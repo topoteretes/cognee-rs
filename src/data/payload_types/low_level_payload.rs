@@ -1,7 +1,7 @@
-use uuid::Uuid;
 use crate::data::payload_base::PayloadBase;
-use serde::{Serialize, Deserialize};
 use crate::data::traits::PayloadBehavior;
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 //ContinueHere
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LowLevelPayload {
@@ -25,8 +25,16 @@ impl LowLevelPayload {
 }
 
 impl PayloadBehavior for LowLevelPayload {
-    fn id(&self) -> Uuid { self.base.metainfo.id }
-    fn task_counter(&self) -> u32 { self.base.metainfo.task_counter }
-    fn task_done(&mut self) { self.base.metainfo.task_done(); }
-    fn chunks(&self) -> &[String] { &self.base.data }
+    fn id(&self) -> Uuid {
+        self.base.metainfo.id
+    }
+    fn task_counter(&self) -> u32 {
+        self.base.metainfo.task_counter
+    }
+    fn task_done(&mut self) {
+        self.base.metainfo.task_done();
+    }
+    fn chunks(&self) -> &[String] {
+        &self.base.data
+    }
 }
