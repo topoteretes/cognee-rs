@@ -1,24 +1,25 @@
 //! On-device AI memory (Rust library)
-//!
-//! This is just a stub version to get the project compiling and usable.
+//! Core data shapes and a stub pipeline-friendly API.
+
+pub mod data;  // <- our payload + types live here
 
 /// Say hello from the library.
-pub fn hello() {
-    println!("Hello from your Rust library!");
+pub async fn hello() -> &'static str {
+    "Hello from cognee!"
 }
 
 /// Placeholder for an on-device embedding step.
-pub fn embed_stub(text: &str) {
+pub async fn embed_stub(text: &str) {
     println!("Embedding text: {text}");
 }
 
 /// Placeholder for storing a memory item.
-pub fn store_stub(id: &str, content: &str) {
+pub async fn store_stub(id: &str, content: &str) {
     println!("Storing memory: id={id}, content={content}");
 }
 
 /// Placeholder for a retrieval call.
-pub fn retrieve_stub(query: &str) {
+pub async fn retrieve_stub(query: &str) {
     println!("Retrieving with query: {query}");
 }
 
@@ -26,13 +27,13 @@ pub fn retrieve_stub(query: &str) {
 mod tests {
     use super::*;
 
-    #[test]
-    fn hello_prints() {
-        hello();
+    #[tokio::test]
+    async fn hello_works() {
+        assert_eq!(hello().await, "Hello from cognee!");
     }
 
-    #[test]
-    fn retrieve_prints() {
-        retrieve_stub("hello");
+    #[tokio::test]
+    async fn retrieve_runs() {
+        retrieve_stub("hello").await;
     }
 }
