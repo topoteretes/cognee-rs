@@ -1,4 +1,3 @@
-use crate::data::traits::PayloadBehavior;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -74,7 +73,7 @@ mod tests {
         assert_eq!(back.metainfo.task_counter, 3);
         assert_eq!(back.data.chunks, vec!["x".to_string(), "y".to_string()]);
     }
-
+    use crate::data::traits::PayloadBehavior;
     #[test]
     fn test() {
         let mut items: Vec<Box<dyn PayloadBehavior>> = vec![
