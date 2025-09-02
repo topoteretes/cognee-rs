@@ -71,7 +71,7 @@ mod tests {
             println!("id={} counter={} first_chunk={:?}",
                      p.id(),
                      p.task_counter(),
-                     p.chunks().get(0),
+                     p.chunks().first(),
             );
             p.task_done();
         }
