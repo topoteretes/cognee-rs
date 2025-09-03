@@ -26,7 +26,7 @@ impl CogneePayload {
     {
         let chunks = self.chunks.read().unwrap();
 
-        f(&*chunks)
+        f(&chunks)
     }
 
     pub fn write_chunks<F, R>(&self, f: F) -> R
@@ -34,7 +34,7 @@ impl CogneePayload {
         F: FnOnce(&mut Vec<String>) -> R,
     {
         let mut chunks = self.chunks.write().unwrap();
-        f(&mut *chunks)
+        f(&mut chunks)
     }
 
     pub fn read_base<F, R>(&self, f: F) -> R
@@ -42,7 +42,7 @@ impl CogneePayload {
         F: FnOnce(&PayloadBase) -> R,
     {
         let base = self.base.read().unwrap();
-        f(&*base)
+        f(&base)
     }
 
     pub fn write_base<F, R>(&self, f: F) -> R
@@ -50,7 +50,7 @@ impl CogneePayload {
         F: FnOnce(&mut PayloadBase) -> R,
     {
         let mut base = self.base.write().unwrap();
-        f(&mut *base)
+        f(&mut base)
     }
 
     // Safe access methods for results
@@ -59,7 +59,7 @@ impl CogneePayload {
         F: FnOnce(&Vec<String>) -> R,
     {
         let results = self.results.read().unwrap();
-        f(&*results)
+        f(&results)
     }
 
     pub fn write_results<F, R>(&self, f: F) -> R
@@ -67,7 +67,7 @@ impl CogneePayload {
         F: FnOnce(&mut Vec<String>) -> R,
     {
         let mut results = self.results.write().unwrap();
-        f(&mut *results)
+        f(&mut results)
     }
 }
 

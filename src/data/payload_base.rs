@@ -9,6 +9,12 @@ pub struct PayloadMetaInfo {
     pub created_at: DateTime<Utc>,
 }
 
+impl Default for PayloadMetaInfo {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PayloadMetaInfo {
     pub fn new() -> Self {
         Self {
@@ -25,6 +31,12 @@ impl PayloadMetaInfo {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PayloadBase {
     pub metainfo: PayloadMetaInfo,
+}
+
+impl Default for PayloadBase {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl PayloadBase {
