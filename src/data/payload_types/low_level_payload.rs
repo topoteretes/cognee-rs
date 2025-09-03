@@ -5,17 +5,19 @@ use uuid::Uuid;
 //Example Low level payload with strictly defined properties following the PayloadBehaviour
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LowLevelPayload {
-    base: PayloadBase<Vec<String>>,
+    base: PayloadBase,
     pub property1: u32,
     pub property2: u32,
+    pub chunks: Vec<String>,
 }
 
 impl LowLevelPayload {
-    pub fn new(task_counter: u32, property1: u32, property2: u32, chunks: Vec<String>) -> Self {
+    pub fn new(property1: u32, property2: u32, chunks: Vec<String>) -> Self {
         Self {
-            base: PayloadBase::new(task_counter, chunks),
+            base: PayloadBase::new(),
             property1,
             property2,
+            chunks,
         }
     }
 
@@ -28,13 +30,7 @@ impl PayloadBehavior for LowLevelPayload {
     fn id(&self) -> Uuid {
         self.base.metainfo.id
     }
-    fn task_counter(&self) -> u32 {
-        self.base.metainfo.task_counter
-    }
     fn task_done(&mut self) {
         self.base.metainfo.task_done();
-    }
-    fn chunks(&self) -> &[String] {
-        &self.base.data
     }
 }

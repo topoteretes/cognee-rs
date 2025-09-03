@@ -1,17 +1,20 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+use chrono::{DateTime, Utc};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PayloadMetaInfo {
     pub id: Uuid,
     pub task_counter: u32,
+    pub created_at: DateTime<Utc>,
 }
 
 impl PayloadMetaInfo {
-    pub fn new(task_counter: u32) -> Self {
+    pub fn new() -> Self {
         Self {
             id: Uuid::new_v4(),
-            task_counter,
+            task_counter: 0,
+            created_at: Utc::now(),
         }
     }
     pub fn task_done(&mut self) {
@@ -20,16 +23,14 @@ impl PayloadMetaInfo {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PayloadBase<T> {
+pub struct PayloadBase {
     pub metainfo: PayloadMetaInfo,
-    pub data: T,
 }
 
-impl<T> PayloadBase<T> {
-    pub fn new(task_counter: u32, data: T) -> Self {
+impl PayloadBase {
+    pub fn new() -> Self {
         Self {
-            metainfo: PayloadMetaInfo::new(task_counter),
-            data,
+            metainfo: PayloadMetaInfo::new(),
         }
     }
 }
@@ -40,50 +41,46 @@ mod tests {
     use crate::data::payload_types::cognee_payload::CogneePayload;
     use crate::data::payload_types::low_level_payload::LowLevelPayload;
     use serde_json;
+    use chrono::Utc;
 
-    #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-    struct DataPoint {
-        path: String,
-        chunks: Vec<String>,
-    }
+
 
     #[test]
     fn constructs_and_increments_counter() {
-        let dp = DataPoint {
-            path: "a".into(),
-            chunks: vec!["x".into()],
-        };
-        let mut p = PayloadBase::new(0, dp);
+        let before = Utc::now();
+        let mut p = PayloadBase::new();
+        let after = Utc::now();
+        
         assert_eq!(p.metainfo.task_counter, 0);
         p.metainfo.task_done();
         assert_eq!(p.metainfo.task_counter, 1);
         assert!(!p.metainfo.id.is_nil());
-        assert_eq!(p.data.path, "a");
+        
+        // Verify created_at is within reasonable bounds
+        assert!(p.metainfo.created_at >= before);
+        assert!(p.metainfo.created_at <= after);
     }
 
     #[test]
     fn serde_roundtrip() {
-        let dp = DataPoint {
-            path: "a".into(),
-            chunks: vec!["x".into(), "y".into()],
-        };
-        let p = PayloadBase::new(3, dp);
+        let mut p = PayloadBase::new();
+        // Increment counter a few times to test serialization
+        p.metainfo.task_done();
+        p.metainfo.task_done();
+        p.metainfo.task_done();
+        
         let json = serde_json::to_string(&p).unwrap();
-        let back: PayloadBase<DataPoint> = serde_json::from_str(&json).unwrap();
+        let back: PayloadBase = serde_json::from_str(&json).unwrap();
         assert_eq!(back.metainfo.task_counter, 3);
-        assert_eq!(back.data.chunks, vec!["x".to_string(), "y".to_string()]);
     }
     use crate::data::traits::PayloadBehavior;
     #[test]
     fn test() {
         let mut items: Vec<Box<dyn PayloadBehavior>> = vec![
             Box::new(CogneePayload::new(
-                0,
-                "Intro",
                 vec!["hello world".into(), "lorem ipsum".into()],
             )),
             Box::new(LowLevelPayload::new(
-                2,
                 1920,
                 1080,
                 vec!["tile_a".into(), "tile_b".into()],
@@ -91,12 +88,7 @@ mod tests {
         ];
 
         for p in items.iter_mut() {
-            println!(
-                "id={} counter={} first_chunk={:?}",
-                p.id(),
-                p.task_counter(),
-                p.chunks().first(),
-            );
+            println!("id={}", p.id());
             p.task_done();
         }
     }
