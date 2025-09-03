@@ -2,25 +2,25 @@ use crate::data::payload_base::PayloadBase;
 use crate::data::traits::PayloadBehavior;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-//ContinueHere
+//Example Low level payload with strictly defined properties following the PayloadBehaviour
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LowLevelPayload {
     base: PayloadBase<Vec<String>>,
-    pub width: u32,
-    pub height: u32,
+    pub property1: u32,
+    pub property2: u32,
 }
 
 impl LowLevelPayload {
-    pub fn new(task_counter: u32, width: u32, height: u32, chunks: Vec<String>) -> Self {
+    pub fn new(task_counter: u32, property1: u32, property2: u32, chunks: Vec<String>) -> Self {
         Self {
             base: PayloadBase::new(task_counter, chunks),
-            width,
-            height,
+            property1,
+            property2,
         }
     }
 
-    pub fn aspect_ratio(&self) -> f32 {
-        self.width as f32 / self.height as f32
+    pub fn properties(&self) -> f32 {
+        self.property1 as f32 / self.property2 as f32
     }
 }
 
