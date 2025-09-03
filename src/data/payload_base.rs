@@ -1,12 +1,18 @@
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-use chrono::{DateTime, Utc};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PayloadMetaInfo {
     pub id: Uuid,
     pub task_counter: u32,
     pub created_at: DateTime<Utc>,
+}
+
+impl Default for PayloadMetaInfo {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl PayloadMetaInfo {
@@ -27,6 +33,12 @@ pub struct PayloadBase {
     pub metainfo: PayloadMetaInfo,
 }
 
+impl Default for PayloadBase {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PayloadBase {
     pub fn new() -> Self {
         Self {
@@ -40,22 +52,20 @@ mod tests {
     use super::*;
     use crate::data::payload_types::cognee_payload::CogneePayload;
     use crate::data::payload_types::low_level_payload::LowLevelPayload;
-    use serde_json;
     use chrono::Utc;
-
-
+    use serde_json;
 
     #[test]
     fn constructs_and_increments_counter() {
         let before = Utc::now();
         let mut p = PayloadBase::new();
         let after = Utc::now();
-        
+
         assert_eq!(p.metainfo.task_counter, 0);
         p.metainfo.task_done();
         assert_eq!(p.metainfo.task_counter, 1);
         assert!(!p.metainfo.id.is_nil());
-        
+
         // Verify created_at is within reasonable bounds
         assert!(p.metainfo.created_at >= before);
         assert!(p.metainfo.created_at <= after);
@@ -68,7 +78,7 @@ mod tests {
         p.metainfo.task_done();
         p.metainfo.task_done();
         p.metainfo.task_done();
-        
+
         let json = serde_json::to_string(&p).unwrap();
         let back: PayloadBase = serde_json::from_str(&json).unwrap();
         assert_eq!(back.metainfo.task_counter, 3);
@@ -77,9 +87,10 @@ mod tests {
     #[test]
     fn test() {
         let mut items: Vec<Box<dyn PayloadBehavior>> = vec![
-            Box::new(CogneePayload::new(
-                vec!["hello world".into(), "lorem ipsum".into()],
-            )),
+            Box::new(CogneePayload::new(vec![
+                "hello world".into(),
+                "lorem ipsum".into(),
+            ])),
             Box::new(LowLevelPayload::new(
                 1920,
                 1080,
