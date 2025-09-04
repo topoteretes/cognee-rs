@@ -194,7 +194,6 @@ fn parallel_readers_no_copy() {
 
             let mut batch_results = Vec::with_capacity(batch_end - batch_start);
             {
-
                 {
                     let chunks_guard = chunks_ref.read().unwrap();
                     for i in batch_start..batch_end {
@@ -250,7 +249,6 @@ fn parallel_readers_no_copy() {
                 {
                     let chunks_guard = chunks_ref.read().unwrap();
                     for i in batch_start..batch_end {
-
                         let chunk = Arc::clone(&chunks_guard[i]);
                         batch_results.push(chunk);
                     }
@@ -260,8 +258,6 @@ fn parallel_readers_no_copy() {
                 let sleep_ms = 2000 + (rand::random::<u64>() % 2001);
                 thread::sleep(Duration::from_millis(sleep_ms));
                 println!("Batch processing ends");
-
-
 
                 {
                     let mut result2_guard = result2.write().unwrap();
