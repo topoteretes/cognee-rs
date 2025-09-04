@@ -150,6 +150,8 @@ where
 
 #[test]
 fn parallel_readers_no_copy() {
+    use std::thread;
+    use std::time::Duration;
     let initial_chunks: Vec<Arc<String>> = (0..1023)
         .map(|i| {
             let content = match i % 5 {
