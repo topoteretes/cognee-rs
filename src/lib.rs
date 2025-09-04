@@ -1,7 +1,9 @@
 //! On-device AI memory (Rust library)
 //! Core data shapes and a stub pipeline-friendly API.
 
-pub mod data; // <- our payload + types live here
+pub mod data;
+mod infrastructure;
+// <- our payload + types live here
 
 /// Say hello from the library.
 pub async fn hello() -> &'static str {

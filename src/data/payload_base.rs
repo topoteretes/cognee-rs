@@ -50,57 +50,122 @@ impl PayloadBase {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::data::payload_types::cognee_payload::CogneePayload;
-    use crate::data::payload_types::low_level_payload::LowLevelPayload;
-    use chrono::Utc;
+    use chrono::{Duration, Utc};
     use serde_json;
 
     #[test]
-    fn constructs_and_increments_counter() {
-        let before = Utc::now();
-        let mut p = PayloadBase::new();
-        let after = Utc::now();
+    fn payload_metainfo_new_initial_values() {
+        let meta = PayloadMetaInfo::new();
 
-        assert_eq!(p.metainfo.task_counter, 0);
-        p.metainfo.task_done();
-        assert_eq!(p.metainfo.task_counter, 1);
-        assert!(!p.metainfo.id.is_nil());
+        // task_counter starts at 0
+        assert_eq!(meta.task_counter, 0);
 
-        // Verify created_at is within reasonable bounds
-        assert!(p.metainfo.created_at >= before);
-        assert!(p.metainfo.created_at <= after);
+        // id is a valid v4 UUID (Uuid::new_v4() always yields V4)
+        assert_eq!(meta.id.get_version_num(), 4);
+
+        // created_at is close to "now"
+        let now = Utc::now();
+        assert!(
+            meta.created_at <= now,
+            "created_at should not be in the future"
+        );
+        assert!(
+            meta.created_at >= now - Duration::seconds(5),
+            "created_at is too old: {} vs now {}",
+            meta.created_at,
+            now
+        );
     }
 
     #[test]
-    fn serde_roundtrip() {
-        let mut p = PayloadBase::new();
-        // Increment counter a few times to test serialization
-        p.metainfo.task_done();
-        p.metainfo.task_done();
-        p.metainfo.task_done();
+    fn payload_metainfo_task_done_increments() {
+        let mut meta = PayloadMetaInfo::new();
+        assert_eq!(meta.task_counter, 0);
 
-        let json = serde_json::to_string(&p).unwrap();
-        let back: PayloadBase = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.metainfo.task_counter, 3);
+        meta.task_done();
+        assert_eq!(meta.task_counter, 1);
+
+        meta.task_done();
+        assert_eq!(meta.task_counter, 2);
     }
-    use crate::data::traits::PayloadBehavior;
-    #[test]
-    fn test() {
-        let mut items: Vec<Box<dyn PayloadBehavior>> = vec![
-            Box::new(CogneePayload::new(vec![
-                "hello world".into(),
-                "lorem ipsum".into(),
-            ])),
-            Box::new(LowLevelPayload::new(
-                1920,
-                1080,
-                vec!["tile_a".into(), "tile_b".into()],
-            )),
-        ];
 
-        for p in items.iter_mut() {
-            println!("id={}", p.id());
-            p.task_done();
+    #[test]
+    fn payload_base_new_initializes_metainfo() {
+        let base = PayloadBase::new();
+        // Ensure metainfo exists and has sane defaults
+        assert_eq!(base.metainfo.task_counter, 0);
+        assert_eq!(base.metainfo.id.get_version_num(), 4);
+    }
+
+    #[test]
+    fn default_impls_match_new() {
+        let meta_default = PayloadMetaInfo::default();
+        let meta_new = PayloadMetaInfo::new();
+
+        // We can't expect IDs/timestamps to match, but we can expect semantics:
+        assert_eq!(meta_default.task_counter, 0);
+        assert_eq!(meta_default.id.get_version_num(), 4);
+        assert_eq!(meta_new.task_counter, 0);
+        assert_eq!(meta_new.id.get_version_num(), 4);
+
+        let base_default = PayloadBase::default();
+        let base_new = PayloadBase::new();
+
+        // Same as above: both should have valid metainfo with counter 0 and v4 UUIDs
+        for b in [&base_default, &base_new] {
+            assert_eq!(b.metainfo.task_counter, 0);
+            assert_eq!(b.metainfo.id.get_version_num(), 4);
         }
+    }
+
+    #[test]
+    fn serde_roundtrip_payload_metainfo() {
+        let mut meta = PayloadMetaInfo::new();
+        meta.task_done(); // mutate to ensure non-default value is preserved
+
+        let json = serde_json::to_string(&meta).expect("serialize");
+        let de: PayloadMetaInfo = serde_json::from_str(&json).expect("deserialize");
+
+        assert_eq!(de.task_counter, meta.task_counter);
+        assert_eq!(de.id, meta.id);
+        assert_eq!(de.created_at, meta.created_at);
+    }
+
+    #[test]
+    fn serde_roundtrip_payload_base() {
+        let base = PayloadBase::new();
+
+        let json = serde_json::to_string(&base).expect("serialize");
+        let de: PayloadBase = serde_json::from_str(&json).expect("deserialize");
+
+        assert_eq!(de.metainfo.task_counter, base.metainfo.task_counter);
+        assert_eq!(de.metainfo.id, base.metainfo.id);
+        assert_eq!(de.metainfo.created_at, base.metainfo.created_at);
+    }
+
+    #[test]
+    fn clone_and_debug_work() {
+        let base = PayloadBase::new();
+        let cloned = base.clone();
+
+        // Cloned value should be equal by field values (derive(Clone)).
+        assert_eq!(cloned.metainfo.id, base.metainfo.id);
+        assert_eq!(cloned.metainfo.task_counter, base.metainfo.task_counter);
+        assert_eq!(cloned.metainfo.created_at, base.metainfo.created_at);
+
+        // Debug shouldn't panic and should contain type name hints.
+        let dbg_str = format!("{:?}", base);
+        assert!(dbg_str.contains("PayloadBase"));
+        assert!(dbg_str.contains("PayloadMetaInfo"));
+    }
+
+    #[test]
+    fn unique_ids_across_instances() {
+        // It's extremely likely two fresh instances have different IDs.
+        // This guards against accidental reuse/copy.
+        let a = PayloadMetaInfo::new();
+        let b = PayloadMetaInfo::new();
+
+        assert_ne!(a.id, b.id, "new() should generate fresh UUIDs");
     }
 }
