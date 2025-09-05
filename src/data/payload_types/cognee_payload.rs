@@ -202,7 +202,7 @@ fn parallel_readers_no_copy() {
                     }
                 }
                 println!("Batch processing starts");
-                let sleep_ms = 2000 + (rand::random::<u64>() % 2001);
+                let sleep_ms = 1000 + (rand::random::<u64>() % 1001);
                 thread::sleep(Duration::from_millis(sleep_ms));
                 println!("Batch processing ends");
 
@@ -255,7 +255,7 @@ fn parallel_readers_no_copy() {
                 }
 
                 println!("Batch processing starts");
-                let sleep_ms = 2000 + (rand::random::<u64>() % 2001);
+                let sleep_ms = 1000 + (rand::random::<u64>() % 1001);
                 thread::sleep(Duration::from_millis(sleep_ms));
                 println!("Batch processing ends");
 
