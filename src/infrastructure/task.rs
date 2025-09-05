@@ -1,7 +1,7 @@
 use std::sync::{Arc, RwLock};
 use std::thread::{self, JoinHandle};
 
-pub fn execute_task<TInput, TOutput, F>(
+pub fn create_task<TInput, TOutput, F>(
     task_name: &str,
     batch_size: Option<usize>,
     input: Arc<RwLock<Vec<Arc<TInput>>>>,
@@ -102,7 +102,7 @@ mod tests {
 
         let mut task_handles = Vec::new();
 
-        let handle1 = execute_task(
+        let handle1 = create_task(
             "Task1_ToResult1",
             Some(100),
             payload.chunks_arc(),
@@ -111,7 +111,7 @@ mod tests {
         );
         task_handles.push(handle1);
 
-        let handle2 = execute_task(
+        let handle2 = create_task(
             "Task2_ToResult2",
             None,
             payload.chunks_arc(),
@@ -212,7 +212,7 @@ mod tests {
         let payload = CogneePayload::<String, ProcessedChunk, AnalyzedResult>::new(initial_chunks);
 
         println!("Starting Stage 1: chunks -> result1");
-        let handle1 = execute_task(
+        let handle1 = create_task(
             "Stage1_ChunksToProcessed",
             None,
             payload.chunks_arc(),
@@ -224,7 +224,7 @@ mod tests {
         println!("Stage 1 completed!");
 
         println!("Starting Stage 2: result1 -> result2");
-        let handle2 = execute_task(
+        let handle2 = create_task(
             "Stage2_ProcessedToAnalyzed",
             Some(15),
             payload.result1_arc(),

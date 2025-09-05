@@ -2,7 +2,7 @@
 //! Core data shapes and a stub pipeline-friendly API.
 
 pub mod data;
-mod infrastructure;
+pub mod infrastructure;
 // <- our payload + types live here
 
 /// Say hello from the library.
