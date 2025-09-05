@@ -14,7 +14,7 @@ where
     F: Fn(Vec<Arc<TInput>>) -> Vec<Arc<TOutput>> + Send + 'static,
 {
     let task_name = task_name.to_string();
-    
+
     thread::spawn(move || {
         let total_chunks = {
             let chunks_guard = input.read().unwrap();
@@ -23,13 +23,16 @@ where
 
         let batch_size = batch_size.unwrap_or(total_chunks);
 
-        println!("{} starting - moving {} chunks to result...", task_name, total_chunks);
-        
+        println!(
+            "{} starting - moving {} chunks to result...",
+            task_name, total_chunks
+        );
+
         let mut total_processed = 0;
-        
+
         for batch_start in (0..total_chunks).step_by(batch_size) {
             let batch_end = (batch_start + batch_size).min(total_chunks);
-            
+
             let mut batch_results = Vec::with_capacity(batch_end - batch_start);
             {
                 {
@@ -39,28 +42,30 @@ where
                         batch_results.push(chunk);
                     }
                 }
-                
+
                 println!("Batch processing starts");
                 let processed_batch = process_fn(batch_results);
                 println!("Batch processing ends");
-                
+
                 {
                     let mut result_guard = output.write().unwrap();
                     result_guard.extend(processed_batch);
                 }
             }
-            
+
             total_processed += batch_end - batch_start;
             println!(
                 "{}: processed {}/{} chunks (batch size: {})",
-                task_name, total_processed, total_chunks, batch_end - batch_start
+                task_name,
+                total_processed,
+                total_chunks,
+                batch_end - batch_start
             );
         }
-        
+
         println!("{} completed - moved chunks to result", task_name);
     })
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -68,9 +73,9 @@ mod tests {
 
     #[test]
     fn test_cognee_payload_with_parallel_tasks() {
-        use std::time::Duration;
         use crate::data::payload_types::cognee_payload::CogneePayload;
-        
+        use std::time::Duration;
+
         let transform_fn1 = |batch: Vec<Arc<String>>| -> Vec<Arc<String>> {
             let sleep_ms = 1000 + (rand::random::<u64>() % 1001);
             thread::sleep(Duration::from_millis(sleep_ms));
@@ -79,7 +84,7 @@ mod tests {
                 .map(|arc_item| Arc::new(format!("task1_processed_{}", &*arc_item)))
                 .collect()
         };
-        
+
         let transform_fn2 = |batch: Vec<Arc<String>>| -> Vec<Arc<String>> {
             let sleep_ms = 1000 + (rand::random::<u64>() % 1001);
             thread::sleep(Duration::from_millis(sleep_ms));
@@ -131,14 +136,18 @@ mod tests {
         assert_eq!(results2.len(), 1000);
         assert_eq!(results1[0].as_str(), "task1_processed_chunk_0");
         assert_eq!(results2[0].as_str(), "task2_processed_chunk_0");
-        
-        println!("Final results - Result1: {}, Result2: {}", results1.len(), results2.len());
+
+        println!(
+            "Final results - Result1: {}, Result2: {}",
+            results1.len(),
+            results2.len()
+        );
     }
 
     #[test]
     fn test_complex_pipeline_with_chained_tasks() {
-        use std::time::Duration;
         use crate::data::payload_types::cognee_payload::CogneePayload;
+        use std::time::Duration;
 
         #[derive(Debug, Clone)]
         struct ProcessedChunk {
@@ -147,7 +156,7 @@ mod tests {
             word_count: usize,
             processed_at: String,
         }
-        
+
         #[derive(Debug, Clone)]
         struct AnalyzedResult {
             chunk_id: usize,
@@ -159,7 +168,7 @@ mod tests {
         let stage1_transform = |batch: Vec<Arc<String>>| -> Vec<Arc<ProcessedChunk>> {
             let sleep_ms = 500 + (rand::random::<u64>() % 501);
             thread::sleep(Duration::from_millis(sleep_ms));
-            
+
             batch
                 .into_iter()
                 .enumerate()
@@ -178,7 +187,7 @@ mod tests {
         let stage2_transform = |batch: Vec<Arc<ProcessedChunk>>| -> Vec<Arc<AnalyzedResult>> {
             let sleep_ms = 300 + (rand::random::<u64>() % 301);
             thread::sleep(Duration::from_millis(sleep_ms));
-            
+
             batch
                 .into_iter()
                 .map(|arc_item| {
@@ -197,9 +206,8 @@ mod tests {
                 .collect()
         };
 
-        let initial_chunks: Vec<Arc<String>> = (0..100)
-            .map(|i| Arc::new(format!("chunk_{}", i)))
-            .collect();
+        let initial_chunks: Vec<Arc<String>> =
+            (0..100).map(|i| Arc::new(format!("chunk_{}", i))).collect();
 
         let payload = CogneePayload::<String, ProcessedChunk, AnalyzedResult>::new(initial_chunks);
 
@@ -243,7 +251,7 @@ mod tests {
         assert_eq!(results2[0].analysis, "analyzed_processed_chunk_0");
         assert_eq!(results2[0].score, 3.0);
         assert_eq!(results2[0].metadata.len(), 3);
-        
+
         println!("Pipeline Results:");
         println!("- Stage 1 (ProcessedChunk): {} items", results1.len());
         println!("- Stage 2 (AnalyzedResult): {} items", results2.len());
