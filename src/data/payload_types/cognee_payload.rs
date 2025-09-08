@@ -1,7 +1,16 @@
 use crate::data::payload_base::PayloadBase;
 use crate::data::payloadbehavior::PayloadBehavior;
-use std::sync::{Arc, RwLock};
+use std::collections::HashMap;
+use std::sync::{Arc, RwLock, Mutex};
 use uuid::Uuid;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PropertyStatus {
+    Empty,
+    Processing,
+    Done,
+    Errored(String),
+}
 
 #[derive(Debug, Clone)]
 pub struct CogneePayload<TC, T1, T2>
@@ -14,6 +23,7 @@ where
     chunks: Arc<RwLock<Vec<Arc<TC>>>>,
     result1: Arc<RwLock<Vec<Arc<T1>>>>,
     result2: Arc<RwLock<Vec<Arc<T2>>>>,
+    property_status: Arc<Mutex<HashMap<String, PropertyStatus>>>,
 }
 
 impl<TC, T1, T2> CogneePayload<TC, T1, T2>
@@ -23,11 +33,18 @@ where
     T2: Clone + Send + Sync,
 {
     pub fn new(chunks: Vec<Arc<TC>>) -> Self {
+        let mut status = HashMap::new();
+        status.insert("base".to_string(), PropertyStatus::Done);
+        status.insert("chunks".to_string(), if chunks.is_empty() { PropertyStatus::Empty } else { PropertyStatus::Done });
+        status.insert("result1".to_string(), PropertyStatus::Empty);
+        status.insert("result2".to_string(), PropertyStatus::Empty);
+        
         Self {
             base: Arc::new(RwLock::new(PayloadBase::new())),
             chunks: Arc::new(RwLock::new(chunks)),
             result1: Arc::new(RwLock::new(Vec::new())),
             result2: Arc::new(RwLock::new(Vec::new())),
+            property_status: Arc::new(Mutex::new(status)),
         }
     }
 
@@ -56,7 +73,7 @@ where
 
     pub fn clear_chunks(&self) {
         let mut chunks = self.chunks.write().unwrap();
-        chunks.clear()
+        chunks.clear();
     }
 
     pub fn result1_arc(&self) -> Arc<RwLock<Vec<Arc<T1>>>> {
@@ -131,6 +148,23 @@ where
         let mut base = self.base.write().unwrap();
         f(&mut base)
     }
+
+    // Status dictionary methods
+    pub fn get_property_status(&self, property: &str) -> Option<PropertyStatus> {
+        let status = self.property_status.lock().unwrap();
+        status.get(property).cloned()
+    }
+
+    pub fn set_property_status(&self, property: &str, status: PropertyStatus) {
+        let mut status_map = self.property_status.lock().unwrap();
+        status_map.insert(property.to_string(), status);
+    }
+
+    pub fn get_all_property_statuses(&self) -> HashMap<String, PropertyStatus> {
+        let status = self.property_status.lock().unwrap();
+        status.clone()
+    }
+
 }
 
 impl<TC, T1, T2> PayloadBehavior for CogneePayload<TC, T1, T2>
@@ -287,4 +321,133 @@ fn parallel_readers_no_copy() {
         println!("Thread {} completed!", i + 1);
     }
     println!("All processing completed!");
+}
+
+#[cfg(test)]
+mod status_tests {
+    use super::*;
+
+    #[test]
+    fn test_property_status_enum() {
+        // Test PropertyStatus enum variants
+        let empty = PropertyStatus::Empty;
+        let processing = PropertyStatus::Processing;
+        let done = PropertyStatus::Done;
+        let errored = PropertyStatus::Errored("test error".to_string());
+
+        assert_eq!(empty, PropertyStatus::Empty);
+        assert_eq!(processing, PropertyStatus::Processing);
+        assert_eq!(done, PropertyStatus::Done);
+        assert_eq!(errored, PropertyStatus::Errored("test error".to_string()));
+    }
+
+    #[test]
+    fn test_initial_status_with_empty_chunks() {
+        let payload = CogneePayload::<String, String, String>::new(vec![]);
+        
+        // Check initial statuses
+        assert_eq!(payload.get_property_status("base"), Some(PropertyStatus::Done));
+        assert_eq!(payload.get_property_status("chunks"), Some(PropertyStatus::Empty));
+        assert_eq!(payload.get_property_status("result1"), Some(PropertyStatus::Empty));
+        assert_eq!(payload.get_property_status("result2"), Some(PropertyStatus::Empty));
+    }
+
+    #[test]
+    fn test_initial_status_with_chunks() {
+        let chunks = vec![Arc::new("test chunk".to_string())];
+        let payload = CogneePayload::<String, String, String>::new(chunks);
+        
+        // Check initial statuses
+        assert_eq!(payload.get_property_status("base"), Some(PropertyStatus::Done));
+        assert_eq!(payload.get_property_status("chunks"), Some(PropertyStatus::Done));
+        assert_eq!(payload.get_property_status("result1"), Some(PropertyStatus::Empty));
+        assert_eq!(payload.get_property_status("result2"), Some(PropertyStatus::Empty));
+    }
+
+    #[test]
+    fn test_get_all_property_statuses() {
+        let payload = CogneePayload::<String, String, String>::new(vec![]);
+        let all_statuses = payload.get_all_property_statuses();
+        
+        assert_eq!(all_statuses.len(), 4);
+        assert!(all_statuses.contains_key("base"));
+        assert!(all_statuses.contains_key("chunks"));
+        assert!(all_statuses.contains_key("result1"));
+        assert!(all_statuses.contains_key("result2"));
+    }
+
+    #[test]
+    fn test_set_and_get_property_status() {
+        let payload = CogneePayload::<String, String, String>::new(vec![]);
+        
+        // Set processing status
+        payload.set_property_status("chunks", PropertyStatus::Processing);
+        assert_eq!(payload.get_property_status("chunks"), Some(PropertyStatus::Processing));
+        
+        // Set error status
+        payload.set_property_status("result1", PropertyStatus::Errored("test error".to_string()));
+        assert_eq!(payload.get_property_status("result1"), Some(PropertyStatus::Errored("test error".to_string())));
+        
+        // Set done status
+        payload.set_property_status("result2", PropertyStatus::Done);
+        assert_eq!(payload.get_property_status("result2"), Some(PropertyStatus::Done));
+    }
+
+    #[test]
+    fn test_manual_status_management() {
+        let payload = CogneePayload::<String, String, String>::new(vec![]);
+        
+        // Status should NOT automatically update when adding data
+        assert_eq!(payload.get_property_status("chunks"), Some(PropertyStatus::Empty));
+        
+        // Add chunk - status should remain Empty (no automatic updates)
+        payload.add_chunk(Arc::new("test".to_string()));
+        assert_eq!(payload.get_property_status("chunks"), Some(PropertyStatus::Empty));
+        
+        // Manually update status
+        payload.set_property_status("chunks", PropertyStatus::Done);
+        assert_eq!(payload.get_property_status("chunks"), Some(PropertyStatus::Done));
+        
+        // Clear chunks - status should remain Done (no automatic updates)
+        payload.clear_chunks();
+        assert_eq!(payload.get_property_status("chunks"), Some(PropertyStatus::Done));
+        
+        // Manually update status back to Empty
+        payload.set_property_status("chunks", PropertyStatus::Empty);
+        assert_eq!(payload.get_property_status("chunks"), Some(PropertyStatus::Empty));
+    }
+
+    #[test]
+    fn test_property_status_with_different_types() {
+        // Test with different generic types
+        let payload = CogneePayload::<i32, f64, bool>::new(vec![Arc::new(42)]);
+        
+        assert_eq!(payload.get_property_status("base"), Some(PropertyStatus::Done));
+        assert_eq!(payload.get_property_status("chunks"), Some(PropertyStatus::Done));
+        assert_eq!(payload.get_property_status("result1"), Some(PropertyStatus::Empty));
+        assert_eq!(payload.get_property_status("result2"), Some(PropertyStatus::Empty));
+        
+        // Manually set statuses
+        payload.set_property_status("result1", PropertyStatus::Processing);
+        payload.add_result1(Arc::new(3.14));
+        payload.set_property_status("result1", PropertyStatus::Done);
+        
+        payload.add_result2(Arc::new(true));
+        payload.set_property_status("result2", PropertyStatus::Done);
+        
+        assert_eq!(payload.get_property_status("result1"), Some(PropertyStatus::Done));
+        assert_eq!(payload.get_property_status("result2"), Some(PropertyStatus::Done));
+    }
+
+    #[test]
+    fn test_any_property_name_allowed() {
+        let payload = CogneePayload::<String, String, String>::new(vec![]);
+        
+        // Can set status for any property name (no validation)
+        payload.set_property_status("custom_property", PropertyStatus::Processing);
+        assert_eq!(payload.get_property_status("custom_property"), Some(PropertyStatus::Processing));
+        
+        payload.set_property_status("another_prop", PropertyStatus::Errored("custom error".to_string()));
+        assert_eq!(payload.get_property_status("another_prop"), Some(PropertyStatus::Errored("custom error".to_string())));
+    }
 }
