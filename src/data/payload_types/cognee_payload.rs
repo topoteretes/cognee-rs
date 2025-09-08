@@ -84,6 +84,10 @@ where
         Arc::clone(&self.result2)
     }
 
+    pub fn property_status_arc(&self) -> Arc<Mutex<HashMap<String, PropertyStatus>>> {
+        Arc::clone(&self.property_status)
+    }
+
     pub fn add_result1(&self, item: Arc<T1>) {
         let mut result1 = self.result1.write().unwrap();
         result1.push(item);

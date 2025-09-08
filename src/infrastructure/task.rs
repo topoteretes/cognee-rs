@@ -1,12 +1,15 @@
 use std::sync::{Arc, RwLock};
 use std::thread::{self, JoinHandle};
 use log::{info, debug};
+use crate::data::payload_types::cognee_payload::PropertyStatus;
 
 pub fn create_task<TInput, TOutput, F>(
     task_name: &str,
     batch_size: Option<usize>,
     input: Arc<RwLock<Vec<Arc<TInput>>>>,
     output: Option<Arc<RwLock<Vec<Arc<TOutput>>>>>,
+    property_status: Arc<std::sync::Mutex<std::collections::HashMap<String, PropertyStatus>>>,
+    output_property_name: &str,
     process_fn: F,
 ) -> JoinHandle<()>
 where
@@ -15,8 +18,15 @@ where
     F: Fn(Vec<Arc<TInput>>) -> Vec<Arc<TOutput>> + Send + 'static,
 {
     let task_name = task_name.to_string();
+    let output_property_name = output_property_name.to_string();
 
     thread::spawn(move || {
+        // Set property status to Processing at the beginning
+        {
+            let mut status = property_status.lock().unwrap();
+            status.insert(output_property_name.clone(), PropertyStatus::Processing);
+        }
+
         let total_chunks = {
             let chunks_guard = input.read().unwrap();
             chunks_guard.len()
@@ -67,6 +77,12 @@ where
             );
         }
 
+        // Set property status to Done at the end
+        {
+            let mut status = property_status.lock().unwrap();
+            status.insert(output_property_name.clone(), PropertyStatus::Done);
+        }
+
         info!("{} completed - moved chunks to result", task_name);
     })
 }
@@ -113,6 +129,8 @@ mod tests {
             Some(100),
             payload.chunks_arc(),
             Some(payload.result1_arc()),
+            payload.property_status_arc(),
+            "result1",
             transform_fn1,
         );
         task_handles.push(handle1);
@@ -122,6 +140,8 @@ mod tests {
             None,
             payload.chunks_arc(),
             Some(payload.result2_arc()),
+            payload.property_status_arc(),
+            "result2",
             transform_fn2,
         );
         task_handles.push(handle2);
@@ -225,6 +245,8 @@ mod tests {
             None,
             payload.chunks_arc(),
             Some(payload.result1_arc()),
+            payload.property_status_arc(),
+            "result1",
             stage1_transform,
         );
 
@@ -237,6 +259,8 @@ mod tests {
             Some(15),
             payload.result1_arc(),
             Some(payload.result2_arc()),
+            payload.property_status_arc(),
+            "result2",
             stage2_transform,
         );
 
@@ -299,6 +323,8 @@ mod tests {
             Some(3),
             payload.chunks_arc(),
             None, // No output storage!
+            payload.property_status_arc(),
+            "custom_task_status",
             side_effect_task,
         );
 
