@@ -186,9 +186,8 @@ where
     }
 }
 
-#[test]
-fn parallel_readers_no_copy() {
-    use std::thread;
+#[tokio::test]
+async fn parallel_readers_no_copy() {
     use std::time::Duration;
     let initial_chunks: Vec<Arc<String>> = (0..1023)
         .map(|i| {
@@ -209,12 +208,12 @@ fn parallel_readers_no_copy() {
     let result1_arc = payload.result1_arc();
     let result2_arc = payload.result2_arc();
 
-    let mut threads = Vec::new();
+    let mut handles = Vec::new();
 
     // ---- Task 1: process chunks in batches and move to result1 ----
     let result1 = Arc::clone(&result1_arc);
     let chunks_ref = Arc::clone(&chunks_arc);
-    let t1 = thread::spawn(move || {
+    let t1 = tokio::spawn(async move {
         let total_chunks = {
             let chunks_guard = chunks_ref.read().unwrap();
             chunks_guard.len()
@@ -241,7 +240,7 @@ fn parallel_readers_no_copy() {
                 }
                 println!("Batch processing starts");
                 let sleep_ms = 1000 + (rand::random::<u64>() % 1001);
-                thread::sleep(Duration::from_millis(sleep_ms));
+                tokio::time::sleep(Duration::from_millis(sleep_ms)).await;
                 println!("Batch processing ends");
 
                 {
@@ -261,12 +260,12 @@ fn parallel_readers_no_copy() {
 
         println!("Task 1 completed - moved chunks to result1");
     });
-    threads.push(t1);
+    handles.push(t1);
 
     // ---- Task 2: process chunks in batches and move to result2 ----
     let result2 = Arc::clone(&result2_arc);
     let chunks_ref = Arc::clone(&chunks_arc);
-    let t2 = thread::spawn(move || {
+    let t2 = tokio::spawn(async move {
         let total_chunks = {
             let chunks_guard = chunks_ref.read().unwrap();
             chunks_guard.len()
@@ -294,7 +293,7 @@ fn parallel_readers_no_copy() {
 
                 println!("Batch processing starts");
                 let sleep_ms = 1000 + (rand::random::<u64>() % 1001);
-                thread::sleep(Duration::from_millis(sleep_ms));
+                tokio::time::sleep(Duration::from_millis(sleep_ms)).await;
                 println!("Batch processing ends");
 
                 {
@@ -314,15 +313,15 @@ fn parallel_readers_no_copy() {
 
         println!("Task 2 completed - moved chunks to result2");
     });
-    threads.push(t2);
+    handles.push(t2);
 
     println!(
-        "Phase 1: Waiting for {} initial threads to complete...",
-        threads.len()
+        "Phase 1: Waiting for {} initial tasks to complete...",
+        handles.len()
     );
-    for (i, thread) in threads.into_iter().enumerate() {
-        thread.join().unwrap();
-        println!("Thread {} completed!", i + 1);
+    for (i, handle) in handles.into_iter().enumerate() {
+        handle.await.unwrap();
+        println!("Task {} completed!", i + 1);
     }
     println!("All processing completed!");
 }

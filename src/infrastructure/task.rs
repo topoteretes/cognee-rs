@@ -1,9 +1,10 @@
 use std::sync::{Arc, RwLock};
-use std::thread::{self, JoinHandle};
+use tokio::task::JoinHandle;
+use std::future::Future;
 use log::{info, debug};
 use crate::data::payload_types::cognee_payload::PropertyStatus;
 
-pub fn create_task<TInput, TOutput, F>(
+pub fn create_task<TInput, TOutput, F, Fut>(
     task_name: &str,
     batch_size: Option<usize>,
     input: Arc<RwLock<Vec<Arc<TInput>>>>,
@@ -15,12 +16,13 @@ pub fn create_task<TInput, TOutput, F>(
 where
     TInput: Clone + Send + Sync + 'static,
     TOutput: Clone + Send + Sync + 'static,
-    F: Fn(Vec<Arc<TInput>>) -> Vec<Arc<TOutput>> + Send + 'static,
+    F: Fn(Vec<Arc<TInput>>) -> Fut + Send + 'static,
+    Fut: Future<Output = Vec<Arc<TOutput>>> + Send + 'static,
 {
     let task_name = task_name.to_string();
     let output_property_name = output_property_name.to_string();
 
-    thread::spawn(move || {
+    tokio::spawn(async move {
         // Set property status to Processing at the beginning
         {
             let mut status = property_status.lock().unwrap();
@@ -55,7 +57,7 @@ where
                 }
 
                 debug!("Batch processing starts");
-                let processed_batch = process_fn(batch_results);
+                let processed_batch = process_fn(batch_results).await;
                 debug!("Batch processing ends");
 
 
@@ -91,25 +93,25 @@ where
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_cognee_payload_with_parallel_tasks() {
+    #[tokio::test]
+    async fn test_cognee_payload_with_parallel_tasks() {
         dotenv::dotenv().ok(); // Load .env file
         let _ = env_logger::builder().is_test(true).try_init();
         use crate::data::payload_types::cognee_payload::CogneePayload;
         use std::time::Duration;
 
-        let transform_fn1 = |batch: Vec<Arc<String>>| -> Vec<Arc<String>> {
+        let transform_fn1 = |batch: Vec<Arc<String>>| async move {
             let sleep_ms = 1000 + (rand::random::<u64>() % 1001);
-            thread::sleep(Duration::from_millis(sleep_ms));
+            tokio::time::sleep(Duration::from_millis(sleep_ms)).await;
             batch
                 .into_iter()
                 .map(|arc_item| Arc::new(format!("task1_processed_{}", &*arc_item)))
                 .collect()
         };
 
-        let transform_fn2 = |batch: Vec<Arc<String>>| -> Vec<Arc<String>> {
+        let transform_fn2 = |batch: Vec<Arc<String>>| async move {
             let sleep_ms = 1000 + (rand::random::<u64>() % 1001);
-            thread::sleep(Duration::from_millis(sleep_ms));
+            tokio::time::sleep(Duration::from_millis(sleep_ms)).await;
             batch
                 .into_iter()
                 .map(|arc_item| Arc::new(format!("task2_processed_{}", &*arc_item)))
@@ -148,7 +150,7 @@ mod tests {
 
         info!("Waiting for {} tasks to complete...", task_handles.len());
         for (i, handle) in task_handles.into_iter().enumerate() {
-            handle.join().unwrap();
+            handle.await.unwrap();
             info!("Task {} completed!", i + 1);
         }
         info!("All tasks completed!");
@@ -170,8 +172,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_complex_pipeline_with_chained_tasks() {
+    #[tokio::test]
+    async fn test_complex_pipeline_with_chained_tasks() {
         dotenv::dotenv().ok(); // Load .env file
         let _ = env_logger::builder().is_test(true).try_init();
         use crate::data::payload_types::cognee_payload::CogneePayload;
@@ -193,9 +195,9 @@ mod tests {
             metadata: Vec<String>,
         }
 
-        let stage1_transform = |batch: Vec<Arc<String>>| -> Vec<Arc<ProcessedChunk>> {
+        let stage1_transform = |batch: Vec<Arc<String>>| async move {
             let sleep_ms = 500 + (rand::random::<u64>() % 501);
-            thread::sleep(Duration::from_millis(sleep_ms));
+            tokio::time::sleep(Duration::from_millis(sleep_ms)).await;
 
             batch
                 .into_iter()
@@ -212,9 +214,9 @@ mod tests {
                 .collect()
         };
 
-        let stage2_transform = |batch: Vec<Arc<ProcessedChunk>>| -> Vec<Arc<AnalyzedResult>> {
+        let stage2_transform = |batch: Vec<Arc<ProcessedChunk>>| async move {
             let sleep_ms = 300 + (rand::random::<u64>() % 301);
-            thread::sleep(Duration::from_millis(sleep_ms));
+            tokio::time::sleep(Duration::from_millis(sleep_ms)).await;
 
             batch
                 .into_iter()
@@ -250,7 +252,7 @@ mod tests {
             stage1_transform,
         );
 
-        handle1.join().unwrap();
+        handle1.await.unwrap();
         info!("Stage 1 completed!");
 
         info!("Starting Stage 2: result1 -> result2");
@@ -264,7 +266,7 @@ mod tests {
             stage2_transform,
         );
 
-        handle2.join().unwrap();
+        handle2.await.unwrap();
         info!("Stage 2 completed!");
 
         let result1_arc = payload.result1_arc();
@@ -290,8 +292,8 @@ mod tests {
         info!("- First analyzed result: {:?}", results2[0]);
     }
 
-    #[test]
-    fn test_task_with_no_output() {
+    #[tokio::test]
+    async fn test_task_with_no_output() {
         dotenv::dotenv().ok();
         let _ = env_logger::builder().is_test(true).try_init();
         use crate::data::payload_types::cognee_payload::CogneePayload;
@@ -300,8 +302,8 @@ mod tests {
 
         static SIDE_EFFECT_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
-        let side_effect_task = |batch: Vec<Arc<String>>| -> Vec<Arc<String>> {
-            thread::sleep(Duration::from_millis(50));
+        let side_effect_task = |batch: Vec<Arc<String>>| async move {
+            tokio::time::sleep(Duration::from_millis(50)).await;
             for item in &batch {
                 info!("Side effect processing: {}", &**item);
                 SIDE_EFFECT_COUNTER.fetch_add(1, Ordering::SeqCst);
@@ -328,7 +330,7 @@ mod tests {
             side_effect_task,
         );
 
-        handle.join().unwrap();
+        handle.await.unwrap();
 
         let result1_arc = payload.result1_arc();
         let results1 = result1_arc.read().unwrap();
