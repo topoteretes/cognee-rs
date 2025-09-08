@@ -1,5 +1,6 @@
 use std::sync::{Arc, RwLock};
 use std::thread::{self, JoinHandle};
+use log::{info, debug};
 
 pub fn create_task<TInput, TOutput, F>(
     task_name: &str,
@@ -23,7 +24,7 @@ where
 
         let batch_size = batch_size.unwrap_or(total_chunks);
 
-        println!(
+        info!(
             "{} starting - moving {} chunks to result...",
             task_name, total_chunks
         );
@@ -43,9 +44,9 @@ where
                     }
                 }
 
-                println!("Batch processing starts");
+                debug!("Batch processing starts");
                 let processed_batch = process_fn(batch_results);
-                println!("Batch processing ends");
+                debug!("Batch processing ends");
 
                 {
                     let mut result_guard = output.write().unwrap();
@@ -54,7 +55,7 @@ where
             }
 
             total_processed += batch_end - batch_start;
-            println!(
+            info!(
                 "{}: processed {}/{} chunks (batch size: {})",
                 task_name,
                 total_processed,
@@ -63,7 +64,7 @@ where
             );
         }
 
-        println!("{} completed - moved chunks to result", task_name);
+        info!("{} completed - moved chunks to result", task_name);
     })
 }
 
@@ -73,6 +74,8 @@ mod tests {
 
     #[test]
     fn test_cognee_payload_with_parallel_tasks() {
+        dotenv::dotenv().ok(); // Load .env file
+        let _ = env_logger::builder().is_test(true).try_init();
         use crate::data::payload_types::cognee_payload::CogneePayload;
         use std::time::Duration;
 
@@ -120,12 +123,12 @@ mod tests {
         );
         task_handles.push(handle2);
 
-        println!("Waiting for {} tasks to complete...", task_handles.len());
+        info!("Waiting for {} tasks to complete...", task_handles.len());
         for (i, handle) in task_handles.into_iter().enumerate() {
             handle.join().unwrap();
-            println!("Task {} completed!", i + 1);
+            info!("Task {} completed!", i + 1);
         }
-        println!("All tasks completed!");
+        info!("All tasks completed!");
 
         let result1_arc = payload.result1_arc();
         let result2_arc = payload.result2_arc();
@@ -137,7 +140,7 @@ mod tests {
         assert_eq!(results1[0].as_str(), "task1_processed_chunk_0");
         assert_eq!(results2[0].as_str(), "task2_processed_chunk_0");
 
-        println!(
+        info!(
             "Final results - Result1: {}, Result2: {}",
             results1.len(),
             results2.len()
@@ -146,6 +149,8 @@ mod tests {
 
     #[test]
     fn test_complex_pipeline_with_chained_tasks() {
+        dotenv::dotenv().ok(); // Load .env file
+        let _ = env_logger::builder().is_test(true).try_init();
         use crate::data::payload_types::cognee_payload::CogneePayload;
         use std::time::Duration;
 
@@ -211,7 +216,7 @@ mod tests {
 
         let payload = CogneePayload::<String, ProcessedChunk, AnalyzedResult>::new(initial_chunks);
 
-        println!("Starting Stage 1: chunks -> result1");
+        info!("Starting Stage 1: chunks -> result1");
         let handle1 = create_task(
             "Stage1_ChunksToProcessed",
             None,
@@ -221,9 +226,9 @@ mod tests {
         );
 
         handle1.join().unwrap();
-        println!("Stage 1 completed!");
+        info!("Stage 1 completed!");
 
-        println!("Starting Stage 2: result1 -> result2");
+        info!("Starting Stage 2: result1 -> result2");
         let handle2 = create_task(
             "Stage2_ProcessedToAnalyzed",
             Some(15),
@@ -233,7 +238,7 @@ mod tests {
         );
 
         handle2.join().unwrap();
-        println!("Stage 2 completed!");
+        info!("Stage 2 completed!");
 
         let result1_arc = payload.result1_arc();
         let result2_arc = payload.result2_arc();
@@ -252,9 +257,9 @@ mod tests {
         assert_eq!(results2[0].score, 3.0);
         assert_eq!(results2[0].metadata.len(), 3);
 
-        println!("Pipeline Results:");
-        println!("- Stage 1 (ProcessedChunk): {} items", results1.len());
-        println!("- Stage 2 (AnalyzedResult): {} items", results2.len());
-        println!("- First analyzed result: {:?}", results2[0]);
+        info!("Pipeline Results:");
+        info!("- Stage 1 (ProcessedChunk): {} items", results1.len());
+        info!("- Stage 2 (AnalyzedResult): {} items", results2.len());
+        info!("- First analyzed result: {:?}", results2[0]);
     }
 }
