@@ -498,7 +498,7 @@ mod status_tests {
 
         // Manually set statuses
         payload.set_property_status("result1", PropertyStatus::Processing);
-        payload.add_result1(Arc::new(3.14));
+        payload.add_result1(Arc::new(3.15));
         payload.set_property_status("result1", PropertyStatus::Done);
 
         payload.add_result2(Arc::new(true));
