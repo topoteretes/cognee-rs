@@ -6,7 +6,7 @@ pub fn create_task<TInput, TOutput, F>(
     task_name: &str,
     batch_size: Option<usize>,
     input: Arc<RwLock<Vec<Arc<TInput>>>>,
-    output: Arc<RwLock<Vec<Arc<TOutput>>>>,
+    output: Option<Arc<RwLock<Vec<Arc<TOutput>>>>>,
     process_fn: F,
 ) -> JoinHandle<()>
 where
@@ -48,9 +48,12 @@ where
                 let processed_batch = process_fn(batch_results);
                 debug!("Batch processing ends");
 
-                {
-                    let mut result_guard = output.write().unwrap();
+
+                if let Some(output_arc) = &output {
+                    info!("Writing {} batches...", batch_end);
+                    let mut result_guard = output_arc.write().unwrap();
                     result_guard.extend(processed_batch);
+                    info!("Writing batches...");
                 }
             }
 
@@ -109,7 +112,7 @@ mod tests {
             "Task1_ToResult1",
             Some(100),
             payload.chunks_arc(),
-            payload.result1_arc(),
+            Some(payload.result1_arc()),
             transform_fn1,
         );
         task_handles.push(handle1);
@@ -118,7 +121,7 @@ mod tests {
             "Task2_ToResult2",
             None,
             payload.chunks_arc(),
-            payload.result2_arc(),
+            Some(payload.result2_arc()),
             transform_fn2,
         );
         task_handles.push(handle2);
@@ -221,7 +224,7 @@ mod tests {
             "Stage1_ChunksToProcessed",
             None,
             payload.chunks_arc(),
-            payload.result1_arc(),
+            Some(payload.result1_arc()),
             stage1_transform,
         );
 
@@ -233,7 +236,7 @@ mod tests {
             "Stage2_ProcessedToAnalyzed",
             Some(15),
             payload.result1_arc(),
-            payload.result2_arc(),
+            Some(payload.result2_arc()),
             stage2_transform,
         );
 
@@ -261,5 +264,59 @@ mod tests {
         info!("- Stage 1 (ProcessedChunk): {} items", results1.len());
         info!("- Stage 2 (AnalyzedResult): {} items", results2.len());
         info!("- First analyzed result: {:?}", results2[0]);
+    }
+
+    #[test]
+    fn test_task_with_no_output() {
+        dotenv::dotenv().ok();
+        let _ = env_logger::builder().is_test(true).try_init();
+        use crate::data::payload_types::cognee_payload::CogneePayload;
+        use std::time::Duration;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        static SIDE_EFFECT_COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+        let side_effect_task = |batch: Vec<Arc<String>>| -> Vec<Arc<String>> {
+            thread::sleep(Duration::from_millis(50));
+            for item in &batch {
+                info!("Side effect processing: {}", &**item);
+                SIDE_EFFECT_COUNTER.fetch_add(1, Ordering::SeqCst);
+            }
+            // The return value doesn't matter since output is None
+            vec![Arc::new("this won't be written anywhere".to_string())]
+        };
+
+        let initial_chunks: Vec<Arc<String>> = (0..10)
+            .map(|i| Arc::new(format!("chunk_{}", i)))
+            .collect();
+
+        let payload = CogneePayload::<String, String, String>::new(initial_chunks);
+
+        info!("Starting test with no output parameter");
+
+        let handle = create_task(
+            "NoOutputTask",
+            Some(3),
+            payload.chunks_arc(),
+            None, // No output storage!
+            side_effect_task,
+        );
+
+        handle.join().unwrap();
+
+        let result1_arc = payload.result1_arc();
+        let results1 = result1_arc.read().unwrap();
+        let result2_arc = payload.result2_arc();
+        let results2 = result2_arc.read().unwrap();
+
+        assert_eq!(results1.len(), 0);
+        assert_eq!(results2.len(), 0);
+
+        assert_eq!(SIDE_EFFECT_COUNTER.load(Ordering::SeqCst), 10);
+
+        info!("No output task completed successfully");
+        info!("- Result1 output: {} items", results1.len());
+        info!("- Result2 output: {} items", results2.len());
+        info!("- Side effects processed: {} items", SIDE_EFFECT_COUNTER.load(Ordering::SeqCst));
     }
 }
