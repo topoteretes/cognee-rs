@@ -1,8 +1,8 @@
+use crate::data::payload_types::cognee_payload::PropertyStatus;
+use log::{debug, info};
+use std::future::Future;
 use std::sync::{Arc, RwLock};
 use tokio::task::JoinHandle;
-use std::future::Future;
-use log::{info, debug};
-use crate::data::payload_types::cognee_payload::PropertyStatus;
 
 pub fn create_task<TInput, TOutput, F, Fut>(
     task_name: &str,
@@ -59,7 +59,6 @@ where
                 debug!("Batch processing starts");
                 let processed_batch = process_fn(batch_results).await;
                 debug!("Batch processing ends");
-
 
                 if let Some(output_arc) = &output {
                     info!("Writing {} batches...", batch_end);
@@ -297,8 +296,8 @@ mod tests {
         dotenv::dotenv().ok();
         let _ = env_logger::builder().is_test(true).try_init();
         use crate::data::payload_types::cognee_payload::CogneePayload;
-        use std::time::Duration;
         use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::time::Duration;
 
         static SIDE_EFFECT_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
@@ -312,9 +311,8 @@ mod tests {
             vec![Arc::new("this won't be written anywhere".to_string())]
         };
 
-        let initial_chunks: Vec<Arc<String>> = (0..10)
-            .map(|i| Arc::new(format!("chunk_{}", i)))
-            .collect();
+        let initial_chunks: Vec<Arc<String>> =
+            (0..10).map(|i| Arc::new(format!("chunk_{}", i))).collect();
 
         let payload = CogneePayload::<String, String, String>::new(initial_chunks);
 
@@ -345,6 +343,9 @@ mod tests {
         info!("No output task completed successfully");
         info!("- Result1 output: {} items", results1.len());
         info!("- Result2 output: {} items", results2.len());
-        info!("- Side effects processed: {} items", SIDE_EFFECT_COUNTER.load(Ordering::SeqCst));
+        info!(
+            "- Side effects processed: {} items",
+            SIDE_EFFECT_COUNTER.load(Ordering::SeqCst)
+        );
     }
 }
