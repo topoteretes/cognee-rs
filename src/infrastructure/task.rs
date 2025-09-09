@@ -20,7 +20,7 @@ pub fn create_task<TInput, TOutput, F, Fut>(
     property_status: Arc<std::sync::Mutex<std::collections::HashMap<String, PropertyStatus>>>,
     output_property_name: &str,
     process_fn: F,
-    signal_sender: mpsc::UnboundedSender<LoopSignal>
+    signal_sender: Option<mpsc::UnboundedSender<LoopSignal>>
 ) -> JoinHandle<()>
 where
     TInput: Clone + Send + Sync + 'static,
@@ -94,7 +94,9 @@ where
         }
 
         info!("{} completed - moved chunks to result", task_name);
-        let _ = signal_sender.send(LoopSignal::TaskCompleted);
+        if let Some(sender) = signal_sender {
+            let _ = sender.send(LoopSignal::TaskCompleted);
+        }
     })
 }
 
@@ -143,6 +145,7 @@ mod tests {
             payload.property_status_arc(),
             "result1",
             transform_fn1,
+            None,
         );
         task_handles.push(handle1);
 
@@ -154,6 +157,7 @@ mod tests {
             payload.property_status_arc(),
             "result2",
             transform_fn2,
+            None,
         );
         task_handles.push(handle2);
 
@@ -259,6 +263,7 @@ mod tests {
             payload.property_status_arc(),
             "result1",
             stage1_transform,
+            None,
         );
 
         handle1.await.unwrap();
@@ -273,6 +278,7 @@ mod tests {
             payload.property_status_arc(),
             "result2",
             stage2_transform,
+            None,
         );
 
         handle2.await.unwrap();
@@ -336,6 +342,7 @@ mod tests {
             payload.property_status_arc(),
             "custom_task_status",
             side_effect_task,
+            None,
         );
 
         handle.await.unwrap();
