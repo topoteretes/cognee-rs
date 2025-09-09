@@ -5,7 +5,7 @@ use cognee_rust::infrastructure::task::LoopSignal;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio::time::sleep;
@@ -25,6 +25,40 @@ struct CompletedPayload {
 struct PayloadMetadata {
     total_chunks: usize,
     completion_timestamp: String,
+}
+
+// Function to write completed payload to JSON file
+async fn write_payload_to_json(payload: &CogneePayload<String, String, String>, counter: usize) -> Result<(), Box<dyn std::error::Error>> {
+    let chunks = payload.get_chunks_copy();
+    let result1 = payload.get_result1_copy();
+    let result2 = payload.get_result2_copy();
+    
+    let original_chunks: Vec<String> = chunks.iter().map(|c| c.as_str().to_string()).collect();
+    let stage1_results: Vec<String> = result1.iter().map(|r| r.as_str().to_string()).collect();
+    let stage2_results: Vec<String> = result2.iter().map(|r| r.as_str().to_string()).collect();
+    
+    let completed_payload = CompletedPayload {
+        counter,
+        original_chunks,
+        stage1_results,
+        stage2_results,
+        metadata: PayloadMetadata {
+            total_chunks: chunks.len(),
+            completion_timestamp: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs()
+                .to_string(),
+        },
+    };
+    
+    let filename = format!("result_{}.json", counter);
+    let json_content = serde_json::to_string_pretty(&completed_payload)?;
+    
+    tokio::fs::write(&filename, json_content).await?;
+    println!("Written payload #{} to {}", counter, filename);
+    
+    Ok(())
 }
 
 
@@ -49,7 +83,7 @@ async fn stage2_transform(result1: Vec<Arc<String>>) -> Vec<Arc<String>> {
     println!("Task2 started: processing {} items", result1.len());
 
     // Random sleep between 3s and 10s
-    let millis = rand::thread_rng().gen_range(2000..=2000);
+    let millis = rand::thread_rng().gen_range(2000..=4000);
     sleep(Duration::from_millis(millis)).await;
 
     let results: Vec<Arc<String>> = result1
@@ -236,6 +270,14 @@ async fn main() {
             // Remove payload from the list if its fully completed
             for payload_id in payload_ids_to_remove {
                 if let Some(pos) = payload_list.iter().position(|p| p.id() == payload_id) {
+                    // Write to JSON before removing
+                    let payload = &payload_list[pos];
+                    let counter = payload_counters.get(&payload_id).copied().unwrap_or(0);
+                    
+                    if let Err(e) = write_payload_to_json(payload, counter).await {
+                        eprintln!("Failed to write payload {} to JSON: {}", counter, e);
+                    }
+                    
                     payload_list.remove(pos);
                     payload_counters.remove(&payload_id);
                     println!("Removed completed payload with ID: {}", payload_id);
