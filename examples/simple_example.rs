@@ -104,11 +104,11 @@ async fn main() {
 
     /////////Parameters
     // Maximum number of payloads in the central processing queue
-    const MAX_PAYLOADS: usize = 150;
+    const MAX_PAYLOADS: usize = 15;
     // Maximum number of concurrent tasks
-    const MAX_CONCURRENT_TASKS: usize = 10;
+    const MAX_CONCURRENT_TASKS: usize = 3;
     // Number of all payloads (just for the POC)
-    const MAX_COMPLETED: usize = 1000;
+    const MAX_COMPLETED: usize = 100;
 
     ///////// Scheduler related resources
     let (signal_tx, mut signal_rx) = mpsc::unbounded_channel::<LoopSignal>();
@@ -155,7 +155,7 @@ async fn main() {
         let current_size = payloads.read().unwrap().len();
 
         // Adds new payload to the queue if there is space left
-        if current_size < MAX_PAYLOADS && completed_payloads < MAX_COMPLETED {
+        if current_size < MAX_PAYLOADS && counter < MAX_COMPLETED {
             counter += 1;
 
             let chunks = vec![
@@ -230,9 +230,6 @@ async fn main() {
                                 Some(signal_tx.clone()),
                             );
                             active_tasks.push(handle);
-                        } else {
-                            println!("Skipping Stage1 for payload {} - Task limit reached ({}/{})", 
-                                index + 1, active_tasks.len(), MAX_CONCURRENT_TASKS);
                         }
                     }
                 }
@@ -259,9 +256,6 @@ async fn main() {
                                 Some(signal_tx.clone()),
                             );
                             active_tasks.push(handle);
-                        } else {
-                            println!("Skipping Stage2 for payload {} - Task limit reached ({}/{})", 
-                                index + 1, active_tasks.len(), MAX_CONCURRENT_TASKS);
                         }
                     }
                 }
