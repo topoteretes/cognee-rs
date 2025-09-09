@@ -32,7 +32,7 @@ async fn stage1_transform_async(chunks: Vec<Arc<String>>) -> Vec<Arc<String>> {
     println!("Task1 started: processing {} chunks", chunks.len());
 
     // Random sleep between 3s and 10s
-    let millis = rand::thread_rng().gen_range(8000..=20000);
+    let millis = rand::thread_rng().gen_range(2000..=2000);
     sleep(Duration::from_millis(millis)).await;
 
     let results: Vec<Arc<String>> = chunks
@@ -49,7 +49,7 @@ async fn stage2_transform(result1: Vec<Arc<String>>) -> Vec<Arc<String>> {
     println!("Task2 started: processing {} items", result1.len());
 
     // Random sleep between 3s and 10s
-    let millis = rand::thread_rng().gen_range(8000..=20000);
+    let millis = rand::thread_rng().gen_range(2000..=2000);
     sleep(Duration::from_millis(millis)).await;
 
     let results: Vec<Arc<String>> = result1
@@ -70,7 +70,9 @@ async fn main() {
 
     /////////Parameters
     // Maximum number of payloads in the central processing queue
-    const MAX_PAYLOADS: usize = 5;
+    const MAX_PAYLOADS: usize = 150;
+    // Maximum number of concurrent tasks
+    const MAX_CONCURRENT_TASKS: usize = 10;
     // Number of all payloads (just for the POC)
     const MAX_COMPLETED: usize = 1000;
 
@@ -177,21 +179,27 @@ async fn main() {
                 // If result1 is empty, create a new task that gets result1 and processes it
                 if let Some(status) = &result1_status {
                     if matches!(status, PropertyStatus::Empty) {
-                        println!("Creating Stage1 async task for payload {} (ID: {})", index + 1, payload_id);
+                        if active_tasks.len() < MAX_CONCURRENT_TASKS {
+                            println!("Creating Stage1 async task for payload {} (ID: {}) - Tasks: {}/{}", 
+                                index + 1, payload_id, active_tasks.len() + 1, MAX_CONCURRENT_TASKS);
 
-                        payload.set_property_status("result1", PropertyStatus::Processing);
+                            payload.set_property_status("result1", PropertyStatus::Processing);
 
-                        let handle = create_task(
-                            "Stage1_ChunksToProcessed",
-                            None,
-                            payload.chunks_arc(),
-                            Some(payload.result1_arc()),
-                            payload.property_status_arc(),
-                            "result1",
-                            stage1_transform_async,
-                            Some(signal_tx.clone()),
-                        );
-                        active_tasks.push(handle);
+                            let handle = create_task(
+                                "Stage1_ChunksToProcessed",
+                                None,
+                                payload.chunks_arc(),
+                                Some(payload.result1_arc()),
+                                payload.property_status_arc(),
+                                "result1",
+                                stage1_transform_async,
+                                Some(signal_tx.clone()),
+                            );
+                            active_tasks.push(handle);
+                        } else {
+                            println!("Skipping Stage1 for payload {} - Task limit reached ({}/{})", 
+                                index + 1, active_tasks.len(), MAX_CONCURRENT_TASKS);
+                        }
                     }
                 }
 
@@ -200,21 +208,27 @@ async fn main() {
                     if matches!(r1_status, PropertyStatus::Done)
                         && matches!(r2_status, PropertyStatus::Empty)
                     {
-                        println!("Creating Stage2 task for payload {} (ID: {})", index + 1, payload_id);
+                        if active_tasks.len() < MAX_CONCURRENT_TASKS {
+                            println!("Creating Stage2 task for payload {} (ID: {}) - Tasks: {}/{}", 
+                                index + 1, payload_id, active_tasks.len() + 1, MAX_CONCURRENT_TASKS);
 
-                        payload.set_property_status("result2", PropertyStatus::Processing);
+                            payload.set_property_status("result2", PropertyStatus::Processing);
 
-                        let handle = create_task(
-                            "Stage2_ProcessedToFinal",
-                            None,
-                            payload.result1_arc(),
-                            Some(payload.result2_arc()),
-                            payload.property_status_arc(),
-                            "result2",
-                            stage2_transform,
-                            Some(signal_tx.clone()),
-                        );
-                        active_tasks.push(handle);
+                            let handle = create_task(
+                                "Stage2_ProcessedToFinal",
+                                None,
+                                payload.result1_arc(),
+                                Some(payload.result2_arc()),
+                                payload.property_status_arc(),
+                                "result2",
+                                stage2_transform,
+                                Some(signal_tx.clone()),
+                            );
+                            active_tasks.push(handle);
+                        } else {
+                            println!("Skipping Stage2 for payload {} - Task limit reached ({}/{})", 
+                                index + 1, active_tasks.len(), MAX_CONCURRENT_TASKS);
+                        }
                     }
                 }
             }
@@ -230,7 +244,15 @@ async fn main() {
         }
 
 
+        let before_count = active_tasks.len();
         active_tasks.retain(|handle| !handle.is_finished());
+        let after_count = active_tasks.len();
+        
+        // Show task status
+        if before_count != after_count || active_tasks.len() > 0 {
+            println!("Status: {} active tasks, {} payloads in queue, {} completed", 
+                active_tasks.len(), payloads.read().unwrap().len(), completed_payloads);
+        }
 
         if completed_payloads >= MAX_COMPLETED {
             println!(
