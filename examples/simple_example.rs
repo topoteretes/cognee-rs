@@ -1,7 +1,8 @@
 use cognee_rust::data::payload_types::cognee_payload::{CogneePayload, PropertyStatus};
 use cognee_rust::data::payloadbehavior::PayloadBehavior;
-use cognee_rust::infrastructure::task::create_task;
 use cognee_rust::infrastructure::task::LoopSignal;
+use cognee_rust::infrastructure::task::create_task;
+use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
@@ -9,7 +10,6 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio::time::sleep;
-use rand::Rng;
 use uuid::Uuid;
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -28,15 +28,18 @@ struct PayloadMetadata {
 }
 
 // Function to write completed payload to JSON file
-async fn write_payload_to_json(payload: &CogneePayload<String, String, String>, counter: usize) -> Result<(), Box<dyn std::error::Error>> {
+async fn write_payload_to_json(
+    payload: &CogneePayload<String, String, String>,
+    counter: usize,
+) -> Result<(), Box<dyn std::error::Error>> {
     let chunks = payload.get_chunks_copy();
     let result1 = payload.get_result1_copy();
     let result2 = payload.get_result2_copy();
-    
+
     let original_chunks: Vec<String> = chunks.iter().map(|c| c.as_str().to_string()).collect();
     let stage1_results: Vec<String> = result1.iter().map(|r| r.as_str().to_string()).collect();
     let stage2_results: Vec<String> = result2.iter().map(|r| r.as_str().to_string()).collect();
-    
+
     let completed_payload = CompletedPayload {
         counter,
         original_chunks,
@@ -51,16 +54,15 @@ async fn write_payload_to_json(payload: &CogneePayload<String, String, String>, 
                 .to_string(),
         },
     };
-    
+
     let filename = format!("result_{}.json", counter);
     let json_content = serde_json::to_string_pretty(&completed_payload)?;
-    
+
     tokio::fs::write(&filename, json_content).await?;
     println!("Written payload #{} to {}", counter, filename);
-    
+
     Ok(())
 }
-
 
 async fn stage1_transform_async(chunks: Vec<Arc<String>>) -> Vec<Arc<String>> {
     println!("Task1 started: processing {} chunks", chunks.len());
@@ -74,7 +76,11 @@ async fn stage1_transform_async(chunks: Vec<Arc<String>>) -> Vec<Arc<String>> {
         .map(|chunk| Arc::new(format!("Stage1-Processed: {}", chunk)))
         .collect();
 
-    println!("Task1 finished after {} ms, produced {} results", millis, results.len());
+    println!(
+        "Task1 finished after {} ms, produced {} results",
+        millis,
+        results.len()
+    );
 
     results
 }
@@ -91,7 +97,11 @@ async fn stage2_transform(result1: Vec<Arc<String>>) -> Vec<Arc<String>> {
         .map(|item| Arc::new(format!("Stage2-Final: {}", item)))
         .collect();
 
-    println!("Task2 finished after {} ms, produced {} results", millis, results.len());
+    println!(
+        "Task2 finished after {} ms, produced {} results",
+        millis,
+        results.len()
+    );
 
     results
 }
@@ -119,11 +129,9 @@ async fn main() {
     // List to keep track of active tasks
     let mut active_tasks: Vec<JoinHandle<()>> = Vec::new();
 
-
     // Counters
     let mut counter = 0;
     let mut completed_payloads = 0;
-
 
     loop {
         tokio::select! {
@@ -165,7 +173,7 @@ async fn main() {
 
             let payload = Arc::new(CogneePayload::new(chunks));
             let payload_id = payload.id();
-            
+
             payloads.write().unwrap().push(Arc::clone(&payload));
             payload_counters.insert(payload_id, counter);
 
@@ -180,7 +188,6 @@ async fn main() {
             let _ = signal_tx.send(LoopSignal::NewPayloadAdded);
         }
 
-
         {
             let mut payload_list = payloads.write().unwrap();
             let mut payload_ids_to_remove = Vec::new();
@@ -191,11 +198,11 @@ async fn main() {
                 let result1_status = payload.get_property_status("result1");
                 let result2_status = payload.get_property_status("result2");
 
-
                 // This is the case when the payload is fully completed
                 if let (Some(r1), Some(r2)) = (&result1_status, &result2_status) {
                     if matches!(r1, PropertyStatus::Done) && matches!(r2, PropertyStatus::Done) {
-                        let payload_counter = payload_counters.get(&payload_id).copied().unwrap_or(0);
+                        let payload_counter =
+                            payload_counters.get(&payload_id).copied().unwrap_or(0);
                         println!(
                             "Payload {} (ID: {}, counter: {}) fully completed!",
                             index + 1,
@@ -209,13 +216,17 @@ async fn main() {
                     }
                 }
 
-
                 // If result1 is empty, create a new task that gets result1 and processes it
                 if let Some(status) = &result1_status {
                     if matches!(status, PropertyStatus::Empty) {
                         if active_tasks.len() < MAX_CONCURRENT_TASKS {
-                            println!("Creating Stage1 async task for payload {} (ID: {}) - Tasks: {}/{}", 
-                                index + 1, payload_id, active_tasks.len() + 1, MAX_CONCURRENT_TASKS);
+                            println!(
+                                "Creating Stage1 async task for payload {} (ID: {}) - Tasks: {}/{}",
+                                index + 1,
+                                payload_id,
+                                active_tasks.len() + 1,
+                                MAX_CONCURRENT_TASKS
+                            );
 
                             payload.set_property_status("result1", PropertyStatus::Processing);
 
@@ -240,8 +251,13 @@ async fn main() {
                         && matches!(r2_status, PropertyStatus::Empty)
                     {
                         if active_tasks.len() < MAX_CONCURRENT_TASKS {
-                            println!("Creating Stage2 task for payload {} (ID: {}) - Tasks: {}/{}", 
-                                index + 1, payload_id, active_tasks.len() + 1, MAX_CONCURRENT_TASKS);
+                            println!(
+                                "Creating Stage2 task for payload {} (ID: {}) - Tasks: {}/{}",
+                                index + 1,
+                                payload_id,
+                                active_tasks.len() + 1,
+                                MAX_CONCURRENT_TASKS
+                            );
 
                             payload.set_property_status("result2", PropertyStatus::Processing);
 
@@ -267,11 +283,11 @@ async fn main() {
                     // Write to JSON before removing
                     let payload = &payload_list[pos];
                     let counter = payload_counters.get(&payload_id).copied().unwrap_or(0);
-                    
+
                     if let Err(e) = write_payload_to_json(payload, counter).await {
                         eprintln!("Failed to write payload {} to JSON: {}", counter, e);
                     }
-                    
+
                     payload_list.remove(pos);
                     payload_counters.remove(&payload_id);
                     println!("Removed completed payload with ID: {}", payload_id);
@@ -279,15 +295,18 @@ async fn main() {
             }
         }
 
-
         let before_count = active_tasks.len();
         active_tasks.retain(|handle| !handle.is_finished());
         let after_count = active_tasks.len();
-        
+
         // Show task status
         if before_count != after_count || active_tasks.len() > 0 {
-            println!("Status: {} active tasks, {} payloads in queue, {} completed", 
-                active_tasks.len(), payloads.read().unwrap().len(), completed_payloads);
+            println!(
+                "Status: {} active tasks, {} payloads in queue, {} completed",
+                active_tasks.len(),
+                payloads.read().unwrap().len(),
+                completed_payloads
+            );
         }
 
         if completed_payloads >= MAX_COMPLETED {
@@ -298,7 +317,6 @@ async fn main() {
             break;
         }
     }
-
 
     // Let all tasks finish ()
     for handle in active_tasks {

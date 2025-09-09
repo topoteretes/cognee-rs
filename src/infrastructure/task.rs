@@ -20,7 +20,7 @@ pub fn create_task<TInput, TOutput, F, Fut>(
     property_status: Arc<std::sync::Mutex<std::collections::HashMap<String, PropertyStatus>>>,
     output_property_name: &str,
     process_fn: F,
-    signal_sender: Option<mpsc::UnboundedSender<LoopSignal>>
+    signal_sender: Option<mpsc::UnboundedSender<LoopSignal>>,
 ) -> JoinHandle<()>
 where
     TInput: Clone + Send + Sync + 'static,
