@@ -2,7 +2,15 @@ use crate::data::payload_types::cognee_payload::PropertyStatus;
 use log::{debug, info};
 use std::future::Future;
 use std::sync::{Arc, RwLock};
+use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
+
+#[derive(Debug, Clone)]
+pub enum LoopSignal {
+    TaskCompleted,
+    NewPayloadAdded,
+    Shutdown,
+}
 
 pub fn create_task<TInput, TOutput, F, Fut>(
     task_name: &str,
@@ -12,6 +20,7 @@ pub fn create_task<TInput, TOutput, F, Fut>(
     property_status: Arc<std::sync::Mutex<std::collections::HashMap<String, PropertyStatus>>>,
     output_property_name: &str,
     process_fn: F,
+    signal_sender: mpsc::UnboundedSender<LoopSignal>
 ) -> JoinHandle<()>
 where
     TInput: Clone + Send + Sync + 'static,
@@ -85,6 +94,7 @@ where
         }
 
         info!("{} completed - moved chunks to result", task_name);
+        let _ = signal_sender.send(LoopSignal::TaskCompleted);
     })
 }
 
