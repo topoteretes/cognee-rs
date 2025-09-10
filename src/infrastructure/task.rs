@@ -32,7 +32,6 @@ where
     let output_property_name = output_property_name.to_string();
 
     async move {
-
         let total_chunks = {
             let chunks_guard = input.read().unwrap();
             chunks_guard.len()
