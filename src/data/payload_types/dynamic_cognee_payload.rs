@@ -27,6 +27,7 @@ macro_rules! create_cognee_payload {
             property_status: Arc<Mutex<HashMap<String, PropertyStatus>>>,
         }
 
+        #[allow(dead_code)]
         impl $name
         where
             $(
