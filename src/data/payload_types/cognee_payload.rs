@@ -198,11 +198,11 @@ async fn parallel_readers_no_copy() {
     let initial_chunks: Vec<Arc<String>> = (0..1023)
         .map(|i| {
             let content = match i % 5 {
-                0 => format!("document_text_{:04}_analysis_ready", i),
-                1 => format!("embedding_vector_{:04}_processed", i),
-                2 => format!("memory_fragment_{:04}_indexed", i),
-                3 => format!("knowledge_node_{:04}_connected", i),
-                _ => format!("data_segment_{:04}_transformed", i),
+                0 => format!("document_text_{i:04}_analysis_ready"),
+                1 => format!("embedding_vector_{i:04}_processed"),
+                2 => format!("memory_fragment_{i:04}_indexed"),
+                3 => format!("knowledge_node_{i:04}_connected"),
+                _ => format!("data_segment_{i:04}_transformed"),
             };
             Arc::new(content)
         })
@@ -225,8 +225,7 @@ async fn parallel_readers_no_copy() {
             chunks_guard.len()
         };
         println!(
-            "Task 1 starting - moving {} chunks to result1...",
-            total_chunks
+            "Task 1 starting - moving {total_chunks} chunks to result1..."
         );
 
         const BATCH_SIZE: usize = 100;
@@ -277,8 +276,7 @@ async fn parallel_readers_no_copy() {
             chunks_guard.len()
         };
         println!(
-            "Task 2 starting - moving {} chunks to result2...",
-            total_chunks
+            "Task 2 starting - moving {total_chunks} chunks to result2..."
         );
 
         const BATCH_SIZE: usize = 50;

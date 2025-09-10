@@ -12,6 +12,7 @@ pub enum LoopSignal {
     Shutdown,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn create_task<TInput, TOutput, F, Fut>(
     task_name: &str,
     batch_size: Option<usize>,
@@ -46,8 +47,7 @@ where
         let batch_size = batch_size.unwrap_or(total_chunks);
 
         info!(
-            "{} starting - moving {} chunks to result...",
-            task_name, total_chunks
+            "{task_name} starting - moving {total_chunks} chunks to result..."
         );
 
         let mut total_processed = 0;
@@ -70,7 +70,7 @@ where
                 debug!("Batch processing ends");
 
                 if let Some(output_arc) = &output {
-                    info!("Writing {} batches...", batch_end);
+                    info!("Writing {batch_end} batches...");
                     let mut result_guard = output_arc.write().unwrap();
                     result_guard.extend(processed_batch);
                     info!("Writing batches...");
@@ -93,7 +93,7 @@ where
             status.insert(output_property_name.clone(), PropertyStatus::Done);
         }
 
-        info!("{} completed - moved chunks to result", task_name);
+        info!("{task_name} completed - moved chunks to result");
         if let Some(sender) = signal_sender {
             let _ = sender.send(LoopSignal::TaskCompleted);
         }
@@ -130,7 +130,7 @@ mod tests {
         };
 
         let initial_chunks: Vec<Arc<String>> = (0..1000)
-            .map(|i| Arc::new(format!("chunk_{}", i)))
+            .map(|i| Arc::new(format!("chunk_{i}")))
             .collect();
 
         let payload = CogneePayload::<String, String, String>::new(initial_chunks);
@@ -219,9 +219,9 @@ mod tests {
                     let content = &*arc_item;
                     Arc::new(ProcessedChunk {
                         id: idx,
-                        content: format!("processed_{}", content),
+                        content: format!("processed_{content}"),
                         word_count: content.split('_').count(),
-                        processed_at: format!("timestamp_{}", idx),
+                        processed_at: format!("timestamp_{idx}"),
                     })
                 })
                 .collect()
@@ -250,7 +250,7 @@ mod tests {
         };
 
         let initial_chunks: Vec<Arc<String>> =
-            (0..100).map(|i| Arc::new(format!("chunk_{}", i))).collect();
+            (0..100).map(|i| Arc::new(format!("chunk_{i}"))).collect();
 
         let payload = CogneePayload::<String, ProcessedChunk, AnalyzedResult>::new(initial_chunks);
 
@@ -328,7 +328,7 @@ mod tests {
         };
 
         let initial_chunks: Vec<Arc<String>> =
-            (0..10).map(|i| Arc::new(format!("chunk_{}", i))).collect();
+            (0..10).map(|i| Arc::new(format!("chunk_{i}"))).collect();
 
         let payload = CogneePayload::<String, String, String>::new(initial_chunks);
 

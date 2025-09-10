@@ -57,11 +57,11 @@ mod tests {
             },
         };
 
-        let filename = format!("result_{}.json", counter);
+        let filename = format!("result_{counter}.json");
         let json_content = serde_json::to_string_pretty(&completed_payload)?;
 
         tokio::fs::write(&filename, json_content).await?;
-        println!("Written payload #{} to {}", counter, filename);
+        println!("Written payload #{counter} to {filename}");
 
         Ok(())
     }
@@ -75,7 +75,7 @@ mod tests {
 
         let results: Vec<Arc<String>> = chunks
             .into_iter()
-            .map(|chunk| Arc::new(format!("Stage1-Processed: {}", chunk)))
+            .map(|chunk| Arc::new(format!("Stage1-Processed: {chunk}")))
             .collect();
 
         println!(
@@ -96,7 +96,7 @@ mod tests {
 
         let results: Vec<Arc<String>> = result1
             .into_iter()
-            .map(|item| Arc::new(format!("Stage2-Final: {}", item)))
+            .map(|item| Arc::new(format!("Stage2-Final: {item}")))
             .collect();
 
         println!(
@@ -122,8 +122,9 @@ mod tests {
 
         ///////// Scheduler related resources
         let (signal_tx, mut signal_rx) = mpsc::unbounded_channel::<LoopSignal>();
-        let payloads: Arc<RwLock<Vec<Arc<CogneePayload<String, String, String>>>>> =
-            Arc::new(RwLock::new(Vec::new()));
+        type PayloadType = CogneePayload<String, String, String>;
+        type PayloadList = Arc<RwLock<Vec<Arc<PayloadType>>>>;
+        let payloads: PayloadList = Arc::new(RwLock::new(Vec::new()));
         let mut payload_counters: HashMap<Uuid, usize> = HashMap::new();
 
         // List to keep track of active tasks
@@ -167,8 +168,8 @@ mod tests {
                 counter += 1;
 
                 let chunks = vec![
-                    Arc::new(format!("Chunk A from payload {}", counter)),
-                    Arc::new(format!("Chunk B from payload {}", counter)),
+                    Arc::new(format!("Chunk A from payload {counter}")),
+                    Arc::new(format!("Chunk B from payload {counter}")),
                 ];
 
                 let payload = Arc::new(CogneePayload::new(chunks));
@@ -188,120 +189,120 @@ mod tests {
                 let _ = signal_tx.send(LoopSignal::NewPayloadAdded);
             }
 
-            {
-                let mut payload_list = payloads.write().unwrap();
-                let mut payload_ids_to_remove = Vec::new();
+        let mut payloads_to_write = Vec::new();
+        {
+            let mut payload_list = payloads.write().unwrap();
+            let mut payload_ids_to_remove = Vec::new();
 
-                for (index, payload) in payload_list.iter().enumerate() {
-                    let payload_id = payload.id();
-                    let _chunks_status = payload.get_property_status("chunks");
-                    let result1_status = payload.get_property_status("result1");
-                    let result2_status = payload.get_property_status("result2");
+            for (index, payload) in payload_list.iter().enumerate() {
+                let payload_id = payload.id();
+                let _chunks_status = payload.get_property_status("chunks");
+                let result1_status = payload.get_property_status("result1");
+                let result2_status = payload.get_property_status("result2");
 
-                    // This is the case when the payload is fully completed
-                    if let (Some(r1), Some(r2)) = (&result1_status, &result2_status) {
-                        if matches!(r1, PropertyStatus::Done) && matches!(r2, PropertyStatus::Done)
-                        {
-                            let payload_counter =
-                                payload_counters.get(&payload_id).copied().unwrap_or(0);
-                            println!(
-                                "Payload {} (ID: {}, counter: {}) fully completed!",
-                                index + 1,
-                                payload_id,
-                                payload_counter
-                            );
+                // This is the case when the payload is fully completed
+                if let (Some(r1), Some(r2)) = (&result1_status, &result2_status)
+                    && matches!(r1, PropertyStatus::Done) && matches!(r2, PropertyStatus::Done)
+                {
+                    let payload_counter =
+                        payload_counters.get(&payload_id).copied().unwrap_or(0);
+                    println!(
+                        "Payload {} (ID: {}, counter: {}) fully completed!",
+                        index + 1,
+                        payload_id,
+                        payload_counter
+                    );
 
-                            payload_ids_to_remove.push(payload_id);
-                            completed_payloads += 1;
-                            continue;
-                        }
-                    }
-
-                    // If result1 is empty, create a new task that gets result1 and processes it
-                    if let Some(status) = &result1_status {
-                        if matches!(status, PropertyStatus::Empty) {
-                            if active_tasks.len() < MAX_CONCURRENT_TASKS {
-                                println!(
-                                    "Creating Stage1 async task for payload {} (ID: {}) - Tasks: {}/{}",
-                                    index + 1,
-                                    payload_id,
-                                    active_tasks.len() + 1,
-                                    MAX_CONCURRENT_TASKS
-                                );
-
-                                payload.set_property_status("result1", PropertyStatus::Processing);
-
-                                let handle = create_task(
-                                    "Stage1_ChunksToProcessed",
-                                    None,
-                                    payload.chunks_arc(),
-                                    Some(payload.result1_arc()),
-                                    payload.property_status_arc(),
-                                    "result1",
-                                    stage1_transform_async,
-                                    Some(signal_tx.clone()),
-                                );
-                                active_tasks.push(handle);
-                            }
-                        }
-                    }
-
-                    // if result1 is done and result2 is empty, create a new task that gets result1 and result2 and processes them
-                    if let (Some(r1_status), Some(r2_status)) = (&result1_status, &result2_status) {
-                        if matches!(r1_status, PropertyStatus::Done)
-                            && matches!(r2_status, PropertyStatus::Empty)
-                        {
-                            if active_tasks.len() < MAX_CONCURRENT_TASKS {
-                                println!(
-                                    "Creating Stage2 task for payload {} (ID: {}) - Tasks: {}/{}",
-                                    index + 1,
-                                    payload_id,
-                                    active_tasks.len() + 1,
-                                    MAX_CONCURRENT_TASKS
-                                );
-
-                                payload.set_property_status("result2", PropertyStatus::Processing);
-
-                                let handle = create_task(
-                                    "Stage2_ProcessedToFinal",
-                                    None,
-                                    payload.result1_arc(),
-                                    Some(payload.result2_arc()),
-                                    payload.property_status_arc(),
-                                    "result2",
-                                    stage2_transform,
-                                    Some(signal_tx.clone()),
-                                );
-                                active_tasks.push(handle);
-                            }
-                        }
-                    }
+                    payload_ids_to_remove.push(payload_id);
+                    completed_payloads += 1;
+                    continue;
                 }
 
-                // Remove payload from the list if its fully completed
-                for payload_id in payload_ids_to_remove {
-                    if let Some(pos) = payload_list.iter().position(|p| p.id() == payload_id) {
-                        // Write to JSON before removing
-                        let payload = &payload_list[pos];
-                        let counter = payload_counters.get(&payload_id).copied().unwrap_or(0);
+                // If result1 is empty, create a new task that gets result1 and processes it
+                if let Some(status) = &result1_status
+                    && matches!(status, PropertyStatus::Empty)
+                    && active_tasks.len() < MAX_CONCURRENT_TASKS
+                {
+                    println!(
+                        "Creating Stage1 async task for payload {} (ID: {}) - Tasks: {}/{}",
+                        index + 1,
+                        payload_id,
+                        active_tasks.len() + 1,
+                        MAX_CONCURRENT_TASKS
+                    );
 
-                        if let Err(e) = write_payload_to_json(payload, counter).await {
-                            eprintln!("Failed to write payload {} to JSON: {}", counter, e);
-                        }
+                    payload.set_property_status("result1", PropertyStatus::Processing);
 
-                        payload_list.remove(pos);
-                        payload_counters.remove(&payload_id);
-                        println!("Removed completed payload with ID: {}", payload_id);
-                    }
+                    let handle = create_task(
+                        "Stage1_ChunksToProcessed",
+                        None,
+                        payload.chunks_arc(),
+                        Some(payload.result1_arc()),
+                        payload.property_status_arc(),
+                        "result1",
+                        stage1_transform_async,
+                        Some(signal_tx.clone()),
+                    );
+                    active_tasks.push(handle);
+                }
+
+                // if result1 is done and result2 is empty, create a new task that gets result1 and result2 and processes them
+                if let (Some(r1_status), Some(r2_status)) = (&result1_status, &result2_status)
+                    && matches!(r1_status, PropertyStatus::Done)
+                    && matches!(r2_status, PropertyStatus::Empty)
+                    && active_tasks.len() < MAX_CONCURRENT_TASKS
+                {
+                    println!(
+                        "Creating Stage2 task for payload {} (ID: {}) - Tasks: {}/{}",
+                        index + 1,
+                        payload_id,
+                        active_tasks.len() + 1,
+                        MAX_CONCURRENT_TASKS
+                    );
+
+                    payload.set_property_status("result2", PropertyStatus::Processing);
+
+                    let handle = create_task(
+                        "Stage2_ProcessedToFinal",
+                        None,
+                        payload.result1_arc(),
+                        Some(payload.result2_arc()),
+                        payload.property_status_arc(),
+                        "result2",
+                        stage2_transform,
+                        Some(signal_tx.clone()),
+                    );
+                    active_tasks.push(handle);
                 }
             }
+
+            // Collect payloads to write to JSON before removing
+            for payload_id in payload_ids_to_remove {
+                if let Some(pos) = payload_list.iter().position(|p| p.id() == payload_id) {
+                    let payload = Arc::clone(&payload_list[pos]);
+                    let counter = payload_counters.get(&payload_id).copied().unwrap_or(0);
+                    payloads_to_write.push((payload, counter));
+                    
+                    payload_list.remove(pos);
+                    payload_counters.remove(&payload_id);
+                    println!("Removed completed payload with ID: {payload_id}");
+                }
+            }
+        }
+
+        // Write JSON files after releasing the lock
+        for (payload, counter) in payloads_to_write {
+            if let Err(e) = write_payload_to_json(&payload, counter).await {
+                eprintln!("Failed to write payload {counter} to JSON: {e}");
+            }
+        }
 
             let before_count = active_tasks.len();
             active_tasks.retain(|handle| !handle.is_finished());
             let after_count = active_tasks.len();
 
             // Show task status
-            if before_count != after_count || active_tasks.len() > 0 {
+            if before_count != after_count || !active_tasks.is_empty() {
                 println!(
                     "Status: {} active tasks, {} payloads in queue, {} completed",
                     active_tasks.len(),
@@ -312,8 +313,7 @@ mod tests {
 
             if completed_payloads >= MAX_COMPLETED {
                 println!(
-                    "Reached completion target: {} payloads processed",
-                    completed_payloads
+                    "Reached completion target: {completed_payloads} payloads processed"
                 );
                 break;
             }

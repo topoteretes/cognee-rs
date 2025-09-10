@@ -154,7 +154,7 @@ mod tests {
         assert_eq!(cloned.metainfo.created_at, base.metainfo.created_at);
 
         // Debug shouldn't panic and should contain type name hints.
-        let dbg_str = format!("{:?}", base);
+        let dbg_str = format!("{base:?}");
         assert!(dbg_str.contains("PayloadBase"));
         assert!(dbg_str.contains("PayloadMetaInfo"));
     }
