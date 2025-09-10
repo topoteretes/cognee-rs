@@ -135,30 +135,30 @@ mod tests {
 
         loop {
             tokio::select! {
-            signal = signal_rx.recv() => {
-                match signal {
-                    Some(LoopSignal::TaskCompleted) => {
-                        println!("Received task completion signal - checking for work...");
+                signal = signal_rx.recv() => {
+                    match signal {
+                        Some(LoopSignal::TaskCompleted) => {
+                            println!("Received task completion signal - checking for work...");
 
-                    }
-                    Some(LoopSignal::NewPayloadAdded) => {
-                        println!("Received new payload signal - checking for work...");
+                        }
+                        Some(LoopSignal::NewPayloadAdded) => {
+                            println!("Received new payload signal - checking for work...");
 
-                    }
-                    Some(LoopSignal::Shutdown) => {
-                        println!("Received shutdown signal");
-                        break;
-                    }
-                    None => {
-                        println!("Signal channel closed");
-                        break;
+                        }
+                        Some(LoopSignal::Shutdown) => {
+                            println!("Received shutdown signal");
+                            break;
+                        }
+                        None => {
+                            println!("Signal channel closed");
+                            break;
+                        }
                     }
                 }
+                _ = tokio::time::sleep(Duration::from_millis(10000)) => {
+                    println!("Periodic check for work - no signals received for 10s");
+                }
             }
-            _ = tokio::time::sleep(Duration::from_millis(10000)) => {
-                println!("Periodic check for work - no signals received for 10s");
-            }
-        }
 
             let current_size = payloads.read().unwrap().len();
 
@@ -200,7 +200,8 @@ mod tests {
 
                     // This is the case when the payload is fully completed
                     if let (Some(r1), Some(r2)) = (&result1_status, &result2_status) {
-                        if matches!(r1, PropertyStatus::Done) && matches!(r2, PropertyStatus::Done) {
+                        if matches!(r1, PropertyStatus::Done) && matches!(r2, PropertyStatus::Done)
+                        {
                             let payload_counter =
                                 payload_counters.get(&payload_id).copied().unwrap_or(0);
                             println!(
