@@ -27,6 +27,46 @@ macro_rules! create_cognee_payload {
             property_status: Arc<Mutex<HashMap<String, PropertyStatus>>>,
         }
 
+        // Implement the PayloadTrait for the generated payload type
+        impl $crate::data::payload_trait::PayloadTrait for $name
+        where
+            $(
+                $result_type: Clone + Send + Sync + 'static,
+            )*
+        {
+            fn payload_id(&self) -> uuid::Uuid {
+                self.id()
+            }
+            
+            fn payload_get_property_status(&self, property: &str) -> Option<PropertyStatus> {
+                self.get_property_status(property)
+            }
+            
+            fn payload_set_property_status(&self, property: &str, status: PropertyStatus) {
+                self.set_property_status(property, status)
+            }
+            
+            fn payload_get_arc(&self, property: &str) -> Result<Box<dyn std::any::Any + Send + Sync>, String> {
+                self.get_arc(property)
+            }
+            
+            fn payload_get_copy(&self, property: &str) -> Result<Box<dyn std::any::Any + Send + Sync>, String> {
+                self.get_copy(property)
+            }
+        }
+
+        // Implement the PayloadConstructor trait for the generated payload type
+        impl $crate::data::payload_trait::PayloadConstructor for $name
+        where
+            $(
+                $result_type: Clone + Send + Sync + 'static,
+            )*
+        {
+            fn new(chunks: Vec<std::sync::Arc<String>>) -> Self {
+                Self::new(chunks)
+            }
+        }
+
         #[allow(dead_code)]
         impl $name
         where
