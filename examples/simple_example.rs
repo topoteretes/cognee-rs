@@ -279,11 +279,12 @@ async fn run_pipeline<T>(
                 let result1_status = payload.payload_get_property_status("result1");
                 let result2_status = payload.payload_get_property_status("result2");
 
-                // This is the case when the payload is fully completed
-                if let (Some(r1), Some(r2)) = (&result1_status, &result2_status)
-                    && matches!(r1, PropertyStatus::Done)
-                    && matches!(r2, PropertyStatus::Done)
-                {
+                // This is the case when the payload is fully completed - check if ALL properties are done
+                let all_properties_done = payload.payload_get_all_property_statuses()
+                    .iter()
+                    .all(|(_, status)| matches!(status, PropertyStatus::Done));
+                
+                if all_properties_done {
                     let payload_counter = payload_counters.get(&payload_id).copied().unwrap_or(0);
                     println!(
                         "Dynamic payload {} (ID: {}, counter: {}) fully completed!",
