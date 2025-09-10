@@ -236,9 +236,13 @@ mod tests {
                         let handle = create_task(
                             "Stage1_ChunksToProcessed",
                             None,
-                            payload.chunks_arc(),
-                            Some(payload.result1_arc()),
-                            payload.property_status_arc(),
+                            *payload.get_arc("chunks").unwrap().downcast().unwrap(),
+                            Some(*payload.get_arc("result1").unwrap().downcast().unwrap()),
+                            *payload
+                                .get_arc("property_status")
+                                .unwrap()
+                                .downcast()
+                                .unwrap(),
                             "result1",
                             stage1_transform_async,
                             Some(signal_tx.clone()),
@@ -265,9 +269,13 @@ mod tests {
                         let handle = create_task(
                             "Stage2_ProcessedToFinal",
                             None,
-                            payload.result1_arc(),
-                            Some(payload.result2_arc()),
-                            payload.property_status_arc(),
+                            *payload.get_arc("result1").unwrap().downcast().unwrap(),
+                            Some(*payload.get_arc("result2").unwrap().downcast().unwrap()),
+                            *payload
+                                .get_arc("property_status")
+                                .unwrap()
+                                .downcast()
+                                .unwrap(),
                             "result2",
                             stage2_transform,
                             Some(signal_tx.clone()),

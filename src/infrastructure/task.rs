@@ -137,9 +137,13 @@ mod tests {
         let handle1 = create_task(
             "Task1_ToResult1",
             Some(100),
-            payload.chunks_arc(),
-            Some(payload.result1_arc()),
-            payload.property_status_arc(),
+            *payload.get_arc("chunks").unwrap().downcast().unwrap(),
+            Some(*payload.get_arc("result1").unwrap().downcast().unwrap()),
+            *payload
+                .get_arc("property_status")
+                .unwrap()
+                .downcast()
+                .unwrap(),
             "result1",
             transform_fn1,
             None,
@@ -149,9 +153,13 @@ mod tests {
         let handle2 = create_task(
             "Task2_ToResult2",
             None,
-            payload.chunks_arc(),
-            Some(payload.result2_arc()),
-            payload.property_status_arc(),
+            *payload.get_arc("chunks").unwrap().downcast().unwrap(),
+            Some(*payload.get_arc("result2").unwrap().downcast().unwrap()),
+            *payload
+                .get_arc("property_status")
+                .unwrap()
+                .downcast()
+                .unwrap(),
             "result2",
             transform_fn2,
             None,
@@ -165,8 +173,10 @@ mod tests {
         }
         info!("All tasks completed!");
 
-        let result1_arc = payload.result1_arc();
-        let result2_arc = payload.result2_arc();
+        let result1_arc: Arc<RwLock<Vec<Arc<String>>>> =
+            *payload.get_arc("result1").unwrap().downcast().unwrap();
+        let result2_arc: Arc<RwLock<Vec<Arc<String>>>> =
+            *payload.get_arc("result2").unwrap().downcast().unwrap();
         let results1 = result1_arc.read().unwrap();
         let results2 = result2_arc.read().unwrap();
 
@@ -255,9 +265,13 @@ mod tests {
         let handle1 = create_task(
             "Stage1_ChunksToProcessed",
             None,
-            payload.chunks_arc(),
-            Some(payload.result1_arc()),
-            payload.property_status_arc(),
+            *payload.get_arc("chunks").unwrap().downcast().unwrap(),
+            Some(*payload.get_arc("result1").unwrap().downcast().unwrap()),
+            *payload
+                .get_arc("property_status")
+                .unwrap()
+                .downcast()
+                .unwrap(),
             "result1",
             stage1_transform,
             None,
@@ -270,9 +284,13 @@ mod tests {
         let handle2 = create_task(
             "Stage2_ProcessedToAnalyzed",
             Some(15),
-            payload.result1_arc(),
-            Some(payload.result2_arc()),
-            payload.property_status_arc(),
+            *payload.get_arc("result1").unwrap().downcast().unwrap(),
+            Some(*payload.get_arc("result2").unwrap().downcast().unwrap()),
+            *payload
+                .get_arc("property_status")
+                .unwrap()
+                .downcast()
+                .unwrap(),
             "result2",
             stage2_transform,
             None,
@@ -281,8 +299,10 @@ mod tests {
         handle2.await.unwrap();
         info!("Stage 2 completed!");
 
-        let result1_arc = payload.result1_arc();
-        let result2_arc = payload.result2_arc();
+        let result1_arc: Arc<RwLock<Vec<Arc<ProcessedChunk>>>> =
+            *payload.get_arc("result1").unwrap().downcast().unwrap();
+        let result2_arc: Arc<RwLock<Vec<Arc<AnalyzedResult>>>> =
+            *payload.get_arc("result2").unwrap().downcast().unwrap();
         let results1 = result1_arc.read().unwrap();
         let results2 = result2_arc.read().unwrap();
 
@@ -334,9 +354,13 @@ mod tests {
         let handle = create_task(
             "NoOutputTask",
             Some(3),
-            payload.chunks_arc(),
+            *payload.get_arc("chunks").unwrap().downcast().unwrap(),
             None, // No output storage!
-            payload.property_status_arc(),
+            *payload
+                .get_arc("property_status")
+                .unwrap()
+                .downcast()
+                .unwrap(),
             "custom_task_status",
             side_effect_task,
             None,
@@ -344,9 +368,11 @@ mod tests {
 
         handle.await.unwrap();
 
-        let result1_arc = payload.result1_arc();
+        let result1_arc: Arc<RwLock<Vec<Arc<String>>>> =
+            *payload.get_arc("result1").unwrap().downcast().unwrap();
         let results1 = result1_arc.read().unwrap();
-        let result2_arc = payload.result2_arc();
+        let result2_arc: Arc<RwLock<Vec<Arc<String>>>> =
+            *payload.get_arc("result2").unwrap().downcast().unwrap();
         let results2 = result2_arc.read().unwrap();
 
         assert_eq!(results1.len(), 0);

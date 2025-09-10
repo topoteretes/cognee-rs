@@ -14,9 +14,9 @@ pub enum PropertyStatus {
 #[derive(Debug, Clone)]
 pub struct CogneePayload<TC, T1, T2>
 where
-    TC: Clone + Send + Sync,
-    T1: Clone + Send + Sync,
-    T2: Clone + Send + Sync,
+    TC: Clone + Send + Sync + 'static,
+    T1: Clone + Send + Sync + 'static,
+    T2: Clone + Send + Sync + 'static,
 {
     base: Arc<RwLock<PayloadBase>>,
     chunks: Arc<RwLock<Vec<Arc<TC>>>>,
@@ -27,9 +27,9 @@ where
 
 impl<TC, T1, T2> CogneePayload<TC, T1, T2>
 where
-    TC: Clone + Send + Sync,
-    T1: Clone + Send + Sync,
-    T2: Clone + Send + Sync,
+    TC: Clone + Send + Sync + 'static,
+    T1: Clone + Send + Sync + 'static,
+    T2: Clone + Send + Sync + 'static,
 {
     pub fn new(chunks: Vec<Arc<TC>>) -> Self {
         let mut status = HashMap::new();
@@ -54,25 +54,25 @@ where
         }
     }
 
-    pub fn chunks_arc(&self) -> Arc<RwLock<Vec<Arc<TC>>>> {
-        Arc::clone(&self.chunks)
+    /// Generic method to get Arc by property name
+    /// Returns a trait object that can be downcast to the specific type
+    /// Usage:
+    ///   let chunks_arc: Arc<RwLock<Vec<Arc<String>>>> = payload.get_arc("chunks").unwrap().downcast().unwrap();
+    ///   let result1_arc: Arc<RwLock<Vec<Arc<String>>>> = payload.get_arc("result1").unwrap().downcast().unwrap();
+    ///   let property_status_arc: Arc<Mutex<HashMap<String, PropertyStatus>>> = payload.get_arc("property_status").unwrap().downcast().unwrap();
+    pub fn get_arc(&self, property: &str) -> Result<Box<dyn std::any::Any + Send + Sync>, String> {
+        match property {
+            "chunks" => Ok(Box::new(Arc::clone(&self.chunks))),
+            "result1" => Ok(Box::new(Arc::clone(&self.result1))),
+            "result2" => Ok(Box::new(Arc::clone(&self.result2))),
+            "property_status" => Ok(Box::new(Arc::clone(&self.property_status))),
+            _ => Err(format!("Unknown property: {property}")),
+        }
     }
 
     pub fn get_chunks_copy(&self) -> Vec<Arc<TC>> {
         let chunks = self.chunks.read().unwrap();
         chunks.clone()
-    }
-
-    pub fn result1_arc(&self) -> Arc<RwLock<Vec<Arc<T1>>>> {
-        Arc::clone(&self.result1)
-    }
-
-    pub fn result2_arc(&self) -> Arc<RwLock<Vec<Arc<T2>>>> {
-        Arc::clone(&self.result2)
-    }
-
-    pub fn property_status_arc(&self) -> Arc<Mutex<HashMap<String, PropertyStatus>>> {
-        Arc::clone(&self.property_status)
     }
 
     pub fn get_result1_copy(&self) -> Vec<Arc<T1>> {
@@ -99,9 +99,9 @@ where
 
 impl<TC, T1, T2> CogneePayload<TC, T1, T2>
 where
-    TC: Clone + Send + Sync,
-    T1: Clone + Send + Sync,
-    T2: Clone + Send + Sync,
+    TC: Clone + Send + Sync + 'static,
+    T1: Clone + Send + Sync + 'static,
+    T2: Clone + Send + Sync + 'static,
 {
     pub fn id(&self) -> Uuid {
         let base = self.base.read().unwrap();
@@ -127,9 +127,12 @@ async fn parallel_readers_no_copy() {
 
     let payload = Arc::new(CogneePayload::<String, String, String>::new(initial_chunks));
 
-    let chunks_arc = payload.chunks_arc();
-    let result1_arc = payload.result1_arc();
-    let result2_arc = payload.result2_arc();
+    let chunks_arc: Arc<RwLock<Vec<Arc<String>>>> =
+        *payload.get_arc("chunks").unwrap().downcast().unwrap();
+    let result1_arc: Arc<RwLock<Vec<Arc<String>>>> =
+        *payload.get_arc("result1").unwrap().downcast().unwrap();
+    let result2_arc: Arc<RwLock<Vec<Arc<String>>>> =
+        *payload.get_arc("result2").unwrap().downcast().unwrap();
 
     let mut handles = Vec::new();
 
@@ -391,5 +394,40 @@ mod status_tests {
             payload.get_property_status("another_prop"),
             Some(PropertyStatus::Errored("custom error".to_string()))
         );
+    }
+
+    #[test]
+    fn test_generic_get_arc() {
+        let chunks = vec![
+            Arc::new("chunk1".to_string()),
+            Arc::new("chunk2".to_string()),
+        ];
+        let payload = CogneePayload::<String, String, String>::new(chunks);
+
+        // Test generic Arc access
+        let chunks_arc: Arc<RwLock<Vec<Arc<String>>>> =
+            *payload.get_arc("chunks").unwrap().downcast().unwrap();
+        let result1_arc: Arc<RwLock<Vec<Arc<String>>>> =
+            *payload.get_arc("result1").unwrap().downcast().unwrap();
+        let result2_arc: Arc<RwLock<Vec<Arc<String>>>> =
+            *payload.get_arc("result2").unwrap().downcast().unwrap();
+        let property_status_arc: Arc<Mutex<HashMap<String, PropertyStatus>>> = *payload
+            .get_arc("property_status")
+            .unwrap()
+            .downcast()
+            .unwrap();
+
+        // Verify we got the right types
+        assert!(chunks_arc.read().unwrap().len() == 2);
+        assert!(result1_arc.read().unwrap().is_empty());
+        assert!(result2_arc.read().unwrap().is_empty());
+        let status_len = property_status_arc.lock().unwrap().len();
+        println!("Property status length: {status_len}");
+        assert!(status_len >= 3); // chunks, result1, result2
+
+        // Test error case
+        let error_result = payload.get_arc("invalid_property");
+        assert!(error_result.is_err());
+        assert!(error_result.unwrap_err().contains("Unknown property"));
     }
 }
