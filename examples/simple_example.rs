@@ -44,6 +44,7 @@ pub struct TaskConfig<TInput, TOutput> {
     pub name: String,
     pub input_type: String,
     pub output_type: String,
+    pub batch_size: Option<usize>,
     pub process_fn: Box<dyn Fn(Vec<Arc<TInput>>) -> Pin<Box<dyn Future<Output = Vec<Arc<TOutput>>> + Send>> + Send + Sync>,
 }
 
@@ -56,6 +57,7 @@ where
         name: String,
         input_type: String,
         output_type: String,
+        batch_size: Option<usize>,
         process_fn: F,
     ) -> Self
     where
@@ -66,6 +68,7 @@ where
             name,
             input_type,
             output_type,
+            batch_size,
             process_fn: Box::new(move |input| {
                 Box::pin(process_fn(input))
             }),
@@ -181,6 +184,21 @@ async fn run_pipeline<T>(
     T: PayloadTrait + PayloadConstructor + Clone + Send + Sync + 'static,
 {
 
+
+    // Print out the tasks that were passed in
+    println!("=== Pipeline Tasks Received ===");
+    println!("Received {} pipeline tasks:", pipeline_tasks.len());
+    
+    for (i, task_box) in pipeline_tasks.iter().enumerate() {
+        if let Some(task) = task_box.downcast_ref::<TaskConfig<String, String>>() {
+            let batch_info = match task.batch_size {
+                Some(size) => format!("batch_size: {}", size),
+                None => "no batch limit".to_string(),
+            };
+            println!("  Task {}: {} ({} -> {}) [{}]", i + 1, task.name, task.input_type, task.output_type, batch_info);
+        }
+    }
+    println!("=== End of Pipeline Tasks ===\n");
 
     ///////// Scheduler related resources
     let (signal_tx, mut signal_rx) = mpsc::unbounded_channel::<LoopSignal>();
@@ -412,6 +430,7 @@ async fn main() {
         "Stage1_ChunksToProcessed".to_string(),
         "String".to_string(),
         "String".to_string(),
+        Some(10), // batch size of 10
         stage1_transform_async,
     );
 
@@ -419,9 +438,10 @@ async fn main() {
         "Stage2_ProcessedToFinal".to_string(),
         "String".to_string(),
         "String".to_string(),
+        None, // no batch size limit
         stage2_transform,
     );
-
+    
 
     let mut pipeline_tasks: Vec<Box<dyn std::any::Any>> = Vec::new();
     pipeline_tasks.push(Box::new(stage1_task));
