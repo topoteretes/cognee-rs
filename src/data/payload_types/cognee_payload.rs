@@ -54,12 +54,6 @@ where
         }
     }
 
-    /// Generic method to get Arc by property name
-    /// Returns a trait object that can be downcast to the specific type
-    /// Usage:
-    ///   let chunks_arc: Arc<RwLock<Vec<Arc<String>>>> = payload.get_arc("chunks").unwrap().downcast().unwrap();
-    ///   let result1_arc: Arc<RwLock<Vec<Arc<String>>>> = payload.get_arc("result1").unwrap().downcast().unwrap();
-    ///   let property_status_arc: Arc<Mutex<HashMap<String, PropertyStatus>>> = payload.get_arc("property_status").unwrap().downcast().unwrap();
     pub fn get_arc(&self, property: &str) -> Result<Box<dyn std::any::Any + Send + Sync>, String> {
         match property {
             "chunks" => Ok(Box::new(Arc::clone(&self.chunks))),
@@ -70,11 +64,6 @@ where
         }
     }
 
-    /// Generic method to get copy of data by property name
-    /// Returns a trait object that can be downcast to the specific type
-    /// Usage:
-    ///   let chunks_copy: Vec<Arc<String>> = payload.get_copy("chunks").unwrap().downcast().unwrap();
-    ///   let result1_copy: Vec<Arc<ProcessedChunk>> = payload.get_copy("result1").unwrap().downcast().unwrap();
     pub fn get_copy(&self, property: &str) -> Result<Box<dyn std::any::Any + Send + Sync>, String> {
         match property {
             "chunks" => {
