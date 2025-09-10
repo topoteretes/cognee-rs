@@ -1,6 +1,4 @@
-// Dynamic CogneePayload generation using macros
-// This allows you to create payloads with configurable result fields
-// Generates EXACTLY the same thread-safe structure as original CogneePayload
+// Unused import is neede here to pass clippy because of metaprogramming (Maybe there is a better way to do this?)
 
 #[allow(unused_imports)]
 use super::super::payload_base::PayloadBase;
