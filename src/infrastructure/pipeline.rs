@@ -1,7 +1,6 @@
 #[cfg(test)]
 mod tests {
     use crate::data::payload_types::cognee_payload::{CogneePayload, PropertyStatus};
-    use crate::data::payloadbehavior::PayloadBehavior;
     use crate::infrastructure::task::LoopSignal;
     use crate::infrastructure::task::create_task;
     use rand::Rng;
@@ -114,11 +113,11 @@ mod tests {
 
         /////////Parameters
         // Maximum number of payloads in the central processing queue
-        const MAX_PAYLOADS: usize = 15;
+        const MAX_PAYLOADS: usize = 5;
         // Maximum number of concurrent tasks
-        const MAX_CONCURRENT_TASKS: usize = 10;
+        const MAX_CONCURRENT_TASKS: usize = 3;
         // Number of all payloads (just for the POC)
-        const MAX_COMPLETED: usize = 50;
+        const MAX_COMPLETED: usize = 10;
 
         ///////// Scheduler related resources
         let (signal_tx, mut signal_rx) = mpsc::unbounded_channel::<LoopSignal>();

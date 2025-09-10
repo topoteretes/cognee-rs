@@ -5,7 +5,6 @@ use uuid::Uuid;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PayloadMetaInfo {
     pub id: Uuid,
-    pub task_counter: u32,
     pub created_at: DateTime<Utc>,
 }
 
@@ -19,12 +18,8 @@ impl PayloadMetaInfo {
     pub fn new() -> Self {
         Self {
             id: Uuid::new_v4(),
-            task_counter: 0,
             created_at: Utc::now(),
         }
-    }
-    pub fn task_done(&mut self) {
-        self.task_counter += 1;
     }
 }
 
@@ -57,9 +52,6 @@ mod tests {
     fn payload_metainfo_new_initial_values() {
         let meta = PayloadMetaInfo::new();
 
-        // task_counter starts at 0
-        assert_eq!(meta.task_counter, 0);
-
         // id is a valid v4 UUID (Uuid::new_v4() always yields V4)
         assert_eq!(meta.id.get_version_num(), 4);
 
@@ -78,22 +70,9 @@ mod tests {
     }
 
     #[test]
-    fn payload_metainfo_task_done_increments() {
-        let mut meta = PayloadMetaInfo::new();
-        assert_eq!(meta.task_counter, 0);
-
-        meta.task_done();
-        assert_eq!(meta.task_counter, 1);
-
-        meta.task_done();
-        assert_eq!(meta.task_counter, 2);
-    }
-
-    #[test]
     fn payload_base_new_initializes_metainfo() {
         let base = PayloadBase::new();
         // Ensure metainfo exists and has sane defaults
-        assert_eq!(base.metainfo.task_counter, 0);
         assert_eq!(base.metainfo.id.get_version_num(), 4);
     }
 
@@ -103,30 +82,25 @@ mod tests {
         let meta_new = PayloadMetaInfo::new();
 
         // We can't expect IDs/timestamps to match, but we can expect semantics:
-        assert_eq!(meta_default.task_counter, 0);
         assert_eq!(meta_default.id.get_version_num(), 4);
-        assert_eq!(meta_new.task_counter, 0);
         assert_eq!(meta_new.id.get_version_num(), 4);
 
         let base_default = PayloadBase::default();
         let base_new = PayloadBase::new();
 
-        // Same as above: both should have valid metainfo with counter 0 and v4 UUIDs
+        // Same as above: both should have valid metainfo with v4 UUIDs
         for b in [&base_default, &base_new] {
-            assert_eq!(b.metainfo.task_counter, 0);
             assert_eq!(b.metainfo.id.get_version_num(), 4);
         }
     }
 
     #[test]
     fn serde_roundtrip_payload_metainfo() {
-        let mut meta = PayloadMetaInfo::new();
-        meta.task_done(); // mutate to ensure non-default value is preserved
+        let meta = PayloadMetaInfo::new();
 
         let json = serde_json::to_string(&meta).expect("serialize");
         let de: PayloadMetaInfo = serde_json::from_str(&json).expect("deserialize");
 
-        assert_eq!(de.task_counter, meta.task_counter);
         assert_eq!(de.id, meta.id);
         assert_eq!(de.created_at, meta.created_at);
     }
@@ -138,7 +112,6 @@ mod tests {
         let json = serde_json::to_string(&base).expect("serialize");
         let de: PayloadBase = serde_json::from_str(&json).expect("deserialize");
 
-        assert_eq!(de.metainfo.task_counter, base.metainfo.task_counter);
         assert_eq!(de.metainfo.id, base.metainfo.id);
         assert_eq!(de.metainfo.created_at, base.metainfo.created_at);
     }
@@ -150,7 +123,6 @@ mod tests {
 
         // Cloned value should be equal by field values (derive(Clone)).
         assert_eq!(cloned.metainfo.id, base.metainfo.id);
-        assert_eq!(cloned.metainfo.task_counter, base.metainfo.task_counter);
         assert_eq!(cloned.metainfo.created_at, base.metainfo.created_at);
 
         // Debug shouldn't panic and should contain type name hints.

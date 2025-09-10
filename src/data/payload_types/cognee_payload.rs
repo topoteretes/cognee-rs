@@ -1,5 +1,4 @@
 use crate::data::payload_base::PayloadBase;
-use crate::data::payloadbehavior::PayloadBehavior;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, RwLock};
 use uuid::Uuid;
@@ -64,7 +63,6 @@ where
         chunks.clone()
     }
 
-
     pub fn result1_arc(&self) -> Arc<RwLock<Vec<Arc<T1>>>> {
         Arc::clone(&self.result1)
     }
@@ -82,14 +80,10 @@ where
         result1.clone()
     }
 
-
-
     pub fn get_result2_copy(&self) -> Vec<Arc<T2>> {
         let result2 = self.result2.read().unwrap();
         result2.clone()
     }
-
-
 
     // Status dictionary methods
     pub fn get_property_status(&self, property: &str) -> Option<PropertyStatus> {
@@ -101,23 +95,17 @@ where
         let mut status_map = self.property_status.lock().unwrap();
         status_map.insert(property.to_string(), status);
     }
-
 }
 
-impl<TC, T1, T2> PayloadBehavior for CogneePayload<TC, T1, T2>
+impl<TC, T1, T2> CogneePayload<TC, T1, T2>
 where
     TC: Clone + Send + Sync,
     T1: Clone + Send + Sync,
     T2: Clone + Send + Sync,
 {
-    fn id(&self) -> Uuid {
+    pub fn id(&self) -> Uuid {
         let base = self.base.read().unwrap();
         base.metainfo.id
-    }
-
-    fn task_done(&mut self) {
-        let mut base = self.base.write().unwrap();
-        base.metainfo.task_done();
     }
 }
 
@@ -320,7 +308,6 @@ mod status_tests {
         );
     }
 
-
     #[test]
     fn test_set_and_get_property_status() {
         let payload = CogneePayload::<String, String, String>::new(vec![]);
@@ -346,7 +333,6 @@ mod status_tests {
             Some(PropertyStatus::Done)
         );
     }
-
 
     #[test]
     fn test_property_status_with_different_types() {
