@@ -2,9 +2,13 @@
 // This allows you to create payloads with configurable result fields
 // Generates EXACTLY the same thread-safe structure as original CogneePayload
 
+#[allow(unused_imports)]
 use super::super::payload_base::PayloadBase;
+#[allow(unused_imports)]
 use super::cognee_payload::PropertyStatus;
+#[allow(unused_imports)]
 use std::collections::HashMap;
+#[allow(unused_imports)]
 use std::sync::{Arc, Mutex, RwLock};
 
 #[macro_export]
@@ -115,7 +119,6 @@ macro_rules! create_cognee_payload {
 mod tests {
     use super::*;
     use crate::create_cognee_payload;
-    use crate::data::payload_types::cognee_payload::CogneePayload;
 
     // Create a custom payload type with 3 result fields for testing
     create_cognee_payload!(
@@ -427,22 +430,22 @@ mod tests {
         payload.set_property_status("result3", PropertyStatus::Empty);
 
         if let Some(status) = payload.get_property_status("result1") {
-            println!("Got result1 status: {:?}", status);
+            println!("Got result1 status: {status:?}");
         }
 
         if let Some(status) = payload.get_property_status("result2") {
-            println!("Got result2 status: {:?}", status);
+            println!("Got result2 status: {status:?}");
         }
 
         if let Some(status) = payload.get_property_status("result3") {
-            println!("Got result3 status: {:?}", status);
+            println!("Got result3 status: {status:?}");
         }
 
         // Test base method
-        let base_arc = payload.base();
+        let _base_arc = payload.base();
 
         // Test ID method (returns Uuid like original)
-        let payload_id = payload.id();
+        let _payload_id = payload.id();
 
         // Assertions to verify functionality
         assert_eq!(
@@ -595,11 +598,11 @@ mod tests {
         let original_id_str = original_id.to_string();
         let dynamic_id_str = dynamic_id.to_string();
         assert!(
-            original_id_str.len() > 0,
+            !original_id_str.is_empty(),
             "Original ID should be a valid Uuid"
         );
         assert!(
-            dynamic_id_str.len() > 0,
+            !dynamic_id_str.is_empty(),
             "Dynamic ID should be a valid Uuid"
         );
 
@@ -642,13 +645,11 @@ mod tests {
         for field in &core_fields {
             assert!(
                 original_arc.get_arc(field).is_ok(),
-                "Original should have field: {}",
-                field
+                "Original should have field: {field}"
             );
             assert!(
                 dynamic_arc.get_arc(field).is_ok(),
-                "Dynamic should have field: {}",
-                field
+                "Dynamic should have field: {field}"
             );
         }
 
