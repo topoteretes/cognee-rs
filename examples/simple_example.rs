@@ -7,15 +7,14 @@ use cognee_rust::{PayloadConstructor, PayloadTrait};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio::time::sleep;
 use uuid::Uuid;
-use std::future::Future;
-use std::pin::Pin;
-
 
 // Create a dynamic payload type for testing
 create_cognee_payload!(
@@ -45,7 +44,11 @@ pub struct TaskConfig<TInput, TOutput> {
     pub input_type: String,
     pub output_type: String,
     pub batch_size: Option<usize>,
-    pub process_fn: Box<dyn Fn(Vec<Arc<TInput>>) -> Pin<Box<dyn Future<Output = Vec<Arc<TOutput>>> + Send>> + Send + Sync>,
+    pub process_fn: Box<
+        dyn Fn(Vec<Arc<TInput>>) -> Pin<Box<dyn Future<Output = Vec<Arc<TOutput>>> + Send>>
+            + Send
+            + Sync,
+    >,
 }
 
 impl<TInput, TOutput> TaskConfig<TInput, TOutput>
@@ -69,9 +72,7 @@ where
             input_type,
             output_type,
             batch_size,
-            process_fn: Box::new(move |input| {
-                Box::pin(process_fn(input))
-            }),
+            process_fn: Box::new(move |input| Box::pin(process_fn(input))),
         }
     }
 
@@ -183,19 +184,24 @@ async fn run_pipeline<T>(
 ) where
     T: PayloadTrait + PayloadConstructor + Clone + Send + Sync + 'static,
 {
-
-
     // Print out the tasks that were passed in
     println!("=== Pipeline Tasks Received ===");
     println!("Received {} pipeline tasks:", pipeline_tasks.len());
-    
+
     for (i, task_box) in pipeline_tasks.iter().enumerate() {
         if let Some(task) = task_box.downcast_ref::<TaskConfig<String, String>>() {
             let batch_info = match task.batch_size {
                 Some(size) => format!("batch_size: {}", size),
                 None => "no batch limit".to_string(),
             };
-            println!("  Task {}: {} ({} -> {}) [{}]", i + 1, task.name, task.input_type, task.output_type, batch_info);
+            println!(
+                "  Task {}: {} ({} -> {}) [{}]",
+                i + 1,
+                task.name,
+                task.input_type,
+                task.output_type,
+                batch_info
+            );
         }
     }
     println!("=== End of Pipeline Tasks ===\n");
@@ -280,10 +286,11 @@ async fn run_pipeline<T>(
                 let result2_status = payload.payload_get_property_status("result2");
 
                 // This is the case when the payload is fully completed - check if ALL properties are done
-                let all_properties_done = payload.payload_get_all_property_statuses()
+                let all_properties_done = payload
+                    .payload_get_all_property_statuses()
                     .iter()
                     .all(|(_, status)| matches!(status, PropertyStatus::Done));
-                
+
                 if all_properties_done {
                     let payload_counter = payload_counters.get(&payload_id).copied().unwrap_or(0);
                     println!(
@@ -316,8 +323,18 @@ async fn run_pipeline<T>(
                     let task_future = create_task(
                         "DynamicStage1_ChunksToProcessed",
                         None,
-                        *payload.payload_get_arc("chunks").unwrap().downcast().unwrap(),
-                        Some(*payload.payload_get_arc("result1").unwrap().downcast().unwrap()),
+                        *payload
+                            .payload_get_arc("chunks")
+                            .unwrap()
+                            .downcast()
+                            .unwrap(),
+                        Some(
+                            *payload
+                                .payload_get_arc("result1")
+                                .unwrap()
+                                .downcast()
+                                .unwrap(),
+                        ),
                         *payload
                             .payload_get_arc("property_status")
                             .unwrap()
@@ -350,8 +367,18 @@ async fn run_pipeline<T>(
                     let task_future = create_task(
                         "DynamicStage2_ProcessedToFinal",
                         None,
-                        *payload.payload_get_arc("result1").unwrap().downcast().unwrap(),
-                        Some(*payload.payload_get_arc("result2").unwrap().downcast().unwrap()),
+                        *payload
+                            .payload_get_arc("result1")
+                            .unwrap()
+                            .downcast()
+                            .unwrap(),
+                        Some(
+                            *payload
+                                .payload_get_arc("result2")
+                                .unwrap()
+                                .downcast()
+                                .unwrap(),
+                        ),
                         *payload
                             .payload_get_arc("property_status")
                             .unwrap()
@@ -425,8 +452,6 @@ async fn main() {
     let max_concurrent_tasks = 3; // Maximum number of concurrent tasks
     let max_completed = 10; // Number of all payloads (just for the POC)
 
-
-    
     let stage1_task = TaskConfig::new(
         "Stage1_ChunksToProcessed".to_string(),
         "String".to_string(),
@@ -442,13 +467,10 @@ async fn main() {
         None, // no batch size limit
         stage2_transform,
     );
-    
 
     let mut pipeline_tasks: Vec<Box<dyn std::any::Any>> = Vec::new();
     pipeline_tasks.push(Box::new(stage1_task));
     pipeline_tasks.push(Box::new(stage2_task));
-    
-
 
     // Now run the pipeline
     run_pipeline(

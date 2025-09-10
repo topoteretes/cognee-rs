@@ -13,7 +13,9 @@ pub trait PayloadTrait: Send + Sync + 'static {
         &self,
         property: &str,
     ) -> Result<Box<dyn std::any::Any + Send + Sync>, String>;
-    fn payload_get_all_property_statuses(&self) -> std::collections::HashMap<String, PropertyStatus>;
+    fn payload_get_all_property_statuses(
+        &self,
+    ) -> std::collections::HashMap<String, PropertyStatus>;
 }
 
 pub trait PayloadConstructor: PayloadTrait {

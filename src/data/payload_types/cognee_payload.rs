@@ -130,11 +130,17 @@ where
         self.set_property_status(property, status)
     }
 
-    fn payload_get_arc(&self, property: &str) -> Result<Box<dyn std::any::Any + Send + Sync>, String> {
+    fn payload_get_arc(
+        &self,
+        property: &str,
+    ) -> Result<Box<dyn std::any::Any + Send + Sync>, String> {
         self.get_arc(property)
     }
 
-    fn payload_get_copy(&self, property: &str) -> Result<Box<dyn std::any::Any + Send + Sync>, String> {
+    fn payload_get_copy(
+        &self,
+        property: &str,
+    ) -> Result<Box<dyn std::any::Any + Send + Sync>, String> {
         self.get_copy(property)
     }
 
