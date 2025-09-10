@@ -72,7 +72,7 @@ where
 
     /// Generic method to get copy of data by property name
     /// Returns a trait object that can be downcast to the specific type
-    /// Usage: 
+    /// Usage:
     ///   let chunks_copy: Vec<Arc<String>> = payload.get_copy("chunks").unwrap().downcast().unwrap();
     ///   let result1_copy: Vec<Arc<ProcessedChunk>> = payload.get_copy("result1").unwrap().downcast().unwrap();
     pub fn get_copy(&self, property: &str) -> Result<Box<dyn std::any::Any + Send + Sync>, String> {
@@ -92,7 +92,6 @@ where
             _ => Err(format!("Unknown property: {property}")),
         }
     }
-
 
     // Status dictionary methods
     pub fn get_property_status(&self, property: &str) -> Option<PropertyStatus> {
@@ -442,15 +441,18 @@ mod status_tests {
 
     #[test]
     fn test_generic_get_copy() {
-        let chunks = vec![Arc::new("chunk1".to_string()), Arc::new("chunk2".to_string())];
+        let chunks = vec![
+            Arc::new("chunk1".to_string()),
+            Arc::new("chunk2".to_string()),
+        ];
         let payload = CogneePayload::<String, String, String>::new(chunks);
 
         // Test generic copy access
-        let chunks_copy: Vec<Arc<String>> = 
+        let chunks_copy: Vec<Arc<String>> =
             *payload.get_copy("chunks").unwrap().downcast().unwrap();
-        let result1_copy: Vec<Arc<String>> = 
+        let result1_copy: Vec<Arc<String>> =
             *payload.get_copy("result1").unwrap().downcast().unwrap();
-        let result2_copy: Vec<Arc<String>> = 
+        let result2_copy: Vec<Arc<String>> =
             *payload.get_copy("result2").unwrap().downcast().unwrap();
 
         // Verify we got the right types and data
