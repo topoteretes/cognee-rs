@@ -32,11 +32,6 @@ where
     let output_property_name = output_property_name.to_string();
 
     async move {
-        // Set property status to Processing at the beginning
-        {
-            let mut status = property_status.lock().unwrap();
-            status.insert(output_property_name.clone(), PropertyStatus::Processing);
-        }
 
         let total_chunks = {
             let chunks_guard = input.read().unwrap();
