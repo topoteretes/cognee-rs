@@ -10,6 +10,13 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, RwLock};
+
+// Type alias for the complex process function type
+type ProcessFn<TInput, TOutput> = Box<
+    dyn Fn(Vec<Arc<TInput>>) -> Pin<Box<dyn Future<Output = Vec<Arc<TOutput>>> + Send>>
+        + Send
+        + Sync,
+>;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -44,11 +51,7 @@ pub struct TaskConfig<TInput, TOutput> {
     pub input_type: String,
     pub output_type: String,
     pub batch_size: Option<usize>,
-    pub process_fn: Box<
-        dyn Fn(Vec<Arc<TInput>>) -> Pin<Box<dyn Future<Output = Vec<Arc<TOutput>>> + Send>>
-            + Send
-            + Sync,
-    >,
+    pub process_fn: ProcessFn<TInput, TOutput>,
 }
 
 impl<TInput, TOutput> TaskConfig<TInput, TOutput>
@@ -191,7 +194,7 @@ async fn run_pipeline<T>(
     for (i, task_box) in pipeline_tasks.iter().enumerate() {
         if let Some(task) = task_box.downcast_ref::<TaskConfig<String, String>>() {
             let batch_info = match task.batch_size {
-                Some(size) => format!("batch_size: {}", size),
+                Some(size) => format!("batch_size: {size}"),
                 None => "no batch limit".to_string(),
             };
             println!(
@@ -468,9 +471,8 @@ async fn main() {
         stage2_transform,
     );
 
-    let mut pipeline_tasks: Vec<Box<dyn std::any::Any>> = Vec::new();
-    pipeline_tasks.push(Box::new(stage1_task));
-    pipeline_tasks.push(Box::new(stage2_task));
+    let pipeline_tasks: Vec<Box<dyn std::any::Any>> =
+        vec![Box::new(stage1_task), Box::new(stage2_task)];
 
     // Now run the pipeline
     run_pipeline(
