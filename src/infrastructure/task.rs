@@ -46,9 +46,7 @@ where
 
         let batch_size = batch_size.unwrap_or(total_chunks);
 
-        info!(
-            "{task_name} starting - moving {total_chunks} chunks to result..."
-        );
+        info!("{task_name} starting - moving {total_chunks} chunks to result...");
 
         let mut total_processed = 0;
 
@@ -129,9 +127,8 @@ mod tests {
                 .collect()
         };
 
-        let initial_chunks: Vec<Arc<String>> = (0..1000)
-            .map(|i| Arc::new(format!("chunk_{i}")))
-            .collect();
+        let initial_chunks: Vec<Arc<String>> =
+            (0..1000).map(|i| Arc::new(format!("chunk_{i}"))).collect();
 
         let payload = CogneePayload::<String, String, String>::new(initial_chunks);
 

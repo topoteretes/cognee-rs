@@ -224,9 +224,7 @@ async fn parallel_readers_no_copy() {
             let chunks_guard = chunks_ref.read().unwrap();
             chunks_guard.len()
         };
-        println!(
-            "Task 1 starting - moving {total_chunks} chunks to result1..."
-        );
+        println!("Task 1 starting - moving {total_chunks} chunks to result1...");
 
         const BATCH_SIZE: usize = 100;
         let mut total_processed = 0;
@@ -275,9 +273,7 @@ async fn parallel_readers_no_copy() {
             let chunks_guard = chunks_ref.read().unwrap();
             chunks_guard.len()
         };
-        println!(
-            "Task 2 starting - moving {total_chunks} chunks to result2..."
-        );
+        println!("Task 2 starting - moving {total_chunks} chunks to result2...");
 
         const BATCH_SIZE: usize = 50;
         let mut total_processed = 0;
