@@ -70,20 +70,29 @@ where
         }
     }
 
-    pub fn get_chunks_copy(&self) -> Vec<Arc<TC>> {
-        let chunks = self.chunks.read().unwrap();
-        chunks.clone()
+    /// Generic method to get copy of data by property name
+    /// Returns a trait object that can be downcast to the specific type
+    /// Usage: 
+    ///   let chunks_copy: Vec<Arc<String>> = payload.get_copy("chunks").unwrap().downcast().unwrap();
+    ///   let result1_copy: Vec<Arc<ProcessedChunk>> = payload.get_copy("result1").unwrap().downcast().unwrap();
+    pub fn get_copy(&self, property: &str) -> Result<Box<dyn std::any::Any + Send + Sync>, String> {
+        match property {
+            "chunks" => {
+                let chunks = self.chunks.read().unwrap();
+                Ok(Box::new(chunks.clone()))
+            }
+            "result1" => {
+                let result1 = self.result1.read().unwrap();
+                Ok(Box::new(result1.clone()))
+            }
+            "result2" => {
+                let result2 = self.result2.read().unwrap();
+                Ok(Box::new(result2.clone()))
+            }
+            _ => Err(format!("Unknown property: {property}")),
+        }
     }
 
-    pub fn get_result1_copy(&self) -> Vec<Arc<T1>> {
-        let result1 = self.result1.read().unwrap();
-        result1.clone()
-    }
-
-    pub fn get_result2_copy(&self) -> Vec<Arc<T2>> {
-        let result2 = self.result2.read().unwrap();
-        result2.clone()
-    }
 
     // Status dictionary methods
     pub fn get_property_status(&self, property: &str) -> Option<PropertyStatus> {
@@ -427,6 +436,32 @@ mod status_tests {
 
         // Test error case
         let error_result = payload.get_arc("invalid_property");
+        assert!(error_result.is_err());
+        assert!(error_result.unwrap_err().contains("Unknown property"));
+    }
+
+    #[test]
+    fn test_generic_get_copy() {
+        let chunks = vec![Arc::new("chunk1".to_string()), Arc::new("chunk2".to_string())];
+        let payload = CogneePayload::<String, String, String>::new(chunks);
+
+        // Test generic copy access
+        let chunks_copy: Vec<Arc<String>> = 
+            *payload.get_copy("chunks").unwrap().downcast().unwrap();
+        let result1_copy: Vec<Arc<String>> = 
+            *payload.get_copy("result1").unwrap().downcast().unwrap();
+        let result2_copy: Vec<Arc<String>> = 
+            *payload.get_copy("result2").unwrap().downcast().unwrap();
+
+        // Verify we got the right types and data
+        assert!(chunks_copy.len() == 2);
+        assert!(result1_copy.is_empty());
+        assert!(result2_copy.is_empty());
+        assert_eq!(chunks_copy[0].as_str(), "chunk1");
+        assert_eq!(chunks_copy[1].as_str(), "chunk2");
+
+        // Test error case
+        let error_result = payload.get_copy("invalid_property");
         assert!(error_result.is_err());
         assert!(error_result.unwrap_err().contains("Unknown property"));
     }

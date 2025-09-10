@@ -33,9 +33,9 @@ mod tests {
         payload: &CogneePayload<String, String, String>,
         counter: usize,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let chunks = payload.get_chunks_copy();
-        let result1 = payload.get_result1_copy();
-        let result2 = payload.get_result2_copy();
+        let chunks: Vec<Arc<String>> = *payload.get_copy("chunks").unwrap().downcast().unwrap();
+        let result1: Vec<Arc<String>> = *payload.get_copy("result1").unwrap().downcast().unwrap();
+        let result2: Vec<Arc<String>> = *payload.get_copy("result2").unwrap().downcast().unwrap();
 
         let original_chunks: Vec<String> = chunks.iter().map(|c| c.as_str().to_string()).collect();
         let stage1_results: Vec<String> = result1.iter().map(|r| r.as_str().to_string()).collect();
