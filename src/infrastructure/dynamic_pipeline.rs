@@ -242,7 +242,7 @@ mod tests {
 
                         payload.set_property_status("result1", PropertyStatus::Processing);
 
-                        let handle = create_task(
+                        let task_future = create_task(
                             "DynamicStage1_ChunksToProcessed",
                             None,
                             *payload.get_arc("chunks").unwrap().downcast().unwrap(),
@@ -256,6 +256,7 @@ mod tests {
                             stage1_transform_async,
                             Some(signal_tx.clone()),
                         );
+                        let handle = tokio::spawn(task_future);
                         active_tasks.push(handle);
                     }
 
@@ -275,7 +276,7 @@ mod tests {
 
                         payload.set_property_status("result2", PropertyStatus::Processing);
 
-                        let handle = create_task(
+                        let task_future = create_task(
                             "DynamicStage2_ProcessedToFinal",
                             None,
                             *payload.get_arc("result1").unwrap().downcast().unwrap(),
@@ -289,6 +290,7 @@ mod tests {
                             stage2_transform,
                             Some(signal_tx.clone()),
                         );
+                        let handle = tokio::spawn(task_future);
                         active_tasks.push(handle);
                     }
                 }

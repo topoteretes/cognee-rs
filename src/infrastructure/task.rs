@@ -3,7 +3,6 @@ use log::{debug, info};
 use std::future::Future;
 use std::sync::{Arc, RwLock};
 use tokio::sync::mpsc;
-use tokio::task::JoinHandle;
 
 #[derive(Debug, Clone)]
 pub enum LoopSignal {
@@ -22,7 +21,7 @@ pub fn create_task<TInput, TOutput, F, Fut>(
     output_property_name: &str,
     process_fn: F,
     signal_sender: Option<mpsc::UnboundedSender<LoopSignal>>,
-) -> JoinHandle<()>
+) -> impl Future<Output = ()>
 where
     TInput: Clone + Send + Sync + 'static,
     TOutput: Clone + Send + Sync + 'static,
@@ -32,7 +31,7 @@ where
     let task_name = task_name.to_string();
     let output_property_name = output_property_name.to_string();
 
-    tokio::spawn(async move {
+    async move {
         // Set property status to Processing at the beginning
         {
             let mut status = property_status.lock().unwrap();
@@ -95,7 +94,7 @@ where
         if let Some(sender) = signal_sender {
             let _ = sender.send(LoopSignal::TaskCompleted);
         }
-    })
+    }
 }
 
 #[cfg(test)]
@@ -139,7 +138,7 @@ mod tests {
 
         let mut task_handles = Vec::new();
 
-        let handle1 = create_task(
+        let task_future1 = create_task(
             "Task1_ToResult1",
             Some(100),
             *payload.get_arc("chunks").unwrap().downcast().unwrap(),
@@ -153,9 +152,10 @@ mod tests {
             transform_fn1,
             None,
         );
+        let handle1 = tokio::spawn(task_future1);
         task_handles.push(handle1);
 
-        let handle2 = create_task(
+        let task_future2 = create_task(
             "Task2_ToResult2",
             None,
             *payload.get_arc("chunks").unwrap().downcast().unwrap(),
@@ -169,6 +169,7 @@ mod tests {
             transform_fn2,
             None,
         );
+        let handle2 = tokio::spawn(task_future2);
         task_handles.push(handle2);
 
         info!("Waiting for {} tasks to complete...", task_handles.len());
@@ -267,7 +268,7 @@ mod tests {
         let payload = CogneePayload::<String, ProcessedChunk, AnalyzedResult>::new(initial_chunks);
 
         info!("Starting Stage 1: chunks -> result1");
-        let handle1 = create_task(
+        let task_future1 = create_task(
             "Stage1_ChunksToProcessed",
             None,
             *payload.get_arc("chunks").unwrap().downcast().unwrap(),
@@ -281,12 +282,13 @@ mod tests {
             stage1_transform,
             None,
         );
+        let handle1 = tokio::spawn(task_future1);
 
         handle1.await.unwrap();
         info!("Stage 1 completed!");
 
         info!("Starting Stage 2: result1 -> result2");
-        let handle2 = create_task(
+        let task_future2 = create_task(
             "Stage2_ProcessedToAnalyzed",
             Some(15),
             *payload.get_arc("result1").unwrap().downcast().unwrap(),
@@ -300,6 +302,7 @@ mod tests {
             stage2_transform,
             None,
         );
+        let handle2 = tokio::spawn(task_future2);
 
         handle2.await.unwrap();
         info!("Stage 2 completed!");
@@ -356,7 +359,7 @@ mod tests {
 
         info!("Starting test with no output parameter");
 
-        let handle = create_task(
+        let task_future = create_task(
             "NoOutputTask",
             Some(3),
             *payload.get_arc("chunks").unwrap().downcast().unwrap(),
@@ -370,6 +373,7 @@ mod tests {
             side_effect_task,
             None,
         );
+        let handle = tokio::spawn(task_future);
 
         handle.await.unwrap();
 
@@ -434,7 +438,7 @@ mod tests {
 
         let mut task_handles = Vec::new();
 
-        let handle1 = create_task(
+        let task_future1 = create_task(
             "DynamicTask1_ToResult1",
             Some(100),
             *payload.get_arc("chunks").unwrap().downcast().unwrap(),
@@ -448,9 +452,10 @@ mod tests {
             transform_fn1,
             None,
         );
+        let handle1 = tokio::spawn(task_future1);
         task_handles.push(handle1);
 
-        let handle2 = create_task(
+        let task_future2 = create_task(
             "DynamicTask2_ToResult2",
             None,
             *payload.get_arc("chunks").unwrap().downcast().unwrap(),
@@ -464,6 +469,7 @@ mod tests {
             transform_fn2,
             None,
         );
+        let handle2 = tokio::spawn(task_future2);
         task_handles.push(handle2);
 
         info!(
@@ -578,7 +584,7 @@ mod tests {
         let payload = DynamicPipelinePayload::new(initial_chunks);
 
         info!("Starting Dynamic Stage 1: chunks -> result1");
-        let handle1 = create_task(
+        let task_future1 = create_task(
             "DynamicStage1_ChunksToProcessed",
             None,
             *payload.get_arc("chunks").unwrap().downcast().unwrap(),
@@ -592,12 +598,13 @@ mod tests {
             stage1_transform,
             None,
         );
+        let handle1 = tokio::spawn(task_future1);
 
         handle1.await.unwrap();
         info!("Dynamic Stage 1 completed!");
 
         info!("Starting Dynamic Stage 2: result1 -> result2");
-        let handle2 = create_task(
+        let task_future2 = create_task(
             "DynamicStage2_ProcessedToAnalyzed",
             Some(15),
             *payload.get_arc("result1").unwrap().downcast().unwrap(),
@@ -611,6 +618,7 @@ mod tests {
             stage2_transform,
             None,
         );
+        let handle2 = tokio::spawn(task_future2);
 
         handle2.await.unwrap();
         info!("Dynamic Stage 2 completed!");
@@ -684,7 +692,7 @@ mod tests {
 
         info!("Starting dynamic test with no output parameter");
 
-        let handle = create_task(
+        let task_future = create_task(
             "DynamicNoOutputTask",
             Some(3),
             *payload.get_arc("chunks").unwrap().downcast().unwrap(),
@@ -698,6 +706,7 @@ mod tests {
             dynamic_side_effect_task,
             None,
         );
+        let handle = tokio::spawn(task_future);
 
         handle.await.unwrap();
 
