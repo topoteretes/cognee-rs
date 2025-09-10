@@ -57,29 +57,29 @@ mod tests {
             },
         };
 
-        let filename = format!("pipeline_result_{}.json", counter);
+        let filename = format!("result_{}.json", counter);
         let json_content = serde_json::to_string_pretty(&completed_payload)?;
 
         tokio::fs::write(&filename, json_content).await?;
-        println!("Written pipeline payload #{} to {}", counter, filename);
+        println!("Written payload #{} to {}", counter, filename);
 
         Ok(())
     }
 
     async fn stage1_transform_async(chunks: Vec<Arc<String>>) -> Vec<Arc<String>> {
-        println!("Pipeline Task1 started: processing {} chunks", chunks.len());
+        println!("Task1 started: processing {} chunks", chunks.len());
 
-        // Random sleep between 2s and 4s
-        let millis = rand::thread_rng().gen_range(2000..=4000);
+        // Random sleep between 3s and 10s
+        let millis = rand::thread_rng().gen_range(2000..=2000);
         sleep(Duration::from_millis(millis)).await;
 
         let results: Vec<Arc<String>> = chunks
             .into_iter()
-            .map(|chunk| Arc::new(format!("Pipeline-Stage1-Processed: {}", chunk)))
+            .map(|chunk| Arc::new(format!("Stage1-Processed: {}", chunk)))
             .collect();
 
         println!(
-            "Pipeline Task1 finished after {} ms, produced {} results",
+            "Task1 finished after {} ms, produced {} results",
             millis,
             results.len()
         );
@@ -88,19 +88,19 @@ mod tests {
     }
 
     async fn stage2_transform(result1: Vec<Arc<String>>) -> Vec<Arc<String>> {
-        println!("Pipeline Task2 started: processing {} items", result1.len());
+        println!("Task2 started: processing {} items", result1.len());
 
-        // Random sleep between 2s and 4s
+        // Random sleep between 3s and 10s
         let millis = rand::thread_rng().gen_range(2000..=4000);
         sleep(Duration::from_millis(millis)).await;
 
         let results: Vec<Arc<String>> = result1
             .into_iter()
-            .map(|item| Arc::new(format!("Pipeline-Stage2-Final: {}", item)))
+            .map(|item| Arc::new(format!("Stage2-Final: {}", item)))
             .collect();
 
         println!(
-            "Pipeline Task2 finished after {} ms, produced {} results",
+            "Task2 finished after {} ms, produced {} results",
             millis,
             results.len()
         );
@@ -114,16 +114,11 @@ mod tests {
 
         /////////Parameters
         // Maximum number of payloads in the central processing queue
-        const MAX_PAYLOADS: usize = 5;
+        const MAX_PAYLOADS: usize = 15;
         // Maximum number of concurrent tasks
-        const MAX_CONCURRENT_TASKS: usize = 5;
-        // Number of all payloads (just for the test)
-        const MAX_COMPLETED: usize = 25;
-
-        println!(
-            "Configuration: MAX_PAYLOADS={}, MAX_CONCURRENT_TASKS={}, MAX_COMPLETED={}",
-            MAX_PAYLOADS, MAX_CONCURRENT_TASKS, MAX_COMPLETED
-        );
+        const MAX_CONCURRENT_TASKS: usize = 10;
+        // Number of all payloads (just for the POC)
+        const MAX_COMPLETED: usize = 50;
 
         ///////// Scheduler related resources
         let (signal_tx, mut signal_rx) = mpsc::unbounded_channel::<LoopSignal>();
@@ -140,28 +135,30 @@ mod tests {
 
         loop {
             tokio::select! {
-                signal = signal_rx.recv() => {
-                    match signal {
-                        Some(LoopSignal::TaskCompleted) => {
-                            println!("Received task completion signal - checking for work...");
-                        }
-                        Some(LoopSignal::NewPayloadAdded) => {
-                            println!("Received new payload signal - checking for work...");
-                        }
-                        Some(LoopSignal::Shutdown) => {
-                            println!("Received shutdown signal");
-                            break;
-                        }
-                        None => {
-                            println!("Signal channel closed");
-                            break;
-                        }
+            signal = signal_rx.recv() => {
+                match signal {
+                    Some(LoopSignal::TaskCompleted) => {
+                        println!("Received task completion signal - checking for work...");
+
+                    }
+                    Some(LoopSignal::NewPayloadAdded) => {
+                        println!("Received new payload signal - checking for work...");
+
+                    }
+                    Some(LoopSignal::Shutdown) => {
+                        println!("Received shutdown signal");
+                        break;
+                    }
+                    None => {
+                        println!("Signal channel closed");
+                        break;
                     }
                 }
-                _ = tokio::time::sleep(Duration::from_millis(10000)) => {
-                    println!("Periodic check - no signals received for 10s");
-                }
             }
+            _ = tokio::time::sleep(Duration::from_millis(10000)) => {
+                println!("Periodic check for work - no signals received for 10s");
+            }
+        }
 
             let current_size = payloads.read().unwrap().len();
 
@@ -170,8 +167,8 @@ mod tests {
                 counter += 1;
 
                 let chunks = vec![
-                    Arc::new(format!("Pipeline Chunk A from payload {}", counter)),
-                    Arc::new(format!("Pipeline Chunk B from payload {}", counter)),
+                    Arc::new(format!("Chunk A from payload {}", counter)),
+                    Arc::new(format!("Chunk B from payload {}", counter)),
                 ];
 
                 let payload = Arc::new(CogneePayload::new(chunks));
@@ -181,7 +178,7 @@ mod tests {
                 payload_counters.insert(payload_id, counter);
 
                 println!(
-                    "Added pipeline payload {} to list (size: {}/{})",
+                    "Added payload {} to list (size: {}/{})",
                     counter,
                     current_size + 1,
                     MAX_PAYLOADS
@@ -203,12 +200,11 @@ mod tests {
 
                     // This is the case when the payload is fully completed
                     if let (Some(r1), Some(r2)) = (&result1_status, &result2_status) {
-                        if matches!(r1, PropertyStatus::Done) && matches!(r2, PropertyStatus::Done)
-                        {
+                        if matches!(r1, PropertyStatus::Done) && matches!(r2, PropertyStatus::Done) {
                             let payload_counter =
                                 payload_counters.get(&payload_id).copied().unwrap_or(0);
                             println!(
-                                "Pipeline payload {} (ID: {}, counter: {}) fully completed!",
+                                "Payload {} (ID: {}, counter: {}) fully completed!",
                                 index + 1,
                                 payload_id,
                                 payload_counter
@@ -225,7 +221,8 @@ mod tests {
                         if matches!(status, PropertyStatus::Empty) {
                             if active_tasks.len() < MAX_CONCURRENT_TASKS {
                                 println!(
-                                    "Creating Pipeline Stage1 task for payload (ID: {}) - Tasks: {}/{}",
+                                    "Creating Stage1 async task for payload {} (ID: {}) - Tasks: {}/{}",
+                                    index + 1,
                                     payload_id,
                                     active_tasks.len() + 1,
                                     MAX_CONCURRENT_TASKS
@@ -234,7 +231,7 @@ mod tests {
                                 payload.set_property_status("result1", PropertyStatus::Processing);
 
                                 let handle = create_task(
-                                    "Pipeline_Stage1_ChunksToProcessed",
+                                    "Stage1_ChunksToProcessed",
                                     None,
                                     payload.chunks_arc(),
                                     Some(payload.result1_arc()),
@@ -244,13 +241,6 @@ mod tests {
                                     Some(signal_tx.clone()),
                                 );
                                 active_tasks.push(handle);
-                            } else {
-                                println!(
-                                    "Skipping Pipeline Stage1 for payload {} - Task limit reached ({}/{})",
-                                    index + 1,
-                                    active_tasks.len(),
-                                    MAX_CONCURRENT_TASKS
-                                );
                             }
                         }
                     }
@@ -262,7 +252,8 @@ mod tests {
                         {
                             if active_tasks.len() < MAX_CONCURRENT_TASKS {
                                 println!(
-                                    "Creating Pipeline Stage2 task for payload (ID: {}) - Tasks: {}/{}",
+                                    "Creating Stage2 task for payload {} (ID: {}) - Tasks: {}/{}",
+                                    index + 1,
                                     payload_id,
                                     active_tasks.len() + 1,
                                     MAX_CONCURRENT_TASKS
@@ -271,7 +262,7 @@ mod tests {
                                 payload.set_property_status("result2", PropertyStatus::Processing);
 
                                 let handle = create_task(
-                                    "Pipeline_Stage2_ProcessedToFinal",
+                                    "Stage2_ProcessedToFinal",
                                     None,
                                     payload.result1_arc(),
                                     Some(payload.result2_arc()),
@@ -281,13 +272,6 @@ mod tests {
                                     Some(signal_tx.clone()),
                                 );
                                 active_tasks.push(handle);
-                            } else {
-                                println!(
-                                    "Skipping Pipeline Stage2 for payload {} - Task limit reached ({}/{})",
-                                    index + 1,
-                                    active_tasks.len(),
-                                    MAX_CONCURRENT_TASKS
-                                );
                             }
                         }
                     }
@@ -301,15 +285,12 @@ mod tests {
                         let counter = payload_counters.get(&payload_id).copied().unwrap_or(0);
 
                         if let Err(e) = write_payload_to_json(payload, counter).await {
-                            eprintln!(
-                                "Failed to write pipeline payload {} to JSON: {}",
-                                counter, e
-                            );
+                            eprintln!("Failed to write payload {} to JSON: {}", counter, e);
                         }
 
                         payload_list.remove(pos);
                         payload_counters.remove(&payload_id);
-                        println!("Removed completed pipeline payload with ID: {}", payload_id);
+                        println!("Removed completed payload with ID: {}", payload_id);
                     }
                 }
             }
@@ -321,7 +302,7 @@ mod tests {
             // Show task status
             if before_count != after_count || active_tasks.len() > 0 {
                 println!(
-                    "Pipeline Status: {} active tasks, {} payloads in queue, {} completed",
+                    "Status: {} active tasks, {} payloads in queue, {} completed",
                     active_tasks.len(),
                     payloads.read().unwrap().len(),
                     completed_payloads
@@ -330,20 +311,16 @@ mod tests {
 
             if completed_payloads >= MAX_COMPLETED {
                 println!(
-                    "Pipeline target reached: {} payloads processed",
+                    "Reached completion target: {} payloads processed",
                     completed_payloads
                 );
                 break;
             }
         }
 
-        println!(
-            "Waiting for {} remaining pipeline tasks to complete...",
-            active_tasks.len()
-        );
-        for (i, handle) in active_tasks.into_iter().enumerate() {
+        // Let all tasks finish ()
+        for handle in active_tasks {
             handle.await.unwrap();
-            println!("Pipeline task {} completed", i + 1);
         }
     }
 }
