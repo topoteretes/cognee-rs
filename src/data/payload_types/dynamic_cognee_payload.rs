@@ -53,6 +53,10 @@ macro_rules! create_cognee_payload {
             fn payload_get_copy(&self, property: &str) -> Result<Box<dyn std::any::Any + Send + Sync>, String> {
                 self.get_copy(property)
             }
+
+            fn payload_get_all_property_statuses(&self) -> HashMap<String, PropertyStatus> {
+                self.get_all_property_statuses()
+            }
         }
 
         // Implement the PayloadConstructor trait for the generated payload type
@@ -138,6 +142,11 @@ macro_rules! create_cognee_payload {
             pub fn set_property_status(&self, property: &str, status: PropertyStatus) {
                 let mut status_map = self.property_status.lock().unwrap();
                 status_map.insert(property.to_string(), status);
+            }
+
+            pub fn get_all_property_statuses(&self) -> HashMap<String, PropertyStatus> {
+                let status = self.property_status.lock().unwrap();
+                status.clone()
             }
 
             // Base method (like in original CogneePayload)

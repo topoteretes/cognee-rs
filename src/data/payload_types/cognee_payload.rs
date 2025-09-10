@@ -92,6 +92,11 @@ where
         let mut status_map = self.property_status.lock().unwrap();
         status_map.insert(property.to_string(), status);
     }
+
+    pub fn get_all_property_statuses(&self) -> HashMap<String, PropertyStatus> {
+        let status = self.property_status.lock().unwrap();
+        status.clone()
+    }
 }
 
 impl<TC, T1, T2> CogneePayload<TC, T1, T2>
@@ -105,6 +110,42 @@ where
         base.metainfo.id
     }
 }
+
+// Implement PayloadTrait for CogneePayload
+impl<TC, T1, T2> crate::data::payload_trait::PayloadTrait for CogneePayload<TC, T1, T2>
+where
+    TC: Clone + Send + Sync + 'static,
+    T1: Clone + Send + Sync + 'static,
+    T2: Clone + Send + Sync + 'static,
+{
+    fn payload_id(&self) -> Uuid {
+        self.id()
+    }
+
+    fn payload_get_property_status(&self, property: &str) -> Option<PropertyStatus> {
+        self.get_property_status(property)
+    }
+
+    fn payload_set_property_status(&self, property: &str, status: PropertyStatus) {
+        self.set_property_status(property, status)
+    }
+
+    fn payload_get_arc(&self, property: &str) -> Result<Box<dyn std::any::Any + Send + Sync>, String> {
+        self.get_arc(property)
+    }
+
+    fn payload_get_copy(&self, property: &str) -> Result<Box<dyn std::any::Any + Send + Sync>, String> {
+        self.get_copy(property)
+    }
+
+    fn payload_get_all_property_statuses(&self) -> HashMap<String, PropertyStatus> {
+        self.get_all_property_statuses()
+    }
+}
+
+// Note: PayloadConstructor implementation removed due to type mismatch
+// The trait expects Vec<Arc<String>> but CogneePayload is generic over TC
+// This would need a redesign of the trait to be truly generic
 
 #[tokio::test]
 async fn parallel_readers_no_copy() {
