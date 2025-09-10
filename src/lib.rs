@@ -5,6 +5,9 @@ pub mod data;
 pub mod infrastructure;
 // <- our payload + types live here
 
+// Re-export the PayloadTrait and PayloadConstructor
+pub use data::payload_trait::{PayloadTrait, PayloadConstructor};
+
 /// Say hello from the library.
 pub async fn hello() -> &'static str {
     "Hello from cognee!"
