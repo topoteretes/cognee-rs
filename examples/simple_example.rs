@@ -13,6 +13,8 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio::time::sleep;
 use uuid::Uuid;
+use std::future::Future;
+use std::pin::Pin;
 
 
 // Create a dynamic payload type for testing
@@ -35,6 +37,44 @@ struct CompletedPayload {
 struct PayloadMetadata {
     total_chunks: usize,
     completion_timestamp: String,
+}
+
+// Simple task struct that can hold different async functions
+pub struct TaskConfig<TInput, TOutput> {
+    pub name: String,
+    pub input_type: String,
+    pub output_type: String,
+    pub process_fn: Box<dyn Fn(Vec<Arc<TInput>>) -> Pin<Box<dyn Future<Output = Vec<Arc<TOutput>>> + Send>> + Send + Sync>,
+}
+
+impl<TInput, TOutput> TaskConfig<TInput, TOutput>
+where
+    TInput: Clone + Send + Sync + 'static,
+    TOutput: Clone + Send + Sync + 'static,
+{
+    pub fn new<F, Fut>(
+        name: String,
+        input_type: String,
+        output_type: String,
+        process_fn: F,
+    ) -> Self
+    where
+        F: Fn(Vec<Arc<TInput>>) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Vec<Arc<TOutput>>> + Send + 'static,
+    {
+        Self {
+            name,
+            input_type,
+            output_type,
+            process_fn: Box::new(move |input| {
+                Box::pin(process_fn(input))
+            }),
+        }
+    }
+
+    pub async fn execute(&self, input: Vec<Arc<TInput>>) -> Vec<Arc<TOutput>> {
+        (self.process_fn)(input).await
+    }
 }
 
 // Function to write completed dynamic payload to JSON file
@@ -135,10 +175,13 @@ async fn run_pipeline<T>(
     max_payloads: usize,
     max_concurrent_tasks: usize,
     max_completed: usize,
+    pipeline_tasks: Vec<Box<dyn std::any::Any>>,
     _payload_type: std::marker::PhantomData<T>,
 ) where
     T: PayloadTrait + PayloadConstructor + Clone + Send + Sync + 'static,
 {
+
+
     ///////// Scheduler related resources
     let (signal_tx, mut signal_rx) = mpsc::unbounded_channel::<LoopSignal>();
     let payloads: Arc<RwLock<Vec<Arc<T>>>> = Arc::new(RwLock::new(Vec::new()));
@@ -364,11 +407,34 @@ async fn main() {
     let max_completed = 10; // Number of all payloads (just for the POC)
 
 
+    
+    let stage1_task = TaskConfig::new(
+        "Stage1_ChunksToProcessed".to_string(),
+        "String".to_string(),
+        "String".to_string(),
+        stage1_transform_async,
+    );
 
+    let stage2_task = TaskConfig::new(
+        "Stage2_ProcessedToFinal".to_string(),
+        "String".to_string(),
+        "String".to_string(),
+        stage2_transform,
+    );
+
+
+    let mut pipeline_tasks: Vec<Box<dyn std::any::Any>> = Vec::new();
+    pipeline_tasks.push(Box::new(stage1_task));
+    pipeline_tasks.push(Box::new(stage2_task));
+    
+
+
+    // Now run the pipeline
     run_pipeline(
         max_payloads,
         max_concurrent_tasks,
         max_completed,
+        pipeline_tasks,
         std::marker::PhantomData::<DynamicPipelinePayload>,
     )
     .await;
