@@ -234,7 +234,7 @@ mod tests {
                         payload.set_property_status("result1", PropertyStatus::Processing);
 
                         let task_future = create_task(
-                            "Stage1_ChunksToProcessed",
+                            "Stage1_ChunksToProcessed".to_string(),
                             None,
                             *payload.get_arc("chunks").unwrap().downcast().unwrap(),
                             Some(*payload.get_arc("result1").unwrap().downcast().unwrap()),
@@ -243,7 +243,7 @@ mod tests {
                                 .unwrap()
                                 .downcast()
                                 .unwrap(),
-                            "result1",
+                            "result1".to_string(),
                             stage1_transform_async,
                             Some(signal_tx.clone()),
                         );
@@ -268,7 +268,7 @@ mod tests {
                         payload.set_property_status("result2", PropertyStatus::Processing);
 
                         let task_future = create_task(
-                            "Stage2_ProcessedToFinal",
+                            "Stage2_ProcessedToFinal".to_string(),
                             None,
                             *payload.get_arc("result1").unwrap().downcast().unwrap(),
                             Some(*payload.get_arc("result2").unwrap().downcast().unwrap()),
@@ -277,7 +277,7 @@ mod tests {
                                 .unwrap()
                                 .downcast()
                                 .unwrap(),
-                            "result2",
+                            "result2".to_string(),
                             stage2_transform,
                             Some(signal_tx.clone()),
                         );

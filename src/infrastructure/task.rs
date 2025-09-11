@@ -13,12 +13,12 @@ pub enum LoopSignal {
 
 #[allow(clippy::too_many_arguments)]
 pub fn create_task<TInput, TOutput, F, Fut>(
-    task_name: &str,
+    task_name: String,
     batch_size: Option<usize>,
     input: Arc<RwLock<Vec<Arc<TInput>>>>,
     output: Option<Arc<RwLock<Vec<Arc<TOutput>>>>>,
     property_status: Arc<std::sync::Mutex<std::collections::HashMap<String, PropertyStatus>>>,
-    output_property_name: &str,
+    output_property_name: String,
     process_fn: F,
     signal_sender: Option<mpsc::UnboundedSender<LoopSignal>>,
 ) -> impl Future<Output = ()>
@@ -133,7 +133,7 @@ mod tests {
         let mut task_handles = Vec::new();
 
         let task_future1 = create_task(
-            "Task1_ToResult1",
+            "Task1_ToResult1".to_string(),
             Some(100),
             *payload.get_arc("chunks").unwrap().downcast().unwrap(),
             Some(*payload.get_arc("result1").unwrap().downcast().unwrap()),
@@ -142,7 +142,7 @@ mod tests {
                 .unwrap()
                 .downcast()
                 .unwrap(),
-            "result1",
+            "result1".to_string(),
             transform_fn1,
             None,
         );
@@ -150,7 +150,7 @@ mod tests {
         task_handles.push(handle1);
 
         let task_future2 = create_task(
-            "Task2_ToResult2",
+            "Task2_ToResult2".to_string(),
             None,
             *payload.get_arc("chunks").unwrap().downcast().unwrap(),
             Some(*payload.get_arc("result2").unwrap().downcast().unwrap()),
@@ -159,7 +159,7 @@ mod tests {
                 .unwrap()
                 .downcast()
                 .unwrap(),
-            "result2",
+            "result2".to_string(),
             transform_fn2,
             None,
         );
@@ -263,7 +263,7 @@ mod tests {
 
         info!("Starting Stage 1: chunks -> result1");
         let task_future1 = create_task(
-            "Stage1_ChunksToProcessed",
+            "Stage1_ChunksToProcessed".to_string(),
             None,
             *payload.get_arc("chunks").unwrap().downcast().unwrap(),
             Some(*payload.get_arc("result1").unwrap().downcast().unwrap()),
@@ -272,7 +272,7 @@ mod tests {
                 .unwrap()
                 .downcast()
                 .unwrap(),
-            "result1",
+            "result1".to_string(),
             stage1_transform,
             None,
         );
@@ -283,7 +283,7 @@ mod tests {
 
         info!("Starting Stage 2: result1 -> result2");
         let task_future2 = create_task(
-            "Stage2_ProcessedToAnalyzed",
+            "Stage2_ProcessedToAnalyzed".to_string(),
             Some(15),
             *payload.get_arc("result1").unwrap().downcast().unwrap(),
             Some(*payload.get_arc("result2").unwrap().downcast().unwrap()),
@@ -292,7 +292,7 @@ mod tests {
                 .unwrap()
                 .downcast()
                 .unwrap(),
-            "result2",
+            "result2".to_string(),
             stage2_transform,
             None,
         );
@@ -354,7 +354,7 @@ mod tests {
         info!("Starting test with no output parameter");
 
         let task_future = create_task(
-            "NoOutputTask",
+            "NoOutputTask".to_string(),
             Some(3),
             *payload.get_arc("chunks").unwrap().downcast().unwrap(),
             None, // No output storage!
@@ -363,7 +363,7 @@ mod tests {
                 .unwrap()
                 .downcast()
                 .unwrap(),
-            "custom_task_status",
+            "custom_task_status".to_string(),
             side_effect_task,
             None,
         );
@@ -433,7 +433,7 @@ mod tests {
         let mut task_handles = Vec::new();
 
         let task_future1 = create_task(
-            "DynamicTask1_ToResult1",
+            "DynamicTask1_ToResult1".to_string(),
             Some(100),
             *payload.get_arc("chunks").unwrap().downcast().unwrap(),
             Some(*payload.get_arc("result1").unwrap().downcast().unwrap()),
@@ -442,7 +442,7 @@ mod tests {
                 .unwrap()
                 .downcast()
                 .unwrap(),
-            "result1",
+            "result1".to_string(),
             transform_fn1,
             None,
         );
@@ -450,7 +450,7 @@ mod tests {
         task_handles.push(handle1);
 
         let task_future2 = create_task(
-            "DynamicTask2_ToResult2",
+            "DynamicTask2_ToResult2".to_string(),
             None,
             *payload.get_arc("chunks").unwrap().downcast().unwrap(),
             Some(*payload.get_arc("result2").unwrap().downcast().unwrap()),
@@ -459,7 +459,7 @@ mod tests {
                 .unwrap()
                 .downcast()
                 .unwrap(),
-            "result2",
+            "result2".to_string(),
             transform_fn2,
             None,
         );
@@ -579,7 +579,7 @@ mod tests {
 
         info!("Starting Dynamic Stage 1: chunks -> result1");
         let task_future1 = create_task(
-            "DynamicStage1_ChunksToProcessed",
+            "DynamicStage1_ChunksToProcessed".to_string(),
             None,
             *payload.get_arc("chunks").unwrap().downcast().unwrap(),
             Some(*payload.get_arc("result1").unwrap().downcast().unwrap()),
@@ -588,7 +588,7 @@ mod tests {
                 .unwrap()
                 .downcast()
                 .unwrap(),
-            "result1",
+            "result1".to_string(),
             stage1_transform,
             None,
         );
@@ -599,7 +599,7 @@ mod tests {
 
         info!("Starting Dynamic Stage 2: result1 -> result2");
         let task_future2 = create_task(
-            "DynamicStage2_ProcessedToAnalyzed",
+            "DynamicStage2_ProcessedToAnalyzed".to_string(),
             Some(15),
             *payload.get_arc("result1").unwrap().downcast().unwrap(),
             Some(*payload.get_arc("result2").unwrap().downcast().unwrap()),
@@ -608,7 +608,7 @@ mod tests {
                 .unwrap()
                 .downcast()
                 .unwrap(),
-            "result2",
+            "result2".to_string(),
             stage2_transform,
             None,
         );
@@ -687,7 +687,7 @@ mod tests {
         info!("Starting dynamic test with no output parameter");
 
         let task_future = create_task(
-            "DynamicNoOutputTask",
+            "DynamicNoOutputTask".to_string(),
             Some(3),
             *payload.get_arc("chunks").unwrap().downcast().unwrap(),
             None, // No output storage!
@@ -696,7 +696,7 @@ mod tests {
                 .unwrap()
                 .downcast()
                 .unwrap(),
-            "dynamic_custom_task_status",
+            "dynamic_custom_task_status".to_string(),
             dynamic_side_effect_task,
             None,
         );
