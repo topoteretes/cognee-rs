@@ -42,10 +42,9 @@ struct PayloadMetadata {
 
 type ProcessFn<TInput, TOutput> = Arc<
     dyn Fn(Vec<Arc<TInput>>) -> Pin<Box<dyn Future<Output = Vec<Arc<TOutput>>> + Send>>
-    + Send
-    + Sync,
+        + Send
+        + Sync,
 >;
-
 
 // ------------------------------
 // Trait for task configuration
@@ -55,7 +54,7 @@ pub trait TaskConfigTrait: Send + Sync {
     fn input_property_name(&self) -> &str;
     fn output_property_name(&self) -> &str;
     fn batch_size(&self) -> Option<usize>;
-    
+
     // Method to create a task with concrete types
     fn create_task_future(
         &self,
@@ -63,7 +62,6 @@ pub trait TaskConfigTrait: Send + Sync {
         signal_tx: Option<mpsc::UnboundedSender<LoopSignal>>,
     ) -> Result<Pin<Box<dyn Future<Output = ()> + Send>>, Box<dyn std::error::Error>>;
 }
-
 
 // ------------------------------
 // Task configuration structure
@@ -75,7 +73,6 @@ pub struct TaskConfig<TInput, TOutput> {
     pub output_property_name: String,
     pub process_fn: ProcessFn<TInput, TOutput>,
 }
-
 
 impl<TInput, TOutput> TaskConfig<TInput, TOutput>
 where
@@ -153,9 +150,7 @@ where
             let process_fn = self.process_fn.clone();
             move |input: Vec<Arc<TInput>>| {
                 let process_fn = process_fn.clone();
-                Box::pin(async move {
-                    process_fn(input).await
-                })
+                Box::pin(async move { process_fn(input).await })
             }
         };
 
@@ -173,9 +168,6 @@ where
         Ok(Box::pin(task_future))
     }
 }
-
-
-
 
 // Function to write completed dynamic payload to JSON file
 async fn write_dynamic_payload_to_json<T>(
@@ -280,7 +272,6 @@ async fn run_pipeline<T>(
 ) where
     T: PayloadTrait + PayloadConstructor + Clone + Send + Sync + 'static,
 {
-
     ///////// Scheduler related resources
     let (signal_tx, mut signal_rx) = mpsc::unbounded_channel::<LoopSignal>();
     let payloads: Arc<RwLock<Vec<Arc<T>>>> = Arc::new(RwLock::new(Vec::new()));
@@ -357,7 +348,6 @@ async fn run_pipeline<T>(
             for (index, payload) in payload_list.iter().enumerate() {
                 let payload_id = payload.payload_id();
 
-
                 // This is the case when the payload is fully completed - check if ALL properties are done
                 let all_properties_done = payload
                     .payload_get_all_property_statuses()
@@ -379,12 +369,15 @@ async fn run_pipeline<T>(
                 }
 
                 for task in &pipeline_tasks {
-                    let input_status = payload.payload_get_property_status(task.input_property_name());
-                    let output_status = payload.payload_get_property_status(task.output_property_name());
+                    let input_status =
+                        payload.payload_get_property_status(task.input_property_name());
+                    let output_status =
+                        payload.payload_get_property_status(task.output_property_name());
 
                     println!("Input status: {input_status:?}, output status: {output_status:?}");
 
-                    if let (Some(input_status), Some(output_status)) = (input_status, output_status) {
+                    if let (Some(input_status), Some(output_status)) = (input_status, output_status)
+                    {
                         if matches!(input_status, PropertyStatus::Done | PropertyStatus::Empty)
                             && matches!(output_status, PropertyStatus::Empty)
                             && active_tasks.len() < max_concurrent_tasks
@@ -395,7 +388,6 @@ async fn run_pipeline<T>(
                                 index + 1,
                                 payload_id
                             );
-
 
                             payload.payload_set_property_status(
                                 task.output_property_name(),
@@ -424,7 +416,6 @@ async fn run_pipeline<T>(
                                     );
                                 }
                             }
-
                         }
                     }
                 }
@@ -505,10 +496,8 @@ async fn main() {
         stage2_transform,
     );
 
-    let pipeline_tasks: Vec<Arc<dyn TaskConfigTrait>> = vec![
-        Arc::new(stage1_task),
-        Arc::new(stage2_task),
-    ];
+    let pipeline_tasks: Vec<Arc<dyn TaskConfigTrait>> =
+        vec![Arc::new(stage1_task), Arc::new(stage2_task)];
 
     // Now run the pipeline
     run_pipeline(
