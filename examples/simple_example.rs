@@ -16,6 +16,10 @@ use tokio::task::JoinHandle;
 use tokio::time::sleep;
 use uuid::Uuid;
 
+// Type alias for complex return type to improve readability
+type TaskFuture = Pin<Box<dyn Future<Output = ()> + Send>>;
+type TaskResult = Result<TaskFuture, Box<dyn std::error::Error>>;
+
 // Create a dynamic payload type for testing
 create_cognee_payload!(
     DynamicPipelinePayload,
@@ -60,7 +64,7 @@ pub trait TaskConfigTrait: Send + Sync {
         &self,
         payload: &dyn PayloadTrait,
         signal_tx: Option<mpsc::UnboundedSender<LoopSignal>>,
-    ) -> Result<Pin<Box<dyn Future<Output = ()> + Send>>, Box<dyn std::error::Error>>;
+    ) -> TaskResult;
 }
 
 // ------------------------------
@@ -126,7 +130,7 @@ where
         &self,
         payload: &dyn PayloadTrait,
         signal_tx: Option<mpsc::UnboundedSender<LoopSignal>>,
-    ) -> Result<Pin<Box<dyn Future<Output = ()> + Send>>, Box<dyn std::error::Error>> {
+    ) -> TaskResult {
         let input_arc = payload
             .payload_get_arc(self.input_property_name())
             .map_err(|_| "Input property not found")?
@@ -377,11 +381,10 @@ async fn run_pipeline<T>(
                     println!("Input status: {input_status:?}, output status: {output_status:?}");
 
                     if let (Some(input_status), Some(output_status)) = (input_status, output_status)
+                        && matches!(input_status, PropertyStatus::Done)
+                        && matches!(output_status, PropertyStatus::Empty)
+                        && active_tasks.len() < max_concurrent_tasks
                     {
-                        if matches!(input_status, PropertyStatus::Done)
-                            && matches!(output_status, PropertyStatus::Empty)
-                            && active_tasks.len() < max_concurrent_tasks
-                        {
                             println!(
                                 "Creating dynamic task '{}' for payload {} (ID: {})",
                                 task.name(),
@@ -416,7 +419,6 @@ async fn run_pipeline<T>(
                                     );
                                 }
                             }
-                        }
                     }
                 }
             }
