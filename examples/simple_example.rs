@@ -385,40 +385,33 @@ async fn run_pipeline<T>(
                         && matches!(output_status, PropertyStatus::Empty)
                         && active_tasks.len() < max_concurrent_tasks
                     {
-                            println!(
-                                "Creating dynamic task '{}' for payload {} (ID: {})",
-                                task.name(),
-                                index + 1,
-                                payload_id
-                            );
+                        payload.payload_set_property_status(
+                            task.output_property_name(),
+                            PropertyStatus::Processing,
+                        );
 
-                            payload.payload_set_property_status(
-                                task.output_property_name(),
-                                PropertyStatus::Processing,
-                            );
+                        println!(
+                            "Creating dynamic task '{}' for payload {} (ID: {})",
+                            task.name(),
+                            index + 1,
+                            payload_id
+                        );
 
-                            println!(
-                                "Creating dynamic task '{}' for payload {} (ID: {})",
-                                task.name(),
-                                index + 1,
-                                payload_id
-                            );
-
-                            // Use the trait method to create the task
-                            match task.create_task_future(&**payload, Some(signal_tx.clone())) {
-                                Ok(task_future) => {
-                                    let handle = tokio::spawn(task_future);
-                                    active_tasks.push(handle);
-                                }
-                                Err(e) => {
-                                    eprintln!("Failed to create task '{}': {}", task.name(), e);
-                                    // Reset the property status on error
-                                    payload.payload_set_property_status(
-                                        task.output_property_name(),
-                                        PropertyStatus::Empty,
-                                    );
-                                }
+                        // Use the trait method to create the task
+                        match task.create_task_future(&**payload, Some(signal_tx.clone())) {
+                            Ok(task_future) => {
+                                let handle = tokio::spawn(task_future);
+                                active_tasks.push(handle);
                             }
+                            Err(e) => {
+                                eprintln!("Failed to create task '{}': {}", task.name(), e);
+                                // Reset the property status on error
+                                payload.payload_set_property_status(
+                                    task.output_property_name(),
+                                    PropertyStatus::Empty,
+                                );
+                            }
+                        }
                     }
                 }
             }
