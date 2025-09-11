@@ -378,7 +378,7 @@ async fn run_pipeline<T>(
 
                     if let (Some(input_status), Some(output_status)) = (input_status, output_status)
                     {
-                        if matches!(input_status, PropertyStatus::Done | PropertyStatus::Empty)
+                        if matches!(input_status, PropertyStatus::Done)
                             && matches!(output_status, PropertyStatus::Empty)
                             && active_tasks.len() < max_concurrent_tasks
                         {
