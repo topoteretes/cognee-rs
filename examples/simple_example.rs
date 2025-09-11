@@ -1,4 +1,3 @@
-use async_trait::async_trait;
 use cognee_rust::create_cognee_payload;
 use cognee_rust::data::payload_base::PayloadBase;
 use cognee_rust::data::payload_types::cognee_payload::PropertyStatus;
@@ -16,7 +15,10 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio::time::sleep;
 use uuid::Uuid;
-use std::any::Any;
+
+// Type alias for complex return type to improve readability
+type TaskFuture = Pin<Box<dyn Future<Output = ()> + Send>>;
+type TaskResult = Result<TaskFuture, Box<dyn std::error::Error>>;
 
 // Create a dynamic payload type for testing
 create_cognee_payload!(
@@ -44,31 +46,26 @@ struct PayloadMetadata {
 
 type ProcessFn<TInput, TOutput> = Arc<
     dyn Fn(Vec<Arc<TInput>>) -> Pin<Box<dyn Future<Output = Vec<Arc<TOutput>>> + Send>>
-    + Send
-    + Sync,
+        + Send
+        + Sync,
 >;
 
-
 // ------------------------------
-// Type-erased trait for dynamic process function
+// Trait for task configuration
 // ------------------------------
-#[async_trait]
-pub trait DynProcessFn: Send + Sync {
+pub trait TaskConfigTrait: Send + Sync {
     fn name(&self) -> &str;
     fn input_property_name(&self) -> &str;
     fn output_property_name(&self) -> &str;
     fn batch_size(&self) -> Option<usize>;
 
-
-    fn get_fn(
+    // Method to create a task with concrete types
+    fn create_task_future(
         &self,
-    ) -> Arc<
-        dyn Fn(Vec<Arc<dyn Any + Send + Sync>>) -> Pin<Box<dyn Future<Output = Vec<Arc<dyn Any + Send + Sync>>> + Send>>
-        + Send
-        + Sync,
-    >;
+        payload: &dyn PayloadTrait,
+        signal_tx: Option<mpsc::UnboundedSender<LoopSignal>>,
+    ) -> TaskResult;
 }
-
 
 // ------------------------------
 // Task configuration structure
@@ -80,7 +77,6 @@ pub struct TaskConfig<TInput, TOutput> {
     pub output_property_name: String,
     pub process_fn: ProcessFn<TInput, TOutput>,
 }
-
 
 impl<TInput, TOutput> TaskConfig<TInput, TOutput>
 where
@@ -108,70 +104,74 @@ where
     }
 }
 
-
-// ------------------------------
-// Wrapper to implement DynProcessFn
-// ------------------------------
-pub struct ErasedTaskConfig<TInput, TOutput> {
-    pub inner: TaskConfig<TInput, TOutput>,
-}
-
-
-#[async_trait]
-impl<TInput, TOutput> DynProcessFn for ErasedTaskConfig<TInput, TOutput>
+// Implement the trait for TaskConfig
+impl<TInput, TOutput> TaskConfigTrait for TaskConfig<TInput, TOutput>
 where
     TInput: Clone + Send + Sync + 'static,
     TOutput: Clone + Send + Sync + 'static,
 {
     fn name(&self) -> &str {
-        &self.inner.name
+        &self.name
     }
-
 
     fn input_property_name(&self) -> &str {
-        &self.inner.input_property_name
+        &self.input_property_name
     }
-
 
     fn output_property_name(&self) -> &str {
-        &self.inner.output_property_name
+        &self.output_property_name
     }
-
 
     fn batch_size(&self) -> Option<usize> {
-        self.inner.batch_size
+        self.batch_size
     }
 
+    fn create_task_future(
+        &self,
+        payload: &dyn PayloadTrait,
+        signal_tx: Option<mpsc::UnboundedSender<LoopSignal>>,
+    ) -> TaskResult {
+        let input_arc = payload
+            .payload_get_arc(self.input_property_name())
+            .map_err(|_| "Input property not found")?
+            .downcast::<Arc<RwLock<Vec<Arc<TInput>>>>>()
+            .map_err(|_| "Failed to downcast input")?;
 
-    fn get_fn(&self) -> Arc<
-        dyn Fn(Vec<Arc<dyn Any + Send + Sync>>) -> Pin<Box<dyn Future<Output = Vec<Arc<dyn Any + Send + Sync>>> + Send>>
-        + Send
-        + Sync,
-    > {
-        let process_fn = self.inner.process_fn.clone();
+        let output_arc = payload
+            .payload_get_arc(self.output_property_name())
+            .map_err(|_| "Output property not found")?
+            .downcast::<Arc<RwLock<Vec<Arc<TOutput>>>>>()
+            .map_err(|_| "Failed to downcast output")?;
 
+        let property_status = payload
+            .payload_get_arc("property_status")
+            .map_err(|_| "Property status not found")?
+            .downcast::<Arc<Mutex<HashMap<String, PropertyStatus>>>>()
+            .map_err(|_| "Failed to downcast property status")?;
 
-        Arc::new(move |input_any: Vec<Arc<dyn Any + Send + Sync>>| {
-            let typed_input: Vec<Arc<TInput>> = input_any
-                .into_iter()
-                .map(|x| x.downcast::<TInput>().expect("input type mismatch"))
-                .collect();
+        // Create a wrapper function that matches the expected signature
+        let process_fn_wrapper = {
+            let process_fn = self.process_fn.clone();
+            move |input: Vec<Arc<TInput>>| {
+                let process_fn = process_fn.clone();
+                Box::pin(async move { process_fn(input).await })
+            }
+        };
 
+        let task_future = create_task(
+            self.name().to_string(),
+            self.batch_size(),
+            *input_arc,
+            Some(*output_arc),
+            *property_status,
+            self.output_property_name().to_string(),
+            process_fn_wrapper,
+            signal_tx,
+        );
 
-            let process_fn = process_fn.clone();
-
-
-            Box::pin(async move {
-                let output = process_fn(typed_input).await;
-                output
-                    .into_iter()
-                    .map(|x| x as Arc<dyn Any + Send + Sync>)
-                    .collect()
-            })
-        })
+        Ok(Box::pin(task_future))
     }
 }
-
 
 // Function to write completed dynamic payload to JSON file
 async fn write_dynamic_payload_to_json<T>(
@@ -271,12 +271,11 @@ async fn run_pipeline<T>(
     max_payloads: usize,
     max_concurrent_tasks: usize,
     max_completed: usize,
-    pipeline_tasks: Vec<Arc<dyn DynProcessFn>>,
+    pipeline_tasks: Vec<Arc<dyn TaskConfigTrait>>,
     _payload_type: std::marker::PhantomData<T>,
 ) where
     T: PayloadTrait + PayloadConstructor + Clone + Send + Sync + 'static,
 {
-
     ///////// Scheduler related resources
     let (signal_tx, mut signal_rx) = mpsc::unbounded_channel::<LoopSignal>();
     let payloads: Arc<RwLock<Vec<Arc<T>>>> = Arc::new(RwLock::new(Vec::new()));
@@ -353,7 +352,6 @@ async fn run_pipeline<T>(
             for (index, payload) in payload_list.iter().enumerate() {
                 let payload_id = payload.payload_id();
 
-
                 // This is the case when the payload is fully completed - check if ALL properties are done
                 let all_properties_done = payload
                     .payload_get_all_property_statuses()
@@ -375,64 +373,44 @@ async fn run_pipeline<T>(
                 }
 
                 for task in &pipeline_tasks {
-                    let input_status = payload.payload_get_property_status(task.input_property_name());
-                    let output_status = payload.payload_get_property_status(task.output_property_name());
+                    let input_status =
+                        payload.payload_get_property_status(task.input_property_name());
+                    let output_status =
+                        payload.payload_get_property_status(task.output_property_name());
 
                     println!("Input status: {input_status:?}, output status: {output_status:?}");
 
-                    if let (Some(input_status), Some(output_status)) = (input_status, output_status) {
-                        if matches!(input_status, PropertyStatus::Done | PropertyStatus::Empty)
-                            && matches!(output_status, PropertyStatus::Empty)
-                            && active_tasks.len() < max_concurrent_tasks
-                        {
-                            println!(
-                                "Creating dynamic task '{}' for payload {} (ID: {})",
-                                task.name(),
-                                index + 1,
-                                payload_id
-                            );
+                    if let (Some(input_status), Some(output_status)) = (input_status, output_status)
+                        && matches!(input_status, PropertyStatus::Done)
+                        && matches!(output_status, PropertyStatus::Empty)
+                        && active_tasks.len() < max_concurrent_tasks
+                    {
+                        payload.payload_set_property_status(
+                            task.output_property_name(),
+                            PropertyStatus::Processing,
+                        );
 
+                        println!(
+                            "Creating dynamic task '{}' for payload {} (ID: {})",
+                            task.name(),
+                            index + 1,
+                            payload_id
+                        );
 
-                            payload.payload_set_property_status(
-                                task.output_property_name(),
-                                PropertyStatus::Processing,
-                            );
-
-                            let task_name = task.name().to_string();
-                            let input_prop = task.input_property_name().to_string();
-                            let output_prop = task.output_property_name().to_string();
-                            let batch_size = task.batch_size();
-                            let signal_tx = signal_tx.clone();
-                            let process_fn = task.get_fn();
-
-                            let task_future = create_task(
-                                task_name,
-                                batch_size,
-                                *payload
-                                    .payload_get_arc(input_prop.as_str())
-                                    .unwrap()
-                                    .downcast()
-                                    .unwrap(),
-                                Some(
-                                    *payload
-                                        .payload_get_arc(output_prop.as_str())
-                                        .unwrap()
-                                        .downcast()
-                                        .unwrap(),
-                                ),
-                                *payload
-                                    .payload_get_arc("property_status")
-                                    .unwrap()
-                                    .downcast()
-                                    .unwrap(),
-                                output_prop,
-                                stage1_transform_async,
-                                Some(signal_tx.clone()),
-                            );
-
-                            let handle = tokio::spawn(task_future);
-                            active_tasks.push(handle);
-
+                        // Use the trait method to create the task
+                        match task.create_task_future(&**payload, Some(signal_tx.clone())) {
+                            Ok(task_future) => {
+                                let handle = tokio::spawn(task_future);
+                                active_tasks.push(handle);
+                            }
+                            Err(e) => {
+                                eprintln!("Failed to create task '{}': {}", task.name(), e);
+                                // Reset the property status on error
+                                payload.payload_set_property_status(
+                                    task.output_property_name(),
+                                    PropertyStatus::Empty,
+                                );
+                            }
                         }
                     }
                 }
@@ -513,10 +491,8 @@ async fn main() {
         stage2_transform,
     );
 
-    let pipeline_tasks: Vec<Arc<dyn DynProcessFn>> = vec![
-        Arc::new(ErasedTaskConfig { inner: stage1_task }),
-        Arc::new(ErasedTaskConfig { inner: stage2_task }),
-    ];
+    let pipeline_tasks: Vec<Arc<dyn TaskConfigTrait>> =
+        vec![Arc::new(stage1_task), Arc::new(stage2_task)];
 
     // Now run the pipeline
     run_pipeline(
