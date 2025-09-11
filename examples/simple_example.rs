@@ -48,9 +48,9 @@ struct PayloadMetadata {
 // Simple task struct that can hold different async functions
 pub struct TaskConfig<TInput, TOutput> {
     pub name: String,
-    pub input_type: String,
-    pub output_type: String,
     pub batch_size: Option<usize>,
+    pub input_property_name: String,
+    pub output_property_name: String,
     pub process_fn: ProcessFn<TInput, TOutput>,
 }
 
@@ -61,8 +61,8 @@ where
 {
     pub fn new<F, Fut>(
         name: String,
-        input_type: String,
-        output_type: String,
+        input_property_name: String,
+        output_property_name: String,
         batch_size: Option<usize>,
         process_fn: F,
     ) -> Self
@@ -72,15 +72,11 @@ where
     {
         Self {
             name,
-            input_type,
-            output_type,
+            input_property_name,
+            output_property_name,
             batch_size,
             process_fn: Box::new(move |input| Box::pin(process_fn(input))),
         }
-    }
-
-    pub async fn execute(&self, input: Vec<Arc<TInput>>) -> Vec<Arc<TOutput>> {
-        (self.process_fn)(input).await
     }
 }
 
@@ -187,27 +183,6 @@ async fn run_pipeline<T>(
 ) where
     T: PayloadTrait + PayloadConstructor + Clone + Send + Sync + 'static,
 {
-    // Print out the tasks that were passed in
-    println!("=== Pipeline Tasks Received ===");
-    println!("Received {} pipeline tasks:", pipeline_tasks.len());
-
-    for (i, task_box) in pipeline_tasks.iter().enumerate() {
-        if let Some(task) = task_box.downcast_ref::<TaskConfig<String, String>>() {
-            let batch_info = match task.batch_size {
-                Some(size) => format!("batch_size: {size}"),
-                None => "no batch limit".to_string(),
-            };
-            println!(
-                "  Task {}: {} ({} -> {}) [{}]",
-                i + 1,
-                task.name,
-                task.input_type,
-                task.output_type,
-                batch_info
-            );
-        }
-    }
-    println!("=== End of Pipeline Tasks ===\n");
 
     ///////// Scheduler related resources
     let (signal_tx, mut signal_rx) = mpsc::unbounded_channel::<LoopSignal>();
@@ -464,16 +439,16 @@ async fn main() {
 
     let stage1_task = TaskConfig::new(
         "Stage1_ChunksToProcessed".to_string(),
-        "String".to_string(),
-        "String".to_string(),
+        "chunks".to_string(),
+        "result1".to_string(),
         Some(10), // batch size of 10
         stage1_transform_async,
     );
 
     let stage2_task = TaskConfig::new(
         "Stage2_ProcessedToFinal".to_string(),
-        "String".to_string(),
-        "String".to_string(),
+        "result1".to_string(),
+        "result2".to_string(),
         None, // no batch size limit
         stage2_transform,
     );
