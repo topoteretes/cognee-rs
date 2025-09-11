@@ -281,12 +281,10 @@ async fn run_pipeline<T>(
             let mut payload_list = payloads.write().unwrap();
             let mut payload_ids_to_remove = Vec::new();
 
+            // This part has to be dynamic.....still dont know how to do it
             for (index, payload) in payload_list.iter().enumerate() {
                 let payload_id = payload.payload_id();
 
-                let _chunks_status = payload.payload_get_property_status("chunks");
-                let result1_status = payload.payload_get_property_status("result1");
-                let result2_status = payload.payload_get_property_status("result2");
 
                 // This is the case when the payload is fully completed - check if ALL properties are done
                 let all_properties_done = payload
@@ -307,6 +305,13 @@ async fn run_pipeline<T>(
                     completed_payloads += 1;
                     continue;
                 }
+
+
+
+
+                let _chunks_status = payload.payload_get_property_status("chunks");
+                let result1_status = payload.payload_get_property_status("result1");
+                let result2_status = payload.payload_get_property_status("result2");
 
                 // If result1 is empty, create a new task that gets result1 and processes it
                 if let Some(status) = &result1_status
@@ -395,6 +400,8 @@ async fn run_pipeline<T>(
                     active_tasks.push(handle);
                 }
             }
+
+            // TIL THIS
 
             // Collect payloads to write to JSON before removing
             for payload_id in payload_ids_to_remove {
