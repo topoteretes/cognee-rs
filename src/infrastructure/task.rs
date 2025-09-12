@@ -1,7 +1,10 @@
+use crate::data::payload_trait::PayloadTrait;
 use crate::data::payload_types::cognee_payload::PropertyStatus;
 use log::{debug, info};
+use std::collections::HashMap;
 use std::future::Future;
-use std::sync::{Arc, RwLock};
+use std::pin::Pin;
+use std::sync::{Arc, Mutex, RwLock};
 use tokio::sync::mpsc;
 
 #[derive(Debug, Clone)]
@@ -88,6 +91,140 @@ where
         if let Some(sender) = signal_sender {
             let _ = sender.send(LoopSignal::TaskCompleted);
         }
+    }
+}
+
+// Type alias for complex return type to improve readability
+type TaskFuture = Pin<Box<dyn Future<Output = ()> + Send>>;
+type TaskResult = Result<TaskFuture, Box<dyn std::error::Error>>;
+
+// Process function type for task execution
+pub type ProcessFn<TInput, TOutput> = Arc<
+    dyn Fn(Vec<Arc<TInput>>) -> Pin<Box<dyn Future<Output = Vec<Arc<TOutput>>> + Send>>
+        + Send
+        + Sync,
+>;
+
+// ------------------------------
+// Trait for task configuration
+// ------------------------------
+pub trait TaskConfigTrait: Send + Sync {
+    fn name(&self) -> &str;
+    fn input_property_name(&self) -> &str;
+    fn output_property_name(&self) -> &str;
+    fn batch_size(&self) -> Option<usize>;
+
+    // Method to create a task with concrete types
+    fn create_task_future(
+        &self,
+        payload: &dyn PayloadTrait,
+        signal_tx: Option<mpsc::UnboundedSender<LoopSignal>>,
+    ) -> TaskResult;
+}
+
+// ------------------------------
+// Task configuration structure
+// ------------------------------
+pub struct TaskConfig<TInput, TOutput> {
+    pub name: String,
+    pub batch_size: Option<usize>,
+    pub input_property_name: String,
+    pub output_property_name: String,
+    pub process_fn: ProcessFn<TInput, TOutput>,
+}
+
+impl<TInput, TOutput> TaskConfig<TInput, TOutput>
+where
+    TInput: Clone + Send + Sync + 'static,
+    TOutput: Clone + Send + Sync + 'static,
+{
+    pub fn new<F, Fut>(
+        name: String,
+        input_property_name: String,
+        output_property_name: String,
+        batch_size: Option<usize>,
+        process_fn: F,
+    ) -> Self
+    where
+        F: Fn(Vec<Arc<TInput>>) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Vec<Arc<TOutput>>> + Send + 'static,
+    {
+        Self {
+            name,
+            input_property_name,
+            output_property_name,
+            batch_size,
+            process_fn: Arc::new(move |input| Box::pin(process_fn(input))),
+        }
+    }
+}
+
+// Implement the trait for TaskConfig
+impl<TInput, TOutput> TaskConfigTrait for TaskConfig<TInput, TOutput>
+where
+    TInput: Clone + Send + Sync + 'static,
+    TOutput: Clone + Send + Sync + 'static,
+{
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn input_property_name(&self) -> &str {
+        &self.input_property_name
+    }
+
+    fn output_property_name(&self) -> &str {
+        &self.output_property_name
+    }
+
+    fn batch_size(&self) -> Option<usize> {
+        self.batch_size
+    }
+
+    fn create_task_future(
+        &self,
+        payload: &dyn PayloadTrait,
+        signal_tx: Option<mpsc::UnboundedSender<LoopSignal>>,
+    ) -> TaskResult {
+        let input_arc = payload
+            .payload_get_arc(self.input_property_name())
+            .map_err(|_| "Input property not found")?
+            .downcast::<Arc<RwLock<Vec<Arc<TInput>>>>>()
+            .map_err(|_| "Failed to downcast input")?;
+
+        let output_arc = payload
+            .payload_get_arc(self.output_property_name())
+            .map_err(|_| "Output property not found")?
+            .downcast::<Arc<RwLock<Vec<Arc<TOutput>>>>>()
+            .map_err(|_| "Failed to downcast output")?;
+
+        let property_status = payload
+            .payload_get_arc("property_status")
+            .map_err(|_| "Property status not found")?
+            .downcast::<Arc<Mutex<HashMap<String, PropertyStatus>>>>()
+            .map_err(|_| "Failed to downcast property status")?;
+
+        // Create a wrapper function that matches the expected signature
+        let process_fn_wrapper = {
+            let process_fn = self.process_fn.clone();
+            move |input: Vec<Arc<TInput>>| {
+                let process_fn = process_fn.clone();
+                Box::pin(async move { process_fn(input).await })
+            }
+        };
+
+        let task_future = create_task(
+            self.name().to_string(),
+            self.batch_size(),
+            *input_arc,
+            Some(*output_arc),
+            *property_status,
+            self.output_property_name().to_string(),
+            process_fn_wrapper,
+            signal_tx,
+        );
+
+        Ok(Box::pin(task_future))
     }
 }
 
