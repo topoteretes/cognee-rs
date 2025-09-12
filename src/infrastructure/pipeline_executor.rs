@@ -1,6 +1,6 @@
 use crate::data::payload_types::cognee_payload::PropertyStatus;
 use crate::infrastructure::task::LoopSignal;
-use crate::{PayloadConstructor, PayloadTrait};
+use crate::data::payload_trait::{PayloadConstructor, PayloadTrait};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
@@ -182,7 +182,7 @@ pub async fn run_pipeline<T>(
         }
 
         // Write JSON files after releasing the lock
-        for (payload, counter) in payloads_to_write {
+        for (_payload, counter) in payloads_to_write {
             println!("Would write dynamic payload #{counter} to JSON file.");
         }
 

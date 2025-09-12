@@ -1,5 +1,5 @@
 use crate::data::payload_types::cognee_payload::PropertyStatus;
-use crate::PayloadTrait;
+use crate::data::payload_trait::PayloadTrait;
 use log::{debug, info};
 use std::collections::HashMap;
 use std::future::Future;
