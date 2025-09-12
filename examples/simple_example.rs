@@ -1,8 +1,8 @@
 use cognee_rust::create_cognee_payload;
 use cognee_rust::data::payload_base::PayloadBase;
 use cognee_rust::data::payload_types::cognee_payload::PropertyStatus;
-use cognee_rust::infrastructure::task::{TaskConfig, TaskConfigTrait};
 use cognee_rust::infrastructure::pipeline_executor::run_pipeline;
+use cognee_rust::infrastructure::task::{TaskConfig, TaskConfigTrait};
 use rand::Rng;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, RwLock};
@@ -44,7 +44,6 @@ struct FinalOutput {
 
 // Stage 1: Text Processing
 async fn stage1_text_processing(chunks: Vec<Arc<String>>) -> Vec<Arc<ProcessedText>> {
-    
     let millis = rand::thread_rng().gen_range(1000..=2000);
     tokio::time::sleep(Duration::from_millis(millis)).await;
 
@@ -67,16 +66,20 @@ async fn stage1_text_processing(chunks: Vec<Arc<String>>) -> Vec<Arc<ProcessedTe
 
 // Stage 2: Text Analysis
 async fn stage2_text_analysis(processed_texts: Vec<Arc<ProcessedText>>) -> Vec<Arc<AnalyzedText>> {
-    
     let millis = rand::thread_rng().gen_range(1500..=3000);
     tokio::time::sleep(Duration::from_millis(millis)).await;
 
     let results: Vec<Arc<AnalyzedText>> = processed_texts
         .into_iter()
         .map(|processed| {
-            let sentiment = if processed.word_count > 10 { "positive" } else { "neutral" };
+            let sentiment = if processed.word_count > 10 {
+                "positive"
+            } else {
+                "neutral"
+            };
             let complexity_score = (processed.word_count as f64) * 0.1 + 0.5;
-            let keywords = processed.original_text
+            let keywords = processed
+                .original_text
                 .split_whitespace()
                 .filter(|word| word.len() > 3)
                 .take(3)
@@ -98,7 +101,6 @@ async fn stage2_text_analysis(processed_texts: Vec<Arc<ProcessedText>>) -> Vec<A
 
 // Stage 3: Final Output Generation
 async fn stage3_final_output(analyzed_texts: Vec<Arc<AnalyzedText>>) -> Vec<Arc<FinalOutput>> {
-    
     let millis = rand::thread_rng().gen_range(800..=1500);
     tokio::time::sleep(Duration::from_millis(millis)).await;
 
@@ -112,11 +114,22 @@ async fn stage3_final_output(analyzed_texts: Vec<Arc<AnalyzedText>>) -> Vec<Arc<
                 analyzed.complexity_score,
                 analyzed.keywords.join(", ")
             );
-            
-            let confidence = if analyzed.complexity_score > 1.0 { 0.9 } else { 0.7 };
+
+            let confidence = if analyzed.complexity_score > 1.0 {
+                0.9
+            } else {
+                0.7
+            };
             let recommendations = vec![
                 format!("Consider {} sentiment", analyzed.sentiment),
-                format!("Complexity level: {}", if analyzed.complexity_score > 1.0 { "high" } else { "medium" }),
+                format!(
+                    "Complexity level: {}",
+                    if analyzed.complexity_score > 1.0 {
+                        "high"
+                    } else {
+                        "medium"
+                    }
+                ),
                 "Review keywords for relevance".to_string(),
             ];
 
@@ -137,7 +150,6 @@ async fn stage3_final_output(analyzed_texts: Vec<Arc<AnalyzedText>>) -> Vec<Arc<
 async fn main() {
     dotenv::dotenv().ok();
     let _ = env_logger::builder().try_init();
-
 
     let stage1_task = TaskConfig::new(
         "Stage1_TextProcessing".to_string(),
@@ -169,14 +181,12 @@ async fn main() {
         Arc::new(stage3_task),
     ];
 
-
     run_pipeline(
-        40, // max_payloads
-        20, // max_concurrent_tasks
+        40,  // max_payloads
+        20,  // max_concurrent_tasks
         100, // max_completed
         pipeline_tasks,
         std::marker::PhantomData::<ThreeStagePayload>,
-    ).await;
-
-
+    )
+    .await;
 }

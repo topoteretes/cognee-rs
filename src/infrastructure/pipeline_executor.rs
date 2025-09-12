@@ -1,6 +1,6 @@
+use crate::data::payload_trait::{PayloadConstructor, PayloadTrait};
 use crate::data::payload_types::cognee_payload::PropertyStatus;
 use crate::infrastructure::task::LoopSignal;
-use crate::data::payload_trait::{PayloadConstructor, PayloadTrait};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
@@ -89,7 +89,7 @@ pub async fn run_pipeline<T>(
         {
             let mut payload_list = payloads.write().unwrap();
             let mut payload_ids_to_remove = Vec::new();
-            
+
             for (index, payload) in payload_list.iter().enumerate() {
                 let payload_id = payload.payload_id();
 
@@ -114,19 +114,17 @@ pub async fn run_pipeline<T>(
                 }
 
                 for task in &pipeline_tasks {
-
                     let input_property_name = task.input_property_name();
                     let output_property_name = task.output_property_name();
 
                     let task_name = task.name();
 
-                    let input_status =
-                        payload.payload_get_property_status(input_property_name);
-                    let output_status =
-                        payload.payload_get_property_status(output_property_name);
+                    let input_status = payload.payload_get_property_status(input_property_name);
+                    let output_status = payload.payload_get_property_status(output_property_name);
 
-
-                    println!("Task: {task_name:?} has of {input_property_name:?} with status of: {input_status:?} and output  {output_property_name:?} with status of : {output_status:?}");
+                    println!(
+                        "Task: {task_name:?} has of {input_property_name:?} with status of: {input_status:?} and output  {output_property_name:?} with status of : {output_status:?}"
+                    );
 
                     if let (Some(input_status), Some(output_status)) = (input_status, output_status)
                         && matches!(input_status, PropertyStatus::Done)
@@ -212,7 +210,6 @@ pub async fn run_pipeline<T>(
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -263,7 +260,11 @@ mod tests {
             .map(|chunk| Arc::new(format!("Simple-Stage1: {chunk}")))
             .collect();
 
-        println!("Simple Stage1: finished after {} ms, produced {} results", millis, results.len());
+        println!(
+            "Simple Stage1: finished after {} ms, produced {} results",
+            millis,
+            results.len()
+        );
         results
     }
 
@@ -277,7 +278,11 @@ mod tests {
             .map(|item| Arc::new(format!("Simple-Stage2-Final: {item}")))
             .collect();
 
-        println!("Simple Stage2: finished after {} ms, produced {} results", millis, results.len());
+        println!(
+            "Simple Stage2: finished after {} ms, produced {} results",
+            millis,
+            results.len()
+        );
         results
     }
 
@@ -299,7 +304,11 @@ mod tests {
             })
             .collect();
 
-        println!("Complex Stage1: finished after {} ms, produced {} results", millis, results.len());
+        println!(
+            "Complex Stage1: finished after {} ms, produced {} results",
+            millis,
+            results.len()
+        );
         results
     }
 
@@ -324,7 +333,11 @@ mod tests {
             })
             .collect();
 
-        println!("Complex Stage2: finished after {} ms, produced {} results", millis, results.len());
+        println!(
+            "Complex Stage2: finished after {} ms, produced {} results",
+            millis,
+            results.len()
+        );
         results
     }
 
@@ -360,7 +373,8 @@ mod tests {
             4, // max_completed
             pipeline_tasks,
             std::marker::PhantomData::<SimpleTestPayload>,
-        ).await;
+        )
+        .await;
 
         println!("=== Simple Pipeline Executor Test Completed ===");
     }
@@ -397,7 +411,8 @@ mod tests {
             3, // max_completed
             pipeline_tasks,
             std::marker::PhantomData::<ComplexTestPayload>,
-        ).await;
+        )
+        .await;
 
         println!("=== Complex Pipeline Executor Test Completed ===");
     }
@@ -434,7 +449,8 @@ mod tests {
             8, // max_completed
             pipeline_tasks,
             std::marker::PhantomData::<SimpleTestPayload>,
-        ).await;
+        )
+        .await;
 
         println!("=== High Concurrency Pipeline Test Completed ===");
     }
@@ -468,10 +484,13 @@ mod tests {
 
         println!("Running with SimpleTestPayload...");
         run_pipeline(
-            2, 2, 3,
+            2,
+            2,
+            3,
             simple_tasks,
             std::marker::PhantomData::<SimpleTestPayload>,
-        ).await;
+        )
+        .await;
 
         // Test with ComplexTestPayload
         let complex_stage1 = TaskConfig::new(
@@ -495,10 +514,13 @@ mod tests {
 
         println!("Running with ComplexTestPayload...");
         run_pipeline(
-            2, 1, 2,
+            2,
+            1,
+            2,
             complex_tasks,
             std::marker::PhantomData::<ComplexTestPayload>,
-        ).await;
+        )
+        .await;
 
         println!("=== Mixed Payload Types Test Completed ===");
     }
