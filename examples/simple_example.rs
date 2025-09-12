@@ -193,3 +193,82 @@ async fn main() {
     )
     .await;
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_simple_example_compiles_and_runs() {
+        dotenv::dotenv().ok();
+        let _ = env_logger::builder().is_test(true).try_init();
+
+        // Test that the example compiles and runs with smaller parameters
+        let stage1_task = TaskConfig::new(
+            "TestStage1_TextProcessing".to_string(),
+            "chunks".to_string(),
+            "stage1_result".to_string(),
+            Some(2), // smaller batch size for testing
+            stage1_text_processing,
+        );
+
+        let stage2_task = TaskConfig::new(
+            "TestStage2_TextAnalysis".to_string(),
+            "stage1_result".to_string(),
+            "stage2_result".to_string(),
+            Some(1), // smaller batch size for testing
+            stage2_text_analysis,
+        );
+
+        let stage3_task = TaskConfig::new(
+            "TestStage3_FinalOutput".to_string(),
+            "stage2_result".to_string(),
+            "stage3_result".to_string(),
+            None,
+            stage3_final_output,
+        );
+
+        let pipeline_tasks: Vec<Arc<dyn TaskConfigTrait>> = vec![
+            Arc::new(stage1_task),
+            Arc::new(stage2_task),
+            Arc::new(stage3_task),
+        ];
+
+        // Run with same parameters as main function
+        run_pipeline(
+            40,  // max_payloads
+            20,  // max_concurrent_tasks
+            100, // max_completed
+            pipeline_tasks,
+            std::marker::PhantomData::<ThreeStagePayload>,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn test_transformation_functions() {
+        // Test that our transformation functions work correctly
+        let test_chunks = vec![
+            Arc::new("Hello world test".to_string()),
+            Arc::new("Another test chunk".to_string()),
+        ];
+
+        // Test Stage 1
+        let processed = stage1_text_processing(test_chunks).await;
+        assert_eq!(processed.len(), 2);
+        assert_eq!(processed[0].word_count, 3); // "Hello world test" = 3 words
+        assert_eq!(processed[1].word_count, 3); // "Another test chunk" = 3 words
+
+        // Test Stage 2
+        let analyzed = stage2_text_analysis(processed).await;
+        assert_eq!(analyzed.len(), 2);
+        assert_eq!(analyzed[0].sentiment, "neutral"); // word_count <= 10
+        assert_eq!(analyzed[1].sentiment, "neutral"); // word_count <= 10
+
+        // Test Stage 3
+        let final_outputs = stage3_final_output(analyzed).await;
+        assert_eq!(final_outputs.len(), 2);
+        assert_eq!(final_outputs[0].confidence, 0.7); // complexity_score <= 1.0
+        assert_eq!(final_outputs[1].confidence, 0.7); // complexity_score <= 1.0
+    }
+}
