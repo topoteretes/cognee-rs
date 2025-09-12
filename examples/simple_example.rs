@@ -1,506 +1,182 @@
 use cognee_rust::create_cognee_payload;
 use cognee_rust::data::payload_base::PayloadBase;
 use cognee_rust::data::payload_types::cognee_payload::PropertyStatus;
-use cognee_rust::infrastructure::task::LoopSignal;
-use cognee_rust::infrastructure::task::create_task;
-use cognee_rust::{PayloadConstructor, PayloadTrait};
+use cognee_rust::infrastructure::task::{TaskConfig, TaskConfigTrait};
+use cognee_rust::infrastructure::pipeline_executor::run_pipeline;
 use rand::Rng;
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::future::Future;
-use std::pin::Pin;
 use std::sync::{Arc, Mutex, RwLock};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tokio::sync::mpsc;
-use tokio::task::JoinHandle;
-use tokio::time::sleep;
-use uuid::Uuid;
+use std::time::Duration;
 
-// Type alias for complex return type to improve readability
-type TaskFuture = Pin<Box<dyn Future<Output = ()> + Send>>;
-type TaskResult = Result<TaskFuture, Box<dyn std::error::Error>>;
-
-// Create a dynamic payload type for testing
+// Create a 3-stage payload type
 create_cognee_payload!(
-    DynamicPipelinePayload,
-    result1: String,
-    result2: String
+    ThreeStagePayload,
+    stage1_result: ProcessedText,
+    stage2_result: AnalyzedText,
+    stage3_result: FinalOutput
 );
 
-#[derive(Serialize, Deserialize, Debug)]
-struct CompletedPayload {
-    counter: usize,
-    original_chunks: Vec<String>,
-    stage1_results: Vec<String>,
-    stage2_results: Vec<String>,
-    metadata: PayloadMetadata,
+#[derive(Debug, Clone)]
+struct ProcessedText {
+    id: usize,
+    original_text: String,
+    word_count: usize,
+    processed_at: String,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
-struct PayloadMetadata {
-    total_chunks: usize,
-    completion_timestamp: String,
+#[derive(Debug, Clone)]
+struct AnalyzedText {
+    text_id: usize,
+    sentiment: String,
+    complexity_score: f64,
+    keywords: Vec<String>,
+    analysis_timestamp: String,
 }
 
-// TASK CONFIGURATION
-
-type ProcessFn<TInput, TOutput> = Arc<
-    dyn Fn(Vec<Arc<TInput>>) -> Pin<Box<dyn Future<Output = Vec<Arc<TOutput>>> + Send>>
-        + Send
-        + Sync,
->;
-
-// ------------------------------
-// Trait for task configuration
-// ------------------------------
-pub trait TaskConfigTrait: Send + Sync {
-    fn name(&self) -> &str;
-    fn input_property_name(&self) -> &str;
-    fn output_property_name(&self) -> &str;
-    fn batch_size(&self) -> Option<usize>;
-
-    // Method to create a task with concrete types
-    fn create_task_future(
-        &self,
-        payload: &dyn PayloadTrait,
-        signal_tx: Option<mpsc::UnboundedSender<LoopSignal>>,
-    ) -> TaskResult;
+#[derive(Debug, Clone)]
+struct FinalOutput {
+    analysis_id: usize,
+    summary: String,
+    confidence: f64,
+    recommendations: Vec<String>,
+    final_timestamp: String,
 }
 
-// ------------------------------
-// Task configuration structure
-// ------------------------------
-pub struct TaskConfig<TInput, TOutput> {
-    pub name: String,
-    pub batch_size: Option<usize>,
-    pub input_property_name: String,
-    pub output_property_name: String,
-    pub process_fn: ProcessFn<TInput, TOutput>,
-}
+// Stage 1: Text Processing
+async fn stage1_text_processing(chunks: Vec<Arc<String>>) -> Vec<Arc<ProcessedText>> {
+    
+    let millis = rand::thread_rng().gen_range(1000..=2000);
+    tokio::time::sleep(Duration::from_millis(millis)).await;
 
-impl<TInput, TOutput> TaskConfig<TInput, TOutput>
-where
-    TInput: Clone + Send + Sync + 'static,
-    TOutput: Clone + Send + Sync + 'static,
-{
-    pub fn new<F, Fut>(
-        name: String,
-        input_property_name: String,
-        output_property_name: String,
-        batch_size: Option<usize>,
-        process_fn: F,
-    ) -> Self
-    where
-        F: Fn(Vec<Arc<TInput>>) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = Vec<Arc<TOutput>>> + Send + 'static,
-    {
-        Self {
-            name,
-            input_property_name,
-            output_property_name,
-            batch_size,
-            process_fn: Arc::new(move |input| Box::pin(process_fn(input))),
-        }
-    }
-}
-
-// Implement the trait for TaskConfig
-impl<TInput, TOutput> TaskConfigTrait for TaskConfig<TInput, TOutput>
-where
-    TInput: Clone + Send + Sync + 'static,
-    TOutput: Clone + Send + Sync + 'static,
-{
-    fn name(&self) -> &str {
-        &self.name
-    }
-
-    fn input_property_name(&self) -> &str {
-        &self.input_property_name
-    }
-
-    fn output_property_name(&self) -> &str {
-        &self.output_property_name
-    }
-
-    fn batch_size(&self) -> Option<usize> {
-        self.batch_size
-    }
-
-    fn create_task_future(
-        &self,
-        payload: &dyn PayloadTrait,
-        signal_tx: Option<mpsc::UnboundedSender<LoopSignal>>,
-    ) -> TaskResult {
-        let input_arc = payload
-            .payload_get_arc(self.input_property_name())
-            .map_err(|_| "Input property not found")?
-            .downcast::<Arc<RwLock<Vec<Arc<TInput>>>>>()
-            .map_err(|_| "Failed to downcast input")?;
-
-        let output_arc = payload
-            .payload_get_arc(self.output_property_name())
-            .map_err(|_| "Output property not found")?
-            .downcast::<Arc<RwLock<Vec<Arc<TOutput>>>>>()
-            .map_err(|_| "Failed to downcast output")?;
-
-        let property_status = payload
-            .payload_get_arc("property_status")
-            .map_err(|_| "Property status not found")?
-            .downcast::<Arc<Mutex<HashMap<String, PropertyStatus>>>>()
-            .map_err(|_| "Failed to downcast property status")?;
-
-        // Create a wrapper function that matches the expected signature
-        let process_fn_wrapper = {
-            let process_fn = self.process_fn.clone();
-            move |input: Vec<Arc<TInput>>| {
-                let process_fn = process_fn.clone();
-                Box::pin(async move { process_fn(input).await })
-            }
-        };
-
-        let task_future = create_task(
-            self.name().to_string(),
-            self.batch_size(),
-            *input_arc,
-            Some(*output_arc),
-            *property_status,
-            self.output_property_name().to_string(),
-            process_fn_wrapper,
-            signal_tx,
-        );
-
-        Ok(Box::pin(task_future))
-    }
-}
-
-// Function to write completed dynamic payload to JSON file
-async fn write_dynamic_payload_to_json<T>(
-    payload: &T,
-    counter: usize,
-) -> Result<(), Box<dyn std::error::Error>>
-where
-    T: PayloadTrait,
-{
-    let chunks: Vec<Arc<String>> = *payload
-        .payload_get_copy("chunks")
-        .unwrap()
-        .downcast()
-        .unwrap();
-    let result1: Vec<Arc<String>> = *payload
-        .payload_get_copy("result1")
-        .unwrap()
-        .downcast()
-        .unwrap();
-    let result2: Vec<Arc<String>> = *payload
-        .payload_get_copy("result2")
-        .unwrap()
-        .downcast()
-        .unwrap();
-
-    let original_chunks: Vec<String> = chunks.iter().map(|c| c.as_str().to_string()).collect();
-    let stage1_results: Vec<String> = result1.iter().map(|r| r.as_str().to_string()).collect();
-    let stage2_results: Vec<String> = result2.iter().map(|r| r.as_str().to_string()).collect();
-
-    let completed_payload = CompletedPayload {
-        counter,
-        original_chunks,
-        stage1_results,
-        stage2_results,
-        metadata: PayloadMetadata {
-            total_chunks: chunks.len(),
-            completion_timestamp: SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_secs()
-                .to_string(),
-        },
-    };
-
-    let filename = format!("dynamic_result_{counter}.json");
-    let json_content = serde_json::to_string_pretty(&completed_payload)?;
-
-    tokio::fs::write(&filename, json_content).await?;
-    println!("Written dynamic payload #{counter} to {filename}");
-
-    Ok(())
-}
-
-async fn stage1_transform_async(chunks: Vec<Arc<String>>) -> Vec<Arc<String>> {
-    println!("Dynamic Task1 started: processing {} chunks", chunks.len());
-
-    // Random sleep between 2s and 2s
-    let millis = rand::thread_rng().gen_range(2000..=2000);
-    sleep(Duration::from_millis(millis)).await;
-
-    let results: Vec<Arc<String>> = chunks
+    let results: Vec<Arc<ProcessedText>> = chunks
         .into_iter()
-        .map(|chunk| Arc::new(format!("Dynamic Stage1-Processed: {chunk}")))
+        .enumerate()
+        .map(|(idx, chunk)| {
+            let text = chunk.as_str();
+            Arc::new(ProcessedText {
+                id: idx,
+                original_text: text.to_string(),
+                word_count: text.split_whitespace().count(),
+                processed_at: format!("processed_at_{}", chrono::Utc::now().timestamp()),
+            })
+        })
         .collect();
-
-    println!(
-        "Dynamic Task1 finished after {} ms, produced {} results",
-        millis,
-        results.len()
-    );
 
     results
 }
 
-async fn stage2_transform(result1: Vec<Arc<String>>) -> Vec<Arc<String>> {
-    println!("Dynamic Task2 started: processing {} items", result1.len());
+// Stage 2: Text Analysis
+async fn stage2_text_analysis(processed_texts: Vec<Arc<ProcessedText>>) -> Vec<Arc<AnalyzedText>> {
+    
+    let millis = rand::thread_rng().gen_range(1500..=3000);
+    tokio::time::sleep(Duration::from_millis(millis)).await;
 
-    // Random sleep between 2s and 4s
-    let millis = rand::thread_rng().gen_range(2000..=4000);
-    sleep(Duration::from_millis(millis)).await;
-
-    let results: Vec<Arc<String>> = result1
+    let results: Vec<Arc<AnalyzedText>> = processed_texts
         .into_iter()
-        .map(|item| Arc::new(format!("Dynamic Stage2-Final: {item}")))
-        .collect();
+        .map(|processed| {
+            let sentiment = if processed.word_count > 10 { "positive" } else { "neutral" };
+            let complexity_score = (processed.word_count as f64) * 0.1 + 0.5;
+            let keywords = processed.original_text
+                .split_whitespace()
+                .filter(|word| word.len() > 3)
+                .take(3)
+                .map(|s| s.to_string())
+                .collect();
 
-    println!(
-        "Dynamic Task2 finished after {} ms, produced {} results",
-        millis,
-        results.len()
-    );
+            Arc::new(AnalyzedText {
+                text_id: processed.id,
+                sentiment: sentiment.to_string(),
+                complexity_score,
+                keywords,
+                analysis_timestamp: format!("analyzed_at_{}", chrono::Utc::now().timestamp()),
+            })
+        })
+        .collect();
 
     results
 }
 
-async fn run_pipeline<T>(
-    max_payloads: usize,
-    max_concurrent_tasks: usize,
-    max_completed: usize,
-    pipeline_tasks: Vec<Arc<dyn TaskConfigTrait>>,
-    _payload_type: std::marker::PhantomData<T>,
-) where
-    T: PayloadTrait + PayloadConstructor + Clone + Send + Sync + 'static,
-{
-    ///////// Scheduler related resources
-    let (signal_tx, mut signal_rx) = mpsc::unbounded_channel::<LoopSignal>();
-    let payloads: Arc<RwLock<Vec<Arc<T>>>> = Arc::new(RwLock::new(Vec::new()));
-    let mut payload_counters: HashMap<Uuid, usize> = HashMap::new();
+// Stage 3: Final Output Generation
+async fn stage3_final_output(analyzed_texts: Vec<Arc<AnalyzedText>>) -> Vec<Arc<FinalOutput>> {
+    
+    let millis = rand::thread_rng().gen_range(800..=1500);
+    tokio::time::sleep(Duration::from_millis(millis)).await;
 
-    // List to keep track of active tasks
-    let mut active_tasks: Vec<JoinHandle<()>> = Vec::new();
-
-    // Counters
-    let mut counter = 0;
-    let mut completed_payloads = 0;
-
-    loop {
-        tokio::select! {
-            signal = signal_rx.recv() => {
-                match signal {
-                    Some(LoopSignal::TaskCompleted) => {
-                        println!("Received dynamic task completion signal - checking for work...");
-
-                    }
-                    Some(LoopSignal::NewPayloadAdded) => {
-                        println!("Received new dynamic payload signal - checking for work...");
-
-                    }
-                    Some(LoopSignal::Shutdown) => {
-                        println!("Received shutdown signal");
-                        break;
-                    }
-                    None => {
-                        println!("Signal channel closed");
-                        break;
-                    }
-                }
-            }
-            _ = tokio::time::sleep(Duration::from_millis(10000)) => {
-                println!("Periodic check for dynamic work - no signals received for 10s");
-            }
-        }
-
-        let current_size = payloads.read().unwrap().len();
-
-        // Adds new payload to the queue if there is space left
-        if current_size < max_payloads && counter < max_completed {
-            counter += 1;
-
-            // Create a default payload using the generic type T
-            let chunks = vec![
-                Arc::new(format!("Default Chunk A from payload {counter}")),
-                Arc::new(format!("Default Chunk B from payload {counter}")),
+    let results: Vec<Arc<FinalOutput>> = analyzed_texts
+        .into_iter()
+        .map(|analyzed| {
+            let summary = format!(
+                "Text {}: {} sentiment, complexity {:.2}, keywords: {}",
+                analyzed.text_id,
+                analyzed.sentiment,
+                analyzed.complexity_score,
+                analyzed.keywords.join(", ")
+            );
+            
+            let confidence = if analyzed.complexity_score > 1.0 { 0.9 } else { 0.7 };
+            let recommendations = vec![
+                format!("Consider {} sentiment", analyzed.sentiment),
+                format!("Complexity level: {}", if analyzed.complexity_score > 1.0 { "high" } else { "medium" }),
+                "Review keywords for relevance".to_string(),
             ];
-            let payload = Arc::new(T::new(chunks));
-            let payload_id = payload.payload_id();
 
-            payloads.write().unwrap().push(Arc::clone(&payload));
-            payload_counters.insert(payload_id, counter);
+            Arc::new(FinalOutput {
+                analysis_id: analyzed.text_id,
+                summary,
+                confidence,
+                recommendations,
+                final_timestamp: format!("final_at_{}", chrono::Utc::now().timestamp()),
+            })
+        })
+        .collect();
 
-            println!(
-                "Added dynamic payload {} to list (size: {}/{})",
-                counter,
-                current_size + 1,
-                max_payloads
-            );
-
-            // Send signal that we added a payload
-            let _ = signal_tx.send(LoopSignal::NewPayloadAdded);
-        }
-
-        let mut payloads_to_write = Vec::new();
-        {
-            let mut payload_list = payloads.write().unwrap();
-            let mut payload_ids_to_remove = Vec::new();
-
-            // This part has to be dynamic.....still dont know how to do it
-            for (index, payload) in payload_list.iter().enumerate() {
-                let payload_id = payload.payload_id();
-
-                // This is the case when the payload is fully completed - check if ALL properties are done
-                let all_properties_done = payload
-                    .payload_get_all_property_statuses()
-                    .iter()
-                    .all(|(_, status)| matches!(status, PropertyStatus::Done));
-
-                if all_properties_done {
-                    let payload_counter = payload_counters.get(&payload_id).copied().unwrap_or(0);
-                    println!(
-                        "Dynamic payload {} (ID: {}, counter: {}) fully completed!",
-                        index + 1,
-                        payload_id,
-                        payload_counter
-                    );
-
-                    payload_ids_to_remove.push(payload_id);
-                    completed_payloads += 1;
-                    continue;
-                }
-
-                for task in &pipeline_tasks {
-                    let input_status =
-                        payload.payload_get_property_status(task.input_property_name());
-                    let output_status =
-                        payload.payload_get_property_status(task.output_property_name());
-
-                    println!("Input status: {input_status:?}, output status: {output_status:?}");
-
-                    if let (Some(input_status), Some(output_status)) = (input_status, output_status)
-                        && matches!(input_status, PropertyStatus::Done)
-                        && matches!(output_status, PropertyStatus::Empty)
-                        && active_tasks.len() < max_concurrent_tasks
-                    {
-                        payload.payload_set_property_status(
-                            task.output_property_name(),
-                            PropertyStatus::Processing,
-                        );
-
-                        println!(
-                            "Creating dynamic task '{}' for payload {} (ID: {})",
-                            task.name(),
-                            index + 1,
-                            payload_id
-                        );
-
-                        // Use the trait method to create the task
-                        match task.create_task_future(&**payload, Some(signal_tx.clone())) {
-                            Ok(task_future) => {
-                                let handle = tokio::spawn(task_future);
-                                active_tasks.push(handle);
-                            }
-                            Err(e) => {
-                                eprintln!("Failed to create task '{}': {}", task.name(), e);
-                                // Reset the property status on error
-                                payload.payload_set_property_status(
-                                    task.output_property_name(),
-                                    PropertyStatus::Empty,
-                                );
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Collect payloads to write to JSON before removing
-            for payload_id in payload_ids_to_remove {
-                if let Some(pos) = payload_list
-                    .iter()
-                    .position(|p| p.payload_id() == payload_id)
-                {
-                    let payload = Arc::clone(&payload_list[pos]);
-                    let counter = payload_counters.get(&payload_id).copied().unwrap_or(0);
-                    payloads_to_write.push((payload, counter));
-
-                    payload_list.remove(pos);
-                    payload_counters.remove(&payload_id);
-                    println!("Removed completed dynamic payload with ID: {payload_id}");
-                }
-            }
-        }
-
-        // Write JSON files after releasing the lock
-        for (payload, counter) in payloads_to_write {
-            if let Err(e) = write_dynamic_payload_to_json(&*payload, counter).await {
-                eprintln!("Failed to write dynamic payload {counter} to JSON: {e}");
-            }
-        }
-
-        let before_count = active_tasks.len();
-        active_tasks.retain(|handle| !handle.is_finished());
-        let after_count = active_tasks.len();
-
-        // Show task status
-        if before_count != after_count || !active_tasks.is_empty() {
-            println!(
-                "Dynamic Status: {} active tasks, {} payloads in queue, {} completed",
-                active_tasks.len(),
-                payloads.read().unwrap().len(),
-                completed_payloads
-            );
-        }
-
-        if completed_payloads >= max_completed {
-            println!("Reached dynamic completion target: {completed_payloads} payloads processed");
-            break;
-        }
-    }
-
-    // Let all tasks finish ()
-    for handle in active_tasks {
-        handle.await.unwrap();
-    }
+    results
 }
 
 #[tokio::main]
 async fn main() {
     dotenv::dotenv().ok();
+    let _ = env_logger::builder().try_init();
 
-    // Pipeline parameters
-    let max_payloads = 5; // Maximum number of payloads in the central processing queue
-    let max_concurrent_tasks = 3; // Maximum number of concurrent tasks
-    let max_completed = 10; // Number of all payloads (just for the POC)
 
     let stage1_task = TaskConfig::new(
-        "Stage1_ChunksToProcessed".to_string(),
+        "Stage1_TextProcessing".to_string(),
         "chunks".to_string(),
-        "result1".to_string(),
-        Some(10), // batch size of 10
-        stage1_transform_async,
+        "stage1_result".to_string(),
+        Some(3),
+        stage1_text_processing,
     );
 
     let stage2_task = TaskConfig::new(
-        "Stage2_ProcessedToFinal".to_string(),
-        "result1".to_string(),
-        "result2".to_string(),
-        None, // no batch size limit
-        stage2_transform,
+        "Stage2_TextAnalysis".to_string(),
+        "stage1_result".to_string(),
+        "stage2_result".to_string(),
+        Some(2),
+        stage2_text_analysis,
     );
 
-    let pipeline_tasks: Vec<Arc<dyn TaskConfigTrait>> =
-        vec![Arc::new(stage1_task), Arc::new(stage2_task)];
+    let stage3_task = TaskConfig::new(
+        "Stage3_FinalOutput".to_string(),
+        "stage2_result".to_string(),
+        "stage3_result".to_string(),
+        None,
+        stage3_final_output,
+    );
 
-    // Now run the pipeline
+    let pipeline_tasks: Vec<Arc<dyn TaskConfigTrait>> = vec![
+        Arc::new(stage1_task),
+        Arc::new(stage2_task),
+        Arc::new(stage3_task),
+    ];
+
+
     run_pipeline(
-        max_payloads,
-        max_concurrent_tasks,
-        max_completed,
+        40, // max_payloads
+        20, // max_concurrent_tasks
+        100, // max_completed
         pipeline_tasks,
-        std::marker::PhantomData::<DynamicPipelinePayload>,
-    )
-    .await;
+        std::marker::PhantomData::<ThreeStagePayload>,
+    ).await;
+
+
 }
