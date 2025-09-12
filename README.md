@@ -1,59 +1,31 @@
-# 🦀 Cognee-RS (Rust Edition)
+# Cognee-RS (Rust Edition)
 
-**Cognee-RS** is a Rust-based experimental framework for building **on-device AI memory**.  
-It’s designed to run efficiently on constrained devices (smartwatch, phone) while still being portable to cloud infra when needed.
-
----
-
-## ✨ Goals
-
-- **On-device memory**: lightweight AI memory system that can run on devices like smartwatches (~1B parameter models) or phones (Phi-4 class).
-- **Vector store first**:  
-  - Uses a metastore and a vector database as the primary storage layer.  
-  - No dedicated graph DB.
-- **Transformations everywhere**:  
-  - Each transformation stage can run **locally** or in the **cloud**.  
-  - Cloud prep is not the immediate goal, but we’ll keep infra flexibility in mind.
-- **Interoperability**: Integration with **BAML** for llm extraction.
+**Cognee-RS** is a Rust-based experimental SDK for building **on-device AI memory** pipeline in rust.  
+It’s designed to run efficiently on constrained devices (smartwatch, phone)
 
 ---
 
-## 🏗️ Architecture (high-level)
+## Objectives
 
-1. **Ingestion**  
-   - Text, speech, or other data comes in.  
-   - Converted into embeddings (device-friendly models where possible).
-
-2. **Storage**  
-   - Embeddings stored in collections (lightweight, efficient vector store).
-   - Small, retrieved-based subgraphs for contextual reasoning — without a full graph DB.
-
-3. **Retrieval + Reasoning**  
-   - Memory is reconstructed through vector search.  
-   - Subgraphs built dynamically during retrieval for contextual queries.
-
-4. **Models**  
-   - **Smartwatch tier** → ~1B parameter models.  
-   - **Phone tier** → Models like **Phi-4**.  
-   - Larger models (or fine-tuned variants) can run in the cloud.
-
+- **Small-model support**: The solution has to be able to run with on device models (Phi4 class + embeddings).
+- **90+ correctness**: We aim to keep the basic cognee ability to reach similar correctness to Cognee SDK (90+%).
+- **On-device vs Cloud ability**:  
+  - Transformation tasks + orchestration design should support on-device and cloud mode.  
+    - Cloud prep is not the immediate goal, but we’ll keep infra flexibility in mind.
+- **Multimodal support**: POC has to support multimodal data ingestion.
+- **Retrieval**: Has to be optimally 3-4 sec on a reasonably sized knowledge base.
 ---
 
-## 🔧 Tech Stack
+## Orchestration requirements:
+- **Memory Control**: Control over the memory used by the ingestion pipeline.
+- **CPU control**: Control over threads and parallelization in the ingestion pipeline.
+- **Autonomous task scheduling**: Dynamic scheduling of memory-tasks.
 
-- **Rust** 🦀 — core implementation for speed and safety.  
-- **Qdrant** — vector storage backend.
+
+## Technology Stack
+
+- **Rust** — We use rust  for the POC.
+- **Qdrant** — Qdrant as vector storage.
 - **BAML** — llm model management.  
-- **Local models** — small/efficient LLMs for on-device reasoning.  
-- **Optional cloud bridge** — keep design modular so that transformations can be run remotely if needed.
-
----
-
-## 🚦 Roadmap
-
-- [ ] Core ingestion & embedding pipeline in Rust  
-- [ ] Qdrant integration for vector storage  
-- [ ] Retrieval 
-- [ ] BAML bindings for orchestration  
-- [ ] Device deployment profiles (watch / phone)  
-- [ ] Optional cloud execution paths
+- **Local models** — Phi4
+- **Graph store** — We do not use graph database, as we store structure embeddings in the vector collections + optionally retrieve and build relevant subgraphs.
