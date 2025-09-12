@@ -234,19 +234,21 @@ mod tests {
     );
 
     #[derive(Debug, Clone)]
-    struct ProcessedData {
-        id: usize,
-        content: String,
-        word_count: usize,
-        processed_at: String,
+    #[allow(dead_code)]
+    pub struct ProcessedData {
+        pub id: usize,
+        pub content: String,
+        pub word_count: usize,
+        pub processed_at: String,
     }
 
     #[derive(Debug, Clone)]
-    struct FinalResult {
-        chunk_id: usize,
-        analysis: String,
-        score: f64,
-        metadata: Vec<String>,
+    #[allow(dead_code)]
+    pub struct FinalResult {
+        pub chunk_id: usize,
+        pub analysis: String,
+        pub score: f64,
+        pub metadata: Vec<String>,
     }
 
     // Test transformation functions

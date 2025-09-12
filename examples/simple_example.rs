@@ -17,6 +17,7 @@ create_cognee_payload!(
 );
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 struct ProcessedText {
     id: usize,
     original_text: String,
@@ -25,6 +26,7 @@ struct ProcessedText {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 struct AnalyzedText {
     text_id: usize,
     sentiment: String,
@@ -34,6 +36,7 @@ struct AnalyzedText {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 struct FinalOutput {
     analysis_id: usize,
     summary: String,
