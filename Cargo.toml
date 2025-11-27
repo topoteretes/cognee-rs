@@ -13,6 +13,12 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"
 rand = "0.8"
 async-trait = "0.1.89"
 
+# qdrant
+edge = { git = "https://github.com/qdrant/qdrant", package = "edge", default-features = false }
+segment = { git = "https://github.com/qdrant/qdrant", package = "segment", default-features = false }
+shard = { git = "https://github.com/qdrant/qdrant", package = "shard" }
+common = { git = "https://github.com/qdrant/qdrant", package = "common" }
+
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "fs"] }
 anyhow = "1"
