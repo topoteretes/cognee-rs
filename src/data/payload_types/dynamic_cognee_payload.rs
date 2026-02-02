@@ -166,7 +166,6 @@ macro_rules! create_cognee_payload {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::create_cognee_payload;
 
     // Create a custom payload type with 3 result fields for testing
     create_cognee_payload!(

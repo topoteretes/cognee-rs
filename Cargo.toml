@@ -14,10 +14,10 @@ rand = "0.8"
 async-trait = "0.1.89"
 
 # qdrant
-edge = { git = "https://github.com/qdrant/qdrant", package = "edge", default-features = false }
-segment = { git = "https://github.com/qdrant/qdrant", package = "segment", default-features = false }
-shard = { git = "https://github.com/qdrant/qdrant", package = "shard" }
-common = { git = "https://github.com/qdrant/qdrant", package = "common" }
+edge = { git = "https://github.com/qdrant/qdrant", package = "edge", default-features = false, branch = "dev" }
+segment = { git = "https://github.com/qdrant/qdrant", package = "segment", default-features = false, branch = "dev" }
+shard = { git = "https://github.com/qdrant/qdrant", package = "shard", branch = "dev" }
+common = { git = "https://github.com/qdrant/qdrant", package = "common", branch = "dev" }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "fs"] }
