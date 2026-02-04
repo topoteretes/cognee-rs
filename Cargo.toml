@@ -15,7 +15,7 @@ rand = "0.8"
 async-trait = "0.1.89"
 
 # ONNX Runtime for embeddings
-ort = "2.0.0-rc.11"
+ort = { version = "2.0.0-rc.11", features = ["load-dynamic"] }
 ndarray = "0.16"
 tokenizers = "0.15"
 

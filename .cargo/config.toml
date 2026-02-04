@@ -1,0 +1,12 @@
+[target.aarch64-linux-android]
+# Ensure the Android NDK toolchain bin directory is on PATH.
+# Example:
+#   export ANDROID_NDK_HOME=/path/to/android-ndk
+#   export PATH="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH"
+linker = "aarch64-linux-android21-clang++"
+ar = "llvm-ar"
+
+[env]
+CC_aarch64_linux_android = "aarch64-linux-android21-clang"
+CXX_aarch64_linux_android = "aarch64-linux-android21-clang++"
+AR_aarch64_linux_android = "llvm-ar"

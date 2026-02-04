@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
+use std::env;
 
 use edge::EdgeShard;
 use ort::session::{Session, builder::GraphOptimizationLevel};
@@ -61,8 +62,12 @@ fn main() -> Result<(), Box<dyn Error>> {
     let model_dir = std::env::args().nth(1).unwrap_or_else(|| DEFAULT_MODEL_DIR.to_string());
     let model_dir = PathBuf::from(model_dir);
 
-    // Initialize ONNX Runtime environment (bundled runtime via ort-sys)
-    ort::init().commit();
+    // Initialize ONNX Runtime environment (dynamic runtime when ORT_DYLIB_PATH is set)
+    if let Ok(path) = env::var("ORT_DYLIB_PATH") {
+        ort::init_from(path)?.commit();
+    } else {
+        ort::init().commit();
+    }
 
     println!("Initializing Qdrant Edge shard...");
     let shard = setup_qdrant_shard()?;
