@@ -6,6 +6,9 @@ const ONNXRUNTIME_VERSION: &str = "v1.23.0";
 const ONNXRUNTIME_REPO: &str = "https://github.com/microsoft/onnxruntime.git";
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Required for LadybugDB extensions (e.g. json) to link back into the binary
+    println!("cargo:rustc-link-arg=-rdynamic");
+
     // Get absolute path to target directory
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR")?);
     let target_dir = env::var("CARGO_TARGET_DIR")

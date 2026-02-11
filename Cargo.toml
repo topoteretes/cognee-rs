@@ -26,6 +26,9 @@ ort = { version = "2.0.0-rc.11", features = ["ndarray", "cuda", "tensorrt"] }
 ndarray = "0.17"
 tokenizers = "0.21"
 
+# ladybug graph database
+lbug = "0.14"
+
 # qdrant
 edge = { git = "https://github.com/qdrant/qdrant", package = "edge", default-features = false, branch = "dev" }
 segment = { git = "https://github.com/qdrant/qdrant", package = "segment", default-features = false, branch = "dev" }

@@ -279,7 +279,10 @@ impl EdgeLLMGenerator {
             .with_optimization_level(GraphOptimizationLevel::Level3)?
             .with_intra_threads(INTRA_THREADS)?
             .with_execution_providers([
-                NNAPIExecutionProvider::default().with_fp16(true).with_disable_cpu(true).build(),
+                NNAPIExecutionProvider::default()
+                    .with_fp16(true)
+                    .with_disable_cpu(true)
+                    .build(),
                 CPUExecutionProvider::default().build(),
             ])?
             .commit_from_file(model_path)?;
