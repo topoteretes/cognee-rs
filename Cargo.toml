@@ -1,51 +1,33 @@
-[package]
-name = "cognee-rust"
-version = "0.1.0"
+[workspace]
+members = ["examples"]
+resolver = "3"
+
+[workspace.package]
 edition = "2024"
-build = "build.rs"
 
-[features]
-default = []
-# Enable this feature to build libonnxruntime from source as a dynamic library.
-# Automatically enabled for Android targets (which get NNAPI support).
-onnx_dynamic_library = ["ort/load-dynamic"]
-
-[dependencies]
-serde = { version = "1", features = ["derive"] }
-uuid  = { version = "1", features = ["v4", "serde"] }
-serde_json = "1"
-chrono = { version = "0.4.41", features = ["serde"] }
-log = "0.4"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "fs"] }
-rand = "0.8"
-async-trait = "0.1.89"
-tracing-subscriber = { version = "0.3", features = [ "env-filter", "fmt" ] }
-
-# ONNX Runtime for embeddings
-ort = { version = "2.0.0-rc.11", features = ["ndarray", "cuda", "tensorrt"] }
-ndarray = "0.17"
-tokenizers = "0.21"
-
-# ladybug graph database
-lbug = "0.14"
-
-# qdrant
-edge = { git = "https://github.com/qdrant/qdrant", package = "edge", default-features = false, branch = "dev" }
-segment = { git = "https://github.com/qdrant/qdrant", package = "segment", default-features = false, branch = "dev" }
-shard = { git = "https://github.com/qdrant/qdrant", package = "shard", branch = "dev" }
-common = { git = "https://github.com/qdrant/qdrant", package = "common", branch = "dev" }
-
-# Enable load-dynamic for Android targets automatically (for NNAPI support)
-[target.'cfg(target_os = "android")'.dependencies]
-ort = { version = "2.0.0-rc.11", features = ["load-dynamic"] }
-
-[dev-dependencies]
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "fs"] }
+[workspace.dependencies]
 anyhow = "1"
-rand = "0.8"
-env_logger = "0.11"
+async-trait = "0.1.89"
+chrono = { version = "0.4.41", features = ["serde"] }
+common = { git = "https://github.com/qdrant/qdrant", package = "common", branch = "dev" }
 dotenv = "0.15"
+edge = { git = "https://github.com/qdrant/qdrant", package = "edge", default-features = false, branch = "dev" }
+env_logger = "0.11"
+lbug = "0.14"
+log = "0.4"
+ndarray = "0.17"
 notify = "6.1"
+ort = { version = "2.0.0-rc.11", features = ["ndarray", "cuda", "tensorrt"] }
+rand = "0.8"
+segment = { git = "https://github.com/qdrant/qdrant", package = "segment", default-features = false, branch = "dev" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+shard = { git = "https://github.com/qdrant/qdrant", package = "shard", branch = "dev" }
+tempfile = "3"
+tokenizers = "0.21"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "fs"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+uuid = { version = "1", features = ["v4", "serde"] }
 
 [patch.crates-io]
 # Align tar version with qdrant workspace (needed for Archive::set_sync)

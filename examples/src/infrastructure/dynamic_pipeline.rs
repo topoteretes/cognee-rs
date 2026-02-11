@@ -8,6 +8,7 @@ mod tests {
     use rand::Rng;
     use serde::{Deserialize, Serialize};
     use std::collections::HashMap;
+    use std::path::Path;
     use std::sync::{Arc, Mutex, RwLock};
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
     use tokio::sync::mpsc;
@@ -41,6 +42,7 @@ mod tests {
     async fn write_dynamic_payload_to_json(
         payload: &DynamicPipelinePayload,
         counter: usize,
+        output_dir: &Path,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let chunks: Vec<Arc<String>> = *payload.get_copy("chunks").unwrap().downcast().unwrap();
         let result1: Vec<Arc<String>> = *payload.get_copy("result1").unwrap().downcast().unwrap();
@@ -65,11 +67,14 @@ mod tests {
             },
         };
 
-        let filename = format!("dynamic_result_{counter}.json");
+        let filename = output_dir.join(format!("dynamic_result_{counter}.json"));
         let json_content = serde_json::to_string_pretty(&completed_payload)?;
 
         tokio::fs::write(&filename, json_content).await?;
-        println!("Written dynamic payload #{counter} to {filename}");
+        println!(
+            "Written dynamic payload #{counter} to {}",
+            filename.display()
+        );
 
         Ok(())
     }
@@ -119,6 +124,8 @@ mod tests {
     #[tokio::test]
     async fn test_dynamic_pipeline_orchestrator() {
         dotenv::dotenv().ok();
+
+        let tmp_dir = tempfile::tempdir().expect("Failed to create temp directory");
 
         /////////Parameters
         // Maximum number of payloads in the central processing queue
@@ -311,7 +318,9 @@ mod tests {
 
             // Write JSON files after releasing the lock
             for (payload, counter) in payloads_to_write {
-                if let Err(e) = write_dynamic_payload_to_json(&payload, counter).await {
+                if let Err(e) =
+                    write_dynamic_payload_to_json(&payload, counter, tmp_dir.path()).await
+                {
                     eprintln!("Failed to write dynamic payload {counter} to JSON: {e}");
                 }
             }

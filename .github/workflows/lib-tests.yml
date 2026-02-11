@@ -34,10 +34,10 @@ jobs:
           cargo --version
 
       - name: Build
-        run: cargo build --all --verbose
+        run: cargo check --all-targets --verbose
 
       - name: Test
-        run: cargo test --all --verbose -- --nocapture
+        run: cargo test --all-targets --verbose
 
       - name: Build docs
         run: cargo doc --no-deps

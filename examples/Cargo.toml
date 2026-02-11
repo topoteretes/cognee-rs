@@ -1,0 +1,43 @@
+[package]
+name = "cognee-rust"
+version = "0.1.0"
+edition.workspace = true
+build = "build.rs"
+
+[features]
+default = []
+# Enable this feature to build libonnxruntime from source as a dynamic library.
+# Automatically enabled for Android targets (which get NNAPI support).
+onnx_dynamic_library = ["ort/load-dynamic"]
+
+[dependencies]
+async-trait.workspace = true
+chrono.workspace = true
+common.workspace = true
+edge.workspace = true
+lbug.workspace = true
+log.workspace = true
+ndarray.workspace = true
+ort.workspace = true
+rand.workspace = true
+segment.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+shard.workspace = true
+tokenizers.workspace = true
+tokio.workspace = true
+tracing-subscriber.workspace = true
+uuid.workspace = true
+
+# Enable load-dynamic for Android targets automatically (for NNAPI support)
+[target.'cfg(target_os = "android")'.dependencies]
+ort = { version = "2.0.0-rc.11", features = ["load-dynamic"] }
+
+[dev-dependencies]
+anyhow.workspace = true
+dotenv.workspace = true
+env_logger.workspace = true
+notify.workspace = true
+rand.workspace = true
+tempfile.workspace = true
+tokio.workspace = true
