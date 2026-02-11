@@ -2,6 +2,8 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
+
+#[cfg(feature = "onnx_dynamic_library")]
 use std::env;
 
 use edge::EdgeShard;
@@ -59,15 +61,21 @@ impl ModelConfig {
 fn main() -> Result<(), Box<dyn Error>> {
     println!("Cognee-Rust: On-Device Text Embeddings + Qdrant Edge\n\n\n");
 
-    let model_dir = std::env::args().nth(1).unwrap_or_else(|| DEFAULT_MODEL_DIR.to_string());
+    let model_dir = std::env::args()
+        .nth(1)
+        .unwrap_or_else(|| DEFAULT_MODEL_DIR.to_string());
     let model_dir = PathBuf::from(model_dir);
 
-    // Initialize ONNX Runtime environment (dynamic runtime when ORT_DYLIB_PATH is set)
+    // Initialize ONNX Runtime environment
+    #[cfg(feature = "onnx_dynamic_library")]
     if let Ok(path) = env::var("ORT_DYLIB_PATH") {
         ort::init_from(path)?.commit();
     } else {
         ort::init().commit();
     }
+
+    #[cfg(not(feature = "onnx_dynamic_library"))]
+    ort::init().commit();
 
     println!("Initializing Qdrant Edge shard...");
     let shard = setup_qdrant_shard()?;
@@ -148,12 +156,7 @@ fn process_texts_with_model(
     println!("  Dimensions: {}", model.output_dim);
 
     // Use build-time cached model
-    let model_path = model_dir.join(
-        model
-            .onnx_path
-            .file_name()
-            .ok_or("Invalid model path")?,
-    );
+    let model_path = model_dir.join(model.onnx_path.file_name().ok_or("Invalid model path")?);
     if !model_path.exists() {
         return Err(format!(
             "Model not found at {:?}. Run `cargo build` to generate models in target/models.",
@@ -228,12 +231,7 @@ fn process_texts_with_model(
 fn query_embeddings(shard: &EdgeShard, model_dir: &Path) -> Result<(), Box<dyn Error>> {
     // Use build-time cached model
     let model = ModelConfig::bge_small();
-    let model_path = model_dir.join(
-        model
-            .onnx_path
-            .file_name()
-            .ok_or("Invalid model path")?,
-    );
+    let model_path = model_dir.join(model.onnx_path.file_name().ok_or("Invalid model path")?);
     if !model_path.exists() {
         return Err(format!(
             "Model not found at {:?}. Run `cargo build` to generate models in target/models.",
