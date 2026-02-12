@@ -4,7 +4,6 @@ version = "0.1.0"
 edition.workspace = true
 
 [dependencies]
-cognee-ingestion = { path = "../cognee-ingestion" }
 chrono.workspace = true
 serde.workspace = true
 uuid.workspace = true

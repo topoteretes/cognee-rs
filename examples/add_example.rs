@@ -1,7 +1,7 @@
-use cognee_rust::database::{DatabaseTrait, SqliteDatabase};
-use cognee_rust::ingestion::IngestPipeline;
-use cognee_rust::models::DataInput;
-use cognee_rust::storage::{LocalStorage, StorageTrait};
+use cognee_database::{DatabaseTrait, SqliteDatabase};
+use cognee_ingestion::IngestPipeline;
+use cognee_models::DataInput;
+use cognee_storage::{LocalStorage, StorageTrait};
 use std::path::PathBuf;
 use std::sync::Arc;
 use uuid::Uuid;

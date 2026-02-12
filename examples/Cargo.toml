@@ -1,8 +1,34 @@
 [package]
-name = "cognee-rust"
+name = "cognee-examples"
 version = "0.1.0"
 edition.workspace = true
 build = "build.rs"
+publish = false
+
+# Define each example
+[[example]]
+name = "add_example"
+path = "add_example.rs"
+
+[[example]]
+name = "embeddings"
+path = "embeddings.rs"
+
+[[example]]
+name = "ladybug"
+path = "ladybug.rs"
+
+[[example]]
+name = "llm_fact_extraction"
+path = "llm_fact_extraction.rs"
+
+[[example]]
+name = "qdrant"
+path = "qdrant.rs"
+
+[[example]]
+name = "simple_example"
+path = "simple_example.rs"
 
 [features]
 default = []
@@ -12,6 +38,13 @@ onnx_dynamic_library = ["ort/load-dynamic"]
 testing = ["dep:tempfile"]
 
 [dependencies]
+# Workspace crates (instead of duplicates)
+cognee-storage = { path = "../crates/cognee-storage" }
+cognee-database = { path = "../crates/cognee-database" }
+cognee-ingestion = { path = "../crates/cognee-ingestion" }
+cognee-models = { path = "../crates/cognee-models" }
+
+# Keep existing dependencies that examples need
 async-trait.workspace = true
 chrono.workspace = true
 common.workspace = true

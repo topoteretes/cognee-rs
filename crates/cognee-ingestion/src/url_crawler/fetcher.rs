@@ -99,10 +99,9 @@ impl UrlFetcher {
         let mut stream = response.bytes_stream();
         while let Some(chunk_result) = stream.next().await {
             let chunk = chunk_result.map_err(|e| UrlFetcherError::HttpError(e.to_string()))?;
-            callback(&chunk).await.map_err(|_e| UrlFetcherError::from(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                "Callback error",
-            )))?;
+            callback(&chunk)
+                .await
+                .map_err(|_e| UrlFetcherError::from(std::io::Error::other("Callback error")))?;
         }
 
         Ok(())
