@@ -11,6 +11,11 @@ sha2 = "0.10"
 uuid.workspace = true
 tokio.workspace = true
 mime_guess = "2.0"
+reqwest.workspace = true
+scraper.workspace = true
+thiserror.workspace = true
+url.workspace = true
+futures-util.workspace = true
 
 [dev-dependencies]
 cognee-database = { path = "../cognee-database", features = ["testing"] }

@@ -11,6 +11,7 @@ cognee-models = { path = "../cognee-models" }
 async-trait.workspace = true
 chrono.workspace = true
 sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "uuid", "chrono"] }
+thiserror.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]

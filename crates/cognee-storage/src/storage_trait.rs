@@ -1,28 +1,23 @@
 use async_trait::async_trait;
 use std::path::PathBuf;
+use thiserror::Error;
 use tokio::fs::File;
 use tokio::io::{AsyncRead, AsyncWriteExt};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Error)]
 pub enum StorageError {
+    #[error("Not found: {0}")]
     NotFound(String),
+
+    #[error("IO error: {0}")]
     IoError(String),
+
+    #[error("Permission denied: {0}")]
     PermissionDenied(String),
+
+    #[error("Invalid path: {0}")]
     InvalidPath(String),
 }
-
-impl std::fmt::Display for StorageError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            StorageError::NotFound(msg) => write!(f, "Not found: {}", msg),
-            StorageError::IoError(msg) => write!(f, "IO error: {}", msg),
-            StorageError::PermissionDenied(msg) => write!(f, "Permission denied: {}", msg),
-            StorageError::InvalidPath(msg) => write!(f, "Invalid path: {}", msg),
-        }
-    }
-}
-
-impl std::error::Error for StorageError {}
 
 /// A writer for storing data in chunks
 /// This allows efficient streaming writes without loading entire content into memory

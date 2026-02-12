@@ -15,20 +15,25 @@ common = { git = "https://github.com/qdrant/qdrant", package = "common", branch 
 dotenv = "0.15"
 edge = { git = "https://github.com/qdrant/qdrant", package = "edge", default-features = false, branch = "dev" }
 env_logger = "0.11"
+futures-util = "0.3"
 lbug = "0.14"
 log = "0.4"
 ndarray = "0.17"
 notify = "6.1"
 ort = { version = "2.0.0-rc.11", features = ["ndarray", "cuda", "tensorrt"] }
 rand = "0.8"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "cookies", "gzip"] }
+scraper = "0.21"
 segment = { git = "https://github.com/qdrant/qdrant", package = "segment", default-features = false, branch = "dev" }
 serde = { version = "1", features = ["derive"] }
+thiserror = "2.0"
 serde_json = "1"
 shard = { git = "https://github.com/qdrant/qdrant", package = "shard", branch = "dev" }
 tempfile = "3"
 tokenizers = "0.21"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "fs"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+url = "2.5"
 uuid = { version = "1", features = ["v4", "v5", "serde"] }
 
 [patch.crates-io]

@@ -60,12 +60,28 @@ impl DataInput {
                     callback(&buffer[..bytes_read]).await?;
                 }
             }
-            Self::Url(_url) => {
-                // URL fetching not yet implemented
-                return Err(E::from(std::io::Error::new(
-                    std::io::ErrorKind::Unsupported,
-                    "URL fetching not yet implemented",
-                )));
+            Self::Url(url) => {
+                // Use URL fetcher to fetch and parse
+                use cognee_ingestion::url_crawler::{UrlFetcher, HtmlParser};
+
+                let fetcher = UrlFetcher::new()
+                    .map_err(|e| E::from(std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        format!("Failed to create fetcher: {}", e),
+                    )))?;
+
+                // Fetch HTML content
+                let html = fetcher.fetch(url).await
+                    .map_err(|e| E::from(std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        format!("Failed to fetch URL: {}", e),
+                    )))?;
+
+                // Extract text from HTML
+                let text = HtmlParser::extract_text(&html);
+
+                // Process as single chunk
+                callback(text.as_bytes()).await?;
             }
         }
 

@@ -1,27 +1,22 @@
 use async_trait::async_trait;
 use cognee_models::{Data, Dataset};
+use thiserror::Error;
 use uuid::Uuid;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Error)]
 pub enum DatabaseError {
+    #[error("Not found: {0}")]
     NotFound(String),
+
+    #[error("Connection error: {0}")]
     ConnectionError(String),
+
+    #[error("Query error: {0}")]
     QueryError(String),
+
+    #[error("Unique violation: {0}")]
     UniqueViolation(String),
 }
-
-impl std::fmt::Display for DatabaseError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            DatabaseError::NotFound(msg) => write!(f, "Not found: {}", msg),
-            DatabaseError::ConnectionError(msg) => write!(f, "Connection error: {}", msg),
-            DatabaseError::QueryError(msg) => write!(f, "Query error: {}", msg),
-            DatabaseError::UniqueViolation(msg) => write!(f, "Unique violation: {}", msg),
-        }
-    }
-}
-
-impl std::error::Error for DatabaseError {}
 
 #[async_trait]
 pub trait DatabaseTrait: Send + Sync {
