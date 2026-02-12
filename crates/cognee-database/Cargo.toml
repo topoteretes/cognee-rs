@@ -1,0 +1,17 @@
+[package]
+name = "cognee-database"
+version = "0.1.0"
+edition.workspace = true
+
+[features]
+testing = []
+
+[dependencies]
+cognee-models = { path = "../cognee-models" }
+async-trait.workspace = true
+chrono.workspace = true
+sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "uuid", "chrono"] }
+uuid.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true

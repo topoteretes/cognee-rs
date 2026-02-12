@@ -9,6 +9,7 @@ default = []
 # Enable this feature to build libonnxruntime from source as a dynamic library.
 # Automatically enabled for Android targets (which get NNAPI support).
 onnx_dynamic_library = ["ort/load-dynamic"]
+testing = ["dep:tempfile"]
 
 [dependencies]
 async-trait.workspace = true
@@ -28,6 +29,12 @@ tokenizers.workspace = true
 tokio.workspace = true
 tracing-subscriber.workspace = true
 uuid.workspace = true
+
+# Dependencies from merged crates
+sha2 = "0.10"
+mime_guess = "2.0"
+sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "uuid", "chrono"] }
+tempfile = { workspace = true, optional = true }
 
 # Enable load-dynamic for Android targets automatically (for NNAPI support)
 [target.'cfg(target_os = "android")'.dependencies]

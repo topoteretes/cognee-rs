@@ -1,0 +1,17 @@
+[package]
+name = "cognee-storage"
+version = "0.1.0"
+edition.workspace = true
+
+[features]
+testing = ["dep:tempfile"]
+
+[dependencies]
+async-trait.workspace = true
+tokio.workspace = true
+uuid.workspace = true
+tempfile = { workspace = true, optional = true }
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio.workspace = true
