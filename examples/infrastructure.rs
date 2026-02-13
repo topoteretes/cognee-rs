@@ -12,6 +12,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use tokio::sync::mpsc;
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub enum LoopSignal {
     TaskCompleted,
     NewPayloadAdded,

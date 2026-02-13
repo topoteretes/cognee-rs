@@ -19,7 +19,7 @@ create_cognee_payload!(
 
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
-struct ProcessedText {
+pub struct ProcessedText {
     id: usize,
     original_text: String,
     word_count: usize,
@@ -28,7 +28,7 @@ struct ProcessedText {
 
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
-struct AnalyzedText {
+pub struct AnalyzedText {
     text_id: usize,
     sentiment: String,
     complexity_score: f64,
@@ -38,7 +38,7 @@ struct AnalyzedText {
 
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
-struct FinalOutput {
+pub struct FinalOutput {
     analysis_id: usize,
     summary: String,
     confidence: f64,

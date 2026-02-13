@@ -69,6 +69,7 @@ pub enum PropertyStatus {
 // PayloadTrait - Core trait for all payload types
 // ============================================================================
 
+#[allow(dead_code)]
 pub trait PayloadTrait: Send + Sync + 'static {
     fn payload_id(&self) -> Uuid;
     fn payload_get_property_status(&self, property: &str) -> Option<PropertyStatus>;
@@ -93,6 +94,7 @@ pub trait PayloadConstructor: PayloadTrait {
 // ============================================================================
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct CogneePayload<TC, T1, T2>
 where
     TC: Clone + Send + Sync + 'static,
@@ -106,6 +108,7 @@ where
     property_status: Arc<Mutex<HashMap<String, PropertyStatus>>>,
 }
 
+#[allow(dead_code)]
 impl<TC, T1, T2> CogneePayload<TC, T1, T2>
 where
     TC: Clone + Send + Sync + 'static,
