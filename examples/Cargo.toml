@@ -30,6 +30,10 @@ path = "qdrant.rs"
 name = "simple_example"
 path = "simple_example.rs"
 
+[[example]]
+name = "cognify_example"
+path = "cognify_example.rs"
+
 [features]
 default = []
 # Enable this feature to build libonnxruntime from source as a dynamic library.
@@ -43,6 +47,7 @@ cognee-storage = { path = "../crates/cognee-storage" }
 cognee-database = { path = "../crates/cognee-database" }
 cognee-ingestion = { path = "../crates/cognee-ingestion" }
 cognee-models = { path = "../crates/cognee-models" }
+cognee-chunking = { path = "../crates/cognee-chunking" }
 
 # Keep existing dependencies that examples need
 async-trait.workspace = true
