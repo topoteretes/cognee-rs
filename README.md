@@ -29,3 +29,33 @@ It’s designed to run efficiently on constrained devices (smartwatch, phone)
 - **BAML** — llm model management.  
 - **Local models** — Phi4
 - **Graph store** — We do not use graph database, as we store structure embeddings in the vector collections + optionally retrieve and build relevant subgraphs.
+
+## Quick Start
+
+### Local LLM with Ollama
+
+We provide a Docker setup for running Ollama with OpenAI-compatible API:
+
+```bash
+cd docker/ollama
+./start.sh
+```
+
+This will start:
+- **Ollama** with OpenAI-compatible API at `http://localhost:11434/v1`
+- **Web UI** at `http://localhost:3000`
+- Automatically pulls `llama3.2:3b` model (small, fast, ~2GB)
+
+See [docker/ollama/README.md](docker/ollama/README.md) for detailed documentation.
+
+### Building the Project
+
+```bash
+cargo build --release
+```
+
+### Running Tests
+
+```bash
+cargo test --workspace
+```
