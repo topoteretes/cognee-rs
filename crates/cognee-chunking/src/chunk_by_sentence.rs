@@ -24,7 +24,7 @@ pub struct SentenceChunk<'a> {
     pub cut_type: CutType,
 }
 
-fn word_type_to_cut_type(wt: &WordType) -> CutType {
+fn word_type_to_cut_type(wt: WordType) -> CutType {
     match wt {
         WordType::ParagraphEnd => CutType::ParagraphEnd,
         WordType::SentenceEnd => CutType::SentenceEnd,
@@ -59,7 +59,7 @@ pub fn chunk_by_sentence<'a, C: TokenCounter>(
 
     for word_chunk in &words {
         let word = word_chunk.text;
-        let word_type = &word_chunk.word_type;
+        let word_type = word_chunk.word_type;
         let word_size = counter.count_tokens(word);
 
         let word_start_byte = offset_in(data, word);
@@ -69,11 +69,11 @@ pub fn chunk_by_sentence<'a, C: TokenCounter>(
         // For words, only update if the word contains alphabetic characters.
         match word_type {
             WordType::ParagraphEnd | WordType::SentenceEnd => {
-                word_type_state = word_type.clone();
+                word_type_state = word_type;
             }
             WordType::Word => {
                 if word.chars().any(|c| c.is_alphabetic()) {
-                    word_type_state = word_type.clone();
+                    word_type_state = word_type;
                 }
             }
         }
@@ -87,7 +87,7 @@ pub fn chunk_by_sentence<'a, C: TokenCounter>(
                 paragraph_id,
                 text: &data[sentence_start.unwrap()..sentence_end],
                 size: sentence_size,
-                cut_type: word_type_to_cut_type(&word_type_state),
+                cut_type: word_type_to_cut_type(word_type_state),
             });
             sentence_start = Some(word_start_byte);
             sentence_end = word_end_byte;
@@ -102,7 +102,7 @@ pub fn chunk_by_sentence<'a, C: TokenCounter>(
             sentence_end = word_end_byte;
             sentence_size += word_size;
 
-            if *word_type == WordType::ParagraphEnd {
+            if word_type == WordType::ParagraphEnd {
                 paragraph_id = Uuid::new_v4();
             }
 
@@ -110,7 +110,7 @@ pub fn chunk_by_sentence<'a, C: TokenCounter>(
                 paragraph_id,
                 text: &data[sentence_start.unwrap()..sentence_end],
                 size: sentence_size,
-                cut_type: word_type_to_cut_type(&word_type_state),
+                cut_type: word_type_to_cut_type(word_type_state),
             });
             sentence_start = None;
             sentence_size = 0;
@@ -127,7 +127,7 @@ pub fn chunk_by_sentence<'a, C: TokenCounter>(
         let cut_type = if word_type_state == WordType::Word {
             CutType::SentenceCut
         } else {
-            word_type_to_cut_type(&word_type_state)
+            word_type_to_cut_type(word_type_state)
         };
         result.push(SentenceChunk {
             paragraph_id,

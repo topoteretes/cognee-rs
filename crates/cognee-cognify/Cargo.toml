@@ -1,0 +1,17 @@
+[package]
+name = "cognee-cognify"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+cognee-models = { path = "../cognee-models" }
+cognee-storage = { path = "../cognee-storage" }
+cognee-chunking = { path = "../cognee-chunking" }
+
+uuid = { version = "1", features = ["v4"] }
+tokio = { version = "1", features = ["rt-multi-thread"] }
+async-trait = "0.1.89"
+thiserror = "2"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }

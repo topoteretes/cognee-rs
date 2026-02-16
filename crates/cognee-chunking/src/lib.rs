@@ -7,7 +7,7 @@ pub mod error;
 pub mod text_chunker;
 pub mod token_counter;
 
-pub use cognify_pipeline::CognifyPipeline;
+pub use cognify_pipeline::ExtractTextChunksPipeline;
 pub use cut_type::CutType;
 pub use error::ChunkingError;
 pub use text_chunker::chunk_text;

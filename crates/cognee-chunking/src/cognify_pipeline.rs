@@ -1,7 +1,7 @@
-//! Cognify pipeline skeleton.
+//! Extract text chunks pipeline.
 //!
-//! Orchestrates the cognify process: classify documents → chunk text → (TODO)
-//! extract graph → summarize → store.
+//! Orchestrates the initial stages of the cognify process:
+//! classify documents → chunk text.
 
 use std::sync::Arc;
 
@@ -12,36 +12,39 @@ use crate::error::ChunkingError;
 use crate::text_chunker::chunk_text;
 use crate::token_counter::{TokenCounter, WordCounter};
 
-/// The cognify pipeline. Generic over the storage backend used to read
-/// ingested file content.
-pub struct CognifyPipeline<S: StorageTrait> {
+/// The extract text chunks pipeline. Generic over the storage backend used
+/// to read ingested file content.
+///
+/// This pipeline handles the first two stages of cognify:
+/// 1. Document classification (text/* only)
+/// 2. Text chunking
+pub struct ExtractTextChunksPipeline<S: StorageTrait> {
     storage: Arc<S>,
 }
 
-impl<S: StorageTrait> CognifyPipeline<S> {
+impl<S: StorageTrait> ExtractTextChunksPipeline<S> {
     pub fn new(storage: Arc<S>) -> Self {
         Self { storage }
     }
 
-    /// Run the cognify pipeline on a set of Data items.
+    /// Extract text chunks from a set of Data items.
     ///
-    /// Currently implements:
+    /// Implements:
     /// 1. Document classification (text/* only)
     /// 2. Text chunking
     ///
-    /// Returns the generated chunks. Later stages (graph extraction,
-    /// summarization, storage) are marked as TODOs.
-    pub async fn cognify(
+    /// Returns the generated chunks.
+    pub async fn extract_chunks(
         &self,
         data_items: Vec<Data>,
         max_chunk_size: usize,
     ) -> Result<Vec<DocumentChunk>, ChunkingError> {
-        self.cognify_with_counter(data_items, max_chunk_size, &WordCounter)
+        self.extract_chunks_with_counter(data_items, max_chunk_size, &WordCounter)
             .await
     }
 
-    /// Run cognify with a custom token counter.
-    pub async fn cognify_with_counter<C: TokenCounter>(
+    /// Extract text chunks with a custom token counter.
+    pub async fn extract_chunks_with_counter<C: TokenCounter>(
         &self,
         data_items: Vec<Data>,
         max_chunk_size: usize,
@@ -70,20 +73,6 @@ impl<S: StorageTrait> CognifyPipeline<S> {
             all_chunks.extend(chunks);
         }
 
-        // TODO: Stage 3 — extract_graph_from_data
-        //   LLM-based knowledge graph extraction from chunks.
-        //   For each chunk, use an LLM to extract Node and Edge objects
-        //   based on a graph model (e.g. KnowledgeGraph).
-
-        // TODO: Stage 4 — summarize_text
-        //   LLM-based text summarization for each chunk.
-        //   Creates TextSummary objects linked to their source chunks.
-
-        // TODO: Stage 5 — add_data_points
-        //   Store nodes and edges in graph DB.
-        //   Create embeddings and store in vector DB.
-        //   Optionally create and embed triplets for semantic search.
-
         Ok(all_chunks)
     }
 }
@@ -95,23 +84,23 @@ mod tests {
     use uuid::Uuid;
 
     #[tokio::test]
-    async fn cognify_empty_data() {
+    async fn extract_chunks_empty_data() {
         let storage = Arc::new(MockStorage::new());
-        let pipeline = CognifyPipeline::new(storage);
-        let chunks = pipeline.cognify(vec![], 100).await.unwrap();
+        let pipeline = ExtractTextChunksPipeline::new(storage);
+        let chunks = pipeline.extract_chunks(vec![], 100).await.unwrap();
         assert!(chunks.is_empty());
     }
 
     #[tokio::test]
-    async fn cognify_invalid_chunk_size() {
+    async fn extract_chunks_invalid_chunk_size() {
         let storage = Arc::new(MockStorage::new());
-        let pipeline = CognifyPipeline::new(storage);
-        let result = pipeline.cognify(vec![], 0).await;
+        let pipeline = ExtractTextChunksPipeline::new(storage);
+        let result = pipeline.extract_chunks(vec![], 0).await;
         assert!(result.is_err());
     }
 
     #[tokio::test]
-    async fn cognify_text_data() {
+    async fn extract_chunks_text_data() {
         let storage = Arc::new(MockStorage::new());
 
         // Store some content
@@ -131,8 +120,8 @@ mod tests {
             Uuid::new_v4(),
         );
 
-        let pipeline = CognifyPipeline::new(storage);
-        let chunks = pipeline.cognify(vec![data], 100).await.unwrap();
+        let pipeline = ExtractTextChunksPipeline::new(storage);
+        let chunks = pipeline.extract_chunks(vec![data], 100).await.unwrap();
 
         assert!(!chunks.is_empty());
         // All chunks should have text content
@@ -142,7 +131,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cognify_skips_non_text() {
+    async fn extract_chunks_skips_non_text() {
         let storage = Arc::new(MockStorage::new());
 
         let data = Data::new(
@@ -156,8 +145,8 @@ mod tests {
             Uuid::new_v4(),
         );
 
-        let pipeline = CognifyPipeline::new(storage);
-        let chunks = pipeline.cognify(vec![data], 100).await.unwrap();
+        let pipeline = ExtractTextChunksPipeline::new(storage);
+        let chunks = pipeline.extract_chunks(vec![data], 100).await.unwrap();
         assert!(chunks.is_empty());
     }
 }

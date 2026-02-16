@@ -48,6 +48,7 @@ cognee-database = { path = "../crates/cognee-database" }
 cognee-ingestion = { path = "../crates/cognee-ingestion" }
 cognee-models = { path = "../crates/cognee-models" }
 cognee-chunking = { path = "../crates/cognee-chunking" }
+cognee-cognify = { path = "../crates/cognee-cognify" }
 
 # Keep existing dependencies that examples need
 async-trait.workspace = true

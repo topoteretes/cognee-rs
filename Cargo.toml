@@ -1,6 +1,14 @@
 [workspace]
 members = [
     "examples",
+    "crates/cognee-models",
+    "crates/cognee-storage",
+    "crates/cognee-database",
+    "crates/cognee-ingestion",
+    "crates/cognee-chunking",
+    "crates/cognee-cognify",
+    "crates/cognee-utils",
+    "crates/cognee-llm",
 ]
 resolver = "3"
 

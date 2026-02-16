@@ -1,0 +1,25 @@
+[package]
+name = "cognee-llm"
+version = "0.1.0"
+edition.workspace = true
+
+[dependencies]
+# Async runtime
+tokio.workspace = true
+async-trait.workspace = true
+
+# Serialization
+serde.workspace = true
+serde_json.workspace = true
+
+# Error handling
+thiserror.workspace = true
+
+# HTTP client (for API-based implementations)
+reqwest.workspace = true
+
+# Logging
+log.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

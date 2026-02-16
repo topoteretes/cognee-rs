@@ -6,7 +6,7 @@
 //! Port of Python `cognee.tasks.chunks.chunk_by_word`.
 
 /// The type of a word-level chunk.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum WordType {
     Word,
     SentenceEnd,
@@ -37,15 +37,11 @@ fn is_paragraph_ending(c: char) -> bool {
 ///   - If the next non-space character is a newline, it's a paragraph_end; otherwise sentence_end.
 /// - Remaining text at end is yielded as a word.
 pub fn chunk_by_word(data: &str) -> Vec<WordChunk<'_>> {
-    let chars: Vec<(usize, char)> = data.char_indices().collect();
-    let len = chars.len();
     let mut result = Vec::new();
     let mut chunk_start = 0usize;
-    let mut i = 0;
+    let mut iter = data.char_indices().peekable();
 
-    while i < len {
-        let (byte_pos, ch) = chars[i];
-
+    while let Some((byte_pos, ch)) = iter.next() {
         if ch == ' ' {
             let end = byte_pos + 1; // space is always 1 byte
             result.push(WordChunk {
@@ -53,24 +49,18 @@ pub fn chunk_by_word(data: &str) -> Vec<WordChunk<'_>> {
                 word_type: WordType::Word,
             });
             chunk_start = end;
-            i += 1;
             continue;
         }
 
         if is_sentence_ending(ch) {
-            // Look ahead: consume trailing spaces
-            let mut next_i = i + 1;
-            while next_i < len && chars[next_i].1 == ' ' {
-                next_i += 1;
+            // Consume trailing spaces via peek + next
+            let mut end = byte_pos + ch.len_utf8();
+            while let Some(&(next_bp, ' ')) = iter.peek() {
+                end = next_bp + 1;
+                iter.next();
             }
 
-            let end = if next_i < len {
-                chars[next_i].0
-            } else {
-                data.len()
-            };
-
-            let is_para_end = next_i < len && is_paragraph_ending(chars[next_i].1);
+            let is_para_end = iter.peek().is_some_and(|&(_, c)| is_paragraph_ending(c));
             result.push(WordChunk {
                 text: &data[chunk_start..end],
                 word_type: if is_para_end {
@@ -80,11 +70,8 @@ pub fn chunk_by_word(data: &str) -> Vec<WordChunk<'_>> {
                 },
             });
             chunk_start = end;
-            i = next_i;
             continue;
         }
-
-        i += 1;
     }
 
     if chunk_start < data.len() {

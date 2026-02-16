@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use cognee_chunking::CognifyPipeline;
+use cognee_cognify::CognifyPipeline;
 use cognee_database::{DatabaseTrait, SqliteDatabase};
 use cognee_ingestion::IngestPipeline;
 use cognee_models::DataInput;
@@ -53,7 +53,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let data_items = ingest.add(inputs, "example_dataset", owner_id).await?;
     println!("   Ingested {} data items\n", data_items.len());
 
-    // Cognify: classify + chunk
+    // Cognify: classify + chunk (+ TODO: graph extraction, summarization, storage)
     let cognify = CognifyPipeline::new(storage);
     let max_chunk_size = 10; // 10 words per chunk for demonstration
 
