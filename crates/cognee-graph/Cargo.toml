@@ -1,0 +1,25 @@
+[package]
+name = "cognee-graph"
+version = "0.1.0"
+edition.workspace = true
+
+[dependencies]
+# Core async and serialization
+async-trait.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+# UUID and time
+uuid.workspace = true
+chrono.workspace = true
+
+# Ladybug database
+lbug.workspace = true
+
+# Internal dependencies
+cognee-models = { path = "../cognee-models" }
+
+[dev-dependencies]
+tempfile.workspace = true

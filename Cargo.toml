@@ -9,6 +9,7 @@ members = [
     "crates/cognee-cognify",
     "crates/cognee-utils",
     "crates/cognee-llm",
+    "crates/cognee-graph",
 ]
 resolver = "3"
 
