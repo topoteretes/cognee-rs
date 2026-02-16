@@ -1,6 +1,7 @@
 //! LLM trait definition for structured output generation.
 
 use async_trait::async_trait;
+use schemars::JsonSchema;
 use serde::{Serialize, de::DeserializeOwned};
 
 use crate::error::LlmResult;
@@ -53,14 +54,17 @@ pub trait Llm: Send + Sync {
     /// graphs) from text using LLM with JSON schema validation.
     ///
     /// Inspired by Python's Instructor library, this method:
-    /// 1. Constructs a JSON schema from the response type `T`
+    /// 1. Constructs a JSON schema from the response type `T` using `schemars`
     /// 2. Includes the schema in the system prompt or as a tool/function
-    /// 3. Sends the request to the LLM
+    /// 3. Sends the request to the LLM with JSON mode enabled
     /// 4. Parses and validates the JSON response into type `T`
     /// 5. Returns error on validation failures (caller should handle retries)
     ///
+    /// The schema is generated from `T` at compile time, ensuring the LLM
+    /// receives a precise specification of the expected output format.
+    ///
     /// # Type Parameters
-    /// * `T` - Response model type (must implement Serialize + DeserializeOwned).
+    /// * `T` - Response model type (must implement Serialize + DeserializeOwned + JsonSchema).
     ///
     /// # Arguments
     /// * `text_input` - User input text to process.
@@ -73,9 +77,10 @@ pub trait Llm: Send + Sync {
     /// # Example
     /// ```ignore
     /// use cognee_llm::{Llm, Message};
+    /// use schemars::JsonSchema;
     /// use serde::{Deserialize, Serialize};
     ///
-    /// #[derive(Serialize, Deserialize)]
+    /// #[derive(Serialize, Deserialize, JsonSchema)]
     /// struct KnowledgeGraph {
     ///     nodes: Vec<Node>,
     ///     edges: Vec<Edge>,
@@ -95,15 +100,18 @@ pub trait Llm: Send + Sync {
         options: Option<GenerationOptions>,
     ) -> LlmResult<T>
     where
-        T: Serialize + DeserializeOwned + Send;
+        T: Serialize + DeserializeOwned + JsonSchema + Send;
 
     /// Generate structured output with custom messages.
     ///
     /// Similar to `create_structured_output` but allows full control over
     /// the conversation history (useful for multi-turn interactions).
     ///
+    /// The JSON schema is automatically generated from `T` and included in the
+    /// request to ensure the LLM returns properly structured output.
+    ///
     /// # Type Parameters
-    /// * `T` - Response model type.
+    /// * `T` - Response model type (must implement Serialize + DeserializeOwned + JsonSchema).
     ///
     /// # Arguments
     /// * `messages` - Full conversation messages.
@@ -117,7 +125,7 @@ pub trait Llm: Send + Sync {
         options: Option<GenerationOptions>,
     ) -> LlmResult<T>
     where
-        T: Serialize + DeserializeOwned + Send;
+        T: Serialize + DeserializeOwned + JsonSchema + Send;
 
     /// Get the model identifier.
     fn model(&self) -> &str;

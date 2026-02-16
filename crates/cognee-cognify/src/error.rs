@@ -18,4 +18,7 @@ pub enum CognifyError {
 
     #[error("LLM error: {0}")]
     LlmError(String),
+
+    #[error("Fact extraction error: {0}")]
+    FactExtractionError(String),
 }

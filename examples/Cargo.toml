@@ -34,6 +34,10 @@ path = "simple_example.rs"
 name = "cognify_example"
 path = "cognify_example.rs"
 
+[[example]]
+name = "fact_extraction_example"
+path = "fact_extraction_example.rs"
+
 [features]
 default = []
 # Enable this feature to build libonnxruntime from source as a dynamic library.
@@ -49,6 +53,7 @@ cognee-ingestion = { path = "../crates/cognee-ingestion" }
 cognee-models = { path = "../crates/cognee-models" }
 cognee-chunking = { path = "../crates/cognee-chunking" }
 cognee-cognify = { path = "../crates/cognee-cognify" }
+cognee-llm = { path = "../crates/cognee-llm" }
 
 # Keep existing dependencies that examples need
 async-trait.workspace = true

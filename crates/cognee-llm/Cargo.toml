@@ -12,6 +12,9 @@ async-trait.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 
+# JSON Schema generation
+schemars = "0.8"
+
 # Error handling
 thiserror.workspace = true
 

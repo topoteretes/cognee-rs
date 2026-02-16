@@ -30,7 +30,7 @@ ndarray = "0.17"
 notify = "6.1"
 ort = { version = "2.0.0-rc.11", features = ["ndarray", "cuda", "tensorrt"] }
 rand = "0.8"
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "cookies", "gzip"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "cookies", "gzip", "json"] }
 scraper = "0.21"
 segment = { git = "https://github.com/qdrant/qdrant", package = "segment", default-features = false, branch = "dev" }
 serde = { version = "1", features = ["derive"] }

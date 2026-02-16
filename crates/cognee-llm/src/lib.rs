@@ -18,9 +18,10 @@
 //! ```ignore
 //! use cognee_llm::{Llm, LlmConfig, LlmProvider, LlmError};
 //! use cognee_utils::retry::{retry_with_backoff, RetryConfig, RetryDecision};
+//! use schemars::JsonSchema;
 //! use serde::{Deserialize, Serialize};
 //!
-//! #[derive(Serialize, Deserialize)]
+//! #[derive(Serialize, Deserialize, JsonSchema)]
 //! struct ExtractedData {
 //!     entities: Vec<String>,
 //!     relationships: Vec<(String, String, String)>,
@@ -49,12 +50,16 @@
 //! ).await?;
 //! ```
 
+pub mod adapters;
 pub mod config;
 pub mod error;
 pub mod llm_trait;
+pub mod schema;
 pub mod types;
 
+pub use adapters::OpenAIAdapter;
 pub use config::{LlmConfig, LlmProvider};
 pub use error::{LlmError, LlmResult};
 pub use llm_trait::Llm;
+pub use schema::{build_schema_prompt, generate_json_schema, generate_json_schema_string};
 pub use types::{GenerationOptions, GenerationResponse, Message, MessageRole, TokenUsage};
