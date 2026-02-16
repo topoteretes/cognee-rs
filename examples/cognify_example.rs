@@ -4,7 +4,6 @@
 
 use std::sync::Arc;
 
-use cognee_cognify::CognifyPipeline;
 use cognee_database::{DatabaseTrait, SqliteDatabase};
 use cognee_ingestion::IngestPipeline;
 use cognee_models::DataInput;
@@ -53,18 +52,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let data_items = ingest.add(inputs, "example_dataset", owner_id).await?;
     println!("   Ingested {} data items\n", data_items.len());
 
-    // Cognify: classify + chunk (+ TODO: graph extraction, summarization, storage)
-    let cognify = CognifyPipeline::new(storage);
+    // NOTE: Full cognify pipeline now requires an LLM for knowledge graph extraction.
+    // This example demonstrates just the chunking part via ExtractTextChunksPipeline.
+    // For full graph extraction, see integration tests or set up an LLM adapter.
+
+    use cognee_chunking::ExtractTextChunksPipeline;
+    let chunk_pipeline = ExtractTextChunksPipeline::new(storage);
     let max_chunk_size = 10; // 10 words per chunk for demonstration
 
     println!(
-        "3. Running cognify (max_chunk_size={} words)...\n",
+        "3. Running text chunking (max_chunk_size={} words)...\n",
         max_chunk_size
     );
-    let chunks = cognify.cognify(data_items, max_chunk_size).await?;
+    let chunks = chunk_pipeline
+        .extract_chunks(data_items, max_chunk_size)
+        .await?;
 
     println!("Generated {} chunks:\n", chunks.len());
-    for chunk in &chunks {
+    for  chunk in &chunks {
         println!("--- Chunk {} ---", chunk.chunk_index);
         println!("  ID:        {}", chunk.id);
         println!("  Size:      {} words", chunk.chunk_size);
@@ -75,7 +80,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     println!("=== Example completed! ===");
-    println!("\nTo clean up:");
+    println!("\nNote: Full cognify (with knowledge graph extraction) requires an LLM.");
+    println!("      See integration tests for examples with OpenAI/Ollama.\n");
+    println!("To clean up:");
     println!("  rm -rf ./cognify_data ./cognify.db");
 
     Ok(())

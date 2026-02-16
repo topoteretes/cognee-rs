@@ -66,6 +66,7 @@ Extract nodes and edges from the provided text."#;
 ///
 /// println!("Extracted {} nodes and {} edges", graph.node_count(), graph.edge_count());
 /// ```
+#[derive(Clone)]
 pub struct FactExtractor<L: Llm> {
     llm: Arc<L>,
 }
@@ -199,6 +200,7 @@ mod tests {
     use super::*;
 
     // Mock LLM for testing
+    #[derive(Clone)]
     struct MockLlm;
 
     #[async_trait::async_trait]

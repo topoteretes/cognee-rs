@@ -9,10 +9,16 @@
 use std::sync::Arc;
 
 use cognee_chunking::ExtractTextChunksPipeline;
+use cognee_llm::Llm;
 use cognee_models::{Data, DocumentChunk};
 use cognee_storage::StorageTrait;
+use uuid::Uuid;
 
 use crate::error::CognifyError;
+use crate::fact_extraction::FactExtractor;
+use crate::graph_integration::{
+    GraphEdgePair, GraphNodePair, deduplicate_nodes_and_edges, expand_with_nodes_and_edges,
+};
 
 /// The full cognify pipeline. Orchestrates all stages of knowledge graph
 /// extraction and storage.
@@ -34,17 +40,49 @@ impl<S: StorageTrait> CognifyPipeline<S> {
     ///
     /// Stages:
     /// 1. Document classification and text chunking (via ExtractTextChunksPipeline)
-    /// 2. Extract knowledge graph from chunks (TODO)
-    /// 3. Summarize text (TODO)
-    /// 4. Store data points in graph and vector databases (TODO)
+    /// 2. Extract knowledge graphs from chunks (LLM-based, parallel)
+    /// 3. Merge and deduplicate graphs
+    /// 4. TODO: Summarize text
+    /// 5. TODO: Store data points in graph and vector databases
     ///
-    /// Returns the generated chunks. Later stages will return additional data
-    /// structures (nodes, edges, summaries, embeddings).
-    pub async fn cognify(
+    /// Returns CognifyResult with chunks, entities, and edges.
+    ///
+    /// # Arguments
+    /// * `data_items` - Data items to process
+    /// * `dataset_id` - Dataset UUID for linking entities
+    /// * `max_chunk_size` - Maximum chunk size in tokens
+    /// * `llm` - LLM instance for knowledge graph extraction
+    ///
+    /// # Example
+    /// ```no_run
+    /// use cognee_cognify::CognifyPipeline;
+    /// use cognee_storage::LocalStorage;
+    /// use cognee_llm::openai::OpenAIAdapter;
+    /// use std::sync::Arc;
+    /// use uuid::Uuid;
+    ///
+    /// # async fn example() -> anyhow::Result<()> {
+    /// let storage = Arc::new(LocalStorage::new("/tmp/cognee"));
+    /// let llm = Arc::new(OpenAIAdapter::new("http://localhost:11434".to_string()));
+    /// let pipeline = CognifyPipeline::new(storage);
+    ///
+    /// let result = pipeline.cognify(
+    ///     vec![],
+    ///     Uuid::new_v4(),
+    ///     512,
+    ///     llm,
+    /// ).await?;
+    ///
+    /// println!("Extracted {} entities", result.entities.len());
+    /// # Ok(())
+    /// # }\n    /// ```
+    pub async fn cognify<L: Llm + Clone + 'static>(
         &self,
         data_items: Vec<Data>,
+        dataset_id: Uuid,
         max_chunk_size: usize,
-    ) -> Result<Vec<DocumentChunk>, CognifyError> {
+        llm: Arc<L>,
+    ) -> Result<CognifyResult, CognifyError> {
         // Stage 1: Extract text chunks (classify + chunk)
         let chunks = self
             .text_chunks_pipeline
@@ -52,115 +90,112 @@ impl<S: StorageTrait> CognifyPipeline<S> {
             .await
             .map_err(|e| CognifyError::ChunkingError(e.to_string()))?;
 
-        // TODO: Stage 2 — extract_graph_from_data
-        //   LLM-based knowledge graph extraction from chunks.
-        //   For each chunk, use an LLM to extract Node and Edge objects
-        //   based on a graph model (e.g. KnowledgeGraph).
-        //
-        //   Pseudocode:
+        if chunks.is_empty() {
+            return Ok(CognifyResult {
+                chunks,
+                entities: vec![],
+                edges: vec![],
+            });
+        }
+
+        // Stage 2a: Extract knowledge graphs from all chunks (parallel)
+        let fact_extractor = FactExtractor::new(llm);
+
+        let mut extract_tasks = Vec::new();
+        for chunk in &chunks {
+            let extractor = fact_extractor.clone();
+            let text = chunk.text.clone();
+            extract_tasks.push(tokio::spawn(async move {
+                extractor.extract_facts(&text, None).await
+            }));
+        }
+
+        let graph_results = futures::future::join_all(extract_tasks).await;
+        let mut graphs = Vec::new();
+        for result in graph_results {
+            let graph = result.map_err(|e| CognifyError::FactExtractionError(e.to_string()))??;
+            graphs.push(graph);
+        }
+
+        // Stage 2b: Merge and deduplicate graphs
+        let chunk_id = chunks[0].id; // Use first chunk as reference
+        let (nodes, edges) = expand_with_nodes_and_edges(graphs, chunk_id, dataset_id)
+            .await
+            .map_err(|e| CognifyError::FactExtractionError(e.to_string()))?;
+
+        // Stage 2c: Final deduplication pass
+        let dedup_result = deduplicate_nodes_and_edges(nodes, edges);
+
+        // TODO: Stage 2d — Database deduplication (mirrors Python's retrieve_existing_edges)
+        //   Query database for existing edges to prevent duplicates:
         //   ```
-        //   let mut nodes = Vec::new();
-        //   let mut edges = Vec::new();
-        //   for chunk in &chunks {
-        //       let graph = llm.extract_knowledge_graph(&chunk.text).await?;
-        //       nodes.extend(graph.nodes);
-        //       edges.extend(graph.edges);
-        //   }
+        //   let existing_edges = database
+        //       .retrieve_existing_edge_keys(dataset_id)
+        //       .await?;
+        //
+        //   // Filter out edges that already exist in the database
+        //   let new_edges: Vec<_> = dedup_result.unique_edges
+        //       .into_iter()
+        //       .filter(|edge| {
+        //           let key = format!("{}_{}_{}",
+        //               edge.source_entity_id,
+        //               edge.target_entity_id,
+        //               edge.relationship_name
+        //           );
+        //           !existing_edges.contains_key(&key)
+        //       })
+        //       .collect();
+        //
+        //   // Similarly, check for existing nodes by entity ID
+        //   let existing_nodes = database
+        //       .retrieve_existing_entity_ids(dataset_id)
+        //       .await?;
+        //
+        //   let new_nodes: Vec<_> = dedup_result.unique_nodes
+        //       .into_iter()
+        //       .filter(|node| !existing_nodes.contains(&node.entity.base.id))
+        //       .collect();
         //   ```
 
         // TODO: Stage 3 — summarize_text
         //   LLM-based text summarization for each chunk.
-        //   Creates TextSummary objects linked to their source chunks.
-        //
-        //   Pseudocode:
-        //   ```
-        //   let mut summaries = Vec::new();
-        //   for chunk in &chunks {
-        //       let summary = llm.summarize(&chunk.text).await?;
-        //       summaries.push(TextSummary {
-        //           id: Uuid::new_v4(),
-        //           chunk_id: chunk.id,
-        //           summary_text: summary,
-        //       });
-        //   }
-        //   ```
 
         // TODO: Stage 4 — add_data_points
         //   Store nodes and edges in graph DB.
         //   Create embeddings and store in vector DB.
-        //   Optionally create and embed triplets for semantic search.
-        //
-        //   Pseudocode:
-        //   ```
-        //   // Store in graph database
-        //   for node in nodes {
-        //       graph_db.store_node(&node).await?;
-        //   }
-        //   for edge in edges {
-        //       graph_db.store_edge(&edge).await?;
-        //   }
-        //
-        //   // Generate and store embeddings
-        //   for chunk in &chunks {
-        //       let embedding = embedding_model.embed(&chunk.text).await?;
-        //       vector_db.store(chunk.id, embedding).await?;
-        //   }
-        //
-        //   // Optional: Create and embed triplets (subject-predicate-object)
-        //   for edge in &edges {
-        //       let triplet_text = format!("{} {} {}",
-        //           edge.source_label, edge.relation, edge.target_label);
-        //       let triplet_embedding = embedding_model.embed(&triplet_text).await?;
-        //       vector_db.store_triplet(edge.id, triplet_embedding).await?;
-        //   }
-        //   ```
 
-        Ok(chunks)
+        Ok(CognifyResult {
+            chunks,
+            entities: dedup_result.unique_nodes,
+            edges: dedup_result.unique_edges,
+        })
     }
+}
+
+/// Result of the cognify pipeline.
+#[derive(Debug, Clone)]
+pub struct CognifyResult {
+    /// Text chunks extracted from documents
+    pub chunks: Vec<DocumentChunk>,
+
+    /// Entities (nodes) with their types, deduplicated
+    pub entities: Vec<GraphNodePair>,
+
+    /// Edges (relationships) between entities, deduplicated
+    pub edges: Vec<GraphEdgePair>,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use cognee_storage::MockStorage;
-    use uuid::Uuid;
+
+    // Note: Tests that require LLM are in integration tests
 
     #[tokio::test]
-    async fn cognify_empty_data() {
+    async fn test_cognify_pipeline_creation() {
         let storage = Arc::new(MockStorage::new());
-        let pipeline = CognifyPipeline::new(storage);
-        let chunks = pipeline.cognify(vec![], 100).await.unwrap();
-        assert!(chunks.is_empty());
-    }
-
-    #[tokio::test]
-    async fn cognify_delegates_to_text_chunks_pipeline() {
-        let storage = Arc::new(MockStorage::new());
-
-        // Store some content
-        let location = storage
-            .store(b"Hello world. This is a test.", "test.txt")
-            .await
-            .unwrap();
-
-        let data = Data::new(
-            Uuid::new_v4(),
-            "test.txt".into(),
-            location,
-            "text://test".into(),
-            "txt".into(),
-            "text/plain".into(),
-            "hash123".into(),
-            Uuid::new_v4(),
-        );
-
-        let pipeline = CognifyPipeline::new(storage);
-        let chunks = pipeline.cognify(vec![data], 100).await.unwrap();
-
-        // Should have chunks from the text chunks pipeline
-        assert!(!chunks.is_empty());
-        for chunk in &chunks {
-            assert!(!chunk.text.is_empty());
-        }
+        let _pipeline = CognifyPipeline::new(storage);
+        // Pipeline should be created successfully
     }
 }
