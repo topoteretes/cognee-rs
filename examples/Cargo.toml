@@ -38,6 +38,10 @@ path = "cognify_example.rs"
 name = "fact_extraction_example"
 path = "fact_extraction_example.rs"
 
+[[example]]
+name = "summarization_example"
+path = "summarization_example.rs"
+
 [features]
 default = []
 # Enable this feature to build libonnxruntime from source as a dynamic library.

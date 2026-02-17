@@ -22,6 +22,7 @@ use crate::graph_integration::{
     GraphEdgePair, GraphNodePair, deduplicate_nodes_and_edges, expand_with_nodes_and_edges,
     retrieve_existing_edges,
 };
+use crate::summarization::{SummaryExtractor, TextSummary};
 
 /// The full cognify pipeline. Orchestrates all stages of knowledge graph
 /// extraction and storage.
@@ -47,8 +48,8 @@ impl<S: StorageTrait, G: GraphDBTrait> CognifyPipeline<S, G> {
     /// 1. Document classification and text chunking (via ExtractTextChunksPipeline)
     /// 2. Extract knowledge graphs from chunks (LLM-based, parallel)
     /// 3. Merge and deduplicate graphs
-    /// 4. TODO: Summarize text
-    /// 5. TODO: Store data points in graph and vector databases
+    /// 4. Summarize text chunks (LLM-based, parallel)
+    /// 5. TODO: Create embeddings and store in vector database
     ///
     /// Returns CognifyResult with chunks, entities, and edges.
     ///
@@ -102,11 +103,12 @@ impl<S: StorageTrait, G: GraphDBTrait> CognifyPipeline<S, G> {
                 chunks,
                 entities: vec![],
                 edges: vec![],
+                summaries: vec![],
             });
         }
 
         // Stage 2a: Extract knowledge graphs from all chunks (parallel)
-        let fact_extractor = FactExtractor::new(llm);
+        let fact_extractor = FactExtractor::new(Arc::clone(&llm));
 
         let mut extract_tasks = Vec::new();
         for chunk in &chunks {
@@ -176,16 +178,18 @@ impl<S: StorageTrait, G: GraphDBTrait> CognifyPipeline<S, G> {
             .await
             .map_err(CognifyError::from)?;
 
-        // TODO: Stage 4 — summarize_text
-        //   LLM-based text summarization for each chunk.
+        // Stage 4: Summarize text chunks (parallel)
+        let summary_extractor = SummaryExtractor::new(llm);
+        let summaries = summary_extractor.summarize_chunks(&chunks, None).await?;
 
         // TODO: Stage 5 — Create embeddings
-        //   Generate embeddings for nodes and chunks, store in vector DB.
+        //   Generate embeddings for nodes, edges, and chunks, store in vector DB.
 
         Ok(CognifyResult {
             chunks,
             entities: dedup_result.unique_nodes,
             edges: dedup_result.unique_edges,
+            summaries,
         })
     }
 }
@@ -201,6 +205,9 @@ pub struct CognifyResult {
 
     /// Edges (relationships) between entities, deduplicated
     pub edges: Vec<GraphEdgePair>,
+
+    /// Text summaries generated from chunks
+    pub summaries: Vec<TextSummary>,
 }
 
 #[cfg(test)]
