@@ -430,11 +430,67 @@ impl GraphDBTrait for LadybugAdapter {
     }
 
     async fn add_nodes<T: Serialize + Sync>(&self, nodes: &[&T]) -> GraphDBResult<()> {
-        // Add nodes one by one for now
-        // TODO: Optimize with batch insert
-        for node in nodes {
-            self.add_node(*node).await?;
+        // Batch insert optimization: process nodes in chunks to avoid
+        // query size limits and improve performance
+        const BATCH_SIZE: usize = 500;
+
+        if nodes.is_empty() {
+            return Ok(());
         }
+
+        // Process in batches
+        for chunk in nodes.chunks(BATCH_SIZE) {
+            // Serialize all nodes in this chunk first to catch any serialization errors early
+            let mut node_props = Vec::with_capacity(chunk.len());
+            for node in chunk {
+                node_props.push(self.serialize_to_node_props(node)?);
+            }
+
+            // Build batched query with multiple CREATE statements
+            let conn = Connection::new(&self.db).map_err(|e| {
+                GraphDBError::ConnectionError(format!("Failed to create connection: {}", e))
+            })?;
+
+            // Create multiple nodes in a single query
+            let create_statements: Vec<String> = node_props
+                .iter()
+                .map(|props| {
+                    let created_at_str =
+                        props.created_at.format("%Y-%m-%d %H:%M:%S%.6f").to_string();
+                    let updated_at_str =
+                        props.updated_at.format("%Y-%m-%d %H:%M:%S%.6f").to_string();
+
+                    format!(
+                        r#"CREATE (:Node {{
+                id: '{}',
+                name: '{}',
+                type: '{}',
+                created_at: timestamp('{}'),
+                updated_at: timestamp('{}'),
+                properties: '{}'
+            }})"#,
+                        props.id.replace("'", "\\'"),
+                        props.name.replace("'", "\\'"),
+                        props.node_type.replace("'", "\\'"),
+                        created_at_str,
+                        updated_at_str,
+                        props.properties.replace("'", "\\'")
+                    )
+                })
+                .collect();
+
+            // Execute all CREATE statements in a single query
+            let batch_query = create_statements.join(";\n");
+
+            conn.query(&batch_query).map_err(|e| {
+                GraphDBError::NodeError(format!(
+                    "Failed to add {} nodes in batch: {}",
+                    chunk.len(),
+                    e
+                ))
+            })?;
+        }
+
         Ok(())
     }
 
@@ -655,8 +711,11 @@ impl GraphDBTrait for LadybugAdapter {
         &self,
         _node_id: &str,
     ) -> GraphDBResult<Vec<(NodeData, HashMap<String, serde_json::Value>, NodeData)>> {
-        // TODO: Implement full connection retrieval
-        Ok(Vec::new())
+        unimplemented!(
+            "get_connections not yet implemented. \
+            Requires full node+edge retrieval with bidirectional support. \
+            See IMPLEMENTATION_PLAN.md TODO #2"
+        )
     }
 
     async fn get_graph_data(&self) -> GraphDBResult<(Vec<GraphNode>, Vec<EdgeData>)> {
@@ -745,8 +804,11 @@ impl GraphDBTrait for LadybugAdapter {
         &self,
         _attribute_filters: &HashMap<String, Vec<serde_json::Value>>,
     ) -> GraphDBResult<(Vec<GraphNode>, Vec<EdgeData>)> {
-        // TODO: Implement filtered query
-        Ok((Vec::new(), Vec::new()))
+        unimplemented!(
+            "get_filtered_graph_data not yet implemented. \
+            Requires query builder with AND/OR filter logic. \
+            See IMPLEMENTATION_PLAN.md TODO #3"
+        )
     }
 
     async fn get_nodeset_subgraph(
@@ -754,8 +816,11 @@ impl GraphDBTrait for LadybugAdapter {
         _node_type: &str,
         _node_names: &[String],
     ) -> GraphDBResult<(Vec<GraphNode>, Vec<EdgeData>)> {
-        // TODO: Implement subgraph extraction
-        Ok((Vec::new(), Vec::new()))
+        unimplemented!(
+            "get_nodeset_subgraph not yet implemented. \
+            Requires type+name filtering with edge retrieval. \
+            See IMPLEMENTATION_PLAN.md TODO #4"
+        )
     }
 }
 
@@ -763,6 +828,41 @@ impl GraphDBTrait for LadybugAdapter {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    /// Simple test node for testing batch operations
+    #[derive(Debug, Clone, Serialize)]
+    struct TestNode {
+        id: String,
+        name: String,
+        data_type: String,
+        created_at: String,
+        updated_at: String,
+        value: i32,
+    }
+
+    impl TestNode {
+        fn new(id: &str, name: &str, value: i32) -> Self {
+            let now = chrono::Utc::now().to_rfc3339();
+            Self {
+                id: id.to_string(),
+                name: name.to_string(),
+                data_type: "TestNode".to_string(),
+                created_at: now.clone(),
+                updated_at: now,
+                value,
+            }
+        }
+    }
+
+    async fn setup_adapter() -> (LadybugAdapter, TempDir) {
+        let temp_dir = TempDir::new().unwrap();
+        let db_path = temp_dir.path().join("test.db");
+        let adapter = LadybugAdapter::new(db_path.to_str().unwrap())
+            .await
+            .unwrap();
+        adapter.initialize().await.unwrap();
+        (adapter, temp_dir)
+    }
 
     #[tokio::test]
     async fn test_adapter_creation() {
@@ -786,5 +886,168 @@ mod tests {
             eprintln!("Initialization error: {:?}", e);
         }
         assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_batch_insert_empty() {
+        let (adapter, _temp_dir) = setup_adapter().await;
+
+        // Test with empty slice
+        let nodes: Vec<&TestNode> = vec![];
+        let result = adapter.add_nodes(&nodes).await;
+        assert!(result.is_ok());
+
+        // Verify no nodes were added
+        assert!(adapter.is_empty().await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_batch_insert_single_node() {
+        let (adapter, _temp_dir) = setup_adapter().await;
+
+        let node = TestNode::new("test-1", "Node 1", 100);
+        let nodes = vec![&node];
+
+        let result = adapter.add_nodes(&nodes).await;
+        assert!(result.is_ok());
+
+        // Verify node was added
+        assert!(!adapter.is_empty().await.unwrap());
+        assert!(adapter.has_node("test-1").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_batch_insert_ten_nodes() {
+        let (adapter, _temp_dir) = setup_adapter().await;
+
+        let nodes: Vec<TestNode> = (0..10)
+            .map(|i| TestNode::new(&format!("test-{}", i), &format!("Node {}", i), i * 10))
+            .collect();
+        let node_refs: Vec<&TestNode> = nodes.iter().collect();
+
+        let result = adapter.add_nodes(&node_refs).await;
+        assert!(result.is_ok());
+
+        // Verify all nodes were added
+        for i in 0..10 {
+            assert!(
+                adapter.has_node(&format!("test-{}", i)).await.unwrap(),
+                "Node test-{} should exist",
+                i
+            );
+        }
+
+        // Check total count
+        let metrics = adapter.get_graph_metrics(false).await.unwrap();
+        assert_eq!(metrics.get("node_count").unwrap().as_i64().unwrap(), 10);
+    }
+
+    #[tokio::test]
+    async fn test_batch_insert_hundred_nodes() {
+        let (adapter, _temp_dir) = setup_adapter().await;
+
+        let nodes: Vec<TestNode> = (0..100)
+            .map(|i| TestNode::new(&format!("test-{}", i), &format!("Node {}", i), i * 10))
+            .collect();
+        let node_refs: Vec<&TestNode> = nodes.iter().collect();
+
+        let result = adapter.add_nodes(&node_refs).await;
+        assert!(result.is_ok());
+
+        // Verify count
+        let metrics = adapter.get_graph_metrics(false).await.unwrap();
+        assert_eq!(metrics.get("node_count").unwrap().as_i64().unwrap(), 100);
+
+        // Spot check a few nodes
+        assert!(adapter.has_node("test-0").await.unwrap());
+        assert!(adapter.has_node("test-50").await.unwrap());
+        assert!(adapter.has_node("test-99").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_batch_insert_thousand_nodes() {
+        let (adapter, _temp_dir) = setup_adapter().await;
+
+        let nodes: Vec<TestNode> = (0..1000)
+            .map(|i| TestNode::new(&format!("test-{}", i), &format!("Node {}", i), i * 10))
+            .collect();
+        let node_refs: Vec<&TestNode> = nodes.iter().collect();
+
+        let result = adapter.add_nodes(&node_refs).await;
+        assert!(result.is_ok());
+
+        // Verify count (should process in chunks of 500)
+        let metrics = adapter.get_graph_metrics(false).await.unwrap();
+        assert_eq!(metrics.get("node_count").unwrap().as_i64().unwrap(), 1000);
+
+        // Spot check nodes across batch boundaries
+        assert!(adapter.has_node("test-0").await.unwrap());
+        assert!(adapter.has_node("test-499").await.unwrap()); // Last of first batch
+        assert!(adapter.has_node("test-500").await.unwrap()); // First of second batch
+        assert!(adapter.has_node("test-999").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_batch_insert_preserves_data() {
+        let (adapter, _temp_dir) = setup_adapter().await;
+
+        let nodes: Vec<TestNode> = vec![
+            TestNode::new("test-a", "Alice", 100),
+            TestNode::new("test-b", "Bob", 200),
+            TestNode::new("test-c", "Charlie", 300),
+        ];
+        let node_refs: Vec<&TestNode> = nodes.iter().collect();
+
+        adapter.add_nodes(&node_refs).await.unwrap();
+
+        // Verify node data is preserved
+        let alice = adapter.get_node("test-a").await.unwrap().unwrap();
+        assert_eq!(alice.get("id").unwrap().as_str().unwrap(), "test-a");
+        assert_eq!(alice.get("name").unwrap().as_str().unwrap(), "Alice");
+        assert_eq!(alice.get("value").unwrap().as_i64().unwrap(), 100);
+
+        let bob = adapter.get_node("test-b").await.unwrap().unwrap();
+        assert_eq!(bob.get("name").unwrap().as_str().unwrap(), "Bob");
+        assert_eq!(bob.get("value").unwrap().as_i64().unwrap(), 200);
+
+        let charlie = adapter.get_node("test-c").await.unwrap().unwrap();
+        assert_eq!(charlie.get("name").unwrap().as_str().unwrap(), "Charlie");
+        assert_eq!(charlie.get("value").unwrap().as_i64().unwrap(), 300);
+    }
+
+    #[tokio::test]
+    async fn test_batch_vs_sequential_equivalence() {
+        // Create two adapters
+        let (adapter_batch, _temp_dir_batch) = setup_adapter().await;
+        let (adapter_seq, _temp_dir_seq) = setup_adapter().await;
+
+        let nodes: Vec<TestNode> = (0..20)
+            .map(|i| TestNode::new(&format!("test-{}", i), &format!("Node {}", i), i * 10))
+            .collect();
+        let node_refs: Vec<&TestNode> = nodes.iter().collect();
+
+        // Batch insert
+        adapter_batch.add_nodes(&node_refs).await.unwrap();
+
+        // Sequential insert
+        for node in &node_refs {
+            adapter_seq.add_node(node).await.unwrap();
+        }
+
+        // Both should have same node count
+        let metrics_batch = adapter_batch.get_graph_metrics(false).await.unwrap();
+        let metrics_seq = adapter_seq.get_graph_metrics(false).await.unwrap();
+
+        assert_eq!(
+            metrics_batch.get("node_count").unwrap(),
+            metrics_seq.get("node_count").unwrap()
+        );
+
+        // Spot check that same nodes exist in both
+        for i in 0..20 {
+            let node_id = format!("test-{}", i);
+            assert!(adapter_batch.has_node(&node_id).await.unwrap());
+            assert!(adapter_seq.has_node(&node_id).await.unwrap());
+        }
     }
 }

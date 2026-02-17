@@ -98,13 +98,14 @@ impl EntityType {
         self.base.set_ontology_valid(true);
 
         if let Some(canonical) = canonical_name
-            && canonical != self.name {
-                // Store original name in metadata
-                self.base
-                    .set_metadata("original_name", serde_json::json!(self.name.clone()));
-                // Update to canonical name
-                self.name = canonical;
-            }
+            && canonical != self.name
+        {
+            // Store original name in metadata
+            self.base
+                .set_metadata("original_name", serde_json::json!(self.name.clone()));
+            // Update to canonical name
+            self.name = canonical;
+        }
     }
 }
 

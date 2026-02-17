@@ -62,9 +62,9 @@ pub async fn expand_with_nodes_and_edges(
         for node in graph.nodes {
             // Step 1: Create or get EntityType
             let type_key = format!("{}_type", node.node_type);
-            let entity_type = type_map.entry(type_key.clone()).or_insert_with(|| {
-                EntityType::from_node_type(&node.node_type, Some(dataset_id))
-            });
+            let entity_type = type_map
+                .entry(type_key.clone())
+                .or_insert_with(|| EntityType::from_node_type(&node.node_type, Some(dataset_id)));
 
             // Step 2: Create Entity
             let entity_key = format!("{}_entity", node.id);
@@ -102,15 +102,17 @@ pub async fn expand_with_nodes_and_edges(
                     })?;
 
             let edge_key = (
-                *source_entity_id, *target_entity_id, edge.relationship_name.clone()
+                *source_entity_id,
+                *target_entity_id,
+                edge.relationship_name.clone(),
             );
 
             if let std::collections::hash_map::Entry::Vacant(e) = edge_map.entry(edge_key) {
                 e.insert(GraphEdgePair::new(
-                        *source_entity_id,
-                        *target_entity_id,
-                        edge.relationship_name,
-                    ));
+                    *source_entity_id,
+                    *target_entity_id,
+                    edge.relationship_name,
+                ));
             }
         }
     }

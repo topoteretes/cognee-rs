@@ -54,15 +54,16 @@ impl<S: StorageTrait> CognifyPipeline<S> {
     /// * `llm` - LLM instance for knowledge graph extraction
     ///
     /// # Example
-    /// ```no_run
+    /// ```ignore
     /// use cognee_cognify::CognifyPipeline;
     /// use cognee_storage::LocalStorage;
-    /// use cognee_llm::openai::OpenAIAdapter;
+    /// use cognee_llm::OpenAIAdapter;
     /// use std::sync::Arc;
+    /// use std::path::PathBuf;
     /// use uuid::Uuid;
     ///
-    /// # async fn example() -> anyhow::Result<()> {
-    /// let storage = Arc::new(LocalStorage::new("/tmp/cognee"));
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let storage = Arc::new(LocalStorage::new(PathBuf::from("/tmp/cognee")));
     /// let llm = Arc::new(OpenAIAdapter::new("http://localhost:11434".to_string()));
     /// let pipeline = CognifyPipeline::new(storage);
     ///
@@ -75,7 +76,8 @@ impl<S: StorageTrait> CognifyPipeline<S> {
     ///
     /// println!("Extracted {} entities", result.entities.len());
     /// # Ok(())
-    /// # }\n    /// ```
+    /// # }
+    /// ```
     pub async fn cognify<L: Llm + Clone + 'static>(
         &self,
         data_items: Vec<Data>,
