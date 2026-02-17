@@ -7,6 +7,7 @@ edition.workspace = true
 cognee-database = { path = "../cognee-database" }
 cognee-models = { path = "../cognee-models" }
 cognee-storage = { path = "../cognee-storage" }
+cognee-utils = { path = "../cognee-utils" }
 sha2 = "0.10"
 uuid.workspace = true
 tokio.workspace = true

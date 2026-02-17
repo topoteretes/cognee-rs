@@ -21,6 +21,9 @@ lbug.workspace = true
 # Internal dependencies
 cognee-models = { path = "../cognee-models" }
 
+[features]
+testing = []
+
 [dev-dependencies]
 tempfile.workspace = true
 serial_test.workspace = true

@@ -6,9 +6,11 @@
 //! 3. Summarize text
 //! 4. Store data points (nodes, edges, embeddings)
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use cognee_chunking::ExtractTextChunksPipeline;
+use cognee_graph::GraphDBTrait;
 use cognee_llm::Llm;
 use cognee_models::{Data, DocumentChunk};
 use cognee_storage::StorageTrait;
@@ -18,21 +20,24 @@ use crate::error::CognifyError;
 use crate::fact_extraction::FactExtractor;
 use crate::graph_integration::{
     GraphEdgePair, GraphNodePair, deduplicate_nodes_and_edges, expand_with_nodes_and_edges,
+    retrieve_existing_edges,
 };
 
 /// The full cognify pipeline. Orchestrates all stages of knowledge graph
 /// extraction and storage.
 ///
-/// Generic over the storage backend used to read ingested file content.
-pub struct CognifyPipeline<S: StorageTrait> {
+/// Generic over the storage backend and graph database used.
+pub struct CognifyPipeline<S: StorageTrait, G: GraphDBTrait> {
     text_chunks_pipeline: ExtractTextChunksPipeline<S>,
+    graph_db: Arc<G>,
 }
 
-impl<S: StorageTrait> CognifyPipeline<S> {
-    pub fn new(storage: Arc<S>) -> Self {
+impl<S: StorageTrait, G: GraphDBTrait> CognifyPipeline<S, G> {
+    pub fn new(storage: Arc<S>, graph_db: Arc<G>) -> Self {
         let text_chunks_pipeline = ExtractTextChunksPipeline::new(storage);
         Self {
             text_chunks_pipeline,
+            graph_db,
         }
     }
 
@@ -119,52 +124,63 @@ impl<S: StorageTrait> CognifyPipeline<S> {
             graphs.push(graph);
         }
 
-        // Stage 2b: Merge and deduplicate graphs
-        let chunk_id = chunks[0].id; // Use first chunk as reference
-        let (nodes, edges) = expand_with_nodes_and_edges(graphs, chunk_id, dataset_id)
-            .await
-            .map_err(|e| CognifyError::FactExtractionError(e.to_string()))?;
+        // Stage 2b: Database deduplication — query for existing edges
+        let existing_edges_set = retrieve_existing_edges(self.graph_db.as_ref(), &graphs).await?;
 
-        // Stage 2c: Final deduplication pass
+        // Stage 2c: Merge and deduplicate graphs (with DB awareness)
+        let chunk_id = chunks[0].id; // Use first chunk as reference
+        let (nodes, edges) =
+            expand_with_nodes_and_edges(graphs, chunk_id, dataset_id, &existing_edges_set)
+                .await
+                .map_err(|e| CognifyError::FactExtractionError(e.to_string()))?;
+
+        // Stage 2d: Final deduplication pass (in-memory only after DB filtering)
         let dedup_result = deduplicate_nodes_and_edges(nodes, edges);
 
-        // TODO: Stage 2d — Database deduplication (mirrors Python's retrieve_existing_edges)
-        //   Query database for existing edges to prevent duplicates:
-        //   ```
-        //   let existing_edges = database
-        //       .retrieve_existing_edge_keys(dataset_id)
-        //       .await?;
-        //
-        //   // Filter out edges that already exist in the database
-        //   let new_edges: Vec<_> = dedup_result.unique_edges
-        //       .into_iter()
-        //       .filter(|edge| {
-        //           let key = format!("{}_{}_{}",
-        //               edge.source_entity_id,
-        //               edge.target_entity_id,
-        //               edge.relationship_name
-        //           );
-        //           !existing_edges.contains_key(&key)
-        //       })
-        //       .collect();
-        //
-        //   // Similarly, check for existing nodes by entity ID
-        //   let existing_nodes = database
-        //       .retrieve_existing_entity_ids(dataset_id)
-        //       .await?;
-        //
-        //   let new_nodes: Vec<_> = dedup_result.unique_nodes
-        //       .into_iter()
-        //       .filter(|node| !existing_nodes.contains(&node.entity.base.id))
-        //       .collect();
-        //   ```
+        // Stage 3: Store graph data (nodes and edges) in graph database
+        let entity_refs: Vec<&GraphNodePair> = dedup_result.unique_nodes.iter().collect();
+        self.graph_db
+            .add_nodes(&entity_refs)
+            .await
+            .map_err(CognifyError::from)?;
 
-        // TODO: Stage 3 — summarize_text
+        // Convert edges to (source_id, target_id, relation, metadata) tuples
+        let edge_data: Vec<_> = dedup_result
+            .unique_edges
+            .iter()
+            .map(|edge_pair| {
+                // Convert HashMap<String, String> to HashMap<Cow<'static, str>, Value>
+                let properties: HashMap<std::borrow::Cow<'static, str>, serde_json::Value> =
+                    edge_pair
+                        .properties
+                        .iter()
+                        .map(|(k, v)| {
+                            (
+                                std::borrow::Cow::Owned(k.clone()),
+                                serde_json::Value::String(v.clone()),
+                            )
+                        })
+                        .collect();
+
+                (
+                    edge_pair.source_entity_id.to_string(),
+                    edge_pair.target_entity_id.to_string(),
+                    edge_pair.relationship_name.clone(),
+                    properties,
+                )
+            })
+            .collect();
+
+        self.graph_db
+            .add_edges(&edge_data)
+            .await
+            .map_err(CognifyError::from)?;
+
+        // TODO: Stage 4 — summarize_text
         //   LLM-based text summarization for each chunk.
 
-        // TODO: Stage 4 — add_data_points
-        //   Store nodes and edges in graph DB.
-        //   Create embeddings and store in vector DB.
+        // TODO: Stage 5 — Create embeddings
+        //   Generate embeddings for nodes and chunks, store in vector DB.
 
         Ok(CognifyResult {
             chunks,
@@ -190,6 +206,7 @@ pub struct CognifyResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cognee_graph::MockGraphDB;
     use cognee_storage::MockStorage;
 
     // Note: Tests that require LLM are in integration tests
@@ -197,7 +214,8 @@ mod tests {
     #[tokio::test]
     async fn test_cognify_pipeline_creation() {
         let storage = Arc::new(MockStorage::new());
-        let _pipeline = CognifyPipeline::new(storage);
+        let graph_db = Arc::new(MockGraphDB::new());
+        let _pipeline = CognifyPipeline::new(storage, graph_db);
         // Pipeline should be created successfully
     }
 }

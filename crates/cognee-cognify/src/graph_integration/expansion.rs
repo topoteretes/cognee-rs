@@ -3,7 +3,7 @@
 //! Mirrors Python's `cognee/modules/graph/utils/expand_with_nodes_and_edges.py`
 //! Converts LLM-layer KnowledgeGraph objects to storage-layer Entity/EntityType pairs.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 
 use cognee_models::{Entity, EntityType};
@@ -41,6 +41,7 @@ pub enum GraphIntegrationError {
 /// * `graphs` - Vector of KnowledgeGraph objects from LLM extraction
 /// * `chunk_id` - UUID of the chunk these graphs were extracted from
 /// * `dataset_id` - UUID of the dataset
+/// * `existing_edges_set` - Set of edges that already exist in the database
 ///
 /// # Returns
 /// Tuple of (graph_nodes, graph_edges) for storage.
@@ -48,6 +49,7 @@ pub async fn expand_with_nodes_and_edges(
     graphs: Vec<KnowledgeGraph>,
     chunk_id: Uuid,
     dataset_id: Uuid,
+    existing_edges_set: &HashSet<String>,
 ) -> Result<(Vec<GraphNodePair>, Vec<GraphEdgePair>), GraphIntegrationError> {
     // Maps for deduplication
     let mut node_map = HashMap::new();
@@ -84,7 +86,7 @@ pub async fn expand_with_nodes_and_edges(
             }
         }
 
-        // Step 3: Create Edges
+        // Step 3: Create Edges (skip if already in database)
         for edge in graph.edges {
             // Look up entity IDs from node IDs
             let source_entity_id =
@@ -100,6 +102,16 @@ pub async fn expand_with_nodes_and_edges(
                     .ok_or_else(|| {
                         GraphIntegrationError::MissingNodeReference(edge.target_node_id.clone())
                     })?;
+
+            // Check if edge already exists in database
+            let edge_db_key = format!(
+                "{}_{}_{}",
+                source_entity_id, target_entity_id, edge.relationship_name
+            );
+            if existing_edges_set.contains(&edge_db_key) {
+                // Edge already exists in database, skip it
+                continue;
+            }
 
             let edge_key = (
                 *source_entity_id,
@@ -188,9 +200,10 @@ mod tests {
         let chunk_id = Uuid::new_v4();
         let dataset_id = Uuid::new_v4();
 
-        let (nodes, edges) = expand_with_nodes_and_edges(vec![graph], chunk_id, dataset_id)
-            .await
-            .unwrap();
+        let (nodes, edges) =
+            expand_with_nodes_and_edges(vec![graph], chunk_id, dataset_id, &HashSet::new())
+                .await
+                .unwrap();
 
         // Should have 2 nodes (TechCorp, Alice)
         assert_eq!(nodes.len(), 2);
@@ -213,10 +226,14 @@ mod tests {
         let chunk_id = Uuid::new_v4();
         let dataset_id = Uuid::new_v4();
 
-        let (nodes, edges) =
-            expand_with_nodes_and_edges(vec![graph1, graph2], chunk_id, dataset_id)
-                .await
-                .unwrap();
+        let (nodes, edges) = expand_with_nodes_and_edges(
+            vec![graph1, graph2],
+            chunk_id,
+            dataset_id,
+            &HashSet::new(),
+        )
+        .await
+        .unwrap();
 
         // Should have 2 unique nodes (deduplication by node_id)
         assert_eq!(nodes.len(), 2);
@@ -231,9 +248,10 @@ mod tests {
         let chunk_id = Uuid::new_v4();
         let dataset_id = Uuid::new_v4();
 
-        let (nodes, _) = expand_with_nodes_and_edges(vec![graph], chunk_id, dataset_id)
-            .await
-            .unwrap();
+        let (nodes, _) =
+            expand_with_nodes_and_edges(vec![graph], chunk_id, dataset_id, &HashSet::new())
+                .await
+                .unwrap();
 
         // Check that entity types are created
         for node_pair in &nodes {
@@ -253,9 +271,10 @@ mod tests {
         let chunk_id = Uuid::new_v4();
         let dataset_id = Uuid::new_v4();
 
-        let (nodes, _) = expand_with_nodes_and_edges(vec![graph], chunk_id, dataset_id)
-            .await
-            .unwrap();
+        let (nodes, _) =
+            expand_with_nodes_and_edges(vec![graph], chunk_id, dataset_id, &HashSet::new())
+                .await
+                .unwrap();
 
         // Check that entities reference their types
         for node_pair in &nodes {
@@ -269,9 +288,10 @@ mod tests {
         let chunk_id = Uuid::new_v4();
         let dataset_id = Uuid::new_v4();
 
-        let (nodes, _) = expand_with_nodes_and_edges(vec![graph], chunk_id, dataset_id)
-            .await
-            .unwrap();
+        let (nodes, _) =
+            expand_with_nodes_and_edges(vec![graph], chunk_id, dataset_id, &HashSet::new())
+                .await
+                .unwrap();
 
         // Verify chunk_id is stored in metadata
         for node_pair in &nodes {
@@ -299,7 +319,8 @@ mod tests {
         let chunk_id = Uuid::new_v4();
         let dataset_id = Uuid::new_v4();
 
-        let result = expand_with_nodes_and_edges(vec![graph], chunk_id, dataset_id).await;
+        let result =
+            expand_with_nodes_and_edges(vec![graph], chunk_id, dataset_id, &HashSet::new()).await;
 
         // Should fail with MissingNodeReference error
         assert!(result.is_err());
@@ -316,9 +337,10 @@ mod tests {
         let chunk_id = Uuid::new_v4();
         let dataset_id = Uuid::new_v4();
 
-        let (nodes, edges) = expand_with_nodes_and_edges(vec![], chunk_id, dataset_id)
-            .await
-            .unwrap();
+        let (nodes, edges) =
+            expand_with_nodes_and_edges(vec![], chunk_id, dataset_id, &HashSet::new())
+                .await
+                .unwrap();
 
         assert_eq!(nodes.len(), 0);
         assert_eq!(edges.len(), 0);
@@ -358,9 +380,10 @@ mod tests {
         let chunk_id = Uuid::new_v4();
         let dataset_id = Uuid::new_v4();
 
-        let (nodes, edges) = expand_with_nodes_and_edges(vec![graph], chunk_id, dataset_id)
-            .await
-            .unwrap();
+        let (nodes, edges) =
+            expand_with_nodes_and_edges(vec![graph], chunk_id, dataset_id, &HashSet::new())
+                .await
+                .unwrap();
 
         assert_eq!(nodes.len(), 2);
         // Should have 2 edges (different relationships)

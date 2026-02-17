@@ -3,17 +3,13 @@
 //! Batches sentences into paragraph-sized chunks, respecting a maximum token
 //! count. Supports both batch mode (accumulate across paragraphs) and
 //! non-batch mode (yield at each paragraph boundary).
-//!
-//! Port of Python `cognee.tasks.chunks.chunk_by_paragraph`.
 
-use uuid::{Uuid, uuid};
+use cognee_utils::NAMESPACE_OID;
+use uuid::Uuid;
 
 use crate::chunk_by_sentence::chunk_by_sentence;
 use crate::cut_type::CutType;
 use crate::token_counter::TokenCounter;
-
-/// NAMESPACE_OID from the uuid spec, used for deterministic uuid5 generation.
-const NAMESPACE_OID: Uuid = uuid!("6ba7b812-9dad-11d1-80b4-00c04fd430c8");
 
 /// A paragraph-level chunk with metadata. Borrows text from the input.
 #[derive(Debug, Clone)]

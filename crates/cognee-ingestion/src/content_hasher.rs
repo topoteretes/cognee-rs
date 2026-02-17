@@ -1,3 +1,4 @@
+use cognee_utils::NAMESPACE_OID;
 use sha2::{Digest, Sha256};
 use tokio::io::{AsyncRead, AsyncReadExt};
 use uuid::Uuid;
@@ -19,7 +20,7 @@ impl ContentHasher {
     /// Use UUID v5 (namespace-based) for deterministic generation
     pub fn hash_to_uuid(content: &[u8], owner_id: Uuid) -> Uuid {
         let hash = Self::hash_content(content, owner_id);
-        Uuid::new_v5(&Uuid::NAMESPACE_OID, hash.as_bytes())
+        Uuid::new_v5(&NAMESPACE_OID, hash.as_bytes())
     }
 
     /// Generate content hash from an async reader by streaming chunks

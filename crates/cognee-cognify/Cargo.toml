@@ -11,6 +11,8 @@ cognee-models = { path = "../cognee-models" }
 cognee-storage = { path = "../cognee-storage" }
 cognee-chunking = { path = "../cognee-chunking" }
 cognee-llm = { path = "../cognee-llm" }
+cognee-graph = { path = "../cognee-graph" }
+cognee-utils = { path = "../cognee-utils" }
 
 uuid = { version = "1", features = ["v4"] }
 tokio = { version = "1", features = ["rt-multi-thread"] }
@@ -23,4 +25,5 @@ futures = "0.3"
 
 [dev-dependencies]
 cognee-storage = { path = "../cognee-storage", features = ["testing"] }
+cognee-graph = { path = "../cognee-graph", features = ["testing"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }

@@ -7,6 +7,7 @@ edition.workspace = true
 async-trait.workspace = true
 cognee-models = { path = "../cognee-models" }
 cognee-storage = { path = "../cognee-storage" }
+cognee-utils = { path = "../cognee-utils" }
 log = "0.4"
 serde.workspace = true
 thiserror.workspace = true

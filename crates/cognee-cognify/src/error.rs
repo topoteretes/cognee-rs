@@ -21,4 +21,17 @@ pub enum CognifyError {
 
     #[error("Fact extraction error: {0}")]
     FactExtractionError(String),
+
+    #[error("Graph database query failed: {0}")]
+    GraphDatabaseError(String),
+
+    #[error("Failed to store graph: {0}")]
+    GraphStorageError(String),
+}
+
+/// Convert GraphDBError to CognifyError
+impl From<cognee_graph::GraphDBError> for CognifyError {
+    fn from(err: cognee_graph::GraphDBError) -> Self {
+        CognifyError::GraphDatabaseError(err.to_string())
+    }
 }
