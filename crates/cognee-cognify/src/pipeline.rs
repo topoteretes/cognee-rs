@@ -4,15 +4,17 @@
 //! 1. Extract text chunks (via ExtractTextChunksPipeline)
 //! 2. Extract knowledge graph from chunks
 //! 3. Summarize text
-//! 4. Store data points (nodes, edges, embeddings)
+//! 4. Generate embeddings
+//! 5. Store data points (nodes, edges, embeddings)
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use cognee_chunking::ExtractTextChunksPipeline;
+use cognee_embedding::engine::EmbeddingEngine;
 use cognee_graph::GraphDBTrait;
 use cognee_llm::Llm;
-use cognee_models::{Data, DocumentChunk};
+use cognee_models::{Data, DocumentChunk, Embedding};
 use cognee_storage::StorageTrait;
 use uuid::Uuid;
 
@@ -27,18 +29,31 @@ use crate::summarization::{SummaryExtractor, TextSummary};
 /// The full cognify pipeline. Orchestrates all stages of knowledge graph
 /// extraction and storage.
 ///
-/// Generic over the storage backend and graph database used.
-pub struct CognifyPipeline<S: StorageTrait, G: GraphDBTrait> {
+/// Generic over the storage backend, graph database, and embedding engine.
+pub struct CognifyPipeline<S: StorageTrait, G: GraphDBTrait, E: EmbeddingEngine> {
     text_chunks_pipeline: ExtractTextChunksPipeline<S>,
     graph_db: Arc<G>,
+    embedding_engine: Option<Arc<E>>,
 }
 
-impl<S: StorageTrait, G: GraphDBTrait> CognifyPipeline<S, G> {
+impl<S: StorageTrait, G: GraphDBTrait, E: EmbeddingEngine> CognifyPipeline<S, G, E> {
+    /// Create a new CognifyPipeline without embedding engine.
     pub fn new(storage: Arc<S>, graph_db: Arc<G>) -> Self {
         let text_chunks_pipeline = ExtractTextChunksPipeline::new(storage);
         Self {
             text_chunks_pipeline,
             graph_db,
+            embedding_engine: None,
+        }
+    }
+
+    /// Create a new CognifyPipeline with embedding engine.
+    pub fn with_embeddings(storage: Arc<S>, graph_db: Arc<G>, embedding_engine: Arc<E>) -> Self {
+        let text_chunks_pipeline = ExtractTextChunksPipeline::new(storage);
+        Self {
+            text_chunks_pipeline,
+            graph_db,
+            embedding_engine: Some(embedding_engine),
         }
     }
 
@@ -104,6 +119,7 @@ impl<S: StorageTrait, G: GraphDBTrait> CognifyPipeline<S, G> {
                 entities: vec![],
                 edges: vec![],
                 summaries: vec![],
+                embeddings: vec![],
             });
         }
 
@@ -182,15 +198,97 @@ impl<S: StorageTrait, G: GraphDBTrait> CognifyPipeline<S, G> {
         let summary_extractor = SummaryExtractor::new(llm);
         let summaries = summary_extractor.summarize_chunks(&chunks, None).await?;
 
-        // TODO: Stage 5 — Create embeddings
-        //   Generate embeddings for nodes, edges, and chunks, store in vector DB.
+        // Stage 5: Generate embeddings (if engine provided)
+        let embeddings = if let Some(ref engine) = self.embedding_engine {
+            self.generate_embeddings(
+                &chunks,
+                &dedup_result.unique_nodes,
+                &summaries,
+                engine.clone(),
+            )
+            .await?
+        } else {
+            vec![]
+        };
 
         Ok(CognifyResult {
             chunks,
             entities: dedup_result.unique_nodes,
             edges: dedup_result.unique_edges,
             summaries,
+            embeddings,
         })
+    }
+
+    /// Generate embeddings for chunks, entities, and summaries.
+    ///
+    /// Batches all embeddable text and processes in parallel using the embedding engine.
+    ///
+    /// # Arguments
+    /// * `chunks` - Document chunks to embed
+    /// * `entities` - Entities (nodes) to embed
+    /// * `summaries` - Text summaries to embed
+    /// * `engine` - Embedding engine to use
+    async fn generate_embeddings(
+        &self,
+        chunks: &[DocumentChunk],
+        entities: &[GraphNodePair],
+        summaries: &[TextSummary],
+        engine: Arc<E>,
+    ) -> Result<Vec<Embedding>, CognifyError> {
+        let mut embeddings = Vec::new();
+
+        // 1. Embed document chunks ("text" field)
+        if !chunks.is_empty() {
+            let chunk_texts: Vec<String> = chunks.iter().map(|c| c.text.clone()).collect();
+            let chunk_vectors = engine
+                .embed(&chunk_texts)
+                .await
+                .map_err(|e| CognifyError::EmbeddingError(e.to_string()))?;
+
+            for (chunk, vector) in chunks.iter().zip(chunk_vectors) {
+                embeddings.push(Embedding::new(chunk.id, "DocumentChunk", "text", vector));
+            }
+        }
+
+        // 2. Embed entity names ("name" field)
+        if !entities.is_empty() {
+            let entity_names: Vec<String> =
+                entities.iter().map(|e| e.entity.name.clone()).collect();
+            let entity_vectors = engine
+                .embed(&entity_names)
+                .await
+                .map_err(|e| CognifyError::EmbeddingError(e.to_string()))?;
+
+            for (entity, vector) in entities.iter().zip(entity_vectors) {
+                embeddings.push(Embedding::new(
+                    entity.entity.base.id,
+                    "Entity",
+                    "name",
+                    vector,
+                ));
+            }
+        }
+
+        // 3. Embed summaries ("text" field)
+        if !summaries.is_empty() {
+            let summary_texts: Vec<String> = summaries.iter().map(|s| s.text.clone()).collect();
+            let summary_vectors = engine
+                .embed(&summary_texts)
+                .await
+                .map_err(|e| CognifyError::EmbeddingError(e.to_string()))?;
+
+            for (summary, vector) in summaries.iter().zip(summary_vectors) {
+                embeddings.push(Embedding::new(
+                    summary.chunk_id,
+                    "TextSummary",
+                    "text",
+                    vector,
+                ));
+            }
+        }
+
+        Ok(embeddings)
     }
 }
 
@@ -208,11 +306,15 @@ pub struct CognifyResult {
 
     /// Text summaries generated from chunks
     pub summaries: Vec<TextSummary>,
+
+    /// Embeddings for chunks, entities, and summaries
+    pub embeddings: Vec<Embedding>,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cognee_embedding::onnx::OnnxEmbeddingEngine;
     use cognee_graph::MockGraphDB;
     use cognee_storage::MockStorage;
 
@@ -222,7 +324,9 @@ mod tests {
     async fn test_cognify_pipeline_creation() {
         let storage = Arc::new(MockStorage::new());
         let graph_db = Arc::new(MockGraphDB::new());
-        let _pipeline = CognifyPipeline::new(storage, graph_db);
+        // Type annotation needed since embedding_engine is Option<Arc<E>>
+        let _pipeline: CognifyPipeline<MockStorage, MockGraphDB, OnnxEmbeddingEngine> =
+            CognifyPipeline::new(storage, graph_db);
         // Pipeline should be created successfully
     }
 }

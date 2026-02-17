@@ -27,6 +27,9 @@ pub enum CognifyError {
 
     #[error("Failed to store graph: {0}")]
     GraphStorageError(String),
+
+    #[error("Embedding generation error: {0}")]
+    EmbeddingError(String),
 }
 
 /// Convert GraphDBError to CognifyError

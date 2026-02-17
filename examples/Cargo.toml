@@ -2,7 +2,6 @@
 name = "cognee-examples"
 version = "0.1.0"
 edition.workspace = true
-build = "build.rs"
 publish = false
 
 # Define each example
@@ -42,6 +41,10 @@ path = "fact_extraction_example.rs"
 name = "summarization_example"
 path = "summarization_example.rs"
 
+[[example]]
+name = "embedding_engine_example"
+path = "embedding_engine_example.rs"
+
 [features]
 default = []
 # Enable this feature to build libonnxruntime from source as a dynamic library.
@@ -58,6 +61,7 @@ cognee-models = { path = "../crates/cognee-models" }
 cognee-chunking = { path = "../crates/cognee-chunking" }
 cognee-cognify = { path = "../crates/cognee-cognify" }
 cognee-llm = { path = "../crates/cognee-llm" }
+cognee-embedding = { path = "../crates/cognee-embedding" }
 
 # Keep existing dependencies that examples need
 async-trait.workspace = true

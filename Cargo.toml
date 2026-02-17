@@ -10,6 +10,7 @@ members = [
     "crates/cognee-utils",
     "crates/cognee-llm",
     "crates/cognee-graph",
+    "crates/cognee-embedding",
 ]
 resolver = "3"
 

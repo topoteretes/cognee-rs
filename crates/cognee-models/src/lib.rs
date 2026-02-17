@@ -5,6 +5,7 @@ mod dataset;
 mod document;
 mod document_chunk;
 mod edge_type;
+mod embedding;
 mod entity;
 mod entity_type;
 
@@ -15,5 +16,6 @@ pub use dataset::Dataset;
 pub use document::{Document, classify_documents};
 pub use document_chunk::DocumentChunk;
 pub use edge_type::EdgeType;
+pub use embedding::Embedding;
 pub use entity::Entity;
 pub use entity_type::EntityType;
