@@ -6,6 +6,7 @@ use chrono::{DateTime, Utc};
 use lbug::{Connection, Database, SystemConfig, Value as LbugValue};
 use serde::Serialize;
 use serde_json::json;
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -58,6 +59,12 @@ pub struct LadybugAdapter {
 }
 
 impl LadybugAdapter {
+    /// Number of columns in node query: id, name, type, properties
+    pub const NODE_QUERY_COLUMN_COUNT: usize = 4;
+
+    /// Number of columns in edge query: source_id, target_id, relationship_name, properties
+    pub const EDGE_QUERY_COLUMN_COUNT: usize = 4;
+
     /// Create a new Ladybug adapter.
     ///
     /// # Arguments
@@ -272,11 +279,48 @@ impl LadybugAdapter {
         if let Some(props_value) = data.remove("properties")
             && let Some(props_str) = props_value.as_str()
         {
-            let additional_props: HashMap<String, serde_json::Value> =
+            let additional_props: HashMap<Cow<'static, str>, serde_json::Value> =
                 serde_json::from_str(props_str).map_err(GraphDBError::SerializationError)?;
             data.extend(additional_props);
         }
         Ok(data)
+    }
+
+    /// Check if a node matches property filters.
+    ///
+    /// This method checks if a node matches the given attribute filters.
+    /// Core fields (id, name, type) are already filtered in the query,
+    /// so this method only checks additional property fields.
+    ///
+    /// # Arguments
+    /// * `node` - The parsed node data to check
+    /// * `filters` - HashMap of attribute filters (key -> list of values)
+    ///
+    /// # Returns
+    /// `true` if the node matches all property filters, `false` otherwise
+    ///
+    fn matches_property_filters(
+        &self,
+        node: &NodeData,
+        filters: &HashMap<Cow<'static, str>, Vec<serde_json::Value>>,
+    ) -> bool {
+        for (attr, values) in filters {
+            // Skip core fields - already filtered in query
+            if matches!(attr.as_ref(), "id" | "name" | "type") {
+                continue;
+            }
+
+            // Check if node has this property and if it matches any value
+            if let Some(node_value) = node.get(attr.as_ref()) {
+                if !values.iter().any(|filter_value| node_value == filter_value) {
+                    return false;
+                }
+            } else {
+                // Property not present = doesn't match filter
+                return false;
+            }
+        }
+        true
     }
 }
 
@@ -354,10 +398,14 @@ impl GraphDBTrait for LadybugAdapter {
     async fn query(
         &self,
         query: &str,
-        _params: Option<HashMap<String, serde_json::Value>>,
+        params: Option<HashMap<Cow<'static, str>, serde_json::Value>>,
     ) -> GraphDBResult<Vec<Vec<serde_json::Value>>> {
-        // Ladybug doesn't support parameterized queries the same way as other DBs
-        // Parameter substitution could be implemented via string formatting if needed
+        // Ladybug doesn't support parameterized queries
+        if params.is_some() {
+            return Err(GraphDBError::QueryError(
+                "Ladybug adapter does not support parameterized queries".to_string(),
+            ));
+        }
         self.execute_query(query)
     }
 
@@ -531,16 +579,16 @@ impl GraphDBTrait for LadybugAdapter {
         {
             let mut node_data = NodeData::new();
             if let Some(id_str) = row[0].as_str() {
-                node_data.insert("id".to_string(), json!(id_str));
+                node_data.insert(Cow::Borrowed("id"), json!(id_str));
             }
             if let Some(name_str) = row[1].as_str() {
-                node_data.insert("name".to_string(), json!(name_str));
+                node_data.insert(Cow::Borrowed("name"), json!(name_str));
             }
             if let Some(type_str) = row[2].as_str() {
-                node_data.insert("type".to_string(), json!(type_str));
+                node_data.insert(Cow::Borrowed("type"), json!(type_str));
             }
             if let Some(props_str) = row[3].as_str() {
-                node_data.insert("properties".to_string(), json!(props_str));
+                node_data.insert(Cow::Borrowed("properties"), json!(props_str));
             }
             return Ok(Some(self.parse_node_data(node_data)?));
         }
@@ -599,7 +647,7 @@ impl GraphDBTrait for LadybugAdapter {
         source_id: &str,
         target_id: &str,
         relationship_name: &str,
-        properties: Option<HashMap<String, serde_json::Value>>,
+        properties: Option<HashMap<Cow<'static, str>, serde_json::Value>>,
     ) -> GraphDBResult<()> {
         let conn = Connection::new(&self.db).map_err(|e| {
             GraphDBError::ConnectionError(format!("Failed to create connection: {}", e))
@@ -656,13 +704,13 @@ impl GraphDBTrait for LadybugAdapter {
 
         // Parse each row into EdgeData
         for row in results {
-            if row.len() >= 4 {
+            if row.len() >= Self::EDGE_QUERY_COLUMN_COUNT {
                 let source_id = row[0].as_str().unwrap_or("").to_string();
                 let target_id = row[1].as_str().unwrap_or("").to_string();
                 let rel_name = row[2].as_str().unwrap_or("").to_string();
 
                 let props = if let Some(props_str) = row[3].as_str() {
-                    serde_json::from_str::<HashMap<String, serde_json::Value>>(props_str)
+                    serde_json::from_str::<HashMap<Cow<'static, str>, serde_json::Value>>(props_str)
                         .unwrap_or_default()
                 } else {
                     HashMap::new()
@@ -686,19 +734,19 @@ impl GraphDBTrait for LadybugAdapter {
 
         // Parse each row into NodeData
         for row in results {
-            if row.len() >= 4 {
+            if row.len() >= Self::NODE_QUERY_COLUMN_COUNT {
                 let mut node_data = NodeData::new();
                 if let Some(id_str) = row[0].as_str() {
-                    node_data.insert("id".to_string(), json!(id_str));
+                    node_data.insert(Cow::Borrowed("id"), json!(id_str));
                 }
                 if let Some(name_str) = row[1].as_str() {
-                    node_data.insert("name".to_string(), json!(name_str));
+                    node_data.insert(Cow::Borrowed("name"), json!(name_str));
                 }
                 if let Some(type_str) = row[2].as_str() {
-                    node_data.insert("type".to_string(), json!(type_str));
+                    node_data.insert(Cow::Borrowed("type"), json!(type_str));
                 }
                 if let Some(props_str) = row[3].as_str() {
-                    node_data.insert("properties".to_string(), json!(props_str));
+                    node_data.insert(Cow::Borrowed("properties"), json!(props_str));
                 }
                 neighbors.push(self.parse_node_data(node_data)?);
             }
@@ -709,13 +757,87 @@ impl GraphDBTrait for LadybugAdapter {
 
     async fn get_connections(
         &self,
-        _node_id: &str,
-    ) -> GraphDBResult<Vec<(NodeData, HashMap<String, serde_json::Value>, NodeData)>> {
-        unimplemented!(
-            "get_connections not yet implemented. \
-            Requires full node+edge retrieval with bidirectional support. \
-            See IMPLEMENTATION_PLAN.md TODO #2"
-        )
+        node_id: &str,
+    ) -> GraphDBResult<
+        Vec<(
+            NodeData,
+            HashMap<Cow<'static, str>, serde_json::Value>,
+            NodeData,
+        )>,
+    > {
+        /// Number of columns expected from query: 4 (source node) + 2 (edge) + 4 (target node) = 10
+        const GET_CONNECTIONS_COLUMN_COUNT: usize = 10;
+
+        let query = format!(
+            r#"MATCH (n:Node)-[r:EDGE]-(m:Node)
+            WHERE n.id = '{}'
+            RETURN 
+                n.id AS source_id, 
+                n.name AS source_name, 
+                n.type AS source_type, 
+                n.properties AS source_props,
+                r.relationship_name AS rel_name,
+                r.properties AS rel_props,
+                m.id AS target_id,
+                m.name AS target_name,
+                m.type AS target_type,
+                m.properties AS target_props"#,
+            node_id.replace("'", "\\'")
+        );
+
+        let results = self.execute_query(&query)?;
+        let mut connections = Vec::new();
+
+        for row in results {
+            if row.len() >= GET_CONNECTIONS_COLUMN_COUNT {
+                // Parse source node
+                let mut source_node = NodeData::new();
+                if let Some(id) = row[0].as_str() {
+                    source_node.insert(Cow::Borrowed("id"), json!(id));
+                }
+                if let Some(name) = row[1].as_str() {
+                    source_node.insert(Cow::Borrowed("name"), json!(name));
+                }
+                if let Some(node_type) = row[2].as_str() {
+                    source_node.insert(Cow::Borrowed("type"), json!(node_type));
+                }
+                if let Some(props) = row[3].as_str() {
+                    source_node.insert(Cow::Borrowed("properties"), json!(props));
+                }
+                let source_node = self.parse_node_data(source_node)?;
+
+                // Parse edge properties
+                let mut edge_props = HashMap::new();
+                if let Some(rel_name) = row[4].as_str() {
+                    edge_props.insert(Cow::Borrowed("relationship_name"), json!(rel_name));
+                }
+                if let Some(rel_props_str) = row[5].as_str() {
+                    let additional_props: HashMap<Cow<'static, str>, serde_json::Value> =
+                        serde_json::from_str(rel_props_str).unwrap_or_default();
+                    edge_props.extend(additional_props);
+                }
+
+                // Parse target node
+                let mut target_node = NodeData::new();
+                if let Some(id) = row[6].as_str() {
+                    target_node.insert(Cow::Borrowed("id"), json!(id));
+                }
+                if let Some(name) = row[7].as_str() {
+                    target_node.insert(Cow::Borrowed("name"), json!(name));
+                }
+                if let Some(node_type) = row[8].as_str() {
+                    target_node.insert(Cow::Borrowed("type"), json!(node_type));
+                }
+                if let Some(props) = row[9].as_str() {
+                    target_node.insert(Cow::Borrowed("properties"), json!(props));
+                }
+                let target_node = self.parse_node_data(target_node)?;
+
+                connections.push((source_node, edge_props, target_node));
+            }
+        }
+
+        Ok(connections)
     }
 
     async fn get_graph_data(&self) -> GraphDBResult<(Vec<GraphNode>, Vec<EdgeData>)> {
@@ -725,19 +847,19 @@ impl GraphDBTrait for LadybugAdapter {
 
         let mut nodes = Vec::new();
         for row in node_results {
-            if row.len() >= 4 {
+            if row.len() >= Self::NODE_QUERY_COLUMN_COUNT {
                 let mut node_data = NodeData::new();
                 if let Some(id_str) = row[0].as_str() {
-                    node_data.insert("id".to_string(), json!(id_str));
+                    node_data.insert(Cow::Borrowed("id"), json!(id_str));
                 }
                 if let Some(name_str) = row[1].as_str() {
-                    node_data.insert("name".to_string(), json!(name_str));
+                    node_data.insert(Cow::Borrowed("name"), json!(name_str));
                 }
                 if let Some(type_str) = row[2].as_str() {
-                    node_data.insert("type".to_string(), json!(type_str));
+                    node_data.insert(Cow::Borrowed("type"), json!(type_str));
                 }
                 if let Some(props_str) = row[3].as_str() {
-                    node_data.insert("properties".to_string(), json!(props_str));
+                    node_data.insert(Cow::Borrowed("properties"), json!(props_str));
                 }
                 let parsed_node = self.parse_node_data(node_data)?;
                 if let Some(id_str) = parsed_node.get("id").and_then(|v| v.as_str()) {
@@ -752,13 +874,13 @@ impl GraphDBTrait for LadybugAdapter {
 
         let mut edges = Vec::new();
         for row in edge_results {
-            if row.len() >= 4 {
+            if row.len() >= Self::EDGE_QUERY_COLUMN_COUNT {
                 let source_id = row[0].as_str().unwrap_or("").to_string();
                 let target_id = row[1].as_str().unwrap_or("").to_string();
                 let rel_name = row[2].as_str().unwrap_or("").to_string();
 
                 let props = if let Some(props_str) = row[3].as_str() {
-                    serde_json::from_str::<HashMap<String, serde_json::Value>>(props_str)
+                    serde_json::from_str::<HashMap<Cow<'static, str>, serde_json::Value>>(props_str)
                         .unwrap_or_default()
                 } else {
                     HashMap::new()
@@ -774,7 +896,7 @@ impl GraphDBTrait for LadybugAdapter {
     async fn get_graph_metrics(
         &self,
         _include_optional: bool,
-    ) -> GraphDBResult<HashMap<String, serde_json::Value>> {
+    ) -> GraphDBResult<HashMap<Cow<'static, str>, serde_json::Value>> {
         let mut metrics = HashMap::new();
 
         // Get node count
@@ -794,39 +916,233 @@ impl GraphDBTrait for LadybugAdapter {
             .and_then(|v| v.as_i64())
             .unwrap_or(0);
 
-        metrics.insert("node_count".to_string(), json!(node_count));
-        metrics.insert("edge_count".to_string(), json!(edge_count));
+        metrics.insert(Cow::Borrowed("node_count"), json!(node_count));
+        metrics.insert(Cow::Borrowed("edge_count"), json!(edge_count));
 
         Ok(metrics)
     }
 
     async fn get_filtered_graph_data(
         &self,
-        _attribute_filters: &HashMap<String, Vec<serde_json::Value>>,
+        attribute_filters: &HashMap<Cow<'static, str>, Vec<serde_json::Value>>,
     ) -> GraphDBResult<(Vec<GraphNode>, Vec<EdgeData>)> {
-        unimplemented!(
-            "get_filtered_graph_data not yet implemented. \
-            Requires query builder with AND/OR filter logic. \
-            See IMPLEMENTATION_PLAN.md TODO #3"
-        )
+        // If no filters, return entire graph
+        if attribute_filters.is_empty() {
+            return self.get_graph_data().await;
+        }
+
+        // Build WHERE clause for core fields (id, name, type)
+        let mut where_clauses = Vec::new();
+
+        for (attr, values) in attribute_filters {
+            if values.is_empty() {
+                continue;
+            }
+
+            // Check if this is a core field
+            let is_core_field = matches!(attr.as_ref(), "id" | "name" | "type");
+
+            if is_core_field {
+                // Direct field match
+                let value_clauses: Vec<String> = values
+                    .iter()
+                    .map(|v| {
+                        if let Some(s) = v.as_str() {
+                            format!("n.{} = '{}'", attr, s.replace("'", "\\'"))
+                        } else {
+                            format!("n.{} = {}", attr, v)
+                        }
+                    })
+                    .collect();
+
+                if value_clauses.len() == 1 {
+                    where_clauses.push(value_clauses[0].clone());
+                } else {
+                    where_clauses.push(format!("({})", value_clauses.join(" OR ")));
+                }
+            }
+            // Property fields are filtered in Rust after loading
+        }
+
+        // Build final query with optional WHERE clause
+        let where_clause = if where_clauses.is_empty() {
+            String::new()
+        } else {
+            format!("WHERE {}", where_clauses.join(" AND "))
+        };
+
+        // Get filtered nodes
+        let nodes_query = format!(
+            "MATCH (n:Node) {} RETURN n.id AS id, n.name AS name, n.type AS type, n.properties AS properties",
+            where_clause
+        );
+
+        let node_results = self.execute_query(&nodes_query)?;
+
+        // Parse nodes and collect IDs
+        let mut nodes = Vec::new();
+        let mut node_ids = Vec::new();
+
+        for row in node_results {
+            if row.len() >= Self::NODE_QUERY_COLUMN_COUNT {
+                let mut node_data = NodeData::new();
+                if let Some(id_str) = row[0].as_str() {
+                    node_data.insert(Cow::Borrowed("id"), json!(id_str));
+                }
+                if let Some(name_str) = row[1].as_str() {
+                    node_data.insert(Cow::Borrowed("name"), json!(name_str));
+                }
+                if let Some(type_str) = row[2].as_str() {
+                    node_data.insert(Cow::Borrowed("type"), json!(type_str));
+                }
+                if let Some(props_str) = row[3].as_str() {
+                    node_data.insert(Cow::Borrowed("properties"), json!(props_str));
+                }
+
+                let parsed_node = self.parse_node_data(node_data)?;
+
+                // Apply property filters in Rust if needed
+                if self.matches_property_filters(&parsed_node, attribute_filters)
+                    && let Some(id_str) = parsed_node.get("id").and_then(|v| v.as_str())
+                {
+                    node_ids.push(id_str.to_string());
+                    nodes.push((id_str.to_string(), parsed_node));
+                }
+            }
+        }
+
+        // Get edges connecting filtered nodes
+        if node_ids.is_empty() {
+            return Ok((nodes, Vec::new()));
+        }
+
+        // Build IN clause for edge query
+        let id_list = node_ids
+            .iter()
+            .map(|id| format!("'{}'", id.replace("'", "\\'")))
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        let edges_query = format!(
+            "MATCH (a:Node)-[r:EDGE]->(b:Node) WHERE a.id IN [{}] AND b.id IN [{}] RETURN a.id, b.id, r.relationship_name, r.properties",
+            id_list, id_list
+        );
+
+        let edge_results = self.execute_query(&edges_query)?;
+        let mut edges = Vec::new();
+
+        for row in edge_results {
+            if row.len() >= Self::EDGE_QUERY_COLUMN_COUNT {
+                let source_id = row[0].as_str().unwrap_or("").to_string();
+                let target_id = row[1].as_str().unwrap_or("").to_string();
+                let rel_name = row[2].as_str().unwrap_or("").to_string();
+                let props = if let Some(props_str) = row[3].as_str() {
+                    serde_json::from_str(props_str).unwrap_or_default()
+                } else {
+                    HashMap::new()
+                };
+                edges.push((source_id, target_id, rel_name, props));
+            }
+        }
+
+        Ok((nodes, edges))
     }
 
     async fn get_nodeset_subgraph(
         &self,
-        _node_type: &str,
-        _node_names: &[String],
+        node_type: &str,
+        node_names: &[String],
     ) -> GraphDBResult<(Vec<GraphNode>, Vec<EdgeData>)> {
-        unimplemented!(
-            "get_nodeset_subgraph not yet implemented. \
-            Requires type+name filtering with edge retrieval. \
-            See IMPLEMENTATION_PLAN.md TODO #4"
-        )
+        // Early return for empty node_names
+        if node_names.is_empty() {
+            return Ok((Vec::new(), Vec::new()));
+        }
+
+        // Build IN clause for names
+        let name_list = node_names
+            .iter()
+            .map(|name| format!("'{}'", name.replace("'", "\\'")))
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        // Query for specific nodes
+        let nodes_query = format!(
+            "MATCH (n:Node) WHERE n.type = '{}' AND n.name IN [{}] RETURN n.id AS id, n.name AS name, n.type AS type, n.properties AS properties",
+            node_type.replace("'", "\\'"),
+            name_list
+        );
+
+        let node_results = self.execute_query(&nodes_query)?;
+
+        let mut nodes = Vec::new();
+        let mut node_ids = Vec::new();
+
+        // Parse nodes
+        for row in node_results {
+            if row.len() >= Self::NODE_QUERY_COLUMN_COUNT {
+                let mut node_data = NodeData::new();
+                if let Some(id_str) = row[0].as_str() {
+                    node_data.insert(Cow::Borrowed("id"), json!(id_str));
+                    node_ids.push(id_str.to_string());
+                }
+                if let Some(name_str) = row[1].as_str() {
+                    node_data.insert(Cow::Borrowed("name"), json!(name_str));
+                }
+                if let Some(type_str) = row[2].as_str() {
+                    node_data.insert(Cow::Borrowed("type"), json!(type_str));
+                }
+                if let Some(props_str) = row[3].as_str() {
+                    node_data.insert(Cow::Borrowed("properties"), json!(props_str));
+                }
+
+                let parsed_node = self.parse_node_data(node_data)?;
+                if let Some(id_str) = parsed_node.get("id").and_then(|v| v.as_str()) {
+                    nodes.push((id_str.to_string(), parsed_node));
+                }
+            }
+        }
+
+        // Get edges connecting these nodes
+        if node_ids.is_empty() {
+            return Ok((nodes, Vec::new()));
+        }
+
+        let id_list = node_ids
+            .iter()
+            .map(|id| format!("'{}'", id.replace("'", "\\'")))
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        let edges_query = format!(
+            "MATCH (a:Node)-[r:EDGE]->(b:Node) WHERE a.id IN [{}] AND b.id IN [{}] RETURN a.id, b.id, r.relationship_name, r.properties",
+            id_list, id_list
+        );
+
+        let edge_results = self.execute_query(&edges_query)?;
+        let mut edges = Vec::new();
+
+        for row in edge_results {
+            if row.len() >= Self::EDGE_QUERY_COLUMN_COUNT {
+                let source_id = row[0].as_str().unwrap_or("").to_string();
+                let target_id = row[1].as_str().unwrap_or("").to_string();
+                let rel_name = row[2].as_str().unwrap_or("").to_string();
+                let props = if let Some(props_str) = row[3].as_str() {
+                    serde_json::from_str(props_str).unwrap_or_default()
+                } else {
+                    HashMap::new()
+                };
+                edges.push((source_id, target_id, rel_name, props));
+            }
+        }
+
+        Ok((nodes, edges))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
     use tempfile::TempDir;
 
     /// Simple test node for testing batch operations
@@ -865,6 +1181,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_adapter_creation() {
         let temp_dir = TempDir::new().unwrap();
         let db_path = temp_dir.path().join("test.db");
@@ -874,6 +1191,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_initialize() {
         let temp_dir = TempDir::new().unwrap();
         let db_path = temp_dir.path().join("test_init.db");
@@ -889,6 +1207,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_batch_insert_empty() {
         let (adapter, _temp_dir) = setup_adapter().await;
 
@@ -902,6 +1221,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_batch_insert_single_node() {
         let (adapter, _temp_dir) = setup_adapter().await;
 
@@ -917,6 +1237,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_batch_insert_ten_nodes() {
         let (adapter, _temp_dir) = setup_adapter().await;
 
@@ -943,6 +1264,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_batch_insert_hundred_nodes() {
         let (adapter, _temp_dir) = setup_adapter().await;
 
@@ -965,6 +1287,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_batch_insert_thousand_nodes() {
         let (adapter, _temp_dir) = setup_adapter().await;
 
@@ -988,6 +1311,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_batch_insert_preserves_data() {
         let (adapter, _temp_dir) = setup_adapter().await;
 
@@ -1016,6 +1340,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_batch_vs_sequential_equivalence() {
         // Create two adapters
         let (adapter_batch, _temp_dir_batch) = setup_adapter().await;
@@ -1049,5 +1374,810 @@ mod tests {
             assert!(adapter_batch.has_node(&node_id).await.unwrap());
             assert!(adapter_seq.has_node(&node_id).await.unwrap());
         }
+    }
+
+    // Tests for get_connections()
+    #[tokio::test]
+    #[serial]
+    async fn test_get_connections_node_with_no_connections() {
+        let (adapter, _temp_dir) = setup_adapter().await;
+
+        let node = TestNode::new("isolated", "Isolated Node", 42);
+        adapter.add_node(&node).await.unwrap();
+
+        let connections = adapter.get_connections("isolated").await.unwrap();
+        assert_eq!(connections.len(), 0);
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_get_connections_outgoing_only() {
+        let (adapter, _temp_dir) = setup_adapter().await;
+
+        // Create nodes
+        let node_a = TestNode::new("node-a", "Node A", 1);
+        let node_b = TestNode::new("node-b", "Node B", 2);
+        adapter.add_node(&node_a).await.unwrap();
+        adapter.add_node(&node_b).await.unwrap();
+
+        // Add edge A -> B
+        adapter
+            .add_edge("node-a", "node-b", "points_to", None)
+            .await
+            .unwrap();
+
+        let connections = adapter.get_connections("node-a").await.unwrap();
+        assert_eq!(connections.len(), 1);
+
+        let (source, edge_props, target) = &connections[0];
+        assert_eq!(source.get("id").unwrap().as_str().unwrap(), "node-a");
+        assert_eq!(target.get("id").unwrap().as_str().unwrap(), "node-b");
+        assert_eq!(
+            edge_props
+                .get("relationship_name")
+                .unwrap()
+                .as_str()
+                .unwrap(),
+            "points_to"
+        );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_get_connections_incoming_only() {
+        let (adapter, _temp_dir) = setup_adapter().await;
+
+        let node_a = TestNode::new("node-a", "Node A", 1);
+        let node_b = TestNode::new("node-b", "Node B", 2);
+        adapter.add_node(&node_a).await.unwrap();
+        adapter.add_node(&node_b).await.unwrap();
+
+        // Add edge A -> B (so B has incoming edge)
+        adapter
+            .add_edge("node-a", "node-b", "points_to", None)
+            .await
+            .unwrap();
+
+        let connections = adapter.get_connections("node-b").await.unwrap();
+        assert_eq!(connections.len(), 1);
+
+        let (source, _, target) = &connections[0];
+        assert_eq!(source.get("id").unwrap().as_str().unwrap(), "node-b");
+        assert_eq!(target.get("id").unwrap().as_str().unwrap(), "node-a");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_get_connections_bidirectional() {
+        let (adapter, _temp_dir) = setup_adapter().await;
+
+        let node_a = TestNode::new("node-a", "Node A", 1);
+        let node_b = TestNode::new("node-b", "Node B", 2);
+        adapter.add_node(&node_a).await.unwrap();
+        adapter.add_node(&node_b).await.unwrap();
+
+        // Add both directions
+        adapter
+            .add_edge("node-a", "node-b", "knows", None)
+            .await
+            .unwrap();
+        adapter
+            .add_edge("node-b", "node-a", "knows", None)
+            .await
+            .unwrap();
+
+        let connections = adapter.get_connections("node-a").await.unwrap();
+        assert_eq!(connections.len(), 2);
+
+        // Both connections should involve node-a and node-b
+        for (source, _, target) in &connections {
+            let source_id = source.get("id").unwrap().as_str().unwrap();
+            let target_id = target.get("id").unwrap().as_str().unwrap();
+            assert_eq!(source_id, "node-a");
+            assert!(target_id == "node-b" || target_id == "node-a");
+        }
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_get_connections_self_loop() {
+        let (adapter, _temp_dir) = setup_adapter().await;
+
+        let node = TestNode::new("node-a", "Node A", 1);
+        adapter.add_node(&node).await.unwrap();
+
+        // Self-loop
+        adapter
+            .add_edge("node-a", "node-a", "references", None)
+            .await
+            .unwrap();
+
+        let connections = adapter.get_connections("node-a").await.unwrap();
+        // Self-loop appears twice due to bidirectional pattern (once as outgoing, once as incoming)
+        assert_eq!(connections.len(), 2);
+
+        // Both should be self-references
+        for (source, edge_props, target) in &connections {
+            assert_eq!(source.get("id").unwrap().as_str().unwrap(), "node-a");
+            assert_eq!(target.get("id").unwrap().as_str().unwrap(), "node-a");
+            assert_eq!(
+                edge_props
+                    .get("relationship_name")
+                    .unwrap()
+                    .as_str()
+                    .unwrap(),
+                "references"
+            );
+        }
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_get_connections_multiple_relationship_types() {
+        let (adapter, _temp_dir) = setup_adapter().await;
+
+        let node_a = TestNode::new("node-a", "Node A", 1);
+        let node_b = TestNode::new("node-b", "Node B", 2);
+        adapter.add_node(&node_a).await.unwrap();
+        adapter.add_node(&node_b).await.unwrap();
+
+        // Multiple edges with different relationships
+        adapter
+            .add_edge("node-a", "node-b", "knows", None)
+            .await
+            .unwrap();
+        adapter
+            .add_edge("node-a", "node-b", "works_with", None)
+            .await
+            .unwrap();
+        adapter
+            .add_edge("node-a", "node-b", "lives_near", None)
+            .await
+            .unwrap();
+
+        let connections = adapter.get_connections("node-a").await.unwrap();
+        assert_eq!(connections.len(), 3);
+
+        // Collect all relationship names
+        let rel_names: Vec<String> = connections
+            .iter()
+            .map(|(_, edge_props, _)| {
+                edge_props
+                    .get("relationship_name")
+                    .unwrap()
+                    .as_str()
+                    .unwrap()
+                    .to_string()
+            })
+            .collect();
+
+        assert!(rel_names.contains(&"knows".to_string()));
+        assert!(rel_names.contains(&"works_with".to_string()));
+        assert!(rel_names.contains(&"lives_near".to_string()));
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_get_connections_edge_properties() {
+        let (adapter, _temp_dir) = setup_adapter().await;
+
+        let node_a = TestNode::new("node-a", "Node A", 1);
+        let node_b = TestNode::new("node-b", "Node B", 2);
+        adapter.add_node(&node_a).await.unwrap();
+        adapter.add_node(&node_b).await.unwrap();
+
+        // Add edge with custom properties
+        let mut props = HashMap::new();
+        props.insert(Cow::Borrowed("since"), json!(2020));
+        props.insert(Cow::Borrowed("strength"), json!("strong"));
+
+        adapter
+            .add_edge("node-a", "node-b", "knows", Some(props))
+            .await
+            .unwrap();
+
+        let connections = adapter.get_connections("node-a").await.unwrap();
+        assert_eq!(connections.len(), 1);
+
+        let (_, edge_props, _) = &connections[0];
+        assert_eq!(
+            edge_props
+                .get("relationship_name")
+                .unwrap()
+                .as_str()
+                .unwrap(),
+            "knows"
+        );
+        assert_eq!(edge_props.get("since").unwrap().as_i64().unwrap(), 2020);
+        assert_eq!(
+            edge_props.get("strength").unwrap().as_str().unwrap(),
+            "strong"
+        );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_get_connections_node_properties_expanded() {
+        let (adapter, _temp_dir) = setup_adapter().await;
+
+        // Create nodes with custom properties
+        let node_a = TestNode::new("node-a", "Alice", 100);
+        let node_b = TestNode::new("node-b", "Bob", 200);
+        adapter.add_node(&node_a).await.unwrap();
+        adapter.add_node(&node_b).await.unwrap();
+
+        adapter
+            .add_edge("node-a", "node-b", "knows", None)
+            .await
+            .unwrap();
+
+        let connections = adapter.get_connections("node-a").await.unwrap();
+        assert_eq!(connections.len(), 1);
+
+        let (source, _, target) = &connections[0];
+
+        // Verify source node properties
+        assert_eq!(source.get("id").unwrap().as_str().unwrap(), "node-a");
+        assert_eq!(source.get("name").unwrap().as_str().unwrap(), "Alice");
+        assert_eq!(source.get("value").unwrap().as_i64().unwrap(), 100);
+
+        // Verify target node properties
+        assert_eq!(target.get("id").unwrap().as_str().unwrap(), "node-b");
+        assert_eq!(target.get("name").unwrap().as_str().unwrap(), "Bob");
+        assert_eq!(target.get("value").unwrap().as_i64().unwrap(), 200);
+    }
+
+    // Tests for get_filtered_graph_data
+
+    #[tokio::test]
+    #[serial]
+    async fn test_get_filtered_graph_data_empty_filters() {
+        let (adapter, _temp_dir) = setup_adapter().await;
+
+        // Create some test nodes
+        let node_a = TestNode::new("node-a", "Alice", 100);
+        let node_b = TestNode::new("node-b", "Bob", 200);
+        adapter.add_node(&node_a).await.unwrap();
+        adapter.add_node(&node_b).await.unwrap();
+
+        adapter
+            .add_edge("node-a", "node-b", "knows", None)
+            .await
+            .unwrap();
+
+        // Empty filters should return entire graph
+        let filters = HashMap::new();
+        let (nodes, edges) = adapter.get_filtered_graph_data(&filters).await.unwrap();
+
+        assert_eq!(nodes.len(), 2);
+        assert_eq!(edges.len(), 1);
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_get_filtered_graph_data_single_attribute_single_value() {
+        let (adapter, _temp_dir) = setup_adapter().await;
+
+        let node_a = TestNode::new("node-a", "Alice", 100);
+        let node_b = TestNode::new("node-b", "Bob", 200);
+        let node_c = TestNode::new("node-c", "Charlie", 300);
+        adapter.add_node(&node_a).await.unwrap();
+        adapter.add_node(&node_b).await.unwrap();
+        adapter.add_node(&node_c).await.unwrap();
+
+        // Filter by name = "Alice"
+        let mut filters = HashMap::new();
+        filters.insert(Cow::Borrowed("name"), vec![json!("Alice")]);
+
+        let (nodes, _edges) = adapter.get_filtered_graph_data(&filters).await.unwrap();
+
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0].1.get("name").unwrap().as_str().unwrap(), "Alice");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_get_filtered_graph_data_single_attribute_multiple_values() {
+        let (adapter, _temp_dir) = setup_adapter().await;
+
+        let node_a = TestNode::new("node-a", "Alice", 100);
+        let node_b = TestNode::new("node-b", "Bob", 200);
+        let node_c = TestNode::new("node-c", "Charlie", 300);
+        adapter.add_node(&node_a).await.unwrap();
+        adapter.add_node(&node_b).await.unwrap();
+        adapter.add_node(&node_c).await.unwrap();
+
+        // Filter by name IN ["Alice", "Charlie"] (OR logic)
+        let mut filters = HashMap::new();
+        filters.insert(
+            Cow::Borrowed("name"),
+            vec![json!("Alice"), json!("Charlie")],
+        );
+
+        let (nodes, _edges) = adapter.get_filtered_graph_data(&filters).await.unwrap();
+
+        assert_eq!(nodes.len(), 2);
+        let names: Vec<_> = nodes
+            .iter()
+            .map(|(_, n)| n.get("name").unwrap().as_str().unwrap())
+            .collect();
+        assert!(names.contains(&"Alice"));
+        assert!(names.contains(&"Charlie"));
+        assert!(!names.contains(&"Bob"));
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_get_filtered_graph_data_multiple_attributes_and_logic() {
+        let (adapter, _temp_dir) = setup_adapter().await;
+
+        // Create test nodes with different types
+        #[derive(Serialize)]
+        struct TypedNode {
+            id: String,
+            name: String,
+            data_type: String, // This maps to the 'type' column in DB
+            created_at: String,
+            updated_at: String,
+        }
+
+        let node_a = TypedNode {
+            id: "node-a".to_string(),
+            name: "Alice".to_string(),
+            data_type: "Person".to_string(),
+            created_at: chrono::Utc::now().to_rfc3339(),
+            updated_at: chrono::Utc::now().to_rfc3339(),
+        };
+
+        let node_b = TypedNode {
+            id: "node-b".to_string(),
+            name: "Bob".to_string(),
+            data_type: "Person".to_string(),
+            created_at: chrono::Utc::now().to_rfc3339(),
+            updated_at: chrono::Utc::now().to_rfc3339(),
+        };
+
+        let node_c = TypedNode {
+            id: "node-c".to_string(),
+            name: "Charlie".to_string(),
+            data_type: "Organization".to_string(),
+            created_at: chrono::Utc::now().to_rfc3339(),
+            updated_at: chrono::Utc::now().to_rfc3339(),
+        };
+
+        adapter.add_node(&node_a).await.unwrap();
+        adapter.add_node(&node_b).await.unwrap();
+        adapter.add_node(&node_c).await.unwrap();
+
+        // Filter by type = "Person" AND name IN ["Alice", "Bob"] (AND logic)
+        let mut filters = HashMap::new();
+        filters.insert(Cow::Borrowed("type"), vec![json!("Person")]);
+        filters.insert(Cow::Borrowed("name"), vec![json!("Alice"), json!("Bob")]);
+
+        let (nodes, _edges) = adapter.get_filtered_graph_data(&filters).await.unwrap();
+
+        assert_eq!(nodes.len(), 2);
+        for (_, node) in &nodes {
+            assert_eq!(node.get("type").unwrap().as_str().unwrap(), "Person");
+            let name = node.get("name").unwrap().as_str().unwrap();
+            assert!(name == "Alice" || name == "Bob");
+        }
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_get_filtered_graph_data_property_filters() {
+        let (adapter, _temp_dir) = setup_adapter().await;
+
+        let node_a = TestNode::new("node-a", "Alice", 100);
+        let node_b = TestNode::new("node-b", "Bob", 200);
+        let node_c = TestNode::new("node-c", "Charlie", 100);
+        adapter.add_node(&node_a).await.unwrap();
+        adapter.add_node(&node_b).await.unwrap();
+        adapter.add_node(&node_c).await.unwrap();
+
+        // Filter by value = 100 (property field, filtered in Rust)
+        let mut filters = HashMap::new();
+        filters.insert(Cow::Borrowed("value"), vec![json!(100)]);
+
+        let (nodes, _edges) = adapter.get_filtered_graph_data(&filters).await.unwrap();
+
+        assert_eq!(nodes.len(), 2);
+        for (_, node) in &nodes {
+            assert_eq!(node.get("value").unwrap().as_i64().unwrap(), 100);
+        }
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_get_filtered_graph_data_mixed_core_and_property_filters() {
+        let (adapter, _temp_dir) = setup_adapter().await;
+
+        let node_a = TestNode::new("node-a", "Alice", 100);
+        let node_b = TestNode::new("node-b", "Bob", 100);
+        let node_c = TestNode::new("node-c", "Charlie", 200);
+        adapter.add_node(&node_a).await.unwrap();
+        adapter.add_node(&node_b).await.unwrap();
+        adapter.add_node(&node_c).await.unwrap();
+
+        // Filter by name IN ["Alice", "Bob"] (core) AND value = 100 (property)
+        let mut filters = HashMap::new();
+        filters.insert(Cow::Borrowed("name"), vec![json!("Alice"), json!("Bob")]);
+        filters.insert(Cow::Borrowed("value"), vec![json!(100)]);
+
+        let (nodes, _edges) = adapter.get_filtered_graph_data(&filters).await.unwrap();
+
+        assert_eq!(nodes.len(), 2);
+        for (_, node) in &nodes {
+            let name = node.get("name").unwrap().as_str().unwrap();
+            assert!(name == "Alice" || name == "Bob");
+            assert_eq!(node.get("value").unwrap().as_i64().unwrap(), 100);
+        }
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_get_filtered_graph_data_no_matches() {
+        let (adapter, _temp_dir) = setup_adapter().await;
+
+        let node_a = TestNode::new("node-a", "Alice", 100);
+        let node_b = TestNode::new("node-b", "Bob", 200);
+        adapter.add_node(&node_a).await.unwrap();
+        adapter.add_node(&node_b).await.unwrap();
+
+        // Filter by non-existent name
+        let mut filters = HashMap::new();
+        filters.insert(Cow::Borrowed("name"), vec![json!("NonExistent")]);
+
+        let (nodes, edges) = adapter.get_filtered_graph_data(&filters).await.unwrap();
+
+        assert_eq!(nodes.len(), 0);
+        assert_eq!(edges.len(), 0);
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_get_filtered_graph_data_edges_between_filtered_nodes() {
+        let (adapter, _temp_dir) = setup_adapter().await;
+
+        let node_a = TestNode::new("node-a", "Alice", 100);
+        let node_b = TestNode::new("node-b", "Bob", 200);
+        let node_c = TestNode::new("node-c", "Charlie", 300);
+        adapter.add_node(&node_a).await.unwrap();
+        adapter.add_node(&node_b).await.unwrap();
+        adapter.add_node(&node_c).await.unwrap();
+
+        // Create edges: A -> B, B -> C, A -> C
+        adapter
+            .add_edge("node-a", "node-b", "knows", None)
+            .await
+            .unwrap();
+        adapter
+            .add_edge("node-b", "node-c", "knows", None)
+            .await
+            .unwrap();
+        adapter
+            .add_edge("node-a", "node-c", "knows", None)
+            .await
+            .unwrap();
+
+        // Filter for Alice and Bob only
+        let mut filters = HashMap::new();
+        filters.insert(Cow::Borrowed("name"), vec![json!("Alice"), json!("Bob")]);
+
+        let (nodes, edges) = adapter.get_filtered_graph_data(&filters).await.unwrap();
+
+        assert_eq!(nodes.len(), 2);
+        // Only edge A -> B should be returned (both nodes in filter)
+        // Edge B -> C and A -> C should NOT be returned (Charlie not in filter)
+        assert_eq!(edges.len(), 1);
+        assert_eq!(edges[0].0, "node-a"); // source
+        assert_eq!(edges[0].1, "node-b"); // target
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_get_filtered_graph_data_multiple_relationship_types() {
+        let (adapter, _temp_dir) = setup_adapter().await;
+
+        let node_a = TestNode::new("node-a", "Alice", 100);
+        let node_b = TestNode::new("node-b", "Bob", 200);
+        adapter.add_node(&node_a).await.unwrap();
+        adapter.add_node(&node_b).await.unwrap();
+
+        // Create multiple edges with different relationship types
+        adapter
+            .add_edge("node-a", "node-b", "knows", None)
+            .await
+            .unwrap();
+        adapter
+            .add_edge("node-a", "node-b", "works_with", None)
+            .await
+            .unwrap();
+        adapter
+            .add_edge("node-a", "node-b", "friends_with", None)
+            .await
+            .unwrap();
+
+        // Filter for both nodes
+        let mut filters = HashMap::new();
+        filters.insert(Cow::Borrowed("name"), vec![json!("Alice"), json!("Bob")]);
+
+        let (nodes, edges) = adapter.get_filtered_graph_data(&filters).await.unwrap();
+
+        assert_eq!(nodes.len(), 2);
+        // All three edges should be returned
+        assert_eq!(edges.len(), 3);
+
+        let rel_names: Vec<_> = edges.iter().map(|(_, _, rel, _)| rel.as_str()).collect();
+        assert!(rel_names.contains(&"knows"));
+        assert!(rel_names.contains(&"works_with"));
+        assert!(rel_names.contains(&"friends_with"));
+    }
+
+    // Tests for get_nodeset_subgraph
+
+    #[tokio::test]
+    #[serial]
+    async fn test_get_nodeset_subgraph_empty_node_names() {
+        let (adapter, _temp_dir) = setup_adapter().await;
+
+        let node_a = TestNode::new("node-a", "Alice", 100);
+        adapter.add_node(&node_a).await.unwrap();
+
+        // Empty node_names should return empty result
+        let (nodes, edges) = adapter.get_nodeset_subgraph("TestNode", &[]).await.unwrap();
+
+        assert_eq!(nodes.len(), 0);
+        assert_eq!(edges.len(), 0);
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_get_nodeset_subgraph_non_existent_type() {
+        let (adapter, _temp_dir) = setup_adapter().await;
+
+        let node_a = TestNode::new("node-a", "Alice", 100);
+        adapter.add_node(&node_a).await.unwrap();
+
+        // Non-existent type should return empty result
+        let (nodes, edges) = adapter
+            .get_nodeset_subgraph("NonExistentType", &["Alice".to_string()])
+            .await
+            .unwrap();
+
+        assert_eq!(nodes.len(), 0);
+        assert_eq!(edges.len(), 0);
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_get_nodeset_subgraph_non_existent_names() {
+        let (adapter, _temp_dir) = setup_adapter().await;
+
+        let node_a = TestNode::new("node-a", "Alice", 100);
+        adapter.add_node(&node_a).await.unwrap();
+
+        // Non-existent names should return empty result
+        let (nodes, edges) = adapter
+            .get_nodeset_subgraph("test", &["Bob".to_string(), "Charlie".to_string()])
+            .await
+            .unwrap();
+
+        assert_eq!(nodes.len(), 0);
+        assert_eq!(edges.len(), 0);
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_get_nodeset_subgraph_valid_single_node() {
+        let (adapter, _temp_dir) = setup_adapter().await;
+
+        let node_a = TestNode::new("node-a", "Alice", 100);
+        let node_b = TestNode::new("node-b", "Bob", 200);
+        adapter.add_node(&node_a).await.unwrap();
+        adapter.add_node(&node_b).await.unwrap();
+
+        // Get single node by type + name
+        let (nodes, _edges) = adapter
+            .get_nodeset_subgraph("TestNode", &["Alice".to_string()])
+            .await
+            .unwrap();
+
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0].1.get("name").unwrap().as_str().unwrap(), "Alice");
+        assert_eq!(
+            nodes[0].1.get("type").unwrap().as_str().unwrap(),
+            "TestNode"
+        );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_get_nodeset_subgraph_valid_multiple_nodes() {
+        let (adapter, _temp_dir) = setup_adapter().await;
+
+        let node_a = TestNode::new("node-a", "Alice", 100);
+        let node_b = TestNode::new("node-b", "Bob", 200);
+        let node_c = TestNode::new("node-c", "Charlie", 300);
+        adapter.add_node(&node_a).await.unwrap();
+        adapter.add_node(&node_b).await.unwrap();
+        adapter.add_node(&node_c).await.unwrap();
+
+        // Get multiple nodes by type + names
+        let (nodes, _edges) = adapter
+            .get_nodeset_subgraph("TestNode", &["Alice".to_string(), "Charlie".to_string()])
+            .await
+            .unwrap();
+
+        assert_eq!(nodes.len(), 2);
+        let names: Vec<_> = nodes
+            .iter()
+            .map(|(_, n)| n.get("name").unwrap().as_str().unwrap())
+            .collect();
+        assert!(names.contains(&"Alice"));
+        assert!(names.contains(&"Charlie"));
+        assert!(!names.contains(&"Bob"));
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_get_nodeset_subgraph_edges_only_between_specified_nodes() {
+        let (adapter, _temp_dir) = setup_adapter().await;
+
+        let node_a = TestNode::new("node-a", "Alice", 100);
+        let node_b = TestNode::new("node-b", "Bob", 200);
+        let node_c = TestNode::new("node-c", "Charlie", 300);
+        adapter.add_node(&node_a).await.unwrap();
+        adapter.add_node(&node_b).await.unwrap();
+        adapter.add_node(&node_c).await.unwrap();
+
+        // Create edges: A -> B, B -> C, A -> C
+        adapter
+            .add_edge("node-a", "node-b", "knows", None)
+            .await
+            .unwrap();
+        adapter
+            .add_edge("node-b", "node-c", "knows", None)
+            .await
+            .unwrap();
+        adapter
+            .add_edge("node-a", "node-c", "knows", None)
+            .await
+            .unwrap();
+
+        // Get subgraph for Alice and Bob only
+        let (nodes, edges) = adapter
+            .get_nodeset_subgraph("TestNode", &["Alice".to_string(), "Bob".to_string()])
+            .await
+            .unwrap();
+
+        assert_eq!(nodes.len(), 2);
+        // Only edge A -> B should be returned (both nodes in subgraph)
+        // Edge B -> C and A -> C should NOT be returned (Charlie not in subgraph)
+        assert_eq!(edges.len(), 1);
+        assert_eq!(edges[0].0, "node-a"); // source
+        assert_eq!(edges[0].1, "node-b"); // target
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_get_nodeset_subgraph_no_edges_between_nodes() {
+        let (adapter, _temp_dir) = setup_adapter().await;
+
+        let node_a = TestNode::new("node-a", "Alice", 100);
+        let node_b = TestNode::new("node-b", "Bob", 200);
+        adapter.add_node(&node_a).await.unwrap();
+        adapter.add_node(&node_b).await.unwrap();
+
+        // No edges created
+        let (nodes, edges) = adapter
+            .get_nodeset_subgraph("TestNode", &["Alice".to_string(), "Bob".to_string()])
+            .await
+            .unwrap();
+
+        assert_eq!(nodes.len(), 2);
+        assert_eq!(edges.len(), 0);
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_get_nodeset_subgraph_densely_connected() {
+        let (adapter, _temp_dir) = setup_adapter().await;
+
+        let node_a = TestNode::new("node-a", "Alice", 100);
+        let node_b = TestNode::new("node-b", "Bob", 200);
+        let node_c = TestNode::new("node-c", "Charlie", 300);
+        adapter.add_node(&node_a).await.unwrap();
+        adapter.add_node(&node_b).await.unwrap();
+        adapter.add_node(&node_c).await.unwrap();
+
+        // Create a densely connected subgraph: all pairs connected
+        adapter
+            .add_edge("node-a", "node-b", "knows", None)
+            .await
+            .unwrap();
+        adapter
+            .add_edge("node-b", "node-a", "knows", None)
+            .await
+            .unwrap();
+        adapter
+            .add_edge("node-a", "node-c", "knows", None)
+            .await
+            .unwrap();
+        adapter
+            .add_edge("node-c", "node-a", "knows", None)
+            .await
+            .unwrap();
+        adapter
+            .add_edge("node-b", "node-c", "knows", None)
+            .await
+            .unwrap();
+        adapter
+            .add_edge("node-c", "node-b", "knows", None)
+            .await
+            .unwrap();
+
+        // Get all three nodes
+        let (nodes, edges) = adapter
+            .get_nodeset_subgraph(
+                "TestNode",
+                &[
+                    "Alice".to_string(),
+                    "Bob".to_string(),
+                    "Charlie".to_string(),
+                ],
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(nodes.len(), 3);
+        // All 6 edges should be returned
+        assert_eq!(edges.len(), 6);
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_get_nodeset_subgraph_filters_by_type() {
+        let (adapter, _temp_dir) = setup_adapter().await;
+
+        // Create nodes with different types
+        #[derive(Serialize)]
+        struct TypedNode {
+            id: String,
+            name: String,
+            data_type: String,
+            created_at: String,
+            updated_at: String,
+        }
+
+        let person_a = TypedNode {
+            id: "node-a".to_string(),
+            name: "Alice".to_string(),
+            data_type: "Person".to_string(),
+            created_at: chrono::Utc::now().to_rfc3339(),
+            updated_at: chrono::Utc::now().to_rfc3339(),
+        };
+
+        let org_a = TypedNode {
+            id: "node-b".to_string(),
+            name: "Alice".to_string(), // Same name, different type
+            data_type: "Organization".to_string(),
+            created_at: chrono::Utc::now().to_rfc3339(),
+            updated_at: chrono::Utc::now().to_rfc3339(),
+        };
+
+        adapter.add_node(&person_a).await.unwrap();
+        adapter.add_node(&org_a).await.unwrap();
+
+        // Get only Person type with name Alice
+        let (nodes, _edges) = adapter
+            .get_nodeset_subgraph("Person", &["Alice".to_string()])
+            .await
+            .unwrap();
+
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0].1.get("name").unwrap().as_str().unwrap(), "Alice");
+        assert_eq!(nodes[0].1.get("type").unwrap().as_str().unwrap(), "Person");
     }
 }

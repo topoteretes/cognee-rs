@@ -6,16 +6,23 @@
 //! - GraphNode: (node_id, properties)
 
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 use std::collections::HashMap;
 
 /// Node data: arbitrary key-value properties
-pub type NodeData = HashMap<String, serde_json::Value>;
+/// Uses Cow<'static, str> for keys to avoid allocating static strings
+pub type NodeData = HashMap<Cow<'static, str>, serde_json::Value>;
 
 /// Graph node: (node_id, properties)
 pub type GraphNode = (String, NodeData);
 
 /// Edge data: (source_id, target_id, relationship_name, properties)
-pub type EdgeData = (String, String, String, HashMap<String, serde_json::Value>);
+pub type EdgeData = (
+    String,
+    String,
+    String,
+    HashMap<Cow<'static, str>, serde_json::Value>,
+);
 
 /// Structured graph edge for easier construction
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -27,7 +34,7 @@ pub struct GraphEdge {
     /// Relationship name (edge label)
     pub relationship_name: String,
     /// Edge properties
-    pub properties: HashMap<String, serde_json::Value>,
+    pub properties: HashMap<Cow<'static, str>, serde_json::Value>,
 }
 
 impl GraphEdge {
@@ -46,7 +53,7 @@ impl GraphEdge {
         source_id: String,
         target_id: String,
         relationship_name: String,
-        properties: HashMap<String, serde_json::Value>,
+        properties: HashMap<Cow<'static, str>, serde_json::Value>,
     ) -> Self {
         Self {
             source_id,

@@ -4,6 +4,7 @@
 
 use async_trait::async_trait;
 use serde::Serialize;
+use std::borrow::Cow;
 use std::collections::HashMap;
 
 use crate::{EdgeData, GraphDBResult, GraphNode, NodeData};
@@ -69,7 +70,7 @@ pub trait GraphDBTrait: Send + Sync {
     async fn query(
         &self,
         query: &str,
-        params: Option<HashMap<String, serde_json::Value>>,
+        params: Option<HashMap<Cow<'static, str>, serde_json::Value>>,
     ) -> GraphDBResult<Vec<Vec<serde_json::Value>>>;
 
     /// Delete the entire graph (all nodes and edges).
@@ -153,7 +154,7 @@ pub trait GraphDBTrait: Send + Sync {
         source_id: &str,
         target_id: &str,
         relationship_name: &str,
-        properties: Option<HashMap<String, serde_json::Value>>,
+        properties: Option<HashMap<Cow<'static, str>, serde_json::Value>>,
     ) -> GraphDBResult<()>;
 
     /// Add multiple edges in a batch operation.
@@ -184,7 +185,13 @@ pub trait GraphDBTrait: Send + Sync {
     async fn get_connections(
         &self,
         node_id: &str,
-    ) -> GraphDBResult<Vec<(NodeData, HashMap<String, serde_json::Value>, NodeData)>>;
+    ) -> GraphDBResult<
+        Vec<(
+            NodeData,
+            HashMap<Cow<'static, str>, serde_json::Value>,
+            NodeData,
+        )>,
+    >;
 
     /// Get all nodes and edges in the graph.
     ///
@@ -201,7 +208,7 @@ pub trait GraphDBTrait: Send + Sync {
     async fn get_graph_metrics(
         &self,
         include_optional: bool,
-    ) -> GraphDBResult<HashMap<String, serde_json::Value>>;
+    ) -> GraphDBResult<HashMap<Cow<'static, str>, serde_json::Value>>;
 
     /// Get a filtered subgraph based on attribute filters.
     ///
@@ -210,7 +217,7 @@ pub trait GraphDBTrait: Send + Sync {
     ///
     async fn get_filtered_graph_data(
         &self,
-        attribute_filters: &HashMap<String, Vec<serde_json::Value>>,
+        attribute_filters: &HashMap<Cow<'static, str>, Vec<serde_json::Value>>,
     ) -> GraphDBResult<(Vec<GraphNode>, Vec<EdgeData>)>;
 
     /// Get subgraph for a specific set of nodes.

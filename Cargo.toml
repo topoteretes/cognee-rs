@@ -35,6 +35,7 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 scraper = "0.21"
 segment = { git = "https://github.com/qdrant/qdrant", package = "segment", default-features = false, branch = "dev" }
 serde = { version = "1", features = ["derive"] }
+serial_test = "3.2"
 thiserror = "2.0"
 serde_json = "1"
 shard = { git = "https://github.com/qdrant/qdrant", package = "shard", branch = "dev" }
