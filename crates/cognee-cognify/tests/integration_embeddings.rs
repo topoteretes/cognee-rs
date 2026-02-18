@@ -13,7 +13,7 @@ use cognee_graph::MockGraphDB;
 use cognee_llm::OpenAIAdapter;
 use cognee_models::Data;
 use cognee_storage::{MockStorage, StorageTrait};
-use cognee_vector::MockVectorDB;
+use cognee_vector::{MockVectorDB, VectorDB};
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -305,4 +305,135 @@ async fn test_embedding_semantic_similarity() {
             similarity
         );
     }
+}
+
+#[tokio::test]
+#[ignore] // Requires model and LLM - Phase 2 test
+async fn test_entity_description_indexing() {
+    // Test that both Entity.name and Entity.description are indexed (Phase 2 feature)
+
+    // Skip if env vars not set
+    let llm = match create_adapter_from_env() {
+        Ok(adapter) => adapter,
+        Err(_) => return,
+    };
+
+    let storage = Arc::new(MockStorage::new());
+    let graph_db = Arc::new(MockGraphDB::new());
+    let vector_db = Arc::new(MockVectorDB::new());
+
+    let embedding_config = EmbeddingConfig::bge_small("examples/target/models");
+    let embedding_engine = match OnnxEmbeddingEngine::new(embedding_config) {
+        Ok(engine) => Arc::new(engine),
+        Err(e) => {
+            eprintln!("⚠️  Skipping test: Failed to load embedding model: {}", e);
+            return;
+        }
+    };
+
+    let pipeline = CognifyPipeline::new(
+        storage.clone(),
+        graph_db,
+        vector_db.clone(),
+        embedding_engine,
+    );
+
+    // Create test data with entity information
+    let text = "TechCorp is a technology company founded in 2020. \
+                Alice is the CEO of TechCorp and works in San Francisco. \
+                Bob is a software engineer at TechCorp.";
+
+    let id = Uuid::new_v4();
+    let owner_id = Uuid::new_v4();
+    let location = format!("test-data-{}", id);
+
+    storage
+        .store(text.as_bytes(), &location)
+        .await
+        .expect("Failed to store text");
+
+    let data_item = Data::new(
+        id,
+        "company.txt".to_string(),
+        location.clone(),
+        "company.txt".to_string(),
+        "txt".to_string(),
+        "text/plain".to_string(),
+        "test-hash".to_string(),
+        owner_id,
+    );
+
+    // Run cognify pipeline
+    let dataset_id = Uuid::new_v4();
+    let result: CognifyResult = pipeline
+        .cognify(vec![data_item], dataset_id, llm)
+        .await
+        .expect("Cognify pipeline failed");
+
+    // 1. Verify IndexedFieldsStats are populated
+    println!("✓ Indexed fields stats:");
+    println!("  - Chunks: {}", result.indexed_fields.chunk_text_count);
+    println!(
+        "  - Entity names: {}",
+        result.indexed_fields.entity_name_count
+    );
+    println!(
+        "  - Entity descriptions: {}",
+        result.indexed_fields.entity_description_count
+    );
+    println!(
+        "  - Summaries: {}",
+        result.indexed_fields.summary_text_count
+    );
+
+    // 2. Verify both name and description were indexed (Phase 2 requirement)
+    if !result.entities.is_empty() {
+        assert_eq!(
+            result.indexed_fields.entity_name_count,
+            result.entities.len(),
+            "Entity name count should match entity count"
+        );
+        assert_eq!(
+            result.indexed_fields.entity_description_count,
+            result.entities.len(),
+            "Entity description count should match entity count (Phase 2)"
+        );
+
+        println!(
+            "✓ Both name and description indexed for {} entities",
+            result.entities.len()
+        );
+    }
+
+    // 3. Verify vector DB has both collections
+    assert!(
+        vector_db.has_collection("Entity", "name").await.unwrap(),
+        "Entity name collection should exist"
+    );
+    assert!(
+        vector_db
+            .has_collection("Entity", "description")
+            .await
+            .unwrap(),
+        "Entity description collection should exist (Phase 2)"
+    );
+
+    println!("✓ Both Entity collections created in vector DB");
+
+    // 4. Verify chunk and summary stats are also tracked
+    assert_eq!(
+        result.indexed_fields.chunk_text_count,
+        result.chunks.len(),
+        "Chunk count should match"
+    );
+
+    if !result.summaries.is_empty() {
+        assert_eq!(
+            result.indexed_fields.summary_text_count,
+            result.summaries.len(),
+            "Summary count should match"
+        );
+    }
+
+    println!("✓ Phase 2: Entity description embeddings working correctly");
 }

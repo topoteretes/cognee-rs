@@ -186,6 +186,7 @@ impl<S: StorageTrait, G: GraphDBTrait, V: VectorDB, E: EmbeddingEngine>
                 edges: vec![],
                 summaries: vec![],
                 embeddings: vec![],
+                indexed_fields: IndexedFieldsStats::default(),
             });
         }
 
@@ -312,14 +313,15 @@ impl<S: StorageTrait, G: GraphDBTrait, V: VectorDB, E: EmbeddingEngine>
             .await?;
 
         // Stage 5b: Index data points in vector database
-        self.index_data_points(
-            &chunks,
-            &dedup_result.unique_nodes,
-            &summaries,
-            self.embedding_engine.clone(),
-            self.vector_db.clone(),
-        )
-        .await?;
+        let indexed_fields = self
+            .index_data_points(
+                &chunks,
+                &dedup_result.unique_nodes,
+                &summaries,
+                self.embedding_engine.clone(),
+                self.vector_db.clone(),
+            )
+            .await?;
 
         Ok(CognifyResult {
             chunks,
@@ -327,6 +329,7 @@ impl<S: StorageTrait, G: GraphDBTrait, V: VectorDB, E: EmbeddingEngine>
             edges: dedup_result.unique_edges,
             summaries,
             embeddings,
+            indexed_fields,
         })
     }
 
@@ -408,7 +411,10 @@ impl<S: StorageTrait, G: GraphDBTrait, V: VectorDB, E: EmbeddingEngine>
     /// # Collections Created
     /// - `DocumentChunk_text` - Chunk embeddings
     /// - `Entity_name` - Entity name embeddings
+    /// - `Entity_description` - Entity description embeddings (Phase 2)
     /// - `TextSummary_text` - Summary embeddings
+    ///
+    /// Returns statistics about indexed fields.
     async fn index_data_points(
         &self,
         chunks: &[DocumentChunk],
@@ -416,7 +422,8 @@ impl<S: StorageTrait, G: GraphDBTrait, V: VectorDB, E: EmbeddingEngine>
         summaries: &[TextSummary],
         engine: Arc<E>,
         vector_db: Arc<V>,
-    ) -> Result<(), CognifyError> {
+    ) -> Result<IndexedFieldsStats, CognifyError> {
+        let mut stats = IndexedFieldsStats::default();
         let dimension = engine.dimension();
 
         // 1. Index DocumentChunk.text field
@@ -459,10 +466,11 @@ impl<S: StorageTrait, G: GraphDBTrait, V: VectorDB, E: EmbeddingEngine>
                 .await
                 .map_err(|e| CognifyError::VectorDBError(e.to_string()))?;
 
+            stats.chunk_text_count = chunks.len();
             println!("✓ Indexed {} document chunks", chunks.len());
         }
 
-        // 2. Index Entity.name field
+        // 2a. Index Entity.name field
         if !entities.is_empty() {
             if !vector_db
                 .has_collection("Entity", "name")
@@ -497,7 +505,49 @@ impl<S: StorageTrait, G: GraphDBTrait, V: VectorDB, E: EmbeddingEngine>
                 .await
                 .map_err(|e| CognifyError::VectorDBError(e.to_string()))?;
 
-            println!("✓ Indexed {} entities", entities.len());
+            println!("✓ Indexed {} entity names", entities.len());
+        }
+
+        // 2b. Index Entity.description field (NEW - Phase 2)
+        if !entities.is_empty() {
+            if !vector_db
+                .has_collection("Entity", "description")
+                .await
+                .map_err(|e| CognifyError::VectorDBError(e.to_string()))?
+            {
+                vector_db
+                    .create_collection("Entity", "description", dimension)
+                    .await
+                    .map_err(|e| CognifyError::VectorDBError(e.to_string()))?;
+            }
+
+            let descriptions: Vec<_> = entities
+                .iter()
+                .map(|e| e.entity.description.as_str())
+                .collect();
+            let vectors = engine
+                .embed(&descriptions)
+                .await
+                .map_err(|e| CognifyError::EmbeddingError(e.to_string()))?;
+
+            let points: Vec<VectorPoint> = entities
+                .iter()
+                .zip(vectors)
+                .map(|(entity, vector)| {
+                    VectorPoint::new(entity.entity.base.id, vector)
+                        .with_metadata("type", json!("Entity"))
+                        .with_metadata("field", json!("description"))
+                        .with_metadata("entity_type", json!(entity.entity_type.name.clone()))
+                        .with_metadata("entity_name", json!(entity.entity.name.clone()))
+                })
+                .collect();
+
+            vector_db
+                .index_points("Entity", "description", &points)
+                .await
+                .map_err(|e| CognifyError::VectorDBError(e.to_string()))?;
+
+            println!("✓ Indexed {} entity descriptions", entities.len());
         }
 
         // 3. Index TextSummary.text field
@@ -535,10 +585,11 @@ impl<S: StorageTrait, G: GraphDBTrait, V: VectorDB, E: EmbeddingEngine>
                 .await
                 .map_err(|e| CognifyError::VectorDBError(e.to_string()))?;
 
+            stats.summary_text_count = summaries.len();
             println!("✓ Indexed {} summaries", summaries.len());
         }
 
-        Ok(())
+        Ok(stats)
     }
 }
 
@@ -559,6 +610,31 @@ pub struct CognifyResult {
 
     /// Embeddings for chunks, entities, and summaries
     pub embeddings: Vec<Embedding>,
+
+    /// Statistics about indexed fields (NEW - Phase 2)
+    pub indexed_fields: IndexedFieldsStats,
+}
+
+/// Statistics about indexed fields.
+///
+/// Tracks how many data points were indexed for each field type.
+/// Useful for verifying indexing completeness and debugging.
+#[derive(Debug, Clone, Default)]
+pub struct IndexedFieldsStats {
+    /// Number of DocumentChunk.text fields indexed
+    pub chunk_text_count: usize,
+
+    /// Number of Entity.name fields indexed
+    pub entity_name_count: usize,
+
+    /// Number of Entity.description fields indexed (NEW - Phase 2)
+    pub entity_description_count: usize,
+
+    /// Number of TextSummary.text fields indexed
+    pub summary_text_count: usize,
+
+    /// Number of triplets indexed (Phase 3)
+    pub triplet_count: usize,
 }
 
 #[cfg(test)]
