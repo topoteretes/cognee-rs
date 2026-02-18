@@ -148,7 +148,7 @@ impl OnnxEmbeddingEngine {
     ///
     /// # Returns
     /// * Tuple of (input_ids, attention_mask) tensors, both with shape [batch_size, max_seq_len]
-    fn tokenize_batch(&self, texts: &[String]) -> EmbeddingResult<TokenizationBatch> {
+    fn tokenize_batch(&self, texts: &[&str]) -> EmbeddingResult<TokenizationBatch> {
         let tokenizer = self.tokenizer.lock().unwrap();
         let max_len = self.config.max_sequence_length;
 
@@ -158,7 +158,7 @@ impl OnnxEmbeddingEngine {
         for text in texts {
             // Encode with HuggingFace tokenizer
             let encoding = tokenizer
-                .encode(text.clone(), true)
+                .encode(*text, true)
                 .map_err(|e| EmbeddingError::TokenizerError(e.to_string()))?;
 
             let mut ids = encoding
@@ -224,7 +224,7 @@ impl OnnxEmbeddingEngine {
 
 #[async_trait]
 impl EmbeddingEngine for OnnxEmbeddingEngine {
-    async fn embed(&self, texts: &[String]) -> EmbeddingResult<Vec<Vec<f32>>> {
+    async fn embed(&self, texts: &[&str]) -> EmbeddingResult<Vec<Vec<f32>>> {
         if texts.is_empty() {
             return Ok(Vec::new());
         }

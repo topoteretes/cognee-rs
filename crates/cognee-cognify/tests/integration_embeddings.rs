@@ -13,6 +13,7 @@ use cognee_graph::MockGraphDB;
 use cognee_llm::OpenAIAdapter;
 use cognee_models::Data;
 use cognee_storage::{MockStorage, StorageTrait};
+use cognee_vector::MockVectorDB;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -47,6 +48,7 @@ async fn test_pipeline_with_embeddings() {
     // 1. Setup storage and graph DB
     let storage = Arc::new(MockStorage::new());
     let graph_db = Arc::new(MockGraphDB::new());
+    let vector_db = Arc::new(MockVectorDB::new());
 
     // 2. Setup embedding engine (BGE-Small)
     let embedding_config = EmbeddingConfig::bge_small("examples/target/models");
@@ -60,7 +62,7 @@ async fn test_pipeline_with_embeddings() {
     };
 
     // 3. Create pipeline with embeddings
-    let pipeline = CognifyPipeline::with_embeddings(storage.clone(), graph_db, embedding_engine);
+    let pipeline = CognifyPipeline::new(storage.clone(), graph_db, vector_db, embedding_engine);
 
     // 4. Create test data
     let text = "TechCorp is an organization based in San Francisco. \
@@ -151,20 +153,30 @@ async fn test_pipeline_with_embeddings() {
 }
 
 #[tokio::test]
-async fn test_pipeline_without_embeddings() {
-    // This test doesn't require LLM or embedding model
-    // It just verifies that the pipeline works without embeddings
+#[ignore] // Requires LLM and embedding model
+async fn test_pipeline_requires_embeddings() {
+    // This test verifies that embeddings are REQUIRED (matches Python behavior)
 
     // 1. Setup storage and graph DB
     let storage = Arc::new(MockStorage::new());
     let graph_db = Arc::new(MockGraphDB::new());
+    let vector_db = Arc::new(MockVectorDB::new());
 
-    // 2. Create pipeline WITHOUT embeddings
-    let pipeline: CognifyPipeline<MockStorage, MockGraphDB, OnnxEmbeddingEngine> =
-        CognifyPipeline::new(storage.clone(), graph_db);
+    // 2. Setup embedding engine
+    let embedding_config = EmbeddingConfig::bge_small("examples/target/models");
+    let embedding_engine = match OnnxEmbeddingEngine::new(embedding_config) {
+        Ok(engine) => Arc::new(engine),
+        Err(e) => {
+            eprintln!("⚠️  Skipping test: Failed to load embedding model: {}", e);
+            return;
+        }
+    };
 
-    // 3. Create test data
-    let text = "Simple test text.";
+    // 3. Create pipeline (embeddings are REQUIRED)
+    let pipeline = CognifyPipeline::new(storage.clone(), graph_db, vector_db, embedding_engine);
+
+    // 4. Create test data
+    let text = "Simple test text about technology.";
 
     let id = Uuid::new_v4();
     let owner_id = Uuid::new_v4();
@@ -186,7 +198,7 @@ async fn test_pipeline_without_embeddings() {
         owner_id,
     );
 
-    // 4. Skip if LLM not available
+    // 5. Skip if LLM not available
     let llm = match create_adapter_from_env() {
         Ok(adapter) => adapter,
         Err(_) => {
@@ -195,21 +207,20 @@ async fn test_pipeline_without_embeddings() {
         }
     };
 
-    // 5. Run cognify pipeline
+    // 6. Run cognify pipeline
     let dataset_id = Uuid::new_v4();
     let result: CognifyResult = pipeline
         .cognify(vec![data_item], dataset_id, 512, llm)
         .await
         .expect("Cognify pipeline failed");
 
-    // 6. Verify NO embeddings generated (engine not provided)
-    assert_eq!(
-        result.embeddings.len(),
-        0,
-        "Embeddings should be empty when engine not provided"
+    // 7. Verify embeddings WERE generated (required in Python implementation)
+    assert!(
+        !result.embeddings.is_empty(),
+        "Embeddings are required - pipeline should always generate them"
     );
 
-    // 7. Verify other pipeline stages still work
+    // 8. Verify other pipeline stages still work
     assert!(!result.chunks.is_empty(), "Chunks should be generated");
 }
 
@@ -226,6 +237,7 @@ async fn test_embedding_semantic_similarity() {
 
     let storage = Arc::new(MockStorage::new());
     let graph_db = Arc::new(MockGraphDB::new());
+    let vector_db = Arc::new(MockVectorDB::new());
 
     let embedding_config = EmbeddingConfig::bge_small("examples/target/models");
     let embedding_engine = match OnnxEmbeddingEngine::new(embedding_config) {
@@ -236,7 +248,7 @@ async fn test_embedding_semantic_similarity() {
         }
     };
 
-    let pipeline = CognifyPipeline::with_embeddings(storage.clone(), graph_db, embedding_engine);
+    let pipeline = CognifyPipeline::new(storage.clone(), graph_db, vector_db, embedding_engine);
 
     // Create two semantically similar documents
     let texts = [

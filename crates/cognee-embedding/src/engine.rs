@@ -27,7 +27,7 @@ pub trait EmbeddingEngine: Send + Sync {
     /// assert_eq!(embeddings.len(), 1);
     /// assert_eq!(embeddings[0].len(), engine.dimension());
     /// ```
-    async fn embed(&self, texts: &[String]) -> EmbeddingResult<Vec<Vec<f32>>>;
+    async fn embed(&self, texts: &[&str]) -> EmbeddingResult<Vec<Vec<f32>>>;
 
     /// Get the dimensionality of embeddings produced by this engine
     ///

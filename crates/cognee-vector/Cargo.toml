@@ -3,6 +3,9 @@ name = "cognee-vector"
 version = "0.1.0"
 edition.workspace = true
 
+[features]
+testing = []
+
 [dependencies]
 # Async
 tokio = { workspace = true }

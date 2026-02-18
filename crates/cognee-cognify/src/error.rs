@@ -30,6 +30,9 @@ pub enum CognifyError {
 
     #[error("Embedding generation error: {0}")]
     EmbeddingError(String),
+
+    #[error("Vector database error: {0}")]
+    VectorDBError(String),
 }
 
 /// Convert GraphDBError to CognifyError

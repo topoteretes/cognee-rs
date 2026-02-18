@@ -19,7 +19,7 @@ async fn test_full_embedding_pipeline() {
         .expect("Failed to load model - run examples/embeddings.rs first");
 
     // 2. Embed batch
-    let texts = vec!["Hello world".to_string(), "Rust is awesome".to_string()];
+    let texts = vec!["Hello world", "Rust is awesome"];
     let embeddings = engine.embed(&texts).await.unwrap();
 
     // 3. Verify dimensions
@@ -45,9 +45,9 @@ async fn test_semantic_similarity() {
     let engine = OnnxEmbeddingEngine::new(config).unwrap();
 
     let texts = vec![
-        "machine learning".to_string(),
-        "artificial intelligence".to_string(),
-        "cooking recipes".to_string(),
+        "machine learning",
+        "artificial intelligence",
+        "cooking recipes",
     ];
 
     let embeddings = engine.embed(&texts).await.unwrap();
@@ -81,11 +81,11 @@ async fn test_batch_processing() {
     let engine = OnnxEmbeddingEngine::new(config).unwrap();
 
     // Test with different batch sizes
-    let texts: Vec<String> = (0..10)
+    let texts: Vec<_> = (0..10)
         .map(|i| format!("This is test sentence number {}", i))
         .collect();
 
-    let embeddings = engine.embed(&texts).await.unwrap();
+    let embeddings = engine.embed(&texts.iter().map(|s| s.as_str()).collect::<Vec<_>>()).await.unwrap();
 
     assert_eq!(embeddings.len(), 10);
     for emb in embeddings {
@@ -101,7 +101,7 @@ async fn test_empty_batch() {
     let config = EmbeddingConfig::bge_small(get_model_dir());
     let engine = OnnxEmbeddingEngine::new(config).unwrap();
 
-    let texts: Vec<String> = vec![];
+    let texts: Vec<&str> = vec![];
     let embeddings = engine.embed(&texts).await.unwrap();
 
     assert_eq!(embeddings.len(), 0);
@@ -115,7 +115,7 @@ async fn test_long_text_truncation() {
 
     // Create a very long text (will be truncated to max_sequence_length)
     let long_text = "word ".repeat(1000);
-    let texts = vec![long_text];
+    let texts = vec![long_text.as_str()];
 
     let embeddings = engine.embed(&texts).await.unwrap();
 
