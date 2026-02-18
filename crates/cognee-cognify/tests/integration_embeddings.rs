@@ -89,10 +89,10 @@ async fn test_pipeline_with_embeddings() {
         owner_id,
     );
 
-    // 5. Run cognify pipeline
+    // 5. Run cognify pipeline (max_chunk_size now in config)
     let dataset_id = Uuid::new_v4();
     let result: CognifyResult = pipeline
-        .cognify(vec![data_item], dataset_id, 512, llm)
+        .cognify(vec![data_item], dataset_id, llm)
         .await
         .expect("Cognify pipeline failed");
 
@@ -207,10 +207,10 @@ async fn test_pipeline_requires_embeddings() {
         }
     };
 
-    // 6. Run cognify pipeline
+    // 6. Run cognify pipeline (max_chunk_size now in config)
     let dataset_id = Uuid::new_v4();
     let result: CognifyResult = pipeline
-        .cognify(vec![data_item], dataset_id, 512, llm)
+        .cognify(vec![data_item], dataset_id, llm)
         .await
         .expect("Cognify pipeline failed");
 
@@ -282,7 +282,7 @@ async fn test_embedding_semantic_similarity() {
         );
 
         let result: CognifyResult = pipeline
-            .cognify(vec![data_item], dataset_id, 512, llm.clone())
+            .cognify(vec![data_item], dataset_id, llm.clone())
             .await
             .expect("Cognify failed");
 

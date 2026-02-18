@@ -18,8 +18,10 @@ use cognee_models::{Data, DocumentChunk, Embedding};
 use cognee_storage::StorageTrait;
 use cognee_vector::{VectorDB, VectorPoint};
 use serde_json::json;
+use tokio::sync::Semaphore;
 use uuid::Uuid;
 
+use crate::config::CognifyConfig;
 use crate::error::CognifyError;
 use crate::fact_extraction::FactExtractor;
 use crate::graph_integration::{
@@ -38,12 +40,13 @@ pub struct CognifyPipeline<S: StorageTrait, G: GraphDBTrait, V: VectorDB, E: Emb
     graph_db: Arc<G>,
     vector_db: Arc<V>,
     embedding_engine: Arc<E>,
+    config: CognifyConfig,
 }
 
 impl<S: StorageTrait, G: GraphDBTrait, V: VectorDB, E: EmbeddingEngine>
     CognifyPipeline<S, G, V, E>
 {
-    /// Create a new CognifyPipeline with embedding engine and vector database.
+    /// Create a new CognifyPipeline with default configuration.
     ///
     /// Note: Embeddings are REQUIRED (not optional) to match Python implementation.
     /// Without embeddings, semantic search would not work.
@@ -53,12 +56,63 @@ impl<S: StorageTrait, G: GraphDBTrait, V: VectorDB, E: EmbeddingEngine>
         vector_db: Arc<V>,
         embedding_engine: Arc<E>,
     ) -> Self {
+        Self::with_config(
+            storage,
+            graph_db,
+            vector_db,
+            embedding_engine,
+            CognifyConfig::default(),
+        )
+    }
+
+    /// Create a new CognifyPipeline with custom configuration.
+    ///
+    /// This is the preferred way to create a pipeline when you need to customize
+    /// batch sizes, enable features like triplet embeddings, or control incremental loading.
+    ///
+    /// # Arguments
+    /// * `storage` - Storage backend for file operations
+    /// * `graph_db` - Graph database for storing nodes and edges
+    /// * `vector_db` - Vector database for storing embeddings
+    /// * `embedding_engine` - Embedding engine for generating vectors
+    /// * `config` - Configuration for the pipeline
+    ///
+    /// # Example
+    /// ```ignore
+    /// use cognee_cognify::{CognifyPipeline, CognifyConfig};
+    ///
+    /// let config = CognifyConfig::default()
+    ///     .with_chunk_size(2000)
+    ///     .with_chunks_per_batch(50)
+    ///     .with_triplet_embeddings(true);
+    ///
+    /// config.validate().expect("Invalid config");
+    ///
+    /// let pipeline = CognifyPipeline::with_config(
+    ///     storage,
+    ///     graph_db,
+    ///     vector_db,
+    ///     embedding_engine,
+    ///     config,
+    /// );
+    /// ```
+    pub fn with_config(
+        storage: Arc<S>,
+        graph_db: Arc<G>,
+        vector_db: Arc<V>,
+        embedding_engine: Arc<E>,
+        config: CognifyConfig,
+    ) -> Self {
+        // Validate config on construction
+        config.validate().expect("Invalid CognifyConfig");
+
         let text_chunks_pipeline = ExtractTextChunksPipeline::new(storage);
         Self {
             text_chunks_pipeline,
             graph_db,
             vector_db,
             embedding_engine,
+            config,
         }
     }
 
@@ -66,37 +120,40 @@ impl<S: StorageTrait, G: GraphDBTrait, V: VectorDB, E: EmbeddingEngine>
     ///
     /// Stages:
     /// 1. Document classification and text chunking (via ExtractTextChunksPipeline)
-    /// 2. Extract knowledge graphs from chunks (LLM-based, parallel)
+    /// 2. Extract knowledge graphs from chunks (LLM-based, batched + parallel)
     /// 3. Merge and deduplicate graphs
-    /// 4. Summarize text chunks (LLM-based, parallel)
-    /// 5. TODO: Create embeddings and store in vector database
+    /// 4. Summarize text chunks (LLM-based, batched if enabled)
+    /// 5. Create embeddings and store in vector database
     ///
     /// Returns CognifyResult with chunks, entities, and edges.
     ///
     /// # Arguments
     /// * `data_items` - Data items to process
     /// * `dataset_id` - Dataset UUID for linking entities
-    /// * `max_chunk_size` - Maximum chunk size in tokens
     /// * `llm` - LLM instance for knowledge graph extraction
     ///
     /// # Example
     /// ```ignore
-    /// use cognee_cognify::CognifyPipeline;
+    /// use cognee_cognify::{CognifyPipeline, CognifyConfig};
     /// use cognee_storage::LocalStorage;
-    /// use cognee_llm::OpenAIAdapter;
+    /// use cognee_llm::OllamaAdapter;
     /// use std::sync::Arc;
     /// use std::path::PathBuf;
     /// use uuid::Uuid;
     ///
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-    /// let storage = Arc::new(LocalStorage::new(PathBuf::from("/tmp/cognee")));
-    /// let llm = Arc::new(OpenAIAdapter::new("http://localhost:11434".to_string()));
-    /// let pipeline = CognifyPipeline::new(storage);
+    /// let config = CognifyConfig::default().with_chunk_size(1500);
+    /// let pipeline = CognifyPipeline::with_config(
+    ///     storage,
+    ///     graph_db,
+    ///     vector_db,
+    ///     embedding_engine,
+    ///     config,
+    /// );
     ///
     /// let result = pipeline.cognify(
     ///     vec![],
     ///     Uuid::new_v4(),
-    ///     512,
     ///     llm,
     /// ).await?;
     ///
@@ -108,13 +165,17 @@ impl<S: StorageTrait, G: GraphDBTrait, V: VectorDB, E: EmbeddingEngine>
         &self,
         data_items: Vec<Data>,
         dataset_id: Uuid,
-        max_chunk_size: usize,
         llm: Arc<L>,
     ) -> Result<CognifyResult, CognifyError> {
-        // Stage 1: Extract text chunks (classify + chunk)
+        println!(
+            "Starting cognify pipeline with config: chunks_per_batch={}, max_chunk_size={}",
+            self.config.chunks_per_batch, self.config.max_chunk_size
+        );
+
+        // Stage 1: Extract text chunks (classify + chunk) with config
         let chunks = self
             .text_chunks_pipeline
-            .extract_chunks(data_items, max_chunk_size)
+            .extract_chunks(data_items, self.config.max_chunk_size)
             .await
             .map_err(|e| CognifyError::ChunkingError(e.to_string()))?;
 
@@ -128,24 +189,47 @@ impl<S: StorageTrait, G: GraphDBTrait, V: VectorDB, E: EmbeddingEngine>
             });
         }
 
-        // Stage 2a: Extract knowledge graphs from all chunks (parallel)
-        let fact_extractor = FactExtractor::new(Arc::clone(&llm));
+        println!("✓ Extracted {} chunks", chunks.len());
 
-        let mut extract_tasks = Vec::new();
-        for chunk in &chunks {
-            let extractor = fact_extractor.clone();
-            let text = chunk.text.clone();
-            extract_tasks.push(tokio::spawn(async move {
-                extractor.extract_facts(&text, None).await
-            }));
+        // Stage 2: Graph extraction with configured batching and parallelism
+        let batch_size = self.config.chunks_per_batch;
+        let mut all_graphs = Vec::new();
+
+        // Use config.max_parallel_extractions to limit concurrency
+        let semaphore = Arc::new(Semaphore::new(self.config.max_parallel_extractions));
+
+        for (batch_idx, batch) in chunks.chunks(batch_size).enumerate() {
+            let fact_extractor = FactExtractor::new(Arc::clone(&llm));
+            let mut extract_tasks = Vec::new();
+
+            for chunk in batch {
+                let extractor = fact_extractor.clone();
+                let text = chunk.text.clone();
+                let sem = Arc::clone(&semaphore);
+                let prompt = self.config.custom_extraction_prompt.clone();
+
+                extract_tasks.push(tokio::spawn(async move {
+                    let _permit = sem.acquire().await.unwrap(); // Respect parallel limit
+                    extractor.extract_facts(&text, prompt.as_deref()).await
+                }));
+            }
+
+            let batch_results = futures::future::join_all(extract_tasks).await;
+            for result in batch_results {
+                let graph =
+                    result.map_err(|e| CognifyError::FactExtractionError(e.to_string()))??;
+                all_graphs.push(graph);
+            }
+
+            println!(
+                "✓ Processed batch {}/{} ({} chunks)",
+                batch_idx + 1,
+                chunks.len().div_ceil(batch_size),
+                batch.len()
+            );
         }
 
-        let graph_results = futures::future::join_all(extract_tasks).await;
-        let mut graphs = Vec::new();
-        for result in graph_results {
-            let graph = result.map_err(|e| CognifyError::FactExtractionError(e.to_string()))??;
-            graphs.push(graph);
-        }
+        let graphs = all_graphs;
 
         // Stage 2b: Database deduplication — query for existing edges
         let existing_edges_set = retrieve_existing_edges(self.graph_db.as_ref(), &graphs).await?;
@@ -199,9 +283,23 @@ impl<S: StorageTrait, G: GraphDBTrait, V: VectorDB, E: EmbeddingEngine>
             .await
             .map_err(CognifyError::from)?;
 
-        // Stage 4: Summarize text chunks (parallel)
-        let summary_extractor = SummaryExtractor::new(llm);
-        let summaries = summary_extractor.summarize_chunks(&chunks, None).await?;
+        // Stage 4: Summarize text chunks (batched, if enabled in config)
+        let summaries = if self.config.enable_summarization {
+            let summary_extractor = SummaryExtractor::new(llm);
+            let mut all_summaries = Vec::new();
+
+            // Use config.summarization_batch_size for batching
+            for batch in chunks.chunks(self.config.summarization_batch_size) {
+                let batch_summaries = summary_extractor.summarize_chunks(batch, None).await?;
+                all_summaries.extend(batch_summaries);
+            }
+
+            println!("✓ Generated {} summaries", all_summaries.len());
+            all_summaries
+        } else {
+            println!("✓ Summarization disabled in config");
+            Vec::new()
+        };
 
         // Stage 5a: Generate embeddings
         let embeddings = self
@@ -265,8 +363,7 @@ impl<S: StorageTrait, G: GraphDBTrait, V: VectorDB, E: EmbeddingEngine>
 
         // 2. Embed entity names ("name" field)
         if !entities.is_empty() {
-            let entity_names: Vec<_> =
-                entities.iter().map(|e| e.entity.name.as_str()).collect();
+            let entity_names: Vec<_> = entities.iter().map(|e| e.entity.name.as_str()).collect();
             let entity_vectors = engine
                 .embed(&entity_names)
                 .await
@@ -467,6 +564,7 @@ pub struct CognifyResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::CognifyConfig;
     use cognee_embedding::onnx::OnnxEmbeddingEngine;
     use cognee_graph::MockGraphDB;
     use cognee_storage::MockStorage;
@@ -492,5 +590,33 @@ mod tests {
             // Pipeline should be created successfully
         }
         // If model doesn't exist, test passes anyway (unit test doesn't require files)
+    }
+
+    #[tokio::test]
+    async fn test_cognify_pipeline_with_custom_config() {
+        use cognee_embedding::EmbeddingConfig;
+
+        let storage = Arc::new(MockStorage::new());
+        let graph_db = Arc::new(MockGraphDB::new());
+        let vector_db = Arc::new(MockVectorDB::new());
+
+        let embedding_config = EmbeddingConfig::minilm_l6("test_models");
+        if let Ok(embedding_engine) = OnnxEmbeddingEngine::new(embedding_config) {
+            let embedding_engine = Arc::new(embedding_engine);
+
+            let config = CognifyConfig::default()
+                .with_chunk_size(2000)
+                .with_chunks_per_batch(50)
+                .with_summarization(false);
+
+            let _pipeline = CognifyPipeline::with_config(
+                storage,
+                graph_db,
+                vector_db,
+                embedding_engine,
+                config,
+            );
+            // Pipeline should be created successfully with custom config
+        }
     }
 }

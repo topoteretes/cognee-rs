@@ -85,7 +85,10 @@ async fn test_batch_processing() {
         .map(|i| format!("This is test sentence number {}", i))
         .collect();
 
-    let embeddings = engine.embed(&texts.iter().map(|s| s.as_str()).collect::<Vec<_>>()).await.unwrap();
+    let embeddings = engine
+        .embed(&texts.iter().map(|s| s.as_str()).collect::<Vec<_>>())
+        .await
+        .unwrap();
 
     assert_eq!(embeddings.len(), 10);
     for emb in embeddings {

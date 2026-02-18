@@ -22,9 +22,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     // 3. Embed batch
     let texts = vec![
-        "Cognee transforms documents into AI memory".to_string(),
-        "Knowledge graphs enable semantic search".to_string(),
-        "ONNX Runtime provides efficient inference".to_string(),
+        "Cognee transforms documents into AI memory",
+        "Knowledge graphs enable semantic search",
+        "ONNX Runtime provides efficient inference",
     ];
 
     println!("Embedding {} texts...", texts.len());
