@@ -11,6 +11,7 @@ members = [
     "crates/cognee-llm",
     "crates/cognee-graph",
     "crates/cognee-embedding",
+    "crates/cognee-vector",
 ]
 resolver = "3"
 
