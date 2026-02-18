@@ -8,6 +8,7 @@ mod edge_type;
 mod embedding;
 mod entity;
 mod entity_type;
+mod triplet;
 
 pub use data::Data;
 pub use data_input::DataInput;
@@ -19,3 +20,4 @@ pub use edge_type::EdgeType;
 pub use embedding::Embedding;
 pub use entity::Entity;
 pub use entity_type::EntityType;
+pub use triplet::Triplet;

@@ -318,6 +318,7 @@ impl<S: StorageTrait, G: GraphDBTrait, V: VectorDB, E: EmbeddingEngine>
                 &chunks,
                 &dedup_result.unique_nodes,
                 &summaries,
+                &dedup_result.unique_edges, // NEW - Phase 3: pass edges for triplet creation
                 self.embedding_engine.clone(),
                 self.vector_db.clone(),
             )
@@ -413,6 +414,7 @@ impl<S: StorageTrait, G: GraphDBTrait, V: VectorDB, E: EmbeddingEngine>
     /// - `Entity_name` - Entity name embeddings
     /// - `Entity_description` - Entity description embeddings (Phase 2)
     /// - `TextSummary_text` - Summary embeddings
+    /// - `Triplet_embeddable_text` - Triplet embeddings (Phase 3, if config.embed_triplets is true)
     ///
     /// Returns statistics about indexed fields.
     async fn index_data_points(
@@ -420,6 +422,7 @@ impl<S: StorageTrait, G: GraphDBTrait, V: VectorDB, E: EmbeddingEngine>
         chunks: &[DocumentChunk],
         entities: &[GraphNodePair],
         summaries: &[TextSummary],
+        edges: &[GraphEdgePair], // NEW - Phase 3: needed for triplet creation
         engine: Arc<E>,
         vector_db: Arc<V>,
     ) -> Result<IndexedFieldsStats, CognifyError> {
@@ -587,6 +590,62 @@ impl<S: StorageTrait, G: GraphDBTrait, V: VectorDB, E: EmbeddingEngine>
 
             stats.summary_text_count = summaries.len();
             println!("✓ Indexed {} summaries", summaries.len());
+        }
+
+        // 4. Index triplets (Phase 3) - only if enabled in config
+        if self.config.embed_triplets && !edges.is_empty() && !entities.is_empty() {
+            use crate::triplet_creation::create_triplets_from_graph;
+
+            let triplets = create_triplets_from_graph(entities, edges);
+
+            if !triplets.is_empty() {
+                // Create collection if needed
+                if !vector_db
+                    .has_collection("Triplet", "embeddable_text")
+                    .await
+                    .map_err(|e| CognifyError::VectorDBError(e.to_string()))?
+                {
+                    vector_db
+                        .create_collection("Triplet", "embeddable_text", dimension)
+                        .await
+                        .map_err(|e| CognifyError::VectorDBError(e.to_string()))?;
+                }
+
+                // Generate embeddings for triplets
+                let triplet_texts: Vec<_> = triplets
+                    .iter()
+                    .map(|t| t.embeddable_text.as_str())
+                    .collect();
+                let triplet_vectors = engine
+                    .embed(&triplet_texts)
+                    .await
+                    .map_err(|e| CognifyError::EmbeddingError(e.to_string()))?;
+
+                // Create vector points
+                let triplet_points: Vec<VectorPoint> = triplets
+                    .iter()
+                    .zip(triplet_vectors)
+                    .map(|(triplet, vector)| {
+                        VectorPoint::new(triplet.id, vector)
+                            .with_metadata("type", json!("Triplet"))
+                            .with_metadata("field", json!("embeddable_text"))
+                            .with_metadata("source_id", json!(triplet.source_entity_id.to_string()))
+                            .with_metadata("target_id", json!(triplet.target_entity_id.to_string()))
+                            .with_metadata("relationship", json!(triplet.relationship_name.clone()))
+                    })
+                    .collect();
+
+                // Index in vector DB
+                vector_db
+                    .index_points("Triplet", "embeddable_text", &triplet_points)
+                    .await
+                    .map_err(|e| CognifyError::VectorDBError(e.to_string()))?;
+
+                stats.triplet_count = triplets.len();
+                println!("✓ Indexed {} triplets", triplets.len());
+            }
+        } else if self.config.embed_triplets {
+            println!("• Triplet embedding enabled but no edges/entities to index");
         }
 
         Ok(stats)
