@@ -108,8 +108,7 @@ fn extract_individuals(
     let mut count = 0;
 
     let rdf_type = rdf::type_.iri().unwrap().to_string();
-    let class_uris: HashSet<_> =
-        classes.values().map(|uri| uri.as_str()).collect();
+    let class_uris: HashSet<_> = classes.values().map(|uri| uri.as_str()).collect();
 
     // Query: ?s rdf:type <class_uri>
     for triple_result in graph.triples() {

@@ -60,7 +60,7 @@
 //! use cognee_ontology::RdfLibOntologyResolver;
 //!
 //! let ontology = RdfLibOntologyResolver::new(vec!["schema.ttl".into()])?;
-//! let pipeline = CognifyPipeline::with_ontology(
+//! let pipeline = CognifyPipeline::new(
 //!     storage,
 //!     graph_db,
 //!     vector_db,

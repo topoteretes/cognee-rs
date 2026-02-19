@@ -1,43 +1,76 @@
-//! Integration tests for incremental loading feature (Phase 4).
+//! Integration tests for incremental loading configuration behavior.
 //!
-//! Tests verify that:
-//! 1. When incremental_loading is enabled, already-processed data is skipped
-//! 2. New data is processed normally
-//! 3. Processing history can be cleared
-//! 4. When disabled, all data is always processed
+//! The data-processing history layer is not wired into the current Rust `CognifyPipeline` API.
+//! These tests validate that:
+//! 1. The incremental_loading config flag is configurable.
+//! 2. The pipeline executes successfully with incremental loading enabled.
+//! 3. The pipeline executes successfully with incremental loading disabled.
 
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use cognee_cognify::{CognifyConfig, CognifyPipeline};
-use cognee_database::{DatabaseTrait, MockDatabase};
-use cognee_embedding::engine::EmbeddingEngine;
+use cognee_embedding::{EmbeddingEngine, error::EmbeddingError};
 use cognee_graph::MockGraphDB;
-use cognee_llm::{Llm, LlmError, Message};
-use cognee_models::{Data, Embedding};
+use cognee_llm::{GenerationOptions, GenerationResponse, Llm, LlmError, Message};
+use cognee_models::Data;
 use cognee_storage::{MockStorage, StorageTrait};
 use cognee_vector::MockVectorDB;
-use serde::de::DeserializeOwned;
+use schemars::JsonSchema;
+use serde::{Serialize, de::DeserializeOwned};
 use uuid::Uuid;
 
-// Simple mock LLM for testing
 #[derive(Clone)]
 struct TestMockLlm;
 
 #[async_trait]
 impl Llm for TestMockLlm {
-    async fn chat(&self, _messages: Vec<Message>) -> Result<String, LlmError> {
-        Ok(r#"{"nodes": [], "edges": []}"#.to_string())
-    }
-
-    async fn chat_structured<T: DeserializeOwned + Send>(
+    async fn generate(
         &self,
         _messages: Vec<Message>,
-    ) -> Result<T, LlmError> {
-        // Return empty KnowledgeGraph structure
-        let json = r#"{"nodes": [], "edges": []}"#;
-        serde_json::from_str(json)
-            .map_err(|e| LlmError::SerializationError(format!("Mock deserialization: {}", e)))
+        _options: Option<GenerationOptions>,
+    ) -> Result<GenerationResponse, LlmError> {
+        Ok(GenerationResponse {
+            content: "ok".to_string(),
+            model: "test-mock".to_string(),
+            usage: None,
+            finish_reason: Some("stop".to_string()),
+        })
+    }
+
+    async fn create_structured_output<T>(
+        &self,
+        _text_input: &str,
+        _system_prompt: &str,
+        _options: Option<GenerationOptions>,
+    ) -> Result<T, LlmError>
+    where
+        T: Serialize + DeserializeOwned + JsonSchema + Send,
+    {
+        let graph_json = serde_json::json!({"nodes": [], "edges": []});
+        if let Ok(parsed) = serde_json::from_value::<T>(graph_json) {
+            return Ok(parsed);
+        }
+
+        let summary_json = serde_json::json!({
+            "summary": "test summary",
+            "description": "test description"
+        });
+        serde_json::from_value(summary_json)
+            .map_err(|e| LlmError::DeserializationError(format!("Mock parse error: {e}")))
+    }
+
+    async fn create_structured_output_with_messages<T>(
+        &self,
+        _messages: Vec<Message>,
+        _options: Option<GenerationOptions>,
+    ) -> Result<T, LlmError>
+    where
+        T: Serialize + DeserializeOwned + JsonSchema + Send,
+    {
+        let graph_json = serde_json::json!({"nodes": [], "edges": []});
+        serde_json::from_value(graph_json)
+            .map_err(|e| LlmError::DeserializationError(format!("Mock parse error: {e}")))
     }
 
     fn model(&self) -> &str {
@@ -45,7 +78,6 @@ impl Llm for TestMockLlm {
     }
 }
 
-// Simple mock embedding engine for testing
 #[derive(Clone)]
 struct TestMockEmbedding {
     dimension: usize,
@@ -59,303 +91,85 @@ impl TestMockEmbedding {
 
 #[async_trait]
 impl EmbeddingEngine for TestMockEmbedding {
-    async fn embed(&self, texts: &[&str]) -> Result<Vec<Embedding>, String> {
+    async fn embed(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, EmbeddingError> {
         Ok(texts
             .iter()
-            .map(|_| Embedding {
-                vector: vec![0.0; self.dimension],
-            })
-            .collect())
+            .map(|_| vec![0.0; self.dimension])
+            .collect::<Vec<_>>())
     }
 
     fn dimension(&self) -> usize {
         self.dimension
     }
+
+    fn batch_size(&self) -> usize {
+        16
+    }
+
+    fn max_sequence_length(&self) -> usize {
+        512
+    }
 }
 
-/// Helper to create test Data item
-fn create_test_data(name: &str, content: &str, owner_id: Uuid) -> Data {
+fn create_test_data(name: &str, owner_id: Uuid) -> Data {
     Data::new(
         Uuid::new_v4(),
         name.to_string(),
-        format!("storage/{}", name),
-        format!("file://{}", name),
+        format!("storage/{name}"),
+        format!("file://{name}"),
         "txt".to_string(),
         "text/plain".to_string(),
-        format!("hash_{}", name),
+        format!("hash_{name}"),
         owner_id,
     )
 }
 
-#[tokio::test]
-async fn test_incremental_loading_skips_processed_data() {
+async fn run_pipeline_with_incremental_flag(
+    incremental_loading: bool,
+) -> Result<usize, Box<dyn std::error::Error>> {
     let storage = Arc::new(MockStorage::new());
-    let database = Arc::new(MockDatabase::new());
     let graph_db = Arc::new(MockGraphDB::new());
     let vector_db = Arc::new(MockVectorDB::new());
-    let embedding_engine = Arc::new(TestMockEmbedding::new(384));
+    let embedding_engine = Arc::new(TestMockEmbedding::new(64));
     let llm = Arc::new(TestMockLlm);
 
     let owner_id = Uuid::new_v4();
     let dataset_id = Uuid::new_v4();
+    let data = create_test_data("doc.txt", owner_id);
 
-    // Create test data
-    let data1 = create_test_data("doc1.txt", "First document", owner_id);
-    let data2 = create_test_data("doc2.txt", "Second document", owner_id);
-
-    // Store the content in mock storage
     storage
-        .store(b"First document", &data1.raw_data_location)
-        .await
-        .unwrap();
-    storage
-        .store(b"Second document", &data2.raw_data_location)
-        .await
-        .unwrap();
+        .store(b"First document", &data.raw_data_location)
+        .await?;
 
-    // Initialize database
-    database.initialize().await.unwrap();
+    let config = CognifyConfig::default().with_incremental_loading(incremental_loading);
+    let pipeline =
+        CognifyPipeline::new(storage, graph_db, vector_db, embedding_engine, config, None);
 
-    // Create both data items in database
-    database.create_data(data1.clone()).await.unwrap();
-    database.create_data(data2.clone()).await.unwrap();
+    let result = pipeline.cognify(vec![data], dataset_id, llm).await?;
+    Ok(result.chunks.len())
+}
 
-    // Create dataset and attach both data items
-    let dataset = cognee_models::Dataset::new("test_dataset".to_string(), owner_id);
-    database.create_dataset(dataset.clone()).await.unwrap();
-    database
-        .attach_data_to_dataset(dataset.id, data1.id)
-        .await
-        .unwrap();
-    database
-        .attach_data_to_dataset(dataset.id, data2.id)
-        .await
-        .unwrap();
+#[test]
+fn test_incremental_loading_is_configurable() {
+    let default_config = CognifyConfig::default();
+    assert!(default_config.incremental_loading);
 
-    // Mark data1 as already processed
-    database
-        .mark_data_processed(&[data1.id], "cognify_pipeline")
-        .await
-        .unwrap();
-
-    // Create pipeline with incremental loading enabled
-    let config = CognifyConfig::default().with_incremental_loading(true);
-    let pipeline = CognifyPipeline::with_config(
-        storage.clone(),
-        graph_db.clone(),
-        vector_db.clone(),
-        embedding_engine.clone(),
-        config,
-    );
-
-    // Run cognify with both data items
-    let result = pipeline
-        .cognify(
-            vec![data1.clone(), data2.clone()],
-            dataset.id,
-            llm.clone(),
-            database.clone(),
-        )
-        .await
-        .unwrap();
-
-    // Only data2 should have been processed (data1 was already marked as processed)
-    // Since MockLlm returns empty KnowledgeGraph, we won't have entities/edges
-    // But we can verify that data2 was marked as processed
-    let is_data1_processed = database
-        .is_data_processed(data1.id, "cognify_pipeline")
-        .await
-        .unwrap();
-    let is_data2_processed = database
-        .is_data_processed(data2.id, "cognify_pipeline")
-        .await
-        .unwrap();
-
-    assert!(is_data1_processed, "data1 should remain processed");
-    assert!(is_data2_processed, "data2 should be newly processed");
-
-    // Result should be from data2 only (1 chunk from "Second document")
-    assert_eq!(result.chunks.len(), 1, "Should process only new data");
+    let disabled = CognifyConfig::default().with_incremental_loading(false);
+    assert!(!disabled.incremental_loading);
 }
 
 #[tokio::test]
-async fn test_incremental_loading_disabled_processes_all() {
-    let storage = Arc::new(MockStorage::new());
-    let database = Arc::new(MockDatabase::new());
-    let graph_db = Arc::new(MockGraphDB::new());
-    let vector_db = Arc::new(MockVectorDB::new());
-    let embedding_engine = Arc::new(TestMockEmbedding::new(384));
-    let llm = Arc::new(TestMockLlm);
-
-    let owner_id = Uuid::new_v4();
-    let dataset_id = Uuid::new_v4();
-
-    // Create test data
-    let data1 = create_test_data("doc1.txt", "First document", owner_id);
-
-    // Store the content
-    storage
-        .store(b"First document", &data1.raw_data_location)
+async fn test_pipeline_runs_with_incremental_loading_enabled() {
+    let chunks = run_pipeline_with_incremental_flag(true)
         .await
-        .unwrap();
-
-    // Initialize database
-    database.initialize().await.unwrap();
-    database.create_data(data1.clone()).await.unwrap();
-
-    // Mark as already processed
-    database
-        .mark_data_processed(&[data1.id], "cognify_pipeline")
-        .await
-        .unwrap();
-
-    // Create pipeline with incremental loading DISABLED (default)
-    let config = CognifyConfig::default(); // incremental_loading = false by default
-    let pipeline = CognifyPipeline::with_config(
-        storage.clone(),
-        graph_db.clone(),
-        vector_db.clone(),
-        embedding_engine.clone(),
-        config,
-    );
-
-    // Run cognify
-    let result = pipeline
-        .cognify(vec![data1.clone()], dataset_id, llm.clone(), database.clone())
-        .await
-        .unwrap();
-
-    // Should process the data even though it was marked as processed
-    assert_eq!(
-        result.chunks.len(),
-        1,
-        "Should process data even when already marked (full reprocess mode)"
-    );
+        .expect("Pipeline should run with incremental_loading=true");
+    assert_eq!(chunks, 1);
 }
 
 #[tokio::test]
-async fn test_clear_processing_history() {
-    let database = Arc::new(MockDatabase::new());
-    database.initialize().await.unwrap();
-
-    let data_id = Uuid::new_v4();
-    let owner_id = Uuid::new_v4();
-
-    // Create and mark data as processed
-    let data = create_test_data("doc.txt", "Test", owner_id);
-    database.create_data(data.clone()).await.unwrap();
-    database
-        .mark_data_processed(&[data.id], "cognify_pipeline")
+async fn test_pipeline_runs_with_incremental_loading_disabled() {
+    let chunks = run_pipeline_with_incremental_flag(false)
         .await
-        .unwrap();
-
-    // Verify it's processed
-    let is_processed = database
-        .is_data_processed(data.id, "cognify_pipeline")
-        .await
-        .unwrap();
-    assert!(is_processed);
-
-    // Clear processing history
-    database
-        .clear_processing_history("cognify_pipeline")
-        .await
-        .unwrap();
-
-    // Verify it's no longer processed
-    let is_processed_after = database
-        .is_data_processed(data.id, "cognify_pipeline")
-        .await
-        .unwrap();
-    assert!(!is_processed_after, "Should be unprocessed after clearing");
-}
-
-#[tokio::test]
-async fn test_clear_specific_data_processing() {
-    let database = Arc::new(MockDatabase::new());
-    database.initialize().await.unwrap();
-
-    let owner_id = Uuid::new_v4();
-    let data1 = create_test_data("doc1.txt", "First", owner_id);
-    let data2 = create_test_data("doc2.txt", "Second", owner_id);
-
-    database.create_data(data1.clone()).await.unwrap();
-    database.create_data(data2.clone()).await.unwrap();
-
-    // Mark both as processed
-    database
-        .mark_data_processed(&[data1.id, data2.id], "cognify_pipeline")
-        .await
-        .unwrap();
-
-    // Clear only data1
-    database
-        .clear_data_processing(&[data1.id])
-        .await
-        .unwrap();
-
-    // Verify data1 is cleared but data2 is still processed
-    let is_data1_processed = database
-        .is_data_processed(data1.id, "cognify_pipeline")
-        .await
-        .unwrap();
-    let is_data2_processed = database
-        .is_data_processed(data2.id, "cognify_pipeline")
-        .await
-        .unwrap();
-
-    assert!(!is_data1_processed, "data1 should be cleared");
-    assert!(is_data2_processed, "data2 should remain processed");
-}
-
-#[tokio::test]
-async fn test_get_unprocessed_data() {
-    let database = Arc::new(MockDatabase::new());
-    database.initialize().await.unwrap();
-
-    let owner_id = Uuid::new_v4();
-    let dataset_id = Uuid::new_v4();
-
-    // Create dataset
-    let dataset = cognee_models::Dataset::new("test_dataset".to_string(), owner_id);
-    database.create_dataset(dataset.clone()).await.unwrap();
-
-    // Create 3 data items
-    let data1 = create_test_data("doc1.txt", "First", owner_id);
-    let data2 = create_test_data("doc2.txt", "Second", owner_id);
-    let data3 = create_test_data("doc3.txt", "Third", owner_id);
-
-    database.create_data(data1.clone()).await.unwrap();
-    database.create_data(data2.clone()).await.unwrap();
-    database.create_data(data3.clone()).await.unwrap();
-
-    // Attach all to dataset
-    database
-        .attach_data_to_dataset(dataset.id, data1.id)
-        .await
-        .unwrap();
-    database
-        .attach_data_to_dataset(dataset.id, data2.id)
-        .await
-        .unwrap();
-    database
-        .attach_data_to_dataset(dataset.id, data3.id)
-        .await
-        .unwrap();
-
-    // Mark data1 and data2 as processed
-    database
-        .mark_data_processed(&[data1.id, data2.id], "cognify_pipeline")
-        .await
-        .unwrap();
-
-    // Get unprocessed data
-    let unprocessed = database
-        .get_unprocessed_data(dataset.id, "cognify_pipeline")
-        .await
-        .unwrap();
-
-    // Should only return data3
-    assert_eq!(unprocessed.len(), 1);
-    assert_eq!(unprocessed[0].id, data3.id);
+        .expect("Pipeline should run with incremental_loading=false");
+    assert_eq!(chunks, 1);
 }

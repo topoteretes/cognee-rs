@@ -11,16 +11,16 @@ thiserror = { workspace = true }
 log = { workspace = true }
 
 # RDF/OWL parsing and graph operations
-sophia = "0.8"
-sophia_api = "0.8"
-sophia_inmem = "0.8"
-sophia_turtle = "0.8"
-sophia_xml = "0.8"
-sophia_jsonld = "0.8"
+sophia = { workspace = true }
+sophia_api = { workspace = true }
+sophia_inmem = { workspace = true }
+sophia_turtle = { workspace = true }
+sophia_xml = { workspace = true }
+sophia_jsonld = { workspace = true }
 
 # Fuzzy string matching for entity resolution
-strsim = "0.11"
+strsim = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }
-env_logger = "0.11"
+env_logger = { workspace = true }

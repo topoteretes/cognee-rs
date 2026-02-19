@@ -738,14 +738,8 @@ mod tests {
                 .with_chunks_per_batch(50)
                 .with_summarization(false);
 
-            let _pipeline = CognifyPipeline::new(
-                storage,
-                graph_db,
-                vector_db,
-                embedding_engine,
-                config,
-                None,
-            );
+            let _pipeline =
+                CognifyPipeline::new(storage, graph_db, vector_db, embedding_engine, config, None);
             // Pipeline should be created successfully with custom config
         }
     }
