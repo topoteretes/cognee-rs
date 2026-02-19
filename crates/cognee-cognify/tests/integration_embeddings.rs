@@ -7,7 +7,7 @@
 //!
 //! Run with: cargo test --package cognee-cognify --test integration_embeddings -- --ignored
 
-use cognee_cognify::{CognifyPipeline, CognifyResult};
+use cognee_cognify::{CognifyConfig, CognifyPipeline, CognifyResult};
 use cognee_embedding::{config::EmbeddingConfig, onnx::OnnxEmbeddingEngine};
 use cognee_graph::MockGraphDB;
 use cognee_llm::OpenAIAdapter;
@@ -62,7 +62,14 @@ async fn test_pipeline_with_embeddings() {
     };
 
     // 3. Create pipeline with embeddings
-    let pipeline = CognifyPipeline::new(storage.clone(), graph_db, vector_db, embedding_engine);
+    let pipeline = CognifyPipeline::new(
+        storage.clone(),
+        graph_db,
+        vector_db,
+        embedding_engine,
+        CognifyConfig::default(),
+        None,
+    );
 
     // 4. Create test data
     let text = "TechCorp is an organization based in San Francisco. \
@@ -173,7 +180,14 @@ async fn test_pipeline_requires_embeddings() {
     };
 
     // 3. Create pipeline (embeddings are REQUIRED)
-    let pipeline = CognifyPipeline::new(storage.clone(), graph_db, vector_db, embedding_engine);
+    let pipeline = CognifyPipeline::new(
+        storage.clone(),
+        graph_db,
+        vector_db,
+        embedding_engine,
+        CognifyConfig::default(),
+        None,
+    );
 
     // 4. Create test data
     let text = "Simple test text about technology.";
@@ -248,7 +262,14 @@ async fn test_embedding_semantic_similarity() {
         }
     };
 
-    let pipeline = CognifyPipeline::new(storage.clone(), graph_db, vector_db, embedding_engine);
+    let pipeline = CognifyPipeline::new(
+        storage.clone(),
+        graph_db,
+        vector_db,
+        embedding_engine,
+        CognifyConfig::default(),
+        None,
+    );
 
     // Create two semantically similar documents
     let texts = [
@@ -336,6 +357,8 @@ async fn test_entity_description_indexing() {
         graph_db,
         vector_db.clone(),
         embedding_engine,
+        CognifyConfig::default(),
+        None,
     );
 
     // Create test data with entity information
@@ -467,6 +490,8 @@ async fn test_triplet_embeddings_disabled_by_default() {
         graph_db,
         vector_db.clone(),
         embedding_engine,
+        CognifyConfig::default(),
+        None,
     );
 
     // Create test data
@@ -542,14 +567,14 @@ async fn test_triplet_embeddings_enabled() {
     };
 
     // Create pipeline with config that ENABLES triplet embeddings (Phase 3)
-    use cognee_cognify::CognifyConfig;
     let config = CognifyConfig::default().with_triplet_embeddings(true);
-    let pipeline = CognifyPipeline::with_config(
+    let pipeline = CognifyPipeline::new(
         storage.clone(),
         graph_db,
         vector_db.clone(),
         embedding_engine,
         config,
+        None,
     );
 
     // Create test data with relationship-heavy content

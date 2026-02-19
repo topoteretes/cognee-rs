@@ -12,6 +12,7 @@ members = [
     "crates/cognee-graph",
     "crates/cognee-embedding",
     "crates/cognee-vector",
+    "crates/cognee-ontology",
 ]
 resolver = "3"
 
@@ -38,6 +39,13 @@ scraper = "0.21"
 segment = { git = "https://github.com/qdrant/qdrant", package = "segment", default-features = false, branch = "dev" }
 serde = { version = "1", features = ["derive"] }
 serial_test = "3.2"
+sophia = "0.8"
+sophia_api = "0.8"
+sophia_inmem = "0.8"
+sophia_jsonld = "0.8"
+sophia_turtle = "0.8"
+sophia_xml = "0.8"
+strsim = "0.11"
 thiserror = "2.0"
 serde_json = "1"
 shard = { git = "https://github.com/qdrant/qdrant", package = "shard", branch = "dev" }

@@ -15,6 +15,7 @@ use cognee_embedding::engine::EmbeddingEngine;
 use cognee_graph::GraphDBTrait;
 use cognee_llm::Llm;
 use cognee_models::{Data, DocumentChunk, Embedding};
+use cognee_ontology::OntologyResolver;
 use cognee_storage::StorageTrait;
 use cognee_vector::{VectorDB, VectorPoint};
 use serde_json::json;
@@ -30,6 +31,8 @@ use crate::graph_integration::{
 };
 use crate::summarization::{SummaryExtractor, TextSummary};
 
+type SharedOntologyResolver = Arc<dyn OntologyResolver>;
+
 /// The full cognify pipeline. Orchestrates all stages of knowledge graph
 /// extraction and storage.
 ///
@@ -41,34 +44,16 @@ pub struct CognifyPipeline<S: StorageTrait, G: GraphDBTrait, V: VectorDB, E: Emb
     vector_db: Arc<V>,
     embedding_engine: Arc<E>,
     config: CognifyConfig,
+    ontology_resolver: Option<SharedOntologyResolver>,
 }
 
 impl<S: StorageTrait, G: GraphDBTrait, V: VectorDB, E: EmbeddingEngine>
     CognifyPipeline<S, G, V, E>
 {
-    /// Create a new CognifyPipeline with default configuration.
+    /// Create a new CognifyPipeline.
     ///
     /// Note: Embeddings are REQUIRED (not optional) to match Python implementation.
     /// Without embeddings, semantic search would not work.
-    pub fn new(
-        storage: Arc<S>,
-        graph_db: Arc<G>,
-        vector_db: Arc<V>,
-        embedding_engine: Arc<E>,
-    ) -> Self {
-        Self::with_config(
-            storage,
-            graph_db,
-            vector_db,
-            embedding_engine,
-            CognifyConfig::default(),
-        )
-    }
-
-    /// Create a new CognifyPipeline with custom configuration.
-    ///
-    /// This is the preferred way to create a pipeline when you need to customize
-    /// batch sizes, enable features like triplet embeddings, or control incremental loading.
     ///
     /// # Arguments
     /// * `storage` - Storage backend for file operations
@@ -76,32 +61,14 @@ impl<S: StorageTrait, G: GraphDBTrait, V: VectorDB, E: EmbeddingEngine>
     /// * `vector_db` - Vector database for storing embeddings
     /// * `embedding_engine` - Embedding engine for generating vectors
     /// * `config` - Configuration for the pipeline
-    ///
-    /// # Example
-    /// ```ignore
-    /// use cognee_cognify::{CognifyPipeline, CognifyConfig};
-    ///
-    /// let config = CognifyConfig::default()
-    ///     .with_chunk_size(2000)
-    ///     .with_chunks_per_batch(50)
-    ///     .with_triplet_embeddings(true);
-    ///
-    /// config.validate().expect("Invalid config");
-    ///
-    /// let pipeline = CognifyPipeline::with_config(
-    ///     storage,
-    ///     graph_db,
-    ///     vector_db,
-    ///     embedding_engine,
-    ///     config,
-    /// );
-    /// ```
-    pub fn with_config(
+    /// * `ontology_resolver` - Optional ontology resolver (None or custom implementation)
+    pub fn new(
         storage: Arc<S>,
         graph_db: Arc<G>,
         vector_db: Arc<V>,
         embedding_engine: Arc<E>,
         config: CognifyConfig,
+        ontology_resolver: Option<SharedOntologyResolver>,
     ) -> Self {
         // Validate config on construction
         config.validate().expect("Invalid CognifyConfig");
@@ -113,7 +80,19 @@ impl<S: StorageTrait, G: GraphDBTrait, V: VectorDB, E: EmbeddingEngine>
             vector_db,
             embedding_engine,
             config,
+            ontology_resolver,
         }
+    }
+
+    /// Check if ontology enrichment is enabled.
+    ///
+    /// Returns true if an ontology resolver is configured and loaded.
+    /// This can be used to conditionally enable ontology-based features.
+    pub fn has_ontology(&self) -> bool {
+        self.ontology_resolver
+            .as_ref()
+            .map(|resolver| resolver.is_loaded())
+            .unwrap_or(false)
     }
 
     /// Run the complete cognify pipeline on a set of Data items.
@@ -134,7 +113,7 @@ impl<S: StorageTrait, G: GraphDBTrait, V: VectorDB, E: EmbeddingEngine>
     ///
     /// # Example
     /// ```ignore
-    /// use cognee_cognify::{CognifyPipeline, CognifyConfig};
+    /// use cognee_cognify::{CognifyConfig, CognifyPipeline};
     /// use cognee_storage::LocalStorage;
     /// use cognee_llm::OllamaAdapter;
     /// use std::sync::Arc;
@@ -143,12 +122,13 @@ impl<S: StorageTrait, G: GraphDBTrait, V: VectorDB, E: EmbeddingEngine>
     ///
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// let config = CognifyConfig::default().with_chunk_size(1500);
-    /// let pipeline = CognifyPipeline::with_config(
+    /// let pipeline = CognifyPipeline::new(
     ///     storage,
     ///     graph_db,
     ///     vector_db,
     ///     embedding_engine,
     ///     config,
+    ///     None,
     /// );
     ///
     /// let result = pipeline.cognify(
@@ -242,6 +222,10 @@ impl<S: StorageTrait, G: GraphDBTrait, V: VectorDB, E: EmbeddingEngine>
                 .await
                 .map_err(|e| CognifyError::FactExtractionError(e.to_string()))?;
 
+        // Note: Ontology enrichment would occur here if has_ontology() is true.
+        // Future enhancement: Pass self.ontology_resolver to expand_with_nodes_and_edges
+        // to enable entity validation and ontology-based relationship inference.
+
         // Stage 2d: Final deduplication pass (in-memory only after DB filtering)
         let dedup_result = deduplicate_nodes_and_edges(nodes, edges);
 
@@ -318,7 +302,7 @@ impl<S: StorageTrait, G: GraphDBTrait, V: VectorDB, E: EmbeddingEngine>
                 &chunks,
                 &dedup_result.unique_nodes,
                 &summaries,
-                &dedup_result.unique_edges, // NEW - Phase 3: pass edges for triplet creation
+                &dedup_result.unique_edges,
                 self.embedding_engine.clone(),
                 self.vector_db.clone(),
             )
@@ -422,7 +406,7 @@ impl<S: StorageTrait, G: GraphDBTrait, V: VectorDB, E: EmbeddingEngine>
         chunks: &[DocumentChunk],
         entities: &[GraphNodePair],
         summaries: &[TextSummary],
-        edges: &[GraphEdgePair], // NEW - Phase 3: needed for triplet creation
+        edges: &[GraphEdgePair],
         engine: Arc<E>,
         vector_db: Arc<V>,
     ) -> Result<IndexedFieldsStats, CognifyError> {
@@ -508,6 +492,7 @@ impl<S: StorageTrait, G: GraphDBTrait, V: VectorDB, E: EmbeddingEngine>
                 .await
                 .map_err(|e| CognifyError::VectorDBError(e.to_string()))?;
 
+            stats.entity_name_count = entities.len();
             println!("✓ Indexed {} entity names", entities.len());
         }
 
@@ -550,6 +535,7 @@ impl<S: StorageTrait, G: GraphDBTrait, V: VectorDB, E: EmbeddingEngine>
                 .await
                 .map_err(|e| CognifyError::VectorDBError(e.to_string()))?;
 
+            stats.entity_description_count = entities.len();
             println!("✓ Indexed {} entity descriptions", entities.len());
         }
 
@@ -670,7 +656,7 @@ pub struct CognifyResult {
     /// Embeddings for chunks, entities, and summaries
     pub embeddings: Vec<Embedding>,
 
-    /// Statistics about indexed fields (NEW - Phase 2)
+    /// Statistics about indexed fields
     pub indexed_fields: IndexedFieldsStats,
 }
 
@@ -686,7 +672,7 @@ pub struct IndexedFieldsStats {
     /// Number of Entity.name fields indexed
     pub entity_name_count: usize,
 
-    /// Number of Entity.description fields indexed (NEW - Phase 2)
+    /// Number of Entity.description fields indexed
     pub entity_description_count: usize,
 
     /// Number of TextSummary.text fields indexed
@@ -702,6 +688,7 @@ mod tests {
     use crate::config::CognifyConfig;
     use cognee_embedding::onnx::OnnxEmbeddingEngine;
     use cognee_graph::MockGraphDB;
+    use cognee_ontology::NoOpOntologyResolver;
     use cognee_storage::MockStorage;
     use cognee_vector::MockVectorDB;
 
@@ -721,7 +708,14 @@ mod tests {
         let embedding_config = EmbeddingConfig::minilm_l6("test_models");
         if let Ok(embedding_engine) = OnnxEmbeddingEngine::new(embedding_config) {
             let embedding_engine = Arc::new(embedding_engine);
-            let _pipeline = CognifyPipeline::new(storage, graph_db, vector_db, embedding_engine);
+            let _pipeline = CognifyPipeline::new(
+                storage,
+                graph_db,
+                vector_db,
+                embedding_engine,
+                CognifyConfig::default(),
+                None,
+            );
             // Pipeline should be created successfully
         }
         // If model doesn't exist, test passes anyway (unit test doesn't require files)
@@ -744,14 +738,97 @@ mod tests {
                 .with_chunks_per_batch(50)
                 .with_summarization(false);
 
-            let _pipeline = CognifyPipeline::with_config(
+            let _pipeline = CognifyPipeline::new(
                 storage,
                 graph_db,
                 vector_db,
                 embedding_engine,
                 config,
+                None,
             );
             // Pipeline should be created successfully with custom config
+        }
+    }
+
+    #[tokio::test]
+    async fn test_cognify_pipeline_with_no_ontology() {
+        use cognee_embedding::EmbeddingConfig;
+
+        let storage = Arc::new(MockStorage::new());
+        let graph_db = Arc::new(MockGraphDB::new());
+        let vector_db = Arc::new(MockVectorDB::new());
+
+        let embedding_config = EmbeddingConfig::minilm_l6("test_models");
+        if let Ok(embedding_engine) = OnnxEmbeddingEngine::new(embedding_config) {
+            let embedding_engine = Arc::new(embedding_engine);
+
+            // Create pipeline with no ontology resolver
+            let pipeline = CognifyPipeline::new(
+                storage,
+                graph_db,
+                vector_db,
+                embedding_engine,
+                CognifyConfig::default(),
+                None, // No ontology resolver
+            );
+
+            // Should not have ontology
+            assert!(!pipeline.has_ontology());
+        }
+    }
+
+    #[tokio::test]
+    async fn test_cognify_pipeline_with_noop_ontology() {
+        use cognee_embedding::EmbeddingConfig;
+        use cognee_ontology::NoOpOntologyResolver;
+
+        let storage = Arc::new(MockStorage::new());
+        let graph_db = Arc::new(MockGraphDB::new());
+        let vector_db = Arc::new(MockVectorDB::new());
+
+        let embedding_config = EmbeddingConfig::minilm_l6("test_models");
+        if let Ok(embedding_engine) = OnnxEmbeddingEngine::new(embedding_config) {
+            let embedding_engine = Arc::new(embedding_engine);
+
+            // Create pipeline with no-op ontology resolver
+            let pipeline = CognifyPipeline::new(
+                storage,
+                graph_db,
+                vector_db,
+                embedding_engine,
+                CognifyConfig::default(),
+                Some(Arc::new(NoOpOntologyResolver::new())),
+            );
+
+            // No-op resolver is not loaded, so has_ontology should return false
+            assert!(!pipeline.has_ontology());
+        }
+    }
+
+    #[tokio::test]
+    async fn test_cognify_pipeline_default_has_noop_ontology() {
+        use cognee_embedding::EmbeddingConfig;
+
+        let storage = Arc::new(MockStorage::new());
+        let graph_db = Arc::new(MockGraphDB::new());
+        let vector_db = Arc::new(MockVectorDB::new());
+
+        let embedding_config = EmbeddingConfig::minilm_l6("test_models");
+        if let Ok(embedding_engine) = OnnxEmbeddingEngine::new(embedding_config) {
+            let embedding_engine = Arc::new(embedding_engine);
+
+            // Pipeline with no-op ontology resolver
+            let pipeline = CognifyPipeline::new(
+                storage,
+                graph_db,
+                vector_db,
+                embedding_engine,
+                CognifyConfig::default(),
+                Some(Arc::new(NoOpOntologyResolver::new())),
+            );
+
+            // No-op resolver is not loaded, so has_ontology should return false
+            assert!(!pipeline.has_ontology());
         }
     }
 }

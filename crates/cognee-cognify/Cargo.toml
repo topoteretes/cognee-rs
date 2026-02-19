@@ -15,6 +15,7 @@ cognee-graph = { path = "../cognee-graph" }
 cognee-utils = { path = "../cognee-utils" }
 cognee-embedding = { path = "../cognee-embedding" }
 cognee-vector = { path = "../cognee-vector" }
+cognee-ontology = { path = "../cognee-ontology" }
 
 uuid = { version = "1", features = ["v4"] }
 tokio = { version = "1", features = ["rt-multi-thread"] }

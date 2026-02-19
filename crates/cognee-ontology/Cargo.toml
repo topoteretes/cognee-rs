@@ -1,0 +1,26 @@
+[package]
+name = "cognee-ontology"
+version = "0.1.0"
+edition.workspace = true
+
+[dependencies]
+cognee-models = { path = "../cognee-models" }
+
+uuid = { workspace = true }
+thiserror = { workspace = true }
+log = { workspace = true }
+
+# RDF/OWL parsing and graph operations
+sophia = "0.8"
+sophia_api = "0.8"
+sophia_inmem = "0.8"
+sophia_turtle = "0.8"
+sophia_xml = "0.8"
+sophia_jsonld = "0.8"
+
+# Fuzzy string matching for entity resolution
+strsim = "0.11"
+
+[dev-dependencies]
+tokio = { workspace = true }
+env_logger = "0.11"
