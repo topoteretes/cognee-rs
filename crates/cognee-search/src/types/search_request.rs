@@ -1,0 +1,39 @@
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
+
+use crate::types::SearchType;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SearchRequest {
+    pub query_text: String,
+    #[serde(default)]
+    pub search_type: SearchType,
+    pub top_k: Option<usize>,
+    pub datasets: Option<Vec<String>>,
+    pub dataset_ids: Option<Vec<Uuid>>,
+    pub system_prompt: Option<String>,
+    pub system_prompt_path: Option<String>,
+    pub only_context: Option<bool>,
+    pub use_combined_context: Option<bool>,
+    pub session_id: Option<String>,
+    pub node_type: Option<String>,
+    pub node_name: Option<String>,
+    pub wide_search_top_k: Option<usize>,
+    pub triplet_distance_penalty: Option<f32>,
+    pub save_interaction: Option<bool>,
+    pub verbose: Option<bool>,
+}
+
+impl SearchRequest {
+    pub fn only_context(&self) -> bool {
+        self.only_context.unwrap_or(false)
+    }
+
+    pub fn use_combined_context(&self) -> bool {
+        self.use_combined_context.unwrap_or(false)
+    }
+
+    pub fn top_k_or_default(&self, default_value: usize) -> usize {
+        self.top_k.unwrap_or(default_value)
+    }
+}

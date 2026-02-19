@@ -1,4 +1,6 @@
-use super::database_trait::{DatabaseError, DatabaseTrait};
+use super::database_trait::{
+    DatabaseError, DatabaseTrait, SearchHistoryEntry, SearchHistoryEntryType,
+};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use sqlx::{Row, SqlitePool};
@@ -92,6 +94,37 @@ impl DatabaseTrait for SqliteDatabase {
                 PRIMARY KEY (dataset_id, data_id),
                 FOREIGN KEY (dataset_id) REFERENCES datasets(id) ON DELETE CASCADE,
                 FOREIGN KEY (data_id) REFERENCES data(id) ON DELETE CASCADE
+            )
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        // Create queries table
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS queries (
+                id TEXT PRIMARY KEY,
+                query_text TEXT NOT NULL,
+                query_type TEXT NOT NULL,
+                user_id TEXT,
+                created_at TEXT NOT NULL
+            )
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        // Create results table
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS results (
+                id TEXT PRIMARY KEY,
+                query_id TEXT NOT NULL,
+                serialized_result TEXT NOT NULL,
+                user_id TEXT,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (query_id) REFERENCES queries(id) ON DELETE CASCADE
             )
             "#,
         )
@@ -383,5 +416,164 @@ impl DatabaseTrait for SqliteDatabase {
         .await?;
 
         Ok(())
+    }
+
+    async fn log_query(
+        &self,
+        query_text: &str,
+        query_type: &str,
+        user_id: Option<Uuid>,
+    ) -> Result<Uuid, DatabaseError> {
+        let query_id = Uuid::new_v4();
+        let created_at = Utc::now().to_rfc3339();
+        let user_id_str = user_id.map(|id| id.to_string());
+
+        sqlx::query(
+            r#"
+            INSERT INTO queries (id, query_text, query_type, user_id, created_at)
+            VALUES (?1, ?2, ?3, ?4, ?5)
+            "#,
+        )
+        .bind(query_id.to_string())
+        .bind(query_text)
+        .bind(query_type)
+        .bind(user_id_str)
+        .bind(created_at)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(query_id)
+    }
+
+    async fn log_result(
+        &self,
+        query_id: Uuid,
+        serialized_result: &str,
+        user_id: Option<Uuid>,
+    ) -> Result<Uuid, DatabaseError> {
+        let result_id = Uuid::new_v4();
+        let created_at = Utc::now().to_rfc3339();
+        let user_id_str = user_id.map(|id| id.to_string());
+
+        sqlx::query(
+            r#"
+            INSERT INTO results (id, query_id, serialized_result, user_id, created_at)
+            VALUES (?1, ?2, ?3, ?4, ?5)
+            "#,
+        )
+        .bind(result_id.to_string())
+        .bind(query_id.to_string())
+        .bind(serialized_result)
+        .bind(user_id_str)
+        .bind(created_at)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(result_id)
+    }
+
+    async fn get_history(
+        &self,
+        user_id: Option<Uuid>,
+        limit: Option<usize>,
+    ) -> Result<Vec<SearchHistoryEntry>, DatabaseError> {
+        let user_id_str = user_id.map(|id| id.to_string());
+        let history_limit = limit.unwrap_or(100) as i64;
+
+        let rows = if let Some(user_id) = user_id_str {
+            sqlx::query(
+                r#"
+                SELECT
+                    q.id AS entry_id,
+                    q.id AS query_id,
+                    'query' AS entry_type,
+                    q.query_text AS content,
+                    q.query_type AS query_type,
+                    q.user_id AS user_id,
+                    q.created_at AS created_at
+                FROM queries q
+                WHERE q.user_id = ?1
+                UNION ALL
+                SELECT
+                    r.id AS entry_id,
+                    r.query_id AS query_id,
+                    'result' AS entry_type,
+                    r.serialized_result AS content,
+                    q.query_type AS query_type,
+                    r.user_id AS user_id,
+                    r.created_at AS created_at
+                FROM results r
+                INNER JOIN queries q ON q.id = r.query_id
+                WHERE r.user_id = ?1
+                ORDER BY created_at DESC
+                LIMIT ?2
+                "#,
+            )
+            .bind(user_id)
+            .bind(history_limit)
+            .fetch_all(&self.pool)
+            .await?
+        } else {
+            sqlx::query(
+                r#"
+                SELECT
+                    q.id AS entry_id,
+                    q.id AS query_id,
+                    'query' AS entry_type,
+                    q.query_text AS content,
+                    q.query_type AS query_type,
+                    q.user_id AS user_id,
+                    q.created_at AS created_at
+                FROM queries q
+                UNION ALL
+                SELECT
+                    r.id AS entry_id,
+                    r.query_id AS query_id,
+                    'result' AS entry_type,
+                    r.serialized_result AS content,
+                    q.query_type AS query_type,
+                    r.user_id AS user_id,
+                    r.created_at AS created_at
+                FROM results r
+                INNER JOIN queries q ON q.id = r.query_id
+                ORDER BY created_at DESC
+                LIMIT ?1
+                "#,
+            )
+            .bind(history_limit)
+            .fetch_all(&self.pool)
+            .await?
+        };
+
+        let mut history_entries = Vec::with_capacity(rows.len());
+        for row in rows {
+            let entry_id: String = row.get("entry_id");
+            let query_id: String = row.get("query_id");
+            let entry_type: String = row.get("entry_type");
+            let created_at: String = row.get("created_at");
+            let user_id_raw: Option<String> = row.get("user_id");
+
+            history_entries.push(SearchHistoryEntry {
+                entry_id: Uuid::parse_str(&entry_id)
+                    .map_err(|e| DatabaseError::QueryError(e.to_string()))?,
+                query_id: Uuid::parse_str(&query_id)
+                    .map_err(|e| DatabaseError::QueryError(e.to_string()))?,
+                entry_type: if entry_type == "query" {
+                    SearchHistoryEntryType::Query
+                } else {
+                    SearchHistoryEntryType::Result
+                },
+                content: row.get("content"),
+                query_type: row.get("query_type"),
+                user_id: user_id_raw
+                    .map(|id| {
+                        Uuid::parse_str(&id).map_err(|e| DatabaseError::QueryError(e.to_string()))
+                    })
+                    .transpose()?,
+                created_at: Self::parse_datetime(&created_at)?,
+            });
+        }
+
+        Ok(history_entries)
     }
 }

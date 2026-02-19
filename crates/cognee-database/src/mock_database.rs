@@ -1,9 +1,30 @@
-use super::database_trait::{DatabaseError, DatabaseTrait};
+use super::database_trait::{
+    DatabaseError, DatabaseTrait, SearchHistoryEntry, SearchHistoryEntryType,
+};
 use async_trait::async_trait;
+use chrono::Utc;
 use cognee_models::{Data, Dataset};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
+
+#[derive(Clone)]
+struct QueryLog {
+    id: Uuid,
+    query_text: String,
+    query_type: String,
+    user_id: Option<Uuid>,
+    created_at: chrono::DateTime<Utc>,
+}
+
+#[derive(Clone)]
+struct ResultLog {
+    id: Uuid,
+    query_id: Uuid,
+    serialized_result: String,
+    user_id: Option<Uuid>,
+    created_at: chrono::DateTime<Utc>,
+}
 
 /// Mock database for testing
 /// Stores data in memory using HashMaps
@@ -13,6 +34,8 @@ pub struct MockDatabase {
     data: Arc<Mutex<HashMap<Uuid, Data>>>,
     dataset_data: Arc<Mutex<HashMap<Uuid, Vec<Uuid>>>>, // dataset_id -> vec of data_ids
     dataset_by_name: Arc<Mutex<HashMap<(String, Uuid), Uuid>>>, // (name, owner_id) -> dataset_id
+    query_logs: Arc<Mutex<Vec<QueryLog>>>,
+    result_logs: Arc<Mutex<Vec<ResultLog>>>,
 }
 
 impl MockDatabase {
@@ -22,6 +45,8 @@ impl MockDatabase {
             data: Arc::new(Mutex::new(HashMap::new())),
             dataset_data: Arc::new(Mutex::new(HashMap::new())),
             dataset_by_name: Arc::new(Mutex::new(HashMap::new())),
+            query_logs: Arc::new(Mutex::new(Vec::new())),
+            result_logs: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -157,6 +182,99 @@ impl DatabaseTrait for MockDatabase {
 
         Ok(())
     }
+
+    async fn log_query(
+        &self,
+        query_text: &str,
+        query_type: &str,
+        user_id: Option<Uuid>,
+    ) -> Result<Uuid, DatabaseError> {
+        let query_id = Uuid::new_v4();
+
+        self.query_logs.lock().unwrap().push(QueryLog {
+            id: query_id,
+            query_text: query_text.to_string(),
+            query_type: query_type.to_string(),
+            user_id,
+            created_at: Utc::now(),
+        });
+
+        Ok(query_id)
+    }
+
+    async fn log_result(
+        &self,
+        query_id: Uuid,
+        serialized_result: &str,
+        user_id: Option<Uuid>,
+    ) -> Result<Uuid, DatabaseError> {
+        let result_id = Uuid::new_v4();
+
+        self.result_logs.lock().unwrap().push(ResultLog {
+            id: result_id,
+            query_id,
+            serialized_result: serialized_result.to_string(),
+            user_id,
+            created_at: Utc::now(),
+        });
+
+        Ok(result_id)
+    }
+
+    async fn get_history(
+        &self,
+        user_id: Option<Uuid>,
+        limit: Option<usize>,
+    ) -> Result<Vec<SearchHistoryEntry>, DatabaseError> {
+        let query_logs = self.query_logs.lock().unwrap().clone();
+        let result_logs = self.result_logs.lock().unwrap().clone();
+
+        let mut history_entries = Vec::new();
+
+        for query in query_logs {
+            if user_id.is_none() || query.user_id == user_id {
+                history_entries.push(SearchHistoryEntry {
+                    entry_id: query.id,
+                    query_id: query.id,
+                    entry_type: SearchHistoryEntryType::Query,
+                    content: query.query_text,
+                    query_type: Some(query.query_type),
+                    user_id: query.user_id,
+                    created_at: query.created_at,
+                });
+            }
+        }
+
+        let query_type_by_id: HashMap<Uuid, String> = self
+            .query_logs
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|q| (q.id, q.query_type.clone()))
+            .collect();
+
+        for result in result_logs {
+            if user_id.is_none() || result.user_id == user_id {
+                history_entries.push(SearchHistoryEntry {
+                    entry_id: result.id,
+                    query_id: result.query_id,
+                    entry_type: SearchHistoryEntryType::Result,
+                    content: result.serialized_result,
+                    query_type: query_type_by_id.get(&result.query_id).cloned(),
+                    user_id: result.user_id,
+                    created_at: result.created_at,
+                });
+            }
+        }
+
+        history_entries.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+
+        if let Some(limit) = limit {
+            history_entries.truncate(limit);
+        }
+
+        Ok(history_entries)
+    }
 }
 
 #[cfg(test)]
@@ -236,5 +354,31 @@ mod tests {
         let dataset_data = db.get_dataset_data(dataset.id).await.unwrap();
         assert_eq!(dataset_data.len(), 1);
         assert_eq!(dataset_data[0].id, data.id);
+    }
+
+    #[tokio::test]
+    async fn test_mock_database_search_history() {
+        let db = MockDatabase::new();
+        let query_id = db
+            .log_query("what is cognee", "CHUNKS", None)
+            .await
+            .unwrap();
+
+        db.log_result(query_id, "{\"result\":\"ok\"}", None)
+            .await
+            .unwrap();
+
+        let history = db.get_history(None, Some(10)).await.unwrap();
+        assert_eq!(history.len(), 2);
+        assert!(
+            history
+                .iter()
+                .any(|entry| entry.entry_type == SearchHistoryEntryType::Query)
+        );
+        assert!(
+            history
+                .iter()
+                .any(|entry| entry.entry_type == SearchHistoryEntryType::Result)
+        );
     }
 }

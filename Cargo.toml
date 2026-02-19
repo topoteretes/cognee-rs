@@ -13,6 +13,7 @@ members = [
     "crates/cognee-embedding",
     "crates/cognee-vector",
     "crates/cognee-ontology",
+    "crates/cognee-search",
 ]
 resolver = "3"
 

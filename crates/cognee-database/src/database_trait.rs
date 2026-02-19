@@ -1,5 +1,7 @@
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use cognee_models::{Data, Dataset};
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -16,6 +18,23 @@ pub enum DatabaseError {
 
     #[error("Unique violation: {0}")]
     UniqueViolation(String),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum SearchHistoryEntryType {
+    Query,
+    Result,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SearchHistoryEntry {
+    pub entry_id: Uuid,
+    pub query_id: Uuid,
+    pub entry_type: SearchHistoryEntryType,
+    pub content: String,
+    pub query_type: Option<String>,
+    pub user_id: Option<Uuid>,
+    pub created_at: DateTime<Utc>,
 }
 
 #[async_trait]
@@ -39,6 +58,27 @@ pub trait DatabaseTrait: Send + Sync {
         dataset_id: Uuid,
         data_id: Uuid,
     ) -> Result<(), DatabaseError>;
+
+    // Search persistence operations
+    async fn log_query(
+        &self,
+        query_text: &str,
+        query_type: &str,
+        user_id: Option<Uuid>,
+    ) -> Result<Uuid, DatabaseError>;
+
+    async fn log_result(
+        &self,
+        query_id: Uuid,
+        serialized_result: &str,
+        user_id: Option<Uuid>,
+    ) -> Result<Uuid, DatabaseError>;
+
+    async fn get_history(
+        &self,
+        user_id: Option<Uuid>,
+        limit: Option<usize>,
+    ) -> Result<Vec<SearchHistoryEntry>, DatabaseError>;
 
     // Initialize schema
     async fn initialize(&self) -> Result<(), DatabaseError>;

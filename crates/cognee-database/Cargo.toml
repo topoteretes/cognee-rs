@@ -13,6 +13,7 @@ chrono.workspace = true
 sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "uuid", "chrono"] }
 thiserror.workspace = true
 uuid.workspace = true
+serde.workspace = true
 
 [dev-dependencies]
 tokio.workspace = true
