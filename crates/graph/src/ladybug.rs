@@ -105,7 +105,6 @@ impl LadybugAdapter {
             .query(query)
             .map_err(|e| GraphDBError::QueryError(format!("Query failed: {}", e)))?;
 
-        // Convert QueryResult iterator to Vec<Vec<serde_json::Value>>
         let rows: Vec<Vec<serde_json::Value>> = result
             .map(|row| row.into_iter().map(Self::lbug_value_to_json).collect())
             .collect();
@@ -205,7 +204,6 @@ impl LadybugAdapter {
     /// as a JSON properties string.
     ///
     fn serialize_to_node_props<T: Serialize>(&self, node: &T) -> GraphDBResult<NodeProperties> {
-        // Serialize the entire object to JSON
         let json_str = serde_json::to_string(&node).map_err(GraphDBError::SerializationError)?;
 
         let json_value: serde_json::Value =
@@ -219,7 +217,6 @@ impl LadybugAdapter {
             ));
         };
 
-        // Extract timestamps
         let created_at = props
             .get("created_at")
             .and_then(|v| v.as_str())
@@ -234,14 +231,12 @@ impl LadybugAdapter {
             .map(|dt| dt.with_timezone(&Utc))
             .unwrap_or_else(Utc::now);
 
-        // Extract ID
         let id = props
             .get("id")
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
 
-        // Extract core fields
         let name = props
             .remove("name")
             .and_then(|v| v.as_str().map(String::from))
@@ -253,13 +248,11 @@ impl LadybugAdapter {
             .unwrap_or("Unknown")
             .to_string();
 
-        // Remove core fields that are stored separately
         props.remove("id");
         props.remove("created_at");
         props.remove("updated_at");
         props.remove("data_type");
 
-        // Serialize remaining properties as JSON string
         let properties_json =
             serde_json::to_string(&props).map_err(GraphDBError::SerializationError)?;
 

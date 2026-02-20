@@ -38,46 +38,39 @@ pub fn chunk_text<C: TokenCounter>(
 
     for para in &paragraph_chunks {
         if accumulated_size + para.chunk_size <= max_chunk_size {
-            // Fits: accumulate
             accumulated.push(para);
             accumulated_size += para.chunk_size;
+        } else if accumulated.is_empty() {
+            result.push(DocumentChunk {
+                id: para.chunk_id,
+                text: para.text.to_owned(),
+                chunk_size: para.chunk_size,
+                chunk_index,
+                cut_type: para.cut_type.to_string(),
+                document_id,
+            });
+            chunk_index += 1;
         } else {
-            // Overflow
-            if accumulated.is_empty() {
-                // Single oversized paragraph — emit as-is with the paragraph's own ID
-                result.push(DocumentChunk {
-                    id: para.chunk_id,
-                    text: para.text.to_owned(),
-                    chunk_size: para.chunk_size,
-                    chunk_index,
-                    cut_type: para.cut_type.to_string(),
-                    document_id,
-                });
-                chunk_index += 1;
-            } else {
-                // Emit accumulated chunks joined with space
-                let chunk_text: String = accumulated
-                    .iter()
-                    .map(|c| c.text)
-                    .collect::<Vec<_>>()
-                    .join(" ");
-                let cut_type = accumulated.last().unwrap().cut_type.to_string();
-                result.push(DocumentChunk {
-                    id: Uuid::new_v5(
-                        &NAMESPACE_OID,
-                        format!("{}-{}", document_id, chunk_index).as_bytes(),
-                    ),
-                    text: chunk_text,
-                    chunk_size: accumulated_size,
-                    chunk_index,
-                    cut_type,
-                    document_id,
-                });
-                chunk_index += 1;
-                // Start new accumulation with current paragraph
-                accumulated = vec![para];
-                accumulated_size = para.chunk_size;
-            }
+            let chunk_text: String = accumulated
+                .iter()
+                .map(|c| c.text)
+                .collect::<Vec<_>>()
+                .join(" ");
+            let cut_type = accumulated.last().unwrap().cut_type.to_string();
+            result.push(DocumentChunk {
+                id: Uuid::new_v5(
+                    &NAMESPACE_OID,
+                    format!("{}-{}", document_id, chunk_index).as_bytes(),
+                ),
+                text: chunk_text,
+                chunk_size: accumulated_size,
+                chunk_index,
+                cut_type,
+                document_id,
+            });
+            chunk_index += 1;
+            accumulated = vec![para];
+            accumulated_size = para.chunk_size;
         }
     }
 

@@ -44,10 +44,8 @@ impl OnnxEmbeddingEngine {
     /// let engine = OnnxEmbeddingEngine::new(config)?;
     /// ```
     pub fn new(config: EmbeddingConfig) -> EmbeddingResult<Self> {
-        // 1. Initialize ONNX Runtime (safe to call multiple times)
         ort::init().commit();
 
-        // 2. Verify model file exists
         if !config.model_path.exists() {
             return Err(EmbeddingError::ModelLoadError(format!(
                 "Model file not found: {:?}",
@@ -55,7 +53,6 @@ impl OnnxEmbeddingEngine {
             )));
         }
 
-        // 3. Load HuggingFace tokenizer from file
         info!("Loading tokenizer: {:?}", config.tokenizer_path);
         let tokenizer = Tokenizer::from_file(&config.tokenizer_path).map_err(|e| {
             EmbeddingError::TokenizerError(format!(
@@ -64,7 +61,6 @@ impl OnnxEmbeddingEngine {
             ))
         })?;
 
-        // 4. Load ONNX session with optimization
         info!("Loading ONNX model: {:?}", config.model_path);
         let session = Session::builder()
             .map_err(|e| EmbeddingError::ModelLoadError(e.to_string()))?
@@ -105,7 +101,6 @@ impl OnnxEmbeddingEngine {
     /// let engine = OnnxEmbeddingEngine::with_auto_download(config).await?;
     /// ```
     pub async fn with_auto_download(config: EmbeddingConfig) -> EmbeddingResult<Self> {
-        // 1. Determine URLs based on model name
         let (model_url, tokenizer_url) = match config.model_name.as_str() {
             "bge-small-en-v1.5" => (
                 ModelUrls::BGE_SMALL.model_url,
@@ -123,20 +118,17 @@ impl OnnxEmbeddingEngine {
             }
         };
 
-        // 2. Ensure model exists (download if missing)
         let model_downloaded = ensure_model_exists(&config.model_path, model_url).await?;
         if model_downloaded {
             info!("✓ Downloaded model to {:?}", config.model_path);
         }
 
-        // 3. Ensure tokenizer exists (download if missing)
         let tokenizer_downloaded =
             ensure_tokenizer_exists(&config.tokenizer_path, tokenizer_url).await?;
         if tokenizer_downloaded {
             info!("✓ Downloaded tokenizer to {:?}", config.tokenizer_path);
         }
 
-        // 4. Create engine using existing constructor (model and tokenizer now guaranteed to exist)
         Self::new(config)
     }
 
@@ -157,7 +149,6 @@ impl OnnxEmbeddingEngine {
         let mut attention_mask_batch = Vec::new();
 
         for text in texts {
-            // Encode with HuggingFace tokenizer
             let encoding = tokenizer
                 .encode(*text, true)
                 .map_err(|e| EmbeddingError::TokenizerError(e.to_string()))?;
@@ -173,13 +164,11 @@ impl OnnxEmbeddingEngine {
                 .map(|&m| m as i64)
                 .collect::<Vec<_>>();
 
-            // Truncate if needed
             if ids.len() > max_len {
                 ids.truncate(max_len);
                 mask.truncate(max_len);
             }
 
-            // Pad if needed
             while ids.len() < max_len {
                 ids.push(0); // [PAD] token
                 mask.push(0); // Padding mask
@@ -204,14 +193,12 @@ impl OnnxEmbeddingEngine {
         let output_dim = self.config.dimensions;
 
         if output_shape.len() == 3 {
-            // Shape: [batch_size, seq_len, hidden_dim] - need mean pooling
             let seq_len = output_shape[1];
             let hidden_dim = output_shape[2];
 
             let pooled = mean_pool(output_data, seq_len, hidden_dim, attention_mask, output_dim);
             Ok(l2_normalize(&pooled))
         } else if output_shape.len() == 2 {
-            // Shape: [seq_len, hidden_dim] - take first output_dim values
             let embedding: Vec<f32> = output_data.iter().take(output_dim).copied().collect();
             Ok(l2_normalize(&embedding))
         } else {
@@ -233,15 +220,12 @@ impl EmbeddingEngine for OnnxEmbeddingEngine {
         let batch_size = texts.len();
         let seq_len = self.config.max_sequence_length;
 
-        // 1. Tokenize batch
         let (input_ids_batch, attention_mask_batch) = self.tokenize_batch(texts)?;
 
-        // 2. Flatten to 2D tensors [batch_size, seq_len]
         let input_ids_flat: Vec<i64> = input_ids_batch.iter().flatten().copied().collect();
         let attention_mask_flat: Vec<i64> =
             attention_mask_batch.iter().flatten().copied().collect();
 
-        // 3. Create ONNX tensors
         let input_ids_tensor = Tensor::from_array((vec![batch_size, seq_len], input_ids_flat))
             .map_err(|e| EmbeddingError::InferenceError(e.to_string()))?;
         let attention_mask_tensor =
@@ -251,7 +235,6 @@ impl EmbeddingEngine for OnnxEmbeddingEngine {
             Tensor::from_array((vec![batch_size, seq_len], vec![0i64; batch_size * seq_len]))
                 .map_err(|e| EmbeddingError::InferenceError(e.to_string()))?;
 
-        // 4. Run inference (blocking - spawn in tokio threadpool)
         let session = Arc::clone(&self.session);
         let attention_masks = attention_mask_batch.clone();
 
@@ -264,7 +247,6 @@ impl EmbeddingEngine for OnnxEmbeddingEngine {
             })?;
 
             let (shape, data) = outputs[0].try_extract_tensor::<f32>()?;
-            // Convert shape dimensions to usize
             let shape_usize: Vec<usize> = shape.iter().map(|&d| d as usize).collect();
             Ok::<_, Box<dyn std::error::Error + Send + Sync>>((shape_usize, data.to_vec()))
         })
@@ -272,11 +254,9 @@ impl EmbeddingEngine for OnnxEmbeddingEngine {
         .map_err(|e| EmbeddingError::InferenceError(e.to_string()))?
         .map_err(|e| EmbeddingError::InferenceError(e.to_string()))?;
 
-        // 5. Extract embeddings for each sample in batch
         let mut embeddings = Vec::with_capacity(batch_size);
 
         if output_shape.len() == 3 {
-            // Shape: [batch_size, seq_len, hidden_dim]
             let seq_len = output_shape[1];
             let hidden_dim = output_shape[2];
             let sample_size = seq_len * hidden_dim;
@@ -292,7 +272,6 @@ impl EmbeddingEngine for OnnxEmbeddingEngine {
                 embeddings.push(embedding);
             }
         } else if output_shape.len() == 2 && batch_size == 1 {
-            // Single sample, 2D output
             let embedding =
                 self.extract_embedding(&output_data, &output_shape, &attention_masks[0])?;
             embeddings.push(embedding);

@@ -32,12 +32,10 @@ impl ModelUrls {
 /// Creates parent directories if they don't exist.
 /// Shows progress during download.
 async fn download_file(url: &str, dest: &Path) -> EmbeddingResult<()> {
-    // Create parent directory
     if let Some(parent) = dest.parent() {
         fs::create_dir_all(parent).await?;
     }
 
-    // Download file
     let response = reqwest::get(url).await.map_err(|e| {
         EmbeddingError::ModelLoadError(format!("Failed to download {}: {}", url, e))
     })?;
@@ -55,7 +53,6 @@ async fn download_file(url: &str, dest: &Path) -> EmbeddingResult<()> {
         .await
         .map_err(|e| EmbeddingError::ModelLoadError(format!("Failed to read response: {}", e)))?;
 
-    // Write to file
     let mut file = fs::File::create(dest).await?;
     file.write_all(&bytes).await?;
     file.flush().await?;
@@ -138,10 +135,8 @@ pub async fn download_model(
         model_dir.join("minilm-l6-tokenizer.json")
     };
 
-    // Download model if missing
     ensure_model_exists(&model_path, urls.model_url).await?;
 
-    // Download tokenizer if missing
     ensure_tokenizer_exists(&tokenizer_path, urls.tokenizer_url).await?;
 
     Ok((model_path, tokenizer_path))

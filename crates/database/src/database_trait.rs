@@ -51,7 +51,6 @@ pub struct ArtifactReference {
 
 #[async_trait]
 pub trait DatabaseTrait: Send + Sync {
-    // Data operations
     async fn create_data(&self, data: Data) -> Result<Data, DatabaseError>;
     async fn get_data(&self, id: Uuid) -> Result<Option<Data>, DatabaseError>;
     async fn delete_data(&self, id: Uuid) -> Result<(), DatabaseError>;
@@ -60,7 +59,6 @@ pub trait DatabaseTrait: Send + Sync {
     async fn count_data_dataset_links(&self, data_id: Uuid) -> Result<usize, DatabaseError>;
     async fn list_datasets_for_data(&self, data_id: Uuid) -> Result<Vec<Dataset>, DatabaseError>;
 
-    // Dataset operations
     async fn create_dataset(&self, dataset: Dataset) -> Result<Dataset, DatabaseError>;
     async fn get_dataset(&self, id: Uuid) -> Result<Option<Dataset>, DatabaseError>;
     async fn get_dataset_by_name(
@@ -82,7 +80,6 @@ pub trait DatabaseTrait: Send + Sync {
         data_id: Uuid,
     ) -> Result<(), DatabaseError>;
 
-    // Artifact provenance operations
     async fn upsert_artifact_references(
         &self,
         references: &[ArtifactReference],
@@ -105,7 +102,6 @@ pub trait DatabaseTrait: Send + Sync {
         Ok(vec![])
     }
 
-    // Search persistence operations
     async fn log_query(
         &self,
         query_text: &str,
@@ -126,6 +122,5 @@ pub trait DatabaseTrait: Send + Sync {
         limit: Option<usize>,
     ) -> Result<Vec<SearchHistoryEntry>, DatabaseError>;
 
-    // Initialize schema
     async fn initialize(&self) -> Result<(), DatabaseError>;
 }

@@ -54,10 +54,8 @@ impl<S: StorageTrait> ExtractTextChunksPipeline<S> {
             return Err(ChunkingError::InvalidChunkSize(0));
         }
 
-        // Stage 1: Classify documents
         let documents: Vec<Document> = classify_documents(&data_items);
 
-        // Stage 2: Chunk text
         let mut all_chunks = Vec::new();
         for document in &documents {
             let content_bytes = self

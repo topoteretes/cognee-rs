@@ -82,7 +82,6 @@ impl Entity {
             dataset_id,
         );
 
-        // Store original node ID in metadata for reference
         entity
             .base
             .set_metadata("original_node_id", serde_json::json!(node_id.into()));

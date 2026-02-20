@@ -152,7 +152,6 @@ where
                 return Ok(result);
             }
             Err(error) => {
-                // Check if we should retry
                 let decision = should_retry(&error);
 
                 match decision {

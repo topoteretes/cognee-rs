@@ -56,7 +56,6 @@ impl Default for MockGraphDB {
 #[async_trait]
 impl GraphDBTrait for MockGraphDB {
     async fn initialize(&self) -> GraphDBResult<()> {
-        // No-op for mock
         Ok(())
     }
 
@@ -69,7 +68,6 @@ impl GraphDBTrait for MockGraphDB {
         _query: &str,
         _params: Option<HashMap<Cow<'static, str>, serde_json::Value>>,
     ) -> GraphDBResult<Vec<Vec<serde_json::Value>>> {
-        // Not implemented for mock
         Err(GraphDBError::QueryError(
             "Query not supported in MockGraphDB".to_string(),
         ))
@@ -94,7 +92,6 @@ impl GraphDBTrait for MockGraphDB {
             }
         }
 
-        // Extract ID from node_data
         let id = node_data
             .get("id")
             .and_then(|v| v.as_str())
@@ -290,7 +287,6 @@ impl GraphDBTrait for MockGraphDB {
         &self,
         _attribute_filters: &HashMap<Cow<'static, str>, Vec<serde_json::Value>>,
     ) -> GraphDBResult<(Vec<(String, NodeData)>, Vec<EdgeData>)> {
-        // Simple implementation: return all data (filtering not implemented)
         self.get_graph_data().await
     }
 
@@ -299,7 +295,6 @@ impl GraphDBTrait for MockGraphDB {
         _node_type: &str,
         _node_names: &[String],
     ) -> GraphDBResult<(Vec<(String, NodeData)>, Vec<EdgeData>)> {
-        // Simple implementation: return all data (filtering not implemented)
         self.get_graph_data().await
     }
 }

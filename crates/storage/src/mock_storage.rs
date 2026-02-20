@@ -76,15 +76,10 @@ impl StorageTrait for MockStorage {
     }
 
     async fn create_writer(&self, _file_name: &str) -> Result<StorageWriter, StorageError> {
-        // For mock storage, we'll create a temporary file and then move it to memory
-        // This is a simplified implementation for testing
         let location = self.generate_location();
         let temp_file =
             tempfile::NamedTempFile::new().map_err(|e| StorageError::IoError(e.to_string()))?;
 
-        // We need to store the data reference and location for later
-        // In a real implementation, we'd have a custom writer that writes directly to the HashMap
-        // For now, we'll use a file-backed approach
         Ok(StorageWriter::new(
             tokio::fs::File::from_std(
                 temp_file

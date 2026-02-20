@@ -31,7 +31,6 @@ pub enum UrlFetcherError {
     IoError(String),
 }
 
-// Keep custom From<reqwest::Error> for specialized handling
 impl From<reqwest::Error> for UrlFetcherError {
     fn from(err: reqwest::Error) -> Self {
         if err.is_timeout() {

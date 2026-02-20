@@ -52,7 +52,6 @@ impl QdrantAdapter {
             dimension,
         };
 
-        // Auto-load existing shards (ignore errors, they'll surface on actual operations)
         if let Err(e) = adapter.load_existing_shards() {
             warn!("Warning: Failed to load existing shards: {}", e);
         }
@@ -74,7 +73,6 @@ impl QdrantAdapter {
             return Ok(0);
         }
 
-        // Scan data directory for collection folders
         let entries = std::fs::read_dir(&self.data_dir)?;
 
         for entry in entries {
@@ -88,13 +86,11 @@ impl QdrantAdapter {
                     .map(|s| s.to_string());
 
                 if let Some(collection) = collection_name {
-                    // Try to load the shard (use default dimension, will be validated on use)
                     match self.get_or_create_shard(&collection, self.dimension) {
                         Ok(_) => {
                             loaded_count += 1;
                         }
                         Err(e) => {
-                            // Log error but continue loading other shards
                             warn!("Warning: Failed to load shard '{}': {}", collection, e);
                         }
                     }
@@ -120,7 +116,6 @@ impl QdrantAdapter {
         collection: &str,
         dimension: usize,
     ) -> VectorDBResult<Arc<EdgeShard>> {
-        // Check if already loaded
         {
             let shards = self.shards.read().unwrap();
             if let Some(shard) = shards.get(collection) {
@@ -128,11 +123,9 @@ impl QdrantAdapter {
             }
         }
 
-        // Create shard directory
         let shard_path = self.data_dir.join(collection);
         std::fs::create_dir_all(&shard_path)?;
 
-        // Configure segment
         let config = SegmentConfig {
             vector_data: HashMap::from([(
                 "default".to_string(),
@@ -150,13 +143,11 @@ impl QdrantAdapter {
             payload_storage_type: PayloadStorageType::Mmap,
         };
 
-        // Load or create EdgeShard
         let shard = Arc::new(
             EdgeShard::load(&shard_path, Some(config))
                 .map_err(|e| VectorDBError::StorageError(e.to_string()))?,
         );
 
-        // Store in map
         let mut shards = self.shards.write().unwrap();
         shards.insert(collection.to_string(), shard.clone());
 
@@ -170,8 +161,6 @@ impl QdrantAdapter {
             .map(|p| ExtendedPointId::NumId(p.id.as_u128() as u64))
             .collect();
 
-        // Use Named variant with "default" vector name to match queries
-        // Convert each Vec<f32> to VectorPersisted::Dense
         let vectors: Vec<VectorPersisted> = points
             .iter()
             .map(|p| VectorPersisted::Dense(p.vector.clone()))
@@ -237,12 +226,10 @@ impl VectorDB for QdrantAdapter {
     ) -> VectorDBResult<()> {
         let collection = Self::collection_name(data_type, field_name);
 
-        // Check if already exists
         if self.has_collection(data_type, field_name).await? {
             return Err(VectorDBError::CollectionExists(collection));
         }
 
-        // Create shard (will be created on first use)
         self.get_or_create_shard(&collection, dimension)?;
 
         Ok(())
@@ -251,7 +238,6 @@ impl VectorDB for QdrantAdapter {
     async fn has_collection(&self, data_type: &str, field_name: &str) -> VectorDBResult<bool> {
         let collection = Self::collection_name(data_type, field_name);
 
-        // First check in-memory cache
         {
             let shards = self.shards.read().unwrap();
             if shards.contains_key(&collection) {
@@ -259,7 +245,6 @@ impl VectorDB for QdrantAdapter {
             }
         }
 
-        // Check if collection exists on disk
         let shard_path = self.data_dir.join(&collection);
         Ok(shard_path.exists() && shard_path.is_dir())
     }
@@ -276,7 +261,6 @@ impl VectorDB for QdrantAdapter {
 
         let collection = Self::collection_name(data_type, field_name);
 
-        // Validate dimension
         let expected_dim = points[0].vector.len();
         for point in points {
             if point.vector.len() != expected_dim {
@@ -287,13 +271,10 @@ impl VectorDB for QdrantAdapter {
             }
         }
 
-        // Get or create shard
         let shard = self.get_or_create_shard(&collection, expected_dim)?;
 
-        // Convert to batch format (more efficient than PointsList)
         let batch = Self::points_to_batch(points);
 
-        // Upsert into shard
         shard
             .update(PointOperation(UpsertPoints(PointsBatch(batch))))
             .map_err(|e| VectorDBError::StorageError(e.to_string()))?;
@@ -310,10 +291,8 @@ impl VectorDB for QdrantAdapter {
     ) -> VectorDBResult<Vec<SearchResult>> {
         let collection = Self::collection_name(data_type, field_name);
 
-        // Get shard
         let shard = self.get_or_create_shard(&collection, self.dimension)?;
 
-        // Perform query
         let query_vec: VectorInternal = query_vector.to_vec().into();
         let results = shard
             .query(ShardQueryRequest {
@@ -341,7 +320,6 @@ impl VectorDB for QdrantAdapter {
 
         shards.remove(&collection);
 
-        // Delete shard directory
         let shard_path = self.data_dir.join(&collection);
         if shard_path.exists() {
             std::fs::remove_dir_all(&shard_path)?;

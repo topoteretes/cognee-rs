@@ -100,10 +100,8 @@ impl EntityType {
         if let Some(canonical) = canonical_name
             && canonical != self.name
         {
-            // Store original name in metadata
             self.base
                 .set_metadata("original_name", serde_json::json!(self.name.clone()));
-            // Update to canonical name
             self.name = canonical;
         }
     }

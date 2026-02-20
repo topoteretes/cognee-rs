@@ -47,10 +47,6 @@ use crate::{EdgeData, GraphDBResult, GraphNode, NodeData};
 /// - `get_nodeset_subgraph()` - Get subgraph for specific nodes
 #[async_trait]
 pub trait GraphDBTrait: Send + Sync {
-    // =================
-    // Core Operations
-    // =================
-
     /// Initialize the database schema.
     ///
     /// Creates necessary tables, indexes, and constraints.
@@ -76,10 +72,6 @@ pub trait GraphDBTrait: Send + Sync {
     /// Delete the entire graph (all nodes and edges).
     ///
     async fn delete_graph(&self) -> GraphDBResult<()>;
-
-    // =================
-    // Node Operations
-    // =================
 
     /// Check if a node exists by ID.
     ///
@@ -116,10 +108,6 @@ pub trait GraphDBTrait: Send + Sync {
     /// Get multiple nodes by IDs.
     ///
     async fn get_nodes(&self, node_ids: &[String]) -> GraphDBResult<Vec<NodeData>>;
-
-    // =================
-    // Edge Operations
-    // =================
 
     /// Check if an edge exists between two nodes.
     ///
@@ -169,10 +157,6 @@ pub trait GraphDBTrait: Send + Sync {
     /// Returns edges in format: (source_id, target_id, relationship_name, properties)
     ///
     async fn get_edges(&self, node_id: &str) -> GraphDBResult<Vec<EdgeData>>;
-
-    // =================
-    // Graph Queries
-    // =================
 
     /// Get all neighboring nodes (directly connected).
     ///

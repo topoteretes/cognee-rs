@@ -40,18 +40,14 @@ impl DataInput {
 
         match self {
             Self::Text(text) => {
-                // For text, process as a single chunk since it's already in memory
                 callback(text.as_bytes()).await?;
             }
             Self::FilePath(path) => {
-                // Remove file:// prefix if present
                 let clean_path = path.strip_prefix("file://").unwrap_or(path);
 
-                // Open file for streaming
                 let mut file = File::open(clean_path).await.map_err(E::from)?;
                 let mut buffer = vec![0u8; BUFFER_SIZE];
 
-                // Read and process in chunks
                 loop {
                     let bytes_read = file.read(&mut buffer).await.map_err(E::from)?;
                     if bytes_read == 0 {
@@ -61,7 +57,6 @@ impl DataInput {
                 }
             }
             Self::Url(_url) => {
-                // URL processing not yet implemented
                 return Err(E::from(std::io::Error::new(
                     std::io::ErrorKind::Unsupported,
                     "URL processing not yet supported",

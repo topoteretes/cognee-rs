@@ -162,7 +162,6 @@ impl OntologyResolver for RdfLibOntologyResolver {
         // BFS traversal
         let (nodes, edges) = bfs_extract_subgraph(graph, start_uri, directed)?;
 
-        // Create root node
         let root_node = AttachedOntologyNode::new(start_uri.to_string(), category);
 
         Ok((nodes, edges, Some(root_node)))

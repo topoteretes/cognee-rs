@@ -109,29 +109,23 @@ pub enum ChunkStrategy {
 impl Default for CognifyConfig {
     fn default() -> Self {
         Self {
-            // Chunking
             max_chunk_size: 1500,
             chunk_overlap: 10,
             chunk_strategy: ChunkStrategy::Paragraph,
 
-            // Graph Extraction
             chunks_per_batch: 100,
             max_parallel_extractions: 50,
             custom_extraction_prompt: None,
 
-            // Summarization
             enable_summarization: true,
             summarization_batch_size: 50,
 
-            // Embedding & Indexing
             embed_triplets: false,
             embedding_batch_size: 100,
             vector_collection_prefix: String::new(),
 
-            // Incremental Processing
             incremental_loading: true,
 
-            // Advanced
             temporal_cognify: false,
             data_per_batch: 20,
         }

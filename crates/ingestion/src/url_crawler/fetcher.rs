@@ -37,18 +37,14 @@ impl UrlFetcher {
 
     /// Fetch URL and return HTML content as string
     pub async fn fetch(&self, url: &str) -> Result<String, UrlFetcherError> {
-        // Validate URL
         let parsed_url = Url::parse(url)?;
 
-        // Check robots.txt if enabled
         if self.config.respect_robots_txt {
             self.check_robots_txt(&parsed_url).await?;
         }
 
-        // Fetch content
         let response = self.client.get(url).send().await?;
 
-        // Check status
         let status = response.status();
         if !status.is_success() {
             return Err(UrlFetcherError::HttpStatus(
@@ -57,7 +53,6 @@ impl UrlFetcher {
             ));
         }
 
-        // Get HTML content
         let html = response.text().await?;
         Ok(html)
     }
@@ -75,18 +70,14 @@ impl UrlFetcher {
     {
         use futures_util::StreamExt;
 
-        // Validate URL
         let parsed_url = Url::parse(url)?;
 
-        // Check robots.txt if enabled
         if self.config.respect_robots_txt {
             self.check_robots_txt(&parsed_url).await?;
         }
 
-        // Fetch content
         let response = self.client.get(url).send().await?;
 
-        // Check status
         let status = response.status();
         if !status.is_success() {
             return Err(UrlFetcherError::HttpStatus(
@@ -95,7 +86,6 @@ impl UrlFetcher {
             ));
         }
 
-        // Stream chunks
         let mut stream = response.bytes_stream();
         while let Some(chunk_result) = stream.next().await {
             let chunk = chunk_result.map_err(|e| UrlFetcherError::HttpError(e.to_string()))?;

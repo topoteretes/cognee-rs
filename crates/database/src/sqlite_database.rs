@@ -50,7 +50,6 @@ impl From<sqlx::Error> for DatabaseError {
 #[async_trait]
 impl DatabaseTrait for SqliteDatabase {
     async fn initialize(&self) -> Result<(), DatabaseError> {
-        // Create datasets table
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS datasets (
@@ -65,7 +64,6 @@ impl DatabaseTrait for SqliteDatabase {
         .execute(&self.pool)
         .await?;
 
-        // Create data table
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS data (
@@ -85,7 +83,6 @@ impl DatabaseTrait for SqliteDatabase {
         .execute(&self.pool)
         .await?;
 
-        // Create dataset_data junction table
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS dataset_data (
@@ -100,7 +97,6 @@ impl DatabaseTrait for SqliteDatabase {
         .execute(&self.pool)
         .await?;
 
-        // Create queries table
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS queries (
@@ -115,7 +111,6 @@ impl DatabaseTrait for SqliteDatabase {
         .execute(&self.pool)
         .await?;
 
-        // Create results table
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS results (
@@ -131,7 +126,6 @@ impl DatabaseTrait for SqliteDatabase {
         .execute(&self.pool)
         .await?;
 
-        // Create artifact_references table for provenance-backed delete resolution
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS artifact_references (

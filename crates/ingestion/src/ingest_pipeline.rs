@@ -22,7 +22,6 @@ impl<S: StorageTrait, D: DatabaseTrait> IngestPipeline<S, D> {
         dataset_name: &str,
         owner_id: Uuid,
     ) -> Result<Vec<Data>, Box<dyn std::error::Error>> {
-        // 1. Get or create dataset
         let dataset = match self
             .database
             .get_dataset_by_name(dataset_name, owner_id)
@@ -38,11 +37,9 @@ impl<S: StorageTrait, D: DatabaseTrait> IngestPipeline<S, D> {
         let mut created_data = Vec::new();
 
         for input in inputs {
-            // Use streaming approach to avoid loading large files into memory
             let (content_hash, data_id, storage_location) =
                 self.process_input_streaming(&input, owner_id).await?;
 
-            // Check if data already exists
             if let Some(existing_data) = self.database.get_data(data_id).await? {
                 self.database
                     .attach_data_to_dataset(dataset.id, data_id)
@@ -51,7 +48,6 @@ impl<S: StorageTrait, D: DatabaseTrait> IngestPipeline<S, D> {
                 continue;
             }
 
-            // Create Data record
             let data = Data::new(
                 data_id,
                 self.extract_name(&input),
@@ -63,10 +59,8 @@ impl<S: StorageTrait, D: DatabaseTrait> IngestPipeline<S, D> {
                 owner_id,
             );
 
-            // Save to database
             let saved_data = self.database.create_data(data).await?;
 
-            // Attach to dataset
             self.database
                 .attach_data_to_dataset(dataset.id, data_id)
                 .await?;
@@ -88,7 +82,6 @@ impl<S: StorageTrait, D: DatabaseTrait> IngestPipeline<S, D> {
         use std::sync::Arc;
         use tokio::sync::Mutex;
 
-        // 1. Determine file name for storage
         let file_name_template = match input {
             DataInput::FilePath(path) => {
                 let clean_path = path.strip_prefix("file://").unwrap_or(path);
@@ -102,13 +95,11 @@ impl<S: StorageTrait, D: DatabaseTrait> IngestPipeline<S, D> {
             DataInput::Url(_) => return Err("URL fetching not yet implemented".into()),
         };
 
-        // 2. Create storage writer and hasher with Arc<Mutex> for shared mutable access
         let hasher = Arc::new(Mutex::new(Sha256::new()));
         let writer = Arc::new(Mutex::new(
             self.storage.create_writer(&file_name_template).await?,
         ));
 
-        // 3. Process chunks: hash and store in a single pass
         let hasher_clone = hasher.clone();
         let writer_clone = writer.clone();
 
@@ -118,10 +109,8 @@ impl<S: StorageTrait, D: DatabaseTrait> IngestPipeline<S, D> {
                 let writer = writer_clone.clone();
                 let chunk_owned = chunk.to_vec(); // Copy chunk to own the data
                 async move {
-                    // Hash the chunk
                     hasher.lock().await.update(&chunk_owned);
 
-                    // Write the chunk to storage
                     writer.lock().await.write_chunk(&chunk_owned).await?;
 
                     Ok::<(), Box<dyn std::error::Error>>(())
@@ -129,7 +118,6 @@ impl<S: StorageTrait, D: DatabaseTrait> IngestPipeline<S, D> {
             })
             .await?;
 
-        // 4. Finalize hash and storage
         let mut hasher = Arc::try_unwrap(hasher)
             .map_err(|_| "Failed to unwrap hasher")?
             .into_inner();
@@ -157,13 +145,11 @@ impl<S: StorageTrait, D: DatabaseTrait> IngestPipeline<S, D> {
                     .unwrap_or("unknown")
                     .to_string()
             }
-            DataInput::Url(url) => {
-                // Extract filename from URL or use a default
-                url.split('/')
-                    .next_back()
-                    .unwrap_or("url_content")
-                    .to_string()
-            }
+            DataInput::Url(url) => url
+                .split('/')
+                .next_back()
+                .unwrap_or("url_content")
+                .to_string(),
         }
     }
 
@@ -192,14 +178,12 @@ impl<S: StorageTrait, D: DatabaseTrait> IngestPipeline<S, D> {
                     .unwrap_or("txt")
                     .to_string()
             }
-            DataInput::Url(url) => {
-                // Try to extract extension from URL
-                url.split('/')
-                    .next_back()
-                    .and_then(|s| s.split('.').next_back())
-                    .unwrap_or("html")
-                    .to_string()
-            }
+            DataInput::Url(url) => url
+                .split('/')
+                .next_back()
+                .and_then(|s| s.split('.').next_back())
+                .unwrap_or("html")
+                .to_string(),
         }
     }
 
