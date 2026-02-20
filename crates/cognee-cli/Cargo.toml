@@ -1,0 +1,20 @@
+[package]
+name = "cognee-cli"
+version = "0.1.0"
+edition.workspace = true
+publish = false
+
+[[bin]]
+name = "cognee-cli"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap = { version = "4.5", features = ["derive"] }
+cognee-lib = { path = "../cognee-lib" }
+dirs = "6"
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+uuid.workspace = true

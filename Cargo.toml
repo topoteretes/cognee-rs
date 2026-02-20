@@ -8,6 +8,7 @@ members = [
     "crates/cognee-chunking",
     "crates/cognee-cognify",
     "crates/cognee-lib",
+    "crates/cognee-cli",
     "crates/cognee-utils",
     "crates/cognee-llm",
     "crates/cognee-graph",
