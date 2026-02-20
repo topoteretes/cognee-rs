@@ -575,6 +575,13 @@ mod tests {
             Ok(None)
         }
 
+        async fn list_datasets_by_owner(
+            &self,
+            _owner_id: Uuid,
+        ) -> Result<Vec<Dataset>, DatabaseError> {
+            Ok(vec![])
+        }
+
         async fn attach_data_to_dataset(
             &self,
             _dataset_id: Uuid,

@@ -53,6 +53,7 @@ pub trait DatabaseTrait: Send + Sync {
         name: &str,
         owner_id: Uuid,
     ) -> Result<Option<Dataset>, DatabaseError>;
+    async fn list_datasets_by_owner(&self, owner_id: Uuid) -> Result<Vec<Dataset>, DatabaseError>;
     async fn attach_data_to_dataset(
         &self,
         dataset_id: Uuid,

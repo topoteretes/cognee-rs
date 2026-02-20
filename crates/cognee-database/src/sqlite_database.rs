@@ -396,6 +396,41 @@ impl DatabaseTrait for SqliteDatabase {
         }
     }
 
+    async fn list_datasets_by_owner(&self, owner_id: Uuid) -> Result<Vec<Dataset>, DatabaseError> {
+        let owner_id_str = owner_id.to_string();
+
+        let rows = sqlx::query(
+            r#"
+            SELECT id, name, owner_id, created_at, updated_at
+            FROM datasets
+            WHERE owner_id = ?1
+            ORDER BY created_at ASC
+            "#,
+        )
+        .bind(&owner_id_str)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut datasets = Vec::with_capacity(rows.len());
+        for row in rows {
+            let id: String = row.get("id");
+            let owner_id: String = row.get("owner_id");
+            let created_at: String = row.get("created_at");
+            let updated_at: Option<String> = row.get("updated_at");
+
+            datasets.push(Dataset {
+                id: Uuid::parse_str(&id).map_err(|e| DatabaseError::QueryError(e.to_string()))?,
+                name: row.get("name"),
+                owner_id: Uuid::parse_str(&owner_id)
+                    .map_err(|e| DatabaseError::QueryError(e.to_string()))?,
+                created_at: Self::parse_datetime(&created_at)?,
+                updated_at: updated_at.map(|s| Self::parse_datetime(&s)).transpose()?,
+            });
+        }
+
+        Ok(datasets)
+    }
+
     async fn attach_data_to_dataset(
         &self,
         dataset_id: Uuid,

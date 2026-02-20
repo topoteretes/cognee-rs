@@ -40,11 +40,7 @@ pub fn run(args: CognifyArgs) -> Result<(), CliError> {
         }
     }
 
-    let dataset_names = if args.datasets.is_empty() {
-        vec![config.settings.default_dataset_name.clone()]
-    } else {
-        args.datasets
-    };
+    let requested_datasets = args.datasets.clone();
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -68,6 +64,9 @@ pub fn run(args: CognifyArgs) -> Result<(), CliError> {
         database.initialize().await.map_err(|error| {
             CliError::Runtime(format!("Database schema initialization failed: {error}"))
         })?;
+
+        let dataset_names = resolve_dataset_names(database.as_ref(), owner_id, requested_datasets)
+            .await?;
 
         let graph_provider = config.settings.graph_database_provider.to_lowercase();
         if graph_provider != "ladybug" && graph_provider != "kuzu" {
@@ -253,4 +252,33 @@ pub fn run(args: CognifyArgs) -> Result<(), CliError> {
 
         Ok(())
     })
+}
+
+async fn resolve_dataset_names(
+    database: &dyn DatabaseTrait,
+    owner_id: Uuid,
+    requested_datasets: Vec<String>,
+) -> Result<Vec<String>, CliError> {
+    if !requested_datasets.is_empty() {
+        return Ok(requested_datasets);
+    }
+
+    let datasets = database
+        .list_datasets_by_owner(owner_id)
+        .await
+        .map_err(|error| {
+            CliError::Runtime(format!(
+                "Failed to list datasets for owner {}: {error}",
+                owner_id
+            ))
+        })?;
+
+    if datasets.is_empty() {
+        return Err(CliError::Validation(format!(
+            "No datasets found for owner {}. Add data first or pass --datasets.",
+            owner_id
+        )));
+    }
+
+    Ok(datasets.into_iter().map(|dataset| dataset.name).collect())
 }

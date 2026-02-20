@@ -166,6 +166,17 @@ impl DatabaseTrait for MockDatabase {
         }
     }
 
+    async fn list_datasets_by_owner(&self, owner_id: Uuid) -> Result<Vec<Dataset>, DatabaseError> {
+        let datasets = self.datasets.lock().unwrap();
+        let mut result: Vec<Dataset> = datasets
+            .values()
+            .filter(|dataset| dataset.owner_id == owner_id)
+            .cloned()
+            .collect();
+        result.sort_by(|left, right| left.created_at.cmp(&right.created_at));
+        Ok(result)
+    }
+
     async fn attach_data_to_dataset(
         &self,
         dataset_id: Uuid,
