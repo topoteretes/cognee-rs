@@ -1,6 +1,6 @@
 [package]
 name = "cognee-examples"
-version = "0.1.0"
+version.workspace = true
 edition.workspace = true
 publish = false
 
@@ -84,14 +84,14 @@ tracing-subscriber.workspace = true
 uuid.workspace = true
 
 # Dependencies from merged crates
-sha2 = "0.10"
-mime_guess = "2.0"
-sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "uuid", "chrono"] }
+sha2.workspace = true
+mime_guess.workspace = true
+sqlx = { workspace = true, features = ["runtime-tokio", "sqlite", "uuid", "chrono"] }
 tempfile = { workspace = true, optional = true }
 
 # Enable load-dynamic for Android targets automatically (for NNAPI support)
 [target.'cfg(target_os = "android")'.dependencies]
-ort = { version = "2.0.0-rc.11", features = ["load-dynamic"] }
+ort = { workspace = true, features = ["load-dynamic"] }
 
 [dev-dependencies]
 anyhow.workspace = true

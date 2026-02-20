@@ -1,6 +1,6 @@
 [package]
 name = "cognee-ingestion"
-version = "0.1.0"
+version.workspace = true
 edition.workspace = true
 
 [dependencies]
@@ -8,10 +8,10 @@ cognee-database = { path = "../cognee-database" }
 cognee-models = { path = "../cognee-models" }
 cognee-storage = { path = "../cognee-storage" }
 cognee-utils = { path = "../cognee-utils" }
-sha2 = "0.10"
+sha2.workspace = true
 uuid.workspace = true
 tokio.workspace = true
-mime_guess = "2.0"
+mime_guess.workspace = true
 reqwest.workspace = true
 scraper.workspace = true
 thiserror.workspace = true

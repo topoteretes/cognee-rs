@@ -1,6 +1,6 @@
 [package]
 name = "cognee-llm"
-version = "0.1.0"
+version.workspace = true
 edition.workspace = true
 
 [dependencies]
@@ -13,7 +13,7 @@ serde.workspace = true
 serde_json.workspace = true
 
 # JSON Schema generation
-schemars = "0.8"
+schemars.workspace = true
 
 # Error handling
 thiserror.workspace = true

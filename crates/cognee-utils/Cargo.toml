@@ -1,6 +1,6 @@
 [package]
 name = "cognee-utils"
-version = "0.1.0"
+version.workspace = true
 edition.workspace = true
 
 [dependencies]
@@ -14,7 +14,7 @@ log.workspace = true
 rand.workspace = true
 
 # UUID generation
-uuid = { version = "1", features = ["v4", "v5"] }
+uuid = { workspace = true, features = ["v4", "v5"] }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

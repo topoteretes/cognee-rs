@@ -1,6 +1,6 @@
 [package]
 name = "cognee-chunking"
-version = "0.1.0"
+version.workspace = true
 edition.workspace = true
 
 [dependencies]
@@ -8,7 +8,7 @@ async-trait.workspace = true
 cognee-models = { path = "../cognee-models" }
 cognee-storage = { path = "../cognee-storage" }
 cognee-utils = { path = "../cognee-utils" }
-log = "0.4"
+log.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
