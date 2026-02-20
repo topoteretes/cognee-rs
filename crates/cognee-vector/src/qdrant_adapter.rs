@@ -8,7 +8,7 @@ use segment::types::{
 use shard::count::CountRequestInternal;
 use shard::operations::CollectionUpdateOperations::PointOperation;
 use shard::operations::point_ops::PointInsertOperationsInternal::PointsBatch;
-use shard::operations::point_ops::PointOperations::UpsertPoints;
+use shard::operations::point_ops::PointOperations::{DeletePoints, UpsertPoints};
 use shard::operations::point_ops::{BatchPersisted, BatchVectorStructPersisted, VectorPersisted};
 use shard::query::query_enum::QueryEnum;
 use shard::query::{ScoringQuery, ShardQueryRequest};
@@ -345,6 +345,31 @@ impl VectorDB for QdrantAdapter {
         if shard_path.exists() {
             std::fs::remove_dir_all(&shard_path)?;
         }
+
+        Ok(())
+    }
+
+    async fn delete_points(
+        &self,
+        data_type: &str,
+        field_name: &str,
+        point_ids: &[Uuid],
+    ) -> VectorDBResult<()> {
+        if point_ids.is_empty() {
+            return Ok(());
+        }
+
+        let collection = Self::collection_name(data_type, field_name);
+        let shard = self.get_or_create_shard(&collection, self.dimension)?;
+
+        let ids: Vec<ExtendedPointId> = point_ids
+            .iter()
+            .map(|id| ExtendedPointId::NumId(id.as_u128() as u64))
+            .collect();
+
+        shard
+            .update(PointOperation(DeletePoints { ids }))
+            .map_err(|e| VectorDBError::StorageError(e.to_string()))?;
 
         Ok(())
     }

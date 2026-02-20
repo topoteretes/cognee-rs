@@ -1,5 +1,5 @@
 use super::database_trait::{
-    DatabaseError, DatabaseTrait, SearchHistoryEntry, SearchHistoryEntryType,
+    ArtifactReference, DatabaseError, DatabaseTrait, SearchHistoryEntry, SearchHistoryEntryType,
 };
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -131,6 +131,27 @@ impl DatabaseTrait for SqliteDatabase {
         .execute(&self.pool)
         .await?;
 
+        // Create artifact_references table for provenance-backed delete resolution
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS artifact_references (
+                id TEXT PRIMARY KEY,
+                owner_id TEXT NOT NULL,
+                dataset_id TEXT NOT NULL,
+                data_id TEXT,
+                artifact_kind TEXT NOT NULL,
+                artifact_id TEXT NOT NULL,
+                collection_name TEXT,
+                created_at TEXT NOT NULL,
+                UNIQUE(dataset_id, data_id, artifact_kind, artifact_id, collection_name),
+                FOREIGN KEY (dataset_id) REFERENCES datasets(id) ON DELETE CASCADE,
+                FOREIGN KEY (data_id) REFERENCES data(id) ON DELETE CASCADE
+            )
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
         Ok(())
     }
 
@@ -211,6 +232,22 @@ impl DatabaseTrait for SqliteDatabase {
         }
     }
 
+    async fn delete_data(&self, id: Uuid) -> Result<(), DatabaseError> {
+        let id_str = id.to_string();
+
+        sqlx::query(
+            r#"
+            DELETE FROM data
+            WHERE id = ?1
+            "#,
+        )
+        .bind(&id_str)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
     async fn update_data(&self, data: Data) -> Result<Data, DatabaseError> {
         let id = data.id.to_string();
         let owner_id = data.owner_id.to_string();
@@ -289,6 +326,59 @@ impl DatabaseTrait for SqliteDatabase {
         }
 
         Ok(data_list)
+    }
+
+    async fn count_data_dataset_links(&self, data_id: Uuid) -> Result<usize, DatabaseError> {
+        let data_id_str = data_id.to_string();
+        let row = sqlx::query(
+            r#"
+            SELECT COUNT(*) AS count
+            FROM dataset_data
+            WHERE data_id = ?1
+            "#,
+        )
+        .bind(&data_id_str)
+        .fetch_one(&self.pool)
+        .await?;
+
+        let count: i64 = row.get("count");
+        Ok(count as usize)
+    }
+
+    async fn list_datasets_for_data(&self, data_id: Uuid) -> Result<Vec<Dataset>, DatabaseError> {
+        let data_id_str = data_id.to_string();
+
+        let rows = sqlx::query(
+            r#"
+            SELECT ds.id, ds.name, ds.owner_id, ds.created_at, ds.updated_at
+            FROM datasets ds
+            INNER JOIN dataset_data dd ON ds.id = dd.dataset_id
+            WHERE dd.data_id = ?1
+            ORDER BY ds.created_at ASC
+            "#,
+        )
+        .bind(&data_id_str)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut datasets = Vec::with_capacity(rows.len());
+        for row in rows {
+            let id: String = row.get("id");
+            let owner_id: String = row.get("owner_id");
+            let created_at: String = row.get("created_at");
+            let updated_at: Option<String> = row.get("updated_at");
+
+            datasets.push(Dataset {
+                id: Uuid::parse_str(&id).map_err(|e| DatabaseError::QueryError(e.to_string()))?,
+                name: row.get("name"),
+                owner_id: Uuid::parse_str(&owner_id)
+                    .map_err(|e| DatabaseError::QueryError(e.to_string()))?,
+                created_at: Self::parse_datetime(&created_at)?,
+                updated_at: updated_at.map(|s| Self::parse_datetime(&s)).transpose()?,
+            });
+        }
+
+        Ok(datasets)
     }
 
     async fn create_dataset(&self, dataset: Dataset) -> Result<Dataset, DatabaseError> {
@@ -431,6 +521,53 @@ impl DatabaseTrait for SqliteDatabase {
         Ok(datasets)
     }
 
+    async fn list_datasets(&self) -> Result<Vec<Dataset>, DatabaseError> {
+        let rows = sqlx::query(
+            r#"
+            SELECT id, name, owner_id, created_at, updated_at
+            FROM datasets
+            ORDER BY created_at ASC
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut datasets = Vec::with_capacity(rows.len());
+        for row in rows {
+            let id: String = row.get("id");
+            let owner_id: String = row.get("owner_id");
+            let created_at: String = row.get("created_at");
+            let updated_at: Option<String> = row.get("updated_at");
+
+            datasets.push(Dataset {
+                id: Uuid::parse_str(&id).map_err(|e| DatabaseError::QueryError(e.to_string()))?,
+                name: row.get("name"),
+                owner_id: Uuid::parse_str(&owner_id)
+                    .map_err(|e| DatabaseError::QueryError(e.to_string()))?,
+                created_at: Self::parse_datetime(&created_at)?,
+                updated_at: updated_at.map(|s| Self::parse_datetime(&s)).transpose()?,
+            });
+        }
+
+        Ok(datasets)
+    }
+
+    async fn delete_dataset(&self, id: Uuid) -> Result<(), DatabaseError> {
+        let id_str = id.to_string();
+
+        sqlx::query(
+            r#"
+            DELETE FROM datasets
+            WHERE id = ?1
+            "#,
+        )
+        .bind(&id_str)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
     async fn attach_data_to_dataset(
         &self,
         dataset_id: Uuid,
@@ -451,6 +588,148 @@ impl DatabaseTrait for SqliteDatabase {
         .await?;
 
         Ok(())
+    }
+
+    async fn detach_data_from_dataset(
+        &self,
+        dataset_id: Uuid,
+        data_id: Uuid,
+    ) -> Result<(), DatabaseError> {
+        let dataset_id_str = dataset_id.to_string();
+        let data_id_str = data_id.to_string();
+
+        sqlx::query(
+            r#"
+            DELETE FROM dataset_data
+            WHERE dataset_id = ?1 AND data_id = ?2
+            "#,
+        )
+        .bind(&dataset_id_str)
+        .bind(&data_id_str)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
+    async fn upsert_artifact_references(
+        &self,
+        references: &[ArtifactReference],
+    ) -> Result<(), DatabaseError> {
+        for reference in references {
+            sqlx::query(
+                r#"
+                INSERT OR IGNORE INTO artifact_references (
+                    id, owner_id, dataset_id, data_id, artifact_kind, artifact_id, collection_name, created_at
+                )
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                "#,
+            )
+            .bind(reference.id.to_string())
+            .bind(reference.owner_id.to_string())
+            .bind(reference.dataset_id.to_string())
+            .bind(reference.data_id.map(|id| id.to_string()))
+            .bind(&reference.artifact_kind)
+            .bind(&reference.artifact_id)
+            .bind(&reference.collection_name)
+            .bind(reference.created_at.to_rfc3339())
+            .execute(&self.pool)
+            .await?;
+        }
+
+        Ok(())
+    }
+
+    async fn list_artifact_references_for_data(
+        &self,
+        data_id: Uuid,
+    ) -> Result<Vec<ArtifactReference>, DatabaseError> {
+        let rows = sqlx::query(
+            r#"
+            SELECT id, owner_id, dataset_id, data_id, artifact_kind, artifact_id, collection_name, created_at
+            FROM artifact_references
+            WHERE data_id = ?1
+            ORDER BY created_at ASC
+            "#,
+        )
+        .bind(data_id.to_string())
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut references = Vec::with_capacity(rows.len());
+        for row in rows {
+            let id: String = row.get("id");
+            let owner_id: String = row.get("owner_id");
+            let dataset_id: String = row.get("dataset_id");
+            let data_id_value: Option<String> = row.get("data_id");
+            let created_at: String = row.get("created_at");
+
+            references.push(ArtifactReference {
+                id: Uuid::parse_str(&id).map_err(|e| DatabaseError::QueryError(e.to_string()))?,
+                owner_id: Uuid::parse_str(&owner_id)
+                    .map_err(|e| DatabaseError::QueryError(e.to_string()))?,
+                dataset_id: Uuid::parse_str(&dataset_id)
+                    .map_err(|e| DatabaseError::QueryError(e.to_string()))?,
+                data_id: data_id_value
+                    .map(|value| {
+                        Uuid::parse_str(&value)
+                            .map_err(|e| DatabaseError::QueryError(e.to_string()))
+                    })
+                    .transpose()?,
+                artifact_kind: row.get("artifact_kind"),
+                artifact_id: row.get("artifact_id"),
+                collection_name: row.get("collection_name"),
+                created_at: Self::parse_datetime(&created_at)?,
+            });
+        }
+
+        Ok(references)
+    }
+
+    async fn list_artifact_references_for_dataset(
+        &self,
+        dataset_id: Uuid,
+    ) -> Result<Vec<ArtifactReference>, DatabaseError> {
+        let rows = sqlx::query(
+            r#"
+            SELECT id, owner_id, dataset_id, data_id, artifact_kind, artifact_id, collection_name, created_at
+            FROM artifact_references
+            WHERE dataset_id = ?1
+            ORDER BY created_at ASC
+            "#,
+        )
+        .bind(dataset_id.to_string())
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut references = Vec::with_capacity(rows.len());
+        for row in rows {
+            let id: String = row.get("id");
+            let owner_id: String = row.get("owner_id");
+            let dataset_id_value: String = row.get("dataset_id");
+            let data_id_value: Option<String> = row.get("data_id");
+            let created_at: String = row.get("created_at");
+
+            references.push(ArtifactReference {
+                id: Uuid::parse_str(&id).map_err(|e| DatabaseError::QueryError(e.to_string()))?,
+                owner_id: Uuid::parse_str(&owner_id)
+                    .map_err(|e| DatabaseError::QueryError(e.to_string()))?,
+                dataset_id: Uuid::parse_str(&dataset_id_value)
+                    .map_err(|e| DatabaseError::QueryError(e.to_string()))?,
+                data_id: data_id_value
+                    .map(|value| {
+                        Uuid::parse_str(&value)
+                            .map_err(|e| DatabaseError::QueryError(e.to_string()))
+                    })
+                    .transpose()?,
+                artifact_kind: row.get("artifact_kind"),
+                artifact_id: row.get("artifact_id"),
+                collection_name: row.get("collection_name"),
+                created_at: Self::parse_datetime(&created_at)?,
+            });
+        }
+
+        Ok(references)
     }
 
     async fn log_query(

@@ -16,6 +16,7 @@ members = [
     "crates/cognee-vector",
     "crates/cognee-ontology",
     "crates/cognee-search",
+    "crates/cognee-delete",
 ]
 resolver = "3"
 

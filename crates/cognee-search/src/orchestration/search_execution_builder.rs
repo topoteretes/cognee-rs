@@ -551,11 +551,26 @@ mod tests {
             Ok(None)
         }
 
+        async fn delete_data(&self, _id: Uuid) -> Result<(), DatabaseError> {
+            Ok(())
+        }
+
         async fn update_data(&self, _data: Data) -> Result<Data, DatabaseError> {
             Err(DatabaseError::NotFound("unused".to_string()))
         }
 
         async fn get_dataset_data(&self, _dataset_id: Uuid) -> Result<Vec<Data>, DatabaseError> {
+            Ok(vec![])
+        }
+
+        async fn count_data_dataset_links(&self, _data_id: Uuid) -> Result<usize, DatabaseError> {
+            Ok(0)
+        }
+
+        async fn list_datasets_for_data(
+            &self,
+            _data_id: Uuid,
+        ) -> Result<Vec<Dataset>, DatabaseError> {
             Ok(vec![])
         }
 
@@ -582,7 +597,23 @@ mod tests {
             Ok(vec![])
         }
 
+        async fn list_datasets(&self) -> Result<Vec<Dataset>, DatabaseError> {
+            Ok(vec![])
+        }
+
+        async fn delete_dataset(&self, _id: Uuid) -> Result<(), DatabaseError> {
+            Ok(())
+        }
+
         async fn attach_data_to_dataset(
+            &self,
+            _dataset_id: Uuid,
+            _data_id: Uuid,
+        ) -> Result<(), DatabaseError> {
+            Ok(())
+        }
+
+        async fn detach_data_from_dataset(
             &self,
             _dataset_id: Uuid,
             _data_id: Uuid,

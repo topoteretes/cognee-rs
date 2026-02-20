@@ -16,6 +16,7 @@ pub enum Commands {
     Add(AddArgs),
     Cognify(CognifyArgs),
     Search(SearchArgs),
+    Delete(DeleteArgs),
     Config(ConfigArgs),
 }
 
@@ -103,6 +104,38 @@ pub struct SearchArgs {
 
     #[arg(long = "output-format", short = 'f', default_value = "pretty")]
     pub output_format: OutputFormatArg,
+}
+
+#[derive(Debug, Clone, ValueEnum)]
+pub enum DeleteModeArg {
+    #[value(name = "soft")]
+    Soft,
+    #[value(name = "hard")]
+    Hard,
+}
+
+#[derive(Debug, Args)]
+pub struct DeleteArgs {
+    #[arg(long = "dataset-name", short = 'd')]
+    pub dataset_name: Option<String>,
+
+    #[arg(long = "user-id", short = 'u')]
+    pub user_id: Option<String>,
+
+    #[arg(long = "data-id")]
+    pub data_id: Option<String>,
+
+    #[arg(long = "all", default_value_t = false)]
+    pub all: bool,
+
+    #[arg(long = "mode", default_value = "soft")]
+    pub mode: DeleteModeArg,
+
+    #[arg(long = "dry-run", default_value_t = false)]
+    pub dry_run: bool,
+
+    #[arg(long = "force", short = 'f', default_value_t = false)]
+    pub force: bool,
 }
 
 #[derive(Debug, Args)]

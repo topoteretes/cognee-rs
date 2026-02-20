@@ -37,13 +37,28 @@ pub struct SearchHistoryEntry {
     pub created_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArtifactReference {
+    pub id: Uuid,
+    pub owner_id: Uuid,
+    pub dataset_id: Uuid,
+    pub data_id: Option<Uuid>,
+    pub artifact_kind: String,
+    pub artifact_id: String,
+    pub collection_name: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
 #[async_trait]
 pub trait DatabaseTrait: Send + Sync {
     // Data operations
     async fn create_data(&self, data: Data) -> Result<Data, DatabaseError>;
     async fn get_data(&self, id: Uuid) -> Result<Option<Data>, DatabaseError>;
+    async fn delete_data(&self, id: Uuid) -> Result<(), DatabaseError>;
     async fn update_data(&self, data: Data) -> Result<Data, DatabaseError>;
     async fn get_dataset_data(&self, dataset_id: Uuid) -> Result<Vec<Data>, DatabaseError>;
+    async fn count_data_dataset_links(&self, data_id: Uuid) -> Result<usize, DatabaseError>;
+    async fn list_datasets_for_data(&self, data_id: Uuid) -> Result<Vec<Dataset>, DatabaseError>;
 
     // Dataset operations
     async fn create_dataset(&self, dataset: Dataset) -> Result<Dataset, DatabaseError>;
@@ -54,11 +69,41 @@ pub trait DatabaseTrait: Send + Sync {
         owner_id: Uuid,
     ) -> Result<Option<Dataset>, DatabaseError>;
     async fn list_datasets_by_owner(&self, owner_id: Uuid) -> Result<Vec<Dataset>, DatabaseError>;
+    async fn list_datasets(&self) -> Result<Vec<Dataset>, DatabaseError>;
+    async fn delete_dataset(&self, id: Uuid) -> Result<(), DatabaseError>;
     async fn attach_data_to_dataset(
         &self,
         dataset_id: Uuid,
         data_id: Uuid,
     ) -> Result<(), DatabaseError>;
+    async fn detach_data_from_dataset(
+        &self,
+        dataset_id: Uuid,
+        data_id: Uuid,
+    ) -> Result<(), DatabaseError>;
+
+    // Artifact provenance operations
+    async fn upsert_artifact_references(
+        &self,
+        references: &[ArtifactReference],
+    ) -> Result<(), DatabaseError> {
+        let _ = references;
+        Ok(())
+    }
+    async fn list_artifact_references_for_data(
+        &self,
+        data_id: Uuid,
+    ) -> Result<Vec<ArtifactReference>, DatabaseError> {
+        let _ = data_id;
+        Ok(vec![])
+    }
+    async fn list_artifact_references_for_dataset(
+        &self,
+        dataset_id: Uuid,
+    ) -> Result<Vec<ArtifactReference>, DatabaseError> {
+        let _ = dataset_id;
+        Ok(vec![])
+    }
 
     // Search persistence operations
     async fn log_query(

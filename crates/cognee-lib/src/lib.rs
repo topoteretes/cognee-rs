@@ -18,6 +18,10 @@ pub mod search {
     pub use cognee_search::*;
 }
 
+pub mod delete {
+    pub use cognee_delete::*;
+}
+
 pub mod models {
     pub use cognee_models::*;
 }
@@ -65,9 +69,11 @@ pub mod prelude {
 
 pub use add::{ContentHasher, IngestPipeline};
 pub use cognee_cognify::*;
+pub use cognee_delete::*;
 pub use cognee_search::*;
 
 pub use cognee_database;
+pub use cognee_delete;
 pub use cognee_embedding;
 pub use cognee_graph;
 pub use cognee_llm;

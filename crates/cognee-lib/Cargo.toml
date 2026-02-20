@@ -15,6 +15,7 @@ testing = [
 [dependencies]
 cognee-chunking = { path = "../cognee-chunking" }
 cognee-cognify = { path = "../cognee-cognify" }
+ cognee-delete = { path = "../cognee-delete" }
 cognee-database = { path = "../cognee-database" }
 cognee-embedding = { path = "../cognee-embedding" }
 cognee-graph = { path = "../cognee-graph" }

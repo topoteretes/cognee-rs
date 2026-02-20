@@ -165,6 +165,15 @@ mod tests {
             Ok(())
         }
 
+        async fn delete_points(
+            &self,
+            _data_type: &str,
+            _field_name: &str,
+            _point_ids: &[Uuid],
+        ) -> VectorDBResult<()> {
+            Ok(())
+        }
+
         async fn collection_size(
             &self,
             _data_type: &str,

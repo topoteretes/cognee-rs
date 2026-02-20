@@ -12,6 +12,7 @@ path = "src/main.rs"
 anyhow.workspace = true
 clap = { version = "4.5", features = ["derive"] }
 cognee-lib = { path = "../cognee-lib" }
+chrono.workspace = true
 dirs = "6"
 serde.workspace = true
 serde_json.workspace = true

@@ -1,6 +1,7 @@
 use crate::error::VectorDBResult;
 use crate::models::{SearchResult, VectorPoint};
 use async_trait::async_trait;
+use uuid::Uuid;
 
 /// Vector database trait
 #[async_trait]
@@ -73,6 +74,17 @@ pub trait VectorDB: Send + Sync {
 
     /// Delete collection
     async fn delete_collection(&self, data_type: &str, field_name: &str) -> VectorDBResult<()>;
+
+    /// Delete points by IDs from an existing collection.
+    async fn delete_points(
+        &self,
+        data_type: &str,
+        field_name: &str,
+        point_ids: &[Uuid],
+    ) -> VectorDBResult<()> {
+        let _ = (data_type, field_name, point_ids);
+        Ok(())
+    }
 
     /// Get collection statistics
     async fn collection_size(&self, data_type: &str, field_name: &str) -> VectorDBResult<usize>;

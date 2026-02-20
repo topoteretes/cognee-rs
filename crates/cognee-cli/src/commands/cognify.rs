@@ -1,8 +1,9 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use chrono::Utc;
 use cognee_lib::cognify::{ChunkStrategy, CognifyConfig, CognifyPipeline};
-use cognee_lib::database::{DatabaseTrait, SqliteDatabase};
+use cognee_lib::database::{ArtifactReference, DatabaseTrait, SqliteDatabase};
 use cognee_lib::embedding::{EmbeddingConfig, OnnxEmbeddingEngine};
 use cognee_lib::graph::{GraphDBTrait, LadybugAdapter};
 use cognee_lib::llm::OpenAIAdapter;
@@ -226,6 +227,16 @@ pub fn run(args: CognifyArgs) -> Result<(), CliError> {
                     ))
                 })?;
 
+            let artifact_references = build_artifact_references(owner_id, dataset.id, &result);
+            database
+                .upsert_artifact_references(&artifact_references)
+                .await
+                .map_err(|error| {
+                    CliError::Runtime(format!(
+                        "Failed to persist artifact references for dataset '{dataset_name}': {error}"
+                    ))
+                })?;
+
             total_chunks += result.chunks.len();
             total_entities += result.entities.len();
             total_edges += result.edges.len();
@@ -281,4 +292,83 @@ async fn resolve_dataset_names(
     }
 
     Ok(datasets.into_iter().map(|dataset| dataset.name).collect())
+}
+
+fn build_artifact_references(
+    owner_id: Uuid,
+    dataset_id: Uuid,
+    result: &cognee_lib::cognify::CognifyResult,
+) -> Vec<ArtifactReference> {
+    let created_at = Utc::now();
+    let mut references = Vec::new();
+
+    let mut chunk_to_data_id = std::collections::HashMap::new();
+
+    for chunk in &result.chunks {
+        chunk_to_data_id.insert(chunk.id, chunk.document_id);
+
+        references.push(ArtifactReference {
+            id: Uuid::new_v4(),
+            owner_id,
+            dataset_id,
+            data_id: Some(chunk.document_id),
+            artifact_kind: "vector_point".to_string(),
+            artifact_id: chunk.id.to_string(),
+            collection_name: Some("DocumentChunk_text".to_string()),
+            created_at,
+        });
+    }
+
+    for summary in &result.summaries {
+        let data_id = chunk_to_data_id.get(&summary.chunk_id).copied();
+        references.push(ArtifactReference {
+            id: Uuid::new_v4(),
+            owner_id,
+            dataset_id,
+            data_id,
+            artifact_kind: "vector_point".to_string(),
+            artifact_id: summary.id.to_string(),
+            collection_name: Some("TextSummary_text".to_string()),
+            created_at,
+        });
+    }
+
+    for entity in &result.entities {
+        let entity_id = entity.entity.base.id.to_string();
+
+        references.push(ArtifactReference {
+            id: Uuid::new_v4(),
+            owner_id,
+            dataset_id,
+            data_id: None,
+            artifact_kind: "graph_node".to_string(),
+            artifact_id: entity_id.clone(),
+            collection_name: None,
+            created_at,
+        });
+
+        references.push(ArtifactReference {
+            id: Uuid::new_v4(),
+            owner_id,
+            dataset_id,
+            data_id: None,
+            artifact_kind: "vector_point".to_string(),
+            artifact_id: entity_id.clone(),
+            collection_name: Some("Entity_name".to_string()),
+            created_at,
+        });
+
+        references.push(ArtifactReference {
+            id: Uuid::new_v4(),
+            owner_id,
+            dataset_id,
+            data_id: None,
+            artifact_kind: "vector_point".to_string(),
+            artifact_id: entity_id,
+            collection_name: Some("Entity_description".to_string()),
+            created_at,
+        });
+    }
+
+    references
 }

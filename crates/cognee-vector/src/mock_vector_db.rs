@@ -5,6 +5,7 @@
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use uuid::Uuid;
 
 use crate::error::{VectorDBError, VectorDBResult};
 use crate::models::{SearchResult, VectorPoint};
@@ -179,6 +180,26 @@ impl VectorDB for MockVectorDB {
         let key = Self::collection_key(data_type, field_name);
         let mut collections = self.collections.lock().unwrap();
         collections.remove(&key);
+        Ok(())
+    }
+
+    async fn delete_points(
+        &self,
+        data_type: &str,
+        field_name: &str,
+        point_ids: &[Uuid],
+    ) -> VectorDBResult<()> {
+        let key = Self::collection_key(data_type, field_name);
+        let mut collections = self.collections.lock().unwrap();
+
+        let collection = collections
+            .get_mut(&key)
+            .ok_or_else(|| VectorDBError::CollectionNotFound(key.clone()))?;
+
+        collection
+            .points
+            .retain(|point| !point_ids.contains(&point.id));
+
         Ok(())
     }
 

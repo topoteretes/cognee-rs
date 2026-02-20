@@ -1,5 +1,5 @@
 use super::database_trait::{
-    DatabaseError, DatabaseTrait, SearchHistoryEntry, SearchHistoryEntryType,
+    ArtifactReference, DatabaseError, DatabaseTrait, SearchHistoryEntry, SearchHistoryEntryType,
 };
 use async_trait::async_trait;
 use chrono::Utc;
@@ -34,6 +34,7 @@ pub struct MockDatabase {
     data: Arc<Mutex<HashMap<Uuid, Data>>>,
     dataset_data: Arc<Mutex<HashMap<Uuid, Vec<Uuid>>>>, // dataset_id -> vec of data_ids
     dataset_by_name: Arc<Mutex<HashMap<(String, Uuid), Uuid>>>, // (name, owner_id) -> dataset_id
+    artifact_references: Arc<Mutex<Vec<ArtifactReference>>>,
     query_logs: Arc<Mutex<Vec<QueryLog>>>,
     result_logs: Arc<Mutex<Vec<ResultLog>>>,
 }
@@ -45,6 +46,7 @@ impl MockDatabase {
             data: Arc::new(Mutex::new(HashMap::new())),
             dataset_data: Arc::new(Mutex::new(HashMap::new())),
             dataset_by_name: Arc::new(Mutex::new(HashMap::new())),
+            artifact_references: Arc::new(Mutex::new(Vec::new())),
             query_logs: Arc::new(Mutex::new(Vec::new())),
             result_logs: Arc::new(Mutex::new(Vec::new())),
         }
@@ -98,6 +100,17 @@ impl DatabaseTrait for MockDatabase {
         Ok(self.data.lock().unwrap().get(&id).cloned())
     }
 
+    async fn delete_data(&self, id: Uuid) -> Result<(), DatabaseError> {
+        self.data.lock().unwrap().remove(&id);
+
+        let mut dataset_data = self.dataset_data.lock().unwrap();
+        for data_ids in dataset_data.values_mut() {
+            data_ids.retain(|data_id| *data_id != id);
+        }
+
+        Ok(())
+    }
+
     async fn update_data(&self, data: Data) -> Result<Data, DatabaseError> {
         let mut data_map = self.data.lock().unwrap();
 
@@ -125,6 +138,32 @@ impl DatabaseTrait for MockDatabase {
             }
         }
 
+        Ok(result)
+    }
+
+    async fn count_data_dataset_links(&self, data_id: Uuid) -> Result<usize, DatabaseError> {
+        let dataset_data = self.dataset_data.lock().unwrap();
+        let count = dataset_data
+            .values()
+            .filter(|data_ids| data_ids.contains(&data_id))
+            .count();
+        Ok(count)
+    }
+
+    async fn list_datasets_for_data(&self, data_id: Uuid) -> Result<Vec<Dataset>, DatabaseError> {
+        let dataset_data = self.dataset_data.lock().unwrap();
+        let datasets = self.datasets.lock().unwrap();
+
+        let mut result = Vec::new();
+        for (dataset_id, data_ids) in dataset_data.iter() {
+            if data_ids.contains(&data_id)
+                && let Some(dataset) = datasets.get(dataset_id)
+            {
+                result.push(dataset.clone());
+            }
+        }
+
+        result.sort_by(|left, right| left.created_at.cmp(&right.created_at));
         Ok(result)
     }
 
@@ -177,6 +216,27 @@ impl DatabaseTrait for MockDatabase {
         Ok(result)
     }
 
+    async fn list_datasets(&self) -> Result<Vec<Dataset>, DatabaseError> {
+        let datasets = self.datasets.lock().unwrap();
+        let mut result: Vec<Dataset> = datasets.values().cloned().collect();
+        result.sort_by(|left, right| left.created_at.cmp(&right.created_at));
+        Ok(result)
+    }
+
+    async fn delete_dataset(&self, id: Uuid) -> Result<(), DatabaseError> {
+        let removed_dataset = self.datasets.lock().unwrap().remove(&id);
+        self.dataset_data.lock().unwrap().remove(&id);
+
+        if let Some(dataset) = removed_dataset {
+            self.dataset_by_name
+                .lock()
+                .unwrap()
+                .remove(&(dataset.name, dataset.owner_id));
+        }
+
+        Ok(())
+    }
+
     async fn attach_data_to_dataset(
         &self,
         dataset_id: Uuid,
@@ -192,6 +252,62 @@ impl DatabaseTrait for MockDatabase {
         }
 
         Ok(())
+    }
+
+    async fn detach_data_from_dataset(
+        &self,
+        dataset_id: Uuid,
+        data_id: Uuid,
+    ) -> Result<(), DatabaseError> {
+        let mut dataset_data = self.dataset_data.lock().unwrap();
+        if let Some(data_ids) = dataset_data.get_mut(&dataset_id) {
+            data_ids.retain(|id| *id != data_id);
+        }
+        Ok(())
+    }
+
+    async fn upsert_artifact_references(
+        &self,
+        references: &[ArtifactReference],
+    ) -> Result<(), DatabaseError> {
+        let mut stored = self.artifact_references.lock().unwrap();
+        for reference in references {
+            let exists = stored.iter().any(|item| {
+                item.dataset_id == reference.dataset_id
+                    && item.data_id == reference.data_id
+                    && item.artifact_kind == reference.artifact_kind
+                    && item.artifact_id == reference.artifact_id
+                    && item.collection_name == reference.collection_name
+            });
+            if !exists {
+                stored.push(reference.clone());
+            }
+        }
+        Ok(())
+    }
+
+    async fn list_artifact_references_for_data(
+        &self,
+        data_id: Uuid,
+    ) -> Result<Vec<ArtifactReference>, DatabaseError> {
+        let stored = self.artifact_references.lock().unwrap();
+        Ok(stored
+            .iter()
+            .filter(|reference| reference.data_id == Some(data_id))
+            .cloned()
+            .collect())
+    }
+
+    async fn list_artifact_references_for_dataset(
+        &self,
+        dataset_id: Uuid,
+    ) -> Result<Vec<ArtifactReference>, DatabaseError> {
+        let stored = self.artifact_references.lock().unwrap();
+        Ok(stored
+            .iter()
+            .filter(|reference| reference.dataset_id == dataset_id)
+            .cloned()
+            .collect())
     }
 
     async fn log_query(

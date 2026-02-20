@@ -1,0 +1,12 @@
+[package]
+name = "cognee-delete"
+version = "0.1.0"
+edition.workspace = true
+
+[dependencies]
+cognee-database = { path = "../cognee-database" }
+cognee-models = { path = "../cognee-models" }
+cognee-storage = { path = "../cognee-storage" }
+serde.workspace = true
+thiserror.workspace = true
+uuid.workspace = true

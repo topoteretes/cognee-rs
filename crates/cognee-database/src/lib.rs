@@ -5,7 +5,7 @@ mod sqlite_database;
 mod mock_database;
 
 pub use database_trait::{
-    DatabaseError, DatabaseTrait, SearchHistoryEntry, SearchHistoryEntryType,
+    ArtifactReference, DatabaseError, DatabaseTrait, SearchHistoryEntry, SearchHistoryEntryType,
 };
 pub use sqlite_database::SqliteDatabase;
 

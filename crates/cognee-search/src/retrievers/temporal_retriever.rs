@@ -585,6 +585,7 @@ mod tests {
     use schemars::JsonSchema;
     use serde::{Deserialize, Serialize};
     use serde_json::{Value, json};
+    use uuid::Uuid;
 
     use super::{QueryInterval, TemporalRetriever};
     use crate::retrievers::SearchRetriever;
@@ -667,6 +668,15 @@ mod tests {
             &self,
             _data_type: &str,
             _field_name: &str,
+        ) -> VectorDBResult<()> {
+            Ok(())
+        }
+
+        async fn delete_points(
+            &self,
+            _data_type: &str,
+            _field_name: &str,
+            _point_ids: &[Uuid],
         ) -> VectorDBResult<()> {
             Ok(())
         }
