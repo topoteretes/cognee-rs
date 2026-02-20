@@ -1,4 +1,4 @@
-use std::io::{self, Write};
+use std::io;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -8,6 +8,7 @@ use cognee_lib::delete::{DeleteMode, DeleteRequest, DeleteScope, DeleteService};
 use cognee_lib::graph::{GraphDBTrait, LadybugAdapter};
 use cognee_lib::storage::{LocalStorage, StorageTrait};
 use cognee_lib::vector::{QdrantAdapter, VectorDB};
+use tracing::{info, warn};
 use uuid::Uuid;
 
 use crate::cli::{DeleteArgs, DeleteModeArg};
@@ -50,14 +51,14 @@ pub fn run(args: DeleteArgs) -> Result<(), CliError> {
         .block_on(service.preview(&request))
         .map_err(|error| CliError::Runtime(format!("Delete preview failed: {error}")))?;
 
-    println!("Preview:");
-    println!("  datasets_to_delete: {}", preview.datasets_to_delete);
-    println!(
+    info!("Preview:");
+    info!("  datasets_to_delete: {}", preview.datasets_to_delete);
+    info!(
         "  dataset_links_to_delete: {}",
         preview.dataset_links_to_delete
     );
-    println!("  data_to_delete: {}", preview.data_to_delete);
-    println!(
+    info!("  data_to_delete: {}", preview.data_to_delete);
+    info!(
         "  storage_files_to_delete: {}",
         preview.storage_files_to_delete
     );
@@ -67,10 +68,7 @@ pub fn run(args: DeleteArgs) -> Result<(), CliError> {
     }
 
     if !force {
-        print!("This operation is irreversible. Continue? [y/N]: ");
-        io::stdout()
-            .flush()
-            .map_err(|error| CliError::Runtime(format!("Failed to flush stdout: {error}")))?;
+        info!("This operation is irreversible. Continue? [y/N]: ");
 
         let mut confirmation = String::new();
         io::stdin()
@@ -79,7 +77,7 @@ pub fn run(args: DeleteArgs) -> Result<(), CliError> {
 
         let answer = confirmation.trim().to_lowercase();
         if answer != "y" && answer != "yes" {
-            println!("Deletion cancelled.");
+            info!("Deletion cancelled.");
             return Ok(());
         }
     }
@@ -103,7 +101,7 @@ pub fn run(args: DeleteArgs) -> Result<(), CliError> {
     ))?;
     result.warnings.extend(cleanup_warnings);
 
-    println!(
+    info!(
         "Success: Deleted datasets={}, links={}, data={}, storage_files={}",
         result.deleted_datasets,
         result.deleted_dataset_links,
@@ -112,7 +110,7 @@ pub fn run(args: DeleteArgs) -> Result<(), CliError> {
     );
 
     for warning in result.warnings {
-        eprintln!("Warning: {warning}");
+        warn!("Warning: {warning}");
     }
 
     Ok(())

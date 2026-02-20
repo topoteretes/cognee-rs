@@ -24,6 +24,7 @@ serde_json = { workspace = true }
 
 # Error handling
 thiserror = { workspace = true }
+tracing = { workspace = true }
 
 [dev-dependencies]
 tempfile.workspace = true

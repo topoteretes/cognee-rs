@@ -1,4 +1,5 @@
 use serde_json::Value;
+use tracing::info;
 
 use crate::cli::{ConfigAction, ConfigArgs};
 use crate::config_store::{
@@ -26,11 +27,11 @@ fn handle_get(key: Option<&str>) -> Result<(), CliError> {
                 "Unknown config key '{key}'. Use 'cognee-cli config list' to see supported keys."
             ))
         })?;
-        println!("{key}: {value}");
+        info!("{key}: {value}");
         return Ok(());
     }
 
-    println!(
+    info!(
         "{}",
         serde_json::to_string_pretty(&config).map_err(|error| CliError::Runtime(format!(
             "Failed to format config output: {error}"
@@ -48,14 +49,14 @@ fn handle_set(key: &str, raw_value: &str) -> Result<(), CliError> {
     set_value(&mut config.settings, key, parsed)?;
     save_config(&config)?;
 
-    println!("Success: Set {key}");
+    info!("Success: Set {key}");
     Ok(())
 }
 
 fn handle_list() -> Result<(), CliError> {
-    println!("Available configuration keys:");
+    info!("Available configuration keys:");
     for key in known_keys() {
-        println!("  {key}");
+        info!("  {key}");
     }
 
     Ok(())
@@ -63,7 +64,7 @@ fn handle_list() -> Result<(), CliError> {
 
 fn handle_unset(key: &str, force: bool) -> Result<(), CliError> {
     if !force && !confirm(&format!("Unset configuration key '{key}'?"))? {
-        println!("Unset cancelled.");
+        info!("Unset cancelled.");
         return Ok(());
     }
 
@@ -71,30 +72,27 @@ fn handle_unset(key: &str, force: bool) -> Result<(), CliError> {
     unset_key(&mut config.settings, key)?;
     save_config(&config)?;
 
-    println!("Success: Unset {key}");
+    info!("Success: Unset {key}");
     Ok(())
 }
 
 fn handle_reset(force: bool) -> Result<(), CliError> {
     if !force && !confirm("Reset all configuration to defaults?")? {
-        println!("Reset cancelled.");
+        info!("Reset cancelled.");
         return Ok(());
     }
 
     let config = ConfigDocument::default();
     save_config(&config)?;
 
-    println!("Success: Configuration reset to defaults");
+    info!("Success: Configuration reset to defaults");
     Ok(())
 }
 
 fn confirm(prompt: &str) -> Result<bool, CliError> {
-    use std::io::{self, Write};
+    use std::io;
 
-    print!("{prompt} [y/N]: ");
-    io::stdout()
-        .flush()
-        .map_err(|error| CliError::Runtime(format!("Failed to flush stdout: {error}")))?;
+    info!("{prompt} [y/N]: ");
 
     let mut input = String::new();
     io::stdin()

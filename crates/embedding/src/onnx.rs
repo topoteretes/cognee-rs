@@ -3,6 +3,7 @@ use ort::session::{Session, builder::GraphOptimizationLevel};
 use ort::value::Tensor;
 use std::sync::{Arc, Mutex};
 use tokenizers::Tokenizer;
+use tracing::info;
 
 use crate::{
     config::EmbeddingConfig,
@@ -55,7 +56,7 @@ impl OnnxEmbeddingEngine {
         }
 
         // 3. Load HuggingFace tokenizer from file
-        println!("Loading tokenizer: {:?}", config.tokenizer_path);
+        info!("Loading tokenizer: {:?}", config.tokenizer_path);
         let tokenizer = Tokenizer::from_file(&config.tokenizer_path).map_err(|e| {
             EmbeddingError::TokenizerError(format!(
                 "Failed to load tokenizer from {:?}: {}. Please ensure tokenizer.json file exists.",
@@ -64,7 +65,7 @@ impl OnnxEmbeddingEngine {
         })?;
 
         // 4. Load ONNX session with optimization
-        println!("Loading ONNX model: {:?}", config.model_path);
+        info!("Loading ONNX model: {:?}", config.model_path);
         let session = Session::builder()
             .map_err(|e| EmbeddingError::ModelLoadError(e.to_string()))?
             .with_optimization_level(GraphOptimizationLevel::Level3)
@@ -72,7 +73,7 @@ impl OnnxEmbeddingEngine {
             .commit_from_file(&config.model_path)
             .map_err(|e| EmbeddingError::ModelLoadError(e.to_string()))?;
 
-        println!(
+        info!(
             "✓ Loaded {} (dims: {}, max_seq_len: {})",
             config.model_name, config.dimensions, config.max_sequence_length
         );
@@ -125,14 +126,14 @@ impl OnnxEmbeddingEngine {
         // 2. Ensure model exists (download if missing)
         let model_downloaded = ensure_model_exists(&config.model_path, model_url).await?;
         if model_downloaded {
-            println!("✓ Downloaded model to {:?}", config.model_path);
+            info!("✓ Downloaded model to {:?}", config.model_path);
         }
 
         // 3. Ensure tokenizer exists (download if missing)
         let tokenizer_downloaded =
             ensure_tokenizer_exists(&config.tokenizer_path, tokenizer_url).await?;
         if tokenizer_downloaded {
-            println!("✓ Downloaded tokenizer to {:?}", config.tokenizer_path);
+            info!("✓ Downloaded tokenizer to {:?}", config.tokenizer_path);
         }
 
         // 4. Create engine using existing constructor (model and tokenizer now guaranteed to exist)

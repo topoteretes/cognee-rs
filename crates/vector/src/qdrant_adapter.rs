@@ -15,6 +15,7 @@ use shard::query::{ScoringQuery, ShardQueryRequest};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
+use tracing::warn;
 use uuid::Uuid;
 
 use crate::error::{VectorDBError, VectorDBResult};
@@ -53,7 +54,7 @@ impl QdrantAdapter {
 
         // Auto-load existing shards (ignore errors, they'll surface on actual operations)
         if let Err(e) = adapter.load_existing_shards() {
-            eprintln!("Warning: Failed to load existing shards: {}", e);
+            warn!("Warning: Failed to load existing shards: {}", e);
         }
 
         adapter
@@ -94,7 +95,7 @@ impl QdrantAdapter {
                         }
                         Err(e) => {
                             // Log error but continue loading other shards
-                            eprintln!("Warning: Failed to load shard '{}': {}", collection, e);
+                            warn!("Warning: Failed to load shard '{}': {}", collection, e);
                         }
                     }
                 }

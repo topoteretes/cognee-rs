@@ -25,6 +25,7 @@ serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 schemars.workspace = true
 futures.workspace = true
+tracing.workspace = true
 
 [dev-dependencies]
 cognee-storage = { path = "../storage", features = ["testing"] }

@@ -5,6 +5,7 @@
 
 use cognee_models::Triplet;
 use std::collections::HashMap;
+use tracing::warn;
 use uuid::Uuid;
 
 use crate::graph_integration::{GraphEdgePair, GraphNodePair};
@@ -119,7 +120,7 @@ pub fn create_triplets_from_graph(
     }
 
     if skipped_count > 0 {
-        println!(
+        warn!(
             "⚠  Skipped {} triplets (missing nodes or empty text)",
             skipped_count
         );

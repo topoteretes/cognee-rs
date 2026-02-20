@@ -20,6 +20,7 @@ use cognee_storage::StorageTrait;
 use cognee_vector::{VectorDB, VectorPoint};
 use serde_json::json;
 use tokio::sync::Semaphore;
+use tracing::info;
 use uuid::Uuid;
 
 use crate::config::CognifyConfig;
@@ -147,7 +148,7 @@ impl<S: StorageTrait, G: GraphDBTrait, V: VectorDB, E: EmbeddingEngine>
         dataset_id: Uuid,
         llm: Arc<L>,
     ) -> Result<CognifyResult, CognifyError> {
-        println!(
+        info!(
             "Starting cognify pipeline with config: chunks_per_batch={}, max_chunk_size={}",
             self.config.chunks_per_batch, self.config.max_chunk_size
         );
@@ -170,7 +171,7 @@ impl<S: StorageTrait, G: GraphDBTrait, V: VectorDB, E: EmbeddingEngine>
             });
         }
 
-        println!("✓ Extracted {} chunks", chunks.len());
+        info!("✓ Extracted {} chunks", chunks.len());
 
         // Stage 2: Graph extraction with configured batching and parallelism
         let batch_size = self.config.chunks_per_batch;
@@ -202,7 +203,7 @@ impl<S: StorageTrait, G: GraphDBTrait, V: VectorDB, E: EmbeddingEngine>
                 all_graphs.push(graph);
             }
 
-            println!(
+            info!(
                 "✓ Processed batch {}/{} ({} chunks)",
                 batch_idx + 1,
                 chunks.len().div_ceil(batch_size),
@@ -279,10 +280,10 @@ impl<S: StorageTrait, G: GraphDBTrait, V: VectorDB, E: EmbeddingEngine>
                 all_summaries.extend(batch_summaries);
             }
 
-            println!("✓ Generated {} summaries", all_summaries.len());
+            info!("✓ Generated {} summaries", all_summaries.len());
             all_summaries
         } else {
-            println!("✓ Summarization disabled in config");
+            info!("✓ Summarization disabled in config");
             Vec::new()
         };
 
@@ -454,7 +455,7 @@ impl<S: StorageTrait, G: GraphDBTrait, V: VectorDB, E: EmbeddingEngine>
                 .map_err(|e| CognifyError::VectorDBError(e.to_string()))?;
 
             stats.chunk_text_count = chunks.len();
-            println!("✓ Indexed {} document chunks", chunks.len());
+            info!("✓ Indexed {} document chunks", chunks.len());
         }
 
         // 2a. Index Entity.name field
@@ -493,7 +494,7 @@ impl<S: StorageTrait, G: GraphDBTrait, V: VectorDB, E: EmbeddingEngine>
                 .map_err(|e| CognifyError::VectorDBError(e.to_string()))?;
 
             stats.entity_name_count = entities.len();
-            println!("✓ Indexed {} entity names", entities.len());
+            info!("✓ Indexed {} entity names", entities.len());
         }
 
         // 2b. Index Entity.description field (NEW - Phase 2)
@@ -536,7 +537,7 @@ impl<S: StorageTrait, G: GraphDBTrait, V: VectorDB, E: EmbeddingEngine>
                 .map_err(|e| CognifyError::VectorDBError(e.to_string()))?;
 
             stats.entity_description_count = entities.len();
-            println!("✓ Indexed {} entity descriptions", entities.len());
+            info!("✓ Indexed {} entity descriptions", entities.len());
         }
 
         // 3. Index TextSummary.text field
@@ -575,7 +576,7 @@ impl<S: StorageTrait, G: GraphDBTrait, V: VectorDB, E: EmbeddingEngine>
                 .map_err(|e| CognifyError::VectorDBError(e.to_string()))?;
 
             stats.summary_text_count = summaries.len();
-            println!("✓ Indexed {} summaries", summaries.len());
+            info!("✓ Indexed {} summaries", summaries.len());
         }
 
         // 4. Index triplets (Phase 3) - only if enabled in config
@@ -628,10 +629,10 @@ impl<S: StorageTrait, G: GraphDBTrait, V: VectorDB, E: EmbeddingEngine>
                     .map_err(|e| CognifyError::VectorDBError(e.to_string()))?;
 
                 stats.triplet_count = triplets.len();
-                println!("✓ Indexed {} triplets", triplets.len());
+                info!("✓ Indexed {} triplets", triplets.len());
             }
         } else if self.config.embed_triplets {
-            println!("• Triplet embedding enabled but no edges/entities to index");
+            info!("• Triplet embedding enabled but no edges/entities to index");
         }
 
         Ok(stats)

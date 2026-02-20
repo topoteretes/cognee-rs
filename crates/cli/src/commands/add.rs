@@ -5,6 +5,7 @@ use cognee_lib::add::IngestPipeline;
 use cognee_lib::database::{DatabaseTrait, SqliteDatabase};
 use cognee_lib::models::DataInput;
 use cognee_lib::storage::{LocalStorage, StorageTrait};
+use tracing::info;
 use uuid::Uuid;
 
 use crate::cli::AddArgs;
@@ -54,7 +55,7 @@ pub fn run(args: AddArgs) -> Result<(), CliError> {
             .await
             .map_err(|error| CliError::Runtime(format!("Add operation failed: {error}")))?;
 
-        println!(
+        info!(
             "Success: Added {} item(s) to dataset '{}'.",
             results.len(),
             args.dataset_name

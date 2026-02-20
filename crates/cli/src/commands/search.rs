@@ -7,6 +7,7 @@ use cognee_lib::graph::{GraphDBTrait, LadybugAdapter};
 use cognee_lib::llm::OpenAIAdapter;
 use cognee_lib::search::{SearchBuilder, SearchOutput, SearchRequest, SearchResponse, SearchType};
 use cognee_lib::vector::QdrantAdapter;
+use tracing::{info, warn};
 
 use crate::cli::{OutputFormatArg, QueryTypeArg, SearchArgs};
 use crate::config_store::{DEFAULT_SYSTEM_PROMPT_PATH, Settings, load_config};
@@ -24,7 +25,7 @@ pub fn run(args: SearchArgs) -> Result<(), CliError> {
     let mapped_query_type = map_query_type(args.query_type);
 
     if requires_llm(mapped_query_type) && config.settings.llm_api_key.is_empty() {
-        eprintln!("Warning: llm_api_key is empty. LLM-based search types may fail at runtime.");
+        warn!("Warning: llm_api_key is empty. LLM-based search types may fail at runtime.");
     }
 
     let system_prompt = args.system_prompt.unwrap_or_else(|| {
@@ -138,7 +139,7 @@ async fn build_search_dependencies(settings: &Settings) -> Result<SearchDependen
     }
 
     if vector_provider == "lancedb" {
-        eprintln!(
+        warn!(
             "Warning: vector_db_provider=lancedb is mapped to embedded qdrant adapter in Rust CLI runtime."
         );
     }
@@ -205,7 +206,7 @@ fn map_query_type(query_type: QueryTypeArg) -> SearchType {
         QueryTypeArg::Chunks => SearchType::Chunks,
         QueryTypeArg::Summaries => SearchType::Summaries,
         QueryTypeArg::Code => {
-            eprintln!("Warning: CODE is mapped to CODING_RULES compatibility mode.");
+            warn!("Warning: CODE is mapped to CODING_RULES compatibility mode.");
             SearchType::CodingRules
         }
         QueryTypeArg::Cypher => SearchType::Cypher,
@@ -235,7 +236,7 @@ fn render_output(
 ) -> Result<(), CliError> {
     match output_format {
         OutputFormatArg::Json => {
-            println!(
+            info!(
                 "{}",
                 serde_json::to_string_pretty(response).map_err(|error| {
                     CliError::Runtime(format!("Failed to render JSON output: {error}"))
@@ -243,52 +244,52 @@ fn render_output(
             );
         }
         OutputFormatArg::Simple => match &response.result {
-            SearchOutput::Text(text) => println!("{text}"),
+            SearchOutput::Text(text) => info!("{text}"),
             SearchOutput::Texts(items) => {
                 for item in items {
-                    println!("{item}");
+                    info!("{item}");
                 }
             }
             SearchOutput::Items(items) => {
                 for item in items {
-                    println!("{}", item.payload);
+                    info!("{}", item.payload);
                 }
             }
-            other => println!("{:?}", other),
+            other => info!("{:?}", other),
         },
         OutputFormatArg::Pretty => match &response.result {
             SearchOutput::Text(text) => {
-                println!("Response: {text}");
+                info!("Response: {text}");
             }
             SearchOutput::Texts(items) => {
                 if items.is_empty() {
-                    println!("No results found for your query.");
+                    info!("No results found for your query.");
                 } else {
-                    println!("Found {} result(s):", items.len());
+                    info!("Found {} result(s):", items.len());
                     for (index, item) in items.iter().enumerate() {
-                        println!("{}. {}", index + 1, item);
+                        info!("{}. {}", index + 1, item);
                     }
                 }
             }
             SearchOutput::Items(items) => {
                 if items.is_empty() {
-                    println!("No results found for your query.");
+                    info!("No results found for your query.");
                 } else {
-                    println!("Found {} result(s):", items.len());
+                    info!("Found {} result(s):", items.len());
                     for (index, item) in items.iter().enumerate() {
-                        println!("Result {}:", index + 1);
-                        println!("  Score: {:?}", item.score);
-                        println!("  Payload: {}", item.payload);
+                        info!("Result {}:", index + 1);
+                        info!("  Score: {:?}", item.score);
+                        info!("  Payload: {}", item.payload);
                     }
                 }
             }
             SearchOutput::GraphQueryRows(rows) => {
                 if rows.is_empty() {
-                    println!("No rows returned.");
+                    info!("No rows returned.");
                 } else {
-                    println!("Returned {} row(s):", rows.len());
+                    info!("Returned {} row(s):", rows.len());
                     for (index, row) in rows.iter().enumerate() {
-                        println!(
+                        info!(
                             "Row {}: {}",
                             index + 1,
                             serde_json::Value::Array(row.clone())
@@ -298,15 +299,15 @@ fn render_output(
             }
             SearchOutput::Rules(rules) => {
                 if rules.is_empty() {
-                    println!("No rules returned.");
+                    info!("No rules returned.");
                 } else {
-                    println!("Found {} rule(s):", rules.len());
+                    info!("Found {} rule(s):", rules.len());
                     for (index, rule) in rules.iter().enumerate() {
-                        println!("{}. [{}] {}", index + 1, rule.node_set, rule.text);
+                        info!("{}. [{}] {}", index + 1, rule.node_set, rule.text);
                     }
                 }
             }
-            SearchOutput::Ack { message } => println!("{message}"),
+            SearchOutput::Ack { message } => info!("{message}"),
         },
     }
 

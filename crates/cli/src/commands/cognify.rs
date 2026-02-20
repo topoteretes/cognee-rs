@@ -10,6 +10,7 @@ use cognee_lib::llm::OpenAIAdapter;
 use cognee_lib::ontology::{OntologyResolver, RdfLibOntologyResolver};
 use cognee_lib::storage::{LocalStorage, StorageTrait};
 use cognee_lib::vector::QdrantAdapter;
+use tracing::{info, warn};
 use uuid::Uuid;
 
 use crate::cli::{ChunkerArg, CognifyArgs};
@@ -27,7 +28,7 @@ pub fn run(args: CognifyArgs) -> Result<(), CliError> {
     })?;
 
     if args.background {
-        eprintln!(
+        warn!(
             "Warning: --background is accepted for compatibility, but execution remains synchronous and in-process."
         );
     }
@@ -35,7 +36,7 @@ pub fn run(args: CognifyArgs) -> Result<(), CliError> {
     match args.chunker {
         ChunkerArg::Text => {}
         ChunkerArg::Langchain | ChunkerArg::Csv => {
-            eprintln!(
+            warn!(
                 "Warning: selected chunker is not natively available in Rust yet; using TextChunker-compatible flow."
             );
         }
@@ -101,7 +102,7 @@ pub fn run(args: CognifyArgs) -> Result<(), CliError> {
         }
 
         if vector_provider == "lancedb" {
-            eprintln!(
+            warn!(
                 "Warning: vector_db_provider=lancedb is mapped to embedded qdrant adapter in Rust CLI runtime."
             );
         }
@@ -214,7 +215,7 @@ pub fn run(args: CognifyArgs) -> Result<(), CliError> {
                 })?;
 
             if data_items.is_empty() {
-                eprintln!("Warning: dataset '{dataset_name}' has no data to cognify.");
+                warn!("Warning: dataset '{dataset_name}' has no data to cognify.");
                 continue;
             }
 
@@ -244,7 +245,7 @@ pub fn run(args: CognifyArgs) -> Result<(), CliError> {
             total_embeddings += result.embeddings.len();
 
             if args.verbose {
-                println!(
+                info!(
                     "Dataset '{}' -> chunks={}, entities={}, edges={}, summaries={}, embeddings={}",
                     dataset_name,
                     result.chunks.len(),
@@ -256,7 +257,7 @@ pub fn run(args: CognifyArgs) -> Result<(), CliError> {
             }
         }
 
-        println!(
+        info!(
             "Success: Cognify completed. chunks={}, entities={}, edges={}, summaries={}, embeddings={}",
             total_chunks, total_entities, total_edges, total_summaries, total_embeddings
         );
