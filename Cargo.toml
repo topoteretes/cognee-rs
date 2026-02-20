@@ -7,6 +7,7 @@ members = [
     "crates/cognee-ingestion",
     "crates/cognee-chunking",
     "crates/cognee-cognify",
+    "crates/cognee-lib",
     "crates/cognee-utils",
     "crates/cognee-llm",
     "crates/cognee-graph",
