@@ -4,7 +4,7 @@ pub mod retrievers;
 pub mod types;
 pub mod utils;
 
-pub use orchestration::{SearchOrchestrator, SearchTypeRegistry};
+pub use orchestration::{SearchBuilder, SearchOrchestrator, SearchTypeRegistry};
 pub use retrievers::{
     ChunksRetriever, CodingRulesRetriever, CompletionRetriever, CypherSearchRetriever,
     FeedbackRetriever, FeelingLuckyRetriever, GraphCompletionContextExtensionRetriever,
