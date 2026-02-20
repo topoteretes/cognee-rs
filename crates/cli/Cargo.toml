@@ -11,7 +11,7 @@ path = "src/main.rs"
 [dependencies]
 anyhow.workspace = true
 clap = { workspace = true, features = ["derive"] }
-cognee-lib = { path = "../cognee-lib" }
+cognee-lib = { path = "../lib" }
 chrono.workspace = true
 dirs.workspace = true
 serde.workspace = true

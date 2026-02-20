@@ -4,10 +4,10 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
-cognee-database = { path = "../cognee-database" }
-cognee-models = { path = "../cognee-models" }
-cognee-storage = { path = "../cognee-storage" }
-cognee-utils = { path = "../cognee-utils" }
+cognee-database = { path = "../database" }
+cognee-models = { path = "../models" }
+cognee-storage = { path = "../storage" }
+cognee-utils = { path = "../utils" }
 sha2.workspace = true
 uuid.workspace = true
 tokio.workspace = true
@@ -19,6 +19,6 @@ url.workspace = true
 futures-util.workspace = true
 
 [dev-dependencies]
-cognee-database = { path = "../cognee-database", features = ["testing"] }
-cognee-storage = { path = "../cognee-storage", features = ["testing"] }
+cognee-database = { path = "../database", features = ["testing"] }
+cognee-storage = { path = "../storage", features = ["testing"] }
 tempfile.workspace = true

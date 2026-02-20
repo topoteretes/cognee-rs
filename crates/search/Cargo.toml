@@ -4,11 +4,11 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
-cognee-embedding = { path = "../cognee-embedding" }
-cognee-database = { path = "../cognee-database" }
-cognee-graph = { path = "../cognee-graph" }
-cognee-llm = { path = "../cognee-llm" }
-cognee-vector = { path = "../cognee-vector" }
+cognee-embedding = { path = "../embedding" }
+cognee-database = { path = "../database" }
+cognee-graph = { path = "../graph" }
+cognee-llm = { path = "../llm" }
+cognee-vector = { path = "../vector" }
 
 async-trait.workspace = true
 serde = { workspace = true, features = ["derive"] }
@@ -19,7 +19,7 @@ thiserror.workspace = true
 uuid = { workspace = true, features = ["serde", "v4"] }
 
 [dev-dependencies]
-cognee-database = { path = "../cognee-database", features = ["testing"] }
-cognee-graph = { path = "../cognee-graph", features = ["testing"] }
-cognee-models = { path = "../cognee-models" }
+cognee-database = { path = "../database", features = ["testing"] }
+cognee-graph = { path = "../graph", features = ["testing"] }
+cognee-models = { path = "../models" }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

@@ -19,7 +19,7 @@ chrono.workspace = true
 lbug.workspace = true
 
 # Internal dependencies
-cognee-models = { path = "../cognee-models" }
+cognee-models = { path = "../models" }
 
 [features]
 testing = []

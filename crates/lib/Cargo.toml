@@ -1,0 +1,29 @@
+[package]
+name = "cognee-lib"
+version.workspace = true
+edition.workspace = true
+
+[features]
+testing = [
+    "cognee-cognify/testing",
+    "cognee-database/testing",
+    "cognee-graph/testing",
+    "cognee-storage/testing",
+    "cognee-vector/testing",
+]
+
+[dependencies]
+cognee-chunking = { path = "../chunking" }
+cognee-cognify = { path = "../cognify" }
+cognee-delete = { path = "../delete" }
+cognee-database = { path = "../database" }
+cognee-embedding = { path = "../embedding" }
+cognee-graph = { path = "../graph" }
+cognee-ingestion = { path = "../ingestion" }
+cognee-llm = { path = "../llm" }
+cognee-models = { path = "../models" }
+cognee-ontology = { path = "../ontology" }
+cognee-search = { path = "../search" }
+cognee-storage = { path = "../storage" }
+cognee-vector = { path = "../vector" }
+uuid.workspace = true

@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
-cognee-models = { path = "../cognee-models" }
+cognee-models = { path = "../models" }
 
 uuid = { workspace = true }
 thiserror = { workspace = true }

@@ -5,9 +5,9 @@ edition.workspace = true
 
 [dependencies]
 async-trait.workspace = true
-cognee-models = { path = "../cognee-models" }
-cognee-storage = { path = "../cognee-storage" }
-cognee-utils = { path = "../cognee-utils" }
+cognee-models = { path = "../models" }
+cognee-storage = { path = "../storage" }
+cognee-utils = { path = "../utils" }
 log.workspace = true
 serde.workspace = true
 thiserror.workspace = true
@@ -15,5 +15,5 @@ tokio.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
-cognee-storage = { path = "../cognee-storage", features = ["testing"] }
+cognee-storage = { path = "../storage", features = ["testing"] }
 tokio.workspace = true

@@ -1,0 +1,33 @@
+[package]
+name = "cognee-cognify"
+version.workspace = true
+edition.workspace = true
+
+[features]
+testing = ["cognee-storage/testing"]
+
+[dependencies]
+cognee-models = { path = "../models" }
+cognee-storage = { path = "../storage" }
+cognee-chunking = { path = "../chunking" }
+cognee-llm = { path = "../llm" }
+cognee-graph = { path = "../graph" }
+cognee-utils = { path = "../utils" }
+cognee-embedding = { path = "../embedding" }
+cognee-vector = { path = "../vector" }
+cognee-ontology = { path = "../ontology" }
+
+uuid = { workspace = true, features = ["v4"] }
+tokio = { workspace = true, features = ["rt-multi-thread"] }
+async-trait.workspace = true
+thiserror.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+schemars.workspace = true
+futures.workspace = true
+
+[dev-dependencies]
+cognee-storage = { path = "../storage", features = ["testing"] }
+cognee-graph = { path = "../graph", features = ["testing"] }
+cognee-vector = { path = "../vector", features = ["testing"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

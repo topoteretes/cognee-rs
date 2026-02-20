@@ -4,9 +4,9 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
-cognee-database = { path = "../cognee-database" }
-cognee-models = { path = "../cognee-models" }
-cognee-storage = { path = "../cognee-storage" }
+cognee-database = { path = "../database" }
+cognee-models = { path = "../models" }
+cognee-storage = { path = "../storage" }
 serde.workspace = true
 thiserror.workspace = true
 uuid.workspace = true
