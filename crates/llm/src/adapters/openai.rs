@@ -45,11 +45,14 @@ pub struct OpenAIAdapter {
     api_key: String,
     base_url: String,
     client: Client,
+    structured_output_retries: usize,
 }
 
 impl OpenAIAdapter {
     /// Default OpenAI API base URL
     pub const DEFAULT_BASE_URL: &'static str = "https://api.openai.com/v1";
+    /// Default retry attempts for structured output parsing paths.
+    pub const DEFAULT_STRUCTURED_OUTPUT_RETRIES: usize = 2;
 
     /// Create a new OpenAI adapter.
     ///
@@ -75,7 +78,17 @@ impl OpenAIAdapter {
             api_key: api_key.into(),
             base_url: base_url.unwrap_or_else(|| Self::DEFAULT_BASE_URL.to_string()),
             client,
+            structured_output_retries: Self::DEFAULT_STRUCTURED_OUTPUT_RETRIES,
         })
+    }
+
+    /// Configure retry attempts for structured output extraction.
+    ///
+    /// Values lower than 1 are coerced to 1.
+    pub fn with_structured_output_retries(mut self, retries: u32) -> Self {
+        let retries = usize::try_from(retries).unwrap_or(usize::MAX);
+        self.structured_output_retries = retries.max(1);
+        self
     }
 
     /// Build the authorization header value
@@ -83,9 +96,23 @@ impl OpenAIAdapter {
         format!("Bearer {}", self.api_key)
     }
 
+    /// Whether to request non-thinking mode for local Qwen OpenAI-compatible endpoints.
+    fn should_disable_thinking(&self) -> bool {
+        self.model.to_lowercase().starts_with("qwen") && !self.base_url.contains("api.openai.com")
+    }
+
     /// Call the OpenAI chat completions API
     async fn call_api(&self, request_body: Value) -> LlmResult<OpenAIResponse> {
         let url = format!("{}/chat/completions", self.base_url);
+        let debug_enabled = std::env::var("COGNEE_DEBUG_LLM_REQUEST")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
+
+        if debug_enabled {
+            let pretty_request = serde_json::to_string_pretty(&request_body)
+                .unwrap_or_else(|_| request_body.to_string());
+            eprintln!("\n[COGNEE_DEBUG_LLM_REQUEST] POST {url}\n{pretty_request}\n");
+        }
 
         let response = self
             .client
@@ -113,10 +140,20 @@ impl OpenAIAdapter {
             });
         }
 
-        response
-            .json::<OpenAIResponse>()
-            .await
-            .map_err(|e| LlmError::DeserializationError(format!("Failed to parse response: {}", e)))
+        let response_body = response.text().await.map_err(|e| {
+            LlmError::DeserializationError(format!("Failed to read response body: {}", e))
+        })?;
+
+        if debug_enabled {
+            eprintln!("\n[COGNEE_DEBUG_LLM_RESPONSE] POST {url}\n{response_body}\n");
+        }
+
+        serde_json::from_str::<OpenAIResponse>(&response_body).map_err(|e| {
+            LlmError::DeserializationError(format!(
+                "Failed to parse response: {}. Raw body: {}",
+                e, response_body
+            ))
+        })
     }
 
     /// Convert our Message type to OpenAI's format
@@ -251,6 +288,11 @@ impl Llm for OpenAIAdapter {
             request_body["stop"] = json!(stop);
         }
 
+        if self.should_disable_thinking() {
+            request_body["think"] = json!(false);
+            request_body["reasoning"] = json!({"effort": "none"});
+        }
+
         let response = self.call_api(request_body).await?;
 
         // Extract the first choice
@@ -303,6 +345,11 @@ impl Llm for OpenAIAdapter {
     where
         T: Serialize + DeserializeOwned + JsonSchema + Send,
     {
+        let is_empty_or_non_json = |raw: &str| {
+            let trimmed = raw.trim();
+            trimmed.is_empty() || serde_json::from_str::<Value>(trimmed).is_err()
+        };
+
         let opts = options.unwrap_or_default();
 
         // Generate JSON schema for the response type
@@ -330,28 +377,58 @@ impl Llm for OpenAIAdapter {
         if let Some(max_tokens) = opts.max_tokens {
             strict_schema_request["max_tokens"] = json!(max_tokens);
         }
+        if self.should_disable_thinking() {
+            strict_schema_request["think"] = json!(false);
+            strict_schema_request["reasoning"] = json!({"effort": "none"});
+        }
 
-        if let Ok(strict_response) = self.call_api(strict_schema_request).await {
-            let strict_choice = strict_response.choices.first().ok_or_else(|| {
-                LlmError::InvalidResponse("No choices in strict schema response".to_string())
-            })?;
+        for attempt in 0..self.structured_output_retries {
+            if let Ok(strict_response) = self.call_api(strict_schema_request.clone()).await {
+                let strict_choice = strict_response.choices.first().ok_or_else(|| {
+                    LlmError::InvalidResponse("No choices in strict schema response".to_string())
+                })?;
 
-            if let Some(function_call) = &strict_choice.message.function_call {
-                return serde_json::from_str::<T>(&function_call.arguments).map_err(|e| {
-                    LlmError::DeserializationError(format!(
-                        "Failed to deserialize strict function call arguments: {}. Raw: {}",
-                        e, function_call.arguments
-                    ))
-                });
-            }
+                if let Some(function_call) = &strict_choice.message.function_call {
+                    match serde_json::from_str::<T>(&function_call.arguments) {
+                        Ok(parsed) => return Ok(parsed),
+                        Err(e) => {
+                            if attempt + 1 < self.structured_output_retries
+                                && is_empty_or_non_json(&function_call.arguments)
+                            {
+                                continue;
+                            }
+                            if !is_empty_or_non_json(&function_call.arguments) {
+                                return Err(LlmError::DeserializationError(format!(
+                                    "Failed to deserialize strict function call arguments: {}. Raw: {}",
+                                    e, function_call.arguments
+                                )));
+                            }
+                            break;
+                        }
+                    }
+                }
 
-            if let Some(content) = strict_choice.message.content.as_ref() {
-                return serde_json::from_str::<T>(content).map_err(|e| {
-                    LlmError::DeserializationError(format!(
-                        "Failed to deserialize strict JSON content: {}. Raw: {}",
-                        e, content
-                    ))
-                });
+                if let Some(content) = strict_choice.message.content.as_ref() {
+                    match serde_json::from_str::<T>(content) {
+                        Ok(parsed) => return Ok(parsed),
+                        Err(e) => {
+                            if attempt + 1 < self.structured_output_retries
+                                && is_empty_or_non_json(content)
+                            {
+                                continue;
+                            }
+                            if !is_empty_or_non_json(content) {
+                                return Err(LlmError::DeserializationError(format!(
+                                    "Failed to deserialize strict JSON content: {}. Raw: {}",
+                                    e, content
+                                )));
+                            }
+                            break;
+                        }
+                    }
+                }
+            } else {
+                break;
             }
         }
 
@@ -374,22 +451,41 @@ impl Llm for OpenAIAdapter {
         if let Some(max_tokens) = opts.max_tokens {
             request_body["max_tokens"] = json!(max_tokens);
         }
+        if self.should_disable_thinking() {
+            request_body["think"] = json!(false);
+            request_body["reasoning"] = json!({"effort": "none"});
+        }
 
-        let response = self.call_api(request_body.clone()).await?;
+        for attempt in 0..self.structured_output_retries {
+            let response = self.call_api(request_body.clone()).await?;
 
-        let choice = response
-            .choices
-            .first()
-            .ok_or_else(|| LlmError::InvalidResponse("No choices in response".to_string()))?;
+            let choice = response
+                .choices
+                .first()
+                .ok_or_else(|| LlmError::InvalidResponse("No choices in response".to_string()))?;
 
-        // Try to extract from function call (OpenAI style)
-        if let Some(function_call) = &choice.message.function_call {
-            return serde_json::from_str::<T>(&function_call.arguments).map_err(|e| {
-                LlmError::DeserializationError(format!(
-                    "Failed to deserialize function call arguments: {}. Raw: {}",
-                    e, function_call.arguments
-                ))
-            });
+            // Try to extract from function call (OpenAI style)
+            if let Some(function_call) = &choice.message.function_call {
+                match serde_json::from_str::<T>(&function_call.arguments) {
+                    Ok(parsed) => return Ok(parsed),
+                    Err(e) => {
+                        if attempt + 1 < self.structured_output_retries
+                            && is_empty_or_non_json(&function_call.arguments)
+                        {
+                            continue;
+                        }
+                        if !is_empty_or_non_json(&function_call.arguments) {
+                            return Err(LlmError::DeserializationError(format!(
+                                "Failed to deserialize function call arguments: {}. Raw: {}",
+                                e, function_call.arguments
+                            )));
+                        }
+                        break;
+                    }
+                }
+            }
+
+            break;
         }
 
         // Fallback to JSON mode (works with Ollama and other providers)
@@ -426,24 +522,58 @@ impl Llm for OpenAIAdapter {
         if let Some(max_tokens) = opts.max_tokens {
             json_request["max_tokens"] = json!(max_tokens);
         }
+        if self.should_disable_thinking() {
+            json_request["think"] = json!(false);
+            json_request["reasoning"] = json!({"effort": "none"});
+        }
 
-        let json_response = self.call_api(json_request).await?;
+        for attempt in 0..self.structured_output_retries {
+            let mut request_for_attempt = json_request.clone();
 
-        let json_choice = json_response.choices.first().ok_or_else(|| {
-            LlmError::InvalidResponse("No choices in JSON mode response".to_string())
-        })?;
+            if attempt > 0 {
+                if let Some(messages) = request_for_attempt["messages"].as_array_mut()
+                    && let Some(last_msg) = messages.last_mut()
+                    && last_msg["role"] == "user"
+                {
+                    let original_content = last_msg["content"].as_str().unwrap_or("");
+                    last_msg["content"] = json!(format!(
+                        "{}\n\n/no_think\nReturn ONLY one valid JSON object matching the required schema. No reasoning, no markdown, no extra text.",
+                        original_content
+                    ));
+                }
 
-        // Parse JSON from content
-        let content = json_choice.message.content.as_ref().ok_or_else(|| {
-            LlmError::InvalidResponse("No content in JSON mode response".to_string())
-        })?;
+                request_for_attempt["temperature"] = json!(0.0);
+            }
 
-        serde_json::from_str::<T>(content).map_err(|e| {
-            LlmError::DeserializationError(format!(
-                "Failed to deserialize JSON content: {}. Raw: {}",
-                e, content
-            ))
-        })
+            let json_response = self.call_api(request_for_attempt).await?;
+
+            let json_choice = json_response.choices.first().ok_or_else(|| {
+                LlmError::InvalidResponse("No choices in JSON mode response".to_string())
+            })?;
+
+            // Parse JSON from content
+            let content = json_choice.message.content.as_ref().ok_or_else(|| {
+                LlmError::InvalidResponse("No content in JSON mode response".to_string())
+            })?;
+
+            match serde_json::from_str::<T>(content) {
+                Ok(parsed) => return Ok(parsed),
+                Err(e) => {
+                    if attempt + 1 < self.structured_output_retries && is_empty_or_non_json(content)
+                    {
+                        continue;
+                    }
+                    return Err(LlmError::DeserializationError(format!(
+                        "Failed to deserialize JSON content: {}. Raw: {}",
+                        e, content
+                    )));
+                }
+            }
+        }
+
+        Err(LlmError::InvalidResponse(
+            "Structured output retries exhausted without a parseable response".to_string(),
+        ))
     }
 
     fn model(&self) -> &str {
@@ -496,6 +626,7 @@ struct OpenAIChoice {
 struct OpenAIMessage {
     role: String,
     content: Option<String>,
+    reasoning: Option<String>,
     function_call: Option<OpenAIFunctionCall>,
 }
 
@@ -525,6 +656,23 @@ mod tests {
         let adapter = adapter.unwrap();
         assert_eq!(adapter.model(), "gpt-4");
         assert_eq!(adapter.base_url, OpenAIAdapter::DEFAULT_BASE_URL);
+        assert_eq!(
+            adapter.structured_output_retries,
+            OpenAIAdapter::DEFAULT_STRUCTURED_OUTPUT_RETRIES
+        );
+    }
+
+    #[test]
+    fn test_configurable_structured_output_retries() {
+        let adapter = OpenAIAdapter::new("gpt-4", "test-key", None)
+            .unwrap()
+            .with_structured_output_retries(5);
+        assert_eq!(adapter.structured_output_retries, 5);
+
+        let adapter = OpenAIAdapter::new("gpt-4", "test-key", None)
+            .unwrap()
+            .with_structured_output_retries(0);
+        assert_eq!(adapter.structured_output_retries, 1);
     }
 
     #[test]

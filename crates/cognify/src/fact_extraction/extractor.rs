@@ -83,6 +83,11 @@ impl<L: Llm + 'static> FactExtractor<L> {
         Self { llm }
     }
 
+    /// Return the default graph extraction prompt used by `extract_facts`.
+    pub fn default_graph_prompt() -> &'static str {
+        DEFAULT_GRAPH_PROMPT
+    }
+
     /// Extract facts (knowledge graph) from text.
     ///
     /// Mirrors Python's `extract_content_graph` function.
@@ -124,7 +129,7 @@ impl<L: Llm + 'static> FactExtractor<L> {
                 text,
                 system_prompt,
                 Some(GenerationOptions {
-                    temperature: Some(0.0), // Deterministic for fact extraction
+                    temperature: Some(0.1), // Slightly non-zero to improve extraction robustness
                     max_tokens: Some(4000), // Generous limit for complex graphs
                     ..Default::default()
                 }),

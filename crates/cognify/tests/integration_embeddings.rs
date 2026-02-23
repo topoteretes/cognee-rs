@@ -1,7 +1,7 @@
 //! Integration tests for embedding generation in the cognify pipeline.
 //!
 //! These tests require:
-//! - Environment variables: OPENAI_URL, OPENAI_TOKEN
+//! - Environment variables: OPENAI_URL, OPENAI_TOKEN, OPENAI_MODEL
 //! - Model file: ./target/models/BGE-Small-v1.5-model_quantized.onnx
 //! - Tokenizer: ./target/models/bge-small-tokenizer.json
 //!
@@ -10,42 +10,29 @@
 use cognee_cognify::{CognifyConfig, CognifyPipeline, CognifyResult};
 use cognee_embedding::{config::EmbeddingConfig, onnx::OnnxEmbeddingEngine};
 use cognee_graph::MockGraphDB;
-use cognee_llm::OpenAIAdapter;
 use cognee_models::Data;
 use cognee_storage::{MockStorage, StorageTrait};
 use cognee_vector::{MockVectorDB, VectorDB};
 use std::sync::Arc;
 use uuid::Uuid;
 
-/// Helper to get environment variables or skip test
-fn get_env_or_skip(var_name: &str) -> Result<String, ()> {
-    std::env::var(var_name).map_err(|_| {
-        eprintln!("⚠️  Skipping test: {} not set", var_name);
-    })
-}
+mod test_data;
+mod test_utils;
 
-/// Helper to create OpenAI adapter from environment variables
-fn create_adapter_from_env() -> Result<Arc<OpenAIAdapter>, ()> {
-    let base_url = get_env_or_skip("OPENAI_URL")?;
-    let api_token = get_env_or_skip("OPENAI_TOKEN")?;
-    let model = std::env::var("OPENAI_MODEL").unwrap_or_else(|_| "llama3.2:3b".to_string());
-
-    OpenAIAdapter::new(&model, api_token, Some(base_url))
-        .map(Arc::new)
-        .map_err(|e| {
-            eprintln!("⚠️  Failed to create adapter: {}", e);
-        })
-}
+use test_data::{
+    TEST_TEXT_EMBEDDINGS_BASIC, TEST_TEXT_EMBEDDINGS_ENTITY, TEST_TEXT_EMBEDDINGS_TRIPLETS_DEFAULT,
+};
+use test_utils::create_adapter_from_env;
 
 fn get_embedding_model_dir() -> String {
     if let Ok(model_dir) = std::env::var("COGNEE_TEST_MODEL_DIR") {
         return model_dir;
     }
 
-    if let Ok(model_path) = std::env::var("COGNEE_E2E_EMBED_MODEL_PATH") {
-        if let Some(parent) = std::path::Path::new(&model_path).parent() {
-            return parent.to_string_lossy().to_string();
-        }
+    if let Ok(model_path) = std::env::var("COGNEE_E2E_EMBED_MODEL_PATH")
+        && let Some(parent) = std::path::Path::new(&model_path).parent()
+    {
+        return parent.to_string_lossy().to_string();
     }
 
     "./target/models".to_string()
@@ -53,11 +40,7 @@ fn get_embedding_model_dir() -> String {
 
 #[tokio::test]
 async fn test_pipeline_with_embeddings() {
-    // Skip if env vars not set
-    let llm = match create_adapter_from_env() {
-        Ok(adapter) => adapter,
-        Err(_) => return,
-    };
+    let llm = create_adapter_from_env();
 
     // 1. Setup storage and graph DB
     let storage = Arc::new(MockStorage::new());
@@ -86,8 +69,7 @@ async fn test_pipeline_with_embeddings() {
     );
 
     // 4. Create test data
-    let text = "TechCorp is an organization based in San Francisco. \
-                Alice works at TechCorp as a software engineer.";
+    let text = TEST_TEXT_EMBEDDINGS_BASIC;
 
     let id = Uuid::new_v4();
     let owner_id = Uuid::new_v4();
@@ -228,14 +210,7 @@ async fn test_pipeline_requires_embeddings() {
         owner_id,
     );
 
-    // 5. Skip if LLM not available
-    let llm = match create_adapter_from_env() {
-        Ok(adapter) => adapter,
-        Err(_) => {
-            eprintln!("⚠️  Skipping test: LLM not configured");
-            return;
-        }
-    };
+    let llm = create_adapter_from_env();
 
     // 6. Run cognify pipeline (max_chunk_size now in config)
     let dataset_id = Uuid::new_v4();
@@ -261,11 +236,7 @@ async fn test_pipeline_requires_embeddings() {
 async fn test_embedding_semantic_similarity() {
     // Test that embeddings capture semantic similarity
 
-    // Skip if env vars not set
-    let llm = match create_adapter_from_env() {
-        Ok(adapter) => adapter,
-        Err(_) => return,
-    };
+    let llm = create_adapter_from_env();
 
     let storage = Arc::new(MockStorage::new());
     let graph_db = Arc::new(MockGraphDB::new());
@@ -320,7 +291,10 @@ async fn test_embedding_semantic_similarity() {
             owner_id,
         );
 
-        let result: CognifyResult = match pipeline.cognify(vec![data_item], dataset_id, llm.clone()).await {
+        let result: CognifyResult = match pipeline
+            .cognify(vec![data_item], dataset_id, llm.clone())
+            .await
+        {
             Ok(result) => result,
             Err(e) => {
                 eprintln!("⚠️  Skipping test: Cognify failed: {}", e);
@@ -353,11 +327,7 @@ async fn test_embedding_semantic_similarity() {
 async fn test_entity_description_indexing() {
     // Test that both Entity.name and Entity.description are indexed (Phase 2 feature)
 
-    // Skip if env vars not set
-    let llm = match create_adapter_from_env() {
-        Ok(adapter) => adapter,
-        Err(_) => return,
-    };
+    let llm = create_adapter_from_env();
 
     let storage = Arc::new(MockStorage::new());
     let graph_db = Arc::new(MockGraphDB::new());
@@ -382,9 +352,7 @@ async fn test_entity_description_indexing() {
     );
 
     // Create test data with entity information
-    let text = "TechCorp is a technology company founded in 2020. \
-                Alice is the CEO of TechCorp and works in San Francisco. \
-                Bob is a software engineer at TechCorp.";
+    let text = TEST_TEXT_EMBEDDINGS_ENTITY;
 
     let id = Uuid::new_v4();
     let owner_id = Uuid::new_v4();
@@ -487,11 +455,7 @@ async fn test_entity_description_indexing() {
 async fn test_triplet_embeddings_disabled_by_default() {
     // Test that triplet embeddings are disabled by default (Phase 3 feature)
 
-    // Skip if env vars not set
-    let llm = match create_adapter_from_env() {
-        Ok(adapter) => adapter,
-        Err(_) => return,
-    };
+    let llm = create_adapter_from_env();
 
     let storage = Arc::new(MockStorage::new());
     let graph_db = Arc::new(MockGraphDB::new());
@@ -517,7 +481,7 @@ async fn test_triplet_embeddings_disabled_by_default() {
     );
 
     // Create test data
-    let text = "Alice works at TechCorp. Bob also works at TechCorp.";
+    let text = TEST_TEXT_EMBEDDINGS_TRIPLETS_DEFAULT;
 
     let id = Uuid::new_v4();
     let owner_id = Uuid::new_v4();
@@ -571,11 +535,7 @@ async fn test_triplet_embeddings_disabled_by_default() {
 async fn test_triplet_embeddings_enabled() {
     // Test that triplet embeddings work when explicitly enabled (Phase 3 feature)
 
-    // Skip if env vars not set
-    let llm = match create_adapter_from_env() {
-        Ok(adapter) => adapter,
-        Err(_) => return,
-    };
+    let llm = create_adapter_from_env();
 
     let storage = Arc::new(MockStorage::new());
     let graph_db = Arc::new(MockGraphDB::new());

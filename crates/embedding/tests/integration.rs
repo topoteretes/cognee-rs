@@ -9,10 +9,10 @@ fn get_model_dir() -> String {
         return model_dir;
     }
 
-    if let Ok(model_path) = env::var("COGNEE_E2E_EMBED_MODEL_PATH") {
-        if let Some(parent) = std::path::Path::new(&model_path).parent() {
-            return parent.to_string_lossy().to_string();
-        }
+    if let Ok(model_path) = env::var("COGNEE_E2E_EMBED_MODEL_PATH")
+        && let Some(parent) = std::path::Path::new(&model_path).parent()
+    {
+        return parent.to_string_lossy().to_string();
     }
 
     let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();

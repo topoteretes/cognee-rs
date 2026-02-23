@@ -15,6 +15,10 @@ use crate::error::CliError;
 
 pub fn run(args: SearchArgs) -> Result<(), CliError> {
     let config = load_config()?;
+    let effective_llm_max_retries = args
+        .llm_max_retries
+        .unwrap_or(config.settings.llm_max_retries)
+        .max(1);
 
     if !(1..=100).contains(&args.top_k) {
         return Err(CliError::Validation(
@@ -42,7 +46,8 @@ pub fn run(args: SearchArgs) -> Result<(), CliError> {
         .map_err(|error| CliError::Runtime(format!("Failed to create async runtime: {error}")))?;
 
     runtime.block_on(async {
-        let dependencies = build_search_dependencies(&config.settings).await?;
+        let dependencies =
+            build_search_dependencies(&config.settings, effective_llm_max_retries).await?;
         let orchestrator = SearchBuilder::new(
             Arc::clone(&dependencies.vector_db),
             Arc::clone(&dependencies.embedding_engine),
@@ -95,7 +100,10 @@ struct SearchDependencies {
     llm: Arc<OpenAIAdapter>,
 }
 
-async fn build_search_dependencies(settings: &Settings) -> Result<SearchDependencies, CliError> {
+async fn build_search_dependencies(
+    settings: &Settings,
+    llm_max_retries: u32,
+) -> Result<SearchDependencies, CliError> {
     let database = Arc::new(
         SqliteDatabase::new(&settings.relational_db_url)
             .await
@@ -187,6 +195,7 @@ async fn build_search_dependencies(settings: &Settings) -> Result<SearchDependen
                 Some(settings.llm_endpoint.clone())
             },
         )
+        .map(|adapter| adapter.with_structured_output_retries(llm_max_retries.max(1)))
         .map_err(|error| CliError::Runtime(format!("LLM initialization failed: {error}")))?,
     );
 

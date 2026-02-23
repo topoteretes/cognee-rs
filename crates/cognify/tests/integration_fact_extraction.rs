@@ -3,79 +3,23 @@
 //! These tests require environment variables to be set:
 //! - OPENAI_URL: Base URL for the OpenAI-compatible API
 //! - OPENAI_TOKEN: API token (use "not-needed" for Ollama)
-//!
-//! Tests are automatically skipped if environment variables are not set.
+//! - OPENAI_MODEL: Model name to use for extraction
 //!
 //! Run with: cargo test --package cognee-cognify --test integration_fact_extraction
 
 use cognee_cognify::{FactExtractor, KnowledgeGraph};
 use cognee_llm::{Llm, OpenAIAdapter};
 use std::collections::HashMap;
-use std::sync::Arc;
 
-/// Helper to get environment variables or skip test
-fn get_env_or_skip(var_name: &str) -> Result<String, ()> {
-    std::env::var(var_name).map_err(|_| {
-        eprintln!("⚠️  Skipping test: {} not set", var_name);
-    })
-}
+mod test_data;
+mod test_utils;
 
-/// Helper to create OpenAI adapter from environment variables
-fn create_adapter_from_env() -> Result<Arc<OpenAIAdapter>, ()> {
-    let base_url = get_env_or_skip("OPENAI_URL")?;
-    let api_token = get_env_or_skip("OPENAI_TOKEN")?;
-
-    OpenAIAdapter::new("llama3.2:3b", api_token, Some(base_url))
-        .map(Arc::new)
-        .map_err(|e| {
-            eprintln!("⚠️  Failed to create adapter: {}", e);
-        })
-}
-
-/// Test data: Multi-paragraph text about a technology company
-const TEST_TEXT_TECHCORP: &str = r#"
-Alice Johnson is a software engineer at TechCorp, a technology company based in San Francisco, California. 
-She has been working there for five years, specializing in machine learning and artificial intelligence.
-
-Bob Smith, the CEO of TechCorp, founded the company in 2010 with a vision to revolutionize how businesses 
-use data. Under his leadership, TechCorp has grown from a small startup to a company with over 500 employees.
-
-The company's headquarters is located in the heart of San Francisco's financial district, occupying three 
-floors of a modern office building. TechCorp also has satellite offices in New York City and Austin, Texas.
-
-Last month, Alice presented her latest project at the AI Conference in Seattle, Washington. Her work on 
-improving natural language processing models received significant attention from industry experts. She 
-collaborated with Dr. Emma Chen from Stanford University on this research.
-
-TechCorp recently announced a partnership with DataSystems Inc., another major player in the technology sector. 
-This partnership aims to integrate TechCorp's AI capabilities with DataSystems' cloud infrastructure platform.
-"#;
-
-/// Test data: Multi-paragraph text about scientific research
-const TEST_TEXT_RESEARCH: &str = r#"
-Dr. Maria Rodriguez leads the Quantum Computing Laboratory at MIT, where she has been conducting groundbreaking 
-research on quantum error correction since 2018. Her team consists of twelve researchers from various countries, 
-including Dr. James Lee from South Korea and Dr. Fatima Abbas from Egypt.
-
-The laboratory is funded by a $10 million grant from the National Science Foundation, which was awarded in 2020. 
-This funding has enabled the acquisition of state-of-the-art quantum computers manufactured by QuantumTech Industries, 
-a Canadian company specializing in quantum hardware.
-
-Dr. Rodriguez recently published a paper in Nature Physics, co-authored with Professor Chen Wei from Tsinghua 
-University in Beijing. The research demonstrates a novel approach to reducing quantum decoherence, which could 
-significantly improve the reliability of quantum computers.
-
-The MIT laboratory collaborates with several institutions worldwide, including Cambridge University in the UK, 
-the Max Planck Institute in Germany, and RIKEN in Japan. These partnerships facilitate the exchange of ideas 
-and resources in the rapidly evolving field of quantum computing.
-"#;
+use test_data::{TEST_TEXT_RESEARCH, TEST_TEXT_TECHCORP};
+use test_utils::create_adapter_from_env;
 
 #[tokio::test]
 async fn test_fact_extraction_single_text() {
-    let adapter = match create_adapter_from_env() {
-        Ok(a) => a,
-        Err(_) => return, // Skip test
-    };
+    let adapter = create_adapter_from_env();
 
     println!("\n🧪 Testing fact extraction with single text");
     println!("   Model: {}", adapter.model());
@@ -140,14 +84,18 @@ async fn test_fact_extraction_single_text() {
 
 #[tokio::test]
 async fn test_fact_extraction_batch() {
-    let adapter = match create_adapter_from_env() {
-        Ok(a) => a,
-        Err(_) => return, // Skip test
-    };
+    let adapter = create_adapter_from_env();
 
-    println!("\n🧪 Testing batch fact extraction with multiple texts");
+    println!("\n  Testing batch fact extraction with multiple texts");
     println!("   Model: {}", adapter.model());
     println!("   Number of texts: 2");
+
+    println!(
+        "\n  Effective Prompt (default):\n{}",
+        FactExtractor::<OpenAIAdapter>::default_graph_prompt()
+    );
+    println!("\n  Input Text 1 (TechCorp):\n{}", TEST_TEXT_TECHCORP);
+    println!("\n  Input Text 2 (Research):\n{}", TEST_TEXT_RESEARCH);
 
     let extractor = FactExtractor::new(adapter);
 
@@ -164,6 +112,17 @@ async fn test_fact_extraction_batch() {
             println!("   Extracted {} knowledge graphs", graphs.len());
 
             assert_eq!(graphs.len(), 2, "Should return 2 knowledge graphs");
+
+            println!(
+                "\n  Graph 1 Raw JSON:\n{}",
+                serde_json::to_string_pretty(&graphs[0])
+                    .unwrap_or_else(|_| "<failed to serialize graph 1>".to_string())
+            );
+            println!(
+                "\n  Graph 2 Raw JSON:\n{}",
+                serde_json::to_string_pretty(&graphs[1])
+                    .unwrap_or_else(|_| "<failed to serialize graph 2>".to_string())
+            );
 
             // Analyze each graph
             for (i, graph) in graphs.iter().enumerate() {
@@ -198,6 +157,7 @@ async fn test_fact_extraction_batch() {
                 .iter()
                 .map(|n| n.name.to_lowercase())
                 .collect();
+            println!("\n  Graph 2 Node Names: {:?}", graph2_nodes);
             assert!(
                 graph2_nodes.iter().any(|n| n.contains("maria")
                     || n.contains("rodriguez")
@@ -215,12 +175,9 @@ async fn test_fact_extraction_batch() {
 
 #[tokio::test]
 async fn test_fact_extraction_with_custom_prompt() {
-    let adapter = match create_adapter_from_env() {
-        Ok(a) => a,
-        Err(_) => return, // Skip test
-    };
+    let adapter = create_adapter_from_env();
 
-    println!("\n🧪 Testing fact extraction with custom prompt");
+    println!("\n  Testing fact extraction with custom prompt");
     println!("   Model: {}", adapter.model());
 
     let extractor = FactExtractor::new(adapter);
@@ -320,7 +277,7 @@ fn print_knowledge_graph(graph: &KnowledgeGraph) {
     }
 
     // Print some detailed node information
-    println!("\n📝 Node Details (first 5):");
+    println!("\n  Node Details (first 5):");
     for node in graph.nodes.iter().take(5) {
         println!("   {}:", node.name);
         println!("     Type: {}", node.node_type);

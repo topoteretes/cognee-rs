@@ -20,6 +20,10 @@ use crate::error::CliError;
 pub fn run(args: CognifyArgs) -> Result<(), CliError> {
     let config = load_config()?;
     let effective_chunk_size = args.chunk_size.unwrap_or(config.settings.chunk_size);
+    let effective_llm_max_retries = args
+        .llm_max_retries
+        .unwrap_or(config.settings.llm_max_retries)
+        .max(1);
     let owner_id = Uuid::parse_str(&config.settings.default_user_id).map_err(|error| {
         CliError::Validation(format!(
             "Invalid default_user_id '{}': {error}",
@@ -155,6 +159,7 @@ pub fn run(args: CognifyArgs) -> Result<(), CliError> {
                     Some(config.settings.llm_endpoint.clone())
                 },
             )
+            .map(|adapter| adapter.with_structured_output_retries(effective_llm_max_retries))
             .map_err(|error| CliError::Runtime(format!("LLM initialization failed: {error}")))?,
         );
 

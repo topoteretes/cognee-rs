@@ -3,8 +3,7 @@
 //! These tests require environment variables to be set:
 //! - OPENAI_URL: Base URL for the OpenAI-compatible API
 //! - OPENAI_TOKEN: API token (use "not-needed" for Ollama)
-//!
-//! Tests are automatically skipped if environment variables are not set.
+//! - OPENAI_MODEL: Model name to use for integration tests
 //!
 //! Run with: cargo test --package cognee-llm --test integration_openai
 
@@ -12,21 +11,19 @@ use cognee_llm::{GenerationOptions, Llm, OpenAIAdapter};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-/// Helper to get environment variables or skip test
-fn get_env_or_skip(var_name: &str) -> Result<String, ()> {
-    std::env::var(var_name).map_err(|_| {
-        eprintln!("⚠️  Skipping test: {} not set", var_name);
-    })
+fn require_env(var_name: &str) -> String {
+    std::env::var(var_name)
+        .unwrap_or_else(|_| panic!("❌ Required environment variable '{}' is not set", var_name))
 }
 
 /// Helper to create OpenAI adapter from environment variables
-fn create_adapter_from_env() -> Result<OpenAIAdapter, ()> {
-    let base_url = get_env_or_skip("OPENAI_URL")?;
-    let api_token = get_env_or_skip("OPENAI_TOKEN")?;
+fn create_adapter_from_env() -> OpenAIAdapter {
+    let base_url = require_env("OPENAI_URL");
+    let api_token = require_env("OPENAI_TOKEN");
+    let model = require_env("OPENAI_MODEL");
 
-    OpenAIAdapter::new("llama3.2:3b", api_token, Some(base_url)).map_err(|e| {
-        eprintln!("⚠️  Failed to create adapter: {}", e);
-    })
+    OpenAIAdapter::new(model, api_token, Some(base_url))
+        .unwrap_or_else(|e| panic!("❌ Failed to create OpenAI adapter: {}", e))
 }
 
 /// Test data: Multi-paragraph text for fact extraction
@@ -107,10 +104,7 @@ struct Edge {
 
 #[tokio::test]
 async fn test_entity_extraction() {
-    let adapter = match create_adapter_from_env() {
-        Ok(a) => a,
-        Err(_) => return, // Skip test
-    };
+    let adapter = create_adapter_from_env();
 
     println!("\n🧪 Testing entity extraction with OpenAI-compatible API");
     println!("   Model: {}", adapter.model());
@@ -224,10 +218,7 @@ async fn test_entity_extraction() {
 
 #[tokio::test]
 async fn test_knowledge_graph_extraction() {
-    let adapter = match create_adapter_from_env() {
-        Ok(a) => a,
-        Err(_) => return, // Skip test
-    };
+    let adapter = create_adapter_from_env();
 
     println!("\n🧪 Testing knowledge graph extraction with OpenAI-compatible API");
     println!("   Model: {}", adapter.model());
@@ -294,10 +285,7 @@ async fn test_knowledge_graph_extraction() {
 
 #[tokio::test]
 async fn test_simple_text_generation() {
-    let adapter = match create_adapter_from_env() {
-        Ok(a) => a,
-        Err(_) => return, // Skip test
-    };
+    let adapter = create_adapter_from_env();
 
     println!("\n🧪 Testing simple text generation");
 

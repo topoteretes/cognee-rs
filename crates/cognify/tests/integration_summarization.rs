@@ -3,74 +3,25 @@
 //! These tests require environment variables to be set:
 //! - OPENAI_URL: Base URL for the OpenAI-compatible API
 //! - OPENAI_TOKEN: API token (use "not-needed" for Ollama)
-//!
-//! Tests are automatically skipped if environment variables are not set.
+//! - OPENAI_MODEL: Model name to use for summarization
 //!
 //! Run with: cargo test --package cognee-cognify --test integration_summarization
 
 use cognee_chunking::CutType;
 use cognee_cognify::{SummarizedContent, SummaryExtractor, TextSummary};
-use cognee_llm::{Llm, OpenAIAdapter};
+use cognee_llm::Llm;
 use cognee_models::DocumentChunk;
-use std::sync::Arc;
 use uuid::Uuid;
 
-/// Helper to get environment variables or skip test
-fn get_env_or_skip(var_name: &str) -> Result<String, ()> {
-    std::env::var(var_name).map_err(|_| {
-        eprintln!("⚠️  Skipping test: {} not set", var_name);
-    })
-}
+mod test_data;
+mod test_utils;
 
-/// Helper to create OpenAI adapter from environment variables
-fn create_adapter_from_env() -> Result<Arc<OpenAIAdapter>, ()> {
-    let base_url = get_env_or_skip("OPENAI_URL")?;
-    let api_token = get_env_or_skip("OPENAI_TOKEN")?;
-
-    OpenAIAdapter::new("llama3.2:3b", api_token, Some(base_url))
-        .map(Arc::new)
-        .map_err(|e| {
-            eprintln!("⚠️  Failed to create adapter: {}", e);
-        })
-}
-
-/// Test data: Long article text suitable for summarization
-const TEST_TEXT_ARTICLE: &str = r#"
-Artificial intelligence has made remarkable progress over the past decade, transforming 
-industries ranging from healthcare to transportation. Machine learning algorithms can now 
-diagnose diseases with accuracy rivaling human experts, while autonomous vehicles are 
-becoming a reality on roads worldwide. Natural language processing models have achieved 
-unprecedented capabilities in understanding and generating human language.
-
-The development of large language models, particularly transformer-based architectures, 
-has been a key driver of this progress. These models can perform a wide variety of tasks, 
-from translation and summarization to code generation and creative writing. Their ability 
-to learn from vast amounts of data has enabled them to capture complex patterns in language 
-and knowledge.
-
-However, these advances also raise important ethical considerations. Issues of bias, privacy, 
-and the environmental impact of training large models have become increasingly prominent in 
-academic and public discourse. Researchers and policymakers are working to develop frameworks 
-that ensure AI systems are developed and deployed responsibly.
-
-Looking ahead, the integration of AI into everyday life will continue to accelerate. Edge 
-computing and more efficient model architectures will enable AI capabilities on personal 
-devices, while advances in multi-modal learning will allow systems to understand and generate 
-content across text, images, and audio simultaneously.
-"#;
-
-const TEST_TEXT_SHORT: &str = r#"
-Quantum computing represents a paradigm shift in computation. Unlike classical computers 
-that use bits, quantum computers use qubits that can exist in superposition states. This 
-allows them to solve certain problems exponentially faster than traditional computers.
-"#;
+use test_data::{TEST_TEXT_ARTICLE, TEST_TEXT_SHORT};
+use test_utils::create_adapter_from_env;
 
 #[tokio::test]
 async fn test_summarization_single_text() {
-    let adapter = match create_adapter_from_env() {
-        Ok(a) => a,
-        Err(_) => return, // Skip test
-    };
+    let adapter = create_adapter_from_env();
 
     println!("\n🧪 Testing summarization with single text");
     println!("   Model: {}", adapter.model());
@@ -114,10 +65,7 @@ async fn test_summarization_single_text() {
 
 #[tokio::test]
 async fn test_summarization_batch() {
-    let adapter = match create_adapter_from_env() {
-        Ok(a) => a,
-        Err(_) => return, // Skip test
-    };
+    let adapter = create_adapter_from_env();
 
     println!("\n🧪 Testing batch summarization");
     println!("   Model: {}", adapter.model());
@@ -144,6 +92,7 @@ async fn test_summarization_batch() {
     ];
 
     println!("   Processing {} chunks", chunks.len());
+    let expected_model = adapter.model().to_string();
 
     let extractor = SummaryExtractor::new(adapter);
 
@@ -176,7 +125,7 @@ async fn test_summarization_batch() {
                 );
 
                 assert!(!summary.text.is_empty(), "Summary text should not be empty");
-                assert_eq!(summary.model, "llama3.2:3b", "Model name should match");
+                assert_eq!(summary.model, expected_model, "Model name should match");
             }
         }
         Err(e) => {
@@ -187,10 +136,7 @@ async fn test_summarization_batch() {
 
 #[tokio::test]
 async fn test_summarization_deterministic_ids() {
-    let adapter = match create_adapter_from_env() {
-        Ok(a) => a,
-        Err(_) => return, // Skip test
-    };
+    let adapter = create_adapter_from_env();
 
     println!("\n🧪 Testing deterministic summary IDs");
 
@@ -249,10 +195,7 @@ async fn test_summarization_deterministic_ids() {
 
 #[tokio::test]
 async fn test_summarization_empty_chunks() {
-    let adapter = match create_adapter_from_env() {
-        Ok(a) => a,
-        Err(_) => return, // Skip test
-    };
+    let adapter = create_adapter_from_env();
 
     println!("\n🧪 Testing summarization with empty chunks");
 
@@ -276,10 +219,7 @@ async fn test_summarization_empty_chunks() {
 
 #[tokio::test]
 async fn test_summarization_custom_prompt() {
-    let adapter = match create_adapter_from_env() {
-        Ok(a) => a,
-        Err(_) => return, // Skip test
-    };
+    let adapter = create_adapter_from_env();
 
     println!("\n🧪 Testing summarization with custom prompt");
 
