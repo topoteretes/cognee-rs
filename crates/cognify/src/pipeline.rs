@@ -219,9 +219,7 @@ impl<S: StorageTrait, G: GraphDBTrait, V: VectorDB, E: EmbeddingEngine>
         // Stage 2c: Merge and deduplicate graphs (with DB awareness)
         let chunk_id = chunks[0].id; // Use first chunk as reference
         let (nodes, edges) =
-            expand_with_nodes_and_edges(graphs, chunk_id, dataset_id, &existing_edges_set)
-                .await
-                .map_err(|e| CognifyError::FactExtractionError(e.to_string()))?;
+            expand_with_nodes_and_edges(graphs, chunk_id, dataset_id, &existing_edges_set).await;
 
         // Note: Ontology enrichment would occur here if has_ontology() is true.
         // Future enhancement: Pass self.ontology_resolver to expand_with_nodes_and_edges
@@ -231,7 +229,13 @@ impl<S: StorageTrait, G: GraphDBTrait, V: VectorDB, E: EmbeddingEngine>
         let dedup_result = deduplicate_nodes_and_edges(nodes, edges);
 
         // Stage 3: Store graph data (nodes and edges) in graph database
-        let entity_refs: Vec<&GraphNodePair> = dedup_result.unique_nodes.iter().collect();
+        // Pass Entity directly (not GraphNodePair) so that serialize_to_node_props
+        // sees `id` and `name` at the top level (via #[serde(flatten)] on DataPoint).
+        let entity_refs: Vec<&cognee_models::Entity> = dedup_result
+            .unique_nodes
+            .iter()
+            .map(|n| &n.entity)
+            .collect();
         self.graph_db
             .add_nodes(&entity_refs)
             .await
@@ -304,6 +308,7 @@ impl<S: StorageTrait, G: GraphDBTrait, V: VectorDB, E: EmbeddingEngine>
                 &dedup_result.unique_nodes,
                 &summaries,
                 &dedup_result.unique_edges,
+                dataset_id,
                 self.embedding_engine.clone(),
                 self.vector_db.clone(),
             )
@@ -408,6 +413,7 @@ impl<S: StorageTrait, G: GraphDBTrait, V: VectorDB, E: EmbeddingEngine>
         entities: &[GraphNodePair],
         summaries: &[TextSummary],
         edges: &[GraphEdgePair],
+        dataset_id: Uuid,
         engine: Arc<E>,
         vector_db: Arc<V>,
     ) -> Result<IndexedFieldsStats, CognifyError> {
@@ -443,6 +449,8 @@ impl<S: StorageTrait, G: GraphDBTrait, V: VectorDB, E: EmbeddingEngine>
                     VectorPoint::new(chunk.id, vector)
                         .with_metadata("type", json!("DocumentChunk"))
                         .with_metadata("field", json!("text"))
+                        .with_metadata("text", json!(chunk.text.clone()))
+                        .with_metadata("dataset_id", json!(dataset_id.to_string()))
                         .with_metadata("document_id", json!(chunk.document_id.to_string()))
                         .with_metadata("chunk_index", json!(chunk.chunk_index))
                 })
@@ -484,6 +492,7 @@ impl<S: StorageTrait, G: GraphDBTrait, V: VectorDB, E: EmbeddingEngine>
                     VectorPoint::new(entity.entity.base.id, vector)
                         .with_metadata("type", json!("Entity"))
                         .with_metadata("field", json!("name"))
+                        .with_metadata("dataset_id", json!(dataset_id.to_string()))
                         .with_metadata("entity_type", json!(entity.entity_type.name.clone()))
                 })
                 .collect();
@@ -526,6 +535,7 @@ impl<S: StorageTrait, G: GraphDBTrait, V: VectorDB, E: EmbeddingEngine>
                     VectorPoint::new(entity.entity.base.id, vector)
                         .with_metadata("type", json!("Entity"))
                         .with_metadata("field", json!("description"))
+                        .with_metadata("dataset_id", json!(dataset_id.to_string()))
                         .with_metadata("entity_type", json!(entity.entity_type.name.clone()))
                         .with_metadata("entity_name", json!(entity.entity.name.clone()))
                 })
@@ -566,6 +576,7 @@ impl<S: StorageTrait, G: GraphDBTrait, V: VectorDB, E: EmbeddingEngine>
                     VectorPoint::new(summary.id, vector)
                         .with_metadata("type", json!("TextSummary"))
                         .with_metadata("field", json!("text"))
+                        .with_metadata("dataset_id", json!(dataset_id.to_string()))
                         .with_metadata("chunk_id", json!(summary.chunk_id.to_string()))
                 })
                 .collect();

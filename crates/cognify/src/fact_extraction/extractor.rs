@@ -6,6 +6,7 @@
 use std::sync::Arc;
 
 use cognee_llm::{GenerationOptions, Llm};
+use tracing::debug;
 
 use super::models::KnowledgeGraph;
 use crate::error::CognifyError;
@@ -121,6 +122,7 @@ impl<L: Llm + 'static> FactExtractor<L> {
         text: &str,
         custom_prompt: Option<&str>,
     ) -> Result<KnowledgeGraph, CognifyError> {
+        debug!("Extracting facts from text: {}", text);
         let system_prompt = custom_prompt.unwrap_or(DEFAULT_GRAPH_PROMPT);
 
         let graph = self
@@ -136,6 +138,12 @@ impl<L: Llm + 'static> FactExtractor<L> {
             )
             .await
             .map_err(|e| CognifyError::LlmError(e.to_string()))?;
+
+        debug!(
+            "Extracted graph with {} nodes and {} edges",
+            graph.node_count(),
+            graph.edge_count()
+        );
 
         Ok(graph)
     }

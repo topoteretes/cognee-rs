@@ -7,19 +7,10 @@ use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 
 use cognee_models::{Entity, EntityType};
+use tracing::warn;
 
 use crate::fact_extraction::{KnowledgeGraph, Node};
 use crate::graph_integration::types::{GraphEdgePair, GraphNodePair};
-
-/// Graph integration error.
-#[derive(Debug, thiserror::Error)]
-pub enum GraphIntegrationError {
-    #[error("Missing node reference: {0}")]
-    MissingNodeReference(String),
-
-    #[error("Invalid edge: source or target node not found")]
-    InvalidEdge,
-}
 
 /// Core graph integration function. Converts LLM-layer KnowledgeGraph objects
 /// to storage-layer Entity/EntityType pairs.
@@ -50,7 +41,7 @@ pub async fn expand_with_nodes_and_edges(
     chunk_id: Uuid,
     dataset_id: Uuid,
     existing_edges_set: &HashSet<String>,
-) -> Result<(Vec<GraphNodePair>, Vec<GraphEdgePair>), GraphIntegrationError> {
+) -> (Vec<GraphNodePair>, Vec<GraphEdgePair>) {
     // Maps for deduplication
     let mut node_map = HashMap::new();
     let mut edge_map = HashMap::new();
@@ -88,20 +79,23 @@ pub async fn expand_with_nodes_and_edges(
 
         // Step 3: Create Edges (skip if already in database)
         for edge in graph.edges {
-            // Look up entity IDs from node IDs
-            let source_entity_id =
-                node_id_to_entity_id
-                    .get(&edge.source_node_id)
-                    .ok_or_else(|| {
-                        GraphIntegrationError::MissingNodeReference(edge.source_node_id.clone())
-                    })?;
+            // Look up entity IDs from node IDs; skip edges the LLM produced with
+            // node IDs that don't match any extracted node (common with local models).
+            let Some(source_entity_id) = node_id_to_entity_id.get(&edge.source_node_id) else {
+                warn!(
+                    "Skipping edge: source node '{}' not found in extracted nodes",
+                    edge.source_node_id
+                );
+                continue;
+            };
 
-            let target_entity_id =
-                node_id_to_entity_id
-                    .get(&edge.target_node_id)
-                    .ok_or_else(|| {
-                        GraphIntegrationError::MissingNodeReference(edge.target_node_id.clone())
-                    })?;
+            let Some(target_entity_id) = node_id_to_entity_id.get(&edge.target_node_id) else {
+                warn!(
+                    "Skipping edge: target node '{}' not found in extracted nodes",
+                    edge.target_node_id
+                );
+                continue;
+            };
 
             // Check if edge already exists in database
             let edge_db_key = format!(
@@ -133,7 +127,7 @@ pub async fn expand_with_nodes_and_edges(
     let graph_nodes: Vec<GraphNodePair> = node_map.into_values().collect();
     let graph_edges: Vec<GraphEdgePair> = edge_map.into_values().collect();
 
-    Ok((graph_nodes, graph_edges))
+    (graph_nodes, graph_edges)
 }
 
 /// Helper: Create Entity from Node.
@@ -201,9 +195,7 @@ mod tests {
         let dataset_id = Uuid::new_v4();
 
         let (nodes, edges) =
-            expand_with_nodes_and_edges(vec![graph], chunk_id, dataset_id, &HashSet::new())
-                .await
-                .unwrap();
+            expand_with_nodes_and_edges(vec![graph], chunk_id, dataset_id, &HashSet::new()).await;
 
         // Should have 2 nodes (TechCorp, Alice)
         assert_eq!(nodes.len(), 2);
@@ -232,8 +224,7 @@ mod tests {
             dataset_id,
             &HashSet::new(),
         )
-        .await
-        .unwrap();
+        .await;
 
         // Should have 2 unique nodes (deduplication by node_id)
         assert_eq!(nodes.len(), 2);
@@ -249,9 +240,7 @@ mod tests {
         let dataset_id = Uuid::new_v4();
 
         let (nodes, _) =
-            expand_with_nodes_and_edges(vec![graph], chunk_id, dataset_id, &HashSet::new())
-                .await
-                .unwrap();
+            expand_with_nodes_and_edges(vec![graph], chunk_id, dataset_id, &HashSet::new()).await;
 
         // Check that entity types are created
         for node_pair in &nodes {
@@ -272,9 +261,7 @@ mod tests {
         let dataset_id = Uuid::new_v4();
 
         let (nodes, _) =
-            expand_with_nodes_and_edges(vec![graph], chunk_id, dataset_id, &HashSet::new())
-                .await
-                .unwrap();
+            expand_with_nodes_and_edges(vec![graph], chunk_id, dataset_id, &HashSet::new()).await;
 
         // Check that entities reference their types
         for node_pair in &nodes {
@@ -289,9 +276,7 @@ mod tests {
         let dataset_id = Uuid::new_v4();
 
         let (nodes, _) =
-            expand_with_nodes_and_edges(vec![graph], chunk_id, dataset_id, &HashSet::new())
-                .await
-                .unwrap();
+            expand_with_nodes_and_edges(vec![graph], chunk_id, dataset_id, &HashSet::new()).await;
 
         // Verify chunk_id is stored in metadata
         for node_pair in &nodes {
@@ -301,7 +286,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_expand_missing_source_node() {
+    async fn test_expand_missing_target_node_is_skipped() {
         let graph = KnowledgeGraph {
             nodes: vec![Node {
                 id: "alice_1".to_string(),
@@ -311,7 +296,7 @@ mod tests {
             }],
             edges: vec![Edge {
                 source_node_id: "alice_1".to_string(),
-                target_node_id: "missing_node".to_string(), // Missing!
+                target_node_id: "missing_node".to_string(), // LLM inconsistency
                 relationship_name: "knows".to_string(),
             }],
         };
@@ -319,17 +304,12 @@ mod tests {
         let chunk_id = Uuid::new_v4();
         let dataset_id = Uuid::new_v4();
 
-        let result =
+        let (nodes, edges) =
             expand_with_nodes_and_edges(vec![graph], chunk_id, dataset_id, &HashSet::new()).await;
 
-        // Should fail with MissingNodeReference error
-        assert!(result.is_err());
-        match result {
-            Err(GraphIntegrationError::MissingNodeReference(node_id)) => {
-                assert_eq!(node_id, "missing_node");
-            }
-            _ => panic!("Expected MissingNodeReference error"),
-        }
+        // Node is kept; the unresolvable edge is silently skipped
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(edges.len(), 0);
     }
 
     #[tokio::test]
@@ -338,9 +318,7 @@ mod tests {
         let dataset_id = Uuid::new_v4();
 
         let (nodes, edges) =
-            expand_with_nodes_and_edges(vec![], chunk_id, dataset_id, &HashSet::new())
-                .await
-                .unwrap();
+            expand_with_nodes_and_edges(vec![], chunk_id, dataset_id, &HashSet::new()).await;
 
         assert_eq!(nodes.len(), 0);
         assert_eq!(edges.len(), 0);
@@ -381,9 +359,7 @@ mod tests {
         let dataset_id = Uuid::new_v4();
 
         let (nodes, edges) =
-            expand_with_nodes_and_edges(vec![graph], chunk_id, dataset_id, &HashSet::new())
-                .await
-                .unwrap();
+            expand_with_nodes_and_edges(vec![graph], chunk_id, dataset_id, &HashSet::new()).await;
 
         assert_eq!(nodes.len(), 2);
         // Should have 2 edges (different relationships)

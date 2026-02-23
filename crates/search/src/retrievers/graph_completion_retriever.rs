@@ -6,6 +6,7 @@ use cognee_graph::GraphDBTrait;
 use cognee_llm::{GenerationOptions, Llm, Message};
 use cognee_vector::VectorDB;
 use serde_json::json;
+use tracing::debug;
 
 use crate::graph_retrieval::{GraphRetrievalConfig, brute_force_triplet_search};
 use crate::retrievers::SearchRetriever;
@@ -101,6 +102,7 @@ impl<V: VectorDB, E: EmbeddingEngine, G: GraphDBTrait, L: Llm> SearchRetriever
                     "relationship": edge.relationship_name,
                     "source_name": edge.source_name,
                     "target_name": edge.target_name,
+                    "dataset_id": edge.dataset_id,
                 }),
             })
             .collect())
@@ -129,6 +131,12 @@ impl<V: VectorDB, E: EmbeddingEngine, G: GraphDBTrait, L: Llm> SearchRetriever
             query,
             &graph_context_text,
         );
+
+        debug!(
+            context_items = completion_context.len(),
+            "Graph context assembled:\n{graph_context_text}"
+        );
+        debug!("LLM user prompt:\n{user_prompt}");
 
         let completion = self
             .llm

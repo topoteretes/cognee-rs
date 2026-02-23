@@ -242,8 +242,11 @@ impl LadybugAdapter {
             .and_then(|v| v.as_str().map(String::from))
             .unwrap_or_default();
 
+        // Accept both "type" (DataPoint via #[serde(rename = "type")]) and
+        // "data_type" (plain structs used in tests and older code).
         let node_type = props
-            .get("data_type")
+            .get("type")
+            .or_else(|| props.get("data_type"))
             .and_then(|v| v.as_str())
             .unwrap_or("Unknown")
             .to_string();
@@ -251,6 +254,7 @@ impl LadybugAdapter {
         props.remove("id");
         props.remove("created_at");
         props.remove("updated_at");
+        props.remove("type");
         props.remove("data_type");
 
         let properties_json =

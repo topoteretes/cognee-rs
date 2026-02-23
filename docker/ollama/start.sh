@@ -111,4 +111,4 @@ echo "   - Pull model:        docker exec $CONTAINER_NAME ollama pull <model-nam
 echo "   - Test API:          ./test-api.sh"
 echo ""
 echo "🧪 Running API tests..."
-./test-api.sh
+OLLAMA_URL="http://localhost:$PORT" MODEL="$MODEL_NAME" ./test-api.sh

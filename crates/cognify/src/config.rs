@@ -114,7 +114,7 @@ impl Default for CognifyConfig {
             chunk_strategy: ChunkStrategy::Paragraph,
 
             chunks_per_batch: 100,
-            max_parallel_extractions: 50,
+            max_parallel_extractions: 20,
             custom_extraction_prompt: None,
 
             enable_summarization: true,
@@ -289,7 +289,7 @@ mod tests {
 
         // Graph extraction defaults
         assert_eq!(config.chunks_per_batch, 100);
-        assert_eq!(config.max_parallel_extractions, 50);
+        assert_eq!(config.max_parallel_extractions, 20);
         assert!(config.custom_extraction_prompt.is_none());
 
         // Summarization defaults

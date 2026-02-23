@@ -24,6 +24,10 @@ pub fn run(args: CognifyArgs) -> Result<(), CliError> {
         .llm_max_retries
         .unwrap_or(config.settings.llm_max_retries)
         .max(1);
+    let effective_max_parallel = args
+        .llm_max_parallel_requests
+        .unwrap_or(config.settings.llm_max_parallel_requests)
+        .max(1) as usize;
     let owner_id = Uuid::parse_str(&config.settings.default_user_id).map_err(|error| {
         CliError::Validation(format!(
             "Invalid default_user_id '{}': {error}",
@@ -160,6 +164,7 @@ pub fn run(args: CognifyArgs) -> Result<(), CliError> {
                 },
             )
             .map(|adapter| adapter.with_structured_output_retries(effective_llm_max_retries))
+            .map(|adapter| adapter.with_network_retries(effective_llm_max_retries))
             .map_err(|error| CliError::Runtime(format!("LLM initialization failed: {error}")))?,
         );
 
@@ -179,7 +184,8 @@ pub fn run(args: CognifyArgs) -> Result<(), CliError> {
         let cognify_config = CognifyConfig::default()
             .with_chunk_size(effective_chunk_size as usize)
             .with_chunk_overlap(config.settings.chunk_overlap as usize)
-            .with_chunk_strategy(chunk_strategy);
+            .with_chunk_strategy(chunk_strategy)
+            .with_max_parallel_extractions(effective_max_parallel);
 
         let pipeline = CognifyPipeline::new(
             Arc::clone(&storage),

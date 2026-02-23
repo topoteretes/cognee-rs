@@ -42,6 +42,7 @@ pub struct Settings {
     pub llm_streaming: bool,
     pub llm_max_completion_tokens: u32,
     pub llm_max_retries: u32,
+    pub llm_max_parallel_requests: u32,
     pub graph_prompt_path: String,
 
     pub graph_database_provider: String,
@@ -102,6 +103,7 @@ impl Default for Settings {
             llm_streaming: false,
             llm_max_completion_tokens: 16384,
             llm_max_retries: 2,
+            llm_max_parallel_requests: 20,
             graph_prompt_path: "generate_graph_prompt.txt".to_string(),
 
             graph_database_provider: "kuzu".to_string(),
@@ -217,6 +219,7 @@ pub fn known_keys() -> Vec<&'static str> {
         "llm_streaming",
         "llm_max_completion_tokens",
         "llm_max_retries",
+        "llm_max_parallel_requests",
         "graph_prompt_path",
         "graph_database_provider",
         "graph_database_url",
@@ -302,6 +305,10 @@ pub fn as_flat_map(settings: &Settings) -> BTreeMap<&'static str, Value> {
             Value::from(settings.llm_max_completion_tokens),
         ),
         ("llm_max_retries", Value::from(settings.llm_max_retries)),
+        (
+            "llm_max_parallel_requests",
+            Value::from(settings.llm_max_parallel_requests),
+        ),
         (
             "graph_prompt_path",
             Value::String(settings.graph_prompt_path.clone()),
@@ -426,6 +433,7 @@ pub fn set_value(settings: &mut Settings, key: &str, value: Value) -> Result<(),
         "llm_streaming" => settings.llm_streaming = expect_bool(key, value)?,
         "llm_max_completion_tokens" => settings.llm_max_completion_tokens = expect_u32(key, value)?,
         "llm_max_retries" => settings.llm_max_retries = expect_u32(key, value)?,
+        "llm_max_parallel_requests" => settings.llm_max_parallel_requests = expect_u32(key, value)?,
         "graph_prompt_path" => settings.graph_prompt_path = expect_string(key, value)?,
         "graph_database_provider" => settings.graph_database_provider = expect_string(key, value)?,
         "graph_database_url" => settings.graph_database_url = expect_string(key, value)?,
@@ -495,6 +503,9 @@ pub fn unset_key(settings: &mut Settings, key: &str) -> Result<(), CliError> {
             settings.llm_max_completion_tokens = defaults.llm_max_completion_tokens
         }
         "llm_max_retries" => settings.llm_max_retries = defaults.llm_max_retries,
+        "llm_max_parallel_requests" => {
+            settings.llm_max_parallel_requests = defaults.llm_max_parallel_requests
+        }
         "graph_prompt_path" => settings.graph_prompt_path = defaults.graph_prompt_path,
         "graph_database_provider" => {
             settings.graph_database_provider = defaults.graph_database_provider

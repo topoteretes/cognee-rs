@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use cognee_embedding::EmbeddingEngine;
 use cognee_llm::{GenerationOptions, Llm, Message};
 use cognee_vector::VectorDB;
+use tracing::debug;
 
 use crate::retrievers::SearchRetriever;
 use crate::retrievers::context_items::search_results_to_context;
@@ -132,6 +133,12 @@ impl<V: VectorDB, E: EmbeddingEngine, L: Llm> SearchRetriever for TripletRetriev
 
         let user_prompt =
             render_user_prompt(self.user_prompt_template.as_deref(), query, &context_text);
+
+        debug!(
+            context_items = completion_context.len(),
+            "Triplet context assembled:\n{context_text}"
+        );
+        debug!("LLM user prompt:\n{user_prompt}");
 
         let completion = self
             .llm

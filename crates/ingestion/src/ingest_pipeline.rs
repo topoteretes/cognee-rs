@@ -82,23 +82,21 @@ impl<S: StorageTrait, D: DatabaseTrait> IngestPipeline<S, D> {
         use std::sync::Arc;
         use tokio::sync::Mutex;
 
-        let file_name_template = match input {
+        let file_name = match input {
             DataInput::FilePath(path) => {
                 let clean_path = path.strip_prefix("file://").unwrap_or(path);
-                let extension = Path::new(clean_path)
-                    .extension()
-                    .and_then(|e| e.to_str())
-                    .unwrap_or("txt");
-                format!("file_{{id}}.{}", extension)
+                Path::new(clean_path)
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("file.bin")
+                    .to_string()
             }
-            DataInput::Text(_) => "text_{id}.txt".to_string(),
+            DataInput::Text(_) => format!("text_{}.txt", Uuid::new_v4()),
             DataInput::Url(_) => return Err("URL fetching not yet implemented".into()),
         };
 
         let hasher = Arc::new(Mutex::new(Sha256::new()));
-        let writer = Arc::new(Mutex::new(
-            self.storage.create_writer(&file_name_template).await?,
-        ));
+        let writer = Arc::new(Mutex::new(self.storage.create_writer(&file_name).await?));
 
         let hasher_clone = hasher.clone();
         let writer_clone = writer.clone();

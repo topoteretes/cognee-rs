@@ -196,6 +196,7 @@ async fn build_search_dependencies(
             },
         )
         .map(|adapter| adapter.with_structured_output_retries(llm_max_retries.max(1)))
+        .map(|adapter| adapter.with_network_retries(llm_max_retries.max(1)))
         .map_err(|error| CliError::Runtime(format!("LLM initialization failed: {error}")))?,
     );
 

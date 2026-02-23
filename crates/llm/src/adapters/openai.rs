@@ -46,6 +46,8 @@ pub struct OpenAIAdapter {
     base_url: String,
     client: Client,
     structured_output_retries: usize,
+    /// Number of times to retry the HTTP request on transient network/server errors.
+    network_retries: usize,
 }
 
 impl OpenAIAdapter {
@@ -53,6 +55,8 @@ impl OpenAIAdapter {
     pub const DEFAULT_BASE_URL: &'static str = "https://api.openai.com/v1";
     /// Default retry attempts for structured output parsing paths.
     pub const DEFAULT_STRUCTURED_OUTPUT_RETRIES: usize = 2;
+    /// Default retry attempts for transient network/server errors.
+    pub const DEFAULT_NETWORK_RETRIES: usize = 3;
 
     /// Create a new OpenAI adapter.
     ///
@@ -79,6 +83,7 @@ impl OpenAIAdapter {
             base_url: base_url.unwrap_or_else(|| Self::DEFAULT_BASE_URL.to_string()),
             client,
             structured_output_retries: Self::DEFAULT_STRUCTURED_OUTPUT_RETRIES,
+            network_retries: Self::DEFAULT_NETWORK_RETRIES,
         })
     }
 
@@ -88,6 +93,14 @@ impl OpenAIAdapter {
     pub fn with_structured_output_retries(mut self, retries: u32) -> Self {
         let retries = usize::try_from(retries).unwrap_or(usize::MAX);
         self.structured_output_retries = retries.max(1);
+        self
+    }
+
+    /// Configure retry attempts for transient network and server errors (HTTP 429, 5xx).
+    ///
+    /// Each retry uses exponential backoff starting at 1 s, doubling up to 30 s.
+    pub fn with_network_retries(mut self, retries: u32) -> Self {
+        self.network_retries = usize::try_from(retries).unwrap_or(usize::MAX);
         self
     }
 
@@ -101,7 +114,15 @@ impl OpenAIAdapter {
         self.model.to_lowercase().starts_with("qwen") && !self.base_url.contains("api.openai.com")
     }
 
-    /// Call the OpenAI chat completions API
+    /// Call the OpenAI chat completions API, retrying on transient network/server errors.
+    ///
+    /// Retries up to `self.network_retries` times with exponential backoff (1 s, 2 s, 4 s …
+    /// capped at 30 s) on:
+    /// - Network-level failures (connection refused, timeout, etc.)
+    /// - HTTP 429 (rate limit exceeded)
+    /// - HTTP 5xx (server errors)
+    ///
+    /// Errors on HTTP 400 and 401 are returned immediately without retrying.
     async fn call_api(&self, request_body: Value) -> LlmResult<OpenAIResponse> {
         let url = format!("{}/chat/completions", self.base_url);
         let debug_enabled = std::env::var("COGNEE_DEBUG_LLM_REQUEST")
@@ -114,46 +135,82 @@ impl OpenAIAdapter {
             eprintln!("\n[COGNEE_DEBUG_LLM_REQUEST] POST {url}\n{pretty_request}\n");
         }
 
-        let response = self
-            .client
-            .post(&url)
-            .header("Authorization", self.auth_header())
-            .header("Content-Type", "application/json")
-            .json(&request_body)
-            .send()
-            .await
-            .map_err(|e| LlmError::NetworkError(e.to_string()))?;
+        let mut last_error = LlmError::NetworkError("No attempt made".to_string());
 
-        let status = response.status();
+        for attempt in 0..=self.network_retries {
+            if attempt > 0 {
+                let delay_ms = (1_000u64 * 2u64.saturating_pow(attempt as u32 - 1)).min(30_000);
+                log::warn!(
+                    "LLM request failed (attempt {}/{}), retrying in {}ms: {}",
+                    attempt,
+                    self.network_retries,
+                    delay_ms,
+                    last_error
+                );
+                tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+            }
 
-        if !status.is_success() {
-            let error_body = response
-                .text()
+            let response = match self
+                .client
+                .post(&url)
+                .header("Authorization", self.auth_header())
+                .header("Content-Type", "application/json")
+                .json(&request_body)
+                .send()
                 .await
-                .unwrap_or_else(|_| "Unknown error".to_string());
+            {
+                Ok(r) => r,
+                Err(e) => {
+                    last_error = LlmError::NetworkError(e.to_string());
+                    continue;
+                }
+            };
 
-            return Err(match status.as_u16() {
-                401 => LlmError::AuthenticationError(error_body),
-                429 => LlmError::RateLimitExceeded(error_body),
-                400 => LlmError::InvalidResponse(format!("Bad request: {}", error_body)),
-                _ => LlmError::ApiError(format!("HTTP {}: {}", status, error_body)),
+            let status = response.status();
+
+            if !status.is_success() {
+                let error_body = response
+                    .text()
+                    .await
+                    .unwrap_or_else(|_| "Unknown error".to_string());
+
+                let err = match status.as_u16() {
+                    401 => LlmError::AuthenticationError(error_body),
+                    429 => LlmError::RateLimitExceeded(error_body),
+                    400 => LlmError::InvalidResponse(format!("Bad request: {}", error_body)),
+                    _ => LlmError::ApiError(format!("HTTP {}: {}", status, error_body)),
+                };
+
+                // Non-retryable: bad request or authentication failure.
+                if matches!(status.as_u16(), 400 | 401) {
+                    return Err(err);
+                }
+
+                last_error = err;
+                continue;
+            }
+
+            let response_body = response.text().await.map_err(|e| {
+                LlmError::DeserializationError(format!("Failed to read response body: {}", e))
+            })?;
+
+            if debug_enabled {
+                eprintln!("\n[COGNEE_DEBUG_LLM_RESPONSE] POST {url}\n{response_body}\n");
+            }
+
+            return serde_json::from_str::<OpenAIResponse>(&response_body).map_err(|e| {
+                LlmError::DeserializationError(format!(
+                    "Failed to parse response: {}. Raw body: {}",
+                    e, response_body
+                ))
             });
         }
 
-        let response_body = response.text().await.map_err(|e| {
-            LlmError::DeserializationError(format!("Failed to read response body: {}", e))
-        })?;
-
-        if debug_enabled {
-            eprintln!("\n[COGNEE_DEBUG_LLM_RESPONSE] POST {url}\n{response_body}\n");
-        }
-
-        serde_json::from_str::<OpenAIResponse>(&response_body).map_err(|e| {
-            LlmError::DeserializationError(format!(
-                "Failed to parse response: {}. Raw body: {}",
-                e, response_body
-            ))
-        })
+        Err(LlmError::MaxRetriesExceeded(format!(
+            "LLM request failed after {} attempt(s): {}",
+            self.network_retries + 1,
+            last_error
+        )))
     }
 
     /// Convert our Message type to OpenAI's format

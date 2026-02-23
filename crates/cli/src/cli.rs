@@ -61,6 +61,9 @@ pub struct CognifyArgs {
 
     #[arg(long = "llm-max-retries", value_parser = clap::value_parser!(u32).range(1..))]
     pub llm_max_retries: Option<u32>,
+
+    #[arg(long = "llm-max-parallel-requests", value_parser = clap::value_parser!(u32).range(1..))]
+    pub llm_max_parallel_requests: Option<u32>,
 }
 
 #[derive(Debug, Clone, ValueEnum)]

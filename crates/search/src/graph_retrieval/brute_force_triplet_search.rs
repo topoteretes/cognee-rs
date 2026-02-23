@@ -41,6 +41,8 @@ pub struct RankedGraphEdge {
     pub score: f32,
     pub source_name: String,
     pub target_name: String,
+    /// Dataset ID of the source or target entity, for context scoping.
+    pub dataset_id: Option<String>,
 }
 
 pub async fn brute_force_triplet_search<V: VectorDB, E: EmbeddingEngine, G: GraphDBTrait>(
@@ -57,6 +59,7 @@ pub async fn brute_force_triplet_search<V: VectorDB, E: EmbeddingEngine, G: Grap
 
     let mut node_scores = HashMap::<String, f32>::new();
     let mut candidate_node_ids = HashSet::<String>::new();
+    let mut node_dataset_ids = HashMap::<String, String>::new();
 
     for (data_type, field_name) in SEARCH_COLLECTIONS {
         if !vector_db.has_collection(data_type, field_name).await? {
@@ -77,8 +80,15 @@ pub async fn brute_force_triplet_search<V: VectorDB, E: EmbeddingEngine, G: Grap
                 "Entity" => {
                     let entity_id = result.id.to_string();
                     candidate_node_ids.insert(entity_id.clone());
-                    let entry = node_scores.entry(entity_id).or_insert(result.score);
+                    let entry = node_scores.entry(entity_id.clone()).or_insert(result.score);
                     *entry = entry.max(result.score);
+                    if let Some(dataset_id) =
+                        result.metadata.get("dataset_id").and_then(|v| v.as_str())
+                    {
+                        node_dataset_ids
+                            .entry(entity_id)
+                            .or_insert_with(|| dataset_id.to_string());
+                    }
                 }
                 "Triplet" => {
                     let penalty_adjusted_score = result.score - config.triplet_distance_penalty;
@@ -144,6 +154,11 @@ pub async fn brute_force_triplet_search<V: VectorDB, E: EmbeddingEngine, G: Grap
                 .cloned()
                 .unwrap_or(target_id.clone());
 
+            let dataset_id = node_dataset_ids
+                .get(&source_id)
+                .or_else(|| node_dataset_ids.get(&target_id))
+                .cloned();
+
             Some(RankedGraphEdge {
                 source_id,
                 target_id,
@@ -151,6 +166,7 @@ pub async fn brute_force_triplet_search<V: VectorDB, E: EmbeddingEngine, G: Grap
                 score: rank_edge_score(source_score, target_score),
                 source_name,
                 target_name,
+                dataset_id,
             })
         })
         .collect::<Vec<_>>();
