@@ -16,7 +16,7 @@ cd ollama
 
 **Features:**
 - OpenAI-compatible API at `http://localhost:11435/v1/chat/completions`
-- Automatic model downloading (default: llama3.2:3b)
+- Automatic model downloading with stronger defaults (primary: `llama3.2:3b`, plus `llama3.1:8b`)
 - GPU support (NVIDIA/AMD)
 - Simple single-container deployment
 

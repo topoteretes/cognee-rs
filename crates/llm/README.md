@@ -196,16 +196,16 @@ The crate includes integration tests that use a local Ollama instance for realis
 
 ```bash
 # Run all integration tests (requires Ollama)
-./scripts/test-with-ollama.sh
+./scripts/run_tests_with_local_env.sh
 
 # Run a specific test
-./scripts/test-with-ollama.sh test_entity_extraction
+./scripts/run_tests_with_local_env.sh test_entity_extraction
 ```
 
 The test script automatically:
 - Starts the Ollama Docker container if not running
 - Waits for the model to be ready
-- Sets environment variables (`OPENAI_URL`, `OPENAI_TOKEN`)
+- Sets environment variables (`OPENAI_URL`, `OPENAI_TOKEN`, `OPENAI_MODEL`)
 - Runs the tests
 - Shows cleanup instructions
 
@@ -215,6 +215,7 @@ The test script automatically:
 # Set environment variables
 export OPENAI_URL="http://localhost:11435/v1"
 export OPENAI_TOKEN="not-needed"
+export OPENAI_MODEL="llama3.2:3b"
 
 # Run integration tests
 cargo test --package cognee-llm --test integration_openai -- --nocapture

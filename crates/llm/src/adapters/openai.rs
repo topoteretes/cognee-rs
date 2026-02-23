@@ -17,6 +17,7 @@ use crate::types::{GenerationOptions, GenerationResponse, Message, MessageRole, 
 /// OpenAI API adapter.
 ///
 /// Supports structured output generation via:
+/// - Strict JSON schema mode (response_format with type: "json_schema")
 /// - Function calling (for GPT-4 and GPT-3.5-turbo)
 /// - JSON mode (response_format with type: "json_object")
 /// - JSON schema validation (via function parameters)
@@ -306,6 +307,53 @@ impl Llm for OpenAIAdapter {
 
         // Generate JSON schema for the response type
         let schema = generate_json_schema::<T>();
+
+        // Try strict JSON schema mode first (new OpenAI API behavior).
+        // Some OpenAI-compatible providers may not support this and will fail,
+        // in which case we gracefully fall back to older modes below.
+        let mut strict_schema_request = json!({
+            "model": self.model,
+            "messages": Self::convert_messages(&messages),
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "extract_structured_data",
+                    "schema": schema.clone(),
+                    "strict": true
+                }
+            }
+        });
+
+        if let Some(temp) = opts.temperature {
+            strict_schema_request["temperature"] = json!(temp);
+        }
+        if let Some(max_tokens) = opts.max_tokens {
+            strict_schema_request["max_tokens"] = json!(max_tokens);
+        }
+
+        if let Ok(strict_response) = self.call_api(strict_schema_request).await {
+            let strict_choice = strict_response.choices.first().ok_or_else(|| {
+                LlmError::InvalidResponse("No choices in strict schema response".to_string())
+            })?;
+
+            if let Some(function_call) = &strict_choice.message.function_call {
+                return serde_json::from_str::<T>(&function_call.arguments).map_err(|e| {
+                    LlmError::DeserializationError(format!(
+                        "Failed to deserialize strict function call arguments: {}. Raw: {}",
+                        e, function_call.arguments
+                    ))
+                });
+            }
+
+            if let Some(content) = strict_choice.message.content.as_ref() {
+                return serde_json::from_str::<T>(content).map_err(|e| {
+                    LlmError::DeserializationError(format!(
+                        "Failed to deserialize strict JSON content: {}. Raw: {}",
+                        e, content
+                    ))
+                });
+            }
+        }
 
         // Try function calling first (works with OpenAI)
         let mut request_body = json!({

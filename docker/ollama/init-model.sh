@@ -1,7 +1,25 @@
 #!/bin/bash
 
-# Default model to pull (can be overridden via MODEL_NAME env var)
+# Primary model to use for test/api examples
 MODEL_NAME="${MODEL_NAME:-llama3.2:3b}"
+
+# Comma-separated models to ensure are available.
+# Includes a stronger default model in addition to the primary one.
+MODEL_NAMES="${MODEL_NAMES:-${MODEL_NAME},llama3.1:8b}"
+
+IFS=',' read -ra MODEL_ARRAY <<< "$MODEL_NAMES"
+
+trim() {
+  local value="$1"
+  value="${value#${value%%[![:space:]]*}}"
+  value="${value%${value##*[![:space:]]}}"
+  echo "$value"
+}
+
+model_available() {
+  local model="$1"
+  ollama list 2>/dev/null | grep -Fq "$model"
+}
 
 echo "Starting Ollama service..."
 # Start Ollama in the background
@@ -21,36 +39,41 @@ for i in {1..20}; do
   sleep 1
 done
 
-# Check if model is already pulled
-echo "Checking for model: $MODEL_NAME"
-if ollama list 2>/dev/null | grep -q "$MODEL_NAME"; then
-  echo "✓ Model $MODEL_NAME is already available"
-else
+# Check/pull all requested models
+echo "Ensuring requested models are available: $MODEL_NAMES"
+for raw_model in "${MODEL_ARRAY[@]}"; do
+  model="$(trim "$raw_model")"
+  [[ -z "$model" ]] && continue
+
+  if model_available "$model"; then
+    echo "✓ Model $model is already available"
+    continue
+  fi
+
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-  echo "📦 Downloading model: $MODEL_NAME"
+  echo "📦 Downloading model: $model"
   echo "   This is a one-time download and may take several minutes..."
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
   echo ""
-  
-  # Pull the model (this is synchronous and will block until complete)
-  if ollama pull "$MODEL_NAME"; then
+
+  if ollama pull "$model"; then
     echo ""
-    echo "✓ Model $MODEL_NAME downloaded successfully!"
+    echo "✓ Model $model downloaded successfully!"
   else
     echo ""
-    echo "❌ ERROR: Failed to download model $MODEL_NAME"
+    echo "❌ ERROR: Failed to download model $model"
     echo "   Please check your internet connection and try again."
     exit 1
   fi
-fi
+done
 
-# Verify model is available
+# Verify primary model is available
 echo ""
-echo "Verifying model availability..."
-if ollama list 2>/dev/null | grep -q "$MODEL_NAME"; then
-  echo "✓ Model $MODEL_NAME is ready to use"
+echo "Verifying primary model availability..."
+if model_available "$MODEL_NAME"; then
+  echo "✓ Primary model $MODEL_NAME is ready to use"
 else
-  echo "❌ ERROR: Model $MODEL_NAME is not available"
+  echo "❌ ERROR: Primary model $MODEL_NAME is not available"
   echo "Available models:"
   ollama list
   exit 1
@@ -58,7 +81,8 @@ fi
 
 # Keep the container running by waiting for the Ollama process
 echo ""
-echo "✓ Ollama is ready with model: $MODEL_NAME"
+echo "✓ Ollama is ready with primary model: $MODEL_NAME"
+echo "✓ Available model set: $MODEL_NAMES"
 echo "✓ OpenAI-compatible API available at: http://localhost:11434/v1/chat/completions"
 echo ""
 wait $OLLAMA_PID

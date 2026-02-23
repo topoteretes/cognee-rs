@@ -5,7 +5,9 @@ Docker configuration for running Ollama with OpenAI-compatible API for local LLM
 ## Features
 
 - **Ollama service** with OpenAI-compatible API endpoints
-- **Pre-configured model** automatically pulled on first start (default: llama3.2:3b)
+- **Pre-configured model set** automatically pulled on first start
+  - Primary model (`MODEL_NAME`): `llama3.2:3b`
+  - Additional stronger model (`MODEL_NAMES`): `llama3.1:8b`
 - **GPU support** for NVIDIA and AMD (optional)
 - **Persistent storage** for models and data
 - **Simple single-container deployment**
@@ -34,6 +36,7 @@ This will build the image (if needed), start the container, and verify it's work
      -p 11435:11434 \
      -v ollama_data:/root/.ollama \
      -e MODEL_NAME=llama3.2:3b \
+    -e MODEL_NAMES=llama3.2:3b,llama3.1:8b \
      ollama-cognee
    ```
 
@@ -45,6 +48,7 @@ This will build the image (if needed), start the container, and verify it's work
      -p 11435:11434 \
      -v ollama_data:/root/.ollama \
      -e MODEL_NAME=llama3.2:3b \
+    -e MODEL_NAMES=llama3.2:3b,llama3.1:8b \
      ollama-cognee
    ```
 
@@ -101,12 +105,20 @@ let config = LlmConfig::new(LlmProvider::Ollama, "llama3.2:3b")
 ## Available Models
 
 Common models you can use:
-top the container and restart with a new `MODEL_NAME`:
+Stop the container and restart with a new `MODEL_NAME` or `MODEL_NAMES`:
 
 ```bash
 docker stop ollama
 docker rm ollama
 MODEL_NAME=mistral:7b ./start.sh
+```
+
+Or pull multiple models (with a stronger model included):
+
+```bash
+docker stop ollama
+docker rm ollama
+MODEL_NAME=llama3.2:3b MODEL_NAMES=llama3.2:3b,llama3.1:8b,qwen2.5:7b ./start.sh
 ```
 
 Or manually:

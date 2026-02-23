@@ -135,11 +135,12 @@ async fn run_pipeline_with_incremental_flag(
 
     let owner_id = Uuid::new_v4();
     let dataset_id = Uuid::new_v4();
-    let data = create_test_data("doc.txt", owner_id);
+    let mut data = create_test_data("doc.txt", owner_id);
 
-    storage
+    let stored_location = storage
         .store(b"First document", &data.raw_data_location)
         .await?;
+    data.raw_data_location = stored_location;
 
     let config = CognifyConfig::default().with_incremental_loading(incremental_loading);
     let pipeline =

@@ -514,7 +514,7 @@ fn search_rejects_invalid_top_k() {
         .args(["search", "test", "--top-k", "0"])
         .assert()
         .code(2)
-        .stderr(predicate::str::contains(
+        .stdout(predicate::str::contains(
             "--top-k must be between 1 and 100",
         ));
 }
@@ -527,7 +527,7 @@ fn delete_rejects_missing_scope() {
         .args(["delete"])
         .assert()
         .code(2)
-        .stderr(predicate::str::contains("Specify exactly one delete scope"));
+        .stdout(predicate::str::contains("Specify exactly one delete scope"));
 }
 
 #[test]
@@ -543,7 +543,7 @@ fn add_fails_fast_on_invalid_configured_default_user_id() {
         .args(["add", "hello"])
         .assert()
         .code(2)
-        .stderr(predicate::str::contains("Invalid default_user_id"));
+        .stdout(predicate::str::contains("Invalid default_user_id"));
 }
 
 #[test]
@@ -941,14 +941,14 @@ fn cognify_without_datasets_fails_with_explicit_message() {
         .args(["cognify"])
         .assert()
         .code(2)
-        .stderr(predicate::str::contains("No datasets found for owner"));
+        .stdout(predicate::str::contains("No datasets found for owner"));
 }
 
 #[test]
-#[ignore = "requires OPENAI_TOKEN/OPENAI_URL and local ONNX model/tokenizer files"]
 fn cognify_live_smoke() {
     let api_key = std::env::var("OPENAI_TOKEN").expect("OPENAI_TOKEN must be set");
     let api_url = std::env::var("OPENAI_URL").expect("OPENAI_URL must be set");
+    let llm_model = std::env::var("OPENAI_MODEL").expect("OPENAI_MODEL must be set");
     let embedding_model_path = std::env::var("COGNEE_E2E_EMBED_MODEL_PATH")
         .expect("COGNEE_E2E_EMBED_MODEL_PATH must be set");
     let embedding_tokenizer_path =
@@ -956,6 +956,9 @@ fn cognify_live_smoke() {
 
     let config_home = TempDir::new().expect("temp dir should be created");
     let workdir = TempDir::new().expect("temp dir should be created");
+    let db_file_path = workdir.path().join("cognee.db");
+    let db_url = format!("sqlite://{}", db_file_path.display());
+    std::fs::File::create(&db_file_path).expect("sqlite database file should be created");
 
     config_set(
         &config_home,
@@ -973,7 +976,7 @@ fn cognify_live_smoke() {
         &config_home,
         workdir.path(),
         "relational_db_url",
-        "\"sqlite:./cognee.db\"",
+        &format!("\"{}\"", db_url),
     );
     config_set(
         &config_home,
@@ -988,7 +991,12 @@ fn cognify_live_smoke() {
         "\"./graph\"",
     );
     config_set(&config_home, workdir.path(), "llm_provider", "\"openai\"");
-    config_set(&config_home, workdir.path(), "llm_model", "\"gpt-4o-mini\"");
+    config_set(
+        &config_home,
+        workdir.path(),
+        "llm_model",
+        &format!("\"{}\"", llm_model),
+    );
     config_set(
         &config_home,
         workdir.path(),
@@ -1032,10 +1040,10 @@ fn cognify_live_smoke() {
 }
 
 #[test]
-#[ignore = "requires OPENAI_TOKEN/OPENAI_URL and local ONNX model/tokenizer files"]
 fn search_live_smoke() {
     let api_key = std::env::var("OPENAI_TOKEN").expect("OPENAI_TOKEN must be set");
     let api_url = std::env::var("OPENAI_URL").expect("OPENAI_URL must be set");
+    let llm_model = std::env::var("OPENAI_MODEL").expect("OPENAI_MODEL must be set");
     let embedding_model_path = std::env::var("COGNEE_E2E_EMBED_MODEL_PATH")
         .expect("COGNEE_E2E_EMBED_MODEL_PATH must be set");
     let embedding_tokenizer_path =
@@ -1043,6 +1051,9 @@ fn search_live_smoke() {
 
     let config_home = TempDir::new().expect("temp dir should be created");
     let workdir = TempDir::new().expect("temp dir should be created");
+    let db_file_path = workdir.path().join("cognee.db");
+    let db_url = format!("sqlite://{}", db_file_path.display());
+    std::fs::File::create(&db_file_path).expect("sqlite database file should be created");
 
     config_set(
         &config_home,
@@ -1060,7 +1071,7 @@ fn search_live_smoke() {
         &config_home,
         workdir.path(),
         "relational_db_url",
-        "\"sqlite:./cognee.db\"",
+        &format!("\"{}\"", db_url),
     );
     config_set(
         &config_home,
@@ -1075,7 +1086,12 @@ fn search_live_smoke() {
         "\"./graph\"",
     );
     config_set(&config_home, workdir.path(), "llm_provider", "\"openai\"");
-    config_set(&config_home, workdir.path(), "llm_model", "\"gpt-4o-mini\"");
+    config_set(
+        &config_home,
+        workdir.path(),
+        "llm_model",
+        &format!("\"{}\"", llm_model),
+    );
     config_set(
         &config_home,
         workdir.path(),

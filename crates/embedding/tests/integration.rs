@@ -5,15 +5,23 @@ use std::env;
 
 // Helper to get model directory path
 fn get_model_dir() -> String {
-    // Tests run from target/debug/deps/, so we need to go up to workspace root
+    if let Ok(model_dir) = env::var("COGNEE_TEST_MODEL_DIR") {
+        return model_dir;
+    }
+
+    if let Ok(model_path) = env::var("COGNEE_E2E_EMBED_MODEL_PATH") {
+        if let Some(parent) = std::path::Path::new(&model_path).parent() {
+            return parent.to_string_lossy().to_string();
+        }
+    }
+
     let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
-    format!("{}/../../examples/target/models", manifest_dir)
+    format!("{}/../../target/models", manifest_dir)
 }
 
 #[tokio::test]
-#[ignore] // Requires model file - run with --ignored flag
 async fn test_full_embedding_pipeline() {
-    // 1. Load model (use BGE-Small from examples)
+    // 1. Load model (use BGE-Small from target/models by default)
     let config = EmbeddingConfig::bge_small(get_model_dir());
     let engine = OnnxEmbeddingEngine::new(config)
         .expect("Failed to load model - run examples/embeddings.rs first");
@@ -39,7 +47,6 @@ async fn test_full_embedding_pipeline() {
 }
 
 #[tokio::test]
-#[ignore]
 async fn test_semantic_similarity() {
     let config = EmbeddingConfig::bge_small(get_model_dir());
     let engine = OnnxEmbeddingEngine::new(config).unwrap();
@@ -75,7 +82,6 @@ async fn test_semantic_similarity() {
 }
 
 #[tokio::test]
-#[ignore]
 async fn test_batch_processing() {
     let config = EmbeddingConfig::bge_small(get_model_dir());
     let engine = OnnxEmbeddingEngine::new(config).unwrap();
@@ -99,7 +105,6 @@ async fn test_batch_processing() {
 }
 
 #[tokio::test]
-#[ignore]
 async fn test_empty_batch() {
     let config = EmbeddingConfig::bge_small(get_model_dir());
     let engine = OnnxEmbeddingEngine::new(config).unwrap();
@@ -111,7 +116,6 @@ async fn test_empty_batch() {
 }
 
 #[tokio::test]
-#[ignore]
 async fn test_long_text_truncation() {
     let config = EmbeddingConfig::bge_small(get_model_dir());
     let engine = OnnxEmbeddingEngine::new(config).unwrap();

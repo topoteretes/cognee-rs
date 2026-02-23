@@ -6,8 +6,19 @@ set -e
 # Configuration
 CONTAINER_NAME="${CONTAINER_NAME:-ollama}"
 MODEL_NAME="${MODEL_NAME:-llama3.2:3b}"
+MODEL_NAMES="${MODEL_NAMES:-${MODEL_NAME},llama3.1:8b}"
 PORT="${PORT:-11435}"
 VOLUME_NAME="${VOLUME_NAME:-ollama_data}"
+DNS_SERVERS="${DNS_SERVERS:-1.1.1.1,8.8.8.8}"
+RECREATE_CONTAINER="${RECREATE_CONTAINER:-0}"
+
+IFS=',' read -ra DNS_ARRAY <<< "$DNS_SERVERS"
+DNS_FLAGS=()
+for dns in "${DNS_ARRAY[@]}"; do
+  dns_trimmed="$(echo "$dns" | xargs)"
+  [[ -z "$dns_trimmed" ]] && continue
+  DNS_FLAGS+=(--dns "$dns_trimmed")
+done
 
 echo "🚀 Starting Ollama with OpenAI-compatible API"
 echo ""
@@ -19,6 +30,13 @@ if ! docker info > /dev/null 2>&1; then
 fi
 
 # Check if container already exists
+if docker ps -a --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
+  if [[ "$RECREATE_CONTAINER" == "1" ]]; then
+    echo "♻️  Recreating container '$CONTAINER_NAME'..."
+    docker rm -f "$CONTAINER_NAME" > /dev/null 2>&1 || true
+  fi
+fi
+
 if docker ps -a --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
   echo "📦 Container '$CONTAINER_NAME' already exists."
   if docker ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
@@ -48,7 +66,9 @@ else
     --name "$CONTAINER_NAME" \
     -p "$PORT:11434" \
     -v "$VOLUME_NAME:/root/.ollama" \
+    "${DNS_FLAGS[@]}" \
     -e MODEL_NAME="$MODEL_NAME" \
+    -e MODEL_NAMES="$MODEL_NAMES" \
     ollama-cognee
 fi
 
@@ -79,7 +99,8 @@ echo ""
 echo "📍 Endpoints:"
 echo "   - Ollama API:        http://localhost:$PORT"
 echo "   - OpenAI-compatible: http://localhost:$PORT/v1/chat/completions"
-echo "   - Model:             $MODEL_NAME"
+echo "   - Primary model:     $MODEL_NAME"
+echo "   - Model set:         $MODEL_NAMES"
 echo ""
 echo "📚 Useful commands:"
 echo "   - View logs:         docker logs -f $CONTAINER_NAME"

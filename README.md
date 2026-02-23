@@ -59,3 +59,19 @@ cargo build --release
 ```bash
 cargo test --workspace
 ```
+
+For local full-suite execution (including LLM and ONNX/tokenizer dependent tests), use:
+
+```bash
+./scripts/run_tests_with_local_env.sh
+```
+
+This script initializes and exports the required test environment:
+
+- `OPENAI_URL` (auto-detected from `http://localhost:11435/v1` or `http://localhost:11434/v1`, or pre-set value)
+- `OPENAI_TOKEN` (defaults to `not-needed` for local Ollama)
+- `OPENAI_MODEL` (uses pre-set value, otherwise auto-detected from `${OPENAI_URL}/models`, fallback `gpt-4o-mini`)
+- `COGNEE_E2E_EMBED_MODEL_PATH` (defaults to `target/models/BGE-Small-v1.5-model_quantized.onnx`)
+- `COGNEE_E2E_TOKENIZER_PATH` (defaults to `target/models/bge-small-tokenizer.json`)
+
+If model/tokenizer files are missing, the script downloads them automatically.
