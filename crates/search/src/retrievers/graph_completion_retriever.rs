@@ -73,6 +73,7 @@ impl<V: VectorDB, E: EmbeddingEngine, G: GraphDBTrait, L: Llm> SearchRetriever
 
     async fn get_context(&self, query: &str) -> Result<SearchContext, SearchError> {
         if self.graph_db.is_empty().await? {
+            debug!("graph is empty — returning empty context");
             return Ok(vec![]);
         }
 

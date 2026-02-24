@@ -3,6 +3,7 @@ use std::collections::{HashMap, HashSet};
 use cognee_embedding::EmbeddingEngine;
 use cognee_graph::GraphDBTrait;
 use cognee_vector::VectorDB;
+use tracing::debug;
 
 use crate::graph_retrieval::rank_edge_score;
 use crate::types::SearchError;
@@ -63,6 +64,7 @@ pub async fn brute_force_triplet_search<V: VectorDB, E: EmbeddingEngine, G: Grap
 
     for (data_type, field_name) in SEARCH_COLLECTIONS {
         if !vector_db.has_collection(data_type, field_name).await? {
+            debug!("vector collection {data_type}/{field_name} does not exist — skipping");
             continue;
         }
 
@@ -117,6 +119,7 @@ pub async fn brute_force_triplet_search<V: VectorDB, E: EmbeddingEngine, G: Grap
     }
 
     if candidate_node_ids.is_empty() {
+        debug!("no candidate nodes found from vector search — returning empty");
         return Ok(vec![]);
     }
 

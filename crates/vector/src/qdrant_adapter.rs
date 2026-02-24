@@ -156,10 +156,8 @@ impl QdrantAdapter {
 
     /// Convert vector points to BatchPersisted (more efficient than PointsList)
     fn points_to_batch(points: &[VectorPoint]) -> BatchPersisted {
-        let ids: Vec<ExtendedPointId> = points
-            .iter()
-            .map(|p| ExtendedPointId::NumId(p.id.as_u128() as u64))
-            .collect();
+        let ids: Vec<ExtendedPointId> =
+            points.iter().map(|p| ExtendedPointId::Uuid(p.id)).collect();
 
         let vectors: Vec<VectorPersisted> = points
             .iter()
@@ -343,7 +341,7 @@ impl VectorDB for QdrantAdapter {
 
         let ids: Vec<ExtendedPointId> = point_ids
             .iter()
-            .map(|id| ExtendedPointId::NumId(id.as_u128() as u64))
+            .map(|id| ExtendedPointId::Uuid(*id))
             .collect();
 
         shard
@@ -630,6 +628,38 @@ mod tests {
 
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].metadata.get("name"), Some(&json!("Cognee")));
+    }
+
+    #[tokio::test]
+    async fn test_uuid_round_trip_preserves_full_128_bits() {
+        // Regression test: storing a UUID as NumId(uuid.as_u128() as u64) truncated the
+        // upper 64 bits, causing the returned ID to differ from the stored ID.
+        // The fix is to use ExtendedPointId::Uuid which preserves all 128 bits.
+        let temp_dir = TempDir::new().unwrap();
+        let adapter = QdrantAdapter::new(temp_dir.path().to_path_buf(), 2);
+
+        adapter.create_collection("Test", "field", 2).await.unwrap();
+
+        // Use a UUID with significant bits in the upper half
+        let stored_id = Uuid::parse_str("f7ab8d87-553f-4509-b595-463cedc998be").unwrap();
+        let points = vec![VectorPoint::new(stored_id, vec![1.0, 0.0])];
+
+        adapter
+            .index_points("Test", "field", &points)
+            .await
+            .unwrap();
+
+        let results = adapter
+            .search_similar("Test", "field", &[1.0, 0.0], 1)
+            .await
+            .unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(
+            results[0].id, stored_id,
+            "UUID round-trip must preserve all 128 bits; got {:?} expected {:?}",
+            results[0].id, stored_id
+        );
     }
 
     #[tokio::test]
