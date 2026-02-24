@@ -50,6 +50,8 @@ require_cmd() {
   fi
 }
 
+RUST_LOG="${RUST_LOG:-info,cognee_search=debug,ort=warn}"
+
 run_cli() {
   cargo run --release -p cognee-cli -- "$@"
 }
@@ -164,25 +166,7 @@ TXT
 }
 
 
-run_search_queries() {
-  log "🔎 Query 1: person-role relation"
-  run_cli search "Who directed the scientific work at Los Alamos?" --datasets "$DATASET_NAME" --query-type GRAPH_COMPLETION --top-k 5 --output-format pretty
-
-  log "🔎 Query 2: organizations"
-  run_cli search "Which organizations were involved in the Manhattan Project?" --datasets "$DATASET_NAME" --query-type GRAPH_COMPLETION --top-k 5 --output-format pretty
-
-  log "🔎 Query 3: site responsibilities"
-  run_cli search "What were Oak Ridge and Hanford responsible for?" --datasets "$DATASET_NAME" --query-type RAG_COMPLETION --top-k 5 --output-format pretty
-
-  log "🔎 Query 4: direct chunk retrieval"
-  run_cli search "Leslie Groves responsibilities" --datasets "$DATASET_NAME" --query-type CHUNKS --top-k 5 --output-format pretty
-}
-
-main() {
-  require_cmd docker
-  require_cmd curl
-  require_cmd cargo
-
+prepare_env_and_configure_cli() {
   cleanup_demo_data
   mkdir -p "$DEMO_RUNTIME_DIR" "$DEMO_DATA_DIR" "$MODEL_DIR"
 
@@ -214,6 +198,14 @@ main() {
   configure_cli
 
   wait_for_ollama_chat_api 40
+}
+
+main() {
+  require_cmd docker
+  require_cmd curl
+  require_cmd cargo
+
+  prepare_env_and_configure_cli
 
   log "📝 Creating local demo text files"
   create_demo_documents
@@ -228,9 +220,19 @@ main() {
 
   log "🧠 Running cognify"
   COGNEE_DEBUG_LLM_REQUEST="${COGNEE_DEBUG_LLM_REQUEST:-0}" \
-    run_cli cognify --datasets "$DATASET_NAME" --chunk-size 700 --llm-max-retries 3 --llm-max-parallel-requests 4 --verbose
+    run_cli cognify --datasets "$DATASET_NAME" --chunk-size 700 --llm-max-retries 3 --llm-max-parallel-requests 4
 
-  run_search_queries
+  log "🔎 Query 1: person-role relation"
+  run_cli search "Who directed the scientific work at Los Alamos?" --datasets "$DATASET_NAME" --query-type GRAPH_COMPLETION --top-k 5 --output-format pretty
+
+  log "🔎 Query 2: organizations"
+  run_cli search "Which organizations were involved in the Manhattan Project?" --datasets "$DATASET_NAME" --query-type GRAPH_COMPLETION --top-k 5 --output-format pretty
+
+  log "🔎 Query 3: site responsibilities"
+  run_cli search "What were Oak Ridge and Hanford responsible for?" --datasets "$DATASET_NAME" --query-type RAG_COMPLETION --top-k 5 --output-format pretty
+
+  log "🔎 Query 4: direct chunk retrieval"
+  run_cli search "Leslie Groves responsibilities" --datasets "$DATASET_NAME" --query-type CHUNKS --top-k 5 --output-format pretty
 
   ok ""
   ok "✅ Demo completed successfully"
