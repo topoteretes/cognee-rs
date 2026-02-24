@@ -56,9 +56,6 @@ pub struct CognifyArgs {
     #[arg(long = "background", short = 'b', default_value_t = false)]
     pub background: bool,
 
-    #[arg(long = "verbose", short = 'v', default_value_t = false)]
-    pub verbose: bool,
-
     #[arg(long = "llm-max-retries", value_parser = clap::value_parser!(u32).range(1..))]
     pub llm_max_retries: Option<u32>,
 

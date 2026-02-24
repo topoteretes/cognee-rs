@@ -79,7 +79,6 @@ pub fn run(args: SearchArgs) -> Result<(), CliError> {
             wide_search_top_k: None,
             triplet_distance_penalty: None,
             save_interaction: Some(false),
-            verbose: Some(false),
         };
 
         let response = orchestrator

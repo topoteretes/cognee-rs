@@ -21,7 +21,6 @@ pub struct SearchRequest {
     pub wide_search_top_k: Option<usize>,
     pub triplet_distance_penalty: Option<f32>,
     pub save_interaction: Option<bool>,
-    pub verbose: Option<bool>,
 }
 
 impl SearchRequest {

@@ -1033,10 +1033,10 @@ fn cognify_live_smoke() {
         .success();
 
     make_cmd_in(&config_home, workdir.path())
-        .args(["cognify", "--datasets", "live_dataset", "--verbose"])
+        .args(["cognify", "--datasets", "live_dataset"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("Success: Cognify completed."));
+        .stdout(predicate::str::contains("Cognify completed."));
 }
 
 #[test]

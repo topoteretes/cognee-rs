@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use serde_json::{Value, json};
+use tracing::debug;
 use uuid::Uuid;
 
 use crate::types::{
@@ -18,7 +19,6 @@ pub fn prepare_search_result(
     datasets: Option<Vec<Uuid>>,
     only_context: bool,
     use_combined_context: bool,
-    verbose: bool,
 ) -> SearchResponse {
     let context_label = if use_combined_context {
         CONTEXT_LABEL_COMBINED.to_string()
@@ -35,17 +35,21 @@ pub fn prepare_search_result(
         .and_then(transform_context_to_graph)
         .map(|graph| HashMap::from([(context_label.clone(), graph)]));
 
-    let diagnostics = if verbose {
-        let context_item_count = context
-            .as_ref()
-            .map(|items| items.len())
-            .unwrap_or_default();
-        let graph_edge_count = graphs
-            .as_ref()
-            .and_then(|graphs_by_dataset| graphs_by_dataset.get(&context_label))
-            .map(|graph| graph.edges.len())
-            .unwrap_or_default();
+    let context_item_count = context
+        .as_ref()
+        .map(|items| items.len())
+        .unwrap_or_default();
+    let graph_edge_count = graphs
+        .as_ref()
+        .and_then(|graphs_by_dataset| graphs_by_dataset.get(&context_label))
+        .map(|graph| graph.edges.len())
+        .unwrap_or_default();
+    debug!(
+        context_item_count,
+        graph_edge_count, "search context prepared"
+    );
 
+    let diagnostics = if tracing::enabled!(tracing::Level::DEBUG) {
         Some(HashMap::from([
             ("context_item_count".to_string(), json!(context_item_count)),
             ("graph_edge_count".to_string(), json!(graph_edge_count)),
@@ -63,7 +67,6 @@ pub fn prepare_search_result(
         datasets,
         only_context,
         use_combined_context,
-        verbose,
     }
 }
 
@@ -146,7 +149,7 @@ mod tests {
     use crate::types::{SearchItem, SearchOutput, SearchType};
 
     #[test]
-    fn creates_graph_and_diagnostics_for_verbose_graph_context() {
+    fn creates_graph_from_context() {
         let context = vec![SearchItem {
             id: None,
             score: Some(0.8),
@@ -166,16 +169,11 @@ mod tests {
             None,
             false,
             false,
-            true,
         );
 
         let graphs = response.graphs.expect("graph must be present");
         let graph = graphs.get("default").expect("default graph must exist");
         assert_eq!(graph.nodes.len(), 2);
         assert_eq!(graph.edges.len(), 1);
-
-        let diagnostics = response.diagnostics.expect("diagnostics must be present");
-        assert_eq!(diagnostics.get("context_item_count"), Some(&json!(1)));
-        assert_eq!(diagnostics.get("graph_edge_count"), Some(&json!(1)));
     }
 }

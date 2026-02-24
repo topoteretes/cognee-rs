@@ -10,7 +10,7 @@ use cognee_lib::llm::OpenAIAdapter;
 use cognee_lib::ontology::{OntologyResolver, RdfLibOntologyResolver};
 use cognee_lib::storage::{LocalStorage, StorageTrait};
 use cognee_lib::vector::QdrantAdapter;
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 use crate::cli::{ChunkerArg, CognifyArgs};
@@ -255,20 +255,18 @@ pub fn run(args: CognifyArgs) -> Result<(), CliError> {
             total_summaries += result.summaries.len();
             total_embeddings += result.embeddings.len();
 
-            if args.verbose {
-                debug!(
-                    "Dataset '{}' -> chunks={}, entities={}, edges={}, summaries={}, embeddings={}",
-                    dataset_name,
-                    result.chunks.len(),
-                    result.entities.len(),
-                    result.edges.len(),
-                    result.summaries.len(),
-                    result.embeddings.len()
-                );
-            }
+            debug!(
+                "Dataset '{}' -> chunks={}, entities={}, edges={}, summaries={}, embeddings={}",
+                dataset_name,
+                result.chunks.len(),
+                result.entities.len(),
+                result.edges.len(),
+                result.summaries.len(),
+                result.embeddings.len()
+            );
         }
 
-        debug!(
+        info!(
             "Cognify completed. chunks={}, entities={}, edges={}, summaries={}, embeddings={}",
             total_chunks, total_entities, total_edges, total_summaries, total_embeddings
         );

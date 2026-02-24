@@ -40,7 +40,6 @@ impl SearchOrchestrator {
         request: &SearchRequest,
     ) -> Result<SearchResponse, crate::types::SearchError> {
         let retriever = self.registry.get(request.search_type)?;
-        let verbose = request.verbose.unwrap_or(false);
         let use_dataset_scope = request
             .dataset_ids
             .as_ref()
@@ -59,10 +58,8 @@ impl SearchOrchestrator {
             logged_query_id = Some(query_id);
         }
 
-        let include_context = request.only_context()
-            || request.use_combined_context()
-            || verbose
-            || use_dataset_scope;
+        let include_context =
+            request.only_context() || request.use_combined_context() || use_dataset_scope;
         let base_context = if include_context {
             Some(retriever.get_context(&request.query_text).await?)
         } else {
@@ -100,7 +97,6 @@ impl SearchOrchestrator {
                 request.dataset_ids.clone(),
                 true,
                 request.use_combined_context(),
-                verbose,
             );
 
             if let Some(scoped_context_map) = scoped_contexts
@@ -129,7 +125,6 @@ impl SearchOrchestrator {
             request.dataset_ids.clone(),
             false,
             request.use_combined_context(),
-            verbose,
         );
 
         if let Some(scoped_context_map) = scoped_contexts
@@ -219,7 +214,6 @@ mod tests {
             wide_search_top_k: None,
             triplet_distance_penalty: None,
             save_interaction: None,
-            verbose: None,
         };
 
         let response = orchestrator.search(&request).await.unwrap();
@@ -231,7 +225,6 @@ mod tests {
 
         assert!(response.context.is_none());
         assert!(response.graphs.is_none());
-        assert!(response.diagnostics.is_none());
     }
 
     #[tokio::test]
@@ -257,7 +250,6 @@ mod tests {
             wide_search_top_k: None,
             triplet_distance_penalty: None,
             save_interaction: None,
-            verbose: None,
         };
 
         let response = orchestrator.search(&request).await.unwrap();
@@ -274,7 +266,6 @@ mod tests {
         let context = response.context.expect("context should exist");
         assert!(context.contains_key(CONTEXT_LABEL_COMBINED));
         assert!(response.graphs.is_none());
-        assert!(response.diagnostics.is_none());
     }
 
     #[tokio::test]
@@ -300,7 +291,6 @@ mod tests {
             wide_search_top_k: None,
             triplet_distance_penalty: None,
             save_interaction: None,
-            verbose: None,
         };
 
         let response = orchestrator.search(&request).await.unwrap();
@@ -310,7 +300,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn includes_graph_and_diagnostics_when_verbose_graph_context_is_available() {
+    async fn includes_graph_when_context_is_fetched() {
         struct FakeGraphRetriever;
 
         #[async_trait]
@@ -356,7 +346,7 @@ mod tests {
             dataset_ids: None,
             system_prompt: None,
             system_prompt_path: None,
-            only_context: Some(false),
+            only_context: Some(true),
             use_combined_context: Some(false),
             session_id: None,
             node_type: None,
@@ -364,26 +354,19 @@ mod tests {
             wide_search_top_k: None,
             triplet_distance_penalty: None,
             save_interaction: None,
-            verbose: Some(true),
         };
 
         let response = orchestrator.search(&request).await.unwrap();
 
         let graphs = response
             .graphs
-            .expect("graphs should be present in verbose mode");
+            .expect("graphs should be present when context is fetched");
         let default_graph = graphs
             .get(CONTEXT_LABEL_DEFAULT)
             .expect("default graph should exist");
 
         assert_eq!(default_graph.nodes.len(), 2);
         assert_eq!(default_graph.edges.len(), 1);
-
-        let diagnostics = response
-            .diagnostics
-            .expect("diagnostics should be present in verbose mode");
-        assert_eq!(diagnostics.get("context_item_count"), Some(&json!(1)));
-        assert_eq!(diagnostics.get("graph_edge_count"), Some(&json!(1)));
     }
 
     #[tokio::test]
@@ -457,7 +440,6 @@ mod tests {
             wide_search_top_k: None,
             triplet_distance_penalty: None,
             save_interaction: None,
-            verbose: None,
         };
 
         let response = orchestrator.search(&request).await.unwrap();
@@ -538,7 +520,6 @@ mod tests {
             wide_search_top_k: None,
             triplet_distance_penalty: None,
             save_interaction: None,
-            verbose: None,
         };
 
         let response = orchestrator.search(&request).await.unwrap();
@@ -576,7 +557,6 @@ mod tests {
             wide_search_top_k: None,
             triplet_distance_penalty: None,
             save_interaction: Some(true),
-            verbose: None,
         };
 
         let _ = orchestrator.search(&request).await.unwrap();

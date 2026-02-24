@@ -702,7 +702,6 @@ mod tests {
             wide_search_top_k: None,
             triplet_distance_penalty: None,
             save_interaction: None,
-            verbose: None,
         };
 
         let response = orchestrator.search(&request).await.unwrap();
@@ -767,7 +766,6 @@ mod tests {
             wide_search_top_k: None,
             triplet_distance_penalty: None,
             save_interaction: None,
-            verbose: None,
         };
 
         let response = orchestrator.search(&request).await.unwrap();
