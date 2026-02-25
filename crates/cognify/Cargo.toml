@@ -31,4 +31,9 @@ tracing.workspace = true
 cognee-storage = { path = "../storage", features = ["testing"] }
 cognee-graph = { path = "../graph", features = ["testing"] }
 cognee-vector = { path = "../vector", features = ["testing"] }
+cognee-database = { path = "../database" }
+cognee-ingestion = { path = "../ingestion" }
+cognee-search = { path = "../search" }
+cognee-delete = { path = "../delete" }
+tempfile.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

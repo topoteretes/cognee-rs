@@ -73,7 +73,7 @@ impl OpenAIAdapter {
         base_url: Option<String>,
     ) -> LlmResult<Self> {
         let client = Client::builder()
-            .timeout(std::time::Duration::from_secs(120))
+            .timeout(std::time::Duration::from_secs(600))
             .build()
             .map_err(|e| LlmError::ConfigError(format!("Failed to create HTTP client: {}", e)))?;
 

@@ -21,15 +21,22 @@ const DEFAULT_GRAPH_PROMPT: &str = r#"You are a top-tier algorithm designed for 
 
 The aim is to achieve simplicity and clarity in the knowledge graph.
 
-# 1. Labeling Nodes
-**Consistency**: Ensure you use basic or elementary types for node labels.
-  - For example, when you identify an entity representing a person, always label it as **"PERSON"**.
-  - Avoid using more specific terms like "Mathematician" or "Scientist", keep those as "description" property.
+# 1. Node Fields
+Each node must have exactly these fields:
+  - **id**: the human-readable entity name as found in the text (e.g., "Alice Johnson", "TechCorp", "San Francisco")
+  - **name**: the same human-readable entity name as `id` (e.g., "Alice Johnson", "TechCorp", "San Francisco")
+  - **type**: the entity type label in uppercase (e.g., "PERSON", "ORGANIZATION", "LOCATION", "DATE", "CONCEPT")
+  - **description**: a brief 1-2 sentence description of the entity
+
+# 2. Labeling Nodes
+**Consistency**: Ensure you use basic or elementary types for the `type` field.
+  - For example, when you identify an entity representing a person, always set `type` to **"PERSON"**.
+  - Avoid using more specific terms like "Mathematician" or "Scientist" in `type`, keep those in `description`.
   - Don't use too generic terms like "Entity".
 **Node IDs**: Never utilize integers as node IDs.
-  - Node IDs should be names or human-readable identifiers found in the text.
+  - Both `id` and `name` should be the entity's name or human-readable identifier found in the text.
 
-# 2. Handling Numerical Data and Dates
+# 3. Handling Numerical Data and Dates
   - For example, when you identify an entity representing a date, make sure it has type **"DATE"**.
   - Extract the date in the format "YYYY-MM-DD"
   - If not possible to extract the whole date, extract month or year, or both if available.
@@ -37,13 +44,13 @@ The aim is to achieve simplicity and clarity in the knowledge graph.
   - **Quotation Marks**: Never use escaped single or double quotes within property values.
   - **Naming Convention**: Use snake_case for relationship names, e.g., `works_at`.
 
-# 3. Coreference Resolution
+# 4. Coreference Resolution
   - **Maintain Entity Consistency**: When extracting entities, it's vital to ensure consistency.
   If an entity, such as "John Doe", is mentioned multiple times in the text but is referred to by different names or pronouns (e.g., "Joe", "he"),
   always use the most complete identifier for that entity throughout the knowledge graph. In this example, use "John Doe" as the node ID.
 Remember, the knowledge graph should be coherent and easily understandable, so maintaining consistency in entity references is crucial.
 
-# 4. Strict Compliance
+# 5. Strict Compliance
 Adhere to the rules strictly. Non-compliance will result in termination.
 
 Extract nodes and edges from the provided text."#;
@@ -132,7 +139,7 @@ impl<L: Llm + 'static> FactExtractor<L> {
                 system_prompt,
                 Some(GenerationOptions {
                     temperature: Some(0.1), // Slightly non-zero to improve extraction robustness
-                    max_tokens: Some(4000), // Generous limit for complex graphs
+                    max_tokens: Some(2000), // Fits within small local model context windows (4096)
                     ..Default::default()
                 }),
             )

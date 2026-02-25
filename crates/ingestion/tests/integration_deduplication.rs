@@ -1,0 +1,408 @@
+//! Integration tests for content-addressed deduplication in `IngestPipeline`.
+//!
+//! These tests exercise the full SQLite + LocalStorage stack (no mocks) to verify
+//! that the pipeline deduplicates correctly under various scenarios matching the
+//! Python `test_deduplication.py` E2E test.
+
+use cognee_database::{DatabaseTrait, SqliteDatabase};
+use cognee_delete::{DeleteMode, DeleteRequest, DeleteScope, DeleteService};
+use cognee_ingestion::IngestPipeline;
+use cognee_models::DataInput;
+use cognee_storage::{LocalStorage, StorageTrait};
+use std::io::Write;
+use std::sync::Arc;
+use tempfile::{NamedTempFile, TempDir};
+use uuid::Uuid;
+
+const NLP_TEXT: &str = include_str!("test_data/natural_language_processing.txt");
+const QUANTUM_TEXT: &str = include_str!("test_data/quantum_computers.txt");
+
+/// Build a fresh `IngestPipeline` backed by a real SQLite database and
+/// `LocalStorage` inside `dir`. Returns the pipeline plus a shared database
+/// handle for post-test assertions.
+async fn make_pipeline(
+    dir: &TempDir,
+) -> (
+    IngestPipeline<LocalStorage, SqliteDatabase>,
+    Arc<SqliteDatabase>,
+    Arc<LocalStorage>,
+) {
+    let db_path = dir.path().join("cognee.db");
+    std::fs::File::create(&db_path).expect("sqlite db file should be created");
+    let db_url = format!("sqlite://{}", db_path.display());
+
+    let database = Arc::new(
+        SqliteDatabase::new(&db_url)
+            .await
+            .expect("SqliteDatabase::new"),
+    );
+    database.initialize().await.expect("database.initialize");
+
+    let storage = Arc::new(LocalStorage::new(dir.path().join("storage")));
+    storage.initialize().await.expect("storage.initialize");
+
+    let pipeline = IngestPipeline::new(Arc::clone(&storage), Arc::clone(&database));
+    (pipeline, database, storage)
+}
+
+// ---------------------------------------------------------------------------
+// Sub-test A — File deduplication (identical content, different filenames)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn file_deduplication_same_content_yields_one_record() {
+    let dir = TempDir::new().expect("tempdir");
+    let (pipeline, database, _storage) = make_pipeline(&dir).await;
+    let owner = Uuid::new_v4();
+
+    // Two temp files with identical content
+    let mut file1 = NamedTempFile::new().expect("tmp file 1");
+    file1.write_all(NLP_TEXT.as_bytes()).expect("write file 1");
+    let path1 = file1.path().to_str().unwrap().to_string();
+
+    let mut file2 = NamedTempFile::new().expect("tmp file 2");
+    file2.write_all(NLP_TEXT.as_bytes()).expect("write file 2");
+    let path2 = file2.path().to_str().unwrap().to_string();
+
+    let result1 = pipeline
+        .add(vec![DataInput::FilePath(path1)], "dataset1", owner)
+        .await
+        .expect("add file 1");
+    let result2 = pipeline
+        .add(vec![DataInput::FilePath(path2)], "dataset2", owner)
+        .await
+        .expect("add file 2");
+
+    // Same content + same owner → same data_id
+    assert_eq!(
+        result1[0].id, result2[0].id,
+        "identical content should yield the same data_id"
+    );
+
+    // Only one Data record in the database
+    let all_data_count = database
+        .list_datasets()
+        .await
+        .expect("list datasets")
+        .iter()
+        .map(|ds| ds.id)
+        .collect::<Vec<_>>()
+        .len();
+    assert_eq!(all_data_count, 2, "should have 2 datasets");
+
+    let ds1 = database
+        .get_dataset_by_name("dataset1", owner)
+        .await
+        .expect("get ds1")
+        .expect("ds1 should exist");
+    let ds2 = database
+        .get_dataset_by_name("dataset2", owner)
+        .await
+        .expect("get ds2")
+        .expect("ds2 should exist");
+
+    let ds1_data = database.get_dataset_data(ds1.id).await.expect("ds1 data");
+    let ds2_data = database.get_dataset_data(ds2.id).await.expect("ds2 data");
+
+    assert_eq!(ds1_data.len(), 1);
+    assert_eq!(ds2_data.len(), 1);
+    // Both datasets reference the same underlying data record
+    assert_eq!(
+        ds1_data[0].id, ds2_data[0].id,
+        "both datasets should reference the same data_id"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Sub-test B — Inline text deduplication across two add() calls
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn text_deduplication_across_two_calls() {
+    let dir = TempDir::new().expect("tempdir");
+    let (pipeline, database, _storage) = make_pipeline(&dir).await;
+    let owner = Uuid::new_v4();
+
+    let result1 = pipeline
+        .add(
+            vec![DataInput::Text(QUANTUM_TEXT.to_string())],
+            "dataset1",
+            owner,
+        )
+        .await
+        .expect("add text 1");
+    let result2 = pipeline
+        .add(
+            vec![DataInput::Text(QUANTUM_TEXT.to_string())],
+            "dataset2",
+            owner,
+        )
+        .await
+        .expect("add text 2");
+
+    assert_eq!(
+        result1[0].id, result2[0].id,
+        "same text should deduplicate to the same data_id"
+    );
+    assert_eq!(result1[0].name, "inline_text");
+    assert_eq!(result2[0].name, "inline_text");
+
+    // Both datasets reference the same data record
+    let ds1 = database
+        .get_dataset_by_name("dataset1", owner)
+        .await
+        .unwrap()
+        .unwrap();
+    let ds2 = database
+        .get_dataset_by_name("dataset2", owner)
+        .await
+        .unwrap()
+        .unwrap();
+
+    let link_count = database
+        .count_data_dataset_links(result1[0].id)
+        .await
+        .expect("count links");
+    assert_eq!(link_count, 2, "data should be linked to 2 datasets");
+
+    let ds1_data = database.get_dataset_data(ds1.id).await.unwrap();
+    let ds2_data = database.get_dataset_data(ds2.id).await.unwrap();
+    assert_eq!(ds1_data[0].id, ds2_data[0].id);
+}
+
+// ---------------------------------------------------------------------------
+// Sub-test C — Cross-owner isolation (same content, different owners)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn cross_owner_isolation_same_content_different_owners() {
+    let dir = TempDir::new().expect("tempdir");
+    let (pipeline, database, _storage) = make_pipeline(&dir).await;
+    let owner1 = Uuid::new_v4();
+    let owner2 = Uuid::new_v4();
+
+    let result1 = pipeline
+        .add(
+            vec![DataInput::Text(NLP_TEXT.to_string())],
+            "dataset1",
+            owner1,
+        )
+        .await
+        .expect("add owner1");
+    let result2 = pipeline
+        .add(
+            vec![DataInput::Text(NLP_TEXT.to_string())],
+            "dataset2",
+            owner2,
+        )
+        .await
+        .expect("add owner2");
+
+    // Different owners → different data_ids (owner_id is mixed into hash)
+    assert_ne!(
+        result1[0].id, result2[0].id,
+        "different owners should produce different data_ids"
+    );
+    assert_ne!(result1[0].content_hash, result2[0].content_hash);
+
+    assert_eq!(result1[0].owner_id, owner1);
+    assert_eq!(result2[0].owner_id, owner2);
+
+    // Each owner has exactly one dataset and one data record
+    let owner1_datasets = database
+        .list_datasets_by_owner(owner1)
+        .await
+        .expect("list owner1 datasets");
+    let owner2_datasets = database
+        .list_datasets_by_owner(owner2)
+        .await
+        .expect("list owner2 datasets");
+
+    assert_eq!(owner1_datasets.len(), 1);
+    assert_eq!(owner2_datasets.len(), 1);
+
+    let ds1_data = database
+        .get_dataset_data(owner1_datasets[0].id)
+        .await
+        .unwrap();
+    let ds2_data = database
+        .get_dataset_data(owner2_datasets[0].id)
+        .await
+        .unwrap();
+
+    assert_eq!(ds1_data[0].owner_id, owner1);
+    assert_eq!(ds2_data[0].owner_id, owner2);
+}
+
+// ---------------------------------------------------------------------------
+// Sub-test D — Binary file deduplication
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn binary_file_deduplication() {
+    let dir = TempDir::new().expect("tempdir");
+    let (pipeline, database, _storage) = make_pipeline(&dir).await;
+    let owner = Uuid::new_v4();
+
+    // Identical binary bytes — PNG-like magic bytes
+    let binary_content: &[u8] = &[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0xFF];
+
+    let mut bin1 = NamedTempFile::new().expect("bin tmp 1");
+    bin1.write_all(binary_content).expect("write bin 1");
+    let bin1_path = bin1.path().to_str().unwrap().to_string();
+
+    let mut bin2 = NamedTempFile::new().expect("bin tmp 2");
+    bin2.write_all(binary_content).expect("write bin 2");
+    let bin2_path = bin2.path().to_str().unwrap().to_string();
+
+    let result1 = pipeline
+        .add(vec![DataInput::FilePath(bin1_path)], "bin_dataset1", owner)
+        .await
+        .expect("add bin 1");
+    let result2 = pipeline
+        .add(vec![DataInput::FilePath(bin2_path)], "bin_dataset2", owner)
+        .await
+        .expect("add bin 2");
+
+    // Deduplication is MIME-type agnostic — only content + owner matter
+    assert_eq!(
+        result1[0].id, result2[0].id,
+        "identical binary content should deduplicate"
+    );
+
+    let all_datasets = database.list_datasets().await.expect("list datasets");
+    assert_eq!(all_datasets.len(), 2);
+
+    let link_count = database
+        .count_data_dataset_links(result1[0].id)
+        .await
+        .expect("count links");
+    assert_eq!(
+        link_count, 2,
+        "binary data should be linked to both datasets"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Sub-test E — Dataset link counting and cascade deletion
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn cascade_deletion_preserves_data_with_remaining_links() {
+    let dir = TempDir::new().expect("tempdir");
+    let (pipeline, database, storage) = make_pipeline(&dir).await;
+    let owner = Uuid::new_v4();
+
+    // Add the same content to 3 datasets
+    let r1 = pipeline
+        .add(
+            vec![DataInput::Text(QUANTUM_TEXT.to_string())],
+            "ds1",
+            owner,
+        )
+        .await
+        .expect("add ds1");
+    pipeline
+        .add(
+            vec![DataInput::Text(QUANTUM_TEXT.to_string())],
+            "ds2",
+            owner,
+        )
+        .await
+        .expect("add ds2");
+    pipeline
+        .add(
+            vec![DataInput::Text(QUANTUM_TEXT.to_string())],
+            "ds3",
+            owner,
+        )
+        .await
+        .expect("add ds3");
+
+    let data_id = r1[0].id;
+
+    // All three datasets reference the same data record
+    let link_count = database
+        .count_data_dataset_links(data_id)
+        .await
+        .expect("count links before delete");
+    assert_eq!(link_count, 3, "data should be linked to 3 datasets");
+
+    let delete_svc = DeleteService::new(Arc::clone(&storage), Arc::clone(&database));
+
+    // Delete dataset1 — data still has 2 remaining links and must NOT be deleted
+    let result1 = delete_svc
+        .execute(&DeleteRequest {
+            scope: DeleteScope::Dataset {
+                owner_id: owner,
+                dataset_name: "ds1".to_string(),
+            },
+            mode: DeleteMode::Soft,
+        })
+        .await
+        .expect("delete ds1");
+
+    assert_eq!(result1.deleted_datasets, 1);
+    assert_eq!(
+        result1.deleted_data, 0,
+        "data should not be deleted while still linked to other datasets"
+    );
+
+    // Data record must still exist
+    let data_still_exists = database
+        .get_data(data_id)
+        .await
+        .expect("get data after ds1 delete");
+    assert!(
+        data_still_exists.is_some(),
+        "data record should survive deletion of one dataset"
+    );
+
+    let remaining_links = database
+        .count_data_dataset_links(data_id)
+        .await
+        .expect("count links after ds1 delete");
+    assert_eq!(remaining_links, 2);
+
+    // Delete dataset2 — data still has 1 remaining link
+    let result2 = delete_svc
+        .execute(&DeleteRequest {
+            scope: DeleteScope::Dataset {
+                owner_id: owner,
+                dataset_name: "ds2".to_string(),
+            },
+            mode: DeleteMode::Soft,
+        })
+        .await
+        .expect("delete ds2");
+
+    assert_eq!(result2.deleted_datasets, 1);
+    assert_eq!(result2.deleted_data, 0, "data still linked to ds3");
+
+    // Delete dataset3 — last link removed; data record should be deleted
+    let result3 = delete_svc
+        .execute(&DeleteRequest {
+            scope: DeleteScope::Dataset {
+                owner_id: owner,
+                dataset_name: "ds3".to_string(),
+            },
+            mode: DeleteMode::Soft,
+        })
+        .await
+        .expect("delete ds3");
+
+    assert_eq!(result3.deleted_datasets, 1);
+    assert_eq!(
+        result3.deleted_data, 1,
+        "data record should be deleted when last link is removed"
+    );
+
+    let data_gone = database
+        .get_data(data_id)
+        .await
+        .expect("get data after all deletes");
+    assert!(
+        data_gone.is_none(),
+        "data record should be gone after all links removed"
+    );
+}

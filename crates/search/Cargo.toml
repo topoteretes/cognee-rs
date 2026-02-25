@@ -22,5 +22,12 @@ uuid = { workspace = true, features = ["serde", "v4"] }
 [dev-dependencies]
 cognee-database = { path = "../database", features = ["testing"] }
 cognee-graph = { path = "../graph", features = ["testing"] }
+cognee-vector = { path = "../vector", features = ["testing"] }
 cognee-models = { path = "../models" }
+cognee-storage = { path = "../storage" }
+cognee-ingestion = { path = "../ingestion" }
+cognee-cognify = { path = "../cognify" }
+cognee-delete = { path = "../delete" }
+cognee-llm = { path = "../llm" }
+tempfile.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

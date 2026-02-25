@@ -491,3 +491,322 @@ impl<S: StorageTrait, D: DatabaseTrait> DeleteService<S, D> {
         Ok(count)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cognee_database::MockDatabase;
+    use cognee_models::{Data, Dataset};
+    use cognee_storage::MockStorage;
+
+    // ------------------------------------------------------------------
+    // Test helpers
+    // ------------------------------------------------------------------
+
+    fn make_service() -> DeleteService<MockStorage, MockDatabase> {
+        DeleteService::new(Arc::new(MockStorage::new()), Arc::new(MockDatabase::new()))
+    }
+
+    /// Seed one dataset + one data item, attach them, and return their IDs.
+    async fn seed_dataset_with_data(
+        db: &MockDatabase,
+        storage: &MockStorage,
+        owner_id: Uuid,
+        dataset_name: &str,
+    ) -> (Uuid, Uuid) {
+        let dataset = Dataset::new(dataset_name.to_string(), owner_id);
+        let dataset_id = dataset.id;
+        db.create_dataset(dataset).await.unwrap();
+
+        let location = storage.store(b"test content", "test.txt").await.unwrap();
+
+        let data_id = Uuid::new_v4();
+        let data = Data::new(
+            data_id,
+            "test.txt".to_string(),
+            location,
+            "file://test.txt".to_string(),
+            "txt".to_string(),
+            "text/plain".to_string(),
+            "hash_placeholder".to_string(),
+            owner_id,
+        );
+        db.create_data(data).await.unwrap();
+        db.attach_data_to_dataset(dataset_id, data_id)
+            .await
+            .unwrap();
+
+        (dataset_id, data_id)
+    }
+
+    // ------------------------------------------------------------------
+    // Step 2 — test_delete_dataset_with_force
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn delete_dataset_with_force_removes_dataset_and_data() {
+        let storage = Arc::new(MockStorage::new());
+        let database = Arc::new(MockDatabase::new());
+        let svc = DeleteService::new(Arc::clone(&storage), Arc::clone(&database));
+
+        let owner = Uuid::new_v4();
+        seed_dataset_with_data(&database, &storage, owner, "test_dataset").await;
+
+        let result = svc
+            .execute(&DeleteRequest {
+                scope: DeleteScope::Dataset {
+                    owner_id: owner,
+                    dataset_name: "test_dataset".to_string(),
+                },
+                mode: DeleteMode::Soft,
+            })
+            .await
+            .expect("execute should succeed");
+
+        assert_eq!(result.deleted_datasets, 1);
+        assert_eq!(result.deleted_data, 1);
+
+        let still_exists = database
+            .get_dataset_by_name("test_dataset", owner)
+            .await
+            .unwrap();
+        assert!(still_exists.is_none(), "dataset should be gone");
+    }
+
+    // ------------------------------------------------------------------
+    // Step 3 — test_delete_preview_does_not_mutate_state
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn preview_does_not_mutate_database_state() {
+        let storage = Arc::new(MockStorage::new());
+        let database = Arc::new(MockDatabase::new());
+        let svc = DeleteService::new(Arc::clone(&storage), Arc::clone(&database));
+
+        let owner = Uuid::new_v4();
+        seed_dataset_with_data(&database, &storage, owner, "test_dataset").await;
+
+        let request = DeleteRequest {
+            scope: DeleteScope::Dataset {
+                owner_id: owner,
+                dataset_name: "test_dataset".to_string(),
+            },
+            mode: DeleteMode::Soft,
+        };
+
+        let preview = svc.preview(&request).await.expect("preview should succeed");
+
+        assert_eq!(preview.datasets_to_delete, 1);
+        assert_eq!(preview.data_to_delete, 1);
+
+        let still_exists = database
+            .get_dataset_by_name("test_dataset", owner)
+            .await
+            .unwrap();
+        assert!(
+            still_exists.is_some(),
+            "dataset should still exist after preview"
+        );
+        assert_eq!(
+            database.get_data_count(),
+            1,
+            "data count should be unchanged"
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // Step 4 — test_delete_missing_dataset_returns_validation_error
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn delete_nonexistent_dataset_returns_validation_error() {
+        let svc = make_service();
+
+        let err = svc
+            .execute(&DeleteRequest {
+                scope: DeleteScope::Dataset {
+                    owner_id: Uuid::new_v4(),
+                    dataset_name: "nonexistent".to_string(),
+                },
+                mode: DeleteMode::Soft,
+            })
+            .await
+            .expect_err("should fail for nonexistent dataset");
+
+        assert!(
+            matches!(err, DeleteError::Validation(_)),
+            "expected Validation error, got: {err:?}"
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // Step 5 — test_shared_data_not_deleted_while_linked_to_another_dataset
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn shared_data_not_deleted_while_linked_to_another_dataset() {
+        let storage = Arc::new(MockStorage::new());
+        let database = Arc::new(MockDatabase::new());
+        let svc = DeleteService::new(Arc::clone(&storage), Arc::clone(&database));
+
+        let owner = Uuid::new_v4();
+
+        let ds1 = Dataset::new("dataset1".to_string(), owner);
+        let ds2 = Dataset::new("dataset2".to_string(), owner);
+        let ds1_id = ds1.id;
+        let ds2_id = ds2.id;
+        database.create_dataset(ds1).await.unwrap();
+        database.create_dataset(ds2).await.unwrap();
+
+        let location = storage
+            .store(b"shared content", "shared.txt")
+            .await
+            .unwrap();
+        let data_id = Uuid::new_v4();
+        let data = Data::new(
+            data_id,
+            "shared.txt".to_string(),
+            location,
+            "file://shared.txt".to_string(),
+            "txt".to_string(),
+            "text/plain".to_string(),
+            "shared_hash".to_string(),
+            owner,
+        );
+        database.create_data(data).await.unwrap();
+        database
+            .attach_data_to_dataset(ds1_id, data_id)
+            .await
+            .unwrap();
+        database
+            .attach_data_to_dataset(ds2_id, data_id)
+            .await
+            .unwrap();
+
+        let result = svc
+            .execute(&DeleteRequest {
+                scope: DeleteScope::Dataset {
+                    owner_id: owner,
+                    dataset_name: "dataset1".to_string(),
+                },
+                mode: DeleteMode::Soft,
+            })
+            .await
+            .expect("execute should succeed");
+
+        assert_eq!(result.deleted_datasets, 1);
+        assert_eq!(
+            result.deleted_data, 0,
+            "data must not be deleted while still linked to dataset2"
+        );
+
+        let data_still_there = database.get_data(data_id).await.unwrap();
+        assert!(data_still_there.is_some(), "data record must survive");
+    }
+
+    // ------------------------------------------------------------------
+    // Step 6 — test_data_deleted_when_last_link_removed
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn data_deleted_when_last_dataset_link_removed() {
+        let storage = Arc::new(MockStorage::new());
+        let database = Arc::new(MockDatabase::new());
+        let svc = DeleteService::new(Arc::clone(&storage), Arc::clone(&database));
+
+        let owner = Uuid::new_v4();
+
+        let ds1 = Dataset::new("dataset1".to_string(), owner);
+        let ds2 = Dataset::new("dataset2".to_string(), owner);
+        let ds1_id = ds1.id;
+        let ds2_id = ds2.id;
+        database.create_dataset(ds1).await.unwrap();
+        database.create_dataset(ds2).await.unwrap();
+
+        let location = storage
+            .store(b"shared content", "shared.txt")
+            .await
+            .unwrap();
+        let data_id = Uuid::new_v4();
+        let data = Data::new(
+            data_id,
+            "shared.txt".to_string(),
+            location,
+            "file://shared.txt".to_string(),
+            "txt".to_string(),
+            "text/plain".to_string(),
+            "shared_hash".to_string(),
+            owner,
+        );
+        database.create_data(data).await.unwrap();
+        database
+            .attach_data_to_dataset(ds1_id, data_id)
+            .await
+            .unwrap();
+        database
+            .attach_data_to_dataset(ds2_id, data_id)
+            .await
+            .unwrap();
+
+        svc.execute(&DeleteRequest {
+            scope: DeleteScope::Dataset {
+                owner_id: owner,
+                dataset_name: "dataset1".to_string(),
+            },
+            mode: DeleteMode::Soft,
+        })
+        .await
+        .expect("delete dataset1");
+
+        let result = svc
+            .execute(&DeleteRequest {
+                scope: DeleteScope::Dataset {
+                    owner_id: owner,
+                    dataset_name: "dataset2".to_string(),
+                },
+                mode: DeleteMode::Soft,
+            })
+            .await
+            .expect("delete dataset2");
+
+        assert_eq!(
+            result.deleted_data, 1,
+            "data must be deleted when last link is removed"
+        );
+
+        let data_gone = database.get_data(data_id).await.unwrap();
+        assert!(data_gone.is_none(), "data record must be gone");
+    }
+
+    // ------------------------------------------------------------------
+    // Step 7 — test_delete_wrong_owner_returns_validation_error
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn delete_dataset_with_wrong_owner_returns_validation_error() {
+        let storage = Arc::new(MockStorage::new());
+        let database = Arc::new(MockDatabase::new());
+        let svc = DeleteService::new(Arc::clone(&storage), Arc::clone(&database));
+
+        let owner_a = Uuid::new_v4();
+        let owner_b = Uuid::new_v4();
+
+        seed_dataset_with_data(&database, &storage, owner_a, "owner_a_dataset").await;
+
+        let err = svc
+            .execute(&DeleteRequest {
+                scope: DeleteScope::Dataset {
+                    owner_id: owner_b,
+                    dataset_name: "owner_a_dataset".to_string(),
+                },
+                mode: DeleteMode::Soft,
+            })
+            .await
+            .expect_err("should fail for wrong owner");
+
+        assert!(
+            matches!(err, DeleteError::Validation(_)),
+            "expected Validation error for wrong owner, got: {err:?}"
+        );
+    }
+}

@@ -25,8 +25,8 @@ fn run() -> Result<(), CliError> {
 fn main() {
     // Suppress verbose ONNX Runtime graph-optimizer logs (ort crate) by default.
     // Users can re-enable them with RUST_LOG="info,ort=info".
-    let env_filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("info,ort=warn"));
+    let env_filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info,ort=warn"));
     let _ = tracing_subscriber::fmt()
         .with_env_filter(env_filter)
         .with_target(false)
