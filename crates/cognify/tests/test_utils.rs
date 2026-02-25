@@ -6,6 +6,7 @@ pub fn require_env(var_name: &str) -> String {
         .unwrap_or_else(|_| panic!("❌ Required environment variable '{}' is not set", var_name))
 }
 
+#[allow(dead_code)]
 pub fn create_adapter_from_env() -> Arc<OpenAIAdapter> {
     let base_url = require_env("OPENAI_URL");
     let api_token = require_env("OPENAI_TOKEN");
