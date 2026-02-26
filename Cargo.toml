@@ -30,10 +30,10 @@ assert_cmd = "2.0"
 async-trait = "0.1.89"
 clap = "4.5"
 chrono = { version = "0.4.41", default-features = false, features = ["serde", "clock", "std"] }
-common = { git = "https://github.com/qdrant/qdrant", package = "common", branch = "dev" }
+common = { git = "https://github.com/qdrant/qdrant", package = "common", tag = "v1.17.0" }
 dirs = "6"
 dotenv = "0.15"
-edge = { git = "https://github.com/qdrant/qdrant", package = "edge", default-features = false, branch = "dev" }
+edge = { git = "https://github.com/qdrant/qdrant", package = "edge", default-features = false, tag = "v1.17.0" }
 env_logger = "0.11"
 futures = "0.3"
 futures-util = "0.3"
@@ -48,7 +48,7 @@ rand = "0.8"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "cookies", "gzip", "json", "stream"] }
 scraper = "0.21"
 schemars = "0.8"
-segment = { git = "https://github.com/qdrant/qdrant", package = "segment", default-features = false, branch = "dev" }
+segment = { git = "https://github.com/qdrant/qdrant", package = "segment", default-features = false, tag = "v1.17.0" }
 serde = { version = "1", features = ["derive"] }
 serial_test = "3.2"
 sha2 = "0.10"
@@ -62,18 +62,21 @@ sqlx = "0.8"
 strsim = "0.11"
 thiserror = "2.0"
 serde_json = "1"
-shard = { git = "https://github.com/qdrant/qdrant", package = "shard", branch = "dev" }
+shard = { git = "https://github.com/qdrant/qdrant", package = "shard", tag = "v1.17.0" }
 tempfile = "3"
 tokenizers = "0.21"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "fs", "io-util"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 url = "2.5"
-uuid = { version = "1", features = ["v4", "v5", "serde"] }
+uuid = { version = "1.21", features = ["v4", "v5", "serde"] }
 
 [patch.crates-io]
 # Align tar version with qdrant workspace (needed for Archive::set_sync)
 tar = { git = "https://github.com/qdrant/tar-rs", branch = "main" }
+# Required by qdrant v1.17.0 — their forks add http2_max_local_error_reset_streams and related APIs
+tonic = { git = "https://github.com/qdrant/tonic", branch = "v0.11.0-qdrant" }
+hyper = { git = "https://github.com/qdrant/hyper", branch = "v0.14.26-qdrant" }
 
 [profile.release]
 debug = true
