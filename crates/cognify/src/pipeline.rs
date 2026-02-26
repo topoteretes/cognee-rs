@@ -407,6 +407,7 @@ impl<S: StorageTrait, G: GraphDBTrait, V: VectorDB, E: EmbeddingEngine>
     /// - `Triplet_embeddable_text` - Triplet embeddings (Phase 3, if config.embed_triplets is true)
     ///
     /// Returns statistics about indexed fields.
+    #[allow(clippy::too_many_arguments)]
     async fn index_data_points(
         &self,
         chunks: &[DocumentChunk],
