@@ -15,6 +15,10 @@ jobs:
     name: Build & Test (stable)
     runs-on: ubuntu-latest
 
+    env:
+      OPENAI_KEY: ${{ secrets.OPENAI_KEY }}
+      COGNEE_TEST_MODEL_DIR: ${{ github.workspace }}/target/models
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -36,8 +40,16 @@ jobs:
       - name: Build
         run: cargo check --all-targets --verbose
 
+      - name: Cache embedding models
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/target/models
+          key: embedding-models-${{ hashFiles('scripts/lib/common.sh') }}
+          restore-keys: |
+            embedding-models-
+
       - name: Test
-        run: cargo test --all-targets --verbose
+        run: bash scripts/run_tests_with_openai.sh
 
       - name: Build docs
         run: cargo doc --no-deps
