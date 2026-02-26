@@ -1,5 +1,6 @@
 use std::path::Path;
 use std::sync::Arc;
+use tracing::{info, info_span, instrument};
 use uuid::Uuid;
 
 use cognee_database::DatabaseTrait;
@@ -16,6 +17,7 @@ impl<S: StorageTrait, D: DatabaseTrait> IngestPipeline<S, D> {
         Self { storage, database }
     }
 
+    #[instrument(name = "ingestion.add", skip(self, inputs), fields(dataset_name, owner_id = %owner_id, inputs_count = inputs.len()))]
     pub async fn add(
         &self,
         inputs: Vec<DataInput>,
@@ -33,10 +35,13 @@ impl<S: StorageTrait, D: DatabaseTrait> IngestPipeline<S, D> {
                 self.database.create_dataset(new_dataset).await?
             }
         };
+        info!(dataset_id = %dataset.id, "dataset resolved");
 
         let mut created_data = Vec::new();
 
-        for input in inputs {
+        for (idx, input) in inputs.into_iter().enumerate() {
+            let _input_span = info_span!("ingestion.process_input", idx).entered();
+
             let (content_hash, data_id, storage_location) =
                 self.process_input_streaming(&input, owner_id).await?;
 
@@ -44,6 +49,7 @@ impl<S: StorageTrait, D: DatabaseTrait> IngestPipeline<S, D> {
                 self.database
                     .attach_data_to_dataset(dataset.id, data_id)
                     .await?;
+                info!(data_id = %data_id, is_duplicate = true, "input processed");
                 created_data.push(existing_data);
                 continue;
             }
@@ -65,6 +71,7 @@ impl<S: StorageTrait, D: DatabaseTrait> IngestPipeline<S, D> {
                 .attach_data_to_dataset(dataset.id, data_id)
                 .await?;
 
+            info!(data_id = %data_id, is_duplicate = false, "input processed");
             created_data.push(saved_data);
         }
 
@@ -73,6 +80,7 @@ impl<S: StorageTrait, D: DatabaseTrait> IngestPipeline<S, D> {
 
     /// Process input using streaming to avoid loading large files into memory
     /// Returns (content_hash, data_id, storage_location)
+    #[instrument(name = "ingestion.process_input_streaming", skip(self, input), fields(owner_id = %owner_id))]
     async fn process_input_streaming(
         &self,
         input: &DataInput,

@@ -4,6 +4,7 @@ use super::database_trait::{
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use sqlx::{Row, SqlitePool};
+use tracing::instrument;
 use uuid::Uuid;
 
 use cognee_models::{Data, Dataset};
@@ -149,6 +150,7 @@ impl DatabaseTrait for SqliteDatabase {
         Ok(())
     }
 
+    #[instrument(name = "db.create_data", skip(self, data), fields(data_id = %data.id))]
     async fn create_data(&self, data: Data) -> Result<Data, DatabaseError> {
         let id = data.id.to_string();
         let owner_id = data.owner_id.to_string();
@@ -185,6 +187,7 @@ impl DatabaseTrait for SqliteDatabase {
         Ok(data)
     }
 
+    #[instrument(name = "db.get_data", skip(self), fields(id = %id))]
     async fn get_data(&self, id: Uuid) -> Result<Option<Data>, DatabaseError> {
         let id_str = id.to_string();
 
@@ -226,6 +229,7 @@ impl DatabaseTrait for SqliteDatabase {
         }
     }
 
+    #[instrument(name = "db.delete_data", skip(self), fields(id = %id))]
     async fn delete_data(&self, id: Uuid) -> Result<(), DatabaseError> {
         let id_str = id.to_string();
 
@@ -375,6 +379,7 @@ impl DatabaseTrait for SqliteDatabase {
         Ok(datasets)
     }
 
+    #[instrument(name = "db.create_dataset", skip(self, dataset), fields(dataset_id = %dataset.id, name = %dataset.name))]
     async fn create_dataset(&self, dataset: Dataset) -> Result<Dataset, DatabaseError> {
         let id = dataset.id.to_string();
         let owner_id = dataset.owner_id.to_string();
@@ -440,6 +445,7 @@ impl DatabaseTrait for SqliteDatabase {
         }
     }
 
+    #[instrument(name = "db.get_dataset_by_name", skip(self), fields(name, owner_id = %owner_id))]
     async fn get_dataset_by_name(
         &self,
         name: &str,
@@ -546,6 +552,7 @@ impl DatabaseTrait for SqliteDatabase {
         Ok(datasets)
     }
 
+    #[instrument(name = "db.delete_dataset", skip(self), fields(id = %id))]
     async fn delete_dataset(&self, id: Uuid) -> Result<(), DatabaseError> {
         let id_str = id.to_string();
 
@@ -562,6 +569,7 @@ impl DatabaseTrait for SqliteDatabase {
         Ok(())
     }
 
+    #[instrument(name = "db.attach_data_to_dataset", skip(self), fields(dataset_id = %dataset_id, data_id = %data_id))]
     async fn attach_data_to_dataset(
         &self,
         dataset_id: Uuid,
@@ -584,6 +592,7 @@ impl DatabaseTrait for SqliteDatabase {
         Ok(())
     }
 
+    #[instrument(name = "db.detach_data_from_dataset", skip(self), fields(dataset_id = %dataset_id, data_id = %data_id))]
     async fn detach_data_from_dataset(
         &self,
         dataset_id: Uuid,
@@ -726,6 +735,7 @@ impl DatabaseTrait for SqliteDatabase {
         Ok(references)
     }
 
+    #[instrument(name = "db.log_query", skip(self, query_text), fields(query_type, len = query_text.len()))]
     async fn log_query(
         &self,
         query_text: &str,

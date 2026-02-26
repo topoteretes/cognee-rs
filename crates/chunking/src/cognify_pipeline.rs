@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use cognee_models::{Data, Document, DocumentChunk, classify_documents};
 use cognee_storage::StorageTrait;
+use tracing::{debug, info, info_span, instrument};
 
 use crate::error::ChunkingError;
 use crate::text_chunker::chunk_text;
@@ -44,6 +45,7 @@ impl<S: StorageTrait> ExtractTextChunksPipeline<S> {
     }
 
     /// Extract text chunks with a custom token counter.
+    #[instrument(name = "chunking.extract_chunks", skip(self, data_items, counter), fields(max_chunk_size, data_count = data_items.len()))]
     pub async fn extract_chunks_with_counter<C: TokenCounter>(
         &self,
         data_items: Vec<Data>,
@@ -55,9 +57,17 @@ impl<S: StorageTrait> ExtractTextChunksPipeline<S> {
         }
 
         let documents: Vec<Document> = classify_documents(&data_items);
+        info!(doc_count = documents.len(), "documents classified");
 
         let mut all_chunks = Vec::new();
         for document in &documents {
+            let _doc_span = info_span!(
+                "chunking.process_document",
+                document_id = %document.id,
+                mime_type = %document.mime_type,
+            )
+            .entered();
+
             let content_bytes = self
                 .storage
                 .retrieve(&document.raw_data_location)
@@ -68,9 +78,11 @@ impl<S: StorageTrait> ExtractTextChunksPipeline<S> {
                 .map_err(|e| ChunkingError::InvalidUtf8(e.to_string()))?;
 
             let chunks = chunk_text(document.id, &content, max_chunk_size, counter);
+            debug!(chunk_count = chunks.len(), document_id = %document.id, "document chunked");
             all_chunks.extend(chunks);
         }
 
+        info!(total_chunks = all_chunks.len(), "chunking complete");
         Ok(all_chunks)
     }
 }

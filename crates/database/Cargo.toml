@@ -12,6 +12,7 @@ async-trait.workspace = true
 chrono.workspace = true
 sqlx = { workspace = true, features = ["runtime-tokio", "sqlite", "uuid", "chrono"] }
 thiserror.workspace = true
+tracing.workspace = true
 uuid.workspace = true
 serde.workspace = true
 

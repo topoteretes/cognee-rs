@@ -3,6 +3,7 @@ use async_trait::async_trait;
 use std::path::PathBuf;
 use tokio::fs;
 use tokio::io::{AsyncRead, AsyncWriteExt};
+use tracing::{debug, instrument};
 use uuid::Uuid;
 
 pub struct LocalStorage {
@@ -36,6 +37,7 @@ impl StorageTrait for LocalStorage {
             .map_err(|e| StorageError::IoError(format!("Failed to create base directory: {}", e)))
     }
 
+    #[instrument(name = "storage.store", skip(self, data), fields(file_name, bytes = data.len()))]
     async fn store(&self, data: &[u8], file_name: &str) -> Result<String, StorageError> {
         let relative_path = self.generate_storage_path(file_name);
         let full_path = self.base_path.join(&relative_path);
@@ -63,6 +65,7 @@ impl StorageTrait for LocalStorage {
         Ok(relative_path)
     }
 
+    #[instrument(name = "storage.store_stream", skip(self, reader), fields(file_name))]
     async fn store_stream<R: AsyncRead + Unpin + Send>(
         &self,
         reader: &mut R,
@@ -95,6 +98,7 @@ impl StorageTrait for LocalStorage {
         Ok(relative_path)
     }
 
+    #[instrument(name = "storage.create_writer", skip(self), fields(file_name))]
     async fn create_writer(&self, file_name: &str) -> Result<StorageWriter, StorageError> {
         let relative_path = self.generate_storage_path(file_name);
         let full_path = self.base_path.join(&relative_path);
@@ -114,16 +118,19 @@ impl StorageTrait for LocalStorage {
         Ok(StorageWriter::new(file, relative_path))
     }
 
+    #[instrument(name = "storage.retrieve", skip(self), fields(location))]
     async fn retrieve(&self, location: &str) -> Result<Vec<u8>, StorageError> {
         let full_path = self.base_path.join(location);
 
-        fs::read(&full_path).await.map_err(|e| {
+        let bytes = fs::read(&full_path).await.map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
                 StorageError::NotFound(format!("File not found: {}", location))
             } else {
                 StorageError::IoError(format!("Failed to read file: {}", e))
             }
-        })
+        })?;
+        debug!(bytes = bytes.len(), "file retrieved");
+        Ok(bytes)
     }
 
     async fn exists(&self, location: &str) -> Result<bool, StorageError> {
@@ -134,6 +141,7 @@ impl StorageTrait for LocalStorage {
             .map_err(|e| StorageError::IoError(format!("Failed to check file existence: {}", e)))
     }
 
+    #[instrument(name = "storage.delete", skip(self), fields(location))]
     async fn delete(&self, location: &str) -> Result<(), StorageError> {
         let full_path = self.base_path.join(location);
 

@@ -8,6 +8,7 @@ use reqwest::Client;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
+use tracing::{debug, instrument, warn};
 
 use crate::error::{LlmError, LlmResult};
 use crate::llm_trait::Llm;
@@ -123,8 +124,10 @@ impl OpenAIAdapter {
     /// - HTTP 5xx (server errors)
     ///
     /// Errors on HTTP 400 and 401 are returned immediately without retrying.
+    #[instrument(name = "llm.api_call", skip(self, request_body), fields(url = tracing::field::Empty))]
     async fn call_api(&self, request_body: Value) -> LlmResult<OpenAIResponse> {
         let url = format!("{}/chat/completions", self.base_url);
+        tracing::Span::current().record("url", url.as_str());
         let debug_enabled = std::env::var("COGNEE_DEBUG_LLM_REQUEST")
             .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
             .unwrap_or(false);
@@ -138,14 +141,15 @@ impl OpenAIAdapter {
         let mut last_error = LlmError::NetworkError("No attempt made".to_string());
 
         for attempt in 0..=self.network_retries {
+            debug!(attempt, "LLM API attempt");
             if attempt > 0 {
                 let delay_ms = (1_000u64 * 2u64.saturating_pow(attempt as u32 - 1)).min(30_000);
-                log::warn!(
-                    "LLM request failed (attempt {}/{}), retrying in {}ms: {}",
+                warn!(
                     attempt,
-                    self.network_retries,
+                    network_retries = self.network_retries,
                     delay_ms,
-                    last_error
+                    error = %last_error,
+                    "LLM request failed, retrying",
                 );
                 tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
             }
