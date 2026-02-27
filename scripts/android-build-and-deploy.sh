@@ -12,7 +12,12 @@
 #   - NDK toolchain bin on PATH (for the linker)
 #
 # Usage:
-#   ./scripts/android-build-and-deploy.sh [--debug]
+#   ./scripts/android-build-and-deploy.sh [--debug] [--deploy]
+#
+# Flags:
+#   --debug    Build in debug mode (default: release)
+#   --deploy   Push built artifacts to the connected Android device via adb
+#              (default: build only, no device interaction)
 
 set -euo pipefail
 
@@ -44,10 +49,24 @@ ANDROID_API_LEVEL="${ANDROID_API_LEVEL:-27}"
 # Parse args
 PROFILE="release"
 CARGO_PROFILE_FLAG="--release"
-if [[ "${1:-}" == "--debug" ]]; then
-    PROFILE="debug"
-    CARGO_PROFILE_FLAG=""
-fi
+DEPLOY=false
+
+for arg in "$@"; do
+    case "${arg}" in
+        --debug)
+            PROFILE="debug"
+            CARGO_PROFILE_FLAG=""
+            ;;
+        --deploy)
+            DEPLOY=true
+            ;;
+        *)
+            echo "ERROR: Unknown argument: ${arg}" >&2
+            echo "Usage: $0 [--debug] [--deploy]" >&2
+            exit 1
+            ;;
+    esac
+done
 
 TARGET_DIR="${PROJECT_DIR}/target"
 BINARY_DIR="${TARGET_DIR}/${TARGET}/${PROFILE}"
@@ -57,6 +76,7 @@ MODEL_DIR="${TARGET_DIR}/models"
 echo "=== Android Build & Deploy: workspace ==="
 echo "  Target:   ${TARGET}"
 echo "  Profile:  ${PROFILE}"
+echo "  Deploy:   ${DEPLOY}"
 echo "  NDK:      ${ANDROID_NDK_HOME}"
 echo "  SDK:      ${ANDROID_SDK_ROOT}"
 echo ""
@@ -69,13 +89,15 @@ if [[ -z "${ANDROID_SDK_ROOT}" ]]; then
     echo "ERROR: ANDROID_SDK_ROOT (or ANDROID_HOME) is not set." >&2
     exit 1
 fi
-if [[ ! -x "${ADB}" ]]; then
-    echo "ERROR: adb not found at ${ADB}" >&2
-    exit 1
-fi
-if ! "${ADB}" devices | grep -q "device$"; then
-    echo "ERROR: No Android device connected. Connect a device and enable USB debugging." >&2
-    exit 1
+if [[ "${DEPLOY}" == "true" ]]; then
+    if [[ ! -x "${ADB}" ]]; then
+        echo "ERROR: adb not found at ${ADB}" >&2
+        exit 1
+    fi
+    if ! "${ADB}" devices | grep -q "device$"; then
+        echo "ERROR: No Android device connected. Connect a device and enable USB debugging." >&2
+        exit 1
+    fi
 fi
 if [[ ! -d "${NDK_TOOLCHAIN}/bin" ]]; then
     echo "ERROR: NDK toolchain not found at ${NDK_TOOLCHAIN}" >&2
@@ -238,42 +260,63 @@ if [[ "${MODELS_FOUND}" -eq 0 ]]; then
 fi
 
 # ── Step 4: Push to device ─────────────────────────────────────────────────────
-echo ""
-echo ">>> Step 4: Pushing files to device at ${DEVICE_DIR}..."
+if [[ "${DEPLOY}" == "true" ]]; then
+    echo ""
+    echo ">>> Step 4: Pushing files to device at ${DEVICE_DIR}..."
 
-"${ADB}" shell "mkdir -p ${DEVICE_DIR}/bin ${DEVICE_DIR}/lib ${DEVICE_DIR}/models"
+    "${ADB}" shell "mkdir -p ${DEVICE_DIR}/bin ${DEVICE_DIR}/lib ${DEVICE_DIR}/models"
 
-# Push binaries
-if ls "${STAGING_DIR}/bin/"* 1>/dev/null 2>&1; then
-    "${ADB}" push "${STAGING_DIR}/bin/." "${DEVICE_DIR}/bin/"
-    # Make all binaries executable
-    "${ADB}" shell "chmod 755 ${DEVICE_DIR}/bin/*"
-fi
+    # Push binaries
+    if ls "${STAGING_DIR}/bin/"* 1>/dev/null 2>&1; then
+        "${ADB}" push "${STAGING_DIR}/bin/." "${DEVICE_DIR}/bin/"
+        # Make all binaries executable
+        "${ADB}" shell "chmod 755 ${DEVICE_DIR}/bin/*"
+    fi
 
-# Push shared libraries
-if ls "${STAGING_DIR}/lib/"*.so 1>/dev/null 2>&1; then
-    "${ADB}" push "${STAGING_DIR}/lib/." "${DEVICE_DIR}/lib/"
-fi
+    # Push shared libraries
+    if ls "${STAGING_DIR}/lib/"*.so 1>/dev/null 2>&1; then
+        "${ADB}" push "${STAGING_DIR}/lib/." "${DEVICE_DIR}/lib/"
+    fi
 
-# Push model files
-if ls "${STAGING_DIR}/models/"* 1>/dev/null 2>&1; then
-    "${ADB}" push "${STAGING_DIR}/models/." "${DEVICE_DIR}/models/"
+    # Push model files
+    if ls "${STAGING_DIR}/models/"* 1>/dev/null 2>&1; then
+        "${ADB}" push "${STAGING_DIR}/models/." "${DEVICE_DIR}/models/"
+    fi
+else
+    echo ""
+    echo ">>> Step 4: Skipping deploy (pass --deploy to push to device)."
+    echo "    Staged artifacts are in: ${STAGING_DIR}"
 fi
 
 # ── Step 5: Print run instructions ─────────────────────────────────────────────
 echo ""
-echo "=== Deploy complete! ==="
-echo ""
-echo "To run on device:"
-echo ""
-echo "  ${ADB} shell"
-echo "  export PATH=${DEVICE_DIR}/bin:\$PATH"
-echo "  export LD_LIBRARY_PATH=${DEVICE_DIR}/lib"
-echo "  export ORT_DYLIB_PATH=${DEVICE_DIR}/lib/libonnxruntime.so"
-echo "  export RUST_LOG=debug"
-echo "  cognee --help"
-echo ""
-echo "Or as a one-liner (replace <binary> with the target name):"
-echo ""
-echo "  ${ADB} shell \"cd ${DEVICE_DIR} && PATH=${DEVICE_DIR}/bin:\\\$PATH LD_LIBRARY_PATH=${DEVICE_DIR}/lib ORT_DYLIB_PATH=${DEVICE_DIR}/lib/libonnxruntime.so RUST_LOG=debug bin/<binary>\""
+if [[ "${DEPLOY}" == "true" ]]; then
+    echo "=== Build & deploy complete! ==="
+    echo ""
+    echo "To run on device:"
+    echo ""
+    echo "  ${ADB} shell"
+    echo "  export PATH=${DEVICE_DIR}/bin:\$PATH"
+    echo "  export LD_LIBRARY_PATH=${DEVICE_DIR}/lib"
+    echo "  export ORT_DYLIB_PATH=${DEVICE_DIR}/lib/libonnxruntime.so"
+    echo "  export RUST_LOG=debug"
+    echo "  cognee --help"
+    echo ""
+    echo "Or as a one-liner (replace <binary> with the target name):"
+    echo ""
+    echo "  ${ADB} shell \"cd ${DEVICE_DIR} && PATH=${DEVICE_DIR}/bin:\\\$PATH LD_LIBRARY_PATH=${DEVICE_DIR}/lib ORT_DYLIB_PATH=${DEVICE_DIR}/lib/libonnxruntime.so RUST_LOG=debug bin/<binary>\""
+else
+    echo "=== Build complete! ==="
+    echo ""
+    echo "To deploy to a connected device, re-run with --deploy:"
+    echo ""
+    echo "  $0 ${CARGO_PROFILE_FLAG:+--debug }--deploy"
+    echo ""
+    echo "To manually push the staged artifacts:"
+    echo ""
+    echo "  adb push ${STAGING_DIR}/bin/. ${DEVICE_DIR}/bin/"
+    echo "  adb shell chmod 755 ${DEVICE_DIR}/bin/*"
+    echo "  adb push ${STAGING_DIR}/lib/. ${DEVICE_DIR}/lib/"
+    echo "  adb push ${STAGING_DIR}/models/. ${DEVICE_DIR}/models/"
+fi
 echo ""
