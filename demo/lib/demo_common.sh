@@ -146,36 +146,33 @@ Scientists Enrico Fermi, Niels Bohr, and Richard Feynman were associated with pr
 TXT
 }
 
+# expand_sequence_file <template_json> <output_json>
+# Expands shell variables (DEMO_DATA_DIR, DATASET_NAME, etc.) in a JSON
+# template and writes the result to output_json.
+expand_sequence_file() {
+  local template="$1"
+  local output="$2"
+  mkdir -p "$(dirname "$output")"
+  # envsubst only sees exported variables
+  export DEMO_DATA_DIR DATASET_NAME
+  envsubst < "$template" > "$output"
+}
+
 # run_demo_pipeline
-# Runs the full add + cognify + 4 search queries pipeline.
-# Reads:  DEMO_DATA_DIR (paths passed to 'run_cli add'), DATASET_NAME
+# Runs the full add + cognify + 4 search queries pipeline via run-sequence.
+# Reads:  DEMO_DATA_DIR, DATASET_NAME, DEMO_SEQUENCE_TEMPLATE (optional)
 # Calls:  run_cli (must be defined by the sourcing script)
 run_demo_pipeline() {
-  log "➕ Adding local text files"
-  run_cli add \
-    "${DEMO_DATA_DIR}/oppenheimer.txt" \
-    "${DEMO_DATA_DIR}/groves.txt" \
-    "${DEMO_DATA_DIR}/laboratories.txt" \
-    "${DEMO_DATA_DIR}/organizations.txt" \
-    --dataset-name "${DATASET_NAME}"
+  local script_dir
+  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+  local template="${DEMO_SEQUENCE_TEMPLATE:-${script_dir}/sequences/demo_pipeline.json}"
+  local expanded="/tmp/cognee_demo_sequence_$$.json"
 
-  log "🧠 Running cognify"
-  COGNEE_DEBUG_LLM_REQUEST="${COGNEE_DEBUG_LLM_REQUEST:-0}" \
-    run_cli cognify --datasets "${DATASET_NAME}" --chunk-size 700 --llm-max-retries 3 --llm-max-parallel-requests 4
+  log "📋 Expanding sequence template: ${template}"
+  expand_sequence_file "$template" "$expanded"
 
-  log "🔎 Query 1: person-role relation"
-  run_cli search "Who directed the scientific work at Los Alamos?" \
-    --datasets "${DATASET_NAME}" --query-type GRAPH_COMPLETION --top-k 5 --output-format pretty
+  log "🚀 Running demo pipeline via run-sequence"
+  run_cli run-sequence "$expanded"
 
-  log "🔎 Query 2: organizations"
-  run_cli search "Which organizations were involved in the Manhattan Project?" \
-    --datasets "${DATASET_NAME}" --query-type GRAPH_COMPLETION --top-k 5 --output-format pretty
-
-  log "🔎 Query 3: site responsibilities"
-  run_cli search "What were Oak Ridge and Hanford responsible for?" \
-    --datasets "${DATASET_NAME}" --query-type RAG_COMPLETION --top-k 5 --output-format pretty
-
-  log "🔎 Query 4: direct chunk retrieval"
-  run_cli search "Leslie Groves responsibilities" \
-    --datasets "${DATASET_NAME}" --query-type CHUNKS --top-k 5 --output-format pretty
+  rm -f "$expanded"
 }

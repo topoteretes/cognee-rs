@@ -18,6 +18,8 @@ pub enum Commands {
     Search(SearchArgs),
     Delete(DeleteArgs),
     Config(ConfigArgs),
+    #[command(name = "run-sequence")]
+    RunSequence(RunSequenceArgs),
 }
 
 #[derive(Debug, Args)]
@@ -182,4 +184,10 @@ pub struct ConfigUnsetArgs {
 pub struct ConfigResetArgs {
     #[arg(long = "force", short = 'f', default_value_t = false)]
     pub force: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct RunSequenceArgs {
+    /// Path to JSON file containing the command sequence
+    pub sequence_file: String,
 }

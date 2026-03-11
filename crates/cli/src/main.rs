@@ -5,7 +5,7 @@ mod error;
 
 use clap::Parser;
 use cli::{Cli, Commands};
-use commands::{add, cognify, config, delete, search};
+use commands::{add, cognify, config, delete, run_sequence, search};
 use error::{CliError, ExitCode};
 use tracing::error;
 use tracing_subscriber::EnvFilter;
@@ -19,6 +19,7 @@ fn run() -> Result<(), CliError> {
         Commands::Search(args) => search::run(args),
         Commands::Delete(args) => delete::run(args),
         Commands::Config(args) => config::run(args),
+        Commands::RunSequence(args) => run_sequence::run(args),
     }
 }
 
