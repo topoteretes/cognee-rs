@@ -12,15 +12,17 @@
 
 use std::error::Error;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Instant;
 
 use ndarray::Array4;
+use ort::logging::LogLevel;
 use ort::session::{Session, builder::GraphOptimizationLevel};
 use ort::value::{DynValue, Tensor};
 use tokenizers::Tokenizer;
 
 #[cfg(target_os = "android")]
-use ort::execution_providers::{CPUExecutionProvider, NNAPIExecutionProvider};
+use ort::execution_providers::CPUExecutionProvider;
 
 const DEFAULT_MODEL_DIR: &str = "./target/models";
 const QWEN_ONNX_FILENAME: &str = "qwen3-0.6b-q4.onnx";
@@ -41,6 +43,28 @@ const MAX_KV_LEN: usize = 2048; // Max cached tokens for edge devices
 const INTRA_THREADS: usize = 2; // Mobile-friendly thread count
 #[cfg(not(target_os = "android"))]
 const INTRA_THREADS: usize = 8; // Desktop can use more threads
+
+/// Which execution provider configuration to use on Android
+#[cfg(target_os = "android")]
+#[derive(Debug, Clone, Copy)]
+enum AndroidEP {
+    CpuOnly,
+    Xnnpack,
+    ArmNN,
+    ACL,
+}
+
+#[cfg(target_os = "android")]
+impl AndroidEP {
+    fn name(&self) -> &'static str {
+        match self {
+            AndroidEP::CpuOnly => "CPU-only",
+            AndroidEP::Xnnpack => "XNNPACK + CPU",
+            AndroidEP::ArmNN => "ArmNN + CPU",
+            AndroidEP::ACL => "ACL + CPU",
+        }
+    }
+}
 
 fn main() -> Result<(), Box<dyn Error>> {
     tracing_subscriber::fmt::init();
@@ -63,6 +87,9 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     #[cfg(not(feature = "onnx_dynamic_library"))]
     ort::init().commit();
+
+    // Print ORT build info
+    println!("ORT build info: {}", ort::info());
 
     // Check paths exist
     let model_path = model_dir.join(QWEN_ONNX_FILENAME);
@@ -89,57 +116,178 @@ fn main() -> Result<(), Box<dyn Error>> {
         model_size as f64 / (1024.0 * 1024.0)
     );
 
-    // Create edge-optimized LLM generator
-    println!("Loading EdgeLLMGenerator...");
-    let mut generator = EdgeLLMGenerator::new(&model_path, &tokenizer_path)?;
-    println!(
-        "  Tokenizer loaded: {} vocab size",
-        generator.tokenizer.get_vocab_size(true)
-    );
+    // Benchmark text — use only one text for fair comparison across EPs
+    let benchmark_text = "Albert Einstein was born in Ulm, Germany in 1879. He developed the theory of relativity while working at the Swiss Patent Office in Bern.";
 
-    // Print model info
-    println!("  Model inputs:");
-    for input in generator.session.inputs() {
-        println!("    - {}", input.name());
-    }
-    println!("  Model outputs:");
-    for output in generator.session.outputs() {
-        println!("    - {}", output.name());
-    }
+    #[cfg(target_os = "android")]
+    {
+        // Run benchmarks with each execution provider
+        let eps = [
+            AndroidEP::CpuOnly,
+            AndroidEP::Xnnpack,
+            AndroidEP::ArmNN,
+            AndroidEP::ACL,
+        ];
 
-    // Sample texts for fact extraction
-    let texts = [
-        "Albert Einstein was born in Ulm, Germany in 1879. He developed the theory of relativity while working at the Swiss Patent Office in Bern.",
-        "Apple Inc. was founded by Steve Jobs, Steve Wozniak, and Ronald Wayne in Cupertino, California in 1976.",
-        "The Amazon River flows through Brazil and is the largest river by water volume in the world.",
-    ];
+        println!("\n{}", "=".repeat(60));
+        println!("EXECUTION PROVIDER BENCHMARK");
+        println!("Text: \"{}\"", benchmark_text);
+        println!("{}\n", "=".repeat(60));
 
-    println!("\n{}", "=".repeat(60));
-    println!("Extracting facts from {} texts...", texts.len());
-    println!("{}\n", "=".repeat(60));
+        let mut results: Vec<(&str, Option<ExtractionResult>)> = Vec::new();
 
-    for (idx, text) in texts.iter().enumerate() {
-        println!("Text {}: \"{}\"", idx + 1, text);
-        println!("{}", "-".repeat(60));
+        for ep in &eps {
+            println!("\n>>> Benchmarking EP: {} <<<", ep.name());
+            println!("{}", "-".repeat(60));
 
-        match extract_facts(text, &mut generator) {
-            Ok(result) => {
-                println!("Extracted knowledge graph:\n{}", result.json_output);
-                println!(
-                    "Stats: {} input tokens, {} output tokens, {:.2} tokens/sec, {:?} total\n",
-                    result.input_tokens,
-                    result.output_tokens,
-                    result.tokens_per_second(),
-                    result.generation_time
-                );
+            match EdgeLLMGenerator::new_with_ep(&model_path, &tokenizer_path, *ep) {
+                Ok(mut generator) => {
+                    // Print model info on first run
+                    if results.is_empty() {
+                        println!(
+                            "  Tokenizer: {} vocab size",
+                            generator.tokenizer.get_vocab_size(true)
+                        );
+                        println!("  Model inputs:");
+                        for input in generator.session.inputs() {
+                            println!("    - {}", input.name());
+                        }
+                    }
+
+                    match extract_facts(benchmark_text, &mut generator) {
+                        Ok(result) => {
+                            println!(
+                                "  Result: {} input tokens, {} output tokens",
+                                result.input_tokens, result.output_tokens
+                            );
+                            println!(
+                                "  Prefill: {:.2} tok/s ({:.1?} for {} tokens)",
+                                result.prefill_tok_per_sec(),
+                                result.prefill_time,
+                                result.input_tokens
+                            );
+                            println!(
+                                "  Decode:  {:.2} tok/s ({:.1?} for {} tokens)",
+                                result.decode_tok_per_sec(),
+                                result.decode_time,
+                                result.output_tokens.saturating_sub(1)
+                            );
+                            println!(
+                                "  Total:   {:.2} tok/s, {:?}",
+                                result.total_tok_per_sec(),
+                                result.generation_time
+                            );
+                            results.push((ep.name(), Some(result)));
+                        }
+                        Err(e) => {
+                            println!("  ERROR: {}", e);
+                            results.push((ep.name(), None));
+                        }
+                    }
+
+                    // End profiling for this session
+                    match generator.session.end_profiling() {
+                        Ok(f) => println!("  Profile: {}", f),
+                        Err(e) => println!("  (no profile: {})", e),
+                    }
+                }
+                Err(e) => {
+                    println!("  FAILED to create session: {}", e);
+                    results.push((ep.name(), None));
+                }
             }
-            Err(e) => {
-                println!("Error extracting facts: {}\n", e);
+        }
+
+        // Print summary table
+        println!("\n{}", "=".repeat(78));
+        println!("BENCHMARK SUMMARY");
+        println!("{}", "=".repeat(78));
+        println!(
+            "{:<16} {:>8} {:>8} {:>14} {:>14} {:>14}",
+            "EP", "In Tok", "Out Tok", "Prefill tok/s", "Decode tok/s", "Total Time"
+        );
+        println!("{}", "-".repeat(78));
+        for (name, result) in &results {
+            match result {
+                Some(r) => {
+                    println!(
+                        "{:<16} {:>8} {:>8} {:>14.2} {:>14.2} {:>14.2?}",
+                        name,
+                        r.input_tokens,
+                        r.output_tokens,
+                        r.prefill_tok_per_sec(),
+                        r.decode_tok_per_sec(),
+                        r.generation_time
+                    );
+                }
+                None => {
+                    println!("{:<16} {:>8}", name, "FAILED");
+                }
             }
+        }
+        println!("{}", "=".repeat(78));
+    }
+
+    #[cfg(not(target_os = "android"))]
+    {
+        // Desktop: single run with default EPs
+        println!("Loading EdgeLLMGenerator...");
+        let mut generator = EdgeLLMGenerator::new(&model_path, &tokenizer_path)?;
+        println!(
+            "  Tokenizer loaded: {} vocab size",
+            generator.tokenizer.get_vocab_size(true)
+        );
+
+        println!("  Model inputs:");
+        for input in generator.session.inputs() {
+            println!("    - {}", input.name());
+        }
+        println!("  Model outputs:");
+        for output in generator.session.outputs() {
+            println!("    - {}", output.name());
+        }
+
+        let texts = [
+            benchmark_text,
+            "Apple Inc. was founded by Steve Jobs, Steve Wozniak, and Ronald Wayne in Cupertino, California in 1976.",
+            "The Amazon River flows through Brazil and is the largest river by water volume in the world.",
+        ];
+
+        println!("\n{}", "=".repeat(60));
+        println!("Extracting facts from {} texts...", texts.len());
+        println!("{}\n", "=".repeat(60));
+
+        for (idx, text) in texts.iter().enumerate() {
+            println!("Text {}: \"{}\"", idx + 1, text);
+            println!("{}", "-".repeat(60));
+
+            match extract_facts(text, &mut generator) {
+                Ok(result) => {
+                    println!("Extracted knowledge graph:\n{}", result.json_output);
+                    println!(
+                        "Stats: {} in, {} out | prefill {:.2} tok/s ({:.1?}) | decode {:.2} tok/s ({:.1?}) | total {:?}\n",
+                        result.input_tokens,
+                        result.output_tokens,
+                        result.prefill_tok_per_sec(),
+                        result.prefill_time,
+                        result.decode_tok_per_sec(),
+                        result.decode_time,
+                        result.generation_time
+                    );
+                }
+                Err(e) => {
+                    println!("Error extracting facts: {}\n", e);
+                }
+            }
+        }
+
+        match generator.session.end_profiling() {
+            Ok(profile_file) => println!("ORT profiling data written to: {}", profile_file),
+            Err(e) => println!("Could not end profiling: {}", e),
         }
     }
 
-    println!("Fact extraction demo completed!");
+    println!("\nBenchmark completed!");
     Ok(())
 }
 
@@ -149,11 +297,27 @@ struct ExtractionResult {
     input_tokens: usize,
     output_tokens: usize,
     generation_time: std::time::Duration,
+    prefill_time: std::time::Duration,
+    decode_time: std::time::Duration,
 }
 
 impl ExtractionResult {
-    fn tokens_per_second(&self) -> f64 {
+    fn total_tok_per_sec(&self) -> f64 {
         self.output_tokens as f64 / self.generation_time.as_secs_f64()
+    }
+
+    /// Prefill speed: input tokens processed per second (first inference call)
+    fn prefill_tok_per_sec(&self) -> f64 {
+        self.input_tokens as f64 / self.prefill_time.as_secs_f64()
+    }
+
+    /// Decode speed: output tokens generated per second (excluding prefill)
+    fn decode_tok_per_sec(&self) -> f64 {
+        if self.output_tokens <= 1 {
+            return 0.0;
+        }
+        // First decode token is produced during prefill, remaining are pure decode
+        (self.output_tokens - 1) as f64 / self.decode_time.as_secs_f64()
     }
 }
 
@@ -176,7 +340,8 @@ fn extract_facts(
 
     // Generate response
     let start = Instant::now();
-    let (output, output_tokens) = generator.generate(&prompt, MAX_NEW_TOKENS, TEMPERATURE)?;
+    let (output, output_tokens, timings) =
+        generator.generate(&prompt, MAX_NEW_TOKENS, TEMPERATURE)?;
     let generation_time = start.elapsed();
 
     // Extract JSON from the response
@@ -187,6 +352,8 @@ fn extract_facts(
         input_tokens,
         output_tokens,
         generation_time,
+        prefill_time: timings.prefill_time,
+        decode_time: timings.decode_time,
     })
 }
 
@@ -241,6 +408,12 @@ fn empty_kv_tensor() -> Result<DynValue, Box<dyn Error>> {
     Ok(Tensor::from_array(array)?.into())
 }
 
+/// Timing data returned from generate
+struct GenerateTimings {
+    prefill_time: std::time::Duration,
+    decode_time: std::time::Duration,
+}
+
 /// Edge-optimized LLM generator with KV cache and optional NNAPI acceleration
 struct EdgeLLMGenerator {
     session: Session,
@@ -251,7 +424,8 @@ struct EdgeLLMGenerator {
 }
 
 impl EdgeLLMGenerator {
-    /// Create a new generator with NNAPI support on Android, CPU fallback otherwise
+    /// Create a new generator with default EPs (desktop path)
+    #[cfg(not(target_os = "android"))]
     fn new(model_path: &Path, tokenizer_path: &Path) -> Result<Self, Box<dyn Error>> {
         let tokenizer = Tokenizer::from_file(tokenizer_path)
             .map_err(|e| format!("Failed to load tokenizer: {}", e))?;
@@ -271,21 +445,103 @@ impl EdgeLLMGenerator {
         })
     }
 
-    /// Create session with NNAPI on Android, CPU-only elsewhere
+    /// Create a new generator with a specific execution provider (Android benchmark path)
     #[cfg(target_os = "android")]
-    fn create_session(model_path: &Path) -> Result<Session, Box<dyn Error>> {
-        println!("  Configuring NNAPI execution provider with CPU fallback...");
-        let session = Session::builder()?
+    fn new_with_ep(
+        model_path: &Path,
+        tokenizer_path: &Path,
+        ep: AndroidEP,
+    ) -> Result<Self, Box<dyn Error>> {
+        let tokenizer = Tokenizer::from_file(tokenizer_path)
+            .map_err(|e| format!("Failed to load tokenizer: {}", e))?;
+
+        let session = Self::create_session_with_ep(model_path, ep)?;
+
+        let kv_cache = (0..NUM_LAYERS * 2)
+            .map(|_| empty_kv_tensor())
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(Self {
+            session,
+            tokenizer,
+            kv_cache,
+            past_seq_len: 0,
+            max_kv_len: MAX_KV_LEN,
+        })
+    }
+
+    /// Create session with a specific EP on Android for benchmarking
+    #[cfg(target_os = "android")]
+    fn create_session_with_ep(model_path: &Path, ep: AndroidEP) -> Result<Session, Box<dyn Error>> {
+        use core::num::NonZeroUsize;
+
+        println!("  Configuring EP: {:?}...", ep);
+
+        // Only log warnings and errors to reduce noise during benchmarking
+        let ort_logger: Arc<dyn Fn(LogLevel, &str, &str, &str, &str) + Send + Sync> = Arc::new(
+            |level: LogLevel, category: &str, _id: &str, _code_location: &str, message: &str| {
+                if matches!(level, LogLevel::Warning | LogLevel::Error | LogLevel::Fatal) {
+                    println!("  [ORT {:?}] [{}] {}", level, category, message);
+                }
+            },
+        );
+
+        let mut builder = Session::builder()?;
+        builder = builder
             .with_optimization_level(GraphOptimizationLevel::Level3)?
             .with_intra_threads(INTRA_THREADS)?
-            .with_execution_providers([
-                NNAPIExecutionProvider::default()
-                    .with_fp16(true)
-                    .with_disable_cpu(true)
-                    .build(),
-                CPUExecutionProvider::default().build(),
-            ])?
-            .commit_from_file(model_path)?;
+            .with_log_level(LogLevel::Warning)?
+            .with_logger(ort_logger)?
+            .with_profiling(format!(
+                "/data/local/tmp/cognee/ort_profile_{}",
+                match ep {
+                    AndroidEP::CpuOnly => "cpu",
+                    AndroidEP::Xnnpack => "xnnpack",
+                    AndroidEP::ArmNN => "armnn",
+                    AndroidEP::ACL => "acl",
+                }
+            ))?;
+
+        match ep {
+            AndroidEP::CpuOnly => {
+                builder =
+                    builder.with_execution_providers([CPUExecutionProvider::default().build()])?;
+            }
+            AndroidEP::Xnnpack => {
+                builder = builder.with_execution_providers([
+                    ort::ep::XNNPACK::default()
+                        .with_intra_op_num_threads(NonZeroUsize::new(INTRA_THREADS).unwrap())
+                        .build(),
+                    CPUExecutionProvider::default().build(),
+                ])?;
+            }
+            AndroidEP::ArmNN => {
+                builder = builder.with_execution_providers([
+                    ort::ep::ArmNN::default().build(),
+                    CPUExecutionProvider::default().build(),
+                ])?;
+            }
+            AndroidEP::ACL => {
+                builder = builder.with_execution_providers([
+                    ort::ep::ACL::default().with_fast_math(true).build(),
+                    CPUExecutionProvider::default().build(),
+                ])?;
+            }
+        }
+
+        let session = builder.commit_from_file(model_path)?;
+
+        println!("  Session created successfully with EP: {:?}", ep);
+        if let Ok(meta) = session.metadata() {
+            println!(
+                "  Model metadata: producer={:?}, description={:?}, domain={:?}, version={:?}",
+                meta.producer(),
+                meta.description(),
+                meta.domain(),
+                meta.version()
+            );
+        }
+
         Ok(session)
     }
 
@@ -295,9 +551,23 @@ impl EdgeLLMGenerator {
             "  Using CPU execution provider ({} threads)...",
             INTRA_THREADS
         );
+
+        // Custom logger to capture all ORT internal messages (including EP registration)
+        let ort_logger: Arc<dyn Fn(LogLevel, &str, &str, &str, &str) + Send + Sync> = Arc::new(
+            |level: LogLevel, category: &str, _id: &str, code_location: &str, message: &str| {
+                println!(
+                    "  [ORT {:?}] [{}] {} (at {})",
+                    level, category, message, code_location
+                );
+            },
+        );
+
         let session = Session::builder()?
             .with_optimization_level(GraphOptimizationLevel::Level3)?
             .with_intra_threads(INTRA_THREADS)?
+            .with_log_level(LogLevel::Verbose)?
+            .with_log_verbosity(10)?
+            .with_logger(ort_logger)?
             .with_execution_providers([
                 // Prefer TensorRT over CUDA.
                 ort::ep::TensorRT::default().build(),
@@ -307,6 +577,17 @@ impl EdgeLLMGenerator {
                 ort::ep::CPU::default().build(),
             ])?
             .commit_from_file(model_path)?;
+
+        println!("  Session created successfully.");
+        if let Ok(meta) = session.metadata() {
+            println!(
+                "  Model metadata: producer={:?}, description={:?}, domain={:?}, version={:?}",
+                meta.producer(),
+                meta.description(),
+                meta.domain(),
+                meta.version()
+            );
+        }
 
         Ok(session)
     }
@@ -338,7 +619,7 @@ impl EdgeLLMGenerator {
         prompt: &str,
         max_new_tokens: usize,
         temperature: f32,
-    ) -> Result<(String, usize), Box<dyn Error>> {
+    ) -> Result<(String, usize, GenerateTimings), Box<dyn Error>> {
         // Reset cache for each new prompt (stateless generation)
         self.reset_cache()?;
 
@@ -359,6 +640,8 @@ impl EdgeLLMGenerator {
             .unwrap_or(151643) as i64;
 
         let mut current_input_ids = input_ids;
+        let mut prefill_time = std::time::Duration::ZERO;
+        let mut decode_time = std::time::Duration::ZERO;
 
         for step in 0..max_new_tokens {
             // Check memory limits
@@ -401,8 +684,17 @@ impl EdgeLLMGenerator {
                 inputs.push((value_name.into(), cached_value));
             }
 
-            // Run inference
+            // Run inference with timing
+            let step_start = Instant::now();
             let mut outputs = self.session.run(inputs)?;
+            let step_elapsed = step_start.elapsed();
+
+            // step 0 = prefill (processes all input tokens), rest = decode (1 token each)
+            if step == 0 {
+                prefill_time = step_elapsed;
+            } else {
+                decode_time += step_elapsed;
+            }
 
             // Get logits from first output
             let (shape, logits) = outputs[0].try_extract_tensor::<f32>()?;
@@ -452,7 +744,12 @@ impl EdgeLLMGenerator {
             .decode(&generated_tokens, true)
             .map_err(|e| format!("Decoding failed: {}", e))?;
 
-        Ok((output_text, token_count))
+        let timings = GenerateTimings {
+            prefill_time,
+            decode_time,
+        };
+
+        Ok((output_text, token_count, timings))
     }
 }
 

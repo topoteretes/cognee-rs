@@ -21,7 +21,7 @@ EXAMPLE="llm_fact_extraction"
 DEVICE_DIR="/data/local/tmp/cognee"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+PROJECT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 # Android SDK / NDK paths
 ANDROID_NDK_HOME="${ANDROID_NDK_HOME:-${NDK_HOME:-}}"
