@@ -7,7 +7,7 @@
 //!
 //! Run with: cargo test --package cognee-llm --test integration_openai
 
-use cognee_llm::{GenerationOptions, Llm, OpenAIAdapter};
+use cognee_llm::{GenerationOptions, Llm, LlmExt, OpenAIAdapter};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 

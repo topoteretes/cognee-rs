@@ -13,18 +13,17 @@ use crate::error::ChunkingError;
 use crate::text_chunker::chunk_text;
 use crate::token_counter::{TokenCounter, WordCounter};
 
-/// The extract text chunks pipeline. Generic over the storage backend used
-/// to read ingested file content.
+/// The extract text chunks pipeline.
 ///
 /// This pipeline handles the first two stages of cognify:
 /// 1. Document classification (text/* only)
 /// 2. Text chunking
-pub struct ExtractTextChunksPipeline<S: StorageTrait> {
-    storage: Arc<S>,
+pub struct ExtractTextChunksPipeline {
+    storage: Arc<dyn StorageTrait>,
 }
 
-impl<S: StorageTrait> ExtractTextChunksPipeline<S> {
-    pub fn new(storage: Arc<S>) -> Self {
+impl ExtractTextChunksPipeline {
+    pub fn new(storage: Arc<dyn StorageTrait>) -> Self {
         Self { storage }
     }
 

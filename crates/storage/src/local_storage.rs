@@ -66,9 +66,9 @@ impl StorageTrait for LocalStorage {
     }
 
     #[instrument(name = "storage.store_stream", skip(self, reader), fields(file_name))]
-    async fn store_stream<R: AsyncRead + Unpin + Send>(
+    async fn store_stream_dyn(
         &self,
-        reader: &mut R,
+        reader: &mut (dyn AsyncRead + Unpin + Send),
         file_name: &str,
     ) -> Result<String, StorageError> {
         let relative_path = self.generate_storage_path(file_name);

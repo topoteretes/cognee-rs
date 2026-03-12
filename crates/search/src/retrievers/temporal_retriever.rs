@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Datelike, NaiveDate, NaiveDateTime, TimeZone, Utc};
 use cognee_embedding::EmbeddingEngine;
 use cognee_graph::{GraphDBTrait, NodeData};
-use cognee_llm::{GenerationOptions, Llm, Message};
+use cognee_llm::{GenerationOptions, Llm, LlmExt, Message};
 use cognee_vector::VectorDB;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -63,11 +63,11 @@ impl QueryInterval {
     }
 }
 
-pub struct TemporalRetriever<V: VectorDB, E: EmbeddingEngine, G: GraphDBTrait, L: Llm> {
-    vector_db: Arc<V>,
-    embedding_engine: Arc<E>,
-    graph_db: Arc<G>,
-    llm: Arc<L>,
+pub struct TemporalRetriever {
+    vector_db: Arc<dyn VectorDB>,
+    embedding_engine: Arc<dyn EmbeddingEngine>,
+    graph_db: Arc<dyn GraphDBTrait>,
+    llm: Arc<dyn Llm>,
     top_k: usize,
     wide_search_top_k: usize,
     triplet_distance_penalty: f32,
@@ -78,13 +78,13 @@ pub struct TemporalRetriever<V: VectorDB, E: EmbeddingEngine, G: GraphDBTrait, L
     generation_options: Option<GenerationOptions>,
 }
 
-impl<V: VectorDB, E: EmbeddingEngine, G: GraphDBTrait, L: Llm> TemporalRetriever<V, E, G, L> {
+impl TemporalRetriever {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        vector_db: Arc<V>,
-        embedding_engine: Arc<E>,
-        graph_db: Arc<G>,
-        llm: Arc<L>,
+        vector_db: Arc<dyn VectorDB>,
+        embedding_engine: Arc<dyn EmbeddingEngine>,
+        graph_db: Arc<dyn GraphDBTrait>,
+        llm: Arc<dyn Llm>,
         top_k: Option<usize>,
         wide_search_top_k: Option<usize>,
         triplet_distance_penalty: Option<f32>,
@@ -310,9 +310,7 @@ impl<V: VectorDB, E: EmbeddingEngine, G: GraphDBTrait, L: Llm> TemporalRetriever
 }
 
 #[async_trait]
-impl<V: VectorDB, E: EmbeddingEngine, G: GraphDBTrait, L: Llm> SearchRetriever
-    for TemporalRetriever<V, E, G, L>
-{
+impl SearchRetriever for TemporalRetriever {
     fn search_type(&self) -> SearchType {
         SearchType::Temporal
     }
@@ -582,8 +580,7 @@ mod tests {
         GenerationOptions, GenerationResponse, Llm, LlmError, LlmResult, Message, TokenUsage,
     };
     use cognee_vector::{SearchResult, VectorDB, VectorDBResult, VectorPoint};
-    use schemars::JsonSchema;
-    use serde::{Deserialize, Serialize};
+
     use serde_json::{Value, json};
     use uuid::Uuid;
 
@@ -725,11 +722,11 @@ mod tests {
             Ok(false)
         }
 
-        async fn add_node<T: Serialize + Sync>(&self, _node: &T) -> GraphDBResult<()> {
+        async fn add_node_raw(&self, _node: serde_json::Value) -> GraphDBResult<()> {
             Ok(())
         }
 
-        async fn add_nodes<T: Serialize + Sync>(&self, _nodes: &[&T]) -> GraphDBResult<()> {
+        async fn add_nodes_raw(&self, _nodes: Vec<serde_json::Value>) -> GraphDBResult<()> {
             Ok(())
         }
 
@@ -847,15 +844,12 @@ mod tests {
             })
         }
 
-        async fn create_structured_output<T>(
+        async fn create_structured_output_with_messages_raw(
             &self,
-            _text_input: &str,
-            _system_prompt: &str,
+            _messages: Vec<Message>,
+            _json_schema: &serde_json::Value,
             _options: Option<GenerationOptions>,
-        ) -> LlmResult<T>
-        where
-            T: Serialize + for<'de> Deserialize<'de> + JsonSchema + Send,
-        {
+        ) -> LlmResult<serde_json::Value> {
             if self.fail_structured_output {
                 return Err(LlmError::ConfigError("forced failure".to_string()));
             }
@@ -865,21 +859,7 @@ mod tests {
                 .clone()
                 .ok_or_else(|| LlmError::ConfigError("missing interval response".to_string()))?;
 
-            let value = serde_json::to_value(response)
-                .map_err(|error| LlmError::ConfigError(error.to_string()))?;
-
-            serde_json::from_value(value).map_err(|error| LlmError::ConfigError(error.to_string()))
-        }
-
-        async fn create_structured_output_with_messages<T>(
-            &self,
-            _messages: Vec<Message>,
-            _options: Option<GenerationOptions>,
-        ) -> LlmResult<T>
-        where
-            T: Serialize + for<'de> Deserialize<'de> + JsonSchema + Send,
-        {
-            self.create_structured_output("", "", None).await
+            serde_json::to_value(response).map_err(|error| LlmError::ConfigError(error.to_string()))
         }
 
         fn model(&self) -> &str {

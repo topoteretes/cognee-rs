@@ -6,7 +6,7 @@
 
 use std::sync::Arc;
 
-use cognee_llm::{GenerationOptions, Llm};
+use cognee_llm::{GenerationOptions, Llm, LlmExt};
 use cognee_models::DocumentChunk;
 
 use super::models::{SummarizedContent, TextSummary};
@@ -40,11 +40,11 @@ Use synonym words where possible in order to change the wording but keep the mea
 /// println!("Summary: {}", summary.summary);
 /// ```
 #[derive(Clone)]
-pub struct SummaryExtractor<L: Llm> {
-    llm: Arc<L>,
+pub struct SummaryExtractor {
+    llm: Arc<dyn Llm>,
 }
 
-impl<L: Llm + 'static> SummaryExtractor<L> {
+impl SummaryExtractor {
     /// Create a new summary extractor with the given LLM.
     ///
     /// # Arguments
@@ -52,7 +52,7 @@ impl<L: Llm + 'static> SummaryExtractor<L> {
     ///
     /// # Returns
     /// A new SummaryExtractor instance
-    pub fn new(llm: Arc<L>) -> Self {
+    pub fn new(llm: Arc<dyn Llm>) -> Self {
         Self { llm }
     }
 
@@ -87,9 +87,9 @@ impl<L: Llm + 'static> SummaryExtractor<L> {
     ) -> Result<SummarizedContent, CognifyError> {
         let system_prompt = custom_prompt.unwrap_or(DEFAULT_SUMMARY_PROMPT);
 
-        let summarized = self
+        let summarized: SummarizedContent = self
             .llm
-            .create_structured_output::<SummarizedContent>(
+            .create_structured_output(
                 text,
                 system_prompt,
                 Some(GenerationOptions {
@@ -188,7 +188,7 @@ impl<L: Llm + 'static> SummaryExtractor<L> {
     }
 
     /// Get a reference to the underlying LLM.
-    pub fn llm(&self) -> &Arc<L> {
+    pub fn llm(&self) -> &Arc<dyn Llm> {
         &self.llm
     }
 }

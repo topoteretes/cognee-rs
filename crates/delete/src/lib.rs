@@ -69,13 +69,13 @@ struct ResolvedDeleteTargets {
     candidate_data_ids: Vec<Uuid>,
 }
 
-pub struct DeleteService<S: StorageTrait, D: DatabaseTrait> {
-    storage: Arc<S>,
-    database: Arc<D>,
+pub struct DeleteService {
+    storage: Arc<dyn StorageTrait>,
+    database: Arc<dyn DatabaseTrait>,
 }
 
-impl<S: StorageTrait, D: DatabaseTrait> DeleteService<S, D> {
-    pub fn new(storage: Arc<S>, database: Arc<D>) -> Self {
+impl DeleteService {
+    pub fn new(storage: Arc<dyn StorageTrait>, database: Arc<dyn DatabaseTrait>) -> Self {
         Self { storage, database }
     }
 
@@ -503,7 +503,7 @@ mod tests {
     // Test helpers
     // ------------------------------------------------------------------
 
-    fn make_service() -> DeleteService<MockStorage, MockDatabase> {
+    fn make_service() -> DeleteService {
         DeleteService::new(Arc::new(MockStorage::new()), Arc::new(MockDatabase::new()))
     }
 
@@ -547,7 +547,10 @@ mod tests {
     async fn delete_dataset_with_force_removes_dataset_and_data() {
         let storage = Arc::new(MockStorage::new());
         let database = Arc::new(MockDatabase::new());
-        let svc = DeleteService::new(Arc::clone(&storage), Arc::clone(&database));
+        let svc = DeleteService::new(
+            storage.clone() as Arc<dyn StorageTrait>,
+            database.clone() as Arc<dyn DatabaseTrait>,
+        );
 
         let owner = Uuid::new_v4();
         seed_dataset_with_data(&database, &storage, owner, "test_dataset").await;
@@ -581,7 +584,10 @@ mod tests {
     async fn preview_does_not_mutate_database_state() {
         let storage = Arc::new(MockStorage::new());
         let database = Arc::new(MockDatabase::new());
-        let svc = DeleteService::new(Arc::clone(&storage), Arc::clone(&database));
+        let svc = DeleteService::new(
+            storage.clone() as Arc<dyn StorageTrait>,
+            database.clone() as Arc<dyn DatabaseTrait>,
+        );
 
         let owner = Uuid::new_v4();
         seed_dataset_with_data(&database, &storage, owner, "test_dataset").await;
@@ -647,7 +653,10 @@ mod tests {
     async fn shared_data_not_deleted_while_linked_to_another_dataset() {
         let storage = Arc::new(MockStorage::new());
         let database = Arc::new(MockDatabase::new());
-        let svc = DeleteService::new(Arc::clone(&storage), Arc::clone(&database));
+        let svc = DeleteService::new(
+            storage.clone() as Arc<dyn StorageTrait>,
+            database.clone() as Arc<dyn DatabaseTrait>,
+        );
 
         let owner = Uuid::new_v4();
 
@@ -712,7 +721,10 @@ mod tests {
     async fn data_deleted_when_last_dataset_link_removed() {
         let storage = Arc::new(MockStorage::new());
         let database = Arc::new(MockDatabase::new());
-        let svc = DeleteService::new(Arc::clone(&storage), Arc::clone(&database));
+        let svc = DeleteService::new(
+            storage.clone() as Arc<dyn StorageTrait>,
+            database.clone() as Arc<dyn DatabaseTrait>,
+        );
 
         let owner = Uuid::new_v4();
 
@@ -786,7 +798,10 @@ mod tests {
     async fn delete_dataset_with_wrong_owner_returns_validation_error() {
         let storage = Arc::new(MockStorage::new());
         let database = Arc::new(MockDatabase::new());
-        let svc = DeleteService::new(Arc::clone(&storage), Arc::clone(&database));
+        let svc = DeleteService::new(
+            storage.clone() as Arc<dyn StorageTrait>,
+            database.clone() as Arc<dyn DatabaseTrait>,
+        );
 
         let owner_a = Uuid::new_v4();
         let owner_b = Uuid::new_v4();

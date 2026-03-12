@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use serde::Serialize;
+use serde_json::Value;
 
 use crate::{EdgeData, GraphDBError, GraphDBResult, GraphDBTrait, NodeData};
 
@@ -82,11 +82,9 @@ impl GraphDBTrait for MockGraphDB {
         Ok(self.nodes.lock().unwrap().contains_key(node_id))
     }
 
-    async fn add_node<T: Serialize + Sync>(&self, node: &T) -> GraphDBResult<()> {
-        let json = serde_json::to_value(node)?;
-
+    async fn add_node_raw(&self, node: Value) -> GraphDBResult<()> {
         let mut node_data = HashMap::new();
-        if let serde_json::Value::Object(map) = json {
+        if let Value::Object(map) = node {
             for (k, v) in map {
                 node_data.insert(Cow::from(k), v);
             }
@@ -102,9 +100,9 @@ impl GraphDBTrait for MockGraphDB {
         Ok(())
     }
 
-    async fn add_nodes<T: Serialize + Sync>(&self, nodes: &[&T]) -> GraphDBResult<()> {
+    async fn add_nodes_raw(&self, nodes: Vec<Value>) -> GraphDBResult<()> {
         for node in nodes {
-            self.add_node(*node).await?;
+            self.add_node_raw(node).await?;
         }
         Ok(())
     }
@@ -302,6 +300,7 @@ impl GraphDBTrait for MockGraphDB {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::GraphDBTraitExt;
     use cognee_models::Entity;
 
     #[tokio::test]

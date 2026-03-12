@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use cognee_llm::{GenerationOptions, Llm};
+use cognee_llm::{GenerationOptions, Llm, LlmExt};
 use tracing::debug;
 
 use super::models::KnowledgeGraph;
@@ -75,11 +75,11 @@ Extract nodes and edges from the provided text."#;
 /// println!("Extracted {} nodes and {} edges", graph.node_count(), graph.edge_count());
 /// ```
 #[derive(Clone)]
-pub struct FactExtractor<L: Llm> {
-    llm: Arc<L>,
+pub struct FactExtractor {
+    llm: Arc<dyn Llm>,
 }
 
-impl<L: Llm + 'static> FactExtractor<L> {
+impl FactExtractor {
     /// Create a new fact extractor with the given LLM.
     ///
     /// # Arguments
@@ -87,7 +87,7 @@ impl<L: Llm + 'static> FactExtractor<L> {
     ///
     /// # Returns
     /// A new FactExtractor instance
-    pub fn new(llm: Arc<L>) -> Self {
+    pub fn new(llm: Arc<dyn Llm>) -> Self {
         Self { llm }
     }
 
@@ -132,9 +132,9 @@ impl<L: Llm + 'static> FactExtractor<L> {
         debug!("Extracting facts from text: {}", text);
         let system_prompt = custom_prompt.unwrap_or(DEFAULT_GRAPH_PROMPT);
 
-        let graph = self
+        let graph: KnowledgeGraph = self
             .llm
-            .create_structured_output::<KnowledgeGraph>(
+            .create_structured_output(
                 text,
                 system_prompt,
                 Some(GenerationOptions {
@@ -210,7 +210,7 @@ impl<L: Llm + 'static> FactExtractor<L> {
     }
 
     /// Get a reference to the underlying LLM.
-    pub fn llm(&self) -> &Arc<L> {
+    pub fn llm(&self) -> &Arc<dyn Llm> {
         &self.llm
     }
 }
@@ -233,16 +233,12 @@ mod tests {
             unimplemented!()
         }
 
-        async fn create_structured_output<T>(
+        async fn create_structured_output_with_messages_raw(
             &self,
-            _text_input: &str,
-            _system_prompt: &str,
+            _messages: Vec<cognee_llm::Message>,
+            _json_schema: &serde_json::Value,
             _options: Option<GenerationOptions>,
-        ) -> cognee_llm::LlmResult<T>
-        where
-            T: serde::Serialize + serde::de::DeserializeOwned + schemars::JsonSchema + Send,
-        {
-            // Return a mock knowledge graph
+        ) -> cognee_llm::LlmResult<serde_json::Value> {
             let graph = KnowledgeGraph {
                 nodes: vec![super::super::models::Node {
                     id: "test_node".to_string(),
@@ -252,39 +248,11 @@ mod tests {
                 }],
                 edges: vec![],
             };
-
-            // This is a bit of a hack because we can't return a typed T directly
-            // In real tests, you'd use a proper mocking library
-            let json = serde_json::to_string(&graph).unwrap();
-            let result: T = serde_json::from_str(&json).unwrap();
-            Ok(result)
-        }
-
-        async fn create_structured_output_with_messages<T>(
-            &self,
-            _messages: Vec<cognee_llm::Message>,
-            _options: Option<GenerationOptions>,
-        ) -> cognee_llm::LlmResult<T>
-        where
-            T: serde::Serialize + serde::de::DeserializeOwned + schemars::JsonSchema + Send,
-        {
-            unimplemented!()
+            Ok(serde_json::to_value(&graph).unwrap())
         }
 
         fn model(&self) -> &str {
             "mock"
-        }
-
-        fn supports_streaming(&self) -> bool {
-            false
-        }
-
-        fn supports_function_calling(&self) -> bool {
-            false
-        }
-
-        fn max_context_length(&self) -> u32 {
-            4096
         }
     }
 

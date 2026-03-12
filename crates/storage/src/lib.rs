@@ -5,7 +5,7 @@ mod storage_trait;
 mod mock_storage;
 
 pub use local_storage::LocalStorage;
-pub use storage_trait::{StorageError, StorageTrait, StorageWriter};
+pub use storage_trait::{StorageError, StorageExt, StorageTrait, StorageWriter};
 
 #[cfg(feature = "testing")]
 pub use mock_storage::MockStorage;

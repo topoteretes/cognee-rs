@@ -26,4 +26,10 @@ cognee-ontology = { path = "../ontology" }
 cognee-search = { path = "../search" }
 cognee-storage = { path = "../storage" }
 cognee-vector = { path = "../vector" }
+async-trait.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
 uuid.workspace = true

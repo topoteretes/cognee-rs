@@ -12,14 +12,18 @@ const SUMMARIES_DATA_TYPE: &str = "TextSummary";
 const SUMMARIES_FIELD_NAME: &str = "text";
 const DEFAULT_TOP_K: usize = 10;
 
-pub struct SummariesRetriever<V: VectorDB, E: EmbeddingEngine> {
-    vector_db: Arc<V>,
-    embedding_engine: Arc<E>,
+pub struct SummariesRetriever {
+    vector_db: Arc<dyn VectorDB>,
+    embedding_engine: Arc<dyn EmbeddingEngine>,
     top_k: usize,
 }
 
-impl<V: VectorDB, E: EmbeddingEngine> SummariesRetriever<V, E> {
-    pub fn new(vector_db: Arc<V>, embedding_engine: Arc<E>, top_k: Option<usize>) -> Self {
+impl SummariesRetriever {
+    pub fn new(
+        vector_db: Arc<dyn VectorDB>,
+        embedding_engine: Arc<dyn EmbeddingEngine>,
+        top_k: Option<usize>,
+    ) -> Self {
         Self {
             vector_db,
             embedding_engine,
@@ -29,7 +33,7 @@ impl<V: VectorDB, E: EmbeddingEngine> SummariesRetriever<V, E> {
 }
 
 #[async_trait]
-impl<V: VectorDB, E: EmbeddingEngine> SearchRetriever for SummariesRetriever<V, E> {
+impl SearchRetriever for SummariesRetriever {
     fn search_type(&self) -> SearchType {
         SearchType::Summaries
     }

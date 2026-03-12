@@ -4,8 +4,7 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use lbug::{Connection, Database, SystemConfig, Value as LbugValue};
-use serde::Serialize;
-use serde_json::json;
+use serde_json::{Value, json};
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -203,13 +202,8 @@ impl LadybugAdapter {
     /// Extracts core fields (id, name, type) and serializes remaining fields
     /// as a JSON properties string.
     ///
-    fn serialize_to_node_props<T: Serialize>(&self, node: &T) -> GraphDBResult<NodeProperties> {
-        let json_str = serde_json::to_string(&node).map_err(GraphDBError::SerializationError)?;
-
-        let json_value: serde_json::Value =
-            serde_json::from_str(&json_str).map_err(GraphDBError::SerializationError)?;
-
-        let mut props = if let serde_json::Value::Object(map) = json_value {
+    fn serialize_to_node_props(&self, node: &serde_json::Value) -> GraphDBResult<NodeProperties> {
+        let mut props = if let serde_json::Value::Object(map) = node.clone() {
             map
         } else {
             return Err(GraphDBError::DatabaseError(
@@ -441,8 +435,8 @@ impl GraphDBTrait for LadybugAdapter {
         Ok(false)
     }
 
-    async fn add_node<T: Serialize + Sync>(&self, node: &T) -> GraphDBResult<()> {
-        let props = self.serialize_to_node_props(node)?;
+    async fn add_node_raw(&self, node: Value) -> GraphDBResult<()> {
+        let props = self.serialize_to_node_props(&node)?;
         let conn = Connection::new(&self.db).map_err(|e| {
             GraphDBError::ConnectionError(format!("Failed to create connection: {}", e))
         })?;
@@ -474,7 +468,7 @@ impl GraphDBTrait for LadybugAdapter {
         Ok(())
     }
 
-    async fn add_nodes<T: Serialize + Sync>(&self, nodes: &[&T]) -> GraphDBResult<()> {
+    async fn add_nodes_raw(&self, nodes: Vec<Value>) -> GraphDBResult<()> {
         // Batch insert optimization: process nodes in chunks to avoid
         // query size limits and improve performance
         const BATCH_SIZE: usize = 500;
@@ -1139,6 +1133,8 @@ impl GraphDBTrait for LadybugAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::GraphDBTraitExt;
+    use serde::Serialize;
     use serial_test::serial;
     use tempfile::TempDir;
 

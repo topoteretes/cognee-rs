@@ -43,8 +43,8 @@ use crate::fact_extraction::KnowledgeGraph;
 ///     // Create new edge
 /// }
 /// ```
-pub async fn retrieve_existing_edges<G: GraphDBTrait>(
-    graph_db: &G,
+pub async fn retrieve_existing_edges(
+    graph_db: &dyn GraphDBTrait,
     graphs: &[KnowledgeGraph],
 ) -> Result<HashSet<String>, CognifyError> {
     if graphs.is_empty() {

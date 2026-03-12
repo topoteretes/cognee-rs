@@ -8,7 +8,7 @@
 //! Run with: cargo test --package cognee-cognify --test integration_fact_extraction
 
 use cognee_cognify::{FactExtractor, KnowledgeGraph};
-use cognee_llm::{Llm, OpenAIAdapter};
+use cognee_llm::Llm;
 use std::collections::HashMap;
 
 mod test_data;
@@ -92,7 +92,7 @@ async fn test_fact_extraction_batch() {
 
     println!(
         "\n  Effective Prompt (default):\n{}",
-        FactExtractor::<OpenAIAdapter>::default_graph_prompt()
+        FactExtractor::default_graph_prompt()
     );
     println!("\n  Input Text 1 (TechCorp):\n{}", TEST_TEXT_TECHCORP);
     println!("\n  Input Text 2 (Research):\n{}", TEST_TEXT_RESEARCH);

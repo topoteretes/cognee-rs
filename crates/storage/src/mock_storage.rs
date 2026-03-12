@@ -57,9 +57,9 @@ impl StorageTrait for MockStorage {
         Ok(location)
     }
 
-    async fn store_stream<R: AsyncRead + Unpin + Send>(
+    async fn store_stream_dyn(
         &self,
-        reader: &mut R,
+        reader: &mut (dyn AsyncRead + Unpin + Send),
         _file_name: &str,
     ) -> Result<String, StorageError> {
         use tokio::io::AsyncReadExt;

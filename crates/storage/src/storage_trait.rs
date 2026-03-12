@@ -54,11 +54,11 @@ pub trait StorageTrait: Send + Sync {
     /// Store data at a specific path and return the storage location
     async fn store(&self, data: &[u8], file_name: &str) -> Result<String, StorageError>;
 
-    /// Store data from an async reader (streaming) and return the storage location
-    /// This avoids loading the entire content into memory
-    async fn store_stream<R: AsyncRead + Unpin + Send>(
+    /// Store data from an async reader (streaming) and return the storage location.
+    /// This is the object-safe version; for a generic version see [`StorageExt::store_stream`].
+    async fn store_stream_dyn(
         &self,
-        reader: &mut R,
+        reader: &mut (dyn AsyncRead + Unpin + Send),
         file_name: &str,
     ) -> Result<String, StorageError>;
 
@@ -81,3 +81,20 @@ pub trait StorageTrait: Send + Sync {
     /// Initialize storage (create directories, etc.)
     async fn initialize(&self) -> Result<(), StorageError>;
 }
+
+/// Extension trait providing generic convenience methods on top of [`StorageTrait`].
+/// Auto-implemented for all types that implement `StorageTrait`.
+#[async_trait]
+pub trait StorageExt: StorageTrait {
+    /// Store data from a typed async reader (streaming).
+    /// Delegates to [`StorageTrait::store_stream_dyn`].
+    async fn store_stream<R: AsyncRead + Unpin + Send>(
+        &self,
+        reader: &mut R,
+        file_name: &str,
+    ) -> Result<String, StorageError> {
+        self.store_stream_dyn(reader, file_name).await
+    }
+}
+
+impl<T: StorageTrait + ?Sized> StorageExt for T {}

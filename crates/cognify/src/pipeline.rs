@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use cognee_chunking::ExtractTextChunksPipeline;
 use cognee_embedding::engine::EmbeddingEngine;
-use cognee_graph::GraphDBTrait;
+use cognee_graph::{GraphDBTrait, GraphDBTraitExt};
 use cognee_llm::Llm;
 use cognee_models::{Data, DocumentChunk, Embedding};
 use cognee_ontology::OntologyResolver;
@@ -37,20 +37,17 @@ type SharedOntologyResolver = Arc<dyn OntologyResolver>;
 /// The full cognify pipeline. Orchestrates all stages of knowledge graph
 /// extraction and storage.
 ///
-/// Generic over the storage backend, graph database, vector database, and embedding engine.
 /// Note: Vector database and embedding engine are REQUIRED, not optional (matches Python behavior).
-pub struct CognifyPipeline<S: StorageTrait, G: GraphDBTrait, V: VectorDB, E: EmbeddingEngine> {
-    text_chunks_pipeline: ExtractTextChunksPipeline<S>,
-    graph_db: Arc<G>,
-    vector_db: Arc<V>,
-    embedding_engine: Arc<E>,
+pub struct CognifyPipeline {
+    text_chunks_pipeline: ExtractTextChunksPipeline,
+    graph_db: Arc<dyn GraphDBTrait>,
+    vector_db: Arc<dyn VectorDB>,
+    embedding_engine: Arc<dyn EmbeddingEngine>,
     config: CognifyConfig,
     ontology_resolver: Option<SharedOntologyResolver>,
 }
 
-impl<S: StorageTrait, G: GraphDBTrait, V: VectorDB, E: EmbeddingEngine>
-    CognifyPipeline<S, G, V, E>
-{
+impl CognifyPipeline {
     /// Create a new CognifyPipeline.
     ///
     /// Note: Embeddings are REQUIRED (not optional) to match Python implementation.
@@ -64,10 +61,10 @@ impl<S: StorageTrait, G: GraphDBTrait, V: VectorDB, E: EmbeddingEngine>
     /// * `config` - Configuration for the pipeline
     /// * `ontology_resolver` - Optional ontology resolver (None or custom implementation)
     pub fn new(
-        storage: Arc<S>,
-        graph_db: Arc<G>,
-        vector_db: Arc<V>,
-        embedding_engine: Arc<E>,
+        storage: Arc<dyn StorageTrait>,
+        graph_db: Arc<dyn GraphDBTrait>,
+        vector_db: Arc<dyn VectorDB>,
+        embedding_engine: Arc<dyn EmbeddingEngine>,
         config: CognifyConfig,
         ontology_resolver: Option<SharedOntologyResolver>,
     ) -> Self {
@@ -142,11 +139,11 @@ impl<S: StorageTrait, G: GraphDBTrait, V: VectorDB, E: EmbeddingEngine>
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn cognify<L: Llm + Clone + 'static>(
+    pub async fn cognify(
         &self,
         data_items: Vec<Data>,
         dataset_id: Uuid,
-        llm: Arc<L>,
+        llm: Arc<dyn Llm>,
     ) -> Result<CognifyResult, CognifyError> {
         info!(
             "Starting cognify pipeline with config: chunks_per_batch={}, max_chunk_size={}",
@@ -338,7 +335,7 @@ impl<S: StorageTrait, G: GraphDBTrait, V: VectorDB, E: EmbeddingEngine>
         chunks: &[DocumentChunk],
         entities: &[GraphNodePair],
         summaries: &[TextSummary],
-        engine: Arc<E>,
+        engine: Arc<dyn EmbeddingEngine>,
     ) -> Result<Vec<Embedding>, CognifyError> {
         let mut embeddings = Vec::new();
 
@@ -415,8 +412,8 @@ impl<S: StorageTrait, G: GraphDBTrait, V: VectorDB, E: EmbeddingEngine>
         summaries: &[TextSummary],
         edges: &[GraphEdgePair],
         dataset_id: Uuid,
-        engine: Arc<E>,
-        vector_db: Arc<V>,
+        engine: Arc<dyn EmbeddingEngine>,
+        vector_db: Arc<dyn VectorDB>,
     ) -> Result<IndexedFieldsStats, CognifyError> {
         let mut stats = IndexedFieldsStats::default();
         let dimension = engine.dimension();

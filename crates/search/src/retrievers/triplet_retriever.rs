@@ -16,10 +16,10 @@ const TRIPLET_PRIMARY_FIELD: &str = "text";
 const TRIPLET_FALLBACK_FIELD: &str = "embeddable_text";
 const DEFAULT_TOP_K: usize = 10;
 
-pub struct TripletRetriever<V: VectorDB, E: EmbeddingEngine, L: Llm> {
-    vector_db: Arc<V>,
-    embedding_engine: Arc<E>,
-    llm: Arc<L>,
+pub struct TripletRetriever {
+    vector_db: Arc<dyn VectorDB>,
+    embedding_engine: Arc<dyn EmbeddingEngine>,
+    llm: Arc<dyn Llm>,
     top_k: usize,
     system_prompt: Option<String>,
     system_prompt_path: Option<String>,
@@ -27,12 +27,12 @@ pub struct TripletRetriever<V: VectorDB, E: EmbeddingEngine, L: Llm> {
     generation_options: Option<GenerationOptions>,
 }
 
-impl<V: VectorDB, E: EmbeddingEngine, L: Llm> TripletRetriever<V, E, L> {
+impl TripletRetriever {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        vector_db: Arc<V>,
-        embedding_engine: Arc<E>,
-        llm: Arc<L>,
+        vector_db: Arc<dyn VectorDB>,
+        embedding_engine: Arc<dyn EmbeddingEngine>,
+        llm: Arc<dyn Llm>,
         top_k: Option<usize>,
         system_prompt: Option<String>,
         system_prompt_path: Option<String>,
@@ -92,7 +92,7 @@ impl<V: VectorDB, E: EmbeddingEngine, L: Llm> TripletRetriever<V, E, L> {
 }
 
 #[async_trait]
-impl<V: VectorDB, E: EmbeddingEngine, L: Llm> SearchRetriever for TripletRetriever<V, E, L> {
+impl SearchRetriever for TripletRetriever {
     fn search_type(&self) -> SearchType {
         SearchType::TripletCompletion
     }
@@ -164,8 +164,7 @@ mod tests {
         GenerationOptions, GenerationResponse, Llm, LlmError, LlmResult, Message, TokenUsage,
     };
     use cognee_vector::{SearchResult, VectorDB, VectorDBResult, VectorPoint};
-    use schemars::JsonSchema;
-    use serde::{Deserialize, Serialize};
+
     use serde_json::json;
     use uuid::Uuid;
 
@@ -303,28 +302,12 @@ mod tests {
             })
         }
 
-        async fn create_structured_output<T>(
-            &self,
-            _text_input: &str,
-            _system_prompt: &str,
-            _options: Option<GenerationOptions>,
-        ) -> LlmResult<T>
-        where
-            T: Serialize + for<'de> Deserialize<'de> + JsonSchema + Send,
-        {
-            Err(LlmError::ConfigError(
-                "not implemented for this unit test".to_string(),
-            ))
-        }
-
-        async fn create_structured_output_with_messages<T>(
+        async fn create_structured_output_with_messages_raw(
             &self,
             _messages: Vec<Message>,
+            _json_schema: &serde_json::Value,
             _options: Option<GenerationOptions>,
-        ) -> LlmResult<T>
-        where
-            T: Serialize + for<'de> Deserialize<'de> + JsonSchema + Send,
-        {
+        ) -> LlmResult<serde_json::Value> {
             Err(LlmError::ConfigError(
                 "not implemented for this unit test".to_string(),
             ))
@@ -389,7 +372,7 @@ mod tests {
         });
 
         let retriever = TripletRetriever::new(
-            Arc::clone(&vector_db),
+            Arc::clone(&vector_db) as Arc<dyn VectorDB>,
             Arc::new(TestEmbeddingEngine),
             Arc::new(TestLlm {
                 response_text: "unused".to_string(),
@@ -433,7 +416,7 @@ mod tests {
                 searched_fields: Mutex::new(vec![]),
             }),
             Arc::new(TestEmbeddingEngine),
-            Arc::clone(&llm),
+            Arc::clone(&llm) as Arc<dyn Llm>,
             Some(2),
             None,
             None,

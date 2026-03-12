@@ -1,7 +1,7 @@
 use assert_cmd::Command;
 use chrono::{DateTime, Utc};
 use cognee_lib::database::{ArtifactReference, DatabaseTrait, SqliteDatabase};
-use cognee_lib::graph::{GraphDBTrait, LadybugAdapter};
+use cognee_lib::graph::{GraphDBTrait, GraphDBTraitExt, LadybugAdapter};
 use cognee_lib::vector::{QdrantAdapter, VectorDB, VectorPoint};
 use predicates::prelude::*;
 use std::path::Path;

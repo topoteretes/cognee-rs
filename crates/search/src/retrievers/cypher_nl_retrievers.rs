@@ -46,18 +46,18 @@ fn context_to_rows(context: SearchContext) -> Vec<Vec<Value>> {
         .collect()
 }
 
-pub struct CypherSearchRetriever<G: GraphDBTrait> {
-    graph_db: Arc<G>,
+pub struct CypherSearchRetriever {
+    graph_db: Arc<dyn GraphDBTrait>,
 }
 
-impl<G: GraphDBTrait> CypherSearchRetriever<G> {
-    pub fn new(graph_db: Arc<G>) -> Self {
+impl CypherSearchRetriever {
+    pub fn new(graph_db: Arc<dyn GraphDBTrait>) -> Self {
         Self { graph_db }
     }
 }
 
 #[async_trait]
-impl<G: GraphDBTrait> SearchRetriever for CypherSearchRetriever<G> {
+impl SearchRetriever for CypherSearchRetriever {
     fn search_type(&self) -> SearchType {
         SearchType::Cypher
     }
@@ -90,17 +90,17 @@ impl<G: GraphDBTrait> SearchRetriever for CypherSearchRetriever<G> {
     }
 }
 
-pub struct NaturalLanguageRetriever<G: GraphDBTrait, L: Llm> {
-    graph_db: Arc<G>,
-    llm: Arc<L>,
+pub struct NaturalLanguageRetriever {
+    graph_db: Arc<dyn GraphDBTrait>,
+    llm: Arc<dyn Llm>,
     max_attempts: usize,
     generation_options: Option<GenerationOptions>,
 }
 
-impl<G: GraphDBTrait, L: Llm> NaturalLanguageRetriever<G, L> {
+impl NaturalLanguageRetriever {
     pub fn new(
-        graph_db: Arc<G>,
-        llm: Arc<L>,
+        graph_db: Arc<dyn GraphDBTrait>,
+        llm: Arc<dyn Llm>,
         max_attempts: Option<usize>,
         generation_options: Option<GenerationOptions>,
     ) -> Self {
@@ -190,7 +190,7 @@ impl<G: GraphDBTrait, L: Llm> NaturalLanguageRetriever<G, L> {
 }
 
 #[async_trait]
-impl<G: GraphDBTrait, L: Llm> SearchRetriever for NaturalLanguageRetriever<G, L> {
+impl SearchRetriever for NaturalLanguageRetriever {
     fn search_type(&self) -> SearchType {
         SearchType::NaturalLanguage
     }
@@ -234,8 +234,7 @@ mod tests {
     use cognee_llm::{
         GenerationOptions, GenerationResponse, Llm, LlmError, LlmResult, Message, TokenUsage,
     };
-    use schemars::JsonSchema;
-    use serde::{Deserialize, Serialize};
+
     use serde_json::json;
 
     use super::{CypherSearchRetriever, NaturalLanguageRetriever};
@@ -275,11 +274,11 @@ mod tests {
             Ok(false)
         }
 
-        async fn add_node<T: Serialize + Sync>(&self, _node: &T) -> GraphDBResult<()> {
+        async fn add_node_raw(&self, _node: serde_json::Value) -> GraphDBResult<()> {
             Ok(())
         }
 
-        async fn add_nodes<T: Serialize + Sync>(&self, _nodes: &[&T]) -> GraphDBResult<()> {
+        async fn add_nodes_raw(&self, _nodes: Vec<serde_json::Value>) -> GraphDBResult<()> {
             Ok(())
         }
 
@@ -415,26 +414,12 @@ mod tests {
             })
         }
 
-        async fn create_structured_output<T>(
-            &self,
-            _text_input: &str,
-            _system_prompt: &str,
-            _options: Option<GenerationOptions>,
-        ) -> LlmResult<T>
-        where
-            T: Serialize + for<'de> Deserialize<'de> + JsonSchema + Send,
-        {
-            Err(LlmError::ConfigError("not implemented".to_string()))
-        }
-
-        async fn create_structured_output_with_messages<T>(
+        async fn create_structured_output_with_messages_raw(
             &self,
             _messages: Vec<Message>,
+            _json_schema: &serde_json::Value,
             _options: Option<GenerationOptions>,
-        ) -> LlmResult<T>
-        where
-            T: Serialize + for<'de> Deserialize<'de> + JsonSchema + Send,
-        {
+        ) -> LlmResult<serde_json::Value> {
             Err(LlmError::ConfigError("not implemented".to_string()))
         }
 

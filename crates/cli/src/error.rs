@@ -1,3 +1,4 @@
+use cognee_lib::ComponentError;
 use thiserror::Error;
 
 #[repr(u8)]
@@ -25,8 +26,8 @@ impl CliError {
     }
 }
 
-impl From<anyhow::Error> for CliError {
-    fn from(value: anyhow::Error) -> Self {
+impl From<ComponentError> for CliError {
+    fn from(value: ComponentError) -> Self {
         CliError::Runtime(value.to_string())
     }
 }

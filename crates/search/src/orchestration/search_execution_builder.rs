@@ -23,19 +23,13 @@ pub struct SearchBuilder {
 }
 
 impl SearchBuilder {
-    pub fn new<V, E, G, L>(
-        vector_db: Arc<V>,
-        embedding_engine: Arc<E>,
-        graph_db: Arc<G>,
-        llm: Arc<L>,
+    pub fn new(
+        vector_db: Arc<dyn VectorDB>,
+        embedding_engine: Arc<dyn EmbeddingEngine>,
+        graph_db: Arc<dyn GraphDBTrait>,
+        llm: Arc<dyn Llm>,
         database: Arc<dyn DatabaseTrait>,
-    ) -> Self
-    where
-        V: VectorDB + 'static,
-        E: EmbeddingEngine + 'static,
-        G: GraphDBTrait + 'static,
-        L: Llm + 'static,
-    {
+    ) -> Self {
         Self {
             retrievers: HashMap::new(),
             database,
@@ -48,19 +42,13 @@ impl SearchBuilder {
         self
     }
 
-    fn register_standard_retrievers<V, E, G, L>(
+    fn register_standard_retrievers(
         mut self,
-        vector_db: Arc<V>,
-        embedding_engine: Arc<E>,
-        graph_db: Arc<G>,
-        llm: Arc<L>,
-    ) -> Self
-    where
-        V: VectorDB + 'static,
-        E: EmbeddingEngine + 'static,
-        G: GraphDBTrait + 'static,
-        L: Llm + 'static,
-    {
+        vector_db: Arc<dyn VectorDB>,
+        embedding_engine: Arc<dyn EmbeddingEngine>,
+        graph_db: Arc<dyn GraphDBTrait>,
+        llm: Arc<dyn Llm>,
+    ) -> Self {
         self.retrievers.insert(
             SearchType::Chunks,
             Arc::new(ChunksRetriever::new(
@@ -275,8 +263,7 @@ mod tests {
     };
     use cognee_models::{Data, Dataset};
     use cognee_vector::{SearchResult, VectorDB, VectorDBResult, VectorPoint};
-    use schemars::JsonSchema;
-    use serde::{Deserialize, Serialize};
+
     use serde_json::json;
     use std::borrow::Cow;
     use uuid::Uuid;
@@ -391,11 +378,11 @@ mod tests {
             Ok(false)
         }
 
-        async fn add_node<T: Serialize + Sync>(&self, _node: &T) -> GraphDBResult<()> {
+        async fn add_node_raw(&self, _node: serde_json::Value) -> GraphDBResult<()> {
             Ok(())
         }
 
-        async fn add_nodes<T: Serialize + Sync>(&self, _nodes: &[&T]) -> GraphDBResult<()> {
+        async fn add_nodes_raw(&self, _nodes: Vec<serde_json::Value>) -> GraphDBResult<()> {
             Ok(())
         }
 
@@ -511,26 +498,12 @@ mod tests {
             })
         }
 
-        async fn create_structured_output<T>(
-            &self,
-            _text_input: &str,
-            _system_prompt: &str,
-            _options: Option<GenerationOptions>,
-        ) -> LlmResult<T>
-        where
-            T: Serialize + for<'de> Deserialize<'de> + JsonSchema + Send,
-        {
-            Err(LlmError::ConfigError("not used in this test".to_string()))
-        }
-
-        async fn create_structured_output_with_messages<T>(
+        async fn create_structured_output_with_messages_raw(
             &self,
             _messages: Vec<Message>,
+            _json_schema: &serde_json::Value,
             _options: Option<GenerationOptions>,
-        ) -> LlmResult<T>
-        where
-            T: Serialize + for<'de> Deserialize<'de> + JsonSchema + Send,
-        {
+        ) -> LlmResult<serde_json::Value> {
             Err(LlmError::ConfigError("not used in this test".to_string()))
         }
 

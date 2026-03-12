@@ -15,17 +15,17 @@ use std::sync::Arc;
 use cognee_cognify::{CognifyConfig, CognifyPipeline};
 use cognee_database::{DatabaseTrait, SqliteDatabase};
 use cognee_delete::{DeleteMode, DeleteRequest, DeleteScope, DeleteService};
-use cognee_embedding::{config::EmbeddingConfig, onnx::OnnxEmbeddingEngine};
+use cognee_embedding::{EmbeddingEngine, config::EmbeddingConfig, onnx::OnnxEmbeddingEngine};
 use cognee_graph::{GraphDBTrait, LadybugAdapter};
 use cognee_ingestion::IngestPipeline;
-use cognee_llm::OpenAIAdapter;
+use cognee_llm::{Llm, OpenAIAdapter};
 use cognee_models::DataInput;
 use cognee_search::{
     SearchBuilder, SearchRequest, SearchType,
     types::{SearchOutput, SearchResponse},
 };
 use cognee_storage::{LocalStorage, StorageTrait};
-use cognee_vector::QdrantAdapter;
+use cognee_vector::{QdrantAdapter, VectorDB};
 use tempfile::TempDir;
 use uuid::Uuid;
 
@@ -89,14 +89,15 @@ async fn test_default_backend_add_cognify_search_delete() {
     let temp_dir = TempDir::new().expect("temp dir");
 
     // Local file storage
-    let storage = Arc::new(LocalStorage::new(temp_dir.path().join("storage")));
+    let storage: Arc<dyn StorageTrait> =
+        Arc::new(LocalStorage::new(temp_dir.path().join("storage")));
     storage.initialize().await.expect("storage.initialize");
 
     // SQLite metadata database (file must exist before sqlx opens it)
     let db_path = temp_dir.path().join("cognee.db");
     std::fs::File::create(&db_path).expect("create sqlite db file");
     let db_url = format!("sqlite://{}", db_path.display());
-    let database = Arc::new(
+    let database: Arc<dyn DatabaseTrait> = Arc::new(
         SqliteDatabase::new(&db_url)
             .await
             .expect("SqliteDatabase::new"),
@@ -105,7 +106,7 @@ async fn test_default_backend_add_cognify_search_delete() {
 
     // Ladybug graph database
     let graph_path = temp_dir.path().join("graph").to_string_lossy().to_string();
-    let graph_db = Arc::new(
+    let graph_db: Arc<dyn GraphDBTrait> = Arc::new(
         LadybugAdapter::new(&graph_path)
             .await
             .expect("LadybugAdapter::new"),
@@ -113,24 +114,26 @@ async fn test_default_backend_add_cognify_search_delete() {
     graph_db.initialize().await.expect("graph_db.initialize");
 
     // Qdrant vector database (BGE-Small dimension = 384)
-    let vector_db = Arc::new(QdrantAdapter::new(temp_dir.path().join("qdrant"), 384));
+    let vector_db: Arc<dyn VectorDB> =
+        Arc::new(QdrantAdapter::new(temp_dir.path().join("qdrant"), 384));
 
     // ONNX embedding engine
     let model_dir = get_embedding_model_dir();
-    let embedding_engine = match OnnxEmbeddingEngine::new(EmbeddingConfig::bge_small(&model_dir)) {
-        Ok(engine) => Arc::new(engine),
-        Err(e) => {
-            eprintln!("⚠️  Skipping test: failed to load embedding model: {}", e);
-            eprintln!(
-                "   Ensure model is at {}/BGE-Small-v1.5-model_quantized.onnx",
-                model_dir
-            );
-            return;
-        }
-    };
+    let embedding_engine: Arc<dyn EmbeddingEngine> =
+        match OnnxEmbeddingEngine::new(EmbeddingConfig::bge_small(&model_dir)) {
+            Ok(engine) => Arc::new(engine),
+            Err(e) => {
+                eprintln!("⚠️  Skipping test: failed to load embedding model: {}", e);
+                eprintln!(
+                    "   Ensure model is at {}/BGE-Small-v1.5-model_quantized.onnx",
+                    model_dir
+                );
+                return;
+            }
+        };
 
     // OpenAI-compatible LLM
-    let llm = Arc::new(
+    let llm: Arc<dyn Llm> = Arc::new(
         OpenAIAdapter::new(
             require_env("OPENAI_MODEL"),
             require_env("OPENAI_TOKEN"),
@@ -167,10 +170,10 @@ async fn test_default_backend_add_cognify_search_delete() {
         .with_triplet_embeddings(false);
 
     let cognify = CognifyPipeline::new(
-        Arc::clone(&storage),
-        Arc::clone(&graph_db),
-        Arc::clone(&vector_db),
-        Arc::clone(&embedding_engine),
+        storage.clone() as Arc<dyn StorageTrait>,
+        graph_db.clone() as Arc<dyn GraphDBTrait>,
+        vector_db.clone() as Arc<dyn VectorDB>,
+        embedding_engine.clone() as Arc<dyn EmbeddingEngine>,
         config,
         None,
     );
@@ -182,7 +185,7 @@ async fn test_default_backend_add_cognify_search_delete() {
         .expect("dataset should exist after ingest");
 
     let result = match cognify
-        .cognify(data_items, dataset.id, Arc::clone(&llm))
+        .cognify(data_items, dataset.id, llm.clone() as Arc<dyn Llm>)
         .await
     {
         Ok(r) => r,
@@ -214,14 +217,12 @@ async fn test_default_backend_add_cognify_search_delete() {
     );
 
     // ── Steps 7–9: Search ────────────────────────────────────────────────────
-    // Use method-call clone to allow unsized coercion to Arc<dyn DatabaseTrait>
-    let db_for_search: Arc<dyn DatabaseTrait> = database.clone();
     let orchestrator = SearchBuilder::new(
-        Arc::clone(&vector_db),
-        Arc::clone(&embedding_engine),
-        Arc::clone(&graph_db),
-        Arc::clone(&llm),
-        db_for_search,
+        vector_db.clone() as Arc<dyn VectorDB>,
+        embedding_engine.clone() as Arc<dyn EmbeddingEngine>,
+        graph_db.clone() as Arc<dyn GraphDBTrait>,
+        llm.clone() as Arc<dyn Llm>,
+        database.clone() as Arc<dyn DatabaseTrait>,
     )
     .build();
 

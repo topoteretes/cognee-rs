@@ -9,7 +9,7 @@
 //! cargo run --example openai_example
 //! ```
 
-use cognee_llm::{GenerationOptions, Llm, Message, OpenAIAdapter};
+use cognee_llm::{GenerationOptions, Llm, LlmExt, Message, OpenAIAdapter};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 

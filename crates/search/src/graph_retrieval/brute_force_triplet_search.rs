@@ -46,11 +46,11 @@ pub struct RankedGraphEdge {
     pub dataset_id: Option<String>,
 }
 
-pub async fn brute_force_triplet_search<V: VectorDB, E: EmbeddingEngine, G: GraphDBTrait>(
+pub async fn brute_force_triplet_search(
     query: &str,
-    vector_db: &V,
-    embedding_engine: &E,
-    graph_db: &G,
+    vector_db: &dyn VectorDB,
+    embedding_engine: &dyn EmbeddingEngine,
+    graph_db: &dyn GraphDBTrait,
     config: &GraphRetrievalConfig,
 ) -> Result<Vec<RankedGraphEdge>, SearchError> {
     let query_vectors = embedding_engine.embed(&[query]).await?;

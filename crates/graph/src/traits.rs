@@ -4,6 +4,7 @@
 
 use async_trait::async_trait;
 use serde::Serialize;
+use serde_json::Value;
 use std::borrow::Cow;
 use std::collections::HashMap;
 
@@ -77,19 +78,13 @@ pub trait GraphDBTrait: Send + Sync {
     ///
     async fn has_node(&self, node_id: &str) -> GraphDBResult<bool>;
 
-    /// Add a single node to the graph.
-    ///
-    /// # Arguments
-    /// * `node` - Serializable object (Entity, EntityType, etc.)
-    ///
-    async fn add_node<T: Serialize + Sync>(&self, node: &T) -> GraphDBResult<()>;
+    /// Add a single node (type-erased). Takes a pre-serialized JSON value.
+    /// Prefer [`GraphDBTraitExt::add_node`] for typed access.
+    async fn add_node_raw(&self, node: Value) -> GraphDBResult<()>;
 
-    /// Add multiple nodes in a batch operation.
-    ///
-    /// # Arguments
-    /// * `nodes` - Vector of serializable objects
-    ///
-    async fn add_nodes<T: Serialize + Sync>(&self, nodes: &[&T]) -> GraphDBResult<()>;
+    /// Add multiple nodes (type-erased). Takes pre-serialized JSON values.
+    /// Prefer [`GraphDBTraitExt::add_nodes`] for typed access.
+    async fn add_nodes_raw(&self, nodes: Vec<Value>) -> GraphDBResult<()>;
 
     /// Delete a node by ID.
     ///
@@ -218,3 +213,30 @@ pub trait GraphDBTrait: Send + Sync {
         node_names: &[String],
     ) -> GraphDBResult<(Vec<GraphNode>, Vec<EdgeData>)>;
 }
+
+/// Extension trait providing generic convenience methods on top of [`GraphDBTrait`].
+/// Auto-implemented for all types that implement `GraphDBTrait`.
+#[async_trait]
+pub trait GraphDBTraitExt: GraphDBTrait {
+    /// Add a single node to the graph.
+    async fn add_node<T: Serialize + Sync>(&self, node: &T) -> GraphDBResult<()> {
+        let value = serde_json::to_value(node).map_err(|e| {
+            crate::GraphDBError::QueryError(format!("Failed to serialize node: {e}"))
+        })?;
+        self.add_node_raw(value).await
+    }
+
+    /// Add multiple nodes in a batch operation.
+    async fn add_nodes<T: Serialize + Sync>(&self, nodes: &[&T]) -> GraphDBResult<()> {
+        let values: Vec<Value> = nodes
+            .iter()
+            .map(serde_json::to_value)
+            .collect::<Result<_, _>>()
+            .map_err(|e| {
+                crate::GraphDBError::QueryError(format!("Failed to serialize nodes: {e}"))
+            })?;
+        self.add_nodes_raw(values).await
+    }
+}
+
+impl<T: GraphDBTrait + ?Sized> GraphDBTraitExt for T {}

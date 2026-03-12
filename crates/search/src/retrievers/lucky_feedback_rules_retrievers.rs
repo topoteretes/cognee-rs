@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use cognee_graph::GraphDBTrait;
-use cognee_llm::{GenerationOptions, Llm, Message};
+use cognee_graph::{GraphDBTrait, GraphDBTraitExt};
+use cognee_llm::{GenerationOptions, Llm, LlmExt, Message};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -40,16 +40,16 @@ struct FeedbackNode {
     created_at: String,
 }
 
-pub struct FeelingLuckyRetriever<L: Llm> {
-    llm: Arc<L>,
+pub struct FeelingLuckyRetriever {
+    llm: Arc<dyn Llm>,
     retrievers: HashMap<SearchType, SearchRetrieverRef>,
     fallback_search_type: SearchType,
     generation_options: Option<GenerationOptions>,
 }
 
-impl<L: Llm> FeelingLuckyRetriever<L> {
+impl FeelingLuckyRetriever {
     pub fn new(
-        llm: Arc<L>,
+        llm: Arc<dyn Llm>,
         retrievers: HashMap<SearchType, SearchRetrieverRef>,
         fallback_search_type: Option<SearchType>,
         generation_options: Option<GenerationOptions>,
@@ -119,7 +119,7 @@ impl<L: Llm> FeelingLuckyRetriever<L> {
 }
 
 #[async_trait]
-impl<L: Llm> SearchRetriever for FeelingLuckyRetriever<L> {
+impl SearchRetriever for FeelingLuckyRetriever {
     fn search_type(&self) -> SearchType {
         SearchType::FeelingLucky
     }
@@ -141,17 +141,17 @@ impl<L: Llm> SearchRetriever for FeelingLuckyRetriever<L> {
     }
 }
 
-pub struct FeedbackRetriever<G: GraphDBTrait, L: Llm> {
-    graph_db: Arc<G>,
-    llm: Arc<L>,
+pub struct FeedbackRetriever {
+    graph_db: Arc<dyn GraphDBTrait>,
+    llm: Arc<dyn Llm>,
     last_k: usize,
     generation_options: Option<GenerationOptions>,
 }
 
-impl<G: GraphDBTrait, L: Llm> FeedbackRetriever<G, L> {
+impl FeedbackRetriever {
     pub fn new(
-        graph_db: Arc<G>,
-        llm: Arc<L>,
+        graph_db: Arc<dyn GraphDBTrait>,
+        llm: Arc<dyn Llm>,
         last_k: Option<usize>,
         generation_options: Option<GenerationOptions>,
     ) -> Self {
@@ -164,7 +164,8 @@ impl<G: GraphDBTrait, L: Llm> FeedbackRetriever<G, L> {
     }
 
     async fn extract_feedback(&self, feedback_text: &str) -> Result<FeedbackAnalysis, SearchError> {
-        self.llm
+        let analysis: FeedbackAnalysis = self
+            .llm
             .create_structured_output_with_messages(
                 vec![
                     Message::system(DEFAULT_FEEDBACK_PROMPT.to_string()),
@@ -173,7 +174,8 @@ impl<G: GraphDBTrait, L: Llm> FeedbackRetriever<G, L> {
                 self.generation_options.clone(),
             )
             .await
-            .map_err(SearchError::from)
+            .map_err(SearchError::from)?;
+        Ok(analysis)
     }
 
     fn is_interaction_node(node_data: &HashMap<Cow<'static, str>, Value>) -> bool {
@@ -263,7 +265,7 @@ impl<G: GraphDBTrait, L: Llm> FeedbackRetriever<G, L> {
 }
 
 #[async_trait]
-impl<G: GraphDBTrait, L: Llm> SearchRetriever for FeedbackRetriever<G, L> {
+impl SearchRetriever for FeedbackRetriever {
     fn search_type(&self) -> SearchType {
         SearchType::Feedback
     }
@@ -300,13 +302,13 @@ impl<G: GraphDBTrait, L: Llm> SearchRetriever for FeedbackRetriever<G, L> {
     }
 }
 
-pub struct CodingRulesRetriever<G: GraphDBTrait> {
-    graph_db: Arc<G>,
+pub struct CodingRulesRetriever {
+    graph_db: Arc<dyn GraphDBTrait>,
     default_rule_sets: Vec<String>,
 }
 
-impl<G: GraphDBTrait> CodingRulesRetriever<G> {
-    pub fn new(graph_db: Arc<G>, default_rule_sets: Option<Vec<String>>) -> Self {
+impl CodingRulesRetriever {
+    pub fn new(graph_db: Arc<dyn GraphDBTrait>, default_rule_sets: Option<Vec<String>>) -> Self {
         Self {
             graph_db,
             default_rule_sets: default_rule_sets
@@ -398,7 +400,7 @@ impl<G: GraphDBTrait> CodingRulesRetriever<G> {
 }
 
 #[async_trait]
-impl<G: GraphDBTrait> SearchRetriever for CodingRulesRetriever<G> {
+impl SearchRetriever for CodingRulesRetriever {
     fn search_type(&self) -> SearchType {
         SearchType::CodingRules
     }
@@ -449,12 +451,12 @@ mod tests {
 
     use async_trait::async_trait;
     use chrono::Utc;
-    use cognee_graph::{GraphDBTrait, MockGraphDB};
+    use cognee_graph::{GraphDBTrait, GraphDBTraitExt, MockGraphDB};
     use cognee_llm::{
         GenerationOptions, GenerationResponse, Llm, LlmError, LlmResult, Message, TokenUsage,
     };
-    use schemars::JsonSchema;
-    use serde::{Deserialize, Serialize};
+
+    use serde::Serialize;
 
     use super::{CodingRulesRetriever, FeedbackAnalysis, FeedbackRetriever, FeelingLuckyRetriever};
     use crate::retrievers::{SearchRetriever, SearchRetrieverRef};
@@ -491,33 +493,18 @@ mod tests {
             })
         }
 
-        async fn create_structured_output<T>(
-            &self,
-            _text_input: &str,
-            _system_prompt: &str,
-            _options: Option<GenerationOptions>,
-        ) -> LlmResult<T>
-        where
-            T: Serialize + for<'de> Deserialize<'de> + JsonSchema + Send,
-        {
-            let value =
-                serde_json::to_value(self.feedback_response.clone().ok_or_else(|| {
-                    LlmError::ConfigError("missing feedback response".to_string())
-                })?)
-                .map_err(|error| LlmError::ConfigError(error.to_string()))?;
-
-            serde_json::from_value(value).map_err(|error| LlmError::ConfigError(error.to_string()))
-        }
-
-        async fn create_structured_output_with_messages<T>(
+        async fn create_structured_output_with_messages_raw(
             &self,
             _messages: Vec<Message>,
+            _json_schema: &serde_json::Value,
             _options: Option<GenerationOptions>,
-        ) -> LlmResult<T>
-        where
-            T: Serialize + for<'de> Deserialize<'de> + JsonSchema + Send,
-        {
-            self.create_structured_output("", "", None).await
+        ) -> LlmResult<serde_json::Value> {
+            let response = self
+                .feedback_response
+                .clone()
+                .ok_or_else(|| LlmError::ConfigError("missing feedback response".to_string()))?;
+
+            serde_json::to_value(response).map_err(|error| LlmError::ConfigError(error.to_string()))
         }
 
         fn model(&self) -> &str {

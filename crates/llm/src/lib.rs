@@ -60,6 +60,6 @@ pub mod types;
 pub use adapters::OpenAIAdapter;
 pub use config::{LlmConfig, LlmProvider};
 pub use error::{LlmError, LlmResult};
-pub use llm_trait::Llm;
+pub use llm_trait::{Llm, LlmExt};
 pub use schema::{build_schema_prompt, generate_json_schema, generate_json_schema_string};
 pub use types::{GenerationOptions, GenerationResponse, Message, MessageRole, TokenUsage};

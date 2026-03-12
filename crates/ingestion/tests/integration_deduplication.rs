@@ -20,13 +20,7 @@ const QUANTUM_TEXT: &str = include_str!("test_data/quantum_computers.txt");
 /// Build a fresh `IngestPipeline` backed by a real SQLite database and
 /// `LocalStorage` inside `dir`. Returns the pipeline plus a shared database
 /// handle for post-test assertions.
-async fn make_pipeline(
-    dir: &TempDir,
-) -> (
-    IngestPipeline<LocalStorage, SqliteDatabase>,
-    Arc<SqliteDatabase>,
-    Arc<LocalStorage>,
-) {
+async fn make_pipeline(dir: &TempDir) -> (IngestPipeline, Arc<SqliteDatabase>, Arc<LocalStorage>) {
     let db_path = dir.path().join("cognee.db");
     std::fs::File::create(&db_path).expect("sqlite db file should be created");
     let db_url = format!("sqlite://{}", db_path.display());
@@ -41,7 +35,10 @@ async fn make_pipeline(
     let storage = Arc::new(LocalStorage::new(dir.path().join("storage")));
     storage.initialize().await.expect("storage.initialize");
 
-    let pipeline = IngestPipeline::new(Arc::clone(&storage), Arc::clone(&database));
+    let pipeline = IngestPipeline::new(
+        storage.clone() as Arc<dyn StorageTrait>,
+        database.clone() as Arc<dyn DatabaseTrait>,
+    );
     (pipeline, database, storage)
 }
 
@@ -328,7 +325,10 @@ async fn cascade_deletion_preserves_data_with_remaining_links() {
         .expect("count links before delete");
     assert_eq!(link_count, 3, "data should be linked to 3 datasets");
 
-    let delete_svc = DeleteService::new(Arc::clone(&storage), Arc::clone(&database));
+    let delete_svc = DeleteService::new(
+        storage.clone() as Arc<dyn StorageTrait>,
+        database.clone() as Arc<dyn DatabaseTrait>,
+    );
 
     // Delete dataset1 — data still has 2 remaining links and must NOT be deleted
     let result1 = delete_svc

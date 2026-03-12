@@ -16,8 +16,7 @@ use cognee_llm::{GenerationOptions, GenerationResponse, Llm, LlmError, Message};
 use cognee_models::Data;
 use cognee_storage::{MockStorage, StorageTrait};
 use cognee_vector::MockVectorDB;
-use schemars::JsonSchema;
-use serde::{Serialize, de::DeserializeOwned};
+use serde_json::Value;
 use uuid::Uuid;
 
 #[derive(Clone)]
@@ -38,39 +37,14 @@ impl Llm for TestMockLlm {
         })
     }
 
-    async fn create_structured_output<T>(
-        &self,
-        _text_input: &str,
-        _system_prompt: &str,
-        _options: Option<GenerationOptions>,
-    ) -> Result<T, LlmError>
-    where
-        T: Serialize + DeserializeOwned + JsonSchema + Send,
-    {
-        let graph_json = serde_json::json!({"nodes": [], "edges": []});
-        if let Ok(parsed) = serde_json::from_value::<T>(graph_json) {
-            return Ok(parsed);
-        }
-
-        let summary_json = serde_json::json!({
-            "summary": "test summary",
-            "description": "test description"
-        });
-        serde_json::from_value(summary_json)
-            .map_err(|e| LlmError::DeserializationError(format!("Mock parse error: {e}")))
-    }
-
-    async fn create_structured_output_with_messages<T>(
+    async fn create_structured_output_with_messages_raw(
         &self,
         _messages: Vec<Message>,
+        _json_schema: &Value,
         _options: Option<GenerationOptions>,
-    ) -> Result<T, LlmError>
-    where
-        T: Serialize + DeserializeOwned + JsonSchema + Send,
-    {
-        let graph_json = serde_json::json!({"nodes": [], "edges": []});
-        serde_json::from_value(graph_json)
-            .map_err(|e| LlmError::DeserializationError(format!("Mock parse error: {e}")))
+    ) -> Result<Value, LlmError> {
+        // Try graph first, fall back to summary
+        Ok(serde_json::json!({"nodes": [], "edges": []}))
     }
 
     fn model(&self) -> &str {

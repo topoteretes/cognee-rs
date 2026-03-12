@@ -12,14 +12,18 @@ const CHUNKS_DATA_TYPE: &str = "DocumentChunk";
 const CHUNKS_FIELD_NAME: &str = "text";
 const DEFAULT_TOP_K: usize = 10;
 
-pub struct ChunksRetriever<V: VectorDB, E: EmbeddingEngine> {
-    vector_db: Arc<V>,
-    embedding_engine: Arc<E>,
+pub struct ChunksRetriever {
+    vector_db: Arc<dyn VectorDB>,
+    embedding_engine: Arc<dyn EmbeddingEngine>,
     top_k: usize,
 }
 
-impl<V: VectorDB, E: EmbeddingEngine> ChunksRetriever<V, E> {
-    pub fn new(vector_db: Arc<V>, embedding_engine: Arc<E>, top_k: Option<usize>) -> Self {
+impl ChunksRetriever {
+    pub fn new(
+        vector_db: Arc<dyn VectorDB>,
+        embedding_engine: Arc<dyn EmbeddingEngine>,
+        top_k: Option<usize>,
+    ) -> Self {
         Self {
             vector_db,
             embedding_engine,
@@ -29,7 +33,7 @@ impl<V: VectorDB, E: EmbeddingEngine> ChunksRetriever<V, E> {
 }
 
 #[async_trait]
-impl<V: VectorDB, E: EmbeddingEngine> SearchRetriever for ChunksRetriever<V, E> {
+impl SearchRetriever for ChunksRetriever {
     fn search_type(&self) -> SearchType {
         SearchType::Chunks
     }

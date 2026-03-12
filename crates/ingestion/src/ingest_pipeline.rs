@@ -7,13 +7,13 @@ use cognee_database::DatabaseTrait;
 use cognee_models::{Data, DataInput, Dataset};
 use cognee_storage::StorageTrait;
 
-pub struct IngestPipeline<S: StorageTrait, D: DatabaseTrait> {
-    storage: Arc<S>,
-    database: Arc<D>,
+pub struct IngestPipeline {
+    storage: Arc<dyn StorageTrait>,
+    database: Arc<dyn DatabaseTrait>,
 }
 
-impl<S: StorageTrait, D: DatabaseTrait> IngestPipeline<S, D> {
-    pub fn new(storage: Arc<S>, database: Arc<D>) -> Self {
+impl IngestPipeline {
+    pub fn new(storage: Arc<dyn StorageTrait>, database: Arc<dyn DatabaseTrait>) -> Self {
         Self { storage, database }
     }
 
@@ -215,15 +215,16 @@ mod tests {
     use std::io::Write;
     use tempfile::NamedTempFile;
 
-    fn create_test_pipeline() -> IngestPipeline<MockStorage, MockDatabase> {
-        let storage = Arc::new(MockStorage::new());
+    fn create_test_pipeline() -> (IngestPipeline, Arc<MockDatabase>) {
+        let storage: Arc<dyn StorageTrait> = Arc::new(MockStorage::new());
         let database = Arc::new(MockDatabase::new());
-        IngestPipeline::new(storage, database)
+        let pipeline = IngestPipeline::new(storage, database.clone() as Arc<dyn DatabaseTrait>);
+        (pipeline, database)
     }
 
     #[tokio::test]
     async fn test_add_text_input() {
-        let pipeline = create_test_pipeline();
+        let (pipeline, database) = create_test_pipeline();
         let owner_id = Uuid::new_v4();
 
         let inputs = vec![DataInput::Text("Hello, world!".to_string())];
@@ -238,13 +239,13 @@ mod tests {
         assert_eq!(data[0].extension, "txt");
 
         // Verify data was stored
-        assert_eq!(pipeline.database.get_data_count(), 1);
-        assert_eq!(pipeline.database.get_dataset_count(), 1);
+        assert_eq!(database.get_data_count(), 1);
+        assert_eq!(database.get_dataset_count(), 1);
     }
 
     #[tokio::test]
     async fn test_add_file_input() {
-        let pipeline = create_test_pipeline();
+        let (pipeline, database) = create_test_pipeline();
         let owner_id = Uuid::new_v4();
 
         // Create a temporary file
@@ -264,13 +265,13 @@ mod tests {
         assert!(!data[0].extension.is_empty());
 
         // Verify data was stored
-        assert_eq!(pipeline.database.get_data_count(), 1);
-        assert_eq!(pipeline.database.get_dataset_count(), 1);
+        assert_eq!(database.get_data_count(), 1);
+        assert_eq!(database.get_dataset_count(), 1);
     }
 
     #[tokio::test]
     async fn test_add_multiple_inputs() {
-        let pipeline = create_test_pipeline();
+        let (pipeline, database) = create_test_pipeline();
         let owner_id = Uuid::new_v4();
 
         let inputs = vec![
@@ -285,13 +286,13 @@ mod tests {
         assert_eq!(data.len(), 2);
 
         // Verify all data was stored
-        assert_eq!(pipeline.database.get_data_count(), 2);
-        assert_eq!(pipeline.database.get_dataset_count(), 1);
+        assert_eq!(database.get_data_count(), 2);
+        assert_eq!(database.get_dataset_count(), 1);
     }
 
     #[tokio::test]
     async fn test_deduplication_same_content() {
-        let pipeline = create_test_pipeline();
+        let (pipeline, database) = create_test_pipeline();
         let owner_id = Uuid::new_v4();
 
         let content = "Duplicate content";
@@ -313,7 +314,7 @@ mod tests {
         assert_eq!(data1[0].content_hash, data2[0].content_hash);
 
         // Should only have one data record
-        assert_eq!(pipeline.database.get_data_count(), 1);
+        assert_eq!(database.get_data_count(), 1);
 
         // But both should be attached to the dataset
         let dataset = pipeline
@@ -332,7 +333,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_different_owners_different_hash() {
-        let pipeline = create_test_pipeline();
+        let (pipeline, database) = create_test_pipeline();
         let owner_id1 = Uuid::new_v4();
         let owner_id2 = Uuid::new_v4();
 
@@ -351,12 +352,12 @@ mod tests {
         assert_ne!(result1[0].content_hash, result2[0].content_hash);
 
         // Should have two separate data records
-        assert_eq!(pipeline.database.get_data_count(), 2);
+        assert_eq!(database.get_data_count(), 2);
     }
 
     #[tokio::test]
     async fn test_multiple_datasets() {
-        let pipeline = create_test_pipeline();
+        let (pipeline, database) = create_test_pipeline();
         let owner_id = Uuid::new_v4();
 
         let inputs1 = vec![DataInput::Text("Content 1".to_string())];
@@ -371,13 +372,13 @@ mod tests {
         assert!(result2.is_ok());
 
         // Should have two datasets
-        assert_eq!(pipeline.database.get_dataset_count(), 2);
-        assert_eq!(pipeline.database.get_data_count(), 2);
+        assert_eq!(database.get_dataset_count(), 2);
+        assert_eq!(database.get_data_count(), 2);
     }
 
     #[tokio::test]
     async fn test_reuse_dataset() {
-        let pipeline = create_test_pipeline();
+        let (pipeline, database) = create_test_pipeline();
         let owner_id = Uuid::new_v4();
 
         let inputs1 = vec![DataInput::Text("Content 1".to_string())];
@@ -394,8 +395,8 @@ mod tests {
             .unwrap();
 
         // Should only have one dataset
-        assert_eq!(pipeline.database.get_dataset_count(), 1);
-        assert_eq!(pipeline.database.get_data_count(), 2);
+        assert_eq!(database.get_dataset_count(), 1);
+        assert_eq!(database.get_data_count(), 2);
 
         // Both data should be attached to the same dataset
         let dataset = pipeline
@@ -414,42 +415,42 @@ mod tests {
 
     #[tokio::test]
     async fn test_extract_name_from_text() {
-        let pipeline = create_test_pipeline();
+        let (pipeline, _database) = create_test_pipeline();
         let input = DataInput::Text("test".to_string());
         assert_eq!(pipeline.extract_name(&input), "inline_text");
     }
 
     #[tokio::test]
     async fn test_extract_name_from_file_path() {
-        let pipeline = create_test_pipeline();
+        let (pipeline, _database) = create_test_pipeline();
         let input = DataInput::FilePath("/path/to/file.txt".to_string());
         assert_eq!(pipeline.extract_name(&input), "file.txt");
     }
 
     #[tokio::test]
     async fn test_extract_extension_from_text() {
-        let pipeline = create_test_pipeline();
+        let (pipeline, _database) = create_test_pipeline();
         let input = DataInput::Text("test".to_string());
         assert_eq!(pipeline.extract_extension(&input), "txt");
     }
 
     #[tokio::test]
     async fn test_extract_extension_from_file_path() {
-        let pipeline = create_test_pipeline();
+        let (pipeline, _database) = create_test_pipeline();
         let input = DataInput::FilePath("/path/to/file.rs".to_string());
         assert_eq!(pipeline.extract_extension(&input), "rs");
     }
 
     #[tokio::test]
     async fn test_extract_mime_type_from_text() {
-        let pipeline = create_test_pipeline();
+        let (pipeline, _database) = create_test_pipeline();
         let input = DataInput::Text("test".to_string());
         assert_eq!(pipeline.extract_mime_type(&input), "text/plain");
     }
 
     #[tokio::test]
     async fn test_content_hash_deterministic() {
-        let pipeline = create_test_pipeline();
+        let (pipeline, _database) = create_test_pipeline();
         let owner_id = Uuid::new_v4();
 
         let inputs1 = vec![DataInput::Text("Test content".to_string())];

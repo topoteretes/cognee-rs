@@ -1,22 +1,16 @@
 use std::io;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use cognee_lib::database::ArtifactReference;
-use cognee_lib::database::{DatabaseTrait, SqliteDatabase};
 use cognee_lib::delete::{DeleteMode, DeleteRequest, DeleteScope, DeleteService};
-use cognee_lib::graph::{GraphDBTrait, LadybugAdapter};
-use cognee_lib::storage::{LocalStorage, StorageTrait};
-use cognee_lib::vector::{QdrantAdapter, VectorDB};
+use cognee_lib::{ComponentManager, PipelineContext};
 use tracing::{info, warn};
 use uuid::Uuid;
 
 use crate::cli::{DeleteArgs, DeleteModeArg};
-use crate::config_store::{Settings, load_config};
 use crate::error::CliError;
 
-pub fn run(args: DeleteArgs) -> Result<(), CliError> {
-    let config = load_config()?;
+pub fn run(args: DeleteArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> {
     let dry_run = args.dry_run;
     let force = args.force;
 
@@ -27,10 +21,10 @@ pub fn run(args: DeleteArgs) -> Result<(), CliError> {
             CliError::Validation(format!("Invalid --user-id '{}': {error}", user_id))
         })?
     } else {
-        Uuid::parse_str(&config.settings.default_user_id).map_err(|error| {
+        Uuid::parse_str(&cm.settings().default_user_id).map_err(|error| {
             CliError::Validation(format!(
                 "Invalid default_user_id '{}': {error}",
-                config.settings.default_user_id
+                cm.settings().default_user_id
             ))
         })?
     };
@@ -42,102 +36,86 @@ pub fn run(args: DeleteArgs) -> Result<(), CliError> {
         .build()
         .map_err(|error| CliError::Runtime(format!("Failed to create async runtime: {error}")))?;
 
-    let service = runtime.block_on(initialize_delete_service(
-        config.settings.data_root_directory.clone(),
-        config.settings.relational_db_url.clone(),
-    ))?;
+    runtime.block_on(async {
+        let storage = cm
+            .storage()
+            .await
+            .map_err(|e| CliError::Runtime(format!("{e}")))?;
+        let database = cm
+            .database()
+            .await
+            .map_err(|e| CliError::Runtime(format!("{e}")))?;
 
-    let preview = runtime
-        .block_on(service.preview(&request))
-        .map_err(|error| CliError::Runtime(format!("Delete preview failed: {error}")))?;
+        let service = DeleteService::new(storage, database);
 
-    info!("Preview:");
-    info!("  datasets_to_delete: {}", preview.datasets_to_delete);
-    info!(
-        "  dataset_links_to_delete: {}",
-        preview.dataset_links_to_delete
-    );
-    info!("  data_to_delete: {}", preview.data_to_delete);
-    info!(
-        "  storage_files_to_delete: {}",
-        preview.storage_files_to_delete
-    );
+        let preview = service
+            .preview(&request)
+            .await
+            .map_err(|error| CliError::Runtime(format!("Delete preview failed: {error}")))?;
 
-    if dry_run {
-        return Ok(());
-    }
+        info!("Preview:");
+        info!("  datasets_to_delete: {}", preview.datasets_to_delete);
+        info!(
+            "  dataset_links_to_delete: {}",
+            preview.dataset_links_to_delete
+        );
+        info!("  data_to_delete: {}", preview.data_to_delete);
+        info!(
+            "  storage_files_to_delete: {}",
+            preview.storage_files_to_delete
+        );
 
-    if !force {
-        info!("This operation is irreversible. Continue? [y/N]: ");
-
-        let mut confirmation = String::new();
-        io::stdin()
-            .read_line(&mut confirmation)
-            .map_err(|error| CliError::Runtime(format!("Failed to read confirmation: {error}")))?;
-
-        let answer = confirmation.trim().to_lowercase();
-        if answer != "y" && answer != "yes" {
-            info!("Deletion cancelled.");
+        if dry_run {
             return Ok(());
         }
-    }
 
-    let artifact_references = runtime
-        .block_on(service.artifact_references_for_request(&request))
-        .map_err(|error| {
-            CliError::Runtime(format!(
-                "Failed to resolve artifact references for cleanup: {error}"
-            ))
-        })?;
+        if !force {
+            info!("This operation is irreversible. Continue? [y/N]: ");
 
-    let mut result = runtime
-        .block_on(service.execute(&request))
-        .map_err(|error| CliError::Runtime(format!("Delete execution failed: {error}")))?;
+            let mut confirmation = String::new();
+            io::stdin().read_line(&mut confirmation).map_err(|error| {
+                CliError::Runtime(format!("Failed to read confirmation: {error}"))
+            })?;
 
-    let cleanup_warnings = runtime.block_on(cleanup_graph_and_vector(
-        &config.settings,
-        &request,
-        &artifact_references,
-    ))?;
-    result.warnings.extend(cleanup_warnings);
+            let answer = confirmation.trim().to_lowercase();
+            if answer != "y" && answer != "yes" {
+                info!("Deletion cancelled.");
+                return Ok(());
+            }
+        }
 
-    info!(
-        "Success: Deleted datasets={}, links={}, data={}, storage_files={}",
-        result.deleted_datasets,
-        result.deleted_dataset_links,
-        result.deleted_data,
-        result.deleted_storage_files
-    );
-
-    for warning in result.warnings {
-        warn!("Warning: {warning}");
-    }
-
-    Ok(())
-}
-
-async fn initialize_delete_service(
-    data_root_directory: String,
-    relational_db_url: String,
-) -> Result<DeleteService<LocalStorage, SqliteDatabase>, CliError> {
-    let storage = Arc::new(LocalStorage::new(PathBuf::from(data_root_directory)));
-    storage
-        .initialize()
-        .await
-        .map_err(|error| CliError::Runtime(format!("Storage initialization failed: {error}")))?;
-
-    let database = Arc::new(
-        SqliteDatabase::new(&relational_db_url)
+        let artifact_references = service
+            .artifact_references_for_request(&request)
             .await
             .map_err(|error| {
-                CliError::Runtime(format!("Database initialization failed: {error}"))
-            })?,
-    );
-    database.initialize().await.map_err(|error| {
-        CliError::Runtime(format!("Database schema initialization failed: {error}"))
-    })?;
+                CliError::Runtime(format!(
+                    "Failed to resolve artifact references for cleanup: {error}"
+                ))
+            })?;
 
-    Ok(DeleteService::new(storage, database))
+        let mut result = service
+            .execute(&request)
+            .await
+            .map_err(|error| CliError::Runtime(format!("Delete execution failed: {error}")))?;
+
+        let cleanup_warnings =
+            cleanup_graph_and_vector(&cm, &request, &artifact_references).await?;
+        result.warnings.extend(cleanup_warnings);
+
+        info!(
+            "Success: Deleted datasets={}, links={}, data={}, storage_files={}",
+            result.deleted_datasets,
+            result.deleted_dataset_links,
+            result.deleted_data,
+            result.deleted_storage_files
+        );
+
+        for warning in result.warnings {
+            warn!("Warning: {warning}");
+        }
+
+        Ok(())
+    })
 }
 
 fn validate_scope_selection(args: &DeleteArgs) -> Result<(), CliError> {
@@ -196,7 +174,7 @@ fn build_request(args: DeleteArgs, owner_id: Uuid) -> Result<DeleteRequest, CliE
 }
 
 async fn cleanup_graph_and_vector(
-    settings: &Settings,
+    cm: &ComponentManager,
     request: &DeleteRequest,
     artifact_references: &[ArtifactReference],
 ) -> Result<Vec<String>, CliError> {
@@ -212,40 +190,11 @@ async fn cleanup_graph_and_vector(
         return Ok(warnings);
     }
 
-    let graph_provider = settings.graph_database_provider.to_lowercase();
-    if graph_provider != "ladybug" && graph_provider != "kuzu" {
-        return Err(CliError::Validation(format!(
-            "Unsupported graph_database_provider '{}'. Supported for delete cleanup: ladybug, kuzu (compat alias).",
-            settings.graph_database_provider
-        )));
-    }
+    let graph_db = cm
+        .graph_db()
+        .await
+        .map_err(|e| CliError::Runtime(format!("{e}")))?;
 
-    let graph_path = if !settings.graph_file_path.is_empty() {
-        settings.graph_file_path.clone()
-    } else {
-        format!("{}/graph", settings.system_root_directory)
-    };
-
-    let graph_parent = PathBuf::from(&graph_path)
-        .parent()
-        .map(|path| path.to_path_buf())
-        .unwrap_or_else(|| PathBuf::from("."));
-
-    std::fs::create_dir_all(&graph_parent).map_err(|error| {
-        CliError::Runtime(format!(
-            "Failed to create graph parent directory '{}': {error}",
-            graph_parent.display()
-        ))
-    })?;
-
-    let graph_db = LadybugAdapter::new(&graph_path).await.map_err(|error| {
-        CliError::Runtime(format!("Graph database initialization failed: {error}"))
-    })?;
-    graph_db.initialize().await.map_err(|error| {
-        CliError::Runtime(format!(
-            "Graph database schema initialization failed: {error}"
-        ))
-    })?;
     if is_all_scope {
         graph_db
             .delete_graph()
@@ -264,35 +213,10 @@ async fn cleanup_graph_and_vector(
         }
     }
 
-    let vector_provider = settings.vector_db_provider.to_lowercase();
-    if vector_provider != "qdrant" && vector_provider != "lancedb" {
-        return Err(CliError::Validation(format!(
-            "Unsupported vector_db_provider '{}'. Supported for delete cleanup: qdrant, lancedb (compat alias).",
-            settings.vector_db_provider
-        )));
-    }
-
-    if vector_provider == "lancedb" {
-        warnings.push(
-            "vector_db_provider=lancedb is mapped to embedded qdrant adapter for delete cleanup."
-                .to_string(),
-        );
-    }
-
-    let vector_data_dir = if !settings.vector_db_url.is_empty() {
-        PathBuf::from(&settings.vector_db_url)
-    } else {
-        PathBuf::from(&settings.system_root_directory).join("vectors")
-    };
-
-    std::fs::create_dir_all(&vector_data_dir).map_err(|error| {
-        CliError::Runtime(format!(
-            "Failed to create vector data directory '{}': {error}",
-            vector_data_dir.display()
-        ))
-    })?;
-
-    let vector_db = QdrantAdapter::new(vector_data_dir, settings.embedding_dimensions as usize);
+    let vector_db = cm
+        .vector_db()
+        .await
+        .map_err(|e| CliError::Runtime(format!("{e}")))?;
 
     if is_all_scope {
         let known_collections = [

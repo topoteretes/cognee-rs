@@ -35,20 +35,20 @@ const DEFAULT_COT_FOLLOW_UP_SYSTEM_PROMPT: &str =
     "Generate one concise follow-up graph query to improve the answer.";
 const DEFAULT_COT_FOLLOW_UP_USER_PROMPT: &str = "Question:\n{question}\n\nAnswer:\n{answer}\n\nValidation:\n{validation}\n\nProvide one follow-up graph query.";
 
-struct GraphRetrieverCore<V: VectorDB, E: EmbeddingEngine, G: GraphDBTrait> {
-    vector_db: Arc<V>,
-    embedding_engine: Arc<E>,
-    graph_db: Arc<G>,
+struct GraphRetrieverCore {
+    vector_db: Arc<dyn VectorDB>,
+    embedding_engine: Arc<dyn EmbeddingEngine>,
+    graph_db: Arc<dyn GraphDBTrait>,
     top_k: usize,
     wide_search_top_k: usize,
     triplet_distance_penalty: f32,
 }
 
-impl<V: VectorDB, E: EmbeddingEngine, G: GraphDBTrait> GraphRetrieverCore<V, E, G> {
+impl GraphRetrieverCore {
     fn new(
-        vector_db: Arc<V>,
-        embedding_engine: Arc<E>,
-        graph_db: Arc<G>,
+        vector_db: Arc<dyn VectorDB>,
+        embedding_engine: Arc<dyn EmbeddingEngine>,
+        graph_db: Arc<dyn GraphDBTrait>,
         top_k: Option<usize>,
         wide_search_top_k: Option<usize>,
         triplet_distance_penalty: Option<f32>,
@@ -118,25 +118,22 @@ fn merge_dedup_context(left: &SearchContext, right: &SearchContext) -> SearchCon
     merged
 }
 
-pub struct GraphSummaryCompletionRetriever<V: VectorDB, E: EmbeddingEngine, G: GraphDBTrait, L: Llm>
-{
-    core: GraphRetrieverCore<V, E, G>,
-    llm: Arc<L>,
+pub struct GraphSummaryCompletionRetriever {
+    core: GraphRetrieverCore,
+    llm: Arc<dyn Llm>,
     system_prompt: Option<String>,
     system_prompt_path: Option<String>,
     user_prompt_template: Option<String>,
     generation_options: Option<GenerationOptions>,
 }
 
-impl<V: VectorDB, E: EmbeddingEngine, G: GraphDBTrait, L: Llm>
-    GraphSummaryCompletionRetriever<V, E, G, L>
-{
+impl GraphSummaryCompletionRetriever {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        vector_db: Arc<V>,
-        embedding_engine: Arc<E>,
-        graph_db: Arc<G>,
-        llm: Arc<L>,
+        vector_db: Arc<dyn VectorDB>,
+        embedding_engine: Arc<dyn EmbeddingEngine>,
+        graph_db: Arc<dyn GraphDBTrait>,
+        llm: Arc<dyn Llm>,
         top_k: Option<usize>,
         wide_search_top_k: Option<usize>,
         triplet_distance_penalty: Option<f32>,
@@ -164,9 +161,7 @@ impl<V: VectorDB, E: EmbeddingEngine, G: GraphDBTrait, L: Llm>
 }
 
 #[async_trait]
-impl<V: VectorDB, E: EmbeddingEngine, G: GraphDBTrait, L: Llm> SearchRetriever
-    for GraphSummaryCompletionRetriever<V, E, G, L>
-{
+impl SearchRetriever for GraphSummaryCompletionRetriever {
     fn search_type(&self) -> SearchType {
         SearchType::GraphSummaryCompletion
     }
@@ -225,14 +220,9 @@ impl<V: VectorDB, E: EmbeddingEngine, G: GraphDBTrait, L: Llm> SearchRetriever
     }
 }
 
-pub struct GraphCompletionContextExtensionRetriever<
-    V: VectorDB,
-    E: EmbeddingEngine,
-    G: GraphDBTrait,
-    L: Llm,
-> {
-    core: GraphRetrieverCore<V, E, G>,
-    llm: Arc<L>,
+pub struct GraphCompletionContextExtensionRetriever {
+    core: GraphRetrieverCore,
+    llm: Arc<dyn Llm>,
     context_extension_rounds: usize,
     system_prompt: Option<String>,
     system_prompt_path: Option<String>,
@@ -240,15 +230,13 @@ pub struct GraphCompletionContextExtensionRetriever<
     generation_options: Option<GenerationOptions>,
 }
 
-impl<V: VectorDB, E: EmbeddingEngine, G: GraphDBTrait, L: Llm>
-    GraphCompletionContextExtensionRetriever<V, E, G, L>
-{
+impl GraphCompletionContextExtensionRetriever {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        vector_db: Arc<V>,
-        embedding_engine: Arc<E>,
-        graph_db: Arc<G>,
-        llm: Arc<L>,
+        vector_db: Arc<dyn VectorDB>,
+        embedding_engine: Arc<dyn EmbeddingEngine>,
+        graph_db: Arc<dyn GraphDBTrait>,
+        llm: Arc<dyn Llm>,
         top_k: Option<usize>,
         wide_search_top_k: Option<usize>,
         triplet_distance_penalty: Option<f32>,
@@ -279,9 +267,7 @@ impl<V: VectorDB, E: EmbeddingEngine, G: GraphDBTrait, L: Llm>
 }
 
 #[async_trait]
-impl<V: VectorDB, E: EmbeddingEngine, G: GraphDBTrait, L: Llm> SearchRetriever
-    for GraphCompletionContextExtensionRetriever<V, E, G, L>
-{
+impl SearchRetriever for GraphCompletionContextExtensionRetriever {
     fn search_type(&self) -> SearchType {
         SearchType::GraphCompletionContextExtension
     }
@@ -357,9 +343,9 @@ impl<V: VectorDB, E: EmbeddingEngine, G: GraphDBTrait, L: Llm> SearchRetriever
     }
 }
 
-pub struct GraphCompletionCotRetriever<V: VectorDB, E: EmbeddingEngine, G: GraphDBTrait, L: Llm> {
-    core: GraphRetrieverCore<V, E, G>,
-    llm: Arc<L>,
+pub struct GraphCompletionCotRetriever {
+    core: GraphRetrieverCore,
+    llm: Arc<dyn Llm>,
     max_iter: usize,
     system_prompt: Option<String>,
     system_prompt_path: Option<String>,
@@ -367,15 +353,13 @@ pub struct GraphCompletionCotRetriever<V: VectorDB, E: EmbeddingEngine, G: Graph
     generation_options: Option<GenerationOptions>,
 }
 
-impl<V: VectorDB, E: EmbeddingEngine, G: GraphDBTrait, L: Llm>
-    GraphCompletionCotRetriever<V, E, G, L>
-{
+impl GraphCompletionCotRetriever {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        vector_db: Arc<V>,
-        embedding_engine: Arc<E>,
-        graph_db: Arc<G>,
-        llm: Arc<L>,
+        vector_db: Arc<dyn VectorDB>,
+        embedding_engine: Arc<dyn EmbeddingEngine>,
+        graph_db: Arc<dyn GraphDBTrait>,
+        llm: Arc<dyn Llm>,
         top_k: Option<usize>,
         wide_search_top_k: Option<usize>,
         triplet_distance_penalty: Option<f32>,
@@ -405,9 +389,7 @@ impl<V: VectorDB, E: EmbeddingEngine, G: GraphDBTrait, L: Llm>
 }
 
 #[async_trait]
-impl<V: VectorDB, E: EmbeddingEngine, G: GraphDBTrait, L: Llm> SearchRetriever
-    for GraphCompletionCotRetriever<V, E, G, L>
-{
+impl SearchRetriever for GraphCompletionCotRetriever {
     fn search_type(&self) -> SearchType {
         SearchType::GraphCompletionCot
     }
@@ -513,14 +495,14 @@ mod tests {
     use async_trait::async_trait;
     use cognee_embedding::EmbeddingResult;
     use cognee_embedding::engine::EmbeddingEngine;
-    use cognee_graph::GraphDBTrait;
     use cognee_graph::MockGraphDB;
+    use cognee_graph::{GraphDBTrait, GraphDBTraitExt};
     use cognee_llm::{
         GenerationOptions, GenerationResponse, Llm, LlmError, LlmResult, Message, TokenUsage,
     };
     use cognee_vector::{SearchResult, VectorDB, VectorDBResult, VectorPoint};
-    use schemars::JsonSchema;
-    use serde::{Deserialize, Serialize};
+
+    use serde::Serialize;
     use uuid::Uuid;
 
     use crate::retrievers::{
@@ -680,28 +662,12 @@ mod tests {
             })
         }
 
-        async fn create_structured_output<T>(
-            &self,
-            _text_input: &str,
-            _system_prompt: &str,
-            _options: Option<GenerationOptions>,
-        ) -> LlmResult<T>
-        where
-            T: Serialize + for<'de> Deserialize<'de> + JsonSchema + Send,
-        {
-            Err(LlmError::ConfigError(
-                "not implemented for this unit test".to_string(),
-            ))
-        }
-
-        async fn create_structured_output_with_messages<T>(
+        async fn create_structured_output_with_messages_raw(
             &self,
             _messages: Vec<Message>,
+            _json_schema: &serde_json::Value,
             _options: Option<GenerationOptions>,
-        ) -> LlmResult<T>
-        where
-            T: Serialize + for<'de> Deserialize<'de> + JsonSchema + Send,
-        {
+        ) -> LlmResult<serde_json::Value> {
             Err(LlmError::ConfigError(
                 "not implemented for this unit test".to_string(),
             ))
@@ -773,7 +739,7 @@ mod tests {
             build_vector_db(),
             Arc::new(TestEmbeddingEngine),
             build_graph_db().await,
-            Arc::clone(&llm),
+            Arc::clone(&llm) as Arc<dyn Llm>,
             Some(5),
             Some(5),
             Some(0.0),
@@ -805,7 +771,7 @@ mod tests {
             build_vector_db(),
             Arc::new(TestEmbeddingEngine),
             build_graph_db().await,
-            Arc::clone(&llm),
+            Arc::clone(&llm) as Arc<dyn Llm>,
             Some(5),
             Some(5),
             Some(0.0),
@@ -844,7 +810,7 @@ mod tests {
             build_vector_db(),
             Arc::new(TestEmbeddingEngine),
             build_graph_db().await,
-            Arc::clone(&llm),
+            Arc::clone(&llm) as Arc<dyn Llm>,
             Some(5),
             Some(5),
             Some(0.0),

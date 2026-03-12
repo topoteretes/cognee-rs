@@ -15,9 +15,10 @@ use std::sync::Arc;
 use cognee_cognify::{CognifyConfig, CognifyPipeline};
 use cognee_database::{DatabaseTrait, SqliteDatabase};
 use cognee_delete::{DeleteMode, DeleteRequest, DeleteScope, DeleteService};
-use cognee_embedding::{config::EmbeddingConfig, onnx::OnnxEmbeddingEngine};
+use cognee_embedding::{EmbeddingEngine, config::EmbeddingConfig, onnx::OnnxEmbeddingEngine};
 use cognee_graph::{GraphDBTrait, LadybugAdapter};
 use cognee_ingestion::IngestPipeline;
+use cognee_llm::Llm;
 use cognee_models::DataInput;
 use cognee_search::{
     SearchBuilder, SearchRequest, SearchType,
@@ -92,14 +93,15 @@ async fn test_search_type_matrix() {
     // ── Infrastructure setup ─────────────────────────────────────────────────
     let temp_dir = TempDir::new().expect("temp dir");
 
-    let storage = Arc::new(LocalStorage::new(temp_dir.path().join("storage")));
+    let storage: Arc<dyn StorageTrait> =
+        Arc::new(LocalStorage::new(temp_dir.path().join("storage")));
     storage.initialize().await.expect("storage.initialize");
 
     // SQLite metadata database (file must exist before sqlx opens it)
     let db_path = temp_dir.path().join("cognee.db");
     std::fs::File::create(&db_path).expect("create sqlite db file");
     let db_url = format!("sqlite://{}", db_path.display());
-    let database = Arc::new(
+    let database: Arc<dyn DatabaseTrait> = Arc::new(
         SqliteDatabase::new(&db_url)
             .await
             .expect("SqliteDatabase::new"),
@@ -107,29 +109,31 @@ async fn test_search_type_matrix() {
     database.initialize().await.expect("database.initialize");
 
     let graph_path = temp_dir.path().join("graph").to_string_lossy().to_string();
-    let graph_db = Arc::new(
+    let graph_db: Arc<dyn GraphDBTrait> = Arc::new(
         LadybugAdapter::new(&graph_path)
             .await
             .expect("LadybugAdapter::new"),
     );
     graph_db.initialize().await.expect("graph_db.initialize");
 
-    let vector_db = Arc::new(QdrantAdapter::new(temp_dir.path().join("qdrant"), 384));
+    let vector_db: Arc<dyn VectorDB> =
+        Arc::new(QdrantAdapter::new(temp_dir.path().join("qdrant"), 384));
 
     let model_dir = get_embedding_model_dir();
-    let embedding_engine = match OnnxEmbeddingEngine::new(EmbeddingConfig::bge_small(&model_dir)) {
-        Ok(engine) => Arc::new(engine),
-        Err(e) => {
-            eprintln!("⚠️  Skipping test: failed to load embedding model: {}", e);
-            eprintln!(
-                "   Ensure model is at {}/BGE-Small-v1.5-model_quantized.onnx",
-                model_dir
-            );
-            return;
-        }
-    };
+    let embedding_engine: Arc<dyn EmbeddingEngine> =
+        match OnnxEmbeddingEngine::new(EmbeddingConfig::bge_small(&model_dir)) {
+            Ok(engine) => Arc::new(engine),
+            Err(e) => {
+                eprintln!("⚠️  Skipping test: failed to load embedding model: {}", e);
+                eprintln!(
+                    "   Ensure model is at {}/BGE-Small-v1.5-model_quantized.onnx",
+                    model_dir
+                );
+                return;
+            }
+        };
 
-    let llm = create_adapter_from_env();
+    let llm: Arc<dyn Llm> = create_adapter_from_env();
     let owner_id = Uuid::nil();
 
     // ── Step 3: Ingest two documents into the same dataset ───────────────────
@@ -234,13 +238,12 @@ async fn test_search_type_matrix() {
     );
 
     // ── Steps 8–11: Search matrix ────────────────────────────────────────────
-    let db_for_search: Arc<dyn DatabaseTrait> = database.clone();
     let orchestrator = SearchBuilder::new(
         Arc::clone(&vector_db),
         Arc::clone(&embedding_engine),
         Arc::clone(&graph_db),
         Arc::clone(&llm),
-        db_for_search,
+        Arc::clone(&database),
     )
     .build();
 

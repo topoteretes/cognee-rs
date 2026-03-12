@@ -302,6 +302,7 @@ struct ExtractionResult {
 }
 
 impl ExtractionResult {
+    #[allow(dead_code)]
     fn total_tok_per_sec(&self) -> f64 {
         self.output_tokens as f64 / self.generation_time.as_secs_f64()
     }
@@ -553,6 +554,7 @@ impl EdgeLLMGenerator {
         );
 
         // Custom logger to capture all ORT internal messages (including EP registration)
+        #[allow(clippy::type_complexity)]
         let ort_logger: Arc<dyn Fn(LogLevel, &str, &str, &str, &str) + Send + Sync> = Arc::new(
             |level: LogLevel, category: &str, _id: &str, code_location: &str, message: &str| {
                 println!(

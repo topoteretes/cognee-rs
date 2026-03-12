@@ -1,24 +1,15 @@
-use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use cognee_lib::database::{DatabaseTrait, SqliteDatabase};
-use cognee_lib::embedding::{EmbeddingConfig, OnnxEmbeddingEngine};
-use cognee_lib::graph::{GraphDBTrait, LadybugAdapter};
-use cognee_lib::llm::OpenAIAdapter;
 use cognee_lib::search::{SearchBuilder, SearchOutput, SearchRequest, SearchResponse, SearchType};
-use cognee_lib::vector::QdrantAdapter;
+use cognee_lib::{ComponentManager, PipelineContext};
 use tracing::{info, warn};
 
 use crate::cli::{OutputFormatArg, QueryTypeArg, SearchArgs};
-use crate::config_store::{DEFAULT_SYSTEM_PROMPT_PATH, Settings, load_config};
+use crate::config_store::DEFAULT_SYSTEM_PROMPT_PATH;
 use crate::error::CliError;
 
-pub fn run(args: SearchArgs) -> Result<(), CliError> {
-    let config = load_config()?;
-    let effective_llm_max_retries = args
-        .llm_max_retries
-        .unwrap_or(config.settings.llm_max_retries)
-        .max(1);
+pub fn run(args: SearchArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> {
+    let settings = cm.settings();
 
     if !(1..=100).contains(&args.top_k) {
         return Err(CliError::Validation(
@@ -28,15 +19,15 @@ pub fn run(args: SearchArgs) -> Result<(), CliError> {
 
     let mapped_query_type = map_query_type(args.query_type);
 
-    if requires_llm(mapped_query_type) && config.settings.llm_api_key.is_empty() {
+    if requires_llm(mapped_query_type) && settings.llm_api_key.is_empty() {
         warn!("Warning: llm_api_key is empty. LLM-based search types may fail at runtime.");
     }
 
     let system_prompt = args.system_prompt.unwrap_or_else(|| {
-        if config.settings.default_system_prompt_path.is_empty() {
+        if settings.default_system_prompt_path.is_empty() {
             DEFAULT_SYSTEM_PROMPT_PATH.to_string()
         } else {
-            config.settings.default_system_prompt_path.clone()
+            settings.default_system_prompt_path.clone()
         }
     });
 
@@ -46,16 +37,29 @@ pub fn run(args: SearchArgs) -> Result<(), CliError> {
         .map_err(|error| CliError::Runtime(format!("Failed to create async runtime: {error}")))?;
 
     runtime.block_on(async {
-        let dependencies =
-            build_search_dependencies(&config.settings, effective_llm_max_retries).await?;
-        let orchestrator = SearchBuilder::new(
-            Arc::clone(&dependencies.vector_db),
-            Arc::clone(&dependencies.embedding_engine),
-            Arc::clone(&dependencies.graph_db),
-            Arc::clone(&dependencies.llm),
-            Arc::clone(&dependencies.database),
-        )
-        .build();
+        let vector_db = cm
+            .vector_db()
+            .await
+            .map_err(|e| CliError::Runtime(format!("{e}")))?;
+        let embedding_engine = cm
+            .embedding_engine()
+            .await
+            .map_err(|e| CliError::Runtime(format!("{e}")))?;
+        let graph_db = cm
+            .graph_db()
+            .await
+            .map_err(|e| CliError::Runtime(format!("{e}")))?;
+        let llm = cm
+            .llm()
+            .await
+            .map_err(|e| CliError::Runtime(format!("{e}")))?;
+        let database = cm
+            .database()
+            .await
+            .map_err(|e| CliError::Runtime(format!("{e}")))?;
+
+        let orchestrator =
+            SearchBuilder::new(vector_db, embedding_engine, graph_db, llm, database).build();
 
         let datasets = if args.datasets.is_empty() {
             None
@@ -88,123 +92,6 @@ pub fn run(args: SearchArgs) -> Result<(), CliError> {
 
         render_output(&response, args.output_format)?;
         Ok(())
-    })
-}
-
-struct SearchDependencies {
-    database: Arc<dyn DatabaseTrait>,
-    graph_db: Arc<LadybugAdapter>,
-    vector_db: Arc<QdrantAdapter>,
-    embedding_engine: Arc<OnnxEmbeddingEngine>,
-    llm: Arc<OpenAIAdapter>,
-}
-
-async fn build_search_dependencies(
-    settings: &Settings,
-    llm_max_retries: u32,
-) -> Result<SearchDependencies, CliError> {
-    let database = Arc::new(
-        SqliteDatabase::new(&settings.relational_db_url)
-            .await
-            .map_err(|error| {
-                CliError::Runtime(format!("Database initialization failed: {error}"))
-            })?,
-    );
-    database.initialize().await.map_err(|error| {
-        CliError::Runtime(format!("Database schema initialization failed: {error}"))
-    })?;
-
-    let graph_provider = settings.graph_database_provider.to_lowercase();
-    if graph_provider != "ladybug" && graph_provider != "kuzu" {
-        return Err(CliError::Validation(format!(
-            "Unsupported graph_database_provider '{}'. Supported for CLI runtime: ladybug, kuzu (compat alias).",
-            settings.graph_database_provider
-        )));
-    }
-
-    let graph_path = if !settings.graph_file_path.is_empty() {
-        settings.graph_file_path.clone()
-    } else {
-        format!("{}/graph", settings.system_root_directory)
-    };
-
-    let graph_db = Arc::new(LadybugAdapter::new(&graph_path).await.map_err(|error| {
-        CliError::Runtime(format!("Graph database initialization failed: {error}"))
-    })?);
-    graph_db.initialize().await.map_err(|error| {
-        CliError::Runtime(format!(
-            "Graph database schema initialization failed: {error}"
-        ))
-    })?;
-
-    let vector_provider = settings.vector_db_provider.to_lowercase();
-    if vector_provider != "qdrant" && vector_provider != "lancedb" {
-        return Err(CliError::Validation(format!(
-            "Unsupported vector_db_provider '{}'. Supported for CLI runtime: qdrant, lancedb (compat alias).",
-            settings.vector_db_provider
-        )));
-    }
-
-    if vector_provider == "lancedb" {
-        warn!(
-            "Warning: vector_db_provider=lancedb is mapped to embedded qdrant adapter in Rust CLI runtime."
-        );
-    }
-
-    let vector_data_dir = if !settings.vector_db_url.is_empty() {
-        PathBuf::from(&settings.vector_db_url)
-    } else {
-        Path::new(&settings.system_root_directory).join("vectors")
-    };
-
-    let vector_db = Arc::new(QdrantAdapter::new(
-        vector_data_dir,
-        settings.embedding_dimensions as usize,
-    ));
-
-    let embedding_engine = Arc::new(
-        OnnxEmbeddingEngine::new(EmbeddingConfig {
-            model_path: PathBuf::from(&settings.embedding_model_path),
-            tokenizer_path: PathBuf::from(&settings.embedding_tokenizer_path),
-            model_name: settings.embedding_model_name.clone(),
-            dimensions: settings.embedding_dimensions as usize,
-            max_sequence_length: settings.embedding_max_sequence_length as usize,
-            batch_size: settings.embedding_batch_size as usize,
-        })
-        .map_err(|error| {
-            CliError::Runtime(format!("Embedding engine initialization failed: {error}"))
-        })?,
-    );
-
-    let llm_provider = settings.llm_provider.to_lowercase();
-    if llm_provider != "openai" {
-        return Err(CliError::Validation(format!(
-            "Unsupported llm_provider '{}'. Supported for CLI runtime: openai.",
-            settings.llm_provider
-        )));
-    }
-
-    let llm = Arc::new(
-        OpenAIAdapter::new(
-            settings.llm_model.clone(),
-            settings.llm_api_key.clone(),
-            if settings.llm_endpoint.is_empty() {
-                None
-            } else {
-                Some(settings.llm_endpoint.clone())
-            },
-        )
-        .map(|adapter| adapter.with_structured_output_retries(llm_max_retries.max(1)))
-        .map(|adapter| adapter.with_network_retries(llm_max_retries.max(1)))
-        .map_err(|error| CliError::Runtime(format!("LLM initialization failed: {error}")))?,
-    );
-
-    Ok(SearchDependencies {
-        database,
-        graph_db,
-        vector_db,
-        embedding_engine,
-        llm,
     })
 }
 

@@ -1,37 +1,27 @@
-use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use chrono::Utc;
 use cognee_lib::cognify::{ChunkStrategy, CognifyConfig, CognifyPipeline};
-use cognee_lib::database::{ArtifactReference, DatabaseTrait, SqliteDatabase};
-use cognee_lib::embedding::{EmbeddingConfig, OnnxEmbeddingEngine};
-use cognee_lib::graph::{GraphDBTrait, LadybugAdapter};
-use cognee_lib::llm::OpenAIAdapter;
+use cognee_lib::database::{ArtifactReference, DatabaseTrait};
 use cognee_lib::ontology::{OntologyResolver, RdfLibOntologyResolver};
-use cognee_lib::storage::{LocalStorage, StorageTrait};
-use cognee_lib::vector::QdrantAdapter;
+use cognee_lib::{ComponentManager, PipelineContext};
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 use crate::cli::{ChunkerArg, CognifyArgs};
-use crate::config_store::load_config;
 use crate::error::CliError;
 
-pub fn run(args: CognifyArgs) -> Result<(), CliError> {
-    let config = load_config()?;
-    let effective_chunk_size = args.chunk_size.unwrap_or(config.settings.chunk_size);
-    let effective_llm_max_retries = args
-        .llm_max_retries
-        .unwrap_or(config.settings.llm_max_retries)
-        .max(1);
+pub fn run(args: CognifyArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> {
+    let settings = cm.settings();
+    let effective_chunk_size = args.chunk_size.unwrap_or(settings.chunk_size);
     let effective_max_parallel = args
         .llm_max_parallel_requests
-        .unwrap_or(config.settings.llm_max_parallel_requests)
+        .unwrap_or(settings.llm_max_parallel_requests)
         .max(1) as usize;
-    let owner_id = Uuid::parse_str(&config.settings.default_user_id).map_err(|error| {
+    let owner_id = Uuid::parse_str(&settings.default_user_id).map_err(|error| {
         CliError::Validation(format!(
             "Invalid default_user_id '{}': {error}",
-            config.settings.default_user_id
+            settings.default_user_id
         ))
     })?;
 
@@ -58,140 +48,63 @@ pub fn run(args: CognifyArgs) -> Result<(), CliError> {
         .map_err(|error| CliError::Runtime(format!("Failed to create async runtime: {error}")))?;
 
     runtime.block_on(async {
-        let storage = Arc::new(LocalStorage::new(PathBuf::from(
-            &config.settings.data_root_directory,
-        )));
-        storage
-            .initialize()
+        // Resolve datasets first (cheap) — fail early before initializing heavy components
+        let database = cm
+            .database()
             .await
-            .map_err(|error| CliError::Runtime(format!("Storage initialization failed: {error}")))?;
+            .map_err(|e| CliError::Runtime(format!("{e}")))?;
 
-        let database = Arc::new(
-            SqliteDatabase::new(&config.settings.relational_db_url)
-                .await
-                .map_err(|error| CliError::Runtime(format!("Database initialization failed: {error}")))?,
-        );
-        database.initialize().await.map_err(|error| {
-            CliError::Runtime(format!("Database schema initialization failed: {error}"))
-        })?;
+        let dataset_names =
+            resolve_dataset_names(database.as_ref(), owner_id, requested_datasets).await?;
 
-        let dataset_names = resolve_dataset_names(database.as_ref(), owner_id, requested_datasets)
-            .await?;
+        let storage = cm
+            .storage()
+            .await
+            .map_err(|e| CliError::Runtime(format!("{e}")))?;
+        let graph_db = cm
+            .graph_db()
+            .await
+            .map_err(|e| CliError::Runtime(format!("{e}")))?;
+        let vector_db = cm
+            .vector_db()
+            .await
+            .map_err(|e| CliError::Runtime(format!("{e}")))?;
+        let embedding_engine = cm
+            .embedding_engine()
+            .await
+            .map_err(|e| CliError::Runtime(format!("{e}")))?;
+        let llm = cm
+            .llm()
+            .await
+            .map_err(|e| CliError::Runtime(format!("{e}")))?;
 
-        let graph_provider = config.settings.graph_database_provider.to_lowercase();
-        if graph_provider != "ladybug" && graph_provider != "kuzu" {
-            return Err(CliError::Validation(format!(
-                "Unsupported graph_database_provider '{}'. Supported for CLI runtime: ladybug, kuzu (compat alias).",
-                config.settings.graph_database_provider
-            )));
-        }
+        let ontology_resolver: Option<Arc<dyn OntologyResolver>> =
+            if let Some(path) = &args.ontology_file {
+                Some(Arc::new(
+                    RdfLibOntologyResolver::new(path.as_str()).map_err(|error| {
+                        CliError::Runtime(format!("Ontology initialization failed: {error}"))
+                    })?,
+                ))
+            } else {
+                None
+            };
 
-        let graph_path = if !config.settings.graph_file_path.is_empty() {
-            config.settings.graph_file_path.clone()
-        } else {
-            format!("{}/graph", config.settings.system_root_directory)
-        };
-
-        let graph_db = Arc::new(
-            LadybugAdapter::new(&graph_path)
-                .await
-                .map_err(|error| CliError::Runtime(format!("Graph database initialization failed: {error}")))?,
-        );
-        graph_db.initialize().await.map_err(|error| {
-            CliError::Runtime(format!("Graph database schema initialization failed: {error}"))
-        })?;
-
-        let vector_provider = config.settings.vector_db_provider.to_lowercase();
-        if vector_provider != "qdrant" && vector_provider != "lancedb" {
-            return Err(CliError::Validation(format!(
-                "Unsupported vector_db_provider '{}'. Supported for CLI runtime: qdrant, lancedb (compat alias).",
-                config.settings.vector_db_provider
-            )));
-        }
-
-        if vector_provider == "lancedb" {
-            warn!(
-                "Warning: vector_db_provider=lancedb is mapped to embedded qdrant adapter in Rust CLI runtime."
-            );
-        }
-
-        let vector_data_dir = if !config.settings.vector_db_url.is_empty() {
-            PathBuf::from(&config.settings.vector_db_url)
-        } else {
-            Path::new(&config.settings.system_root_directory).join("vectors")
-        };
-        let vector_db = Arc::new(QdrantAdapter::new(
-            vector_data_dir,
-            config.settings.embedding_dimensions as usize,
-        ));
-
-        let embedding_engine = Arc::new(
-            OnnxEmbeddingEngine::new(EmbeddingConfig {
-                model_path: PathBuf::from(&config.settings.embedding_model_path),
-                tokenizer_path: PathBuf::from(&config.settings.embedding_tokenizer_path),
-                model_name: config.settings.embedding_model_name.clone(),
-                dimensions: config.settings.embedding_dimensions as usize,
-                max_sequence_length: config.settings.embedding_max_sequence_length as usize,
-                batch_size: config.settings.embedding_batch_size as usize,
-            })
-            .map_err(|error| {
-                CliError::Runtime(format!("Embedding engine initialization failed: {error}"))
-            })?,
-        );
-
-        let llm_provider = config.settings.llm_provider.to_lowercase();
-        if llm_provider != "openai" {
-            return Err(CliError::Validation(format!(
-                "Unsupported llm_provider '{}'. Supported for CLI runtime: openai.",
-                config.settings.llm_provider
-            )));
-        }
-
-        if config.settings.llm_api_key.is_empty() {
-            return Err(CliError::Validation(
-                "llm_api_key must be configured for cognify pipeline".to_string(),
-            ));
-        }
-
-        let llm = Arc::new(
-            OpenAIAdapter::new(
-                config.settings.llm_model.clone(),
-                config.settings.llm_api_key.clone(),
-                if config.settings.llm_endpoint.is_empty() {
-                    None
-                } else {
-                    Some(config.settings.llm_endpoint.clone())
-                },
-            )
-            .map(|adapter| adapter.with_structured_output_retries(effective_llm_max_retries))
-            .map(|adapter| adapter.with_network_retries(effective_llm_max_retries))
-            .map_err(|error| CliError::Runtime(format!("LLM initialization failed: {error}")))?,
-        );
-
-        let ontology_resolver: Option<Arc<dyn OntologyResolver>> = if let Some(path) = &args.ontology_file {
-            Some(Arc::new(RdfLibOntologyResolver::new(path.as_str()).map_err(
-                |error| CliError::Runtime(format!("Ontology initialization failed: {error}")),
-            )?))
-        } else {
-            None
-        };
-
-        let chunk_strategy = match config.settings.chunk_strategy.to_uppercase().as_str() {
+        let chunk_strategy = match cm.settings().chunk_strategy.to_uppercase().as_str() {
             "RECURSIVE" => ChunkStrategy::Recursive,
             _ => ChunkStrategy::Paragraph,
         };
 
         let cognify_config = CognifyConfig::default()
             .with_chunk_size(effective_chunk_size as usize)
-            .with_chunk_overlap(config.settings.chunk_overlap as usize)
+            .with_chunk_overlap(cm.settings().chunk_overlap as usize)
             .with_chunk_strategy(chunk_strategy)
             .with_max_parallel_extractions(effective_max_parallel);
 
         let pipeline = CognifyPipeline::new(
-            Arc::clone(&storage),
-            Arc::clone(&graph_db),
-            Arc::clone(&vector_db),
-            Arc::clone(&embedding_engine),
+            storage,
+            graph_db,
+            vector_db,
+            embedding_engine,
             cognify_config,
             ontology_resolver,
         );
@@ -207,7 +120,9 @@ pub fn run(args: CognifyArgs) -> Result<(), CliError> {
                 .get_dataset_by_name(dataset_name, owner_id)
                 .await
                 .map_err(|error| {
-                    CliError::Runtime(format!("Failed to resolve dataset '{dataset_name}': {error}"))
+                    CliError::Runtime(format!(
+                        "Failed to resolve dataset '{dataset_name}': {error}"
+                    ))
                 })?
                 .ok_or_else(|| {
                     CliError::Validation(format!(
@@ -231,7 +146,7 @@ pub fn run(args: CognifyArgs) -> Result<(), CliError> {
             }
 
             let result = pipeline
-                .cognify(data_items, dataset.id, Arc::clone(&llm))
+                .cognify(data_items, dataset.id, llm.clone())
                 .await
                 .map_err(|error| {
                     CliError::Runtime(format!(

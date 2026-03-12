@@ -54,6 +54,16 @@ pub mod ontology {
     pub use cognee_ontology::*;
 }
 
+pub mod component_manager;
+pub mod config;
+pub mod context;
+pub mod error;
+
+pub use component_manager::ComponentManager;
+pub use config::Settings;
+pub use context::PipelineContext;
+pub use error::ComponentError;
+
 pub mod prelude {
     pub use crate::add::IngestPipeline;
     pub use crate::cognify::{CognifyConfig, CognifyPipeline};

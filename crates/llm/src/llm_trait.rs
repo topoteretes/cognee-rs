@@ -3,129 +3,60 @@
 use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Serialize, de::DeserializeOwned};
+use serde_json::Value;
 
-use crate::error::LlmResult;
-use crate::types::{GenerationOptions, GenerationResponse, Message};
+use crate::error::{LlmError, LlmResult};
+use crate::schema::generate_json_schema;
+use crate::types::{GenerationOptions, GenerationResponse, Message, MessageRole};
 
-/// Trait for LLM implementations supporting structured output generation.
+/// Object-safe base trait for LLM implementations.
 ///
-/// Implementations can either perform API calls to remote LLM services
-/// or use local models via ONNX Runtime or other inference engines.
-///
-/// # Retry Logic
-///
-/// This trait does not include built-in retry logic. Use the generic
-/// `retry_with_backoff` function from `cognee-utils` to wrap LLM calls:
-///
-/// ```ignore
-/// use cognee_utils::retry::{retry_with_backoff, RetryConfig, RetryDecision};
-/// use cognee_llm::{Llm, LlmError};
-///
-/// let config = RetryConfig::new(3, 100, 5000);
-///
-/// let result = retry_with_backoff(
-///     config,
-///     || llm.create_structured_output(text, prompt, None),
-///     |error| match error {
-///         LlmError::NetworkError(_) | LlmError::RateLimitExceeded(_) => RetryDecision::Retry,
-///         _ => RetryDecision::Abort,
-///     },
-/// ).await?;
-/// ```
+/// Provides type-erased methods that work with `serde_json::Value` for JSON schemas
+/// and responses. For ergonomic generic methods, see [`LlmExt`].
 #[async_trait]
 pub trait Llm: Send + Sync {
     /// Generate text completion from messages.
-    ///
-    /// # Arguments
-    /// * `messages` - Conversation messages (system, user, assistant).
-    /// * `options` - Generation options (temperature, max_tokens, etc.).
-    ///
-    /// # Returns
-    /// Generated response with content and metadata.
     async fn generate(
         &self,
         messages: Vec<Message>,
         options: Option<GenerationOptions>,
     ) -> LlmResult<GenerationResponse>;
 
-    /// Generate structured output from messages.
+    /// Generate structured output from text (type-erased).
     ///
-    /// This is the core method for extracting structured data (e.g., knowledge
-    /// graphs) from text using LLM with JSON schema validation.
-    ///
-    /// Inspired by Python's Instructor library, this method:
-    /// 1. Constructs a JSON schema from the response type `T` using `schemars`
-    /// 2. Includes the schema in the system prompt or as a tool/function
-    /// 3. Sends the request to the LLM with JSON mode enabled
-    /// 4. Parses and validates the JSON response into type `T`
-    /// 5. Returns error on validation failures (caller should handle retries)
-    ///
-    /// The schema is generated from `T` at compile time, ensuring the LLM
-    /// receives a precise specification of the expected output format.
-    ///
-    /// # Type Parameters
-    /// * `T` - Response model type (must implement Serialize + DeserializeOwned + JsonSchema).
-    ///
-    /// # Arguments
-    /// * `text_input` - User input text to process.
-    /// * `system_prompt` - System prompt describing the task and output format.
-    /// * `options` - Generation options.
-    ///
-    /// # Returns
-    /// Structured data of type `T` extracted from LLM response.
-    ///
-    /// # Example
-    /// ```ignore
-    /// use cognee_llm::{Llm, Message};
-    /// use schemars::JsonSchema;
-    /// use serde::{Deserialize, Serialize};
-    ///
-    /// #[derive(Serialize, Deserialize, JsonSchema)]
-    /// struct KnowledgeGraph {
-    ///     nodes: Vec<Node>,
-    ///     edges: Vec<Edge>,
-    /// }
-    ///
-    /// let llm: Box<dyn Llm> = ...;
-    /// let graph: KnowledgeGraph = llm.create_structured_output(
-    ///     "Alice told Bob to bring documents.",
-    ///     "Extract a knowledge graph with nodes and edges.",
-    ///     None,
-    /// ).await?;
-    /// ```
-    async fn create_structured_output<T>(
+    /// Takes a pre-built JSON schema and returns the raw JSON `Value`.
+    /// Prefer using [`LlmExt::create_structured_output`] for typed access.
+    async fn create_structured_output_raw(
         &self,
         text_input: &str,
         system_prompt: &str,
+        json_schema: &Value,
         options: Option<GenerationOptions>,
-    ) -> LlmResult<T>
-    where
-        T: Serialize + DeserializeOwned + JsonSchema + Send;
+    ) -> LlmResult<Value> {
+        let messages = vec![
+            Message {
+                role: MessageRole::System,
+                content: system_prompt.to_string(),
+            },
+            Message {
+                role: MessageRole::User,
+                content: text_input.to_string(),
+            },
+        ];
+        self.create_structured_output_with_messages_raw(messages, json_schema, options)
+            .await
+    }
 
-    /// Generate structured output with custom messages.
+    /// Generate structured output from messages (type-erased).
     ///
-    /// Similar to `create_structured_output` but allows full control over
-    /// the conversation history (useful for multi-turn interactions).
-    ///
-    /// The JSON schema is automatically generated from `T` and included in the
-    /// request to ensure the LLM returns properly structured output.
-    ///
-    /// # Type Parameters
-    /// * `T` - Response model type (must implement Serialize + DeserializeOwned + JsonSchema).
-    ///
-    /// # Arguments
-    /// * `messages` - Full conversation messages.
-    /// * `options` - Generation options.
-    ///
-    /// # Returns
-    /// Structured data of type `T`.
-    async fn create_structured_output_with_messages<T>(
+    /// Takes a pre-built JSON schema and returns the raw JSON `Value`.
+    /// Prefer using [`LlmExt::create_structured_output_with_messages`] for typed access.
+    async fn create_structured_output_with_messages_raw(
         &self,
         messages: Vec<Message>,
+        json_schema: &Value,
         options: Option<GenerationOptions>,
-    ) -> LlmResult<T>
-    where
-        T: Serialize + DeserializeOwned + JsonSchema + Send;
+    ) -> LlmResult<Value>;
 
     /// Get the model identifier.
     fn model(&self) -> &str;
@@ -142,6 +73,62 @@ pub trait Llm: Send + Sync {
 
     /// Get the maximum context length (in tokens) for this model.
     fn max_context_length(&self) -> u32 {
-        4096 // Conservative default
+        4096
     }
 }
+
+/// Extension trait providing generic convenience methods on top of [`Llm`].
+/// Auto-implemented for all types that implement `Llm`.
+#[async_trait]
+pub trait LlmExt: Llm {
+    /// Generate structured output from text input.
+    ///
+    /// Generates a JSON schema from `T`, calls the type-erased
+    /// [`Llm::create_structured_output_raw`], and deserializes the result.
+    async fn create_structured_output<T>(
+        &self,
+        text_input: &str,
+        system_prompt: &str,
+        options: Option<GenerationOptions>,
+    ) -> LlmResult<T>
+    where
+        T: Serialize + DeserializeOwned + JsonSchema + Send,
+    {
+        let schema = generate_json_schema::<T>();
+        let value = self
+            .create_structured_output_raw(text_input, system_prompt, &schema, options)
+            .await?;
+        serde_json::from_value(value).map_err(|e| {
+            LlmError::DeserializationError(format!(
+                "Failed to deserialize structured output: {}",
+                e
+            ))
+        })
+    }
+
+    /// Generate structured output from custom messages.
+    ///
+    /// Generates a JSON schema from `T`, calls the type-erased
+    /// [`Llm::create_structured_output_with_messages_raw`], and deserializes the result.
+    async fn create_structured_output_with_messages<T>(
+        &self,
+        messages: Vec<Message>,
+        options: Option<GenerationOptions>,
+    ) -> LlmResult<T>
+    where
+        T: Serialize + DeserializeOwned + JsonSchema + Send,
+    {
+        let schema = generate_json_schema::<T>();
+        let value = self
+            .create_structured_output_with_messages_raw(messages, &schema, options)
+            .await?;
+        serde_json::from_value(value).map_err(|e| {
+            LlmError::DeserializationError(format!(
+                "Failed to deserialize structured output: {}",
+                e
+            ))
+        })
+    }
+}
+
+impl<T: Llm + ?Sized> LlmExt for T {}

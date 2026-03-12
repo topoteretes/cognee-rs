@@ -12,17 +12,17 @@ use crate::types::{SearchContext, SearchError, SearchItem, SearchOutput, SearchT
 const DEFAULT_TOP_K: usize = 10;
 const DOCUMENT_CHUNK_TYPE: &str = "DocumentChunk";
 
-pub struct LexicalRetriever<G: GraphDBTrait> {
-    graph_db: Arc<G>,
+pub struct LexicalRetriever {
+    graph_db: Arc<dyn GraphDBTrait>,
     top_k: usize,
     with_scores: bool,
     stop_words: HashSet<String>,
     multiset_jaccard: bool,
 }
 
-impl<G: GraphDBTrait> LexicalRetriever<G> {
+impl LexicalRetriever {
     pub fn new(
-        graph_db: Arc<G>,
+        graph_db: Arc<dyn GraphDBTrait>,
         top_k: Option<usize>,
         with_scores: bool,
         stop_words: Option<Vec<String>>,
@@ -164,7 +164,7 @@ impl<G: GraphDBTrait> LexicalRetriever<G> {
 }
 
 #[async_trait]
-impl<G: GraphDBTrait> SearchRetriever for LexicalRetriever<G> {
+impl SearchRetriever for LexicalRetriever {
     fn search_type(&self) -> SearchType {
         SearchType::ChunksLexical
     }
@@ -228,13 +228,13 @@ impl<G: GraphDBTrait> SearchRetriever for LexicalRetriever<G> {
     }
 }
 
-pub struct JaccardChunksRetriever<G: GraphDBTrait> {
-    inner: LexicalRetriever<G>,
+pub struct JaccardChunksRetriever {
+    inner: LexicalRetriever,
 }
 
-impl<G: GraphDBTrait> JaccardChunksRetriever<G> {
+impl JaccardChunksRetriever {
     pub fn new(
-        graph_db: Arc<G>,
+        graph_db: Arc<dyn GraphDBTrait>,
         top_k: Option<usize>,
         with_scores: bool,
         stop_words: Option<Vec<String>>,
@@ -253,7 +253,7 @@ impl<G: GraphDBTrait> JaccardChunksRetriever<G> {
 }
 
 #[async_trait]
-impl<G: GraphDBTrait> SearchRetriever for JaccardChunksRetriever<G> {
+impl SearchRetriever for JaccardChunksRetriever {
     fn search_type(&self) -> SearchType {
         self.inner.search_type()
     }
@@ -276,7 +276,7 @@ impl<G: GraphDBTrait> SearchRetriever for JaccardChunksRetriever<G> {
 mod tests {
     use std::sync::Arc;
 
-    use cognee_graph::{GraphDBTrait, MockGraphDB};
+    use cognee_graph::{GraphDBTrait, GraphDBTraitExt, MockGraphDB};
     use serde::Serialize;
     use uuid::Uuid;
 
@@ -303,10 +303,11 @@ mod tests {
 
     #[tokio::test]
     async fn ranks_chunks_with_set_jaccard() {
-        let graph_db = Arc::new(MockGraphDB::new());
-        add_chunk(&graph_db, "rust memory safety and ownership").await;
-        add_chunk(&graph_db, "python async search orchestration").await;
-        add_chunk(&graph_db, "ownership ownership ownership model").await;
+        let mock_graph_db = Arc::new(MockGraphDB::new());
+        add_chunk(&mock_graph_db, "rust memory safety and ownership").await;
+        add_chunk(&mock_graph_db, "python async search orchestration").await;
+        add_chunk(&mock_graph_db, "ownership ownership ownership model").await;
+        let graph_db: Arc<dyn GraphDBTrait> = mock_graph_db;
 
         let retriever = JaccardChunksRetriever::new(
             Arc::clone(&graph_db),
@@ -332,9 +333,10 @@ mod tests {
 
     #[tokio::test]
     async fn multiset_jaccard_accounts_for_frequency() {
-        let graph_db = Arc::new(MockGraphDB::new());
-        add_chunk(&graph_db, "rust rust rust memory").await;
-        add_chunk(&graph_db, "rust memory").await;
+        let mock_graph_db = Arc::new(MockGraphDB::new());
+        add_chunk(&mock_graph_db, "rust rust rust memory").await;
+        add_chunk(&mock_graph_db, "rust memory").await;
+        let graph_db: Arc<dyn GraphDBTrait> = mock_graph_db;
 
         let retriever =
             JaccardChunksRetriever::new(Arc::clone(&graph_db), Some(2), true, None, true);
@@ -347,8 +349,9 @@ mod tests {
 
     #[tokio::test]
     async fn get_completion_returns_items_output() {
-        let graph_db = Arc::new(MockGraphDB::new());
-        add_chunk(&graph_db, "exact term matching with jaccard").await;
+        let mock_graph_db = Arc::new(MockGraphDB::new());
+        add_chunk(&mock_graph_db, "exact term matching with jaccard").await;
+        let graph_db: Arc<dyn GraphDBTrait> = mock_graph_db;
 
         let retriever =
             JaccardChunksRetriever::new(Arc::clone(&graph_db), Some(5), false, None, false);

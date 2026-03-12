@@ -5,14 +5,12 @@
 
 use async_trait::async_trait;
 use reqwest::Client;
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use serde::Deserialize;
 use serde_json::{Value, json};
 use tracing::{debug, instrument, warn};
 
 use crate::error::{LlmError, LlmResult};
 use crate::llm_trait::Llm;
-use crate::schema::generate_json_schema;
 use crate::types::{GenerationOptions, GenerationResponse, Message, MessageRole, TokenUsage};
 
 /// OpenAI API adapter.
@@ -374,51 +372,24 @@ impl Llm for OpenAIAdapter {
         })
     }
 
-    async fn create_structured_output<T>(
-        &self,
-        text_input: &str,
-        system_prompt: &str,
-        options: Option<GenerationOptions>,
-    ) -> LlmResult<T>
-    where
-        T: Serialize + DeserializeOwned + JsonSchema + Send,
-    {
-        let messages = vec![
-            Message {
-                role: MessageRole::System,
-                content: system_prompt.to_string(),
-            },
-            Message {
-                role: MessageRole::User,
-                content: text_input.to_string(),
-            },
-        ];
-
-        self.create_structured_output_with_messages(messages, options)
-            .await
-    }
-
-    async fn create_structured_output_with_messages<T>(
+    async fn create_structured_output_with_messages_raw(
         &self,
         messages: Vec<Message>,
+        json_schema: &Value,
         options: Option<GenerationOptions>,
-    ) -> LlmResult<T>
-    where
-        T: Serialize + DeserializeOwned + JsonSchema + Send,
-    {
+    ) -> LlmResult<Value> {
         let is_empty_or_non_json = |raw: &str| {
             let trimmed = raw.trim();
             trimmed.is_empty() || serde_json::from_str::<Value>(trimmed).is_err()
         };
 
-        let opts = options.unwrap_or_default();
+        let parse_json =
+            |raw: &str| -> Result<Value, serde_json::Error> { serde_json::from_str(raw) };
 
-        // Generate JSON schema for the response type
-        let schema = generate_json_schema::<T>();
+        let opts = options.unwrap_or_default();
+        let schema = json_schema;
 
         // Try strict JSON schema mode first (new OpenAI API behavior).
-        // Some OpenAI-compatible providers may not support this and will fail,
-        // in which case we gracefully fall back to older modes below.
         let mut strict_schema_request = json!({
             "model": self.model,
             "messages": Self::convert_messages(&messages),
@@ -450,7 +421,7 @@ impl Llm for OpenAIAdapter {
                 })?;
 
                 if let Some(function_call) = &strict_choice.message.function_call {
-                    match serde_json::from_str::<T>(&function_call.arguments) {
+                    match parse_json(&function_call.arguments) {
                         Ok(parsed) => return Ok(parsed),
                         Err(e) => {
                             if attempt + 1 < self.structured_output_retries
@@ -470,7 +441,7 @@ impl Llm for OpenAIAdapter {
                 }
 
                 if let Some(content) = strict_choice.message.content.as_ref() {
-                    match serde_json::from_str::<T>(content) {
+                    match parse_json(content) {
                         Ok(parsed) => return Ok(parsed),
                         Err(e) => {
                             if attempt + 1 < self.structured_output_retries
@@ -505,7 +476,6 @@ impl Llm for OpenAIAdapter {
             "function_call": {"name": "extract_structured_data"}
         });
 
-        // Add optional parameters
         if let Some(temp) = opts.temperature {
             request_body["temperature"] = json!(temp);
         }
@@ -525,9 +495,8 @@ impl Llm for OpenAIAdapter {
                 .first()
                 .ok_or_else(|| LlmError::InvalidResponse("No choices in response".to_string()))?;
 
-            // Try to extract from function call (OpenAI style)
             if let Some(function_call) = &choice.message.function_call {
-                match serde_json::from_str::<T>(&function_call.arguments) {
+                match parse_json(&function_call.arguments) {
                     Ok(parsed) => return Ok(parsed),
                     Err(e) => {
                         if attempt + 1 < self.structured_output_retries
@@ -550,13 +519,10 @@ impl Llm for OpenAIAdapter {
         }
 
         // Fallback to JSON mode (works with Ollama and other providers)
-        // Rebuild the request with JSON mode and example-based prompt
         let mut json_messages = Self::convert_messages(&messages);
 
-        // Create an example JSON structure based on the schema
-        let example = Self::schema_to_example(&schema);
+        let example = Self::schema_to_example(schema);
 
-        // Inject clearer instructions into the last user message
         if let Some(last_msg) = json_messages.last_mut()
             && last_msg["role"] == "user"
         {
@@ -576,7 +542,6 @@ impl Llm for OpenAIAdapter {
             "response_format": {"type": "json_object"}
         });
 
-        // Add optional parameters
         if let Some(temp) = opts.temperature {
             json_request["temperature"] = json!(temp);
         }
@@ -612,12 +577,11 @@ impl Llm for OpenAIAdapter {
                 LlmError::InvalidResponse("No choices in JSON mode response".to_string())
             })?;
 
-            // Parse JSON from content
             let content = json_choice.message.content.as_ref().ok_or_else(|| {
                 LlmError::InvalidResponse("No content in JSON mode response".to_string())
             })?;
 
-            match serde_json::from_str::<T>(content) {
+            match parse_json(content) {
                 Ok(parsed) => return Ok(parsed),
                 Err(e) => {
                     if attempt + 1 < self.structured_output_retries && is_empty_or_non_json(content)

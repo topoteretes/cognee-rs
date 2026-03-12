@@ -1,26 +1,19 @@
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use cognee_lib::add::IngestPipeline;
-use cognee_lib::database::{DatabaseTrait, SqliteDatabase};
 use cognee_lib::models::DataInput;
-use cognee_lib::storage::{LocalStorage, StorageTrait};
+use cognee_lib::{ComponentManager, PipelineContext};
 use tracing::info;
 use uuid::Uuid;
 
 use crate::cli::AddArgs;
-use crate::config_store::load_config;
 use crate::error::CliError;
 
-pub fn run(args: AddArgs) -> Result<(), CliError> {
-    let config = load_config()?;
-
-    let storage_path = PathBuf::from(config.settings.data_root_directory);
-    let database_url = config.settings.relational_db_url;
-    let owner_id = Uuid::parse_str(&config.settings.default_user_id).map_err(|error| {
+pub fn run(args: AddArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> {
+    let owner_id = Uuid::parse_str(&cm.settings().default_user_id).map_err(|error| {
         CliError::Validation(format!(
             "Invalid default_user_id '{}': {error}",
-            config.settings.default_user_id
+            cm.settings().default_user_id
         ))
     })?;
 
@@ -30,19 +23,16 @@ pub fn run(args: AddArgs) -> Result<(), CliError> {
         .map_err(|error| CliError::Runtime(format!("Failed to create async runtime: {error}")))?;
 
     runtime.block_on(async {
-        let storage = Arc::new(LocalStorage::new(storage_path));
-        storage.initialize().await.map_err(|error| {
-            CliError::Runtime(format!("Storage initialization failed: {error}"))
-        })?;
+        let storage = cm
+            .storage()
+            .await
+            .map_err(|e| CliError::Runtime(format!("{e}")))?;
+        let database = cm
+            .database()
+            .await
+            .map_err(|e| CliError::Runtime(format!("{e}")))?;
 
-        let database = Arc::new(SqliteDatabase::new(&database_url).await.map_err(|error| {
-            CliError::Runtime(format!("Database initialization failed: {error}"))
-        })?);
-        database.initialize().await.map_err(|error| {
-            CliError::Runtime(format!("Database schema initialization failed: {error}"))
-        })?;
-
-        let pipeline = IngestPipeline::new(Arc::clone(&storage), Arc::clone(&database));
+        let pipeline = IngestPipeline::new(storage, database);
 
         let inputs = args
             .data

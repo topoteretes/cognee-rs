@@ -1,6 +1,8 @@
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use clap::Parser;
+use cognee_lib::ComponentManager;
 use serde::Deserialize;
 use tracing::info;
 
@@ -16,12 +18,12 @@ struct SequenceStep {
     timestamp_offset_ms: u64,
 }
 
-fn dispatch(command: Commands) -> Result<(), CliError> {
+fn dispatch(command: Commands, cm: &Arc<ComponentManager>) -> Result<(), CliError> {
     match command {
-        Commands::Add(args) => add::run(args),
-        Commands::Cognify(args) => cognify::run(args),
-        Commands::Search(args) => search::run(args),
-        Commands::Delete(args) => delete::run(args),
+        Commands::Add(args) => add::run(args, Arc::clone(cm)),
+        Commands::Cognify(args) => cognify::run(args, Arc::clone(cm)),
+        Commands::Search(args) => search::run(args, Arc::clone(cm)),
+        Commands::Delete(args) => delete::run(args, Arc::clone(cm)),
         Commands::Config(args) => config::run(args),
         Commands::RunSequence(_) => Err(CliError::Validation(
             "Nested run-sequence is not allowed".to_string(),
@@ -29,7 +31,7 @@ fn dispatch(command: Commands) -> Result<(), CliError> {
     }
 }
 
-pub fn run(args: RunSequenceArgs) -> Result<(), CliError> {
+pub fn run(args: RunSequenceArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> {
     let content = std::fs::read_to_string(&args.sequence_file).map_err(|e| {
         CliError::Validation(format!(
             "Failed to read sequence file '{}': {}",
@@ -90,7 +92,7 @@ pub fn run(args: RunSequenceArgs) -> Result<(), CliError> {
             ))
         })?;
 
-        dispatch(parsed.command)
+        dispatch(parsed.command, &cm)
             .map_err(|e| CliError::Runtime(format!("Step {}: {}", index + 1, e)))?;
     }
 
