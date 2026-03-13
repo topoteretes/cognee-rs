@@ -188,6 +188,7 @@ pub struct ConfigResetArgs {
 
 #[derive(Debug, Args)]
 pub struct RunSequenceArgs {
-    /// Path to JSON file containing the command sequence
-    pub sequence_file: String,
+    /// Path(s) to JSON file(s) containing the command sequence
+    #[arg(required = true)]
+    pub sequence_files: Vec<String>,
 }
