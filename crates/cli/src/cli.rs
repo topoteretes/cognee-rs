@@ -15,6 +15,8 @@ pub struct Cli {
 pub enum Commands {
     Add(AddArgs),
     Cognify(CognifyArgs),
+    #[command(name = "add-and-cognify")]
+    AddAndCognify(AddAndCognifyArgs),
     Search(SearchArgs),
     Delete(DeleteArgs),
     Config(ConfigArgs),
@@ -57,6 +59,30 @@ pub struct CognifyArgs {
 
     #[arg(long = "background", short = 'b', default_value_t = false)]
     pub background: bool,
+
+    #[arg(long = "llm-max-retries", value_parser = clap::value_parser!(u32).range(1..))]
+    pub llm_max_retries: Option<u32>,
+
+    #[arg(long = "llm-max-parallel-requests", value_parser = clap::value_parser!(u32).range(1..))]
+    pub llm_max_parallel_requests: Option<u32>,
+}
+
+#[derive(Debug, Args)]
+pub struct AddAndCognifyArgs {
+    #[arg(required = true)]
+    pub data: Vec<String>,
+
+    #[arg(long = "dataset-name", short = 'd', default_value = "main_dataset")]
+    pub dataset_name: String,
+
+    #[arg(long = "chunk-size")]
+    pub chunk_size: Option<u32>,
+
+    #[arg(long = "ontology-file")]
+    pub ontology_file: Option<String>,
+
+    #[arg(long = "chunker", default_value = "TextChunker")]
+    pub chunker: ChunkerArg,
 
     #[arg(long = "llm-max-retries", value_parser = clap::value_parser!(u32).range(1..))]
     pub llm_max_retries: Option<u32>,

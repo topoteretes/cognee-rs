@@ -1,0 +1,211 @@
+[
+  {
+    "command": [
+      "add-and-cognify",
+      "make butter mixture make butter softened micrawave 20 seconds soften",
+      "--dataset-name",
+      "howto100m_GIxObShU_UE",
+      "--chunk-size",
+      "700"
+    ],
+    "timestamp_offset_ms": 45010
+  },
+  {
+    "command": [
+      "add-and-cognify",
+      "large bowl cut softened butter sift powdered sugar mix butter sugar using spatula hands easier hands",
+      "--dataset-name",
+      "howto100m_GIxObShU_UE",
+      "--chunk-size",
+      "700"
+    ],
+    "timestamp_offset_ms": 66960
+  },
+  {
+    "command": [
+      "add-and-cognify",
+      "add almond powder almond powder raw blanched almonds mixed food processor get fine texture",
+      "--dataset-name",
+      "howto100m_GIxObShU_UE",
+      "--chunk-size",
+      "700"
+    ],
+    "timestamp_offset_ms": 71520
+  },
+  {
+    "command": [
+      "add-and-cognify",
+      "add pinch salt baking sweet add salt highlights sweet flavors mix ingredients",
+      "--dataset-name",
+      "howto100m_GIxObShU_UE",
+      "--chunk-size",
+      "700"
+    ],
+    "timestamp_offset_ms": 80690
+  },
+  {
+    "command": [
+      "add-and-cognify",
+      "flavoring pate sucree vanilla extract feel free flavor taste spices extracts add vanilla extra 1 large egg lightly beat fork",
+      "--dataset-name",
+      "howto100m_GIxObShU_UE",
+      "--chunk-size",
+      "700"
+    ],
+    "timestamp_offset_ms": 107990
+  },
+  {
+    "command": [
+      "add-and-cognify",
+      "add egg butter mixture mix using spatula",
+      "--dataset-name",
+      "howto100m_GIxObShU_UE",
+      "--chunk-size",
+      "700"
+    ],
+    "timestamp_offset_ms": 128900
+  },
+  {
+    "command": [
+      "add-and-cognify",
+      "finally sift flour ingredients mix ingredients",
+      "--dataset-name",
+      "howto100m_GIxObShU_UE",
+      "--chunk-size",
+      "700"
+    ],
+    "timestamp_offset_ms": 135740
+  },
+  {
+    "command": [
+      "add-and-cognify",
+      "important overmix dough shrink baked ingredients incorporate create soft dough",
+      "--dataset-name",
+      "howto100m_GIxObShU_UE",
+      "--chunk-size",
+      "700"
+    ],
+    "timestamp_offset_ms": 151079
+  },
+  {
+    "command": [
+      "add-and-cognify",
+      "wrap dough plastic wrap rest fridge 1 hour dough rest bake shrink make dough 1 2 days advance bake",
+      "--dataset-name",
+      "howto100m_GIxObShU_UE",
+      "--chunk-size",
+      "700"
+    ],
+    "timestamp_offset_ms": 169280
+  },
+  {
+    "command": [
+      "add-and-cognify",
+      "cooling dough shape use small individual molds large usually comes 2 pieces personally prefer small ones",
+      "--dataset-name",
+      "howto100m_GIxObShU_UE",
+      "--chunk-size",
+      "700"
+    ],
+    "timestamp_offset_ms": 208430
+  },
+  {
+    "command": [
+      "add-and-cognify",
+      "butter molds little butter",
+      "--dataset-name",
+      "howto100m_GIxObShU_UE",
+      "--chunk-size",
+      "700"
+    ],
+    "timestamp_offset_ms": 238490
+  },
+  {
+    "command": [
+      "add-and-cognify",
+      "sprinkle flour work station rolling pin place dough little tap rolling pin flatten roll thin",
+      "--dataset-name",
+      "howto100m_GIxObShU_UE",
+      "--chunk-size",
+      "700"
+    ],
+    "timestamp_offset_ms": 242930
+  },
+  {
+    "command": [
+      "add-and-cognify",
+      "transfer dough into modle roll rolling pin place mold tendancy break dont worry patch pieces using hands",
+      "--dataset-name",
+      "howto100m_GIxObShU_UE",
+      "--chunk-size",
+      "700"
+    ],
+    "timestamp_offset_ms": 280430
+  },
+  {
+    "command": [
+      "add-and-cognify",
+      "transfer dough into modle run rolling pin edges cut dough press dough into mold add dough edges completely covering mold tend shrink baking",
+      "--dataset-name",
+      "howto100m_GIxObShU_UE",
+      "--chunk-size",
+      "700"
+    ],
+    "timestamp_offset_ms": 307370
+  },
+  {
+    "command": [
+      "add-and-cognify",
+      "place dough fridge 30 minutes baking",
+      "--dataset-name",
+      "howto100m_GIxObShU_UE",
+      "--chunk-size",
+      "700"
+    ],
+    "timestamp_offset_ms": 394250
+  },
+  {
+    "command": [
+      "add-and-cognify",
+      "preheat oven 360 f degree 180 c",
+      "--dataset-name",
+      "howto100m_GIxObShU_UE",
+      "--chunk-size",
+      "700"
+    ],
+    "timestamp_offset_ms": 399590
+  },
+  {
+    "command": [
+      "add-and-cognify",
+      "bake dough 15 minutes gets golden brown color",
+      "--dataset-name",
+      "howto100m_GIxObShU_UE",
+      "--chunk-size",
+      "700"
+    ],
+    "timestamp_offset_ms": 404850
+  },
+  {
+    "command": [
+      "add-and-cognify",
+      "remove dough oven rest kitchen counter remove form mold pate sucree cool fill custard cream fruits",
+      "--dataset-name",
+      "howto100m_GIxObShU_UE",
+      "--chunk-size",
+      "700"
+    ],
+    "timestamp_offset_ms": 414230
+  },
+  {
+    "command": [
+      "add-and-cognify",
+      "wrap pate sucree plastic wrap place freezer bag freeze 2 months heat oven using",
+      "--dataset-name",
+      "howto100m_GIxObShU_UE",
+      "--chunk-size",
+      "700"
+    ],
+    "timestamp_offset_ms": 433520
+  }
+]

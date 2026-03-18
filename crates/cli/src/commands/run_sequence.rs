@@ -9,7 +9,7 @@ use tracing::info;
 use crate::cli::{Cli, Commands, RunSequenceArgs};
 use crate::error::CliError;
 
-use super::{add, cognify, config, delete, search};
+use super::{add, add_and_cognify, cognify, config, delete, search};
 
 #[derive(Debug, Deserialize)]
 struct SequenceStep {
@@ -22,6 +22,7 @@ fn dispatch(command: Commands, cm: &Arc<ComponentManager>) -> Result<(), CliErro
     match command {
         Commands::Add(args) => add::run(args, Arc::clone(cm)),
         Commands::Cognify(args) => cognify::run(args, Arc::clone(cm)),
+        Commands::AddAndCognify(args) => add_and_cognify::run(args, Arc::clone(cm)),
         Commands::Search(args) => search::run(args, Arc::clone(cm)),
         Commands::Delete(args) => delete::run(args, Arc::clone(cm)),
         Commands::Config(args) => config::run(args),

@@ -13,6 +13,34 @@ OLLAMA_VOLUME_NAME="${OLLAMA_VOLUME_NAME:-ollama_cognee_demo_data}"
 MODEL_NAME="${MODEL_NAME:-qwen3:4b}"
 DATASET_NAME="${DATASET_NAME:-manhattan_project_demo}"
 
+# ── Parse flags ──────────────────────────────────────────────────────────────────
+VIDEO_IDS=()
+SEQUENCE_FILES=()
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --video-ids)
+      shift
+      while [[ $# -gt 0 && "$1" != --* ]]; do
+        VIDEO_IDS+=("$1")
+        shift
+      done
+      ;;
+    --sequence-files)
+      shift
+      while [[ $# -gt 0 && "$1" != --* ]]; do
+        SEQUENCE_FILES+=("$1")
+        shift
+      done
+      ;;
+    *)
+      echo "ERROR: Unknown argument: $1" >&2
+      echo "Usage: $0 [--video-ids <id>...] [--sequence-files <path>...]" >&2
+      exit 1
+      ;;
+  esac
+done
+
 DEMO_RUNTIME_DIR="$PROJECT_ROOT/target/demo/runtime"
 DEMO_DATA_DIR="$PROJECT_ROOT/target/demo/data"
 MODEL_DIR="$PROJECT_ROOT/target/models"
@@ -107,10 +135,17 @@ main() {
 
   prepare_env_and_configure_cli
 
-  log "📝 Creating local demo text files"
-  create_demo_documents
-
-  run_demo_pipeline
+  if [[ ${#VIDEO_IDS[@]} -gt 0 ]]; then
+    log "🎬 Running video pipeline for: ${VIDEO_IDS[*]}"
+    run_video_pipeline "${VIDEO_IDS[@]}"
+  elif [[ ${#SEQUENCE_FILES[@]} -gt 0 ]]; then
+    log "📋 Running custom sequence files: ${SEQUENCE_FILES[*]}"
+    run_sequence_files "${SEQUENCE_FILES[@]}"
+  else
+    log "📝 Creating local demo text files"
+    create_demo_documents
+    run_demo_pipeline
+  fi
 
   ok ""
   ok "✅ Demo completed successfully"
@@ -119,4 +154,4 @@ main() {
   ok "   To stop Ollama: docker stop $OLLAMA_CONTAINER_NAME"
 }
 
-main "$@"
+main

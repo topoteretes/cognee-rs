@@ -62,6 +62,8 @@ RUST_LOG="${RUST_LOG:-info,cognee_search=debug,ort=warn}"
 
 # ── Parse flags ─────────────────────────────────────────────────────────────────
 SKIP_BUILD=false
+VIDEO_IDS=()
+SEQUENCE_FILES=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -69,9 +71,23 @@ while [[ $# -gt 0 ]]; do
       SKIP_BUILD=true
       shift
       ;;
+    --video-ids)
+      shift
+      while [[ $# -gt 0 && "$1" != --* ]]; do
+        VIDEO_IDS+=("$1")
+        shift
+      done
+      ;;
+    --sequence-files)
+      shift
+      while [[ $# -gt 0 && "$1" != --* ]]; do
+        SEQUENCE_FILES+=("$1")
+        shift
+      done
+      ;;
     *)
       echo "ERROR: Unknown argument: $1" >&2
-      echo "Usage: $0 [--skip-build]" >&2
+      echo "Usage: $0 [--skip-build] [--video-ids <id>...] [--sequence-files <path>...]" >&2
       exit 1
       ;;
   esac
@@ -111,6 +127,39 @@ run_cli() {
     --log "${RUST_LOG}" \
     --forward-port "${OLLAMA_PORT}" \
     cognee-cli -- "$@"
+}
+
+# ── Android-specific run_sequence_files ────────────────────────────────────────
+# Override the shared run_sequence_files: expand env vars, push the resulting
+# files to the device, then pass device-side paths to run_cli.
+run_sequence_files() {
+  local expanded_files=()
+  local device_files=()
+  local cleanup_files=()
+  local device_seq_dir="${DEVICE_DIR}/sequences"
+
+  "${ADB}" shell "mkdir -p ${device_seq_dir}"
+
+  for template in "$@"; do
+    if [[ ! -f "$template" ]]; then
+      fail "Sequence file not found: $template"
+    fi
+    local base
+    base="$(basename "$template")"
+    local expanded="/tmp/cognee_seq_${$}_${base}"
+    expand_sequence_file "$template" "$expanded"
+    expanded_files+=("$expanded")
+    cleanup_files+=("$expanded")
+
+    # Push to device
+    "${ADB}" push "$expanded" "${device_seq_dir}/${base}" > /dev/null
+    device_files+=("${device_seq_dir}/${base}")
+  done
+
+  log "🚀 Running ${#device_files[@]} sequence file(s) via run-sequence"
+  run_cli run-sequence "${device_files[@]}"
+
+  rm -f "${cleanup_files[@]}"
 }
 
 # ── Android-specific configure_cli ─────────────────────────────────────────────
@@ -201,17 +250,25 @@ main() {
 
   prepare_env_and_configure_cli
 
-  # create_demo_documents (from demo_common.sh) takes an explicit path so it
-  # writes to the host filesystem; DEMO_DATA_DIR remains the device path for
-  # the subsequent run_demo_pipeline call.
-  log "📝 Creating demo text files on host"
-  create_demo_documents "${HOST_DATA_DIR}"
+  if [[ ${#VIDEO_IDS[@]} -gt 0 ]]; then
+    log "🎬 Running video pipeline for: ${VIDEO_IDS[*]}"
+    run_video_pipeline "${VIDEO_IDS[@]}"
+  elif [[ ${#SEQUENCE_FILES[@]} -gt 0 ]]; then
+    log "📋 Running custom sequence files: ${SEQUENCE_FILES[*]}"
+    run_sequence_files "${SEQUENCE_FILES[@]}"
+  else
+    # create_demo_documents (from demo_common.sh) takes an explicit path so it
+    # writes to the host filesystem; DEMO_DATA_DIR remains the device path for
+    # the subsequent run_demo_pipeline call.
+    log "📝 Creating demo text files on host"
+    create_demo_documents "${HOST_DATA_DIR}"
 
-  log "📤 Pushing demo text files to device"
-  "${ADB}" push "${HOST_DATA_DIR}/." "${DEVICE_DIR}/demo_data/"
+    log "📤 Pushing demo text files to device"
+    "${ADB}" push "${HOST_DATA_DIR}/." "${DEVICE_DIR}/demo_data/"
 
-  # run_demo_pipeline uses DEMO_DATA_DIR (device path) for 'cognee-cli add'.
-  run_demo_pipeline
+    # run_demo_pipeline uses DEMO_DATA_DIR (device path) for 'cognee-cli add'.
+    run_demo_pipeline
+  fi
 
   ok ""
   ok "✅ Android demo completed successfully"
@@ -221,4 +278,4 @@ main() {
   ok "   To stop Ollama:   docker stop ${OLLAMA_CONTAINER_NAME}"
 }
 
-main "$@"
+main

@@ -8,7 +8,7 @@ use std::sync::Arc;
 use clap::Parser;
 use cli::{Cli, Commands};
 use cognee_lib::ComponentManager;
-use commands::{add, cognify, config, delete, run_sequence, search};
+use commands::{add, add_and_cognify, cognify, config, delete, run_sequence, search};
 use config_store::load_config;
 use error::{CliError, ExitCode};
 use tracing::error;
@@ -23,6 +23,7 @@ fn run() -> Result<(), CliError> {
     match cli.command {
         Commands::Add(args) => add::run(args, Arc::clone(&cm)),
         Commands::Cognify(args) => cognify::run(args, Arc::clone(&cm)),
+        Commands::AddAndCognify(args) => add_and_cognify::run(args, Arc::clone(&cm)),
         Commands::Search(args) => search::run(args, Arc::clone(&cm)),
         Commands::Delete(args) => delete::run(args, Arc::clone(&cm)),
         Commands::Config(args) => config::run(args),

@@ -176,3 +176,60 @@ run_demo_pipeline() {
 
   rm -f "$expanded"
 }
+
+# run_sequence_files <file1> [file2 ...]
+# Expands env vars in each sequence file and runs them all via a single
+# run-sequence invocation (multiple files supported).
+# Calls:  run_cli (must be defined by the sourcing script)
+run_sequence_files() {
+  local expanded_files=()
+  local cleanup_files=()
+
+  for template in "$@"; do
+    if [[ ! -f "$template" ]]; then
+      fail "Sequence file not found: $template"
+    fi
+    local expanded="/tmp/cognee_seq_${$}_$(basename "$template")"
+    expand_sequence_file "$template" "$expanded"
+    expanded_files+=("$expanded")
+    cleanup_files+=("$expanded")
+  done
+
+  log "🚀 Running ${#expanded_files[@]} sequence file(s) via run-sequence"
+  run_cli run-sequence "${expanded_files[@]}"
+
+  rm -f "${cleanup_files[@]}"
+}
+
+# run_video_pipeline <video_id> [video_id ...]
+# For each video ID, locates the ingest (<id>.json) and search (<id>_search.json)
+# sequence files under demo/how_to_videos/ and runs them all.
+# Calls:  run_cli (must be defined by the sourcing script)
+run_video_pipeline() {
+  if [[ $# -eq 0 ]]; then
+    fail "Usage: run_video_pipeline <video_id> [video_id ...]"
+  fi
+
+  local script_dir
+  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+  local videos_dir="${script_dir}/how_to_videos"
+
+  local all_files=()
+
+  for video_id in "$@"; do
+    local ingest_file="${videos_dir}/${video_id}.json"
+    local search_file="${videos_dir}/${video_id}_search.json"
+
+    if [[ ! -f "$ingest_file" ]]; then
+      fail "Ingest sequence not found for video '${video_id}': ${ingest_file}"
+    fi
+    if [[ ! -f "$search_file" ]]; then
+      fail "Search sequence not found for video '${video_id}': ${search_file}"
+    fi
+
+    all_files+=("$ingest_file" "$search_file")
+  done
+
+  log "🎬 Running video pipeline for ${#} video(s): $*"
+  run_sequence_files "${all_files[@]}"
+}

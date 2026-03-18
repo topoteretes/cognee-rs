@@ -141,9 +141,14 @@ pub fn run(args: CognifyArgs, cm: Arc<ComponentManager>) -> Result<(), CliError>
                 })?;
 
             if data_items.is_empty() {
-                warn!("Warning: dataset '{dataset_name}' has no data to cognify.");
+                info!("Dataset '{dataset_name}': no data to cognify, skipping.");
                 continue;
             }
+
+            info!(
+                "Dataset '{dataset_name}': cognifying {} data item(s)",
+                data_items.len()
+            );
 
             let result = pipeline
                 .cognify(data_items, dataset.id, llm.clone())
@@ -219,7 +224,7 @@ async fn resolve_dataset_names(
     Ok(datasets.into_iter().map(|dataset| dataset.name).collect())
 }
 
-fn build_artifact_references(
+pub(crate) fn build_artifact_references(
     owner_id: Uuid,
     dataset_id: Uuid,
     result: &cognee_lib::cognify::CognifyResult,
