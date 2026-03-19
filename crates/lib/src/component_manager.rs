@@ -10,6 +10,8 @@ use tracing::warn;
 use cognee_database::{DatabaseTrait, SqliteDatabase};
 use cognee_embedding::{EmbeddingConfig, EmbeddingEngine, OnnxEmbeddingEngine};
 use cognee_graph::{GraphDBTrait, LadybugAdapter};
+#[cfg(all(feature = "android-litert", target_os = "android"))]
+use cognee_llm::LiteRtAdapter;
 use cognee_llm::{Llm, OpenAIAdapter};
 use cognee_storage::{LocalStorage, StorageTrait};
 use cognee_vector::{QdrantAdapter, VectorDB};
@@ -139,37 +141,69 @@ impl ComponentManager {
 
     fn init_llm(&self) -> Result<Arc<dyn Llm>, ComponentError> {
         let provider = self.settings.llm_provider.to_lowercase();
-        if provider != "openai" {
-            return Err(ComponentError::Config(format!(
-                "Unsupported llm_provider '{}'. Supported: openai.",
+        match provider.as_str() {
+            "openai" => {
+                if self.settings.llm_api_key.is_empty() {
+                    return Err(ComponentError::Config(
+                        "llm_api_key must be configured".to_string(),
+                    ));
+                }
+
+                let endpoint = if self.settings.llm_endpoint.is_empty() {
+                    None
+                } else {
+                    Some(self.settings.llm_endpoint.clone())
+                };
+
+                let retries = self.settings.llm_max_retries.max(1);
+
+                let adapter = OpenAIAdapter::new(
+                    self.settings.llm_model.clone(),
+                    self.settings.llm_api_key.clone(),
+                    endpoint,
+                )
+                .map_err(|e| ComponentError::Llm(format!("initialization failed: {e}")))?
+                .with_structured_output_retries(retries)
+                .with_network_retries(retries);
+
+                Ok(Arc::new(adapter))
+            }
+            "litert" => {
+                #[cfg(all(feature = "android-litert", target_os = "android"))]
+                {
+                    let model_path = self.settings.llm_model.trim();
+                    if model_path.is_empty() {
+                        return Err(ComponentError::Config(
+                            "llm_model must point to a local LiteRT model path when llm_provider=litert"
+                                .to_string(),
+                        ));
+                    }
+
+                    let backend = if self.settings.llm_endpoint.trim().is_empty() {
+                        None
+                    } else {
+                        Some(self.settings.llm_endpoint.clone())
+                    };
+
+                    let adapter = LiteRtAdapter::new(model_path.to_string(), backend)
+                        .map_err(|e| ComponentError::Llm(format!("initialization failed: {e}")))?;
+
+                    Ok(Arc::new(adapter))
+                }
+
+                #[cfg(not(all(feature = "android-litert", target_os = "android")))]
+                {
+                    Err(ComponentError::Config(
+                        "llm_provider=litert requires Android target and the `android-litert` crate feature"
+                            .to_string(),
+                    ))
+                }
+            }
+            _ => Err(ComponentError::Config(format!(
+                "Unsupported llm_provider '{}'. Supported: openai, litert.",
                 self.settings.llm_provider
-            )));
+            ))),
         }
-
-        if self.settings.llm_api_key.is_empty() {
-            return Err(ComponentError::Config(
-                "llm_api_key must be configured".to_string(),
-            ));
-        }
-
-        let endpoint = if self.settings.llm_endpoint.is_empty() {
-            None
-        } else {
-            Some(self.settings.llm_endpoint.clone())
-        };
-
-        let retries = self.settings.llm_max_retries.max(1);
-
-        let adapter = OpenAIAdapter::new(
-            self.settings.llm_model.clone(),
-            self.settings.llm_api_key.clone(),
-            endpoint,
-        )
-        .map_err(|e| ComponentError::Llm(format!("initialization failed: {e}")))?
-        .with_structured_output_retries(retries)
-        .with_network_retries(retries);
-
-        Ok(Arc::new(adapter))
     }
 }
 

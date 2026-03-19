@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "lowercase")]
 pub enum LlmProvider {
     OpenAI,
+    LiteRt,
     Anthropic,
     Ollama,
     Gemini,

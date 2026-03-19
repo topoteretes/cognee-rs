@@ -57,6 +57,8 @@ pub mod llm_trait;
 pub mod schema;
 pub mod types;
 
+#[cfg(all(feature = "android-litert", target_os = "android"))]
+pub use adapters::LiteRtAdapter;
 pub use adapters::OpenAIAdapter;
 pub use config::{LlmConfig, LlmProvider};
 pub use error::{LlmError, LlmResult};

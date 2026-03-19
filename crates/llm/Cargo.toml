@@ -3,6 +3,10 @@ name = "cognee-llm"
 version.workspace = true
 edition.workspace = true
 
+[features]
+default = []
+android-litert = ["dep:cognee-litert-lm"]
+
 [dependencies]
 # Async runtime
 tokio.workspace = true
@@ -24,6 +28,9 @@ reqwest.workspace = true
 # Logging
 log.workspace = true
 tracing.workspace = true
+
+# Android local LLM backend (feature-gated)
+cognee-litert-lm = { workspace = true, optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

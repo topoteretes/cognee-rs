@@ -54,6 +54,35 @@ See [docker/ollama/README.md](docker/ollama/README.md) for detailed documentatio
 cargo build --release
 ```
 
+### Android Local LLM (LiteRT-LM)
+
+An Android-only local LLM backend is available through the `litert` provider.
+
+Requirements:
+- LiteRT wrapper crate fetched from `https://github.com/topoteretes/cognee-litert-lm.git`
+- Android NDK toolchain configured (for example `aarch64-linux-android21-clang` in `PATH`)
+
+Enable feature:
+
+```bash
+cargo check -p cognee-lib --features android-litert
+```
+
+Android compile check:
+
+```bash
+cargo check -p cognee-lib --features android-litert --target aarch64-linux-android
+```
+
+Configuration values:
+- `llm_provider = "litert"`
+- `llm_model = "/absolute/path/to/model.litertlm"` (local model path)
+- `llm_endpoint = "cpu"` or `"gpu"` (optional backend hint)
+
+Structured output behavior for LiteRT:
+- The JSON schema is injected into the user prompt in compact JSON form.
+- The model is instructed to return only one valid JSON object matching that schema.
+
 ### Running Tests
 
 ```bash

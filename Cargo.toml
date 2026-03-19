@@ -28,6 +28,7 @@ version = "0.1.0"
 anyhow = "1"
 assert_cmd = "2.0"
 async-trait = "0.1.89"
+cognee-litert-lm = { git = "https://github.com/topoteretes/cognee-litert-lm.git" }
 clap = "4.5"
 chrono = { version = "0.4.41", default-features = false, features = ["serde", "clock", "std"] }
 common = { git = "https://github.com/qdrant/qdrant", package = "common", tag = "v1.17.0" }
