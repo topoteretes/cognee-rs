@@ -19,15 +19,6 @@ use serde::{Deserialize, Serialize};
 /// * `name` - Display name of the entity
 /// * `node_type` - Type classification (e.g., "PERSON", "ORGANIZATION", "CONCEPT")
 /// * `description` - Brief description of the entity
-///
-/// # Python equivalent
-/// ```python
-/// class Node(BaseModel):
-///     id: str
-///     name: str
-///     type: str  # renamed to node_type in Rust (type is a keyword)
-///     description: str
-/// ```
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct Node {
     /// Unique identifier for the node (human-readable, e.g., "Albert Einstein")
@@ -54,14 +45,6 @@ pub struct Node {
 /// * `source_node_id` - ID of the source node
 /// * `target_node_id` - ID of the target node
 /// * `relationship_name` - Type of relationship (use snake_case, e.g., "works_at")
-///
-/// # Python equivalent
-/// ```python
-/// class Edge(BaseModel):
-///     source_node_id: str
-///     target_node_id: str
-///     relationship_name: str
-/// ```
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct Edge {
     /// ID of the source node
@@ -82,13 +65,6 @@ pub struct Edge {
 /// # Fields
 /// * `nodes` - List of extracted entities and concepts
 /// * `edges` - List of relationships between nodes
-///
-/// # Python equivalent
-/// ```python
-/// class KnowledgeGraph(BaseModel):
-///     nodes: List[Node] = Field(..., default_factory=list)
-///     edges: List[Edge] = Field(..., default_factory=list)
-/// ```
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct KnowledgeGraph {
     /// List of nodes (entities and concepts)

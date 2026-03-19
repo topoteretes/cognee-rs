@@ -22,15 +22,6 @@ pub struct DeduplicationResult {
 /// **Node deduplication key**: `str(entity.id)` (entity UUID as string)
 /// **Edge deduplication key**: `"{source_id}_{target_id}_{relationship_name}"`
 ///
-/// This matches the Python implementation in `deduplicate_nodes_and_edges.py`:
-/// ```python
-/// node_map = {str(node.id): node for node in graph_nodes}
-/// edge_map = {
-///     str(source) + str(relationship) + str(target): edge
-///     for edge in graph_edges
-/// }
-/// ```
-///
 /// # Arguments
 /// * `nodes` - Vector of GraphNodePair to deduplicate
 /// * `edges` - Vector of GraphEdgePair to deduplicate

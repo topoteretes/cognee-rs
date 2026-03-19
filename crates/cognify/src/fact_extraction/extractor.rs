@@ -110,20 +110,6 @@ impl FactExtractor {
     ///
     /// # Errors
     /// Returns CognifyError::LlmError if the LLM call fails
-    ///
-    /// # Python equivalent
-    /// ```python
-    /// async def extract_content_graph(
-    ///     content: str,
-    ///     response_model: Type[BaseModel],
-    ///     custom_prompt: Optional[str] = None,
-    /// ):
-    ///     system_prompt = custom_prompt or render_prompt(llm_config.graph_prompt_path, {})
-    ///     content_graph = await LLMGateway.acreate_structured_output(
-    ///         content, system_prompt, response_model
-    ///     )
-    ///     return content_graph
-    /// ```
     pub async fn extract_facts(
         &self,
         text: &str,
@@ -169,13 +155,6 @@ impl FactExtractor {
     ///
     /// # Errors
     /// Returns CognifyError::LlmError if any LLM call fails
-    ///
-    /// # Python equivalent
-    /// ```python
-    /// chunk_graphs = await asyncio.gather(
-    ///     *[extract_content_graph(chunk.text, graph_model) for chunk in data_chunks]
-    /// )
-    /// ```
     pub async fn extract_facts_batch(
         &self,
         texts: Vec<String>, // Changed to owned Vec<String> to avoid lifetime issues

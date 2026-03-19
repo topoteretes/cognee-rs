@@ -70,16 +70,6 @@ impl SummaryExtractor {
     ///
     /// # Errors
     /// Returns CognifyError::LlmError if the LLM call fails
-    ///
-    /// # Python equivalent
-    /// ```python
-    /// async def extract_summary(content: str, response_model: Type[BaseModel]):
-    ///     system_prompt = read_query_prompt("summarize_content.txt")
-    ///     llm_output = await LLMGateway.acreate_structured_output(
-    ///         content, system_prompt, response_model
-    ///     )
-    ///     return llm_output
-    /// ```
     pub async fn extract_summary(
         &self,
         text: &str,
@@ -106,13 +96,6 @@ impl SummaryExtractor {
 
     /// Summarize multiple text chunks in parallel.
     ///
-    /// Mirrors Python's pattern in summarize_text.py:
-    /// ```python
-    /// chunk_summaries = await asyncio.gather(
-    ///     *[extract_summary(chunk.text, summarization_model) for chunk in data_chunks]
-    /// )
-    /// ```
-    ///
     /// # Arguments
     /// * `chunks` - Slice of DocumentChunks to summarize
     /// * `custom_prompt` - Optional custom system prompt
@@ -122,25 +105,6 @@ impl SummaryExtractor {
     ///
     /// # Errors
     /// Returns CognifyError::LlmError if any LLM call fails
-    ///
-    /// # Python equivalent
-    /// ```python
-    /// async def summarize_text(
-    ///     data_chunks: list[DocumentChunk], summarization_model: Type[BaseModel] = None
-    /// ):
-    ///     chunk_summaries = await asyncio.gather(
-    ///         *[extract_summary(chunk.text, summarization_model) for chunk in data_chunks]
-    ///     )
-    ///     summaries = [
-    ///         TextSummary(
-    ///             id=uuid5(chunk.id, "TextSummary"),
-    ///             made_from=chunk,
-    ///             text=chunk_summaries[chunk_index].summary,
-    ///         )
-    ///         for (chunk_index, chunk) in enumerate(data_chunks)
-    ///     ]
-    ///     return summaries
-    /// ```
     pub async fn summarize_chunks(
         &self,
         chunks: &[DocumentChunk],

@@ -12,13 +12,6 @@ use uuid::Uuid;
 ///
 /// This is the structured output format expected from the LLM.
 /// Used as the response_model in extract_summary calls.
-///
-/// # Python equivalent
-/// ```python
-/// class SummarizedContent(BaseModel):
-///     summary: str
-///     description: str
-/// ```
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SummarizedContent {
     /// Brief summary of the content (1-2 sentences)
@@ -32,21 +25,6 @@ pub struct SummarizedContent {
 ///
 /// Represents a hierarchical summary that can be stored and retrieved.
 /// Links back to the original chunk via chunk_id.
-///
-/// # Python equivalent
-/// ```python
-/// class TextSummary(DataPoint):
-///     text: str
-///     made_from: DocumentChunk
-///     metadata: dict = {"index_fields": ["text"]}
-///
-/// # In Python, created as:
-/// TextSummary(
-///     id=uuid5(chunk.id, "TextSummary"),
-///     made_from=chunk,
-///     text=chunk_summaries[chunk_index].summary,
-/// )
-/// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TextSummary {
     /// Unique identifier (uuid5 based on chunk_id + "TextSummary")
@@ -77,11 +55,6 @@ impl TextSummary {
     ///
     /// # Returns
     /// A new TextSummary with uuid5(chunk_id, "TextSummary") as id
-    ///
-    /// # Python equivalent
-    /// ```python
-    /// id=uuid5(chunk.id, "TextSummary")
-    /// ```
     pub fn new(chunk_id: Uuid, text: String, description: Option<String>, model: String) -> Self {
         // Deterministic ID: uuid5(chunk_id, "TextSummary")
         let id = Uuid::new_v5(&chunk_id, b"TextSummary");
