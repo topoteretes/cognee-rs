@@ -155,7 +155,11 @@ for port in "${FORWARD_PORTS[@]}"; do
 done
 
 "${ADB}" shell \
-    "HOME=${DEVICE_DIR} \
+    "mkdir -p ${DEVICE_DIR}/tmp && \
+     cd ${DEVICE_DIR} && \
+     HOME=${DEVICE_DIR} \
+     TMPDIR=${DEVICE_DIR}/tmp \
+     LLVM_PROFILE_FILE=${DEVICE_DIR}/default.profraw \
      PATH=${DEVICE_DIR}/bin:\$PATH \
      LD_LIBRARY_PATH=${DEVICE_DIR}/lib \
      ORT_DYLIB_PATH=${DEVICE_DIR}/lib/libonnxruntime.so \

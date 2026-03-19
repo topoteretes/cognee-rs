@@ -12,12 +12,13 @@
 #   - NDK toolchain bin on PATH (for the linker)
 #
 # Usage:
-#   ./scripts/android-build-and-deploy.sh [--debug] [--deploy]
+#   ./scripts/android-build-and-deploy.sh [--debug] [--deploy] [--litert]
 #
 # Flags:
 #   --debug    Build in debug mode (default: release)
 #   --deploy   Push built artifacts to the connected Android device via adb
 #              (default: build only, no device interaction)
+#   --litert   Enable LiteRT LLM feature in cognee-lib/cognee-cli builds.
 
 set -euo pipefail
 
@@ -50,6 +51,7 @@ ANDROID_API_LEVEL="${ANDROID_API_LEVEL:-27}"
 PROFILE="release"
 CARGO_PROFILE_FLAG="--release"
 DEPLOY=false
+ENABLE_LITERT=false
 
 for arg in "$@"; do
     case "${arg}" in
@@ -60,9 +62,12 @@ for arg in "$@"; do
         --deploy)
             DEPLOY=true
             ;;
+        --litert)
+            ENABLE_LITERT=true
+            ;;
         *)
             echo "ERROR: Unknown argument: ${arg}" >&2
-            echo "Usage: $0 [--debug] [--deploy]" >&2
+            echo "Usage: $0 [--debug] [--deploy] [--litert]" >&2
             exit 1
             ;;
     esac
@@ -72,11 +77,17 @@ TARGET_DIR="${PROJECT_DIR}/target"
 BINARY_DIR="${TARGET_DIR}/${TARGET}/${PROFILE}"
 MODEL_DIR="${TARGET_DIR}/models"
 
+# LiteRT wrapper defaults (used only when --litert is enabled)
+# Prefer explicit override via LITERT_WRAPPER_DIR, fall back to a sibling checkout.
+LITERT_WRAPPER_DIR="${LITERT_WRAPPER_DIR:-${PROJECT_DIR}/../cognee-litert-lm}"
+LITERT_PREBUILT_ANDROID_DIR="${LITERT_WRAPPER_DIR}/vendor/LiteRT-LM/prebuilt/android_arm64"
+
 # ── Validation ─────────────────────────────────────────────────────────────────
 echo "=== Android Build & Deploy: workspace ==="
 echo "  Target:   ${TARGET}"
 echo "  Profile:  ${PROFILE}"
 echo "  Deploy:   ${DEPLOY}"
+echo "  LiteRT:   ${ENABLE_LITERT}"
 echo "  NDK:      ${ANDROID_NDK_HOME}"
 echo "  SDK:      ${ANDROID_SDK_ROOT}"
 echo ""
@@ -104,6 +115,38 @@ if [[ ! -d "${NDK_TOOLCHAIN}/bin" ]]; then
     exit 1
 fi
 
+if [[ "${ENABLE_LITERT}" == "true" ]]; then
+    # Resolve directory that contains liblitert_lm_c.so for link-time.
+    # Precedence:
+    # 1) Caller-provided LITERT_LM_LIB_DIR with exact filename
+    # 2) /tmp/liblitert_lm_c_sync.so produced by benchmark_android.sh
+    # 3) /tmp/liblitert_lm_c_spec.so produced by benchmark_android.sh
+    if [[ -n "${LITERT_LM_LIB_DIR:-}" && -f "${LITERT_LM_LIB_DIR}/liblitert_lm_c.so" ]]; then
+        :
+    else
+        RESOLVED_LITERT_LIB_DIR="${TARGET_DIR}/android-litert-lib"
+        mkdir -p "${RESOLVED_LITERT_LIB_DIR}"
+
+        if [[ -f "/tmp/liblitert_lm_c_sync.so" ]]; then
+            cp -f "/tmp/liblitert_lm_c_sync.so" "${RESOLVED_LITERT_LIB_DIR}/liblitert_lm_c.so"
+        elif [[ -f "/tmp/liblitert_lm_c_spec.so" ]]; then
+            cp -f "/tmp/liblitert_lm_c_spec.so" "${RESOLVED_LITERT_LIB_DIR}/liblitert_lm_c.so"
+        else
+            echo "ERROR: LiteRT C library not found." >&2
+            echo "Expected one of:" >&2
+            echo "  - \\$LITERT_LM_LIB_DIR/liblitert_lm_c.so" >&2
+            echo "  - /tmp/liblitert_lm_c_sync.so" >&2
+            echo "  - /tmp/liblitert_lm_c_spec.so" >&2
+            echo "Hint: run benchmark_android.sh from your cognee-litert-lm checkout, or set LITERT_LM_LIB_DIR." >&2
+            exit 1
+        fi
+
+        export LITERT_LM_LIB_DIR="${RESOLVED_LITERT_LIB_DIR}"
+    fi
+
+    echo "  LiteRT lib dir: ${LITERT_LM_LIB_DIR}"
+fi
+
 # Ensure the Rust target is installed
 if ! rustup target list --installed | grep -q "${TARGET}"; then
     echo "Installing Rust target ${TARGET}..."
@@ -129,24 +172,34 @@ export ANDROID_API_LEVEL
 # ARM objects that the aarch64 linker rejects with "incompatible" errors.
 export ANDROID_NDK="${ANDROID_NDK_HOME}"
 
-# Wipe any cached C/C++ library build outputs that were compiled for the wrong
-# architecture.  This can happen when cmake previously ran with a toolchain
-# file that defaulted to a wrong ABI (e.g. armeabi-v7a).  Because lbug's
-# build.rs does not declare ANDROID_NDK in cargo:rerun-if-env-changed, cargo
-# caches the cmake-built static libraries and will reuse wrong-arch objects
-# on subsequent builds.  Deleting the build directory forces cargo to re-run
-# the build script so cmake produces fresh aarch64 objects.
-echo ">>> Purging cached C/C++ build outputs for ${TARGET}/${PROFILE}..."
-rm -rf "${TARGET_DIR}/${TARGET}/${PROFILE}/build/lbug-"*
+# lbug's build.rs does not declare ANDROID_NDK in cargo:rerun-if-env-changed,
+# so cargo caches cmake-built static libraries and will reuse wrong-arch objects
+# when the NDK or target changes.  We track the last build config in a marker
+# file and only purge the lbug build cache when it actually changes.
+LBUG_MARKER="${TARGET_DIR}/${TARGET}/${PROFILE}/.lbug-build-config"
+LBUG_CONFIG_KEY="${TARGET}|${ANDROID_NDK_HOME}|${ANDROID_API_LEVEL}"
+if [[ -f "${LBUG_MARKER}" ]] && [[ "$(cat "${LBUG_MARKER}")" == "${LBUG_CONFIG_KEY}" ]]; then
+    echo ">>> lbug build cache is up-to-date for ${TARGET}/${PROFILE}, skipping purge."
+else
+    echo ">>> Purging cached C/C++ build outputs for ${TARGET}/${PROFILE} (config changed)..."
+    rm -rf "${TARGET_DIR}/${TARGET}/${PROFILE}/build/lbug-"*
+    mkdir -p "$(dirname "${LBUG_MARKER}")"
+    echo "${LBUG_CONFIG_KEY}" > "${LBUG_MARKER}"
+fi
 
 # ── Step 1: Build ──────────────────────────────────────────────────────────────
 echo ">>> Step 1: Building workspace for ${TARGET} (${PROFILE})..."
 echo ""
 
+FEATURES="onnx_dynamic_library"
+if [[ "${ENABLE_LITERT}" == "true" ]]; then
+    FEATURES="${FEATURES},cognee-lib/android-litert"
+fi
+
 cargo build \
     --workspace \
     --target "${TARGET}" \
-    --features onnx_dynamic_library \
+    --features "${FEATURES}" \
     ${CARGO_PROFILE_FLAG}
 
 echo ""
@@ -197,11 +250,25 @@ ORT_LIB="${BINARY_DIR}/libonnxruntime.so"
 if [[ ! -f "${ORT_LIB}" ]]; then
     ORT_LIB=$(find "${TARGET_DIR}/${TARGET}" -name "libonnxruntime.so" -type f 2>/dev/null | head -1)
 fi
+if [[ ! -f "${ORT_LIB}" ]]; then
+    # Optional fallback path provided by caller/environment.
+    ORT_LIB="${ORT_LIB:-}"
+fi
 if [[ -n "${ORT_LIB}" && -f "${ORT_LIB}" ]]; then
     cp "${ORT_LIB}" "${STAGING_DIR}/lib/"
     echo "  Found libonnxruntime.so: $(du -h "${ORT_LIB}" | cut -f1)"
 else
     echo "WARNING: libonnxruntime.so not found. Binaries that use ONNX may fail at runtime." >&2
+fi
+
+# Copy Rust JNI/FFI library for Android wrapper app
+CLI_FFI_LIB="${BINARY_DIR}/libcognee_cli_ffi.so"
+if [[ -f "${CLI_FFI_LIB}" ]]; then
+    cp "${CLI_FFI_LIB}" "${STAGING_DIR}/lib/"
+    echo "  Found libcognee_cli_ffi.so: $(du -h "${CLI_FFI_LIB}" | cut -f1)"
+else
+    echo "WARNING: libcognee_cli_ffi.so not found in ${BINARY_DIR}." >&2
+    echo "         Android wrapper app JNI integration requires this library." >&2
 fi
 
 # Copy NDK libc++_shared.so (required for C++ dependencies)
@@ -211,6 +278,24 @@ if [[ -f "${LIBCXX}" ]]; then
     echo "  Found libc++_shared.so"
 else
     echo "WARNING: libc++_shared.so not found at ${LIBCXX}" >&2
+fi
+
+if [[ "${ENABLE_LITERT}" == "true" ]]; then
+    if [[ -f "${LITERT_LM_LIB_DIR}/liblitert_lm_c.so" ]]; then
+        cp "${LITERT_LM_LIB_DIR}/liblitert_lm_c.so" "${STAGING_DIR}/lib/"
+        echo "  Found liblitert_lm_c.so"
+    else
+        echo "WARNING: liblitert_lm_c.so not found in ${LITERT_LM_LIB_DIR}" >&2
+    fi
+
+    if [[ -d "${LITERT_PREBUILT_ANDROID_DIR}" ]]; then
+        while IFS= read -r -d '' lib; do
+            cp "${lib}" "${STAGING_DIR}/lib/"
+        done < <(find "${LITERT_PREBUILT_ANDROID_DIR}" -maxdepth 1 -type f -name '*.so' -print0)
+        echo "  Copied LiteRT Android prebuilt shared libraries"
+    else
+        echo "WARNING: LiteRT prebuilt dir not found: ${LITERT_PREBUILT_ANDROID_DIR}" >&2
+    fi
 fi
 
 # Scan all collected binaries for additional NDK shared library dependencies
@@ -282,6 +367,9 @@ if [[ "${DEPLOY}" == "true" ]]; then
     if ls "${STAGING_DIR}/models/"* 1>/dev/null 2>&1; then
         "${ADB}" push "${STAGING_DIR}/models/." "${DEVICE_DIR}/models/"
     fi
+
+    # Make entire deploy tree accessible/executable for non-super-user contexts.
+    "${ADB}" shell "chmod -R 777 ${DEVICE_DIR}"
 else
     echo ""
     echo ">>> Step 4: Skipping deploy (pass --deploy to push to device)."
