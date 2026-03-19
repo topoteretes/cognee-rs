@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 
 use clap::Parser;
 use cognee_lib::ComponentManager;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tracing::info;
 
 use crate::cli::{Cli, Commands, RunSequenceArgs};
@@ -11,7 +11,7 @@ use crate::error::CliError;
 
 use super::{add, add_and_cognify, cognify, config, delete, search};
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 struct SequenceStep {
     command: Vec<String>,
     #[serde(default)]
@@ -82,6 +82,19 @@ fn run_single_file(file_path: &str, cm: &Arc<ComponentManager>) -> Result<(), Cl
                 file_path
             )));
         }
+
+        let step_json = serde_json::to_string(step).unwrap_or_else(|_| {
+            format!(
+                "{{\"command\":{:?},\"timestamp_offset_ms\":{}}}",
+                step.command, step.timestamp_offset_ms
+            )
+        });
+        info!(
+            "Step {}/{}: start processing {}",
+            index + 1,
+            steps.len(),
+            step_json
+        );
 
         // Sleep until the target offset if we haven't reached it yet
         let target = Duration::from_millis(step.timestamp_offset_ms);

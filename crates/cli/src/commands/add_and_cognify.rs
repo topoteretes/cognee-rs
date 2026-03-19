@@ -26,6 +26,7 @@ pub fn run(args: AddAndCognifyArgs, cm: Arc<ComponentManager>) -> Result<(), Cli
             settings.default_user_id
         ))
     })?;
+    let summarization_model = cm.settings().summarization_model.clone();
 
     match args.chunker {
         ChunkerArg::Text => {}
@@ -130,7 +131,8 @@ pub fn run(args: AddAndCognifyArgs, cm: Arc<ComponentManager>) -> Result<(), Cli
             .with_chunk_size(effective_chunk_size as usize)
             .with_chunk_overlap(cm.settings().chunk_overlap as usize)
             .with_chunk_strategy(chunk_strategy)
-            .with_max_parallel_extractions(effective_max_parallel);
+            .with_max_parallel_extractions(effective_max_parallel)
+            .with_summarization(!summarization_model.is_empty());
 
         let pipeline = CognifyPipeline::new(
             storage,
