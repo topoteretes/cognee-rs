@@ -5,6 +5,10 @@
 //! - cognify (`CognifyPipeline` and related types)
 //! - search (`SearchBuilder`/`SearchOrchestrator` and related types)
 
+pub mod core {
+    pub use cognee_core::*;
+}
+
 pub mod add {
     pub use cognee_ingestion::{ContentHasher, IngestPipeline};
 }
@@ -67,6 +71,12 @@ pub use error::ComponentError;
 pub mod prelude {
     pub use crate::add::IngestPipeline;
     pub use crate::cognify::{CognifyConfig, CognifyPipeline};
+    pub use crate::core::{
+        AsyncRuntime, CancellationHandle, CancellationToken, CpuPool, CpuPoolExt, ExecutionError,
+        NoopWatcher, Pipeline, PipelineWatcher, ProgressToken, RayonThreadPool, RetryDelay,
+        RetryPolicy, Task, TaskContext, TaskContextBuilder, TaskInfo, Value, execute,
+        execute_blocking, execute_in_background,
+    };
     pub use crate::database::{DatabaseTrait, SqliteDatabase};
     pub use crate::graph::GraphDBTrait;
     pub use crate::llm::Llm;
@@ -82,6 +92,7 @@ pub use cognee_cognify::*;
 pub use cognee_delete::*;
 pub use cognee_search::*;
 
+pub use cognee_core;
 pub use cognee_database;
 pub use cognee_delete;
 pub use cognee_embedding;

@@ -16,6 +16,7 @@ android-litert = ["cognee-llm/android-litert"]
 [dependencies]
 cognee-chunking = { path = "../chunking" }
 cognee-cognify = { path = "../cognify" }
+cognee-core = { path = "../core" }
 cognee-delete = { path = "../delete" }
 cognee-database = { path = "../database" }
 cognee-embedding = { path = "../embedding" }
