@@ -1,0 +1,20 @@
+[package]
+name = "cognee-python"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "cognee_pipeline"
+crate-type = ["cdylib"]
+
+[dependencies]
+cognee-core = { path = "../crates/core" }
+cognee-database = { path = "../crates/database", features = ["testing"] }
+cognee-graph = { path = "../crates/graph", features = ["testing"] }
+cognee-vector = { path = "../crates/vector", features = ["testing"] }
+pyo3 = { version = "0.23", features = ["extension-module"] }
+pyo3-async-runtimes = { version = "0.23", features = ["tokio-runtime"] }
+tokio = { workspace = true }
+futures = { workspace = true }
+uuid = { workspace = true }
+async-trait = { workspace = true }

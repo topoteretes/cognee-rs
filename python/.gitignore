@@ -1,0 +1,18 @@
+# Rust build output
+target/
+
+# Compiled extension modules
+*.so
+*.pyd
+*.dll
+
+# Maturin / pip build artifacts
+dist/
+*.egg-info/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Virtual environments
+.venv/

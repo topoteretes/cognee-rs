@@ -23,7 +23,10 @@ members = [
     "crates/ontology",
     "crates/search",
     "crates/delete",
+    
+    # TODO: Move this out of the main workspace to avoid pulling in testing features and C FFI dependencies for all members
     "capi/cognee-capi",
+    "python",
 ]
 resolver = "3"
 
