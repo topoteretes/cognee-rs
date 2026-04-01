@@ -1,3 +1,8 @@
+# TODO: Extract capi/cognee-capi into a separate workspace. The C FFI wrapper
+# should not live inside the main cognee-rust workspace long-term — it has
+# different build requirements (cdylib/staticlib, cbindgen, CMake integration)
+# and pulls in testing features unconditionally. Move it to its own workspace
+# under capi/ with its own Cargo.toml [workspace] root.
 [workspace]
 members = [
     "examples",
@@ -18,6 +23,7 @@ members = [
     "crates/ontology",
     "crates/search",
     "crates/delete",
+    "capi/cognee-capi",
 ]
 resolver = "3"
 

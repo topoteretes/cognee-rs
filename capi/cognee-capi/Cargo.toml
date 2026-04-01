@@ -1,0 +1,21 @@
+[package]
+name = "cognee-capi"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+crate-type = ["cdylib", "staticlib"]
+
+[dependencies]
+cognee-core = { path = "../../crates/core" }
+cognee-database = { path = "../../crates/database", features = ["testing"] }
+cognee-graph = { path = "../../crates/graph", features = ["testing"] }
+cognee-vector = { path = "../../crates/vector", features = ["testing"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "sync"] }
+futures.workspace = true
+tokio-stream = "0.1"
+uuid.workspace = true
+async-trait.workspace = true
+
+[build-dependencies]
+cbindgen = "0.27"

@@ -24,3 +24,6 @@ Desktop.ini
 
 # Environment variables
 .env
+
+# C API build artifacts
+capi/build/
