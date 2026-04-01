@@ -1,0 +1,27 @@
+[package]
+name = "cognee-core"
+version.workspace = true
+edition.workspace = true
+
+[features]
+telemetry = []
+
+[dependencies]
+cognee-database = { path = "../database" }
+cognee-graph = { path = "../graph" }
+cognee-vector = { path = "../vector" }
+
+async-trait.workspace = true
+chrono.workspace = true
+futures.workspace = true
+rayon.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+cognee-database = { path = "../database", features = ["testing"] }
+cognee-graph = { path = "../graph", features = ["testing"] }
+cognee-vector = { path = "../vector", features = ["testing"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

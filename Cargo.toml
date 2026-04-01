@@ -7,6 +7,7 @@ members = [
     "crates/ingestion",
     "crates/chunking",
     "crates/cognify",
+    "crates/core",
     "crates/lib",
     "crates/cli",
     "crates/utils",
@@ -46,6 +47,7 @@ notify = "6.1"
 ort = { version = "2.0.0-rc.11", features = ["ndarray", "cuda", "tensorrt"] }
 predicates = "3.1"
 rand = "0.8"
+rayon = "1.10"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "cookies", "gzip", "json", "stream"] }
 scraper = "0.21"
 schemars = "0.8"
