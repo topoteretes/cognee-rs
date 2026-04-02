@@ -13,7 +13,8 @@ Cargo.lock
 .idea/
 *.swp
 *.swo
-.claude/
+.claude/*
+!.claude/CLAUDE.md
 
 # macOS
 .DS_Store
