@@ -4,6 +4,8 @@ pub struct CgPipelineRunHandle {
     pub(crate) inner: Option<PipelineRunHandle>,
 }
 
+/// # Safety
+/// `h` must be a valid pointer or null.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cg_run_handle_is_finished(h: *const CgPipelineRunHandle) -> bool {
     if h.is_null() {
@@ -15,6 +17,8 @@ pub unsafe extern "C" fn cg_run_handle_is_finished(h: *const CgPipelineRunHandle
     }
 }
 
+/// # Safety
+/// `h` must be a valid pointer or null.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cg_run_handle_abort(h: *mut CgPipelineRunHandle) {
     if h.is_null() {
@@ -25,6 +29,8 @@ pub unsafe extern "C" fn cg_run_handle_abort(h: *mut CgPipelineRunHandle) {
     }
 }
 
+/// # Safety
+/// `h` must have been created by this library, or be null.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cg_run_handle_destroy(h: *mut CgPipelineRunHandle) {
     if !h.is_null() {

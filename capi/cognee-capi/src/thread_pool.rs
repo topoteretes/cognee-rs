@@ -3,6 +3,7 @@ use cognee_core::RayonThreadPool;
 use crate::error::set_last_error;
 
 pub struct CgRayonThreadPool {
+    #[allow(dead_code)]
     pub(crate) inner: RayonThreadPool,
 }
 
@@ -28,6 +29,8 @@ pub extern "C" fn cg_rayon_thread_pool_default() -> *mut CgRayonThreadPool {
     }
 }
 
+/// # Safety
+/// `pool` must have been created by this library, or be null.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cg_rayon_thread_pool_destroy(pool: *mut CgRayonThreadPool) {
     if !pool.is_null() {

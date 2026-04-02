@@ -6,6 +6,7 @@ use cognee_core::{ExecStatusManager, NoopExecStatusManager};
 use uuid::Uuid;
 
 pub struct CgExecStatusManager {
+    #[allow(dead_code)]
     pub(crate) inner: Box<dyn ExecStatusManager>,
 }
 
@@ -180,6 +181,8 @@ pub unsafe extern "C" fn cg_exec_status_new(
     }))
 }
 
+/// # Safety
+/// `mgr` must have been created by this library, or be null.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cg_exec_status_destroy(mgr: *mut CgExecStatusManager) {
     if !mgr.is_null() {

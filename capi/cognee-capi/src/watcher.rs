@@ -229,6 +229,8 @@ pub extern "C" fn cg_pipeline_watcher_noop() -> *mut CgPipelineWatcher {
     }))
 }
 
+/// # Safety
+/// `w` must have been created by this library, or be null.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cg_pipeline_watcher_destroy(w: *mut CgPipelineWatcher) {
     if !w.is_null() {

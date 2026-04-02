@@ -30,6 +30,8 @@ pub unsafe extern "C" fn cg_cancellation_pair(
     CgErrorCode::Ok
 }
 
+/// # Safety
+/// `h` must be a valid pointer or null.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cg_cancellation_handle_cancel(h: *mut CgCancellationHandle) {
     if !h.is_null() {
@@ -37,6 +39,8 @@ pub unsafe extern "C" fn cg_cancellation_handle_cancel(h: *mut CgCancellationHan
     }
 }
 
+/// # Safety
+/// `h` must be a valid pointer or null.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cg_cancellation_handle_is_cancelled(
     h: *const CgCancellationHandle,
@@ -47,6 +51,8 @@ pub unsafe extern "C" fn cg_cancellation_handle_is_cancelled(
     unsafe { (*h).inner.is_cancelled() }
 }
 
+/// # Safety
+/// `t` must be a valid pointer or null.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cg_cancellation_token_is_cancelled(t: *const CgCancellationToken) -> bool {
     if t.is_null() {
@@ -55,6 +61,8 @@ pub unsafe extern "C" fn cg_cancellation_token_is_cancelled(t: *const CgCancella
     unsafe { (*t).inner.is_cancelled() }
 }
 
+/// # Safety
+/// `h` must be a valid pointer or null.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cg_cancellation_handle_clone(
     h: *const CgCancellationHandle,
@@ -67,6 +75,8 @@ pub unsafe extern "C" fn cg_cancellation_handle_clone(
     }))
 }
 
+/// # Safety
+/// `t` must be a valid pointer or null.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cg_cancellation_token_clone(
     t: *const CgCancellationToken,
@@ -79,6 +89,8 @@ pub unsafe extern "C" fn cg_cancellation_token_clone(
     }))
 }
 
+/// # Safety
+/// `h` must have been created by this library, or be null.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cg_cancellation_handle_destroy(h: *mut CgCancellationHandle) {
     if !h.is_null() {
@@ -86,6 +98,8 @@ pub unsafe extern "C" fn cg_cancellation_handle_destroy(h: *mut CgCancellationHa
     }
 }
 
+/// # Safety
+/// `t` must have been created by this library, or be null.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cg_cancellation_token_destroy(t: *mut CgCancellationToken) {
     if !t.is_null() {

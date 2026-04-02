@@ -180,38 +180,6 @@ fn error_code_to_task_error(code: CgErrorCode) -> TaskError {
     msg.into()
 }
 
-/// Build a batch pointer array from `&[Box<dyn Value>]`.
-fn batch_to_cg_ptrs(items: &[Box<dyn Value>]) -> (Vec<*const CgValue>, Vec<*mut CgValue>) {
-    let mut ptrs = Vec::with_capacity(items.len());
-    let mut owned = Vec::with_capacity(items.len());
-    for item in items {
-        let arc: Arc<dyn Value> = Arc::from(Box::new(clone_box_value(item)) as Box<dyn Value>);
-        let cg = Box::new(CgValue { inner: arc });
-        let raw = Box::into_raw(cg);
-        ptrs.push(raw as *const CgValue);
-        owned.push(raw);
-    }
-    (ptrs, owned)
-}
-
-/// Clone a `Box<dyn Value>` item by wrapping an Arc around its Any representation.
-fn clone_box_value(item: &dyn Value) -> ArcHolder {
-    // We can't clone a dyn Value directly, but we can wrap a reference.
-    // Since the item is borrowed for the duration of the C call, we use a raw-ptr trick.
-    // Actually, for batch calls, the items are `&[Box<dyn Value>]` and we need
-    // pointers that are valid for the call duration. Let's just create CgValue
-    // wrappers that borrow via raw pointer.
-    //
-    // Simpler approach: create CgValue handles pointing into the existing data.
-    // We'll use a different strategy — stack-allocate CgValue wrappers.
-    ArcHolder(item as *const dyn Value)
-}
-
-/// Holds a raw pointer to a dyn Value for the duration of a batch call.
-struct ArcHolder(*const dyn Value);
-unsafe impl Send for ArcHolder {}
-unsafe impl Sync for ArcHolder {}
-
 // ---------------------------------------------------------------------------
 // Alternative batch approach: create temporary CgValue wrappers on the stack
 // ---------------------------------------------------------------------------
@@ -236,6 +204,7 @@ fn batch_to_temp_ptrs(items: &[Box<dyn Value>]) -> Vec<CgValue> {
 }
 
 /// Wraps a raw pointer to a `dyn Value` for short-lived batch FFI calls.
+#[allow(dead_code)]
 struct RawPtrValue(*const dyn Value);
 unsafe impl Send for RawPtrValue {}
 unsafe impl Sync for RawPtrValue {}
@@ -474,6 +443,7 @@ unsafe extern "C" fn stream_complete_trampoline(status: CgErrorCode, stream_data
 }
 
 /// Wrapper to hold `Arc<dyn Value>` as a boxed `Value`.
+#[allow(dead_code)]
 struct ArcValueWrapper(Arc<dyn Value>);
 
 // ---------------------------------------------------------------------------
@@ -666,6 +636,8 @@ pub unsafe extern "C" fn cg_task_async_stream_batch(
 // Destructor
 // ---------------------------------------------------------------------------
 
+/// # Safety
+/// `t` must have been created by this library, or be null.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cg_task_destroy(t: *mut CgTask) {
     if !t.is_null() {

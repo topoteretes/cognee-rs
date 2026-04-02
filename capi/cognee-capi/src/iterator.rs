@@ -72,6 +72,8 @@ pub unsafe extern "C" fn cg_value_iter_new(
     }))
 }
 
+/// # Safety
+/// `iter` must have been created by this library, or be null.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cg_value_iter_destroy(iter: *mut CgValueIter) {
     if !iter.is_null() {

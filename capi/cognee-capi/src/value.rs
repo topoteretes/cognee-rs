@@ -153,6 +153,8 @@ pub unsafe extern "C" fn cg_value_as_i64(v: *const CgValue, out: *mut i64) -> Cg
     }
 }
 
+/// # Safety
+/// `v` must be a valid `CgValue` pointer, `out` must be a valid pointer.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cg_value_as_f64(v: *const CgValue, out: *mut f64) -> CgErrorCode {
     null_check!(v);
@@ -170,6 +172,8 @@ pub unsafe extern "C" fn cg_value_as_f64(v: *const CgValue, out: *mut f64) -> Cg
     }
 }
 
+/// # Safety
+/// `v` must be a valid `CgValue` pointer, `out` must be a valid pointer.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cg_value_as_bool(v: *const CgValue, out: *mut bool) -> CgErrorCode {
     null_check!(v);

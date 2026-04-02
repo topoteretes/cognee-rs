@@ -30,6 +30,9 @@ pub fn str_to_c_owned(s: &str) -> *mut c_char {
 }
 
 /// Free a string previously returned by this library.
+///
+/// # Safety
+/// `s` must have been allocated by this library, or be null.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cg_string_destroy(s: *mut c_char) {
     if !s.is_null() {
@@ -58,6 +61,7 @@ macro_rules! null_check {
 
 /// Macro wrapping a Result-returning expression. On Err, sets last error and
 /// returns the given error code.
+#[allow(unused_macros)]
 macro_rules! ffi_try {
     ($expr:expr, $code:expr) => {
         match $expr {

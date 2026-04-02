@@ -225,6 +225,8 @@ pub unsafe extern "C" fn cg_pipeline_set_data_id_fn(
     unsafe { (*p).inner.data_id_fn = Some(data_id_fn) };
 }
 
+/// # Safety
+/// `p` must have been created by this library, or be null.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cg_pipeline_destroy(p: *mut CgPipeline) {
     if !p.is_null() {

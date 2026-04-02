@@ -14,6 +14,8 @@ pub extern "C" fn cg_progress_token_new() -> *mut CgProgressToken {
     }))
 }
 
+/// # Safety
+/// `t` must be a valid pointer or null.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cg_progress_token_set(t: *mut CgProgressToken, fraction: f64) {
     if !t.is_null() {
@@ -21,6 +23,8 @@ pub unsafe extern "C" fn cg_progress_token_set(t: *mut CgProgressToken, fraction
     }
 }
 
+/// # Safety
+/// `t` must be a valid pointer or null.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cg_progress_token_fraction(t: *const CgProgressToken) -> f64 {
     if t.is_null() {
@@ -29,6 +33,8 @@ pub unsafe extern "C" fn cg_progress_token_fraction(t: *const CgProgressToken) -
     unsafe { (*t).inner.fraction() }
 }
 
+/// # Safety
+/// `t` must be a valid pointer or null.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cg_progress_token_width(t: *const CgProgressToken) -> f64 {
     if t.is_null() {
@@ -37,6 +43,8 @@ pub unsafe extern "C" fn cg_progress_token_width(t: *const CgProgressToken) -> f
     unsafe { (*t).inner.width() }
 }
 
+/// # Safety
+/// `t` must be a valid pointer or null.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cg_progress_token_is_complete(t: *const CgProgressToken) -> bool {
     if t.is_null() {
@@ -45,6 +53,8 @@ pub unsafe extern "C" fn cg_progress_token_is_complete(t: *const CgProgressToken
     unsafe { (*t).inner.is_complete() }
 }
 
+/// # Safety
+/// `t` must be a valid pointer or null.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cg_progress_token_root_fraction(t: *const CgProgressToken) -> f64 {
     if t.is_null() {
@@ -96,6 +106,8 @@ pub unsafe extern "C" fn cg_progress_token_split(
     }
 }
 
+/// # Safety
+/// `t` must be a valid pointer or null.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cg_progress_token_subtoken(
     t: *mut CgProgressToken,
@@ -108,6 +120,8 @@ pub unsafe extern "C" fn cg_progress_token_subtoken(
     Box::into_raw(Box::new(CgProgressToken { inner: sub }))
 }
 
+/// # Safety
+/// `t` must be a valid pointer or null.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cg_progress_token_clone(
     t: *const CgProgressToken,
@@ -120,6 +134,8 @@ pub unsafe extern "C" fn cg_progress_token_clone(
     }))
 }
 
+/// # Safety
+/// `t` must have been created by this library, or be null.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cg_progress_token_destroy(t: *mut CgProgressToken) {
     if !t.is_null() {
@@ -128,6 +144,10 @@ pub unsafe extern "C" fn cg_progress_token_destroy(t: *mut CgProgressToken) {
 }
 
 /// Destroy an array of progress tokens returned by `cg_progress_token_split`.
+///
+/// # Safety
+/// `arr` must have been allocated by `cg_progress_token_split`, or be null.
+/// `count` must match the count returned by that function.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cg_progress_token_array_destroy(
     arr: *mut *mut CgProgressToken,

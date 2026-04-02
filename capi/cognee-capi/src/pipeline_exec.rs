@@ -23,6 +23,8 @@ pub struct CgPipelineRunResult {
 // Result accessors
 // ---------------------------------------------------------------------------
 
+/// # Safety
+/// `r` must be a valid pointer or null.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cg_run_result_output_count(r: *const CgPipelineRunResult) -> usize {
     if r.is_null() {
@@ -31,6 +33,8 @@ pub unsafe extern "C" fn cg_run_result_output_count(r: *const CgPipelineRunResul
     unsafe { (*r).inner.outputs.len() }
 }
 
+/// # Safety
+/// `r` must be a valid pointer or null.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cg_run_result_output_at(
     r: *const CgPipelineRunResult,
@@ -51,6 +55,8 @@ pub unsafe extern "C" fn cg_run_result_output_at(
     }
 }
 
+/// # Safety
+/// `r` must have been created by this library, or be null.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cg_run_result_destroy(r: *mut CgPipelineRunResult) {
     if !r.is_null() {
@@ -177,7 +183,7 @@ pub unsafe extern "C" fn cg_pipeline_execute_in_background(
     inputs: *const *const CgValue,
     input_count: usize,
     ctx: *const CgTaskContext,
-    watcher: *const CgPipelineWatcher,
+    _watcher: *const CgPipelineWatcher,
 ) -> *mut CgPipelineRunHandle {
     if pipeline.is_null() || ctx.is_null() {
         set_last_error("null pointer argument");
@@ -195,11 +201,7 @@ pub unsafe extern "C" fn cg_pipeline_execute_in_background(
     let c = Arc::clone(unsafe { &(*ctx).inner });
     let input_vec = unsafe { inputs_to_vec(inputs, input_count) };
 
-    let w: Arc<dyn cognee_core::PipelineWatcher> = if watcher.is_null() {
-        Arc::new(NoopWatcher)
-    } else {
-        Arc::new(NoopWatcher)
-    };
+    let w: Arc<dyn cognee_core::PipelineWatcher> = Arc::new(NoopWatcher);
 
     // Pipeline fields are pub and task closures are Arc-wrapped, so we can
     // reconstruct a Pipeline that shares the same task closures.
