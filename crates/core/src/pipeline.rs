@@ -1,3 +1,4 @@
+use std::marker::PhantomData;
 use std::mem;
 use std::sync::Arc;
 use std::time::Duration;
@@ -10,7 +11,9 @@ use tokio::time::sleep;
 use uuid::Uuid;
 
 use crate::progress::ProgressToken;
-use crate::task::{TaggedMeta, Task, TaskCall, TaskError, TaskInfo, Value, ValueIter, ValueStream};
+use crate::task::{
+    TaggedMeta, Task, TaskCall, TaskError, TaskInfo, TypedTask, Value, ValueIter, ValueStream,
+};
 use crate::task_context::TaskContext;
 
 #[derive(Debug, Clone)]
@@ -160,6 +163,128 @@ impl Pipeline {
         self
     }
 }
+
+/// A compile-time type-safe builder for [`Pipeline`].
+///
+/// `PipelineBuilder<I, O>` tracks the input type of the first task (`I`) and the
+/// output type of the most recently added task (`O`) as type parameters.  The
+/// [`add_task`](PipelineBuilder::add_task) method accepts only a
+/// [`TypedTask<O, O2>`](TypedTask), ensuring that each task's input type matches the
+/// previous task's output type.  When all tasks have been added, call
+/// [`build`](PipelineBuilder::build) to erase the types and obtain a [`Pipeline`]
+/// that the standard executor can run.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// let pipeline = PipelineBuilder::new_with_task(
+///         "my pipeline",
+///         TypedTask::sync(|s: &String, _| Ok(Box::new(s.len()))),
+///     )
+///     .add_task(TypedTask::sync(|n: &usize, _| Ok(Box::new(format!("len={n}")))))
+///     .with_name("length-formatter")
+///     .build();
+/// ```
+pub struct PipelineBuilder<I: Value, O: Value> {
+    description: String,
+    name: Option<String>,
+    tasks: Vec<TaskInfo>,
+    retry_policy: RetryPolicy,
+    batch_size: usize,
+    data_id_fn: Option<DataIdFn>,
+    concurrency: usize,
+    _marker: PhantomData<fn(I) -> O>,
+}
+
+impl<I: Value, O: Value> PipelineBuilder<I, O> {
+    /// Create a new builder, seeding it with the first task.
+    ///
+    /// The type parameters `I` and `O` are inferred from `first_task`.
+    pub fn new_with_task(
+        description: impl Into<String>,
+        first_task: TypedTask<I, O>,
+    ) -> PipelineBuilder<I, O> {
+        PipelineBuilder {
+            description: description.into(),
+            name: None,
+            tasks: vec![first_task.into()],
+            retry_policy: RetryPolicy::NoRetry,
+            batch_size: 32,
+            data_id_fn: None,
+            concurrency: 1,
+            _marker: PhantomData,
+        }
+    }
+
+    /// Append a task whose input type must equal the current output type `O`.
+    ///
+    /// Returns a new builder whose output type is updated to `O2`.  The
+    /// compile-time constraint `TypedTask<O, O2>` ensures type safety: passing a
+    /// task with a mismatched input type is a compile error.
+    pub fn add_task<O2: Value>(mut self, task: TypedTask<O, O2>) -> PipelineBuilder<I, O2> {
+        self.tasks.push(task.into());
+        PipelineBuilder {
+            description: self.description,
+            name: self.name,
+            tasks: self.tasks,
+            retry_policy: self.retry_policy,
+            batch_size: self.batch_size,
+            data_id_fn: self.data_id_fn,
+            concurrency: self.concurrency,
+            _marker: PhantomData,
+        }
+    }
+
+    /// Set a human-readable name (used as key for status tracking).
+    pub fn with_name(mut self, name: impl Into<String>) -> Self {
+        self.name = Some(name.into());
+        self
+    }
+
+    /// Set the retry policy applied to all tasks.
+    pub fn with_retry(mut self, policy: RetryPolicy) -> Self {
+        self.retry_policy = policy;
+        self
+    }
+
+    /// Set the default batch size (items accumulated before dispatching to a batch task).
+    pub fn with_batch_size(mut self, size: usize) -> Self {
+        assert!(size > 0, "batch_size must be > 0");
+        self.batch_size = size;
+        self
+    }
+
+    /// Set the number of data items processed concurrently.
+    pub fn with_concurrency(mut self, n: usize) -> Self {
+        assert!(n > 0, "concurrency must be > 0");
+        self.concurrency = n;
+        self
+    }
+
+    /// Set the function used to extract a stable data ID for incremental deduplication.
+    pub fn with_data_id(mut self, f: DataIdFn) -> Self {
+        self.data_id_fn = Some(f);
+        self
+    }
+
+    /// Consume the builder and produce a [`Pipeline`].
+    ///
+    /// Type safety is fully enforced by the time `build` is called; the returned
+    /// `Pipeline` uses the existing type-erased executor unchanged.
+    pub fn build(self) -> Pipeline {
+        Pipeline {
+            id: Uuid::new_v4(),
+            name: self.name,
+            description: self.description,
+            tasks: self.tasks,
+            retry_policy: self.retry_policy,
+            batch_size: self.batch_size,
+            data_id_fn: self.data_id_fn,
+            concurrency: self.concurrency,
+        }
+    }
+}
+
 /// Identity and metadata of a pipeline run, passed to [`PipelineWatcher`]
 /// event methods.
 #[derive(Debug, Clone)]
@@ -2197,5 +2322,64 @@ mod tests {
 
         // After completion, both tasks are set to 1.0 by the executor
         assert!((progress.root_fraction() - 1.0).abs() < 0.01);
+    }
+
+    #[tokio::test]
+    async fn test_pipeline_builder_typed_chain() {
+        // String → usize (len) → String (formatted)
+        let t1 = TypedTask::sync(|s: &String, _| Ok(Box::new(s.len())));
+        let t2 = TypedTask::sync(|n: &usize, _| Ok(Box::new(format!("len={n}"))));
+
+        let pipeline = PipelineBuilder::new_with_task("typed chain", t1)
+            .add_task(t2)
+            .build();
+
+        let inputs: Vec<Arc<dyn Value>> = vec![Arc::new("hello".to_string())];
+        let outputs = execute(&pipeline, inputs, stub_ctx(), &NoopWatcher)
+            .await
+            .unwrap();
+
+        assert_eq!(outputs.len(), 1);
+        let s = (*outputs[0]).as_any().downcast_ref::<String>().unwrap();
+        assert_eq!(s, "len=5");
+    }
+
+    #[tokio::test]
+    async fn test_pipeline_builder_config_forwarded() {
+        let t1 = TypedTask::sync(|x: &i32, _| Ok(Box::new(*x * 2)));
+        let pipeline = PipelineBuilder::new_with_task("cfg test", t1)
+            .with_name("my pipeline")
+            .with_batch_size(8)
+            .with_concurrency(2)
+            .build();
+
+        assert_eq!(pipeline.name.as_deref(), Some("my pipeline"));
+        assert_eq!(pipeline.batch_size, 8);
+        assert_eq!(pipeline.concurrency, 2);
+    }
+
+    #[test]
+    fn test_typed_task_into_task_info() {
+        let typed: TypedTask<i32, i32> = TypedTask::sync(|x: &i32, _| Ok(Box::new(*x)));
+        let info: TaskInfo = typed.into();
+        // Default TaskInfo fields
+        assert!(info.name.is_none());
+        assert!(info.batch_size.is_none());
+        assert_eq!(info.weight, 1);
+    }
+
+    #[tokio::test]
+    async fn test_typed_task_into_untyped_pipeline() {
+        // TypedTask implements Into<TaskInfo>, so it drops into Pipeline::with_task directly.
+        let typed: TypedTask<i32, i32> = TypedTask::sync(|x: &i32, _| Ok(Box::new(*x + 10)));
+        let pipeline = Pipeline::new("escape hatch").with_task(typed);
+
+        let inputs: Vec<Arc<dyn Value>> = vec![Arc::new(5_i32)];
+        let outputs = execute(&pipeline, inputs, stub_ctx(), &NoopWatcher)
+            .await
+            .unwrap();
+
+        let v = (*outputs[0]).as_any().downcast_ref::<i32>().unwrap();
+        assert_eq!(*v, 15);
     }
 }

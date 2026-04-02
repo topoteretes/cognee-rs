@@ -27,16 +27,16 @@ pub use cancellation::{CancellationHandle, CancellationToken, cancellation_pair}
 pub use error::CoreError;
 pub use exec_status::{ExecStatusManager, NoopExecStatusManager};
 pub use pipeline::{
-    DataIdFn, ExecutionError, NoopWatcher, Pipeline, PipelineRunHandle, PipelineRunInfo,
-    PipelineRunResult, PipelineRunStatus, PipelineStatus, PipelineWatcher, RetryDelay, RetryPolicy,
-    TaskStatus, execute, execute_blocking, execute_in_background,
+    DataIdFn, ExecutionError, NoopWatcher, Pipeline, PipelineBuilder, PipelineRunHandle,
+    PipelineRunInfo, PipelineRunResult, PipelineRunStatus, PipelineStatus, PipelineWatcher,
+    RetryDelay, RetryPolicy, TaskStatus, execute, execute_blocking, execute_in_background,
 };
 pub use progress::ProgressToken;
 pub use runtime::AsyncRuntime;
 pub use task::{
     AsyncBatchFn, AsyncFn, AsyncStreamBatchFn, AsyncStreamFn, SyncBatchFn, SyncFn, SyncIterBatchFn,
-    SyncIterFn, Tagged, TaggedMeta, Task, TaskCall, TaskError, TaskInfo, Value, ValueIter,
-    ValueStream, downcast_value, extract_node_set,
+    SyncIterFn, Tagged, TaggedMeta, Task, TaskCall, TaskError, TaskInfo, TypedTask, Value,
+    ValueIter, ValueStream, downcast_value, extract_node_set,
 };
 pub use task_context::{PipelineContext, TaskContext, TaskContextBuilder};
 pub use thread_pool::{CpuPool, CpuPoolExt, RayonThreadPool};
