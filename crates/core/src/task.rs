@@ -774,6 +774,46 @@ impl From<Task> for TaskInfo {
     }
 }
 
+/// Typed sync single-value fn: `&I → Result<Box<O>, TaskError>`.
+type TypedSyncFn<I, O> = dyn Fn(&I, Arc<TaskContext>) -> Result<Box<O>, TaskError> + Send + Sync;
+/// Typed async single-value fn: `&I → BoxFuture<Result<Box<O>, TaskError>>`.
+type TypedAsyncFn<I, O> =
+    dyn Fn(&I, Arc<TaskContext>) -> BoxFuture<'static, Result<Box<O>, TaskError>> + Send + Sync;
+/// Typed sync iterator fn: `&I → Result<Box<dyn Iterator<Item=Box<O>>>, TaskError>`.
+type TypedSyncIterFn<I, O> = dyn Fn(
+    &I,
+    Arc<TaskContext>,
+) -> Result<Box<dyn Iterator<Item = Box<O>> + Send + 'static>, TaskError>
+    + Send
+    + Sync;
+/// Typed async stream fn: `&I → Result<BoxStream<Box<O>>, TaskError>`.
+type TypedAsyncStreamFn<I, O> =
+    dyn Fn(&I, Arc<TaskContext>) -> Result<BoxStream<'static, Box<O>>, TaskError> + Send + Sync;
+/// Typed sync batch fn: `&[&I] → Result<Box<O>, TaskError>`.
+type TypedSyncBatchFn<I, O> =
+    dyn for<'a> Fn(&'a [&'a I], Arc<TaskContext>) -> Result<Box<O>, TaskError> + Send + Sync;
+/// Typed async batch fn: `&[&I] → BoxFuture<Result<Box<O>, TaskError>>`.
+type TypedAsyncBatchFn<I, O> = dyn for<'a> Fn(
+    &'a [&'a I],
+    Arc<TaskContext>,
+) -> BoxFuture<'static, Result<Box<O>, TaskError>>
+    + Send
+    + Sync;
+/// Typed sync batch iterator fn: `&[&I] → Result<Box<dyn Iterator<Item=Box<O>>>, TaskError>`.
+type TypedSyncIterBatchFn<I, O> = dyn for<'a> Fn(
+    &'a [&'a I],
+    Arc<TaskContext>,
+) -> Result<Box<dyn Iterator<Item = Box<O>> + Send + 'static>, TaskError>
+    + Send
+    + Sync;
+/// Typed async batch stream fn: `&[&I] → Result<BoxStream<Box<O>>, TaskError>`.
+type TypedAsyncStreamBatchFn<I, O> = dyn for<'a> Fn(
+    &'a [&'a I],
+    Arc<TaskContext>,
+) -> Result<BoxStream<'static, Box<O>>, TaskError>
+    + Send
+    + Sync;
+
 /// A typed pipeline task whose input and output types are tracked at the type level.
 ///
 /// Unlike [`Task`], which erases all types to [`Value`] trait objects, `TypedTask<I, O>`
@@ -799,77 +839,21 @@ impl From<Task> for TaskInfo {
 /// | [`async_stream_batch`](TypedTask::async_stream_batch) | `AsyncStreamBatch` — non-blocking, `&[&I] → Stream<Box<O>>` |
 pub enum TypedTask<I: Value, O: Value> {
     /// Blocking single-value task: `&I → Result<Box<O>, TaskError>`.
-    Sync(Arc<dyn Fn(&I, Arc<TaskContext>) -> Result<Box<O>, TaskError> + Send + Sync>),
+    Sync(Arc<TypedSyncFn<I, O>>),
     /// Non-blocking single-value task: `&I → BoxFuture<Result<Box<O>, TaskError>>`.
-    Async(
-        Arc<
-            dyn Fn(&I, Arc<TaskContext>) -> BoxFuture<'static, Result<Box<O>, TaskError>>
-                + Send
-                + Sync,
-        >,
-    ),
+    Async(Arc<TypedAsyncFn<I, O>>),
     /// Blocking iterator task: `&I → Result<Box<dyn Iterator<Item=Box<O>>>, TaskError>`.
-    SyncIter(
-        Arc<
-            dyn Fn(
-                    &I,
-                    Arc<TaskContext>,
-                )
-                    -> Result<Box<dyn Iterator<Item = Box<O>> + Send + 'static>, TaskError>
-                + Send
-                + Sync,
-        >,
-    ),
+    SyncIter(Arc<TypedSyncIterFn<I, O>>),
     /// Non-blocking stream task: `&I → Result<BoxStream<Box<O>>, TaskError>`.
-    AsyncStream(
-        Arc<
-            dyn Fn(&I, Arc<TaskContext>) -> Result<BoxStream<'static, Box<O>>, TaskError>
-                + Send
-                + Sync,
-        >,
-    ),
+    AsyncStream(Arc<TypedAsyncStreamFn<I, O>>),
     /// Blocking batch task: `&[&I] → Result<Box<O>, TaskError>`.
-    SyncBatch(
-        Arc<
-            dyn for<'a> Fn(&'a [&'a I], Arc<TaskContext>) -> Result<Box<O>, TaskError>
-                + Send
-                + Sync,
-        >,
-    ),
+    SyncBatch(Arc<TypedSyncBatchFn<I, O>>),
     /// Non-blocking batch task: `&[&I] → BoxFuture<Result<Box<O>, TaskError>>`.
-    AsyncBatch(
-        Arc<
-            dyn for<'a> Fn(
-                    &'a [&'a I],
-                    Arc<TaskContext>,
-                ) -> BoxFuture<'static, Result<Box<O>, TaskError>>
-                + Send
-                + Sync,
-        >,
-    ),
+    AsyncBatch(Arc<TypedAsyncBatchFn<I, O>>),
     /// Blocking batch iterator task: `&[&I] → Result<Box<dyn Iterator<Item=Box<O>>>, TaskError>`.
-    SyncIterBatch(
-        Arc<
-            dyn for<'a> Fn(
-                    &'a [&'a I],
-                    Arc<TaskContext>,
-                )
-                    -> Result<Box<dyn Iterator<Item = Box<O>> + Send + 'static>, TaskError>
-                + Send
-                + Sync,
-        >,
-    ),
+    SyncIterBatch(Arc<TypedSyncIterBatchFn<I, O>>),
     /// Non-blocking batch stream task: `&[&I] → Result<BoxStream<Box<O>>, TaskError>`.
-    AsyncStreamBatch(
-        Arc<
-            dyn for<'a> Fn(
-                    &'a [&'a I],
-                    Arc<TaskContext>,
-                ) -> Result<BoxStream<'static, Box<O>>, TaskError>
-                + Send
-                + Sync,
-        >,
-    ),
+    AsyncStreamBatch(Arc<TypedAsyncStreamBatchFn<I, O>>),
 }
 
 impl<I: Value, O: Value> TypedTask<I, O> {
