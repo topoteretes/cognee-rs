@@ -780,10 +780,7 @@ type TypedSyncFn<I, O> = dyn Fn(&I, Arc<TaskContext>) -> Result<Box<O>, TaskErro
 type TypedAsyncFn<I, O> =
     dyn Fn(&I, Arc<TaskContext>) -> BoxFuture<'static, Result<Box<O>, TaskError>> + Send + Sync;
 /// Typed sync iterator fn: `&I → Result<Box<dyn Iterator<Item=Box<O>>>, TaskError>`.
-type TypedSyncIterFn<I, O> = dyn Fn(
-    &I,
-    Arc<TaskContext>,
-) -> Result<Box<dyn Iterator<Item = Box<O>> + Send + 'static>, TaskError>
+type TypedSyncIterFn<I, O> = dyn Fn(&I, Arc<TaskContext>) -> Result<Box<dyn Iterator<Item = Box<O>> + Send + 'static>, TaskError>
     + Send
     + Sync;
 /// Typed async stream fn: `&I → Result<BoxStream<Box<O>>, TaskError>`.
@@ -793,24 +790,18 @@ type TypedAsyncStreamFn<I, O> =
 type TypedSyncBatchFn<I, O> =
     dyn for<'a> Fn(&'a [&'a I], Arc<TaskContext>) -> Result<Box<O>, TaskError> + Send + Sync;
 /// Typed async batch fn: `&[&I] → BoxFuture<Result<Box<O>, TaskError>>`.
-type TypedAsyncBatchFn<I, O> = dyn for<'a> Fn(
-    &'a [&'a I],
-    Arc<TaskContext>,
-) -> BoxFuture<'static, Result<Box<O>, TaskError>>
+type TypedAsyncBatchFn<I, O> = dyn for<'a> Fn(&'a [&'a I], Arc<TaskContext>) -> BoxFuture<'static, Result<Box<O>, TaskError>>
     + Send
     + Sync;
 /// Typed sync batch iterator fn: `&[&I] → Result<Box<dyn Iterator<Item=Box<O>>>, TaskError>`.
 type TypedSyncIterBatchFn<I, O> = dyn for<'a> Fn(
-    &'a [&'a I],
-    Arc<TaskContext>,
-) -> Result<Box<dyn Iterator<Item = Box<O>> + Send + 'static>, TaskError>
+        &'a [&'a I],
+        Arc<TaskContext>,
+    ) -> Result<Box<dyn Iterator<Item = Box<O>> + Send + 'static>, TaskError>
     + Send
     + Sync;
 /// Typed async batch stream fn: `&[&I] → Result<BoxStream<Box<O>>, TaskError>`.
-type TypedAsyncStreamBatchFn<I, O> = dyn for<'a> Fn(
-    &'a [&'a I],
-    Arc<TaskContext>,
-) -> Result<BoxStream<'static, Box<O>>, TaskError>
+type TypedAsyncStreamBatchFn<I, O> = dyn for<'a> Fn(&'a [&'a I], Arc<TaskContext>) -> Result<BoxStream<'static, Box<O>>, TaskError>
     + Send
     + Sync;
 
