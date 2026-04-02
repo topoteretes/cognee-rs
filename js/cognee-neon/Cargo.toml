@@ -1,0 +1,26 @@
+[package]
+name = "cognee-neon"
+version = "0.1.0"
+edition = "2024"
+
+# Standalone crate — not part of the parent workspace.
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+cognee-core = { path = "../../crates/core" }
+cognee-database = { path = "../../crates/database", features = ["testing"] }
+cognee-graph = { path = "../../crates/graph", features = ["testing"] }
+cognee-vector = { path = "../../crates/vector", features = ["testing"] }
+neon = { version = "1", default-features = false, features = ["napi-6"] }
+async-trait = "0.1.89"
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time"] }
+futures = "0.3"
+uuid = { version = "1.21", features = ["v4", "serde"] }
+
+[patch.crates-io]
+tar = { git = "https://github.com/qdrant/tar-rs", branch = "main" }
+tonic = { git = "https://github.com/qdrant/tonic", branch = "v0.11.0-qdrant" }
+hyper = { git = "https://github.com/qdrant/hyper", branch = "v0.14.26-qdrant" }

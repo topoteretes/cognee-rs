@@ -27,3 +27,9 @@ Desktop.ini
 
 # C API build artifacts
 capi/build/
+
+# JS/Neon build artifacts
+js/cognee-neon/target/
+js/node_modules/
+js/lib/
+js/cognee_neon.node

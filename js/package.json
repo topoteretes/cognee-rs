@@ -1,0 +1,24 @@
+{
+  "name": "@cognee/pipeline",
+  "version": "0.1.0",
+  "description": "Node.js bindings for the cognee-core pipeline engine",
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "scripts": {
+    "build:rust": "cd cognee-neon && cargo build --release && cp target/release/libcognee_neon.so ../cognee_neon.node || cp target/release/libcognee_neon.dylib ../cognee_neon.node || cp target/release/cognee_neon.dll ../cognee_neon.node",
+    "build:ts": "tsc",
+    "build": "npm run build:rust && npm run build:ts",
+    "test": "jest --config jest.config.js"
+  },
+  "devDependencies": {
+    "@types/jest": "^27.5.0",
+    "@types/node": "^14.0.0",
+    "jest": "^27.5.0",
+    "ts-jest": "^27.1.0",
+    "typescript": "^5.4.0"
+  },
+  "files": [
+    "lib/",
+    "cognee_neon.node"
+  ]
+}
