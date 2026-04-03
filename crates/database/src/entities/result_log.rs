@@ -1,0 +1,33 @@
+use sea_orm::entity::prelude::*;
+use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel, Serialize, Deserialize)]
+#[sea_orm(table_name = "results")]
+pub struct Model {
+    #[sea_orm(primary_key, auto_increment = false)]
+    pub id: Uuid,
+    pub query_id: Uuid,
+    #[sea_orm(column_type = "Text")]
+    pub serialized_result: String,
+    pub user_id: Option<Uuid>,
+    pub created_at: DateTimeUtc,
+}
+
+#[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+pub enum Relation {
+    #[sea_orm(
+        belongs_to = "super::query_log::Entity",
+        from = "Column::QueryId",
+        to = "super::query_log::Column::Id",
+        on_delete = "Cascade"
+    )]
+    Query,
+}
+
+impl Related<super::query_log::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::Query.def()
+    }
+}
+
+impl ActiveModelBehavior for ActiveModel {}

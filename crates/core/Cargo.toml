@@ -21,7 +21,7 @@ tracing.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
-cognee-database = { path = "../database", features = ["testing"] }
+cognee-database = { path = "../database" }
 cognee-graph = { path = "../graph", features = ["testing"] }
 cognee-vector = { path = "../vector", features = ["testing"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

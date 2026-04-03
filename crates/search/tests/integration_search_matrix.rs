@@ -13,7 +13,9 @@
 use std::sync::Arc;
 
 use cognee_cognify::{CognifyConfig, CognifyPipeline};
-use cognee_database::{DatabaseTrait, SqliteDatabase};
+use cognee_database::{
+    DatabaseConnection, DeleteDb, IngestDb, SearchHistoryDb, connect, initialize, ops,
+};
 use cognee_delete::{DeleteMode, DeleteRequest, DeleteScope, DeleteService};
 use cognee_embedding::{EmbeddingEngine, config::EmbeddingConfig, onnx::OnnxEmbeddingEngine};
 use cognee_graph::{GraphDBTrait, LadybugAdapter};
@@ -101,12 +103,9 @@ async fn test_search_type_matrix() {
     let db_path = temp_dir.path().join("cognee.db");
     std::fs::File::create(&db_path).expect("create sqlite db file");
     let db_url = format!("sqlite://{}", db_path.display());
-    let database: Arc<dyn DatabaseTrait> = Arc::new(
-        SqliteDatabase::new(&db_url)
-            .await
-            .expect("SqliteDatabase::new"),
-    );
-    database.initialize().await.expect("database.initialize");
+    let db = connect(&db_url).await.expect("connect");
+    initialize(&db).await.expect("initialize");
+    let database: Arc<DatabaseConnection> = Arc::new(db);
 
     let graph_path = temp_dir.path().join("graph").to_string_lossy().to_string();
     let graph_db: Arc<dyn GraphDBTrait> = Arc::new(
@@ -137,7 +136,7 @@ async fn test_search_type_matrix() {
     let owner_id = Uuid::nil();
 
     // ── Step 3: Ingest two documents into the same dataset ───────────────────
-    let ingest = IngestPipeline::new(Arc::clone(&storage), Arc::clone(&database));
+    let ingest = IngestPipeline::new(Arc::clone(&storage), database.clone() as Arc<dyn IngestDb>);
     ingest
         .add(
             vec![DataInput::Text(GERMANY_TEXT.to_string())],
@@ -155,13 +154,11 @@ async fn test_search_type_matrix() {
         .await
         .expect("ingest quantum");
 
-    let dataset = database
-        .get_dataset_by_name("test_dataset", owner_id)
+    let dataset = ops::datasets::get_dataset_by_name(&database, "test_dataset", owner_id)
         .await
         .expect("get_dataset_by_name")
         .expect("dataset should exist after ingest");
-    let data_items = database
-        .get_dataset_data(dataset.id)
+    let data_items = ops::datasets::get_dataset_data(&database, dataset.id)
         .await
         .expect("get_dataset_data");
     assert_eq!(data_items.len(), 2, "Expected 2 data items in dataset");
@@ -243,7 +240,7 @@ async fn test_search_type_matrix() {
         Arc::clone(&embedding_engine),
         Arc::clone(&graph_db),
         Arc::clone(&llm),
-        Arc::clone(&database),
+        database.clone() as Arc<dyn SearchHistoryDb>,
     )
     .build();
 
@@ -352,7 +349,8 @@ async fn test_search_type_matrix() {
     println!("✓ Search history: {} entries (>= 5)", history.len());
 
     // ── Step 13: Cleanup ─────────────────────────────────────────────────────
-    let delete_svc = DeleteService::new(Arc::clone(&storage), Arc::clone(&database));
+    let delete_svc =
+        DeleteService::new(Arc::clone(&storage), database.clone() as Arc<dyn DeleteDb>);
     delete_svc
         .execute(&DeleteRequest {
             scope: DeleteScope::All,

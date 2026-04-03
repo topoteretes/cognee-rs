@@ -1209,11 +1209,13 @@ mod tests {
         }
     }
 
-    fn stub_ctx() -> Arc<TaskContext> {
+    async fn stub_ctx() -> Arc<TaskContext> {
+        let db = cognee_database::connect("sqlite::memory:").await.unwrap();
+        cognee_database::initialize(&db).await.unwrap();
         let (_handle, token) = cancellation_pair();
         Arc::new(TaskContext {
             thread_pool: Arc::new(StubPool),
-            database: Arc::new(cognee_database::MockDatabase::new()),
+            database: Arc::new(db),
             graph_db: Arc::new(cognee_graph::MockGraphDB::new()),
             vector_db: Arc::new(cognee_vector::MockVectorDB::new()),
             cancellation: token,
@@ -1251,7 +1253,7 @@ mod tests {
             .with_task(task);
 
         let inputs: Vec<Arc<dyn Value>> = vec![Arc::new(21_i32)];
-        let ctx = stub_ctx();
+        let ctx = stub_ctx().await;
         let watcher = NoopWatcher;
 
         let outputs = execute(&pipeline, inputs, ctx, &watcher).await.unwrap();
@@ -1271,7 +1273,7 @@ mod tests {
         let pipeline = Pipeline::new("double pipeline").with_task(double);
 
         let inputs: Vec<Arc<dyn Value>> = vec![Arc::new(5_i32)];
-        let ctx = stub_ctx();
+        let ctx = stub_ctx().await;
         let watcher = NoopWatcher;
 
         let outputs = execute(&pipeline, inputs, ctx, &watcher).await.unwrap();
@@ -1292,7 +1294,7 @@ mod tests {
             .with_task(add_one);
 
         let inputs: Vec<Arc<dyn Value>> = vec![Arc::new(3_i32)];
-        let ctx = stub_ctx();
+        let ctx = stub_ctx().await;
         let watcher = NoopWatcher;
 
         let outputs = execute(&pipeline, inputs, ctx, &watcher).await.unwrap();
@@ -1320,7 +1322,7 @@ mod tests {
             .with_task(double_task);
 
         let inputs: Vec<Arc<dyn Value>> = vec![Arc::new(0_i32)];
-        let ctx = stub_ctx();
+        let ctx = stub_ctx().await;
         let watcher = NoopWatcher;
 
         let outputs = execute(&pipeline, inputs, ctx, &watcher).await.unwrap();
@@ -1362,10 +1364,12 @@ mod tests {
             .with_task(task1)
             .with_task(task2);
 
+        let db = cognee_database::connect("sqlite::memory:").await.unwrap();
+        cognee_database::initialize(&db).await.unwrap();
         let (handle, token) = cancellation_pair();
         let ctx = Arc::new(TaskContext {
             thread_pool: Arc::new(StubPool),
-            database: Arc::new(cognee_database::MockDatabase::new()),
+            database: Arc::new(db),
             graph_db: Arc::new(cognee_graph::MockGraphDB::new()),
             vector_db: Arc::new(cognee_vector::MockVectorDB::new()),
             cancellation: token,
@@ -1395,7 +1399,7 @@ mod tests {
         let pipeline = Pipeline::new("sync terminal").with_task(double);
 
         let inputs: Vec<Arc<dyn Value>> = vec![Arc::new(5_i32)];
-        let ctx = stub_ctx();
+        let ctx = stub_ctx().await;
 
         let outputs = execute(&pipeline, inputs, ctx, &NoopWatcher).await.unwrap();
 
@@ -1414,7 +1418,7 @@ mod tests {
         let pipeline = Pipeline::new("async terminal").with_task(triple);
 
         let inputs: Vec<Arc<dyn Value>> = vec![Arc::new(4_i32)];
-        let ctx = stub_ctx();
+        let ctx = stub_ctx().await;
 
         let outputs = execute(&pipeline, inputs, ctx, &NoopWatcher).await.unwrap();
 
@@ -1435,7 +1439,7 @@ mod tests {
         let pipeline = Pipeline::new("sync iter terminal").with_task(iter_task);
 
         let inputs: Vec<Arc<dyn Value>> = vec![Arc::new(0_i32)];
-        let ctx = stub_ctx();
+        let ctx = stub_ctx().await;
 
         let outputs = execute(&pipeline, inputs, ctx, &NoopWatcher).await.unwrap();
 
@@ -1465,7 +1469,7 @@ mod tests {
             .with_task(double_task);
 
         let inputs: Vec<Arc<dyn Value>> = vec![Arc::new(0_i32)];
-        let ctx = stub_ctx();
+        let ctx = stub_ctx().await;
 
         let outputs = execute(&pipeline, inputs, ctx, &NoopWatcher).await.unwrap();
 
@@ -1498,7 +1502,7 @@ mod tests {
             .with_task(add_ten);
 
         let inputs: Vec<Arc<dyn Value>> = vec![Arc::new(0_i32)];
-        let ctx = stub_ctx();
+        let ctx = stub_ctx().await;
 
         let outputs = execute(&pipeline, inputs, ctx, &NoopWatcher).await.unwrap();
 
@@ -1523,7 +1527,7 @@ mod tests {
         let pipeline = Pipeline::new("async stream terminal").with_task(stream_task);
 
         let inputs: Vec<Arc<dyn Value>> = vec![Arc::new(0_i32)];
-        let ctx = stub_ctx();
+        let ctx = stub_ctx().await;
 
         let outputs = execute(&pipeline, inputs, ctx, &NoopWatcher).await.unwrap();
 
@@ -1554,7 +1558,7 @@ mod tests {
             .with_task(triple);
 
         let inputs: Vec<Arc<dyn Value>> = vec![Arc::new(0_i32)];
-        let ctx = stub_ctx();
+        let ctx = stub_ctx().await;
 
         let outputs = execute(&pipeline, inputs, ctx, &NoopWatcher).await.unwrap();
 
@@ -1588,7 +1592,7 @@ mod tests {
             .with_task(add_one);
 
         let inputs: Vec<Arc<dyn Value>> = vec![Arc::new(0_i32)];
-        let ctx = stub_ctx();
+        let ctx = stub_ctx().await;
 
         let outputs = execute(&pipeline, inputs, ctx, &NoopWatcher).await.unwrap();
 
@@ -1614,7 +1618,7 @@ mod tests {
             .with_task(add_one);
 
         let inputs: Vec<Arc<dyn Value>> = vec![Arc::new(3_i32)];
-        let outputs = execute(&pipeline, inputs, stub_ctx(), &NoopWatcher)
+        let outputs = execute(&pipeline, inputs, stub_ctx().await, &NoopWatcher)
             .await
             .unwrap();
 
@@ -1638,7 +1642,7 @@ mod tests {
             .with_task(add_ten);
 
         let inputs: Vec<Arc<dyn Value>> = vec![Arc::new(5_i32)];
-        let outputs = execute(&pipeline, inputs, stub_ctx(), &NoopWatcher)
+        let outputs = execute(&pipeline, inputs, stub_ctx().await, &NoopWatcher)
             .await
             .unwrap();
 
@@ -1662,7 +1666,7 @@ mod tests {
             .with_task(double);
 
         let inputs: Vec<Arc<dyn Value>> = vec![Arc::new(3_i32)];
-        let outputs = execute(&pipeline, inputs, stub_ctx(), &NoopWatcher)
+        let outputs = execute(&pipeline, inputs, stub_ctx().await, &NoopWatcher)
             .await
             .unwrap();
 
@@ -1687,7 +1691,7 @@ mod tests {
             .with_task(add_one);
 
         let inputs: Vec<Arc<dyn Value>> = vec![Arc::new(10_i32)];
-        let outputs = execute(&pipeline, inputs, stub_ctx(), &NoopWatcher)
+        let outputs = execute(&pipeline, inputs, stub_ctx().await, &NoopWatcher)
             .await
             .unwrap();
 
@@ -1721,7 +1725,7 @@ mod tests {
             .with_task(sum_batch);
 
         let inputs: Vec<Arc<dyn Value>> = vec![Arc::new(0_i32)];
-        let ctx = stub_ctx();
+        let ctx = stub_ctx().await;
 
         let outputs = execute(&pipeline, inputs, ctx, &NoopWatcher).await.unwrap();
 
@@ -1755,7 +1759,7 @@ mod tests {
             .with_task(count_batch);
 
         let inputs: Vec<Arc<dyn Value>> = vec![Arc::new(0_i32)];
-        let ctx = stub_ctx();
+        let ctx = stub_ctx().await;
 
         let outputs = execute(&pipeline, inputs, ctx, &NoopWatcher).await.unwrap();
 
@@ -1791,7 +1795,7 @@ mod tests {
             .with_task(sum_batch);
 
         let inputs: Vec<Arc<dyn Value>> = vec![Arc::new(0_i32)];
-        let ctx = stub_ctx();
+        let ctx = stub_ctx().await;
 
         let outputs = execute(&pipeline, inputs, ctx, &NoopWatcher).await.unwrap();
 
@@ -1824,7 +1828,7 @@ mod tests {
             .with_task(product_batch);
 
         let inputs: Vec<Arc<dyn Value>> = vec![Arc::new(0_i32)];
-        let ctx = stub_ctx();
+        let ctx = stub_ctx().await;
 
         let outputs = execute(&pipeline, inputs, ctx, &NoopWatcher).await.unwrap();
 
@@ -1861,7 +1865,7 @@ mod tests {
             .with_task(double_batch);
 
         let inputs: Vec<Arc<dyn Value>> = vec![Arc::new(0_i32)];
-        let ctx = stub_ctx();
+        let ctx = stub_ctx().await;
 
         let outputs = execute(&pipeline, inputs, ctx, &NoopWatcher).await.unwrap();
 
@@ -1901,7 +1905,7 @@ mod tests {
             .with_task(add_one_batch);
 
         let inputs: Vec<Arc<dyn Value>> = vec![Arc::new(0_i32)];
-        let ctx = stub_ctx();
+        let ctx = stub_ctx().await;
 
         let outputs = execute(&pipeline, inputs, ctx, &NoopWatcher).await.unwrap();
 
@@ -1942,7 +1946,7 @@ mod tests {
             .with_task(triple_batch);
 
         let inputs: Vec<Arc<dyn Value>> = vec![Arc::new(0_i32)];
-        let ctx = stub_ctx();
+        let ctx = stub_ctx().await;
 
         let outputs = execute(&pipeline, inputs, ctx, &NoopWatcher).await.unwrap();
 
@@ -1981,7 +1985,7 @@ mod tests {
             .with_task(negate_batch);
 
         let inputs: Vec<Arc<dyn Value>> = vec![Arc::new(0_i32)];
-        let ctx = stub_ctx();
+        let ctx = stub_ctx().await;
 
         let outputs = execute(&pipeline, inputs, ctx, &NoopWatcher).await.unwrap();
 
@@ -2017,7 +2021,7 @@ mod tests {
             .with_task(TaskInfo::new(sum_batch).with_batch_size(3));
 
         let inputs: Vec<Arc<dyn Value>> = vec![Arc::new(0_i32)];
-        let outputs = execute(&pipeline, inputs, stub_ctx(), &NoopWatcher)
+        let outputs = execute(&pipeline, inputs, stub_ctx().await, &NoopWatcher)
             .await
             .unwrap();
 
@@ -2051,7 +2055,7 @@ mod tests {
             .with_task(TaskInfo::new(max_batch).with_batch_size(2));
 
         let inputs: Vec<Arc<dyn Value>> = vec![Arc::new(0_i32)];
-        let outputs = execute(&pipeline, inputs, stub_ctx(), &NoopWatcher)
+        let outputs = execute(&pipeline, inputs, stub_ctx().await, &NoopWatcher)
             .await
             .unwrap();
 
@@ -2090,7 +2094,7 @@ mod tests {
             .with_task(TaskInfo::new(double_batch).with_batch_size(3));
 
         let inputs: Vec<Arc<dyn Value>> = vec![Arc::new(0_i32)];
-        let outputs = execute(&pipeline, inputs, stub_ctx(), &NoopWatcher)
+        let outputs = execute(&pipeline, inputs, stub_ctx().await, &NoopWatcher)
             .await
             .unwrap();
 
@@ -2132,7 +2136,7 @@ mod tests {
             .with_task(TaskInfo::new(negate_batch).with_batch_size(2));
 
         let inputs: Vec<Arc<dyn Value>> = vec![Arc::new(0_i32)];
-        let outputs = execute(&pipeline, inputs, stub_ctx(), &NoopWatcher)
+        let outputs = execute(&pipeline, inputs, stub_ctx().await, &NoopWatcher)
             .await
             .unwrap();
 
@@ -2176,7 +2180,7 @@ mod tests {
             .with_task(sum_batch);
 
         let inputs: Vec<Arc<dyn Value>> = vec![Arc::new(5_i32)];
-        let outputs = execute(&pipeline, inputs, stub_ctx(), &NoopWatcher)
+        let outputs = execute(&pipeline, inputs, stub_ctx().await, &NoopWatcher)
             .await
             .unwrap();
 
@@ -2222,7 +2226,7 @@ mod tests {
             .with_task(double);
 
         let inputs: Vec<Arc<dyn Value>> = vec![Arc::new(0_i32)];
-        let outputs = execute(&pipeline, inputs, stub_ctx(), &NoopWatcher)
+        let outputs = execute(&pipeline, inputs, stub_ctx().await, &NoopWatcher)
             .await
             .unwrap();
 
@@ -2270,7 +2274,7 @@ mod tests {
             .with_task(re_expand);
 
         let inputs: Vec<Arc<dyn Value>> = vec![Arc::new(0_i32)];
-        let outputs = execute(&pipeline, inputs, stub_ctx(), &NoopWatcher)
+        let outputs = execute(&pipeline, inputs, stub_ctx().await, &NoopWatcher)
             .await
             .unwrap();
 
@@ -2292,9 +2296,11 @@ mod tests {
 
         let progress = ProgressToken::new();
         let (_handle, token) = cancellation_pair();
+        let db = cognee_database::connect("sqlite::memory:").await.unwrap();
+        cognee_database::initialize(&db).await.unwrap();
         let ctx = Arc::new(TaskContext {
             thread_pool: Arc::new(StubPool),
-            database: Arc::new(cognee_database::MockDatabase::new()),
+            database: Arc::new(db),
             graph_db: Arc::new(cognee_graph::MockGraphDB::new()),
             vector_db: Arc::new(cognee_vector::MockVectorDB::new()),
             cancellation: token,
@@ -2335,7 +2341,7 @@ mod tests {
             .build();
 
         let inputs: Vec<Arc<dyn Value>> = vec![Arc::new("hello".to_string())];
-        let outputs = execute(&pipeline, inputs, stub_ctx(), &NoopWatcher)
+        let outputs = execute(&pipeline, inputs, stub_ctx().await, &NoopWatcher)
             .await
             .unwrap();
 
@@ -2375,7 +2381,7 @@ mod tests {
         let pipeline = Pipeline::new("escape hatch").with_task(typed);
 
         let inputs: Vec<Arc<dyn Value>> = vec![Arc::new(5_i32)];
-        let outputs = execute(&pipeline, inputs, stub_ctx(), &NoopWatcher)
+        let outputs = execute(&pipeline, inputs, stub_ctx().await, &NoopWatcher)
             .await
             .unwrap();
 

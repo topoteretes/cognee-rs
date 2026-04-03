@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use cognee_database::{ArtifactReference, DatabaseTrait};
+use cognee_database::{ArtifactReference, DeleteDb};
 use cognee_models::Dataset;
 use cognee_storage::{StorageError, StorageTrait};
 use serde::{Deserialize, Serialize};
@@ -71,11 +71,11 @@ struct ResolvedDeleteTargets {
 
 pub struct DeleteService {
     storage: Arc<dyn StorageTrait>,
-    database: Arc<dyn DatabaseTrait>,
+    database: Arc<dyn DeleteDb>,
 }
 
 impl DeleteService {
-    pub fn new(storage: Arc<dyn StorageTrait>, database: Arc<dyn DatabaseTrait>) -> Self {
+    pub fn new(storage: Arc<dyn StorageTrait>, database: Arc<dyn DeleteDb>) -> Self {
         Self { storage, database }
     }
 
@@ -495,7 +495,7 @@ impl DeleteService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cognee_database::MockDatabase;
+    use cognee_database::{connect, initialize, ops};
     use cognee_models::{Data, Dataset};
     use cognee_storage::MockStorage;
 
@@ -503,20 +503,32 @@ mod tests {
     // Test helpers
     // ------------------------------------------------------------------
 
-    fn make_service() -> DeleteService {
-        DeleteService::new(Arc::new(MockStorage::new()), Arc::new(MockDatabase::new()))
+    async fn make_service() -> (
+        DeleteService,
+        Arc<MockStorage>,
+        Arc<cognee_database::DatabaseConnection>,
+    ) {
+        let db = connect("sqlite::memory:").await.unwrap();
+        initialize(&db).await.unwrap();
+        let db = Arc::new(db);
+        let storage = Arc::new(MockStorage::new());
+        let svc = DeleteService::new(
+            storage.clone() as Arc<dyn StorageTrait>,
+            db.clone() as Arc<dyn DeleteDb>,
+        );
+        (svc, storage, db)
     }
 
     /// Seed one dataset + one data item, attach them, and return their IDs.
     async fn seed_dataset_with_data(
-        db: &MockDatabase,
+        db: &cognee_database::DatabaseConnection,
         storage: &MockStorage,
         owner_id: Uuid,
         dataset_name: &str,
     ) -> (Uuid, Uuid) {
         let dataset = Dataset::new(dataset_name.to_string(), owner_id);
         let dataset_id = dataset.id;
-        db.create_dataset(dataset).await.unwrap();
+        ops::datasets::create_dataset(db, dataset).await.unwrap();
 
         let location = storage.store(b"test content", "test.txt").await.unwrap();
 
@@ -531,8 +543,8 @@ mod tests {
             "hash_placeholder".to_string(),
             owner_id,
         );
-        db.create_data(data).await.unwrap();
-        db.attach_data_to_dataset(dataset_id, data_id)
+        ops::data::create_data(db, data).await.unwrap();
+        ops::datasets::attach_data_to_dataset(db, dataset_id, data_id)
             .await
             .unwrap();
 
@@ -545,15 +557,9 @@ mod tests {
 
     #[tokio::test]
     async fn delete_dataset_with_force_removes_dataset_and_data() {
-        let storage = Arc::new(MockStorage::new());
-        let database = Arc::new(MockDatabase::new());
-        let svc = DeleteService::new(
-            storage.clone() as Arc<dyn StorageTrait>,
-            database.clone() as Arc<dyn DatabaseTrait>,
-        );
-
+        let (svc, storage, db) = make_service().await;
         let owner = Uuid::new_v4();
-        seed_dataset_with_data(&database, &storage, owner, "test_dataset").await;
+        seed_dataset_with_data(&db, &storage, owner, "test_dataset").await;
 
         let result = svc
             .execute(&DeleteRequest {
@@ -569,8 +575,7 @@ mod tests {
         assert_eq!(result.deleted_datasets, 1);
         assert_eq!(result.deleted_data, 1);
 
-        let still_exists = database
-            .get_dataset_by_name("test_dataset", owner)
+        let still_exists = ops::datasets::get_dataset_by_name(&db, "test_dataset", owner)
             .await
             .unwrap();
         assert!(still_exists.is_none(), "dataset should be gone");
@@ -582,15 +587,9 @@ mod tests {
 
     #[tokio::test]
     async fn preview_does_not_mutate_database_state() {
-        let storage = Arc::new(MockStorage::new());
-        let database = Arc::new(MockDatabase::new());
-        let svc = DeleteService::new(
-            storage.clone() as Arc<dyn StorageTrait>,
-            database.clone() as Arc<dyn DatabaseTrait>,
-        );
-
+        let (svc, storage, db) = make_service().await;
         let owner = Uuid::new_v4();
-        seed_dataset_with_data(&database, &storage, owner, "test_dataset").await;
+        let (_ds_id, data_id) = seed_dataset_with_data(&db, &storage, owner, "test_dataset").await;
 
         let request = DeleteRequest {
             scope: DeleteScope::Dataset {
@@ -605,18 +604,17 @@ mod tests {
         assert_eq!(preview.datasets_to_delete, 1);
         assert_eq!(preview.data_to_delete, 1);
 
-        let still_exists = database
-            .get_dataset_by_name("test_dataset", owner)
+        let still_exists = ops::datasets::get_dataset_by_name(&db, "test_dataset", owner)
             .await
             .unwrap();
         assert!(
             still_exists.is_some(),
             "dataset should still exist after preview"
         );
-        assert_eq!(
-            database.get_data_count(),
-            1,
-            "data count should be unchanged"
+        let data_still_there = ops::data::get_data(&db, data_id).await.unwrap();
+        assert!(
+            data_still_there.is_some(),
+            "data should be unchanged after preview"
         );
     }
 
@@ -626,7 +624,7 @@ mod tests {
 
     #[tokio::test]
     async fn delete_nonexistent_dataset_returns_validation_error() {
-        let svc = make_service();
+        let (svc, _storage, _db) = make_service().await;
 
         let err = svc
             .execute(&DeleteRequest {
@@ -651,21 +649,15 @@ mod tests {
 
     #[tokio::test]
     async fn shared_data_not_deleted_while_linked_to_another_dataset() {
-        let storage = Arc::new(MockStorage::new());
-        let database = Arc::new(MockDatabase::new());
-        let svc = DeleteService::new(
-            storage.clone() as Arc<dyn StorageTrait>,
-            database.clone() as Arc<dyn DatabaseTrait>,
-        );
-
+        let (svc, storage, db) = make_service().await;
         let owner = Uuid::new_v4();
 
         let ds1 = Dataset::new("dataset1".to_string(), owner);
         let ds2 = Dataset::new("dataset2".to_string(), owner);
         let ds1_id = ds1.id;
         let ds2_id = ds2.id;
-        database.create_dataset(ds1).await.unwrap();
-        database.create_dataset(ds2).await.unwrap();
+        ops::datasets::create_dataset(&db, ds1).await.unwrap();
+        ops::datasets::create_dataset(&db, ds2).await.unwrap();
 
         let location = storage
             .store(b"shared content", "shared.txt")
@@ -682,13 +674,11 @@ mod tests {
             "shared_hash".to_string(),
             owner,
         );
-        database.create_data(data).await.unwrap();
-        database
-            .attach_data_to_dataset(ds1_id, data_id)
+        ops::data::create_data(&db, data).await.unwrap();
+        ops::datasets::attach_data_to_dataset(&db, ds1_id, data_id)
             .await
             .unwrap();
-        database
-            .attach_data_to_dataset(ds2_id, data_id)
+        ops::datasets::attach_data_to_dataset(&db, ds2_id, data_id)
             .await
             .unwrap();
 
@@ -709,7 +699,7 @@ mod tests {
             "data must not be deleted while still linked to dataset2"
         );
 
-        let data_still_there = database.get_data(data_id).await.unwrap();
+        let data_still_there = ops::data::get_data(&db, data_id).await.unwrap();
         assert!(data_still_there.is_some(), "data record must survive");
     }
 
@@ -719,21 +709,15 @@ mod tests {
 
     #[tokio::test]
     async fn data_deleted_when_last_dataset_link_removed() {
-        let storage = Arc::new(MockStorage::new());
-        let database = Arc::new(MockDatabase::new());
-        let svc = DeleteService::new(
-            storage.clone() as Arc<dyn StorageTrait>,
-            database.clone() as Arc<dyn DatabaseTrait>,
-        );
-
+        let (svc, storage, db) = make_service().await;
         let owner = Uuid::new_v4();
 
         let ds1 = Dataset::new("dataset1".to_string(), owner);
         let ds2 = Dataset::new("dataset2".to_string(), owner);
         let ds1_id = ds1.id;
         let ds2_id = ds2.id;
-        database.create_dataset(ds1).await.unwrap();
-        database.create_dataset(ds2).await.unwrap();
+        ops::datasets::create_dataset(&db, ds1).await.unwrap();
+        ops::datasets::create_dataset(&db, ds2).await.unwrap();
 
         let location = storage
             .store(b"shared content", "shared.txt")
@@ -750,13 +734,11 @@ mod tests {
             "shared_hash".to_string(),
             owner,
         );
-        database.create_data(data).await.unwrap();
-        database
-            .attach_data_to_dataset(ds1_id, data_id)
+        ops::data::create_data(&db, data).await.unwrap();
+        ops::datasets::attach_data_to_dataset(&db, ds1_id, data_id)
             .await
             .unwrap();
-        database
-            .attach_data_to_dataset(ds2_id, data_id)
+        ops::datasets::attach_data_to_dataset(&db, ds2_id, data_id)
             .await
             .unwrap();
 
@@ -786,7 +768,7 @@ mod tests {
             "data must be deleted when last link is removed"
         );
 
-        let data_gone = database.get_data(data_id).await.unwrap();
+        let data_gone = ops::data::get_data(&db, data_id).await.unwrap();
         assert!(data_gone.is_none(), "data record must be gone");
     }
 
@@ -796,17 +778,11 @@ mod tests {
 
     #[tokio::test]
     async fn delete_dataset_with_wrong_owner_returns_validation_error() {
-        let storage = Arc::new(MockStorage::new());
-        let database = Arc::new(MockDatabase::new());
-        let svc = DeleteService::new(
-            storage.clone() as Arc<dyn StorageTrait>,
-            database.clone() as Arc<dyn DatabaseTrait>,
-        );
-
+        let (svc, storage, db) = make_service().await;
         let owner_a = Uuid::new_v4();
         let owner_b = Uuid::new_v4();
 
-        seed_dataset_with_data(&database, &storage, owner_a, "owner_a_dataset").await;
+        seed_dataset_with_data(&db, &storage, owner_a, "owner_a_dataset").await;
 
         let err = svc
             .execute(&DeleteRequest {

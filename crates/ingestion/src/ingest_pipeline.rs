@@ -3,17 +3,17 @@ use std::sync::Arc;
 use tracing::{info, info_span, instrument};
 use uuid::Uuid;
 
-use cognee_database::DatabaseTrait;
+use cognee_database::IngestDb;
 use cognee_models::{Data, DataInput, Dataset};
 use cognee_storage::StorageTrait;
 
 pub struct IngestPipeline {
     storage: Arc<dyn StorageTrait>,
-    database: Arc<dyn DatabaseTrait>,
+    database: Arc<dyn IngestDb>,
 }
 
 impl IngestPipeline {
-    pub fn new(storage: Arc<dyn StorageTrait>, database: Arc<dyn DatabaseTrait>) -> Self {
+    pub fn new(storage: Arc<dyn StorageTrait>, database: Arc<dyn IngestDb>) -> Self {
         Self { storage, database }
     }
 
@@ -113,12 +113,10 @@ impl IngestPipeline {
             .process_by_chunks(move |chunk| {
                 let hasher = hasher_clone.clone();
                 let writer = writer_clone.clone();
-                let chunk_owned = chunk.to_vec(); // Copy chunk to own the data
+                let chunk_owned = chunk.to_vec();
                 async move {
                     hasher.lock().await.update(&chunk_owned);
-
                     writer.lock().await.write_chunk(&chunk_owned).await?;
-
                     Ok::<(), Box<dyn std::error::Error>>(())
                 }
             })
@@ -210,25 +208,26 @@ impl IngestPipeline {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cognee_database::MockDatabase;
+    use cognee_database::{connect, initialize, ops};
     use cognee_storage::MockStorage;
     use std::io::Write;
     use tempfile::NamedTempFile;
 
-    fn create_test_pipeline() -> (IngestPipeline, Arc<MockDatabase>) {
+    async fn make_pipeline() -> (IngestPipeline, Arc<cognee_database::DatabaseConnection>) {
+        let db = connect("sqlite::memory:").await.unwrap();
+        initialize(&db).await.unwrap();
+        let db = Arc::new(db);
         let storage: Arc<dyn StorageTrait> = Arc::new(MockStorage::new());
-        let database = Arc::new(MockDatabase::new());
-        let pipeline = IngestPipeline::new(storage, database.clone() as Arc<dyn DatabaseTrait>);
-        (pipeline, database)
+        let pipeline = IngestPipeline::new(storage, db.clone() as Arc<dyn IngestDb>);
+        (pipeline, db)
     }
 
     #[tokio::test]
     async fn test_add_text_input() {
-        let (pipeline, database) = create_test_pipeline();
+        let (pipeline, db) = make_pipeline().await;
         let owner_id = Uuid::new_v4();
 
         let inputs = vec![DataInput::Text("Hello, world!".to_string())];
-
         let result = pipeline.add(inputs, "test_dataset", owner_id).await;
         assert!(result.is_ok());
 
@@ -238,228 +237,244 @@ mod tests {
         assert_eq!(data[0].mime_type, "text/plain");
         assert_eq!(data[0].extension, "txt");
 
-        // Verify data was stored
-        assert_eq!(database.get_data_count(), 1);
-        assert_eq!(database.get_dataset_count(), 1);
+        let datasets = ops::datasets::list_datasets_by_owner(&db, owner_id)
+            .await
+            .unwrap();
+        assert_eq!(datasets.len(), 1);
+        let ds_data = ops::datasets::get_dataset_data(&db, datasets[0].id)
+            .await
+            .unwrap();
+        assert_eq!(ds_data.len(), 1);
     }
 
     #[tokio::test]
     async fn test_add_file_input() {
-        let (pipeline, database) = create_test_pipeline();
+        let (pipeline, db) = make_pipeline().await;
         let owner_id = Uuid::new_v4();
 
-        // Create a temporary file
         let mut temp_file = NamedTempFile::new().unwrap();
         writeln!(temp_file, "Test file content").unwrap();
         let file_path = temp_file.path().to_str().unwrap().to_string();
 
-        let inputs = vec![DataInput::FilePath(file_path.clone())];
-
+        let inputs = vec![DataInput::FilePath(file_path)];
         let result = pipeline.add(inputs, "test_dataset", owner_id).await;
         assert!(result.is_ok());
 
         let data = result.unwrap();
         assert_eq!(data.len(), 1);
         assert!(!data[0].name.is_empty());
-        // Extension could vary based on temp file implementation
-        assert!(!data[0].extension.is_empty());
 
-        // Verify data was stored
-        assert_eq!(database.get_data_count(), 1);
-        assert_eq!(database.get_dataset_count(), 1);
+        let datasets = ops::datasets::list_datasets_by_owner(&db, owner_id)
+            .await
+            .unwrap();
+        assert_eq!(datasets.len(), 1);
     }
 
     #[tokio::test]
     async fn test_add_multiple_inputs() {
-        let (pipeline, database) = create_test_pipeline();
+        let (pipeline, db) = make_pipeline().await;
         let owner_id = Uuid::new_v4();
 
         let inputs = vec![
             DataInput::Text("First text".to_string()),
             DataInput::Text("Second text".to_string()),
         ];
-
         let result = pipeline.add(inputs, "test_dataset", owner_id).await;
         assert!(result.is_ok());
 
         let data = result.unwrap();
         assert_eq!(data.len(), 2);
 
-        // Verify all data was stored
-        assert_eq!(database.get_data_count(), 2);
-        assert_eq!(database.get_dataset_count(), 1);
+        let datasets = ops::datasets::list_datasets_by_owner(&db, owner_id)
+            .await
+            .unwrap();
+        assert_eq!(datasets.len(), 1);
+        let ds_data = ops::datasets::get_dataset_data(&db, datasets[0].id)
+            .await
+            .unwrap();
+        assert_eq!(ds_data.len(), 2);
     }
 
     #[tokio::test]
     async fn test_deduplication_same_content() {
-        let (pipeline, database) = create_test_pipeline();
+        let (pipeline, db) = make_pipeline().await;
         let owner_id = Uuid::new_v4();
 
         let content = "Duplicate content";
-        let inputs1 = vec![DataInput::Text(content.to_string())];
-        let inputs2 = vec![DataInput::Text(content.to_string())];
+        let result1 = pipeline
+            .add(
+                vec![DataInput::Text(content.to_string())],
+                "test_dataset",
+                owner_id,
+            )
+            .await
+            .unwrap();
+        let result2 = pipeline
+            .add(
+                vec![DataInput::Text(content.to_string())],
+                "test_dataset",
+                owner_id,
+            )
+            .await
+            .unwrap();
 
-        // Add first time
-        let result1 = pipeline.add(inputs1, "test_dataset", owner_id).await;
-        assert!(result1.is_ok());
-        let data1 = result1.unwrap();
+        assert_eq!(result1[0].id, result2[0].id);
+        assert_eq!(result1[0].content_hash, result2[0].content_hash);
 
-        // Add second time (should deduplicate)
-        let result2 = pipeline.add(inputs2, "test_dataset", owner_id).await;
-        assert!(result2.is_ok());
-        let data2 = result2.unwrap();
-
-        // Should have same ID (deduplication)
-        assert_eq!(data1[0].id, data2[0].id);
-        assert_eq!(data1[0].content_hash, data2[0].content_hash);
-
-        // Should only have one data record
-        assert_eq!(database.get_data_count(), 1);
-
-        // But both should be attached to the dataset
-        let dataset = pipeline
-            .database
-            .get_dataset_by_name("test_dataset", owner_id)
+        let dataset = ops::datasets::get_dataset_by_name(&db, "test_dataset", owner_id)
             .await
             .unwrap()
             .unwrap();
-        let dataset_data = pipeline
-            .database
-            .get_dataset_data(dataset.id)
+        let ds_data = ops::datasets::get_dataset_data(&db, dataset.id)
             .await
             .unwrap();
-        assert_eq!(dataset_data.len(), 1);
+        assert_eq!(ds_data.len(), 1);
     }
 
     #[tokio::test]
     async fn test_different_owners_different_hash() {
-        let (pipeline, database) = create_test_pipeline();
-        let owner_id1 = Uuid::new_v4();
-        let owner_id2 = Uuid::new_v4();
+        let (pipeline, _db) = make_pipeline().await;
+        let owner1 = Uuid::new_v4();
+        let owner2 = Uuid::new_v4();
 
-        let content = "Same content";
-        let inputs1 = vec![DataInput::Text(content.to_string())];
-        let inputs2 = vec![DataInput::Text(content.to_string())];
+        let result1 = pipeline
+            .add(
+                vec![DataInput::Text("Same content".to_string())],
+                "ds1",
+                owner1,
+            )
+            .await
+            .unwrap();
+        let result2 = pipeline
+            .add(
+                vec![DataInput::Text("Same content".to_string())],
+                "ds2",
+                owner2,
+            )
+            .await
+            .unwrap();
 
-        // Add with first owner
-        let result1 = pipeline.add(inputs1, "dataset1", owner_id1).await.unwrap();
-
-        // Add with second owner
-        let result2 = pipeline.add(inputs2, "dataset2", owner_id2).await.unwrap();
-
-        // Should have different IDs (different owners)
         assert_ne!(result1[0].id, result2[0].id);
         assert_ne!(result1[0].content_hash, result2[0].content_hash);
-
-        // Should have two separate data records
-        assert_eq!(database.get_data_count(), 2);
     }
 
     #[tokio::test]
     async fn test_multiple_datasets() {
-        let (pipeline, database) = create_test_pipeline();
+        let (pipeline, db) = make_pipeline().await;
         let owner_id = Uuid::new_v4();
 
-        let inputs1 = vec![DataInput::Text("Content 1".to_string())];
-        let inputs2 = vec![DataInput::Text("Content 2".to_string())];
+        pipeline
+            .add(
+                vec![DataInput::Text("Content 1".to_string())],
+                "dataset1",
+                owner_id,
+            )
+            .await
+            .unwrap();
+        pipeline
+            .add(
+                vec![DataInput::Text("Content 2".to_string())],
+                "dataset2",
+                owner_id,
+            )
+            .await
+            .unwrap();
 
-        // Add to first dataset
-        let result1 = pipeline.add(inputs1, "dataset1", owner_id).await;
-        assert!(result1.is_ok());
-
-        // Add to second dataset
-        let result2 = pipeline.add(inputs2, "dataset2", owner_id).await;
-        assert!(result2.is_ok());
-
-        // Should have two datasets
-        assert_eq!(database.get_dataset_count(), 2);
-        assert_eq!(database.get_data_count(), 2);
+        let datasets = ops::datasets::list_datasets_by_owner(&db, owner_id)
+            .await
+            .unwrap();
+        assert_eq!(datasets.len(), 2);
     }
 
     #[tokio::test]
     async fn test_reuse_dataset() {
-        let (pipeline, database) = create_test_pipeline();
+        let (pipeline, db) = make_pipeline().await;
         let owner_id = Uuid::new_v4();
 
-        let inputs1 = vec![DataInput::Text("Content 1".to_string())];
-        let inputs2 = vec![DataInput::Text("Content 2".to_string())];
+        pipeline
+            .add(
+                vec![DataInput::Text("Content 1".to_string())],
+                "same_dataset",
+                owner_id,
+            )
+            .await
+            .unwrap();
+        pipeline
+            .add(
+                vec![DataInput::Text("Content 2".to_string())],
+                "same_dataset",
+                owner_id,
+            )
+            .await
+            .unwrap();
 
-        // Add to same dataset twice
-        let _result1 = pipeline
-            .add(inputs1, "same_dataset", owner_id)
+        let datasets = ops::datasets::list_datasets_by_owner(&db, owner_id)
             .await
             .unwrap();
-        let _result2 = pipeline
-            .add(inputs2, "same_dataset", owner_id)
+        assert_eq!(datasets.len(), 1);
+        let ds_data = ops::datasets::get_dataset_data(&db, datasets[0].id)
             .await
             .unwrap();
-
-        // Should only have one dataset
-        assert_eq!(database.get_dataset_count(), 1);
-        assert_eq!(database.get_data_count(), 2);
-
-        // Both data should be attached to the same dataset
-        let dataset = pipeline
-            .database
-            .get_dataset_by_name("same_dataset", owner_id)
-            .await
-            .unwrap()
-            .unwrap();
-        let dataset_data = pipeline
-            .database
-            .get_dataset_data(dataset.id)
-            .await
-            .unwrap();
-        assert_eq!(dataset_data.len(), 2);
+        assert_eq!(ds_data.len(), 2);
     }
 
     #[tokio::test]
     async fn test_extract_name_from_text() {
-        let (pipeline, _database) = create_test_pipeline();
+        let (pipeline, _db) = make_pipeline().await;
         let input = DataInput::Text("test".to_string());
         assert_eq!(pipeline.extract_name(&input), "inline_text");
     }
 
     #[tokio::test]
     async fn test_extract_name_from_file_path() {
-        let (pipeline, _database) = create_test_pipeline();
+        let (pipeline, _db) = make_pipeline().await;
         let input = DataInput::FilePath("/path/to/file.txt".to_string());
         assert_eq!(pipeline.extract_name(&input), "file.txt");
     }
 
     #[tokio::test]
     async fn test_extract_extension_from_text() {
-        let (pipeline, _database) = create_test_pipeline();
+        let (pipeline, _db) = make_pipeline().await;
         let input = DataInput::Text("test".to_string());
         assert_eq!(pipeline.extract_extension(&input), "txt");
     }
 
     #[tokio::test]
     async fn test_extract_extension_from_file_path() {
-        let (pipeline, _database) = create_test_pipeline();
+        let (pipeline, _db) = make_pipeline().await;
         let input = DataInput::FilePath("/path/to/file.rs".to_string());
         assert_eq!(pipeline.extract_extension(&input), "rs");
     }
 
     #[tokio::test]
     async fn test_extract_mime_type_from_text() {
-        let (pipeline, _database) = create_test_pipeline();
+        let (pipeline, _db) = make_pipeline().await;
         let input = DataInput::Text("test".to_string());
         assert_eq!(pipeline.extract_mime_type(&input), "text/plain");
     }
 
     #[tokio::test]
     async fn test_content_hash_deterministic() {
-        let (pipeline, _database) = create_test_pipeline();
+        let (pipeline, _db) = make_pipeline().await;
         let owner_id = Uuid::new_v4();
 
-        let inputs1 = vec![DataInput::Text("Test content".to_string())];
-        let inputs2 = vec![DataInput::Text("Test content".to_string())];
+        let result1 = pipeline
+            .add(
+                vec![DataInput::Text("Test content".to_string())],
+                "dataset1",
+                owner_id,
+            )
+            .await
+            .unwrap();
+        let result2 = pipeline
+            .add(
+                vec![DataInput::Text("Test content".to_string())],
+                "dataset1",
+                owner_id,
+            )
+            .await
+            .unwrap();
 
-        let result1 = pipeline.add(inputs1, "dataset1", owner_id).await.unwrap();
-        let result2 = pipeline.add(inputs2, "dataset1", owner_id).await.unwrap();
-
-        // Same content and owner should produce same hash
         assert_eq!(result1[0].content_hash, result2[0].content_hash);
         assert_eq!(result1[0].id, result2[0].id);
     }

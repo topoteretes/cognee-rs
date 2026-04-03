@@ -26,9 +26,23 @@ impl PyTaskContext {
         let pool = RayonThreadPool::with_default_threads()
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
 
+        let db = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?
+            .block_on(async {
+                let db = cognee_database::connect("sqlite::memory:")
+                    .await
+                    .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+                cognee_database::initialize(&db)
+                    .await
+                    .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+                Ok::<_, PyErr>(db)
+            })?;
+
         let (handle, ctx) = TaskContextBuilder::new()
             .thread_pool(Arc::new(pool))
-            .database(Arc::new(cognee_database::MockDatabase::new()))
+            .database(Arc::new(db))
             .graph_db(Arc::new(cognee_graph::MockGraphDB::new()))
             .vector_db(Arc::new(cognee_vector::MockVectorDB::new()))
             .build()

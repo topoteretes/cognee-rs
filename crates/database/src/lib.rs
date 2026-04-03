@@ -1,13 +1,15 @@
-mod database_trait;
-mod sqlite_database;
+mod connection;
+mod conversions;
+pub mod entities;
+pub mod migrator;
+pub mod ops;
+mod traits;
+mod types;
 
-#[cfg(feature = "testing")]
-mod mock_database;
-
-pub use database_trait::{
-    ArtifactReference, DatabaseError, DatabaseTrait, SearchHistoryEntry, SearchHistoryEntryType,
+pub use connection::{connect, initialize};
+pub use sea_orm::DatabaseConnection;
+pub use traits::{DeleteDb, IngestDb, SearchHistoryDb};
+pub use types::{
+    ArtifactReference, DatabaseError, GraphEdge, GraphMetrics, GraphNode, PipelineRun,
+    PipelineRunStatus, SearchHistoryEntry, SearchHistoryEntryType, TaskRun,
 };
-pub use sqlite_database::SqliteDatabase;
-
-#[cfg(feature = "testing")]
-pub use mock_database::MockDatabase;

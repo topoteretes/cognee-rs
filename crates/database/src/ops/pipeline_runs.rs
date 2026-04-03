@@ -1,0 +1,45 @@
+use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
+use uuid::Uuid;
+
+use crate::conversions::{domain_status_to_entity, map_sea_err};
+use crate::entities::pipeline_run;
+use crate::types::{DatabaseError, PipelineRun, PipelineRunStatus};
+
+pub async fn create_pipeline_run(
+    db: &DatabaseConnection,
+    run: PipelineRun,
+) -> Result<PipelineRun, DatabaseError> {
+    pipeline_run::ActiveModel::from(&run)
+        .insert(db)
+        .await
+        .map_err(map_sea_err)?;
+    Ok(run)
+}
+
+pub async fn update_pipeline_run_status(
+    db: &DatabaseConnection,
+    id: Uuid,
+    status: PipelineRunStatus,
+) -> Result<(), DatabaseError> {
+    pipeline_run::Entity::update_many()
+        .col_expr(
+            pipeline_run::Column::Status,
+            sea_orm::sea_query::Expr::value(domain_status_to_entity(status)),
+        )
+        .filter(pipeline_run::Column::Id.eq(id))
+        .exec(db)
+        .await
+        .map_err(map_sea_err)?;
+    Ok(())
+}
+
+pub async fn get_pipeline_run(
+    db: &DatabaseConnection,
+    id: Uuid,
+) -> Result<Option<PipelineRun>, DatabaseError> {
+    pipeline_run::Entity::find_by_id(id)
+        .one(db)
+        .await
+        .map_err(map_sea_err)
+        .map(|opt| opt.map(PipelineRun::from))
+}

@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use chrono::Utc;
 use cognee_lib::cognify::{ChunkStrategy, CognifyConfig, CognifyPipeline};
-use cognee_lib::database::{ArtifactReference, DatabaseTrait};
+use cognee_lib::database::{ArtifactReference, DatabaseConnection, ops};
 use cognee_lib::ontology::{OntologyResolver, RdfLibOntologyResolver};
 use cognee_lib::{ComponentManager, PipelineContext};
 use tracing::{debug, info, warn};
@@ -55,7 +55,7 @@ pub fn run(args: CognifyArgs, cm: Arc<ComponentManager>) -> Result<(), CliError>
             .map_err(|e| CliError::Runtime(format!("{e}")))?;
 
         let dataset_names =
-            resolve_dataset_names(database.as_ref(), owner_id, requested_datasets).await?;
+            resolve_dataset_names(&database, owner_id, requested_datasets).await?;
 
         let storage = cm
             .storage()
@@ -116,8 +116,7 @@ pub fn run(args: CognifyArgs, cm: Arc<ComponentManager>) -> Result<(), CliError>
         let mut total_embeddings = 0usize;
 
         for dataset_name in &dataset_names {
-            let dataset = database
-                .get_dataset_by_name(dataset_name, owner_id)
+            let dataset = ops::datasets::get_dataset_by_name(&database, dataset_name, owner_id)
                 .await
                 .map_err(|error| {
                     CliError::Runtime(format!(
@@ -131,8 +130,7 @@ pub fn run(args: CognifyArgs, cm: Arc<ComponentManager>) -> Result<(), CliError>
                     ))
                 })?;
 
-            let data_items = database
-                .get_dataset_data(dataset.id)
+            let data_items = ops::datasets::get_dataset_data(&database, dataset.id)
                 .await
                 .map_err(|error| {
                     CliError::Runtime(format!(
@@ -160,8 +158,7 @@ pub fn run(args: CognifyArgs, cm: Arc<ComponentManager>) -> Result<(), CliError>
                 })?;
 
             let artifact_references = build_artifact_references(owner_id, dataset.id, &result);
-            database
-                .upsert_artifact_references(&artifact_references)
+            ops::artifact_refs::upsert_artifact_references(&database, &artifact_references)
                 .await
                 .map_err(|error| {
                     CliError::Runtime(format!(
@@ -196,7 +193,7 @@ pub fn run(args: CognifyArgs, cm: Arc<ComponentManager>) -> Result<(), CliError>
 }
 
 async fn resolve_dataset_names(
-    database: &dyn DatabaseTrait,
+    database: &DatabaseConnection,
     owner_id: Uuid,
     requested_datasets: Vec<String>,
 ) -> Result<Vec<String>, CliError> {
@@ -204,8 +201,7 @@ async fn resolve_dataset_names(
         return Ok(requested_datasets);
     }
 
-    let datasets = database
-        .list_datasets_by_owner(owner_id)
+    let datasets = ops::datasets::list_datasets_by_owner(database, owner_id)
         .await
         .map_err(|error| {
             CliError::Runtime(format!(

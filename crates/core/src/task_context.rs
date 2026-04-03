@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use cognee_database::DatabaseTrait;
+use cognee_database::DatabaseConnection;
 use cognee_graph::GraphDBTrait;
 use cognee_vector::VectorDB;
 use uuid::Uuid;
@@ -37,8 +37,8 @@ pub struct PipelineContext {
 pub struct TaskContext {
     /// CPU-bound work executor (wraps a Rayon pool by default).
     pub thread_pool: Arc<dyn CpuPool>,
-    /// Relational / metadata database.
-    pub database: Arc<dyn DatabaseTrait>,
+    /// Relational / metadata database connection.
+    pub database: Arc<DatabaseConnection>,
     /// Graph database.
     pub graph_db: Arc<dyn GraphDBTrait>,
     /// Vector database.
@@ -64,10 +64,6 @@ impl TaskContext {
             .expect("PipelineContext not set — task is not running inside a pipeline executor")
     }
 
-    /// Create a new `Arc<TaskContext>` with `current_data` set on the pipeline
-    /// context. All `Arc` fields are shallow-cloned (cheap reference bumps).
-    ///
-    /// Returns the original `Arc` unchanged if no `pipeline_ctx` is present.
     /// Create a new `Arc<TaskContext>` with a different progress token.
     /// All other fields are shallow-cloned.
     pub fn with_progress(self: &Arc<Self>, progress: ProgressToken) -> Arc<Self> {
@@ -119,7 +115,7 @@ impl TaskContext {
 #[derive(Default)]
 pub struct TaskContextBuilder {
     thread_pool: Option<Arc<dyn CpuPool>>,
-    database: Option<Arc<dyn DatabaseTrait>>,
+    database: Option<Arc<DatabaseConnection>>,
     graph_db: Option<Arc<dyn GraphDBTrait>>,
     vector_db: Option<Arc<dyn VectorDB>>,
     /// If set, the cancellation pair is created from an external handle.
@@ -139,7 +135,7 @@ impl TaskContextBuilder {
         self
     }
 
-    pub fn database(mut self, db: Arc<dyn DatabaseTrait>) -> Self {
+    pub fn database(mut self, db: Arc<DatabaseConnection>) -> Self {
         self.database = Some(db);
         self
     }
