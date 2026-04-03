@@ -150,6 +150,7 @@ async fn test_default_backend_add_cognify_search_delete() {
             vec![DataInput::Text(AI_TEXT.to_string())],
             "artificial_intelligence",
             owner_id,
+            None,
         )
         .await
         .expect("ingest.add");
@@ -178,7 +179,7 @@ async fn test_default_backend_add_cognify_search_delete() {
     );
 
     let dataset =
-        ops::datasets::get_dataset_by_name(&database, "artificial_intelligence", owner_id)
+        ops::datasets::get_dataset_by_name(&database, "artificial_intelligence", owner_id, None)
             .await
             .expect("get_dataset_by_name")
             .expect("dataset should exist after ingest");

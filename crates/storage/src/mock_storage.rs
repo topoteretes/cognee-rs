@@ -115,6 +115,10 @@ impl StorageTrait for MockStorage {
     fn get_full_path(&self, location: &str) -> PathBuf {
         PathBuf::from(format!("/mock/{}", location))
     }
+
+    fn base_path(&self) -> &str {
+        ""
+    }
 }
 
 #[cfg(test)]

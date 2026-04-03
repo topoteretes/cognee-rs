@@ -1,4 +1,3 @@
-// Phase 2: full implementation
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -10,6 +9,7 @@ pub struct Model {
     pub name: String,
     #[sea_orm(indexed)]
     pub owner_id: Uuid,
+    pub tenant_id: Option<Uuid>,
     pub created_at: DateTimeUtc,
     pub updated_at: Option<DateTimeUtc>,
 }

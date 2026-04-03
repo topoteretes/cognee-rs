@@ -35,14 +35,17 @@ pub async fn get_dataset_by_name(
     db: &DatabaseConnection,
     name: &str,
     owner_id: Uuid,
+    tenant_id: Option<Uuid>,
 ) -> Result<Option<Dataset>, DatabaseError> {
-    dataset::Entity::find()
-        .filter(
-            dataset::Column::Name
-                .eq(name)
-                .and(dataset::Column::OwnerId.eq(owner_id)),
-        )
-        .one(db)
+    let mut q = dataset::Entity::find().filter(
+        dataset::Column::Name
+            .eq(name)
+            .and(dataset::Column::OwnerId.eq(owner_id)),
+    );
+    if let Some(tid) = tenant_id {
+        q = q.filter(dataset::Column::TenantId.eq(tid));
+    }
+    q.one(db)
         .await
         .map_err(map_sea_err)
         .map(|opt| opt.map(Dataset::from))

@@ -116,7 +116,7 @@ pub fn run(args: CognifyArgs, cm: Arc<ComponentManager>) -> Result<(), CliError>
         let mut total_embeddings = 0usize;
 
         for dataset_name in &dataset_names {
-            let dataset = ops::datasets::get_dataset_by_name(&database, dataset_name, owner_id)
+            let dataset = ops::datasets::get_dataset_by_name(&database, dataset_name, owner_id, None)
                 .await
                 .map_err(|error| {
                     CliError::Runtime(format!(

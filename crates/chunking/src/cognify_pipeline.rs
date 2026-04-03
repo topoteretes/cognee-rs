@@ -118,16 +118,17 @@ mod tests {
             .await
             .unwrap();
 
-        let data = Data::new(
+        let data = Data::builder(
             Uuid::new_v4(),
-            "test.txt".into(),
+            "test.txt",
             location,
-            "text://test".into(),
-            "txt".into(),
-            "text/plain".into(),
-            "hash123".into(),
+            "text://test",
+            "txt",
+            "text/plain",
+            "hash123",
             Uuid::new_v4(),
-        );
+        )
+        .build();
 
         let pipeline = ExtractTextChunksPipeline::new(storage);
         let chunks = pipeline.extract_chunks(vec![data], 100).await.unwrap();
@@ -143,16 +144,17 @@ mod tests {
     async fn extract_chunks_skips_non_text() {
         let storage = Arc::new(MockStorage::new());
 
-        let data = Data::new(
+        let data = Data::builder(
             Uuid::new_v4(),
-            "image.png".into(),
-            "/storage/image.png".into(),
-            "file://image.png".into(),
-            "png".into(),
-            "image/png".into(),
-            "hash456".into(),
+            "image.png",
+            "/storage/image.png",
+            "file://image.png",
+            "png",
+            "image/png",
+            "hash456",
             Uuid::new_v4(),
-        );
+        )
+        .build();
 
         let pipeline = ExtractTextChunksPipeline::new(storage);
         let chunks = pipeline.extract_chunks(vec![data], 100).await.unwrap();

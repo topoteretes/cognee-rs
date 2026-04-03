@@ -42,7 +42,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         DataInput::Text("Another piece of text content for testing purposes.".to_string()),
     ];
 
-    let text_data = pipeline.add(text_inputs, "text_dataset", owner_id).await?;
+    let text_data = pipeline
+        .add(text_inputs, "text_dataset", owner_id, None)
+        .await?;
     println!("   ✓ Added {} text items", text_data.len());
     for data in &text_data {
         println!("      - ID: {}, Name: {}", data.id, data.name);
@@ -56,7 +58,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     )];
 
     let duplicate_data = pipeline
-        .add(duplicate_inputs, "text_dataset", owner_id)
+        .add(duplicate_inputs, "text_dataset", owner_id, None)
         .await?;
     println!(
         "   ✓ Added {} items (should reuse existing data)",
@@ -74,7 +76,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "Content for a different dataset.".to_string(),
     )];
 
-    let dataset2_data = pipeline.add(inputs, "dataset_two", owner_id).await?;
+    let dataset2_data = pipeline.add(inputs, "dataset_two", owner_id, None).await?;
     println!("   ✓ Added {} items to 'dataset_two'", dataset2_data.len());
     println!();
 

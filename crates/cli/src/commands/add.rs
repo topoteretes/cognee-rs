@@ -17,6 +17,13 @@ pub fn run(args: AddArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> {
         ))
     })?;
 
+    let tenant_id = args
+        .tenant_id
+        .as_deref()
+        .map(Uuid::parse_str)
+        .transpose()
+        .map_err(|error| CliError::Validation(format!("Invalid --tenant-id: {error}")))?;
+
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -41,7 +48,7 @@ pub fn run(args: AddArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> {
             .collect::<Vec<_>>();
 
         let results = pipeline
-            .add(inputs, &args.dataset_name, owner_id)
+            .add(inputs, &args.dataset_name, owner_id, tenant_id)
             .await
             .map_err(|error| CliError::Runtime(format!("Add operation failed: {error}")))?;
 

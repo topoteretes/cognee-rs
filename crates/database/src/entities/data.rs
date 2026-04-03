@@ -16,6 +16,18 @@ pub struct Model {
     pub owner_id: Uuid,
     pub created_at: DateTimeUtc,
     pub updated_at: Option<DateTimeUtc>,
+    pub label: Option<String>,
+    pub original_extension: Option<String>,
+    pub original_mime_type: Option<String>,
+    pub loader_engine: Option<String>,
+    pub raw_content_hash: Option<String>,
+    pub tenant_id: Option<Uuid>,
+    pub external_metadata: Option<String>,
+    pub node_set: Option<String>,
+    pub pipeline_status: Option<String>,
+    pub token_count: i64,
+    pub data_size: i64,
+    pub last_accessed: Option<DateTimeUtc>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

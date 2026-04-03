@@ -64,7 +64,7 @@ pub fn run(args: AddAndCognifyArgs, cm: Arc<ComponentManager>) -> Result<(), Cli
             .collect::<Vec<_>>();
 
         let added_data = ingest
-            .add(inputs, &args.dataset_name, owner_id)
+            .add(inputs, &args.dataset_name, owner_id, None)
             .await
             .map_err(|error| CliError::Runtime(format!("Add operation failed: {error}")))?;
 
@@ -80,20 +80,21 @@ pub fn run(args: AddAndCognifyArgs, cm: Arc<ComponentManager>) -> Result<(), Cli
         }
 
         // ── Cognify only the newly-added items ──────────────────────────────
-        let dataset = ops::datasets::get_dataset_by_name(&database, &args.dataset_name, owner_id)
-            .await
-            .map_err(|error| {
-                CliError::Runtime(format!(
-                    "Failed to resolve dataset '{}': {error}",
-                    args.dataset_name
-                ))
-            })?
-            .ok_or_else(|| {
-                CliError::Validation(format!(
-                    "Dataset '{}' was not found for owner {}",
-                    args.dataset_name, owner_id
-                ))
-            })?;
+        let dataset =
+            ops::datasets::get_dataset_by_name(&database, &args.dataset_name, owner_id, None)
+                .await
+                .map_err(|error| {
+                    CliError::Runtime(format!(
+                        "Failed to resolve dataset '{}': {error}",
+                        args.dataset_name
+                    ))
+                })?
+                .ok_or_else(|| {
+                    CliError::Validation(format!(
+                        "Dataset '{}' was not found for owner {}",
+                        args.dataset_name, owner_id
+                    ))
+                })?;
 
         let graph_db = cm
             .graph_db()

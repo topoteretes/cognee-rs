@@ -61,7 +61,7 @@ impl DeleteDb for DatabaseConnection {
         name: &str,
         owner_id: Uuid,
     ) -> Result<Option<Dataset>, DatabaseError> {
-        datasets::get_dataset_by_name(self, name, owner_id).await
+        datasets::get_dataset_by_name(self, name, owner_id, None).await
     }
 
     async fn get_dataset_data(&self, dataset_id: Uuid) -> Result<Vec<Data>, DatabaseError> {

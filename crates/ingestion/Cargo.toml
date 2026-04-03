@@ -8,6 +8,7 @@ cognee-database = { path = "../database" }
 cognee-models = { path = "../models" }
 cognee-storage = { path = "../storage" }
 cognee-utils = { path = "../utils" }
+md-5.workspace = true
 sha2.workspace = true
 uuid.workspace = true
 tokio.workspace = true

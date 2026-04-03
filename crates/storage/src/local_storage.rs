@@ -157,6 +157,10 @@ impl StorageTrait for LocalStorage {
     fn get_full_path(&self, location: &str) -> PathBuf {
         self.base_path.join(location)
     }
+
+    fn base_path(&self) -> &str {
+        self.base_path.to_str().unwrap_or("")
+    }
 }
 
 #[cfg(test)]

@@ -86,16 +86,17 @@ impl EmbeddingEngine for TestMockEmbedding {
 }
 
 fn create_test_data(name: &str, owner_id: Uuid) -> Data {
-    Data::new(
+    Data::builder(
         Uuid::new_v4(),
-        name.to_string(),
+        name,
         format!("storage/{name}"),
         format!("file://{name}"),
-        "txt".to_string(),
-        "text/plain".to_string(),
+        "txt",
+        "text/plain",
         format!("hash_{name}"),
         owner_id,
     )
+    .build()
 }
 
 async fn run_pipeline_with_incremental_flag(

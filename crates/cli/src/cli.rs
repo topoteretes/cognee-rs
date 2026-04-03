@@ -31,6 +31,9 @@ pub struct AddArgs {
 
     #[arg(long = "dataset-name", short = 'd', default_value = "main_dataset")]
     pub dataset_name: String,
+
+    #[arg(long = "tenant-id")]
+    pub tenant_id: Option<String>,
 }
 
 #[derive(Debug, Clone, ValueEnum)]

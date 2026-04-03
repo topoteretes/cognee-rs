@@ -50,7 +50,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ];
 
     println!("2. Ingesting data...");
-    let data_items = ingest.add(inputs, "example_dataset", owner_id).await?;
+    let data_items = ingest
+        .add(inputs, "example_dataset", owner_id, None)
+        .await?;
     println!("   Ingested {} data items\n", data_items.len());
 
     // NOTE: Full cognify pipeline now requires an LLM for knowledge graph extraction.

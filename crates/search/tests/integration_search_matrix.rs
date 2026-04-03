@@ -142,6 +142,7 @@ async fn test_search_type_matrix() {
             vec![DataInput::Text(GERMANY_TEXT.to_string())],
             "test_dataset",
             owner_id,
+            None,
         )
         .await
         .expect("ingest germany");
@@ -150,11 +151,12 @@ async fn test_search_type_matrix() {
             vec![DataInput::Text(QUANTUM_TEXT.to_string())],
             "test_dataset",
             owner_id,
+            None,
         )
         .await
         .expect("ingest quantum");
 
-    let dataset = ops::datasets::get_dataset_by_name(&database, "test_dataset", owner_id)
+    let dataset = ops::datasets::get_dataset_by_name(&database, "test_dataset", owner_id, None)
         .await
         .expect("get_dataset_by_name")
         .expect("dataset should exist after ingest");

@@ -81,16 +81,17 @@ async fn test_pipeline_with_embeddings() {
         .await
         .expect("Failed to store text");
 
-    let data_item = Data::new(
+    let data_item = Data::builder(
         id,
-        "test-doc.txt".to_string(),
+        "test-doc.txt",
         stored_location,
-        "test-doc.txt".to_string(),
-        "txt".to_string(),
-        "text/plain".to_string(),
-        "test-hash".to_string(),
+        "test-doc.txt",
+        "txt",
+        "text/plain",
+        "test-hash",
         owner_id,
-    );
+    )
+    .build();
 
     // 5. Run cognify pipeline (max_chunk_size now in config)
     let dataset_id = Uuid::new_v4();
@@ -199,16 +200,17 @@ async fn test_pipeline_requires_embeddings() {
         .await
         .expect("Failed to store text");
 
-    let data_item = Data::new(
+    let data_item = Data::builder(
         id,
-        "test.txt".to_string(),
+        "test.txt",
         stored_location,
-        "test.txt".to_string(),
-        "txt".to_string(),
-        "text/plain".to_string(),
-        "test-hash".to_string(),
+        "test.txt",
+        "txt",
+        "text/plain",
+        "test-hash",
         owner_id,
-    );
+    )
+    .build();
 
     let llm = create_adapter_from_env();
 
@@ -280,16 +282,17 @@ async fn test_embedding_semantic_similarity() {
             .await
             .expect("Failed to store text");
 
-        let data_item = Data::new(
+        let data_item = Data::builder(
             id,
             format!("doc-{}.txt", i),
             stored_location,
             format!("doc-{}.txt", i),
-            "txt".to_string(),
-            "text/plain".to_string(),
+            "txt",
+            "text/plain",
             format!("hash-{}", i),
             owner_id,
-        );
+        )
+        .build();
 
         let result: CognifyResult = match pipeline
             .cognify(vec![data_item], dataset_id, llm.clone())
@@ -363,16 +366,17 @@ async fn test_entity_description_indexing() {
         .await
         .expect("Failed to store text");
 
-    let data_item = Data::new(
+    let data_item = Data::builder(
         id,
-        "company.txt".to_string(),
+        "company.txt",
         stored_location,
-        "company.txt".to_string(),
-        "txt".to_string(),
-        "text/plain".to_string(),
-        "test-hash".to_string(),
+        "company.txt",
+        "txt",
+        "text/plain",
+        "test-hash",
         owner_id,
-    );
+    )
+    .build();
 
     // Run cognify pipeline
     let dataset_id = Uuid::new_v4();
@@ -492,16 +496,17 @@ async fn test_triplet_embeddings_disabled_by_default() {
         .await
         .expect("Failed to store text");
 
-    let data_item = Data::new(
+    let data_item = Data::builder(
         id,
-        "test.txt".to_string(),
+        "test.txt",
         stored_location,
-        "test.txt".to_string(),
-        "txt".to_string(),
-        "text/plain".to_string(),
-        "test-hash".to_string(),
+        "test.txt",
+        "txt",
+        "text/plain",
+        "test-hash",
         owner_id,
-    );
+    )
+    .build();
 
     // Run cognify pipeline
     let dataset_id = Uuid::new_v4();
@@ -575,16 +580,17 @@ async fn test_triplet_embeddings_enabled() {
         .await
         .expect("Failed to store text");
 
-    let data_item = Data::new(
+    let data_item = Data::builder(
         id,
-        "company.txt".to_string(),
+        "company.txt",
         stored_location,
-        "company.txt".to_string(),
-        "txt".to_string(),
-        "text/plain".to_string(),
-        "test-hash".to_string(),
+        "company.txt",
+        "txt",
+        "text/plain",
+        "test-hash",
         owner_id,
-    );
+    )
+    .build();
 
     // Run cognify pipeline
     let dataset_id = Uuid::new_v4();

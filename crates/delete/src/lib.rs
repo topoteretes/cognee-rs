@@ -526,23 +526,24 @@ mod tests {
         owner_id: Uuid,
         dataset_name: &str,
     ) -> (Uuid, Uuid) {
-        let dataset = Dataset::new(dataset_name.to_string(), owner_id);
+        let dataset = Dataset::new(dataset_name.to_string(), owner_id, None, Uuid::new_v4());
         let dataset_id = dataset.id;
         ops::datasets::create_dataset(db, dataset).await.unwrap();
 
         let location = storage.store(b"test content", "test.txt").await.unwrap();
 
         let data_id = Uuid::new_v4();
-        let data = Data::new(
+        let data = Data::builder(
             data_id,
-            "test.txt".to_string(),
+            "test.txt",
             location,
-            "file://test.txt".to_string(),
-            "txt".to_string(),
-            "text/plain".to_string(),
-            "hash_placeholder".to_string(),
+            "file://test.txt",
+            "txt",
+            "text/plain",
+            "hash_placeholder",
             owner_id,
-        );
+        )
+        .build();
         ops::data::create_data(db, data).await.unwrap();
         ops::datasets::attach_data_to_dataset(db, dataset_id, data_id)
             .await
@@ -575,7 +576,7 @@ mod tests {
         assert_eq!(result.deleted_datasets, 1);
         assert_eq!(result.deleted_data, 1);
 
-        let still_exists = ops::datasets::get_dataset_by_name(&db, "test_dataset", owner)
+        let still_exists = ops::datasets::get_dataset_by_name(&db, "test_dataset", owner, None)
             .await
             .unwrap();
         assert!(still_exists.is_none(), "dataset should be gone");
@@ -604,7 +605,7 @@ mod tests {
         assert_eq!(preview.datasets_to_delete, 1);
         assert_eq!(preview.data_to_delete, 1);
 
-        let still_exists = ops::datasets::get_dataset_by_name(&db, "test_dataset", owner)
+        let still_exists = ops::datasets::get_dataset_by_name(&db, "test_dataset", owner, None)
             .await
             .unwrap();
         assert!(
@@ -652,8 +653,8 @@ mod tests {
         let (svc, storage, db) = make_service().await;
         let owner = Uuid::new_v4();
 
-        let ds1 = Dataset::new("dataset1".to_string(), owner);
-        let ds2 = Dataset::new("dataset2".to_string(), owner);
+        let ds1 = Dataset::new("dataset1".to_string(), owner, None, Uuid::new_v4());
+        let ds2 = Dataset::new("dataset2".to_string(), owner, None, Uuid::new_v4());
         let ds1_id = ds1.id;
         let ds2_id = ds2.id;
         ops::datasets::create_dataset(&db, ds1).await.unwrap();
@@ -664,16 +665,17 @@ mod tests {
             .await
             .unwrap();
         let data_id = Uuid::new_v4();
-        let data = Data::new(
+        let data = Data::builder(
             data_id,
-            "shared.txt".to_string(),
+            "shared.txt",
             location,
-            "file://shared.txt".to_string(),
-            "txt".to_string(),
-            "text/plain".to_string(),
-            "shared_hash".to_string(),
+            "file://shared.txt",
+            "txt",
+            "text/plain",
+            "shared_hash",
             owner,
-        );
+        )
+        .build();
         ops::data::create_data(&db, data).await.unwrap();
         ops::datasets::attach_data_to_dataset(&db, ds1_id, data_id)
             .await
@@ -712,8 +714,8 @@ mod tests {
         let (svc, storage, db) = make_service().await;
         let owner = Uuid::new_v4();
 
-        let ds1 = Dataset::new("dataset1".to_string(), owner);
-        let ds2 = Dataset::new("dataset2".to_string(), owner);
+        let ds1 = Dataset::new("dataset1".to_string(), owner, None, Uuid::new_v4());
+        let ds2 = Dataset::new("dataset2".to_string(), owner, None, Uuid::new_v4());
         let ds1_id = ds1.id;
         let ds2_id = ds2.id;
         ops::datasets::create_dataset(&db, ds1).await.unwrap();
@@ -724,16 +726,17 @@ mod tests {
             .await
             .unwrap();
         let data_id = Uuid::new_v4();
-        let data = Data::new(
+        let data = Data::builder(
             data_id,
-            "shared.txt".to_string(),
+            "shared.txt",
             location,
-            "file://shared.txt".to_string(),
-            "txt".to_string(),
-            "text/plain".to_string(),
-            "shared_hash".to_string(),
+            "file://shared.txt",
+            "txt",
+            "text/plain",
+            "shared_hash",
             owner,
-        );
+        )
+        .build();
         ops::data::create_data(&db, data).await.unwrap();
         ops::datasets::attach_data_to_dataset(&db, ds1_id, data_id)
             .await

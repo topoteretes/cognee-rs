@@ -54,6 +54,7 @@ impl From<dataset::Model> for Dataset {
             id: m.id,
             name: m.name,
             owner_id: m.owner_id,
+            tenant_id: m.tenant_id,
             created_at: m.created_at,
             updated_at: m.updated_at,
         }
@@ -66,6 +67,7 @@ impl From<&Dataset> for dataset::ActiveModel {
             id: Set(d.id),
             name: Set(d.name.clone()),
             owner_id: Set(d.owner_id),
+            tenant_id: Set(d.tenant_id),
             created_at: Set(d.created_at),
             updated_at: Set(d.updated_at),
         }
@@ -89,6 +91,18 @@ impl From<data::Model> for Data {
             owner_id: m.owner_id,
             created_at: m.created_at,
             updated_at: m.updated_at,
+            label: m.label,
+            original_extension: m.original_extension,
+            original_mime_type: m.original_mime_type,
+            loader_engine: m.loader_engine,
+            raw_content_hash: m.raw_content_hash,
+            tenant_id: m.tenant_id,
+            external_metadata: m.external_metadata,
+            node_set: m.node_set,
+            pipeline_status: m.pipeline_status,
+            token_count: m.token_count,
+            data_size: m.data_size,
+            last_accessed: m.last_accessed,
         }
     }
 }
@@ -106,6 +120,18 @@ impl From<&Data> for data::ActiveModel {
             owner_id: Set(d.owner_id),
             created_at: Set(d.created_at),
             updated_at: Set(d.updated_at),
+            label: Set(d.label.clone()),
+            original_extension: Set(d.original_extension.clone()),
+            original_mime_type: Set(d.original_mime_type.clone()),
+            loader_engine: Set(d.loader_engine.clone()),
+            raw_content_hash: Set(d.raw_content_hash.clone()),
+            tenant_id: Set(d.tenant_id),
+            external_metadata: Set(d.external_metadata.clone()),
+            node_set: Set(d.node_set.clone()),
+            pipeline_status: Set(d.pipeline_status.clone()),
+            token_count: Set(d.token_count),
+            data_size: Set(d.data_size),
+            last_accessed: Set(d.last_accessed),
         }
     }
 }

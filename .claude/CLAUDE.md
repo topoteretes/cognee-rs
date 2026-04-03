@@ -108,16 +108,30 @@ cognee-rust/
 
 ### Implemented
 - Data models (Data, Dataset, DataInput, Document, DocumentChunk)
-- File storage with LocalStorage
-- SQLite metadata database
-- Ingestion pipeline with streaming, hashing, deduplication
-- URL fetcher + HTML parser infrastructure
+  - `DataInput` variants: `Text`, `FilePath`, `Url`, `S3Path` (error stub), `Binary`, `DataItem`
+  - `Data` has full 22-column Python-compat schema (label, tenant_id, loader_engine, raw_content_hash, …)
+- File storage with LocalStorage; `base_path()` on `StorageTrait` for absolute `file://` URIs
+- SQLite metadata database with SeaORM; migrations include Python-compat columns and tenant_id indexes
+- **Ingestion pipeline** — fully Python-compatible `add()`:
+  - MD5 hashing (content-only, no owner_id) with configurable `HashAlgorithm` (MD5 default, SHA256 opt-in)
+  - Deterministic UUID5 IDs for data and datasets matching Python's `uuid5(NAMESPACE_OID, …)` formula
+  - Multi-tenant support (`tenant_id` flows through pipeline, ID generation, and DB queries)
+  - `file://` absolute URI storage paths matching Python format
+  - Text files stored as `text_<md5>.txt` matching Python's `TextData` naming
+  - Loader engine registry (`text_loader`, `pypdf_loader`, `beautiful_soup_loader`, …)
+  - URL inputs: fetches HTML via `UrlFetcher`, extracts text via `HtmlParser`, stores as text
+  - Deduplication by content hash within owner+tenant scope
 - **Text chunking** — full 3-level hierarchy (word → sentence → paragraph → TextChunker), ported from Python
 - **Document classification** — mime_type-based classification (text/* supported)
 - **CognifyPipeline skeleton** — classify + chunk stages working; later stages are TODOs
-- Comprehensive test suite (75+ tests)
+- Comprehensive test suite (100+ tests) including:
+  - Python cross-validated ID tests (`crates/ingestion/tests/python_compat_ids.rs`)
+  - Tenant isolation tests, DataItem label tests
+  - Schema compatibility tests (`crates/database/tests/schema_compat.rs`)
 
 ### Not Yet Implemented (next steps)
+- **Cross-SDK integration tests** — Python writes DB, Rust reads; Rust writes, Python verifies (ADD_COMPAT_PLAN.md Phase 9)
+- **`Data` builder pattern** — replace 15-arg `Data::new()` with `DataBuilder` (ADD_COMPAT_PLAN.md 10.2)
 - **Graph extraction** — LLM-based Node/Edge/KnowledgeGraph extraction from chunks (cognify stage 3)
 - **Text summarization** — LLM-based chunk summarization (cognify stage 4)
 - **Data point storage** — Store nodes+edges in graph DB, embeddings in vector DB (cognify stage 5)
@@ -129,6 +143,7 @@ cognee-rust/
 - **Embedding engine** — ONNX-based embeddings (ort + tokenizers dependencies present)
 - **Real tokenizer** — Replace `WordCounter` with HuggingFace `tokenizers` via `TokenCounter` trait
 - **Non-text document types** — PDF, CSV, image, audio classification and reading
+- **S3 support** — `DataInput::S3Path` currently returns an error stub
 
 ## Key Dependencies
 

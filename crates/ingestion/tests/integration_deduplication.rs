@@ -65,11 +65,11 @@ async fn file_deduplication_same_content_yields_one_record() {
     let path2 = file2.path().to_str().unwrap().to_string();
 
     let result1 = pipeline
-        .add(vec![DataInput::FilePath(path1)], "dataset1", owner)
+        .add(vec![DataInput::FilePath(path1)], "dataset1", owner, None)
         .await
         .expect("add file 1");
     let result2 = pipeline
-        .add(vec![DataInput::FilePath(path2)], "dataset2", owner)
+        .add(vec![DataInput::FilePath(path2)], "dataset2", owner, None)
         .await
         .expect("add file 2");
 
@@ -86,11 +86,11 @@ async fn file_deduplication_same_content_yields_one_record() {
         .len();
     assert_eq!(all_data_count, 2, "should have 2 datasets");
 
-    let ds1 = ops::datasets::get_dataset_by_name(&database, "dataset1", owner)
+    let ds1 = ops::datasets::get_dataset_by_name(&database, "dataset1", owner, None)
         .await
         .expect("get ds1")
         .expect("ds1 should exist");
-    let ds2 = ops::datasets::get_dataset_by_name(&database, "dataset2", owner)
+    let ds2 = ops::datasets::get_dataset_by_name(&database, "dataset2", owner, None)
         .await
         .expect("get ds2")
         .expect("ds2 should exist");
@@ -126,6 +126,7 @@ async fn text_deduplication_across_two_calls() {
             vec![DataInput::Text(QUANTUM_TEXT.to_string())],
             "dataset1",
             owner,
+            None,
         )
         .await
         .expect("add text 1");
@@ -134,6 +135,7 @@ async fn text_deduplication_across_two_calls() {
             vec![DataInput::Text(QUANTUM_TEXT.to_string())],
             "dataset2",
             owner,
+            None,
         )
         .await
         .expect("add text 2");
@@ -142,15 +144,19 @@ async fn text_deduplication_across_two_calls() {
         result1[0].id, result2[0].id,
         "same text should deduplicate to the same data_id"
     );
-    assert_eq!(result1[0].name, "inline_text");
-    assert_eq!(result2[0].name, "inline_text");
+    // Name for text inputs is text_<md5_hash>
+    assert!(
+        result1[0].name.starts_with("text_"),
+        "name should start with text_"
+    );
+    assert_eq!(result1[0].name, result2[0].name, "same content → same name");
 
     // Both datasets reference the same data record
-    let ds1 = ops::datasets::get_dataset_by_name(&database, "dataset1", owner)
+    let ds1 = ops::datasets::get_dataset_by_name(&database, "dataset1", owner, None)
         .await
         .unwrap()
         .unwrap();
-    let ds2 = ops::datasets::get_dataset_by_name(&database, "dataset2", owner)
+    let ds2 = ops::datasets::get_dataset_by_name(&database, "dataset2", owner, None)
         .await
         .unwrap()
         .unwrap();
@@ -185,6 +191,7 @@ async fn cross_owner_isolation_same_content_different_owners() {
             vec![DataInput::Text(NLP_TEXT.to_string())],
             "dataset1",
             owner1,
+            None,
         )
         .await
         .expect("add owner1");
@@ -193,16 +200,21 @@ async fn cross_owner_isolation_same_content_different_owners() {
             vec![DataInput::Text(NLP_TEXT.to_string())],
             "dataset2",
             owner2,
+            None,
         )
         .await
         .expect("add owner2");
 
-    // Different owners → different data_ids (owner_id is mixed into hash)
+    // Different owners → different data_ids (owner_id is mixed into UUID5 seed)
     assert_ne!(
         result1[0].id, result2[0].id,
         "different owners should produce different data_ids"
     );
-    assert_ne!(result1[0].content_hash, result2[0].content_hash);
+    // Content hash is content-only (Python compatible), so same content → same hash
+    assert_eq!(
+        result1[0].content_hash, result2[0].content_hash,
+        "content hash is owner-independent (Python compat)"
+    );
 
     assert_eq!(result1[0].owner_id, owner1);
     assert_eq!(result2[0].owner_id, owner2);
@@ -251,11 +263,21 @@ async fn binary_file_deduplication() {
     let bin2_path = bin2.path().to_str().unwrap().to_string();
 
     let result1 = pipeline
-        .add(vec![DataInput::FilePath(bin1_path)], "bin_dataset1", owner)
+        .add(
+            vec![DataInput::FilePath(bin1_path)],
+            "bin_dataset1",
+            owner,
+            None,
+        )
         .await
         .expect("add bin 1");
     let result2 = pipeline
-        .add(vec![DataInput::FilePath(bin2_path)], "bin_dataset2", owner)
+        .add(
+            vec![DataInput::FilePath(bin2_path)],
+            "bin_dataset2",
+            owner,
+            None,
+        )
         .await
         .expect("add bin 2");
 
@@ -295,6 +317,7 @@ async fn cascade_deletion_preserves_data_with_remaining_links() {
             vec![DataInput::Text(QUANTUM_TEXT.to_string())],
             "ds1",
             owner,
+            None,
         )
         .await
         .expect("add ds1");
@@ -303,6 +326,7 @@ async fn cascade_deletion_preserves_data_with_remaining_links() {
             vec![DataInput::Text(QUANTUM_TEXT.to_string())],
             "ds2",
             owner,
+            None,
         )
         .await
         .expect("add ds2");
@@ -311,6 +335,7 @@ async fn cascade_deletion_preserves_data_with_remaining_links() {
             vec![DataInput::Text(QUANTUM_TEXT.to_string())],
             "ds3",
             owner,
+            None,
         )
         .await
         .expect("add ds3");
@@ -399,5 +424,96 @@ async fn cascade_deletion_preserves_data_with_remaining_links() {
     assert!(
         data_gone.is_none(),
         "data record should be gone after all links removed"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Sub-test F — Tenant isolation
+// ---------------------------------------------------------------------------
+
+/// Same owner, same content, but different tenant_id → different data IDs.
+/// Content hash must be identical (owner-independent hashing).
+#[tokio::test]
+async fn same_owner_different_tenants_creates_separate_data_records() {
+    let dir = TempDir::new().expect("tempdir");
+    let (pipeline, _db, _storage) = make_pipeline(&dir).await;
+
+    let owner = Uuid::new_v4();
+    let tenant1 = Some(Uuid::new_v4());
+    let tenant2 = Some(Uuid::new_v4());
+
+    let r1 = pipeline
+        .add(
+            vec![DataInput::Text(NLP_TEXT.to_string())],
+            "ds_tenant1",
+            owner,
+            tenant1,
+        )
+        .await
+        .expect("add with tenant1");
+
+    let r2 = pipeline
+        .add(
+            vec![DataInput::Text(NLP_TEXT.to_string())],
+            "ds_tenant2",
+            owner,
+            tenant2,
+        )
+        .await
+        .expect("add with tenant2");
+
+    assert_eq!(r1.len(), 1);
+    assert_eq!(r2.len(), 1);
+
+    assert_ne!(
+        r1[0].id, r2[0].id,
+        "different tenants must produce different data IDs"
+    );
+    assert_eq!(
+        r1[0].content_hash, r2[0].content_hash,
+        "content hash is tenant-independent"
+    );
+    assert_eq!(r1[0].tenant_id, tenant1);
+    assert_eq!(r2[0].tenant_id, tenant2);
+}
+
+/// Two owners × two tenants each create the same dataset name → four distinct dataset IDs.
+#[tokio::test]
+async fn datasets_isolated_by_owner_and_tenant() {
+    let dir = TempDir::new().expect("tempdir");
+    let (pipeline, _db, _storage) = make_pipeline(&dir).await;
+
+    let owner1 = Uuid::new_v4();
+    let owner2 = Uuid::new_v4();
+    let tenant1 = Some(Uuid::new_v4());
+    let tenant2 = Some(Uuid::new_v4());
+
+    let combos = [
+        (owner1, tenant1, "o1t1"),
+        (owner1, tenant2, "o1t2"),
+        (owner2, tenant1, "o2t1"),
+        (owner2, tenant2, "o2t2"),
+    ];
+
+    let mut dataset_ids = Vec::new();
+    for (owner, tenant, label) in combos {
+        let result = pipeline
+            .add(
+                vec![DataInput::Text(format!("content for {label}"))],
+                "shared_dataset_name",
+                owner,
+                tenant,
+            )
+            .await
+            .unwrap_or_else(|e| panic!("add {label}: {e}"));
+        dataset_ids.push(result[0].id);
+    }
+
+    // All four data IDs must be distinct because owner and tenant differ
+    let unique: std::collections::HashSet<_> = dataset_ids.iter().collect();
+    assert_eq!(
+        unique.len(),
+        4,
+        "each owner+tenant combination must produce a distinct data ID"
     );
 }

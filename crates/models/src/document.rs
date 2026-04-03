@@ -45,16 +45,17 @@ mod tests {
     use super::*;
 
     fn make_data(mime_type: &str, extension: &str) -> Data {
-        Data::new(
+        Data::builder(
             Uuid::new_v4(),
             format!("test.{extension}"),
-            "/storage/test".into(),
-            "text://test".into(),
-            extension.into(),
-            mime_type.into(),
-            "hash123".into(),
+            "/storage/test",
+            "text://test",
+            extension,
+            mime_type,
+            "hash123",
             Uuid::new_v4(),
         )
+        .build()
     }
 
     #[test]

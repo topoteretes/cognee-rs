@@ -15,6 +15,7 @@ impl MigrationTrait for Migration {
                     .col(ColumnDef::new(Datasets::Id).uuid().not_null().primary_key())
                     .col(ColumnDef::new(Datasets::Name).text().not_null())
                     .col(ColumnDef::new(Datasets::OwnerId).uuid().not_null())
+                    .col(ColumnDef::new(Datasets::TenantId).text())
                     .col(
                         ColumnDef::new(Datasets::CreatedAt)
                             .timestamp_with_time_zone()
@@ -30,6 +31,15 @@ impl MigrationTrait for Migration {
                     .name("idx_datasets_owner_id")
                     .table(Datasets::Table)
                     .col(Datasets::OwnerId)
+                    .to_owned(),
+            )
+            .await?;
+        manager
+            .create_index(
+                Index::create()
+                    .name("idx_datasets_tenant_id")
+                    .table(Datasets::Table)
+                    .col(Datasets::TenantId)
                     .to_owned(),
             )
             .await?;
@@ -54,6 +64,28 @@ impl MigrationTrait for Migration {
                             .not_null(),
                     )
                     .col(ColumnDef::new(Data::UpdatedAt).timestamp_with_time_zone())
+                    .col(ColumnDef::new(Data::Label).text())
+                    .col(ColumnDef::new(Data::OriginalExtension).text())
+                    .col(ColumnDef::new(Data::OriginalMimeType).text())
+                    .col(ColumnDef::new(Data::LoaderEngine).text())
+                    .col(ColumnDef::new(Data::RawContentHash).text())
+                    .col(ColumnDef::new(Data::TenantId).text())
+                    .col(ColumnDef::new(Data::ExternalMetadata).text())
+                    .col(ColumnDef::new(Data::NodeSet).text())
+                    .col(ColumnDef::new(Data::PipelineStatus).text())
+                    .col(
+                        ColumnDef::new(Data::TokenCount)
+                            .integer()
+                            .not_null()
+                            .default(-1),
+                    )
+                    .col(
+                        ColumnDef::new(Data::DataSize)
+                            .integer()
+                            .not_null()
+                            .default(-1),
+                    )
+                    .col(ColumnDef::new(Data::LastAccessed).timestamp_with_time_zone())
                     .to_owned(),
             )
             .await?;
@@ -63,6 +95,15 @@ impl MigrationTrait for Migration {
                     .name("idx_data_owner_id")
                     .table(Data::Table)
                     .col(Data::OwnerId)
+                    .to_owned(),
+            )
+            .await?;
+        manager
+            .create_index(
+                Index::create()
+                    .name("idx_data_tenant_id")
+                    .table(Data::Table)
+                    .col(Data::TenantId)
                     .to_owned(),
             )
             .await?;
@@ -489,11 +530,13 @@ enum Datasets {
     Id,
     Name,
     OwnerId,
+    TenantId,
     CreatedAt,
     UpdatedAt,
 }
 
 #[derive(DeriveIden)]
+#[allow(clippy::enum_variant_names)]
 enum Data {
     Table,
     Id,
@@ -506,6 +549,18 @@ enum Data {
     OwnerId,
     CreatedAt,
     UpdatedAt,
+    Label,
+    OriginalExtension,
+    OriginalMimeType,
+    LoaderEngine,
+    RawContentHash,
+    TenantId,
+    ExternalMetadata,
+    NodeSet,
+    PipelineStatus,
+    TokenCount,
+    DataSize,
+    LastAccessed,
 }
 
 #[derive(DeriveIden)]

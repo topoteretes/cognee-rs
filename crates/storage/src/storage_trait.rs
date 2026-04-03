@@ -78,6 +78,11 @@ pub trait StorageTrait: Send + Sync {
     /// Get the full path for a location
     fn get_full_path(&self, location: &str) -> PathBuf;
 
+    /// Return the base directory of this storage backend as a string.
+    /// Used to construct `file://` URIs for stored files.
+    /// Returns an empty string for backends that have no filesystem path (e.g. mock, S3).
+    fn base_path(&self) -> &str;
+
     /// Initialize storage (create directories, etc.)
     async fn initialize(&self) -> Result<(), StorageError>;
 }
