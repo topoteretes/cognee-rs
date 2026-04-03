@@ -20,7 +20,7 @@ url.workspace = true
 futures-util.workspace = true
 
 [dev-dependencies]
-cognee-database = { path = "../database", features = ["testing"] }
+cognee-database = { path = "../database" }
 cognee-delete = { path = "../delete" }
 cognee-storage = { path = "../storage", features = ["testing"] }
 tempfile.workspace = true

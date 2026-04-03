@@ -6,7 +6,6 @@ edition.workspace = true
 [features]
 testing = [
     "cognee-cognify/testing",
-    "cognee-database/testing",
     "cognee-graph/testing",
     "cognee-storage/testing",
     "cognee-vector/testing",

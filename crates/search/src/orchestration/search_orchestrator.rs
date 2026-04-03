@@ -2,12 +2,12 @@ use crate::orchestration::{
     SearchTypeRegistry, merge_scoped_contexts, prepare_search_result, scope_context_by_datasets,
 };
 use crate::types::{SearchError, SearchOutput, SearchRequest, SearchResponse};
-use cognee_database::{DatabaseTrait, SearchHistoryEntry};
+use cognee_database::{SearchHistoryDb, SearchHistoryEntry};
 use std::sync::Arc;
 
 pub struct SearchOrchestrator {
     registry: SearchTypeRegistry,
-    database: Option<Arc<dyn DatabaseTrait>>,
+    database: Option<Arc<dyn SearchHistoryDb>>,
 }
 
 impl SearchOrchestrator {
@@ -18,7 +18,7 @@ impl SearchOrchestrator {
         }
     }
 
-    pub fn with_database(mut self, database: Arc<dyn DatabaseTrait>) -> Self {
+    pub fn with_database(mut self, database: Arc<dyn SearchHistoryDb>) -> Self {
         self.database = Some(database);
         self
     }
@@ -156,7 +156,7 @@ mod tests {
     use std::sync::Arc;
 
     use async_trait::async_trait;
-    use cognee_database::{MockDatabase, SearchHistoryEntryType};
+    use cognee_database::{SearchHistoryDb, SearchHistoryEntryType, connect, initialize};
     use serde_json::json;
 
     use crate::orchestration::SearchTypeRegistry;
@@ -538,8 +538,11 @@ mod tests {
         let mut registry = SearchTypeRegistry::new();
         registry.register(Arc::new(FakeChunksRetriever));
 
-        let db = Arc::new(MockDatabase::new());
-        let orchestrator = super::SearchOrchestrator::new(registry).with_database(db);
+        let db = connect("sqlite::memory:").await.unwrap();
+        initialize(&db).await.unwrap();
+        let db = Arc::new(db);
+        let orchestrator = super::SearchOrchestrator::new(registry)
+            .with_database(db.clone() as Arc<dyn SearchHistoryDb>);
 
         let request = SearchRequest {
             query_text: "hello".to_string(),

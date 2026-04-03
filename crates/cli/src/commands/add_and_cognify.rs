@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use cognee_lib::add::IngestPipeline;
 use cognee_lib::cognify::{ChunkStrategy, CognifyConfig, CognifyPipeline};
+use cognee_lib::database::{IngestDb, ops};
 use cognee_lib::models::DataInput;
 use cognee_lib::ontology::{OntologyResolver, RdfLibOntologyResolver};
 use cognee_lib::{ComponentManager, PipelineContext};
@@ -53,7 +54,8 @@ pub fn run(args: AddAndCognifyArgs, cm: Arc<ComponentManager>) -> Result<(), Cli
             .map_err(|e| CliError::Runtime(format!("{e}")))?;
 
         // ── Add ──────────────────────────────────────────────────────────────
-        let ingest = IngestPipeline::new(Arc::clone(&storage), Arc::clone(&database));
+        let ingest =
+            IngestPipeline::new(Arc::clone(&storage), database.clone() as Arc<dyn IngestDb>);
 
         let inputs = args
             .data
@@ -78,8 +80,7 @@ pub fn run(args: AddAndCognifyArgs, cm: Arc<ComponentManager>) -> Result<(), Cli
         }
 
         // ── Cognify only the newly-added items ──────────────────────────────
-        let dataset = database
-            .get_dataset_by_name(&args.dataset_name, owner_id)
+        let dataset = ops::datasets::get_dataset_by_name(&database, &args.dataset_name, owner_id)
             .await
             .map_err(|error| {
                 CliError::Runtime(format!(
@@ -160,8 +161,7 @@ pub fn run(args: AddAndCognifyArgs, cm: Arc<ComponentManager>) -> Result<(), Cli
             })?;
 
         let artifact_references = build_artifact_references(owner_id, dataset.id, &result);
-        database
-            .upsert_artifact_references(&artifact_references)
+        ops::artifact_refs::upsert_artifact_references(&database, &artifact_references)
             .await
             .map_err(|error| {
                 CliError::Runtime(format!(

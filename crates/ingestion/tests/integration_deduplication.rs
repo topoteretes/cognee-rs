@@ -4,7 +4,7 @@
 //! that the pipeline deduplicates correctly under various scenarios matching the
 //! Python `test_deduplication.py` E2E test.
 
-use cognee_database::{DatabaseTrait, SqliteDatabase};
+use cognee_database::{DeleteDb, IngestDb, connect, initialize, ops};
 use cognee_delete::{DeleteMode, DeleteRequest, DeleteScope, DeleteService};
 use cognee_ingestion::IngestPipeline;
 use cognee_models::DataInput;
@@ -20,26 +20,29 @@ const QUANTUM_TEXT: &str = include_str!("test_data/quantum_computers.txt");
 /// Build a fresh `IngestPipeline` backed by a real SQLite database and
 /// `LocalStorage` inside `dir`. Returns the pipeline plus a shared database
 /// handle for post-test assertions.
-async fn make_pipeline(dir: &TempDir) -> (IngestPipeline, Arc<SqliteDatabase>, Arc<LocalStorage>) {
+async fn make_pipeline(
+    dir: &TempDir,
+) -> (
+    IngestPipeline,
+    Arc<cognee_database::DatabaseConnection>,
+    Arc<LocalStorage>,
+) {
     let db_path = dir.path().join("cognee.db");
     std::fs::File::create(&db_path).expect("sqlite db file should be created");
     let db_url = format!("sqlite://{}", db_path.display());
 
-    let database = Arc::new(
-        SqliteDatabase::new(&db_url)
-            .await
-            .expect("SqliteDatabase::new"),
-    );
-    database.initialize().await.expect("database.initialize");
+    let db = connect(&db_url).await.expect("connect");
+    initialize(&db).await.expect("initialize");
+    let db = Arc::new(db);
 
     let storage = Arc::new(LocalStorage::new(dir.path().join("storage")));
     storage.initialize().await.expect("storage.initialize");
 
     let pipeline = IngestPipeline::new(
         storage.clone() as Arc<dyn StorageTrait>,
-        database.clone() as Arc<dyn DatabaseTrait>,
+        db.clone() as Arc<dyn IngestDb>,
     );
-    (pipeline, database, storage)
+    (pipeline, db, storage)
 }
 
 // ---------------------------------------------------------------------------
@@ -77,29 +80,27 @@ async fn file_deduplication_same_content_yields_one_record() {
     );
 
     // Only one Data record in the database
-    let all_data_count = database
-        .list_datasets()
+    let all_data_count = ops::datasets::list_datasets(&database)
         .await
         .expect("list datasets")
-        .iter()
-        .map(|ds| ds.id)
-        .collect::<Vec<_>>()
         .len();
     assert_eq!(all_data_count, 2, "should have 2 datasets");
 
-    let ds1 = database
-        .get_dataset_by_name("dataset1", owner)
+    let ds1 = ops::datasets::get_dataset_by_name(&database, "dataset1", owner)
         .await
         .expect("get ds1")
         .expect("ds1 should exist");
-    let ds2 = database
-        .get_dataset_by_name("dataset2", owner)
+    let ds2 = ops::datasets::get_dataset_by_name(&database, "dataset2", owner)
         .await
         .expect("get ds2")
         .expect("ds2 should exist");
 
-    let ds1_data = database.get_dataset_data(ds1.id).await.expect("ds1 data");
-    let ds2_data = database.get_dataset_data(ds2.id).await.expect("ds2 data");
+    let ds1_data = ops::datasets::get_dataset_data(&database, ds1.id)
+        .await
+        .expect("ds1 data");
+    let ds2_data = ops::datasets::get_dataset_data(&database, ds2.id)
+        .await
+        .expect("ds2 data");
 
     assert_eq!(ds1_data.len(), 1);
     assert_eq!(ds2_data.len(), 1);
@@ -145,25 +146,26 @@ async fn text_deduplication_across_two_calls() {
     assert_eq!(result2[0].name, "inline_text");
 
     // Both datasets reference the same data record
-    let ds1 = database
-        .get_dataset_by_name("dataset1", owner)
+    let ds1 = ops::datasets::get_dataset_by_name(&database, "dataset1", owner)
         .await
         .unwrap()
         .unwrap();
-    let ds2 = database
-        .get_dataset_by_name("dataset2", owner)
+    let ds2 = ops::datasets::get_dataset_by_name(&database, "dataset2", owner)
         .await
         .unwrap()
         .unwrap();
 
-    let link_count = database
-        .count_data_dataset_links(result1[0].id)
+    let link_count = ops::data::count_data_dataset_links(&database, result1[0].id)
         .await
         .expect("count links");
     assert_eq!(link_count, 2, "data should be linked to 2 datasets");
 
-    let ds1_data = database.get_dataset_data(ds1.id).await.unwrap();
-    let ds2_data = database.get_dataset_data(ds2.id).await.unwrap();
+    let ds1_data = ops::datasets::get_dataset_data(&database, ds1.id)
+        .await
+        .unwrap();
+    let ds2_data = ops::datasets::get_dataset_data(&database, ds2.id)
+        .await
+        .unwrap();
     assert_eq!(ds1_data[0].id, ds2_data[0].id);
 }
 
@@ -206,24 +208,20 @@ async fn cross_owner_isolation_same_content_different_owners() {
     assert_eq!(result2[0].owner_id, owner2);
 
     // Each owner has exactly one dataset and one data record
-    let owner1_datasets = database
-        .list_datasets_by_owner(owner1)
+    let owner1_datasets = ops::datasets::list_datasets_by_owner(&database, owner1)
         .await
         .expect("list owner1 datasets");
-    let owner2_datasets = database
-        .list_datasets_by_owner(owner2)
+    let owner2_datasets = ops::datasets::list_datasets_by_owner(&database, owner2)
         .await
         .expect("list owner2 datasets");
 
     assert_eq!(owner1_datasets.len(), 1);
     assert_eq!(owner2_datasets.len(), 1);
 
-    let ds1_data = database
-        .get_dataset_data(owner1_datasets[0].id)
+    let ds1_data = ops::datasets::get_dataset_data(&database, owner1_datasets[0].id)
         .await
         .unwrap();
-    let ds2_data = database
-        .get_dataset_data(owner2_datasets[0].id)
+    let ds2_data = ops::datasets::get_dataset_data(&database, owner2_datasets[0].id)
         .await
         .unwrap();
 
@@ -267,11 +265,12 @@ async fn binary_file_deduplication() {
         "identical binary content should deduplicate"
     );
 
-    let all_datasets = database.list_datasets().await.expect("list datasets");
+    let all_datasets = ops::datasets::list_datasets(&database)
+        .await
+        .expect("list datasets");
     assert_eq!(all_datasets.len(), 2);
 
-    let link_count = database
-        .count_data_dataset_links(result1[0].id)
+    let link_count = ops::data::count_data_dataset_links(&database, result1[0].id)
         .await
         .expect("count links");
     assert_eq!(
@@ -319,15 +318,14 @@ async fn cascade_deletion_preserves_data_with_remaining_links() {
     let data_id = r1[0].id;
 
     // All three datasets reference the same data record
-    let link_count = database
-        .count_data_dataset_links(data_id)
+    let link_count = ops::data::count_data_dataset_links(&database, data_id)
         .await
         .expect("count links before delete");
     assert_eq!(link_count, 3, "data should be linked to 3 datasets");
 
     let delete_svc = DeleteService::new(
         storage.clone() as Arc<dyn StorageTrait>,
-        database.clone() as Arc<dyn DatabaseTrait>,
+        database.clone() as Arc<dyn DeleteDb>,
     );
 
     // Delete dataset1 — data still has 2 remaining links and must NOT be deleted
@@ -349,8 +347,7 @@ async fn cascade_deletion_preserves_data_with_remaining_links() {
     );
 
     // Data record must still exist
-    let data_still_exists = database
-        .get_data(data_id)
+    let data_still_exists = ops::data::get_data(&database, data_id)
         .await
         .expect("get data after ds1 delete");
     assert!(
@@ -358,8 +355,7 @@ async fn cascade_deletion_preserves_data_with_remaining_links() {
         "data record should survive deletion of one dataset"
     );
 
-    let remaining_links = database
-        .count_data_dataset_links(data_id)
+    let remaining_links = ops::data::count_data_dataset_links(&database, data_id)
         .await
         .expect("count links after ds1 delete");
     assert_eq!(remaining_links, 2);
@@ -397,8 +393,7 @@ async fn cascade_deletion_preserves_data_with_remaining_links() {
         "data record should be deleted when last link is removed"
     );
 
-    let data_gone = database
-        .get_data(data_id)
+    let data_gone = ops::data::get_data(&database, data_id)
         .await
         .expect("get data after all deletes");
     assert!(

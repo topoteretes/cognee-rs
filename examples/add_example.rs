@@ -1,4 +1,4 @@
-use cognee_database::{DatabaseTrait, SqliteDatabase};
+use cognee_database::{IngestDb, connect, initialize};
 use cognee_ingestion::IngestPipeline;
 use cognee_models::DataInput;
 use cognee_storage::{LocalStorage, StorageTrait};
@@ -21,13 +21,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Initialize database
     println!("2. Initializing SQLite database...");
-    let database = Arc::new(SqliteDatabase::new("sqlite:./cognee.db").await?);
-    database.initialize().await?;
+    let db = connect("sqlite:./cognee.db").await?;
+    initialize(&db).await?;
+    let database = Arc::new(db);
     println!("   ✓ Database initialized at ./cognee.db\n");
 
     // Create ingestion pipeline
     println!("3. Creating ingestion pipeline...");
-    let pipeline = IngestPipeline::new(storage.clone(), database.clone());
+    let pipeline = IngestPipeline::new(storage.clone(), database.clone() as Arc<dyn IngestDb>);
     println!("   ✓ Pipeline created\n");
 
     // Create a test user

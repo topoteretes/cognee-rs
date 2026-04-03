@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use tokio::sync::OnceCell;
 use tracing::warn;
 
-use cognee_database::{DatabaseTrait, SqliteDatabase};
+use cognee_database::{DatabaseConnection, connect, initialize};
 use cognee_embedding::{EmbeddingConfig, EmbeddingEngine, OnnxEmbeddingEngine};
 use cognee_graph::{GraphDBTrait, LadybugAdapter};
 #[cfg(all(feature = "android-litert", target_os = "android"))]
@@ -27,7 +27,7 @@ use crate::error::ComponentError;
 pub struct ComponentManager {
     settings: Settings,
     storage: OnceCell<Arc<dyn StorageTrait>>,
-    database: OnceCell<Arc<dyn DatabaseTrait>>,
+    database: OnceCell<Arc<DatabaseConnection>>,
     graph_db: OnceCell<Arc<dyn GraphDBTrait>>,
     vector_db: OnceCell<Arc<dyn VectorDB>>,
     embedding_engine: OnceCell<Arc<dyn EmbeddingEngine>>,
@@ -60,11 +60,11 @@ impl ComponentManager {
         Ok(Arc::new(storage))
     }
 
-    async fn init_database(&self) -> Result<Arc<dyn DatabaseTrait>, ComponentError> {
-        let db = SqliteDatabase::new(&self.settings.relational_db_url)
+    async fn init_database(&self) -> Result<Arc<DatabaseConnection>, ComponentError> {
+        let db = connect(&self.settings.relational_db_url)
             .await
             .map_err(|e| ComponentError::Database(format!("initialization failed: {e}")))?;
-        db.initialize()
+        initialize(&db)
             .await
             .map_err(|e| ComponentError::Database(format!("schema initialization failed: {e}")))?;
         Ok(Arc::new(db))
@@ -216,7 +216,7 @@ impl PipelineContext for ComponentManager {
             .cloned()
     }
 
-    async fn database(&self) -> Result<Arc<dyn DatabaseTrait>, ComponentError> {
+    async fn database(&self) -> Result<Arc<DatabaseConnection>, ComponentError> {
         self.database
             .get_or_try_init(|| self.init_database())
             .await

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use cognee_database::DatabaseTrait;
+use cognee_database::SearchHistoryDb;
 use cognee_embedding::EmbeddingEngine;
 use cognee_graph::GraphDBTrait;
 use cognee_llm::Llm;
@@ -19,7 +19,7 @@ use crate::types::SearchType;
 
 pub struct SearchBuilder {
     retrievers: HashMap<SearchType, SearchRetrieverRef>,
-    database: Arc<dyn DatabaseTrait>,
+    database: Arc<dyn SearchHistoryDb>,
 }
 
 impl SearchBuilder {
@@ -28,7 +28,7 @@ impl SearchBuilder {
         embedding_engine: Arc<dyn EmbeddingEngine>,
         graph_db: Arc<dyn GraphDBTrait>,
         llm: Arc<dyn Llm>,
-        database: Arc<dyn DatabaseTrait>,
+        database: Arc<dyn SearchHistoryDb>,
     ) -> Self {
         Self {
             retrievers: HashMap::new(),
@@ -254,14 +254,13 @@ mod tests {
     use std::sync::Arc;
 
     use async_trait::async_trait;
-    use cognee_database::{DatabaseError, DatabaseTrait, SearchHistoryEntry};
+    use cognee_database::{DatabaseError, SearchHistoryDb, SearchHistoryEntry};
     use cognee_embedding::EmbeddingResult;
     use cognee_embedding::engine::EmbeddingEngine;
     use cognee_graph::{EdgeData, GraphDBResult, GraphDBTrait, GraphNode, NodeData};
     use cognee_llm::{
         GenerationOptions, GenerationResponse, Llm, LlmError, LlmResult, Message, TokenUsage,
     };
-    use cognee_models::{Data, Dataset};
     use cognee_vector::{SearchResult, VectorDB, VectorDBResult, VectorPoint};
 
     use serde_json::json;
@@ -515,85 +514,7 @@ mod tests {
     struct TestDatabase;
 
     #[async_trait]
-    impl DatabaseTrait for TestDatabase {
-        async fn create_data(&self, _data: Data) -> Result<Data, DatabaseError> {
-            Err(DatabaseError::NotFound("unused".to_string()))
-        }
-
-        async fn get_data(&self, _id: Uuid) -> Result<Option<Data>, DatabaseError> {
-            Ok(None)
-        }
-
-        async fn delete_data(&self, _id: Uuid) -> Result<(), DatabaseError> {
-            Ok(())
-        }
-
-        async fn update_data(&self, _data: Data) -> Result<Data, DatabaseError> {
-            Err(DatabaseError::NotFound("unused".to_string()))
-        }
-
-        async fn get_dataset_data(&self, _dataset_id: Uuid) -> Result<Vec<Data>, DatabaseError> {
-            Ok(vec![])
-        }
-
-        async fn count_data_dataset_links(&self, _data_id: Uuid) -> Result<usize, DatabaseError> {
-            Ok(0)
-        }
-
-        async fn list_datasets_for_data(
-            &self,
-            _data_id: Uuid,
-        ) -> Result<Vec<Dataset>, DatabaseError> {
-            Ok(vec![])
-        }
-
-        async fn create_dataset(&self, _dataset: Dataset) -> Result<Dataset, DatabaseError> {
-            Err(DatabaseError::NotFound("unused".to_string()))
-        }
-
-        async fn get_dataset(&self, _id: Uuid) -> Result<Option<Dataset>, DatabaseError> {
-            Ok(None)
-        }
-
-        async fn get_dataset_by_name(
-            &self,
-            _name: &str,
-            _owner_id: Uuid,
-        ) -> Result<Option<Dataset>, DatabaseError> {
-            Ok(None)
-        }
-
-        async fn list_datasets_by_owner(
-            &self,
-            _owner_id: Uuid,
-        ) -> Result<Vec<Dataset>, DatabaseError> {
-            Ok(vec![])
-        }
-
-        async fn list_datasets(&self) -> Result<Vec<Dataset>, DatabaseError> {
-            Ok(vec![])
-        }
-
-        async fn delete_dataset(&self, _id: Uuid) -> Result<(), DatabaseError> {
-            Ok(())
-        }
-
-        async fn attach_data_to_dataset(
-            &self,
-            _dataset_id: Uuid,
-            _data_id: Uuid,
-        ) -> Result<(), DatabaseError> {
-            Ok(())
-        }
-
-        async fn detach_data_from_dataset(
-            &self,
-            _dataset_id: Uuid,
-            _data_id: Uuid,
-        ) -> Result<(), DatabaseError> {
-            Ok(())
-        }
-
+    impl SearchHistoryDb for TestDatabase {
         async fn log_query(
             &self,
             _query_text: &str,
@@ -618,10 +539,6 @@ mod tests {
             _limit: Option<usize>,
         ) -> Result<Vec<SearchHistoryEntry>, DatabaseError> {
             Ok(vec![])
-        }
-
-        async fn initialize(&self) -> Result<(), DatabaseError> {
-            Ok(())
         }
     }
 

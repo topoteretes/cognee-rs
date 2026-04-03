@@ -8,7 +8,7 @@ crate-type = ["cdylib", "staticlib"]
 
 [dependencies]
 cognee-core = { path = "../../crates/core" }
-cognee-database = { path = "../../crates/database", features = ["testing"] }
+cognee-database = { path = "../../crates/database" }
 cognee-graph = { path = "../../crates/graph", features = ["testing"] }
 cognee-vector = { path = "../../crates/vector", features = ["testing"] }
 tokio = { workspace = true, features = ["rt-multi-thread", "sync"] }

@@ -1,0 +1,80 @@
+use chrono::Utc;
+use sea_orm::{
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter,
+};
+use uuid::Uuid;
+
+use crate::conversions::{map_sea_err, query_model_to_history, result_model_to_history};
+use crate::entities::{query_log, result_log};
+use crate::types::{DatabaseError, SearchHistoryEntry};
+
+pub async fn log_query(
+    db: &DatabaseConnection,
+    query_text: &str,
+    query_type: &str,
+    user_id: Option<Uuid>,
+) -> Result<Uuid, DatabaseError> {
+    let id = Uuid::new_v4();
+    let model = query_log::ActiveModel {
+        id: Set(id),
+        query_text: Set(query_text.to_string()),
+        query_type: Set(query_type.to_string()),
+        user_id: Set(user_id),
+        created_at: Set(Utc::now()),
+    };
+    model.insert(db).await.map_err(map_sea_err)?;
+    Ok(id)
+}
+
+pub async fn log_result(
+    db: &DatabaseConnection,
+    query_id: Uuid,
+    serialized_result: &str,
+    user_id: Option<Uuid>,
+) -> Result<Uuid, DatabaseError> {
+    let id = Uuid::new_v4();
+    let model = result_log::ActiveModel {
+        id: Set(id),
+        query_id: Set(query_id),
+        serialized_result: Set(serialized_result.to_string()),
+        user_id: Set(user_id),
+        created_at: Set(Utc::now()),
+    };
+    model.insert(db).await.map_err(map_sea_err)?;
+    Ok(id)
+}
+
+pub async fn get_history(
+    db: &DatabaseConnection,
+    user_id: Option<Uuid>,
+    limit: Option<usize>,
+) -> Result<Vec<SearchHistoryEntry>, DatabaseError> {
+    let mut q_query = query_log::Entity::find();
+    if let Some(uid) = user_id {
+        q_query = q_query.filter(query_log::Column::UserId.eq(uid));
+    }
+    let queries = q_query
+        .all(db)
+        .await
+        .map_err(map_sea_err)?
+        .into_iter()
+        .map(query_model_to_history);
+
+    let mut r_query = result_log::Entity::find();
+    if let Some(uid) = user_id {
+        r_query = r_query.filter(result_log::Column::UserId.eq(uid));
+    }
+    let results = r_query
+        .all(db)
+        .await
+        .map_err(map_sea_err)?
+        .into_iter()
+        .map(result_model_to_history);
+
+    let mut entries: Vec<SearchHistoryEntry> = queries.chain(results).collect();
+    entries.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    if let Some(n) = limit {
+        entries.truncate(n);
+    }
+    Ok(entries)
+}

@@ -1,6 +1,6 @@
 use assert_cmd::Command;
 use chrono::{DateTime, Utc};
-use cognee_lib::database::{ArtifactReference, DatabaseTrait, SqliteDatabase};
+use cognee_lib::database::{ArtifactReference, connect, initialize, ops};
 use cognee_lib::graph::{GraphDBTrait, GraphDBTraitExt, LadybugAdapter};
 use cognee_lib::vector::{QdrantAdapter, VectorDB, VectorPoint};
 use predicates::prelude::*;
@@ -55,16 +55,12 @@ fn seed_scoped_delete_fixture(
 ) -> DeleteFixture {
     let runtime = tokio::runtime::Runtime::new().expect("runtime should be created");
     runtime.block_on(async {
-        let database = SqliteDatabase::new(db_url)
-            .await
-            .expect("sqlite should initialize");
-        database
-            .initialize()
+        let database = connect(db_url).await.expect("connect should succeed");
+        initialize(&database)
             .await
             .expect("schema should initialize");
 
-        let datasets = database
-            .list_datasets_by_owner(owner_id)
+        let datasets = ops::datasets::list_datasets_by_owner(&database, owner_id)
             .await
             .expect("datasets should load");
         let target_dataset = datasets
@@ -76,15 +72,13 @@ fn seed_scoped_delete_fixture(
             .find(|dataset| dataset.name == keep_dataset_name)
             .expect("keep dataset should exist");
 
-        let target_data = database
-            .get_dataset_data(target_dataset.id)
+        let target_data = ops::datasets::get_dataset_data(&database, target_dataset.id)
             .await
             .expect("target dataset data should load")
             .into_iter()
             .next()
             .expect("target data should exist");
-        let keep_data = database
-            .get_dataset_data(keep_dataset.id)
+        let keep_data = ops::datasets::get_dataset_data(&database, keep_dataset.id)
             .await
             .expect("keep dataset data should load")
             .into_iter()
@@ -193,8 +187,7 @@ fn seed_scoped_delete_fixture(
             },
         ];
 
-        database
-            .upsert_artifact_references(&references)
+        ops::artifact_refs::upsert_artifact_references(&database, &references)
             .await
             .expect("artifact references should be persisted");
 
@@ -220,38 +213,31 @@ fn seed_cross_owner_delete_fixture(
 ) -> DeleteFixture {
     let runtime = tokio::runtime::Runtime::new().expect("runtime should be created");
     runtime.block_on(async {
-        let database = SqliteDatabase::new(db_url)
-            .await
-            .expect("sqlite should initialize");
-        database
-            .initialize()
+        let database = connect(db_url).await.expect("connect should succeed");
+        initialize(&database)
             .await
             .expect("schema should initialize");
 
-        let target_dataset = database
-            .list_datasets_by_owner(target_owner_id)
+        let target_dataset = ops::datasets::list_datasets_by_owner(&database, target_owner_id)
             .await
             .expect("target owner datasets should load")
             .into_iter()
             .find(|dataset| dataset.name == target_dataset_name)
             .expect("target dataset should exist");
-        let keep_dataset = database
-            .list_datasets_by_owner(keep_owner_id)
+        let keep_dataset = ops::datasets::list_datasets_by_owner(&database, keep_owner_id)
             .await
             .expect("keep owner datasets should load")
             .into_iter()
             .find(|dataset| dataset.name == keep_dataset_name)
             .expect("keep dataset should exist");
 
-        let target_data = database
-            .get_dataset_data(target_dataset.id)
+        let target_data = ops::datasets::get_dataset_data(&database, target_dataset.id)
             .await
             .expect("target dataset data should load")
             .into_iter()
             .next()
             .expect("target data should exist");
-        let keep_data = database
-            .get_dataset_data(keep_dataset.id)
+        let keep_data = ops::datasets::get_dataset_data(&database, keep_dataset.id)
             .await
             .expect("keep dataset data should load")
             .into_iter()
@@ -360,8 +346,7 @@ fn seed_cross_owner_delete_fixture(
             },
         ];
 
-        database
-            .upsert_artifact_references(&references)
+        ops::artifact_refs::upsert_artifact_references(&database, &references)
             .await
             .expect("artifact references should be persisted");
 
@@ -384,22 +369,17 @@ fn assert_scoped_delete_results(
 ) {
     let runtime = tokio::runtime::Runtime::new().expect("runtime should be created");
     runtime.block_on(async {
-        let database = SqliteDatabase::new(db_url)
-            .await
-            .expect("sqlite should initialize");
-        database
-            .initialize()
+        let database = connect(db_url).await.expect("connect should succeed");
+        initialize(&database)
             .await
             .expect("schema should initialize");
 
-        let deleted_data = database
-            .get_data(fixture.target_data_id)
+        let deleted_data = ops::data::get_data(&database, fixture.target_data_id)
             .await
             .expect("target data query should succeed");
         assert!(deleted_data.is_none(), "target data should be deleted");
 
-        let remaining_data = database
-            .get_data(fixture.keep_data_id)
+        let remaining_data = ops::data::get_data(&database, fixture.keep_data_id)
             .await
             .expect("keep data query should succeed");
         assert!(remaining_data.is_some(), "keep data should remain");

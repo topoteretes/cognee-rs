@@ -1025,11 +1025,13 @@ mod tests {
         }
     }
 
-    fn stub_ctx() -> Arc<TaskContext> {
+    async fn stub_ctx() -> Arc<TaskContext> {
+        let db = cognee_database::connect("sqlite::memory:").await.unwrap();
+        cognee_database::initialize(&db).await.unwrap();
         let (_handle, token) = cancellation_pair();
         Arc::new(TaskContext {
             thread_pool: Arc::new(StubPool),
-            database: Arc::new(cognee_database::MockDatabase::new()),
+            database: Arc::new(db),
             graph_db: Arc::new(cognee_graph::MockGraphDB::new()),
             vector_db: Arc::new(cognee_vector::MockVectorDB::new()),
             cancellation: token,
@@ -1049,7 +1051,7 @@ mod tests {
 
         let par = Task::parallel(vec![double, triple]);
         let input: Arc<dyn Value> = Arc::new(5_i32);
-        let ctx = stub_ctx();
+        let ctx = stub_ctx().await;
 
         let call = par.call(input, ctx);
         let result = match call {
@@ -1074,7 +1076,7 @@ mod tests {
 
         let par = Task::parallel(vec![add_ten, add_twenty]);
         let input: Arc<dyn Value> = Arc::new(100_i32);
-        let ctx = stub_ctx();
+        let ctx = stub_ctx().await;
 
         let result = match par.call(input, ctx) {
             TaskCall::Async(fut) => fut.await.unwrap(),
@@ -1092,7 +1094,7 @@ mod tests {
 
         let par = Task::parallel(vec![ok_task, err_task]);
         let input: Arc<dyn Value> = Arc::new(42_i32);
-        let ctx = stub_ctx();
+        let ctx = stub_ctx().await;
 
         let result = match par.call(input, ctx) {
             TaskCall::Async(fut) => fut.await,
@@ -1107,7 +1109,7 @@ mod tests {
     async fn parallel_empty_returns_input() {
         let par = Task::parallel(vec![]);
         let input: Arc<dyn Value> = Arc::new(99_i32);
-        let ctx = stub_ctx();
+        let ctx = stub_ctx().await;
 
         let result = match par.call(Arc::clone(&input), ctx) {
             TaskCall::Async(fut) => fut.await.unwrap(),
@@ -1117,13 +1119,13 @@ mod tests {
         assert_eq!(*(*result).as_any().downcast_ref::<i32>().unwrap(), 99);
     }
 
-    #[test]
-    fn test_typed_task_panics_on_type_mismatch() {
+    #[tokio::test]
+    async fn test_typed_task_panics_on_type_mismatch() {
         use std::panic::{AssertUnwindSafe, catch_unwind};
 
         let task = Task::sync_typed(|_x: &String, _ctx| Ok(Box::new("ok".to_string())));
         let input: Arc<dyn Value> = Arc::new(42_i32); // wrong type
-        let ctx = stub_ctx();
+        let ctx = stub_ctx().await;
 
         let result = catch_unwind(AssertUnwindSafe(|| task.call(input, ctx)));
 

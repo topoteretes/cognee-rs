@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use cognee_database::{DatabaseTrait, SqliteDatabase};
+use cognee_database::{IngestDb, connect, initialize};
 use cognee_ingestion::IngestPipeline;
 use cognee_models::DataInput;
 use cognee_storage::{LocalStorage, StorageTrait};
@@ -21,13 +21,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let storage = Arc::new(LocalStorage::new("./cognify_data".into()));
     storage.initialize().await?;
 
-    let database = Arc::new(SqliteDatabase::new("sqlite:./cognify.db").await?);
-    database.initialize().await?;
+    let db = connect("sqlite:./cognify.db").await?;
+    initialize(&db).await?;
+    let database = Arc::new(db);
     println!("   Storage and database initialized\n");
 
     // Ingest some text data
     let owner_id = Uuid::new_v4();
-    let ingest = IngestPipeline::new(storage.clone(), database.clone());
+    let ingest = IngestPipeline::new(storage.clone(), database.clone() as Arc<dyn IngestDb>);
 
     let inputs = vec![
         DataInput::Text(

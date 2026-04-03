@@ -4,7 +4,6 @@ use neon::prelude::*;
 
 pub use cognee_core::TaskContext as CogneeTaskContext;
 use cognee_core::{RayonThreadPool, TaskContextBuilder};
-use cognee_database::MockDatabase;
 use cognee_graph::MockGraphDB;
 use cognee_vector::MockVectorDB;
 
@@ -26,9 +25,23 @@ pub fn task_context_mock(mut cx: FunctionContext) -> JsResult<JsObject> {
         RayonThreadPool::with_default_threads().or_else(|e| throw_core_error(&mut cx, e))?,
     );
 
+    let db = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .and_then(|rt| {
+            rt.block_on(async {
+                let db = cognee_database::connect("sqlite::memory:").await
+                    .map_err(|e| std::io::Error::other(e.to_string()))?;
+                cognee_database::initialize(&db).await
+                    .map_err(|e| std::io::Error::other(e.to_string()))?;
+                Ok::<_, std::io::Error>(db)
+            })
+        })
+        .or_else(|e| cx.throw_error(e.to_string()))?;
+
     let (handle, ctx) = TaskContextBuilder::new()
         .thread_pool(pool)
-        .database(Arc::new(MockDatabase::new()))
+        .database(Arc::new(db))
         .graph_db(Arc::new(MockGraphDB::new()))
         .vector_db(Arc::new(MockVectorDB::new()))
         .build()

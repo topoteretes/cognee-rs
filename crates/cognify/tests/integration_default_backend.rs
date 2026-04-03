@@ -13,7 +13,9 @@
 use std::sync::Arc;
 
 use cognee_cognify::{CognifyConfig, CognifyPipeline};
-use cognee_database::{DatabaseTrait, SqliteDatabase};
+use cognee_database::{
+    DatabaseConnection, DeleteDb, IngestDb, SearchHistoryDb, connect, initialize, ops,
+};
 use cognee_delete::{DeleteMode, DeleteRequest, DeleteScope, DeleteService};
 use cognee_embedding::{EmbeddingEngine, config::EmbeddingConfig, onnx::OnnxEmbeddingEngine};
 use cognee_graph::{GraphDBTrait, LadybugAdapter};
@@ -97,12 +99,9 @@ async fn test_default_backend_add_cognify_search_delete() {
     let db_path = temp_dir.path().join("cognee.db");
     std::fs::File::create(&db_path).expect("create sqlite db file");
     let db_url = format!("sqlite://{}", db_path.display());
-    let database: Arc<dyn DatabaseTrait> = Arc::new(
-        SqliteDatabase::new(&db_url)
-            .await
-            .expect("SqliteDatabase::new"),
-    );
-    database.initialize().await.expect("database.initialize");
+    let db = connect(&db_url).await.expect("connect");
+    initialize(&db).await.expect("initialize");
+    let database: Arc<DatabaseConnection> = Arc::new(db);
 
     // Ladybug graph database
     let graph_path = temp_dir.path().join("graph").to_string_lossy().to_string();
@@ -145,7 +144,7 @@ async fn test_default_backend_add_cognify_search_delete() {
     let owner_id = Uuid::nil();
 
     // ── Step 3: Ingest ───────────────────────────────────────────────────────
-    let ingest = IngestPipeline::new(Arc::clone(&storage), Arc::clone(&database));
+    let ingest = IngestPipeline::new(Arc::clone(&storage), database.clone() as Arc<dyn IngestDb>);
     let data_items = ingest
         .add(
             vec![DataInput::Text(AI_TEXT.to_string())],
@@ -178,11 +177,11 @@ async fn test_default_backend_add_cognify_search_delete() {
         None,
     );
 
-    let dataset = database
-        .get_dataset_by_name("artificial_intelligence", owner_id)
-        .await
-        .expect("get_dataset_by_name")
-        .expect("dataset should exist after ingest");
+    let dataset =
+        ops::datasets::get_dataset_by_name(&database, "artificial_intelligence", owner_id)
+            .await
+            .expect("get_dataset_by_name")
+            .expect("dataset should exist after ingest");
 
     let result = match cognify
         .cognify(data_items, dataset.id, llm.clone() as Arc<dyn Llm>)
@@ -222,7 +221,7 @@ async fn test_default_backend_add_cognify_search_delete() {
         embedding_engine.clone() as Arc<dyn EmbeddingEngine>,
         graph_db.clone() as Arc<dyn GraphDBTrait>,
         llm.clone() as Arc<dyn Llm>,
-        database.clone() as Arc<dyn DatabaseTrait>,
+        database.clone() as Arc<dyn SearchHistoryDb>,
     )
     .build();
 
@@ -264,7 +263,8 @@ async fn test_default_backend_add_cognify_search_delete() {
     println!("✓ Summaries: non-empty result");
 
     // ── Step 10: Delete / cleanup ────────────────────────────────────────────
-    let delete_svc = DeleteService::new(Arc::clone(&storage), Arc::clone(&database));
+    let delete_svc =
+        DeleteService::new(Arc::clone(&storage), database.clone() as Arc<dyn DeleteDb>);
     delete_svc
         .execute(&DeleteRequest {
             scope: DeleteScope::All,
@@ -278,8 +278,7 @@ async fn test_default_backend_add_cognify_search_delete() {
         .await
         .expect("graph_db.delete_graph");
 
-    let remaining = database
-        .list_datasets()
+    let remaining = ops::datasets::list_datasets(&database)
         .await
         .expect("list_datasets after delete");
     assert!(
