@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use cognee_lib::add::IngestPipeline;
+use cognee_lib::add::AddPipeline;
 use cognee_lib::cognify::{ChunkStrategy, CognifyConfig, CognifyPipeline};
 use cognee_lib::database::{IngestDb, ops};
 use cognee_lib::models::DataInput;
@@ -54,8 +54,7 @@ pub fn run(args: AddAndCognifyArgs, cm: Arc<ComponentManager>) -> Result<(), Cli
             .map_err(|e| CliError::Runtime(format!("{e}")))?;
 
         // ── Add ──────────────────────────────────────────────────────────────
-        let ingest =
-            IngestPipeline::new(Arc::clone(&storage), database.clone() as Arc<dyn IngestDb>);
+        let ingest = AddPipeline::new(Arc::clone(&storage), database.clone() as Arc<dyn IngestDb>);
 
         let inputs = args
             .data

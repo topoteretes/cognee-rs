@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+cognee-core = { path = "../core" }
 cognee-database = { path = "../database" }
 cognee-models = { path = "../models" }
 cognee-storage = { path = "../storage" }
@@ -24,5 +25,6 @@ futures-util.workspace = true
 cognee-database = { path = "../database" }
 cognee-delete = { path = "../delete" }
 cognee-storage = { path = "../storage", features = ["testing"] }
+cognee-test-utils = { path = "../test-utils" }
 tempfile.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

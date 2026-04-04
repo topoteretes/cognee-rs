@@ -1,5 +1,5 @@
 use cognee_database::{IngestDb, connect, initialize};
-use cognee_ingestion::IngestPipeline;
+use cognee_ingestion::AddPipeline;
 use cognee_models::DataInput;
 use cognee_storage::{LocalStorage, StorageTrait};
 use std::path::PathBuf;
@@ -28,7 +28,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create ingestion pipeline
     println!("3. Creating ingestion pipeline...");
-    let pipeline = IngestPipeline::new(storage.clone(), database.clone() as Arc<dyn IngestDb>);
+    let pipeline = AddPipeline::new(storage.clone(), database.clone() as Arc<dyn IngestDb>);
     println!("   ✓ Pipeline created\n");
 
     // Create a test user

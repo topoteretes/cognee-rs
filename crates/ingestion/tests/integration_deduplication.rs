@@ -1,4 +1,4 @@
-//! Integration tests for content-addressed deduplication in `IngestPipeline`.
+//! Integration tests for content-addressed deduplication in `AddPipeline`.
 //!
 //! These tests exercise the full SQLite + LocalStorage stack (no mocks) to verify
 //! that the pipeline deduplicates correctly under various scenarios matching the
@@ -6,7 +6,7 @@
 
 use cognee_database::{DeleteDb, IngestDb, connect, initialize, ops};
 use cognee_delete::{DeleteMode, DeleteRequest, DeleteScope, DeleteService};
-use cognee_ingestion::IngestPipeline;
+use cognee_ingestion::AddPipeline;
 use cognee_models::DataInput;
 use cognee_storage::{LocalStorage, StorageTrait};
 use std::io::Write;
@@ -17,13 +17,13 @@ use uuid::Uuid;
 const NLP_TEXT: &str = include_str!("test_data/natural_language_processing.txt");
 const QUANTUM_TEXT: &str = include_str!("test_data/quantum_computers.txt");
 
-/// Build a fresh `IngestPipeline` backed by a real SQLite database and
+/// Build a fresh `AddPipeline` backed by a real SQLite database and
 /// `LocalStorage` inside `dir`. Returns the pipeline plus a shared database
 /// handle for post-test assertions.
 async fn make_pipeline(
     dir: &TempDir,
 ) -> (
-    IngestPipeline,
+    AddPipeline,
     Arc<cognee_database::DatabaseConnection>,
     Arc<LocalStorage>,
 ) {
@@ -38,7 +38,7 @@ async fn make_pipeline(
     let storage = Arc::new(LocalStorage::new(dir.path().join("storage")));
     storage.initialize().await.expect("storage.initialize");
 
-    let pipeline = IngestPipeline::new(
+    let pipeline = AddPipeline::new(
         storage.clone() as Arc<dyn StorageTrait>,
         db.clone() as Arc<dyn IngestDb>,
     );

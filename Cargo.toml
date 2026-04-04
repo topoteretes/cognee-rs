@@ -23,7 +23,8 @@ members = [
     "crates/ontology",
     "crates/search",
     "crates/delete",
-    
+    "crates/test-utils",
+
     # TODO: Move this out of the main workspace to avoid pulling in testing features and C FFI dependencies for all members
     "capi/cognee-capi",
     "python",

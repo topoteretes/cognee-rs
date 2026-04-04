@@ -1,7 +1,7 @@
 //! Unified public API for Cognee-Rust.
 //!
 //! This crate provides a single entry point by re-exporting the core operations:
-//! - add (`IngestPipeline`)
+//! - add (`AddPipeline`)
 //! - cognify (`CognifyPipeline` and related types)
 //! - search (`SearchBuilder`/`SearchOrchestrator` and related types)
 
@@ -10,7 +10,11 @@ pub mod core {
 }
 
 pub mod add {
-    pub use cognee_ingestion::{ContentHasher, IngestPipeline};
+    pub use cognee_ingestion::{
+        AddPipeline, ContentHasher, HashAlgorithm, ProcessedInput, build_add_pipeline,
+        generate_data_id, generate_dataset_id, make_persist_data_task, make_process_input_task,
+        persist_data, process_input,
+    };
 }
 
 pub mod cognify {
@@ -69,7 +73,7 @@ pub use context::PipelineContext;
 pub use error::ComponentError;
 
 pub mod prelude {
-    pub use crate::add::IngestPipeline;
+    pub use crate::add::AddPipeline;
     pub use crate::cognify::{CognifyConfig, CognifyPipeline};
     pub use crate::core::{
         AsyncRuntime, CancellationHandle, CancellationToken, CpuPool, CpuPoolExt, ExecutionError,
@@ -87,7 +91,10 @@ pub mod prelude {
     pub use uuid::Uuid;
 }
 
-pub use add::{ContentHasher, IngestPipeline};
+pub use add::{
+    AddPipeline, ContentHasher, ProcessedInput, build_add_pipeline, make_persist_data_task,
+    make_process_input_task, persist_data, process_input,
+};
 pub use cognee_cognify::*;
 pub use cognee_delete::*;
 pub use cognee_search::*;

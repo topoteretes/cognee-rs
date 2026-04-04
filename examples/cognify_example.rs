@@ -5,7 +5,7 @@
 use std::sync::Arc;
 
 use cognee_database::{IngestDb, connect, initialize};
-use cognee_ingestion::IngestPipeline;
+use cognee_ingestion::AddPipeline;
 use cognee_models::DataInput;
 use cognee_storage::{LocalStorage, StorageTrait};
 use uuid::Uuid;
@@ -28,7 +28,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Ingest some text data
     let owner_id = Uuid::new_v4();
-    let ingest = IngestPipeline::new(storage.clone(), database.clone() as Arc<dyn IngestDb>);
+    let ingest = AddPipeline::new(storage.clone(), database.clone() as Arc<dyn IngestDb>);
 
     let inputs = vec![
         DataInput::Text(

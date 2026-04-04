@@ -19,7 +19,7 @@ use cognee_database::{
 use cognee_delete::{DeleteMode, DeleteRequest, DeleteScope, DeleteService};
 use cognee_embedding::{EmbeddingEngine, config::EmbeddingConfig, onnx::OnnxEmbeddingEngine};
 use cognee_graph::{GraphDBTrait, LadybugAdapter};
-use cognee_ingestion::IngestPipeline;
+use cognee_ingestion::AddPipeline;
 use cognee_llm::{Llm, OpenAIAdapter};
 use cognee_models::DataInput;
 use cognee_search::{
@@ -144,7 +144,7 @@ async fn test_default_backend_add_cognify_search_delete() {
     let owner_id = Uuid::nil();
 
     // ── Step 3: Ingest ───────────────────────────────────────────────────────
-    let ingest = IngestPipeline::new(Arc::clone(&storage), database.clone() as Arc<dyn IngestDb>);
+    let ingest = AddPipeline::new(Arc::clone(&storage), database.clone() as Arc<dyn IngestDb>);
     let data_items = ingest
         .add(
             vec![DataInput::Text(AI_TEXT.to_string())],

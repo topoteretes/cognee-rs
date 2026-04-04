@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use cognee_lib::add::IngestPipeline;
+use cognee_lib::add::AddPipeline;
 use cognee_lib::models::DataInput;
 use cognee_lib::{ComponentManager, PipelineContext};
 use tracing::info;
@@ -39,7 +39,7 @@ pub fn run(args: AddArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> {
             .await
             .map_err(|e| CliError::Runtime(format!("{e}")))?;
 
-        let pipeline = IngestPipeline::new(storage, database);
+        let pipeline = AddPipeline::new(storage, database);
 
         let inputs = args
             .data
