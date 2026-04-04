@@ -2,7 +2,7 @@
 //!
 //! This crate provides a single entry point by re-exporting the core operations:
 //! - add (`AddPipeline`)
-//! - cognify (`CognifyPipeline` and related types)
+//! - cognify (`cognify()` free function and related types)
 //! - search (`SearchBuilder`/`SearchOrchestrator` and related types)
 
 pub mod core {
@@ -18,7 +18,7 @@ pub mod add {
 }
 
 pub mod cognify {
-    pub use cognee_chunking::{ChunkingError, CutType, ExtractTextChunksPipeline, WordCounter};
+    pub use cognee_chunking::{ChunkingError, CutType, WordCounter};
     pub use cognee_cognify::*;
 }
 
@@ -74,7 +74,7 @@ pub use error::ComponentError;
 
 pub mod prelude {
     pub use crate::add::AddPipeline;
-    pub use crate::cognify::{CognifyConfig, CognifyPipeline};
+    pub use crate::cognify::{CognifyConfig, cognify};
     pub use crate::core::{
         AsyncRuntime, CancellationHandle, CancellationToken, CpuPool, CpuPoolExt, ExecutionError,
         NoopWatcher, Pipeline, PipelineWatcher, ProgressToken, RayonThreadPool, RetryDelay,

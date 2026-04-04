@@ -56,18 +56,13 @@
 //! # Integration with Cognify Pipeline
 //!
 //! ```ignore
-//! use cognee_cognify::CognifyPipeline;
+//! use cognee_cognify::{cognify, CognifyConfig};
 //! use cognee_ontology::RdfLibOntologyResolver;
 //!
 //! let ontology = RdfLibOntologyResolver::new(vec!["schema.ttl".into()])?;
-//! let pipeline = CognifyPipeline::new(
-//!     storage,
-//!     graph_db,
-//!     vector_db,
-//!     embedding_engine,
-//!     config,
-//!     Some(Arc::new(ontology)),
-//! );
+//! // Pass the resolver to graph extraction tasks; the pipeline is built via build_cognify_pipeline()
+//! let config = CognifyConfig::default();
+//! let result = cognify(data_items, dataset_id, llm, storage, graph_db, vector_db, embedding_engine, &config).await?;
 //! ```
 
 pub mod builder;

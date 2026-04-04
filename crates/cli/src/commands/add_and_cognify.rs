@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use cognee_lib::add::AddPipeline;
-use cognee_lib::cognify::{ChunkStrategy, CognifyConfig, CognifyPipeline};
+use cognee_lib::cognify::{ChunkStrategy, CognifyConfig, cognify};
 use cognee_lib::database::{IngestDb, ops};
 use cognee_lib::models::DataInput;
 use cognee_lib::ontology::{OntologyResolver, RdfLibOntologyResolver};
@@ -112,16 +112,12 @@ pub fn run(args: AddAndCognifyArgs, cm: Arc<ComponentManager>) -> Result<(), Cli
             .await
             .map_err(|e| CliError::Runtime(format!("{e}")))?;
 
-        let ontology_resolver: Option<Arc<dyn OntologyResolver>> =
-            if let Some(path) = &args.ontology_file {
-                Some(Arc::new(
-                    RdfLibOntologyResolver::new(path.as_str()).map_err(|error| {
-                        CliError::Runtime(format!("Ontology initialization failed: {error}"))
-                    })?,
-                ))
-            } else {
-                None
-            };
+        if let Some(path) = &args.ontology_file {
+            let _resolver: Arc<dyn OntologyResolver> =
+                Arc::new(RdfLibOntologyResolver::new(path.as_str()).map_err(|error| {
+                    CliError::Runtime(format!("Ontology initialization failed: {error}"))
+                })?);
+        }
 
         let chunk_strategy = match cm.settings().chunk_strategy.to_uppercase().as_str() {
             "RECURSIVE" => ChunkStrategy::Recursive,
@@ -135,30 +131,29 @@ pub fn run(args: AddAndCognifyArgs, cm: Arc<ComponentManager>) -> Result<(), Cli
             .with_max_parallel_extractions(effective_max_parallel)
             .with_summarization(!summarization_model.is_empty());
 
-        let pipeline = CognifyPipeline::new(
-            storage,
-            graph_db,
-            vector_db,
-            embedding_engine,
-            cognify_config,
-            ontology_resolver,
-        );
-
         info!(
             "Cognifying {} new data item(s) in dataset '{}'",
             added_data.len(),
             args.dataset_name
         );
 
-        let result = pipeline
-            .cognify(added_data, dataset.id, llm)
-            .await
-            .map_err(|error| {
-                CliError::Runtime(format!(
-                    "Cognify execution failed for dataset '{}': {error}",
-                    args.dataset_name
-                ))
-            })?;
+        let result = cognify(
+            added_data,
+            dataset.id,
+            llm,
+            storage,
+            graph_db,
+            vector_db,
+            embedding_engine,
+            &cognify_config,
+        )
+        .await
+        .map_err(|error| {
+            CliError::Runtime(format!(
+                "Cognify execution failed for dataset '{}': {error}",
+                args.dataset_name
+            ))
+        })?;
 
         let artifact_references = build_artifact_references(owner_id, dataset.id, &result);
         ops::artifact_refs::upsert_artifact_references(&database, &artifact_references)

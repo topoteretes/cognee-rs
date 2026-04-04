@@ -7,7 +7,7 @@
 //!
 //! Run with: cargo test --package cognee-cognify --test integration_embeddings
 
-use cognee_cognify::{CognifyConfig, CognifyPipeline, CognifyResult};
+use cognee_cognify::{CognifyConfig, CognifyResult, cognify};
 use cognee_embedding::{config::EmbeddingConfig, onnx::OnnxEmbeddingEngine};
 use cognee_graph::MockGraphDB;
 use cognee_models::Data;
@@ -58,15 +58,8 @@ async fn test_pipeline_with_embeddings() {
         }
     };
 
-    // 3. Create pipeline with embeddings
-    let pipeline = CognifyPipeline::new(
-        storage.clone(),
-        graph_db,
-        vector_db,
-        embedding_engine,
-        CognifyConfig::default(),
-        None,
-    );
+    // 3. Create config
+    let config = CognifyConfig::default();
 
     // 4. Create test data
     let text = TEST_TEXT_EMBEDDINGS_BASIC;
@@ -95,7 +88,18 @@ async fn test_pipeline_with_embeddings() {
 
     // 5. Run cognify pipeline (max_chunk_size now in config)
     let dataset_id = Uuid::new_v4();
-    let result: CognifyResult = match pipeline.cognify(vec![data_item], dataset_id, llm).await {
+    let result: CognifyResult = match cognify(
+        vec![data_item],
+        dataset_id,
+        llm,
+        storage.clone(),
+        graph_db,
+        vector_db,
+        embedding_engine,
+        &config,
+    )
+    .await
+    {
         Ok(result) => result,
         Err(e) => {
             eprintln!("⚠️  Skipping test: Cognify pipeline failed: {}", e);
@@ -178,15 +182,8 @@ async fn test_pipeline_requires_embeddings() {
         }
     };
 
-    // 3. Create pipeline (embeddings are REQUIRED)
-    let pipeline = CognifyPipeline::new(
-        storage.clone(),
-        graph_db,
-        vector_db,
-        embedding_engine,
-        CognifyConfig::default(),
-        None,
-    );
+    // 3. Create config (embeddings are REQUIRED)
+    let config = CognifyConfig::default();
 
     // 4. Create test data
     let text = "Simple test text about technology.";
@@ -216,7 +213,18 @@ async fn test_pipeline_requires_embeddings() {
 
     // 6. Run cognify pipeline (max_chunk_size now in config)
     let dataset_id = Uuid::new_v4();
-    let result: CognifyResult = match pipeline.cognify(vec![data_item], dataset_id, llm).await {
+    let result: CognifyResult = match cognify(
+        vec![data_item],
+        dataset_id,
+        llm,
+        storage.clone(),
+        graph_db,
+        vector_db,
+        embedding_engine,
+        &config,
+    )
+    .await
+    {
         Ok(result) => result,
         Err(e) => {
             eprintln!("⚠️  Skipping test: Cognify pipeline failed: {}", e);
@@ -238,29 +246,23 @@ async fn test_pipeline_requires_embeddings() {
 async fn test_embedding_semantic_similarity() {
     // Test that embeddings capture semantic similarity
 
-    let llm = create_adapter_from_env();
+    let llm = create_adapter_from_env() as Arc<dyn cognee_llm::Llm>;
 
-    let storage = Arc::new(MockStorage::new());
-    let graph_db = Arc::new(MockGraphDB::new());
-    let vector_db = Arc::new(MockVectorDB::new());
+    let storage: Arc<dyn StorageTrait> = Arc::new(MockStorage::new());
+    let graph_db: Arc<dyn cognee_graph::GraphDBTrait> = Arc::new(MockGraphDB::new());
+    let vector_db: Arc<dyn VectorDB> = Arc::new(MockVectorDB::new());
 
     let embedding_config = EmbeddingConfig::bge_small(get_embedding_model_dir());
-    let embedding_engine = match OnnxEmbeddingEngine::new(embedding_config) {
-        Ok(engine) => Arc::new(engine),
-        Err(e) => {
-            eprintln!("⚠️  Skipping test: Failed to load embedding model: {}", e);
-            return;
-        }
-    };
+    let embedding_engine: Arc<dyn cognee_embedding::EmbeddingEngine> =
+        match OnnxEmbeddingEngine::new(embedding_config) {
+            Ok(engine) => Arc::new(engine),
+            Err(e) => {
+                eprintln!("⚠️  Skipping test: Failed to load embedding model: {}", e);
+                return;
+            }
+        };
 
-    let pipeline = CognifyPipeline::new(
-        storage.clone(),
-        graph_db,
-        vector_db,
-        embedding_engine,
-        CognifyConfig::default(),
-        None,
-    );
+    let config = CognifyConfig::default();
 
     // Create two semantically similar documents
     let texts = [
@@ -294,9 +296,17 @@ async fn test_embedding_semantic_similarity() {
         )
         .build();
 
-        let result: CognifyResult = match pipeline
-            .cognify(vec![data_item], dataset_id, llm.clone())
-            .await
+        let result: CognifyResult = match cognify(
+            vec![data_item],
+            dataset_id,
+            Arc::clone(&llm),
+            Arc::clone(&storage),
+            Arc::clone(&graph_db),
+            Arc::clone(&vector_db),
+            Arc::clone(&embedding_engine),
+            &config,
+        )
+        .await
         {
             Ok(result) => result,
             Err(e) => {
@@ -345,14 +355,7 @@ async fn test_entity_description_indexing() {
         }
     };
 
-    let pipeline = CognifyPipeline::new(
-        storage.clone(),
-        graph_db,
-        vector_db.clone(),
-        embedding_engine,
-        CognifyConfig::default(),
-        None,
-    );
+    let config = CognifyConfig::default();
 
     // Create test data with entity information
     let text = TEST_TEXT_EMBEDDINGS_ENTITY;
@@ -380,7 +383,18 @@ async fn test_entity_description_indexing() {
 
     // Run cognify pipeline
     let dataset_id = Uuid::new_v4();
-    let result: CognifyResult = match pipeline.cognify(vec![data_item], dataset_id, llm).await {
+    let result: CognifyResult = match cognify(
+        vec![data_item],
+        dataset_id,
+        llm,
+        storage.clone(),
+        graph_db,
+        vector_db.clone(),
+        embedding_engine,
+        &config,
+    )
+    .await
+    {
         Ok(result) => result,
         Err(e) => {
             eprintln!("⚠️  Skipping test: Cognify pipeline failed: {}", e);
@@ -474,15 +488,8 @@ async fn test_triplet_embeddings_disabled_by_default() {
         }
     };
 
-    // Create pipeline with DEFAULT config (triplet embeddings should be disabled)
-    let pipeline = CognifyPipeline::new(
-        storage.clone(),
-        graph_db,
-        vector_db.clone(),
-        embedding_engine,
-        CognifyConfig::default(),
-        None,
-    );
+    // Create config with DEFAULT settings (triplet embeddings should be disabled)
+    let config = CognifyConfig::default();
 
     // Create test data
     let text = TEST_TEXT_EMBEDDINGS_TRIPLETS_DEFAULT;
@@ -510,7 +517,18 @@ async fn test_triplet_embeddings_disabled_by_default() {
 
     // Run cognify pipeline
     let dataset_id = Uuid::new_v4();
-    let result: CognifyResult = match pipeline.cognify(vec![data_item], dataset_id, llm).await {
+    let result: CognifyResult = match cognify(
+        vec![data_item],
+        dataset_id,
+        llm,
+        storage.clone(),
+        graph_db,
+        vector_db.clone(),
+        embedding_engine,
+        &config,
+    )
+    .await
+    {
         Ok(result) => result,
         Err(e) => {
             eprintln!("⚠️  Skipping test: Cognify pipeline failed: {}", e);
@@ -555,16 +573,8 @@ async fn test_triplet_embeddings_enabled() {
         }
     };
 
-    // Create pipeline with config that ENABLES triplet embeddings (Phase 3)
+    // Create config that ENABLES triplet embeddings (Phase 3)
     let config = CognifyConfig::default().with_triplet_embeddings(true);
-    let pipeline = CognifyPipeline::new(
-        storage.clone(),
-        graph_db,
-        vector_db.clone(),
-        embedding_engine,
-        config,
-        None,
-    );
 
     // Create test data with relationship-heavy content
     let text = "Steve Jobs founded Apple Inc. in 1976. \
@@ -594,7 +604,18 @@ async fn test_triplet_embeddings_enabled() {
 
     // Run cognify pipeline
     let dataset_id = Uuid::new_v4();
-    let result: CognifyResult = match pipeline.cognify(vec![data_item], dataset_id, llm).await {
+    let result: CognifyResult = match cognify(
+        vec![data_item],
+        dataset_id,
+        llm,
+        storage.clone(),
+        graph_db,
+        vector_db.clone(),
+        embedding_engine,
+        &config,
+    )
+    .await
+    {
         Ok(result) => result,
         Err(e) => {
             eprintln!("⚠️  Skipping test: Cognify pipeline failed: {}", e);

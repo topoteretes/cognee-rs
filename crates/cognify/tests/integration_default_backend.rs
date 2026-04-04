@@ -12,7 +12,7 @@
 
 use std::sync::Arc;
 
-use cognee_cognify::{CognifyConfig, CognifyPipeline};
+use cognee_cognify::{CognifyConfig, cognify};
 use cognee_database::{
     DatabaseConnection, DeleteDb, IngestDb, SearchHistoryDb, connect, initialize, ops,
 };
@@ -169,24 +169,23 @@ async fn test_default_backend_add_cognify_search_delete() {
         .with_summarization(true)
         .with_triplet_embeddings(false);
 
-    let cognify = CognifyPipeline::new(
-        storage.clone() as Arc<dyn StorageTrait>,
-        graph_db.clone() as Arc<dyn GraphDBTrait>,
-        vector_db.clone() as Arc<dyn VectorDB>,
-        embedding_engine.clone() as Arc<dyn EmbeddingEngine>,
-        config,
-        None,
-    );
-
     let dataset =
         ops::datasets::get_dataset_by_name(&database, "artificial_intelligence", owner_id, None)
             .await
             .expect("get_dataset_by_name")
             .expect("dataset should exist after ingest");
 
-    let result = match cognify
-        .cognify(data_items, dataset.id, llm.clone() as Arc<dyn Llm>)
-        .await
+    let result = match cognify(
+        data_items,
+        dataset.id,
+        llm.clone() as Arc<dyn Llm>,
+        storage.clone() as Arc<dyn StorageTrait>,
+        graph_db.clone() as Arc<dyn GraphDBTrait>,
+        vector_db.clone() as Arc<dyn VectorDB>,
+        embedding_engine.clone() as Arc<dyn EmbeddingEngine>,
+        &config,
+    )
+    .await
     {
         Ok(r) => r,
         Err(e) => {

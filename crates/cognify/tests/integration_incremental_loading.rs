@@ -1,6 +1,6 @@
 //! Integration tests for incremental loading configuration behavior.
 //!
-//! The data-processing history layer is not wired into the current Rust `CognifyPipeline` API.
+//! The data-processing history layer is not wired into the current Rust `cognify()` API.
 //! These tests validate that:
 //! 1. The incremental_loading config flag is configurable.
 //! 2. The pipeline executes successfully with incremental loading enabled.
@@ -9,7 +9,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use cognee_cognify::{CognifyConfig, CognifyPipeline};
+use cognee_cognify::{CognifyConfig, cognify};
 use cognee_embedding::{EmbeddingEngine, error::EmbeddingError};
 use cognee_graph::MockGraphDB;
 use cognee_llm::{GenerationOptions, GenerationResponse, Llm, LlmError, Message};
@@ -118,10 +118,19 @@ async fn run_pipeline_with_incremental_flag(
     data.raw_data_location = stored_location;
 
     let config = CognifyConfig::default().with_incremental_loading(incremental_loading);
-    let pipeline =
-        CognifyPipeline::new(storage, graph_db, vector_db, embedding_engine, config, None);
 
-    let result = pipeline.cognify(vec![data], dataset_id, llm).await?;
+    let result = cognify(
+        vec![data],
+        dataset_id,
+        llm,
+        storage,
+        graph_db,
+        vector_db,
+        embedding_engine,
+        &config,
+    )
+    .await
+    .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
     Ok(result.chunks.len())
 }
 

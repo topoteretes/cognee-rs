@@ -4,6 +4,9 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum CognifyError {
+    #[error("Configuration error: {0}")]
+    ConfigError(String),
+
     #[error("Chunking error: {0}")]
     ChunkingError(String),
 

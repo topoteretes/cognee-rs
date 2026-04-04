@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use chrono::Utc;
-use cognee_lib::cognify::{ChunkStrategy, CognifyConfig, CognifyPipeline};
+use cognee_lib::cognify::{ChunkStrategy, CognifyConfig, cognify};
 use cognee_lib::database::{ArtifactReference, DatabaseConnection, ops};
 use cognee_lib::ontology::{OntologyResolver, RdfLibOntologyResolver};
 use cognee_lib::{ComponentManager, PipelineContext};
@@ -78,16 +78,15 @@ pub fn run(args: CognifyArgs, cm: Arc<ComponentManager>) -> Result<(), CliError>
             .await
             .map_err(|e| CliError::Runtime(format!("{e}")))?;
 
-        let ontology_resolver: Option<Arc<dyn OntologyResolver>> =
-            if let Some(path) = &args.ontology_file {
-                Some(Arc::new(
-                    RdfLibOntologyResolver::new(path.as_str()).map_err(|error| {
-                        CliError::Runtime(format!("Ontology initialization failed: {error}"))
-                    })?,
-                ))
-            } else {
-                None
-            };
+        if let Some(path) = &args.ontology_file {
+            // Validate the ontology file eagerly so we fail fast.
+            let _resolver: Arc<dyn OntologyResolver> = Arc::new(
+                RdfLibOntologyResolver::new(path.as_str()).map_err(|error| {
+                    CliError::Runtime(format!("Ontology initialization failed: {error}"))
+                })?,
+            );
+            // NOTE: ontology enrichment is not yet wired into the pipeline tasks.
+        }
 
         let chunk_strategy = match cm.settings().chunk_strategy.to_uppercase().as_str() {
             "RECURSIVE" => ChunkStrategy::Recursive,
@@ -99,15 +98,6 @@ pub fn run(args: CognifyArgs, cm: Arc<ComponentManager>) -> Result<(), CliError>
             .with_chunk_overlap(cm.settings().chunk_overlap as usize)
             .with_chunk_strategy(chunk_strategy)
             .with_max_parallel_extractions(effective_max_parallel);
-
-        let pipeline = CognifyPipeline::new(
-            storage,
-            graph_db,
-            vector_db,
-            embedding_engine,
-            cognify_config,
-            ontology_resolver,
-        );
 
         let mut total_chunks = 0usize;
         let mut total_entities = 0usize;
@@ -148,8 +138,16 @@ pub fn run(args: CognifyArgs, cm: Arc<ComponentManager>) -> Result<(), CliError>
                 data_items.len()
             );
 
-            let result = pipeline
-                .cognify(data_items, dataset.id, llm.clone())
+            let result = cognify(
+                data_items,
+                dataset.id,
+                llm.clone(),
+                Arc::clone(&storage),
+                Arc::clone(&graph_db),
+                Arc::clone(&vector_db),
+                Arc::clone(&embedding_engine),
+                &cognify_config,
+            )
                 .await
                 .map_err(|error| {
                     CliError::Runtime(format!(

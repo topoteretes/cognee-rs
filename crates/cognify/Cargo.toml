@@ -10,6 +10,7 @@ testing = ["cognee-storage/testing"]
 cognee-models = { path = "../models" }
 cognee-storage = { path = "../storage" }
 cognee-chunking = { path = "../chunking" }
+cognee-core = { path = "../core" }
 cognee-llm = { path = "../llm" }
 cognee-graph = { path = "../graph" }
 cognee-utils = { path = "../utils" }

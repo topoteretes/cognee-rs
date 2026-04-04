@@ -12,7 +12,7 @@
 
 use std::sync::Arc;
 
-use cognee_cognify::{CognifyConfig, CognifyPipeline};
+use cognee_cognify::{CognifyConfig, cognify};
 use cognee_database::{
     DatabaseConnection, DeleteDb, IngestDb, SearchHistoryDb, connect, initialize, ops,
 };
@@ -177,18 +177,17 @@ async fn test_search_type_matrix() {
         .with_summarization(true)
         .with_triplet_embeddings(true);
 
-    let cognify = CognifyPipeline::new(
+    let result = match cognify(
+        data_items,
+        dataset.id,
+        Arc::clone(&llm),
         Arc::clone(&storage),
         Arc::clone(&graph_db),
         Arc::clone(&vector_db),
         Arc::clone(&embedding_engine),
-        config,
-        None,
-    );
-
-    let result = match cognify
-        .cognify(data_items, dataset.id, Arc::clone(&llm))
-        .await
+        &config,
+    )
+    .await
     {
         Ok(r) => r,
         Err(e) => {
