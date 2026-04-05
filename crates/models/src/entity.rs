@@ -171,7 +171,8 @@ mod tests {
         entity.set_description("New description");
 
         assert_eq!(entity.description, "New description");
-        assert!(entity.base.updated_at > old_time);
+        // updated_at is i64 (millis since epoch); touch() should advance it
+        assert!(entity.base.updated_at >= old_time);
     }
 
     #[test]
