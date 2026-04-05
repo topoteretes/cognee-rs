@@ -564,50 +564,6 @@ async fn index_data_points(
         info!("Indexed {} entity names", entities.len());
     }
 
-    // 2b. Index Entity.description field
-    if !entities.is_empty() {
-        if !vector_db
-            .has_collection("Entity", "description")
-            .await
-            .map_err(|e| CognifyError::VectorDBError(e.to_string()))?
-        {
-            vector_db
-                .create_collection("Entity", "description", dimension)
-                .await
-                .map_err(|e| CognifyError::VectorDBError(e.to_string()))?;
-        }
-
-        let descriptions: Vec<_> = entities
-            .iter()
-            .map(|e| e.entity.description.as_str())
-            .collect();
-        let vectors = engine
-            .embed(&descriptions)
-            .await
-            .map_err(|e| CognifyError::EmbeddingError(e.to_string()))?;
-
-        let points: Vec<VectorPoint> = entities
-            .iter()
-            .zip(vectors)
-            .map(|(entity, vector)| {
-                VectorPoint::new(entity.entity.base.id, vector)
-                    .with_metadata("type", json!("Entity"))
-                    .with_metadata("field", json!("description"))
-                    .with_metadata("dataset_id", json!(dataset_id.to_string()))
-                    .with_metadata("entity_type", json!(entity.entity_type.name.clone()))
-                    .with_metadata("entity_name", json!(entity.entity.name.clone()))
-            })
-            .collect();
-
-        vector_db
-            .index_points("Entity", "description", &points)
-            .await
-            .map_err(|e| CognifyError::VectorDBError(e.to_string()))?;
-
-        stats.entity_description_count = entities.len();
-        info!("Indexed {} entity descriptions", entities.len());
-    }
-
     // 3. Index TextSummary.text field
     if !summaries.is_empty() {
         if !vector_db
