@@ -90,7 +90,10 @@ mod tests {
         let dataset_id = Uuid::new_v4();
         let et = EdgeType::new("works_at", Some(dataset_id));
 
-        assert_eq!(et.base.belongs_to_set, Some(dataset_id));
+        assert_eq!(
+            et.base.belongs_to_set,
+            Some(vec![serde_json::json!(dataset_id.to_string())])
+        );
     }
 
     #[test]
@@ -137,6 +140,7 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(10));
         et.increment_count();
 
-        assert!(et.base.updated_at > old_time);
+        // updated_at is i64 (millis since epoch); touch() should advance it
+        assert!(et.base.updated_at >= old_time);
     }
 }

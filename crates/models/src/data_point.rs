@@ -3,38 +3,51 @@
 //! Mirrors Python's `cognee/infrastructure/engine/models/DataPoint.py`
 //! Provides common fields for UUID, timestamps, versioning, and metadata.
 
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use uuid::Uuid;
+
+/// Default value for `feedback_weight` (used by serde).
+fn default_feedback_weight() -> f64 {
+    0.5
+}
+
+/// Default value for `version` (used by serde).
+fn default_version() -> i32 {
+    1
+}
 
 /// Base model for all storage-layer entities.
 ///
 /// Provides:
 /// - Unique identifier (UUID)
-/// - Timestamps (created_at, updated_at)
+/// - Timestamps (created_at, updated_at) as milliseconds since epoch
 /// - Ontology validation flag
-/// - Version tracking
+/// - Version tracking (integer)
 /// - Topological rank for graph traversal
 /// - Flexible metadata storage
 /// - Type discriminator
 /// - Dataset membership
+/// - Pipeline provenance fields
+/// - Feedback weight
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct DataPoint {
     /// Unique identifier
     pub id: Uuid,
 
-    /// Creation timestamp
-    pub created_at: DateTime<Utc>,
+    /// Creation timestamp (milliseconds since epoch, matching Python)
+    pub created_at: i64,
 
-    /// Last update timestamp
-    pub updated_at: DateTime<Utc>,
+    /// Last update timestamp (milliseconds since epoch, matching Python)
+    pub updated_at: i64,
 
     /// Whether this entity has been validated against an ontology
     pub ontology_valid: bool,
 
-    /// Version string (e.g., "1.0")
-    pub version: String,
+    /// Version number (default 1, matching Python)
+    #[serde(default = "default_version")]
+    pub version: i32,
 
     /// Topological rank for graph traversal optimization
     pub topological_rank: Option<i32>,
@@ -46,8 +59,28 @@ pub struct DataPoint {
     #[serde(rename = "type")]
     pub data_type: String,
 
-    /// Dataset this data point belongs to
-    pub belongs_to_set: Option<Uuid>,
+    /// Dataset this data point belongs to (list of JSON values, matching Python)
+    pub belongs_to_set: Option<Vec<serde_json::Value>>,
+
+    /// Pipeline that created this data point
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_pipeline: Option<String>,
+
+    /// Task that created this data point
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_task: Option<String>,
+
+    /// Node set source
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_node_set: Option<String>,
+
+    /// User that triggered creation
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_user: Option<String>,
+
+    /// Feedback weight (default 0.5, matching Python)
+    #[serde(default = "default_feedback_weight")]
+    pub feedback_weight: f64,
 }
 
 impl DataPoint {
@@ -57,16 +90,22 @@ impl DataPoint {
     /// * `data_type` - Type discriminator (e.g., "Entity", "EntityType")
     /// * `dataset_id` - Optional dataset UUID
     pub fn new(data_type: impl Into<String>, dataset_id: Option<Uuid>) -> Self {
+        let now = Utc::now().timestamp_millis();
         Self {
             id: Uuid::new_v4(),
-            created_at: Utc::now(),
-            updated_at: Utc::now(),
+            created_at: now,
+            updated_at: now,
             ontology_valid: false,
-            version: "1.0".to_string(),
+            version: 1,
             topological_rank: None,
             metadata: HashMap::new(),
             data_type: data_type.into(),
-            belongs_to_set: dataset_id,
+            belongs_to_set: dataset_id.map(|id| vec![serde_json::json!(id.to_string())]),
+            source_pipeline: None,
+            source_task: None,
+            source_node_set: None,
+            source_user: None,
+            feedback_weight: 0.5,
         }
     }
 
@@ -76,16 +115,22 @@ impl DataPoint {
         dataset_id: Option<Uuid>,
         metadata: HashMap<String, serde_json::Value>,
     ) -> Self {
+        let now = Utc::now().timestamp_millis();
         Self {
             id: Uuid::new_v4(),
-            created_at: Utc::now(),
-            updated_at: Utc::now(),
+            created_at: now,
+            updated_at: now,
             ontology_valid: false,
-            version: "1.0".to_string(),
+            version: 1,
             topological_rank: None,
             metadata,
             data_type: data_type.into(),
-            belongs_to_set: dataset_id,
+            belongs_to_set: dataset_id.map(|id| vec![serde_json::json!(id.to_string())]),
+            source_pipeline: None,
+            source_task: None,
+            source_node_set: None,
+            source_user: None,
+            feedback_weight: 0.5,
         }
     }
 
@@ -103,7 +148,7 @@ impl DataPoint {
 
     /// Update the timestamp to current time.
     pub fn touch(&mut self) {
-        self.updated_at = Utc::now();
+        self.updated_at = Utc::now().timestamp_millis();
     }
 
     /// Set ontology validation status.
@@ -132,16 +177,27 @@ mod tests {
     fn test_data_point_creation() {
         let dp = DataPoint::new("TestType", None);
         assert_eq!(dp.data_type, "TestType");
-        assert_eq!(dp.version, "1.0");
+        assert_eq!(dp.version, 1);
         assert!(!dp.ontology_valid);
         assert!(dp.metadata.is_empty());
+        assert!(dp.belongs_to_set.is_none());
+        assert!(dp.source_pipeline.is_none());
+        assert!(dp.source_task.is_none());
+        assert!(dp.source_node_set.is_none());
+        assert!(dp.source_user.is_none());
+        assert!((dp.feedback_weight - 0.5).abs() < f64::EPSILON);
+        assert!(dp.created_at > 0);
+        assert!(dp.updated_at > 0);
     }
 
     #[test]
     fn test_data_point_with_dataset() {
         let dataset_id = Uuid::new_v4();
         let dp = DataPoint::new("Entity", Some(dataset_id));
-        assert_eq!(dp.belongs_to_set, Some(dataset_id));
+        assert_eq!(
+            dp.belongs_to_set,
+            Some(vec![serde_json::json!(dataset_id.to_string())])
+        );
     }
 
     #[test]
