@@ -313,8 +313,49 @@ pub async fn add_data_points(
     embedding_engine: Arc<dyn EmbeddingEngine>,
     config: &CognifyConfig,
 ) -> Result<CognifyResult, CognifyError> {
-    // graph_db is threaded through for future Steps 10-11 (structural edge writes).
-    let _graph_db = graph_db;
+    // Store all DataPoint types as graph nodes (matches Python's add_data_points behavior).
+    // Python stores DocumentChunks, TextSummaries, and EntityTypes as graph nodes.
+
+    // Store DocumentChunks as graph nodes
+    if !input.chunks.is_empty() {
+        let chunk_refs: Vec<&DocumentChunk> = input.chunks.iter().collect();
+        graph_db
+            .add_nodes(&chunk_refs)
+            .await
+            .map_err(CognifyError::from)?;
+        info!("Stored {} document chunks as graph nodes", chunk_refs.len());
+    }
+
+    // Store TextSummaries as graph nodes
+    if !input.summaries.is_empty() {
+        let summary_refs: Vec<&TextSummary> = input.summaries.iter().collect();
+        graph_db
+            .add_nodes(&summary_refs)
+            .await
+            .map_err(CognifyError::from)?;
+        info!(
+            "Stored {} text summaries as graph nodes",
+            summary_refs.len()
+        );
+    }
+
+    // Store EntityTypes as graph nodes (extract from GraphNodePairs)
+    if !input.entities.is_empty() {
+        let entity_type_refs: Vec<&cognee_models::EntityType> = input
+            .entities
+            .iter()
+            .map(|pair| &pair.entity_type)
+            .collect();
+        graph_db
+            .add_nodes(&entity_type_refs)
+            .await
+            .map_err(CognifyError::from)?;
+        info!(
+            "Stored {} entity types as graph nodes",
+            entity_type_refs.len()
+        );
+    }
+
     let embeddings = generate_embeddings(
         &input.chunks,
         &input.entities,
