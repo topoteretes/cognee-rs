@@ -62,7 +62,7 @@ impl ExtractTextChunksPipeline {
         for document in &documents {
             let _doc_span = info_span!(
                 "chunking.process_document",
-                document_id = %document.id,
+                document_id = %document.base.id,
                 mime_type = %document.mime_type,
             )
             .entered();
@@ -76,8 +76,8 @@ impl ExtractTextChunksPipeline {
             let content = String::from_utf8(content_bytes)
                 .map_err(|e| ChunkingError::InvalidUtf8(e.to_string()))?;
 
-            let chunks = chunk_text(document.id, &content, max_chunk_size, counter);
-            debug!(chunk_count = chunks.len(), document_id = %document.id, "document chunked");
+            let chunks = chunk_text(document.base.id, &content, max_chunk_size, counter);
+            debug!(chunk_count = chunks.len(), document_id = %document.base.id, "document chunked");
             all_chunks.extend(chunks);
         }
 

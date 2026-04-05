@@ -1,20 +1,33 @@
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use uuid::Uuid;
 
 use crate::Data;
+use crate::DataPoint;
 
 /// A classified document derived from a Data item.
+///
+/// Extends `DataPoint` (via `#[serde(flatten)]`) following the same pattern
+/// used by `Entity`, `EntityType`, `DocumentChunk`, and `TextSummary`.
+///
+/// Python equivalent: `cognee.modules.data.processing.document_types.Document`
+/// which extends `DataPoint` with `metadata = {"index_fields": ["name"]}`.
+///
 /// Currently supports text documents; other types (PDF, image, audio) can be
 /// added later by extending `classify_documents`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Document {
-    pub id: Uuid,
+    /// Base data point fields (id, timestamps, metadata, type, etc.)
+    #[serde(flatten)]
+    pub base: DataPoint,
     pub name: String,
     pub raw_data_location: String,
     pub mime_type: String,
     pub extension: String,
     /// Reference back to the source Data record.
     pub data_id: Uuid,
+    /// External metadata from the source Data record (if any).
+    pub external_metadata: Option<String>,
 }
 
 /// Maps Data items to Documents based on mime type.
@@ -25,13 +38,18 @@ pub fn classify_documents(data_items: &[Data]) -> Vec<Document> {
         .iter()
         .filter_map(|data| {
             if data.mime_type.starts_with("text/") {
+                let mut base = DataPoint::new("TextDocument", None);
+                // Use the same deterministic ID as the source Data record
+                base.id = data.id;
+                base.set_metadata("index_fields", json!(["name"]));
                 Some(Document {
-                    id: data.id,
+                    base,
                     name: data.name.clone(),
                     raw_data_location: data.raw_data_location.clone(),
                     mime_type: data.mime_type.clone(),
                     extension: data.extension.clone(),
                     data_id: data.id,
+                    external_metadata: data.external_metadata.clone(),
                 })
             } else {
                 None
@@ -65,6 +83,12 @@ mod tests {
         assert_eq!(docs.len(), 1);
         assert_eq!(docs[0].mime_type, "text/plain");
         assert_eq!(docs[0].data_id, data[0].id);
+        assert_eq!(docs[0].base.id, data[0].id);
+        assert_eq!(docs[0].base.data_type, "TextDocument");
+        assert_eq!(
+            docs[0].base.get_metadata("index_fields"),
+            Some(&serde_json::json!(["name"]))
+        );
     }
 
     #[test]

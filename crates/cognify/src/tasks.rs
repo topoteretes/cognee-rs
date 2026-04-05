@@ -131,7 +131,7 @@ pub async fn extract_chunks_from_documents(
         let content = String::from_utf8(content_bytes)
             .map_err(|e| CognifyError::ChunkingError(e.to_string()))?;
 
-        let chunks = chunk_text(document.id, &content, max_chunk_size, &counter);
+        let chunks = chunk_text(document.base.id, &content, max_chunk_size, &counter);
         all_chunks.extend(chunks);
     }
 
@@ -857,13 +857,18 @@ mod tests {
             .await
             .unwrap();
 
+        let doc_id = Uuid::new_v4();
+        let mut base = cognee_models::DataPoint::new("TextDocument", None);
+        base.id = doc_id;
+        base.set_metadata("index_fields", serde_json::json!(["name"]));
         let doc = Document {
-            id: Uuid::new_v4(),
+            base,
             name: "test.txt".to_string(),
             raw_data_location: location,
             mime_type: "text/plain".to_string(),
             extension: "txt".to_string(),
             data_id: Uuid::new_v4(),
+            external_metadata: None,
         };
 
         let input = ClassifiedDocuments {
