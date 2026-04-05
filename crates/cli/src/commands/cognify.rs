@@ -244,14 +244,16 @@ pub(crate) fn build_artifact_references(
     }
 
     for summary in &result.summaries {
-        let data_id = chunk_to_data_id.get(&summary.chunk_id).copied();
+        let data_id = summary
+            .made_from
+            .and_then(|chunk_id| chunk_to_data_id.get(&chunk_id).copied());
         references.push(ArtifactReference {
             id: Uuid::new_v4(),
             owner_id,
             dataset_id,
             data_id,
             artifact_kind: "vector_point".to_string(),
-            artifact_id: summary.id.to_string(),
+            artifact_id: summary.base.id.to_string(),
             collection_name: Some("TextSummary_text".to_string()),
             created_at,
         });

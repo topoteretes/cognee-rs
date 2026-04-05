@@ -91,7 +91,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let summaries = extractor.summarize_chunks(&chunks, None).await?;
 
     for (idx, summary) in summaries.iter().enumerate() {
-        println!("Chunk {}: ID={}", idx + 1, summary.id);
+        println!("Chunk {}: ID={}", idx + 1, summary.base.id);
         println!("  Summary: {}", summary.text);
         if let Some(desc) = &summary.description {
             println!("  Description: {}\n", desc);

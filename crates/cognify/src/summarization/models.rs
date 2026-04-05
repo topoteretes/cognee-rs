@@ -4,8 +4,10 @@
 //! - cognee/tasks/summarization/models.py (TextSummary)
 //! - cognee/shared/data_models.py (SummarizedContent)
 
+use cognee_models::DataPoint;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use uuid::Uuid;
 
 /// LLM output model for summarized content.
@@ -24,14 +26,16 @@ pub struct SummarizedContent {
 /// Text summary derived from a document chunk.
 ///
 /// Represents a hierarchical summary that can be stored and retrieved.
-/// Links back to the original chunk via chunk_id.
+/// Extends DataPoint (matching Python's `TextSummary(DataPoint)`).
+/// Links back to the original chunk via `made_from`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TextSummary {
-    /// Unique identifier (uuid5 based on chunk_id + "TextSummary")
-    pub id: Uuid,
+    /// Base DataPoint fields (id, timestamps, metadata, etc.)
+    #[serde(flatten)]
+    pub base: DataPoint,
 
-    /// The chunk this summary was generated from
-    pub chunk_id: Uuid,
+    /// The chunk this summary was generated from (matches Python's `made_from: DocumentChunk`)
+    pub made_from: Option<Uuid>,
 
     /// The summary text
     pub text: String,
@@ -59,9 +63,14 @@ impl TextSummary {
         // Deterministic ID: uuid5(chunk_id, "TextSummary")
         let id = Uuid::new_v5(&chunk_id, b"TextSummary");
 
+        let mut base = DataPoint::new("TextSummary", None);
+        base.id = id;
+        base.metadata
+            .insert("index_fields".to_string(), json!(["text"]));
+
         Self {
-            id,
-            chunk_id,
+            base,
+            made_from: Some(chunk_id),
             text,
             description,
             model,
@@ -111,7 +120,7 @@ mod tests {
         );
 
         // Same chunk_id should produce same summary id (deterministic)
-        assert_eq!(summary1.id, summary2.id);
+        assert_eq!(summary1.base.id, summary2.base.id);
 
         // Different chunk_id should produce different summary id
         let different_chunk_id = Uuid::new_v4();
@@ -121,7 +130,7 @@ mod tests {
             None,
             "gpt-4".to_string(),
         );
-        assert_ne!(summary1.id, summary3.id);
+        assert_ne!(summary1.base.id, summary3.base.id);
     }
 
     #[test]
@@ -138,11 +147,14 @@ mod tests {
             "llama3".to_string(),
         );
 
-        assert_eq!(text_summary.chunk_id, chunk_id);
+        assert_eq!(text_summary.made_from, Some(chunk_id));
         assert_eq!(text_summary.text, summarized.summary);
         assert_eq!(text_summary.description, Some(summarized.description));
         assert_eq!(text_summary.model, "llama3");
-        assert_eq!(text_summary.id, Uuid::new_v5(&chunk_id, b"TextSummary"));
+        assert_eq!(
+            text_summary.base.id,
+            Uuid::new_v5(&chunk_id, b"TextSummary")
+        );
     }
 
     #[test]
@@ -158,10 +170,31 @@ mod tests {
         let json = serde_json::to_string(&summary).unwrap();
         let deserialized: TextSummary = serde_json::from_str(&json).unwrap();
 
-        assert_eq!(summary.id, deserialized.id);
-        assert_eq!(summary.chunk_id, deserialized.chunk_id);
+        assert_eq!(summary.base.id, deserialized.base.id);
+        assert_eq!(summary.made_from, deserialized.made_from);
         assert_eq!(summary.text, deserialized.text);
         assert_eq!(summary.description, deserialized.description);
         assert_eq!(summary.model, deserialized.model);
+    }
+
+    #[test]
+    fn test_data_point_base_fields() {
+        let chunk_id = Uuid::new_v4();
+        let summary = TextSummary::new(
+            chunk_id,
+            "Test summary".to_string(),
+            None,
+            "gpt-4".to_string(),
+        );
+
+        // Verify DataPoint base fields are properly set
+        assert_eq!(summary.base.data_type, "TextSummary");
+        assert_eq!(
+            summary.base.metadata.get("index_fields"),
+            Some(&json!(["text"]))
+        );
+        assert!(summary.base.created_at > 0);
+        assert!(summary.base.updated_at > 0);
+        assert_eq!(summary.base.version, 1);
     }
 }

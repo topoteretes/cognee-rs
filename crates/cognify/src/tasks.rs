@@ -462,7 +462,7 @@ async fn generate_embeddings(
 
         for (summary, vector) in summaries.iter().zip(summary_vectors) {
             embeddings.push(Embedding::new(
-                summary.chunk_id,
+                summary.base.id,
                 "TextSummary",
                 "text",
                 vector,
@@ -593,11 +593,14 @@ async fn index_data_points(
             .iter()
             .zip(vectors)
             .map(|(summary, vector)| {
-                VectorPoint::new(summary.id, vector)
+                let mut point = VectorPoint::new(summary.base.id, vector)
                     .with_metadata("type", json!("TextSummary"))
                     .with_metadata("field", json!("text"))
-                    .with_metadata("dataset_id", json!(dataset_id.to_string()))
-                    .with_metadata("chunk_id", json!(summary.chunk_id.to_string()))
+                    .with_metadata("dataset_id", json!(dataset_id.to_string()));
+                if let Some(made_from) = summary.made_from {
+                    point = point.with_metadata("chunk_id", json!(made_from.to_string()));
+                }
+                point
             })
             .collect();
 

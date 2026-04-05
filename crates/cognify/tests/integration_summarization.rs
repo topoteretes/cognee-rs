@@ -115,11 +115,12 @@ async fn test_summarization_batch() {
 
                 // Verify deterministic UUID
                 assert_eq!(
-                    summary.chunk_id, chunks[idx].base.id,
+                    summary.made_from,
+                    Some(chunks[idx].base.id),
                     "Summary should link to correct chunk"
                 );
                 assert_eq!(
-                    summary.id,
+                    summary.base.id,
                     Uuid::new_v5(&chunks[idx].base.id, b"TextSummary"),
                     "Summary ID should be deterministic uuid5"
                 );
@@ -172,18 +173,18 @@ async fn test_summarization_deterministic_ids() {
             let summary2 = &summaries2[0];
 
             println!("\n✓ Generated summaries with deterministic IDs");
-            println!("   Summary ID: {}", summary1.id);
+            println!("   Summary ID: {}", summary1.base.id);
 
             // Same chunk_id should produce same summary id
             assert_eq!(
-                summary1.id, summary2.id,
+                summary1.base.id, summary2.base.id,
                 "Same chunk should produce same summary ID"
             );
 
             // Verify the ID is the expected uuid5
             let expected_id = Uuid::new_v5(&chunk_id, b"TextSummary");
             assert_eq!(
-                summary1.id, expected_id,
+                summary1.base.id, expected_id,
                 "Summary ID should be uuid5(chunk_id, 'TextSummary')"
             );
         }
@@ -263,8 +264,10 @@ fn print_summarized_content(summarized: &SummarizedContent) {
 }
 
 fn print_text_summary(summary: &TextSummary) {
-    println!("   ID: {}", summary.id);
-    println!("   Chunk ID: {}", summary.chunk_id);
+    println!("   ID: {}", summary.base.id);
+    if let Some(made_from) = summary.made_from {
+        println!("   Made from chunk: {}", made_from);
+    }
     println!("   Model: {}", summary.model);
     println!("   Text: {}", summary.text);
     if let Some(desc) = &summary.description {
