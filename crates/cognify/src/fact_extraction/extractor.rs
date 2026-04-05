@@ -118,7 +118,7 @@ impl FactExtractor {
         debug!("Extracting facts from text: {}", text);
         let system_prompt = custom_prompt.unwrap_or(DEFAULT_GRAPH_PROMPT);
 
-        let graph: KnowledgeGraph = self
+        let mut graph: KnowledgeGraph = self
             .llm
             .create_structured_output(
                 text,
@@ -137,6 +137,14 @@ impl FactExtractor {
             graph.node_count(),
             graph.edge_count()
         );
+
+        // Post-processing: ensure every node has a non-empty name (Python compat).
+        // In Python's Node.__init__, name defaults to id when empty.
+        for node in &mut graph.nodes {
+            if node.name.is_empty() {
+                node.name = node.id.clone();
+            }
+        }
 
         Ok(graph)
     }
@@ -253,5 +261,68 @@ mod tests {
         let graph = result.unwrap();
         assert_eq!(graph.node_count(), 1);
         assert_eq!(graph.nodes[0].id, "test_node");
+    }
+
+    /// Mock LLM that returns a node with an empty name to test the fallback.
+    #[derive(Clone)]
+    struct MockLlmEmptyName;
+
+    #[async_trait::async_trait]
+    impl Llm for MockLlmEmptyName {
+        async fn generate(
+            &self,
+            _messages: Vec<cognee_llm::Message>,
+            _options: Option<GenerationOptions>,
+        ) -> cognee_llm::LlmResult<cognee_llm::GenerationResponse> {
+            unimplemented!()
+        }
+
+        async fn create_structured_output_with_messages_raw(
+            &self,
+            _messages: Vec<cognee_llm::Message>,
+            _json_schema: &serde_json::Value,
+            _options: Option<GenerationOptions>,
+        ) -> cognee_llm::LlmResult<serde_json::Value> {
+            let graph = KnowledgeGraph {
+                nodes: vec![
+                    super::super::models::Node {
+                        id: "alice_johnson".to_string(),
+                        name: "".to_string(), // Empty name — should be set to id
+                        node_type: "PERSON".to_string(),
+                        description: "A person".to_string(),
+                    },
+                    super::super::models::Node {
+                        id: "techcorp".to_string(),
+                        name: "TechCorp".to_string(), // Non-empty — should stay unchanged
+                        node_type: "ORGANIZATION".to_string(),
+                        description: "A company".to_string(),
+                    },
+                ],
+                edges: vec![],
+            };
+            Ok(serde_json::to_value(&graph).unwrap())
+        }
+
+        fn model(&self) -> &str {
+            "mock-empty-name"
+        }
+    }
+
+    #[tokio::test]
+    async fn test_empty_node_name_defaults_to_id() {
+        let llm = Arc::new(MockLlmEmptyName);
+        let extractor = FactExtractor::new(llm);
+
+        let graph = extractor.extract_facts("Test text", None).await.unwrap();
+
+        assert_eq!(graph.node_count(), 2);
+
+        // Node with empty name should have name set to its id
+        assert_eq!(graph.nodes[0].id, "alice_johnson");
+        assert_eq!(graph.nodes[0].name, "alice_johnson");
+
+        // Node with non-empty name should remain unchanged
+        assert_eq!(graph.nodes[1].id, "techcorp");
+        assert_eq!(graph.nodes[1].name, "TechCorp");
     }
 }
