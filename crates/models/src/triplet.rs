@@ -9,9 +9,9 @@ use uuid::Uuid;
 /// A triplet representing a semantic relationship between two entities.
 ///
 /// Triplets are embedded as text in the format:
-/// "source_text -› relationship_text -› target_text"
+/// "source_text -› relationship_text-›target_text"
 ///
-/// Example: "Steve Jobs: Co-founder of Apple -› founded -› Apple Inc.: Technology company"
+/// Example: "Steve Jobs: Co-founder of Apple -› founded-›Apple Inc.: Technology company"
 ///
 /// Python reference: cognee/modules/engine/models/Triplet.py
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -30,7 +30,7 @@ pub struct Triplet {
     pub relationship_name: String,
 
     /// Embeddable text representation.
-    /// Format: "{source_text} -› {relationship_text} -› {target_text}"
+    /// Format: "{source_text} -› {relationship_text}-›{target_text}"
     /// This is the text that gets embedded for semantic search.
     pub embeddable_text: String,
 
@@ -63,7 +63,7 @@ impl Triplet {
     ///     source_id,
     ///     target_id,
     ///     "founded".to_string(),
-    ///     "Steve Jobs -› founded -› Apple Inc.".to_string(),
+    ///     "Steve Jobs -› founded-›Apple Inc.".to_string(),
     /// );
     /// ```
     pub fn new(
@@ -72,12 +72,15 @@ impl Triplet {
         relationship_name: String,
         embeddable_text: String,
     ) -> Self {
-        // Generate deterministic ID from edge key (matches Python behavior)
-        let edge_key = format!(
-            "{}_{}_{}",
-            source_entity_id, target_entity_id, relationship_name
+        // Generate deterministic ID matching Python's generate_node_id():
+        //   uuid5(NAMESPACE_OID, (src + rel + tgt).lower().replace(" ", "_").replace("'", ""))
+        // Python reference: cognee/modules/engine/utils/generate_node_id.py
+        let raw = format!(
+            "{}{}{}",
+            source_entity_id, relationship_name, target_entity_id
         );
-        let id = Uuid::new_v5(&Uuid::NAMESPACE_OID, edge_key.as_bytes());
+        let normalized = raw.to_lowercase().replace(' ', "_").replace('\'', "");
+        let id = Uuid::new_v5(&Uuid::NAMESPACE_OID, normalized.as_bytes());
 
         Self {
             id,
@@ -119,7 +122,7 @@ mod tests {
             source_id,
             target_id,
             "founded".to_string(),
-            "Steve Jobs -› founded -› Apple Inc.".to_string(),
+            "Steve Jobs -› founded-›Apple Inc.".to_string(),
         );
 
         assert_eq!(triplet.source_entity_id, source_id);
@@ -138,7 +141,7 @@ mod tests {
             source_id,
             target_id,
             "works_at".to_string(),
-            "Alice -› works at -› TechCorp".to_string(),
+            "Alice -› works at-›TechCorp".to_string(),
         )
         .with_names("Alice".to_string(), "TechCorp".to_string());
 
@@ -156,17 +159,45 @@ mod tests {
             source_id,
             target_id,
             "relates".to_string(),
-            "A -› relates -› B".to_string(),
+            "A -› relates-›B".to_string(),
         );
 
         let triplet2 = Triplet::new(
             source_id,
             target_id,
             "relates".to_string(),
-            "A -› relates -› B".to_string(),
+            "A -› relates-›B".to_string(),
         );
 
         assert_eq!(triplet1.id, triplet2.id, "IDs should be deterministic");
+    }
+
+    #[test]
+    fn test_triplet_id_matches_python_generate_node_id() {
+        // Verify ID generation matches Python's generate_node_id():
+        //   uuid5(NAMESPACE_OID, (src + rel + tgt).lower().replace(" ", "_").replace("'", ""))
+        let source_id = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+        let target_id = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440001").unwrap();
+        let relationship = "founded";
+
+        let triplet = Triplet::new(
+            source_id,
+            target_id,
+            relationship.to_string(),
+            "test".to_string(),
+        );
+
+        // Manually compute expected ID using Python's formula:
+        // raw = str(source_id) + relationship_name + str(target_id)
+        // normalized = raw.lower().replace(" ", "_").replace("'", "")
+        let raw = format!("{}{}{}", source_id, relationship, target_id);
+        let normalized = raw.to_lowercase().replace(' ', "_").replace('\'', "");
+        let expected_id = Uuid::new_v5(&Uuid::NAMESPACE_OID, normalized.as_bytes());
+
+        assert_eq!(
+            triplet.id, expected_id,
+            "ID should match Python generate_node_id formula"
+        );
     }
 
     #[test]

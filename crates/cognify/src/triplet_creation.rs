@@ -18,7 +18,7 @@ use crate::graph_integration::{GraphEdgePair, GraphNodePair};
 /// - Target entity (name + description)
 ///
 /// Into embeddable text format:
-/// "source_text -› relationship_text -› target_text"
+/// "source_text -› relationship_text-›target_text"
 ///
 /// # Arguments
 /// * `nodes` - List of graph nodes (entities with descriptions)
@@ -98,12 +98,10 @@ pub fn create_triplets_from_graph(
             continue;
         }
 
-        // Create embeddable text: "source -› relationship -› target"
-        // Format matches Python: "-›" is the delimiter
-        let embeddable_text = format!(
-            "{} -› {} -› {}",
-            source_text, relationship_text, target_text
-        );
+        // Create embeddable text: "source -› relationship-›target"
+        // Format matches Python add_data_points.py:242:
+        //   f"{source_node_text} -› {relationship_text}-›{target_node_text}"
+        let embeddable_text = format!("{} -› {}-›{}", source_text, relationship_text, target_text);
 
         let triplet = Triplet::new(
             edge.source_entity_id,
@@ -263,6 +261,28 @@ mod tests {
         assert!(text.contains("Bob"));
         // Should not have ": " since descriptions are empty
         assert!(!text.contains(": "));
+    }
+
+    #[test]
+    fn test_triplet_format_matches_python() {
+        // Python format (add_data_points.py:242):
+        //   f"{source_node_text} -› {relationship_text}-›{target_node_text}"
+        // Note: space before first arrow, NO space before/after second arrow
+        let entity1 = create_test_entity("Alice", "");
+        let entity2 = create_test_entity("Bob", "");
+
+        let edge = GraphEdgePair {
+            source_entity_id: entity1.entity.base.id,
+            target_entity_id: entity2.entity.base.id,
+            relationship_name: "knows".to_string(),
+            properties: HashMap::new(),
+        };
+
+        let triplets = create_triplets_from_graph(&[entity1, entity2], &[edge]);
+        assert_eq!(triplets.len(), 1);
+
+        // Exact format: "Alice -› knows-›Bob"
+        assert_eq!(triplets[0].embeddable_text, "Alice -› knows-›Bob");
     }
 
     #[test]
