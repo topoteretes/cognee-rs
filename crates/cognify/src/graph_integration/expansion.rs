@@ -29,16 +29,16 @@ use crate::graph_integration::types::{GraphEdgePair, GraphNodePair};
 /// - **Edge**: `{source_entity_id}_{target_entity_id}_{relationship_name}`
 ///
 /// # Arguments
-/// * `graphs` - Vector of KnowledgeGraph objects from LLM extraction
-/// * `chunk_id` - UUID of the chunk these graphs were extracted from
+/// * `graphs` - Vector of (chunk_id, KnowledgeGraph) pairs. Each graph is
+///   paired with the UUID of the chunk it was extracted from, so entities
+///   are tagged with the correct source chunk.
 /// * `dataset_id` - UUID of the dataset
 /// * `existing_edges_set` - Set of edges that already exist in the database
 ///
 /// # Returns
 /// Tuple of (graph_nodes, graph_edges) for storage.
 pub async fn expand_with_nodes_and_edges(
-    graphs: Vec<KnowledgeGraph>,
-    chunk_id: Uuid,
+    graphs: Vec<(Uuid, KnowledgeGraph)>,
     dataset_id: Uuid,
     existing_edges_set: &HashSet<String>,
 ) -> (Vec<GraphNodePair>, Vec<GraphEdgePair>) {
@@ -50,8 +50,8 @@ pub async fn expand_with_nodes_and_edges(
     // Map from node_id to entity_id for edge resolution
     let mut node_id_to_entity_id: HashMap<String, Uuid> = HashMap::new();
 
-    // Process all graphs
-    for graph in graphs {
+    // Process all graphs — each graph carries its source chunk_id
+    for (chunk_id, graph) in graphs {
         for node in graph.nodes {
             // Step 1: Create or get EntityType
             let type_key = format!("{}_type", node.node_type);
@@ -195,7 +195,7 @@ mod tests {
         let dataset_id = Uuid::new_v4();
 
         let (nodes, edges) =
-            expand_with_nodes_and_edges(vec![graph], chunk_id, dataset_id, &HashSet::new()).await;
+            expand_with_nodes_and_edges(vec![(chunk_id, graph)], dataset_id, &HashSet::new()).await;
 
         // Should have 2 nodes (TechCorp, Alice)
         assert_eq!(nodes.len(), 2);
@@ -219,8 +219,7 @@ mod tests {
         let dataset_id = Uuid::new_v4();
 
         let (nodes, edges) = expand_with_nodes_and_edges(
-            vec![graph1, graph2],
-            chunk_id,
+            vec![(chunk_id, graph1), (chunk_id, graph2)],
             dataset_id,
             &HashSet::new(),
         )
@@ -240,7 +239,7 @@ mod tests {
         let dataset_id = Uuid::new_v4();
 
         let (nodes, _) =
-            expand_with_nodes_and_edges(vec![graph], chunk_id, dataset_id, &HashSet::new()).await;
+            expand_with_nodes_and_edges(vec![(chunk_id, graph)], dataset_id, &HashSet::new()).await;
 
         // Check that entity types are created
         for node_pair in &nodes {
@@ -261,7 +260,7 @@ mod tests {
         let dataset_id = Uuid::new_v4();
 
         let (nodes, _) =
-            expand_with_nodes_and_edges(vec![graph], chunk_id, dataset_id, &HashSet::new()).await;
+            expand_with_nodes_and_edges(vec![(chunk_id, graph)], dataset_id, &HashSet::new()).await;
 
         // Check that entities reference their types
         for node_pair in &nodes {
@@ -276,7 +275,7 @@ mod tests {
         let dataset_id = Uuid::new_v4();
 
         let (nodes, _) =
-            expand_with_nodes_and_edges(vec![graph], chunk_id, dataset_id, &HashSet::new()).await;
+            expand_with_nodes_and_edges(vec![(chunk_id, graph)], dataset_id, &HashSet::new()).await;
 
         // Verify chunk_id is stored in metadata
         for node_pair in &nodes {
@@ -305,7 +304,7 @@ mod tests {
         let dataset_id = Uuid::new_v4();
 
         let (nodes, edges) =
-            expand_with_nodes_and_edges(vec![graph], chunk_id, dataset_id, &HashSet::new()).await;
+            expand_with_nodes_and_edges(vec![(chunk_id, graph)], dataset_id, &HashSet::new()).await;
 
         // Node is kept; the unresolvable edge is silently skipped
         assert_eq!(nodes.len(), 1);
@@ -314,11 +313,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_expand_empty_graphs() {
-        let chunk_id = Uuid::new_v4();
         let dataset_id = Uuid::new_v4();
 
-        let (nodes, edges) =
-            expand_with_nodes_and_edges(vec![], chunk_id, dataset_id, &HashSet::new()).await;
+        let (nodes, edges) = expand_with_nodes_and_edges(vec![], dataset_id, &HashSet::new()).await;
 
         assert_eq!(nodes.len(), 0);
         assert_eq!(edges.len(), 0);
@@ -359,7 +356,7 @@ mod tests {
         let dataset_id = Uuid::new_v4();
 
         let (nodes, edges) =
-            expand_with_nodes_and_edges(vec![graph], chunk_id, dataset_id, &HashSet::new()).await;
+            expand_with_nodes_and_edges(vec![(chunk_id, graph)], dataset_id, &HashSet::new()).await;
 
         assert_eq!(nodes.len(), 2);
         // Should have 2 edges (different relationships)
@@ -369,5 +366,68 @@ mod tests {
             edges.iter().map(|e| e.relationship_name.clone()).collect();
         assert!(relationships.contains(&"works_at".to_string()));
         assert!(relationships.contains(&"founded".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_expand_multiple_chunks_different_ids() {
+        // Create two graphs from different chunks — each entity should get
+        // the chunk_id of the chunk it was extracted from.
+        let chunk_id_a = Uuid::new_v4();
+        let chunk_id_b = Uuid::new_v4();
+        let dataset_id = Uuid::new_v4();
+
+        let graph_a = KnowledgeGraph {
+            nodes: vec![Node {
+                id: "alice_1".to_string(),
+                name: "Alice".to_string(),
+                node_type: "Person".to_string(),
+                description: "A software engineer".to_string(),
+            }],
+            edges: vec![],
+        };
+
+        let graph_b = KnowledgeGraph {
+            nodes: vec![Node {
+                id: "bob_1".to_string(),
+                name: "Bob".to_string(),
+                node_type: "Person".to_string(),
+                description: "A data scientist".to_string(),
+            }],
+            edges: vec![],
+        };
+
+        let (nodes, _edges) = expand_with_nodes_and_edges(
+            vec![(chunk_id_a, graph_a), (chunk_id_b, graph_b)],
+            dataset_id,
+            &HashSet::new(),
+        )
+        .await;
+
+        assert_eq!(nodes.len(), 2);
+
+        // Find each node and verify its chunk_id metadata
+        for node_pair in &nodes {
+            let chunk_ref = node_pair
+                .entity
+                .base
+                .get_metadata("chunk_id")
+                .expect("chunk_id metadata should be present");
+
+            if node_pair.entity.name == "Alice" {
+                assert_eq!(
+                    chunk_ref.as_str().unwrap(),
+                    chunk_id_a.to_string(),
+                    "Alice should be tagged with chunk_id_a"
+                );
+            } else if node_pair.entity.name == "Bob" {
+                assert_eq!(
+                    chunk_ref.as_str().unwrap(),
+                    chunk_id_b.to_string(),
+                    "Bob should be tagged with chunk_id_b"
+                );
+            } else {
+                panic!("Unexpected entity name: {}", node_pair.entity.name);
+            }
+        }
     }
 }

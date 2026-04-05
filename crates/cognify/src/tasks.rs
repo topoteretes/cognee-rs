@@ -34,7 +34,7 @@ use uuid::Uuid;
 
 use crate::config::CognifyConfig;
 use crate::error::CognifyError;
-use crate::fact_extraction::FactExtractor;
+use crate::fact_extraction::{FactExtractor, KnowledgeGraph};
 use crate::graph_integration::{
     GraphEdgePair, GraphNodePair, deduplicate_nodes_and_edges, expand_with_nodes_and_edges,
     retrieve_existing_edges,
@@ -167,12 +167,13 @@ pub async fn extract_graph_from_data(
     }
 
     let batch_size = config.chunks_per_batch;
-    let mut all_graphs = Vec::new();
+    let mut all_graphs: Vec<(Uuid, KnowledgeGraph)> = Vec::new();
     let semaphore = Arc::new(Semaphore::new(config.max_parallel_extractions));
 
     for (batch_idx, batch) in input.chunks.chunks(batch_size).enumerate() {
         let fact_extractor = FactExtractor::new(Arc::clone(&llm));
         let mut extract_tasks = Vec::new();
+        let mut chunk_ids = Vec::new();
 
         for chunk in batch {
             let extractor = fact_extractor.clone();
@@ -180,6 +181,7 @@ pub async fn extract_graph_from_data(
             let sem = Arc::clone(&semaphore);
             let prompt = config.custom_extraction_prompt.clone();
 
+            chunk_ids.push(chunk.id);
             extract_tasks.push(tokio::spawn(async move {
                 let _permit = sem.acquire().await.unwrap();
                 extractor.extract_facts(&text, prompt.as_deref()).await
@@ -187,9 +189,9 @@ pub async fn extract_graph_from_data(
         }
 
         let batch_results = futures::future::join_all(extract_tasks).await;
-        for result in batch_results {
+        for (result, chunk_id) in batch_results.into_iter().zip(chunk_ids) {
             let graph = result.map_err(|e| CognifyError::FactExtractionError(e.to_string()))??;
-            all_graphs.push(graph);
+            all_graphs.push((chunk_id, graph));
         }
 
         info!(
@@ -201,13 +203,12 @@ pub async fn extract_graph_from_data(
     }
 
     // Database deduplication — query for existing edges
-    let existing_edges_set = retrieve_existing_edges(graph_db.as_ref(), &all_graphs).await?;
+    let graphs_only: Vec<KnowledgeGraph> = all_graphs.iter().map(|(_, g)| g.clone()).collect();
+    let existing_edges_set = retrieve_existing_edges(graph_db.as_ref(), &graphs_only).await?;
 
     // Merge and deduplicate graphs (with DB awareness)
-    let chunk_id = input.chunks[0].id;
     let (nodes, edges) =
-        expand_with_nodes_and_edges(all_graphs, chunk_id, input.dataset_id, &existing_edges_set)
-            .await;
+        expand_with_nodes_and_edges(all_graphs, input.dataset_id, &existing_edges_set).await;
 
     // Final deduplication pass (in-memory only after DB filtering)
     let dedup_result = deduplicate_nodes_and_edges(nodes, edges);
