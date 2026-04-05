@@ -277,19 +277,8 @@ pub(crate) fn build_artifact_references(
             dataset_id,
             data_id: None,
             artifact_kind: "vector_point".to_string(),
-            artifact_id: entity_id.clone(),
-            collection_name: Some("Entity_name".to_string()),
-            created_at,
-        });
-
-        references.push(ArtifactReference {
-            id: Uuid::new_v4(),
-            owner_id,
-            dataset_id,
-            data_id: None,
-            artifact_kind: "vector_point".to_string(),
             artifact_id: entity_id,
-            collection_name: Some("Entity_description".to_string()),
+            collection_name: Some("Entity_name".to_string()),
             created_at,
         });
     }

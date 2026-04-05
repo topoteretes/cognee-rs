@@ -337,8 +337,8 @@ async fn test_embedding_semantic_similarity() {
 }
 
 #[tokio::test]
-async fn test_entity_description_indexing() {
-    // Test that both Entity.name and Entity.description are indexed (Phase 2 feature)
+async fn test_entity_name_indexing() {
+    // Test that Entity.name is indexed (matching Python's index_fields=["name"])
 
     let llm = create_adapter_from_env();
 
@@ -410,47 +410,38 @@ async fn test_entity_description_indexing() {
         result.indexed_fields.entity_name_count
     );
     println!(
-        "  - Entity descriptions: {}",
-        result.indexed_fields.entity_description_count
-    );
-    println!(
         "  - Summaries: {}",
         result.indexed_fields.summary_text_count
     );
 
-    // 2. Verify both name and description were indexed (Phase 2 requirement)
+    // 2. Verify entity names were indexed
     if !result.entities.is_empty() {
         assert_eq!(
             result.indexed_fields.entity_name_count,
             result.entities.len(),
             "Entity name count should match entity count"
         );
-        assert_eq!(
-            result.indexed_fields.entity_description_count,
-            result.entities.len(),
-            "Entity description count should match entity count (Phase 2)"
-        );
 
         println!(
-            "✓ Both name and description indexed for {} entities",
+            "✓ Entity names indexed for {} entities",
             result.entities.len()
         );
     }
 
-    // 3. Verify vector DB has both collections
+    // 3. Verify vector DB has Entity name collection (but NOT description)
     assert!(
         vector_db.has_collection("Entity", "name").await.unwrap(),
         "Entity name collection should exist"
     );
     assert!(
-        vector_db
+        !vector_db
             .has_collection("Entity", "description")
             .await
             .unwrap(),
-        "Entity description collection should exist (Phase 2)"
+        "Entity description collection should NOT exist (matches Python SDK)"
     );
 
-    println!("✓ Both Entity collections created in vector DB");
+    println!("✓ Only Entity name collection created in vector DB (Python-compatible)");
 
     // 4. Verify chunk and summary stats are also tracked
     assert_eq!(
@@ -467,7 +458,7 @@ async fn test_entity_description_indexing() {
         );
     }
 
-    println!("✓ Phase 2: Entity description embeddings working correctly");
+    println!("✓ Entity name-only indexing working correctly (Python-compatible)");
 }
 #[tokio::test]
 async fn test_triplet_embeddings_disabled_by_default() {
@@ -628,10 +619,6 @@ async fn test_triplet_embeddings_enabled() {
     println!(
         "  - Entity names: {}",
         result.indexed_fields.entity_name_count
-    );
-    println!(
-        "  - Entity descriptions: {}",
-        result.indexed_fields.entity_description_count
     );
     println!(
         "  - Summaries: {}",
