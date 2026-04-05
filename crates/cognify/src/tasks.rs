@@ -308,10 +308,13 @@ pub async fn summarize_text(
 /// and optionally triplets. Creates vector collections and indexes points.
 pub async fn add_data_points(
     input: &SummarizedData,
+    graph_db: Arc<dyn GraphDBTrait>,
     vector_db: Arc<dyn VectorDB>,
     embedding_engine: Arc<dyn EmbeddingEngine>,
     config: &CognifyConfig,
 ) -> Result<CognifyResult, CognifyError> {
+    // graph_db is threaded through for future Steps 10-11 (structural edge writes).
+    let _graph_db = graph_db;
     let embeddings = generate_embeddings(
         &input.chunks,
         &input.entities,
@@ -396,14 +399,19 @@ pub async fn cognify(
     info!("Extracted {} chunks", extracted_chunks.chunks.len());
 
     // Task 3: Extract knowledge graph
-    let graph_data =
-        extract_graph_from_data(&extracted_chunks, Arc::clone(&llm), graph_db, config).await?;
+    let graph_data = extract_graph_from_data(
+        &extracted_chunks,
+        Arc::clone(&llm),
+        Arc::clone(&graph_db),
+        config,
+    )
+    .await?;
 
     // Task 4: Summarize text
     let summarized = summarize_text(&graph_data, llm, config).await?;
 
     // Task 5: Add data points (embeddings + vector indexing)
-    add_data_points(&summarized, vector_db, embedding_engine, config).await
+    add_data_points(&summarized, graph_db, vector_db, embedding_engine, config).await
 }
 
 // ---------------------------------------------------------------------------
@@ -738,17 +746,19 @@ pub fn make_summarize_text_task(
 
 /// Build a [`TypedTask`] that generates embeddings and indexes data points.
 pub fn make_add_data_points_task(
+    graph_db: Arc<dyn GraphDBTrait>,
     vector_db: Arc<dyn VectorDB>,
     embedding_engine: Arc<dyn EmbeddingEngine>,
     config: CognifyConfig,
 ) -> TypedTask<SummarizedData, CognifyResult> {
     TypedTask::async_fn(move |input: &SummarizedData, _ctx| {
         let input = input.clone();
+        let graph_db = Arc::clone(&graph_db);
         let vector_db = Arc::clone(&vector_db);
         let embedding_engine = Arc::clone(&embedding_engine);
         let config = config.clone();
         Box::pin(async move {
-            add_data_points(&input, vector_db, embedding_engine, &config)
+            add_data_points(&input, graph_db, vector_db, embedding_engine, &config)
                 .await
                 .map(Box::new)
                 .map_err(|e| format!("{e}").into())
@@ -777,11 +787,12 @@ pub fn build_cognify_pipeline(
         .add_task(make_extract_chunks_task(storage, config.max_chunk_size))
         .add_task(make_extract_graph_task(
             Arc::clone(&llm),
-            graph_db,
+            Arc::clone(&graph_db),
             config.clone(),
         ))
         .add_task(make_summarize_text_task(llm, config.clone()))
         .add_task(make_add_data_points_task(
+            graph_db,
             vector_db,
             embedding_engine,
             config,
