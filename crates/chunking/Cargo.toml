@@ -10,6 +10,7 @@ cognee-storage = { path = "../storage" }
 cognee-utils = { path = "../utils" }
 log.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 tracing.workspace = true
 thiserror.workspace = true
 tokio.workspace = true

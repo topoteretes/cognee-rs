@@ -73,22 +73,22 @@ async fn test_summarization_batch() {
     // Create test chunks
     let document_id = Uuid::new_v4();
     let chunks = vec![
-        DocumentChunk {
-            id: Uuid::new_v4(),
+        DocumentChunk::new(
+            Uuid::new_v4(),
+            TEST_TEXT_ARTICLE.to_string(),
+            TEST_TEXT_ARTICLE.len(),
+            0,
+            CutType::ParagraphEnd.to_string(),
             document_id,
-            text: TEST_TEXT_ARTICLE.to_string(),
-            chunk_index: 0,
-            chunk_size: TEST_TEXT_ARTICLE.len(),
-            cut_type: CutType::ParagraphEnd.to_string(),
-        },
-        DocumentChunk {
-            id: Uuid::new_v4(),
+        ),
+        DocumentChunk::new(
+            Uuid::new_v4(),
+            TEST_TEXT_SHORT.to_string(),
+            TEST_TEXT_SHORT.len(),
+            1,
+            CutType::ParagraphEnd.to_string(),
             document_id,
-            text: TEST_TEXT_SHORT.to_string(),
-            chunk_index: 1,
-            chunk_size: TEST_TEXT_SHORT.len(),
-            cut_type: CutType::ParagraphEnd.to_string(),
-        },
+        ),
     ];
 
     println!("   Processing {} chunks", chunks.len());
@@ -115,12 +115,12 @@ async fn test_summarization_batch() {
 
                 // Verify deterministic UUID
                 assert_eq!(
-                    summary.chunk_id, chunks[idx].id,
+                    summary.chunk_id, chunks[idx].base.id,
                     "Summary should link to correct chunk"
                 );
                 assert_eq!(
                     summary.id,
-                    Uuid::new_v5(&chunks[idx].id, b"TextSummary"),
+                    Uuid::new_v5(&chunks[idx].base.id, b"TextSummary"),
                     "Summary ID should be deterministic uuid5"
                 );
 
@@ -143,14 +143,14 @@ async fn test_summarization_deterministic_ids() {
     let chunk_id = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
     let document_id = Uuid::new_v4();
 
-    let chunk = DocumentChunk {
-        id: chunk_id,
+    let chunk = DocumentChunk::new(
+        chunk_id,
+        TEST_TEXT_SHORT.to_string(),
+        TEST_TEXT_SHORT.len(),
+        0,
+        CutType::ParagraphEnd.to_string(),
         document_id,
-        text: TEST_TEXT_SHORT.to_string(),
-        chunk_index: 0,
-        chunk_size: TEST_TEXT_SHORT.len(),
-        cut_type: CutType::ParagraphEnd.to_string(),
-    };
+    );
 
     let extractor = SummaryExtractor::new(adapter);
 

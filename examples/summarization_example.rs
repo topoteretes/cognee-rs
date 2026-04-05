@@ -68,22 +68,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let document_id = Uuid::new_v4();
     let chunks = vec![
-        DocumentChunk {
-            id: Uuid::new_v4(),
+        DocumentChunk::new(
+            Uuid::new_v4(),
+            SAMPLE_TEXT.to_string(),
+            SAMPLE_TEXT.len(),
+            0,
+            CutType::ParagraphEnd.to_string(),
             document_id,
-            text: SAMPLE_TEXT.to_string(),
-            chunk_index: 0,
-            chunk_size: SAMPLE_TEXT.len(),
-            cut_type: CutType::ParagraphEnd.to_string(),
-        },
-        DocumentChunk {
-            id: Uuid::new_v4(),
+        ),
+        DocumentChunk::new(
+            Uuid::new_v4(),
+            "Quantum computing represents a paradigm shift in computation.".to_string(),
+            62,
+            1,
+            CutType::SentenceEnd.to_string(),
             document_id,
-            text: "Quantum computing represents a paradigm shift in computation.".to_string(),
-            chunk_index: 1,
-            chunk_size: 62,
-            cut_type: CutType::SentenceEnd.to_string(),
-        },
+        ),
     ];
 
     println!("Processing {} chunks...\n", chunks.len());

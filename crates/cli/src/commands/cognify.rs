@@ -229,7 +229,7 @@ pub(crate) fn build_artifact_references(
     let mut chunk_to_data_id = std::collections::HashMap::new();
 
     for chunk in &result.chunks {
-        chunk_to_data_id.insert(chunk.id, chunk.document_id);
+        chunk_to_data_id.insert(chunk.base.id, chunk.document_id);
 
         references.push(ArtifactReference {
             id: Uuid::new_v4(),
@@ -237,7 +237,7 @@ pub(crate) fn build_artifact_references(
             dataset_id,
             data_id: Some(chunk.document_id),
             artifact_kind: "vector_point".to_string(),
-            artifact_id: chunk.id.to_string(),
+            artifact_id: chunk.base.id.to_string(),
             collection_name: Some("DocumentChunk_text".to_string()),
             created_at,
         });

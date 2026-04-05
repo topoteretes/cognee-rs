@@ -143,7 +143,7 @@ impl SummaryExtractor {
                 result.map_err(|e| CognifyError::LlmError(format!("Task join error: {}", e)))??;
 
             let text_summary =
-                TextSummary::from_summarized_content(chunk.id, summarized, model_name.clone());
+                TextSummary::from_summarized_content(chunk.base.id, summarized, model_name.clone());
 
             summaries.push(text_summary);
         }

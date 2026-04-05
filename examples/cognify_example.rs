@@ -74,7 +74,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Generated {} chunks:\n", chunks.len());
     for chunk in &chunks {
         println!("--- Chunk {} ---", chunk.chunk_index);
-        println!("  ID:        {}", chunk.id);
+        println!("  ID:        {}", chunk.base.id);
         println!("  Size:      {} words", chunk.chunk_size);
         println!("  Cut type:  {}", chunk.cut_type);
         println!("  Doc ID:    {}", chunk.document_id);

@@ -41,14 +41,14 @@ pub fn chunk_text<C: TokenCounter>(
             accumulated.push(para);
             accumulated_size += para.chunk_size;
         } else if accumulated.is_empty() {
-            result.push(DocumentChunk {
-                id: para.chunk_id,
-                text: para.text.to_owned(),
-                chunk_size: para.chunk_size,
+            result.push(DocumentChunk::new(
+                para.chunk_id,
+                para.text.to_owned(),
+                para.chunk_size,
                 chunk_index,
-                cut_type: para.cut_type.to_string(),
+                para.cut_type.to_string(),
                 document_id,
-            });
+            ));
             chunk_index += 1;
         } else {
             let chunk_text: String = accumulated
@@ -57,17 +57,17 @@ pub fn chunk_text<C: TokenCounter>(
                 .collect::<Vec<_>>()
                 .join(" ");
             let cut_type = accumulated.last().unwrap().cut_type.to_string();
-            result.push(DocumentChunk {
-                id: Uuid::new_v5(
+            result.push(DocumentChunk::new(
+                Uuid::new_v5(
                     &NAMESPACE_OID,
                     format!("{}-{}", document_id, chunk_index).as_bytes(),
                 ),
-                text: chunk_text,
-                chunk_size: accumulated_size,
+                chunk_text,
+                accumulated_size,
                 chunk_index,
                 cut_type,
                 document_id,
-            });
+            ));
             chunk_index += 1;
             accumulated = vec![para];
             accumulated_size = para.chunk_size;
@@ -82,17 +82,17 @@ pub fn chunk_text<C: TokenCounter>(
             .collect::<Vec<_>>()
             .join(" ");
         let cut_type = accumulated.last().unwrap().cut_type.to_string();
-        result.push(DocumentChunk {
-            id: Uuid::new_v5(
+        result.push(DocumentChunk::new(
+            Uuid::new_v5(
                 &NAMESPACE_OID,
                 format!("{}-{}", document_id, chunk_index).as_bytes(),
             ),
-            text: chunk_text,
-            chunk_size: accumulated_size,
+            chunk_text,
+            accumulated_size,
             chunk_index,
             cut_type,
             document_id,
-        });
+        ));
     }
 
     result
@@ -149,7 +149,7 @@ mod tests {
         let text = "Hello world. This is a test.";
         let chunks1 = chunk_text(doc_id, text, 100, &WordCounter);
         let chunks2 = chunk_text(doc_id, text, 100, &WordCounter);
-        assert_eq!(chunks1[0].id, chunks2[0].id);
+        assert_eq!(chunks1[0].base.id, chunks2[0].base.id);
     }
 
     #[test]

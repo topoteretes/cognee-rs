@@ -181,7 +181,7 @@ pub async fn extract_graph_from_data(
             let sem = Arc::clone(&semaphore);
             let prompt = config.custom_extraction_prompt.clone();
 
-            chunk_ids.push(chunk.id);
+            chunk_ids.push(chunk.base.id);
             extract_tasks.push(tokio::spawn(async move {
                 let _permit = sem.acquire().await.unwrap();
                 extractor.extract_facts(&text, prompt.as_deref()).await
@@ -427,7 +427,12 @@ async fn generate_embeddings(
             .map_err(|e| CognifyError::EmbeddingError(e.to_string()))?;
 
         for (chunk, vector) in chunks.iter().zip(chunk_vectors) {
-            embeddings.push(Embedding::new(chunk.id, "DocumentChunk", "text", vector));
+            embeddings.push(Embedding::new(
+                chunk.base.id,
+                "DocumentChunk",
+                "text",
+                vector,
+            ));
         }
     }
 
@@ -506,7 +511,7 @@ async fn index_data_points(
             .iter()
             .zip(vectors)
             .map(|(chunk, vector)| {
-                VectorPoint::new(chunk.id, vector)
+                VectorPoint::new(chunk.base.id, vector)
                     .with_metadata("type", json!("DocumentChunk"))
                     .with_metadata("field", json!("text"))
                     .with_metadata("text", json!(chunk.text.clone()))
