@@ -56,9 +56,6 @@ pub struct IndexedFieldsStats {
     /// Number of Entity.name fields indexed
     pub entity_name_count: usize,
 
-    /// Number of Entity.description fields indexed
-    pub entity_description_count: usize,
-
     /// Number of TextSummary.text fields indexed
     pub summary_text_count: usize,
 
