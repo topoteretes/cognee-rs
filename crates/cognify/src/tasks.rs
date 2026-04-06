@@ -25,7 +25,8 @@ use cognee_embedding::engine::EmbeddingEngine;
 use cognee_graph::{GraphDBTrait, GraphDBTraitExt};
 use cognee_llm::Llm;
 use cognee_models::{
-    Data, Document, DocumentChunk, Embedding, classify_documents as model_classify_documents,
+    Data, Document, DocumentChunk, EdgeType, Embedding,
+    classify_documents as model_classify_documents,
 };
 use cognee_storage::StorageTrait;
 use cognee_vector::{VectorDB, VectorPoint};
@@ -511,6 +512,33 @@ pub async fn add_data_points(
         );
     }
 
+    // Create and store EdgeTypes from unique relationship names
+    // (port of Python's create_edge_type_datapoints + index_graph_edges)
+    let mut edge_type_counts: HashMap<String, i32> = HashMap::new();
+    for edge_pair in &input.edges {
+        *edge_type_counts
+            .entry(edge_pair.relationship_name.clone())
+            .or_insert(0) += 1;
+    }
+
+    let edge_types: Vec<EdgeType> = edge_type_counts
+        .into_iter()
+        .map(|(name, count)| {
+            let mut et = EdgeType::new(&name, Some(input.dataset_id));
+            et.set_count(count);
+            et
+        })
+        .collect();
+
+    if !edge_types.is_empty() {
+        let edge_type_refs: Vec<&EdgeType> = edge_types.iter().collect();
+        graph_db
+            .add_nodes(&edge_type_refs)
+            .await
+            .map_err(CognifyError::from)?;
+        info!("Stored {} edge types as graph nodes", edge_types.len());
+    }
+
     // Discover structural edges via GraphExtractable trait
     // (port of Python's get_graph_from_model() relationship discovery)
     let mut extractable_items: Vec<&dyn crate::graph_extraction::GraphExtractable> = Vec::new();
@@ -548,6 +576,7 @@ pub async fn add_data_points(
         &input.entities,
         &input.summaries,
         &input.edges,
+        &edge_types,
         input.dataset_id,
         input.user_id,
         input.tenant_id,
@@ -577,6 +606,7 @@ pub async fn add_data_points(
         entities: input.entities.clone(),
         edges: input.edges.clone(),
         summaries: input.summaries.clone(),
+        edge_types,
         embeddings,
         indexed_fields,
     })
@@ -1039,6 +1069,7 @@ async fn index_data_points(
     entities: &[GraphNodePair],
     summaries: &[TextSummary],
     edges: &[GraphEdgePair],
+    edge_types: &[EdgeType],
     dataset_id: Uuid,
     user_id: Option<Uuid>,
     tenant_id: Option<Uuid>,
@@ -1245,6 +1276,57 @@ async fn index_data_points(
         }
     } else if config.embed_triplets {
         info!("Triplet embedding enabled but no edges/entities to index");
+    }
+
+    // 5. Index EdgeType.relationship_name field
+    if !edge_types.is_empty() {
+        if !vector_db
+            .has_collection("EdgeType", "relationship_name")
+            .await
+            .map_err(|e| CognifyError::VectorDBError(e.to_string()))?
+        {
+            vector_db
+                .create_collection("EdgeType", "relationship_name", dimension)
+                .await
+                .map_err(|e| CognifyError::VectorDBError(e.to_string()))?;
+        }
+
+        let names: Vec<&str> = edge_types
+            .iter()
+            .map(|et| et.relationship_name.as_str())
+            .collect();
+        let vectors = engine
+            .embed(&names)
+            .await
+            .map_err(|e| CognifyError::EmbeddingError(e.to_string()))?;
+
+        let points: Vec<VectorPoint> = edge_types
+            .iter()
+            .zip(vectors)
+            .map(|(et, vector)| {
+                let mut point = VectorPoint::new(et.base.id, vector)
+                    .with_metadata("type", json!("EdgeType"))
+                    .with_metadata("field", json!("relationship_name"))
+                    .with_metadata("relationship_name", json!(et.relationship_name.clone()))
+                    .with_metadata("number_of_edges", json!(et.number_of_edges))
+                    .with_metadata("dataset_id", json!(dataset_id.to_string()));
+                if let Some(uid) = user_id {
+                    point = point.with_metadata("user_id", json!(uid.to_string()));
+                }
+                if let Some(tid) = tenant_id {
+                    point = point.with_metadata("tenant_id", json!(tid.to_string()));
+                }
+                point
+            })
+            .collect();
+
+        vector_db
+            .index_points("EdgeType", "relationship_name", &points)
+            .await
+            .map_err(|e| CognifyError::VectorDBError(e.to_string()))?;
+
+        stats.record("EdgeType", "relationship_name", edge_types.len());
+        info!("Indexed {} edge types", edge_types.len());
     }
 
     Ok(stats)

@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 
-use cognee_models::{DocumentChunk, Embedding};
+use cognee_models::{DocumentChunk, EdgeType, Embedding};
 
 use crate::graph_integration::{GraphEdgePair, GraphNodePair};
 use crate::summarization::TextSummary;
@@ -25,6 +25,9 @@ pub struct CognifyResult {
     /// Text summaries generated from chunks
     pub summaries: Vec<TextSummary>,
 
+    /// Edge types aggregated from relationship names
+    pub edge_types: Vec<EdgeType>,
+
     /// Embeddings for chunks, entities, and summaries
     pub embeddings: Vec<Embedding>,
 
@@ -40,6 +43,7 @@ impl CognifyResult {
             entities: vec![],
             edges: vec![],
             summaries: vec![],
+            edge_types: vec![],
             embeddings: vec![],
             indexed_fields: IndexedFieldsStats::default(),
         }
@@ -96,5 +100,10 @@ impl IndexedFieldsStats {
     /// Number of TextSummary.text fields indexed.
     pub fn summary_text_count(&self) -> usize {
         self.get("TextSummary", "text")
+    }
+
+    /// Number of EdgeType.relationship_name fields indexed.
+    pub fn edge_type_count(&self) -> usize {
+        self.get("EdgeType", "relationship_name")
     }
 }
