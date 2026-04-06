@@ -310,8 +310,14 @@ pub async fn extract_graph_from_data(
     let existing_edges_set = retrieve_existing_edges(graph_db.as_ref(), &graphs_only).await?;
 
     // Merge and deduplicate graphs (with DB awareness)
-    let (nodes, edges) =
-        expand_with_nodes_and_edges(all_graphs, input.dataset_id, &existing_edges_set).await;
+    let ontology_resolver = cognee_ontology::NoOpOntologyResolver::new();
+    let (nodes, edges) = expand_with_nodes_and_edges(
+        all_graphs,
+        input.dataset_id,
+        &existing_edges_set,
+        &ontology_resolver,
+    )
+    .await;
 
     // Final deduplication pass (in-memory only after DB filtering)
     let dedup_result = deduplicate_nodes_and_edges(nodes, edges);

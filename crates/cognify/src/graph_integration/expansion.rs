@@ -7,6 +7,7 @@ use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 
 use cognee_models::{Entity, EntityType};
+use cognee_ontology::OntologyResolver;
 use tracing::warn;
 
 use crate::fact_extraction::{KnowledgeGraph, Node};
@@ -34,6 +35,9 @@ use crate::graph_integration::types::{GraphEdgePair, GraphNodePair};
 ///   are tagged with the correct source chunk.
 /// * `dataset_id` - UUID of the dataset
 /// * `existing_edges_set` - Set of edges that already exist in the database
+/// * `ontology_resolver` - Ontology resolver for entity validation and enrichment.
+///   When loaded, validates entity types against "classes" and entities against
+///   "individuals". A [`NoOpOntologyResolver`] leaves everything unvalidated.
 ///
 /// # Returns
 /// Tuple of (graph_nodes, graph_edges) for storage.
@@ -41,6 +45,7 @@ pub async fn expand_with_nodes_and_edges(
     graphs: Vec<(Uuid, KnowledgeGraph)>,
     dataset_id: Uuid,
     existing_edges_set: &HashSet<String>,
+    ontology_resolver: &dyn OntologyResolver,
 ) -> (Vec<GraphNodePair>, Vec<GraphEdgePair>) {
     // Maps for deduplication
     let mut node_map = HashMap::new();
@@ -55,20 +60,38 @@ pub async fn expand_with_nodes_and_edges(
         for node in graph.nodes {
             // Step 1: Create or get EntityType
             let type_key = format!("{}_type", node.node_type);
-            let entity_type = type_map
-                .entry(type_key.clone())
-                .or_insert_with(|| EntityType::from_node_type(&node.node_type, Some(dataset_id)));
+            let entity_type = type_map.entry(type_key.clone()).or_insert_with(|| {
+                let mut et = EntityType::from_node_type(&node.node_type, Some(dataset_id));
+
+                // Validate entity type against ontology "classes"
+                if ontology_resolver.is_loaded()
+                    && let Ok(Some(canonical)) =
+                        ontology_resolver.find_closest_match(&node.node_type, "classes")
+                {
+                    et.mark_ontology_valid(Some(canonical));
+                }
+
+                et
+            });
 
             // Step 2: Create Entity
             let entity_key = format!("{}_entity", node.id);
 
             if let std::collections::hash_map::Entry::Vacant(e) = node_map.entry(entity_key) {
-                let entity_pair = create_entity_node(
+                let mut entity_pair = create_entity_node(
                     &node,
                     entity_type.clone(), // Pass the shared entity_type
                     dataset_id,
                     chunk_id,
                 );
+
+                // Validate entity against ontology "individuals"
+                if ontology_resolver.is_loaded()
+                    && let Ok(Some(_canonical)) =
+                        ontology_resolver.find_closest_match(&node.name, "individuals")
+                {
+                    entity_pair.entity.base.set_ontology_valid(true);
+                }
 
                 // Track node_id -> entity_id mapping for edge resolution
                 node_id_to_entity_id.insert(node.id.clone(), entity_pair.entity.base.id);
@@ -163,6 +186,12 @@ fn create_entity_node(
 mod tests {
     use super::*;
     use crate::fact_extraction::Edge;
+    use cognee_ontology::{NoOpOntologyResolver, OntologyResult, traits::OntologySubgraph};
+
+    /// Helper to get the default no-op resolver used by most tests.
+    fn noop() -> NoOpOntologyResolver {
+        NoOpOntologyResolver::new()
+    }
 
     fn create_test_graph() -> KnowledgeGraph {
         KnowledgeGraph {
@@ -194,8 +223,13 @@ mod tests {
         let chunk_id = Uuid::new_v4();
         let dataset_id = Uuid::new_v4();
 
-        let (nodes, edges) =
-            expand_with_nodes_and_edges(vec![(chunk_id, graph)], dataset_id, &HashSet::new()).await;
+        let (nodes, edges) = expand_with_nodes_and_edges(
+            vec![(chunk_id, graph)],
+            dataset_id,
+            &HashSet::new(),
+            &noop(),
+        )
+        .await;
 
         // Should have 2 nodes (TechCorp, Alice)
         assert_eq!(nodes.len(), 2);
@@ -222,6 +256,7 @@ mod tests {
             vec![(chunk_id, graph1), (chunk_id, graph2)],
             dataset_id,
             &HashSet::new(),
+            &noop(),
         )
         .await;
 
@@ -238,8 +273,13 @@ mod tests {
         let chunk_id = Uuid::new_v4();
         let dataset_id = Uuid::new_v4();
 
-        let (nodes, _) =
-            expand_with_nodes_and_edges(vec![(chunk_id, graph)], dataset_id, &HashSet::new()).await;
+        let (nodes, _) = expand_with_nodes_and_edges(
+            vec![(chunk_id, graph)],
+            dataset_id,
+            &HashSet::new(),
+            &noop(),
+        )
+        .await;
 
         // Check that entity types are created
         for node_pair in &nodes {
@@ -259,8 +299,13 @@ mod tests {
         let chunk_id = Uuid::new_v4();
         let dataset_id = Uuid::new_v4();
 
-        let (nodes, _) =
-            expand_with_nodes_and_edges(vec![(chunk_id, graph)], dataset_id, &HashSet::new()).await;
+        let (nodes, _) = expand_with_nodes_and_edges(
+            vec![(chunk_id, graph)],
+            dataset_id,
+            &HashSet::new(),
+            &noop(),
+        )
+        .await;
 
         // Check that entities reference their types
         for node_pair in &nodes {
@@ -274,8 +319,13 @@ mod tests {
         let chunk_id = Uuid::new_v4();
         let dataset_id = Uuid::new_v4();
 
-        let (nodes, _) =
-            expand_with_nodes_and_edges(vec![(chunk_id, graph)], dataset_id, &HashSet::new()).await;
+        let (nodes, _) = expand_with_nodes_and_edges(
+            vec![(chunk_id, graph)],
+            dataset_id,
+            &HashSet::new(),
+            &noop(),
+        )
+        .await;
 
         // Verify chunk_id is stored in metadata
         for node_pair in &nodes {
@@ -303,8 +353,13 @@ mod tests {
         let chunk_id = Uuid::new_v4();
         let dataset_id = Uuid::new_v4();
 
-        let (nodes, edges) =
-            expand_with_nodes_and_edges(vec![(chunk_id, graph)], dataset_id, &HashSet::new()).await;
+        let (nodes, edges) = expand_with_nodes_and_edges(
+            vec![(chunk_id, graph)],
+            dataset_id,
+            &HashSet::new(),
+            &noop(),
+        )
+        .await;
 
         // Node is kept; the unresolvable edge is silently skipped
         assert_eq!(nodes.len(), 1);
@@ -315,7 +370,8 @@ mod tests {
     async fn test_expand_empty_graphs() {
         let dataset_id = Uuid::new_v4();
 
-        let (nodes, edges) = expand_with_nodes_and_edges(vec![], dataset_id, &HashSet::new()).await;
+        let (nodes, edges) =
+            expand_with_nodes_and_edges(vec![], dataset_id, &HashSet::new(), &noop()).await;
 
         assert_eq!(nodes.len(), 0);
         assert_eq!(edges.len(), 0);
@@ -355,8 +411,13 @@ mod tests {
         let chunk_id = Uuid::new_v4();
         let dataset_id = Uuid::new_v4();
 
-        let (nodes, edges) =
-            expand_with_nodes_and_edges(vec![(chunk_id, graph)], dataset_id, &HashSet::new()).await;
+        let (nodes, edges) = expand_with_nodes_and_edges(
+            vec![(chunk_id, graph)],
+            dataset_id,
+            &HashSet::new(),
+            &noop(),
+        )
+        .await;
 
         assert_eq!(nodes.len(), 2);
         // Should have 2 edges (different relationships)
@@ -400,6 +461,7 @@ mod tests {
             vec![(chunk_id_a, graph_a), (chunk_id_b, graph_b)],
             dataset_id,
             &HashSet::new(),
+            &noop(),
         )
         .await;
 
@@ -428,6 +490,111 @@ mod tests {
             } else {
                 panic!("Unexpected entity name: {}", node_pair.entity.name);
             }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Mock ontology resolver for testing ontology validation
+    // -----------------------------------------------------------------------
+
+    /// Mock resolver that returns canonical names for specific queries.
+    ///
+    /// - `find_closest_match("Organization", "classes")` → `Some("Organisation")`
+    /// - `find_closest_match("Alice", "individuals")` → `Some("Alice_Canonical")`
+    /// - Everything else → `None`
+    struct MockOntologyResolver;
+
+    impl OntologyResolver for MockOntologyResolver {
+        fn find_closest_match(&self, name: &str, category: &str) -> OntologyResult<Option<String>> {
+            match (name, category) {
+                ("Organization", "classes") => Ok(Some("Organisation".to_string())),
+                ("Person", "classes") => Ok(Some("Person".to_string())),
+                ("Alice", "individuals") => Ok(Some("Alice_Canonical".to_string())),
+                _ => Ok(None),
+            }
+        }
+
+        fn get_subgraph(
+            &self,
+            _node_name: &str,
+            _node_type: &str,
+            _directed: bool,
+        ) -> OntologyResult<OntologySubgraph> {
+            Ok((vec![], vec![], None))
+        }
+
+        fn is_loaded(&self) -> bool {
+            true
+        }
+    }
+
+    #[tokio::test]
+    async fn test_expand_with_ontology_validates_entity_types() {
+        let graph = create_test_graph();
+        let chunk_id = Uuid::new_v4();
+        let dataset_id = Uuid::new_v4();
+        let resolver = MockOntologyResolver;
+
+        let (nodes, _edges) = expand_with_nodes_and_edges(
+            vec![(chunk_id, graph)],
+            dataset_id,
+            &HashSet::new(),
+            &resolver,
+        )
+        .await;
+
+        assert_eq!(nodes.len(), 2);
+
+        for node_pair in &nodes {
+            // All entity types should be ontology-valid (both "Organization"
+            // and "Person" are matched by MockOntologyResolver)
+            assert!(
+                node_pair.entity_type.is_ontology_valid(),
+                "EntityType '{}' should be ontology-valid",
+                node_pair.entity_type.name
+            );
+
+            if node_pair.entity.name == "TechCorp" {
+                // "Organization" → canonical "Organisation"
+                assert_eq!(node_pair.entity_type.name, "Organisation");
+            } else if node_pair.entity.name == "Alice" {
+                // "Person" → canonical "Person" (same name, no rename)
+                assert_eq!(node_pair.entity_type.name, "Person");
+                // Alice is matched as an individual
+                assert!(
+                    node_pair.entity.base.ontology_valid,
+                    "Entity 'Alice' should be ontology-valid"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_expand_noop_resolver_leaves_entities_unvalidated() {
+        let graph = create_test_graph();
+        let chunk_id = Uuid::new_v4();
+        let dataset_id = Uuid::new_v4();
+
+        let (nodes, _edges) = expand_with_nodes_and_edges(
+            vec![(chunk_id, graph)],
+            dataset_id,
+            &HashSet::new(),
+            &noop(),
+        )
+        .await;
+
+        // With NoOp resolver nothing should be ontology-validated
+        for node_pair in &nodes {
+            assert!(
+                !node_pair.entity_type.is_ontology_valid(),
+                "EntityType '{}' should NOT be ontology-valid with NoOp resolver",
+                node_pair.entity_type.name
+            );
+            assert!(
+                !node_pair.entity.base.ontology_valid,
+                "Entity '{}' should NOT be ontology-valid with NoOp resolver",
+                node_pair.entity.name
+            );
         }
     }
 }
