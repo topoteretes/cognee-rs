@@ -672,7 +672,7 @@ async fn index_data_points(
             .await
             .map_err(|e| CognifyError::VectorDBError(e.to_string()))?;
 
-        stats.chunk_text_count = chunks.len();
+        stats.record("DocumentChunk", "text", chunks.len());
         info!("Indexed {} document chunks", chunks.len());
     }
 
@@ -712,7 +712,7 @@ async fn index_data_points(
             .await
             .map_err(|e| CognifyError::VectorDBError(e.to_string()))?;
 
-        stats.entity_name_count = entities.len();
+        stats.record("Entity", "name", entities.len());
         info!("Indexed {} entity names", entities.len());
     }
 
@@ -755,7 +755,7 @@ async fn index_data_points(
             .await
             .map_err(|e| CognifyError::VectorDBError(e.to_string()))?;
 
-        stats.summary_text_count = summaries.len();
+        stats.record("TextSummary", "text", summaries.len());
         info!("Indexed {} summaries", summaries.len());
     }
 

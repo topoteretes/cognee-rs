@@ -404,20 +404,20 @@ async fn test_entity_name_indexing() {
 
     // 1. Verify IndexedFieldsStats are populated
     println!("✓ Indexed fields stats:");
-    println!("  - Chunks: {}", result.indexed_fields.chunk_text_count);
+    println!("  - Chunks: {}", result.indexed_fields.chunk_text_count());
     println!(
         "  - Entity names: {}",
-        result.indexed_fields.entity_name_count
+        result.indexed_fields.entity_name_count()
     );
     println!(
         "  - Summaries: {}",
-        result.indexed_fields.summary_text_count
+        result.indexed_fields.summary_text_count()
     );
 
     // 2. Verify entity names were indexed
     if !result.entities.is_empty() {
         assert_eq!(
-            result.indexed_fields.entity_name_count,
+            result.indexed_fields.entity_name_count(),
             result.entities.len(),
             "Entity name count should match entity count"
         );
@@ -445,14 +445,14 @@ async fn test_entity_name_indexing() {
 
     // 4. Verify chunk and summary stats are also tracked
     assert_eq!(
-        result.indexed_fields.chunk_text_count,
+        result.indexed_fields.chunk_text_count(),
         result.chunks.len(),
         "Chunk count should match"
     );
 
     if !result.summaries.is_empty() {
         assert_eq!(
-            result.indexed_fields.summary_text_count,
+            result.indexed_fields.summary_text_count(),
             result.summaries.len(),
             "Summary count should match"
         );
@@ -615,14 +615,14 @@ async fn test_triplet_embeddings_enabled() {
     };
 
     println!("✓ Indexed fields stats:");
-    println!("  - Chunks: {}", result.indexed_fields.chunk_text_count);
+    println!("  - Chunks: {}", result.indexed_fields.chunk_text_count());
     println!(
         "  - Entity names: {}",
-        result.indexed_fields.entity_name_count
+        result.indexed_fields.entity_name_count()
     );
     println!(
         "  - Summaries: {}",
-        result.indexed_fields.summary_text_count
+        result.indexed_fields.summary_text_count()
     );
     println!("  - Triplets: {}", result.indexed_fields.triplet_count);
 

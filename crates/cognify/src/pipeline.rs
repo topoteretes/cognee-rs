@@ -3,6 +3,8 @@
 //! The actual pipeline orchestration lives in [`crate::tasks`]. This module
 //! defines the output types shared across the pipeline.
 
+use std::collections::HashMap;
+
 use cognee_models::{DocumentChunk, Embedding};
 
 use crate::graph_integration::{GraphEdgePair, GraphNodePair};
@@ -47,18 +49,52 @@ impl CognifyResult {
 /// Statistics about indexed fields.
 ///
 /// Tracks how many data points were indexed for each field type.
-/// Useful for verifying indexing completeness and debugging.
+/// Uses dynamic `{TypeName}_{field_name}` keys matching the Python SDK's
+/// `metadata["index_fields"]`-driven approach, plus legacy convenience accessors.
 #[derive(Debug, Clone, Default)]
 pub struct IndexedFieldsStats {
-    /// Number of DocumentChunk.text fields indexed
-    pub chunk_text_count: usize,
+    /// Dynamic per-collection counts keyed by `"{TypeName}_{field_name}"`.
+    ///
+    /// E.g. `"DocumentChunk_text" -> 42`, `"Entity_name" -> 7`.
+    pub field_counts: HashMap<String, usize>,
 
-    /// Number of Entity.name fields indexed
-    pub entity_name_count: usize,
-
-    /// Number of TextSummary.text fields indexed
-    pub summary_text_count: usize,
-
-    /// Number of triplets indexed
+    /// Number of triplets indexed (triplets are not standard DataPoints,
+    /// so they are tracked separately).
     pub triplet_count: usize,
+}
+
+impl IndexedFieldsStats {
+    /// Record that `count` items were indexed for `collection`.
+    pub fn record(&mut self, data_type: &str, field_name: &str, count: usize) {
+        let key = format!("{}_{}", data_type, field_name);
+        *self.field_counts.entry(key).or_insert(0) += count;
+    }
+
+    /// Get count for a specific `{type}_{field}` collection, or 0 if absent.
+    pub fn get(&self, data_type: &str, field_name: &str) -> usize {
+        let key = format!("{}_{}", data_type, field_name);
+        self.field_counts.get(&key).copied().unwrap_or(0)
+    }
+
+    // -- Convenience accessors (backward-compatible with old named fields) --
+
+    /// Number of DocumentChunk.text fields indexed.
+    pub fn chunk_text_count(&self) -> usize {
+        self.get("DocumentChunk", "text")
+    }
+
+    /// Number of Entity.name fields indexed.
+    pub fn entity_name_count(&self) -> usize {
+        self.get("Entity", "name")
+    }
+
+    /// Number of Entity.description fields indexed.
+    pub fn entity_description_count(&self) -> usize {
+        self.get("Entity", "description")
+    }
+
+    /// Number of TextSummary.text fields indexed.
+    pub fn summary_text_count(&self) -> usize {
+        self.get("TextSummary", "text")
+    }
 }
