@@ -5,6 +5,8 @@
 //! NO environment variables should be read in pipeline components.
 //! ALL configuration flows through this struct.
 
+use cognee_embedding::engine::EmbeddingEngine;
+use cognee_llm::Llm;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -231,6 +233,33 @@ impl CognifyConfig {
         self
     }
 
+    /// Auto-calculate max_chunk_size from embedding and LLM capabilities.
+    ///
+    /// Formula: `min(embedding_engine.max_sequence_length(), llm.max_context_length() / 2)`
+    ///
+    /// Matches Python's `get_max_chunk_tokens()` from
+    /// `cognee/infrastructure/llm/utils.py`:
+    /// - Chunk size must not exceed half of the LLM's max context token size
+    /// - Chunk size must not exceed the embedding engine's max token size
+    /// - Result is at least 1
+    pub fn auto_chunk_size(embedding_engine: &dyn EmbeddingEngine, llm: &dyn Llm) -> usize {
+        let llm_cutoff = (llm.max_context_length() / 2) as usize;
+        let embed_max = embedding_engine.max_sequence_length();
+        llm_cutoff.min(embed_max).max(1)
+    }
+
+    /// Set max_chunk_size by auto-calculating from embedding and LLM capabilities.
+    ///
+    /// See [`auto_chunk_size`](Self::auto_chunk_size) for the formula used.
+    pub fn with_auto_chunk_size(
+        mut self,
+        embedding_engine: &dyn EmbeddingEngine,
+        llm: &dyn Llm,
+    ) -> Self {
+        self.max_chunk_size = Self::auto_chunk_size(embedding_engine, llm);
+        self
+    }
+
     /// Validate configuration parameters.
     ///
     /// Returns an error if any parameters are invalid.
@@ -291,6 +320,60 @@ pub enum ConfigError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use async_trait::async_trait;
+    use cognee_embedding::error::EmbeddingResult;
+    use cognee_llm::types::GenerationOptions;
+
+    // Minimal mock for EmbeddingEngine — only max_sequence_length() matters.
+    struct MockEmbedding {
+        max_seq: usize,
+    }
+
+    #[async_trait]
+    impl EmbeddingEngine for MockEmbedding {
+        async fn embed(&self, _texts: &[&str]) -> EmbeddingResult<Vec<Vec<f32>>> {
+            Ok(vec![])
+        }
+        fn dimension(&self) -> usize {
+            384
+        }
+        fn batch_size(&self) -> usize {
+            32
+        }
+        fn max_sequence_length(&self) -> usize {
+            self.max_seq
+        }
+    }
+
+    // Minimal mock for Llm — only max_context_length() matters.
+    struct MockLlm {
+        max_ctx: u32,
+    }
+
+    #[async_trait]
+    impl Llm for MockLlm {
+        async fn generate(
+            &self,
+            _messages: Vec<cognee_llm::Message>,
+            _options: Option<GenerationOptions>,
+        ) -> cognee_llm::LlmResult<cognee_llm::GenerationResponse> {
+            unimplemented!()
+        }
+        async fn create_structured_output_with_messages_raw(
+            &self,
+            _messages: Vec<cognee_llm::Message>,
+            _json_schema: &serde_json::Value,
+            _options: Option<GenerationOptions>,
+        ) -> cognee_llm::LlmResult<serde_json::Value> {
+            unimplemented!()
+        }
+        fn model(&self) -> &str {
+            "mock"
+        }
+        fn max_context_length(&self) -> u32 {
+            self.max_ctx
+        }
+    }
 
     #[test]
     fn test_default_config() {
@@ -419,5 +502,56 @@ mod tests {
             ..Default::default()
         };
         assert!(config3.validate().is_err());
+    }
+
+    #[test]
+    fn test_auto_chunk_size_embed_is_smaller() {
+        // embed_max=512, llm_context=4096 → llm_cutoff=2048 → result=512
+        let embed = MockEmbedding { max_seq: 512 };
+        let llm = MockLlm { max_ctx: 4096 };
+        assert_eq!(CognifyConfig::auto_chunk_size(&embed, &llm), 512);
+    }
+
+    #[test]
+    fn test_auto_chunk_size_llm_cutoff_is_smaller() {
+        // embed_max=512, llm_context=256 → llm_cutoff=128 → result=128
+        let embed = MockEmbedding { max_seq: 512 };
+        let llm = MockLlm { max_ctx: 256 };
+        assert_eq!(CognifyConfig::auto_chunk_size(&embed, &llm), 128);
+    }
+
+    #[test]
+    fn test_auto_chunk_size_equal_values() {
+        // embed_max=1024, llm_context=2048 → llm_cutoff=1024 → result=1024
+        let embed = MockEmbedding { max_seq: 1024 };
+        let llm = MockLlm { max_ctx: 2048 };
+        assert_eq!(CognifyConfig::auto_chunk_size(&embed, &llm), 1024);
+    }
+
+    #[test]
+    fn test_auto_chunk_size_floor_at_one() {
+        // embed_max=0, llm_context=0 → both 0 → result clamped to 1
+        let embed = MockEmbedding { max_seq: 0 };
+        let llm = MockLlm { max_ctx: 0 };
+        assert_eq!(CognifyConfig::auto_chunk_size(&embed, &llm), 1);
+    }
+
+    #[test]
+    fn test_auto_chunk_size_odd_llm_context() {
+        // llm_context=4097 → llm_cutoff=2048 (integer division), embed_max=3000 → result=2048
+        let embed = MockEmbedding { max_seq: 3000 };
+        let llm = MockLlm { max_ctx: 4097 };
+        assert_eq!(CognifyConfig::auto_chunk_size(&embed, &llm), 2048);
+    }
+
+    #[test]
+    fn test_with_auto_chunk_size_builder() {
+        let embed = MockEmbedding { max_seq: 512 };
+        let llm = MockLlm { max_ctx: 4096 };
+        let config = CognifyConfig::default().with_auto_chunk_size(&embed, &llm);
+        assert_eq!(config.max_chunk_size, 512);
+        // Other fields should remain at defaults
+        assert_eq!(config.chunk_overlap, 10);
+        assert_eq!(config.chunks_per_batch, 100);
     }
 }

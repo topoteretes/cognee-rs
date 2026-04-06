@@ -1081,6 +1081,22 @@ pub async fn cognify(
         .validate()
         .map_err(|e| CognifyError::ConfigError(e.to_string()))?;
 
+    // Auto-calculate chunk size when the caller is using the default value.
+    // Matches Python's get_max_chunk_tokens() from cognee/infrastructure/llm/utils.py.
+    let effective_config;
+    let config = if config.max_chunk_size == CognifyConfig::default().max_chunk_size {
+        effective_config = config
+            .clone()
+            .with_auto_chunk_size(embedding_engine.as_ref(), llm.as_ref());
+        info!(
+            "Auto-calculated max_chunk_size: {}",
+            effective_config.max_chunk_size
+        );
+        &effective_config
+    } else {
+        config
+    };
+
     info!(
         "Starting cognify pipeline with config: chunks_per_batch={}, max_chunk_size={}",
         config.chunks_per_batch, config.max_chunk_size
