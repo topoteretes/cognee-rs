@@ -18,6 +18,7 @@ cognee-embedding = { path = "../embedding" }
 cognee-vector = { path = "../vector" }
 cognee-ontology = { path = "../ontology" }
 
+chrono.workspace = true
 uuid = { workspace = true, features = ["v4"] }
 tokio = { workspace = true, features = ["rt-multi-thread"] }
 async-trait.workspace = true

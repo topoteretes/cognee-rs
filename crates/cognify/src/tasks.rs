@@ -14,13 +14,15 @@
 //! - [`TypedTask`] factories: [`make_classify_documents_task`], etc.
 //! - Pipeline builder: [`build_cognify_pipeline`]
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use chrono::Utc;
 use cognee_chunking::{WordCounter, chunk_text};
 use cognee_core::{Pipeline, PipelineBuilder, TypedTask};
 use cognee_embedding::engine::EmbeddingEngine;
-use cognee_graph::{GraphDBTrait, GraphDBTraitExt};
+use cognee_graph::{EdgeData, GraphDBTrait, GraphDBTraitExt};
 use cognee_llm::Llm;
 use cognee_models::{
     Data, Document, DocumentChunk, Embedding, classify_documents as model_classify_documents,
@@ -354,6 +356,54 @@ pub async fn add_data_points(
             "Stored {} entity types as graph nodes",
             entity_type_refs.len()
         );
+    }
+
+    // Build structural edges (matching Python's get_graph_from_model() discovery)
+    let mut structural_edges: Vec<EdgeData> = Vec::new();
+    let now = Utc::now().to_rfc3339();
+
+    // is_a: Entity → EntityType
+    for pair in &input.entities {
+        if let Some(type_id) = pair.entity.is_a {
+            structural_edges.push((
+                pair.entity.base.id.to_string(),
+                type_id.to_string(),
+                "is_a".to_string(),
+                HashMap::from([(Cow::from("updated_at"), json!(now.clone()))]),
+            ));
+        }
+    }
+
+    // is_part_of: DocumentChunk → Document
+    for chunk in &input.chunks {
+        if let Some(doc_id) = chunk.is_part_of {
+            structural_edges.push((
+                chunk.base.id.to_string(),
+                doc_id.to_string(),
+                "is_part_of".to_string(),
+                HashMap::from([(Cow::from("updated_at"), json!(now.clone()))]),
+            ));
+        }
+    }
+
+    // made_from: TextSummary → DocumentChunk
+    for summary in &input.summaries {
+        if let Some(chunk_id) = summary.made_from {
+            structural_edges.push((
+                summary.base.id.to_string(),
+                chunk_id.to_string(),
+                "made_from".to_string(),
+                HashMap::from([(Cow::from("updated_at"), json!(now.clone()))]),
+            ));
+        }
+    }
+
+    if !structural_edges.is_empty() {
+        graph_db
+            .add_edges(&structural_edges)
+            .await
+            .map_err(CognifyError::from)?;
+        info!("Created {} structural edges", structural_edges.len());
     }
 
     let embeddings = generate_embeddings(
