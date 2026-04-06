@@ -215,6 +215,29 @@ pub async fn extract_graph_from_data(
     // Final deduplication pass (in-memory only after DB filtering)
     let dedup_result = deduplicate_nodes_and_edges(nodes, edges);
 
+    // Build chunk_id → entity IDs mapping from the deduplicated nodes.
+    // Each entity stores the chunk_id it was extracted from in its metadata.
+    let mut chunk_entity_map: HashMap<Uuid, Vec<serde_json::Value>> = HashMap::new();
+    for node_pair in &dedup_result.unique_nodes {
+        if let Some(chunk_id_val) = node_pair.entity.base.get_metadata("chunk_id")
+            && let Some(chunk_id_str) = chunk_id_val.as_str()
+            && let Ok(chunk_id) = Uuid::parse_str(chunk_id_str)
+        {
+            chunk_entity_map
+                .entry(chunk_id)
+                .or_default()
+                .push(json!(node_pair.entity.base.id.to_string()));
+        }
+    }
+
+    // Populate DocumentChunk.contains with extracted entity IDs
+    let mut updated_chunks = input.chunks.clone();
+    for chunk in &mut updated_chunks {
+        if let Some(entity_ids) = chunk_entity_map.get(&chunk.base.id) {
+            chunk.contains = entity_ids.clone();
+        }
+    }
+
     // Store graph data (nodes and edges) in graph database
     let entity_refs: Vec<&cognee_models::Entity> = dedup_result
         .unique_nodes
@@ -255,7 +278,7 @@ pub async fn extract_graph_from_data(
         .map_err(CognifyError::from)?;
 
     Ok(ExtractedGraphData {
-        chunks: input.chunks.clone(),
+        chunks: updated_chunks,
         entities: dedup_result.unique_nodes,
         edges: dedup_result.unique_edges,
         dataset_id: input.dataset_id,
@@ -395,6 +418,20 @@ pub async fn add_data_points(
                 "made_from".to_string(),
                 HashMap::from([(Cow::from("updated_at"), json!(now.clone()))]),
             ));
+        }
+    }
+
+    // contains: DocumentChunk → Entity (from chunk.contains populated in graph extraction)
+    for chunk in &input.chunks {
+        for entity_ref in &chunk.contains {
+            if let Some(entity_id_str) = entity_ref.as_str() {
+                structural_edges.push((
+                    chunk.base.id.to_string(),
+                    entity_id_str.to_string(),
+                    "contains".to_string(),
+                    HashMap::from([(Cow::from("updated_at"), json!(now.clone()))]),
+                ));
+            }
         }
     }
 
