@@ -17,6 +17,7 @@ cognee-utils = { path = "../utils" }
 cognee-embedding = { path = "../embedding" }
 cognee-vector = { path = "../vector" }
 cognee-ontology = { path = "../ontology" }
+cognee-database = { path = "../database" }
 
 chrono.workspace = true
 uuid = { workspace = true, features = ["v4"] }

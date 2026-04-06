@@ -21,6 +21,7 @@ use std::sync::Arc;
 use chrono::Utc;
 use cognee_chunking::{WordCounter, chunk_text};
 use cognee_core::{Pipeline, PipelineBuilder, TypedTask};
+use cognee_database::DatabaseConnection;
 use cognee_embedding::engine::EmbeddingEngine;
 use cognee_graph::{EdgeData, GraphDBTrait, GraphDBTraitExt};
 use cognee_llm::Llm;
@@ -363,11 +364,16 @@ pub async fn summarize_text(
 ///
 /// Generates embeddings for chunks, entities (name + description), summaries,
 /// and optionally triplets. Creates vector collections and indexes points.
+///
+/// When `db` is `Some`, also writes provenance records (nodes/edges) to the
+/// relational database, matching Python's `upsert_nodes` / `upsert_edges`
+/// calls guarded by `if user and dataset and data:`.
 pub async fn add_data_points(
     input: &SummarizedData,
     graph_db: Arc<dyn GraphDBTrait>,
     vector_db: Arc<dyn VectorDB>,
     embedding_engine: Arc<dyn EmbeddingEngine>,
+    db: Option<Arc<DatabaseConnection>>,
     config: &CognifyConfig,
 ) -> Result<CognifyResult, CognifyError> {
     // Store all DataPoint types as graph nodes (matches Python's add_data_points behavior).
@@ -497,6 +503,21 @@ pub async fn add_data_points(
     )
     .await?;
 
+    // ── Provenance upsert (mirrors Python's `if user and dataset and data:`) ──
+    if let (Some(db), Some(user_id), Some(tenant_id)) = (&db, input.user_id, input.tenant_id) {
+        upsert_provenance(
+            db,
+            tenant_id,
+            user_id,
+            input.dataset_id,
+            &input.chunks,
+            &input.entities,
+            &input.edges,
+            &input.summaries,
+        )
+        .await?;
+    }
+
     Ok(CognifyResult {
         chunks: input.chunks.clone(),
         entities: input.entities.clone(),
@@ -529,6 +550,7 @@ pub async fn cognify(
     graph_db: Arc<dyn GraphDBTrait>,
     vector_db: Arc<dyn VectorDB>,
     embedding_engine: Arc<dyn EmbeddingEngine>,
+    db: Option<Arc<DatabaseConnection>>,
     config: &CognifyConfig,
 ) -> Result<CognifyResult, CognifyError> {
     config
@@ -576,13 +598,251 @@ pub async fn cognify(
     // Task 4: Summarize text
     let summarized = summarize_text(&graph_data, llm, config).await?;
 
-    // Task 5: Add data points (embeddings + vector indexing)
-    add_data_points(&summarized, graph_db, vector_db, embedding_engine, config).await
+    // Task 5: Add data points (embeddings + vector indexing + provenance)
+    add_data_points(
+        &summarized,
+        graph_db,
+        vector_db,
+        embedding_engine,
+        db,
+        config,
+    )
+    .await
 }
 
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
+
+// ── Provenance helpers ──────────────────────────────────────────────────────
+
+/// Deterministic provenance node ID, matching Python's:
+/// `uuid5(NAMESPACE_OID, str(tenant_id) + str(user_id) + str(dataset_id) + str(data_id) + str(node_id))`
+fn provenance_node_id(
+    tenant_id: Uuid,
+    user_id: Uuid,
+    dataset_id: Uuid,
+    data_id: Uuid,
+    node_id: Uuid,
+) -> Uuid {
+    let raw = format!("{tenant_id}{user_id}{dataset_id}{data_id}{node_id}");
+    Uuid::new_v5(&Uuid::NAMESPACE_OID, raw.as_bytes())
+}
+
+/// Deterministic provenance edge ID, matching Python's:
+/// `uuid5(NAMESPACE_OID, str(tenant_id) + str(user_id) + str(dataset_id) + str(source_id) + str(edge_text) + str(target_id))`
+fn provenance_edge_id(
+    tenant_id: Uuid,
+    user_id: Uuid,
+    dataset_id: Uuid,
+    source_id: Uuid,
+    edge_text: &str,
+    target_id: Uuid,
+) -> Uuid {
+    let raw = format!("{tenant_id}{user_id}{dataset_id}{source_id}{edge_text}{target_id}");
+    Uuid::new_v5(&Uuid::NAMESPACE_OID, raw.as_bytes())
+}
+
+/// Deterministic edge slug, matching Python's `generate_edge_id`:
+/// `uuid5(NAMESPACE_OID, edge_text.lower().replace(" ", "_").replace("'", ""))`
+fn edge_slug(edge_text: &str) -> Uuid {
+    let normalized = edge_text.to_lowercase().replace(' ', "_").replace('\'', "");
+    Uuid::new_v5(&Uuid::NAMESPACE_OID, normalized.as_bytes())
+}
+
+/// Write provenance node and edge records to the relational database.
+///
+/// Mirrors the Python `upsert_nodes()` / `upsert_edges()` calls in
+/// `add_data_points` (guarded by `if user and dataset and data:`).
+///
+/// Provenance records link graph nodes/edges back to the user, tenant,
+/// dataset, and data item they originated from.
+#[allow(clippy::too_many_arguments)]
+async fn upsert_provenance(
+    db: &DatabaseConnection,
+    tenant_id: Uuid,
+    user_id: Uuid,
+    dataset_id: Uuid,
+    chunks: &[DocumentChunk],
+    entities: &[GraphNodePair],
+    edges: &[GraphEdgePair],
+    summaries: &[TextSummary],
+) -> Result<(), CognifyError> {
+    use cognee_database::ops::graph_storage;
+    use cognee_database::{GraphEdge, GraphNode};
+
+    // Build chunk_id → document_id map for tracing entity provenance back
+    // to the originating Data item.
+    let chunk_data_map: HashMap<Uuid, Uuid> =
+        chunks.iter().map(|c| (c.base.id, c.document_id)).collect();
+
+    // ── Provenance nodes ────────────────────────────────────────────────
+    let mut prov_nodes: Vec<GraphNode> = Vec::new();
+
+    // Entities
+    for pair in entities {
+        let entity = &pair.entity;
+
+        // Resolve data_id by tracing entity → chunk_id → document_id
+        let data_id = entity
+            .base
+            .get_metadata("chunk_id")
+            .and_then(|v| v.as_str())
+            .and_then(|s| Uuid::parse_str(s).ok())
+            .and_then(|chunk_id| chunk_data_map.get(&chunk_id).copied())
+            .unwrap_or(Uuid::nil());
+
+        let indexed_fields = entity
+            .base
+            .get_metadata("index_fields")
+            .cloned()
+            .unwrap_or(json!(["name"]));
+
+        let label = if entity.name.is_empty() {
+            entity.base.id.to_string()
+        } else {
+            entity.name.clone()
+        };
+
+        prov_nodes.push(GraphNode {
+            id: provenance_node_id(tenant_id, user_id, dataset_id, data_id, entity.base.id),
+            slug: entity.base.id,
+            user_id,
+            data_id,
+            dataset_id,
+            label: Some(label),
+            node_type: entity.base.data_type.clone(),
+            indexed_fields,
+            attributes: serde_json::to_value(entity).ok(),
+            created_at: Utc::now(),
+        });
+    }
+
+    // DocumentChunks
+    for chunk in chunks {
+        let data_id = chunk.document_id;
+
+        let indexed_fields = chunk
+            .base
+            .get_metadata("index_fields")
+            .cloned()
+            .unwrap_or(json!(["text"]));
+
+        prov_nodes.push(GraphNode {
+            id: provenance_node_id(tenant_id, user_id, dataset_id, data_id, chunk.base.id),
+            slug: chunk.base.id,
+            user_id,
+            data_id,
+            dataset_id,
+            label: Some(format!("chunk_{}", chunk.chunk_index)),
+            node_type: chunk.base.data_type.clone(),
+            indexed_fields,
+            attributes: serde_json::to_value(chunk).ok(),
+            created_at: Utc::now(),
+        });
+    }
+
+    // TextSummaries
+    for summary in summaries {
+        let data_id = summary
+            .made_from
+            .and_then(|chunk_id| chunk_data_map.get(&chunk_id).copied())
+            .unwrap_or(Uuid::nil());
+
+        let indexed_fields = summary
+            .base
+            .get_metadata("index_fields")
+            .cloned()
+            .unwrap_or(json!(["text"]));
+
+        prov_nodes.push(GraphNode {
+            id: provenance_node_id(tenant_id, user_id, dataset_id, data_id, summary.base.id),
+            slug: summary.base.id,
+            user_id,
+            data_id,
+            dataset_id,
+            label: Some(format!("summary_{}", summary.base.id)),
+            node_type: summary.base.data_type.clone(),
+            indexed_fields,
+            attributes: serde_json::to_value(summary).ok(),
+            created_at: Utc::now(),
+        });
+    }
+
+    // EntityTypes
+    for pair in entities {
+        let et = &pair.entity_type;
+        // EntityType is shared across entities; use nil data_id as in Python
+        prov_nodes.push(GraphNode {
+            id: provenance_node_id(tenant_id, user_id, dataset_id, Uuid::nil(), et.base.id),
+            slug: et.base.id,
+            user_id,
+            data_id: Uuid::nil(),
+            dataset_id,
+            label: Some(et.name.clone()),
+            node_type: et.base.data_type.clone(),
+            indexed_fields: et
+                .base
+                .get_metadata("index_fields")
+                .cloned()
+                .unwrap_or(json!(["name"])),
+            attributes: serde_json::to_value(et).ok(),
+            created_at: Utc::now(),
+        });
+    }
+
+    if !prov_nodes.is_empty() {
+        graph_storage::upsert_nodes(db, &prov_nodes).await?;
+        info!("Upserted {} provenance node records", prov_nodes.len());
+    }
+
+    // ── Provenance edges ────────────────────────────────────────────────
+    let mut prov_edges: Vec<GraphEdge> = Vec::new();
+
+    // Semantic edges from graph extraction
+    for edge_pair in edges {
+        let edge_text = if edge_pair.relationship_name == "contains" {
+            edge_pair
+                .properties
+                .get("edge_text")
+                .cloned()
+                .unwrap_or_else(|| edge_pair.relationship_name.clone())
+        } else {
+            edge_pair.relationship_name.clone()
+        };
+
+        // Resolve data_id from source entity
+        let data_id = Uuid::nil(); // edges span entities; use nil
+
+        prov_edges.push(GraphEdge {
+            id: provenance_edge_id(
+                tenant_id,
+                user_id,
+                dataset_id,
+                edge_pair.source_entity_id,
+                &edge_text,
+                edge_pair.target_entity_id,
+            ),
+            slug: edge_slug(&edge_text),
+            user_id,
+            data_id,
+            dataset_id,
+            source_node_id: edge_pair.source_entity_id,
+            destination_node_id: edge_pair.target_entity_id,
+            relationship_name: edge_text,
+            label: Some(edge_pair.relationship_name.clone()),
+            attributes: serde_json::to_value(&edge_pair.properties).ok(),
+            created_at: Utc::now(),
+        });
+    }
+
+    if !prov_edges.is_empty() {
+        graph_storage::upsert_edges(db, &prov_edges).await?;
+        info!("Upserted {} provenance edge records", prov_edges.len());
+    }
+
+    Ok(())
+}
 
 /// Generate embeddings for chunks, entities, and summaries.
 async fn generate_embeddings(
@@ -938,6 +1198,7 @@ pub fn make_add_data_points_task(
     graph_db: Arc<dyn GraphDBTrait>,
     vector_db: Arc<dyn VectorDB>,
     embedding_engine: Arc<dyn EmbeddingEngine>,
+    db: Option<Arc<DatabaseConnection>>,
     config: CognifyConfig,
 ) -> TypedTask<SummarizedData, CognifyResult> {
     TypedTask::async_fn(move |input: &SummarizedData, _ctx| {
@@ -945,9 +1206,10 @@ pub fn make_add_data_points_task(
         let graph_db = Arc::clone(&graph_db);
         let vector_db = Arc::clone(&vector_db);
         let embedding_engine = Arc::clone(&embedding_engine);
+        let db = db.clone();
         let config = config.clone();
         Box::pin(async move {
-            add_data_points(&input, graph_db, vector_db, embedding_engine, &config)
+            add_data_points(&input, graph_db, vector_db, embedding_engine, db, &config)
                 .await
                 .map(Box::new)
                 .map_err(|e| format!("{e}").into())
@@ -974,6 +1236,7 @@ pub fn build_cognify_pipeline(
     vector_db: Arc<dyn VectorDB>,
     embedding_engine: Arc<dyn EmbeddingEngine>,
     llm: Arc<dyn Llm>,
+    db: Option<Arc<DatabaseConnection>>,
     config: CognifyConfig,
 ) -> Pipeline {
     PipelineBuilder::new_with_task("cognify", make_classify_documents_task())
@@ -988,6 +1251,7 @@ pub fn build_cognify_pipeline(
             graph_db,
             vector_db,
             embedding_engine,
+            db,
             config,
         ))
         .with_name("cognify")

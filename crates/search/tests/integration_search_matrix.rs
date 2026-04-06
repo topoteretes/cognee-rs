@@ -187,6 +187,7 @@ async fn test_search_type_matrix() {
         Arc::clone(&graph_db),
         Arc::clone(&vector_db),
         Arc::clone(&embedding_engine),
+        None,
         &config,
     )
     .await

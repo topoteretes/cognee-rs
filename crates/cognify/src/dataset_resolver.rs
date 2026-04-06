@@ -10,6 +10,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use cognee_database::DatabaseConnection;
 use cognee_embedding::engine::EmbeddingEngine;
 use cognee_graph::GraphDBTrait;
 use cognee_llm::Llm;
@@ -75,6 +76,7 @@ pub async fn cognify_datasets(
     graph_db: Arc<dyn GraphDBTrait>,
     vector_db: Arc<dyn VectorDB>,
     embedding_engine: Arc<dyn EmbeddingEngine>,
+    db: Option<Arc<DatabaseConnection>>,
     config: &CognifyConfig,
 ) -> Result<Vec<CognifyResult>, CognifyError> {
     let datasets = resolver
@@ -118,6 +120,7 @@ pub async fn cognify_datasets(
             Arc::clone(&graph_db),
             Arc::clone(&vector_db),
             Arc::clone(&embedding_engine),
+            db.clone(),
             config,
         )
         .await?;

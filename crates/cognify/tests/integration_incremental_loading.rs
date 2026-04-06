@@ -129,6 +129,7 @@ async fn run_pipeline_with_incremental_flag(
         graph_db,
         vector_db,
         embedding_engine,
+        None,
         &config,
     )
     .await

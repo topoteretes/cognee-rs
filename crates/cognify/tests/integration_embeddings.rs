@@ -98,6 +98,7 @@ async fn test_pipeline_with_embeddings() {
         graph_db,
         vector_db,
         embedding_engine,
+        None,
         &config,
     )
     .await
@@ -225,6 +226,7 @@ async fn test_pipeline_requires_embeddings() {
         graph_db,
         vector_db,
         embedding_engine,
+        None,
         &config,
     )
     .await
@@ -310,6 +312,7 @@ async fn test_embedding_semantic_similarity() {
             Arc::clone(&graph_db),
             Arc::clone(&vector_db),
             Arc::clone(&embedding_engine),
+            None,
             &config,
         )
         .await
@@ -399,6 +402,7 @@ async fn test_entity_name_indexing() {
         graph_db,
         vector_db.clone(),
         embedding_engine,
+        None,
         &config,
     )
     .await
@@ -526,6 +530,7 @@ async fn test_triplet_embeddings_disabled_by_default() {
         graph_db,
         vector_db.clone(),
         embedding_engine,
+        None,
         &config,
     )
     .await
@@ -615,6 +620,7 @@ async fn test_triplet_embeddings_enabled() {
         graph_db,
         vector_db.clone(),
         embedding_engine,
+        None,
         &config,
     )
     .await

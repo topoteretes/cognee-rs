@@ -148,6 +148,7 @@ pub fn run(args: CognifyArgs, cm: Arc<ComponentManager>) -> Result<(), CliError>
                 Arc::clone(&graph_db),
                 Arc::clone(&vector_db),
                 Arc::clone(&embedding_engine),
+                None,
                 &cognify_config,
             )
                 .await

@@ -185,6 +185,7 @@ async fn test_default_backend_add_cognify_search_delete() {
         graph_db.clone() as Arc<dyn GraphDBTrait>,
         vector_db.clone() as Arc<dyn VectorDB>,
         embedding_engine.clone() as Arc<dyn EmbeddingEngine>,
+        None,
         &config,
     )
     .await

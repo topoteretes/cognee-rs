@@ -39,11 +39,21 @@ pub enum CognifyError {
 
     #[error("Dataset resolution error: {0}")]
     DatasetResolutionError(String),
+
+    #[error("Database error: {0}")]
+    DatabaseError(String),
 }
 
 /// Convert GraphDBError to CognifyError
 impl From<cognee_graph::GraphDBError> for CognifyError {
     fn from(err: cognee_graph::GraphDBError) -> Self {
         CognifyError::GraphDatabaseError(err.to_string())
+    }
+}
+
+/// Convert cognee_database::DatabaseError to CognifyError
+impl From<cognee_database::DatabaseError> for CognifyError {
+    fn from(err: cognee_database::DatabaseError) -> Self {
+        CognifyError::DatabaseError(err.to_string())
     }
 }
