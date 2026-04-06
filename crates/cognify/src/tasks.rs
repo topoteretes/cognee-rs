@@ -14,7 +14,7 @@
 //! - [`TypedTask`] factories: [`make_classify_documents_task`], etc.
 //! - Pipeline builder: [`build_cognify_pipeline`]
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use chrono::Utc;
@@ -77,6 +77,9 @@ pub struct ClassifiedDocuments {
 #[derive(Debug, Clone)]
 pub struct ExtractedChunks {
     pub chunks: Vec<DocumentChunk>,
+    /// Classified documents — carried forward so downstream tasks (e.g. DLT
+    /// filtering in [`extract_graph_from_data`]) can inspect document metadata.
+    pub documents: Vec<Document>,
     pub dataset_id: Uuid,
     pub user_id: Option<Uuid>,
     pub tenant_id: Option<Uuid>,
@@ -87,6 +90,8 @@ pub struct ExtractedChunks {
 #[derive(Debug, Clone)]
 pub struct ExtractedGraphData {
     pub chunks: Vec<DocumentChunk>,
+    /// Classified documents — carried forward for DLT FK edge extraction.
+    pub documents: Vec<Document>,
     pub entities: Vec<GraphNodePair>,
     pub edges: Vec<GraphEdgePair>,
     pub dataset_id: Uuid,
@@ -98,6 +103,8 @@ pub struct ExtractedGraphData {
 #[derive(Debug, Clone)]
 pub struct SummarizedData {
     pub chunks: Vec<DocumentChunk>,
+    /// Classified documents — carried forward for DLT FK edge extraction.
+    pub documents: Vec<Document>,
     pub entities: Vec<GraphNodePair>,
     pub edges: Vec<GraphEdgePair>,
     pub summaries: Vec<TextSummary>,
@@ -189,6 +196,7 @@ pub async fn extract_chunks_from_documents(
     info!(total_chunks = all_chunks.len(), "chunking complete");
     Ok(ExtractedChunks {
         chunks: all_chunks,
+        documents: input.documents.clone(),
         dataset_id: input.dataset_id,
         user_id: input.user_id,
         tenant_id: input.tenant_id,
@@ -213,6 +221,7 @@ pub async fn extract_graph_from_data(
     if input.chunks.is_empty() {
         return Ok(ExtractedGraphData {
             chunks: input.chunks.clone(),
+            documents: input.documents.clone(),
             entities: vec![],
             edges: vec![],
             dataset_id: input.dataset_id,
@@ -221,11 +230,50 @@ pub async fn extract_graph_from_data(
         });
     }
 
+    // Filter out DLT chunks — their graph is built deterministically by
+    // extract_dlt_fk_edges from schema metadata, not by LLM extraction.
+    // Mirrors Python: cognee/tasks/graph/extract_graph_from_data.py:148-155
+    let dlt_doc_ids: HashSet<Uuid> = input
+        .documents
+        .iter()
+        .filter(|d| d.document_type == "dlt_row")
+        .map(|d| d.base.id)
+        .collect();
+
+    let (dlt_chunks, non_dlt_chunks): (Vec<&DocumentChunk>, Vec<&DocumentChunk>) = input
+        .chunks
+        .iter()
+        .partition(|c| dlt_doc_ids.contains(&c.document_id));
+
+    if !dlt_chunks.is_empty() {
+        info!(
+            "Skipping {} DLT chunks from LLM extraction ({} non-DLT chunks remain)",
+            dlt_chunks.len(),
+            non_dlt_chunks.len()
+        );
+    }
+
+    // If only DLT chunks remain, return early with all chunks but no entities/edges
+    if non_dlt_chunks.is_empty() {
+        return Ok(ExtractedGraphData {
+            chunks: input.chunks.clone(),
+            documents: input.documents.clone(),
+            entities: vec![],
+            edges: vec![],
+            dataset_id: input.dataset_id,
+            user_id: input.user_id,
+            tenant_id: input.tenant_id,
+        });
+    }
+
+    // Collect non-DLT chunks for LLM processing
+    let chunks_for_extraction: Vec<DocumentChunk> = non_dlt_chunks.into_iter().cloned().collect();
+
     let batch_size = config.chunks_per_batch;
     let mut all_graphs: Vec<(Uuid, KnowledgeGraph)> = Vec::new();
     let semaphore = Arc::new(Semaphore::new(config.max_parallel_extractions));
 
-    for (batch_idx, batch) in input.chunks.chunks(batch_size).enumerate() {
+    for (batch_idx, batch) in chunks_for_extraction.chunks(batch_size).enumerate() {
         let fact_extractor = FactExtractor::new(Arc::clone(&llm));
         let mut extract_tasks = Vec::new();
         let mut chunk_ids = Vec::new();
@@ -252,7 +300,7 @@ pub async fn extract_graph_from_data(
         info!(
             "Processed graph extraction batch {}/{} ({} chunks)",
             batch_idx + 1,
-            input.chunks.len().div_ceil(batch_size),
+            chunks_for_extraction.len().div_ceil(batch_size),
             batch.len()
         );
     }
@@ -332,6 +380,7 @@ pub async fn extract_graph_from_data(
 
     Ok(ExtractedGraphData {
         chunks: updated_chunks,
+        documents: input.documents.clone(),
         entities: dedup_result.unique_nodes,
         edges: dedup_result.unique_edges,
         dataset_id: input.dataset_id,
@@ -374,6 +423,7 @@ pub async fn extract_custom_graph_from_data<M: crate::fact_extraction::GraphMode
     if input.chunks.is_empty() {
         return Ok(ExtractedGraphData {
             chunks: input.chunks.clone(),
+            documents: input.documents.clone(),
             entities: vec![],
             edges: vec![],
             dataset_id: input.dataset_id,
@@ -382,18 +432,47 @@ pub async fn extract_custom_graph_from_data<M: crate::fact_extraction::GraphMode
         });
     }
 
+    // Filter out DLT chunks — same as extract_graph_from_data
+    let dlt_doc_ids: HashSet<Uuid> = input
+        .documents
+        .iter()
+        .filter(|d| d.document_type == "dlt_row")
+        .map(|d| d.base.id)
+        .collect();
+
     let batch_size = config.chunks_per_batch;
     let semaphore = Arc::new(Semaphore::new(config.max_parallel_extractions));
 
     let mut updated_chunks = input.chunks.clone();
-    let total_batches = updated_chunks.len().div_ceil(batch_size);
 
-    for (batch_idx, batch_range) in updated_chunks.chunks_mut(batch_size).enumerate() {
+    // Only process non-DLT chunks through LLM
+    let non_dlt_indices: Vec<usize> = updated_chunks
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| !dlt_doc_ids.contains(&c.document_id))
+        .map(|(i, _)| i)
+        .collect();
+
+    if non_dlt_indices.is_empty() {
+        return Ok(ExtractedGraphData {
+            chunks: updated_chunks,
+            documents: input.documents.clone(),
+            entities: vec![],
+            edges: vec![],
+            dataset_id: input.dataset_id,
+            user_id: input.user_id,
+            tenant_id: input.tenant_id,
+        });
+    }
+
+    let total_batches = non_dlt_indices.len().div_ceil(batch_size);
+
+    for (batch_idx, batch_indices) in non_dlt_indices.chunks(batch_size).enumerate() {
         let mut extract_tasks = Vec::new();
 
-        for chunk in batch_range.iter() {
+        for &idx in batch_indices {
             let extractor = FactExtractor::new(Arc::clone(&llm));
-            let text = chunk.text.clone();
+            let text = updated_chunks[idx].text.clone();
             let sem = Arc::clone(&semaphore);
             let prompt = config.custom_extraction_prompt.clone();
 
@@ -404,14 +483,14 @@ pub async fn extract_custom_graph_from_data<M: crate::fact_extraction::GraphMode
         }
 
         let batch_results = futures::future::join_all(extract_tasks).await;
-        let batch_len = batch_range.len();
+        let batch_len = batch_indices.len();
 
         for (i, result) in batch_results.into_iter().enumerate() {
             let model: M =
                 result.map_err(|e| CognifyError::FactExtractionError(e.to_string()))??;
             let value = serde_json::to_value(&model)
                 .map_err(|e| CognifyError::SerializationError(e.to_string()))?;
-            batch_range[i].contains = vec![value];
+            updated_chunks[batch_indices[i]].contains = vec![value];
         }
 
         info!(
@@ -424,6 +503,7 @@ pub async fn extract_custom_graph_from_data<M: crate::fact_extraction::GraphMode
 
     Ok(ExtractedGraphData {
         chunks: updated_chunks,
+        documents: input.documents.clone(),
         entities: vec![],
         edges: vec![],
         dataset_id: input.dataset_id,
@@ -463,6 +543,7 @@ pub async fn summarize_text(
 
     Ok(SummarizedData {
         chunks: input.chunks.clone(),
+        documents: input.documents.clone(),
         entities: input.entities.clone(),
         edges: input.edges.clone(),
         summaries,
@@ -636,6 +717,321 @@ pub async fn add_data_points(
 }
 
 // ---------------------------------------------------------------------------
+// Task 6: extract_dlt_fk_edges
+// ---------------------------------------------------------------------------
+
+/// Create graph edges and schema nodes from DLT-sourced relational data.
+///
+/// Mirrors the Python `cognee/tasks/ingestion/extract_dlt_fk_edges.py`.
+/// This task runs after `add_data_points` in the cognify pipeline. It:
+/// 1. Identifies DLT documents from the classified documents list
+/// 2. Parses `external_metadata` for table info and foreign key definitions
+/// 3. Creates `is_row_of` edges from DLT document nodes to their source table
+/// 4. Creates FK-based edges between documents of related rows
+///
+/// If no DLT documents are present, this is a no-op.
+pub async fn extract_dlt_fk_edges(
+    _chunks: &[DocumentChunk],
+    documents: &[Document],
+    graph_db: Arc<dyn GraphDBTrait>,
+) -> Result<(), CognifyError> {
+    // Collect DLT documents
+    let dlt_docs: Vec<&Document> = documents
+        .iter()
+        .filter(|d| d.document_type == "dlt_row")
+        .collect();
+
+    if dlt_docs.is_empty() {
+        return Ok(());
+    }
+
+    info!(
+        "Processing {} DLT documents for FK edge extraction",
+        dlt_docs.len()
+    );
+
+    // Parse external_metadata for each DLT document
+    // Collect table info and FK definitions
+    let mut tables_seen: HashMap<String, DltTableMeta> = HashMap::new();
+    let mut dlt_doc_meta: HashMap<Uuid, serde_json::Value> = HashMap::new();
+    let mut fk_defs_seen: HashSet<(String, String, String, String)> = HashSet::new();
+
+    for doc in &dlt_docs {
+        let ext_metadata = match &doc.external_metadata {
+            Some(m) => match serde_json::from_str::<serde_json::Value>(m) {
+                Ok(v) if v.get("source").and_then(|s| s.as_str()) == Some("dlt") => v,
+                _ => continue,
+            },
+            None => continue,
+        };
+
+        dlt_doc_meta.insert(doc.base.id, ext_metadata.clone());
+
+        let table_name = ext_metadata
+            .get("table_name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        if !table_name.is_empty() && !tables_seen.contains_key(&table_name) {
+            tables_seen.insert(
+                table_name.clone(),
+                DltTableMeta {
+                    schema_info: ext_metadata.get("schema_info").cloned(),
+                    foreign_keys: ext_metadata
+                        .get("foreign_keys")
+                        .and_then(|v| v.as_array())
+                        .cloned()
+                        .unwrap_or_default(),
+                    dlt_db_name: ext_metadata
+                        .get("dlt_db_name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                },
+            );
+        }
+    }
+
+    if dlt_doc_meta.is_empty() {
+        return Ok(());
+    }
+
+    let mut all_edges: Vec<cognee_graph::EdgeData> = Vec::new();
+
+    // Phase 1: Build table node IDs (deterministic via uuid5)
+    let mut table_node_ids: HashMap<String, Uuid> = HashMap::new();
+    for table_name in tables_seen.keys() {
+        let id = Uuid::new_v5(
+            &Uuid::NAMESPACE_OID,
+            format!("dlt:{}", table_name).as_bytes(),
+        );
+        table_node_ids.insert(table_name.clone(), id);
+    }
+
+    // Phase 2: Create FK relationship edges between table nodes
+    for (table_name, table_meta) in &tables_seen {
+        for fk in &table_meta.foreign_keys {
+            let fk_col = fk
+                .get("column")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let ref_table = fk
+                .get("ref_table")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let ref_col = fk
+                .get("ref_column")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+
+            if fk_col.is_empty() || ref_table.is_empty() {
+                continue;
+            }
+
+            let fk_key = (
+                table_name.clone(),
+                fk_col.clone(),
+                ref_table.clone(),
+                ref_col.clone(),
+            );
+            if fk_defs_seen.contains(&fk_key) {
+                continue;
+            }
+            fk_defs_seen.insert(fk_key);
+
+            let rel_name = format!(
+                "{}:{}->{}{}",
+                table_name,
+                fk_col,
+                ref_table,
+                if ref_col.is_empty() {
+                    String::new()
+                } else {
+                    format!(":{}", ref_col)
+                }
+            );
+            let rel_id = Uuid::new_v5(&Uuid::NAMESPACE_OID, format!("dlt:{}", rel_name).as_bytes());
+
+            // source_table -> relationship (has_foreign_key)
+            if let Some(&source_table_id) = table_node_ids.get(table_name.as_str()) {
+                let mut props = HashMap::new();
+                props.insert(
+                    std::borrow::Cow::Borrowed("source_node_id"),
+                    json!(source_table_id.to_string()),
+                );
+                props.insert(
+                    std::borrow::Cow::Borrowed("target_node_id"),
+                    json!(rel_id.to_string()),
+                );
+                props.insert(
+                    std::borrow::Cow::Borrowed("relationship_name"),
+                    json!("has_foreign_key"),
+                );
+                all_edges.push((
+                    source_table_id.to_string(),
+                    rel_id.to_string(),
+                    "has_foreign_key".to_string(),
+                    props,
+                ));
+            }
+
+            // relationship -> target_table (references_table)
+            if let Some(&target_table_id) = table_node_ids.get(ref_table.as_str()) {
+                let mut props = HashMap::new();
+                props.insert(
+                    std::borrow::Cow::Borrowed("source_node_id"),
+                    json!(rel_id.to_string()),
+                );
+                props.insert(
+                    std::borrow::Cow::Borrowed("target_node_id"),
+                    json!(target_table_id.to_string()),
+                );
+                props.insert(
+                    std::borrow::Cow::Borrowed("relationship_name"),
+                    json!("references_table"),
+                );
+                all_edges.push((
+                    rel_id.to_string(),
+                    target_table_id.to_string(),
+                    "references_table".to_string(),
+                    props,
+                ));
+            }
+        }
+    }
+
+    // Phase 3: Create row-level edges (document -> table, document -> referenced document)
+    let mut seen_row_edges: HashSet<(String, String, String)> = HashSet::new();
+
+    for (doc_id, ext_metadata) in &dlt_doc_meta {
+        let table_name = ext_metadata
+            .get("table_name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        // Link document to its SchemaTable node
+        if let Some(&table_node_id) = table_node_ids.get(table_name) {
+            let mut props = HashMap::new();
+            props.insert(
+                std::borrow::Cow::Borrowed("source_node_id"),
+                json!(doc_id.to_string()),
+            );
+            props.insert(
+                std::borrow::Cow::Borrowed("target_node_id"),
+                json!(table_node_id.to_string()),
+            );
+            props.insert(
+                std::borrow::Cow::Borrowed("relationship_name"),
+                json!("is_row_of"),
+            );
+            all_edges.push((
+                doc_id.to_string(),
+                table_node_id.to_string(),
+                "is_row_of".to_string(),
+                props,
+            ));
+        }
+
+        // Create FK row-level edges
+        let fk_references = ext_metadata
+            .get("fk_references")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+
+        for fk_ref in &fk_references {
+            let target_data_id = match fk_ref.get("target_data_id").and_then(|v| v.as_str()) {
+                Some(id) => id.to_string(),
+                None => continue,
+            };
+
+            let relationship_name = fk_ref
+                .get("relationship_name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("references")
+                .to_string();
+
+            let edge_key = (
+                doc_id.to_string(),
+                target_data_id.clone(),
+                relationship_name.clone(),
+            );
+            if seen_row_edges.contains(&edge_key) {
+                continue;
+            }
+            seen_row_edges.insert(edge_key);
+
+            let mut props = HashMap::new();
+            props.insert(
+                std::borrow::Cow::Borrowed("source_node_id"),
+                json!(doc_id.to_string()),
+            );
+            props.insert(
+                std::borrow::Cow::Borrowed("target_node_id"),
+                json!(target_data_id.clone()),
+            );
+            props.insert(
+                std::borrow::Cow::Borrowed("relationship_name"),
+                json!(relationship_name.clone()),
+            );
+            props.insert(
+                std::borrow::Cow::Borrowed("edge_text"),
+                json!(relationship_name.replace('_', " ")),
+            );
+            props.insert(
+                std::borrow::Cow::Borrowed("source_table"),
+                json!(table_name),
+            );
+            props.insert(
+                std::borrow::Cow::Borrowed("target_table"),
+                json!(
+                    fk_ref
+                        .get("target_table")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                ),
+            );
+            props.insert(
+                std::borrow::Cow::Borrowed("fk_column"),
+                json!(fk_ref.get("column").and_then(|v| v.as_str()).unwrap_or("")),
+            );
+
+            all_edges.push((doc_id.to_string(), target_data_id, relationship_name, props));
+        }
+    }
+
+    // Persist edges to graph DB
+    if !all_edges.is_empty() {
+        graph_db
+            .add_edges(&all_edges)
+            .await
+            .map_err(CognifyError::from)?;
+        info!(
+            "Added {} DLT FK edges to graph ({} tables, {} FK definitions)",
+            all_edges.len(),
+            table_node_ids.len(),
+            fk_defs_seen.len()
+        );
+    }
+
+    Ok(())
+}
+
+/// Internal metadata for a DLT source table.
+#[derive(Debug)]
+struct DltTableMeta {
+    #[allow(dead_code)]
+    schema_info: Option<serde_json::Value>,
+    foreign_keys: Vec<serde_json::Value>,
+    #[allow(dead_code)]
+    dlt_db_name: String,
+}
+
+// ---------------------------------------------------------------------------
 // Provenance stamping helper
 // ---------------------------------------------------------------------------
 
@@ -778,15 +1174,20 @@ pub async fn cognify(
     }
 
     // Task 5: Add data points (embeddings + vector indexing + provenance)
-    add_data_points(
+    let result = add_data_points(
         &summarized,
-        graph_db,
+        Arc::clone(&graph_db),
         vector_db,
         embedding_engine,
         db,
         config,
     )
-    .await
+    .await?;
+
+    // Task 6: Extract DLT FK edges (no-op if no DLT documents)
+    extract_dlt_fk_edges(&summarized.chunks, &summarized.documents, graph_db).await?;
+
+    Ok(result)
 }
 
 // ---------------------------------------------------------------------------
