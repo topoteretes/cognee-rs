@@ -99,7 +99,7 @@ pub fn classify_documents(data_items: &[Data]) -> Vec<Document> {
                 serde_json::to_string_pretty(&v).ok()
             });
 
-            Some(Document {
+            let mut doc = Document {
                 base,
                 document_type: doc_type.to_string(),
                 name: data.name.clone(),
@@ -108,7 +108,43 @@ pub fn classify_documents(data_items: &[Data]) -> Vec<Document> {
                 extension: data.extension.clone(),
                 data_id: data.id,
                 external_metadata: formatted_metadata.or(data.external_metadata.clone()),
-            })
+            };
+
+            // update_node_set: parse external_metadata for node_set array
+            // Mirrors Python cognee/tasks/documents/classify_documents.py:update_node_set()
+            if let Some(ref meta_str) = doc.external_metadata
+                && let Ok(meta_val) = serde_json::from_str::<serde_json::Value>(meta_str)
+                && let Some(node_set_array) = meta_val.get("node_set").and_then(|v| v.as_array())
+            {
+                // Build NodeSet-like JSON values with deterministic IDs
+                // Python: NodeSet(id=generate_node_id(f"NodeSet:{name}"), name=name)
+                let node_set_values: Vec<serde_json::Value> = node_set_array
+                    .iter()
+                    .filter_map(|v| {
+                        let name = v.as_str()?;
+                        let key = format!("NodeSet:{}", name)
+                            .to_lowercase()
+                            .replace(' ', "_")
+                            .replace('\'', "");
+                        let id = uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_OID, key.as_bytes());
+                        Some(json!({
+                            "id": id.to_string(),
+                            "name": name,
+                            "type": "NodeSet"
+                        }))
+                    })
+                    .collect();
+
+                if !node_set_values.is_empty() {
+                    // source_node_set = comma-separated names (Python: ", ".join(node_set))
+                    let names: Vec<&str> =
+                        node_set_array.iter().filter_map(|v| v.as_str()).collect();
+                    doc.base.source_node_set = Some(names.join(", "));
+                    doc.base.belongs_to_set = Some(node_set_values);
+                }
+            }
+
+            Some(doc)
         })
         .collect()
 }
@@ -371,5 +407,103 @@ mod tests {
         assert_eq!(extension_to_doc_type("Txt"), Some("text"));
         assert_eq!(extension_to_doc_type("PNG"), Some("image"));
         assert_eq!(extension_to_doc_type("MP3"), Some("audio"));
+    }
+
+    // ----- NodeSet handling (update_node_set) -----
+
+    #[test]
+    fn node_set_populates_belongs_to_set_and_source_node_set() {
+        let data = vec![make_data_with_metadata(
+            "text/plain",
+            "txt",
+            r#"{"node_set": ["setA", "setB"]}"#,
+        )];
+        let docs = classify_documents(&data);
+        assert_eq!(docs.len(), 1);
+
+        // belongs_to_set should have two NodeSet entries
+        let bts = docs[0].base.belongs_to_set.as_ref().unwrap();
+        assert_eq!(bts.len(), 2);
+
+        // Each entry should have id, name, type
+        assert_eq!(bts[0]["name"], "setA");
+        assert_eq!(bts[0]["type"], "NodeSet");
+        assert_eq!(bts[1]["name"], "setB");
+        assert_eq!(bts[1]["type"], "NodeSet");
+
+        // IDs should be deterministic UUID5
+        let key_a = "nodeset:seta"; // lowercased, spaces→underscores
+        let expected_id_a =
+            uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_OID, key_a.as_bytes()).to_string();
+        assert_eq!(bts[0]["id"], expected_id_a);
+
+        // source_node_set should be comma-separated names
+        assert_eq!(docs[0].base.source_node_set.as_ref().unwrap(), "setA, setB");
+    }
+
+    #[test]
+    fn node_set_single_entry() {
+        let data = vec![make_data_with_metadata(
+            "text/plain",
+            "txt",
+            r#"{"node_set": ["only_one"]}"#,
+        )];
+        let docs = classify_documents(&data);
+        assert_eq!(docs.len(), 1);
+
+        let bts = docs[0].base.belongs_to_set.as_ref().unwrap();
+        assert_eq!(bts.len(), 1);
+        assert_eq!(bts[0]["name"], "only_one");
+
+        assert_eq!(docs[0].base.source_node_set.as_ref().unwrap(), "only_one");
+    }
+
+    #[test]
+    fn no_node_set_key_leaves_belongs_to_set_unset() {
+        let data = vec![make_data_with_metadata(
+            "text/plain",
+            "txt",
+            r#"{"other_key": "value"}"#,
+        )];
+        let docs = classify_documents(&data);
+        assert_eq!(docs.len(), 1);
+        assert!(docs[0].base.belongs_to_set.is_none());
+        assert!(docs[0].base.source_node_set.is_none());
+    }
+
+    #[test]
+    fn node_set_not_array_leaves_belongs_to_set_unset() {
+        let data = vec![make_data_with_metadata(
+            "text/plain",
+            "txt",
+            r#"{"node_set": "not_an_array"}"#,
+        )];
+        let docs = classify_documents(&data);
+        assert_eq!(docs.len(), 1);
+        assert!(docs[0].base.belongs_to_set.is_none());
+        assert!(docs[0].base.source_node_set.is_none());
+    }
+
+    #[test]
+    fn node_set_empty_array_leaves_belongs_to_set_unset() {
+        let data = vec![make_data_with_metadata(
+            "text/plain",
+            "txt",
+            r#"{"node_set": []}"#,
+        )];
+        let docs = classify_documents(&data);
+        assert_eq!(docs.len(), 1);
+        // Empty array produces no NodeSet values, so stays unset
+        assert!(docs[0].base.belongs_to_set.is_none());
+        assert!(docs[0].base.source_node_set.is_none());
+    }
+
+    #[test]
+    fn node_set_with_no_metadata_leaves_belongs_to_set_unset() {
+        let data = vec![make_data("text/plain", "txt")];
+        let docs = classify_documents(&data);
+        assert_eq!(docs.len(), 1);
+        assert!(docs[0].base.belongs_to_set.is_none());
+        assert!(docs[0].base.source_node_set.is_none());
     }
 }

@@ -133,7 +133,16 @@ pub async fn extract_chunks_from_documents(
         let content = String::from_utf8(content_bytes)
             .map_err(|e| CognifyError::ChunkingError(e.to_string()))?;
 
-        let chunks = chunk_text(document.base.id, &content, max_chunk_size, &counter);
+        let mut chunks = chunk_text(document.base.id, &content, max_chunk_size, &counter);
+
+        // Propagate belongs_to_set from Document to each DocumentChunk
+        // Mirrors Python: document_chunk.belongs_to_set = document.belongs_to_set
+        if document.base.belongs_to_set.is_some() {
+            for chunk in &mut chunks {
+                chunk.base.belongs_to_set = document.base.belongs_to_set.clone();
+            }
+        }
+
         all_chunks.extend(chunks);
     }
 
@@ -654,6 +663,7 @@ async fn index_data_points(
                     .with_metadata("dataset_id", json!(dataset_id.to_string()))
                     .with_metadata("document_id", json!(chunk.document_id.to_string()))
                     .with_metadata("chunk_index", json!(chunk.chunk_index))
+                    .with_metadata("belongs_to_set", json!(chunk.base.belongs_to_set))
             })
             .collect();
 
