@@ -36,6 +36,9 @@ pub enum CognifyError {
 
     #[error("Vector database error: {0}")]
     VectorDBError(String),
+
+    #[error("Dataset resolution error: {0}")]
+    DatasetResolutionError(String),
 }
 
 /// Convert GraphDBError to CognifyError

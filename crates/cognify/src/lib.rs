@@ -1,4 +1,5 @@
 pub mod config;
+pub mod dataset_resolver;
 pub mod error;
 pub mod fact_extraction;
 pub mod graph_integration;
@@ -8,6 +9,7 @@ pub mod tasks;
 pub mod triplet_creation;
 
 pub use config::{ChunkStrategy, CognifyConfig, ConfigError};
+pub use dataset_resolver::{DatasetResolver, cognify_datasets};
 pub use error::CognifyError;
 pub use fact_extraction::{Edge, FactExtractor, KnowledgeGraph, Node};
 pub use graph_integration::{
