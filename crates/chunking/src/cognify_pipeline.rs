@@ -141,16 +141,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn extract_chunks_skips_non_text() {
+    async fn extract_chunks_skips_unknown_extension() {
         let storage = Arc::new(MockStorage::new());
 
         let data = Data::builder(
             Uuid::new_v4(),
-            "image.png",
-            "/storage/image.png",
-            "file://image.png",
-            "png",
-            "image/png",
+            "data.xyz",
+            "/storage/data.xyz",
+            "file://data.xyz",
+            "xyz",
+            "application/octet-stream",
             "hash456",
             Uuid::new_v4(),
         )

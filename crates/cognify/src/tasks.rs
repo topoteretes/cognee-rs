@@ -932,6 +932,7 @@ pub fn build_cognify_pipeline(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cognee_models::DataPoint;
     use cognee_storage::MockStorage;
 
     #[test]
@@ -967,14 +968,14 @@ mod tests {
     }
 
     #[test]
-    fn test_classify_documents_skips_non_text() {
+    fn test_classify_documents_skips_unknown_extension() {
         let data = Data::builder(
             Uuid::new_v4(),
-            "image.png",
-            "/storage/image.png",
-            "file://image.png",
-            "png",
-            "image/png",
+            "data.xyz",
+            "/storage/data.xyz",
+            "file://data.xyz",
+            "xyz",
+            "application/octet-stream",
             "hash456",
             Uuid::new_v4(),
         )
@@ -997,16 +998,17 @@ mod tests {
             .unwrap();
 
         let doc_id = Uuid::new_v4();
-        let mut base = cognee_models::DataPoint::new("TextDocument", None);
+        let mut base = DataPoint::new("TextDocument", None);
         base.id = doc_id;
         base.set_metadata("index_fields", serde_json::json!(["name"]));
         let doc = Document {
             base,
+            document_type: "text".to_string(),
             name: "test.txt".to_string(),
             raw_data_location: location,
             mime_type: "text/plain".to_string(),
             extension: "txt".to_string(),
-            data_id: Uuid::new_v4(),
+            data_id: doc_id,
             external_metadata: None,
         };
 

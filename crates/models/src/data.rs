@@ -81,6 +81,7 @@ impl Data {
             original_mime_type: None,
             loader_engine: None,
             raw_content_hash: None,
+            external_metadata: None,
             data_size: -1,
         }
     }
@@ -102,6 +103,7 @@ pub struct DataBuilder {
     original_mime_type: Option<String>,
     loader_engine: Option<String>,
     raw_content_hash: Option<String>,
+    external_metadata: Option<String>,
     data_size: i64,
 }
 
@@ -130,6 +132,10 @@ impl DataBuilder {
         self.raw_content_hash = Some(v.into());
         self
     }
+    pub fn external_metadata(mut self, v: impl Into<String>) -> Self {
+        self.external_metadata = Some(v.into());
+        self
+    }
     pub fn data_size(mut self, v: i64) -> Self {
         self.data_size = v;
         self
@@ -153,7 +159,7 @@ impl DataBuilder {
             original_mime_type: self.original_mime_type,
             loader_engine: self.loader_engine,
             raw_content_hash: self.raw_content_hash,
-            external_metadata: None,
+            external_metadata: self.external_metadata,
             node_set: None,
             pipeline_status: None,
             token_count: -1,
