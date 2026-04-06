@@ -140,6 +140,8 @@ pub fn run(args: AddAndCognifyArgs, cm: Arc<ComponentManager>) -> Result<(), Cli
         let result = cognify(
             added_data,
             dataset.id,
+            Some(owner_id),
+            None,
             llm,
             storage,
             graph_db,

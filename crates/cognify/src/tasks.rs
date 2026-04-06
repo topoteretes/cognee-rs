@@ -50,11 +50,16 @@ use crate::summarization::{SummaryExtractor, TextSummary};
 
 /// Input to the cognify pipeline.
 ///
-/// Wraps all data items for a dataset along with the dataset identifier.
+/// Wraps all data items for a dataset along with the dataset identifier
+/// and optional user/tenant context.
 #[derive(Debug, Clone)]
 pub struct CognifyInput {
     pub data_items: Vec<Data>,
     pub dataset_id: Uuid,
+    /// Optional user ID (owner of the pipeline run).
+    pub user_id: Option<Uuid>,
+    /// Optional tenant ID for multi-tenant isolation.
+    pub tenant_id: Option<Uuid>,
 }
 
 /// Output of [`classify_documents`]: classified documents ready for chunking.
@@ -62,6 +67,8 @@ pub struct CognifyInput {
 pub struct ClassifiedDocuments {
     pub documents: Vec<Document>,
     pub dataset_id: Uuid,
+    pub user_id: Option<Uuid>,
+    pub tenant_id: Option<Uuid>,
 }
 
 /// Output of [`extract_chunks_from_documents`]: text chunks ready for graph extraction.
@@ -69,6 +76,8 @@ pub struct ClassifiedDocuments {
 pub struct ExtractedChunks {
     pub chunks: Vec<DocumentChunk>,
     pub dataset_id: Uuid,
+    pub user_id: Option<Uuid>,
+    pub tenant_id: Option<Uuid>,
 }
 
 /// Output of [`extract_graph_from_data`]: chunks plus extracted entities and edges
@@ -79,6 +88,8 @@ pub struct ExtractedGraphData {
     pub entities: Vec<GraphNodePair>,
     pub edges: Vec<GraphEdgePair>,
     pub dataset_id: Uuid,
+    pub user_id: Option<Uuid>,
+    pub tenant_id: Option<Uuid>,
 }
 
 /// Output of [`summarize_text`]: graph data plus generated summaries.
@@ -89,6 +100,8 @@ pub struct SummarizedData {
     pub edges: Vec<GraphEdgePair>,
     pub summaries: Vec<TextSummary>,
     pub dataset_id: Uuid,
+    pub user_id: Option<Uuid>,
+    pub tenant_id: Option<Uuid>,
 }
 
 // ---------------------------------------------------------------------------
@@ -105,6 +118,8 @@ pub fn classify_documents(input: &CognifyInput) -> Result<ClassifiedDocuments, C
     Ok(ClassifiedDocuments {
         documents,
         dataset_id: input.dataset_id,
+        user_id: input.user_id,
+        tenant_id: input.tenant_id,
     })
 }
 
@@ -150,6 +165,8 @@ pub async fn extract_chunks_from_documents(
     Ok(ExtractedChunks {
         chunks: all_chunks,
         dataset_id: input.dataset_id,
+        user_id: input.user_id,
+        tenant_id: input.tenant_id,
     })
 }
 
@@ -174,6 +191,8 @@ pub async fn extract_graph_from_data(
             entities: vec![],
             edges: vec![],
             dataset_id: input.dataset_id,
+            user_id: input.user_id,
+            tenant_id: input.tenant_id,
         });
     }
 
@@ -291,6 +310,8 @@ pub async fn extract_graph_from_data(
         entities: dedup_result.unique_nodes,
         edges: dedup_result.unique_edges,
         dataset_id: input.dataset_id,
+        user_id: input.user_id,
+        tenant_id: input.tenant_id,
     })
 }
 
@@ -329,6 +350,8 @@ pub async fn summarize_text(
         edges: input.edges.clone(),
         summaries,
         dataset_id: input.dataset_id,
+        user_id: input.user_id,
+        tenant_id: input.tenant_id,
     })
 }
 
@@ -466,6 +489,8 @@ pub async fn add_data_points(
         &input.summaries,
         &input.edges,
         input.dataset_id,
+        input.user_id,
+        input.tenant_id,
         embedding_engine,
         vector_db,
         config,
@@ -497,6 +522,8 @@ pub async fn add_data_points(
 pub async fn cognify(
     data_items: Vec<Data>,
     dataset_id: Uuid,
+    user_id: Option<Uuid>,
+    tenant_id: Option<Uuid>,
     llm: Arc<dyn Llm>,
     storage: Arc<dyn StorageTrait>,
     graph_db: Arc<dyn GraphDBTrait>,
@@ -516,6 +543,8 @@ pub async fn cognify(
     let input = CognifyInput {
         data_items,
         dataset_id,
+        user_id,
+        tenant_id,
     };
 
     // Task 1: Classify documents
@@ -626,6 +655,8 @@ async fn index_data_points(
     summaries: &[TextSummary],
     edges: &[GraphEdgePair],
     dataset_id: Uuid,
+    user_id: Option<Uuid>,
+    tenant_id: Option<Uuid>,
     engine: Arc<dyn EmbeddingEngine>,
     vector_db: Arc<dyn VectorDB>,
     config: &CognifyConfig,
@@ -656,14 +687,21 @@ async fn index_data_points(
             .iter()
             .zip(vectors)
             .map(|(chunk, vector)| {
-                VectorPoint::new(chunk.base.id, vector)
+                let mut point = VectorPoint::new(chunk.base.id, vector)
                     .with_metadata("type", json!("DocumentChunk"))
                     .with_metadata("field", json!("text"))
                     .with_metadata("text", json!(chunk.text.clone()))
                     .with_metadata("dataset_id", json!(dataset_id.to_string()))
                     .with_metadata("document_id", json!(chunk.document_id.to_string()))
                     .with_metadata("chunk_index", json!(chunk.chunk_index))
-                    .with_metadata("belongs_to_set", json!(chunk.base.belongs_to_set))
+                    .with_metadata("belongs_to_set", json!(chunk.base.belongs_to_set));
+                if let Some(uid) = user_id {
+                    point = point.with_metadata("user_id", json!(uid.to_string()));
+                }
+                if let Some(tid) = tenant_id {
+                    point = point.with_metadata("tenant_id", json!(tid.to_string()));
+                }
+                point
             })
             .collect();
 
@@ -699,11 +737,18 @@ async fn index_data_points(
             .iter()
             .zip(vectors)
             .map(|(entity, vector)| {
-                VectorPoint::new(entity.entity.base.id, vector)
+                let mut point = VectorPoint::new(entity.entity.base.id, vector)
                     .with_metadata("type", json!("Entity"))
                     .with_metadata("field", json!("name"))
                     .with_metadata("dataset_id", json!(dataset_id.to_string()))
-                    .with_metadata("entity_type", json!(entity.entity_type.name.clone()))
+                    .with_metadata("entity_type", json!(entity.entity_type.name.clone()));
+                if let Some(uid) = user_id {
+                    point = point.with_metadata("user_id", json!(uid.to_string()));
+                }
+                if let Some(tid) = tenant_id {
+                    point = point.with_metadata("tenant_id", json!(tid.to_string()));
+                }
+                point
             })
             .collect();
 
@@ -745,6 +790,12 @@ async fn index_data_points(
                     .with_metadata("dataset_id", json!(dataset_id.to_string()));
                 if let Some(made_from) = summary.made_from {
                     point = point.with_metadata("chunk_id", json!(made_from.to_string()));
+                }
+                if let Some(uid) = user_id {
+                    point = point.with_metadata("user_id", json!(uid.to_string()));
+                }
+                if let Some(tid) = tenant_id {
+                    point = point.with_metadata("tenant_id", json!(tid.to_string()));
                 }
                 point
             })
@@ -911,8 +962,12 @@ pub fn make_add_data_points_task(
 /// Build a complete cognify [`Pipeline`]:
 /// [`CognifyInput`] → classify → chunk → extract_graph → summarize → add_data_points → [`CognifyResult`].
 ///
+/// The `user_id` and `tenant_id` parameters are threaded through all pipeline
+/// stages and included as metadata on vector points and graph nodes.
+///
 /// For composable pipeline-based execution (with concurrency, retry, progress
 /// tracking, etc.), pass the result to [`cognee_core::execute`].
+#[allow(clippy::too_many_arguments)]
 pub fn build_cognify_pipeline(
     storage: Arc<dyn StorageTrait>,
     graph_db: Arc<dyn GraphDBTrait>,
@@ -950,6 +1005,8 @@ mod tests {
         let input = CognifyInput {
             data_items: vec![],
             dataset_id: Uuid::new_v4(),
+            user_id: None,
+            tenant_id: None,
         };
         let result = classify_documents(&input).unwrap();
         assert!(result.documents.is_empty());
@@ -972,6 +1029,8 @@ mod tests {
         let input = CognifyInput {
             data_items: vec![data],
             dataset_id: Uuid::new_v4(),
+            user_id: None,
+            tenant_id: None,
         };
         let result = classify_documents(&input).unwrap();
         assert_eq!(result.documents.len(), 1);
@@ -994,6 +1053,8 @@ mod tests {
         let input = CognifyInput {
             data_items: vec![data],
             dataset_id: Uuid::new_v4(),
+            user_id: None,
+            tenant_id: None,
         };
         let result = classify_documents(&input).unwrap();
         assert!(result.documents.is_empty());
@@ -1025,6 +1086,8 @@ mod tests {
         let input = ClassifiedDocuments {
             documents: vec![doc],
             dataset_id: Uuid::new_v4(),
+            user_id: None,
+            tenant_id: None,
         };
 
         let result = extract_chunks_from_documents(&input, &*storage, 100)
@@ -1039,6 +1102,8 @@ mod tests {
         let input = ClassifiedDocuments {
             documents: vec![],
             dataset_id: Uuid::new_v4(),
+            user_id: None,
+            tenant_id: None,
         };
 
         let result = extract_chunks_from_documents(&input, &*storage, 100)
@@ -1053,6 +1118,8 @@ mod tests {
         let input = CognifyInput {
             data_items: vec![],
             dataset_id,
+            user_id: None,
+            tenant_id: None,
         };
         let result = classify_documents(&input).unwrap();
         assert_eq!(result.dataset_id, dataset_id);

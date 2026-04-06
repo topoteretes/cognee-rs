@@ -141,6 +141,8 @@ pub fn run(args: CognifyArgs, cm: Arc<ComponentManager>) -> Result<(), CliError>
             let result = cognify(
                 data_items,
                 dataset.id,
+                Some(owner_id),
+                None,
                 llm.clone(),
                 Arc::clone(&storage),
                 Arc::clone(&graph_db),

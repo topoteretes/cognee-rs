@@ -180,6 +180,8 @@ async fn test_search_type_matrix() {
     let result = match cognify(
         data_items,
         dataset.id,
+        None,
+        None,
         Arc::clone(&llm),
         Arc::clone(&storage),
         Arc::clone(&graph_db),

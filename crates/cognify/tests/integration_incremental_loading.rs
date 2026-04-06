@@ -122,6 +122,8 @@ async fn run_pipeline_with_incremental_flag(
     let result = cognify(
         vec![data],
         dataset_id,
+        None,
+        None,
         llm,
         storage,
         graph_db,

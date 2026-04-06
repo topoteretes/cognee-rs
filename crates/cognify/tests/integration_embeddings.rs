@@ -91,6 +91,8 @@ async fn test_pipeline_with_embeddings() {
     let result: CognifyResult = match cognify(
         vec![data_item],
         dataset_id,
+        None,
+        None,
         llm,
         storage.clone(),
         graph_db,
@@ -216,6 +218,8 @@ async fn test_pipeline_requires_embeddings() {
     let result: CognifyResult = match cognify(
         vec![data_item],
         dataset_id,
+        None,
+        None,
         llm,
         storage.clone(),
         graph_db,
@@ -299,6 +303,8 @@ async fn test_embedding_semantic_similarity() {
         let result: CognifyResult = match cognify(
             vec![data_item],
             dataset_id,
+            None,
+            None,
             Arc::clone(&llm),
             Arc::clone(&storage),
             Arc::clone(&graph_db),
@@ -386,6 +392,8 @@ async fn test_entity_name_indexing() {
     let result: CognifyResult = match cognify(
         vec![data_item],
         dataset_id,
+        None,
+        None,
         llm,
         storage.clone(),
         graph_db,
@@ -511,6 +519,8 @@ async fn test_triplet_embeddings_disabled_by_default() {
     let result: CognifyResult = match cognify(
         vec![data_item],
         dataset_id,
+        None,
+        None,
         llm,
         storage.clone(),
         graph_db,
@@ -598,6 +608,8 @@ async fn test_triplet_embeddings_enabled() {
     let result: CognifyResult = match cognify(
         vec![data_item],
         dataset_id,
+        None,
+        None,
         llm,
         storage.clone(),
         graph_db,
