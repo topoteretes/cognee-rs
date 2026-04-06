@@ -52,6 +52,7 @@
 
 pub mod adapters;
 pub mod config;
+pub mod dynamic_model;
 pub mod error;
 pub mod llm_trait;
 pub mod schema;
@@ -61,7 +62,11 @@ pub mod types;
 pub use adapters::LiteRtAdapter;
 pub use adapters::OpenAIAdapter;
 pub use config::{LlmConfig, LlmProvider};
+pub use dynamic_model::DynamicGraphModel;
 pub use error::{LlmError, LlmResult};
 pub use llm_trait::{Llm, LlmExt};
-pub use schema::{build_schema_prompt, generate_json_schema, generate_json_schema_string};
+pub use schema::{
+    build_schema_prompt, generate_json_schema, generate_json_schema_string, graph_model_to_schema,
+    graph_model_to_schema_string,
+};
 pub use types::{GenerationOptions, GenerationResponse, Message, MessageRole, TokenUsage};

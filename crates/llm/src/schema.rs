@@ -78,6 +78,52 @@ pub fn generate_json_schema_string<T: JsonSchema>(pretty: bool) -> String {
     }
 }
 
+/// Convert a `GraphModel` (or any `JsonSchema` type) to its JSON schema representation.
+///
+/// This is a convenience alias for [`generate_json_schema`] with a domain-specific name,
+/// mirroring Python's `graph_model_to_graph_schema()` from `cognee/shared/graph_model_utils.py`.
+///
+/// # Type Parameters
+/// * `T` - The graph model type (must implement `JsonSchema`)
+///
+/// # Returns
+/// A JSON schema as a `serde_json::Value`
+///
+/// # Example
+/// ```
+/// use cognee_llm::schema::graph_model_to_schema;
+/// use schemars::JsonSchema;
+/// use serde::{Deserialize, Serialize};
+///
+/// #[derive(Serialize, Deserialize, JsonSchema)]
+/// struct MyGraphModel {
+///     nodes: Vec<String>,
+///     edges: Vec<(String, String)>,
+/// }
+///
+/// let schema = graph_model_to_schema::<MyGraphModel>();
+/// assert!(schema["properties"].is_object());
+/// ```
+pub fn graph_model_to_schema<T: JsonSchema>() -> Value {
+    generate_json_schema::<T>()
+}
+
+/// Convert a `GraphModel` (or any `JsonSchema` type) to its JSON schema as a string.
+///
+/// Convenience wrapper around [`generate_json_schema_string`] with domain-specific naming.
+///
+/// # Type Parameters
+/// * `T` - The graph model type (must implement `JsonSchema`)
+///
+/// # Arguments
+/// * `pretty` - If true, formats the JSON with indentation
+///
+/// # Returns
+/// A JSON schema as a String
+pub fn graph_model_to_schema_string<T: JsonSchema>(pretty: bool) -> String {
+    generate_json_schema_string::<T>(pretty)
+}
+
 /// Build a system prompt that includes a JSON schema.
 ///
 /// This helper constructs a system prompt following the Python cognee pattern:
@@ -168,5 +214,24 @@ mod tests {
         assert!(prompt.contains("valid JSON"));
         assert!(prompt.contains("schema"));
         assert!(prompt.contains("name"));
+    }
+
+    #[test]
+    fn test_graph_model_to_schema() {
+        let schema = graph_model_to_schema::<TestPerson>();
+        assert!(schema.is_object());
+        // Should be identical to generate_json_schema
+        let expected = generate_json_schema::<TestPerson>();
+        assert_eq!(schema, expected);
+    }
+
+    #[test]
+    fn test_graph_model_to_schema_string() {
+        let schema_str = graph_model_to_schema_string::<TestPerson>(false);
+        let expected = generate_json_schema_string::<TestPerson>(false);
+        assert_eq!(schema_str, expected);
+
+        let pretty_str = graph_model_to_schema_string::<TestPerson>(true);
+        assert!(pretty_str.contains('\n'));
     }
 }
