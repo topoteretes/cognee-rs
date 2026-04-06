@@ -82,6 +82,12 @@ pub struct CognifyConfig {
     /// Python parameter: incremental_loading (default: True)
     pub incremental_loading: bool,
 
+    /// Enable pipeline-level caching.
+    /// When true, skips datasets whose latest pipeline run status is `Completed`.
+    /// Requires a database connection to be provided.
+    /// Python parameter: use_pipeline_cache (default: False)
+    pub use_pipeline_cache: bool,
+
     /// Enable temporal graph construction.
     /// Python parameter: temporal_cognify (default: False)
     /// Extracts events and timestamps for temporal reasoning
@@ -125,6 +131,8 @@ impl Default for CognifyConfig {
             vector_collection_prefix: String::new(),
 
             incremental_loading: true,
+
+            use_pipeline_cache: false,
 
             temporal_cognify: false,
             data_per_batch: 20,
@@ -202,6 +210,12 @@ impl CognifyConfig {
     /// Enable or disable incremental loading.
     pub fn with_incremental_loading(mut self, enable: bool) -> Self {
         self.incremental_loading = enable;
+        self
+    }
+
+    /// Enable or disable pipeline-level caching.
+    pub fn with_pipeline_cache(mut self, enable: bool) -> Self {
+        self.use_pipeline_cache = enable;
         self
     }
 
@@ -303,6 +317,9 @@ mod tests {
 
         // Incremental defaults
         assert!(config.incremental_loading);
+
+        // Pipeline cache defaults
+        assert!(!config.use_pipeline_cache);
 
         // Advanced defaults
         assert!(!config.temporal_cognify);

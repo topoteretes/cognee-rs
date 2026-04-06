@@ -1,4 +1,6 @@
-use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder,
+};
 use uuid::Uuid;
 
 use crate::conversions::{domain_status_to_entity, map_sea_err};
@@ -42,4 +44,26 @@ pub async fn get_pipeline_run(
         .await
         .map_err(map_sea_err)
         .map(|opt| opt.map(PipelineRun::from))
+}
+
+/// Get the latest pipeline run status for a (pipeline_name, dataset_id) pair.
+///
+/// Queries the `pipeline_runs` table for the most recent entry matching
+/// the given `pipeline_name` and `dataset_id`, ordered by `created_at DESC`.
+///
+/// Returns `None` if no matching run exists.
+pub async fn get_latest_pipeline_status(
+    db: &DatabaseConnection,
+    pipeline_name: &str,
+    dataset_id: Uuid,
+) -> Result<Option<PipelineRunStatus>, DatabaseError> {
+    let run = pipeline_run::Entity::find()
+        .filter(pipeline_run::Column::PipelineName.eq(pipeline_name))
+        .filter(pipeline_run::Column::DatasetId.eq(dataset_id))
+        .order_by_desc(pipeline_run::Column::CreatedAt)
+        .one(db)
+        .await
+        .map_err(map_sea_err)?;
+
+    Ok(run.map(|m| PipelineRun::from(m).status))
 }

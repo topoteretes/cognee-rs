@@ -10,7 +10,9 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use cognee_database::DatabaseConnection;
+use chrono::Utc;
+use cognee_database::ops::pipeline_runs::{create_pipeline_run, get_latest_pipeline_status};
+use cognee_database::{DatabaseConnection, PipelineRun, PipelineRunStatus};
 use cognee_embedding::engine::EmbeddingEngine;
 use cognee_graph::GraphDBTrait;
 use cognee_llm::Llm;
@@ -24,6 +26,9 @@ use crate::config::CognifyConfig;
 use crate::error::CognifyError;
 use crate::pipeline::CognifyResult;
 use crate::tasks::cognify;
+
+/// Pipeline name used for cognify pipeline run records (matches Python convention).
+const COGNIFY_PIPELINE_NAME: &str = "cognify_pipeline";
 
 // ---------------------------------------------------------------------------
 // Trait
@@ -92,6 +97,22 @@ pub async fn cognify_datasets(
     let mut results = Vec::new();
 
     for dataset in &datasets {
+        // --- Pipeline cache check ---
+        if config.use_pipeline_cache
+            && let Some(ref db_conn) = db
+        {
+            let status =
+                get_latest_pipeline_status(db_conn, COGNIFY_PIPELINE_NAME, dataset.id).await?;
+            if matches!(status, Some(PipelineRunStatus::Completed)) {
+                info!(
+                    dataset_name = %dataset.name,
+                    dataset_id = %dataset.id,
+                    "Skipping already-processed dataset (pipeline cache hit)"
+                );
+                continue;
+            }
+        }
+
         let data_items = resolver.get_dataset_data(dataset.id).await?;
 
         if data_items.is_empty() {
@@ -124,6 +145,22 @@ pub async fn cognify_datasets(
             config,
         )
         .await?;
+
+        // --- Record successful pipeline run ---
+        if let Some(ref db_conn) = db {
+            let pipeline_run_id = Uuid::new_v4();
+            let run = PipelineRun {
+                id: Uuid::new_v4(),
+                created_at: Utc::now(),
+                status: PipelineRunStatus::Completed,
+                pipeline_run_id,
+                pipeline_name: COGNIFY_PIPELINE_NAME.to_string(),
+                pipeline_id: pipeline_run_id,
+                dataset_id: dataset.id,
+                run_info: None,
+            };
+            create_pipeline_run(db_conn, run).await?;
+        }
 
         results.push(result);
     }
