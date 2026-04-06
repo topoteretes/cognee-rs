@@ -8,7 +8,7 @@ use std::sync::Arc;
 use cognee_llm::{GenerationOptions, Llm, LlmExt};
 use tracing::debug;
 
-use super::models::KnowledgeGraph;
+use super::models::{GraphModel, KnowledgeGraph};
 use crate::error::CognifyError;
 
 /// Default system prompt for knowledge graph extraction.
@@ -96,6 +96,51 @@ impl FactExtractor {
         DEFAULT_GRAPH_PROMPT
     }
 
+    /// Extract a structured model from text via LLM.
+    ///
+    /// Generic counterpart of [`extract_facts`](Self::extract_facts).
+    /// Works with any type implementing [`GraphModel`], which requires
+    /// `Serialize + DeserializeOwned + JsonSchema + Clone + Send + Sync`.
+    ///
+    /// The LLM's [`create_structured_output`](cognee_llm::LlmExt::create_structured_output)
+    /// method infers the JSON schema from `M` and deserializes the response
+    /// into the concrete type.
+    ///
+    /// No post-processing is applied; for the default [`KnowledgeGraph`] flow
+    /// with name-fallback logic, use [`extract_facts`](Self::extract_facts).
+    ///
+    /// # Arguments
+    /// * `text` - Input text to extract from
+    /// * `custom_prompt` - Optional custom system prompt (uses [`DEFAULT_GRAPH_PROMPT`] if None)
+    ///
+    /// # Errors
+    /// Returns [`CognifyError::LlmError`] if the LLM call fails
+    pub async fn extract<M: GraphModel>(
+        &self,
+        text: &str,
+        custom_prompt: Option<&str>,
+    ) -> Result<M, CognifyError> {
+        debug!("Extracting model {} from text", std::any::type_name::<M>());
+        let system_prompt = custom_prompt.unwrap_or(DEFAULT_GRAPH_PROMPT);
+
+        let result: M = self
+            .llm
+            .create_structured_output(
+                text,
+                system_prompt,
+                Some(GenerationOptions {
+                    temperature: Some(0.1),
+                    max_tokens: Some(2000),
+                    ..Default::default()
+                }),
+            )
+            .await
+            .map_err(|e| CognifyError::LlmError(e.to_string()))?;
+
+        debug!("Extracted model {}", std::any::type_name::<M>());
+        Ok(result)
+    }
+
     /// Extract facts (knowledge graph) from text.
     ///
     /// Mirrors Python's `extract_content_graph` function.
@@ -116,21 +161,8 @@ impl FactExtractor {
         custom_prompt: Option<&str>,
     ) -> Result<KnowledgeGraph, CognifyError> {
         debug!("Extracting facts from text: {}", text);
-        let system_prompt = custom_prompt.unwrap_or(DEFAULT_GRAPH_PROMPT);
 
-        let mut graph: KnowledgeGraph = self
-            .llm
-            .create_structured_output(
-                text,
-                system_prompt,
-                Some(GenerationOptions {
-                    temperature: Some(0.1), // Slightly non-zero to improve extraction robustness
-                    max_tokens: Some(2000), // Fits within small local model context windows (4096)
-                    ..Default::default()
-                }),
-            )
-            .await
-            .map_err(|e| CognifyError::LlmError(e.to_string()))?;
+        let mut graph: KnowledgeGraph = self.extract(text, custom_prompt).await?;
 
         debug!(
             "Extracted graph with {} nodes and {} edges",
@@ -324,5 +356,83 @@ mod tests {
         // Node with non-empty name should remain unchanged
         assert_eq!(graph.nodes[1].id, "techcorp");
         assert_eq!(graph.nodes[1].name, "TechCorp");
+    }
+
+    // ── Tests for the generic extract<M> method ────────────────────────
+
+    /// A custom graph model used to verify generic extraction.
+    #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+    struct CustomEvent {
+        event_name: String,
+        participants: Vec<String>,
+    }
+
+    impl super::super::models::GraphModel for CustomEvent {}
+
+    /// Mock LLM that returns a `CustomEvent` JSON payload.
+    #[derive(Clone)]
+    struct MockLlmCustom;
+
+    #[async_trait::async_trait]
+    impl Llm for MockLlmCustom {
+        async fn generate(
+            &self,
+            _messages: Vec<cognee_llm::Message>,
+            _options: Option<GenerationOptions>,
+        ) -> cognee_llm::LlmResult<cognee_llm::GenerationResponse> {
+            unimplemented!()
+        }
+
+        async fn create_structured_output_with_messages_raw(
+            &self,
+            _messages: Vec<cognee_llm::Message>,
+            _json_schema: &serde_json::Value,
+            _options: Option<GenerationOptions>,
+        ) -> cognee_llm::LlmResult<serde_json::Value> {
+            let event = CustomEvent {
+                event_name: "Conference".to_string(),
+                participants: vec!["Alice".to_string(), "Bob".to_string()],
+            };
+            Ok(serde_json::to_value(&event).unwrap())
+        }
+
+        fn model(&self) -> &str {
+            "mock-custom"
+        }
+    }
+
+    #[tokio::test]
+    async fn test_extract_generic_custom_model() {
+        let llm = Arc::new(MockLlmCustom);
+        let extractor = FactExtractor::new(llm);
+
+        let event: CustomEvent = extractor.extract("Test text", None).await.unwrap();
+        assert_eq!(event.event_name, "Conference");
+        assert_eq!(event.participants, vec!["Alice", "Bob"]);
+    }
+
+    #[tokio::test]
+    async fn test_extract_generic_knowledge_graph() {
+        // Verify that extract::<KnowledgeGraph> works (without post-processing)
+        let llm = Arc::new(MockLlmEmptyName);
+        let extractor = FactExtractor::new(llm);
+
+        let graph: KnowledgeGraph = extractor.extract("Test text", None).await.unwrap();
+        // No post-processing: empty name stays empty (unlike extract_facts)
+        assert_eq!(graph.nodes[0].name, "");
+    }
+
+    #[tokio::test]
+    async fn test_extract_facts_delegates_to_extract() {
+        // Verify extract_facts still applies post-processing on top of extract
+        let llm = Arc::new(MockLlm);
+        let extractor = FactExtractor::new(llm);
+
+        let via_extract: KnowledgeGraph = extractor.extract("Test text", None).await.unwrap();
+        let via_facts = extractor.extract_facts("Test text", None).await.unwrap();
+
+        // Both should get the same node
+        assert_eq!(via_extract.node_count(), via_facts.node_count());
+        assert_eq!(via_extract.nodes[0].id, via_facts.nodes[0].id);
     }
 }

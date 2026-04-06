@@ -317,6 +317,98 @@ pub async fn extract_graph_from_data(
 }
 
 // ---------------------------------------------------------------------------
+// Task 3b: extract_custom_graph_from_data (custom graph model path)
+// ---------------------------------------------------------------------------
+
+/// Extract a custom graph model from chunks via LLM (Task 3 — custom model variant).
+///
+/// Mirrors the Python branching at `extract_graph_from_data.py:99-103`:
+/// when the graph model is **not** the built-in [`KnowledgeGraph`], the LLM
+/// output is serialized to JSON and stored directly in each
+/// [`DocumentChunk::contains`] without entity/edge expansion, deduplication,
+/// or graph DB storage.
+///
+/// This function is the generic counterpart of [`extract_graph_from_data`].
+/// It accepts any type implementing [`GraphModel`].
+///
+/// The returned [`ExtractedGraphData`] will have empty `entities` and `edges`
+/// fields (those only apply to the default KnowledgeGraph flow).
+///
+/// # Type Parameters
+/// * `M` — A type implementing [`GraphModel`]. Must be `Serialize +
+///   DeserializeOwned + JsonSchema + Clone + Send + Sync + 'static`.
+///
+/// # Errors
+/// - [`CognifyError::LlmError`] if any LLM call fails
+/// - [`CognifyError::SerializationError`] if the extracted model cannot be
+///   serialized to JSON
+pub async fn extract_custom_graph_from_data<M: crate::fact_extraction::GraphModel>(
+    input: &ExtractedChunks,
+    llm: Arc<dyn Llm>,
+    config: &CognifyConfig,
+) -> Result<ExtractedGraphData, CognifyError> {
+    if input.chunks.is_empty() {
+        return Ok(ExtractedGraphData {
+            chunks: input.chunks.clone(),
+            entities: vec![],
+            edges: vec![],
+            dataset_id: input.dataset_id,
+            user_id: input.user_id,
+            tenant_id: input.tenant_id,
+        });
+    }
+
+    let batch_size = config.chunks_per_batch;
+    let semaphore = Arc::new(Semaphore::new(config.max_parallel_extractions));
+
+    let mut updated_chunks = input.chunks.clone();
+    let total_batches = updated_chunks.len().div_ceil(batch_size);
+
+    for (batch_idx, batch_range) in updated_chunks.chunks_mut(batch_size).enumerate() {
+        let mut extract_tasks = Vec::new();
+
+        for chunk in batch_range.iter() {
+            let extractor = FactExtractor::new(Arc::clone(&llm));
+            let text = chunk.text.clone();
+            let sem = Arc::clone(&semaphore);
+            let prompt = config.custom_extraction_prompt.clone();
+
+            extract_tasks.push(tokio::spawn(async move {
+                let _permit = sem.acquire().await.unwrap();
+                extractor.extract::<M>(&text, prompt.as_deref()).await
+            }));
+        }
+
+        let batch_results = futures::future::join_all(extract_tasks).await;
+        let batch_len = batch_range.len();
+
+        for (i, result) in batch_results.into_iter().enumerate() {
+            let model: M =
+                result.map_err(|e| CognifyError::FactExtractionError(e.to_string()))??;
+            let value = serde_json::to_value(&model)
+                .map_err(|e| CognifyError::SerializationError(e.to_string()))?;
+            batch_range[i].contains = vec![value];
+        }
+
+        info!(
+            "Processed custom graph extraction batch {}/{} ({} chunks)",
+            batch_idx + 1,
+            total_batches,
+            batch_len
+        );
+    }
+
+    Ok(ExtractedGraphData {
+        chunks: updated_chunks,
+        entities: vec![],
+        edges: vec![],
+        dataset_id: input.dataset_id,
+        user_id: input.user_id,
+        tenant_id: input.tenant_id,
+    })
+}
+
+// ---------------------------------------------------------------------------
 // Task 4: summarize_text
 // ---------------------------------------------------------------------------
 

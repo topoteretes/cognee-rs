@@ -9,4 +9,4 @@ pub mod extractor;
 pub mod models;
 
 pub use extractor::FactExtractor;
-pub use models::{Edge, KnowledgeGraph, Node};
+pub use models::{Edge, GraphModel, KnowledgeGraph, Node};

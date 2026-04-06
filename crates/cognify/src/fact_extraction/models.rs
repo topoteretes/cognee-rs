@@ -7,7 +7,35 @@
 //! - KnowledgeGraph: Collection of nodes and edges
 
 use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
+
+/// Marker trait for types that can be used as graph extraction models.
+///
+/// Types implementing this trait can be extracted from text via LLM
+/// structured output. The LLM generates JSON conforming to the type's
+/// [`JsonSchema`], which is then deserialized into the concrete type.
+///
+/// The built-in [`KnowledgeGraph`] model implements this trait with
+/// `is_default_knowledge_graph() == true`, which triggers additional
+/// post-processing (entity/edge expansion, deduplication, graph DB storage).
+/// Custom models return `false`, causing the extracted value to be stored
+/// directly in [`DocumentChunk::contains`] as serialized JSON — mirroring
+/// the Python branching at `extract_graph_from_data.py:99-103`.
+///
+/// # Required bounds
+/// `Serialize + DeserializeOwned + JsonSchema + Clone + Send + Sync + 'static`
+pub trait GraphModel:
+    Serialize + DeserializeOwned + JsonSchema + Clone + Send + Sync + 'static
+{
+    /// Returns `true` if this is the built-in [`KnowledgeGraph`] model.
+    ///
+    /// Custom models should leave the default (`false`), which changes
+    /// the processing flow: extracted data is stored as-is in chunk metadata
+    /// instead of being expanded into graph nodes and edges.
+    fn is_default_knowledge_graph() -> bool {
+        false
+    }
+}
 
 /// Node in a knowledge graph.
 ///
@@ -107,6 +135,12 @@ impl Default for KnowledgeGraph {
     }
 }
 
+impl GraphModel for KnowledgeGraph {
+    fn is_default_knowledge_graph() -> bool {
+        true
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -161,5 +195,33 @@ mod tests {
         assert!(!graph.is_empty());
         assert_eq!(graph.node_count(), 1);
         assert_eq!(graph.edge_count(), 1);
+    }
+
+    #[test]
+    fn test_knowledge_graph_is_default() {
+        assert!(KnowledgeGraph::is_default_knowledge_graph());
+    }
+
+    /// A custom graph model for testing the `GraphModel` trait.
+    #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+    struct CustomModel {
+        items: Vec<String>,
+    }
+
+    impl GraphModel for CustomModel {}
+
+    #[test]
+    fn test_custom_model_is_not_default() {
+        assert!(!CustomModel::is_default_knowledge_graph());
+    }
+
+    #[test]
+    fn test_custom_model_roundtrip() {
+        let model = CustomModel {
+            items: vec!["a".to_string(), "b".to_string()],
+        };
+        let json = serde_json::to_string(&model).unwrap();
+        let deserialized: CustomModel = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.items, vec!["a", "b"]);
     }
 }

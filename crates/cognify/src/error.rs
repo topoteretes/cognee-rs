@@ -42,6 +42,9 @@ pub enum CognifyError {
 
     #[error("Database error: {0}")]
     DatabaseError(String),
+
+    #[error("Serialization error: {0}")]
+    SerializationError(String),
 }
 
 /// Convert GraphDBError to CognifyError
