@@ -32,7 +32,7 @@ use cognee_storage::StorageTrait;
 use cognee_vector::{VectorDB, VectorPoint};
 use serde_json::json;
 use tokio::sync::Semaphore;
-use tracing::info;
+use tracing::{info, warn};
 use uuid::Uuid;
 
 use crate::config::CognifyConfig;
@@ -133,10 +133,15 @@ pub fn classify_documents(input: &CognifyInput) -> Result<ClassifiedDocuments, C
 ///
 /// For each document, reads content from storage and applies the
 /// word → sentence → paragraph → text chunker hierarchy.
+///
+/// When `db` is `Some`, the accumulated token count for each document
+/// is written back to the corresponding `Data` record, mirroring
+/// Python's `update_document_token_count()`.
 pub async fn extract_chunks_from_documents(
     input: &ClassifiedDocuments,
     storage: &dyn StorageTrait,
     max_chunk_size: usize,
+    db: Option<&DatabaseConnection>,
 ) -> Result<ExtractedChunks, CognifyError> {
     let counter = WordCounter;
     let mut all_chunks = Vec::new();
@@ -157,6 +162,24 @@ pub async fn extract_chunks_from_documents(
         if document.base.belongs_to_set.is_some() {
             for chunk in &mut chunks {
                 chunk.base.belongs_to_set = document.base.belongs_to_set.clone();
+            }
+        }
+
+        // Accumulate token count and write back to the Data record.
+        // Mirrors Python: update_document_token_count(document.id, document_token_count)
+        if let Some(db) = db {
+            let document_token_count: i64 = chunks.iter().map(|c| c.chunk_size as i64).sum();
+            if let Err(e) = cognee_database::ops::data::update_data_token_count(
+                db,
+                document.data_id,
+                document_token_count,
+            )
+            .await
+            {
+                warn!(
+                    data_id = %document.data_id,
+                    "Failed to update token count: {e}"
+                );
             }
         }
 
@@ -695,9 +718,10 @@ pub async fn cognify(
         return Ok(CognifyResult::empty());
     }
 
-    // Task 2: Extract text chunks
+    // Task 2: Extract text chunks (with token count write-back when DB available)
     let mut extracted_chunks =
-        extract_chunks_from_documents(&classified, &*storage, config.max_chunk_size).await?;
+        extract_chunks_from_documents(&classified, &*storage, config.max_chunk_size, db.as_deref())
+            .await?;
 
     // Stamp provenance on extracted chunks
     for chunk in &mut extracted_chunks.chunks {
@@ -1349,12 +1373,14 @@ pub fn make_classify_documents_task() -> TypedTask<CognifyInput, ClassifiedDocum
 pub fn make_extract_chunks_task(
     storage: Arc<dyn StorageTrait>,
     max_chunk_size: usize,
+    db: Option<Arc<DatabaseConnection>>,
 ) -> TypedTask<ClassifiedDocuments, ExtractedChunks> {
     TypedTask::async_fn(move |input: &ClassifiedDocuments, _ctx| {
         let input = input.clone();
         let storage = Arc::clone(&storage);
+        let db = db.clone();
         Box::pin(async move {
-            extract_chunks_from_documents(&input, &*storage, max_chunk_size)
+            extract_chunks_from_documents(&input, &*storage, max_chunk_size, db.as_deref())
                 .await
                 .map(Box::new)
                 .map_err(|e| format!("{e}").into())
@@ -1447,7 +1473,11 @@ pub fn build_cognify_pipeline(
     config: CognifyConfig,
 ) -> Pipeline {
     PipelineBuilder::new_with_task("cognify", make_classify_documents_task())
-        .add_task(make_extract_chunks_task(storage, config.max_chunk_size))
+        .add_task(make_extract_chunks_task(
+            storage,
+            config.max_chunk_size,
+            db.clone(),
+        ))
         .add_task(make_extract_graph_task(
             Arc::clone(&llm),
             Arc::clone(&graph_db),
@@ -1561,7 +1591,7 @@ mod tests {
             tenant_id: None,
         };
 
-        let result = extract_chunks_from_documents(&input, &*storage, 100)
+        let result = extract_chunks_from_documents(&input, &*storage, 100, None)
             .await
             .unwrap();
         assert!(!result.chunks.is_empty());
@@ -1577,7 +1607,7 @@ mod tests {
             tenant_id: None,
         };
 
-        let result = extract_chunks_from_documents(&input, &*storage, 100)
+        let result = extract_chunks_from_documents(&input, &*storage, 100, None)
             .await
             .unwrap();
         assert!(result.chunks.is_empty());
