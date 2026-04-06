@@ -44,6 +44,7 @@ use crate::graph_integration::{
 };
 use crate::pipeline::{CognifyResult, IndexedFieldsStats};
 use crate::summarization::{SummaryExtractor, TextSummary};
+use cognee_models::DataPoint;
 
 // ---------------------------------------------------------------------------
 // Intermediate types
@@ -529,6 +530,27 @@ pub async fn add_data_points(
 }
 
 // ---------------------------------------------------------------------------
+// Provenance stamping helper
+// ---------------------------------------------------------------------------
+
+/// Stamp pipeline provenance fields on a [`DataPoint`].
+///
+/// Only sets each field if it is currently `None`, so earlier (more specific)
+/// stamps are never overwritten.  Mirrors the Python
+/// `run_tasks_base.py` post-task provenance stamping.
+fn stamp_provenance(dp: &mut DataPoint, pipeline: &str, task: &str, user: Option<&str>) {
+    if dp.source_pipeline.is_none() {
+        dp.source_pipeline = Some(pipeline.to_string());
+    }
+    if dp.source_task.is_none() {
+        dp.source_task = Some(task.to_string());
+    }
+    if dp.source_user.is_none() {
+        dp.source_user = user.map(String::from);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Convenience function: sequential execution of all tasks
 // ---------------------------------------------------------------------------
 
@@ -562,6 +584,10 @@ pub async fn cognify(
         config.chunks_per_batch, config.max_chunk_size
     );
 
+    // Derive user string for provenance stamping
+    let user_str = user_id.as_ref().map(|id| id.to_string());
+    let user_str_ref = user_str.as_deref();
+
     let input = CognifyInput {
         data_items,
         dataset_id,
@@ -570,15 +596,35 @@ pub async fn cognify(
     };
 
     // Task 1: Classify documents
-    let classified = classify_documents(&input)?;
+    let mut classified = classify_documents(&input)?;
+
+    // Stamp provenance on classified documents
+    for doc in &mut classified.documents {
+        stamp_provenance(
+            &mut doc.base,
+            "cognify_pipeline",
+            "classify_documents",
+            user_str_ref,
+        );
+    }
 
     if classified.documents.is_empty() {
         return Ok(CognifyResult::empty());
     }
 
     // Task 2: Extract text chunks
-    let extracted_chunks =
+    let mut extracted_chunks =
         extract_chunks_from_documents(&classified, &*storage, config.max_chunk_size).await?;
+
+    // Stamp provenance on extracted chunks
+    for chunk in &mut extracted_chunks.chunks {
+        stamp_provenance(
+            &mut chunk.base,
+            "cognify_pipeline",
+            "extract_chunks_from_documents",
+            user_str_ref,
+        );
+    }
 
     if extracted_chunks.chunks.is_empty() {
         return Ok(CognifyResult::empty());
@@ -587,7 +633,7 @@ pub async fn cognify(
     info!("Extracted {} chunks", extracted_chunks.chunks.len());
 
     // Task 3: Extract knowledge graph
-    let graph_data = extract_graph_from_data(
+    let mut graph_data = extract_graph_from_data(
         &extracted_chunks,
         Arc::clone(&llm),
         Arc::clone(&graph_db),
@@ -595,8 +641,34 @@ pub async fn cognify(
     )
     .await?;
 
+    // Stamp provenance on extracted graph entities
+    for pair in &mut graph_data.entities {
+        stamp_provenance(
+            &mut pair.entity.base,
+            "cognify_pipeline",
+            "extract_graph_from_data",
+            user_str_ref,
+        );
+        stamp_provenance(
+            &mut pair.entity_type.base,
+            "cognify_pipeline",
+            "extract_graph_from_data",
+            user_str_ref,
+        );
+    }
+
     // Task 4: Summarize text
-    let summarized = summarize_text(&graph_data, llm, config).await?;
+    let mut summarized = summarize_text(&graph_data, llm, config).await?;
+
+    // Stamp provenance on generated summaries
+    for summary in &mut summarized.summaries {
+        stamp_provenance(
+            &mut summary.base,
+            "cognify_pipeline",
+            "summarize_text",
+            user_str_ref,
+        );
+    }
 
     // Task 5: Add data points (embeddings + vector indexing + provenance)
     add_data_points(
