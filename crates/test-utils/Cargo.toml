@@ -4,9 +4,15 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+async-trait.workspace = true
 cognee-core = { path = "../core" }
 cognee-database = { path = "../database" }
 cognee-graph = { path = "../graph", features = ["testing"] }
+cognee-llm = { path = "../llm" }
 cognee-storage = { path = "../storage", features = ["testing"] }
 cognee-vector = { path = "../vector", features = ["testing"] }
+serde_json.workspace = true
 uuid.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

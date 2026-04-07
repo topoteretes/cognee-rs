@@ -7,6 +7,9 @@ pub mod error;
 pub mod text_chunker;
 pub mod token_counter;
 
+#[cfg(test)]
+pub(crate) mod test_inputs;
+
 pub use cognify_pipeline::ExtractTextChunksPipeline;
 pub use cut_type::CutType;
 pub use error::ChunkingError;

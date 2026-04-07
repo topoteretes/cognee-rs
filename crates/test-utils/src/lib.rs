@@ -3,6 +3,8 @@
 //! Re-exports mock implementations and provides helpers for constructing
 //! [`TaskContext`] in tests without requiring real database backends.
 
+pub mod mock_llm;
+
 use std::sync::Arc;
 
 use cognee_core::{CancellationHandle, RayonThreadPool, TaskContext, TaskContextBuilder};
@@ -11,6 +13,7 @@ use cognee_database::DatabaseConnection;
 pub use cognee_graph::MockGraphDB;
 pub use cognee_storage::MockStorage;
 pub use cognee_vector::MockVectorDB;
+pub use mock_llm::MockLlm;
 
 /// Build a [`TaskContext`] with all-mock backends and an in-memory SQLite database.
 ///
