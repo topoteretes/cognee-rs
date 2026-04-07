@@ -299,12 +299,24 @@ fn extract_file_metadata(input: &DataInput) -> (String, String, String, Option<S
 }
 
 /// Convert a relative storage location into a `file://` absolute URI.
+///
+/// Mirrors Python's `Path(full_file_path).as_uri()` which always produces
+/// an absolute `file:///…` URI.  If `base_path` is relative, it is
+/// resolved against the current working directory first so that the URI
+/// stored in the database is always absolute and self-contained.
 fn storage_location_to_uri(base_path: &str, location: &str) -> String {
     if base_path.is_empty() {
         // MockStorage or other non-filesystem backend — return as-is
         location.to_string()
     } else {
-        let abs = Path::new(base_path).join(location);
+        let joined = Path::new(base_path).join(location);
+        // Canonicalize to absolute; fall back to manual cwd join on error
+        // (e.g. the path doesn't exist on disk yet during tests).
+        let abs = if joined.is_absolute() {
+            joined
+        } else {
+            std::env::current_dir().unwrap_or_default().join(&joined)
+        };
         format!("file://{}", abs.display())
     }
 }

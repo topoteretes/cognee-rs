@@ -1,6 +1,6 @@
 use super::storage_trait::{StorageError, StorageTrait, StorageWriter};
 use async_trait::async_trait;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tokio::fs;
 use tokio::io::{AsyncRead, AsyncWriteExt};
 use tracing::{debug, instrument};
@@ -26,6 +26,29 @@ impl LocalStorage {
         let dir2 = &uuid_str[2..4];
 
         format!("{}/{}/{}", dir1, dir2, file_name)
+    }
+
+    /// Resolve a location string into a filesystem path.
+    ///
+    /// Mirrors Python's `get_data_file_path()` + `open_data_file()` which
+    /// strips the `file://` scheme and uses the resulting absolute path
+    /// directly.
+    ///
+    /// Accepted inputs:
+    /// - plain relative path: `ab/cd/file.txt`  → `base_path/ab/cd/file.txt`
+    /// - absolute `file://` URI: `file:///data/ab/cd/file.txt` → `/data/ab/cd/file.txt`
+    fn resolve_location(&self, location: &str) -> PathBuf {
+        let path_str = location.strip_prefix("file://").unwrap_or(location);
+        let path = Path::new(path_str);
+
+        if path.is_absolute() {
+            // Absolute path (from a file:// URI) — use directly, just like
+            // Python's `open_data_file` does after `get_data_file_path()`.
+            path.to_path_buf()
+        } else {
+            // Relative path (plain storage location) — join with base.
+            self.base_path.join(path)
+        }
     }
 }
 
@@ -120,7 +143,7 @@ impl StorageTrait for LocalStorage {
 
     #[instrument(name = "storage.retrieve", skip(self), fields(location))]
     async fn retrieve(&self, location: &str) -> Result<Vec<u8>, StorageError> {
-        let full_path = self.base_path.join(location);
+        let full_path = self.resolve_location(location);
 
         let bytes = fs::read(&full_path).await.map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
@@ -134,7 +157,7 @@ impl StorageTrait for LocalStorage {
     }
 
     async fn exists(&self, location: &str) -> Result<bool, StorageError> {
-        let full_path = self.base_path.join(location);
+        let full_path = self.resolve_location(location);
 
         fs::try_exists(&full_path)
             .await
@@ -143,7 +166,7 @@ impl StorageTrait for LocalStorage {
 
     #[instrument(name = "storage.delete", skip(self), fields(location))]
     async fn delete(&self, location: &str) -> Result<(), StorageError> {
-        let full_path = self.base_path.join(location);
+        let full_path = self.resolve_location(location);
 
         fs::remove_file(&full_path).await.map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
@@ -155,7 +178,7 @@ impl StorageTrait for LocalStorage {
     }
 
     fn get_full_path(&self, location: &str) -> PathBuf {
-        self.base_path.join(location)
+        self.resolve_location(location)
     }
 
     fn base_path(&self) -> &str {
@@ -194,6 +217,52 @@ mod tests {
 
         assert!(storage.exists(&location).await.unwrap());
         assert!(!storage.exists("nonexistent.txt").await.unwrap());
+    }
+
+    #[test]
+    fn resolve_plain_relative_path() {
+        let storage = LocalStorage::new(PathBuf::from("/data"));
+        assert_eq!(
+            storage.resolve_location("ab/cd/file.txt"),
+            PathBuf::from("/data/ab/cd/file.txt")
+        );
+    }
+
+    #[test]
+    fn resolve_absolute_file_uri() {
+        // file:// URI with an absolute path — strip scheme, use path as-is
+        // (mirrors Python's get_data_file_path for file:///abs/path)
+        let storage = LocalStorage::new(PathBuf::from("/data"));
+        assert_eq!(
+            storage.resolve_location("file:///data/ab/cd/file.txt"),
+            PathBuf::from("/data/ab/cd/file.txt")
+        );
+    }
+
+    #[test]
+    fn resolve_absolute_file_uri_different_base() {
+        // URI points to a different directory than base_path — still works
+        let storage = LocalStorage::new(PathBuf::from("/data"));
+        assert_eq!(
+            storage.resolve_location("file:///other/ab/cd/file.txt"),
+            PathBuf::from("/other/ab/cd/file.txt")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_retrieve_with_file_uri() {
+        let temp_dir = TempDir::new().unwrap();
+        let storage = LocalStorage::new(temp_dir.path().to_path_buf());
+        storage.initialize().await.unwrap();
+
+        let data = b"URI test data";
+        let relative = storage.store(data, "uri_test.txt").await.unwrap();
+
+        // Build a file:// URI the same way the ingestion pipeline does
+        let uri = format!("file://{}", temp_dir.path().join(&relative).display());
+
+        let retrieved = storage.retrieve(&uri).await.unwrap();
+        assert_eq!(data.to_vec(), retrieved);
     }
 
     #[tokio::test]
