@@ -220,22 +220,22 @@ async fn test_search_type_matrix() {
     );
 
     // ── Step 7: Graph/vector consistency check ───────────────────────────────
-    let (_, graph_edges) = graph_db.get_graph_data().await.expect("get_graph_data");
+    // The graph contains both LLM-extracted edges and structural edges
+    // (contains, is_part_of, has_type, etc.), but triplet embeddings are only
+    // created for LLM-extracted edges.  Compare the cognify result's triplet
+    // count against the vector collection size.
     let triplet_size = vector_db
         .collection_size("Triplet", "embeddable_text")
         .await
         .expect("collection_size Triplet");
     assert_eq!(
-        graph_edges.len(),
-        triplet_size,
-        "Edge count in graph ({}) should equal Triplet vector collection size ({})",
-        graph_edges.len(),
-        triplet_size
+        result.indexed_fields.triplet_count, triplet_size,
+        "Cognify triplet count ({}) should equal Triplet vector collection size ({})",
+        result.indexed_fields.triplet_count, triplet_size
     );
     println!(
-        "✓ Graph/vector consistency: {} edges = {} triplet vectors",
-        graph_edges.len(),
-        triplet_size
+        "✓ Graph/vector consistency: {} triplets indexed = {} triplet vectors",
+        result.indexed_fields.triplet_count, triplet_size
     );
 
     // ── Steps 8–11: Search matrix ────────────────────────────────────────────

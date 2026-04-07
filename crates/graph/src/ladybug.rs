@@ -484,7 +484,7 @@ impl GraphDBTrait for LadybugAdapter {
     async fn has_node(&self, node_id: &str) -> GraphDBResult<bool> {
         let query = format!(
             "MATCH (n:Node) WHERE n.id = '{}' RETURN COUNT(n) AS count",
-            node_id.replace("'", "\\'")
+            node_id.replace('\\', "\\\\").replace('\'', "\\'")
         );
 
         let results = self.execute_query(&query)?;
@@ -519,12 +519,12 @@ impl GraphDBTrait for LadybugAdapter {
                 updated_at: timestamp('{}'),
                 properties: '{}'
             }})"#,
-            props.id.replace("'", "\\'"),
-            props.name.replace("'", "\\'"),
-            props.node_type.replace("'", "\\'"),
+            props.id.replace('\\', "\\\\").replace('\'', "\\'"),
+            props.name.replace('\\', "\\\\").replace('\'', "\\'"),
+            props.node_type.replace('\\', "\\\\").replace('\'', "\\'"),
             created_at_str,
             updated_at_str,
-            props.properties.replace("'", "\\'")
+            props.properties.replace('\\', "\\\\").replace('\'', "\\'")
         );
 
         conn.query(&query)
@@ -573,12 +573,12 @@ impl GraphDBTrait for LadybugAdapter {
                 updated_at: timestamp('{}'),
                 properties: '{}'
             }})"#,
-                        props.id.replace("'", "\\'"),
-                        props.name.replace("'", "\\'"),
-                        props.node_type.replace("'", "\\'"),
+                        props.id.replace('\\', "\\\\").replace('\'', "\\'"),
+                        props.name.replace('\\', "\\\\").replace('\'', "\\'"),
+                        props.node_type.replace('\\', "\\\\").replace('\'', "\\'"),
                         created_at_str,
                         updated_at_str,
-                        props.properties.replace("'", "\\'")
+                        props.properties.replace('\\', "\\\\").replace('\'', "\\'")
                     )
                 })
                 .collect();
@@ -605,7 +605,7 @@ impl GraphDBTrait for LadybugAdapter {
 
         let query = format!(
             "MATCH (n:Node) WHERE n.id = '{}' DETACH DELETE n",
-            node_id.replace("'", "\\'")
+            node_id.replace('\\', "\\\\").replace('\'', "\\'")
         );
 
         conn.query(&query)
@@ -624,7 +624,7 @@ impl GraphDBTrait for LadybugAdapter {
     async fn get_node(&self, node_id: &str) -> GraphDBResult<Option<NodeData>> {
         let query = format!(
             "MATCH (n:Node) WHERE n.id = '{}' RETURN n.id AS id, n.name AS name, n.type AS type, n.properties AS properties",
-            node_id.replace("'", "\\'")
+            node_id.replace('\\', "\\\\").replace('\'', "\\'")
         );
 
         let results = self.execute_query(&query)?;
@@ -670,9 +670,9 @@ impl GraphDBTrait for LadybugAdapter {
     ) -> GraphDBResult<bool> {
         let query = format!(
             "MATCH (a:Node)-[r:EDGE]->(b:Node) WHERE a.id = '{}' AND b.id = '{}' AND r.relationship_name = '{}' RETURN COUNT(r) AS count",
-            source_id.replace("'", "\\'"),
-            target_id.replace("'", "\\'"),
-            relationship_name.replace("'", "\\'")
+            source_id.replace('\\', "\\\\").replace('\'', "\\'"),
+            target_id.replace('\\', "\\\\").replace('\'', "\\'"),
+            relationship_name.replace('\\', "\\\\").replace('\'', "\\'")
         );
 
         let results = self.execute_query(&query)?;
@@ -729,12 +729,12 @@ impl GraphDBTrait for LadybugAdapter {
                 updated_at: timestamp('{}'),
                 properties: '{}'
             }}]->(b)"#,
-            source_id.replace("'", "\\'"),
-            target_id.replace("'", "\\'"),
-            relationship_name.replace("'", "\\'"),
+            source_id.replace('\\', "\\\\").replace('\'', "\\'"),
+            target_id.replace('\\', "\\\\").replace('\'', "\\'"),
+            relationship_name.replace('\\', "\\\\").replace('\'', "\\'"),
             timestamp_str,
             timestamp_str,
-            props_json.replace("'", "\\'")
+            props_json.replace('\\', "\\\\").replace('\'', "\\'")
         );
 
         conn.query(&query)
@@ -754,7 +754,7 @@ impl GraphDBTrait for LadybugAdapter {
     async fn get_edges(&self, node_id: &str) -> GraphDBResult<Vec<EdgeData>> {
         let query = format!(
             "MATCH (n:Node)-[r:EDGE]-(m:Node) WHERE n.id = '{}' RETURN n.id AS source_id, m.id AS target_id, r.relationship_name AS rel_name, r.properties AS props",
-            node_id.replace("'", "\\'")
+            node_id.replace('\\', "\\\\").replace('\'', "\\'")
         );
 
         let results = self.execute_query(&query)?;
@@ -785,7 +785,7 @@ impl GraphDBTrait for LadybugAdapter {
     async fn get_neighbors(&self, node_id: &str) -> GraphDBResult<Vec<NodeData>> {
         let query = format!(
             "MATCH (n:Node)-[r:EDGE]-(m:Node) WHERE n.id = '{}' RETURN DISTINCT m.id AS id, m.name AS name, m.type AS type, m.properties AS properties",
-            node_id.replace("'", "\\'")
+            node_id.replace('\\', "\\\\").replace('\'', "\\'")
         );
 
         let results = self.execute_query(&query)?;
@@ -841,7 +841,7 @@ impl GraphDBTrait for LadybugAdapter {
                 m.name AS target_name,
                 m.type AS target_type,
                 m.properties AS target_props"#,
-            node_id.replace("'", "\\'")
+            node_id.replace('\\', "\\\\").replace('\'', "\\'")
         );
 
         let results = self.execute_query(&query)?;
@@ -1009,7 +1009,11 @@ impl GraphDBTrait for LadybugAdapter {
                     .iter()
                     .map(|v| {
                         if let Some(s) = v.as_str() {
-                            format!("n.{} = '{}'", attr, s.replace("'", "\\'"))
+                            format!(
+                                "n.{} = '{}'",
+                                attr,
+                                s.replace('\\', "\\\\").replace('\'', "\\'")
+                            )
                         } else {
                             format!("n.{} = {}", attr, v)
                         }
@@ -1080,7 +1084,7 @@ impl GraphDBTrait for LadybugAdapter {
         // Build IN clause for edge query
         let id_list = node_ids
             .iter()
-            .map(|id| format!("'{}'", id.replace("'", "\\'")))
+            .map(|id| format!("'{}'", id.replace('\\', "\\\\").replace('\'', "\\'")))
             .collect::<Vec<_>>()
             .join(", ");
 
@@ -1123,14 +1127,14 @@ impl GraphDBTrait for LadybugAdapter {
         // Build IN clause for names
         let name_list = node_names
             .iter()
-            .map(|name| format!("'{}'", name.replace("'", "\\'")))
+            .map(|name| format!("'{}'", name.replace('\\', "\\\\").replace('\'', "\\'")))
             .collect::<Vec<_>>()
             .join(", ");
 
         // Query for specific nodes
         let nodes_query = format!(
             "MATCH (n:Node) WHERE n.type = '{}' AND n.name IN [{}] RETURN n.id AS id, n.name AS name, n.type AS type, n.properties AS properties",
-            node_type.replace("'", "\\'"),
+            node_type.replace('\\', "\\\\").replace('\'', "\\'"),
             name_list
         );
 
@@ -1171,7 +1175,7 @@ impl GraphDBTrait for LadybugAdapter {
 
         let id_list = node_ids
             .iter()
-            .map(|id| format!("'{}'", id.replace("'", "\\'")))
+            .map(|id| format!("'{}'", id.replace('\\', "\\\\").replace('\'', "\\'")))
             .collect::<Vec<_>>()
             .join(", ");
 

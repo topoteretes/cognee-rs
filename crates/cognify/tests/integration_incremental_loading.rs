@@ -47,7 +47,9 @@ impl Llm for TestMockLlm {
         let schema_str = json_schema.to_string();
         if schema_str.contains("summary") {
             // Summarization step expects SummarizedContent
-            Ok(serde_json::json!({"summary": "A test summary.", "description": "A test description."}))
+            Ok(
+                serde_json::json!({"summary": "A test summary.", "description": "A test description."}),
+            )
         } else {
             // Graph extraction step expects nodes/edges
             Ok(serde_json::json!({"nodes": [], "edges": []}))
