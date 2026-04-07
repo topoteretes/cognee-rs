@@ -40,11 +40,18 @@ impl Llm for TestMockLlm {
     async fn create_structured_output_with_messages_raw(
         &self,
         _messages: Vec<Message>,
-        _json_schema: &Value,
+        json_schema: &Value,
         _options: Option<GenerationOptions>,
     ) -> Result<Value, LlmError> {
-        // Try graph first, fall back to summary
-        Ok(serde_json::json!({"nodes": [], "edges": []}))
+        // Inspect the schema to return the right shape for each pipeline stage.
+        let schema_str = json_schema.to_string();
+        if schema_str.contains("summary") {
+            // Summarization step expects SummarizedContent
+            Ok(serde_json::json!({"summary": "A test summary.", "description": "A test description."}))
+        } else {
+            // Graph extraction step expects nodes/edges
+            Ok(serde_json::json!({"nodes": [], "edges": []}))
+        }
     }
 
     fn model(&self) -> &str {
