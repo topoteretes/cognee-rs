@@ -176,4 +176,34 @@ mod tests {
         let reconstructed: String = chunks.iter().map(|c| c.text).collect();
         assert_eq!(reconstructed, input);
     }
+
+    #[test]
+    fn isomorphism_parametrized() {
+        use crate::test_inputs::ALL_INPUTS;
+
+        for &(name, input) in ALL_INPUTS {
+            let chunks = chunk_by_word(input);
+            let reconstructed: String = chunks.iter().map(|c| c.text).collect();
+            assert_eq!(reconstructed, input, "isomorphism failed for '{name}'");
+        }
+    }
+
+    #[test]
+    fn no_internal_spaces_in_word_chunks() {
+        use crate::test_inputs::ALL_INPUTS;
+
+        for &(name, input) in ALL_INPUTS {
+            if input.is_empty() {
+                continue;
+            }
+            let chunks = chunk_by_word(input);
+            for (i, chunk) in chunks.iter().enumerate() {
+                assert!(
+                    !chunk.text.trim().contains(' '),
+                    "chunk {i} in '{name}' has internal space: {:?}",
+                    chunk.text
+                );
+            }
+        }
+    }
 }

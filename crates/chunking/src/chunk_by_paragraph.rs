@@ -186,4 +186,62 @@ mod tests {
         let chunks2 = chunk_by_paragraph(text, 100, true, &WordCounter);
         assert_eq!(chunks1[0].chunk_id, chunks2[0].chunk_id);
     }
+
+    #[test]
+    fn ground_truth_whole_text() {
+        use crate::cut_type::CutType;
+
+        let input = "The quick brown fox jumps over the lazy dog. It was a sunny day.\n\
+                     The rain in Spain falls mainly on the plain. A stitch in time saves nine. An apple a day keeps the doctor away.\n\
+                     To be or not to be that is the question. All that glitters is not gold. Actions speak louder than words. The pen is mightier than the sword. Knowledge is power above all else.";
+        let counter = WordCounter;
+        let chunks = chunk_by_paragraph(input, 12, true, &counter);
+
+        // With max_chunk_size=12 and batch_paragraphs=true, the text is split
+        // into multiple chunks by overflow. Each chunk respects the 12-word limit.
+        assert!(
+            chunks.len() >= 2,
+            "expected at least 2 chunks, got {}",
+            chunks.len()
+        );
+
+        // All chunk sizes should be within the limit
+        for (i, chunk) in chunks.iter().enumerate() {
+            assert!(
+                chunk.chunk_size <= 12,
+                "chunk {i} has size {} > 12",
+                chunk.chunk_size
+            );
+        }
+
+        // Last chunk — text ends with sentence-ending punctuation "."
+        let last = chunks.last().unwrap();
+        assert_eq!(last.cut_type, CutType::SentenceEnd);
+
+        // Verify indices are sequential
+        for (i, chunk) in chunks.iter().enumerate() {
+            assert_eq!(chunk.chunk_index, i, "chunk_index mismatch at {i}");
+        }
+    }
+
+    #[test]
+    fn ground_truth_cut_text() {
+        use crate::cut_type::CutType;
+
+        let input = "The quick brown fox jumps over the lazy dog. It was a sunny day.\n\
+                     The rain in Spain falls mainly on the plain. A stitch in time saves nine. An apple a day keeps the doctor away.\n\
+                     To be or not to be that is the question. All that glitters is not gold. Actions speak louder than words. The pen is mightier than the sword. Knowledge is power above all else";
+        let counter = WordCounter;
+        let chunks = chunk_by_paragraph(input, 12, true, &counter);
+
+        assert!(chunks.len() >= 2, "expected at least 2 chunks");
+
+        // Last chunk should be SentenceCut (no trailing punctuation)
+        let last = chunks.last().unwrap();
+        assert_eq!(
+            last.cut_type,
+            CutType::SentenceCut,
+            "last chunk should be SentenceCut when text doesn't end with punctuation"
+        );
+    }
 }

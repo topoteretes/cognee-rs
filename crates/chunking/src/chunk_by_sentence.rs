@@ -209,4 +209,67 @@ mod tests {
         let chunks = chunk_by_sentence("This is a test sentence.", None, &WordCounter);
         assert_eq!(chunks[0].size, 5);
     }
+
+    #[test]
+    fn isomorphism_parametrized() {
+        use crate::test_inputs::{EMPTY, ENGLISH_LISTS, ENGLISH_TEXT, PYTHON_CODE};
+
+        let texts = [
+            ("english_text", ENGLISH_TEXT),
+            ("english_lists", ENGLISH_LISTS),
+            ("python_code", PYTHON_CODE),
+            ("empty", EMPTY),
+        ];
+        let max_sizes: [Option<usize>; 3] = [None, Some(16), Some(64)];
+        let counter = WordCounter;
+
+        for &(name, text) in &texts {
+            for max in max_sizes {
+                let chunks = chunk_by_sentence(text, max, &counter);
+                let reconstructed: String = chunks.iter().map(|c| c.text).collect();
+                assert_eq!(
+                    reconstructed, text,
+                    "isomorphism failed for ('{name}', max={max:?})"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn token_count_within_max_length() {
+        use crate::test_inputs::{EMPTY, ENGLISH_LISTS, ENGLISH_TEXT, PYTHON_CODE};
+
+        let texts = [
+            ("english_text", ENGLISH_TEXT),
+            ("english_lists", ENGLISH_LISTS),
+            ("python_code", PYTHON_CODE),
+            ("empty", EMPTY),
+        ];
+        let counter = WordCounter;
+
+        for &(name, text) in &texts {
+            for max in [16_usize, 64] {
+                let chunks = chunk_by_sentence(text, Some(max), &counter);
+                for (i, chunk) in chunks.iter().enumerate() {
+                    assert!(
+                        chunk.size <= max,
+                        "chunk {i} in ('{name}', max={max}) has size {} > {max}",
+                        chunk.size
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn chinese_text_no_panic() {
+        use crate::test_inputs::CHINESE_TEXT;
+
+        let counter = WordCounter;
+        let chunks = chunk_by_sentence(CHINESE_TEXT, Some(16), &counter);
+        assert!(
+            !chunks.is_empty(),
+            "Chinese text should produce at least one chunk"
+        );
+    }
 }

@@ -168,4 +168,84 @@ mod tests {
             assert_eq!(chunk.chunk_index, i);
         }
     }
+
+    #[test]
+    fn whitespace_only_input_emits_single_chunk() {
+        let doc_id = Uuid::new_v4();
+        let input = "   \n\t   \r\n   ";
+        let chunks = chunk_text(doc_id, input, 512, &WordCounter);
+        assert_eq!(chunks.len(), 1, "whitespace-only should emit 1 chunk");
+        assert_eq!(chunks[0].text, input);
+        assert_eq!(chunks[0].chunk_index, 0);
+        assert_eq!(chunks[0].document_id, doc_id);
+    }
+
+    #[test]
+    fn oversized_paragraph_emitted() {
+        let doc_id = Uuid::new_v4();
+        let long_para: String = (0..100)
+            .map(|i| format!("word{i}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let input = format!("{}.\nShort text here.", long_para);
+        let chunks = chunk_text(doc_id, &input, 50, &WordCounter);
+        // The 100-word sentence is pre-split by chunk_by_sentence into 2 chunks
+        // of 50 words, plus the short paragraph makes 3 total
+        assert!(
+            chunks.len() >= 3,
+            "should have at least 3 chunks, got {}",
+            chunks.len()
+        );
+        // Each of the first two chunks should have the maximum allowed size
+        assert_eq!(
+            chunks[0].chunk_size, 50,
+            "first chunk should be at the size limit"
+        );
+        assert_eq!(
+            chunks[1].chunk_size, 50,
+            "second chunk should be at the size limit"
+        );
+        // Last chunk is the short paragraph
+        let last = chunks.last().unwrap();
+        assert!(
+            last.chunk_size < 50,
+            "last chunk should be smaller than the limit"
+        );
+    }
+
+    #[test]
+    fn alternating_large_small_paragraphs_dont_batch() {
+        let doc_id = Uuid::new_v4();
+        let large: String = (0..20)
+            .map(|i| format!("word{i}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let small = "Short text here.";
+        let input = format!("{large}.\n{small}\n{large}.\n{small}");
+        let chunks = chunk_text(doc_id, &input, 10, &WordCounter);
+        // Each 20-word "large" paragraph is pre-split into 2 chunks of 10 by
+        // chunk_by_sentence, resulting in 6 total chunks:
+        //   large_part1(10), large_part2(10), small(3),
+        //   large_part1(10), large_part2(10), small(3)
+        assert_eq!(
+            chunks.len(),
+            6,
+            "expected 6 chunks (2*large_split + small + 2*large_split + small)"
+        );
+        assert_eq!(chunks[0].chunk_size, 10, "chunk 0 should be at limit");
+        assert_eq!(chunks[1].chunk_size, 10, "chunk 1 should be at limit");
+        assert!(
+            chunks[2].chunk_size <= 10,
+            "chunk 2 (small) should fit within limit"
+        );
+        assert_eq!(chunks[3].chunk_size, 10, "chunk 3 should be at limit");
+        assert_eq!(chunks[4].chunk_size, 10, "chunk 4 should be at limit");
+        assert!(
+            chunks[5].chunk_size <= 10,
+            "chunk 5 (small) should fit within limit"
+        );
+        for (i, c) in chunks.iter().enumerate() {
+            assert_eq!(c.chunk_index, i, "chunk_index sequential at {i}");
+        }
+    }
 }
