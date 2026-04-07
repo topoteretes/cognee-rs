@@ -51,9 +51,22 @@ cognee-rust/
 │   ├── storage/                # File storage abstraction (StorageTrait, LocalStorage)
 │   ├── database/               # Metadata DB abstraction (DatabaseTrait, SqliteDatabase)
 │   ├── ingestion/              # Ingest pipeline + content hashing + URL crawler
-│   └── chunking/               # Text chunking (word→sentence→paragraph→TextChunker) + CognifyPipeline
-├── examples/                   # Usage examples (add_example, cognify_example, embeddings, qdrant, etc.)
-└── .github/workflows/          # CI: lib-tests.yml, lint.yml
+│   ├── chunking/               # Text chunking (word→sentence→paragraph→TextChunker)
+│   ├── cognify/                # Full cognify pipeline (classify → chunk → extract graph → summarize → store)
+│   ├── search/                 # Search pipeline with multiple retrieval strategies
+│   ├── embedding/              # ONNX-based embedding engine (BGE-Small etc.)
+│   ├── llm/                    # LLM provider abstraction (OpenAI-compatible API adapter)
+│   ├── graph/                  # Graph DB abstraction (Ladybug embedded graph)
+│   ├── vector/                 # Vector DB abstraction (Qdrant embedded)
+│   ├── ontology/               # Ontology resolution (RDF/JSON-LD loader, NoOp resolver)
+│   ├── delete/                 # Dataset/data deletion across all backends
+│   ├── core/                   # Task pipeline orchestration framework
+│   ├── lib/                    # Top-level library aggregating all crates
+│   ├── cli/                    # CLI binary (add, cognify, search, delete, config, run-sequence)
+│   ├── utils/                  # Shared utilities
+│   └── test-utils/             # Mock implementations (MockStorage, MockGraphDB, MockVectorDB)
+├── examples/                   # Usage examples (add, cognify, embeddings, fact extraction, qdrant, ladybug, etc.)
+└── .github/workflows/          # CI: lib-tests.yml, lint.yml, capi-check.yml, js-check.yml, python-check.yml
 ```
 
 ### Crate Details
@@ -79,23 +92,72 @@ cognee-rust/
 
 **cognee-ingestion** — Ingestion pipeline orchestration
 - `IngestPipeline<S: StorageTrait, D: DatabaseTrait>` — Generic pipeline. `add()` method: get/create dataset → stream each input with hashing+storage → deduplicate by content hash → create Data record → attach to dataset
-- `ContentHasher` — SHA256(content + owner_id) for per-owner deduplication. Deterministic UUID v5 from hash.
-- `url_crawler/` — `UrlFetcher` (reqwest + config), `HtmlParser` (scraper crate), not yet integrated into pipeline
+- `ContentHasher` — MD5 hashing (content-only, matching Python). Deterministic UUID v5 from hash.
+- `url_crawler/` — `UrlFetcher` (reqwest + config), `HtmlParser` (scraper crate), integrated into pipeline for URL inputs
 
-**cognee-chunking** — Text chunking and cognify pipeline (port of Python chunking hierarchy)
+**cognee-chunking** — Text chunking (port of Python chunking hierarchy)
 - `chunk_by_word(data: &str) -> Vec<WordChunk>` — Character-level tokenizer using `Peekable<CharIndices>`. Detects sentence endings (`.;!?…。！？`) and paragraph endings (sentence ending + `\n`/`\r`). Zero-copy: `WordChunk.text` is `&str` borrowing from input.
 - `chunk_by_sentence(data, maximum_size, counter) -> Vec<SentenceChunk>` — Aggregates words into sentences, tracks paragraph IDs (new UUID v4 on paragraph boundaries), counts tokens via `TokenCounter` trait. Zero-copy: `SentenceChunk.text` is `&str`.
 - `chunk_by_paragraph(data, max_chunk_size, batch_paragraphs, counter) -> Vec<ParagraphChunk>` — Batches sentences until token overflow. `batch_paragraphs=true` accumulates across paragraph boundaries; `false` yields at each boundary. Zero-copy: `ParagraphChunk.text` is `&str`.
 - `chunk_text(document_id, text, max_chunk_size, counter) -> Vec<DocumentChunk>` — Top-level API (port of Python `TextChunker`). Further batches paragraph chunks, joins with space on emit. `DocumentChunk.text` is owned `String` since it crosses async/crate boundaries.
-- `CognifyPipeline<S: StorageTrait>` — Pipeline skeleton: classify documents → chunk text → (TODO: graph extraction, summarization, storage). Reads stored files via `StorageTrait::retrieve()`.
 - `CutType` enum — `ParagraphEnd`, `SentenceEnd`, `SentenceCut`, `Word` (type-safe boundary markers)
 - `TokenCounter` trait + `WordCounter` — Pluggable token counting. `WordCounter` uses whitespace-split word count; swap in HuggingFace tokenizers later.
 - `ChunkingError` — Error enum: `InvalidChunkSize`, `StorageError`, `InvalidUtf8`
 
+**cognee-cognify** — Full cognify pipeline (port of Python cognify task sequence)
+- `CognifyPipeline` — Orchestrates all 6 stages with configurable `CognifyConfig`
+- **Stage 1: `classify_documents`** — Maps Data items to typed Documents by mime_type
+- **Stage 2: `extract_chunks_from_documents`** — Hierarchical text chunking via cognee-chunking. Supports `ChunkStrategy::Paragraph` (default, sentence-aware) and `ChunkStrategy::Recursive` (character-based with overlap). Writes `token_count` back to Data record.
+- **Stage 3: `extract_graph_from_data`** — LLM-based entity/relationship extraction via `FactExtractor`. Batched (`chunks_per_batch`, default 100) with semaphore-controlled concurrency (`max_parallel_extractions`, default 20). DB-aware deduplication of edges. Supports custom extraction prompts. Alternative path: `extract_custom_graph_from_data` for arbitrary `GraphModel` types.
+- **Stage 4: `summarize_text`** — LLM-based chunk summarization via `SummaryExtractor`. Conditional (`enable_summarization`, default true). Deterministic UUID for each summary linked to source chunk via `made_from`.
+- **Stage 5: `add_data_points`** — Stores all data points to graph DB (nodes: DocumentChunk, TextSummary, Entity, EntityType, EdgeType; edges: LLM-extracted + structural). Generates embeddings and indexes in vector DB across 5 collections: `DocumentChunk:text`, `Entity:name`, `TextSummary:text`, `EdgeType:relationship_name`, `Triplet:embeddable_text` (optional). Writes provenance records to relational DB. Rich metadata per vector point (type, field, dataset_id, user_id, tenant_id, domain-specific fields).
+- **Stage 6: `extract_dlt_fk_edges`** — Deterministic foreign-key edge creation for DLT-sourced tabular data (table-level FK edges, row-level is_row_of edges, row-level FK reference edges).
+- `CognifyConfig` — Single source of truth for all pipeline parameters. Builder pattern with sensible defaults matching Python. Key params: `max_chunk_size` (1500), `chunk_overlap` (10), `embed_triplets` (false), `enable_summarization` (true), `embedding_batch_size` (100).
+- `triplet_creation` — Creates embeddable triplets from knowledge graph edges: `"source: desc → relationship → target: desc"`. Indexed in vector DB when `embed_triplets=true`.
+
+**cognee-search** — Search pipeline with multiple retrieval strategies
+- `SearchOrchestrator` — Coordinates retrieval across graph and vector DBs
+- `SearchType` enum — 15 search types: GraphCompletion (default), GraphCompletionCot, GraphCompletionContextExtension, GraphSummaryCompletion, TripletCompletion, RagCompletion, Chunks, Summaries, Temporal, Cypher, NaturalLanguage, FeelingLucky, Feedback, CodingRules, ChunksLexical
+- Retrievers: `GraphCompletionRetriever`, `ChunksRetriever`, `SummariesRetriever`, `TripletRetriever`, `TemporalRetriever`, `CompletionRetriever`, `LexicalRetriever`, `CypherNlRetriever`, advanced graph retrievers (CoT, context extension)
+
+**cognee-embedding** — Embedding engine
+- ONNX Runtime-based embedding via `ort` + `tokenizers`
+- `EmbeddingEngine` trait with `OnnxEmbeddingEngine` impl
+- Tested with BGE-Small-v1.5 (384 dimensions), supports batch processing and long text truncation
+
+**cognee-llm** — LLM provider abstraction
+- `Llm` trait for structured output extraction
+- `OpenAiAdapter` — OpenAI-compatible API adapter (works with Ollama, vLLM, etc.)
+- `FactExtractor`, `SummaryExtractor` — Typed extraction wrappers with JSON schema validation
+
+**cognee-graph** — Graph database abstraction
+- `GraphDb` trait — async trait for node/edge CRUD, neighbor queries
+- `LadybugGraphDb` — Embedded graph database (Ladybug)
+- Used by cognify for entity/relationship storage and by search for graph traversal
+
+**cognee-vector** — Vector database abstraction
+- `VectorDb` trait — async trait for collection management, upsert, search
+- `QdrantVectorDb` — Embedded Qdrant vector storage
+- Dynamic collection creation, metadata filtering, cosine similarity search
+
+**cognee-delete** — Deletion across all backends
+- Scoped deletion (by dataset, by data, by owner)
+- Cascading cleanup: relational DB → graph DB → vector DB → file storage
+- Dry-run support
+
+**cognee-core** — Task pipeline orchestration
+- Generic task pipeline framework for chaining async operations
+- `TaskContext` with cancellation support and progress tracking
+
+**cognee-ontology** — Ontology resolution
+- `OntologyResolver` trait — entity type matching and subgraph extraction
+- `OntologyLoader` — RDF, JSON-LD, Turtle format parsing
+- `NoOpOntologyResolver` — pass-through when no ontology is configured
+
 ## Architecture Patterns
 
 - **Trait-based abstraction** — `StorageTrait`, `DatabaseTrait`, `TokenCounter` enable backend swapping and mock testing
-- **Generics** — `IngestPipeline<S, D>`, `CognifyPipeline<S>` parameterized on storage/database implementations
+- **Generics** — `IngestPipeline<S, D>` parameterized on storage/database implementations; `CognifyPipeline` takes `Arc<dyn Trait>` for storage, graph DB, vector DB, LLM, and embedding engine
 - **Zero-copy chunking** — `WordChunk<'a>`, `SentenceChunk<'a>`, `ParagraphChunk<'a>` borrow `&str` slices from input text using byte offset tracking; no intermediate String allocations in the chunking hierarchy
 - **Arc for shared ownership** — `Arc<S>`, `Arc<D>` in pipeline; `Arc<Mutex<T>>` in mocks
 - **Async-first** — All I/O via tokio; `#[async_trait]` for trait objects
@@ -106,12 +168,12 @@ cognee-rust/
 
 ## Current State & Roadmap
 
-### Implemented
-- Data models (Data, Dataset, DataInput, Document, DocumentChunk)
+### Implemented — full add → cognify → search pipeline
+- **Data models** (Data, Dataset, DataInput, Document, DocumentChunk)
   - `DataInput` variants: `Text`, `FilePath`, `Url`, `S3Path` (error stub), `Binary`, `DataItem`
   - `Data` has full 22-column Python-compat schema (label, tenant_id, loader_engine, raw_content_hash, …)
-- File storage with LocalStorage; `base_path()` on `StorageTrait` for absolute `file://` URIs
-- SQLite metadata database with SeaORM; migrations include Python-compat columns and tenant_id indexes
+- **File storage** with LocalStorage; `base_path()` on `StorageTrait` for absolute `file://` URIs
+- **SQLite metadata database** with SeaORM; migrations include Python-compat columns and tenant_id indexes
 - **Ingestion pipeline** — fully Python-compatible `add()`:
   - MD5 hashing (content-only, no owner_id) with configurable `HashAlgorithm` (MD5 default, SHA256 opt-in)
   - Deterministic UUID5 IDs for data and datasets matching Python's `uuid5(NAMESPACE_OID, …)` formula
@@ -121,29 +183,36 @@ cognee-rust/
   - Loader engine registry (`text_loader`, `pypdf_loader`, `beautiful_soup_loader`, …)
   - URL inputs: fetches HTML via `UrlFetcher`, extracts text via `HtmlParser`, stores as text
   - Deduplication by content hash within owner+tenant scope
-- **Text chunking** — full 3-level hierarchy (word → sentence → paragraph → TextChunker), ported from Python
+- **Text chunking** — full 3-level hierarchy (word → sentence → paragraph → TextChunker), ported from Python. Two strategies: Paragraph (default, sentence-aware) and Recursive (character-based with overlap).
 - **Document classification** — mime_type-based classification (text/* supported)
-- **CognifyPipeline skeleton** — classify + chunk stages working; later stages are TODOs
-- Comprehensive test suite (100+ tests) including:
+- **Cognify pipeline** — all 6 stages fully implemented:
+  1. `classify_documents` — mime_type-based document typing
+  2. `extract_chunks_from_documents` — hierarchical text chunking, writes token_count back to Data
+  3. `extract_graph_from_data` — LLM-based entity/relationship extraction with batched concurrency and DB-aware deduplication. Supports custom prompts and custom graph models.
+  4. `summarize_text` — LLM-based chunk summarization (conditional via config)
+  5. `add_data_points` — stores nodes+edges to Ladybug graph DB, generates embeddings and indexes in Qdrant vector DB across 5 collection types, writes provenance records to relational DB
+  6. `extract_dlt_fk_edges` — deterministic foreign-key edge creation for DLT-sourced tabular data
+- **Triplet embedding** — optional creation and indexing of `"source → relationship → target"` triplets in vector DB
+- **LLM integration** — OpenAI-compatible API adapter (works with Ollama, vLLM, etc.) with structured JSON schema output
+- **Embedding engine** — ONNX Runtime-based embeddings (tested with BGE-Small-v1.5, 384 dimensions)
+- **Graph storage** — Ladybug embedded graph DB for node/edge CRUD and graph traversal
+- **Vector storage** — Embedded Qdrant for similarity search with metadata filtering
+- **Search pipeline** — 15 search types including GraphCompletion (default), GraphCompletionCot, GraphCompletionContextExtension, GraphSummaryCompletion, TripletCompletion, RagCompletion, Chunks, Summaries, Temporal, Cypher, NaturalLanguage, FeelingLucky, Feedback, CodingRules, ChunksLexical
+- **Ontology resolution** — RDF/JSON-LD/Turtle ontology loading with entity type matching
+- **Deletion** — scoped deletion cascading across relational DB, graph DB, vector DB, and file storage (with dry-run support)
+- **CLI** — full command set: `add`, `cognify`, `add-and-cognify`, `search`, `delete`, `config`, `run-sequence`
+- **Comprehensive test suite** including:
   - Python cross-validated ID tests (`crates/ingestion/tests/python_compat_ids.rs`)
   - Tenant isolation tests, DataItem label tests
   - Schema compatibility tests (`crates/database/tests/schema_compat.rs`)
+  - Full E2E search matrix test (add → cognify → search across 9 search types)
+  - CLI E2E tests, deletion tests, embedding tests, fact extraction tests
 
 ### Not Yet Implemented (next steps)
-- **Cross-SDK integration tests** — Python writes DB, Rust reads; Rust writes, Python verifies (ADD_COMPAT_PLAN.md Phase 9)
-- **`Data` builder pattern** — replace 15-arg `Data::new()` with `DataBuilder` (ADD_COMPAT_PLAN.md 10.2)
-- **Graph extraction** — LLM-based Node/Edge/KnowledgeGraph extraction from chunks (cognify stage 3)
-- **Text summarization** — LLM-based chunk summarization (cognify stage 4)
-- **Data point storage** — Store nodes+edges in graph DB, embeddings in vector DB (cognify stage 5)
-- **Knowledge graph models** — Node, Edge, KnowledgeGraph (port from Python `shared/data_models.py`)
-- **Graph storage** — Qdrant-based graph embeddings (no traditional graph DB per README goals)
-- **Vector storage** — Qdrant integration (dependencies already in workspace Cargo.toml)
-- **LLM integration** — ONNX Runtime for local models (ort dependency present), structured output
-- **Search pipeline** — Multiple retrieval strategies, context assembly, LLM completion
-- **Embedding engine** — ONNX-based embeddings (ort + tokenizers dependencies present)
-- **Real tokenizer** — Replace `WordCounter` with HuggingFace `tokenizers` via `TokenCounter` trait
+- **Cross-SDK E2E tests** — Python writes DB, Rust reads; Rust writes, Python verifies
 - **Non-text document types** — PDF, CSV, image, audio classification and reading
 - **S3 support** — `DataInput::S3Path` currently returns an error stub
+- **Real tokenizer** — Replace `WordCounter` with HuggingFace `tokenizers` via `TokenCounter` trait
 
 ## Key Dependencies
 
