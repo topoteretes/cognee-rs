@@ -11,6 +11,65 @@ use std::sync::Arc;
 
 use crate::{EdgeData, GraphDBError, GraphDBResult, GraphDBTrait, GraphNode, NodeData};
 
+/// Strip control characters (`\u{0000}`–`\u{001F}`, except `\t`, `\n`, `\r`)
+/// from all string values inside a `serde_json::Value` tree.
+///
+/// LLM-extracted text occasionally contains stray control characters.
+/// They carry no semantic value and corrupt the JSON round-trip through
+/// Ladybug's text property storage, so we remove them at the write boundary.
+fn sanitize_json_value(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::String(s) => {
+            if s.bytes()
+                .any(|b| b < 0x20 && b != b'\t' && b != b'\n' && b != b'\r')
+            {
+                *s = s
+                    .chars()
+                    .filter(|&c| c >= '\u{0020}' || c == '\t' || c == '\n' || c == '\r')
+                    .collect();
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            for item in arr {
+                sanitize_json_value(item);
+            }
+        }
+        serde_json::Value::Object(map) => {
+            for val in map.values_mut() {
+                sanitize_json_value(val);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Defence-in-depth: escape unescaped control characters in a raw JSON
+/// string read back from Ladybug, so that `serde_json::from_str` succeeds.
+///
+/// The primary sanitisation happens on _write_ (see [`sanitize_json_value`]),
+/// but data that was stored before the write-side fix still needs this.
+fn sanitize_json_control_chars(s: &str) -> Cow<'_, str> {
+    if s.bytes().any(|b| b < 0x20) {
+        let mut out = String::with_capacity(s.len());
+        for ch in s.chars() {
+            if ch < '\u{0020}' && ch != '\n' && ch != '\r' && ch != '\t' {
+                out.push_str(&format!("\\u{:04x}", ch as u32));
+            } else if ch == '\n' {
+                out.push_str("\\n");
+            } else if ch == '\r' {
+                out.push_str("\\r");
+            } else if ch == '\t' {
+                out.push_str("\\t");
+            } else {
+                out.push(ch);
+            }
+        }
+        Cow::Owned(out)
+    } else {
+        Cow::Borrowed(s)
+    }
+}
+
 /// Ladybug graph database adapter.
 ///
 /// This adapter provides a complete implementation of GraphDBTrait using
@@ -251,8 +310,13 @@ impl LadybugAdapter {
         props.remove("type");
         props.remove("data_type");
 
+        // Strip control characters from LLM-produced string values before
+        // persisting, so the JSON round-trip through Ladybug stays clean.
+        let mut props_value = serde_json::Value::Object(props);
+        sanitize_json_value(&mut props_value);
+
         let properties_json =
-            serde_json::to_string(&props).map_err(GraphDBError::SerializationError)?;
+            serde_json::to_string(&props_value).map_err(GraphDBError::SerializationError)?;
 
         Ok(NodeProperties {
             id,
@@ -270,8 +334,9 @@ impl LadybugAdapter {
         if let Some(props_value) = data.remove("properties")
             && let Some(props_str) = props_value.as_str()
         {
+            let clean = sanitize_json_control_chars(props_str);
             let additional_props: HashMap<Cow<'static, str>, serde_json::Value> =
-                serde_json::from_str(props_str).map_err(GraphDBError::SerializationError)?;
+                serde_json::from_str(&clean).map_err(GraphDBError::SerializationError)?;
             data.extend(additional_props);
         }
         Ok(data)
@@ -648,7 +713,9 @@ impl GraphDBTrait for LadybugAdapter {
         let timestamp_str = now.format("%Y-%m-%d %H:%M:%S%.6f").to_string();
 
         let props_json = if let Some(props) = properties {
-            serde_json::to_string(&props).map_err(GraphDBError::SerializationError)?
+            let mut val = serde_json::to_value(&props).map_err(GraphDBError::SerializationError)?;
+            sanitize_json_value(&mut val);
+            serde_json::to_string(&val).map_err(GraphDBError::SerializationError)?
         } else {
             "{}".to_string()
         };
@@ -701,7 +768,8 @@ impl GraphDBTrait for LadybugAdapter {
                 let rel_name = row[2].as_str().unwrap_or("").to_string();
 
                 let props = if let Some(props_str) = row[3].as_str() {
-                    serde_json::from_str::<HashMap<Cow<'static, str>, serde_json::Value>>(props_str)
+                    let clean = sanitize_json_control_chars(props_str);
+                    serde_json::from_str::<HashMap<Cow<'static, str>, serde_json::Value>>(&clean)
                         .unwrap_or_default()
                 } else {
                     HashMap::new()
@@ -803,8 +871,9 @@ impl GraphDBTrait for LadybugAdapter {
                     edge_props.insert(Cow::Borrowed("relationship_name"), json!(rel_name));
                 }
                 if let Some(rel_props_str) = row[5].as_str() {
+                    let clean = sanitize_json_control_chars(rel_props_str);
                     let additional_props: HashMap<Cow<'static, str>, serde_json::Value> =
-                        serde_json::from_str(rel_props_str).unwrap_or_default();
+                        serde_json::from_str(&clean).unwrap_or_default();
                     edge_props.extend(additional_props);
                 }
 
@@ -871,7 +940,8 @@ impl GraphDBTrait for LadybugAdapter {
                 let rel_name = row[2].as_str().unwrap_or("").to_string();
 
                 let props = if let Some(props_str) = row[3].as_str() {
-                    serde_json::from_str::<HashMap<Cow<'static, str>, serde_json::Value>>(props_str)
+                    let clean = sanitize_json_control_chars(props_str);
+                    serde_json::from_str::<HashMap<Cow<'static, str>, serde_json::Value>>(&clean)
                         .unwrap_or_default()
                 } else {
                     HashMap::new()
@@ -1028,7 +1098,8 @@ impl GraphDBTrait for LadybugAdapter {
                 let target_id = row[1].as_str().unwrap_or("").to_string();
                 let rel_name = row[2].as_str().unwrap_or("").to_string();
                 let props = if let Some(props_str) = row[3].as_str() {
-                    serde_json::from_str(props_str).unwrap_or_default()
+                    let clean = sanitize_json_control_chars(props_str);
+                    serde_json::from_str(&clean).unwrap_or_default()
                 } else {
                     HashMap::new()
                 };
@@ -1118,7 +1189,8 @@ impl GraphDBTrait for LadybugAdapter {
                 let target_id = row[1].as_str().unwrap_or("").to_string();
                 let rel_name = row[2].as_str().unwrap_or("").to_string();
                 let props = if let Some(props_str) = row[3].as_str() {
-                    serde_json::from_str(props_str).unwrap_or_default()
+                    let clean = sanitize_json_control_chars(props_str);
+                    serde_json::from_str(&clean).unwrap_or_default()
                 } else {
                     HashMap::new()
                 };
