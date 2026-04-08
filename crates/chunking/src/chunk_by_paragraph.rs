@@ -57,7 +57,7 @@ pub fn chunk_by_paragraph<'a, C: TokenCounter>(
 
         // Overflow: yield current chunk and start fresh
         if current_chunk_size > 0 && (current_chunk_size + sentence.size > max_chunk_size) {
-            let text = &data[chunk_start.unwrap()..chunk_end];
+            let text = &data[chunk_start.expect("chunk_start is Some because current_chunk_size > 0 only after a sentence was accumulated")..chunk_end];
             result.push(ParagraphChunk {
                 text,
                 chunk_size: current_chunk_size,
@@ -85,7 +85,7 @@ pub fn chunk_by_paragraph<'a, C: TokenCounter>(
                 CutType::ParagraphEnd | CutType::SentenceCut
             )
         {
-            let text = &data[chunk_start.unwrap()..chunk_end];
+            let text = &data[chunk_start.expect("chunk_start is Some because it was set above before this emit branch is reached")..chunk_end];
             result.push(ParagraphChunk {
                 text,
                 chunk_size: current_chunk_size,

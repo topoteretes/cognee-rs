@@ -85,7 +85,7 @@ pub fn chunk_by_sentence<'a, C: TokenCounter>(
         {
             result.push(SentenceChunk {
                 paragraph_id,
-                text: &data[sentence_start.unwrap()..sentence_end],
+                text: &data[sentence_start.expect("sentence_start is Some because the guard sentence_start.is_some() was checked before this branch")..sentence_end],
                 size: sentence_size,
                 cut_type: word_type_to_cut_type(word_type_state),
             });
@@ -108,7 +108,7 @@ pub fn chunk_by_sentence<'a, C: TokenCounter>(
 
             result.push(SentenceChunk {
                 paragraph_id,
-                text: &data[sentence_start.unwrap()..sentence_end],
+                text: &data[sentence_start.expect("sentence_start is Some because it was just set above if it was None")..sentence_end],
                 size: sentence_size,
                 cut_type: word_type_to_cut_type(word_type_state),
             });

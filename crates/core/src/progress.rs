@@ -89,7 +89,7 @@ impl ProgressToken {
     /// Overall progress across the entire tree: `Σ(width × progress)` for all
     /// intervals. Returns a value in [0.0, 1.0].
     pub fn root_fraction(&self) -> f64 {
-        let intervals = self.tree.intervals.lock().unwrap();
+        let intervals = self.tree.intervals.lock().unwrap(); // lock poison is unrecoverable
         let sum: f64 = intervals
             .iter()
             .map(|iv| {
@@ -130,7 +130,7 @@ impl ProgressToken {
             .progress
             .store(0.0_f64.to_bits(), Ordering::Relaxed);
 
-        let mut intervals = self.tree.intervals.lock().unwrap();
+        let mut intervals = self.tree.intervals.lock().unwrap(); // lock poison is unrecoverable
 
         Ok(weights
             .iter()
@@ -169,7 +169,7 @@ impl ProgressToken {
             progress: AtomicU64::new(0.0_f64.to_bits()),
         });
 
-        let mut intervals = self.tree.intervals.lock().unwrap();
+        let mut intervals = self.tree.intervals.lock().unwrap(); // lock poison is unrecoverable
         intervals.push(Arc::clone(&iv));
 
         Self {

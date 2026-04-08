@@ -32,18 +32,18 @@ impl MockGraphDB {
 
     /// Get the current node count (for testing).
     pub fn node_count(&self) -> usize {
-        self.nodes.lock().unwrap().len()
+        self.nodes.lock().unwrap().len() // lock poison is unrecoverable
     }
 
     /// Get the current edge count (for testing).
     pub fn edge_count(&self) -> usize {
-        self.edges.lock().unwrap().len()
+        self.edges.lock().unwrap().len() // lock poison is unrecoverable
     }
 
     /// Clear all data (for testing).
     pub fn clear(&self) {
-        self.nodes.lock().unwrap().clear();
-        self.edges.lock().unwrap().clear();
+        self.nodes.lock().unwrap().clear(); // lock poison is unrecoverable
+        self.edges.lock().unwrap().clear(); // lock poison is unrecoverable
     }
 }
 
@@ -60,7 +60,7 @@ impl GraphDBTrait for MockGraphDB {
     }
 
     async fn is_empty(&self) -> GraphDBResult<bool> {
-        Ok(self.nodes.lock().unwrap().is_empty())
+        Ok(self.nodes.lock().unwrap().is_empty()) // lock poison is unrecoverable
     }
 
     async fn query(
@@ -79,7 +79,7 @@ impl GraphDBTrait for MockGraphDB {
     }
 
     async fn has_node(&self, node_id: &str) -> GraphDBResult<bool> {
-        Ok(self.nodes.lock().unwrap().contains_key(node_id))
+        Ok(self.nodes.lock().unwrap().contains_key(node_id)) // lock poison is unrecoverable
     }
 
     async fn add_node_raw(&self, node: Value) -> GraphDBResult<()> {
@@ -96,7 +96,7 @@ impl GraphDBTrait for MockGraphDB {
             .ok_or_else(|| GraphDBError::NodeError("Node missing 'id' field".to_string()))?
             .to_string();
 
-        self.nodes.lock().unwrap().insert(id, node_data);
+        self.nodes.lock().unwrap().insert(id, node_data); // lock poison is unrecoverable
         Ok(())
     }
 
@@ -108,12 +108,12 @@ impl GraphDBTrait for MockGraphDB {
     }
 
     async fn delete_node(&self, node_id: &str) -> GraphDBResult<()> {
-        self.nodes.lock().unwrap().remove(node_id);
+        self.nodes.lock().unwrap().remove(node_id); // lock poison is unrecoverable
         Ok(())
     }
 
     async fn delete_nodes(&self, node_ids: &[String]) -> GraphDBResult<()> {
-        let mut nodes = self.nodes.lock().unwrap();
+        let mut nodes = self.nodes.lock().unwrap(); // lock poison is unrecoverable
         for node_id in node_ids {
             nodes.remove(node_id);
         }
@@ -121,11 +121,11 @@ impl GraphDBTrait for MockGraphDB {
     }
 
     async fn get_node(&self, node_id: &str) -> GraphDBResult<Option<NodeData>> {
-        Ok(self.nodes.lock().unwrap().get(node_id).cloned())
+        Ok(self.nodes.lock().unwrap().get(node_id).cloned()) // lock poison is unrecoverable
     }
 
     async fn get_nodes(&self, node_ids: &[String]) -> GraphDBResult<Vec<NodeData>> {
-        let nodes = self.nodes.lock().unwrap();
+        let nodes = self.nodes.lock().unwrap(); // lock poison is unrecoverable
         Ok(node_ids
             .iter()
             .filter_map(|id| nodes.get(id).cloned())
@@ -138,14 +138,14 @@ impl GraphDBTrait for MockGraphDB {
         target_id: &str,
         relationship_name: &str,
     ) -> GraphDBResult<bool> {
-        let edges = self.edges.lock().unwrap();
+        let edges = self.edges.lock().unwrap(); // lock poison is unrecoverable
         Ok(edges.iter().any(|(src, tgt, rel, _)| {
             src == source_id && tgt == target_id && rel == relationship_name
         }))
     }
 
     async fn has_edges(&self, edges: &[EdgeData]) -> GraphDBResult<Vec<EdgeData>> {
-        let stored_edges = self.edges.lock().unwrap();
+        let stored_edges = self.edges.lock().unwrap(); // lock poison is unrecoverable
         let mut existing = Vec::new();
 
         for (src, tgt, rel, props) in edges {
@@ -173,12 +173,12 @@ impl GraphDBTrait for MockGraphDB {
             relationship_name.to_string(),
             properties.unwrap_or_default(),
         );
-        self.edges.lock().unwrap().push(edge);
+        self.edges.lock().unwrap().push(edge); // lock poison is unrecoverable
         Ok(())
     }
 
     async fn add_edges(&self, edges: &[EdgeData]) -> GraphDBResult<()> {
-        let mut stored_edges = self.edges.lock().unwrap();
+        let mut stored_edges = self.edges.lock().unwrap(); // lock poison is unrecoverable
         for edge in edges {
             stored_edges.push(edge.clone());
         }
@@ -186,7 +186,7 @@ impl GraphDBTrait for MockGraphDB {
     }
 
     async fn get_edges(&self, node_id: &str) -> GraphDBResult<Vec<EdgeData>> {
-        let edges = self.edges.lock().unwrap();
+        let edges = self.edges.lock().unwrap(); // lock poison is unrecoverable
         Ok(edges
             .iter()
             .filter(|(src, tgt, _, _)| src == node_id || tgt == node_id)
@@ -195,8 +195,8 @@ impl GraphDBTrait for MockGraphDB {
     }
 
     async fn get_neighbors(&self, node_id: &str) -> GraphDBResult<Vec<NodeData>> {
-        let edges = self.edges.lock().unwrap();
-        let nodes = self.nodes.lock().unwrap();
+        let edges = self.edges.lock().unwrap(); // lock poison is unrecoverable
+        let nodes = self.nodes.lock().unwrap(); // lock poison is unrecoverable
 
         let neighbor_ids: Vec<String> = edges
             .iter()
@@ -227,8 +227,8 @@ impl GraphDBTrait for MockGraphDB {
             NodeData,
         )>,
     > {
-        let edges = self.edges.lock().unwrap();
-        let nodes = self.nodes.lock().unwrap();
+        let edges = self.edges.lock().unwrap(); // lock poison is unrecoverable
+        let nodes = self.nodes.lock().unwrap(); // lock poison is unrecoverable
 
         let mut connections = Vec::new();
         for (src, tgt, _, props) in edges.iter() {
@@ -250,8 +250,8 @@ impl GraphDBTrait for MockGraphDB {
     }
 
     async fn get_graph_data(&self) -> GraphDBResult<(Vec<(String, NodeData)>, Vec<EdgeData>)> {
-        let nodes = self.nodes.lock().unwrap();
-        let edges = self.edges.lock().unwrap();
+        let nodes = self.nodes.lock().unwrap(); // lock poison is unrecoverable
+        let edges = self.edges.lock().unwrap(); // lock poison is unrecoverable
 
         let node_vec: Vec<(String, NodeData)> = nodes
             .iter()

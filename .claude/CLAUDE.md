@@ -257,6 +257,10 @@ scripts/check_all.sh
 
 ## Coding Conventions
 
+- **`unwrap()` is forbidden in non-test code.** Use one of two alternatives:
+  - `expect("reason why this can never panic at runtime")` — when an invariant guarantees the value is always `Some`/`Ok`. The message must explain *why* it cannot fail (e.g. `expect("chunk_start is set whenever we enter the emit branch")`). Do NOT just restate what failed.
+  - Proper error/option propagation (`?`, `map_err`, `ok_or`, `match`, etc.) — when the operation can legitimately fail and the error should surface to the caller.
+  - Allowed patterns that do not need changing: `Mutex::lock().unwrap()` and `RwLock::read/write().unwrap()` are acceptable because lock poisoning only occurs if a thread already panicked, and there is no meaningful recovery in that case. Add a `// lock poison is unrecoverable` comment when doing this.
 - Use `thiserror` for custom error enums in library crates, `anyhow` in binaries/examples
 - Prefer streaming (`AsyncRead + Unpin + Send`) over loading full content into memory
 - Prefer `&str` borrows over `String` in intermediate data structures; use byte offset tracking for zero-copy slicing

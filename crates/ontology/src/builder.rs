@@ -71,8 +71,8 @@ pub fn build_lookup(graph: &FastGraph) -> OntologyResult<OntologyLookup> {
 fn extract_classes(graph: &FastGraph, lookup: &mut OntologyLookup) -> OntologyResult<usize> {
     let mut count = 0;
 
-    let rdf_type = rdf::type_.iri().unwrap().to_string();
-    let owl_class = owl::Class.iri().unwrap().to_string();
+    let rdf_type = rdf::type_.iri().expect("rdf:type is a compile-time constant IRI").to_string();
+    let owl_class = owl::Class.iri().expect("owl:Class is a compile-time constant IRI").to_string();
 
     // Query: ?s rdf:type owl:Class
     for triple_result in graph.triples() {
@@ -107,7 +107,7 @@ fn extract_individuals(
 ) -> OntologyResult<usize> {
     let mut count = 0;
 
-    let rdf_type = rdf::type_.iri().unwrap().to_string();
+    let rdf_type = rdf::type_.iri().expect("rdf:type is a compile-time constant IRI").to_string();
     let class_uris: HashSet<_> = classes.values().map(|uri| uri.as_str()).collect();
 
     // Query: ?s rdf:type <class_uri>

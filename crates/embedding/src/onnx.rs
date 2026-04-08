@@ -142,7 +142,7 @@ impl OnnxEmbeddingEngine {
     /// # Returns
     /// * Tuple of (input_ids, attention_mask) tensors, both with shape [batch_size, max_seq_len]
     fn tokenize_batch(&self, texts: &[&str]) -> EmbeddingResult<TokenizationBatch> {
-        let tokenizer = self.tokenizer.lock().unwrap();
+        let tokenizer = self.tokenizer.lock().unwrap(); // lock poison is unrecoverable
         let max_len = self.config.max_sequence_length;
 
         let mut input_ids_batch = Vec::new();
@@ -239,7 +239,7 @@ impl EmbeddingEngine for OnnxEmbeddingEngine {
         let attention_masks = attention_mask_batch.clone();
 
         let (output_shape, output_data) = tokio::task::spawn_blocking(move || {
-            let mut session = session.lock().unwrap();
+            let mut session = session.lock().unwrap(); // lock poison is unrecoverable
             let outputs = session.run(ort::inputs! {
                 "input_ids" => input_ids_tensor,
                 "attention_mask" => attention_mask_tensor,

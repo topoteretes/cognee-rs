@@ -56,7 +56,7 @@ pub fn chunk_text<C: TokenCounter>(
                 .map(|c| c.text)
                 .collect::<Vec<_>>()
                 .join(" ");
-            let cut_type = accumulated.last().unwrap().cut_type.to_string();
+            let cut_type = accumulated.last().expect("accumulated is non-empty because the else branch is only entered when !accumulated.is_empty()").cut_type.to_string();
             result.push(DocumentChunk::new(
                 Uuid::new_v5(
                     &NAMESPACE_OID,
@@ -81,7 +81,7 @@ pub fn chunk_text<C: TokenCounter>(
             .map(|c| c.text)
             .collect::<Vec<_>>()
             .join(" ");
-        let cut_type = accumulated.last().unwrap().cut_type.to_string();
+        let cut_type = accumulated.last().expect("accumulated is non-empty because the if-guard !accumulated.is_empty() was checked above").cut_type.to_string();
         result.push(DocumentChunk::new(
             Uuid::new_v5(
                 &NAMESPACE_OID,

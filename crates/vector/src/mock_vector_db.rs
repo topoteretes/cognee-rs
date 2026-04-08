@@ -68,7 +68,7 @@ impl VectorDB for MockVectorDB {
         dimension: usize,
     ) -> VectorDBResult<()> {
         let key = Self::collection_key(data_type, field_name);
-        let mut collections = self.collections.lock().unwrap();
+        let mut collections = self.collections.lock().unwrap(); // lock poison is unrecoverable
 
         if collections.contains_key(&key) {
             return Err(VectorDBError::CollectionExists(key));
@@ -87,7 +87,7 @@ impl VectorDB for MockVectorDB {
 
     async fn has_collection(&self, data_type: &str, field_name: &str) -> VectorDBResult<bool> {
         let key = Self::collection_key(data_type, field_name);
-        let collections = self.collections.lock().unwrap();
+        let collections = self.collections.lock().unwrap(); // lock poison is unrecoverable
         Ok(collections.contains_key(&key))
     }
 
@@ -102,7 +102,7 @@ impl VectorDB for MockVectorDB {
         }
 
         let key = Self::collection_key(data_type, field_name);
-        let mut collections = self.collections.lock().unwrap();
+        let mut collections = self.collections.lock().unwrap(); // lock poison is unrecoverable
 
         let collection = collections
             .get_mut(&key)
@@ -139,7 +139,7 @@ impl VectorDB for MockVectorDB {
         top_k: usize,
     ) -> VectorDBResult<Vec<SearchResult>> {
         let key = Self::collection_key(data_type, field_name);
-        let collections = self.collections.lock().unwrap();
+        let collections = self.collections.lock().unwrap(); // lock poison is unrecoverable
 
         let collection = collections
             .get(&key)
@@ -157,7 +157,7 @@ impl VectorDB for MockVectorDB {
             .collect();
 
         // Sort by score descending
-        scored_points.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+        scored_points.sort_by(|a, b| b.1.total_cmp(&a.1));
 
         // Take top k
         let results: Vec<SearchResult> = scored_points
@@ -178,7 +178,7 @@ impl VectorDB for MockVectorDB {
 
     async fn delete_collection(&self, data_type: &str, field_name: &str) -> VectorDBResult<()> {
         let key = Self::collection_key(data_type, field_name);
-        let mut collections = self.collections.lock().unwrap();
+        let mut collections = self.collections.lock().unwrap(); // lock poison is unrecoverable
         collections.remove(&key);
         Ok(())
     }
@@ -190,7 +190,7 @@ impl VectorDB for MockVectorDB {
         point_ids: &[Uuid],
     ) -> VectorDBResult<()> {
         let key = Self::collection_key(data_type, field_name);
-        let mut collections = self.collections.lock().unwrap();
+        let mut collections = self.collections.lock().unwrap(); // lock poison is unrecoverable
 
         let collection = collections
             .get_mut(&key)
@@ -205,7 +205,7 @@ impl VectorDB for MockVectorDB {
 
     async fn collection_size(&self, data_type: &str, field_name: &str) -> VectorDBResult<usize> {
         let key = Self::collection_key(data_type, field_name);
-        let collections = self.collections.lock().unwrap();
+        let collections = self.collections.lock().unwrap(); // lock poison is unrecoverable
 
         let collection = collections
             .get(&key)

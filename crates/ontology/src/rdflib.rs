@@ -185,8 +185,8 @@ fn bfs_extract_subgraph(
     let mut queue = VecDeque::new();
     let mut nodes = Vec::new();
     let mut edges = Vec::new();
-    let rdf_type = rdf::type_.iri().unwrap().to_string();
-    let rdfs_subclass = rdfs::subClassOf.iri().unwrap().to_string();
+    let rdf_type = rdf::type_.iri().expect("rdf:type is a compile-time constant IRI").to_string();
+    let rdfs_subclass = rdfs::subClassOf.iri().expect("rdfs:subClassOf is a compile-time constant IRI").to_string();
 
     // Start BFS from start_uri
     queue.push_back(start_uri.to_string());
@@ -294,8 +294,8 @@ fn bfs_extract_subgraph(
 
 /// Check if a predicate is an OWL ObjectProperty.
 fn is_object_property(graph: &FastGraph, predicate_uri: &str) -> OntologyResult<bool> {
-    let rdf_type = rdf::type_.iri().unwrap().to_string();
-    let owl_obj_prop = owl::ObjectProperty.iri().unwrap().to_string();
+    let rdf_type = rdf::type_.iri().expect("rdf:type is a compile-time constant IRI").to_string();
+    let owl_obj_prop = owl::ObjectProperty.iri().expect("owl:ObjectProperty is a compile-time constant IRI").to_string();
 
     // Query: <predicate> rdf:type owl:ObjectProperty
     for triple_result in graph.triples() {

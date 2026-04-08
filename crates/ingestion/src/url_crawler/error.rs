@@ -36,7 +36,7 @@ impl From<reqwest::Error> for UrlFetcherError {
         if err.is_timeout() {
             Self::Timeout(err.to_string())
         } else if err.is_status() {
-            let status = err.status().unwrap();
+            let status = err.status().expect("is_status() guarantees status() returns Some");
             Self::HttpStatus(status.as_u16(), err.to_string())
         } else {
             Self::HttpError(err.to_string())

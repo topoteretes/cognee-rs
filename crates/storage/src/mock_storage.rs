@@ -22,17 +22,19 @@ impl MockStorage {
     }
 
     fn generate_location(&self) -> String {
-        let mut counter = self.counter.lock().unwrap();
+        let mut counter = self.counter.lock().unwrap(); // lock poison is unrecoverable
         *counter += 1;
         format!("mock/{}.bin", counter)
     }
 
     pub fn get_stored_data(&self, location: &str) -> Option<Vec<u8>> {
-        self.data.lock().unwrap().get(location).cloned()
+        self.data.lock().unwrap() // lock poison is unrecoverable
+            .get(location).cloned()
     }
 
     pub fn get_all_locations(&self) -> Vec<String> {
-        self.data.lock().unwrap().keys().cloned().collect()
+        self.data.lock().unwrap() // lock poison is unrecoverable
+            .keys().cloned().collect()
     }
 }
 
@@ -52,7 +54,7 @@ impl StorageTrait for MockStorage {
         let location = self.generate_location();
         self.data
             .lock()
-            .unwrap()
+            .unwrap() // lock poison is unrecoverable
             .insert(location.clone(), data.to_vec());
         Ok(location)
     }
@@ -71,7 +73,8 @@ impl StorageTrait for MockStorage {
             .map_err(|e| StorageError::IoError(e.to_string()))?;
 
         let location = self.generate_location();
-        self.data.lock().unwrap().insert(location.clone(), buffer);
+        self.data.lock().unwrap() // lock poison is unrecoverable
+            .insert(location.clone(), buffer);
         Ok(location)
     }
 
@@ -93,20 +96,21 @@ impl StorageTrait for MockStorage {
     async fn retrieve(&self, location: &str) -> Result<Vec<u8>, StorageError> {
         self.data
             .lock()
-            .unwrap()
+            .unwrap() // lock poison is unrecoverable
             .get(location)
             .cloned()
             .ok_or_else(|| StorageError::NotFound(format!("Location not found: {}", location)))
     }
 
     async fn exists(&self, location: &str) -> Result<bool, StorageError> {
-        Ok(self.data.lock().unwrap().contains_key(location))
+        Ok(self.data.lock().unwrap() // lock poison is unrecoverable
+            .contains_key(location))
     }
 
     async fn delete(&self, location: &str) -> Result<(), StorageError> {
         self.data
             .lock()
-            .unwrap()
+            .unwrap() // lock poison is unrecoverable
             .remove(location)
             .ok_or_else(|| StorageError::NotFound(format!("Location not found: {}", location)))?;
         Ok(())

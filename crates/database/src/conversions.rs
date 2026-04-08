@@ -52,10 +52,10 @@ pub(crate) fn ignore_do_nothing(result: Result<(), DatabaseError>) -> Result<(),
 impl From<dataset::Model> for Dataset {
     fn from(m: dataset::Model) -> Self {
         Self {
-            id: uuid_hex::from_hex(&m.id).unwrap(),
+            id: uuid_hex::from_hex(&m.id).expect("DB stores only valid UUID hex strings; corruption indicates data integrity failure"),
             name: m.name,
-            owner_id: uuid_hex::from_hex(&m.owner_id).unwrap(),
-            tenant_id: uuid_hex::from_hex_opt(m.tenant_id.as_deref()).unwrap(),
+            owner_id: uuid_hex::from_hex(&m.owner_id).expect("DB stores only valid UUID hex strings; corruption indicates data integrity failure"),
+            tenant_id: uuid_hex::from_hex_opt(m.tenant_id.as_deref()).expect("DB stores only valid UUID hex strings; corruption indicates data integrity failure"),
             created_at: m.created_at,
             updated_at: m.updated_at,
         }
@@ -82,14 +82,14 @@ impl From<&Dataset> for dataset::ActiveModel {
 impl From<data::Model> for Data {
     fn from(m: data::Model) -> Self {
         Self {
-            id: uuid_hex::from_hex(&m.id).unwrap(),
+            id: uuid_hex::from_hex(&m.id).expect("DB stores only valid UUID hex strings; corruption indicates data integrity failure"),
             name: m.name,
             raw_data_location: m.raw_data_location,
             original_data_location: m.original_data_location,
             extension: m.extension,
             mime_type: m.mime_type,
             content_hash: m.content_hash,
-            owner_id: uuid_hex::from_hex(&m.owner_id).unwrap(),
+            owner_id: uuid_hex::from_hex(&m.owner_id).expect("DB stores only valid UUID hex strings; corruption indicates data integrity failure"),
             created_at: m.created_at,
             updated_at: m.updated_at,
             label: m.label,
@@ -97,7 +97,7 @@ impl From<data::Model> for Data {
             original_mime_type: m.original_mime_type,
             loader_engine: m.loader_engine,
             raw_content_hash: m.raw_content_hash,
-            tenant_id: uuid_hex::from_hex_opt(m.tenant_id.as_deref()).unwrap(),
+            tenant_id: uuid_hex::from_hex_opt(m.tenant_id.as_deref()).expect("DB stores only valid UUID hex strings; corruption indicates data integrity failure"),
             external_metadata: m.external_metadata,
             node_set: m.node_set,
             pipeline_status: m.pipeline_status,
@@ -157,26 +157,26 @@ pub(crate) fn make_dataset_data_active(
 // ---------------------------------------------------------------------------
 
 pub(crate) fn query_model_to_history(m: query_log::Model) -> SearchHistoryEntry {
-    let id = uuid_hex::from_hex(&m.id).unwrap();
+    let id = uuid_hex::from_hex(&m.id).expect("DB stores only valid UUID hex strings; corruption indicates data integrity failure");
     SearchHistoryEntry {
         entry_id: id,
         query_id: id,
         entry_type: SearchHistoryEntryType::Query,
         content: m.query_text,
         query_type: Some(m.query_type),
-        user_id: uuid_hex::from_hex_opt(m.user_id.as_deref()).unwrap(),
+        user_id: uuid_hex::from_hex_opt(m.user_id.as_deref()).expect("DB stores only valid UUID hex strings; corruption indicates data integrity failure"),
         created_at: m.created_at,
     }
 }
 
 pub(crate) fn result_model_to_history(m: result_log::Model) -> SearchHistoryEntry {
     SearchHistoryEntry {
-        entry_id: uuid_hex::from_hex(&m.id).unwrap(),
-        query_id: uuid_hex::from_hex(&m.query_id).unwrap(),
+        entry_id: uuid_hex::from_hex(&m.id).expect("DB stores only valid UUID hex strings; corruption indicates data integrity failure"),
+        query_id: uuid_hex::from_hex(&m.query_id).expect("DB stores only valid UUID hex strings; corruption indicates data integrity failure"),
         entry_type: SearchHistoryEntryType::Result,
         content: m.serialized_result,
         query_type: None,
-        user_id: uuid_hex::from_hex_opt(m.user_id.as_deref()).unwrap(),
+        user_id: uuid_hex::from_hex_opt(m.user_id.as_deref()).expect("DB stores only valid UUID hex strings; corruption indicates data integrity failure"),
         created_at: m.created_at,
     }
 }
@@ -188,10 +188,10 @@ pub(crate) fn result_model_to_history(m: result_log::Model) -> SearchHistoryEntr
 impl From<artifact_reference::Model> for ArtifactReference {
     fn from(m: artifact_reference::Model) -> Self {
         Self {
-            id: uuid_hex::from_hex(&m.id).unwrap(),
-            owner_id: uuid_hex::from_hex(&m.owner_id).unwrap(),
-            dataset_id: uuid_hex::from_hex(&m.dataset_id).unwrap(),
-            data_id: uuid_hex::from_hex_opt(m.data_id.as_deref()).unwrap(),
+            id: uuid_hex::from_hex(&m.id).expect("DB stores only valid UUID hex strings; corruption indicates data integrity failure"),
+            owner_id: uuid_hex::from_hex(&m.owner_id).expect("DB stores only valid UUID hex strings; corruption indicates data integrity failure"),
+            dataset_id: uuid_hex::from_hex(&m.dataset_id).expect("DB stores only valid UUID hex strings; corruption indicates data integrity failure"),
+            data_id: uuid_hex::from_hex_opt(m.data_id.as_deref()).expect("DB stores only valid UUID hex strings; corruption indicates data integrity failure"),
             artifact_kind: m.artifact_kind,
             artifact_id: m.artifact_id,
             collection_name: m.collection_name,
@@ -207,11 +207,11 @@ impl From<artifact_reference::Model> for ArtifactReference {
 impl From<node::Model> for GraphNode {
     fn from(m: node::Model) -> Self {
         Self {
-            id: uuid_hex::from_hex(&m.id).unwrap(),
-            slug: uuid_hex::from_hex(&m.slug).unwrap(),
-            user_id: uuid_hex::from_hex(&m.user_id).unwrap(),
-            data_id: uuid_hex::from_hex(&m.data_id).unwrap(),
-            dataset_id: uuid_hex::from_hex(&m.dataset_id).unwrap(),
+            id: uuid_hex::from_hex(&m.id).expect("DB stores only valid UUID hex strings; corruption indicates data integrity failure"),
+            slug: uuid_hex::from_hex(&m.slug).expect("DB stores only valid UUID hex strings; corruption indicates data integrity failure"),
+            user_id: uuid_hex::from_hex(&m.user_id).expect("DB stores only valid UUID hex strings; corruption indicates data integrity failure"),
+            data_id: uuid_hex::from_hex(&m.data_id).expect("DB stores only valid UUID hex strings; corruption indicates data integrity failure"),
+            dataset_id: uuid_hex::from_hex(&m.dataset_id).expect("DB stores only valid UUID hex strings; corruption indicates data integrity failure"),
             label: m.label,
             node_type: m.node_type,
             indexed_fields: m.indexed_fields,
@@ -241,13 +241,13 @@ impl From<&GraphNode> for node::ActiveModel {
 impl From<edge::Model> for GraphEdge {
     fn from(m: edge::Model) -> Self {
         Self {
-            id: uuid_hex::from_hex(&m.id).unwrap(),
-            slug: uuid_hex::from_hex(&m.slug).unwrap(),
-            user_id: uuid_hex::from_hex(&m.user_id).unwrap(),
-            data_id: uuid_hex::from_hex(&m.data_id).unwrap(),
-            dataset_id: uuid_hex::from_hex(&m.dataset_id).unwrap(),
-            source_node_id: uuid_hex::from_hex(&m.source_node_id).unwrap(),
-            destination_node_id: uuid_hex::from_hex(&m.destination_node_id).unwrap(),
+            id: uuid_hex::from_hex(&m.id).expect("DB stores only valid UUID hex strings; corruption indicates data integrity failure"),
+            slug: uuid_hex::from_hex(&m.slug).expect("DB stores only valid UUID hex strings; corruption indicates data integrity failure"),
+            user_id: uuid_hex::from_hex(&m.user_id).expect("DB stores only valid UUID hex strings; corruption indicates data integrity failure"),
+            data_id: uuid_hex::from_hex(&m.data_id).expect("DB stores only valid UUID hex strings; corruption indicates data integrity failure"),
+            dataset_id: uuid_hex::from_hex(&m.dataset_id).expect("DB stores only valid UUID hex strings; corruption indicates data integrity failure"),
+            source_node_id: uuid_hex::from_hex(&m.source_node_id).expect("DB stores only valid UUID hex strings; corruption indicates data integrity failure"),
+            destination_node_id: uuid_hex::from_hex(&m.destination_node_id).expect("DB stores only valid UUID hex strings; corruption indicates data integrity failure"),
             relationship_name: m.relationship_name,
             label: m.label,
             attributes: m.attributes,
@@ -299,13 +299,13 @@ pub(crate) fn domain_status_to_entity(s: PipelineRunStatus) -> pipeline_run::Pip
 impl From<pipeline_run::Model> for PipelineRun {
     fn from(m: pipeline_run::Model) -> Self {
         Self {
-            id: uuid_hex::from_hex(&m.id).unwrap(),
+            id: uuid_hex::from_hex(&m.id).expect("DB stores only valid UUID hex strings; corruption indicates data integrity failure"),
             created_at: m.created_at,
             status: entity_status_to_domain(m.status),
-            pipeline_run_id: uuid_hex::from_hex(&m.pipeline_run_id).unwrap(),
+            pipeline_run_id: uuid_hex::from_hex(&m.pipeline_run_id).expect("DB stores only valid UUID hex strings; corruption indicates data integrity failure"),
             pipeline_name: m.pipeline_name,
-            pipeline_id: uuid_hex::from_hex(&m.pipeline_id).unwrap(),
-            dataset_id: uuid_hex::from_hex(&m.dataset_id).unwrap(),
+            pipeline_id: uuid_hex::from_hex(&m.pipeline_id).expect("DB stores only valid UUID hex strings; corruption indicates data integrity failure"),
+            dataset_id: uuid_hex::from_hex(&m.dataset_id).expect("DB stores only valid UUID hex strings; corruption indicates data integrity failure"),
             run_info: m.run_info,
         }
     }
@@ -333,7 +333,7 @@ impl From<&PipelineRun> for pipeline_run::ActiveModel {
 impl From<task_run::Model> for TaskRun {
     fn from(m: task_run::Model) -> Self {
         Self {
-            id: uuid_hex::from_hex(&m.id).unwrap(),
+            id: uuid_hex::from_hex(&m.id).expect("DB stores only valid UUID hex strings; corruption indicates data integrity failure"),
             task_name: m.task_name,
             created_at: m.created_at,
             status: m.status,
@@ -361,7 +361,7 @@ impl From<&TaskRun> for task_run::ActiveModel {
 impl From<graph_metrics::Model> for GraphMetrics {
     fn from(m: graph_metrics::Model) -> Self {
         Self {
-            id: uuid_hex::from_hex(&m.id).unwrap(),
+            id: uuid_hex::from_hex(&m.id).expect("DB stores only valid UUID hex strings; corruption indicates data integrity failure"),
             num_tokens: m.num_tokens,
             num_nodes: m.num_nodes,
             num_edges: m.num_edges,

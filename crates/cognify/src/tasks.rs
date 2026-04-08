@@ -286,7 +286,10 @@ pub async fn extract_graph_from_data(
 
             chunk_ids.push(chunk.base.id);
             extract_tasks.push(tokio::spawn(async move {
-                let _permit = sem.acquire().await.unwrap();
+                let _permit = sem
+                    .acquire()
+                    .await
+                    .expect("semaphore is never closed; created locally in this function");
                 extractor.extract_facts(&text, prompt.as_deref()).await
             }));
         }
@@ -483,7 +486,10 @@ pub async fn extract_custom_graph_from_data<M: crate::fact_extraction::GraphMode
             let prompt = config.custom_extraction_prompt.clone();
 
             extract_tasks.push(tokio::spawn(async move {
-                let _permit = sem.acquire().await.unwrap();
+                let _permit = sem
+                    .acquire()
+                    .await
+                    .expect("semaphore is never closed; created locally in this function");
                 extractor.extract::<M>(&text, prompt.as_deref()).await
             }));
         }

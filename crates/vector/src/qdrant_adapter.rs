@@ -117,7 +117,7 @@ impl QdrantAdapter {
         dimension: usize,
     ) -> VectorDBResult<Arc<EdgeShard>> {
         {
-            let shards = self.shards.read().unwrap();
+            let shards = self.shards.read().unwrap(); // lock poison is unrecoverable
             if let Some(shard) = shards.get(collection) {
                 return Ok(shard.clone());
             }
@@ -148,7 +148,7 @@ impl QdrantAdapter {
                 .map_err(|e| VectorDBError::StorageError(e.to_string()))?,
         );
 
-        let mut shards = self.shards.write().unwrap();
+        let mut shards = self.shards.write().unwrap(); // lock poison is unrecoverable
         shards.insert(collection.to_string(), shard.clone());
 
         Ok(shard)
@@ -237,7 +237,7 @@ impl VectorDB for QdrantAdapter {
         let collection = Self::collection_name(data_type, field_name);
 
         {
-            let shards = self.shards.read().unwrap();
+            let shards = self.shards.read().unwrap(); // lock poison is unrecoverable
             if shards.contains_key(&collection) {
                 return Ok(true);
             }
@@ -314,7 +314,7 @@ impl VectorDB for QdrantAdapter {
 
     async fn delete_collection(&self, data_type: &str, field_name: &str) -> VectorDBResult<()> {
         let collection = Self::collection_name(data_type, field_name);
-        let mut shards = self.shards.write().unwrap();
+        let mut shards = self.shards.write().unwrap(); // lock poison is unrecoverable
 
         shards.remove(&collection);
 

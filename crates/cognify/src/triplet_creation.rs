@@ -57,8 +57,10 @@ pub fn create_triplets_from_graph(
             continue;
         }
 
-        let source_node = source_node.unwrap();
-        let target_node = target_node.unwrap();
+        let source_node = source_node
+            .expect("source_node is Some; None case was handled by the is_none() check above");
+        let target_node = target_node
+            .expect("target_node is Some; None case was handled by the is_none() check above");
 
         // Extract embeddable text from source node (name: description)
         let source_text = if !source_node.entity.description.is_empty() {
