@@ -1,9 +1,0 @@
-# Environment file (contains secrets)
-.env
-
-# Docker volumes data
-ollama_data/
-ollama_webui_data/
-
-# Logs
-*.log
