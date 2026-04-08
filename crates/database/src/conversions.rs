@@ -157,26 +157,36 @@ pub(crate) fn make_dataset_data_active(
 // ---------------------------------------------------------------------------
 
 pub(crate) fn query_model_to_history(m: query_log::Model) -> SearchHistoryEntry {
-    let id = uuid_hex::from_hex(&m.id).expect("DB stores only valid UUID hex strings; corruption indicates data integrity failure");
+    let id = uuid_hex::from_hex(&m.id).expect(
+        "DB stores only valid UUID hex strings; corruption indicates data integrity failure",
+    );
     SearchHistoryEntry {
         entry_id: id,
         query_id: id,
         entry_type: SearchHistoryEntryType::Query,
         content: m.query_text,
         query_type: Some(m.query_type),
-        user_id: uuid_hex::from_hex_opt(m.user_id.as_deref()).expect("DB stores only valid UUID hex strings; corruption indicates data integrity failure"),
+        user_id: uuid_hex::from_hex_opt(m.user_id.as_deref()).expect(
+            "DB stores only valid UUID hex strings; corruption indicates data integrity failure",
+        ),
         created_at: m.created_at,
     }
 }
 
 pub(crate) fn result_model_to_history(m: result_log::Model) -> SearchHistoryEntry {
     SearchHistoryEntry {
-        entry_id: uuid_hex::from_hex(&m.id).expect("DB stores only valid UUID hex strings; corruption indicates data integrity failure"),
-        query_id: uuid_hex::from_hex(&m.query_id).expect("DB stores only valid UUID hex strings; corruption indicates data integrity failure"),
+        entry_id: uuid_hex::from_hex(&m.id).expect(
+            "DB stores only valid UUID hex strings; corruption indicates data integrity failure",
+        ),
+        query_id: uuid_hex::from_hex(&m.query_id).expect(
+            "DB stores only valid UUID hex strings; corruption indicates data integrity failure",
+        ),
         entry_type: SearchHistoryEntryType::Result,
         content: m.serialized_result,
         query_type: None,
-        user_id: uuid_hex::from_hex_opt(m.user_id.as_deref()).expect("DB stores only valid UUID hex strings; corruption indicates data integrity failure"),
+        user_id: uuid_hex::from_hex_opt(m.user_id.as_deref()).expect(
+            "DB stores only valid UUID hex strings; corruption indicates data integrity failure",
+        ),
         created_at: m.created_at,
     }
 }

@@ -1467,7 +1467,9 @@ async fn upsert_provenance(
         };
 
         prov_edges.push(GraphEdge {
-            id: provenance_edge_id(tenant_id, user_id, dataset_id, source_id, rel_name, target_id),
+            id: provenance_edge_id(
+                tenant_id, user_id, dataset_id, source_id, rel_name, target_id,
+            ),
             slug: edge_slug(rel_name),
             user_id,
             data_id: Uuid::nil(), // structural edges span multiple DataPoints
