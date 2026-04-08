@@ -61,7 +61,7 @@ impl ComponentManager {
     }
 
     async fn init_database(&self) -> Result<Arc<DatabaseConnection>, ComponentError> {
-        let db = connect(&self.settings.relational_db_url)
+        let db = connect(&self.settings.resolved_relational_db_url())
             .await
             .map_err(|e| ComponentError::Database(format!("initialization failed: {e}")))?;
         initialize(&db)

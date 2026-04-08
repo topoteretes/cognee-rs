@@ -56,6 +56,17 @@ pub struct Settings {
     pub relational_db_url: String,
     pub migration_db_url: String,
 
+    /// Selects the relational DB backend: `"sqlite"` (default) or `"postgres"`.
+    /// When set to `"postgres"`, the individual `db_host`/`db_port`/`db_name`/
+    /// `db_username`/`db_password` fields are used instead of `relational_db_url`.
+    /// Mirrors the Python `DB_PROVIDER` environment variable.
+    pub db_provider: String,
+    pub db_host: String,
+    pub db_port: u16,
+    pub db_name: String,
+    pub db_username: String,
+    pub db_password: String,
+
     pub default_system_prompt_path: String,
 
     pub embedding_model_path: String,
@@ -64,6 +75,25 @@ pub struct Settings {
     pub embedding_dimensions: u32,
     pub embedding_max_sequence_length: u32,
     pub embedding_batch_size: u32,
+}
+
+impl Settings {
+    /// Returns the effective relational DB connection URL.
+    ///
+    /// When `db_provider` is `"postgres"`, builds
+    /// `postgres://username:password@host:port/name` from the individual
+    /// `db_*` fields (matching Python's `DB_PROVIDER`/`DB_HOST`/… env vars).
+    /// Otherwise returns `relational_db_url` verbatim.
+    pub fn resolved_relational_db_url(&self) -> String {
+        if self.db_provider == "postgres" {
+            format!(
+                "postgres://{}:{}@{}:{}/{}",
+                self.db_username, self.db_password, self.db_host, self.db_port, self.db_name
+            )
+        } else {
+            self.relational_db_url.clone()
+        }
+    }
 }
 
 impl Default for Settings {
@@ -116,6 +146,13 @@ impl Default for Settings {
 
             relational_db_url: "sqlite:./cognee.db".to_string(),
             migration_db_url: String::new(),
+
+            db_provider: "sqlite".to_string(),
+            db_host: "localhost".to_string(),
+            db_port: 5432,
+            db_name: "cognee_db".to_string(),
+            db_username: String::new(),
+            db_password: String::new(),
 
             default_system_prompt_path: DEFAULT_SYSTEM_PROMPT_PATH.to_string(),
 

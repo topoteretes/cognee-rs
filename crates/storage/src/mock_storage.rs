@@ -28,13 +28,20 @@ impl MockStorage {
     }
 
     pub fn get_stored_data(&self, location: &str) -> Option<Vec<u8>> {
-        self.data.lock().unwrap() // lock poison is unrecoverable
-            .get(location).cloned()
+        self.data
+            .lock()
+            .unwrap() // lock poison is unrecoverable
+            .get(location)
+            .cloned()
     }
 
     pub fn get_all_locations(&self) -> Vec<String> {
-        self.data.lock().unwrap() // lock poison is unrecoverable
-            .keys().cloned().collect()
+        self.data
+            .lock()
+            .unwrap() // lock poison is unrecoverable
+            .keys()
+            .cloned()
+            .collect()
     }
 }
 
@@ -73,7 +80,9 @@ impl StorageTrait for MockStorage {
             .map_err(|e| StorageError::IoError(e.to_string()))?;
 
         let location = self.generate_location();
-        self.data.lock().unwrap() // lock poison is unrecoverable
+        self.data
+            .lock()
+            .unwrap() // lock poison is unrecoverable
             .insert(location.clone(), buffer);
         Ok(location)
     }
@@ -103,7 +112,10 @@ impl StorageTrait for MockStorage {
     }
 
     async fn exists(&self, location: &str) -> Result<bool, StorageError> {
-        Ok(self.data.lock().unwrap() // lock poison is unrecoverable
+        Ok(self
+            .data
+            .lock()
+            .unwrap() // lock poison is unrecoverable
             .contains_key(location))
     }
 

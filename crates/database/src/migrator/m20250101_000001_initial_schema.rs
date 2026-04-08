@@ -12,9 +12,9 @@ impl MigrationTrait for Migration {
                 Table::create()
                     .table(Datasets::Table)
                     .if_not_exists()
-                    .col(ColumnDef::new(Datasets::Id).uuid().not_null().primary_key())
+                    .col(ColumnDef::new(Datasets::Id).text().not_null().primary_key())
                     .col(ColumnDef::new(Datasets::Name).text().not_null())
-                    .col(ColumnDef::new(Datasets::OwnerId).uuid().not_null())
+                    .col(ColumnDef::new(Datasets::OwnerId).text().not_null())
                     .col(ColumnDef::new(Datasets::TenantId).text())
                     .col(
                         ColumnDef::new(Datasets::CreatedAt)
@@ -50,14 +50,14 @@ impl MigrationTrait for Migration {
                 Table::create()
                     .table(Data::Table)
                     .if_not_exists()
-                    .col(ColumnDef::new(Data::Id).uuid().not_null().primary_key())
+                    .col(ColumnDef::new(Data::Id).text().not_null().primary_key())
                     .col(ColumnDef::new(Data::Name).text().not_null())
                     .col(ColumnDef::new(Data::RawDataLocation).text().not_null())
                     .col(ColumnDef::new(Data::OriginalDataLocation).text().not_null())
                     .col(ColumnDef::new(Data::Extension).text().not_null())
                     .col(ColumnDef::new(Data::MimeType).text().not_null())
                     .col(ColumnDef::new(Data::ContentHash).text().not_null())
-                    .col(ColumnDef::new(Data::OwnerId).uuid().not_null())
+                    .col(ColumnDef::new(Data::OwnerId).text().not_null())
                     .col(
                         ColumnDef::new(Data::CreatedAt)
                             .timestamp_with_time_zone()
@@ -75,15 +75,15 @@ impl MigrationTrait for Migration {
                     .col(ColumnDef::new(Data::PipelineStatus).text())
                     .col(
                         ColumnDef::new(Data::TokenCount)
-                            .integer()
+                            .big_integer()
                             .not_null()
-                            .default(-1),
+                            .default(-1_i64),
                     )
                     .col(
                         ColumnDef::new(Data::DataSize)
-                            .integer()
+                            .big_integer()
                             .not_null()
-                            .default(-1),
+                            .default(-1_i64),
                     )
                     .col(ColumnDef::new(Data::LastAccessed).timestamp_with_time_zone())
                     .to_owned(),
@@ -114,8 +114,8 @@ impl MigrationTrait for Migration {
                 Table::create()
                     .table(DatasetData::Table)
                     .if_not_exists()
-                    .col(ColumnDef::new(DatasetData::DatasetId).uuid().not_null())
-                    .col(ColumnDef::new(DatasetData::DataId).uuid().not_null())
+                    .col(ColumnDef::new(DatasetData::DatasetId).text().not_null())
+                    .col(ColumnDef::new(DatasetData::DataId).text().not_null())
                     .col(
                         ColumnDef::new(DatasetData::CreatedAt)
                             .timestamp_with_time_zone()
@@ -148,10 +148,10 @@ impl MigrationTrait for Migration {
                 Table::create()
                     .table(Queries::Table)
                     .if_not_exists()
-                    .col(ColumnDef::new(Queries::Id).uuid().not_null().primary_key())
+                    .col(ColumnDef::new(Queries::Id).text().not_null().primary_key())
                     .col(ColumnDef::new(Queries::QueryText).text().not_null())
                     .col(ColumnDef::new(Queries::QueryType).text().not_null())
-                    .col(ColumnDef::new(Queries::UserId).uuid())
+                    .col(ColumnDef::new(Queries::UserId).text())
                     .col(
                         ColumnDef::new(Queries::CreatedAt)
                             .timestamp_with_time_zone()
@@ -167,10 +167,10 @@ impl MigrationTrait for Migration {
                 Table::create()
                     .table(Results::Table)
                     .if_not_exists()
-                    .col(ColumnDef::new(Results::Id).uuid().not_null().primary_key())
-                    .col(ColumnDef::new(Results::QueryId).uuid().not_null())
+                    .col(ColumnDef::new(Results::Id).text().not_null().primary_key())
+                    .col(ColumnDef::new(Results::QueryId).text().not_null())
                     .col(ColumnDef::new(Results::SerializedResult).text().not_null())
-                    .col(ColumnDef::new(Results::UserId).uuid())
+                    .col(ColumnDef::new(Results::UserId).text())
                     .col(
                         ColumnDef::new(Results::CreatedAt)
                             .timestamp_with_time_zone()
@@ -194,21 +194,21 @@ impl MigrationTrait for Migration {
                     .if_not_exists()
                     .col(
                         ColumnDef::new(ArtifactReferences::Id)
-                            .uuid()
+                            .text()
                             .not_null()
                             .primary_key(),
                     )
                     .col(
                         ColumnDef::new(ArtifactReferences::OwnerId)
-                            .uuid()
+                            .text()
                             .not_null(),
                     )
                     .col(
                         ColumnDef::new(ArtifactReferences::DatasetId)
-                            .uuid()
+                            .text()
                             .not_null(),
                     )
-                    .col(ColumnDef::new(ArtifactReferences::DataId).uuid())
+                    .col(ColumnDef::new(ArtifactReferences::DataId).text())
                     .col(
                         ColumnDef::new(ArtifactReferences::ArtifactKind)
                             .text()
@@ -261,11 +261,11 @@ impl MigrationTrait for Migration {
                 Table::create()
                     .table(Nodes::Table)
                     .if_not_exists()
-                    .col(ColumnDef::new(Nodes::Id).uuid().not_null().primary_key())
-                    .col(ColumnDef::new(Nodes::Slug).uuid().not_null())
-                    .col(ColumnDef::new(Nodes::UserId).uuid().not_null())
-                    .col(ColumnDef::new(Nodes::DataId).uuid().not_null())
-                    .col(ColumnDef::new(Nodes::DatasetId).uuid().not_null())
+                    .col(ColumnDef::new(Nodes::Id).text().not_null().primary_key())
+                    .col(ColumnDef::new(Nodes::Slug).text().not_null())
+                    .col(ColumnDef::new(Nodes::UserId).text().not_null())
+                    .col(ColumnDef::new(Nodes::DataId).text().not_null())
+                    .col(ColumnDef::new(Nodes::DatasetId).text().not_null())
                     .col(ColumnDef::new(Nodes::Label).text())
                     .col(ColumnDef::new(Nodes::NodeType).text().not_null())
                     .col(ColumnDef::new(Nodes::IndexedFields).json().not_null())
@@ -313,13 +313,13 @@ impl MigrationTrait for Migration {
                 Table::create()
                     .table(Edges::Table)
                     .if_not_exists()
-                    .col(ColumnDef::new(Edges::Id).uuid().not_null().primary_key())
-                    .col(ColumnDef::new(Edges::Slug).uuid().not_null())
-                    .col(ColumnDef::new(Edges::UserId).uuid().not_null())
-                    .col(ColumnDef::new(Edges::DataId).uuid().not_null())
-                    .col(ColumnDef::new(Edges::DatasetId).uuid().not_null())
-                    .col(ColumnDef::new(Edges::SourceNodeId).uuid().not_null())
-                    .col(ColumnDef::new(Edges::DestinationNodeId).uuid().not_null())
+                    .col(ColumnDef::new(Edges::Id).text().not_null().primary_key())
+                    .col(ColumnDef::new(Edges::Slug).text().not_null())
+                    .col(ColumnDef::new(Edges::UserId).text().not_null())
+                    .col(ColumnDef::new(Edges::DataId).text().not_null())
+                    .col(ColumnDef::new(Edges::DatasetId).text().not_null())
+                    .col(ColumnDef::new(Edges::SourceNodeId).text().not_null())
+                    .col(ColumnDef::new(Edges::DestinationNodeId).text().not_null())
                     .col(ColumnDef::new(Edges::RelationshipName).text().not_null())
                     .col(ColumnDef::new(Edges::Label).text())
                     .col(ColumnDef::new(Edges::Attributes).json())
@@ -365,7 +365,7 @@ impl MigrationTrait for Migration {
                     .if_not_exists()
                     .col(
                         ColumnDef::new(PipelineRuns::Id)
-                            .uuid()
+                            .text()
                             .not_null()
                             .primary_key(),
                     )
@@ -377,12 +377,12 @@ impl MigrationTrait for Migration {
                     .col(ColumnDef::new(PipelineRuns::Status).text().not_null())
                     .col(
                         ColumnDef::new(PipelineRuns::PipelineRunId)
-                            .uuid()
+                            .text()
                             .not_null(),
                     )
                     .col(ColumnDef::new(PipelineRuns::PipelineName).text().not_null())
-                    .col(ColumnDef::new(PipelineRuns::PipelineId).uuid().not_null())
-                    .col(ColumnDef::new(PipelineRuns::DatasetId).uuid().not_null())
+                    .col(ColumnDef::new(PipelineRuns::PipelineId).text().not_null())
+                    .col(ColumnDef::new(PipelineRuns::DatasetId).text().not_null())
                     .col(ColumnDef::new(PipelineRuns::RunInfo).json())
                     .foreign_key(
                         ForeignKey::create()
@@ -427,7 +427,7 @@ impl MigrationTrait for Migration {
                 Table::create()
                     .table(TaskRuns::Table)
                     .if_not_exists()
-                    .col(ColumnDef::new(TaskRuns::Id).uuid().not_null().primary_key())
+                    .col(ColumnDef::new(TaskRuns::Id).text().not_null().primary_key())
                     .col(ColumnDef::new(TaskRuns::TaskName).text().not_null())
                     .col(
                         ColumnDef::new(TaskRuns::CreatedAt)
@@ -448,7 +448,7 @@ impl MigrationTrait for Migration {
                     .if_not_exists()
                     .col(
                         ColumnDef::new(GraphMetrics::Id)
-                            .uuid()
+                            .text()
                             .not_null()
                             .primary_key(),
                     )

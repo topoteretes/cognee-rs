@@ -3,6 +3,10 @@
 //! These tests exercise the full SQLite + LocalStorage stack (no mocks) to verify
 //! that the pipeline deduplicates correctly under various scenarios matching the
 //! Python `test_deduplication.py` E2E test.
+//!
+//! Each test is instantiated twice: once with SQLite and once with PostgreSQL.
+//! The PostgreSQL variant is skipped automatically when `DB_PROVIDER` is not
+//! set to `"postgres"` in the environment.
 
 use cognee_database::{DeleteDb, IngestDb, connect, initialize, ops};
 use cognee_delete::{DeleteMode, DeleteRequest, DeleteScope, DeleteService};
@@ -17,21 +21,25 @@ use uuid::Uuid;
 const NLP_TEXT: &str = include_str!("test_data/natural_language_processing.txt");
 const QUANTUM_TEXT: &str = include_str!("test_data/quantum_computers.txt");
 
-/// Build a fresh `AddPipeline` backed by a real SQLite database and
+/// Build a SQLite URL backed by a file inside `dir`, creating the file first.
+fn sqlite_db_url(dir: &TempDir) -> String {
+    let db_path = dir.path().join("cognee.db");
+    std::fs::File::create(&db_path).expect("sqlite db file should be created");
+    format!("sqlite://{}", db_path.display())
+}
+
+/// Build a fresh `AddPipeline` backed by the given database URL and
 /// `LocalStorage` inside `dir`. Returns the pipeline plus a shared database
 /// handle for post-test assertions.
 async fn make_pipeline(
     dir: &TempDir,
+    db_url: &str,
 ) -> (
     AddPipeline,
     Arc<cognee_database::DatabaseConnection>,
     Arc<LocalStorage>,
 ) {
-    let db_path = dir.path().join("cognee.db");
-    std::fs::File::create(&db_path).expect("sqlite db file should be created");
-    let db_url = format!("sqlite://{}", db_path.display());
-
-    let db = connect(&db_url).await.expect("connect");
+    let db = connect(db_url).await.expect("connect");
     initialize(&db).await.expect("initialize");
     let db = Arc::new(db);
 
@@ -49,13 +57,11 @@ async fn make_pipeline(
 // Sub-test A — File deduplication (identical content, different filenames)
 // ---------------------------------------------------------------------------
 
-#[tokio::test]
-async fn file_deduplication_same_content_yields_one_record() {
+async fn impl_file_deduplication_same_content_yields_one_record(db_url: &str) {
     let dir = TempDir::new().expect("tempdir");
-    let (pipeline, database, _storage) = make_pipeline(&dir).await;
+    let (pipeline, database, _storage) = make_pipeline(&dir, db_url).await;
     let owner = Uuid::new_v4();
 
-    // Two temp files with identical content
     let mut file1 = NamedTempFile::new().expect("tmp file 1");
     file1.write_all(NLP_TEXT.as_bytes()).expect("write file 1");
     let path1 = file1.path().to_str().unwrap().to_string();
@@ -73,14 +79,12 @@ async fn file_deduplication_same_content_yields_one_record() {
         .await
         .expect("add file 2");
 
-    // Same content + same owner → same data_id
     assert_eq!(
         result1[0].id, result2[0].id,
         "identical content should yield the same data_id"
     );
 
-    // Only one Data record in the database
-    let all_data_count = ops::datasets::list_datasets(&database)
+    let all_data_count = ops::datasets::list_datasets_by_owner(&database, owner)
         .await
         .expect("list datasets")
         .len();
@@ -104,21 +108,34 @@ async fn file_deduplication_same_content_yields_one_record() {
 
     assert_eq!(ds1_data.len(), 1);
     assert_eq!(ds2_data.len(), 1);
-    // Both datasets reference the same underlying data record
     assert_eq!(
         ds1_data[0].id, ds2_data[0].id,
         "both datasets should reference the same data_id"
     );
 }
 
+#[tokio::test]
+async fn file_deduplication_same_content_yields_one_record_sqlite() {
+    let dir = TempDir::new().expect("tempdir for url");
+    let url = sqlite_db_url(&dir);
+    impl_file_deduplication_same_content_yields_one_record(&url).await;
+}
+
+#[tokio::test]
+async fn file_deduplication_same_content_yields_one_record_pg() {
+    let Some(url) = cognee_test_utils::pg_test_url() else {
+        return;
+    };
+    impl_file_deduplication_same_content_yields_one_record(&url).await;
+}
+
 // ---------------------------------------------------------------------------
 // Sub-test B — Inline text deduplication across two add() calls
 // ---------------------------------------------------------------------------
 
-#[tokio::test]
-async fn text_deduplication_across_two_calls() {
+async fn impl_text_deduplication_across_two_calls(db_url: &str) {
     let dir = TempDir::new().expect("tempdir");
-    let (pipeline, database, _storage) = make_pipeline(&dir).await;
+    let (pipeline, database, _storage) = make_pipeline(&dir, db_url).await;
     let owner = Uuid::new_v4();
 
     let result1 = pipeline
@@ -144,14 +161,12 @@ async fn text_deduplication_across_two_calls() {
         result1[0].id, result2[0].id,
         "same text should deduplicate to the same data_id"
     );
-    // Name for text inputs is text_<md5_hash>
     assert!(
         result1[0].name.starts_with("text_"),
         "name should start with text_"
     );
     assert_eq!(result1[0].name, result2[0].name, "same content → same name");
 
-    // Both datasets reference the same data record
     let ds1 = ops::datasets::get_dataset_by_name(&database, "dataset1", owner, None)
         .await
         .unwrap()
@@ -175,14 +190,28 @@ async fn text_deduplication_across_two_calls() {
     assert_eq!(ds1_data[0].id, ds2_data[0].id);
 }
 
+#[tokio::test]
+async fn text_deduplication_across_two_calls_sqlite() {
+    let dir = TempDir::new().expect("tempdir for url");
+    let url = sqlite_db_url(&dir);
+    impl_text_deduplication_across_two_calls(&url).await;
+}
+
+#[tokio::test]
+async fn text_deduplication_across_two_calls_pg() {
+    let Some(url) = cognee_test_utils::pg_test_url() else {
+        return;
+    };
+    impl_text_deduplication_across_two_calls(&url).await;
+}
+
 // ---------------------------------------------------------------------------
 // Sub-test C — Cross-owner isolation (same content, different owners)
 // ---------------------------------------------------------------------------
 
-#[tokio::test]
-async fn cross_owner_isolation_same_content_different_owners() {
+async fn impl_cross_owner_isolation_same_content_different_owners(db_url: &str) {
     let dir = TempDir::new().expect("tempdir");
-    let (pipeline, database, _storage) = make_pipeline(&dir).await;
+    let (pipeline, database, _storage) = make_pipeline(&dir, db_url).await;
     let owner1 = Uuid::new_v4();
     let owner2 = Uuid::new_v4();
 
@@ -205,12 +234,10 @@ async fn cross_owner_isolation_same_content_different_owners() {
         .await
         .expect("add owner2");
 
-    // Different owners → different data_ids (owner_id is mixed into UUID5 seed)
     assert_ne!(
         result1[0].id, result2[0].id,
         "different owners should produce different data_ids"
     );
-    // Content hash is content-only (Python compatible), so same content → same hash
     assert_eq!(
         result1[0].content_hash, result2[0].content_hash,
         "content hash is owner-independent (Python compat)"
@@ -219,7 +246,6 @@ async fn cross_owner_isolation_same_content_different_owners() {
     assert_eq!(result1[0].owner_id, owner1);
     assert_eq!(result2[0].owner_id, owner2);
 
-    // Each owner has exactly one dataset and one data record
     let owner1_datasets = ops::datasets::list_datasets_by_owner(&database, owner1)
         .await
         .expect("list owner1 datasets");
@@ -241,17 +267,30 @@ async fn cross_owner_isolation_same_content_different_owners() {
     assert_eq!(ds2_data[0].owner_id, owner2);
 }
 
+#[tokio::test]
+async fn cross_owner_isolation_same_content_different_owners_sqlite() {
+    let dir = TempDir::new().expect("tempdir for url");
+    let url = sqlite_db_url(&dir);
+    impl_cross_owner_isolation_same_content_different_owners(&url).await;
+}
+
+#[tokio::test]
+async fn cross_owner_isolation_same_content_different_owners_pg() {
+    let Some(url) = cognee_test_utils::pg_test_url() else {
+        return;
+    };
+    impl_cross_owner_isolation_same_content_different_owners(&url).await;
+}
+
 // ---------------------------------------------------------------------------
 // Sub-test D — Binary file deduplication
 // ---------------------------------------------------------------------------
 
-#[tokio::test]
-async fn binary_file_deduplication() {
+async fn impl_binary_file_deduplication(db_url: &str) {
     let dir = TempDir::new().expect("tempdir");
-    let (pipeline, database, _storage) = make_pipeline(&dir).await;
+    let (pipeline, database, _storage) = make_pipeline(&dir, db_url).await;
     let owner = Uuid::new_v4();
 
-    // Identical binary bytes — PNG-like magic bytes
     let binary_content: &[u8] = &[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0xFF];
 
     let mut bin1 = NamedTempFile::new().expect("bin tmp 1");
@@ -281,13 +320,12 @@ async fn binary_file_deduplication() {
         .await
         .expect("add bin 2");
 
-    // Deduplication is MIME-type agnostic — only content + owner matter
     assert_eq!(
         result1[0].id, result2[0].id,
         "identical binary content should deduplicate"
     );
 
-    let all_datasets = ops::datasets::list_datasets(&database)
+    let all_datasets = ops::datasets::list_datasets_by_owner(&database, owner)
         .await
         .expect("list datasets");
     assert_eq!(all_datasets.len(), 2);
@@ -301,17 +339,30 @@ async fn binary_file_deduplication() {
     );
 }
 
+#[tokio::test]
+async fn binary_file_deduplication_sqlite() {
+    let dir = TempDir::new().expect("tempdir for url");
+    let url = sqlite_db_url(&dir);
+    impl_binary_file_deduplication(&url).await;
+}
+
+#[tokio::test]
+async fn binary_file_deduplication_pg() {
+    let Some(url) = cognee_test_utils::pg_test_url() else {
+        return;
+    };
+    impl_binary_file_deduplication(&url).await;
+}
+
 // ---------------------------------------------------------------------------
 // Sub-test E — Dataset link counting and cascade deletion
 // ---------------------------------------------------------------------------
 
-#[tokio::test]
-async fn cascade_deletion_preserves_data_with_remaining_links() {
+async fn impl_cascade_deletion_preserves_data_with_remaining_links(db_url: &str) {
     let dir = TempDir::new().expect("tempdir");
-    let (pipeline, database, storage) = make_pipeline(&dir).await;
+    let (pipeline, database, storage) = make_pipeline(&dir, db_url).await;
     let owner = Uuid::new_v4();
 
-    // Add the same content to 3 datasets
     let r1 = pipeline
         .add(
             vec![DataInput::Text(QUANTUM_TEXT.to_string())],
@@ -342,7 +393,6 @@ async fn cascade_deletion_preserves_data_with_remaining_links() {
 
     let data_id = r1[0].id;
 
-    // All three datasets reference the same data record
     let link_count = ops::data::count_data_dataset_links(&database, data_id)
         .await
         .expect("count links before delete");
@@ -353,7 +403,6 @@ async fn cascade_deletion_preserves_data_with_remaining_links() {
         database.clone() as Arc<dyn DeleteDb>,
     );
 
-    // Delete dataset1 — data still has 2 remaining links and must NOT be deleted
     let result1 = delete_svc
         .execute(&DeleteRequest {
             scope: DeleteScope::Dataset {
@@ -371,7 +420,6 @@ async fn cascade_deletion_preserves_data_with_remaining_links() {
         "data should not be deleted while still linked to other datasets"
     );
 
-    // Data record must still exist
     let data_still_exists = ops::data::get_data(&database, data_id)
         .await
         .expect("get data after ds1 delete");
@@ -385,7 +433,6 @@ async fn cascade_deletion_preserves_data_with_remaining_links() {
         .expect("count links after ds1 delete");
     assert_eq!(remaining_links, 2);
 
-    // Delete dataset2 — data still has 1 remaining link
     let result2 = delete_svc
         .execute(&DeleteRequest {
             scope: DeleteScope::Dataset {
@@ -400,7 +447,6 @@ async fn cascade_deletion_preserves_data_with_remaining_links() {
     assert_eq!(result2.deleted_datasets, 1);
     assert_eq!(result2.deleted_data, 0, "data still linked to ds3");
 
-    // Delete dataset3 — last link removed; data record should be deleted
     let result3 = delete_svc
         .execute(&DeleteRequest {
             scope: DeleteScope::Dataset {
@@ -427,16 +473,28 @@ async fn cascade_deletion_preserves_data_with_remaining_links() {
     );
 }
 
+#[tokio::test]
+async fn cascade_deletion_preserves_data_with_remaining_links_sqlite() {
+    let dir = TempDir::new().expect("tempdir for url");
+    let url = sqlite_db_url(&dir);
+    impl_cascade_deletion_preserves_data_with_remaining_links(&url).await;
+}
+
+#[tokio::test]
+async fn cascade_deletion_preserves_data_with_remaining_links_pg() {
+    let Some(url) = cognee_test_utils::pg_test_url() else {
+        return;
+    };
+    impl_cascade_deletion_preserves_data_with_remaining_links(&url).await;
+}
+
 // ---------------------------------------------------------------------------
 // Sub-test F — Tenant isolation
 // ---------------------------------------------------------------------------
 
-/// Same owner, same content, but different tenant_id → different data IDs.
-/// Content hash must be identical (owner-independent hashing).
-#[tokio::test]
-async fn same_owner_different_tenants_creates_separate_data_records() {
+async fn impl_same_owner_different_tenants_creates_separate_data_records(db_url: &str) {
     let dir = TempDir::new().expect("tempdir");
-    let (pipeline, _db, _storage) = make_pipeline(&dir).await;
+    let (pipeline, _db, _storage) = make_pipeline(&dir, db_url).await;
 
     let owner = Uuid::new_v4();
     let tenant1 = Some(Uuid::new_v4());
@@ -477,11 +535,28 @@ async fn same_owner_different_tenants_creates_separate_data_records() {
     assert_eq!(r2[0].tenant_id, tenant2);
 }
 
-/// Two owners × two tenants each create the same dataset name → four distinct dataset IDs.
 #[tokio::test]
-async fn datasets_isolated_by_owner_and_tenant() {
+async fn same_owner_different_tenants_creates_separate_data_records_sqlite() {
+    let dir = TempDir::new().expect("tempdir for url");
+    let url = sqlite_db_url(&dir);
+    impl_same_owner_different_tenants_creates_separate_data_records(&url).await;
+}
+
+#[tokio::test]
+async fn same_owner_different_tenants_creates_separate_data_records_pg() {
+    let Some(url) = cognee_test_utils::pg_test_url() else {
+        return;
+    };
+    impl_same_owner_different_tenants_creates_separate_data_records(&url).await;
+}
+
+// ---------------------------------------------------------------------------
+// Sub-test G — Owner × tenant matrix isolation
+// ---------------------------------------------------------------------------
+
+async fn impl_datasets_isolated_by_owner_and_tenant(db_url: &str) {
     let dir = TempDir::new().expect("tempdir");
-    let (pipeline, _db, _storage) = make_pipeline(&dir).await;
+    let (pipeline, _db, _storage) = make_pipeline(&dir, db_url).await;
 
     let owner1 = Uuid::new_v4();
     let owner2 = Uuid::new_v4();
@@ -509,11 +584,25 @@ async fn datasets_isolated_by_owner_and_tenant() {
         dataset_ids.push(result[0].id);
     }
 
-    // All four data IDs must be distinct because owner and tenant differ
     let unique: std::collections::HashSet<_> = dataset_ids.iter().collect();
     assert_eq!(
         unique.len(),
         4,
         "each owner+tenant combination must produce a distinct data ID"
     );
+}
+
+#[tokio::test]
+async fn datasets_isolated_by_owner_and_tenant_sqlite() {
+    let dir = TempDir::new().expect("tempdir for url");
+    let url = sqlite_db_url(&dir);
+    impl_datasets_isolated_by_owner_and_tenant(&url).await;
+}
+
+#[tokio::test]
+async fn datasets_isolated_by_owner_and_tenant_pg() {
+    let Some(url) = cognee_test_utils::pg_test_url() else {
+        return;
+    };
+    impl_datasets_isolated_by_owner_and_tenant(&url).await;
 }

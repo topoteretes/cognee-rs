@@ -24,5 +24,7 @@ serde.workspace = true
 serde_json.workspace = true
 
 [dev-dependencies]
+cognee-test-utils = { path = "../test-utils" }
+serial_test.workspace = true
 tokio.workspace = true
 tempfile = "3"

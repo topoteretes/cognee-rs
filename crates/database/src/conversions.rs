@@ -1,8 +1,3 @@
-/// Shared SeaORM ↔ domain-type conversions and error helpers used across ops modules.
-use chrono::Utc;
-use cognee_models::{Data, Dataset};
-use sea_orm::ActiveValue::Set;
-
 use crate::entities::{
     artifact_reference, data, dataset, dataset_data, edge, graph_metrics, node, pipeline_run,
     query_log, result_log, task_run,
@@ -12,6 +7,10 @@ use crate::types::{
     PipelineRunStatus, SearchHistoryEntry, SearchHistoryEntryType, TaskRun,
 };
 use crate::uuid_hex;
+/// Shared SeaORM ↔ domain-type conversions and error helpers used across ops modules.
+use chrono::Utc;
+use cognee_models::{Data, Dataset};
+use sea_orm::ActiveValue::Set;
 
 // ---------------------------------------------------------------------------
 // Error mapping

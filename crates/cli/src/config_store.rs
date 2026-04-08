@@ -117,6 +117,12 @@ pub fn known_keys() -> Vec<&'static str> {
         "chunk_overlap",
         "relational_db_url",
         "migration_db_url",
+        "db_provider",
+        "db_host",
+        "db_port",
+        "db_name",
+        "db_username",
+        "db_password",
         "default_system_prompt_path",
         "embedding_model_path",
         "embedding_tokenizer_path",
@@ -257,6 +263,12 @@ pub fn as_flat_map(settings: &Settings) -> BTreeMap<&'static str, Value> {
             "migration_db_url",
             Value::String(settings.migration_db_url.clone()),
         ),
+        ("db_provider", Value::String(settings.db_provider.clone())),
+        ("db_host", Value::String(settings.db_host.clone())),
+        ("db_port", Value::from(settings.db_port)),
+        ("db_name", Value::String(settings.db_name.clone())),
+        ("db_username", Value::String(settings.db_username.clone())),
+        ("db_password", Value::String(settings.db_password.clone())),
         (
             "default_system_prompt_path",
             Value::String(settings.default_system_prompt_path.clone()),
@@ -331,6 +343,12 @@ pub fn set_value(settings: &mut Settings, key: &str, value: Value) -> Result<(),
         "chunk_overlap" => settings.chunk_overlap = expect_u32(key, value)?,
         "relational_db_url" => settings.relational_db_url = expect_string(key, value)?,
         "migration_db_url" => settings.migration_db_url = expect_string(key, value)?,
+        "db_provider" => settings.db_provider = expect_string(key, value)?,
+        "db_host" => settings.db_host = expect_string(key, value)?,
+        "db_port" => settings.db_port = expect_u16(key, value)?,
+        "db_name" => settings.db_name = expect_string(key, value)?,
+        "db_username" => settings.db_username = expect_string(key, value)?,
+        "db_password" => settings.db_password = expect_string(key, value)?,
         "default_system_prompt_path" => {
             settings.default_system_prompt_path = expect_string(key, value)?
         }
@@ -409,6 +427,12 @@ pub fn unset_key(settings: &mut Settings, key: &str) -> Result<(), CliError> {
         "chunk_overlap" => settings.chunk_overlap = defaults.chunk_overlap,
         "relational_db_url" => settings.relational_db_url = defaults.relational_db_url,
         "migration_db_url" => settings.migration_db_url = defaults.migration_db_url,
+        "db_provider" => settings.db_provider = defaults.db_provider,
+        "db_host" => settings.db_host = defaults.db_host,
+        "db_port" => settings.db_port = defaults.db_port,
+        "db_name" => settings.db_name = defaults.db_name,
+        "db_username" => settings.db_username = defaults.db_username,
+        "db_password" => settings.db_password = defaults.db_password,
         "default_system_prompt_path" => {
             settings.default_system_prompt_path = defaults.default_system_prompt_path
         }
