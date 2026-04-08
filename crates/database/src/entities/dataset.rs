@@ -5,11 +5,11 @@ use serde::{Deserialize, Serialize};
 #[sea_orm(table_name = "datasets")]
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
-    pub id: Uuid,
+    pub id: String,
     pub name: String,
     #[sea_orm(indexed)]
-    pub owner_id: Uuid,
-    pub tenant_id: Option<Uuid>,
+    pub owner_id: String,
+    pub tenant_id: Option<String>,
     pub created_at: DateTimeUtc,
     pub updated_at: Option<DateTimeUtc>,
 }

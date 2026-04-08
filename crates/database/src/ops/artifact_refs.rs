@@ -7,6 +7,7 @@ use uuid::Uuid;
 use crate::conversions::{ignore_do_nothing, map_sea_err};
 use crate::entities::artifact_reference;
 use crate::types::{ArtifactReference, DatabaseError};
+use crate::uuid_hex;
 
 pub async fn upsert_artifact_references(
     db: &DatabaseConnection,
@@ -14,10 +15,10 @@ pub async fn upsert_artifact_references(
 ) -> Result<(), DatabaseError> {
     for r in references {
         let model = artifact_reference::ActiveModel {
-            id: Set(r.id),
-            owner_id: Set(r.owner_id),
-            dataset_id: Set(r.dataset_id),
-            data_id: Set(r.data_id),
+            id: Set(uuid_hex::to_hex(r.id)),
+            owner_id: Set(uuid_hex::to_hex(r.owner_id)),
+            dataset_id: Set(uuid_hex::to_hex(r.dataset_id)),
+            data_id: Set(uuid_hex::to_hex_opt(r.data_id)),
             artifact_kind: Set(r.artifact_kind.clone()),
             artifact_id: Set(r.artifact_id.clone()),
             collection_name: Set(r.collection_name.clone()),
@@ -49,7 +50,7 @@ pub async fn list_artifact_references_for_data(
     data_id: Uuid,
 ) -> Result<Vec<ArtifactReference>, DatabaseError> {
     artifact_reference::Entity::find()
-        .filter(artifact_reference::Column::DataId.eq(data_id))
+        .filter(artifact_reference::Column::DataId.eq(uuid_hex::to_hex(data_id)))
         .order_by_asc(artifact_reference::Column::CreatedAt)
         .all(db)
         .await
@@ -62,7 +63,7 @@ pub async fn list_artifact_references_for_dataset(
     dataset_id: Uuid,
 ) -> Result<Vec<ArtifactReference>, DatabaseError> {
     artifact_reference::Entity::find()
-        .filter(artifact_reference::Column::DatasetId.eq(dataset_id))
+        .filter(artifact_reference::Column::DatasetId.eq(uuid_hex::to_hex(dataset_id)))
         .order_by_asc(artifact_reference::Column::CreatedAt)
         .all(db)
         .await

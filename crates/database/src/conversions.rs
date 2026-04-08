@@ -11,6 +11,7 @@ use crate::types::{
     ArtifactReference, DatabaseError, GraphEdge, GraphMetrics, GraphNode, PipelineRun,
     PipelineRunStatus, SearchHistoryEntry, SearchHistoryEntryType, TaskRun,
 };
+use crate::uuid_hex;
 
 // ---------------------------------------------------------------------------
 // Error mapping
@@ -51,10 +52,10 @@ pub(crate) fn ignore_do_nothing(result: Result<(), DatabaseError>) -> Result<(),
 impl From<dataset::Model> for Dataset {
     fn from(m: dataset::Model) -> Self {
         Self {
-            id: m.id,
+            id: uuid_hex::from_hex(&m.id).unwrap(),
             name: m.name,
-            owner_id: m.owner_id,
-            tenant_id: m.tenant_id,
+            owner_id: uuid_hex::from_hex(&m.owner_id).unwrap(),
+            tenant_id: uuid_hex::from_hex_opt(m.tenant_id.as_deref()).unwrap(),
             created_at: m.created_at,
             updated_at: m.updated_at,
         }
@@ -64,10 +65,10 @@ impl From<dataset::Model> for Dataset {
 impl From<&Dataset> for dataset::ActiveModel {
     fn from(d: &Dataset) -> Self {
         Self {
-            id: Set(d.id),
+            id: Set(uuid_hex::to_hex(d.id)),
             name: Set(d.name.clone()),
-            owner_id: Set(d.owner_id),
-            tenant_id: Set(d.tenant_id),
+            owner_id: Set(uuid_hex::to_hex(d.owner_id)),
+            tenant_id: Set(uuid_hex::to_hex_opt(d.tenant_id)),
             created_at: Set(d.created_at),
             updated_at: Set(d.updated_at),
         }
@@ -81,14 +82,14 @@ impl From<&Dataset> for dataset::ActiveModel {
 impl From<data::Model> for Data {
     fn from(m: data::Model) -> Self {
         Self {
-            id: m.id,
+            id: uuid_hex::from_hex(&m.id).unwrap(),
             name: m.name,
             raw_data_location: m.raw_data_location,
             original_data_location: m.original_data_location,
             extension: m.extension,
             mime_type: m.mime_type,
             content_hash: m.content_hash,
-            owner_id: m.owner_id,
+            owner_id: uuid_hex::from_hex(&m.owner_id).unwrap(),
             created_at: m.created_at,
             updated_at: m.updated_at,
             label: m.label,
@@ -96,7 +97,7 @@ impl From<data::Model> for Data {
             original_mime_type: m.original_mime_type,
             loader_engine: m.loader_engine,
             raw_content_hash: m.raw_content_hash,
-            tenant_id: m.tenant_id,
+            tenant_id: uuid_hex::from_hex_opt(m.tenant_id.as_deref()).unwrap(),
             external_metadata: m.external_metadata,
             node_set: m.node_set,
             pipeline_status: m.pipeline_status,
@@ -110,14 +111,14 @@ impl From<data::Model> for Data {
 impl From<&Data> for data::ActiveModel {
     fn from(d: &Data) -> Self {
         Self {
-            id: Set(d.id),
+            id: Set(uuid_hex::to_hex(d.id)),
             name: Set(d.name.clone()),
             raw_data_location: Set(d.raw_data_location.clone()),
             original_data_location: Set(d.original_data_location.clone()),
             extension: Set(d.extension.clone()),
             mime_type: Set(d.mime_type.clone()),
             content_hash: Set(d.content_hash.clone()),
-            owner_id: Set(d.owner_id),
+            owner_id: Set(uuid_hex::to_hex(d.owner_id)),
             created_at: Set(d.created_at),
             updated_at: Set(d.updated_at),
             label: Set(d.label.clone()),
@@ -125,7 +126,7 @@ impl From<&Data> for data::ActiveModel {
             original_mime_type: Set(d.original_mime_type.clone()),
             loader_engine: Set(d.loader_engine.clone()),
             raw_content_hash: Set(d.raw_content_hash.clone()),
-            tenant_id: Set(d.tenant_id),
+            tenant_id: Set(uuid_hex::to_hex_opt(d.tenant_id)),
             external_metadata: Set(d.external_metadata.clone()),
             node_set: Set(d.node_set.clone()),
             pipeline_status: Set(d.pipeline_status.clone()),
@@ -145,8 +146,8 @@ pub(crate) fn make_dataset_data_active(
     data_id: uuid::Uuid,
 ) -> dataset_data::ActiveModel {
     dataset_data::ActiveModel {
-        dataset_id: Set(dataset_id),
-        data_id: Set(data_id),
+        dataset_id: Set(uuid_hex::to_hex(dataset_id)),
+        data_id: Set(uuid_hex::to_hex(data_id)),
         created_at: Set(Utc::now()),
     }
 }
@@ -156,25 +157,26 @@ pub(crate) fn make_dataset_data_active(
 // ---------------------------------------------------------------------------
 
 pub(crate) fn query_model_to_history(m: query_log::Model) -> SearchHistoryEntry {
+    let id = uuid_hex::from_hex(&m.id).unwrap();
     SearchHistoryEntry {
-        entry_id: m.id,
-        query_id: m.id,
+        entry_id: id,
+        query_id: id,
         entry_type: SearchHistoryEntryType::Query,
         content: m.query_text,
         query_type: Some(m.query_type),
-        user_id: m.user_id,
+        user_id: uuid_hex::from_hex_opt(m.user_id.as_deref()).unwrap(),
         created_at: m.created_at,
     }
 }
 
 pub(crate) fn result_model_to_history(m: result_log::Model) -> SearchHistoryEntry {
     SearchHistoryEntry {
-        entry_id: m.id,
-        query_id: m.query_id,
+        entry_id: uuid_hex::from_hex(&m.id).unwrap(),
+        query_id: uuid_hex::from_hex(&m.query_id).unwrap(),
         entry_type: SearchHistoryEntryType::Result,
         content: m.serialized_result,
         query_type: None,
-        user_id: m.user_id,
+        user_id: uuid_hex::from_hex_opt(m.user_id.as_deref()).unwrap(),
         created_at: m.created_at,
     }
 }
@@ -186,10 +188,10 @@ pub(crate) fn result_model_to_history(m: result_log::Model) -> SearchHistoryEntr
 impl From<artifact_reference::Model> for ArtifactReference {
     fn from(m: artifact_reference::Model) -> Self {
         Self {
-            id: m.id,
-            owner_id: m.owner_id,
-            dataset_id: m.dataset_id,
-            data_id: m.data_id,
+            id: uuid_hex::from_hex(&m.id).unwrap(),
+            owner_id: uuid_hex::from_hex(&m.owner_id).unwrap(),
+            dataset_id: uuid_hex::from_hex(&m.dataset_id).unwrap(),
+            data_id: uuid_hex::from_hex_opt(m.data_id.as_deref()).unwrap(),
             artifact_kind: m.artifact_kind,
             artifact_id: m.artifact_id,
             collection_name: m.collection_name,
@@ -205,11 +207,11 @@ impl From<artifact_reference::Model> for ArtifactReference {
 impl From<node::Model> for GraphNode {
     fn from(m: node::Model) -> Self {
         Self {
-            id: m.id,
-            slug: m.slug,
-            user_id: m.user_id,
-            data_id: m.data_id,
-            dataset_id: m.dataset_id,
+            id: uuid_hex::from_hex(&m.id).unwrap(),
+            slug: uuid_hex::from_hex(&m.slug).unwrap(),
+            user_id: uuid_hex::from_hex(&m.user_id).unwrap(),
+            data_id: uuid_hex::from_hex(&m.data_id).unwrap(),
+            dataset_id: uuid_hex::from_hex(&m.dataset_id).unwrap(),
             label: m.label,
             node_type: m.node_type,
             indexed_fields: m.indexed_fields,
@@ -222,11 +224,11 @@ impl From<node::Model> for GraphNode {
 impl From<&GraphNode> for node::ActiveModel {
     fn from(n: &GraphNode) -> Self {
         Self {
-            id: Set(n.id),
-            slug: Set(n.slug),
-            user_id: Set(n.user_id),
-            data_id: Set(n.data_id),
-            dataset_id: Set(n.dataset_id),
+            id: Set(uuid_hex::to_hex(n.id)),
+            slug: Set(uuid_hex::to_hex(n.slug)),
+            user_id: Set(uuid_hex::to_hex(n.user_id)),
+            data_id: Set(uuid_hex::to_hex(n.data_id)),
+            dataset_id: Set(uuid_hex::to_hex(n.dataset_id)),
             label: Set(n.label.clone()),
             node_type: Set(n.node_type.clone()),
             indexed_fields: Set(n.indexed_fields.clone()),
@@ -239,13 +241,13 @@ impl From<&GraphNode> for node::ActiveModel {
 impl From<edge::Model> for GraphEdge {
     fn from(m: edge::Model) -> Self {
         Self {
-            id: m.id,
-            slug: m.slug,
-            user_id: m.user_id,
-            data_id: m.data_id,
-            dataset_id: m.dataset_id,
-            source_node_id: m.source_node_id,
-            destination_node_id: m.destination_node_id,
+            id: uuid_hex::from_hex(&m.id).unwrap(),
+            slug: uuid_hex::from_hex(&m.slug).unwrap(),
+            user_id: uuid_hex::from_hex(&m.user_id).unwrap(),
+            data_id: uuid_hex::from_hex(&m.data_id).unwrap(),
+            dataset_id: uuid_hex::from_hex(&m.dataset_id).unwrap(),
+            source_node_id: uuid_hex::from_hex(&m.source_node_id).unwrap(),
+            destination_node_id: uuid_hex::from_hex(&m.destination_node_id).unwrap(),
             relationship_name: m.relationship_name,
             label: m.label,
             attributes: m.attributes,
@@ -257,13 +259,13 @@ impl From<edge::Model> for GraphEdge {
 impl From<&GraphEdge> for edge::ActiveModel {
     fn from(e: &GraphEdge) -> Self {
         Self {
-            id: Set(e.id),
-            slug: Set(e.slug),
-            user_id: Set(e.user_id),
-            data_id: Set(e.data_id),
-            dataset_id: Set(e.dataset_id),
-            source_node_id: Set(e.source_node_id),
-            destination_node_id: Set(e.destination_node_id),
+            id: Set(uuid_hex::to_hex(e.id)),
+            slug: Set(uuid_hex::to_hex(e.slug)),
+            user_id: Set(uuid_hex::to_hex(e.user_id)),
+            data_id: Set(uuid_hex::to_hex(e.data_id)),
+            dataset_id: Set(uuid_hex::to_hex(e.dataset_id)),
+            source_node_id: Set(uuid_hex::to_hex(e.source_node_id)),
+            destination_node_id: Set(uuid_hex::to_hex(e.destination_node_id)),
             relationship_name: Set(e.relationship_name.clone()),
             label: Set(e.label.clone()),
             attributes: Set(e.attributes.clone()),
@@ -297,13 +299,13 @@ pub(crate) fn domain_status_to_entity(s: PipelineRunStatus) -> pipeline_run::Pip
 impl From<pipeline_run::Model> for PipelineRun {
     fn from(m: pipeline_run::Model) -> Self {
         Self {
-            id: m.id,
+            id: uuid_hex::from_hex(&m.id).unwrap(),
             created_at: m.created_at,
             status: entity_status_to_domain(m.status),
-            pipeline_run_id: m.pipeline_run_id,
+            pipeline_run_id: uuid_hex::from_hex(&m.pipeline_run_id).unwrap(),
             pipeline_name: m.pipeline_name,
-            pipeline_id: m.pipeline_id,
-            dataset_id: m.dataset_id,
+            pipeline_id: uuid_hex::from_hex(&m.pipeline_id).unwrap(),
+            dataset_id: uuid_hex::from_hex(&m.dataset_id).unwrap(),
             run_info: m.run_info,
         }
     }
@@ -312,13 +314,13 @@ impl From<pipeline_run::Model> for PipelineRun {
 impl From<&PipelineRun> for pipeline_run::ActiveModel {
     fn from(r: &PipelineRun) -> Self {
         Self {
-            id: Set(r.id),
+            id: Set(uuid_hex::to_hex(r.id)),
             created_at: Set(r.created_at),
             status: Set(domain_status_to_entity(r.status.clone())),
-            pipeline_run_id: Set(r.pipeline_run_id),
+            pipeline_run_id: Set(uuid_hex::to_hex(r.pipeline_run_id)),
             pipeline_name: Set(r.pipeline_name.clone()),
-            pipeline_id: Set(r.pipeline_id),
-            dataset_id: Set(r.dataset_id),
+            pipeline_id: Set(uuid_hex::to_hex(r.pipeline_id)),
+            dataset_id: Set(uuid_hex::to_hex(r.dataset_id)),
             run_info: Set(r.run_info.clone()),
         }
     }
@@ -331,7 +333,7 @@ impl From<&PipelineRun> for pipeline_run::ActiveModel {
 impl From<task_run::Model> for TaskRun {
     fn from(m: task_run::Model) -> Self {
         Self {
-            id: m.id,
+            id: uuid_hex::from_hex(&m.id).unwrap(),
             task_name: m.task_name,
             created_at: m.created_at,
             status: m.status,
@@ -343,7 +345,7 @@ impl From<task_run::Model> for TaskRun {
 impl From<&TaskRun> for task_run::ActiveModel {
     fn from(r: &TaskRun) -> Self {
         Self {
-            id: Set(r.id),
+            id: Set(uuid_hex::to_hex(r.id)),
             task_name: Set(r.task_name.clone()),
             created_at: Set(r.created_at),
             status: Set(r.status.clone()),
@@ -359,7 +361,7 @@ impl From<&TaskRun> for task_run::ActiveModel {
 impl From<graph_metrics::Model> for GraphMetrics {
     fn from(m: graph_metrics::Model) -> Self {
         Self {
-            id: m.id,
+            id: uuid_hex::from_hex(&m.id).unwrap(),
             num_tokens: m.num_tokens,
             num_nodes: m.num_nodes,
             num_edges: m.num_edges,
@@ -380,7 +382,7 @@ impl From<graph_metrics::Model> for GraphMetrics {
 impl From<&GraphMetrics> for graph_metrics::ActiveModel {
     fn from(gm: &GraphMetrics) -> Self {
         Self {
-            id: Set(gm.id),
+            id: Set(uuid_hex::to_hex(gm.id)),
             num_tokens: Set(gm.num_tokens),
             num_nodes: Set(gm.num_nodes),
             num_edges: Set(gm.num_edges),

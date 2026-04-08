@@ -8,6 +8,7 @@ use uuid::Uuid;
 use crate::conversions::{ignore_do_nothing, make_dataset_data_active, map_sea_err};
 use crate::entities::{data, dataset, dataset_data};
 use crate::types::DatabaseError;
+use crate::uuid_hex;
 
 pub async fn create_dataset(
     db: &DatabaseConnection,
@@ -24,7 +25,7 @@ pub async fn get_dataset(
     db: &DatabaseConnection,
     id: Uuid,
 ) -> Result<Option<Dataset>, DatabaseError> {
-    dataset::Entity::find_by_id(id)
+    dataset::Entity::find_by_id(uuid_hex::to_hex(id))
         .one(db)
         .await
         .map_err(map_sea_err)
@@ -40,10 +41,10 @@ pub async fn get_dataset_by_name(
     let mut q = dataset::Entity::find().filter(
         dataset::Column::Name
             .eq(name)
-            .and(dataset::Column::OwnerId.eq(owner_id)),
+            .and(dataset::Column::OwnerId.eq(uuid_hex::to_hex(owner_id))),
     );
     if let Some(tid) = tenant_id {
-        q = q.filter(dataset::Column::TenantId.eq(tid));
+        q = q.filter(dataset::Column::TenantId.eq(uuid_hex::to_hex(tid)));
     }
     q.one(db)
         .await
@@ -56,7 +57,7 @@ pub async fn list_datasets_by_owner(
     owner_id: Uuid,
 ) -> Result<Vec<Dataset>, DatabaseError> {
     dataset::Entity::find()
-        .filter(dataset::Column::OwnerId.eq(owner_id))
+        .filter(dataset::Column::OwnerId.eq(uuid_hex::to_hex(owner_id)))
         .order_by_asc(dataset::Column::CreatedAt)
         .all(db)
         .await
@@ -74,7 +75,7 @@ pub async fn list_datasets(db: &DatabaseConnection) -> Result<Vec<Dataset>, Data
 }
 
 pub async fn delete_dataset(db: &DatabaseConnection, id: Uuid) -> Result<(), DatabaseError> {
-    dataset::Entity::delete_by_id(id)
+    dataset::Entity::delete_by_id(uuid_hex::to_hex(id))
         .exec(db)
         .await
         .map_err(map_sea_err)?;
@@ -111,8 +112,8 @@ pub async fn detach_data_from_dataset(
     dataset_data::Entity::delete_many()
         .filter(
             dataset_data::Column::DatasetId
-                .eq(dataset_id)
-                .and(dataset_data::Column::DataId.eq(data_id)),
+                .eq(uuid_hex::to_hex(dataset_id))
+                .and(dataset_data::Column::DataId.eq(uuid_hex::to_hex(data_id))),
         )
         .exec(db)
         .await
@@ -124,7 +125,7 @@ pub async fn get_dataset_data(
     db: &DatabaseConnection,
     dataset_id: Uuid,
 ) -> Result<Vec<Data>, DatabaseError> {
-    let pairs = dataset::Entity::find_by_id(dataset_id)
+    let pairs = dataset::Entity::find_by_id(uuid_hex::to_hex(dataset_id))
         .find_with_related(data::Entity)
         .all(db)
         .await

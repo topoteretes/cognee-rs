@@ -7,6 +7,7 @@ use uuid::Uuid;
 use crate::conversions::{map_sea_err, query_model_to_history, result_model_to_history};
 use crate::entities::{query_log, result_log};
 use crate::types::{DatabaseError, SearchHistoryEntry};
+use crate::uuid_hex;
 
 pub async fn log_query(
     db: &DatabaseConnection,
@@ -16,10 +17,10 @@ pub async fn log_query(
 ) -> Result<Uuid, DatabaseError> {
     let id = Uuid::new_v4();
     let model = query_log::ActiveModel {
-        id: Set(id),
+        id: Set(uuid_hex::to_hex(id)),
         query_text: Set(query_text.to_string()),
         query_type: Set(query_type.to_string()),
-        user_id: Set(user_id),
+        user_id: Set(uuid_hex::to_hex_opt(user_id)),
         created_at: Set(Utc::now()),
     };
     model.insert(db).await.map_err(map_sea_err)?;
@@ -34,10 +35,10 @@ pub async fn log_result(
 ) -> Result<Uuid, DatabaseError> {
     let id = Uuid::new_v4();
     let model = result_log::ActiveModel {
-        id: Set(id),
-        query_id: Set(query_id),
+        id: Set(uuid_hex::to_hex(id)),
+        query_id: Set(uuid_hex::to_hex(query_id)),
         serialized_result: Set(serialized_result.to_string()),
-        user_id: Set(user_id),
+        user_id: Set(uuid_hex::to_hex_opt(user_id)),
         created_at: Set(Utc::now()),
     };
     model.insert(db).await.map_err(map_sea_err)?;
@@ -51,7 +52,7 @@ pub async fn get_history(
 ) -> Result<Vec<SearchHistoryEntry>, DatabaseError> {
     let mut q_query = query_log::Entity::find();
     if let Some(uid) = user_id {
-        q_query = q_query.filter(query_log::Column::UserId.eq(uid));
+        q_query = q_query.filter(query_log::Column::UserId.eq(uuid_hex::to_hex(uid)));
     }
     let queries = q_query
         .all(db)
@@ -62,7 +63,7 @@ pub async fn get_history(
 
     let mut r_query = result_log::Entity::find();
     if let Some(uid) = user_id {
-        r_query = r_query.filter(result_log::Column::UserId.eq(uid));
+        r_query = r_query.filter(result_log::Column::UserId.eq(uuid_hex::to_hex(uid)));
     }
     let results = r_query
         .all(db)

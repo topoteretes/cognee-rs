@@ -6,6 +6,7 @@ use uuid::Uuid;
 use crate::conversions::{domain_status_to_entity, map_sea_err};
 use crate::entities::pipeline_run;
 use crate::types::{DatabaseError, PipelineRun, PipelineRunStatus};
+use crate::uuid_hex;
 
 pub async fn create_pipeline_run(
     db: &DatabaseConnection,
@@ -28,7 +29,7 @@ pub async fn update_pipeline_run_status(
             pipeline_run::Column::Status,
             sea_orm::sea_query::Expr::value(domain_status_to_entity(status)),
         )
-        .filter(pipeline_run::Column::Id.eq(id))
+        .filter(pipeline_run::Column::Id.eq(uuid_hex::to_hex(id)))
         .exec(db)
         .await
         .map_err(map_sea_err)?;
@@ -39,7 +40,7 @@ pub async fn get_pipeline_run(
     db: &DatabaseConnection,
     id: Uuid,
 ) -> Result<Option<PipelineRun>, DatabaseError> {
-    pipeline_run::Entity::find_by_id(id)
+    pipeline_run::Entity::find_by_id(uuid_hex::to_hex(id))
         .one(db)
         .await
         .map_err(map_sea_err)
@@ -59,7 +60,7 @@ pub async fn get_latest_pipeline_status(
 ) -> Result<Option<PipelineRunStatus>, DatabaseError> {
     let run = pipeline_run::Entity::find()
         .filter(pipeline_run::Column::PipelineName.eq(pipeline_name))
-        .filter(pipeline_run::Column::DatasetId.eq(dataset_id))
+        .filter(pipeline_run::Column::DatasetId.eq(uuid_hex::to_hex(dataset_id)))
         .order_by_desc(pipeline_run::Column::CreatedAt)
         .one(db)
         .await

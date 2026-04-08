@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 #[sea_orm(table_name = "graph_metrics")]
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
-    pub id: Uuid,
+    pub id: String,
     pub num_tokens: Option<i32>,
     pub num_nodes: Option<i32>,
     pub num_edges: Option<i32>,

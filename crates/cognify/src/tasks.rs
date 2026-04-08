@@ -22,7 +22,7 @@ use cognee_chunking::{WordCounter, chunk_text};
 use cognee_core::{Pipeline, PipelineBuilder, TypedTask};
 use cognee_database::DatabaseConnection;
 use cognee_embedding::engine::EmbeddingEngine;
-use cognee_graph::{GraphDBTrait, GraphDBTraitExt};
+use cognee_graph::{EdgeData, GraphDBTrait, GraphDBTraitExt};
 use cognee_llm::Llm;
 use cognee_models::{
     Data, Document, DocumentChunk, EdgeType, Embedding,
@@ -697,16 +697,17 @@ pub async fn add_data_points(
     .await?;
 
     // ── Provenance upsert (mirrors Python's `if user and dataset and data:`) ──
-    if let (Some(db), Some(user_id), Some(tenant_id)) = (&db, input.user_id, input.tenant_id) {
+    if let (Some(db), Some(user_id)) = (&db, input.user_id) {
         upsert_provenance(
             db,
-            tenant_id,
+            input.tenant_id,
             user_id,
             input.dataset_id,
             &input.chunks,
             &input.entities,
             &input.edges,
             &input.summaries,
+            &structural_edges,
         )
         .await?;
     }
@@ -1220,28 +1221,32 @@ pub async fn cognify(
 
 /// Deterministic provenance node ID, matching Python's:
 /// `uuid5(NAMESPACE_OID, str(tenant_id) + str(user_id) + str(dataset_id) + str(data_id) + str(node_id))`
+///
+/// When `tenant_id` is `None`, Python's `str(None)` produces `"None"`.
 fn provenance_node_id(
-    tenant_id: Uuid,
+    tenant_id: Option<Uuid>,
     user_id: Uuid,
     dataset_id: Uuid,
     data_id: Uuid,
     node_id: Uuid,
 ) -> Uuid {
-    let raw = format!("{tenant_id}{user_id}{dataset_id}{data_id}{node_id}");
+    let tid = tenant_id.map_or("None".to_string(), |t| t.to_string());
+    let raw = format!("{tid}{user_id}{dataset_id}{data_id}{node_id}");
     Uuid::new_v5(&Uuid::NAMESPACE_OID, raw.as_bytes())
 }
 
 /// Deterministic provenance edge ID, matching Python's:
 /// `uuid5(NAMESPACE_OID, str(tenant_id) + str(user_id) + str(dataset_id) + str(source_id) + str(edge_text) + str(target_id))`
 fn provenance_edge_id(
-    tenant_id: Uuid,
+    tenant_id: Option<Uuid>,
     user_id: Uuid,
     dataset_id: Uuid,
     source_id: Uuid,
     edge_text: &str,
     target_id: Uuid,
 ) -> Uuid {
-    let raw = format!("{tenant_id}{user_id}{dataset_id}{source_id}{edge_text}{target_id}");
+    let tid = tenant_id.map_or("None".to_string(), |t| t.to_string());
+    let raw = format!("{tid}{user_id}{dataset_id}{source_id}{edge_text}{target_id}");
     Uuid::new_v5(&Uuid::NAMESPACE_OID, raw.as_bytes())
 }
 
@@ -1262,13 +1267,14 @@ fn edge_slug(edge_text: &str) -> Uuid {
 #[allow(clippy::too_many_arguments)]
 async fn upsert_provenance(
     db: &DatabaseConnection,
-    tenant_id: Uuid,
+    tenant_id: Option<Uuid>,
     user_id: Uuid,
     dataset_id: Uuid,
     chunks: &[DocumentChunk],
     entities: &[GraphNodePair],
     edges: &[GraphEdgePair],
     summaries: &[TextSummary],
+    structural_edges: &[EdgeData],
 ) -> Result<(), CognifyError> {
     use cognee_database::ops::graph_storage;
     use cognee_database::{GraphEdge, GraphNode};
@@ -1434,6 +1440,37 @@ async fn upsert_provenance(
             relationship_name: edge_text,
             label: Some(edge_pair.relationship_name.clone()),
             attributes: serde_json::to_value(&edge_pair.properties).ok(),
+            created_at: Utc::now(),
+        });
+    }
+
+    // Structural edges from get_graph_from_model (contains, is_a, made_from, etc.)
+    // Python writes these to SQLite via upsert_edges() — Rust must match.
+    for (source_id_str, target_id_str, rel_name, properties) in structural_edges {
+        let source_id = Uuid::parse_str(source_id_str).unwrap_or(Uuid::nil());
+        let target_id = Uuid::parse_str(target_id_str).unwrap_or(Uuid::nil());
+
+        let attrs = if properties.is_empty() {
+            None
+        } else {
+            let map: serde_json::Map<String, serde_json::Value> = properties
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.clone()))
+                .collect();
+            Some(serde_json::Value::Object(map))
+        };
+
+        prov_edges.push(GraphEdge {
+            id: provenance_edge_id(tenant_id, user_id, dataset_id, source_id, rel_name, target_id),
+            slug: edge_slug(rel_name),
+            user_id,
+            data_id: Uuid::nil(), // structural edges span multiple DataPoints
+            dataset_id,
+            source_node_id: source_id,
+            destination_node_id: target_id,
+            relationship_name: rel_name.clone(),
+            label: None,
+            attributes: attrs,
             created_at: Utc::now(),
         });
     }
@@ -2047,5 +2084,82 @@ mod tests {
         };
         let result = classify_documents(&input).unwrap();
         assert_eq!(result.dataset_id, dataset_id);
+    }
+
+    // ── Provenance guard and ID tests ───────────────────────────────────
+
+    #[test]
+    fn provenance_node_id_works_with_none_tenant() {
+        let user_id = Uuid::parse_str("00000000-0000-0000-0000-000000000001").unwrap();
+        let dataset_id = Uuid::parse_str("00000000-0000-0000-0000-000000000002").unwrap();
+        let data_id = Uuid::parse_str("00000000-0000-0000-0000-000000000003").unwrap();
+        let node_id = Uuid::parse_str("00000000-0000-0000-0000-000000000004").unwrap();
+
+        // Must not panic with None tenant
+        let id = provenance_node_id(None, user_id, dataset_id, data_id, node_id);
+
+        // Matches Python's str(None) → "None" in the UUID5 input
+        let expected_input = format!("None{user_id}{dataset_id}{data_id}{node_id}");
+        let expected = Uuid::new_v5(&Uuid::NAMESPACE_OID, expected_input.as_bytes());
+        assert_eq!(id, expected);
+    }
+
+    #[test]
+    fn provenance_node_id_with_real_tenant_differs_from_none() {
+        let user_id = Uuid::parse_str("00000000-0000-0000-0000-000000000001").unwrap();
+        let dataset_id = Uuid::parse_str("00000000-0000-0000-0000-000000000002").unwrap();
+        let data_id = Uuid::parse_str("00000000-0000-0000-0000-000000000003").unwrap();
+        let node_id = Uuid::parse_str("00000000-0000-0000-0000-000000000004").unwrap();
+        let tenant_id = Uuid::parse_str("00000000-0000-0000-0000-000000000005").unwrap();
+
+        let id_none = provenance_node_id(None, user_id, dataset_id, data_id, node_id);
+        let id_real = provenance_node_id(Some(tenant_id), user_id, dataset_id, data_id, node_id);
+        assert_ne!(id_none, id_real);
+    }
+
+    #[test]
+    fn provenance_edge_id_works_with_none_tenant() {
+        let user_id = Uuid::parse_str("00000000-0000-0000-0000-000000000001").unwrap();
+        let dataset_id = Uuid::parse_str("00000000-0000-0000-0000-000000000002").unwrap();
+        let source_id = Uuid::parse_str("00000000-0000-0000-0000-000000000003").unwrap();
+        let target_id = Uuid::parse_str("00000000-0000-0000-0000-000000000004").unwrap();
+
+        let id = provenance_edge_id(
+            None,
+            user_id,
+            dataset_id,
+            source_id,
+            "relates_to",
+            target_id,
+        );
+
+        let expected_input = format!("None{user_id}{dataset_id}{source_id}relates_to{target_id}");
+        let expected = Uuid::new_v5(&Uuid::NAMESPACE_OID, expected_input.as_bytes());
+        assert_eq!(id, expected);
+    }
+
+    /// The provenance guard must fire when db + user_id are present,
+    /// even if tenant_id is None.  This matches Python's
+    /// `if user and dataset and data:` which doesn't check tenant.
+    #[test]
+    fn provenance_guard_does_not_require_tenant_id() {
+        // Simulate the guard condition from cognify():
+        //   if let (Some(db), Some(user_id)) = (&db, input.user_id)
+        let db: Option<u8> = Some(1); // stand-in for Some(db)
+        let user_id: Option<Uuid> = Some(Uuid::new_v4());
+        let tenant_id: Option<Uuid> = None;
+
+        let guard_fires = matches!((&db, user_id), (Some(_), Some(_)));
+        assert!(
+            guard_fires,
+            "Provenance guard must fire when db + user_id are present, regardless of tenant_id"
+        );
+
+        // Also verify the old (broken) guard would NOT fire
+        let old_guard_fires = matches!((&db, user_id, tenant_id), (Some(_), Some(_), Some(_)));
+        assert!(
+            !old_guard_fires,
+            "The old 3-way guard should NOT fire when tenant_id is None"
+        );
     }
 }

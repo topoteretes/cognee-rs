@@ -5,6 +5,7 @@ pub mod migrator;
 pub mod ops;
 mod traits;
 mod types;
+pub mod uuid_hex;
 
 pub use connection::{connect, initialize};
 pub use sea_orm::DatabaseConnection;

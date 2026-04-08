@@ -5,6 +5,7 @@ use uuid::Uuid;
 use crate::conversions::map_sea_err;
 use crate::entities::{edge, node};
 use crate::types::{DatabaseError, GraphEdge, GraphNode};
+use crate::uuid_hex;
 
 pub async fn upsert_nodes(
     db: &DatabaseConnection,
@@ -40,7 +41,7 @@ pub async fn get_nodes_by_dataset(
     dataset_id: Uuid,
 ) -> Result<Vec<GraphNode>, DatabaseError> {
     node::Entity::find()
-        .filter(node::Column::DatasetId.eq(dataset_id))
+        .filter(node::Column::DatasetId.eq(uuid_hex::to_hex(dataset_id)))
         .order_by_asc(node::Column::CreatedAt)
         .all(db)
         .await
@@ -53,7 +54,7 @@ pub async fn delete_nodes_by_data(
     data_id: Uuid,
 ) -> Result<(), DatabaseError> {
     node::Entity::delete_many()
-        .filter(node::Column::DataId.eq(data_id))
+        .filter(node::Column::DataId.eq(uuid_hex::to_hex(data_id)))
         .exec(db)
         .await
         .map_err(map_sea_err)?;
@@ -95,7 +96,7 @@ pub async fn get_edges_by_dataset(
     dataset_id: Uuid,
 ) -> Result<Vec<GraphEdge>, DatabaseError> {
     edge::Entity::find()
-        .filter(edge::Column::DatasetId.eq(dataset_id))
+        .filter(edge::Column::DatasetId.eq(uuid_hex::to_hex(dataset_id)))
         .order_by_asc(edge::Column::CreatedAt)
         .all(db)
         .await
@@ -108,7 +109,7 @@ pub async fn delete_edges_by_data(
     data_id: Uuid,
 ) -> Result<(), DatabaseError> {
     edge::Entity::delete_many()
-        .filter(edge::Column::DataId.eq(data_id))
+        .filter(edge::Column::DataId.eq(uuid_hex::to_hex(data_id)))
         .exec(db)
         .await
         .map_err(map_sea_err)?;

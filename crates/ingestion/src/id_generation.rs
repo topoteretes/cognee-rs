@@ -4,25 +4,29 @@ use uuid::Uuid;
 /// Generate a deterministic data ID matching Python's formula:
 ///   `uuid5(NAMESPACE_OID, f"{content_hash}{str(user_id)}{str(tenant_id)}")`
 ///
-/// When `tenant_id` is None the tenant portion is omitted:
-///   `uuid5(NAMESPACE_OID, f"{content_hash}{str(user_id)}")`
+/// When `tenant_id` is `None`, Python's `str(None)` produces the literal
+/// string `"None"`, so the formula becomes:
+///   `uuid5(NAMESPACE_OID, f"{content_hash}{str(user_id)}None")`
 ///
 /// Python's `str(uuid)` and Rust's `format!("{}", uuid)` both produce the
 /// hyphenated lowercase form, so the inputs are identical.
 pub fn generate_data_id(content_hash: &str, user_id: Uuid, tenant_id: Option<Uuid>) -> Uuid {
     let input = match tenant_id {
         Some(tid) => format!("{}{}{}", content_hash, user_id, tid),
-        None => format!("{}{}", content_hash, user_id),
+        None => format!("{}{}None", content_hash, user_id),
     };
     Uuid::new_v5(&NAMESPACE_OID, input.as_bytes())
 }
 
 /// Generate a deterministic dataset ID matching Python's formula:
 ///   `uuid5(NAMESPACE_OID, f"{dataset_name}{str(user_id)}{str(tenant_id)}")`
+///
+/// When `tenant_id` is `None`, the literal string `"None"` is appended,
+/// matching Python's `str(None)` behavior.
 pub fn generate_dataset_id(dataset_name: &str, user_id: Uuid, tenant_id: Option<Uuid>) -> Uuid {
     let input = match tenant_id {
         Some(tid) => format!("{}{}{}", dataset_name, user_id, tid),
-        None => format!("{}{}", dataset_name, user_id),
+        None => format!("{}{}None", dataset_name, user_id),
     };
     Uuid::new_v5(&NAMESPACE_OID, input.as_bytes())
 }
@@ -89,5 +93,36 @@ mod tests {
         let id1 = generate_dataset_id("ds", user_id, None);
         let id2 = generate_dataset_id("ds", user_id, Some(tenant_id));
         assert_ne!(id1, id2);
+    }
+
+    /// Verify that None tenant appends the literal string "None" to match
+    /// Python's `str(None)` behavior in the UUID5 input.
+    #[test]
+    fn none_tenant_appends_literal_none_string() {
+        let hash = "abc";
+        let user_id = Uuid::parse_str("00000000-0000-0000-0000-000000000001").unwrap();
+
+        let id = generate_data_id(hash, user_id, None);
+
+        // Manually compute what Python produces:
+        //   uuid5(NAMESPACE_OID, f"{hash}{user_id}None")
+        let expected_input = format!("{}{}None", hash, user_id);
+        let expected = Uuid::new_v5(&NAMESPACE_OID, expected_input.as_bytes());
+        assert_eq!(
+            id, expected,
+            "None tenant must append literal 'None' to match Python"
+        );
+    }
+
+    /// Same test for dataset IDs.
+    #[test]
+    fn none_tenant_appends_literal_none_string_dataset() {
+        let user_id = Uuid::parse_str("00000000-0000-0000-0000-000000000001").unwrap();
+
+        let id = generate_dataset_id("ds", user_id, None);
+
+        let expected_input = format!("ds{}None", user_id);
+        let expected = Uuid::new_v5(&NAMESPACE_OID, expected_input.as_bytes());
+        assert_eq!(id, expected);
     }
 }

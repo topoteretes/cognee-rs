@@ -15,14 +15,14 @@
 //! uuid5(NAMESPACE_OID, f"{content_hash}{user_id}{tenant_id}")
 //! # => UUID('5a23871a-b711-595c-8b9a-77a5a235cc72')
 //!
-//! uuid5(NAMESPACE_OID, f"{content_hash}{user_id}")
-//! # => UUID('2ac38eb6-e5e1-5928-bd21-5cb131dc4f4f')
+//! uuid5(NAMESPACE_OID, f"{content_hash}{user_id}None")
+//! # => UUID('3349a17c-1ac6-5f0f-85bc-0ae3abd1cadc')
 //!
 //! uuid5(NAMESPACE_OID, f"main_dataset{user_id}{tenant_id}")
 //! # => UUID('babfb417-8280-5a55-b3e8-ebe37c4a10cf')
 //!
-//! uuid5(NAMESPACE_OID, f"main_dataset{user_id}")
-//! # => UUID('1f2e53f7-a9ef-55c6-81e4-2ee952c6be68')
+//! uuid5(NAMESPACE_OID, f"main_dataset{user_id}None")
+//! # => UUID('c0b626cb-2d1a-54c1-a108-d560bb6e1597')
 //! ```
 
 use cognee_ingestion::{generate_data_id, generate_dataset_id};
@@ -56,8 +56,8 @@ fn data_id_without_tenant_matches_python() {
     let id = generate_data_id(CONTENT_HASH, user(), None);
     assert_eq!(
         id,
-        Uuid::parse_str("2ac38eb6-e5e1-5928-bd21-5cb131dc4f4f").unwrap(),
-        "generate_data_id output must match Python uuid5(NAMESPACE_OID, hash+user)"
+        Uuid::parse_str("3349a17c-1ac6-5f0f-85bc-0ae3abd1cadc").unwrap(),
+        "generate_data_id output must match Python uuid5(NAMESPACE_OID, hash+user+None)"
     );
 }
 
@@ -78,8 +78,8 @@ fn dataset_id_without_tenant_matches_python() {
     let id = generate_dataset_id("main_dataset", user(), None);
     assert_eq!(
         id,
-        Uuid::parse_str("1f2e53f7-a9ef-55c6-81e4-2ee952c6be68").unwrap(),
-        "generate_dataset_id output must match Python uuid5(NAMESPACE_OID, name+user)"
+        Uuid::parse_str("c0b626cb-2d1a-54c1-a108-d560bb6e1597").unwrap(),
+        "generate_dataset_id output must match Python uuid5(NAMESPACE_OID, name+user+None)"
     );
 }
 

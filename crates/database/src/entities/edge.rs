@@ -5,15 +5,15 @@ use serde::{Deserialize, Serialize};
 #[sea_orm(table_name = "edges")]
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
-    pub id: Uuid,
-    pub slug: Uuid,
-    pub user_id: Uuid,
+    pub id: String,
+    pub slug: String,
+    pub user_id: String,
     #[sea_orm(indexed)]
-    pub data_id: Uuid,
+    pub data_id: String,
     #[sea_orm(indexed)]
-    pub dataset_id: Uuid,
-    pub source_node_id: Uuid,
-    pub destination_node_id: Uuid,
+    pub dataset_id: String,
+    pub source_node_id: String,
+    pub destination_node_id: String,
     #[sea_orm(column_type = "Text")]
     pub relationship_name: String,
     #[sea_orm(column_type = "Text", nullable)]
@@ -43,12 +43,6 @@ pub enum Relation {
         to = "super::dataset::Column::Id"
     )]
     Dataset,
-    #[sea_orm(
-        belongs_to = "super::data::Entity",
-        from = "Column::DataId",
-        to = "super::data::Column::Id"
-    )]
-    Data,
 }
 
 impl ActiveModelBehavior for ActiveModel {}

@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 #[sea_orm(table_name = "data")]
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
-    pub id: Uuid,
+    pub id: String,
     pub name: String,
     pub raw_data_location: String,
     pub original_data_location: String,
@@ -13,7 +13,7 @@ pub struct Model {
     pub mime_type: String,
     pub content_hash: String,
     #[sea_orm(indexed)]
-    pub owner_id: Uuid,
+    pub owner_id: String,
     pub created_at: DateTimeUtc,
     pub updated_at: Option<DateTimeUtc>,
     pub label: Option<String>,
@@ -21,7 +21,7 @@ pub struct Model {
     pub original_mime_type: Option<String>,
     pub loader_engine: Option<String>,
     pub raw_content_hash: Option<String>,
-    pub tenant_id: Option<Uuid>,
+    pub tenant_id: Option<String>,
     pub external_metadata: Option<String>,
     pub node_set: Option<String>,
     pub pipeline_status: Option<String>,

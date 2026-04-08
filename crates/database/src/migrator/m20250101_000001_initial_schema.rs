@@ -281,12 +281,8 @@ impl MigrationTrait for Migration {
                             .to(Datasets::Table, Datasets::Id)
                             .on_delete(ForeignKeyAction::Cascade),
                     )
-                    .foreign_key(
-                        ForeignKey::create()
-                            .from(Nodes::Table, Nodes::DataId)
-                            .to(Data::Table, Data::Id)
-                            .on_delete(ForeignKeyAction::Cascade),
-                    )
+                    // No FK on data_id — Python has no FK here, and provenance
+                    // nodes (EntityType, etc.) use nil data_id as a sentinel.
                     .to_owned(),
             )
             .await?;
@@ -338,12 +334,7 @@ impl MigrationTrait for Migration {
                             .to(Datasets::Table, Datasets::Id)
                             .on_delete(ForeignKeyAction::Cascade),
                     )
-                    .foreign_key(
-                        ForeignKey::create()
-                            .from(Edges::Table, Edges::DataId)
-                            .to(Data::Table, Data::Id)
-                            .on_delete(ForeignKeyAction::Cascade),
-                    )
+                    // No FK on data_id — matches Python model (no FK constraint).
                     .to_owned(),
             )
             .await?;
@@ -613,6 +604,9 @@ enum Nodes {
     DataId,
     DatasetId,
     Label,
+    // Python's SQLAlchemy model uses column name "type" (not "node_type").
+    // Override the default DeriveIden snake_case conversion.
+    #[sea_orm(iden = "type")]
     NodeType,
     IndexedFields,
     Attributes,

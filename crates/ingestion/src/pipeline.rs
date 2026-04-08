@@ -328,7 +328,7 @@ fn extract_name(input: &DataInput, content_hash: &str) -> String {
         DataInput::FilePath(path) => {
             let clean_path = path.strip_prefix("file://").unwrap_or(path);
             Path::new(clean_path)
-                .file_name()
+                .file_stem()
                 .and_then(|n| n.to_str())
                 .unwrap_or("unknown")
                 .to_string()
@@ -884,5 +884,32 @@ mod tests {
             Some("my-label"),
             "DataItem label must be stored in the Data record"
         );
+    }
+
+    // ── extract_name — Python parity ────────────────────────────────────
+
+    #[test]
+    fn extract_name_file_path_uses_stem_not_full_name() {
+        // Python uses Path(file_path).stem which strips the extension.
+        let input = DataInput::FilePath("documents/report.txt".into());
+        let name = super::extract_name(&input, "abc123");
+        assert_eq!(
+            name, "report",
+            "file path name should be stem (no extension)"
+        );
+    }
+
+    #[test]
+    fn extract_name_file_path_with_file_uri() {
+        let input = DataInput::FilePath("file:///tmp/data/notes.pdf".into());
+        let name = super::extract_name(&input, "abc123");
+        assert_eq!(name, "notes");
+    }
+
+    #[test]
+    fn extract_name_text_input_uses_hash() {
+        let input = DataInput::Text("hello world".into());
+        let name = super::extract_name(&input, "5eb63bbbe01eeed093cb22bb8f5acdc3");
+        assert_eq!(name, "text_5eb63bbbe01eeed093cb22bb8f5acdc3");
     }
 }

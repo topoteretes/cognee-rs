@@ -5,9 +5,9 @@ use serde::{Deserialize, Serialize};
 #[sea_orm(table_name = "dataset_data")]
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
-    pub dataset_id: Uuid,
+    pub dataset_id: String,
     #[sea_orm(primary_key, auto_increment = false)]
-    pub data_id: Uuid,
+    pub data_id: String,
     pub created_at: DateTimeUtc,
 }
 

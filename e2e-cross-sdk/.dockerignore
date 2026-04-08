@@ -1,0 +1,36 @@
+# Exclude build artifacts and large directories from Docker build context.
+# Context is the monorepo root (/home/dmytro/dev/cognee/).
+
+# Rust build artifacts
+cognee-rust/target/
+
+# Git
+**/.git/
+
+# Python caches
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/.pytest_cache/
+
+# Runtime data
+**/.data_storage/
+**/.cognee_system/
+**/.cognee_cache/
+
+# Node
+**/node_modules/
+
+# IDE
+**/.idea/
+**/.vscode/
+
+# OS
+**/.DS_Store
+
+# Docker-in-Docker
+**/docker-compose.override.yml
+
+# Large unneeded dirs in Python repo
+cognee/cognee-frontend/
+cognee/.chromadb_data/

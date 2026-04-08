@@ -142,13 +142,13 @@ pub fn run(args: CognifyArgs, cm: Arc<ComponentManager>) -> Result<(), CliError>
                 data_items,
                 dataset.id,
                 Some(owner_id),
-                None,
+                dataset.tenant_id,
                 llm.clone(),
                 Arc::clone(&storage),
                 Arc::clone(&graph_db),
                 Arc::clone(&vector_db),
                 Arc::clone(&embedding_engine),
-                None,
+                Some(Arc::clone(&database)),
                 &cognify_config,
             )
                 .await

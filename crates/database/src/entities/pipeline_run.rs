@@ -18,16 +18,16 @@ pub enum PipelineRunStatus {
 #[sea_orm(table_name = "pipeline_runs")]
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
-    pub id: Uuid,
+    pub id: String,
     pub created_at: DateTimeUtc,
     pub status: PipelineRunStatus,
     #[sea_orm(indexed)]
-    pub pipeline_run_id: Uuid,
+    pub pipeline_run_id: String,
     pub pipeline_name: String,
     #[sea_orm(indexed)]
-    pub pipeline_id: Uuid,
+    pub pipeline_id: String,
     #[sea_orm(indexed)]
-    pub dataset_id: Uuid,
+    pub dataset_id: String,
     #[sea_orm(column_type = "Json", nullable)]
     pub run_info: Option<Json>,
 }
