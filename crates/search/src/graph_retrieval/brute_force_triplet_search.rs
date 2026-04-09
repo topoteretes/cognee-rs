@@ -60,6 +60,14 @@ pub struct RankedGraphEdge {
     pub target_name: String,
     /// Dataset ID of the source or target entity, for context scoping.
     pub dataset_id: Option<String>,
+    /// Text content of the source node (present on DocumentChunk nodes).
+    pub source_text: Option<String>,
+    /// Text content of the target node (present on DocumentChunk nodes).
+    pub target_text: Option<String>,
+    /// Description of the source node (present on Entity nodes).
+    pub source_description: Option<String>,
+    /// Description of the target node (present on Entity nodes).
+    pub target_description: Option<String>,
 }
 
 pub async fn brute_force_triplet_search(
@@ -146,17 +154,26 @@ pub async fn brute_force_triplet_search(
 
     let (graph_nodes, graph_edges) = graph_db.get_graph_data().await?;
 
-    let node_names: HashMap<String, String> = graph_nodes
-        .into_iter()
-        .map(|(node_id, properties)| {
-            let name = properties
-                .get("name")
-                .and_then(|value| value.as_str())
-                .unwrap_or(node_id.as_str())
-                .to_string();
-            (node_id, name)
-        })
-        .collect();
+    // Extract name, text, and description from each node's properties.
+    let mut node_names: HashMap<String, String> = HashMap::new();
+    let mut node_texts: HashMap<String, String> = HashMap::new();
+    let mut node_descriptions: HashMap<String, String> = HashMap::new();
+
+    for (node_id, properties) in graph_nodes {
+        let name = properties
+            .get("name")
+            .and_then(|value| value.as_str())
+            .unwrap_or(node_id.as_str())
+            .to_string();
+        node_names.insert(node_id.clone(), name);
+
+        if let Some(text) = properties.get("text").and_then(|v| v.as_str()) {
+            node_texts.insert(node_id.clone(), text.to_string());
+        }
+        if let Some(desc) = properties.get("description").and_then(|v| v.as_str()) {
+            node_descriptions.insert(node_id.clone(), desc.to_string());
+        }
+    }
 
     let default_penalty = config.triplet_distance_penalty;
 
@@ -200,6 +217,11 @@ pub async fn brute_force_triplet_search(
                 .or_else(|| node_dataset_ids.get(&target_id))
                 .cloned();
 
+            let source_text = node_texts.get(&source_id).cloned();
+            let target_text = node_texts.get(&target_id).cloned();
+            let source_description = node_descriptions.get(&source_id).cloned();
+            let target_description = node_descriptions.get(&target_id).cloned();
+
             Some(RankedGraphEdge {
                 source_id,
                 target_id,
@@ -208,6 +230,10 @@ pub async fn brute_force_triplet_search(
                 source_name,
                 target_name,
                 dataset_id,
+                source_text,
+                target_text,
+                source_description,
+                target_description,
             })
         })
         .collect::<Vec<_>>();

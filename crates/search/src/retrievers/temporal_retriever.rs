@@ -180,6 +180,10 @@ impl TemporalRetriever {
                     "relationship": edge.relationship_name,
                     "source_name": edge.source_name,
                     "target_name": edge.target_name,
+                    "source_text": edge.source_text,
+                    "target_text": edge.target_text,
+                    "source_description": edge.source_description,
+                    "target_description": edge.target_description,
                 }),
             })
             .collect()

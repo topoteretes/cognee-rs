@@ -106,6 +106,10 @@ impl SearchRetriever for GraphCompletionRetriever {
                     "relationship": edge.relationship_name,
                     "source_name": edge.source_name,
                     "target_name": edge.target_name,
+                    "source_text": edge.source_text,
+                    "target_text": edge.target_text,
+                    "source_description": edge.source_description,
+                    "target_description": edge.target_description,
                     "dataset_id": edge.dataset_id,
                 }),
             })
@@ -603,6 +607,8 @@ mod tests {
 
         let messages = llm.last_messages.lock().unwrap().clone();
         assert_eq!(messages[0].content, "graph system");
-        assert!(messages[1].content.contains("Graph=Alice -[KNOWS]-> Bob"));
+        assert!(messages[1].content.contains("Graph="));
+        assert!(messages[1].content.contains("Nodes:"));
+        assert!(messages[1].content.contains("--[KNOWS]-->"));
     }
 }
