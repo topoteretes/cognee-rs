@@ -10,7 +10,9 @@ use serde_json::json;
 
 use cognee_session::SessionContext;
 
-use crate::graph_retrieval::{GraphRetrievalConfig, brute_force_triplet_search};
+use crate::graph_retrieval::{
+    DEFAULT_TRIPLET_DISTANCE_PENALTY, GraphRetrievalConfig, brute_force_triplet_search,
+};
 use crate::retrievers::SearchRetriever;
 use crate::types::{SearchContext, SearchError, SearchItem, SearchOutput, SearchType};
 use crate::utils::{
@@ -63,7 +65,8 @@ impl GraphRetrieverCore {
             graph_db,
             top_k: top_k.unwrap_or(DEFAULT_TOP_K),
             wide_search_top_k: wide_search_top_k.unwrap_or(DEFAULT_WIDE_SEARCH_TOP_K),
-            triplet_distance_penalty: triplet_distance_penalty.unwrap_or(0.0),
+            triplet_distance_penalty: triplet_distance_penalty
+                .unwrap_or(DEFAULT_TRIPLET_DISTANCE_PENALTY),
         }
     }
 
