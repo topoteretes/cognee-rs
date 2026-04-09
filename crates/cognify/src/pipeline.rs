@@ -92,9 +92,9 @@ impl IndexedFieldsStats {
         self.get("Entity", "name")
     }
 
-    /// Number of Entity.description fields indexed.
-    pub fn entity_description_count(&self) -> usize {
-        self.get("Entity", "description")
+    /// Number of EntityType.name fields indexed.
+    pub fn entity_type_name_count(&self) -> usize {
+        self.get("EntityType", "name")
     }
 
     /// Number of TextSummary.text fields indexed.

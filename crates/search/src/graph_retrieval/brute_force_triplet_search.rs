@@ -21,9 +21,10 @@ pub const DEFAULT_TRIPLET_DISTANCE_PENALTY: f32 = 3.5;
 /// Note: "Entity_description" and "Triplet_embeddable_text" are intentionally excluded here
 /// because they don't match the default Python collection set used in brute_force_triplet_search.
 /// The "EdgeType_relationship_name" collection provides per-relationship-name distances.
-const SEARCH_COLLECTIONS: [(&str, &str); 4] = [
+const SEARCH_COLLECTIONS: [(&str, &str); 5] = [
     ("Entity", "name"),
     ("TextSummary", "text"),
+    ("EntityType", "name"), // matches Python default collection list
     ("DocumentChunk", "text"),
     ("EdgeType", "relationship_name"),
 ];

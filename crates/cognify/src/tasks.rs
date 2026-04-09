@@ -1669,6 +1669,64 @@ async fn index_data_points(
         info!("Indexed {} entity names", entities.len());
     }
 
+    // 2b. Index EntityType.name field (deduplicated by EntityType ID)
+    {
+        let mut seen_ids = std::collections::HashSet::new();
+        let unique_entity_types: Vec<&cognee_models::EntityType> = entities
+            .iter()
+            .map(|pair| &pair.entity_type)
+            .filter(|et| seen_ids.insert(et.base.id))
+            .collect();
+
+        if !unique_entity_types.is_empty() {
+            if !vector_db
+                .has_collection("EntityType", "name")
+                .await
+                .map_err(|e| CognifyError::VectorDBError(e.to_string()))?
+            {
+                vector_db
+                    .create_collection("EntityType", "name", dimension)
+                    .await
+                    .map_err(|e| CognifyError::VectorDBError(e.to_string()))?;
+            }
+
+            let type_names: Vec<_> = unique_entity_types
+                .iter()
+                .map(|et| et.name.as_str())
+                .collect();
+            let vectors = engine
+                .embed(&type_names)
+                .await
+                .map_err(|e| CognifyError::EmbeddingError(e.to_string()))?;
+
+            let points: Vec<VectorPoint> = unique_entity_types
+                .iter()
+                .zip(vectors)
+                .map(|(et, vector)| {
+                    let mut point = VectorPoint::new(et.base.id, vector)
+                        .with_metadata("type", json!("EntityType"))
+                        .with_metadata("field", json!("name"))
+                        .with_metadata("dataset_id", json!(dataset_id.to_string()));
+                    if let Some(uid) = user_id {
+                        point = point.with_metadata("user_id", json!(uid.to_string()));
+                    }
+                    if let Some(tid) = tenant_id {
+                        point = point.with_metadata("tenant_id", json!(tid.to_string()));
+                    }
+                    point
+                })
+                .collect();
+
+            vector_db
+                .index_points("EntityType", "name", &points)
+                .await
+                .map_err(|e| CognifyError::VectorDBError(e.to_string()))?;
+
+            stats.record("EntityType", "name", unique_entity_types.len());
+            info!("Indexed {} entity type names", unique_entity_types.len());
+        }
+    }
+
     // 3. Index TextSummary.text field
     if !summaries.is_empty() {
         if !vector_db
