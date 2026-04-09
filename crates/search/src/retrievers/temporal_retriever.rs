@@ -13,13 +13,16 @@ use serde_json::{Value, json};
 
 use cognee_session::SessionContext;
 
-use crate::graph_retrieval::{GraphRetrievalConfig, RankedGraphEdge, brute_force_triplet_search};
+use crate::graph_retrieval::{
+    DEFAULT_TRIPLET_DISTANCE_PENALTY, GraphRetrievalConfig, RankedGraphEdge,
+    brute_force_triplet_search,
+};
 use crate::retrievers::SearchRetriever;
 use crate::types::{SearchContext, SearchError, SearchItem, SearchOutput, SearchType};
 use crate::utils::{build_messages_with_history, render_user_prompt, resolve_system_prompt};
 
-const DEFAULT_TOP_K: usize = 10;
-const DEFAULT_WIDE_SEARCH_TOP_K: usize = 20;
+const DEFAULT_TOP_K: usize = 5;
+const DEFAULT_WIDE_SEARCH_TOP_K: usize = 100;
 const TEMPORAL_DATA_TYPE: &str = "Event";
 const TEMPORAL_FIELD_NAME: &str = "name";
 const DEFAULT_TEMPORAL_INTERVAL_PROMPT: &str = "Extract the temporal interval for a user question. Return JSON with optional string fields `start` and `end` in ISO-like format (YYYY, YYYY-MM, YYYY-MM-DD, or RFC3339). Leave missing bounds as null.";
@@ -103,7 +106,8 @@ impl TemporalRetriever {
             llm,
             top_k: top_k.unwrap_or(DEFAULT_TOP_K),
             wide_search_top_k: wide_search_top_k.unwrap_or(DEFAULT_WIDE_SEARCH_TOP_K),
-            triplet_distance_penalty: triplet_distance_penalty.unwrap_or(0.0),
+            triplet_distance_penalty: triplet_distance_penalty
+                .unwrap_or(DEFAULT_TRIPLET_DISTANCE_PENALTY),
             temporal_interval_prompt,
             system_prompt,
             system_prompt_path,

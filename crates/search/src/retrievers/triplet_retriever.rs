@@ -16,7 +16,7 @@ use crate::utils::{build_messages_with_history, render_user_prompt, resolve_syst
 const TRIPLET_DATA_TYPE: &str = "Triplet";
 const TRIPLET_PRIMARY_FIELD: &str = "text";
 const TRIPLET_FALLBACK_FIELD: &str = "embeddable_text";
-const DEFAULT_TOP_K: usize = 10;
+const DEFAULT_TOP_K: usize = 5;
 
 pub struct TripletRetriever {
     vector_db: Arc<dyn VectorDB>,
@@ -89,7 +89,7 @@ impl TripletRetriever {
                     })
             })
             .collect::<Vec<_>>()
-            .join("\n\n")
+            .join("\n")
     }
 }
 

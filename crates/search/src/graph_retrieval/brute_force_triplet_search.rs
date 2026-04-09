@@ -8,7 +8,7 @@ use tracing::debug;
 use crate::graph_retrieval::rank_edge_score;
 use crate::types::SearchError;
 
-const DEFAULT_WIDE_SEARCH_TOP_K: usize = 20;
+const DEFAULT_WIDE_SEARCH_TOP_K: usize = 100;
 
 /// Default cosine distance assigned to graph elements (nodes or edges) that have no
 /// vector match for the current query. Matches Python's `triplet_distance_penalty` default
@@ -41,7 +41,7 @@ pub struct GraphRetrievalConfig {
 impl Default for GraphRetrievalConfig {
     fn default() -> Self {
         Self {
-            top_k: 10,
+            top_k: 5,
             wide_search_top_k: DEFAULT_WIDE_SEARCH_TOP_K,
             triplet_distance_penalty: DEFAULT_TRIPLET_DISTANCE_PENALTY,
         }

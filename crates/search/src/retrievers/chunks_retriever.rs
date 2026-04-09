@@ -11,7 +11,7 @@ use crate::types::{SearchContext, SearchError, SearchOutput, SearchType};
 
 const CHUNKS_DATA_TYPE: &str = "DocumentChunk";
 const CHUNKS_FIELD_NAME: &str = "text";
-const DEFAULT_TOP_K: usize = 10;
+const DEFAULT_TOP_K: usize = 5;
 
 pub struct ChunksRetriever {
     vector_db: Arc<dyn VectorDB>,

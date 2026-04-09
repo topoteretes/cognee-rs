@@ -19,10 +19,10 @@ use crate::utils::{
     build_messages_with_history, render_edges_context, render_user_prompt, resolve_system_prompt,
 };
 
-const DEFAULT_TOP_K: usize = 10;
-const DEFAULT_WIDE_SEARCH_TOP_K: usize = 20;
-const DEFAULT_CONTEXT_EXTENSION_ROUNDS: usize = 2;
-const DEFAULT_COT_MAX_ITER: usize = 2;
+const DEFAULT_TOP_K: usize = 5;
+const DEFAULT_WIDE_SEARCH_TOP_K: usize = 100;
+const DEFAULT_CONTEXT_EXTENSION_ROUNDS: usize = 4;
+const DEFAULT_COT_MAX_ITER: usize = 4;
 
 const DEFAULT_GRAPH_SUMMARY_SYSTEM_PROMPT: &str =
     "You summarize graph evidence into concise factual context.";
