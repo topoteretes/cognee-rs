@@ -16,7 +16,8 @@ use crate::graph_retrieval::{
 use crate::retrievers::SearchRetriever;
 use crate::types::{SearchContext, SearchError, SearchItem, SearchOutput, SearchType};
 use crate::utils::{
-    build_messages_with_history, render_edges_context, render_user_prompt, resolve_system_prompt,
+    build_messages_with_history, render_edges_context, render_graph_user_prompt,
+    resolve_system_prompt,
 };
 
 const DEFAULT_TOP_K: usize = 5;
@@ -134,7 +135,7 @@ impl SearchRetriever for GraphCompletionRetriever {
             self.system_prompt_path.as_deref(),
         )?;
 
-        let user_prompt = render_user_prompt(
+        let user_prompt = render_graph_user_prompt(
             self.user_prompt_template.as_deref(),
             query,
             &graph_context_text,
@@ -610,5 +611,61 @@ mod tests {
         assert!(messages[1].content.contains("Graph="));
         assert!(messages[1].content.contains("Nodes:"));
         assert!(messages[1].content.contains("--[KNOWS]-->"));
+    }
+
+    #[tokio::test]
+    async fn uses_graph_prompt_template_by_default() {
+        let llm = Arc::new(TestLlm {
+            response_text: "answer".to_string(),
+            ..Default::default()
+        });
+
+        let retriever = GraphCompletionRetriever::new(
+            Arc::new(TestVectorDb {
+                collections: HashMap::new(),
+            }),
+            Arc::new(TestEmbeddingEngine),
+            Arc::new(TestGraphDb {
+                empty: true,
+                nodes: vec![],
+                edges: vec![],
+            }),
+            Arc::clone(&llm) as Arc<dyn Llm>,
+            Some(2),
+            Some(5),
+            Some(0.0),
+            None,
+            None,
+            None, // user_prompt_template — should use graph default
+            None,
+        );
+
+        let context = vec![crate::types::SearchItem {
+            id: None,
+            score: Some(1.0),
+            payload: json!({
+                "source_name": "Alice",
+                "target_name": "Bob",
+                "relationship": "KNOWS"
+            }),
+        }];
+
+        let _ = retriever
+            .get_completion("Who knows Bob?", Some(context), &SessionContext::default())
+            .await
+            .unwrap();
+
+        let messages = llm.last_messages.lock().unwrap().clone();
+        // User message should use graph_context_for_question format
+        assert!(
+            messages[1]
+                .content
+                .contains("The question is: `Who knows Bob?`"),
+            "expected graph prompt format, got: {}",
+            messages[1].content
+        );
+        assert!(messages[1].content.contains("knowledge graph"));
+        // Should NOT use the generic RAG format
+        assert!(!messages[1].content.starts_with("Question:\n"));
     }
 }

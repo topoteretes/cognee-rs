@@ -19,7 +19,7 @@ use crate::graph_retrieval::{
 };
 use crate::retrievers::SearchRetriever;
 use crate::types::{SearchContext, SearchError, SearchItem, SearchOutput, SearchType};
-use crate::utils::{build_messages_with_history, render_user_prompt, resolve_system_prompt};
+use crate::utils::{build_messages_with_history, render_graph_user_prompt, resolve_system_prompt};
 
 const DEFAULT_TOP_K: usize = 5;
 const DEFAULT_WIDE_SEARCH_TOP_K: usize = 100;
@@ -403,7 +403,7 @@ impl SearchRetriever for TemporalRetriever {
             self.system_prompt_path.as_deref(),
         )?;
 
-        let user_prompt = render_user_prompt(
+        let user_prompt = render_graph_user_prompt(
             self.user_prompt_template.as_deref(),
             query,
             &Self::temporal_context_to_text(&completion_context),

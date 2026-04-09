@@ -16,7 +16,8 @@ use crate::graph_retrieval::{
 use crate::retrievers::SearchRetriever;
 use crate::types::{SearchContext, SearchError, SearchItem, SearchOutput, SearchType};
 use crate::utils::{
-    build_messages_with_history, render_edges_context, render_user_prompt, resolve_system_prompt,
+    build_messages_with_history, render_edges_context, render_graph_user_prompt,
+    resolve_system_prompt,
 };
 
 const DEFAULT_TOP_K: usize = 5;
@@ -213,7 +214,7 @@ impl SearchRetriever for GraphSummaryCompletionRetriever {
             self.system_prompt_path.as_deref(),
         )?;
 
-        let user_prompt = render_user_prompt(
+        let user_prompt = render_graph_user_prompt(
             self.user_prompt_template.as_deref(),
             query,
             &summarized_context,
@@ -336,7 +337,7 @@ impl SearchRetriever for GraphCompletionContextExtensionRetriever {
             self.system_prompt.as_deref(),
             self.system_prompt_path.as_deref(),
         )?;
-        let user_prompt = render_user_prompt(
+        let user_prompt = render_graph_user_prompt(
             self.user_prompt_template.as_deref(),
             query,
             &render_edges_context(&extended_context),
@@ -428,7 +429,7 @@ impl SearchRetriever for GraphCompletionCotRetriever {
         let mut final_answer = String::new();
 
         for iter_index in 0..self.max_iter {
-            let answer_prompt = render_user_prompt(
+            let answer_prompt = render_graph_user_prompt(
                 self.user_prompt_template.as_deref(),
                 query,
                 &render_edges_context(&current_context),
