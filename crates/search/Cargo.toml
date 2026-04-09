@@ -8,7 +8,7 @@ cognee-embedding = { path = "../embedding" }
 cognee-database = { path = "../database" }
 cognee-graph = { path = "../graph" }
 cognee-llm = { path = "../llm" }
-cognee-session = { path = "../session" }
+cognee-session = { path = "../session", features = ["sea-orm-store"] }
 cognee-vector = { path = "../vector" }
 
 async-trait.workspace = true

@@ -1,3 +1,5 @@
+#![cfg(feature = "sea-orm-store")]
+
 use std::sync::Arc;
 
 use cognee_session::{SeaOrmSessionStore, SessionManager, SessionStore};
