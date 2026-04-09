@@ -22,6 +22,7 @@ members = [
     "crates/vector",
     "crates/ontology",
     "crates/search",
+    "crates/session",
     "crates/delete",
     "crates/test-utils",
 

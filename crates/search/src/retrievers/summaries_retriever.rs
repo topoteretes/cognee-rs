@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use cognee_embedding::EmbeddingEngine;
+use cognee_session::SessionContext;
 use cognee_vector::VectorDB;
 
 use crate::retrievers::SearchRetriever;
@@ -71,7 +72,7 @@ impl SearchRetriever for SummariesRetriever {
         &self,
         query: &str,
         context: Option<SearchContext>,
-        _session_id: Option<&str>,
+        _session: &SessionContext,
     ) -> Result<SearchOutput, SearchError> {
         let output_context = match context {
             Some(existing_context) => existing_context,
@@ -93,6 +94,8 @@ mod tests {
     use cognee_vector::{SearchResult, VectorDB, VectorDBResult, VectorPoint};
     use serde_json::json;
     use uuid::Uuid;
+
+    use cognee_session::SessionContext;
 
     use crate::retrievers::{SearchRetriever, SummariesRetriever};
     use crate::types::{SearchError, SearchOutput};
@@ -225,7 +228,10 @@ mod tests {
             Some(2),
         );
 
-        let output = retriever.get_completion("query", None, None).await.unwrap();
+        let output = retriever
+            .get_completion("query", None, &SessionContext::default())
+            .await
+            .unwrap();
         match output {
             SearchOutput::Items(items) => assert!(items.is_empty()),
             _ => panic!("expected items output"),

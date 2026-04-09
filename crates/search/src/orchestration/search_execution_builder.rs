@@ -5,6 +5,7 @@ use cognee_database::SearchHistoryDb;
 use cognee_embedding::EmbeddingEngine;
 use cognee_graph::GraphDBTrait;
 use cognee_llm::Llm;
+use cognee_session::SessionManager;
 use cognee_vector::VectorDB;
 
 use crate::orchestration::{SearchOrchestrator, SearchTypeRegistry};
@@ -20,6 +21,7 @@ use crate::types::SearchType;
 pub struct SearchBuilder {
     retrievers: HashMap<SearchType, SearchRetrieverRef>,
     database: Arc<dyn SearchHistoryDb>,
+    session_manager: Option<Arc<SessionManager>>,
 }
 
 impl SearchBuilder {
@@ -33,8 +35,14 @@ impl SearchBuilder {
         Self {
             retrievers: HashMap::new(),
             database,
+            session_manager: None,
         }
         .register_standard_retrievers(vector_db, embedding_engine, graph_db, llm)
+    }
+
+    pub fn with_session_manager(mut self, session_manager: Arc<SessionManager>) -> Self {
+        self.session_manager = Some(session_manager);
+        self
     }
 
     pub fn register_retriever(mut self, retriever: SearchRetrieverRef) -> Self {
@@ -244,7 +252,11 @@ impl SearchBuilder {
             registry.register(Arc::clone(retriever));
         }
 
-        SearchOrchestrator::new(registry).with_database(self.database)
+        let mut orchestrator = SearchOrchestrator::new(registry).with_database(self.database);
+        if let Some(session_manager) = self.session_manager {
+            orchestrator = orchestrator.with_session_manager(session_manager);
+        }
+        orchestrator
     }
 }
 
@@ -266,6 +278,8 @@ mod tests {
     use serde_json::json;
     use std::borrow::Cow;
     use uuid::Uuid;
+
+    use cognee_session::SessionContext;
 
     use super::SearchBuilder;
     use crate::retrievers::SearchRetriever;
@@ -558,7 +572,7 @@ mod tests {
             &self,
             _query: &str,
             _context: Option<SearchContext>,
-            _session_id: Option<&str>,
+            _session: &SessionContext,
         ) -> Result<SearchOutput, SearchError> {
             Ok(SearchOutput::Text("builder-executed".to_string()))
         }
@@ -624,7 +638,7 @@ mod tests {
                 &self,
                 _query: &str,
                 _context: Option<SearchContext>,
-                _session_id: Option<&str>,
+                _session: &SessionContext,
             ) -> Result<SearchOutput, SearchError> {
                 Ok(SearchOutput::Text("unused".to_string()))
             }

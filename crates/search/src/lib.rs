@@ -4,6 +4,7 @@ pub mod retrievers;
 pub mod types;
 pub mod utils;
 
+pub use cognee_session::{SeaOrmSessionStore, SessionContext, SessionManager, SessionStore};
 pub use orchestration::{SearchBuilder, SearchOrchestrator, SearchTypeRegistry};
 pub use retrievers::{
     ChunksRetriever, CodingRulesRetriever, CompletionRetriever, CypherSearchRetriever,

@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use cognee_session::SessionContext;
 
 use crate::types::{SearchContext, SearchError, SearchOutput, SearchType};
 
@@ -16,6 +17,6 @@ pub trait SearchRetriever: Send + Sync {
         &self,
         query: &str,
         context: Option<SearchContext>,
-        session_id: Option<&str>,
+        session: &SessionContext,
     ) -> Result<SearchOutput, SearchError>;
 }

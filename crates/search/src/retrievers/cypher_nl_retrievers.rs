@@ -4,6 +4,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use cognee_graph::GraphDBTrait;
 use cognee_llm::{GenerationOptions, Llm, Message};
+use cognee_session::SessionContext;
 use serde_json::{Value, json};
 
 use crate::retrievers::SearchRetriever;
@@ -77,7 +78,7 @@ impl SearchRetriever for CypherSearchRetriever {
         &self,
         query: &str,
         context: Option<SearchContext>,
-        _session_id: Option<&str>,
+        _session: &SessionContext,
     ) -> Result<SearchOutput, SearchError> {
         let output_context = match context {
             Some(existing_context) => existing_context,
@@ -210,7 +211,7 @@ impl SearchRetriever for NaturalLanguageRetriever {
         &self,
         query: &str,
         context: Option<SearchContext>,
-        _session_id: Option<&str>,
+        _session: &SessionContext,
     ) -> Result<SearchOutput, SearchError> {
         let output_context = match context {
             Some(existing_context) => existing_context,
@@ -236,6 +237,8 @@ mod tests {
     };
 
     use serde_json::json;
+
+    use cognee_session::SessionContext;
 
     use super::{CypherSearchRetriever, NaturalLanguageRetriever};
     use crate::retrievers::SearchRetriever;
@@ -440,7 +443,7 @@ mod tests {
 
         let retriever = CypherSearchRetriever::new(graph_db);
         let output = retriever
-            .get_completion("MATCH (n) RETURN n", None, None)
+            .get_completion("MATCH (n) RETURN n", None, &SessionContext::default())
             .await
             .unwrap();
 
@@ -480,7 +483,7 @@ mod tests {
 
         let retriever = NaturalLanguageRetriever::new(graph_db, llm, Some(3), None);
         let output = retriever
-            .get_completion("Find Alice", None, None)
+            .get_completion("Find Alice", None, &SessionContext::default())
             .await
             .unwrap();
 

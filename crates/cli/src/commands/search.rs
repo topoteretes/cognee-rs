@@ -1,6 +1,9 @@
 use std::sync::Arc;
 
-use cognee_lib::search::{SearchBuilder, SearchOutput, SearchRequest, SearchResponse, SearchType};
+use cognee_lib::search::{
+    SeaOrmSessionStore, SearchBuilder, SearchOutput, SearchRequest, SearchResponse, SearchType,
+    SessionManager,
+};
 use cognee_lib::{ComponentManager, PipelineContext};
 use tracing::{info, warn};
 
@@ -58,8 +61,13 @@ pub fn run(args: SearchArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> 
             .await
             .map_err(|e| CliError::Runtime(format!("{e}")))?;
 
-        let orchestrator =
-            SearchBuilder::new(vector_db, embedding_engine, graph_db, llm, database).build();
+        let session_store = SeaOrmSessionStore::new(Arc::clone(&database))
+            .await
+            .map_err(|e| CliError::Runtime(format!("session store init failed: {e}")))?;
+        let session_manager = Arc::new(SessionManager::new(Arc::new(session_store)));
+        let orchestrator = SearchBuilder::new(vector_db, embedding_engine, graph_db, llm, database)
+            .with_session_manager(session_manager)
+            .build();
 
         let datasets = if args.datasets.is_empty() {
             None
@@ -77,7 +85,7 @@ pub fn run(args: SearchArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> 
             system_prompt_path: Some(system_prompt),
             only_context: Some(false),
             use_combined_context: Some(false),
-            session_id: None,
+            session_id: args.session_id,
             node_type: None,
             node_name: None,
             wide_search_top_k: None,

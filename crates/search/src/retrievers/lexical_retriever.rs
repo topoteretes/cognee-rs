@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use cognee_graph::GraphDBTrait;
+use cognee_session::SessionContext;
 use serde_json::{Value, json};
 
 use crate::retrievers::SearchRetriever;
@@ -217,7 +218,7 @@ impl SearchRetriever for LexicalRetriever {
         &self,
         query: &str,
         context: Option<SearchContext>,
-        _session_id: Option<&str>,
+        _session: &SessionContext,
     ) -> Result<SearchOutput, SearchError> {
         let output_context = match context {
             Some(existing_context) => existing_context,
@@ -266,9 +267,9 @@ impl SearchRetriever for JaccardChunksRetriever {
         &self,
         query: &str,
         context: Option<SearchContext>,
-        session_id: Option<&str>,
+        session: &SessionContext,
     ) -> Result<SearchOutput, SearchError> {
-        self.inner.get_completion(query, context, session_id).await
+        self.inner.get_completion(query, context, session).await
     }
 }
 
@@ -279,6 +280,8 @@ mod tests {
     use cognee_graph::{GraphDBTrait, GraphDBTraitExt, MockGraphDB};
     use serde::Serialize;
     use uuid::Uuid;
+
+    use cognee_session::SessionContext;
 
     use crate::retrievers::{JaccardChunksRetriever, SearchRetriever};
     use crate::types::SearchOutput;
@@ -357,7 +360,7 @@ mod tests {
             JaccardChunksRetriever::new(Arc::clone(&graph_db), Some(5), false, None, false);
 
         let output = retriever
-            .get_completion("exact term", None, None)
+            .get_completion("exact term", None, &SessionContext::default())
             .await
             .unwrap();
 

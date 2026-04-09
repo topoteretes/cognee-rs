@@ -3,11 +3,13 @@ use crate::orchestration::{
 };
 use crate::types::{SearchError, SearchOutput, SearchRequest, SearchResponse};
 use cognee_database::{SearchHistoryDb, SearchHistoryEntry};
+use cognee_session::{SessionContext, SessionManager};
 use std::sync::Arc;
 
 pub struct SearchOrchestrator {
     registry: SearchTypeRegistry,
     database: Option<Arc<dyn SearchHistoryDb>>,
+    session_manager: Option<Arc<SessionManager>>,
 }
 
 impl SearchOrchestrator {
@@ -15,11 +17,17 @@ impl SearchOrchestrator {
         Self {
             registry,
             database: None,
+            session_manager: None,
         }
     }
 
     pub fn with_database(mut self, database: Arc<dyn SearchHistoryDb>) -> Self {
         self.database = Some(database);
+        self
+    }
+
+    pub fn with_session_manager(mut self, session_manager: Arc<SessionManager>) -> Self {
+        self.session_manager = Some(session_manager);
         self
     }
 
@@ -110,13 +118,41 @@ impl SearchOrchestrator {
             return Ok(response);
         }
 
+        let session_context =
+            if let (Some(session_id), Some(sm)) = (&request.session_id, &self.session_manager) {
+                let history = sm
+                    .load_history_messages(Some(session_id), None)
+                    .await
+                    .unwrap_or_default();
+                SessionContext {
+                    session_id: Some(session_id.clone()),
+                    history,
+                }
+            } else {
+                SessionContext {
+                    session_id: request.session_id.clone(),
+                    ..SessionContext::default()
+                }
+            };
+
         let output = retriever
-            .get_completion(
-                &request.query_text,
-                context.clone(),
-                request.session_id.as_deref(),
-            )
+            .get_completion(&request.query_text, context.clone(), &session_context)
             .await?;
+
+        if let (Some(session_id), Some(sm)) = (&request.session_id, &self.session_manager)
+            && let SearchOutput::Text(ref answer) = output
+        {
+            let ctx_json = context.as_ref().and_then(|c| serde_json::to_string(c).ok());
+            let _ = sm
+                .save_qa(
+                    Some(session_id),
+                    None,
+                    &request.query_text,
+                    answer,
+                    ctx_json.as_deref(),
+                )
+                .await;
+        }
 
         let mut response = prepare_search_result(
             request.search_type,
@@ -159,6 +195,8 @@ mod tests {
     use cognee_database::{SearchHistoryDb, SearchHistoryEntryType, connect, initialize};
     use serde_json::json;
 
+    use cognee_session::SessionContext;
+
     use crate::orchestration::SearchTypeRegistry;
     use crate::retrievers::SearchRetriever;
     use crate::types::{SearchContext, SearchError, SearchOutput, SearchRequest, SearchType};
@@ -185,7 +223,7 @@ mod tests {
             &self,
             _query: &str,
             _context: Option<SearchContext>,
-            _session_id: Option<&str>,
+            _session: &SessionContext,
         ) -> Result<SearchOutput, SearchError> {
             Ok(SearchOutput::Text("answer value".to_string()))
         }
@@ -327,7 +365,7 @@ mod tests {
                 &self,
                 _query: &str,
                 _context: Option<SearchContext>,
-                _session_id: Option<&str>,
+                _session: &SessionContext,
             ) -> Result<SearchOutput, SearchError> {
                 Ok(SearchOutput::Text("graph answer".to_string()))
             }
@@ -410,7 +448,7 @@ mod tests {
                 &self,
                 _query: &str,
                 context: Option<SearchContext>,
-                _session_id: Option<&str>,
+                _session: &SessionContext,
             ) -> Result<SearchOutput, SearchError> {
                 Ok(SearchOutput::Items(context.unwrap_or_default()))
             }
@@ -490,7 +528,7 @@ mod tests {
                 &self,
                 _query: &str,
                 context: Option<SearchContext>,
-                _session_id: Option<&str>,
+                _session: &SessionContext,
             ) -> Result<SearchOutput, SearchError> {
                 Ok(SearchOutput::Items(context.unwrap_or_default()))
             }

@@ -8,10 +8,14 @@ use cognee_llm::{GenerationOptions, Llm, Message};
 use cognee_vector::VectorDB;
 use serde_json::json;
 
+use cognee_session::SessionContext;
+
 use crate::graph_retrieval::{GraphRetrievalConfig, brute_force_triplet_search};
 use crate::retrievers::SearchRetriever;
 use crate::types::{SearchContext, SearchError, SearchItem, SearchOutput, SearchType};
-use crate::utils::{render_edges_context, render_user_prompt, resolve_system_prompt};
+use crate::utils::{
+    build_messages_with_history, render_edges_context, render_user_prompt, resolve_system_prompt,
+};
 
 const DEFAULT_TOP_K: usize = 10;
 const DEFAULT_WIDE_SEARCH_TOP_K: usize = 20;
@@ -174,7 +178,7 @@ impl SearchRetriever for GraphSummaryCompletionRetriever {
         &self,
         query: &str,
         context: Option<SearchContext>,
-        _session_id: Option<&str>,
+        session: &SessionContext,
     ) -> Result<SearchOutput, SearchError> {
         let completion_context = match context {
             Some(existing_context) => existing_context,
@@ -211,7 +215,7 @@ impl SearchRetriever for GraphSummaryCompletionRetriever {
         let completion = self
             .llm
             .generate(
-                vec![Message::system(system_prompt), Message::user(user_prompt)],
+                build_messages_with_history(system_prompt, user_prompt, session),
                 self.generation_options.clone(),
             )
             .await?;
@@ -280,7 +284,7 @@ impl SearchRetriever for GraphCompletionContextExtensionRetriever {
         &self,
         query: &str,
         context: Option<SearchContext>,
-        _session_id: Option<&str>,
+        session: &SessionContext,
     ) -> Result<SearchOutput, SearchError> {
         let mut extended_context = match context {
             Some(existing_context) => existing_context,
@@ -334,7 +338,7 @@ impl SearchRetriever for GraphCompletionContextExtensionRetriever {
         let completion = self
             .llm
             .generate(
-                vec![Message::system(system_prompt), Message::user(user_prompt)],
+                build_messages_with_history(system_prompt, user_prompt, session),
                 self.generation_options.clone(),
             )
             .await?;
@@ -402,7 +406,7 @@ impl SearchRetriever for GraphCompletionCotRetriever {
         &self,
         query: &str,
         context: Option<SearchContext>,
-        _session_id: Option<&str>,
+        session: &SessionContext,
     ) -> Result<SearchOutput, SearchError> {
         let mut current_context = match context {
             Some(existing_context) => existing_context,
@@ -426,10 +430,7 @@ impl SearchRetriever for GraphCompletionCotRetriever {
             final_answer = self
                 .llm
                 .generate(
-                    vec![
-                        Message::system(system_prompt.clone()),
-                        Message::user(answer_prompt),
-                    ],
+                    build_messages_with_history(system_prompt.clone(), answer_prompt, session),
                     self.generation_options.clone(),
                 )
                 .await?
@@ -504,6 +505,8 @@ mod tests {
 
     use serde::Serialize;
     use uuid::Uuid;
+
+    use cognee_session::SessionContext;
 
     use crate::retrievers::{
         GraphCompletionContextExtensionRetriever, GraphCompletionCotRetriever,
@@ -751,7 +754,7 @@ mod tests {
 
         assert_eq!(retriever.search_type(), SearchType::GraphSummaryCompletion);
         let output = retriever
-            .get_completion("Who knows Bob?", None, None)
+            .get_completion("Who knows Bob?", None, &SessionContext::default())
             .await
             .unwrap();
 
@@ -787,7 +790,7 @@ mod tests {
             SearchType::GraphCompletionContextExtension
         );
         let output = retriever
-            .get_completion("Who knows Bob?", None, None)
+            .get_completion("Who knows Bob?", None, &SessionContext::default())
             .await
             .unwrap();
 
@@ -823,7 +826,7 @@ mod tests {
 
         assert_eq!(retriever.search_type(), SearchType::GraphCompletionCot);
         let output = retriever
-            .get_completion("Who knows Bob?", None, None)
+            .get_completion("Who knows Bob?", None, &SessionContext::default())
             .await
             .unwrap();
 

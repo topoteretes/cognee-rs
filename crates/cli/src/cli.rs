@@ -136,6 +136,9 @@ pub struct SearchArgs {
     #[arg(long = "system-prompt")]
     pub system_prompt: Option<String>,
 
+    #[arg(long = "session-id")]
+    pub session_id: Option<String>,
+
     #[arg(long = "output-format", short = 'f', default_value = "pretty")]
     pub output_format: OutputFormatArg,
 

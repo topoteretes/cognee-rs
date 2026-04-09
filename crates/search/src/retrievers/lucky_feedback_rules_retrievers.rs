@@ -6,6 +6,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use cognee_graph::{GraphDBTrait, GraphDBTraitExt};
 use cognee_llm::{GenerationOptions, Llm, LlmExt, Message};
+use cognee_session::SessionContext;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -132,11 +133,11 @@ impl SearchRetriever for FeelingLuckyRetriever {
         &self,
         query: &str,
         context: Option<SearchContext>,
-        session_id: Option<&str>,
+        session: &SessionContext,
     ) -> Result<SearchOutput, SearchError> {
         self.select_retriever(query)
             .await?
-            .get_completion(query, context, session_id)
+            .get_completion(query, context, session)
             .await
     }
 }
@@ -288,7 +289,7 @@ impl SearchRetriever for FeedbackRetriever {
         &self,
         query: &str,
         _context: Option<SearchContext>,
-        _session_id: Option<&str>,
+        _session: &SessionContext,
     ) -> Result<SearchOutput, SearchError> {
         let analysis = self.extract_feedback(query).await?;
         let feedback_id = self.store_feedback(query, &analysis).await?;
@@ -425,7 +426,7 @@ impl SearchRetriever for CodingRulesRetriever {
         &self,
         query: &str,
         context: Option<SearchContext>,
-        _session_id: Option<&str>,
+        _session: &SessionContext,
     ) -> Result<SearchOutput, SearchError> {
         let rules = match context {
             Some(items) => items
@@ -457,6 +458,8 @@ mod tests {
     };
 
     use serde::Serialize;
+
+    use cognee_session::SessionContext;
 
     use super::{CodingRulesRetriever, FeedbackAnalysis, FeedbackRetriever, FeelingLuckyRetriever};
     use crate::retrievers::{SearchRetriever, SearchRetrieverRef};
@@ -531,7 +534,7 @@ mod tests {
             &self,
             _query: &str,
             _context: Option<SearchContext>,
-            _session_id: Option<&str>,
+            _session: &SessionContext,
         ) -> Result<SearchOutput, SearchError> {
             Ok(SearchOutput::Text(self.text.clone()))
         }
@@ -573,7 +576,10 @@ mod tests {
             None,
         );
 
-        let output = retriever.get_completion("hello", None, None).await.unwrap();
+        let output = retriever
+            .get_completion("hello", None, &SessionContext::default())
+            .await
+            .unwrap();
         match output {
             SearchOutput::Text(text) => assert_eq!(text, "fallback rag"),
             _ => panic!("expected text output"),
@@ -604,7 +610,7 @@ mod tests {
 
         let retriever = FeedbackRetriever::new(graph_db.clone(), llm, Some(3), None);
         let output = retriever
-            .get_completion("Great answer", None, None)
+            .get_completion("Great answer", None, &SessionContext::default())
             .await
             .unwrap();
 
@@ -647,7 +653,7 @@ mod tests {
 
         let retriever = CodingRulesRetriever::new(graph_db, None);
         let output = retriever
-            .get_completion("coding_agent_rules", None, None)
+            .get_completion("coding_agent_rules", None, &SessionContext::default())
             .await
             .unwrap();
 

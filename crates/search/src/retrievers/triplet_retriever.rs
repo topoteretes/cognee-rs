@@ -2,14 +2,16 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use cognee_embedding::EmbeddingEngine;
-use cognee_llm::{GenerationOptions, Llm, Message};
+use cognee_llm::{GenerationOptions, Llm};
 use cognee_vector::VectorDB;
 use tracing::debug;
+
+use cognee_session::SessionContext;
 
 use crate::retrievers::SearchRetriever;
 use crate::retrievers::context_items::search_results_to_context;
 use crate::types::{SearchContext, SearchError, SearchOutput, SearchType};
-use crate::utils::{render_user_prompt, resolve_system_prompt};
+use crate::utils::{build_messages_with_history, render_user_prompt, resolve_system_prompt};
 
 const TRIPLET_DATA_TYPE: &str = "Triplet";
 const TRIPLET_PRIMARY_FIELD: &str = "text";
@@ -117,7 +119,7 @@ impl SearchRetriever for TripletRetriever {
         &self,
         query: &str,
         context: Option<SearchContext>,
-        _session_id: Option<&str>,
+        session: &SessionContext,
     ) -> Result<SearchOutput, SearchError> {
         let completion_context = match context {
             Some(existing_context) => existing_context,
@@ -143,7 +145,7 @@ impl SearchRetriever for TripletRetriever {
         let completion = self
             .llm
             .generate(
-                vec![Message::system(system_prompt), Message::user(user_prompt)],
+                build_messages_with_history(system_prompt, user_prompt, session),
                 self.generation_options.clone(),
             )
             .await?;
@@ -167,6 +169,8 @@ mod tests {
 
     use serde_json::json;
     use uuid::Uuid;
+
+    use cognee_session::SessionContext;
 
     use crate::retrievers::{SearchRetriever, TripletRetriever};
     use crate::types::{SearchError, SearchOutput};
@@ -425,7 +429,7 @@ mod tests {
         );
 
         let output = retriever
-            .get_completion("who knows Bob?", None, None)
+            .get_completion("who knows Bob?", None, &SessionContext::default())
             .await
             .unwrap();
 

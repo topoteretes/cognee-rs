@@ -11,10 +11,12 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+use cognee_session::SessionContext;
+
 use crate::graph_retrieval::{GraphRetrievalConfig, RankedGraphEdge, brute_force_triplet_search};
 use crate::retrievers::SearchRetriever;
 use crate::types::{SearchContext, SearchError, SearchItem, SearchOutput, SearchType};
-use crate::utils::{render_user_prompt, resolve_system_prompt};
+use crate::utils::{build_messages_with_history, render_user_prompt, resolve_system_prompt};
 
 const DEFAULT_TOP_K: usize = 10;
 const DEFAULT_WIDE_SEARCH_TOP_K: usize = 20;
@@ -381,7 +383,7 @@ impl SearchRetriever for TemporalRetriever {
         &self,
         query: &str,
         context: Option<SearchContext>,
-        _session_id: Option<&str>,
+        session: &SessionContext,
     ) -> Result<SearchOutput, SearchError> {
         let completion_context = match context {
             Some(existing_context) => existing_context,
@@ -402,7 +404,7 @@ impl SearchRetriever for TemporalRetriever {
         let completion = self
             .llm
             .generate(
-                vec![Message::system(system_prompt), Message::user(user_prompt)],
+                build_messages_with_history(system_prompt, user_prompt, session),
                 self.generation_options.clone(),
             )
             .await?;

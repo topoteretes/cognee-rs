@@ -1,0 +1,19 @@
+[package]
+name = "cognee-session"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+cognee-llm = { path = "../llm" }
+async-trait.workspace = true
+chrono.workspace = true
+sea-orm = { version = "1.1", features = ["sqlx-sqlite", "runtime-tokio-rustls", "with-chrono"] }
+sea-orm-migration = { version = "1.1", features = ["runtime-tokio-rustls"] }
+thiserror.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
