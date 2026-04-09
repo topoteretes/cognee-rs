@@ -2,8 +2,10 @@ use std::fs;
 
 use crate::types::SearchError;
 
-pub const DEFAULT_RAG_SYSTEM_PROMPT: &str = "You are a helpful assistant. Answer the user question using the provided context. If the context is insufficient, say what is missing.";
-pub const DEFAULT_RAG_USER_PROMPT_TEMPLATE: &str = "Question:\n{question}\n\nContext:\n{context}";
+pub const DEFAULT_RAG_SYSTEM_PROMPT: &str =
+    "Answer the question using the provided context. Be as brief as possible.";
+pub const DEFAULT_RAG_USER_PROMPT_TEMPLATE: &str =
+    "The question is: `{question}`\nAnd here is the context: `{context}`";
 pub const DEFAULT_GRAPH_USER_PROMPT_TEMPLATE: &str = "The question is: `{question}`\nand here is the context provided with a set of relationships from a knowledge graph separated by \\n---\\n each represented as node1 -- relation -- node2 triplet: `{context}`";
 
 pub fn resolve_system_prompt(
@@ -73,8 +75,8 @@ mod tests {
     fn render_user_prompt_uses_rag_template_by_default() {
         let result = render_user_prompt(None, "question", "context");
 
-        assert!(result.contains("Question:\nquestion"));
-        assert!(result.contains("Context:\ncontext"));
+        assert!(result.contains("The question is: `question`"));
+        assert!(result.contains("And here is the context: `context`"));
         // Should NOT contain graph-specific text
         assert!(!result.contains("knowledge graph"));
     }

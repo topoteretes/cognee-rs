@@ -16,8 +16,8 @@ use crate::graph_retrieval::{
 use crate::retrievers::SearchRetriever;
 use crate::types::{SearchContext, SearchError, SearchItem, SearchOutput, SearchType};
 use crate::utils::{
-    build_messages_with_history, render_edges_context, render_graph_user_prompt,
-    resolve_system_prompt,
+    DEFAULT_RAG_SYSTEM_PROMPT, build_messages_with_history, render_edges_context,
+    render_graph_user_prompt, resolve_system_prompt,
 };
 
 const DEFAULT_TOP_K: usize = 5;
@@ -25,22 +25,14 @@ const DEFAULT_WIDE_SEARCH_TOP_K: usize = 100;
 const DEFAULT_CONTEXT_EXTENSION_ROUNDS: usize = 4;
 const DEFAULT_COT_MAX_ITER: usize = 4;
 
-const DEFAULT_GRAPH_SUMMARY_SYSTEM_PROMPT: &str =
-    "You summarize graph evidence into concise factual context.";
-const DEFAULT_GRAPH_SUMMARY_USER_PROMPT: &str =
-    "Summarize the following graph context:\n\n{context}";
+const DEFAULT_GRAPH_SUMMARY_SYSTEM_PROMPT: &str = "You are a top-tier summarization engine that is meant to eliminate redundancies.\nThe input contains relationships enclosed by \\\"--\\\" .\nSummarize the input into natural sentences, listing all relationships.";
+const DEFAULT_GRAPH_SUMMARY_USER_PROMPT: &str = "{context}";
 
-const DEFAULT_CONTEXT_EXTENSION_SYSTEM_PROMPT: &str =
-    "Generate a follow-up graph query that expands useful context for the question.";
-const DEFAULT_CONTEXT_EXTENSION_USER_PROMPT: &str = "Original question:\n{question}\n\nCurrent graph context:\n{context}\n\nProvide one short follow-up graph query.";
+const DEFAULT_COT_VALIDATION_SYSTEM_PROMPT: &str = "You are a helpful agent who are allowed to use only the provided question answer and context.\nI want to you find reasoning what is missing from the context or why the answer is not answering the question or not correct strictly based on the context.";
+const DEFAULT_COT_VALIDATION_USER_PROMPT: &str = "<QUESTION>\n`{question}`\n</QUESTION>\n\n<ANSWER>\n`{answer}`\n</ANSWER>\n\n<CONTEXT>\n`{context}`\n</CONTEXT>";
 
-const DEFAULT_COT_VALIDATION_SYSTEM_PROMPT: &str =
-    "You validate whether an answer is sufficiently grounded in graph context.";
-const DEFAULT_COT_VALIDATION_USER_PROMPT: &str = "Question:\n{question}\n\nAnswer:\n{answer}\n\nContext:\n{context}\n\nSay whether more context is needed and why.";
-
-const DEFAULT_COT_FOLLOW_UP_SYSTEM_PROMPT: &str =
-    "Generate one concise follow-up graph query to improve the answer.";
-const DEFAULT_COT_FOLLOW_UP_USER_PROMPT: &str = "Question:\n{question}\n\nAnswer:\n{answer}\n\nValidation:\n{validation}\n\nProvide one follow-up graph query.";
+const DEFAULT_COT_FOLLOW_UP_SYSTEM_PROMPT: &str = "You are a helpful assistant whose job is to ask exactly one clarifying follow-up question,\nto collect the missing piece of information needed to fully answer the user's original query.\nRespond with the question only (no extra text, no punctuation beyond what's needed).";
+const DEFAULT_COT_FOLLOW_UP_USER_PROMPT: &str = "Based on the following, ask exactly one question that would directly resolve the gap identified in the validation reasoning and allow a valid answer.\nThink in a way that with the followup question you are exploring a knowledge graph which contains entities, entity types and document chunks\n\n<QUERY>\n`{question}`\n</QUERY>\n\n<ANSWER>\n`{answer}`\n</ANSWER>\n\n<REASONING>\n`{validation}`\n</REASONING>";
 
 struct GraphRetrieverCore {
     vector_db: Arc<dyn VectorDB>,
@@ -301,15 +293,17 @@ impl SearchRetriever for GraphCompletionContextExtensionRetriever {
 
         for _ in 0..self.context_extension_rounds {
             let current_context_text = render_edges_context(&extended_context);
-            let extension_prompt = DEFAULT_CONTEXT_EXTENSION_USER_PROMPT
-                .replace("{question}", query)
-                .replace("{context}", &current_context_text);
+            let extension_prompt = render_graph_user_prompt(
+                self.user_prompt_template.as_deref(),
+                query,
+                &current_context_text,
+            );
 
             let follow_up_query = self
                 .llm
                 .generate(
                     vec![
-                        Message::system(DEFAULT_CONTEXT_EXTENSION_SYSTEM_PROMPT),
+                        Message::system(DEFAULT_RAG_SYSTEM_PROMPT),
                         Message::user(extension_prompt),
                     ],
                     self.generation_options.clone(),
