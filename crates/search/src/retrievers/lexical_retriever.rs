@@ -196,7 +196,7 @@ impl SearchRetriever for LexicalRetriever {
                 let score = self.score(&query_tokens, &tokens);
                 Some(SearchItem {
                     id,
-                    score: if self.with_scores { Some(score) } else { None },
+                    score: Some(score),
                     payload,
                 })
             })
@@ -210,6 +210,12 @@ impl SearchRetriever for LexicalRetriever {
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
         items_with_score.truncate(self.top_k);
+
+        if !self.with_scores {
+            for item in &mut items_with_score {
+                item.score = None;
+            }
+        }
 
         Ok(items_with_score)
     }
@@ -348,6 +354,49 @@ mod tests {
 
         assert_eq!(context.len(), 2);
         assert!(context[0].score.unwrap() > context[1].score.unwrap());
+    }
+
+    #[tokio::test]
+    async fn ranks_correctly_when_with_scores_is_false() {
+        let mock_graph_db = Arc::new(MockGraphDB::new());
+        // The query will be "ownership safety". The first chunk matches both tokens,
+        // the second matches neither, the third matches "ownership" only.
+        add_chunk(
+            &mock_graph_db,
+            "ownership and safety are core rust features",
+        )
+        .await;
+        add_chunk(&mock_graph_db, "python async search orchestration").await;
+        add_chunk(&mock_graph_db, "ownership model in rust").await;
+        let graph_db: Arc<dyn GraphDBTrait> = mock_graph_db;
+
+        let retriever = JaccardChunksRetriever::new(
+            Arc::clone(&graph_db),
+            Some(2),
+            false, // scores NOT included in output
+            Some(vec!["and".to_string(), "are".to_string(), "in".to_string()]),
+            false,
+        );
+
+        let context = retriever.get_context("ownership safety").await.unwrap();
+
+        assert_eq!(context.len(), 2);
+
+        // Scores should be None (with_scores=false)
+        assert!(context[0].score.is_none());
+        assert!(context[1].score.is_none());
+
+        // But ranking must still be correct: the chunk with both "ownership" and
+        // "safety" should come first.
+        let first_text = context[0]
+            .payload
+            .get("text")
+            .and_then(|v| v.as_str())
+            .expect("first item should have text");
+        assert!(
+            first_text.contains("ownership") && first_text.contains("safety"),
+            "highest-ranked chunk should contain both query terms, got: {first_text}"
+        );
     }
 
     #[tokio::test]
