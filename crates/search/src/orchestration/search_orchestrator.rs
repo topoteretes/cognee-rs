@@ -60,7 +60,7 @@ impl SearchOrchestrator {
         if should_save_interaction
             && let Some(database) = &self.database
             && let Ok(query_id) = database
-                .log_query(&request.query_text, &query_type, None)
+                .log_query(&request.query_text, &query_type, request.user_id)
                 .await
         {
             logged_query_id = Some(query_id);
@@ -113,15 +113,17 @@ impl SearchOrchestrator {
                 response.context = Some(scoped_context_map);
             }
 
-            self.log_result_if_enabled(logged_query_id, &response).await;
+            self.log_result_if_enabled(logged_query_id, &response, request.user_id)
+                .await;
 
             return Ok(response);
         }
 
+        let user_id_str = request.user_id.map(|id| id.to_string());
         let session_context =
             if let (Some(session_id), Some(sm)) = (&request.session_id, &self.session_manager) {
                 let history = sm
-                    .load_history_messages(Some(session_id), None)
+                    .load_history_messages(Some(session_id), user_id_str.as_deref())
                     .await
                     .unwrap_or_default();
                 SessionContext {
@@ -146,7 +148,7 @@ impl SearchOrchestrator {
             let _ = sm
                 .save_qa(
                     Some(session_id),
-                    None,
+                    user_id_str.as_deref(),
                     &request.query_text,
                     answer,
                     ctx_json.as_deref(),
@@ -169,19 +171,25 @@ impl SearchOrchestrator {
             response.context = Some(scoped_context_map);
         }
 
-        self.log_result_if_enabled(logged_query_id, &response).await;
+        self.log_result_if_enabled(logged_query_id, &response, request.user_id)
+            .await;
 
         Ok(response)
     }
 
-    async fn log_result_if_enabled(&self, query_id: Option<uuid::Uuid>, response: &SearchResponse) {
+    async fn log_result_if_enabled(
+        &self,
+        query_id: Option<uuid::Uuid>,
+        response: &SearchResponse,
+        user_id: Option<uuid::Uuid>,
+    ) {
         let (Some(query_id), Some(database)) = (query_id, &self.database) else {
             return;
         };
 
         if let Ok(serialized_response) = serde_json::to_string(response) {
             let _ = database
-                .log_result(query_id, &serialized_response, None)
+                .log_result(query_id, &serialized_response, user_id)
                 .await;
         }
     }
@@ -252,6 +260,7 @@ mod tests {
             wide_search_top_k: None,
             triplet_distance_penalty: None,
             save_interaction: None,
+            user_id: None,
         };
 
         let response = orchestrator.search(&request).await.unwrap();
@@ -288,6 +297,7 @@ mod tests {
             wide_search_top_k: None,
             triplet_distance_penalty: None,
             save_interaction: None,
+            user_id: None,
         };
 
         let response = orchestrator.search(&request).await.unwrap();
@@ -329,6 +339,7 @@ mod tests {
             wide_search_top_k: None,
             triplet_distance_penalty: None,
             save_interaction: None,
+            user_id: None,
         };
 
         let response = orchestrator.search(&request).await.unwrap();
@@ -392,6 +403,7 @@ mod tests {
             wide_search_top_k: None,
             triplet_distance_penalty: None,
             save_interaction: None,
+            user_id: None,
         };
 
         let response = orchestrator.search(&request).await.unwrap();
@@ -478,6 +490,7 @@ mod tests {
             wide_search_top_k: None,
             triplet_distance_penalty: None,
             save_interaction: None,
+            user_id: None,
         };
 
         let response = orchestrator.search(&request).await.unwrap();
@@ -558,6 +571,7 @@ mod tests {
             wide_search_top_k: None,
             triplet_distance_penalty: None,
             save_interaction: None,
+            user_id: None,
         };
 
         let response = orchestrator.search(&request).await.unwrap();
@@ -598,6 +612,7 @@ mod tests {
             wide_search_top_k: None,
             triplet_distance_penalty: None,
             save_interaction: Some(true),
+            user_id: None,
         };
 
         let _ = orchestrator.search(&request).await.unwrap();

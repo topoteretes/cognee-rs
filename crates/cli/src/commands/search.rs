@@ -91,6 +91,7 @@ pub fn run(args: SearchArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> 
             wide_search_top_k: None,
             triplet_distance_penalty: None,
             save_interaction: Some(false),
+            user_id: None,
         };
 
         let response = orchestrator

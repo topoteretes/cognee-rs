@@ -76,6 +76,7 @@ fn make_request(query: &str, search_type: SearchType) -> SearchRequest {
         wide_search_top_k: None,
         triplet_distance_penalty: None,
         save_interaction: None,
+        user_id: None,
     }
 }
 
