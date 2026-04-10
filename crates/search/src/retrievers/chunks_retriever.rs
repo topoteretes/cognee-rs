@@ -39,6 +39,11 @@ impl SearchRetriever for ChunksRetriever {
         SearchType::Chunks
     }
 
+    #[tracing::instrument(
+        name = "cognee.retrieval.get_context",
+        skip(self, params),
+        fields(cognee.retrieval.retriever = "ChunksRetriever")
+    )]
     async fn get_context(
         &self,
         query: &str,

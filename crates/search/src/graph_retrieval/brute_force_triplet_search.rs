@@ -86,6 +86,13 @@ pub struct RankedGraphEdge {
     pub target_description: Option<String>,
 }
 
+#[tracing::instrument(
+    name = "cognee.retrieval.graph_search",
+    skip(graph_db, vector_db, embedding_engine, config),
+    fields(
+        cognee.result.count = tracing::field::Empty,
+    )
+)]
 pub async fn brute_force_triplet_search(
     query: &str,
     vector_db: &dyn VectorDB,
@@ -179,8 +186,15 @@ pub async fn brute_force_triplet_search(
 
     if candidate_node_ids.is_empty() {
         debug!("no candidate nodes found from vector search — returning empty");
+        tracing::Span::current().record("cognee.result.count", 0u64);
         return Ok(vec![]);
     }
+
+    tracing::debug!(
+        target: "cognee::search",
+        wide_search_results = candidate_node_ids.len(),
+        "Vector search complete"
+    );
 
     let has_node_filter = config.node_type.is_some()
         && config
@@ -319,5 +333,7 @@ pub async fn brute_force_triplet_search(
             .unwrap_or(std::cmp::Ordering::Equal)
     });
 
-    Ok(ranked_edges.into_iter().take(config.top_k).collect())
+    let ranked_edges: Vec<_> = ranked_edges.into_iter().take(config.top_k).collect();
+    tracing::Span::current().record("cognee.result.count", ranked_edges.len() as u64);
+    Ok(ranked_edges)
 }

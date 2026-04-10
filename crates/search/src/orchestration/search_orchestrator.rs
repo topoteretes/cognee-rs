@@ -92,6 +92,14 @@ impl SearchOrchestrator {
         Ok(responses)
     }
 
+    #[tracing::instrument(
+        name = "cognee.search",
+        skip(self, request),
+        fields(
+            cognee.search.type = %format!("{:?}", request.search_type),
+            cognee.search.query.len = request.query_text.len(),
+        )
+    )]
     pub async fn search(
         &self,
         request: &SearchRequest,

@@ -1,4 +1,5 @@
 pub mod graph_retrieval;
+pub mod observability;
 pub mod orchestration;
 pub mod retrievers;
 pub mod types;

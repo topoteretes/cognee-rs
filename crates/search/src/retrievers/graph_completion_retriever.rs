@@ -79,6 +79,11 @@ impl SearchRetriever for GraphCompletionRetriever {
         SearchType::GraphCompletion
     }
 
+    #[tracing::instrument(
+        name = "cognee.retrieval.get_context",
+        skip(self, params),
+        fields(cognee.retrieval.retriever = "GraphCompletionRetriever")
+    )]
     async fn get_context(
         &self,
         query: &str,
