@@ -10,4 +10,7 @@ pub enum ChunkingError {
 
     #[error("Invalid UTF-8 content: {0}")]
     InvalidUtf8(String),
+
+    #[error("tokenizer error: {0}")]
+    TokenizerError(String),
 }

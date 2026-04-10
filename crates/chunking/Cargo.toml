@@ -15,6 +15,10 @@ tracing.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 uuid.workspace = true
+tokenizers = { workspace = true, optional = true }
+
+[features]
+hf-tokenizer = ["dep:tokenizers", "tokenizers/http"]
 
 [dev-dependencies]
 cognee-storage = { path = "../storage", features = ["testing"] }

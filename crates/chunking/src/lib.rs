@@ -15,3 +15,5 @@ pub use cut_type::CutType;
 pub use error::ChunkingError;
 pub use text_chunker::chunk_text;
 pub use token_counter::{TokenCounter, WordCounter};
+#[cfg(feature = "hf-tokenizer")]
+pub use token_counter::HuggingFaceTokenCounter;
