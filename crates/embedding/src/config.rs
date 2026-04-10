@@ -4,7 +4,8 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 
 use crate::engine::EmbeddingEngine;
-use crate::error::{EmbeddingError, EmbeddingResult};
+use crate::error::EmbeddingResult;
+use crate::mock::MockEmbeddingEngine;
 use crate::ollama::OllamaEmbeddingEngine;
 use crate::onnx::OnnxEmbeddingEngine;
 use crate::openai_compatible::OpenAICompatibleEmbeddingEngine;
@@ -294,10 +295,9 @@ impl EmbeddingConfig {
                 let engine = OllamaEmbeddingEngine::new(self)?;
                 Ok(Arc::new(engine))
             }
-            other => Err(EmbeddingError::NotImplemented(format!(
-                "Provider {:?} is not yet implemented",
-                other
-            ))),
+            EmbeddingProvider::Mock => {
+                Ok(Arc::new(MockEmbeddingEngine::new(self.dimensions)))
+            }
         }
     }
 }
