@@ -105,6 +105,7 @@ impl SearchOrchestrator {
                 request.dataset_ids.clone(),
                 true,
                 request.use_combined_context(),
+                request.verbose(),
             );
 
             if let Some(scoped_context_map) = scoped_contexts
@@ -122,13 +123,14 @@ impl SearchOrchestrator {
         let user_id_str = request.user_id.map(|id| id.to_string());
         let session_context =
             if let (Some(session_id), Some(sm)) = (&request.session_id, &self.session_manager) {
-                let history = sm
-                    .load_history_messages(Some(session_id), user_id_str.as_deref())
+                let (history, formatted_history) = sm
+                    .load_history_both(Some(session_id), user_id_str.as_deref())
                     .await
                     .unwrap_or_default();
                 SessionContext {
                     session_id: Some(session_id.clone()),
                     history,
+                    formatted_history,
                 }
             } else {
                 SessionContext {
@@ -163,6 +165,7 @@ impl SearchOrchestrator {
             request.dataset_ids.clone(),
             false,
             request.use_combined_context(),
+            request.verbose(),
         );
 
         if let Some(scoped_context_map) = scoped_contexts
@@ -261,6 +264,7 @@ mod tests {
             triplet_distance_penalty: None,
             save_interaction: None,
             user_id: None,
+            verbose: None,
         };
 
         let response = orchestrator.search(&request).await.unwrap();
@@ -298,6 +302,7 @@ mod tests {
             triplet_distance_penalty: None,
             save_interaction: None,
             user_id: None,
+            verbose: None,
         };
 
         let response = orchestrator.search(&request).await.unwrap();
@@ -340,6 +345,7 @@ mod tests {
             triplet_distance_penalty: None,
             save_interaction: None,
             user_id: None,
+            verbose: None,
         };
 
         let response = orchestrator.search(&request).await.unwrap();
@@ -404,6 +410,7 @@ mod tests {
             triplet_distance_penalty: None,
             save_interaction: None,
             user_id: None,
+            verbose: None,
         };
 
         let response = orchestrator.search(&request).await.unwrap();
@@ -491,6 +498,7 @@ mod tests {
             triplet_distance_penalty: None,
             save_interaction: None,
             user_id: None,
+            verbose: None,
         };
 
         let response = orchestrator.search(&request).await.unwrap();
@@ -572,6 +580,7 @@ mod tests {
             triplet_distance_penalty: None,
             save_interaction: None,
             user_id: None,
+            verbose: Some(true),
         };
 
         let response = orchestrator.search(&request).await.unwrap();
@@ -613,6 +622,7 @@ mod tests {
             triplet_distance_penalty: None,
             save_interaction: Some(true),
             user_id: None,
+            verbose: None,
         };
 
         let _ = orchestrator.search(&request).await.unwrap();

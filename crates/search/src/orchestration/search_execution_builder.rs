@@ -607,6 +607,7 @@ mod tests {
             triplet_distance_penalty: None,
             save_interaction: None,
             user_id: None,
+            verbose: None,
         };
 
         let response = orchestrator.search(&request).await.unwrap();
@@ -672,6 +673,7 @@ mod tests {
             triplet_distance_penalty: None,
             save_interaction: None,
             user_id: None,
+            verbose: None,
         };
 
         let response = orchestrator.search(&request).await.unwrap();

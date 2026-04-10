@@ -26,6 +26,7 @@ pub struct SearchRequest {
     pub save_interaction: Option<bool>,
     #[serde(default)]
     pub user_id: Option<Uuid>,
+    pub verbose: Option<bool>,
 }
 
 impl SearchRequest {
@@ -39,6 +40,10 @@ impl SearchRequest {
 
     pub fn top_k_or_default(&self, default_value: usize) -> usize {
         self.top_k.unwrap_or(default_value)
+    }
+
+    pub fn verbose(&self) -> bool {
+        self.verbose.unwrap_or(false)
     }
 }
 

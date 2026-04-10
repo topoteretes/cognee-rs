@@ -68,6 +68,29 @@ impl SessionManager {
         Ok(entries_to_messages(&entries))
     }
 
+    /// Load history as structured messages AND a formatted string, with a single store round-trip.
+    pub async fn load_history_both(
+        &self,
+        session_id: Option<&str>,
+        user_id: Option<&str>,
+    ) -> Result<(Vec<Message>, String), SessionError> {
+        let resolved_id = self.resolve_session_id(session_id);
+        let entries = self
+            .store
+            .get_latest_qa_entries(resolved_id, user_id, self.history_limit)
+            .await?;
+
+        debug!(
+            session_id = resolved_id,
+            entries = entries.len(),
+            "Loaded session history (both forms)"
+        );
+
+        let messages = entries_to_messages(&entries);
+        let formatted = Self::format_entries(&entries);
+        Ok((messages, formatted))
+    }
+
     /// Save a Q&A exchange to the session. Returns the generated `qa_id`.
     pub async fn save_qa(
         &self,

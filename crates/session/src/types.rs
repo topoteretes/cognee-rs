@@ -21,4 +21,5 @@ pub struct SessionQAEntry {
 pub struct SessionContext {
     pub session_id: Option<String>,
     pub history: Vec<Message>,
+    pub formatted_history: String,
 }

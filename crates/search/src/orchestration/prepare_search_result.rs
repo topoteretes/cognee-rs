@@ -19,6 +19,7 @@ pub fn prepare_search_result(
     datasets: Option<Vec<Uuid>>,
     only_context: bool,
     use_combined_context: bool,
+    verbose: bool,
 ) -> SearchResponse {
     let context_label = if use_combined_context {
         CONTEXT_LABEL_COMBINED.to_string()
@@ -58,15 +59,24 @@ pub fn prepare_search_result(
         None
     };
 
+    // When neither verbose nor only_context is set, strip context and graph
+    // from the response to reduce payload size.
+    let (final_context, final_graphs) = if verbose || only_context {
+        (context_map, graphs)
+    } else {
+        (None, None)
+    };
+
     SearchResponse {
         search_type,
         result,
-        context: context_map,
-        graphs,
+        context: final_context,
+        graphs: final_graphs,
         diagnostics,
         datasets,
         only_context,
         use_combined_context,
+        verbose,
     }
 }
 
@@ -169,6 +179,7 @@ mod tests {
             None,
             false,
             false,
+            true,
         );
 
         let graphs = response.graphs.expect("graph must be present");

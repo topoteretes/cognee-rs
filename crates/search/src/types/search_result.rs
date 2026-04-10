@@ -62,6 +62,7 @@ pub struct SearchResponse {
     pub datasets: Option<Vec<Uuid>>,
     pub only_context: bool,
     pub use_combined_context: bool,
+    pub verbose: bool,
 }
 
 impl SearchResponse {
@@ -75,6 +76,7 @@ impl SearchResponse {
             datasets: None,
             only_context: false,
             use_combined_context: false,
+            verbose: false,
         }
     }
 }

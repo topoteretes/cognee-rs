@@ -77,6 +77,7 @@ fn make_request(query: &str, search_type: SearchType) -> SearchRequest {
         triplet_distance_penalty: None,
         save_interaction: None,
         user_id: None,
+        verbose: None,
     }
 }
 

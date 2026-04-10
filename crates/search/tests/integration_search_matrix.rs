@@ -82,6 +82,7 @@ fn make_request(query: &str, search_type: SearchType, save: Option<bool>) -> Sea
         triplet_distance_penalty: None,
         save_interaction: save,
         user_id: None,
+        verbose: None,
     }
 }
 
@@ -328,6 +329,7 @@ async fn test_search_type_matrix() {
         triplet_distance_penalty: None,
         save_interaction: Some(false),
         user_id: None,
+        verbose: None,
     };
     let chunks_resp = orchestrator
         .search(&chunks_ctx)

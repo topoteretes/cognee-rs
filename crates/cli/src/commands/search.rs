@@ -92,6 +92,7 @@ pub fn run(args: SearchArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> 
             triplet_distance_penalty: None,
             save_interaction: Some(false),
             user_id: None,
+            verbose: None,
         };
 
         let response = orchestrator
