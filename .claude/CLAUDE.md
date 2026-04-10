@@ -24,7 +24,7 @@ cognee-rust/
 │   ├── cognify/                # Full cognify pipeline (classify → chunk → extract graph → summarize → store)
 │   ├── search/                 # Search pipeline with multiple retrieval strategies
 │   ├── session/                # Session management and session store
-│   ├── embedding/              # ONNX-based embedding engine (BGE-Small etc.)
+│   ├── embedding/              # Multi-provider embedding engine (ONNX, OpenAI, Ollama, Mock)
 │   ├── llm/                    # LLM provider abstraction (OpenAI-compatible API adapter)
 │   ├── graph/                  # Graph DB abstraction (Ladybug embedded graph)
 │   ├── vector/                 # Vector DB abstraction (Qdrant embedded)
@@ -57,7 +57,7 @@ cognee-rust/
 
 **cognee-ingestion** — Pipeline for ingesting data: streams content, computes hashes, deduplicates, and stores. Main type: `AddPipeline`. No trait abstraction — uses `StorageTrait` and `IngestDb` from sibling crates.
 
-**cognee-chunking** — Text chunking strategies ported from the Python chunking hierarchy (word → sentence → paragraph). Main entry point: `ExtractTextChunksPipeline`. Trait: `TokenCounter`. Impl: `WordCounter`.
+**cognee-chunking** — Text chunking strategies ported from the Python chunking hierarchy (word → sentence → paragraph). Main entry point: `ExtractTextChunksPipeline`. Trait: `TokenCounter`. Impls: `WordCounter` (whitespace fallback), `HuggingFaceTokenCounter` (BPE/WordPiece via `tokenizers` crate, behind `hf-tokenizer` feature), `TikTokenCounter` (cl100k_base BPE for OpenAI models, behind `tiktoken` feature). `TokenCounterKind` enum with `from_env()` auto-selects the best counter based on `EMBEDDING_PROVIDER` and `COGNEE_TOKEN_COUNTER` env vars.
 
 **cognee-cognify** — Knowledge graph extraction pipeline: classify documents, chunk text, extract entities/relationships via LLM, summarize, store to graph and vector DBs. Main types: `CognifyPipeline`, `CognifyConfig`, `FactExtractor`, `SummaryExtractor`.
 
@@ -65,7 +65,7 @@ cognee-rust/
 
 **cognee-session** — Session management and QA history storage. Trait: `SessionStore`. Impls: `FsSessionStore`, `RedisSessionStore`, `SeaOrmSessionStore`.
 
-**cognee-embedding** — Text vectorization engine. Trait: `EmbeddingEngine`. Impls: `OnnxEmbeddingEngine` (local ONNX Runtime), `OpenAICompatibleEmbeddingEngine` (remote API).
+**cognee-embedding** — Text vectorization engine. Trait: `EmbeddingEngine`. Impls: `OnnxEmbeddingEngine` (local ONNX Runtime, BGE-Small-v1.5), `OpenAICompatibleEmbeddingEngine` (OpenAI/Azure/vLLM/llama.cpp/TEI via HTTP), `OllamaEmbeddingEngine` (Ollama `/api/embed`), `MockEmbeddingEngine` (zero vectors for testing). `EmbeddingConfig::from_env()` reads `EMBEDDING_PROVIDER`, `EMBEDDING_MODEL`, `EMBEDDING_ENDPOINT`, `EMBEDDING_API_KEY`, `MOCK_EMBEDDING` etc. and `create_engine()` factory returns the appropriate provider. Input sanitization via `sanitize_embedding_inputs()` / `handle_embedding_response()`.
 
 **cognee-llm** — Async LLM abstraction with structured JSON output. Trait: `Llm` (+ auto-implemented `LlmExt`). Impls: `OpenAIAdapter` (OpenAI-compatible APIs, works with Ollama/vLLM), `LiteRtAdapter`.
 
@@ -105,12 +105,12 @@ cognee-rust/
 - **File storage** — `LocalStorage` with `file://` absolute URIs matching Python format
 - **SQLite metadata database** — SeaORM with migrations including Python-compat columns and tenant_id indexes
 - **Ingestion pipeline** — Python-compatible `add()`: MD5 content hashing (configurable SHA256), deterministic UUID5 IDs, multi-tenant support, `text_<md5>.txt` naming, loader engine registry, URL crawling (`UrlFetcher` + `HtmlParser`), deduplication by content hash
-- **Text chunking** — 3-level hierarchy (word → sentence → paragraph → `chunk_text`), ported from Python. `TokenCounter` trait with `WordCounter` impl.
+- **Text chunking** — 3-level hierarchy (word → sentence → paragraph → `chunk_text`), ported from Python. `TokenCounter` trait with `WordCounter`, `HuggingFaceTokenCounter` (feature-gated), and `TikTokenCounter` (feature-gated) impls. `TokenCounterKind::from_env()` auto-selects counter based on embedding provider. `CognifyConfig.token_counter_kind` drives the selection in the pipeline.
 - **Document classification** — mime_type/extension-based (text, pdf, csv, image, audio, dlt_row types recognized; only text extraction implemented)
 - **Cognify pipeline** — 6 stages: classify → chunk → extract graph (LLM, batched, custom prompts) → summarize (conditional) → add data points (6 vector collections: DocumentChunk:text, Entity:name, EntityType:name, TextSummary:text, EdgeType:relationship_name, Triplet:text; provenance to relational DB) → extract DLT FK edges. Configurable via `CognifyConfig` builder with `ChunkStrategy::Paragraph` (default) and `ChunkStrategy::Recursive`.
 - **Triplet embedding** — optional `"source → relationship → target"` indexing in vector DB
 - **LLM integration** — `OpenAiAdapter` (OpenAI-compatible, works with Ollama/vLLM), `LiteRtAdapter` (Android local inference via LiteRT, feature-gated)
-- **Embedding engine** — `OnnxEmbeddingEngine` (local ONNX Runtime, BGE-Small-v1.5) and `OpenAICompatibleEmbeddingEngine` (remote API, supports OpenAI/Azure/vLLM/llama.cpp/TEI)
+- **Embedding engine** — Multi-provider via `EmbeddingConfig::from_env()` + `create_engine()` factory. Providers: `OnnxEmbeddingEngine` (local ONNX Runtime, BGE-Small-v1.5 default), `OpenAICompatibleEmbeddingEngine` (OpenAI/Azure/vLLM/llama.cpp/TEI with retry and input sanitization), `OllamaEmbeddingEngine` (concurrent per-text requests, char-based truncation), `MockEmbeddingEngine` (zero vectors via `MOCK_EMBEDDING=true`). Env vars match Python SDK: `EMBEDDING_PROVIDER`, `EMBEDDING_MODEL`, `EMBEDDING_DIMENSIONS`, `EMBEDDING_ENDPOINT`, `EMBEDDING_API_KEY` (with `LLM_API_KEY` fallback)
 - **Graph storage** — Ladybug embedded graph DB
 - **Vector storage** — Embedded Qdrant with metadata filtering
 - **Search pipeline** — 15 search types: GraphCompletion (default), GraphCompletionCot, GraphCompletionContextExtension, GraphSummaryCompletion, TripletCompletion, RagCompletion, Chunks, Summaries, Temporal, Cypher, NaturalLanguage, FeelingLucky, Feedback, CodingRules, ChunksLexical
@@ -126,7 +126,7 @@ cognee-rust/
 - **Non-text document extraction** — Classification and loader registry exist for PDF, CSV, image, audio, but actual text extraction is not implemented (only text/* files are processed end-to-end)
 - **S3 support** — `DataInput::S3Path` returns an error stub
 - **URL processing in DataInput** — `DataInput::Url` in `process_by_chunks()` returns unsupported error (URL crawling works in ingestion pipeline but not in the streaming `DataInput` path)
-- **Real tokenizer in chunking** — HuggingFace `tokenizers` is used in the embedding engine, but the chunking crate still uses `WordCounter` (whitespace-based approximation) via the `TokenCounter` trait
+- **Default tokenizer features in CI** — `HuggingFaceTokenCounter` and `TikTokenCounter` are behind optional feature flags (`hf-tokenizer`, `tiktoken`); CI builds may need to enable them explicitly
 
 ## Key Dependencies
 
@@ -144,7 +144,8 @@ cognee-rust/
 | `uuid` (v4, v5) | ID generation |
 | `serde` / `serde_json` / `schemars` | Serialization and JSON schema generation |
 | `chrono` | Timestamps |
-| `tokenizers` | HuggingFace tokenization (embedding engine) |
+| `tokenizers` | HuggingFace tokenization (embedding engine + chunking token counter) |
+| `tiktoken-rs` | OpenAI cl100k_base BPE tokenization (chunking token counter, optional) |
 | `tracing` | Structured logging and instrumentation |
 | `async-trait` | Async trait support |
 | `thiserror` | Error type derivation |
