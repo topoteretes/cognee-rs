@@ -286,6 +286,11 @@ impl SearchRetriever for GraphCompletionContextExtensionRetriever {
         context: Option<SearchContext>,
         session: &SessionContext,
     ) -> Result<SearchOutput, SearchError> {
+        let system_prompt = resolve_system_prompt(
+            self.system_prompt.as_deref(),
+            self.system_prompt_path.as_deref(),
+        )?;
+
         let mut extended_context = match context {
             Some(existing_context) => existing_context,
             None => self.get_context(query).await?,
@@ -299,7 +304,7 @@ impl SearchRetriever for GraphCompletionContextExtensionRetriever {
                 &current_context_text,
             );
 
-            let follow_up_query = self
+            let completion = self
                 .llm
                 .generate(
                     vec![
@@ -313,11 +318,11 @@ impl SearchRetriever for GraphCompletionContextExtensionRetriever {
                 .trim()
                 .to_string();
 
-            if follow_up_query.is_empty() {
+            if completion.is_empty() {
                 break;
             }
 
-            let new_context = self.get_context(&follow_up_query).await?;
+            let new_context = self.get_context(&completion).await?;
             let merged_context = merge_dedup_context(&extended_context, &new_context);
 
             if merged_context.len() == extended_context.len() {
@@ -327,10 +332,6 @@ impl SearchRetriever for GraphCompletionContextExtensionRetriever {
             extended_context = merged_context;
         }
 
-        let system_prompt = resolve_system_prompt(
-            self.system_prompt.as_deref(),
-            self.system_prompt_path.as_deref(),
-        )?;
         let user_prompt = render_graph_user_prompt(
             self.user_prompt_template.as_deref(),
             query,
@@ -800,6 +801,41 @@ mod tests {
             SearchOutput::Text(text) => assert_eq!(text, "extended answer"),
             _ => panic!("expected text output"),
         }
+    }
+
+    #[tokio::test]
+    async fn graph_context_extension_with_zero_rounds_returns_single_completion() {
+        // With context_extension_rounds = 0, the loop body is never entered.
+        // Only the final completion LLM call should be made.
+        let llm = Arc::new(TestLlm::new(vec!["direct answer"]));
+
+        let retriever = GraphCompletionContextExtensionRetriever::new(
+            build_vector_db(),
+            Arc::new(TestEmbeddingEngine),
+            build_graph_db().await,
+            Arc::clone(&llm) as Arc<dyn Llm>,
+            Some(5),
+            Some(5),
+            Some(0.0),
+            Some(0), // zero extension rounds
+            None,
+            None,
+            None,
+            None,
+        );
+
+        let output = retriever
+            .get_completion("Who knows Bob?", None, &SessionContext::default())
+            .await
+            .unwrap();
+
+        match output {
+            SearchOutput::Text(text) => assert_eq!(text, "direct answer"),
+            _ => panic!("expected text output"),
+        }
+
+        // Exactly one LLM call: the final completion (no extension iterations).
+        assert_eq!(llm.captured_messages.lock().unwrap().len(), 1);
     }
 
     #[tokio::test]
