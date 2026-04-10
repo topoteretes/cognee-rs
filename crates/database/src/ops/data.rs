@@ -1,4 +1,4 @@
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use cognee_models::{Data, Dataset};
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, DatabaseConnection, EntityTrait,
@@ -73,6 +73,34 @@ pub async fn update_data_token_count(
     active.token_count = Set(token_count);
     active.updated_at = Set(Some(Utc::now()));
     active.update(db).await.map_err(map_sea_err)?;
+    Ok(())
+}
+
+/// Update `last_accessed` for a batch of Data records identified by their IDs.
+///
+/// This is a no-op when `data_ids` is empty.
+pub async fn update_last_accessed(
+    db: &DatabaseConnection,
+    data_ids: &[Uuid],
+    timestamp: DateTime<Utc>,
+) -> Result<(), DatabaseError> {
+    if data_ids.is_empty() {
+        return Ok(());
+    }
+
+    for id in data_ids {
+        let model = data::Entity::find_by_id(uuid_hex::to_hex(*id))
+            .one(db)
+            .await
+            .map_err(map_sea_err)?;
+
+        if let Some(m) = model {
+            let mut active = m.into_active_model();
+            active.last_accessed = Set(Some(timestamp));
+            active.update(db).await.map_err(map_sea_err)?;
+        }
+    }
+
     Ok(())
 }
 

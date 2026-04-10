@@ -364,6 +364,43 @@ impl VectorDB for QdrantAdapter {
 
         Ok(count)
     }
+
+    async fn list_collections(&self) -> VectorDBResult<Vec<(String, String)>> {
+        // Prefer the in-memory shard map (already loaded), then fall back to
+        // the filesystem for any shards that were not preloaded.
+        let collection_names: Vec<String> = {
+            let shards = self.shards.read().unwrap(); // lock poison is unrecoverable
+            shards.keys().cloned().collect()
+        };
+
+        // Also scan the data directory for on-disk shards not yet in memory.
+        let mut all_names: std::collections::HashSet<String> =
+            collection_names.into_iter().collect();
+
+        if self.data_dir.exists()
+            && let Ok(entries) = std::fs::read_dir(&self.data_dir)
+        {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir()
+                    && let Some(name) = path.file_name().and_then(|n| n.to_str())
+                {
+                    all_names.insert(name.to_string());
+                }
+            }
+        }
+
+        // Parse "{data_type}_{field_name}" by splitting on the first '_'
+        let pairs = all_names
+            .into_iter()
+            .filter_map(|name| {
+                name.split_once('_')
+                    .map(|(dt, fn_)| (dt.to_string(), fn_.to_string()))
+            })
+            .collect();
+
+        Ok(pairs)
+    }
 }
 
 #[cfg(test)]

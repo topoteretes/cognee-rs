@@ -213,6 +213,19 @@ impl VectorDB for MockVectorDB {
 
         Ok(collection.points.len())
     }
+
+    async fn list_collections(&self) -> VectorDBResult<Vec<(String, String)>> {
+        let collections = self.collections.lock().unwrap(); // lock poison is unrecoverable
+        let pairs = collections
+            .keys()
+            .filter_map(|key| {
+                // Keys are stored as "{data_type}_{field_name}"; split on the first '_'
+                key.split_once('_')
+                    .map(|(dt, fn_)| (dt.to_string(), fn_.to_string()))
+            })
+            .collect();
+        Ok(pairs)
+    }
 }
 
 #[cfg(test)]
@@ -252,6 +265,34 @@ mod tests {
 
         assert_eq!(results.len(), 2);
         assert!(results[0].score >= results[1].score);
+    }
+
+    #[tokio::test]
+    async fn test_list_collections_returns_created_collections() {
+        let db = MockVectorDB::new();
+
+        // Empty database returns no collections
+        let initial = db.list_collections().await.unwrap();
+        assert!(initial.is_empty(), "no collections initially");
+
+        db.create_collection("DocumentChunk", "text", 3)
+            .await
+            .unwrap();
+        db.create_collection("Entity", "name", 3).await.unwrap();
+
+        let mut collections = db.list_collections().await.unwrap();
+        // Sort for deterministic comparison
+        collections.sort();
+
+        assert_eq!(collections.len(), 2);
+        assert!(
+            collections.contains(&("DocumentChunk".to_string(), "text".to_string())),
+            "DocumentChunk:text should be listed"
+        );
+        assert!(
+            collections.contains(&("Entity".to_string(), "name".to_string())),
+            "Entity:name should be listed"
+        );
     }
 
     #[tokio::test]

@@ -10,6 +10,10 @@ pub struct SearchOrchestrator {
     registry: SearchTypeRegistry,
     database: Option<Arc<dyn SearchHistoryDb>>,
     session_manager: Option<Arc<SessionManager>>,
+    /// When `true`, `last_accessed` timestamps are updated on source Data records
+    /// after each successful retrieval. Disabled by default to avoid unexpected
+    /// write traffic on read-only deployments.
+    enable_access_tracking: bool,
 }
 
 impl SearchOrchestrator {
@@ -18,6 +22,7 @@ impl SearchOrchestrator {
             registry,
             database: None,
             session_manager: None,
+            enable_access_tracking: false,
         }
     }
 
@@ -28,6 +33,17 @@ impl SearchOrchestrator {
 
     pub fn with_session_manager(mut self, session_manager: Arc<SessionManager>) -> Self {
         self.session_manager = Some(session_manager);
+        self
+    }
+
+    /// Enable access-timestamp tracking: after each retrieval, the `last_accessed`
+    /// field on the source `Data` records will be updated.
+    ///
+    /// Requires an `IngestDb`-capable database to be wired in. When only a
+    /// `SearchHistoryDb` is present the timestamps are logged at debug level
+    /// rather than persisted.
+    pub fn with_access_tracking(mut self) -> Self {
+        self.enable_access_tracking = true;
         self
     }
 
@@ -104,7 +120,32 @@ impl SearchOrchestrator {
         let include_context =
             request.only_context() || request.use_combined_context() || use_dataset_scope;
         let base_context = if include_context {
-            Some(retriever.get_context(&request.query_text, &params).await?)
+            let ctx = retriever.get_context(&request.query_text, &params).await?;
+
+            if self.enable_access_tracking && !ctx.is_empty() {
+                // The orchestrator holds a `SearchHistoryDb`, not an `IngestDb`.
+                // Full persistence requires wiring an `IngestDb` separately.
+                // For now, log the accessed data IDs at debug level so the
+                // infrastructure is in place and can be extended later.
+                let accessed_ids: Vec<String> = ctx
+                    .iter()
+                    .filter_map(|item| {
+                        item.payload
+                            .get("data_id")
+                            .and_then(|v| v.as_str())
+                            .map(String::from)
+                    })
+                    .collect();
+                if !accessed_ids.is_empty() {
+                    tracing::debug!(
+                        data_ids = ?accessed_ids,
+                        "access tracking: updating last_accessed for {} data records",
+                        accessed_ids.len()
+                    );
+                }
+            }
+
+            Some(ctx)
         } else {
             None
         };

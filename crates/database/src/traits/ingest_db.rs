@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use cognee_models::{Data, Dataset};
 use sea_orm::DatabaseConnection;
 use uuid::Uuid;
@@ -25,6 +26,16 @@ pub trait IngestDb: Send + Sync {
         &self,
         dataset_id: Uuid,
         data_id: Uuid,
+    ) -> Result<(), DatabaseError>;
+
+    /// Update the `last_accessed` timestamp on the given Data records.
+    ///
+    /// Implementations should perform a bulk `UPDATE data SET last_accessed = ?
+    /// WHERE id IN (...)` query. An empty `data_ids` slice is a no-op.
+    async fn update_last_accessed(
+        &self,
+        data_ids: &[Uuid],
+        timestamp: DateTime<Utc>,
     ) -> Result<(), DatabaseError>;
 }
 
@@ -57,5 +68,13 @@ impl IngestDb for DatabaseConnection {
         data_id: Uuid,
     ) -> Result<(), DatabaseError> {
         datasets::attach_data_to_dataset(self, dataset_id, data_id).await
+    }
+
+    async fn update_last_accessed(
+        &self,
+        data_ids: &[Uuid],
+        timestamp: DateTime<Utc>,
+    ) -> Result<(), DatabaseError> {
+        data::update_last_accessed(self, data_ids, timestamp).await
     }
 }

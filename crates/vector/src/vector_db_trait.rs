@@ -89,6 +89,14 @@ pub trait VectorDB: Send + Sync {
     /// Get collection statistics
     async fn collection_size(&self, data_type: &str, field_name: &str) -> VectorDBResult<usize>;
 
+    /// List all existing vector collections as `(data_type, field_name)` pairs.
+    ///
+    /// Default implementation returns an empty list. Backends should override
+    /// to return the actual collections they hold.
+    async fn list_collections(&self) -> VectorDBResult<Vec<(String, String)>> {
+        Ok(vec![])
+    }
+
     /// Perform multiple vector similarity searches in sequence.
     ///
     /// Default implementation loops over [`search_similar`]. Backends may override
