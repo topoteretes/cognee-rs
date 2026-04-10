@@ -93,6 +93,7 @@ pub fn run(args: SearchArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> 
             save_interaction: Some(false),
             user_id: None,
             verbose: None,
+            feedback_influence: None,
         };
 
         let response = orchestrator

@@ -41,6 +41,7 @@ struct GraphRetrieverCore {
     top_k: usize,
     wide_search_top_k: usize,
     triplet_distance_penalty: f32,
+    feedback_influence: f32,
 }
 
 impl GraphRetrieverCore {
@@ -60,6 +61,7 @@ impl GraphRetrieverCore {
             wide_search_top_k: wide_search_top_k.unwrap_or(DEFAULT_WIDE_SEARCH_TOP_K),
             triplet_distance_penalty: triplet_distance_penalty
                 .unwrap_or(DEFAULT_TRIPLET_DISTANCE_PENALTY),
+            feedback_influence: 0.0,
         }
     }
 
@@ -72,6 +74,7 @@ impl GraphRetrieverCore {
             top_k: self.top_k,
             wide_search_top_k: self.wide_search_top_k,
             triplet_distance_penalty: self.triplet_distance_penalty,
+            feedback_influence: self.feedback_influence,
         };
 
         let ranked_edges = brute_force_triplet_search(

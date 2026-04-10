@@ -83,6 +83,7 @@ fn make_request(query: &str, search_type: SearchType, save: Option<bool>) -> Sea
         save_interaction: save,
         user_id: None,
         verbose: None,
+        feedback_influence: None,
     }
 }
 
@@ -330,6 +331,7 @@ async fn test_search_type_matrix() {
         save_interaction: Some(false),
         user_id: None,
         verbose: None,
+        feedback_influence: None,
     };
     let chunks_resp = orchestrator
         .search(&chunks_ctx)

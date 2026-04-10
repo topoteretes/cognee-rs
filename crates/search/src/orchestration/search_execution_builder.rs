@@ -608,6 +608,7 @@ mod tests {
             save_interaction: None,
             user_id: None,
             verbose: None,
+            feedback_influence: None,
         };
 
         let response = orchestrator.search(&request).await.unwrap();
@@ -674,6 +675,7 @@ mod tests {
             save_interaction: None,
             user_id: None,
             verbose: None,
+            feedback_influence: None,
         };
 
         let response = orchestrator.search(&request).await.unwrap();

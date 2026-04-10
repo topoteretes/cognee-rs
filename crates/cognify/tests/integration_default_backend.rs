@@ -78,6 +78,7 @@ fn make_request(query: &str, search_type: SearchType) -> SearchRequest {
         save_interaction: None,
         user_id: None,
         verbose: None,
+        feedback_influence: None,
     }
 }
 

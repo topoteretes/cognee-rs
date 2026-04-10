@@ -27,6 +27,7 @@ pub struct SearchRequest {
     #[serde(default)]
     pub user_id: Option<Uuid>,
     pub verbose: Option<bool>,
+    pub feedback_influence: Option<f32>,
 }
 
 impl SearchRequest {
@@ -44,6 +45,10 @@ impl SearchRequest {
 
     pub fn verbose(&self) -> bool {
         self.verbose.unwrap_or(false)
+    }
+
+    pub fn feedback_influence_or_default(&self) -> f32 {
+        self.feedback_influence.unwrap_or(0.0)
     }
 }
 
