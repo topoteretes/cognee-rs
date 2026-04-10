@@ -84,6 +84,7 @@ fn make_request(query: &str, search_type: SearchType, save: Option<bool>) -> Sea
         user_id: None,
         verbose: None,
         feedback_influence: None,
+        retriever_specific_config: None,
     }
 }
 
@@ -332,6 +333,7 @@ async fn test_search_type_matrix() {
         user_id: None,
         verbose: None,
         feedback_influence: None,
+        retriever_specific_config: None,
     };
     let chunks_resp = orchestrator
         .search(&chunks_ctx)

@@ -73,8 +73,18 @@ impl From<&SearchRequest> for SearchParams {
             node_name: req.node_name.clone(),
             node_name_filter_operator: None, // not yet in SearchRequest
             feedback_influence: req.feedback_influence,
-            max_iter: None,                 // future: add to SearchRequest
-            context_extension_rounds: None, // future: add to SearchRequest
+            max_iter: req
+                .retriever_specific_config
+                .as_ref()
+                .and_then(|c| c.get("max_iter"))
+                .and_then(|v| v.as_u64())
+                .map(|v| v as usize),
+            context_extension_rounds: req
+                .retriever_specific_config
+                .as_ref()
+                .and_then(|c| c.get("context_extension_rounds"))
+                .and_then(|v| v.as_u64())
+                .map(|v| v as usize),
         }
     }
 }

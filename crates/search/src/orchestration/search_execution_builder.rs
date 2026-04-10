@@ -617,6 +617,7 @@ mod tests {
             user_id: None,
             verbose: None,
             feedback_influence: None,
+            retriever_specific_config: None,
         };
 
         let response = orchestrator.search(&request).await.unwrap();
@@ -689,6 +690,7 @@ mod tests {
             user_id: None,
             verbose: None,
             feedback_influence: None,
+            retriever_specific_config: None,
         };
 
         let response = orchestrator.search(&request).await.unwrap();

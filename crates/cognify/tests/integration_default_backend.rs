@@ -79,6 +79,7 @@ fn make_request(query: &str, search_type: SearchType) -> SearchRequest {
         user_id: None,
         verbose: None,
         feedback_influence: None,
+        retriever_specific_config: None,
     }
 }
 

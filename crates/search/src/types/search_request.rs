@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -28,6 +30,9 @@ pub struct SearchRequest {
     pub user_id: Option<Uuid>,
     pub verbose: Option<bool>,
     pub feedback_influence: Option<f32>,
+    /// Arbitrary retriever-specific configuration passed through from the caller.
+    /// Keys and values are retriever-defined; unknown keys are silently ignored.
+    pub retriever_specific_config: Option<HashMap<String, serde_json::Value>>,
 }
 
 impl SearchRequest {
@@ -50,6 +55,30 @@ impl SearchRequest {
     pub fn feedback_influence_or_default(&self) -> f32 {
         self.feedback_influence.unwrap_or(0.0)
     }
+
+    /// Return the retriever-specific config map.
+    pub fn retriever_config(&self) -> Option<&HashMap<String, serde_json::Value>> {
+        self.retriever_specific_config.as_ref()
+    }
+
+    /// Get a string value from `retriever_specific_config`, with a fallback.
+    pub fn retriever_config_str<'a>(&'a self, key: &str, default: &'a str) -> &'a str {
+        self.retriever_specific_config
+            .as_ref()
+            .and_then(|m| m.get(key))
+            .and_then(|v| v.as_str())
+            .unwrap_or(default)
+    }
+
+    /// Get a `usize` value from `retriever_specific_config`, with a fallback.
+    pub fn retriever_config_usize(&self, key: &str, default: usize) -> usize {
+        self.retriever_specific_config
+            .as_ref()
+            .and_then(|m| m.get(key))
+            .and_then(|v| v.as_u64())
+            .map(|v| v as usize)
+            .unwrap_or(default)
+    }
 }
 
 #[cfg(test)]
@@ -71,5 +100,42 @@ mod tests {
         let json = r#"{"query_text": "test"}"#;
         let request: SearchRequest = serde_json::from_str(json).unwrap();
         assert_eq!(request.node_name, None);
+    }
+
+    #[test]
+    fn retriever_config_usize_reads_value() {
+        let json = r#"{
+            "query_text": "test",
+            "retriever_specific_config": {"max_iter": 8, "missing": null}
+        }"#;
+        let req: SearchRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.retriever_config_usize("max_iter", 4), 8);
+        assert_eq!(req.retriever_config_usize("unknown", 4), 4);
+    }
+
+    #[test]
+    fn retriever_config_str_reads_value() {
+        let json = r#"{
+            "query_text": "test",
+            "retriever_specific_config": {"prompt_path": "/tmp/prompt.txt"}
+        }"#;
+        let req: SearchRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            req.retriever_config_str("prompt_path", "default.txt"),
+            "/tmp/prompt.txt"
+        );
+        assert_eq!(req.retriever_config_str("missing", "fallback"), "fallback");
+    }
+
+    #[test]
+    fn search_params_from_request_extracts_max_iter() {
+        use crate::types::SearchParams;
+        let json = r#"{
+            "query_text": "test",
+            "retriever_specific_config": {"max_iter": 6}
+        }"#;
+        let req: SearchRequest = serde_json::from_str(json).unwrap();
+        let params = SearchParams::from(&req);
+        assert_eq!(params.max_iter, Some(6));
     }
 }
