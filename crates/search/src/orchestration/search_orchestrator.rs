@@ -1,7 +1,7 @@
 use crate::orchestration::{
     SearchTypeRegistry, merge_scoped_contexts, prepare_search_result, scope_context_by_datasets,
 };
-use crate::types::{SearchError, SearchOutput, SearchRequest, SearchResponse};
+use crate::types::{SearchError, SearchOutput, SearchParams, SearchRequest, SearchResponse};
 use cognee_database::{SearchHistoryDb, SearchHistoryEntry};
 use cognee_session::{SessionContext, SessionManager};
 use std::sync::Arc;
@@ -48,6 +48,7 @@ impl SearchOrchestrator {
         request: &SearchRequest,
     ) -> Result<SearchResponse, crate::types::SearchError> {
         let retriever = self.registry.get(request.search_type)?;
+        let params = SearchParams::from(request);
         let use_dataset_scope = request
             .dataset_ids
             .as_ref()
@@ -69,7 +70,7 @@ impl SearchOrchestrator {
         let include_context =
             request.only_context() || request.use_combined_context() || use_dataset_scope;
         let base_context = if include_context {
-            Some(retriever.get_context(&request.query_text).await?)
+            Some(retriever.get_context(&request.query_text, &params).await?)
         } else {
             None
         };
@@ -140,7 +141,12 @@ impl SearchOrchestrator {
             };
 
         let output = retriever
-            .get_completion(&request.query_text, context.clone(), &session_context)
+            .get_completion(
+                &request.query_text,
+                context.clone(),
+                &session_context,
+                &params,
+            )
             .await?;
 
         if let (Some(session_id), Some(sm)) = (&request.session_id, &self.session_manager)
@@ -210,7 +216,9 @@ mod tests {
 
     use crate::orchestration::SearchTypeRegistry;
     use crate::retrievers::SearchRetriever;
-    use crate::types::{SearchContext, SearchError, SearchOutput, SearchRequest, SearchType};
+    use crate::types::{
+        SearchContext, SearchError, SearchOutput, SearchParams, SearchRequest, SearchType,
+    };
 
     use crate::orchestration::{CONTEXT_LABEL_COMBINED, CONTEXT_LABEL_DEFAULT};
 
@@ -222,7 +230,11 @@ mod tests {
             SearchType::Chunks
         }
 
-        async fn get_context(&self, _query: &str) -> Result<SearchContext, SearchError> {
+        async fn get_context(
+            &self,
+            _query: &str,
+            _params: &SearchParams,
+        ) -> Result<SearchContext, SearchError> {
             Ok(vec![crate::types::SearchItem {
                 id: None,
                 score: Some(0.9),
@@ -235,6 +247,7 @@ mod tests {
             _query: &str,
             _context: Option<SearchContext>,
             _session: &SessionContext,
+            _params: &SearchParams,
         ) -> Result<SearchOutput, SearchError> {
             Ok(SearchOutput::Text("answer value".to_string()))
         }
@@ -367,7 +380,11 @@ mod tests {
                 SearchType::GraphCompletion
             }
 
-            async fn get_context(&self, _query: &str) -> Result<SearchContext, SearchError> {
+            async fn get_context(
+                &self,
+                _query: &str,
+                _params: &SearchParams,
+            ) -> Result<SearchContext, SearchError> {
                 Ok(vec![crate::types::SearchItem {
                     id: None,
                     score: Some(0.9),
@@ -386,6 +403,7 @@ mod tests {
                 _query: &str,
                 _context: Option<SearchContext>,
                 _session: &SessionContext,
+                _params: &SearchParams,
             ) -> Result<SearchOutput, SearchError> {
                 Ok(SearchOutput::Text("graph answer".to_string()))
             }
@@ -446,7 +464,11 @@ mod tests {
                 SearchType::Chunks
             }
 
-            async fn get_context(&self, _query: &str) -> Result<SearchContext, SearchError> {
+            async fn get_context(
+                &self,
+                _query: &str,
+                _params: &SearchParams,
+            ) -> Result<SearchContext, SearchError> {
                 Ok(vec![
                     crate::types::SearchItem {
                         id: None,
@@ -472,6 +494,7 @@ mod tests {
                 _query: &str,
                 context: Option<SearchContext>,
                 _session: &SessionContext,
+                _params: &SearchParams,
             ) -> Result<SearchOutput, SearchError> {
                 Ok(SearchOutput::Items(context.unwrap_or_default()))
             }
@@ -529,7 +552,11 @@ mod tests {
                 SearchType::Chunks
             }
 
-            async fn get_context(&self, _query: &str) -> Result<SearchContext, SearchError> {
+            async fn get_context(
+                &self,
+                _query: &str,
+                _params: &SearchParams,
+            ) -> Result<SearchContext, SearchError> {
                 Ok(vec![
                     crate::types::SearchItem {
                         id: None,
@@ -555,6 +582,7 @@ mod tests {
                 _query: &str,
                 context: Option<SearchContext>,
                 _session: &SessionContext,
+                _params: &SearchParams,
             ) -> Result<SearchOutput, SearchError> {
                 Ok(SearchOutput::Items(context.unwrap_or_default()))
             }

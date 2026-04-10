@@ -10,7 +10,7 @@ use cognee_session::SessionContext;
 
 use crate::retrievers::SearchRetriever;
 use crate::retrievers::context_items::search_results_to_context;
-use crate::types::{SearchContext, SearchError, SearchOutput, SearchType};
+use crate::types::{SearchContext, SearchError, SearchOutput, SearchParams, SearchType};
 use crate::utils::{build_messages_with_history, render_user_prompt, resolve_system_prompt};
 
 const TRIPLET_DATA_TYPE: &str = "Triplet";
@@ -99,7 +99,11 @@ impl SearchRetriever for TripletRetriever {
         SearchType::TripletCompletion
     }
 
-    async fn get_context(&self, query: &str) -> Result<SearchContext, SearchError> {
+    async fn get_context(
+        &self,
+        query: &str,
+        params: &SearchParams,
+    ) -> Result<SearchContext, SearchError> {
         let field_name = self.resolve_triplet_field().await?;
 
         let embeddings = self.embedding_engine.embed(&[query]).await?;
@@ -109,7 +113,12 @@ impl SearchRetriever for TripletRetriever {
 
         let results = self
             .vector_db
-            .search_similar(TRIPLET_DATA_TYPE, field_name, &query_vector, self.top_k)
+            .search_similar(
+                TRIPLET_DATA_TYPE,
+                field_name,
+                &query_vector,
+                params.top_k_or(self.top_k),
+            )
             .await?;
 
         search_results_to_context(results)
@@ -120,17 +129,24 @@ impl SearchRetriever for TripletRetriever {
         query: &str,
         context: Option<SearchContext>,
         session: &SessionContext,
+        params: &SearchParams,
     ) -> Result<SearchOutput, SearchError> {
         let completion_context = match context {
             Some(existing_context) => existing_context,
-            None => self.get_context(query).await?,
+            None => self.get_context(query, params).await?,
         };
 
         let context_text = Self::context_to_text(&completion_context);
 
         let system_prompt = resolve_system_prompt(
-            self.system_prompt.as_deref(),
-            self.system_prompt_path.as_deref(),
+            params
+                .system_prompt
+                .as_deref()
+                .or(self.system_prompt.as_deref()),
+            params
+                .system_prompt_path
+                .as_deref()
+                .or(self.system_prompt_path.as_deref()),
         )?;
 
         let user_prompt =
@@ -173,7 +189,7 @@ mod tests {
     use cognee_session::SessionContext;
 
     use crate::retrievers::{SearchRetriever, TripletRetriever};
-    use crate::types::{SearchError, SearchOutput};
+    use crate::types::{SearchError, SearchOutput, SearchParams};
 
     struct TestEmbeddingEngine;
 
@@ -354,7 +370,9 @@ mod tests {
             None,
         );
 
-        let result = retriever.get_context("query").await;
+        let result = retriever
+            .get_context("query", &SearchParams::default())
+            .await;
         assert!(matches!(result, Err(SearchError::NotFound(_))));
     }
 
@@ -389,7 +407,10 @@ mod tests {
             None,
         );
 
-        let context = retriever.get_context("query").await.unwrap();
+        let context = retriever
+            .get_context("query", &SearchParams::default())
+            .await
+            .unwrap();
 
         assert_eq!(context.len(), 1);
         assert_eq!(
@@ -429,7 +450,12 @@ mod tests {
         );
 
         let output = retriever
-            .get_completion("who knows Bob?", None, &SessionContext::default())
+            .get_completion(
+                "who knows Bob?",
+                None,
+                &SessionContext::default(),
+                &SearchParams::default(),
+            )
             .await
             .unwrap();
 

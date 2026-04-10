@@ -283,7 +283,9 @@ mod tests {
 
     use super::SearchBuilder;
     use crate::retrievers::SearchRetriever;
-    use crate::types::{SearchContext, SearchError, SearchOutput, SearchRequest, SearchType};
+    use crate::types::{
+        SearchContext, SearchError, SearchOutput, SearchParams, SearchRequest, SearchType,
+    };
 
     struct TestEmbedding;
 
@@ -564,7 +566,11 @@ mod tests {
             SearchType::Chunks
         }
 
-        async fn get_context(&self, _query: &str) -> Result<SearchContext, SearchError> {
+        async fn get_context(
+            &self,
+            _query: &str,
+            _params: &SearchParams,
+        ) -> Result<SearchContext, SearchError> {
             Ok(vec![])
         }
 
@@ -573,6 +579,7 @@ mod tests {
             _query: &str,
             _context: Option<SearchContext>,
             _session: &SessionContext,
+            _params: &SearchParams,
         ) -> Result<SearchOutput, SearchError> {
             Ok(SearchOutput::Text("builder-executed".to_string()))
         }
@@ -629,7 +636,11 @@ mod tests {
                 SearchType::Summaries
             }
 
-            async fn get_context(&self, _query: &str) -> Result<SearchContext, SearchError> {
+            async fn get_context(
+                &self,
+                _query: &str,
+                _params: &SearchParams,
+            ) -> Result<SearchContext, SearchError> {
                 Ok(vec![crate::types::SearchItem {
                     id: None,
                     score: Some(0.9),
@@ -642,6 +653,7 @@ mod tests {
                 _query: &str,
                 _context: Option<SearchContext>,
                 _session: &SessionContext,
+                _params: &SearchParams,
             ) -> Result<SearchOutput, SearchError> {
                 Ok(SearchOutput::Text("unused".to_string()))
             }

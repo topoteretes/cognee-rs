@@ -13,7 +13,9 @@ use serde_json::{Value, json};
 use uuid::Uuid;
 
 use crate::retrievers::{SearchRetriever, SearchRetrieverRef};
-use crate::types::{Rule, SearchContext, SearchError, SearchItem, SearchOutput, SearchType};
+use crate::types::{
+    Rule, SearchContext, SearchError, SearchItem, SearchOutput, SearchParams, SearchType,
+};
 
 const DEFAULT_FEELING_LUCKY_PROMPT: &str = "\
 You are an expert query analyzer for a **GraphRAG system**. Your primary goal is to analyze a user's query and select the single most appropriate `SearchType` tool to answer it.
@@ -245,8 +247,15 @@ impl SearchRetriever for FeelingLuckyRetriever {
         SearchType::FeelingLucky
     }
 
-    async fn get_context(&self, query: &str) -> Result<SearchContext, SearchError> {
-        self.select_retriever(query).await?.get_context(query).await
+    async fn get_context(
+        &self,
+        query: &str,
+        params: &SearchParams,
+    ) -> Result<SearchContext, SearchError> {
+        self.select_retriever(query)
+            .await?
+            .get_context(query, params)
+            .await
     }
 
     async fn get_completion(
@@ -254,10 +263,11 @@ impl SearchRetriever for FeelingLuckyRetriever {
         query: &str,
         context: Option<SearchContext>,
         session: &SessionContext,
+        params: &SearchParams,
     ) -> Result<SearchOutput, SearchError> {
         self.select_retriever(query)
             .await?
-            .get_completion(query, context, session)
+            .get_completion(query, context, session, params)
             .await
     }
 }
@@ -391,7 +401,11 @@ impl SearchRetriever for FeedbackRetriever {
         SearchType::Feedback
     }
 
-    async fn get_context(&self, query: &str) -> Result<SearchContext, SearchError> {
+    async fn get_context(
+        &self,
+        query: &str,
+        _params: &SearchParams,
+    ) -> Result<SearchContext, SearchError> {
         let analysis = self.extract_feedback(query).await?;
 
         Ok(vec![SearchItem {
@@ -410,6 +424,7 @@ impl SearchRetriever for FeedbackRetriever {
         query: &str,
         _context: Option<SearchContext>,
         _session: &SessionContext,
+        _params: &SearchParams,
     ) -> Result<SearchOutput, SearchError> {
         let analysis = self.extract_feedback(query).await?;
         let feedback_id = self.store_feedback(query, &analysis).await?;
@@ -526,7 +541,11 @@ impl SearchRetriever for CodingRulesRetriever {
         SearchType::CodingRules
     }
 
-    async fn get_context(&self, query: &str) -> Result<SearchContext, SearchError> {
+    async fn get_context(
+        &self,
+        query: &str,
+        _params: &SearchParams,
+    ) -> Result<SearchContext, SearchError> {
         Ok(self
             .load_rules(query)
             .await?
@@ -547,6 +566,7 @@ impl SearchRetriever for CodingRulesRetriever {
         query: &str,
         context: Option<SearchContext>,
         _session: &SessionContext,
+        _params: &SearchParams,
     ) -> Result<SearchOutput, SearchError> {
         let rules = match context {
             Some(items) => items
@@ -583,7 +603,7 @@ mod tests {
 
     use super::{CodingRulesRetriever, FeedbackAnalysis, FeedbackRetriever, FeelingLuckyRetriever};
     use crate::retrievers::{SearchRetriever, SearchRetrieverRef};
-    use crate::types::{SearchContext, SearchError, SearchOutput, SearchType};
+    use crate::types::{SearchContext, SearchError, SearchOutput, SearchParams, SearchType};
     use uuid::Uuid;
 
     #[derive(Default)]
@@ -646,7 +666,11 @@ mod tests {
             self.kind
         }
 
-        async fn get_context(&self, _query: &str) -> Result<SearchContext, SearchError> {
+        async fn get_context(
+            &self,
+            _query: &str,
+            _params: &SearchParams,
+        ) -> Result<SearchContext, SearchError> {
             Ok(vec![])
         }
 
@@ -655,6 +679,7 @@ mod tests {
             _query: &str,
             _context: Option<SearchContext>,
             _session: &SessionContext,
+            _params: &SearchParams,
         ) -> Result<SearchOutput, SearchError> {
             Ok(SearchOutput::Text(self.text.clone()))
         }
@@ -697,7 +722,12 @@ mod tests {
         );
 
         let output = retriever
-            .get_completion("hello", None, &SessionContext::default())
+            .get_completion(
+                "hello",
+                None,
+                &SessionContext::default(),
+                &SearchParams::default(),
+            )
             .await
             .unwrap();
         match output {
@@ -730,7 +760,12 @@ mod tests {
 
         let retriever = FeedbackRetriever::new(graph_db.clone(), llm, Some(3), None);
         let output = retriever
-            .get_completion("Great answer", None, &SessionContext::default())
+            .get_completion(
+                "Great answer",
+                None,
+                &SessionContext::default(),
+                &SearchParams::default(),
+            )
             .await
             .unwrap();
 
@@ -773,7 +808,12 @@ mod tests {
 
         let retriever = CodingRulesRetriever::new(graph_db, None);
         let output = retriever
-            .get_completion("coding_agent_rules", None, &SessionContext::default())
+            .get_completion(
+                "coding_agent_rules",
+                None,
+                &SessionContext::default(),
+                &SearchParams::default(),
+            )
             .await
             .unwrap();
 
@@ -836,7 +876,12 @@ mod tests {
         );
 
         let output = retriever
-            .get_completion("explain relationships", None, &SessionContext::default())
+            .get_completion(
+                "explain relationships",
+                None,
+                &SessionContext::default(),
+                &SearchParams::default(),
+            )
             .await
             .unwrap();
         match output {

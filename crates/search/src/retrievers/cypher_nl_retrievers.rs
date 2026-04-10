@@ -8,7 +8,9 @@ use cognee_session::SessionContext;
 use serde_json::{Value, json};
 
 use crate::retrievers::SearchRetriever;
-use crate::types::{SearchContext, SearchError, SearchItem, SearchOutput, SearchType};
+use crate::types::{
+    SearchContext, SearchError, SearchItem, SearchOutput, SearchParams, SearchType,
+};
 
 const DEFAULT_NL_MAX_ATTEMPTS: usize = 3;
 const NL_SYSTEM_PROMPT_TEMPLATE: &str = "\
@@ -129,7 +131,11 @@ impl SearchRetriever for CypherSearchRetriever {
         SearchType::Cypher
     }
 
-    async fn get_context(&self, query: &str) -> Result<SearchContext, SearchError> {
+    async fn get_context(
+        &self,
+        query: &str,
+        _params: &SearchParams,
+    ) -> Result<SearchContext, SearchError> {
         ensure_cypher_queries_enabled()?;
 
         if self.graph_db.is_empty().await? {
@@ -145,10 +151,19 @@ impl SearchRetriever for CypherSearchRetriever {
         query: &str,
         context: Option<SearchContext>,
         _session: &SessionContext,
+        _params: &SearchParams,
     ) -> Result<SearchOutput, SearchError> {
         let output_context = match context {
             Some(existing_context) => existing_context,
-            None => self.get_context(query).await?,
+            None => {
+                ensure_cypher_queries_enabled()?;
+                if self.graph_db.is_empty().await? {
+                    vec![]
+                } else {
+                    let rows = self.graph_db.query(query, None).await?;
+                    rows_to_context(rows)
+                }
+            }
         };
 
         Ok(SearchOutput::GraphQueryRows(context_to_rows(
@@ -271,7 +286,11 @@ impl SearchRetriever for NaturalLanguageRetriever {
         SearchType::NaturalLanguage
     }
 
-    async fn get_context(&self, query: &str) -> Result<SearchContext, SearchError> {
+    async fn get_context(
+        &self,
+        query: &str,
+        _params: &SearchParams,
+    ) -> Result<SearchContext, SearchError> {
         ensure_cypher_queries_enabled()?;
 
         if self.graph_db.is_empty().await? {
@@ -287,10 +306,11 @@ impl SearchRetriever for NaturalLanguageRetriever {
         query: &str,
         context: Option<SearchContext>,
         _session: &SessionContext,
+        params: &SearchParams,
     ) -> Result<SearchOutput, SearchError> {
         let output_context = match context {
             Some(existing_context) => existing_context,
-            None => self.get_context(query).await?,
+            None => self.get_context(query, params).await?,
         };
 
         Ok(SearchOutput::GraphQueryRows(context_to_rows(
@@ -317,7 +337,7 @@ mod tests {
 
     use super::{CypherSearchRetriever, NaturalLanguageRetriever};
     use crate::retrievers::SearchRetriever;
-    use crate::types::SearchOutput;
+    use crate::types::{SearchOutput, SearchParams};
 
     struct TestGraphDb {
         empty: bool,
@@ -518,7 +538,12 @@ mod tests {
 
         let retriever = CypherSearchRetriever::new(graph_db);
         let output = retriever
-            .get_completion("MATCH (n) RETURN n", None, &SessionContext::default())
+            .get_completion(
+                "MATCH (n) RETURN n",
+                None,
+                &SessionContext::default(),
+                &SearchParams::default(),
+            )
             .await
             .unwrap();
 
@@ -558,7 +583,12 @@ mod tests {
 
         let retriever = NaturalLanguageRetriever::new(graph_db, llm, Some(3), None);
         let output = retriever
-            .get_completion("Find Alice", None, &SessionContext::default())
+            .get_completion(
+                "Find Alice",
+                None,
+                &SessionContext::default(),
+                &SearchParams::default(),
+            )
             .await
             .unwrap();
 
@@ -650,7 +680,12 @@ mod tests {
 
         let retriever = NaturalLanguageRetriever::new(graph_db, llm, Some(3), None);
         let output = retriever
-            .get_completion("Find Alice", None, &SessionContext::default())
+            .get_completion(
+                "Find Alice",
+                None,
+                &SessionContext::default(),
+                &SearchParams::default(),
+            )
             .await
             .unwrap();
 
@@ -689,7 +724,12 @@ mod tests {
 
         let retriever = NaturalLanguageRetriever::new(graph_db, llm, Some(3), None);
         let output = retriever
-            .get_completion("Find Alice", None, &SessionContext::default())
+            .get_completion(
+                "Find Alice",
+                None,
+                &SessionContext::default(),
+                &SearchParams::default(),
+            )
             .await
             .unwrap();
 

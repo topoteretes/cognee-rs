@@ -7,7 +7,7 @@ use cognee_vector::VectorDB;
 
 use crate::retrievers::SearchRetriever;
 use crate::retrievers::context_items::search_results_to_context;
-use crate::types::{SearchContext, SearchError, SearchOutput, SearchType};
+use crate::types::{SearchContext, SearchError, SearchOutput, SearchParams, SearchType};
 
 const SUMMARIES_DATA_TYPE: &str = "TextSummary";
 const SUMMARIES_FIELD_NAME: &str = "text";
@@ -39,7 +39,11 @@ impl SearchRetriever for SummariesRetriever {
         SearchType::Summaries
     }
 
-    async fn get_context(&self, query: &str) -> Result<SearchContext, SearchError> {
+    async fn get_context(
+        &self,
+        query: &str,
+        params: &SearchParams,
+    ) -> Result<SearchContext, SearchError> {
         if !self
             .vector_db
             .has_collection(SUMMARIES_DATA_TYPE, SUMMARIES_FIELD_NAME)
@@ -61,7 +65,7 @@ impl SearchRetriever for SummariesRetriever {
                 SUMMARIES_DATA_TYPE,
                 SUMMARIES_FIELD_NAME,
                 &query_vector,
-                self.top_k,
+                params.top_k_or(self.top_k),
             )
             .await?;
 
@@ -73,10 +77,11 @@ impl SearchRetriever for SummariesRetriever {
         query: &str,
         context: Option<SearchContext>,
         _session: &SessionContext,
+        params: &SearchParams,
     ) -> Result<SearchOutput, SearchError> {
         let output_context = match context {
             Some(existing_context) => existing_context,
-            None => self.get_context(query).await?,
+            None => self.get_context(query, params).await?,
         };
 
         Ok(SearchOutput::Items(output_context))
@@ -98,7 +103,7 @@ mod tests {
     use cognee_session::SessionContext;
 
     use crate::retrievers::{SearchRetriever, SummariesRetriever};
-    use crate::types::{SearchError, SearchOutput};
+    use crate::types::{SearchError, SearchOutput, SearchParams};
 
     struct TestEmbeddingEngine;
 
@@ -212,7 +217,9 @@ mod tests {
             Some(2),
         );
 
-        let result = retriever.get_context("query").await;
+        let result = retriever
+            .get_context("query", &SearchParams::default())
+            .await;
 
         assert!(matches!(result, Err(SearchError::NotFound(_))));
     }
@@ -229,7 +236,12 @@ mod tests {
         );
 
         let output = retriever
-            .get_completion("query", None, &SessionContext::default())
+            .get_completion(
+                "query",
+                None,
+                &SessionContext::default(),
+                &SearchParams::default(),
+            )
             .await
             .unwrap();
         match output {
@@ -253,7 +265,10 @@ mod tests {
             Some(2),
         );
 
-        let context = retriever.get_context("query").await.unwrap();
+        let context = retriever
+            .get_context("query", &SearchParams::default())
+            .await
+            .unwrap();
 
         assert_eq!(context.len(), 2);
         assert_eq!(context[0].payload["text"], "first summary");

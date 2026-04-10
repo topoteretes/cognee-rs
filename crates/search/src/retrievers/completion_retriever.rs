@@ -10,7 +10,7 @@ use cognee_session::SessionContext;
 
 use crate::retrievers::SearchRetriever;
 use crate::retrievers::context_items::search_results_to_context;
-use crate::types::{SearchContext, SearchError, SearchOutput, SearchType};
+use crate::types::{SearchContext, SearchError, SearchOutput, SearchParams, SearchType};
 use crate::utils::{build_messages_with_history, render_user_prompt, resolve_system_prompt};
 
 const CHUNKS_DATA_TYPE: &str = "DocumentChunk";
@@ -59,7 +59,11 @@ impl SearchRetriever for CompletionRetriever {
         SearchType::RagCompletion
     }
 
-    async fn get_context(&self, query: &str) -> Result<SearchContext, SearchError> {
+    async fn get_context(
+        &self,
+        query: &str,
+        params: &SearchParams,
+    ) -> Result<SearchContext, SearchError> {
         if !self
             .vector_db
             .has_collection(CHUNKS_DATA_TYPE, CHUNKS_FIELD_NAME)
@@ -81,7 +85,7 @@ impl SearchRetriever for CompletionRetriever {
                 CHUNKS_DATA_TYPE,
                 CHUNKS_FIELD_NAME,
                 &query_vector,
-                self.top_k,
+                params.top_k_or(self.top_k),
             )
             .await?;
 
@@ -93,10 +97,11 @@ impl SearchRetriever for CompletionRetriever {
         query: &str,
         context: Option<SearchContext>,
         session: &SessionContext,
+        params: &SearchParams,
     ) -> Result<SearchOutput, SearchError> {
         let completion_context = match context {
             Some(existing_context) => existing_context,
-            None => self.get_context(query).await?,
+            None => self.get_context(query, params).await?,
         };
 
         let context_text = completion_context
@@ -106,8 +111,14 @@ impl SearchRetriever for CompletionRetriever {
             .join("\n");
 
         let system_prompt = resolve_system_prompt(
-            self.system_prompt.as_deref(),
-            self.system_prompt_path.as_deref(),
+            params
+                .system_prompt
+                .as_deref()
+                .or(self.system_prompt.as_deref()),
+            params
+                .system_prompt_path
+                .as_deref()
+                .or(self.system_prompt_path.as_deref()),
         )?;
 
         let user_prompt =
@@ -150,7 +161,7 @@ mod tests {
     use cognee_session::SessionContext;
 
     use crate::retrievers::{CompletionRetriever, SearchRetriever};
-    use crate::types::{SearchContext, SearchError, SearchItem, SearchOutput};
+    use crate::types::{SearchContext, SearchError, SearchItem, SearchOutput, SearchParams};
     use crate::utils::DEFAULT_RAG_SYSTEM_PROMPT;
 
     struct TestEmbeddingEngine;
@@ -317,7 +328,9 @@ mod tests {
             None,
         );
 
-        let result = retriever.get_context("query").await;
+        let result = retriever
+            .get_context("query", &SearchParams::default())
+            .await;
         assert!(matches!(result, Err(SearchError::NotFound(_))));
     }
 
@@ -346,7 +359,12 @@ mod tests {
         );
 
         let output = retriever
-            .get_completion("what happened?", None, &SessionContext::default())
+            .get_completion(
+                "what happened?",
+                None,
+                &SessionContext::default(),
+                &SearchParams::default(),
+            )
             .await
             .unwrap();
 
@@ -391,7 +409,12 @@ mod tests {
         }];
 
         let output = retriever
-            .get_completion("who?", Some(provided_context), &SessionContext::default())
+            .get_completion(
+                "who?",
+                Some(provided_context),
+                &SessionContext::default(),
+                &SearchParams::default(),
+            )
             .await
             .unwrap();
 

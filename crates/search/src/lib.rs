@@ -15,5 +15,5 @@ pub use retrievers::{
 };
 pub use types::{
     Rule, SearchContext, SearchError, SearchGraph, SearchGraphEdge, SearchGraphNode, SearchItem,
-    SearchOutput, SearchRequest, SearchResponse, SearchType,
+    SearchOutput, SearchParams, SearchRequest, SearchResponse, SearchType,
 };

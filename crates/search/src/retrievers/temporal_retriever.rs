@@ -18,7 +18,9 @@ use crate::graph_retrieval::{
     brute_force_triplet_search,
 };
 use crate::retrievers::SearchRetriever;
-use crate::types::{SearchContext, SearchError, SearchItem, SearchOutput, SearchType};
+use crate::types::{
+    SearchContext, SearchError, SearchItem, SearchOutput, SearchParams, SearchType,
+};
 use crate::utils::{build_messages_with_history, render_graph_user_prompt, resolve_system_prompt};
 
 const DEFAULT_TOP_K: usize = 5;
@@ -149,25 +151,27 @@ impl TemporalRetriever {
         Ok(Some(parsed))
     }
 
-    fn get_graph_retrieval_config(&self) -> GraphRetrievalConfig {
+    fn get_graph_retrieval_config(&self, params: &SearchParams) -> GraphRetrievalConfig {
         GraphRetrievalConfig {
-            top_k: self.top_k,
-            wide_search_top_k: self.wide_search_top_k,
-            triplet_distance_penalty: self.triplet_distance_penalty,
-            feedback_influence: self.feedback_influence,
+            top_k: params.top_k_or(self.top_k),
+            wide_search_top_k: params.wide_search_top_k_or(self.wide_search_top_k),
+            triplet_distance_penalty: params
+                .triplet_distance_penalty_or(self.triplet_distance_penalty),
+            feedback_influence: params.feedback_influence_or(self.feedback_influence),
         }
     }
 
     async fn get_ranked_graph_edges(
         &self,
         query: &str,
+        params: &SearchParams,
     ) -> Result<Vec<RankedGraphEdge>, SearchError> {
         brute_force_triplet_search(
             query,
             self.vector_db.as_ref(),
             self.embedding_engine.as_ref(),
             self.graph_db.as_ref(),
-            &self.get_graph_retrieval_config(),
+            &self.get_graph_retrieval_config(params),
         )
         .await
     }
@@ -193,8 +197,12 @@ impl TemporalRetriever {
             .collect()
     }
 
-    async fn get_fallback_context(&self, query: &str) -> Result<SearchContext, SearchError> {
-        let ranked_edges = self.get_ranked_graph_edges(query).await?;
+    async fn get_fallback_context(
+        &self,
+        query: &str,
+        params: &SearchParams,
+    ) -> Result<SearchContext, SearchError> {
+        let ranked_edges = self.get_ranked_graph_edges(query, params).await?;
         Ok(Self::ranked_edges_to_context(ranked_edges))
     }
 
@@ -329,13 +337,17 @@ impl SearchRetriever for TemporalRetriever {
         SearchType::Temporal
     }
 
-    async fn get_context(&self, query: &str) -> Result<SearchContext, SearchError> {
+    async fn get_context(
+        &self,
+        query: &str,
+        params: &SearchParams,
+    ) -> Result<SearchContext, SearchError> {
         if self.graph_db.is_empty().await? {
             return Ok(vec![]);
         }
 
         let Some(interval) = self.extract_interval(query).await? else {
-            return self.get_fallback_context(query).await;
+            return self.get_fallback_context(query, params).await;
         };
 
         let (nodes, _) = self.graph_db.get_graph_data().await?;
@@ -356,10 +368,10 @@ impl SearchRetriever for TemporalRetriever {
         }
 
         if event_node_ids.is_empty() {
-            return self.get_fallback_context(query).await;
+            return self.get_fallback_context(query, params).await;
         }
 
-        let ranked_edges = self.get_ranked_graph_edges(query).await?;
+        let ranked_edges = self.get_ranked_graph_edges(query, params).await?;
         let ranked_events = self
             .rank_temporal_events(query, &event_node_ids, &ranked_edges)
             .await?;
@@ -367,7 +379,7 @@ impl SearchRetriever for TemporalRetriever {
         let nodes_by_id: HashMap<String, NodeData> = nodes.into_iter().collect();
         let mut temporal_context = Vec::new();
 
-        for (event_id, score) in ranked_events.into_iter().take(self.top_k) {
+        for (event_id, score) in ranked_events.into_iter().take(params.top_k_or(self.top_k)) {
             let Some(event_node) = nodes_by_id.get(&event_id) else {
                 continue;
             };
@@ -396,15 +408,22 @@ impl SearchRetriever for TemporalRetriever {
         query: &str,
         context: Option<SearchContext>,
         session: &SessionContext,
+        params: &SearchParams,
     ) -> Result<SearchOutput, SearchError> {
         let completion_context = match context {
             Some(existing_context) => existing_context,
-            None => self.get_context(query).await?,
+            None => self.get_context(query, params).await?,
         };
 
         let system_prompt = resolve_system_prompt(
-            self.system_prompt.as_deref(),
-            self.system_prompt_path.as_deref(),
+            params
+                .system_prompt
+                .as_deref()
+                .or(self.system_prompt.as_deref()),
+            params
+                .system_prompt_path
+                .as_deref()
+                .or(self.system_prompt_path.as_deref()),
         )?;
 
         let user_prompt = render_graph_user_prompt(
@@ -600,6 +619,7 @@ mod tests {
 
     use super::{QueryInterval, TemporalRetriever};
     use crate::retrievers::SearchRetriever;
+    use crate::types::SearchParams;
 
     struct TestEmbeddingEngine;
 
@@ -975,7 +995,7 @@ mod tests {
         );
 
         let context = retriever
-            .get_context("What happened in 2024?")
+            .get_context("What happened in 2024?", &SearchParams::default())
             .await
             .unwrap();
 
@@ -1052,7 +1072,10 @@ mod tests {
             None,
         );
 
-        let context = retriever.get_context("What happened?").await.unwrap();
+        let context = retriever
+            .get_context("What happened?", &SearchParams::default())
+            .await
+            .unwrap();
         assert_eq!(context.len(), 1);
         assert_eq!(
             context[0]

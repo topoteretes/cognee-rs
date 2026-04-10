@@ -3,7 +3,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use cognee_session::SessionContext;
 
-use crate::types::{SearchContext, SearchError, SearchOutput, SearchType};
+use crate::types::{SearchContext, SearchError, SearchOutput, SearchParams, SearchType};
 
 pub type SearchRetrieverRef = Arc<dyn SearchRetriever>;
 
@@ -11,12 +11,17 @@ pub type SearchRetrieverRef = Arc<dyn SearchRetriever>;
 pub trait SearchRetriever: Send + Sync {
     fn search_type(&self) -> SearchType;
 
-    async fn get_context(&self, query: &str) -> Result<SearchContext, SearchError>;
+    async fn get_context(
+        &self,
+        query: &str,
+        params: &SearchParams,
+    ) -> Result<SearchContext, SearchError>;
 
     async fn get_completion(
         &self,
         query: &str,
         context: Option<SearchContext>,
         session: &SessionContext,
+        params: &SearchParams,
     ) -> Result<SearchOutput, SearchError>;
 }

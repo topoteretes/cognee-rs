@@ -14,7 +14,9 @@ use crate::graph_retrieval::{
     DEFAULT_TRIPLET_DISTANCE_PENALTY, GraphRetrievalConfig, brute_force_triplet_search,
 };
 use crate::retrievers::SearchRetriever;
-use crate::types::{SearchContext, SearchError, SearchItem, SearchOutput, SearchType};
+use crate::types::{
+    SearchContext, SearchError, SearchItem, SearchOutput, SearchParams, SearchType,
+};
 use crate::utils::{
     build_messages_with_history, render_edges_context, render_graph_user_prompt,
     resolve_system_prompt,
@@ -77,17 +79,22 @@ impl SearchRetriever for GraphCompletionRetriever {
         SearchType::GraphCompletion
     }
 
-    async fn get_context(&self, query: &str) -> Result<SearchContext, SearchError> {
+    async fn get_context(
+        &self,
+        query: &str,
+        params: &SearchParams,
+    ) -> Result<SearchContext, SearchError> {
         if self.graph_db.is_empty().await? {
             debug!("graph is empty — returning empty context");
             return Ok(vec![]);
         }
 
         let config = GraphRetrievalConfig {
-            top_k: self.top_k,
-            wide_search_top_k: self.wide_search_top_k,
-            triplet_distance_penalty: self.triplet_distance_penalty,
-            feedback_influence: self.feedback_influence,
+            top_k: params.top_k_or(self.top_k),
+            wide_search_top_k: params.wide_search_top_k_or(self.wide_search_top_k),
+            triplet_distance_penalty: params
+                .triplet_distance_penalty_or(self.triplet_distance_penalty),
+            feedback_influence: params.feedback_influence_or(self.feedback_influence),
         };
 
         let ranked_edges = brute_force_triplet_search(
@@ -125,17 +132,24 @@ impl SearchRetriever for GraphCompletionRetriever {
         query: &str,
         context: Option<SearchContext>,
         session: &SessionContext,
+        params: &SearchParams,
     ) -> Result<SearchOutput, SearchError> {
         let completion_context = match context {
             Some(existing_context) => existing_context,
-            None => self.get_context(query).await?,
+            None => self.get_context(query, params).await?,
         };
 
         let graph_context_text = render_edges_context(&completion_context);
 
         let system_prompt = resolve_system_prompt(
-            self.system_prompt.as_deref(),
-            self.system_prompt_path.as_deref(),
+            params
+                .system_prompt
+                .as_deref()
+                .or(self.system_prompt.as_deref()),
+            params
+                .system_prompt_path
+                .as_deref()
+                .or(self.system_prompt_path.as_deref()),
         )?;
 
         let user_prompt = render_graph_user_prompt(
@@ -183,7 +197,7 @@ mod tests {
     use cognee_session::SessionContext;
 
     use crate::retrievers::{GraphCompletionRetriever, SearchRetriever};
-    use crate::types::SearchOutput;
+    use crate::types::{SearchOutput, SearchParams};
 
     struct TestEmbeddingEngine;
 
@@ -533,7 +547,10 @@ mod tests {
             None,
         );
 
-        let context = retriever.get_context("query").await.unwrap();
+        let context = retriever
+            .get_context("query", &SearchParams::default())
+            .await
+            .unwrap();
 
         assert_eq!(context.len(), 2);
         assert_eq!(context[0].payload["relationship"], "KNOWS");
@@ -600,6 +617,7 @@ mod tests {
                 "who does Alice know?",
                 Some(context),
                 &SessionContext::default(),
+                &SearchParams::default(),
             )
             .await
             .unwrap();
@@ -654,7 +672,12 @@ mod tests {
         }];
 
         let _ = retriever
-            .get_completion("Who knows Bob?", Some(context), &SessionContext::default())
+            .get_completion(
+                "Who knows Bob?",
+                Some(context),
+                &SessionContext::default(),
+                &SearchParams::default(),
+            )
             .await
             .unwrap();
 

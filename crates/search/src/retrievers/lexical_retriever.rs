@@ -8,7 +8,9 @@ use cognee_session::SessionContext;
 use serde_json::{Value, json};
 
 use crate::retrievers::SearchRetriever;
-use crate::types::{SearchContext, SearchError, SearchItem, SearchOutput, SearchType};
+use crate::types::{
+    SearchContext, SearchError, SearchItem, SearchOutput, SearchParams, SearchType,
+};
 
 const DEFAULT_TOP_K: usize = 10;
 const DOCUMENT_CHUNK_TYPE: &str = "DocumentChunk";
@@ -170,7 +172,11 @@ impl SearchRetriever for LexicalRetriever {
         SearchType::ChunksLexical
     }
 
-    async fn get_context(&self, query: &str) -> Result<SearchContext, SearchError> {
+    async fn get_context(
+        &self,
+        query: &str,
+        params: &SearchParams,
+    ) -> Result<SearchContext, SearchError> {
         if self.graph_db.is_empty().await? {
             return Ok(vec![]);
         }
@@ -209,7 +215,7 @@ impl SearchRetriever for LexicalRetriever {
                 .partial_cmp(&left.score.unwrap_or_default())
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
-        items_with_score.truncate(self.top_k);
+        items_with_score.truncate(params.top_k_or(self.top_k));
 
         if !self.with_scores {
             for item in &mut items_with_score {
@@ -225,10 +231,11 @@ impl SearchRetriever for LexicalRetriever {
         query: &str,
         context: Option<SearchContext>,
         _session: &SessionContext,
+        params: &SearchParams,
     ) -> Result<SearchOutput, SearchError> {
         let output_context = match context {
             Some(existing_context) => existing_context,
-            None => self.get_context(query).await?,
+            None => self.get_context(query, params).await?,
         };
 
         Ok(SearchOutput::Items(output_context))
@@ -265,8 +272,12 @@ impl SearchRetriever for JaccardChunksRetriever {
         self.inner.search_type()
     }
 
-    async fn get_context(&self, query: &str) -> Result<SearchContext, SearchError> {
-        self.inner.get_context(query).await
+    async fn get_context(
+        &self,
+        query: &str,
+        params: &SearchParams,
+    ) -> Result<SearchContext, SearchError> {
+        self.inner.get_context(query, params).await
     }
 
     async fn get_completion(
@@ -274,8 +285,11 @@ impl SearchRetriever for JaccardChunksRetriever {
         query: &str,
         context: Option<SearchContext>,
         session: &SessionContext,
+        params: &SearchParams,
     ) -> Result<SearchOutput, SearchError> {
-        self.inner.get_completion(query, context, session).await
+        self.inner
+            .get_completion(query, context, session, params)
+            .await
     }
 }
 
@@ -290,7 +304,7 @@ mod tests {
     use cognee_session::SessionContext;
 
     use crate::retrievers::{JaccardChunksRetriever, SearchRetriever};
-    use crate::types::SearchOutput;
+    use crate::types::{SearchOutput, SearchParams};
 
     #[derive(Serialize)]
     struct DocumentChunkNode {
@@ -326,7 +340,10 @@ mod tests {
             false,
         );
 
-        let context = retriever.get_context("ownership and safety").await.unwrap();
+        let context = retriever
+            .get_context("ownership and safety", &SearchParams::default())
+            .await
+            .unwrap();
 
         assert_eq!(context.len(), 2);
         assert!(
@@ -350,7 +367,10 @@ mod tests {
         let retriever =
             JaccardChunksRetriever::new(Arc::clone(&graph_db), Some(2), true, None, true);
 
-        let context = retriever.get_context("rust rust memory").await.unwrap();
+        let context = retriever
+            .get_context("rust rust memory", &SearchParams::default())
+            .await
+            .unwrap();
 
         assert_eq!(context.len(), 2);
         assert!(context[0].score.unwrap() > context[1].score.unwrap());
@@ -378,7 +398,10 @@ mod tests {
             false,
         );
 
-        let context = retriever.get_context("ownership safety").await.unwrap();
+        let context = retriever
+            .get_context("ownership safety", &SearchParams::default())
+            .await
+            .unwrap();
 
         assert_eq!(context.len(), 2);
 
@@ -425,7 +448,12 @@ mod tests {
             JaccardChunksRetriever::new(Arc::clone(&graph_db), Some(5), false, None, false);
 
         let output = retriever
-            .get_completion("exact term", None, &SessionContext::default())
+            .get_completion(
+                "exact term",
+                None,
+                &SessionContext::default(),
+                &SearchParams::default(),
+            )
             .await
             .unwrap();
 
