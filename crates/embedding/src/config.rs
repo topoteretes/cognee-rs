@@ -207,10 +207,10 @@ impl EmbeddingConfig {
         }
 
         // EMBEDDING_DIMENSIONS
-        if let Ok(val) = std::env::var("EMBEDDING_DIMENSIONS") {
-            if let Ok(n) = val.trim().parse::<usize>() {
-                config.dimensions = n;
-            }
+        if let Ok(val) = std::env::var("EMBEDDING_DIMENSIONS")
+            && let Ok(n) = val.trim().parse::<usize>()
+        {
+            config.dimensions = n;
         }
 
         // EMBEDDING_ENDPOINT
@@ -243,17 +243,17 @@ impl EmbeddingConfig {
         }
 
         // EMBEDDING_MAX_COMPLETION_TOKENS
-        if let Ok(val) = std::env::var("EMBEDDING_MAX_COMPLETION_TOKENS") {
-            if let Ok(n) = val.trim().parse::<usize>() {
-                config.max_completion_tokens = n;
-            }
+        if let Ok(val) = std::env::var("EMBEDDING_MAX_COMPLETION_TOKENS")
+            && let Ok(n) = val.trim().parse::<usize>()
+        {
+            config.max_completion_tokens = n;
         }
 
         // EMBEDDING_BATCH_SIZE
-        if let Ok(val) = std::env::var("EMBEDDING_BATCH_SIZE") {
-            if let Ok(n) = val.trim().parse::<usize>() {
-                config.batch_size = n;
-            }
+        if let Ok(val) = std::env::var("EMBEDDING_BATCH_SIZE")
+            && let Ok(n) = val.trim().parse::<usize>()
+        {
+            config.batch_size = n;
         }
 
         // HUGGINGFACE_TOKENIZER
@@ -316,8 +316,10 @@ mod tests {
 
     #[test]
     fn test_effective_provider_mock_override() {
-        let mut config = EmbeddingConfig::default();
-        config.mock = true;
+        let config = EmbeddingConfig {
+            mock: true,
+            ..Default::default()
+        };
         assert_eq!(config.effective_provider(), EmbeddingProvider::Mock);
     }
 

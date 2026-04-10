@@ -55,10 +55,10 @@ impl TokenCounterKind {
                 "tiktoken" => return TokenCounterKind::TikToken,
                 "word" => return TokenCounterKind::Word,
                 "huggingface" | "hf" => {
-                    if let Ok(model_id) = std::env::var("HUGGINGFACE_TOKENIZER") {
-                        if !model_id.trim().is_empty() {
-                            return TokenCounterKind::HuggingFace { model_id };
-                        }
+                    if let Ok(model_id) = std::env::var("HUGGINGFACE_TOKENIZER")
+                        && !model_id.trim().is_empty()
+                    {
+                        return TokenCounterKind::HuggingFace { model_id };
                     }
                     // explicit hf requested but no model id — fall through to other priorities
                 }
@@ -67,10 +67,10 @@ impl TokenCounterKind {
         }
 
         // Priority 3: HUGGINGFACE_TOKENIZER set (any provider)
-        if let Ok(model_id) = std::env::var("HUGGINGFACE_TOKENIZER") {
-            if !model_id.trim().is_empty() {
-                return TokenCounterKind::HuggingFace { model_id };
-            }
+        if let Ok(model_id) = std::env::var("HUGGINGFACE_TOKENIZER")
+            && !model_id.trim().is_empty()
+        {
+            return TokenCounterKind::HuggingFace { model_id };
         }
 
         // Priority 4–6: based on EMBEDDING_PROVIDER
@@ -92,10 +92,10 @@ impl TokenCounterKind {
             }
             "openai" | "openai_compatible" => TokenCounterKind::TikToken,
             "ollama" => {
-                if let Ok(model_id) = std::env::var("HUGGINGFACE_TOKENIZER") {
-                    if !model_id.trim().is_empty() {
-                        return TokenCounterKind::HuggingFace { model_id };
-                    }
+                if let Ok(model_id) = std::env::var("HUGGINGFACE_TOKENIZER")
+                    && !model_id.trim().is_empty()
+                {
+                    return TokenCounterKind::HuggingFace { model_id };
                 }
                 TokenCounterKind::Word
             }

@@ -65,14 +65,13 @@ impl OllamaEmbeddingEngine {
 
         let mut default_headers = reqwest::header::HeaderMap::new();
 
-        if let Some(api_key) = &config.api_key {
-            if !api_key.is_empty() {
-                let bearer = format!("Bearer {api_key}");
-                let auth_value = reqwest::header::HeaderValue::from_str(&bearer).map_err(|e| {
-                    EmbeddingError::ConfigError(format!("Invalid API key value: {e}"))
-                })?;
-                default_headers.insert(reqwest::header::AUTHORIZATION, auth_value);
-            }
+        if let Some(api_key) = &config.api_key
+            && !api_key.is_empty()
+        {
+            let bearer = format!("Bearer {api_key}");
+            let auth_value = reqwest::header::HeaderValue::from_str(&bearer)
+                .map_err(|e| EmbeddingError::ConfigError(format!("Invalid API key value: {e}")))?;
+            default_headers.insert(reqwest::header::AUTHORIZATION, auth_value);
         }
 
         let client = reqwest::Client::builder()
@@ -257,10 +256,10 @@ fn extract_embedding_from_value(value: &Value) -> EmbeddingResult<Vec<f32>> {
 
     // Shape 3: {"data": [{"embedding": [...]}]}
     if let Some(data) = value.get("data") {
-        if let Some(first) = data.get(0) {
-            if let Some(embedding) = first.get("embedding") {
-                return parse_f32_array(embedding);
-            }
+        if let Some(first) = data.get(0)
+            && let Some(embedding) = first.get("embedding")
+        {
+            return parse_f32_array(embedding);
         }
         return Err(EmbeddingError::ApiError(
             "Response 'data' array is empty or missing 'embedding' field".to_string(),
