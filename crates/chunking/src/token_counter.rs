@@ -16,7 +16,7 @@ impl TokenCounter for WordCounter {
 
 #[cfg(feature = "hf-tokenizer")]
 use std::{path::Path, sync::Arc};
-#[cfg(feature = "hf-tokenizer")]
+#[cfg(any(feature = "hf-tokenizer", feature = "tiktoken"))]
 use crate::error::ChunkingError;
 
 /// Token counter backed by a HuggingFace `tokenizers` tokenizer.
@@ -60,6 +60,32 @@ impl TokenCounter for HuggingFaceTokenCounter {
     }
 }
 
+/// Token counter using TikToken BPE encoding (cl100k_base).
+///
+/// Use when chunking for OpenAI models (text-embedding-3-large, GPT-4, etc.).
+/// Matches Python's TikTokenTokenizer with cl100k_base encoding.
+#[cfg(feature = "tiktoken")]
+pub struct TikTokenCounter {
+    bpe: tiktoken_rs::CoreBPE,
+}
+
+#[cfg(feature = "tiktoken")]
+impl TikTokenCounter {
+    /// Create with cl100k_base encoding (matches GPT-4, text-embedding-3-large).
+    pub fn cl100k_base() -> Result<Self, ChunkingError> {
+        let bpe = tiktoken_rs::cl100k_base()
+            .map_err(|e| ChunkingError::TokenizerError(e.to_string()))?;
+        Ok(Self { bpe })
+    }
+}
+
+#[cfg(feature = "tiktoken")]
+impl TokenCounter for TikTokenCounter {
+    fn count_tokens(&self, text: &str) -> usize {
+        self.bpe.encode_with_special_tokens(text).len()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -93,5 +119,32 @@ mod hf_tests {
     fn test_from_file_nonexistent() {
         let result = HuggingFaceTokenCounter::from_file("/nonexistent/tokenizer.json");
         assert!(result.is_err());
+    }
+}
+
+#[cfg(all(test, feature = "tiktoken"))]
+mod tiktoken_tests {
+    use super::*;
+
+    #[test]
+    fn cl100k_base_constructs() {
+        let counter = TikTokenCounter::cl100k_base();
+        assert!(counter.is_ok());
+    }
+
+    #[test]
+    fn counts_known_text() {
+        let counter = TikTokenCounter::cl100k_base().expect("cl100k_base should load");
+        // "Hello, world!" is 4 tokens in cl100k_base
+        let count = counter.count_tokens("Hello, world!");
+        assert!(count > 0);
+        // verify it's in reasonable range (3-6 tokens for this string)
+        assert!(count >= 3 && count <= 6, "Expected 3-6 tokens, got {}", count);
+    }
+
+    #[test]
+    fn empty_string_is_zero_tokens() {
+        let counter = TikTokenCounter::cl100k_base().expect("cl100k_base should load");
+        assert_eq!(counter.count_tokens(""), 0);
     }
 }

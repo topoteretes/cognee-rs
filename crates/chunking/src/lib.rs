@@ -17,3 +17,5 @@ pub use text_chunker::chunk_text;
 pub use token_counter::{TokenCounter, WordCounter};
 #[cfg(feature = "hf-tokenizer")]
 pub use token_counter::HuggingFaceTokenCounter;
+#[cfg(feature = "tiktoken")]
+pub use token_counter::TikTokenCounter;
