@@ -25,7 +25,7 @@ const DEFAULT_TOP_K: usize = 5;
 const DEFAULT_WIDE_SEARCH_TOP_K: usize = 100;
 const TEMPORAL_DATA_TYPE: &str = "Event";
 const TEMPORAL_FIELD_NAME: &str = "name";
-const DEFAULT_TEMPORAL_INTERVAL_PROMPT: &str = "Extract the temporal interval for a user question. Return JSON with optional string fields `start` and `end` in ISO-like format (YYYY, YYYY-MM, YYYY-MM-DD, or RFC3339). Leave missing bounds as null.";
+const DEFAULT_TEMPORAL_INTERVAL_PROMPT: &str = "You are tasked with identifying relevant time periods where the answer to a given query should be searched.\nCurrent date is:  `{time_now}`. Determine relevant period(s) and return structured intervals.\n\nExtraction rules:\n\n1. Query without specific timestamp: use the time period with starts_at set to None and ends_at set to now.\n2. Explicit time intervals: If the query specifies a range (e.g., from 2010 to 2020, between January and March 2023), extract both start and end dates. Always assign the earlier date to starts_at and the later date to ends_at.\n3. Single timestamp: If the query refers to one specific moment (e.g., in 2015, on March 5, 2022), set starts_at and ends_at to that same timestamp.\n4. Open-ended time references: For phrases such as \"before X\" or \"after X\", represent the unspecified side as None. For example: before 2009 → starts_at: None, ends_at: 2009; after 2009 → starts_at: 2009, ends_at: None.\n5. Current-time references (\"now\", \"current\", \"today\"): If the query explicitly refers to the present, set both starts_at and ends_at to now (the ingestion timestamp).\n6. \"Who is\" and \"Who was\" questions: These imply a general identity or biographical inquiry without a specific temporal scope. Set both starts_at and ends_at to None.\n7. Ordering rule: Always ensure the earlier date is assigned to starts_at and the later date to ends_at.\n8. No temporal information: If no valid or inferable time reference is found, set both starts_at and ends_at to None.";
 
 const TEMPORAL_TIME_KEYS: [&str; 11] = [
     "timestamp",
@@ -43,8 +43,8 @@ const TEMPORAL_TIME_KEYS: [&str; 11] = [
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 struct QueryInterval {
-    start: Option<String>,
-    end: Option<String>,
+    starts_at: Option<String>,
+    ends_at: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -57,11 +57,11 @@ impl QueryInterval {
     fn parse(self) -> ParsedInterval {
         ParsedInterval {
             start: self
-                .start
+                .starts_at
                 .as_deref()
                 .and_then(|value| parse_bound(value, false)),
             end: self
-                .end
+                .ends_at
                 .as_deref()
                 .and_then(|value| parse_bound(value, true)),
         }
@@ -117,11 +117,12 @@ impl TemporalRetriever {
     }
 
     async fn extract_interval(&self, query: &str) -> Result<Option<ParsedInterval>, SearchError> {
-        let system_prompt = self
+        let now = chrono::Local::now().format("%d-%m-%Y").to_string();
+        let prompt_template = self
             .temporal_interval_prompt
             .as_deref()
-            .unwrap_or(DEFAULT_TEMPORAL_INTERVAL_PROMPT)
-            .to_string();
+            .unwrap_or(DEFAULT_TEMPORAL_INTERVAL_PROMPT);
+        let system_prompt = prompt_template.replace("{time_now}", &now);
 
         let interval = match self
             .llm
@@ -948,8 +949,8 @@ mod tests {
         let llm = Arc::new(TestLlm {
             completion_response: "temporal answer".to_string(),
             interval_response: Some(QueryInterval {
-                start: Some("2024-01-01".to_string()),
-                end: Some("2024-12-31".to_string()),
+                starts_at: Some("2024-01-01".to_string()),
+                ends_at: Some("2024-12-31".to_string()),
             }),
             fail_structured_output: false,
             last_messages: Mutex::new(vec![]),
