@@ -15,7 +15,132 @@ use uuid::Uuid;
 use crate::retrievers::{SearchRetriever, SearchRetrieverRef};
 use crate::types::{Rule, SearchContext, SearchError, SearchItem, SearchOutput, SearchType};
 
-const DEFAULT_FEELING_LUCKY_PROMPT: &str = "You are a search method selector. Return ONLY one valid search type name in SCREAMING_SNAKE_CASE.";
+const DEFAULT_FEELING_LUCKY_PROMPT: &str = "\
+You are an expert query analyzer for a **GraphRAG system**. Your primary goal is to analyze a user's query and select the single most appropriate `SearchType` tool to answer it.
+
+Here are the available `SearchType` tools and their specific functions:
+
+- **`SUMMARIES`**: The `SUMMARIES` search type retrieves summarized information from the knowledge graph.
+
+  **Best for:**
+
+  - Getting concise overviews of topics
+  - Summarizing large amounts of information
+  - Quick understanding of complex subjects
+
+  **Best for:**
+
+  - Discovering how entities are connected
+  - Understanding relationships between concepts
+  - Exploring the structure of your knowledge graph
+
+* **`CHUNKS`**: The `CHUNKS` search type retrieves specific facts and information chunks from the knowledge graph.
+
+  **Best for:**
+
+  - Finding specific facts
+  - Getting direct answers to questions
+  - Retrieving precise information
+
+* **`RAG_COMPLETION`**: Use for direct factual questions that can likely be answered by retrieving a specific text passage from a document. It does not use the graph's relationship structure.
+
+  **Best for:**
+
+  - Getting detailed explanations or comprehensive answers
+  - Combining multiple pieces of information
+  - Getting a single, coherent answer that is generated from relevant text passages
+
+* **`GRAPH_COMPLETION`**: The `GRAPH_COMPLETION` search type leverages the graph structure to provide more contextually aware completions.
+
+  **Best for:**
+
+  - Complex queries requiring graph traversal
+  - Questions that benefit from understanding relationships
+  - Queries where context from connected entities matters
+
+* **`GRAPH_SUMMARY_COMPLETION`**: The `GRAPH_SUMMARY_COMPLETION` search type combines graph traversal with summarization to provide concise but comprehensive answers.
+
+  **Best for:**
+
+  - Getting summarized information that requires understanding relationships
+  - Complex topics that need concise explanations
+  - Queries that benefit from both graph structure and summarization
+
+* **`GRAPH_COMPLETION_COT`**: The `GRAPH_COMPLETION_COT` search type combines graph traversal with chain of thought to provide answers to complex multi hop questions.
+
+  **Best for:**
+
+  - Multi-hop questions that require following several linked concepts or entities
+  - Tracing relational paths in a knowledge graph while also getting clear step-by-step reasoning
+  - Summarizing completx linkages into a concise, human-readable answer once all hops have been explored
+
+* **`GRAPH_COMPLETION_CONTEXT_EXTENSION`**: The `GRAPH_COMPLETION_CONTEXT_EXTENSION` search type combines graph traversal with multi-round context extension.
+
+  **Best for:**
+
+  - Iterative, multi-hop queries where intermediate facts aren't all present upfront
+  - Complex linkages that benefit from multi-round \"search → extend context → reason\" loops to uncover deep connections.
+  - Sparse or evolving graphs that require on-the-fly expansion—issuing follow-up searches to discover missing nodes or properties
+
+* **`CODE`**: The `CODE` search type is specialized for retrieving and understanding code-related information from the knowledge graph.
+
+  **Best for:**
+
+  - Code-related queries
+  - Programming examples and patterns
+  - Technical documentation searches
+
+* **`CYPHER`**: The `CYPHER` search type allows user to execute raw Cypher queries directly against your graph database.
+
+  **Best for:**
+
+  - Executing precise graph queries with full control
+  - Leveraging Cypher features and functions
+  - Getting raw data directly from the graph database
+
+* **`NATURAL_LANGUAGE`**: The `NATURAL_LANGUAGE` search type translates a natural language question into a precise Cypher query that is executed directly against the graph database.
+
+  **Best for:**
+
+  - Getting precise, structured answers from the graph using natural language.
+  - Performing advanced graph operations like filtering and aggregating data using natural language.
+  - Asking precise, database-style questions without needing to write Cypher.
+
+**Examples:**
+
+Query: \"Summarize the key findings from these research papers\"
+Response: `SUMMARIES`
+
+Query: \"When was Einstein born?\"
+Response: `CHUNKS`
+
+Query: \"Explain Einstein's contributions to physics\"
+Response: `RAG_COMPLETION`
+
+Query: \"Provide a comprehensive analysis of how these papers contribute to the field\"
+Response: `GRAPH_COMPLETION`
+
+Query: \"Explain the overall architecture of this codebase\"
+Response: `GRAPH_SUMMARY_COMPLETION`
+
+Query: \"Who was the father of the person who invented the lightbulb\"
+Response: `GRAPH_COMPLETION_COT`
+
+Query: \"What county was XY born in\"
+Response: `GRAPH_COMPLETION_CONTEXT_EXTENSION`
+
+Query: \"How to implement authentication in this codebase\"
+Response: `CODE`
+
+Query: \"MATCH (n) RETURN labels(n) as types, n.name as name LIMIT 10\"
+Response: `CYPHER`
+
+Query: \"Get all nodes connected to John\"
+Response: `NATURAL_LANGUAGE`
+
+
+
+Your response MUST be a single word, consisting of only the chosen `SearchType` name. Do not provide any explanation.";
 const DEFAULT_FEELING_LUCKY_FALLBACK: SearchType = SearchType::RagCompletion;
 
 const DEFAULT_FEEDBACK_PROMPT: &str = "Extract user feedback sentiment and a numeric score in range [-1, 1]. Return JSON with fields: sentiment (string), score (number).";
@@ -79,22 +204,17 @@ impl FeelingLuckyRetriever {
             .replace([' ', '-'], "_")
             .to_ascii_uppercase();
 
-        serde_json::from_value::<SearchType>(Value::String(normalized)).ok()
+        // The Python prompt uses "CODE" for what the Rust enum calls CodingRules.
+        let mapped = match normalized.as_str() {
+            "CODE" => "CODING_RULES".to_string(),
+            other => other.to_string(),
+        };
+
+        serde_json::from_value::<SearchType>(Value::String(mapped)).ok()
     }
 
     async fn select_retriever(&self, query: &str) -> Result<SearchRetrieverRef, SearchError> {
-        let allowed_types = self
-            .retrievers
-            .keys()
-            .copied()
-            .filter(|search_type| *search_type != SearchType::FeelingLucky)
-            .map(|search_type| format!("{:?}", search_type).to_ascii_uppercase())
-            .collect::<Vec<_>>()
-            .join(", ");
-
-        let selector_prompt = format!(
-            "{DEFAULT_FEELING_LUCKY_PROMPT}\nAllowed types: {allowed_types}\nReturn only one value."
-        );
+        let selector_prompt = DEFAULT_FEELING_LUCKY_PROMPT.to_string();
 
         let response = self
             .llm
@@ -664,6 +784,64 @@ mod tests {
                 assert_eq!(rules[0].text, "Prefer explicit error handling");
             }
             _ => panic!("expected rules output"),
+        }
+    }
+
+    #[test]
+    fn feeling_lucky_prompt_contains_python_search_types() {
+        use super::DEFAULT_FEELING_LUCKY_PROMPT;
+        assert!(DEFAULT_FEELING_LUCKY_PROMPT.contains("expert query analyzer"));
+        assert!(DEFAULT_FEELING_LUCKY_PROMPT.contains("GraphRAG system"));
+        assert!(DEFAULT_FEELING_LUCKY_PROMPT.contains("SUMMARIES"));
+        assert!(DEFAULT_FEELING_LUCKY_PROMPT.contains("CHUNKS"));
+        assert!(DEFAULT_FEELING_LUCKY_PROMPT.contains("RAG_COMPLETION"));
+        assert!(DEFAULT_FEELING_LUCKY_PROMPT.contains("GRAPH_COMPLETION"));
+        assert!(DEFAULT_FEELING_LUCKY_PROMPT.contains("GRAPH_COMPLETION_COT"));
+        assert!(DEFAULT_FEELING_LUCKY_PROMPT.contains("NATURAL_LANGUAGE"));
+        assert!(DEFAULT_FEELING_LUCKY_PROMPT.contains("Your response MUST be a single word"));
+    }
+
+    #[test]
+    fn parse_search_type_maps_code_to_coding_rules() {
+        assert_eq!(
+            FeelingLuckyRetriever::parse_search_type("CODE"),
+            Some(SearchType::CodingRules)
+        );
+    }
+
+    #[tokio::test]
+    async fn feeling_lucky_selects_graph_completion_when_llm_says_so() {
+        let llm = Arc::new(TestLlm {
+            plain_responses: Mutex::new(VecDeque::from(["GRAPH_COMPLETION".to_string()])),
+            feedback_response: None,
+        });
+
+        let rag: SearchRetrieverRef = Arc::new(FixedRetriever {
+            kind: SearchType::RagCompletion,
+            text: "rag result".to_string(),
+        });
+        let graph: SearchRetrieverRef = Arc::new(FixedRetriever {
+            kind: SearchType::GraphCompletion,
+            text: "graph result".to_string(),
+        });
+
+        let retriever = FeelingLuckyRetriever::new(
+            llm,
+            HashMap::from([
+                (SearchType::RagCompletion, rag),
+                (SearchType::GraphCompletion, Arc::clone(&graph)),
+            ]),
+            Some(SearchType::RagCompletion),
+            None,
+        );
+
+        let output = retriever
+            .get_completion("explain relationships", None, &SessionContext::default())
+            .await
+            .unwrap();
+        match output {
+            SearchOutput::Text(text) => assert_eq!(text, "graph result"),
+            _ => panic!("expected text output"),
         }
     }
 }
