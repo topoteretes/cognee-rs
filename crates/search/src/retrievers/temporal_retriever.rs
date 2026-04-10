@@ -23,7 +23,7 @@ use crate::types::{
 };
 use crate::utils::{build_messages_with_history, render_graph_user_prompt, resolve_system_prompt};
 
-const DEFAULT_TOP_K: usize = 5;
+const DEFAULT_TOP_K: usize = 10;
 const DEFAULT_WIDE_SEARCH_TOP_K: usize = 100;
 const TEMPORAL_DATA_TYPE: &str = "Event";
 const TEMPORAL_FIELD_NAME: &str = "name";

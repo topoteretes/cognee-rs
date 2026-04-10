@@ -15,7 +15,7 @@ use crate::utils::{build_messages_with_history, render_user_prompt, resolve_syst
 
 const CHUNKS_DATA_TYPE: &str = "DocumentChunk";
 const CHUNKS_FIELD_NAME: &str = "text";
-const DEFAULT_TOP_K: usize = 1;
+const DEFAULT_TOP_K: usize = 10;
 
 pub struct CompletionRetriever {
     vector_db: Arc<dyn VectorDB>,

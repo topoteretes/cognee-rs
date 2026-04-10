@@ -11,7 +11,7 @@ use crate::types::{SearchContext, SearchError, SearchOutput, SearchParams, Searc
 
 const SUMMARIES_DATA_TYPE: &str = "TextSummary";
 const SUMMARIES_FIELD_NAME: &str = "text";
-const DEFAULT_TOP_K: usize = 5;
+const DEFAULT_TOP_K: usize = 10;
 
 pub struct SummariesRetriever {
     vector_db: Arc<dyn VectorDB>,

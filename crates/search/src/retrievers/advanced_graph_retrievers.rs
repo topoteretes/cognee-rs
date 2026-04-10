@@ -22,7 +22,7 @@ use crate::utils::{
     render_graph_user_prompt, resolve_system_prompt,
 };
 
-const DEFAULT_TOP_K: usize = 5;
+const DEFAULT_TOP_K: usize = 10;
 const DEFAULT_WIDE_SEARCH_TOP_K: usize = 100;
 const DEFAULT_CONTEXT_EXTENSION_ROUNDS: usize = 4;
 const DEFAULT_COT_MAX_ITER: usize = 4;

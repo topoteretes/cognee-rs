@@ -53,7 +53,7 @@ pub struct GraphRetrievalConfig {
 impl Default for GraphRetrievalConfig {
     fn default() -> Self {
         Self {
-            top_k: 5,
+            top_k: 10,
             wide_search_top_k: DEFAULT_WIDE_SEARCH_TOP_K,
             triplet_distance_penalty: DEFAULT_TRIPLET_DISTANCE_PENALTY,
             feedback_influence: 0.0,

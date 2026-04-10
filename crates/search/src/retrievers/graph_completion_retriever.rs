@@ -22,7 +22,7 @@ use crate::utils::{
     resolve_system_prompt,
 };
 
-const DEFAULT_TOP_K: usize = 5;
+const DEFAULT_TOP_K: usize = 10;
 const DEFAULT_WIDE_SEARCH_TOP_K: usize = 100;
 
 pub struct GraphCompletionRetriever {
