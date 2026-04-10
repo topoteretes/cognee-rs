@@ -229,9 +229,18 @@ impl NaturalLanguageRetriever {
         let mut previous_attempts = String::from("No attempts yet.");
 
         for _ in 0..self.max_attempts {
-            let cypher_query = self
+            let cypher_query = match self
                 .generate_cypher_query(query, &edge_schemas, &previous_attempts)
-                .await?;
+                .await
+            {
+                Ok(cq) => cq,
+                Err(error) => {
+                    previous_attempts.push_str(&format!(
+                        "Query: Not generated -> Executed with error: {error}\\n"
+                    ));
+                    continue;
+                }
+            };
 
             if cypher_query.is_empty() {
                 previous_attempts.push_str("Query: <empty> -> Result: None\\n");
@@ -555,6 +564,142 @@ mod tests {
 
         match output {
             SearchOutput::GraphQueryRows(rows) => assert_eq!(rows.len(), 1),
+            _ => panic!("expected graph query rows"),
+        }
+    }
+
+    struct FailThenSucceedLlm {
+        fail_count: Mutex<usize>,
+        success_response: String,
+    }
+
+    impl FailThenSucceedLlm {
+        fn new(fail_count: usize, success_response: &str) -> Self {
+            Self {
+                fail_count: Mutex::new(fail_count),
+                success_response: success_response.to_string(),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl Llm for FailThenSucceedLlm {
+        async fn generate(
+            &self,
+            _messages: Vec<Message>,
+            _options: Option<GenerationOptions>,
+        ) -> LlmResult<GenerationResponse> {
+            let mut remaining = self.fail_count.lock().unwrap(); // lock poison is unrecoverable
+            if *remaining > 0 {
+                *remaining -= 1;
+                return Err(LlmError::ApiError("simulated LLM failure".to_string()));
+            }
+            Ok(GenerationResponse {
+                content: self.success_response.clone(),
+                model: "test".to_string(),
+                usage: Some(TokenUsage {
+                    prompt_tokens: 1,
+                    completion_tokens: 1,
+                    total_tokens: 2,
+                }),
+                finish_reason: Some("stop".to_string()),
+            })
+        }
+
+        async fn create_structured_output_with_messages_raw(
+            &self,
+            _messages: Vec<Message>,
+            _json_schema: &serde_json::Value,
+            _options: Option<GenerationOptions>,
+        ) -> LlmResult<serde_json::Value> {
+            Err(LlmError::ConfigError("not implemented".to_string()))
+        }
+
+        fn model(&self) -> &str {
+            "test"
+        }
+    }
+
+    #[tokio::test]
+    async fn natural_language_retriever_retries_on_llm_error() {
+        let graph_db = Arc::new(TestGraphDb {
+            empty: false,
+            rows_by_query: std::collections::HashMap::from([
+                (
+                    "\n            MATCH (n)\n            UNWIND keys(n) AS prop\n            RETURN DISTINCT labels(n) AS NodeLabels, collect(DISTINCT prop) AS Properties;\n            "
+                        .to_string(),
+                    vec![vec![json!(["Entity"]), json!(["name"])]],
+                ),
+                (
+                    "\n            MATCH ()-[r]->()\n            UNWIND keys(r) AS key\n            RETURN DISTINCT key;\n            "
+                        .to_string(),
+                    vec![vec![json!("relationship")]],
+                ),
+                (
+                    "MATCH (n) WHERE n.name = 'Alice' RETURN n".to_string(),
+                    vec![vec![json!({"name": "Alice"})]],
+                ),
+            ]),
+        });
+
+        // LLM fails on first call, succeeds on second with a valid query
+        let llm = Arc::new(FailThenSucceedLlm::new(
+            1,
+            "MATCH (n) WHERE n.name = 'Alice' RETURN n",
+        ));
+
+        let retriever = NaturalLanguageRetriever::new(graph_db, llm, Some(3), None);
+        let output = retriever
+            .get_completion("Find Alice", None, &SessionContext::default())
+            .await
+            .unwrap();
+
+        match output {
+            SearchOutput::GraphQueryRows(rows) => {
+                assert_eq!(
+                    rows.len(),
+                    1,
+                    "should return results after recovering from LLM error"
+                );
+            }
+            _ => panic!("expected graph query rows"),
+        }
+    }
+
+    #[tokio::test]
+    async fn natural_language_retriever_returns_empty_when_all_llm_attempts_fail() {
+        let graph_db = Arc::new(TestGraphDb {
+            empty: false,
+            rows_by_query: std::collections::HashMap::from([
+                (
+                    "\n            MATCH (n)\n            UNWIND keys(n) AS prop\n            RETURN DISTINCT labels(n) AS NodeLabels, collect(DISTINCT prop) AS Properties;\n            "
+                        .to_string(),
+                    vec![vec![json!(["Entity"]), json!(["name"])]],
+                ),
+                (
+                    "\n            MATCH ()-[r]->()\n            UNWIND keys(r) AS key\n            RETURN DISTINCT key;\n            "
+                        .to_string(),
+                    vec![vec![json!("relationship")]],
+                ),
+            ]),
+        });
+
+        // LLM fails on all 3 attempts
+        let llm = Arc::new(FailThenSucceedLlm::new(3, "should not reach this"));
+
+        let retriever = NaturalLanguageRetriever::new(graph_db, llm, Some(3), None);
+        let output = retriever
+            .get_completion("Find Alice", None, &SessionContext::default())
+            .await
+            .unwrap();
+
+        match output {
+            SearchOutput::GraphQueryRows(rows) => {
+                assert!(
+                    rows.is_empty(),
+                    "should return empty when all LLM attempts fail"
+                );
+            }
             _ => panic!("expected graph query rows"),
         }
     }
