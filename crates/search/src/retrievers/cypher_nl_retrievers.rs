@@ -11,7 +11,73 @@ use crate::retrievers::SearchRetriever;
 use crate::types::{SearchContext, SearchError, SearchItem, SearchOutput, SearchType};
 
 const DEFAULT_NL_MAX_ATTEMPTS: usize = 3;
-const NL_SYSTEM_PROMPT_TEMPLATE: &str = "You convert natural language requests into graph queries. Return ONLY a query string.\n\nGraph edge schema:\n{edge_schemas}\n\nPrevious attempts:\n{previous_attempts}";
+const NL_SYSTEM_PROMPT_TEMPLATE: &str = "\
+You are an expert Neo4j Cypher query generator tasked with translating natural language questions into precise, optimized Cypher queries.
+
+TASK:
+Generate a valid, executable Cypher query that accurately answers the user's question based on the provided graph schema.
+
+GRAPH SCHEMA INFORMATION:
+- You will be given node labels and their properties in format: NodeLabels [list of properties]
+- You will be given relationship types between nodes
+- ONLY use node labels, properties, and relationship types that exist in the provided schema
+- Respect relationship directions (source→target) exactly as specified in the schema
+- Properties may have specific formats (e.g., dates, codes) - infer these from examples when possible
+
+QUERY REQUIREMENTS:
+1. Return ONLY the exact Cypher query with NO explanations, comments, or markdown
+2. Generate syntactically correct Neo4j Cypher code (Neo4j 4.4+ compatible)
+3. Be precise - match the exact property names and relationship types from the schema
+4. Handle complex queries by breaking them into logical pattern matching parts
+5. Use parameters (e.g., $name) for literal values when appropriate
+6. Use appropriate data types for parameters (strings, numbers, booleans)
+
+PERFORMANCE OPTIMIZATION:
+1. Use indexes and constraints when available (assume they exist on ID properties)
+2. Include LIMIT clauses for queries that could return large result sets
+3. Use efficient patterns - avoid unnecessary pattern complexity
+4. Consider using OPTIONAL MATCH for parts that might not exist
+5. For aggregation, use efficient aggregation functions (count, sum, avg)
+6. For pathfinding, consider using shortestPath() or apoc.algo.* procedures
+
+ERROR PREVENTION:
+1. Validate your query steps mentally before finalizing
+2. Ensure relationship directions match schema
+3. Check property names match exactly what's in the schema
+4. Use pattern variables consistently throughout the query
+5. If previous attempts failed, analyze the failures and adjust your approach
+
+Node schemas:
+- EntityType
+Properties: description, ontology_valid, name, created_at, type, version, topological_rank, updated_at, metadata, id
+Purpose: Represents the categories or classifications for entities in the database.
+
+- Entity
+Properties: description, ontology_valid, name, created_at, type, version, topological_rank, updated_at, metadata, id
+Purpose: Represents individual entities that belong to a specific type or classification.
+
+- TextDocument
+Properties: raw_data_location, name, mime_type, external_metadata, created_at, type, version, topological_rank, updated_at, metadata, id
+Purpose: Represents documents containing text data, along with metadata about their storage and format.
+
+- DocumentChunk
+Properties: version, created_at, type, topological_rank, cut_type, text, metadata, chunk_index, chunk_size, updated_at, id
+Purpose: Represents segmented portions of larger documents, useful for processing or analysis at a more granular level.
+
+- TextSummary
+Properties: topological_rank, metadata, id, type, updated_at, created_at, text, version
+Purpose: Represents summarized content generated from larger text documents, retaining essential information and metadata.
+
+Edge schema (relationship properties):
+`{edge_schemas}`
+
+This queries doesn't work. Do NOT use them:
+`{previous_attempts}`
+
+Example 1:
+Get all nodes connected to John
+MATCH (n:Entity {'name': 'John'})--(neighbor)
+RETURN n, neighbor";
 
 fn cypher_queries_enabled() -> bool {
     env::var("ALLOW_CYPHER_QUERY")
@@ -160,7 +226,7 @@ impl NaturalLanguageRetriever {
 
     async fn execute_nl_query(&self, query: &str) -> Result<Vec<Vec<Value>>, SearchError> {
         let (_node_schemas, edge_schemas) = self.get_graph_schema().await?;
-        let mut previous_attempts = String::new();
+        let mut previous_attempts = String::from("No attempts yet.");
 
         for _ in 0..self.max_attempts {
             let cypher_query = self
@@ -491,5 +557,22 @@ mod tests {
             SearchOutput::GraphQueryRows(rows) => assert_eq!(rows.len(), 1),
             _ => panic!("expected graph query rows"),
         }
+    }
+
+    #[test]
+    fn nl_system_prompt_contains_required_sections() {
+        use super::NL_SYSTEM_PROMPT_TEMPLATE;
+        assert!(NL_SYSTEM_PROMPT_TEMPLATE.contains("{edge_schemas}"));
+        assert!(NL_SYSTEM_PROMPT_TEMPLATE.contains("{previous_attempts}"));
+        assert!(NL_SYSTEM_PROMPT_TEMPLATE.contains("QUERY REQUIREMENTS:"));
+        assert!(NL_SYSTEM_PROMPT_TEMPLATE.contains("PERFORMANCE OPTIMIZATION:"));
+        assert!(NL_SYSTEM_PROMPT_TEMPLATE.contains("ERROR PREVENTION:"));
+        assert!(NL_SYSTEM_PROMPT_TEMPLATE.contains("Node schemas:"));
+        assert!(NL_SYSTEM_PROMPT_TEMPLATE.contains("EntityType"));
+        assert!(NL_SYSTEM_PROMPT_TEMPLATE.contains("Entity"));
+        assert!(NL_SYSTEM_PROMPT_TEMPLATE.contains("TextDocument"));
+        assert!(NL_SYSTEM_PROMPT_TEMPLATE.contains("DocumentChunk"));
+        assert!(NL_SYSTEM_PROMPT_TEMPLATE.contains("TextSummary"));
+        assert!(NL_SYSTEM_PROMPT_TEMPLATE.contains("Example 1:"));
     }
 }
