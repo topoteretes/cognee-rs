@@ -14,6 +14,7 @@ pub use retrievers::{
     SearchRetrieverRef, SummariesRetriever, TemporalRetriever, TripletRetriever,
 };
 pub use types::{
-    Rule, SearchContext, SearchError, SearchGraph, SearchGraphEdge, SearchGraphNode, SearchItem,
-    SearchOutput, SearchParams, SearchRequest, SearchResponse, SearchType,
+    FeedbackDetectionResult, Rule, SearchContext, SearchError, SearchGraph, SearchGraphEdge,
+    SearchGraphNode, SearchItem, SearchOutput, SearchParams, SearchRequest, SearchResponse,
+    SearchType,
 };

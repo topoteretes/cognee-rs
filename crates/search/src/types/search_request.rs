@@ -40,6 +40,9 @@ pub struct SearchRequest {
     /// When set, routes to a community/custom retriever registered by this name,
     /// ignoring `search_type`.
     pub custom_search_type: Option<String>,
+    /// When `true` and a session is active, automatically detect if the query
+    /// contains feedback about the previous response before executing the search.
+    pub auto_feedback_detection: Option<bool>,
 }
 
 impl SearchRequest {

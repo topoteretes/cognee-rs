@@ -88,6 +88,7 @@ fn make_request(query: &str, search_type: SearchType, save: Option<bool>) -> Sea
         retriever_specific_config: None,
         response_schema: None,
         custom_search_type: None,
+        auto_feedback_detection: None,
     }
 }
 
@@ -339,6 +340,7 @@ async fn test_search_type_matrix() {
         retriever_specific_config: None,
         response_schema: None,
         custom_search_type: None,
+        auto_feedback_detection: None,
     };
     let chunks_resp = orchestrator
         .search(&chunks_ctx)

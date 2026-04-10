@@ -97,6 +97,7 @@ pub fn run(args: SearchArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> 
             retriever_specific_config: None,
             response_schema: None,
             custom_search_type: None,
+            auto_feedback_detection: None,
         };
 
         let response = orchestrator

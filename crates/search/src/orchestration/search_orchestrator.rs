@@ -2,7 +2,9 @@ use crate::orchestration::{
     SearchTypeRegistry, merge_scoped_contexts, prepare_search_result, scope_context_by_datasets,
 };
 use crate::types::{SearchError, SearchOutput, SearchParams, SearchRequest, SearchResponse};
+use crate::utils::detect_feedback;
 use cognee_database::{SearchHistoryDb, SearchHistoryEntry};
+use cognee_llm::Llm;
 use cognee_session::{SessionContext, SessionManager};
 use std::sync::Arc;
 
@@ -10,6 +12,7 @@ pub struct SearchOrchestrator {
     registry: SearchTypeRegistry,
     database: Option<Arc<dyn SearchHistoryDb>>,
     session_manager: Option<Arc<SessionManager>>,
+    llm: Option<Arc<dyn Llm>>,
     /// When `true`, `last_accessed` timestamps are updated on source Data records
     /// after each successful retrieval. Disabled by default to avoid unexpected
     /// write traffic on read-only deployments.
@@ -22,6 +25,7 @@ impl SearchOrchestrator {
             registry,
             database: None,
             session_manager: None,
+            llm: None,
             enable_access_tracking: false,
         }
     }
@@ -33,6 +37,11 @@ impl SearchOrchestrator {
 
     pub fn with_session_manager(mut self, session_manager: Arc<SessionManager>) -> Self {
         self.session_manager = Some(session_manager);
+        self
+    }
+
+    pub fn with_llm(mut self, llm: Arc<dyn Llm>) -> Self {
+        self.llm = Some(llm);
         self
     }
 
@@ -215,6 +224,32 @@ impl SearchOrchestrator {
                 }
             };
 
+        // Auto-feedback detection: if session is active and detection is enabled,
+        // check if the user message contains feedback before routing to the retriever.
+        if request.auto_feedback_detection.unwrap_or(false)
+            && let (Some(session_id), Some(llm)) = (&request.session_id, &self.llm)
+            && !session_id.is_empty()
+        {
+            let detection = detect_feedback(llm.as_ref(), &request.query_text).await;
+            if detection.feedback_detected && !detection.contains_followup_question {
+                // Pure feedback — acknowledge and return early
+                let acknowledgment = detection
+                    .response_to_user
+                    .unwrap_or_else(|| "Thank you for your feedback!".to_string());
+                let response = prepare_search_result(
+                    request.search_type,
+                    SearchOutput::Text(acknowledgment),
+                    None,
+                    request.dataset_ids.clone(),
+                    false,
+                    request.use_combined_context(),
+                    request.verbose(),
+                );
+                return Ok(response);
+            }
+            // If feedback with follow-up, or no feedback, proceed normally
+        }
+
         let output = retriever
             .get_completion(
                 &request.query_text,
@@ -357,6 +392,7 @@ mod tests {
             retriever_specific_config: None,
             response_schema: None,
             custom_search_type: None,
+            auto_feedback_detection: None,
         };
 
         let response = orchestrator.search(&request).await.unwrap();
@@ -399,6 +435,7 @@ mod tests {
             retriever_specific_config: None,
             response_schema: None,
             custom_search_type: None,
+            auto_feedback_detection: None,
         };
 
         let response = orchestrator.search(&request).await.unwrap();
@@ -446,6 +483,7 @@ mod tests {
             retriever_specific_config: None,
             response_schema: None,
             custom_search_type: None,
+            auto_feedback_detection: None,
         };
 
         let response = orchestrator.search(&request).await.unwrap();
@@ -520,6 +558,7 @@ mod tests {
             retriever_specific_config: None,
             response_schema: None,
             custom_search_type: None,
+            auto_feedback_detection: None,
         };
 
         let response = orchestrator.search(&request).await.unwrap();
@@ -617,6 +656,7 @@ mod tests {
             retriever_specific_config: None,
             response_schema: None,
             custom_search_type: None,
+            auto_feedback_detection: None,
         };
 
         let response = orchestrator.search(&request).await.unwrap();
@@ -708,6 +748,7 @@ mod tests {
             retriever_specific_config: None,
             response_schema: None,
             custom_search_type: None,
+            auto_feedback_detection: None,
         };
 
         let response = orchestrator.search(&request).await.unwrap();
@@ -754,6 +795,7 @@ mod tests {
             retriever_specific_config: None,
             response_schema: None,
             custom_search_type: None,
+            auto_feedback_detection: None,
         };
 
         let _ = orchestrator.search(&request).await.unwrap();
@@ -802,6 +844,7 @@ mod tests {
                 retriever_specific_config: None,
                 response_schema: None,
                 custom_search_type: None,
+                auto_feedback_detection: None,
             },
             SearchRequest {
                 query_text: "second".to_string(),
@@ -825,6 +868,7 @@ mod tests {
                 retriever_specific_config: None,
                 response_schema: None,
                 custom_search_type: None,
+                auto_feedback_detection: None,
             },
         ];
 
@@ -867,6 +911,7 @@ mod tests {
             retriever_specific_config: None,
             response_schema: None,
             custom_search_type: Some("my_custom".to_string()),
+            auto_feedback_detection: None,
         };
 
         let response = orchestrator.search(&request).await.unwrap();
@@ -904,6 +949,7 @@ mod tests {
             retriever_specific_config: None,
             response_schema: None,
             custom_search_type: Some("nonexistent".to_string()),
+            auto_feedback_detection: None,
         };
 
         let result = orchestrator.search(&request).await;
