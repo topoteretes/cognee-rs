@@ -233,7 +233,7 @@ async fn test_search_type_matrix() {
     // created for LLM-extracted edges.  Compare the cognify result's triplet
     // count against the vector collection size.
     let triplet_size = vector_db
-        .collection_size("Triplet", "embeddable_text")
+        .collection_size("Triplet", "text")
         .await
         .expect("collection_size Triplet");
     assert_eq!(

@@ -551,7 +551,7 @@ async fn test_triplet_embeddings_disabled_by_default() {
     // Verify Triplet collection was NOT created
     assert!(
         !vector_db
-            .has_collection("Triplet", "embeddable_text")
+            .has_collection("Triplet", "text")
             .await
             .unwrap(),
         "Triplet collection should not exist when embed_triplets=false"
@@ -654,7 +654,7 @@ async fn test_triplet_embeddings_enabled() {
         // Verify Triplet collection was created
         assert!(
             vector_db
-                .has_collection("Triplet", "embeddable_text")
+                .has_collection("Triplet", "text")
                 .await
                 .unwrap(),
             "Triplet collection should exist when embed_triplets=true"

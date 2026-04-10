@@ -224,7 +224,7 @@ async fn cleanup_graph_and_vector(
             ("Entity", "name"),
             ("Entity", "description"),
             ("TextSummary", "text"),
-            ("Triplet", "embeddable_text"),
+            ("Triplet", "text"),
         ];
 
         for (data_type, field_name) in known_collections {

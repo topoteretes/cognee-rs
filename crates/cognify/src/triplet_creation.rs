@@ -103,13 +103,13 @@ pub fn create_triplets_from_graph(
         // Create embeddable text: "source -› relationship-›target"
         // Format matches Python add_data_points.py:242:
         //   f"{source_node_text} -› {relationship_text}-›{target_node_text}"
-        let embeddable_text = format!("{} -› {}-›{}", source_text, relationship_text, target_text);
+        let text = format!("{} -› {}-›{}", source_text, relationship_text, target_text);
 
         let triplet = Triplet::new(
             edge.source_entity_id,
             edge.target_entity_id,
             edge.relationship_name.clone(),
-            embeddable_text,
+            text,
         )
         .with_names(
             source_node.entity.name.clone(),
@@ -178,12 +178,12 @@ mod tests {
         assert_eq!(triplet.source_entity_id, entity1.entity.base.id);
         assert_eq!(triplet.target_entity_id, entity2.entity.base.id);
         assert_eq!(triplet.relationship_name, "founded");
-        assert!(triplet.embeddable_text.contains("Steve Jobs"));
-        assert!(triplet.embeddable_text.contains("Co-founder of Apple"));
-        assert!(triplet.embeddable_text.contains("founded"));
-        assert!(triplet.embeddable_text.contains("Apple Inc."));
-        assert!(triplet.embeddable_text.contains("Technology company"));
-        assert!(triplet.embeddable_text.contains("-›"));
+        assert!(triplet.text.contains("Steve Jobs"));
+        assert!(triplet.text.contains("Co-founder of Apple"));
+        assert!(triplet.text.contains("founded"));
+        assert!(triplet.text.contains("Apple Inc."));
+        assert!(triplet.text.contains("Technology company"));
+        assert!(triplet.text.contains("-›"));
     }
 
     #[test]
@@ -205,8 +205,8 @@ mod tests {
 
         assert_eq!(triplets.len(), 1);
         // Should use "works at" from edge_text, not "employed_by"
-        assert!(triplets[0].embeddable_text.contains("works at"));
-        assert!(!triplets[0].embeddable_text.contains("employed_by"));
+        assert!(triplets[0].text.contains("works at"));
+        assert!(!triplets[0].text.contains("employed_by"));
     }
 
     #[test]
@@ -257,7 +257,7 @@ mod tests {
         let triplets = create_triplets_from_graph(&[entity1, entity2], &[edge]);
 
         assert_eq!(triplets.len(), 1);
-        let text = &triplets[0].embeddable_text;
+        let text = &triplets[0].text;
         assert!(text.contains("Alice"));
         assert!(text.contains("knows"));
         assert!(text.contains("Bob"));
@@ -284,7 +284,7 @@ mod tests {
         assert_eq!(triplets.len(), 1);
 
         // Exact format: "Alice -› knows-›Bob"
-        assert_eq!(triplets[0].embeddable_text, "Alice -› knows-›Bob");
+        assert_eq!(triplets[0].text, "Alice -› knows-›Bob");
     }
 
     #[test]

@@ -1784,19 +1784,19 @@ async fn index_data_points(
 
         if !triplets.is_empty() {
             if !vector_db
-                .has_collection("Triplet", "embeddable_text")
+                .has_collection("Triplet", "text")
                 .await
                 .map_err(|e| CognifyError::VectorDBError(e.to_string()))?
             {
                 vector_db
-                    .create_collection("Triplet", "embeddable_text", dimension)
+                    .create_collection("Triplet", "text", dimension)
                     .await
                     .map_err(|e| CognifyError::VectorDBError(e.to_string()))?;
             }
 
             let triplet_texts: Vec<_> = triplets
                 .iter()
-                .map(|t| t.embeddable_text.as_str())
+                .map(|t| t.text.as_str())
                 .collect();
             let triplet_vectors = engine
                 .embed(&triplet_texts)
@@ -1809,7 +1809,7 @@ async fn index_data_points(
                 .map(|(triplet, vector)| {
                     VectorPoint::new(triplet.id, vector)
                         .with_metadata("type", json!("Triplet"))
-                        .with_metadata("field", json!("embeddable_text"))
+                        .with_metadata("field", json!("text"))
                         .with_metadata("source_id", json!(triplet.source_entity_id.to_string()))
                         .with_metadata("target_id", json!(triplet.target_entity_id.to_string()))
                         .with_metadata("relationship", json!(triplet.relationship_name.clone()))
@@ -1817,7 +1817,7 @@ async fn index_data_points(
                 .collect();
 
             vector_db
-                .index_points("Triplet", "embeddable_text", &triplet_points)
+                .index_points("Triplet", "text", &triplet_points)
                 .await
                 .map_err(|e| CognifyError::VectorDBError(e.to_string()))?;
 

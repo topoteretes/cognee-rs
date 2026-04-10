@@ -32,7 +32,7 @@ pub struct Triplet {
     /// Embeddable text representation.
     /// Format: "{source_text} -› {relationship_text}-›{target_text}"
     /// This is the text that gets embedded for semantic search.
-    pub embeddable_text: String,
+    pub text: String,
 
     /// Optional: Source entity name for display/debugging.
     pub source_name: Option<String>,
@@ -50,7 +50,7 @@ impl Triplet {
     /// * `source_entity_id` - Source entity UUID
     /// * `target_entity_id` - Target entity UUID
     /// * `relationship_name` - Relationship/edge type name
-    /// * `embeddable_text` - Formatted text for embedding
+    /// * `text` - Formatted text for embedding
     ///
     /// # Example
     /// ```
@@ -70,7 +70,7 @@ impl Triplet {
         source_entity_id: Uuid,
         target_entity_id: Uuid,
         relationship_name: String,
-        embeddable_text: String,
+        text: String,
     ) -> Self {
         // Generate deterministic ID matching Python's generate_node_id():
         //   uuid5(NAMESPACE_OID, (src + rel + tgt).lower().replace(" ", "_").replace("'", ""))
@@ -87,7 +87,7 @@ impl Triplet {
             source_entity_id,
             target_entity_id,
             relationship_name,
-            embeddable_text,
+            text,
             source_name: None,
             target_name: None,
         }
@@ -105,8 +105,8 @@ impl Triplet {
     }
 
     /// Get embeddable text (for consistency with other models).
-    pub fn get_embeddable_text(&self) -> &str {
-        &self.embeddable_text
+    pub fn get_text(&self) -> &str {
+        &self.text
     }
 }
 
@@ -128,7 +128,7 @@ mod tests {
         assert_eq!(triplet.source_entity_id, source_id);
         assert_eq!(triplet.target_entity_id, target_id);
         assert_eq!(triplet.relationship_name, "founded");
-        assert!(triplet.embeddable_text.contains("-›"));
+        assert!(triplet.text.contains("-›"));
         assert_eq!(triplet.source_name, None);
         assert_eq!(triplet.target_name, None);
     }
@@ -201,7 +201,7 @@ mod tests {
     }
 
     #[test]
-    fn test_triplet_get_embeddable_text() {
+    fn test_triplet_get_text() {
         let triplet = Triplet::new(
             Uuid::new_v4(),
             Uuid::new_v4(),
@@ -209,6 +209,6 @@ mod tests {
             "test text".to_string(),
         );
 
-        assert_eq!(triplet.get_embeddable_text(), "test text");
+        assert_eq!(triplet.get_text(), "test text");
     }
 }

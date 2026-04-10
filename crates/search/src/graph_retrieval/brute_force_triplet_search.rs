@@ -18,7 +18,7 @@ pub const DEFAULT_TRIPLET_DISTANCE_PENALTY: f32 = 3.5;
 /// Collections searched to find candidate graph nodes and edge-type distances.
 /// Each entry is (data_type, field_name).
 ///
-/// Note: "Entity_description" and "Triplet_embeddable_text" are intentionally excluded here
+/// Note: "Entity_description" and "Triplet_text" are intentionally excluded here
 /// because they don't match the default Python collection set used in brute_force_triplet_search.
 /// The "EdgeType_relationship_name" collection provides per-relationship-name distances.
 const SEARCH_COLLECTIONS: [(&str, &str); 5] = [
