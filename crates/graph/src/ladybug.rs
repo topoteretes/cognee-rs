@@ -1118,7 +1118,10 @@ impl GraphDBTrait for LadybugAdapter {
         &self,
         node_type: &str,
         node_names: &[String],
+        node_name_filter_operator: &str,
     ) -> GraphDBResult<(Vec<GraphNode>, Vec<EdgeData>)> {
+        use std::collections::HashSet;
+
         // Early return for empty node_names
         if node_names.is_empty() {
             return Ok((Vec::new(), Vec::new()));
@@ -1131,7 +1134,7 @@ impl GraphDBTrait for LadybugAdapter {
             .collect::<Vec<_>>()
             .join(", ");
 
-        // Query for specific nodes
+        // Query for specific (primary) nodes matching type and names
         let nodes_query = format!(
             "MATCH (n:Node) WHERE n.type = '{}' AND n.name IN [{}] RETURN n.id AS id, n.name AS name, n.type AS type, n.properties AS properties",
             node_type.replace('\\', "\\\\").replace('\'', "\\'"),
@@ -1140,16 +1143,78 @@ impl GraphDBTrait for LadybugAdapter {
 
         let node_results = self.execute_query(&nodes_query)?;
 
-        let mut nodes = Vec::new();
-        let mut node_ids = Vec::new();
+        let mut primary_node_ids: Vec<String> = Vec::new();
 
-        // Parse nodes
-        for row in node_results {
+        // Parse primary node IDs
+        for row in &node_results {
+            if row.len() >= Self::NODE_QUERY_COLUMN_COUNT
+                && let Some(id_str) = row[0].as_str()
+            {
+                primary_node_ids.push(id_str.to_string());
+            }
+        }
+
+        if primary_node_ids.is_empty() {
+            return Ok((Vec::new(), Vec::new()));
+        }
+
+        // Gather 1-hop neighbor IDs per primary node, applying OR/AND logic.
+        let use_and = node_name_filter_operator.eq_ignore_ascii_case("AND");
+        let mut neighbor_id_set: Option<HashSet<String>> = None;
+
+        for primary_id in &primary_node_ids {
+            let escaped_id = primary_id.replace('\\', "\\\\").replace('\'', "\\'");
+            let neighbor_query = format!(
+                "MATCH (n:Node)-[:EDGE]-(nbr:Node) WHERE n.id = '{}' RETURN DISTINCT nbr.id",
+                escaped_id
+            );
+            let nbr_results = self.execute_query(&neighbor_query)?;
+            let nbr_ids: HashSet<String> = nbr_results
+                .iter()
+                .filter_map(|row| row.first().and_then(|v| v.as_str()).map(str::to_string))
+                .collect();
+
+            match neighbor_id_set {
+                None => {
+                    neighbor_id_set = Some(nbr_ids);
+                }
+                Some(ref mut existing) => {
+                    if use_and {
+                        // AND: keep only IDs present in all sets (intersection)
+                        existing.retain(|id| nbr_ids.contains(id));
+                    } else {
+                        // OR: add all neighbor IDs (union)
+                        existing.extend(nbr_ids);
+                    }
+                }
+            }
+        }
+
+        // Union of primary nodes and their filtered neighbors
+        let mut all_ids: HashSet<String> = primary_node_ids.iter().cloned().collect();
+        if let Some(nbr_set) = neighbor_id_set {
+            all_ids.extend(nbr_set);
+        }
+
+        let id_list = all_ids
+            .iter()
+            .map(|id| format!("'{}'", id.replace('\\', "\\\\").replace('\'', "\\'")))
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        // Fetch full node data for all IDs
+        let all_nodes_query = format!(
+            "MATCH (n:Node) WHERE n.id IN [{}] RETURN n.id AS id, n.name AS name, n.type AS type, n.properties AS properties",
+            id_list
+        );
+        let all_node_results = self.execute_query(&all_nodes_query)?;
+
+        let mut nodes: Vec<GraphNode> = Vec::new();
+        for row in all_node_results {
             if row.len() >= Self::NODE_QUERY_COLUMN_COUNT {
                 let mut node_data = NodeData::new();
                 if let Some(id_str) = row[0].as_str() {
                     node_data.insert(Cow::Borrowed("id"), json!(id_str));
-                    node_ids.push(id_str.to_string());
                 }
                 if let Some(name_str) = row[1].as_str() {
                     node_data.insert(Cow::Borrowed("name"), json!(name_str));
@@ -1168,17 +1233,7 @@ impl GraphDBTrait for LadybugAdapter {
             }
         }
 
-        // Get edges connecting these nodes
-        if node_ids.is_empty() {
-            return Ok((nodes, Vec::new()));
-        }
-
-        let id_list = node_ids
-            .iter()
-            .map(|id| format!("'{}'", id.replace('\\', "\\\\").replace('\'', "\\'")))
-            .collect::<Vec<_>>()
-            .join(", ");
-
+        // Get all edges between nodes in the final set
         let edges_query = format!(
             "MATCH (a:Node)-[r:EDGE]->(b:Node) WHERE a.id IN [{}] AND b.id IN [{}] RETURN a.id, b.id, r.relationship_name, r.properties",
             id_list, id_list
@@ -1995,7 +2050,10 @@ mod tests {
         adapter.add_node(&node_a).await.unwrap();
 
         // Empty node_names should return empty result
-        let (nodes, edges) = adapter.get_nodeset_subgraph("TestNode", &[]).await.unwrap();
+        let (nodes, edges) = adapter
+            .get_nodeset_subgraph("TestNode", &[], "OR")
+            .await
+            .unwrap();
 
         assert_eq!(nodes.len(), 0);
         assert_eq!(edges.len(), 0);
@@ -2011,7 +2069,7 @@ mod tests {
 
         // Non-existent type should return empty result
         let (nodes, edges) = adapter
-            .get_nodeset_subgraph("NonExistentType", &["Alice".to_string()])
+            .get_nodeset_subgraph("NonExistentType", &["Alice".to_string()], "OR")
             .await
             .unwrap();
 
@@ -2029,7 +2087,7 @@ mod tests {
 
         // Non-existent names should return empty result
         let (nodes, edges) = adapter
-            .get_nodeset_subgraph("test", &["Bob".to_string(), "Charlie".to_string()])
+            .get_nodeset_subgraph("test", &["Bob".to_string(), "Charlie".to_string()], "OR")
             .await
             .unwrap();
 
@@ -2047,9 +2105,9 @@ mod tests {
         adapter.add_node(&node_a).await.unwrap();
         adapter.add_node(&node_b).await.unwrap();
 
-        // Get single node by type + name
+        // Get single node by type + name (no edges, so no neighbors)
         let (nodes, _edges) = adapter
-            .get_nodeset_subgraph("TestNode", &["Alice".to_string()])
+            .get_nodeset_subgraph("TestNode", &["Alice".to_string()], "OR")
             .await
             .unwrap();
 
@@ -2073,9 +2131,13 @@ mod tests {
         adapter.add_node(&node_b).await.unwrap();
         adapter.add_node(&node_c).await.unwrap();
 
-        // Get multiple nodes by type + names
+        // Get multiple nodes by type + names (no edges, so no neighbors)
         let (nodes, _edges) = adapter
-            .get_nodeset_subgraph("TestNode", &["Alice".to_string(), "Charlie".to_string()])
+            .get_nodeset_subgraph(
+                "TestNode",
+                &["Alice".to_string(), "Charlie".to_string()],
+                "OR",
+            )
             .await
             .unwrap();
 
@@ -2115,18 +2177,18 @@ mod tests {
             .await
             .unwrap();
 
-        // Get subgraph for Alice and Bob only
+        // Get subgraph for Alice and Bob — with OR mode their neighbors are also included.
+        // Alice's neighbors (via A→B, A→C): Bob, Charlie
+        // Bob's neighbors (via A→B, B→C): Alice, Charlie
+        // Union: Alice + Bob + Charlie
         let (nodes, edges) = adapter
-            .get_nodeset_subgraph("TestNode", &["Alice".to_string(), "Bob".to_string()])
+            .get_nodeset_subgraph("TestNode", &["Alice".to_string(), "Bob".to_string()], "OR")
             .await
             .unwrap();
 
-        assert_eq!(nodes.len(), 2);
-        // Only edge A -> B should be returned (both nodes in subgraph)
-        // Edge B -> C and A -> C should NOT be returned (Charlie not in subgraph)
-        assert_eq!(edges.len(), 1);
-        assert_eq!(edges[0].0, "node-a"); // source
-        assert_eq!(edges[0].1, "node-b"); // target
+        assert_eq!(nodes.len(), 3);
+        // All three edges connect nodes in the subgraph: A→B, B→C, A→C
+        assert_eq!(edges.len(), 3);
     }
 
     #[tokio::test]
@@ -2139,9 +2201,9 @@ mod tests {
         adapter.add_node(&node_a).await.unwrap();
         adapter.add_node(&node_b).await.unwrap();
 
-        // No edges created
+        // No edges created — neighbors will be empty, only primary nodes returned
         let (nodes, edges) = adapter
-            .get_nodeset_subgraph("TestNode", &["Alice".to_string(), "Bob".to_string()])
+            .get_nodeset_subgraph("TestNode", &["Alice".to_string(), "Bob".to_string()], "OR")
             .await
             .unwrap();
 
@@ -2187,7 +2249,7 @@ mod tests {
             .await
             .unwrap();
 
-        // Get all three nodes
+        // Get all three nodes (OR mode — neighbors already all included in primary set)
         let (nodes, edges) = adapter
             .get_nodeset_subgraph(
                 "TestNode",
@@ -2196,6 +2258,7 @@ mod tests {
                     "Bob".to_string(),
                     "Charlie".to_string(),
                 ],
+                "OR",
             )
             .await
             .unwrap();
@@ -2239,9 +2302,9 @@ mod tests {
         adapter.add_node(&person_a).await.unwrap();
         adapter.add_node(&org_a).await.unwrap();
 
-        // Get only Person type with name Alice
+        // Get only Person type with name Alice (no edges, so no neighbors)
         let (nodes, _edges) = adapter
-            .get_nodeset_subgraph("Person", &["Alice".to_string()])
+            .get_nodeset_subgraph("Person", &["Alice".to_string()], "OR")
             .await
             .unwrap();
 

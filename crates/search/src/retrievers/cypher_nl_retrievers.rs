@@ -466,6 +466,7 @@ mod tests {
             &self,
             _node_type: &str,
             _node_names: &[String],
+            _node_name_filter_operator: &str,
         ) -> GraphDBResult<(Vec<GraphNode>, Vec<EdgeData>)> {
             Ok((vec![], vec![]))
         }

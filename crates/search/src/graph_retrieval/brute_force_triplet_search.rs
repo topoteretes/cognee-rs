@@ -39,6 +39,15 @@ pub struct GraphRetrievalConfig {
     /// How much per-node `feedback_weight` values influence triplet ranking.
     /// Must be in [0.0, 1.0]. 0.0 (default) means pure similarity-based ranking.
     pub feedback_influence: f32,
+    /// Filter graph to nodes of this type before scoring.
+    /// When combined with `node_name`, calls `get_nodeset_subgraph` instead of
+    /// `get_graph_data`.
+    pub node_type: Option<String>,
+    /// Filter graph to nodes with these names (paired with `node_type`).
+    pub node_name: Option<Vec<String>>,
+    /// "OR" (default): include neighbors of ANY named node.
+    /// "AND": include only neighbors connected to ALL named nodes.
+    pub node_name_filter_operator: String,
 }
 
 impl Default for GraphRetrievalConfig {
@@ -48,6 +57,9 @@ impl Default for GraphRetrievalConfig {
             wide_search_top_k: DEFAULT_WIDE_SEARCH_TOP_K,
             triplet_distance_penalty: DEFAULT_TRIPLET_DISTANCE_PENALTY,
             feedback_influence: 0.0,
+            node_type: None,
+            node_name: None,
+            node_name_filter_operator: "OR".to_string(),
         }
     }
 }
@@ -85,6 +97,14 @@ pub async fn brute_force_triplet_search(
         return Err(SearchError::InvalidInput(
             "feedback_influence must be in range [0.0, 1.0]".to_string(),
         ));
+    }
+
+    let op = config.node_name_filter_operator.to_uppercase();
+    if op != "AND" && op != "OR" {
+        return Err(SearchError::InvalidInput(format!(
+            "Invalid node_name_filter_operator: {:?}. Must be AND or OR.",
+            config.node_name_filter_operator
+        )));
     }
 
     let query_vectors = embedding_engine.embed(&[query]).await?;
@@ -162,7 +182,27 @@ pub async fn brute_force_triplet_search(
         return Ok(vec![]);
     }
 
-    let (graph_nodes, graph_edges) = graph_db.get_graph_data().await?;
+    let has_node_filter = config.node_type.is_some()
+        && config
+            .node_name
+            .as_ref()
+            .is_some_and(|names| !names.is_empty());
+
+    let (graph_nodes, graph_edges) = if has_node_filter {
+        let node_type = config
+            .node_type
+            .as_deref()
+            .expect("node_type is checked non-None in has_node_filter");
+        let node_names = config
+            .node_name
+            .as_deref()
+            .expect("node_name is checked non-empty in has_node_filter");
+        graph_db
+            .get_nodeset_subgraph(node_type, node_names, &config.node_name_filter_operator)
+            .await?
+    } else {
+        graph_db.get_graph_data().await?
+    };
 
     // Extract name, text, description, and (optionally) feedback_weight from each node.
     let mut node_names: HashMap<String, String> = HashMap::new();

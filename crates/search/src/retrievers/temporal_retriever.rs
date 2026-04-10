@@ -158,6 +158,13 @@ impl TemporalRetriever {
             triplet_distance_penalty: params
                 .triplet_distance_penalty_or(self.triplet_distance_penalty),
             feedback_influence: params.feedback_influence_or(self.feedback_influence),
+            node_type: params.node_type.clone(),
+            node_name: params.node_name.clone(),
+            node_name_filter_operator: params
+                .node_name_filter_operator
+                .as_deref()
+                .unwrap_or("OR")
+                .to_string(),
         }
     }
 
@@ -844,6 +851,7 @@ mod tests {
             &self,
             _node_type: &str,
             _node_names: &[String],
+            _node_name_filter_operator: &str,
         ) -> GraphDBResult<(Vec<GraphNode>, Vec<EdgeData>)> {
             Ok((self.nodes.clone(), self.edges.clone()))
         }

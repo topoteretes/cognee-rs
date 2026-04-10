@@ -204,6 +204,8 @@ pub trait GraphDBTrait: Send + Sync {
     /// # Arguments
     /// * `node_type` - Type name of nodes to retrieve
     /// * `node_names` - Names of specific nodes
+    /// * `node_name_filter_operator` - "OR" to include neighbors of ANY named node,
+    ///   "AND" to include only neighbors connected to ALL named nodes
     ///
     /// Returns nodes and edges connecting them.
     ///
@@ -211,6 +213,7 @@ pub trait GraphDBTrait: Send + Sync {
         &self,
         node_type: &str,
         node_names: &[String],
+        node_name_filter_operator: &str,
     ) -> GraphDBResult<(Vec<GraphNode>, Vec<EdgeData>)>;
 }
 

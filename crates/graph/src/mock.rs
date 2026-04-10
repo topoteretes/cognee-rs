@@ -292,6 +292,7 @@ impl GraphDBTrait for MockGraphDB {
         &self,
         _node_type: &str,
         _node_names: &[String],
+        _node_name_filter_operator: &str,
     ) -> GraphDBResult<(Vec<(String, NodeData)>, Vec<EdgeData>)> {
         self.get_graph_data().await
     }
