@@ -6,6 +6,7 @@ use async_trait::async_trait;
 use cognee_graph::GraphDBTrait;
 use cognee_session::SessionContext;
 use serde_json::{Value, json};
+use tokio::sync::OnceCell;
 
 use crate::retrievers::SearchRetriever;
 use crate::types::{
@@ -15,12 +16,19 @@ use crate::types::{
 const DEFAULT_TOP_K: usize = 10;
 const DOCUMENT_CHUNK_TYPE: &str = "DocumentChunk";
 
+struct CachedChunk {
+    id: Option<uuid::Uuid>,
+    payload: serde_json::Value,
+    tokens: Vec<String>,
+}
+
 pub struct LexicalRetriever {
     graph_db: Arc<dyn GraphDBTrait>,
     top_k: usize,
     with_scores: bool,
     stop_words: HashSet<String>,
     multiset_jaccard: bool,
+    cached_chunks: OnceCell<Vec<CachedChunk>>,
 }
 
 impl LexicalRetriever {
@@ -41,6 +49,7 @@ impl LexicalRetriever {
                 .map(|token| token.to_lowercase())
                 .collect(),
             multiset_jaccard,
+            cached_chunks: OnceCell::new(),
         }
     }
 
@@ -164,6 +173,32 @@ impl LexicalRetriever {
 
         Ok(chunks)
     }
+
+    async fn ensure_initialized(&self) -> Result<&[CachedChunk], SearchError> {
+        self.cached_chunks
+            .get_or_try_init(|| async {
+                let raw_chunks = self.load_document_chunks().await?;
+                Ok::<Vec<CachedChunk>, SearchError>(
+                    raw_chunks
+                        .into_iter()
+                        .filter_map(|(id, payload, text)| {
+                            let tokens = self.tokenize(&text);
+                            if tokens.is_empty() {
+                                None
+                            } else {
+                                Some(CachedChunk {
+                                    id,
+                                    payload,
+                                    tokens,
+                                })
+                            }
+                        })
+                        .collect(),
+                )
+            })
+            .await
+            .map(|v: &Vec<CachedChunk>| v.as_slice())
+    }
 }
 
 #[async_trait]
@@ -186,25 +221,20 @@ impl SearchRetriever for LexicalRetriever {
             return Ok(vec![]);
         }
 
-        let chunks = self.load_document_chunks().await?;
-        if chunks.is_empty() {
+        let cached = self.ensure_initialized().await?;
+        if cached.is_empty() {
             return Ok(vec![]);
         }
 
-        let mut items_with_score = chunks
-            .into_iter()
-            .filter_map(|(id, payload, text)| {
-                let tokens = self.tokenize(&text);
-                if tokens.is_empty() {
-                    return None;
-                }
-
-                let score = self.score(&query_tokens, &tokens);
-                Some(SearchItem {
-                    id,
+        let mut items_with_score = cached
+            .iter()
+            .map(|chunk| {
+                let score = self.score(&query_tokens, &chunk.tokens);
+                SearchItem {
+                    id: chunk.id,
                     score: Some(score),
-                    payload,
-                })
+                    payload: chunk.payload.clone(),
+                }
             })
             .collect::<Vec<_>>();
 
@@ -436,6 +466,29 @@ mod tests {
             retriever.inner.tokenize("Hello World"),
             vec!["hello", "world"]
         );
+    }
+
+    #[tokio::test]
+    async fn cache_is_populated_after_first_get_context_call() {
+        let mock_graph_db = Arc::new(MockGraphDB::new());
+        add_chunk(&mock_graph_db, "cached chunk example text").await;
+        let graph_db: Arc<dyn GraphDBTrait> = mock_graph_db;
+
+        let retriever =
+            JaccardChunksRetriever::new(Arc::clone(&graph_db), Some(5), true, None, false);
+
+        // Cache should be empty before the first call
+        assert!(retriever.inner.cached_chunks.get().is_none());
+
+        let _ = retriever
+            .get_context("cached chunk", &SearchParams::default())
+            .await
+            .unwrap();
+
+        // Cache should be populated after the first call
+        assert!(retriever.inner.cached_chunks.get().is_some());
+        let cached = retriever.inner.cached_chunks.get().unwrap();
+        assert_eq!(cached.len(), 1);
     }
 
     #[tokio::test]

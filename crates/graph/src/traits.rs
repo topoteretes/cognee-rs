@@ -215,6 +215,35 @@ pub trait GraphDBTrait: Send + Sync {
         node_names: &[String],
         node_name_filter_operator: &str,
     ) -> GraphDBResult<(Vec<GraphNode>, Vec<EdgeData>)>;
+
+    /// Retrieve a subgraph containing only the specified nodes and edges between them.
+    ///
+    /// Default implementation fetches the full graph and filters in memory.
+    /// Backends may override this with a more efficient query.
+    async fn get_id_filtered_graph_data(
+        &self,
+        node_ids: &[String],
+    ) -> GraphDBResult<(Vec<GraphNode>, Vec<EdgeData>)> {
+        if node_ids.is_empty() {
+            return Ok((vec![], vec![]));
+        }
+        let (all_nodes, all_edges) = self.get_graph_data().await?;
+        let id_set: std::collections::HashSet<&str> = node_ids.iter().map(String::as_str).collect();
+
+        let filtered_nodes: Vec<GraphNode> = all_nodes
+            .into_iter()
+            .filter(|(id, _)| id_set.contains(id.as_str()))
+            .collect();
+
+        let filtered_edges: Vec<EdgeData> = all_edges
+            .into_iter()
+            .filter(|(src, tgt, _, _)| {
+                id_set.contains(src.as_str()) && id_set.contains(tgt.as_str())
+            })
+            .collect();
+
+        Ok((filtered_nodes, filtered_edges))
+    }
 }
 
 /// Extension trait providing generic convenience methods on top of [`GraphDBTrait`].

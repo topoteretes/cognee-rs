@@ -376,4 +376,54 @@ mod tests {
         assert_eq!(db.node_count(), 0);
         assert_eq!(db.edge_count(), 0);
     }
+
+    #[tokio::test]
+    async fn get_id_filtered_graph_data_returns_subset() {
+        let db = MockGraphDB::new();
+
+        // Add three nodes with raw JSON (id field required by MockGraphDB)
+        db.add_node_raw(serde_json::json!({"id": "n1", "label": "Node1"}))
+            .await
+            .unwrap();
+        db.add_node_raw(serde_json::json!({"id": "n2", "label": "Node2"}))
+            .await
+            .unwrap();
+        db.add_node_raw(serde_json::json!({"id": "n3", "label": "Node3"}))
+            .await
+            .unwrap();
+
+        // Add edges: n1→n2 (both requested), n2→n3 (n3 not requested), n1→n3 (n3 not requested)
+        db.add_edge("n1", "n2", "connects", None).await.unwrap();
+        db.add_edge("n2", "n3", "connects", None).await.unwrap();
+        db.add_edge("n1", "n3", "connects", None).await.unwrap();
+
+        let node_ids = vec!["n1".to_string(), "n2".to_string()];
+        let (nodes, edges) = db.get_id_filtered_graph_data(&node_ids).await.unwrap();
+
+        // Only n1 and n2 should be returned
+        assert_eq!(nodes.len(), 2);
+        let returned_ids: std::collections::HashSet<&str> =
+            nodes.iter().map(|(id, _)| id.as_str()).collect();
+        assert!(returned_ids.contains("n1"));
+        assert!(returned_ids.contains("n2"));
+        assert!(!returned_ids.contains("n3"));
+
+        // Only the edge n1→n2 should be returned (both endpoints in the requested set)
+        assert_eq!(edges.len(), 1);
+        assert_eq!(edges[0].0, "n1");
+        assert_eq!(edges[0].1, "n2");
+    }
+
+    #[tokio::test]
+    async fn get_id_filtered_graph_data_empty_ids_returns_empty() {
+        let db = MockGraphDB::new();
+        db.add_node_raw(serde_json::json!({"id": "n1", "label": "Node1"}))
+            .await
+            .unwrap();
+
+        let (nodes, edges) = db.get_id_filtered_graph_data(&[]).await.unwrap();
+
+        assert!(nodes.is_empty());
+        assert!(edges.is_empty());
+    }
 }

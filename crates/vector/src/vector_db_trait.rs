@@ -88,4 +88,49 @@ pub trait VectorDB: Send + Sync {
 
     /// Get collection statistics
     async fn collection_size(&self, data_type: &str, field_name: &str) -> VectorDBResult<usize>;
+
+    /// Perform multiple vector similarity searches in sequence.
+    ///
+    /// Default implementation loops over [`search_similar`]. Backends may override
+    /// this with a native batch API for better performance.
+    async fn batch_search_similar(
+        &self,
+        data_type: &str,
+        field_name: &str,
+        query_vectors: &[Vec<f32>],
+        top_k: usize,
+    ) -> VectorDBResult<Vec<Vec<SearchResult>>> {
+        let mut results = Vec::with_capacity(query_vectors.len());
+        for query_vector in query_vectors {
+            results.push(
+                self.search_similar(data_type, field_name, query_vector, top_k)
+                    .await?,
+            );
+        }
+        Ok(results)
+    }
+}
+
+#[cfg(all(test, feature = "testing"))]
+mod tests {
+    use super::*;
+    use crate::mock_vector_db::MockVectorDB;
+
+    #[tokio::test]
+    async fn batch_search_similar_returns_one_result_per_query() {
+        let db = MockVectorDB::new();
+        db.create_collection("TestType", "field", 3).await.unwrap();
+
+        // No points indexed — each search returns an empty Vec.
+        let query_vectors = vec![vec![1.0_f32, 0.0, 0.0], vec![0.0_f32, 1.0, 0.0]];
+
+        let results = db
+            .batch_search_similar("TestType", "field", &query_vectors, 5)
+            .await
+            .unwrap();
+
+        assert_eq!(results.len(), 2, "one result set per query vector");
+        assert!(results[0].is_empty(), "no indexed points → empty result");
+        assert!(results[1].is_empty(), "no indexed points → empty result");
+    }
 }

@@ -13,6 +13,7 @@ cognee-vector = { path = "../vector" }
 
 async-trait.workspace = true
 indexmap = "2"
+tokio = { workspace = true, features = ["sync"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 chrono.workspace = true
