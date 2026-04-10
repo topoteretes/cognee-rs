@@ -16,6 +16,9 @@ pub enum EmbeddingError {
 
     #[error("IO error: {0}")]
     IoError(#[from] std::io::Error),
+
+    #[error("Provider not implemented: {0}")]
+    NotImplemented(String),
 }
 
 pub type EmbeddingResult<T> = Result<T, EmbeddingError>;

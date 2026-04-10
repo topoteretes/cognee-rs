@@ -1,5 +1,5 @@
 use cognee_embedding::{
-    config::EmbeddingConfig, engine::EmbeddingEngine, onnx::OnnxEmbeddingEngine,
+    config::OnnxEmbeddingConfig, engine::EmbeddingEngine, onnx::OnnxEmbeddingEngine,
 };
 use std::env;
 
@@ -22,7 +22,7 @@ fn get_model_dir() -> String {
 #[tokio::test]
 async fn test_full_embedding_pipeline() {
     // 1. Load model (use BGE-Small from target/models by default)
-    let config = EmbeddingConfig::bge_small(get_model_dir());
+    let config = OnnxEmbeddingConfig::bge_small(get_model_dir());
     let engine = OnnxEmbeddingEngine::new(config)
         .expect("Failed to load model - run examples/embeddings.rs first");
 
@@ -48,7 +48,7 @@ async fn test_full_embedding_pipeline() {
 
 #[tokio::test]
 async fn test_semantic_similarity() {
-    let config = EmbeddingConfig::bge_small(get_model_dir());
+    let config = OnnxEmbeddingConfig::bge_small(get_model_dir());
     let engine = OnnxEmbeddingEngine::new(config).unwrap();
 
     let texts = vec![
@@ -83,7 +83,7 @@ async fn test_semantic_similarity() {
 
 #[tokio::test]
 async fn test_batch_processing() {
-    let config = EmbeddingConfig::bge_small(get_model_dir());
+    let config = OnnxEmbeddingConfig::bge_small(get_model_dir());
     let engine = OnnxEmbeddingEngine::new(config).unwrap();
 
     // Test with different batch sizes
@@ -106,7 +106,7 @@ async fn test_batch_processing() {
 
 #[tokio::test]
 async fn test_empty_batch() {
-    let config = EmbeddingConfig::bge_small(get_model_dir());
+    let config = OnnxEmbeddingConfig::bge_small(get_model_dir());
     let engine = OnnxEmbeddingEngine::new(config).unwrap();
 
     let texts: Vec<&str> = vec![];
@@ -117,7 +117,7 @@ async fn test_empty_batch() {
 
 #[tokio::test]
 async fn test_long_text_truncation() {
-    let config = EmbeddingConfig::bge_small(get_model_dir());
+    let config = OnnxEmbeddingConfig::bge_small(get_model_dir());
     let engine = OnnxEmbeddingEngine::new(config).unwrap();
 
     // Create a very long text (will be truncated to max_sequence_length)

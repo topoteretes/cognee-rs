@@ -8,7 +8,7 @@
 //! Run with: cargo test --package cognee-cognify --test integration_embeddings
 
 use cognee_cognify::{CognifyConfig, CognifyResult, cognify};
-use cognee_embedding::{config::EmbeddingConfig, onnx::OnnxEmbeddingEngine};
+use cognee_embedding::{config::OnnxEmbeddingConfig, onnx::OnnxEmbeddingEngine};
 use cognee_graph::MockGraphDB;
 use cognee_models::Data;
 use cognee_storage::{MockStorage, StorageTrait};
@@ -48,7 +48,7 @@ async fn test_pipeline_with_embeddings() {
     let vector_db = Arc::new(MockVectorDB::new());
 
     // 2. Setup embedding engine (BGE-Small)
-    let embedding_config = EmbeddingConfig::bge_small(get_embedding_model_dir());
+    let embedding_config = OnnxEmbeddingConfig::bge_small(get_embedding_model_dir());
     let embedding_engine = match OnnxEmbeddingEngine::new(embedding_config) {
         Ok(engine) => Arc::new(engine),
         Err(e) => {
@@ -176,7 +176,7 @@ async fn test_pipeline_requires_embeddings() {
     let vector_db = Arc::new(MockVectorDB::new());
 
     // 2. Setup embedding engine
-    let embedding_config = EmbeddingConfig::bge_small(get_embedding_model_dir());
+    let embedding_config = OnnxEmbeddingConfig::bge_small(get_embedding_model_dir());
     let embedding_engine = match OnnxEmbeddingEngine::new(embedding_config) {
         Ok(engine) => Arc::new(engine),
         Err(e) => {
@@ -258,7 +258,7 @@ async fn test_embedding_semantic_similarity() {
     let graph_db: Arc<dyn cognee_graph::GraphDBTrait> = Arc::new(MockGraphDB::new());
     let vector_db: Arc<dyn VectorDB> = Arc::new(MockVectorDB::new());
 
-    let embedding_config = EmbeddingConfig::bge_small(get_embedding_model_dir());
+    let embedding_config = OnnxEmbeddingConfig::bge_small(get_embedding_model_dir());
     let embedding_engine: Arc<dyn cognee_embedding::EmbeddingEngine> =
         match OnnxEmbeddingEngine::new(embedding_config) {
             Ok(engine) => Arc::new(engine),
@@ -355,7 +355,7 @@ async fn test_entity_name_indexing() {
     let graph_db = Arc::new(MockGraphDB::new());
     let vector_db = Arc::new(MockVectorDB::new());
 
-    let embedding_config = EmbeddingConfig::bge_small(get_embedding_model_dir());
+    let embedding_config = OnnxEmbeddingConfig::bge_small(get_embedding_model_dir());
     let embedding_engine = match OnnxEmbeddingEngine::new(embedding_config) {
         Ok(engine) => Arc::new(engine),
         Err(e) => {
@@ -482,7 +482,7 @@ async fn test_triplet_embeddings_disabled_by_default() {
     let graph_db = Arc::new(MockGraphDB::new());
     let vector_db = Arc::new(MockVectorDB::new());
 
-    let embedding_config = EmbeddingConfig::bge_small(get_embedding_model_dir());
+    let embedding_config = OnnxEmbeddingConfig::bge_small(get_embedding_model_dir());
     let embedding_engine = match OnnxEmbeddingEngine::new(embedding_config) {
         Ok(engine) => Arc::new(engine),
         Err(e) => {
@@ -570,7 +570,7 @@ async fn test_triplet_embeddings_enabled() {
     let graph_db = Arc::new(MockGraphDB::new());
     let vector_db = Arc::new(MockVectorDB::new());
 
-    let embedding_config = EmbeddingConfig::bge_small(get_embedding_model_dir());
+    let embedding_config = OnnxEmbeddingConfig::bge_small(get_embedding_model_dir());
     let embedding_engine = match OnnxEmbeddingEngine::new(embedding_config) {
         Ok(engine) => Arc::new(engine),
         Err(e) => {

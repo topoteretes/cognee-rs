@@ -8,7 +8,7 @@ use tokio::sync::OnceCell;
 use tracing::warn;
 
 use cognee_database::{DatabaseConnection, connect, initialize};
-use cognee_embedding::{EmbeddingConfig, EmbeddingEngine, OnnxEmbeddingEngine};
+use cognee_embedding::{EmbeddingEngine, OnnxEmbeddingConfig, OnnxEmbeddingEngine};
 use cognee_graph::{GraphDBTrait, LadybugAdapter};
 #[cfg(all(feature = "android-litert", target_os = "android"))]
 use cognee_llm::LiteRtAdapter;
@@ -127,7 +127,7 @@ impl ComponentManager {
     }
 
     fn init_embedding_engine(&self) -> Result<Arc<dyn EmbeddingEngine>, ComponentError> {
-        let engine = OnnxEmbeddingEngine::new(EmbeddingConfig {
+        let engine = OnnxEmbeddingEngine::new(OnnxEmbeddingConfig {
             model_path: PathBuf::from(&self.settings.embedding_model_path),
             tokenizer_path: PathBuf::from(&self.settings.embedding_tokenizer_path),
             model_name: self.settings.embedding_model_name.clone(),

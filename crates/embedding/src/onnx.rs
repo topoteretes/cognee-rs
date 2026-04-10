@@ -6,7 +6,7 @@ use tokenizers::Tokenizer;
 use tracing::info;
 
 use crate::{
-    config::EmbeddingConfig,
+    config::OnnxEmbeddingConfig,
     download::{ModelUrls, ensure_model_exists, ensure_tokenizer_exists},
     engine::EmbeddingEngine,
     error::{EmbeddingError, EmbeddingResult},
@@ -21,7 +21,7 @@ type TokenizationBatch = (Vec<Vec<i64>>, Vec<Vec<i64>>);
 pub struct OnnxEmbeddingEngine {
     session: Arc<Mutex<Session>>,
     tokenizer: Arc<Mutex<Tokenizer>>,
-    config: EmbeddingConfig,
+    config: OnnxEmbeddingConfig,
 }
 
 impl OnnxEmbeddingEngine {
@@ -40,10 +40,10 @@ impl OnnxEmbeddingEngine {
     ///
     /// # Example
     /// ```ignore
-    /// let config = EmbeddingConfig::bge_small("./target/models");
+    /// let config = OnnxEmbeddingConfig::bge_small("./target/models");
     /// let engine = OnnxEmbeddingEngine::new(config)?;
     /// ```
-    pub fn new(config: EmbeddingConfig) -> EmbeddingResult<Self> {
+    pub fn new(config: OnnxEmbeddingConfig) -> EmbeddingResult<Self> {
         ort::init().commit();
 
         if !config.model_path.exists() {
@@ -97,10 +97,10 @@ impl OnnxEmbeddingEngine {
     ///
     /// # Example
     /// ```ignore
-    /// let config = EmbeddingConfig::bge_small("./target/models");
+    /// let config = OnnxEmbeddingConfig::bge_small("./target/models");
     /// let engine = OnnxEmbeddingEngine::with_auto_download(config).await?;
     /// ```
-    pub async fn with_auto_download(config: EmbeddingConfig) -> EmbeddingResult<Self> {
+    pub async fn with_auto_download(config: OnnxEmbeddingConfig) -> EmbeddingResult<Self> {
         let (model_url, tokenizer_url) = match config.model_name.as_str() {
             "bge-small-en-v1.5" => (
                 ModelUrls::BGE_SMALL.model_url,
@@ -331,7 +331,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_engine_creation() {
-        let config = EmbeddingConfig::default();
+        let config = OnnxEmbeddingConfig::default();
         // Will fail if model not present - that's expected
         let result = OnnxEmbeddingEngine::new(config);
 

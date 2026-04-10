@@ -17,7 +17,7 @@ use cognee_database::{
     DatabaseConnection, DeleteDb, IngestDb, SearchHistoryDb, connect, initialize, ops,
 };
 use cognee_delete::{DeleteMode, DeleteRequest, DeleteScope, DeleteService};
-use cognee_embedding::{EmbeddingEngine, config::EmbeddingConfig, onnx::OnnxEmbeddingEngine};
+use cognee_embedding::{EmbeddingEngine, config::OnnxEmbeddingConfig, onnx::OnnxEmbeddingEngine};
 use cognee_graph::{GraphDBTrait, LadybugAdapter};
 use cognee_ingestion::AddPipeline;
 use cognee_llm::Llm;
@@ -128,7 +128,7 @@ async fn test_search_type_matrix() {
 
     let model_dir = get_embedding_model_dir();
     let embedding_engine: Arc<dyn EmbeddingEngine> =
-        match OnnxEmbeddingEngine::new(EmbeddingConfig::bge_small(&model_dir)) {
+        match OnnxEmbeddingEngine::new(OnnxEmbeddingConfig::bge_small(&model_dir)) {
             Ok(engine) => Arc::new(engine),
             Err(e) => {
                 eprintln!("⚠️  Skipping test: failed to load embedding model: {}", e);

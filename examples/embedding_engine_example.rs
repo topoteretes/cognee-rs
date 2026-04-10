@@ -1,5 +1,5 @@
 use cognee_embedding::{
-    config::EmbeddingConfig, engine::EmbeddingEngine, onnx::OnnxEmbeddingEngine,
+    config::OnnxEmbeddingConfig, engine::EmbeddingEngine, onnx::OnnxEmbeddingEngine,
 };
 use std::error::Error;
 
@@ -8,7 +8,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     println!("Cognee Embedding Engine Example\n");
 
     // 1. Configure engine (using BGE-Small model from examples)
-    let config = EmbeddingConfig::bge_small("target/models");
+    let config = OnnxEmbeddingConfig::bge_small("target/models");
 
     println!("Model: {}", config.model_name);
     println!("Tokenizer: {:?}", config.tokenizer_path);
