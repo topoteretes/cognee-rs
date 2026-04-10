@@ -33,6 +33,10 @@ pub struct SearchRequest {
     /// Arbitrary retriever-specific configuration passed through from the caller.
     /// Keys and values are retriever-defined; unknown keys are silently ignored.
     pub retriever_specific_config: Option<HashMap<String, serde_json::Value>>,
+    /// Optional JSON schema for structured LLM output.
+    /// When present, completion-generating retrievers return structured JSON
+    /// matching this schema instead of plain text.
+    pub response_schema: Option<serde_json::Value>,
 }
 
 impl SearchRequest {

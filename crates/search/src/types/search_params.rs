@@ -41,6 +41,11 @@ pub struct SearchParams {
 
     /// Number of context extension rounds (GraphCompletionContextExtension).
     pub context_extension_rounds: Option<usize>,
+
+    /// Optional JSON schema for structured LLM output.
+    /// When `Some`, completion-generating retrievers return `SearchOutput::Structured`
+    /// instead of `SearchOutput::Text`.
+    pub response_schema: Option<serde_json::Value>,
 }
 
 impl SearchParams {
@@ -85,6 +90,7 @@ impl From<&SearchRequest> for SearchParams {
                 .and_then(|c| c.get("context_extension_rounds"))
                 .and_then(|v| v.as_u64())
                 .map(|v| v as usize),
+            response_schema: req.response_schema.clone(),
         }
     }
 }

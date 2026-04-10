@@ -439,15 +439,26 @@ impl SearchRetriever for TemporalRetriever {
             &Self::temporal_context_to_text(&completion_context),
         );
 
-        let completion = self
-            .llm
-            .generate(
-                build_messages_with_history(system_prompt, user_prompt, session),
-                self.generation_options.clone(),
-            )
-            .await?;
+        let messages = build_messages_with_history(system_prompt, user_prompt, session);
 
-        Ok(SearchOutput::Text(completion.content))
+        if let Some(schema) = &params.response_schema {
+            let structured_value = self
+                .llm
+                .create_structured_output_with_messages_raw(
+                    messages,
+                    schema,
+                    self.generation_options.clone(),
+                )
+                .await
+                .map_err(|e| SearchError::LlmError(e.to_string()))?;
+            Ok(SearchOutput::Structured(structured_value))
+        } else {
+            let completion = self
+                .llm
+                .generate(messages, self.generation_options.clone())
+                .await?;
+            Ok(SearchOutput::Text(completion.content))
+        }
     }
 }
 

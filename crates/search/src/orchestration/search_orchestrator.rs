@@ -280,6 +280,7 @@ mod tests {
             verbose: None,
             feedback_influence: None,
             retriever_specific_config: None,
+            response_schema: None,
         };
 
         let response = orchestrator.search(&request).await.unwrap();
@@ -320,6 +321,7 @@ mod tests {
             verbose: None,
             feedback_influence: None,
             retriever_specific_config: None,
+            response_schema: None,
         };
 
         let response = orchestrator.search(&request).await.unwrap();
@@ -365,6 +367,7 @@ mod tests {
             verbose: None,
             feedback_influence: None,
             retriever_specific_config: None,
+            response_schema: None,
         };
 
         let response = orchestrator.search(&request).await.unwrap();
@@ -437,6 +440,7 @@ mod tests {
             verbose: None,
             feedback_influence: None,
             retriever_specific_config: None,
+            response_schema: None,
         };
 
         let response = orchestrator.search(&request).await.unwrap();
@@ -532,6 +536,7 @@ mod tests {
             verbose: None,
             feedback_influence: None,
             retriever_specific_config: None,
+            response_schema: None,
         };
 
         let response = orchestrator.search(&request).await.unwrap();
@@ -621,6 +626,7 @@ mod tests {
             verbose: Some(true),
             feedback_influence: None,
             retriever_specific_config: None,
+            response_schema: None,
         };
 
         let response = orchestrator.search(&request).await.unwrap();
@@ -665,6 +671,7 @@ mod tests {
             verbose: None,
             feedback_influence: None,
             retriever_specific_config: None,
+            response_schema: None,
         };
 
         let _ = orchestrator.search(&request).await.unwrap();

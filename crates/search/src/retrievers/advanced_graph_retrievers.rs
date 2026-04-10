@@ -240,15 +240,26 @@ impl SearchRetriever for GraphSummaryCompletionRetriever {
             &summarized_context,
         );
 
-        let completion = self
-            .llm
-            .generate(
-                build_messages_with_history(system_prompt, user_prompt, session),
-                self.generation_options.clone(),
-            )
-            .await?;
+        let messages = build_messages_with_history(system_prompt, user_prompt, session);
 
-        Ok(SearchOutput::Text(completion.content))
+        if let Some(schema) = &params.response_schema {
+            let structured_value = self
+                .llm
+                .create_structured_output_with_messages_raw(
+                    messages,
+                    schema,
+                    self.generation_options.clone(),
+                )
+                .await
+                .map_err(|e| SearchError::LlmError(e.to_string()))?;
+            Ok(SearchOutput::Structured(structured_value))
+        } else {
+            let completion = self
+                .llm
+                .generate(messages, self.generation_options.clone())
+                .await?;
+            Ok(SearchOutput::Text(completion.content))
+        }
     }
 }
 
@@ -381,15 +392,26 @@ impl SearchRetriever for GraphCompletionContextExtensionRetriever {
             &render_edges_context(&extended_context),
         );
 
-        let completion = self
-            .llm
-            .generate(
-                build_messages_with_history(system_prompt, user_prompt, session),
-                self.generation_options.clone(),
-            )
-            .await?;
+        let messages = build_messages_with_history(system_prompt, user_prompt, session);
 
-        Ok(SearchOutput::Text(completion.content))
+        if let Some(schema) = &params.response_schema {
+            let structured_value = self
+                .llm
+                .create_structured_output_with_messages_raw(
+                    messages,
+                    schema,
+                    self.generation_options.clone(),
+                )
+                .await
+                .map_err(|e| SearchError::LlmError(e.to_string()))?;
+            Ok(SearchOutput::Structured(structured_value))
+        } else {
+            let completion = self
+                .llm
+                .generate(messages, self.generation_options.clone())
+                .await?;
+            Ok(SearchOutput::Text(completion.content))
+        }
     }
 }
 
@@ -561,7 +583,29 @@ impl SearchRetriever for GraphCompletionCotRetriever {
                 .content;
         }
 
-        Ok(SearchOutput::Text(current_answer))
+        if let Some(schema) = &params.response_schema {
+            // CoT builds answer iteratively as plain text; structured output
+            // is applied only to the final answer by re-running the last
+            // completion as a structured call.
+            let final_context_text = render_edges_context(&current_context);
+            let final_prompt = render_graph_user_prompt(
+                self.user_prompt_template.as_deref(),
+                query,
+                &final_context_text,
+            );
+            let structured_value = self
+                .llm
+                .create_structured_output_with_messages_raw(
+                    build_messages_with_history(system_prompt, final_prompt, session),
+                    schema,
+                    self.generation_options.clone(),
+                )
+                .await
+                .map_err(|e| SearchError::LlmError(e.to_string()))?;
+            Ok(SearchOutput::Structured(structured_value))
+        } else {
+            Ok(SearchOutput::Text(current_answer))
+        }
     }
 }
 

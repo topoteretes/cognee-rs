@@ -95,6 +95,7 @@ pub fn run(args: SearchArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> 
             verbose: None,
             feedback_influence: None,
             retriever_specific_config: None,
+            response_schema: None,
         };
 
         let response = orchestrator
@@ -216,6 +217,7 @@ fn render_output(
                 }
             }
             SearchOutput::Ack { message } => info!("{message}"),
+            SearchOutput::Structured(value) => info!("{}", value),
         },
     }
 

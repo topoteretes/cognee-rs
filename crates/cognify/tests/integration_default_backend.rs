@@ -55,6 +55,7 @@ fn is_non_empty(response: &SearchResponse) -> bool {
         SearchOutput::GraphQueryRows(rows) => !rows.is_empty(),
         SearchOutput::Rules(rules) => !rules.is_empty(),
         SearchOutput::Ack { .. } => true,
+        SearchOutput::Structured(value) => !value.is_null(),
     }
 }
 
@@ -80,6 +81,7 @@ fn make_request(query: &str, search_type: SearchType) -> SearchRequest {
         verbose: None,
         feedback_influence: None,
         retriever_specific_config: None,
+        response_schema: None,
     }
 }
 

@@ -46,6 +46,7 @@ fn is_non_empty(response: &SearchResponse) -> bool {
         SearchOutput::GraphQueryRows(rows) => !rows.is_empty(),
         SearchOutput::Rules(rules) => !rules.is_empty(),
         SearchOutput::Ack { .. } => true,
+        SearchOutput::Structured(value) => !value.is_null(),
     }
 }
 
@@ -85,6 +86,7 @@ fn make_request(query: &str, search_type: SearchType, save: Option<bool>) -> Sea
         verbose: None,
         feedback_influence: None,
         retriever_specific_config: None,
+        response_schema: None,
     }
 }
 
@@ -334,6 +336,7 @@ async fn test_search_type_matrix() {
         verbose: None,
         feedback_influence: None,
         retriever_specific_config: None,
+        response_schema: None,
     };
     let chunks_resp = orchestrator
         .search(&chunks_ctx)

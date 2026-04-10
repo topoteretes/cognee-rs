@@ -49,7 +49,12 @@ pub enum SearchOutput {
     Texts(Vec<String>),
     GraphQueryRows(Vec<Vec<Value>>),
     Rules(Vec<Rule>),
-    Ack { message: String },
+    Ack {
+        message: String,
+    },
+    /// Structured JSON output produced when a `response_schema` is provided.
+    /// The value conforms to the JSON schema supplied in `SearchParams::response_schema`.
+    Structured(Value),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
