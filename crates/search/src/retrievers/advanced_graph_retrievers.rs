@@ -421,31 +421,26 @@ impl SearchRetriever for GraphCompletionCotRetriever {
             self.system_prompt_path.as_deref(),
         )?;
 
-        let mut final_answer = String::new();
+        // Step 1: Generate INITIAL completion (before any reasoning rounds)
+        let context_text = render_edges_context(&current_context);
+        let answer_prompt =
+            render_graph_user_prompt(self.user_prompt_template.as_deref(), query, &context_text);
 
-        for iter_index in 0..self.max_iter {
-            let answer_prompt = render_graph_user_prompt(
-                self.user_prompt_template.as_deref(),
-                query,
-                &render_edges_context(&current_context),
-            );
+        let mut current_answer = self
+            .llm
+            .generate(
+                build_messages_with_history(system_prompt.clone(), answer_prompt, session),
+                self.generation_options.clone(),
+            )
+            .await?
+            .content;
 
-            final_answer = self
-                .llm
-                .generate(
-                    build_messages_with_history(system_prompt.clone(), answer_prompt, session),
-                    self.generation_options.clone(),
-                )
-                .await?
-                .content;
-
-            if iter_index + 1 >= self.max_iter {
-                break;
-            }
-
+        // Step 2: Run max_iter REASONING rounds
+        for _ in 0..self.max_iter {
+            // 2a. Validate the current answer against the context
             let validation_prompt = DEFAULT_COT_VALIDATION_USER_PROMPT
                 .replace("{question}", query)
-                .replace("{answer}", &final_answer)
+                .replace("{answer}", &current_answer)
                 .replace("{context}", &render_edges_context(&current_context));
 
             let validation = self
@@ -460,9 +455,10 @@ impl SearchRetriever for GraphCompletionCotRetriever {
                 .await?
                 .content;
 
+            // 2b. Generate follow-up question based on validation reasoning
             let follow_up_prompt = DEFAULT_COT_FOLLOW_UP_USER_PROMPT
                 .replace("{question}", query)
-                .replace("{answer}", &final_answer)
+                .replace("{answer}", &current_answer)
                 .replace("{validation}", &validation);
 
             let follow_up_query = self
@@ -483,11 +479,33 @@ impl SearchRetriever for GraphCompletionCotRetriever {
                 break;
             }
 
+            // 2c. Fetch new context using the follow-up question
             let additional_context = self.get_context(&follow_up_query).await?;
             current_context = merge_dedup_context(&current_context, &additional_context);
+
+            // 2d. Regenerate completion with the enriched context
+            let enriched_context_text = render_edges_context(&current_context);
+            let regeneration_prompt = render_graph_user_prompt(
+                self.user_prompt_template.as_deref(),
+                query,
+                &enriched_context_text,
+            );
+
+            current_answer = self
+                .llm
+                .generate(
+                    build_messages_with_history(
+                        system_prompt.clone(),
+                        regeneration_prompt,
+                        session,
+                    ),
+                    self.generation_options.clone(),
+                )
+                .await?
+                .content;
         }
 
-        Ok(SearchOutput::Text(final_answer))
+        Ok(SearchOutput::Text(current_answer))
     }
 }
 
@@ -855,7 +873,7 @@ mod tests {
             Some(5),
             Some(5),
             Some(0.0),
-            Some(2),
+            Some(1),
             None,
             None,
             None,
@@ -872,5 +890,40 @@ mod tests {
             SearchOutput::Text(text) => assert_eq!(text, "second answer"),
             _ => panic!("expected text output"),
         }
+    }
+
+    #[tokio::test]
+    async fn graph_cot_with_zero_rounds_returns_initial_completion_only() {
+        // With max_iter = 0, the reasoning loop is never entered.
+        // Only the initial completion LLM call should be made.
+        let llm = Arc::new(TestLlm::new(vec!["the answer"]));
+
+        let retriever = GraphCompletionCotRetriever::new(
+            build_vector_db(),
+            Arc::new(TestEmbeddingEngine),
+            build_graph_db().await,
+            Arc::clone(&llm) as Arc<dyn Llm>,
+            Some(5),
+            Some(5),
+            Some(0.0),
+            Some(0), // zero reasoning rounds
+            None,
+            None,
+            None,
+            None,
+        );
+
+        let output = retriever
+            .get_completion("Who knows Bob?", None, &SessionContext::default())
+            .await
+            .unwrap();
+
+        match output {
+            SearchOutput::Text(text) => assert_eq!(text, "the answer"),
+            _ => panic!("expected text output"),
+        }
+
+        // Exactly one LLM call: the initial completion (no reasoning rounds).
+        assert_eq!(llm.captured_messages.lock().unwrap().len(), 1);
     }
 }
