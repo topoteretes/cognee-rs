@@ -3,6 +3,7 @@ pub mod download;
 pub mod engine;
 pub mod error;
 pub mod onnx;
+pub mod openai_compatible;
 pub mod provider;
 pub mod utils;
 
@@ -11,4 +12,6 @@ pub use download::{ModelUrls, download_model, ensure_model_exists, ensure_tokeni
 pub use engine::EmbeddingEngine;
 pub use error::{EmbeddingError, EmbeddingResult};
 pub use onnx::OnnxEmbeddingEngine;
+pub use openai_compatible::OpenAICompatibleEmbeddingEngine;
 pub use provider::EmbeddingProvider;
+pub use utils::{handle_embedding_response, is_embeddable, sanitize_embedding_inputs};

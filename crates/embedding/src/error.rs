@@ -19,6 +19,16 @@ pub enum EmbeddingError {
 
     #[error("Provider not implemented: {0}")]
     NotImplemented(String),
+
+    /// HTTP-level error (network failure, rate-limit 429, server 5xx).
+    /// These are considered transient and will be retried by the engine.
+    #[error("HTTP error: {0}")]
+    HttpError(String),
+
+    /// API-level error (4xx other than 429, unexpected response shape).
+    /// These are not retried.
+    #[error("API error: {0}")]
+    ApiError(String),
 }
 
 pub type EmbeddingResult<T> = Result<T, EmbeddingError>;

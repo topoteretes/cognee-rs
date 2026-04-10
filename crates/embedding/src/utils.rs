@@ -75,6 +75,65 @@ pub fn compute_norm(vec: &[f32]) -> f32 {
     vec.iter().map(|x| x * x).sum::<f32>().sqrt()
 }
 
+use std::borrow::Cow;
+
+/// Returns `true` if `s` is non-empty after stripping ASCII whitespace.
+///
+/// Used to detect inputs that would produce degenerate zero/NaN embeddings
+/// when sent to an embedding API.
+pub fn is_embeddable(s: &str) -> bool {
+    !s.trim().is_empty()
+}
+
+/// Replace empty/whitespace-only strings with `"."` to prevent API errors.
+///
+/// Returns a `Vec<Cow<str>>` of the same length as `texts`. Non-empty strings
+/// are returned as `Cow::Borrowed` (zero-copy); empty/whitespace-only strings
+/// are replaced with `Cow::Owned(".")`.
+///
+/// After receiving the API response, pair this with
+/// [`handle_embedding_response`] to zero out vectors for slots that were
+/// originally invalid.
+pub fn sanitize_embedding_inputs<'a>(texts: &[&'a str]) -> Vec<Cow<'a, str>> {
+    texts
+        .iter()
+        .map(|&t| {
+            if is_embeddable(t) {
+                Cow::Borrowed(t)
+            } else {
+                Cow::Owned(".".to_string())
+            }
+        })
+        .collect()
+}
+
+/// Replace embeddings for originally-invalid inputs with zero vectors.
+///
+/// Iterates `original_texts` in parallel with `embeddings`. For each slot
+/// where `original_texts[i]` is empty or whitespace-only (as determined by
+/// [`is_embeddable`]), the corresponding embedding is replaced with a zero
+/// vector of length `dimensions`.
+///
+/// This must be called with the *original* (unsanitized) texts, not the
+/// sanitized ones returned by [`sanitize_embedding_inputs`].
+pub fn handle_embedding_response(
+    original_texts: &[&str],
+    embeddings: Vec<Vec<f32>>,
+    dimensions: usize,
+) -> Vec<Vec<f32>> {
+    original_texts
+        .iter()
+        .zip(embeddings)
+        .map(|(t, v)| {
+            if is_embeddable(t) {
+                v
+            } else {
+                vec![0.0; dimensions]
+            }
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -119,5 +178,73 @@ mod tests {
         // Mean of only real tokens [[1,2], [3,4]] = [2.0, 3.0]
         assert!((pooled[0] - 2.0).abs() < 0.001);
         assert!((pooled[1] - 3.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_is_embeddable_non_empty() {
+        assert!(is_embeddable("hello world"));
+        assert!(is_embeddable("  some text  "));
+        assert!(is_embeddable("."));
+    }
+
+    #[test]
+    fn test_is_embeddable_empty_or_whitespace() {
+        assert!(!is_embeddable(""));
+        assert!(!is_embeddable("   "));
+        assert!(!is_embeddable("\t\n"));
+        assert!(!is_embeddable("\r\n"));
+    }
+
+    #[test]
+    fn test_sanitize_embedding_inputs_preserves_valid() {
+        let texts = ["hello", "world"];
+        let sanitized = sanitize_embedding_inputs(&texts);
+        assert_eq!(sanitized.len(), 2);
+        // Valid strings should be borrowed (no allocation)
+        assert_eq!(sanitized[0].as_ref(), "hello");
+        assert_eq!(sanitized[1].as_ref(), "world");
+        assert!(matches!(sanitized[0], Cow::Borrowed(_)));
+        assert!(matches!(sanitized[1], Cow::Borrowed(_)));
+    }
+
+    #[test]
+    fn test_sanitize_embedding_inputs_replaces_empty() {
+        let texts = ["", "   ", "valid", "\t"];
+        let sanitized = sanitize_embedding_inputs(&texts);
+        assert_eq!(sanitized.len(), 4);
+        assert_eq!(sanitized[0].as_ref(), ".");
+        assert_eq!(sanitized[1].as_ref(), ".");
+        assert_eq!(sanitized[2].as_ref(), "valid");
+        assert_eq!(sanitized[3].as_ref(), ".");
+        assert!(matches!(sanitized[0], Cow::Owned(_)));
+        assert!(matches!(sanitized[2], Cow::Borrowed(_)));
+    }
+
+    #[test]
+    fn test_handle_embedding_response_zeros_invalid() {
+        let original = ["valid", ""];
+        let embeddings = vec![vec![1.0, 2.0, 3.0], vec![0.5, 0.5, 0.5]];
+        let result = handle_embedding_response(&original, embeddings, 3);
+        // Valid slot: unchanged
+        assert_eq!(result[0], vec![1.0, 2.0, 3.0]);
+        // Invalid slot: zeroed out
+        assert_eq!(result[1], vec![0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn test_handle_embedding_response_all_valid() {
+        let original = ["a", "b"];
+        let embeddings = vec![vec![1.0, 2.0], vec![3.0, 4.0]];
+        let result = handle_embedding_response(&original, embeddings.clone(), 2);
+        assert_eq!(result, embeddings);
+    }
+
+    #[test]
+    fn test_handle_embedding_response_all_invalid() {
+        let original = ["", "  "];
+        let embeddings = vec![vec![9.9, 9.9], vec![8.8, 8.8]];
+        let result = handle_embedding_response(&original, embeddings, 2);
+        assert_eq!(result[0], vec![0.0, 0.0]);
+        assert_eq!(result[1], vec![0.0, 0.0]);
     }
 }

@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::engine::EmbeddingEngine;
 use crate::error::{EmbeddingError, EmbeddingResult};
 use crate::onnx::OnnxEmbeddingEngine;
+use crate::openai_compatible::OpenAICompatibleEmbeddingEngine;
 use crate::provider::EmbeddingProvider;
 
 /// ONNX-specific configuration.
@@ -273,6 +274,10 @@ impl EmbeddingConfig {
         match self.effective_provider() {
             EmbeddingProvider::Onnx | EmbeddingProvider::Fastembed => {
                 let engine = OnnxEmbeddingEngine::with_auto_download(self.onnx.clone()).await?;
+                Ok(Arc::new(engine))
+            }
+            EmbeddingProvider::OpenAi | EmbeddingProvider::OpenAiCompatible => {
+                let engine = OpenAICompatibleEmbeddingEngine::new(self)?;
                 Ok(Arc::new(engine))
             }
             other => Err(EmbeddingError::NotImplemented(format!(
