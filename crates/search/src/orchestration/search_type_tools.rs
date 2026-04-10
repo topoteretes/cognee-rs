@@ -6,6 +6,7 @@ use crate::types::{SearchError, SearchType};
 #[derive(Default)]
 pub struct SearchTypeRegistry {
     retrievers: HashMap<SearchType, SearchRetrieverRef>,
+    named_retrievers: HashMap<String, SearchRetrieverRef>,
 }
 
 impl SearchTypeRegistry {
@@ -26,5 +27,15 @@ impl SearchTypeRegistry {
 
     pub fn contains(&self, search_type: SearchType) -> bool {
         self.retrievers.contains_key(&search_type)
+    }
+
+    /// Register a community retriever by name.
+    pub fn register_named(&mut self, name: impl Into<String>, retriever: SearchRetrieverRef) {
+        self.named_retrievers.insert(name.into(), retriever);
+    }
+
+    /// Look up a named community retriever.
+    pub fn get_by_name(&self, name: &str) -> Option<SearchRetrieverRef> {
+        self.named_retrievers.get(name).cloned()
     }
 }

@@ -43,11 +43,45 @@ impl SearchOrchestrator {
         Ok(database.get_history(user_id, limit).await?)
     }
 
+    /// Register a community retriever by name.
+    pub fn with_community_retriever(
+        mut self,
+        name: impl Into<String>,
+        retriever: crate::retrievers::SearchRetrieverRef,
+    ) -> Self {
+        self.registry.register_named(name, retriever);
+        self
+    }
+
+    /// Execute multiple search requests, routing each to its appropriate retriever.
+    ///
+    /// Returns one `SearchResponse` per request, in the same order.
+    pub async fn search_batch(
+        &self,
+        requests: &[SearchRequest],
+    ) -> Result<Vec<SearchResponse>, SearchError> {
+        let mut responses = Vec::with_capacity(requests.len());
+        for request in requests {
+            responses.push(self.search(request).await?);
+        }
+        Ok(responses)
+    }
+
     pub async fn search(
         &self,
         request: &SearchRequest,
     ) -> Result<SearchResponse, crate::types::SearchError> {
-        let retriever = self.registry.get(request.search_type)?;
+        let retriever: crate::retrievers::SearchRetrieverRef =
+            if let Some(ref custom_type) = request.custom_search_type {
+                self.registry.get_by_name(custom_type).ok_or_else(|| {
+                    SearchError::InvalidInput(format!(
+                        "No community retriever registered for '{}'",
+                        custom_type
+                    ))
+                })?
+            } else {
+                self.registry.get(request.search_type)?
+            };
         let params = SearchParams::from(request);
         let use_dataset_scope = request
             .dataset_ids
@@ -281,6 +315,7 @@ mod tests {
             feedback_influence: None,
             retriever_specific_config: None,
             response_schema: None,
+            custom_search_type: None,
         };
 
         let response = orchestrator.search(&request).await.unwrap();
@@ -322,6 +357,7 @@ mod tests {
             feedback_influence: None,
             retriever_specific_config: None,
             response_schema: None,
+            custom_search_type: None,
         };
 
         let response = orchestrator.search(&request).await.unwrap();
@@ -368,6 +404,7 @@ mod tests {
             feedback_influence: None,
             retriever_specific_config: None,
             response_schema: None,
+            custom_search_type: None,
         };
 
         let response = orchestrator.search(&request).await.unwrap();
@@ -441,6 +478,7 @@ mod tests {
             feedback_influence: None,
             retriever_specific_config: None,
             response_schema: None,
+            custom_search_type: None,
         };
 
         let response = orchestrator.search(&request).await.unwrap();
@@ -537,6 +575,7 @@ mod tests {
             feedback_influence: None,
             retriever_specific_config: None,
             response_schema: None,
+            custom_search_type: None,
         };
 
         let response = orchestrator.search(&request).await.unwrap();
@@ -627,6 +666,7 @@ mod tests {
             feedback_influence: None,
             retriever_specific_config: None,
             response_schema: None,
+            custom_search_type: None,
         };
 
         let response = orchestrator.search(&request).await.unwrap();
@@ -672,6 +712,7 @@ mod tests {
             feedback_influence: None,
             retriever_specific_config: None,
             response_schema: None,
+            custom_search_type: None,
         };
 
         let _ = orchestrator.search(&request).await.unwrap();
@@ -687,6 +728,153 @@ mod tests {
             history
                 .iter()
                 .any(|entry| entry.entry_type == SearchHistoryEntryType::Result)
+        );
+    }
+
+    #[tokio::test]
+    async fn search_batch_returns_one_response_per_request() {
+        let mut registry = SearchTypeRegistry::new();
+        registry.register(Arc::new(FakeChunksRetriever));
+
+        let orchestrator = super::SearchOrchestrator::new(registry);
+
+        let requests = vec![
+            SearchRequest {
+                query_text: "first".to_string(),
+                search_type: SearchType::Chunks,
+                top_k: Some(3),
+                datasets: None,
+                dataset_ids: None,
+                system_prompt: None,
+                system_prompt_path: None,
+                only_context: Some(false),
+                use_combined_context: Some(false),
+                session_id: None,
+                node_type: None,
+                node_name: None,
+                wide_search_top_k: None,
+                triplet_distance_penalty: None,
+                save_interaction: None,
+                user_id: None,
+                verbose: None,
+                feedback_influence: None,
+                retriever_specific_config: None,
+                response_schema: None,
+                custom_search_type: None,
+            },
+            SearchRequest {
+                query_text: "second".to_string(),
+                search_type: SearchType::Chunks,
+                top_k: Some(3),
+                datasets: None,
+                dataset_ids: None,
+                system_prompt: None,
+                system_prompt_path: None,
+                only_context: Some(false),
+                use_combined_context: Some(false),
+                session_id: None,
+                node_type: None,
+                node_name: None,
+                wide_search_top_k: None,
+                triplet_distance_penalty: None,
+                save_interaction: None,
+                user_id: None,
+                verbose: None,
+                feedback_influence: None,
+                retriever_specific_config: None,
+                response_schema: None,
+                custom_search_type: None,
+            },
+        ];
+
+        let responses = orchestrator.search_batch(&requests).await.unwrap();
+
+        assert_eq!(responses.len(), 2);
+        for response in &responses {
+            match &response.result {
+                SearchOutput::Text(answer) => assert_eq!(answer, "answer value"),
+                _ => panic!("unexpected output kind"),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn routes_to_community_retriever_by_name() {
+        let registry = SearchTypeRegistry::new();
+        let orchestrator = super::SearchOrchestrator::new(registry)
+            .with_community_retriever("my_custom", Arc::new(FakeChunksRetriever));
+
+        let request = SearchRequest {
+            query_text: "hello".to_string(),
+            search_type: SearchType::Chunks,
+            top_k: Some(3),
+            datasets: None,
+            dataset_ids: None,
+            system_prompt: None,
+            system_prompt_path: None,
+            only_context: Some(false),
+            use_combined_context: Some(false),
+            session_id: None,
+            node_type: None,
+            node_name: None,
+            wide_search_top_k: None,
+            triplet_distance_penalty: None,
+            save_interaction: None,
+            user_id: None,
+            verbose: None,
+            feedback_influence: None,
+            retriever_specific_config: None,
+            response_schema: None,
+            custom_search_type: Some("my_custom".to_string()),
+        };
+
+        let response = orchestrator.search(&request).await.unwrap();
+
+        match response.result {
+            SearchOutput::Text(answer) => assert_eq!(answer, "answer value"),
+            _ => panic!("unexpected output kind"),
+        }
+    }
+
+    #[tokio::test]
+    async fn returns_error_for_unknown_community_retriever_name() {
+        let registry = SearchTypeRegistry::new();
+        let orchestrator = super::SearchOrchestrator::new(registry);
+
+        let request = SearchRequest {
+            query_text: "hello".to_string(),
+            search_type: SearchType::Chunks,
+            top_k: Some(3),
+            datasets: None,
+            dataset_ids: None,
+            system_prompt: None,
+            system_prompt_path: None,
+            only_context: Some(false),
+            use_combined_context: Some(false),
+            session_id: None,
+            node_type: None,
+            node_name: None,
+            wide_search_top_k: None,
+            triplet_distance_penalty: None,
+            save_interaction: None,
+            user_id: None,
+            verbose: None,
+            feedback_influence: None,
+            retriever_specific_config: None,
+            response_schema: None,
+            custom_search_type: Some("nonexistent".to_string()),
+        };
+
+        let result = orchestrator.search(&request).await;
+        assert!(
+            result.is_err(),
+            "expected error for unknown community retriever"
+        );
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, SearchError::InvalidInput(_)),
+            "expected InvalidInput error, got: {:?}",
+            err
         );
     }
 }

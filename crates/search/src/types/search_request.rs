@@ -37,6 +37,9 @@ pub struct SearchRequest {
     /// When present, completion-generating retrievers return structured JSON
     /// matching this schema instead of plain text.
     pub response_schema: Option<serde_json::Value>,
+    /// When set, routes to a community/custom retriever registered by this name,
+    /// ignoring `search_type`.
+    pub custom_search_type: Option<String>,
 }
 
 impl SearchRequest {

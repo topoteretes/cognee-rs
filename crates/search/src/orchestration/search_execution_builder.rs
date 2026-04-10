@@ -619,6 +619,7 @@ mod tests {
             feedback_influence: None,
             retriever_specific_config: None,
             response_schema: None,
+            custom_search_type: None,
         };
 
         let response = orchestrator.search(&request).await.unwrap();
@@ -693,6 +694,7 @@ mod tests {
             feedback_influence: None,
             retriever_specific_config: None,
             response_schema: None,
+            custom_search_type: None,
         };
 
         let response = orchestrator.search(&request).await.unwrap();

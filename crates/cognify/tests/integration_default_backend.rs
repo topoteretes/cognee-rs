@@ -82,6 +82,7 @@ fn make_request(query: &str, search_type: SearchType) -> SearchRequest {
         feedback_influence: None,
         retriever_specific_config: None,
         response_schema: None,
+        custom_search_type: None,
     }
 }
 
