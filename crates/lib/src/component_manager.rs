@@ -8,7 +8,7 @@ use tokio::sync::OnceCell;
 use tracing::warn;
 
 use cognee_database::{DatabaseConnection, connect, initialize};
-use cognee_embedding::{EmbeddingEngine, OnnxEmbeddingConfig, OnnxEmbeddingEngine};
+use cognee_embedding::{EmbeddingConfig, EmbeddingEngine};
 use cognee_graph::{GraphDBTrait, LadybugAdapter};
 #[cfg(all(feature = "android-litert", target_os = "android"))]
 use cognee_llm::LiteRtAdapter;
@@ -127,16 +127,13 @@ impl ComponentManager {
     }
 
     fn init_embedding_engine(&self) -> Result<Arc<dyn EmbeddingEngine>, ComponentError> {
-        let engine = OnnxEmbeddingEngine::new(OnnxEmbeddingConfig {
-            model_path: PathBuf::from(&self.settings.embedding_model_path),
-            tokenizer_path: PathBuf::from(&self.settings.embedding_tokenizer_path),
-            model_name: self.settings.embedding_model_name.clone(),
-            dimensions: self.settings.embedding_dimensions as usize,
-            max_sequence_length: self.settings.embedding_max_sequence_length as usize,
-            batch_size: self.settings.embedding_batch_size as usize,
-        })
-        .map_err(|e| ComponentError::EmbeddingEngine(format!("initialization failed: {e}")))?;
-        Ok(Arc::new(engine))
+        let config = EmbeddingConfig::from_env();
+        let handle = tokio::runtime::Handle::try_current()
+            .map_err(|e| ComponentError::EmbeddingEngine(format!("no tokio runtime: {e}")))?;
+        let engine = handle
+            .block_on(config.create_engine())
+            .map_err(|e| ComponentError::EmbeddingEngine(format!("embedding engine init failed: {e}")))?;
+        Ok(engine)
     }
 
     fn init_llm(&self) -> Result<Arc<dyn Llm>, ComponentError> {

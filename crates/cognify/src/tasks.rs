@@ -18,7 +18,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use chrono::Utc;
-use cognee_chunking::{WordCounter, chunk_text};
+use cognee_chunking::{TokenCounterKind, chunk_text};
 use cognee_core::{Pipeline, PipelineBuilder, TypedTask};
 use cognee_database::DatabaseConnection;
 use cognee_embedding::engine::EmbeddingEngine;
@@ -148,9 +148,12 @@ pub async fn extract_chunks_from_documents(
     input: &ClassifiedDocuments,
     storage: &dyn StorageTrait,
     max_chunk_size: usize,
+    token_counter_kind: TokenCounterKind,
     db: Option<&DatabaseConnection>,
 ) -> Result<ExtractedChunks, CognifyError> {
-    let counter = WordCounter;
+    let counter = token_counter_kind
+        .build()
+        .map_err(|e| CognifyError::ChunkingError(e.to_string()))?;
     let mut all_chunks = Vec::new();
 
     for document in &input.documents {
@@ -1899,17 +1902,25 @@ pub fn make_classify_documents_task() -> TypedTask<CognifyInput, ClassifiedDocum
 pub fn make_extract_chunks_task(
     storage: Arc<dyn StorageTrait>,
     max_chunk_size: usize,
+    token_counter_kind: TokenCounterKind,
     db: Option<Arc<DatabaseConnection>>,
 ) -> TypedTask<ClassifiedDocuments, ExtractedChunks> {
     TypedTask::async_fn(move |input: &ClassifiedDocuments, _ctx| {
         let input = input.clone();
         let storage = Arc::clone(&storage);
         let db = db.clone();
+        let token_counter_kind = token_counter_kind.clone();
         Box::pin(async move {
-            extract_chunks_from_documents(&input, &*storage, max_chunk_size, db.as_deref())
-                .await
-                .map(Box::new)
-                .map_err(|e| format!("{e}").into())
+            extract_chunks_from_documents(
+                &input,
+                &*storage,
+                max_chunk_size,
+                token_counter_kind,
+                db.as_deref(),
+            )
+            .await
+            .map(Box::new)
+            .map_err(|e| format!("{e}").into())
         })
     })
 }
@@ -2002,6 +2013,7 @@ pub fn build_cognify_pipeline(
         .add_task(make_extract_chunks_task(
             storage,
             config.max_chunk_size,
+            config.token_counter_kind.clone(),
             db.clone(),
         ))
         .add_task(make_extract_graph_task(

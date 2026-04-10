@@ -4,6 +4,21 @@ pub trait TokenCounter {
     fn count_tokens(&self, text: &str) -> usize;
 }
 
+/// Blanket implementation so `Box<dyn TokenCounter + Send + Sync>` can be passed
+/// to functions that accept `impl TokenCounter` (like `chunk_text`).
+impl<T: TokenCounter + ?Sized> TokenCounter for Box<T> {
+    fn count_tokens(&self, text: &str) -> usize {
+        (**self).count_tokens(text)
+    }
+}
+
+/// Blanket implementation so `&dyn TokenCounter` can be used anywhere `TokenCounter` is required.
+impl<T: TokenCounter + ?Sized> TokenCounter for &T {
+    fn count_tokens(&self, text: &str) -> usize {
+        (*self).count_tokens(text)
+    }
+}
+
 /// Simple token counter that splits on whitespace and counts words.
 #[derive(Debug, Clone, Default)]
 pub struct WordCounter;

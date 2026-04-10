@@ -5,6 +5,7 @@
 //! NO environment variables should be read in pipeline components.
 //! ALL configuration flows through this struct.
 
+use cognee_chunking::TokenCounterKind;
 use cognee_embedding::engine::EmbeddingEngine;
 use cognee_llm::Llm;
 use serde::{Deserialize, Serialize};
@@ -98,6 +99,10 @@ pub struct CognifyConfig {
     /// Batch size for data processing in temporal cognify.
     /// Python parameter: data_per_batch (default: 20)
     pub data_per_batch: usize,
+
+    /// How to count tokens when chunking text.
+    /// Default is determined at construction time via [`TokenCounterKind::from_env`].
+    pub token_counter_kind: TokenCounterKind,
 }
 
 /// Chunking strategy options.
@@ -138,6 +143,8 @@ impl Default for CognifyConfig {
 
             temporal_cognify: false,
             data_per_batch: 20,
+
+            token_counter_kind: TokenCounterKind::from_env(),
         }
     }
 }
@@ -230,6 +237,12 @@ impl CognifyConfig {
     /// Set data per batch for temporal processing.
     pub fn with_data_per_batch(mut self, batch_size: usize) -> Self {
         self.data_per_batch = batch_size;
+        self
+    }
+
+    /// Set the token counter implementation to use during chunking.
+    pub fn with_token_counter(mut self, kind: TokenCounterKind) -> Self {
+        self.token_counter_kind = kind;
         self
     }
 

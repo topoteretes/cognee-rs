@@ -7,6 +7,8 @@
 
 use std::path::PathBuf;
 
+use serde::{Deserialize, Serialize};
+
 use crate::error::ChunkingError;
 use crate::token_counter::{TokenCounter, WordCounter};
 
@@ -14,7 +16,7 @@ use crate::token_counter::{TokenCounter, WordCounter};
 ///
 /// `from_env()` picks the best available counter based on env vars and the current
 /// embedding provider setting. `WordCounter` is the last-resort fallback.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum TokenCounterKind {
     /// Accurate BPE/WordPiece via a HuggingFace tokenizer model ID (requires network or cache).
     HuggingFace { model_id: String },
