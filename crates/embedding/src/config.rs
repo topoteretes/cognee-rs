@@ -51,7 +51,7 @@ impl OnnxEmbeddingConfig {
         Self {
             model_path,
             tokenizer_path,
-            model_name: "BGE-Small-v1.5".to_string(),
+            model_name: "bge-small-en-v1.5".to_string(),
             dimensions: 384,
             max_sequence_length: 512,
             batch_size: 32,
@@ -413,7 +413,7 @@ mod tests {
         let cfg = OnnxEmbeddingConfig::bge_small("/models");
         assert_eq!(cfg.dimensions, 384);
         assert_eq!(cfg.max_sequence_length, 512);
-        assert_eq!(cfg.model_name, "BGE-Small-v1.5");
+        assert_eq!(cfg.model_name, "bge-small-en-v1.5");
     }
 
     #[test]

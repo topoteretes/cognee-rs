@@ -1148,7 +1148,7 @@ pub async fn cognify(
 
     // Task 2: Extract text chunks (with token count write-back when DB available)
     let mut extracted_chunks =
-        extract_chunks_from_documents(&classified, &*storage, config.max_chunk_size, db.as_deref())
+        extract_chunks_from_documents(&classified, &*storage, config.max_chunk_size, config.token_counter_kind.clone(), db.as_deref())
             .await?;
 
     // Stamp provenance on extracted chunks
@@ -2129,7 +2129,7 @@ mod tests {
             tenant_id: None,
         };
 
-        let result = extract_chunks_from_documents(&input, &*storage, 100, None)
+        let result = extract_chunks_from_documents(&input, &*storage, 100, TokenCounterKind::Word, None)
             .await
             .unwrap();
         assert!(!result.chunks.is_empty());
@@ -2145,7 +2145,7 @@ mod tests {
             tenant_id: None,
         };
 
-        let result = extract_chunks_from_documents(&input, &*storage, 100, None)
+        let result = extract_chunks_from_documents(&input, &*storage, 100, TokenCounterKind::Word, None)
             .await
             .unwrap();
         assert!(result.chunks.is_empty());
