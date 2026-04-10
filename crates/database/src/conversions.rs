@@ -1,6 +1,6 @@
 use crate::entities::{
     artifact_reference, data, dataset, dataset_data, edge, graph_metrics, node, pipeline_run,
-    query_log, result_log, task_run,
+    query, result_log, task_run,
 };
 use crate::types::{
     ArtifactReference, DatabaseError, GraphEdge, GraphMetrics, GraphNode, PipelineRun,
@@ -155,7 +155,7 @@ pub(crate) fn make_dataset_data_active(
 // Search history conversions
 // ---------------------------------------------------------------------------
 
-pub(crate) fn query_model_to_history(m: query_log::Model) -> SearchHistoryEntry {
+pub(crate) fn query_model_to_history(m: query::Model) -> SearchHistoryEntry {
     let id = uuid_hex::from_hex(&m.id).expect(
         "DB stores only valid UUID hex strings; corruption indicates data integrity failure",
     );

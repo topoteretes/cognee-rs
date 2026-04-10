@@ -4,7 +4,7 @@ pub mod artifact_reference;
 pub mod data;
 pub mod dataset;
 pub mod dataset_data;
-pub mod query_log;
+pub mod query;
 pub mod result_log;
 
 // Phase 3 entities (new tables from Python models):

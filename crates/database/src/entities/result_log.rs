@@ -16,15 +16,15 @@ pub struct Model {
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
 pub enum Relation {
     #[sea_orm(
-        belongs_to = "super::query_log::Entity",
+        belongs_to = "super::query::Entity",
         from = "Column::QueryId",
-        to = "super::query_log::Column::Id",
+        to = "super::query::Column::Id",
         on_delete = "Cascade"
     )]
     Query,
 }
 
-impl Related<super::query_log::Entity> for Entity {
+impl Related<super::query::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::Query.def()
     }

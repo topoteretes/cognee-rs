@@ -5,7 +5,7 @@ use sea_orm::{
 use uuid::Uuid;
 
 use crate::conversions::{map_sea_err, query_model_to_history, result_model_to_history};
-use crate::entities::{query_log, result_log};
+use crate::entities::{query, result_log};
 use crate::types::{DatabaseError, SearchHistoryEntry};
 use crate::uuid_hex;
 
@@ -16,7 +16,7 @@ pub async fn log_query(
     user_id: Option<Uuid>,
 ) -> Result<Uuid, DatabaseError> {
     let id = Uuid::new_v4();
-    let model = query_log::ActiveModel {
+    let model = query::ActiveModel {
         id: Set(uuid_hex::to_hex(id)),
         query_text: Set(query_text.to_string()),
         query_type: Set(query_type.to_string()),
@@ -50,9 +50,9 @@ pub async fn get_history(
     user_id: Option<Uuid>,
     limit: Option<usize>,
 ) -> Result<Vec<SearchHistoryEntry>, DatabaseError> {
-    let mut q_query = query_log::Entity::find();
+    let mut q_query = query::Entity::find();
     if let Some(uid) = user_id {
-        q_query = q_query.filter(query_log::Column::UserId.eq(uuid_hex::to_hex(uid)));
+        q_query = q_query.filter(query::Column::UserId.eq(uuid_hex::to_hex(uid)));
     }
     let queries = q_query
         .all(db)

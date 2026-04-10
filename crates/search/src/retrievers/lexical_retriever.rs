@@ -48,7 +48,7 @@ impl LexicalRetriever {
 
         for ch in text.chars() {
             if ch.is_alphanumeric() || ch == '_' {
-                current.push(ch.to_ascii_lowercase());
+                current.extend(ch.to_lowercase());
             } else if !current.is_empty() {
                 if !self.stop_words.contains(&current) {
                     tokens.push(std::mem::take(&mut current));
@@ -396,6 +396,22 @@ mod tests {
         assert!(
             first_text.contains("ownership") && first_text.contains("safety"),
             "highest-ranked chunk should contain both query terms, got: {first_text}"
+        );
+    }
+
+    #[test]
+    fn tokenize_lowercases_unicode_characters() {
+        let mock_graph_db = Arc::new(MockGraphDB::new());
+        let graph_db: Arc<dyn cognee_graph::GraphDBTrait> = mock_graph_db;
+        let retriever =
+            JaccardChunksRetriever::new(Arc::clone(&graph_db), None, false, None, false);
+
+        assert_eq!(retriever.inner.tokenize("Über"), vec!["über"]);
+        assert_eq!(retriever.inner.tokenize("Ñoño"), vec!["ñoño"]);
+        assert_eq!(retriever.inner.tokenize("ДМИТРО"), vec!["дмитро"]);
+        assert_eq!(
+            retriever.inner.tokenize("Hello World"),
+            vec!["hello", "world"]
         );
     }
 

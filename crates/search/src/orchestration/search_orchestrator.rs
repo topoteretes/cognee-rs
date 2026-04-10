@@ -53,7 +53,7 @@ impl SearchOrchestrator {
             .as_ref()
             .map(|ids| !ids.is_empty())
             .unwrap_or(false);
-        let should_save_interaction = request.save_interaction.unwrap_or(false);
+        let should_save_interaction = request.save_interaction.unwrap_or(true);
         let query_type = format!("{:?}", request.search_type);
         let mut logged_query_id = None;
 
