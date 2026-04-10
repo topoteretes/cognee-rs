@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::engine::EmbeddingEngine;
 use crate::error::{EmbeddingError, EmbeddingResult};
+use crate::ollama::OllamaEmbeddingEngine;
 use crate::onnx::OnnxEmbeddingEngine;
 use crate::openai_compatible::OpenAICompatibleEmbeddingEngine;
 use crate::provider::EmbeddingProvider;
@@ -187,6 +188,15 @@ impl EmbeddingConfig {
             }
         }
 
+        // Apply provider-specific defaults before checking env var overrides.
+        // This ensures that when a user switches to EMBEDDING_PROVIDER=ollama
+        // without setting EMBEDDING_MODEL/EMBEDDING_DIMENSIONS explicitly, they
+        // get sensible Ollama defaults rather than the ONNX defaults.
+        if config.provider == EmbeddingProvider::Ollama {
+            config.model = "avr/sfr-embedding-mistral:latest".to_string();
+            config.dimensions = 1024;
+        }
+
         // EMBEDDING_MODEL
         if let Ok(val) = std::env::var("EMBEDDING_MODEL") {
             let val = val.trim().to_string();
@@ -278,6 +288,10 @@ impl EmbeddingConfig {
             }
             EmbeddingProvider::OpenAi | EmbeddingProvider::OpenAiCompatible => {
                 let engine = OpenAICompatibleEmbeddingEngine::new(self)?;
+                Ok(Arc::new(engine))
+            }
+            EmbeddingProvider::Ollama => {
+                let engine = OllamaEmbeddingEngine::new(self)?;
                 Ok(Arc::new(engine))
             }
             other => Err(EmbeddingError::NotImplemented(format!(
