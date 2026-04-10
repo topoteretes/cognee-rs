@@ -57,7 +57,10 @@ mod tests {
     async fn test_embed_returns_correct_count() {
         let engine = MockEmbeddingEngine::new(384);
         let texts = vec!["hello", "world", "foo"];
-        let embeddings = engine.embed(&texts).await.expect("embed must not fail for mock engine");
+        let embeddings = engine
+            .embed(&texts)
+            .await
+            .expect("embed must not fail for mock engine");
         assert_eq!(embeddings.len(), texts.len());
     }
 
@@ -65,7 +68,10 @@ mod tests {
     async fn test_embed_returns_correct_dimensions() {
         let engine = MockEmbeddingEngine::new(512);
         let texts = vec!["some text"];
-        let embeddings = engine.embed(&texts).await.expect("embed must not fail for mock engine");
+        let embeddings = engine
+            .embed(&texts)
+            .await
+            .expect("embed must not fail for mock engine");
         assert_eq!(embeddings[0].len(), 512);
     }
 
@@ -73,7 +79,10 @@ mod tests {
     async fn test_embed_returns_zero_vectors() {
         let engine = MockEmbeddingEngine::new(128);
         let texts = vec!["a", "b"];
-        let embeddings = engine.embed(&texts).await.expect("embed must not fail for mock engine");
+        let embeddings = engine
+            .embed(&texts)
+            .await
+            .expect("embed must not fail for mock engine");
         for vec in &embeddings {
             for &val in vec {
                 assert_eq!(val, 0.0_f32);
@@ -85,7 +94,10 @@ mod tests {
     async fn test_embed_empty_input() {
         let engine = MockEmbeddingEngine::new(384);
         let texts: Vec<&str> = vec![];
-        let embeddings = engine.embed(&texts).await.expect("embed must not fail for mock engine");
+        let embeddings = engine
+            .embed(&texts)
+            .await
+            .expect("embed must not fail for mock engine");
         assert_eq!(embeddings.len(), 0);
     }
 

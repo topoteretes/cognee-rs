@@ -295,9 +295,7 @@ impl EmbeddingConfig {
                 let engine = OllamaEmbeddingEngine::new(self)?;
                 Ok(Arc::new(engine))
             }
-            EmbeddingProvider::Mock => {
-                Ok(Arc::new(MockEmbeddingEngine::new(self.dimensions)))
-            }
+            EmbeddingProvider::Mock => Ok(Arc::new(MockEmbeddingEngine::new(self.dimensions))),
         }
     }
 }

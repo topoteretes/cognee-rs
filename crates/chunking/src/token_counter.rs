@@ -14,10 +14,10 @@ impl TokenCounter for WordCounter {
     }
 }
 
-#[cfg(feature = "hf-tokenizer")]
-use std::{path::Path, sync::Arc};
 #[cfg(any(feature = "hf-tokenizer", feature = "tiktoken"))]
 use crate::error::ChunkingError;
+#[cfg(feature = "hf-tokenizer")]
+use std::{path::Path, sync::Arc};
 
 /// Token counter backed by a HuggingFace `tokenizers` tokenizer.
 ///
@@ -73,8 +73,8 @@ pub struct TikTokenCounter {
 impl TikTokenCounter {
     /// Create with cl100k_base encoding (matches GPT-4, text-embedding-3-large).
     pub fn cl100k_base() -> Result<Self, ChunkingError> {
-        let bpe = tiktoken_rs::cl100k_base()
-            .map_err(|e| ChunkingError::TokenizerError(e.to_string()))?;
+        let bpe =
+            tiktoken_rs::cl100k_base().map_err(|e| ChunkingError::TokenizerError(e.to_string()))?;
         Ok(Self { bpe })
     }
 }
@@ -139,7 +139,11 @@ mod tiktoken_tests {
         let count = counter.count_tokens("Hello, world!");
         assert!(count > 0);
         // verify it's in reasonable range (3-6 tokens for this string)
-        assert!(count >= 3 && count <= 6, "Expected 3-6 tokens, got {}", count);
+        assert!(
+            count >= 3 && count <= 6,
+            "Expected 3-6 tokens, got {}",
+            count
+        );
     }
 
     #[test]

@@ -95,7 +95,9 @@ impl OpenAICompatibleEmbeddingEngine {
             .default_headers(default_headers)
             .timeout(std::time::Duration::from_secs(30))
             .build()
-            .map_err(|e| EmbeddingError::ConfigError(format!("Failed to build HTTP client: {e}")))?;
+            .map_err(|e| {
+                EmbeddingError::ConfigError(format!("Failed to build HTTP client: {e}"))
+            })?;
 
         Ok(Self {
             client,
@@ -307,7 +309,10 @@ mod tests {
     fn test_normalize_azure_endpoint() {
         // Azure endpoints typically end with the API path, not /v1
         let url = "https://myresource.openai.azure.com/openai";
-        assert_eq!(normalize_base_url(url), "https://myresource.openai.azure.com/openai/v1");
+        assert_eq!(
+            normalize_base_url(url),
+            "https://myresource.openai.azure.com/openai/v1"
+        );
     }
 
     // ── Constructor ──────────────────────────────────────────────────────────
@@ -347,22 +352,32 @@ mod tests {
             endpoint: Some("https://api.openai.com".to_string()),
             ..EmbeddingConfig::default()
         };
-        let engine = OpenAICompatibleEmbeddingEngine::new(&config)
-            .expect("should build engine");
-        assert_eq!(engine.embeddings_url(), "https://api.openai.com/v1/embeddings");
+        let engine = OpenAICompatibleEmbeddingEngine::new(&config).expect("should build engine");
+        assert_eq!(
+            engine.embeddings_url(),
+            "https://api.openai.com/v1/embeddings"
+        );
     }
 
     // ── is_retryable ─────────────────────────────────────────────────────────
 
     #[test]
     fn test_is_retryable_http_error() {
-        assert!(is_retryable(&EmbeddingError::HttpError("HTTP 429: rate limited".to_string())));
-        assert!(is_retryable(&EmbeddingError::HttpError("HTTP 503: unavailable".to_string())));
+        assert!(is_retryable(&EmbeddingError::HttpError(
+            "HTTP 429: rate limited".to_string()
+        )));
+        assert!(is_retryable(&EmbeddingError::HttpError(
+            "HTTP 503: unavailable".to_string()
+        )));
     }
 
     #[test]
     fn test_is_retryable_api_error_not_retryable() {
-        assert!(!is_retryable(&EmbeddingError::ApiError("HTTP 400: bad request".to_string())));
-        assert!(!is_retryable(&EmbeddingError::ConfigError("bad config".to_string())));
+        assert!(!is_retryable(&EmbeddingError::ApiError(
+            "HTTP 400: bad request".to_string()
+        )));
+        assert!(!is_retryable(&EmbeddingError::ConfigError(
+            "bad config".to_string()
+        )));
     }
 }

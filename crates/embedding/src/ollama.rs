@@ -79,7 +79,9 @@ impl OllamaEmbeddingEngine {
             .default_headers(default_headers)
             .timeout(std::time::Duration::from_secs(30))
             .build()
-            .map_err(|e| EmbeddingError::ConfigError(format!("Failed to build HTTP client: {e}")))?;
+            .map_err(|e| {
+                EmbeddingError::ConfigError(format!("Failed to build HTTP client: {e}"))
+            })?;
 
         Ok(Self {
             client,
@@ -189,7 +191,11 @@ impl OllamaEmbeddingEngine {
 
         let embeddings: EmbeddingResult<Vec<Vec<f32>>> = results.into_iter().collect();
 
-        Ok(handle_embedding_response(texts, embeddings?, self.dimensions))
+        Ok(handle_embedding_response(
+            texts,
+            embeddings?,
+            self.dimensions,
+        ))
     }
 }
 
@@ -274,9 +280,9 @@ fn parse_f32_array(value: &Value) -> EmbeddingResult<Vec<f32>> {
 
     arr.iter()
         .map(|v| {
-            v.as_f64()
-                .map(|f| f as f32)
-                .ok_or_else(|| EmbeddingError::ApiError(format!("Non-numeric value in embedding array: {v}")))
+            v.as_f64().map(|f| f as f32).ok_or_else(|| {
+                EmbeddingError::ApiError(format!("Non-numeric value in embedding array: {v}"))
+            })
         })
         .collect()
 }
