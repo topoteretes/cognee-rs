@@ -12,15 +12,16 @@ pub fn resolve_system_prompt(
     system_prompt: Option<&str>,
     system_prompt_path: Option<&str>,
 ) -> Result<String, SearchError> {
+    // Check inline prompt first (matches Python: `system_prompt if system_prompt else read_query_prompt(path)`)
+    if let Some(inline_prompt) = system_prompt {
+        return Ok(inline_prompt.to_string());
+    }
+
     if let Some(path) = system_prompt_path {
         let prompt = fs::read_to_string(path).map_err(|error| {
             SearchError::InvalidInput(format!("failed to read system prompt path: {error}"))
         })?;
         return Ok(prompt);
-    }
-
-    if let Some(inline_prompt) = system_prompt {
-        return Ok(inline_prompt.to_string());
     }
 
     Ok(DEFAULT_RAG_SYSTEM_PROMPT.to_string())
@@ -47,6 +48,10 @@ pub fn render_graph_user_prompt(template: Option<&str>, question: &str, context:
 
 #[cfg(test)]
 mod tests {
+    use std::io::Write;
+
+    use tempfile::NamedTempFile;
+
     use super::*;
 
     #[test]
@@ -87,5 +92,34 @@ mod tests {
         let rag = render_user_prompt(None, "q", "c");
 
         assert_ne!(graph, rag);
+    }
+
+    #[test]
+    fn resolve_system_prompt_inline_takes_priority_over_path() {
+        let mut tmp = NamedTempFile::new().unwrap();
+        writeln!(tmp, "prompt from file").unwrap();
+        let path = tmp.path().to_str().unwrap();
+
+        let result = resolve_system_prompt(Some("inline prompt"), Some(path)).unwrap();
+
+        assert_eq!(result, "inline prompt");
+    }
+
+    #[test]
+    fn resolve_system_prompt_uses_path_when_inline_is_none() {
+        let mut tmp = NamedTempFile::new().unwrap();
+        write!(tmp, "prompt from file").unwrap();
+        let path = tmp.path().to_str().unwrap();
+
+        let result = resolve_system_prompt(None, Some(path)).unwrap();
+
+        assert_eq!(result, "prompt from file");
+    }
+
+    #[test]
+    fn resolve_system_prompt_uses_default_when_both_are_none() {
+        let result = resolve_system_prompt(None, None).unwrap();
+
+        assert_eq!(result, DEFAULT_RAG_SYSTEM_PROMPT);
     }
 }
