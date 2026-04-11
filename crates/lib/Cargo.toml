@@ -16,6 +16,7 @@ default = [
 onnx           = ["cognee-embedding/onnx"]
 ladybug        = ["cognee-graph/ladybug"]
 qdrant         = ["cognee-vector/qdrant"]
+pgvector       = ["cognee-vector/pgvector", "dep:url"]
 sqlite         = ["cognee-database/sqlite"]
 postgres       = ["cognee-database/postgres"]
 hf-tokenizer   = ["cognee-chunking/hf-tokenizer"]
@@ -49,6 +50,7 @@ serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 tracing.workspace = true
+url = { workspace = true, optional = true }
 uuid.workspace = true
 
 [dev-dependencies]

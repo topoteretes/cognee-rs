@@ -16,6 +16,8 @@ use cognee_graph::LadybugAdapter;
 use cognee_llm::LiteRtAdapter;
 use cognee_llm::{Llm, OpenAIAdapter};
 use cognee_storage::{LocalStorage, StorageTrait};
+#[cfg(feature = "pgvector")]
+use cognee_vector::PgVectorAdapter;
 #[cfg(feature = "qdrant")]
 use cognee_vector::QdrantAdapter;
 use cognee_vector::VectorDB;
@@ -112,35 +114,101 @@ impl ComponentManager {
 
     async fn init_vector_db(&self) -> Result<Arc<dyn VectorDB>, ComponentError> {
         let provider = self.settings.vector_db_provider.to_lowercase();
-        if provider != "qdrant" && provider != "lancedb" {
-            return Err(ComponentError::Config(format!(
-                "Unsupported vector_db_provider '{}'. Supported: qdrant, lancedb.",
+        let dim = self.settings.embedding_dimensions as usize;
+
+        match provider.as_str() {
+            "pgvector" => {
+                #[cfg(feature = "pgvector")]
+                {
+                    let url = self.resolved_vector_db_url()?;
+                    let adapter = PgVectorAdapter::new(&url, dim).await.map_err(|e| {
+                        ComponentError::VectorDb(format!("pgvector init failed: {e}"))
+                    })?;
+                    Ok(Arc::new(adapter))
+                }
+
+                #[cfg(not(feature = "pgvector"))]
+                Err(ComponentError::Config(
+                    "vector_db_provider=pgvector requires the `pgvector` crate feature".to_string(),
+                ))
+            }
+            "qdrant" | "lancedb" => {
+                if provider == "lancedb" {
+                    warn!("vector_db_provider=lancedb is mapped to embedded qdrant adapter.");
+                }
+
+                let vector_data_dir = if !self.settings.vector_db_url.is_empty() {
+                    PathBuf::from(&self.settings.vector_db_url)
+                } else {
+                    Path::new(&self.settings.system_root_directory).join("vectors")
+                };
+
+                std::fs::create_dir_all(&vector_data_dir)?;
+
+                #[cfg(feature = "qdrant")]
+                return Ok(Arc::new(QdrantAdapter::new(vector_data_dir, dim)));
+
+                #[cfg(not(feature = "qdrant"))]
+                Err(ComponentError::Config(
+                    "vector_db_provider=qdrant requires the `qdrant` crate feature".to_string(),
+                ))
+            }
+            _ => Err(ComponentError::Config(format!(
+                "Unsupported vector_db_provider '{}'. Supported: qdrant, lancedb, pgvector.",
                 self.settings.vector_db_provider
-            )));
+            ))),
+        }
+    }
+
+    /// Build a Postgres connection URL from the vector_db_* settings.
+    ///
+    /// If `vector_db_url` already looks like a full `postgres://` URL it is
+    /// returned as-is. Otherwise the URL is assembled from the individual
+    /// `vector_db_*` / `db_*` fields using the `url` crate so that special
+    /// characters in passwords are percent-encoded correctly.
+    #[cfg(feature = "pgvector")]
+    fn resolved_vector_db_url(&self) -> Result<String, ComponentError> {
+        if self.settings.vector_db_url.starts_with("postgres://")
+            || self.settings.vector_db_url.starts_with("postgresql://")
+        {
+            return Ok(self.settings.vector_db_url.clone());
         }
 
-        if provider == "lancedb" {
-            warn!("vector_db_provider=lancedb is mapped to embedded qdrant adapter.");
-        }
-
-        let vector_data_dir = if !self.settings.vector_db_url.is_empty() {
-            PathBuf::from(&self.settings.vector_db_url)
+        let host = if self.settings.vector_db_url.is_empty() {
+            "localhost"
         } else {
-            Path::new(&self.settings.system_root_directory).join("vectors")
+            &self.settings.vector_db_url
         };
+        let port = self.settings.vector_db_port;
+        let name = if self.settings.vector_db_name.is_empty() {
+            "cognee_vectors"
+        } else {
+            &self.settings.vector_db_name
+        };
+        let user = if self.settings.db_username.is_empty() {
+            "postgres"
+        } else {
+            &self.settings.db_username
+        };
+        let pass = &self.settings.db_password;
 
-        std::fs::create_dir_all(&vector_data_dir)?;
+        let mut parsed =
+            url::Url::parse("postgres://localhost").expect("static URL is always valid");
+        parsed
+            .set_host(Some(host))
+            .map_err(|e| ComponentError::Config(format!("invalid vector_db host: {e}")))?;
+        parsed
+            .set_port(Some(port))
+            .map_err(|_| ComponentError::Config("invalid vector_db port".into()))?;
+        parsed.set_path(&format!("/{name}"));
+        parsed
+            .set_username(user)
+            .map_err(|_| ComponentError::Config("invalid vector_db username".into()))?;
+        parsed
+            .set_password(Some(pass))
+            .map_err(|_| ComponentError::Config("invalid vector_db password".into()))?;
 
-        #[cfg(feature = "qdrant")]
-        return Ok(Arc::new(QdrantAdapter::new(
-            vector_data_dir,
-            self.settings.embedding_dimensions as usize,
-        )));
-
-        #[cfg(not(feature = "qdrant"))]
-        Err(ComponentError::Config(
-            "vector_db_provider=qdrant requires the `qdrant` crate feature".to_string(),
-        ))
+        Ok(parsed.to_string())
     }
 
     fn init_embedding_engine(&self) -> Result<Arc<dyn EmbeddingEngine>, ComponentError> {

@@ -62,6 +62,8 @@ pub mod graph {
 pub mod vector {
     #[cfg(feature = "testing")]
     pub use cognee_vector::MockVectorDB;
+    #[cfg(feature = "pgvector")]
+    pub use cognee_vector::PgVectorAdapter;
     #[cfg(feature = "qdrant")]
     pub use cognee_vector::QdrantAdapter;
     pub use cognee_vector::{

@@ -9,6 +9,9 @@ pub mod vector_db_trait;
 #[cfg(feature = "qdrant")]
 pub mod qdrant_adapter;
 
+#[cfg(feature = "pgvector")]
+pub mod pgvector_adapter;
+
 #[cfg(feature = "testing")]
 pub mod mock_vector_db;
 
@@ -18,6 +21,9 @@ pub use vector_db_trait::VectorDB;
 
 #[cfg(feature = "qdrant")]
 pub use qdrant_adapter::QdrantAdapter;
+
+#[cfg(feature = "pgvector")]
+pub use pgvector_adapter::PgVectorAdapter;
 
 #[cfg(feature = "testing")]
 pub use mock_vector_db::MockVectorDB;

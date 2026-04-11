@@ -4,8 +4,9 @@ version.workspace = true
 edition.workspace = true
 
 [features]
-qdrant  = ["dep:edge", "dep:segment", "dep:shard", "dep:common"]
-testing = []
+qdrant   = ["dep:edge", "dep:segment", "dep:shard", "dep:common"]
+pgvector = ["dep:sea-orm", "dep:sea-orm-migration", "dep:url"]
+testing  = []
 
 [dependencies]
 # Async
@@ -18,6 +19,20 @@ segment = { workspace = true, optional = true }
 shard   = { workspace = true, optional = true }
 common  = { workspace = true, optional = true }
 
+# PGVector / SeaORM (feature-gated)
+sea-orm = { version = "1.1", features = [
+    "runtime-tokio-rustls",
+    "sqlx-postgres",
+    "with-uuid",
+    "with-json",
+], optional = true }
+sea-orm-migration = { version = "1.1", features = [
+    "runtime-tokio-rustls",
+], optional = true }
+
+# URL parsing (feature-gated with pgvector)
+url = { workspace = true, optional = true }
+
 # Data structures
 uuid = { workspace = true }
 serde = { workspace = true }
@@ -29,3 +44,4 @@ tracing = { workspace = true }
 
 [dev-dependencies]
 tempfile.workspace = true
+serial_test.workspace = true
