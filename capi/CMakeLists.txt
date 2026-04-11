@@ -21,6 +21,11 @@ add_dependencies(cognee_capi cognee_capi_cargo)
 # stdc++ is required because cognee-graph depends on lbug (C++ graph engine)
 set(COGNEE_SYSTEM_LIBS pthread dl m stdc++)
 
+# macOS requires CoreFoundation for iana_time_zone (used by chrono)
+if(APPLE)
+    list(APPEND COGNEE_SYSTEM_LIBS "-framework CoreFoundation")
+endif()
+
 # Header include path
 set(COGNEE_INCLUDE_DIR "${CMAKE_SOURCE_DIR}/include")
 

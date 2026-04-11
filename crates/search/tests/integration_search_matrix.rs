@@ -3,7 +3,7 @@
 //! Ingests two documents into a shared dataset, cognifies with triplet embeddings
 //! enabled, then exercises 9 `SearchType` variants and asserts each returns a
 //! non-empty result.  Also verifies graph/vector consistency and search history.
-//!
+
 //! Required environment variables (set by `scripts/run_tests_with_local_env.sh`):
 //!   OPENAI_URL, OPENAI_TOKEN, OPENAI_MODEL,
 //!   COGNEE_E2E_EMBED_MODEL_PATH, COGNEE_E2E_TOKENIZER_PATH

@@ -4,13 +4,15 @@ version.workspace = true
 edition.workspace = true
 
 
+[features]
+sqlite   = ["sea-orm/sqlx-sqlite"]
+postgres = ["sea-orm/sqlx-postgres"]
+
 [dependencies]
-cognee-models = { path = "../models" }
+cognee-models     = { path = "../models" }
 async-trait.workspace = true
-chrono.workspace = true
+chrono.workspace  = true
 sea-orm = { version = "1.1", features = [
-    "sqlx-sqlite",
-    "sqlx-postgres",
     "runtime-tokio-rustls",
     "with-chrono",
     "with-uuid",

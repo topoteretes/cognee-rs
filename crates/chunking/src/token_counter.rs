@@ -155,7 +155,7 @@ mod tiktoken_tests {
         assert!(count > 0);
         // verify it's in reasonable range (3-6 tokens for this string)
         assert!(
-            count >= 3 && count <= 6,
+            (3..=6).contains(&count),
             "Expected 3-6 tokens, got {}",
             count
         );

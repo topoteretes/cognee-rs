@@ -3,18 +3,21 @@ name = "cognee-embedding"
 version.workspace = true
 edition.workspace = true
 
+[features]
+onnx = ["dep:ort", "dep:tokenizers"]
+
 [dependencies]
 async-trait = { workspace = true }
-futures = { workspace = true }
-tokio = { workspace = true }
-ort = { workspace = true }
-tokenizers = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
-thiserror = { workspace = true }
-reqwest = { workspace = true }
-tracing = { workspace = true }
-rand = { workspace = true }
+futures     = { workspace = true }
+tokio       = { workspace = true }
+serde       = { workspace = true }
+serde_json  = { workspace = true }
+thiserror   = { workspace = true }
+reqwest     = { workspace = true }
+tracing     = { workspace = true }
+rand        = { workspace = true }
+ort         = { workspace = true, optional = true }
+tokenizers  = { workspace = true, optional = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

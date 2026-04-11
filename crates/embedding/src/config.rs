@@ -1,4 +1,3 @@
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
@@ -7,14 +6,19 @@ use crate::engine::EmbeddingEngine;
 use crate::error::EmbeddingResult;
 use crate::mock::MockEmbeddingEngine;
 use crate::ollama::OllamaEmbeddingEngine;
-use crate::onnx::OnnxEmbeddingEngine;
 use crate::openai_compatible::OpenAICompatibleEmbeddingEngine;
 use crate::provider::EmbeddingProvider;
+
+#[cfg(feature = "onnx")]
+use crate::onnx::OnnxEmbeddingEngine;
+#[cfg(feature = "onnx")]
+use std::path::PathBuf;
 
 /// ONNX-specific configuration.
 ///
 /// Only used when `EmbeddingConfig::provider` is `Onnx` or `Fastembed`.
 /// All other providers use the top-level `EmbeddingConfig` fields only.
+#[cfg(feature = "onnx")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OnnxEmbeddingConfig {
     /// Path to ONNX model file (.onnx)
@@ -36,12 +40,14 @@ pub struct OnnxEmbeddingConfig {
     pub batch_size: usize,
 }
 
+#[cfg(feature = "onnx")]
 impl Default for OnnxEmbeddingConfig {
     fn default() -> Self {
         Self::bge_small("./target/models")
     }
 }
 
+#[cfg(feature = "onnx")]
 impl OnnxEmbeddingConfig {
     /// Create config for BGE-Small-v1.5 model
     pub fn bge_small(model_dir: impl Into<PathBuf>) -> Self {
@@ -123,6 +129,7 @@ pub struct EmbeddingConfig {
     pub mock: bool,
 
     /// ONNX-specific configuration. Only consulted when provider is `Onnx` or `Fastembed`.
+    #[cfg(feature = "onnx")]
     pub onnx: OnnxEmbeddingConfig,
 
     /// HuggingFace tokenizer identifier for chunking token counting.
@@ -132,11 +139,17 @@ pub struct EmbeddingConfig {
 
 impl Default for EmbeddingConfig {
     fn default() -> Self {
-        let onnx = OnnxEmbeddingConfig::default();
-        let dimensions = onnx.dimensions;
-        let model = onnx.model_name.clone();
+        #[cfg(feature = "onnx")]
+        let (provider, model, dimensions, onnx) = {
+            let onnx = OnnxEmbeddingConfig::default();
+            let dimensions = onnx.dimensions;
+            let model = onnx.model_name.clone();
+            (EmbeddingProvider::Onnx, model, dimensions, onnx)
+        };
+        #[cfg(not(feature = "onnx"))]
+        let (provider, model, dimensions) = (EmbeddingProvider::Mock, String::new(), 384usize);
         Self {
-            provider: EmbeddingProvider::Onnx,
+            provider,
             model,
             dimensions,
             endpoint: None,
@@ -145,6 +158,7 @@ impl Default for EmbeddingConfig {
             max_completion_tokens: 8191,
             batch_size: 36,
             mock: false,
+            #[cfg(feature = "onnx")]
             onnx,
             huggingface_tokenizer: None,
         }
@@ -283,9 +297,16 @@ impl EmbeddingConfig {
     /// return [`EmbeddingError::NotImplemented`].
     pub async fn create_engine(&self) -> EmbeddingResult<Arc<dyn EmbeddingEngine>> {
         match self.effective_provider() {
+            #[cfg(feature = "onnx")]
             EmbeddingProvider::Onnx | EmbeddingProvider::Fastembed => {
                 let engine = OnnxEmbeddingEngine::with_auto_download(self.onnx.clone()).await?;
                 Ok(Arc::new(engine))
+            }
+            #[cfg(not(feature = "onnx"))]
+            EmbeddingProvider::Onnx | EmbeddingProvider::Fastembed => {
+                Err(crate::error::EmbeddingError::NotImplemented(
+                    "ONNX embedding engine requires the `onnx` crate feature".to_string(),
+                ))
             }
             EmbeddingProvider::OpenAi | EmbeddingProvider::OpenAiCompatible => {
                 let engine = OpenAICompatibleEmbeddingEngine::new(self)?;
@@ -305,6 +326,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[cfg(feature = "onnx")]
     fn test_default_is_onnx() {
         let config = EmbeddingConfig::default();
         assert_eq!(config.provider, EmbeddingProvider::Onnx);
@@ -324,6 +346,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "onnx")]
     fn test_effective_provider_passthrough() {
         let config = EmbeddingConfig::default();
         assert_eq!(config.effective_provider(), EmbeddingProvider::Onnx);
@@ -409,6 +432,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "onnx")]
     fn test_onnx_config_bge_small() {
         let cfg = OnnxEmbeddingConfig::bge_small("/models");
         assert_eq!(cfg.dimensions, 384);
@@ -417,6 +441,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "onnx")]
     fn test_onnx_config_minilm_l6() {
         let cfg = OnnxEmbeddingConfig::minilm_l6("/models");
         assert_eq!(cfg.dimensions, 384);

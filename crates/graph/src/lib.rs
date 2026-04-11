@@ -23,17 +23,21 @@
 //! ```
 
 mod error;
-mod ladybug;
 mod traits;
 mod types;
+
+#[cfg(feature = "ladybug")]
+mod ladybug;
 
 #[cfg(any(test, feature = "testing"))]
 pub mod mock;
 
 pub use error::{GraphDBError, GraphDBResult};
-pub use ladybug::LadybugAdapter;
 pub use traits::{GraphDBTrait, GraphDBTraitExt};
 pub use types::{EdgeData, GraphEdge, GraphNode, NodeData};
+
+#[cfg(feature = "ladybug")]
+pub use ladybug::LadybugAdapter;
 
 #[cfg(any(test, feature = "testing"))]
 pub use mock::MockGraphDB;

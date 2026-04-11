@@ -16,13 +16,14 @@ tracing.workspace = true
 uuid.workspace = true
 chrono.workspace = true
 
-# Ladybug database
-lbug.workspace = true
+# Ladybug database (feature-gated)
+lbug = { workspace = true, optional = true }
 
 # Internal dependencies
 cognee-models = { path = "../models" }
 
 [features]
+ladybug = ["dep:lbug"]
 testing = []
 
 [dev-dependencies]

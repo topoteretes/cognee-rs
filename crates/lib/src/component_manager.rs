@@ -9,12 +9,16 @@ use tracing::warn;
 
 use cognee_database::{DatabaseConnection, connect, initialize};
 use cognee_embedding::{EmbeddingConfig, EmbeddingEngine};
-use cognee_graph::{GraphDBTrait, LadybugAdapter};
+use cognee_graph::GraphDBTrait;
+#[cfg(feature = "ladybug")]
+use cognee_graph::LadybugAdapter;
 #[cfg(all(feature = "android-litert", target_os = "android"))]
 use cognee_llm::LiteRtAdapter;
 use cognee_llm::{Llm, OpenAIAdapter};
 use cognee_storage::{LocalStorage, StorageTrait};
-use cognee_vector::{QdrantAdapter, VectorDB};
+#[cfg(feature = "qdrant")]
+use cognee_vector::QdrantAdapter;
+use cognee_vector::VectorDB;
 
 use crate::config::Settings;
 use crate::context::PipelineContext;
@@ -89,14 +93,21 @@ impl ComponentManager {
             std::fs::create_dir_all(parent)?;
         }
 
-        let graph_db = LadybugAdapter::new(&graph_path)
-            .await
-            .map_err(|e| ComponentError::GraphDb(format!("initialization failed: {e}")))?;
-        graph_db
-            .initialize()
-            .await
-            .map_err(|e| ComponentError::GraphDb(format!("schema initialization failed: {e}")))?;
-        Ok(Arc::new(graph_db))
+        #[cfg(feature = "ladybug")]
+        {
+            let graph_db = LadybugAdapter::new(&graph_path)
+                .await
+                .map_err(|e| ComponentError::GraphDb(format!("initialization failed: {e}")))?;
+            graph_db.initialize().await.map_err(|e| {
+                ComponentError::GraphDb(format!("schema initialization failed: {e}"))
+            })?;
+            Ok(Arc::new(graph_db))
+        }
+
+        #[cfg(not(feature = "ladybug"))]
+        Err(ComponentError::Config(
+            "graph_database_provider=ladybug requires the `ladybug` crate feature".to_string(),
+        ))
     }
 
     async fn init_vector_db(&self) -> Result<Arc<dyn VectorDB>, ComponentError> {
@@ -120,19 +131,25 @@ impl ComponentManager {
 
         std::fs::create_dir_all(&vector_data_dir)?;
 
-        Ok(Arc::new(QdrantAdapter::new(
+        #[cfg(feature = "qdrant")]
+        return Ok(Arc::new(QdrantAdapter::new(
             vector_data_dir,
             self.settings.embedding_dimensions as usize,
-        )))
+        )));
+
+        #[cfg(not(feature = "qdrant"))]
+        Err(ComponentError::Config(
+            "vector_db_provider=qdrant requires the `qdrant` crate feature".to_string(),
+        ))
     }
 
     fn init_embedding_engine(&self) -> Result<Arc<dyn EmbeddingEngine>, ComponentError> {
         let config = EmbeddingConfig::from_env();
         let handle = tokio::runtime::Handle::try_current()
             .map_err(|e| ComponentError::EmbeddingEngine(format!("no tokio runtime: {e}")))?;
-        let engine = handle
-            .block_on(config.create_engine())
-            .map_err(|e| ComponentError::EmbeddingEngine(format!("embedding engine init failed: {e}")))?;
+        let engine = handle.block_on(config.create_engine()).map_err(|e| {
+            ComponentError::EmbeddingEngine(format!("embedding engine init failed: {e}"))
+        })?;
         Ok(engine)
     }
 

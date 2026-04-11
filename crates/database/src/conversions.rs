@@ -19,6 +19,7 @@ use sea_orm::ActiveValue::Set;
 pub(crate) fn map_sea_err(e: sea_orm::DbErr) -> DatabaseError {
     match &e {
         sea_orm::DbErr::RecordNotFound(_) => DatabaseError::NotFound(e.to_string()),
+        #[cfg(any(feature = "sqlite", feature = "postgres"))]
         sea_orm::DbErr::Exec(sea_orm::RuntimeErr::SqlxError(sqlx_err)) => {
             let s = sqlx_err.to_string();
             if s.contains("UNIQUE constraint failed") || s.contains("unique constraint") {

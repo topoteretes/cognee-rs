@@ -19,8 +19,9 @@ tokenizers = { workspace = true, optional = true }
 tiktoken-rs = { workspace = true, optional = true }
 
 [features]
+default      = []
 hf-tokenizer = ["dep:tokenizers", "tokenizers/http"]
-tiktoken = ["dep:tiktoken-rs"]
+tiktoken     = ["dep:tiktoken-rs"]
 
 [dev-dependencies]
 cognee-storage = { path = "../storage", features = ["testing"] }

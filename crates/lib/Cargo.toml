@@ -4,13 +4,29 @@ version.workspace = true
 edition.workspace = true
 
 [features]
+default = [
+    "onnx",
+    "ladybug",
+    "qdrant",
+    "sqlite",
+    "postgres",
+    "hf-tokenizer",
+    "tiktoken",
+]
+onnx           = ["cognee-embedding/onnx"]
+ladybug        = ["cognee-graph/ladybug"]
+qdrant         = ["cognee-vector/qdrant"]
+sqlite         = ["cognee-database/sqlite"]
+postgres       = ["cognee-database/postgres"]
+hf-tokenizer   = ["cognee-chunking/hf-tokenizer"]
+tiktoken       = ["cognee-chunking/tiktoken"]
+android-litert = ["cognee-llm/android-litert"]
 testing = [
     "cognee-cognify/testing",
     "cognee-graph/testing",
     "cognee-storage/testing",
     "cognee-vector/testing",
 ]
-android-litert = ["cognee-llm/android-litert"]
 
 [dependencies]
 cognee-chunking = { path = "../chunking" }

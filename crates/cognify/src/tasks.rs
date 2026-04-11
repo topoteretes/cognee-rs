@@ -1147,9 +1147,14 @@ pub async fn cognify(
     }
 
     // Task 2: Extract text chunks (with token count write-back when DB available)
-    let mut extracted_chunks =
-        extract_chunks_from_documents(&classified, &*storage, config.max_chunk_size, config.token_counter_kind.clone(), db.as_deref())
-            .await?;
+    let mut extracted_chunks = extract_chunks_from_documents(
+        &classified,
+        &*storage,
+        config.max_chunk_size,
+        config.token_counter_kind.clone(),
+        db.as_deref(),
+    )
+    .await?;
 
     // Stamp provenance on extracted chunks
     for chunk in &mut extracted_chunks.chunks {
@@ -1797,10 +1802,7 @@ async fn index_data_points(
                     .map_err(|e| CognifyError::VectorDBError(e.to_string()))?;
             }
 
-            let triplet_texts: Vec<_> = triplets
-                .iter()
-                .map(|t| t.text.as_str())
-                .collect();
+            let triplet_texts: Vec<_> = triplets.iter().map(|t| t.text.as_str()).collect();
             let triplet_vectors = engine
                 .embed(&triplet_texts)
                 .await
@@ -2129,9 +2131,10 @@ mod tests {
             tenant_id: None,
         };
 
-        let result = extract_chunks_from_documents(&input, &*storage, 100, TokenCounterKind::Word, None)
-            .await
-            .unwrap();
+        let result =
+            extract_chunks_from_documents(&input, &*storage, 100, TokenCounterKind::Word, None)
+                .await
+                .unwrap();
         assert!(!result.chunks.is_empty());
     }
 
@@ -2145,9 +2148,10 @@ mod tests {
             tenant_id: None,
         };
 
-        let result = extract_chunks_from_documents(&input, &*storage, 100, TokenCounterKind::Word, None)
-            .await
-            .unwrap();
+        let result =
+            extract_chunks_from_documents(&input, &*storage, 100, TokenCounterKind::Word, None)
+                .await
+                .unwrap();
         assert!(result.chunks.is_empty());
     }
 

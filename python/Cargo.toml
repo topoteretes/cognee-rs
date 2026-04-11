@@ -9,7 +9,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 cognee-core = { path = "../crates/core" }
-cognee-database = { path = "../crates/database" }
+cognee-database = { path = "../crates/database", features = ["sqlite"] }
 cognee-graph = { path = "../crates/graph", features = ["testing"] }
 cognee-vector = { path = "../crates/vector", features = ["testing"] }
 pyo3 = { version = "0.23", features = ["extension-module"] }

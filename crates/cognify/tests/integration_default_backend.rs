@@ -3,7 +3,7 @@
 //! Ports the core assertions from `test_library.py` using the Rust fixed infrastructure:
 //! SQLite (metadata), Ladybug (graph), Qdrant (vector), LocalStorage (files),
 //! ONNX BGE-Small (embeddings), OpenAI-compatible adapter (LLM).
-//!
+
 //! Required environment variables (set by `scripts/run_tests_with_local_env.sh`):
 //!   OPENAI_URL, OPENAI_TOKEN, OPENAI_MODEL,
 //!   COGNEE_E2E_EMBED_MODEL_PATH, COGNEE_E2E_TOKENIZER_PATH

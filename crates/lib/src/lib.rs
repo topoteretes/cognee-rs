@@ -18,7 +18,13 @@ pub mod add {
 }
 
 pub mod cognify {
-    pub use cognee_chunking::{ChunkingError, CutType, WordCounter};
+    #[cfg(feature = "hf-tokenizer")]
+    pub use cognee_chunking::HuggingFaceTokenCounter;
+    #[cfg(feature = "tiktoken")]
+    pub use cognee_chunking::TikTokenCounter;
+    pub use cognee_chunking::{
+        ChunkingError, CutType, TokenCounter, TokenCounterKind, WordCounter,
+    };
     pub use cognee_cognify::*;
 }
 
@@ -43,15 +49,40 @@ pub mod database {
 }
 
 pub mod graph {
-    pub use cognee_graph::*;
+    #[cfg(feature = "ladybug")]
+    pub use cognee_graph::LadybugAdapter;
+    #[cfg(any(test, feature = "testing"))]
+    pub use cognee_graph::MockGraphDB;
+    pub use cognee_graph::{
+        EdgeData, GraphDBError, GraphDBResult, GraphDBTrait, GraphDBTraitExt, GraphEdge, GraphNode,
+        NodeData,
+    };
 }
 
 pub mod vector {
-    pub use cognee_vector::*;
+    #[cfg(feature = "testing")]
+    pub use cognee_vector::MockVectorDB;
+    #[cfg(feature = "qdrant")]
+    pub use cognee_vector::QdrantAdapter;
+    pub use cognee_vector::{
+        CollectionConfig, DistanceMetric, SearchResult, VectorDB, VectorDBError, VectorDBResult,
+        VectorPoint,
+    };
 }
 
 pub mod embedding {
-    pub use cognee_embedding::*;
+    pub use cognee_embedding::utils::{
+        handle_embedding_response, is_embeddable, sanitize_embedding_inputs,
+    };
+    pub use cognee_embedding::{
+        EmbeddingConfig, EmbeddingEngine, EmbeddingError, EmbeddingProvider, EmbeddingResult,
+        MockEmbeddingEngine, OllamaEmbeddingEngine, OpenAICompatibleEmbeddingEngine,
+    };
+    #[cfg(feature = "onnx")]
+    pub use cognee_embedding::{
+        ModelUrls, OnnxEmbeddingConfig, OnnxEmbeddingEngine, download_model, ensure_model_exists,
+        ensure_tokenizer_exists,
+    };
 }
 
 pub mod llm {

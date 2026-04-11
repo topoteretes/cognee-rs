@@ -1,8 +1,12 @@
 use assert_cmd::Command;
 use chrono::{DateTime, Utc};
 use cognee_lib::database::{ArtifactReference, connect, initialize, ops};
-use cognee_lib::graph::{GraphDBTrait, GraphDBTraitExt, LadybugAdapter};
-use cognee_lib::vector::{QdrantAdapter, VectorDB, VectorPoint};
+use cognee_lib::graph::GraphDBTrait;
+#[cfg(feature = "ladybug")]
+use cognee_lib::graph::{GraphDBTraitExt, LadybugAdapter};
+use cognee_lib::vector::VectorDB;
+#[cfg(feature = "qdrant")]
+use cognee_lib::vector::{QdrantAdapter, VectorPoint};
 use predicates::prelude::*;
 use std::path::Path;
 use tempfile::TempDir;
@@ -17,6 +21,7 @@ struct TestGraphNode {
     updated_at: DateTime<Utc>,
 }
 
+#[cfg(all(feature = "ladybug", feature = "qdrant"))]
 struct DeleteFixture {
     target_data_id: Uuid,
     keep_data_id: Uuid,
@@ -45,6 +50,7 @@ fn config_set(config_home: &TempDir, workdir: &Path, key: &str, json_value: &str
         .success();
 }
 
+#[cfg(all(feature = "ladybug", feature = "qdrant"))]
 fn seed_scoped_delete_fixture(
     db_url: &str,
     owner_id: Uuid,
@@ -202,6 +208,7 @@ fn seed_scoped_delete_fixture(
     })
 }
 
+#[cfg(all(feature = "ladybug", feature = "qdrant"))]
 fn seed_cross_owner_delete_fixture(
     db_url: &str,
     target_owner_id: Uuid,
@@ -361,6 +368,7 @@ fn seed_cross_owner_delete_fixture(
     })
 }
 
+#[cfg(all(feature = "ladybug", feature = "qdrant"))]
 fn assert_scoped_delete_results(
     db_url: &str,
     graph_path: &Path,
@@ -598,6 +606,7 @@ fn delete_all_preview_and_force_execution() {
 }
 
 #[test]
+#[cfg(all(feature = "ladybug", feature = "qdrant"))]
 fn delete_data_scope_removes_only_targeted_graph_and_vector_artifacts() {
     let config_home = TempDir::new().expect("temp dir should be created");
     let workdir = TempDir::new().expect("temp dir should be created");
@@ -693,6 +702,7 @@ fn delete_data_scope_removes_only_targeted_graph_and_vector_artifacts() {
 }
 
 #[test]
+#[cfg(all(feature = "ladybug", feature = "qdrant"))]
 fn delete_dataset_scope_removes_only_targeted_graph_and_vector_artifacts() {
     let config_home = TempDir::new().expect("temp dir should be created");
     let workdir = TempDir::new().expect("temp dir should be created");
@@ -784,6 +794,7 @@ fn delete_dataset_scope_removes_only_targeted_graph_and_vector_artifacts() {
 }
 
 #[test]
+#[cfg(all(feature = "ladybug", feature = "qdrant"))]
 fn delete_user_scope_removes_only_targeted_graph_and_vector_artifacts() {
     let config_home = TempDir::new().expect("temp dir should be created");
     let workdir = TempDir::new().expect("temp dir should be created");
