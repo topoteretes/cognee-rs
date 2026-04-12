@@ -13,11 +13,6 @@
 //! parameterised queries. Complex graph queries (recursive CTEs, UNION ALL,
 //! JOINs with CASE expressions) use raw SQL via [`Statement::from_sql_and_values`]
 //! because they exceed the query builder's expressiveness.
-//!
-//! # TODO
-//! Align `PgVectorAdapter` initialisation with this pattern — it currently auto-creates
-//! the database via `ensure_database_exists()`, while this adapter and the relational
-//! database crate assume the DB pre-exists and only run migrations.
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};

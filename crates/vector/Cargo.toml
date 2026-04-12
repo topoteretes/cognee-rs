@@ -5,7 +5,7 @@ edition.workspace = true
 
 [features]
 qdrant   = ["dep:edge", "dep:segment", "dep:shard", "dep:common"]
-pgvector = ["dep:sea-orm", "dep:sea-orm-migration", "dep:url"]
+pgvector = ["dep:sea-orm", "dep:sea-orm-migration"]
 testing  = []
 
 [dependencies]
@@ -29,9 +29,6 @@ sea-orm = { version = "1.1", features = [
 sea-orm-migration = { version = "1.1", features = [
     "runtime-tokio-rustls",
 ], optional = true }
-
-# URL parsing (feature-gated with pgvector)
-url = { workspace = true, optional = true }
 
 # Data structures
 uuid = { workspace = true }

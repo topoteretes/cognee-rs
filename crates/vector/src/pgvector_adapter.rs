@@ -5,11 +5,14 @@
 //! A `_vector_collections` bookkeeping table tracks which collection tables exist.
 
 use async_trait::async_trait;
+use sea_orm::sea_query::{
+    Alias, Asterisk, Expr, Func, Iden, OnConflict, Order, PostgresQueryBuilder, Query, Table,
+};
 use sea_orm::{ConnectionTrait, Database, DatabaseBackend, DatabaseConnection, Statement};
 use sea_orm_migration::MigratorTrait;
 use std::collections::HashMap;
+use std::fmt;
 use tracing::debug;
-use url::Url;
 use uuid::Uuid;
 
 use crate::error::{VectorDBError, VectorDBResult};
@@ -18,6 +21,36 @@ use crate::vector_db_trait::VectorDB;
 
 /// Max points per INSERT batch (300 params = 100 rows × 3 columns).
 const BATCH_SIZE: usize = 100;
+
+// ---------------------------------------------------------------------------
+// Table / column identifiers for sea_query (`_vector_collections`)
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Copy)]
+enum VColl {
+    Table,
+    CollectionName,
+    DataType,
+    FieldName,
+    Dimension,
+}
+
+impl Iden for VColl {
+    fn unquoted(&self, s: &mut dyn fmt::Write) {
+        write!(
+            s,
+            "{}",
+            match self {
+                Self::Table => "_vector_collections",
+                Self::CollectionName => "collection_name",
+                Self::DataType => "data_type",
+                Self::FieldName => "field_name",
+                Self::Dimension => "dimension",
+            }
+        )
+        .expect("write to string cannot fail");
+    }
+}
 
 /// Vector database backed by PostgreSQL + pgvector extension.
 ///
@@ -29,18 +62,16 @@ pub struct PgVectorAdapter {
 }
 
 impl PgVectorAdapter {
-    /// Connect to PostgreSQL and run the pgvector migration.
+    /// Connect to an existing PostgreSQL database and run pgvector migrations.
     ///
-    /// The target database is created automatically if it does not exist yet
-    /// (connects to the `postgres` maintenance database to issue the DDL).
+    /// The database must already exist. Use [`Self::from_connection`] to share
+    /// a connection that was established elsewhere (e.g. by the database crate).
     ///
     /// # Arguments
     /// * `database_url` — Postgres connection string, e.g.
     ///   `postgres://user:pass@localhost:5432/mydb`
     /// * `dimension` — default vector dimension (e.g. 384 for BGE-Small)
     pub async fn new(database_url: &str, dimension: usize) -> VectorDBResult<Self> {
-        Self::ensure_database_exists(database_url).await?;
-
         let db = Database::connect(database_url)
             .await
             .map_err(|e| VectorDBError::StorageError(format!("PGVector connect failed: {e}")))?;
@@ -73,62 +104,9 @@ impl PgVectorAdapter {
 
     // -- helpers ----------------------------------------------------------
 
-    /// Ensure the target database exists, creating it if necessary.
-    ///
-    /// Connects to the `postgres` maintenance database (same host/credentials)
-    /// and runs `CREATE DATABASE "…"` if the target does not exist yet.
-    async fn ensure_database_exists(database_url: &str) -> VectorDBResult<()> {
-        let (maintenance_url, db_name) = Self::parse_maintenance_url(database_url)?;
-        Self::validate_identifier(&db_name)?;
-
-        let admin = Database::connect(&maintenance_url).await.map_err(|e| {
-            VectorDBError::StorageError(format!("Failed to connect to maintenance database: {e}"))
-        })?;
-
-        // Check if the database already exists.
-        let row = admin
-            .query_one(Statement::from_sql_and_values(
-                DatabaseBackend::Postgres,
-                "SELECT 1 FROM pg_database WHERE datname = $1",
-                [db_name.clone().into()],
-            ))
-            .await
-            .map_err(|e| VectorDBError::StorageError(e.to_string()))?;
-
-        if row.is_none() {
-            debug!("database \"{db_name}\" does not exist — creating");
-            let ddl = format!(r#"CREATE DATABASE "{db_name}""#);
-            admin
-                .execute_unprepared(&ddl)
-                .await
-                .map_err(|e| VectorDBError::StorageError(e.to_string()))?;
-        }
-
-        admin.close().await.map_err(|e| {
-            VectorDBError::StorageError(format!("Failed to close maintenance connection: {e}"))
-        })?;
-
-        Ok(())
-    }
-
-    /// Split a database URL into a maintenance URL (pointing at `postgres`)
-    /// and the target database name.
-    ///
-    /// `postgres://user:pass@host:5432/mydb` →
-    ///   (`postgres://user:pass@host:5432/postgres`, `"mydb"`)
-    fn parse_maintenance_url(raw: &str) -> VectorDBResult<(String, String)> {
-        let mut parsed = Url::parse(raw)
-            .map_err(|e| VectorDBError::StorageError(format!("invalid database URL: {e}")))?;
-
-        let db_name = parsed.path().trim_start_matches('/').to_string();
-        if db_name.is_empty() {
-            return Err(VectorDBError::StorageError(
-                "database URL must contain a database name".into(),
-            ));
-        }
-
-        parsed.set_path("/postgres");
-        Ok((parsed.to_string(), db_name))
+    /// Build a SeaORM [`Statement`] from a `sea_query` query.
+    fn build<S: sea_orm::StatementBuilder>(&self, query: &S) -> Statement {
+        self.db.get_database_backend().build(query)
     }
 
     /// Build a validated table name from a `(data_type, field_name)` pair.
@@ -190,19 +168,29 @@ impl VectorDB for PgVectorAdapter {
             .map_err(|e| VectorDBError::StorageError(e.to_string()))?;
 
         // Register in bookkeeping table.
+        let insert = Query::insert()
+            .into_table(VColl::Table)
+            .columns([
+                VColl::CollectionName,
+                VColl::DataType,
+                VColl::FieldName,
+                VColl::Dimension,
+            ])
+            .values_panic([
+                coll.clone().into(),
+                data_type.to_string().into(),
+                field_name.to_string().into(),
+                (dimension as i32).into(),
+            ])
+            .on_conflict(
+                OnConflict::column(VColl::CollectionName)
+                    .do_nothing()
+                    .to_owned(),
+            )
+            .to_owned();
+
         self.db
-            .execute(Statement::from_sql_and_values(
-                DatabaseBackend::Postgres,
-                r#"INSERT INTO _vector_collections (collection_name, data_type, field_name, dimension)
-                   VALUES ($1, $2, $3, $4)
-                   ON CONFLICT (collection_name) DO NOTHING"#,
-                [
-                    coll.clone().into(),
-                    data_type.to_string().into(),
-                    field_name.to_string().into(),
-                    (dimension as i32).into(),
-                ],
-            ))
+            .execute(self.build(&insert))
             .await
             .map_err(|e| VectorDBError::StorageError(e.to_string()))?;
 
@@ -213,13 +201,19 @@ impl VectorDB for PgVectorAdapter {
     async fn has_collection(&self, data_type: &str, field_name: &str) -> VectorDBResult<bool> {
         let coll = Self::collection_name(data_type, field_name)?;
 
+        let inner = Query::select()
+            .expr(Expr::val(1))
+            .from(VColl::Table)
+            .and_where(Expr::col(VColl::CollectionName).eq(coll))
+            .to_owned();
+
+        let query = Query::select()
+            .expr_as(Expr::exists(inner), Alias::new("exists"))
+            .to_owned();
+
         let row = self
             .db
-            .query_one(Statement::from_sql_and_values(
-                DatabaseBackend::Postgres,
-                "SELECT EXISTS (SELECT 1 FROM _vector_collections WHERE collection_name = $1) AS exists",
-                [coll.into()],
-            ))
+            .query_one(self.build(&query))
             .await
             .map_err(|e| VectorDBError::StorageError(e.to_string()))?;
 
@@ -365,18 +359,23 @@ impl VectorDB for PgVectorAdapter {
     async fn delete_collection(&self, data_type: &str, field_name: &str) -> VectorDBResult<()> {
         let coll = Self::collection_name(data_type, field_name)?;
 
-        let ddl = format!(r#"DROP TABLE IF EXISTS "{coll}""#);
+        let drop = Table::drop()
+            .table(Alias::new(&coll))
+            .if_exists()
+            .to_owned();
+
         self.db
-            .execute_unprepared(&ddl)
+            .execute_unprepared(&drop.to_string(PostgresQueryBuilder))
             .await
             .map_err(|e| VectorDBError::StorageError(e.to_string()))?;
 
+        let delete = Query::delete()
+            .from_table(VColl::Table)
+            .and_where(Expr::col(VColl::CollectionName).eq(&coll))
+            .to_owned();
+
         self.db
-            .execute(Statement::from_sql_and_values(
-                DatabaseBackend::Postgres,
-                "DELETE FROM _vector_collections WHERE collection_name = $1",
-                [coll.into()],
-            ))
+            .execute(self.build(&delete))
             .await
             .map_err(|e| VectorDBError::StorageError(e.to_string()))?;
 
@@ -395,21 +394,16 @@ impl VectorDB for PgVectorAdapter {
 
         let coll = Self::collection_name(data_type, field_name)?;
 
-        let placeholders: String = (1..=point_ids.len())
-            .map(|i| format!("${i}"))
-            .collect::<Vec<_>>()
-            .join(", ");
-
-        let sql = format!(r#"DELETE FROM "{coll}" WHERE id IN ({placeholders})"#);
-
-        let values: Vec<sea_orm::Value> = point_ids.iter().map(|id| (*id).into()).collect();
+        let query = Query::delete()
+            .from_table(Alias::new(&coll))
+            .and_where(
+                Expr::col(Alias::new("id"))
+                    .is_in(point_ids.iter().copied().map(sea_orm::Value::from)),
+            )
+            .to_owned();
 
         self.db
-            .execute(Statement::from_sql_and_values(
-                DatabaseBackend::Postgres,
-                &sql,
-                values,
-            ))
+            .execute(self.build(&query))
             .await
             .map_err(|e| VectorDBError::StorageError(e.to_string()))?;
 
@@ -419,10 +413,14 @@ impl VectorDB for PgVectorAdapter {
     async fn collection_size(&self, data_type: &str, field_name: &str) -> VectorDBResult<usize> {
         let coll = Self::collection_name(data_type, field_name)?;
 
-        let sql = format!(r#"SELECT COUNT(*) AS count FROM "{coll}""#);
+        let query = Query::select()
+            .expr_as(Func::count(Expr::col(Asterisk)), Alias::new("count"))
+            .from(Alias::new(&coll))
+            .to_owned();
+
         let row = self
             .db
-            .query_one(Statement::from_string(DatabaseBackend::Postgres, sql))
+            .query_one(self.build(&query))
             .await
             .map_err(|e| VectorDBError::StorageError(e.to_string()))?;
 
@@ -438,13 +436,15 @@ impl VectorDB for PgVectorAdapter {
     }
 
     async fn list_collections(&self) -> VectorDBResult<Vec<(String, String)>> {
+        let query = Query::select()
+            .columns([VColl::DataType, VColl::FieldName])
+            .from(VColl::Table)
+            .order_by(VColl::CollectionName, Order::Asc)
+            .to_owned();
+
         let rows = self
             .db
-            .query_all(Statement::from_string(
-                DatabaseBackend::Postgres,
-                "SELECT data_type, field_name FROM _vector_collections ORDER BY collection_name"
-                    .to_string(),
-            ))
+            .query_all(self.build(&query))
             .await
             .map_err(|e| VectorDBError::StorageError(e.to_string()))?;
 
