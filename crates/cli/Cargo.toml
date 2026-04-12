@@ -9,10 +9,12 @@ name = "cognee-cli"
 path = "src/main.rs"
 
 [features]
-default      = ["onnx", "ladybug", "qdrant", "sqlite", "postgres", "hf-tokenizer", "tiktoken"]
+default      = ["onnx", "ladybug", "qdrant", "pgvector", "pggraph", "sqlite", "postgres", "hf-tokenizer", "tiktoken"]
 onnx         = ["cognee-lib/onnx"]
 ladybug      = ["cognee-lib/ladybug"]
 qdrant       = ["cognee-lib/qdrant"]
+pgvector     = ["cognee-lib/pgvector"]
+pggraph      = ["cognee-lib/pggraph"]
 sqlite       = ["cognee-lib/sqlite"]
 postgres     = ["cognee-lib/postgres"]
 hf-tokenizer = ["cognee-lib/hf-tokenizer"]

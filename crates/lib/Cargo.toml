@@ -8,6 +8,8 @@ default = [
     "onnx",
     "ladybug",
     "qdrant",
+    "pgvector",
+    "pggraph",
     "sqlite",
     "postgres",
     "hf-tokenizer",

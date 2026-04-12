@@ -89,6 +89,7 @@ cognee-rust/
 
 ## Architecture Patterns
 
+- **Feature strategy** — Individual crates define optional features with no defaults (`default = []`). The umbrella library (`cognee-lib`) and the CLI (`cognee-cli`) enable all non-platform-specific features by default so that a plain `cargo build` gives a fully-featured binary. Platform-specific features (e.g. `android-litert`) and the `testing` feature remain opt-in. When adding a new feature-gated capability to a crate, propagate it up through `cognee-lib` and `cognee-cli` and add it to their `default` lists unless it is platform-specific or test-only.
 - **Trait-based abstractions** — `StorageTrait`, `IngestDb`, `GraphDBTrait`, `VectorDB`, `EmbeddingEngine`, `Llm`, `SessionStore`, etc. enable backend swapping and mock testing
 - **Prefer `dyn Trait`** — Use object-safe traits with `&dyn Trait` or `Arc<dyn Trait>` at call sites. Only use monomorphized generics when performance-critical or unavoidable.
 - **Zero-copy where possible** — e.g. `WordChunk<'a>`, `SentenceChunk<'a>`, `ParagraphChunk<'a>` borrow `&str` slices via byte offset tracking, avoiding intermediate `String` allocations
