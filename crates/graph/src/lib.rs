@@ -29,6 +29,9 @@ mod types;
 #[cfg(feature = "ladybug")]
 mod ladybug;
 
+#[cfg(feature = "postgres")]
+mod pg_graph_adapter;
+
 #[cfg(any(test, feature = "testing"))]
 pub mod mock;
 
@@ -38,6 +41,9 @@ pub use types::{EdgeData, GraphEdge, GraphNode, NodeData};
 
 #[cfg(feature = "ladybug")]
 pub use ladybug::LadybugAdapter;
+
+#[cfg(feature = "postgres")]
+pub use pg_graph_adapter::PgGraphAdapter;
 
 #[cfg(any(test, feature = "testing"))]
 pub use mock::MockGraphDB;
