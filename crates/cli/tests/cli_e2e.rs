@@ -507,6 +507,106 @@ fn search_rejects_invalid_top_k() {
         ));
 }
 
+/// Regression for `docs/bug-search-dataset-name-filter-ignored.md`:
+/// `cognee-cli search "..." -d <unknown-name>` used to silently return
+/// every indexed record because `SearchRequest.datasets` was never
+/// resolved to UUIDs. After the fix, the orchestrator must surface
+/// `SearchError::DatasetNotFound`, which the CLI bubbles up as a
+/// non-zero exit with `dataset not found` in the logged error.
+///
+/// The test wires `MOCK_EMBEDDING=true` and a dummy `llm_api_key` so the
+/// LLM/embedding component init succeeds — neither is actually invoked
+/// because resolution fails before the retriever runs. A real dataset is
+/// added first to make the bogus-name lookup the only possible failure.
+#[test]
+#[cfg(all(feature = "ladybug", feature = "qdrant"))]
+fn search_errors_when_dataset_name_does_not_exist() {
+    let config_home = TempDir::new().expect("temp dir should be created");
+    let workdir = TempDir::new().expect("temp dir should be created");
+
+    let owner_id = Uuid::from_u128(0);
+    let db_file_path = workdir.path().join("cognee.db");
+    let db_url = format!("sqlite://{}", db_file_path.display());
+    let graph_path = workdir.path().join("graph");
+    let vector_path = workdir.path().join("vectors");
+    std::fs::File::create(&db_file_path).expect("sqlite database file should be created");
+
+    config_set(
+        &config_home,
+        workdir.path(),
+        "default_user_id",
+        &format!("\"{}\"", owner_id),
+    );
+    config_set(
+        &config_home,
+        workdir.path(),
+        "data_root_directory",
+        &format!("\"{}\"", workdir.path().join("cognee_data").display()),
+    );
+    config_set(
+        &config_home,
+        workdir.path(),
+        "relational_db_url",
+        &format!("\"{}\"", db_url),
+    );
+    config_set(
+        &config_home,
+        workdir.path(),
+        "graph_file_path",
+        &format!("\"{}\"", graph_path.display()),
+    );
+    config_set(
+        &config_home,
+        workdir.path(),
+        "vector_db_url",
+        &format!("\"{}\"", vector_path.display()),
+    );
+    config_set(
+        &config_home,
+        workdir.path(),
+        "graph_database_provider",
+        "\"ladybug\"",
+    );
+    config_set(
+        &config_home,
+        workdir.path(),
+        "vector_db_provider",
+        "\"qdrant\"",
+    );
+    config_set(&config_home, workdir.path(), "embedding_dimensions", "2");
+    // Dummy key so init_llm() succeeds — the search will never call the
+    // LLM because the dataset name resolution fails first.
+    config_set(
+        &config_home,
+        workdir.path(),
+        "llm_api_key",
+        "\"dummy-key\"",
+    );
+
+    // Seed a real dataset so the only thing different about the search
+    // call is the bogus dataset name.
+    make_cmd_in(&config_home, workdir.path())
+        .args(["add", "real content", "--dataset-name", "real_dataset"])
+        .assert()
+        .success();
+
+    make_cmd_in(&config_home, workdir.path())
+        .env("MOCK_EMBEDDING", "true")
+        .args([
+            "search",
+            "anything",
+            "--query-type",
+            "CHUNKS",
+            "-d",
+            "this_dataset_does_not_exist",
+            "--output-format",
+            "simple",
+        ])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("dataset not found"));
+}
+
 #[test]
 fn delete_rejects_missing_scope() {
     let config_home = TempDir::new().expect("temp dir should be created");
