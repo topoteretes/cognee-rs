@@ -211,17 +211,14 @@ impl ComponentManager {
         Ok(parsed.to_string())
     }
 
-    fn init_embedding_engine(&self) -> Result<Arc<dyn EmbeddingEngine>, ComponentError> {
+    async fn init_embedding_engine(&self) -> Result<Arc<dyn EmbeddingEngine>, ComponentError> {
         let config = EmbeddingConfig::from_env();
-        let handle = tokio::runtime::Handle::try_current()
-            .map_err(|e| ComponentError::EmbeddingEngine(format!("no tokio runtime: {e}")))?;
-        let engine = handle.block_on(config.create_engine()).map_err(|e| {
+        config.create_engine().await.map_err(|e| {
             ComponentError::EmbeddingEngine(format!("embedding engine init failed: {e}"))
-        })?;
-        Ok(engine)
+        })
     }
 
-    fn init_llm(&self) -> Result<Arc<dyn Llm>, ComponentError> {
+    async fn init_llm(&self) -> Result<Arc<dyn Llm>, ComponentError> {
         let provider = self.settings.llm_provider.to_lowercase();
         match provider.as_str() {
             "openai" => {
@@ -321,15 +318,12 @@ impl PipelineContext for ComponentManager {
 
     async fn embedding_engine(&self) -> Result<Arc<dyn EmbeddingEngine>, ComponentError> {
         self.embedding_engine
-            .get_or_try_init(|| async { self.init_embedding_engine() })
+            .get_or_try_init(|| self.init_embedding_engine())
             .await
             .cloned()
     }
 
     async fn llm(&self) -> Result<Arc<dyn Llm>, ComponentError> {
-        self.llm
-            .get_or_try_init(|| async { self.init_llm() })
-            .await
-            .cloned()
+        self.llm.get_or_try_init(|| self.init_llm()).await.cloned()
     }
 }

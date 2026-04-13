@@ -6,6 +6,7 @@ SQLite query helpers, and file-comparison utilities.
 
 import json
 import os
+import re
 import sqlite3
 import subprocess
 from pathlib import Path
@@ -149,6 +150,60 @@ def run_python_cli(
             f"async def main():\n"
             f"    await cognee.cognify(datasets={ds_arg})\n"
             f"    print('OK')\n"
+            f"asyncio.run(main())\n"
+        )
+    elif command == "search":
+        # Parse: search <query> -t <TYPE> -d <dataset> -k <top_k>
+        query_text = args[1]
+        query_type = "GRAPH_COMPLETION"
+        dataset_name = None
+        top_k = 10
+        i = 2
+        while i < len(args):
+            if args[i] in ("-t", "--query-type") and i + 1 < len(args):
+                query_type = args[i + 1]
+                i += 2
+            elif args[i] in ("-d", "--datasets") and i + 1 < len(args):
+                dataset_name = args[i + 1]
+                i += 2
+            elif args[i] in ("-k", "--top-k") and i + 1 < len(args):
+                top_k = int(args[i + 1])
+                i += 2
+            else:
+                i += 1
+
+        ds_arg = f"[{dataset_name!r}]" if dataset_name else "None"
+        # The script prints a sentinel-wrapped JSON payload with the list of
+        # string-coerced search_result values for each SearchResult.  The
+        # harness extracts it with `parse_python_search_output`.
+        # ``cognee.search`` returns one of several shapes depending on whether
+        # backend access control is enabled, whether ``verbose=True``, and
+        # (for single-dataset CHUNKS/SUMMARIES) whether a list-of-lists gets
+        # unwrapped.  We flatten everything to a list of strings here so the
+        # parity tests can do substring / len assertions uniformly.
+        script = (
+            f"import asyncio, json, cognee\n"
+            f"cognee.config.data_root_directory({str(py_storage)!r})\n"
+            f"cognee.config.system_root_directory({str(py_system)!r})\n"
+            f"def _extract(item):\n"
+            f"    if isinstance(item, dict):\n"
+            f"        return item.get('search_result') or item.get('text_result') or item.get('context_result')\n"
+            f"    return item\n"
+            f"async def main():\n"
+            f"    results = await cognee.search(\n"
+            f"        query_text={query_text!r},\n"
+            f"        query_type=cognee.SearchType.{query_type},\n"
+            f"        datasets={ds_arg},\n"
+            f"        top_k={top_k},\n"
+            f"    )\n"
+            f"    payload = []\n"
+            f"    for r in results:\n"
+            f"        v = _extract(r)\n"
+            f"        if isinstance(v, list):\n"
+            f"            payload.extend(str(x) for x in v if x is not None)\n"
+            f"        elif v is not None:\n"
+            f"            payload.append(str(v))\n"
+            f"    print('>>>RESULTS<<<' + json.dumps(payload) + '>>>END<<<')\n"
             f"asyncio.run(main())\n"
         )
     else:
@@ -322,3 +377,149 @@ def read_stored_file(data_root: Path, raw_data_location: str) -> bytes:
     """Read the bytes of a stored file given its raw_data_location."""
     path = resolve_stored_file(data_root, raw_data_location)
     return path.read_bytes()
+
+
+# ── Search helpers ───────────────────────────────────────────────────────────
+
+# The Rust CLI emits output through `tracing::info!`; the default
+# `tracing_subscriber::fmt` formatter (a) wraps the timestamp and level in ANSI
+# color escapes and (b) prefixes a line like:
+#   ``\x1b[2m2026-04-13T12:34:56.789Z\x1b[0m \x1b[32m INFO\x1b[0m Response: hello``
+# We strip the ANSI escapes first, then the timestamp+level prefix.
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*m")
+_LOG_PREFIX_RE = re.compile(
+    r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z?\s+(?:TRACE|DEBUG|INFO|WARN|ERROR)\s+"
+)
+
+# Rust CLI "pretty"/"simple" output noise lines we strip before joining.
+_RUST_NOISE_LINES = (
+    "No results found for your query.",
+    "No rows returned.",
+    "No rules returned.",
+)
+
+# To quieten the Rust CLI so we can isolate the actual search payload from the
+# dependency-crate logging (sqlx migrations, qdrant segment WALs, ort model
+# loading, etc.) we restrict tracing to errors globally and keep the CLI's own
+# info output (which is where `render_output` emits results).
+RUST_SEARCH_LOG_FILTER = "error,cognee_cli=info"
+
+
+def _strip_log_prefix(line: str) -> str:
+    """Remove ANSI escapes and the tracing subscriber prefix from one line."""
+    without_ansi = _ANSI_ESCAPE_RE.sub("", line)
+    return _LOG_PREFIX_RE.sub("", without_ansi, count=1)
+
+
+def parse_python_search_output(stdout: str) -> list[str]:
+    """Extract the sentinel-wrapped JSON payload printed by the Python search script."""
+    marker_start = ">>>RESULTS<<<"
+    marker_end = ">>>END<<<"
+    start = stdout.find(marker_start)
+    end = stdout.find(marker_end)
+    if start == -1 or end == -1 or end < start:
+        raise ValueError(
+            f"Python search output did not contain sentinel markers.\n"
+            f"--- stdout ---\n{stdout}"
+        )
+    payload = stdout[start + len(marker_start) : end]
+    return json.loads(payload)
+
+
+def parse_rust_search_output(stdout: str, *, query_type: str) -> list[str]:
+    """Extract per-result strings from the Rust CLI's ``-f simple`` output.
+
+    For GRAPH_COMPLETION / RAG_COMPLETION the entire response is a single text
+    blob — we return it as a one-element list.  For CHUNKS / SUMMARIES each
+    result is printed on its own line.
+    """
+    lines = []
+    for raw in stdout.splitlines():
+        stripped = _strip_log_prefix(raw).strip()
+        if not stripped:
+            continue
+        if stripped in _RUST_NOISE_LINES:
+            continue
+        lines.append(stripped)
+
+    if not lines:
+        return []
+
+    if query_type in ("GRAPH_COMPLETION", "RAG_COMPLETION"):
+        # Single-blob text response — re-join all log-prefix-stripped lines
+        # back together (the LLM may have emitted multi-line output).
+        return ["\n".join(lines)]
+
+    # CHUNKS / SUMMARIES / other list-shaped outputs: one item per line.
+    return lines
+
+
+def run_python_search(
+    workdir: Path,
+    query: str,
+    *,
+    query_type: str = "GRAPH_COMPLETION",
+    dataset: Optional[str] = None,
+    top_k: int = 10,
+    check: bool = True,
+) -> list[str]:
+    """Run search via the Python SDK and return the list of result strings."""
+    args = ["search", query, "-t", query_type, "-k", str(top_k)]
+    if dataset:
+        args.extend(["-d", dataset])
+    result = run_python_cli(workdir, args, check=check)
+    if result.returncode != 0:
+        return []
+    return parse_python_search_output(result.stdout)
+
+
+def _ensure_rust_system_prompt(workdir: Path) -> Path:
+    """Write a minimal system prompt file the Rust CLI can open.
+
+    The Rust CLI defaults to the filename ``answer_simple_question.txt`` and
+    tries to read it literally as a path — it is not bundled with prompt
+    templates the way the Python SDK is.  Completion searches (GRAPH_COMPLETION,
+    RAG_COMPLETION) therefore need a real file at ``--system-prompt``.
+    """
+    prompt_path = workdir / "answer_simple_question.txt"
+    if not prompt_path.exists():
+        prompt_path.write_text(
+            "You are a helpful assistant. Answer the user's question using the "
+            "provided context. If the context does not answer the question, say so.\n"
+        )
+    return prompt_path
+
+
+def run_rust_search(
+    workdir: Path,
+    query: str,
+    *,
+    query_type: str = "GRAPH_COMPLETION",
+    dataset: Optional[str] = None,
+    top_k: int = 10,
+    check: bool = True,
+) -> list[str]:
+    """Run search via the Rust CLI and return the list of result strings."""
+    prompt_path = _ensure_rust_system_prompt(workdir)
+    args = [
+        "search",
+        query,
+        "-t",
+        query_type,
+        "-k",
+        str(top_k),
+        "-f",
+        "simple",
+        "--system-prompt",
+        str(prompt_path),
+    ]
+    if dataset:
+        args.extend(["-d", dataset])
+    # Silence dependency-crate info logs so the search payload is the only
+    # thing at INFO level on stdout.
+    result = run_rust_cli(
+        workdir, args, check=check, env={"RUST_LOG": RUST_SEARCH_LOG_FILTER}
+    )
+    if result.returncode != 0:
+        return []
+    return parse_rust_search_output(result.stdout, query_type=query_type)

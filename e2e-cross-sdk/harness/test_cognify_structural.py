@@ -10,72 +10,12 @@ import pytest
 from helpers import (
     open_db,
     query_data,
-    query_datasets,
     query_nodes,
     query_edges,
     python_db_path,
     rust_db_path,
-    run_python_cli,
-    run_rust_cli,
-    write_rust_config,
-    NLP_TEXT_FILE,
-    DATASET_NAME,
 )
 from conftest import requires_openai
-
-
-
-
-# ── Fixtures ─────────────────────────────────────────────────────────────────
-
-
-@pytest.fixture
-def both_cognified(tmp_path):
-    """Run add + cognify on the same text in both SDKs.
-
-    Returns (python_workspace, rust_workspace).
-    """
-    py_ws = tmp_path / "python"
-    py_ws.mkdir()
-    rust_ws = tmp_path / "rust"
-    rust_ws.mkdir()
-
-    # Write input file for both SDKs
-    input_py = py_ws / "input.txt"
-    input_py.write_text(NLP_TEXT_FILE.read_text())
-    input_rust = rust_ws / "input.txt"
-    input_rust.write_text(NLP_TEXT_FILE.read_text())
-
-    # ── Python: add + cognify ────────────────────────────────────────────
-    result = run_python_cli(py_ws, ["add", str(input_py), "-d", DATASET_NAME], check=False)
-    assert result.returncode == 0, f"Python add failed:\n{result.stdout}\n{result.stderr}"
-
-    # Extract user/tenant for Rust
-    py_db = python_db_path(py_ws)
-    conn = open_db(py_db)
-    ds = query_datasets(conn)
-    owner_id = str(ds[0]["owner_id"])
-    tenant_id = ds[0].get("tenant_id")
-    tenant_id_str = str(tenant_id) if tenant_id else None
-    conn.close()
-
-    result = run_python_cli(py_ws, ["cognify", "-d", DATASET_NAME], check=False)
-    assert result.returncode == 0, f"Python cognify failed:\n{result.stdout}\n{result.stderr}"
-
-    # ── Rust: add + cognify ──────────────────────────────────────────────
-    write_rust_config(rust_ws, user_id=owner_id)
-
-    rust_add_args = ["add", str(input_rust), "-d", DATASET_NAME]
-    if tenant_id_str:
-        rust_add_args.extend(["--tenant-id", tenant_id_str])
-
-    result = run_rust_cli(rust_ws, rust_add_args, check=False)
-    assert result.returncode == 0, f"Rust add failed:\n{result.stdout}\n{result.stderr}"
-
-    result = run_rust_cli(rust_ws, ["cognify", "-d", DATASET_NAME])
-    assert result.returncode == 0, f"Rust cognify failed: {result.stderr}"
-
-    return py_ws, rust_ws
 
 
 # ── Tests ────────────────────────────────────────────────────────────────────
