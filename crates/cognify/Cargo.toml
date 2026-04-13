@@ -31,13 +31,15 @@ futures.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
-cognee-storage   = { path = "../storage", features = ["testing"] }
-cognee-embedding = { path = "../embedding", features = ["onnx"] }
-cognee-graph     = { path = "../graph", features = ["testing", "ladybug"] }
-cognee-vector    = { path = "../vector", features = ["testing", "qdrant"] }
-cognee-database  = { path = "../database" }
-cognee-ingestion = { path = "../ingestion" }
-cognee-search    = { path = "../search" }
-cognee-delete    = { path = "../delete" }
+cognee-storage    = { path = "../storage", features = ["testing"] }
+cognee-embedding  = { path = "../embedding", features = ["onnx"] }
+cognee-graph      = { path = "../graph", features = ["testing", "ladybug"] }
+cognee-vector     = { path = "../vector", features = ["testing", "qdrant"] }
+cognee-database   = { path = "../database" }
+cognee-ingestion  = { path = "../ingestion" }
+cognee-search     = { path = "../search" }
+cognee-delete     = { path = "../delete" }
+cognee-test-utils = { path = "../test-utils" }
+cognee-llm        = { path = "../llm" }
 tempfile.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

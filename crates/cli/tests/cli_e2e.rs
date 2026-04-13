@@ -576,12 +576,7 @@ fn search_errors_when_dataset_name_does_not_exist() {
     config_set(&config_home, workdir.path(), "embedding_dimensions", "2");
     // Dummy key so init_llm() succeeds — the search will never call the
     // LLM because the dataset name resolution fails first.
-    config_set(
-        &config_home,
-        workdir.path(),
-        "llm_api_key",
-        "\"dummy-key\"",
-    );
+    config_set(&config_home, workdir.path(), "llm_api_key", "\"dummy-key\"");
 
     // Seed a real dataset so the only thing different about the search
     // call is the bogus dataset name.

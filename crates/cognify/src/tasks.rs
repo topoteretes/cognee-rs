@@ -1761,6 +1761,7 @@ async fn index_data_points(
                 let mut point = VectorPoint::new(summary.base.id, vector)
                     .with_metadata("type", json!("TextSummary"))
                     .with_metadata("field", json!("text"))
+                    .with_metadata("text", json!(summary.text.clone()))
                     .with_metadata("dataset_id", json!(dataset_id.to_string()));
                 if let Some(made_from) = summary.made_from {
                     point = point.with_metadata("chunk_id", json!(made_from.to_string()));
