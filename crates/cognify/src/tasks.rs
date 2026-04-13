@@ -541,11 +541,35 @@ pub async fn summarize_text(
     llm: Arc<dyn Llm>,
     config: &CognifyConfig,
 ) -> Result<SummarizedData, CognifyError> {
-    let summaries = if config.enable_summarization {
+    // Filter out DLT chunks — structured data rows should not be summarized.
+    // Mirrors Python: cognee/tasks/summarization/summarize_text.py:52-62
+    let dlt_doc_ids: HashSet<Uuid> = input
+        .documents
+        .iter()
+        .filter(|d| d.document_type == "dlt_row")
+        .map(|d| d.base.id)
+        .collect();
+
+    let non_dlt_chunks: Vec<DocumentChunk> = input
+        .chunks
+        .iter()
+        .filter(|c| !dlt_doc_ids.contains(&c.document_id))
+        .cloned()
+        .collect();
+
+    if non_dlt_chunks.len() < input.chunks.len() {
+        info!(
+            "Skipping {} DLT chunks from summarization ({} non-DLT chunks remain)",
+            input.chunks.len() - non_dlt_chunks.len(),
+            non_dlt_chunks.len()
+        );
+    }
+
+    let summaries = if config.enable_summarization && !non_dlt_chunks.is_empty() {
         let summary_extractor = SummaryExtractor::new(llm);
         let mut all_summaries = Vec::new();
 
-        for batch in input.chunks.chunks(config.summarization_batch_size) {
+        for batch in non_dlt_chunks.chunks(config.summarization_batch_size) {
             let batch_summaries = summary_extractor.summarize_chunks(batch, None).await?;
             all_summaries.extend(batch_summaries);
         }
@@ -553,7 +577,11 @@ pub async fn summarize_text(
         info!("Generated {} summaries", all_summaries.len());
         all_summaries
     } else {
-        info!("Summarization disabled in config");
+        if !config.enable_summarization {
+            info!("Summarization disabled in config");
+        } else {
+            info!("No non-DLT chunks to summarize");
+        }
         Vec::new()
     };
 
@@ -2251,5 +2279,75 @@ mod tests {
             !old_guard_fires,
             "The old 3-way guard should NOT fire when tenant_id is None"
         );
+    }
+
+    #[tokio::test]
+    async fn test_summarize_text_skips_dlt_chunks() {
+        use cognee_test_utils::MockLlm;
+
+        let doc_id_text = Uuid::new_v4();
+        let doc_id_dlt = Uuid::new_v4();
+
+        let mut base_text = DataPoint::new("TextDocument", None);
+        base_text.id = doc_id_text;
+        let text_doc = Document {
+            base: base_text,
+            document_type: "text".to_string(),
+            name: "test.txt".to_string(),
+            raw_data_location: "file:///tmp/test.txt".to_string(),
+            mime_type: "text/plain".to_string(),
+            extension: "txt".to_string(),
+            data_id: doc_id_text,
+            external_metadata: None,
+        };
+
+        let mut base_dlt = DataPoint::new("DltRowDocument", None);
+        base_dlt.id = doc_id_dlt;
+        let dlt_doc = Document {
+            base: base_dlt,
+            document_type: "dlt_row".to_string(),
+            name: "dlt_row.json".to_string(),
+            raw_data_location: "file:///tmp/dlt_row.json".to_string(),
+            mime_type: "application/json".to_string(),
+            extension: "json".to_string(),
+            data_id: doc_id_dlt,
+            external_metadata: None,
+        };
+
+        let text_chunk = DocumentChunk::new(
+            Uuid::new_v4(),
+            "Some meaningful text to summarize.".to_string(),
+            5,
+            0,
+            "paragraph_end".to_string(),
+            doc_id_text,
+        );
+
+        let dlt_chunk = DocumentChunk::new(
+            Uuid::new_v4(),
+            r#"{"id": 1, "name": "row"}"#.to_string(),
+            3,
+            0,
+            "paragraph_end".to_string(),
+            doc_id_dlt,
+        );
+
+        let input = ExtractedGraphData {
+            chunks: vec![text_chunk, dlt_chunk],
+            documents: vec![text_doc, dlt_doc],
+            entities: vec![],
+            edges: vec![],
+            dataset_id: Uuid::new_v4(),
+            user_id: None,
+            tenant_id: None,
+        };
+
+        // With summarization disabled, verify we get zero summaries and no panic.
+        let config = CognifyConfig::default().with_summarization(false);
+        let llm: Arc<dyn Llm> = Arc::new(MockLlm::empty());
+        let result = summarize_text(&input, llm, &config).await.unwrap();
+        assert!(result.summaries.is_empty());
+        // All chunks (both DLT and non-DLT) are still passed through.
+        assert_eq!(result.chunks.len(), 2);
     }
 }
