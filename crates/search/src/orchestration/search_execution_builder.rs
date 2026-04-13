@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use cognee_database::SearchHistoryDb;
+use cognee_database::{IngestDb, SearchHistoryDb};
 use cognee_embedding::EmbeddingEngine;
 use cognee_graph::GraphDBTrait;
 use cognee_llm::Llm;
@@ -21,6 +21,7 @@ use crate::types::SearchType;
 pub struct SearchBuilder {
     retrievers: HashMap<SearchType, SearchRetrieverRef>,
     database: Arc<dyn SearchHistoryDb>,
+    dataset_resolver: Option<Arc<dyn IngestDb>>,
     session_manager: Option<Arc<SessionManager>>,
 }
 
@@ -35,6 +36,7 @@ impl SearchBuilder {
         Self {
             retrievers: HashMap::new(),
             database,
+            dataset_resolver: None,
             session_manager: None,
         }
         .register_standard_retrievers(vector_db, embedding_engine, graph_db, llm)
@@ -42,6 +44,14 @@ impl SearchBuilder {
 
     pub fn with_session_manager(mut self, session_manager: Arc<SessionManager>) -> Self {
         self.session_manager = Some(session_manager);
+        self
+    }
+
+    /// Wire in an `IngestDb`-backed resolver so dataset name strings can be
+    /// translated to UUIDs when `SearchRequest.datasets` is set. Without one,
+    /// requests carrying `datasets` fail with `SearchError::InvalidInput`.
+    pub fn with_dataset_resolver(mut self, resolver: Arc<dyn IngestDb>) -> Self {
+        self.dataset_resolver = Some(resolver);
         self
     }
 
@@ -253,6 +263,9 @@ impl SearchBuilder {
         }
 
         let mut orchestrator = SearchOrchestrator::new(registry).with_database(self.database);
+        if let Some(resolver) = self.dataset_resolver {
+            orchestrator = orchestrator.with_dataset_resolver(resolver);
+        }
         if let Some(session_manager) = self.session_manager {
             orchestrator = orchestrator.with_session_manager(session_manager);
         }

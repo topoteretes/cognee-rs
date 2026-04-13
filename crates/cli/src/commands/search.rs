@@ -1,11 +1,13 @@
 use std::sync::Arc;
 
+use cognee_lib::database::IngestDb;
 use cognee_lib::search::{
     SeaOrmSessionStore, SearchBuilder, SearchOutput, SearchRequest, SearchResponse, SearchType,
     SessionManager,
 };
 use cognee_lib::{ComponentManager, PipelineContext};
 use tracing::{info, warn};
+use uuid::Uuid;
 
 use crate::cli::{OutputFormatArg, QueryTypeArg, SearchArgs};
 use crate::config_store::DEFAULT_SYSTEM_PROMPT_PATH;
@@ -25,6 +27,13 @@ pub fn run(args: SearchArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> 
     if requires_llm(mapped_query_type) && settings.llm_api_key.is_empty() {
         warn!("Warning: llm_api_key is empty. LLM-based search types may fail at runtime.");
     }
+
+    let owner_id = Uuid::parse_str(&settings.default_user_id).map_err(|error| {
+        CliError::Validation(format!(
+            "Invalid default_user_id '{}': {error}",
+            settings.default_user_id
+        ))
+    })?;
 
     let system_prompt = args.system_prompt.unwrap_or_else(|| {
         if settings.default_system_prompt_path.is_empty() {
@@ -65,9 +74,11 @@ pub fn run(args: SearchArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> 
             .await
             .map_err(|e| CliError::Runtime(format!("session store init failed: {e}")))?;
         let session_manager = Arc::new(SessionManager::new(Arc::new(session_store)));
-        let orchestrator = SearchBuilder::new(vector_db, embedding_engine, graph_db, llm, database)
-            .with_session_manager(session_manager)
-            .build();
+        let orchestrator =
+            SearchBuilder::new(vector_db, embedding_engine, graph_db, llm, database.clone())
+                .with_session_manager(session_manager)
+                .with_dataset_resolver(database as Arc<dyn IngestDb>)
+                .build();
 
         let datasets = if args.datasets.is_empty() {
             None
@@ -91,7 +102,7 @@ pub fn run(args: SearchArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> 
             wide_search_top_k: None,
             triplet_distance_penalty: None,
             save_interaction: Some(false),
-            user_id: None,
+            user_id: Some(owner_id),
             verbose: None,
             feedback_influence: None,
             retriever_specific_config: None,

@@ -3,7 +3,7 @@ use crate::orchestration::{
 };
 use crate::types::{SearchError, SearchOutput, SearchParams, SearchRequest, SearchResponse};
 use crate::utils::detect_feedback;
-use cognee_database::{SearchHistoryDb, SearchHistoryEntry};
+use cognee_database::{IngestDb, SearchHistoryDb, SearchHistoryEntry};
 use cognee_llm::Llm;
 use cognee_session::{SessionContext, SessionManager};
 use std::sync::Arc;
@@ -11,6 +11,7 @@ use std::sync::Arc;
 pub struct SearchOrchestrator {
     registry: SearchTypeRegistry,
     database: Option<Arc<dyn SearchHistoryDb>>,
+    dataset_resolver: Option<Arc<dyn IngestDb>>,
     session_manager: Option<Arc<SessionManager>>,
     llm: Option<Arc<dyn Llm>>,
     /// When `true`, `last_accessed` timestamps are updated on source Data records
@@ -24,6 +25,7 @@ impl SearchOrchestrator {
         Self {
             registry,
             database: None,
+            dataset_resolver: None,
             session_manager: None,
             llm: None,
             enable_access_tracking: false,
@@ -32,6 +34,15 @@ impl SearchOrchestrator {
 
     pub fn with_database(mut self, database: Arc<dyn SearchHistoryDb>) -> Self {
         self.database = Some(database);
+        self
+    }
+
+    /// Wire in a metadata-DB-backed resolver so that `SearchRequest.datasets`
+    /// (name strings) can be translated to UUIDs against the relational DB.
+    /// Without a resolver, requests carrying `datasets` will be rejected with
+    /// `SearchError::InvalidInput`.
+    pub fn with_dataset_resolver(mut self, resolver: Arc<dyn IngestDb>) -> Self {
+        self.dataset_resolver = Some(resolver);
         self
     }
 
@@ -115,6 +126,66 @@ impl SearchOrchestrator {
             } else {
                 self.registry.get(request.search_type)?
             };
+
+        // Resolve dataset names → UUIDs. Mirrors Python `cognee.search()`:
+        //   - names are looked up via owner-scoped `get_dataset_by_name`
+        //   - per-batch error: if ZERO names resolve → `DatasetNotFound`;
+        //     partial misses are logged and the search proceeds with the
+        //     resolved subset (matches `get_authorized_existing_datasets`
+        //     and `cognee/api/v1/search/search.py:242-243`)
+        //   - `datasets=Some(empty_vec)` is treated like `None`: no
+        //     resolution and no scope filter (Python's `if datasets:`
+        //     short-circuits empty lists too)
+        //   - explicit `dataset_ids` always wins over `datasets`
+        let resolved_request_owned;
+        let request: &SearchRequest = match (&request.datasets, &request.dataset_ids) {
+            (Some(names), maybe_ids)
+                if !names.is_empty()
+                    && maybe_ids.as_ref().map(|v| v.is_empty()).unwrap_or(true) =>
+            {
+                let resolver = self.dataset_resolver.as_ref().ok_or_else(|| {
+                    SearchError::InvalidInput(
+                        "dataset name filter requested but no dataset resolver is wired \
+                         into the SearchOrchestrator (call SearchBuilder::with_dataset_resolver)"
+                            .to_string(),
+                    )
+                })?;
+                let owner_id = request.user_id.ok_or_else(|| {
+                    SearchError::InvalidInput(
+                        "dataset name filter requires SearchRequest.user_id to identify the owner"
+                            .to_string(),
+                    )
+                })?;
+
+                let mut resolved = Vec::with_capacity(names.len());
+                let mut missing = Vec::new();
+                for name in names {
+                    match resolver.get_dataset_by_name(name, owner_id, None).await? {
+                        Some(ds) => resolved.push(ds.id),
+                        None => missing.push(name.clone()),
+                    }
+                }
+
+                if resolved.is_empty() {
+                    // All requested names were unknown — Python raises
+                    // DatasetNotFoundError("No datasets found.") here.
+                    return Err(SearchError::DatasetNotFound(missing.join(", ")));
+                }
+                if !missing.is_empty() {
+                    tracing::warn!(
+                        missing = ?missing,
+                        "some requested dataset names did not resolve; proceeding with the resolved subset"
+                    );
+                }
+
+                let mut clone = request.clone();
+                clone.dataset_ids = Some(resolved);
+                resolved_request_owned = clone;
+                &resolved_request_owned
+            }
+            _ => request,
+        };
+
         let params = SearchParams::from(request);
         let use_dataset_scope = request
             .dataset_ids
@@ -324,21 +395,21 @@ impl SearchOrchestrator {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
-    use async_trait::async_trait;
-    use cognee_database::{SearchHistoryDb, SearchHistoryEntryType, connect, initialize};
-    use serde_json::json;
-
-    use cognee_session::SessionContext;
-
     use crate::orchestration::SearchTypeRegistry;
+    use crate::orchestration::{CONTEXT_LABEL_COMBINED, CONTEXT_LABEL_DEFAULT};
     use crate::retrievers::SearchRetriever;
     use crate::types::{
         SearchContext, SearchError, SearchOutput, SearchParams, SearchRequest, SearchType,
     };
-
-    use crate::orchestration::{CONTEXT_LABEL_COMBINED, CONTEXT_LABEL_DEFAULT};
+    use async_trait::async_trait;
+    use cognee_database::IngestDb;
+    use cognee_database::ops as db_ops;
+    use cognee_database::{SearchHistoryDb, SearchHistoryEntryType, connect, initialize};
+    use cognee_models::Dataset;
+    use cognee_session::SessionContext;
+    use serde_json::json;
+    use std::sync::Arc;
+    use uuid::Uuid;
 
     struct FakeChunksRetriever;
 
@@ -928,6 +999,376 @@ mod tests {
             SearchOutput::Text(answer) => assert_eq!(answer, "answer value"),
             _ => panic!("unexpected output kind"),
         }
+    }
+
+    // ---- Dataset-name resolution tests -----------------------------------
+    //
+    // These tests pin the behavior of `SearchRequest.datasets` (name
+    // strings): they must be resolved to UUIDs against the metadata DB
+    // before the dataset-scope filter runs. Each test documents the
+    // expected behavior and how it's verified.
+
+    /// Local fixture for the resolution tests: emits one chunk per dataset
+    /// so we can assert the post-search scope filter trims the bucket map
+    /// down to the resolved UUID.
+    struct ResolutionFixtureRetriever {
+        dataset_a: uuid::Uuid,
+        dataset_b: uuid::Uuid,
+    }
+
+    #[async_trait]
+    impl SearchRetriever for ResolutionFixtureRetriever {
+        fn search_type(&self) -> SearchType {
+            SearchType::Chunks
+        }
+
+        async fn get_context(
+            &self,
+            _query: &str,
+            _params: &SearchParams,
+        ) -> Result<SearchContext, SearchError> {
+            Ok(vec![
+                crate::types::SearchItem {
+                    id: None,
+                    score: Some(0.9),
+                    payload: json!({
+                        "dataset_id": self.dataset_a.to_string(),
+                        "text": "A context"
+                    }),
+                },
+                crate::types::SearchItem {
+                    id: None,
+                    score: Some(0.8),
+                    payload: json!({
+                        "dataset_id": self.dataset_b.to_string(),
+                        "text": "B context"
+                    }),
+                },
+            ])
+        }
+
+        async fn get_completion(
+            &self,
+            _query: &str,
+            context: Option<SearchContext>,
+            _session: &SessionContext,
+            _params: &SearchParams,
+        ) -> Result<SearchOutput, SearchError> {
+            Ok(SearchOutput::Items(context.unwrap_or_default()))
+        }
+    }
+
+    fn dataset_request_template() -> SearchRequest {
+        SearchRequest {
+            query_text: "hello".to_string(),
+            search_type: SearchType::Chunks,
+            top_k: Some(3),
+            datasets: None,
+            dataset_ids: None,
+            system_prompt: None,
+            system_prompt_path: None,
+            only_context: Some(true),
+            use_combined_context: Some(false),
+            session_id: None,
+            node_type: None,
+            node_name: None,
+            wide_search_top_k: None,
+            triplet_distance_penalty: None,
+            save_interaction: Some(false),
+            user_id: None,
+            verbose: None,
+            feedback_influence: None,
+            retriever_specific_config: None,
+            response_schema: None,
+            custom_search_type: None,
+            auto_feedback_detection: None,
+        }
+    }
+
+    async fn fresh_db() -> Arc<cognee_database::DatabaseConnection> {
+        let db = connect("sqlite::memory:").await.unwrap();
+        initialize(&db).await.unwrap();
+        Arc::new(db)
+    }
+
+    async fn seed_dataset(
+        db: &cognee_database::DatabaseConnection,
+        name: &str,
+        owner: Uuid,
+    ) -> Dataset {
+        db_ops::datasets::create_dataset(
+            db,
+            Dataset::new(name.to_string(), owner, None, Uuid::new_v4()),
+        )
+        .await
+        .expect("seed dataset")
+    }
+
+    /// Scenario: caller passes a known dataset name in `datasets` and no
+    /// `dataset_ids`.
+    /// Expected: the orchestrator looks the name up against the metadata
+    /// DB, populates `dataset_ids` with the resolved UUID, and the
+    /// post-search scope filter restricts the response context map to
+    /// that UUID only.
+    /// Verification: seed one dataset named `"real"` for `owner`, fire a
+    /// retriever that emits one chunk for that UUID and one for an
+    /// unrelated UUID, and assert the response context contains only the
+    /// resolved UUID's bucket.
+    #[tokio::test]
+    async fn resolves_dataset_names_to_ids_and_scopes_results() {
+        let owner = Uuid::new_v4();
+        let db = fresh_db().await;
+        let dataset = seed_dataset(&db, "real", owner).await;
+        let other = Uuid::new_v4();
+
+        let mut registry = SearchTypeRegistry::new();
+        registry.register(Arc::new(ResolutionFixtureRetriever {
+            dataset_a: dataset.id,
+            dataset_b: other,
+        }));
+        let orchestrator =
+            super::SearchOrchestrator::new(registry).with_dataset_resolver(db as Arc<dyn IngestDb>);
+
+        let request = SearchRequest {
+            datasets: Some(vec!["real".into()]),
+            user_id: Some(owner),
+            ..dataset_request_template()
+        };
+
+        let response = orchestrator.search(&request).await.unwrap();
+        let context_map = response.context.expect("scoped context map");
+        assert!(context_map.contains_key(&dataset.id.to_string()));
+        assert!(!context_map.contains_key(&other.to_string()));
+    }
+
+    /// Scenario: dataset `"shared_name"` exists for owner A; a search
+    /// request from owner B passes `datasets: ["shared_name"]`.
+    /// Expected: name resolution is owner-scoped — owner B cannot see
+    /// owner A's dataset, so the lookup returns no match and the
+    /// orchestrator surfaces `DatasetNotFound`. This guarantees the name
+    /// filter never leaks rows across user boundaries.
+    /// Verification: seed the dataset under owner A, run the search as
+    /// owner B, assert `DatasetNotFound` is returned.
+    #[tokio::test]
+    async fn dataset_name_resolution_is_owner_scoped() {
+        let owner_a = Uuid::new_v4();
+        let owner_b = Uuid::new_v4();
+        let db = fresh_db().await;
+        let _ = seed_dataset(&db, "shared_name", owner_a).await;
+
+        let mut registry = SearchTypeRegistry::new();
+        registry.register(Arc::new(FakeChunksRetriever));
+        let orchestrator =
+            super::SearchOrchestrator::new(registry).with_dataset_resolver(db as Arc<dyn IngestDb>);
+
+        let request = SearchRequest {
+            datasets: Some(vec!["shared_name".into()]),
+            user_id: Some(owner_b),
+            ..dataset_request_template()
+        };
+
+        let err = orchestrator.search(&request).await.expect_err("must error");
+        assert!(
+            matches!(err, SearchError::DatasetNotFound(_)),
+            "got {err:?}"
+        );
+    }
+
+    /// Scenario: caller passes a list of dataset names where none of
+    /// them exist in the metadata DB.
+    /// Expected: the orchestrator returns `SearchError::DatasetNotFound`
+    /// rather than silently running an unfiltered search. The error
+    /// message includes every missing name so the caller can see exactly
+    /// which inputs failed to resolve.
+    /// Verification: pass two non-existent names, assert the error
+    /// variant is `DatasetNotFound`, and assert the joined error string
+    /// contains both names.
+    #[tokio::test]
+    async fn errors_when_all_dataset_names_are_unknown() {
+        let owner = Uuid::new_v4();
+        let db = fresh_db().await;
+
+        let mut registry = SearchTypeRegistry::new();
+        registry.register(Arc::new(FakeChunksRetriever));
+        let orchestrator =
+            super::SearchOrchestrator::new(registry).with_dataset_resolver(db as Arc<dyn IngestDb>);
+
+        let request = SearchRequest {
+            datasets: Some(vec!["does_not_exist".into(), "also_missing".into()]),
+            user_id: Some(owner),
+            ..dataset_request_template()
+        };
+
+        let err = orchestrator.search(&request).await.expect_err("must error");
+        let SearchError::DatasetNotFound(joined) = err else {
+            panic!("expected DatasetNotFound, got {err:?}");
+        };
+        assert!(
+            joined.contains("does_not_exist"),
+            "missing names list: {joined:?}"
+        );
+        assert!(
+            joined.contains("also_missing"),
+            "missing names list: {joined:?}"
+        );
+    }
+
+    /// Scenario: caller passes a mix of known and unknown dataset names.
+    /// Expected: a typo on one of several `-d` flags must NOT fail the
+    /// whole search. The orchestrator drops unknown names (with a
+    /// warning), proceeds with the resolved subset, and the response is
+    /// scoped to the resolved UUID(s) only.
+    /// Verification: seed one dataset named `"real"`, pass
+    /// `["real", "missing"]`, assert the search succeeds and the
+    /// resulting context contains the resolved UUID's bucket.
+    #[tokio::test]
+    async fn partial_resolution_drops_unknown_names_and_succeeds() {
+        let owner = Uuid::new_v4();
+        let db = fresh_db().await;
+        let dataset = seed_dataset(&db, "real", owner).await;
+
+        let mut registry = SearchTypeRegistry::new();
+        registry.register(Arc::new(ResolutionFixtureRetriever {
+            dataset_a: dataset.id,
+            dataset_b: Uuid::new_v4(),
+        }));
+        let orchestrator =
+            super::SearchOrchestrator::new(registry).with_dataset_resolver(db as Arc<dyn IngestDb>);
+
+        let request = SearchRequest {
+            datasets: Some(vec!["real".into(), "missing".into()]),
+            user_id: Some(owner),
+            ..dataset_request_template()
+        };
+
+        let response = orchestrator
+            .search(&request)
+            .await
+            .expect("partial resolution must succeed");
+        let context = response.context.expect("scoped context");
+        assert!(context.contains_key(&dataset.id.to_string()));
+    }
+
+    /// Scenario: caller passes `datasets: Some(vec![])` — i.e. the
+    /// option is set but the list is empty.
+    /// Expected: an empty list is treated identically to `None` — no
+    /// resolution is attempted, no resolver is required, no scope filter
+    /// is applied, and the search runs across everything the retriever
+    /// returns. This avoids a confusing failure mode where supplying an
+    /// empty `--datasets` flag would error out.
+    /// Verification: build an orchestrator with NO resolver wired, fire
+    /// a search with an empty `datasets` vec, and assert it succeeds.
+    #[tokio::test]
+    async fn empty_datasets_vec_behaves_like_none() {
+        let mut registry = SearchTypeRegistry::new();
+        registry.register(Arc::new(FakeChunksRetriever));
+        // Intentionally no .with_dataset_resolver(...) — the empty list
+        // must not require one.
+        let orchestrator = super::SearchOrchestrator::new(registry);
+
+        let request = SearchRequest {
+            datasets: Some(vec![]),
+            user_id: None,
+            only_context: Some(false),
+            ..dataset_request_template()
+        };
+
+        orchestrator
+            .search(&request)
+            .await
+            .expect("empty datasets list must not error");
+    }
+
+    /// Scenario: caller passes BOTH `datasets` (names) and `dataset_ids`
+    /// (UUIDs).
+    /// Expected: explicit `dataset_ids` always win — name resolution is
+    /// skipped entirely, the resolver is never consulted, and a bogus
+    /// name in `datasets` does not cause an error. This protects API
+    /// callers that already know the UUIDs from being affected by name
+    /// resolution edge cases.
+    /// Verification: register a retriever for an explicit UUID, build an
+    /// orchestrator with NO resolver wired, send a request with both a
+    /// bogus name and the real UUID, and assert the search succeeds and
+    /// scopes to the supplied UUID.
+    #[tokio::test]
+    async fn dataset_ids_take_precedence_over_names() {
+        let id = Uuid::new_v4();
+        let mut registry = SearchTypeRegistry::new();
+        registry.register(Arc::new(ResolutionFixtureRetriever {
+            dataset_a: id,
+            dataset_b: Uuid::new_v4(),
+        }));
+        // No resolver wired — would fail if names were consulted.
+        let orchestrator = super::SearchOrchestrator::new(registry);
+
+        let request = SearchRequest {
+            datasets: Some(vec!["bogus".into()]),
+            dataset_ids: Some(vec![id]),
+            ..dataset_request_template()
+        };
+
+        let response = orchestrator
+            .search(&request)
+            .await
+            .expect("explicit dataset_ids must succeed without resolver");
+        let context_map = response.context.expect("scoped context");
+        assert!(context_map.contains_key(&id.to_string()));
+    }
+
+    /// Scenario: caller passes `datasets` (names) but the orchestrator
+    /// was constructed without a `dataset_resolver`.
+    /// Expected: the orchestrator returns
+    /// `SearchError::InvalidInput` instead of silently ignoring the
+    /// filter. The original bug (see
+    /// `docs/bug-search-dataset-name-filter-ignored.md`) was that the
+    /// names were dropped on the floor and the search returned every
+    /// dataset — this test ensures any future refactor that loses the
+    /// resolver wiring fails loudly.
+    /// Verification: build an orchestrator with no resolver, send a
+    /// request with a non-empty `datasets` vec and a `user_id`, assert
+    /// the error is `InvalidInput`.
+    #[tokio::test]
+    async fn errors_when_dataset_names_supplied_without_resolver() {
+        let mut registry = SearchTypeRegistry::new();
+        registry.register(Arc::new(FakeChunksRetriever));
+        let orchestrator = super::SearchOrchestrator::new(registry);
+
+        let request = SearchRequest {
+            datasets: Some(vec!["whatever".into()]),
+            user_id: Some(Uuid::new_v4()),
+            ..dataset_request_template()
+        };
+
+        let err = orchestrator.search(&request).await.expect_err("must error");
+        assert!(matches!(err, SearchError::InvalidInput(_)), "got {err:?}");
+    }
+
+    /// Scenario: caller passes `datasets` (names) but `user_id` is
+    /// `None`. The metadata lookup needs an owner to be owner-scoped, so
+    /// without a `user_id` the orchestrator cannot determine which
+    /// user's namespace to look the names up in.
+    /// Expected: `SearchError::InvalidInput`. The orchestrator must NOT
+    /// fall back to a default owner or run an unscoped lookup, since
+    /// either would silently break the per-user isolation that the
+    /// owner-scoping test above relies on.
+    /// Verification: send a request with `datasets` set and
+    /// `user_id: None`, assert the error variant is `InvalidInput`.
+    #[tokio::test]
+    async fn errors_when_dataset_names_supplied_without_user_id() {
+        let db = fresh_db().await;
+        let mut registry = SearchTypeRegistry::new();
+        registry.register(Arc::new(FakeChunksRetriever));
+        let orchestrator =
+            super::SearchOrchestrator::new(registry).with_dataset_resolver(db as Arc<dyn IngestDb>);
+
+        let request = SearchRequest {
+            datasets: Some(vec!["whatever".into()]),
+            user_id: None,
+            ..dataset_request_template()
+        };
+
+        let err = orchestrator.search(&request).await.expect_err("must error");
+        assert!(matches!(err, SearchError::InvalidInput(_)), "got {err:?}");
     }
 
     #[tokio::test]

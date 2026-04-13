@@ -23,6 +23,9 @@ pub enum SearchError {
     #[error("not found: {0}")]
     NotFound(String),
 
+    #[error("dataset not found: {0}")]
+    DatasetNotFound(String),
+
     #[error("unsupported search type: {0:?}")]
     UnsupportedSearchType(crate::types::SearchType),
 
