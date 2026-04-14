@@ -26,7 +26,7 @@ impl Default for FetcherConfig {
             user_agent: "Cognee-Rust/0.1.0".to_string(),
             follow_redirects: true,
             max_redirects: 5,
-            respect_robots_txt: false, // Start simple, can enable later
+            respect_robots_txt: true,
         }
     }
 }

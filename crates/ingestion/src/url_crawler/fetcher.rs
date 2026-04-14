@@ -1,7 +1,11 @@
 use super::config::FetcherConfig;
 use super::error::UrlFetcherError;
 use reqwest::Client;
+use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
+use texting_robots::Robot;
+use tokio::sync::Mutex;
 use url::Url;
 
 /// Result of fetching a URL, carrying raw bytes and metadata.
@@ -15,10 +19,24 @@ pub struct FetchResult {
     pub url: String,
 }
 
+/// TTL for cached robots.txt entries (1 hour, matching Python).
+const ROBOTS_CACHE_TTL: Duration = Duration::from_secs(3600);
+
+/// Timeout for fetching robots.txt (5s, matching Python).
+const ROBOTS_FETCH_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Cached robots.txt entry for a single domain.
+struct RobotsCacheEntry {
+    robot: Robot,
+    fetched_at: Instant,
+}
+
 /// HTTP fetcher for downloading web content
 pub struct UrlFetcher {
     client: Arc<Client>,
     config: FetcherConfig,
+    /// Per-domain robots.txt cache. Key is the domain origin (e.g. `"https://example.com"`).
+    robots_cache: Arc<Mutex<HashMap<String, RobotsCacheEntry>>>,
 }
 
 impl UrlFetcher {
@@ -43,6 +61,7 @@ impl UrlFetcher {
         Ok(Self {
             client: Arc::new(client),
             config,
+            robots_cache: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
@@ -133,14 +152,81 @@ impl UrlFetcher {
         Ok(())
     }
 
-    /// Basic robots.txt check (simplified for MVP)
-    async fn check_robots_txt(&self, _url: &Url) -> Result<(), UrlFetcherError> {
-        // For MVP: just return Ok, full implementation would:
-        // 1. Fetch robots.txt from domain
-        // 2. Parse rules
-        // 3. Check if our user-agent can access the path
-        // This can be enhanced later with a robots.txt parser
-        Ok(())
+    /// Check robots.txt rules for the given URL.
+    ///
+    /// Fetches and caches `/robots.txt` per domain. On fetch failure the URL
+    /// is allowed (matching Python behaviour). Returns
+    /// `Err(UrlFetcherError::RobotsDisallowed)` when the URL is blocked.
+    async fn check_robots_txt(&self, url: &Url) -> Result<(), UrlFetcherError> {
+        let origin = url.origin().unicode_serialization();
+
+        // Check cache (fetch if missing or expired).
+        let robot_allowed = {
+            let mut cache = self.robots_cache.lock().await;
+
+            // Remove expired entry so we re-fetch below.
+            if let Some(entry) = cache.get(&origin)
+                && entry.fetched_at.elapsed() >= ROBOTS_CACHE_TTL
+            {
+                cache.remove(&origin);
+            }
+
+            if let Some(entry) = cache.get(&origin) {
+                entry.robot.allowed(url.as_str())
+            } else {
+                // Fetch robots.txt — drop the lock while doing I/O.
+                drop(cache);
+                let robot = self.fetch_robots_txt(&origin).await;
+                let allowed = robot.allowed(url.as_str());
+
+                let mut cache = self.robots_cache.lock().await;
+                // Another task may have populated it while we were fetching;
+                // insert only if still absent.
+                cache.entry(origin).or_insert(RobotsCacheEntry {
+                    robot,
+                    fetched_at: Instant::now(),
+                });
+
+                allowed
+            }
+        };
+
+        if robot_allowed {
+            Ok(())
+        } else {
+            Err(UrlFetcherError::RobotsDisallowed(url.to_string()))
+        }
+    }
+
+    /// Fetch and parse `/robots.txt` for the given origin.
+    ///
+    /// On any failure (network error, non-200 status, parse error) returns a
+    /// permissive `Robot` that allows all URLs — matching Python behaviour.
+    async fn fetch_robots_txt(&self, origin: &str) -> Robot {
+        let robots_url = format!("{origin}/robots.txt");
+
+        let body = match tokio::time::timeout(
+            ROBOTS_FETCH_TIMEOUT,
+            self.client.get(&robots_url).send(),
+        )
+        .await
+        {
+            Ok(Ok(resp)) if resp.status().is_success() => resp
+                .bytes()
+                .await
+                .map(|b| b.to_vec())
+                .unwrap_or_default(),
+            _ => {
+                // Fetch failed or non-200 — treat as empty (allow all).
+                Vec::new()
+            }
+        };
+
+        // `Robot::new` can fail on malformed input; treat as permissive.
+        Robot::new(&self.config.user_agent, &body).unwrap_or_else(|_| {
+            Robot::new(&self.config.user_agent, b"")
+                .expect("empty robots.txt should always parse")
+        })
     }
 
     /// Get MIME type from URL (helper for metadata extraction)
