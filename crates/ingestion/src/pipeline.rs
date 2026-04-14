@@ -234,6 +234,22 @@ pub async fn persist_data(
 // Private helpers
 // ---------------------------------------------------------------------------
 
+/// Resolve the MIME type for a file extension.
+///
+/// If the extension maps to `"text_loader"` in the loader registry, return
+/// `"text/plain"` to match Python's behaviour (Python's `filetype.guess()`
+/// returns `text/plain` for `.md`, `.json`, `.xml`, etc. because they have no
+/// magic bytes). Otherwise fall back to `mime_guess`.
+fn resolve_mime(extension: &str, path_for_guess: &str) -> String {
+    if get_loader_name(extension) == "text_loader" {
+        "text/plain".to_string()
+    } else {
+        mime_guess::from_path(path_for_guess)
+            .first_or_octet_stream()
+            .to_string()
+    }
+}
+
 /// Return `(file_name, extension, mime_type, label)` for the given input.
 fn extract_file_metadata(input: &DataInput) -> (String, String, String, Option<String>) {
     match input {
@@ -250,9 +266,7 @@ fn extract_file_metadata(input: &DataInput) -> (String, String, String, Option<S
                 .and_then(|e| e.to_str())
                 .unwrap_or("")
                 .to_string();
-            let mime = mime_guess::from_path(clean_path)
-                .first_or_octet_stream()
-                .to_string();
+            let mime = resolve_mime(&extension, clean_path);
             (file_name, extension, mime, None)
         }
         DataInput::Text(_) => {
@@ -286,9 +300,7 @@ fn extract_file_metadata(input: &DataInput) -> (String, String, String, Option<S
                 .and_then(|e| e.to_str())
                 .unwrap_or("bin")
                 .to_string();
-            let mime = mime_guess::from_path(name)
-                .first_or_octet_stream()
-                .to_string();
+            let mime = resolve_mime(&ext, name);
             (name.clone(), ext, mime, None)
         }
         DataInput::DataItem { data, label } => {
@@ -911,5 +923,50 @@ mod tests {
         let input = DataInput::Text("hello world".into());
         let name = super::extract_name(&input, "5eb63bbbe01eeed093cb22bb8f5acdc3");
         assert_eq!(name, "text_5eb63bbbe01eeed093cb22bb8f5acdc3");
+    }
+
+    // ── mime type override for text-loader extensions ──────────────────
+
+    #[test]
+    fn binary_md_file_gets_text_plain_mime() {
+        let input = DataInput::Binary {
+            name: "notes.md".to_string(),
+            data: b"# Heading\nSome markdown".to_vec(),
+        };
+        let (_name, _ext, mime, _label) = super::extract_file_metadata(&input);
+        assert_eq!(
+            mime, "text/plain",
+            ".md binary should produce text/plain, not text/markdown"
+        );
+    }
+
+    #[test]
+    fn file_path_md_gets_text_plain_mime() {
+        let input = DataInput::FilePath("/tmp/notes.md".to_string());
+        let (_name, _ext, mime, _label) = super::extract_file_metadata(&input);
+        assert_eq!(
+            mime, "text/plain",
+            ".md file path should produce text/plain, not text/markdown"
+        );
+    }
+
+    #[test]
+    fn file_path_json_gets_text_plain_mime() {
+        let input = DataInput::FilePath("/tmp/data.json".to_string());
+        let (_name, _ext, mime, _label) = super::extract_file_metadata(&input);
+        assert_eq!(
+            mime, "text/plain",
+            ".json file path should produce text/plain, not application/json"
+        );
+    }
+
+    #[test]
+    fn file_path_pdf_keeps_original_mime() {
+        let input = DataInput::FilePath("/tmp/doc.pdf".to_string());
+        let (_name, _ext, mime, _label) = super::extract_file_metadata(&input);
+        assert_ne!(
+            mime, "text/plain",
+            ".pdf should NOT be overridden to text/plain"
+        );
     }
 }
