@@ -4,6 +4,8 @@
 //! [`LoaderRegistry`] struct, and [`LoaderError`] type for routing
 //! document content through type-specific extraction logic.
 
+#[cfg(any(feature = "pdf-pdfium", feature = "pdf-pure-rust"))]
+pub mod pdf;
 pub mod text;
 
 use std::collections::HashMap;
@@ -129,7 +131,10 @@ impl LoaderRegistry {
     pub fn default_registry() -> Self {
         let mut registry = Self::new();
         registry.register("text", Arc::new(text::TextLoader));
-        // Phase 2+: conditionally register pdf, csv, etc.
+
+        #[cfg(any(feature = "pdf-pdfium", feature = "pdf-pure-rust"))]
+        registry.register("pdf", Arc::new(pdf::PdfLoader));
+
         registry
     }
 }

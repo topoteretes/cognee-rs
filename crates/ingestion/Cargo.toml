@@ -21,6 +21,14 @@ thiserror.workspace = true
 tracing.workspace = true
 url.workspace = true
 futures-util.workspace = true
+pdfium-render = { workspace = true, optional = true }
+pdfium-auto = { workspace = true, optional = true }
+pdf-extract = { workspace = true, optional = true }
+
+[features]
+default = []
+pdf-pdfium = ["dep:pdfium-render", "dep:pdfium-auto"]
+pdf-pure-rust = ["dep:pdf-extract"]
 
 [dev-dependencies]
 cognee-database = { path = "../database" }

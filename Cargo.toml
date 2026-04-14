@@ -56,6 +56,9 @@ mime_guess = "2.0"
 ndarray = "0.17"
 notify = "6.1"
 ort = { version = "2.0.0-rc.11", features = ["ndarray", "cuda", "tensorrt"] }
+pdf-extract = "0.10"
+pdfium-auto = "0.3"
+pdfium-render = { version = "0.9", features = ["thread_safe"] }
 predicates = "3.1"
 rand = "0.8"
 rayon = "1.10"
