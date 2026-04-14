@@ -1243,4 +1243,52 @@ mod tests {
             Some(&"true".to_string())
         );
     }
+
+    #[tokio::test]
+    async fn test_expand_edges_connect_to_canonicalized_entities() {
+        // Verify that LLM-extracted edges resolve correctly even after
+        // entity names/IDs are canonicalized by the ontology resolver.
+        // This confirms that name_mapping-based edge remapping is NOT needed
+        // in Rust (unlike Python) because node_id_to_entity_id keys by
+        // the original LLM node.id, not the entity name.
+        let graph = create_test_graph(); // alice_1, techcorp_1, works_at
+        let chunk_id = Uuid::new_v4();
+        let dataset_id = Uuid::new_v4();
+        let resolver = MockOntologyResolver;
+
+        let (nodes, edges) = expand_with_nodes_and_edges(
+            vec![(chunk_id, graph)],
+            dataset_id,
+            &HashSet::new(),
+            &resolver,
+        )
+        .await;
+
+        // The "works_at" edge should still connect Alice to TechCorp
+        let works_at: Vec<_> = edges
+            .iter()
+            .filter(|e| e.relationship_name == "works_at")
+            .collect();
+        assert_eq!(works_at.len(), 1, "Expected exactly 1 works_at edge");
+
+        // Find Alice (canonicalized to "alice_canonical") and TechCorp by entity name
+        let alice = nodes
+            .iter()
+            .find(|n| n.entity.name == "alice_canonical")
+            .expect("Alice should be canonicalized to 'alice_canonical'");
+        let techcorp = nodes
+            .iter()
+            .find(|n| n.entity.name == "TechCorp")
+            .expect("TechCorp entity should exist");
+
+        // Edge endpoints must match the entity UUIDs
+        assert_eq!(
+            works_at[0].source_entity_id, alice.entity.base.id,
+            "Edge source should point to canonicalized Alice's UUID"
+        );
+        assert_eq!(
+            works_at[0].target_entity_id, techcorp.entity.base.id,
+            "Edge target should point to TechCorp's UUID"
+        );
+    }
 }
