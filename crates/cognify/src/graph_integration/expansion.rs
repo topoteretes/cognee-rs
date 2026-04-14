@@ -148,6 +148,10 @@ pub async fn expand_with_nodes_and_edges(
             // Step 2: Create Entity
             let entity_key = format!("{}_entity", node.id);
 
+            // Validate entity against ontology "individuals" with subgraph expansion.
+            // Collect subgraph data for deferred processing (after insert releases borrow).
+            let mut deferred_individual_data = None;
+
             if let std::collections::hash_map::Entry::Vacant(e) = node_map.entry(entity_key) {
                 let mut entity_pair = create_entity_node(
                     &node,
@@ -156,18 +160,58 @@ pub async fn expand_with_nodes_and_edges(
                     chunk_id,
                 );
 
-                // Validate entity against ontology "individuals"
-                if ontology_resolver.is_loaded()
-                    && let Ok(Some(_canonical)) =
-                        ontology_resolver.find_closest_match(&node.name, "individuals")
-                {
-                    entity_pair.entity.base.set_ontology_valid(true);
+                if ontology_resolver.is_loaded() {
+                    match ontology_resolver.get_subgraph(&node.name, "individuals", true) {
+                        Ok((ont_nodes, ont_edges, Some(root_individual))) => {
+                            let canonical_name = root_individual.name.clone();
+
+                            // Store original name in metadata
+                            entity_pair.entity.base.set_metadata(
+                                "original_name",
+                                serde_json::json!(entity_pair.entity.name.clone()),
+                            );
+
+                            // Replace name and ID with canonical form
+                            entity_pair.entity.name = canonical_name.clone();
+                            entity_pair.entity.base.id =
+                                ontology_name_to_uuid(&canonical_name);
+                            entity_pair.entity.base.set_ontology_valid(true);
+
+                            // Defer subgraph processing until after insert
+                            deferred_individual_data = Some((ont_nodes, ont_edges));
+                        }
+                        Ok((_, _, None)) => {}
+                        Err(err) => {
+                            warn!(
+                                "Ontology individual lookup failed for '{}': {}",
+                                node.name, err
+                            );
+                        }
+                    }
                 }
 
                 // Track node_id -> entity_id mapping for edge resolution
                 node_id_to_entity_id.insert(node.id.clone(), entity_pair.entity.base.id);
 
                 e.insert(entity_pair);
+            }
+
+            // Process deferred ontology individual subgraph (outside the Vacant borrow)
+            if let Some((ont_nodes, ont_edges)) = deferred_individual_data {
+                process_ontology_nodes(
+                    &ont_nodes,
+                    dataset_id,
+                    &node_map,
+                    &type_map,
+                    &mut ontology_types_map,
+                    &mut ontology_entities_map,
+                );
+                process_ontology_edges(
+                    &ont_edges,
+                    existing_edges_set,
+                    &mut ontology_edge_keys,
+                    &mut ontology_edges_out,
+                );
             }
         }
 
@@ -757,6 +801,14 @@ mod tests {
                     };
                     Ok((vec![], vec![], Some(root)))
                 }
+                ("Alice", "individuals") => {
+                    let root = AttachedOntologyNode {
+                        uri: "http://test.org#alice_canonical".to_string(),
+                        name: "alice_canonical".to_string(),
+                        category: NodeCategory::Individuals,
+                    };
+                    Ok((vec![], vec![], Some(root)))
+                }
                 _ => Ok((vec![], vec![], None)),
             }
         }
@@ -785,9 +837,14 @@ mod tests {
         assert!(nodes.len() >= 2, "Expected at least 2 nodes, got {}", nodes.len());
 
         // Find LLM-extracted nodes (not ontology-derived)
+        // Note: Alice's name is canonicalized to "alice_canonical" by individual matching
         let llm_nodes: Vec<_> = nodes
             .iter()
-            .filter(|n| n.entity.name == "TechCorp" || n.entity.name == "Alice")
+            .filter(|n| {
+                n.entity.name == "TechCorp"
+                    || n.entity.name == "Alice"
+                    || n.entity.name == "alice_canonical"
+            })
             .collect();
         assert_eq!(llm_nodes.len(), 2);
 
@@ -803,13 +860,18 @@ mod tests {
             if node_pair.entity.name == "TechCorp" {
                 // "Organization" → canonical "organisation" (lowercase from uri_to_key)
                 assert_eq!(node_pair.entity_type.name, "organisation");
-            } else if node_pair.entity.name == "Alice" {
+            } else if node_pair.entity.name == "alice_canonical" {
                 // "Person" → canonical "person" (lowercase from uri_to_key)
                 assert_eq!(node_pair.entity_type.name, "person");
-                // Alice is matched as an individual
+                // Alice is matched as individual and canonicalized
                 assert!(
                     node_pair.entity.base.ontology_valid,
-                    "Entity 'Alice' should be ontology-valid"
+                    "Entity 'alice_canonical' should be ontology-valid"
+                );
+                // Original name stored in metadata
+                assert_eq!(
+                    node_pair.entity.base.get_metadata("original_name"),
+                    Some(&serde_json::json!("Alice")),
                 );
             }
         }
