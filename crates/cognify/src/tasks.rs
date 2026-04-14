@@ -888,17 +888,7 @@ pub async fn extract_dlt_fk_edges(
             }
             fk_defs_seen.insert(fk_key);
 
-            let rel_name = format!(
-                "{}:{}->{}{}",
-                table_name,
-                fk_col,
-                ref_table,
-                if ref_col.is_empty() {
-                    String::new()
-                } else {
-                    format!(":{}", ref_col)
-                }
-            );
+            let rel_name = format!("{}:{}->{}:{}", table_name, fk_col, ref_table, ref_col);
             let rel_id = Uuid::new_v5(&Uuid::NAMESPACE_OID, format!("dlt:{}", rel_name).as_bytes());
 
             // source_table -> relationship (has_foreign_key)
@@ -2259,6 +2249,49 @@ mod tests {
     /// The provenance guard must fire when db + user_id are present,
     /// even if tenant_id is None.  This matches Python's
     /// `if user and dataset and data:` which doesn't check tenant.
+    #[test]
+    fn dlt_fk_rel_name_always_includes_ref_col_separator() {
+        // Python: rel_name = f"{table_name}:{fk_col}->{ref_table}:{ref_col}"
+        // This always includes the colon before ref_col, even when ref_col is empty.
+
+        // Case 1: non-empty ref_col
+        let table_name = "orders";
+        let fk_col = "customer_id";
+        let ref_table = "customers";
+        let ref_col = "id";
+        let rel_name = format!("{}:{}->{}:{}", table_name, fk_col, ref_table, ref_col);
+        assert_eq!(rel_name, "orders:customer_id->customers:id");
+
+        let rel_id = Uuid::new_v5(&Uuid::NAMESPACE_OID, format!("dlt:{}", rel_name).as_bytes());
+        let expected_id = Uuid::new_v5(
+            &Uuid::NAMESPACE_OID,
+            b"dlt:orders:customer_id->customers:id",
+        );
+        assert_eq!(rel_id, expected_id);
+
+        // Case 2: empty ref_col -- must still include trailing colon
+        let ref_col_empty = "";
+        let rel_name_empty = format!("{}:{}->{}:{}", table_name, fk_col, ref_table, ref_col_empty);
+        assert_eq!(
+            rel_name_empty, "orders:customer_id->customers:",
+            "rel_name must include trailing colon even when ref_col is empty"
+        );
+
+        let rel_id_empty = Uuid::new_v5(
+            &Uuid::NAMESPACE_OID,
+            format!("dlt:{}", rel_name_empty).as_bytes(),
+        );
+        let expected_id_empty =
+            Uuid::new_v5(&Uuid::NAMESPACE_OID, b"dlt:orders:customer_id->customers:");
+        assert_eq!(rel_id_empty, expected_id_empty);
+
+        // Verify the two IDs differ (trailing colon changes the UUID5 seed)
+        assert_ne!(
+            rel_id, rel_id_empty,
+            "non-empty and empty ref_col must produce different UUIDs"
+        );
+    }
+
     #[test]
     fn provenance_guard_does_not_require_tenant_id() {
         // Simulate the guard condition from cognify():
