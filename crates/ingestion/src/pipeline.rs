@@ -46,6 +46,7 @@ pub struct ProcessedInput {
     pub original_location: String,
     pub owner_id: Uuid,
     pub tenant_id: Option<Uuid>,
+    pub external_metadata: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -135,6 +136,13 @@ pub async fn process_input(
         _ => extract_original_location(input),
     };
 
+    let external_metadata = match input {
+        DataInput::DataItem {
+            external_metadata, ..
+        } => external_metadata.clone(),
+        _ => None,
+    };
+
     Ok(ProcessedInput {
         content_hash,
         data_id,
@@ -149,6 +157,7 @@ pub async fn process_input(
         original_location,
         owner_id,
         tenant_id,
+        external_metadata,
     })
 }
 
@@ -219,6 +228,9 @@ pub async fn persist_data(
     }
     if let Some(ref lbl) = processed.label {
         data_builder = data_builder.label(lbl.clone());
+    }
+    if let Some(ref meta) = processed.external_metadata {
+        data_builder = data_builder.external_metadata(meta.clone());
     }
     let data = data_builder.build();
 
@@ -303,7 +315,7 @@ fn extract_file_metadata(input: &DataInput) -> (String, String, String, Option<S
             let mime = resolve_mime(&ext, name);
             (name.clone(), ext, mime, None)
         }
-        DataInput::DataItem { data, label } => {
+        DataInput::DataItem { data, label, .. } => {
             let (file_name, ext, mime, _) = extract_file_metadata(data);
             (file_name, ext, mime, Some(label.clone()))
         }
@@ -882,6 +894,7 @@ mod tests {
                 vec![DataInput::DataItem {
                     data: Box::new(DataInput::Text("labelled content".to_string())),
                     label: "my-label".to_string(),
+                    external_metadata: None,
                 }],
                 "ds",
                 owner_id,
@@ -967,6 +980,62 @@ mod tests {
         assert_ne!(
             mime, "text/plain",
             ".pdf should NOT be overridden to text/plain"
+        );
+    }
+
+    // ── external_metadata plumbing ────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_data_item_external_metadata_stored() {
+        let (pipeline, _db) = make_pipeline().await;
+        let owner_id = Uuid::new_v4();
+
+        let meta_json = r#"{"source":"dlt","table_name":"orders"}"#.to_string();
+        let result = pipeline
+            .add(
+                vec![DataInput::DataItem {
+                    data: Box::new(DataInput::Text("dlt content".to_string())),
+                    label: "dlt-label".to_string(),
+                    external_metadata: Some(meta_json.clone()),
+                }],
+                "ds",
+                owner_id,
+                None,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(
+            result[0].external_metadata.as_deref(),
+            Some(meta_json.as_str()),
+            "DataItem external_metadata must be stored in the Data record"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_data_item_without_metadata() {
+        let (pipeline, _db) = make_pipeline().await;
+        let owner_id = Uuid::new_v4();
+
+        let result = pipeline
+            .add(
+                vec![DataInput::DataItem {
+                    data: Box::new(DataInput::Text("no metadata".to_string())),
+                    label: "plain-label".to_string(),
+                    external_metadata: None,
+                }],
+                "ds",
+                owner_id,
+                None,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(
+            result[0].external_metadata, None,
+            "DataItem with no external_metadata should produce None on Data"
         );
     }
 }
