@@ -25,12 +25,24 @@ pdfium-render = { workspace = true, optional = true }
 pdfium-auto = { workspace = true, optional = true }
 pdf-extract = { workspace = true, optional = true }
 csv = { workspace = true, optional = true }
+calamine = { workspace = true, optional = true }
+mail-parser = { workspace = true, optional = true }
+quick-xml = { workspace = true, optional = true }
+zip = { workspace = true, optional = true }
 
 [features]
 default = []
 pdf-pdfium = ["dep:pdfium-render", "dep:pdfium-auto"]
 pdf-pure-rust = ["dep:pdf-extract"]
 csv-loader = ["dep:csv"]
+unstructured-xlsx = ["dep:calamine"]
+unstructured-docx = ["dep:quick-xml", "dep:zip"]
+unstructured-pptx = ["dep:quick-xml", "dep:zip"]
+unstructured-epub = ["dep:quick-xml", "dep:zip"]
+unstructured-eml = ["dep:mail-parser"]
+unstructured-odt = ["dep:quick-xml", "dep:zip"]
+unstructured-odp = ["dep:quick-xml", "dep:zip"]
+unstructured = ["unstructured-xlsx", "unstructured-docx", "unstructured-pptx", "unstructured-epub", "unstructured-eml", "unstructured-odt", "unstructured-odp"]
 
 [dev-dependencies]
 cognee-database = { path = "../database" }

@@ -41,6 +41,7 @@ anyhow = "1"
 assert_cmd = "2.0"
 async-trait = "0.1.89"
 cognee-litert-lm = { git = "https://github.com/topoteretes/cognee-litert-lm.git" }
+calamine = "0.34"
 csv = "1.3"
 clap = "4.5"
 chrono = { version = "0.4.41", default-features = false, features = ["serde", "clock", "std"] }
@@ -53,11 +54,13 @@ futures = "0.3"
 futures-util = "0.3"
 lbug = "0.14"
 log = "0.4"
+mail-parser = "0.11"
 mime_guess = "2.0"
 ndarray = "0.17"
 notify = "6.1"
 ort = { version = "2.0.0-rc.11", features = ["ndarray", "cuda", "tensorrt"] }
 pdf-extract = "0.10"
+quick-xml = "0.39"
 pdfium-auto = "0.3"
 pdfium-render = { version = "0.9", features = ["thread_safe"] }
 predicates = "3.1"
@@ -90,6 +93,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 url = "2.5"
 uuid = { version = "1.21", features = ["v4", "v5", "serde"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }
 
 [patch.crates-io]
 # Align tar version with qdrant workspace (needed for Archive::set_sync)

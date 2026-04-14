@@ -9,6 +9,8 @@ pub mod csv_loader;
 #[cfg(any(feature = "pdf-pdfium", feature = "pdf-pure-rust"))]
 pub mod pdf;
 pub mod text;
+#[cfg(feature = "unstructured")]
+pub mod unstructured;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -139,6 +141,9 @@ impl LoaderRegistry {
 
         #[cfg(feature = "csv-loader")]
         registry.register("csv", Arc::new(csv_loader::CsvLoader));
+
+        #[cfg(feature = "unstructured")]
+        registry.register("unstructured", Arc::new(unstructured::UnstructuredLoader));
 
         registry
     }
