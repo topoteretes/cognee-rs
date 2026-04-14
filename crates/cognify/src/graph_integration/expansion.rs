@@ -7,8 +7,8 @@ use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 
 use cognee_models::{Entity, EntityType};
-use cognee_ontology::{AttachedOntologyNode, NodeCategory, OntologyResolver};
 use cognee_ontology::traits::OntologyEdge;
+use cognee_ontology::{AttachedOntologyNode, NodeCategory, OntologyResolver};
 use tracing::warn;
 
 use crate::fact_extraction::{KnowledgeGraph, Node};
@@ -173,8 +173,7 @@ pub async fn expand_with_nodes_and_edges(
 
                             // Replace name and ID with canonical form
                             entity_pair.entity.name = canonical_name.clone();
-                            entity_pair.entity.base.id =
-                                ontology_name_to_uuid(&canonical_name);
+                            entity_pair.entity.base.id = ontology_name_to_uuid(&canonical_name);
                             entity_pair.entity.base.set_ontology_valid(true);
 
                             // Defer subgraph processing until after insert
@@ -359,7 +358,9 @@ fn process_ontology_nodes(
                 let dedup_key = format!("{}_type", node_id);
                 // Skip if the LLM already extracted this type (check by name-based key)
                 let llm_type_key = format!("{}_type", node.name);
-                if type_map.contains_key(&llm_type_key) || ontology_types_map.contains_key(&dedup_key) {
+                if type_map.contains_key(&llm_type_key)
+                    || ontology_types_map.contains_key(&dedup_key)
+                {
                     continue;
                 }
                 // Also skip if there is already a node_map entry for this node id
@@ -376,7 +377,9 @@ fn process_ontology_nodes(
             NodeCategory::Individuals => {
                 let dedup_key = format!("{}_entity", node_id);
                 // Skip if already present in either map
-                if node_map.contains_key(&dedup_key) || ontology_entities_map.contains_key(&dedup_key) {
+                if node_map.contains_key(&dedup_key)
+                    || ontology_entities_map.contains_key(&dedup_key)
+                {
                     continue;
                 }
 
@@ -385,7 +388,8 @@ fn process_ontology_nodes(
                 entity.base.set_ontology_valid(true);
 
                 // Placeholder EntityType for the GraphNodePair
-                let mut placeholder_et = EntityType::new("OntologyIndividual", "", Some(dataset_id));
+                let mut placeholder_et =
+                    EntityType::new("OntologyIndividual", "", Some(dataset_id));
                 placeholder_et.base.id = ontology_name_to_uuid("ontologyindividual");
 
                 let pair = GraphNodePair {
@@ -834,7 +838,11 @@ mod tests {
         .await;
 
         // 2 LLM nodes + 1 ontology ancestor (legalentity) = 3
-        assert!(nodes.len() >= 2, "Expected at least 2 nodes, got {}", nodes.len());
+        assert!(
+            nodes.len() >= 2,
+            "Expected at least 2 nodes, got {}",
+            nodes.len()
+        );
 
         // Find LLM-extracted nodes (not ontology-derived)
         // Note: Alice's name is canonicalized to "alice_canonical" by individual matching
@@ -1053,11 +1061,7 @@ mod tests {
     #[test]
     fn test_process_ontology_edges_creates_edges() {
         let edges: Vec<OntologyEdge> = vec![
-            (
-                "Car".to_string(),
-                "is a".to_string(),
-                "Vehicle".to_string(),
-            ),
+            ("Car".to_string(), "is a".to_string(), "Vehicle".to_string()),
             (
                 "Vehicle".to_string(),
                 "has part".to_string(),
@@ -1086,7 +1090,10 @@ mod tests {
         assert_eq!(edge0.source_entity_id, car_id);
         assert_eq!(edge0.target_entity_id, vehicle_id);
         assert_eq!(edge0.relationship_name, "is_a");
-        assert_eq!(edge0.properties.get("ontology_valid"), Some(&"true".to_string()));
+        assert_eq!(
+            edge0.properties.get("ontology_valid"),
+            Some(&"true".to_string())
+        );
         assert_eq!(
             edge0.properties.get("source_node_id"),
             Some(&car_id.to_string())
@@ -1114,11 +1121,7 @@ mod tests {
         existing_edge_keys.insert(existing_key);
 
         let edges: Vec<OntologyEdge> = vec![
-            (
-                "Car".to_string(),
-                "is a".to_string(),
-                "Vehicle".to_string(),
-            ),
+            ("Car".to_string(), "is a".to_string(), "Vehicle".to_string()),
             (
                 "Vehicle".to_string(),
                 "has part".to_string(),
@@ -1232,10 +1235,7 @@ mod tests {
 
         // Source = organisation, target = legalentity (deterministic UUIDs)
         assert_eq!(is_a.source_entity_id, ontology_name_to_uuid("organisation"));
-        assert_eq!(
-            is_a.target_entity_id,
-            ontology_name_to_uuid("legalentity")
-        );
+        assert_eq!(is_a.target_entity_id, ontology_name_to_uuid("legalentity"));
 
         // Should be marked as ontology-derived
         assert_eq!(
@@ -1346,7 +1346,10 @@ mod tests {
         );
 
         // Exactly 1 is_a edge
-        let is_a_edges: Vec<_> = edges.iter().filter(|e| e.relationship_name == "is_a").collect();
+        let is_a_edges: Vec<_> = edges
+            .iter()
+            .filter(|e| e.relationship_name == "is_a")
+            .collect();
         assert_eq!(is_a_edges.len(), 1, "Expected exactly 1 is_a edge");
     }
 
@@ -1385,7 +1388,10 @@ mod tests {
 
         // Both entities should exist
         let tc = nodes.iter().find(|n| n.entity.name == "TechCorp").unwrap();
-        let qt = nodes.iter().find(|n| n.entity.name == "QuantumTheory").unwrap();
+        let qt = nodes
+            .iter()
+            .find(|n| n.entity.name == "QuantumTheory")
+            .unwrap();
 
         // Organization type is canonicalized and validated
         assert!(tc.entity_type.is_ontology_valid());
