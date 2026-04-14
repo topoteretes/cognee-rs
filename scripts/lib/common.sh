@@ -51,7 +51,12 @@ print_env() {
 }
 
 # run_cargo_tests [test_name]
-# Runs cargo test for the entire workspace. Caller must cd to PROJECT_ROOT first.
+# Runs the workspace test suite. Uses `cargo nextest run` when available
+# (faster compile scheduling, cleaner output) and falls back to `cargo test`
+# otherwise. `--no-capture` forces serial execution, which matches the
+# prior `--test-threads=1` requirement that many LLM tests rely on.
+# Doctests are run separately because nextest does not execute them yet.
+# Caller must cd to PROJECT_ROOT first.
 run_cargo_tests() {
   local test_name="${1:-}"
 
@@ -59,10 +64,20 @@ run_cargo_tests() {
   echo -e "${BLUE}═══════════════════════════════════════════════════════════════${NC}"
   echo
 
-  if [[ -n "$test_name" ]]; then
-    cargo test --workspace "$test_name" -- --nocapture --test-threads=1
+  if command -v cargo-nextest >/dev/null 2>&1; then
+    if [[ -n "$test_name" ]]; then
+      cargo nextest run --workspace --no-capture "$test_name"
+    else
+      cargo nextest run --workspace --no-capture
+    fi
+    # nextest does not run doctests; exercise them separately.
+    cargo test --workspace --doc -- --nocapture
   else
-    cargo test --workspace -- --nocapture --test-threads=1
+    if [[ -n "$test_name" ]]; then
+      cargo test --workspace "$test_name" -- --nocapture --test-threads=1
+    else
+      cargo test --workspace -- --nocapture --test-threads=1
+    fi
   fi
 
   echo
