@@ -4,6 +4,8 @@
 //! [`LoaderRegistry`] struct, and [`LoaderError`] type for routing
 //! document content through type-specific extraction logic.
 
+#[cfg(feature = "csv-loader")]
+pub mod csv_loader;
 #[cfg(any(feature = "pdf-pdfium", feature = "pdf-pure-rust"))]
 pub mod pdf;
 pub mod text;
@@ -134,6 +136,9 @@ impl LoaderRegistry {
 
         #[cfg(any(feature = "pdf-pdfium", feature = "pdf-pure-rust"))]
         registry.register("pdf", Arc::new(pdf::PdfLoader));
+
+        #[cfg(feature = "csv-loader")]
+        registry.register("csv", Arc::new(csv_loader::CsvLoader));
 
         registry
     }
