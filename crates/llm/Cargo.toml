@@ -26,7 +26,7 @@ base64.workspace = true
 thiserror.workspace = true
 
 # HTTP client (for API-based implementations)
-reqwest.workspace = true
+reqwest = { workspace = true, features = ["multipart"] }
 
 # Logging
 log.workspace = true
@@ -36,4 +36,5 @@ tracing.workspace = true
 cognee-litert-lm = { workspace = true, optional = true }
 
 [dev-dependencies]
+httpmock = "0.8"
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

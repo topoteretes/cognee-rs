@@ -45,6 +45,11 @@ pub enum LlmError {
 
     #[error("Local model error: {0}")]
     LocalModelError(String),
+
+    #[error(
+        "Unsupported audio format: {0}. Supported formats: mp3, mp4, mpeg, mpga, m4a, wav, webm"
+    )]
+    InvalidAudioFormat(String),
 }
 
 /// Result type for LLM operations.

@@ -56,6 +56,7 @@ pub mod dynamic_model;
 pub mod error;
 pub mod llm_trait;
 pub mod schema;
+pub mod transcriber;
 pub mod types;
 
 #[cfg(all(feature = "android-litert", target_os = "android"))]
@@ -69,4 +70,5 @@ pub use schema::{
     build_schema_prompt, generate_json_schema, generate_json_schema_string, graph_model_to_schema,
     graph_model_to_schema_string,
 };
+pub use transcriber::{Transcriber, TranscriptionOutput, validate_audio_format};
 pub use types::{GenerationOptions, GenerationResponse, Message, MessageRole, TokenUsage};

@@ -11,6 +11,7 @@ use tracing::{debug, instrument, warn};
 
 use crate::error::{LlmError, LlmResult};
 use crate::llm_trait::Llm;
+use crate::transcriber::{Transcriber, TranscriptionOutput, validate_audio_format};
 use crate::types::{GenerationOptions, GenerationResponse, Message, MessageRole, TokenUsage};
 
 /// OpenAI API adapter.
@@ -47,6 +48,8 @@ pub struct OpenAIAdapter {
     structured_output_retries: usize,
     /// Number of times to retry the HTTP request on transient network/server errors.
     network_retries: usize,
+    /// Model name for audio transcription (e.g. `"whisper-1"`).
+    transcription_model: String,
 }
 
 impl OpenAIAdapter {
@@ -76,6 +79,9 @@ impl OpenAIAdapter {
             .build()
             .map_err(|e| LlmError::ConfigError(format!("Failed to create HTTP client: {}", e)))?;
 
+        let transcription_model =
+            std::env::var("TRANSCRIPTION_MODEL").unwrap_or_else(|_| "whisper-1".to_string());
+
         Ok(Self {
             model: model.into(),
             api_key: api_key.into(),
@@ -83,6 +89,7 @@ impl OpenAIAdapter {
             client,
             structured_output_retries: Self::DEFAULT_STRUCTURED_OUTPUT_RETRIES,
             network_retries: Self::DEFAULT_NETWORK_RETRIES,
+            transcription_model,
         })
     }
 
@@ -100,6 +107,12 @@ impl OpenAIAdapter {
     /// Each retry uses exponential backoff starting at 1 s, doubling up to 30 s.
     pub fn with_network_retries(mut self, retries: u32) -> Self {
         self.network_retries = usize::try_from(retries).unwrap_or(usize::MAX);
+        self
+    }
+
+    /// Configure the model used for audio transcription (default: `"whisper-1"`).
+    pub fn with_transcription_model(mut self, model: impl Into<String>) -> Self {
+        self.transcription_model = model.into();
         self
     }
 
@@ -687,6 +700,193 @@ impl Llm for OpenAIAdapter {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Whisper transcription support
+// ---------------------------------------------------------------------------
+
+/// Response from the OpenAI Whisper `verbose_json` endpoint.
+#[derive(Debug, Deserialize)]
+struct WhisperResponse {
+    text: String,
+    language: Option<String>,
+    duration: Option<f32>,
+}
+
+/// Map a validated audio format extension to its MIME type.
+fn audio_mime_type(format: &str) -> &'static str {
+    match format {
+        "mp3" | "mpeg" | "mpga" => "audio/mpeg",
+        "mp4" | "m4a" => "audio/mp4",
+        "wav" => "audio/wav",
+        "webm" => "audio/webm",
+        // validate_audio_format ensures only the above values reach here
+        _ => "application/octet-stream",
+    }
+}
+
+impl OpenAIAdapter {
+    /// Call the Whisper transcription API with the same retry logic as `call_api`.
+    #[instrument(name = "llm.transcription_api_call", skip(self, form), fields(url = tracing::field::Empty))]
+    async fn call_transcription_api(
+        &self,
+        form: reqwest::multipart::Form,
+    ) -> LlmResult<WhisperResponse> {
+        let url = format!("{}/audio/transcriptions", self.base_url);
+        tracing::Span::current().record("url", url.as_str());
+
+        // We cannot clone a multipart Form, so the first attempt uses the
+        // original form and retries are not possible for the multipart body.
+        // However, we keep the retry loop for network errors that occur
+        // *before* the body is consumed (connection refused, DNS failure).
+        // For simplicity and matching the guide's design, we rebuild the form
+        // if needed by storing the bytes. But since `Form` doesn't support
+        // Clone, we perform a single attempt with the form and rely on the
+        // caller to retry externally if needed.
+        //
+        // Actually, the simplest approach is to send the form once and
+        // handle retries at a higher level. But the guide says to mirror
+        // call_api's retry. Since reqwest::multipart::Form is not Clone,
+        // we accept `form` by value and do a single-shot request here,
+        // while the `transcribe_audio` impl handles retry by rebuilding
+        // the form on each attempt.
+
+        let response = self
+            .client
+            .post(&url)
+            .header("Authorization", self.auth_header())
+            .multipart(form)
+            .send()
+            .await
+            .map_err(|e| LlmError::NetworkError(e.to_string()))?;
+
+        let status = response.status();
+
+        if !status.is_success() {
+            let error_body = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
+
+            return Err(match status.as_u16() {
+                401 => LlmError::AuthenticationError(error_body),
+                429 => LlmError::RateLimitExceeded(error_body),
+                400 => LlmError::InvalidResponse(format!("Bad request: {}", error_body)),
+                _ => LlmError::ApiError(format!("HTTP {}: {}", status, error_body)),
+            });
+        }
+
+        let response_body = response.text().await.map_err(|e| {
+            LlmError::DeserializationError(format!("Failed to read response body: {}", e))
+        })?;
+
+        serde_json::from_str::<WhisperResponse>(&response_body).map_err(|e| {
+            LlmError::DeserializationError(format!(
+                "Failed to parse Whisper response: {}. Raw body: {}",
+                e, response_body
+            ))
+        })
+    }
+
+    /// Build a `reqwest::multipart::Form` for a Whisper transcription request.
+    fn build_transcription_form(
+        &self,
+        audio: &[u8],
+        format: &str,
+        language_hint: Option<&str>,
+        prompt_hint: Option<&str>,
+    ) -> LlmResult<reqwest::multipart::Form> {
+        let mime = audio_mime_type(format);
+        let filename = format!("audio.{}", format);
+
+        let file_part = reqwest::multipart::Part::bytes(audio.to_vec())
+            .file_name(filename)
+            .mime_str(mime)
+            .map_err(|e| {
+                LlmError::ConfigError(format!("Failed to set MIME type on multipart part: {}", e))
+            })?;
+
+        let mut form = reqwest::multipart::Form::new()
+            .part("file", file_part)
+            .text("model", self.transcription_model.clone())
+            .text("response_format", "verbose_json");
+
+        if let Some(lang) = language_hint {
+            form = form.text("language", lang.to_string());
+        }
+        if let Some(prompt) = prompt_hint {
+            form = form.text("prompt", prompt.to_string());
+        }
+
+        Ok(form)
+    }
+}
+
+#[async_trait]
+impl Transcriber for OpenAIAdapter {
+    async fn transcribe_audio(
+        &self,
+        audio: &[u8],
+        format: &str,
+        language_hint: Option<&str>,
+        prompt_hint: Option<&str>,
+    ) -> LlmResult<TranscriptionOutput> {
+        // Normalize and validate before any network I/O.
+        let format_lower = format.to_ascii_lowercase();
+        validate_audio_format(&format_lower)?;
+
+        let mut last_error = LlmError::NetworkError("No attempt made".to_string());
+
+        for attempt in 0..=self.network_retries {
+            debug!(attempt, "Transcription API attempt");
+            if attempt > 0 {
+                let delay_ms = (1_000u64 * 2u64.saturating_pow(attempt as u32 - 1)).min(30_000);
+                warn!(
+                    attempt,
+                    network_retries = self.network_retries,
+                    delay_ms,
+                    error = %last_error,
+                    "Transcription request failed, retrying",
+                );
+                tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+            }
+
+            let form =
+                self.build_transcription_form(audio, &format_lower, language_hint, prompt_hint)?;
+
+            match self.call_transcription_api(form).await {
+                Ok(resp) => {
+                    return Ok(TranscriptionOutput {
+                        text: resp.text,
+                        language: resp.language,
+                        duration: resp.duration,
+                    });
+                }
+                Err(e) => {
+                    // Non-retryable errors: bad request or authentication failure.
+                    if matches!(
+                        e,
+                        LlmError::InvalidResponse(_) | LlmError::AuthenticationError(_)
+                    ) {
+                        return Err(e);
+                    }
+                    last_error = e;
+                    continue;
+                }
+            }
+        }
+
+        Err(LlmError::MaxRetriesExceeded(format!(
+            "Transcription request failed after {} attempt(s): {}",
+            self.network_retries + 1,
+            last_error
+        )))
+    }
+
+    fn transcription_model(&self) -> &str {
+        &self.transcription_model
+    }
+}
+
 // OpenAI API response types
 #[derive(Debug, Deserialize)]
 #[allow(dead_code)]
@@ -860,5 +1060,34 @@ mod tests {
             matches!(result.unwrap_err(), LlmError::InvalidResponse(_)),
             "Expected InvalidResponse for non-image MIME type"
         );
+    }
+
+    #[test]
+    fn test_transcription_model_default() {
+        // Clear the env var to test the default value.
+        // SAFETY: This test is single-threaded and no other thread reads
+        // TRANSCRIPTION_MODEL concurrently.
+        unsafe { std::env::remove_var("TRANSCRIPTION_MODEL") };
+        let adapter = OpenAIAdapter::new("gpt-4", "key", None).unwrap();
+        assert_eq!(adapter.transcription_model(), "whisper-1");
+    }
+
+    #[test]
+    fn test_transcription_model_custom() {
+        let adapter = OpenAIAdapter::new("gpt-4", "key", None)
+            .unwrap()
+            .with_transcription_model("whisper-large-v3");
+        assert_eq!(adapter.transcription_model(), "whisper-large-v3");
+    }
+
+    #[test]
+    fn test_audio_mime_type_mapping() {
+        assert_eq!(audio_mime_type("mp3"), "audio/mpeg");
+        assert_eq!(audio_mime_type("mpeg"), "audio/mpeg");
+        assert_eq!(audio_mime_type("mpga"), "audio/mpeg");
+        assert_eq!(audio_mime_type("mp4"), "audio/mp4");
+        assert_eq!(audio_mime_type("m4a"), "audio/mp4");
+        assert_eq!(audio_mime_type("wav"), "audio/wav");
+        assert_eq!(audio_mime_type("webm"), "audio/webm");
     }
 }

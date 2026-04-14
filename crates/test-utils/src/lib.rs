@@ -8,6 +8,7 @@
 //! `DB_HOST` / … convention).
 
 pub mod mock_llm;
+pub mod mock_transcriber;
 
 use std::sync::Arc;
 
@@ -18,6 +19,7 @@ pub use cognee_graph::MockGraphDB;
 pub use cognee_storage::MockStorage;
 pub use cognee_vector::MockVectorDB;
 pub use mock_llm::MockLlm;
+pub use mock_transcriber::MockTranscriber;
 
 /// Returns a PostgreSQL connection URL built from environment variables, or `None`
 /// if `DB_PROVIDER` is not set to `"postgres"`.
