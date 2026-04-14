@@ -28,6 +28,8 @@ const ROBOTS_FETCH_TIMEOUT: Duration = Duration::from_secs(5);
 /// Cached robots.txt entry for a single domain.
 struct RobotsCacheEntry {
     robot: Robot,
+    /// Per-domain crawl delay from robots.txt (if any), already capped.
+    crawl_delay: Option<Duration>,
     fetched_at: Instant,
 }
 
@@ -37,6 +39,8 @@ pub struct UrlFetcher {
     config: FetcherConfig,
     /// Per-domain robots.txt cache. Key is the domain origin (e.g. `"https://example.com"`).
     robots_cache: Arc<Mutex<HashMap<String, RobotsCacheEntry>>>,
+    /// Per-domain last-fetch timestamp for rate limiting.
+    last_fetch: Arc<Mutex<HashMap<String, Instant>>>,
 }
 
 impl UrlFetcher {
@@ -62,6 +66,7 @@ impl UrlFetcher {
             client: Arc::new(client),
             config,
             robots_cache: Arc::new(Mutex::new(HashMap::new())),
+            last_fetch: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
@@ -72,6 +77,8 @@ impl UrlFetcher {
         if self.config.respect_robots_txt {
             self.check_robots_txt(&parsed_url).await?;
         }
+
+        self.respect_rate_limit(&parsed_url).await;
 
         let response = self.client.get(url).send().await?;
 
@@ -130,6 +137,8 @@ impl UrlFetcher {
             self.check_robots_txt(&parsed_url).await?;
         }
 
+        self.respect_rate_limit(&parsed_url).await;
+
         let response = self.client.get(url).send().await?;
 
         let status = response.status();
@@ -176,7 +185,7 @@ impl UrlFetcher {
             } else {
                 // Fetch robots.txt — drop the lock while doing I/O.
                 drop(cache);
-                let robot = self.fetch_robots_txt(&origin).await;
+                let (robot, crawl_delay) = self.fetch_robots_txt(&origin).await;
                 let allowed = robot.allowed(url.as_str());
 
                 let mut cache = self.robots_cache.lock().await;
@@ -184,6 +193,7 @@ impl UrlFetcher {
                 // insert only if still absent.
                 cache.entry(origin).or_insert(RobotsCacheEntry {
                     robot,
+                    crawl_delay,
                     fetched_at: Instant::now(),
                 });
 
@@ -202,7 +212,8 @@ impl UrlFetcher {
     ///
     /// On any failure (network error, non-200 status, parse error) returns a
     /// permissive `Robot` that allows all URLs — matching Python behaviour.
-    async fn fetch_robots_txt(&self, origin: &str) -> Robot {
+    /// Also returns the (capped) crawl delay if one is present.
+    async fn fetch_robots_txt(&self, origin: &str) -> (Robot, Option<Duration>) {
         let robots_url = format!("{origin}/robots.txt");
 
         let body = match tokio::time::timeout(
@@ -223,10 +234,47 @@ impl UrlFetcher {
         };
 
         // `Robot::new` can fail on malformed input; treat as permissive.
-        Robot::new(&self.config.user_agent, &body).unwrap_or_else(|_| {
+        let robot = Robot::new(&self.config.user_agent, &body).unwrap_or_else(|_| {
             Robot::new(&self.config.user_agent, b"")
                 .expect("empty robots.txt should always parse")
-        })
+        });
+
+        // Extract crawl delay from robots.txt, capped at max_crawl_delay.
+        let crawl_delay = robot.delay.map(|secs| {
+            let d = Duration::from_secs_f32(secs);
+            d.min(self.config.max_crawl_delay)
+        });
+
+        (robot, crawl_delay)
+    }
+
+    /// Enforce per-domain rate limiting before making an HTTP request.
+    ///
+    /// Uses the robots.txt `Crawl-Delay` for the domain if available,
+    /// otherwise falls back to `config.crawl_delay`. Sleeps until the
+    /// minimum inter-request interval has elapsed.
+    async fn respect_rate_limit(&self, url: &Url) {
+        let origin = url.origin().unicode_serialization();
+
+        // Determine effective delay: robots.txt crawl_delay > config default.
+        let robots_delay = {
+            let cache = self.robots_cache.lock().await;
+            cache.get(&origin).and_then(|entry| entry.crawl_delay)
+        };
+        let effective_delay = robots_delay.unwrap_or(self.config.crawl_delay);
+
+        let mut last = self.last_fetch.lock().await;
+        if let Some(prev) = last.get(&origin) {
+            let elapsed = prev.elapsed();
+            if elapsed < effective_delay {
+                let wait = effective_delay - elapsed;
+                // Release the lock while sleeping so other domains are not blocked.
+                drop(last);
+                tokio::time::sleep(wait).await;
+                last = self.last_fetch.lock().await;
+            }
+        }
+        last.insert(origin, Instant::now());
     }
 
     /// Get MIME type from URL (helper for metadata extraction)

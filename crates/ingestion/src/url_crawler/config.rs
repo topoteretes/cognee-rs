@@ -15,8 +15,16 @@ pub struct FetcherConfig {
     /// Maximum redirects to follow
     pub max_redirects: usize,
 
-    /// Check robots.txt before fetching (basic implementation)
+    /// Check robots.txt before fetching
     pub respect_robots_txt: bool,
+
+    /// Minimum delay between requests to the same domain (default 500ms,
+    /// matching Python's `crawl_delay`).
+    pub crawl_delay: Duration,
+
+    /// Upper bound for per-domain crawl delay when robots.txt specifies a
+    /// `Crawl-Delay` directive (default 10s, matching Python).
+    pub max_crawl_delay: Duration,
 }
 
 impl Default for FetcherConfig {
@@ -27,6 +35,8 @@ impl Default for FetcherConfig {
             follow_redirects: true,
             max_redirects: 5,
             respect_robots_txt: true,
+            crawl_delay: Duration::from_millis(500),
+            max_crawl_delay: Duration::from_secs(10),
         }
     }
 }
