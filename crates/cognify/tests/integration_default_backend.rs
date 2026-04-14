@@ -22,6 +22,7 @@ use cognee_graph::{GraphDBTrait, LadybugAdapter};
 use cognee_ingestion::AddPipeline;
 use cognee_llm::{Llm, OpenAIAdapter};
 use cognee_models::DataInput;
+use cognee_ontology::NoOpOntologyResolver;
 use cognee_search::{
     SearchBuilder, SearchRequest, SearchType,
     types::{SearchOutput, SearchResponse},
@@ -194,6 +195,7 @@ async fn test_default_backend_add_cognify_search_delete() {
         vector_db.clone() as Arc<dyn VectorDB>,
         embedding_engine.clone() as Arc<dyn EmbeddingEngine>,
         None,
+        Arc::new(NoOpOntologyResolver::new()),
         &config,
     )
     .await

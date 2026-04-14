@@ -11,6 +11,7 @@ use cognee_cognify::{CognifyConfig, CognifyResult, cognify};
 use cognee_embedding::{config::OnnxEmbeddingConfig, onnx::OnnxEmbeddingEngine};
 use cognee_graph::MockGraphDB;
 use cognee_models::Data;
+use cognee_ontology::NoOpOntologyResolver;
 use cognee_storage::{MockStorage, StorageTrait};
 use cognee_vector::{MockVectorDB, VectorDB};
 use std::sync::Arc;
@@ -99,6 +100,7 @@ async fn test_pipeline_with_embeddings() {
         vector_db,
         embedding_engine,
         None,
+        Arc::new(NoOpOntologyResolver::new()),
         &config,
     )
     .await
@@ -227,6 +229,7 @@ async fn test_pipeline_requires_embeddings() {
         vector_db,
         embedding_engine,
         None,
+        Arc::new(NoOpOntologyResolver::new()),
         &config,
     )
     .await
@@ -313,6 +316,7 @@ async fn test_embedding_semantic_similarity() {
             Arc::clone(&vector_db),
             Arc::clone(&embedding_engine),
             None,
+            Arc::new(NoOpOntologyResolver::new()),
             &config,
         )
         .await
@@ -403,6 +407,7 @@ async fn test_entity_name_indexing() {
         vector_db.clone(),
         embedding_engine,
         None,
+        Arc::new(NoOpOntologyResolver::new()),
         &config,
     )
     .await
@@ -531,6 +536,7 @@ async fn test_triplet_embeddings_disabled_by_default() {
         vector_db.clone(),
         embedding_engine,
         None,
+        Arc::new(NoOpOntologyResolver::new()),
         &config,
     )
     .await
@@ -618,6 +624,7 @@ async fn test_triplet_embeddings_enabled() {
         vector_db.clone(),
         embedding_engine,
         None,
+        Arc::new(NoOpOntologyResolver::new()),
         &config,
     )
     .await

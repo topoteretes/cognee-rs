@@ -22,6 +22,7 @@ use cognee_graph::{GraphDBTrait, LadybugAdapter};
 use cognee_ingestion::AddPipeline;
 use cognee_llm::Llm;
 use cognee_models::DataInput;
+use cognee_ontology::NoOpOntologyResolver;
 use cognee_search::{
     SearchBuilder, SearchRequest, SearchType,
     types::{SearchOutput, SearchResponse},
@@ -196,6 +197,7 @@ async fn test_search_type_matrix() {
         Arc::clone(&vector_db),
         Arc::clone(&embedding_engine),
         None,
+        Arc::new(NoOpOntologyResolver::new()),
         &config,
     )
     .await

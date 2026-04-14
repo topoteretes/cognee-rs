@@ -3,7 +3,7 @@ use std::sync::Arc;
 use chrono::Utc;
 use cognee_lib::cognify::{ChunkStrategy, CognifyConfig, cognify};
 use cognee_lib::database::{ArtifactReference, DatabaseConnection, ops};
-use cognee_lib::ontology::{OntologyResolver, RdfLibOntologyResolver};
+use cognee_lib::ontology::{NoOpOntologyResolver, OntologyResolver, RdfLibOntologyResolver};
 use cognee_lib::{ComponentManager, PipelineContext};
 use tracing::{debug, info, warn};
 use uuid::Uuid;
@@ -78,15 +78,16 @@ pub fn run(args: CognifyArgs, cm: Arc<ComponentManager>) -> Result<(), CliError>
             .await
             .map_err(|e| CliError::Runtime(format!("{e}")))?;
 
-        if let Some(path) = &args.ontology_file {
-            // Validate the ontology file eagerly so we fail fast.
-            let _resolver: Arc<dyn OntologyResolver> = Arc::new(
-                RdfLibOntologyResolver::new(path.as_str()).map_err(|error| {
-                    CliError::Runtime(format!("Ontology initialization failed: {error}"))
-                })?,
-            );
-            // NOTE: ontology enrichment is not yet wired into the pipeline tasks.
-        }
+        let ontology_resolver: Arc<dyn OntologyResolver> =
+            if let Some(path) = &args.ontology_file {
+                Arc::new(
+                    RdfLibOntologyResolver::new(path.as_str()).map_err(|error| {
+                        CliError::Runtime(format!("Ontology initialization failed: {error}"))
+                    })?,
+                )
+            } else {
+                Arc::new(NoOpOntologyResolver::new())
+            };
 
         let chunk_strategy = match cm.settings().chunk_strategy.to_uppercase().as_str() {
             "RECURSIVE" => ChunkStrategy::Recursive,
@@ -149,6 +150,7 @@ pub fn run(args: CognifyArgs, cm: Arc<ComponentManager>) -> Result<(), CliError>
                 Arc::clone(&vector_db),
                 Arc::clone(&embedding_engine),
                 Some(Arc::clone(&database)),
+                Arc::clone(&ontology_resolver),
                 &cognify_config,
             )
                 .await

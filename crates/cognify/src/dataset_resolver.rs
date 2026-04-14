@@ -17,6 +17,7 @@ use cognee_embedding::engine::EmbeddingEngine;
 use cognee_graph::GraphDBTrait;
 use cognee_llm::Llm;
 use cognee_models::{Data, Dataset};
+use cognee_ontology::OntologyResolver;
 use cognee_storage::StorageTrait;
 use cognee_vector::VectorDB;
 use tracing::info;
@@ -82,6 +83,7 @@ pub async fn cognify_datasets(
     vector_db: Arc<dyn VectorDB>,
     embedding_engine: Arc<dyn EmbeddingEngine>,
     db: Option<Arc<DatabaseConnection>>,
+    ontology_resolver: Arc<dyn OntologyResolver>,
     config: &CognifyConfig,
 ) -> Result<Vec<CognifyResult>, CognifyError> {
     let datasets = resolver
@@ -142,6 +144,7 @@ pub async fn cognify_datasets(
             Arc::clone(&vector_db),
             Arc::clone(&embedding_engine),
             db.clone(),
+            Arc::clone(&ontology_resolver),
             config,
         )
         .await?;

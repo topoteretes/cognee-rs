@@ -14,6 +14,8 @@
 
 use std::sync::Arc;
 
+use cognee_ontology::NoOpOntologyResolver;
+
 use cognee_cognify::{CognifyConfig, cognify};
 use cognee_embedding::MockEmbeddingEngine;
 use cognee_models::Data;
@@ -90,6 +92,7 @@ async fn text_summary_payload_contains_text_field() {
         vector_db.clone() as Arc<dyn VectorDB>,
         embedding_engine,
         None,
+        Arc::new(NoOpOntologyResolver::new()),
         &config,
     )
     .await

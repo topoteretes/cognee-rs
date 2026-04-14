@@ -31,6 +31,7 @@ cognee-models    = { path = "../models" }
 cognee-storage   = { path = "../storage" }
 cognee-ingestion = { path = "../ingestion" }
 cognee-cognify   = { path = "../cognify" }
+cognee-ontology  = { path = "../ontology" }
 cognee-delete    = { path = "../delete" }
 cognee-llm       = { path = "../llm" }
 tempfile.workspace = true

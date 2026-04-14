@@ -14,6 +14,7 @@ use cognee_embedding::{EmbeddingEngine, error::EmbeddingError};
 use cognee_graph::MockGraphDB;
 use cognee_llm::{GenerationOptions, GenerationResponse, Llm, LlmError, Message};
 use cognee_models::Data;
+use cognee_ontology::NoOpOntologyResolver;
 use cognee_storage::{MockStorage, StorageTrait};
 use cognee_vector::MockVectorDB;
 use serde_json::Value;
@@ -139,6 +140,7 @@ async fn run_pipeline_with_incremental_flag(
         vector_db,
         embedding_engine,
         None,
+        Arc::new(NoOpOntologyResolver::new()),
         &config,
     )
     .await

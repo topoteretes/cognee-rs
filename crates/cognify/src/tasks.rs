@@ -28,6 +28,7 @@ use cognee_models::{
     Data, Document, DocumentChunk, EdgeType, Embedding,
     classify_documents as model_classify_documents,
 };
+use cognee_ontology::OntologyResolver;
 use cognee_storage::StorageTrait;
 use cognee_vector::{VectorDB, VectorPoint};
 use serde_json::json;
@@ -219,6 +220,7 @@ pub async fn extract_graph_from_data(
     input: &ExtractedChunks,
     llm: Arc<dyn Llm>,
     graph_db: Arc<dyn GraphDBTrait>,
+    ontology_resolver: Arc<dyn OntologyResolver>,
     config: &CognifyConfig,
 ) -> Result<ExtractedGraphData, CognifyError> {
     if input.chunks.is_empty() {
@@ -316,12 +318,11 @@ pub async fn extract_graph_from_data(
     let existing_edges_set = retrieve_existing_edges(graph_db.as_ref(), &graphs_only).await?;
 
     // Merge and deduplicate graphs (with DB awareness)
-    let ontology_resolver = cognee_ontology::NoOpOntologyResolver::new();
     let (nodes, edges) = expand_with_nodes_and_edges(
         all_graphs,
         input.dataset_id,
         &existing_edges_set,
-        &ontology_resolver,
+        ontology_resolver.as_ref(),
     )
     .await;
 
@@ -1091,6 +1092,7 @@ pub async fn cognify(
     vector_db: Arc<dyn VectorDB>,
     embedding_engine: Arc<dyn EmbeddingEngine>,
     db: Option<Arc<DatabaseConnection>>,
+    ontology_resolver: Arc<dyn OntologyResolver>,
     config: &CognifyConfig,
 ) -> Result<CognifyResult, CognifyError> {
     config
@@ -1177,6 +1179,7 @@ pub async fn cognify(
         &extracted_chunks,
         Arc::clone(&llm),
         Arc::clone(&graph_db),
+        Arc::clone(&ontology_resolver),
         config,
     )
     .await?;
@@ -1932,15 +1935,17 @@ pub fn make_extract_chunks_task(
 pub fn make_extract_graph_task(
     llm: Arc<dyn Llm>,
     graph_db: Arc<dyn GraphDBTrait>,
+    ontology_resolver: Arc<dyn OntologyResolver>,
     config: CognifyConfig,
 ) -> TypedTask<ExtractedChunks, ExtractedGraphData> {
     TypedTask::async_fn(move |input: &ExtractedChunks, _ctx| {
         let input = input.clone();
         let llm = Arc::clone(&llm);
         let graph_db = Arc::clone(&graph_db);
+        let ontology_resolver = Arc::clone(&ontology_resolver);
         let config = config.clone();
         Box::pin(async move {
-            extract_graph_from_data(&input, llm, graph_db, &config)
+            extract_graph_from_data(&input, llm, graph_db, ontology_resolver, &config)
                 .await
                 .map(Box::new)
                 .map_err(|e| format!("{e}").into())
@@ -2010,6 +2015,7 @@ pub fn build_cognify_pipeline(
     embedding_engine: Arc<dyn EmbeddingEngine>,
     llm: Arc<dyn Llm>,
     db: Option<Arc<DatabaseConnection>>,
+    ontology_resolver: Arc<dyn OntologyResolver>,
     config: CognifyConfig,
 ) -> Pipeline {
     PipelineBuilder::new_with_task("cognify", make_classify_documents_task())
@@ -2022,6 +2028,7 @@ pub fn build_cognify_pipeline(
         .add_task(make_extract_graph_task(
             Arc::clone(&llm),
             Arc::clone(&graph_db),
+            ontology_resolver,
             config.clone(),
         ))
         .add_task(make_summarize_text_task(llm, config.clone()))
