@@ -11,6 +11,7 @@ cognee-models = { path = "../models" }
 cognee-storage = { path = "../storage" }
 cognee-chunking = { path = "../chunking" }
 cognee-core = { path = "../core" }
+cognee-ingestion = { path = "../ingestion" }
 cognee-llm = { path = "../llm" }
 cognee-graph = { path = "../graph" }
 cognee-utils = { path = "../utils" }
@@ -36,7 +37,6 @@ cognee-embedding  = { path = "../embedding", features = ["onnx"] }
 cognee-graph      = { path = "../graph", features = ["testing", "ladybug"] }
 cognee-vector     = { path = "../vector", features = ["testing", "qdrant"] }
 cognee-database   = { path = "../database" }
-cognee-ingestion  = { path = "../ingestion" }
 cognee-search     = { path = "../search" }
 cognee-delete     = { path = "../delete" }
 cognee-test-utils = { path = "../test-utils" }

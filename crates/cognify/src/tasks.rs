@@ -18,11 +18,12 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use chrono::Utc;
-use cognee_chunking::{TokenCounterKind, chunk_text};
+use cognee_chunking::{CutType, NAMESPACE_OID, TokenCounterKind, chunk_by_row, chunk_text};
 use cognee_core::{Pipeline, PipelineBuilder, TypedTask};
 use cognee_database::DatabaseConnection;
 use cognee_embedding::engine::EmbeddingEngine;
 use cognee_graph::{EdgeData, GraphDBTrait, GraphDBTraitExt};
+use cognee_ingestion::loaders::{LoaderOutput, LoaderRegistry};
 use cognee_llm::Llm;
 use cognee_models::{
     Data, Document, DocumentChunk, EdgeType, Embedding,
@@ -152,6 +153,7 @@ pub async fn extract_chunks_from_documents(
     max_chunk_size: usize,
     token_counter_kind: TokenCounterKind,
     db: Option<&DatabaseConnection>,
+    loader_registry: &LoaderRegistry,
 ) -> Result<ExtractedChunks, CognifyError> {
     let counter = token_counter_kind
         .build()
@@ -164,10 +166,76 @@ pub async fn extract_chunks_from_documents(
             .await
             .map_err(|e| CognifyError::ChunkingError(e.to_string()))?;
 
-        let content = String::from_utf8(content_bytes)
+        // ---- DLT short-circuit ----
+        // DLT documents emit exactly one chunk with cut_type="dlt_row".
+        // No word/sentence/paragraph chunking. Mirrors Python DltRowDocument.read().
+        if document.document_type == "dlt_row" {
+            let text = String::from_utf8(content_bytes)
+                .map_err(|e| CognifyError::ChunkingError(e.to_string()))?;
+            let trimmed = text.trim();
+            if !trimmed.is_empty() {
+                let chunk_id =
+                    Uuid::new_v5(&NAMESPACE_OID, format!("{}-0", document.base.id).as_bytes());
+                let word_count = counter.count_tokens(trimmed);
+                let mut chunk = DocumentChunk::new(
+                    chunk_id,
+                    trimmed.to_string(),
+                    word_count,
+                    0, // chunk_index
+                    CutType::DltRow.to_string(),
+                    document.base.id,
+                );
+                if document.base.belongs_to_set.is_some() {
+                    chunk.base.belongs_to_set = document.base.belongs_to_set.clone();
+                }
+                // Token count write-back
+                if let Some(db) = db
+                    && let Err(e) = cognee_database::ops::data::update_data_token_count(
+                        db,
+                        document.data_id,
+                        word_count as i64,
+                    )
+                    .await
+                {
+                    warn!(data_id = %document.data_id, "Failed to update token count: {e}");
+                }
+                all_chunks.push(chunk);
+            }
+            continue;
+        }
+
+        // ---- Loader dispatch ----
+        let loader = loader_registry
+            .get(&document.document_type)
+            .ok_or_else(|| CognifyError::UnsupportedDocumentType(document.document_type.clone()))?;
+
+        let output = loader
+            .extract(&content_bytes, document)
+            .await
             .map_err(|e| CognifyError::ChunkingError(e.to_string()))?;
 
-        let mut chunks = chunk_text(document.base.id, &content, max_chunk_size, &counter);
+        let mut chunks = match output {
+            LoaderOutput::Text(text) => {
+                chunk_text(document.base.id, &text, max_chunk_size, &counter)
+            }
+            LoaderOutput::Rows(rows) => {
+                let joined = rows.join("\n\n");
+                chunk_by_row(document.base.id, &joined, max_chunk_size, &counter)
+            }
+            LoaderOutput::SingleChunk { text, cut_type } => {
+                let chunk_id =
+                    Uuid::new_v5(&NAMESPACE_OID, format!("{}-0", document.base.id).as_bytes());
+                let word_count = counter.count_tokens(&text);
+                vec![DocumentChunk::new(
+                    chunk_id,
+                    text,
+                    word_count,
+                    0,
+                    cut_type.to_string(),
+                    document.base.id,
+                )]
+            }
+        };
 
         // Propagate belongs_to_set from Document to each DocumentChunk
         // Mirrors Python: document_chunk.belongs_to_set = document.belongs_to_set
@@ -1260,12 +1328,14 @@ pub async fn cognify(
     }
 
     // Task 2: Extract text chunks (with token count write-back when DB available)
+    let loader_registry = LoaderRegistry::default();
     let mut extracted_chunks = extract_chunks_from_documents(
         &classified,
         &*storage,
         config.max_chunk_size,
         config.token_counter_kind.clone(),
         db.as_deref(),
+        &loader_registry,
     )
     .await?;
 
@@ -2021,12 +2091,14 @@ pub fn make_extract_chunks_task(
     max_chunk_size: usize,
     token_counter_kind: TokenCounterKind,
     db: Option<Arc<DatabaseConnection>>,
+    loader_registry: Arc<LoaderRegistry>,
 ) -> TypedTask<ClassifiedDocuments, ExtractedChunks> {
     TypedTask::async_fn(move |input: &ClassifiedDocuments, _ctx| {
         let input = input.clone();
         let storage = Arc::clone(&storage);
         let db = db.clone();
         let token_counter_kind = token_counter_kind.clone();
+        let loader_registry = Arc::clone(&loader_registry);
         Box::pin(async move {
             extract_chunks_from_documents(
                 &input,
@@ -2034,6 +2106,7 @@ pub fn make_extract_chunks_task(
                 max_chunk_size,
                 token_counter_kind,
                 db.as_deref(),
+                &loader_registry,
             )
             .await
             .map(Box::new)
@@ -2129,12 +2202,14 @@ pub fn build_cognify_pipeline(
     ontology_resolver: Arc<dyn OntologyResolver>,
     config: CognifyConfig,
 ) -> Pipeline {
+    let loader_registry = Arc::new(LoaderRegistry::default());
     PipelineBuilder::new_with_task("cognify", make_classify_documents_task())
         .add_task(make_extract_chunks_task(
             storage,
             config.max_chunk_size,
             config.token_counter_kind.clone(),
             db.clone(),
+            loader_registry,
         ))
         .add_task(make_extract_graph_task(
             Arc::clone(&llm),
@@ -2250,10 +2325,17 @@ mod tests {
             tenant_id: None,
         };
 
-        let result =
-            extract_chunks_from_documents(&input, &*storage, 100, TokenCounterKind::Word, None)
-                .await
-                .unwrap();
+        let registry = LoaderRegistry::default();
+        let result = extract_chunks_from_documents(
+            &input,
+            &*storage,
+            100,
+            TokenCounterKind::Word,
+            None,
+            &registry,
+        )
+        .await
+        .unwrap();
         assert!(!result.chunks.is_empty());
     }
 
@@ -2267,11 +2349,117 @@ mod tests {
             tenant_id: None,
         };
 
-        let result =
-            extract_chunks_from_documents(&input, &*storage, 100, TokenCounterKind::Word, None)
-                .await
-                .unwrap();
+        let registry = LoaderRegistry::default();
+        let result = extract_chunks_from_documents(
+            &input,
+            &*storage,
+            100,
+            TokenCounterKind::Word,
+            None,
+            &registry,
+        )
+        .await
+        .unwrap();
         assert!(result.chunks.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_dlt_short_circuit() {
+        let storage = Arc::new(MockStorage::new());
+        let location = storage
+            .store(b"  some dlt row content  ", "dlt.txt")
+            .await
+            .unwrap();
+
+        let doc_id = Uuid::new_v4();
+        let mut base = DataPoint::new("DltRowDocument", None);
+        base.id = doc_id;
+        base.set_metadata("index_fields", serde_json::json!(["text"]));
+        let doc = Document {
+            base,
+            document_type: "dlt_row".to_string(),
+            name: "dlt.txt".to_string(),
+            raw_data_location: location,
+            mime_type: "text/plain".to_string(),
+            extension: "txt".to_string(),
+            data_id: doc_id,
+            external_metadata: None,
+        };
+
+        let input = ClassifiedDocuments {
+            documents: vec![doc],
+            dataset_id: Uuid::new_v4(),
+            user_id: None,
+            tenant_id: None,
+        };
+
+        let registry = LoaderRegistry::default();
+        let result = extract_chunks_from_documents(
+            &input,
+            &*storage,
+            100,
+            TokenCounterKind::Word,
+            None,
+            &registry,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result.chunks.len(), 1);
+        let chunk = &result.chunks[0];
+        assert_eq!(chunk.text, "some dlt row content");
+        assert_eq!(chunk.cut_type, "dlt_row");
+        assert_eq!(chunk.chunk_index, 0);
+        assert_eq!(chunk.document_id, doc_id);
+    }
+
+    #[tokio::test]
+    async fn test_unsupported_document_type() {
+        let storage = Arc::new(MockStorage::new());
+        let location = storage
+            .store(b"some pdf content", "test.pdf")
+            .await
+            .unwrap();
+
+        let doc_id = Uuid::new_v4();
+        let mut base = DataPoint::new("PdfDocument", None);
+        base.id = doc_id;
+        base.set_metadata("index_fields", serde_json::json!(["text"]));
+        let doc = Document {
+            base,
+            document_type: "pdf".to_string(),
+            name: "test.pdf".to_string(),
+            raw_data_location: location,
+            mime_type: "application/pdf".to_string(),
+            extension: "pdf".to_string(),
+            data_id: doc_id,
+            external_metadata: None,
+        };
+
+        let input = ClassifiedDocuments {
+            documents: vec![doc],
+            dataset_id: Uuid::new_v4(),
+            user_id: None,
+            tenant_id: None,
+        };
+
+        let registry = LoaderRegistry::default();
+        let result = extract_chunks_from_documents(
+            &input,
+            &*storage,
+            100,
+            TokenCounterKind::Word,
+            None,
+            &registry,
+        )
+        .await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, CognifyError::UnsupportedDocumentType(ref t) if t == "pdf"),
+            "expected UnsupportedDocumentType(\"pdf\"), got: {err:?}"
+        );
     }
 
     #[test]

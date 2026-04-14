@@ -14,7 +14,7 @@ use crate::chunk_by_paragraph::chunk_by_paragraph;
 use crate::token_counter::TokenCounter;
 
 /// NAMESPACE_OID from the uuid spec.
-const NAMESPACE_OID: Uuid = uuid!("6ba7b812-9dad-11d1-80b4-00c04fd430c8");
+pub const NAMESPACE_OID: Uuid = uuid!("6ba7b812-9dad-11d1-80b4-00c04fd430c8");
 
 /// Chunks text from a document into `DocumentChunk` items.
 ///

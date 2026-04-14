@@ -12,6 +12,12 @@ pub enum CutType {
     SentenceCut,
     /// Text ended mid-word.
     Word,
+    /// Single-chunk emission for DLT-ingested rows.
+    DltRow,
+    /// Row boundary within CSV/DLT chunking (mid-row split).
+    RowCut,
+    /// End of a complete row in CSV/DLT chunking.
+    RowEnd,
 }
 
 impl fmt::Display for CutType {
@@ -21,6 +27,9 @@ impl fmt::Display for CutType {
             CutType::SentenceEnd => write!(f, "sentence_end"),
             CutType::SentenceCut => write!(f, "sentence_cut"),
             CutType::Word => write!(f, "word"),
+            CutType::DltRow => write!(f, "dlt_row"),
+            CutType::RowCut => write!(f, "row_cut"),
+            CutType::RowEnd => write!(f, "row_end"),
         }
     }
 }
@@ -35,5 +44,8 @@ mod tests {
         assert_eq!(CutType::SentenceEnd.to_string(), "sentence_end");
         assert_eq!(CutType::SentenceCut.to_string(), "sentence_cut");
         assert_eq!(CutType::Word.to_string(), "word");
+        assert_eq!(CutType::DltRow.to_string(), "dlt_row");
+        assert_eq!(CutType::RowCut.to_string(), "row_cut");
+        assert_eq!(CutType::RowEnd.to_string(), "row_end");
     }
 }

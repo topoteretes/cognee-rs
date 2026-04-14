@@ -45,6 +45,9 @@ pub enum CognifyError {
 
     #[error("Serialization error: {0}")]
     SerializationError(String),
+
+    #[error("Unsupported document type: {0}")]
+    UnsupportedDocumentType(String),
 }
 
 /// Convert GraphDBError to CognifyError
