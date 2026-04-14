@@ -31,6 +31,7 @@ use cognee_models::{
 use cognee_ontology::OntologyResolver;
 use cognee_storage::StorageTrait;
 use cognee_vector::{VectorDB, VectorPoint};
+use serde::Serialize;
 use serde_json::json;
 use tokio::sync::Semaphore;
 use tracing::{info, warn};
@@ -844,14 +845,42 @@ pub async fn extract_dlt_fk_edges(
 
     let mut all_edges: Vec<cognee_graph::EdgeData> = Vec::new();
 
-    // Phase 1: Build table node IDs (deterministic via uuid5)
+    // Phase 1: Build table node IDs (deterministic via uuid5) and SchemaTable nodes
     let mut table_node_ids: HashMap<String, Uuid> = HashMap::new();
-    for table_name in tables_seen.keys() {
+    let mut schema_nodes: Vec<serde_json::Value> = Vec::new();
+
+    for (table_name, table_meta) in &tables_seen {
         let id = Uuid::new_v5(
             &Uuid::NAMESPACE_OID,
             format!("dlt:{}", table_name).as_bytes(),
         );
         table_node_ids.insert(table_name.clone(), id);
+
+        let columns_str = table_meta
+            .schema_info
+            .as_ref()
+            .map(|v| v.to_string())
+            .unwrap_or_else(|| "[]".to_string());
+        let fk_str =
+            serde_json::to_string(&table_meta.foreign_keys).unwrap_or_else(|_| "[]".to_string());
+
+        let table_node = SchemaTableNode {
+            id: id.to_string(),
+            name: table_name.clone(),
+            columns: columns_str,
+            primary_key: None,
+            foreign_keys: fk_str,
+            sample_rows: "[]".to_string(),
+            row_count_estimate: None,
+            description: format!(
+                "DLT-ingested relational table '{}' from database '{}'.",
+                table_name, table_meta.dlt_db_name
+            ),
+            data_type: "SchemaTable".to_string(),
+        };
+        if let Ok(val) = serde_json::to_value(&table_node) {
+            schema_nodes.push(val);
+        }
     }
 
     // Phase 2: Create FK relationship edges between table nodes
@@ -890,6 +919,25 @@ pub async fn extract_dlt_fk_edges(
 
             let rel_name = format!("{}:{}->{}:{}", table_name, fk_col, ref_table, ref_col);
             let rel_id = Uuid::new_v5(&Uuid::NAMESPACE_OID, format!("dlt:{}", rel_name).as_bytes());
+
+            // Create SchemaRelationship node for this FK definition
+            let rel_node = SchemaRelationshipNode {
+                id: rel_id.to_string(),
+                name: rel_name.clone(),
+                source_table: table_name.clone(),
+                target_table: ref_table.clone(),
+                relationship_type: "foreign_key".to_string(),
+                source_column: fk_col.clone(),
+                target_column: ref_col.clone(),
+                description: format!(
+                    "Foreign key: {}.{} -> {}.{}",
+                    table_name, fk_col, ref_table, ref_col
+                ),
+                data_type: "SchemaRelationship".to_string(),
+            };
+            if let Ok(val) = serde_json::to_value(&rel_node) {
+                schema_nodes.push(val);
+            }
 
             // source_table -> relationship (has_foreign_key)
             if let Some(&source_table_id) = table_node_ids.get(table_name.as_str()) {
@@ -1039,6 +1087,19 @@ pub async fn extract_dlt_fk_edges(
         }
     }
 
+    // Persist schema nodes to graph DB (SchemaTable + SchemaRelationship)
+    // NOTE: Python also calls `index_data_points(schema_nodes)` to embed these
+    // into vector DB. That is out of scope for Phase 0; Rust's `add_data_points`
+    // task handles vector indexing for the main pipeline data.
+    if !schema_nodes.is_empty() {
+        let node_count = schema_nodes.len();
+        graph_db
+            .add_nodes_raw(schema_nodes)
+            .await
+            .map_err(CognifyError::from)?;
+        info!("Added {} DLT schema nodes to graph", node_count);
+    }
+
     // Persist edges to graph DB
     if !all_edges.is_empty() {
         graph_db
@@ -1056,13 +1117,45 @@ pub async fn extract_dlt_fk_edges(
     Ok(())
 }
 
+/// Graph node representing a DLT-ingested relational table.
+///
+/// Mirrors Python's `SchemaTable` DataPoint model from
+/// `cognee/tasks/schema/models.py`.
+#[derive(Debug, Serialize)]
+struct SchemaTableNode {
+    id: String,
+    name: String,
+    columns: String,
+    primary_key: Option<String>,
+    foreign_keys: String,
+    sample_rows: String,
+    row_count_estimate: Option<i64>,
+    description: String,
+    data_type: String,
+}
+
+/// Graph node representing a foreign-key relationship between two tables.
+///
+/// Mirrors Python's `SchemaRelationship` DataPoint model from
+/// `cognee/tasks/schema/models.py`.
+#[derive(Debug, Serialize)]
+struct SchemaRelationshipNode {
+    id: String,
+    name: String,
+    source_table: String,
+    target_table: String,
+    relationship_type: String,
+    source_column: String,
+    target_column: String,
+    description: String,
+    data_type: String,
+}
+
 /// Internal metadata for a DLT source table.
 #[derive(Debug)]
 struct DltTableMeta {
-    #[allow(dead_code)]
     schema_info: Option<serde_json::Value>,
     foreign_keys: Vec<serde_json::Value>,
-    #[allow(dead_code)]
     dlt_db_name: String,
 }
 
