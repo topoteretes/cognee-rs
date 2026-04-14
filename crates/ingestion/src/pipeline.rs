@@ -26,7 +26,11 @@ use crate::url_crawler::{HtmlParser, UrlFetcher};
 /// Extract the MIME essence (e.g. `"text/html"`) from a full Content-Type
 /// header value like `"text/html; charset=utf-8"`.
 fn mime_essence(content_type: &str) -> &str {
-    content_type.split(';').next().unwrap_or(content_type).trim()
+    content_type
+        .split(';')
+        .next()
+        .unwrap_or(content_type)
+        .trim()
 }
 
 /// Infer a MIME type from a URL path extension. Returns `"text/plain"` as
@@ -135,18 +139,16 @@ pub async fn process_input(
             let meta = metadata_from_mime(&essence);
 
             let data_input = if essence == "text/html" || essence == "application/xhtml+xml" {
-                let html = String::from_utf8(fetch_result.bytes).map_err(|e| {
-                    format!("Invalid UTF-8 in HTML response from {url}: {e}")
-                })?;
+                let html = String::from_utf8(fetch_result.bytes)
+                    .map_err(|e| format!("Invalid UTF-8 in HTML response from {url}: {e}"))?;
                 let text = HtmlParser::extract_text(&html);
                 DataInput::Text(text)
             } else if essence == "text/plain"
                 || essence == "application/json"
                 || essence == "text/csv"
             {
-                let text = String::from_utf8(fetch_result.bytes).map_err(|e| {
-                    format!("Invalid UTF-8 in text response from {url}: {e}")
-                })?;
+                let text = String::from_utf8(fetch_result.bytes)
+                    .map_err(|e| format!("Invalid UTF-8 in text response from {url}: {e}"))?;
                 DataInput::Text(text)
             } else if essence.starts_with("image/")
                 || essence.starts_with("audio/")

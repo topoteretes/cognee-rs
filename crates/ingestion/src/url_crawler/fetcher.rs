@@ -249,27 +249,22 @@ impl UrlFetcher {
     async fn fetch_robots_txt(&self, origin: &str) -> (Robot, Option<Duration>) {
         let robots_url = format!("{origin}/robots.txt");
 
-        let body = match tokio::time::timeout(
-            ROBOTS_FETCH_TIMEOUT,
-            self.client.get(&robots_url).send(),
-        )
-        .await
-        {
-            Ok(Ok(resp)) if resp.status().is_success() => resp
-                .bytes()
+        let body =
+            match tokio::time::timeout(ROBOTS_FETCH_TIMEOUT, self.client.get(&robots_url).send())
                 .await
-                .map(|b| b.to_vec())
-                .unwrap_or_default(),
-            _ => {
-                // Fetch failed or non-200 — treat as empty (allow all).
-                Vec::new()
-            }
-        };
+            {
+                Ok(Ok(resp)) if resp.status().is_success() => {
+                    resp.bytes().await.map(|b| b.to_vec()).unwrap_or_default()
+                }
+                _ => {
+                    // Fetch failed or non-200 — treat as empty (allow all).
+                    Vec::new()
+                }
+            };
 
         // `Robot::new` can fail on malformed input; treat as permissive.
         let robot = Robot::new(&self.config.user_agent, &body).unwrap_or_else(|_| {
-            Robot::new(&self.config.user_agent, b"")
-                .expect("empty robots.txt should always parse")
+            Robot::new(&self.config.user_agent, b"").expect("empty robots.txt should always parse")
         });
 
         // Extract crawl delay from robots.txt, capped at max_crawl_delay.

@@ -31,7 +31,7 @@ impl Default for FetcherConfig {
     fn default() -> Self {
         Self {
             timeout: Duration::from_secs(15),
-            user_agent: "Cognee-Rust/0.1.0".to_string(),
+            user_agent: "Cognee-Scraper/1.0 (hello@cognee.ai)".to_string(),
             follow_redirects: true,
             max_redirects: 5,
             respect_robots_txt: true,
