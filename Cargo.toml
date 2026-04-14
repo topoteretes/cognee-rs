@@ -90,6 +90,7 @@ shard = { git = "https://github.com/qdrant/qdrant", package = "shard", tag = "v1
 tempfile = "3"
 tokenizers = "0.21"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "fs", "io-util"] }
+toml = "0.8"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 url = "2.5"
