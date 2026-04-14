@@ -19,6 +19,9 @@ serde_json.workspace = true
 # JSON Schema generation
 schemars.workspace = true
 
+# Base64 encoding (for vision API image data URIs)
+base64.workspace = true
+
 # Error handling
 thiserror.workspace = true
 

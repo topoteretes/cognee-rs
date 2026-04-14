@@ -40,6 +40,9 @@ pub enum LlmError {
     #[error("Configuration error: {0}")]
     ConfigError(String),
 
+    #[error("Feature not supported: {0}")]
+    FeatureNotSupported(String),
+
     #[error("Local model error: {0}")]
     LocalModelError(String),
 }

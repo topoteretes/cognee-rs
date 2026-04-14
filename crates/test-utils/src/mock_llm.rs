@@ -28,6 +28,7 @@ use cognee_llm::{Llm, LlmError, LlmResult};
 /// `KnowledgeGraph`-shaped JSON object.
 pub struct MockLlm {
     responses: Mutex<VecDeque<String>>,
+    vision_responses: Mutex<VecDeque<String>>,
     model_name: String,
 }
 
@@ -39,6 +40,7 @@ impl MockLlm {
     pub fn new(responses: Vec<String>) -> Self {
         Self {
             responses: Mutex::new(VecDeque::from(responses)),
+            vision_responses: Mutex::new(VecDeque::new()),
             model_name: "mock-llm".to_string(),
         }
     }
@@ -46,6 +48,15 @@ impl MockLlm {
     /// Create a `MockLlm` that always returns an empty knowledge graph.
     pub fn empty() -> Self {
         Self::new(vec![])
+    }
+
+    /// Pre-load vision responses for `transcribe_image` calls.
+    pub fn with_vision_responses(self, responses: Vec<String>) -> Self {
+        *self
+            .vision_responses
+            .lock()
+            .expect("MockLlm vision lock poisoned") = VecDeque::from(responses); // lock poison is unrecoverable
+        self
     }
 
     fn pop_response(&self) -> String {
@@ -89,6 +100,29 @@ impl Llm for MockLlm {
     fn model(&self) -> &str {
         &self.model_name
     }
+
+    async fn transcribe_image(
+        &self,
+        _image_bytes: &[u8],
+        _mime_type: &str,
+        _options: Option<GenerationOptions>,
+    ) -> LlmResult<String> {
+        let mut queue = self
+            .vision_responses
+            .lock()
+            .expect("MockLlm vision lock poisoned"); // lock poison is unrecoverable
+        queue.pop_front().ok_or_else(|| {
+            LlmError::FeatureNotSupported("MockLlm: no vision responses queued".to_string())
+        })
+    }
+
+    fn supports_vision(&self) -> bool {
+        let queue = self
+            .vision_responses
+            .lock()
+            .expect("MockLlm vision lock poisoned"); // lock poison is unrecoverable
+        !queue.is_empty()
+    }
 }
 
 #[cfg(test)]
@@ -127,5 +161,29 @@ mod tests {
             .unwrap();
 
         assert_eq!(val["nodes"][0]["name"], "Alice");
+    }
+
+    #[tokio::test]
+    async fn vision_returns_queued_response() {
+        let mock = MockLlm::new(vec![]).with_vision_responses(vec!["A red square.".to_string()]);
+
+        let result = mock.transcribe_image(b"fake", "image/png", None).await;
+        assert_eq!(result.unwrap(), "A red square.");
+    }
+
+    #[tokio::test]
+    async fn vision_returns_error_when_queue_empty() {
+        let mock = MockLlm::empty();
+        let result = mock.transcribe_image(b"fake", "image/png", None).await;
+        assert!(matches!(result, Err(LlmError::FeatureNotSupported(_))));
+    }
+
+    #[test]
+    fn supports_vision_reflects_queue_state() {
+        let mock_no_vision = MockLlm::empty();
+        assert!(!mock_no_vision.supports_vision());
+
+        let mock_with_vision = MockLlm::new(vec![]).with_vision_responses(vec!["test".to_string()]);
+        assert!(mock_with_vision.supports_vision());
     }
 }

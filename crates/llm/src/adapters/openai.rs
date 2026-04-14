@@ -624,6 +624,67 @@ impl Llm for OpenAIAdapter {
             _ => 4_096, // Conservative default
         }
     }
+
+    async fn transcribe_image(
+        &self,
+        image_bytes: &[u8],
+        mime_type: &str,
+        options: Option<GenerationOptions>,
+    ) -> LlmResult<String> {
+        use base64::Engine as _;
+
+        if !mime_type.starts_with("image/") {
+            return Err(LlmError::InvalidResponse(format!(
+                "Expected image/* MIME type, got: {mime_type}"
+            )));
+        }
+
+        let b64 = base64::engine::general_purpose::STANDARD.encode(image_bytes);
+        let data_uri = format!("data:{mime_type};base64,{b64}");
+
+        let vision_model = std::env::var("LLM_VISION_MODEL")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| self.model.clone());
+
+        let max_tokens = options.as_ref().and_then(|o| o.max_tokens).unwrap_or(300);
+
+        let request_body = json!({
+            "model": vision_model,
+            "messages": [{
+                "role": "user",
+                "content": [
+                    { "type": "text", "text": "What's in this image?" },
+                    { "type": "image_url", "image_url": { "url": data_uri } }
+                ]
+            }],
+            "max_tokens": max_tokens
+        });
+
+        let response = self.call_api(request_body).await?;
+
+        let choice = response.choices.first().ok_or_else(|| {
+            LlmError::InvalidResponse("No choices in vision response".to_string())
+        })?;
+
+        choice.message.content.clone().ok_or_else(|| {
+            LlmError::InvalidResponse("Vision response contained no content".to_string())
+        })
+    }
+
+    fn supports_vision(&self) -> bool {
+        let m = self.model.to_lowercase();
+        m.contains("gpt-4")
+            || m.contains("gpt-5")
+            || m.contains("vision")
+            || m.contains("o1")
+            || m.contains("o3")
+            || m.contains("o4")
+            || m.contains("llava")
+            || m.contains("moondream")
+            || m.contains("llama-3.2-vision")
+            || m.contains("gemma3")
+    }
 }
 
 // OpenAI API response types
@@ -744,5 +805,60 @@ mod tests {
 
         let adapter = OpenAIAdapter::new("gpt-3.5-turbo-16k", "key", None).unwrap();
         assert_eq!(adapter.max_context_length(), 16_384);
+    }
+
+    #[test]
+    fn test_supports_vision_gpt4o() {
+        let adapter = OpenAIAdapter::new("gpt-4o", "key", None).unwrap();
+        assert!(adapter.supports_vision());
+    }
+
+    #[test]
+    fn test_supports_vision_gpt4_turbo() {
+        let adapter = OpenAIAdapter::new("gpt-4-turbo", "key", None).unwrap();
+        assert!(adapter.supports_vision());
+    }
+
+    #[test]
+    fn test_supports_vision_gpt4o_mini() {
+        let adapter = OpenAIAdapter::new("gpt-4o-mini", "key", None).unwrap();
+        assert!(adapter.supports_vision());
+    }
+
+    #[test]
+    fn test_supports_vision_gpt35_is_false() {
+        let adapter = OpenAIAdapter::new("gpt-3.5-turbo", "key", None).unwrap();
+        assert!(!adapter.supports_vision());
+    }
+
+    #[test]
+    fn test_supports_vision_llava() {
+        let adapter = OpenAIAdapter::new("llava:13b", "key", None).unwrap();
+        assert!(adapter.supports_vision());
+    }
+
+    #[test]
+    fn test_supports_vision_o1() {
+        let adapter = OpenAIAdapter::new("o1-preview", "key", None).unwrap();
+        assert!(adapter.supports_vision());
+    }
+
+    #[test]
+    fn test_supports_vision_gemma3() {
+        let adapter = OpenAIAdapter::new("gemma3:12b", "key", None).unwrap();
+        assert!(adapter.supports_vision());
+    }
+
+    #[tokio::test]
+    async fn transcribe_image_rejects_non_image_mime() {
+        let adapter = OpenAIAdapter::new("gpt-4o", "fake-key", None).unwrap();
+        let result = adapter
+            .transcribe_image(b"not-an-image", "text/plain", None)
+            .await;
+        assert!(result.is_err());
+        assert!(
+            matches!(result.unwrap_err(), LlmError::InvalidResponse(_)),
+            "Expected InvalidResponse for non-image MIME type"
+        );
     }
 }

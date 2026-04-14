@@ -2,6 +2,10 @@
 //!
 //! This adapter is feature-gated behind `android-litert` and compiled only on Android.
 //! Structured output is achieved by embedding a compact JSON schema directly into the prompt.
+//!
+//! **Limitations:** Vision (`transcribe_image`) and audio transcription are not
+//! supported. LiteRT is a text-only inference engine; image understanding would
+//! require a separate multimodal model and integration.
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
