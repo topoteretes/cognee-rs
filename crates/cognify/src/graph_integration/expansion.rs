@@ -1291,4 +1291,108 @@ mod tests {
             "Edge target should point to TechCorp's UUID"
         );
     }
+
+    #[tokio::test]
+    async fn test_expand_ontology_no_duplicate_derived_nodes() {
+        // Two entities share the same type "Organization". The ancestor "legalentity"
+        // should appear only once (deduplication across entities of the same type).
+        let graph = KnowledgeGraph {
+            nodes: vec![
+                Node {
+                    id: "techcorp_1".to_string(),
+                    name: "TechCorp".to_string(),
+                    node_type: "Organization".to_string(),
+                    description: "A tech company".to_string(),
+                },
+                Node {
+                    id: "acmecorp_1".to_string(),
+                    name: "AcmeCorp".to_string(),
+                    node_type: "Organization".to_string(),
+                    description: "Another company".to_string(),
+                },
+            ],
+            edges: vec![],
+        };
+
+        let chunk_id = Uuid::new_v4();
+        let dataset_id = Uuid::new_v4();
+        let resolver = MockOntologyResolver;
+
+        let (nodes, edges) = expand_with_nodes_and_edges(
+            vec![(chunk_id, graph)],
+            dataset_id,
+            &HashSet::new(),
+            &resolver,
+        )
+        .await;
+
+        // Both entities should exist
+        assert!(nodes.iter().any(|n| n.entity.name == "TechCorp"));
+        assert!(nodes.iter().any(|n| n.entity.name == "AcmeCorp"));
+
+        // Both should share the same EntityType (canonicalized to "organisation")
+        let tc = nodes.iter().find(|n| n.entity.name == "TechCorp").unwrap();
+        let ac = nodes.iter().find(|n| n.entity.name == "AcmeCorp").unwrap();
+        assert_eq!(tc.entity_type.base.id, ac.entity_type.base.id);
+
+        // There should be exactly 1 legalentity derived node (not duplicated)
+        let legalentity_count = nodes
+            .iter()
+            .filter(|n| n.entity.name == "legalentity" || n.entity_type.name == "legalentity")
+            .count();
+        assert_eq!(
+            legalentity_count, 1,
+            "legalentity ancestor should appear exactly once"
+        );
+
+        // Exactly 1 is_a edge
+        let is_a_edges: Vec<_> = edges.iter().filter(|e| e.relationship_name == "is_a").collect();
+        assert_eq!(is_a_edges.len(), 1, "Expected exactly 1 is_a edge");
+    }
+
+    #[tokio::test]
+    async fn test_expand_ontology_mixed_validated_and_unvalidated() {
+        // "Organization" matches the ontology, "Concept" does not
+        let graph = KnowledgeGraph {
+            nodes: vec![
+                Node {
+                    id: "techcorp_1".to_string(),
+                    name: "TechCorp".to_string(),
+                    node_type: "Organization".to_string(),
+                    description: "A tech company".to_string(),
+                },
+                Node {
+                    id: "quantum_1".to_string(),
+                    name: "QuantumTheory".to_string(),
+                    node_type: "Concept".to_string(),
+                    description: "A scientific concept".to_string(),
+                },
+            ],
+            edges: vec![],
+        };
+
+        let chunk_id = Uuid::new_v4();
+        let dataset_id = Uuid::new_v4();
+        let resolver = MockOntologyResolver;
+
+        let (nodes, _edges) = expand_with_nodes_and_edges(
+            vec![(chunk_id, graph)],
+            dataset_id,
+            &HashSet::new(),
+            &resolver,
+        )
+        .await;
+
+        // Both entities should exist
+        let tc = nodes.iter().find(|n| n.entity.name == "TechCorp").unwrap();
+        let qt = nodes.iter().find(|n| n.entity.name == "QuantumTheory").unwrap();
+
+        // Organization type is canonicalized and validated
+        assert!(tc.entity_type.is_ontology_valid());
+        assert_eq!(tc.entity_type.name, "organisation");
+
+        // Concept type is NOT in the ontology
+        assert!(!qt.entity_type.is_ontology_valid());
+        assert_eq!(qt.entity_type.name, "Concept");
+    }
 }
