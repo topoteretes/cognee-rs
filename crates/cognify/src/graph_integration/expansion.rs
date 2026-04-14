@@ -7,7 +7,8 @@ use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 
 use cognee_models::{Entity, EntityType};
-use cognee_ontology::OntologyResolver;
+use cognee_ontology::{AttachedOntologyNode, NodeCategory, OntologyResolver};
+use cognee_ontology::traits::OntologyEdge;
 use tracing::warn;
 
 use crate::fact_extraction::{KnowledgeGraph, Node};
@@ -179,6 +180,118 @@ fn create_entity_node(
     GraphNodePair {
         entity: entity_with_chunk,
         entity_type,
+    }
+}
+
+/// Compute a deterministic UUID5 from a normalized name.
+///
+/// Follows Python's `generate_node_id()` pattern: lowercase, replace spaces
+/// with underscores, strip apostrophes, then hash with UUID5 NAMESPACE_OID.
+fn ontology_name_to_uuid(name: &str) -> Uuid {
+    let normalized = name.to_lowercase().replace(' ', "_").replace('\'', "");
+    Uuid::new_v5(&Uuid::NAMESPACE_OID, normalized.as_bytes())
+}
+
+/// Normalize an edge/relationship name for deduplication and storage.
+///
+/// Lowercases, replaces spaces with underscores, and strips apostrophes.
+fn normalize_edge_name(name: &str) -> String {
+    name.to_lowercase().replace(' ', "_").replace('\'', "")
+}
+
+/// Convert ontology subgraph nodes into graph integration types.
+///
+/// For each [`AttachedOntologyNode`]:
+/// - **Classes** become [`EntityType`] entries in `ontology_types_map`
+/// - **Individuals** become [`GraphNodePair`] entries in `ontology_entities_map`
+///
+/// All produced items receive deterministic UUID5 IDs and `ontology_valid = true`.
+/// Duplicates are skipped when a matching key already exists in the LLM-produced
+/// maps (`node_map`, `type_map`) or in the ontology output maps.
+fn process_ontology_nodes(
+    ontology_nodes: &[AttachedOntologyNode],
+    dataset_id: Uuid,
+    node_map: &HashMap<String, GraphNodePair>,
+    type_map: &HashMap<String, EntityType>,
+    ontology_types_map: &mut HashMap<String, EntityType>,
+    ontology_entities_map: &mut HashMap<String, GraphNodePair>,
+) {
+    for node in ontology_nodes {
+        let node_id = ontology_name_to_uuid(&node.name);
+
+        match node.category {
+            NodeCategory::Classes => {
+                let dedup_key = format!("{}_type", node_id);
+                // Skip if the LLM already extracted this type (check by name-based key)
+                let llm_type_key = format!("{}_type", node.name);
+                if type_map.contains_key(&llm_type_key) || ontology_types_map.contains_key(&dedup_key) {
+                    continue;
+                }
+                // Also skip if there is already a node_map entry for this node id
+                let node_entity_key = format!("{}_entity", node_id);
+                if node_map.contains_key(&node_entity_key) {
+                    continue;
+                }
+
+                let mut et = EntityType::new(&node.name, &node.name, Some(dataset_id));
+                et.base.id = node_id;
+                et.base.set_ontology_valid(true);
+                ontology_types_map.insert(dedup_key, et);
+            }
+            NodeCategory::Individuals => {
+                let dedup_key = format!("{}_entity", node_id);
+                // Skip if already present in either map
+                if node_map.contains_key(&dedup_key) || ontology_entities_map.contains_key(&dedup_key) {
+                    continue;
+                }
+
+                let mut entity = Entity::new(&node.name, None, &node.name, Some(dataset_id));
+                entity.base.id = node_id;
+                entity.base.set_ontology_valid(true);
+
+                // Placeholder EntityType for the GraphNodePair
+                let mut placeholder_et = EntityType::new("OntologyIndividual", "", Some(dataset_id));
+                placeholder_et.base.id = ontology_name_to_uuid("ontologyindividual");
+
+                let pair = GraphNodePair {
+                    entity,
+                    entity_type: placeholder_et,
+                };
+                ontology_entities_map.insert(dedup_key, pair);
+            }
+        }
+    }
+}
+
+/// Convert ontology edge tuples into [`GraphEdgePair`] objects.
+///
+/// Each `(source, relation, target)` tuple is mapped to a [`GraphEdgePair`] with
+/// deterministic UUID5 source/target IDs and normalized relationship names. Edges
+/// that already exist (in `existing_edge_keys` or `ontology_edge_keys`) are skipped.
+fn process_ontology_edges(
+    ontology_edges: &[OntologyEdge],
+    existing_edge_keys: &HashSet<String>,
+    ontology_edge_keys: &mut HashSet<String>,
+    ontology_edges_out: &mut Vec<GraphEdgePair>,
+) {
+    for (source, relation, target) in ontology_edges {
+        let source_id = ontology_name_to_uuid(source);
+        let target_id = ontology_name_to_uuid(target);
+        let rel_name = normalize_edge_name(relation);
+        let edge_key = format!("{}_{}_{}", source_id, target_id, rel_name);
+
+        if existing_edge_keys.contains(&edge_key) || ontology_edge_keys.contains(&edge_key) {
+            continue;
+        }
+
+        let mut edge = GraphEdgePair::new(source_id, target_id, &rel_name);
+        edge.add_property("ontology_valid", "true");
+        edge.add_property("relationship_name", &rel_name);
+        edge.add_property("source_node_id", source_id.to_string());
+        edge.add_property("target_node_id", target_id.to_string());
+
+        ontology_edge_keys.insert(edge_key);
+        ontology_edges_out.push(edge);
     }
 }
 
@@ -596,5 +709,240 @@ mod tests {
                 node_pair.entity.name
             );
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Tests for ontology helper functions
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_ontology_name_to_uuid_deterministic() {
+        // "Car" and "car" should produce the same UUID (both normalize to "car")
+        let uuid_upper = ontology_name_to_uuid("Car");
+        let uuid_lower = ontology_name_to_uuid("car");
+        assert_eq!(uuid_upper, uuid_lower);
+
+        // Should match the canonical UUID5 derivation for "car"
+        let expected = Uuid::new_v5(&Uuid::NAMESPACE_OID, b"car");
+        assert_eq!(uuid_upper, expected);
+    }
+
+    #[test]
+    fn test_normalize_edge_name() {
+        assert_eq!(normalize_edge_name("is a"), "is_a");
+        assert_eq!(normalize_edge_name("Is A"), "is_a");
+        assert_eq!(normalize_edge_name("don't know"), "dont_know");
+    }
+
+    #[test]
+    fn test_process_ontology_nodes_creates_entity_types_for_classes() {
+        let dataset_id = Uuid::new_v4();
+        let nodes = vec![
+            AttachedOntologyNode {
+                uri: "http://example.org#Vehicle".to_string(),
+                name: "Vehicle".to_string(),
+                category: NodeCategory::Classes,
+            },
+            AttachedOntologyNode {
+                uri: "http://example.org#Car".to_string(),
+                name: "Car".to_string(),
+                category: NodeCategory::Classes,
+            },
+        ];
+
+        let node_map = HashMap::new();
+        let type_map = HashMap::new();
+        let mut ontology_types_map = HashMap::new();
+        let mut ontology_entities_map = HashMap::new();
+
+        process_ontology_nodes(
+            &nodes,
+            dataset_id,
+            &node_map,
+            &type_map,
+            &mut ontology_types_map,
+            &mut ontology_entities_map,
+        );
+
+        assert_eq!(ontology_types_map.len(), 2);
+        assert!(ontology_entities_map.is_empty());
+
+        // Verify each EntityType has ontology_valid=true and deterministic IDs
+        for et in ontology_types_map.values() {
+            assert!(et.base.ontology_valid);
+        }
+
+        // Check deterministic IDs
+        let vehicle_key = format!("{}_type", ontology_name_to_uuid("Vehicle"));
+        let car_key = format!("{}_type", ontology_name_to_uuid("Car"));
+        assert!(ontology_types_map.contains_key(&vehicle_key));
+        assert!(ontology_types_map.contains_key(&car_key));
+
+        let vehicle_et = &ontology_types_map[&vehicle_key];
+        assert_eq!(vehicle_et.base.id, ontology_name_to_uuid("Vehicle"));
+        assert_eq!(vehicle_et.name, "Vehicle");
+    }
+
+    #[test]
+    fn test_process_ontology_nodes_skips_duplicates() {
+        let dataset_id = Uuid::new_v4();
+        let nodes = vec![AttachedOntologyNode {
+            uri: "http://example.org#Organization".to_string(),
+            name: "Organization".to_string(),
+            category: NodeCategory::Classes,
+        }];
+
+        let node_map = HashMap::new();
+        // Pre-populate type_map with an "Organization" entry (as if LLM already extracted it)
+        let mut type_map = HashMap::new();
+        type_map.insert(
+            "Organization_type".to_string(),
+            EntityType::new("Organization", "A type", Some(dataset_id)),
+        );
+
+        let mut ontology_types_map = HashMap::new();
+        let mut ontology_entities_map = HashMap::new();
+
+        process_ontology_nodes(
+            &nodes,
+            dataset_id,
+            &node_map,
+            &type_map,
+            &mut ontology_types_map,
+            &mut ontology_entities_map,
+        );
+
+        // Should be skipped because it already exists in type_map
+        assert!(ontology_types_map.is_empty());
+    }
+
+    #[test]
+    fn test_process_ontology_nodes_creates_entities_for_individuals() {
+        let dataset_id = Uuid::new_v4();
+        let nodes = vec![AttachedOntologyNode {
+            uri: "http://example.org#MyCar".to_string(),
+            name: "MyCar".to_string(),
+            category: NodeCategory::Individuals,
+        }];
+
+        let node_map = HashMap::new();
+        let type_map = HashMap::new();
+        let mut ontology_types_map = HashMap::new();
+        let mut ontology_entities_map = HashMap::new();
+
+        process_ontology_nodes(
+            &nodes,
+            dataset_id,
+            &node_map,
+            &type_map,
+            &mut ontology_types_map,
+            &mut ontology_entities_map,
+        );
+
+        assert_eq!(ontology_entities_map.len(), 1);
+        assert!(ontology_types_map.is_empty());
+
+        let dedup_key = format!("{}_entity", ontology_name_to_uuid("MyCar"));
+        let pair = &ontology_entities_map[&dedup_key];
+        assert!(pair.entity.base.ontology_valid);
+        assert_eq!(pair.entity.base.id, ontology_name_to_uuid("MyCar"));
+        assert_eq!(pair.entity.name, "MyCar");
+        // Placeholder type
+        assert_eq!(pair.entity_type.name, "OntologyIndividual");
+        assert_eq!(
+            pair.entity_type.base.id,
+            ontology_name_to_uuid("ontologyindividual")
+        );
+    }
+
+    #[test]
+    fn test_process_ontology_edges_creates_edges() {
+        let edges: Vec<OntologyEdge> = vec![
+            (
+                "Car".to_string(),
+                "is a".to_string(),
+                "Vehicle".to_string(),
+            ),
+            (
+                "Vehicle".to_string(),
+                "has part".to_string(),
+                "Engine".to_string(),
+            ),
+        ];
+
+        let existing_edge_keys = HashSet::new();
+        let mut ontology_edge_keys = HashSet::new();
+        let mut ontology_edges_out = Vec::new();
+
+        process_ontology_edges(
+            &edges,
+            &existing_edge_keys,
+            &mut ontology_edge_keys,
+            &mut ontology_edges_out,
+        );
+
+        assert_eq!(ontology_edges_out.len(), 2);
+        assert_eq!(ontology_edge_keys.len(), 2);
+
+        // Verify first edge: Car -> Vehicle via "is_a"
+        let car_id = ontology_name_to_uuid("Car");
+        let vehicle_id = ontology_name_to_uuid("Vehicle");
+        let edge0 = &ontology_edges_out[0];
+        assert_eq!(edge0.source_entity_id, car_id);
+        assert_eq!(edge0.target_entity_id, vehicle_id);
+        assert_eq!(edge0.relationship_name, "is_a");
+        assert_eq!(edge0.properties.get("ontology_valid"), Some(&"true".to_string()));
+        assert_eq!(
+            edge0.properties.get("source_node_id"),
+            Some(&car_id.to_string())
+        );
+        assert_eq!(
+            edge0.properties.get("target_node_id"),
+            Some(&vehicle_id.to_string())
+        );
+
+        // Verify second edge: Vehicle -> Engine via "has_part"
+        let engine_id = ontology_name_to_uuid("Engine");
+        let edge1 = &ontology_edges_out[1];
+        assert_eq!(edge1.source_entity_id, vehicle_id);
+        assert_eq!(edge1.target_entity_id, engine_id);
+        assert_eq!(edge1.relationship_name, "has_part");
+    }
+
+    #[test]
+    fn test_process_ontology_edges_skips_existing() {
+        let car_id = ontology_name_to_uuid("Car");
+        let vehicle_id = ontology_name_to_uuid("Vehicle");
+        let existing_key = format!("{}_{}_{}", car_id, vehicle_id, "is_a");
+
+        let mut existing_edge_keys = HashSet::new();
+        existing_edge_keys.insert(existing_key);
+
+        let edges: Vec<OntologyEdge> = vec![
+            (
+                "Car".to_string(),
+                "is a".to_string(),
+                "Vehicle".to_string(),
+            ),
+            (
+                "Vehicle".to_string(),
+                "has part".to_string(),
+                "Engine".to_string(),
+            ),
+        ];
+
+        let mut ontology_edge_keys = HashSet::new();
+        let mut ontology_edges_out = Vec::new();
+
+        process_ontology_edges(
+            &edges,
+            &existing_edge_keys,
+            &mut ontology_edge_keys,
+            &mut ontology_edges_out,
+        );
+
+        // Only the second edge should be present; the first is in existing_edge_keys
+        assert_eq!(ontology_edges_out.len(), 1);
+        assert_eq!(ontology_edges_out[0].relationship_name, "has_part");
     }
 }
