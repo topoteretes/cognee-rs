@@ -21,9 +21,6 @@ pub fn get_loader_name(extension: &str) -> &'static str {
         | "epub" | "eml" | "msg" => "unstructured_loader",
         // HTML
         "html" | "htm" => "beautiful_soup_loader",
-        // Source code — treated as plain text
-        "rs" | "py" | "js" | "ts" | "c" | "cpp" | "h" | "go" | "java" | "rb" | "sh" | "toml"
-        | "cfg" | "ini" => "text_loader",
         // Default
         _ => "text_loader",
     }
@@ -71,5 +68,15 @@ mod tests {
     #[test]
     fn test_html_extension() {
         assert_eq!(get_loader_name("html"), "beautiful_soup_loader");
+    }
+
+    #[test]
+    fn test_source_code_extensions_use_default() {
+        // Source code extensions are not explicitly mapped -- they fall
+        // through to the default text_loader, matching Python's behavior
+        // of not including them in EXTENSION_TO_DOCUMENT_CLASS.
+        for ext in &["py", "rs", "js", "ts", "c", "cpp", "go", "java", "rb", "sh"] {
+            assert_eq!(get_loader_name(ext), "text_loader");
+        }
     }
 }

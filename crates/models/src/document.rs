@@ -286,6 +286,15 @@ mod tests {
         assert!(docs.is_empty());
     }
 
+    #[test]
+    fn source_code_extensions_are_not_classified() {
+        for ext in &["py", "rs", "js", "ts", "c", "cpp", "go", "java", "rb", "sh"] {
+            let data = vec![make_data("text/plain", ext)];
+            let docs = classify_documents(&data);
+            assert!(docs.is_empty(), "extension .{ext} should not be classified");
+        }
+    }
+
     // ----- Mixed input: only known extensions pass through -----
 
     #[test]
