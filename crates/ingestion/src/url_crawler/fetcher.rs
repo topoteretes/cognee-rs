@@ -4,6 +4,17 @@ use reqwest::Client;
 use std::sync::Arc;
 use url::Url;
 
+/// Result of fetching a URL, carrying raw bytes and metadata.
+#[derive(Debug, Clone)]
+pub struct FetchResult {
+    /// Raw response body bytes.
+    pub bytes: Vec<u8>,
+    /// Content-Type header value (e.g. `"text/html; charset=utf-8"`).
+    pub content_type: String,
+    /// Final URL after any redirects.
+    pub url: String,
+}
+
 /// HTTP fetcher for downloading web content
 pub struct UrlFetcher {
     client: Arc<Client>,
@@ -35,8 +46,8 @@ impl UrlFetcher {
         })
     }
 
-    /// Fetch URL and return HTML content as string
-    pub async fn fetch(&self, url: &str) -> Result<String, UrlFetcherError> {
+    /// Fetch URL and return raw bytes along with content-type and final URL.
+    pub async fn fetch_with_metadata(&self, url: &str) -> Result<FetchResult, UrlFetcherError> {
         let parsed_url = Url::parse(url)?;
 
         if self.config.respect_robots_txt {
@@ -53,8 +64,32 @@ impl UrlFetcher {
             ));
         }
 
-        let html = response.text().await?;
-        Ok(html)
+        let final_url = response.url().to_string();
+        let content_type = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .to_string();
+
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|e| UrlFetcherError::HttpError(e.to_string()))?
+            .to_vec();
+
+        Ok(FetchResult {
+            bytes,
+            content_type,
+            url: final_url,
+        })
+    }
+
+    /// Fetch URL and return HTML content as string (convenience wrapper).
+    pub async fn fetch(&self, url: &str) -> Result<String, UrlFetcherError> {
+        let result = self.fetch_with_metadata(url).await?;
+        String::from_utf8(result.bytes)
+            .map_err(|e| UrlFetcherError::ParseError(format!("Invalid UTF-8 response: {e}")))
     }
 
     /// Fetch URL and stream content via callback (for large pages)

@@ -23,6 +23,58 @@ use crate::id_generation::{generate_data_id, generate_dataset_id};
 use crate::loader_registry::get_loader_name;
 use crate::url_crawler::{HtmlParser, UrlFetcher};
 
+/// Extract the MIME essence (e.g. `"text/html"`) from a full Content-Type
+/// header value like `"text/html; charset=utf-8"`.
+fn mime_essence(content_type: &str) -> &str {
+    content_type.split(';').next().unwrap_or(content_type).trim()
+}
+
+/// Infer a MIME type from a URL path extension. Returns `"text/plain"` as
+/// fallback when the URL has no recognisable extension.
+fn mime_from_url(url: &str) -> String {
+    if let Ok(parsed) = url::Url::parse(url) {
+        let path = parsed.path();
+        if let Some(dot) = path.rfind('.') {
+            let ext = &path[dot..]; // e.g. ".pdf"
+            let guess = mime_guess::from_path(ext).first_or_text_plain();
+            return guess.to_string();
+        }
+    }
+    "text/plain".to_string()
+}
+
+/// Derive `(extension, mime, loader_engine)` from a MIME essence string.
+fn metadata_from_mime(essence: &str) -> (String, String, String) {
+    let ext = match essence {
+        "text/html" | "application/xhtml+xml" => "html",
+        "text/plain" => "txt",
+        "application/json" => "json",
+        "text/csv" => "csv",
+        "application/pdf" => "pdf",
+        _ if essence.starts_with("image/") => {
+            // Pick a common extension from the sub-type
+            match essence {
+                "image/png" => "png",
+                "image/jpeg" => "jpg",
+                "image/gif" => "gif",
+                "image/webp" => "webp",
+                "image/svg+xml" => "svg",
+                _ => "bin",
+            }
+        }
+        _ if essence.starts_with("audio/") => match essence {
+            "audio/mpeg" => "mp3",
+            "audio/wav" => "wav",
+            "audio/ogg" => "ogg",
+            _ => "bin",
+        },
+        _ => "bin",
+    };
+    let mime = essence.to_string();
+    let loader = get_loader_name(ext).to_string();
+    (ext.to_string(), mime, loader)
+}
+
 // ---------------------------------------------------------------------------
 // ProcessedInput
 // ---------------------------------------------------------------------------
@@ -67,23 +119,74 @@ pub async fn process_input(
 ) -> Result<ProcessedInput, Box<dyn std::error::Error>> {
     use tokio::sync::Mutex;
 
-    // For URL inputs: fetch HTML and extract plain text first, then process
-    // the text content exactly like a Text input. The original URL is preserved
-    // via `extract_original_location` which returns the URL as-is.
-    let resolved_text: Option<DataInput> = if let DataInput::Url(url) = input {
-        let html = UrlFetcher::new()?.fetch(url).await?;
-        let text = HtmlParser::extract_text(&html);
-        Some(DataInput::Text(text))
-    } else {
-        None
-    };
-    let effective_input: &DataInput = resolved_text.as_ref().unwrap_or(input);
+    // For URL inputs: fetch the resource and route based on Content-Type.
+    // HTML → extract plain text; text/json → store as-is; binary → store raw bytes.
+    // The original URL is preserved via `extract_original_location`.
+    let (resolved_input, url_metadata): (Option<DataInput>, Option<(String, String, String)>) =
+        if let DataInput::Url(url) = input {
+            let fetch_result = UrlFetcher::new()?.fetch_with_metadata(url).await?;
+            let raw_essence = mime_essence(&fetch_result.content_type);
+            // When server omits Content-Type, sniff from the URL path extension
+            let essence = if raw_essence.is_empty() {
+                mime_from_url(&fetch_result.url)
+            } else {
+                raw_essence.to_string()
+            };
+            let meta = metadata_from_mime(&essence);
+
+            let data_input = if essence == "text/html" || essence == "application/xhtml+xml" {
+                let html = String::from_utf8(fetch_result.bytes).map_err(|e| {
+                    format!("Invalid UTF-8 in HTML response from {url}: {e}")
+                })?;
+                let text = HtmlParser::extract_text(&html);
+                DataInput::Text(text)
+            } else if essence == "text/plain"
+                || essence == "application/json"
+                || essence == "text/csv"
+            {
+                let text = String::from_utf8(fetch_result.bytes).map_err(|e| {
+                    format!("Invalid UTF-8 in text response from {url}: {e}")
+                })?;
+                DataInput::Text(text)
+            } else if essence.starts_with("image/")
+                || essence.starts_with("audio/")
+                || essence == "application/pdf"
+            {
+                let ext = &meta.0;
+                let file_name = format!("url_fetched.{ext}");
+                DataInput::Binary {
+                    data: fetch_result.bytes,
+                    name: file_name,
+                }
+            } else {
+                // Unknown type — treat as text
+                let text = String::from_utf8(fetch_result.bytes).unwrap_or_else(|e| {
+                    tracing::warn!(
+                        "Non-UTF-8 response from {url} with Content-Type {essence}, \
+                         storing lossy conversion: {e}"
+                    );
+                    String::from_utf8_lossy(e.as_bytes()).into_owned()
+                });
+                DataInput::Text(text)
+            };
+
+            (Some(data_input), Some(meta))
+        } else {
+            (None, None)
+        };
+    let effective_input: &DataInput = resolved_input.as_ref().unwrap_or(input);
 
     // Determine filename and metadata before streaming.
-    // For URL→Text: metadata comes from the original URL input, not the resolved text.
-    let (file_name, original_extension, original_mime_type, label) = extract_file_metadata(input);
-
-    let loader_engine = get_loader_name(&original_extension);
+    // For URL inputs the Content-Type-derived metadata takes precedence.
+    let (file_name, original_extension, original_mime_type, label, loader_engine) =
+        if let Some((ext, mime, loader)) = url_metadata {
+            let fname = format!("text_placeholder.{ext}");
+            (fname, ext, mime, None, loader)
+        } else {
+            let (fname, ext, mime, lbl) = extract_file_metadata(input);
+            let loader = get_loader_name(&ext).to_string();
+            (fname, ext, mime, lbl, loader)
+        };
 
     // Use Arc<Mutex<>> so closures can share the hasher and writer
     let size_counter: Arc<Mutex<i64>> = Arc::new(Mutex::new(0i64));
