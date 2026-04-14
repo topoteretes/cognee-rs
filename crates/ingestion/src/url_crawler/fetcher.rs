@@ -71,6 +71,10 @@ impl UrlFetcher {
     }
 
     /// Fetch URL and return raw bytes along with content-type and final URL.
+    ///
+    /// Applies robots.txt check (outside retry loop), then retries the HTTP
+    /// request with exponential backoff on transient errors (5xx, 429, timeout,
+    /// connection errors). Non-retryable errors (4xx except 429) abort immediately.
     pub async fn fetch_with_metadata(&self, url: &str) -> Result<FetchResult, UrlFetcherError> {
         let parsed_url = Url::parse(url)?;
 
@@ -78,37 +82,66 @@ impl UrlFetcher {
             self.check_robots_txt(&parsed_url).await?;
         }
 
-        self.respect_rate_limit(&parsed_url).await;
+        let retry_config = cognee_utils::RetryConfig {
+            max_retries: 2,
+            initial_delay_ms: 500,
+            max_delay_ms: 10_000,
+            backoff_multiplier: 2.0,
+            jitter_factor: None,
+        };
 
-        let response = self.client.get(url).send().await?;
+        let client = Arc::clone(&self.client);
+        let url_owned = url.to_string();
+        let parsed_for_rate = parsed_url.clone();
+        let fetcher = self;
 
-        let status = response.status();
-        if !status.is_success() {
-            return Err(UrlFetcherError::HttpStatus(
-                status.as_u16(),
-                format!("Failed to fetch URL: {}", url),
-            ));
-        }
+        cognee_utils::retry_with_backoff(
+            retry_config,
+            || {
+                let client = Arc::clone(&client);
+                let url = url_owned.clone();
+                let parsed = parsed_for_rate.clone();
+                async move {
+                    fetcher.respect_rate_limit(&parsed).await;
 
-        let final_url = response.url().to_string();
-        let content_type = response
-            .headers()
-            .get(reqwest::header::CONTENT_TYPE)
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("")
-            .to_string();
+                    let response = client
+                        .get(&url)
+                        .send()
+                        .await
+                        .map_err(UrlFetcherError::from)?;
 
-        let bytes = response
-            .bytes()
-            .await
-            .map_err(|e| UrlFetcherError::HttpError(e.to_string()))?
-            .to_vec();
+                    let status = response.status();
+                    if !status.is_success() {
+                        return Err(UrlFetcherError::HttpStatus(
+                            status.as_u16(),
+                            format!("Failed to fetch URL: {}", url),
+                        ));
+                    }
 
-        Ok(FetchResult {
-            bytes,
-            content_type,
-            url: final_url,
-        })
+                    let final_url = response.url().to_string();
+                    let content_type = response
+                        .headers()
+                        .get(reqwest::header::CONTENT_TYPE)
+                        .and_then(|v| v.to_str().ok())
+                        .unwrap_or("")
+                        .to_string();
+
+                    let bytes = response
+                        .bytes()
+                        .await
+                        .map_err(|e| UrlFetcherError::HttpError(e.to_string()))?
+                        .to_vec();
+
+                    Ok(FetchResult {
+                        bytes,
+                        content_type,
+                        url: final_url,
+                    })
+                }
+            },
+            should_retry,
+        )
+        .await
     }
 
     /// Fetch URL and return HTML content as string (convenience wrapper).
@@ -293,5 +326,30 @@ impl UrlFetcher {
 impl Default for UrlFetcher {
     fn default() -> Self {
         Self::new().expect("Failed to create default UrlFetcher")
+    }
+}
+
+/// Retry predicate for HTTP fetch errors.
+///
+/// Retries on: 5xx, 429 (Too Many Requests), timeout, connection errors.
+/// Does NOT retry on: other 4xx (client errors are not transient),
+/// robots.txt disallowed, parse/URL errors.
+fn should_retry(err: &UrlFetcherError) -> cognee_utils::RetryDecision {
+    match err {
+        UrlFetcherError::HttpStatus(status, _) => {
+            if *status == 429 || *status >= 500 {
+                cognee_utils::RetryDecision::Retry
+            } else {
+                cognee_utils::RetryDecision::Abort
+            }
+        }
+        UrlFetcherError::Timeout(_) | UrlFetcherError::HttpError(_) => {
+            // Timeouts and connection errors are transient.
+            cognee_utils::RetryDecision::Retry
+        }
+        UrlFetcherError::RobotsDisallowed(_)
+        | UrlFetcherError::InvalidUrl(_)
+        | UrlFetcherError::ParseError(_)
+        | UrlFetcherError::IoError(_) => cognee_utils::RetryDecision::Abort,
     }
 }
