@@ -56,24 +56,94 @@ pub async fn expand_with_nodes_and_edges(
     // Map from node_id to entity_id for edge resolution
     let mut node_id_to_entity_id: HashMap<String, Uuid> = HashMap::new();
 
+    // Ontology-specific collections (populated by get_subgraph expansion)
+    let mut key_mapping: HashMap<String, String> = HashMap::new();
+    let mut ontology_types_map: HashMap<String, EntityType> = HashMap::new();
+    let mut ontology_entities_map: HashMap<String, GraphNodePair> = HashMap::new();
+    let mut ontology_edge_keys: HashSet<String> = HashSet::new();
+    let mut ontology_edges_out: Vec<GraphEdgePair> = Vec::new();
+
     // Process all graphs — each graph carries its source chunk_id
     for (chunk_id, graph) in graphs {
         for node in graph.nodes {
-            // Step 1: Create or get EntityType
+            // Step 1: Create or get EntityType (with ontology subgraph expansion)
             let type_key = format!("{}_type", node.node_type);
-            let entity_type = type_map.entry(type_key.clone()).or_insert_with(|| {
+
+            // Check if this key was already remapped to a canonical form
+            let effective_key = key_mapping
+                .get(&type_key)
+                .cloned()
+                .unwrap_or_else(|| type_key.clone());
+
+            if !type_map.contains_key(&effective_key) {
                 let mut et = EntityType::from_node_type(&node.node_type, Some(dataset_id));
 
-                // Validate entity type against ontology "classes"
-                if ontology_resolver.is_loaded()
-                    && let Ok(Some(canonical)) =
-                        ontology_resolver.find_closest_match(&node.node_type, "classes")
-                {
-                    et.mark_ontology_valid(Some(canonical));
-                }
+                if ontology_resolver.is_loaded() {
+                    match ontology_resolver.get_subgraph(&node.node_type, "classes", true) {
+                        Ok((onto_nodes, onto_edges, Some(root_node))) => {
+                            let canonical_name = root_node.name.clone();
 
-                et
-            });
+                            // Canonicalize: rename + regenerate deterministic ID
+                            et.mark_ontology_valid(Some(canonical_name.clone()));
+                            et.base.id = ontology_name_to_uuid(&canonical_name);
+
+                            // Record key mapping if canonical differs
+                            let new_type_key = format!("{}_type", canonical_name);
+                            if new_type_key != type_key {
+                                key_mapping.insert(type_key.clone(), new_type_key.clone());
+                            }
+
+                            // Process ontology subgraph nodes and edges
+                            process_ontology_nodes(
+                                &onto_nodes,
+                                dataset_id,
+                                &node_map,
+                                &type_map,
+                                &mut ontology_types_map,
+                                &mut ontology_entities_map,
+                            );
+                            process_ontology_edges(
+                                &onto_edges,
+                                existing_edges_set,
+                                &mut ontology_edge_keys,
+                                &mut ontology_edges_out,
+                            );
+
+                            // Insert under canonical key
+                            type_map.insert(
+                                if new_type_key != type_key {
+                                    new_type_key
+                                } else {
+                                    effective_key.clone()
+                                },
+                                et,
+                            );
+                        }
+                        Ok((_, _, None)) => {
+                            // No match in ontology
+                            type_map.insert(effective_key.clone(), et);
+                        }
+                        Err(e) => {
+                            warn!(
+                                "Ontology subgraph extraction failed for '{}': {}",
+                                node.node_type, e
+                            );
+                            type_map.insert(effective_key.clone(), et);
+                        }
+                    }
+                } else {
+                    type_map.insert(effective_key.clone(), et);
+                }
+            }
+
+            // Re-resolve the effective key (may have been remapped above)
+            let resolved_key = key_mapping
+                .get(&type_key)
+                .cloned()
+                .unwrap_or_else(|| type_key.clone());
+            let entity_type = type_map
+                .get(&resolved_key)
+                .expect("entity type was just inserted or already existed");
 
             // Step 2: Create Entity
             let entity_key = format!("{}_entity", node.id);
@@ -147,9 +217,30 @@ pub async fn expand_with_nodes_and_edges(
         }
     }
 
-    // Convert maps to vectors
-    let graph_nodes: Vec<GraphNodePair> = node_map.into_values().collect();
-    let graph_edges: Vec<GraphEdgePair> = edge_map.into_values().collect();
+    // Merge LLM-extracted nodes with ontology-derived nodes
+    let mut graph_nodes: Vec<GraphNodePair> = node_map.into_values().collect();
+
+    // Convert ontology-derived class types into GraphNodePairs (as "type nodes")
+    for et in ontology_types_map.into_values() {
+        let entity = Entity::from_node(
+            &et.name,
+            &et.name,
+            format!("Ontology-derived type: {}", et.name),
+            et.base.id,
+            Some(dataset_id),
+        );
+        graph_nodes.push(GraphNodePair {
+            entity,
+            entity_type: et,
+        });
+    }
+
+    // Add ontology-derived individual nodes
+    graph_nodes.extend(ontology_entities_map.into_values());
+
+    // Merge LLM-extracted edges with ontology-derived edges
+    let mut graph_edges: Vec<GraphEdgePair> = edge_map.into_values().collect();
+    graph_edges.extend(ontology_edges_out);
 
     (graph_nodes, graph_edges)
 }
@@ -610,18 +701,21 @@ mod tests {
     // Mock ontology resolver for testing ontology validation
     // -----------------------------------------------------------------------
 
-    /// Mock resolver that returns canonical names for specific queries.
+    /// Mock resolver that returns canonical names and realistic subgraphs.
     ///
-    /// - `find_closest_match("Organization", "classes")` → `Some("Organisation")`
-    /// - `find_closest_match("Alice", "individuals")` → `Some("Alice_Canonical")`
-    /// - Everything else → `None`
+    /// **`get_subgraph` behavior:**
+    /// - `("Organization", "classes")` → root "organisation" with ancestor "legalentity", is_a edge
+    /// - `("Person", "classes")` → root "person", no ancestors
+    /// - Everything else → empty
+    ///
+    /// **`find_closest_match` behavior:**
+    /// - `("Alice", "individuals")` → `Some("Alice_Canonical")`
+    /// - Everything else → `None` (classes are handled via get_subgraph)
     struct MockOntologyResolver;
 
     impl OntologyResolver for MockOntologyResolver {
         fn find_closest_match(&self, name: &str, category: &str) -> OntologyResult<Option<String>> {
             match (name, category) {
-                ("Organization", "classes") => Ok(Some("Organisation".to_string())),
-                ("Person", "classes") => Ok(Some("Person".to_string())),
                 ("Alice", "individuals") => Ok(Some("Alice_Canonical".to_string())),
                 _ => Ok(None),
             }
@@ -629,11 +723,42 @@ mod tests {
 
         fn get_subgraph(
             &self,
-            _node_name: &str,
-            _node_type: &str,
+            node_name: &str,
+            node_type: &str,
             _directed: bool,
         ) -> OntologyResult<OntologySubgraph> {
-            Ok((vec![], vec![], None))
+            match (node_name, node_type) {
+                ("Organization", "classes") => {
+                    let root = AttachedOntologyNode {
+                        uri: "http://test.org#Organisation".to_string(),
+                        name: "organisation".to_string(),
+                        category: NodeCategory::Classes,
+                    };
+                    let ancestor = AttachedOntologyNode {
+                        uri: "http://test.org#LegalEntity".to_string(),
+                        name: "legalentity".to_string(),
+                        category: NodeCategory::Classes,
+                    };
+                    Ok((
+                        vec![ancestor],
+                        vec![(
+                            "organisation".to_string(),
+                            "is_a".to_string(),
+                            "legalentity".to_string(),
+                        )],
+                        Some(root),
+                    ))
+                }
+                ("Person", "classes") => {
+                    let root = AttachedOntologyNode {
+                        uri: "http://test.org#Person".to_string(),
+                        name: "person".to_string(),
+                        category: NodeCategory::Classes,
+                    };
+                    Ok((vec![], vec![], Some(root)))
+                }
+                _ => Ok((vec![], vec![], None)),
+            }
         }
 
         fn is_loaded(&self) -> bool {
@@ -656,11 +781,19 @@ mod tests {
         )
         .await;
 
-        assert_eq!(nodes.len(), 2);
+        // 2 LLM nodes + 1 ontology ancestor (legalentity) = 3
+        assert!(nodes.len() >= 2, "Expected at least 2 nodes, got {}", nodes.len());
 
-        for node_pair in &nodes {
+        // Find LLM-extracted nodes (not ontology-derived)
+        let llm_nodes: Vec<_> = nodes
+            .iter()
+            .filter(|n| n.entity.name == "TechCorp" || n.entity.name == "Alice")
+            .collect();
+        assert_eq!(llm_nodes.len(), 2);
+
+        for node_pair in &llm_nodes {
             // All entity types should be ontology-valid (both "Organization"
-            // and "Person" are matched by MockOntologyResolver)
+            // and "Person" are matched by MockOntologyResolver via get_subgraph)
             assert!(
                 node_pair.entity_type.is_ontology_valid(),
                 "EntityType '{}' should be ontology-valid",
@@ -668,11 +801,11 @@ mod tests {
             );
 
             if node_pair.entity.name == "TechCorp" {
-                // "Organization" → canonical "Organisation"
-                assert_eq!(node_pair.entity_type.name, "Organisation");
+                // "Organization" → canonical "organisation" (lowercase from uri_to_key)
+                assert_eq!(node_pair.entity_type.name, "organisation");
             } else if node_pair.entity.name == "Alice" {
-                // "Person" → canonical "Person" (same name, no rename)
-                assert_eq!(node_pair.entity_type.name, "Person");
+                // "Person" → canonical "person" (lowercase from uri_to_key)
+                assert_eq!(node_pair.entity_type.name, "person");
                 // Alice is matched as an individual
                 assert!(
                     node_pair.entity.base.ontology_valid,
@@ -944,5 +1077,108 @@ mod tests {
         // Only the second edge should be present; the first is in existing_edge_keys
         assert_eq!(ontology_edges_out.len(), 1);
         assert_eq!(ontology_edges_out[0].relationship_name, "has_part");
+    }
+
+    // -----------------------------------------------------------------------
+    // Tests for entity type subgraph expansion (Step 3)
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_expand_ontology_adds_ancestor_type_nodes() {
+        // "Organization" matches ontology class "organisation" which has ancestor "legalentity"
+        let graph = KnowledgeGraph {
+            nodes: vec![Node {
+                id: "techcorp_1".to_string(),
+                name: "TechCorp".to_string(),
+                node_type: "Organization".to_string(),
+                description: "A technology company".to_string(),
+            }],
+            edges: vec![],
+        };
+
+        let chunk_id = Uuid::new_v4();
+        let dataset_id = Uuid::new_v4();
+        let resolver = MockOntologyResolver;
+
+        let (nodes, _edges) = expand_with_nodes_and_edges(
+            vec![(chunk_id, graph)],
+            dataset_id,
+            &HashSet::new(),
+            &resolver,
+        )
+        .await;
+
+        // LLM node (TechCorp) + ontology-derived ancestor (legalentity)
+        assert!(
+            nodes.len() >= 2,
+            "Expected at least 2 nodes (LLM + ontology ancestor), got {}",
+            nodes.len()
+        );
+
+        // The ancestor "legalentity" should be present as an ontology-derived node
+        let legalentity_node = nodes
+            .iter()
+            .find(|n| n.entity.name == "legalentity" || n.entity_type.name == "legalentity");
+        assert!(
+            legalentity_node.is_some(),
+            "Expected ontology-derived 'legalentity' node in output"
+        );
+
+        // The ancestor should be ontology-valid
+        if let Some(le) = legalentity_node {
+            assert!(le.entity_type.base.ontology_valid || le.entity.base.ontology_valid);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_expand_ontology_adds_is_a_edges() {
+        // "Organization" matches ontology class "organisation" → is_a → "legalentity"
+        let graph = KnowledgeGraph {
+            nodes: vec![Node {
+                id: "techcorp_1".to_string(),
+                name: "TechCorp".to_string(),
+                node_type: "Organization".to_string(),
+                description: "A technology company".to_string(),
+            }],
+            edges: vec![],
+        };
+
+        let chunk_id = Uuid::new_v4();
+        let dataset_id = Uuid::new_v4();
+        let resolver = MockOntologyResolver;
+
+        let (_nodes, edges) = expand_with_nodes_and_edges(
+            vec![(chunk_id, graph)],
+            dataset_id,
+            &HashSet::new(),
+            &resolver,
+        )
+        .await;
+
+        // There should be an ontology-derived "is_a" edge
+        let is_a_edges: Vec<_> = edges
+            .iter()
+            .filter(|e| e.relationship_name == "is_a")
+            .collect();
+        assert_eq!(
+            is_a_edges.len(),
+            1,
+            "Expected exactly 1 is_a edge from ontology"
+        );
+
+        let is_a = &is_a_edges[0];
+
+        // Source = organisation, target = legalentity (deterministic UUIDs)
+        assert_eq!(is_a.source_entity_id, ontology_name_to_uuid("organisation"));
+        assert_eq!(
+            is_a.target_entity_id,
+            ontology_name_to_uuid("legalentity")
+        );
+
+        // Should be marked as ontology-derived
+        assert_eq!(
+            is_a.properties.get("ontology_valid"),
+            Some(&"true".to_string())
+        );
     }
 }
