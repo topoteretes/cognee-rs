@@ -9,7 +9,20 @@ name = "cognee-cli"
 path = "src/main.rs"
 
 [features]
-default      = ["onnx", "ladybug", "qdrant", "pgvector", "pggraph", "sqlite", "postgres", "hf-tokenizer", "tiktoken"]
+default = [
+    "onnx",
+    "ladybug",
+    "qdrant",
+    "pgvector",
+    "pggraph",
+    "sqlite",
+    "postgres",
+    "hf-tokenizer",
+    "tiktoken",
+    "pdf-pdfium",
+    "csv-loader",
+    "unstructured",
+]
 onnx         = ["cognee-lib/onnx"]
 ladybug      = ["cognee-lib/ladybug"]
 qdrant       = ["cognee-lib/qdrant"]
@@ -19,6 +32,22 @@ sqlite       = ["cognee-lib/sqlite"]
 postgres     = ["cognee-lib/postgres"]
 hf-tokenizer = ["cognee-lib/hf-tokenizer"]
 tiktoken     = ["cognee-lib/tiktoken"]
+
+# Document format loaders (forwarded through cognee-lib)
+pdf-pdfium        = ["cognee-lib/pdf-pdfium"]
+pdf-pure-rust     = ["cognee-lib/pdf-pure-rust"]
+csv-loader        = ["cognee-lib/csv-loader"]
+unstructured      = ["cognee-lib/unstructured"]
+unstructured-xlsx = ["cognee-lib/unstructured-xlsx"]
+unstructured-docx = ["cognee-lib/unstructured-docx"]
+unstructured-pptx = ["cognee-lib/unstructured-pptx"]
+unstructured-epub = ["cognee-lib/unstructured-epub"]
+unstructured-eml  = ["cognee-lib/unstructured-eml"]
+unstructured-odt  = ["cognee-lib/unstructured-odt"]
+unstructured-odp  = ["cognee-lib/unstructured-odp"]
+
+# Composite feature for Android CLI builds
+android-default = ["cognee-lib/android-default"]
 
 [dependencies]
 clap = { workspace = true, features = ["derive"] }

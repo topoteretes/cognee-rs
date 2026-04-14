@@ -67,7 +67,7 @@ pdfium-render = { version = "0.9", features = ["thread_safe"] }
 predicates = "3.1"
 rand = "0.8"
 rayon = "1.10"
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "cookies", "gzip", "json", "stream"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "cookies", "gzip", "json", "stream", "multipart"] }
 scraper = "0.21"
 schemars = "0.8"
 segment = { git = "https://github.com/qdrant/qdrant", package = "segment", default-features = false, tag = "v1.17.0" }

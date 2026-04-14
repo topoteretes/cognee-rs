@@ -14,6 +14,9 @@ default = [
     "postgres",
     "hf-tokenizer",
     "tiktoken",
+    "pdf-pdfium",
+    "csv-loader",
+    "unstructured",
 ]
 onnx           = ["cognee-embedding/onnx"]
 ladybug        = ["cognee-graph/ladybug"]
@@ -25,6 +28,36 @@ postgres       = ["cognee-database/postgres"]
 hf-tokenizer   = ["cognee-chunking/hf-tokenizer"]
 tiktoken       = ["cognee-chunking/tiktoken"]
 android-litert = ["cognee-llm/android-litert"]
+
+# Document format loaders (forwarded from cognee-ingestion)
+pdf-pdfium        = ["cognee-ingestion/pdf-pdfium"]
+pdf-pure-rust     = ["cognee-ingestion/pdf-pure-rust"]
+csv-loader        = ["cognee-ingestion/csv-loader"]
+unstructured      = ["cognee-ingestion/unstructured"]
+unstructured-xlsx = ["cognee-ingestion/unstructured-xlsx"]
+unstructured-docx = ["cognee-ingestion/unstructured-docx"]
+unstructured-pptx = ["cognee-ingestion/unstructured-pptx"]
+unstructured-epub = ["cognee-ingestion/unstructured-epub"]
+unstructured-eml  = ["cognee-ingestion/unstructured-eml"]
+unstructured-odt  = ["cognee-ingestion/unstructured-odt"]
+unstructured-odp  = ["cognee-ingestion/unstructured-odp"]
+
+# Composite feature for Android builds (no pdfium, no PostgreSQL, no tiktoken)
+android-default = [
+    "onnx",
+    "ladybug",
+    "qdrant",
+    "sqlite",
+    "hf-tokenizer",
+    "pdf-pure-rust",
+    "csv-loader",
+    "unstructured-xlsx",
+    "unstructured-docx",
+    "unstructured-epub",
+    "unstructured-eml",
+    "unstructured-odt",
+]
+
 testing = [
     "cognee-cognify/testing",
     "cognee-graph/testing",
