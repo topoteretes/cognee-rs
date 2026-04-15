@@ -2964,23 +2964,26 @@ mod tests {
 
     #[tokio::test]
     async fn test_unsupported_document_type() {
+        // Use a document_type that is intentionally never registered in
+        // LoaderRegistry::default(). The previous fixture used "pdf", but the
+        // PDF loader added in phase2/task1 made that type supported, causing
+        // this test to invoke the real PDFium loader on garbage bytes.
+        const UNSUPPORTED: &str = "no_such_loader_type_for_test";
+
         let storage = Arc::new(MockStorage::new());
-        let location = storage
-            .store(b"some pdf content", "test.pdf")
-            .await
-            .unwrap();
+        let location = storage.store(b"some content", "test.bin").await.unwrap();
 
         let doc_id = Uuid::new_v4();
-        let mut base = DataPoint::new("PdfDocument", None);
+        let mut base = DataPoint::new("UnknownDocument", None);
         base.id = doc_id;
         base.set_metadata("index_fields", serde_json::json!(["text"]));
         let doc = Document {
             base,
-            document_type: "pdf".to_string(),
-            name: "test.pdf".to_string(),
+            document_type: UNSUPPORTED.to_string(),
+            name: "test.bin".to_string(),
             raw_data_location: location,
-            mime_type: "application/pdf".to_string(),
-            extension: "pdf".to_string(),
+            mime_type: "application/octet-stream".to_string(),
+            extension: "bin".to_string(),
             data_id: doc_id,
             external_metadata: None,
         };
@@ -3006,8 +3009,8 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(
-            matches!(err, CognifyError::UnsupportedDocumentType(ref t) if t == "pdf"),
-            "expected UnsupportedDocumentType(\"pdf\"), got: {err:?}"
+            matches!(err, CognifyError::UnsupportedDocumentType(ref t) if t == UNSUPPORTED),
+            "expected UnsupportedDocumentType({UNSUPPORTED:?}), got: {err:?}"
         );
     }
 
