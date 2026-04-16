@@ -4,6 +4,7 @@ pub mod error;
 pub mod fact_extraction;
 pub mod graph_extraction;
 pub mod graph_integration;
+pub mod memify;
 pub mod pipeline;
 pub mod summarization;
 pub mod tasks;
@@ -27,4 +28,5 @@ pub use tasks::{
     extract_graph_from_data, make_add_data_points_task, make_classify_documents_task,
     make_extract_chunks_task, make_extract_graph_task, make_summarize_text_task, summarize_text,
 };
+pub use memify::{MemifyConfig, MemifyError, MemifyResult, memify};
 pub use triplet_creation::create_triplets_from_graph;
