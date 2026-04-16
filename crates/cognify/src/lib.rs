@@ -28,5 +28,5 @@ pub use tasks::{
     extract_graph_from_data, make_add_data_points_task, make_classify_documents_task,
     make_extract_chunks_task, make_extract_graph_task, make_summarize_text_task, summarize_text,
 };
-pub use memify::{MemifyConfig, MemifyError, MemifyResult, memify};
+pub use memify::{MemifyConfig, MemifyError, MemifyResult, memify as run_memify};
 pub use triplet_creation::create_triplets_from_graph;
