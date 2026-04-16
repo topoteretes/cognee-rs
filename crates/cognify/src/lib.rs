@@ -4,6 +4,7 @@ pub mod error;
 pub mod fact_extraction;
 pub mod graph_extraction;
 pub mod graph_integration;
+pub mod memify;
 pub mod pipeline;
 pub mod summarization;
 pub mod tasks;
