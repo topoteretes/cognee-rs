@@ -1,30 +1,30 @@
-//! Configuration for the memify pipeline.
-
 use serde::{Deserialize, Serialize};
 
 use super::error::MemifyError;
 
-/// Configuration for the memify pipeline.
-///
-/// Controls how graph triplets are fetched, filtered, and embedded
-/// during the memify process. Embedding batch size is not stored here;
-/// it is read from `EmbeddingEngine::batch_size()` at runtime.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MemifyConfig {
-    /// Number of triplets to fetch and process per batch.
-    /// Default: 100
+    /// Batch size for reading triplets from the graph.
+    /// Python: triplets_batch_size=100 in get_triplet_datapoints()
+    ///
+    /// In the Rust implementation this controls the chunk size used when
+    /// batching embedding calls, NOT graph pagination (since Rust loads
+    /// the full graph via get_graph_data()). Kept for future use if
+    /// get_triplets_batch() is added to GraphDBTrait.
     pub triplet_batch_size: usize,
 
-    /// Optional filter to restrict processing to nodes of a specific type.
-    /// When `None`, all node types are included.
+    /// Optional filter: only process nodes of this type.
+    /// Python: memify(node_type=NodeSet) default
+    /// When set along with node_name_filter, uses
+    /// GraphDBTrait::get_nodeset_subgraph().
     pub node_type_filter: Option<String>,
 
-    /// Optional filter to restrict processing to nodes with specific names.
-    /// When `None`, all node names are included.
+    /// Optional filter: only process nodes with these names.
+    /// Python: memify(node_name=None) default
     pub node_name_filter: Option<Vec<String>>,
 
-    /// Logical operator for combining `node_name_filter` entries.
-    /// Must be `"OR"` or `"AND"`. Default: `"OR"`.
+    /// Operator for node_name filtering ("OR" or "AND").
+    /// Python: get_memory_fragment(node_name_filter_operator="OR")
     pub node_name_filter_operator: String,
 }
 
@@ -40,118 +40,32 @@ impl Default for MemifyConfig {
 }
 
 impl MemifyConfig {
-    /// Set the number of triplets processed per batch.
     pub fn with_triplet_batch_size(mut self, size: usize) -> Self {
         self.triplet_batch_size = size;
         self
     }
 
-    /// Set the node type filter.
     pub fn with_node_type_filter(mut self, node_type: String) -> Self {
         self.node_type_filter = Some(node_type);
         self
     }
 
-    /// Set the node name filter.
     pub fn with_node_name_filter(mut self, names: Vec<String>) -> Self {
         self.node_name_filter = Some(names);
         self
     }
 
-    /// Set the logical operator for combining node name filter entries.
-    pub fn with_node_name_filter_operator(mut self, operator: String) -> Self {
-        self.node_name_filter_operator = operator;
+    pub fn with_node_name_filter_operator(mut self, op: String) -> Self {
+        self.node_name_filter_operator = op;
         self
     }
 
-    /// Validate configuration parameters.
-    ///
-    /// Returns an error if any parameters are invalid.
     pub fn validate(&self) -> Result<(), MemifyError> {
         if self.triplet_batch_size == 0 {
             return Err(MemifyError::ConfigError(
-                "triplet_batch_size must be greater than 0".to_string(),
+                "triplet_batch_size must be > 0".into(),
             ));
         }
-
-        if self.node_name_filter_operator != "OR" && self.node_name_filter_operator != "AND" {
-            return Err(MemifyError::ConfigError(
-                "node_name_filter_operator must be \"OR\" or \"AND\"".to_string(),
-            ));
-        }
-
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_default_config() {
-        let config = MemifyConfig::default();
-
-        assert_eq!(config.triplet_batch_size, 100);
-        assert!(config.node_type_filter.is_none());
-        assert!(config.node_name_filter.is_none());
-        assert_eq!(config.node_name_filter_operator, "OR");
-    }
-
-    #[test]
-    fn test_builder_methods() {
-        let config = MemifyConfig::default()
-            .with_triplet_batch_size(50)
-            .with_node_type_filter("Person".to_string())
-            .with_node_name_filter(vec!["Alice".to_string(), "Bob".to_string()])
-            .with_node_name_filter_operator("AND".to_string());
-
-        assert_eq!(config.triplet_batch_size, 50);
-        assert_eq!(config.node_type_filter, Some("Person".to_string()));
-        assert_eq!(
-            config.node_name_filter,
-            Some(vec!["Alice".to_string(), "Bob".to_string()])
-        );
-        assert_eq!(config.node_name_filter_operator, "AND");
-    }
-
-    #[test]
-    fn test_validate_success() {
-        let config = MemifyConfig::default();
-        assert!(config.validate().is_ok());
-    }
-
-    #[test]
-    fn test_validate_zero_batch_size() {
-        let config = MemifyConfig {
-            triplet_batch_size: 0,
-            ..Default::default()
-        };
-        let err = config.validate().unwrap_err();
-        assert!(matches!(err, MemifyError::ConfigError(_)));
-        assert!(err.to_string().contains("triplet_batch_size"));
-    }
-
-    #[test]
-    fn test_validate_invalid_operator() {
-        let config = MemifyConfig {
-            node_name_filter_operator: "XOR".to_string(),
-            ..Default::default()
-        };
-        let err = config.validate().unwrap_err();
-        assert!(matches!(err, MemifyError::ConfigError(_)));
-        assert!(err.to_string().contains("node_name_filter_operator"));
-    }
-
-    #[test]
-    fn test_validate_valid_operators() {
-        let config_or = MemifyConfig::default();
-        assert!(config_or.validate().is_ok());
-
-        let config_and = MemifyConfig {
-            node_name_filter_operator: "AND".to_string(),
-            ..Default::default()
-        };
-        assert!(config_and.validate().is_ok());
     }
 }

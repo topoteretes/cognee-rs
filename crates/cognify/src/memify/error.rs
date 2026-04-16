@@ -1,5 +1,3 @@
-//! Error types for the memify pipeline.
-
 use thiserror::Error;
 
 #[derive(Error, Debug)]

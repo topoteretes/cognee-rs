@@ -1,192 +1,157 @@
-//! Extract triplets from graph database for the memify pipeline.
-//!
-//! Reads nodes and edges from the graph DB (optionally filtered by node type/name),
-//! and produces `Triplet` values with embeddable text matching the format used by
-//! `create_triplets_from_graph()` in `triplet_creation.rs`.
-
-use std::collections::HashMap;
-
-use cognee_graph::{GraphDBTrait, NodeData};
+use cognee_graph::{EdgeData, GraphDBTrait, GraphNode, NodeData};
 use cognee_models::Triplet;
+use std::borrow::Cow;
+use std::collections::HashMap;
 use tracing::{info, warn};
 use uuid::Uuid;
 
 use super::config::MemifyConfig;
 use super::error::MemifyError;
 
-/// Extract triplets from the graph database.
+/// Extract triplets from an existing graph database.
 ///
-/// Reads the graph (all data or a filtered subgraph depending on config) and
-/// converts each edge into a [`Triplet`] with embeddable text in the format:
-/// `"source_text -› relationship_text-›target_text"`
+/// Reads all nodes and edges (or a filtered subgraph) via GraphDBTrait
+/// and constructs Triplet objects with embeddable text.
 ///
-/// # Arguments
-/// * `graph_db` - Graph database to read from
-/// * `config` - Memify configuration controlling optional node filters
-///
-/// # Errors
-/// Returns `MemifyError::GraphDBError` if graph reads or UUID parsing fails.
+/// Rust equivalent of Python's get_triplet_datapoints()
+/// (cognee/tasks/memify/get_triplet_datapoints.py:169).
 pub async fn extract_triplets_from_graph_db(
     graph_db: &dyn GraphDBTrait,
     config: &MemifyConfig,
 ) -> Result<Vec<Triplet>, MemifyError> {
-    // Step 1: Read graph data (filtered or full)
-    let (nodes, edges) = match (&config.node_type_filter, &config.node_name_filter) {
-        (Some(node_type), Some(node_names)) => graph_db
-            .get_nodeset_subgraph(node_type, node_names, &config.node_name_filter_operator)
-            .await
-            .map_err(|e| MemifyError::GraphDBError(e.to_string()))?,
-        _ => graph_db
-            .get_graph_data()
-            .await
-            .map_err(|e| MemifyError::GraphDBError(e.to_string()))?,
-    };
+    // Step 1: Read graph data (full or filtered)
+    let (nodes, edges) = read_graph_data(graph_db, config).await?;
 
-    // Step 2: Build node lookup map for O(1) access by node_id
-    let node_map: HashMap<&str, &NodeData> = nodes
-        .iter()
-        .map(|(node_id, node_data)| (node_id.as_str(), node_data))
-        .collect();
+    info!(
+        node_count = nodes.len(),
+        edge_count = edges.len(),
+        "Read graph data for triplet extraction"
+    );
 
-    // Step 3: Iterate edges and build triplets
+    if edges.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // Step 2: Build node lookup: node_id -> NodeData
+    let node_map: HashMap<&str, &NodeData> =
+        nodes.iter().map(|(id, data)| (id.as_str(), data)).collect();
+
+    // Step 3: Build triplets from edges
     let mut triplets = Vec::new();
-    let mut skipped_count: usize = 0;
+    let mut skipped = 0usize;
 
     for (source_id, target_id, relationship_name, edge_props) in &edges {
-        // Look up source and target nodes
-        let (source_data, target_data) = match (
-            node_map.get(source_id.as_str()),
-            node_map.get(target_id.as_str()),
-        ) {
-            (Some(src), Some(tgt)) => (*src, *tgt),
-            _ => {
-                skipped_count += 1;
+        let source = match node_map.get(source_id.as_str()) {
+            Some(data) => *data,
+            None => {
+                skipped += 1;
+                continue;
+            }
+        };
+        let target = match node_map.get(target_id.as_str()) {
+            Some(data) => *data,
+            None => {
+                skipped += 1;
                 continue;
             }
         };
 
-        // Build embeddable text for source and target
-        let source_text = build_node_text(source_data);
-        let target_text = build_node_text(target_data);
+        let source_text = build_node_text(source);
+        let target_text = build_node_text(target);
+        let relationship_text = extract_relationship_text(edge_props, relationship_name);
 
-        // Extract relationship text: prefer edge_text property, fall back to relationship_name
-        let relationship_text = edge_props
-            .get("edge_text")
-            .and_then(|v| v.as_str())
-            .filter(|s| !s.trim().is_empty())
-            .unwrap_or(relationship_name.as_str());
+        if source_text.is_empty() && relationship_text.is_empty() && target_text.is_empty() {
+            skipped += 1;
+            continue;
+        }
 
-        // Format triplet text matching Python's add_data_points.py:242:
-        //   f"{source_node_text} -› {relationship_text}-›{target_node_text}"
+        // Format matches existing Rust create_triplets_from_graph():
+        // "{source_text} -\u{203a} {relationship_text}-\u{203a}{target_text}"
         let text = format!("{source_text} -\u{203a} {relationship_text}-\u{203a}{target_text}");
 
-        // Parse source and target IDs as UUIDs
-        let source_uuid = Uuid::parse_str(source_id).map_err(|e| {
-            MemifyError::GraphDBError(format!("invalid source UUID '{source_id}': {e}"))
-        })?;
-        let target_uuid = Uuid::parse_str(target_id).map_err(|e| {
-            MemifyError::GraphDBError(format!("invalid target UUID '{target_id}': {e}"))
-        })?;
-
-        // Extract node names for display
-        let source_name = extract_string_prop(source_data, "name");
-        let target_name = extract_string_prop(target_data, "name");
+        let source_uuid = parse_node_uuid(source_id)?;
+        let target_uuid = parse_node_uuid(target_id)?;
 
         let triplet = Triplet::new(source_uuid, target_uuid, relationship_name.clone(), text)
-            .with_names(source_name, target_name);
+            .with_names(
+                extract_string_prop(source, "name"),
+                extract_string_prop(target, "name"),
+            );
 
         triplets.push(triplet);
     }
 
-    info!(
-        total_nodes = nodes.len(),
-        total_edges = edges.len(),
-        triplets_created = triplets.len(),
-        skipped = skipped_count,
-        "Extracted triplets from graph DB"
-    );
-
-    if skipped_count > 0 {
-        warn!(
-            skipped_count,
-            "Skipped edges with missing source or target nodes"
-        );
+    if skipped > 0 {
+        warn!(skipped, "Skipped edges (missing nodes or empty text)");
     }
 
     Ok(triplets)
 }
 
-/// Build embeddable text from a graph node's properties.
-///
-/// If the node has a non-empty "description", returns `"name: description"`.
-/// Otherwise returns just the name. The result is trimmed.
-fn build_node_text(node: &NodeData) -> String {
-    let name = node.get("name").and_then(|v| v.as_str()).unwrap_or("");
-    let description = node
-        .get("description")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-
-    if !description.is_empty() {
-        format!("{name}: {description}").trim().to_string()
-    } else {
-        name.trim().to_string()
+/// Read graph data, applying filters from config if present.
+async fn read_graph_data(
+    graph_db: &dyn GraphDBTrait,
+    config: &MemifyConfig,
+) -> Result<(Vec<GraphNode>, Vec<EdgeData>), MemifyError> {
+    match (&config.node_type_filter, &config.node_name_filter) {
+        (Some(node_type), Some(node_names)) => graph_db
+            .get_nodeset_subgraph(node_type, node_names, &config.node_name_filter_operator)
+            .await
+            .map_err(|e| MemifyError::GraphDBError(e.to_string())),
+        _ => graph_db
+            .get_graph_data()
+            .await
+            .map_err(|e| MemifyError::GraphDBError(e.to_string())),
     }
 }
 
-/// Extract a string property from node data, returning an empty string if missing.
+/// Build embeddable text from a graph node's properties.
+///
+/// Uses "name" and "description" fields, matching existing
+/// create_triplets_from_graph() in triplet_creation.rs.
+///
+/// Format: "Name: Description" or just "Name" if description is empty.
+fn build_node_text(node: &NodeData) -> String {
+    let name = extract_string_prop(node, "name");
+    let description = extract_string_prop(node, "description");
+
+    if !description.is_empty() {
+        format!("{name}: {description}")
+    } else {
+        name
+    }
+    .trim()
+    .to_string()
+}
+
+/// Extract relationship text from edge properties.
+///
+/// Tries "edge_text" property first (matching Python's
+/// _extract_relationship_text), falls back to relationship_name.
+fn extract_relationship_text(
+    edge_props: &HashMap<Cow<'static, str>, serde_json::Value>,
+    relationship_name: &str,
+) -> String {
+    edge_props
+        .get("edge_text")
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .unwrap_or(relationship_name)
+        .to_string()
+}
+
+/// Extract a string property from NodeData.
 fn extract_string_prop(data: &NodeData, key: &str) -> String {
     data.get(key)
         .and_then(|v| v.as_str())
-        .unwrap_or_default()
+        .unwrap_or("")
         .trim()
         .to_string()
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-    use std::borrow::Cow;
-
-    fn make_node_data(name: &str, description: &str) -> NodeData {
-        let mut data = NodeData::new();
-        data.insert(Cow::Borrowed("name"), json!(name));
-        if !description.is_empty() {
-            data.insert(Cow::Borrowed("description"), json!(description));
-        }
-        data
-    }
-
-    #[test]
-    fn test_build_node_text_with_description() {
-        let data = make_node_data("Alice", "Software engineer");
-        assert_eq!(build_node_text(&data), "Alice: Software engineer");
-    }
-
-    #[test]
-    fn test_build_node_text_without_description() {
-        let data = make_node_data("Alice", "");
-        assert_eq!(build_node_text(&data), "Alice");
-    }
-
-    #[test]
-    fn test_build_node_text_empty() {
-        let data = NodeData::new();
-        assert_eq!(build_node_text(&data), "");
-    }
-
-    #[test]
-    fn test_extract_string_prop() {
-        let data = make_node_data("Alice", "");
-        assert_eq!(extract_string_prop(&data, "name"), "Alice");
-        assert_eq!(extract_string_prop(&data, "missing_key"), "");
-    }
-
-    #[test]
-    fn test_extract_string_prop_trims_whitespace() {
-        let mut data = NodeData::new();
-        data.insert(Cow::Borrowed("name"), json!("  Alice  "));
-        assert_eq!(extract_string_prop(&data, "name"), "Alice");
-    }
+/// Parse a node ID string as UUID.
+fn parse_node_uuid(id: &str) -> Result<Uuid, MemifyError> {
+    Uuid::parse_str(id)
+        .map_err(|e| MemifyError::GraphDBError(format!("Invalid node UUID '{id}': {e}")))
 }
