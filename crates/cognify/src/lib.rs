@@ -8,6 +8,7 @@ pub mod memify;
 pub mod pipeline;
 pub mod summarization;
 pub mod tasks;
+pub mod temporal_extraction;
 pub mod triplet_creation;
 
 pub use config::{ChunkStrategy, CognifyConfig, ConfigError};
