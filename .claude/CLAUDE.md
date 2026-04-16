@@ -21,7 +21,7 @@ cognee-rust/
 │   ├── database/               # Metadata DB abstraction (DatabaseTrait, SqliteDatabase)
 │   ├── ingestion/              # Ingest pipeline + content hashing + URL crawler
 │   ├── chunking/               # Text chunking (word→sentence→paragraph→TextChunker)
-│   ├── cognify/                # Full cognify pipeline (classify → chunk → extract graph → summarize → store)
+│   ├── cognify/                # Full cognify pipeline + memify enrichment pipeline
 │   ├── search/                 # Search pipeline with multiple retrieval strategies
 │   ├── session/                # Session management and session store
 │   ├── embedding/              # Multi-provider embedding engine (ONNX, OpenAI, Ollama, Mock)
@@ -59,7 +59,7 @@ cognee-rust/
 
 **cognee-chunking** — Text chunking strategies ported from the Python chunking hierarchy (word → sentence → paragraph). Main entry point: `ExtractTextChunksPipeline`. Trait: `TokenCounter`. Impls: `WordCounter` (whitespace fallback), `HuggingFaceTokenCounter` (BPE/WordPiece via `tokenizers` crate, behind `hf-tokenizer` feature), `TikTokenCounter` (cl100k_base BPE for OpenAI models, behind `tiktoken` feature). `TokenCounterKind` enum with `from_env()` auto-selects the best counter based on `EMBEDDING_PROVIDER` and `COGNEE_TOKEN_COUNTER` env vars.
 
-**cognee-cognify** — Knowledge graph extraction pipeline: classify documents, chunk text, extract entities/relationships via LLM, summarize, store to graph and vector DBs. Main types: `CognifyPipeline`, `CognifyConfig`, `FactExtractor`, `SummaryExtractor`.
+**cognee-cognify** — Knowledge graph extraction pipeline: classify documents, chunk text, extract entities/relationships via LLM, summarize, store to graph and vector DBs. Main types: `CognifyPipeline`, `CognifyConfig`, `FactExtractor`, `SummaryExtractor`. Also includes the **memify** sub-module for graph enrichment: `MemifyConfig`, `MemifyResult`, `memify()`. Reads existing knowledge graph, creates triplet embeddings, indexes in vector DB for `SearchType::TripletCompletion`.
 
 **cognee-search** — Unified search orchestration across multiple retrieval strategies. Main types: `SearchBuilder`, `SearchOrchestrator`. `SearchType` enum defines 15 search modes (GraphCompletion, RagCompletion, Chunks, Summaries, Temporal, Cypher, etc.) with corresponding retriever implementations.
 
@@ -81,7 +81,7 @@ cognee-rust/
 
 **cognee-lib** — Unified public API facade that re-exports all crates.
 
-**cognee-cli** — Command-line binary: `add`, `cognify`, `add-and-cognify`, `search`, `delete`, `config`, `run-sequence`.
+**cognee-cli** — Command-line binary: `add`, `cognify`, `add-and-cognify`, `memify`, `search`, `delete`, `config`, `run-sequence`.
 
 **cognee-utils** — Shared utilities (retry logic, ID generation).
 
@@ -119,6 +119,7 @@ cognee-rust/
 - **Ontology resolution** — RDF/JSON-LD/Turtle ontology loading with entity type matching
 - **Deletion** — scoped cascading across relational DB, graph DB, vector DB, and file storage (with dry-run via `preview()`)
 - **CLI** — `add`, `cognify`, `add-and-cognify`, `search`, `delete`, `config`, `run-sequence`
+- **Memify pipeline** — Standalone graph enrichment: reads existing knowledge graph via `GraphDBTrait`, creates `Triplet` objects from all edges, embeds triplet text, indexes into `"Triplet"/"text"` vector collection. Idempotent (re-runnable). Configurable via `MemifyConfig` with optional node type/name filtering. CLI: `memify` subcommand.
 - **Language bindings** — C API (`capi/`), Python via PyO3 (`python/`), JavaScript via Neon (`js/`), Android runner (`android/`)
 - **Cross-SDK E2E tests** — `e2e-cross-sdk/` with Docker harness: add parity, cross-read, cognify structural comparison (Python ↔ Rust)
 - **Test suite** — Python-compat ID tests, schema compatibility tests, E2E search matrix (9 search types), CLI E2E tests, deletion tests, embedding tests, fact extraction tests
