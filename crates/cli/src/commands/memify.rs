@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use cognee_lib::cognify::{MemifyConfig, run_memify};
 use cognee_lib::database::ops;
-use cognee_lib::ComponentManager;
+use cognee_lib::{ComponentManager, PipelineContext};
 use tracing::{debug, info};
 use uuid::Uuid;
 
@@ -34,8 +34,7 @@ pub fn run(args: MemifyArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> 
             .await
             .map_err(|e| CliError::Runtime(format!("{e}")))?;
 
-        let dataset_names =
-            resolve_dataset_names(&database, owner_id, requested_datasets).await?;
+        let dataset_names = resolve_dataset_names(&database, owner_id, requested_datasets).await?;
 
         let graph_db = cm
             .graph_db()
@@ -65,23 +64,22 @@ pub fn run(args: MemifyArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> 
         let mut total_batches = 0usize;
 
         for dataset_name in &dataset_names {
-            let dataset = ops::datasets::get_dataset_by_name(&database, dataset_name, owner_id, None)
-                .await
-                .map_err(|error| {
-                    CliError::Runtime(format!(
-                        "Failed to resolve dataset '{dataset_name}': {error}"
-                    ))
-                })?
-                .ok_or_else(|| {
-                    CliError::Validation(format!(
-                        "Dataset '{dataset_name}' was not found for owner {}",
-                        owner_id
-                    ))
-                })?;
+            let dataset =
+                ops::datasets::get_dataset_by_name(&database, dataset_name, owner_id, None)
+                    .await
+                    .map_err(|error| {
+                        CliError::Runtime(format!(
+                            "Failed to resolve dataset '{dataset_name}': {error}"
+                        ))
+                    })?
+                    .ok_or_else(|| {
+                        CliError::Validation(format!(
+                            "Dataset '{dataset_name}' was not found for owner {}",
+                            owner_id
+                        ))
+                    })?;
 
-            info!(
-                "Dataset '{dataset_name}': running memify"
-            );
+            info!("Dataset '{dataset_name}': running memify");
 
             let result = run_memify(
                 &*graph_db,

@@ -19,6 +19,7 @@ pub use graph_integration::{
     DeduplicationResult, GraphEdgePair, GraphNodePair, deduplicate_nodes_and_edges,
     expand_with_nodes_and_edges,
 };
+pub use memify::{MemifyConfig, MemifyError, MemifyResult, memify as run_memify};
 pub use pipeline::{CognifyResult, IndexedFieldsStats};
 pub use summarization::{SummarizedContent, SummaryExtractor, TextSummary};
 pub use tasks::{
@@ -28,5 +29,4 @@ pub use tasks::{
     extract_graph_from_data, make_add_data_points_task, make_classify_documents_task,
     make_extract_chunks_task, make_extract_graph_task, make_summarize_text_task, summarize_text,
 };
-pub use memify::{MemifyConfig, MemifyError, MemifyResult, memify as run_memify};
 pub use triplet_creation::create_triplets_from_graph;

@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 
 [features]
-testing = ["cognee-storage/testing"]
+testing = ["cognee-storage/testing", "cognee-graph/testing", "cognee-vector/testing"]
 
 [dependencies]
 cognee-models = { path = "../models" }

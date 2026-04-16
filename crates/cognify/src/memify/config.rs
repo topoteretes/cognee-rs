@@ -66,6 +66,76 @@ impl MemifyConfig {
                 "triplet_batch_size must be > 0".into(),
             ));
         }
+        let op = self.node_name_filter_operator.as_str();
+        if op != "OR" && op != "AND" {
+            return Err(MemifyError::ConfigError(format!(
+                "node_name_filter_operator must be \"OR\" or \"AND\", got \"{op}\""
+            )));
+        }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_default_config() {
+        let config = MemifyConfig::default();
+        assert_eq!(config.triplet_batch_size, 100);
+        assert!(config.node_type_filter.is_none());
+        assert!(config.node_name_filter.is_none());
+        assert_eq!(config.node_name_filter_operator, "OR");
+    }
+
+    #[test]
+    fn test_validate_valid_config() {
+        let config = MemifyConfig::default();
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_validate_zero_batch_size() {
+        let config = MemifyConfig::default().with_triplet_batch_size(0);
+        let err = config.validate().unwrap_err();
+        assert!(
+            err.to_string().contains("triplet_batch_size must be > 0"),
+            "expected batch size error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_validate_invalid_operator() {
+        let config = MemifyConfig::default().with_node_name_filter_operator("XOR".to_string());
+        let err = config.validate().unwrap_err();
+        assert!(
+            err.to_string().contains("node_name_filter_operator"),
+            "expected operator error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_validate_and_operator_accepted() {
+        let config = MemifyConfig::default().with_node_name_filter_operator("AND".to_string());
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_builder_methods() {
+        let config = MemifyConfig::default()
+            .with_triplet_batch_size(50)
+            .with_node_type_filter("Entity".to_string())
+            .with_node_name_filter(vec!["Alice".to_string(), "Bob".to_string()])
+            .with_node_name_filter_operator("AND".to_string());
+
+        assert_eq!(config.triplet_batch_size, 50);
+        assert_eq!(config.node_type_filter, Some("Entity".to_string()));
+        assert_eq!(
+            config.node_name_filter,
+            Some(vec!["Alice".to_string(), "Bob".to_string()])
+        );
+        assert_eq!(config.node_name_filter_operator, "AND");
+        assert!(config.validate().is_ok());
     }
 }

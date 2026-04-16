@@ -118,3 +118,134 @@ pub async fn index_triplets(
         batch_count,
     })
 }
+
+#[cfg(all(test, feature = "testing"))]
+mod tests {
+    use super::*;
+    use cognee_embedding::MockEmbeddingEngine;
+    use cognee_models::Triplet;
+    use cognee_vector::MockVectorDB;
+
+    fn make_triplet(src_name: &str, tgt_name: &str, rel: &str) -> Triplet {
+        let src_id = Uuid::new_v4();
+        let tgt_id = Uuid::new_v4();
+        let text = format!("{src_name} -\u{203a} {rel}-\u{203a}{tgt_name}");
+        Triplet::new(src_id, tgt_id, rel.to_string(), text)
+            .with_names(src_name.to_string(), tgt_name.to_string())
+    }
+
+    #[tokio::test]
+    async fn test_index_empty_triplets() {
+        let vector_db = MockVectorDB::new();
+        let engine = MockEmbeddingEngine::new(4);
+
+        let result = index_triplets(&[], &vector_db, &engine, None, None, None)
+            .await
+            .unwrap();
+
+        assert_eq!(result.indexed_count, 0);
+        assert_eq!(result.batch_count, 0);
+        // No collection should have been created
+        assert!(
+            !vector_db.has_collection("Triplet", "text").await.unwrap(),
+            "collection should not be created for empty input"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_index_creates_collection() {
+        let vector_db = MockVectorDB::new();
+        let engine = MockEmbeddingEngine::new(4);
+        let triplets = vec![make_triplet("Alice", "Bob", "knows")];
+
+        let result = index_triplets(&triplets, &vector_db, &engine, None, None, None)
+            .await
+            .unwrap();
+
+        assert_eq!(result.indexed_count, 1);
+        assert_eq!(result.batch_count, 1);
+        assert!(
+            vector_db.has_collection("Triplet", "text").await.unwrap(),
+            "Triplet:text collection should be created"
+        );
+        assert_eq!(
+            vector_db.collection_size("Triplet", "text").await.unwrap(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn test_index_metadata_fields() {
+        let vector_db = MockVectorDB::new();
+        let engine = MockEmbeddingEngine::new(4);
+        let dataset_id = Uuid::new_v4();
+        let user_id = Uuid::new_v4();
+        let tenant_id = Uuid::new_v4();
+        let triplet = make_triplet("Src", "Tgt", "rel");
+        let triplet_id = triplet.id;
+        let source_id = triplet.source_entity_id;
+        let target_id = triplet.target_entity_id;
+
+        index_triplets(
+            &[triplet],
+            &vector_db,
+            &engine,
+            Some(dataset_id),
+            Some(user_id),
+            Some(tenant_id),
+        )
+        .await
+        .unwrap();
+
+        // Retrieve the point via search (cosine with zero vector returns all points equally)
+        let results = vector_db
+            .search_similar("Triplet", "text", &[0.0; 4], 10)
+            .await
+            .unwrap();
+        assert_eq!(results.len(), 1);
+        let meta = &results[0].metadata;
+        assert_eq!(results[0].id, triplet_id);
+        assert_eq!(meta.get("type").unwrap(), &json!("Triplet"));
+        assert_eq!(meta.get("field").unwrap(), &json!("text"));
+        assert_eq!(
+            meta.get("source_id").unwrap(),
+            &json!(source_id.to_string())
+        );
+        assert_eq!(
+            meta.get("target_id").unwrap(),
+            &json!(target_id.to_string())
+        );
+        assert_eq!(meta.get("relationship").unwrap(), &json!("rel"));
+        assert_eq!(
+            meta.get("dataset_id").unwrap(),
+            &json!(dataset_id.to_string())
+        );
+        assert_eq!(meta.get("user_id").unwrap(), &json!(user_id.to_string()));
+        assert_eq!(
+            meta.get("tenant_id").unwrap(),
+            &json!(tenant_id.to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn test_index_batching() {
+        let vector_db = MockVectorDB::new();
+        // batch_size=2, so 5 triplets should produce 3 batches
+        let engine = MockEmbeddingEngine::with_batch_size(4, 2);
+
+        let triplets: Vec<Triplet> = (0..5)
+            .map(|i| make_triplet(&format!("S{i}"), &format!("T{i}"), "rel"))
+            .collect();
+
+        let result = index_triplets(&triplets, &vector_db, &engine, None, None, None)
+            .await
+            .unwrap();
+
+        assert_eq!(result.indexed_count, 5);
+        assert_eq!(result.batch_count, 3); // ceil(5/2) = 3
+        assert_eq!(
+            vector_db.collection_size("Triplet", "text").await.unwrap(),
+            5
+        );
+    }
+}

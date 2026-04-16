@@ -121,11 +121,9 @@ pub fn run(args: AddAndCognifyArgs, cm: Arc<ComponentManager>) -> Result<(), Cli
             }
         });
         let ontology_resolver: Arc<dyn OntologyResolver> = match ontology_path {
-            Some(path) => Arc::new(
-                RdfLibOntologyResolver::new(path).map_err(|error| {
-                    CliError::Runtime(format!("Ontology initialization failed: {error}"))
-                })?,
-            ),
+            Some(path) => Arc::new(RdfLibOntologyResolver::new(path).map_err(|error| {
+                CliError::Runtime(format!("Ontology initialization failed: {error}"))
+            })?),
             None => Arc::new(NoOpOntologyResolver::new()),
         };
 
