@@ -17,11 +17,31 @@ pub enum Commands {
     Cognify(CognifyArgs),
     #[command(name = "add-and-cognify")]
     AddAndCognify(AddAndCognifyArgs),
+    Memify(MemifyArgs),
     Search(SearchArgs),
     Delete(DeleteArgs),
     Config(ConfigArgs),
     #[command(name = "run-sequence")]
     RunSequence(RunSequenceArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct MemifyArgs {
+    /// Dataset(s) to run memify on. If empty, runs on all datasets for the current owner.
+    #[arg(long = "datasets", short = 'd')]
+    pub datasets: Vec<String>,
+
+    /// Filter to specific node type in the graph (e.g., "Entity").
+    #[arg(long = "node-type")]
+    pub node_type: Option<String>,
+
+    /// Filter to specific node names (OR logic).
+    #[arg(long = "node-name")]
+    pub node_names: Vec<String>,
+
+    /// Triplet extraction/embedding batch size.
+    #[arg(long = "batch-size", default_value_t = 100)]
+    pub batch_size: usize,
 }
 
 #[derive(Debug, Args)]

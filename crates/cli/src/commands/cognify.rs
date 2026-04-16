@@ -201,7 +201,7 @@ pub fn run(args: CognifyArgs, cm: Arc<ComponentManager>) -> Result<(), CliError>
     })
 }
 
-async fn resolve_dataset_names(
+pub(crate) async fn resolve_dataset_names(
     database: &DatabaseConnection,
     owner_id: Uuid,
     requested_datasets: Vec<String>,
