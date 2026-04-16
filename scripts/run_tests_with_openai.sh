@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
 # Run the full test suite using the OpenAI-compatible API configured in the environment or .env file.
 #
-# Required (from environment or .env):
-#   OPENAI_URL   — base URL for the OpenAI-compatible API
-#   OPENAI_TOKEN — API token
+# The `.env` file is loaded automatically by the Rust test utilities via
+# `dotenv::dotenv()` — no manual sourcing is needed here.
 #
-# Optional (from environment or .env):
-#   OPENAI_MODEL              — model to use (default: gpt-4o-mini)
+# Required (in environment or .env — canonical Python-compatible names):
+#   LLM_API_KEY   — API key              (legacy alias: OPENAI_TOKEN)
+#   LLM_ENDPOINT  — API base URL         (legacy alias: OPENAI_URL)
+#
+# Optional:
+#   LLM_MODEL                 — model to use (default: gpt-4o-mini; alias: OPENAI_MODEL)
 #   COGNEE_TEST_MODEL_DIR     — directory for embedding model cache
 #   COGNEE_E2E_EMBED_MODEL_PATH / COGNEE_E2E_TOKENIZER_PATH — full path overrides
 
@@ -18,32 +21,31 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 # shellcheck source=lib/common.sh
 source "$SCRIPT_DIR/lib/common.sh"
 
-# Load .env if present (only sets variables not already in the environment)
-if [[ -f "$PROJECT_ROOT/.env" ]]; then
-  set -a
-  # shellcheck source=/dev/null
-  source "$PROJECT_ROOT/.env"
-  set +a
-fi
+# Resolve API key: canonical LLM_API_KEY takes precedence; fall back to OPENAI_TOKEN.
+LLM_API_KEY="${LLM_API_KEY:-${OPENAI_TOKEN:-}}"
+LLM_ENDPOINT="${LLM_ENDPOINT:-${OPENAI_URL:-}}"
+LLM_MODEL="${LLM_MODEL:-${OPENAI_MODEL:-gpt-4o-mini}}"
+export LLM_API_KEY LLM_ENDPOINT LLM_MODEL
+
+# Also export legacy aliases so tests that still reference them directly still work.
+export OPENAI_TOKEN="${LLM_API_KEY}"
+export OPENAI_URL="${LLM_ENDPOINT}"
+export OPENAI_MODEL="${LLM_MODEL}"
 
 echo -e "${BLUE}═══════════════════════════════════════════════════════════════${NC}"
 echo -e "${BLUE}  Cognee Workspace Tests${NC}"
 echo -e "${BLUE}═══════════════════════════════════════════════════════════════${NC}"
 echo
 
-if [[ -z "${OPENAI_URL:-}" ]]; then
-  echo -e "${RED}❌ OPENAI_URL is not set. Set it in the environment or .env file.${NC}"
+if [[ -z "${LLM_API_KEY:-}" ]]; then
+  echo -e "${RED}❌ LLM_API_KEY is not set. Set it in the environment or .env file.${NC}"
   exit 1
 fi
 
-if [[ -z "${OPENAI_TOKEN:-}" ]]; then
-  echo -e "${RED}❌ OPENAI_TOKEN is not set. Set it in the environment or .env file.${NC}"
+if [[ -z "${LLM_ENDPOINT:-}" ]]; then
+  echo -e "${RED}❌ LLM_ENDPOINT is not set. Set it in the environment or .env file.${NC}"
   exit 1
 fi
-
-export OPENAI_URL
-export OPENAI_TOKEN
-export OPENAI_MODEL="${OPENAI_MODEL:-gpt-4o-mini}"
 
 MODEL_DIR="${COGNEE_TEST_MODEL_DIR:-$PROJECT_ROOT/target/models}"
 setup_embedding_models "$MODEL_DIR"

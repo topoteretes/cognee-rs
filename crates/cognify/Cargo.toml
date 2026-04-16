@@ -41,5 +41,6 @@ cognee-search     = { path = "../search" }
 cognee-delete     = { path = "../delete" }
 cognee-test-utils = { path = "../test-utils" }
 cognee-llm        = { path = "../llm" }
+dotenv.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

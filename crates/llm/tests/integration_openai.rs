@@ -1,9 +1,9 @@
 //! Integration tests for OpenAI adapter with fact extraction.
 //!
 //! These tests require environment variables to be set:
-//! - OPENAI_URL: Base URL for the OpenAI-compatible API
-//! - OPENAI_TOKEN: API token (use "not-needed" for Ollama)
-//! - OPENAI_MODEL: Model name to use for integration tests
+//! - LLM_ENDPOINT (or alias OPENAI_URL): Base URL for the OpenAI-compatible API
+//! - LLM_API_KEY (or alias OPENAI_TOKEN): API token (use "not-needed" for Ollama)
+//! - LLM_MODEL (or alias OPENAI_MODEL): Model name to use for integration tests
 //!
 //! Run with: cargo test --package cognee-llm --test integration_openai
 
@@ -11,19 +11,42 @@ use cognee_llm::{GenerationOptions, Llm, LlmExt, OpenAIAdapter};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+/// Read a required env var, loading `.env` first (idempotent).
+/// Accepts canonical LLM_* names as fallbacks for legacy OPENAI_* aliases.
 fn require_env(var_name: &str) -> String {
-    std::env::var(var_name)
-        .unwrap_or_else(|_| panic!("❌ Required environment variable '{}' is not set", var_name))
+    let _ = dotenv::dotenv();
+
+    let canonical_fallback = match var_name {
+        "OPENAI_TOKEN" => Some("LLM_API_KEY"),
+        "OPENAI_URL" => Some("LLM_ENDPOINT"),
+        "OPENAI_MODEL" => Some("LLM_MODEL"),
+        _ => None,
+    };
+
+    if let Ok(v) = std::env::var(var_name)
+        && !v.is_empty()
+    {
+        return v;
+    }
+    if let Some(canonical) = canonical_fallback
+        && let Ok(v) = std::env::var(canonical)
+        && !v.is_empty()
+    {
+        return v;
+    }
+    panic!("❌ Required environment variable '{var_name}' is not set")
 }
 
-/// Helper to create OpenAI adapter from environment variables
+/// Create an OpenAI adapter from environment variables.
 fn create_adapter_from_env() -> OpenAIAdapter {
     let base_url = require_env("OPENAI_URL");
     let api_token = require_env("OPENAI_TOKEN");
-    let model = require_env("OPENAI_MODEL");
+    let model = std::env::var("LLM_MODEL")
+        .or_else(|_| std::env::var("OPENAI_MODEL"))
+        .unwrap_or_else(|_| "gpt-4o-mini".to_string());
 
     OpenAIAdapter::new(model, api_token, Some(base_url))
-        .unwrap_or_else(|e| panic!("❌ Failed to create OpenAI adapter: {}", e))
+        .unwrap_or_else(|e| panic!("❌ Failed to create OpenAI adapter: {e}"))
 }
 
 /// Test data: Multi-paragraph text for fact extraction

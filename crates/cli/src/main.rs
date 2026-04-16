@@ -9,7 +9,7 @@ use clap::Parser;
 use cli::{Cli, Commands};
 use cognee_lib::ComponentManager;
 use commands::{add, add_and_cognify, cognify, config, delete, run_sequence, search};
-use config_store::load_config;
+use config_store::load_settings;
 use error::{CliError, ExitCode};
 use tracing::error;
 use tracing_subscriber::EnvFilter;
@@ -17,8 +17,10 @@ use tracing_subscriber::EnvFilter;
 fn run() -> Result<(), CliError> {
     let cli = Cli::parse();
 
-    let config = load_config()?;
-    let cm = Arc::new(ComponentManager::new(config.settings));
+    // Load JSON config then overlay env vars (.env + shell env).
+    // Priority: defaults < JSON config < env vars.
+    let settings = load_settings()?;
+    let cm = Arc::new(ComponentManager::new(settings));
 
     match cli.command {
         Commands::Add(args) => add::run(args, Arc::clone(&cm)),

@@ -36,5 +36,6 @@ tracing.workspace = true
 cognee-litert-lm = { workspace = true, optional = true }
 
 [dev-dependencies]
+dotenv.workspace = true
 httpmock = "0.8"
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

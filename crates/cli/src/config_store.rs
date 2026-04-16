@@ -35,6 +35,17 @@ pub fn config_file_path() -> Result<PathBuf, CliError> {
     Ok(base_dir.join("cognee-rust").join("config.json"))
 }
 
+/// Load the persisted CLI config (JSON), then overlay environment variables on top.
+///
+/// Priority: `defaults < JSON config < env vars`.
+/// The `.env` file is loaded automatically inside [`Settings::overlay_from_env`].
+pub fn load_settings() -> Result<Settings, CliError> {
+    let config = load_config()?;
+    let mut settings = config.settings;
+    settings.overlay_from_env();
+    Ok(settings)
+}
+
 pub fn load_config() -> Result<ConfigDocument, CliError> {
     let path = config_file_path()?;
 

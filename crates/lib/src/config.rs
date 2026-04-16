@@ -78,6 +78,191 @@ pub struct Settings {
 }
 
 impl Settings {
+    /// Build `Settings` entirely from environment variables (and any `.env` file).
+    ///
+    /// Equivalent to Python's `LLMConfig()` / `GraphConfig()` instantiation:
+    /// starts from defaults and overlays every env var that is set.
+    /// The `.env` file in the current working directory (or any ancestor) is loaded
+    /// automatically before env vars are read — callers do not need to call
+    /// `dotenv::dotenv()` themselves.
+    pub fn load_from_env() -> Self {
+        let mut s = Self::default();
+        s.overlay_from_env();
+        s
+    }
+
+    /// Overlay environment variables on top of `self`.
+    ///
+    /// Only fields whose corresponding env var is set are modified; everything
+    /// else keeps its current value.  The `.env` file is loaded first (idempotent —
+    /// safe to call multiple times).
+    ///
+    /// Env-var naming follows the Python SDK conventions (`LLM_*`, `EMBEDDING_*`,
+    /// `GRAPH_DATABASE_*`, `VECTOR_DB_*`, `DB_*`, `COGNEE_*`).  A handful of
+    /// Rust-specific aliases (`OPENAI_TOKEN`, `OPENAI_URL`, `OPENAI_MODEL`) are
+    /// accepted as fallbacks for backward compatibility with existing test setups.
+    pub fn overlay_from_env(&mut self) {
+        // Load .env (no-op if absent or if the vars are already in the environment).
+        let _ = dotenv::dotenv();
+
+        // Helpers ----------------------------------------------------------------
+        let str_var =
+            |name: &str| -> Option<String> { std::env::var(name).ok().filter(|v| !v.is_empty()) };
+        // Try `primary` first; fall back to `alias` if primary is unset/empty.
+        let str_alias = |primary: &str, alias: &str| -> Option<String> {
+            str_var(primary).or_else(|| str_var(alias))
+        };
+
+        // -- LLM -----------------------------------------------------------------
+        if let Some(v) = str_var("LLM_PROVIDER") {
+            self.llm_provider = v;
+        }
+        if let Some(v) = str_alias("LLM_MODEL", "OPENAI_MODEL") {
+            self.llm_model = v;
+        }
+        if let Some(v) = str_alias("LLM_API_KEY", "OPENAI_TOKEN") {
+            self.llm_api_key = v;
+        }
+        if let Some(v) = str_alias("LLM_ENDPOINT", "OPENAI_URL") {
+            self.llm_endpoint = v;
+        }
+        if let Some(v) = str_var("LLM_API_VERSION") {
+            self.llm_api_version = v;
+        }
+        if let Some(v) = str_var("LLM_TEMPERATURE")
+            && let Ok(f) = v.parse::<f64>()
+        {
+            self.llm_temperature = f;
+        }
+        if let Some(v) = str_var("LLM_MAX_TOKENS")
+            && let Ok(n) = v.parse::<u32>()
+        {
+            self.llm_max_completion_tokens = n;
+        }
+        if let Some(v) = str_var("LLM_MAX_RETRIES")
+            && let Ok(n) = v.parse::<u32>()
+        {
+            self.llm_max_retries = n;
+        }
+        if let Some(v) = str_var("LLM_MAX_PARALLEL_REQUESTS")
+            && let Ok(n) = v.parse::<u32>()
+        {
+            self.llm_max_parallel_requests = n;
+        }
+
+        // -- Graph database ------------------------------------------------------
+        if let Some(v) = str_var("GRAPH_DATABASE_PROVIDER") {
+            self.graph_database_provider = v;
+        }
+        if let Some(v) = str_var("GRAPH_DATABASE_URL") {
+            self.graph_database_url = v;
+        }
+        if let Some(v) = str_var("GRAPH_DATABASE_NAME") {
+            self.graph_database_name = v;
+        }
+        if let Some(v) = str_var("GRAPH_DATABASE_USERNAME") {
+            self.graph_database_username = v;
+        }
+        if let Some(v) = str_var("GRAPH_DATABASE_PASSWORD") {
+            self.graph_database_password = v;
+        }
+        if let Some(v) = str_var("GRAPH_DATABASE_PORT")
+            && let Ok(n) = v.parse::<u16>()
+        {
+            self.graph_database_port = n;
+        }
+        if let Some(v) = str_var("GRAPH_DATABASE_KEY") {
+            self.graph_database_key = v;
+        }
+        if let Some(v) = str_var("GRAPH_FILE_PATH") {
+            self.graph_file_path = v;
+        }
+
+        // -- Vector database -----------------------------------------------------
+        if let Some(v) = str_var("VECTOR_DB_PROVIDER") {
+            self.vector_db_provider = v;
+        }
+        if let Some(v) = str_var("VECTOR_DB_URL") {
+            self.vector_db_url = v;
+        }
+        if let Some(v) = str_var("VECTOR_DB_PORT")
+            && let Ok(n) = v.parse::<u16>()
+        {
+            self.vector_db_port = n;
+        }
+        if let Some(v) = str_var("VECTOR_DB_NAME") {
+            self.vector_db_name = v;
+        }
+        if let Some(v) = str_var("VECTOR_DB_KEY") {
+            self.vector_db_key = v;
+        }
+
+        // -- Relational database -------------------------------------------------
+        if let Some(v) = str_var("DB_PROVIDER") {
+            self.db_provider = v;
+        }
+        if let Some(v) = str_var("DB_HOST") {
+            self.db_host = v;
+        }
+        if let Some(v) = str_var("DB_PORT")
+            && let Ok(n) = v.parse::<u16>()
+        {
+            self.db_port = n;
+        }
+        if let Some(v) = str_var("DB_NAME") {
+            self.db_name = v;
+        }
+        if let Some(v) = str_var("DB_USERNAME") {
+            self.db_username = v;
+        }
+        if let Some(v) = str_var("DB_PASSWORD") {
+            self.db_password = v;
+        }
+        if let Some(v) = str_var("DATABASE_URL") {
+            self.relational_db_url = v;
+        }
+
+        // -- Embedding -----------------------------------------------------------
+        if let Some(v) = str_var("EMBEDDING_MODEL") {
+            self.embedding_model_name = v;
+        }
+        if let Some(v) = str_var("EMBEDDING_DIMENSIONS")
+            && let Ok(n) = v.parse::<u32>()
+        {
+            self.embedding_dimensions = n;
+        }
+        if let Some(v) = str_var("EMBEDDING_BATCH_SIZE")
+            && let Ok(n) = v.parse::<u32>()
+        {
+            self.embedding_batch_size = n;
+        }
+        if let Some(v) = str_var("EMBEDDING_MAX_SEQUENCE_LENGTH")
+            && let Ok(n) = v.parse::<u32>()
+        {
+            self.embedding_max_sequence_length = n;
+        }
+        if let Some(v) = str_alias("EMBEDDING_MODEL_PATH", "COGNEE_E2E_EMBED_MODEL_PATH") {
+            self.embedding_model_path = v;
+        }
+        if let Some(v) = str_alias("EMBEDDING_TOKENIZER_PATH", "COGNEE_E2E_TOKENIZER_PATH") {
+            self.embedding_tokenizer_path = v;
+        }
+
+        // -- Base / system -------------------------------------------------------
+        if let Some(v) = str_var("COGNEE_SYSTEM_ROOT_DIRECTORY") {
+            self.system_root_directory = v;
+        }
+        if let Some(v) = str_var("COGNEE_DATA_ROOT_DIRECTORY") {
+            self.data_root_directory = v;
+        }
+        if let Some(v) = str_var("COGNEE_DEFAULT_DATASET_NAME") {
+            self.default_dataset_name = v;
+        }
+        if let Some(v) = str_var("COGNEE_DEFAULT_USER_ID") {
+            self.default_user_id = v;
+        }
+    }
+
     /// Returns the effective relational DB connection URL.
     ///
     /// When `db_provider` is `"postgres"`, builds

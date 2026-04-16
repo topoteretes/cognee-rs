@@ -81,6 +81,7 @@ cognee-search = { path = "../search" }
 cognee-storage = { path = "../storage" }
 cognee-vector = { path = "../vector" }
 async-trait.workspace = true
+dotenv.workspace = true
 thiserror.workspace = true
 serde.workspace = true
 serde_json.workspace = true
