@@ -75,6 +75,16 @@ pub struct Settings {
     pub embedding_dimensions: u32,
     pub embedding_max_sequence_length: u32,
     pub embedding_batch_size: u32,
+
+    pub ontology_file_path: String,
+    /// Ontology resolver backend. Currently always resolved to `RdfLibOntologyResolver`
+    /// when `ontology_file_path` is set — this field is reserved for future multi-resolver
+    /// support (e.g. SPARQL endpoint). Only `"rdflib"` is implemented.
+    pub ontology_resolver: String,
+    /// Fuzzy matching strategy for entity name resolution. Currently always resolved to
+    /// `FuzzyMatchingStrategy` (Ratcliff/Obershelp gestalt) — this field is reserved for
+    /// future strategy selection. Only `"fuzzy"` is implemented.
+    pub ontology_matching_strategy: String,
 }
 
 impl Settings {
@@ -261,6 +271,21 @@ impl Settings {
         if let Some(v) = str_var("COGNEE_DEFAULT_USER_ID") {
             self.default_user_id = v;
         }
+
+        // -- Ontology ------------------------------------------------------------
+        // NOTE: ontology_resolver and ontology_matching_strategy are stored for
+        // future multi-resolver / multi-strategy support. Currently the CLI always
+        // uses RdfLibOntologyResolver + FuzzyMatchingStrategy when ontology_file_path
+        // is set; these two fields have no runtime effect yet.
+        if let Some(v) = str_var("ONTOLOGY_FILE_PATH") {
+            self.ontology_file_path = v;
+        }
+        if let Some(v) = str_var("ONTOLOGY_RESOLVER") {
+            self.ontology_resolver = v;
+        }
+        if let Some(v) = str_var("ONTOLOGY_MATCHING_STRATEGY") {
+            self.ontology_matching_strategy = v;
+        }
     }
 
     /// Returns the effective relational DB connection URL.
@@ -347,6 +372,71 @@ impl Default for Settings {
             embedding_dimensions: 384,
             embedding_max_sequence_length: 512,
             embedding_batch_size: 32,
+
+            ontology_file_path: String::new(),
+            ontology_resolver: "rdflib".to_string(),
+            ontology_matching_strategy: "fuzzy".to_string(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Each test sets env vars and must clean up after itself.  `serial` prevents
+    // parallel tests from seeing each other's env mutations.
+
+    #[test]
+    #[serial_test::serial]
+    fn overlay_picks_up_ontology_file_path() {
+        // SAFETY: test is serial — no other thread reads/writes env concurrently.
+        unsafe { std::env::set_var("ONTOLOGY_FILE_PATH", "/tmp/test.owl") };
+        let mut s = Settings::default();
+        s.overlay_from_env();
+        unsafe { std::env::remove_var("ONTOLOGY_FILE_PATH") };
+
+        assert_eq!(s.ontology_file_path, "/tmp/test.owl");
+        // resolver / strategy should stay at defaults when not set
+        assert_eq!(s.ontology_resolver, "rdflib");
+        assert_eq!(s.ontology_matching_strategy, "fuzzy");
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn overlay_picks_up_ontology_resolver() {
+        // SAFETY: test is serial — no other thread reads/writes env concurrently.
+        unsafe { std::env::set_var("ONTOLOGY_RESOLVER", "custom") };
+        let mut s = Settings::default();
+        s.overlay_from_env();
+        unsafe { std::env::remove_var("ONTOLOGY_RESOLVER") };
+
+        assert_eq!(s.ontology_resolver, "custom");
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn overlay_picks_up_ontology_matching_strategy() {
+        // SAFETY: test is serial — no other thread reads/writes env concurrently.
+        unsafe { std::env::set_var("ONTOLOGY_MATCHING_STRATEGY", "exact") };
+        let mut s = Settings::default();
+        s.overlay_from_env();
+        unsafe { std::env::remove_var("ONTOLOGY_MATCHING_STRATEGY") };
+
+        assert_eq!(s.ontology_matching_strategy, "exact");
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn overlay_ignores_empty_ontology_file_path() {
+        // SAFETY: test is serial — no other thread reads/writes env concurrently.
+        unsafe { std::env::set_var("ONTOLOGY_FILE_PATH", "") };
+        let mut s = Settings::default();
+        s.overlay_from_env();
+        unsafe { std::env::remove_var("ONTOLOGY_FILE_PATH") };
+
+        // Empty string must not override the default (the str_var helper filters
+        // out empty values, so ontology_file_path remains its default empty string).
+        assert_eq!(s.ontology_file_path, "");
     }
 }

@@ -24,6 +24,7 @@ pub fn run(args: CognifyArgs, cm: Arc<ComponentManager>) -> Result<(), CliError>
             settings.default_user_id
         ))
     })?;
+    let settings_ontology_path = settings.ontology_file_path.clone();
 
     if args.background {
         warn!(
@@ -78,16 +79,21 @@ pub fn run(args: CognifyArgs, cm: Arc<ComponentManager>) -> Result<(), CliError>
             .await
             .map_err(|e| CliError::Runtime(format!("{e}")))?;
 
-        let ontology_resolver: Arc<dyn OntologyResolver> =
-            if let Some(path) = &args.ontology_file {
-                Arc::new(
-                    RdfLibOntologyResolver::new(path.as_str()).map_err(|error| {
-                        CliError::Runtime(format!("Ontology initialization failed: {error}"))
-                    })?,
-                )
+        let ontology_path = args.ontology_file.as_deref().or_else(|| {
+            if settings_ontology_path.is_empty() {
+                None
             } else {
-                Arc::new(NoOpOntologyResolver::new())
-            };
+                Some(settings_ontology_path.as_str())
+            }
+        });
+        let ontology_resolver: Arc<dyn OntologyResolver> = match ontology_path {
+            Some(path) => Arc::new(
+                RdfLibOntologyResolver::new(path).map_err(|error| {
+                    CliError::Runtime(format!("Ontology initialization failed: {error}"))
+                })?,
+            ),
+            None => Arc::new(NoOpOntologyResolver::new()),
+        };
 
         let chunk_strategy = match cm.settings().chunk_strategy.to_uppercase().as_str() {
             "RECURSIVE" => ChunkStrategy::Recursive,

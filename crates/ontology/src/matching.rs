@@ -3,7 +3,49 @@
 //! Provides fuzzy string matching to find ontology entities that
 //! closely match LLM-extracted entity names.
 
-use strsim::jaro_winkler;
+/// Recursive Ratcliff/Obershelp matching-block count.
+///
+/// Counts the total number of matched characters by finding the longest common
+/// substring recursively — matches Python's `difflib.SequenceMatcher` internals
+/// for ASCII input (URI fragment names).
+fn count_matching_chars(a: &[u8], b: &[u8]) -> usize {
+    if a.is_empty() || b.is_empty() {
+        return 0;
+    }
+    let (mut best_ai, mut best_bi, mut best_len) = (0usize, 0usize, 0usize);
+    for i in 0..a.len() {
+        for j in 0..b.len() {
+            let mut k = 0usize;
+            while i + k < a.len() && j + k < b.len() && a[i + k] == b[j + k] {
+                k += 1;
+            }
+            if k > best_len {
+                best_ai = i;
+                best_bi = j;
+                best_len = k;
+            }
+        }
+    }
+    if best_len == 0 {
+        return 0;
+    }
+    count_matching_chars(&a[..best_ai], &b[..best_bi])
+        + best_len
+        + count_matching_chars(&a[best_ai + best_len..], &b[best_bi + best_len..])
+}
+
+/// Gestalt string similarity: `2.0 * M / T`.
+///
+/// `M` = matched characters from [`count_matching_chars`], `T` = total characters
+/// in both strings. Matches Python `difflib.SequenceMatcher.ratio()`, which is
+/// the algorithm underlying `difflib.get_close_matches()`.
+fn gestalt_ratio(a: &str, b: &str) -> f64 {
+    let total = a.len() + b.len();
+    if total == 0 {
+        return 1.0;
+    }
+    2.0 * count_matching_chars(a.as_bytes(), b.as_bytes()) as f64 / total as f64
+}
 
 /// Strategy for matching entity names against ontology.
 ///
@@ -16,15 +58,17 @@ pub trait MatchingStrategy: Send + Sync {
     fn find_match(&self, query: &str, candidates: &[&str]) -> Option<String>;
 }
 
-/// Fuzzy matching strategy using Jaro-Winkler similarity.
+/// Fuzzy matching strategy using Ratcliff/Obershelp (gestalt) similarity.
 ///
-/// Matches Python's `difflib.get_close_matches()` behavior with
-/// a configurable similarity threshold (default 0.8).
+/// Matches Python's `difflib.get_close_matches()` behavior: uses
+/// `SequenceMatcher.ratio()` — `2.0 * M / T` where M is the total matched
+/// characters via recursive longest-common-substring and T is total characters
+/// in both strings — with a configurable similarity threshold (default 0.8).
 ///
 /// # Algorithm
 ///
 /// 1. Check for exact match first (case-insensitive)
-/// 2. Compute Jaro-Winkler similarity for all candidates
+/// 2. Compute gestalt ratio for all candidates
 /// 3. Filter by cutoff threshold
 /// 4. Return candidate with highest similarity score
 ///
@@ -92,11 +136,11 @@ impl MatchingStrategy for FuzzyMatchingStrategy {
             }
         }
 
-        // Fuzzy match using Jaro-Winkler similarity
+        // Fuzzy match using Ratcliff/Obershelp (gestalt) similarity
         let mut best_match: Option<(&str, f64)> = None;
 
         for candidate in candidates {
-            let similarity = jaro_winkler(&query_lower, &candidate.to_lowercase());
+            let similarity = gestalt_ratio(&query_lower, &candidate.to_lowercase());
 
             if similarity >= self.cutoff {
                 match best_match {

@@ -18,9 +18,6 @@ sophia_turtle = { workspace = true }
 sophia_xml = { workspace = true }
 sophia_jsonld = { workspace = true }
 
-# Fuzzy string matching for entity resolution
-strsim = { workspace = true }
-
 [dev-dependencies]
 tokio = { workspace = true }
 env_logger = { workspace = true }

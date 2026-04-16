@@ -28,6 +28,7 @@ pub fn run(args: AddAndCognifyArgs, cm: Arc<ComponentManager>) -> Result<(), Cli
         ))
     })?;
     let summarization_model = cm.settings().summarization_model.clone();
+    let settings_ontology_path = cm.settings().ontology_file_path.clone();
 
     match args.chunker {
         ChunkerArg::Text => {}
@@ -112,12 +113,20 @@ pub fn run(args: AddAndCognifyArgs, cm: Arc<ComponentManager>) -> Result<(), Cli
             .await
             .map_err(|e| CliError::Runtime(format!("{e}")))?;
 
-        let ontology_resolver: Arc<dyn OntologyResolver> = if let Some(path) = &args.ontology_file {
-            Arc::new(RdfLibOntologyResolver::new(path.as_str()).map_err(|error| {
-                CliError::Runtime(format!("Ontology initialization failed: {error}"))
-            })?)
-        } else {
-            Arc::new(NoOpOntologyResolver::new())
+        let ontology_path = args.ontology_file.as_deref().or_else(|| {
+            if settings_ontology_path.is_empty() {
+                None
+            } else {
+                Some(settings_ontology_path.as_str())
+            }
+        });
+        let ontology_resolver: Arc<dyn OntologyResolver> = match ontology_path {
+            Some(path) => Arc::new(
+                RdfLibOntologyResolver::new(path).map_err(|error| {
+                    CliError::Runtime(format!("Ontology initialization failed: {error}"))
+                })?,
+            ),
+            None => Arc::new(NoOpOntologyResolver::new()),
         };
 
         let chunk_strategy = match cm.settings().chunk_strategy.to_uppercase().as_str() {
