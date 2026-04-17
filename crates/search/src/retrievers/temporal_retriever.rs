@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -28,20 +29,6 @@ const DEFAULT_WIDE_SEARCH_TOP_K: usize = 100;
 const TEMPORAL_DATA_TYPE: &str = "Event";
 const TEMPORAL_FIELD_NAME: &str = "name";
 const DEFAULT_TEMPORAL_INTERVAL_PROMPT: &str = "You are tasked with identifying relevant time periods where the answer to a given query should be searched.\nCurrent date is:  `{time_now}`. Determine relevant period(s) and return structured intervals.\n\nExtraction rules:\n\n1. Query without specific timestamp: use the time period with starts_at set to None and ends_at set to now.\n2. Explicit time intervals: If the query specifies a range (e.g., from 2010 to 2020, between January and March 2023), extract both start and end dates. Always assign the earlier date to starts_at and the later date to ends_at.\n3. Single timestamp: If the query refers to one specific moment (e.g., in 2015, on March 5, 2022), set starts_at and ends_at to that same timestamp.\n4. Open-ended time references: For phrases such as \"before X\" or \"after X\", represent the unspecified side as None. For example: before 2009 → starts_at: None, ends_at: 2009; after 2009 → starts_at: 2009, ends_at: None.\n5. Current-time references (\"now\", \"current\", \"today\"): If the query explicitly refers to the present, set both starts_at and ends_at to now (the ingestion timestamp).\n6. \"Who is\" and \"Who was\" questions: These imply a general identity or biographical inquiry without a specific temporal scope. Set both starts_at and ends_at to None.\n7. Ordering rule: Always ensure the earlier date is assigned to starts_at and the later date to ends_at.\n8. No temporal information: If no valid or inferable time reference is found, set both starts_at and ends_at to None.";
-
-const TEMPORAL_TIME_KEYS: [&str; 11] = [
-    "timestamp",
-    "event_time",
-    "time",
-    "date",
-    "datetime",
-    "occurred_at",
-    "start_time",
-    "start_date",
-    "end_time",
-    "end_date",
-    "created_at",
-];
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 struct QueryInterval {
@@ -357,20 +344,57 @@ impl SearchRetriever for TemporalRetriever {
             return self.get_fallback_context(query, params).await;
         };
 
-        let (nodes, _) = self.graph_db.get_graph_data().await?;
+        // Fix 1: Use typed query to find Timestamp nodes instead of full graph scan.
+        let (candidate_timestamps, _) = self
+            .graph_db
+            .get_filtered_graph_data(&HashMap::from([(
+                Cow::Borrowed("type"),
+                vec![json!("Timestamp")],
+            )]))
+            .await?;
+
+        let interval_from_ms = interval.start.map(|dt| dt.timestamp_millis());
+        let interval_to_ms = interval.end.map(|dt| dt.timestamp_millis());
+
+        let matching_ts_ids: Vec<String> = candidate_timestamps
+            .into_iter()
+            .filter_map(|(id, props)| {
+                let time_at = props.get("time_at")?.as_i64()?;
+                is_within_interval_ms(time_at, interval_from_ms, interval_to_ms).then_some(id)
+            })
+            .collect();
+
+        // Fix 2: Collect Event nodes reachable within 1-2 hops from matching Timestamps.
         let mut event_node_ids = HashSet::new();
-
-        for (node_id, node_data) in &nodes {
-            if !is_event_node(node_data) {
-                continue;
-            }
-
-            let Some(event_time) = extract_event_time(node_data) else {
-                continue;
-            };
-
-            if is_within_interval(event_time, &interval) {
-                event_node_ids.insert(node_id.clone());
+        for ts_id in &matching_ts_ids {
+            for node_props in self.graph_db.get_neighbors(ts_id).await? {
+                let node_type = node_props.get("type").and_then(|v| v.as_str());
+                match node_type {
+                    Some("Event") => {
+                        if let Some(id) = node_props.get("id").and_then(|v| v.as_str()) {
+                            event_node_ids.insert(id.to_string());
+                        }
+                    }
+                    Some("Interval") => {
+                        // Hop through Interval node to reach Event nodes (hop 2).
+                        if let Some(interval_id) = node_props.get("id").and_then(|v| v.as_str()) {
+                            for inner_props in
+                                self.graph_db.get_neighbors(interval_id).await?
+                            {
+                                if inner_props.get("type").and_then(|v| v.as_str())
+                                    == Some("Event")
+                                {
+                                    if let Some(id) =
+                                        inner_props.get("id").and_then(|v| v.as_str())
+                                    {
+                                        event_node_ids.insert(id.to_string());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
             }
         }
 
@@ -383,7 +407,18 @@ impl SearchRetriever for TemporalRetriever {
             .rank_temporal_events(query, &event_node_ids, &ranked_edges)
             .await?;
 
-        let nodes_by_id: HashMap<String, NodeData> = nodes.into_iter().collect();
+        // Fetch Event nodes by ID for building the context payload.
+        let event_id_list: Vec<String> = ranked_events
+            .iter()
+            .take(params.top_k_or(self.top_k))
+            .map(|(id, _)| id.clone())
+            .collect();
+        let event_nodes = self.graph_db.get_nodes(&event_id_list).await?;
+        let nodes_by_id: HashMap<String, NodeData> = event_id_list
+            .into_iter()
+            .zip(event_nodes)
+            .collect();
+
         let mut temporal_context = Vec::new();
 
         for (event_id, score) in ranked_events.into_iter().take(params.top_k_or(self.top_k)) {
@@ -398,7 +433,6 @@ impl SearchRetriever for TemporalRetriever {
                     "event_id": event_id,
                     "event_name": extract_node_name(event_node),
                     "event_description": extract_node_description(event_node),
-                    "event_time": extract_event_time(event_node).map(|time| time.to_rfc3339()),
                 }),
             });
         }
@@ -480,62 +514,10 @@ fn extract_node_description(node_data: &NodeData) -> String {
         .to_string()
 }
 
-fn is_event_node(node_data: &NodeData) -> bool {
-    let type_keys = ["type", "node_type", "kind", "label", "labels", "class"];
-
-    let matches_event_marker = type_keys.iter().any(|key| {
-        node_data
-            .get(*key)
-            .map(value_contains_event_marker)
-            .unwrap_or(false)
-    });
-
-    matches_event_marker || extract_event_time(node_data).is_some()
-}
-
-fn value_contains_event_marker(value: &Value) -> bool {
-    match value {
-        Value::String(text) => text.to_lowercase().contains("event"),
-        Value::Array(values) => values.iter().any(value_contains_event_marker),
-        _ => false,
-    }
-}
-
-fn extract_event_time(node_data: &NodeData) -> Option<DateTime<Utc>> {
-    for key in TEMPORAL_TIME_KEYS {
-        if let Some(value) = node_data.get(key)
-            && let Some(parsed) = parse_temporal_value(value)
-        {
-            return Some(parsed);
-        }
-    }
-
-    for (key, value) in node_data {
-        let key_lower = key.to_lowercase();
-        if (key_lower.contains("time") || key_lower.contains("date"))
-            && let Some(parsed) = parse_temporal_value(value)
-        {
-            return Some(parsed);
-        }
-    }
-
-    None
-}
-
-fn parse_temporal_value(value: &Value) -> Option<DateTime<Utc>> {
-    match value {
-        Value::String(text) => parse_bound(text, false),
-        Value::Number(number) => {
-            let raw_value = number.as_i64()?;
-
-            if raw_value > 1_000_000_000_000 {
-                Utc.timestamp_millis_opt(raw_value).single()
-            } else {
-                Utc.timestamp_opt(raw_value, 0).single()
-            }
-        }
-        _ => None,
-    }
+// Fix 3: millisecond-based interval check for Timestamp nodes.
+fn is_within_interval_ms(time_at_ms: i64, from_ms: Option<i64>, to_ms: Option<i64>) -> bool {
+    from_ms.map_or(true, |from| time_at_ms >= from)
+        && to_ms.map_or(true, |to| time_at_ms <= to)
 }
 
 fn parse_bound(input: &str, is_end: bool) -> Option<DateTime<Utc>> {
@@ -599,22 +581,6 @@ fn to_datetime(date: NaiveDate, is_end: bool) -> Option<DateTime<Utc>> {
     };
 
     Some(Utc.from_utc_datetime(&naive_dt))
-}
-
-fn is_within_interval(event_time: DateTime<Utc>, interval: &ParsedInterval) -> bool {
-    if let Some(start) = interval.start
-        && event_time < start
-    {
-        return false;
-    }
-
-    if let Some(end) = interval.end
-        && event_time > end
-    {
-        return false;
-    }
-
-    true
 }
 
 #[cfg(test)]
@@ -746,6 +712,8 @@ mod tests {
     struct TestGraphDb {
         nodes: Vec<GraphNode>,
         edges: Vec<EdgeData>,
+        /// Maps node_id -> list of neighbor NodeData returned by get_neighbors.
+        neighbors: HashMap<String, Vec<NodeData>>,
     }
 
     #[async_trait]
@@ -794,8 +762,16 @@ mod tests {
             Ok(None)
         }
 
-        async fn get_nodes(&self, _node_ids: &[String]) -> GraphDBResult<Vec<NodeData>> {
-            Ok(vec![])
+        async fn get_nodes(&self, node_ids: &[String]) -> GraphDBResult<Vec<NodeData>> {
+            let nodes_map: HashMap<&str, &NodeData> = self
+                .nodes
+                .iter()
+                .map(|(id, data)| (id.as_str(), data))
+                .collect();
+            Ok(node_ids
+                .iter()
+                .filter_map(|id| nodes_map.get(id.as_str()).map(|d| (*d).clone()))
+                .collect())
         }
 
         async fn has_edge(
@@ -829,8 +805,12 @@ mod tests {
             Ok(vec![])
         }
 
-        async fn get_neighbors(&self, _node_id: &str) -> GraphDBResult<Vec<NodeData>> {
-            Ok(vec![])
+        async fn get_neighbors(&self, node_id: &str) -> GraphDBResult<Vec<NodeData>> {
+            Ok(self
+                .neighbors
+                .get(node_id)
+                .cloned()
+                .unwrap_or_default())
         }
 
         async fn get_connections(
@@ -920,24 +900,45 @@ mod tests {
         }
     }
 
-    fn event_node(id: &str, name: &str, date: &str) -> GraphNode {
+    fn event_node_data(id: &str, name: &str) -> NodeData {
+        HashMap::from([
+            (Cow::Borrowed("id"), json!(id)),
+            (Cow::Borrowed("name"), json!(name)),
+            (Cow::Borrowed("type"), json!("Event")),
+            (
+                Cow::Borrowed("description"),
+                json!(format!("Description for {name}")),
+            ),
+        ])
+    }
+
+    fn timestamp_node(id: &str, time_at_ms: i64) -> GraphNode {
         (
             id.to_string(),
             HashMap::from([
                 (Cow::Borrowed("id"), json!(id)),
-                (Cow::Borrowed("name"), json!(name)),
-                (Cow::Borrowed("type"), json!("Event")),
-                (Cow::Borrowed("date"), json!(date)),
-                (
-                    Cow::Borrowed("description"),
-                    json!(format!("Description for {name}")),
-                ),
+                (Cow::Borrowed("type"), json!("Timestamp")),
+                (Cow::Borrowed("time_at"), json!(time_at_ms)),
             ]),
         )
     }
 
+    fn event_graph_node(id: &str, name: &str) -> GraphNode {
+        (id.to_string(), event_node_data(id, name))
+    }
+
     #[tokio::test]
     async fn returns_temporal_event_context_when_interval_matches() {
+        // 2024-03-15 00:00:00 UTC in milliseconds
+        let launch_event_ms: i64 = 1710460800000;
+        // 2020-01-10 00:00:00 UTC in milliseconds
+        let old_event_ms: i64 = 1578614400000;
+
+        let ts_in_2024 = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+        let ts_in_2020 = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
+        let event_launch = "11111111-1111-1111-1111-111111111111";
+        let event_old = "22222222-2222-2222-2222-222222222222";
+
         let vector_db = Arc::new(TestVectorDb {
             collections: HashMap::from([
                 (
@@ -951,7 +952,7 @@ mod tests {
                 (
                     TestVectorDb::key("Event", "name"),
                     vec![SearchResult {
-                        id: uuid::Uuid::parse_str("11111111-1111-1111-1111-111111111111").unwrap(),
+                        id: uuid::Uuid::parse_str(event_launch).unwrap(),
                         score: 0.95,
                         metadata: HashMap::new(),
                     }],
@@ -962,31 +963,37 @@ mod tests {
         let embedding_engine = Arc::new(TestEmbeddingEngine);
         let graph_db = Arc::new(TestGraphDb {
             nodes: vec![
-                event_node(
-                    "11111111-1111-1111-1111-111111111111",
-                    "Launch event",
-                    "2024-03-15",
-                ),
-                event_node(
-                    "22222222-2222-2222-2222-222222222222",
-                    "Old event",
-                    "2020-01-10",
-                ),
+                timestamp_node(ts_in_2024, launch_event_ms),
+                timestamp_node(ts_in_2020, old_event_ms),
+                event_graph_node(event_launch, "Launch event"),
+                event_graph_node(event_old, "Old event"),
             ],
             edges: vec![
                 (
-                    "11111111-1111-1111-1111-111111111111".to_string(),
-                    "entity-a".to_string(),
-                    "relates_to".to_string(),
+                    event_launch.to_string(),
+                    ts_in_2024.to_string(),
+                    "at".to_string(),
                     HashMap::new(),
                 ),
                 (
-                    "22222222-2222-2222-2222-222222222222".to_string(),
-                    "entity-b".to_string(),
-                    "relates_to".to_string(),
+                    event_old.to_string(),
+                    ts_in_2020.to_string(),
+                    "at".to_string(),
                     HashMap::new(),
                 ),
             ],
+            neighbors: HashMap::from([
+                // The 2024 Timestamp node has the Launch event as a neighbor.
+                (
+                    ts_in_2024.to_string(),
+                    vec![event_node_data(event_launch, "Launch event")],
+                ),
+                // The 2020 Timestamp node has the Old event as a neighbor.
+                (
+                    ts_in_2020.to_string(),
+                    vec![event_node_data(event_old, "Old event")],
+                ),
+            ]),
         });
         let llm = Arc::new(TestLlm {
             completion_response: "temporal answer".to_string(),
@@ -1068,6 +1075,7 @@ mod tests {
                 "connected_to".to_string(),
                 HashMap::new(),
             )],
+            neighbors: HashMap::new(),
         });
         let llm = Arc::new(TestLlm {
             completion_response: "fallback answer".to_string(),
