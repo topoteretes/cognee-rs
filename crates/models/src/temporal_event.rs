@@ -8,11 +8,11 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct CognifyTimestamp {
     pub year: u16,
-    pub month: u8,    // 1-12; unknown → 1
-    pub day: u8,      // 1-31; unknown → 1
-    pub hour: u8,     // 0-23; unknown → 0
-    pub minute: u8,   // 0-59; unknown → 0
-    pub second: u8,   // 0-59; unknown → 0
+    pub month: u8,  // 1-12; unknown → 1
+    pub day: u8,    // 1-31; unknown → 1
+    pub hour: u8,   // 0-23; unknown → 0
+    pub minute: u8, // 0-59; unknown → 0
+    pub second: u8, // 0-59; unknown → 0
     /// Milliseconds since Unix epoch (UTC). Computed from the date/time fields.
     pub time_at: i64,
     /// Formatted string "YYYY-MM-DD HH:MM:SS" for human readability.
@@ -66,7 +66,7 @@ fn default_day() -> u8 {
 
 /// LLM output schema for a timestamp. Mirrors Python task model Timestamp.
 /// All fields except year default to 1/0; the extractor computes time_at.
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct RawExtractedTimestamp {
     pub year: u16,
     #[serde(default = "default_month")]

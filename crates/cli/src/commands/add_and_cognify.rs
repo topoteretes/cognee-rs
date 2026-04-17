@@ -113,7 +113,7 @@ pub fn run(args: AddAndCognifyArgs, cm: Arc<ComponentManager>) -> Result<(), Cli
             .await
             .map_err(|e| CliError::Runtime(format!("{e}")))?;
 
-        let ontology_path = args.ontology_file.as_deref().or_else(|| {
+        let ontology_path = args.ontology_file.as_deref().or({
             if settings_ontology_path.is_empty() {
                 None
             } else {
