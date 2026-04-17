@@ -383,12 +383,10 @@ impl SearchRetriever for TemporalRetriever {
                             {
                                 if inner_props.get("type").and_then(|v| v.as_str())
                                     == Some("Event")
-                                {
-                                    if let Some(id) =
+                                    && let Some(id) =
                                         inner_props.get("id").and_then(|v| v.as_str())
-                                    {
-                                        event_node_ids.insert(id.to_string());
-                                    }
+                                {
+                                    event_node_ids.insert(id.to_string());
                                 }
                             }
                         }
@@ -516,8 +514,8 @@ fn extract_node_description(node_data: &NodeData) -> String {
 
 // Fix 3: millisecond-based interval check for Timestamp nodes.
 fn is_within_interval_ms(time_at_ms: i64, from_ms: Option<i64>, to_ms: Option<i64>) -> bool {
-    from_ms.map_or(true, |from| time_at_ms >= from)
-        && to_ms.map_or(true, |to| time_at_ms <= to)
+    from_ms.is_none_or(|from| time_at_ms >= from)
+        && to_ms.is_none_or(|to| time_at_ms <= to)
 }
 
 fn parse_bound(input: &str, is_end: bool) -> Option<DateTime<Utc>> {
