@@ -589,6 +589,7 @@ mod tests {
     };
     use cognee_vector::{SearchResult, VectorDB, VectorDBResult, VectorPoint};
 
+    use chrono::{TimeZone, Utc};
     use serde_json::{Value, json};
     use uuid::Uuid;
 
@@ -1318,6 +1319,149 @@ mod tests {
                 .get("relationship")
                 .and_then(Value::as_str),
             Some("connected_to")
+        );
+    }
+
+    fn build_retriever_with_llm(llm: TestLlm) -> TemporalRetriever {
+        TemporalRetriever::new(
+            Arc::new(TestVectorDb {
+                collections: HashMap::new(),
+            }),
+            Arc::new(TestEmbeddingEngine),
+            Arc::new(TestGraphDb {
+                nodes: vec![],
+                edges: vec![],
+                neighbors: HashMap::new(),
+            }),
+            Arc::new(llm),
+            Some(5),
+            Some(10),
+            Some(0.0),
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+    }
+
+    #[tokio::test]
+    async fn extract_interval_returns_parsed_interval_from_llm() {
+        let llm = TestLlm {
+            completion_response: String::new(),
+            interval_response: Some(QueryInterval {
+                starts_at: Some("2024-01-01".into()),
+                ends_at: Some("2024-12-31".into()),
+            }),
+            fail_structured_output: false,
+            last_messages: Mutex::new(vec![]),
+        };
+        let retriever = build_retriever_with_llm(llm);
+
+        let result = retriever
+            .extract_interval("What happened in 2024?")
+            .await
+            .unwrap();
+
+        let parsed = result.expect("should return Some(ParsedInterval)");
+        assert_eq!(
+            parsed.start,
+            Some(Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap())
+        );
+        assert_eq!(
+            parsed.end,
+            Some(Utc.with_ymd_and_hms(2024, 12, 31, 23, 59, 59).unwrap())
+        );
+    }
+
+    #[tokio::test]
+    async fn extract_interval_returns_none_when_llm_returns_none_none() {
+        let llm = TestLlm {
+            completion_response: String::new(),
+            interval_response: Some(QueryInterval {
+                starts_at: None,
+                ends_at: None,
+            }),
+            fail_structured_output: false,
+            last_messages: Mutex::new(vec![]),
+        };
+        let retriever = build_retriever_with_llm(llm);
+
+        let result = retriever
+            .extract_interval("Who is Einstein?")
+            .await
+            .unwrap();
+
+        assert!(
+            result.is_none(),
+            "both fields None means no interval detected"
+        );
+    }
+
+    #[tokio::test]
+    async fn extract_interval_returns_none_when_llm_fails() {
+        let llm = TestLlm {
+            completion_response: String::new(),
+            interval_response: None,
+            fail_structured_output: true,
+            last_messages: Mutex::new(vec![]),
+        };
+        let retriever = build_retriever_with_llm(llm);
+
+        let result = retriever.extract_interval("What happened?").await.unwrap();
+
+        assert!(result.is_none(), "error should be swallowed gracefully");
+    }
+
+    #[tokio::test]
+    async fn extract_interval_with_only_starts_at() {
+        let llm = TestLlm {
+            completion_response: String::new(),
+            interval_response: Some(QueryInterval {
+                starts_at: Some("2024-01-01".into()),
+                ends_at: None,
+            }),
+            fail_structured_output: false,
+            last_messages: Mutex::new(vec![]),
+        };
+        let retriever = build_retriever_with_llm(llm);
+
+        let result = retriever
+            .extract_interval("What happened after 2024?")
+            .await
+            .unwrap();
+
+        let parsed = result.expect("should return Some(ParsedInterval)");
+        assert_eq!(
+            parsed.start,
+            Some(Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap())
+        );
+        assert_eq!(parsed.end, None);
+    }
+
+    #[tokio::test]
+    async fn extract_interval_with_only_ends_at() {
+        let llm = TestLlm {
+            completion_response: String::new(),
+            interval_response: Some(QueryInterval {
+                starts_at: None,
+                ends_at: Some("2024-12-31".into()),
+            }),
+            fail_structured_output: false,
+            last_messages: Mutex::new(vec![]),
+        };
+        let retriever = build_retriever_with_llm(llm);
+
+        let result = retriever
+            .extract_interval("What happened before 2025?")
+            .await
+            .unwrap();
+
+        let parsed = result.expect("should return Some(ParsedInterval)");
+        assert_eq!(parsed.start, None);
+        assert_eq!(
+            parsed.end,
+            Some(Utc.with_ymd_and_hms(2024, 12, 31, 23, 59, 59).unwrap())
         );
     }
 }
