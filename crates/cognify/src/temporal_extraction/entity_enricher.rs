@@ -1,10 +1,10 @@
-use std::collections::HashMap;
-use std::sync::Arc;
+use cognee_llm::{GenerationOptions, Llm, LlmExt};
+use cognee_models::{EventAttribute, TemporalEvent};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json;
-use cognee_llm::{GenerationOptions, Llm, LlmExt};
-use cognee_models::{EventAttribute, TemporalEvent};
+use std::collections::HashMap;
+use std::sync::Arc;
 
 use crate::CognifyError;
 
@@ -45,10 +45,12 @@ impl TemporalEntityEnricher {
         // Build the user prompt: serialise event name + description as the input list.
         let input: Vec<serde_json::Value> = events
             .iter()
-            .map(|e| serde_json::json!({
-                "event_name": e.name,
-                "description": e.description,
-            }))
+            .map(|e| {
+                serde_json::json!({
+                    "event_name": e.name,
+                    "description": e.description,
+                })
+            })
             .collect();
 
         let user_prompt = serde_json::to_string(&input)

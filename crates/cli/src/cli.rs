@@ -88,6 +88,11 @@ pub struct CognifyArgs {
 
     #[arg(long = "llm-max-parallel-requests", value_parser = clap::value_parser!(u32).range(1..))]
     pub llm_max_parallel_requests: Option<u32>,
+
+    /// Use temporal cognify pipeline (event/timestamp extraction instead of standard KG extraction).
+    /// Mirrors Python's `temporal_cognify=True` parameter.
+    #[arg(long = "temporal-cognify", default_value_t = false)]
+    pub temporal_cognify: bool,
 }
 
 #[derive(Debug, Args)]

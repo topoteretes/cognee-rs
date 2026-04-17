@@ -7,12 +7,19 @@
 //! 4. [`summarize_text`] — + summaries via LLM
 //! 5. [`add_data_points`] — embeddings + vector indexing → [`CognifyResult`]
 //!
+//! Temporal pipeline variant:
+//! 1. [`classify_documents`] — same
+//! 2. [`extract_chunks_from_documents`] — same
+//! 3. [`extract_temporal_events`] — Chunks → TemporalEvents (via two LLM passes)
+//! 4. [`add_temporal_data_points`] — persists events, timestamps, intervals, entities → graph+vector
+//!
 //! Public surface:
 //! - Intermediate types: [`CognifyInput`], [`ClassifiedDocuments`],
-//!   [`ExtractedChunks`], [`ExtractedGraphData`], [`SummarizedData`]
+//!   [`ExtractedChunks`], [`ExtractedGraphData`], [`SummarizedData`],
+//!   [`ExtractedTemporalEvents`]
 //! - Task implementations (free functions)
 //! - [`TypedTask`] factories: [`make_classify_documents_task`], etc.
-//! - Pipeline builder: [`build_cognify_pipeline`]
+//! - Pipeline builders: [`build_cognify_pipeline`], [`build_temporal_cognify_pipeline`]
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -26,7 +33,7 @@ use cognee_graph::{EdgeData, GraphDBTrait, GraphDBTraitExt};
 use cognee_ingestion::loaders::{LoaderOutput, LoaderRegistry};
 use cognee_llm::Llm;
 use cognee_models::{
-    Data, Document, DocumentChunk, EdgeType, Embedding,
+    Data, Document, DocumentChunk, EdgeType, Embedding, TemporalEvent,
     classify_documents as model_classify_documents,
 };
 use cognee_ontology::OntologyResolver;
@@ -47,6 +54,7 @@ use crate::graph_integration::{
 };
 use crate::pipeline::{CognifyResult, IndexedFieldsStats};
 use crate::summarization::{SummaryExtractor, TextSummary};
+use crate::temporal_extraction::{TemporalEntityEnricher, TemporalEventExtractor};
 use cognee_models::DataPoint;
 
 // ---------------------------------------------------------------------------
@@ -111,6 +119,18 @@ pub struct SummarizedData {
     pub entities: Vec<GraphNodePair>,
     pub edges: Vec<GraphEdgePair>,
     pub summaries: Vec<TextSummary>,
+    pub dataset_id: Uuid,
+    pub user_id: Option<Uuid>,
+    pub tenant_id: Option<Uuid>,
+}
+
+/// Output of [`extract_temporal_events`]: temporal events extracted from chunks
+/// via two LLM passes (event extraction + entity enrichment).
+///
+/// Used as the intermediate type between Task 3 and Task 4 in the temporal pipeline.
+#[derive(Debug, Clone)]
+pub struct ExtractedTemporalEvents {
+    pub events: Vec<TemporalEvent>,
     pub dataset_id: Uuid,
     pub user_id: Option<Uuid>,
     pub tenant_id: Option<Uuid>,
@@ -831,6 +851,441 @@ pub async fn add_data_points(
 }
 
 // ---------------------------------------------------------------------------
+// Temporal Task 3: extract_temporal_events
+// ---------------------------------------------------------------------------
+
+/// Extract temporal events from text chunks via two LLM passes (Temporal Task 3).
+///
+/// Mirrors the Python `get_temporal_tasks` pipeline stage 3:
+/// `extract_events_and_timestamps` followed by `extract_knowledge_graph_from_events`.
+///
+/// Steps:
+/// 1. Collects all non-DLT [`DocumentChunk`]s from `input`.
+/// 2. Batches by `config.data_per_batch`.
+/// 3. For each chunk in a batch, runs [`TemporalEventExtractor::extract_events`]
+///    in parallel (bounded by `config.max_parallel_extractions`).
+/// 4. Flattens per-chunk results and enriches each batch with entity attributes
+///    via [`TemporalEntityEnricher::enrich`].
+/// 5. Returns all events as [`ExtractedTemporalEvents`].
+pub async fn extract_temporal_events(
+    input: &ExtractedChunks,
+    llm: Arc<dyn Llm>,
+    config: &CognifyConfig,
+) -> Result<ExtractedTemporalEvents, CognifyError> {
+    if input.chunks.is_empty() {
+        return Ok(ExtractedTemporalEvents {
+            events: vec![],
+            dataset_id: input.dataset_id,
+            user_id: input.user_id,
+            tenant_id: input.tenant_id,
+        });
+    }
+
+    // Filter out DLT chunks — same rationale as extract_graph_from_data.
+    let dlt_doc_ids: HashSet<Uuid> = input
+        .documents
+        .iter()
+        .filter(|d| d.document_type == "dlt_row")
+        .map(|d| d.base.id)
+        .collect();
+
+    let non_dlt_chunks: Vec<&DocumentChunk> = input
+        .chunks
+        .iter()
+        .filter(|c| !dlt_doc_ids.contains(&c.document_id))
+        .collect();
+
+    if non_dlt_chunks.is_empty() {
+        return Ok(ExtractedTemporalEvents {
+            events: vec![],
+            dataset_id: input.dataset_id,
+            user_id: input.user_id,
+            tenant_id: input.tenant_id,
+        });
+    }
+
+    let batch_size = config.data_per_batch;
+    let semaphore = Arc::new(Semaphore::new(config.max_parallel_extractions));
+    let extractor = Arc::new(TemporalEventExtractor::new(Arc::clone(&llm)));
+    let enricher = TemporalEntityEnricher::new(Arc::clone(&llm));
+
+    let mut all_events: Vec<TemporalEvent> = Vec::new();
+
+    for (batch_idx, batch) in non_dlt_chunks.chunks(batch_size).enumerate() {
+        let mut extract_tasks = Vec::new();
+
+        for chunk in batch {
+            let ext = Arc::clone(&extractor);
+            let text = chunk.text.clone();
+            let sem = Arc::clone(&semaphore);
+            extract_tasks.push(tokio::spawn(async move {
+                let _permit = sem
+                    .acquire()
+                    .await
+                    .expect("semaphore is never closed; created locally in this function");
+                ext.extract_events(&text).await
+            }));
+        }
+
+        let batch_results = futures::future::join_all(extract_tasks).await;
+        let mut batch_events: Vec<TemporalEvent> = Vec::new();
+        for result in batch_results {
+            let events = result.map_err(|e| CognifyError::FactExtractionError(e.to_string()))??;
+            batch_events.extend(events);
+        }
+
+        info!(
+            "Temporal extraction batch {}/{}: {} events extracted",
+            batch_idx + 1,
+            non_dlt_chunks.len().div_ceil(batch_size),
+            batch_events.len()
+        );
+
+        // Entity enrichment pass for the whole batch.
+        let enriched = enricher.enrich(batch_events).await?;
+        all_events.extend(enriched);
+    }
+
+    info!(
+        "Temporal event extraction complete: {} total events",
+        all_events.len()
+    );
+
+    Ok(ExtractedTemporalEvents {
+        events: all_events,
+        dataset_id: input.dataset_id,
+        user_id: input.user_id,
+        tenant_id: input.tenant_id,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Temporal Task 4: add_temporal_data_points
+// ---------------------------------------------------------------------------
+
+/// Persist temporal events to graph and vector databases (Temporal Task 4).
+///
+/// Mirrors the Python `add_data_points` stage in the temporal pipeline.
+///
+/// For each [`TemporalEvent`]:
+/// 1. Creates an `Event` graph node with a deterministic UUID5 ID.
+/// 2. For `event.at` — creates a `Timestamp` graph node and an `at` edge.
+/// 3. For `event.during` — creates `Timestamp` nodes for from/to, an `Interval`
+///    node, and `during` / `time_from` / `time_to` edges (Python-compatible layout).
+/// 4. For each [`EventAttribute`] — creates or looks up an entity graph node
+///    and adds a typed edge from the `Event` to the entity.
+/// 5. Embeds `event.name` and indexes to the `Event_name` vector collection.
+pub async fn add_temporal_data_points(
+    events: &ExtractedTemporalEvents,
+    graph_db: Arc<dyn GraphDBTrait>,
+    vector_db: Arc<dyn VectorDB>,
+    embedding_engine: Arc<dyn EmbeddingEngine>,
+) -> Result<CognifyResult, CognifyError> {
+    if events.events.is_empty() {
+        info!("No temporal events to persist.");
+        return Ok(CognifyResult::empty());
+    }
+
+    let mut graph_nodes: Vec<serde_json::Value> = Vec::new();
+    let mut graph_edges: Vec<EdgeData> = Vec::new();
+
+    // Deduplicate entity nodes across events to avoid redundant graph inserts.
+    let mut seen_entity_ids: HashSet<Uuid> = HashSet::new();
+    // Deduplicate edges: (source_id, target_id, relationship_name)
+    let mut seen_edge_keys: HashSet<(String, String, String)> = HashSet::new();
+
+    let mut event_ids: Vec<Uuid> = Vec::new();
+    let mut event_names: Vec<String> = Vec::new();
+
+    for event in &events.events {
+        // ── Event node ──────────────────────────────────────────────────────
+        let event_id = Uuid::new_v5(
+            &Uuid::NAMESPACE_OID,
+            format!("event:{}", event.name).as_bytes(),
+        );
+        event_ids.push(event_id);
+        event_names.push(event.name.clone());
+
+        let mut event_node = json!({
+            "id": event_id.to_string(),
+            "data_type": "Event",
+            "name": event.name,
+        });
+        if let Some(desc) = &event.description {
+            event_node["description"] = json!(desc);
+        }
+        if let Some(loc) = &event.location {
+            event_node["location"] = json!(loc);
+        }
+        graph_nodes.push(event_node);
+
+        // ── Timestamp for event.at ──────────────────────────────────────────
+        if let Some(ts) = &event.at {
+            let ts_id = Uuid::new_v5(
+                &Uuid::NAMESPACE_OID,
+                format!("timestamp:{}", ts.time_at).as_bytes(),
+            );
+            graph_nodes.push(json!({
+                "id": ts_id.to_string(),
+                "data_type": "Timestamp",
+                "time_at": ts.time_at,
+                "timestamp_str": ts.timestamp_str,
+                "year": ts.year,
+                "month": ts.month,
+                "day": ts.day,
+                "hour": ts.hour,
+                "minute": ts.minute,
+                "second": ts.second,
+            }));
+
+            let edge_key = (event_id.to_string(), ts_id.to_string(), "at".to_string());
+            if seen_edge_keys.insert(edge_key) {
+                graph_edges.push((
+                    event_id.to_string(),
+                    ts_id.to_string(),
+                    "at".to_string(),
+                    build_edge_props(&event_id.to_string(), &ts_id.to_string(), "at"),
+                ));
+            }
+        }
+
+        // ── Interval for event.during ───────────────────────────────────────
+        if let Some(interval) = &event.during {
+            let ts_from = &interval.time_from;
+            let ts_to = &interval.time_to;
+
+            let ts_from_id = Uuid::new_v5(
+                &Uuid::NAMESPACE_OID,
+                format!("timestamp:{}", ts_from.time_at).as_bytes(),
+            );
+            let ts_to_id = Uuid::new_v5(
+                &Uuid::NAMESPACE_OID,
+                format!("timestamp:{}", ts_to.time_at).as_bytes(),
+            );
+            let interval_id = Uuid::new_v5(
+                &Uuid::NAMESPACE_OID,
+                format!("interval:{}:{}", ts_from.time_at, ts_to.time_at).as_bytes(),
+            );
+
+            graph_nodes.push(json!({
+                "id": ts_from_id.to_string(),
+                "data_type": "Timestamp",
+                "time_at": ts_from.time_at,
+                "timestamp_str": ts_from.timestamp_str,
+                "year": ts_from.year,
+                "month": ts_from.month,
+                "day": ts_from.day,
+                "hour": ts_from.hour,
+                "minute": ts_from.minute,
+                "second": ts_from.second,
+            }));
+            graph_nodes.push(json!({
+                "id": ts_to_id.to_string(),
+                "data_type": "Timestamp",
+                "time_at": ts_to.time_at,
+                "timestamp_str": ts_to.timestamp_str,
+                "year": ts_to.year,
+                "month": ts_to.month,
+                "day": ts_to.day,
+                "hour": ts_to.hour,
+                "minute": ts_to.minute,
+                "second": ts_to.second,
+            }));
+            graph_nodes.push(json!({
+                "id": interval_id.to_string(),
+                "data_type": "Interval",
+            }));
+
+            // Event -[during]-> Interval
+            let during_key = (
+                event_id.to_string(),
+                interval_id.to_string(),
+                "during".to_string(),
+            );
+            if seen_edge_keys.insert(during_key) {
+                graph_edges.push((
+                    event_id.to_string(),
+                    interval_id.to_string(),
+                    "during".to_string(),
+                    build_edge_props(&event_id.to_string(), &interval_id.to_string(), "during"),
+                ));
+            }
+
+            // Interval -[time_from]-> Timestamp(from)
+            let from_key = (
+                interval_id.to_string(),
+                ts_from_id.to_string(),
+                "time_from".to_string(),
+            );
+            if seen_edge_keys.insert(from_key) {
+                graph_edges.push((
+                    interval_id.to_string(),
+                    ts_from_id.to_string(),
+                    "time_from".to_string(),
+                    build_edge_props(
+                        &interval_id.to_string(),
+                        &ts_from_id.to_string(),
+                        "time_from",
+                    ),
+                ));
+            }
+
+            // Interval -[time_to]-> Timestamp(to)
+            let to_key = (
+                interval_id.to_string(),
+                ts_to_id.to_string(),
+                "time_to".to_string(),
+            );
+            if seen_edge_keys.insert(to_key) {
+                graph_edges.push((
+                    interval_id.to_string(),
+                    ts_to_id.to_string(),
+                    "time_to".to_string(),
+                    build_edge_props(&interval_id.to_string(), &ts_to_id.to_string(), "time_to"),
+                ));
+            }
+        }
+
+        // ── Entity attribute nodes and edges ────────────────────────────────
+        for attr in &event.attributes {
+            let entity_id = Uuid::new_v5(
+                &Uuid::NAMESPACE_OID,
+                format!("entity:{}", attr.entity).as_bytes(),
+            );
+
+            if seen_entity_ids.insert(entity_id) {
+                graph_nodes.push(json!({
+                    "id": entity_id.to_string(),
+                    "data_type": attr.entity_type,
+                    "name": attr.entity,
+                }));
+            }
+
+            let rel_key = (
+                event_id.to_string(),
+                entity_id.to_string(),
+                attr.relationship.clone(),
+            );
+            if seen_edge_keys.insert(rel_key) {
+                graph_edges.push((
+                    event_id.to_string(),
+                    entity_id.to_string(),
+                    attr.relationship.clone(),
+                    build_edge_props(
+                        &event_id.to_string(),
+                        &entity_id.to_string(),
+                        &attr.relationship,
+                    ),
+                ));
+            }
+        }
+    }
+
+    // Persist nodes and edges to graph DB.
+    if !graph_nodes.is_empty() {
+        let node_count = graph_nodes.len();
+        graph_db
+            .add_nodes_raw(graph_nodes)
+            .await
+            .map_err(CognifyError::from)?;
+        info!("Stored {} temporal graph nodes", node_count);
+    }
+
+    if !graph_edges.is_empty() {
+        let edge_count = graph_edges.len();
+        graph_db
+            .add_edges(&graph_edges)
+            .await
+            .map_err(CognifyError::from)?;
+        info!("Stored {} temporal graph edges", edge_count);
+    }
+
+    // ── Vector indexing: Event.name ──────────────────────────────────────────
+    let mut indexed_fields = IndexedFieldsStats::default();
+
+    if !event_ids.is_empty() {
+        let dimension = embedding_engine.dimension();
+
+        if !vector_db
+            .has_collection("Event", "name")
+            .await
+            .map_err(|e| CognifyError::VectorDBError(e.to_string()))?
+        {
+            vector_db
+                .create_collection("Event", "name", dimension)
+                .await
+                .map_err(|e| CognifyError::VectorDBError(e.to_string()))?;
+        }
+
+        let name_strs: Vec<&str> = event_names.iter().map(String::as_str).collect();
+        let vectors = embedding_engine
+            .embed(&name_strs)
+            .await
+            .map_err(|e| CognifyError::EmbeddingError(e.to_string()))?;
+
+        let points: Vec<VectorPoint> = event_ids
+            .iter()
+            .zip(event_names.iter())
+            .zip(vectors.iter())
+            .map(|((id, name), vector)| {
+                let mut point = VectorPoint::new(*id, vector.clone())
+                    .with_metadata("type", json!("Event"))
+                    .with_metadata("field", json!("name"))
+                    .with_metadata("name", json!(name))
+                    .with_metadata("dataset_id", json!(events.dataset_id.to_string()));
+                if let Some(uid) = events.user_id {
+                    point = point.with_metadata("user_id", json!(uid.to_string()));
+                }
+                if let Some(tid) = events.tenant_id {
+                    point = point.with_metadata("tenant_id", json!(tid.to_string()));
+                }
+                point
+            })
+            .collect();
+
+        vector_db
+            .index_points("Event", "name", &points)
+            .await
+            .map_err(|e| CognifyError::VectorDBError(e.to_string()))?;
+
+        indexed_fields.record("Event", "name", event_ids.len());
+        info!("Indexed {} event names in vector DB", event_ids.len());
+    }
+
+    Ok(CognifyResult {
+        chunks: vec![],
+        entities: vec![],
+        edges: vec![],
+        summaries: vec![],
+        edge_types: vec![],
+        embeddings: vec![],
+        indexed_fields,
+    })
+}
+
+/// Build minimal edge properties for graph storage.
+fn build_edge_props(
+    source_id: &str,
+    target_id: &str,
+    relationship_name: &str,
+) -> HashMap<std::borrow::Cow<'static, str>, serde_json::Value> {
+    let mut props = HashMap::new();
+    props.insert(
+        std::borrow::Cow::Borrowed("source_node_id"),
+        json!(source_id),
+    );
+    props.insert(
+        std::borrow::Cow::Borrowed("target_node_id"),
+        json!(target_id),
+    );
+    props.insert(
+        std::borrow::Cow::Borrowed("relationship_name"),
+        json!(relationship_name),
+    );
+    props
+}
+
+// ---------------------------------------------------------------------------
 // Task 6: extract_dlt_fk_edges
 // ---------------------------------------------------------------------------
 
@@ -1354,6 +1809,27 @@ pub async fn cognify(
     }
 
     info!("Extracted {} chunks", extracted_chunks.chunks.len());
+
+    // ── Branch: temporal vs. standard pipeline ──────────────────────────────
+    if config.temporal_cognify {
+        info!("Running temporal cognify pipeline (event/timestamp extraction).");
+
+        // Temporal Task 3: Extract events (two LLM passes)
+        let temporal_events =
+            extract_temporal_events(&extracted_chunks, Arc::clone(&llm), config).await?;
+
+        info!(
+            "Temporal extraction complete: {} events",
+            temporal_events.events.len()
+        );
+
+        // Temporal Task 4: Persist to graph + vector
+        let result =
+            add_temporal_data_points(&temporal_events, graph_db, vector_db, embedding_engine)
+                .await?;
+
+        return Ok(result);
+    }
 
     // Task 3: Extract knowledge graph
     let mut graph_data = extract_graph_from_data(
@@ -2226,6 +2702,79 @@ pub fn build_cognify_pipeline(
             config,
         ))
         .with_name("cognify")
+        .build()
+}
+
+/// Build a [`TypedTask`] that extracts temporal events from chunks via LLM.
+pub fn make_extract_temporal_events_task(
+    llm: Arc<dyn Llm>,
+    config: CognifyConfig,
+) -> TypedTask<ExtractedChunks, ExtractedTemporalEvents> {
+    TypedTask::async_fn(move |input: &ExtractedChunks, _ctx| {
+        let input = input.clone();
+        let llm = Arc::clone(&llm);
+        let config = config.clone();
+        Box::pin(async move {
+            extract_temporal_events(&input, llm, &config)
+                .await
+                .map(Box::new)
+                .map_err(|e| format!("{e}").into())
+        })
+    })
+}
+
+/// Build a [`TypedTask`] that persists temporal events to graph and vector DBs.
+pub fn make_add_temporal_data_points_task(
+    graph_db: Arc<dyn GraphDBTrait>,
+    vector_db: Arc<dyn VectorDB>,
+    embedding_engine: Arc<dyn EmbeddingEngine>,
+) -> TypedTask<ExtractedTemporalEvents, CognifyResult> {
+    TypedTask::async_fn(move |input: &ExtractedTemporalEvents, _ctx| {
+        let input = input.clone();
+        let graph_db = Arc::clone(&graph_db);
+        let vector_db = Arc::clone(&vector_db);
+        let embedding_engine = Arc::clone(&embedding_engine);
+        Box::pin(async move {
+            add_temporal_data_points(&input, graph_db, vector_db, embedding_engine)
+                .await
+                .map(Box::new)
+                .map_err(|e| format!("{e}").into())
+        })
+    })
+}
+
+/// Build a complete temporal cognify [`Pipeline`]:
+/// [`CognifyInput`] → classify → chunk → extract_temporal_events → add_temporal_data_points → [`CognifyResult`].
+///
+/// This pipeline runs instead of the standard cognify pipeline when
+/// `CognifyConfig::temporal_cognify` is `true`. It mirrors the Python
+/// `get_temporal_tasks()` pipeline that replaces the default stages with
+/// event/timestamp extraction and temporal graph construction.
+pub fn build_temporal_cognify_pipeline(
+    storage: Arc<dyn StorageTrait>,
+    graph_db: Arc<dyn GraphDBTrait>,
+    vector_db: Arc<dyn VectorDB>,
+    embedding_engine: Arc<dyn EmbeddingEngine>,
+    llm: Arc<dyn Llm>,
+    db: Option<Arc<DatabaseConnection>>,
+    config: CognifyConfig,
+) -> Pipeline {
+    let loader_registry = Arc::new(LoaderRegistry::default());
+    PipelineBuilder::new_with_task("temporal-cognify", make_classify_documents_task())
+        .add_task(make_extract_chunks_task(
+            storage,
+            config.max_chunk_size,
+            config.token_counter_kind.clone(),
+            db,
+            loader_registry,
+        ))
+        .add_task(make_extract_temporal_events_task(llm, config))
+        .add_task(make_add_temporal_data_points_task(
+            graph_db,
+            vector_db,
+            embedding_engine,
+        ))
+        .with_name("temporal-cognify")
         .build()
 }
 

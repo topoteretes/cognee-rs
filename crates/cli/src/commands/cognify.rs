@@ -104,7 +104,8 @@ pub fn run(args: CognifyArgs, cm: Arc<ComponentManager>) -> Result<(), CliError>
             .with_chunk_size(effective_chunk_size as usize)
             .with_chunk_overlap(cm.settings().chunk_overlap as usize)
             .with_chunk_strategy(chunk_strategy)
-            .with_max_parallel_extractions(effective_max_parallel);
+            .with_max_parallel_extractions(effective_max_parallel)
+            .with_temporal_cognify(args.temporal_cognify);
 
         let mut total_chunks = 0usize;
         let mut total_entities = 0usize;
