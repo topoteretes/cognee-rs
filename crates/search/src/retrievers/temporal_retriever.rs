@@ -378,13 +378,9 @@ impl SearchRetriever for TemporalRetriever {
                     Some("Interval") => {
                         // Hop through Interval node to reach Event nodes (hop 2).
                         if let Some(interval_id) = node_props.get("id").and_then(|v| v.as_str()) {
-                            for inner_props in
-                                self.graph_db.get_neighbors(interval_id).await?
-                            {
-                                if inner_props.get("type").and_then(|v| v.as_str())
-                                    == Some("Event")
-                                    && let Some(id) =
-                                        inner_props.get("id").and_then(|v| v.as_str())
+                            for inner_props in self.graph_db.get_neighbors(interval_id).await? {
+                                if inner_props.get("type").and_then(|v| v.as_str()) == Some("Event")
+                                    && let Some(id) = inner_props.get("id").and_then(|v| v.as_str())
                                 {
                                     event_node_ids.insert(id.to_string());
                                 }
@@ -412,10 +408,8 @@ impl SearchRetriever for TemporalRetriever {
             .map(|(id, _)| id.clone())
             .collect();
         let event_nodes = self.graph_db.get_nodes(&event_id_list).await?;
-        let nodes_by_id: HashMap<String, NodeData> = event_id_list
-            .into_iter()
-            .zip(event_nodes)
-            .collect();
+        let nodes_by_id: HashMap<String, NodeData> =
+            event_id_list.into_iter().zip(event_nodes).collect();
 
         let mut temporal_context = Vec::new();
 
@@ -514,8 +508,7 @@ fn extract_node_description(node_data: &NodeData) -> String {
 
 // Fix 3: millisecond-based interval check for Timestamp nodes.
 fn is_within_interval_ms(time_at_ms: i64, from_ms: Option<i64>, to_ms: Option<i64>) -> bool {
-    from_ms.is_none_or(|from| time_at_ms >= from)
-        && to_ms.is_none_or(|to| time_at_ms <= to)
+    from_ms.is_none_or(|from| time_at_ms >= from) && to_ms.is_none_or(|to| time_at_ms <= to)
 }
 
 fn parse_bound(input: &str, is_end: bool) -> Option<DateTime<Utc>> {
@@ -804,11 +797,7 @@ mod tests {
         }
 
         async fn get_neighbors(&self, node_id: &str) -> GraphDBResult<Vec<NodeData>> {
-            Ok(self
-                .neighbors
-                .get(node_id)
-                .cloned()
-                .unwrap_or_default())
+            Ok(self.neighbors.get(node_id).cloned().unwrap_or_default())
         }
 
         async fn get_connections(
