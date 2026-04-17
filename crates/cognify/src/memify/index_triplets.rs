@@ -248,4 +248,179 @@ mod tests {
             5
         );
     }
+
+    #[tokio::test]
+    async fn test_index_existing_collection_no_recreate() {
+        let vector_db = MockVectorDB::new();
+        let engine = MockEmbeddingEngine::new(4);
+
+        // Pre-create the collection; index_triplets must see it via has_collection
+        // and skip create_collection entirely.
+        vector_db
+            .create_collection("Triplet", "text", engine.dimension())
+            .await
+            .unwrap();
+        assert_eq!(vector_db.create_collection_count(), 1);
+
+        let triplets = vec![make_triplet("Alice", "Bob", "knows")];
+        index_triplets(&triplets, &vector_db, &engine, None, None, None)
+            .await
+            .unwrap();
+
+        // Exactly one create_collection invocation total (the manual one above).
+        assert_eq!(
+            vector_db.create_collection_count(),
+            1,
+            "index_triplets must not recreate an existing collection"
+        );
+        assert!(vector_db.was_create_collection_called("Triplet", "text"));
+    }
+
+    #[tokio::test]
+    async fn test_index_metadata_values_match_triplet() {
+        let vector_db = MockVectorDB::new();
+        let engine = MockEmbeddingEngine::new(4);
+        let dataset_id = Uuid::new_v4();
+        let user_id = Uuid::new_v4();
+        let tenant_id = Uuid::new_v4();
+
+        // Build 3 triplets with distinct source/target/relationship values.
+        let triplets: Vec<Triplet> = vec![
+            make_triplet("Alice", "Bob", "knows"),
+            make_triplet("Bob", "Charlie", "mentors"),
+            make_triplet("Charlie", "Dana", "manages"),
+        ];
+        // Snapshot field values for later exact-value comparison.
+        let expected: Vec<(Uuid, Uuid, Uuid, String)> = triplets
+            .iter()
+            .map(|t| {
+                (
+                    t.id,
+                    t.source_entity_id,
+                    t.target_entity_id,
+                    t.relationship_name.clone(),
+                )
+            })
+            .collect();
+
+        index_triplets(
+            &triplets,
+            &vector_db,
+            &engine,
+            Some(dataset_id),
+            Some(user_id),
+            Some(tenant_id),
+        )
+        .await
+        .unwrap();
+
+        // Fetch all points via search.
+        let results = vector_db
+            .search_similar("Triplet", "text", &[0.0; 4], 10)
+            .await
+            .unwrap();
+        assert_eq!(results.len(), expected.len());
+
+        for (id, source_id, target_id, relationship) in expected {
+            let point = results
+                .iter()
+                .find(|r| r.id == id)
+                .expect("every indexed triplet must produce a point with a matching id");
+            let meta = &point.metadata;
+            assert_eq!(meta.get("type").unwrap(), &json!("Triplet"));
+            assert_eq!(meta.get("field").unwrap(), &json!("text"));
+            assert_eq!(
+                meta.get("source_id").unwrap(),
+                &json!(source_id.to_string())
+            );
+            assert_eq!(
+                meta.get("target_id").unwrap(),
+                &json!(target_id.to_string())
+            );
+            assert_eq!(meta.get("relationship").unwrap(), &json!(relationship));
+            assert_eq!(
+                meta.get("dataset_id").unwrap(),
+                &json!(dataset_id.to_string())
+            );
+            assert_eq!(meta.get("user_id").unwrap(), &json!(user_id.to_string()));
+            assert_eq!(
+                meta.get("tenant_id").unwrap(),
+                &json!(tenant_id.to_string())
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_index_large_batch_multiple_requests() {
+        let vector_db = MockVectorDB::new();
+        // batch_size=100 paired with 1000 triplets → exactly 10 batches.
+        let engine = MockEmbeddingEngine::with_batch_size(4, 100);
+
+        let triplets: Vec<Triplet> = (0..1000)
+            .map(|i| {
+                let src_id = Uuid::new_v4();
+                let tgt_id = Uuid::new_v4();
+                let src_name = format!("S{i}");
+                let tgt_name = format!("T{i}");
+                let text = format!("{src_name} -\u{203a} rel-\u{203a}{tgt_name}");
+                Triplet::new(src_id, tgt_id, "rel".to_string(), text).with_names(src_name, tgt_name)
+            })
+            .collect();
+
+        let result = index_triplets(&triplets, &vector_db, &engine, None, None, None)
+            .await
+            .unwrap();
+
+        assert_eq!(result.indexed_count, 1000);
+        assert_eq!(result.batch_count, 10);
+        assert_eq!(
+            vector_db.index_points_call_count(),
+            10,
+            "exactly 10 index_points calls expected for 1000/100 batches"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_index_embedding_error_propagates() {
+        let vector_db = MockVectorDB::new();
+        let engine = MockEmbeddingEngine::new(4);
+        engine.set_failure_after(0); // fail on the very first embed call
+
+        let triplets = vec![make_triplet("Alice", "Bob", "knows")];
+        let err = index_triplets(&triplets, &vector_db, &engine, None, None, None)
+            .await
+            .expect_err("embedding failure must propagate as MemifyError");
+
+        match err {
+            MemifyError::EmbeddingError(msg) => {
+                assert!(
+                    msg.contains("injected failure"),
+                    "error message should preserve embedding-engine context, got: {msg}"
+                );
+            }
+            other => panic!("expected MemifyError::EmbeddingError, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_index_vector_db_error_propagates() {
+        let vector_db = MockVectorDB::new();
+        let engine = MockEmbeddingEngine::new(4);
+        vector_db.set_index_error("boom");
+
+        let triplets = vec![make_triplet("Alice", "Bob", "knows")];
+        let err = index_triplets(&triplets, &vector_db, &engine, None, None, None)
+            .await
+            .expect_err("vector-db failure must propagate as MemifyError");
+
+        match err {
+            MemifyError::VectorDBError(msg) => {
+                assert!(
+                    msg.contains("boom"),
+                    "error message should contain injected text, got: {msg}"
+                );
+            }
+            other => panic!("expected MemifyError::VectorDBError, got {other:?}"),
+        }
+    }
 }

@@ -18,6 +18,13 @@ use crate::vector_db_trait::VectorDB;
 pub struct MockVectorDB {
     /// Map from (data_type, field_name) -> collection data
     collections: Arc<Mutex<HashMap<String, CollectionData>>>,
+    /// Log of `create_collection` invocations, as `(data_type, field_name)` tuples.
+    create_collection_calls: Arc<Mutex<Vec<(String, String)>>>,
+    /// Log of `index_points` invocations, as `"{data_type}/{field_name}"` strings
+    /// (one entry per call — useful for asserting batch counts).
+    index_points_calls: Arc<Mutex<Vec<String>>>,
+    /// Optional injected error returned from the next `index_points` call.
+    index_error: Arc<Mutex<Option<String>>>,
 }
 
 #[derive(Clone)]
@@ -31,12 +38,41 @@ impl MockVectorDB {
     pub fn new() -> Self {
         Self {
             collections: Arc::new(Mutex::new(HashMap::new())),
+            create_collection_calls: Arc::new(Mutex::new(Vec::new())),
+            index_points_calls: Arc::new(Mutex::new(Vec::new())),
+            index_error: Arc::new(Mutex::new(None)),
         }
     }
 
     /// Generate collection key from data_type and field_name
     fn collection_key(data_type: &str, field_name: &str) -> String {
         format!("{}_{}", data_type, field_name)
+    }
+
+    /// Return the number of times `create_collection` was invoked.
+    pub fn create_collection_count(&self) -> usize {
+        let log = self.create_collection_calls.lock().unwrap(); // lock poison is unrecoverable
+        log.len()
+    }
+
+    /// Return `true` if `create_collection` was called for `(data_type, field_name)`.
+    pub fn was_create_collection_called(&self, data_type: &str, field_name: &str) -> bool {
+        let log = self.create_collection_calls.lock().unwrap(); // lock poison is unrecoverable
+        log.iter()
+            .any(|(dt, fn_)| dt == data_type && fn_ == field_name)
+    }
+
+    /// Return the number of times `index_points` was invoked successfully.
+    pub fn index_points_call_count(&self) -> usize {
+        let log = self.index_points_calls.lock().unwrap(); // lock poison is unrecoverable
+        log.len()
+    }
+
+    /// Inject an error that will be returned from subsequent `index_points` calls
+    /// as `VectorDBError::StorageError`.
+    pub fn set_index_error(&self, msg: impl Into<String>) {
+        let mut slot = self.index_error.lock().unwrap(); // lock poison is unrecoverable
+        *slot = Some(msg.into());
     }
 
     /// Compute cosine similarity between two vectors
@@ -67,6 +103,12 @@ impl VectorDB for MockVectorDB {
         field_name: &str,
         dimension: usize,
     ) -> VectorDBResult<()> {
+        // Log the call before any validation so tests can see every attempt.
+        {
+            let mut log = self.create_collection_calls.lock().unwrap(); // lock poison is unrecoverable
+            log.push((data_type.to_string(), field_name.to_string()));
+        }
+
         let key = Self::collection_key(data_type, field_name);
         let mut collections = self.collections.lock().unwrap(); // lock poison is unrecoverable
 
@@ -97,6 +139,14 @@ impl VectorDB for MockVectorDB {
         field_name: &str,
         points: &[VectorPoint],
     ) -> VectorDBResult<()> {
+        // Error-injection hook for tests: fail before any side effects.
+        {
+            let slot = self.index_error.lock().unwrap(); // lock poison is unrecoverable
+            if let Some(msg) = slot.as_ref() {
+                return Err(VectorDBError::StorageError(msg.clone()));
+            }
+        }
+
         if points.is_empty() {
             return Ok(());
         }
@@ -127,6 +177,11 @@ impl VectorDB for MockVectorDB {
                 collection.points.push(new_point.clone());
             }
         }
+
+        // Log the successful call for batch-count assertions.
+        drop(collections);
+        let mut log = self.index_points_calls.lock().unwrap(); // lock poison is unrecoverable
+        log.push(format!("{}/{}", data_type, field_name));
 
         Ok(())
     }
