@@ -129,7 +129,7 @@ mod tests {
     fn make_triplet(src_name: &str, tgt_name: &str, rel: &str) -> Triplet {
         let src_id = Uuid::new_v4();
         let tgt_id = Uuid::new_v4();
-        let text = format!("{src_name} -\u{203a} {rel}-\u{203a}{tgt_name}");
+        let text = format!("{src_name}-\u{203a}{rel}-\u{203a}{tgt_name}");
         Triplet::new(src_id, tgt_id, rel.to_string(), text)
             .with_names(src_name.to_string(), tgt_name.to_string())
     }
@@ -362,7 +362,7 @@ mod tests {
                 let tgt_id = Uuid::new_v4();
                 let src_name = format!("S{i}");
                 let tgt_name = format!("T{i}");
-                let text = format!("{src_name} -\u{203a} rel-\u{203a}{tgt_name}");
+                let text = format!("{src_name}-\u{203a}rel-\u{203a}{tgt_name}");
                 Triplet::new(src_id, tgt_id, "rel".to_string(), text).with_names(src_name, tgt_name)
             })
             .collect();

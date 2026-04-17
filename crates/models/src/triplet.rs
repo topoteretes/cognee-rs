@@ -9,9 +9,9 @@ use uuid::Uuid;
 /// A triplet representing a semantic relationship between two entities.
 ///
 /// Triplets are embedded as text in the format:
-/// "source_text -› relationship_text-›target_text"
+/// "source_text-›relationship_text-›target_text"
 ///
-/// Example: "Steve Jobs: Co-founder of Apple -› founded-›Apple Inc.: Technology company"
+/// Example: "Steve Jobs: Co-founder of Apple-›founded-›Apple Inc.: Technology company"
 ///
 /// Python reference: cognee/modules/engine/models/Triplet.py
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -30,7 +30,7 @@ pub struct Triplet {
     pub relationship_name: String,
 
     /// Embeddable text representation.
-    /// Format: "{source_text} -› {relationship_text}-›{target_text}"
+    /// Format: "{source_text}-›{relationship_text}-›{target_text}"
     /// This is the text that gets embedded for semantic search.
     pub text: String,
 
@@ -63,7 +63,7 @@ impl Triplet {
     ///     source_id,
     ///     target_id,
     ///     "founded".to_string(),
-    ///     "Steve Jobs -› founded-›Apple Inc.".to_string(),
+    ///     "Steve Jobs-›founded-›Apple Inc.".to_string(),
     /// );
     /// ```
     pub fn new(
@@ -122,7 +122,7 @@ mod tests {
             source_id,
             target_id,
             "founded".to_string(),
-            "Steve Jobs -› founded-›Apple Inc.".to_string(),
+            "Steve Jobs-›founded-›Apple Inc.".to_string(),
         );
 
         assert_eq!(triplet.source_entity_id, source_id);
@@ -141,7 +141,7 @@ mod tests {
             source_id,
             target_id,
             "works_at".to_string(),
-            "Alice -› works at-›TechCorp".to_string(),
+            "Alice-›works at-›TechCorp".to_string(),
         )
         .with_names("Alice".to_string(), "TechCorp".to_string());
 
@@ -159,14 +159,14 @@ mod tests {
             source_id,
             target_id,
             "relates".to_string(),
-            "A -› relates-›B".to_string(),
+            "A-›relates-›B".to_string(),
         );
 
         let triplet2 = Triplet::new(
             source_id,
             target_id,
             "relates".to_string(),
-            "A -› relates-›B".to_string(),
+            "A-›relates-›B".to_string(),
         );
 
         assert_eq!(triplet1.id, triplet2.id, "IDs should be deterministic");

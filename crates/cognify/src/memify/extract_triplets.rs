@@ -65,9 +65,12 @@ pub async fn extract_triplets_from_graph_db(
             continue;
         }
 
-        // Format matches existing Rust create_triplets_from_graph():
-        // "{source_text} -\u{203a} {relationship_text}-\u{203a}{target_text}"
-        let text = format!("{source_text} -\u{203a} {relationship_text}-\u{203a}{target_text}");
+        // Format matches Python's canonical triplet text:
+        // "{source_text}-\u{203a}{relationship_text}-\u{203a}{target_text}"
+        // (cognee/tasks/memify/get_triplet_datapoints.py:157).
+        // Cross-SDK embedding vectors are directly comparable only when
+        // both sides build the same embeddable string.
+        let text = format!("{source_text}-\u{203a}{relationship_text}-\u{203a}{target_text}");
 
         let source_uuid = parse_node_uuid(source_id)?;
         let target_uuid = parse_node_uuid(target_id)?;
@@ -256,7 +259,7 @@ mod tests {
         assert_eq!(t.source_entity_id, src_id);
         assert_eq!(t.target_entity_id, tgt_id);
         assert_eq!(t.relationship_name, "works_at");
-        // Format: "Name: Description -› relationship-›Name: Description"
+        // Format: "Name: Description-›relationship-›Name: Description"
         assert!(t.text.contains("Alice: Software engineer"));
         assert!(t.text.contains("works_at"));
         assert!(t.text.contains("TechCorp: A tech company"));
@@ -555,7 +558,7 @@ mod tests {
         // Current behavior: `name` absent + `description` present yields
         // `": {description}"` (leading colon), not `""`. Pinned verbatim.
         assert_eq!(
-            t.text, ": Some description -\u{203a} knows-\u{203a}Bob: A person",
+            t.text, ": Some description-\u{203a}knows-\u{203a}Bob: A person",
             "pinned leading-colon behavior when `name` is absent but \
              `description` is present"
         );
@@ -574,7 +577,7 @@ mod tests {
         let t2 = &triplets2[0];
         // Bare name: no trailing colon, no description suffix.
         assert!(
-            t2.text.starts_with("Carol -\u{203a} knows"),
+            t2.text.starts_with("Carol-\u{203a}knows"),
             "expected bare name 'Carol' with no colon, got: {text:?}",
             text = t2.text
         );
@@ -612,12 +615,12 @@ mod tests {
     }
 
     /// Pins the exact triplet text format:
-    ///   "{source}: {src_desc} -\u{203a} {rel}-\u{203a}{target}: {tgt_desc}"
+    ///   "{source}: {src_desc}-\u{203a}{rel}-\u{203a}{target}: {tgt_desc}"
     ///
-    /// Note the ASYMMETRIC spacing: space-dash BEFORE the first U+203A arrow,
-    /// and NO space before the second arrow. Any future refactor that drifts
-    /// from this exact format will change the embedding input string and
-    /// break cross-run ID stability / vector similarity.
+    /// Matches Python's canonical form at
+    /// cognee/tasks/memify/get_triplet_datapoints.py:157. Any future refactor
+    /// that drifts from this format will change the embedding input string
+    /// and break cross-SDK vector comparability.
     #[tokio::test]
     async fn test_extract_triplet_text_format() {
         let db = MockGraphDB::new();
@@ -634,7 +637,7 @@ mod tests {
         assert_eq!(triplets.len(), 1);
         assert_eq!(
             triplets[0].text,
-            "Alice: engineer -\u{203a} works_at-\u{203a}TechCorp: tech",
+            "Alice: engineer-\u{203a}works_at-\u{203a}TechCorp: tech",
         );
     }
 }

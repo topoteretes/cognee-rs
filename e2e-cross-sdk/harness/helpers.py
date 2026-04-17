@@ -157,6 +157,34 @@ def run_python_cli(
             f"    print('OK')\n"
             f"asyncio.run(main())\n"
         )
+    elif command == "memify":
+        # Parse: memify -d <dataset_name> [--node-name <name> ...]
+        dataset_name = None
+        node_names: list[str] = []
+        i = 1
+        while i < len(args):
+            if args[i] in ("-d", "--datasets", "--dataset-name") and i + 1 < len(args):
+                dataset_name = args[i + 1]
+                i += 2
+            elif args[i] in ("--node-name",) and i + 1 < len(args):
+                node_names.append(args[i + 1])
+                i += 2
+            else:
+                i += 1
+
+        ds_arg = f"{dataset_name!r}" if dataset_name else "'main_dataset'"
+        node_name_arg = f"{node_names!r}" if node_names else "None"
+        # Invoke cognee.memify() with the existing graph as the enrichment
+        # source. Default extraction/enrichment tasks are used.
+        script = (
+            f"import asyncio, cognee\n"
+            f"cognee.config.data_root_directory({str(py_storage)!r})\n"
+            f"cognee.config.system_root_directory({str(py_system)!r})\n"
+            f"async def main():\n"
+            f"    await cognee.memify(dataset={ds_arg}, node_name={node_name_arg})\n"
+            f"    print('OK')\n"
+            f"asyncio.run(main())\n"
+        )
     elif command == "search":
         # Parse: search <query> -t <TYPE> -d <dataset> -k <top_k>
         query_text = args[1]
@@ -481,6 +509,25 @@ def parse_rust_search_output(stdout: str, *, query_type: str) -> list[str]:
 
     # CHUNKS / SUMMARIES / other list-shaped outputs: one item per line.
     return lines
+
+
+def run_python_memify(
+    workdir: Path,
+    dataset: str,
+    *,
+    node_names: Optional[list[str]] = None,
+    check: bool = True,
+) -> subprocess.CompletedProcess:
+    """Run ``cognee.memify()`` via the Python SDK on *dataset* in *workdir*.
+
+    Mirrors the ``memify`` CLI subcommand on the Rust side:
+    ``run_rust_cli(workdir, ["memify", "-d", dataset])``.
+    """
+    args = ["memify", "-d", dataset]
+    if node_names:
+        for n in node_names:
+            args.extend(["--node-name", n])
+    return run_python_cli(workdir, args, check=check)
 
 
 def run_python_search(

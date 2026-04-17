@@ -18,7 +18,7 @@ use crate::graph_integration::{GraphEdgePair, GraphNodePair};
 /// - Target entity (name + description)
 ///
 /// Into embeddable text format:
-/// "source_text -› relationship_text-›target_text"
+/// "source_text-›relationship_text-›target_text"
 ///
 /// # Arguments
 /// * `nodes` - List of graph nodes (entities with descriptions)
@@ -100,10 +100,12 @@ pub fn create_triplets_from_graph(
             continue;
         }
 
-        // Create embeddable text: "source -› relationship-›target"
-        // Format matches Python add_data_points.py:242:
-        //   f"{source_node_text} -› {relationship_text}-›{target_node_text}"
-        let text = format!("{} -› {}-›{}", source_text, relationship_text, target_text);
+        // Create embeddable text: "source-›relationship-›target"
+        // Format matches Python memify get_triplet_datapoints.py:157:
+        //   f"{start_node_text}-›{relationship_text}-›{end_node_text}"
+        // Kept aligned with memify (no spaces around arrows) since both cognify
+        // and memify write into the same "Triplet"/"text" vector collection.
+        let text = format!("{source_text}-\u{203a}{relationship_text}-\u{203a}{target_text}");
 
         let triplet = Triplet::new(
             edge.source_entity_id,
@@ -267,9 +269,11 @@ mod tests {
 
     #[test]
     fn test_triplet_format_matches_python() {
-        // Python format (add_data_points.py:242):
-        //   f"{source_node_text} -› {relationship_text}-›{target_node_text}"
-        // Note: space before first arrow, NO space before/after second arrow
+        // Python memify format (get_triplet_datapoints.py:157):
+        //   f"{start_node_text}-›{relationship_text}-›{end_node_text}"
+        // No spaces around arrows. Cognify's add_data_points stage writes into
+        // the same "Triplet"/"text" collection, so we use the memify format
+        // for consistency across both pipelines.
         let entity1 = create_test_entity("Alice", "");
         let entity2 = create_test_entity("Bob", "");
 
@@ -283,8 +287,8 @@ mod tests {
         let triplets = create_triplets_from_graph(&[entity1, entity2], &[edge]);
         assert_eq!(triplets.len(), 1);
 
-        // Exact format: "Alice -› knows-›Bob"
-        assert_eq!(triplets[0].text, "Alice -› knows-›Bob");
+        // Exact format: "Alice-›knows-›Bob"
+        assert_eq!(triplets[0].text, "Alice-\u{203a}knows-\u{203a}Bob");
     }
 
     #[test]
