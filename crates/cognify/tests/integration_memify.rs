@@ -1,10 +1,15 @@
 #![cfg(feature = "testing")]
 
+use cognee_cognify::graph_integration::{GraphEdgePair, GraphNodePair};
+use cognee_cognify::memify::extract_triplets::extract_triplets_from_graph_db;
 use cognee_cognify::memify::{MemifyConfig, memify};
+use cognee_cognify::triplet_creation::create_triplets_from_graph;
 use cognee_embedding::MockEmbeddingEngine;
 use cognee_graph::{GraphDBTrait, MockGraphDB};
+use cognee_models::{Entity, EntityType};
 use cognee_vector::{MockVectorDB, VectorDB};
 use serde_json::json;
+use std::collections::HashMap;
 use uuid::Uuid;
 
 /// Helper: add a node to the mock graph with name and description.
@@ -124,6 +129,137 @@ async fn test_memify_empty_graph() {
         !vector_db.has_collection("Triplet", "text").await.unwrap(),
         "no collection should be created for empty graph"
     );
+}
+
+// ⚠️ CRITICAL: Breaking this test means memify will duplicate-insert
+// instead of upsert vector points, corrupting production deployments.
+// Both memify and cognify must derive Triplet.id identically (see
+// Triplet::new in crates/models/src/triplet.rs).
+#[tokio::test]
+async fn test_memify_idempotent_ids_match_cognify() {
+    // --- Seed the mock graph for memify's extract path ---
+    let graph_db = MockGraphDB::new();
+
+    let id_a = Uuid::new_v4();
+    let id_b = Uuid::new_v4();
+    let id_c = Uuid::new_v4();
+
+    add_node(&graph_db, id_a, "Alice", "Software engineer").await;
+    add_node(&graph_db, id_b, "TechCorp", "Technology company").await;
+    add_node(&graph_db, id_c, "Bob", "Product manager").await;
+    add_edge(&graph_db, id_a, id_b, "works_at").await;
+    add_edge(&graph_db, id_a, id_c, "knows").await;
+    add_edge(&graph_db, id_b, id_c, "employs").await;
+
+    // --- Build parallel GraphNodePair / GraphEdgePair representations
+    // for cognify's synchronous create_triplets_from_graph helper.
+    // Same UUIDs + same (source, relationship, target) tuples guarantee
+    // the deterministic Triplet::new() derivation is driven by identical
+    // inputs on both sides.
+    fn make_node(id: Uuid, name: &str, description: &str) -> GraphNodePair {
+        let mut entity = Entity::new(name, None, description, None);
+        entity.base.id = id;
+        let entity_type = EntityType::new("Generic", "Generic type", None);
+        GraphNodePair {
+            entity,
+            entity_type,
+        }
+    }
+
+    let nodes = vec![
+        make_node(id_a, "Alice", "Software engineer"),
+        make_node(id_b, "TechCorp", "Technology company"),
+        make_node(id_c, "Bob", "Product manager"),
+    ];
+    let edges = vec![
+        GraphEdgePair::new(id_a, id_b, "works_at"),
+        GraphEdgePair::new(id_a, id_c, "knows"),
+        GraphEdgePair::new(id_b, id_c, "employs"),
+    ];
+
+    // --- Run both paths ---
+    let memify_config = MemifyConfig::default();
+    let memify_triplets = extract_triplets_from_graph_db(&graph_db, &memify_config)
+        .await
+        .expect("memify extract should succeed on seeded mock graph");
+
+    let cognify_triplets = create_triplets_from_graph(&nodes, &edges);
+
+    // --- Compare counts ---
+    assert_eq!(
+        memify_triplets.len(),
+        cognify_triplets.len(),
+        "memify and cognify should produce the same number of triplets for \
+         the same logical graph state (memify={}, cognify={})",
+        memify_triplets.len(),
+        cognify_triplets.len(),
+    );
+    assert_eq!(
+        memify_triplets.len(),
+        3,
+        "sanity: all three seeded edges should yield triplets"
+    );
+
+    // --- Compare (source, rel, target) -> id maps ---
+    let memify_map: HashMap<(Uuid, String, Uuid), Uuid> = memify_triplets
+        .iter()
+        .map(|t| {
+            (
+                (
+                    t.source_entity_id,
+                    t.relationship_name.clone(),
+                    t.target_entity_id,
+                ),
+                t.id,
+            )
+        })
+        .collect();
+    let cognify_map: HashMap<(Uuid, String, Uuid), Uuid> = cognify_triplets
+        .iter()
+        .map(|t| {
+            (
+                (
+                    t.source_entity_id,
+                    t.relationship_name.clone(),
+                    t.target_entity_id,
+                ),
+                t.id,
+            )
+        })
+        .collect();
+
+    assert_eq!(
+        memify_map.len(),
+        memify_triplets.len(),
+        "memify triplets must have unique (source, rel, target) tuples"
+    );
+    assert_eq!(
+        cognify_map.len(),
+        cognify_triplets.len(),
+        "cognify triplets must have unique (source, rel, target) tuples"
+    );
+
+    // Key sets must be identical.
+    let memify_keys: std::collections::HashSet<_> = memify_map.keys().collect();
+    let cognify_keys: std::collections::HashSet<_> = cognify_map.keys().collect();
+    assert_eq!(
+        memify_keys, cognify_keys,
+        "memify and cognify must cover the same (source, rel, target) tuples"
+    );
+
+    // For every shared key, the derived UUID5 id must match exactly.
+    for (key, memify_id) in &memify_map {
+        let cognify_id = cognify_map
+            .get(key)
+            .expect("key presence already asserted by set equality above");
+        assert_eq!(
+            memify_id, cognify_id,
+            "Triplet.id diverges between memify and cognify for \
+             (source={}, rel={}, target={}): memify={}, cognify={}. \
+             This would cause duplicate vector points instead of upsert.",
+            key.0, key.1, key.2, memify_id, cognify_id,
+        );
+    }
 }
 
 #[tokio::test]
