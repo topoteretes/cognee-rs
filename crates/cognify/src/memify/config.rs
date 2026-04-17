@@ -122,6 +122,41 @@ mod tests {
     }
 
     #[test]
+    fn test_config_empty_node_names_vec_passes_validation() {
+        // ANCHOR: pins the current behavior that an empty `node_name_filter`
+        // vec passes `validate()` as-is (it is NOT coerced to `None`). If
+        // future work adds such coercion, this test must be updated.
+        let config = MemifyConfig::default().with_node_name_filter(vec![]);
+        assert_eq!(config.node_name_filter, Some(vec![]));
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_config_operator_case_sensitive() {
+        for op in ["or", "Or", "aNd", "and", "xor", ""] {
+            let config = MemifyConfig::default().with_node_name_filter_operator(op.to_string());
+            let err = config.validate().unwrap_err();
+            assert!(
+                matches!(err, MemifyError::ConfigError(_)),
+                "expected ConfigError for operator {op:?}, got: {err}"
+            );
+        }
+        for op in ["OR", "AND"] {
+            let config = MemifyConfig::default().with_node_name_filter_operator(op.to_string());
+            assert!(
+                config.validate().is_ok(),
+                "expected operator {op:?} to pass validation"
+            );
+        }
+    }
+
+    #[test]
+    fn test_config_large_batch_size_accepted() {
+        let config = MemifyConfig::default().with_triplet_batch_size(10_000);
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
     fn test_builder_methods() {
         let config = MemifyConfig::default()
             .with_triplet_batch_size(50)
