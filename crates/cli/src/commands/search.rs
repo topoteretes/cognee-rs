@@ -132,6 +132,7 @@ fn map_query_type(query_type: QueryTypeArg) -> SearchType {
             SearchType::CodingRules
         }
         QueryTypeArg::Cypher => SearchType::Cypher,
+        QueryTypeArg::Temporal => SearchType::Temporal,
     }
 }
 

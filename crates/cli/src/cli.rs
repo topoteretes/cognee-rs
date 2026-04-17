@@ -133,6 +133,8 @@ pub enum QueryTypeArg {
     Code,
     #[value(name = "CYPHER")]
     Cypher,
+    #[value(name = "TEMPORAL")]
+    Temporal,
 }
 
 #[derive(Debug, Clone, ValueEnum)]

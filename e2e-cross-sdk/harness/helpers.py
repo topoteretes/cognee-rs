@@ -132,23 +132,28 @@ def run_python_cli(
             f"asyncio.run(main())\n"
         )
     elif command == "cognify":
-        # Parse: cognify -d <dataset_name>
+        # Parse: cognify -d <dataset_name> [--temporal-cognify]
         dataset_name = None
+        temporal_cognify = False
         i = 1
         while i < len(args):
             if args[i] in ("-d", "--datasets") and i + 1 < len(args):
                 dataset_name = args[i + 1]
                 i += 2
+            elif args[i] == "--temporal-cognify":
+                temporal_cognify = True
+                i += 1
             else:
                 i += 1
 
         ds_arg = f"[{dataset_name!r}]" if dataset_name else "None"
+        temporal_arg = "True" if temporal_cognify else "False"
         script = (
             f"import asyncio, cognee\n"
             f"cognee.config.data_root_directory({str(py_storage)!r})\n"
             f"cognee.config.system_root_directory({str(py_system)!r})\n"
             f"async def main():\n"
-            f"    await cognee.cognify(datasets={ds_arg})\n"
+            f"    await cognee.cognify(datasets={ds_arg}, temporal_cognify={temporal_arg})\n"
             f"    print('OK')\n"
             f"asyncio.run(main())\n"
         )
@@ -331,6 +336,30 @@ def query_nodes(conn: sqlite3.Connection) -> list[dict]:
             r["node_type"] = r["type"]
     rows.sort(key=lambda r: (r.get("type", ""), r.get("label", "")))
     return rows
+
+
+def query_nodes_by_type(conn: sqlite3.Connection, node_type: str) -> list[dict]:
+    """Return all graph nodes of a given type from the graph SQLite store.
+
+    The Rust Ladybug adapter stores nodes in the ``nodes`` table with a
+    ``node_type`` column.  The Python Kuzu adapter stores nodes in a separate
+    table per type.  This helper queries the Rust-side ``nodes`` table and
+    normalises the result into a uniform list of dicts with a ``type`` key.
+    """
+    rows = conn.execute(
+        'SELECT * FROM nodes WHERE "node_type" = ?',
+        (node_type,),
+    ).fetchall()
+    result = []
+    for r in rows:
+        d = dict(r)
+        # Normalise: always expose both "type" and "node_type" keys
+        if "node_type" in d and "type" not in d:
+            d["type"] = d["node_type"]
+        elif "type" in d and "node_type" not in d:
+            d["node_type"] = d["type"]
+        result.append(d)
+    return result
 
 
 def query_edges(conn: sqlite3.Connection) -> list[dict]:
