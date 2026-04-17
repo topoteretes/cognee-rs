@@ -102,3 +102,95 @@ pub fn to_cognify_timestamp(raw: RawExtractedTimestamp) -> Option<CognifyTimesta
         timestamp_str,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::{TimeZone, Utc};
+
+    #[test]
+    fn to_cognify_timestamp_happy_path() {
+        let raw = RawExtractedTimestamp {
+            year: 2024,
+            month: 3,
+            day: 15,
+            hour: 0,
+            minute: 0,
+            second: 0,
+        };
+        let result = to_cognify_timestamp(raw).unwrap();
+
+        let expected_dt = Utc.with_ymd_and_hms(2024, 3, 15, 0, 0, 0).unwrap();
+        assert_eq!(result.time_at, expected_dt.timestamp_millis());
+        assert_eq!(result.timestamp_str, "2024-03-15 00:00:00");
+        assert_eq!(result.year, 2024);
+        assert_eq!(result.month, 3);
+        assert_eq!(result.day, 15);
+    }
+
+    #[test]
+    fn to_cognify_timestamp_with_time_components() {
+        let raw = RawExtractedTimestamp {
+            year: 2024,
+            month: 7,
+            day: 4,
+            hour: 14,
+            minute: 30,
+            second: 45,
+        };
+        let result = to_cognify_timestamp(raw).unwrap();
+
+        let expected_dt = Utc.with_ymd_and_hms(2024, 7, 4, 14, 30, 45).unwrap();
+        assert_eq!(result.time_at, expected_dt.timestamp_millis());
+        assert_eq!(result.timestamp_str, "2024-07-04 14:30:45");
+        assert_eq!(result.hour, 14);
+        assert_eq!(result.minute, 30);
+        assert_eq!(result.second, 45);
+    }
+
+    #[test]
+    fn to_cognify_timestamp_invalid_dates_return_none() {
+        // Month 13 is invalid
+        let raw = RawExtractedTimestamp {
+            year: 2024,
+            month: 13,
+            day: 1,
+            hour: 0,
+            minute: 0,
+            second: 0,
+        };
+        assert!(to_cognify_timestamp(raw).is_none());
+
+        // Feb 30 is invalid
+        let raw = RawExtractedTimestamp {
+            year: 2024,
+            month: 2,
+            day: 30,
+            hour: 0,
+            minute: 0,
+            second: 0,
+        };
+        assert!(to_cognify_timestamp(raw).is_none());
+    }
+
+    #[test]
+    fn to_cognify_timestamp_serde_defaults() {
+        // Simulates serde defaults: year from LLM, month=1, day=1, h/m/s=0
+        let raw = RawExtractedTimestamp {
+            year: 1889,
+            month: 1,
+            day: 1,
+            hour: 0,
+            minute: 0,
+            second: 0,
+        };
+        let result = to_cognify_timestamp(raw).unwrap();
+
+        let expected_dt = Utc.with_ymd_and_hms(1889, 1, 1, 0, 0, 0).unwrap();
+        assert_eq!(result.time_at, expected_dt.timestamp_millis());
+        assert_eq!(result.timestamp_str, "1889-01-01 00:00:00");
+        assert_eq!(result.year, 1889);
+        assert_eq!(result.month, 1);
+        assert_eq!(result.day, 1);
+    }
+}

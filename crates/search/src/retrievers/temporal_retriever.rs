@@ -1019,6 +1019,227 @@ mod tests {
         );
     }
 
+    // ── parse_bound tests ──────────────────────────────────────────────
+
+    #[test]
+    fn parse_bound_datetime_space_format() {
+        use chrono::{TimeZone, Utc};
+        let result = super::parse_bound("2024-01-15 10:30:00", false);
+        assert_eq!(
+            result,
+            Some(Utc.with_ymd_and_hms(2024, 1, 15, 10, 30, 0).unwrap())
+        );
+    }
+
+    #[test]
+    fn parse_bound_rfc3339_format() {
+        use chrono::{TimeZone, Utc};
+        let result = super::parse_bound("2024-01-15T10:30:00Z", false);
+        assert_eq!(
+            result,
+            Some(Utc.with_ymd_and_hms(2024, 1, 15, 10, 30, 0).unwrap())
+        );
+    }
+
+    #[test]
+    fn parse_bound_date_only_start() {
+        use chrono::{TimeZone, Utc};
+        let result = super::parse_bound("2024-03-15", false);
+        assert_eq!(
+            result,
+            Some(Utc.with_ymd_and_hms(2024, 3, 15, 0, 0, 0).unwrap())
+        );
+    }
+
+    #[test]
+    fn parse_bound_date_only_end() {
+        use chrono::{TimeZone, Utc};
+        let result = super::parse_bound("2024-03-15", true);
+        assert_eq!(
+            result,
+            Some(Utc.with_ymd_and_hms(2024, 3, 15, 23, 59, 59).unwrap())
+        );
+    }
+
+    #[test]
+    fn parse_bound_month_start() {
+        use chrono::{TimeZone, Utc};
+        let result = super::parse_bound("2024-03", false);
+        assert_eq!(
+            result,
+            Some(Utc.with_ymd_and_hms(2024, 3, 1, 0, 0, 0).unwrap())
+        );
+    }
+
+    #[test]
+    fn parse_bound_month_end() {
+        use chrono::{TimeZone, Utc};
+        let result = super::parse_bound("2024-03", true);
+        assert_eq!(
+            result,
+            Some(Utc.with_ymd_and_hms(2024, 3, 31, 23, 59, 59).unwrap())
+        );
+    }
+
+    #[test]
+    fn parse_bound_month_end_leap_year() {
+        use chrono::{TimeZone, Utc};
+        let result = super::parse_bound("2024-02", true);
+        assert_eq!(
+            result,
+            Some(Utc.with_ymd_and_hms(2024, 2, 29, 23, 59, 59).unwrap())
+        );
+    }
+
+    #[test]
+    fn parse_bound_month_end_non_leap_year() {
+        use chrono::{TimeZone, Utc};
+        let result = super::parse_bound("2023-02", true);
+        assert_eq!(
+            result,
+            Some(Utc.with_ymd_and_hms(2023, 2, 28, 23, 59, 59).unwrap())
+        );
+    }
+
+    #[test]
+    fn parse_bound_month_end_december_wrap() {
+        use chrono::{TimeZone, Utc};
+        let result = super::parse_bound("2024-12", true);
+        assert_eq!(
+            result,
+            Some(Utc.with_ymd_and_hms(2024, 12, 31, 23, 59, 59).unwrap())
+        );
+    }
+
+    #[test]
+    fn parse_bound_year_start() {
+        use chrono::{TimeZone, Utc};
+        let result = super::parse_bound("2024", false);
+        assert_eq!(
+            result,
+            Some(Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap())
+        );
+    }
+
+    #[test]
+    fn parse_bound_year_end() {
+        use chrono::{TimeZone, Utc};
+        let result = super::parse_bound("2024", true);
+        assert_eq!(
+            result,
+            Some(Utc.with_ymd_and_hms(2024, 12, 31, 23, 59, 59).unwrap())
+        );
+    }
+
+    #[test]
+    fn parse_bound_empty_and_whitespace_returns_none() {
+        assert_eq!(super::parse_bound("", false), None);
+        assert_eq!(super::parse_bound("  ", false), None);
+    }
+
+    #[test]
+    fn parse_bound_invalid_input_returns_none() {
+        assert_eq!(super::parse_bound("not-a-date", false), None);
+        assert_eq!(super::parse_bound("abc", false), None);
+    }
+
+    // ── is_within_interval_ms tests ───────────────────────────────────
+
+    #[test]
+    fn is_within_interval_ms_basic_cases() {
+        use super::is_within_interval_ms;
+
+        // In range
+        assert!(is_within_interval_ms(500, Some(100), Some(1000)));
+        // At lower boundary (inclusive)
+        assert!(is_within_interval_ms(100, Some(100), Some(1000)));
+        // At upper boundary (inclusive)
+        assert!(is_within_interval_ms(1000, Some(100), Some(1000)));
+        // Below range
+        assert!(!is_within_interval_ms(50, Some(100), Some(1000)));
+        // Above range
+        assert!(!is_within_interval_ms(1500, Some(100), Some(1000)));
+    }
+
+    #[test]
+    fn is_within_interval_ms_open_ended_bounds() {
+        use super::is_within_interval_ms;
+
+        // No lower bound (open start)
+        assert!(is_within_interval_ms(50, None, Some(1000)));
+        assert!(!is_within_interval_ms(1500, None, Some(1000)));
+
+        // No upper bound (open end)
+        assert!(is_within_interval_ms(1500, Some(100), None));
+        assert!(!is_within_interval_ms(50, Some(100), None));
+
+        // Both bounds None (everything matches)
+        assert!(is_within_interval_ms(0, None, None));
+        assert!(is_within_interval_ms(i64::MAX, None, None));
+        assert!(is_within_interval_ms(i64::MIN, None, None));
+    }
+
+    // ── QueryInterval::parse tests ────────────────────────────────────
+
+    #[test]
+    fn query_interval_parse_both_bounds() {
+        use chrono::{TimeZone, Utc};
+
+        let qi = QueryInterval {
+            starts_at: Some("2024-01-01".to_string()),
+            ends_at: Some("2024-12-31".to_string()),
+        };
+        let parsed = qi.parse();
+        assert_eq!(
+            parsed.start,
+            Some(Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap())
+        );
+        assert_eq!(
+            parsed.end,
+            Some(Utc.with_ymd_and_hms(2024, 12, 31, 23, 59, 59).unwrap())
+        );
+    }
+
+    #[test]
+    fn query_interval_parse_none_bounds() {
+        let qi = QueryInterval {
+            starts_at: None,
+            ends_at: None,
+        };
+        let parsed = qi.parse();
+        assert!(parsed.start.is_none());
+        assert!(parsed.end.is_none());
+    }
+
+    #[test]
+    fn query_interval_parse_partial_bounds() {
+        use chrono::{TimeZone, Utc};
+
+        // Only starts_at
+        let qi = QueryInterval {
+            starts_at: Some("2024-06".to_string()),
+            ends_at: None,
+        };
+        let parsed = qi.parse();
+        assert_eq!(
+            parsed.start,
+            Some(Utc.with_ymd_and_hms(2024, 6, 1, 0, 0, 0).unwrap())
+        );
+        assert!(parsed.end.is_none());
+
+        // Only ends_at
+        let qi = QueryInterval {
+            starts_at: None,
+            ends_at: Some("2024".to_string()),
+        };
+        let parsed = qi.parse();
+        assert!(parsed.start.is_none());
+        assert_eq!(
+            parsed.end,
+            Some(Utc.with_ymd_and_hms(2024, 12, 31, 23, 59, 59).unwrap())
+        );
+    }
+
     #[tokio::test]
     async fn falls_back_to_graph_context_when_interval_extraction_fails() {
         let vector_db = Arc::new(TestVectorDb {
