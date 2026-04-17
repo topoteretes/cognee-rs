@@ -475,4 +475,166 @@ mod tests {
             "filters referencing a nonexistent type should yield no triplets"
         );
     }
+
+    /// Self-loop: a single node with an edge to itself produces exactly one
+    /// triplet whose source and target UUIDs are equal. The extractor does
+    /// not de-duplicate or reject self-loops.
+    #[tokio::test]
+    async fn test_extract_circular_self_loop() {
+        let db = MockGraphDB::new();
+        let node_id = Uuid::new_v4();
+
+        add_node(&db, node_id, "Ouroboros", "A snake eating its tail").await;
+        add_edge(&db, node_id, node_id, "relates_to").await;
+
+        let config = MemifyConfig::default();
+        let triplets = extract_triplets_from_graph_db(&db, &config).await.unwrap();
+
+        assert_eq!(triplets.len(), 1, "self-loops must produce one triplet");
+        let t = &triplets[0];
+        assert_eq!(
+            t.source_entity_id, t.target_entity_id,
+            "self-loop source and target IDs must be equal"
+        );
+        assert_eq!(t.source_entity_id, node_id);
+        assert_eq!(t.relationship_name, "relates_to");
+    }
+
+    /// Helper: add a node populated from a raw JSON builder closure so tests
+    /// can control exactly which property keys are present (e.g. description
+    /// without name, or name without description).
+    async fn add_node_with_props(db: &MockGraphDB, id: Uuid, props: serde_json::Value) {
+        let mut node_json = match props {
+            serde_json::Value::Object(m) => m,
+            _ => panic!("props must be a JSON object"),
+        };
+        node_json.insert("id".to_string(), json!(id.to_string()));
+        db.add_node_raw(serde_json::Value::Object(node_json))
+            .await
+            .unwrap();
+    }
+
+    /// Covers two sub-cases for nodes with partial property coverage:
+    ///
+    /// 1. Node A has `description` only (no `name`). Current Rust
+    ///    `build_node_text()` behavior: with an absent `name` but a non-empty
+    ///    `description`, it still enters the `"{name}: {description}"`
+    ///    branch, producing the leading-colon string `": <description>"`.
+    ///    This quirk is pinned here so any refactor (including an intentional
+    ///    fix that makes it return `""`) becomes a visible diff. The edge is
+    ///    NOT skipped because source/relationship/target text are not all
+    ///    empty.
+    /// 2. Node C has `name` only (no `description`). Text is the bare name,
+    ///    with no trailing colon.
+    #[tokio::test]
+    async fn test_extract_node_missing_name_field() {
+        // --- Sub-case 1: node A has description but no name ---
+        let db1 = MockGraphDB::new();
+        let a_id = Uuid::new_v4();
+        let b_id = Uuid::new_v4();
+
+        // Node A: description only, no "name" key.
+        add_node_with_props(&db1, a_id, json!({ "description": "Some description" })).await;
+        // Node B: fully populated to provide non-empty target text.
+        add_node(&db1, b_id, "Bob", "A person").await;
+        add_edge(&db1, a_id, b_id, "knows").await;
+
+        let config = MemifyConfig::default();
+        let triplets = extract_triplets_from_graph_db(&db1, &config).await.unwrap();
+
+        assert_eq!(
+            triplets.len(),
+            1,
+            "edge with missing-name source must NOT be skipped when \
+             relationship + target text are non-empty"
+        );
+        let t = &triplets[0];
+        assert_eq!(t.source_entity_id, a_id);
+        assert_eq!(t.target_entity_id, b_id);
+        assert_eq!(t.relationship_name, "knows");
+        // Current behavior: `name` absent + `description` present yields
+        // `": {description}"` (leading colon), not `""`. Pinned verbatim.
+        assert_eq!(
+            t.text, ": Some description -\u{203a} knows-\u{203a}Bob: A person",
+            "pinned leading-colon behavior when `name` is absent but \
+             `description` is present"
+        );
+
+        // --- Sub-case 2: node C has name only, no description ---
+        let db2 = MockGraphDB::new();
+        let c_id = Uuid::new_v4();
+        let d_id = Uuid::new_v4();
+
+        add_node_with_props(&db2, c_id, json!({ "name": "Carol" })).await;
+        add_node(&db2, d_id, "Dave", "").await;
+        add_edge(&db2, c_id, d_id, "knows").await;
+
+        let triplets2 = extract_triplets_from_graph_db(&db2, &config).await.unwrap();
+        assert_eq!(triplets2.len(), 1);
+        let t2 = &triplets2[0];
+        // Bare name: no trailing colon, no description suffix.
+        assert!(
+            t2.text.starts_with("Carol -\u{203a} knows"),
+            "expected bare name 'Carol' with no colon, got: {text:?}",
+            text = t2.text
+        );
+        assert!(
+            !t2.text.starts_with("Carol: "),
+            "bare name must not have a trailing colon, got: {text:?}",
+            text = t2.text
+        );
+    }
+
+    /// All three text components empty → edge is skipped (empty Vec returned).
+    #[tokio::test]
+    async fn test_extract_edge_all_empty_fields_skipped() {
+        let db = MockGraphDB::new();
+        let a_id = Uuid::new_v4();
+        let b_id = Uuid::new_v4();
+
+        // Nodes with no name and no description: text will be empty.
+        add_node_with_props(&db, a_id, json!({})).await;
+        add_node_with_props(&db, b_id, json!({})).await;
+        // Edge with empty relationship_name AND empty edge_text.
+        let mut props: HashMap<Cow<'static, str>, serde_json::Value> = HashMap::new();
+        props.insert(Cow::Borrowed("edge_text"), json!(""));
+        db.add_edge(&a_id.to_string(), &b_id.to_string(), "", Some(props))
+            .await
+            .unwrap();
+
+        let config = MemifyConfig::default();
+        let triplets = extract_triplets_from_graph_db(&db, &config).await.unwrap();
+
+        assert!(
+            triplets.is_empty(),
+            "edge with all three text components empty must be skipped, got: {triplets:?}"
+        );
+    }
+
+    /// Pins the exact triplet text format:
+    ///   "{source}: {src_desc} -\u{203a} {rel}-\u{203a}{target}: {tgt_desc}"
+    ///
+    /// Note the ASYMMETRIC spacing: space-dash BEFORE the first U+203A arrow,
+    /// and NO space before the second arrow. Any future refactor that drifts
+    /// from this exact format will change the embedding input string and
+    /// break cross-run ID stability / vector similarity.
+    #[tokio::test]
+    async fn test_extract_triplet_text_format() {
+        let db = MockGraphDB::new();
+        let src_id = Uuid::new_v4();
+        let tgt_id = Uuid::new_v4();
+
+        add_node(&db, src_id, "Alice", "engineer").await;
+        add_node(&db, tgt_id, "TechCorp", "tech").await;
+        add_edge(&db, src_id, tgt_id, "works_at").await;
+
+        let config = MemifyConfig::default();
+        let triplets = extract_triplets_from_graph_db(&db, &config).await.unwrap();
+
+        assert_eq!(triplets.len(), 1);
+        assert_eq!(
+            triplets[0].text,
+            "Alice: engineer -\u{203a} works_at-\u{203a}TechCorp: tech",
+        );
+    }
 }
