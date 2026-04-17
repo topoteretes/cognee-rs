@@ -1020,25 +1020,225 @@ mod tests {
         );
     }
 
-    fn build_retriever(
-        vector_db: Arc<dyn VectorDB>,
-        graph_db: Arc<dyn GraphDBTrait>,
-        llm: Arc<dyn Llm>,
-    ) -> TemporalRetriever {
-        TemporalRetriever::new(
-            vector_db,
-            Arc::new(TestEmbeddingEngine),
-            graph_db,
-            llm,
-            Some(10),
-            Some(100),
-            Some(0.0),
-            None,
-            None,
-            None,
-            None,
-            None,
-        )
+    // ── parse_bound tests ──────────────────────────────────────────────
+
+    #[test]
+    fn parse_bound_datetime_space_format() {
+        use chrono::{TimeZone, Utc};
+        let result = super::parse_bound("2024-01-15 10:30:00", false);
+        assert_eq!(
+            result,
+            Some(Utc.with_ymd_and_hms(2024, 1, 15, 10, 30, 0).unwrap())
+        );
+    }
+
+    #[test]
+    fn parse_bound_rfc3339_format() {
+        use chrono::{TimeZone, Utc};
+        let result = super::parse_bound("2024-01-15T10:30:00Z", false);
+        assert_eq!(
+            result,
+            Some(Utc.with_ymd_and_hms(2024, 1, 15, 10, 30, 0).unwrap())
+        );
+    }
+
+    #[test]
+    fn parse_bound_date_only_start() {
+        use chrono::{TimeZone, Utc};
+        let result = super::parse_bound("2024-03-15", false);
+        assert_eq!(
+            result,
+            Some(Utc.with_ymd_and_hms(2024, 3, 15, 0, 0, 0).unwrap())
+        );
+    }
+
+    #[test]
+    fn parse_bound_date_only_end() {
+        use chrono::{TimeZone, Utc};
+        let result = super::parse_bound("2024-03-15", true);
+        assert_eq!(
+            result,
+            Some(Utc.with_ymd_and_hms(2024, 3, 15, 23, 59, 59).unwrap())
+        );
+    }
+
+    #[test]
+    fn parse_bound_month_start() {
+        use chrono::{TimeZone, Utc};
+        let result = super::parse_bound("2024-03", false);
+        assert_eq!(
+            result,
+            Some(Utc.with_ymd_and_hms(2024, 3, 1, 0, 0, 0).unwrap())
+        );
+    }
+
+    #[test]
+    fn parse_bound_month_end() {
+        use chrono::{TimeZone, Utc};
+        let result = super::parse_bound("2024-03", true);
+        assert_eq!(
+            result,
+            Some(Utc.with_ymd_and_hms(2024, 3, 31, 23, 59, 59).unwrap())
+        );
+    }
+
+    #[test]
+    fn parse_bound_month_end_leap_year() {
+        use chrono::{TimeZone, Utc};
+        let result = super::parse_bound("2024-02", true);
+        assert_eq!(
+            result,
+            Some(Utc.with_ymd_and_hms(2024, 2, 29, 23, 59, 59).unwrap())
+        );
+    }
+
+    #[test]
+    fn parse_bound_month_end_non_leap_year() {
+        use chrono::{TimeZone, Utc};
+        let result = super::parse_bound("2023-02", true);
+        assert_eq!(
+            result,
+            Some(Utc.with_ymd_and_hms(2023, 2, 28, 23, 59, 59).unwrap())
+        );
+    }
+
+    #[test]
+    fn parse_bound_month_end_december_wrap() {
+        use chrono::{TimeZone, Utc};
+        let result = super::parse_bound("2024-12", true);
+        assert_eq!(
+            result,
+            Some(Utc.with_ymd_and_hms(2024, 12, 31, 23, 59, 59).unwrap())
+        );
+    }
+
+    #[test]
+    fn parse_bound_year_start() {
+        use chrono::{TimeZone, Utc};
+        let result = super::parse_bound("2024", false);
+        assert_eq!(
+            result,
+            Some(Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap())
+        );
+    }
+
+    #[test]
+    fn parse_bound_year_end() {
+        use chrono::{TimeZone, Utc};
+        let result = super::parse_bound("2024", true);
+        assert_eq!(
+            result,
+            Some(Utc.with_ymd_and_hms(2024, 12, 31, 23, 59, 59).unwrap())
+        );
+    }
+
+    #[test]
+    fn parse_bound_empty_and_whitespace_returns_none() {
+        assert_eq!(super::parse_bound("", false), None);
+        assert_eq!(super::parse_bound("  ", false), None);
+    }
+
+    #[test]
+    fn parse_bound_invalid_input_returns_none() {
+        assert_eq!(super::parse_bound("not-a-date", false), None);
+        assert_eq!(super::parse_bound("abc", false), None);
+    }
+
+    // ── is_within_interval_ms tests ───────────────────────────────────
+
+    #[test]
+    fn is_within_interval_ms_basic_cases() {
+        use super::is_within_interval_ms;
+
+        // In range
+        assert!(is_within_interval_ms(500, Some(100), Some(1000)));
+        // At lower boundary (inclusive)
+        assert!(is_within_interval_ms(100, Some(100), Some(1000)));
+        // At upper boundary (inclusive)
+        assert!(is_within_interval_ms(1000, Some(100), Some(1000)));
+        // Below range
+        assert!(!is_within_interval_ms(50, Some(100), Some(1000)));
+        // Above range
+        assert!(!is_within_interval_ms(1500, Some(100), Some(1000)));
+    }
+
+    #[test]
+    fn is_within_interval_ms_open_ended_bounds() {
+        use super::is_within_interval_ms;
+
+        // No lower bound (open start)
+        assert!(is_within_interval_ms(50, None, Some(1000)));
+        assert!(!is_within_interval_ms(1500, None, Some(1000)));
+
+        // No upper bound (open end)
+        assert!(is_within_interval_ms(1500, Some(100), None));
+        assert!(!is_within_interval_ms(50, Some(100), None));
+
+        // Both bounds None (everything matches)
+        assert!(is_within_interval_ms(0, None, None));
+        assert!(is_within_interval_ms(i64::MAX, None, None));
+        assert!(is_within_interval_ms(i64::MIN, None, None));
+    }
+
+    // ── QueryInterval::parse tests ────────────────────────────────────
+
+    #[test]
+    fn query_interval_parse_both_bounds() {
+        use chrono::{TimeZone, Utc};
+
+        let qi = QueryInterval {
+            starts_at: Some("2024-01-01".to_string()),
+            ends_at: Some("2024-12-31".to_string()),
+        };
+        let parsed = qi.parse();
+        assert_eq!(
+            parsed.start,
+            Some(Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap())
+        );
+        assert_eq!(
+            parsed.end,
+            Some(Utc.with_ymd_and_hms(2024, 12, 31, 23, 59, 59).unwrap())
+        );
+    }
+
+    #[test]
+    fn query_interval_parse_none_bounds() {
+        let qi = QueryInterval {
+            starts_at: None,
+            ends_at: None,
+        };
+        let parsed = qi.parse();
+        assert!(parsed.start.is_none());
+        assert!(parsed.end.is_none());
+    }
+
+    #[test]
+    fn query_interval_parse_partial_bounds() {
+        use chrono::{TimeZone, Utc};
+
+        // Only starts_at
+        let qi = QueryInterval {
+            starts_at: Some("2024-06".to_string()),
+            ends_at: None,
+        };
+        let parsed = qi.parse();
+        assert_eq!(
+            parsed.start,
+            Some(Utc.with_ymd_and_hms(2024, 6, 1, 0, 0, 0).unwrap())
+        );
+        assert!(parsed.end.is_none());
+
+        // Only ends_at
+        let qi = QueryInterval {
+            starts_at: None,
+            ends_at: Some("2024".to_string()),
+        };
+        let parsed = qi.parse();
+        assert!(parsed.start.is_none());
+        assert_eq!(
+            parsed.end,
+            Some(Utc.with_ymd_and_hms(2024, 12, 31, 23, 59, 59).unwrap())
+        );
     }
 
     #[tokio::test]
@@ -1122,494 +1322,146 @@ mod tests {
         );
     }
 
-    // ---- Phase 3: get_context edge case tests ----
+    fn build_retriever_with_llm(llm: TestLlm) -> TemporalRetriever {
+        TemporalRetriever::new(
+            Arc::new(TestVectorDb {
+                collections: HashMap::new(),
+            }),
+            Arc::new(TestEmbeddingEngine),
+            Arc::new(TestGraphDb {
+                nodes: vec![],
+                edges: vec![],
+                neighbors: HashMap::new(),
+            }),
+            Arc::new(llm),
+            Some(5),
+            Some(10),
+            Some(0.0),
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+    }
 
     #[tokio::test]
-    async fn get_context_with_time_from_only() {
-        // Timestamps: 2020-06-15, 2024-01-15, 2024-07-15
-        let ts_2020 = "aa000000-0000-0000-0000-000000000001";
-        let ts_2024_jan = "aa000000-0000-0000-0000-000000000002";
-        let ts_2024_jul = "aa000000-0000-0000-0000-000000000003";
-        let ev_old = "bb000000-0000-0000-0000-000000000001";
-        let ev_jan = "bb000000-0000-0000-0000-000000000002";
-        let ev_jul = "bb000000-0000-0000-0000-000000000003";
-
-        let graph_db = Arc::new(TestGraphDb {
-            nodes: vec![
-                timestamp_node(ts_2020, 1592179200000),
-                timestamp_node(ts_2024_jan, 1705276800000),
-                timestamp_node(ts_2024_jul, 1721001600000),
-                event_graph_node(ev_old, "Old event"),
-                event_graph_node(ev_jan, "Jan event"),
-                event_graph_node(ev_jul, "Jul event"),
-            ],
-            edges: vec![
-                (
-                    ev_old.to_string(),
-                    ts_2020.to_string(),
-                    "at".to_string(),
-                    HashMap::new(),
-                ),
-                (
-                    ev_jan.to_string(),
-                    ts_2024_jan.to_string(),
-                    "at".to_string(),
-                    HashMap::new(),
-                ),
-                (
-                    ev_jul.to_string(),
-                    ts_2024_jul.to_string(),
-                    "at".to_string(),
-                    HashMap::new(),
-                ),
-            ],
-            neighbors: HashMap::from([
-                (
-                    ts_2020.to_string(),
-                    vec![event_node_data(ev_old, "Old event")],
-                ),
-                (
-                    ts_2024_jan.to_string(),
-                    vec![event_node_data(ev_jan, "Jan event")],
-                ),
-                (
-                    ts_2024_jul.to_string(),
-                    vec![event_node_data(ev_jul, "Jul event")],
-                ),
-            ]),
-        });
-
-        let vector_db = Arc::new(TestVectorDb {
-            collections: HashMap::from([(
-                TestVectorDb::key("Event", "name"),
-                vec![
-                    SearchResult {
-                        id: uuid::Uuid::parse_str(ev_jan).unwrap(),
-                        score: 0.9,
-                        metadata: HashMap::new(),
-                    },
-                    SearchResult {
-                        id: uuid::Uuid::parse_str(ev_jul).unwrap(),
-                        score: 0.85,
-                        metadata: HashMap::new(),
-                    },
-                ],
-            )]),
-        });
-
-        let llm = Arc::new(TestLlm {
+    async fn extract_interval_returns_parsed_interval_from_llm() {
+        let llm = TestLlm {
             completion_response: String::new(),
             interval_response: Some(QueryInterval {
-                starts_at: Some("2024-01-01".to_string()),
+                starts_at: Some("2024-01-01".into()),
+                ends_at: Some("2024-12-31".into()),
+            }),
+            fail_structured_output: false,
+            last_messages: Mutex::new(vec![]),
+        };
+        let retriever = build_retriever_with_llm(llm);
+
+        let result = retriever
+            .extract_interval("What happened in 2024?")
+            .await
+            .unwrap();
+
+        let parsed = result.expect("should return Some(ParsedInterval)");
+        assert_eq!(
+            parsed.start,
+            Some(Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap())
+        );
+        assert_eq!(
+            parsed.end,
+            Some(Utc.with_ymd_and_hms(2024, 12, 31, 23, 59, 59).unwrap())
+        );
+    }
+
+    #[tokio::test]
+    async fn extract_interval_returns_none_when_llm_returns_none_none() {
+        let llm = TestLlm {
+            completion_response: String::new(),
+            interval_response: Some(QueryInterval {
+                starts_at: None,
                 ends_at: None,
             }),
             fail_structured_output: false,
             last_messages: Mutex::new(vec![]),
-        });
+        };
+        let retriever = build_retriever_with_llm(llm);
 
-        let retriever = build_retriever(vector_db, graph_db, llm);
-
-        let context = retriever
-            .get_context("What happened since 2024?", &SearchParams::default())
+        let result = retriever
+            .extract_interval("Who is Einstein?")
             .await
             .unwrap();
 
-        assert_eq!(context.len(), 2, "should have 2 items (both 2024 events)");
-
-        let event_names: Vec<&str> = context
-            .iter()
-            .filter_map(|item| item.payload.get("event_name").and_then(Value::as_str))
-            .collect();
         assert!(
-            event_names.contains(&"Jan event"),
-            "Jan event should be present"
-        );
-        assert!(
-            event_names.contains(&"Jul event"),
-            "Jul event should be present"
-        );
-        assert!(
-            !event_names.contains(&"Old event"),
-            "Old event should NOT be present"
+            result.is_none(),
+            "both fields None means no interval detected"
         );
     }
 
     #[tokio::test]
-    async fn get_context_with_time_to_only() {
-        let ts_2020 = "aa000000-0000-0000-0000-000000000001";
-        let ts_2024_jan = "aa000000-0000-0000-0000-000000000002";
-        let ts_2024_jul = "aa000000-0000-0000-0000-000000000003";
-        let ev_old = "bb000000-0000-0000-0000-000000000001";
-        let ev_jan = "bb000000-0000-0000-0000-000000000002";
-        let ev_jul = "bb000000-0000-0000-0000-000000000003";
+    async fn extract_interval_returns_none_when_llm_fails() {
+        let llm = TestLlm {
+            completion_response: String::new(),
+            interval_response: None,
+            fail_structured_output: true,
+            last_messages: Mutex::new(vec![]),
+        };
+        let retriever = build_retriever_with_llm(llm);
 
-        let graph_db = Arc::new(TestGraphDb {
-            nodes: vec![
-                timestamp_node(ts_2020, 1592179200000),
-                timestamp_node(ts_2024_jan, 1705276800000),
-                timestamp_node(ts_2024_jul, 1721001600000),
-                event_graph_node(ev_old, "Old event"),
-                event_graph_node(ev_jan, "Jan event"),
-                event_graph_node(ev_jul, "Jul event"),
-            ],
-            edges: vec![
-                (
-                    ev_old.to_string(),
-                    ts_2020.to_string(),
-                    "at".to_string(),
-                    HashMap::new(),
-                ),
-                (
-                    ev_jan.to_string(),
-                    ts_2024_jan.to_string(),
-                    "at".to_string(),
-                    HashMap::new(),
-                ),
-                (
-                    ev_jul.to_string(),
-                    ts_2024_jul.to_string(),
-                    "at".to_string(),
-                    HashMap::new(),
-                ),
-            ],
-            neighbors: HashMap::from([
-                (
-                    ts_2020.to_string(),
-                    vec![event_node_data(ev_old, "Old event")],
-                ),
-                (
-                    ts_2024_jan.to_string(),
-                    vec![event_node_data(ev_jan, "Jan event")],
-                ),
-                (
-                    ts_2024_jul.to_string(),
-                    vec![event_node_data(ev_jul, "Jul event")],
-                ),
-            ]),
-        });
+        let result = retriever.extract_interval("What happened?").await.unwrap();
 
-        let vector_db = Arc::new(TestVectorDb {
-            collections: HashMap::from([(
-                TestVectorDb::key("Event", "name"),
-                vec![SearchResult {
-                    id: uuid::Uuid::parse_str(ev_old).unwrap(),
-                    score: 0.88,
-                    metadata: HashMap::new(),
-                }],
-            )]),
-        });
+        assert!(result.is_none(), "error should be swallowed gracefully");
+    }
 
-        let llm = Arc::new(TestLlm {
+    #[tokio::test]
+    async fn extract_interval_with_only_starts_at() {
+        let llm = TestLlm {
+            completion_response: String::new(),
+            interval_response: Some(QueryInterval {
+                starts_at: Some("2024-01-01".into()),
+                ends_at: None,
+            }),
+            fail_structured_output: false,
+            last_messages: Mutex::new(vec![]),
+        };
+        let retriever = build_retriever_with_llm(llm);
+
+        let result = retriever
+            .extract_interval("What happened after 2024?")
+            .await
+            .unwrap();
+
+        let parsed = result.expect("should return Some(ParsedInterval)");
+        assert_eq!(
+            parsed.start,
+            Some(Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap())
+        );
+        assert_eq!(parsed.end, None);
+    }
+
+    #[tokio::test]
+    async fn extract_interval_with_only_ends_at() {
+        let llm = TestLlm {
             completion_response: String::new(),
             interval_response: Some(QueryInterval {
                 starts_at: None,
-                ends_at: Some("2021-12-31".to_string()),
+                ends_at: Some("2024-12-31".into()),
             }),
             fail_structured_output: false,
             last_messages: Mutex::new(vec![]),
-        });
-
-        let retriever = build_retriever(vector_db, graph_db, llm);
-
-        let context = retriever
-            .get_context("What happened before 2022?", &SearchParams::default())
-            .await
-            .unwrap();
-
-        assert_eq!(context.len(), 1, "should have 1 item (only the 2020 event)");
-        assert_eq!(
-            context[0].payload.get("event_name").and_then(Value::as_str),
-            Some("Old event")
-        );
-    }
-
-    #[tokio::test]
-    async fn get_context_falls_back_when_no_events_in_range() {
-        let ts_2020 = "aa000000-0000-0000-0000-000000000010";
-        let ts_2021 = "aa000000-0000-0000-0000-000000000011";
-        let ev_2020 = "bb000000-0000-0000-0000-000000000010";
-        let ev_2021 = "bb000000-0000-0000-0000-000000000011";
-        let entity_a = "cc000000-0000-0000-0000-000000000001";
-        let entity_b = "cc000000-0000-0000-0000-000000000002";
-
-        let graph_db = Arc::new(TestGraphDb {
-            nodes: vec![
-                timestamp_node(ts_2020, 1577836800000), // 2020-01-01
-                timestamp_node(ts_2021, 1609459200000), // 2021-01-01
-                event_graph_node(ev_2020, "Event 2020"),
-                event_graph_node(ev_2021, "Event 2021"),
-                (
-                    entity_a.to_string(),
-                    HashMap::from([
-                        (Cow::Borrowed("id"), json!(entity_a)),
-                        (Cow::Borrowed("name"), json!("Entity A")),
-                        (Cow::Borrowed("type"), json!("Entity")),
-                    ]),
-                ),
-                (
-                    entity_b.to_string(),
-                    HashMap::from([
-                        (Cow::Borrowed("id"), json!(entity_b)),
-                        (Cow::Borrowed("name"), json!("Entity B")),
-                        (Cow::Borrowed("type"), json!("Entity")),
-                    ]),
-                ),
-            ],
-            edges: vec![
-                (
-                    ev_2020.to_string(),
-                    ts_2020.to_string(),
-                    "at".to_string(),
-                    HashMap::new(),
-                ),
-                (
-                    ev_2021.to_string(),
-                    ts_2021.to_string(),
-                    "at".to_string(),
-                    HashMap::new(),
-                ),
-                (
-                    entity_a.to_string(),
-                    entity_b.to_string(),
-                    "connected_to".to_string(),
-                    HashMap::new(),
-                ),
-            ],
-            neighbors: HashMap::from([
-                (
-                    ts_2020.to_string(),
-                    vec![event_node_data(ev_2020, "Event 2020")],
-                ),
-                (
-                    ts_2021.to_string(),
-                    vec![event_node_data(ev_2021, "Event 2021")],
-                ),
-            ]),
-        });
-
-        let vector_db = Arc::new(TestVectorDb {
-            collections: HashMap::from([(
-                TestVectorDb::key("Entity", "name"),
-                vec![SearchResult {
-                    id: uuid::Uuid::parse_str(entity_a).unwrap(),
-                    score: 0.9,
-                    metadata: HashMap::new(),
-                }],
-            )]),
-        });
-
-        let llm = Arc::new(TestLlm {
-            completion_response: String::new(),
-            interval_response: Some(QueryInterval {
-                starts_at: Some("2030".to_string()),
-                ends_at: Some("2031".to_string()),
-            }),
-            fail_structured_output: false,
-            last_messages: Mutex::new(vec![]),
-        });
-
-        let retriever = build_retriever(vector_db, graph_db, llm);
-
-        let context = retriever
-            .get_context("What happened in 2030?", &SearchParams::default())
-            .await
-            .unwrap();
-
-        // Falls back to graph triplet search; context should have "relationship" in payload
-        assert!(
-            !context.is_empty(),
-            "fallback should produce at least one result"
-        );
-        assert!(
-            context
-                .iter()
-                .any(|item| item.payload.get("relationship").is_some()),
-            "fallback context items should have 'relationship' in payload"
-        );
-        assert!(
-            context
-                .iter()
-                .all(|item| item.payload.get("event_id").is_none()),
-            "fallback context should NOT have 'event_id' (those are temporal items)"
-        );
-    }
-
-    #[tokio::test]
-    async fn get_context_on_empty_graph() {
-        let graph_db = Arc::new(TestGraphDb {
-            nodes: vec![],
-            edges: vec![],
-            neighbors: HashMap::new(),
-        });
-
-        let vector_db = Arc::new(TestVectorDb {
-            collections: HashMap::new(),
-        });
-
-        // LLM won't be called since the graph is empty
-        let llm = Arc::new(TestLlm {
-            completion_response: String::new(),
-            interval_response: None,
-            fail_structured_output: false,
-            last_messages: Mutex::new(vec![]),
-        });
-
-        let retriever = build_retriever(vector_db, graph_db, llm);
-
-        let context = retriever
-            .get_context("Anything?", &SearchParams::default())
-            .await
-            .unwrap();
-
-        assert!(
-            context.is_empty(),
-            "empty graph should return empty context"
-        );
-    }
-
-    #[tokio::test]
-    async fn get_context_respects_top_k() {
-        let mut nodes = Vec::new();
-        let mut edges = Vec::new();
-        let mut neighbors = HashMap::new();
-        let mut vector_results = Vec::new();
-
-        for i in 1..=5 {
-            let ts_id = format!("aa000000-0000-0000-0000-0000000000{i:02}");
-            let ev_id = format!("bb000000-0000-0000-0000-0000000000{i:02}");
-            let ev_name = format!("Event {i}");
-            // All in 2024: Jan through May
-            let time_ms = 1704067200000_i64 + (i as i64 - 1) * 30 * 86400 * 1000;
-
-            nodes.push(timestamp_node(&ts_id, time_ms));
-            nodes.push(event_graph_node(&ev_id, &ev_name));
-            edges.push((
-                ev_id.clone(),
-                ts_id.clone(),
-                "at".to_string(),
-                HashMap::new(),
-            ));
-            neighbors.insert(ts_id, vec![event_node_data(&ev_id, &ev_name)]);
-            vector_results.push(SearchResult {
-                id: uuid::Uuid::parse_str(&ev_id).unwrap(),
-                score: 0.9 - (i as f32 * 0.01),
-                metadata: HashMap::new(),
-            });
-        }
-
-        let graph_db = Arc::new(TestGraphDb {
-            nodes,
-            edges,
-            neighbors,
-        });
-
-        let vector_db = Arc::new(TestVectorDb {
-            collections: HashMap::from([(TestVectorDb::key("Event", "name"), vector_results)]),
-        });
-
-        let llm = Arc::new(TestLlm {
-            completion_response: String::new(),
-            interval_response: Some(QueryInterval {
-                starts_at: Some("2024-01-01".to_string()),
-                ends_at: Some("2024-12-31".to_string()),
-            }),
-            fail_structured_output: false,
-            last_messages: Mutex::new(vec![]),
-        });
-
-        let retriever = build_retriever(vector_db, graph_db, llm);
-
-        let params = SearchParams {
-            top_k: Some(2),
-            ..Default::default()
         };
+        let retriever = build_retriever_with_llm(llm);
 
-        let context = retriever
-            .get_context("What happened in 2024?", &params)
+        let result = retriever
+            .extract_interval("What happened before 2025?")
             .await
             .unwrap();
 
-        assert_eq!(context.len(), 2, "top_k=2 should limit results to 2 items");
-    }
-
-    #[tokio::test]
-    async fn get_context_2hop_interval_traversal() {
-        let ts1 = "aa000000-0000-0000-0000-000000000020";
-        let ts2 = "aa000000-0000-0000-0000-000000000021";
-        let interval_id = "ii000000-0000-0000-0000-000000000001";
-        let event_id = "bb000000-0000-0000-0000-000000000020";
-
-        let interval_node_data: NodeData = HashMap::from([
-            (Cow::Borrowed("id"), json!(interval_id)),
-            (Cow::Borrowed("type"), json!("Interval")),
-            (Cow::Borrowed("name"), json!("Feb-Mar 2024")),
-        ]);
-
-        let graph_db = Arc::new(TestGraphDb {
-            nodes: vec![
-                timestamp_node(ts1, 1706745600000), // 2024-02-01
-                timestamp_node(ts2, 1709251200000), // 2024-03-01
-                (interval_id.to_string(), interval_node_data.clone()),
-                event_graph_node(event_id, "Team Meeting"),
-            ],
-            edges: vec![(
-                event_id.to_string(),
-                interval_id.to_string(),
-                "during".to_string(),
-                HashMap::new(),
-            )],
-            neighbors: HashMap::from([
-                // Timestamp T1 -> Interval (1st hop)
-                (ts1.to_string(), vec![interval_node_data.clone()]),
-                // Timestamp T2 -> Interval (1st hop)
-                (ts2.to_string(), vec![interval_node_data]),
-                // Interval -> Event (2nd hop)
-                (
-                    interval_id.to_string(),
-                    vec![event_node_data(event_id, "Team Meeting")],
-                ),
-            ]),
-        });
-
-        let vector_db = Arc::new(TestVectorDb {
-            collections: HashMap::from([(
-                TestVectorDb::key("Event", "name"),
-                vec![SearchResult {
-                    id: uuid::Uuid::parse_str(event_id).unwrap(),
-                    score: 0.92,
-                    metadata: HashMap::new(),
-                }],
-            )]),
-        });
-
-        let llm = Arc::new(TestLlm {
-            completion_response: String::new(),
-            interval_response: Some(QueryInterval {
-                starts_at: Some("2024-02".to_string()),
-                ends_at: Some("2024-03".to_string()),
-            }),
-            fail_structured_output: false,
-            last_messages: Mutex::new(vec![]),
-        });
-
-        let retriever = build_retriever(vector_db, graph_db, llm);
-
-        let context = retriever
-            .get_context(
-                "What meetings happened in Feb-Mar 2024?",
-                &SearchParams::default(),
-            )
-            .await
-            .unwrap();
-
+        let parsed = result.expect("should return Some(ParsedInterval)");
+        assert_eq!(parsed.start, None);
         assert_eq!(
-            context.len(),
-            1,
-            "should find 1 event via 2-hop traversal (Timestamp -> Interval -> Event)"
-        );
-        assert_eq!(
-            context[0].payload.get("event_name").and_then(Value::as_str),
-            Some("Team Meeting")
+            parsed.end,
+            Some(Utc.with_ymd_and_hms(2024, 12, 31, 23, 59, 59).unwrap())
         );
     }
 }
