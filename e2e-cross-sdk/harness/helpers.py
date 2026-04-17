@@ -339,15 +339,15 @@ def query_nodes(conn: sqlite3.Connection) -> list[dict]:
 
 
 def query_nodes_by_type(conn: sqlite3.Connection, node_type: str) -> list[dict]:
-    """Return all graph nodes of a given type from the graph SQLite store.
+    """Return all graph nodes of a given type from the relational SQLite store.
 
-    The Rust Ladybug adapter stores nodes in the ``nodes`` table with a
-    ``node_type`` column.  The Python Kuzu adapter stores nodes in a separate
-    table per type.  This helper queries the Rust-side ``nodes`` table and
-    normalises the result into a uniform list of dicts with a ``type`` key.
+    Both the Rust and Python SDKs write graph nodes to a ``nodes`` table in
+    the relational SQLite DB.  The column holding the node type is named
+    ``type`` (matching Python's SQLAlchemy schema); the Rust SeaORM entity
+    maps the Rust field ``node_type`` to this same ``type`` column.
     """
     rows = conn.execute(
-        'SELECT * FROM nodes WHERE "node_type" = ?',
+        'SELECT * FROM nodes WHERE "type" = ?',
         (node_type,),
     ).fetchall()
     result = []
