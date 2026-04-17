@@ -175,11 +175,59 @@ mod tests {
             .unwrap();
     }
 
+    /// Helper: add a typed node (with `type` property, needed for filter tests).
+    async fn add_typed_node(
+        db: &MockGraphDB,
+        id: Uuid,
+        name: &str,
+        node_type: &str,
+        description: &str,
+    ) {
+        let mut node_json = serde_json::Map::new();
+        node_json.insert("id".to_string(), json!(id.to_string()));
+        node_json.insert("name".to_string(), json!(name));
+        node_json.insert("type".to_string(), json!(node_type));
+        if !description.is_empty() {
+            node_json.insert("description".to_string(), json!(description));
+        }
+        db.add_node_raw(serde_json::Value::Object(node_json))
+            .await
+            .unwrap();
+    }
+
     /// Helper: add an edge between two nodes.
     async fn add_edge(db: &MockGraphDB, source: Uuid, target: Uuid, relationship: &str) {
         db.add_edge(&source.to_string(), &target.to_string(), relationship, None)
             .await
             .unwrap();
+    }
+
+    /// Seed a graph used by the filter tests.
+    ///
+    /// - 3 nodes with type=Entity: Alice, Bob, Carol
+    /// - 1 node with type=Concept: Idea1
+    /// - Edges:
+    ///   Alice --knows--> Bob,
+    ///   Bob   --knows--> Carol,
+    ///   Alice --likes--> Idea1
+    ///
+    /// Returns (alice, bob, carol, idea1).
+    async fn seed_filter_graph(db: &MockGraphDB) -> (Uuid, Uuid, Uuid, Uuid) {
+        let alice = Uuid::new_v4();
+        let bob = Uuid::new_v4();
+        let carol = Uuid::new_v4();
+        let idea1 = Uuid::new_v4();
+
+        add_typed_node(db, alice, "Alice", "Entity", "Person A").await;
+        add_typed_node(db, bob, "Bob", "Entity", "Person B").await;
+        add_typed_node(db, carol, "Carol", "Entity", "Person C").await;
+        add_typed_node(db, idea1, "Idea1", "Concept", "An idea").await;
+
+        add_edge(db, alice, bob, "knows").await;
+        add_edge(db, bob, carol, "knows").await;
+        add_edge(db, alice, idea1, "likes").await;
+
+        (alice, bob, carol, idea1)
     }
 
     #[tokio::test]
@@ -289,5 +337,142 @@ mod tests {
         assert_eq!(t1.len(), 1);
         assert_eq!(t2.len(), 1);
         assert_eq!(t1[0].id, t2[0].id, "same input should produce same ID");
+    }
+
+    /// With both type and name filters set, the subgraph code path must be
+    /// invoked (not the full-graph default path).
+    #[tokio::test]
+    async fn test_extract_subgraph_path_is_invoked() {
+        let db = MockGraphDB::new();
+        let (_alice, _bob, _carol, _idea1) = seed_filter_graph(&db).await;
+
+        let config = MemifyConfig::default()
+            .with_node_type_filter("Entity".to_string())
+            .with_node_name_filter(vec!["Alice".to_string(), "Bob".to_string()]);
+
+        let _ = extract_triplets_from_graph_db(&db, &config).await.unwrap();
+
+        let log = db.get_call_log();
+        assert!(
+            log.iter().any(|m| m == "get_nodeset_subgraph"),
+            "expected get_nodeset_subgraph to be invoked, got call log: {log:?}"
+        );
+        assert!(
+            !log.iter().any(|m| m == "get_graph_data"),
+            "expected get_graph_data NOT to be invoked, got call log: {log:?}"
+        );
+    }
+
+    /// With no filters, the default get_graph_data path must be invoked
+    /// (not the subgraph path).
+    #[tokio::test]
+    async fn test_extract_default_path_is_invoked() {
+        let db = MockGraphDB::new();
+        let (_alice, _bob, _carol, _idea1) = seed_filter_graph(&db).await;
+
+        let config = MemifyConfig::default();
+
+        let _ = extract_triplets_from_graph_db(&db, &config).await.unwrap();
+
+        let log = db.get_call_log();
+        assert!(
+            log.iter().any(|m| m == "get_graph_data"),
+            "expected get_graph_data to be invoked, got call log: {log:?}"
+        );
+        assert!(
+            !log.iter().any(|m| m == "get_nodeset_subgraph"),
+            "expected get_nodeset_subgraph NOT to be invoked, got call log: {log:?}"
+        );
+    }
+
+    /// OR semantics: primaries ∪ all neighbors of any primary.
+    ///
+    /// Seed: Alice-knows->Bob, Bob-knows->Carol, Alice-likes->Idea1.
+    /// Filter type=Entity, names=[Alice, Bob], OR.
+    ///
+    /// Primaries = {Alice, Bob}.
+    /// Neighbors of Alice or Bob = {Carol, Idea1, plus Alice/Bob themselves}.
+    /// Included nodes = {Alice, Bob, Carol, Idea1}.
+    /// Edges with both endpoints in included = all 3 → 3 triplets.
+    #[tokio::test]
+    async fn test_extract_with_node_type_and_names_or() {
+        let db = MockGraphDB::new();
+        let (_alice, _bob, _carol, _idea1) = seed_filter_graph(&db).await;
+
+        let config = MemifyConfig::default()
+            .with_node_type_filter("Entity".to_string())
+            .with_node_name_filter(vec!["Alice".to_string(), "Bob".to_string()])
+            .with_node_name_filter_operator("OR".to_string());
+
+        let triplets = extract_triplets_from_graph_db(&db, &config).await.unwrap();
+
+        assert_eq!(
+            triplets.len(),
+            3,
+            "OR filter should include all 3 edges (Alice-knows-Bob, Bob-knows-Carol, Alice-likes-Idea1)"
+        );
+
+        // Every triplet must have at least one endpoint among the primaries,
+        // because all neighbors in this seed are reached directly via an edge
+        // incident to a primary.
+        let relationships: std::collections::HashSet<&str> = triplets
+            .iter()
+            .map(|t| t.relationship_name.as_str())
+            .collect();
+        assert!(relationships.contains("knows"));
+        assert!(relationships.contains("likes"));
+    }
+
+    /// AND semantics: primaries ∪ nodes that are neighbors of EVERY primary.
+    ///
+    /// Seed: Alice-knows->Bob, Bob-knows->Carol, Alice-likes->Idea1.
+    /// Filter type=Entity, names=[Alice, Bob], AND.
+    ///
+    /// Primaries = {Alice, Bob}.
+    /// AND-neighbors (connected to BOTH Alice and Bob):
+    ///   - Carol: neighbor of Bob only → excluded
+    ///   - Idea1: neighbor of Alice only → excluded
+    /// Included nodes = {Alice, Bob}.
+    /// Edges with both endpoints in included = {Alice-knows-Bob} → 1 triplet.
+    #[tokio::test]
+    async fn test_extract_with_node_type_and_names_and() {
+        let db = MockGraphDB::new();
+        let (alice, bob, _carol, _idea1) = seed_filter_graph(&db).await;
+
+        let config = MemifyConfig::default()
+            .with_node_type_filter("Entity".to_string())
+            .with_node_name_filter(vec!["Alice".to_string(), "Bob".to_string()])
+            .with_node_name_filter_operator("AND".to_string());
+
+        let triplets = extract_triplets_from_graph_db(&db, &config).await.unwrap();
+
+        assert_eq!(
+            triplets.len(),
+            1,
+            "AND filter should include only the Alice-knows-Bob edge"
+        );
+        let t = &triplets[0];
+        assert_eq!(t.source_entity_id, alice);
+        assert_eq!(t.target_entity_id, bob);
+        assert_eq!(t.relationship_name, "knows");
+    }
+
+    /// A filter that matches nothing should return an empty triplet set
+    /// without error.
+    #[tokio::test]
+    async fn test_extract_with_filter_empty_result() {
+        let db = MockGraphDB::new();
+        let (_alice, _bob, _carol, _idea1) = seed_filter_graph(&db).await;
+
+        let config = MemifyConfig::default()
+            .with_node_type_filter("NonexistentType".to_string())
+            .with_node_name_filter(vec!["Alice".to_string(), "Bob".to_string()]);
+
+        let triplets = extract_triplets_from_graph_db(&db, &config).await.unwrap();
+
+        assert!(
+            triplets.is_empty(),
+            "filters referencing a nonexistent type should yield no triplets"
+        );
     }
 }

@@ -4,7 +4,7 @@
 //! for use in unit tests.
 
 use std::borrow::Cow;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
@@ -19,6 +19,7 @@ use crate::{EdgeData, GraphDBError, GraphDBResult, GraphDBTrait, NodeData};
 pub struct MockGraphDB {
     nodes: Arc<Mutex<HashMap<String, NodeData>>>,
     edges: Arc<Mutex<Vec<EdgeData>>>,
+    call_log: Arc<Mutex<Vec<String>>>,
 }
 
 impl MockGraphDB {
@@ -27,6 +28,7 @@ impl MockGraphDB {
         Self {
             nodes: Arc::new(Mutex::new(HashMap::new())),
             edges: Arc::new(Mutex::new(Vec::new())),
+            call_log: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -44,6 +46,15 @@ impl MockGraphDB {
     pub fn clear(&self) {
         self.nodes.lock().unwrap().clear(); // lock poison is unrecoverable
         self.edges.lock().unwrap().clear(); // lock poison is unrecoverable
+        self.call_log.lock().unwrap().clear(); // lock poison is unrecoverable
+    }
+
+    /// Get a snapshot of the call log — the names of methods invoked on
+    /// this mock in invocation order.
+    ///
+    /// Currently records `"get_graph_data"` and `"get_nodeset_subgraph"`.
+    pub fn get_call_log(&self) -> Vec<String> {
+        self.call_log.lock().unwrap().clone() // lock poison is unrecoverable
     }
 }
 
@@ -250,6 +261,11 @@ impl GraphDBTrait for MockGraphDB {
     }
 
     async fn get_graph_data(&self) -> GraphDBResult<(Vec<(String, NodeData)>, Vec<EdgeData>)> {
+        self.call_log
+            .lock()
+            .unwrap() // lock poison is unrecoverable
+            .push("get_graph_data".to_string());
+
         let nodes = self.nodes.lock().unwrap(); // lock poison is unrecoverable
         let edges = self.edges.lock().unwrap(); // lock poison is unrecoverable
 
@@ -290,11 +306,103 @@ impl GraphDBTrait for MockGraphDB {
 
     async fn get_nodeset_subgraph(
         &self,
-        _node_type: &str,
-        _node_names: &[String],
-        _node_name_filter_operator: &str,
+        node_type: &str,
+        node_names: &[String],
+        node_name_filter_operator: &str,
     ) -> GraphDBResult<(Vec<(String, NodeData)>, Vec<EdgeData>)> {
-        self.get_graph_data().await
+        self.call_log
+            .lock()
+            .unwrap() // lock poison is unrecoverable
+            .push("get_nodeset_subgraph".to_string());
+
+        // Empty name filter -> empty result (matches PG adapter behavior).
+        if node_names.is_empty() {
+            return Ok((Vec::new(), Vec::new()));
+        }
+
+        let nodes_guard = self.nodes.lock().unwrap(); // lock poison is unrecoverable
+        let edges_guard = self.edges.lock().unwrap(); // lock poison is unrecoverable
+
+        // Step 1: Select primary nodes: nodes whose `type` == node_type AND
+        // whose `name` is in node_names (exact case-sensitive match, matching
+        // the PG adapter).
+        let name_set: HashSet<&str> = node_names.iter().map(|s| s.as_str()).collect();
+        let primary_ids: HashSet<String> = nodes_guard
+            .iter()
+            .filter(|(_, data)| {
+                let ty = data.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                let name = data.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                ty == node_type && name_set.contains(name)
+            })
+            .map(|(id, _)| id.clone())
+            .collect();
+
+        // Step 2: Determine included nodes based on the operator.
+        //
+        // OR:  included = primaries ∪ any neighbor of ANY primary.
+        // AND: included = primaries ∪ nodes that are neighbors of EVERY primary.
+        //
+        // Anything other than "OR" or "AND" defaults to OR, matching the PG
+        // adapter's forgiving behavior.
+        let operator_and = node_name_filter_operator == "AND";
+
+        let mut included: HashSet<String> = primary_ids.clone();
+
+        if !operator_and {
+            // OR semantics: include every neighbor reached via any edge from a
+            // primary node (either endpoint direction).
+            for (src, tgt, _, _) in edges_guard.iter() {
+                if primary_ids.contains(src) {
+                    included.insert(tgt.clone());
+                }
+                if primary_ids.contains(tgt) {
+                    included.insert(src.clone());
+                }
+            }
+        } else {
+            // AND semantics: neighbor must be connected to every primary node.
+            // For each candidate neighbor, count how many distinct primaries
+            // connect to it.
+            //
+            // neighbor_id -> set of primaries that connect to it.
+            let mut neighbor_to_primaries: HashMap<String, HashSet<String>> = HashMap::new();
+            for (src, tgt, _, _) in edges_guard.iter() {
+                if primary_ids.contains(src) && !primary_ids.contains(tgt) {
+                    neighbor_to_primaries
+                        .entry(tgt.clone())
+                        .or_default()
+                        .insert(src.clone());
+                }
+                if primary_ids.contains(tgt) && !primary_ids.contains(src) {
+                    neighbor_to_primaries
+                        .entry(src.clone())
+                        .or_default()
+                        .insert(tgt.clone());
+                }
+            }
+
+            let primary_count = primary_ids.len();
+            for (neighbor_id, connected_primaries) in neighbor_to_primaries {
+                if connected_primaries.len() == primary_count {
+                    included.insert(neighbor_id);
+                }
+            }
+        }
+
+        // Step 3: Collect included nodes (with their data) and edges whose
+        // BOTH endpoints are in the included set.
+        let node_vec: Vec<(String, NodeData)> = included
+            .iter()
+            .filter_map(|id| nodes_guard.get(id).map(|data| (id.clone(), data.clone())))
+            .collect();
+
+        let edge_vec: Vec<EdgeData> = edges_guard
+            .iter()
+            .filter(|(src, tgt, _, _)| included.contains(src) && included.contains(tgt))
+            .cloned()
+            .collect();
+
+        Ok((node_vec, edge_vec))
     }
 }
 

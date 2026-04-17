@@ -278,3 +278,133 @@ async fn test_memify_rejects_invalid_config() {
         "expected config validation error, got: {err}"
     );
 }
+
+/// Helper: add a node with an explicit `type` property.
+///
+/// Used by the filter-path integration tests below to populate primary /
+/// non-primary nodes exercised by `get_nodeset_subgraph`.
+async fn add_typed_node(
+    db: &MockGraphDB,
+    id: Uuid,
+    name: &str,
+    node_type: &str,
+    description: &str,
+) {
+    let mut node_json = serde_json::Map::new();
+    node_json.insert("id".to_string(), json!(id.to_string()));
+    node_json.insert("name".to_string(), json!(name));
+    node_json.insert("type".to_string(), json!(node_type));
+    if !description.is_empty() {
+        node_json.insert("description".to_string(), json!(description));
+    }
+    db.add_node_raw(serde_json::Value::Object(node_json))
+        .await
+        .unwrap();
+}
+
+/// Seed a graph that exercises type + name filtering.
+///
+/// - 3 Entity nodes: Alice, Bob, Carol
+/// - 1 Concept node: Idea1
+/// - Edges:
+///   Alice --knows--> Bob     (Entity↔Entity, Alice primary),
+///   Bob   --knows--> Carol   (Entity↔Entity, Bob primary only),
+///   Alice --likes--> Idea1   (Entity→Concept, Alice primary only)
+///
+/// With type=Entity, names=[Alice,Bob]:
+/// OR  → included = {Alice,Bob,Carol,Idea1} → all 3 edges survive.
+/// AND → included = {Alice,Bob}             → only Alice-knows-Bob survives.
+async fn seed_filter_graph(db: &MockGraphDB) -> (Uuid, Uuid, Uuid, Uuid) {
+    let alice = Uuid::new_v4();
+    let bob = Uuid::new_v4();
+    let carol = Uuid::new_v4();
+    let idea1 = Uuid::new_v4();
+
+    add_typed_node(db, alice, "Alice", "Entity", "Person A").await;
+    add_typed_node(db, bob, "Bob", "Entity", "Person B").await;
+    add_typed_node(db, carol, "Carol", "Entity", "Person C").await;
+    add_typed_node(db, idea1, "Idea1", "Concept", "An idea").await;
+
+    add_edge(db, alice, bob, "knows").await;
+    add_edge(db, bob, carol, "knows").await;
+    add_edge(db, alice, idea1, "likes").await;
+
+    (alice, bob, carol, idea1)
+}
+
+#[tokio::test]
+async fn test_memify_with_type_and_names_filter_or() {
+    let graph_db = MockGraphDB::new();
+    let vector_db = MockVectorDB::new();
+    let engine = MockEmbeddingEngine::new(8);
+
+    let (_alice, _bob, _carol, _idea1) = seed_filter_graph(&graph_db).await;
+
+    let config = MemifyConfig::default()
+        .with_node_type_filter("Entity".to_string())
+        .with_node_name_filter(vec!["Alice".to_string(), "Bob".to_string()])
+        .with_node_name_filter_operator("OR".to_string());
+
+    let result = memify(
+        &graph_db,
+        &vector_db,
+        &engine,
+        Some(Uuid::new_v4()),
+        Some(Uuid::new_v4()),
+        None,
+        &config,
+    )
+    .await
+    .unwrap();
+
+    // OR: primaries (Alice,Bob) ∪ all neighbors (Carol, Idea1) = {A,B,C,Idea1}.
+    // All 3 edges have both endpoints in the included set, so all 3 survive.
+    assert_eq!(
+        result.triplet_count, 3,
+        "OR filter should keep all 3 edges between the included primaries and their neighbors"
+    );
+    assert_eq!(result.index_result.indexed_count, 3);
+    assert_eq!(
+        vector_db.collection_size("Triplet", "text").await.unwrap(),
+        3
+    );
+}
+
+#[tokio::test]
+async fn test_memify_with_type_and_names_filter_and() {
+    let graph_db = MockGraphDB::new();
+    let vector_db = MockVectorDB::new();
+    let engine = MockEmbeddingEngine::new(8);
+
+    let (_alice, _bob, _carol, _idea1) = seed_filter_graph(&graph_db).await;
+
+    let config = MemifyConfig::default()
+        .with_node_type_filter("Entity".to_string())
+        .with_node_name_filter(vec!["Alice".to_string(), "Bob".to_string()])
+        .with_node_name_filter_operator("AND".to_string());
+
+    let result = memify(
+        &graph_db,
+        &vector_db,
+        &engine,
+        Some(Uuid::new_v4()),
+        Some(Uuid::new_v4()),
+        None,
+        &config,
+    )
+    .await
+    .unwrap();
+
+    // AND: only neighbors connected to BOTH Alice and Bob qualify.
+    // Neither Carol nor Idea1 are connected to both, so included = {Alice,Bob}.
+    // The only edge with both endpoints included is Alice-knows-Bob.
+    assert_eq!(
+        result.triplet_count, 1,
+        "AND filter should keep only the Alice-knows-Bob edge (both endpoints are primaries)"
+    );
+    assert_eq!(result.index_result.indexed_count, 1);
+    assert_eq!(
+        vector_db.collection_size("Triplet", "text").await.unwrap(),
+        1
+    );
+}
