@@ -577,7 +577,7 @@ fn to_datetime(date: NaiveDate, is_end: bool) -> Option<DateTime<Utc>> {
 #[cfg(test)]
 mod tests {
     use std::borrow::Cow;
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
     use std::sync::{Arc, Mutex};
 
     use async_trait::async_trait;
@@ -593,9 +593,12 @@ mod tests {
     use serde_json::{Value, json};
     use uuid::Uuid;
 
+    use cognee_session::SessionContext;
+
     use super::{QueryInterval, TemporalRetriever};
+    use crate::graph_retrieval::RankedGraphEdge;
     use crate::retrievers::SearchRetriever;
-    use crate::types::SearchParams;
+    use crate::types::{SearchItem, SearchOutput, SearchParams};
 
     struct TestEmbeddingEngine;
 
@@ -842,6 +845,12 @@ mod tests {
         interval_response: Option<QueryInterval>,
         fail_structured_output: bool,
         last_messages: Mutex<Vec<Message>>,
+        /// When set, `create_structured_output_with_messages_raw` returns this
+        /// value instead of serializing `interval_response`. Used by tests that
+        /// exercise the response_schema path in `get_completion`.
+        structured_completion_response: Mutex<Option<Value>>,
+        /// Messages captured by the most recent `create_structured_output_with_messages_raw` call.
+        last_structured_messages: Mutex<Vec<Message>>,
     }
 
     #[async_trait]
@@ -867,12 +876,22 @@ mod tests {
 
         async fn create_structured_output_with_messages_raw(
             &self,
-            _messages: Vec<Message>,
+            messages: Vec<Message>,
             _json_schema: &serde_json::Value,
             _options: Option<GenerationOptions>,
         ) -> LlmResult<serde_json::Value> {
+            self.last_structured_messages
+                .lock()
+                .unwrap()
+                .clone_from(&messages);
+
             if self.fail_structured_output {
                 return Err(LlmError::ConfigError("forced failure".to_string()));
+            }
+
+            // If a custom structured completion response is set, return it.
+            if let Some(value) = self.structured_completion_response.lock().unwrap().clone() {
+                return Ok(value);
             }
 
             let response = self
@@ -991,6 +1010,8 @@ mod tests {
             }),
             fail_structured_output: false,
             last_messages: Mutex::new(vec![]),
+            structured_completion_response: Mutex::new(None),
+            last_structured_messages: Mutex::new(vec![]),
         });
 
         let retriever = TemporalRetriever::new(
@@ -1291,6 +1312,8 @@ mod tests {
             interval_response: None,
             fail_structured_output: true,
             last_messages: Mutex::new(vec![]),
+            structured_completion_response: Mutex::new(None),
+            last_structured_messages: Mutex::new(vec![]),
         });
 
         let retriever = TemporalRetriever::new(
@@ -1355,6 +1378,7 @@ mod tests {
             }),
             fail_structured_output: false,
             last_messages: Mutex::new(vec![]),
+            ..TestLlm::default()
         };
         let retriever = build_retriever_with_llm(llm);
 
@@ -1384,6 +1408,7 @@ mod tests {
             }),
             fail_structured_output: false,
             last_messages: Mutex::new(vec![]),
+            ..TestLlm::default()
         };
         let retriever = build_retriever_with_llm(llm);
 
@@ -1405,6 +1430,7 @@ mod tests {
             interval_response: None,
             fail_structured_output: true,
             last_messages: Mutex::new(vec![]),
+            ..TestLlm::default()
         };
         let retriever = build_retriever_with_llm(llm);
 
@@ -1423,6 +1449,7 @@ mod tests {
             }),
             fail_structured_output: false,
             last_messages: Mutex::new(vec![]),
+            ..TestLlm::default()
         };
         let retriever = build_retriever_with_llm(llm);
 
@@ -1449,6 +1476,7 @@ mod tests {
             }),
             fail_structured_output: false,
             last_messages: Mutex::new(vec![]),
+            ..TestLlm::default()
         };
         let retriever = build_retriever_with_llm(llm);
 
@@ -1569,6 +1597,7 @@ mod tests {
             }),
             fail_structured_output: false,
             last_messages: Mutex::new(vec![]),
+            ..TestLlm::default()
         });
 
         let retriever = build_retriever(vector_db, graph_db, llm);
@@ -1671,6 +1700,7 @@ mod tests {
             }),
             fail_structured_output: false,
             last_messages: Mutex::new(vec![]),
+            ..TestLlm::default()
         });
 
         let retriever = build_retriever(vector_db, graph_db, llm);
@@ -1770,6 +1800,7 @@ mod tests {
             }),
             fail_structured_output: false,
             last_messages: Mutex::new(vec![]),
+            ..TestLlm::default()
         });
 
         let retriever = build_retriever(vector_db, graph_db, llm);
@@ -1816,6 +1847,7 @@ mod tests {
             interval_response: None,
             fail_structured_output: false,
             last_messages: Mutex::new(vec![]),
+            ..TestLlm::default()
         });
 
         let retriever = build_retriever(vector_db, graph_db, llm);
@@ -1879,6 +1911,7 @@ mod tests {
             }),
             fail_structured_output: false,
             last_messages: Mutex::new(vec![]),
+            ..TestLlm::default()
         });
 
         let retriever = build_retriever(vector_db, graph_db, llm);
@@ -1954,6 +1987,7 @@ mod tests {
             }),
             fail_structured_output: false,
             last_messages: Mutex::new(vec![]),
+            ..TestLlm::default()
         });
 
         let retriever = build_retriever(vector_db, graph_db, llm);
@@ -1975,5 +2009,706 @@ mod tests {
             context[0].payload.get("event_name").and_then(Value::as_str),
             Some("Team Meeting")
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Phase 4 — get_completion unit tests
+    // -----------------------------------------------------------------------
+
+    fn default_session() -> SessionContext {
+        SessionContext {
+            session_id: None,
+            history: vec![],
+            formatted_history: String::new(),
+        }
+    }
+
+    fn make_event_context() -> Vec<SearchItem> {
+        vec![
+            SearchItem {
+                id: None,
+                score: Some(0.9),
+                payload: json!({
+                    "event_id": "evt-1",
+                    "event_name": "Product Launch",
+                    "event_description": "Launched the new product",
+                    "event_time": "2024-03-15",
+                }),
+            },
+            SearchItem {
+                id: None,
+                score: Some(0.7),
+                payload: json!({
+                    "event_id": "evt-2",
+                    "event_name": "Quarterly Review",
+                    "event_description": "Reviewed Q1 results",
+                    "event_time": "2024-04-01",
+                }),
+            },
+        ]
+    }
+
+    fn simple_retriever(llm: Arc<TestLlm>) -> TemporalRetriever {
+        let vector_db = Arc::new(TestVectorDb {
+            collections: HashMap::new(),
+        });
+        let embedding_engine = Arc::new(TestEmbeddingEngine);
+        let graph_db = Arc::new(TestGraphDb {
+            nodes: vec![],
+            edges: vec![],
+            neighbors: HashMap::new(),
+        });
+
+        TemporalRetriever::new(
+            vector_db,
+            embedding_engine,
+            graph_db,
+            llm,
+            Some(5),
+            Some(10),
+            Some(0.0),
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+    }
+
+    #[tokio::test]
+    async fn get_completion_generates_text_from_context() {
+        let llm = Arc::new(TestLlm {
+            completion_response: "The product was launched in March 2024.".to_string(),
+            last_messages: Mutex::new(vec![]),
+            last_structured_messages: Mutex::new(vec![]),
+            ..TestLlm::default()
+        });
+
+        let retriever = simple_retriever(llm);
+        let context = make_event_context();
+        let session = default_session();
+
+        let output = retriever
+            .get_completion(
+                "What happened in 2024?",
+                Some(context),
+                &session,
+                &SearchParams::default(),
+            )
+            .await
+            .unwrap();
+
+        match output {
+            SearchOutput::Text(text) => {
+                assert_eq!(text, "The product was launched in March 2024.");
+            }
+            other => panic!("Expected SearchOutput::Text, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn get_completion_with_provided_context_passes_to_llm() {
+        let llm = Arc::new(TestLlm {
+            completion_response: "completion result".to_string(),
+            last_messages: Mutex::new(vec![]),
+            last_structured_messages: Mutex::new(vec![]),
+            ..TestLlm::default()
+        });
+
+        let retriever = simple_retriever(Arc::clone(&llm));
+        let context = make_event_context();
+        let session = default_session();
+
+        retriever
+            .get_completion(
+                "What happened in 2024?",
+                Some(context),
+                &session,
+                &SearchParams::default(),
+            )
+            .await
+            .unwrap();
+
+        let messages = llm.last_messages.lock().unwrap();
+        assert_eq!(messages.len(), 2, "Expected system + user messages");
+
+        // The user prompt should contain the temporal context text.
+        let user_msg = &messages[1].content;
+        assert!(
+            user_msg.contains("Product Launch"),
+            "User prompt should contain event name from context"
+        );
+        assert!(
+            user_msg.contains("Quarterly Review"),
+            "User prompt should contain second event name from context"
+        );
+    }
+
+    #[tokio::test]
+    async fn get_completion_without_context_calls_get_context() {
+        // Setup a graph with temporal data so get_context can produce context.
+        let launch_event_ms: i64 = 1710460800000; // 2024-03-15 UTC
+        let ts_id = "ts-aaa";
+        let event_id = "ev-111";
+
+        let vector_db = Arc::new(TestVectorDb {
+            collections: HashMap::from([(
+                TestVectorDb::key("Entity", "name"),
+                vec![SearchResult {
+                    id: Uuid::new_v4(),
+                    score: 0.8,
+                    metadata: HashMap::new(),
+                }],
+            )]),
+        });
+
+        let embedding_engine = Arc::new(TestEmbeddingEngine);
+        let graph_db = Arc::new(TestGraphDb {
+            nodes: vec![
+                timestamp_node(ts_id, launch_event_ms),
+                event_graph_node(event_id, "Launch"),
+            ],
+            edges: vec![],
+            neighbors: HashMap::from([(
+                ts_id.to_string(),
+                vec![event_node_data(event_id, "Launch")],
+            )]),
+        });
+
+        let llm = Arc::new(TestLlm {
+            completion_response: "answer from internal context".to_string(),
+            interval_response: Some(QueryInterval {
+                starts_at: Some("2024-01-01".to_string()),
+                ends_at: Some("2024-12-31".to_string()),
+            }),
+            last_messages: Mutex::new(vec![]),
+            last_structured_messages: Mutex::new(vec![]),
+            ..TestLlm::default()
+        });
+
+        let retriever = TemporalRetriever::new(
+            vector_db,
+            embedding_engine,
+            graph_db,
+            llm.clone(),
+            Some(5),
+            Some(10),
+            Some(0.0),
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+
+        let session = default_session();
+
+        let output = retriever
+            .get_completion(
+                "What happened in 2024?",
+                None,
+                &session,
+                &SearchParams::default(),
+            )
+            .await
+            .unwrap();
+
+        match output {
+            SearchOutput::Text(text) => {
+                assert_eq!(text, "answer from internal context");
+            }
+            other => panic!("Expected SearchOutput::Text, got {other:?}"),
+        }
+
+        // Verify that the LLM's generate was called with messages containing context.
+        let messages = llm.last_messages.lock().unwrap();
+        assert!(!messages.is_empty(), "LLM generate should have been called");
+        let user_msg = &messages[1].content;
+        assert!(
+            user_msg.contains("Launch"),
+            "User prompt should reference the event from internal context"
+        );
+    }
+
+    #[tokio::test]
+    async fn get_completion_with_response_schema() {
+        let structured_value = json!({
+            "answer": "The product launched in 2024",
+            "confidence": 0.95
+        });
+
+        let llm = Arc::new(TestLlm {
+            completion_response: "should not be used".to_string(),
+            structured_completion_response: Mutex::new(Some(structured_value.clone())),
+            last_messages: Mutex::new(vec![]),
+            last_structured_messages: Mutex::new(vec![]),
+            ..TestLlm::default()
+        });
+
+        let retriever = simple_retriever(llm);
+        let context = make_event_context();
+        let session = default_session();
+
+        let params = SearchParams {
+            response_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "answer": { "type": "string" },
+                    "confidence": { "type": "number" }
+                }
+            })),
+            ..SearchParams::default()
+        };
+
+        let output = retriever
+            .get_completion("What happened in 2024?", Some(context), &session, &params)
+            .await
+            .unwrap();
+
+        match output {
+            SearchOutput::Structured(value) => {
+                assert_eq!(value, structured_value);
+            }
+            other => panic!("Expected SearchOutput::Structured, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn get_completion_includes_session_history() {
+        let llm = Arc::new(TestLlm {
+            completion_response: "history-aware answer".to_string(),
+            last_messages: Mutex::new(vec![]),
+            last_structured_messages: Mutex::new(vec![]),
+            ..TestLlm::default()
+        });
+
+        let retriever = simple_retriever(Arc::clone(&llm));
+        let context = make_event_context();
+
+        let session = SessionContext {
+            session_id: Some("sess-1".to_string()),
+            history: vec![
+                Message::user("Previous question?".to_string()),
+                Message::assistant("Previous answer.".to_string()),
+            ],
+            formatted_history: "Q: Previous question?\nA: Previous answer.".to_string(),
+        };
+
+        retriever
+            .get_completion(
+                "Follow-up question?",
+                Some(context),
+                &session,
+                &SearchParams::default(),
+            )
+            .await
+            .unwrap();
+
+        let messages = llm.last_messages.lock().unwrap();
+        assert_eq!(messages.len(), 2, "Expected system + user messages");
+
+        // The system prompt should contain session history (prepended via TASK:).
+        let system_msg = &messages[0].content;
+        assert!(
+            system_msg.contains("Previous question?"),
+            "System prompt should include session history"
+        );
+        assert!(
+            system_msg.contains("Previous answer."),
+            "System prompt should include session history answer"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Phase 5 — rank_temporal_events unit tests
+    // -----------------------------------------------------------------------
+
+    fn make_ranked_edge(source_id: &str, target_id: &str, score: f32) -> RankedGraphEdge {
+        RankedGraphEdge {
+            source_id: source_id.to_string(),
+            target_id: target_id.to_string(),
+            relationship_name: "related_to".to_string(),
+            score,
+            source_name: format!("Source-{source_id}"),
+            target_name: format!("Target-{target_id}"),
+            dataset_id: None,
+            source_text: None,
+            target_text: None,
+            source_description: None,
+            target_description: None,
+        }
+    }
+
+    fn ranking_retriever() -> TemporalRetriever {
+        let vector_db = Arc::new(TestVectorDb {
+            collections: HashMap::from([(
+                TestVectorDb::key("Event", "name"),
+                vec![
+                    SearchResult {
+                        id: Uuid::parse_str("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa").unwrap(),
+                        score: 0.9,
+                        metadata: HashMap::new(),
+                    },
+                    SearchResult {
+                        id: Uuid::parse_str("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb").unwrap(),
+                        score: 0.5,
+                        metadata: HashMap::new(),
+                    },
+                    SearchResult {
+                        id: Uuid::parse_str("cccccccc-cccc-cccc-cccc-cccccccccccc").unwrap(),
+                        score: 0.3,
+                        metadata: HashMap::new(),
+                    },
+                ],
+            )]),
+        });
+
+        let embedding_engine = Arc::new(TestEmbeddingEngine);
+        let graph_db = Arc::new(TestGraphDb {
+            nodes: vec![],
+            edges: vec![],
+            neighbors: HashMap::new(),
+        });
+
+        let llm = Arc::new(TestLlm::default());
+
+        TemporalRetriever::new(
+            vector_db,
+            embedding_engine,
+            graph_db,
+            llm,
+            Some(5),
+            Some(10),
+            Some(0.0),
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+    }
+
+    #[tokio::test]
+    async fn rank_sorts_by_combined_score() {
+        let retriever = ranking_retriever();
+
+        let event_ids: HashSet<String> = [
+            "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+            "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+            "cccccccc-cccc-cccc-cccc-cccccccccccc",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+
+        let ranked_edges = vec![
+            make_ranked_edge("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", "other-node", 0.8),
+            make_ranked_edge("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", "other-node", 0.4),
+            make_ranked_edge("cccccccc-cccc-cccc-cccc-cccccccccccc", "other-node", 0.2),
+        ];
+
+        let ranked = retriever
+            .rank_temporal_events("test query", &event_ids, &ranked_edges)
+            .await
+            .unwrap();
+
+        assert_eq!(ranked.len(), 3);
+        assert_eq!(ranked[0].0, "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa");
+        assert_eq!(ranked[1].0, "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb");
+        assert_eq!(ranked[2].0, "cccccccc-cccc-cccc-cccc-cccccccccccc");
+
+        // Verify descending order.
+        assert!(ranked[0].1 >= ranked[1].1);
+        assert!(ranked[1].1 >= ranked[2].1);
+    }
+
+    #[tokio::test]
+    async fn rank_events_not_in_vector_get_default_score() {
+        let retriever = ranking_retriever();
+
+        let event_ids: HashSet<String> = [
+            "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+            "dddddddd-dddd-dddd-dddd-dddddddddddd", // Not in vector DB
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+
+        let ranked_edges = vec![make_ranked_edge(
+            "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+            "other-node",
+            0.8,
+        )];
+
+        let ranked = retriever
+            .rank_temporal_events("test query", &event_ids, &ranked_edges)
+            .await
+            .unwrap();
+
+        assert_eq!(ranked.len(), 2);
+
+        let unknown_event = ranked
+            .iter()
+            .find(|(id, _)| id == "dddddddd-dddd-dddd-dddd-dddddddddddd")
+            .unwrap();
+        assert!(
+            unknown_event.1.abs() < f32::EPSILON,
+            "Unknown event should have score 0.0, got {}",
+            unknown_event.1
+        );
+
+        let known_event = ranked
+            .iter()
+            .find(|(id, _)| id == "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+            .unwrap();
+        assert!(
+            known_event.1 > unknown_event.1,
+            "Known event should have higher score"
+        );
+    }
+
+    #[tokio::test]
+    async fn rank_empty_vector_results() {
+        let vector_db = Arc::new(TestVectorDb {
+            collections: HashMap::new(),
+        });
+        let embedding_engine = Arc::new(TestEmbeddingEngine);
+        let graph_db = Arc::new(TestGraphDb {
+            nodes: vec![],
+            edges: vec![],
+            neighbors: HashMap::new(),
+        });
+        let llm = Arc::new(TestLlm::default());
+
+        let retriever = TemporalRetriever::new(
+            vector_db,
+            embedding_engine,
+            graph_db,
+            llm,
+            Some(5),
+            Some(10),
+            Some(0.0),
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+
+        let event_ids: HashSet<String> = ["ev-1", "ev-2"].iter().map(|s| s.to_string()).collect();
+
+        let ranked_edges = vec![
+            make_ranked_edge("ev-1", "other", 0.6),
+            make_ranked_edge("other", "ev-2", 0.3),
+        ];
+
+        let ranked = retriever
+            .rank_temporal_events("query", &event_ids, &ranked_edges)
+            .await
+            .unwrap();
+
+        assert_eq!(ranked.len(), 2);
+        assert_eq!(ranked[0].0, "ev-1");
+        assert!((ranked[0].1 - 0.6).abs() < f32::EPSILON);
+        assert_eq!(ranked[1].0, "ev-2");
+        assert!((ranked[1].1 - 0.3).abs() < f32::EPSILON);
+    }
+
+    #[tokio::test]
+    async fn rank_empty_event_ids() {
+        let retriever = ranking_retriever();
+
+        let event_ids: HashSet<String> = HashSet::new();
+        let ranked_edges = vec![make_ranked_edge("some-node", "other-node", 0.5)];
+
+        let ranked = retriever
+            .rank_temporal_events("query", &event_ids, &ranked_edges)
+            .await
+            .unwrap();
+
+        assert!(
+            ranked.is_empty(),
+            "Empty event_ids should yield empty result"
+        );
+    }
+
+    #[tokio::test]
+    async fn rank_mismatched_vector_ids() {
+        let vector_db = Arc::new(TestVectorDb {
+            collections: HashMap::from([(
+                TestVectorDb::key("Event", "name"),
+                vec![SearchResult {
+                    id: Uuid::parse_str("ffffffff-ffff-ffff-ffff-ffffffffffff").unwrap(),
+                    score: 0.99,
+                    metadata: HashMap::new(),
+                }],
+            )]),
+        });
+        let embedding_engine = Arc::new(TestEmbeddingEngine);
+        let graph_db = Arc::new(TestGraphDb {
+            nodes: vec![],
+            edges: vec![],
+            neighbors: HashMap::new(),
+        });
+        let llm = Arc::new(TestLlm::default());
+
+        let retriever = TemporalRetriever::new(
+            vector_db,
+            embedding_engine,
+            graph_db,
+            llm,
+            Some(5),
+            Some(10),
+            Some(0.0),
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+
+        let event_ids: HashSet<String> =
+            ["ev-abc", "ev-def"].iter().map(|s| s.to_string()).collect();
+
+        let ranked_edges = vec![make_ranked_edge("ev-abc", "something", 0.4)];
+
+        let ranked = retriever
+            .rank_temporal_events("query", &event_ids, &ranked_edges)
+            .await
+            .unwrap();
+
+        assert_eq!(ranked.len(), 2);
+        let ev_abc = ranked.iter().find(|(id, _)| id == "ev-abc").unwrap();
+        assert!((ev_abc.1 - 0.4).abs() < f32::EPSILON);
+
+        let ev_def = ranked.iter().find(|(id, _)| id == "ev-def").unwrap();
+        assert!(ev_def.1.abs() < f32::EPSILON);
+    }
+
+    // -----------------------------------------------------------------------
+    // Phase 6 — temporal_context_to_text unit tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn context_to_text_formats_event_items() {
+        let context = vec![
+            SearchItem {
+                id: None,
+                score: Some(0.9),
+                payload: json!({
+                    "event_id": "evt-1",
+                    "event_name": "Product Launch",
+                    "event_description": "Launched the new product",
+                    "event_time": "2024-03-15",
+                }),
+            },
+            SearchItem {
+                id: None,
+                score: Some(0.7),
+                payload: json!({
+                    "event_id": "evt-2",
+                    "event_name": "Quarterly Review",
+                    "event_description": "Reviewed Q1 results",
+                    "event_time": "2024-04-01",
+                }),
+            },
+        ];
+
+        let text = TemporalRetriever::temporal_context_to_text(&context);
+        let lines: Vec<&str> = text.lines().collect();
+
+        assert_eq!(lines.len(), 2);
+        assert_eq!(
+            lines[0],
+            "Product Launch (2024-03-15): Launched the new product"
+        );
+        assert_eq!(
+            lines[1],
+            "Quarterly Review (2024-04-01): Reviewed Q1 results"
+        );
+    }
+
+    #[test]
+    fn context_to_text_formats_triplet_items() {
+        let context = vec![
+            SearchItem {
+                id: None,
+                score: Some(0.8),
+                payload: json!({
+                    "source_name": "Alice",
+                    "target_name": "Bob",
+                    "relationship": "knows",
+                }),
+            },
+            SearchItem {
+                id: None,
+                score: Some(0.6),
+                payload: json!({
+                    "source_name": "Company X",
+                    "target_name": "Product Y",
+                    "relationship": "produces",
+                }),
+            },
+        ];
+
+        let text = TemporalRetriever::temporal_context_to_text(&context);
+        let lines: Vec<&str> = text.lines().collect();
+
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0], "Alice -[knows]-> Bob");
+        assert_eq!(lines[1], "Company X -[produces]-> Product Y");
+    }
+
+    #[test]
+    fn context_to_text_empty_context() {
+        let context: Vec<SearchItem> = vec![];
+        let text = TemporalRetriever::temporal_context_to_text(&context);
+        assert_eq!(text, "");
+    }
+
+    #[test]
+    fn context_to_text_missing_fields_use_defaults() {
+        let context = vec![SearchItem {
+            id: None,
+            score: Some(0.5),
+            payload: json!({
+                "event_id": "evt-bare",
+            }),
+        }];
+
+        let text = TemporalRetriever::temporal_context_to_text(&context);
+        assert_eq!(text, "Unnamed event (unknown time): No description");
+    }
+
+    #[test]
+    fn context_to_text_mixed_items() {
+        let context = vec![
+            SearchItem {
+                id: None,
+                score: Some(0.9),
+                payload: json!({
+                    "event_id": "evt-1",
+                    "event_name": "Conference",
+                    "event_description": "Annual tech conference",
+                    "event_time": "2024-06-15",
+                }),
+            },
+            SearchItem {
+                id: None,
+                score: Some(0.7),
+                payload: json!({
+                    "source_name": "Speaker",
+                    "target_name": "Conference",
+                    "relationship": "presents_at",
+                }),
+            },
+        ];
+
+        let text = TemporalRetriever::temporal_context_to_text(&context);
+        let lines: Vec<&str> = text.lines().collect();
+
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0], "Conference (2024-06-15): Annual tech conference");
+        assert_eq!(lines[1], "Speaker -[presents_at]-> Conference");
     }
 }
