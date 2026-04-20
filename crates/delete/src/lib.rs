@@ -16,7 +16,6 @@ use uuid::Uuid;
 const FALLBACK_VECTOR_COLLECTIONS: &[(&str, &str)] = &[
     ("DocumentChunk", "text"),
     ("Entity", "name"),
-    ("Entity", "description"),
     ("EntityType", "name"),
     ("TextSummary", "text"),
     ("EdgeType", "relationship_name"),
