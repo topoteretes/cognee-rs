@@ -1,6 +1,7 @@
 use sea_orm::sea_query::OnConflict;
 use sea_orm::{
-    ColumnTrait, Condition, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, QuerySelect,
+    ColumnTrait, Condition, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter,
+    QueryOrder, QuerySelect,
 };
 use uuid::Uuid;
 
@@ -228,6 +229,46 @@ pub async fn delete_edges_for_data(
         .await
         .map_err(map_sea_err)?;
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Count queries scoped by (data_id, dataset_id)
+// ---------------------------------------------------------------------------
+
+/// Count provenance node rows for a specific `(data_id, dataset_id)` pair.
+pub async fn count_nodes_for_data(
+    db: &DatabaseConnection,
+    data_id: Uuid,
+    dataset_id: Uuid,
+) -> Result<usize, DatabaseError> {
+    let count = node::Entity::find()
+        .filter(
+            Condition::all()
+                .add(node::Column::DataId.eq(uuid_hex::to_hex(data_id)))
+                .add(node::Column::DatasetId.eq(uuid_hex::to_hex(dataset_id))),
+        )
+        .count(db)
+        .await
+        .map_err(map_sea_err)?;
+    Ok(count as usize)
+}
+
+/// Count provenance edge rows for a specific `(data_id, dataset_id)` pair.
+pub async fn count_edges_for_data(
+    db: &DatabaseConnection,
+    data_id: Uuid,
+    dataset_id: Uuid,
+) -> Result<usize, DatabaseError> {
+    let count = edge::Entity::find()
+        .filter(
+            Condition::all()
+                .add(edge::Column::DataId.eq(uuid_hex::to_hex(data_id)))
+                .add(edge::Column::DatasetId.eq(uuid_hex::to_hex(dataset_id))),
+        )
+        .count(db)
+        .await
+        .map_err(map_sea_err)?;
+    Ok(count as usize)
 }
 
 // ---------------------------------------------------------------------------

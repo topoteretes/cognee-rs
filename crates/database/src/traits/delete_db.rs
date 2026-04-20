@@ -90,6 +90,20 @@ pub trait DeleteDb: Send + Sync {
         data_id: Uuid,
         dataset_id: Uuid,
     ) -> Result<(), DatabaseError>;
+
+    /// Count provenance node rows for a specific `(data_id, dataset_id)` pair.
+    async fn get_provenance_node_count_for_data(
+        &self,
+        data_id: Uuid,
+        dataset_id: Uuid,
+    ) -> Result<usize, DatabaseError>;
+
+    /// Count provenance edge rows for a specific `(data_id, dataset_id)` pair.
+    async fn get_provenance_edge_count_for_data(
+        &self,
+        data_id: Uuid,
+        dataset_id: Uuid,
+    ) -> Result<usize, DatabaseError>;
 }
 
 #[async_trait]
@@ -218,5 +232,21 @@ impl DeleteDb for DatabaseConnection {
         dataset_id: Uuid,
     ) -> Result<(), DatabaseError> {
         graph_storage::delete_edges_for_data(self, data_id, dataset_id).await
+    }
+
+    async fn get_provenance_node_count_for_data(
+        &self,
+        data_id: Uuid,
+        dataset_id: Uuid,
+    ) -> Result<usize, DatabaseError> {
+        graph_storage::count_nodes_for_data(self, data_id, dataset_id).await
+    }
+
+    async fn get_provenance_edge_count_for_data(
+        &self,
+        data_id: Uuid,
+        dataset_id: Uuid,
+    ) -> Result<usize, DatabaseError> {
+        graph_storage::count_edges_for_data(self, data_id, dataset_id).await
     }
 }

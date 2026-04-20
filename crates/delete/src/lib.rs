@@ -61,6 +61,8 @@ pub struct DeletePreview {
     pub storage_files_to_delete: usize,
     pub graph_nodes_to_delete: usize,
     pub vector_points_to_delete: usize,
+    pub provenance_nodes_to_delete: usize,
+    pub provenance_edges_to_delete: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -71,6 +73,8 @@ pub struct DeleteResult {
     pub deleted_storage_files: usize,
     pub deleted_graph_nodes: usize,
     pub deleted_vector_points: usize,
+    pub deleted_provenance_nodes: usize,
+    pub deleted_provenance_edges: usize,
     pub warnings: Vec<String>,
 }
 
@@ -128,8 +132,8 @@ impl DeleteService {
             .count_data_that_would_be_deleted(&targets.candidate_data_ids, &targets.links_to_detach)
             .await?;
 
-        // Count graph nodes and vector points from provenance tables
-        let (graph_node_count, vector_point_count) =
+        // Count graph nodes, vector points, and provenance rows from tables
+        let (graph_node_count, vector_point_count, prov_node_count, prov_edge_count) =
             self.count_graph_vector_artifacts(request, &targets).await?;
 
         Ok(DeletePreview {
@@ -139,6 +143,8 @@ impl DeleteService {
             storage_files_to_delete: data_to_delete,
             graph_nodes_to_delete: graph_node_count,
             vector_points_to_delete: vector_point_count,
+            provenance_nodes_to_delete: prov_node_count,
+            provenance_edges_to_delete: prov_edge_count,
         })
     }
 
@@ -152,6 +158,8 @@ impl DeleteService {
         let mut deleted_storage = 0usize;
         let mut deleted_graph_nodes = 0usize;
         let mut deleted_vector_points = 0usize;
+        let mut deleted_provenance_nodes = 0usize;
+        let mut deleted_provenance_edges = 0usize;
 
         // ------------------------------------------------------------------
         // Phase 1: Graph/vector cleanup (before relational provenance is gone)
@@ -161,16 +169,20 @@ impl DeleteService {
 
         if is_all_scope {
             // Fast-path: wipe entire graph and all vector collections
-            let (gn, vp, gv_warnings) = self.cleanup_all().await?;
+            let (gn, vp, pn, pe, gv_warnings) = self.cleanup_all().await?;
             deleted_graph_nodes += gn;
             deleted_vector_points += vp;
+            deleted_provenance_nodes += pn;
+            deleted_provenance_edges += pe;
             warnings.extend(gv_warnings);
         } else {
             // Dataset-scoped cleanup
             for dataset in &targets.datasets_to_delete {
-                let (gn, vp, gv_warnings) = self.cleanup_dataset(dataset.id).await?;
+                let (gn, vp, pn, pe, gv_warnings) = self.cleanup_dataset(dataset.id).await?;
                 deleted_graph_nodes += gn;
                 deleted_vector_points += vp;
+                deleted_provenance_nodes += pn;
+                deleted_provenance_edges += pe;
                 warnings.extend(gv_warnings);
             }
 
@@ -182,10 +194,12 @@ impl DeleteService {
                 for data_id in &deletable_data_ids {
                     for (dataset_id, did) in &targets.links_to_detach {
                         if did == data_id {
-                            let (gn, vp, gv_warnings) =
+                            let (gn, vp, pn, pe, gv_warnings) =
                                 self.cleanup_data(*data_id, *dataset_id).await?;
                             deleted_graph_nodes += gn;
                             deleted_vector_points += vp;
+                            deleted_provenance_nodes += pn;
+                            deleted_provenance_edges += pe;
                             warnings.extend(gv_warnings);
                         }
                     }
@@ -281,6 +295,8 @@ impl DeleteService {
             deleted_storage_files: deleted_storage,
             deleted_graph_nodes,
             deleted_vector_points,
+            deleted_provenance_nodes,
+            deleted_provenance_edges,
             warnings,
         })
     }
@@ -347,8 +363,12 @@ impl DeleteService {
     // ==================================================================
 
     /// Fast-path for `DeleteScope::All`: wipe entire graph and all vector
-    /// collections. Returns `(graph_nodes_deleted, vector_points_deleted, warnings)`.
-    async fn cleanup_all(&self) -> Result<(usize, usize, Vec<String>), DeleteError> {
+    /// collections. Returns `(graph_nodes_deleted, vector_points_deleted,
+    /// provenance_nodes_deleted, provenance_edges_deleted, warnings)`.
+    ///
+    /// Note: provenance counts are 0 because the dataset cascade in phase 2
+    /// handles provenance row deletion.
+    async fn cleanup_all(&self) -> Result<(usize, usize, usize, usize, Vec<String>), DeleteError> {
         let mut warnings = Vec::new();
         let graph_nodes = 0usize;
         let vector_points = 0usize;
@@ -406,16 +426,17 @@ impl DeleteService {
             );
         }
 
-        Ok((graph_nodes, vector_points, warnings))
+        Ok((graph_nodes, vector_points, 0, 0, warnings))
     }
 
     /// Dataset-scoped cleanup: remove graph nodes and vector points based on
     /// the provenance `nodes`/`edges` tables. Returns `(graph_nodes_deleted,
-    /// vector_points_deleted, warnings)`.
+    /// vector_points_deleted, provenance_nodes_deleted, provenance_edges_deleted,
+    /// warnings)`.
     async fn cleanup_dataset(
         &self,
         dataset_id: Uuid,
-    ) -> Result<(usize, usize, Vec<String>), DeleteError> {
+    ) -> Result<(usize, usize, usize, usize, Vec<String>), DeleteError> {
         let mut warnings = Vec::new();
         let mut graph_node_count = 0usize;
         let mut vector_point_count = 0usize;
@@ -440,8 +461,11 @@ impl DeleteService {
                 ))
             })?;
 
+        let prov_node_count = nodes.len();
+        let prov_edge_count = edges.len();
+
         if nodes.is_empty() && edges.is_empty() {
-            return Ok((0, 0, warnings));
+            return Ok((0, 0, 0, 0, warnings));
         }
 
         // --- Graph cleanup ---
@@ -475,16 +499,28 @@ impl DeleteService {
                 ))
             })?;
 
-        Ok((graph_node_count, vector_point_count, warnings))
+        Ok((
+            graph_node_count,
+            vector_point_count,
+            prov_node_count,
+            prov_edge_count,
+            warnings,
+        ))
     }
 
     /// Data-scoped cleanup: remove graph nodes and vector points for a single
-    /// data item, using only non-shared slugs.
+    /// data item, using only non-shared slugs. Returns `(graph_nodes_deleted,
+    /// vector_points_deleted, provenance_nodes_deleted, provenance_edges_deleted,
+    /// warnings)`.
+    ///
+    /// Note: `provenance_nodes_deleted` and `provenance_edges_deleted` count ALL
+    /// provenance rows for this `(data_id, dataset_id)` pair, not just the
+    /// unique ones used for graph/vector cleanup.
     async fn cleanup_data(
         &self,
         data_id: Uuid,
         dataset_id: Uuid,
-    ) -> Result<(usize, usize, Vec<String>), DeleteError> {
+    ) -> Result<(usize, usize, usize, usize, Vec<String>), DeleteError> {
         let mut warnings = Vec::new();
         let mut graph_node_count = 0usize;
         let mut vector_point_count = 0usize;
@@ -509,8 +545,29 @@ impl DeleteService {
                 ))
             })?;
 
-        if nodes.is_empty() && edges.is_empty() {
-            return Ok((0, 0, warnings));
+        // Count ALL provenance rows (not just unique) before deletion, because
+        // we delete all rows for this (data_id, dataset_id) pair.
+        let all_prov_nodes = self
+            .database
+            .get_provenance_node_count_for_data(data_id, dataset_id)
+            .await
+            .map_err(|e| {
+                DeleteError::Runtime(format!(
+                    "Failed to count provenance nodes for data {data_id}: {e}"
+                ))
+            })?;
+        let all_prov_edges = self
+            .database
+            .get_provenance_edge_count_for_data(data_id, dataset_id)
+            .await
+            .map_err(|e| {
+                DeleteError::Runtime(format!(
+                    "Failed to count provenance edges for data {data_id}: {e}"
+                ))
+            })?;
+
+        if nodes.is_empty() && edges.is_empty() && all_prov_nodes == 0 && all_prov_edges == 0 {
+            return Ok((0, 0, 0, 0, warnings));
         }
 
         // --- Graph cleanup ---
@@ -541,7 +598,13 @@ impl DeleteService {
                 ))
             })?;
 
-        Ok((graph_node_count, vector_point_count, warnings))
+        Ok((
+            graph_node_count,
+            vector_point_count,
+            all_prov_nodes,
+            all_prov_edges,
+            warnings,
+        ))
     }
 
     /// Delete nodes from the graph DB based on provenance node slugs.
@@ -656,20 +719,23 @@ impl DeleteService {
         }
     }
 
-    /// Count graph nodes and vector points that would be affected.
+    /// Count graph nodes, vector points, and provenance rows that would be
+    /// affected. Returns `(graph_nodes, vector_points, prov_nodes, prov_edges)`.
     async fn count_graph_vector_artifacts(
         &self,
         request: &DeleteRequest,
         targets: &ResolvedDeleteTargets,
-    ) -> Result<(usize, usize), DeleteError> {
+    ) -> Result<(usize, usize, usize, usize), DeleteError> {
         let mut graph_nodes = 0usize;
         let mut vector_points = 0usize;
+        let mut prov_nodes = 0usize;
+        let mut prov_edges = 0usize;
 
         if matches!(request.scope, DeleteScope::All) {
             // For All scope we cannot provide exact counts without graph_db
             // inspection. Return 0 for now (the preview focuses on relational
             // counts).
-            return Ok((0, 0));
+            return Ok((0, 0, 0, 0));
         }
 
         for dataset in &targets.datasets_to_delete {
@@ -695,6 +761,9 @@ impl DeleteService {
                     ))
                 })?;
 
+            prov_nodes += nodes.len();
+            prov_edges += edges.len();
+
             // Unique node slugs = graph nodes to delete
             let unique_slugs: HashSet<Uuid> = nodes.iter().map(|n| n.slug).collect();
             graph_nodes += unique_slugs.len();
@@ -708,7 +777,7 @@ impl DeleteService {
             vector_points += edges.len() * 2;
         }
 
-        Ok((graph_nodes, vector_points))
+        Ok((graph_nodes, vector_points, prov_nodes, prov_edges))
     }
 
     // ==================================================================
@@ -1753,6 +1822,286 @@ mod tests {
             graph_db.node_count(),
             1,
             "shared node should survive because data_id_2 also references it"
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // New tests: relational DB provenance state verification
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_data_deletion_cleans_relational_provenance() {
+        let (svc, storage, db, _graph_db, _vector_db) = make_service_with_graph_vector().await;
+        let owner = Uuid::new_v4();
+        let (dataset_id, data_id) =
+            seed_dataset_with_data(&db, &storage, owner, "prov_data_ds").await;
+
+        // Seed provenance nodes and edges for this data item
+        let node_slug = Uuid::new_v4();
+        let edge_slug = Uuid::new_v4();
+        seed_provenance_nodes(
+            &db,
+            dataset_id,
+            data_id,
+            owner,
+            &[node_slug],
+            "Entity",
+            serde_json::json!(["name"]),
+        )
+        .await;
+        seed_provenance_edges(&db, dataset_id, data_id, owner, &[edge_slug], "knows").await;
+
+        // Verify provenance rows exist before deletion
+        let nodes_before = ops::graph_storage::get_nodes_by_data(&db, data_id, dataset_id)
+            .await
+            .unwrap();
+        let edges_before = ops::graph_storage::get_edges_by_data(&db, data_id, dataset_id)
+            .await
+            .unwrap();
+        assert_eq!(
+            nodes_before.len(),
+            1,
+            "should have 1 provenance node before delete"
+        );
+        assert_eq!(
+            edges_before.len(),
+            1,
+            "should have 1 provenance edge before delete"
+        );
+
+        // Delete the data item
+        let result = svc
+            .execute(&DeleteRequest {
+                scope: DeleteScope::Data {
+                    owner_id: owner,
+                    data_id,
+                    dataset_name: Some("prov_data_ds".to_string()),
+                },
+                mode: DeleteMode::Soft,
+            })
+            .await
+            .expect("execute should succeed");
+
+        assert_eq!(result.deleted_data, 1);
+        assert_eq!(result.deleted_provenance_nodes, 1);
+        assert_eq!(result.deleted_provenance_edges, 1);
+
+        // Query DB directly: provenance rows should be gone
+        let nodes_after = ops::graph_storage::get_nodes_by_data(&db, data_id, dataset_id)
+            .await
+            .unwrap();
+        let edges_after = ops::graph_storage::get_edges_by_data(&db, data_id, dataset_id)
+            .await
+            .unwrap();
+        assert!(
+            nodes_after.is_empty(),
+            "provenance nodes should be gone after data deletion"
+        );
+        assert!(
+            edges_after.is_empty(),
+            "provenance edges should be gone after data deletion"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_dataset_deletion_cascades_relational_provenance() {
+        let (svc, storage, db, _graph_db, _vector_db) = make_service_with_graph_vector().await;
+        let owner = Uuid::new_v4();
+        let (dataset_id, data_id) =
+            seed_dataset_with_data(&db, &storage, owner, "prov_ds_ds").await;
+
+        // Seed multiple provenance nodes and edges
+        let node_slugs = [Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4()];
+        let edge_slugs = [Uuid::new_v4(), Uuid::new_v4()];
+        seed_provenance_nodes(
+            &db,
+            dataset_id,
+            data_id,
+            owner,
+            &node_slugs,
+            "Entity",
+            serde_json::json!(["name"]),
+        )
+        .await;
+        seed_provenance_edges(&db, dataset_id, data_id, owner, &edge_slugs, "related_to").await;
+
+        // Verify provenance rows exist
+        let nodes_before = ops::graph_storage::get_nodes_by_dataset(&db, dataset_id)
+            .await
+            .unwrap();
+        let edges_before = ops::graph_storage::get_edges_by_dataset(&db, dataset_id)
+            .await
+            .unwrap();
+        assert_eq!(nodes_before.len(), 3);
+        assert_eq!(edges_before.len(), 2);
+
+        // Delete the entire dataset
+        let result = svc
+            .execute(&DeleteRequest {
+                scope: DeleteScope::Dataset {
+                    owner_id: owner,
+                    dataset_name: "prov_ds_ds".to_string(),
+                },
+                mode: DeleteMode::Soft,
+            })
+            .await
+            .expect("execute should succeed");
+
+        assert_eq!(result.deleted_datasets, 1);
+        assert_eq!(result.deleted_data, 1);
+        assert_eq!(result.deleted_provenance_nodes, 3);
+        assert_eq!(result.deleted_provenance_edges, 2);
+
+        // Query DB directly: all provenance rows for this dataset should be gone
+        let nodes_after = ops::graph_storage::get_nodes_by_dataset(&db, dataset_id)
+            .await
+            .unwrap();
+        let edges_after = ops::graph_storage::get_edges_by_dataset(&db, dataset_id)
+            .await
+            .unwrap();
+        assert!(
+            nodes_after.is_empty(),
+            "provenance nodes should be gone after dataset deletion"
+        );
+        assert!(
+            edges_after.is_empty(),
+            "provenance edges should be gone after dataset deletion"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_data_deletion_preserves_sibling_provenance() {
+        let (svc, storage, db, _graph_db, _vector_db) = make_service_with_graph_vector().await;
+        let owner = Uuid::new_v4();
+
+        // Create one dataset with two data items
+        let dataset = Dataset::new("sibling_ds".to_string(), owner, None, Uuid::new_v4());
+        let dataset_id = dataset.id;
+        ops::datasets::create_dataset(&db, dataset).await.unwrap();
+
+        let loc1 = storage.store(b"content alpha", "alpha.txt").await.unwrap();
+        let data_id_1 = Uuid::new_v4();
+        let data1 = Data::builder(
+            data_id_1,
+            "alpha.txt",
+            loc1,
+            "file://alpha.txt",
+            "txt",
+            "text/plain",
+            "hash_alpha",
+            owner,
+        )
+        .build();
+        ops::data::create_data(&db, data1).await.unwrap();
+        ops::datasets::attach_data_to_dataset(&db, dataset_id, data_id_1)
+            .await
+            .unwrap();
+
+        let loc2 = storage.store(b"content beta", "beta.txt").await.unwrap();
+        let data_id_2 = Uuid::new_v4();
+        let data2 = Data::builder(
+            data_id_2,
+            "beta.txt",
+            loc2,
+            "file://beta.txt",
+            "txt",
+            "text/plain",
+            "hash_beta",
+            owner,
+        )
+        .build();
+        ops::data::create_data(&db, data2).await.unwrap();
+        ops::datasets::attach_data_to_dataset(&db, dataset_id, data_id_2)
+            .await
+            .unwrap();
+
+        // Seed separate provenance for each data item
+        let slug_d1 = Uuid::new_v4();
+        let edge_d1 = Uuid::new_v4();
+        seed_provenance_nodes(
+            &db,
+            dataset_id,
+            data_id_1,
+            owner,
+            &[slug_d1],
+            "Entity",
+            serde_json::json!(["name"]),
+        )
+        .await;
+        seed_provenance_edges(&db, dataset_id, data_id_1, owner, &[edge_d1], "mentions").await;
+
+        let slug_d2 = Uuid::new_v4();
+        let edge_d2 = Uuid::new_v4();
+        seed_provenance_nodes(
+            &db,
+            dataset_id,
+            data_id_2,
+            owner,
+            &[slug_d2],
+            "Entity",
+            serde_json::json!(["name"]),
+        )
+        .await;
+        seed_provenance_edges(&db, dataset_id, data_id_2, owner, &[edge_d2], "describes").await;
+
+        // Verify 2 + 2 provenance rows total
+        let all_nodes = ops::graph_storage::get_nodes_by_dataset(&db, dataset_id)
+            .await
+            .unwrap();
+        let all_edges = ops::graph_storage::get_edges_by_dataset(&db, dataset_id)
+            .await
+            .unwrap();
+        assert_eq!(all_nodes.len(), 2, "2 provenance nodes total before delete");
+        assert_eq!(all_edges.len(), 2, "2 provenance edges total before delete");
+
+        // Delete only data_id_1
+        let result = svc
+            .execute(&DeleteRequest {
+                scope: DeleteScope::Data {
+                    owner_id: owner,
+                    data_id: data_id_1,
+                    dataset_name: Some("sibling_ds".to_string()),
+                },
+                mode: DeleteMode::Soft,
+            })
+            .await
+            .expect("execute should succeed");
+
+        assert_eq!(result.deleted_provenance_nodes, 1);
+        assert_eq!(result.deleted_provenance_edges, 1);
+
+        // data_id_1 provenance should be gone
+        let d1_nodes = ops::graph_storage::get_nodes_by_data(&db, data_id_1, dataset_id)
+            .await
+            .unwrap();
+        let d1_edges = ops::graph_storage::get_edges_by_data(&db, data_id_1, dataset_id)
+            .await
+            .unwrap();
+        assert!(
+            d1_nodes.is_empty(),
+            "data_id_1 provenance nodes should be gone"
+        );
+        assert!(
+            d1_edges.is_empty(),
+            "data_id_1 provenance edges should be gone"
+        );
+
+        // data_id_2 provenance should survive
+        let d2_nodes = ops::graph_storage::get_nodes_by_data(&db, data_id_2, dataset_id)
+            .await
+            .unwrap();
+        let d2_edges = ops::graph_storage::get_edges_by_data(&db, data_id_2, dataset_id)
+            .await
+            .unwrap();
+        assert_eq!(
+            d2_nodes.len(),
+            1,
+            "data_id_2 provenance nodes should survive sibling deletion"
+        );
+        assert_eq!(
+            d2_edges.len(),
+            1,
+            "data_id_2 provenance edges should survive sibling deletion"
         );
     }
 }
