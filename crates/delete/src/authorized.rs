@@ -66,19 +66,34 @@ impl AuthorizedDeleteService {
         match &request.scope {
             DeleteScope::Data {
                 owner_id,
-                data_id: _,
+                data_id,
                 dataset_name,
             } => {
                 if let Some(ds_name) = dataset_name {
                     let dataset_id = self.resolve_dataset_id(*owner_id, ds_name).await?;
                     self.require_delete_permission(principal_id, dataset_id)
                         .await?;
+                } else {
+                    // When no dataset_name is given, the inner service resolves
+                    // all datasets linked to this data item that belong to the
+                    // owner. We must check that the principal has delete
+                    // permission on each of those datasets.
+                    let datasets = self
+                        .database
+                        .list_datasets_for_data(*data_id)
+                        .await
+                        .map_err(|e| {
+                            DeleteError::Runtime(format!(
+                                "Failed to list datasets for data {data_id}: {e}"
+                            ))
+                        })?;
+
+                    for ds in &datasets {
+                        if ds.owner_id == *owner_id {
+                            self.require_delete_permission(principal_id, ds.id).await?;
+                        }
+                    }
                 }
-                // When no dataset_name is given, the inner service resolves
-                // all datasets linked to this data item. The owner_id check
-                // in the inner service already scopes the affected datasets.
-                // The principal (who is typically the owner) will have delete
-                // permission granted at dataset creation time.
             }
             DeleteScope::Dataset {
                 owner_id,
@@ -88,7 +103,7 @@ impl AuthorizedDeleteService {
                 self.require_delete_permission(principal_id, dataset_id)
                     .await?;
             }
-            DeleteScope::User { owner_id: _ } => {
+            DeleteScope::User { owner_id } => {
                 // For user-scoped deletion, verify the principal has delete
                 // on all datasets that would be affected. The inner service
                 // will list all datasets by owner. We check that the
@@ -101,7 +116,7 @@ impl AuthorizedDeleteService {
 
                 let owner_datasets = self
                     .database
-                    .list_datasets_by_owner(principal_id)
+                    .list_datasets_by_owner(*owner_id)
                     .await
                     .map_err(|e| {
                         DeleteError::Runtime(format!("Failed to list owner datasets: {e}"))
