@@ -34,6 +34,7 @@ cognee-cognify   = { path = "../cognify" }
 cognee-ontology  = { path = "../ontology" }
 cognee-delete    = { path = "../delete" }
 cognee-llm       = { path = "../llm" }
+cognee-session   = { path = "../session", features = ["fs"] }
 dotenv.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
