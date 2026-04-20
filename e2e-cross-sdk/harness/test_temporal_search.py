@@ -17,6 +17,8 @@ from helpers import (
     run_rust_search,
     write_rust_config,
     query_nodes_by_type,
+    query_edges,
+    query_rows,
     TEST_DATA_DIR,
 )
 from conftest import requires_openai
@@ -93,9 +95,7 @@ def test_temporal_cognify_produces_event_nodes(both_temporal_cognified):
     """Rust must produce Event nodes in the graph database after temporal cognify."""
     _py_ws, rust_ws = both_temporal_cognified
     rust_events = query_nodes_by_type(open_db(rust_db_path(rust_ws)), "Event")
-    assert len(rust_events) >= 1, (
-        f"Rust produced no Event nodes after temporal cognify"
-    )
+    assert len(rust_events) >= 5, f"Expected >= 5 Event nodes, got {len(rust_events)}"
 
 
 @requires_openai
@@ -103,9 +103,7 @@ def test_temporal_cognify_produces_timestamp_nodes(both_temporal_cognified):
     """Rust must produce Timestamp nodes in the graph database after temporal cognify."""
     _py_ws, rust_ws = both_temporal_cognified
     rust_ts = query_nodes_by_type(open_db(rust_db_path(rust_ws)), "Timestamp")
-    assert len(rust_ts) >= 1, (
-        f"Rust produced no Timestamp nodes after temporal cognify"
-    )
+    assert len(rust_ts) >= 5, f"Expected >= 5 Timestamp nodes, got {len(rust_ts)}"
 
 
 @requires_openai
@@ -118,10 +116,10 @@ def test_temporal_event_count_within_tolerance(both_temporal_cognified):
     """
     _py_ws, rust_ws = both_temporal_cognified
     rust_count = len(query_nodes_by_type(open_db(rust_db_path(rust_ws)), "Event"))
-    # The biography fixture contains >10 date-anchored events; expect at least 3
+    # The biography fixture contains >10 date-anchored events; expect at least 5
     # even with conservative LLM extraction.
-    assert rust_count >= 1, (
-        f"Rust produced fewer Event nodes than expected: {rust_count}"
+    assert rust_count >= 5, (
+        f"Expected >= 5 Event nodes, got {rust_count}"
     )
 
 
@@ -130,8 +128,8 @@ def test_temporal_timestamp_count_within_tolerance(both_temporal_cognified):
     """Timestamp node counts must be reasonable after temporal cognify."""
     _py_ws, rust_ws = both_temporal_cognified
     rust_count = len(query_nodes_by_type(open_db(rust_db_path(rust_ws)), "Timestamp"))
-    assert rust_count >= 1, (
-        f"Rust produced fewer Timestamp nodes than expected: {rust_count}"
+    assert rust_count >= 5, (
+        f"Expected >= 5 Timestamp nodes, got {rust_count}"
     )
 
 
@@ -166,3 +164,74 @@ def test_temporal_search_with_year_filter(both_temporal_cognified):
     # We do not compare exact text — LLM output is non-deterministic.
     # Just verify the CLI completed and produced some output.
     assert len(rust_results) > 0, "Rust TEMPORAL year-filter search returned empty results"
+
+
+# ── Helpers for edge validation ──────────────────────────────────────────────
+
+
+TEMPORAL_EDGE_TYPES = {"at", "during"}
+
+
+def query_temporal_edges(conn):
+    """Return edges whose relationship_name is 'at' or 'during' (case-insensitive)."""
+    all_edges = query_edges(conn)
+    return [
+        e for e in all_edges
+        if e.get("relationship_name", "").lower() in TEMPORAL_EDGE_TYPES
+    ]
+
+
+# ── New tests ────────────────────────────────────────────────────────────────
+
+
+@requires_openai
+def test_temporal_cognify_produces_temporal_edges(both_temporal_cognified):
+    """Rust must produce 'at' or 'during' edges linking Event nodes to Timestamp nodes."""
+    _py_ws, rust_ws = both_temporal_cognified
+    db = open_db(rust_db_path(rust_ws))
+
+    temporal_edges = query_temporal_edges(db)
+    assert len(temporal_edges) >= 5, (
+        f"Expected >= 5 temporal edges ('at'/'during'), got {len(temporal_edges)}"
+    )
+
+    # Build a set of node IDs that have at least one outgoing temporal edge.
+    source_ids_with_temporal_edge = {
+        e["source_node_id"] for e in temporal_edges
+    }
+
+    # Every Event node must have at least one outgoing 'at' or 'during' edge.
+    event_nodes = query_nodes_by_type(db, "Event")
+    events_without_edge = []
+    for node in event_nodes:
+        node_id = node["id"]
+        if node_id not in source_ids_with_temporal_edge:
+            events_without_edge.append(node.get("label", node_id))
+
+    assert len(events_without_edge) == 0, (
+        f"{len(events_without_edge)} Event node(s) lack an 'at'/'during' edge: "
+        f"{events_without_edge[:10]}"
+    )
+
+
+@requires_openai
+def test_temporal_search_parity_both_sdks_return_non_empty(both_temporal_cognified):
+    """Both Python and Rust SDKs must return non-empty TEMPORAL search results."""
+    py_ws, rust_ws = both_temporal_cognified
+
+    python_results = run_python_search(
+        py_ws,
+        "What events happened?",
+        query_type="TEMPORAL",
+        check=False,
+    )
+
+    rust_results = run_rust_search(
+        rust_ws,
+        "What events happened?",
+        query_type="TEMPORAL",
+        check=False,
+    )
+
+    assert len(python_results) > 0, "Python TEMPORAL search returned empty results"
+    assert len(rust_results) > 0, "Rust TEMPORAL search returned empty results"
