@@ -1,0 +1,204 @@
+//! ACL database operations: permission checks, grants, and revocations.
+
+use chrono::Utc;
+use sea_orm::prelude::*;
+use sea_orm::{DatabaseConnection, QuerySelect, Set};
+use uuid::Uuid;
+
+use crate::entities::{acl, permission, principal};
+use crate::types::DatabaseError;
+use crate::uuid_hex;
+
+/// All permission names defined in the system.
+pub const PERMISSION_NAMES: &[&str] = &["read", "write", "delete", "share"];
+
+/// Check if a principal has a specific permission on a dataset.
+pub async fn has_permission(
+    db: &DatabaseConnection,
+    principal_id: Uuid,
+    dataset_id: Uuid,
+    permission_name: &str,
+) -> Result<bool, DatabaseError> {
+    let count = acl::Entity::find()
+        .inner_join(permission::Entity)
+        .filter(acl::Column::PrincipalId.eq(uuid_hex::to_hex(principal_id)))
+        .filter(acl::Column::DatasetId.eq(uuid_hex::to_hex(dataset_id)))
+        .filter(permission::Column::Name.eq(permission_name))
+        .count(db)
+        .await
+        .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
+
+    Ok(count > 0)
+}
+
+/// Return all dataset IDs for which the principal has the given permission.
+pub async fn authorized_dataset_ids(
+    db: &DatabaseConnection,
+    principal_id: Uuid,
+    permission_name: &str,
+) -> Result<Vec<Uuid>, DatabaseError> {
+    let rows = acl::Entity::find()
+        .inner_join(permission::Entity)
+        .filter(acl::Column::PrincipalId.eq(uuid_hex::to_hex(principal_id)))
+        .filter(permission::Column::Name.eq(permission_name))
+        .column(acl::Column::DatasetId)
+        .all(db)
+        .await
+        .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
+
+    let ids = rows
+        .iter()
+        .filter_map(|row| uuid_hex::from_hex(&row.dataset_id).ok())
+        .collect();
+
+    Ok(ids)
+}
+
+/// Grant a permission on a dataset to a principal. Idempotent.
+pub async fn grant_permission(
+    db: &DatabaseConnection,
+    principal_id: Uuid,
+    dataset_id: Uuid,
+    permission_name: &str,
+) -> Result<(), DatabaseError> {
+    // Look up the permission by name
+    let perm = permission::Entity::find()
+        .filter(permission::Column::Name.eq(permission_name))
+        .one(db)
+        .await
+        .map_err(|e| DatabaseError::QueryError(e.to_string()))?
+        .ok_or_else(|| {
+            DatabaseError::NotFound(format!("Permission '{}' not found", permission_name))
+        })?;
+
+    let principal_hex = uuid_hex::to_hex(principal_id);
+    let dataset_hex = uuid_hex::to_hex(dataset_id);
+
+    // Check for existing grant (idempotent)
+    let existing = acl::Entity::find()
+        .filter(acl::Column::PrincipalId.eq(principal_hex.clone()))
+        .filter(acl::Column::PermissionId.eq(perm.id.clone()))
+        .filter(acl::Column::DatasetId.eq(dataset_hex.clone()))
+        .count(db)
+        .await
+        .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
+
+    if existing > 0 {
+        return Ok(());
+    }
+
+    let now = Utc::now();
+    let acl_model = acl::ActiveModel {
+        id: Set(uuid_hex::to_hex(Uuid::new_v4())),
+        principal_id: Set(principal_hex),
+        permission_id: Set(perm.id),
+        dataset_id: Set(dataset_hex),
+        created_at: Set(now),
+        updated_at: Set(None),
+    };
+
+    acl::Entity::insert(acl_model)
+        .exec(db)
+        .await
+        .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
+
+    Ok(())
+}
+
+/// Revoke a permission on a dataset from a principal.
+pub async fn revoke_permission(
+    db: &DatabaseConnection,
+    principal_id: Uuid,
+    dataset_id: Uuid,
+    permission_name: &str,
+) -> Result<(), DatabaseError> {
+    let perm = permission::Entity::find()
+        .filter(permission::Column::Name.eq(permission_name))
+        .one(db)
+        .await
+        .map_err(|e| DatabaseError::QueryError(e.to_string()))?
+        .ok_or_else(|| {
+            DatabaseError::NotFound(format!("Permission '{}' not found", permission_name))
+        })?;
+
+    acl::Entity::delete_many()
+        .filter(acl::Column::PrincipalId.eq(uuid_hex::to_hex(principal_id)))
+        .filter(acl::Column::PermissionId.eq(perm.id))
+        .filter(acl::Column::DatasetId.eq(uuid_hex::to_hex(dataset_id)))
+        .exec(db)
+        .await
+        .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
+
+    Ok(())
+}
+
+/// Ensure a principal row exists (upsert by ID).
+pub async fn ensure_principal(
+    db: &DatabaseConnection,
+    principal_id: Uuid,
+    principal_type: &str,
+) -> Result<(), DatabaseError> {
+    let hex_id = uuid_hex::to_hex(principal_id);
+    let existing = principal::Entity::find_by_id(hex_id.clone())
+        .one(db)
+        .await
+        .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
+
+    if existing.is_some() {
+        return Ok(());
+    }
+
+    let now = Utc::now();
+    let model = principal::ActiveModel {
+        id: Set(hex_id),
+        principal_type: Set(principal_type.to_string()),
+        created_at: Set(now),
+        updated_at: Set(None),
+    };
+
+    principal::Entity::insert(model)
+        .exec(db)
+        .await
+        .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
+
+    Ok(())
+}
+
+/// Grant all four permissions (read, write, delete, share) to a principal
+/// on a dataset. Ensures the principal row exists first.
+///
+/// Uses direct database connection operations.
+pub async fn grant_all_permissions_on_dataset(
+    db: &DatabaseConnection,
+    principal_id: Uuid,
+    dataset_id: Uuid,
+) -> Result<(), DatabaseError> {
+    ensure_principal(db, principal_id, "user").await?;
+
+    for perm_name in PERMISSION_NAMES {
+        grant_permission(db, principal_id, dataset_id, perm_name).await?;
+    }
+
+    Ok(())
+}
+
+/// Grant all four permissions (read, write, delete, share) to a principal
+/// on a dataset via the [`AclDb`] trait.
+///
+/// This version works with any `&dyn AclDb` implementation, making it usable
+/// from the ingestion pipeline without requiring a concrete `DatabaseConnection`.
+pub async fn grant_all_permissions_on_dataset_via_trait(
+    acl_db: &dyn crate::traits::AclDb,
+    principal_id: Uuid,
+    dataset_id: Uuid,
+) -> Result<(), DatabaseError> {
+    acl_db.ensure_principal(principal_id, "user").await?;
+
+    for perm_name in PERMISSION_NAMES {
+        acl_db
+            .grant_permission(principal_id, dataset_id, perm_name)
+            .await?;
+    }
+
+    Ok(())
+}

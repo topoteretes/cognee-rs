@@ -1,3 +1,4 @@
+pub mod acl;
 pub mod artifact_refs;
 pub mod data;
 pub mod datasets;

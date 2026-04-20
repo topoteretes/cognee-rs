@@ -2,7 +2,10 @@ use std::io;
 use std::sync::Arc;
 
 use cognee_lib::PipelineContext;
-use cognee_lib::delete::{DeleteMode, DeleteRequest, DeleteScope, DeleteService};
+use cognee_lib::database::AclDb;
+use cognee_lib::delete::{
+    AuthorizedDeleteService, DeleteMode, DeleteRequest, DeleteScope, DeleteService,
+};
 use tracing::{info, warn};
 use uuid::Uuid;
 
@@ -12,6 +15,7 @@ use crate::error::CliError;
 pub fn run(args: DeleteArgs, cm: Arc<cognee_lib::ComponentManager>) -> Result<(), CliError> {
     let dry_run = args.dry_run;
     let force = args.force;
+    let enforce_acl = args.enforce_acl;
 
     validate_scope_selection(&args)?;
 
@@ -53,75 +57,113 @@ pub fn run(args: DeleteArgs, cm: Arc<cognee_lib::ComponentManager>) -> Result<()
             .await
             .map_err(|e| CliError::Runtime(format!("{e}")))?;
 
-        let service = DeleteService::new(storage, database)
-            .with_graph_db(graph_db)
-            .with_vector_db(vector_db);
+        let service = DeleteService::new(
+            storage,
+            database.clone() as Arc<dyn cognee_lib::database::DeleteDb>,
+        )
+        .with_graph_db(graph_db)
+        .with_vector_db(vector_db);
 
-        let preview = service
-            .preview(&request)
-            .await
-            .map_err(|error| CliError::Runtime(format!("Delete preview failed: {error}")))?;
+        if enforce_acl {
+            let acl_db: Arc<dyn AclDb> = database.clone();
+            let delete_db: Arc<dyn cognee_lib::database::DeleteDb> = database;
+            let auth_service = AuthorizedDeleteService::new(service, acl_db, delete_db);
 
-        info!("Preview:");
-        info!("  datasets_to_delete: {}", preview.datasets_to_delete);
-        info!(
-            "  dataset_links_to_delete: {}",
-            preview.dataset_links_to_delete
-        );
-        info!("  data_to_delete: {}", preview.data_to_delete);
-        info!(
-            "  storage_files_to_delete: {}",
-            preview.storage_files_to_delete
-        );
-        info!(
-            "  graph_nodes_to_delete: {}",
-            preview.graph_nodes_to_delete
-        );
-        info!(
-            "  vector_points_to_delete: {}",
-            preview.vector_points_to_delete
-        );
+            let preview = auth_service
+                .preview(&request, owner_id)
+                .await
+                .map_err(|error| CliError::Runtime(format!("Delete preview failed: {error}")))?;
+            print_preview(&preview);
 
-        if dry_run {
-            return Ok(());
-        }
-
-        if !force {
-            info!("This operation is irreversible. Continue? [y/N]: ");
-
-            let mut confirmation = String::new();
-            io::stdin().read_line(&mut confirmation).map_err(|error| {
-                CliError::Runtime(format!("Failed to read confirmation: {error}"))
-            })?;
-
-            let answer = confirmation.trim().to_lowercase();
-            if answer != "y" && answer != "yes" {
-                info!("Deletion cancelled.");
+            if dry_run {
                 return Ok(());
             }
-        }
+            if !force {
+                confirm_deletion()?;
+            }
 
-        let result = service
-            .execute(&request)
-            .await
-            .map_err(|error| CliError::Runtime(format!("Delete execution failed: {error}")))?;
+            let result = auth_service
+                .execute(&request, owner_id)
+                .await
+                .map_err(|error| CliError::Runtime(format!("Delete execution failed: {error}")))?;
+            print_result(&result);
+        } else {
+            let preview = service
+                .preview(&request)
+                .await
+                .map_err(|error| CliError::Runtime(format!("Delete preview failed: {error}")))?;
+            print_preview(&preview);
 
-        info!(
-            "Success: Deleted datasets={}, links={}, data={}, storage_files={}, graph_nodes={}, vector_points={}",
-            result.deleted_datasets,
-            result.deleted_dataset_links,
-            result.deleted_data,
-            result.deleted_storage_files,
-            result.deleted_graph_nodes,
-            result.deleted_vector_points,
-        );
+            if dry_run {
+                return Ok(());
+            }
+            if !force {
+                confirm_deletion()?;
+            }
 
-        for warning in result.warnings {
-            warn!("Warning: {warning}");
+            let result = service
+                .execute(&request)
+                .await
+                .map_err(|error| CliError::Runtime(format!("Delete execution failed: {error}")))?;
+            print_result(&result);
         }
 
         Ok(())
     })
+}
+
+fn print_preview(preview: &cognee_lib::delete::DeletePreview) {
+    info!("Preview:");
+    info!("  datasets_to_delete: {}", preview.datasets_to_delete);
+    info!(
+        "  dataset_links_to_delete: {}",
+        preview.dataset_links_to_delete
+    );
+    info!("  data_to_delete: {}", preview.data_to_delete);
+    info!(
+        "  storage_files_to_delete: {}",
+        preview.storage_files_to_delete
+    );
+    info!("  graph_nodes_to_delete: {}", preview.graph_nodes_to_delete);
+    info!(
+        "  vector_points_to_delete: {}",
+        preview.vector_points_to_delete
+    );
+}
+
+fn print_result(result: &cognee_lib::delete::DeleteResult) {
+    info!(
+        "Success: Deleted datasets={}, links={}, data={}, storage_files={}, graph_nodes={}, vector_points={}",
+        result.deleted_datasets,
+        result.deleted_dataset_links,
+        result.deleted_data,
+        result.deleted_storage_files,
+        result.deleted_graph_nodes,
+        result.deleted_vector_points,
+    );
+
+    for warning in &result.warnings {
+        warn!("Warning: {warning}");
+    }
+}
+
+fn confirm_deletion() -> Result<(), CliError> {
+    info!("This operation is irreversible. Continue? [y/N]: ");
+
+    let mut confirmation = String::new();
+    io::stdin()
+        .read_line(&mut confirmation)
+        .map_err(|error| CliError::Runtime(format!("Failed to read confirmation: {error}")))?;
+
+    let answer = confirmation.trim().to_lowercase();
+    if answer != "y" && answer != "yes" {
+        info!("Deletion cancelled.");
+        return Err(CliError::Validation(
+            "Deletion cancelled by user".to_string(),
+        ));
+    }
+
+    Ok(())
 }
 
 fn validate_scope_selection(args: &DeleteArgs) -> Result<(), CliError> {

@@ -203,6 +203,14 @@ pub struct DeleteArgs {
 
     #[arg(long = "force", short = 'f', default_value_t = false)]
     pub force: bool,
+
+    /// Enforce ACL permission checks before deletion.
+    ///
+    /// When enabled, the delete operation verifies that the requesting
+    /// principal (--user-id) holds "delete" permission on each target
+    /// dataset via the ACL table.
+    #[arg(long = "enforce-acl", default_value_t = false)]
+    pub enforce_acl: bool,
 }
 
 #[derive(Debug, Args)]

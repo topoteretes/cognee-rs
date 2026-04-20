@@ -14,7 +14,7 @@ use tracing::{info, instrument};
 use uuid::Uuid;
 
 use cognee_core::{Pipeline, PipelineBuilder, TypedTask};
-use cognee_database::IngestDb;
+use cognee_database::{AclDb, IngestDb};
 use cognee_models::{Data, DataInput, Dataset};
 use cognee_storage::StorageTrait;
 
@@ -290,20 +290,60 @@ pub async fn persist_data(
     owner_id: Uuid,
     tenant_id: Option<Uuid>,
 ) -> Result<Data, Box<dyn std::error::Error>> {
+    persist_data_with_acl(processed, database, dataset_name, owner_id, tenant_id, None).await
+}
+
+/// Like [`persist_data`], but optionally grants all four ACL permissions
+/// (read, write, delete, share) to the owner when a new dataset is created.
+///
+/// When `acl_db` is `Some`, the owner is ensured as a principal and receives
+/// all permissions on newly created datasets, matching Python's
+/// `create_authorized_dataset()` behavior.
+#[instrument(
+    name = "ingestion.persist_data_with_acl",
+    skip(processed, database, acl_db),
+    fields(data_id = %processed.data_id)
+)]
+pub async fn persist_data_with_acl(
+    processed: &ProcessedInput,
+    database: &dyn IngestDb,
+    dataset_name: &str,
+    owner_id: Uuid,
+    tenant_id: Option<Uuid>,
+    acl_db: Option<&dyn AclDb>,
+) -> Result<Data, Box<dyn std::error::Error>> {
     // Resolve or create the dataset (idempotent: deterministic UUID5 ID).
     let dataset_id = generate_dataset_id(dataset_name, owner_id, tenant_id);
+    let is_new_dataset;
     let dataset = match database
         .get_dataset_by_name(dataset_name, owner_id, tenant_id)
         .await?
     {
-        Some(ds) => ds,
+        Some(ds) => {
+            is_new_dataset = false;
+            ds
+        }
         None => {
+            is_new_dataset = true;
             let new_dataset =
                 Dataset::new(dataset_name.to_string(), owner_id, tenant_id, dataset_id);
             database.create_dataset(new_dataset).await?
         }
     };
     info!(dataset_id = %dataset.id, "dataset resolved");
+
+    // Grant all permissions to the owner when a new dataset is created.
+    if is_new_dataset && let Some(acl) = acl_db {
+        cognee_database::ops::acl::grant_all_permissions_on_dataset_via_trait(
+            acl, owner_id, dataset.id,
+        )
+        .await?;
+        info!(
+            dataset_id = %dataset.id,
+            owner_id = %owner_id,
+            "ACL permissions granted on new dataset"
+        );
+    }
 
     let data_id = processed.data_id;
 
@@ -526,15 +566,35 @@ pub fn make_persist_data_task(
     owner_id: Uuid,
     tenant_id: Option<Uuid>,
 ) -> TypedTask<ProcessedInput, Data> {
+    make_persist_data_task_with_acl(database, dataset_name, owner_id, tenant_id, None)
+}
+
+/// Like [`make_persist_data_task`], but optionally grants ACL permissions
+/// on newly created datasets.
+pub fn make_persist_data_task_with_acl(
+    database: Arc<dyn IngestDb>,
+    dataset_name: String,
+    owner_id: Uuid,
+    tenant_id: Option<Uuid>,
+    acl_db: Option<Arc<dyn AclDb>>,
+) -> TypedTask<ProcessedInput, Data> {
     TypedTask::async_fn(move |processed: &ProcessedInput, _ctx| {
         let processed = processed.clone();
         let database = Arc::clone(&database);
         let dataset_name = dataset_name.clone();
+        let acl_db = acl_db.clone();
         Box::pin(async move {
-            persist_data(&processed, &*database, &dataset_name, owner_id, tenant_id)
-                .await
-                .map(Box::new)
-                .map_err(|e| format!("{e}").into())
+            persist_data_with_acl(
+                &processed,
+                &*database,
+                &dataset_name,
+                owner_id,
+                tenant_id,
+                acl_db.as_deref(),
+            )
+            .await
+            .map(Box::new)
+            .map_err(|e| format!("{e}").into())
         })
     })
 }
@@ -552,15 +612,38 @@ pub fn build_add_pipeline(
     owner_id: Uuid,
     tenant_id: Option<Uuid>,
 ) -> Pipeline {
+    build_add_pipeline_with_acl(
+        storage,
+        database,
+        hash_algorithm,
+        dataset_name,
+        owner_id,
+        tenant_id,
+        None,
+    )
+}
+
+/// Like [`build_add_pipeline`], but optionally grants ACL permissions on
+/// newly created datasets.
+pub fn build_add_pipeline_with_acl(
+    storage: Arc<dyn StorageTrait>,
+    database: Arc<dyn IngestDb>,
+    hash_algorithm: HashAlgorithm,
+    dataset_name: &str,
+    owner_id: Uuid,
+    tenant_id: Option<Uuid>,
+    acl_db: Option<Arc<dyn AclDb>>,
+) -> Pipeline {
     PipelineBuilder::new_with_task(
         "ingestion.add",
         make_process_input_task(Arc::clone(&storage), hash_algorithm, owner_id, tenant_id),
     )
-    .add_task(make_persist_data_task(
+    .add_task(make_persist_data_task_with_acl(
         database,
         dataset_name.to_string(),
         owner_id,
         tenant_id,
+        acl_db,
     ))
     .with_name("ingestion")
     .build()
@@ -584,6 +667,7 @@ pub struct AddPipeline {
     storage: Arc<dyn StorageTrait>,
     database: Arc<dyn IngestDb>,
     hash_algorithm: HashAlgorithm,
+    acl_db: Option<Arc<dyn AclDb>>,
 }
 
 impl AddPipeline {
@@ -593,6 +677,7 @@ impl AddPipeline {
             storage,
             database,
             hash_algorithm: HashAlgorithm::default(),
+            acl_db: None,
         }
     }
 
@@ -606,7 +691,18 @@ impl AddPipeline {
             storage,
             database,
             hash_algorithm,
+            acl_db: None,
         }
+    }
+
+    /// Enable ACL permission grants on newly created datasets.
+    ///
+    /// When set, the pipeline grants all four permissions (read, write, delete,
+    /// share) to the owner on each newly created dataset, matching Python's
+    /// `create_authorized_dataset()` behavior.
+    pub fn with_acl_db(mut self, acl_db: Arc<dyn AclDb>) -> Self {
+        self.acl_db = Some(acl_db);
+        self
     }
 
     #[instrument(
@@ -633,12 +729,13 @@ impl AddPipeline {
             )
             .await?;
 
-            let data = persist_data(
+            let data = persist_data_with_acl(
                 &processed,
                 &*self.database,
                 dataset_name,
                 owner_id,
                 tenant_id,
+                self.acl_db.as_deref(),
             )
             .await?;
             created_data.push(data);

@@ -12,8 +12,9 @@ pub mod core {
 pub mod add {
     pub use cognee_ingestion::{
         AddPipeline, ContentHasher, HashAlgorithm, ProcessedInput, build_add_pipeline,
-        generate_data_id, generate_dataset_id, make_persist_data_task, make_process_input_task,
-        persist_data, process_input,
+        build_add_pipeline_with_acl, generate_data_id, generate_dataset_id, make_persist_data_task,
+        make_persist_data_task_with_acl, make_process_input_task, persist_data,
+        persist_data_with_acl, process_input,
     };
 }
 
@@ -115,7 +116,7 @@ pub mod prelude {
         RetryPolicy, Task, TaskContext, TaskContextBuilder, TaskInfo, Value, execute,
         execute_blocking, execute_in_background,
     };
-    pub use crate::database::{DatabaseConnection, DeleteDb, IngestDb, SearchHistoryDb};
+    pub use crate::database::{AclDb, DatabaseConnection, DeleteDb, IngestDb, SearchHistoryDb};
     pub use crate::graph::GraphDBTrait;
     pub use crate::llm::Llm;
     pub use crate::models::{Data, DataInput, Dataset};

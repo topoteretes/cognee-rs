@@ -7,6 +7,7 @@
 //! the `DB_*` environment variables (mirroring the Python `DB_PROVIDER` /
 //! `DB_HOST` / … convention).
 
+pub mod mock_acl_db;
 pub mod mock_llm;
 pub mod mock_transcriber;
 
@@ -18,6 +19,7 @@ use cognee_database::DatabaseConnection;
 pub use cognee_graph::MockGraphDB;
 pub use cognee_storage::MockStorage;
 pub use cognee_vector::MockVectorDB;
+pub use mock_acl_db::MockAclDb;
 pub use mock_llm::MockLlm;
 pub use mock_transcriber::MockTranscriber;
 

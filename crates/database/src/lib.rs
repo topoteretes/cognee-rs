@@ -9,7 +9,7 @@ pub mod uuid_hex;
 
 pub use connection::{connect, initialize};
 pub use sea_orm::DatabaseConnection;
-pub use traits::{DeleteDb, IngestDb, SearchHistoryDb};
+pub use traits::{AclDb, DeleteDb, IngestDb, SearchHistoryDb};
 pub use types::{
     ArtifactReference, DatabaseError, GraphEdge, GraphMetrics, GraphNode, PipelineRun,
     PipelineRunStatus, SearchHistoryEntry, SearchHistoryEntryType, TaskRun,
