@@ -96,3 +96,266 @@ fn convert_raw_event(raw: RawEvent) -> Option<TemporalEvent> {
         attributes: vec![], // populated by Phase 4
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use async_trait::async_trait;
+    use cognee_llm::error::{LlmError, LlmResult};
+    use cognee_llm::types::{GenerationOptions, GenerationResponse, Message};
+    use serde_json::Value;
+
+    /// Mock LLM that returns a pre-configured JSON value from
+    /// `create_structured_output_with_messages_raw`.
+    struct MockLlm {
+        response: Result<Value, String>,
+    }
+
+    impl MockLlm {
+        fn with_json(value: Value) -> Self {
+            Self {
+                response: Ok(value),
+            }
+        }
+
+        fn with_error(msg: &str) -> Self {
+            Self {
+                response: Err(msg.to_string()),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl Llm for MockLlm {
+        async fn generate(
+            &self,
+            _messages: Vec<Message>,
+            _options: Option<GenerationOptions>,
+        ) -> LlmResult<GenerationResponse> {
+            unimplemented!("not used in event_extractor tests")
+        }
+
+        async fn create_structured_output_with_messages_raw(
+            &self,
+            _messages: Vec<Message>,
+            _json_schema: &Value,
+            _options: Option<GenerationOptions>,
+        ) -> LlmResult<Value> {
+            match &self.response {
+                Ok(v) => Ok(v.clone()),
+                Err(msg) => Err(LlmError::ApiError(msg.clone())),
+            }
+        }
+
+        fn model(&self) -> &str {
+            "mock-llm"
+        }
+    }
+
+    #[tokio::test]
+    async fn extract_events_happy_path() {
+        // Mock returns two events: one point-in-time, one interval.
+        let json = serde_json::json!([
+            {
+                "name": "Moon Landing",
+                "description": "First humans on the Moon",
+                "time_from": { "year": 1969, "month": 7, "day": 20, "hour": 20, "minute": 17, "second": 0 },
+                "time_to": null,
+                "location": "Sea of Tranquility"
+            },
+            {
+                "name": "World War II",
+                "description": "Global conflict",
+                "time_from": { "year": 1939, "month": 9, "day": 1 },
+                "time_to": { "year": 1945, "month": 9, "day": 2 },
+                "location": null
+            }
+        ]);
+
+        let llm = Arc::new(MockLlm::with_json(json));
+        let extractor = TemporalEventExtractor::new(llm);
+
+        let events = extractor.extract_events("some text").await.unwrap();
+        assert_eq!(events.len(), 2);
+
+        // First event: point-in-time (only time_from, no time_to).
+        let e0 = &events[0];
+        assert_eq!(e0.name, "Moon Landing");
+        assert_eq!(e0.description.as_deref(), Some("First humans on the Moon"));
+        assert_eq!(e0.location.as_deref(), Some("Sea of Tranquility"));
+        assert!(e0.at.is_some(), "point-in-time event should have `at`");
+        assert!(e0.during.is_none());
+        let ts = e0.at.as_ref().unwrap();
+        assert_eq!(ts.year, 1969);
+        assert_eq!(ts.month, 7);
+        assert_eq!(ts.day, 20);
+
+        // Second event: interval (both time_from and time_to).
+        let e1 = &events[1];
+        assert_eq!(e1.name, "World War II");
+        assert!(e1.at.is_none());
+        assert!(e1.during.is_some(), "interval event should have `during`");
+        let interval = e1.during.as_ref().unwrap();
+        assert_eq!(interval.time_from.year, 1939);
+        assert_eq!(interval.time_to.year, 1945);
+    }
+
+    #[tokio::test]
+    async fn extract_events_returns_empty_on_llm_error() {
+        let llm = Arc::new(MockLlm::with_error("service unavailable"));
+        let extractor = TemporalEventExtractor::new(llm);
+
+        let events = extractor.extract_events("some text").await.unwrap();
+        assert!(events.is_empty(), "LLM error should yield empty vec");
+    }
+
+    #[tokio::test]
+    async fn extract_events_filters_empty_names() {
+        let json = serde_json::json!([
+            {
+                "name": "",
+                "description": null,
+                "time_from": null,
+                "time_to": null,
+                "location": null
+            },
+            {
+                "name": "Valid Event",
+                "description": "Has a name",
+                "time_from": { "year": 2020, "month": 1, "day": 1 },
+                "time_to": null,
+                "location": null
+            }
+        ]);
+
+        let llm = Arc::new(MockLlm::with_json(json));
+        let extractor = TemporalEventExtractor::new(llm);
+
+        let events = extractor.extract_events("some text").await.unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].name, "Valid Event");
+    }
+
+    #[test]
+    fn convert_raw_event_point_in_time() {
+        let raw = RawEvent {
+            name: "Launch".to_string(),
+            description: Some("Rocket launch".to_string()),
+            time_from: Some(RawExtractedTimestamp {
+                year: 2024,
+                month: 3,
+                day: 15,
+                hour: 10,
+                minute: 30,
+                second: 0,
+            }),
+            time_to: None,
+            location: Some("Cape Canaveral".to_string()),
+        };
+
+        let event = convert_raw_event(raw).unwrap();
+        assert_eq!(event.name, "Launch");
+        assert!(event.at.is_some());
+        assert!(event.during.is_none());
+        let ts = event.at.unwrap();
+        assert_eq!(ts.year, 2024);
+        assert_eq!(ts.month, 3);
+        assert_eq!(ts.day, 15);
+        assert_eq!(ts.hour, 10);
+        assert_eq!(ts.minute, 30);
+        assert_eq!(ts.timestamp_str, "2024-03-15 10:30:00");
+    }
+
+    #[test]
+    fn convert_raw_event_interval() {
+        let raw = RawEvent {
+            name: "Conference".to_string(),
+            description: None,
+            time_from: Some(RawExtractedTimestamp {
+                year: 2025,
+                month: 6,
+                day: 1,
+                hour: 0,
+                minute: 0,
+                second: 0,
+            }),
+            time_to: Some(RawExtractedTimestamp {
+                year: 2025,
+                month: 6,
+                day: 5,
+                hour: 0,
+                minute: 0,
+                second: 0,
+            }),
+            location: None,
+        };
+
+        let event = convert_raw_event(raw).unwrap();
+        assert_eq!(event.name, "Conference");
+        assert!(event.at.is_none());
+        assert!(event.during.is_some());
+        let interval = event.during.unwrap();
+        assert_eq!(interval.time_from.year, 2025);
+        assert_eq!(interval.time_from.day, 1);
+        assert_eq!(interval.time_to.day, 5);
+    }
+
+    #[test]
+    fn convert_raw_event_invalid_timestamp() {
+        // Month 13 is invalid — to_cognify_timestamp returns None.
+        // For a point-in-time case (only time_from), the event is still
+        // returned but with at: None and during: None.
+        let raw = RawEvent {
+            name: "Bad Date".to_string(),
+            description: None,
+            time_from: Some(RawExtractedTimestamp {
+                year: 2024,
+                month: 13,
+                day: 1,
+                hour: 0,
+                minute: 0,
+                second: 0,
+            }),
+            time_to: None,
+            location: None,
+        };
+
+        let event = convert_raw_event(raw).expect("event with invalid timestamp is still returned");
+        assert!(
+            event.at.is_none(),
+            "Invalid month should cause `at` to be None"
+        );
+        assert!(event.during.is_none());
+
+        // For an interval case, if time_from is invalid the entire interval
+        // is dropped — convert_raw_event returns None because `?` propagates
+        // the None from to_cognify_timestamp inside the (Some, Some) branch.
+        let raw_interval = RawEvent {
+            name: "Bad Interval".to_string(),
+            description: None,
+            time_from: Some(RawExtractedTimestamp {
+                year: 2024,
+                month: 13,
+                day: 1,
+                hour: 0,
+                minute: 0,
+                second: 0,
+            }),
+            time_to: Some(RawExtractedTimestamp {
+                year: 2024,
+                month: 6,
+                day: 1,
+                hour: 0,
+                minute: 0,
+                second: 0,
+            }),
+            location: None,
+        };
+
+        let result = convert_raw_event(raw_interval);
+        assert!(
+            result.is_none(),
+            "Invalid month in interval should cause convert_raw_event to return None"
+        );
+    }
+}
