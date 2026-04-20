@@ -3,8 +3,8 @@ use cognee_models::{Data, Dataset};
 use sea_orm::DatabaseConnection;
 use uuid::Uuid;
 
-use crate::ops::{artifact_refs, data, datasets};
-use crate::types::{ArtifactReference, DatabaseError};
+use crate::ops::{artifact_refs, data, datasets, graph_storage};
+use crate::types::{ArtifactReference, DatabaseError, GraphEdge, GraphNode};
 
 #[async_trait]
 pub trait DeleteDb: Send + Sync {
@@ -36,6 +36,60 @@ pub trait DeleteDb: Send + Sync {
         &self,
         dataset_id: Uuid,
     ) -> Result<Vec<ArtifactReference>, DatabaseError>;
+
+    // ------------------------------------------------------------------
+    // Graph provenance methods
+    // ------------------------------------------------------------------
+
+    /// Get all provenance node rows for a dataset.
+    async fn get_nodes_by_dataset(&self, dataset_id: Uuid)
+    -> Result<Vec<GraphNode>, DatabaseError>;
+
+    /// Get all provenance edge rows for a dataset.
+    async fn get_edges_by_dataset(&self, dataset_id: Uuid)
+    -> Result<Vec<GraphEdge>, DatabaseError>;
+
+    /// Get nodes belonging to `(data_id, dataset_id)` whose slug is NOT shared
+    /// with other data items in the same dataset. Safe for targeted deletion.
+    async fn get_unique_nodes_for_data(
+        &self,
+        data_id: Uuid,
+        dataset_id: Uuid,
+    ) -> Result<Vec<GraphNode>, DatabaseError>;
+
+    /// Get edges belonging to `(data_id, dataset_id)` whose slug is NOT shared
+    /// with other data items in the same dataset.
+    async fn get_unique_edges_for_data(
+        &self,
+        data_id: Uuid,
+        dataset_id: Uuid,
+    ) -> Result<Vec<GraphEdge>, DatabaseError>;
+
+    /// Delete all provenance node rows for a dataset.
+    async fn delete_provenance_nodes_for_dataset(
+        &self,
+        dataset_id: Uuid,
+    ) -> Result<(), DatabaseError>;
+
+    /// Delete all provenance edge rows for a dataset.
+    async fn delete_provenance_edges_for_dataset(
+        &self,
+        dataset_id: Uuid,
+    ) -> Result<(), DatabaseError>;
+
+    /// Delete provenance node rows for a specific `(data_id, dataset_id)` pair.
+    async fn delete_provenance_nodes_for_data(
+        &self,
+        data_id: Uuid,
+        dataset_id: Uuid,
+    ) -> Result<(), DatabaseError>;
+
+    /// Delete provenance edge rows for a specific `(data_id, dataset_id)` pair.
+    async fn delete_provenance_edges_for_data(
+        &self,
+        data_id: Uuid,
+        dataset_id: Uuid,
+    ) -> Result<(), DatabaseError>;
 }
 
 #[async_trait]
@@ -100,5 +154,69 @@ impl DeleteDb for DatabaseConnection {
         dataset_id: Uuid,
     ) -> Result<Vec<ArtifactReference>, DatabaseError> {
         artifact_refs::list_artifact_references_for_dataset(self, dataset_id).await
+    }
+
+    // ------------------------------------------------------------------
+    // Graph provenance
+    // ------------------------------------------------------------------
+
+    async fn get_nodes_by_dataset(
+        &self,
+        dataset_id: Uuid,
+    ) -> Result<Vec<GraphNode>, DatabaseError> {
+        graph_storage::get_nodes_by_dataset(self, dataset_id).await
+    }
+
+    async fn get_edges_by_dataset(
+        &self,
+        dataset_id: Uuid,
+    ) -> Result<Vec<GraphEdge>, DatabaseError> {
+        graph_storage::get_edges_by_dataset(self, dataset_id).await
+    }
+
+    async fn get_unique_nodes_for_data(
+        &self,
+        data_id: Uuid,
+        dataset_id: Uuid,
+    ) -> Result<Vec<GraphNode>, DatabaseError> {
+        graph_storage::get_unique_nodes_for_data(self, data_id, dataset_id).await
+    }
+
+    async fn get_unique_edges_for_data(
+        &self,
+        data_id: Uuid,
+        dataset_id: Uuid,
+    ) -> Result<Vec<GraphEdge>, DatabaseError> {
+        graph_storage::get_unique_edges_for_data(self, data_id, dataset_id).await
+    }
+
+    async fn delete_provenance_nodes_for_dataset(
+        &self,
+        dataset_id: Uuid,
+    ) -> Result<(), DatabaseError> {
+        graph_storage::delete_nodes_by_dataset(self, dataset_id).await
+    }
+
+    async fn delete_provenance_edges_for_dataset(
+        &self,
+        dataset_id: Uuid,
+    ) -> Result<(), DatabaseError> {
+        graph_storage::delete_edges_by_dataset(self, dataset_id).await
+    }
+
+    async fn delete_provenance_nodes_for_data(
+        &self,
+        data_id: Uuid,
+        dataset_id: Uuid,
+    ) -> Result<(), DatabaseError> {
+        graph_storage::delete_nodes_for_data(self, data_id, dataset_id).await
+    }
+
+    async fn delete_provenance_edges_for_data(
+        &self,
+        data_id: Uuid,
+        dataset_id: Uuid,
+    ) -> Result<(), DatabaseError> {
+        graph_storage::delete_edges_for_data(self, data_id, dataset_id).await
     }
 }

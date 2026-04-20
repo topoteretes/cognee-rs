@@ -1,16 +1,15 @@
 use std::io;
 use std::sync::Arc;
 
-use cognee_lib::database::ArtifactReference;
+use cognee_lib::PipelineContext;
 use cognee_lib::delete::{DeleteMode, DeleteRequest, DeleteScope, DeleteService};
-use cognee_lib::{ComponentManager, PipelineContext};
 use tracing::{info, warn};
 use uuid::Uuid;
 
 use crate::cli::{DeleteArgs, DeleteModeArg};
 use crate::error::CliError;
 
-pub fn run(args: DeleteArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> {
+pub fn run(args: DeleteArgs, cm: Arc<cognee_lib::ComponentManager>) -> Result<(), CliError> {
     let dry_run = args.dry_run;
     let force = args.force;
 
@@ -45,8 +44,18 @@ pub fn run(args: DeleteArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> 
             .database()
             .await
             .map_err(|e| CliError::Runtime(format!("{e}")))?;
+        let graph_db = cm
+            .graph_db()
+            .await
+            .map_err(|e| CliError::Runtime(format!("{e}")))?;
+        let vector_db = cm
+            .vector_db()
+            .await
+            .map_err(|e| CliError::Runtime(format!("{e}")))?;
 
-        let service = DeleteService::new(storage, database);
+        let service = DeleteService::new(storage, database)
+            .with_graph_db(graph_db)
+            .with_vector_db(vector_db);
 
         let preview = service
             .preview(&request)
@@ -63,6 +72,14 @@ pub fn run(args: DeleteArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> 
         info!(
             "  storage_files_to_delete: {}",
             preview.storage_files_to_delete
+        );
+        info!(
+            "  graph_nodes_to_delete: {}",
+            preview.graph_nodes_to_delete
+        );
+        info!(
+            "  vector_points_to_delete: {}",
+            preview.vector_points_to_delete
         );
 
         if dry_run {
@@ -84,30 +101,19 @@ pub fn run(args: DeleteArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> 
             }
         }
 
-        let artifact_references = service
-            .artifact_references_for_request(&request)
-            .await
-            .map_err(|error| {
-                CliError::Runtime(format!(
-                    "Failed to resolve artifact references for cleanup: {error}"
-                ))
-            })?;
-
-        let mut result = service
+        let result = service
             .execute(&request)
             .await
             .map_err(|error| CliError::Runtime(format!("Delete execution failed: {error}")))?;
 
-        let cleanup_warnings =
-            cleanup_graph_and_vector(&cm, &request, &artifact_references).await?;
-        result.warnings.extend(cleanup_warnings);
-
         info!(
-            "Success: Deleted datasets={}, links={}, data={}, storage_files={}",
+            "Success: Deleted datasets={}, links={}, data={}, storage_files={}, graph_nodes={}, vector_points={}",
             result.deleted_datasets,
             result.deleted_dataset_links,
             result.deleted_data,
-            result.deleted_storage_files
+            result.deleted_storage_files,
+            result.deleted_graph_nodes,
+            result.deleted_vector_points,
         );
 
         for warning in result.warnings {
@@ -171,133 +177,4 @@ fn build_request(args: DeleteArgs, owner_id: Uuid) -> Result<DeleteRequest, CliE
     };
 
     Ok(DeleteRequest { scope, mode })
-}
-
-async fn cleanup_graph_and_vector(
-    cm: &ComponentManager,
-    request: &DeleteRequest,
-    artifact_references: &[ArtifactReference],
-) -> Result<Vec<String>, CliError> {
-    let mut warnings = Vec::new();
-
-    let is_all_scope = matches!(request.scope, DeleteScope::All);
-
-    if !is_all_scope && artifact_references.is_empty() {
-        warnings.push(
-            "No artifact references found for targeted graph/vector cleanup; run cognify to populate provenance for precise deletion."
-                .to_string(),
-        );
-        return Ok(warnings);
-    }
-
-    let graph_db = cm
-        .graph_db()
-        .await
-        .map_err(|e| CliError::Runtime(format!("{e}")))?;
-
-    if is_all_scope {
-        graph_db
-            .delete_graph()
-            .await
-            .map_err(|error| CliError::Runtime(format!("Graph cleanup failed: {error}")))?;
-    } else {
-        let node_ids: Vec<String> = artifact_references
-            .iter()
-            .filter(|reference| reference.artifact_kind == "graph_node")
-            .map(|reference| reference.artifact_id.clone())
-            .collect();
-        if !node_ids.is_empty() {
-            graph_db.delete_nodes(&node_ids).await.map_err(|error| {
-                CliError::Runtime(format!("Targeted graph cleanup failed: {error}"))
-            })?;
-        }
-    }
-
-    let vector_db = cm
-        .vector_db()
-        .await
-        .map_err(|e| CliError::Runtime(format!("{e}")))?;
-
-    if is_all_scope {
-        let known_collections = [
-            ("DocumentChunk", "text"),
-            ("Entity", "name"),
-            ("Entity", "description"),
-            ("TextSummary", "text"),
-            ("Triplet", "text"),
-        ];
-
-        for (data_type, field_name) in known_collections {
-            let exists = vector_db
-                .has_collection(data_type, field_name)
-                .await
-                .map_err(|error| {
-                    CliError::Runtime(format!(
-                        "Failed to inspect vector collection {data_type}_{field_name}: {error}"
-                    ))
-                })?;
-
-            if exists {
-                vector_db
-                    .delete_collection(data_type, field_name)
-                    .await
-                    .map_err(|error| {
-                        CliError::Runtime(format!(
-                            "Failed to delete vector collection {data_type}_{field_name}: {error}"
-                        ))
-                    })?;
-            }
-        }
-    } else {
-        let mut by_collection: std::collections::HashMap<String, Vec<Uuid>> =
-            std::collections::HashMap::new();
-        for reference in artifact_references
-            .iter()
-            .filter(|reference| reference.artifact_kind == "vector_point")
-        {
-            if let Some(collection_name) = &reference.collection_name
-                && let Ok(id) = Uuid::parse_str(&reference.artifact_id)
-            {
-                by_collection
-                    .entry(collection_name.clone())
-                    .or_default()
-                    .push(id);
-            }
-        }
-
-        for (collection_name, ids) in by_collection {
-            if ids.is_empty() {
-                continue;
-            }
-            if let Some((data_type, field_name)) = collection_name.split_once('_') {
-                let exists = vector_db
-                    .has_collection(data_type, field_name)
-                    .await
-                    .map_err(|error| {
-                        CliError::Runtime(format!(
-                            "Failed to inspect vector collection {}: {}",
-                            collection_name, error
-                        ))
-                    })?;
-                if exists {
-                    vector_db
-                        .delete_points(data_type, field_name, &ids)
-                        .await
-                        .map_err(|error| {
-                            CliError::Runtime(format!(
-                                "Failed to delete vector points from {}: {}",
-                                collection_name, error
-                            ))
-                        })?;
-                }
-            } else {
-                warnings.push(format!(
-                    "Skipping unsupported collection naming '{}'; expected '<Type>_<field>'",
-                    collection_name
-                ));
-            }
-        }
-    }
-
-    Ok(warnings)
 }

@@ -5,14 +5,20 @@ edition.workspace = true
 
 [dependencies]
 cognee-database = { path = "../database" }
+cognee-graph = { path = "../graph" }
 cognee-models = { path = "../models" }
 cognee-storage = { path = "../storage" }
+cognee-vector = { path = "../vector" }
 serde.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
-cognee-database = { path = "../database" }
+chrono.workspace = true
+cognee-database = { path = "../database", features = ["sqlite"] }
+cognee-graph = { path = "../graph", features = ["testing"] }
 cognee-storage = { path = "../storage", features = ["testing"] }
+cognee-vector = { path = "../vector", features = ["testing"] }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
