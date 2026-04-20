@@ -10,17 +10,17 @@ Python repo assumed at `/tmp/cognee-python` (clone with `git clone --depth 1 htt
 
 | Phase | Tests | Type | LLM? | Priority | Status |
 |-------|------:|------|------|----------|--------|
-| [1. `parse_bound` / `to_cognify_timestamp`](#phase-1) | 20 | Unit (pure functions) | No | High | Not Started |
-| [2. `extract_interval`](#phase-2) | 5 | Unit (mocked LLM) | No | High | Not Started |
-| [3. `get_context` edge cases](#phase-3) | 6 | Unit (mocked backends) | No | High | Not Started |
-| [4. `get_completion`](#phase-4) | 5 | Unit (mocked backends) | No | High | Not Started |
-| [5. `rank_temporal_events`](#phase-5) | 5 | Unit (mocked backends) | No | Medium | Not Started |
-| [6. `temporal_context_to_text`](#phase-6) | 5 | Unit (pure function) | No | Medium | Not Started |
-| [7. Retriever integration](#phase-7) | 7 | Integration (real backends) | Yes | Medium | Not Started |
-| [8. `TemporalEventExtractor`](#phase-8) | 6 | Unit (mocked LLM) | No | Medium | Not Started |
-| [9. `TemporalEntityEnricher`](#phase-9) | 4 | Unit (mocked LLM) | No | Medium | Not Started |
-| [10. Session history](#phase-10) | 2 | Integration (real backends) | Yes | Low | Not Started |
-| [11. Cross-SDK E2E](#phase-11) | 4 | Cross-SDK E2E | Yes | Low | Not Started |
+| [1. `parse_bound` / `to_cognify_timestamp`](#phase-1) | 20 | Unit (pure functions) | No | High | Done |
+| [2. `extract_interval`](#phase-2) | 5 | Unit (mocked LLM) | No | High | Done |
+| [3. `get_context` edge cases](#phase-3) | 6 | Unit (mocked backends) | No | High | Done |
+| [4. `get_completion`](#phase-4) | 5 | Unit (mocked backends) | No | High | Done |
+| [5. `rank_temporal_events`](#phase-5) | 5 | Unit (mocked backends) | No | Medium | Done |
+| [6. `temporal_context_to_text`](#phase-6) | 5 | Unit (pure function) | No | Medium | Done |
+| [7. Retriever integration](#phase-7) | 7 | Integration (real backends) | Yes | Medium | Done |
+| [8. `TemporalEventExtractor`](#phase-8) | 6 | Unit (mocked LLM) | No | Medium | Done |
+| [9. `TemporalEntityEnricher`](#phase-9) | 4 | Unit (mocked LLM) | No | Medium | Done |
+| [10. Session history](#phase-10) | 2 | Integration (real backends) | Yes | Low | Done |
+| [11. Cross-SDK E2E](#phase-11) | 4 | Cross-SDK E2E | Yes | Low | Done |
 | **Total** | **69** | | | | |
 
 **Phases 1-4** (36 tests) are the highest priority -- they test core logic with mocks, run fast, and close the largest gap vs Python (which has ~32 unit tests vs Rust's 2).
