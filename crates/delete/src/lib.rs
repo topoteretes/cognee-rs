@@ -1,3 +1,7 @@
+mod authorized;
+
+pub use authorized::AuthorizedDeleteService;
+
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -90,6 +94,9 @@ pub enum DeleteError {
 
     #[error("Vector cleanup failed: {0}")]
     VectorCleanup(String),
+
+    #[error("Permission denied: {0}")]
+    PermissionDenied(String),
 }
 
 struct ResolvedDeleteTargets {
@@ -2101,6 +2108,263 @@ mod tests {
             d2_edges.len(),
             1,
             "data_id_2 provenance edges should survive sibling deletion"
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // ACL authorization tests
+    // ------------------------------------------------------------------
+
+    /// Helper to create an AuthorizedDeleteService backed by a real SQLite DB.
+    async fn make_authorized_service() -> (
+        AuthorizedDeleteService,
+        Arc<MockStorage>,
+        Arc<cognee_database::DatabaseConnection>,
+    ) {
+        let db = connect("sqlite::memory:").await.unwrap();
+        initialize(&db).await.unwrap();
+        let db = Arc::new(db);
+        let storage = Arc::new(MockStorage::new());
+        let svc = DeleteService::new(
+            storage.clone() as Arc<dyn StorageTrait>,
+            db.clone() as Arc<dyn DeleteDb>,
+        );
+        let auth_svc = AuthorizedDeleteService::new(
+            svc,
+            db.clone() as Arc<dyn cognee_database::AclDb>,
+            db.clone() as Arc<dyn DeleteDb>,
+        );
+        (auth_svc, storage, db)
+    }
+
+    /// Grant all four permissions (read, write, delete, share) to the owner
+    /// on a dataset, matching what the ingestion pipeline would do.
+    async fn grant_all_perms(
+        db: &cognee_database::DatabaseConnection,
+        owner_id: Uuid,
+        dataset_id: Uuid,
+    ) {
+        ops::acl::grant_all_permissions_on_dataset(db, owner_id, dataset_id)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn authorized_delete_succeeds_with_permission() {
+        let (svc, storage, db) = make_authorized_service().await;
+        let owner = Uuid::new_v4();
+        let (dataset_id, _data_id) =
+            seed_dataset_with_data(&db, &storage, owner, "acl_ok_ds").await;
+
+        grant_all_perms(&db, owner, dataset_id).await;
+
+        let result = svc
+            .execute(
+                &DeleteRequest {
+                    scope: DeleteScope::Dataset {
+                        owner_id: owner,
+                        dataset_name: "acl_ok_ds".to_string(),
+                    },
+                    mode: DeleteMode::Soft,
+                },
+                owner,
+            )
+            .await
+            .expect("authorized delete should succeed");
+
+        assert_eq!(result.deleted_datasets, 1);
+        assert_eq!(result.deleted_data, 1);
+    }
+
+    #[tokio::test]
+    async fn authorized_delete_fails_without_permission() {
+        let (svc, storage, db) = make_authorized_service().await;
+        let owner = Uuid::new_v4();
+        seed_dataset_with_data(&db, &storage, owner, "acl_fail_ds").await;
+
+        // Do NOT grant any permissions.
+        // Ensure the principal exists but without delete permission.
+        ops::acl::ensure_principal(&db, owner, "user")
+            .await
+            .unwrap();
+
+        let err = svc
+            .execute(
+                &DeleteRequest {
+                    scope: DeleteScope::Dataset {
+                        owner_id: owner,
+                        dataset_name: "acl_fail_ds".to_string(),
+                    },
+                    mode: DeleteMode::Soft,
+                },
+                owner,
+            )
+            .await
+            .expect_err("should fail without delete permission");
+
+        assert!(
+            matches!(err, DeleteError::PermissionDenied(_)),
+            "expected PermissionDenied, got: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn authorized_delete_with_wrong_principal_fails() {
+        let (svc, storage, db) = make_authorized_service().await;
+        let owner_a = Uuid::new_v4();
+        let owner_b = Uuid::new_v4();
+        let (dataset_id, _data_id) =
+            seed_dataset_with_data(&db, &storage, owner_a, "acl_wrong_principal").await;
+
+        // Grant permissions to owner_a only
+        grant_all_perms(&db, owner_a, dataset_id).await;
+        // Ensure owner_b exists as principal but has no permissions
+        ops::acl::ensure_principal(&db, owner_b, "user")
+            .await
+            .unwrap();
+
+        let err = svc
+            .execute(
+                &DeleteRequest {
+                    scope: DeleteScope::Dataset {
+                        owner_id: owner_a,
+                        dataset_name: "acl_wrong_principal".to_string(),
+                    },
+                    mode: DeleteMode::Soft,
+                },
+                owner_b, // wrong principal
+            )
+            .await
+            .expect_err("should fail for wrong principal");
+
+        assert!(
+            matches!(err, DeleteError::PermissionDenied(_)),
+            "expected PermissionDenied for wrong principal, got: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn authorized_delete_after_permission_grant() {
+        let (svc, storage, db) = make_authorized_service().await;
+        let owner_a = Uuid::new_v4();
+        let user_b = Uuid::new_v4();
+        let (dataset_id, _data_id) =
+            seed_dataset_with_data(&db, &storage, owner_a, "acl_delegated").await;
+
+        // Owner A gets all permissions
+        grant_all_perms(&db, owner_a, dataset_id).await;
+
+        // Grant "delete" to user B (delegated access)
+        ops::acl::ensure_principal(&db, user_b, "user")
+            .await
+            .unwrap();
+        ops::acl::grant_permission(&db, user_b, dataset_id, "delete")
+            .await
+            .unwrap();
+
+        // User B should now be able to delete
+        let result = svc
+            .execute(
+                &DeleteRequest {
+                    scope: DeleteScope::Dataset {
+                        owner_id: owner_a,
+                        dataset_name: "acl_delegated".to_string(),
+                    },
+                    mode: DeleteMode::Soft,
+                },
+                user_b,
+            )
+            .await
+            .expect("delegated delete should succeed");
+
+        assert_eq!(result.deleted_datasets, 1);
+    }
+
+    #[tokio::test]
+    async fn delete_cascades_acl_entries() {
+        // Verify that deleting a dataset via FK CASCADE also removes ACL rows.
+        let db = connect("sqlite::memory:").await.unwrap();
+        initialize(&db).await.unwrap();
+        let owner = Uuid::new_v4();
+        let storage = MockStorage::new();
+
+        let (dataset_id, _data_id) =
+            seed_dataset_with_data(&db, &storage, owner, "cascade_ds").await;
+        grant_all_perms(&db, owner, dataset_id).await;
+
+        // Verify ACLs exist
+        let has_delete = ops::acl::has_permission(&db, owner, dataset_id, "delete")
+            .await
+            .unwrap();
+        assert!(has_delete, "should have delete permission before cascade");
+
+        // Delete the dataset directly (bypasses DeleteService to test FK cascade)
+        ops::datasets::delete_dataset(&db, dataset_id)
+            .await
+            .unwrap();
+
+        // ACL rows should be gone (FK CASCADE on dataset_id)
+        let has_delete_after = ops::acl::has_permission(&db, owner, dataset_id, "delete")
+            .await
+            .unwrap();
+        assert!(
+            !has_delete_after,
+            "ACL entries should be cascade-deleted with the dataset"
+        );
+    }
+
+    #[tokio::test]
+    async fn unauthorized_service_still_works() {
+        // The plain DeleteService (without ACL wrapper) should continue
+        // to work based on owner_id matching only.
+        let (svc, storage, db) = make_service().await;
+        let owner = Uuid::new_v4();
+        seed_dataset_with_data(&db, &storage, owner, "no_acl_ds").await;
+
+        // No ACL grants needed — plain service doesn't check them
+        let result = svc
+            .execute(&DeleteRequest {
+                scope: DeleteScope::Dataset {
+                    owner_id: owner,
+                    dataset_name: "no_acl_ds".to_string(),
+                },
+                mode: DeleteMode::Soft,
+            })
+            .await
+            .expect("plain service should succeed without ACL");
+
+        assert_eq!(result.deleted_datasets, 1);
+        assert_eq!(result.deleted_data, 1);
+    }
+
+    #[tokio::test]
+    async fn authorized_preview_checks_acl() {
+        let (svc, storage, db) = make_authorized_service().await;
+        let owner = Uuid::new_v4();
+        seed_dataset_with_data(&db, &storage, owner, "preview_acl_ds").await;
+
+        // Without permission, even preview should fail
+        ops::acl::ensure_principal(&db, owner, "user")
+            .await
+            .unwrap();
+
+        let err = svc
+            .preview(
+                &DeleteRequest {
+                    scope: DeleteScope::Dataset {
+                        owner_id: owner,
+                        dataset_name: "preview_acl_ds".to_string(),
+                    },
+                    mode: DeleteMode::Soft,
+                },
+                owner,
+            )
+            .await
+            .expect_err("preview should fail without permission");
+
+        assert!(
+            matches!(err, DeleteError::PermissionDenied(_)),
+            "expected PermissionDenied on preview, got: {err:?}"
         );
     }
 }

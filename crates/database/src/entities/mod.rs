@@ -13,3 +13,8 @@ pub mod graph_metrics;
 pub mod node;
 pub mod pipeline_run;
 pub mod task_run;
+
+// ACL entities (principals, permissions, acls):
+pub mod acl;
+pub mod permission;
+pub mod principal;
