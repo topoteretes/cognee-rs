@@ -1223,7 +1223,7 @@ impl DeleteService {
         if let Some(dataset_name) = dataset_name {
             let dataset = self
                 .database
-                .get_dataset_by_name(dataset_name, owner_id)
+                .get_dataset_by_name(dataset_name, owner_id, None)
                 .await
                 .map_err(|error| {
                     DeleteError::Runtime(format!(
@@ -1321,7 +1321,7 @@ impl DeleteService {
     ) -> Result<ResolvedDeleteTargets, DeleteError> {
         let dataset = self
             .database
-            .get_dataset_by_name(dataset_name, owner_id)
+            .get_dataset_by_name(dataset_name, owner_id, None)
             .await
             .map_err(|error| {
                 DeleteError::Runtime(format!(
@@ -4048,6 +4048,81 @@ mod tests {
         assert!(
             ds.is_some(),
             "dataset should still exist despite being empty"
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // tenant_id filtering in DeleteDb::get_dataset_by_name
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn delete_db_get_dataset_by_name_filters_by_tenant_id() {
+        use cognee_database::DeleteDb;
+
+        let db = cognee_database::connect("sqlite::memory:").await.unwrap();
+        cognee_database::initialize(&db).await.unwrap();
+
+        let owner = Uuid::new_v4();
+        let tenant_a = Uuid::new_v4();
+        let tenant_b = Uuid::new_v4();
+
+        // Create two datasets with the same name and owner but different tenants.
+        let ds_a = Dataset::new(
+            "shared_name".to_string(),
+            owner,
+            Some(tenant_a),
+            Uuid::new_v4(),
+        );
+        let ds_b = Dataset::new(
+            "shared_name".to_string(),
+            owner,
+            Some(tenant_b),
+            Uuid::new_v4(),
+        );
+        ops::datasets::create_dataset(&db, ds_a.clone())
+            .await
+            .unwrap();
+        ops::datasets::create_dataset(&db, ds_b.clone())
+            .await
+            .unwrap();
+
+        // Without tenant_id (None), the query returns one of them (ambiguous).
+        let any = db
+            .get_dataset_by_name("shared_name", owner, None)
+            .await
+            .unwrap();
+        assert!(any.is_some(), "should find at least one dataset");
+
+        // With tenant_a, only the first dataset is returned.
+        let found_a = db
+            .get_dataset_by_name("shared_name", owner, Some(tenant_a))
+            .await
+            .unwrap();
+        assert_eq!(
+            found_a.as_ref().map(|d| d.id),
+            Some(ds_a.id),
+            "should find tenant_a's dataset"
+        );
+
+        // With tenant_b, only the second dataset is returned.
+        let found_b = db
+            .get_dataset_by_name("shared_name", owner, Some(tenant_b))
+            .await
+            .unwrap();
+        assert_eq!(
+            found_b.as_ref().map(|d| d.id),
+            Some(ds_b.id),
+            "should find tenant_b's dataset"
+        );
+
+        // With a nonexistent tenant_id, nothing is returned.
+        let found_none = db
+            .get_dataset_by_name("shared_name", owner, Some(Uuid::new_v4()))
+            .await
+            .unwrap();
+        assert!(
+            found_none.is_none(),
+            "should find no dataset for unknown tenant"
         );
     }
 }

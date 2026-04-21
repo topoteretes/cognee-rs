@@ -17,6 +17,7 @@ pub trait DeleteDb: Send + Sync {
         &self,
         name: &str,
         owner_id: Uuid,
+        tenant_id: Option<Uuid>,
     ) -> Result<Option<Dataset>, DatabaseError>;
     async fn get_dataset_data(&self, dataset_id: Uuid) -> Result<Vec<Data>, DatabaseError>;
     async fn list_datasets_by_owner(&self, owner_id: Uuid) -> Result<Vec<Dataset>, DatabaseError>;
@@ -168,8 +169,9 @@ impl DeleteDb for DatabaseConnection {
         &self,
         name: &str,
         owner_id: Uuid,
+        tenant_id: Option<Uuid>,
     ) -> Result<Option<Dataset>, DatabaseError> {
-        datasets::get_dataset_by_name(self, name, owner_id, None).await
+        datasets::get_dataset_by_name(self, name, owner_id, tenant_id).await
     }
 
     async fn get_dataset_data(&self, dataset_id: Uuid) -> Result<Vec<Data>, DatabaseError> {

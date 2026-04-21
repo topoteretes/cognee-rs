@@ -168,7 +168,7 @@ impl AuthorizedDeleteService {
     ) -> Result<Uuid, DeleteError> {
         let dataset = self
             .database
-            .get_dataset_by_name(dataset_name, owner_id)
+            .get_dataset_by_name(dataset_name, owner_id, None)
             .await
             .map_err(|e| {
                 DeleteError::Runtime(format!("Failed to resolve dataset '{}': {e}", dataset_name))
