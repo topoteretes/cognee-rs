@@ -20,7 +20,7 @@ document with a step-by-step implementation plan.
 | 10 | [Missing `delete_dataset_if_empty` option](#10-missing-delete_dataset_if_empty-option) | P2 | 13 | [gap-10](gap-10-delete-dataset-if-empty.md) | Done |
 | 11 | [No per-tenant database isolation in deletion](#11-no-per-tenant-database-isolation-in-deletion) | P2 | 5 phases | [gap-11](gap-11-per-tenant-isolation.md) | Partial (quick wins done; full multi-tenant deferred) |
 | 12 | [No database context variable setting](#12-no-database-context-variable-setting) | P3 | 7 | [gap-12](gap-12-database-context-variables.md) | Done (by design — Rust's explicit DI approach is correct; no ContextVar needed) |
-| 13 | [No telemetry/observability on delete](#13-no-telemetryobservability-on-delete) | P3 | 11 | [gap-13](gap-13-telemetry-observability.md) | Not started |
+| 13 | [No telemetry/observability on delete](#13-no-telemetryobservability-on-delete) | P3 | 11 | [gap-13](gap-13-telemetry-observability.md) | Done |
 
 ## Dependency Graph
 
