@@ -68,6 +68,7 @@ impl AuthorizedDeleteService {
                 owner_id,
                 data_id,
                 dataset_name,
+                ..
             } => {
                 if let Some(ds_name) = dataset_name {
                     let dataset_id = self.resolve_dataset_id(*owner_id, ds_name).await?;

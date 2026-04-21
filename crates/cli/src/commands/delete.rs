@@ -191,6 +191,12 @@ fn validate_scope_selection(args: &DeleteArgs) -> Result<(), CliError> {
         ));
     }
 
+    if args.delete_dataset_if_empty && args.data_id.is_none() {
+        return Err(CliError::Validation(
+            "--delete-dataset-if-empty only applies with --data-id".to_string(),
+        ));
+    }
+
     Ok(())
 }
 
@@ -209,6 +215,7 @@ fn build_request(args: DeleteArgs, owner_id: Uuid) -> Result<DeleteRequest, CliE
             owner_id,
             data_id: parsed_data_id,
             dataset_name: args.dataset_name,
+            delete_dataset_if_empty: args.delete_dataset_if_empty,
         }
     } else if let Some(dataset_name) = args.dataset_name {
         DeleteScope::Dataset {

@@ -34,6 +34,11 @@ pub enum DeleteScope {
         owner_id: Uuid,
         data_id: Uuid,
         dataset_name: Option<String>,
+        /// When `true`, automatically delete the owning dataset if it becomes
+        /// empty after this data item is removed. Mirrors Python's
+        /// `delete_dataset_if_empty` parameter. Defaults to `false`.
+        #[serde(default)]
+        delete_dataset_if_empty: bool,
     },
     Dataset {
         owner_id: Uuid,
@@ -1170,9 +1175,15 @@ impl DeleteService {
                 owner_id,
                 data_id,
                 dataset_name,
+                delete_dataset_if_empty,
             } => {
-                self.resolve_data_scope(*owner_id, *data_id, dataset_name.as_deref())
-                    .await
+                self.resolve_data_scope(
+                    *owner_id,
+                    *data_id,
+                    dataset_name.as_deref(),
+                    *delete_dataset_if_empty,
+                )
+                .await
             }
             DeleteScope::Dataset {
                 owner_id,
@@ -1188,6 +1199,7 @@ impl DeleteService {
         owner_id: Uuid,
         data_id: Uuid,
         dataset_name: Option<&str>,
+        delete_dataset_if_empty: bool,
     ) -> Result<ResolvedDeleteTargets, DeleteError> {
         let data = self.database.get_data(data_id).await.map_err(|error| {
             DeleteError::Runtime(format!("Failed to fetch data {data_id}: {error}"))
@@ -1203,6 +1215,11 @@ impl DeleteService {
         }
 
         let mut links_to_detach = Vec::new();
+        // Collect affected datasets (with their data items) so we can check
+        // emptiness when `delete_dataset_if_empty` is set.
+        let mut affected_datasets: Vec<(cognee_models::Dataset, Vec<cognee_models::Data>)> =
+            Vec::new();
+
         if let Some(dataset_name) = dataset_name {
             let dataset = self
                 .database
@@ -1239,6 +1256,7 @@ impl DeleteService {
             }
 
             links_to_detach.push((dataset.id, data_id));
+            affected_datasets.push((dataset, data_items));
         } else {
             let datasets = self
                 .database
@@ -1253,6 +1271,19 @@ impl DeleteService {
             for dataset in datasets {
                 if dataset.owner_id == owner_id {
                     links_to_detach.push((dataset.id, data_id));
+                    if delete_dataset_if_empty {
+                        let data_items =
+                            self.database
+                                .get_dataset_data(dataset.id)
+                                .await
+                                .map_err(|error| {
+                                    DeleteError::Runtime(format!(
+                                        "Failed to load data for dataset '{}': {}",
+                                        dataset.name, error
+                                    ))
+                                })?;
+                        affected_datasets.push((dataset, data_items));
+                    }
                 }
             }
 
@@ -1264,8 +1295,20 @@ impl DeleteService {
             }
         }
 
+        // When the flag is set, check each affected dataset: if it currently
+        // has exactly one data item and that item is the one being removed,
+        // mark the dataset for deletion.
+        let mut datasets_to_delete = Vec::new();
+        if delete_dataset_if_empty {
+            for (dataset, data_items) in affected_datasets {
+                if data_items.len() == 1 && data_items[0].id == data_id {
+                    datasets_to_delete.push(dataset);
+                }
+            }
+        }
+
         Ok(ResolvedDeleteTargets {
-            datasets_to_delete: vec![],
+            datasets_to_delete,
             links_to_detach,
             candidate_data_ids: vec![data_id],
         })
@@ -2154,6 +2197,7 @@ mod tests {
                     owner_id: owner,
                     data_id: data_id_1,
                     dataset_name: Some("shared_ds".to_string()),
+                    delete_dataset_if_empty: false,
                 },
                 mode: DeleteMode::Soft,
             })
@@ -2223,6 +2267,7 @@ mod tests {
                     owner_id: owner,
                     data_id,
                     dataset_name: Some("prov_data_ds".to_string()),
+                    delete_dataset_if_empty: false,
                 },
                 mode: DeleteMode::Soft,
             })
@@ -2408,6 +2453,7 @@ mod tests {
                     owner_id: owner,
                     data_id: data_id_1,
                     dataset_name: Some("sibling_ds".to_string()),
+                    delete_dataset_if_empty: false,
                 },
                 mode: DeleteMode::Soft,
             })
@@ -3091,6 +3137,7 @@ mod tests {
                     owner_id: owner,
                     data_id,
                     dataset_name: Some("pr_invalidate_ds".to_string()),
+                    delete_dataset_if_empty: false,
                 },
                 mode: DeleteMode::Soft,
             })
@@ -3855,6 +3902,152 @@ mod tests {
         assert!(
             graph_db.has_node(&edge_type_id.to_string()).await.unwrap(),
             "orphaned EdgeType should still exist after soft delete"
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // delete_dataset_if_empty flag tests
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn delete_data_with_flag_deletes_empty_dataset() {
+        let (svc, storage, db) = make_service().await;
+        let owner = Uuid::new_v4();
+        let (_dataset_id, data_id) =
+            seed_dataset_with_data(&db, &storage, owner, "auto_del_ds").await;
+
+        let result = svc
+            .execute(&DeleteRequest {
+                scope: DeleteScope::Data {
+                    owner_id: owner,
+                    data_id,
+                    dataset_name: Some("auto_del_ds".to_string()),
+                    delete_dataset_if_empty: true,
+                },
+                mode: DeleteMode::Soft,
+            })
+            .await
+            .expect("execute should succeed");
+
+        assert_eq!(result.deleted_data, 1, "data should be deleted");
+        assert_eq!(
+            result.deleted_datasets, 1,
+            "dataset should be auto-deleted because it became empty"
+        );
+
+        // Verify the dataset is actually gone from the DB
+        let ds = ops::datasets::get_dataset_by_name(&db, "auto_del_ds", owner, None)
+            .await
+            .unwrap();
+        assert!(ds.is_none(), "dataset should be gone from DB");
+    }
+
+    #[tokio::test]
+    async fn delete_data_with_flag_keeps_nonempty_dataset() {
+        let (svc, storage, db) = make_service().await;
+        let owner = Uuid::new_v4();
+
+        // Create one dataset with two data items
+        let dataset = Dataset::new("multi_data_ds".to_string(), owner, None, Uuid::new_v4());
+        let dataset_id = dataset.id;
+        ops::datasets::create_dataset(&db, dataset).await.unwrap();
+
+        let loc1 = storage.store(b"content one", "one.txt").await.unwrap();
+        let data_id_1 = Uuid::new_v4();
+        let data1 = Data::builder(
+            data_id_1,
+            "one.txt",
+            loc1,
+            "file://one.txt",
+            "txt",
+            "text/plain",
+            "hash_one",
+            owner,
+        )
+        .build();
+        ops::data::create_data(&db, data1).await.unwrap();
+        ops::datasets::attach_data_to_dataset(&db, dataset_id, data_id_1)
+            .await
+            .unwrap();
+
+        let loc2 = storage.store(b"content two", "two.txt").await.unwrap();
+        let data_id_2 = Uuid::new_v4();
+        let data2 = Data::builder(
+            data_id_2,
+            "two.txt",
+            loc2,
+            "file://two.txt",
+            "txt",
+            "text/plain",
+            "hash_two",
+            owner,
+        )
+        .build();
+        ops::data::create_data(&db, data2).await.unwrap();
+        ops::datasets::attach_data_to_dataset(&db, dataset_id, data_id_2)
+            .await
+            .unwrap();
+
+        // Delete one data item with the flag set
+        let result = svc
+            .execute(&DeleteRequest {
+                scope: DeleteScope::Data {
+                    owner_id: owner,
+                    data_id: data_id_1,
+                    dataset_name: Some("multi_data_ds".to_string()),
+                    delete_dataset_if_empty: true,
+                },
+                mode: DeleteMode::Soft,
+            })
+            .await
+            .expect("execute should succeed");
+
+        assert_eq!(result.deleted_data, 1, "data should be deleted");
+        assert_eq!(
+            result.deleted_datasets, 0,
+            "dataset should survive because it still has data_id_2"
+        );
+
+        // Verify the dataset still exists
+        let ds = ops::datasets::get_dataset_by_name(&db, "multi_data_ds", owner, None)
+            .await
+            .unwrap();
+        assert!(ds.is_some(), "dataset should still exist in DB");
+    }
+
+    #[tokio::test]
+    async fn delete_data_without_flag_keeps_empty_dataset() {
+        let (svc, storage, db) = make_service().await;
+        let owner = Uuid::new_v4();
+        let (_dataset_id, data_id) =
+            seed_dataset_with_data(&db, &storage, owner, "no_flag_ds").await;
+
+        let result = svc
+            .execute(&DeleteRequest {
+                scope: DeleteScope::Data {
+                    owner_id: owner,
+                    data_id,
+                    dataset_name: Some("no_flag_ds".to_string()),
+                    delete_dataset_if_empty: false,
+                },
+                mode: DeleteMode::Soft,
+            })
+            .await
+            .expect("execute should succeed");
+
+        assert_eq!(result.deleted_data, 1, "data should be deleted");
+        assert_eq!(
+            result.deleted_datasets, 0,
+            "dataset should survive because flag is false"
+        );
+
+        // Verify the dataset still exists (even though it's now empty)
+        let ds = ops::datasets::get_dataset_by_name(&db, "no_flag_ds", owner, None)
+            .await
+            .unwrap();
+        assert!(
+            ds.is_some(),
+            "dataset should still exist despite being empty"
         );
     }
 }

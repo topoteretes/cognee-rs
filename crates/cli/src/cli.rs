@@ -204,6 +204,11 @@ pub struct DeleteArgs {
     #[arg(long = "force", short = 'f', default_value_t = false)]
     pub force: bool,
 
+    /// Auto-delete the owning dataset if it becomes empty after data removal.
+    /// Only applies with --data-id.
+    #[arg(long = "delete-dataset-if-empty", default_value_t = false)]
+    pub delete_dataset_if_empty: bool,
+
     /// Enforce ACL permission checks before deletion.
     ///
     /// When enabled, the delete operation verifies that the requesting
