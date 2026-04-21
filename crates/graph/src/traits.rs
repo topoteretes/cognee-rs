@@ -223,10 +223,7 @@ pub trait GraphDBTrait: Send + Sync {
     ///
     /// Default implementation fetches the full graph and computes degree in
     /// memory (O(N+E)).  Backends may override with an efficient Cypher/SQL query.
-    async fn get_degree_one_nodes(
-        &self,
-        node_type: &str,
-    ) -> GraphDBResult<Vec<crate::GraphNode>> {
+    async fn get_degree_one_nodes(&self, node_type: &str) -> GraphDBResult<Vec<crate::GraphNode>> {
         let (nodes, edges) = self.get_graph_data().await?;
 
         // Build a degree map from edges (count both endpoints)

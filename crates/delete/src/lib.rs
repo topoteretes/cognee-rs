@@ -80,6 +80,8 @@ pub struct DeleteResult {
     pub deleted_provenance_edges: usize,
     pub deleted_orphan_entities: usize,
     pub deleted_orphan_entity_types: usize,
+    pub deleted_pipeline_runs: usize,
+    pub cleared_pipeline_statuses: usize,
     pub warnings: Vec<String>,
 }
 
@@ -168,6 +170,56 @@ impl DeleteService {
         let mut deleted_vector_points = 0usize;
         let mut deleted_provenance_nodes = 0usize;
         let mut deleted_provenance_edges = 0usize;
+        let mut deleted_pipeline_runs = 0usize;
+        let mut cleared_pipeline_statuses = 0usize;
+
+        // ------------------------------------------------------------------
+        // Phase 0: Pipeline status cleanup (while junction rows still exist)
+        // ------------------------------------------------------------------
+        // Clear pipeline_status JSON entries for datasets about to be deleted.
+        // This must run before junction rows (dataset_data) are removed, since
+        // the junction is needed to find related Data records.
+
+        for dataset in &targets.datasets_to_delete {
+            let count = self
+                .database
+                .clear_pipeline_status_for_dataset(dataset.id)
+                .await
+                .map_err(|error| {
+                    DeleteError::Runtime(format!(
+                        "Failed to clear pipeline_status for dataset '{}': {error}",
+                        dataset.name
+                    ))
+                })?;
+            cleared_pipeline_statuses += count;
+        }
+
+        // For data-scoped deletion, clear pipeline_status for each affected
+        // dataset (the data item's pipeline_status entries keyed by dataset_id).
+        if matches!(request.scope, DeleteScope::Data { .. }) {
+            // Collect unique dataset IDs from links_to_detach (that are NOT in
+            // datasets_to_delete, which were already handled above).
+            let already_handled: HashSet<Uuid> =
+                targets.datasets_to_delete.iter().map(|d| d.id).collect();
+            let mut affected_dataset_ids: HashSet<Uuid> = HashSet::new();
+            for (dataset_id, _) in &targets.links_to_detach {
+                if !already_handled.contains(dataset_id) {
+                    affected_dataset_ids.insert(*dataset_id);
+                }
+            }
+            for dataset_id in affected_dataset_ids {
+                let count = self
+                    .database
+                    .clear_pipeline_status_for_dataset(dataset_id)
+                    .await
+                    .map_err(|error| {
+                        DeleteError::Runtime(format!(
+                            "Failed to clear pipeline_status for dataset {dataset_id}: {error}"
+                        ))
+                    })?;
+                cleared_pipeline_statuses += count;
+            }
+        }
 
         // ------------------------------------------------------------------
         // Phase 1: Graph/vector cleanup (before relational provenance is gone)
@@ -229,6 +281,27 @@ impl DeleteService {
                     ))
                 })?;
             deleted_links += 1;
+        }
+
+        // For data-scoped deletion, invalidate the pipeline cache for each
+        // affected dataset after detaching. This ensures re-running cognify
+        // will reprocess the dataset since its data composition has changed.
+        if matches!(request.scope, DeleteScope::Data { .. }) {
+            let mut invalidated_datasets: HashSet<Uuid> = HashSet::new();
+            for (dataset_id, _) in &targets.links_to_detach {
+                if invalidated_datasets.insert(*dataset_id) {
+                    let count = self
+                        .database
+                        .delete_pipeline_runs_by_dataset(*dataset_id)
+                        .await
+                        .map_err(|error| {
+                            DeleteError::Runtime(format!(
+                                "Failed to delete pipeline_runs for dataset {dataset_id}: {error}"
+                            ))
+                        })?;
+                    deleted_pipeline_runs += count as usize;
+                }
+            }
         }
 
         for dataset in &targets.datasets_to_delete {
@@ -314,6 +387,8 @@ impl DeleteService {
             deleted_provenance_edges,
             deleted_orphan_entities,
             deleted_orphan_entity_types,
+            deleted_pipeline_runs,
+            cleared_pipeline_statuses,
             warnings,
         })
     }
@@ -740,29 +815,21 @@ impl DeleteService {
     /// nodes from the graph and their corresponding vector points.
     ///
     /// Returns `(orphan_entities, orphan_entity_types, warnings)`.
-    async fn sweep_orphan_nodes(
-        &self,
-    ) -> Result<(usize, usize, Vec<String>), DeleteError> {
+    async fn sweep_orphan_nodes(&self) -> Result<(usize, usize, Vec<String>), DeleteError> {
         let mut warnings = Vec::new();
 
         let graph_db = match &self.graph_db {
             Some(db) => db,
             None => {
-                warnings.push(
-                    "Graph DB not configured; hard-mode orphan sweep skipped.".to_string(),
-                );
+                warnings
+                    .push("Graph DB not configured; hard-mode orphan sweep skipped.".to_string());
                 return Ok((0, 0, warnings));
             }
         };
 
-        let orphan_entities = graph_db
-            .get_degree_one_nodes("Entity")
-            .await
-            .map_err(|e| {
-                DeleteError::GraphCleanup(format!(
-                    "Failed to query degree-one Entity nodes: {e}"
-                ))
-            })?;
+        let orphan_entities = graph_db.get_degree_one_nodes("Entity").await.map_err(|e| {
+            DeleteError::GraphCleanup(format!("Failed to query degree-one Entity nodes: {e}"))
+        })?;
 
         let orphan_types = graph_db
             .get_degree_one_nodes("EntityType")
@@ -837,14 +904,9 @@ impl DeleteService {
         }
 
         // Delete from graph DB
-        graph_db
-            .delete_nodes(&all_orphan_ids)
-            .await
-            .map_err(|e| {
-                DeleteError::GraphCleanup(format!(
-                    "Failed to delete orphan graph nodes: {e}"
-                ))
-            })?;
+        graph_db.delete_nodes(&all_orphan_ids).await.map_err(|e| {
+            DeleteError::GraphCleanup(format!("Failed to delete orphan graph nodes: {e}"))
+        })?;
 
         Ok((entity_count, type_count, warnings))
     }
@@ -2611,7 +2673,11 @@ mod tests {
         assert_eq!(result.deleted_orphan_entities, 0);
         assert_eq!(result.deleted_orphan_entity_types, 0);
         // Orphan nodes should still exist
-        assert_eq!(graph_db.node_count(), 2, "orphan nodes should survive soft delete");
+        assert_eq!(
+            graph_db.node_count(),
+            2,
+            "orphan nodes should survive soft delete"
+        );
     }
 
     #[tokio::test]
@@ -2686,5 +2752,269 @@ mod tests {
         );
         // No orphan entities should have been swept
         assert_eq!(result.deleted_orphan_entities, 0);
+    }
+
+    // ------------------------------------------------------------------
+    // Pipeline runs / pipeline_status cleanup tests
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_dataset_deletion_clears_pipeline_status() {
+        let (svc, storage, db) = make_service().await;
+        let owner = Uuid::new_v4();
+        let (dataset_id, data_id) =
+            seed_dataset_with_data(&db, &storage, owner, "ps_clear_ds").await;
+
+        // Set pipeline_status JSON on the data record with an entry for this dataset
+        let dataset_id_hex = cognee_database::uuid_hex::to_hex(dataset_id);
+        let status_json = serde_json::json!({
+            "cognify_pipeline": {
+                dataset_id_hex: "DATA_ITEM_PROCESSING_COMPLETED"
+            }
+        });
+        let data = ops::data::get_data(&db, data_id).await.unwrap().unwrap();
+        let updated_data = Data {
+            pipeline_status: Some(status_json.to_string()),
+            ..data
+        };
+        ops::data::update_data(&db, updated_data).await.unwrap();
+
+        // Verify pipeline_status is set
+        let data_before = ops::data::get_data(&db, data_id).await.unwrap().unwrap();
+        assert!(
+            data_before.pipeline_status.is_some(),
+            "pipeline_status should be set before deletion"
+        );
+
+        // Delete the dataset
+        let result = svc
+            .execute(&DeleteRequest {
+                scope: DeleteScope::Dataset {
+                    owner_id: owner,
+                    dataset_name: "ps_clear_ds".to_string(),
+                },
+                mode: DeleteMode::Soft,
+            })
+            .await
+            .expect("execute should succeed");
+
+        assert_eq!(result.deleted_datasets, 1);
+        assert_eq!(result.cleared_pipeline_statuses, 1);
+
+        // Data record should still exist (was deleted because only link was
+        // to the deleted dataset). Let us verify by creating a scenario where
+        // the data survives deletion.
+    }
+
+    #[tokio::test]
+    async fn test_dataset_deletion_clears_pipeline_status_data_survives() {
+        let (svc, storage, db) = make_service().await;
+        let owner = Uuid::new_v4();
+
+        // Create two datasets sharing one data item
+        let ds1 = Dataset::new("ps_ds1".to_string(), owner, None, Uuid::new_v4());
+        let ds2 = Dataset::new("ps_ds2".to_string(), owner, None, Uuid::new_v4());
+        let ds1_id = ds1.id;
+        let ds2_id = ds2.id;
+        ops::datasets::create_dataset(&db, ds1).await.unwrap();
+        ops::datasets::create_dataset(&db, ds2).await.unwrap();
+
+        let location = storage
+            .store(b"shared content", "shared.txt")
+            .await
+            .unwrap();
+        let data_id = Uuid::new_v4();
+        let data = Data::builder(
+            data_id,
+            "shared.txt",
+            location,
+            "file://shared.txt",
+            "txt",
+            "text/plain",
+            "shared_hash",
+            owner,
+        )
+        .build();
+        ops::data::create_data(&db, data).await.unwrap();
+        ops::datasets::attach_data_to_dataset(&db, ds1_id, data_id)
+            .await
+            .unwrap();
+        ops::datasets::attach_data_to_dataset(&db, ds2_id, data_id)
+            .await
+            .unwrap();
+
+        // Set pipeline_status with entries for both datasets
+        let ds1_hex = cognee_database::uuid_hex::to_hex(ds1_id);
+        let ds2_hex = cognee_database::uuid_hex::to_hex(ds2_id);
+        let status_json = serde_json::json!({
+            "cognify_pipeline": {
+                ds1_hex.clone(): "DATA_ITEM_PROCESSING_COMPLETED",
+                ds2_hex.clone(): "DATA_ITEM_PROCESSING_COMPLETED"
+            }
+        });
+        let data_record = ops::data::get_data(&db, data_id).await.unwrap().unwrap();
+        let updated_data = Data {
+            pipeline_status: Some(status_json.to_string()),
+            ..data_record
+        };
+        ops::data::update_data(&db, updated_data).await.unwrap();
+
+        // Delete dataset 1 only
+        let result = svc
+            .execute(&DeleteRequest {
+                scope: DeleteScope::Dataset {
+                    owner_id: owner,
+                    dataset_name: "ps_ds1".to_string(),
+                },
+                mode: DeleteMode::Soft,
+            })
+            .await
+            .expect("execute should succeed");
+
+        assert_eq!(result.deleted_datasets, 1);
+        assert_eq!(
+            result.deleted_data, 0,
+            "data should survive because it's still linked to ds2"
+        );
+        assert_eq!(result.cleared_pipeline_statuses, 1);
+
+        // Verify pipeline_status: ds1 entry should be removed, ds2 entry should remain
+        let data_after = ops::data::get_data(&db, data_id).await.unwrap().unwrap();
+        let status_after: serde_json::Value =
+            serde_json::from_str(data_after.pipeline_status.as_deref().unwrap_or("{}")).unwrap();
+        let cognify_obj = status_after
+            .get("cognify_pipeline")
+            .and_then(|v| v.as_object())
+            .expect("cognify_pipeline should still exist");
+
+        assert!(
+            !cognify_obj.contains_key(&ds1_hex),
+            "ds1 entry should be removed from pipeline_status"
+        );
+        assert!(
+            cognify_obj.contains_key(&ds2_hex),
+            "ds2 entry should remain in pipeline_status"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_data_deletion_invalidates_pipeline_cache() {
+        let (svc, storage, db) = make_service().await;
+        let owner = Uuid::new_v4();
+        let (dataset_id, data_id) =
+            seed_dataset_with_data(&db, &storage, owner, "pr_invalidate_ds").await;
+
+        // Insert a pipeline_runs row for this dataset
+        let pipeline_run = cognee_database::PipelineRun {
+            id: Uuid::new_v4(),
+            created_at: chrono::Utc::now(),
+            status: cognee_database::PipelineRunStatus::Completed,
+            pipeline_run_id: Uuid::new_v4(),
+            pipeline_name: "cognify_pipeline".to_string(),
+            pipeline_id: Uuid::new_v4(),
+            dataset_id,
+            run_info: None,
+        };
+        ops::pipeline_runs::create_pipeline_run(&db, pipeline_run)
+            .await
+            .unwrap();
+
+        // Verify pipeline_run exists
+        let status_before =
+            ops::pipeline_runs::get_latest_pipeline_status(&db, "cognify_pipeline", dataset_id)
+                .await
+                .unwrap();
+        assert!(
+            status_before.is_some(),
+            "pipeline run should exist before data deletion"
+        );
+
+        // Delete the data item (data-scoped)
+        let result = svc
+            .execute(&DeleteRequest {
+                scope: DeleteScope::Data {
+                    owner_id: owner,
+                    data_id,
+                    dataset_name: Some("pr_invalidate_ds".to_string()),
+                },
+                mode: DeleteMode::Soft,
+            })
+            .await
+            .expect("execute should succeed");
+
+        assert_eq!(result.deleted_data, 1);
+        assert_eq!(
+            result.deleted_pipeline_runs, 1,
+            "pipeline_runs row should be deleted"
+        );
+
+        // Verify pipeline_run is gone
+        let status_after =
+            ops::pipeline_runs::get_latest_pipeline_status(&db, "cognify_pipeline", dataset_id)
+                .await
+                .unwrap();
+        assert!(
+            status_after.is_none(),
+            "pipeline run should be invalidated after data deletion"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_dataset_deletion_cascades_pipeline_runs() {
+        let (svc, storage, db) = make_service().await;
+        let owner = Uuid::new_v4();
+        let (dataset_id, _data_id) =
+            seed_dataset_with_data(&db, &storage, owner, "pr_cascade_ds").await;
+
+        // Insert a pipeline_runs row for this dataset
+        let pipeline_run = cognee_database::PipelineRun {
+            id: Uuid::new_v4(),
+            created_at: chrono::Utc::now(),
+            status: cognee_database::PipelineRunStatus::Completed,
+            pipeline_run_id: Uuid::new_v4(),
+            pipeline_name: "cognify_pipeline".to_string(),
+            pipeline_id: Uuid::new_v4(),
+            dataset_id,
+            run_info: None,
+        };
+        ops::pipeline_runs::create_pipeline_run(&db, pipeline_run)
+            .await
+            .unwrap();
+
+        // Verify pipeline_run exists
+        let status_before =
+            ops::pipeline_runs::get_latest_pipeline_status(&db, "cognify_pipeline", dataset_id)
+                .await
+                .unwrap();
+        assert!(
+            status_before.is_some(),
+            "pipeline run should exist before dataset deletion"
+        );
+
+        // Delete the dataset
+        let result = svc
+            .execute(&DeleteRequest {
+                scope: DeleteScope::Dataset {
+                    owner_id: owner,
+                    dataset_name: "pr_cascade_ds".to_string(),
+                },
+                mode: DeleteMode::Soft,
+            })
+            .await
+            .expect("execute should succeed");
+
+        assert_eq!(result.deleted_datasets, 1);
+
+        // Pipeline runs are handled by FK CASCADE (delete_dataset triggers it),
+        // so deleted_pipeline_runs counter should be 0 for dataset-scoped deletion.
+        // But the rows should still be gone.
+        let status_after =
+            ops::pipeline_runs::get_latest_pipeline_status(&db, "cognify_pipeline", dataset_id)
+                .await
+                .unwrap();
+        assert!(
+            status_after.is_none(),
+            "pipeline run should be cascade-deleted with the dataset"
+        );
     }
 }

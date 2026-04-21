@@ -53,6 +53,25 @@ pub async fn get_pipeline_run(
 /// the given `pipeline_name` and `dataset_id`, ordered by `created_at DESC`.
 ///
 /// Returns `None` if no matching run exists.
+/// Delete all `pipeline_runs` rows for a given `dataset_id`.
+///
+/// This is needed for data-scoped deletion where the dataset itself is not
+/// deleted (so the FK cascade does not fire), but we still want to invalidate
+/// the pipeline cache so the dataset can be re-cognified after data changes.
+///
+/// Returns the count of deleted rows.
+pub async fn delete_pipeline_runs_by_dataset(
+    db: &DatabaseConnection,
+    dataset_id: Uuid,
+) -> Result<u64, DatabaseError> {
+    let result = pipeline_run::Entity::delete_many()
+        .filter(pipeline_run::Column::DatasetId.eq(uuid_hex::to_hex(dataset_id)))
+        .exec(db)
+        .await
+        .map_err(map_sea_err)?;
+    Ok(result.rows_affected)
+}
+
 pub async fn get_latest_pipeline_status(
     db: &DatabaseConnection,
     pipeline_name: &str,

@@ -3,7 +3,7 @@ use cognee_models::{Data, Dataset};
 use sea_orm::DatabaseConnection;
 use uuid::Uuid;
 
-use crate::ops::{artifact_refs, data, datasets, graph_storage};
+use crate::ops::{artifact_refs, data, datasets, graph_storage, pipeline_runs};
 use crate::types::{ArtifactReference, DatabaseError, GraphEdge, GraphNode};
 
 #[async_trait]
@@ -36,6 +36,26 @@ pub trait DeleteDb: Send + Sync {
         &self,
         dataset_id: Uuid,
     ) -> Result<Vec<ArtifactReference>, DatabaseError>;
+
+    // ------------------------------------------------------------------
+    // Pipeline cleanup methods
+    // ------------------------------------------------------------------
+
+    /// Delete all `pipeline_runs` rows for a given dataset.
+    ///
+    /// Needed for data-scoped deletion where the dataset itself is not deleted
+    /// (FK cascade does not fire) but the pipeline cache should be invalidated.
+    async fn delete_pipeline_runs_by_dataset(&self, dataset_id: Uuid)
+    -> Result<u64, DatabaseError>;
+
+    /// Clear `pipeline_status` JSON entries keyed by `dataset_id` from all
+    /// `Data` records linked to that dataset.
+    ///
+    /// Must be called while junction rows still exist.
+    async fn clear_pipeline_status_for_dataset(
+        &self,
+        dataset_id: Uuid,
+    ) -> Result<usize, DatabaseError>;
 
     // ------------------------------------------------------------------
     // Graph provenance methods
@@ -168,6 +188,24 @@ impl DeleteDb for DatabaseConnection {
         dataset_id: Uuid,
     ) -> Result<Vec<ArtifactReference>, DatabaseError> {
         artifact_refs::list_artifact_references_for_dataset(self, dataset_id).await
+    }
+
+    // ------------------------------------------------------------------
+    // Pipeline cleanup
+    // ------------------------------------------------------------------
+
+    async fn delete_pipeline_runs_by_dataset(
+        &self,
+        dataset_id: Uuid,
+    ) -> Result<u64, DatabaseError> {
+        pipeline_runs::delete_pipeline_runs_by_dataset(self, dataset_id).await
+    }
+
+    async fn clear_pipeline_status_for_dataset(
+        &self,
+        dataset_id: Uuid,
+    ) -> Result<usize, DatabaseError> {
+        data::clear_pipeline_status_for_dataset(self, dataset_id).await
     }
 
     // ------------------------------------------------------------------

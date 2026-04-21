@@ -104,6 +104,88 @@ pub async fn update_last_accessed(
     Ok(())
 }
 
+/// Clear `pipeline_status` JSON entries keyed by the given `dataset_id`
+/// from all `Data` records linked to that dataset via the `dataset_data`
+/// junction table.
+///
+/// This mirrors the Python cleanup in `delete_dataset.py` lines 33-54.
+/// Must be called **before** the junction rows are removed (before
+/// `detach_data_from_dataset` or `delete_dataset`), since the junction is
+/// needed to find related `Data` records.
+///
+/// Returns the number of `Data` records whose `pipeline_status` was modified.
+pub async fn clear_pipeline_status_for_dataset(
+    db: &DatabaseConnection,
+    dataset_id: Uuid,
+) -> Result<usize, DatabaseError> {
+    // Find all data IDs linked to this dataset via the junction table
+    let junction_rows = dataset_data::Entity::find()
+        .filter(dataset_data::Column::DatasetId.eq(uuid_hex::to_hex(dataset_id)))
+        .all(db)
+        .await
+        .map_err(map_sea_err)?;
+
+    let data_ids: Vec<String> = junction_rows.into_iter().map(|j| j.data_id).collect();
+    if data_ids.is_empty() {
+        return Ok(0);
+    }
+
+    let dataset_id_str = uuid_hex::to_hex(dataset_id);
+    let mut updated_count = 0usize;
+
+    for data_hex_id in &data_ids {
+        let model = data::Entity::find_by_id(data_hex_id.clone())
+            .one(db)
+            .await
+            .map_err(map_sea_err)?;
+
+        let Some(model) = model else { continue };
+
+        let Some(ref status_json) = model.pipeline_status else {
+            continue;
+        };
+
+        let mut parsed: serde_json::Value = serde_json::from_str(status_json)
+            .unwrap_or(serde_json::Value::Object(Default::default()));
+
+        let serde_json::Value::Object(ref mut top_map) = parsed else {
+            continue;
+        };
+
+        let mut modified = false;
+        for (_pipeline_name, inner) in top_map.iter_mut() {
+            if let serde_json::Value::Object(inner_map) = inner
+                && inner_map.remove(&dataset_id_str).is_some()
+            {
+                modified = true;
+            }
+        }
+
+        if !modified {
+            continue;
+        }
+
+        // Remove pipeline entries whose inner map is now empty
+        top_map.retain(|_, v| !matches!(v, serde_json::Value::Object(m) if m.is_empty()));
+
+        let new_status = if top_map.is_empty() {
+            None
+        } else {
+            Some(serde_json::to_string(&parsed).map_err(|e| {
+                DatabaseError::QueryError(format!("Failed to serialize pipeline_status: {e}"))
+            })?)
+        };
+
+        let mut active = model.into_active_model();
+        active.pipeline_status = Set(new_status);
+        active.updated_at = Set(Some(Utc::now()));
+        active.update(db).await.map_err(map_sea_err)?;
+        updated_count += 1;
+    }
+
+    Ok(updated_count)
+}
+
 pub async fn list_datasets_for_data(
     db: &DatabaseConnection,
     data_id: Uuid,
