@@ -68,6 +68,7 @@ pub struct DeletePreview {
     pub provenance_nodes_to_delete: usize,
     pub provenance_edges_to_delete: usize,
     pub search_queries_to_delete: usize,
+    pub orphaned_edge_types_to_delete: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -82,6 +83,7 @@ pub struct DeleteResult {
     pub deleted_provenance_edges: usize,
     pub deleted_orphan_entities: usize,
     pub deleted_orphan_entity_types: usize,
+    pub deleted_orphan_edge_types: usize,
     pub deleted_pipeline_runs: usize,
     pub cleared_pipeline_statuses: usize,
     pub deleted_search_queries: usize,
@@ -188,6 +190,9 @@ impl DeleteService {
             provenance_nodes_to_delete: prov_node_count,
             provenance_edges_to_delete: prov_edge_count,
             search_queries_to_delete,
+            // Orphaned EdgeType count is only known at execution time (after
+            // graph nodes are deleted and edges disappear), so preview reports 0.
+            orphaned_edge_types_to_delete: 0,
         })
     }
 
@@ -401,12 +406,17 @@ impl DeleteService {
 
         let mut deleted_orphan_entities = 0usize;
         let mut deleted_orphan_entity_types = 0usize;
+        let mut deleted_orphan_edge_types = 0usize;
 
         if matches!(request.mode, DeleteMode::Hard) {
             let (oe, oet, sweep_warnings) = self.sweep_orphan_nodes().await?;
             deleted_orphan_entities = oe;
             deleted_orphan_entity_types = oet;
             warnings.extend(sweep_warnings);
+
+            let (oedge, edge_sweep_warnings) = self.sweep_orphan_edge_types().await?;
+            deleted_orphan_edge_types = oedge;
+            warnings.extend(edge_sweep_warnings);
         }
 
         // ------------------------------------------------------------------
@@ -460,6 +470,7 @@ impl DeleteService {
             deleted_provenance_edges,
             deleted_orphan_entities,
             deleted_orphan_entity_types,
+            deleted_orphan_edge_types,
             deleted_pipeline_runs,
             cleared_pipeline_statuses,
             deleted_search_queries,
@@ -984,6 +995,75 @@ impl DeleteService {
         })?;
 
         Ok((entity_count, type_count, warnings))
+    }
+
+    /// Hard-mode orphan sweep for EdgeType nodes: find EdgeType graph nodes
+    /// whose relationship name no longer appears in any graph edge, and delete
+    /// them from both the graph and vector DBs.
+    ///
+    /// Returns `(deleted_count, warnings)`.
+    async fn sweep_orphan_edge_types(&self) -> Result<(usize, Vec<String>), DeleteError> {
+        let mut warnings = Vec::new();
+
+        let graph_db = match &self.graph_db {
+            Some(db) => db,
+            None => {
+                warnings
+                    .push("Graph DB not configured; orphan EdgeType sweep skipped.".to_string());
+                return Ok((0, warnings));
+            }
+        };
+
+        let orphan_edge_types = match graph_db.get_zero_degree_edge_type_nodes().await {
+            Ok(nodes) => nodes,
+            Err(e) => {
+                warnings.push(format!(
+                    "Failed to query orphan EdgeType nodes (non-fatal): {e}"
+                ));
+                return Ok((0, warnings));
+            }
+        };
+
+        let count = orphan_edge_types.len();
+        if count == 0 {
+            return Ok((0, warnings));
+        }
+
+        // Delete from vector DB (if configured) — non-fatal
+        if let Some(vector_db) = &self.vector_db {
+            let uuids: Vec<Uuid> = orphan_edge_types
+                .iter()
+                .filter_map(|(id, _)| Uuid::parse_str(id).ok())
+                .collect();
+
+            if !uuids.is_empty() {
+                let has_collection = vector_db
+                    .has_collection("EdgeType", "relationship_name")
+                    .await
+                    .unwrap_or(false);
+                if has_collection
+                    && let Err(e) = vector_db
+                        .delete_points("EdgeType", "relationship_name", &uuids)
+                        .await
+                {
+                    warnings.push(format!(
+                        "Failed to delete orphan EdgeType vector points (non-fatal): {e}"
+                    ));
+                }
+            }
+        }
+
+        // Delete from graph DB
+        let orphan_ids: Vec<String> = orphan_edge_types.iter().map(|(id, _)| id.clone()).collect();
+
+        if let Err(e) = graph_db.delete_nodes(&orphan_ids).await {
+            warnings.push(format!(
+                "Failed to delete orphan EdgeType graph nodes (non-fatal): {e}"
+            ));
+            return Ok((0, warnings));
+        }
+
+        Ok((count, warnings))
     }
 
     /// Count graph nodes, vector points, and provenance rows that would be
@@ -3444,6 +3524,337 @@ mod tests {
         assert!(
             !result.pruned_sessions,
             "result should indicate sessions were NOT pruned when no store is configured"
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // Orphaned EdgeType cleanup tests (Gap 09)
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn hard_delete_removes_orphaned_edge_type_nodes() {
+        let (_svc, storage, db, graph_db, vector_db) = make_service_with_graph_vector().await;
+        let owner = Uuid::new_v4();
+        let (dataset_id, data_id) =
+            seed_dataset_with_data(&db, &storage, owner, "edge_type_ds").await;
+
+        // Seed provenance so graph/vector cleanup can find something
+        let node_slug = Uuid::new_v4();
+        let edge_slug = Uuid::new_v4();
+        seed_provenance_nodes(
+            &db,
+            dataset_id,
+            data_id,
+            owner,
+            &[node_slug],
+            "Entity",
+            serde_json::json!(["name"]),
+        )
+        .await;
+        seed_provenance_edges(&db, dataset_id, data_id, owner, &[edge_slug], "works_at").await;
+
+        // Add entity node + EdgeType node to the graph
+        let edge_type_id = cognee_models::EdgeType::deterministic_id("works_at");
+        graph_db
+            .add_node_raw(serde_json::json!({
+                "id": node_slug.to_string(),
+                "type": "Entity",
+                "name": "Alice"
+            }))
+            .await
+            .unwrap();
+        graph_db
+            .add_node_raw(serde_json::json!({
+                "id": edge_type_id.to_string(),
+                "type": "EdgeType",
+                "relationship_name": "works_at"
+            }))
+            .await
+            .unwrap();
+
+        // Add an edge between the entity and something (so the EdgeType is "in use")
+        graph_db
+            .add_edge(&node_slug.to_string(), "some_target", "works_at", None)
+            .await
+            .unwrap();
+
+        assert_eq!(graph_db.node_count(), 2);
+        assert_eq!(graph_db.edge_count(), 1);
+
+        // Add EdgeType vector point
+        vector_db
+            .create_collection("EdgeType", "relationship_name", 3)
+            .await
+            .unwrap();
+        let et_point = cognee_vector::VectorPoint::new(edge_type_id, vec![1.0, 0.0, 0.0]);
+        vector_db
+            .index_points("EdgeType", "relationship_name", &[et_point])
+            .await
+            .unwrap();
+
+        // Execute hard delete - this should:
+        // 1. Delete the entity node from graph (via provenance)
+        // 2. After entity deletion, the edge "works_at" is gone (MockGraphDB doesn't
+        //    cascade edges on node delete, so we simulate that). Actually MockGraphDB
+        //    delete_nodes only removes nodes, not edges. For this test, let's manually
+        //    remove the edge to simulate what Ladybug would do.
+        //
+        // Actually, let's restructure: make the EdgeType orphaned from the start
+        // by NOT having any edges with that relationship name in the graph.
+        graph_db.clear();
+
+        // Re-add just the orphaned EdgeType node (no edges at all)
+        graph_db
+            .add_node_raw(serde_json::json!({
+                "id": edge_type_id.to_string(),
+                "type": "EdgeType",
+                "relationship_name": "works_at"
+            }))
+            .await
+            .unwrap();
+        assert_eq!(graph_db.node_count(), 1);
+        assert_eq!(graph_db.edge_count(), 0);
+
+        // Re-seed provenance with no nodes (graph was cleared)
+        // We need the dataset to still exist for the delete to work.
+        // Re-create it fresh.
+        let db2 = connect("sqlite::memory:").await.unwrap();
+        initialize(&db2).await.unwrap();
+        let db2 = Arc::new(db2);
+        let storage2 = Arc::new(MockStorage::new());
+        let svc2 = DeleteService::new(
+            storage2.clone() as Arc<dyn StorageTrait>,
+            db2.clone() as Arc<dyn DeleteDb>,
+        )
+        .with_graph_db(graph_db.clone() as Arc<dyn GraphDBTrait>)
+        .with_vector_db(vector_db.clone() as Arc<dyn VectorDB>);
+
+        let (dataset_id2, _data_id2) =
+            seed_dataset_with_data(&db2, &storage2, owner, "edge_type_ds").await;
+
+        // Seed a provenance node so there's something to cleanup in phase 1
+        let node_slug2 = Uuid::new_v4();
+        seed_provenance_nodes(
+            &db2,
+            dataset_id2,
+            _data_id2,
+            owner,
+            &[node_slug2],
+            "Entity",
+            serde_json::json!(["name"]),
+        )
+        .await;
+
+        // Add the provenance node to the graph too
+        graph_db
+            .add_node_raw(serde_json::json!({
+                "id": node_slug2.to_string(),
+                "type": "Entity",
+                "name": "Bob"
+            }))
+            .await
+            .unwrap();
+
+        // Now: graph has 2 nodes (Entity "Bob" + orphaned EdgeType "works_at"), 0 edges
+        assert_eq!(graph_db.node_count(), 2);
+
+        // Execute hard delete
+        let result = svc2
+            .execute(&DeleteRequest {
+                scope: DeleteScope::Dataset {
+                    owner_id: owner,
+                    dataset_name: "edge_type_ds".to_string(),
+                },
+                mode: DeleteMode::Hard,
+            })
+            .await
+            .expect("execute should succeed");
+
+        // The entity node was deleted via provenance. The EdgeType node should
+        // be swept as an orphan because it has degree 0 and its relationship_name
+        // is not in any edge.
+        assert_eq!(
+            result.deleted_orphan_edge_types, 1,
+            "orphaned EdgeType should be cleaned up"
+        );
+        assert_eq!(
+            graph_db.node_count(),
+            0,
+            "all nodes should be gone (entity via provenance, EdgeType via orphan sweep)"
+        );
+
+        // Vector point should also be deleted
+        assert_eq!(
+            vector_db
+                .collection_size("EdgeType", "relationship_name")
+                .await
+                .unwrap(),
+            0,
+            "EdgeType vector point should be removed by orphan sweep"
+        );
+    }
+
+    #[tokio::test]
+    async fn shared_edge_type_survives_when_edges_remain() {
+        let (_svc, _storage, _db, graph_db, vector_db) = make_service_with_graph_vector().await;
+
+        // Setup: EdgeType "works_at" with edges still present in the graph
+        let edge_type_id = cognee_models::EdgeType::deterministic_id("works_at");
+        graph_db
+            .add_node_raw(serde_json::json!({
+                "id": edge_type_id.to_string(),
+                "type": "EdgeType",
+                "relationship_name": "works_at"
+            }))
+            .await
+            .unwrap();
+        graph_db
+            .add_node_raw(serde_json::json!({"id": "e1", "type": "Entity", "name": "Alice"}))
+            .await
+            .unwrap();
+        graph_db
+            .add_node_raw(serde_json::json!({"id": "e2", "type": "Entity", "name": "Bob"}))
+            .await
+            .unwrap();
+        // An edge of type "works_at" still exists
+        graph_db
+            .add_edge("e1", "e2", "works_at", None)
+            .await
+            .unwrap();
+
+        // Create vector collection
+        vector_db
+            .create_collection("EdgeType", "relationship_name", 3)
+            .await
+            .unwrap();
+        let et_point = cognee_vector::VectorPoint::new(edge_type_id, vec![1.0, 0.0, 0.0]);
+        vector_db
+            .index_points("EdgeType", "relationship_name", &[et_point])
+            .await
+            .unwrap();
+
+        // The zero-degree check should NOT find this EdgeType as orphaned
+        let orphans = graph_db.get_zero_degree_edge_type_nodes().await.unwrap();
+        assert!(
+            orphans.is_empty(),
+            "EdgeType with active edges should not be considered orphaned"
+        );
+
+        // The EdgeType node should still exist
+        assert!(
+            graph_db.has_node(&edge_type_id.to_string()).await.unwrap(),
+            "EdgeType node should survive"
+        );
+        assert_eq!(
+            vector_db
+                .collection_size("EdgeType", "relationship_name")
+                .await
+                .unwrap(),
+            1,
+            "EdgeType vector point should survive"
+        );
+    }
+
+    #[tokio::test]
+    async fn orphan_edge_type_detected_when_no_edges_exist() {
+        let (_svc, _storage, _db, graph_db, _vector_db) = make_service_with_graph_vector().await;
+
+        // Add an EdgeType node with NO corresponding edges
+        let edge_type_id = cognee_models::EdgeType::deterministic_id("obsolete_rel");
+        graph_db
+            .add_node_raw(serde_json::json!({
+                "id": edge_type_id.to_string(),
+                "type": "EdgeType",
+                "relationship_name": "obsolete_rel"
+            }))
+            .await
+            .unwrap();
+
+        // Add a non-EdgeType node (should be ignored by the sweep)
+        graph_db
+            .add_node_raw(serde_json::json!({"id": "e1", "type": "Entity", "name": "Alice"}))
+            .await
+            .unwrap();
+
+        let orphans = graph_db.get_zero_degree_edge_type_nodes().await.unwrap();
+        assert_eq!(
+            orphans.len(),
+            1,
+            "should detect exactly one orphaned EdgeType"
+        );
+        assert_eq!(orphans[0].0, edge_type_id.to_string());
+    }
+
+    #[tokio::test]
+    async fn edge_type_with_matching_rel_name_in_edges_not_orphaned() {
+        let (_svc, _storage, _db, graph_db, _vector_db) = make_service_with_graph_vector().await;
+
+        // Add an EdgeType node
+        let edge_type_id = cognee_models::EdgeType::deterministic_id("knows");
+        graph_db
+            .add_node_raw(serde_json::json!({
+                "id": edge_type_id.to_string(),
+                "type": "EdgeType",
+                "relationship_name": "knows"
+            }))
+            .await
+            .unwrap();
+
+        // The EdgeType node itself has no edges (degree 0), but there are
+        // other edges in the graph with relationship_name "knows"
+        graph_db
+            .add_node_raw(serde_json::json!({"id": "a", "type": "Entity", "name": "A"}))
+            .await
+            .unwrap();
+        graph_db
+            .add_node_raw(serde_json::json!({"id": "b", "type": "Entity", "name": "B"}))
+            .await
+            .unwrap();
+        graph_db.add_edge("a", "b", "knows", None).await.unwrap();
+
+        let orphans = graph_db.get_zero_degree_edge_type_nodes().await.unwrap();
+        assert!(
+            orphans.is_empty(),
+            "EdgeType should not be orphaned when edges with its relationship_name exist"
+        );
+    }
+
+    #[tokio::test]
+    async fn soft_delete_does_not_sweep_orphan_edge_types() {
+        let (svc, storage, db, graph_db, _vector_db) = make_service_with_graph_vector().await;
+        let owner = Uuid::new_v4();
+        let (_dataset_id, _data_id) = seed_dataset_with_data(&db, &storage, owner, "soft_ds").await;
+
+        // Add an orphaned EdgeType node
+        let edge_type_id = cognee_models::EdgeType::deterministic_id("stale_rel");
+        graph_db
+            .add_node_raw(serde_json::json!({
+                "id": edge_type_id.to_string(),
+                "type": "EdgeType",
+                "relationship_name": "stale_rel"
+            }))
+            .await
+            .unwrap();
+
+        // Soft delete should NOT trigger orphan sweep
+        let result = svc
+            .execute(&DeleteRequest {
+                scope: DeleteScope::Dataset {
+                    owner_id: owner,
+                    dataset_name: "soft_ds".to_string(),
+                },
+                mode: DeleteMode::Soft,
+            })
+            .await
+            .expect("execute should succeed");
+
+        assert_eq!(
+            result.deleted_orphan_edge_types, 0,
+            "soft delete should not sweep orphan EdgeTypes"
+        );
+        assert!(
+            graph_db.has_node(&edge_type_id.to_string()).await.unwrap(),
+            "orphaned EdgeType should still exist after soft delete"
         );
     }
 }

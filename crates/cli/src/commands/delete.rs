@@ -133,7 +133,7 @@ fn print_preview(preview: &cognee_lib::delete::DeletePreview) {
 
 fn print_result(result: &cognee_lib::delete::DeleteResult) {
     info!(
-        "Success: Deleted datasets={}, links={}, data={}, storage_files={}, graph_nodes={}, vector_points={}, orphan_entities={}, orphan_entity_types={}",
+        "Success: Deleted datasets={}, links={}, data={}, storage_files={}, graph_nodes={}, vector_points={}, orphan_entities={}, orphan_entity_types={}, orphan_edge_types={}",
         result.deleted_datasets,
         result.deleted_dataset_links,
         result.deleted_data,
@@ -142,6 +142,7 @@ fn print_result(result: &cognee_lib::delete::DeleteResult) {
         result.deleted_vector_points,
         result.deleted_orphan_entities,
         result.deleted_orphan_entity_types,
+        result.deleted_orphan_edge_types,
     );
 
     for warning in &result.warnings {

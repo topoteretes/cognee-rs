@@ -325,6 +325,52 @@ impl GraphDBTrait for MockGraphDB {
             .collect())
     }
 
+    async fn get_all_relationship_names(&self) -> GraphDBResult<HashSet<String>> {
+        let edges = self.edges.lock().unwrap(); // lock poison is unrecoverable
+        Ok(edges.iter().map(|(_, _, rel, _)| rel.clone()).collect())
+    }
+
+    async fn get_zero_degree_edge_type_nodes(
+        &self,
+    ) -> GraphDBResult<Vec<(String, crate::types::NodeData)>> {
+        let nodes = self.nodes.lock().unwrap(); // lock poison is unrecoverable
+        let edges = self.edges.lock().unwrap(); // lock poison is unrecoverable
+
+        // Collect active relationship names from edges
+        let active_rel_names: HashSet<String> =
+            edges.iter().map(|(_, _, rel, _)| rel.clone()).collect();
+
+        // Build degree map
+        let mut degree: HashMap<String, usize> = HashMap::new();
+        for (src, tgt, _, _) in edges.iter() {
+            *degree.entry(src.clone()).or_default() += 1;
+            *degree.entry(tgt.clone()).or_default() += 1;
+        }
+
+        Ok(nodes
+            .iter()
+            .filter(|(id, data)| {
+                let is_edge_type = data
+                    .get("type")
+                    .and_then(|v| v.as_str())
+                    .is_some_and(|t| t == "EdgeType");
+                if !is_edge_type {
+                    return false;
+                }
+                let deg = degree.get(*id).copied().unwrap_or(0);
+                if deg > 0 {
+                    return false;
+                }
+                let rel_name = data
+                    .get("relationship_name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                !active_rel_names.contains(rel_name)
+            })
+            .map(|(id, data)| (id.clone(), data.clone()))
+            .collect())
+    }
+
     async fn get_filtered_graph_data(
         &self,
         _attribute_filters: &HashMap<Cow<'static, str>, Vec<serde_json::Value>>,
@@ -610,5 +656,102 @@ mod tests {
 
         assert!(nodes.is_empty());
         assert!(edges.is_empty());
+    }
+
+    #[tokio::test]
+    async fn get_all_relationship_names_returns_distinct() {
+        let db = MockGraphDB::new();
+
+        db.add_edge("a", "b", "knows", None).await.unwrap();
+        db.add_edge("c", "d", "knows", None).await.unwrap();
+        db.add_edge("a", "c", "works_at", None).await.unwrap();
+
+        let names = db.get_all_relationship_names().await.unwrap();
+        assert_eq!(names.len(), 2);
+        assert!(names.contains("knows"));
+        assert!(names.contains("works_at"));
+    }
+
+    #[tokio::test]
+    async fn get_all_relationship_names_empty_graph() {
+        let db = MockGraphDB::new();
+        let names = db.get_all_relationship_names().await.unwrap();
+        assert!(names.is_empty());
+    }
+
+    #[tokio::test]
+    async fn get_zero_degree_edge_type_nodes_finds_orphans() {
+        let db = MockGraphDB::new();
+
+        // Orphaned EdgeType (no edges at all, relationship_name not in any edge)
+        db.add_node_raw(serde_json::json!({
+            "id": "et_orphan",
+            "type": "EdgeType",
+            "relationship_name": "obsolete_rel"
+        }))
+        .await
+        .unwrap();
+
+        // Non-orphaned EdgeType (edges with "knows" exist)
+        db.add_node_raw(serde_json::json!({
+            "id": "et_active",
+            "type": "EdgeType",
+            "relationship_name": "knows"
+        }))
+        .await
+        .unwrap();
+
+        // Non-EdgeType node (should be ignored)
+        db.add_node_raw(serde_json::json!({
+            "id": "e1",
+            "type": "Entity",
+            "name": "Alice"
+        }))
+        .await
+        .unwrap();
+
+        // Edge with "knows" relationship
+        db.add_edge("e1", "e1", "knows", None).await.unwrap();
+
+        let orphans = db.get_zero_degree_edge_type_nodes().await.unwrap();
+        assert_eq!(orphans.len(), 1);
+        assert_eq!(orphans[0].0, "et_orphan");
+    }
+
+    #[tokio::test]
+    async fn get_zero_degree_edge_type_nodes_empty_graph() {
+        let db = MockGraphDB::new();
+        let orphans = db.get_zero_degree_edge_type_nodes().await.unwrap();
+        assert!(orphans.is_empty());
+    }
+
+    #[tokio::test]
+    async fn get_zero_degree_edge_type_with_edges_not_orphaned() {
+        let db = MockGraphDB::new();
+
+        // EdgeType node that is directly connected via an edge (degree > 0)
+        db.add_node_raw(serde_json::json!({
+            "id": "et1",
+            "type": "EdgeType",
+            "relationship_name": "related"
+        }))
+        .await
+        .unwrap();
+        db.add_node_raw(serde_json::json!({
+            "id": "other",
+            "type": "Entity",
+            "name": "X"
+        }))
+        .await
+        .unwrap();
+        db.add_edge("et1", "other", "structural", None)
+            .await
+            .unwrap();
+
+        let orphans = db.get_zero_degree_edge_type_nodes().await.unwrap();
+        assert!(
+            orphans.is_empty(),
+            "EdgeType with degree > 0 should not be orphaned"
+        );
     }
 }

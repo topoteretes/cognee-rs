@@ -3,6 +3,7 @@
 //! Mirrors Python's `cognee/modules/engine/models/EdgeType.py`
 //! Represents a type of relationship (e.g., "works_at", "located_in", "knows").
 
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -30,7 +31,19 @@ impl EdgeType {
     /// Index fields to embed for vector search.
     pub const INDEX_FIELDS: &'static [&'static str] = &["relationship_name"];
 
-    /// Create a new EdgeType.
+    /// Compute a deterministic UUID for an EdgeType from its relationship name.
+    ///
+    /// Mirrors Python's `generate_edge_id(edge_id=text)`:
+    /// `uuid5(NAMESPACE_OID, text.lower().replace(" ", "_").replace("'", ""))`
+    pub fn deterministic_id(relationship_name: &str) -> Uuid {
+        let normalized = relationship_name
+            .to_lowercase()
+            .replace(' ', "_")
+            .replace('\'', "");
+        Uuid::new_v5(&Uuid::NAMESPACE_OID, normalized.as_bytes())
+    }
+
+    /// Create a new EdgeType with a random UUID.
     ///
     /// # Arguments
     /// * `relationship_name` - Relationship name (e.g., "works_at")
@@ -45,6 +58,48 @@ impl EdgeType {
         Self {
             base: DataPoint::with_metadata("EdgeType", dataset_id, metadata),
             relationship_name: relationship_name.into(),
+            number_of_edges: 0,
+        }
+    }
+
+    /// Create a new EdgeType with a deterministic UUID derived from the
+    /// relationship name, matching Python's `generate_edge_id`.
+    ///
+    /// # Arguments
+    /// * `relationship_name` - Relationship name (e.g., "works_at")
+    /// * `dataset_id` - Dataset UUID
+    pub fn new_deterministic(
+        relationship_name: impl Into<String>,
+        dataset_id: Option<Uuid>,
+    ) -> Self {
+        let name = relationship_name.into();
+        let id = Self::deterministic_id(&name);
+        let now = Utc::now().timestamp_millis();
+
+        let mut metadata = std::collections::HashMap::new();
+        metadata.insert(
+            "index_fields".to_string(),
+            serde_json::json!(Self::INDEX_FIELDS),
+        );
+
+        Self {
+            base: DataPoint {
+                id,
+                created_at: now,
+                updated_at: now,
+                ontology_valid: false,
+                version: 1,
+                topological_rank: None,
+                metadata,
+                data_type: "EdgeType".to_string(),
+                belongs_to_set: dataset_id.map(|ds_id| vec![serde_json::json!(ds_id.to_string())]),
+                source_pipeline: None,
+                source_task: None,
+                source_node_set: None,
+                source_user: None,
+                feedback_weight: 0.5,
+            },
+            relationship_name: name,
             number_of_edges: 0,
         }
     }
@@ -142,5 +197,67 @@ mod tests {
 
         // updated_at is i64 (millis since epoch); touch() should advance it
         assert!(et.base.updated_at >= old_time);
+    }
+
+    #[test]
+    fn test_deterministic_id_basic() {
+        let id1 = EdgeType::deterministic_id("works_at");
+        let id2 = EdgeType::deterministic_id("works_at");
+        assert_eq!(id1, id2, "same input must produce same UUID");
+    }
+
+    #[test]
+    fn test_deterministic_id_normalization() {
+        // Spaces become underscores, apostrophes removed, lowercased
+        let id1 = EdgeType::deterministic_id("Works At");
+        let id2 = EdgeType::deterministic_id("works_at");
+        assert_eq!(
+            id1, id2,
+            "normalization should make 'Works At' equal 'works_at'"
+        );
+
+        let id3 = EdgeType::deterministic_id("it's_related");
+        let id4 = EdgeType::deterministic_id("its_related");
+        assert_eq!(id3, id4, "apostrophe removal should match");
+    }
+
+    #[test]
+    fn test_deterministic_id_matches_python() {
+        // Python: uuid5(NAMESPACE_OID, "works_at") with NAMESPACE_OID = 6ba7b812-...
+        // We can verify the computation is correct by ensuring it is a v5 UUID
+        // in the OID namespace.
+        let id = EdgeType::deterministic_id("works_at");
+        assert_eq!(
+            id,
+            Uuid::new_v5(&Uuid::NAMESPACE_OID, b"works_at"),
+            "deterministic_id('works_at') should equal uuid5(OID, 'works_at')"
+        );
+    }
+
+    #[test]
+    fn test_new_deterministic_constructor() {
+        let et = EdgeType::new_deterministic("works_at", None);
+        assert_eq!(et.relationship_name, "works_at");
+        assert_eq!(et.base.data_type, "EdgeType");
+        assert_eq!(et.base.id, EdgeType::deterministic_id("works_at"));
+        assert_eq!(et.number_of_edges, 0);
+    }
+
+    #[test]
+    fn test_new_deterministic_with_dataset() {
+        let dataset_id = Uuid::new_v4();
+        let et = EdgeType::new_deterministic("located_in", Some(dataset_id));
+        assert_eq!(
+            et.base.belongs_to_set,
+            Some(vec![serde_json::json!(dataset_id.to_string())])
+        );
+        assert_eq!(et.base.id, EdgeType::deterministic_id("located_in"));
+    }
+
+    #[test]
+    fn test_deterministic_id_different_names_differ() {
+        let id1 = EdgeType::deterministic_id("works_at");
+        let id2 = EdgeType::deterministic_id("located_in");
+        assert_ne!(id1, id2, "different names must produce different UUIDs");
     }
 }

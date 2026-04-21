@@ -15,7 +15,7 @@ document with a step-by-step implementation plan.
 | 5 | [`Hard` delete mode is unimplemented](#5-hard-delete-mode-is-unimplemented) | P1 | 11 | [gap-05](gap-05-hard-delete-mode.md) | Done |
 | 6 | [No `pipeline_runs` cleanup](#6-no-pipeline_runs-cleanup) | P2 | 9 | [gap-06](gap-06-pipeline-runs-cleanup.md) | Done |
 | 7 | [No `search_history` (queries/results) cleanup](#7-no-search_history-queriesresults-cleanup) | P2 | 10 | [gap-07](gap-07-search-history-cleanup.md) | Done |
-| 8 | [No session cache deletion](#8-no-session-cache-deletion) | P2 | 8 | [gap-08](gap-08-session-cache-deletion.md) | Not started |
+| 8 | [No session cache deletion](#8-no-session-cache-deletion) | P2 | 8 | [gap-08](gap-08-session-cache-deletion.md) | Done |
 | 9 | [No orphaned EdgeType node cleanup](#9-no-orphaned-edgetype-node-cleanup) | P2 | 9 | [gap-09](gap-09-orphaned-edgetype-cleanup.md) | Not started |
 | 10 | [Missing `delete_dataset_if_empty` option](#10-missing-delete_dataset_if_empty-option) | P2 | 13 | [gap-10](gap-10-delete-dataset-if-empty.md) | Not started |
 | 11 | [No per-tenant database isolation in deletion](#11-no-per-tenant-database-isolation-in-deletion) | P2 | 5 phases | [gap-11](gap-11-per-tenant-isolation.md) | Not started |

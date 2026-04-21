@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use serde::Serialize;
 use serde_json::Value;
 use std::borrow::Cow;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::{EdgeData, GraphDBResult, GraphNode, NodeData};
 
@@ -242,6 +242,63 @@ pub trait GraphDBTrait: Send + Sync {
                     .is_some_and(|t| t == node_type);
                 let deg = degree.get(id).copied().unwrap_or(0);
                 type_matches && deg == 1
+            })
+            .collect())
+    }
+
+    /// Return the set of all unique relationship names from edges in the graph.
+    ///
+    /// Used by orphan cleanup to determine which EdgeType nodes still have
+    /// corresponding edges. Default implementation fetches the full graph via
+    /// `get_graph_data()` and collects distinct relationship names.
+    /// Backends may override with a more efficient query.
+    async fn get_all_relationship_names(&self) -> GraphDBResult<HashSet<String>> {
+        let (_, edges) = self.get_graph_data().await?;
+        Ok(edges.into_iter().map(|(_, _, rel, _)| rel).collect())
+    }
+
+    /// Find EdgeType nodes in the graph that have zero edges (degree 0).
+    ///
+    /// Used by hard-delete orphan sweep to find EdgeType nodes whose
+    /// relationship name no longer appears in any edge.
+    ///
+    /// Default implementation fetches the full graph and filters in memory.
+    /// Backends may override with a more efficient query.
+    async fn get_zero_degree_edge_type_nodes(&self) -> GraphDBResult<Vec<crate::GraphNode>> {
+        let (nodes, edges) = self.get_graph_data().await?;
+
+        // Collect all relationship names still in use
+        let active_rel_names: HashSet<&str> =
+            edges.iter().map(|(_, _, rel, _)| rel.as_str()).collect();
+
+        // Build a degree map from edges
+        let mut degree: HashMap<String, usize> = HashMap::new();
+        for (src, tgt, _, _) in &edges {
+            *degree.entry(src.clone()).or_default() += 1;
+            *degree.entry(tgt.clone()).or_default() += 1;
+        }
+
+        Ok(nodes
+            .into_iter()
+            .filter(|(id, props)| {
+                let is_edge_type = props
+                    .get("type")
+                    .and_then(|v| v.as_str())
+                    .is_some_and(|t| t == "EdgeType");
+                if !is_edge_type {
+                    return false;
+                }
+                // Check degree is 0 (no edges at all)
+                let deg = degree.get(id).copied().unwrap_or(0);
+                if deg > 0 {
+                    return false;
+                }
+                // Also check that the relationship_name is not in any edge
+                let rel_name = props
+                    .get("relationship_name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                !active_rel_names.contains(rel_name)
             })
             .collect())
     }

@@ -761,7 +761,7 @@ pub async fn add_data_points(
     let edge_types: Vec<EdgeType> = edge_type_counts
         .into_iter()
         .map(|(name, count)| {
-            let mut et = EdgeType::new(&name, Some(input.dataset_id));
+            let mut et = EdgeType::new_deterministic(&name, Some(input.dataset_id));
             et.set_count(count);
             et
         })
