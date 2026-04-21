@@ -19,8 +19,15 @@ uuid.workspace = true
 [dev-dependencies]
 async-trait.workspace = true
 chrono.workspace = true
+cognee-cognify = { path = "../cognify" }
 cognee-database = { path = "../database", features = ["sqlite"] }
-cognee-graph = { path = "../graph", features = ["testing"] }
+cognee-embedding = { path = "../embedding", features = ["onnx"] }
+cognee-graph = { path = "../graph", features = ["testing", "ladybug"] }
+cognee-ingestion = { path = "../ingestion" }
+cognee-llm = { path = "../llm" }
+cognee-ontology = { path = "../ontology" }
 cognee-storage = { path = "../storage", features = ["testing"] }
-cognee-vector = { path = "../vector", features = ["testing"] }
+cognee-vector = { path = "../vector", features = ["testing", "qdrant"] }
+dotenv.workspace = true
+tempfile.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
