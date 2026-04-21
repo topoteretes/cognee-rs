@@ -1,0 +1,313 @@
+//! E2E test: triplet vector points are cleaned up after data-scope deletion.
+//!
+//! Two documents in separate datasets are cognified and memified. After
+//! deleting one document's data, the Triplet vector collection should lose
+//! only that document's triplet points while preserving the other's.
+//!
+//! Required env vars: OPENAI_URL, OPENAI_TOKEN, OPENAI_MODEL, COGNEE_E2E_EMBED_MODEL_PATH
+
+use std::sync::Arc;
+
+use cognee_cognify::memify::{MemifyConfig, memify};
+use cognee_cognify::{CognifyConfig, cognify};
+use cognee_database::{DatabaseConnection, DeleteDb, IngestDb, connect, initialize, ops};
+use cognee_delete::{DeleteMode, DeleteRequest, DeleteScope, DeleteService};
+use cognee_embedding::{EmbeddingEngine, config::OnnxEmbeddingConfig, onnx::OnnxEmbeddingEngine};
+use cognee_graph::{GraphDBTrait, LadybugAdapter};
+use cognee_ingestion::AddPipeline;
+use cognee_llm::{Llm, OpenAIAdapter};
+use cognee_models::DataInput;
+use cognee_ontology::NoOpOntologyResolver;
+use cognee_storage::{LocalStorage, StorageTrait};
+use cognee_vector::{QdrantAdapter, VectorDB};
+use tempfile::TempDir;
+use uuid::Uuid;
+
+mod test_utils;
+use test_utils::{get_embedding_model_dir, require_env};
+
+const AI_TEXT: &str = include_str!("test_data/artificial_intelligence.txt");
+
+const QUANTUM_TEXT: &str = "\
+Quantum computing leverages quantum mechanical phenomena like superposition \
+and entanglement to perform computations. Quantum bits (qubits) can exist \
+in multiple states simultaneously, enabling quantum computers to solve \
+certain problems exponentially faster than classical computers. \
+Companies like IBM, Google, and Microsoft are investing heavily in \
+quantum hardware and quantum error correction research.";
+
+#[tokio::test]
+async fn test_triplet_vector_cleanup_after_data_delete() {
+    // ── Environment gating ──────────────────────────────────────────────
+    let _ = require_env("OPENAI_URL");
+    let _ = require_env("OPENAI_TOKEN");
+    let _ = require_env("OPENAI_MODEL");
+    let _ = require_env("COGNEE_E2E_EMBED_MODEL_PATH");
+
+    // ── Infrastructure ──────────────────────────────────────────────────
+    let temp_dir = TempDir::new().expect("temp dir");
+
+    let storage: Arc<dyn StorageTrait> =
+        Arc::new(LocalStorage::new(temp_dir.path().join("storage")));
+    storage.initialize().await.expect("storage.initialize");
+
+    let db_path = temp_dir.path().join("cognee.db");
+    std::fs::File::create(&db_path).expect("create sqlite db file");
+    let db_url = format!("sqlite://{}", db_path.display());
+    let db = connect(&db_url).await.expect("connect");
+    initialize(&db).await.expect("initialize");
+    let database: Arc<DatabaseConnection> = Arc::new(db);
+
+    let graph_path = temp_dir.path().join("graph").to_string_lossy().to_string();
+    let graph_db: Arc<dyn GraphDBTrait> = Arc::new(
+        LadybugAdapter::new(&graph_path)
+            .await
+            .expect("LadybugAdapter::new"),
+    );
+    graph_db.initialize().await.expect("graph_db.initialize");
+
+    let vector_db: Arc<dyn VectorDB> =
+        Arc::new(QdrantAdapter::new(temp_dir.path().join("qdrant"), 384));
+
+    let model_dir = get_embedding_model_dir();
+    let embedding_engine: Arc<dyn EmbeddingEngine> =
+        match OnnxEmbeddingEngine::new(OnnxEmbeddingConfig::bge_small(&model_dir)) {
+            Ok(engine) => Arc::new(engine),
+            Err(e) => {
+                eprintln!("Skipping test: failed to load embedding model: {e}");
+                return;
+            }
+        };
+
+    let llm: Arc<dyn Llm> = Arc::new(
+        OpenAIAdapter::new(
+            require_env("OPENAI_MODEL"),
+            require_env("OPENAI_TOKEN"),
+            Some(require_env("OPENAI_URL")),
+        )
+        .expect("OpenAIAdapter::new"),
+    );
+
+    let owner_id = Uuid::nil();
+    let ontology = Arc::new(NoOpOntologyResolver::new());
+    let config = CognifyConfig::default()
+        .with_summarization(false)
+        .with_triplet_embeddings(false); // memify will create triplets
+
+    // ── Step 1: Ingest two documents ────────────────────────────────────
+    let ingest = AddPipeline::new(Arc::clone(&storage), database.clone() as Arc<dyn IngestDb>);
+
+    let data_ai = ingest
+        .add(
+            vec![DataInput::Text(AI_TEXT.to_string())],
+            "ds_ai",
+            owner_id,
+            None,
+        )
+        .await
+        .expect("ingest ds_ai");
+    assert_eq!(data_ai.len(), 1);
+    let data_ai_id = data_ai[0].id;
+
+    let data_q = ingest
+        .add(
+            vec![DataInput::Text(QUANTUM_TEXT.to_string())],
+            "ds_quantum",
+            owner_id,
+            None,
+        )
+        .await
+        .expect("ingest ds_quantum");
+    assert_eq!(data_q.len(), 1);
+
+    let ds_ai = ops::datasets::get_dataset_by_name(&database, "ds_ai", owner_id, None)
+        .await
+        .expect("get ds_ai")
+        .expect("ds_ai should exist");
+    let ds_q = ops::datasets::get_dataset_by_name(&database, "ds_quantum", owner_id, None)
+        .await
+        .expect("get ds_quantum")
+        .expect("ds_quantum should exist");
+
+    // ── Step 2: Cognify both ────────────────────────────────────────────
+    let _result_ai = match cognify(
+        data_ai,
+        ds_ai.id,
+        None,
+        None,
+        llm.clone() as Arc<dyn Llm>,
+        storage.clone(),
+        graph_db.clone(),
+        vector_db.clone(),
+        embedding_engine.clone(),
+        None,
+        ontology.clone(),
+        &config,
+    )
+    .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("Skipping: cognify ds_ai failed: {e}");
+            return;
+        }
+    };
+
+    let _result_q = match cognify(
+        data_q,
+        ds_q.id,
+        None,
+        None,
+        llm.clone() as Arc<dyn Llm>,
+        storage.clone(),
+        graph_db.clone(),
+        vector_db.clone(),
+        embedding_engine.clone(),
+        None,
+        ontology.clone(),
+        &config,
+    )
+    .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("Skipping: cognify ds_quantum failed: {e}");
+            return;
+        }
+    };
+
+    println!("Step 2 OK: Both datasets cognified");
+
+    // ── Step 3: Memify both datasets ────────────────────────────────────
+    let memify_config = MemifyConfig::default();
+
+    let memify_ai = memify(
+        graph_db.as_ref(),
+        vector_db.as_ref(),
+        embedding_engine.as_ref(),
+        Some(ds_ai.id),
+        None,
+        None,
+        &memify_config,
+    )
+    .await
+    .expect("memify ds_ai");
+
+    let memify_q = memify(
+        graph_db.as_ref(),
+        vector_db.as_ref(),
+        embedding_engine.as_ref(),
+        Some(ds_q.id),
+        None,
+        None,
+        &memify_config,
+    )
+    .await
+    .expect("memify ds_quantum");
+
+    assert!(
+        memify_ai.triplet_count > 0,
+        "ds_ai should have triplets after memify"
+    );
+    assert!(
+        memify_q.triplet_count > 0,
+        "ds_quantum should have triplets after memify"
+    );
+
+    println!(
+        "Step 3 OK: Memified — ds_ai: {} triplets, ds_quantum: {} triplets",
+        memify_ai.triplet_count, memify_q.triplet_count,
+    );
+
+    // ── Step 4: Verify Triplet collection exists and has points ─────────
+    assert!(
+        vector_db
+            .has_collection("Triplet", "text")
+            .await
+            .expect("has_collection"),
+        "Triplet:text collection should exist after memify"
+    );
+
+    let pre_triplet_count = vector_db
+        .collection_size("Triplet", "text")
+        .await
+        .expect("collection_size pre-delete");
+    let expected_total = memify_ai.triplet_count + memify_q.triplet_count;
+    println!(
+        "Step 4: Triplet collection has {} points (expected ~{})",
+        pre_triplet_count, expected_total,
+    );
+    assert!(
+        pre_triplet_count > 0,
+        "Triplet collection should have points"
+    );
+
+    // ── Step 5: Delete ds_ai data (data-scope, not dataset-scope) ───────
+    let delete_svc =
+        DeleteService::new(Arc::clone(&storage), database.clone() as Arc<dyn DeleteDb>)
+            .with_graph_db(graph_db.clone())
+            .with_vector_db(vector_db.clone());
+
+    let delete_result = delete_svc
+        .execute(&DeleteRequest {
+            scope: DeleteScope::Data {
+                owner_id,
+                data_id: data_ai_id,
+                dataset_name: Some("ds_ai".to_string()),
+                delete_dataset_if_empty: false,
+            },
+            mode: DeleteMode::Soft,
+        })
+        .await
+        .expect("delete ds_ai data");
+
+    assert!(
+        delete_result.deleted_data >= 1,
+        "Should have deleted at least 1 data item"
+    );
+    println!(
+        "Step 5 OK: Deleted ds_ai data ({} data, {} vector points)",
+        delete_result.deleted_data, delete_result.deleted_vector_points,
+    );
+
+    // ── Step 6: Verify triplet vector cleanup ───────────────────────────
+    let post_triplet_count = vector_db
+        .collection_size("Triplet", "text")
+        .await
+        .expect("collection_size post-delete");
+
+    println!(
+        "Step 6: Triplet collection now has {} points (was {})",
+        post_triplet_count, pre_triplet_count,
+    );
+
+    // Triplet count should have decreased (ds_ai triplets removed)
+    assert!(
+        post_triplet_count < pre_triplet_count,
+        "Triplet count should decrease after data-scope delete: post={}, pre={}",
+        post_triplet_count,
+        pre_triplet_count,
+    );
+
+    // Triplet collection should still have ds_quantum's points
+    assert!(
+        post_triplet_count > 0,
+        "Triplet collection should still have ds_quantum's triplet points"
+    );
+
+    // ds_quantum should still be intact in the DB
+    let ds_q_after =
+        ops::datasets::get_dataset_by_name(&database, "ds_quantum", owner_id, None)
+            .await
+            .expect("get ds_quantum after delete")
+            .expect("ds_quantum should still exist");
+    let q_data = ops::datasets::get_dataset_data(&database, ds_q_after.id)
+        .await
+        .expect("get ds_quantum data");
+    assert!(
+        !q_data.is_empty(),
+        "ds_quantum should still have its data items"
+    );
+
+    println!("PASSED: test_triplet_vector_cleanup_after_data_delete");
+}
