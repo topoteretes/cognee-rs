@@ -256,3 +256,216 @@ async fn shared_data_preserved_on_partial_delete() {
         "storage file should survive because data is still referenced"
     );
 }
+
+// ---------------------------------------------------------------------------
+// FP2.1 — delete_dataset_if_empty=false preserves dataset
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn delete_data_with_dataset_if_empty_false_preserves_dataset() {
+    let (_handle, _ctx, db) = test_task_context().await;
+    let storage = Arc::new(MockStorage::new());
+    let owner_id = Uuid::new_v4();
+
+    let (_dataset_id, data_id, _location) =
+        seed_dataset_with_data(&db, &storage, owner_id, "keep_ds").await;
+
+    // Delete the data item with delete_dataset_if_empty = false.
+    let svc = DeleteService::new(
+        storage.clone() as Arc<dyn StorageTrait>,
+        db.clone() as Arc<dyn DeleteDb>,
+    );
+    let result = svc
+        .execute(&DeleteRequest {
+            scope: DeleteScope::Data {
+                owner_id,
+                data_id,
+                dataset_name: Some("keep_ds".to_string()),
+                delete_dataset_if_empty: false,
+            },
+            mode: DeleteMode::Soft,
+        })
+        .await
+        .expect("delete should succeed");
+
+    // Data should be deleted.
+    assert_eq!(result.deleted_data, 1);
+
+    // The data record should be gone.
+    let gone = ops::data::get_data(&db, data_id).await.unwrap();
+    assert!(gone.is_none(), "data record should be gone after deletion");
+
+    // Dataset should still exist because delete_dataset_if_empty was false.
+    assert_eq!(
+        result.deleted_datasets, 0,
+        "dataset should NOT be deleted when delete_dataset_if_empty is false"
+    );
+    let ds = ops::datasets::get_dataset_by_name(&db, "keep_ds", owner_id, None)
+        .await
+        .unwrap();
+    assert!(
+        ds.is_some(),
+        "dataset should survive when delete_dataset_if_empty is false"
+    );
+
+    // Dataset should have zero data items.
+    let remaining = ops::datasets::get_dataset_data(&db, _dataset_id)
+        .await
+        .unwrap();
+    assert_eq!(
+        remaining.len(),
+        0,
+        "dataset should have zero data items after data deletion"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// FP2.2 — delete_dataset_if_empty=true removes dataset
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn delete_data_with_dataset_if_empty_true_removes_dataset() {
+    let (_handle, _ctx, db) = test_task_context().await;
+    let storage = Arc::new(MockStorage::new());
+    let owner_id = Uuid::new_v4();
+
+    let (_dataset_id, data_id, _location) =
+        seed_dataset_with_data(&db, &storage, owner_id, "remove_ds").await;
+
+    // Delete the data item with delete_dataset_if_empty = true.
+    let svc = DeleteService::new(
+        storage.clone() as Arc<dyn StorageTrait>,
+        db.clone() as Arc<dyn DeleteDb>,
+    );
+    let result = svc
+        .execute(&DeleteRequest {
+            scope: DeleteScope::Data {
+                owner_id,
+                data_id,
+                dataset_name: Some("remove_ds".to_string()),
+                delete_dataset_if_empty: true,
+            },
+            mode: DeleteMode::Soft,
+        })
+        .await
+        .expect("delete should succeed");
+
+    // Data should be deleted.
+    assert_eq!(result.deleted_data, 1);
+
+    // The data record should be gone.
+    let gone = ops::data::get_data(&db, data_id).await.unwrap();
+    assert!(gone.is_none(), "data record should be gone after deletion");
+
+    // Dataset should also be deleted because it became empty.
+    assert!(
+        result.deleted_datasets >= 1,
+        "dataset should be deleted when delete_dataset_if_empty is true and dataset is empty"
+    );
+    let ds = ops::datasets::get_dataset_by_name(&db, "remove_ds", owner_id, None)
+        .await
+        .unwrap();
+    assert!(
+        ds.is_none(),
+        "dataset should be gone when delete_dataset_if_empty is true"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// FP2.3 — delete_dataset_if_empty=true preserves non-empty dataset
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn delete_data_with_dataset_if_empty_true_preserves_non_empty_dataset() {
+    let (_handle, _ctx, db) = test_task_context().await;
+    let storage = Arc::new(MockStorage::new());
+    let owner_id = Uuid::new_v4();
+
+    // Seed one dataset with one data item via the helper.
+    let (dataset_id, data_id_1, _location_1) =
+        seed_dataset_with_data(&db, &storage, owner_id, "two_item_ds").await;
+
+    // Add a second data item to the same dataset manually.
+    let location_2 = storage
+        .store(b"second content", "second.txt")
+        .await
+        .unwrap();
+    let data_id_2 = Uuid::new_v4();
+    let data_2 = Data::builder(
+        data_id_2,
+        "second.txt",
+        &location_2,
+        "file://second.txt",
+        "txt",
+        "text/plain",
+        "hash_second",
+        owner_id,
+    )
+    .build();
+    ops::data::create_data(&db, data_2).await.unwrap();
+    ops::datasets::attach_data_to_dataset(&db, dataset_id, data_id_2)
+        .await
+        .unwrap();
+
+    // Verify dataset has two data items before deletion.
+    let before = ops::datasets::get_dataset_data(&db, dataset_id)
+        .await
+        .unwrap();
+    assert_eq!(
+        before.len(),
+        2,
+        "dataset should have two data items before deletion"
+    );
+
+    // Delete only the first data item with delete_dataset_if_empty = true.
+    let svc = DeleteService::new(
+        storage.clone() as Arc<dyn StorageTrait>,
+        db.clone() as Arc<dyn DeleteDb>,
+    );
+    let result = svc
+        .execute(&DeleteRequest {
+            scope: DeleteScope::Data {
+                owner_id,
+                data_id: data_id_1,
+                dataset_name: Some("two_item_ds".to_string()),
+                delete_dataset_if_empty: true,
+            },
+            mode: DeleteMode::Soft,
+        })
+        .await
+        .expect("delete should succeed");
+
+    // First data item should be deleted.
+    assert_eq!(result.deleted_data, 1);
+    let gone = ops::data::get_data(&db, data_id_1).await.unwrap();
+    assert!(gone.is_none(), "first data record should be gone");
+
+    // Dataset should survive because the second data item is still present.
+    assert_eq!(
+        result.deleted_datasets, 0,
+        "dataset should NOT be deleted because it still has data"
+    );
+    let ds = ops::datasets::get_dataset_by_name(&db, "two_item_ds", owner_id, None)
+        .await
+        .unwrap();
+    assert!(
+        ds.is_some(),
+        "dataset should survive because it still has one data item"
+    );
+
+    // Remaining data count should be 1.
+    let remaining = ops::datasets::get_dataset_data(&db, dataset_id)
+        .await
+        .unwrap();
+    assert_eq!(
+        remaining.len(),
+        1,
+        "dataset should have exactly one remaining data item"
+    );
+
+    // The remaining item should be the second one.
+    assert_eq!(
+        remaining[0].id, data_id_2,
+        "remaining data should be the second item"
+    );
+}
