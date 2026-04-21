@@ -47,4 +47,8 @@ pub trait SessionStore: Send + Sync {
         user_id: Option<&str>,
         qa_id: &str,
     ) -> Result<bool, SessionError>;
+
+    /// Delete ALL session data across all users and sessions.
+    /// Equivalent to Python's `CacheDBInterface.prune()`.
+    async fn prune(&self) -> Result<(), SessionError>;
 }

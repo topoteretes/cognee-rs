@@ -212,4 +212,22 @@ impl SessionStore for FsSessionStore {
 
         Ok(true)
     }
+
+    async fn prune(&self) -> Result<(), SessionError> {
+        // Remove the entire base directory and recreate it empty.
+        // Errors are ignored when the directory does not exist yet.
+        match fs::remove_dir_all(&self.base_dir).await {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => {
+                return Err(SessionError::StoreError(format!(
+                    "fs prune remove_dir_all error: {e}"
+                )));
+            }
+        }
+        fs::create_dir_all(&self.base_dir)
+            .await
+            .map_err(|e| SessionError::StoreError(format!("fs prune create_dir_all error: {e}")))?;
+        Ok(())
+    }
 }

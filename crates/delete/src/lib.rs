@@ -8,6 +8,7 @@ use std::sync::Arc;
 use cognee_database::{ArtifactReference, DeleteDb, GraphEdge, GraphNode};
 use cognee_graph::GraphDBTrait;
 use cognee_models::Dataset;
+use cognee_session::SessionStore;
 use cognee_storage::{StorageError, StorageTrait};
 use cognee_vector::VectorDB;
 use serde::{Deserialize, Serialize};
@@ -84,6 +85,7 @@ pub struct DeleteResult {
     pub deleted_pipeline_runs: usize,
     pub cleared_pipeline_statuses: usize,
     pub deleted_search_queries: usize,
+    pub pruned_sessions: bool,
     pub warnings: Vec<String>,
 }
 
@@ -116,6 +118,7 @@ pub struct DeleteService {
     database: Arc<dyn DeleteDb>,
     graph_db: Option<Arc<dyn GraphDBTrait>>,
     vector_db: Option<Arc<dyn VectorDB>>,
+    session_store: Option<Arc<dyn SessionStore>>,
 }
 
 impl DeleteService {
@@ -125,6 +128,7 @@ impl DeleteService {
             database,
             graph_db: None,
             vector_db: None,
+            session_store: None,
         }
     }
 
@@ -135,6 +139,11 @@ impl DeleteService {
 
     pub fn with_vector_db(mut self, vector_db: Arc<dyn VectorDB>) -> Self {
         self.vector_db = Some(vector_db);
+        self
+    }
+
+    pub fn with_session_store(mut self, store: Arc<dyn SessionStore>) -> Self {
+        self.session_store = Some(store);
         self
     }
 
@@ -425,6 +434,21 @@ impl DeleteService {
             DeleteScope::Data { .. } | DeleteScope::Dataset { .. } => 0,
         };
 
+        // ------------------------------------------------------------------
+        // Phase 5: Session cache cleanup
+        // ------------------------------------------------------------------
+
+        let mut pruned_sessions = false;
+        if matches!(request.scope, DeleteScope::All)
+            && let Some(session_store) = &self.session_store
+        {
+            session_store
+                .prune()
+                .await
+                .map_err(|e| DeleteError::Runtime(format!("Failed to prune session cache: {e}")))?;
+            pruned_sessions = true;
+        }
+
         Ok(DeleteResult {
             deleted_datasets,
             deleted_dataset_links: deleted_links,
@@ -439,6 +463,7 @@ impl DeleteService {
             deleted_pipeline_runs,
             cleared_pipeline_statuses,
             deleted_search_queries,
+            pruned_sessions,
             warnings,
         })
     }
@@ -3273,6 +3298,152 @@ mod tests {
         assert_eq!(
             preview_ds.search_queries_to_delete, 0,
             "dataset-scoped preview should show 0 search queries"
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // Session prune tests
+    // ------------------------------------------------------------------
+
+    /// Minimal mock session store that tracks whether `prune()` was called.
+    struct MockSessionStore {
+        pruned: std::sync::Mutex<bool>,
+    }
+
+    impl MockSessionStore {
+        fn new() -> Self {
+            Self {
+                pruned: std::sync::Mutex::new(false),
+            }
+        }
+
+        fn was_pruned(&self) -> bool {
+            *self.pruned.lock().expect("lock poison is unrecoverable")
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl SessionStore for MockSessionStore {
+        async fn create_qa_entry(
+            &self,
+            _session_id: &str,
+            _user_id: Option<&str>,
+            _question: &str,
+            _answer: &str,
+            _context: Option<&str>,
+        ) -> Result<String, cognee_session::SessionError> {
+            Ok("mock-qa-id".to_string())
+        }
+
+        async fn get_latest_qa_entries(
+            &self,
+            _session_id: &str,
+            _user_id: Option<&str>,
+            _last_n: usize,
+        ) -> Result<Vec<cognee_session::SessionQAEntry>, cognee_session::SessionError> {
+            Ok(vec![])
+        }
+
+        async fn get_all_qa_entries(
+            &self,
+            _session_id: &str,
+            _user_id: Option<&str>,
+        ) -> Result<Vec<cognee_session::SessionQAEntry>, cognee_session::SessionError> {
+            Ok(vec![])
+        }
+
+        async fn delete_session(
+            &self,
+            _session_id: &str,
+            _user_id: Option<&str>,
+        ) -> Result<bool, cognee_session::SessionError> {
+            Ok(true)
+        }
+
+        async fn delete_qa_entry(
+            &self,
+            _session_id: &str,
+            _user_id: Option<&str>,
+            _qa_id: &str,
+        ) -> Result<bool, cognee_session::SessionError> {
+            Ok(true)
+        }
+
+        async fn prune(&self) -> Result<(), cognee_session::SessionError> {
+            *self.pruned.lock().expect("lock poison is unrecoverable") = true;
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn delete_all_prunes_session_store() {
+        let (svc, _storage, _db) = make_service().await;
+        let session_store = Arc::new(MockSessionStore::new());
+        let svc = svc.with_session_store(session_store.clone() as Arc<dyn SessionStore>);
+
+        let result = svc
+            .execute(&DeleteRequest {
+                scope: DeleteScope::All,
+                mode: DeleteMode::Soft,
+            })
+            .await
+            .expect("delete all should succeed");
+
+        assert!(
+            session_store.was_pruned(),
+            "session store prune() should have been called"
+        );
+        assert!(
+            result.pruned_sessions,
+            "result should indicate sessions were pruned"
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_dataset_does_not_prune_sessions() {
+        let (svc, storage, db) = make_service().await;
+        let session_store = Arc::new(MockSessionStore::new());
+        let owner_id = Uuid::new_v4();
+        let _ = seed_dataset_with_data(&db, &storage, owner_id, "test_ds").await;
+        let svc = svc.with_session_store(session_store.clone() as Arc<dyn SessionStore>);
+
+        let result = svc
+            .execute(&DeleteRequest {
+                scope: DeleteScope::Dataset {
+                    owner_id,
+                    dataset_name: "test_ds".to_string(),
+                },
+                mode: DeleteMode::Soft,
+            })
+            .await
+            .expect("delete dataset should succeed");
+
+        assert!(
+            !session_store.was_pruned(),
+            "session store prune() should NOT be called for dataset-scoped deletion"
+        );
+        assert!(
+            !result.pruned_sessions,
+            "result should indicate sessions were NOT pruned"
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_all_without_session_store_skips_prune() {
+        let (svc, _storage, _db) = make_service().await;
+        // No session store configured
+
+        let result = svc
+            .execute(&DeleteRequest {
+                scope: DeleteScope::All,
+                mode: DeleteMode::Soft,
+            })
+            .await
+            .expect("delete all should succeed");
+
+        assert!(
+            !result.pruned_sessions,
+            "result should indicate sessions were NOT pruned when no store is configured"
         );
     }
 }

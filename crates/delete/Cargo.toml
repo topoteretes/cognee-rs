@@ -7,6 +7,7 @@ edition.workspace = true
 cognee-database = { path = "../database" }
 cognee-graph = { path = "../graph" }
 cognee-models = { path = "../models" }
+cognee-session = { path = "../session" }
 cognee-storage = { path = "../storage" }
 cognee-vector = { path = "../vector" }
 serde.workspace = true
@@ -16,6 +17,7 @@ tracing.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+async-trait.workspace = true
 chrono.workspace = true
 cognee-database = { path = "../database", features = ["sqlite"] }
 cognee-graph = { path = "../graph", features = ["testing"] }

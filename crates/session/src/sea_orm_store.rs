@@ -94,4 +94,8 @@ impl SessionStore for SeaOrmSessionStore {
         let deleted = ops::delete_qa_entry(&self.db, session_id, user_id, qa_id).await?;
         Ok(deleted)
     }
+
+    async fn prune(&self) -> Result<(), SessionError> {
+        ops::delete_all(&self.db).await
+    }
 }

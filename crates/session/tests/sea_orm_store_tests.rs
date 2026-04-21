@@ -150,6 +150,76 @@ async fn delete_single_qa_entry() {
 }
 
 #[tokio::test]
+async fn prune_removes_all_sessions() {
+    let store = setup_store().await;
+
+    // Create entries across multiple sessions and users
+    store
+        .create_qa_entry("s1", Some("user-1"), "q1", "a1", None)
+        .await
+        .unwrap();
+    store
+        .create_qa_entry("s1", Some("user-2"), "q2", "a2", None)
+        .await
+        .unwrap();
+    store
+        .create_qa_entry("s2", None, "q3", "a3", None)
+        .await
+        .unwrap();
+
+    // Prune all session data
+    store.prune().await.unwrap();
+
+    // Verify all entries are gone
+    assert!(
+        store
+            .get_all_qa_entries("s1", Some("user-1"))
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        store
+            .get_all_qa_entries("s1", Some("user-2"))
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        store
+            .get_all_qa_entries("s2", None)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
+    // Verify the store is still functional after prune
+    store
+        .create_qa_entry("s3", None, "q4", "a4", None)
+        .await
+        .unwrap();
+    let entries = store.get_all_qa_entries("s3", None).await.unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].question, "q4");
+}
+
+#[tokio::test]
+async fn prune_on_empty_store_is_ok() {
+    let store = setup_store().await;
+
+    // Prune when nothing exists should succeed
+    store.prune().await.unwrap();
+
+    // Store remains functional
+    store
+        .create_qa_entry("s1", None, "q1", "a1", None)
+        .await
+        .unwrap();
+    let entries = store.get_all_qa_entries("s1", None).await.unwrap();
+    assert_eq!(entries.len(), 1);
+}
+
+#[tokio::test]
 async fn session_manager_load_history_returns_user_assistant_pairs() {
     let store = setup_store().await;
 

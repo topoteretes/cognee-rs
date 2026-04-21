@@ -216,4 +216,24 @@ impl SessionStore for RedisSessionStore {
 
         Ok(true)
     }
+
+    async fn prune(&self) -> Result<(), SessionError> {
+        let mut conn = self.conn.clone();
+        let pattern = "agent_sessions:*";
+
+        // Use KEYS to find all session keys, then DEL them.
+        // KEYS is acceptable here because prune() is an infrequent administrative
+        // operation, and session keys are typically few in number.
+        let keys: Vec<String> = redis::cmd("KEYS")
+            .arg(pattern)
+            .query_async(&mut conn)
+            .await
+            .map_err(map_err)?;
+
+        if !keys.is_empty() {
+            conn.del::<_, ()>(&keys).await.map_err(map_err)?;
+        }
+
+        Ok(())
+    }
 }

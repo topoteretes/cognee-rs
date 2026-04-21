@@ -109,3 +109,12 @@ pub async fn delete_qa_entry(
     let result = delete.exec(db).await.map_err(map_db_err)?;
     Ok(result.rows_affected > 0)
 }
+
+/// Delete all rows from the session_qa_entries table (prune).
+pub async fn delete_all(db: &DatabaseConnection) -> Result<(), SessionError> {
+    entity::Entity::delete_many()
+        .exec(db)
+        .await
+        .map_err(map_db_err)?;
+    Ok(())
+}

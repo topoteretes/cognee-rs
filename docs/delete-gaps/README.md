@@ -13,8 +13,8 @@ document with a step-by-step implementation plan.
 | 3 | [Missing vector collections in `DeleteScope::All`](#3-missing-vector-collections-in-deletescopeall) | P0 | 7 | [gap-03](gap-03-missing-vector-collections.md) | Done |
 | 4 | [No ACL-based authorization](#4-no-acl-based-authorization) | P1 | 10 | [gap-04](gap-04-acl-authorization.md) | Done |
 | 5 | [`Hard` delete mode is unimplemented](#5-hard-delete-mode-is-unimplemented) | P1 | 11 | [gap-05](gap-05-hard-delete-mode.md) | Done |
-| 6 | [No `pipeline_runs` cleanup](#6-no-pipeline_runs-cleanup) | P2 | 9 | [gap-06](gap-06-pipeline-runs-cleanup.md) | Not started |
-| 7 | [No `search_history` (queries/results) cleanup](#7-no-search_history-queriesresults-cleanup) | P2 | 10 | [gap-07](gap-07-search-history-cleanup.md) | Not started |
+| 6 | [No `pipeline_runs` cleanup](#6-no-pipeline_runs-cleanup) | P2 | 9 | [gap-06](gap-06-pipeline-runs-cleanup.md) | Done |
+| 7 | [No `search_history` (queries/results) cleanup](#7-no-search_history-queriesresults-cleanup) | P2 | 10 | [gap-07](gap-07-search-history-cleanup.md) | Done |
 | 8 | [No session cache deletion](#8-no-session-cache-deletion) | P2 | 8 | [gap-08](gap-08-session-cache-deletion.md) | Not started |
 | 9 | [No orphaned EdgeType node cleanup](#9-no-orphaned-edgetype-node-cleanup) | P2 | 9 | [gap-09](gap-09-orphaned-edgetype-cleanup.md) | Not started |
 | 10 | [Missing `delete_dataset_if_empty` option](#10-missing-delete_dataset_if_empty-option) | P2 | 13 | [gap-10](gap-10-delete-dataset-if-empty.md) | Not started |
