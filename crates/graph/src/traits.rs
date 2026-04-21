@@ -216,6 +216,39 @@ pub trait GraphDBTrait: Send + Sync {
         node_name_filter_operator: &str,
     ) -> GraphDBResult<(Vec<GraphNode>, Vec<EdgeData>)>;
 
+    /// Find nodes of the given type that have exactly one edge (any direction).
+    ///
+    /// Used by hard-delete mode to locate orphaned Entity/EntityType nodes that
+    /// are no longer meaningfully connected after a soft deletion.
+    ///
+    /// Default implementation fetches the full graph and computes degree in
+    /// memory (O(N+E)).  Backends may override with an efficient Cypher/SQL query.
+    async fn get_degree_one_nodes(
+        &self,
+        node_type: &str,
+    ) -> GraphDBResult<Vec<crate::GraphNode>> {
+        let (nodes, edges) = self.get_graph_data().await?;
+
+        // Build a degree map from edges (count both endpoints)
+        let mut degree: HashMap<String, usize> = HashMap::new();
+        for (src, tgt, _, _) in &edges {
+            *degree.entry(src.clone()).or_default() += 1;
+            *degree.entry(tgt.clone()).or_default() += 1;
+        }
+
+        Ok(nodes
+            .into_iter()
+            .filter(|(id, props)| {
+                let type_matches = props
+                    .get("type")
+                    .and_then(|v| v.as_str())
+                    .is_some_and(|t| t == node_type);
+                let deg = degree.get(id).copied().unwrap_or(0);
+                type_matches && deg == 1
+            })
+            .collect())
+    }
+
     /// Retrieve a subgraph containing only the specified nodes and edges between them.
     ///
     /// Default implementation fetches the full graph and filters in memory.

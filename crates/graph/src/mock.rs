@@ -297,6 +297,34 @@ impl GraphDBTrait for MockGraphDB {
         Ok(metrics)
     }
 
+    async fn get_degree_one_nodes(
+        &self,
+        node_type: &str,
+    ) -> GraphDBResult<Vec<(String, crate::types::NodeData)>> {
+        let nodes = self.nodes.lock().unwrap(); // lock poison is unrecoverable
+        let edges = self.edges.lock().unwrap(); // lock poison is unrecoverable
+
+        // Build degree map from edges
+        let mut degree: HashMap<String, usize> = HashMap::new();
+        for (src, tgt, _, _) in edges.iter() {
+            *degree.entry(src.clone()).or_default() += 1;
+            *degree.entry(tgt.clone()).or_default() += 1;
+        }
+
+        Ok(nodes
+            .iter()
+            .filter(|(id, data)| {
+                let type_matches = data
+                    .get("type")
+                    .and_then(|v| v.as_str())
+                    .is_some_and(|t| t == node_type);
+                let deg = degree.get(*id).copied().unwrap_or(0);
+                type_matches && deg == 1
+            })
+            .map(|(id, data)| (id.clone(), data.clone()))
+            .collect())
+    }
+
     async fn get_filtered_graph_data(
         &self,
         _attribute_filters: &HashMap<Cow<'static, str>, Vec<serde_json::Value>>,
@@ -520,6 +548,55 @@ mod tests {
         assert_eq!(edges.len(), 1);
         assert_eq!(edges[0].0, "n1");
         assert_eq!(edges[0].1, "n2");
+    }
+
+    #[tokio::test]
+    async fn get_degree_one_nodes_returns_orphans() {
+        let db = MockGraphDB::new();
+
+        // Entity with degree 1 (orphan — only connected to its type)
+        db.add_node_raw(serde_json::json!({"id": "e1", "type": "Entity", "name": "Alice"}))
+            .await
+            .unwrap();
+        // Entity with degree 2 (well-connected — should NOT be returned)
+        db.add_node_raw(serde_json::json!({"id": "e2", "type": "Entity", "name": "Bob"}))
+            .await
+            .unwrap();
+        // EntityType with degree 1 (orphan)
+        db.add_node_raw(serde_json::json!({"id": "et1", "type": "EntityType", "name": "Person"}))
+            .await
+            .unwrap();
+        // An unrelated node
+        db.add_node_raw(serde_json::json!({"id": "c1", "type": "DocumentChunk", "text": "hello"}))
+            .await
+            .unwrap();
+
+        // e1 -> et1 (one edge each for e1 and et1)
+        db.add_edge("e1", "et1", "is_a", None).await.unwrap();
+        // e2 -> et1 (second edge for e2 and et1)
+        db.add_edge("e2", "et1", "is_a", None).await.unwrap();
+        // e2 -> c1 (third edge for e2)
+        db.add_edge("c1", "e2", "contains", None).await.unwrap();
+
+        // e1 has degree 1, e2 has degree 2
+        let orphan_entities = db.get_degree_one_nodes("Entity").await.unwrap();
+        assert_eq!(orphan_entities.len(), 1);
+        assert_eq!(orphan_entities[0].0, "e1");
+
+        // et1 has degree 2 (is_a from e1 and e2), so no orphan EntityTypes
+        let orphan_types = db.get_degree_one_nodes("EntityType").await.unwrap();
+        assert_eq!(orphan_types.len(), 0);
+
+        // No DocumentChunk with degree 1 check (c1 has degree 1)
+        let orphan_chunks = db.get_degree_one_nodes("DocumentChunk").await.unwrap();
+        assert_eq!(orphan_chunks.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn get_degree_one_nodes_empty_graph() {
+        let db = MockGraphDB::new();
+        let result = db.get_degree_one_nodes("Entity").await.unwrap();
+        assert!(result.is_empty());
     }
 
     #[tokio::test]

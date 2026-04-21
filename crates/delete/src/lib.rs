@@ -78,6 +78,8 @@ pub struct DeleteResult {
     pub deleted_vector_points: usize,
     pub deleted_provenance_nodes: usize,
     pub deleted_provenance_edges: usize,
+    pub deleted_orphan_entities: usize,
+    pub deleted_orphan_entity_types: usize,
     pub warnings: Vec<String>,
 }
 
@@ -287,11 +289,18 @@ impl DeleteService {
             deleted_data += 1;
         }
 
+        // ------------------------------------------------------------------
+        // Phase 3: Hard-mode orphan sweep (degree-one Entity/EntityType nodes)
+        // ------------------------------------------------------------------
+
+        let mut deleted_orphan_entities = 0usize;
+        let mut deleted_orphan_entity_types = 0usize;
+
         if matches!(request.mode, DeleteMode::Hard) {
-            warnings.push(
-                "Hard mode currently performs soft deletion plus warnings; orphan graph/vector sweep is planned next."
-                    .to_string(),
-            );
+            let (oe, oet, sweep_warnings) = self.sweep_orphan_nodes().await?;
+            deleted_orphan_entities = oe;
+            deleted_orphan_entity_types = oet;
+            warnings.extend(sweep_warnings);
         }
 
         Ok(DeleteResult {
@@ -303,6 +312,8 @@ impl DeleteService {
             deleted_vector_points,
             deleted_provenance_nodes,
             deleted_provenance_edges,
+            deleted_orphan_entities,
+            deleted_orphan_entity_types,
             warnings,
         })
     }
@@ -723,6 +734,119 @@ impl DeleteService {
             }
             Ok((0, warnings))
         }
+    }
+
+    /// Hard-mode orphan sweep: find and delete degree-one Entity/EntityType
+    /// nodes from the graph and their corresponding vector points.
+    ///
+    /// Returns `(orphan_entities, orphan_entity_types, warnings)`.
+    async fn sweep_orphan_nodes(
+        &self,
+    ) -> Result<(usize, usize, Vec<String>), DeleteError> {
+        let mut warnings = Vec::new();
+
+        let graph_db = match &self.graph_db {
+            Some(db) => db,
+            None => {
+                warnings.push(
+                    "Graph DB not configured; hard-mode orphan sweep skipped.".to_string(),
+                );
+                return Ok((0, 0, warnings));
+            }
+        };
+
+        let orphan_entities = graph_db
+            .get_degree_one_nodes("Entity")
+            .await
+            .map_err(|e| {
+                DeleteError::GraphCleanup(format!(
+                    "Failed to query degree-one Entity nodes: {e}"
+                ))
+            })?;
+
+        let orphan_types = graph_db
+            .get_degree_one_nodes("EntityType")
+            .await
+            .map_err(|e| {
+                DeleteError::GraphCleanup(format!(
+                    "Failed to query degree-one EntityType nodes: {e}"
+                ))
+            })?;
+
+        let entity_count = orphan_entities.len();
+        let type_count = orphan_types.len();
+
+        if entity_count == 0 && type_count == 0 {
+            return Ok((0, 0, warnings));
+        }
+
+        // Collect all orphan node IDs for graph deletion
+        let all_orphan_ids: Vec<String> = orphan_entities
+            .iter()
+            .chain(orphan_types.iter())
+            .map(|(id, _)| id.clone())
+            .collect();
+
+        // Delete from vector DB (if configured)
+        if let Some(vector_db) = &self.vector_db {
+            // Entity orphans → Entity/name collection
+            if !orphan_entities.is_empty() {
+                let entity_uuids: Vec<Uuid> = orphan_entities
+                    .iter()
+                    .filter_map(|(id, _)| Uuid::parse_str(id).ok())
+                    .collect();
+                if !entity_uuids.is_empty()
+                    && vector_db
+                        .has_collection("Entity", "name")
+                        .await
+                        .unwrap_or(false)
+                {
+                    vector_db
+                        .delete_points("Entity", "name", &entity_uuids)
+                        .await
+                        .map_err(|e| {
+                            DeleteError::VectorCleanup(format!(
+                                "Failed to delete orphan Entity vector points: {e}"
+                            ))
+                        })?;
+                }
+            }
+
+            // EntityType orphans → EntityType/name collection
+            if !orphan_types.is_empty() {
+                let type_uuids: Vec<Uuid> = orphan_types
+                    .iter()
+                    .filter_map(|(id, _)| Uuid::parse_str(id).ok())
+                    .collect();
+                if !type_uuids.is_empty()
+                    && vector_db
+                        .has_collection("EntityType", "name")
+                        .await
+                        .unwrap_or(false)
+                {
+                    vector_db
+                        .delete_points("EntityType", "name", &type_uuids)
+                        .await
+                        .map_err(|e| {
+                            DeleteError::VectorCleanup(format!(
+                                "Failed to delete orphan EntityType vector points: {e}"
+                            ))
+                        })?;
+                }
+            }
+        }
+
+        // Delete from graph DB
+        graph_db
+            .delete_nodes(&all_orphan_ids)
+            .await
+            .map_err(|e| {
+                DeleteError::GraphCleanup(format!(
+                    "Failed to delete orphan graph nodes: {e}"
+                ))
+            })?;
+
+        Ok((entity_count, type_count, warnings))
     }
 
     /// Count graph nodes, vector points, and provenance rows that would be
@@ -2366,5 +2490,201 @@ mod tests {
             matches!(err, DeleteError::PermissionDenied(_)),
             "expected PermissionDenied on preview, got: {err:?}"
         );
+    }
+
+    // ------------------------------------------------------------------
+    // Hard delete mode tests
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn hard_delete_removes_degree_one_entities() {
+        let (svc, storage, db, graph_db, _vector_db) = make_service_with_graph_vector().await;
+        let owner = Uuid::new_v4();
+        let (dataset_id, _data_id) =
+            seed_dataset_with_data(&db, &storage, owner, "hard_del_ds").await;
+
+        // Add an Entity node with degree 1 (one edge to a type node)
+        graph_db
+            .add_node_raw(serde_json::json!({
+                "id": "entity-orphan",
+                "type": "Entity",
+                "name": "OrphanEntity"
+            }))
+            .await
+            .unwrap();
+        graph_db
+            .add_node_raw(serde_json::json!({
+                "id": "type-node",
+                "type": "EntityType",
+                "name": "Person"
+            }))
+            .await
+            .unwrap();
+        // Single edge: entity-orphan -> type-node
+        // entity-orphan has degree 1, type-node has degree 1
+        graph_db
+            .add_edge("entity-orphan", "type-node", "is_a", None)
+            .await
+            .unwrap();
+
+        assert_eq!(graph_db.node_count(), 2);
+
+        // Seed provenance so cleanup_dataset has something to work with
+        let entity_slug = Uuid::new_v4();
+        seed_provenance_nodes(
+            &db,
+            dataset_id,
+            _data_id,
+            owner,
+            &[entity_slug],
+            "Entity",
+            serde_json::json!(["name"]),
+        )
+        .await;
+
+        let result = svc
+            .execute(&DeleteRequest {
+                scope: DeleteScope::Dataset {
+                    owner_id: owner,
+                    dataset_name: "hard_del_ds".to_string(),
+                },
+                mode: DeleteMode::Hard,
+            })
+            .await
+            .expect("hard delete should succeed");
+
+        assert_eq!(result.deleted_datasets, 1);
+        // After dataset cleanup removes tracked nodes, the orphan sweep finds
+        // degree-one nodes. Since both nodes started with degree 1, both should
+        // be swept (after normal cleanup may have already removed tracked ones,
+        // the sweep catches any remaining degree-one nodes).
+        // The exact counts depend on whether cleanup_dataset already removed
+        // entity-orphan via provenance. The important thing is that the graph
+        // ends up clean.
+        let remaining_nodes = graph_db.node_count();
+        assert_eq!(
+            remaining_nodes, 0,
+            "all orphan nodes should be removed after hard delete"
+        );
+    }
+
+    #[tokio::test]
+    async fn soft_delete_does_not_sweep_orphans() {
+        let (svc, storage, db, graph_db, _vector_db) = make_service_with_graph_vector().await;
+        let owner = Uuid::new_v4();
+        seed_dataset_with_data(&db, &storage, owner, "soft_del_ds").await;
+
+        // Add orphan entity (degree 1)
+        graph_db
+            .add_node_raw(serde_json::json!({
+                "id": "orphan-soft",
+                "type": "Entity",
+                "name": "SoftOrphan"
+            }))
+            .await
+            .unwrap();
+        graph_db
+            .add_node_raw(serde_json::json!({
+                "id": "type-soft",
+                "type": "EntityType",
+                "name": "Thing"
+            }))
+            .await
+            .unwrap();
+        graph_db
+            .add_edge("orphan-soft", "type-soft", "is_a", None)
+            .await
+            .unwrap();
+
+        let result = svc
+            .execute(&DeleteRequest {
+                scope: DeleteScope::Dataset {
+                    owner_id: owner,
+                    dataset_name: "soft_del_ds".to_string(),
+                },
+                mode: DeleteMode::Soft,
+            })
+            .await
+            .expect("soft delete should succeed");
+
+        // Soft delete should NOT sweep orphans
+        assert_eq!(result.deleted_orphan_entities, 0);
+        assert_eq!(result.deleted_orphan_entity_types, 0);
+        // Orphan nodes should still exist
+        assert_eq!(graph_db.node_count(), 2, "orphan nodes should survive soft delete");
+    }
+
+    #[tokio::test]
+    async fn hard_delete_preserves_well_connected_entities() {
+        let (svc, storage, db, graph_db, _vector_db) = make_service_with_graph_vector().await;
+        let owner = Uuid::new_v4();
+        seed_dataset_with_data(&db, &storage, owner, "hard_preserve_ds").await;
+
+        // Add a well-connected Entity (degree 3)
+        graph_db
+            .add_node_raw(serde_json::json!({
+                "id": "connected-entity",
+                "type": "Entity",
+                "name": "WellConnected"
+            }))
+            .await
+            .unwrap();
+        graph_db
+            .add_node_raw(serde_json::json!({
+                "id": "neighbor-1",
+                "type": "DocumentChunk",
+                "text": "chunk1"
+            }))
+            .await
+            .unwrap();
+        graph_db
+            .add_node_raw(serde_json::json!({
+                "id": "neighbor-2",
+                "type": "DocumentChunk",
+                "text": "chunk2"
+            }))
+            .await
+            .unwrap();
+        graph_db
+            .add_node_raw(serde_json::json!({
+                "id": "type-node",
+                "type": "EntityType",
+                "name": "Person"
+            }))
+            .await
+            .unwrap();
+
+        // connected-entity has 3 edges -> degree 3
+        graph_db
+            .add_edge("neighbor-1", "connected-entity", "contains", None)
+            .await
+            .unwrap();
+        graph_db
+            .add_edge("neighbor-2", "connected-entity", "contains", None)
+            .await
+            .unwrap();
+        graph_db
+            .add_edge("connected-entity", "type-node", "is_a", None)
+            .await
+            .unwrap();
+
+        let result = svc
+            .execute(&DeleteRequest {
+                scope: DeleteScope::Dataset {
+                    owner_id: owner,
+                    dataset_name: "hard_preserve_ds".to_string(),
+                },
+                mode: DeleteMode::Hard,
+            })
+            .await
+            .expect("hard delete should succeed");
+
+        // The well-connected entity (degree 3) should survive
+        assert!(
+            graph_db.has_node("connected-entity").await.unwrap(),
+            "well-connected entity should survive hard delete"
+        );
+        // No orphan entities should have been swept
+        assert_eq!(result.deleted_orphan_entities, 0);
     }
 }
