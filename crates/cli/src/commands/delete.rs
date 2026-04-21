@@ -113,40 +113,34 @@ pub fn run(args: DeleteArgs, cm: Arc<cognee_lib::ComponentManager>) -> Result<()
 }
 
 fn print_preview(preview: &cognee_lib::delete::DeletePreview) {
-    info!("Preview:");
-    info!("  datasets_to_delete: {}", preview.datasets_to_delete);
     info!(
-        "  dataset_links_to_delete: {}",
-        preview.dataset_links_to_delete
-    );
-    info!("  data_to_delete: {}", preview.data_to_delete);
-    info!(
-        "  storage_files_to_delete: {}",
-        preview.storage_files_to_delete
-    );
-    info!("  graph_nodes_to_delete: {}", preview.graph_nodes_to_delete);
-    info!(
-        "  vector_points_to_delete: {}",
-        preview.vector_points_to_delete
+        datasets = preview.datasets_to_delete,
+        links = preview.dataset_links_to_delete,
+        data = preview.data_to_delete,
+        storage_files = preview.storage_files_to_delete,
+        graph_nodes = preview.graph_nodes_to_delete,
+        vector_points = preview.vector_points_to_delete,
+        "delete preview"
     );
 }
 
 fn print_result(result: &cognee_lib::delete::DeleteResult) {
     info!(
-        "Success: Deleted datasets={}, links={}, data={}, storage_files={}, graph_nodes={}, vector_points={}, orphan_entities={}, orphan_entity_types={}, orphan_edge_types={}",
-        result.deleted_datasets,
-        result.deleted_dataset_links,
-        result.deleted_data,
-        result.deleted_storage_files,
-        result.deleted_graph_nodes,
-        result.deleted_vector_points,
-        result.deleted_orphan_entities,
-        result.deleted_orphan_entity_types,
-        result.deleted_orphan_edge_types,
+        deleted_datasets = result.deleted_datasets,
+        deleted_links = result.deleted_dataset_links,
+        deleted_data = result.deleted_data,
+        deleted_storage = result.deleted_storage_files,
+        deleted_graph_nodes = result.deleted_graph_nodes,
+        deleted_vector_points = result.deleted_vector_points,
+        deleted_orphan_entities = result.deleted_orphan_entities,
+        deleted_orphan_entity_types = result.deleted_orphan_entity_types,
+        deleted_orphan_edge_types = result.deleted_orphan_edge_types,
+        warning_count = result.warnings.len(),
+        "delete completed"
     );
 
     for warning in &result.warnings {
-        warn!("Warning: {warning}");
+        warn!(warning = %warning, "delete warning");
     }
 }
 

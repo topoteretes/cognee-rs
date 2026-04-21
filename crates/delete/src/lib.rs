@@ -13,8 +13,27 @@ use cognee_storage::{StorageError, StorageTrait};
 use cognee_vector::VectorDB;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tracing::warn;
+use tracing::{info, warn};
 use uuid::Uuid;
+
+/// Map a `DeleteScope` variant to a human-readable label matching Python's
+/// `COGNEE_FORGET_TARGET` values.
+fn scope_label(scope: &DeleteScope) -> &'static str {
+    match scope {
+        DeleteScope::Data { .. } => "data_item",
+        DeleteScope::Dataset { .. } => "dataset",
+        DeleteScope::User { .. } => "user",
+        DeleteScope::All => "everything",
+    }
+}
+
+/// Map a `DeleteMode` variant to a human-readable label.
+fn mode_label(mode: &DeleteMode) -> &'static str {
+    match mode {
+        DeleteMode::Soft => "soft",
+        DeleteMode::Hard => "hard",
+    }
+}
 
 /// Fallback vector collections used when `list_collections()` returns an empty
 /// list (e.g. backends that do not implement dynamic discovery).
@@ -154,6 +173,14 @@ impl DeleteService {
         self
     }
 
+    #[tracing::instrument(
+        name = "cognee.delete.preview",
+        skip(self, request),
+        fields(
+            cognee.forget.target = %scope_label(&request.scope),
+            cognee.result.count = tracing::field::Empty,
+        )
+    )]
     pub async fn preview(&self, request: &DeleteRequest) -> Result<DeletePreview, DeleteError> {
         let targets = self.resolve_targets(request).await?;
         let data_to_delete = self
@@ -185,6 +212,17 @@ impl DeleteService {
             DeleteScope::Data { .. } | DeleteScope::Dataset { .. } => 0,
         };
 
+        tracing::Span::current().record("cognee.result.count", data_to_delete);
+
+        info!(
+            datasets = targets.datasets_to_delete.len(),
+            links = targets.links_to_detach.len(),
+            data = data_to_delete,
+            graph_nodes = graph_node_count,
+            vector_points = vector_point_count,
+            "delete preview computed"
+        );
+
         Ok(DeletePreview {
             datasets_to_delete: targets.datasets_to_delete.len(),
             dataset_links_to_delete: targets.links_to_detach.len(),
@@ -201,8 +239,24 @@ impl DeleteService {
         })
     }
 
+    #[tracing::instrument(
+        name = "cognee.delete.execute",
+        skip(self, request),
+        fields(
+            cognee.forget.target = %scope_label(&request.scope),
+            cognee.operation.mode = %mode_label(&request.mode),
+            cognee.result.count = tracing::field::Empty,
+        )
+    )]
     pub async fn execute(&self, request: &DeleteRequest) -> Result<DeleteResult, DeleteError> {
         let targets = self.resolve_targets(request).await?;
+
+        info!(
+            datasets = targets.datasets_to_delete.len(),
+            links = targets.links_to_detach.len(),
+            data_candidates = targets.candidate_data_ids.len(),
+            "delete targets resolved"
+        );
 
         let mut warnings = Vec::new();
         let mut deleted_links = 0usize;
@@ -310,6 +364,14 @@ impl DeleteService {
             }
         }
 
+        info!(
+            deleted_graph_nodes,
+            deleted_vector_points,
+            deleted_provenance_nodes,
+            deleted_provenance_edges,
+            "phase 1: graph/vector cleanup completed"
+        );
+
         // ------------------------------------------------------------------
         // Phase 2: Relational cleanup (links, datasets, data, storage)
         // ------------------------------------------------------------------
@@ -385,6 +447,11 @@ impl DeleteService {
                         deleted_storage += 1;
                     }
                     Err(StorageError::NotFound(_)) => {
+                        warn!(
+                            data_id = %data.id,
+                            location = %data.raw_data_location,
+                            "storage file already missing"
+                        );
                         warnings.push(format!(
                             "Storage file already missing for data {} at '{}'",
                             data.id, data.raw_data_location
@@ -404,6 +471,14 @@ impl DeleteService {
             })?;
             deleted_data += 1;
         }
+
+        info!(
+            deleted_links,
+            deleted_datasets,
+            deleted_data,
+            deleted_storage,
+            "phase 2: relational cleanup completed"
+        );
 
         // ------------------------------------------------------------------
         // Phase 3: Hard-mode orphan sweep (degree-one Entity/EntityType nodes)
@@ -464,6 +539,24 @@ impl DeleteService {
             pruned_sessions = true;
         }
 
+        let total_deleted =
+            deleted_datasets + deleted_data + deleted_graph_nodes + deleted_vector_points;
+        tracing::Span::current().record("cognee.result.count", total_deleted);
+
+        info!(
+            deleted_datasets,
+            deleted_links,
+            deleted_data,
+            deleted_storage,
+            deleted_graph_nodes,
+            deleted_vector_points,
+            deleted_orphan_entities,
+            deleted_orphan_entity_types,
+            deleted_orphan_edge_types,
+            warning_count = warnings.len(),
+            "delete execution completed"
+        );
+
         Ok(DeleteResult {
             deleted_datasets,
             deleted_dataset_links: deleted_links,
@@ -492,6 +585,12 @@ impl DeleteService {
         self.compute_deletable_data_ids(&targets).await
     }
 
+    #[tracing::instrument(
+        name = "cognee.delete.resolve_artifacts",
+        skip(self, request),
+        level = "debug",
+        fields(cognee.result.count = tracing::field::Empty)
+    )]
     pub async fn artifact_references_for_request(
         &self,
         request: &DeleteRequest,
@@ -537,6 +636,8 @@ impl DeleteService {
                 }
             }
         }
+
+        tracing::Span::current().record("cognee.result.count", references.len());
 
         Ok(references)
     }
@@ -1166,6 +1267,7 @@ impl DeleteService {
         Ok(deletable)
     }
 
+    #[tracing::instrument(level = "debug", skip(self, request))]
     async fn resolve_targets(
         &self,
         request: &DeleteRequest,
@@ -1194,6 +1296,7 @@ impl DeleteService {
         }
     }
 
+    #[tracing::instrument(level = "debug", skip(self))]
     async fn resolve_data_scope(
         &self,
         owner_id: Uuid,
@@ -1314,6 +1417,7 @@ impl DeleteService {
         })
     }
 
+    #[tracing::instrument(level = "debug", skip(self))]
     async fn resolve_dataset_scope(
         &self,
         owner_id: Uuid,
@@ -1338,6 +1442,7 @@ impl DeleteService {
         self.resolve_dataset_list(vec![dataset]).await
     }
 
+    #[tracing::instrument(level = "debug", skip(self))]
     async fn resolve_user_scope(
         &self,
         owner_id: Uuid,
@@ -1355,6 +1460,7 @@ impl DeleteService {
         self.resolve_dataset_list(datasets).await
     }
 
+    #[tracing::instrument(level = "debug", skip(self))]
     async fn resolve_all_scope(&self) -> Result<ResolvedDeleteTargets, DeleteError> {
         let datasets =
             self.database.list_datasets().await.map_err(|error| {

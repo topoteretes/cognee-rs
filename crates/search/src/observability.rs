@@ -33,3 +33,15 @@ pub const COGNEE_USER_ID: &str = "cognee.user.id";
 
 /// The session identifier for multi-turn interactions.
 pub const COGNEE_SESSION_ID: &str = "cognee.session.id";
+
+/// The delete target scope (e.g. "dataset", "data_item", "user", "everything").
+pub const COGNEE_FORGET_TARGET: &str = "cognee.forget.target";
+
+/// The dataset name affected by a delete operation.
+pub const COGNEE_DATASET_NAME: &str = "cognee.dataset.name";
+
+/// The number of data items affected by a delete operation.
+pub const COGNEE_DATA_ITEM_COUNT: &str = "cognee.data.item_count";
+
+/// The delete mode ("soft" or "hard").
+pub const COGNEE_OPERATION_MODE: &str = "cognee.operation.mode";
