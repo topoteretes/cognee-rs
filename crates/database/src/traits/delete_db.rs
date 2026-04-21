@@ -3,7 +3,7 @@ use cognee_models::{Data, Dataset};
 use sea_orm::DatabaseConnection;
 use uuid::Uuid;
 
-use crate::ops::{artifact_refs, data, datasets, graph_storage, pipeline_runs};
+use crate::ops::{artifact_refs, data, datasets, graph_storage, pipeline_runs, search_history};
 use crate::types::{ArtifactReference, DatabaseError, GraphEdge, GraphNode};
 
 #[async_trait]
@@ -124,6 +124,26 @@ pub trait DeleteDb: Send + Sync {
         data_id: Uuid,
         dataset_id: Uuid,
     ) -> Result<usize, DatabaseError>;
+
+    // ------------------------------------------------------------------
+    // Search history cleanup methods
+    // ------------------------------------------------------------------
+
+    /// Delete all search history (queries + cascaded results) for a user.
+    ///
+    /// Returns the number of deleted query rows.
+    async fn delete_search_history_for_user(&self, user_id: Uuid) -> Result<u64, DatabaseError>;
+
+    /// Delete all search history (queries + cascaded results).
+    ///
+    /// Returns the number of deleted query rows.
+    async fn delete_all_search_history(&self) -> Result<u64, DatabaseError>;
+
+    /// Count search history query rows for a specific user.
+    async fn count_search_history_for_user(&self, user_id: Uuid) -> Result<u64, DatabaseError>;
+
+    /// Count all search history query rows.
+    async fn count_all_search_history(&self) -> Result<u64, DatabaseError>;
 }
 
 #[async_trait]
@@ -286,5 +306,25 @@ impl DeleteDb for DatabaseConnection {
         dataset_id: Uuid,
     ) -> Result<usize, DatabaseError> {
         graph_storage::count_edges_for_data(self, data_id, dataset_id).await
+    }
+
+    // ------------------------------------------------------------------
+    // Search history cleanup
+    // ------------------------------------------------------------------
+
+    async fn delete_search_history_for_user(&self, user_id: Uuid) -> Result<u64, DatabaseError> {
+        search_history::delete_queries_by_user(self, user_id).await
+    }
+
+    async fn delete_all_search_history(&self) -> Result<u64, DatabaseError> {
+        search_history::delete_all_queries(self).await
+    }
+
+    async fn count_search_history_for_user(&self, user_id: Uuid) -> Result<u64, DatabaseError> {
+        search_history::count_queries_by_user(self, user_id).await
+    }
+
+    async fn count_all_search_history(&self) -> Result<u64, DatabaseError> {
+        search_history::count_all_queries(self).await
     }
 }

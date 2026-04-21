@@ -1,4 +1,5 @@
 use chrono::Utc;
+use sea_orm::PaginatorTrait;
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter,
 };
@@ -78,4 +79,51 @@ pub async fn get_history(
         entries.truncate(n);
     }
     Ok(entries)
+}
+
+/// Delete all query rows for a specific user.
+///
+/// The FK CASCADE on `results.query_id` automatically removes corresponding
+/// result rows. Returns the number of deleted query rows.
+pub async fn delete_queries_by_user(
+    db: &DatabaseConnection,
+    user_id: Uuid,
+) -> Result<u64, DatabaseError> {
+    let result = query::Entity::delete_many()
+        .filter(query::Column::UserId.eq(uuid_hex::to_hex(user_id)))
+        .exec(db)
+        .await
+        .map_err(map_sea_err)?;
+    Ok(result.rows_affected)
+}
+
+/// Delete all query rows from the `queries` table.
+///
+/// The FK CASCADE on `results.query_id` automatically removes all result rows.
+/// Returns the number of deleted query rows.
+pub async fn delete_all_queries(db: &DatabaseConnection) -> Result<u64, DatabaseError> {
+    let result = query::Entity::delete_many()
+        .exec(db)
+        .await
+        .map_err(map_sea_err)?;
+    Ok(result.rows_affected)
+}
+
+/// Count query rows for a specific user.
+pub async fn count_queries_by_user(
+    db: &DatabaseConnection,
+    user_id: Uuid,
+) -> Result<u64, DatabaseError> {
+    let count = query::Entity::find()
+        .filter(query::Column::UserId.eq(uuid_hex::to_hex(user_id)))
+        .count(db)
+        .await
+        .map_err(map_sea_err)?;
+    Ok(count)
+}
+
+/// Count all query rows in the `queries` table.
+pub async fn count_all_queries(db: &DatabaseConnection) -> Result<u64, DatabaseError> {
+    let count = query::Entity::find().count(db).await.map_err(map_sea_err)?;
+    Ok(count)
 }

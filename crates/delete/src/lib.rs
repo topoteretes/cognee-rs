@@ -66,6 +66,7 @@ pub struct DeletePreview {
     pub vector_points_to_delete: usize,
     pub provenance_nodes_to_delete: usize,
     pub provenance_edges_to_delete: usize,
+    pub search_queries_to_delete: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -82,6 +83,7 @@ pub struct DeleteResult {
     pub deleted_orphan_entity_types: usize,
     pub deleted_pipeline_runs: usize,
     pub cleared_pipeline_statuses: usize,
+    pub deleted_search_queries: usize,
     pub warnings: Vec<String>,
 }
 
@@ -146,6 +148,27 @@ impl DeleteService {
         let (graph_node_count, vector_point_count, prov_node_count, prov_edge_count) =
             self.count_graph_vector_artifacts(request, &targets).await?;
 
+        // Count search history queries that would be deleted
+        let search_queries_to_delete = match &request.scope {
+            DeleteScope::User { owner_id } => self
+                .database
+                .count_search_history_for_user(*owner_id)
+                .await
+                .map_err(|e| {
+                    DeleteError::Runtime(format!(
+                        "Failed to count search history for user {owner_id}: {e}"
+                    ))
+                })? as usize,
+            DeleteScope::All => self
+                .database
+                .count_all_search_history()
+                .await
+                .map_err(|e| {
+                    DeleteError::Runtime(format!("Failed to count all search history: {e}"))
+                })? as usize,
+            DeleteScope::Data { .. } | DeleteScope::Dataset { .. } => 0,
+        };
+
         Ok(DeletePreview {
             datasets_to_delete: targets.datasets_to_delete.len(),
             dataset_links_to_delete: targets.links_to_detach.len(),
@@ -155,6 +178,7 @@ impl DeleteService {
             vector_points_to_delete: vector_point_count,
             provenance_nodes_to_delete: prov_node_count,
             provenance_edges_to_delete: prov_edge_count,
+            search_queries_to_delete,
         })
     }
 
@@ -376,6 +400,31 @@ impl DeleteService {
             warnings.extend(sweep_warnings);
         }
 
+        // ------------------------------------------------------------------
+        // Phase 4: Search history cleanup
+        // ------------------------------------------------------------------
+
+        let deleted_search_queries = match &request.scope {
+            DeleteScope::User { owner_id } => self
+                .database
+                .delete_search_history_for_user(*owner_id)
+                .await
+                .map_err(|e| {
+                    DeleteError::Runtime(format!(
+                        "Failed to delete search history for user {owner_id}: {e}"
+                    ))
+                })? as usize,
+            DeleteScope::All => self
+                .database
+                .delete_all_search_history()
+                .await
+                .map_err(|e| {
+                    DeleteError::Runtime(format!("Failed to delete all search history: {e}"))
+                })? as usize,
+            // Data/Dataset scopes: no-op (no dataset_id on queries table)
+            DeleteScope::Data { .. } | DeleteScope::Dataset { .. } => 0,
+        };
+
         Ok(DeleteResult {
             deleted_datasets,
             deleted_dataset_links: deleted_links,
@@ -389,6 +438,7 @@ impl DeleteService {
             deleted_orphan_entity_types,
             deleted_pipeline_runs,
             cleared_pipeline_statuses,
+            deleted_search_queries,
             warnings,
         })
     }
@@ -3015,6 +3065,214 @@ mod tests {
         assert!(
             status_after.is_none(),
             "pipeline run should be cascade-deleted with the dataset"
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // Search history cleanup tests
+    // ------------------------------------------------------------------
+
+    /// Helper: seed search history queries (and one result per query) for a user.
+    async fn seed_search_history(
+        db: &cognee_database::DatabaseConnection,
+        user_id: Uuid,
+        count: usize,
+    ) {
+        for i in 0..count {
+            let query_id = ops::search_history::log_query(
+                db,
+                &format!("test query {i}"),
+                "GraphCompletion",
+                Some(user_id),
+            )
+            .await
+            .unwrap();
+            ops::search_history::log_result(
+                db,
+                query_id,
+                &format!("{{\"result\": {i}}}"),
+                Some(user_id),
+            )
+            .await
+            .unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn user_scoped_delete_clears_search_history() {
+        let (svc, storage, db) = make_service().await;
+        let user_a = Uuid::new_v4();
+        let user_b = Uuid::new_v4();
+
+        // Seed datasets so the user-scoped delete has something to resolve
+        seed_dataset_with_data(&db, &storage, user_a, "sh_user_a_ds").await;
+        seed_dataset_with_data(&db, &storage, user_b, "sh_user_b_ds").await;
+
+        // Seed search history for both users
+        seed_search_history(&db, user_a, 3).await;
+        seed_search_history(&db, user_b, 2).await;
+
+        // Verify initial counts
+        let count_a = ops::search_history::count_queries_by_user(&db, user_a)
+            .await
+            .unwrap();
+        let count_b = ops::search_history::count_queries_by_user(&db, user_b)
+            .await
+            .unwrap();
+        assert_eq!(count_a, 3);
+        assert_eq!(count_b, 2);
+
+        // Delete user A
+        let result = svc
+            .execute(&DeleteRequest {
+                scope: DeleteScope::User { owner_id: user_a },
+                mode: DeleteMode::Soft,
+            })
+            .await
+            .expect("execute should succeed");
+
+        assert_eq!(result.deleted_search_queries, 3);
+
+        // User A's search history should be gone
+        let count_a_after = ops::search_history::count_queries_by_user(&db, user_a)
+            .await
+            .unwrap();
+        assert_eq!(
+            count_a_after, 0,
+            "user A's search history should be deleted"
+        );
+
+        // User B's search history should remain
+        let count_b_after = ops::search_history::count_queries_by_user(&db, user_b)
+            .await
+            .unwrap();
+        assert_eq!(
+            count_b_after, 2,
+            "user B's search history should be untouched"
+        );
+    }
+
+    #[tokio::test]
+    async fn all_scoped_delete_clears_all_search_history() {
+        let (svc, storage, db) = make_service().await;
+        let user_a = Uuid::new_v4();
+        let user_b = Uuid::new_v4();
+
+        seed_dataset_with_data(&db, &storage, user_a, "sh_all_a_ds").await;
+        seed_dataset_with_data(&db, &storage, user_b, "sh_all_b_ds").await;
+
+        seed_search_history(&db, user_a, 3).await;
+        seed_search_history(&db, user_b, 2).await;
+
+        let total_before = ops::search_history::count_all_queries(&db).await.unwrap();
+        assert_eq!(total_before, 5);
+
+        let result = svc
+            .execute(&DeleteRequest {
+                scope: DeleteScope::All,
+                mode: DeleteMode::Soft,
+            })
+            .await
+            .expect("execute should succeed");
+
+        assert_eq!(result.deleted_search_queries, 5);
+
+        let total_after = ops::search_history::count_all_queries(&db).await.unwrap();
+        assert_eq!(
+            total_after, 0,
+            "all search history should be deleted after All-scoped delete"
+        );
+    }
+
+    #[tokio::test]
+    async fn dataset_scoped_delete_does_not_touch_search_history() {
+        let (svc, storage, db) = make_service().await;
+        let owner = Uuid::new_v4();
+
+        seed_dataset_with_data(&db, &storage, owner, "sh_ds_notouch").await;
+        seed_search_history(&db, owner, 4).await;
+
+        let count_before = ops::search_history::count_queries_by_user(&db, owner)
+            .await
+            .unwrap();
+        assert_eq!(count_before, 4);
+
+        let result = svc
+            .execute(&DeleteRequest {
+                scope: DeleteScope::Dataset {
+                    owner_id: owner,
+                    dataset_name: "sh_ds_notouch".to_string(),
+                },
+                mode: DeleteMode::Soft,
+            })
+            .await
+            .expect("execute should succeed");
+
+        assert_eq!(
+            result.deleted_search_queries, 0,
+            "dataset-scoped delete should not touch search history"
+        );
+
+        let count_after = ops::search_history::count_queries_by_user(&db, owner)
+            .await
+            .unwrap();
+        assert_eq!(
+            count_after, 4,
+            "search history should be untouched after dataset deletion"
+        );
+    }
+
+    #[tokio::test]
+    async fn preview_shows_search_history_count() {
+        let (svc, storage, db) = make_service().await;
+        let owner = Uuid::new_v4();
+
+        seed_dataset_with_data(&db, &storage, owner, "sh_preview_ds").await;
+        seed_search_history(&db, owner, 5).await;
+
+        // User-scoped preview
+        let preview = svc
+            .preview(&DeleteRequest {
+                scope: DeleteScope::User { owner_id: owner },
+                mode: DeleteMode::Soft,
+            })
+            .await
+            .expect("preview should succeed");
+
+        assert_eq!(
+            preview.search_queries_to_delete, 5,
+            "preview should show correct search query count for user scope"
+        );
+
+        // All-scoped preview
+        let preview_all = svc
+            .preview(&DeleteRequest {
+                scope: DeleteScope::All,
+                mode: DeleteMode::Soft,
+            })
+            .await
+            .expect("preview should succeed");
+
+        assert_eq!(
+            preview_all.search_queries_to_delete, 5,
+            "preview should show correct search query count for All scope"
+        );
+
+        // Dataset-scoped preview should show 0
+        let preview_ds = svc
+            .preview(&DeleteRequest {
+                scope: DeleteScope::Dataset {
+                    owner_id: owner,
+                    dataset_name: "sh_preview_ds".to_string(),
+                },
+                mode: DeleteMode::Soft,
+            })
+            .await
+            .expect("preview should succeed");
+
+        assert_eq!(
+            preview_ds.search_queries_to_delete, 0,
+            "dataset-scoped preview should show 0 search queries"
         );
     }
 }
