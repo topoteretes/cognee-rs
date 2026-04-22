@@ -1,6 +1,7 @@
 use sea_orm_migration::prelude::*;
 
 mod m20250402_000001_session_qa_entries;
+mod m20250423_000002_session_qa_feedback_fields;
 
 pub struct SessionMigrator;
 
@@ -11,6 +12,9 @@ impl MigratorTrait for SessionMigrator {
     }
 
     fn migrations() -> Vec<Box<dyn MigrationTrait>> {
-        vec![Box::new(m20250402_000001_session_qa_entries::Migration)]
+        vec![
+            Box::new(m20250402_000001_session_qa_entries::Migration),
+            Box::new(m20250423_000002_session_qa_feedback_fields::Migration),
+        ]
     }
 }

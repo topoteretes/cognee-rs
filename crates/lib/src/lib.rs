@@ -96,6 +96,8 @@ pub mod ontology {
     pub use cognee_ontology::*;
 }
 
+pub mod session;
+
 pub mod component_manager;
 pub mod config;
 pub mod context;
@@ -142,6 +144,7 @@ pub use cognee_graph;
 pub use cognee_llm;
 pub use cognee_models;
 pub use cognee_ontology;
+pub use cognee_session;
 pub use cognee_storage;
 pub use cognee_vector;
 pub use uuid;

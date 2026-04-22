@@ -3606,6 +3606,33 @@ mod tests {
             *self.pruned.lock().expect("lock poison is unrecoverable") = true;
             Ok(())
         }
+
+        async fn update_qa_entry(
+            &self,
+            _session_id: &str,
+            _user_id: Option<&str>,
+            _qa_id: &str,
+            _updates: cognee_session::SessionQAUpdate,
+        ) -> Result<bool, cognee_session::SessionError> {
+            Ok(true)
+        }
+
+        async fn get_graph_context(
+            &self,
+            _session_id: &str,
+            _user_id: Option<&str>,
+        ) -> Result<Option<String>, cognee_session::SessionError> {
+            Ok(None)
+        }
+
+        async fn set_graph_context(
+            &self,
+            _session_id: &str,
+            _user_id: Option<&str>,
+            _context: &str,
+        ) -> Result<(), cognee_session::SessionError> {
+            Ok(())
+        }
     }
 
     #[tokio::test]

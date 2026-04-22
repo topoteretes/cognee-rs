@@ -1,7 +1,28 @@
+use std::collections::HashMap;
+
 use async_trait::async_trait;
 
 use crate::error::SessionError;
-use crate::types::SessionQAEntry;
+use crate::types::{SessionQAEntry, UsedGraphElementIds};
+
+/// Partial update DTO for a QA entry.
+///
+/// - Outer `None` means "leave field unchanged".
+/// - `Some(None)` means "clear the field".
+/// - `Some(Some(value))` means "set the field to this value".
+///
+/// For non-optional fields (`question`, `answer`) the outer `Option` controls
+/// whether an update is applied.
+#[derive(Debug, Clone, Default)]
+pub struct SessionQAUpdate {
+    pub question: Option<String>,
+    pub answer: Option<String>,
+    pub context: Option<Option<String>>,
+    pub feedback_text: Option<Option<String>>,
+    pub feedback_score: Option<Option<i32>>,
+    pub used_graph_element_ids: Option<Option<UsedGraphElementIds>>,
+    pub memify_metadata: Option<Option<HashMap<String, bool>>>,
+}
 
 /// Abstraction over session Q&A storage backends (SQLite, Redis, filesystem, etc.).
 ///
@@ -51,4 +72,29 @@ pub trait SessionStore: Send + Sync {
     /// Delete ALL session data across all users and sessions.
     /// Equivalent to Python's `CacheDBInterface.prune()`.
     async fn prune(&self) -> Result<(), SessionError>;
+
+    /// Update fields on a QA entry. Only non-`None` fields in `updates` are applied.
+    /// Returns `true` if the entry was found and updated.
+    async fn update_qa_entry(
+        &self,
+        session_id: &str,
+        user_id: Option<&str>,
+        qa_id: &str,
+        updates: SessionQAUpdate,
+    ) -> Result<bool, SessionError>;
+
+    /// Retrieve the graph knowledge snapshot for a session, or `None`.
+    async fn get_graph_context(
+        &self,
+        session_id: &str,
+        user_id: Option<&str>,
+    ) -> Result<Option<String>, SessionError>;
+
+    /// Store (or overwrite) the graph knowledge snapshot for a session.
+    async fn set_graph_context(
+        &self,
+        session_id: &str,
+        user_id: Option<&str>,
+        context: &str,
+    ) -> Result<(), SessionError>;
 }

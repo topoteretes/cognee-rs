@@ -272,3 +272,219 @@ async fn session_manager_save_and_load_round_trip() {
     assert_eq!(messages[2].content, "q2");
     assert_eq!(messages[3].content, "a2");
 }
+
+// -------------------------------------------------------------------------
+// Tests for gap-6 session management features
+// -------------------------------------------------------------------------
+
+#[tokio::test]
+async fn new_entries_have_no_feedback_fields() {
+    let store = setup_store().await;
+
+    store
+        .create_qa_entry("s1", None, "q1?", "a1", None)
+        .await
+        .unwrap();
+
+    let entries = store.get_all_qa_entries("s1", None).await.unwrap();
+    assert_eq!(entries.len(), 1);
+    assert!(entries[0].feedback_text.is_none());
+    assert!(entries[0].feedback_score.is_none());
+    assert!(entries[0].used_graph_element_ids.is_none());
+    assert!(entries[0].memify_metadata.is_none());
+}
+
+#[tokio::test]
+async fn update_qa_entry_sets_feedback() {
+    use cognee_session::SessionQAUpdate;
+
+    let store = setup_store().await;
+
+    let qa_id = store
+        .create_qa_entry("s1", None, "q1?", "a1", None)
+        .await
+        .unwrap();
+
+    let updated = store
+        .update_qa_entry(
+            "s1",
+            None,
+            &qa_id,
+            SessionQAUpdate {
+                feedback_text: Some(Some("Excellent".to_string())),
+                feedback_score: Some(Some(5)),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert!(updated);
+
+    let entries = store.get_all_qa_entries("s1", None).await.unwrap();
+    assert_eq!(entries[0].feedback_text.as_deref(), Some("Excellent"));
+    assert_eq!(entries[0].feedback_score, Some(5));
+}
+
+#[tokio::test]
+async fn update_qa_entry_clears_feedback() {
+    use cognee_session::SessionQAUpdate;
+
+    let store = setup_store().await;
+
+    let qa_id = store
+        .create_qa_entry("s1", None, "q1?", "a1", None)
+        .await
+        .unwrap();
+
+    // Set
+    store
+        .update_qa_entry(
+            "s1",
+            None,
+            &qa_id,
+            SessionQAUpdate {
+                feedback_text: Some(Some("Good".to_string())),
+                feedback_score: Some(Some(4)),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    // Clear
+    store
+        .update_qa_entry(
+            "s1",
+            None,
+            &qa_id,
+            SessionQAUpdate {
+                feedback_text: Some(None),
+                feedback_score: Some(None),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    let entries = store.get_all_qa_entries("s1", None).await.unwrap();
+    assert!(entries[0].feedback_text.is_none());
+    assert!(entries[0].feedback_score.is_none());
+}
+
+#[tokio::test]
+async fn update_qa_entry_not_found() {
+    use cognee_session::SessionQAUpdate;
+
+    let store = setup_store().await;
+
+    let result = store
+        .update_qa_entry("s1", None, "nonexistent", SessionQAUpdate::default())
+        .await
+        .unwrap();
+    assert!(!result);
+}
+
+#[tokio::test]
+async fn graph_context_round_trip() {
+    let store = setup_store().await;
+
+    // Initially no context
+    let ctx = store.get_graph_context("s1", None).await.unwrap();
+    assert!(ctx.is_none());
+
+    // Set
+    store
+        .set_graph_context("s1", None, "Some graph data")
+        .await
+        .unwrap();
+
+    let ctx = store.get_graph_context("s1", None).await.unwrap();
+    assert_eq!(ctx.as_deref(), Some("Some graph data"));
+
+    // Overwrite
+    store
+        .set_graph_context("s1", None, "Updated graph data")
+        .await
+        .unwrap();
+
+    let ctx = store.get_graph_context("s1", None).await.unwrap();
+    assert_eq!(ctx.as_deref(), Some("Updated graph data"));
+}
+
+#[tokio::test]
+async fn graph_context_isolated_by_user() {
+    let store = setup_store().await;
+
+    store
+        .set_graph_context("s1", Some("user-1"), "context for user 1")
+        .await
+        .unwrap();
+    store
+        .set_graph_context("s1", Some("user-2"), "context for user 2")
+        .await
+        .unwrap();
+
+    let ctx1 = store.get_graph_context("s1", Some("user-1")).await.unwrap();
+    let ctx2 = store.get_graph_context("s1", Some("user-2")).await.unwrap();
+
+    assert_eq!(ctx1.as_deref(), Some("context for user 1"));
+    assert_eq!(ctx2.as_deref(), Some("context for user 2"));
+}
+
+#[tokio::test]
+async fn delete_session_also_removes_graph_context() {
+    let store = setup_store().await;
+
+    store
+        .create_qa_entry("s1", None, "q", "a", None)
+        .await
+        .unwrap();
+    store
+        .set_graph_context("s1", None, "some context")
+        .await
+        .unwrap();
+
+    store.delete_session("s1", None).await.unwrap();
+
+    let ctx = store.get_graph_context("s1", None).await.unwrap();
+    assert!(ctx.is_none());
+}
+
+#[tokio::test]
+async fn session_manager_add_and_delete_feedback() {
+    let store = setup_store().await;
+    let sm = SessionManager::new(store as Arc<dyn SessionStore>);
+
+    let qa_id = sm
+        .save_qa(Some("s1"), None, "q1", "a1", None)
+        .await
+        .unwrap();
+
+    // Add feedback
+    let ok = sm
+        .add_feedback(Some("s1"), None, &qa_id, Some("Great!"), Some(5))
+        .await
+        .unwrap();
+    assert!(ok);
+
+    // Delete feedback
+    let ok = sm.delete_feedback(Some("s1"), None, &qa_id).await.unwrap();
+    assert!(ok);
+}
+
+#[tokio::test]
+async fn session_manager_graph_context_round_trip() {
+    let store = setup_store().await;
+    let sm = SessionManager::new(store as Arc<dyn SessionStore>);
+
+    // No context initially
+    let ctx = sm.get_graph_context(Some("s1"), None).await.unwrap();
+    assert!(ctx.is_none());
+
+    sm.set_graph_context(Some("s1"), None, "knowledge snapshot")
+        .await
+        .unwrap();
+
+    let ctx = sm.get_graph_context(Some("s1"), None).await.unwrap();
+    assert_eq!(ctx.as_deref(), Some("knowledge snapshot"));
+}
