@@ -34,8 +34,7 @@ fn require_env(name: &str) -> String {
 }
 
 fn get_embedding_model_dir() -> String {
-    std::env::var("COGNEE_TEST_MODEL_DIR")
-        .unwrap_or_else(|_| "target/models".to_string())
+    std::env::var("COGNEE_TEST_MODEL_DIR").unwrap_or_else(|_| "target/models".to_string())
 }
 
 fn is_non_empty(response: &SearchResponse) -> bool {
@@ -61,7 +60,11 @@ fn response_text(response: &SearchResponse) -> String {
             .collect::<Vec<_>>()
             .join(" "),
         SearchOutput::GraphQueryRows(rows) => format!("{rows:?}"),
-        SearchOutput::Rules(rules) => rules.iter().map(|r| r.text.clone()).collect::<Vec<_>>().join(" "),
+        SearchOutput::Rules(rules) => rules
+            .iter()
+            .map(|r| r.text.clone())
+            .collect::<Vec<_>>()
+            .join(" "),
         SearchOutput::Ack { .. } => String::new(),
         SearchOutput::Structured(value) => value.to_string(),
     }
@@ -182,11 +185,10 @@ async fn test_search_returns_empty_for_deleted_doc_and_non_empty_for_remaining()
         .expect("ingest Quantum");
     assert_eq!(quantum_data.len(), 1);
 
-    let dataset =
-        ops::datasets::get_dataset_by_name(&database, "search_test", owner_id, None)
-            .await
-            .expect("get dataset")
-            .expect("dataset should exist");
+    let dataset = ops::datasets::get_dataset_by_name(&database, "search_test", owner_id, None)
+        .await
+        .expect("get dataset")
+        .expect("dataset should exist");
 
     // ── Step 2: Cognify both documents together ─────────────────────────
     let all_items = [germany_data, quantum_data].concat();

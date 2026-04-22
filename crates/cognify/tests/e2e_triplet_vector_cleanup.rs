@@ -296,11 +296,10 @@ async fn test_triplet_vector_cleanup_after_data_delete() {
     );
 
     // ds_quantum should still be intact in the DB
-    let ds_q_after =
-        ops::datasets::get_dataset_by_name(&database, "ds_quantum", owner_id, None)
-            .await
-            .expect("get ds_quantum after delete")
-            .expect("ds_quantum should still exist");
+    let ds_q_after = ops::datasets::get_dataset_by_name(&database, "ds_quantum", owner_id, None)
+        .await
+        .expect("get ds_quantum after delete")
+        .expect("ds_quantum should still exist");
     let q_data = ops::datasets::get_dataset_data(&database, ds_q_after.id)
         .await
         .expect("get ds_quantum data");

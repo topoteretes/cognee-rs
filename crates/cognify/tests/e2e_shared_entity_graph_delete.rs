@@ -43,9 +43,7 @@ through trial and error in complex environments.";
 fn extract_node_names(nodes: &[(String, cognee_graph::NodeData)]) -> HashSet<String> {
     nodes
         .iter()
-        .filter_map(|(_id, props)| {
-            props.get("name")?.as_str().map(|s| s.to_lowercase())
-        })
+        .filter_map(|(_id, props)| props.get("name")?.as_str().map(|s| s.to_lowercase()))
         .collect()
 }
 
