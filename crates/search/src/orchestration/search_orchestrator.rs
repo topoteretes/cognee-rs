@@ -211,25 +211,35 @@ impl SearchOrchestrator {
             let ctx = retriever.get_context(&request.query_text, &params).await?;
 
             if self.enable_access_tracking && !ctx.is_empty() {
-                // The orchestrator holds a `SearchHistoryDb`, not an `IngestDb`.
-                // Full persistence requires wiring an `IngestDb` separately.
-                // For now, log the accessed data IDs at debug level so the
-                // infrastructure is in place and can be extended later.
-                let accessed_ids: Vec<String> = ctx
-                    .iter()
-                    .filter_map(|item| {
-                        item.payload
-                            .get("data_id")
-                            .and_then(|v| v.as_str())
-                            .map(String::from)
-                    })
-                    .collect();
-                if !accessed_ids.is_empty() {
-                    tracing::debug!(
-                        data_ids = ?accessed_ids,
-                        "access tracking: updating last_accessed for {} data records",
-                        accessed_ids.len()
-                    );
+                if let Some(resolver) = &self.dataset_resolver {
+                    if let Err(e) =
+                        crate::utils::update_node_access_timestamps(resolver.as_ref(), &ctx).await
+                    {
+                        tracing::warn!(
+                            error = %e,
+                            "access tracking: failed to persist last_accessed timestamps"
+                        );
+                    }
+                } else {
+                    // No IngestDb wired — log the accessed data IDs at debug
+                    // level so operators can see the tracking would have fired.
+                    let accessed_ids: Vec<String> = ctx
+                        .iter()
+                        .filter_map(|item| {
+                            item.payload
+                                .get("data_id")
+                                .and_then(|v| v.as_str())
+                                .map(String::from)
+                        })
+                        .collect();
+                    if !accessed_ids.is_empty() {
+                        tracing::debug!(
+                            data_ids = ?accessed_ids,
+                            "access tracking: would update last_accessed for {} data records \
+                             but no IngestDb resolver is wired",
+                            accessed_ids.len()
+                        );
+                    }
                 }
             }
 

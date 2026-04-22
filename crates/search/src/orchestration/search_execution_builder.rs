@@ -264,7 +264,11 @@ impl SearchBuilder {
 
         let mut orchestrator = SearchOrchestrator::new(registry).with_database(self.database);
         if let Some(resolver) = self.dataset_resolver {
-            orchestrator = orchestrator.with_dataset_resolver(resolver);
+            // Auto-enable access tracking when an IngestDb resolver is available,
+            // so last_accessed timestamps on Data records are updated on every search.
+            orchestrator = orchestrator
+                .with_dataset_resolver(resolver)
+                .with_access_tracking();
         }
         if let Some(session_manager) = self.session_manager {
             orchestrator = orchestrator.with_session_manager(session_manager);
