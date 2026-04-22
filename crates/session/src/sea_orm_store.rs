@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -8,8 +9,8 @@ use uuid::Uuid;
 use crate::error::SessionError;
 use crate::migrator::SessionMigrator;
 use crate::sea_orm_backend::{entity, ops};
-use crate::session_store::SessionStore;
-use crate::types::SessionQAEntry;
+use crate::session_store::{SessionQAUpdate, SessionStore};
+use crate::types::{SessionQAEntry, UsedGraphElementIds};
 
 /// SeaORM-backed session store using the `session_qa_entries` table.
 ///
@@ -31,6 +32,15 @@ impl SeaOrmSessionStore {
 }
 
 fn model_to_entry(m: entity::Model) -> SessionQAEntry {
+    let used_graph_element_ids = m
+        .used_graph_element_ids
+        .as_deref()
+        .and_then(|s| serde_json::from_str::<UsedGraphElementIds>(s).ok());
+    let memify_metadata = m
+        .memify_metadata
+        .as_deref()
+        .and_then(|s| serde_json::from_str::<HashMap<String, bool>>(s).ok());
+
     SessionQAEntry {
         id: Uuid::parse_str(&m.id).unwrap_or_default(),
         session_id: m.session_id,
@@ -39,6 +49,10 @@ fn model_to_entry(m: entity::Model) -> SessionQAEntry {
         answer: m.answer,
         context: m.context,
         created_at: m.created_at,
+        feedback_text: m.feedback_text,
+        feedback_score: m.feedback_score,
+        used_graph_element_ids,
+        memify_metadata,
     }
 }
 
@@ -97,5 +111,32 @@ impl SessionStore for SeaOrmSessionStore {
 
     async fn prune(&self) -> Result<(), SessionError> {
         ops::delete_all(&self.db).await
+    }
+
+    async fn update_qa_entry(
+        &self,
+        session_id: &str,
+        user_id: Option<&str>,
+        qa_id: &str,
+        updates: SessionQAUpdate,
+    ) -> Result<bool, SessionError> {
+        ops::update_qa_entry(&self.db, session_id, user_id, qa_id, updates).await
+    }
+
+    async fn get_graph_context(
+        &self,
+        session_id: &str,
+        user_id: Option<&str>,
+    ) -> Result<Option<String>, SessionError> {
+        ops::get_graph_context(&self.db, session_id, user_id).await
+    }
+
+    async fn set_graph_context(
+        &self,
+        session_id: &str,
+        user_id: Option<&str>,
+        context: &str,
+    ) -> Result<(), SessionError> {
+        ops::set_graph_context(&self.db, session_id, user_id, context).await
     }
 }

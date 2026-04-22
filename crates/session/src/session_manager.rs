@@ -1,10 +1,11 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use cognee_llm::Message;
 use tracing::debug;
 
 use crate::error::SessionError;
-use crate::session_store::SessionStore;
+use crate::session_store::{SessionQAUpdate, SessionStore};
 use crate::types::SessionQAEntry;
 
 const DEFAULT_SESSION_ID: &str = "default_session";
@@ -118,7 +119,18 @@ impl SessionManager {
 
     /// Format Q&A entries as a human-readable string (for debugging / compatibility
     /// with Python's `SessionManager.format_entries`).
+    ///
+    /// When `include_context` is `true`, the context field is included between
+    /// QUESTION and ANSWER (matching the Python `include_context` parameter).
     pub fn format_entries(entries: &[SessionQAEntry]) -> String {
+        Self::format_entries_with_context(entries, false)
+    }
+
+    /// Format Q&A entries, optionally including context.
+    pub fn format_entries_with_context(
+        entries: &[SessionQAEntry],
+        include_context: bool,
+    ) -> String {
         if entries.is_empty() {
             return String::new();
         }
@@ -126,9 +138,106 @@ impl SessionManager {
         for entry in entries {
             lines.push(format!("[{}]\n", entry.created_at.to_rfc3339()));
             lines.push(format!("QUESTION: {}\n", entry.question));
+            if include_context && let Some(ref ctx) = entry.context {
+                lines.push(format!("CONTEXT: {ctx}\n"));
+            }
             lines.push(format!("ANSWER: {}\n\n", entry.answer));
         }
         lines.concat()
+    }
+
+    /// Update arbitrary fields on a QA entry.
+    pub async fn update_qa(
+        &self,
+        session_id: Option<&str>,
+        user_id: Option<&str>,
+        qa_id: &str,
+        updates: SessionQAUpdate,
+    ) -> Result<bool, SessionError> {
+        let resolved_id = self.resolve_session_id(session_id);
+        self.store
+            .update_qa_entry(resolved_id, user_id, qa_id, updates)
+            .await
+    }
+
+    /// Add or update feedback on a QA entry (convenience over `update_qa`).
+    ///
+    /// Resets `memify_metadata.feedback_weights_applied` to `false` so that the
+    /// memify pipeline will re-apply weights on the next run.
+    pub async fn add_feedback(
+        &self,
+        session_id: Option<&str>,
+        user_id: Option<&str>,
+        qa_id: &str,
+        feedback_text: Option<&str>,
+        feedback_score: Option<i32>,
+    ) -> Result<bool, SessionError> {
+        if let Some(score) = feedback_score
+            && !(1..=5).contains(&score)
+        {
+            return Err(SessionError::InvalidParameter(format!(
+                "feedback_score must be between 1 and 5, got {score}"
+            )));
+        }
+
+        let mut memify = HashMap::new();
+        memify.insert("feedback_weights_applied".to_string(), false);
+
+        self.update_qa(
+            session_id,
+            user_id,
+            qa_id,
+            SessionQAUpdate {
+                feedback_text: Some(feedback_text.map(|s| s.to_string())),
+                feedback_score: Some(feedback_score),
+                memify_metadata: Some(Some(memify)),
+                ..Default::default()
+            },
+        )
+        .await
+    }
+
+    /// Clear feedback from a QA entry.
+    pub async fn delete_feedback(
+        &self,
+        session_id: Option<&str>,
+        user_id: Option<&str>,
+        qa_id: &str,
+    ) -> Result<bool, SessionError> {
+        self.update_qa(
+            session_id,
+            user_id,
+            qa_id,
+            SessionQAUpdate {
+                feedback_text: Some(None),
+                feedback_score: Some(None),
+                ..Default::default()
+            },
+        )
+        .await
+    }
+
+    /// Retrieve graph knowledge snapshot for a session.
+    pub async fn get_graph_context(
+        &self,
+        session_id: Option<&str>,
+        user_id: Option<&str>,
+    ) -> Result<Option<String>, SessionError> {
+        let resolved_id = self.resolve_session_id(session_id);
+        self.store.get_graph_context(resolved_id, user_id).await
+    }
+
+    /// Store graph knowledge snapshot for a session.
+    pub async fn set_graph_context(
+        &self,
+        session_id: Option<&str>,
+        user_id: Option<&str>,
+        context: &str,
+    ) -> Result<(), SessionError> {
+        let resolved_id = self.resolve_session_id(session_id);
+        self.store
+            .set_graph_context(resolved_id, user_id, context)
+            .await
     }
 }
 
@@ -146,27 +255,27 @@ fn entries_to_messages(entries: &[SessionQAEntry]) -> Vec<Message> {
 mod tests {
     use super::*;
 
+    fn make_entry(question: &str, answer: &str) -> SessionQAEntry {
+        SessionQAEntry {
+            id: uuid::Uuid::new_v4(),
+            session_id: "s1".to_string(),
+            user_id: None,
+            question: question.to_string(),
+            answer: answer.to_string(),
+            context: None,
+            created_at: chrono::Utc::now(),
+            feedback_text: None,
+            feedback_score: None,
+            used_graph_element_ids: None,
+            memify_metadata: None,
+        }
+    }
+
     #[test]
     fn entries_to_messages_alternates_roles() {
         let entries = vec![
-            SessionQAEntry {
-                id: uuid::Uuid::new_v4(),
-                session_id: "s1".to_string(),
-                user_id: None,
-                question: "What is Rust?".to_string(),
-                answer: "A systems programming language.".to_string(),
-                context: None,
-                created_at: chrono::Utc::now(),
-            },
-            SessionQAEntry {
-                id: uuid::Uuid::new_v4(),
-                session_id: "s1".to_string(),
-                user_id: None,
-                question: "Tell me more.".to_string(),
-                answer: "It focuses on safety and performance.".to_string(),
-                context: None,
-                created_at: chrono::Utc::now(),
-            },
+            make_entry("What is Rust?", "A systems programming language."),
+            make_entry("Tell me more.", "It focuses on safety and performance."),
         ];
 
         let messages = entries_to_messages(&entries);
@@ -181,15 +290,7 @@ mod tests {
 
     #[test]
     fn format_entries_produces_expected_output() {
-        let entries = vec![SessionQAEntry {
-            id: uuid::Uuid::new_v4(),
-            session_id: "s1".to_string(),
-            user_id: None,
-            question: "Hello?".to_string(),
-            answer: "Hi there!".to_string(),
-            context: None,
-            created_at: chrono::Utc::now(),
-        }];
+        let entries = vec![make_entry("Hello?", "Hi there!")];
 
         let formatted = SessionManager::format_entries(&entries);
         assert!(formatted.contains("Previous conversation:"));
@@ -200,5 +301,25 @@ mod tests {
     #[test]
     fn format_entries_empty_returns_empty_string() {
         assert_eq!(SessionManager::format_entries(&[]), "");
+    }
+
+    #[test]
+    fn format_entries_with_context_includes_context() {
+        let mut entry = make_entry("Hello?", "Hi there!");
+        entry.context = Some("Some context here".to_string());
+        let entries = vec![entry];
+
+        let formatted = SessionManager::format_entries_with_context(&entries, true);
+        assert!(formatted.contains("CONTEXT: Some context here"));
+    }
+
+    #[test]
+    fn format_entries_with_context_false_omits_context() {
+        let mut entry = make_entry("Hello?", "Hi there!");
+        entry.context = Some("Some context here".to_string());
+        let entries = vec![entry];
+
+        let formatted = SessionManager::format_entries_with_context(&entries, false);
+        assert!(!formatted.contains("CONTEXT:"));
     }
 }
