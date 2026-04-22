@@ -102,7 +102,7 @@ pub mod context;
 pub mod error;
 
 pub use component_manager::ComponentManager;
-pub use config::Settings;
+pub use config::{ConfigError, ConfigManager, Settings};
 pub use context::PipelineContext;
 pub use error::ComponentError;
 

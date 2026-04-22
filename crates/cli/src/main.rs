@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use clap::Parser;
 use cli::{Cli, Commands};
-use cognee_lib::ComponentManager;
+use cognee_lib::{ComponentManager, ConfigManager};
 use commands::{add, add_and_cognify, cognify, config, delete, memify, run_sequence, search};
 use config_store::load_settings;
 use error::{CliError, ExitCode};
@@ -20,7 +20,8 @@ fn run() -> Result<(), CliError> {
     // Load JSON config then overlay env vars (.env + shell env).
     // Priority: defaults < JSON config < env vars.
     let settings = load_settings()?;
-    let cm = Arc::new(ComponentManager::new(settings));
+    let config = ConfigManager::new(settings);
+    let cm = Arc::new(ComponentManager::new(config));
 
     match cli.command {
         Commands::Add(args) => add::run(args, Arc::clone(&cm)),

@@ -1,5 +1,9 @@
 //! Shared configuration types for cognee-rust.
 
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, RwLock, RwLockReadGuard};
+
 use serde::{Deserialize, Serialize};
 
 pub const DEFAULT_SYSTEM_PROMPT_PATH: &str = "answer_simple_question.txt";
@@ -75,6 +79,16 @@ pub struct Settings {
     pub embedding_dimensions: u32,
     pub embedding_max_sequence_length: u32,
     pub embedding_batch_size: u32,
+
+    /// Embedding provider backend (e.g. `"onnx"`, `"openai"`, `"ollama"`, `"mock"`).
+    /// Maps to `EMBEDDING_PROVIDER` env var. Used by `ComponentManager::init_embedding_engine()`
+    /// to construct `EmbeddingConfig` from Settings instead of reading env vars directly.
+    pub embedding_provider: String,
+    /// Embedding API endpoint URL (e.g. `https://api.openai.com/v1/embeddings`).
+    /// Maps to `EMBEDDING_ENDPOINT` env var.
+    pub embedding_endpoint: String,
+    /// Embedding API key. Maps to `EMBEDDING_API_KEY` env var (fallback: `LLM_API_KEY`).
+    pub embedding_api_key: String,
 
     pub ontology_file_path: String,
     /// Ontology resolver backend. Currently always resolved to `RdfLibOntologyResolver`
@@ -233,6 +247,15 @@ impl Settings {
         }
 
         // -- Embedding -----------------------------------------------------------
+        if let Some(v) = str_var("EMBEDDING_PROVIDER") {
+            self.embedding_provider = v;
+        }
+        if let Some(v) = str_var("EMBEDDING_ENDPOINT") {
+            self.embedding_endpoint = v;
+        }
+        if let Some(v) = str_alias("EMBEDDING_API_KEY", "LLM_API_KEY") {
+            self.embedding_api_key = v;
+        }
         if let Some(v) = str_var("EMBEDDING_MODEL") {
             self.embedding_model_name = v;
         }
@@ -373,10 +396,475 @@ impl Default for Settings {
             embedding_max_sequence_length: 512,
             embedding_batch_size: 32,
 
+            embedding_provider: "onnx".to_string(),
+            embedding_endpoint: String::new(),
+            embedding_api_key: String::new(),
+
             ontology_file_path: String::new(),
             ontology_resolver: "rdflib".to_string(),
             ontology_matching_strategy: "fuzzy".to_string(),
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ConfigError
+// ---------------------------------------------------------------------------
+
+/// Errors returned by [`ConfigManager`] setter methods.
+#[derive(Debug, thiserror::Error)]
+pub enum ConfigError {
+    #[error("Unknown config key: {0}")]
+    UnknownKey(String),
+    #[error("Type mismatch for key '{key}': {reason}")]
+    TypeMismatch { key: String, reason: String },
+}
+
+// ---------------------------------------------------------------------------
+// ConfigManager
+// ---------------------------------------------------------------------------
+
+/// Thread-safe mutable configuration manager.
+///
+/// Wraps `Settings` in `Arc<RwLock<>>` to allow runtime mutation from
+/// setter methods.  Tracks a monotonically increasing version counter
+/// so that [`crate::ComponentManager`] can detect stale cached components
+/// and reinitialize them.
+///
+/// # Example
+/// ```
+/// use cognee_lib::config::{ConfigManager, Settings};
+///
+/// let cfg = ConfigManager::new(Settings::default());
+/// assert_eq!(cfg.version(), 0);
+///
+/// cfg.set_llm_model("gpt-4o");
+/// assert_eq!(cfg.version(), 1);
+/// assert_eq!(cfg.read().llm_model, "gpt-4o");
+/// ```
+pub struct ConfigManager {
+    inner: Arc<RwLock<Settings>>,
+    version: Arc<AtomicU64>,
+}
+
+impl ConfigManager {
+    /// Create a new `ConfigManager` wrapping the given settings.
+    pub fn new(settings: Settings) -> Self {
+        Self {
+            inner: Arc::new(RwLock::new(settings)),
+            version: Arc::new(AtomicU64::new(0)),
+        }
+    }
+
+    /// Convenience constructor: `Settings::load_from_env()` + wrap.
+    pub fn from_env() -> Self {
+        Self::new(Settings::load_from_env())
+    }
+
+    /// Obtain a read-lock on the current settings.
+    pub fn read(&self) -> RwLockReadGuard<'_, Settings> {
+        self.inner.read().expect("lock poison is unrecoverable") // lock poison is unrecoverable
+    }
+
+    /// Current config version (monotonically increasing on each mutation).
+    pub fn version(&self) -> u64 {
+        self.version.load(Ordering::Acquire)
+    }
+
+    /// Bump the version after any mutation.
+    fn bump_version(&self) {
+        self.version.fetch_add(1, Ordering::Release);
+    }
+}
+
+impl Clone for ConfigManager {
+    fn clone(&self) -> Self {
+        Self {
+            inner: Arc::clone(&self.inner),
+            version: Arc::clone(&self.version),
+        }
+    }
+}
+
+// -- Individual setter methods -----------------------------------------------
+
+impl ConfigManager {
+    // -- LLM -----------------------------------------------------------------
+
+    pub fn set_llm_provider(&self, provider: &str) {
+        let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
+        s.llm_provider = provider.to_string();
+        drop(s);
+        self.bump_version();
+    }
+
+    pub fn set_llm_model(&self, model: &str) {
+        let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
+        s.llm_model = model.to_string();
+        drop(s);
+        self.bump_version();
+    }
+
+    pub fn set_llm_api_key(&self, key: &str) {
+        let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
+        s.llm_api_key = key.to_string();
+        drop(s);
+        self.bump_version();
+    }
+
+    pub fn set_llm_endpoint(&self, endpoint: &str) {
+        let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
+        s.llm_endpoint = endpoint.to_string();
+        drop(s);
+        self.bump_version();
+    }
+
+    // -- Embedding -----------------------------------------------------------
+
+    pub fn set_embedding_provider(&self, provider: &str) {
+        let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
+        s.embedding_provider = provider.to_string();
+        drop(s);
+        self.bump_version();
+    }
+
+    pub fn set_embedding_model(&self, model: &str) {
+        let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
+        s.embedding_model_name = model.to_string();
+        drop(s);
+        self.bump_version();
+    }
+
+    pub fn set_embedding_dimensions(&self, dims: u32) {
+        let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
+        s.embedding_dimensions = dims;
+        drop(s);
+        self.bump_version();
+    }
+
+    pub fn set_embedding_endpoint(&self, endpoint: &str) {
+        let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
+        s.embedding_endpoint = endpoint.to_string();
+        drop(s);
+        self.bump_version();
+    }
+
+    pub fn set_embedding_api_key(&self, key: &str) {
+        let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
+        s.embedding_api_key = key.to_string();
+        drop(s);
+        self.bump_version();
+    }
+
+    // -- Vector DB -----------------------------------------------------------
+
+    pub fn set_vector_db_provider(&self, provider: &str) {
+        let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
+        s.vector_db_provider = provider.to_string();
+        drop(s);
+        self.bump_version();
+    }
+
+    pub fn set_vector_db_url(&self, url: &str) {
+        let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
+        s.vector_db_url = url.to_string();
+        drop(s);
+        self.bump_version();
+    }
+
+    pub fn set_vector_db_key(&self, key: &str) {
+        let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
+        s.vector_db_key = key.to_string();
+        drop(s);
+        self.bump_version();
+    }
+
+    // -- Graph DB ------------------------------------------------------------
+
+    pub fn set_graph_database_provider(&self, provider: &str) {
+        let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
+        s.graph_database_provider = provider.to_string();
+        drop(s);
+        self.bump_version();
+    }
+
+    pub fn set_graph_model(&self, model: &str) {
+        let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
+        s.graph_model = model.to_string();
+        drop(s);
+        self.bump_version();
+    }
+
+    // -- Chunking ------------------------------------------------------------
+
+    pub fn set_chunk_strategy(&self, strategy: &str) {
+        let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
+        s.chunk_strategy = strategy.to_string();
+        drop(s);
+        self.bump_version();
+    }
+
+    pub fn set_chunk_engine(&self, engine: &str) {
+        let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
+        s.chunk_engine = engine.to_string();
+        drop(s);
+        self.bump_version();
+    }
+
+    pub fn set_chunk_size(&self, size: u32) {
+        let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
+        s.chunk_size = size;
+        drop(s);
+        self.bump_version();
+    }
+
+    pub fn set_chunk_overlap(&self, overlap: u32) {
+        let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
+        s.chunk_overlap = overlap;
+        drop(s);
+        self.bump_version();
+    }
+
+    // -- System paths --------------------------------------------------------
+
+    pub fn set_data_root_directory(&self, path: &str) {
+        let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
+        s.data_root_directory = path.to_string();
+        drop(s);
+        self.bump_version();
+    }
+
+    /// Set system root directory and cascade derived path updates.
+    ///
+    /// Matches Python `config.system_root_directory()` (config.py lines 41-67):
+    /// - `graph_file_path` updated if it was under the old system root
+    /// - `vector_db_url` updated if it was under the old system root
+    pub fn set_system_root_directory(&self, path: &str) {
+        let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
+        let old_root = s.system_root_directory.clone();
+        s.system_root_directory = path.to_string();
+
+        // Cascade graph_file_path
+        if s.graph_file_path.is_empty() || s.graph_file_path.starts_with(&old_root) {
+            let suffix = if s.graph_file_path.is_empty() {
+                "/graph".to_string()
+            } else {
+                s.graph_file_path[old_root.len()..].to_string()
+            };
+            s.graph_file_path = format!("{path}{suffix}");
+        }
+
+        // Cascade vector_db_url (only if it was using the default system root path)
+        if s.vector_db_url.is_empty() || s.vector_db_url.starts_with(&old_root) {
+            let suffix = if s.vector_db_url.is_empty() {
+                "/vectors".to_string()
+            } else {
+                s.vector_db_url[old_root.len()..].to_string()
+            };
+            s.vector_db_url = format!("{path}{suffix}");
+        }
+
+        drop(s);
+        self.bump_version();
+    }
+
+    pub fn set_monitoring_tool(&self, tool: &str) {
+        let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
+        s.monitoring_tool = tool.to_string();
+        drop(s);
+        self.bump_version();
+    }
+
+    pub fn set_classification_model(&self, model: &str) {
+        let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
+        s.classification_model = model.to_string();
+        drop(s);
+        self.bump_version();
+    }
+
+    pub fn set_summarization_model(&self, model: &str) {
+        let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
+        s.summarization_model = model.to_string();
+        drop(s);
+        self.bump_version();
+    }
+}
+
+// -- Bulk setters and generic dispatch ---------------------------------------
+
+/// Extract a `String` from a JSON value, or return a type-mismatch error.
+fn as_string(key: &str, value: &serde_json::Value) -> Result<String, ConfigError> {
+    value
+        .as_str()
+        .map(ToString::to_string)
+        .ok_or_else(|| ConfigError::TypeMismatch {
+            key: key.to_string(),
+            reason: "expected a string".to_string(),
+        })
+}
+
+/// Extract a `u32` from a JSON value, or return a type-mismatch error.
+fn as_u32(key: &str, value: &serde_json::Value) -> Result<u32, ConfigError> {
+    value
+        .as_u64()
+        .and_then(|n| u32::try_from(n).ok())
+        .ok_or_else(|| ConfigError::TypeMismatch {
+            key: key.to_string(),
+            reason: "expected a positive integer (u32)".to_string(),
+        })
+}
+
+/// Extract an `f64` from a JSON value, or return a type-mismatch error.
+fn as_f64(key: &str, value: &serde_json::Value) -> Result<f64, ConfigError> {
+    value.as_f64().ok_or_else(|| ConfigError::TypeMismatch {
+        key: key.to_string(),
+        reason: "expected a number".to_string(),
+    })
+}
+
+impl ConfigManager {
+    /// Bulk-update LLM config from a map. Matches Python `config.set_llm_config()`.
+    pub fn set_llm_config(
+        &self,
+        values: &HashMap<String, serde_json::Value>,
+    ) -> Result<(), ConfigError> {
+        let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
+        for (key, value) in values {
+            match key.as_str() {
+                "llm_provider" => s.llm_provider = as_string(key, value)?,
+                "llm_model" => s.llm_model = as_string(key, value)?,
+                "llm_api_key" => s.llm_api_key = as_string(key, value)?,
+                "llm_endpoint" => s.llm_endpoint = as_string(key, value)?,
+                "llm_api_version" => s.llm_api_version = as_string(key, value)?,
+                "llm_temperature" => s.llm_temperature = as_f64(key, value)?,
+                "llm_max_completion_tokens" => s.llm_max_completion_tokens = as_u32(key, value)?,
+                other => return Err(ConfigError::UnknownKey(other.to_string())),
+            }
+        }
+        drop(s);
+        self.bump_version();
+        Ok(())
+    }
+
+    /// Bulk-update embedding config from a map. Matches Python `config.set_embedding_config()`.
+    pub fn set_embedding_config(
+        &self,
+        values: &HashMap<String, serde_json::Value>,
+    ) -> Result<(), ConfigError> {
+        let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
+        for (key, value) in values {
+            match key.as_str() {
+                "embedding_provider" => s.embedding_provider = as_string(key, value)?,
+                "embedding_model" | "embedding_model_name" => {
+                    s.embedding_model_name = as_string(key, value)?;
+                }
+                "embedding_dimensions" => s.embedding_dimensions = as_u32(key, value)?,
+                "embedding_endpoint" => s.embedding_endpoint = as_string(key, value)?,
+                "embedding_api_key" => s.embedding_api_key = as_string(key, value)?,
+                other => return Err(ConfigError::UnknownKey(other.to_string())),
+            }
+        }
+        drop(s);
+        self.bump_version();
+        Ok(())
+    }
+
+    /// Bulk-update vector DB config from a map. Matches Python `config.set_vector_db_config()`.
+    pub fn set_vector_db_config(
+        &self,
+        values: &HashMap<String, serde_json::Value>,
+    ) -> Result<(), ConfigError> {
+        let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
+        for (key, value) in values {
+            match key.as_str() {
+                "vector_db_provider" => s.vector_db_provider = as_string(key, value)?,
+                "vector_db_url" => s.vector_db_url = as_string(key, value)?,
+                "vector_db_key" => s.vector_db_key = as_string(key, value)?,
+                other => return Err(ConfigError::UnknownKey(other.to_string())),
+            }
+        }
+        drop(s);
+        self.bump_version();
+        Ok(())
+    }
+
+    /// Bulk-update graph DB config from a map. Matches Python `config.set_graph_db_config()`.
+    pub fn set_graph_db_config(
+        &self,
+        values: &HashMap<String, serde_json::Value>,
+    ) -> Result<(), ConfigError> {
+        let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
+        for (key, value) in values {
+            match key.as_str() {
+                "graph_database_provider" => s.graph_database_provider = as_string(key, value)?,
+                "graph_model" => s.graph_model = as_string(key, value)?,
+                "graph_file_path" => s.graph_file_path = as_string(key, value)?,
+                other => return Err(ConfigError::UnknownKey(other.to_string())),
+            }
+        }
+        drop(s);
+        self.bump_version();
+        Ok(())
+    }
+
+    /// Generic setter matching Python's `config.set(key, value)`.
+    ///
+    /// Dispatches to the appropriate typed setter based on the key name.
+    /// Returns `ConfigError::UnknownKey` for unrecognized keys and
+    /// `ConfigError::TypeMismatch` when the JSON value type doesn't match.
+    pub fn set(&self, key: &str, value: serde_json::Value) -> Result<(), ConfigError> {
+        match key {
+            // LLM
+            "llm_provider" => self.set_llm_provider(as_string(key, &value)?.as_str()),
+            "llm_model" => self.set_llm_model(as_string(key, &value)?.as_str()),
+            "llm_api_key" => self.set_llm_api_key(as_string(key, &value)?.as_str()),
+            "llm_endpoint" => self.set_llm_endpoint(as_string(key, &value)?.as_str()),
+            // Embedding
+            "embedding_provider" => {
+                self.set_embedding_provider(as_string(key, &value)?.as_str());
+            }
+            "embedding_model" | "embedding_model_name" => {
+                self.set_embedding_model(as_string(key, &value)?.as_str());
+            }
+            "embedding_dimensions" => self.set_embedding_dimensions(as_u32(key, &value)?),
+            "embedding_endpoint" => {
+                self.set_embedding_endpoint(as_string(key, &value)?.as_str());
+            }
+            "embedding_api_key" => self.set_embedding_api_key(as_string(key, &value)?.as_str()),
+            // Vector DB
+            "vector_db_provider" => {
+                self.set_vector_db_provider(as_string(key, &value)?.as_str());
+            }
+            "vector_db_url" => self.set_vector_db_url(as_string(key, &value)?.as_str()),
+            "vector_db_key" => self.set_vector_db_key(as_string(key, &value)?.as_str()),
+            // Graph DB
+            "graph_database_provider" => {
+                self.set_graph_database_provider(as_string(key, &value)?.as_str());
+            }
+            "graph_model" => self.set_graph_model(as_string(key, &value)?.as_str()),
+            // Chunking
+            "chunk_strategy" => self.set_chunk_strategy(as_string(key, &value)?.as_str()),
+            "chunk_engine" => self.set_chunk_engine(as_string(key, &value)?.as_str()),
+            "chunk_size" => self.set_chunk_size(as_u32(key, &value)?),
+            "chunk_overlap" => self.set_chunk_overlap(as_u32(key, &value)?),
+            // System paths
+            "system_root_directory" => {
+                self.set_system_root_directory(as_string(key, &value)?.as_str());
+            }
+            "data_root_directory" => {
+                self.set_data_root_directory(as_string(key, &value)?.as_str());
+            }
+            "monitoring_tool" => self.set_monitoring_tool(as_string(key, &value)?.as_str()),
+            // ML models
+            "classification_model" => {
+                self.set_classification_model(as_string(key, &value)?.as_str());
+            }
+            "summarization_model" => {
+                self.set_summarization_model(as_string(key, &value)?.as_str());
+            }
+            _ => return Err(ConfigError::UnknownKey(key.to_string())),
+        }
+        Ok(())
     }
 }
 
@@ -438,5 +926,180 @@ mod tests {
         // Empty string must not override the default (the str_var helper filters
         // out empty values, so ontology_file_path remains its default empty string).
         assert_eq!(s.ontology_file_path, "");
+    }
+
+    // -- ConfigManager tests --------------------------------------------------
+
+    #[test]
+    fn config_manager_version_starts_at_zero() {
+        let cm = ConfigManager::new(Settings::default());
+        assert_eq!(cm.version(), 0);
+    }
+
+    #[test]
+    fn config_manager_setter_bumps_version() {
+        let cm = ConfigManager::new(Settings::default());
+        cm.set_llm_model("gpt-4o");
+        assert_eq!(cm.version(), 1);
+        assert_eq!(cm.read().llm_model, "gpt-4o");
+
+        cm.set_llm_api_key("sk-test");
+        assert_eq!(cm.version(), 2);
+        assert_eq!(cm.read().llm_api_key, "sk-test");
+    }
+
+    #[test]
+    fn config_manager_clone_shares_state() {
+        let cm1 = ConfigManager::new(Settings::default());
+        let cm2 = cm1.clone();
+
+        cm1.set_llm_model("shared-model");
+        assert_eq!(cm2.read().llm_model, "shared-model");
+        assert_eq!(cm2.version(), 1);
+    }
+
+    #[test]
+    fn config_manager_cascading_system_root() {
+        let settings = Settings {
+            system_root_directory: "/old/root".to_string(),
+            graph_file_path: "/old/root/graph".to_string(),
+            vector_db_url: "/old/root/vectors".to_string(),
+            ..Default::default()
+        };
+
+        let cm = ConfigManager::new(settings);
+        cm.set_system_root_directory("/new/root");
+
+        let s = cm.read();
+        assert_eq!(s.system_root_directory, "/new/root");
+        assert_eq!(s.graph_file_path, "/new/root/graph");
+        assert_eq!(s.vector_db_url, "/new/root/vectors");
+    }
+
+    #[test]
+    fn config_manager_cascading_empty_graph_and_vector() {
+        // When graph_file_path and vector_db_url are empty, cascading should
+        // set them to defaults under the new system root.
+        let cm = ConfigManager::new(Settings::default());
+        cm.set_system_root_directory("/data/cognee");
+
+        let s = cm.read();
+        assert_eq!(s.graph_file_path, "/data/cognee/graph");
+        assert_eq!(s.vector_db_url, "/data/cognee/vectors");
+    }
+
+    #[test]
+    fn config_manager_no_cascade_when_custom_paths() {
+        let settings = Settings {
+            system_root_directory: "/old".to_string(),
+            graph_file_path: "/custom/graph".to_string(), // not under /old
+            vector_db_url: "/custom/vectors".to_string(), // not under /old
+            ..Default::default()
+        };
+
+        let cm = ConfigManager::new(settings);
+        cm.set_system_root_directory("/new");
+
+        let s = cm.read();
+        // Custom paths should NOT be cascaded
+        assert_eq!(s.graph_file_path, "/custom/graph");
+        assert_eq!(s.vector_db_url, "/custom/vectors");
+    }
+
+    #[test]
+    fn config_manager_generic_set_string() {
+        let cm = ConfigManager::new(Settings::default());
+        cm.set("llm_model", serde_json::Value::String("test-model".into()))
+            .expect("set should succeed");
+        assert_eq!(cm.read().llm_model, "test-model");
+    }
+
+    #[test]
+    fn config_manager_generic_set_u32() {
+        let cm = ConfigManager::new(Settings::default());
+        cm.set("chunk_size", serde_json::json!(2048))
+            .expect("set should succeed");
+        assert_eq!(cm.read().chunk_size, 2048);
+    }
+
+    #[test]
+    fn config_manager_generic_set_unknown_key() {
+        let cm = ConfigManager::new(Settings::default());
+        let result = cm.set("nonexistent_key", serde_json::json!("value"));
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            ConfigError::UnknownKey(k) => assert_eq!(k, "nonexistent_key"),
+            other => panic!("expected UnknownKey, got: {other}"),
+        }
+    }
+
+    #[test]
+    fn config_manager_generic_set_type_mismatch() {
+        let cm = ConfigManager::new(Settings::default());
+        let result = cm.set("chunk_size", serde_json::json!("not a number"));
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            ConfigError::TypeMismatch { key, .. } => assert_eq!(key, "chunk_size"),
+            other => panic!("expected TypeMismatch, got: {other}"),
+        }
+    }
+
+    #[test]
+    fn config_manager_bulk_llm_config() {
+        let cm = ConfigManager::new(Settings::default());
+        let mut map = HashMap::new();
+        map.insert("llm_model".into(), serde_json::json!("gpt-4o"));
+        map.insert("llm_provider".into(), serde_json::json!("openai"));
+        cm.set_llm_config(&map).expect("bulk set should succeed");
+
+        let s = cm.read();
+        assert_eq!(s.llm_model, "gpt-4o");
+        assert_eq!(s.llm_provider, "openai");
+    }
+
+    #[test]
+    fn config_manager_bulk_embedding_config() {
+        let cm = ConfigManager::new(Settings::default());
+        let mut map = HashMap::new();
+        map.insert("embedding_provider".into(), serde_json::json!("openai"));
+        map.insert("embedding_dimensions".into(), serde_json::json!(1536));
+        cm.set_embedding_config(&map)
+            .expect("bulk set should succeed");
+
+        let s = cm.read();
+        assert_eq!(s.embedding_provider, "openai");
+        assert_eq!(s.embedding_dimensions, 1536);
+    }
+
+    #[test]
+    fn config_manager_embedding_fields_default() {
+        let s = Settings::default();
+        assert_eq!(s.embedding_provider, "onnx");
+        assert_eq!(s.embedding_endpoint, "");
+        assert_eq!(s.embedding_api_key, "");
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn overlay_picks_up_embedding_provider() {
+        // SAFETY: test is serial — no other thread reads/writes env concurrently.
+        unsafe { std::env::set_var("EMBEDDING_PROVIDER", "openai") };
+        let mut s = Settings::default();
+        s.overlay_from_env();
+        unsafe { std::env::remove_var("EMBEDDING_PROVIDER") };
+
+        assert_eq!(s.embedding_provider, "openai");
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn overlay_picks_up_embedding_endpoint() {
+        // SAFETY: test is serial — no other thread reads/writes env concurrently.
+        unsafe { std::env::set_var("EMBEDDING_ENDPOINT", "https://api.example.com/embed") };
+        let mut s = Settings::default();
+        s.overlay_from_env();
+        unsafe { std::env::remove_var("EMBEDDING_ENDPOINT") };
+
+        assert_eq!(s.embedding_endpoint, "https://api.example.com/embed");
     }
 }
