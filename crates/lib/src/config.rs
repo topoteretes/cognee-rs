@@ -47,6 +47,9 @@ pub struct Settings {
     pub vector_db_port: u16,
     pub vector_db_name: String,
     pub vector_db_key: String,
+    pub vector_db_username: String,
+    pub vector_db_password: String,
+    pub vector_db_host: String,
 
     pub chunk_strategy: String,
     pub chunk_engine: String,
@@ -69,6 +72,7 @@ pub struct Settings {
 
     pub default_system_prompt_path: String,
 
+    pub embedding_provider: String,
     pub embedding_model_path: String,
     pub embedding_tokenizer_path: String,
     pub embedding_model_name: String,
@@ -85,6 +89,48 @@ pub struct Settings {
     /// `FuzzyMatchingStrategy` (Ratcliff/Obershelp gestalt) — this field is reserved for
     /// future strategy selection. Only `"fuzzy"` is implemented.
     pub ontology_matching_strategy: String,
+
+    // -- Session / cache ---------------------------------------------------------
+    /// Session store backend: `"fs"`, `"redis"`, or `"seaorm"`.
+    pub cache_backend: String,
+    pub cache_host: String,
+    pub cache_port: u16,
+    pub cache_username: String,
+    pub cache_password: String,
+    /// Session time-to-live in seconds (default: 604 800 = 7 days).
+    pub session_ttl_seconds: u64,
+    pub enable_caching: bool,
+    pub auto_feedback: bool,
+
+    // -- Authentication / ACL ----------------------------------------------------
+    pub default_user_email: String,
+    pub default_user_password: String,
+    pub enable_access_control: bool,
+
+    // -- Logging -----------------------------------------------------------------
+    pub log_level: String,
+
+    // -- Rate limiting -----------------------------------------------------------
+    pub llm_rate_limit_enabled: bool,
+    pub llm_rate_limit_requests: u32,
+    pub llm_rate_limit_interval: u32,
+    pub embedding_rate_limit_enabled: bool,
+    pub embedding_rate_limit_requests: u32,
+    pub embedding_rate_limit_interval: u32,
+
+    // -- Storage backend ---------------------------------------------------------
+    /// File storage backend: `"local"` or `"s3"`.
+    pub storage_backend: String,
+    pub storage_bucket_name: String,
+
+    // -- Observability -----------------------------------------------------------
+    pub cognee_tracing_enabled: bool,
+    pub otel_service_name: String,
+    pub otel_exporter_otlp_endpoint: String,
+    pub otel_exporter_otlp_headers: String,
+
+    // -- Feature flags -----------------------------------------------------------
+    pub enable_last_accessed: bool,
 }
 
 impl Settings {
@@ -144,10 +190,14 @@ impl Settings {
         {
             self.llm_temperature = f;
         }
-        if let Some(v) = str_var("LLM_MAX_TOKENS")
+        if let Some(v) = str_alias("LLM_MAX_COMPLETION_TOKENS", "LLM_MAX_TOKENS")
             && let Ok(n) = v.parse::<u32>()
         {
             self.llm_max_completion_tokens = n;
+        }
+        if let Some(v) = str_var("LLM_STREAMING") {
+            let v = v.to_lowercase();
+            self.llm_streaming = v == "true" || v == "1" || v == "yes";
         }
         if let Some(v) = str_var("LLM_MAX_RETRIES")
             && let Ok(n) = v.parse::<u32>()
@@ -206,6 +256,15 @@ impl Settings {
         if let Some(v) = str_var("VECTOR_DB_KEY") {
             self.vector_db_key = v;
         }
+        if let Some(v) = str_var("VECTOR_DB_USERNAME") {
+            self.vector_db_username = v;
+        }
+        if let Some(v) = str_var("VECTOR_DB_PASSWORD") {
+            self.vector_db_password = v;
+        }
+        if let Some(v) = str_var("VECTOR_DB_HOST") {
+            self.vector_db_host = v;
+        }
 
         // -- Relational database -------------------------------------------------
         if let Some(v) = str_var("DB_PROVIDER") {
@@ -233,6 +292,9 @@ impl Settings {
         }
 
         // -- Embedding -----------------------------------------------------------
+        if let Some(v) = str_var("EMBEDDING_PROVIDER") {
+            self.embedding_provider = v;
+        }
         if let Some(v) = str_var("EMBEDDING_MODEL") {
             self.embedding_model_name = v;
         }
@@ -285,6 +347,122 @@ impl Settings {
         }
         if let Some(v) = str_var("ONTOLOGY_MATCHING_STRATEGY") {
             self.ontology_matching_strategy = v;
+        }
+
+        // -- Session / cache -----------------------------------------------------
+        if let Some(v) = str_var("CACHE_BACKEND") {
+            self.cache_backend = v;
+        }
+        if let Some(v) = str_var("CACHE_HOST") {
+            self.cache_host = v;
+        }
+        if let Some(v) = str_var("CACHE_PORT")
+            && let Ok(n) = v.parse::<u16>()
+        {
+            self.cache_port = n;
+        }
+        if let Some(v) = str_var("CACHE_USERNAME") {
+            self.cache_username = v;
+        }
+        if let Some(v) = str_var("CACHE_PASSWORD") {
+            self.cache_password = v;
+        }
+        if let Some(v) = str_var("SESSION_TTL_SECONDS")
+            && let Ok(n) = v.parse::<u64>()
+        {
+            self.session_ttl_seconds = n;
+        }
+        if let Some(v) = str_var("CACHING") {
+            let v = v.to_lowercase();
+            self.enable_caching = v == "true" || v == "1" || v == "yes";
+        }
+        if let Some(v) = str_var("AUTO_FEEDBACK") {
+            let v = v.to_lowercase();
+            self.auto_feedback = v == "true" || v == "1" || v == "yes";
+        }
+
+        // -- Authentication / ACL ------------------------------------------------
+        if let Some(v) = str_var("DEFAULT_USER_EMAIL") {
+            self.default_user_email = v;
+        }
+        if let Some(v) = str_var("DEFAULT_USER_PASSWORD") {
+            self.default_user_password = v;
+        }
+        if let Some(v) = str_var("ENABLE_BACKEND_ACCESS_CONTROL") {
+            let v = v.to_lowercase();
+            self.enable_access_control = v == "true" || v == "1" || v == "yes";
+        }
+
+        // -- Logging -------------------------------------------------------------
+        if let Some(v) = str_var("LOG_LEVEL") {
+            self.log_level = v;
+        }
+        // COGNEE_LOGS_DIR maps to existing logs_root_directory
+        if let Some(v) = str_var("COGNEE_LOGS_DIR") {
+            self.logs_root_directory = v;
+        }
+        // CACHE_ROOT_DIRECTORY maps to existing cache_root_directory
+        if let Some(v) = str_var("CACHE_ROOT_DIRECTORY") {
+            self.cache_root_directory = v;
+        }
+
+        // -- Rate limiting -------------------------------------------------------
+        if let Some(v) = str_var("LLM_RATE_LIMIT_ENABLED") {
+            let v = v.to_lowercase();
+            self.llm_rate_limit_enabled = v == "true" || v == "1" || v == "yes";
+        }
+        if let Some(v) = str_var("LLM_RATE_LIMIT_REQUESTS")
+            && let Ok(n) = v.parse::<u32>()
+        {
+            self.llm_rate_limit_requests = n;
+        }
+        if let Some(v) = str_var("LLM_RATE_LIMIT_INTERVAL")
+            && let Ok(n) = v.parse::<u32>()
+        {
+            self.llm_rate_limit_interval = n;
+        }
+        if let Some(v) = str_var("EMBEDDING_RATE_LIMIT_ENABLED") {
+            let v = v.to_lowercase();
+            self.embedding_rate_limit_enabled = v == "true" || v == "1" || v == "yes";
+        }
+        if let Some(v) = str_var("EMBEDDING_RATE_LIMIT_REQUESTS")
+            && let Ok(n) = v.parse::<u32>()
+        {
+            self.embedding_rate_limit_requests = n;
+        }
+        if let Some(v) = str_var("EMBEDDING_RATE_LIMIT_INTERVAL")
+            && let Ok(n) = v.parse::<u32>()
+        {
+            self.embedding_rate_limit_interval = n;
+        }
+
+        // -- Storage backend -----------------------------------------------------
+        if let Some(v) = str_var("STORAGE_BACKEND") {
+            self.storage_backend = v;
+        }
+        if let Some(v) = str_var("STORAGE_BUCKET_NAME") {
+            self.storage_bucket_name = v;
+        }
+
+        // -- Observability -------------------------------------------------------
+        if let Some(v) = str_var("COGNEE_TRACING_ENABLED") {
+            let v = v.to_lowercase();
+            self.cognee_tracing_enabled = v == "true" || v == "1" || v == "yes";
+        }
+        if let Some(v) = str_var("OTEL_SERVICE_NAME") {
+            self.otel_service_name = v;
+        }
+        if let Some(v) = str_var("OTEL_EXPORTER_OTLP_ENDPOINT") {
+            self.otel_exporter_otlp_endpoint = v;
+        }
+        if let Some(v) = str_var("OTEL_EXPORTER_OTLP_HEADERS") {
+            self.otel_exporter_otlp_headers = v;
+        }
+
+        // -- Feature flags -------------------------------------------------------
+        if let Some(v) = str_var("ENABLE_LAST_ACCESSED") {
+            let v = v.to_lowercase();
+            self.enable_last_accessed = v == "true" || v == "1" || v == "yes";
         }
     }
 
@@ -348,6 +526,9 @@ impl Default for Settings {
             vector_db_port: 1234,
             vector_db_name: String::new(),
             vector_db_key: String::new(),
+            vector_db_username: String::new(),
+            vector_db_password: String::new(),
+            vector_db_host: String::new(),
 
             chunk_strategy: "PARAGRAPH".to_string(),
             chunk_engine: "DEFAULT_ENGINE".to_string(),
@@ -366,6 +547,7 @@ impl Default for Settings {
 
             default_system_prompt_path: DEFAULT_SYSTEM_PROMPT_PATH.to_string(),
 
+            embedding_provider: "onnx".to_string(),
             embedding_model_path: "./target/models/BGE-Small-v1.5-model_quantized.onnx".to_string(),
             embedding_tokenizer_path: "./target/models/bge-small-tokenizer.json".to_string(),
             embedding_model_name: "BGE-Small-v1.5".to_string(),
@@ -376,6 +558,45 @@ impl Default for Settings {
             ontology_file_path: String::new(),
             ontology_resolver: "rdflib".to_string(),
             ontology_matching_strategy: "fuzzy".to_string(),
+
+            // Session / cache
+            cache_backend: "fs".to_string(),
+            cache_host: "localhost".to_string(),
+            cache_port: 6379,
+            cache_username: String::new(),
+            cache_password: String::new(),
+            session_ttl_seconds: 604800,
+            enable_caching: true,
+            auto_feedback: false,
+
+            // Authentication / ACL
+            default_user_email: String::new(),
+            default_user_password: String::new(),
+            enable_access_control: false,
+
+            // Logging
+            log_level: "info".to_string(),
+
+            // Rate limiting
+            llm_rate_limit_enabled: false,
+            llm_rate_limit_requests: 60,
+            llm_rate_limit_interval: 60,
+            embedding_rate_limit_enabled: false,
+            embedding_rate_limit_requests: 60,
+            embedding_rate_limit_interval: 60,
+
+            // Storage backend
+            storage_backend: "local".to_string(),
+            storage_bucket_name: String::new(),
+
+            // Observability
+            cognee_tracing_enabled: false,
+            otel_service_name: "cognee".to_string(),
+            otel_exporter_otlp_endpoint: String::new(),
+            otel_exporter_otlp_headers: String::new(),
+
+            // Feature flags
+            enable_last_accessed: false,
         }
     }
 }
@@ -438,5 +659,218 @@ mod tests {
         // Empty string must not override the default (the str_var helper filters
         // out empty values, so ontology_file_path remains its default empty string).
         assert_eq!(s.ontology_file_path, "");
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn overlay_picks_up_cache_backend() {
+        // SAFETY: test is serial — no other thread reads/writes env concurrently.
+        unsafe { std::env::set_var("CACHE_BACKEND", "redis") };
+        let mut s = Settings::default();
+        s.overlay_from_env();
+        unsafe { std::env::remove_var("CACHE_BACKEND") };
+
+        assert_eq!(s.cache_backend, "redis");
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn overlay_llm_max_completion_tokens_primary() {
+        // Primary env var takes precedence over the legacy alias.
+        // SAFETY: test is serial — no other thread reads/writes env concurrently.
+        unsafe { std::env::set_var("LLM_MAX_COMPLETION_TOKENS", "4096") };
+        unsafe { std::env::set_var("LLM_MAX_TOKENS", "8192") };
+        let mut s = Settings::default();
+        s.overlay_from_env();
+        unsafe { std::env::remove_var("LLM_MAX_COMPLETION_TOKENS") };
+        unsafe { std::env::remove_var("LLM_MAX_TOKENS") };
+
+        assert_eq!(s.llm_max_completion_tokens, 4096);
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn overlay_llm_max_completion_tokens_alias_fallback() {
+        // When the primary is unset, the legacy alias is used.
+        // SAFETY: test is serial — no other thread reads/writes env concurrently.
+        unsafe { std::env::remove_var("LLM_MAX_COMPLETION_TOKENS") };
+        unsafe { std::env::set_var("LLM_MAX_TOKENS", "2048") };
+        let mut s = Settings::default();
+        s.overlay_from_env();
+        unsafe { std::env::remove_var("LLM_MAX_TOKENS") };
+
+        assert_eq!(s.llm_max_completion_tokens, 2048);
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn overlay_llm_streaming_bool_parsing() {
+        // SAFETY: test is serial — no other thread reads/writes env concurrently.
+        for (input, expected) in [
+            ("true", true),
+            ("True", true),
+            ("TRUE", true),
+            ("1", true),
+            ("yes", true),
+            ("false", false),
+            ("0", false),
+            ("no", false),
+        ] {
+            unsafe { std::env::set_var("LLM_STREAMING", input) };
+            let mut s = Settings::default();
+            s.overlay_from_env();
+            unsafe { std::env::remove_var("LLM_STREAMING") };
+
+            assert_eq!(
+                s.llm_streaming, expected,
+                "LLM_STREAMING={input} should parse to {expected}"
+            );
+        }
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn overlay_enable_backend_access_control() {
+        // SAFETY: test is serial — no other thread reads/writes env concurrently.
+        unsafe { std::env::set_var("ENABLE_BACKEND_ACCESS_CONTROL", "true") };
+        let mut s = Settings::default();
+        s.overlay_from_env();
+        unsafe { std::env::remove_var("ENABLE_BACKEND_ACCESS_CONTROL") };
+
+        assert!(s.enable_access_control);
+
+        // Also verify "1" works
+        unsafe { std::env::set_var("ENABLE_BACKEND_ACCESS_CONTROL", "1") };
+        let mut s2 = Settings::default();
+        s2.overlay_from_env();
+        unsafe { std::env::remove_var("ENABLE_BACKEND_ACCESS_CONTROL") };
+
+        assert!(s2.enable_access_control);
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn overlay_picks_up_embedding_provider() {
+        // SAFETY: test is serial — no other thread reads/writes env concurrently.
+        unsafe { std::env::set_var("EMBEDDING_PROVIDER", "openai") };
+        let mut s = Settings::default();
+        s.overlay_from_env();
+        unsafe { std::env::remove_var("EMBEDDING_PROVIDER") };
+
+        assert_eq!(s.embedding_provider, "openai");
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn overlay_picks_up_log_level() {
+        // SAFETY: test is serial — no other thread reads/writes env concurrently.
+        unsafe { std::env::set_var("LOG_LEVEL", "debug") };
+        let mut s = Settings::default();
+        s.overlay_from_env();
+        unsafe { std::env::remove_var("LOG_LEVEL") };
+
+        assert_eq!(s.log_level, "debug");
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn overlay_picks_up_cognee_logs_dir() {
+        // SAFETY: test is serial — no other thread reads/writes env concurrently.
+        unsafe { std::env::set_var("COGNEE_LOGS_DIR", "/tmp/logs") };
+        let mut s = Settings::default();
+        s.overlay_from_env();
+        unsafe { std::env::remove_var("COGNEE_LOGS_DIR") };
+
+        assert_eq!(s.logs_root_directory, "/tmp/logs");
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn overlay_picks_up_cache_root_directory() {
+        // SAFETY: test is serial — no other thread reads/writes env concurrently.
+        unsafe { std::env::set_var("CACHE_ROOT_DIRECTORY", "/tmp/cache") };
+        let mut s = Settings::default();
+        s.overlay_from_env();
+        unsafe { std::env::remove_var("CACHE_ROOT_DIRECTORY") };
+
+        assert_eq!(s.cache_root_directory, "/tmp/cache");
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn overlay_picks_up_enable_last_accessed() {
+        // SAFETY: test is serial — no other thread reads/writes env concurrently.
+        unsafe { std::env::set_var("ENABLE_LAST_ACCESSED", "yes") };
+        let mut s = Settings::default();
+        s.overlay_from_env();
+        unsafe { std::env::remove_var("ENABLE_LAST_ACCESSED") };
+
+        assert!(s.enable_last_accessed);
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn overlay_picks_up_otel_service_name() {
+        // SAFETY: test is serial — no other thread reads/writes env concurrently.
+        unsafe { std::env::set_var("OTEL_SERVICE_NAME", "my-service") };
+        let mut s = Settings::default();
+        s.overlay_from_env();
+        unsafe { std::env::remove_var("OTEL_SERVICE_NAME") };
+
+        assert_eq!(s.otel_service_name, "my-service");
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn overlay_picks_up_rate_limit_requests() {
+        // SAFETY: test is serial — no other thread reads/writes env concurrently.
+        unsafe { std::env::set_var("LLM_RATE_LIMIT_REQUESTS", "120") };
+        unsafe { std::env::set_var("EMBEDDING_RATE_LIMIT_REQUESTS", "30") };
+        let mut s = Settings::default();
+        s.overlay_from_env();
+        unsafe { std::env::remove_var("LLM_RATE_LIMIT_REQUESTS") };
+        unsafe { std::env::remove_var("EMBEDDING_RATE_LIMIT_REQUESTS") };
+
+        assert_eq!(s.llm_rate_limit_requests, 120);
+        assert_eq!(s.embedding_rate_limit_requests, 30);
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn overlay_picks_up_storage_backend() {
+        // SAFETY: test is serial — no other thread reads/writes env concurrently.
+        unsafe { std::env::set_var("STORAGE_BACKEND", "s3") };
+        unsafe { std::env::set_var("STORAGE_BUCKET_NAME", "my-bucket") };
+        let mut s = Settings::default();
+        s.overlay_from_env();
+        unsafe { std::env::remove_var("STORAGE_BACKEND") };
+        unsafe { std::env::remove_var("STORAGE_BUCKET_NAME") };
+
+        assert_eq!(s.storage_backend, "s3");
+        assert_eq!(s.storage_bucket_name, "my-bucket");
+    }
+
+    #[test]
+    fn default_values_are_correct() {
+        let s = Settings::default();
+        assert_eq!(s.cache_backend, "fs");
+        assert_eq!(s.cache_host, "localhost");
+        assert_eq!(s.cache_port, 6379);
+        assert_eq!(s.session_ttl_seconds, 604800);
+        assert!(s.enable_caching);
+        assert!(!s.auto_feedback);
+        assert!(!s.enable_access_control);
+        assert_eq!(s.log_level, "info");
+        assert!(!s.llm_rate_limit_enabled);
+        assert_eq!(s.llm_rate_limit_requests, 60);
+        assert_eq!(s.llm_rate_limit_interval, 60);
+        assert!(!s.embedding_rate_limit_enabled);
+        assert_eq!(s.embedding_rate_limit_requests, 60);
+        assert_eq!(s.embedding_rate_limit_interval, 60);
+        assert_eq!(s.storage_backend, "local");
+        assert!(!s.cognee_tracing_enabled);
+        assert_eq!(s.otel_service_name, "cognee");
+        assert!(!s.enable_last_accessed);
+        assert_eq!(s.embedding_provider, "onnx");
     }
 }
