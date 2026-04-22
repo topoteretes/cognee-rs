@@ -185,6 +185,63 @@ def run_python_cli(
             f"    print('OK')\n"
             f"asyncio.run(main())\n"
         )
+    elif command == "delete":
+        # Parse: delete [--all] [-f] [-d <dataset_name>] [--data-id <id>]
+        delete_all = False
+        dataset_name = None
+        data_id = None
+        i = 1
+        while i < len(args):
+            if args[i] in ("--all",):
+                delete_all = True
+                i += 1
+            elif args[i] in ("-f", "--force"):
+                # Python SDK doesn't need --force; skip it
+                i += 1
+            elif args[i] in ("-d", "--dataset-name") and i + 1 < len(args):
+                dataset_name = args[i + 1]
+                i += 2
+            elif args[i] in ("--data-id",) and i + 1 < len(args):
+                data_id = args[i + 1]
+                i += 2
+            else:
+                i += 1
+
+        # Python SDK: cognee.prune.prune_data() removes all data,
+        # cognee.prune.prune_system(metadata=True) removes system tables.
+        # For --all we call both; for dataset-scoped we call prune_data
+        # with the dataset filter.
+        if delete_all:
+            script = (
+                f"import asyncio, cognee\n"
+                f"cognee.config.data_root_directory({str(py_storage)!r})\n"
+                f"cognee.config.system_root_directory({str(py_system)!r})\n"
+                f"async def main():\n"
+                f"    await cognee.prune.prune_data()\n"
+                f"    await cognee.prune.prune_system(metadata=True)\n"
+                f"    print('OK')\n"
+                f"asyncio.run(main())\n"
+            )
+        elif dataset_name:
+            script = (
+                f"import asyncio, cognee\n"
+                f"cognee.config.data_root_directory({str(py_storage)!r})\n"
+                f"cognee.config.system_root_directory({str(py_system)!r})\n"
+                f"async def main():\n"
+                f"    await cognee.prune.prune_data(dataset_name={dataset_name!r})\n"
+                f"    print('OK')\n"
+                f"asyncio.run(main())\n"
+            )
+        else:
+            script = (
+                f"import asyncio, cognee\n"
+                f"cognee.config.data_root_directory({str(py_storage)!r})\n"
+                f"cognee.config.system_root_directory({str(py_system)!r})\n"
+                f"async def main():\n"
+                f"    await cognee.prune.prune_data()\n"
+                f"    print('OK')\n"
+                f"asyncio.run(main())\n"
+            )
     elif command == "search":
         # Parse: search <query> -t <TYPE> -d <dataset> -k <top_k>
         query_text = args[1]
