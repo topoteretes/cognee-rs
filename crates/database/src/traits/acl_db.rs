@@ -53,6 +53,27 @@ pub trait AclDb: Send + Sync {
         principal_id: Uuid,
         principal_type: &str,
     ) -> Result<(), DatabaseError>;
+
+    /// Check permission considering role and tenant inheritance.
+    ///
+    /// Resolution order (mirrors Python `get_all_user_permission_datasets`):
+    /// 1. Direct user ACL
+    /// 2. Tenant-level ACL for each tenant the user belongs to
+    /// 3. Role-level ACL for each role the user holds in those tenants
+    async fn has_permission_with_roles(
+        &self,
+        user_id: Uuid,
+        dataset_id: Uuid,
+        permission_name: &str,
+    ) -> Result<bool, DatabaseError>;
+
+    /// Return all dataset IDs the user can access via direct, tenant, or
+    /// role grants. Deduplicates results.
+    async fn authorized_dataset_ids_with_roles(
+        &self,
+        user_id: Uuid,
+        permission_name: &str,
+    ) -> Result<Vec<Uuid>, DatabaseError>;
 }
 
 #[async_trait]
@@ -98,5 +119,22 @@ impl AclDb for DatabaseConnection {
         principal_type: &str,
     ) -> Result<(), DatabaseError> {
         acl::ensure_principal(self, principal_id, principal_type).await
+    }
+
+    async fn has_permission_with_roles(
+        &self,
+        user_id: Uuid,
+        dataset_id: Uuid,
+        permission_name: &str,
+    ) -> Result<bool, DatabaseError> {
+        acl::has_permission_with_roles(self, user_id, dataset_id, permission_name).await
+    }
+
+    async fn authorized_dataset_ids_with_roles(
+        &self,
+        user_id: Uuid,
+        permission_name: &str,
+    ) -> Result<Vec<Uuid>, DatabaseError> {
+        acl::authorized_dataset_ids_with_roles(self, user_id, permission_name).await
     }
 }

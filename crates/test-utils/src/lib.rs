@@ -9,7 +9,10 @@
 
 pub mod mock_acl_db;
 pub mod mock_llm;
+pub mod mock_role_db;
+pub mod mock_tenant_db;
 pub mod mock_transcriber;
+pub mod mock_user_db;
 
 use std::sync::Arc;
 
@@ -21,7 +24,10 @@ pub use cognee_storage::MockStorage;
 pub use cognee_vector::MockVectorDB;
 pub use mock_acl_db::MockAclDb;
 pub use mock_llm::MockLlm;
+pub use mock_role_db::MockRoleDb;
+pub use mock_tenant_db::MockTenantDb;
 pub use mock_transcriber::MockTranscriber;
+pub use mock_user_db::MockUserDb;
 
 /// Returns a PostgreSQL connection URL built from environment variables, or `None`
 /// if `DB_PROVIDER` is not set to `"postgres"`.

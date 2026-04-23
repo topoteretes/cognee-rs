@@ -18,3 +18,10 @@ pub mod task_run;
 pub mod acl;
 pub mod permission;
 pub mod principal;
+
+// User / Tenant / Role entities:
+pub mod role;
+pub mod tenant;
+pub mod user;
+pub mod user_role;
+pub mod user_tenant;
