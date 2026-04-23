@@ -104,6 +104,7 @@ impl From<data::Model> for Data {
             token_count: m.token_count,
             data_size: m.data_size,
             last_accessed: m.last_accessed,
+            importance_weight: m.importance_weight,
         }
     }
 }
@@ -133,6 +134,7 @@ impl From<&Data> for data::ActiveModel {
             token_count: Set(d.token_count),
             data_size: Set(d.data_size),
             last_accessed: Set(d.last_accessed),
+            importance_weight: Set(d.importance_weight),
         }
     }
 }

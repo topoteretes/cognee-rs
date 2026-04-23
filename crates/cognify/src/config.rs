@@ -5,6 +5,8 @@
 //! NO environment variables should be read in pipeline components.
 //! ALL configuration flows through this struct.
 
+use std::sync::Arc;
+
 use cognee_chunking::TokenCounterKind;
 use cognee_embedding::engine::EmbeddingEngine;
 use cognee_llm::Llm;
@@ -103,6 +105,40 @@ pub struct CognifyConfig {
     /// How to count tokens when chunking text.
     /// Default is determined at construction time via [`TokenCounterKind::from_env`].
     pub token_counter_kind: TokenCounterKind,
+
+    /// Optional JSON Schema for custom graph extraction model.
+    ///
+    /// When `Some`, the LLM uses this schema instead of the default
+    /// `KnowledgeGraph` schema for entity/relationship extraction.
+    /// Extracted data is stored as-is in chunk metadata.
+    ///
+    /// Mirrors Python's `graph_model` parameter.
+    #[serde(skip)]
+    pub graph_schema: Option<serde_json::Value>,
+
+    /// Pluggable chunker callback.
+    ///
+    /// When `Some`, this function is called instead of the built-in
+    /// paragraph/recursive chunking. The callback receives the text and
+    /// max token count, and returns a list of chunk strings.
+    ///
+    /// Mirrors Python's `chunker` parameter.
+    #[serde(skip)]
+    pub custom_chunker: Option<CustomChunker>,
+}
+
+/// Opaque wrapper around a custom chunker callback.
+///
+/// Implements [`Debug`] (prints `"CustomChunker(…)"`) and [`Clone`] (cheap
+/// `Arc` clone), keeping [`CognifyConfig`] derivable.
+#[derive(Clone)]
+#[allow(clippy::type_complexity)]
+pub struct CustomChunker(pub Arc<dyn Fn(&str, usize) -> Vec<String> + Send + Sync>);
+
+impl std::fmt::Debug for CustomChunker {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("CustomChunker(…)")
+    }
 }
 
 /// Chunking strategy options.
@@ -145,6 +181,9 @@ impl Default for CognifyConfig {
             data_per_batch: 20,
 
             token_counter_kind: TokenCounterKind::from_env(),
+
+            graph_schema: None,
+            custom_chunker: None,
         }
     }
 }
@@ -243,6 +282,22 @@ impl CognifyConfig {
     /// Set the token counter implementation to use during chunking.
     pub fn with_token_counter(mut self, kind: TokenCounterKind) -> Self {
         self.token_counter_kind = kind;
+        self
+    }
+
+    /// Set a custom JSON Schema for graph extraction.
+    pub fn with_graph_schema(mut self, schema: serde_json::Value) -> Self {
+        self.graph_schema = Some(schema);
+        self
+    }
+
+    /// Set a custom chunker callback.
+    #[allow(clippy::type_complexity)]
+    pub fn with_custom_chunker(
+        mut self,
+        chunker: Arc<dyn Fn(&str, usize) -> Vec<String> + Send + Sync>,
+    ) -> Self {
+        self.custom_chunker = Some(CustomChunker(chunker));
         self
     }
 

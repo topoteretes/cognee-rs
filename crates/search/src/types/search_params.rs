@@ -46,6 +46,12 @@ pub struct SearchParams {
     /// When `Some`, completion-generating retrievers return `SearchOutput::Structured`
     /// instead of `SearchOutput::Text`.
     pub response_schema: Option<serde_json::Value>,
+
+    /// Number of hops from query result nodes to include in the graph context.
+    pub neighborhood_depth: Option<usize>,
+
+    /// Number of initial seed nodes for neighborhood expansion.
+    pub neighborhood_seed_top_k: Option<usize>,
 }
 
 impl SearchParams {
@@ -76,7 +82,7 @@ impl From<&SearchRequest> for SearchParams {
             triplet_distance_penalty: req.triplet_distance_penalty,
             node_type: req.node_type.clone(),
             node_name: req.node_name.clone(),
-            node_name_filter_operator: None, // not yet in SearchRequest
+            node_name_filter_operator: req.node_name_filter_operator.clone(),
             feedback_influence: req.feedback_influence,
             max_iter: req
                 .retriever_specific_config
@@ -91,6 +97,8 @@ impl From<&SearchRequest> for SearchParams {
                 .and_then(|v| v.as_u64())
                 .map(|v| v as usize),
             response_schema: req.response_schema.clone(),
+            neighborhood_depth: req.neighborhood_depth,
+            neighborhood_seed_top_k: req.neighborhood_seed_top_k,
         }
     }
 }

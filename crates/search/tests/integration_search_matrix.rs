@@ -80,6 +80,7 @@ fn make_request(query: &str, search_type: SearchType, save: Option<bool>) -> Sea
         session_id: None,
         node_type: None,
         node_name: None,
+        node_name_filter_operator: None,
         wide_search_top_k: None,
         triplet_distance_penalty: None,
         save_interaction: save,
@@ -90,6 +91,8 @@ fn make_request(query: &str, search_type: SearchType, save: Option<bool>) -> Sea
         response_schema: None,
         custom_search_type: None,
         auto_feedback_detection: None,
+        neighborhood_depth: None,
+        neighborhood_seed_top_k: None,
     }
 }
 
@@ -333,6 +336,7 @@ async fn test_search_type_matrix() {
         session_id: None,
         node_type: None,
         node_name: None,
+        node_name_filter_operator: None,
         wide_search_top_k: None,
         triplet_distance_penalty: None,
         save_interaction: Some(false),
@@ -343,6 +347,8 @@ async fn test_search_type_matrix() {
         response_schema: None,
         custom_search_type: None,
         auto_feedback_detection: None,
+        neighborhood_depth: None,
+        neighborhood_seed_top_k: None,
     };
     let chunks_resp = orchestrator
         .search(&chunks_ctx)

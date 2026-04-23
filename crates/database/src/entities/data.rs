@@ -1,7 +1,7 @@
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, DeriveEntityModel, Serialize, Deserialize)]
 #[sea_orm(table_name = "data")]
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
@@ -28,6 +28,7 @@ pub struct Model {
     pub token_count: i64,
     pub data_size: i64,
     pub last_accessed: Option<DateTimeUtc>,
+    pub importance_weight: Option<f64>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

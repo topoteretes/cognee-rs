@@ -20,6 +20,9 @@ pub struct SearchRequest {
     pub session_id: Option<String>,
     pub node_type: Option<String>,
     pub node_name: Option<Vec<String>>,
+    /// Controls how multiple `node_name` filters combine:
+    /// `"OR"` = match any (default), `"AND"` = match all.
+    pub node_name_filter_operator: Option<String>,
     pub wide_search_top_k: Option<usize>,
     pub triplet_distance_penalty: Option<f32>,
     /// Whether to persist this query and its result to the search history database.
@@ -43,6 +46,12 @@ pub struct SearchRequest {
     /// When `true` and a session is active, automatically detect if the query
     /// contains feedback about the previous response before executing the search.
     pub auto_feedback_detection: Option<bool>,
+    /// Number of hops from query result nodes to include in the graph context.
+    /// Controls context breadth.
+    pub neighborhood_depth: Option<usize>,
+    /// Number of initial seed nodes for neighborhood expansion.
+    /// Controls starting point density.
+    pub neighborhood_seed_top_k: Option<usize>,
 }
 
 impl SearchRequest {
@@ -147,5 +156,48 @@ mod tests {
         let req: SearchRequest = serde_json::from_str(json).unwrap();
         let params = SearchParams::from(&req);
         assert_eq!(params.max_iter, Some(6));
+    }
+
+    #[test]
+    fn node_name_filter_operator_deserializes() {
+        let json = r#"{"query_text": "test", "node_name_filter_operator": "AND"}"#;
+        let req: SearchRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.node_name_filter_operator, Some("AND".to_string()));
+    }
+
+    #[test]
+    fn node_name_filter_operator_none_when_absent() {
+        let json = r#"{"query_text": "test"}"#;
+        let req: SearchRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.node_name_filter_operator, None);
+    }
+
+    #[test]
+    fn node_name_filter_operator_wired_to_search_params() {
+        use crate::types::SearchParams;
+        let json = r#"{"query_text": "test", "node_name_filter_operator": "AND"}"#;
+        let req: SearchRequest = serde_json::from_str(json).unwrap();
+        let params = SearchParams::from(&req);
+        assert_eq!(params.node_name_filter_operator, Some("AND".to_string()));
+    }
+
+    #[test]
+    fn neighborhood_params_deserialize() {
+        let json =
+            r#"{"query_text": "test", "neighborhood_depth": 3, "neighborhood_seed_top_k": 5}"#;
+        let req: SearchRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.neighborhood_depth, Some(3));
+        assert_eq!(req.neighborhood_seed_top_k, Some(5));
+    }
+
+    #[test]
+    fn neighborhood_params_wired_to_search_params() {
+        use crate::types::SearchParams;
+        let json =
+            r#"{"query_text": "test", "neighborhood_depth": 2, "neighborhood_seed_top_k": 10}"#;
+        let req: SearchRequest = serde_json::from_str(json).unwrap();
+        let params = SearchParams::from(&req);
+        assert_eq!(params.neighborhood_depth, Some(2));
+        assert_eq!(params.neighborhood_seed_top_k, Some(10));
     }
 }

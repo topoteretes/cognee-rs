@@ -1,6 +1,35 @@
+use std::sync::Arc;
+
 use serde::{Deserialize, Serialize};
 
 use super::error::MemifyError;
+
+/// Opaque wrapper around an async task callback for the memify pipeline.
+///
+/// Mirrors Python's `extraction_tasks` / `enrichment_tasks` parameters.
+/// The callback receives a JSON array of input data and returns a JSON array
+/// of output data.
+#[derive(Clone)]
+#[allow(clippy::type_complexity)]
+pub struct MemifyTask(
+    pub  Arc<
+        dyn Fn(
+                Vec<serde_json::Value>,
+            ) -> std::pin::Pin<
+                Box<
+                    dyn std::future::Future<Output = Result<Vec<serde_json::Value>, MemifyError>>
+                        + Send,
+                >,
+            > + Send
+            + Sync,
+    >,
+);
+
+impl std::fmt::Debug for MemifyTask {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("MemifyTask(…)")
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MemifyConfig {
@@ -26,6 +55,23 @@ pub struct MemifyConfig {
     /// Operator for node_name filtering ("OR" or "AND").
     /// Python: get_memory_fragment(node_name_filter_operator="OR")
     pub node_name_filter_operator: String,
+
+    /// Custom extraction tasks to run instead of (or in addition to)
+    /// the default triplet extraction.
+    /// Python: memify(extraction_tasks=...)
+    #[serde(skip)]
+    pub extraction_tasks: Option<Vec<MemifyTask>>,
+
+    /// Custom enrichment tasks to run after extraction.
+    /// Python: memify(enrichment_tasks=...)
+    #[serde(skip)]
+    pub enrichment_tasks: Option<Vec<MemifyTask>>,
+
+    /// Custom input data. When provided, skip reading from the graph
+    /// and use this data directly as input to the pipeline.
+    /// Python: memify(data=...)
+    #[serde(skip)]
+    pub custom_data: Option<Vec<serde_json::Value>>,
 }
 
 impl Default for MemifyConfig {
@@ -35,6 +81,9 @@ impl Default for MemifyConfig {
             node_type_filter: None,
             node_name_filter: None,
             node_name_filter_operator: "OR".to_string(),
+            extraction_tasks: None,
+            enrichment_tasks: None,
+            custom_data: None,
         }
     }
 }
@@ -57,6 +106,21 @@ impl MemifyConfig {
 
     pub fn with_node_name_filter_operator(mut self, op: String) -> Self {
         self.node_name_filter_operator = op;
+        self
+    }
+
+    pub fn with_extraction_tasks(mut self, tasks: Vec<MemifyTask>) -> Self {
+        self.extraction_tasks = Some(tasks);
+        self
+    }
+
+    pub fn with_enrichment_tasks(mut self, tasks: Vec<MemifyTask>) -> Self {
+        self.enrichment_tasks = Some(tasks);
+        self
+    }
+
+    pub fn with_custom_data(mut self, data: Vec<serde_json::Value>) -> Self {
+        self.custom_data = Some(data);
         self
     }
 
