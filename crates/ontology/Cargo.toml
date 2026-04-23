@@ -9,6 +9,10 @@ cognee-models = { path = "../models" }
 uuid = { workspace = true }
 thiserror = { workspace = true }
 log = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
 
 # RDF/OWL parsing and graph operations
 sophia = { workspace = true }
@@ -19,5 +23,5 @@ sophia_xml = { workspace = true }
 sophia_jsonld = { workspace = true }
 
 [dev-dependencies]
-tokio = { workspace = true }
+tempfile = { workspace = true }
 env_logger = { workspace = true }
