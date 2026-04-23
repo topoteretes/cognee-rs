@@ -97,6 +97,20 @@ pub trait VectorDB: Send + Sync {
         Ok(vec![])
     }
 
+    /// Remove all vector collections.
+    ///
+    /// Default implementation lists all collections and deletes each one.
+    /// Backends may override with a more efficient bulk operation.
+    ///
+    /// Equivalent to Python's `vector_engine.prune()`.
+    async fn prune(&self) -> VectorDBResult<()> {
+        let collections = self.list_collections().await?;
+        for (data_type, field_name) in collections {
+            self.delete_collection(&data_type, &field_name).await?;
+        }
+        Ok(())
+    }
+
     /// Perform multiple vector similarity searches in sequence.
     ///
     /// Default implementation loops over [`search_similar`]. Backends may override

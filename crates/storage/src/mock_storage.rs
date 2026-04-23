@@ -135,6 +135,11 @@ impl StorageTrait for MockStorage {
     fn base_path(&self) -> &str {
         ""
     }
+
+    async fn remove_all(&self) -> Result<(), StorageError> {
+        self.data.lock().unwrap().clear(); // lock poison is unrecoverable
+        Ok(())
+    }
 }
 
 #[cfg(test)]

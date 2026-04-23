@@ -303,6 +303,75 @@ pub trait GraphDBTrait: Send + Sync {
             .collect())
     }
 
+    /// Update a single property on a node.
+    ///
+    /// # Arguments
+    /// * `node_id` - The node identifier
+    /// * `key` - Property name
+    /// * `value` - New property value
+    ///
+    /// Default implementation fetches the node and its edges, modifies the
+    /// property, removes the old node (which may cascade-delete edges), re-adds
+    /// the node, and restores the edges. Backends should override with an
+    /// in-place `SET` operation for better performance and atomicity.
+    async fn update_node_property(
+        &self,
+        node_id: &str,
+        key: &str,
+        value: serde_json::Value,
+    ) -> GraphDBResult<()> {
+        let node = self
+            .get_node(node_id)
+            .await?
+            .ok_or_else(|| crate::GraphDBError::NodeError(format!("Node not found: {node_id}")))?;
+
+        // Save edges before deleting the node, since delete_node may cascade.
+        let edges = self.get_edges(node_id).await.unwrap_or_default();
+
+        let mut props = serde_json::Map::new();
+        for (k, v) in node {
+            props.insert(k.into_owned(), v);
+        }
+        props.insert(key.to_string(), value);
+
+        self.delete_node(node_id).await?;
+        self.add_node_raw(Value::Object(props)).await?;
+
+        // Restore edges that were removed by the cascade delete.
+        if !edges.is_empty() {
+            self.add_edges(&edges).await?;
+        }
+
+        Ok(())
+    }
+
+    /// Update a single property on an edge.
+    ///
+    /// # Arguments
+    /// * `source_id` - Source node ID
+    /// * `target_id` - Target node ID
+    /// * `relationship_name` - Edge label/relationship type
+    /// * `key` - Property name
+    /// * `value` - New property value
+    ///
+    /// Default implementation is a no-op that logs a warning. Backends that
+    /// support in-place edge property updates should override this method.
+    async fn update_edge_property(
+        &self,
+        source_id: &str,
+        target_id: &str,
+        relationship_name: &str,
+        key: &str,
+        value: serde_json::Value,
+    ) -> GraphDBResult<()> {
+        let _ = (source_id, target_id, relationship_name, key, value);
+        tracing::warn!(
+            "update_edge_property not implemented for this backend; \
+             edge {source_id} -> {target_id} ({relationship_name}) property {key} not updated"
+        );
+        Ok(())
+    }
+
     /// Retrieve a subgraph containing only the specified nodes and edges between them.
     ///
     /// Default implementation fetches the full graph and filters in memory.
