@@ -68,6 +68,7 @@
 pub mod builder;
 pub mod error;
 pub mod loader;
+pub mod manager;
 pub mod matching;
 pub mod models;
 pub mod noop;
@@ -76,6 +77,7 @@ pub mod traits;
 
 pub use error::{OntologyError, OntologyResult};
 pub use loader::OntologyFileInput;
+pub use manager::{OntologyManager, OntologyMetadata};
 pub use matching::{FuzzyMatchingStrategy, MatchingStrategy};
 pub use models::{AttachedOntologyNode, NodeCategory, OntologyLookup, uri_to_key};
 pub use noop::NoOpOntologyResolver;
