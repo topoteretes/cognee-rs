@@ -85,6 +85,12 @@ pub trait StorageTrait: Send + Sync {
 
     /// Initialize storage (create directories, etc.)
     async fn initialize(&self) -> Result<(), StorageError>;
+
+    /// Remove all files from storage.
+    ///
+    /// Equivalent to Python's `get_file_storage(data_root_directory).remove_all()`.
+    /// The storage directory itself is preserved; only its contents are deleted.
+    async fn remove_all(&self) -> Result<(), StorageError>;
 }
 
 /// Extension trait providing generic convenience methods on top of [`StorageTrait`].

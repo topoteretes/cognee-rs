@@ -113,6 +113,11 @@ pub use error::ComponentError;
 pub mod prelude {
     pub use crate::add::AddPipeline;
     pub use crate::api::DatasetManager;
+    pub use crate::api::{
+        ApiError, ForgetResult, ForgetTarget, ImproveResult, PruneResult, PruneTarget, RecallItem,
+        RecallResult, RecallSource, RememberItemInfo, RememberResult, RememberStatus, UpdateResult,
+        forget, improve, prune_data, prune_system, recall, remember, update,
+    };
     pub use crate::cognify::{CognifyConfig, cognify};
     pub use crate::cognify::{MemifyConfig, MemifyResult, run_memify};
     pub use crate::core::{

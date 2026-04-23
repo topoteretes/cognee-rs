@@ -184,6 +184,47 @@ impl StorageTrait for LocalStorage {
     fn base_path(&self) -> &str {
         self.base_path.to_str().unwrap_or("")
     }
+
+    async fn remove_all(&self) -> Result<(), StorageError> {
+        let mut entries = fs::read_dir(&self.base_path).await.map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                // Directory doesn't exist — nothing to remove.
+                return StorageError::NotFound(format!(
+                    "Base directory not found: {}",
+                    self.base_path.display()
+                ));
+            }
+            StorageError::IoError(format!("Failed to read directory: {}", e))
+        })?;
+
+        while let Some(entry) = entries.next_entry().await.map_err(|e| {
+            StorageError::IoError(format!("Failed to iterate directory entry: {}", e))
+        })? {
+            let path = entry.path();
+            let file_type = entry
+                .file_type()
+                .await
+                .map_err(|e| StorageError::IoError(format!("Failed to get file type: {}", e)))?;
+            if file_type.is_dir() {
+                fs::remove_dir_all(&path).await.map_err(|e| {
+                    StorageError::IoError(format!(
+                        "Failed to remove directory {}: {}",
+                        path.display(),
+                        e
+                    ))
+                })?;
+            } else {
+                fs::remove_file(&path).await.map_err(|e| {
+                    StorageError::IoError(format!(
+                        "Failed to remove file {}: {}",
+                        path.display(),
+                        e
+                    ))
+                })?;
+            }
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
