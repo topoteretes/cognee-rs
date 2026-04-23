@@ -96,11 +96,13 @@ pub mod ontology {
     pub use cognee_ontology::*;
 }
 
+pub mod api;
 pub mod component_manager;
 pub mod config;
 pub mod context;
 pub mod error;
 
+pub use api::{DatasetDb, DatasetError, DatasetManager};
 pub use component_manager::ComponentManager;
 pub use config::Settings;
 pub use context::PipelineContext;
@@ -108,6 +110,7 @@ pub use error::ComponentError;
 
 pub mod prelude {
     pub use crate::add::AddPipeline;
+    pub use crate::api::DatasetManager;
     pub use crate::cognify::{CognifyConfig, cognify};
     pub use crate::cognify::{MemifyConfig, MemifyResult, run_memify};
     pub use crate::core::{

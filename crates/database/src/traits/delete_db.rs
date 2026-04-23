@@ -20,6 +20,8 @@ pub trait DeleteDb: Send + Sync {
         tenant_id: Option<Uuid>,
     ) -> Result<Option<Dataset>, DatabaseError>;
     async fn get_dataset_data(&self, dataset_id: Uuid) -> Result<Vec<Data>, DatabaseError>;
+    /// Count the number of data items linked to a dataset without loading them.
+    async fn count_dataset_data(&self, dataset_id: Uuid) -> Result<usize, DatabaseError>;
     async fn list_datasets_by_owner(&self, owner_id: Uuid) -> Result<Vec<Dataset>, DatabaseError>;
     async fn list_datasets(&self) -> Result<Vec<Dataset>, DatabaseError>;
     async fn delete_dataset(&self, id: Uuid) -> Result<(), DatabaseError>;
@@ -176,6 +178,10 @@ impl DeleteDb for DatabaseConnection {
 
     async fn get_dataset_data(&self, dataset_id: Uuid) -> Result<Vec<Data>, DatabaseError> {
         datasets::get_dataset_data(self, dataset_id).await
+    }
+
+    async fn count_dataset_data(&self, dataset_id: Uuid) -> Result<usize, DatabaseError> {
+        datasets::count_dataset_data(self, dataset_id).await
     }
 
     async fn list_datasets_by_owner(&self, owner_id: Uuid) -> Result<Vec<Dataset>, DatabaseError> {

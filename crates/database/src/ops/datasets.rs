@@ -1,7 +1,8 @@
 use cognee_models::{Data, Dataset};
 use sea_orm::sea_query::OnConflict;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder,
+    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter,
+    QueryOrder,
 };
 use uuid::Uuid;
 
@@ -119,6 +120,21 @@ pub async fn detach_data_from_dataset(
         .await
         .map_err(map_sea_err)?;
     Ok(())
+}
+
+/// Count the number of data items linked to a dataset without loading them.
+///
+/// Uses `SELECT COUNT(*)` on the `dataset_data` junction table for efficiency.
+pub async fn count_dataset_data(
+    db: &DatabaseConnection,
+    dataset_id: Uuid,
+) -> Result<usize, DatabaseError> {
+    let count: u64 = dataset_data::Entity::find()
+        .filter(dataset_data::Column::DatasetId.eq(uuid_hex::to_hex(dataset_id)))
+        .count(db)
+        .await
+        .map_err(map_sea_err)?;
+    Ok(count as usize)
 }
 
 pub async fn get_dataset_data(
