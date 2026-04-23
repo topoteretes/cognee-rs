@@ -179,14 +179,14 @@ Keep the existing fallback test (no temporal nodes, should return generic graph 
 ## Running the Tests
 
 ```bash
-source .env && cargo test -p cognee-cognify temporal --nocapture
-source .env && cargo test -p cognee-search temporal --nocapture
+cargo test -p cognee-cognify temporal --nocapture
+cargo test -p cognee-search temporal --nocapture
 ```
 
 Or via the full suite:
 
 ```bash
-source .env && scripts/run_tests_with_openai.sh temporal
+scripts/run_tests_with_openai.sh temporal
 ```
 
 ---

@@ -168,10 +168,10 @@ cargo check --all-targets
 cargo clippy --all-targets
 
 # Run tests (debug mode by default, no --release unless explicitly asked)
-source .env && cargo test
+cargo test
 
 # After making changes, run the full check suite:
-source .env && scripts/check_all.sh
+scripts/check_all.sh
 ```
 
 ## Test Patterns
