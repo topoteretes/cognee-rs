@@ -19,15 +19,14 @@ use crate::{EdgeData, GraphDBError, GraphDBResult, GraphDBTrait, GraphNode, Node
 /// Ladybug's text property storage, so we remove them at the write boundary.
 fn sanitize_json_value(value: &mut serde_json::Value) {
     match value {
-        serde_json::Value::String(s) => {
+        serde_json::Value::String(s)
             if s.bytes()
-                .any(|b| b < 0x20 && b != b'\t' && b != b'\n' && b != b'\r')
-            {
-                *s = s
-                    .chars()
-                    .filter(|&c| c >= '\u{0020}' || c == '\t' || c == '\n' || c == '\r')
-                    .collect();
-            }
+                .any(|b| b < 0x20 && b != b'\t' && b != b'\n' && b != b'\r') =>
+        {
+            *s = s
+                .chars()
+                .filter(|&c| c >= '\u{0020}' || c == '\t' || c == '\n' || c == '\r')
+                .collect();
         }
         serde_json::Value::Array(arr) => {
             for item in arr {
