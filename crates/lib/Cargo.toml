@@ -94,5 +94,6 @@ uuid.workspace = true
 [dev-dependencies]
 cognee-test-utils = { path = "../test-utils" }
 cognee-storage = { path = "../storage", features = ["testing"] }
+tempfile = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 serial_test = { workspace = true }

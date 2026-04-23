@@ -4,8 +4,8 @@ use cognee_models::{Data, Dataset};
 use sea_orm::DatabaseConnection;
 use uuid::Uuid;
 
-use crate::ops::{data, datasets};
-use crate::types::DatabaseError;
+use crate::ops::{data, datasets, pipeline_runs};
+use crate::types::{DatabaseError, PipelineRunStatus};
 
 #[async_trait]
 pub trait IngestDb: Send + Sync {
@@ -20,6 +20,9 @@ pub trait IngestDb: Send + Sync {
     async fn get_dataset(&self, id: Uuid) -> Result<Option<Dataset>, DatabaseError>;
 
     async fn create_dataset(&self, dataset: Dataset) -> Result<Dataset, DatabaseError>;
+
+    /// List all datasets owned by the given user.
+    async fn list_datasets_by_owner(&self, owner_id: Uuid) -> Result<Vec<Dataset>, DatabaseError>;
 
     async fn get_data(&self, id: Uuid) -> Result<Option<Data>, DatabaseError>;
 
@@ -40,6 +43,15 @@ pub trait IngestDb: Send + Sync {
         data_ids: &[Uuid],
         timestamp: DateTime<Utc>,
     ) -> Result<(), DatabaseError>;
+
+    /// Get the latest pipeline run status for a (pipeline_name, dataset_id) pair.
+    ///
+    /// Returns `None` if no matching run exists.
+    async fn get_latest_pipeline_status(
+        &self,
+        pipeline_name: &str,
+        dataset_id: Uuid,
+    ) -> Result<Option<PipelineRunStatus>, DatabaseError>;
 }
 
 #[async_trait]
@@ -59,6 +71,10 @@ impl IngestDb for DatabaseConnection {
 
     async fn create_dataset(&self, dataset: Dataset) -> Result<Dataset, DatabaseError> {
         datasets::create_dataset(self, dataset).await
+    }
+
+    async fn list_datasets_by_owner(&self, owner_id: Uuid) -> Result<Vec<Dataset>, DatabaseError> {
+        datasets::list_datasets_by_owner(self, owner_id).await
     }
 
     async fn get_data(&self, id: Uuid) -> Result<Option<Data>, DatabaseError> {
@@ -83,5 +99,13 @@ impl IngestDb for DatabaseConnection {
         timestamp: DateTime<Utc>,
     ) -> Result<(), DatabaseError> {
         data::update_last_accessed(self, data_ids, timestamp).await
+    }
+
+    async fn get_latest_pipeline_status(
+        &self,
+        pipeline_name: &str,
+        dataset_id: Uuid,
+    ) -> Result<Option<PipelineRunStatus>, DatabaseError> {
+        pipeline_runs::get_latest_pipeline_status(self, pipeline_name, dataset_id).await
     }
 }
