@@ -347,7 +347,7 @@ impl FeedbackRetriever {
             .map(|(node_id, node_data)| (node_id, Self::parse_node_timestamp(&node_data)))
             .collect::<Vec<_>>();
 
-        interactions.sort_by(|left, right| right.1.cmp(&left.1));
+        interactions.sort_by_key(|i| std::cmp::Reverse(i.1));
 
         Ok(interactions
             .into_iter()

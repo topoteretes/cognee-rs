@@ -74,17 +74,15 @@ fn find_opf_path(archive: &mut zip::ZipArchive<Cursor<&[u8]>>) -> Result<String,
     let mut reader = Reader::from_str(&container_xml);
     loop {
         match reader.read_event() {
-            Ok(Event::Start(ref e)) | Ok(Event::Empty(ref e)) => {
-                if e.local_name().as_ref() == b"rootfile" {
-                    for attr in e.attributes().flatten() {
-                        if attr.key.local_name().as_ref() == b"full-path" {
-                            let path = String::from_utf8(attr.value.to_vec()).map_err(|e| {
-                                LoaderError::ExtractionFailed(format!(
-                                    "Invalid UTF-8 in OPF path: {e}"
-                                ))
-                            })?;
-                            return Ok(path);
-                        }
+            Ok(Event::Start(ref e)) | Ok(Event::Empty(ref e))
+                if e.local_name().as_ref() == b"rootfile" =>
+            {
+                for attr in e.attributes().flatten() {
+                    if attr.key.local_name().as_ref() == b"full-path" {
+                        let path = String::from_utf8(attr.value.to_vec()).map_err(|e| {
+                            LoaderError::ExtractionFailed(format!("Invalid UTF-8 in OPF path: {e}"))
+                        })?;
+                        return Ok(path);
                     }
                 }
             }

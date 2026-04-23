@@ -39,7 +39,7 @@ fn get_top_n_frequent_words(text: &str, top_n: usize) -> String {
     // Sort by frequency descending. Use a stable sort so equal-frequency words
     // remain in a deterministic order.
     let mut word_counts: Vec<(String, usize)> = counts.into_iter().collect();
-    word_counts.sort_by(|a, b| b.1.cmp(&a.1));
+    word_counts.sort_by_key(|w| std::cmp::Reverse(w.1));
 
     word_counts
         .into_iter()
