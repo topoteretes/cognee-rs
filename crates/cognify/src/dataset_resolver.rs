@@ -32,6 +32,21 @@ use crate::tasks::cognify;
 const COGNIFY_PIPELINE_NAME: &str = "cognify_pipeline";
 
 // ---------------------------------------------------------------------------
+// DatasetRef — identify a dataset by name or UUID
+// ---------------------------------------------------------------------------
+
+/// Reference to a dataset, either by name or by UUID.
+///
+/// Mirrors Python's `Union[str, list[str], list[UUID]]` parameter on `cognify()`.
+#[derive(Debug, Clone)]
+pub enum DatasetRef {
+    /// Identify a dataset by its human-readable name.
+    ByName(String),
+    /// Identify a dataset by its UUID.
+    ById(Uuid),
+}
+
+// ---------------------------------------------------------------------------
 // Trait
 // ---------------------------------------------------------------------------
 
@@ -56,6 +71,19 @@ pub trait DatasetResolver: Send + Sync {
 
     /// Return all [`Data`] items attached to the given dataset.
     async fn get_dataset_data(&self, dataset_id: Uuid) -> Result<Vec<Data>, CognifyError>;
+
+    /// Resolve a single dataset by its UUID.
+    ///
+    /// Default implementation returns `None` (not supported). Implementors
+    /// backed by a real database should override.
+    async fn resolve_dataset_by_id(
+        &self,
+        _id: Uuid,
+        _user_id: Uuid,
+        _permission: &str,
+    ) -> Result<Option<Dataset>, CognifyError> {
+        Ok(None)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -170,6 +198,137 @@ pub async fn cognify_datasets(
 
     info!(
         "cognify_datasets complete: {} dataset(s) processed",
+        results.len()
+    );
+    Ok(results)
+}
+
+/// Like [`cognify_datasets`], but accepts [`DatasetRef`] values (by name or
+/// by UUID).
+///
+/// UUID-based refs are resolved via [`DatasetResolver::resolve_dataset_by_id`].
+/// Name-based refs are collected and resolved via [`DatasetResolver::resolve_datasets`].
+#[allow(clippy::too_many_arguments)]
+pub async fn cognify_dataset_refs(
+    refs: Vec<DatasetRef>,
+    user_id: Uuid,
+    tenant_id: Option<Uuid>,
+    resolver: Arc<dyn DatasetResolver>,
+    llm: Arc<dyn Llm>,
+    storage: Arc<dyn StorageTrait>,
+    graph_db: Arc<dyn GraphDBTrait>,
+    vector_db: Arc<dyn VectorDB>,
+    embedding_engine: Arc<dyn EmbeddingEngine>,
+    db: Option<Arc<DatabaseConnection>>,
+    ontology_resolver: Arc<dyn OntologyResolver>,
+    config: &CognifyConfig,
+) -> Result<Vec<CognifyResult>, CognifyError> {
+    // Split refs into name-based and id-based.
+    let mut names = Vec::new();
+    let mut id_datasets = Vec::new();
+
+    for r in refs {
+        match r {
+            DatasetRef::ByName(n) => names.push(n),
+            DatasetRef::ById(id) => {
+                let ds = resolver
+                    .resolve_dataset_by_id(id, user_id, "read")
+                    .await?
+                    .ok_or_else(|| {
+                        CognifyError::DatasetResolutionError(format!(
+                            "Dataset with id {id} not found"
+                        ))
+                    })?;
+                id_datasets.push(ds);
+            }
+        }
+    }
+
+    // Resolve name-based refs.
+    let name_datasets = resolver.resolve_datasets(&names, user_id, "read").await?;
+
+    // Merge both sets and delegate to the core loop via cognify_datasets.
+    // To avoid duplicating the per-dataset loop, we just call cognify_datasets
+    // with a fake name list (empty) and handle both sets directly.
+    let mut all_datasets = name_datasets;
+    all_datasets.extend(id_datasets);
+
+    info!(
+        dataset_count = all_datasets.len(),
+        "Resolved {} dataset(s) for cognify (via refs)",
+        all_datasets.len()
+    );
+
+    let mut results = Vec::new();
+    for dataset in &all_datasets {
+        if config.use_pipeline_cache
+            && let Some(ref db_conn) = db
+        {
+            let status =
+                get_latest_pipeline_status(db_conn, COGNIFY_PIPELINE_NAME, dataset.id).await?;
+            if matches!(status, Some(PipelineRunStatus::Completed)) {
+                info!(
+                    dataset_name = %dataset.name,
+                    dataset_id = %dataset.id,
+                    "Skipping already-processed dataset (pipeline cache hit)"
+                );
+                continue;
+            }
+        }
+
+        let data_items = resolver.get_dataset_data(dataset.id).await?;
+        if data_items.is_empty() {
+            info!(
+                dataset_name = %dataset.name,
+                dataset_id = %dataset.id,
+                "Skipping empty dataset"
+            );
+            continue;
+        }
+
+        info!(
+            dataset_name = %dataset.name,
+            dataset_id = %dataset.id,
+            data_items = data_items.len(),
+            "Running cognify for dataset"
+        );
+
+        let result = cognify(
+            data_items,
+            dataset.id,
+            Some(user_id),
+            tenant_id,
+            Arc::clone(&llm),
+            Arc::clone(&storage),
+            Arc::clone(&graph_db),
+            Arc::clone(&vector_db),
+            Arc::clone(&embedding_engine),
+            db.clone(),
+            Arc::clone(&ontology_resolver),
+            config,
+        )
+        .await?;
+
+        if let Some(ref db_conn) = db {
+            let pipeline_run_id = Uuid::new_v4();
+            let run = PipelineRun {
+                id: Uuid::new_v4(),
+                created_at: Utc::now(),
+                status: PipelineRunStatus::Completed,
+                pipeline_run_id,
+                pipeline_name: COGNIFY_PIPELINE_NAME.to_string(),
+                pipeline_id: pipeline_run_id,
+                dataset_id: dataset.id,
+                run_info: None,
+            };
+            create_pipeline_run(db_conn, run).await?;
+        }
+
+        results.push(result);
+    }
+
+    info!(
+        "cognify_dataset_refs complete: {} dataset(s) processed",
         results.len()
     );
     Ok(results)

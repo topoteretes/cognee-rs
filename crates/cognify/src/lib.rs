@@ -13,8 +13,8 @@ pub mod temporal_extraction;
 pub use temporal_extraction::{TemporalEntityEnricher, TemporalEventExtractor};
 pub mod triplet_creation;
 
-pub use config::{ChunkStrategy, CognifyConfig, ConfigError};
-pub use dataset_resolver::{DatasetResolver, cognify_datasets};
+pub use config::{ChunkStrategy, CognifyConfig, ConfigError, CustomChunker};
+pub use dataset_resolver::{DatasetRef, DatasetResolver, cognify_dataset_refs, cognify_datasets};
 pub use error::CognifyError;
 pub use fact_extraction::{Edge, FactExtractor, GraphModel, KnowledgeGraph, Node};
 pub use graph_extraction::{GraphExtractable, Relationship, get_graph_from_model};
@@ -22,7 +22,7 @@ pub use graph_integration::{
     DeduplicationResult, GraphEdgePair, GraphNodePair, deduplicate_nodes_and_edges,
     expand_with_nodes_and_edges,
 };
-pub use memify::{MemifyConfig, MemifyError, MemifyResult, memify as run_memify};
+pub use memify::{MemifyConfig, MemifyError, MemifyResult, MemifyTask, memify as run_memify};
 pub use pipeline::{CognifyResult, IndexedFieldsStats};
 pub use summarization::{SummarizedContent, SummaryExtractor, TextSummary};
 pub use tasks::{

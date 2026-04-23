@@ -8,6 +8,7 @@
 //! - [`build_add_pipeline`] — build a composable cognee-core [`Pipeline`]
 //! - [`AddPipeline`] — convenience wrapper with a simple `add()` API
 
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 use tracing::{info, instrument};
@@ -22,6 +23,30 @@ use crate::content_hasher::HashAlgorithm;
 use crate::id_generation::{generate_data_id, generate_dataset_id};
 use crate::loader_registry::get_loader_name;
 use crate::url_crawler::{HtmlParser, UrlFetcher};
+
+// ---------------------------------------------------------------------------
+// AddParams
+// ---------------------------------------------------------------------------
+
+/// Optional parameters for the [`AddPipeline::add`] method.
+///
+/// All fields default to `None`/sensible values. Use the builder methods or
+/// struct literal syntax to configure.
+#[derive(Debug, Clone, Default)]
+pub struct AddParams {
+    /// List of node identifiers for graph organisation and access control grouping.
+    /// Stored as a JSON string in `Data.node_set`.
+    pub node_set: Option<Vec<String>>,
+
+    /// Target an existing dataset by UUID instead of name.
+    pub dataset_id: Option<Uuid>,
+
+    /// Maps MIME types or file extensions to preferred loader names.
+    pub preferred_loaders: Option<HashMap<String, String>>,
+
+    /// Importance weight (0.0 to 1.0) for relevance scoring.
+    pub importance_weight: Option<f64>,
+}
 
 /// Extract the MIME essence (e.g. `"text/html"`) from a full Content-Type
 /// header value like `"text/html; charset=utf-8"`.
@@ -103,6 +128,10 @@ pub struct ProcessedInput {
     pub owner_id: Uuid,
     pub tenant_id: Option<Uuid>,
     pub external_metadata: Option<String>,
+    /// JSON-serialized node set identifiers for graph organisation.
+    pub node_set: Option<String>,
+    /// Importance weight for ranking (0.0 to 1.0).
+    pub importance_weight: Option<f64>,
 }
 
 // ---------------------------------------------------------------------------
@@ -263,6 +292,8 @@ pub async fn process_input(
         owner_id,
         tenant_id,
         external_metadata,
+        node_set: None,
+        importance_weight: None,
     })
 }
 
@@ -290,7 +321,16 @@ pub async fn persist_data(
     owner_id: Uuid,
     tenant_id: Option<Uuid>,
 ) -> Result<Data, Box<dyn std::error::Error>> {
-    persist_data_with_acl(processed, database, dataset_name, owner_id, tenant_id, None).await
+    persist_data_with_acl(
+        processed,
+        database,
+        dataset_name,
+        owner_id,
+        tenant_id,
+        None,
+        None,
+    )
+    .await
 }
 
 /// Like [`persist_data`], but optionally grants all four ACL permissions
@@ -299,6 +339,9 @@ pub async fn persist_data(
 /// When `acl_db` is `Some`, the owner is ensured as a principal and receives
 /// all permissions on newly created datasets, matching Python's
 /// `create_authorized_dataset()` behavior.
+///
+/// When `target_dataset_id` is `Some`, the pipeline looks up the dataset by UUID
+/// instead of name, allowing callers to target a specific existing dataset.
 #[instrument(
     name = "ingestion.persist_data_with_acl",
     skip(processed, database, acl_db),
@@ -311,23 +354,36 @@ pub async fn persist_data_with_acl(
     owner_id: Uuid,
     tenant_id: Option<Uuid>,
     acl_db: Option<&dyn AclDb>,
+    target_dataset_id: Option<Uuid>,
 ) -> Result<Data, Box<dyn std::error::Error>> {
-    // Resolve or create the dataset (idempotent: deterministic UUID5 ID).
-    let dataset_id = generate_dataset_id(dataset_name, owner_id, tenant_id);
+    // Resolve the dataset: prefer explicit UUID, fall back to name-based lookup.
     let is_new_dataset;
-    let dataset = match database
-        .get_dataset_by_name(dataset_name, owner_id, tenant_id)
-        .await?
-    {
-        Some(ds) => {
-            is_new_dataset = false;
-            ds
+    let dataset = if let Some(ds_id) = target_dataset_id {
+        match database.get_dataset(ds_id).await? {
+            Some(ds) => {
+                is_new_dataset = false;
+                ds
+            }
+            None => {
+                return Err(format!("Dataset with id {ds_id} not found").into());
+            }
         }
-        None => {
-            is_new_dataset = true;
-            let new_dataset =
-                Dataset::new(dataset_name.to_string(), owner_id, tenant_id, dataset_id);
-            database.create_dataset(new_dataset).await?
+    } else {
+        let generated_id = generate_dataset_id(dataset_name, owner_id, tenant_id);
+        match database
+            .get_dataset_by_name(dataset_name, owner_id, tenant_id)
+            .await?
+        {
+            Some(ds) => {
+                is_new_dataset = false;
+                ds
+            }
+            None => {
+                is_new_dataset = true;
+                let new_dataset =
+                    Dataset::new(dataset_name.to_string(), owner_id, tenant_id, generated_id);
+                database.create_dataset(new_dataset).await?
+            }
         }
     };
     info!(dataset_id = %dataset.id, "dataset resolved");
@@ -376,6 +432,12 @@ pub async fn persist_data_with_acl(
     }
     if let Some(ref meta) = processed.external_metadata {
         data_builder = data_builder.external_metadata(meta.clone());
+    }
+    if let Some(ref ns) = processed.node_set {
+        data_builder = data_builder.node_set(ns.clone());
+    }
+    if let Some(w) = processed.importance_weight {
+        data_builder = data_builder.importance_weight(w);
     }
     let data = data_builder.build();
 
@@ -591,6 +653,7 @@ pub fn make_persist_data_task_with_acl(
                 owner_id,
                 tenant_id,
                 acl_db.as_deref(),
+                None,
             )
             .await
             .map(Box::new)
@@ -717,10 +780,41 @@ impl AddPipeline {
         owner_id: Uuid,
         tenant_id: Option<Uuid>,
     ) -> Result<Vec<Data>, Box<dyn std::error::Error>> {
+        self.add_with_params(
+            inputs,
+            dataset_name,
+            owner_id,
+            tenant_id,
+            &AddParams::default(),
+        )
+        .await
+    }
+
+    /// Like [`add`](Self::add), but accepts additional optional parameters.
+    #[instrument(
+        name = "ingestion.add_with_params",
+        skip(self, inputs, params),
+        fields(dataset_name, owner_id = %owner_id, inputs_count = inputs.len())
+    )]
+    pub async fn add_with_params(
+        &self,
+        inputs: Vec<DataInput>,
+        dataset_name: &str,
+        owner_id: Uuid,
+        tenant_id: Option<Uuid>,
+        params: &AddParams,
+    ) -> Result<Vec<Data>, Box<dyn std::error::Error>> {
+        let node_set_json = params
+            .node_set
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()
+            .map_err(|e| format!("Failed to serialize node_set: {e}"))?;
+
         let mut created_data = Vec::new();
 
         for input in &inputs {
-            let processed = process_input(
+            let mut processed = process_input(
                 input,
                 &*self.storage,
                 self.hash_algorithm,
@@ -729,6 +823,10 @@ impl AddPipeline {
             )
             .await?;
 
+            // Wire add-specific parameters into the processed input.
+            processed.node_set = node_set_json.clone();
+            processed.importance_weight = params.importance_weight;
+
             let data = persist_data_with_acl(
                 &processed,
                 &*self.database,
@@ -736,6 +834,7 @@ impl AddPipeline {
                 owner_id,
                 tenant_id,
                 self.acl_db.as_deref(),
+                params.dataset_id,
             )
             .await?;
             created_data.push(data);

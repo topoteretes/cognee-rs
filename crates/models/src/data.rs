@@ -50,6 +50,8 @@ pub struct Data {
     pub data_size: i64,
     /// Last access timestamp
     pub last_accessed: Option<DateTime<Utc>>,
+    /// Importance weight for ranking (0.0 to 1.0). Influences relevance scoring.
+    pub importance_weight: Option<f64>,
 }
 
 impl Data {
@@ -82,6 +84,8 @@ impl Data {
             loader_engine: None,
             raw_content_hash: None,
             external_metadata: None,
+            node_set: None,
+            importance_weight: None,
             data_size: -1,
         }
     }
@@ -104,6 +108,8 @@ pub struct DataBuilder {
     loader_engine: Option<String>,
     raw_content_hash: Option<String>,
     external_metadata: Option<String>,
+    node_set: Option<String>,
+    importance_weight: Option<f64>,
     data_size: i64,
 }
 
@@ -140,6 +146,14 @@ impl DataBuilder {
         self.data_size = v;
         self
     }
+    pub fn node_set(mut self, v: impl Into<String>) -> Self {
+        self.node_set = Some(v.into());
+        self
+    }
+    pub fn importance_weight(mut self, w: f64) -> Self {
+        self.importance_weight = Some(w);
+        self
+    }
 
     pub fn build(self) -> Data {
         Data {
@@ -160,11 +174,12 @@ impl DataBuilder {
             loader_engine: self.loader_engine,
             raw_content_hash: self.raw_content_hash,
             external_metadata: self.external_metadata,
-            node_set: None,
+            node_set: self.node_set,
             pipeline_status: None,
             token_count: -1,
             data_size: self.data_size,
             last_accessed: None,
+            importance_weight: self.importance_weight,
         }
     }
 }

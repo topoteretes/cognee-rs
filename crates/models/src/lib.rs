@@ -1,3 +1,4 @@
+mod backend_overrides;
 mod data;
 mod data_input;
 mod data_point;
@@ -12,6 +13,7 @@ mod entity_type;
 pub mod temporal_event;
 mod triplet;
 
+pub use backend_overrides::{BackendConfig, BackendOverrides};
 pub use data::Data;
 pub use data_input::DataInput;
 pub use data_point::DataPoint;

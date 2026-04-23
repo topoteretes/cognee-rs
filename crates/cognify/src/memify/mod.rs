@@ -22,7 +22,7 @@ pub mod extract_triplets;
 pub mod index_triplets;
 pub mod pipeline;
 
-pub use config::MemifyConfig;
+pub use config::{MemifyConfig, MemifyTask};
 pub use error::MemifyError;
 pub use index_triplets::IndexResult;
 pub use pipeline::{MemifyResult, memify};

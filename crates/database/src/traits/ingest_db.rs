@@ -16,6 +16,9 @@ pub trait IngestDb: Send + Sync {
         tenant_id: Option<Uuid>,
     ) -> Result<Option<Dataset>, DatabaseError>;
 
+    /// Look up a dataset by its UUID.
+    async fn get_dataset(&self, id: Uuid) -> Result<Option<Dataset>, DatabaseError>;
+
     async fn create_dataset(&self, dataset: Dataset) -> Result<Dataset, DatabaseError>;
 
     async fn get_data(&self, id: Uuid) -> Result<Option<Data>, DatabaseError>;
@@ -48,6 +51,10 @@ impl IngestDb for DatabaseConnection {
         tenant_id: Option<Uuid>,
     ) -> Result<Option<Dataset>, DatabaseError> {
         datasets::get_dataset_by_name(self, name, owner_id, tenant_id).await
+    }
+
+    async fn get_dataset(&self, id: Uuid) -> Result<Option<Dataset>, DatabaseError> {
+        datasets::get_dataset(self, id).await
     }
 
     async fn create_dataset(&self, dataset: Dataset) -> Result<Dataset, DatabaseError> {

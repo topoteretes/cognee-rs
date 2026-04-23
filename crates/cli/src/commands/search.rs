@@ -99,6 +99,7 @@ pub fn run(args: SearchArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> 
             session_id: args.session_id,
             node_type: None,
             node_name: None,
+            node_name_filter_operator: None,
             wide_search_top_k: None,
             triplet_distance_penalty: None,
             save_interaction: Some(false),
@@ -109,6 +110,8 @@ pub fn run(args: SearchArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> 
             response_schema: None,
             custom_search_type: None,
             auto_feedback_detection: None,
+            neighborhood_depth: None,
+            neighborhood_seed_top_k: None,
         };
 
         let response = orchestrator

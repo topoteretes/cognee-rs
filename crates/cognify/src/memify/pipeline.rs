@@ -56,8 +56,45 @@ pub async fn memify(
     // 1. Validate configuration.
     config.validate()?;
 
-    // 2. Extract triplets from the graph database.
-    let triplets = extract_triplets_from_graph_db(graph_db, config).await?;
+    // 2. Extract triplets from the graph database (or use custom data).
+    let triplets = if let Some(ref custom_data) = config.custom_data {
+        // When custom data is provided, convert JSON values to Triplet objects.
+        // Each value should be a JSON object with "source_node", "relationship_name",
+        // and "target_node" fields. UUIDs are generated deterministically from the
+        // text values.
+        use cognee_models::Triplet;
+        let mut custom_triplets = Vec::new();
+        for value in custom_data {
+            let source = value
+                .get("source_node")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown")
+                .to_string();
+            let relationship = value
+                .get("relationship_name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("related_to")
+                .to_string();
+            let target = value
+                .get("target_node")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown")
+                .to_string();
+            let source_id = Uuid::new_v5(&Uuid::NAMESPACE_OID, source.to_lowercase().as_bytes());
+            let target_id = Uuid::new_v5(&Uuid::NAMESPACE_OID, target.to_lowercase().as_bytes());
+            let text = format!("{source}-\u{203A}{relationship}-\u{203A}{target}");
+            custom_triplets.push(
+                Triplet::new(source_id, target_id, relationship, text).with_names(source, target),
+            );
+        }
+        info!(
+            "Using {} custom triplets instead of graph extraction",
+            custom_triplets.len()
+        );
+        custom_triplets
+    } else {
+        extract_triplets_from_graph_db(graph_db, config).await?
+    };
 
     // 3. If empty, return early with zeros.
     if triplets.is_empty() {

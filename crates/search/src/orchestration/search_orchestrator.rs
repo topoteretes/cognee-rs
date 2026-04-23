@@ -472,6 +472,7 @@ mod tests {
             session_id: None,
             node_type: None,
             node_name: None,
+            node_name_filter_operator: None,
             wide_search_top_k: None,
             triplet_distance_penalty: None,
             save_interaction: None,
@@ -482,6 +483,8 @@ mod tests {
             response_schema: None,
             custom_search_type: None,
             auto_feedback_detection: None,
+            neighborhood_depth: None,
+            neighborhood_seed_top_k: None,
         };
 
         let response = orchestrator.search(&request).await.unwrap();
@@ -515,6 +518,7 @@ mod tests {
             session_id: None,
             node_type: None,
             node_name: None,
+            node_name_filter_operator: None,
             wide_search_top_k: None,
             triplet_distance_penalty: None,
             save_interaction: None,
@@ -525,6 +529,8 @@ mod tests {
             response_schema: None,
             custom_search_type: None,
             auto_feedback_detection: None,
+            neighborhood_depth: None,
+            neighborhood_seed_top_k: None,
         };
 
         let response = orchestrator.search(&request).await.unwrap();
@@ -563,6 +569,7 @@ mod tests {
             session_id: None,
             node_type: None,
             node_name: None,
+            node_name_filter_operator: None,
             wide_search_top_k: None,
             triplet_distance_penalty: None,
             save_interaction: None,
@@ -573,6 +580,8 @@ mod tests {
             response_schema: None,
             custom_search_type: None,
             auto_feedback_detection: None,
+            neighborhood_depth: None,
+            neighborhood_seed_top_k: None,
         };
 
         let response = orchestrator.search(&request).await.unwrap();
@@ -638,6 +647,7 @@ mod tests {
             session_id: None,
             node_type: None,
             node_name: None,
+            node_name_filter_operator: None,
             wide_search_top_k: None,
             triplet_distance_penalty: None,
             save_interaction: None,
@@ -648,6 +658,8 @@ mod tests {
             response_schema: None,
             custom_search_type: None,
             auto_feedback_detection: None,
+            neighborhood_depth: None,
+            neighborhood_seed_top_k: None,
         };
 
         let response = orchestrator.search(&request).await.unwrap();
@@ -736,6 +748,7 @@ mod tests {
             session_id: None,
             node_type: None,
             node_name: None,
+            node_name_filter_operator: None,
             wide_search_top_k: None,
             triplet_distance_penalty: None,
             save_interaction: None,
@@ -746,6 +759,8 @@ mod tests {
             response_schema: None,
             custom_search_type: None,
             auto_feedback_detection: None,
+            neighborhood_depth: None,
+            neighborhood_seed_top_k: None,
         };
 
         let response = orchestrator.search(&request).await.unwrap();
@@ -828,6 +843,7 @@ mod tests {
             session_id: None,
             node_type: None,
             node_name: None,
+            node_name_filter_operator: None,
             wide_search_top_k: None,
             triplet_distance_penalty: None,
             save_interaction: None,
@@ -838,6 +854,8 @@ mod tests {
             response_schema: None,
             custom_search_type: None,
             auto_feedback_detection: None,
+            neighborhood_depth: None,
+            neighborhood_seed_top_k: None,
         };
 
         let response = orchestrator.search(&request).await.unwrap();
@@ -875,6 +893,7 @@ mod tests {
             session_id: None,
             node_type: None,
             node_name: None,
+            node_name_filter_operator: None,
             wide_search_top_k: None,
             triplet_distance_penalty: None,
             save_interaction: Some(true),
@@ -885,6 +904,8 @@ mod tests {
             response_schema: None,
             custom_search_type: None,
             auto_feedback_detection: None,
+            neighborhood_depth: None,
+            neighborhood_seed_top_k: None,
         };
 
         let _ = orchestrator.search(&request).await.unwrap();
@@ -924,6 +945,7 @@ mod tests {
                 session_id: None,
                 node_type: None,
                 node_name: None,
+                node_name_filter_operator: None,
                 wide_search_top_k: None,
                 triplet_distance_penalty: None,
                 save_interaction: None,
@@ -934,6 +956,8 @@ mod tests {
                 response_schema: None,
                 custom_search_type: None,
                 auto_feedback_detection: None,
+                neighborhood_depth: None,
+                neighborhood_seed_top_k: None,
             },
             SearchRequest {
                 query_text: "second".to_string(),
@@ -948,6 +972,7 @@ mod tests {
                 session_id: None,
                 node_type: None,
                 node_name: None,
+                node_name_filter_operator: None,
                 wide_search_top_k: None,
                 triplet_distance_penalty: None,
                 save_interaction: None,
@@ -958,6 +983,8 @@ mod tests {
                 response_schema: None,
                 custom_search_type: None,
                 auto_feedback_detection: None,
+                neighborhood_depth: None,
+                neighborhood_seed_top_k: None,
             },
         ];
 
@@ -991,6 +1018,7 @@ mod tests {
             session_id: None,
             node_type: None,
             node_name: None,
+            node_name_filter_operator: None,
             wide_search_top_k: None,
             triplet_distance_penalty: None,
             save_interaction: None,
@@ -1001,6 +1029,8 @@ mod tests {
             response_schema: None,
             custom_search_type: Some("my_custom".to_string()),
             auto_feedback_detection: None,
+            neighborhood_depth: None,
+            neighborhood_seed_top_k: None,
         };
 
         let response = orchestrator.search(&request).await.unwrap();
@@ -1082,6 +1112,7 @@ mod tests {
             session_id: None,
             node_type: None,
             node_name: None,
+            node_name_filter_operator: None,
             wide_search_top_k: None,
             triplet_distance_penalty: None,
             save_interaction: Some(false),
@@ -1092,6 +1123,8 @@ mod tests {
             response_schema: None,
             custom_search_type: None,
             auto_feedback_detection: None,
+            neighborhood_depth: None,
+            neighborhood_seed_top_k: None,
         }
     }
 
@@ -1399,6 +1432,7 @@ mod tests {
             session_id: None,
             node_type: None,
             node_name: None,
+            node_name_filter_operator: None,
             wide_search_top_k: None,
             triplet_distance_penalty: None,
             save_interaction: None,
@@ -1409,6 +1443,8 @@ mod tests {
             response_schema: None,
             custom_search_type: Some("nonexistent".to_string()),
             auto_feedback_detection: None,
+            neighborhood_depth: None,
+            neighborhood_seed_top_k: None,
         };
 
         let result = orchestrator.search(&request).await;

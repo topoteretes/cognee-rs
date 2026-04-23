@@ -223,6 +223,7 @@ async fn test_search_updates_last_accessed_timestamp() {
         session_id: None,
         node_type: None,
         node_name: None,
+        node_name_filter_operator: None,
         wide_search_top_k: None,
         triplet_distance_penalty: None,
         save_interaction: Some(false),
@@ -233,6 +234,8 @@ async fn test_search_updates_last_accessed_timestamp() {
         response_schema: None,
         custom_search_type: None,
         auto_feedback_detection: None,
+        neighborhood_depth: None,
+        neighborhood_seed_top_k: None,
     };
 
     orchestrator
