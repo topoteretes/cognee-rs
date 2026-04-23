@@ -5,7 +5,9 @@ use sea_orm::prelude::*;
 use sea_orm::{DatabaseConnection, QuerySelect, Set};
 use uuid::Uuid;
 
-use crate::entities::{acl, permission, principal};
+use std::collections::HashSet;
+
+use crate::entities::{acl, permission, principal, user_role, user_tenant};
 use crate::types::DatabaseError;
 use crate::uuid_hex;
 
@@ -201,4 +203,102 @@ pub async fn grant_all_permissions_on_dataset_via_trait(
     }
 
     Ok(())
+}
+
+/// Check permission considering role and tenant inheritance.
+///
+/// Resolution order (mirrors Python `get_all_user_permission_datasets`):
+/// 1. Direct user ACL
+/// 2. Tenant-level ACL for each tenant the user belongs to
+/// 3. Role-level ACL for each role the user holds
+pub async fn has_permission_with_roles(
+    db: &DatabaseConnection,
+    user_id: Uuid,
+    dataset_id: Uuid,
+    permission_name: &str,
+) -> Result<bool, DatabaseError> {
+    // 1. Direct user ACL
+    if has_permission(db, user_id, dataset_id, permission_name).await? {
+        return Ok(true);
+    }
+
+    let user_hex = uuid_hex::to_hex(user_id);
+
+    // 2. Tenant-level ACL
+    let tenant_junctions = user_tenant::Entity::find()
+        .filter(user_tenant::Column::UserId.eq(user_hex.clone()))
+        .all(db)
+        .await
+        .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
+
+    for junc in &tenant_junctions {
+        let tenant_id = uuid_hex::from_hex(&junc.tenant_id)
+            .map_err(|e| DatabaseError::QueryError(format!("Invalid tenant_id hex: {e}")))?;
+        if has_permission(db, tenant_id, dataset_id, permission_name).await? {
+            return Ok(true);
+        }
+    }
+
+    // 3. Role-level ACL
+    let role_junctions = user_role::Entity::find()
+        .filter(user_role::Column::UserId.eq(user_hex))
+        .all(db)
+        .await
+        .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
+
+    for junc in &role_junctions {
+        let role_id = uuid_hex::from_hex(&junc.role_id)
+            .map_err(|e| DatabaseError::QueryError(format!("Invalid role_id hex: {e}")))?;
+        if has_permission(db, role_id, dataset_id, permission_name).await? {
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
+}
+
+/// Return all dataset IDs the user can access via direct, tenant, or
+/// role grants. Deduplicates results.
+pub async fn authorized_dataset_ids_with_roles(
+    db: &DatabaseConnection,
+    user_id: Uuid,
+    permission_name: &str,
+) -> Result<Vec<Uuid>, DatabaseError> {
+    let mut all_ids: HashSet<Uuid> = HashSet::new();
+
+    // 1. Direct user ACL
+    let direct = authorized_dataset_ids(db, user_id, permission_name).await?;
+    all_ids.extend(direct);
+
+    let user_hex = uuid_hex::to_hex(user_id);
+
+    // 2. Tenant-level ACL
+    let tenant_junctions = user_tenant::Entity::find()
+        .filter(user_tenant::Column::UserId.eq(user_hex.clone()))
+        .all(db)
+        .await
+        .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
+
+    for junc in &tenant_junctions {
+        let tenant_id = uuid_hex::from_hex(&junc.tenant_id)
+            .map_err(|e| DatabaseError::QueryError(format!("Invalid tenant_id hex: {e}")))?;
+        let tenant_datasets = authorized_dataset_ids(db, tenant_id, permission_name).await?;
+        all_ids.extend(tenant_datasets);
+    }
+
+    // 3. Role-level ACL
+    let role_junctions = user_role::Entity::find()
+        .filter(user_role::Column::UserId.eq(user_hex))
+        .all(db)
+        .await
+        .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
+
+    for junc in &role_junctions {
+        let role_id = uuid_hex::from_hex(&junc.role_id)
+            .map_err(|e| DatabaseError::QueryError(format!("Invalid role_id hex: {e}")))?;
+        let role_datasets = authorized_dataset_ids(db, role_id, permission_name).await?;
+        all_ids.extend(role_datasets);
+    }
+
+    Ok(all_ids.into_iter().collect())
 }

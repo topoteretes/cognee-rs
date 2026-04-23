@@ -587,7 +587,7 @@ impl Default for Settings {
             auto_feedback: false,
 
             // Authentication / ACL
-            default_user_email: String::new(),
+            default_user_email: "default_user@example.com".to_string(),
             default_user_password: String::new(),
             enable_access_control: false,
 

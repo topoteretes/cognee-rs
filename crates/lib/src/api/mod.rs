@@ -19,6 +19,7 @@ pub mod prune;
 pub mod recall;
 pub mod remember;
 pub mod update;
+pub mod user;
 
 pub use datasets::{DatasetDb, DatasetManager};
 pub use error::{ApiError, DatasetError};
@@ -28,3 +29,4 @@ pub use prune::{PruneResult, PruneTarget, prune_data, prune_system};
 pub use recall::{RecallItem, RecallResult, RecallSource, recall};
 pub use remember::{RememberItemInfo, RememberResult, RememberStatus, remember};
 pub use update::{UpdateResult, update};
+pub use user::get_or_create_default_user;

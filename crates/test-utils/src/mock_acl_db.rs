@@ -113,4 +113,24 @@ impl AclDb for MockAclDb {
         principals.insert((principal_id, principal_type.to_string()));
         Ok(())
     }
+
+    async fn has_permission_with_roles(
+        &self,
+        user_id: Uuid,
+        dataset_id: Uuid,
+        permission_name: &str,
+    ) -> Result<bool, DatabaseError> {
+        // In the mock, just delegate to the direct check (no role/tenant resolution).
+        self.has_permission(user_id, dataset_id, permission_name)
+            .await
+    }
+
+    async fn authorized_dataset_ids_with_roles(
+        &self,
+        user_id: Uuid,
+        permission_name: &str,
+    ) -> Result<Vec<Uuid>, DatabaseError> {
+        // In the mock, just delegate to the direct check (no role/tenant resolution).
+        self.authorized_dataset_ids(user_id, permission_name).await
+    }
 }

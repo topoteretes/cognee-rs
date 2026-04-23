@@ -82,6 +82,7 @@ cognee-session = { path = "../session" }
 cognee-storage = { path = "../storage" }
 cognee-vector = { path = "../vector" }
 async-trait.workspace = true
+chrono.workspace = true
 dotenv.workspace = true
 thiserror.workspace = true
 serde.workspace = true
