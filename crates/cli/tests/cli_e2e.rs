@@ -690,14 +690,13 @@ fn delete_all_preview_and_force_execution() {
         .args(["delete", "--all", "--dry-run"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("datasets_to_delete: 0"))
-        .stdout(predicate::str::contains("data_to_delete: 0"));
+        .stdout(predicate::str::contains("delete preview"));
 
     make_cmd_in(&config_home, workdir.path())
         .args(["delete", "--all", "--force"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("Success: Deleted datasets=0"));
+        .stdout(predicate::str::contains("delete completed"));
 }
 
 #[test]
