@@ -1,7 +1,7 @@
 # API v2: `improve()`
 
 **Python source:** `cognee/api/v1/improve/improve.py`
-**Rust status:** Partial (Stage 3 complete; Stages 1, 2, 4 are stubs)
+**Rust status:** **Implemented** (Stage 3 (memify) reuses existing pipeline; Postgres graph backend edge-weight methods deferred to trait default per plan §6)
 **Implementation plan:** [impl/improve-plan.md](impl/improve-plan.md)
 
 ---
@@ -223,15 +223,15 @@ The `improve()` function is a bidirectional session-graph bridge that runs up to
 | **SessionStore trait** | Python CacheDBInterface | `crates/session/src/session_store.rs` | ✅ Complete | Has `get_all_qa_entries()`, `update_qa_entry()`, `get_graph_context()`, `set_graph_context()`. |
 | **SessionQAEntry type** | Python QAEntry dict | `crates/session/src/types.rs:21-41` | ✅ Complete | Has `feedback_text`, `feedback_score`, `used_graph_element_ids`, `memify_metadata` fields. All 4 fields are `Option<T>`. |
 | **DataPoint model** | Python DataPoint | `crates/models/src/data_point.rs:35-84` | ✅ Complete | Has `feedback_weight: f64` field (default 0.5). Read by triplet ranking system. |
-| **GraphDBTrait** | Python GraphEngine | `crates/graph/src/traits.rs` | ⚠️ Partial | Has `update_node_property()` (line 317) with default cascading implementation. Has `update_edge_property()` (line 359) as stub (logs warning, no-op). **Missing:** batch methods `get_node_feedback_weights()`, `set_node_feedback_weights()`, etc. |
-| **Graph property update APIs** | — | `crates/graph/src/traits.rs:317-373` | ⚠️ Basic | `update_node_property()` exists but uses delete-add-restore pattern (cascade risk, poor atomicity). No batch variants. No edge update implementation (stub only). |
+| **GraphDBTrait** | Python GraphEngine | `crates/graph/src/traits.rs` | ~~⚠️ Partial~~ ✅ Complete — done in commit 646ebbc | Batch methods `get/set_node_feedback_weights` + `get/set_edge_feedback_weights` added with default impls (keeps PgGraphAdapter/MockGraphDB compiling); Ladybug overrides with native `MATCH...SET`. Edge ID string encoding uses `EDGE_ID_DELIMITER = "\|\|\|"`. |
+| **Graph property update APIs** | — | `crates/graph/src/traits.rs` | ~~⚠️ Basic~~ ✅ Fixed — done in commit 646ebbc | Ladybug `update_node_property` / `update_edge_property` rewritten as single-statement `MATCH...SET` (fixes the pre-existing cascade-delete bug). Batch feedback-weight variants also landed. |
 | **Memify pipeline** | `cognee.modules.memify` | `crates/cognify/src/memify/pipeline.rs:47-133` | ✅ Complete | Extracts triplets, embeds, indexes. Stage 3 is fully implemented. |
-| **improve() orchestrator** | `cognee.api.v1.improve.improve()` | `crates/lib/src/api/improve.rs:58-153` | ⚠️ Partial | Stage 3 (memify) runs fully. Stage 1 partial (reads sessions, attempts graph updates, but property update APIs are stubs). Stage 2 stub (logs intent only). Stage 4 stub (logs intent only). |
-| **Stage 1: Apply feedback weights** | `apply_feedback_weights.py` | `crates/lib/src/api/improve.rs:156-222` | ⚠️ Partial | Reads sessions, parses `feedback_score` from context, calls `graph_db.update_node_property()` but implementation is incomplete because graph DB property update is a stub for edges. Relies on Python logic: normalize score to [0..1], streaming update formula. **Not yet ported:** batch weight getters/setters for efficiency. |
-| **Stage 2: Persist sessions** | `persist_sessions_in_knowledge_graph.py` | `crates/lib/src/api/improve.rs:229-250` | ❌ Stub | Logs intent but does not cognify session text or add to graph. Full implementation requires wiring `cognify()` with session input and `node_set` tagging. |
-| **Stage 4: Sync graph to session** | `sync_graph_to_session.py` | `crates/lib/src/api/improve.rs:258-280` | ❌ Stub | Logs intent but does not read edges, maintain checkpoints, or write context. Would require relational DB edge queries and cache checkpoint persistence. |
-| **Cache engine abstraction** | `CacheEngine` (Redis/Fs) | ❌ Missing | Missing | No abstraction in Rust for persistent checkpoints. SeaORM DB could be used as fallback, but Redis is not integrated. |
-| **Relational DB edge queries** | SQLAlchemy Edge ORM | `crates/database/src/` | ⚠️ Partial | SeaORM database exists but does not expose Edge/Node ORM models for direct queries in memify context. Would need to be extended. |
+| **improve() orchestrator** | `cognee.api.v1.improve.improve()` | `crates/lib/src/api/improve.rs` | ~~⚠️ Partial~~ ✅ Complete — done in commit 646ebbc | Per-stage non-fatal failure handling (matches Python `try/except`); Stage 4 skipped when `run_in_background=true`. All four stages wired. |
+| **Stage 1: Apply feedback weights** | `apply_feedback_weights.py` | `crates/cognify/src/memify/feedback_weights.rs` | ~~⚠️ Partial~~ ✅ Complete — done in commit 646ebbc | `apply_feedback_weights_pipeline()` with `normalize_feedback_score` + `stream_update_weight` matching Python exactly, eligibility check via `_is_eligible`, batch `get/set_node_feedback_weights` + `get/set_edge_feedback_weights`. |
+| **Stage 2: Persist sessions** | `persist_sessions_in_knowledge_graph.py` | `crates/cognify/src/memify/persist_sessions.rs` | ~~❌ Stub~~ ✅ Complete — done in commit 646ebbc | `persist_sessions_in_knowledge_graph()` concatenates session Q&A per `extract_user_sessions.py` format and runs `AddPipeline::add_with_params` + `cognify()` with `node_set=["user_sessions_from_cache"]`. |
+| **Stage 4: Sync graph to session** | `sync_graph_to_session.py` | `crates/cognify/src/memify/sync_graph_session.rs` | ~~❌ Stub~~ ✅ Complete — done in commit 646ebbc | `sync_graph_to_session()` paginates `get_edges_since` at `BATCH_SIZE=500`, merges JSON-line edge summaries capped at `DEFAULT_MAX_LINES=500`, advances a per-`(user, dataset, session)` checkpoint. |
+| **Cache engine abstraction** | `CacheEngine` (Redis/Fs) | `CheckpointStore` trait + `SeaOrmCheckpointStore` | ~~❌ Missing~~ ✅ Complete — done in commit 646ebbc | `CheckpointStore` trait with SeaORM-backed impl; new `graph_sync_checkpoints` table + migration `m20260424_000001`. Redis-backed checkpoint remains out of scope. |
+| **Relational DB edge queries** | SQLAlchemy Edge ORM | `crates/database/src/ops/graph_storage.rs` | ~~⚠️ Partial~~ ✅ Complete — done in commit 646ebbc | `get_edges_since(dataset_id, since, limit)` + `get_nodes_by_ids(ids)` DB ops added. |
 | **Ontology resolution** | `OntologyResolver` | `crates/ontology/src/` | ✅ Complete | Exists but not used by memify. Not required for `improve()`. |
 | **Embedding engine** | `EmbeddingEngine` | `crates/embedding/src/` | ✅ Complete | Multi-provider (ONNX, OpenAI, Ollama, Mock). Used by memify. |
 | **Vector DB abstraction** | `VectorDB` | `crates/vector/src/` | ✅ Complete | Supports upsert, search, collections. Used by memify. |
@@ -242,61 +242,38 @@ The `improve()` function is a bidirectional session-graph bridge that runs up to
 
 ### Critical Gaps for Stage 1 (Feedback Weights)
 
-1. **Graph batch property update methods** (Priority: HIGH)  
-   - Add to `GraphDBTrait` (file: `crates/graph/src/traits.rs`):  
+1. ~~**Graph batch property update methods** (Priority: HIGH)~~ — **done in commit 646ebbc**  
+   - Added to `GraphDBTrait` in `crates/graph/src/traits.rs`:  
      ```rust
      async fn get_node_feedback_weights(&self, node_ids: &[String]) -> GraphDBResult<HashMap<String, f64>>;
      async fn set_node_feedback_weights(&self, updates: &HashMap<String, f64>) -> GraphDBResult<HashMap<String, bool>>;
-     async fn get_edge_feedback_weights(&self, edge_ids: &[(String, String, String)]) -> GraphDBResult<HashMap<String, f64>>;
+     async fn get_edge_feedback_weights(&self, edge_ids: &[String]) -> GraphDBResult<HashMap<String, f64>>;
      async fn set_edge_feedback_weights(&self, updates: &HashMap<String, f64>) -> GraphDBResult<HashMap<String, bool>>;
      ```
-   - Implement efficiently in Ladybug backend (avoid cascading deletes)  
-   - Implement in PostgreSQL backend if used  
+   - Ladybug backend overrides with native `MATCH...SET` (avoids cascading deletes); PgGraphAdapter / MockGraphDB fall back to trait defaults.  
+   - Edge IDs are encoded via `EDGE_ID_DELIMITER = "|||"` (public const in `feedback_weights` module).  
 
-2. **SessionQAEntry.used_graph_element_ids population** (Priority: HIGH)  
+2. **SessionQAEntry.used_graph_element_ids population** (Priority: HIGH) — **still pending (Gap-6)**  
    - Currently internal field in FS/Redis stores, not exposed on public type  
    - Need to wire up search pipeline to populate this field when answer is generated  
    - Field already exists in type: `crates/session/src/types.rs:37`  
-   - Missing: Logic in search retrievers to capture node/edge IDs used during retrieval  
+   - Missing: Logic in search retrievers to capture node/edge IDs used during retrieval (retrievers must use `EDGE_ID_DELIMITER = "|||"` encoding when populating `UsedGraphElementIds.edge_ids`)  
 
-3. **Feedback weight normalization and streaming update** (Priority: MEDIUM)  
-   - Port Python logic to Rust in `stage1_apply_feedback_weights()`:  
-     ```rust
-     fn normalize_feedback_score(score: i32) -> Result<f64, ApiError> { /* map [1..5] to [0..1] */ }
-     fn stream_update_weight(old: f64, normalized: f64, alpha: f64) -> f64 { /* streaming formula + clip to [0,1] */ }
-     ```
-   - Already partially present in Python `improve.rs` but could be extracted to shared utility module  
+3. ~~**Feedback weight normalization and streaming update** (Priority: MEDIUM)~~ — **done in commit 646ebbc**  
+   - `normalize_feedback_score` + `stream_update_weight` now live in `crates/cognify/src/memify/feedback_weights.rs` and match Python exactly.  
 
 ### Critical Gaps for Stage 2 (Persist Sessions)
 
-4. **Cognify with session input and node_set tag** (Priority: HIGH)  
-   - Extend `cognify()` or create variant to:  
-     - Accept concatenated Q&A text from sessions as input  
-     - Tag output nodes with `source_node_set="user_sessions_from_cache"`  
-     - Integrate into `improve()` pipeline  
-   - File: `crates/cognify/src/tasks.rs`  
-   - Requires: Extract session Q&A data, concatenate, feed to fact extraction, tag results  
+4. ~~**Cognify with session input and node_set tag** (Priority: HIGH)~~ — **done in commit 646ebbc**  
+   - New coordinator `persist_sessions_in_knowledge_graph()` in `crates/cognify/src/memify/persist_sessions.rs` calls `AddPipeline::add_with_params` with `node_set=["user_sessions_from_cache"]` then invokes the existing `cognify()` — no cognify variant needed.  
 
 ### Critical Gaps for Stage 4 (Sync Graph to Session)
 
-5. **Relational DB edge query by timestamp** (Priority: HIGH)  
-   - Extend `DatabaseConnection` to expose edge queries:  
-     ```rust
-     async fn get_edges_since(&self, dataset_id: Uuid, since: Option<DateTime<Utc>>, limit: usize) -> Result<Vec<EdgeRecord>>;
-     ```
-   - Files: `crates/database/src/lib.rs` and SeaORM entity definitions  
-   - Need: Access to both Edge and Node ORM models with their creation timestamps  
+5. ~~**Relational DB edge query by timestamp** (Priority: HIGH)~~ — **done in commit 646ebbc**  
+   - Added `get_edges_since(dataset_id, since, limit)` + `get_nodes_by_ids(ids)` to `crates/database/src/ops/graph_storage.rs`.  
 
-6. **Cache/checkpoint abstraction** (Priority: MEDIUM)  
-   - Create trait or use existing cache layer for high-water mark persistence:  
-     ```rust
-     pub trait CheckpointStore: Send + Sync {
-         async fn load_checkpoint(&self, key: &str) -> Result<Option<DateTime<Utc>>>;
-         async fn save_checkpoint(&self, key: &str, ts: DateTime<Utc>) -> Result<()>;
-     }
-     ```
-   - Implementation: Redis (if available), or fallback to SeaORM table, or Fs  
-   - File: New module `crates/*/src/checkpoint.rs` or extend existing  
+6. ~~**Cache/checkpoint abstraction** (Priority: MEDIUM)~~ — **done in commit 646ebbc** (SeaORM impl only; Redis remains out of scope)  
+   - `CheckpointStore` trait + `SeaOrmCheckpointStore` impl with new `graph_sync_checkpoints` table and migration `m20260424_000001`.  
 
 7. **SessionStore API enhancement for context versioning** (Priority: LOW)  
    - Current `set_graph_context()` is simple string write  
@@ -348,7 +325,7 @@ The `improve()` function is a bidirectional session-graph bridge that runs up to
 
 ---
 
-## Implementation notes
+## Python reference notes
 
 ### Stage 1 key logic (streaming weight update)
 
@@ -385,4 +362,25 @@ These are stored as newline-delimited JSON in `graph_context` field of session. 
 
 ## Summary of the claim
 
-**The gap doc's claim "Stage 3 only" is accurate:** `memify()` in Rust implements exactly the triplet extraction, embedding, and indexing workflow of Python's Stage 3. Stages 1, 2, and 4 are completely absent or stub implementations. The `improve()` orchestrator in `crates/lib/src/api/improve.rs` was started as a scaffold but does not yet implement the full bidirectional session-graph bridge. All four building blocks are in the Rust codebase (sessions, graph DB, embedding, vector DB), but the glue logic for stages 1, 2, and 4 is missing.
+**The gap doc's original claim "Stage 3 only" has been superseded:** `memify()` in Rust implemented Python's Stage 3, and as of commit `646ebbc` Stages 1, 2, and 4 are also fully ported. The `improve()` orchestrator in `crates/lib/src/api/improve.rs` now runs the full bidirectional session-graph bridge with per-stage non-fatal failure handling.
+
+---
+
+## Implementation notes
+
+**Commit SHA:** `646ebbc`
+
+Ported Python `improve()` stages 1, 2, and 4 (Stage 3 = memify was already implemented). Stage 1 adds a feedback-weight streaming-EMA pipeline (`feedback_weights.rs`) with `normalize_feedback_score` + `stream_update_weight` matching Python exactly, batch-reads/writes weights via four new `GraphDBTrait` methods (default impls keep `PgGraphAdapter` & `MockGraphDB` compiling; Ladybug overrides with native `MATCH...SET` queries that also fix a pre-existing cascade-delete bug in `update_node_property` / `update_edge_property`). Stage 2 (`persist_sessions.rs`) concatenates session Q&A per `extract_user_sessions.py` format and runs through `AddPipeline::add_with_params` + `cognify()` with `node_set=["user_sessions_from_cache"]`. Stage 4 (`sync_graph_session.rs`) paginates `get_edges_since` at 500/batch, merges JSON-line edge summaries into `graph_context` capped at 500 lines, advances a per-`(user, dataset, session)` checkpoint stored via the new `CheckpointStore` trait (SeaORM impl + migration `m20260424_000001_graph_sync_checkpoints`). Orchestrator wraps each stage in warn-only error handling matching Python non-fatal semantics; Stage 4 skipped when `run_in_background=true`. 25 new tests total (5 unit feedback + 7 integration feedback + 4 parse-edge-id + 2 persist + 4 sync + 3 orchestrator E2E), all passing.
+
+**Deviations:**
+- `EDGE_ID_DELIMITER = "|||"` is a `pub const` in the feedback-weights module; retrievers populating `UsedGraphElementIds.edge_ids` need to use this encoding (flagged for Gap-6 retriever-side capture).
+- Rust `_is_eligible` rejects empty-string IDs where Python accepts them — stricter/safer, not a bug.
+- `MockGraphDB` and `PgGraphAdapter` rely on trait defaults (non-batched, no Cypher).
+- CLI `improve` subcommand omitted (plan §6 marks it optional).
+
+**Explicitly out of scope (unchanged):**
+- Postgres batch edge feedback methods
+- Redis-backed `CheckpointStore`
+- Retriever-side `used_graph_element_ids` capture (belongs to Gap-6)
+- `auto_feedback` LLM detection
+- CLI `improve` subcommand
