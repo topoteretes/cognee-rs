@@ -1,7 +1,7 @@
 # API v2: `visualize()`
 
 **Python source:** `cognee/api/v1/visualize/visualize.py` (67 lines)
-**Rust status:** Not Started
+**Rust status:** **Implemented** (HTTP server helper `start_visualization_server()` explicitly out of scope)
 **Implementation plan:** [impl/visualize-plan.md](impl/visualize-plan.md)
 
 ---
@@ -98,11 +98,11 @@ Three distinct components, **not a V2 API function**:
 | Building Block | Status | Notes | Rust File(s) |
 |---|---|---|---|
 | **Graph reader** | ✓ Implemented | `GraphDBTrait::get_all_nodes()` + `get_all_edges()` exist; no `get_graph_data()` method | `crates/graph/src/traits.rs` |
-| **Node/edge processing** | ✗ Not started | Would need to implement node type → color mapping, weight extraction, provenance field parsing | — |
-| **Color generation** | ✗ Not started | HSL hue rotation logic (lines 16–19 Python) not ported | — |
-| **HTML template assembly** | ✗ Not started | String interpolation + JSON embedding; requires d3.js HTML template | — |
+| **Node/edge processing** | ~~✗ Not started~~ ✓ Implemented | Node type → color mapping, weight extraction, provenance field parsing — done in commit a0daab3 (`crates/visualization/src/serialize.rs`) | `crates/visualization/src/serialize.rs` |
+| **Color generation** | ~~✗ Not started~~ ✓ Implemented | HSL hue rotation logic ported to 1e-9 tolerance — done in commit a0daab3 | `crates/visualization/src/colors.rs` |
+| **HTML template assembly** | ~~✗ Not started~~ ✓ Implemented | Byte-for-byte port of Python template with `safe_json_embed` placeholder substitution — done in commit a0daab3 | `crates/visualization/src/html.rs`, `crates/visualization/assets/graph_template.html` |
 | **File I/O** | ✓ Available | `LocalStorage::store()` exists, returns `StorageResult` | `crates/storage/src/local.rs` |
-| **HTTP server** | ✗ Not started | No HTTP server in Rust codebase; would need tokio-based implementation | — |
+| **HTTP server** | ✗ Not started | Out of scope — `start_visualization_server()` HTTP helper explicitly excluded from this task | — |
 | **Multi-user aggregation** | ✗ Not started | No equivalent; cognee-rust is single-tenant by design (no user/dataset aggregation) | — |
 
 **Gap in Rust graph interface:**
@@ -114,59 +114,62 @@ Three distinct components, **not a V2 API function**:
 ## 5. Gaps — what Rust needs
 
 ### A. Core visualization infrastructure
-1. **`get_graph_data()` method on `GraphDBTrait`** or a new function `serialize_graph_for_visualization()`
+1. ~~**`get_graph_data()` method on `GraphDBTrait`** or a new function `serialize_graph_for_visualization()`~~ — done in commit a0daab3 (`crates/visualization/src/serialize.rs::serialize_graph`)
    - Return format: `(Vec<(node_id, node_metadata)>, Vec<(source_id, target_id, relation, edge_metadata)>)`
    - Node metadata: `type`, `name`, `ontology_valid` (bool), optional provenance fields
    - Edge metadata: `weight`, optional `weights` dict, `relationship_type`
 
-2. **Node type → color mapper** (deterministic lookup)
+2. ~~**Node type → color mapper** (deterministic lookup)~~ — done in commit a0daab3 (`crates/visualization/src/colors.rs::type_color`)
    - Hard-code map: `Entity` → `#6510F4`, `DocumentChunk` → `#0DFF00`, etc.
    - Fallback: `"default"` → `#7c3aed`, `ontology_valid=true` → `#D8D8D8`
 
-3. **Provenance color generator** (HSL hue rotation)
+3. ~~**Provenance color generator** (HSL hue rotation)~~ — done in commit a0daab3 (`crates/visualization/src/colors.rs::provenance_colors`)
    - Input: list of provenance values
-   - Output: `HashMap<String, String>` (value → hex color)
+   - Output: `BTreeMap<String, String>` (value → hex color; `BTreeMap` for deterministic serialization)
    - Algorithm: unique values → sorted → assign hue at 137.5° intervals
 
 ### B. HTML templating
-4. **Embed d3.js v7 template** with Canvas rendering
+4. ~~**Embed d3.js v7 template** with Canvas rendering~~ — done in commit a0daab3 (`crates/visualization/assets/graph_template.html`, 65 KB, byte-for-byte port)
    - ~500 lines of HTML/CSS/JavaScript
    - d3 force layout: `.forceSimulation()`, `.forceManyBody()`, `.forceLink()`, `.forceCollide()`
    - Canvas rendering: node circles, labels, edge lines
    - Controls: search box, theme toggle (dark/light), filter buttons
    - JSON placeholders: `__NODES_DATA__`, `__LINKS_DATA__`, `__TASK_COLORS__`, `__PIPELINE_COLORS__`, `__NODESET_COLORS__`, `__USER_COLORS__`, `__SCHEMA_DATA__`
 
-5. **JSON serialization + escaping**
+5. ~~**JSON serialization + escaping**~~ — done in commit a0daab3 (`crates/visualization/src/html.rs::safe_json_embed`)
    - Use `serde_json::to_string()` + replace `"</"` → `"<\\/"`
    - Inject into template via string replacement
 
-6. **Default file path logic**
+6. ~~**Default file path logic**~~ — done in commit a0daab3 (`crates/visualization/src/paths.rs::default_output_path`)
    - If no path provided: write to `{HOME}/graph_visualization.html`
    - Use `dirs::home_dir()` or `std::env::var("HOME")`
 
 ### C. API entry point
-7. **Add `visualize()` function to `cognee-lib` public API**
+7. ~~**Add `visualize()` function to `cognee-lib` public API**~~ — done in commit a0daab3 (re-exported behind new `visualization` default feature)
    ```rust
    pub async fn visualize(
-       destination_file_path: Option<String>,
-   ) -> Result<String, VisualizationError>
+       graph_db: &dyn GraphDBTrait,
+       output_path: Option<&Path>,
+   ) -> Result<PathBuf, VisualizationError>
    ```
    - Async (requires `tokio` in calling context)
-   - Returns HTML string
-   - Writes file via `StorageTrait` if path provided
+   - Returns the absolute path of the written HTML file
+   - Writes file via `tokio::fs`
 
-8. **CLI command** (optional but recommended)
+8. ~~**CLI command** (optional but recommended)~~ — done in commit a0daab3 (`cognee-cli visualize [--output <path>]`)
    - `cognee-cli visualize [--output FILE]`
    - Reuses the function above
 
 ### D. Additional (future/optional)
-9. **HTTP server for visualization** — separate from core function
-   - Only if V2 API includes `start_visualization_server()` export
+9. **HTTP server for visualization** — separate from core function, **out of scope** for this iteration
+   - `start_visualization_server()` HTTP helper explicitly excluded
    - Low priority; can be CLI-only initially
 
 10. **Multi-user aggregation** — document as out-of-scope
     - cognee-rust is single-tenant; multi-user graph merging is not a core feature
     - Can be deferred or implemented via scripting
+
+11. **`HtmlVisualizer` dispatch dict** — out of scope; Python's visualizer registry not ported
 
 ---
 
@@ -208,3 +211,16 @@ Three distinct components, **not a V2 API function**:
 - **Rust storage trait**: `/home/dmytro/dev/cognee/cognee-rust/crates/storage/src/lib.rs`
 - **Rust lib.rs**: `/home/dmytro/dev/cognee/cognee-rust/crates/lib/src/lib.rs` (API facade)
 - **Rust CLI commands**: `/home/dmytro/dev/cognee/cognee-rust/crates/cli/src/commands/`
+
+---
+
+## Implementation notes
+
+**Commit SHA:** `a0daab3`
+
+New workspace crate `crates/visualization/` (`cognee-visualization`) ports Python's `cognee_network_visualization` byte-for-byte. The 65 KB d3.js HTML template is extracted to `assets/graph_template.html` and embedded via `include_str!`. Seven placeholders (`__NODES_DATA__`, `__LINKS_DATA__`, `__TASK_COLORS__`, `__PIPELINE_COLORS__`, `__NODESET_COLORS__`, `__USER_COLORS__`, `__SCHEMA_DATA__`) are substituted with `safe_json_embed` that escapes `</` → `<\/` to prevent `</script>` injection. Color map and HSL provenance colors match Python lines 27–47 to 1e-9 tolerance. Public API: `async fn visualize(graph_db: &dyn GraphDBTrait, output_path: Option<&Path>) -> Result<PathBuf, VisualizationError>`. Re-exported from `cognee-lib` behind a new `visualization` default feature. `cognee-cli visualize [--output <path>]` subcommand added. 27 tests total (16 unit + 3 colors + 4 html + 3 end-to-end + 1 doctest) all pass.
+
+**Deviations:**
+- `visualize_with_default_components` convenience wrapper omitted — the CLI uses the primary `visualize(graph_db, output_path)` directly via `cm.graph_db()`; the wrapper was explicitly out of scope for this iteration.
+- `html::build_html` is `pub(crate)` rather than exported — matches "keep scope tight".
+- Schema data placeholder always substituted with `null` (per plan §6 out-of-scope for this iteration).

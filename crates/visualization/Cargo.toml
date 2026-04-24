@@ -1,0 +1,19 @@
+[package]
+name = "cognee-visualization"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+async-trait = { workspace = true }
+cognee-graph = { path = "../graph" }
+dirs = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["fs", "io-util"] }
+tracing = { workspace = true }
+
+[dev-dependencies]
+cognee-graph = { path = "../graph", features = ["testing"] }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }

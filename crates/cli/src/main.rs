@@ -8,6 +8,8 @@ use std::sync::Arc;
 use clap::Parser;
 use cli::{Cli, Commands};
 use cognee_lib::{ComponentManager, ConfigManager};
+#[cfg(feature = "visualization")]
+use commands::visualize;
 use commands::{add, add_and_cognify, cognify, config, delete, memify, run_sequence, search};
 use config_store::load_settings;
 use error::{CliError, ExitCode};
@@ -32,6 +34,8 @@ fn run() -> Result<(), CliError> {
         Commands::Delete(args) => delete::run(args, Arc::clone(&cm)),
         Commands::Config(args) => config::run(args),
         Commands::RunSequence(args) => run_sequence::run(args, Arc::clone(&cm)),
+        #[cfg(feature = "visualization")]
+        Commands::Visualize(args) => visualize::run(args, Arc::clone(&cm)),
     }
 }
 

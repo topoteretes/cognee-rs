@@ -9,6 +9,8 @@ use tracing::info;
 use crate::cli::{Cli, Commands, RunSequenceArgs};
 use crate::error::CliError;
 
+#[cfg(feature = "visualization")]
+use super::visualize;
 use super::{add, add_and_cognify, cognify, config, delete, memify, search};
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -30,6 +32,8 @@ fn dispatch(command: Commands, cm: &Arc<ComponentManager>) -> Result<(), CliErro
         Commands::RunSequence(_) => Err(CliError::Validation(
             "Nested run-sequence is not allowed".to_string(),
         )),
+        #[cfg(feature = "visualization")]
+        Commands::Visualize(args) => visualize::run(args, Arc::clone(cm)),
     }
 }
 

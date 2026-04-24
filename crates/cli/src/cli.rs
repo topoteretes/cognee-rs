@@ -23,6 +23,16 @@ pub enum Commands {
     Config(ConfigArgs),
     #[command(name = "run-sequence")]
     RunSequence(RunSequenceArgs),
+    #[cfg(feature = "visualization")]
+    Visualize(VisualizeArgs),
+}
+
+#[cfg(feature = "visualization")]
+#[derive(Debug, Args)]
+pub struct VisualizeArgs {
+    /// Destination HTML file. If omitted, writes to `~/graph_visualization.html`.
+    #[arg(long = "output", short = 'o')]
+    pub output: Option<String>,
 }
 
 #[derive(Debug, Args)]

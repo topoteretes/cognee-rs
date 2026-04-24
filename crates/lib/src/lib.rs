@@ -96,6 +96,14 @@ pub mod ontology {
     pub use cognee_ontology::*;
 }
 
+#[cfg(feature = "visualization")]
+pub mod visualization {
+    pub use cognee_visualization::*;
+}
+
+#[cfg(feature = "visualization")]
+pub use cognee_visualization::{VisualizationError, visualize};
+
 pub mod session;
 
 pub mod api;

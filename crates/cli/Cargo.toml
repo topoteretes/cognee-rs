@@ -22,16 +22,18 @@ default = [
     "pdf-pdfium",
     "csv-loader",
     "unstructured",
+    "visualization",
 ]
-onnx         = ["cognee-lib/onnx"]
-ladybug      = ["cognee-lib/ladybug"]
-qdrant       = ["cognee-lib/qdrant"]
-pgvector     = ["cognee-lib/pgvector"]
-pggraph      = ["cognee-lib/pggraph"]
-sqlite       = ["cognee-lib/sqlite"]
-postgres     = ["cognee-lib/postgres"]
-hf-tokenizer = ["cognee-lib/hf-tokenizer"]
-tiktoken     = ["cognee-lib/tiktoken"]
+onnx          = ["cognee-lib/onnx"]
+ladybug       = ["cognee-lib/ladybug"]
+qdrant        = ["cognee-lib/qdrant"]
+pgvector      = ["cognee-lib/pgvector"]
+pggraph       = ["cognee-lib/pggraph"]
+sqlite        = ["cognee-lib/sqlite"]
+postgres      = ["cognee-lib/postgres"]
+hf-tokenizer  = ["cognee-lib/hf-tokenizer"]
+tiktoken      = ["cognee-lib/tiktoken"]
+visualization = ["cognee-lib/visualization"]
 
 # Document format loaders (forwarded through cognee-lib)
 pdf-pdfium        = ["cognee-lib/pdf-pdfium"]

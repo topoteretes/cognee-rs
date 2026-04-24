@@ -6,3 +6,5 @@ pub mod delete;
 pub mod memify;
 pub mod run_sequence;
 pub mod search;
+#[cfg(feature = "visualization")]
+pub mod visualize;

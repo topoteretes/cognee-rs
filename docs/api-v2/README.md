@@ -24,7 +24,7 @@ Although the functions physically live under `cognee/api/v1/` in the Python tree
 | `improve()` | Bidirectional session ↔ graph bridge in 4 stages: (1) apply feedback to graph node/edge weights, (2) cognify session Q&A text and persist to the permanent graph, (3) enrich existing graph with triplet embeddings (= `memify`), (4) write graph context back into session cache entries. | **Partial** — Stage 3 is fully implemented by `cognee-cognify::memify`. Stages 1, 2, 4 exist only as stubs in `crates/lib/src/api/improve.rs` that log intent but perform no work. Session store lacks feedback fields on the public type. | [improve.md](improve.md) | [impl/improve-plan.md](impl/improve-plan.md) |
 | `forget()` | Unified deletion: by item id, by dataset, or everything. Cascades across relational DB, graph DB, vector DB, file storage, and session cache. Supports ACL enforcement and dry-run preview. | **Implemented** (UUID + telemetry polish landed) — `crates/lib/src/api/forget.rs` is a thin facade over `DeleteService` in `crates/delete/`, which covers all three modes including session `prune()` for the `everything` scope. | [forget.md](forget.md) | [impl/forget-plan.md](impl/forget-plan.md) (polish complete) |
 | `serve()` / `disconnect()` | Cloud-integration pair. `serve()` runs either **direct mode** (user-provided URL + API key) or **cloud mode** (OAuth2 Device Code flow against Auth0 + Management API tenant provisioning + local credential cache). `disconnect()` tears down the session and wipes cached credentials. | **Not Started** — no equivalent in Rust. Arguably out of scope for a library-level port; best implemented as a separate optional crate (e.g. `cognee-cloud`) behind a feature flag. | [serve-disconnect.md](serve-disconnect.md) | [impl/serve-disconnect-plan.md](impl/serve-disconnect-plan.md) |
-| `visualize()` | Generates a single-file interactive HTML5 visualization of the knowledge graph (d3.js v7 force layout, embedded JSON, pan/zoom, search, color-coded provenance filters). Optional helper `start_visualization_server()` serves it over HTTP. | **Not Started** — graph reader (`GraphDBTrait::get_all_nodes/edges`) and file storage (`LocalStorage`) are in place, but the HTML template, color mappers, and JSON serializer bridging graph types to the viz format are missing. | [visualize.md](visualize.md) | [impl/visualize-plan.md](impl/visualize-plan.md) |
+| `visualize()` | Generates a single-file interactive HTML5 visualization of the knowledge graph (d3.js v7 force layout, embedded JSON, pan/zoom, search, color-coded provenance filters). Optional helper `start_visualization_server()` serves it over HTTP. | **Implemented** (commit a0daab3) — new `cognee-visualization` crate ports Python's `cognee_network_visualization` byte-for-byte: 65 KB d3.js template, color mappers, JSON serializer, `cognee-cli visualize` subcommand. `start_visualization_server()` HTTP helper remains out of scope. | [visualize.md](visualize.md) | [impl/visualize-plan.md](impl/visualize-plan.md) |
 
 ### Legend
 
@@ -36,9 +36,9 @@ Although the functions physically live under `cognee/api/v1/` in the Python tree
 
 ## Summary of findings
 
-- **4 of 7 functions have at least partial Rust implementations.** The per-function docs correct several claims from the older v1 gap analysis (in particular, `forget()` is already complete, and `recall()` is ~95% complete — not "missing").
+- **5 of 7 functions have at least partial Rust implementations** (forget/recall/visualize implemented; remember/improve partial; serve/disconnect not started). The per-function docs correct several claims from the older v1 gap analysis (in particular, `forget()` is already complete, and `recall()` is ~95% complete — not "missing").
 - **The two biggest remaining functional gaps are `improve()` and `serve()/disconnect()`.** The former is core to the V2 memory semantics (feedback loop); the latter is cloud integration that may warrant a separate crate.
-- **`visualize()` is small** (S–M effort) and self-contained — a straightforward first target if we want to expand V2 coverage.
+- **`visualize()` is Implemented** (commit a0daab3).
 - **`remember()` is tantalizingly close** — permanent-memory mode works today; session-memory mode requires session-store feedback fields and background-task plumbing that are also prerequisites for `improve()` stages 2/4.
 
 ### Rough effort ordering (easiest → hardest)
@@ -47,7 +47,7 @@ Although the functions physically live under `cognee/api/v1/` in the Python tree
 |---|---|---|---|
 | 1 | `forget()` | **Done** | No work; minor cosmetic polish only. |
 | 2 | `recall()` | **Done** (~1 day) | Override tracking + telemetry spans landed in commit 598d553. |
-| 3 | `visualize()` | **S–M** (~2–4 days) | HTML template + color mappers. |
+| 3 | `visualize()` | **Done** | HTML template + color mappers landed in commit a0daab3. |
 | 4 | `remember()` | **M–L** (~1 week) | Background tasks, session-bridging path, `RememberResult` polish. |
 | 5 | `improve()` | **L–XL** (~5–8 weeks) | Feedback fields on session types, batch graph property updates, session-text cognify variant, graph-to-session sync. |
 | 6 | `serve()` / `disconnect()` | **XL** (~5–7 weeks) | OAuth2 device flow + Management API + credential store. Consider splitting into `cognee-cloud` crate. |

@@ -6,6 +6,14 @@
 
 ---
 
+## Status
+
+Implemented: yes (convenience wrapper deferred; schema data always `null`)
+Commit: a0daab3
+Date: 2026-04-24
+
+---
+
 ## 1. Goal & Scope
 
 Port Python's `visualize_graph()` (aliased to `cognee.visualize` in V2) to Rust with near-exact visual parity.
@@ -195,6 +203,8 @@ Out of scope (see §6). The Python helper spawns a TCP server in a daemon thread
 
 ### Step 1 — Scaffold the `cognee-visualization` crate
 
+- [x] — done in commit a0daab3
+
 **Files to create:**
 - `crates/visualization/Cargo.toml`
 - `crates/visualization/src/lib.rs` (skeleton)
@@ -248,6 +258,8 @@ Register the crate in the workspace root `Cargo.toml` `[workspace] members` list
 
 ### Step 2 — Port the HTML template asset verbatim
 
+- [x] — done in commit a0daab3
+
 **File to create:** `crates/visualization/assets/graph_template.html`
 
 Copy the return value of `_get_html_template()` — every character from line 189 (`<!DOCTYPE html>`) through the closing `"""` at line ~1869 of `/tmp/cognee-python/cognee/modules/visualization/cognee_network_visualization.py`. Do **not** modify JS, CSS, or placeholders.
@@ -256,6 +268,8 @@ Copy the return value of `_get_html_template()` — every character from line 18
 **Effort:** 1 h.
 
 ### Step 3 — Implement `colors.rs` (static + HSL)
+
+- [x] — done in commit a0daab3
 
 **File to create:** `crates/visualization/src/colors.rs`
 
@@ -272,6 +286,8 @@ Contains:
 **Depends on:** Step 1. **Effort:** 3 h.
 
 ### Step 4 — Implement `serialize.rs` (graph data → JSON nodes/edges)
+
+- [x] — done in commit a0daab3
 
 **File to create:** `crates/visualization/src/serialize.rs`
 
@@ -312,6 +328,8 @@ let user_colors     = provenance_colors(nodes.iter().map(|n| extract_str(n, "sou
 
 ### Step 5 — Implement `html.rs` (template substitution)
 
+- [x] — done in commit a0daab3 (note: `build_html` is `pub(crate)` rather than exported)
+
 **File to create:** `crates/visualization/src/html.rs`
 
 ```rust
@@ -346,6 +364,8 @@ fn safe_json_embed<T: serde::Serialize>(v: &T) -> Result<String, VisualizationEr
 
 ### Step 6 — Implement `paths.rs` (default destination)
 
+- [x] — done in commit a0daab3
+
 **File to create:** `crates/visualization/src/paths.rs`
 
 ```rust
@@ -361,6 +381,9 @@ Mirrors Python `cognee_network_visualization.py:101–102`.
 **Depends on:** Step 1. **Effort:** 0.25 h.
 
 ### Step 7 — Implement public `visualize()` API
+
+- [x] primary `visualize(graph_db, output_path)` — done in commit a0daab3
+- [ ] `visualize_with_default_components(output_path)` convenience wrapper — deferred (convenience wrapper, scope); CLI uses primary `visualize()` directly via `cm.graph_db()`
 
 **File to create/extend:** `crates/visualization/src/lib.rs`
 
@@ -418,6 +441,8 @@ pub async fn render(
 
 ### Step 8 — Re-export from `cognee-lib`
 
+- [x] — done in commit a0daab3 (behind new `visualization` default feature)
+
 **File to modify:** `/home/dmytro/dev/cognee/cognee-rust/crates/lib/src/lib.rs`
 
 Add module re-export and top-level `visualize` alias:
@@ -440,6 +465,8 @@ cognee-visualization = { path = "../visualization" }
 
 ### Step 9 — CLI subcommand `cognee-cli visualize`
 
+- [x] — done in commit a0daab3 (`cognee-cli visualize [--output <path>]`)
+
 **Files to modify:**
 - `/home/dmytro/dev/cognee/cognee-rust/crates/cli/src/cli.rs` — add `Visualize(VisualizeArgs)` variant to `enum Commands` and a new `VisualizeArgs` struct.
 - `/home/dmytro/dev/cognee/cognee-rust/crates/cli/src/commands/mod.rs` — add `pub mod visualize;`
@@ -449,6 +476,8 @@ cognee-visualization = { path = "../visualization" }
 **Depends on:** Step 8. **Effort:** 1.5 h.
 
 ### Step 10 — Unit + integration tests
+
+- [x] — done in commit a0daab3 (27 tests total: 16 unit + 3 colors + 4 html + 3 end-to-end + 1 doctest)
 
 **Files to create:**
 - `crates/visualization/src/colors.rs` — inline `#[cfg(test)]` tests
@@ -460,6 +489,8 @@ See §4 for test details.
 **Depends on:** Steps 3, 5, 7. **Effort:** 4 h.
 
 ### Step 11 — Workspace wiring + docs
+
+- [x] — done in commit a0daab3
 
 - Add `crates/visualization` to workspace `members` in root `Cargo.toml`.
 - Add rustdoc examples to `visualize()` public function.

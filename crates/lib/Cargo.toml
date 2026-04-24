@@ -17,7 +17,9 @@ default = [
     "pdf-pdfium",
     "csv-loader",
     "unstructured",
+    "visualization",
 ]
+visualization  = ["dep:cognee-visualization"]
 onnx           = ["cognee-embedding/onnx"]
 ladybug        = ["cognee-graph/ladybug"]
 qdrant         = ["cognee-vector/qdrant"]
@@ -87,6 +89,7 @@ cognee-search = { path = "../search" }
 cognee-session = { path = "../session" }
 cognee-storage = { path = "../storage" }
 cognee-vector = { path = "../vector" }
+cognee-visualization = { path = "../visualization", optional = true }
 async-trait.workspace = true
 chrono.workspace = true
 dotenv.workspace = true
