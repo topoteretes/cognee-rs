@@ -53,6 +53,9 @@ pub enum ApiError {
     #[error("Memify error: {0}")]
     Memify(String),
 
+    #[error("Improve error: {0}")]
+    Improve(String),
+
     #[error("Invalid argument: {0}")]
     InvalidArgument(String),
 }

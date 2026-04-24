@@ -22,7 +22,12 @@ pub use graph_integration::{
     DeduplicationResult, GraphEdgePair, GraphNodePair, deduplicate_nodes_and_edges,
     expand_with_nodes_and_edges,
 };
-pub use memify::{MemifyConfig, MemifyError, MemifyResult, MemifyTask, memify as run_memify};
+pub use memify::{
+    FeedbackApplyResult, FeedbackError, MemifyConfig, MemifyError, MemifyResult, MemifyTask,
+    PersistSessionsError, PersistSessionsResult, SyncError, SyncResult,
+    apply_feedback_weights_pipeline, memify as run_memify, persist_sessions_in_knowledge_graph,
+    sync_graph_to_session,
+};
 pub use pipeline::{CognifyResult, IndexedFieldsStats};
 pub use summarization::{SummarizedContent, SummaryExtractor, TextSummary};
 pub use tasks::{

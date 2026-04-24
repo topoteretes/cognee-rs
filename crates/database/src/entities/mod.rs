@@ -25,3 +25,6 @@ pub mod tenant;
 pub mod user;
 pub mod user_role;
 pub mod user_tenant;
+
+// Graph sync checkpoints (Stage 4 of improve()):
+pub mod graph_sync_checkpoint;

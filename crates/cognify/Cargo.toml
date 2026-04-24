@@ -19,6 +19,7 @@ cognee-embedding = { path = "../embedding" }
 cognee-vector = { path = "../vector" }
 cognee-ontology = { path = "../ontology" }
 cognee-database = { path = "../database" }
+cognee-session = { path = "../session" }
 
 chrono.workspace = true
 uuid = { workspace = true, features = ["v4"] }
@@ -36,11 +37,12 @@ cognee-storage    = { path = "../storage", features = ["testing"] }
 cognee-embedding  = { path = "../embedding", features = ["onnx"] }
 cognee-graph      = { path = "../graph", features = ["testing", "ladybug"] }
 cognee-vector     = { path = "../vector", features = ["testing", "qdrant"] }
-cognee-database   = { path = "../database" }
+cognee-database   = { path = "../database", features = ["sqlite"] }
 cognee-search     = { path = "../search" }
 cognee-delete     = { path = "../delete" }
 cognee-test-utils = { path = "../test-utils" }
 cognee-llm        = { path = "../llm" }
+cognee-session    = { path = "../session", features = ["fs"] }
 dotenv.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

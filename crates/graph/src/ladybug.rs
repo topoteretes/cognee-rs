@@ -1259,6 +1259,216 @@ impl GraphDBTrait for LadybugAdapter {
 
         Ok((nodes, edges))
     }
+
+    // -----------------------------------------------------------------
+    // In-place property updates
+    // -----------------------------------------------------------------
+    //
+    // Ladybug stores node/edge custom properties as a JSON string column
+    // named `properties`. To update a single key without cascading
+    // deletes, we read the current JSON, merge the new value, and rewrite
+    // the column via a single MATCH ... SET ... statement.
+    async fn update_node_property(
+        &self,
+        node_id: &str,
+        key: &str,
+        value: serde_json::Value,
+    ) -> GraphDBResult<()> {
+        let read_query = format!(
+            "MATCH (n:Node) WHERE n.id = '{}' RETURN n.properties AS properties",
+            node_id.replace('\\', "\\\\").replace('\'', "\\'")
+        );
+        let rows = self.execute_query(&read_query)?;
+        let mut props: serde_json::Map<String, serde_json::Value> = if let Some(row) = rows.first()
+            && let Some(props_str) = row.first().and_then(|v| v.as_str())
+        {
+            let clean = sanitize_json_control_chars(props_str);
+            serde_json::from_str(&clean).unwrap_or_default()
+        } else {
+            return Err(GraphDBError::NodeError(format!(
+                "Node not found: {node_id}"
+            )));
+        };
+        props.insert(key.to_string(), value);
+        let mut props_val = serde_json::Value::Object(props);
+        sanitize_json_value(&mut props_val);
+        let props_json =
+            serde_json::to_string(&props_val).map_err(GraphDBError::SerializationError)?;
+
+        let now = Utc::now();
+        let ts = now.format("%Y-%m-%d %H:%M:%S%.6f").to_string();
+        let conn = Connection::new(&self.db).map_err(|e| {
+            GraphDBError::ConnectionError(format!("Failed to create connection: {e}"))
+        })?;
+        let set_query = format!(
+            "MATCH (n:Node) WHERE n.id = '{}' SET n.properties = '{}', n.updated_at = timestamp('{}')",
+            node_id.replace('\\', "\\\\").replace('\'', "\\'"),
+            props_json.replace('\\', "\\\\").replace('\'', "\\'"),
+            ts
+        );
+        conn.query(&set_query)
+            .map_err(|e| GraphDBError::NodeError(format!("Failed to update node property: {e}")))?;
+        Ok(())
+    }
+
+    async fn update_edge_property(
+        &self,
+        source_id: &str,
+        target_id: &str,
+        relationship_name: &str,
+        key: &str,
+        value: serde_json::Value,
+    ) -> GraphDBResult<()> {
+        let src_esc = source_id.replace('\\', "\\\\").replace('\'', "\\'");
+        let tgt_esc = target_id.replace('\\', "\\\\").replace('\'', "\\'");
+        let rel_esc = relationship_name.replace('\\', "\\\\").replace('\'', "\\'");
+
+        let read_query = format!(
+            "MATCH (a:Node)-[r:EDGE]->(b:Node) WHERE a.id = '{src_esc}' AND b.id = '{tgt_esc}' AND r.relationship_name = '{rel_esc}' RETURN r.properties AS properties"
+        );
+        let rows = self.execute_query(&read_query)?;
+        let mut props: serde_json::Map<String, serde_json::Value> = if let Some(row) = rows.first()
+            && let Some(props_str) = row.first().and_then(|v| v.as_str())
+        {
+            let clean = sanitize_json_control_chars(props_str);
+            serde_json::from_str(&clean).unwrap_or_default()
+        } else {
+            return Err(GraphDBError::EdgeError(format!(
+                "Edge not found: {source_id} -[{relationship_name}]-> {target_id}"
+            )));
+        };
+        props.insert(key.to_string(), value);
+        let mut props_val = serde_json::Value::Object(props);
+        sanitize_json_value(&mut props_val);
+        let props_json =
+            serde_json::to_string(&props_val).map_err(GraphDBError::SerializationError)?;
+
+        let now = Utc::now();
+        let ts = now.format("%Y-%m-%d %H:%M:%S%.6f").to_string();
+        let conn = Connection::new(&self.db).map_err(|e| {
+            GraphDBError::ConnectionError(format!("Failed to create connection: {e}"))
+        })?;
+        let set_query = format!(
+            "MATCH (a:Node)-[r:EDGE]->(b:Node) WHERE a.id = '{src_esc}' AND b.id = '{tgt_esc}' AND r.relationship_name = '{rel_esc}' SET r.properties = '{}', r.updated_at = timestamp('{ts}')",
+            props_json.replace('\\', "\\\\").replace('\'', "\\'")
+        );
+        conn.query(&set_query)
+            .map_err(|e| GraphDBError::EdgeError(format!("Failed to update edge property: {e}")))?;
+        Ok(())
+    }
+
+    // -----------------------------------------------------------------
+    // Batch feedback-weight methods — read the JSON properties column in
+    // bulk and write individual in-place updates. We keep the writes in
+    // individual statements (one per element) rather than a single
+    // UNWIND because each node/edge carries its own merged JSON blob.
+    // -----------------------------------------------------------------
+    async fn get_node_feedback_weights(
+        &self,
+        node_ids: &[String],
+    ) -> GraphDBResult<HashMap<String, f64>> {
+        if node_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let id_list = node_ids
+            .iter()
+            .map(|id| format!("'{}'", id.replace('\\', "\\\\").replace('\'', "\\'")))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let query = format!(
+            "MATCH (n:Node) WHERE n.id IN [{id_list}] RETURN n.id AS id, n.properties AS properties"
+        );
+        let rows = self.execute_query(&query)?;
+        let mut out = HashMap::with_capacity(rows.len());
+        for row in rows {
+            if row.len() < 2 {
+                continue;
+            }
+            let id = match row[0].as_str() {
+                Some(s) => s.to_string(),
+                None => continue,
+            };
+            if let Some(props_str) = row[1].as_str() {
+                let clean = sanitize_json_control_chars(props_str);
+                if let Ok(map) =
+                    serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&clean)
+                    && let Some(v) = map.get("feedback_weight").and_then(|v| v.as_f64())
+                {
+                    out.insert(id, v);
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    async fn set_node_feedback_weights(
+        &self,
+        updates: &HashMap<String, f64>,
+    ) -> GraphDBResult<HashMap<String, bool>> {
+        let mut out = HashMap::with_capacity(updates.len());
+        for (id, w) in updates {
+            let ok = self
+                .update_node_property(id, "feedback_weight", serde_json::json!(w))
+                .await
+                .is_ok();
+            out.insert(id.clone(), ok);
+        }
+        Ok(out)
+    }
+
+    async fn get_edge_feedback_weights(
+        &self,
+        edge_keys: &[crate::traits::EdgeKey],
+    ) -> GraphDBResult<HashMap<crate::traits::EdgeKey, f64>> {
+        if edge_keys.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let mut out = HashMap::with_capacity(edge_keys.len());
+        // Per-edge lookup: Ladybug's property filter on relationships is
+        // simplest when driven by (source_id, target_id, rel_name) tuples.
+        for key in edge_keys {
+            let src_esc = key.0.replace('\\', "\\\\").replace('\'', "\\'");
+            let tgt_esc = key.1.replace('\\', "\\\\").replace('\'', "\\'");
+            let rel_esc = key.2.replace('\\', "\\\\").replace('\'', "\\'");
+            let query = format!(
+                "MATCH (a:Node)-[r:EDGE]->(b:Node) WHERE a.id = '{src_esc}' AND b.id = '{tgt_esc}' AND r.relationship_name = '{rel_esc}' RETURN r.properties AS properties"
+            );
+            let rows = self.execute_query(&query)?;
+            if let Some(row) = rows.first()
+                && let Some(props_str) = row.first().and_then(|v| v.as_str())
+            {
+                let clean = sanitize_json_control_chars(props_str);
+                if let Ok(map) =
+                    serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&clean)
+                    && let Some(v) = map.get("feedback_weight").and_then(|v| v.as_f64())
+                {
+                    out.insert(key.clone(), v);
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    async fn set_edge_feedback_weights(
+        &self,
+        updates: &HashMap<crate::traits::EdgeKey, f64>,
+    ) -> GraphDBResult<HashMap<crate::traits::EdgeKey, bool>> {
+        let mut out = HashMap::with_capacity(updates.len());
+        for (key, w) in updates {
+            let ok = self
+                .update_edge_property(
+                    &key.0,
+                    &key.1,
+                    &key.2,
+                    "feedback_weight",
+                    serde_json::json!(w),
+                )
+                .await
+                .is_ok();
+            out.insert(key.clone(), ok);
+        }
+        Ok(out)
+    }
 }
 
 #[cfg(test)]

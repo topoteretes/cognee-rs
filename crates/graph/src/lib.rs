@@ -36,7 +36,7 @@ mod pg_graph_adapter;
 pub mod mock;
 
 pub use error::{GraphDBError, GraphDBResult};
-pub use traits::{GraphDBTrait, GraphDBTraitExt};
+pub use traits::{EdgeKey, GraphDBTrait, GraphDBTraitExt};
 pub use types::{EdgeData, GraphEdge, GraphNode, NodeData};
 
 #[cfg(feature = "ladybug")]

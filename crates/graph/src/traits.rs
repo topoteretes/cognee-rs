@@ -10,6 +10,10 @@ use std::collections::{HashMap, HashSet};
 
 use crate::{EdgeData, GraphDBResult, GraphNode, NodeData};
 
+/// Composite key uniquely identifying an edge in the graph:
+/// `(source_id, target_id, relationship_name)`.
+pub type EdgeKey = (String, String, String);
+
 /// Graph database interface trait.
 ///
 /// This trait defines the complete set of operations for graph database interaction,
@@ -370,6 +374,96 @@ pub trait GraphDBTrait: Send + Sync {
              edge {source_id} -> {target_id} ({relationship_name}) property {key} not updated"
         );
         Ok(())
+    }
+
+    /// Batch-fetch `feedback_weight` values for the given node IDs.
+    ///
+    /// Returns only IDs that exist and have a numeric `feedback_weight`
+    /// property. IDs missing from the graph or missing the property are
+    /// omitted from the result map.
+    ///
+    /// Default implementation calls [`get_node`] per id; backends should
+    /// override with a single batch query for efficiency.
+    async fn get_node_feedback_weights(
+        &self,
+        node_ids: &[String],
+    ) -> GraphDBResult<HashMap<String, f64>> {
+        let mut out = HashMap::with_capacity(node_ids.len());
+        for id in node_ids {
+            if let Some(node) = self.get_node(id).await?
+                && let Some(v) = node.get("feedback_weight").and_then(|v| v.as_f64())
+            {
+                out.insert(id.clone(), v);
+            }
+        }
+        Ok(out)
+    }
+
+    /// Batch-write `feedback_weight` values on the given nodes.
+    ///
+    /// Returns a map `node_id -> success` indicating whether each update
+    /// succeeded. Default implementation delegates to `update_node_property`
+    /// for each id; backends should override with a single batch query.
+    async fn set_node_feedback_weights(
+        &self,
+        updates: &HashMap<String, f64>,
+    ) -> GraphDBResult<HashMap<String, bool>> {
+        let mut out = HashMap::with_capacity(updates.len());
+        for (id, w) in updates {
+            let ok = self
+                .update_node_property(id, "feedback_weight", serde_json::json!(w))
+                .await
+                .is_ok();
+            out.insert(id.clone(), ok);
+        }
+        Ok(out)
+    }
+
+    /// Batch-fetch `feedback_weight` values for the given edges.
+    ///
+    /// Default implementation returns an empty map and logs a warning,
+    /// because the generic `GraphDBTrait` does not expose a per-edge
+    /// property read. Backends that support edge-property queries should
+    /// override this method.
+    async fn get_edge_feedback_weights(
+        &self,
+        edge_keys: &[EdgeKey],
+    ) -> GraphDBResult<HashMap<EdgeKey, f64>> {
+        if !edge_keys.is_empty() {
+            tracing::warn!(
+                "get_edge_feedback_weights not implemented for this backend; \
+                 returning empty map for {} edge(s)",
+                edge_keys.len()
+            );
+        }
+        Ok(HashMap::new())
+    }
+
+    /// Batch-write `feedback_weight` values on the given edges.
+    ///
+    /// Default implementation delegates to [`update_edge_property`] per
+    /// edge. Backends with no edge-update support will silently succeed
+    /// (because the default `update_edge_property` returns `Ok(())` with
+    /// a warning).
+    async fn set_edge_feedback_weights(
+        &self,
+        updates: &HashMap<EdgeKey, f64>,
+    ) -> GraphDBResult<HashMap<EdgeKey, bool>> {
+        let mut out = HashMap::with_capacity(updates.len());
+        for (key, w) in updates {
+            let ok = self
+                .update_edge_property(
+                    &key.0,
+                    &key.1,
+                    &key.2,
+                    "feedback_weight",
+                    serde_json::json!(w),
+                )
+                .await
+                .is_ok();
+            out.insert(key.clone(), ok);
+        }
+        Ok(out)
     }
 
     /// Retrieve a subgraph containing only the specified nodes and edges between them.

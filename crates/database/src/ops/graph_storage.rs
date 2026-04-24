@@ -1,3 +1,4 @@
+use chrono::{DateTime, Utc};
 use sea_orm::sea_query::OnConflict;
 use sea_orm::{
     ColumnTrait, Condition, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter,
@@ -105,6 +106,47 @@ pub async fn get_edges_by_dataset(
         .await
         .map_err(map_sea_err)
         .map(|v| v.into_iter().map(GraphEdge::from).collect())
+}
+
+/// Return edges for `dataset_id` created strictly after `since`, ordered by
+/// `created_at` ascending and limited to `limit` rows. Used by Stage 4 of
+/// `improve()` for incremental graph→session synchronisation.
+///
+/// When `since` is `None`, returns the oldest `limit` edges in the dataset.
+pub async fn get_edges_since(
+    db: &DatabaseConnection,
+    dataset_id: Uuid,
+    since: Option<DateTime<Utc>>,
+    limit: u64,
+) -> Result<Vec<GraphEdge>, DatabaseError> {
+    let mut q = edge::Entity::find()
+        .filter(edge::Column::DatasetId.eq(uuid_hex::to_hex(dataset_id)))
+        .order_by_asc(edge::Column::CreatedAt)
+        .limit(limit);
+    if let Some(ts) = since {
+        q = q.filter(edge::Column::CreatedAt.gt(ts));
+    }
+    q.all(db)
+        .await
+        .map_err(map_sea_err)
+        .map(|v| v.into_iter().map(GraphEdge::from).collect())
+}
+
+/// Batch-fetch nodes by their string IDs (hex form). Used by Stage 4 to
+/// resolve edge endpoints to full node metadata for JSON-line rendering.
+pub async fn get_nodes_by_ids(
+    db: &DatabaseConnection,
+    ids: &[String],
+) -> Result<Vec<GraphNode>, DatabaseError> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    node::Entity::find()
+        .filter(node::Column::Id.is_in(ids.to_vec()))
+        .all(db)
+        .await
+        .map_err(map_sea_err)
+        .map(|v| v.into_iter().map(GraphNode::from).collect())
 }
 
 pub async fn delete_edges_by_data(
