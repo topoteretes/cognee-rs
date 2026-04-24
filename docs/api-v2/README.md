@@ -56,6 +56,7 @@ Although the functions physically live under `cognee/api/v1/` in the Python tree
 
 ## See also
 
+- **Sequential implementation prompt:** [`IMPLEMENTATION-PROMPT.md`](IMPLEMENTATION-PROMPT.md) — step-by-step orchestration for landing all 6 tasks in the recommended order, one commit per task, with research / implementor / reviewer / doc-update sub-agents per task.
 - General v1 API gap analysis: [`../api-gaps/README.md`](../api-gaps/README.md)
 - Python reference (cloned locally at `/tmp/cognee-python/cognee/api/v1/`)
 - Rust V2 entry points: [`crates/lib/src/api/`](../../crates/lib/src/api/)
