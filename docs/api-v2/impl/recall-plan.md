@@ -6,6 +6,14 @@
 
 ---
 
+## Status
+
+- **Implemented:** yes (span-attribute smoke test skipped — optional per plan)
+- **Commit:** `598d5538b6b19a3df2095e9ef032c52c597fb861`
+- **Date:** 2026-04-24
+
+---
+
 ## 1. Goal & Scope
 
 Bring the Rust port of `recall()` from its current ~95%-implemented state up to full Python parity on both behaviour and observability so the two SDKs can be treated as interchangeable from a caller's perspective.
@@ -78,6 +86,17 @@ Python does two separate things in `recall()`:
 ---
 
 ## 3. Step-by-Step Implementation
+
+- [x] Step 1 — Add semantic-attribute constants for recall
+- [x] Step 2 — Create the override-tracking module
+- [x] Step 3 — Export the stats module
+- [x] Step 4 — Port Python's rule set into the Rust router
+- [x] Step 5 — Wire override tracking into `recall()`
+- [x] Step 6 — Emit a `cognee.api.recall` span with Python-parity attributes
+- [x] Step 7 — Port `test_query_router.py` into Rust
+- [x] Step 8 — Port `TestOverrideTracking`
+- [x] Step 9 — Add an integration test for `recall()` override dispatch
+- [ ] Step 10 — Span-attribute smoke test — skipped (optional, per plan)
 
 ### Step 1 — Add semantic-attribute constants for recall
 

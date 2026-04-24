@@ -10,10 +10,16 @@
 
 use std::collections::HashSet;
 
-use cognee_search::{SearchOrchestrator, SearchRequest, SearchResponse, SearchType, route_query};
+use cognee_search::observability::{
+    COGNEE_RECALL_SCOPE, COGNEE_RECALL_SOURCE, COGNEE_RESULT_COUNT, COGNEE_SEARCH_QUERY,
+    COGNEE_SEARCH_TYPE, COGNEE_SESSION_ENTRY_COUNT, COGNEE_SESSION_ID,
+};
+use cognee_search::{
+    SearchOrchestrator, SearchRequest, SearchResponse, SearchType, record_override, route_query,
+};
 use cognee_session::SessionStore;
 use serde::{Deserialize, Serialize};
-use tracing::{debug, info};
+use tracing::{debug, field, info};
 
 use super::error::ApiError;
 
@@ -71,6 +77,49 @@ pub async fn recall(
     search_orchestrator: &SearchOrchestrator,
     session_store: Option<&dyn SessionStore>,
 ) -> Result<RecallResult, ApiError> {
+    // -- Compute scope for observability (parity with Python recall.py:164) --
+    let scope: &'static str = match (session_id, datasets.as_deref(), query_type) {
+        (Some(_), None, None) => "session",
+        (Some(_), Some(_), _) => "auto",
+        _ => "graph",
+    };
+
+    // Truncate query preview to 500 chars for PII control, mirroring Python's
+    // `span.set_attribute(COGNEE_SEARCH_QUERY, query_text[:500])`.
+    let query_preview: &str = {
+        // Compute the byte index of the 500th char boundary.
+        let mut end = query_text.len();
+        if query_text.chars().count() > 500 {
+            let mut idx = 0usize;
+            for (count, (byte_idx, _)) in query_text.char_indices().enumerate() {
+                if count == 500 {
+                    idx = byte_idx;
+                    break;
+                }
+            }
+            if idx > 0 {
+                end = idx;
+            }
+        }
+        &query_text[..end]
+    };
+
+    // Open a `cognee.api.recall` span with Python-parity semantic
+    // attributes. Fields that are not known yet are initialised as
+    // `field::Empty` and recorded at each return site.
+    let span = tracing::info_span!(
+        "cognee.api.recall",
+        { COGNEE_SEARCH_QUERY } = query_preview,
+        { COGNEE_RECALL_SCOPE } = scope,
+        { COGNEE_SESSION_ID } = session_id.unwrap_or(""),
+        "cognee.recall.top_k" = top_k,
+        { COGNEE_SEARCH_TYPE } = field::Empty,
+        { COGNEE_RECALL_SOURCE } = field::Empty,
+        { COGNEE_RESULT_COUNT } = field::Empty,
+        { COGNEE_SESSION_ENTRY_COUNT } = field::Empty,
+    );
+    let _enter = span.enter();
+
     // -- Session-first routing --
     if let (Some(sid), Some(store)) = (session_id, session_store) {
         // Only try session search when caller has not explicitly set datasets or query_type.
@@ -83,6 +132,9 @@ pub async fn recall(
                     results = session_results.len(),
                     "recall: returning session-matched results"
                 );
+                span.record(COGNEE_RECALL_SOURCE, "session");
+                span.record(COGNEE_RESULT_COUNT, session_results.len());
+                span.record(COGNEE_SESSION_ENTRY_COUNT, session_results.len());
                 return Ok(RecallResult {
                     items: session_results,
                     search_type_used: None,
@@ -97,20 +149,29 @@ pub async fn recall(
         }
     }
 
-    // -- Determine search type --
-    let (search_type, auto_routed) = if let Some(qt) = query_type {
-        (qt, false)
-    } else if auto_route {
-        let route_result = route_query(query_text);
-        info!(
-            search_type = ?route_result.search_type,
-            confidence = route_result.confidence,
-            "recall: auto-routed query"
-        );
-        (route_result.search_type, true)
-    } else {
-        (SearchType::GraphCompletion, false)
+    // -- Determine search type (Python parity: still run the router on
+    //    explicit query_type + auto_route=true so we can record the
+    //    override; see recall.py:225-238) --
+    let (search_type, auto_routed) = match (query_type, auto_route) {
+        (Some(qt), true) => {
+            let routed = route_query(query_text);
+            record_override(routed.search_type, qt);
+            (qt, false)
+        }
+        (Some(qt), false) => (qt, false),
+        (None, true) => {
+            let routed = route_query(query_text);
+            info!(
+                search_type = ?routed.search_type,
+                confidence = routed.confidence,
+                "recall: auto-routed query"
+            );
+            (routed.search_type, true)
+        }
+        (None, false) => (SearchType::GraphCompletion, false),
     };
+
+    span.record(COGNEE_SEARCH_TYPE, format!("{search_type:?}").as_str());
 
     // -- Build and execute search request --
     let request = SearchRequest {
@@ -179,6 +240,9 @@ pub async fn recall(
             score: 1.0,
         }],
     };
+
+    span.record(COGNEE_RECALL_SOURCE, "graph");
+    span.record(COGNEE_RESULT_COUNT, items.len());
 
     Ok(RecallResult {
         items,

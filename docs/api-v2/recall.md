@@ -1,7 +1,7 @@
 # API v2: `recall()`
 
 **Python source:** `cognee/api/v1/recall/recall.py` (+ `query_router.py`)
-**Rust status:** Partial (core logic implemented; integration and override tracking incomplete)
+**Rust status:** **Implemented**
 **Implementation plan:** [impl/recall-plan.md](impl/recall-plan.md)
 
 ---
@@ -176,7 +176,7 @@ class RouteResult:
 | **`_search_session()`** | `cognee/api/v1/recall/recall.py:54–119` | `crates/lib/src/api/recall.rs:195–252` (as `session_keyword_search()`) | ✓ **Implemented** | Keyword overlap scoring with min token length 2 |
 | **`_tokenize()`** | `cognee/api/v1/recall/recall.py:49–51` | `crates/lib/src/api/recall.rs:255–260` (as `tokenize()`) | ✓ **Implemented** | Alphanumeric split, >= 2 char filter |
 | **`route_query()`** | `cognee/api/v1/recall/query_router.py:171–232` | `crates/search/src/query_router.rs:29–174` | ✓ **Implemented** | Rule-based classifier; routes to SearchType |
-| **`record_override()`** | `cognee/api/v1/recall/query_router.py:157–168` | **Missing** | ✗ **Not Implemented** | Override tracking not wired up in Rust |
+| **`record_override()`** | `cognee/api/v1/recall/query_router.py:157–168` | `crates/search/src/query_router_stats.rs` | ~~Missing~~ — done in commit 598d553 | Process-global `OnceLock<Mutex<HashMap<(SearchType, SearchType), u64>>>` counter with `record_override`, `override_counts_snapshot`, `clear_override_counts` helpers |
 | **`_is_negated()`** | `cognee/api/v1/recall/query_router.py:39–43` | `crates/search/src/query_router.rs:176–198` (as `has_negation_nearby()`) | ✓ **Implemented** | Negation suppression via word search |
 | **`RouteResult`** | `cognee/api/v1/recall/query_router.py:17–30` | `crates/search/src/query_router.rs:9–19` | ✓ **Implemented** | Struct with `search_type`, `confidence`, `runner_up`, `runner_up_score` |
 | **`RecallKwargs`** | `cognee/api/v1/recall/recall.py:31–46` | **Missing** | ✗ **Not Implemented** | Rust uses `SearchRequest` directly; no dedicated kwargs type |
@@ -188,8 +188,8 @@ class RouteResult:
 | **`get_remote_client()`** | `cognee/api/v1/serve/state.py` | **Missing** | ✗ **Not Implemented** | Cloud delegation not applicable to Rust (local-only SDK) |
 | **`get_default_user()`** | `cognee/modules/users/methods` | **Missing** | ✗ **Not Implemented** | Not needed; Rust API is stateless |
 | **`send_telemetry()`** | `cognee/shared/utils.py` | **Not found** | ✗ **Not Implemented** | No telemetry layer in Rust; could use tracing instead |
-| **`new_span()`** | `cognee/modules/observability` | `crates/search/src/observability.rs` | ✓ **Partial** | Tracing spans via `#[tracing::instrument]`; manual span creation available |
-| **`override_counts` dict** | `cognee/api/v1/recall/query_router.py:154` | **Missing** | ✗ **Not Implemented** | In-memory misrouting tracker not present |
+| **`new_span()`** | `cognee/modules/observability` | `crates/search/src/observability.rs` | ~~Partial~~ — done in commit 598d553 | `cognee.api.recall` span with Python-parity attributes (query, scope, session_id, top_k, search_type, result count, recall source, session entry count) |
+| **`override_counts` dict** | `cognee/api/v1/recall/query_router.py:154` | `crates/search/src/query_router_stats.rs` | ~~Missing~~ — done in commit 598d553 | Backed by `OnceLock<Mutex<HashMap<(SearchType, SearchType), u64>>>` |
 | **`SessionQAEntry` type** | `cognee/infrastructure/session/models` | `crates/session/src/types.rs` | ✓ **Implemented** | Struct with id, session_id, question, answer, context, feedback fields, created_at |
 | **`SessionStore` trait** | `cognee/infrastructure/session/session_store.rs` (Python interface) | `crates/session/src/session_store.rs` | ✓ **Implemented** | `async fn get_all_qa_entries()`, `create_qa_entry()`, `update_qa_entry()`, `prune()` |
 | **`RecallItem` struct** | (Python doesn't have explicit struct) | `crates/lib/src/api/recall.rs:29–37` | ✓ **Rust-only** | `{ source, content, score }` for tagged results |
@@ -202,18 +202,18 @@ class RouteResult:
 
 Based on the analysis, the Rust `recall()` implementation is **functionally complete** for core use cases, but is missing:
 
-### A. Override tracking (Python parity)
+### A. Override tracking (Python parity) — ~~Missing~~ done in commit 598d553
 
-**What's missing:** The `record_override()` function and the in-memory `override_counts` dict that log misrouting patterns when a user provides an explicit `query_type` that differs from the auto-routed type.
+**What's missing:** ~~The `record_override()` function and the in-memory `override_counts` dict that log misrouting patterns when a user provides an explicit `query_type` that differs from the auto-routed type.~~
 
 **Impact:** Telemetry and debugging. Missing this means you cannot detect if the auto-router is systematically misrouting certain query patterns.
 
 **Effort:** Low — add a new module `crates/search/src/query_router_stats.rs` with:
-- Global `lazy_static` or `parking_lot::Mutex<HashMap<(SearchType, SearchType), u64>>` for override counts
-- Public function `record_override(routed: SearchType, override: SearchType)` that bumps the count and logs
-- Public function `get_override_stats() -> HashMap<...>` to expose for diagnostics
+- ~~Global `lazy_static` or `parking_lot::Mutex<HashMap<(SearchType, SearchType), u64>>` for override counts~~ — done in commit 598d553 (uses `OnceLock<Mutex<HashMap<...>>>`)
+- ~~Public function `record_override(routed: SearchType, override: SearchType)` that bumps the count and logs~~ — done in commit 598d553
+- ~~Public function `get_override_stats() -> HashMap<...>` to expose for diagnostics~~ — done in commit 598d553 (exposed as `override_counts_snapshot()`)
 
-**File:** Would be `crates/search/src/query_router_stats.rs` (new), re-exported via `crates/search/src/lib.rs`.
+**File:** ~~Would be `crates/search/src/query_router_stats.rs` (new), re-exported via `crates/search/src/lib.rs`.~~ Created in commit 598d553.
 
 ### B. Telemetry (Python parity)
 
@@ -243,20 +243,19 @@ Based on the analysis, the Rust `recall()` implementation is **functionally comp
 
 **Verdict:** Skip.
 
-### E. Tracing/observability span attributes (enhancement)
+### E. Tracing/observability span attributes (enhancement) — ~~Missing~~ done in commit 598d553
 
-**Current:** Rust has `#[tracing::instrument]` on `recall()` in the library API layer, but the top-level public API (in `crates/lib/src/api/recall.rs`) does not emit detailed span attributes (query, scope, search_type, result count).
+**Current:** ~~Rust has `#[tracing::instrument]` on `recall()` in the library API layer, but the top-level public API (in `crates/lib/src/api/recall.rs`) does not emit detailed span attributes (query, scope, search_type, result count).~~ — done in commit 598d553: `cognee.api.recall` span opened with Python-parity attributes (query, scope, session_id, top_k, search_type, recall source, result count, session entry count).
 
-**Enhancement:** Add manual `tracing::info!()` calls or use `tracing::Span` API to set attributes, mirroring Python's:
+**Enhancement:** ~~Add manual `tracing::info!()` calls or use `tracing::Span` API to set attributes, mirroring Python's:~~
 ```rust
 span.set_attribute(COGNEE_RECALL_SCOPE, scope);
 span.set_attribute(COGNEE_SEARCH_TYPE, search_type);
 span.set_attribute(COGNEE_RESULT_COUNT, items.len());
 ```
+~~**Effort:** Low — add `use tracing::{info, debug};` and call `info!()` at key decision points.~~ — done in commit 598d553.
 
-**Effort:** Low — add `use tracing::{info, debug};` and call `info!()` at key decision points.
-
-**Priority:** Low (optional enhancement).
+**Priority:** ~~Low (optional enhancement).~~ Landed.
 
 ---
 
@@ -298,13 +297,13 @@ Rust implementation (`session_keyword_search()` in `crates/lib/src/api/recall.rs
 ### Query router behavior
 
 Rust implementation (`crates/search/src/query_router.rs`):
-- Uses substring matching (`contains()`) instead of regex (simpler, faster)
-- Negation detection via `has_negation_nearby()` (20-char window walk)
-- Weights and categories match Python exactly
+- ~~Uses substring matching (`contains()`) instead of regex (simpler, faster)~~ — done in commit 598d553: now ports Python's `_RULES` verbatim (14 rules) with word-boundary helper and two compiled regexes (anchored lexical quote + explicit year range)
+- Negation detection via `has_negation_nearby()` (20-char window walk, matches Python `_NEGATION_WINDOW = 20`)
+- Weights and categories match Python exactly (factual 3.0+3.0, cypher 10.0, coding 5.0+3.0, lexical 8.0+4.0, summary 5.0, reasoning 4.0+2.0, relationship 5.0+5.0+3.0, temporal 3.0+4.0+3.0+6.0)
 - Aggregates scores per SearchType correctly
 - Defaults to `GraphCompletion` on no-match or low-score fallback
 
-**Difference from Python:** Rust uses `contains()` for pattern matching vs. Python's compiled regexes. This makes Rust's implementation slightly less precise (e.g., will not distinguish word boundaries), but good enough for the use case and faster. Example: Python's `\b(why|explain|...\b` matches word boundaries; Rust's `lower.contains("why")` will match "somehow_why_not" as well. This is acceptable for auto-routing (false positives are mild).
+**~~Difference from Python~~:** ~~Rust uses `contains()` for pattern matching vs. Python's compiled regexes. This makes Rust's implementation slightly less precise (e.g., will not distinguish word boundaries), but good enough for the use case and faster. Example: Python's `\b(why|explain|...\b` matches word boundaries; Rust's `lower.contains("why")` will match "somehow_why_not" as well. This is acceptable for auto-routing (false positives are mild).~~ — done in commit 598d553: word-boundary helper now checks non-alphanumeric char boundaries on either side of each keyword match, so Rust no longer produces the "somehow_why_not" false positives.
 
 ### SearchRequest mapping
 
@@ -319,12 +318,14 @@ Current test coverage in Rust:
 | File | Tests | Coverage |
 |------|-------|----------|
 | `crates/lib/src/api/recall.rs` | 3 unit tests | `tokenize()`, `recall_source_serialization()` |
-| `crates/search/src/query_router.rs` | 8 tests | `route_query()` routing decisions, negation suppression, runner-up tracking |
+| `crates/search/src/query_router.rs` | ~~8~~ 34 tests (done in commit 598d553) | Full port of `test_query_router.py` — factual, cypher, coding, lexical, summary, reasoning, relationship, temporal, negation, confidence, ambiguous queries |
+| `crates/search/src/query_router_stats.rs` | 2 tests (done in commit 598d553) | `TestOverrideTracking` port — increment behavior + same-type no-op |
+| `crates/lib/tests/recall_override.rs` | 3 tests (done in commit 598d553) | Override dispatch integration through `recall()` |
 
 ### Integration test candidates
 
 - Session + graph fallthrough (when session empty, ensure graph search runs)
-- Override tracking (capture misrouting stats)
+- ~~Override tracking (capture misrouting stats)~~ — done in commit 598d553 (`crates/lib/tests/recall_override.rs`)
 - Auto-routing confidence scoring (verify `confidence >= 2.0 * runner_up_score` holds)
 - Result tagging (`_source` field present on all items)
 
@@ -353,4 +354,17 @@ Current test coverage in Rust:
 - Detailed span attribute logging
 
 **Recommendation:** Ship as-is; file follow-up tickets for override tracking and telemetry.
+
+---
+
+## Implementation notes
+
+**Commit:** `598d5538b6b19a3df2095e9ef032c52c597fb861`
+
+Ported Python's `_RULES` rule-set verbatim into `crates/search/src/query_router.rs` (14 rules: factual, cypher regex at 10.0, coding, anchored lexical quote + lexical intent, summary, reasoning connectives, three split relationship rules at 5.0+5.0+3.0, temporal with year-range regex at 6.0, plus tier weights). Added `crates/search/src/query_router_stats.rs` with `OnceLock<Mutex<HashMap<(SearchType, SearchType), u64>>>` backing `record_override` / `override_counts_snapshot` / `clear_override_counts`. `crates/lib/src/api/recall.rs` now runs the router even when `query_type` is supplied (when `auto_route=true`) so it can record overrides, matching Python `recall.py:225–231`. Emits `cognee.api.recall` span with 4 new constants added to `observability.rs` (`COGNEE_SEARCH_QUERY`, `COGNEE_RECALL_SCOPE`, `COGNEE_RECALL_SOURCE`, `COGNEE_SESSION_ENTRY_COUNT`). 39 new tests total (34 router + 2 stats + 3 integration).
+
+### Deviations
+
+- **Step 10 (span-attribute smoke test) skipped** — optional per plan, would require `tracing-subscriber` test-writer setup for minimal value.
+- **`Matcher::AnyString` enum variant from plan sketch omitted** — all non-keyword rules use regex; the variant would have been dead code.
 

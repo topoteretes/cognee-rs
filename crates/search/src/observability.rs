@@ -45,3 +45,15 @@ pub const COGNEE_DATA_ITEM_COUNT: &str = "cognee.data.item_count";
 
 /// The delete mode ("soft" or "hard").
 pub const COGNEE_OPERATION_MODE: &str = "cognee.operation.mode";
+
+/// The natural-language query text (truncated to 500 chars for PII control).
+pub const COGNEE_SEARCH_QUERY: &str = "cognee.search.query";
+
+/// Recall scope — "session", "auto", or "graph".
+pub const COGNEE_RECALL_SCOPE: &str = "cognee.recall.scope";
+
+/// Recall result source — "session", "graph", or "cloud".
+pub const COGNEE_RECALL_SOURCE: &str = "cognee.recall.source";
+
+/// Number of session Q&A entries that matched the keyword search.
+pub const COGNEE_SESSION_ENTRY_COUNT: &str = "cognee.session.entry_count";

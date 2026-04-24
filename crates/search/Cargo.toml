@@ -13,6 +13,7 @@ cognee-vector = { path = "../vector" }
 
 async-trait.workspace = true
 indexmap = "2"
+regex = "1"
 tokio = { workspace = true, features = ["sync"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
@@ -36,5 +37,6 @@ cognee-delete    = { path = "../delete" }
 cognee-llm       = { path = "../llm" }
 cognee-session   = { path = "../session", features = ["fs"] }
 dotenv.workspace = true
+serial_test.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
