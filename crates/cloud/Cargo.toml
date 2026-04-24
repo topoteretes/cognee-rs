@@ -18,4 +18,5 @@ tracing = { workspace = true }
 uuid = { workspace = true }
 
 [dev-dependencies]
+mockito = "1"
 tempfile = { workspace = true }
