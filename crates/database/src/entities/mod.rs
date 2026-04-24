@@ -1,6 +1,5 @@
 // SeaORM entity definitions.
 // Phase 2 entities (existing tables):
-pub mod artifact_reference;
 pub mod data;
 pub mod dataset;
 pub mod dataset_data;

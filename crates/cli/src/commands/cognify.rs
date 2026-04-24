@@ -1,8 +1,7 @@
 use std::sync::Arc;
 
-use chrono::Utc;
 use cognee_lib::cognify::{ChunkStrategy, CognifyConfig, cognify};
-use cognee_lib::database::{ArtifactReference, DatabaseConnection, ops};
+use cognee_lib::database::{DatabaseConnection, ops};
 use cognee_lib::ontology::{NoOpOntologyResolver, OntologyResolver, RdfLibOntologyResolver};
 use cognee_lib::{ComponentManager, PipelineContext};
 use tracing::{debug, info, warn};
@@ -55,8 +54,7 @@ pub fn run(args: CognifyArgs, cm: Arc<ComponentManager>) -> Result<(), CliError>
             .await
             .map_err(|e| CliError::Runtime(format!("{e}")))?;
 
-        let dataset_names =
-            resolve_dataset_names(&database, owner_id, requested_datasets).await?;
+        let dataset_names = resolve_dataset_names(&database, owner_id, requested_datasets).await?;
 
         let storage = cm
             .storage()
@@ -87,11 +85,9 @@ pub fn run(args: CognifyArgs, cm: Arc<ComponentManager>) -> Result<(), CliError>
             }
         });
         let ontology_resolver: Arc<dyn OntologyResolver> = match ontology_path {
-            Some(path) => Arc::new(
-                RdfLibOntologyResolver::new(path).map_err(|error| {
-                    CliError::Runtime(format!("Ontology initialization failed: {error}"))
-                })?,
-            ),
+            Some(path) => Arc::new(RdfLibOntologyResolver::new(path).map_err(|error| {
+                CliError::Runtime(format!("Ontology initialization failed: {error}"))
+            })?),
             None => Arc::new(NoOpOntologyResolver::new()),
         };
 
@@ -114,19 +110,20 @@ pub fn run(args: CognifyArgs, cm: Arc<ComponentManager>) -> Result<(), CliError>
         let mut total_embeddings = 0usize;
 
         for dataset_name in &dataset_names {
-            let dataset = ops::datasets::get_dataset_by_name(&database, dataset_name, owner_id, None)
-                .await
-                .map_err(|error| {
-                    CliError::Runtime(format!(
-                        "Failed to resolve dataset '{dataset_name}': {error}"
-                    ))
-                })?
-                .ok_or_else(|| {
-                    CliError::Validation(format!(
-                        "Dataset '{dataset_name}' was not found for owner {}",
-                        owner_id
-                    ))
-                })?;
+            let dataset =
+                ops::datasets::get_dataset_by_name(&database, dataset_name, owner_id, None)
+                    .await
+                    .map_err(|error| {
+                        CliError::Runtime(format!(
+                            "Failed to resolve dataset '{dataset_name}': {error}"
+                        ))
+                    })?
+                    .ok_or_else(|| {
+                        CliError::Validation(format!(
+                            "Dataset '{dataset_name}' was not found for owner {}",
+                            owner_id
+                        ))
+                    })?;
 
             let data_items = ops::datasets::get_dataset_data(&database, dataset.id)
                 .await
@@ -160,21 +157,12 @@ pub fn run(args: CognifyArgs, cm: Arc<ComponentManager>) -> Result<(), CliError>
                 Arc::clone(&ontology_resolver),
                 &cognify_config,
             )
-                .await
-                .map_err(|error| {
-                    CliError::Runtime(format!(
-                        "Cognify execution failed for dataset '{dataset_name}': {error}"
-                    ))
-                })?;
-
-            let artifact_references = build_artifact_references(owner_id, dataset.id, &result);
-            ops::artifact_refs::upsert_artifact_references(&database, &artifact_references)
-                .await
-                .map_err(|error| {
-                    CliError::Runtime(format!(
-                        "Failed to persist artifact references for dataset '{dataset_name}': {error}"
-                    ))
-                })?;
+            .await
+            .map_err(|error| {
+                CliError::Runtime(format!(
+                    "Cognify execution failed for dataset '{dataset_name}': {error}"
+                ))
+            })?;
 
             total_chunks += result.chunks.len();
             total_entities += result.entities.len();
@@ -228,74 +216,4 @@ pub(crate) async fn resolve_dataset_names(
     }
 
     Ok(datasets.into_iter().map(|dataset| dataset.name).collect())
-}
-
-pub(crate) fn build_artifact_references(
-    owner_id: Uuid,
-    dataset_id: Uuid,
-    result: &cognee_lib::cognify::CognifyResult,
-) -> Vec<ArtifactReference> {
-    let created_at = Utc::now();
-    let mut references = Vec::new();
-
-    let mut chunk_to_data_id = std::collections::HashMap::new();
-
-    for chunk in &result.chunks {
-        chunk_to_data_id.insert(chunk.base.id, chunk.document_id);
-
-        references.push(ArtifactReference {
-            id: Uuid::new_v4(),
-            owner_id,
-            dataset_id,
-            data_id: Some(chunk.document_id),
-            artifact_kind: "vector_point".to_string(),
-            artifact_id: chunk.base.id.to_string(),
-            collection_name: Some("DocumentChunk_text".to_string()),
-            created_at,
-        });
-    }
-
-    for summary in &result.summaries {
-        let data_id = summary
-            .made_from
-            .and_then(|chunk_id| chunk_to_data_id.get(&chunk_id).copied());
-        references.push(ArtifactReference {
-            id: Uuid::new_v4(),
-            owner_id,
-            dataset_id,
-            data_id,
-            artifact_kind: "vector_point".to_string(),
-            artifact_id: summary.base.id.to_string(),
-            collection_name: Some("TextSummary_text".to_string()),
-            created_at,
-        });
-    }
-
-    for entity in &result.entities {
-        let entity_id = entity.entity.base.id.to_string();
-
-        references.push(ArtifactReference {
-            id: Uuid::new_v4(),
-            owner_id,
-            dataset_id,
-            data_id: None,
-            artifact_kind: "graph_node".to_string(),
-            artifact_id: entity_id.clone(),
-            collection_name: None,
-            created_at,
-        });
-
-        references.push(ArtifactReference {
-            id: Uuid::new_v4(),
-            owner_id,
-            dataset_id,
-            data_id: None,
-            artifact_kind: "vector_point".to_string(),
-            artifact_id: entity_id,
-            collection_name: Some("Entity_name".to_string()),
-            created_at,
-        });
-    }
-
-    references
 }

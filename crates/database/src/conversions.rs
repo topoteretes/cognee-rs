@@ -1,10 +1,10 @@
 use crate::entities::{
-    artifact_reference, data, dataset, dataset_data, edge, graph_metrics, node, pipeline_run,
-    query, result_log, task_run,
+    data, dataset, dataset_data, edge, graph_metrics, node, pipeline_run, query, result_log,
+    task_run,
 };
 use crate::types::{
-    ArtifactReference, DatabaseError, GraphEdge, GraphMetrics, GraphNode, PipelineRun,
-    PipelineRunStatus, SearchHistoryEntry, SearchHistoryEntryType, TaskRun,
+    DatabaseError, GraphEdge, GraphMetrics, GraphNode, PipelineRun, PipelineRunStatus,
+    SearchHistoryEntry, SearchHistoryEntryType, TaskRun,
 };
 use crate::uuid_hex;
 /// Shared SeaORM ↔ domain-type conversions and error helpers used across ops modules.
@@ -190,25 +190,6 @@ pub(crate) fn result_model_to_history(m: result_log::Model) -> SearchHistoryEntr
             "DB stores only valid UUID hex strings; corruption indicates data integrity failure",
         ),
         created_at: m.created_at,
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Artifact reference conversions
-// ---------------------------------------------------------------------------
-
-impl From<artifact_reference::Model> for ArtifactReference {
-    fn from(m: artifact_reference::Model) -> Self {
-        Self {
-            id: uuid_hex::from_hex(&m.id).expect("DB stores only valid UUID hex strings; corruption indicates data integrity failure"),
-            owner_id: uuid_hex::from_hex(&m.owner_id).expect("DB stores only valid UUID hex strings; corruption indicates data integrity failure"),
-            dataset_id: uuid_hex::from_hex(&m.dataset_id).expect("DB stores only valid UUID hex strings; corruption indicates data integrity failure"),
-            data_id: uuid_hex::from_hex_opt(m.data_id.as_deref()).expect("DB stores only valid UUID hex strings; corruption indicates data integrity failure"),
-            artifact_kind: m.artifact_kind,
-            artifact_id: m.artifact_id,
-            collection_name: m.collection_name,
-            created_at: m.created_at,
-        }
     }
 }
 

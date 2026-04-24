@@ -5,7 +5,7 @@ pub use authorized::AuthorizedDeleteService;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use cognee_database::{ArtifactReference, DeleteDb, GraphEdge, GraphNode};
+use cognee_database::{DeleteDb, GraphEdge, GraphNode};
 use cognee_graph::GraphDBTrait;
 use cognee_models::Dataset;
 use cognee_session::SessionStore;
@@ -583,63 +583,6 @@ impl DeleteService {
     ) -> Result<Vec<Uuid>, DeleteError> {
         let targets = self.resolve_targets(request).await?;
         self.compute_deletable_data_ids(&targets).await
-    }
-
-    #[tracing::instrument(
-        name = "cognee.delete.resolve_artifacts",
-        skip(self, request),
-        level = "debug",
-        fields(cognee.result.count = tracing::field::Empty)
-    )]
-    pub async fn artifact_references_for_request(
-        &self,
-        request: &DeleteRequest,
-    ) -> Result<Vec<ArtifactReference>, DeleteError> {
-        let targets = self.resolve_targets(request).await?;
-        let deletable_data_ids = self.data_ids_to_delete(request).await?;
-
-        let mut references = Vec::new();
-        let mut seen_ids = HashSet::new();
-
-        for data_id in deletable_data_ids {
-            let data_refs = self
-                .database
-                .list_artifact_references_for_data(data_id)
-                .await
-                .map_err(|error| {
-                    DeleteError::Runtime(format!(
-                        "Failed to list artifact references for data {}: {}",
-                        data_id, error
-                    ))
-                })?;
-            for reference in data_refs {
-                if seen_ids.insert(reference.id) {
-                    references.push(reference);
-                }
-            }
-        }
-
-        for dataset in &targets.datasets_to_delete {
-            let dataset_refs = self
-                .database
-                .list_artifact_references_for_dataset(dataset.id)
-                .await
-                .map_err(|error| {
-                    DeleteError::Runtime(format!(
-                        "Failed to list artifact references for dataset {}: {}",
-                        dataset.id, error
-                    ))
-                })?;
-            for reference in dataset_refs {
-                if seen_ids.insert(reference.id) {
-                    references.push(reference);
-                }
-            }
-        }
-
-        tracing::Span::current().record("cognee.result.count", references.len());
-
-        Ok(references)
     }
 
     // ==================================================================

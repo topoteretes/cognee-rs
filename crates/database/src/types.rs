@@ -110,15 +110,3 @@ pub struct SearchHistoryEntry {
     pub user_id: Option<Uuid>,
     pub created_at: DateTime<Utc>,
 }
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ArtifactReference {
-    pub id: Uuid,
-    pub owner_id: Uuid,
-    pub dataset_id: Uuid,
-    pub data_id: Option<Uuid>,
-    pub artifact_kind: String,
-    pub artifact_id: String,
-    pub collection_name: Option<String>,
-    pub created_at: DateTime<Utc>,
-}

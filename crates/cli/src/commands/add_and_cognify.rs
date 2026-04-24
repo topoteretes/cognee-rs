@@ -12,8 +12,6 @@ use uuid::Uuid;
 use crate::cli::{AddAndCognifyArgs, ChunkerArg};
 use crate::error::CliError;
 
-use super::cognify::build_artifact_references;
-
 pub fn run(args: AddAndCognifyArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> {
     let settings = cm.settings();
     let effective_chunk_size = args.chunk_size.unwrap_or(settings.chunk_size);
@@ -166,16 +164,6 @@ pub fn run(args: AddAndCognifyArgs, cm: Arc<ComponentManager>) -> Result<(), Cli
                 args.dataset_name
             ))
         })?;
-
-        let artifact_references = build_artifact_references(owner_id, dataset.id, &result);
-        ops::artifact_refs::upsert_artifact_references(&database, &artifact_references)
-            .await
-            .map_err(|error| {
-                CliError::Runtime(format!(
-                    "Failed to persist artifact references for dataset '{}': {error}",
-                    args.dataset_name
-                ))
-            })?;
 
         info!(
             "Cognify completed. chunks={}, entities={}, edges={}, summaries={}, embeddings={}",

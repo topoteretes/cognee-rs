@@ -291,7 +291,7 @@ async fn session_keyword_search(
         .collect();
 
     // Sort by overlap descending.
-    scored.sort_by(|a, b| b.1.cmp(&a.1));
+    scored.sort_by_key(|s| std::cmp::Reverse(s.1));
     scored.truncate(top_k);
 
     let items = scored

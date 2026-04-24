@@ -3,8 +3,8 @@ use cognee_models::{Data, Dataset};
 use sea_orm::DatabaseConnection;
 use uuid::Uuid;
 
-use crate::ops::{artifact_refs, data, datasets, graph_storage, pipeline_runs, search_history};
-use crate::types::{ArtifactReference, DatabaseError, GraphEdge, GraphNode};
+use crate::ops::{data, datasets, graph_storage, pipeline_runs, search_history};
+use crate::types::{DatabaseError, GraphEdge, GraphNode};
 
 #[async_trait]
 pub trait DeleteDb: Send + Sync {
@@ -30,15 +30,6 @@ pub trait DeleteDb: Send + Sync {
         dataset_id: Uuid,
         data_id: Uuid,
     ) -> Result<(), DatabaseError>;
-
-    async fn list_artifact_references_for_data(
-        &self,
-        data_id: Uuid,
-    ) -> Result<Vec<ArtifactReference>, DatabaseError>;
-    async fn list_artifact_references_for_dataset(
-        &self,
-        dataset_id: Uuid,
-    ) -> Result<Vec<ArtifactReference>, DatabaseError>;
 
     // ------------------------------------------------------------------
     // Pipeline cleanup methods
@@ -202,20 +193,6 @@ impl DeleteDb for DatabaseConnection {
         data_id: Uuid,
     ) -> Result<(), DatabaseError> {
         datasets::detach_data_from_dataset(self, dataset_id, data_id).await
-    }
-
-    async fn list_artifact_references_for_data(
-        &self,
-        data_id: Uuid,
-    ) -> Result<Vec<ArtifactReference>, DatabaseError> {
-        artifact_refs::list_artifact_references_for_data(self, data_id).await
-    }
-
-    async fn list_artifact_references_for_dataset(
-        &self,
-        dataset_id: Uuid,
-    ) -> Result<Vec<ArtifactReference>, DatabaseError> {
-        artifact_refs::list_artifact_references_for_dataset(self, dataset_id).await
     }
 
     // ------------------------------------------------------------------
