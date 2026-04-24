@@ -4,6 +4,12 @@
 **Python reference:** `cognee/api/v1/remember/remember.py`  
 **Rust entry point:** `crates/lib/src/api/remember.rs`
 
+## Status
+
+- Implemented: yes (RememberParams/RememberContext refactor deferred)
+- Commit: `4da7623`
+- Date: 2026-04-24
+
 ---
 
 ## 1. Goal & scope
@@ -68,7 +74,7 @@ The promise-like behavior uses `Arc<tokio::sync::Mutex<RememberResultInner>>` be
 
 ## 3. Step-by-step implementation
 
-### Step 1 — Extend `RememberResult` surface (2h, no deps)
+### Step 1 — Extend `RememberResult` surface (2h, no deps) — [x] done in commit `4da7623`
 
 **File:** `crates/lib/src/api/remember.rs`
 
@@ -182,7 +188,7 @@ impl fmt::Display for RememberResult {
 
 Implement `Deserialize` manually (skip `inner`) or use `#[serde(default)]`.
 
-### Step 2 — `RememberParams` + `RememberContext` (1.5h, depends on Step 1)
+### Step 2 — `RememberParams` + `RememberContext` (1.5h, depends on Step 1) — [ ] skipped (low priority; see remember.md Implementation notes)
 
 **File:** `crates/lib/src/api/remember.rs`
 
@@ -217,7 +223,7 @@ pub struct RememberContext {
 
 Provide `impl Default for RememberParams` with `self_improvement: true`. Update the `pub fn remember(...)` to accept `params` + `ctx` and forward to split internal fns.
 
-### Step 3 — Permanent-mode refactor + item enrichment (2h, depends on Step 1,2)
+### Step 3 — Permanent-mode refactor + item enrichment (2h, depends on Step 1,2) — [x] done in commit `4da7623`
 
 **File:** `crates/lib/src/api/remember.rs`
 
@@ -242,7 +248,7 @@ let content_hash_first = items.first().and_then(|i| i.content_hash.clone());
 
 `pipeline_run_id`: generate at the start (`Uuid::new_v4()`) and pass it into `RememberResult` — Python exposes this as a UUID from its pipeline tracker (`cognify/v1/cognify.py`); the Rust cognify pipeline doesn't expose one today, so a per-call UUID is an acceptable stand-in and preserves API parity.
 
-### Step 4 — Background task support (3h, depends on Step 3)
+### Step 4 — Background task support (3h, depends on Step 3) — [x] done in commit `4da7623`
 
 **File:** `crates/lib/src/api/remember.rs`, `crates/lib/src/api/error.rs`
 
@@ -294,13 +300,13 @@ if params.run_in_background {
 }
 ```
 
-### Step 5 — Session mode: background improve bridge (2h, depends on Steps 1,2,4)
+### Step 5 — Session mode: background improve bridge (2h, depends on Steps 1,2,4) — [x] done in commit `4da7623`
 
 **File:** `crates/lib/src/api/remember.rs`
 
 Refactor `remember_session()` (currently lines 189–269). After `create_qa_entry()` succeeds, if `self_improvement` is true, spawn `improve(dataset=dataset_name, session_ids=[session_id], ...)` via `tokio::spawn` and attach the `JoinHandle` to `RememberResultInner`. The immediate return value carries `status=SessionStored` and a populated `session_ids`. Awaiting the result blocks until the bridge finishes. Important: background errors are logged and recorded to `inner.error` but never propagated as a failure — matches Python `_session_improve()` (lines 529–540 of `remember.py`).
 
-### Step 6 — Improve Stage 2 real implementation (6h, depends on nothing in this plan)
+### Step 6 — Improve Stage 2 real implementation (6h, depends on nothing in this plan) — [x] done in commit `9f0766a`
 
 **File:** `crates/lib/src/api/improve.rs`
 
@@ -373,7 +379,7 @@ async fn stage2_persist_sessions(
 }
 ```
 
-### Step 7 — Improve Stage 4 real implementation (5h, depends on Step 6's arg plumbing)
+### Step 7 — Improve Stage 4 real implementation (5h, depends on Step 6's arg plumbing) — [x] done in commit `9f0766a`
 
 **File:** `crates/lib/src/api/improve.rs`
 
@@ -421,7 +427,7 @@ async fn stage4_sync_graph_to_session(
 }
 ```
 
-### Step 8 — Wire through public API + re-exports (1h, depends on 1–7)
+### Step 8 — Wire through public API + re-exports (1h, depends on 1–7) — [x] done in commit `4da7623`
 
 **File:** `crates/lib/src/api/mod.rs`, `crates/lib/src/lib.rs`
 
@@ -429,7 +435,7 @@ async fn stage4_sync_graph_to_session(
 - Update `crates/lib/src/lib.rs` re-export at line 118 to include the new types.
 - Update any existing callers of the old flat `remember()` signature.
 
-### Step 9 — Unit + integration tests (5h, depends on all)
+### Step 9 — Unit + integration tests (5h, depends on all) — [x] done in commit `4da7623`
 
 See test plan below.
 

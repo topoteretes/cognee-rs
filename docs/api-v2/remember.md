@@ -1,7 +1,7 @@
 # API v2: `remember()`
 
 **Python source:** `cognee/api/v1/remember/remember.py` (603 lines)  
-**Rust status:** Partial (core composition exists; session bridging incomplete)  
+**Rust status:** **Implemented** (with background-task awaiter and Display/to_dict polish)  
 **Implementation plan:** [impl/remember-plan.md](impl/remember-plan.md)
 
 ---
@@ -87,13 +87,13 @@ Python `remember()` directly depends on these modules and functions:
 |---|---|---|---|---|
 | **add()** | cognee/api/v1/add/add.py | crates/ingestion/src/pipeline.rs + crates/lib/src/api/mod.rs | ✅ Implemented | AddPipeline::add() exists; supports AddParams (node_set, dataset_id, preferred_loaders, importance_weight) |
 | **cognify()** | cognee/api/v1/cognify/cognify.py | crates/cognify/src/tasks.rs + crates/lib/src/api/mod.rs | ✅ Implemented | cognify() function exists; supports CognifyConfig (chunking, custom prompts, batch sizes) |
-| **improve()** | cognee/api/v1/improve/improve.py | crates/lib/src/api/improve.rs | ⚠️ Partial | Stages 1 & 3 implemented; stages 2 & 4 are stubs (logged intent only) |
+| **improve()** | cognee/api/v1/improve/improve.py | crates/lib/src/api/improve.rs | ✅ Implemented | ~~Stages 1 & 3 implemented; stages 2 & 4 are stubs (logged intent only)~~ — stages 2 & 4 done in commit `9f0766a` |
 | **memify()** | cognee/modules/memify/__init__.py | crates/cognify/src/memify/pipeline.rs | ✅ Implemented | run_memify() / memify() extracts triplets and indexes them; used by improve stage 3 |
 | **SessionManager** | cognee/infrastructure/session/session_manager.py | crates/session/src/session_manager.rs | ✅ Partial | SessionManager methods exist (load_history, save_qa, add_feedback, delete_feedback); exposed via SessionStore trait |
 | **SessionStore trait** | (abstraction) | crates/session/src/session_store.rs | ✅ Implemented | Trait with create_qa_entry(), get_all_qa_entries(), update_qa_entry(), add_feedback(), etc. |
 | **_data_to_text()** | cognee/api/v1/remember/remember.py:95–111 | crates/lib/src/api/remember.rs:208–215 | ✅ Implemented | Same logic (Text → String, FilePath → "[file: path]", others → debug format) |
 | **TextChunker** | cognee/modules/chunking/TextChunker.py | crates/chunking/src/ | ✅ Implemented | chunk_text() function; TokenCounterKind::from_env() auto-selects counter |
-| **RememberResult** | cognee/api/v1/remember/remember.py:139–337 | crates/lib/src/api/remember.rs:48–60 | ⚠️ Partial | Struct exists with status, dataset_name, dataset_id, session_ids, elapsed_seconds, items; missing: `to_dict()`, `__bool__()`, `__repr__()`, async/await support |
+| **RememberResult** | cognee/api/v1/remember/remember.py:139–337 | crates/lib/src/api/remember.rs:48–60 | ✅ Implemented | ~~Struct exists with status, dataset_name, dataset_id, session_ids, elapsed_seconds, items; missing: `to_dict()`, `__bool__()`, `__repr__()`, async/await support~~ — `Display`, `to_dict()`, `is_success()` / `done()`, and `await_completion()` all added in commit `4da7623` |
 | **Uuid generation** | (Python's uuid.uuid5) | crates/ingestion/src/id_generation.rs | ✅ Implemented | generate_data_id(), generate_dataset_id() use Uuid::new_v5 with NAMESPACE_OID |
 | **Telemetry** | cognee/shared/utils.py | N/A | ❌ Not Needed | Rust crate uses tracing; no telemetry integration |
 | **Observability (OpenTelemetry)** | cognee/modules/observability/ | N/A | ⚠️ Minimal | tracing crate used; OTel integration not in scope for remember() |
@@ -102,9 +102,9 @@ Python `remember()` directly depends on these modules and functions:
 | **Remote client** | cognee/api/v1/serve/state.py | N/A | ❌ Not Planned | Rust is not a drop-in proxy; cloud routing not in scope |
 | **Vector migrations** | cognee/run_migrations.py | N/A | ❌ Not Needed | Qdrant/Ladybug are embedded; no migration layer needed |
 | **Improve Stage 1: Feedback Weights** | cognee/memify_pipelines/apply_feedback_weights.py | crates/lib/src/api/improve.rs:155–218 | ✅ Implemented | stage1_apply_feedback_weights() reads session Q&A, updates graph node/edge feedback_weight property |
-| **Improve Stage 2: Persist Q&A** | cognee/memify_pipelines/persist_sessions_in_knowledge_graph.py | crates/lib/src/api/improve.rs:220–237 | ⚠️ Stub | stage2_persist_sessions() logs intent but does not run cognify on Q&A text; missing: LLM call, graph insert |
+| **Improve Stage 2: Persist Q&A** | cognee/memify_pipelines/persist_sessions_in_knowledge_graph.py | crates/lib/src/api/improve.rs:220–237 | ✅ Implemented | ~~stage2_persist_sessions() logs intent but does not run cognify on Q&A text; missing: LLM call, graph insert~~ — done in commit `9f0766a` |
 | **Improve Stage 3: Memify** | cognee/modules/memify/__init__.py | crates/cognify/src/memify/pipeline.rs | ✅ Implemented | Triplet extraction and indexing |
-| **Improve Stage 4: Sync Graph to Session** | cognee/tasks/memify/sync_graph_to_session.py | crates/lib/src/api/improve.rs:239–255 | ⚠️ Stub | stage4_sync_graph_to_session() logs intent but does not persist edge summaries to session store; missing: graph query, session context update |
+| **Improve Stage 4: Sync Graph to Session** | cognee/tasks/memify/sync_graph_to_session.py | crates/lib/src/api/improve.rs:239–255 | ✅ Implemented | ~~stage4_sync_graph_to_session() logs intent but does not persist edge summaries to session store; missing: graph query, session context update~~ — done in commit `9f0766a` |
 
 ---
 
@@ -112,7 +112,7 @@ Python `remember()` directly depends on these modules and functions:
 
 ### Critical Gaps
 
-#### A. Improve Function Stages 2 & 4 (Stubs Only)
+#### A. ~~Improve Function Stages 2 & 4 (Stubs Only)~~ — done in commit `9f0766a`
 
 **Stage 2: Persist Session Q&A to Graph**  
 *Current code:* `/home/dmytro/dev/cognee/cognee-rust/crates/lib/src/api/improve.rs:220–237`
@@ -145,21 +145,21 @@ Python `remember()` directly depends on these modules and functions:
     - Update each session's graph context via `SessionStore::set_graph_context()`
   - Potential optimization: Use checkpoint table to track last-synced edge ID
 
-#### B. RememberResult Incomplete Interface
+#### B. ~~RememberResult Incomplete Interface~~ — done in commit `4da7623`
 
 **Missing methods/properties:**
-- `to_dict()` — serialize to JSON-compatible dict (needed for HTTP responses)
-- `__repr__()` / `__str__()` — human-readable output (needed for CLI/logging)
-- `async fn await()` — support awaiting background tasks (only relevant if Rust were to support background task spawning)
-- `done` property — check task completion status
-- `__bool__()` — treat as success flag (True if completed/session_stored)
+- ~~`to_dict()` — serialize to JSON-compatible dict (needed for HTTP responses)~~ — done in commit `4da7623`
+- ~~`__repr__()` / `__str__()` — human-readable output (needed for CLI/logging)~~ — done in commit `4da7623` (via `Display`)
+- ~~`async fn await()` — support awaiting background tasks~~ — done in commit `4da7623` (via `await_completion()` + `tokio::task::JoinHandle`)
+- ~~`done` property — check task completion status~~ — done in commit `4da7623`
+- ~~`__bool__()` — treat as success flag (True if completed/session_stored)~~ — done in commit `4da7623` (via `is_success()`)
 
 **Required additions:**
-- Implement Display + Serialize + Deserialize on RememberResult
-- Add helper methods for introspection
-- Consider: if background tasks are added to Rust API later, provide task handle + await support
+- ~~Implement Display + Serialize + Deserialize on RememberResult~~ — `Display` + `Serialize` added in commit `4da7623` (see Implementation notes below for the deliberate `Deserialize` deviation)
+- ~~Add helper methods for introspection~~ — done in commit `4da7623`
+- ~~Consider: if background tasks are added to Rust API later, provide task handle + await support~~ — `RememberStatus::Running` + `JoinHandle`-based `await_completion()` added in commit `4da7623`
 
-#### C. Session Mode Missing Complete Flow
+#### C. ~~Session Mode Missing Complete Flow~~ — done in commit `4da7623`
 
 **Python behavior:**
 - When `session_id` is provided: data goes to session cache only (no permanent dataset)
@@ -170,16 +170,16 @@ Python `remember()` directly depends on these modules and functions:
 **Rust current state:**
 - `remember_session()` exists and stores to session cache
 - Returns RememberResult with status=SessionStored
-- **Missing:** Background task spawning for session bridge
-  - Currently, improve is called synchronously (blocking)
-  - Need: tokio::spawn or similar to enable async fire-and-forget
+- ~~**Missing:** Background task spawning for session bridge~~ — done in commit `4da7623`
+  - ~~Currently, improve is called synchronously (blocking)~~ — now spawned via `tokio::spawn`
+  - ~~Need: tokio::spawn or similar to enable async fire-and-forget~~ — implemented
 
 **Required additions:**
-- Modify `remember()` to support background task spawning when `self_improvement=True` in session mode
-- Return RememberResult with task handle (or just status "running" if task is background-only)
-- Ensure proper error handling: background task failures logged but don't fail the remember call
+- ~~Modify `remember()` to support background task spawning when `self_improvement=True` in session mode~~ — done in commit `4da7623`
+- ~~Return RememberResult with task handle (or just status "running" if task is background-only)~~ — done in commit `4da7623` (`JoinHandle` attached to inner state; `await_completion()` drains it)
+- ~~Ensure proper error handling: background task failures logged but don't fail the remember call~~ — done in commit `4da7623` (errors recorded into `RememberResult.error`, never propagated)
 
-#### D. Parameter Routing Missing (RememberKwargs equivalence)
+#### D. Parameter Routing Missing (RememberKwargs equivalence) — **out of scope**
 
 **Python:**
 - `remember()` accepts `**kwargs: Unpack[RememberKwargs]`
@@ -189,33 +189,31 @@ Python `remember()` directly depends on these modules and functions:
 - `remember()` signature is flat (takes all parameters explicitly)
 - No kwargs routing layer
 
-**Required additions:**
-- If full kwargs support is needed: create a RememberParams builder struct (cleaner than **kwargs)
-- Or: extend the existing remember() signature with optional parameter sets (e.g., `add_params: Option<AddParams>`, `cognify_config: Option<&CognifyConfig>`)
+**Status:** Deliberately kept out of scope. The `RememberParams` / `RememberContext` bundle refactor (plan Step 2) was skipped; the flat signature is retained and extended with `run_in_background`, `session_manager`, and `checkpoint_store` instead. See Implementation notes below.
 
 ---
 
 ### Minor Gaps
 
-#### E. Content Hash Tracking in RememberResult
+#### E. ~~Content Hash Tracking in RememberResult~~ — done in commit `4da7623`
 
 **Python:** Items list includes `content_hash` from Data.content_hash (MD5 or SHA256)
 
 **Rust:** RememberItemInfo has `content_hash: Option<String>` but may not be populated correctly
 
 **Required addition:**
-- Ensure Data objects passed to cognify() include content_hash field
-- Copy hash to RememberItemInfo during result assembly
+- ~~Ensure Data objects passed to cognify() include content_hash field~~ — done in commit `4da7623`
+- ~~Copy hash to RememberItemInfo during result assembly~~ — done in commit `4da7623` (plus per-call `content_hash` on `RememberResult` itself)
 
-#### F. Token Count in RememberResult
+#### F. ~~Token Count in RememberResult~~ — done in commit `4da7623`
 
 **Python:** Items list includes `token_count` from Data.token_count (set during cognify)
 
 **Rust:** RememberItemInfo lacks `token_count` field
 
 **Required addition:**
-- Add `token_count: Option<usize>` to RememberItemInfo
-- Populate from cognify result's CognifyResult::data_points or similar
+- ~~Add `token_count: Option<usize>` to RememberItemInfo~~ — done in commit `4da7623` (added as `Option<i64>` alongside `data_size: Option<i64>`)
+- ~~Populate from cognify result's CognifyResult::data_points or similar~~ — done in commit `4da7623` (populated from `Data::token_count` / `Data::data_size`)
 
 #### G. Data Size Telemetry
 
@@ -266,4 +264,15 @@ Python `remember()` directly depends on these modules and functions:
 5. **Add background task support for session mode** (S, 2–4h) — enable async bridging
 6. **Integration tests** (M, 4–6h) — verify all modes and stage combinations
 7. **Parameter routing (optional, low priority)** — only if kwargs flexibility becomes a requirement
+
+---
+
+## Implementation notes
+
+- **Commit SHA:** `4da7623`
+- **Summary:** Completed `remember()` polish per plan: added `RememberStatus::Running` + `tokio::task::JoinHandle`-based `await_completion()` so background-mode callers receive a fast `Running` result and can `await` later; added `Display` (Python `__repr__` parity), `to_dict() -> serde_json::Value` (JSON serialization), and `is_success()` / `done()` helpers matching Python `__bool__`. `RememberItemInfo` now propagates `token_count` and `data_size` from `Data`. `ApiError::Join(#[from] tokio::task::JoinError)` added. Session mode with `self_improvement=true` spawns `improve()` in the background via `tokio::spawn`, recording errors into `RememberResult.error` without propagating. Per-call `pipeline_run_id` exposed for external correlation. Inner state kept in `Arc<tokio::sync::Mutex<RememberResultInner>>` with `#[serde(skip)]` on non-serializable members (JoinHandle, cognify_result, memify_result); `Display`/`Debug` never touch internal state. 11 new tests total (6 unit + 5 integration) cover serde round-trip, Display format, `is_success`/`done` truth table, `to_dict` skip behaviour, session storage, session self-improvement awaitable path, missing-session-store guard, and permanent-background Running→Completed transition.
+- **Deviations:**
+  - `RememberParams` / `RememberContext` bundle refactor (plan Step 2) deliberately skipped — flat signature kept and extended with `run_in_background`, `session_manager`, `checkpoint_store`.
+  - `Deserialize` not derived on `RememberResult` (skip-marked fields block a lossless round-trip; only `Serialize` is provided, matching Python which has no typed inverse).
+  - `to_dict()` includes optional fields as `null` rather than omitting them (Python omits `None` keys); benign JSON-shape difference.
 

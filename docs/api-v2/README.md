@@ -19,7 +19,7 @@ Although the functions physically live under `cognee/api/v1/` in the Python tree
 
 | Function | Brief description | Rust status | Gap doc | Impl plan |
 |---|---|---|---|---|
-| `remember()` | Smart ingestion: composes `add` + `cognify` + optional `improve`. Two modes: **permanent memory** (default) and **session memory** (when `session_id` is passed). Returns an awaitable `RememberResult` with status + item metadata. | **Partial** — core composition exists (`crates/lib/src/api/remember.rs`); session-bridging path, `RememberResult` Display/serialization, background-task awaiting, and `token_count` field are missing. | [remember.md](remember.md) | [impl/remember-plan.md](impl/remember-plan.md) |
+| `remember()` | Smart ingestion: composes `add` + `cognify` + optional `improve`. Two modes: **permanent memory** (default) and **session memory** (when `session_id` is passed). Returns an awaitable `RememberResult` with status + item metadata. | **Implemented** (commit `4da7623`) — `crates/lib/src/api/remember.rs` with `Display` / `to_dict()` / `is_success()` / `done()` / `await_completion()`, `RememberStatus::Running`, `JoinHandle`-based background mode, session-bridged `improve()` spawn, and `token_count` + `data_size` + `pipeline_run_id` + `content_hash` + `error` fields populated. | [remember.md](remember.md) | [impl/remember-plan.md](impl/remember-plan.md) |
 | `recall()` | Smart search: checks session cache first via keyword lookup, then falls through to `search()` with an auto-selected `SearchType` chosen by a rule-based query router (factual / cypher / coding_rules / lexical / summary / reasoning / relationship / temporal). | **Implemented** — `crates/lib/src/api/recall.rs` + `crates/search/src/query_router.rs` implement the full Python-parity routing algorithm (14 rules verbatim with word-boundary helper and year-range regex), session-first lookup, and process-global override tracking (`crates/search/src/query_router_stats.rs`). `cognee.api.recall` tracing span emits Python-parity attributes. | [recall.md](recall.md) | [impl/recall-plan.md](impl/recall-plan.md) |
 | `improve()` | Bidirectional session ↔ graph bridge in 4 stages: (1) apply feedback to graph node/edge weights, (2) cognify session Q&A text and persist to the permanent graph, (3) enrich existing graph with triplet embeddings (= `memify`), (4) write graph context back into session cache entries. | **Implemented** (commit 646ebbc) — Stages 1, 2, 4 land on top of the existing Stage 3 memify: `feedback_weights.rs` (streaming-EMA + batch `GraphDBTrait` methods), `persist_sessions.rs` (reuses `AddPipeline` + `cognify()` with `node_set=["user_sessions_from_cache"]`), `sync_graph_session.rs` (paginated `get_edges_since` + new `CheckpointStore` trait). Postgres batch edge methods and CLI subcommand deferred. | [improve.md](improve.md) | [impl/improve-plan.md](impl/improve-plan.md) |
 | `forget()` | Unified deletion: by item id, by dataset, or everything. Cascades across relational DB, graph DB, vector DB, file storage, and session cache. Supports ACL enforcement and dry-run preview. | **Implemented** (UUID + telemetry polish landed) — `crates/lib/src/api/forget.rs` is a thin facade over `DeleteService` in `crates/delete/`, which covers all three modes including session `prune()` for the `everything` scope. | [forget.md](forget.md) | [impl/forget-plan.md](impl/forget-plan.md) (polish complete) |
@@ -36,11 +36,11 @@ Although the functions physically live under `cognee/api/v1/` in the Python tree
 
 ## Summary of findings
 
-- **6 of 7 functions have at least partial Rust implementations** (forget/recall/visualize/improve implemented; remember partial; serve/disconnect not started); 4 are fully Implemented. The per-function docs correct several claims from the older v1 gap analysis (in particular, `forget()` is already complete, and `recall()` is ~95% complete — not "missing").
+- **6 of 7 functions fully Implemented; 1 remaining (serve/disconnect cloud integration).** forget/recall/visualize/improve/remember all implemented; serve/disconnect not started. The per-function docs correct several claims from the older v1 gap analysis (in particular, `forget()` is already complete, and `recall()` is ~95% complete — not "missing").
 - **The remaining functional gap is `serve()/disconnect()`** (cloud integration that may warrant a separate crate).
 - **`visualize()` is Implemented** (commit a0daab3).
 - **`improve()` is Implemented** (commit 646ebbc) — Stages 1, 2, 4 landed on top of existing Stage 3 memify.
-- **`remember()` is tantalizingly close** — permanent-memory mode works today; session-memory mode requires session-store feedback fields and background-task plumbing.
+- **`remember()` is Implemented** (commit `4da7623`) — background-task awaiter, `Display` / `to_dict()` / `is_success()` / `done()` helpers, session-bridged `improve()` spawn, and `token_count` / `data_size` / `pipeline_run_id` / `content_hash` / `error` fields all landed.
 
 ### Rough effort ordering (easiest → hardest)
 
@@ -49,7 +49,7 @@ Although the functions physically live under `cognee/api/v1/` in the Python tree
 | 1 | `forget()` | **Done** | No work; minor cosmetic polish only. |
 | 2 | `recall()` | **Done** (~1 day) | Override tracking + telemetry spans landed in commit 598d553. |
 | 3 | `visualize()` | **Done** | HTML template + color mappers landed in commit a0daab3. |
-| 4 | `remember()` | **M–L** (~1 week) | Background tasks, session-bridging path, `RememberResult` polish. |
+| 4 | `remember()` | **Done** (commit `4da7623`) | Background tasks, session-bridging path, `RememberResult` polish all landed. |
 | 5 | `improve()` | **Done** (commit 646ebbc) | Stages 1, 2, 4 landed on top of existing Stage 3 memify; Postgres batch edge methods and CLI subcommand deferred. |
 | 6 | `serve()` / `disconnect()` | **XL** (~5–7 weeks) | OAuth2 device flow + Management API + credential store. Consider splitting into `cognee-cloud` crate. |
 

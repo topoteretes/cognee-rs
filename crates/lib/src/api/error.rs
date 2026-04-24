@@ -58,6 +58,9 @@ pub enum ApiError {
 
     #[error("Invalid argument: {0}")]
     InvalidArgument(String),
+
+    #[error("Background task join error: {0}")]
+    Join(#[from] tokio::task::JoinError),
 }
 
 impl From<cognee_delete::DeleteError> for ApiError {
