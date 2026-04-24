@@ -23,7 +23,7 @@ pub mod user;
 
 pub use datasets::{DatasetDb, DatasetManager};
 pub use error::{ApiError, DatasetError};
-pub use forget::{ForgetResult, ForgetTarget, forget};
+pub use forget::{DatasetRef, ForgetResult, ForgetTarget, forget};
 pub use improve::{ImproveResult, improve};
 pub use prune::{PruneResult, PruneTarget, prune_data, prune_system};
 pub use recall::{RecallItem, RecallResult, RecallSource, recall};

@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use cognee_lib::add::HashAlgorithm;
 use cognee_lib::add::build_add_pipeline;
+use cognee_lib::api::{ApiError, DatasetRef, ForgetTarget, forget};
 use cognee_lib::core::{NoopWatcher, Value, execute};
 use cognee_lib::database::{DeleteDb, IngestDb, ops};
 use cognee_lib::delete::{DeleteMode, DeleteRequest, DeleteScope, DeleteService};
@@ -468,4 +469,86 @@ async fn delete_data_with_dataset_if_empty_true_preserves_non_empty_dataset() {
         remaining[0].id, data_id_2,
         "remaining data should be the second item"
     );
+}
+
+// ---------------------------------------------------------------------------
+// forget() API — resolve dataset by UUID
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn forget_by_dataset_uuid_succeeds() {
+    let (_handle, _ctx, db) = test_task_context().await;
+    let storage = Arc::new(MockStorage::new());
+    let owner_id = Uuid::new_v4();
+
+    let (dataset_id, data_id, _location) =
+        seed_dataset_with_data(&db, &storage, owner_id, "uuid_ds").await;
+
+    // Build a DeleteService.
+    let svc = DeleteService::new(
+        storage.clone() as Arc<dyn StorageTrait>,
+        db.clone() as Arc<dyn DeleteDb>,
+    );
+
+    // Call the forget() API with DatasetRef::Id(dataset_id).
+    let db_ref: Arc<dyn IngestDb> = db.clone();
+    let result = forget(
+        ForgetTarget::Dataset {
+            dataset: DatasetRef::Id(dataset_id),
+        },
+        owner_id,
+        &svc,
+        Some(db_ref.as_ref()),
+    )
+    .await
+    .expect("forget should succeed with DatasetRef::Id");
+
+    assert_eq!(result.delete_result.deleted_datasets, 1);
+    assert_eq!(result.delete_result.deleted_data, 1);
+    assert!(
+        result.target.starts_with("dataset:"),
+        "label must include resolved name, got {:?}",
+        result.target
+    );
+
+    // Data record should be gone.
+    let gone = ops::data::get_data(&db, data_id).await.unwrap();
+    assert!(gone.is_none(), "data record should be removed");
+}
+
+#[tokio::test]
+async fn forget_by_dataset_uuid_missing_returns_err() {
+    let (_handle, _ctx, db) = test_task_context().await;
+    let storage = Arc::new(MockStorage::new());
+    let owner_id = Uuid::new_v4();
+
+    // Random UUID that does not correspond to any dataset.
+    let missing_id = Uuid::new_v4();
+
+    let svc = DeleteService::new(
+        storage.clone() as Arc<dyn StorageTrait>,
+        db.clone() as Arc<dyn DeleteDb>,
+    );
+
+    let db_ref: Arc<dyn IngestDb> = db.clone();
+    let result = forget(
+        ForgetTarget::Dataset {
+            dataset: DatasetRef::Id(missing_id),
+        },
+        owner_id,
+        &svc,
+        Some(db_ref.as_ref()),
+    )
+    .await;
+
+    match result {
+        Err(ApiError::InvalidArgument(msg)) => {
+            assert!(
+                msg.contains(&missing_id.to_string()),
+                "error message should reference the missing UUID, got: {msg}"
+            );
+        }
+        Ok(_) => panic!("forget should have returned InvalidArgument"),
+        Err(other) => panic!("expected InvalidArgument, got {other:?}"),
+    }
 }

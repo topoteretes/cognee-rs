@@ -11,13 +11,65 @@ use uuid::Uuid;
 
 use super::error::ApiError;
 
+/// A reference to a dataset, either by human-readable name or by UUID.
+///
+/// Matches Python's `dataset: Union[str, UUID]` API semantics in
+/// `cognee.api.v1.forget.forget()`.
+#[derive(Debug, Clone)]
+pub enum DatasetRef {
+    /// Dataset identified by name (scoped to the `owner_id` passed to
+    /// [`forget`]).
+    Name(String),
+    /// Dataset identified by UUID. Resolving a UUID back to a dataset name
+    /// requires an [`IngestDb`] connection.
+    Id(Uuid),
+}
+
+impl DatasetRef {
+    /// Resolve this reference to a dataset name, performing a reverse lookup
+    /// via [`IngestDb::get_dataset`] when the reference is a UUID.
+    ///
+    /// # Errors
+    /// * Returns [`ApiError::InvalidArgument`] if `self` is [`DatasetRef::Id`]
+    ///   and `db` is `None` (we cannot resolve a UUID without a DB connection).
+    /// * Returns [`ApiError::InvalidArgument`] if the dataset cannot be found
+    ///   in the database, or if the dataset is owned by a different user.
+    pub async fn to_name(
+        &self,
+        owner_id: Uuid,
+        db: Option<&dyn IngestDb>,
+    ) -> Result<String, ApiError> {
+        match self {
+            DatasetRef::Name(name) => Ok(name.clone()),
+            DatasetRef::Id(id) => {
+                let db = db.ok_or_else(|| {
+                    ApiError::InvalidArgument(
+                        "db connection required to resolve dataset UUID".to_string(),
+                    )
+                })?;
+                let dataset = db.get_dataset(*id).await.map_err(|e| {
+                    ApiError::InvalidArgument(format!("Dataset {id} lookup failed: {e}"))
+                })?;
+                let dataset = dataset
+                    .ok_or_else(|| ApiError::InvalidArgument(format!("Dataset {id} not found")))?;
+                if dataset.owner_id != owner_id {
+                    return Err(ApiError::InvalidArgument(format!(
+                        "Dataset {id} not owned by the requesting user"
+                    )));
+                }
+                Ok(dataset.name)
+            }
+        }
+    }
+}
+
 /// What to forget.
 #[derive(Debug, Clone)]
 pub enum ForgetTarget {
     /// Delete a single data item from a specific dataset.
-    Item { data_id: Uuid, dataset_name: String },
-    /// Delete an entire dataset (resolved by name).
-    Dataset { dataset_name: String },
+    Item { data_id: Uuid, dataset: DatasetRef },
+    /// Delete an entire dataset (by name or UUID).
+    Dataset { dataset: DatasetRef },
     /// Delete all data for the given owner.
     All,
 }
@@ -35,8 +87,9 @@ pub struct ForgetResult {
 /// * `target` - What to delete (item, dataset, or everything).
 /// * `owner_id` - The owner whose data is affected.
 /// * `delete_service` - Pre-configured [`DeleteService`] with all backends.
-/// * `db` - Database connection for name-to-ID resolution (only needed for
-///   `ForgetTarget::Dataset` by name).
+/// * `db` - Database connection for name-to-ID resolution. Required when
+///   `target` references a dataset by [`DatasetRef::Id`]; optional otherwise
+///   (used for dataset existence validation when resolving by name).
 ///
 /// # Errors
 /// Returns [`ApiError::InvalidArgument`] if the dataset cannot be found,
@@ -47,21 +100,43 @@ pub async fn forget(
     delete_service: &DeleteService,
     db: Option<&dyn IngestDb>,
 ) -> Result<ForgetResult, ApiError> {
+    // Telemetry: emit an external event log (gated behind the `telemetry`
+    // feature flag). Mirrors Python's `send_telemetry("cognee.forget", ...)`.
+    #[cfg(feature = "telemetry")]
+    {
+        let (target_label, dataset_dbg, data_id_dbg) = match &target {
+            ForgetTarget::Item { data_id, dataset } => {
+                ("data_item", format!("{dataset:?}"), data_id.to_string())
+            }
+            ForgetTarget::Dataset { dataset } => ("dataset", format!("{dataset:?}"), String::new()),
+            ForgetTarget::All => ("everything", String::new(), String::new()),
+        };
+        tracing::info!(
+            target: "cognee.telemetry",
+            event = "cognee.forget",
+            forget_target = target_label,
+            dataset = %dataset_dbg,
+            data_id = %data_id_dbg,
+            cognee_version = env!("CARGO_PKG_VERSION"),
+            owner_id = %owner_id,
+        );
+    }
+
     let (scope, label) = match target {
-        ForgetTarget::Item {
-            data_id,
-            dataset_name,
-        } => {
+        ForgetTarget::Item { data_id, dataset } => {
+            let dataset_name = dataset.to_name(owner_id, db).await?;
             let scope = DeleteScope::Data {
                 owner_id,
                 data_id,
-                dataset_name: Some(dataset_name.clone()),
+                dataset_name: Some(dataset_name),
                 delete_dataset_if_empty: false,
             };
             (scope, format!("item:{data_id}"))
         }
-        ForgetTarget::Dataset { dataset_name } => {
-            // Validate dataset exists if we have a DB connection.
+        ForgetTarget::Dataset { dataset } => {
+            let dataset_name = dataset.to_name(owner_id, db).await?;
+            // Validate dataset exists if we have a DB connection and the
+            // reference came in as a name (UUID path already validated above).
             if let Some(db) = db {
                 let _dataset = db
                     .get_dataset_by_name(&dataset_name, owner_id, None)
@@ -114,17 +189,58 @@ mod tests {
         let id = Uuid::new_v4();
         let target = ForgetTarget::Item {
             data_id: id,
-            dataset_name: "test_ds".to_string(),
+            dataset: DatasetRef::Name("test_ds".to_string()),
         };
         match target {
-            ForgetTarget::Item {
-                data_id,
-                dataset_name,
-            } => {
+            ForgetTarget::Item { data_id, dataset } => {
                 assert_eq!(data_id, id);
-                assert_eq!(dataset_name, "test_ds");
+                match dataset {
+                    DatasetRef::Name(name) => assert_eq!(name, "test_ds"),
+                    _ => panic!("expected Name variant"),
+                }
             }
             _ => panic!("expected Item variant"),
         }
+    }
+
+    // ----- Unit tests for DatasetRef::to_name -----
+
+    #[tokio::test]
+    async fn dataset_ref_name_passthrough() {
+        // DatasetRef::Name with db=None should return the name without any DB
+        // lookup.
+        let owner_id = Uuid::new_v4();
+        let dref = DatasetRef::Name("my_ds".to_string());
+        let resolved = dref.to_name(owner_id, None).await.expect("passthrough ok");
+        assert_eq!(resolved, "my_ds");
+    }
+
+    #[tokio::test]
+    async fn dataset_ref_id_requires_db() {
+        // DatasetRef::Id with db=None must error with InvalidArgument.
+        let owner_id = Uuid::new_v4();
+        let dref = DatasetRef::Id(Uuid::new_v4());
+        let result = dref.to_name(owner_id, None).await;
+        match result {
+            Err(ApiError::InvalidArgument(msg)) => {
+                assert!(
+                    msg.contains("db connection required"),
+                    "unexpected msg: {msg}"
+                );
+            }
+            other => panic!("expected InvalidArgument, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn forget_target_dataset_uuid_variant_debug() {
+        // Ensure the new UUID variant round-trips through Debug.
+        let id = Uuid::new_v4();
+        let target = ForgetTarget::Dataset {
+            dataset: DatasetRef::Id(id),
+        };
+        let dbg = format!("{target:?}");
+        assert!(dbg.contains("Dataset"), "debug: {dbg}");
+        assert!(dbg.contains("Id"), "debug: {dbg}");
     }
 }

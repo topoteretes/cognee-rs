@@ -2,7 +2,8 @@ use std::io;
 use std::sync::Arc;
 
 use cognee_lib::PipelineContext;
-use cognee_lib::database::AclDb;
+use cognee_lib::api::DatasetRef;
+use cognee_lib::database::{AclDb, IngestDb};
 use cognee_lib::delete::{
     AuthorizedDeleteService, DeleteMode, DeleteRequest, DeleteScope, DeleteService,
 };
@@ -32,8 +33,6 @@ pub fn run(args: DeleteArgs, cm: Arc<cognee_lib::ComponentManager>) -> Result<()
         })?
     };
 
-    let request = build_request(args, owner_id)?;
-
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -56,6 +55,9 @@ pub fn run(args: DeleteArgs, cm: Arc<cognee_lib::ComponentManager>) -> Result<()
             .vector_db()
             .await
             .map_err(|e| CliError::Runtime(format!("{e}")))?;
+
+        let request =
+            build_request_async(args, owner_id, database.clone() as Arc<dyn IngestDb>).await?;
 
         let service = DeleteService::new(
             storage,
@@ -168,7 +170,9 @@ fn validate_scope_selection(args: &DeleteArgs) -> Result<(), CliError> {
     if args.data_id.is_some() {
         selected += 1;
     }
-    if args.dataset_name.is_some() {
+    // --dataset-name and --dataset-id are mutually exclusive (enforced by
+    // clap's `conflicts_with`), and together count as one scope selector.
+    if args.dataset_name.is_some() || args.dataset_id.is_some() {
         selected += 1;
     }
     if args.user_id.is_some() {
@@ -180,7 +184,7 @@ fn validate_scope_selection(args: &DeleteArgs) -> Result<(), CliError> {
 
     if selected != 1 {
         return Err(CliError::Validation(
-            "Specify exactly one delete scope: --data-id, --dataset-name, --user-id, or --all"
+            "Specify exactly one delete scope: --data-id, --dataset-name/--dataset-id, --user-id, or --all"
                 .to_string(),
         ));
     }
@@ -194,10 +198,42 @@ fn validate_scope_selection(args: &DeleteArgs) -> Result<(), CliError> {
     Ok(())
 }
 
-fn build_request(args: DeleteArgs, owner_id: Uuid) -> Result<DeleteRequest, CliError> {
+/// Parse the optional `--dataset-name` / `--dataset-id` pair into a
+/// [`DatasetRef`]. Returns `None` if neither was provided.
+fn parse_dataset_ref(args: &DeleteArgs) -> Result<Option<DatasetRef>, CliError> {
+    if let Some(id) = &args.dataset_id {
+        let parsed = Uuid::parse_str(id).map_err(|error| {
+            CliError::Validation(format!("Invalid --dataset-id '{}': {error}", id))
+        })?;
+        Ok(Some(DatasetRef::Id(parsed)))
+    } else if let Some(name) = &args.dataset_name {
+        Ok(Some(DatasetRef::Name(name.clone())))
+    } else {
+        Ok(None)
+    }
+}
+
+async fn build_request_async(
+    args: DeleteArgs,
+    owner_id: Uuid,
+    db: Arc<dyn IngestDb>,
+) -> Result<DeleteRequest, CliError> {
     let mode = match args.mode {
         DeleteModeArg::Soft => DeleteMode::Soft,
         DeleteModeArg::Hard => DeleteMode::Hard,
+    };
+
+    // Resolve any dataset reference (name or UUID) to a name. The forget
+    // API would normally do this, but the CLI goes directly through
+    // `DeleteService::execute` to retain dry-run / preview semantics.
+    let dataset_ref = parse_dataset_ref(&args)?;
+    let dataset_name_opt = match dataset_ref {
+        Some(dref) => Some(
+            dref.to_name(owner_id, Some(db.as_ref()))
+                .await
+                .map_err(|e| CliError::Validation(format!("{e}")))?,
+        ),
+        None => None,
     };
 
     let scope = if let Some(data_id) = args.data_id {
@@ -208,10 +244,10 @@ fn build_request(args: DeleteArgs, owner_id: Uuid) -> Result<DeleteRequest, CliE
         DeleteScope::Data {
             owner_id,
             data_id: parsed_data_id,
-            dataset_name: args.dataset_name,
+            dataset_name: dataset_name_opt,
             delete_dataset_if_empty: args.delete_dataset_if_empty,
         }
-    } else if let Some(dataset_name) = args.dataset_name {
+    } else if let Some(dataset_name) = dataset_name_opt {
         DeleteScope::Dataset {
             owner_id,
             dataset_name,

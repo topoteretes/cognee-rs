@@ -29,6 +29,12 @@ hf-tokenizer   = ["cognee-chunking/hf-tokenizer"]
 tiktoken       = ["cognee-chunking/tiktoken"]
 android-litert = ["cognee-llm/android-litert"]
 
+# External telemetry event export (opt-in). When enabled, the high-level API
+# functions emit `tracing` events on the `cognee.telemetry` target so
+# downstream subscribers (OTEL log exporter, tracing_subscriber::Layer, etc.)
+# can capture them. Mirrors Python's `send_telemetry()` calls.
+telemetry = []
+
 # Document format loaders (forwarded from cognee-ingestion)
 pdf-pdfium        = ["cognee-ingestion/pdf-pdfium"]
 pdf-pure-rust     = ["cognee-ingestion/pdf-pure-rust"]

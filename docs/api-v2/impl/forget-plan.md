@@ -6,6 +6,14 @@
 
 ---
 
+## Status
+
+- **Implemented:** yes (telemetry test skipped — optional per plan)
+- **Commit:** `094370dc2e84b5164da0b6ba261e74f4b1de8c6e`
+- **Date:** 2026-04-24
+
+---
+
 ## 1. Goal & Scope
 
 The `forget()` API is **already implemented** end-to-end in Rust
@@ -108,7 +116,7 @@ an OTEL log exporter or a `tracing_subscriber::Layer` listening on the
 
 ## 3. Step-by-Step Implementation
 
-### Step 1 — Add `DatasetRef` and rework `ForgetTarget`
+### Step 1 — Add `DatasetRef` and rework `ForgetTarget` — [x]
 **File:** `/home/dmytro/dev/cognee/cognee-rust/crates/lib/src/api/forget.rs`  
 **Lines touched:** 14-23 (enum), 50-86 (dispatch), 101-130 (tests)
 
@@ -159,7 +167,7 @@ constructing the `DeleteScope`.
 **Note:** `IngestDb::get_dataset_by_id` may not exist; confirm against
 `crates/database/src/lib.rs`. If missing, add it as part of this step.
 
-### Step 2 — Emit external telemetry event
+### Step 2 — Emit external telemetry event — [x]
 **File:** `/home/dmytro/dev/cognee/cognee-rust/crates/lib/src/api/forget.rs`  
 **Location:** top of `pub async fn forget(...)` body, after computing
 the label string (around what is currently line 50).
@@ -188,7 +196,7 @@ Sketch:
 }
 ```
 
-### Step 3 — Feature flag propagation
+### Step 3 — Feature flag propagation — [x]
 **File:** `/home/dmytro/dev/cognee/cognee-rust/crates/lib/Cargo.toml`
 
 Add:
@@ -203,7 +211,7 @@ Per CLAUDE.md §"Architecture Patterns → Feature strategy", also add
 want CI to exercise it — but telemetry export is arguably opt-in.
 Recommend **non-default** here.
 
-### Step 4 — Update call sites for the new enum shape
+### Step 4 — Update call sites for the new enum shape — [x]
 **Files:**
 - `/home/dmytro/dev/cognee/cognee-rust/crates/cli/src/commands/delete.rs`  
   Convert `ForgetTarget::Item { ..., dataset_name }` and
@@ -212,7 +220,7 @@ Recommend **non-default** here.
   `--dataset-name`) that produces `DatasetRef::Id(uuid)`.
 - Any doctest / example in `crates/lib/src/api/forget.rs` docstring.
 
-### Step 5 — Re-export `DatasetRef`
+### Step 5 — Re-export `DatasetRef` — [x]
 **File:** `/home/dmytro/dev/cognee/cognee-rust/crates/lib/src/lib.rs:117`
 
 Add `DatasetRef` to the existing pub-use list alongside `ForgetTarget`
@@ -227,16 +235,16 @@ under `mod tests`, or in `/home/dmytro/dev/cognee/cognee-rust/crates/lib/tests/d
 (existing integration test file) when a real `DeleteService` is needed.
 
 Unit tests (synchronous, in-module):
-1. **`dataset_ref_name_passthrough`** — `DatasetRef::Name("x").to_name(..)` returns `"x"` with `db=None` (no DB lookup).
-2. **`dataset_ref_id_requires_db`** — `DatasetRef::Id(uuid).to_name(_, None)` returns `ApiError::InvalidArgument`.
-3. **`forget_target_item_uuid_variant`** — construct `ForgetTarget::Item { data_id, dataset: DatasetRef::Id(..) }`, verify debug format.
+- [x] 1. **`dataset_ref_name_passthrough`** — `DatasetRef::Name("x").to_name(..)` returns `"x"` with `db=None` (no DB lookup).
+- [x] 2. **`dataset_ref_id_requires_db`** — `DatasetRef::Id(uuid).to_name(_, None)` returns `ApiError::InvalidArgument`.
+- [x] 3. **`forget_target_item_uuid_variant`** — construct `ForgetTarget::Item { data_id, dataset: DatasetRef::Id(..) }`, verify debug format.
 
 Integration tests (in `crates/lib/tests/dataset_deletion.rs`):
-4. **`forget_by_dataset_uuid_succeeds`** — seed a dataset, call `forget(ForgetTarget::Dataset { dataset: DatasetRef::Id(ds.id) }, owner, &svc, Some(&db)).await`, assert deletion.
-5. **`forget_by_dataset_uuid_missing_returns_err`** — random UUID → `ApiError::InvalidArgument`.
+- [x] 4. **`forget_by_dataset_uuid_succeeds`** — seed a dataset, call `forget(ForgetTarget::Dataset { dataset: DatasetRef::Id(ds.id) }, owner, &svc, Some(&db)).await`, assert deletion.
+- [x] 5. **`forget_by_dataset_uuid_missing_returns_err`** — random UUID → `ApiError::InvalidArgument`.
 
 Telemetry tests — behind `#[cfg(feature = "telemetry")]`:
-6. **`forget_emits_telemetry_event`** — install a `tracing_subscriber::fmt::test::TestSubscriber` filtered to `cognee.telemetry`, call `forget(ForgetTarget::All, ..)`, assert the event was recorded with field `event = "cognee.forget"` and `forget_target = "everything"`.
+- [ ] 6. **`forget_emits_telemetry_event`** — skipped (optional, per plan) — install a `tracing_subscriber::fmt::test::TestSubscriber` filtered to `cognee.telemetry`, call `forget(ForgetTarget::All, ..)`, assert the event was recorded with field `event = "cognee.forget"` and `forget_target = "everything"`.
 
 No changes needed to existing tests `delete_all_prunes_session_store` (crates/delete/src/lib.rs:3639) or the authorization/orphan-sweep/error-paths integration tests under `crates/delete/tests/` — both gaps are confined to the `cognee-lib` API wrapper.
 

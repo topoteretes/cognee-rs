@@ -183,8 +183,13 @@ pub enum DeleteModeArg {
 
 #[derive(Debug, Args)]
 pub struct DeleteArgs {
-    #[arg(long = "dataset-name", short = 'd')]
+    #[arg(long = "dataset-name", short = 'd', conflicts_with = "dataset_id")]
     pub dataset_name: Option<String>,
+
+    /// Target a dataset by UUID instead of by name. Mutually exclusive with
+    /// `--dataset-name`.
+    #[arg(long = "dataset-id", conflicts_with = "dataset_name")]
+    pub dataset_id: Option<String>,
 
     #[arg(long = "user-id", short = 'u')]
     pub user_id: Option<String>,

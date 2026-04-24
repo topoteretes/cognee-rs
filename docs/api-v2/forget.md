@@ -1,7 +1,7 @@
 # API v2: `forget()`
 
 **Python source:** `cognee/api/v1/forget/forget.py` (198 lines)
-**Rust status:** **Implemented** (with session cleanup for `everything` mode)
+**Rust status:** **Implemented** (with session cleanup for `everything` mode, UUID-variant dataset refs and opt-in telemetry events)
 **Implementation plan:** [impl/forget-plan.md](impl/forget-plan.md)
 
 ---
@@ -167,7 +167,7 @@ If `user=None`, resolves to default user via `get_default_user()` from `cognee.m
 - However, `ForgetTarget` does NOT support UUID; it only takes names
 - **Rust design:** Caller must convert UUID to name before calling `forget()`, OR pass `db` for validation
 
-**Verdict:** **Minor limitation** — UUID support would be a nice-to-have but is not critical. Add to roadmap if Python API parity is strict.
+**Verdict:** ~~**Minor limitation** — UUID support would be a nice-to-have but is not critical. Add to roadmap if Python API parity is strict.~~ — done in commit 094370d. `ForgetTarget::{Item,Dataset}` now carry a `DatasetRef` enum with `Name(String)` and `Id(Uuid)` variants; the UUID path reverse-looks-up the dataset name via `IngestDb::get_dataset` (owner-scoped).
 
 ### Low Gap: Default User Resolution
 
@@ -189,7 +189,7 @@ If `user=None`, resolves to default user via `get_default_user()` from `cognee.m
 - Python uses `send_telemetry()` for external event logging
 - Rust `DeleteService` does not call an external telemetry endpoint; it only logs via `tracing`
 
-**Verdict:** **Acceptable trade-off.** OTEL is available; external telemetry would be a feature addition, not a gap.
+**Verdict:** ~~**Acceptable trade-off.** OTEL is available; external telemetry would be a feature addition, not a gap.~~ — done in commit 094370d. `forget()` now emits a `tracing::info!(target: "cognee.telemetry", event = "cognee.forget", ...)` event gated behind the new opt-in `telemetry` feature flag on `cognee-lib`. Consumers wiring a `tracing_subscriber::Layer` on the `cognee.telemetry` target capture the event.
 
 ---
 
@@ -388,4 +388,14 @@ cargo run --bin cognee -- delete \
 ## Conclusion
 
 **`forget()` is production-ready in Rust with feature parity to Python.** The implementation covers all three deletion modes, includes session cleanup for the `everything` scope, enforces ACL, and provides dry-run preview. No blocking gaps remain; only minor enhancements (UUID API support, telemetry export) are opportunities for future work.
+
+---
+
+## Implementation notes
+
+**Commit SHA:** `094370dc2e84b5164da0b6ba261e74f4b1de8c6e`
+
+**Summary:** `DatasetRef` enum with `Name`/`Id` variants added to `crates/lib/src/api/forget.rs`, with async `to_name()` helper that reverse-looks-up UUIDs via `IngestDb::get_dataset` (enforces owner match). `ForgetTarget::{Item,Dataset}` now take `dataset: DatasetRef`. External telemetry event emitted via `tracing::info!(target: "cognee.telemetry", event = "cognee.forget", ...)`, gated behind the new opt-in `telemetry` feature flag on `cognee-lib`. CLI gains a mutually-exclusive `--dataset-id <UUID>` option that routes through the new UUID path. Five new tests: 3 unit (DatasetRef passthrough, DB-required error, Debug format) + 2 integration (UUID dataset delete success and not-found error).
+
+**Deviations from plan:** used existing `IngestDb::get_dataset(id)` instead of adding a new `get_dataset_by_id` method (the trait already supported UUID lookup). Made `DatasetRef::to_name` `pub` so the CLI crate can reuse it. Telemetry `tracing_subscriber::TestSubscriber` test was skipped per plan (optional).
 
