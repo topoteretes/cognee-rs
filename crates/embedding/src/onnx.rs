@@ -101,19 +101,19 @@ impl OnnxEmbeddingEngine {
     /// let engine = OnnxEmbeddingEngine::with_auto_download(config).await?;
     /// ```
     pub async fn with_auto_download(config: OnnxEmbeddingConfig) -> EmbeddingResult<Self> {
-        let (model_url, tokenizer_url) = match config.model_name.as_str() {
-            "bge-small-en-v1.5" => (
+        let (model_url, tokenizer_url) = match config.model_name.to_lowercase().as_str() {
+            "bge-small-en-v1.5" | "bge-small-v1.5" => (
                 ModelUrls::BGE_SMALL.model_url,
                 ModelUrls::BGE_SMALL.tokenizer_url,
             ),
-            "all-MiniLM-L6-v2" => (
+            "all-minilm-l6-v2" => (
                 ModelUrls::MINILM_L6.model_url,
                 ModelUrls::MINILM_L6.tokenizer_url,
             ),
-            other => {
+            _ => {
                 return Err(EmbeddingError::ModelLoadError(format!(
                     "Unknown model name '{}'. Supported: 'bge-small-en-v1.5', 'all-MiniLM-L6-v2'",
-                    other
+                    config.model_name
                 )));
             }
         };
