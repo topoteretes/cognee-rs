@@ -18,7 +18,9 @@ default = [
     "csv-loader",
     "unstructured",
     "visualization",
+    "cloud",
 ]
+cloud          = ["dep:cognee-cloud"]
 visualization  = ["dep:cognee-visualization"]
 onnx           = ["cognee-embedding/onnx"]
 ladybug        = ["cognee-graph/ladybug"]
@@ -75,6 +77,7 @@ testing = [
 
 [dependencies]
 cognee-chunking = { path = "../chunking" }
+cognee-cloud = { path = "../cloud", optional = true }
 cognee-cognify = { path = "../cognify" }
 cognee-core = { path = "../core" }
 cognee-delete = { path = "../delete" }

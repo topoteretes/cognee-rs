@@ -18,6 +18,8 @@ pub mod improve;
 pub mod prune;
 pub mod recall;
 pub mod remember;
+#[cfg(feature = "cloud")]
+pub mod serve;
 pub mod update;
 pub mod user;
 

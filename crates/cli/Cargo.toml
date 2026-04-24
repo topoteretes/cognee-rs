@@ -23,7 +23,9 @@ default = [
     "csv-loader",
     "unstructured",
     "visualization",
+    "cloud",
 ]
+cloud         = ["cognee-lib/cloud"]
 onnx          = ["cognee-lib/onnx"]
 ladybug       = ["cognee-lib/ladybug"]
 qdrant        = ["cognee-lib/qdrant"]
