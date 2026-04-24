@@ -2,7 +2,38 @@
 
 **Gap doc:** [../serve-disconnect.md](../serve-disconnect.md)  
 **Python reference:** `cognee/api/v1/serve/`  
-**Rust entry point:** *(new)* `crates/cloud/` + `crates/lib/src/api/serve.rs`
+**Rust entry point:** `crates/cloud/` + `cognee-lib` re-exports (see C4 wiring).
+
+---
+
+## Status
+
+Implemented: yes
+Commits:
+  - `ac8c86f` (C1: scaffold / error / config / credentials)
+  - `8624a3f` (C2: device_auth + management_api)
+  - `e94e9f4` (C3: cloud_client + state singleton)
+  - `7c04dcb` (C4: serve + disconnect + cognee-lib wiring)
+  - C5 (CLI subcommands + integration tests + final docs) — see `git log` for SHA
+Date: 2026-04-24
+
+Steps 1–13 of the plan are complete:
+
+- [x] Step 1 — Scaffolding: `crates/cloud/` with `Cargo.toml` and empty `lib.rs` (C1)
+- [x] Step 2 — `error.rs`: `CloudError` enum (C1)
+- [x] Step 3 — `config.rs`: env-var loading (C1)
+- [x] Step 4 — `credentials.rs`: on-disk credential store (C1)
+- [x] Step 5 — `device_auth.rs`: OAuth2 Device Code Flow (RFC 8628) (C2)
+- [x] Step 6 — `management_api.rs`: tenant & API-key client (C2)
+- [x] Step 7 — `cloud_client.rs`: HTTP proxy for V2 operations (C3)
+- [x] Step 8 — `state.rs`: async-safe singleton (C3)
+- [x] Step 9 — `serve.rs`: orchestrator (C4)
+- [x] Step 10 — `disconnect.rs` (C4)
+- [x] Step 11 — `lib.rs`: public surface (C1 through C4; final re-exports in C4)
+- [x] Step 12 — Wire into `cognee-lib` (C4; feature-gated on `cloud`, default-enabled)
+- [x] Step 13 — CLI integration (C5: `cognee-cli serve` / `disconnect`, gated on `cloud`)
+
+Test plan (§4) items all have implementations: `mockito`-based unit tests in each module, plus integration tests under `crates/cloud/tests/serve_disconnect_round_trip.rs` and CLI E2E under `crates/cli/tests/cli_serve_subcommand.rs`. Manual live-Auth0 verification remains opt-in and gated on user-supplied credentials; no CI changes were needed because the unit/integration tests are fully mocked.
 
 ---
 

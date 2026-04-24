@@ -3,8 +3,12 @@ pub mod add_and_cognify;
 pub mod cognify;
 pub mod config;
 pub mod delete;
+#[cfg(feature = "cloud")]
+pub mod disconnect;
 pub mod memify;
 pub mod run_sequence;
 pub mod search;
+#[cfg(feature = "cloud")]
+pub mod serve;
 #[cfg(feature = "visualization")]
 pub mod visualize;

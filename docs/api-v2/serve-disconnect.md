@@ -1,7 +1,7 @@
 # API v2: `serve()` / `disconnect()`
 
 **Python source:** `cognee/api/v1/serve/` (~8 files, 570 LOC total)  
-**Rust status:** **Not Started**  
+**Rust status:** **Implemented** (feature-gated `cloud`, CLI-enabled by default)  
 **Implementation plan:** [impl/serve-disconnect-plan.md](impl/serve-disconnect-plan.md)
 
 ---
@@ -268,14 +268,16 @@ _remote_client: Optional["CloudClient"] = None
 
 | Component | Status | Location | Notes |
 |-----------|--------|----------|-------|
-| **HTTP Server Framework** | Not Started | — | No `actix-web`, `axum`, `warp` in Cargo.toml; only `reqwest` (client) and `tonic` (Qdrant gRPC) |
-| **OAuth2 Device Code Flow** | Not Started | — | No `oauth2`, `openid`, or Auth0 crate dependencies |
-| **Credentials Storage** | Not Started | — | No on-disk credentials module; no `.cognee/` config dir management |
-| **CloudClient HTTP Wrapper** | Not Started | — | No remote proxy client for remember/recall/improve/forget |
-| **Tenant Management API Client** | Not Started | — | No management API client for tenant discovery/provisioning |
-| **Auth0 Integration** | Not Started | — | No Auth0 domain/client ID env var handling |
-| **Module-level Singleton (remote_client)** | Not Started | — | No module state pattern; would need thread-safe global (lazy_static/once_cell) |
-| **CLI subcommand** | Not Started | `crates/cli/src/cli.rs:14–26` | No `Serve` or `Disconnect` variant in `Commands` enum |
+| **HTTP Server Framework** | N/A | — | `serve()` is a client-side orchestrator, not an HTTP server. Reuses `reqwest` only. |
+| **OAuth2 Device Code Flow** | Implemented (C2 `8624a3f`) | `crates/cloud/src/device_auth.rs` | `reqwest`-based RFC 8628 flow with manual JWT-payload decode (no signature verification, matching Python). |
+| **Credentials Storage** | Implemented (C1 `ac8c86f`) | `crates/cloud/src/credentials.rs` | `~/.cognee/cloud_credentials.json`, `0o600` on Unix, identical on-disk schema to Python. |
+| **CloudClient HTTP Wrapper** | Implemented (C3 `e94e9f4`) | `crates/cloud/src/cloud_client.rs` | `reqwest::Client` with `X-Api-Key` default header; remember/recall/improve/forget + `/health`. |
+| **Tenant Management API Client** | Implemented (C2 `8624a3f`) | `crates/cloud/src/management_api.rs` | Tenant discovery + provisioning (polling) + service-URL + API-key. Deterministic `uuid5(NAMESPACE_URL, email)` tenant names. |
+| **Auth0 Integration** | Implemented (C1 `ac8c86f`) | `crates/cloud/src/config.rs` | Env-var-driven defaults (`COGNEE_AUTH0_DOMAIN` / `_DEVICE_CLIENT_ID` / `_AUDIENCE`, `COGNEE_CLOUD_URL`). |
+| **Module-level Singleton (remote_client)** | Implemented (C3 `e94e9f4`) | `crates/cloud/src/state.rs` | `std::sync::LazyLock<tokio::sync::RwLock<Option<Arc<CloudClient>>>>` with Python-compat aliases. |
+| **`serve()` / `disconnect()` orchestrators** | Implemented (C4 `7c04dcb`) | `crates/cloud/src/{serve,disconnect}.rs` | Direct + cloud mode, cached-credentials short-circuit, refresh path, tenant provisioning. |
+| **`cognee-lib` re-exports + feature gate** | Implemented (C4 `7c04dcb`) | `crates/lib/src/lib.rs` | `cognee::{serve, disconnect, ServeConfig, ...}` gated on `cloud` (default-enabled). |
+| **CLI subcommand** | Implemented (C5 this commit) | `crates/cli/src/cli.rs`, `crates/cli/src/commands/{serve,disconnect}.rs` | `cognee-cli serve [--url … \| --auth0-* …]` and `cognee-cli disconnect [--wipe-credentials]`. |
 
 ---
 
@@ -406,16 +408,46 @@ Implement this as a **separate optional crate** (`cognee-cloud`) with feature fl
 
 | Aspect | Python | Rust |
 |--------|--------|------|
-| **Mode: Direct** | Yes, fully implemented | Missing |
-| **Mode: OAuth Cloud** | Yes, fully implemented | Missing |
-| **Credentials storage** | `~/.cognee/cloud_credentials.json` | Missing |
-| **Device Code Flow** | Implemented, RFC 8628 compliant | Missing |
-| **CloudClient HTTP wrapper** | `aiohttp.ClientSession` with `X-Api-Key` | Missing |
-| **Management API client** | Tenant discovery, provisioning, API key retrieval | Missing |
-| **Singleton pattern** | Module-level `_remote_client` | Missing |
-| **CLI subcommands** | Yes (`serve`, `disconnect`) | Missing |
-| **External services** | Auth0, Cognee Cloud Management API | Not reachable |
-| **Test coverage** | Manual (cloud services), fixtures | Would need mocks |
+| **Mode: Direct** | Yes, fully implemented | ~~Missing~~ — done in C4 (`7c04dcb`) |
+| **Mode: OAuth Cloud** | Yes, fully implemented | ~~Missing~~ — done in C2 + C4 (`8624a3f`, `7c04dcb`) |
+| **Credentials storage** | `~/.cognee/cloud_credentials.json` | ~~Missing~~ — done in C1 (`ac8c86f`); byte-compatible JSON, `0o600` on Unix |
+| **Device Code Flow** | Implemented, RFC 8628 compliant | ~~Missing~~ — done in C2 (`8624a3f`); manual JWT-payload decode (no signature verification), matching Python |
+| **CloudClient HTTP wrapper** | `aiohttp.ClientSession` with `X-Api-Key` | ~~Missing~~ — done in C3 (`e94e9f4`); `reqwest::Client` with `X-Api-Key` default header |
+| **Management API client** | Tenant discovery, provisioning, API key retrieval | ~~Missing~~ — done in C2 (`8624a3f`); `uuid5(NAMESPACE_URL, email)` tenant names |
+| **Singleton pattern** | Module-level `_remote_client` | ~~Missing~~ — done in C3 (`e94e9f4`); `std::sync::LazyLock<tokio::sync::RwLock<Option<Arc<CloudClient>>>>` |
+| **CLI subcommands** | Yes (`serve`, `disconnect`) | ~~Missing~~ — done in C5 (this commit); `cognee-cli serve` / `disconnect`, `cloud` feature-gated (default on) |
+| **External services** | Auth0, Cognee Cloud Management API | Reachable (same endpoints); can share `~/.cognee/cloud_credentials.json` with Python SDK |
+| **Test coverage** | Manual (cloud services), fixtures | ~~Would need mocks~~ — ~95 unit + 9 integration tests via `mockito`; manual live-Auth0 path documented but gated |
+
+---
+
+## Implementation notes
+
+### Commit breakdown
+
+| Commit | Scope |
+|---|---|
+| `ac8c86f` (C1) | Scaffold the `cognee-cloud` crate: `error.rs`, `config.rs` (Auth0 / cloud URL defaults + env overrides), `credentials.rs` (on-disk JSON store, `~/.cognee/cloud_credentials.json`, `0o600`). |
+| `8624a3f` (C2) | `device_auth.rs` (RFC 8628 Device Code flow, JWT-payload decode, refresh flow) and `management_api.rs` (tenant discovery / provisioning, service-URL, API-key retrieval). |
+| `e94e9f4` (C3) | `cloud_client.rs` (reqwest proxy with `X-Api-Key` header for remember / recall / improve / forget + `/health`) and `state.rs` (`LazyLock<RwLock<Option<Arc<CloudClient>>>>` singleton with Python-compat aliases). |
+| `7c04dcb` (C4) | `serve.rs` (direct + cloud mode orchestrator with cached-creds short-circuit + refresh path + tenant provisioning) and `disconnect.rs` (tear-down + optional wipe). Also wires `cognee-lib` re-exports behind the `cloud` feature (default-enabled). |
+| C5 (this commit) | `cognee-cli serve` / `disconnect` subcommands (feature-gated on `cloud`) + integration tests in `crates/cloud/tests/` + `crates/cli/tests/cli_serve_subcommand.rs`. |
+
+### Summary
+
+The new `cognee-cloud` crate ports `cognee/api/v1/serve/` byte-for-byte where the on-disk or wire format matters. Credentials live at `~/.cognee/cloud_credentials.json` (owner-only on Unix) and use the same JSON schema as the Python SDK, so both clients can share one file. Auth0 uses an RFC 8628 device-code flow with a manual base64url JWT-payload decode — no signature verification, matching Python's `extract_email_from_id_token`. Tenant provisioning mirrors Python's deterministic `uuid5(NAMESPACE_URL, email)` naming. The HTTP proxy sends every request with an `X-Api-Key` header (not `Bearer`) per the Python reference. Process-wide routing uses `std::sync::LazyLock<tokio::sync::RwLock<Option<Arc<CloudClient>>>>`: `LazyLock` is stable on edition 2024, and the `tokio` lock keeps awaiting non-blocking. `ServeConfig` is a builder with two construction helpers — `direct(url)` for local/remote connections and `cloud()` for the full device flow. The CLI surface (`cognee-cli serve` / `disconnect`) is feature-gated on `cloud`, which is default-enabled on both `cognee-lib` and `cognee-cli`.
+
+### Deviations from plan
+
+- **Auth header is `X-Api-Key`, not `Bearer`.** The plan occasionally says `Bearer` (§2), but the Python reference uses `X-Api-Key` throughout the cloud-proxy requests (management API calls still use `Authorization: Bearer <access_token>`). Rust matches Python here for wire parity.
+- **`CloudClient::new` returns `CloudResult<Arc<Self>>`, not an infallible constructor.** This lets invalid API-key header bytes (newlines / non-ASCII) surface cleanly rather than panic. Every call site was updated to `?` the result.
+- **Both `set_client` / `set_remote_client` are exported.** The prompt and plan use slightly different names (`set_client` in the Rust-native surface, `set_remote_client` in the Python-compat surface). Both now alias the same write operation so downstream callers can pick whichever reads better.
+- **Constructor validates header chars.** Per previous point — the plan's infallible signature was incompatible with `reqwest::HeaderValue::from_str` error handling.
+- **`extract_email_from_id_token` returns `CloudResult<String>`, not `Option<String>`.** The Python reference returns `None` on decode / missing-claim failures; the Rust version surfaces them as `CloudError::InvalidToken` so the cloud-mode orchestrator can decide to `ok()` the result where `None` is acceptable (serve.rs does exactly this when the access token is valid but no email claim is present).
+
+### Deferred items
+
+None. All 13 steps of the implementation plan landed.
 
 ---
 

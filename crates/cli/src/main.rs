@@ -8,6 +8,10 @@ use std::sync::Arc;
 use clap::Parser;
 use cli::{Cli, Commands};
 use cognee_lib::{ComponentManager, ConfigManager};
+#[cfg(feature = "cloud")]
+use commands::disconnect;
+#[cfg(feature = "cloud")]
+use commands::serve;
 #[cfg(feature = "visualization")]
 use commands::visualize;
 use commands::{add, add_and_cognify, cognify, config, delete, memify, run_sequence, search};
@@ -36,6 +40,10 @@ fn run() -> Result<(), CliError> {
         Commands::RunSequence(args) => run_sequence::run(args, Arc::clone(&cm)),
         #[cfg(feature = "visualization")]
         Commands::Visualize(args) => visualize::run(args, Arc::clone(&cm)),
+        #[cfg(feature = "cloud")]
+        Commands::Serve(args) => serve::run(args, Arc::clone(&cm)),
+        #[cfg(feature = "cloud")]
+        Commands::Disconnect(args) => disconnect::run(args, Arc::clone(&cm)),
     }
 }
 
