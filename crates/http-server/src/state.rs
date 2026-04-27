@@ -10,6 +10,7 @@ use cognee_core::PipelineRunRegistry;
 
 use crate::{
     auth::{AuthContext, Mailer},
+    components::ComponentHandles,
     config::HttpServerConfig,
     error::ServerError,
 };
@@ -30,10 +31,12 @@ pub struct AppState {
     // TODO(P3): wire concrete DefaultPipelineRunRegistry here
     pub pipelines: Option<Arc<dyn PipelineRunRegistry>>,
 
-    /// The `cognee-lib` facade (add/cognify/search/delete/…).
-    /// `None` in P0 — wired when `cognee_lib::ComponentManager` integration lands.
-    // TODO(P2): wire Arc<ComponentManager> / CogneeLib facade here
-    pub lib: Option<Arc<()>>,
+    /// Pre-built component handles (database, storage, delete_service,
+    /// ontology_manager). `None` until `AppState::build` fully initialises
+    /// the backends — most tests leave this `None` and stub out the
+    /// relevant functionality directly.
+    // P2: wired by AppState::build when storage/DB env vars are available.
+    pub lib: Option<Arc<ComponentHandles>>,
 
     /// JWT + cookie config and user repository.
     /// Wired in P1 step 2.
@@ -73,5 +76,13 @@ impl AppState {
             spans: None,
             sync: None,
         })
+    }
+
+    /// Convenience accessor for the component handles.
+    ///
+    /// Returns `None` when the server is running in test mode without backends
+    /// wired. Most integration tests build their own `ComponentHandles` directly.
+    pub fn components(&self) -> Option<&ComponentHandles> {
+        self.lib.as_deref()
     }
 }

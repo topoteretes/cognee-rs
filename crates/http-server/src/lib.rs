@@ -8,12 +8,16 @@
 //! returned `Router` in their own runtime.
 
 pub mod auth;
+pub mod components;
 pub mod config;
 pub mod dto;
 pub mod error;
 pub mod lifecycle;
 pub mod middleware;
+pub mod multipart;
 pub mod openapi;
+pub mod permissions;
+pub mod responses;
 pub mod routers;
 pub mod state;
 
@@ -74,6 +78,13 @@ pub async fn build_router(state: AppState) -> Result<Router, ServerError> {
                 .merge(routers::users::router())
                 .merge(routers::users_by_email::router()),
         )
+        // P2 write-path routers
+        .nest("/api/v1/add", routers::add::router())
+        .nest("/api/v1/datasets", routers::datasets::router())
+        .nest("/api/v1/ontologies", routers::ontologies::router())
+        .nest("/api/v1/delete", routers::delete::router())
+        .nest("/api/v1/update", routers::update::router())
+        .nest("/api/v1/forget", routers::forget::router())
         // Middleware stack (outer → inner): trace → CORS → body limit
         .layer(RequestBodyLimitLayer::new(body_limit))
         .layer(middleware::cors::cors_layer(&state.config))

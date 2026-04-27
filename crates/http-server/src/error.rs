@@ -103,9 +103,45 @@ pub enum ApiError {
     #[error("pipeline errored: {0}")]
     PipelineErrored(String),
 
-    /// 418 — fallback for improperly formed errors (Python parity).
-    #[error("unexpected error")]
-    Teapot,
+    /// 418 `{"detail": "<msg>"}` — Python fallback for uncategorized errors.
+    ///
+    /// Changed from a unit variant to carry a message string for Python parity
+    /// (`datasets` and `add` routers use this with dynamic messages).
+    #[error("teapot: {0}")]
+    Teapot(String),
+
+    // ── P2 error variants ─────────────────────────────────────────────────────
+    /// `add`/`update` error envelope: `{"error": "...", "detail": "..."}`.
+    ///
+    /// Used only by `routers/add.rs` and `routers/update.rs` — the only routes
+    /// that deviate from the canonical `{"detail": "..."}` shape.
+    #[error("write endpoint error: {error}")]
+    WriteEndpointError {
+        error: String,
+        detail: Option<String>,
+        status: StatusCode,
+    },
+
+    /// `<status> {"error": "..."}` — used by datasets 2.2 catch-all (409),
+    /// datasets 2.6 (404), and datasets 2.8 (404).
+    #[error("write envelope error: {0}")]
+    WriteEnvelopeError(String, StatusCode),
+
+    /// `<status> {"message": "..."}` — used by datasets 2.3 (404).
+    #[error("error message: {0}")]
+    ErrorMessageError(String, StatusCode),
+
+    /// `<status> {"error": "..."}` — used by ontologies and forget.
+    #[error("error envelope: {0}")]
+    OntologyEnvelope(String, StatusCode),
+
+    /// `409 {"error": "..."}` — used by the deprecated `/delete` endpoint.
+    #[error("deprecated conflict: {0}")]
+    DeprecatedConflict(String),
+
+    /// 501 `{"detail": "..."}` — not implemented (e.g. unsupported storage scheme).
+    #[error("not implemented: {0}")]
+    NotImplemented(String),
 
     /// 500 — unhandled internal error.
     #[error("internal server error: {0}")]
@@ -175,10 +211,17 @@ impl IntoResponse for ApiError {
             ApiError::PipelineErrored(msg) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, json!({"detail": msg}))
             }
-            ApiError::Teapot => (
-                StatusCode::IM_A_TEAPOT,
-                json!({"detail": "An unexpected error occurred."}),
-            ),
+            ApiError::Teapot(msg) => (StatusCode::IM_A_TEAPOT, json!({"detail": msg})),
+            ApiError::WriteEndpointError {
+                error,
+                detail,
+                status,
+            } => (status, json!({"error": error, "detail": detail})),
+            ApiError::WriteEnvelopeError(msg, status) => (status, json!({"error": msg})),
+            ApiError::ErrorMessageError(msg, status) => (status, json!({"message": msg})),
+            ApiError::OntologyEnvelope(msg, status) => (status, json!({"error": msg})),
+            ApiError::DeprecatedConflict(msg) => (StatusCode::CONFLICT, json!({"error": msg})),
+            ApiError::NotImplemented(msg) => (StatusCode::NOT_IMPLEMENTED, json!({"detail": msg})),
             ApiError::Internal(err) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 json!({"detail": err.to_string()}),
@@ -257,8 +300,64 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_teapot() {
-        let resp = ApiError::Teapot.into_response();
+    async fn test_teapot_with_message() {
+        let resp = ApiError::Teapot("Error retrieving datasets: db error".into()).into_response();
         assert_eq!(resp.status(), StatusCode::IM_A_TEAPOT);
+        let body = body_json(resp).await;
+        assert!(
+            body["detail"]
+                .as_str()
+                .unwrap_or("")
+                .contains("retrieving datasets")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_write_endpoint_error() {
+        let resp = ApiError::WriteEndpointError {
+            error: "Pipeline run errored".into(),
+            detail: Some("inner".into()),
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+        }
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let body = body_json(resp).await;
+        assert_eq!(body["error"], "Pipeline run errored");
+    }
+
+    #[tokio::test]
+    async fn test_write_envelope_error() {
+        let resp = ApiError::WriteEnvelopeError("Dataset not found".into(), StatusCode::NOT_FOUND)
+            .into_response();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+        let body = body_json(resp).await;
+        assert_eq!(body["error"], "Dataset not found");
+    }
+
+    #[tokio::test]
+    async fn test_error_message_error() {
+        let resp =
+            ApiError::ErrorMessageError("Dataset (abc) not found.".into(), StatusCode::NOT_FOUND)
+                .into_response();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+        let body = body_json(resp).await;
+        assert_eq!(body["message"], "Dataset (abc) not found.");
+    }
+
+    #[tokio::test]
+    async fn test_deprecated_conflict() {
+        let resp = ApiError::DeprecatedConflict("some error".into()).into_response();
+        assert_eq!(resp.status(), StatusCode::CONFLICT);
+        let body = body_json(resp).await;
+        assert_eq!(body["error"], "some error");
+    }
+
+    #[tokio::test]
+    async fn test_not_implemented() {
+        let resp =
+            ApiError::NotImplemented("Storage scheme 's3' not supported".into()).into_response();
+        assert_eq!(resp.status(), StatusCode::NOT_IMPLEMENTED);
+        let body = body_json(resp).await;
+        assert_eq!(body["detail"], "Storage scheme 's3' not supported");
     }
 }

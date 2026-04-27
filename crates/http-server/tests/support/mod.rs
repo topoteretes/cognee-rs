@@ -186,6 +186,39 @@ pub async fn seed_superuser(state: &AppState, email: &str, password: &str) -> Au
         .expect("make superuser")
 }
 
+/// Build a test `AppState` with authentication **required** (401 for unauthenticated requests).
+///
+/// Use this variant when testing the 401 auth guard — `build_auth_test_state` uses
+/// `require_authentication: false` (anonymous default user), which never returns 401.
+pub async fn build_auth_required_test_state() -> (AppState, Arc<std::sync::Mutex<Vec<MailEvent>>>) {
+    let db = setup_auth_db().await;
+    let user_repo = Arc::new(SeaOrmUserAuthRepository { db: db.clone() });
+    let api_key_repo = Arc::new(SeaOrmApiKeyRepository { db: db.clone() });
+
+    use cognee_http_server::config::Environment;
+    let cfg = HttpServerConfig {
+        require_authentication: true,
+        env: Environment::Dev,
+        ..HttpServerConfig::default()
+    };
+
+    let (mailer, events) = ConsoleMailer::new();
+    let auth = AuthContext::from_env(&cfg, user_repo, api_key_repo).expect("auth context");
+
+    let state = AppState {
+        config: Arc::new(cfg),
+        pipelines: None,
+        lib: None,
+        auth: Some(Arc::new(auth)),
+        mailer: Arc::new(mailer),
+        health: None,
+        spans: None,
+        sync: None,
+    };
+
+    (state, events)
+}
+
 /// Build a `Bearer <jwt>` header value for the given user.
 pub fn bearer_header(user: &AuthUser, state: &AppState) -> String {
     use cognee_http_server::auth::jwt::encode_login_jwt;
