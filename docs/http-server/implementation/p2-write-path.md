@@ -1,5 +1,22 @@
 # Implementation: P2 — Write path
 
+> **Status: Done — commit 3b4ae9e**
+>
+> All write-path routers landed. Two endpoints remain as `501` placeholders due to missing library
+> functions (see §8 and the notes below); these are tracked as blocking gaps against `cognee-graph`
+> / `cognee-models`:
+>
+> - **`GET /datasets/{id}/graph`** — returns `501 {"detail": "Not implemented"}`. Requires
+>   `get_formatted_graph_data()` in `cognee-graph` / `cognee-lib` (marked `// TODO(blocking)` in
+>   the handler).
+> - **`GET /datasets/{id}/schema`** and **`PUT /datasets/{id}/schema`** — schema GET returns
+>   `200 {"graph_schema": null, "custom_prompt": null}` and schema PUT is a pass-through stub.
+>   Requires `graph_schema` / `custom_prompt` columns in `cognee-models` (marked `// TODO(blocking)`
+>   in the handler).
+> - **`PATCH /update`** — the full re-cognify path is deferred to P3. The handler validates inputs
+>   and resolves the data row, but the actual pipeline invocation is a `501` stub pending P3's
+>   `PipelineRunRegistry` integration.
+
 ## 1. Goal
 
 Land the write-path routers — `/api/v1/add`, `/api/v1/update`, `/api/v1/datasets/*` (CRUD + raw download + graph + schema + status), `/api/v1/ontologies`, `/api/v1/delete` (deprecated), `/api/v1/forget` — together with the shared multipart streaming helper they all sit on top of. After this phase, a freshly-built `cognee-http-server` accepts file uploads, manages dataset metadata, exposes graph rendering, streams raw bytes back to clients, accepts ontology files, and supports both the deprecated single-data delete and the unified `/forget` endpoint with full Python parity. Permission gates are wired through the `PermissionsRepository` trait surface — the **real** SeaORM-backed implementation lands in [P5](p5-admin.md); P2 ships a placeholder impl that always returns `true`, gated by a single `// TODO(P5)` comment per call site (see §6).
@@ -312,14 +329,14 @@ For each test, follow the P0 harness: `let app = test_router(state).await; let r
 
 ## 6. Acceptance criteria
 
-- [ ] `cargo check --all-targets -p cognee-http-server` succeeds.
-- [ ] All P2 integration tests pass: `cargo test -p cognee-http-server --tests` runs every file in §5 green.
-- [ ] `scripts/check_all.sh` passes (fmt + check + clippy + capi/python/js binding checks).
-- [ ] **Multipart upload of a 50 MiB file via `/add` round-trips through `/datasets/{id}/data/{did}/raw` byte-for-byte.** Add this as a single explicit test in `test_datasets_raw.rs` (gated on `tempfile::tempdir`); compute SHA-256 of input and output, assert equality.
-- [ ] Status table in [README.md](README.md) updated: P2 row flipped from **Draft** → **Done**.
-- [ ] Per-router status table in [../routers/README.md](../routers/README.md) updated: rows for `add`, `update`, `datasets`, `ontologies`, `delete`, `forget` flipped to **Done**.
-- [ ] Permission gates use `AclDb::has_permission_with_roles` via the `check_permission` helper in `crates/http-server/src/permissions.rs`, with one `// TODO(P5): wire full PermissionsRepository once tenants_rbac migration lands` comment per call site. Until P5's `tenants_rbac` migration lands, a fresh DB with no ACL rows will deny all checks — tests must seed ACL rows or disable enforcement via `REQUIRE_AUTHORIZATION=false`. Document this loudly in the PR description.
-- [ ] OpenAPI: every new handler appears in `GET /openapi.json` with the right tag, params, request body, and response schema. `curl http://localhost:8000/openapi.json | jq '.paths | keys'` lists all 17 P2 paths (1 add + 1 update + 11 datasets + 2 ontologies + 1 delete + 1 forget).
+- [x] `cargo check --all-targets -p cognee-http-server` succeeds.
+- [x] All P2 integration tests pass: `cargo test -p cognee-http-server --tests` runs every file in §5 green.
+- [x] `scripts/check_all.sh` passes (fmt + check + clippy + capi/python/js binding checks).
+- [x] **Multipart upload of a 50 MiB file via `/add` round-trips through `/datasets/{id}/data/{did}/raw` byte-for-byte.** Add this as a single explicit test in `test_datasets_raw.rs` (gated on `tempfile::tempdir`); compute SHA-256 of input and output, assert equality.
+- [x] Status table in [README.md](README.md) updated: P2 row flipped from **Draft** → **Done**.
+- [x] Per-router status table in [../routers/README.md](../routers/README.md) updated: rows for `add`, `update`, `datasets`, `ontologies`, `delete`, `forget` flipped to **Done**.
+- [x] Permission gates use `AclDb::has_permission_with_roles` via the `check_permission` helper in `crates/http-server/src/permissions.rs`, with one `// TODO(P5): wire full PermissionsRepository once tenants_rbac migration lands` comment per call site. Until P5's `tenants_rbac` migration lands, a fresh DB with no ACL rows will deny all checks — tests must seed ACL rows or disable enforcement via `REQUIRE_AUTHORIZATION=false`. Document this loudly in the PR description.
+- [x] OpenAPI: every new handler appears in `GET /openapi.json` with the right tag, params, request body, and response schema. `curl http://localhost:8000/openapi.json | jq '.paths | keys'` lists all 17 P2 paths (1 add + 1 update + 11 datasets + 2 ontologies + 1 delete + 1 forget).
 
 ## 7. Files touched
 

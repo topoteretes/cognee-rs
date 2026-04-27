@@ -25,18 +25,18 @@ One row per router. Update the row in the same PR that lands or changes the unde
 | 6 | api_keys | `/api/v1/auth/api-keys` | [api-keys.md](api-keys.md) | **Done** |
 | 7 | users | `/api/v1/users` | [users.md](users.md) | **Done** |
 | 8 | users — user_id_by_email | `/api/v1/users/get-user-id` | [users-by-email.md](users-by-email.md) | **Done** |
-| 9 | add | `/api/v1/add` | [add.md](add.md) | **Draft** |
-| 10 | update | `/api/v1/update` | [update.md](update.md) | **Draft** |
-| 11 | datasets | `/api/v1/datasets` | [datasets.md](datasets.md) | **Draft** |
-| 12 | ontologies | `/api/v1/ontologies` | [ontologies.md](ontologies.md) | **Draft** |
+| 9 | add | `/api/v1/add` | [add.md](add.md) | **Done** |
+| 10 | update | `/api/v1/update` | [update.md](update.md) | **Done** |
+| 11 | datasets | `/api/v1/datasets` | [datasets.md](datasets.md) | **Done** |
+| 12 | ontologies | `/api/v1/ontologies` | [ontologies.md](ontologies.md) | **Done** |
 | 13 | cognify | `/api/v1/cognify` | [cognify.md](cognify.md) | **Draft** |
 | 14 | memify | `/api/v1/memify` | [memify.md](memify.md) | **Draft** |
 | 15 | remember | `/api/v1/remember` | [remember.md](remember.md) | **Draft** |
 | 16 | improve | `/api/v1/improve` | [improve.md](improve.md) | **Draft** |
 | 17 | search | `/api/v1/search` | [search.md](search.md) | **Draft** |
 | 18 | recall | `/api/v1/recall` | [recall.md](recall.md) | **Draft** |
-| 19 | forget | `/api/v1/forget` | [forget.md](forget.md) | **Draft** |
-| 20 | delete (deprecated) | `/api/v1/delete` | [delete.md](delete.md) | **Draft** |
+| 19 | forget | `/api/v1/forget` | [forget.md](forget.md) | **Done** |
+| 20 | delete (deprecated) | `/api/v1/delete` | [delete.md](delete.md) | **Done** |
 | 21 | settings | `/api/v1/settings` | [settings.md](settings.md) | **Draft** |
 | 22 | configuration | `/api/v1/configuration` | [configuration.md](configuration.md) | **Draft** |
 | 23 | permissions | `/api/v1/permissions` | [permissions.md](permissions.md) | **Draft** |
