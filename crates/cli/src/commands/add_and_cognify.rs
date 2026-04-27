@@ -153,7 +153,7 @@ pub fn run(args: AddAndCognifyArgs, cm: Arc<ComponentManager>) -> Result<(), Cli
             graph_db,
             vector_db,
             embedding_engine,
-            None,
+            Some(Arc::clone(&database)),
             ontology_resolver,
             &cognify_config,
         )
