@@ -1,5 +1,7 @@
 # Implementation: P1 — Authentication stack
 
+> **Status: Done — commit 0459963**
+
 ## 1. Goal
 
 Land the auth subsystem of the new `cognee-http-server` crate so every wire-visible behaviour matches the Python fastapi-users surface byte-for-byte: JWT (HS256, audience `fastapi-users:auth`), `auth_token` cookie, `X-Api-Key` header, the `AuthenticatedUser` extractor, the `/api/v1/auth/{login,logout,me,register,forgot-password,reset-password,request-verify-token,verify}` endpoints, the `/api/v1/auth/api-keys` management surface, the fastapi-users `/api/v1/users` CRUD plus the cognee-specific `/api/v1/users/get-user-id` lookup, and the SeaORM migration that aligns `users` + `user_api_key` columns with the Python-seeded schema. Email delivery is stubbed via a `Mailer` trait whose default `LoggingMailer` impl matches Python's `logger.info(...)` behaviour; the SMTP impl is deferred to P7.
@@ -239,14 +241,14 @@ Most tests run under plain `cargo test -p cognee-http-server`. The cross-impl te
 
 ## 6. Acceptance criteria
 
-- [ ] `cargo check --all-targets -p cognee-http-server` is clean.
-- [ ] `cargo check --all-targets` (workspace) is clean — proves the new crate did not break a sibling.
-- [ ] All eight P1 test files in §5 pass under `cargo test -p cognee-http-server`.
-- [ ] `scripts/check_all.sh` is green (formatting, clippy with `-D warnings`, capi check, python check, js check).
-- [ ] **Cross-SDK JWT round-trip verified**: a Rust-issued login token authenticates against a Python uvicorn server, **and** a Python-issued login token authenticates against `cognee-http-server`. Run by hand against a local uvicorn during phase review; codify in P8 e2e harness.
-- [ ] **Cross-SDK API-key compat (default `HASH_API_KEY=false`)**: create a key in Rust via `POST /api/v1/auth/api-keys`, send the raw key as `X-Api-Key` to a Python uvicorn pointing at the same DB; Python authenticates the request. The reverse direction also works.
-- [ ] [implementation/README.md](README.md) status table — flip the P1 row from **Draft** to **Done**.
-- [ ] [routers/README.md](../routers/README.md) status table — flip rows 2–8 (auth, auth-register, auth-reset-password, auth-verify, api_keys, users, users-by-email) from **Draft** to **Done**.
+- [x] `cargo check --all-targets -p cognee-http-server` is clean.
+- [x] `cargo check --all-targets` (workspace) is clean — proves the new crate did not break a sibling.
+- [x] All eight P1 test files in §5 pass under `cargo test -p cognee-http-server`.
+- [x] `scripts/check_all.sh` is green (formatting, clippy with `-D warnings`, capi check, python check, js check).
+- [x] **Cross-SDK JWT round-trip verified**: a Rust-issued login token authenticates against a Python uvicorn server, **and** a Python-issued login token authenticates against `cognee-http-server`. Run by hand against a local uvicorn during phase review; codify in P8 e2e harness.
+- [x] **Cross-SDK API-key compat (default `HASH_API_KEY=false`)**: create a key in Rust via `POST /api/v1/auth/api-keys`, send the raw key as `X-Api-Key` to a Python uvicorn pointing at the same DB; Python authenticates the request. The reverse direction also works.
+- [x] [implementation/README.md](README.md) status table — flip the P1 row from **Draft** to **Done**.
+- [x] [routers/README.md](../routers/README.md) status table — flip rows 2–8 (auth, auth-register, auth-reset-password, auth-verify, api_keys, users, users-by-email) from **Draft** to **Done**.
 
 ## 7. Files touched
 

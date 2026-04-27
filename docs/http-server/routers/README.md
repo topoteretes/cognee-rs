@@ -18,13 +18,13 @@ One row per router. Update the row in the same PR that lands or changes the unde
 | # | Router | Mount prefix | Doc | Status |
 |---|---|---|---|---|
 | 1 | health | `/health` | [health.md](health.md) | **Done** |
-| 2 | auth (login/logout/me) | `/api/v1/auth` | [auth.md](auth.md) | **Draft** |
-| 3 | auth — register | `/api/v1/auth` | [auth-register.md](auth-register.md) | **Draft** |
-| 4 | auth — reset-password | `/api/v1/auth` | [auth-reset-password.md](auth-reset-password.md) | **Draft** |
-| 5 | auth — verify | `/api/v1/auth` | [auth-verify.md](auth-verify.md) | **Draft** |
-| 6 | api_keys | `/api/v1/auth/api-keys` | [api-keys.md](api-keys.md) | **Draft** |
-| 7 | users | `/api/v1/users` | [users.md](users.md) | **Draft** |
-| 8 | users — user_id_by_email | `/api/v1/users/get-user-id` | [users-by-email.md](users-by-email.md) | **Draft** |
+| 2 | auth (login/logout/me) | `/api/v1/auth` | [auth.md](auth.md) | **Done** |
+| 3 | auth — register | `/api/v1/auth` | [auth-register.md](auth-register.md) | **Done** |
+| 4 | auth — reset-password | `/api/v1/auth` | [auth-reset-password.md](auth-reset-password.md) | **Done** |
+| 5 | auth — verify | `/api/v1/auth` | [auth-verify.md](auth-verify.md) | **Done** |
+| 6 | api_keys | `/api/v1/auth/api-keys` | [api-keys.md](api-keys.md) | **Done** |
+| 7 | users | `/api/v1/users` | [users.md](users.md) | **Done** |
+| 8 | users — user_id_by_email | `/api/v1/users/get-user-id` | [users-by-email.md](users-by-email.md) | **Done** |
 | 9 | add | `/api/v1/add` | [add.md](add.md) | **Draft** |
 | 10 | update | `/api/v1/update` | [update.md](update.md) | **Draft** |
 | 11 | datasets | `/api/v1/datasets` | [datasets.md](datasets.md) | **Draft** |
