@@ -25,8 +25,8 @@ Land the auth subsystem of the new `cognee-http-server` crate so every wire-visi
 P1 depends on **P0** ([p0-foundation.md](p0-foundation.md)) being merged. Specifically the steps below assume the following are already in place:
 
 - `crates/http-server/` crate (library + `bin`-gated standalone binary) compiles green; `AppState`, `HttpServerConfig`, `ServerError`, the `ApiError` enum, the `IntoResponse` impl, the CORS / `TraceLayer` middleware stack, the `build_router` skeleton, the OpenAPI root `#[derive(OpenApi)]` struct with `BearerAuth` + `ApiKeyAuth` security schemes pre-declared, and the `/health`-router integration-test scaffold that uses `tower::ServiceExt::oneshot`. Per [architecture.md §3](../architecture.md#3-crate-topology), [architecture.md §6](../architecture.md#6-application-state--dependency-injection), [architecture.md §13](../architecture.md#13-openapi-generation--utoipa).
-- The `users` and `user_api_key` tables already partially exist in `crates/database/src/migrator/m20250422_000001_user_tenant_role_tables.rs`; P1 only **reconciles** missing columns — it does **not** create the tables from scratch. Confirm by inspecting that migration.
-- `cognee-lib` exposes a `default_user()` helper and a relational DB pool (`SqliteDatabase` / `DatabaseConnection`) that this phase's repositories will plug into.
+- The `users` table already exists in `crates/database/src/migrator/m20250422_000001_user_tenant_role_tables.rs` but is missing the `hashed_password` and `is_verified` columns. The `user_api_key` table does **not** exist at all in that migration — P1 Step 1 must create it from scratch. Confirm by inspecting that migration: `users` has `id`, `email`, `is_active`, `is_superuser`, `tenant_id`, `created_at`, `updated_at`; no `hashed_password`, no `is_verified`, no `user_api_key` table.
+- `cognee-lib` exposes a `get_or_create_default_user()` helper (`cognee_lib::api::user::get_or_create_default_user`, re-exported via `cognee_lib::api::get_or_create_default_user`) and a relational DB pool (`SqliteDatabase` / `DatabaseConnection`) that this phase's repositories will plug into. The `AuthenticatedUser` extractor calls this as the `REQUIRE_AUTHENTICATION=false` fallback (Step 7) — wire it as `state.lib.get_or_create_default_user()` or expose a thin wrapper called `default_user()` on the `CogneeLib` facade added in P1.
 
 If any of those is missing, fix in P0 before continuing.
 
@@ -64,14 +64,14 @@ Implementors must **not** combine steps; the diff-bound rule per [implementation
 ### Step 1: Add the `users` + `user_api_key` SeaORM reconciliation migration
 
 - **File(s)**: `crates/database/src/migrator/m20260427_000001_http_auth_columns.rs`, `crates/database/src/migrator/mod.rs` (register the migration).
-- **Action**: Add a new SeaORM migration that ensures the columns from [auth.md §11](../auth.md#11-database-schema-seaorm-migration) exist. Use `Table::alter().add_column_if_not_exists(...)` for `users.is_verified BOOLEAN NOT NULL DEFAULT TRUE` and any other columns missing from `m20250422_000001`. For `user_api_key`, ensure all six columns (`id`, `user_id`, `api_key`, `label`, `name`, `created_at`, `expires_at`) are present; `api_key` is **not** UNIQUE (see [auth.md §11 — Indexes](../auth.md#11-database-schema-seaorm-migration)). The migration must be **idempotent against a Python-seeded DB** — use `IF NOT EXISTS` for every alter so re-running on a Python-bootstrapped SQLite/Postgres file is a no-op.
+- **Action**: Add a new SeaORM migration that (a) adds the two columns missing from `m20250422_000001` to `users`: `hashed_password TEXT NOT NULL DEFAULT ''` and `is_verified BOOLEAN NOT NULL DEFAULT TRUE` — use `Table::alter().add_column_if_not_exists(...)` for idempotency; (b) creates the `user_api_key` table from scratch with `Table::create().if_not_exists()` — the table does not exist in any prior migration and must be fully defined here with all seven columns (`id`, `user_id`, `api_key`, `label`, `name`, `created_at`, `expires_at`); `api_key` is **not** UNIQUE (see [auth.md §11 — Indexes](../auth.md#11-database-schema-seaorm-migration)). The migration must be **idempotent against a Python-seeded DB** — use `IF NOT EXISTS` for every DDL statement so re-running on a Python-bootstrapped SQLite/Postgres file is a no-op.
 - **Spec reference**: [auth.md §11](../auth.md#11-database-schema-seaorm-migration).
 - **Verify**: `cargo test -p cognee-database migrator::tests::idempotent_against_python_seed` (test added in step 5 below). Also `cargo check --all-targets`.
 
 ### Step 2: Add `AuthContext` + secret/audience plumbing
 
 - **File(s)**: `crates/http-server/src/auth/mod.rs` (re-export module barrel), `crates/http-server/src/auth/context.rs`.
-- **Action**: Define the `AuthContext` struct exactly as in [auth.md §7](../auth.md#7-authcontext) — three `(secret, audience, lifetime)` triples (login / reset / verify), the cookie config, `require_authentication`, `hash_api_key`, `max_api_keys_per_user`, plus `Arc<dyn UserRepository>` and `Arc<dyn ApiKeyRepository>` slots (the trait stubs land in step 9). Add `AuthContext::from_config(&HttpServerConfig)` that reads env vars (`FASTAPI_USERS_JWT_SECRET`, `FASTAPI_USERS_RESET_PASSWORD_TOKEN_SECRET`, `FASTAPI_USERS_VERIFICATION_TOKEN_SECRET`, `JWT_LIFETIME_SECONDS`, `AUTH_TOKEN_COOKIE_NAME`, `AUTH_COOKIE_SECURE`, `AUTH_TOKEN_COOKIE_DOMAIN`, `REQUIRE_AUTHENTICATION`, `HASH_API_KEY`). Wire `Arc<AuthContext>` into the `AppState::auth` field already declared in P0.
+- **Action**: Define the `AuthContext` struct exactly as in [auth.md §7](../auth.md#7-authcontext) — three `(secret, audience, lifetime)` triples (login / reset / verify), the cookie config, `require_authentication`, `hash_api_key`, `max_api_keys_per_user`, plus `Arc<dyn UserRepository>` and `Arc<dyn ApiKeyRepository>` slots (the trait stubs land in step 9). Add `AuthContext::from_config(&HttpServerConfig)` that reads env vars (`FASTAPI_USERS_JWT_SECRET`, `FASTAPI_USERS_RESET_PASSWORD_TOKEN_SECRET`, `FASTAPI_USERS_VERIFICATION_TOKEN_SECRET`, `JWT_LIFETIME_SECONDS`, `AUTH_TOKEN_COOKIE_NAME`, `AUTH_COOKIE_SECURE`, `AUTH_TOKEN_COOKIE_DOMAIN`, `REQUIRE_AUTHENTICATION`, `HASH_API_KEY`). Wire `Arc<AuthContext>` into the `AppState::auth` field already declared in P0. **Note**: the comment in `crates/http-server/src/state.rs` on the `auth` field reads `// TODO(P2): wire Arc<AuthContext> here` — that comment was written before P1 planning was finalized. The field type (`Option<Arc<()>>`) and the comment label are both stale; replace the field type with `Option<Arc<AuthContext>>` and update the comment to `// wired in P1 step 2`.
 - **Spec reference**: [auth.md §7](../auth.md#7-authcontext), [auth.md §14](../auth.md#14-security-considerations) (production secret rejection guard for `super_secret`).
 - **Verify**: `cargo check -p cognee-http-server`. Add a unit test asserting that `AuthContext::from_config` errors when `cfg.env == Environment::Prod && login_secret == "super_secret"`.
 
@@ -189,7 +189,7 @@ Implementors must **not** combine steps; the diff-bound rule per [implementation
 
 ## 5. Tests
 
-Eight integration test files under `crates/http-server/tests/`, each driven via `tower::ServiceExt::oneshot` against the assembled router (no socket bind — see [architecture.md §18 — Layer 2](../architecture.md#18-testing-architecture)). Use a fresh `sqlite::memory:` `AppState` per test via a `support::test_state()` helper added in P0.
+Eight integration test files under `crates/http-server/tests/`, each driven via `tower::ServiceExt::oneshot` against the assembled router (no socket bind — see [architecture.md §18 — Layer 2](../architecture.md#18-testing-architecture)). Use a fresh `sqlite::memory:` `AppState` per test via the `support::build_test_state()` helper (already exists in `crates/http-server/tests/support/mod.rs` from P0); P1 extends this module with additional helper functions listed below.
 
 | Test file | Coverage |
 |---|---|
@@ -208,8 +208,8 @@ All tests run under `cargo test -p cognee-http-server` in debug mode (no `--rele
 
 `crates/http-server/tests/support/mod.rs` (added in P0; extended here) exposes:
 
-- `test_state() -> AppState` — builds an `AppState` over `sqlite::memory:` with the standard P1 migrations applied, a `ConsoleMailer`, and `HASH_API_KEY=false`. Each test calls this once.
-- `test_state_with(cfg_overrides) -> AppState` — same with a closure that mutates the `AuthContext` (e.g. `cfg.hash_api_key = true`, `cfg.require_authentication = false`) before assembly.
+- `build_test_state() -> AppState` — already in P0; P1 upgrades its implementation to run P1 migrations against `sqlite::memory:`, inject a `ConsoleMailer`, and set `HASH_API_KEY=false`. Each test calls this once.
+- `build_test_state_with(cfg_overrides) -> AppState` — new in P1; same as above with a closure that mutates the `AuthContext` (e.g. `cfg.hash_api_key = true`, `cfg.require_authentication = false`) before assembly.
 - `bearer(user) -> HeaderValue`, `cookie(user) -> HeaderValue` — mint a login JWT for the given user and wrap it in the appropriate header.
 - `seed_user(state, email, password) -> User` — calls `auth::register::create_user` and returns the row.
 - `seed_superuser(state, ...)` — same but flips `is_superuser=true` after insert.
@@ -220,7 +220,7 @@ These helpers keep each test ≤30 lines and avoid duplicating the `AppState` bu
 
 These are the byte-level gotchas that the per-router docs flag but that are easy to miss when reading sequentially. Each has bitten Python ports of fastapi-users in the past.
 
-1. **`/api/v1/auth/me` returns ONLY `{"email"}`** — not the full `UserRead`. The auth doc [auth.md §8.3](../auth.md#83-apiv1authme--get) lists a wider shape; that section is acknowledged as inaccurate in [routers/auth.md §6 q1](../routers/auth.md#6-open-questions). The per-router doc is canonical: emit only `email`.
+1. **`/api/v1/auth/me` returns ONLY `{"email"}`** — not the full `UserRead`. [auth.md §8.3](../auth.md#83-apiv1authme--get) and [routers/auth.md §2.3](../routers/auth.md#23-get-me--current-user-shape) both confirm the narrow `{"email": "<str>"}` shape. The discrepancy noted in [routers/auth.md §6 q1](../routers/auth.md#6-open-questions) has been resolved — auth.md §8.3 was corrected. Emit only `email`.
 2. **`/api/v1/users/me` returns the full `UserReadDTO`** — six fields including `tenant_id`. Do not collapse with `/auth/me`.
 3. **`safe=True` is silent.** Register and `PATCH /me` accept `is_superuser` / `is_active` / `is_verified` in the request body and silently drop them. Returning a 400 "field not allowed" is wrong; mirror Python's silent strip.
 4. **`DELETE /api/v1/users/{id}` is `204`, not `200 {}`.** Many clients pattern-match on the status code, not the body.

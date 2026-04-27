@@ -7,7 +7,9 @@
 //! functions.  Library embedders can call `build_router` directly and host the
 //! returned `Router` in their own runtime.
 
+pub mod auth;
 pub mod config;
+pub mod dto;
 pub mod error;
 pub mod lifecycle;
 pub mod middleware;
@@ -54,6 +56,24 @@ pub async fn build_router(state: AppState) -> Result<Router, ServerError> {
         .nest("/health", routers::health::router())
         // OpenAPI document
         .route("/openapi.json", get(openapi::openapi_json))
+        // Auth router family (login / logout / auth-me / register / reset / verify)
+        .nest(
+            "/api/v1/auth",
+            Router::new()
+                .merge(routers::auth::router())
+                .merge(routers::auth_register::router())
+                .merge(routers::auth_reset_password::router())
+                .merge(routers::auth_verify::router()),
+        )
+        // API keys router (mounted at /api/v1/auth/api-keys)
+        .nest("/api/v1/auth/api-keys", routers::api_keys::router())
+        // Users router (me / by-id CRUD + get-user-id)
+        .nest(
+            "/api/v1/users",
+            Router::new()
+                .merge(routers::users::router())
+                .merge(routers::users_by_email::router()),
+        )
         // Middleware stack (outer → inner): trace → CORS → body limit
         .layer(RequestBodyLimitLayer::new(body_limit))
         .layer(middleware::cors::cors_layer(&state.config))

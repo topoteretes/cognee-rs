@@ -269,7 +269,7 @@ This section is normative — the implementation must match these contracts byte
 
 - **Body** (JSON): `{"email": "<str>", "password": "<str>", "is_active": bool?, "is_superuser": bool?, "is_verified": bool?}`. fastapi-users `BaseUserCreate`.
 - **Response** (`201`): `UserRead` shape — full user object: `{"id": "<uuid>", "email": "<str>", "is_active": bool, "is_superuser": bool, "is_verified": bool, "tenant_id": "<uuid>"|null}`. Note: this is wider than `/me`'s response.
-- **Errors**: `400 {"detail": "REGISTER_USER_ALREADY_EXISTS"}` on duplicate email; `400 {"detail": {"code": "REGISTER_INVALID_PASSWORD", "reason": "<str>"}}` on weak password (we keep the rule simple: ≥8 chars, ≤128 chars).
+- **Errors**: `400 {"detail": "REGISTER_USER_ALREADY_EXISTS"}` on duplicate email; `400 {"detail": {"code": "REGISTER_INVALID_PASSWORD", "reason": "<str>"}}` on weak password. **No length rule** — stock fastapi-users `BaseUserManager.validate_password` only rejects a password that contains the user's email substring; cognee does not override this (see [routers/auth-register.md §2.1](routers/auth-register.md#21-post-register--create-a-new-user)).
 - **Side effect**: invokes `Mailer::on_after_register(user)` (default no-op); for parity with [`get_user_manager.py:31-33`](https://github.com/topoteretes/cognee/blob/main/cognee/modules/users/get_user_manager.py#L31-L33).
 
 ### 8.5 `/api/v1/auth/forgot-password` — `POST`

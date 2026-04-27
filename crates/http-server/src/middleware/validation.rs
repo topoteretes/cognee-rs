@@ -14,6 +14,36 @@ use serde_json::json;
 
 use crate::error::{ApiError, ValidationDetails};
 
+// ─── LoginForm extractor ──────────────────────────────────────────────────────
+
+/// Path-scoped `Form<T>` extractor for `POST /api/v1/auth/login`.
+///
+/// Maps any deserialization failure to `ApiError::LoginBadCredentials`
+/// (the `{"detail":"LOGIN_BAD_CREDENTIALS"}` shape) instead of the
+/// generic `ValidationDetails` array.  Only use this on the login handler —
+/// applying it elsewhere would suppress structured validation errors on
+/// `/register` etc.
+///
+/// Python reference: the custom `RequestValidationError` handler in
+/// `client.py:165-176` overrides 422 → 400 with `LOGIN_BAD_CREDENTIALS`
+/// specifically for `/api/v1/auth/login`.
+pub struct LoginForm<T>(pub T);
+
+impl<T, S> FromRequest<S> for LoginForm<T>
+where
+    T: DeserializeOwned,
+    S: Send + Sync,
+{
+    type Rejection = ApiError;
+
+    async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
+        match axum::extract::Form::<T>::from_request(req, state).await {
+            Ok(axum::extract::Form(value)) => Ok(LoginForm(value)),
+            Err(_) => Err(ApiError::LoginBadCredentials),
+        }
+    }
+}
+
 /// Drop-in replacement for `axum::Json` that converts `serde_json` parse errors
 /// into `ApiError::Validation` with the Python-shaped `{detail: [...], body: ...}`
 /// envelope.

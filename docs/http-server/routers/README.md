@@ -17,7 +17,7 @@ One row per router. Update the row in the same PR that lands or changes the unde
 
 | # | Router | Mount prefix | Doc | Status |
 |---|---|---|---|---|
-| 1 | health | `/health` | [health.md](health.md) | **Draft** |
+| 1 | health | `/health` | [health.md](health.md) | **Done** |
 | 2 | auth (login/logout/me) | `/api/v1/auth` | [auth.md](auth.md) | **Draft** |
 | 3 | auth — register | `/api/v1/auth` | [auth-register.md](auth-register.md) | **Draft** |
 | 4 | auth — reset-password | `/api/v1/auth` | [auth-reset-password.md](auth-reset-password.md) | **Draft** |

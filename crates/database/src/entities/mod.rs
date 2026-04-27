@@ -23,6 +23,7 @@ pub mod principal;
 pub mod role;
 pub mod tenant;
 pub mod user;
+pub mod user_api_key;
 pub mod user_role;
 pub mod user_tenant;
 

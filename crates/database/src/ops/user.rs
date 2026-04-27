@@ -71,8 +71,10 @@ impl UserDb for DatabaseConnection {
         let model = user::ActiveModel {
             id: Set(hex_id),
             email: Set(u.email.clone()),
+            hashed_password: Set(String::new()),
             is_active: Set(u.is_active),
             is_superuser: Set(u.is_superuser),
+            is_verified: Set(true),
             tenant_id: Set(uuid_hex::to_hex_opt(u.tenant_id)),
             created_at: Set(u.created_at),
             updated_at: Set(u.updated_at),

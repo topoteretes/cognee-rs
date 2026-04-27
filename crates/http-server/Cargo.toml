@@ -38,6 +38,7 @@ hyper = { version = "1", features = ["server", "http1", "http2"] }
 # Concrete cognee-lib types are wired via AppState in P1+.
 cognee-models = { path = "../models" }
 cognee-core = { path = "../core", features = ["pipeline-run-registry"] }
+cognee-database = { path = "../database", features = ["sqlite"] }
 
 # Serialization
 serde = { workspace = true, features = ["derive"] }
@@ -49,8 +50,14 @@ utoipa = { version = "5", features = ["axum_extras", "uuid", "chrono"] }
 # Auth
 jsonwebtoken = "9"
 argon2 = "0.5"
-cookie = "0.18"
+bcrypt = "0.16"
+cookie = { version = "0.18", features = ["percent-encode"] }
 secrecy = "0.10"
+email_address = "0.2"
+
+# Hashing
+sha2 = { workspace = true }
+rand = { workspace = true }
 
 # Utilities
 uuid = { workspace = true, features = ["v4", "v5", "serde"] }
@@ -74,3 +81,7 @@ tower = { version = "0.5", features = ["util"] }
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros"] }
 serde_json = { workspace = true }
 http-body-util = "0.1"
+serial_test = { workspace = true }
+chrono = { workspace = true }
+sea-orm = { version = "1", default-features = false, features = ["sqlx-sqlite", "runtime-tokio-native-tls", "macros"] }
+cognee-database = { path = "../database", features = ["sqlite"] }

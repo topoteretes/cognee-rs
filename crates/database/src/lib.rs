@@ -1,3 +1,4 @@
+pub mod auth;
 mod connection;
 mod conversions;
 pub mod entities;
@@ -8,6 +9,10 @@ mod traits;
 mod types;
 pub mod uuid_hex;
 
+pub use auth::{
+    ApiKey, ApiKeyRepository, AuthUser, CreateUserPayload, SeaOrmApiKeyRepository,
+    SeaOrmUserAuthRepository, UpdateUserPayload, UserAuthRepository,
+};
 pub use connection::{connect, initialize};
 pub use ops::checkpoint::{CheckpointStore, SeaOrmCheckpointStore};
 pub use pipelines::PipelineRunRepository;

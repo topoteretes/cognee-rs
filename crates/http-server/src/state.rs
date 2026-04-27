@@ -8,7 +8,11 @@ use std::sync::Arc;
 
 use cognee_core::PipelineRunRegistry;
 
-use crate::{config::HttpServerConfig, error::ServerError};
+use crate::{
+    auth::{AuthContext, Mailer},
+    config::HttpServerConfig,
+    error::ServerError,
+};
 
 // ─── AppState ────────────────────────────────────────────────────────────────
 
@@ -28,13 +32,16 @@ pub struct AppState {
 
     /// The `cognee-lib` facade (add/cognify/search/delete/…).
     /// `None` in P0 — wired when `cognee_lib::ComponentManager` integration lands.
-    // TODO(P1): wire Arc<ComponentManager> / CogneeLib facade here
+    // TODO(P2): wire Arc<ComponentManager> / CogneeLib facade here
     pub lib: Option<Arc<()>>,
 
     /// JWT + cookie config and user repository.
-    /// `None` in P0 — wired in P2 (auth phase).
-    // TODO(P2): wire Arc<AuthContext> here
-    pub auth: Option<Arc<()>>,
+    /// Wired in P1 step 2.
+    pub auth: Option<Arc<AuthContext>>,
+
+    /// Email delivery abstraction. Defaults to `LoggingMailer` (P1).
+    /// SMTP impl deferred to P7.
+    pub mailer: Arc<dyn Mailer>,
 
     /// Health checker for /health endpoints.
     /// `None` in P0 — wired when cognee_lib::health lands.
@@ -61,6 +68,7 @@ impl AppState {
             pipelines: None,
             lib: None,
             auth: None,
+            mailer: Arc::new(crate::auth::LoggingMailer),
             health: None,
             spans: None,
             sync: None,

@@ -58,6 +58,47 @@ pub enum ApiError {
     #[error("login bad credentials")]
     LoginBadCredentials,
 
+    /// 400 `{"detail": "LOGIN_USER_NOT_VERIFIED"}` — fastapi-users compat.
+    #[error("login user not verified")]
+    LoginUserNotVerified,
+
+    /// 400 `{"detail": "REGISTER_USER_ALREADY_EXISTS"}` — fastapi-users compat.
+    #[error("register user already exists")]
+    RegisterUserAlreadyExists,
+
+    /// 400 `{"detail": {"code": "REGISTER_INVALID_PASSWORD", "reason": "..."}}`.
+    #[error("register invalid password: {0}")]
+    RegisterInvalidPassword(String),
+
+    /// 400 `{"detail": "RESET_PASSWORD_BAD_TOKEN"}` — fastapi-users compat.
+    #[error("reset password bad token")]
+    ResetPasswordBadToken,
+
+    /// 400 `{"detail": {"code": "RESET_PASSWORD_INVALID_PASSWORD", "reason": "..."}}`.
+    #[error("reset password invalid password: {0}")]
+    ResetPasswordInvalidPassword(String),
+
+    /// 400 `{"detail": "VERIFY_USER_BAD_TOKEN"}` — fastapi-users compat.
+    #[error("verify user bad token")]
+    VerifyUserBadToken,
+
+    /// 400 `{"detail": "VERIFY_USER_ALREADY_VERIFIED"}` — fastapi-users compat.
+    #[error("verify user already verified")]
+    VerifyUserAlreadyVerified,
+
+    /// 400 `{"detail": "UPDATE_USER_EMAIL_ALREADY_EXISTS"}` — fastapi-users compat.
+    #[error("update user email already exists")]
+    UpdateUserEmailAlreadyExists,
+
+    /// 400 `{"detail": {"code": "UPDATE_USER_INVALID_PASSWORD", "reason": "..."}}`.
+    #[error("update user invalid password: {0}")]
+    UpdateUserInvalidPassword(String),
+
+    /// 400 `{"error": {"message": "..."}}` — unique envelope used ONLY by the api-keys router.
+    /// **Never** use this variant outside `routers/api_keys.rs`.
+    #[error("api key error: {0}")]
+    ApiKeyEnvelope(String),
+
     /// 420/500 — pipeline job returned an error status.
     #[error("pipeline errored: {0}")]
     PipelineErrored(String),
@@ -90,6 +131,46 @@ impl IntoResponse for ApiError {
             ApiError::LoginBadCredentials => (
                 StatusCode::BAD_REQUEST,
                 json!({"detail": "LOGIN_BAD_CREDENTIALS"}),
+            ),
+            ApiError::LoginUserNotVerified => (
+                StatusCode::BAD_REQUEST,
+                json!({"detail": "LOGIN_USER_NOT_VERIFIED"}),
+            ),
+            ApiError::RegisterUserAlreadyExists => (
+                StatusCode::BAD_REQUEST,
+                json!({"detail": "REGISTER_USER_ALREADY_EXISTS"}),
+            ),
+            ApiError::RegisterInvalidPassword(reason) => (
+                StatusCode::BAD_REQUEST,
+                json!({"detail": {"code": "REGISTER_INVALID_PASSWORD", "reason": reason}}),
+            ),
+            ApiError::ResetPasswordBadToken => (
+                StatusCode::BAD_REQUEST,
+                json!({"detail": "RESET_PASSWORD_BAD_TOKEN"}),
+            ),
+            ApiError::ResetPasswordInvalidPassword(reason) => (
+                StatusCode::BAD_REQUEST,
+                json!({"detail": {"code": "RESET_PASSWORD_INVALID_PASSWORD", "reason": reason}}),
+            ),
+            ApiError::VerifyUserBadToken => (
+                StatusCode::BAD_REQUEST,
+                json!({"detail": "VERIFY_USER_BAD_TOKEN"}),
+            ),
+            ApiError::VerifyUserAlreadyVerified => (
+                StatusCode::BAD_REQUEST,
+                json!({"detail": "VERIFY_USER_ALREADY_VERIFIED"}),
+            ),
+            ApiError::UpdateUserEmailAlreadyExists => (
+                StatusCode::BAD_REQUEST,
+                json!({"detail": "UPDATE_USER_EMAIL_ALREADY_EXISTS"}),
+            ),
+            ApiError::UpdateUserInvalidPassword(reason) => (
+                StatusCode::BAD_REQUEST,
+                json!({"detail": {"code": "UPDATE_USER_INVALID_PASSWORD", "reason": reason}}),
+            ),
+            ApiError::ApiKeyEnvelope(message) => (
+                StatusCode::BAD_REQUEST,
+                json!({"error": {"message": message}}),
             ),
             ApiError::PipelineErrored(msg) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, json!({"detail": msg}))

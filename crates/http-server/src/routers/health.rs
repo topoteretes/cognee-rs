@@ -343,6 +343,7 @@ mod tests {
             pipelines: None,
             lib: None,
             auth: None,
+            mailer: Arc::new(crate::auth::LoggingMailer),
             health: Some(Arc::new(checker)),
             spans: None,
             sync: None,

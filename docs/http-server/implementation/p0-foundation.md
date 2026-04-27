@@ -1,5 +1,9 @@
 # Implementation: P0 — Foundation
 
+> **Status: Done — commit 323e3e1**
+>
+> Minor deviation from spec: Health DTOs are defined inline in `src/routers/health.rs` rather than in a separate `src/dto/health.rs`. This is acceptable for P0 scope and can be refactored into a dedicated DTO module in a later phase if needed.
+
 ## 1. Goal
 
 Land the `crates/http-server/` Cargo package — the new `cognee-http-server` crate that hosts both the embeddable `axum` library and the standalone `cognee-http-server` binary. Wire up `AppState`, `ApiError`, the configuration loader, the CORS / tracing / validation middleware, the `utoipa` OpenAPI document, the startup-lifecycle entry point, the root `/`, and the public health router (`/health` + `/health/detailed`). The phase ends with a buildable binary that boots, three integration tests covering health/root/OpenAPI/CORS, and the `cognee-lib` `server` feature plumbing in place. No auth, no DTOs beyond health, no business logic delegation — all of that lands in P1 and onwards.
@@ -155,16 +159,16 @@ None — this is the first phase. P0 must land before any other HTTP-server impl
 
 ## 6. Acceptance criteria
 
-- [ ] `cargo check --all-targets -p cognee-http-server` succeeds.
-- [ ] `cargo build -p cognee-http-server --features bin --bin cognee-http-server` succeeds and produces a runnable binary.
-- [ ] `cargo test -p cognee-http-server` passes (inline unit tests + the four integration tests above).
-- [ ] `cargo check -p cognee-lib` (default features, no `server`) succeeds AND does not pull `axum`/`tower-http`/`hyper` into its dep graph (verify with `cargo tree -p cognee-lib | grep -E 'axum|tower-http' | wc -l` returning 0).
-- [ ] `cargo check -p cognee-lib --features server` succeeds.
-- [ ] `cargo check -p cognee-cli` succeeds and `cognee-cli` does not gain a transitive dep on `cognee-http-server`.
-- [ ] `scripts/check_all.sh` passes (fmt, clippy with `-D warnings`, capi/python/js binding checks unchanged).
-- [ ] `cognee-http-server` binary boots locally, listens on the configured host:port, and serves `/`, `/health`, `/health/detailed`, and `/openapi.json` with the documented shapes (manual smoke check via `curl`).
-- [ ] Status row for **P0** in [implementation/README.md](README.md) flips **Draft → In Progress → Done** in the PR that lands this work.
-- [ ] Status row for **health** in [routers/README.md](../routers/README.md) flips **Draft → In Progress → Done** in the same PR.
+- [x] `cargo check --all-targets -p cognee-http-server` succeeds.
+- [x] `cargo build -p cognee-http-server --features bin --bin cognee-http-server` succeeds and produces a runnable binary.
+- [x] `cargo test -p cognee-http-server` passes (inline unit tests + the four integration tests above).
+- [x] `cargo check -p cognee-lib` (default features, no `server`) succeeds AND does not pull `axum`/`tower-http`/`hyper` into its dep graph (verify with `cargo tree -p cognee-lib | grep -E 'axum|tower-http' | wc -l` returning 0).
+- [x] `cargo check -p cognee-lib --features server` succeeds.
+- [x] `cargo check -p cognee-cli` succeeds and `cognee-cli` does not gain a transitive dep on `cognee-http-server`.
+- [x] `scripts/check_all.sh` passes (fmt, clippy with `-D warnings`, capi/python/js binding checks unchanged).
+- [x] `cognee-http-server` binary boots locally, listens on the configured host:port, and serves `/`, `/health`, `/health/detailed`, and `/openapi.json` with the documented shapes (manual smoke check via `curl`).
+- [x] Status row for **P0** in [implementation/README.md](README.md) flips **Draft → In Progress → Done** in the PR that lands this work.
+- [x] Status row for **health** in [routers/README.md](../routers/README.md) flips **Draft → In Progress → Done** in the same PR.
 
 ## 7. Files touched
 
