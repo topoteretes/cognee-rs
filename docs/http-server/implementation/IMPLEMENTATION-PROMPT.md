@@ -2,6 +2,40 @@
 
 > **Read this first.** This document is the entry-point prompt for the model executing the cognee-rust HTTP server port. It defines the task list, the per-task four-agent pipeline, the sub-agent prompts you will copy-paste, and the conventions for commits / verification / status tracking.
 
+## 0. Current state (updated 2026-04-27)
+
+**Resume point: start at task 5 — P3 (pipelines + WebSocket).**
+
+Phases completed in the previous session (do NOT re-run them):
+
+| Phase | Commit | Notes |
+|---|---|---|
+| P3-prereq | `2425f19` | PipelineRunRegistry, PipelineRunRepository, TaskContext.pipeline_watcher, remember/improve refactor |
+| P0 | `323e3e1` | http-server crate scaffold, AppState, ApiError, CORS, OpenAPI, health router |
+| P1 | `0459963` | Auth stack (JWT+cookie+X-Api-Key, login/logout/me, register/reset/verify, users CRUD, api-keys) |
+| P2 | `3b4ae9e` | Write path (/add, /datasets, /ontologies, /delete, /forget); ComponentHandles in AppState |
+
+Doc-update commits: `4ab6a53` (P3-prereq), `7cf39a5` (P1), `66e8ef6` (P2). P0 docs were folded into `0459963`.
+
+**Latest commit on branch:** `66e8ef6` (`git log --oneline -1` to verify before starting).
+
+### Key architectural facts established so far
+
+- `crates/http-server/` is a standalone crate; it does **NOT** depend on `cognee-lib` to avoid a circular dep (`cognee-lib` optionally pulls in `cognee-http-server` via its `server` feature).
+- `AppState` holds `ComponentHandles` (DB, storage, delete_service, ontology_manager) and `Option<Arc<AuthContext>>`. Handlers reach component crates directly.
+- `hyper = { version = "1", features = ["full"] }` is a **direct dep** in `crates/http-server/Cargo.toml` — NOT `workspace = true` (the workspace patches hyper to a v0.14 Qdrant fork; axum 0.8 requires hyper 1.x).
+- `cognee_core::PipelineRunRegistry` and `DefaultPipelineRunRegistry` exist and are exported under the `pipeline-run-registry` feature of `cognee-core`.
+- Permission checks use `AclDb::has_permission_with_roles` (from `cognee-database`), not a `PermissionsRepository` type (which does not exist).
+- `cargo check --all-targets` is the ground truth for compilation. **rust-analyzer shows many false-positive errors** (feature-gated files appear "unlinked"; `bin`-feature-gated `main.rs` shows errors when the feature is off). Always use `cargo check`, not rust-analyzer output.
+
+### Lessons learned — apply to every remaining phase
+
+1. **Review agent `--amend` pitfall**: If the implementation agent leaves uncommitted changes and the review agent runs `git commit --amend --no-edit`, it amends the **previous** commit (not a new one), folding unrelated changes in. To prevent this: the implementation agent MUST always `git add <files> && git commit -m "..."` as its last step. If changes exist but were not committed, the review agent should create a new commit (with the correct message), not amend.
+2. **One commit per phase**: the implementation agent commits; the review agent only amends that commit (never creates a new one); the doc-update agent creates one small docs-only commit. Three agents, at most two commits per phase.
+3. **`scripts/check_all.sh` pre-existing failures**: JS binding test (`ts-jest` / Node.js version) and CLI E2E tests (require `OPENAI_TOKEN`) fail on every run — they are pre-existing and unrelated to http-server work. Both are safe to ignore in the review checklist.
+
+---
+
 You are implementing the cognee-rust HTTP server in `crates/http-server/` (and a related core change in `crates/core/`) by working sequentially through 10 implementation tasks. The design docs in [`docs/http-server/`](..) own the **what** and **why**; the per-task implementation guides in this directory own the **how**. Your job is to drive the four-agent pipeline below for each task in order, never skipping.
 
 ## 1. Mission
@@ -12,18 +46,20 @@ Port the Python cognee FastAPI server ([`cognee/api/client.py`](https://github.c
 
 Execute these tasks in order. **Do not skip ahead, do not reorder, do not run two tasks in parallel.**
 
-| # | Task | Doc | Why this position |
+Tasks 1–4 are **Done** — do not re-run them. Start at task 5.
+
+| # | Task | Doc | Status |
 |---|---|---|---|
-| 1 | **P3-prereq** — library refactor + `cognee_core::PipelineRunRegistry` | [p3-prereq-library-refactor.md](p3-prereq-library-refactor.md) | Background-pipeline machinery in `cognee-core` is a prerequisite for almost every HTTP endpoint. Lands first because the rest depends on the new types. |
-| 2 | **P0** — http-server crate scaffold (empty API) | [p0-foundation.md](p0-foundation.md) | Creates `crates/http-server/` (library + standalone `cognee-http-server` binary) with `AppState`, `ApiError`, CORS, OpenAPI bootstrap, root `/`, health router. After this the server boots. |
-| 3 | **P1** — authentication stack | [p1-auth.md](p1-auth.md) | Every later phase needs `AuthenticatedUser`. |
-| 4 | **P2** — write path | [p2-write-path.md](p2-write-path.md) | `/add`, `/update`, `/datasets`, `/ontologies`, `/delete`, `/forget`. Multipart streaming. |
-| 5 | **P3** — pipelines + WebSocket | [p3-pipelines-and-websocket.md](p3-pipelines-and-websocket.md) | Wires the registry into `/cognify`, `/memify`, `/remember`, `/improve`. |
-| 6 | **P4** — read path | [p4-read-path.md](p4-read-path.md) | `/search`, `/recall`, `/llm`, `/visualize`. |
-| 7 | **P5** — admin + RBAC | [p5-admin.md](p5-admin.md) | RBAC migration; `/permissions`, `/settings`, `/configuration`. Removes P2's permission stub. |
-| 8 | **P6** — observability | [p6-observability.md](p6-observability.md) | `SpanBufferLayer`, `/activity`, `/sync`, `/checks`. |
-| 9 | **P7** — advanced + email flows | [p7-advanced.md](p7-advanced.md) | `/notebooks` CRUD, `/responses` stub, SMTP `Mailer`. |
-| 10 | **P8** — cross-SDK HTTP parity harness | [p8-e2e-parity.md](p8-e2e-parity.md) | Drops in last; depends on all earlier phases existing. |
+| 1 | ~~**P3-prereq** — library refactor + `cognee_core::PipelineRunRegistry`~~ | [p3-prereq-library-refactor.md](p3-prereq-library-refactor.md) | **Done** `2425f19` |
+| 2 | ~~**P0** — http-server crate scaffold (empty API)~~ | [p0-foundation.md](p0-foundation.md) | **Done** `323e3e1` |
+| 3 | ~~**P1** — authentication stack~~ | [p1-auth.md](p1-auth.md) | **Done** `0459963` |
+| 4 | ~~**P2** — write path~~ | [p2-write-path.md](p2-write-path.md) | **Done** `3b4ae9e` |
+| **5** | **► P3 — pipelines + WebSocket** ← START HERE | [p3-pipelines-and-websocket.md](p3-pipelines-and-websocket.md) | **Next** |
+| 6 | **P4** — read path | [p4-read-path.md](p4-read-path.md) | Draft |
+| 7 | **P5** — admin + RBAC | [p5-admin.md](p5-admin.md) | Draft |
+| 8 | **P6** — observability | [p6-observability.md](p6-observability.md) | Draft |
+| 9 | **P7** — advanced + email flows | [p7-advanced.md](p7-advanced.md) | Draft |
+| 10 | **P8** — cross-SDK HTTP parity harness | [p8-e2e-parity.md](p8-e2e-parity.md) | Draft |
 
 The single source of truth for **status** is the table in [README.md](README.md). After every task the doc-update agent flips its row from `Draft` → `In Progress` → `Done`.
 
