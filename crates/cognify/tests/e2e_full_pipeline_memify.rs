@@ -175,14 +175,14 @@ async fn test_full_pipeline_add_cognify_memify_search_delete() {
     let cognify_result = match cognify(
         data_items,
         dataset.id,
-        None,
+        Some(owner_id),
         None,
         llm.clone() as Arc<dyn Llm>,
         storage.clone() as Arc<dyn StorageTrait>,
         graph_db.clone() as Arc<dyn GraphDBTrait>,
         vector_db.clone() as Arc<dyn VectorDB>,
         embedding_engine.clone() as Arc<dyn EmbeddingEngine>,
-        None,
+        Some(database.clone()),
         Arc::new(NoOpOntologyResolver::new()),
         &config,
     )

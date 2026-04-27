@@ -189,7 +189,7 @@ impl DeleteService {
 
         // Count graph nodes, vector points, and provenance rows from tables
         let (graph_node_count, vector_point_count, prov_node_count, prov_edge_count) =
-            self.count_graph_vector_artifacts(request, &targets).await?;
+            self.count_graph_vector_artifacts(&targets).await?;
 
         // Count search history queries that would be deleted
         let search_queries_to_delete = match &request.scope {
@@ -326,7 +326,8 @@ impl DeleteService {
 
         if is_all_scope {
             // Fast-path: wipe entire graph and all vector collections
-            let (gn, vp, pn, pe, gv_warnings) = self.cleanup_all().await?;
+            let (gn, vp, pn, pe) = self.count_graph_vector_artifacts(&targets).await?;
+            let (_, _, _, _, gv_warnings) = self.cleanup_all().await?;
             deleted_graph_nodes += gn;
             deleted_vector_points += vp;
             deleted_provenance_nodes += pn;
@@ -1119,20 +1120,12 @@ impl DeleteService {
     /// affected. Returns `(graph_nodes, vector_points, prov_nodes, prov_edges)`.
     async fn count_graph_vector_artifacts(
         &self,
-        request: &DeleteRequest,
         targets: &ResolvedDeleteTargets,
     ) -> Result<(usize, usize, usize, usize), DeleteError> {
         let mut graph_nodes = 0usize;
         let mut vector_points = 0usize;
         let mut prov_nodes = 0usize;
         let mut prov_edges = 0usize;
-
-        if matches!(request.scope, DeleteScope::All) {
-            // For All scope we cannot provide exact counts without graph_db
-            // inspection. Return 0 for now (the preview focuses on relational
-            // counts).
-            return Ok((0, 0, 0, 0));
-        }
 
         for dataset in &targets.datasets_to_delete {
             let nodes = self
@@ -2014,6 +2007,55 @@ mod tests {
         assert!(
             !vector_db.has_collection("Entity", "name").await.unwrap(),
             "vector collection should be deleted"
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_all_reports_provenance_backed_graph_and_vector_counts() {
+        let (svc, storage, db, _graph_db, _vector_db) = make_service_with_graph_vector().await;
+        let owner = Uuid::new_v4();
+        let (dataset_id, data_id) =
+            seed_dataset_with_data(&db, &storage, owner, "all_counts_ds").await;
+
+        let node_slugs = [Uuid::new_v4(), Uuid::new_v4()];
+        seed_provenance_nodes(
+            &db,
+            dataset_id,
+            data_id,
+            owner,
+            &node_slugs,
+            "Entity",
+            serde_json::json!(["name", "description"]),
+        )
+        .await;
+
+        let edge_slug = Uuid::new_v4();
+        seed_provenance_edges(&db, dataset_id, data_id, owner, &[edge_slug], "knows").await;
+
+        let request = DeleteRequest {
+            scope: DeleteScope::All,
+            mode: DeleteMode::Soft,
+        };
+
+        let preview = svc.preview(&request).await.expect("preview should succeed");
+        assert_eq!(preview.graph_nodes_to_delete, 2);
+        assert_eq!(preview.vector_points_to_delete, 6);
+        assert_eq!(preview.provenance_nodes_to_delete, 2);
+        assert_eq!(preview.provenance_edges_to_delete, 1);
+
+        let result = svc.execute(&request).await.expect("execute should succeed");
+        assert_eq!(result.deleted_graph_nodes, preview.graph_nodes_to_delete);
+        assert_eq!(
+            result.deleted_vector_points,
+            preview.vector_points_to_delete
+        );
+        assert_eq!(
+            result.deleted_provenance_nodes,
+            preview.provenance_nodes_to_delete
+        );
+        assert_eq!(
+            result.deleted_provenance_edges,
+            preview.provenance_edges_to_delete
         );
     }
 
