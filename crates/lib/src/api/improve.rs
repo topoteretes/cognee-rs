@@ -48,6 +48,9 @@ pub struct ImproveResult {
 }
 
 /// Bidirectional session-graph bridge.
+///
+/// Background dispatch is a host-side concern — this function is strictly
+/// synchronous. Stage 4 always runs when sessions are present.
 #[allow(clippy::too_many_arguments)]
 pub async fn improve(
     dataset_name: &str,
@@ -56,7 +59,6 @@ pub async fn improve(
     owner_id: Uuid,
     tenant_id: Option<Uuid>,
     feedback_alpha: f64,
-    run_in_background: bool,
     llm: Arc<dyn Llm>,
     storage: Arc<dyn StorageTrait>,
     graph_db: Arc<dyn GraphDBTrait>,
@@ -194,8 +196,8 @@ pub async fn improve(
 
     // ---- Stage 4: Sync Graph to Session Cache ----
     //
-    // Skipped when `run_in_background=true` (Python `improve.py:152`).
-    if has_sessions && !run_in_background {
+    // Stage 4 always runs when sessions are present (background dispatch is host-side).
+    if has_sessions {
         let sids = session_ids
             .as_ref()
             .expect("has_sessions guarantees session_ids is Some with non-empty vec");

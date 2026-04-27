@@ -1038,6 +1038,7 @@ mod tests {
             progress: ProgressToken::new(),
             pipeline_ctx: None,
             exec_status: Arc::new(NoopExecStatusManager),
+            pipeline_watcher: None,
         })
     }
 

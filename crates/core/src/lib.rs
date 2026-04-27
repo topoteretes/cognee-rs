@@ -23,6 +23,9 @@ pub mod task;
 pub mod task_context;
 pub mod thread_pool;
 
+#[cfg(feature = "pipeline-run-registry")]
+pub mod pipeline_run_registry;
+
 pub use cancellation::{CancellationHandle, CancellationToken, cancellation_pair};
 pub use error::CoreError;
 pub use exec_status::{ExecStatusManager, NoopExecStatusManager};
@@ -40,3 +43,13 @@ pub use task::{
 };
 pub use task_context::{PipelineContext, TaskContext, TaskContextBuilder};
 pub use thread_pool::{CpuPool, CpuPoolExt, RayonThreadPool};
+
+#[cfg(feature = "pipeline-run-registry")]
+pub use pipeline_run_registry::{
+    DefaultPipelineRunRegistry, PipelineFuture, PipelineRunRegistry, RegistryConfig, RegistryError,
+    RunEvent, RunEventKind, RunHandle, RunOutcome, RunPhase, RunSpec, ScopedRunWatcher,
+};
+
+// Re-export the repository trait from cognee-database for ergonomics.
+// This is unconditional — the trait costs nothing if unused.
+pub use cognee_database::PipelineRunRepository;

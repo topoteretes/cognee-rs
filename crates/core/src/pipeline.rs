@@ -1222,6 +1222,7 @@ mod tests {
             progress: ProgressToken::new(),
             pipeline_ctx: None,
             exec_status: Arc::new(NoopExecStatusManager),
+            pipeline_watcher: None,
         })
     }
 
@@ -1376,6 +1377,7 @@ mod tests {
             progress: ProgressToken::new(),
             pipeline_ctx: None,
             exec_status: Arc::new(NoopExecStatusManager),
+            pipeline_watcher: None,
         });
 
         // Cancel before execute so the check at execute_from catches it.
@@ -2307,6 +2309,7 @@ mod tests {
             progress: progress.clone(),
             pipeline_ctx: None,
             exec_status: Arc::new(NoopExecStatusManager),
+            pipeline_watcher: None,
         });
 
         // weight 1 (25%) and weight 3 (75%)

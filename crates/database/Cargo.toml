@@ -26,6 +26,7 @@ serde.workspace = true
 serde_json.workspace = true
 
 [dev-dependencies]
+cognee-models = { path = "../models" }
 cognee-test-utils = { path = "../test-utils" }
 serial_test.workspace = true
 tokio.workspace = true

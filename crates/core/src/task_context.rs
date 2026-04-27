@@ -9,6 +9,7 @@ use crate::{
     cancellation::{CancellationHandle, CancellationToken, cancellation_pair},
     error::CoreError,
     exec_status::{ExecStatusManager, NoopExecStatusManager},
+    pipeline::PipelineWatcher,
     progress::ProgressToken,
     task::Value,
     thread_pool::CpuPool,
@@ -51,6 +52,13 @@ pub struct TaskContext {
     pub pipeline_ctx: Option<PipelineContext>,
     /// Per-item incremental status tracker (deduplication / resume).
     pub exec_status: Arc<dyn ExecStatusManager>,
+    /// Optional pipeline watcher injected by the registry.
+    ///
+    /// When set, the pipeline executor routes lifecycle events here in addition
+    /// to (or instead of) any watcher passed directly to `execute()`. Set by
+    /// `PipelineRunRegistry` so library functions can publish events without
+    /// knowing about the registry.
+    pub pipeline_watcher: Option<Arc<dyn PipelineWatcher>>,
 }
 
 impl TaskContext {
@@ -76,6 +84,7 @@ impl TaskContext {
             progress,
             pipeline_ctx: self.pipeline_ctx.clone(),
             exec_status: Arc::clone(&self.exec_status),
+            pipeline_watcher: self.pipeline_watcher.clone(),
         })
     }
 
@@ -98,6 +107,7 @@ impl TaskContext {
             progress: self.progress.clone(),
             pipeline_ctx: Some(pipeline_ctx),
             exec_status: Arc::clone(&self.exec_status),
+            pipeline_watcher: self.pipeline_watcher.clone(),
         })
     }
 }
@@ -123,6 +133,7 @@ pub struct TaskContextBuilder {
     progress: Option<ProgressToken>,
     pipeline_ctx: Option<PipelineContext>,
     exec_status: Option<Arc<dyn ExecStatusManager>>,
+    pipeline_watcher: Option<Arc<dyn PipelineWatcher>>,
 }
 
 impl TaskContextBuilder {
@@ -169,6 +180,16 @@ impl TaskContextBuilder {
         self
     }
 
+    /// Inject a pipeline watcher into the context.
+    ///
+    /// When set, the registry's `ScopedRunWatcher` is stored here so that
+    /// library functions can publish lifecycle events without needing to know
+    /// about the registry. Defaults to `None` (no watcher).
+    pub fn pipeline_watcher(mut self, w: Arc<dyn PipelineWatcher>) -> Self {
+        self.pipeline_watcher = Some(w);
+        self
+    }
+
     /// Build the context. Returns `(CancellationHandle, TaskContext)` so the
     /// caller keeps the handle while the task receives the token.
     pub fn build(self) -> Result<(CancellationHandle, TaskContext), CoreError> {
@@ -198,6 +219,7 @@ impl TaskContextBuilder {
             exec_status: self
                 .exec_status
                 .unwrap_or_else(|| Arc::new(NoopExecStatusManager)),
+            pipeline_watcher: self.pipeline_watcher,
         };
 
         Ok((handle, ctx))

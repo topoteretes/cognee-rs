@@ -2,7 +2,7 @@
 //!
 //! Covers:
 //! * Session-mode storage (status=SessionStored, session_ids populated).
-//! * Session-mode `self_improvement=true` → awaitable background bridge.
+//! * Session-mode `self_improvement=true` → inline synchronous bridge.
 //! * `RememberResult` serde / display / `is_success` / `done` truth table.
 //!
 //! Permanent-mode end-to-end tests (which require a full cognify pipeline)
@@ -103,7 +103,6 @@ async fn remember_session_stores_qa_entry() {
         "ds_store_only",
         Some(session_id),
         /* self_improvement= */ false,
-        /* run_in_background= */ false,
         owner,
         None,
         Arc::clone(&h.add_pipeline),
@@ -142,7 +141,7 @@ async fn remember_session_stores_qa_entry() {
 }
 
 #[tokio::test]
-async fn remember_session_self_improvement_returns_awaitable() {
+async fn remember_session_self_improvement_runs_inline() {
     let h = make_harness().await;
     let owner = Uuid::new_v4();
     let session_id = "sess-bridge";
@@ -152,7 +151,6 @@ async fn remember_session_self_improvement_returns_awaitable() {
         "ds_bridge",
         Some(session_id),
         /* self_improvement= */ true,
-        /* run_in_background= */ false,
         owner,
         None,
         Arc::clone(&h.add_pipeline),
@@ -171,17 +169,11 @@ async fn remember_session_self_improvement_returns_awaitable() {
     .await
     .expect("remember session with bridge");
 
-    // Initial return carries SessionStored — the improve task is running in background.
+    // Synchronous — always SessionStored, done immediately.
     assert_eq!(result.status, RememberStatus::SessionStored);
     assert_eq!(result.items_processed, 1);
-
-    // Awaiting completion drains the background improve task — should not propagate errors.
-    let awaited = result
-        .await_completion()
-        .await
-        .expect("await_completion succeeds");
-    // Session-mode always ends as SessionStored regardless of improve inner result.
-    assert_eq!(awaited.status, RememberStatus::SessionStored);
+    // done() is always true for any status.
+    assert!(result.done());
 }
 
 #[tokio::test]
@@ -194,7 +186,6 @@ async fn remember_session_requires_session_store() {
         vec![DataInput::Text("x".to_string())],
         "ds_nostore",
         Some("sess-nostore"),
-        false,
         false,
         owner,
         None,
@@ -228,7 +219,6 @@ async fn display_and_to_dict_on_session_result() {
         vec![DataInput::Text("display test".to_string())],
         "ds_display",
         Some("sess-display"),
-        false,
         false,
         owner,
         None,
@@ -265,9 +255,10 @@ async fn display_and_to_dict_on_session_result() {
         obj.get("dataset_name").and_then(|v| v.as_str()),
         Some("ds_display")
     );
-    // cognify_result, memify_result, inner are #[serde(skip)] — absent.
+    // cognify_result, memify_result are #[serde(skip)] — absent.
     assert!(!obj.contains_key("cognify_result"));
     assert!(!obj.contains_key("memify_result"));
+    // inner is gone from the struct entirely.
     assert!(!obj.contains_key("inner"));
 }
 
@@ -286,63 +277,4 @@ fn remember_item_info_serde_roundtrip() {
     assert_eq!(back.token_count, Some(42));
     assert_eq!(back.data_size, Some(1024));
     assert_eq!(back.content_hash.as_deref(), Some("abcdef"));
-}
-
-// ---------------------------------------------------------------------------
-// Permanent-mode background test
-// ---------------------------------------------------------------------------
-
-#[tokio::test]
-async fn remember_permanent_background_returns_running_then_completes() {
-    // Exercise the permanent-mode background path: the initial result should
-    // carry `status = Running` with no populated fields, and awaiting
-    // completion should drive it to a terminal state (Completed or Errored).
-    let h = make_harness().await;
-    let owner = Uuid::new_v4();
-
-    let result = remember(
-        vec![DataInput::Text("background permanent text".to_string())],
-        "ds_bg_perm",
-        /* session_id= */ None,
-        /* self_improvement= */ false,
-        /* run_in_background= */ true,
-        owner,
-        None,
-        Arc::clone(&h.add_pipeline),
-        mock_llm(),
-        Arc::clone(&h.storage),
-        h.graph_db.clone() as Arc<_>,
-        h.vector_db.clone() as Arc<_>,
-        h.embedding_engine.clone() as Arc<_>,
-        Some(Arc::clone(&h.db)),
-        Some(Arc::clone(&h.session_store)),
-        Some(Arc::clone(&h.session_manager)),
-        Some(h.checkpoint_store.clone() as Arc<_>),
-        Arc::clone(&h.ontology),
-        Arc::new(CognifyConfig::default()),
-    )
-    .await
-    .expect("remember background");
-
-    // Initial state: Running, not done, not success.
-    assert_eq!(result.status, RememberStatus::Running);
-    assert!(!result.done());
-    assert!(!result.is_success());
-    assert_eq!(result.dataset_name, "ds_bg_perm");
-    assert!(result.dataset_id.is_none());
-    assert!(result.items.is_empty());
-
-    // Drive to completion.
-    let awaited = result
-        .await_completion()
-        .await
-        .expect("await_completion succeeds");
-    assert!(awaited.done(), "status after await = {:?}", awaited.status);
-    // Completed on success, Errored on pipeline failure — either is a valid
-    // terminal state for this smoke test; both imply the background task
-    // was drained and the shared inner state was refreshed.
-    assert!(matches!(
-        awaited.status,
-        RememberStatus::Completed | RememberStatus::Errored
-    ));
 }

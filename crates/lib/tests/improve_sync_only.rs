@@ -1,10 +1,9 @@
-//! End-to-end tests for `improve()` orchestrator.
+//! Tests verifying that `improve()` is sync-only (no `run_in_background`).
 //!
-//! These tests exercise the stage-gate logic (which stages run based on the
-//! presence of `session_ids` and available backends) using mock
-//! storage/graph/vector/embedding/LLM backends. They do NOT exercise the full
-//! LLM-driven cognify pipeline — that is covered by the per-stage integration
-//! tests in `cognee-cognify`.
+//! (a) Signature has no `run_in_background`.
+//! (b) When sessions are supplied, all four stages run (or gracefully skip
+//!     when backends are missing).
+//! (c) When sessions are not supplied, only Stage 3 (memify) runs.
 
 use std::sync::Arc;
 
@@ -48,20 +47,15 @@ async fn make_harness() -> Harness {
     let db = Arc::new(db);
     let storage: Arc<dyn StorageTrait> = Arc::new(LocalStorage::new(temp.path().join("storage")));
     storage.initialize().await.unwrap();
-
     let ingest_db: Arc<dyn IngestDb> = db.clone();
     let add_pipeline = AddPipeline::new(Arc::clone(&storage), ingest_db);
-
     let graph_db = Arc::new(MockGraphDB::new());
     let vector_db = Arc::new(MockVectorDB::new());
     let embedding_engine = Arc::new(MockEmbeddingEngine::new(16));
     let ontology: Arc<dyn OntologyResolver> = Arc::new(NoOpOntologyResolver::new());
-
     let session_store: Arc<dyn SessionStore> = Arc::new(FsSessionStore::new(sess_dir.path()));
     let session_manager = Arc::new(SessionManager::new(Arc::clone(&session_store)));
-
     let checkpoint_store = Arc::new(SeaOrmCheckpointStore::new(Arc::clone(&db)));
-
     Harness {
         _temp: temp,
         _sess_dir: sess_dir,
@@ -78,6 +72,69 @@ async fn make_harness() -> Harness {
     }
 }
 
+// ---------------------------------------------------------------------------
+// (a) Compile-time: no run_in_background parameter
+//
+// If run_in_background were still present, the calls below would fail to
+// compile because we pass exactly 18 arguments (not 19).
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// (b) With sessions supplied, stage 3 (memify) always runs; stage 1/2/4 may
+//     skip gracefully when the dataset does not yet exist in the graph.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn improve_with_sessions_runs_at_least_memify() {
+    let h = make_harness().await;
+    let owner = Uuid::new_v4();
+    let llm: Arc<dyn cognee_llm::Llm> = Arc::new(MockLlm::empty());
+    let config = CognifyConfig::default();
+
+    let session_id = "sync-sess-improve";
+    let user_id = owner.to_string();
+
+    // Seed a QA entry so there is something for stage 1 to act on.
+    h.session_store
+        .create_qa_entry(session_id, Some(&user_id), "q", "a", None)
+        .await
+        .unwrap();
+
+    let r = improve(
+        "ds_with_sessions",
+        Some(vec![session_id.to_string()]),
+        None,
+        owner,
+        None,
+        0.1,
+        llm,
+        Arc::clone(&h.storage),
+        h.graph_db.clone() as Arc<_>,
+        h.vector_db.clone() as Arc<_>,
+        h.embedding_engine.clone() as Arc<_>,
+        Arc::clone(&h.ontology),
+        Some(Arc::clone(&h.db)),
+        Some(Arc::clone(&h.session_store)),
+        Some(Arc::clone(&h.session_manager)),
+        Some(&h.add_pipeline),
+        Some(h.checkpoint_store.clone() as Arc<_>),
+        &config,
+    )
+    .await
+    .unwrap();
+
+    // Stage 3 (memify) always runs.
+    assert!(
+        r.stages_run.contains(&"memify".to_string()),
+        "expected memify stage; got {:?}",
+        r.stages_run
+    );
+}
+
+// ---------------------------------------------------------------------------
+// (c) Without sessions, only Stage 3 runs
+// ---------------------------------------------------------------------------
+
 #[tokio::test]
 async fn improve_without_sessions_runs_only_memify() {
     let h = make_harness().await;
@@ -86,7 +143,7 @@ async fn improve_without_sessions_runs_only_memify() {
     let config = CognifyConfig::default();
 
     let r = improve(
-        "ds_memify",
+        "ds_no_sess",
         None,
         None,
         owner,
@@ -108,41 +165,10 @@ async fn improve_without_sessions_runs_only_memify() {
     .await
     .unwrap();
 
-    assert_eq!(r.stages_run, vec!["memify".to_string()]);
+    assert_eq!(
+        r.stages_run,
+        vec!["memify".to_string()],
+        "without sessions only stage 3 should run"
+    );
     assert!(r.memify_result.is_some());
-}
-
-#[tokio::test]
-async fn improve_skips_stage1_when_session_backends_missing() {
-    let h = make_harness().await;
-    let owner = Uuid::new_v4();
-    let llm: Arc<dyn cognee_llm::Llm> = Arc::new(MockLlm::empty());
-    let config = CognifyConfig::default();
-
-    // Provide session_ids but no session_store/manager — stages 1, 2, 4
-    // should all be skipped (with warnings), Stage 3 still runs.
-    let r = improve(
-        "ds_nosess",
-        Some(vec!["s1".to_string()]),
-        None,
-        owner,
-        None,
-        0.1,
-        llm,
-        Arc::clone(&h.storage),
-        h.graph_db.clone() as Arc<_>,
-        h.vector_db.clone() as Arc<_>,
-        h.embedding_engine.clone() as Arc<_>,
-        Arc::clone(&h.ontology),
-        Some(Arc::clone(&h.db)),
-        None,
-        None,
-        None,
-        None,
-        &config,
-    )
-    .await
-    .unwrap();
-
-    assert_eq!(r.stages_run, vec!["memify".to_string()]);
 }

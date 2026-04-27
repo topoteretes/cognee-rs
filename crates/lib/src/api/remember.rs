@@ -22,7 +22,6 @@ use cognee_session::{SessionManager, SessionStore};
 use cognee_storage::StorageTrait;
 use cognee_vector::VectorDB;
 use serde::{Deserialize, Serialize};
-use tokio::sync::Mutex as AsyncMutex;
 use tracing::{info, warn};
 use uuid::Uuid;
 
@@ -33,8 +32,6 @@ use super::improve::improve;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RememberStatus {
-    /// Pipeline spawned and still running (background mode).
-    Running,
     /// Pipeline finished successfully.
     Completed,
     /// Pipeline finished with an error.
@@ -56,32 +53,10 @@ pub struct RememberItemInfo {
     pub mime_type: Option<String>,
 }
 
-/// Inner state shared between a `RememberResult` handle and its background task.
-///
-/// The background task writes `status`, `error`, `elapsed_seconds`, etc. as it
-/// runs; callers observe the latest state by calling `await_completion()`.
-#[derive(Debug, Default)]
-struct RememberResultInner {
-    status: Option<RememberStatus>,
-    error: Option<String>,
-    elapsed_seconds: f64,
-    dataset_id: Option<Uuid>,
-    pipeline_run_id: Option<Uuid>,
-    items: Vec<RememberItemInfo>,
-    items_processed: usize,
-    content_hash: Option<String>,
-    cognify_result: Option<CognifyResult>,
-    memify_result: Option<MemifyResult>,
-    join_handle: Option<tokio::task::JoinHandle<()>>,
-}
-
 /// Result of a `remember()` call.
 ///
-/// Acts as a lightweight promise wrapper:
-/// * Blocking mode — fields are populated before the function returns.
-/// * Background mode — fields carry partial/initial state; call
-///   [`RememberResult::await_completion`] to block until the background
-///   pipeline finishes and refresh fields from the shared inner state.
+/// All fields are populated before the function returns — `remember()` is
+/// strictly synchronous.
 #[derive(Debug, Clone, Serialize)]
 pub struct RememberResult {
     pub status: RememberStatus,
@@ -99,9 +74,6 @@ pub struct RememberResult {
     pub cognify_result: Option<CognifyResult>,
     #[serde(skip)]
     pub memify_result: Option<MemifyResult>,
-    /// Shared state for background-mode awaiting. `None` for blocking results.
-    #[serde(skip)]
-    inner: Option<Arc<AsyncMutex<RememberResultInner>>>,
 }
 
 impl RememberResult {
@@ -118,62 +90,12 @@ impl RememberResult {
         )
     }
 
-    /// `true` if the pipeline has finished (success, error, or stored).
-    /// `Running` is the only status that returns `false`.
-    pub fn done(&self) -> bool {
-        self.status != RememberStatus::Running
-    }
-
-    /// Wait for the background task (if any) and refresh fields from shared
-    /// inner state. Mirrors Python's `await result`.
+    /// `true` always — every `RememberStatus` variant is terminal.
     ///
-    /// Safe to call on blocking results — it is a no-op in that case.
-    pub async fn await_completion(mut self) -> Result<Self, ApiError> {
-        let Some(inner) = self.inner.clone() else {
-            return Ok(self);
-        };
-
-        // Take the handle out of inner to release the lock before awaiting it.
-        let handle = {
-            let mut guard = inner.lock().await;
-            guard.join_handle.take()
-        };
-        if let Some(h) = handle {
-            // If the task panicked, return the JoinError; otherwise discard its
-            // () output — the task writes all state into `inner`.
-            h.await?;
-        }
-
-        let guard = inner.lock().await;
-        if let Some(s) = guard.status {
-            self.status = s;
-        }
-        if let Some(ref e) = guard.error {
-            self.error = Some(e.clone());
-        }
-        if guard.elapsed_seconds > 0.0 {
-            self.elapsed_seconds = guard.elapsed_seconds;
-        }
-        if guard.dataset_id.is_some() {
-            self.dataset_id = guard.dataset_id;
-        }
-        if guard.pipeline_run_id.is_some() {
-            self.pipeline_run_id = guard.pipeline_run_id;
-        }
-        if !guard.items.is_empty() {
-            self.items = guard.items.clone();
-            self.items_processed = guard.items_processed;
-        }
-        if guard.content_hash.is_some() {
-            self.content_hash = guard.content_hash.clone();
-        }
-        if guard.cognify_result.is_some() {
-            self.cognify_result = guard.cognify_result.clone();
-        }
-        if guard.memify_result.is_some() {
-            self.memify_result = guard.memify_result.clone();
-        }
-        Ok(self)
+    /// `remember()` is synchronous; the result is always in a terminal state
+    /// by the time the function returns.
+    pub fn done(&self) -> bool {
+        true
     }
 }
 
@@ -222,23 +144,22 @@ impl fmt::Display for RememberResult {
 /// 2. `cognify()` to extract knowledge graph.
 /// 3. If `self_improvement=true`, `memify()` to enrich with triplet embeddings.
 ///
-/// When `run_in_background` is `true`, the whole pipeline is spawned on a tokio
-/// task and the returned `RememberResult` has `status = Running`. Call
-/// [`RememberResult::await_completion`] to block until the task finishes.
-///
 /// **Session Memory Mode** (with `session_id`):
 /// 1. Convert data inputs to text.
 /// 2. Store in session cache as Q&A entry.
-/// 3. If `self_improvement=true`, spawn `improve(session_ids=[session_id])`
-///    in the background. The bridge failures are logged but never surface
-///    as an error to the caller (matches Python `_session_improve()`).
+/// 3. If `self_improvement=true`, run `improve(session_ids=[session_id])`
+///    inline. Failures are logged but never surface as an error to the caller
+///    (matches Python `_session_improve()` semantics).
+///
+/// This function is strictly synchronous — it always returns a
+/// fully-populated [`RememberResult`]. Background dispatch is a host-side
+/// concern (e.g. the HTTP server via `PipelineRunRegistry::register_background`).
 #[allow(clippy::too_many_arguments)]
 pub async fn remember(
     data: Vec<DataInput>,
     dataset_name: &str,
     session_id: Option<&str>,
     self_improvement: bool,
-    run_in_background: bool,
     owner_id: Uuid,
     tenant_id: Option<Uuid>,
     add_pipeline: Arc<AddPipeline>,
@@ -283,30 +204,6 @@ pub async fn remember(
     }
 
     // -- Permanent Memory Mode --
-    if run_in_background {
-        return remember_permanent_background(
-            data,
-            dataset_name.to_string(),
-            self_improvement,
-            owner_id,
-            tenant_id,
-            add_pipeline,
-            llm,
-            storage,
-            graph_db,
-            vector_db,
-            embedding_engine,
-            db,
-            session_store,
-            session_manager,
-            checkpoint_store,
-            ontology_resolver,
-            cognify_config,
-            start,
-        )
-        .await;
-    }
-
     remember_permanent_blocking(
         data,
         dataset_name,
@@ -320,9 +217,6 @@ pub async fn remember(
         vector_db,
         embedding_engine,
         db,
-        session_store,
-        session_manager,
-        checkpoint_store,
         ontology_resolver,
         &cognify_config,
         start,
@@ -334,8 +228,7 @@ pub async fn remember(
 // Permanent mode: blocking
 // ---------------------------------------------------------------------------
 
-/// Outcome of the permanent-mode pipeline, shared between the blocking and
-/// background implementations.
+/// Outcome of the permanent-mode pipeline.
 struct PermanentOutcome {
     dataset_id: Uuid,
     pipeline_run_id: Uuid,
@@ -455,9 +348,6 @@ async fn remember_permanent_blocking(
     vector_db: Arc<dyn VectorDB>,
     embedding_engine: Arc<dyn EmbeddingEngine>,
     db: Option<Arc<DatabaseConnection>>,
-    _session_store: Option<Arc<dyn SessionStore>>,
-    _session_manager: Option<Arc<SessionManager>>,
-    _checkpoint_store: Option<Arc<dyn CheckpointStore>>,
     ontology_resolver: Arc<dyn OntologyResolver>,
     cognify_config: &CognifyConfig,
     start: Instant,
@@ -495,97 +385,6 @@ async fn remember_permanent_blocking(
         error: None,
         cognify_result: Some(outcome.cognify_result),
         memify_result: outcome.memify_result,
-        inner: None,
-    })
-}
-
-// ---------------------------------------------------------------------------
-// Permanent mode: background
-// ---------------------------------------------------------------------------
-
-#[allow(clippy::too_many_arguments)]
-async fn remember_permanent_background(
-    data: Vec<DataInput>,
-    dataset_name: String,
-    self_improvement: bool,
-    owner_id: Uuid,
-    tenant_id: Option<Uuid>,
-    add_pipeline: Arc<AddPipeline>,
-    llm: Arc<dyn Llm>,
-    storage: Arc<dyn StorageTrait>,
-    graph_db: Arc<dyn GraphDBTrait>,
-    vector_db: Arc<dyn VectorDB>,
-    embedding_engine: Arc<dyn EmbeddingEngine>,
-    db: Option<Arc<DatabaseConnection>>,
-    _session_store: Option<Arc<dyn SessionStore>>,
-    _session_manager: Option<Arc<SessionManager>>,
-    _checkpoint_store: Option<Arc<dyn CheckpointStore>>,
-    ontology_resolver: Arc<dyn OntologyResolver>,
-    cognify_config: Arc<CognifyConfig>,
-    start: Instant,
-) -> Result<RememberResult, ApiError> {
-    let inner = Arc::new(AsyncMutex::new(RememberResultInner::default()));
-    let inner_task = Arc::clone(&inner);
-    let dataset_name_task = dataset_name.clone();
-
-    let handle = tokio::spawn(async move {
-        let pipeline_result = run_permanent_inner(
-            data,
-            &dataset_name_task,
-            self_improvement,
-            owner_id,
-            tenant_id,
-            &add_pipeline,
-            llm,
-            storage,
-            graph_db,
-            vector_db,
-            embedding_engine,
-            db,
-            ontology_resolver,
-            &cognify_config,
-        )
-        .await;
-
-        let mut guard = inner_task.lock().await;
-        guard.elapsed_seconds = start.elapsed().as_secs_f64();
-        match pipeline_result {
-            Ok(outcome) => {
-                guard.status = Some(RememberStatus::Completed);
-                guard.dataset_id = Some(outcome.dataset_id);
-                guard.pipeline_run_id = Some(outcome.pipeline_run_id);
-                guard.items_processed = outcome.items_processed;
-                guard.items = outcome.items;
-                guard.content_hash = outcome.content_hash;
-                guard.cognify_result = Some(outcome.cognify_result);
-                guard.memify_result = outcome.memify_result;
-            }
-            Err(e) => {
-                guard.status = Some(RememberStatus::Errored);
-                guard.error = Some(e.to_string());
-            }
-        }
-    });
-
-    {
-        let mut guard = inner.lock().await;
-        guard.join_handle = Some(handle);
-    }
-
-    Ok(RememberResult {
-        status: RememberStatus::Running,
-        dataset_name,
-        dataset_id: None,
-        session_ids: None,
-        pipeline_run_id: None,
-        elapsed_seconds: 0.0,
-        content_hash: None,
-        items_processed: 0,
-        items: Vec::new(),
-        error: None,
-        cognify_result: None,
-        memify_result: None,
-        inner: Some(inner),
     })
 }
 
@@ -595,8 +394,9 @@ async fn remember_permanent_background(
 
 /// Session-mode remember: store data as Q&A text in the session cache.
 ///
-/// When `self_improvement=true`, spawns a background `improve()` call with the
-/// given `session_id`. Background failures are logged but never propagated.
+/// When `self_improvement=true`, runs `improve()` inline (synchronously).
+/// Session-improve failures are logged but never propagated — matches Python's
+/// `_session_improve()` semantics.
 #[allow(clippy::too_many_arguments)]
 async fn remember_session(
     data: &[DataInput],
@@ -649,79 +449,49 @@ async fn remember_session(
         "remember: stored data in session cache"
     );
 
-    // Optional self-improvement via improve() in the background.
-    let inner = if self_improvement {
-        let inner = Arc::new(AsyncMutex::new(RememberResultInner::default()));
-        let inner_task = Arc::clone(&inner);
-        let dataset_name_task = dataset_name.to_string();
-        let sid_task = session_id.to_string();
-        let add_pipeline_task = Arc::clone(&add_pipeline);
-        let llm_task = Arc::clone(&llm);
-        let storage_task = Arc::clone(&storage);
-        let graph_db_task = Arc::clone(&graph_db);
-        let vector_db_task = Arc::clone(&vector_db);
-        let embedding_engine_task = Arc::clone(&embedding_engine);
-        let db_task = db.clone();
-        let session_store_task = session_store.clone();
-        let session_manager_task = session_manager.clone();
-        let checkpoint_store_task = checkpoint_store.clone();
-        let ontology_task = Arc::clone(&ontology_resolver);
-        let cognify_config_task = Arc::clone(&cognify_config);
+    // Optional self-improvement via improve() — inline (synchronous).
+    let mut improve_error: Option<String> = None;
+    if self_improvement {
+        let improve_result = improve(
+            dataset_name,
+            Some(vec![session_id.to_string()]),
+            None,
+            owner_id,
+            tenant_id,
+            0.1, // default feedback_alpha
+            llm,
+            storage,
+            graph_db,
+            vector_db,
+            embedding_engine,
+            ontology_resolver,
+            db,
+            session_store,
+            session_manager,
+            Some(add_pipeline.as_ref()),
+            checkpoint_store,
+            &cognify_config,
+        )
+        .await;
 
-        let handle = tokio::spawn(async move {
-            let improve_result = improve(
-                &dataset_name_task,
-                Some(vec![sid_task.clone()]),
-                None,
-                owner_id,
-                tenant_id,
-                0.1, // default feedback_alpha
-                false,
-                llm_task,
-                storage_task,
-                graph_db_task,
-                vector_db_task,
-                embedding_engine_task,
-                ontology_task,
-                db_task,
-                session_store_task,
-                session_manager_task,
-                Some(add_pipeline_task.as_ref()),
-                checkpoint_store_task,
-                &cognify_config_task,
-            )
-            .await;
-
-            let mut guard = inner_task.lock().await;
-            guard.elapsed_seconds = start.elapsed().as_secs_f64();
-            match improve_result {
-                Ok(_) => {
-                    guard.status = Some(RememberStatus::SessionStored);
-                    info!(
-                        session_id = %sid_task,
-                        "remember: session bridged to permanent graph"
-                    );
-                }
-                Err(e) => {
-                    // Session-improve failures are non-fatal — record and log.
-                    guard.error = Some(e.to_string());
-                    guard.status = Some(RememberStatus::SessionStored);
-                    warn!(
-                        session_id = %sid_task,
-                        "remember: session improve failed (non-fatal): {e}"
-                    );
-                }
+        match improve_result {
+            Ok(_) => {
+                info!(
+                    session_id = session_id,
+                    "remember: session bridged to permanent graph"
+                );
             }
-        });
-
-        {
-            let mut guard = inner.lock().await;
-            guard.join_handle = Some(handle);
+            Err(e) => {
+                // Session-improve failures are non-fatal — record and log.
+                let msg = e.to_string();
+                warn!(
+                    session_id = session_id,
+                    "remember: session improve failed (non-fatal): {msg}"
+                );
+                improve_error = Some(msg);
+            }
         }
-        Some(inner)
-    } else {
-        None
-    };
+    }
 
     let elapsed = start.elapsed().as_secs_f64();
 
@@ -735,10 +505,9 @@ async fn remember_session(
         content_hash: None,
         items_processed: data.len(),
         items: vec![],
-        error: None,
+        error: improve_error,
         cognify_result: None,
         memify_result: None,
-        inner,
     })
 }
 
@@ -751,12 +520,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn remember_status_serde_roundtrip_running() {
-        let s = RememberStatus::Running;
+    fn remember_status_serde_roundtrip_errored() {
+        let s = RememberStatus::Errored;
         let j = serde_json::to_string(&s).expect("serialize");
-        assert_eq!(j, "\"running\"");
+        assert_eq!(j, "\"errored\"");
         let back: RememberStatus = serde_json::from_str(&j).expect("deserialize");
-        assert_eq!(back, RememberStatus::Running);
+        assert_eq!(back, RememberStatus::Errored);
     }
 
     #[test]
@@ -771,14 +540,23 @@ mod tests {
     }
 
     #[test]
-    fn is_success_running_and_errored() {
-        let mut r = sample_result(RememberStatus::Running);
+    fn is_success_errored() {
+        let r = sample_result(RememberStatus::Errored);
         assert!(!r.is_success());
-        assert!(!r.done());
-
-        r.status = RememberStatus::Errored;
-        assert!(!r.is_success());
+        // done() is always true — every status is terminal.
         assert!(r.done());
+    }
+
+    #[test]
+    fn all_statuses_are_done() {
+        for status in [
+            RememberStatus::Completed,
+            RememberStatus::Errored,
+            RememberStatus::SessionStored,
+        ] {
+            let r = sample_result(status);
+            assert!(r.done(), "expected done() == true for {status:?}");
+        }
     }
 
     #[test]
@@ -799,10 +577,9 @@ mod tests {
         let obj = v.as_object().expect("object");
         assert!(obj.contains_key("status"));
         assert!(obj.contains_key("dataset_name"));
-        // cognify_result / memify_result / inner are #[serde(skip)]
+        // cognify_result / memify_result are #[serde(skip)]
         assert!(!obj.contains_key("cognify_result"));
         assert!(!obj.contains_key("memify_result"));
-        assert!(!obj.contains_key("inner"));
     }
 
     #[test]
@@ -828,7 +605,6 @@ mod tests {
             error: None,
             cognify_result: None,
             memify_result: None,
-            inner: None,
         }
     }
 }
