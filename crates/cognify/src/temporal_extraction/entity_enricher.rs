@@ -19,6 +19,13 @@ struct RawEnrichedEvent {
     pub attributes: Vec<RawAttribute>,
 }
 
+/// Object wrapper for structured-output APIs that require a root JSON object.
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+struct RawEnrichedEventsOutput {
+    #[serde(default)]
+    pub events: Vec<RawEnrichedEvent>,
+}
+
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 struct RawAttribute {
     pub entity: String,
@@ -42,6 +49,10 @@ impl TemporalEntityEnricher {
         &self,
         mut events: Vec<TemporalEvent>,
     ) -> Result<Vec<TemporalEvent>, CognifyError> {
+        if events.is_empty() {
+            return Ok(events);
+        }
+
         // Build the user prompt: serialise event name + description as the input list.
         let input: Vec<serde_json::Value> = events
             .iter()
@@ -62,9 +73,9 @@ impl TemporalEntityEnricher {
             ..Default::default()
         };
 
-        let enriched: Vec<RawEnrichedEvent> = match self
+        let enriched: RawEnrichedEventsOutput = match self
             .llm
-            .create_structured_output::<Vec<RawEnrichedEvent>>(
+            .create_structured_output::<RawEnrichedEventsOutput>(
                 &user_prompt,
                 TEMPORAL_ENTITY_ENRICHMENT_PROMPT,
                 Some(options),
@@ -82,6 +93,7 @@ impl TemporalEntityEnricher {
 
         // Match enriched entries back to events by name (same approach as Python).
         let enriched_map: HashMap<String, Vec<EventAttribute>> = enriched
+            .events
             .into_iter()
             .map(|r| {
                 let attrs = r
@@ -176,15 +188,17 @@ mod tests {
 
     #[tokio::test]
     async fn enrich_populates_attributes() {
-        let json = serde_json::json!([
-            {
-                "event_name": "Moon Landing",
-                "attributes": [
-                    { "entity": "Neil Armstrong", "entity_type": "Person", "relationship": "participant" },
-                    { "entity": "NASA", "entity_type": "Organization", "relationship": "organizer" }
-                ]
-            }
-        ]);
+        let json = serde_json::json!({
+            "events": [
+                {
+                    "event_name": "Moon Landing",
+                    "attributes": [
+                        { "entity": "Neil Armstrong", "entity_type": "Person", "relationship": "participant" },
+                        { "entity": "NASA", "entity_type": "Organization", "relationship": "organizer" }
+                    ]
+                }
+            ]
+        });
 
         let llm = Arc::new(MockLlm::with_json(json));
         let enricher = TemporalEntityEnricher::new(llm);
@@ -221,14 +235,16 @@ mod tests {
     #[tokio::test]
     async fn enrich_matches_by_name() {
         // LLM only returns enrichment for "Event A", not "Event B".
-        let json = serde_json::json!([
-            {
-                "event_name": "Event A",
-                "attributes": [
-                    { "entity": "Alice", "entity_type": "Person", "relationship": "subject" }
-                ]
-            }
-        ]);
+        let json = serde_json::json!({
+            "events": [
+                {
+                    "event_name": "Event A",
+                    "attributes": [
+                        { "entity": "Alice", "entity_type": "Person", "relationship": "subject" }
+                    ]
+                }
+            ]
+        });
 
         let llm = Arc::new(MockLlm::with_json(json));
         let enricher = TemporalEntityEnricher::new(llm);
@@ -249,7 +265,7 @@ mod tests {
     async fn enrich_empty_events() {
         // Even though we provide a mock, it should never be called for empty input.
         // But the function should return Ok(vec![]) regardless.
-        let json = serde_json::json!([]);
+        let json = serde_json::json!({ "events": [] });
         let llm = Arc::new(MockLlm::with_json(json));
         let enricher = TemporalEntityEnricher::new(llm);
 

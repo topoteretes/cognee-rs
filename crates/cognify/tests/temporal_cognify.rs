@@ -1,12 +1,8 @@
 //! Integration tests for the temporal cognify pipeline.
 //!
-//! These tests require environment variables to be set:
-//! - OPENAI_URL: Base URL for the OpenAI-compatible API
-//! - OPENAI_TOKEN: API token (use "not-needed" for Ollama)
-//! - OPENAI_MODEL: Model name to use for extraction
-//!
 //! Run with: cargo test --package cognee-cognify --test temporal_cognify
 
+use async_trait::async_trait;
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -14,7 +10,9 @@ use std::sync::Arc;
 use cognee_cognify::{CognifyConfig, cognify};
 use cognee_embedding::mock::MockEmbeddingEngine;
 use cognee_graph::{GraphDBTrait, LadybugAdapter};
-use cognee_llm::{Llm, OpenAIAdapter};
+use cognee_llm::error::{LlmError, LlmResult};
+use cognee_llm::types::{GenerationOptions, GenerationResponse, Message};
+use cognee_llm::{Llm, MessageRole};
 use cognee_models::Data;
 use cognee_ontology::NoOpOntologyResolver;
 use cognee_storage::{MockStorage, StorageTrait};
@@ -30,26 +28,109 @@ const BIOGRAPHY_TEXT: &str = include_str!("test_data/biography.txt");
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Build an LLM adapter from environment variables, or return `None` to skip.
-fn build_test_llm() -> Option<Arc<dyn Llm>> {
-    let _ = dotenv::dotenv();
-    let url = std::env::var("OPENAI_URL")
-        .ok()
-        .or_else(|| std::env::var("LLM_ENDPOINT").ok())?;
-    let token = std::env::var("OPENAI_TOKEN")
-        .ok()
-        .or_else(|| std::env::var("LLM_API_KEY").ok())?;
-    if url.is_empty() || token.is_empty() {
-        return None;
+struct TemporalFixtureLlm;
+
+#[async_trait]
+impl Llm for TemporalFixtureLlm {
+    async fn generate(
+        &self,
+        _messages: Vec<Message>,
+        _options: Option<GenerationOptions>,
+    ) -> LlmResult<GenerationResponse> {
+        Err(LlmError::FeatureNotSupported(
+            "TemporalFixtureLlm only supports structured output".to_string(),
+        ))
     }
-    let model = std::env::var("OPENAI_MODEL")
-        .ok()
-        .or_else(|| std::env::var("LLM_MODEL").ok())
-        .unwrap_or_else(|| "gpt-4o-mini".to_string());
-    Some(Arc::new(
-        OpenAIAdapter::new(model, token, Some(url))
-            .expect("OpenAIAdapter::new should succeed with valid args"),
-    ))
+
+    async fn create_structured_output_with_messages_raw(
+        &self,
+        messages: Vec<Message>,
+        _json_schema: &serde_json::Value,
+        _options: Option<GenerationOptions>,
+    ) -> LlmResult<serde_json::Value> {
+        let system_prompt = messages
+            .iter()
+            .find(|message| matches!(message.role, MessageRole::System))
+            .map(|message| message.content.as_str())
+            .unwrap_or_default();
+
+        if system_prompt.contains("extracting highly granular stream events") {
+            return Ok(serde_json::json!({
+                "events": [
+                    {
+                        "name": "Arnulf Overland is born",
+                        "description": "Arnulf Overland was born in Kristiansund.",
+                        "time_from": { "year": 1889, "month": 4, "day": 27 },
+                        "time_to": null,
+                        "location": "Kristiansund"
+                    },
+                    {
+                        "name": "Overland graduates from school",
+                        "description": "Overland graduated in 1907.",
+                        "time_from": { "year": 1907 },
+                        "time_to": null,
+                        "location": null
+                    },
+                    {
+                        "name": "Overland publishes first poetry collection",
+                        "description": "Overland published his first collection of poems in 1911.",
+                        "time_from": { "year": 1911 },
+                        "time_to": null,
+                        "location": null
+                    },
+                    {
+                        "name": "Overland writes Du ma ikke sove",
+                        "description": "In 1936 he wrote the poem Du ma ikke sove.",
+                        "time_from": { "year": 1936 },
+                        "time_to": null,
+                        "location": null
+                    },
+                    {
+                        "name": "Overland is arrested",
+                        "description": "The clandestine poems led to his arrest in 1941.",
+                        "time_from": { "year": 1941 },
+                        "time_to": null,
+                        "location": null
+                    },
+                    {
+                        "name": "Overland imprisonment period",
+                        "description": "He spent a four-year imprisonment until the liberation of Norway.",
+                        "time_from": { "year": 1945, "month": 5 },
+                        "time_to": null,
+                        "location": "Norway"
+                    }
+                ]
+            }));
+        }
+
+        if system_prompt.contains("extracting highly granular entities from events") {
+            return Ok(serde_json::json!({
+                "events": [
+                    {
+                        "event_name": "Arnulf Overland is born",
+                        "attributes": [
+                            { "entity": "Arnulf Overland", "entity_type": "person", "relationship": "subject" },
+                            { "entity": "Kristiansund", "entity_type": "place", "relationship": "location" }
+                        ]
+                    },
+                    {
+                        "event_name": "Overland is arrested",
+                        "attributes": [
+                            { "entity": "Arnulf Overland", "entity_type": "person", "relationship": "subject" }
+                        ]
+                    }
+                ]
+            }));
+        }
+
+        Err(LlmError::InvalidResponse(
+            "TemporalFixtureLlm received an unknown prompt".to_string(),
+        ))
+    }
+
+    fn model(&self) -> &str {
+        "temporal-fixture"
+    }
 }
 
 /// Count node types by inspecting the `"type"` property from `get_graph_data`.
@@ -92,12 +173,7 @@ async fn ingest_text(text: &str, storage: &Arc<MockStorage>, owner_id: Uuid) -> 
 
 #[tokio::test]
 async fn temporal_cognify_creates_event_and_timestamp_nodes() {
-    let Some(llm) = build_test_llm() else {
-        eprintln!(
-            "OPENAI_URL/OPENAI_TOKEN not set — skipping temporal_cognify_creates_event_and_timestamp_nodes"
-        );
-        return;
-    };
+    let llm: Arc<dyn Llm> = Arc::new(TemporalFixtureLlm);
 
     let temp_dir = TempDir::new().expect("TempDir::new should succeed");
     let owner_id = Uuid::nil();
@@ -123,7 +199,7 @@ async fn temporal_cognify_creates_event_and_timestamp_nodes() {
 
     let config = CognifyConfig::default().with_temporal_cognify(true);
 
-    let result = match cognify(
+    match cognify(
         vec![data_item],
         Uuid::new_v4(),
         None,
@@ -139,14 +215,12 @@ async fn temporal_cognify_creates_event_and_timestamp_nodes() {
     )
     .await
     {
-        Ok(r) => r,
+        Ok(_) => {}
         Err(e) => {
             eprintln!("Skipping: temporal cognify pipeline error: {e}");
             return;
         }
     };
-
-    println!("Temporal cognify result: {} events", result.chunks.len(),);
 
     // Inspect the graph
     let (nodes, edges) = graph_db
@@ -206,13 +280,7 @@ async fn temporal_cognify_creates_event_and_timestamp_nodes() {
 
 #[tokio::test]
 async fn temporal_cognify_populates_event_name_vector_collection() {
-    let Some(llm) = build_test_llm() else {
-        eprintln!(
-            "OPENAI_URL/OPENAI_TOKEN not set — \
-             skipping temporal_cognify_populates_event_name_vector_collection"
-        );
-        return;
-    };
+    let llm: Arc<dyn Llm> = Arc::new(TemporalFixtureLlm);
 
     let temp_dir = TempDir::new().expect("TempDir::new should succeed");
     let owner_id = Uuid::nil();
@@ -282,11 +350,8 @@ async fn temporal_cognify_populates_event_name_vector_collection() {
     )
     .await
     {
-        Ok(r) => {
-            println!(
-                "Temporal cognify succeeded ({} events processed)",
-                r.chunks.len()
-            );
+        Ok(_) => {
+            println!("Temporal cognify succeeded");
         }
         Err(e) => {
             eprintln!("Skipping: temporal cognify pipeline error: {e}");
