@@ -21,6 +21,7 @@ default = [
     "cloud",
 ]
 cloud          = ["dep:cognee-cloud"]
+server         = ["dep:cognee-http-server"]
 visualization  = ["dep:cognee-visualization"]
 onnx           = ["cognee-embedding/onnx"]
 ladybug        = ["cognee-graph/ladybug"]
@@ -78,6 +79,7 @@ testing = [
 [dependencies]
 cognee-chunking = { path = "../chunking" }
 cognee-cloud = { path = "../cloud", optional = true }
+cognee-http-server = { path = "../http-server", optional = true }
 cognee-cognify = { path = "../cognify" }
 cognee-core = { path = "../core" }
 cognee-delete = { path = "../delete" }

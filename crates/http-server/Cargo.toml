@@ -1,0 +1,76 @@
+[package]
+name = "cognee-http-server"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "cognee_http_server"
+path = "src/lib.rs"
+
+[[bin]]
+name = "cognee-http-server"
+path = "src/main.rs"
+required-features = ["bin"]
+
+[features]
+default = []
+# Enables the standalone-binary entry point and its arg-parsing deps.
+bin = [
+    "dep:clap",
+    "dep:dotenv",
+    "tokio/macros",
+    "tokio/rt-multi-thread",
+    "tokio/signal",
+]
+
+[dependencies]
+# Web framework and HTTP stack — do NOT use workspace hyper; the workspace
+# [patch.crates-io] pins hyper to a v0.14 qdrant fork. axum 0.8 requires
+# hyper 1.x. Cargo resolves both versions in parallel.
+axum = "0.8"
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors", "trace", "limit"] }
+hyper = { version = "1", features = ["server", "http1", "http2"] }
+
+# cognee crates
+# NOTE: cognee-lib is intentionally NOT a direct dep here — adding it would
+# create a cycle when cognee-lib's `server` feature pulls in cognee-http-server.
+# Concrete cognee-lib types are wired via AppState in P1+.
+cognee-models = { path = "../models" }
+cognee-core = { path = "../core", features = ["pipeline-run-registry"] }
+
+# Serialization
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+
+# OpenAPI
+utoipa = { version = "5", features = ["axum_extras", "uuid", "chrono"] }
+
+# Auth
+jsonwebtoken = "9"
+argon2 = "0.5"
+cookie = "0.18"
+secrecy = "0.10"
+
+# Utilities
+uuid = { workspace = true, features = ["v4", "v5", "serde"] }
+chrono = { workspace = true, features = ["serde"] }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+async-trait = { workspace = true }
+dashmap = "6"
+bytes = "1"
+futures = { workspace = true }
+tokio = { workspace = true, features = ["rt", "sync", "time", "net", "io-util"] }
+
+# Binary-only deps (optional; pulled in by the `bin` feature only)
+clap = { workspace = true, features = ["derive", "env"], optional = true }
+dotenv = { workspace = true, optional = true }
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros"] }
+serde_json = { workspace = true }
+http-body-util = "0.1"

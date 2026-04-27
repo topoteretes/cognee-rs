@@ -1,0 +1,197 @@
+//! HTTP server configuration.
+//!
+//! `HttpServerConfig` holds all tuneable parameters.  `from_env()` reads the
+//! documented environment variables and overlays them on the struct defaults.
+//! Only the standalone binary calls `from_env()`; library embedders construct
+//! `HttpServerConfig` directly.
+
+use std::{str::FromStr, time::Duration};
+
+use secrecy::SecretString;
+
+use crate::error::ServerError;
+
+// ─── Environment enum ─────────────────────────────────────────────────────────
+
+/// Deployment environment.  Controls log format (pretty vs JSON) and other
+/// dev-vs-prod defaults.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Environment {
+    Dev,
+    #[default]
+    Prod,
+    Test,
+}
+
+impl FromStr for Environment {
+    type Err = ();
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_ascii_lowercase().as_str() {
+            "dev" | "development" => Ok(Environment::Dev),
+            "test" | "testing" => Ok(Environment::Test),
+            _ => Ok(Environment::Prod),
+        }
+    }
+}
+
+// ─── HttpServerConfig ─────────────────────────────────────────────────────────
+
+/// All tuneable server parameters.
+///
+/// Defaults mirror the Python FastAPI server defaults.
+#[derive(Debug, Clone)]
+pub struct HttpServerConfig {
+    /// Bind address. Env: `HTTP_API_HOST`. Default: `"0.0.0.0"`.
+    pub host: String,
+    /// Bind port. Env: `HTTP_API_PORT`. Default: `8000`.
+    pub port: u16,
+    /// Explicit CORS allowed origins. Env: `CORS_ALLOWED_ORIGINS` (comma-sep).
+    /// Falls back to `[ui_app_url]` when empty.
+    pub cors_allowed_origins: Vec<String>,
+    /// Frontend URL used as the CORS fallback. Env: `UI_APP_URL`.
+    /// Default: `"http://localhost:3000"`.
+    pub ui_app_url: String,
+    /// Deployment environment. Env: `ENV`. Default: `Prod`.
+    pub env: Environment,
+    /// Whether to require authentication on API routes.
+    /// Env: `REQUIRE_AUTHENTICATION`. Default: `true`.
+    pub require_authentication: bool,
+    /// JWT signing secret. Env: `AUTH_JWT_SECRET`.
+    /// Randomly generated at boot when unset (tokens are invalidated on restart).
+    pub jwt_secret: SecretString,
+    /// JWT validity window. Env: `AUTH_JWT_LIFETIME_SECONDS`. Default: 3600 s.
+    pub jwt_lifetime: Duration,
+    /// Maximum request body size in bytes. Env: `HTTP_BODY_LIMIT_BYTES`.
+    /// Default: 100 MiB.
+    pub body_limit: usize,
+}
+
+impl Default for HttpServerConfig {
+    fn default() -> Self {
+        Self {
+            host: "0.0.0.0".into(),
+            port: 8000,
+            cors_allowed_origins: Vec::new(),
+            ui_app_url: "http://localhost:3000".into(),
+            env: Environment::Prod,
+            require_authentication: true,
+            jwt_secret: SecretString::new(uuid::Uuid::new_v4().to_string().into()),
+            jwt_lifetime: Duration::from_secs(3600),
+            body_limit: 100 * 1024 * 1024,
+        }
+    }
+}
+
+impl HttpServerConfig {
+    /// Build config by overlaying environment variables on top of the defaults.
+    ///
+    /// Called only by the standalone binary entry point; library embedders
+    /// construct `HttpServerConfig` directly.
+    pub fn from_env() -> Result<Self, ServerError> {
+        let mut cfg = Self::default();
+
+        if let Ok(v) = std::env::var("HTTP_API_HOST") {
+            cfg.host = v;
+        }
+        if let Ok(v) = std::env::var("HTTP_API_PORT") {
+            cfg.port = v
+                .parse::<u16>()
+                .map_err(|e| ServerError::Other(anyhow::anyhow!("HTTP_API_PORT: {e}")))?;
+        }
+        if let Ok(v) = std::env::var("CORS_ALLOWED_ORIGINS") {
+            cfg.cors_allowed_origins = v
+                .split(',')
+                .map(|s| s.trim().to_owned())
+                .filter(|s| !s.is_empty())
+                .collect();
+        }
+        if let Ok(v) = std::env::var("UI_APP_URL") {
+            cfg.ui_app_url = v;
+        }
+        if let Ok(v) = std::env::var("ENV") {
+            cfg.env = v.parse().unwrap_or(Environment::Prod);
+        }
+        if let Ok(v) = std::env::var("REQUIRE_AUTHENTICATION") {
+            cfg.require_authentication =
+                !matches!(v.to_ascii_lowercase().as_str(), "false" | "0" | "no");
+        }
+        if let Ok(v) = std::env::var("AUTH_JWT_SECRET") {
+            cfg.jwt_secret = SecretString::new(v.into());
+        }
+        if let Ok(v) = std::env::var("AUTH_JWT_LIFETIME_SECONDS") {
+            let secs = v.parse::<u64>().map_err(|e| {
+                ServerError::Other(anyhow::anyhow!("AUTH_JWT_LIFETIME_SECONDS: {e}"))
+            })?;
+            cfg.jwt_lifetime = Duration::from_secs(secs);
+        }
+        if let Ok(v) = std::env::var("HTTP_BODY_LIMIT_BYTES") {
+            cfg.body_limit = v
+                .parse::<usize>()
+                .map_err(|e| ServerError::Other(anyhow::anyhow!("HTTP_BODY_LIMIT_BYTES: {e}")))?;
+        }
+
+        Ok(cfg)
+    }
+}
+
+// ─── Unit tests ──────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_defaults() {
+        let cfg = HttpServerConfig::default();
+        assert_eq!(cfg.host, "0.0.0.0");
+        assert_eq!(cfg.port, 8000);
+        assert_eq!(cfg.ui_app_url, "http://localhost:3000");
+        assert_eq!(cfg.body_limit, 100 * 1024 * 1024);
+        assert_eq!(cfg.jwt_lifetime, Duration::from_secs(3600));
+        assert!(cfg.require_authentication);
+        assert!(cfg.cors_allowed_origins.is_empty());
+        assert_eq!(cfg.env, Environment::Prod);
+    }
+
+    #[test]
+    fn test_env_override_port() {
+        // SAFETY: test-only; no concurrent threads modify this env var.
+        unsafe {
+            std::env::set_var("HTTP_API_PORT", "9999");
+        }
+        let cfg = HttpServerConfig::from_env().expect("from_env");
+        // SAFETY: test-only.
+        unsafe {
+            std::env::remove_var("HTTP_API_PORT");
+        }
+        assert_eq!(cfg.port, 9999);
+    }
+
+    #[test]
+    fn test_env_cors_origins() {
+        // SAFETY: test-only; no concurrent threads modify this env var.
+        unsafe {
+            std::env::set_var("CORS_ALLOWED_ORIGINS", "http://a.test, http://b.test");
+        }
+        let cfg = HttpServerConfig::from_env().expect("from_env");
+        // SAFETY: test-only.
+        unsafe {
+            std::env::remove_var("CORS_ALLOWED_ORIGINS");
+        }
+        assert_eq!(
+            cfg.cors_allowed_origins,
+            vec!["http://a.test", "http://b.test"]
+        );
+    }
+
+    #[test]
+    fn test_environment_from_str() {
+        assert_eq!("dev".parse::<Environment>().unwrap(), Environment::Dev);
+        assert_eq!("test".parse::<Environment>().unwrap(), Environment::Test);
+        assert_eq!("prod".parse::<Environment>().unwrap(), Environment::Prod);
+        assert_eq!(
+            "anything".parse::<Environment>().unwrap(),
+            Environment::Prod
+        );
+    }
+}

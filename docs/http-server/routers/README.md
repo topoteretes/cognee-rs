@@ -48,7 +48,7 @@ One row per router. Update the row in the same PR that lands or changes the unde
 | 29 | notebooks | `/api/v1/notebooks` | [notebooks.md](notebooks.md) | **Draft** |
 | 30 | checks (cloud) | `/api/v1/checks` | [checks.md](checks.md) | **Draft** |
 
-The implementation phases in [../plan.md](../plan.md#7-implementation-phases) drive the order in which these docs need to be ready.
+The implementation phases in [../plan.md](../plan.md#4-implementation-phases) drive the order in which these docs need to be ready.
 
 ## 2. Per-doc template
 
@@ -186,7 +186,7 @@ Each endpoint gets a `#[utoipa::path(...)]` annotation declaring tags, parameter
 
 ## 4. Suggested writing order
 
-When creating per-router docs, prioritize as the implementation plan suggests ([../plan.md §7](../plan.md#7-implementation-phases)):
+When creating per-router docs, prioritize as the implementation plan suggests ([../plan.md §4](../plan.md#4-implementation-phases)):
 
 1. **P0** (foundation): `health`.
 2. **P1** (auth): `auth`, `auth-register`, `auth-reset-password`, `auth-verify`, `api-keys`, `users`, `users-by-email`.
@@ -203,4 +203,4 @@ Each per-router doc lands as part of the PR that implements that router. The doc
 
 - Python router files: [`cognee/api/v1/<name>/routers/`](https://github.com/topoteretes/cognee/tree/main/cognee/api/v1).
 - Cross-SDK parity test files: `e2e-cross-sdk/harness/test_http_<name>.py` (see [../e2e-parity.md §5](../e2e-parity.md#5-test-inventory)).
-- Implementation phases: [../plan.md §7](../plan.md#7-implementation-phases).
+- Implementation phases: [../plan.md §4](../plan.md#4-implementation-phases).

@@ -214,4 +214,4 @@ The HTTP DTOs are produced by `From<&HealthCheckReport>` / `From<&ComponentHealt
 - Span-name conventions: [../observability.md §3.4](../observability.md#34-span-name-conventions).
 - Access-log filtering for noisy probes: [../observability.md §7](../observability.md#7-access-logging).
 - Error model that this router intentionally bypasses: [../architecture.md §9](../architecture.md#9-error-handling).
-- Implementation phase that lands this router: [../plan.md §7 (P0)](../plan.md#7-implementation-phases).
+- Implementation phase that lands this router: [../plan.md §4 (P0)](../plan.md#4-implementation-phases).

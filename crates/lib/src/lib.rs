@@ -118,6 +118,15 @@ pub use cognee_cloud::{
     serve_cloud, serve_url,
 };
 
+#[cfg(feature = "server")]
+pub mod http {
+    //! HTTP server surface. Available only when the `server` feature is enabled.
+    //! Consumers who only need the embedded server inside their own binary should
+    //! prefer this re-export over taking a direct dependency on `cognee-http-server`,
+    //! to keep their dependency closure aligned with the rest of the cognee crates.
+    pub use cognee_http_server::*;
+}
+
 pub mod session;
 
 pub mod api;

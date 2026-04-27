@@ -113,10 +113,11 @@ impl DefaultPipelineRunRegistry {
         {
             let runs = self.runs.read().await;
             for (id, slot) in runs.iter() {
-                if let Some(finished_at) = slot.finished_at {
-                    if now.signed_duration_since(finished_at) > retention {
-                        to_remove.push(*id);
-                    }
+                if slot
+                    .finished_at
+                    .is_some_and(|fa| now.signed_duration_since(fa) > retention)
+                {
+                    to_remove.push(*id);
                 }
             }
         }
@@ -158,15 +159,13 @@ impl DefaultPipelineRunRegistry {
             let mut found_idx = None;
             if let Ok(guard) = runs {
                 for (idx, id) in order.iter().enumerate() {
-                    if let Some(slot) = guard.get(id) {
-                        if slot.finished_at.is_some() {
-                            found_idx = Some(idx);
-                            break;
-                        }
+                    if guard.get(id).is_some_and(|slot| slot.finished_at.is_some()) {
+                        found_idx = Some(idx);
+                        break;
                     }
                 }
             }
-            found_idx.map(|idx| order.remove(idx)).flatten()
+            found_idx.and_then(|idx| order.remove(idx))
         };
 
         if let Some(id) = evict_id {
@@ -549,35 +548,32 @@ impl PipelineRunRegistry for DefaultPipelineRunRegistry {
                 let (tx, rx) = broadcast::channel(self.cfg.channel_capacity);
                 // Store this placeholder so the real register_* can reuse it.
                 // Since we can't async here, use try_write.
-                if let Ok(mut runs) = self.runs.try_write() {
-                    if !runs.contains_key(&run_id) {
-                        let (phase_tx, _) = watch::channel(RunPhase::Pending);
-                        let now = chrono::Utc::now();
-                        let placeholder_meta = RunHandle {
-                            run_id,
-                            task_run_id: run_id,
-                            user_id: None,
-                            dataset_id: None,
-                            pipeline_name: String::new(),
-                            started_at: now,
-                        };
-                        runs.insert(
-                            run_id,
-                            RunSlot {
-                                event_tx: tx,
-                                phase_tx,
-                                started_at: now,
-                                finished_at: None,
-                                abort_handle: None,
-                                meta: placeholder_meta,
-                            },
-                        );
-                        let mut order = self
-                            .eviction_order
-                            .lock()
-                            .unwrap_or_else(|e| e.into_inner()); // lock poison is unrecoverable
-                        order.push_back(run_id);
-                    }
+                if let Ok(mut runs) = self.runs.try_write()
+                    && let std::collections::hash_map::Entry::Vacant(e) = runs.entry(run_id)
+                {
+                    let (phase_tx, _) = watch::channel(RunPhase::Pending);
+                    let now = chrono::Utc::now();
+                    let placeholder_meta = RunHandle {
+                        run_id,
+                        task_run_id: run_id,
+                        user_id: None,
+                        dataset_id: None,
+                        pipeline_name: String::new(),
+                        started_at: now,
+                    };
+                    e.insert(RunSlot {
+                        event_tx: tx,
+                        phase_tx,
+                        started_at: now,
+                        finished_at: None,
+                        abort_handle: None,
+                        meta: placeholder_meta,
+                    });
+                    let mut order = self
+                        .eviction_order
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner()); // lock poison is unrecoverable
+                    order.push_back(run_id);
                 }
                 rx
             }

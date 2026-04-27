@@ -444,7 +444,7 @@ axum                 = "0.8"
 tokio                = { workspace = true, features = ["full"] }
 tower                = "0.5"
 tower-http           = { version = "0.6", features = ["cors", "trace", "limit"] }
-hyper                = { workspace = true, features = ["server", "http1", "http2"] }
+hyper                = { version = "1", features = ["server", "http1", "http2"] }  # Do NOT use workspace = true — the workspace [patch] pins hyper to a v0.14 qdrant fork; axum 0.8 needs hyper 1.x. Cargo resolves both versions side-by-side.
 cognee-lib           = { path = "../lib" }       # no `server` feature on cognee-lib here — that would be a cycle
 cognee-models        = { path = "../models" }
 serde                = { workspace = true, features = ["derive"] }
