@@ -4,6 +4,8 @@ This directory holds the **step-by-step implementation tracking** for the `cogne
 
 Audience: an implementor (human or model) who has read the design docs and now needs to execute. The design **why** lives in the design docs ([../plan.md](../plan.md), [../architecture.md](../architecture.md), [../pipelines.md](../pipelines.md), etc.); these implementation docs cover **how**, with references to the design docs whenever a decision needs justification.
 
+**Driver prompt for an autonomous implementor**: [IMPLEMENTATION-PROMPT.md](IMPLEMENTATION-PROMPT.md) — a self-contained meta-prompt that walks a less-powerful model through every task in this directory using a four-agent pipeline (investigate → implement → review → update docs). Read it once at session start; follow its instructions per task.
+
 ## Doc structure (every phase doc follows this)
 
 1. **Goal** — one paragraph.
