@@ -91,6 +91,11 @@ pub async fn build_router(state: AppState) -> Result<Router, ServerError> {
         .nest("/api/v1/memify", routers::memify::router())
         .nest("/api/v1/remember", routers::remember::router())
         .nest("/api/v1/improve", routers::improve::router())
+        // P4 read-path routers
+        .nest("/api/v1/search", routers::search::router())
+        .nest("/api/v1/recall", routers::recall::router())
+        .nest("/api/v1/llm", routers::llm::router())
+        .nest("/api/v1/visualize", routers::visualize::router())
         // Middleware stack (outer → inner): trace → CORS → body limit
         .layer(RequestBodyLimitLayer::new(body_limit))
         .layer(middleware::cors::cors_layer(&state.config))

@@ -11,7 +11,10 @@ use std::sync::Arc;
 
 use cognee_database::DatabaseConnection;
 use cognee_delete::DeleteService;
+use cognee_graph::GraphDBTrait;
+use cognee_llm::Llm;
 use cognee_ontology::OntologyManager;
+use cognee_search::SearchOrchestrator;
 use cognee_storage::StorageTrait;
 
 /// Pre-initialized pipeline component handles shared across all P2 handlers.
@@ -30,6 +33,21 @@ pub struct ComponentHandles {
 
     /// Ontology manager (per-user file storage).
     pub ontology_manager: Arc<OntologyManager>,
+
+    // ── P4 read-path slots ────────────────────────────────────────────────
+    //
+    // Optional handles wired by embedders that want the full read-path
+    // surface. Each slot is `None` by default; the relevant routers
+    // surface a 500-level error when the corresponding handle is missing.
+    /// Pre-built search orchestrator. `None` means HTTP search is unwired
+    /// — handlers return `SearchError {500, "Internal server error"}`.
+    pub search_orchestrator: Option<Arc<SearchOrchestrator>>,
+
+    /// Configured LLM adapter for `/api/v1/llm/*` handlers.
+    pub llm: Option<Arc<dyn Llm>>,
+
+    /// Knowledge-graph DB used by the visualize router.
+    pub graph_db: Option<Arc<dyn GraphDBTrait>>,
 }
 
 impl ComponentHandles {

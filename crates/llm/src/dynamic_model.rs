@@ -39,6 +39,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use thiserror::Error;
 
 use crate::schema::generate_json_schema;
 
@@ -210,6 +211,64 @@ impl DynamicGraphModel {
             ))
         }
     }
+}
+
+// ─── graph_schema_to_graph_model ──────────────────────────────────────────────
+
+/// Errors emitted by [`graph_schema_to_graph_model`].
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum GraphModelError {
+    #[error("graph schema must be a JSON object, got {0}")]
+    NotAnObject(&'static str),
+
+    #[error("graph schema is missing required key `{0}`")]
+    MissingKey(&'static str),
+
+    #[error("graph schema field `{0}` must be a list, got {1}")]
+    NotAList(&'static str, &'static str),
+}
+
+/// Validate a JSON value against the canonical graph-model shape.
+///
+/// Mirrors Python's
+/// [`graph_schema_to_graph_model`](https://github.com/topoteretes/cognee/blob/main/cognee/shared/graph_model_utils.py)
+/// in *spirit only* — the Rust port does not generate runtime Pydantic classes
+/// (the LLM-router handler only ever uses the error path to distinguish
+/// "schema invalid" → 409 from "JSON parse error" → 422).
+///
+/// The validation rules are:
+/// - Top-level value must be a JSON object.
+/// - The object must carry an `entity_types` array.
+/// - The object must carry a `relationship_types` array.
+///
+/// On success returns `Ok(())` (the success value is unused by the handler).
+pub fn graph_schema_to_graph_model(value: &Value) -> Result<(), GraphModelError> {
+    let obj = match value {
+        Value::Object(map) => map,
+        _ => return Err(GraphModelError::NotAnObject(value_type_name(value))),
+    };
+
+    let entity_types = obj
+        .get("entity_types")
+        .ok_or(GraphModelError::MissingKey("entity_types"))?;
+    if !entity_types.is_array() {
+        return Err(GraphModelError::NotAList(
+            "entity_types",
+            value_type_name(entity_types),
+        ));
+    }
+
+    let relationship_types = obj
+        .get("relationship_types")
+        .ok_or(GraphModelError::MissingKey("relationship_types"))?;
+    if !relationship_types.is_array() {
+        return Err(GraphModelError::NotAList(
+            "relationship_types",
+            value_type_name(relationship_types),
+        ));
+    }
+
+    Ok(())
 }
 
 /// Return a human-readable name for a JSON value type.
@@ -445,6 +504,46 @@ mod tests {
 
         assert_eq!(model.description.as_deref(), Some("A test model"));
         assert_eq!(model.source.as_deref(), Some("python-sdk"));
+    }
+
+    #[test]
+    fn test_graph_schema_to_graph_model_accepts_canonical_shape() {
+        let value = serde_json::json!({
+            "entity_types": [{"name": "Person"}],
+            "relationship_types": [{"name": "WORKS_AT"}],
+        });
+        assert!(graph_schema_to_graph_model(&value).is_ok());
+    }
+
+    #[test]
+    fn test_graph_schema_to_graph_model_rejects_non_object() {
+        let value = serde_json::json!([]);
+        let err = graph_schema_to_graph_model(&value).unwrap_err();
+        assert!(matches!(err, GraphModelError::NotAnObject(_)));
+    }
+
+    #[test]
+    fn test_graph_schema_to_graph_model_missing_entity_types() {
+        let value = serde_json::json!({"relationship_types": []});
+        let err = graph_schema_to_graph_model(&value).unwrap_err();
+        assert_eq!(err, GraphModelError::MissingKey("entity_types"));
+    }
+
+    #[test]
+    fn test_graph_schema_to_graph_model_missing_relationship_types() {
+        let value = serde_json::json!({"entity_types": []});
+        let err = graph_schema_to_graph_model(&value).unwrap_err();
+        assert_eq!(err, GraphModelError::MissingKey("relationship_types"));
+    }
+
+    #[test]
+    fn test_graph_schema_to_graph_model_entity_types_must_be_array() {
+        let value = serde_json::json!({
+            "entity_types": "wrong",
+            "relationship_types": [],
+        });
+        let err = graph_schema_to_graph_model(&value).unwrap_err();
+        assert!(matches!(err, GraphModelError::NotAList("entity_types", _)));
     }
 
     #[test]

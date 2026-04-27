@@ -195,9 +195,67 @@ pub enum ApiError {
     #[error("not implemented: {0}")]
     NotImplemented(String),
 
+    // ── P4 read-path error variants ───────────────────────────────────────────
+    //
+    // DO NOT NORMALIZE — these envelopes are wire-compatibility constraints
+    // pinned to Python. See `routers/README.md §3.1` and the per-router specs
+    // (`routers/search.md`, `routers/recall.md`, `routers/llm.md`,
+    // `routers/visualize.md`) before touching them.
+    /// `<status> {"error": "<error>", "detail": "<detail>"}` — used by
+    /// `/api/v1/search` (403/422/500) and `GET /api/v1/search` (500).
+    /// Mirrors Python's `ErrorResponse` model.
+    #[error("search error: {error}")]
+    SearchError {
+        status: StatusCode,
+        error: String,
+        detail: Option<String>,
+    },
+
+    /// Three-shaped envelope used only by `/api/v1/recall`.
+    ///
+    /// - `WithHint { error, hint }` for 422 prerequisite errors.
+    /// - `JustError { error }` for the 409 catch-all and the GET-history 500.
+    ///
+    /// Permission denied is NOT encoded here — the recall handler returns
+    /// `200 []` directly without going through `ApiError`.
+    #[error("recall error")]
+    RecallError {
+        status: StatusCode,
+        body: RecallErrorBody,
+    },
+
+    /// `<status> {"error": "<msg>"}` — used by `/api/v1/llm/*` for 400/409/422.
+    #[error("llm error: {1}")]
+    LlmError(StatusCode, String),
+
+    /// `<status> {"error": "<msg>"}` — used by `/api/v1/visualize/*` for the
+    /// 409 catch-all and the 403 superuser-only failure.
+    #[error("visualize error: {1}")]
+    VisualizeError(StatusCode, String),
+
     /// 500 — unhandled internal error.
     #[error("internal server error: {0}")]
     Internal(#[from] anyhow::Error),
+}
+
+// ─── RecallErrorBody ──────────────────────────────────────────────────────────
+
+/// Recall-router-specific error envelopes.
+///
+/// Python produces three distinct shapes for `/api/v1/recall`:
+/// - `{error, hint}` for 422 prerequisite errors.
+/// - `{error}` for the 409 catch-all and the GET-history 500.
+/// - silent `200 []` for permission denied (NOT encoded here — handled at the
+///   handler layer by returning `Ok(Json(vec![]))` without an `ApiError`).
+///
+/// Serialized as an `untagged` enum so the JSON shape per variant matches Python.
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
+#[serde(untagged)]
+pub enum RecallErrorBody {
+    /// `{"error": "...", "hint": "..."}` — 422 prerequisite errors.
+    WithHint { error: String, hint: String },
+    /// `{"error": "..."}` — 409 catch-all and GET-history 500.
+    JustError { error: String },
 }
 
 impl IntoResponse for ApiError {
@@ -287,6 +345,17 @@ impl IntoResponse for ApiError {
             ApiError::OntologyEnvelope(msg, status) => (status, json!({"error": msg})),
             ApiError::DeprecatedConflict(msg) => (StatusCode::CONFLICT, json!({"error": msg})),
             ApiError::NotImplemented(msg) => (StatusCode::NOT_IMPLEMENTED, json!({"detail": msg})),
+            ApiError::SearchError {
+                status,
+                error,
+                detail,
+            } => (status, json!({"error": error, "detail": detail})),
+            ApiError::RecallError { status, body } => {
+                let value = serde_json::to_value(&body).unwrap_or_else(|_| json!({}));
+                (status, value)
+            }
+            ApiError::LlmError(status, msg) => (status, json!({"error": msg})),
+            ApiError::VisualizeError(status, msg) => (status, json!({"error": msg})),
             ApiError::Internal(err) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 json!({"detail": err.to_string()}),
@@ -473,6 +542,97 @@ mod tests {
         assert_eq!(body["error"], "improve failed");
         // Must NOT have the canonical {"error": "Pipeline run errored"} wrapper
         assert_ne!(body["error"], "Pipeline run errored");
+    }
+
+    // ── P4 envelope tests ─────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_search_error_envelope() {
+        let resp = ApiError::SearchError {
+            status: StatusCode::FORBIDDEN,
+            error: "Permission denied".into(),
+            detail: Some("No read on dataset".into()),
+        }
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        let body = body_json(resp).await;
+        assert_eq!(body["error"], "Permission denied");
+        assert_eq!(body["detail"], "No read on dataset");
+    }
+
+    #[tokio::test]
+    async fn test_search_error_with_null_detail() {
+        let resp = ApiError::SearchError {
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+            error: "Internal server error".into(),
+            detail: None,
+        }
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let body = body_json(resp).await;
+        assert_eq!(body["error"], "Internal server error");
+        assert!(body["detail"].is_null());
+    }
+
+    #[tokio::test]
+    async fn test_recall_error_with_hint_envelope() {
+        let resp = ApiError::RecallError {
+            status: StatusCode::UNPROCESSABLE_ENTITY,
+            body: RecallErrorBody::WithHint {
+                error: "Recall prerequisites not met".into(),
+                hint: "Run cognify first".into(),
+            },
+        }
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let body = body_json(resp).await;
+        assert_eq!(body["error"], "Recall prerequisites not met");
+        assert_eq!(body["hint"], "Run cognify first");
+        // No `detail` key — recall uses `hint`, not `detail`.
+        assert!(body.get("detail").is_none());
+    }
+
+    #[tokio::test]
+    async fn test_recall_error_just_error_envelope() {
+        let resp = ApiError::RecallError {
+            status: StatusCode::CONFLICT,
+            body: RecallErrorBody::JustError {
+                error: "An error occurred during recall.".into(),
+            },
+        }
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::CONFLICT);
+        let body = body_json(resp).await;
+        assert_eq!(body["error"], "An error occurred during recall.");
+        // Single-field envelope — no `detail`, no `hint`.
+        assert!(body.get("detail").is_none());
+        assert!(body.get("hint").is_none());
+    }
+
+    #[tokio::test]
+    async fn test_llm_error_envelope() {
+        let resp =
+            ApiError::LlmError(StatusCode::CONFLICT, "Network failure".into()).into_response();
+        assert_eq!(resp.status(), StatusCode::CONFLICT);
+        let body = body_json(resp).await;
+        assert_eq!(body["error"], "Network failure");
+        assert!(body.get("detail").is_none());
+    }
+
+    #[tokio::test]
+    async fn test_visualize_error_envelope() {
+        let resp = ApiError::VisualizeError(
+            StatusCode::FORBIDDEN,
+            "Superuser privileges required for multi-user visualization".into(),
+        )
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        let body = body_json(resp).await;
+        assert_eq!(
+            body["error"],
+            "Superuser privileges required for multi-user visualization"
+        );
+        assert!(body.get("detail").is_none());
     }
 
     #[tokio::test]

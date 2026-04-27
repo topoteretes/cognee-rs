@@ -27,7 +27,17 @@ use utoipa::{
         description = "Cognee HTTP API — Rust port of the Python FastAPI server."
     ),
     modifiers(&SecurityAddon),
-    paths()
+    paths(
+        // P4 read-path handlers
+        crate::routers::search::get_search_history,
+        crate::routers::search::post_search,
+        crate::routers::recall::get_recall_history,
+        crate::routers::recall::post_recall,
+        crate::routers::llm::post_custom_prompt,
+        crate::routers::llm::post_infer_schema,
+        crate::routers::visualize::get_visualize,
+        crate::routers::visualize::post_visualize_multi,
+    )
 )]
 pub struct ApiDoc;
 

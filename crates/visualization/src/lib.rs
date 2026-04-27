@@ -79,3 +79,45 @@ pub async fn render(graph_db: &dyn GraphDBTrait) -> Result<String, Visualization
     let serialized = serialize::serialize_graph(nodes, edges);
     html::build_html(&serialized, None)
 }
+
+/// Render a combined HTML visualization aggregating multiple `(user_id, graph_db)`
+/// pairs into one output.
+///
+/// Each pair's nodes are tagged with a `user_id` attribute (UUID-stringified)
+/// so the d3 template can color-code by user. Edges from all pairs are
+/// concatenated unchanged.
+///
+/// Mirrors Python's `visualize_multi_user_graph()` in
+/// [`cognee/api/v1/visualize/visualize.py`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/visualize/visualize.py).
+/// An empty input produces a valid-but-empty HTML document.
+///
+/// `pairs` is a slice of `(user_id_string, graph_db)` tuples; the user-id is
+/// taken as a `&str` to keep the visualization crate decoupled from the
+/// `cognee_models::User` type. Callers stringify their UUID/ID before invoking.
+pub async fn render_multi_user(
+    pairs: &[(String, std::sync::Arc<dyn GraphDBTrait>)],
+) -> Result<String, VisualizationError> {
+    use std::borrow::Cow;
+
+    let mut all_nodes = Vec::new();
+    let mut all_edges = Vec::new();
+    for (user_id, gdb) in pairs {
+        let (nodes, edges) = gdb.get_graph_data().await?;
+        for (node_id, mut node_info) in nodes {
+            node_info.insert(
+                Cow::Borrowed("user_id"),
+                serde_json::Value::String(user_id.clone()),
+            );
+            // `source_user` participates in the existing color-by-user
+            // template, so populate it as well to drive the d3 palette.
+            node_info.insert(
+                Cow::Borrowed("source_user"),
+                serde_json::Value::String(user_id.clone()),
+            );
+            all_nodes.push((node_id, node_info));
+        }
+        all_edges.extend(edges);
+    }
+    let serialized = serialize::serialize_graph(all_nodes, all_edges);
+    html::build_html(&serialized, None)
+}

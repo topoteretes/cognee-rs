@@ -55,6 +55,7 @@ pub mod config;
 pub mod dynamic_model;
 pub mod error;
 pub mod llm_trait;
+pub mod prompts;
 pub mod schema;
 pub mod transcriber;
 pub mod types;
@@ -63,7 +64,7 @@ pub mod types;
 pub use adapters::LiteRtAdapter;
 pub use adapters::OpenAIAdapter;
 pub use config::{LlmConfig, LlmProvider};
-pub use dynamic_model::DynamicGraphModel;
+pub use dynamic_model::{DynamicGraphModel, GraphModelError, graph_schema_to_graph_model};
 pub use error::{LlmError, LlmResult};
 pub use llm_trait::{Llm, LlmExt};
 pub use schema::{

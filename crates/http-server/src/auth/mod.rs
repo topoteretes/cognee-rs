@@ -19,9 +19,11 @@ pub mod mailer;
 pub mod password;
 pub mod register;
 pub mod reset;
+pub mod superuser;
 pub mod users_service;
 pub mod verify;
 
 pub use context::AuthContext;
 pub use extractor::{AuthMethod, AuthenticatedUser, OptionalAuthenticatedUser, RequireSuperuser};
 pub use mailer::{LoggingMailer, Mailer};
+pub use superuser::SuperuserOnly;
