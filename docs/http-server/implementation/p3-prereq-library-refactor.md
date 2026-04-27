@@ -249,18 +249,46 @@ Existing tests (`crates/lib/tests/remember_tests.rs`, `crates/lib/tests/improve_
 
 ## 6. Acceptance criteria
 
-- [ ] `cargo check --all-targets` passes (no `--release`).
-- [ ] `cargo test --workspace` passes in debug mode.
-- [ ] `cargo check -p cognee-core --features pipeline-run-registry --all-targets` passes.
-- [ ] `grep -rn "run_in_background" crates/lib crates/cognify crates/ingestion` returns zero hits.
-- [ ] All bindings (`python/scripts/check.sh`, `js/scripts/check.sh`, `capi/scripts/check.sh`) pass against the new signatures.
-- [ ] `scripts/check_all.sh` passes (fmt + check + clippy + binding checks).
-- [ ] `cognee-lib::api::remember::remember()` signature has no `run_in_background` parameter and `RememberResult` has no `inner` / `await_completion()` API.
-- [ ] `cognee-lib::api::improve::improve()` signature has no `run_in_background` parameter; Stage 4 runs whenever sessions are present.
-- [ ] `cognee_core::PipelineRunRegistry`, `RunHandle`, `RunEvent`, `RunPhase`, `RunSpec`, `RegistryConfig`, `PipelineFuture`, `DefaultPipelineRunRegistry`, `ScopedRunWatcher` are public from `cognee-core` under the `pipeline-run-registry` feature.
-- [ ] `cognee_database::PipelineRunRepository` is public from `cognee-database` and re-exported from `cognee-core`.
-- [ ] `TaskContext` has a `pipeline_watcher: Option<Arc<dyn PipelineWatcher>>` slot wired through `TaskContextBuilder`.
-- [ ] No edits to `crates/http-server/` in this phase.
+> **Status: Done** — commit `2425f19` (2026-04-27). All criteria below were met.
+
+- [x] `cargo check --all-targets` passes (no `--release`).
+- [x] `cargo test --workspace` passes in debug mode.
+- [x] `cargo check -p cognee-core --features pipeline-run-registry --all-targets` passes.
+- [x] `grep -rn "run_in_background" crates/lib crates/cognify crates/ingestion` returns zero hits.
+- [x] All bindings (`python/scripts/check.sh`, `js/scripts/check.sh`, `capi/scripts/check.sh`) pass against the new signatures.
+- [x] `scripts/check_all.sh` passes (fmt + check + clippy + binding checks).
+- [x] `cognee-lib::api::remember::remember()` signature has no `run_in_background` parameter and `RememberResult` has no `inner` / `await_completion()` API.
+- [x] `cognee-lib::api::improve::improve()` signature has no `run_in_background` parameter; Stage 4 runs whenever sessions are present.
+- [x] `cognee_core::PipelineRunRegistry`, `RunHandle`, `RunEvent`, `RunPhase`, `RunSpec`, `RegistryConfig`, `PipelineFuture`, `DefaultPipelineRunRegistry`, `ScopedRunWatcher` are public from `cognee-core` under the `pipeline-run-registry` feature.
+- [x] `cognee_database::PipelineRunRepository` is public from `cognee-database` and re-exported from `cognee-core`.
+- [x] `TaskContext` has a `pipeline_watcher: Option<Arc<dyn PipelineWatcher>>` slot wired through `TaskContextBuilder`.
+- [x] No edits to `crates/http-server/` in this phase.
+
+## 8. Implementation notes (post-landing, commit 2425f19)
+
+These notes document deviations from the spec discovered during implementation. P3 should be aware of them.
+
+### 8.1 `subscribe()` placeholder slot uses `try_write`, not async lazy creation
+
+**Spec (Step 7, Step 9)**: "For unknown run IDs, `subscribe` lazily creates a placeholder slot and returns its receiver, so a producer registering after the subscriber attaches still delivers events."
+
+**Actual implementation**: `subscribe` is synchronous (`&self`, no `async`). The implementation uses `try_read` to check for an existing slot, and `try_write` to insert a placeholder if none exists. The placeholder creates a fresh `broadcast::Sender` (capacity from `cfg.channel_capacity`); when `register_background` / `register_inline` later calls `register_run_internal`, it checks for an existing slot and **reuses its `event_tx`** rather than creating a new one. This preserves the subscriber's receiver across the race.
+
+**Implication for P3**: If `try_write` fails (lock already held) at the moment of a subscribe-before-register race, the returned stream will be a dead channel — events will be missed. This is a best-effort approach. For HTTP websocket connections the race window is small (client subscribes then server registers). Full determinism would require making `subscribe` `async`; a future P3 follow-up can upgrade the trait if needed. The P3 WebSocket handler should be coded defensively (brief exponential-backoff poll on snapshot_status before assuming no events).
+
+### 8.2 `dataset_id: None` skips DB write in `log_pipeline_run`
+
+**Spec (Step 3)**: The spec did not explicitly address `dataset_id = None` because the `pipeline_runs` table has a `NOT NULL` FK to `datasets.id` (established in the existing schema migration).
+
+**Actual implementation**: `SeaOrmPipelineRunRepository::log_pipeline_run` short-circuits early when `dataset_id` is `None`, returning the generated `Uuid` without writing a row. Ad-hoc runs (no dataset) are therefore tracked in-memory only. Callers that require durability must supply a valid `dataset_id`.
+
+**Implication for P3**: The HTTP `POST /cognify` handler receives a `dataset_id` from the request; it should always supply it to `log_pipeline_run`. The `dataset_id: None` path exists for registry-internal placeholder slots (Step 8.1) and should not appear in production HTTP dispatch paths.
+
+### 8.3 `cognee-models` added to `cognee-database` dev-dependencies
+
+**Spec**: Not mentioned.
+
+**Actual implementation**: The `pipeline_run_repository.rs` integration test needed `cognee-models` (for `PipelineRun` type construction). Added `cognee-models = { path = "../models" }` to `[dev-dependencies]` in `crates/database/Cargo.toml`. No production dep graph change.
 
 ## 7. Files touched
 
