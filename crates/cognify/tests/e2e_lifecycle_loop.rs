@@ -192,7 +192,7 @@ async fn test_readd_and_recognify_after_delete() {
     let result_1 = match cognify(
         data_items_1,
         dataset_1.id,
-        None,
+        Some(owner_id),
         None,
         llm.clone() as Arc<dyn Llm>,
         storage.clone() as Arc<dyn StorageTrait>,
@@ -352,7 +352,7 @@ async fn test_readd_and_recognify_after_delete() {
     let result_2 = match cognify(
         data_items_2,
         dataset_2.id,
-        None,
+        Some(owner_id),
         None,
         llm.clone() as Arc<dyn Llm>,
         storage.clone() as Arc<dyn StorageTrait>,
