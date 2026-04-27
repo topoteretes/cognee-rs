@@ -29,10 +29,10 @@ One row per router. Update the row in the same PR that lands or changes the unde
 | 10 | update | `/api/v1/update` | [update.md](update.md) | **Done** |
 | 11 | datasets | `/api/v1/datasets` | [datasets.md](datasets.md) | **Done** |
 | 12 | ontologies | `/api/v1/ontologies` | [ontologies.md](ontologies.md) | **Done** |
-| 13 | cognify | `/api/v1/cognify` | [cognify.md](cognify.md) | **Draft** |
-| 14 | memify | `/api/v1/memify` | [memify.md](memify.md) | **Draft** |
-| 15 | remember | `/api/v1/remember` | [remember.md](remember.md) | **Draft** |
-| 16 | improve | `/api/v1/improve` | [improve.md](improve.md) | **Draft** |
+| 13 | cognify | `/api/v1/cognify` | [cognify.md](cognify.md) | **Done** |
+| 14 | memify | `/api/v1/memify` | [memify.md](memify.md) | **Done** |
+| 15 | remember | `/api/v1/remember` | [remember.md](remember.md) | **Done** |
+| 16 | improve | `/api/v1/improve` | [improve.md](improve.md) | **Done** |
 | 17 | search | `/api/v1/search` | [search.md](search.md) | **Draft** |
 | 18 | recall | `/api/v1/recall` | [recall.md](recall.md) | **Draft** |
 | 19 | forget | `/api/v1/forget` | [forget.md](forget.md) | **Done** |

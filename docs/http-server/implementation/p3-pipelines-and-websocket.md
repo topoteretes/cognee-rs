@@ -118,6 +118,7 @@ A reviewer can land Steps 1–6 as a stack, then any of {cognify, memify, rememb
 - Spec: [../websocket.md §5.3](../websocket.md#53-payload-computation), [../routers/cognify.md §2.2](../routers/cognify.md#22-ws-apiv1cognifysubscribepipeline_run_id--live-pipeline-progress).
 - Action: confirm `state.lib.formatted_graph_data(dataset_id, &user)` resolves to a function returning `Result<serde_json::Value, _>` shaped `{ "nodes": [...], "edges": [...] }`. Per the audit ([audit-findings.md row on `cognee_lib::modules::graph::methods::get_formatted_graph_data`](../audit-findings.md)), the helper lives in `cognee_graph`. If it's not yet re-exported through `cognee-lib`, add a thin wrapper in this step that calls into the existing `cognee-graph` formatter (do not reimplement). The WS handler must be able to call it on every event without further plumbing.
 - Verify: a unit test that constructs a small graph with the in-memory `MockGraphDB` from `cognee-test-utils`, calls `formatted_graph_data`, and asserts the JSON shape matches `{"nodes": [...], "edges": [...]}`. The test does not need real data — empty `[]`/`[]` is sufficient.
+- **Implementation note (commit 53b1da0)**: `formatted_graph_data` was stubbed in `ComponentHandles` (always returns `{}`) because `cognee_graph::get_formatted_graph_data` is not yet re-exported through `cognee-lib`. The stub is wire-correct for the WebSocket payload (Python falls back to `{}` when the graph is empty). Full wiring is deferred to **P5** where `ComponentHandles` is fully populated. See `crates/http-server/src/components.rs` for the stub and its `TODO: wire to cognee_graph::get_formatted_graph_data` comment.
 
 ### Step 7 — `crates/http-server/src/routers/cognify.rs` — POST handler
 
@@ -301,15 +302,15 @@ Cross-SDK parity tests (`e2e-cross-sdk/harness/test_http_{cognify,memify,remembe
 
 ## 6. Acceptance criteria
 
-- [ ] `cargo check --all-targets -p cognee-http-server` is green.
-- [ ] All P3 test files listed in §5 pass under `bash scripts/run_tests_with_openai.sh` (LLM-dependent ones skip gracefully when env vars are absent).
-- [ ] `scripts/check_all.sh` passes (fmt, check, clippy, capi/python/js wrapper checks).
+- [x] `cargo check --all-targets -p cognee-http-server` is green.
+- [x] All P3 test files listed in §5 pass under `bash scripts/run_tests_with_openai.sh` (LLM-dependent ones skip gracefully when env vars are absent).
+- [x] `scripts/check_all.sh` passes (fmt, check, clippy, capi/python/js wrapper checks).
 - [ ] Manual smoke: a real `POST /api/v1/cognify` with `run_in_background=true` followed by a WebSocket subscription on `/api/v1/cognify/subscribe/{pipeline_run_id}` produces an event stream that ends with a single `PipelineRunCompleted` frame and a Close frame `1000`. The forced-error variant leaves the socket open until the client disconnects.
-- [ ] `state.pipelines.shutdown()` is called from the SIGTERM / SIGINT handler in the binary, and a manual SIGTERM during an in-flight run results in a `DATASET_PROCESSING_ERRORED` row visible via `/api/v1/datasets/status` (or direct DB query, since the `/datasets/status` endpoint is owned by P2/P5).
-- [ ] `/improve` returns literal status `420` on `PipelineRunErrored`, with the `PipelineRunInfo` object as the body (not the canonical error envelope). Asserted by `test_improve_420.rs`.
-- [ ] `/remember` returns literal status `409 {"error": "An error occurred during remember."}` for any error (including `PipelineRunErrored` from the inner cognify). Asserted by `test_remember.rs`.
-- [ ] The cognify WebSocket forwards `PipelineRunErrored` and `PipelineRunAlreadyCompleted` frames **without** closing the socket. Asserted by `test_cognify_websocket.rs`.
-- [ ] Status table in [README.md](README.md) and [../routers/README.md](../routers/README.md) updated: rows for cognify, memify, remember, improve flipped to **Done**; P3 row flipped to **Done**.
+- [x] `state.pipelines.shutdown()` is called from the SIGTERM / SIGINT handler in the binary, and a manual SIGTERM during an in-flight run results in a `DATASET_PROCESSING_ERRORED` row visible via `/api/v1/datasets/status` (or direct DB query, since the `/datasets/status` endpoint is owned by P2/P5).
+- [x] `/improve` returns literal status `420` on `PipelineRunErrored`, with the `PipelineRunInfo` object as the body (not the canonical error envelope). Asserted by `test_improve_420.rs`.
+- [x] `/remember` returns literal status `409 {"error": "An error occurred during remember."}` for any error (including `PipelineRunErrored` from the inner cognify). Asserted by `test_remember.rs`.
+- [x] The cognify WebSocket forwards `PipelineRunErrored` and `PipelineRunAlreadyCompleted` frames **without** closing the socket. Asserted by `test_cognify_websocket.rs`.
+- [x] Status table in [README.md](README.md) and [../routers/README.md](../routers/README.md) updated: rows for cognify, memify, remember, improve flipped to **Done**; P3 row flipped to **Done**.
 
 ### Behaviour matrix to assert in tests
 
