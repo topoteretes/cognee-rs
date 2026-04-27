@@ -4,6 +4,9 @@ use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 use uuid::Uuid;
 
+// Re-export the shared pipeline-run DTOs so callers only need one import path.
+pub use super::pipeline_run::{DataIngestionInfoDTO, PipelineRunInfoDTO};
+
 /// Multipart form for `POST /api/v1/add`.
 ///
 /// `axum::extract::Multipart` does not derive into a struct directly; this DTO
@@ -48,37 +51,6 @@ pub struct UploadedPart {
     /// Set when the part body is a URL/S3 string (< 4 KiB, valid scheme).
     /// In that case `temp_path` has been unlinked.
     pub url_payload: Option<String>,
-}
-
-/// Response shape — matches Python's `PipelineRunInfo.model_dump()`.
-#[derive(Debug, Serialize, ToSchema)]
-#[serde(rename_all = "snake_case")]
-pub struct PipelineRunInfoDTO {
-    /// "PipelineRunStarted" | "PipelineRunYield" | "PipelineRunCompleted"
-    /// | "PipelineRunAlreadyCompleted" | "PipelineRunErrored".
-    /// String, not enum, to keep wire compatibility with Python's str status field.
-    pub status: String,
-    pub pipeline_run_id: Uuid,
-    pub dataset_id: Uuid,
-    pub dataset_name: String,
-    /// Free-form. Cognify yields a `GraphDTO` here; add yields `null`.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub payload: Option<serde_json::Value>,
-    /// Per-data-item rows from `add_pipeline`.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub data_ingestion_info: Option<Vec<DataIngestionInfoDTO>>,
-}
-
-/// Per-data-item ingestion info row.
-#[derive(Debug, Serialize, ToSchema)]
-#[serde(rename_all = "snake_case")]
-pub struct DataIngestionInfoDTO {
-    pub data_id: Uuid,
-    pub content_hash: String,
-    pub name: String,
-    pub extension: String,
-    pub mime_type: String,
-    pub raw_data_location: String,
 }
 
 /// `add`/`update`-specific error envelope. Keep separate from `ApiError`'s

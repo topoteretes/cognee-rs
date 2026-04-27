@@ -276,6 +276,7 @@ pub async fn post_add(
                 dataset_id: ds_id,
                 dataset_name: dataset_name.clone(),
                 payload: None,
+                error: None,
                 data_ingestion_info: Some(ingestion_info),
             };
 

@@ -1,12 +1,68 @@
-//! Cookie helpers: `login_cookie` and `logout_cookie`.
+//! Cookie helpers: `login_cookie`, `logout_cookie`, and
+//! `authenticate_from_cookie`.
 //!
-//! Both return a `HeaderValue` ready to be appended as `Set-Cookie` on the
-//! response.
+//! `login_cookie` and `logout_cookie` return a `HeaderValue` ready to be
+//! appended as `Set-Cookie` on the response.
+//!
+//! `authenticate_from_cookie` is the shared helper called by both the HTTP
+//! `AuthenticatedUser` extractor and the WebSocket handler (which needs to
+//! authenticate after the upgrade).
 
-use axum::http::HeaderValue;
+use axum::http::{HeaderMap, HeaderValue};
 use cookie::{Cookie, SameSite, time::Duration as CookieDuration};
+use uuid::Uuid;
 
 use super::context::AuthContext;
+use super::extractor::{AuthMethod, AuthenticatedUser};
+
+// ─── authenticate_from_cookie ─────────────────────────────────────────────────
+
+/// Read the auth-token cookie from a header map, verify the JWT, and look up
+/// the user.
+///
+/// Used by the WebSocket handler, which must authenticate *after* the upgrade
+/// handshake (Python parity — [websocket.md §9.2](../../../docs/http-server/websocket.md#92-why-we-accept-the-upgrade-before-auth)).
+///
+/// Returns `None` when the cookie is absent, the JWT is invalid/expired, or
+/// the user is not found/inactive — the WebSocket handler maps any `None` to
+/// a `1008 "Unauthorized"` close frame without leaking the underlying cause.
+pub async fn authenticate_from_cookie(
+    headers: &HeaderMap,
+    auth: &AuthContext,
+) -> Option<AuthenticatedUser> {
+    use super::jwt::decode_login_jwt;
+
+    // Extract the raw cookie header.
+    let cookie_header = headers
+        .get(axum::http::header::COOKIE)
+        .and_then(|v| v.to_str().ok())?;
+
+    // Find the cookie by name.
+    let token = cookie_header
+        .split(';')
+        .map(str::trim)
+        .find_map(|part| part.strip_prefix(&format!("{}=", auth.cookie_name)))?;
+
+    // Decode and validate the JWT.
+    let claims = decode_login_jwt(token, auth).ok()?;
+    let uid = Uuid::parse_str(&claims.sub).ok()?;
+
+    // Look up the user in the repository.
+    let user = auth.user_repo.find_by_id(uid).await.ok()??;
+    if !user.is_active {
+        return None;
+    }
+
+    Some(AuthenticatedUser {
+        id: user.id,
+        email: user.email,
+        is_superuser: user.is_superuser,
+        is_verified: user.is_verified,
+        is_active: user.is_active,
+        tenant_id: user.tenant_id,
+        auth_method: AuthMethod::CookieJwt,
+    })
+}
 
 fn build_cookie<'a>(name: &'a str, value: &'a str, max_age_secs: i64, ctx: &AuthContext) -> String {
     let mut b = Cookie::build((name, value))

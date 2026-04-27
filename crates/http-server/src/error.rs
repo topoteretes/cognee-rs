@@ -12,6 +12,32 @@ use serde::Serialize;
 use serde_json::{Value, json};
 use thiserror::Error;
 
+// ─── PipelineErrorSource ──────────────────────────────────────────────────────
+
+/// Which pipeline router produced a `PipelineErrored` event.
+///
+/// The `IntoResponse` implementation of `ApiError::PipelineErrored` uses this
+/// to choose the HTTP status code and body shape per Python parity:
+///
+/// | Source | Status | Body |
+/// |---|---|---|
+/// | `Improve` | **420** | raw serialised `PipelineRunInfoDTO` |
+/// | all others | 500 | `{"error": "Pipeline run errored", "detail": "<msg>"}` |
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PipelineErrorSource {
+    /// `/cognify` — 500, canonical envelope.
+    Cognify,
+    /// `/memify` — 500, canonical envelope.
+    Memify,
+    /// `/improve` — **420**, raw run-info body (Python parity quirk).
+    Improve,
+    /// `/remember` — does NOT use this variant; its catch-all is 409.
+    /// Included for completeness and future use.
+    Remember,
+    /// `/sync` — 500, canonical envelope (not yet wired).
+    Sync,
+}
+
 // ─── Validation details ──────────────────────────────────────────────────────
 
 /// Carries the Python-shaped validation error payload:
@@ -99,9 +125,29 @@ pub enum ApiError {
     #[error("api key error: {0}")]
     ApiKeyEnvelope(String),
 
-    /// 420/500 — pipeline job returned an error status.
-    #[error("pipeline errored: {0}")]
-    PipelineErrored(String),
+    /// 420 (Improve) or 500 (all others) — pipeline job returned an error.
+    ///
+    /// * `pipeline_source = Improve` → HTTP 420, body is the raw `run_info` value
+    ///   (Python's `/improve` returns the `PipelineRunInfo` object directly,
+    ///   not the canonical envelope).
+    /// * all other sources → HTTP 500, body is
+    ///   `{"error": "Pipeline run errored", "detail": "<msg>"}`.
+    ///
+    /// `/remember` does **not** use this variant — its catch-all is
+    /// `ApiError::DeprecatedConflict("An error occurred during remember.")` per
+    /// Python parity (produces `{"error": "..."}`, not `{"detail": "..."}`).
+    ///
+    /// `/improve`'s generic catch-all similarly uses `ApiError::DeprecatedConflict`.
+    ///
+    /// Note: the field is named `pipeline_source` (not `source`) to prevent
+    /// `thiserror` from treating it as an error-chain source.
+    #[error("pipeline errored ({pipeline_source:?})")]
+    PipelineErrored {
+        pipeline_source: PipelineErrorSource,
+        /// For `Improve`: the full serialised `PipelineRunInfoDTO`.
+        /// For others: `serde_json::json!({"error": "Pipeline run errored", "detail": "<msg>"})`.
+        run_info: serde_json::Value,
+    },
 
     /// 418 `{"detail": "<msg>"}` — Python fallback for uncategorized errors.
     ///
@@ -135,8 +181,14 @@ pub enum ApiError {
     #[error("error envelope: {0}")]
     OntologyEnvelope(String, StatusCode),
 
-    /// `409 {"error": "..."}` — used by the deprecated `/delete` endpoint.
-    #[error("deprecated conflict: {0}")]
+    /// `409 {"error": "..."}` — used by the deprecated `/delete` endpoint and by
+    /// the `/remember` and `/improve` catch-all error paths.
+    ///
+    /// Python parity: those routers return `JSONResponse({"error": "..."})` with
+    /// status 409, **not** `HTTPException(409, detail=...)`, so the body key is
+    /// `"error"` rather than `"detail"`.  This is intentionally different from
+    /// `ApiError::Conflict` which uses the `"detail"` key.
+    #[error("conflict error: {0}")]
     DeprecatedConflict(String),
 
     /// 501 `{"detail": "..."}` — not implemented (e.g. unsupported storage scheme).
@@ -208,9 +260,22 @@ impl IntoResponse for ApiError {
                 StatusCode::BAD_REQUEST,
                 json!({"error": {"message": message}}),
             ),
-            ApiError::PipelineErrored(msg) => {
-                (StatusCode::INTERNAL_SERVER_ERROR, json!({"detail": msg}))
-            }
+            ApiError::PipelineErrored {
+                pipeline_source,
+                run_info,
+            } => match pipeline_source {
+                PipelineErrorSource::Improve => {
+                    // Python parity: /improve returns the raw PipelineRunInfo
+                    // object as the body with HTTP 420, not the canonical
+                    // {"error":..., "detail":...} envelope.
+                    // StatusCode 420 is not a standard IANA code; construct
+                    // it from the raw integer.
+                    let status =
+                        StatusCode::from_u16(420).expect("420 is a valid HTTP status code");
+                    return (status, Json(run_info)).into_response();
+                }
+                _ => (StatusCode::INTERNAL_SERVER_ERROR, run_info),
+            },
             ApiError::Teapot(msg) => (StatusCode::IM_A_TEAPOT, json!({"detail": msg})),
             ApiError::WriteEndpointError {
                 error,
@@ -359,5 +424,64 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::NOT_IMPLEMENTED);
         let body = body_json(resp).await;
         assert_eq!(body["detail"], "Storage scheme 's3' not supported");
+    }
+
+    // ── PipelineErrored variant tests ─────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_pipeline_errored_cognify_returns_500() {
+        let resp = ApiError::PipelineErrored {
+            pipeline_source: PipelineErrorSource::Cognify,
+            run_info: serde_json::json!({"error": "Pipeline run errored", "detail": "boom"}),
+        }
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let body = body_json(resp).await;
+        assert_eq!(body["error"], "Pipeline run errored");
+        assert_eq!(body["detail"], "boom");
+    }
+
+    #[tokio::test]
+    async fn test_pipeline_errored_memify_returns_500() {
+        let resp = ApiError::PipelineErrored {
+            pipeline_source: PipelineErrorSource::Memify,
+            run_info: serde_json::json!({"error": "Pipeline run errored", "detail": "memify fail"}),
+        }
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[tokio::test]
+    async fn test_pipeline_errored_improve_returns_420() {
+        let run_info = serde_json::json!({
+            "status": "PipelineRunErrored",
+            "pipeline_run_id": "00000000-0000-0000-0000-000000000001",
+            "dataset_id": "00000000-0000-0000-0000-000000000002",
+            "dataset_name": "test",
+            "error": "improve failed"
+        });
+        let resp = ApiError::PipelineErrored {
+            pipeline_source: PipelineErrorSource::Improve,
+            run_info: run_info.clone(),
+        }
+        .into_response();
+        // 420 is the Python-parity quirk for /improve
+        assert_eq!(resp.status().as_u16(), 420);
+        // Body is the raw PipelineRunInfoDTO, NOT the canonical envelope
+        let body = body_json(resp).await;
+        assert_eq!(body["status"], "PipelineRunErrored");
+        assert_eq!(body["error"], "improve failed");
+        // Must NOT have the canonical {"error": "Pipeline run errored"} wrapper
+        assert_ne!(body["error"], "Pipeline run errored");
+    }
+
+    #[tokio::test]
+    async fn test_pipeline_errored_sync_returns_500() {
+        let resp = ApiError::PipelineErrored {
+            pipeline_source: PipelineErrorSource::Sync,
+            run_info: serde_json::json!({"error": "Pipeline run errored", "detail": "sync fail"}),
+        }
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 }

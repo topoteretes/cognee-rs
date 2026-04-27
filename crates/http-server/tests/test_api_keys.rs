@@ -64,7 +64,7 @@ async fn list_keys_requires_auth() {
 
     let state = cognee_http_server::AppState {
         config: Arc::new(cfg),
-        pipelines: None,
+        pipelines: cognee_http_server::AppState::noop_pipelines(),
         lib: None,
         auth: Some(Arc::new(auth)),
         mailer: Arc::new(mailer),
@@ -260,7 +260,7 @@ async fn list_keys_masked_when_hash_api_key_enabled() {
 
     let state = cognee_http_server::AppState {
         config: Arc::new(cfg),
-        pipelines: None,
+        pipelines: cognee_http_server::AppState::noop_pipelines(),
         lib: None,
         auth: Some(Arc::new(auth)),
         mailer: Arc::new(mailer),

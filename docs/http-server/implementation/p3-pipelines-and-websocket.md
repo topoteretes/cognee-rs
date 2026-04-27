@@ -63,7 +63,7 @@ A reviewer can land Steps 1–6 as a stack, then any of {cognify, memify, rememb
 
 ### Step 1 — Wire the registry into `AppState::pipelines`
 
-- Files: `crates/http-server/src/state.rs`, `crates/http-server/src/lib.rs` (`AppState::build`), `crates/http-server/src/bin/cognee-http-server.rs` (startup), `crates/http-server/src/config.rs` (extend `HttpServerConfig` with registry knobs).
+- Files: `crates/http-server/src/state.rs`, `crates/http-server/src/lib.rs` (`AppState::build`), `crates/http-server/src/main.rs` (startup), `crates/http-server/src/config.rs` (extend `HttpServerConfig` with registry knobs).
 - Spec: [../architecture.md §6](../architecture.md#6-application-state--dependency-injection), [../pipelines.md §6.1](../pipelines.md#61-location-and-feature-gating), [../pipelines.md §11](../pipelines.md#11-eviction--resource-budget).
 - Action: drop the `Option<…>` wrapper from `AppState::pipelines` (P0 left it as `Option<Arc<dyn PipelineRunRegistry>>` so unit tests could pass without the registry). At construction time, build a `RegistryConfig` from the matching `HttpServerConfig` fields and instantiate the concrete registry from `cognee_core` (`DefaultPipelineRunRegistry::new(repo, cfg)`). Store `Arc::new(registry)` on the state. The `repo: Arc<dyn PipelineRunRepository>` is the SeaORM impl that ships with the P3 prereq.
 
@@ -80,6 +80,7 @@ A reviewer can land Steps 1–6 as a stack, then any of {cognify, memify, rememb
 
 - Files: `crates/http-server/src/dto/pipeline_run.rs` (new), re-export from `dto::mod`.
 - Spec: [../pipelines.md §3](../pipelines.md#3-status-taxonomy-and-wire-mapping), [../routers/cognify.md §4](../routers/cognify.md#4-dto-definitions).
+- **Note**: A `PipelineRunInfoDTO` struct already exists in `crates/http-server/src/dto/add.rs` (used by the P2 add router). The P3 struct in `pipeline_run.rs` is the **shared** version for all four pipeline routers; `dto/add.rs` re-exports it from `pipeline_run.rs` instead of defining it inline. Update `dto/add.rs` and `dto/update.rs` to import from `dto::pipeline_run` to avoid duplication.
 - Action: define the shared `PipelineRunInfoDTO` (used by all four routers — it is **not** cognify-only). Add a `pub fn event_kind_to_python_string(kind: &RunEventKind) -> &'static str` and the inverse for the durable-status side. Cover all five wire strings: `PipelineRunStarted`, `PipelineRunYield`, `PipelineRunCompleted`, `PipelineRunErrored`, `PipelineRunAlreadyCompleted`. Add a `pipeline_status_to_db_string(status: PipelineRunStatus) -> &'static str` for the `DATASET_PROCESSING_*` durable-side mapping (the registry's `PipelineWatcher` impl uses this when it writes rows; if the prereq impl already owns the mapping, this step adds only the wire-string helpers).
 - Verify: unit test for every enum variant in both directions; assert the output strings match the Python literals from [../pipelines.md §3.2](../pipelines.md#32-durable-status--written-to-pipeline_runsstatus) and [§3.3](../pipelines.md#33-live-event-status--emitted-on-the-registry-channel-and-the-websocket-frame).
 
@@ -203,7 +204,7 @@ A reviewer can land Steps 1–6 as a stack, then any of {cognify, memify, rememb
 
 ### Step 11.1 — Multipart parsing details for `/remember`
 
-- Files: `crates/http-server/src/middleware/multipart.rs` (extend the P2 helper if needed), `crates/http-server/src/routers/remember.rs` (Step 11 caller).
+- Files: `crates/http-server/src/multipart.rs` (extend the P2 helper if needed — note: this file is at the crate root, **not** inside `middleware/`), `crates/http-server/src/routers/remember.rs` (Step 11 caller).
 - Spec: [../routers/remember.md §3](../routers/remember.md#3-cross-cutting-behavior), [../routers/remember.md §5](../routers/remember.md#5-implementation-tasks) item 2.
 - Action: confirm the P2 multipart extractor produces a stream of `(name, content_type, AsyncRead)` per part. The remember handler iterates parts and dispatches by name:
   - Name `data` → stream to a per-request tempdir (`dirs::cache_dir()/cognee/uploads/<request-id>/<part-name>`); accumulate `UploadedFilePart` entries with `(filename, content_type, temp_path, byte_count)`.
@@ -234,15 +235,15 @@ A reviewer can land Steps 1–6 as a stack, then any of {cognify, memify, rememb
 
 ### Step 14 — Graceful shutdown calls `state.pipelines.shutdown()`
 
-- Files: `crates/http-server/src/bin/cognee-http-server.rs` (the binary's `main`), `crates/http-server/src/lib.rs` (`run` helper if it owns the signal handler).
-- Spec: [../pipelines.md §12](../pipelines.md#12-crash--restart-recovery), [../architecture.md §13](../architecture.md#13-startup--graceful-shutdown) (the shutdown sketch).
+- Files: `crates/http-server/src/main.rs` (the binary's `main`), `crates/http-server/src/lib.rs` (`run` helper if it owns the signal handler).
+- Spec: [../pipelines.md §12](../pipelines.md#12-crash--restart-recovery), [../architecture.md §15](../architecture.md#15-graceful-shutdown) (the shutdown sketch).
 - Action: in the SIGTERM / SIGINT handler attached to `axum::serve(...).with_graceful_shutdown(...)`, await `state.pipelines.shutdown()` **before** dropping `state`. The default `RegistryConfig` writes `DATASET_PROCESSING_ERRORED` rows for each in-flight run with `run_info = {"reason": "server_shutdown"}`. Operators wanting strict Python parity can flip `RegistryConfig::abort_writes_errored_row = false` via `HttpServerConfig`.
 - Verify: integration test `test_pipelines_shutdown.rs` (Step 17) drives this end-to-end.
 
 ### Step 15 — OpenAPI annotations
 
 - Files: each router file from Steps 7, 10, 11, 12, plus the central `ApiDoc` modifier (P0 wired this — extend the `paths(...)` and `components(schemas(...))` lists).
-- Spec: [../architecture.md §15](../architecture.md#15-openapi-document) (utoipa conventions), per-router OpenAPI sections in each spec.
+- Spec: [../architecture.md §13](../architecture.md#13-openapi-generation----utoipa) (utoipa conventions), per-router OpenAPI sections in each spec.
 - Action: add `#[utoipa::path(...)]` to every handler from Steps 7–12, declaring full response coverage:
   - **`POST /api/v1/cognify`**: `tag = "cognify"`, `request_body = CognifyPayloadDTO`, responses 200 (`HashMap<String, PipelineRunInfoDTO>`), 400, 401, 403, 409, 422, 500. Document the 409 specifically as the unknown-ontology-key path.
   - **`GET /api/v1/cognify/subscribe/{pipeline_run_id}`**: `tag = "cognify"`, response 101 ("Switching Protocols"). utoipa's idiomatic way is a single `(status = 101, description = "Switching Protocols")` entry — the actual frame schema is not part of the OpenAPI document. Add a description block referencing [../websocket.md §5](../websocket.md#5-frame-format) so SDK generators know where to find the wire shape.
@@ -374,7 +375,7 @@ Modified files:
 
 - `crates/http-server/src/state.rs` — drop `Option` from `pipelines`, wire the registry (Step 1).
 - `crates/http-server/src/lib.rs` — `AppState::build` constructs the registry; `build_router` mounts the four nested routers (Steps 1, 9, 10, 11, 12).
-- `crates/http-server/src/bin/cognee-http-server.rs` — call `state.pipelines.shutdown()` in the graceful-shutdown handler (Step 14).
+- `crates/http-server/src/main.rs` — call `state.pipelines.shutdown()` in the graceful-shutdown handler (Step 14).
 - `crates/http-server/src/error.rs` — extend `ApiError::PipelineErrored` with `{ source, run_info }` and add `PipelineErrorSource` enum (Step 4).
 - `crates/http-server/src/routers/mod.rs` — module declarations for the four new routers (Steps 9, 10, 11, 12).
 - `crates/http-server/src/dto/mod.rs` — re-exports for the new DTO modules (Steps 2, 3, 7, 10, 11, 12).

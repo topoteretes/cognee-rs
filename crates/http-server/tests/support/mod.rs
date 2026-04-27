@@ -147,7 +147,7 @@ pub async fn build_auth_test_state() -> (AppState, Arc<std::sync::Mutex<Vec<Mail
 
     let state = AppState {
         config: Arc::new(cfg),
-        pipelines: None,
+        pipelines: AppState::noop_pipelines(),
         lib: None,
         auth: Some(Arc::new(auth)),
         mailer: Arc::new(mailer),
@@ -207,7 +207,7 @@ pub async fn build_auth_required_test_state() -> (AppState, Arc<std::sync::Mutex
 
     let state = AppState {
         config: Arc::new(cfg),
-        pipelines: None,
+        pipelines: AppState::noop_pipelines(),
         lib: None,
         auth: Some(Arc::new(auth)),
         mailer: Arc::new(mailer),

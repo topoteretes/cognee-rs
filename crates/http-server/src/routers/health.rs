@@ -340,7 +340,7 @@ mod tests {
     fn make_router(checker: impl HealthChecker + 'static) -> Router {
         let mut state = AppState {
             config: Arc::new(crate::config::HttpServerConfig::default()),
-            pipelines: None,
+            pipelines: AppState::noop_pipelines(),
             lib: None,
             auth: None,
             mailer: Arc::new(crate::auth::LoggingMailer),

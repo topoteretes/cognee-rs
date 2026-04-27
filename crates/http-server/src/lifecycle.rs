@@ -29,8 +29,19 @@ pub async fn on_startup(state: &crate::state::AppState) -> Result<(), LifecycleE
 
 /// Called on graceful shutdown (SIGTERM / SIGINT).
 ///
-/// P3: call `state.pipelines.shutdown()` to abort in-flight runs and write
-/// `DATASET_PROCESSING_ERRORED` rows so a restart doesn't show stale `STARTED`.
-pub async fn on_shutdown(_state: &crate::state::AppState) {
+/// P3: calls `state.pipelines.shutdown()` to abort in-flight runs and write
+/// `DATASET_PROCESSING_ERRORED` rows so a restart doesn't show stale `STARTED`
+/// state.  Per pipelines.md §12.
+pub async fn on_shutdown(state: &crate::state::AppState) {
     tracing::info!("Backend server is shutting down");
+
+    // Abort every in-flight pipeline run and write ERRORED rows.
+    // The default RegistryConfig.abort_writes_errored_row=true causes a
+    // DATASET_PROCESSING_ERRORED row to be inserted for each in-flight run with
+    // run_info = {"reason": "server_shutdown"}.
+    if let Err(e) = state.pipelines.shutdown().await {
+        tracing::warn!("pipeline registry shutdown failed (non-fatal): {e}");
+    } else {
+        tracing::info!("pipeline registry shutdown complete");
+    }
 }

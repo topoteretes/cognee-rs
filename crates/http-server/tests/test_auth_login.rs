@@ -202,7 +202,7 @@ async fn get_auth_me_no_token_when_auth_required_returns_401() {
 
     let state = cognee_http_server::AppState {
         config: Arc::new(cfg),
-        pipelines: None,
+        pipelines: cognee_http_server::AppState::noop_pipelines(),
         lib: None,
         auth: Some(Arc::new(auth)),
         mailer: Arc::new(mailer),

@@ -11,6 +11,9 @@ use secrecy::SecretString;
 
 use crate::error::ServerError;
 
+// re-export for use in state.rs
+pub use cognee_core::pipeline_run_registry::RegistryConfig;
+
 // ─── Environment enum ─────────────────────────────────────────────────────────
 
 /// Deployment environment.  Controls log format (pretty vs JSON) and other
@@ -64,6 +67,24 @@ pub struct HttpServerConfig {
     /// Maximum request body size in bytes. Env: `HTTP_BODY_LIMIT_BYTES`.
     /// Default: 100 MiB.
     pub body_limit: usize,
+
+    // ── Pipeline registry knobs ──────────────────────────────────────────────
+    //
+    // These map to `cognee_core::pipeline_run_registry::RegistryConfig` fields.
+    // Env vars are prefixed `PIPELINE_REGISTRY_` per pipelines.md §6.2.
+    /// Max in-memory runs. Env: `PIPELINE_REGISTRY_MAX_RUNS`. Default: 4096.
+    pub pipeline_registry_max_runs: usize,
+    /// Finished-run retention in seconds. Env: `PIPELINE_REGISTRY_FINISHED_RETENTION_SECS`.
+    /// Default: 3600.
+    pub pipeline_registry_finished_retention_secs: u64,
+    /// Per-run broadcast channel capacity. Env: `PIPELINE_REGISTRY_CHANNEL_CAPACITY`.
+    /// Default: 64.
+    pub pipeline_registry_channel_capacity: usize,
+    /// Whether to write ERRORED rows on abort/shutdown.
+    /// Env: `PIPELINE_REGISTRY_ABORT_WRITES_ERRORED`. Default: true.
+    /// Set to false for strict Python parity (Python leaves rows as STARTED on
+    /// unclean shutdown). See pipelines.md §12.
+    pub pipeline_registry_abort_writes_errored: bool,
 }
 
 impl Default for HttpServerConfig {
@@ -78,6 +99,10 @@ impl Default for HttpServerConfig {
             jwt_secret: SecretString::new(uuid::Uuid::new_v4().to_string().into()),
             jwt_lifetime: Duration::from_secs(3600),
             body_limit: 100 * 1024 * 1024,
+            pipeline_registry_max_runs: 4096,
+            pipeline_registry_finished_retention_secs: 3600,
+            pipeline_registry_channel_capacity: 64,
+            pipeline_registry_abort_writes_errored: true,
         }
     }
 }
@@ -130,7 +155,43 @@ impl HttpServerConfig {
                 .map_err(|e| ServerError::Other(anyhow::anyhow!("HTTP_BODY_LIMIT_BYTES: {e}")))?;
         }
 
+        // Pipeline registry knobs
+        if let Ok(v) = std::env::var("PIPELINE_REGISTRY_MAX_RUNS") {
+            cfg.pipeline_registry_max_runs = v.parse::<usize>().map_err(|e| {
+                ServerError::Other(anyhow::anyhow!("PIPELINE_REGISTRY_MAX_RUNS: {e}"))
+            })?;
+        }
+        if let Ok(v) = std::env::var("PIPELINE_REGISTRY_FINISHED_RETENTION_SECS") {
+            cfg.pipeline_registry_finished_retention_secs = v.parse::<u64>().map_err(|e| {
+                ServerError::Other(anyhow::anyhow!(
+                    "PIPELINE_REGISTRY_FINISHED_RETENTION_SECS: {e}"
+                ))
+            })?;
+        }
+        if let Ok(v) = std::env::var("PIPELINE_REGISTRY_CHANNEL_CAPACITY") {
+            cfg.pipeline_registry_channel_capacity = v.parse::<usize>().map_err(|e| {
+                ServerError::Other(anyhow::anyhow!("PIPELINE_REGISTRY_CHANNEL_CAPACITY: {e}"))
+            })?;
+        }
+        if let Ok(v) = std::env::var("PIPELINE_REGISTRY_ABORT_WRITES_ERRORED") {
+            cfg.pipeline_registry_abort_writes_errored =
+                !matches!(v.to_ascii_lowercase().as_str(), "false" | "0" | "no");
+        }
+
         Ok(cfg)
+    }
+}
+
+impl HttpServerConfig {
+    /// Build a `RegistryConfig` from the matching `HttpServerConfig` fields.
+    pub fn to_registry_config(&self) -> RegistryConfig {
+        RegistryConfig {
+            max_in_memory_runs: self.pipeline_registry_max_runs,
+            finished_retention: Duration::from_secs(self.pipeline_registry_finished_retention_secs),
+            channel_capacity: self.pipeline_registry_channel_capacity,
+            yield_throttle: None, // not exposed via env in Phase 3
+            abort_writes_errored_row: self.pipeline_registry_abort_writes_errored,
+        }
     }
 }
 

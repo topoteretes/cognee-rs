@@ -31,3 +31,25 @@ pub struct ComponentHandles {
     /// Ontology manager (per-user file storage).
     pub ontology_manager: Arc<OntologyManager>,
 }
+
+impl ComponentHandles {
+    /// Return the formatted knowledge-graph data for a dataset as the JSON
+    /// shape `{"nodes": [...], "edges": [...]}`.
+    ///
+    /// **Blocking gap**: the underlying `get_formatted_graph_data` function
+    /// has not yet been ported from Python. Returns an empty graph
+    /// `{"nodes": [], "edges": []}` until the implementation lands.
+    ///
+    /// The WebSocket handler calls this on every event and substitutes `{}`
+    /// on any error, so a stub return is correct wire-parity for now.
+    ///
+    /// TODO: wire to `cognee_graph::get_formatted_graph_data(dataset_id, user)`
+    /// once that function is ported.
+    pub async fn formatted_graph_data(
+        &self,
+        _dataset_id: Option<uuid::Uuid>,
+        _user_id: uuid::Uuid,
+    ) -> Result<serde_json::Value, anyhow::Error> {
+        Ok(serde_json::json!({"nodes": [], "edges": []}))
+    }
+}

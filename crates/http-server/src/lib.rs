@@ -17,6 +17,7 @@ pub mod middleware;
 pub mod multipart;
 pub mod openapi;
 pub mod permissions;
+pub mod pipelines;
 pub mod responses;
 pub mod routers;
 pub mod state;
@@ -85,6 +86,11 @@ pub async fn build_router(state: AppState) -> Result<Router, ServerError> {
         .nest("/api/v1/delete", routers::delete::router())
         .nest("/api/v1/update", routers::update::router())
         .nest("/api/v1/forget", routers::forget::router())
+        // P3 pipeline routers
+        .nest("/api/v1/cognify", routers::cognify::router())
+        .nest("/api/v1/memify", routers::memify::router())
+        .nest("/api/v1/remember", routers::remember::router())
+        .nest("/api/v1/improve", routers::improve::router())
         // Middleware stack (outer → inner): trace → CORS → body limit
         .layer(RequestBodyLimitLayer::new(body_limit))
         .layer(middleware::cors::cors_layer(&state.config))

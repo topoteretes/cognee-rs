@@ -27,7 +27,7 @@ bin = [
 # Web framework and HTTP stack — do NOT use workspace hyper; the workspace
 # [patch.crates-io] pins hyper to a v0.14 qdrant fork. axum 0.8 requires
 # hyper 1.x. Cargo resolves both versions in parallel.
-axum = { version = "0.8", features = ["multipart"] }
+axum = { version = "0.8", features = ["multipart", "ws"] }
 tower = "0.5"
 tower-http = { version = "0.6", features = ["cors", "trace", "limit"] }
 hyper = { version = "1", features = ["server", "http1", "http2"] }
@@ -75,6 +75,7 @@ dashmap = "6"
 bytes = "1"
 futures = { workspace = true }
 tokio = { workspace = true, features = ["rt", "sync", "time", "net", "io-util", "fs"] }
+tokio-stream = { workspace = true }
 tokio-util = { version = "0.7", features = ["io"] }
 mime_guess = "2"
 
