@@ -503,6 +503,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_delete_points_removes_from_search_and_count() {
+        let temp_dir = TempDir::new().unwrap();
+        let adapter = QdrantAdapter::new(temp_dir.path().to_path_buf(), 2);
+
+        adapter.create_collection("Test", "field", 2).await.unwrap();
+
+        let deleted_id = Uuid::new_v4();
+        let kept_id = Uuid::new_v4();
+        let points = vec![
+            VectorPoint::new(deleted_id, vec![1.0, 0.0]).with_metadata("name", json!("deleted")),
+            VectorPoint::new(kept_id, vec![0.0, 1.0]).with_metadata("name", json!("kept")),
+        ];
+
+        adapter
+            .index_points("Test", "field", &points)
+            .await
+            .unwrap();
+        adapter
+            .delete_points("Test", "field", &[deleted_id])
+            .await
+            .unwrap();
+
+        let size = adapter.collection_size("Test", "field").await.unwrap();
+        assert_eq!(size, 1);
+
+        let results = adapter
+            .search_similar("Test", "field", &[1.0, 0.0], 10)
+            .await
+            .unwrap();
+        let ids: Vec<_> = results.into_iter().map(|result| result.id).collect();
+        assert!(!ids.contains(&deleted_id));
+        assert!(ids.contains(&kept_id));
+    }
+
+    #[tokio::test]
     async fn test_dimension_validation() {
         let temp_dir = TempDir::new().unwrap();
         let adapter = QdrantAdapter::new(temp_dir.path().to_path_buf(), 3);
