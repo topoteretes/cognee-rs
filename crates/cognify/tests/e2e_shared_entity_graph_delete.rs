@@ -146,14 +146,14 @@ async fn test_shared_entity_graph_delete() {
     let result_ai = match cognify(
         data_ai,
         ds_ai.id,
-        None,
+        Some(owner_id),
         None,
         llm.clone() as Arc<dyn Llm>,
         storage.clone(),
         graph_db.clone(),
         vector_db.clone(),
         embedding_engine.clone(),
-        None,
+        Some(Arc::clone(&database)),
         ontology.clone(),
         &config,
     )
@@ -169,14 +169,14 @@ async fn test_shared_entity_graph_delete() {
     let result_ml = match cognify(
         data_ml,
         ds_ml.id,
-        None,
+        Some(owner_id),
         None,
         llm.clone() as Arc<dyn Llm>,
         storage.clone(),
         graph_db.clone(),
         vector_db.clone(),
         embedding_engine.clone(),
-        None,
+        Some(Arc::clone(&database)),
         ontology.clone(),
         &config,
     )
