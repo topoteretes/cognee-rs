@@ -4,6 +4,8 @@
 
 Land the four read-path routers that complete the "core pipeline via HTTP" slice: `/api/v1/search` (GET history + POST semantic search), `/api/v1/recall` (GET history + POST — wire-level alias for search per Python parity), `/api/v1/llm` (`/custom-prompt` + `/infer-schema` LLM utilities), and `/api/v1/visualize` (`GET /?dataset_id=` HTML + superuser-only `POST /multi`). The phase also extends `cognee-visualization` with the missing `render_multi_user(...)` entry point. After P4, every read-path endpoint the cognee-frontend uses today has a Rust counterpart with byte-equivalent shapes and (per Python) three router-specific error envelopes wired into `ApiError`.
 
+**Note on `formatted_graph_data`** — flagged by the P3 doc-update agent: `ComponentHandles::formatted_graph_data` is currently a stub returning `{"nodes": [], "edges": []}` (see [`crates/http-server/src/components.rs:48-54`](../../../crates/http-server/src/components.rs)). P4 does **not** depend on it: the visualize router calls `cognee_visualization::render(graph_db)` directly against the `GraphDBTrait` handle, not through `formatted_graph_data`. Full wiring of the stub remains a P5 follow-up.
+
 ## 2. References (read these before starting)
 
 - Phase summary: [plan.md §4 P4](../plan.md#4-implementation-phases).
@@ -21,9 +23,24 @@ Land the four read-path routers that complete the "core pipeline via HTTP" slice
 ## 3. Prerequisites
 
 - **P0 done** — `crates/http-server/` crate, `AppState`, `ApiError` skeleton, custom `Json` extractor, `build_router` shell.
-- **P1 done** — `AuthenticatedUser` extractor, JWT/cookie/X-Api-Key auth, users table.
-- **P2 done** — `cognee_lib::datasets()` accessor surface and the `get_authorized` resolver are available; needed by the visualize handler's permission gate.
+- **P1 done** — `AuthenticatedUser` extractor, JWT/cookie/X-Api-Key auth, users table. **Note**: `RequireSuperuser` already exists in `crates/http-server/src/auth/extractor.rs:177` from P1 and emits the canonical `{"detail": "Forbidden"}` envelope. Step 10 introduces `SuperuserOnly` as a *visualize-specific* wrapper that emits the `{"error": "..."}` envelope per [routers/visualize.md §2.2](../routers/visualize.md#22-post-apiv1visualizemulti--render-a-combined-multi-user-visualization); the two coexist (the existing `RequireSuperuser` is unchanged because it carries a different wire envelope).
+- **P2 done** — `cognee_lib::api::DatasetManager` exists with `list_datasets`, `list_data`, `check_read_permission` etc. (see [`crates/lib/src/api/datasets.rs`](../../../crates/lib/src/api/datasets.rs)). **There is no `get_authorized([dataset_id], "read", &user)` method matching the Python signature**; the closest existing surface is `DatasetManager::check_read_permission(owner_id, dataset_id)` which returns `Result<(), DatasetError>` and `IngestDb::get_dataset(id)` which returns `Option<Dataset>`. The implementation agent must either add a `DatasetManager::get_authorized([id], permission, &user)` helper that mirrors Python's `get_authorized_existing_datasets` or compose the existing primitives in the visualize handler. Decide before Step 12.
 - P3 is **not** required for P4 — the read path doesn't touch `PipelineRunRegistry` or the WebSocket layer.
+
+### 3.1 Library accessor gap (CRITICAL — read before starting)
+
+The phase doc below cites `state.lib.search()`, `state.lib.datasets()`, `state.lib.users()`, `state.lib.graph_db()`, `state.lib.llm()`, `state.lib.permissions()`. **None of these accessors exist** on the current `ComponentHandles` (see [`crates/http-server/src/components.rs`](../../../crates/http-server/src/components.rs)). `ComponentHandles` exposes only `database`, `storage`, `delete_service`, `ontology_manager`, plus the `formatted_graph_data` stub.
+
+The implementation agent must, as part of this phase, extend `ComponentHandles` with the new accessors needed by Steps 3 / 5 / 9 / 12, OR construct the upstream services directly inside each handler from the existing handles. Concrete options:
+
+- **Option A (preferred)**: add typed slots to `ComponentHandles` for `search_orchestrator: Arc<SearchOrchestrator>`, `dataset_manager: Arc<DatasetManager>`, `llm: Arc<dyn Llm>`, `graph_db: Arc<dyn GraphDBTrait>`, `user_repo: Arc<dyn UserRepo>` and wire them in `AppState::build`.
+- **Option B**: thread the inner traits through directly (e.g. `Arc<dyn SearchHistoryDb>` is already accessible via `database`; an `OpenAIAdapter` can be constructed inside the handler from `state.config`).
+
+Option A scales to P5 and is the recommended approach. Either way, the wiring lands inside this PR — do not assume a separate "library plumbing" phase.
+
+### 3.2 SearchOrchestrator method names
+
+The orchestrator's request-execution method is `SearchOrchestrator::search(...)` (see [`crates/search/src/orchestration/search_orchestrator.rs:114`](../../../crates/search/src/orchestration/search_orchestrator.rs)), **not `run(...)`** as cited inline below. The history method is `SearchOrchestrator::get_history(user_id, limit)` at line 70. Step 3 / Step 5 below are written with `state.lib.search().run(...)` for readability — read those calls as `SearchOrchestrator::search(SearchRequest)` and `SearchOrchestrator::get_history(Some(user.id), Some(0))` respectively.
 
 ## 4. Step-by-step
 
@@ -92,17 +109,17 @@ Land the four read-path routers that complete the "core pipeline via HTTP" slice
 
 ### Step 7: Port the four LLM prompt templates
 
-- **File(s)**: `crates/llm/src/prompts/custom_prompt_generation_user.txt`, `crates/llm/src/prompts/custom_prompt_generation_system.txt`, `crates/llm/src/prompts/infer_schema_user.txt`, `crates/llm/src/prompts/infer_schema_system.txt`. Update `crates/llm/src/prompts/mod.rs` (or equivalent) to register them.
-- **Action**: Copy the four prompt files verbatim from Python's [`cognee/infrastructure/llm/prompts/`](https://github.com/topoteretes/cognee/tree/main/cognee/infrastructure/llm/prompts). The user-prompt files contain `{{GRAPH_SCHEMA_JSON}}` and `{{SAMPLE_TEXT}}` Jinja-style placeholders respectively; the system-prompt files take no variables. Wire them through the existing `cognee_llm::prompts::render_prompt(name, ctx)` loader. If the loader does not yet exist, add a minimal one that does string substitution on `{{KEY}}` patterns (no need for full Jinja — the Python prompts use only flat substitution). Keep file naming exactly as on the Python side so cross-SDK diffing has zero false positives.
+- **File(s)**: `crates/llm/src/prompts/custom_prompt_generation_user.txt`, `crates/llm/src/prompts/custom_prompt_generation_system.txt`, `crates/llm/src/prompts/infer_schema_user.txt`, `crates/llm/src/prompts/infer_schema_system.txt`. Create `crates/llm/src/prompts/mod.rs` to register them.
+- **Action**: The `crates/llm/src/prompts/` directory does **not currently exist** (verified via `ls crates/llm/src/`); neither does `cognee_llm::prompts::render_prompt`. This step creates both. Copy the four prompt files verbatim from Python's [`cognee/infrastructure/llm/prompts/`](https://github.com/topoteretes/cognee/tree/main/cognee/infrastructure/llm/prompts). The user-prompt files contain `{{GRAPH_SCHEMA_JSON}}` and `{{SAMPLE_TEXT}}` Jinja-style placeholders respectively; the system-prompt files take no variables. Add a minimal `pub fn render_prompt(name: &str, ctx: &HashMap<&str, &str>) -> Result<String, PromptError>` loader that does string substitution on `{{KEY}}` patterns (no need for full Jinja — the Python prompts use only flat substitution). Use `include_str!(...)` so prompts are compiled into the binary. Re-export from `crates/llm/src/lib.rs` as `pub mod prompts;`. Keep file naming exactly as on the Python side so cross-SDK diffing has zero false positives.
 - **Spec reference**: [routers/llm.md §2.1 / §2.2 / §5](../routers/llm.md#21-post-apiv1llmcustom-prompt--synthesize-an-extraction-prompt-from-a-graph-model).
 - **Verify**: `cargo test -p cognee-llm --lib prompts::tests` — assert each template loads and renders with a fixture context.
 
-### Step 8: Ensure `graph_schema_to_graph_model` exists in `cognee-cognify`
+### Step 8: Add `graph_schema_to_graph_model` (currently missing)
 
-- **File(s)**: `crates/cognify/src/graph_model.rs` (or wherever the existing graph-model utilities live; check first).
-- **Action**: Grep the cognify crate for a `graph_schema_to_graph_model` function. If it exists, no change. If it doesn't, port it from Python's [`cognee/shared/graph_model_utils.py`](https://github.com/topoteretes/cognee/blob/main/cognee/shared/graph_model_utils.py): take a `&serde_json::Value`, validate it has the canonical shape (`entity_types: [...]`, `relationship_types: [...]`, optional `name`), and return `Result<GraphModel, GraphModelError>` where `GraphModelError` is a `thiserror`-derived enum with one variant per validation failure mode. The handler in Step 9 calls this function but does **not** use its successful return value — it only uses the error to distinguish `409` (schema-conversion failure) from `422` (JSON parse failure). The function therefore needs to exist and return a clean error type; the Rust struct shape itself is not on the wire.
+- **File(s)**: `crates/llm/src/dynamic_model.rs` (preferred location — the existing [`DynamicGraphModel`](../../../crates/llm/src/dynamic_model.rs) is the closest equivalent and the file's docstring at line 9 already names this function as the intended surface). Alternative: `crates/cognify/src/graph_model.rs` (new file).
+- **Action**: A `graph_schema_to_graph_model` function does **not** currently exist anywhere in the workspace (verified via `grep -rn "graph_schema_to_graph_model" crates/` — only docstring references match). Port it from Python's [`cognee/shared/graph_model_utils.py`](https://github.com/topoteretes/cognee/blob/main/cognee/shared/graph_model_utils.py): take a `&serde_json::Value`, validate it has the canonical shape (`entity_types: [...]`, `relationship_types: [...]`, optional `name`), and return `Result<DynamicGraphModel, GraphModelError>` where `GraphModelError` is a `thiserror`-derived enum with one variant per validation failure mode (alternatively, return `Result<(), GraphModelError>` since the LLM handler in Step 9 only uses the error path — the success value is unused). The handler in Step 9 calls this function but does **not** use its successful return value — it only uses the error to distinguish `409` (schema-conversion failure) from `422` (JSON parse failure).
 - **Spec reference**: [routers/llm.md §2.2](../routers/llm.md#22-post-apiv1llminfer-schema--propose-a-graph-model-from-sample-text).
-- **Verify**: `cargo test -p cognee-cognify --lib graph_model::tests`.
+- **Verify**: `cargo test -p cognee-llm --lib dynamic_model::tests` (or `cognee-cognify --lib graph_model::tests` if Option B chosen).
 
 ### Step 9: Add the LLM router
 
@@ -121,7 +138,7 @@ Land the four read-path routers that complete the "core pipeline via HTTP" slice
 ### Step 10: Add the `SuperuserOnly` extractor
 
 - **File(s)**: `crates/http-server/src/auth/superuser.rs` (new), update `crates/http-server/src/auth/mod.rs` to `pub mod superuser; pub use superuser::SuperuserOnly;`.
-- **Action**: Define `pub struct SuperuserOnly(pub AuthenticatedUser);` implementing `axum::extract::FromRequestParts<AppState>`. Internally, run the existing `AuthenticatedUser` extractor; if `user.is_superuser == false`, return `ApiError::VisualizeError(StatusCode::FORBIDDEN, "Superuser privileges required for multi-user visualization".into())` per [routers/visualize.md §2.2](../routers/visualize.md#22-post-apiv1visualizemulti--render-a-combined-multi-user-visualization). The error text is the visualize-specific one but the extractor is generic — other phases (P5) may reuse it; document the error variant choice with a comment noting that the message is visualize-specific because it's the only superuser endpoint as of P4. Inline unit tests assert both the success case (admin user → struct returned) and the rejection case (regular user → 403 with `{error}` envelope).
+- **Action**: A `RequireSuperuser` extractor already exists in [`crates/http-server/src/auth/extractor.rs:177`](../../../crates/http-server/src/auth/extractor.rs) but it returns `ApiError::Forbidden("Forbidden".to_owned())` which emits the canonical `{"detail": "Forbidden"}` envelope — that does **not** match the visualize-specific `{"error": "Superuser privileges required for multi-user visualization"}` envelope. **Do not modify `RequireSuperuser`** (other phases may rely on its canonical envelope). Instead, define a new `pub struct SuperuserOnly(pub AuthenticatedUser);` implementing `axum::extract::FromRequestParts<AppState>`. Internally, run the existing `AuthenticatedUser` extractor; if `user.is_superuser == false`, return `ApiError::VisualizeError(StatusCode::FORBIDDEN, "Superuser privileges required for multi-user visualization".into())` per [routers/visualize.md §2.2](../routers/visualize.md#22-post-apiv1visualizemulti--render-a-combined-multi-user-visualization). Inline unit tests assert both the success case (admin user → struct returned) and the rejection case (regular user → 403 with `{error}` envelope).
 - **Spec reference**: [routers/visualize.md §2.2 / §5](../routers/visualize.md#22-post-apiv1visualizemulti--render-a-combined-multi-user-visualization).
 - **Verify**: `cargo test -p cognee-http-server --lib auth::superuser::tests`.
 

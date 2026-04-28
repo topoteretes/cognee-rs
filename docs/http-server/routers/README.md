@@ -33,17 +33,17 @@ One row per router. Update the row in the same PR that lands or changes the unde
 | 14 | memify | `/api/v1/memify` | [memify.md](memify.md) | **Done** |
 | 15 | remember | `/api/v1/remember` | [remember.md](remember.md) | **Done** |
 | 16 | improve | `/api/v1/improve` | [improve.md](improve.md) | **Done** |
-| 17 | search | `/api/v1/search` | [search.md](search.md) | **Draft** |
-| 18 | recall | `/api/v1/recall` | [recall.md](recall.md) | **Draft** |
+| 17 | search | `/api/v1/search` | [search.md](search.md) | **Done** |
+| 18 | recall | `/api/v1/recall` | [recall.md](recall.md) | **Done** |
 | 19 | forget | `/api/v1/forget` | [forget.md](forget.md) | **Done** |
 | 20 | delete (deprecated) | `/api/v1/delete` | [delete.md](delete.md) | **Done** |
 | 21 | settings | `/api/v1/settings` | [settings.md](settings.md) | **Draft** |
 | 22 | configuration | `/api/v1/configuration` | [configuration.md](configuration.md) | **Draft** |
 | 23 | permissions | `/api/v1/permissions` | [permissions.md](permissions.md) | **Draft** |
-| 24 | visualize | `/api/v1/visualize` | [visualize.md](visualize.md) | **Draft** |
+| 24 | visualize | `/api/v1/visualize` | [visualize.md](visualize.md) | **Done** |
 | 25 | activity | `/api/v1/activity` | [activity.md](activity.md) | **Draft** |
 | 26 | sync | `/api/v1/sync` | [sync.md](sync.md) | **Draft** |
-| 27 | llm | `/api/v1/llm` | [llm.md](llm.md) | **Draft** |
+| 27 | llm | `/api/v1/llm` | [llm.md](llm.md) | **Done** |
 | 28 | responses | `/api/v1/responses` | [responses.md](responses.md) | **Draft** |
 | 29 | notebooks | `/api/v1/notebooks` | [notebooks.md](notebooks.md) | **Draft** |
 | 30 | checks (cloud) | `/api/v1/checks` | [checks.md](checks.md) | **Draft** |
