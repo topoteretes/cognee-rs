@@ -97,6 +97,7 @@ cognee-vector = { path = "../vector" }
 cognee-visualization = { path = "../visualization", optional = true }
 async-trait.workspace = true
 chrono.workspace = true
+include_dir = "0.7"
 dotenv.workspace = true
 thiserror.workspace = true
 serde.workspace = true

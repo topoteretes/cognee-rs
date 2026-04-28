@@ -136,6 +136,7 @@ pub mod context;
 pub mod error;
 
 pub use api::{DatasetDb, DatasetError, DatasetManager};
+pub use api::notebooks::{NotebookError, create_notebook, delete_notebook, list_notebooks, update_notebook};
 pub use component_manager::ComponentManager;
 pub use config::{ConfigError, ConfigManager, Settings};
 pub use context::PipelineContext;

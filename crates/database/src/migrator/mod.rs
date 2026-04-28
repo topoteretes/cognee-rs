@@ -8,6 +8,7 @@ mod m20260424_000001_graph_sync_checkpoints;
 mod m20260427_000001_http_auth_columns;
 mod m20260428_000001_tenants_rbac;
 mod m20260429_000001_sync_operations;
+mod m20260501_000001_create_notebooks;
 
 pub struct Migrator;
 
@@ -23,6 +24,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260427_000001_http_auth_columns::Migration),
             Box::new(m20260428_000001_tenants_rbac::Migration),
             Box::new(m20260429_000001_sync_operations::Migration),
+            Box::new(m20260501_000001_create_notebooks::Migration),
         ]
     }
 }

@@ -23,7 +23,7 @@ pub use sea_orm::DatabaseConnection;
 pub use sync::{
     SeaOrmSyncOperationRepository, SyncOperationRepository, SyncOperationRow, SyncOperationStatus,
 };
-pub use traits::{AclDb, DeleteDb, IngestDb, RoleDb, SearchHistoryDb, TenantDb, UserDb};
+pub use traits::{AclDb, DeleteDb, IngestDb, Notebook, NotebookDb, NotebookUpdatePatch, RoleDb, SearchHistoryDb, TenantDb, UserDb};
 pub use types::{
     ArtifactReference, DatabaseError, GraphEdge, GraphMetrics, GraphNode, PipelineRun,
     PipelineRunStatus, SearchHistoryEntry, SearchHistoryEntryType, TaskRun,

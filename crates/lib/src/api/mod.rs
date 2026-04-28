@@ -15,6 +15,7 @@ pub mod datasets;
 pub mod error;
 pub mod forget;
 pub mod improve;
+pub mod notebooks;
 pub mod prune;
 pub mod recall;
 pub mod remember;

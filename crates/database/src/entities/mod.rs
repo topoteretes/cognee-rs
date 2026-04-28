@@ -38,3 +38,6 @@ pub mod user_default_permission;
 
 // P6 sync_operations (cloud sync state):
 pub mod sync_operation;
+
+// P7 notebooks:
+pub mod notebook;
