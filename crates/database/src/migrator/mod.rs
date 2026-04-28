@@ -6,6 +6,7 @@ mod m20250301_000001_add_importance_weight;
 mod m20250422_000001_user_tenant_role_tables;
 mod m20260424_000001_graph_sync_checkpoints;
 mod m20260427_000001_http_auth_columns;
+mod m20260428_000001_tenants_rbac;
 
 pub struct Migrator;
 
@@ -19,6 +20,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20250422_000001_user_tenant_role_tables::Migration),
             Box::new(m20260424_000001_graph_sync_checkpoints::Migration),
             Box::new(m20260427_000001_http_auth_columns::Migration),
+            Box::new(m20260428_000001_tenants_rbac::Migration),
         ]
     }
 }

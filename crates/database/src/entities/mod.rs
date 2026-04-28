@@ -29,3 +29,9 @@ pub mod user_tenant;
 
 // Graph sync checkpoints (Stage 4 of improve()):
 pub mod graph_sync_checkpoint;
+
+// P5 default-permission tables and per-user named JSON blobs:
+pub mod principal_configuration;
+pub mod role_default_permission;
+pub mod tenant_default_permission;
+pub mod user_default_permission;
