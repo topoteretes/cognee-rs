@@ -2,11 +2,11 @@
 
 > **Read this first.** This document is the entry-point prompt for the model executing the cognee-rust HTTP server port. It defines the task list, the per-task four-agent pipeline, the sub-agent prompts you will copy-paste, and the conventions for commits / verification / status tracking.
 
-## 0. Current state (updated 2026-04-27)
+## 0. Current state (updated 2026-04-28)
 
-**Resume point: start at task 5 — P3 (pipelines + WebSocket).**
+**Resume point: start at task 10 — P8 (cross-SDK HTTP parity harness).**
 
-Phases completed in the previous session (do NOT re-run them):
+Phases completed in previous sessions (do NOT re-run them):
 
 | Phase | Commit | Notes |
 |---|---|---|
@@ -14,10 +14,15 @@ Phases completed in the previous session (do NOT re-run them):
 | P0 | `323e3e1` | http-server crate scaffold, AppState, ApiError, CORS, OpenAPI, health router |
 | P1 | `0459963` | Auth stack (JWT+cookie+X-Api-Key, login/logout/me, register/reset/verify, users CRUD, api-keys) |
 | P2 | `3b4ae9e` | Write path (/add, /datasets, /ontologies, /delete, /forget); ComponentHandles in AppState |
+| P3 | `53b1da0` | Pipeline routers (cognify, memify, remember, improve) + WebSocket dispatch infrastructure |
+| P4 | `3e10c70` | Read path (/search, /recall, /llm, /visualize) |
+| P5 | `aefb105` + `7ae78e3` | Admin + RBAC (/permissions, /settings, /configuration); RBAC migration |
+| P6 | `0e928bf` | Observability (/activity, /sync, /checks, SpanBufferLayer) |
+| P7 | `bf01ef6` + `85fecf8` | Advanced + email flows (/notebooks, /responses stub, SMTP mailer) |
 
-Doc-update commits: `4ab6a53` (P3-prereq), `7cf39a5` (P1), `66e8ef6` (P2). P0 docs were folded into `0459963`.
+Doc-update commits: `4ab6a53` (P3-prereq), `7cf39a5` (P1), `66e8ef6` (P2), `6fbdf38` (P3), `6406410` (P4), `dc80f4e` (P5), `bfc74e3` (P6).
 
-**Latest commit on branch:** `66e8ef6` (`git log --oneline -1` to verify before starting).
+**Latest commit on branch:** `85fecf8` (`git log --oneline -1` to verify before starting).
 
 ### Key architectural facts established so far
 
@@ -46,7 +51,7 @@ Port the Python cognee FastAPI server ([`cognee/api/client.py`](https://github.c
 
 Execute these tasks in order. **Do not skip ahead, do not reorder, do not run two tasks in parallel.**
 
-Tasks 1–4 are **Done** — do not re-run them. Start at task 5.
+Tasks 1–9 are **Done** — do not re-run them. Start at task 10.
 
 | # | Task | Doc | Status |
 |---|---|---|---|
@@ -54,12 +59,12 @@ Tasks 1–4 are **Done** — do not re-run them. Start at task 5.
 | 2 | ~~**P0** — http-server crate scaffold (empty API)~~ | [p0-foundation.md](p0-foundation.md) | **Done** `323e3e1` |
 | 3 | ~~**P1** — authentication stack~~ | [p1-auth.md](p1-auth.md) | **Done** `0459963` |
 | 4 | ~~**P2** — write path~~ | [p2-write-path.md](p2-write-path.md) | **Done** `3b4ae9e` |
-| **5** | **► P3 — pipelines + WebSocket** ← START HERE | [p3-pipelines-and-websocket.md](p3-pipelines-and-websocket.md) | **Next** |
-| 6 | **P4** — read path | [p4-read-path.md](p4-read-path.md) | Draft |
-| 7 | **P5** — admin + RBAC | [p5-admin.md](p5-admin.md) | Draft |
-| 8 | **P6** — observability | [p6-observability.md](p6-observability.md) | Draft |
-| 9 | **P7** — advanced + email flows | [p7-advanced.md](p7-advanced.md) | Draft |
-| 10 | **P8** — cross-SDK HTTP parity harness | [p8-e2e-parity.md](p8-e2e-parity.md) | Draft |
+| 5 | ~~**P3** — pipelines + WebSocket~~ | [p3-pipelines-and-websocket.md](p3-pipelines-and-websocket.md) | **Done** `53b1da0` |
+| 6 | ~~**P4** — read path~~ | [p4-read-path.md](p4-read-path.md) | **Done** `3e10c70` |
+| 7 | ~~**P5** — admin + RBAC~~ | [p5-admin.md](p5-admin.md) | **Done** `7ae78e3` |
+| 8 | ~~**P6** — observability~~ | [p6-observability.md](p6-observability.md) | **Done** `0e928bf` |
+| 9 | ~~**P7** — advanced + email flows~~ | [p7-advanced.md](p7-advanced.md) | **Done** `85fecf8` |
+| **10** | **► P8 — cross-SDK HTTP parity harness** ← START HERE | [p8-e2e-parity.md](p8-e2e-parity.md) | **Next** |
 
 The single source of truth for **status** is the table in [README.md](README.md). After every task the doc-update agent flips its row from `Draft` → `In Progress` → `Done`.
 
