@@ -450,36 +450,34 @@ Tests run on in-memory SQLite seeded with the migration from steps 1–2.
 Inline unit tests in the source files cover smaller invariants (DTO serialization shapes, the
 `redact_api_key` / `should_persist_api_key` matrix, `is_tenant_admin` truth table — see step 5).
 
-### 5.1 Deferred test files (follow-up TODO)
+### 5.1 Deferred test files — RESOLVED (already landed in commit 7ae78e3)
 
-Of the seven HTTP-level test files in the table above, three landed with this
-phase (`test_permissions_select_null.rs`, `test_settings.rs`,
-`test_configuration.rs`); the database-level `permissions_repository.rs` also
-landed. The remaining four HTTP-level test files were intentionally **not
-added in this phase**:
+All seven HTTP-level test files plus the database-level
+`permissions_repository.rs` are now landed. The four files originally listed
+as deferred below were added alongside the P5 router work in commit
+`7ae78e3` (`http-server: P5 admin + RBAC (permissions, settings,
+configuration)`):
 
-- `crates/http-server/tests/test_permissions_acl.rs`
-- `crates/http-server/tests/test_permissions_roles.rs`
-- `crates/http-server/tests/test_permissions_tenants.rs`
-- `crates/http-server/tests/test_permissions_resolution.rs`
+- `crates/http-server/tests/test_permissions_acl.rs` — landed in 7ae78e3.
+- `crates/http-server/tests/test_permissions_roles.rs` — landed in 7ae78e3.
+- `crates/http-server/tests/test_permissions_tenants.rs` — landed in 7ae78e3.
+- `crates/http-server/tests/test_permissions_resolution.rs` — landed in 7ae78e3.
 
-Rationale: `permissions_repository.rs` already exercises the underlying
-invariants (the 8-step `user_can` truth table, ACL grant/revoke, role and
-tenant lifecycle, owner-vs-admin asymmetry) at the repository layer. Adding
-HTTP-level tests would duplicate the assertions through the router seam; the
-incremental coverage is "the handler wires through the right repository call
-and returns the right `ApiError` envelope," which the existing `select_null`
-and `settings`/`configuration` HTTP tests already model end-to-end. Track the
-follow-up alongside the P8 cross-SDK harness, where the same assertions get
-exercised from the Python pytest side anyway.
+The original deferral rationale (repository-layer tests cover the 8-step
+`user_can` matrix; HTTP-layer tests would duplicate assertions through the
+router seam) was overridden when the implementor decided the marginal
+end-to-end coverage was worth the duplication. No follow-up needed.
 
 ## 6. Acceptance criteria
 
 - [x] `cargo check --all-targets` passes for the whole workspace.
 - [x] P5 repository-level tests pass: `cargo test -p cognee-database --test
-      permissions_repository`. The `select_null`, `settings`, and
-      `configuration` HTTP-level tests also pass; the four remaining
-      HTTP-level test files from §5 are deferred (see §5 follow-up note).
+      permissions_repository`. All seven HTTP-level tests from §5
+      (`test_permissions_select_null`, `test_settings`,
+      `test_configuration`, plus `test_permissions_acl`,
+      `test_permissions_roles`, `test_permissions_tenants`,
+      `test_permissions_resolution`) also pass — the originally-deferred
+      four landed in commit `7ae78e3` (see §5.1).
 - [x] The RBAC migration runs cleanly **twice in a row** against an empty DB (no duplicate-table
       errors, `permissions` table contains exactly four rows).
 - [ ] The RBAC migration runs cleanly against a Python-seeded DB — verified by a fixture in

@@ -35,7 +35,7 @@ Audience: an implementor (human or model) who has read the design docs and now n
 | P3 | [p3-pipelines-and-websocket.md](p3-pipelines-and-websocket.md) | `/cognify` (POST + WebSocket), `/memify`, `/remember`, `/improve`. Wires the HTTP-side dispatcher onto the `PipelineRunRegistry` from the prereq. | 3 days | **Done** (commit 53b1da0) |
 | P4 | [p4-read-path.md](p4-read-path.md) | `/search`, `/recall`, `/llm`, `/visualize`. | 2 days | **Done** (commit 3e10c70) |
 | P5 | [p5-admin.md](p5-admin.md) | `/permissions` (13 endpoints), `/settings`, `/configuration`. SeaORM migration for `principals`, `tenants`, `roles`, `user_roles`, `user_tenants`, `permissions`, `acls`, default-permission tables. | 3 days | **Done** (commits aefb105 + 2652aea) |
-| P6 | [p6-observability.md](p6-observability.md) | `/activity` (5 endpoints, span buffer, markdown export), `/sync`, `/checks`. `SpanBufferLayer` tracing layer. | 2 days | **Draft** |
+| P6 | [p6-observability.md](p6-observability.md) | `/activity` (5 endpoints, span buffer, markdown export), `/sync`, `/checks`. `SpanBufferLayer` tracing layer. | 2 days | **Done** (commit 0e928bf) |
 | P7 | [p7-advanced.md](p7-advanced.md) | `/notebooks` (storage only — `/run` returns 501), `/responses` (501 stub), email flows for register / reset / verify with pluggable `Mailer` (default no-op). | 2 days | **Draft** |
 | P8 | [p8-e2e-parity.md](p8-e2e-parity.md) | Cross-SDK HTTP parity harness — uvicorn ↔ `cognee-http-server` side-by-side in one Docker container, pytest + `httpx` clients, ~27 test files mapped to phases. | 2 days | **Draft** |
 

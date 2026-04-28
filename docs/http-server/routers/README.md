@@ -41,12 +41,12 @@ One row per router. Update the row in the same PR that lands or changes the unde
 | 22 | configuration | `/api/v1/configuration` | [configuration.md](configuration.md) | **Done** |
 | 23 | permissions | `/api/v1/permissions` | [permissions.md](permissions.md) | **Done** |
 | 24 | visualize | `/api/v1/visualize` | [visualize.md](visualize.md) | **Done** |
-| 25 | activity | `/api/v1/activity` | [activity.md](activity.md) | **Draft** |
-| 26 | sync | `/api/v1/sync` | [sync.md](sync.md) | **Draft** |
+| 25 | activity | `/api/v1/activity` | [activity.md](activity.md) | **Done** |
+| 26 | sync | `/api/v1/sync` | [sync.md](sync.md) | **Done** |
 | 27 | llm | `/api/v1/llm` | [llm.md](llm.md) | **Done** |
 | 28 | responses | `/api/v1/responses` | [responses.md](responses.md) | **Draft** |
 | 29 | notebooks | `/api/v1/notebooks` | [notebooks.md](notebooks.md) | **Draft** |
-| 30 | checks (cloud) | `/api/v1/checks` | [checks.md](checks.md) | **Draft** |
+| 30 | checks (cloud) | `/api/v1/checks` | [checks.md](checks.md) | **Done** |
 
 The implementation phases in [../plan.md](../plan.md#4-implementation-phases) drive the order in which these docs need to be ready.
 
