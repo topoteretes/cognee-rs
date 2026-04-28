@@ -202,14 +202,14 @@ async fn test_search_returns_empty_for_deleted_doc_and_non_empty_for_remaining()
     if let Err(e) = cognify(
         all_items,
         dataset.id,
-        None,
+        Some(owner_id),
         None,
         llm.clone() as Arc<dyn Llm>,
         storage.clone(),
         graph_db.clone(),
         vector_db.clone(),
         embedding_engine.clone(),
-        None,
+        Some(Arc::clone(&database)),
         Arc::new(NoOpOntologyResolver::new()),
         &config,
     )
