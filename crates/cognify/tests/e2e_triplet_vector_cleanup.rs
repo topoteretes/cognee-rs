@@ -133,14 +133,14 @@ async fn test_triplet_vector_cleanup_after_data_delete() {
     let _result_ai = match cognify(
         data_ai,
         ds_ai.id,
-        None,
+        Some(owner_id),
         None,
         llm.clone() as Arc<dyn Llm>,
         storage.clone(),
         graph_db.clone(),
         vector_db.clone(),
         embedding_engine.clone(),
-        None,
+        Some(Arc::clone(&database)),
         ontology.clone(),
         &config,
     )
@@ -156,14 +156,14 @@ async fn test_triplet_vector_cleanup_after_data_delete() {
     let _result_q = match cognify(
         data_q,
         ds_q.id,
-        None,
+        Some(owner_id),
         None,
         llm.clone() as Arc<dyn Llm>,
         storage.clone(),
         graph_db.clone(),
         vector_db.clone(),
         embedding_engine.clone(),
-        None,
+        Some(Arc::clone(&database)),
         ontology.clone(),
         &config,
     )

@@ -19,7 +19,7 @@ For the purposes of building event-based knowledge graphs, you are tasked with e
 - **Quantity over filtering** - it's better to extract too many events than to miss any
 - **Descriptions** - Always include the event description together with entities (Who did what, what happened? What is the event?). If you can include the corresponding part from the text.
 ## Output Format
-Your reply should be a JSON: list of dictionaries with the following structure:
+Your reply should be a JSON object with an `events` key containing a list of dictionaries with the following structure:
 ```python
 class Event(BaseModel):
     name: str [concise]

@@ -66,18 +66,14 @@ fn parse_docx_xml(xml: &str) -> Result<String, LoaderError> {
                     }
                 }
             }
-            Ok((_, Event::Text(ref e))) => {
-                if in_text {
-                    let raw = std::str::from_utf8(e.as_ref()).map_err(|err| {
-                        LoaderError::ExtractionFailed(format!("Invalid UTF-8 in DOCX XML: {err}"))
-                    })?;
-                    current_paragraph.push_str(raw);
-                }
+            Ok((_, Event::Text(ref e))) if in_text => {
+                let raw = std::str::from_utf8(e.as_ref()).map_err(|err| {
+                    LoaderError::ExtractionFailed(format!("Invalid UTF-8 in DOCX XML: {err}"))
+                })?;
+                current_paragraph.push_str(raw);
             }
-            Ok((_, Event::GeneralRef(ref e))) => {
-                if in_text {
-                    current_paragraph.push_str(resolve_xml_entity(e.as_ref()));
-                }
+            Ok((_, Event::GeneralRef(ref e))) if in_text => {
+                current_paragraph.push_str(resolve_xml_entity(e.as_ref()));
             }
             Ok((_, Event::Eof)) => break,
             Err(e) => {

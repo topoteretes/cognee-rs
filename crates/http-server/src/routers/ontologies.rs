@@ -115,18 +115,17 @@ pub async fn post_upload(
         .get("description")
         .and_then(|v| v.first())
         .map(|s| s.trim().to_owned())
-        .filter(|s| !s.is_empty())
-        .map(|s| {
-            if s.starts_with('[') || s.starts_with('{') {
-                Err(ApiError::OntologyEnvelope(
-                    "description must not start with '[' or '{'".into(),
-                    StatusCode::BAD_REQUEST,
-                ))
-            } else {
-                Ok(s)
-            }
-        })
-        .transpose()?;
+        .filter(|s| !s.is_empty());
+
+    if description
+        .as_deref()
+        .is_some_and(|s| s.starts_with('[') || s.starts_with('{'))
+    {
+        return Err(ApiError::OntologyEnvelope(
+            "description must not start with '[' or '{'".into(),
+            StatusCode::BAD_REQUEST,
+        ));
+    }
 
     // ── File parts ────────────────────────────────────────────────────────
     let spooled_files = parsed.files.remove("ontology_file").unwrap_or_default();

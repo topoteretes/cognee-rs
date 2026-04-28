@@ -33,6 +33,6 @@ pub use traits::{
     TenantDb, UserDb,
 };
 pub use types::{
-    ArtifactReference, DatabaseError, GraphEdge, GraphMetrics, GraphNode, PipelineRun,
-    PipelineRunStatus, SearchHistoryEntry, SearchHistoryEntryType, TaskRun,
+    DatabaseError, GraphEdge, GraphMetrics, GraphNode, PipelineRun, PipelineRunStatus,
+    SearchHistoryEntry, SearchHistoryEntryType, TaskRun,
 };

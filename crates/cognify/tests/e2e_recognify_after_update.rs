@@ -25,9 +25,9 @@ use cognee_database::{
 };
 use cognee_delete::{DeleteMode, DeleteRequest, DeleteScope, DeleteService};
 use cognee_embedding::{EmbeddingEngine, config::OnnxEmbeddingConfig, onnx::OnnxEmbeddingEngine};
-use cognee_graph::{GraphDBTrait, LadybugAdapter};
+use cognee_graph::{GraphDBTrait, MockGraphDB};
 use cognee_ingestion::AddPipeline;
-use cognee_llm::{Llm, OpenAIAdapter};
+use cognee_llm::{GenerationOptions, GenerationResponse, Llm, Message};
 use cognee_models::DataInput;
 use cognee_ontology::NoOpOntologyResolver;
 use cognee_search::{
@@ -56,6 +56,97 @@ achieved a breakthrough in quantum error correction. Bob previously \
 worked at CERN and holds multiple patents in quantum computing hardware. \
 QuantumLab has partnered with several European universities for its \
 quantum advantage program.";
+
+#[derive(Clone)]
+struct UpdateFixtureLlm;
+
+#[async_trait::async_trait]
+impl Llm for UpdateFixtureLlm {
+    async fn generate(
+        &self,
+        _messages: Vec<Message>,
+        _options: Option<GenerationOptions>,
+    ) -> cognee_llm::LlmResult<GenerationResponse> {
+        Ok(GenerationResponse {
+            content: String::new(),
+            model: self.model().to_string(),
+            usage: None,
+            finish_reason: Some("stop".to_string()),
+        })
+    }
+
+    async fn create_structured_output_with_messages_raw(
+        &self,
+        messages: Vec<Message>,
+        _json_schema: &serde_json::Value,
+        _options: Option<GenerationOptions>,
+    ) -> cognee_llm::LlmResult<serde_json::Value> {
+        let input = messages
+            .iter()
+            .map(|message| message.content.as_str())
+            .collect::<Vec<_>>()
+            .join("\n")
+            .to_lowercase();
+
+        let graph = if input.contains("alice") || input.contains("techcorp") {
+            serde_json::json!({
+                "nodes": [
+                    {
+                        "id": "alice_update_fixture",
+                        "name": "Alice",
+                        "type": "PERSON_V1",
+                        "description": "A software engineer."
+                    },
+                    {
+                        "id": "techcorp_update_fixture",
+                        "name": "TechCorp",
+                        "type": "ORGANIZATION_V1",
+                        "description": "A technology company."
+                    }
+                ],
+                "edges": [
+                    {
+                        "source_node_id": "alice_update_fixture",
+                        "target_node_id": "techcorp_update_fixture",
+                        "relationship_name": "works_at_v1"
+                    }
+                ]
+            })
+        } else if input.contains("bob") || input.contains("quantumlab") {
+            serde_json::json!({
+                "nodes": [
+                    {
+                        "id": "bob_update_fixture",
+                        "name": "Bob",
+                        "type": "PERSON_V2",
+                        "description": "A quantum physicist."
+                    },
+                    {
+                        "id": "quantumlab_update_fixture",
+                        "name": "QuantumLab",
+                        "type": "ORGANIZATION_V2",
+                        "description": "A quantum research institute."
+                    }
+                ],
+                "edges": [
+                    {
+                        "source_node_id": "bob_update_fixture",
+                        "target_node_id": "quantumlab_update_fixture",
+                        "relationship_name": "works_at_v2"
+                    }
+                ]
+            })
+        } else {
+            serde_json::json!({ "nodes": [], "edges": [] })
+        };
+
+        Ok(graph)
+    }
+
+    fn model(&self) -> &str {
+        "update-fixture"
+    }
+}
 
 /// Build a `SearchRequest` for Chunks search with `only_context=true`.
 fn make_chunks_request(query: &str) -> SearchRequest {
@@ -120,9 +211,6 @@ fn is_non_empty(response: &SearchResponse) -> bool {
 #[tokio::test]
 async fn test_recognify_after_content_update() {
     // ── Environment gating ──────────────────────────────────────────────────
-    let _ = require_env("OPENAI_URL");
-    let _ = require_env("OPENAI_TOKEN");
-    let _ = require_env("OPENAI_MODEL");
     let _ = require_env("COGNEE_E2E_EMBED_MODEL_PATH");
 
     // ── Infrastructure setup ────────────────────────────────────────────────
@@ -141,13 +229,7 @@ async fn test_recognify_after_content_update() {
     initialize(&db).await.expect("initialize");
     let database: Arc<DatabaseConnection> = Arc::new(db);
 
-    // Ladybug graph database
-    let graph_path = temp_dir.path().join("graph").to_string_lossy().to_string();
-    let graph_db: Arc<dyn GraphDBTrait> = Arc::new(
-        LadybugAdapter::new(&graph_path)
-            .await
-            .expect("LadybugAdapter::new"),
-    );
+    let graph_db: Arc<dyn GraphDBTrait> = Arc::new(MockGraphDB::new());
     graph_db.initialize().await.expect("graph_db.initialize");
 
     // Qdrant vector database (BGE-Small dimension = 384)
@@ -165,15 +247,7 @@ async fn test_recognify_after_content_update() {
             }
         };
 
-    // OpenAI-compatible LLM
-    let llm: Arc<dyn Llm> = Arc::new(
-        OpenAIAdapter::new(
-            require_env("OPENAI_MODEL"),
-            require_env("OPENAI_TOKEN"),
-            Some(require_env("OPENAI_URL")),
-        )
-        .expect("OpenAIAdapter::new"),
-    );
+    let llm: Arc<dyn Llm> = Arc::new(UpdateFixtureLlm);
 
     let owner_id = Uuid::nil();
     let dataset_name = "update_test";
@@ -211,14 +285,14 @@ async fn test_recognify_after_content_update() {
     let result_v1 = match cognify(
         data_items_v1,
         dataset.id,
-        None,
+        Some(owner_id),
         None,
         llm.clone() as Arc<dyn Llm>,
         storage.clone() as Arc<dyn StorageTrait>,
         graph_db.clone() as Arc<dyn GraphDBTrait>,
         vector_db.clone() as Arc<dyn VectorDB>,
         embedding_engine.clone() as Arc<dyn EmbeddingEngine>,
-        None,
+        Some(Arc::clone(&database)),
         Arc::clone(&ontology),
         &config,
     )
@@ -293,14 +367,14 @@ async fn test_recognify_after_content_update() {
     let result_v2 = match cognify(
         data_items_v2,
         dataset.id,
-        None,
+        Some(owner_id),
         None,
         llm.clone() as Arc<dyn Llm>,
         storage.clone() as Arc<dyn StorageTrait>,
         graph_db.clone() as Arc<dyn GraphDBTrait>,
         vector_db.clone() as Arc<dyn VectorDB>,
         embedding_engine.clone() as Arc<dyn EmbeddingEngine>,
-        None,
+        Some(Arc::clone(&database)),
         Arc::clone(&ontology),
         &config,
     )
@@ -354,7 +428,7 @@ async fn test_recognify_after_content_update() {
             .with_graph_db(Arc::clone(&graph_db))
             .with_vector_db(Arc::clone(&vector_db));
 
-    delete_svc
+    let delete_result = delete_svc
         .execute(&DeleteRequest {
             scope: DeleteScope::Data {
                 owner_id,
@@ -366,7 +440,11 @@ async fn test_recognify_after_content_update() {
         })
         .await
         .expect("delete text_v1 data");
-    println!("Step 7: Deleted text_v1 data (data_id={data_id_v1})");
+    println!("Step 7: Deleted text_v1 data (data_id={data_id_v1}): {delete_result:?}");
+    assert!(
+        delete_result.deleted_vector_points > 0,
+        "Data-scope delete should remove v1 vector points; got {delete_result:?}"
+    );
 
     // ── Step 8: Verify Bob still searchable, Alice no longer returned ───────
     let response_bob_after_delete = orchestrator

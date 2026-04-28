@@ -59,32 +59,26 @@ pub(crate) fn parse_odf_content(xml: &str) -> Result<String, LoaderError> {
                     depth += 1;
                 }
             }
-            Ok((_, Event::End(ref e))) => {
-                if in_paragraph {
-                    let local = e.local_name();
-                    if local.as_ref() == b"p" && depth == 1 {
-                        in_paragraph = false;
-                        let trimmed = current_paragraph.trim().to_string();
-                        if !trimmed.is_empty() {
-                            paragraphs.push(trimmed);
-                        }
-                    } else {
-                        depth = depth.saturating_sub(1);
+            Ok((_, Event::End(ref e))) if in_paragraph => {
+                let local = e.local_name();
+                if local.as_ref() == b"p" && depth == 1 {
+                    in_paragraph = false;
+                    let trimmed = current_paragraph.trim().to_string();
+                    if !trimmed.is_empty() {
+                        paragraphs.push(trimmed);
                     }
+                } else {
+                    depth = depth.saturating_sub(1);
                 }
             }
-            Ok((_, Event::Text(ref e))) => {
-                if in_paragraph {
-                    let raw = std::str::from_utf8(e.as_ref()).map_err(|err| {
-                        LoaderError::ExtractionFailed(format!("Invalid UTF-8 in ODF XML: {err}"))
-                    })?;
-                    current_paragraph.push_str(raw);
-                }
+            Ok((_, Event::Text(ref e))) if in_paragraph => {
+                let raw = std::str::from_utf8(e.as_ref()).map_err(|err| {
+                    LoaderError::ExtractionFailed(format!("Invalid UTF-8 in ODF XML: {err}"))
+                })?;
+                current_paragraph.push_str(raw);
             }
-            Ok((_, Event::GeneralRef(ref e))) => {
-                if in_paragraph {
-                    current_paragraph.push_str(resolve_xml_entity(e.as_ref()));
-                }
+            Ok((_, Event::GeneralRef(ref e))) if in_paragraph => {
+                current_paragraph.push_str(resolve_xml_entity(e.as_ref()));
             }
             Ok((_, Event::Eof)) => break,
             Err(e) => {

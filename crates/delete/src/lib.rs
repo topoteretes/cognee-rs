@@ -5,9 +5,9 @@ pub use authorized::AuthorizedDeleteService;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use cognee_database::{ArtifactReference, DeleteDb, GraphEdge, GraphNode};
+use cognee_database::{DeleteDb, GraphEdge, GraphNode};
 use cognee_graph::GraphDBTrait;
-use cognee_models::Dataset;
+use cognee_models::{Dataset, EdgeType, Triplet};
 use cognee_session::SessionStore;
 use cognee_storage::{StorageError, StorageTrait};
 use cognee_vector::VectorDB;
@@ -189,7 +189,7 @@ impl DeleteService {
 
         // Count graph nodes, vector points, and provenance rows from tables
         let (graph_node_count, vector_point_count, prov_node_count, prov_edge_count) =
-            self.count_graph_vector_artifacts(request, &targets).await?;
+            self.count_graph_vector_artifacts(&targets).await?;
 
         // Count search history queries that would be deleted
         let search_queries_to_delete = match &request.scope {
@@ -326,7 +326,8 @@ impl DeleteService {
 
         if is_all_scope {
             // Fast-path: wipe entire graph and all vector collections
-            let (gn, vp, pn, pe, gv_warnings) = self.cleanup_all().await?;
+            let (gn, vp, pn, pe) = self.count_graph_vector_artifacts(&targets).await?;
+            let (_, _, _, _, gv_warnings) = self.cleanup_all().await?;
             deleted_graph_nodes += gn;
             deleted_vector_points += vp;
             deleted_provenance_nodes += pn;
@@ -583,63 +584,6 @@ impl DeleteService {
     ) -> Result<Vec<Uuid>, DeleteError> {
         let targets = self.resolve_targets(request).await?;
         self.compute_deletable_data_ids(&targets).await
-    }
-
-    #[tracing::instrument(
-        name = "cognee.delete.resolve_artifacts",
-        skip(self, request),
-        level = "debug",
-        fields(cognee.result.count = tracing::field::Empty)
-    )]
-    pub async fn artifact_references_for_request(
-        &self,
-        request: &DeleteRequest,
-    ) -> Result<Vec<ArtifactReference>, DeleteError> {
-        let targets = self.resolve_targets(request).await?;
-        let deletable_data_ids = self.data_ids_to_delete(request).await?;
-
-        let mut references = Vec::new();
-        let mut seen_ids = HashSet::new();
-
-        for data_id in deletable_data_ids {
-            let data_refs = self
-                .database
-                .list_artifact_references_for_data(data_id)
-                .await
-                .map_err(|error| {
-                    DeleteError::Runtime(format!(
-                        "Failed to list artifact references for data {}: {}",
-                        data_id, error
-                    ))
-                })?;
-            for reference in data_refs {
-                if seen_ids.insert(reference.id) {
-                    references.push(reference);
-                }
-            }
-        }
-
-        for dataset in &targets.datasets_to_delete {
-            let dataset_refs = self
-                .database
-                .list_artifact_references_for_dataset(dataset.id)
-                .await
-                .map_err(|error| {
-                    DeleteError::Runtime(format!(
-                        "Failed to list artifact references for dataset {}: {}",
-                        dataset.id, error
-                    ))
-                })?;
-            for reference in dataset_refs {
-                if seen_ids.insert(reference.id) {
-                    references.push(reference);
-                }
-            }
-        }
-
-        tracing::Span::current().record("cognee.result.count", references.len());
-
-        Ok(references)
     }
 
     // ==================================================================
@@ -951,18 +895,17 @@ impl DeleteService {
                 }
             }
 
-            // Edges contribute to EdgeType_relationship_name and Triplet_text
+            // Edges contribute to EdgeType_relationship_name and Triplet_text.
             for edge in edges {
                 by_collection
                     .entry(("EdgeType".to_string(), "relationship_name".to_string()))
                     .or_default()
-                    .push(edge.slug);
+                    .push(EdgeType::deterministic_id(&edge.relationship_name));
 
-                // Triplet ID is the edge slug as well (matching cognify pipeline)
                 by_collection
                     .entry(("Triplet".to_string(), "text".to_string()))
                     .or_default()
-                    .push(edge.slug);
+                    .push(triplet_vector_id(edge));
             }
 
             for ((data_type, field_name), ids) in &by_collection {
@@ -1176,20 +1119,12 @@ impl DeleteService {
     /// affected. Returns `(graph_nodes, vector_points, prov_nodes, prov_edges)`.
     async fn count_graph_vector_artifacts(
         &self,
-        request: &DeleteRequest,
         targets: &ResolvedDeleteTargets,
     ) -> Result<(usize, usize, usize, usize), DeleteError> {
         let mut graph_nodes = 0usize;
         let mut vector_points = 0usize;
         let mut prov_nodes = 0usize;
         let mut prov_edges = 0usize;
-
-        if matches!(request.scope, DeleteScope::All) {
-            // For All scope we cannot provide exact counts without graph_db
-            // inspection. Return 0 for now (the preview focuses on relational
-            // counts).
-            return Ok((0, 0, 0, 0));
-        }
 
         for dataset in &targets.datasets_to_delete {
             let nodes = self
@@ -1552,6 +1487,16 @@ fn parse_indexed_fields(value: &serde_json::Value) -> Vec<String> {
             vec![]
         }
     }
+}
+
+fn triplet_vector_id(edge: &GraphEdge) -> Uuid {
+    Triplet::new(
+        edge.source_node_id,
+        edge.destination_node_id,
+        edge.relationship_name.clone(),
+        String::new(),
+    )
+    .id
 }
 
 #[cfg(test)]
@@ -2075,6 +2020,55 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn delete_all_reports_provenance_backed_graph_and_vector_counts() {
+        let (svc, storage, db, _graph_db, _vector_db) = make_service_with_graph_vector().await;
+        let owner = Uuid::new_v4();
+        let (dataset_id, data_id) =
+            seed_dataset_with_data(&db, &storage, owner, "all_counts_ds").await;
+
+        let node_slugs = [Uuid::new_v4(), Uuid::new_v4()];
+        seed_provenance_nodes(
+            &db,
+            dataset_id,
+            data_id,
+            owner,
+            &node_slugs,
+            "Entity",
+            serde_json::json!(["name", "description"]),
+        )
+        .await;
+
+        let edge_slug = Uuid::new_v4();
+        seed_provenance_edges(&db, dataset_id, data_id, owner, &[edge_slug], "knows").await;
+
+        let request = DeleteRequest {
+            scope: DeleteScope::All,
+            mode: DeleteMode::Soft,
+        };
+
+        let preview = svc.preview(&request).await.expect("preview should succeed");
+        assert_eq!(preview.graph_nodes_to_delete, 2);
+        assert_eq!(preview.vector_points_to_delete, 6);
+        assert_eq!(preview.provenance_nodes_to_delete, 2);
+        assert_eq!(preview.provenance_edges_to_delete, 1);
+
+        let result = svc.execute(&request).await.expect("execute should succeed");
+        assert_eq!(result.deleted_graph_nodes, preview.graph_nodes_to_delete);
+        assert_eq!(
+            result.deleted_vector_points,
+            preview.vector_points_to_delete
+        );
+        assert_eq!(
+            result.deleted_provenance_nodes,
+            preview.provenance_nodes_to_delete
+        );
+        assert_eq!(
+            result.deleted_provenance_edges,
+            preview.provenance_edges_to_delete
+        );
+    }
+
+    #[tokio::test]
     async fn delete_without_graph_db_emits_warning() {
         let (svc, storage, db) = make_service().await;
         let owner = Uuid::new_v4();
@@ -2130,8 +2124,34 @@ mod tests {
         let (dataset_id, data_id) = seed_dataset_with_data(&db, &storage, owner, "edge_ds").await;
 
         // Seed provenance edges
-        let edge_slug = Uuid::new_v4();
-        seed_provenance_edges(&db, dataset_id, data_id, owner, &[edge_slug], "knows").await;
+        let source_id = Uuid::new_v4();
+        let target_id = Uuid::new_v4();
+        let relationship_name = "knows";
+        let triplet_id = Triplet::new(
+            source_id,
+            target_id,
+            relationship_name.to_string(),
+            String::new(),
+        )
+        .id;
+        ops::graph_storage::upsert_edges(
+            &db,
+            &[GraphEdge {
+                id: Uuid::new_v4(),
+                slug: triplet_id,
+                user_id: owner,
+                data_id,
+                dataset_id,
+                source_node_id: source_id,
+                destination_node_id: target_id,
+                relationship_name: relationship_name.to_string(),
+                label: None,
+                attributes: None,
+                created_at: chrono::Utc::now(),
+            }],
+        )
+        .await
+        .unwrap();
 
         // Create EdgeType and Triplet collections and index points
         vector_db
@@ -2143,12 +2163,15 @@ mod tests {
             .await
             .unwrap();
 
-        let et_point = cognee_vector::VectorPoint::new(edge_slug, vec![1.0, 0.0, 0.0]);
+        let et_point = cognee_vector::VectorPoint::new(
+            EdgeType::deterministic_id(relationship_name),
+            vec![1.0, 0.0, 0.0],
+        );
         vector_db
             .index_points("EdgeType", "relationship_name", &[et_point])
             .await
             .unwrap();
-        let triplet_point = cognee_vector::VectorPoint::new(edge_slug, vec![0.0, 1.0, 0.0]);
+        let triplet_point = cognee_vector::VectorPoint::new(triplet_id, vec![0.0, 1.0, 0.0]);
         vector_db
             .index_points("Triplet", "text", &[triplet_point])
             .await

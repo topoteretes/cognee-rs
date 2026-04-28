@@ -89,7 +89,6 @@ async fn impl_migration_creates_all_tables(url: &str) {
         "dataset_data",
         "queries",
         "results",
-        "artifact_references",
         "nodes",
         "edges",
         "pipeline_runs",

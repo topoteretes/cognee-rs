@@ -7,7 +7,7 @@ The input will be a list of dictionaries, each containing:
 ## Task
 For each event, extract all entities mentioned in the event description and determine their relationship to the event.
 ## Output Format
-Return the same enriched JSON with an additional key in each dictionary: `attributes`.
+Return a JSON object with an `events` key containing the same enriched JSON objects, each with an additional key: `attributes`.
 The `attributes` should be a list of dictionaries, each containing:
 - `entity`: The name of the entity
 - `entity_type`: The type/category of the entity (person, place, organization, object, concept, etc.)

@@ -74,7 +74,7 @@ pub async fn get_history(
         .map(result_model_to_history);
 
     let mut entries: Vec<SearchHistoryEntry> = queries.chain(results).collect();
-    entries.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    entries.sort_by_key(|e| std::cmp::Reverse(e.created_at));
     if let Some(n) = limit {
         entries.truncate(n);
     }

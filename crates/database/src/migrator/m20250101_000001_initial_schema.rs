@@ -186,75 +186,6 @@ impl MigrationTrait for Migration {
             )
             .await?;
 
-        // artifact_references
-        manager
-            .create_table(
-                Table::create()
-                    .table(ArtifactReferences::Table)
-                    .if_not_exists()
-                    .col(
-                        ColumnDef::new(ArtifactReferences::Id)
-                            .text()
-                            .not_null()
-                            .primary_key(),
-                    )
-                    .col(
-                        ColumnDef::new(ArtifactReferences::OwnerId)
-                            .text()
-                            .not_null(),
-                    )
-                    .col(
-                        ColumnDef::new(ArtifactReferences::DatasetId)
-                            .text()
-                            .not_null(),
-                    )
-                    .col(ColumnDef::new(ArtifactReferences::DataId).text())
-                    .col(
-                        ColumnDef::new(ArtifactReferences::ArtifactKind)
-                            .text()
-                            .not_null(),
-                    )
-                    .col(
-                        ColumnDef::new(ArtifactReferences::ArtifactId)
-                            .text()
-                            .not_null(),
-                    )
-                    .col(ColumnDef::new(ArtifactReferences::CollectionName).text())
-                    .col(
-                        ColumnDef::new(ArtifactReferences::CreatedAt)
-                            .timestamp_with_time_zone()
-                            .not_null(),
-                    )
-                    .foreign_key(
-                        ForeignKey::create()
-                            .from(ArtifactReferences::Table, ArtifactReferences::DatasetId)
-                            .to(Datasets::Table, Datasets::Id)
-                            .on_delete(ForeignKeyAction::Cascade),
-                    )
-                    .foreign_key(
-                        ForeignKey::create()
-                            .from(ArtifactReferences::Table, ArtifactReferences::DataId)
-                            .to(Data::Table, Data::Id)
-                            .on_delete(ForeignKeyAction::Cascade),
-                    )
-                    .to_owned(),
-            )
-            .await?;
-        manager
-            .create_index(
-                Index::create()
-                    .name("idx_artifact_references_unique")
-                    .table(ArtifactReferences::Table)
-                    .col(ArtifactReferences::DatasetId)
-                    .col(ArtifactReferences::DataId)
-                    .col(ArtifactReferences::ArtifactKind)
-                    .col(ArtifactReferences::ArtifactId)
-                    .col(ArtifactReferences::CollectionName)
-                    .unique()
-                    .to_owned(),
-            )
-            .await?;
-
         // nodes
         manager
             .create_table(
@@ -494,9 +425,6 @@ impl MigrationTrait for Migration {
             .drop_table(Table::drop().table(Nodes::Table).to_owned())
             .await?;
         manager
-            .drop_table(Table::drop().table(ArtifactReferences::Table).to_owned())
-            .await?;
-        manager
             .drop_table(Table::drop().table(Results::Table).to_owned())
             .await?;
         manager
@@ -579,19 +507,6 @@ enum Results {
     QueryId,
     SerializedResult,
     UserId,
-    CreatedAt,
-}
-
-#[derive(DeriveIden)]
-enum ArtifactReferences {
-    Table,
-    Id,
-    OwnerId,
-    DatasetId,
-    DataId,
-    ArtifactKind,
-    ArtifactId,
-    CollectionName,
     CreatedAt,
 }
 

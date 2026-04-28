@@ -20,6 +20,13 @@ struct RawEvent {
     pub location: Option<String>,
 }
 
+/// Object wrapper for structured-output APIs that require a root JSON object.
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+struct RawEventsOutput {
+    #[serde(default)]
+    pub events: Vec<RawEvent>,
+}
+
 pub struct TemporalEventExtractor {
     pub(crate) llm: Arc<dyn Llm>,
 }
@@ -42,9 +49,9 @@ impl TemporalEventExtractor {
             ..Default::default()
         };
 
-        let raw: Vec<RawEvent> = match self
+        let raw: RawEventsOutput = match self
             .llm
-            .create_structured_output::<Vec<RawEvent>>(
+            .create_structured_output::<RawEventsOutput>(
                 chunk_text,
                 TEMPORAL_EVENT_EXTRACTION_PROMPT,
                 Some(options),
@@ -58,7 +65,11 @@ impl TemporalEventExtractor {
             }
         };
 
-        let events = raw.into_iter().filter_map(convert_raw_event).collect();
+        let events = raw
+            .events
+            .into_iter()
+            .filter_map(convert_raw_event)
+            .collect();
 
         Ok(events)
     }
@@ -155,22 +166,24 @@ mod tests {
     #[tokio::test]
     async fn extract_events_happy_path() {
         // Mock returns two events: one point-in-time, one interval.
-        let json = serde_json::json!([
-            {
-                "name": "Moon Landing",
-                "description": "First humans on the Moon",
-                "time_from": { "year": 1969, "month": 7, "day": 20, "hour": 20, "minute": 17, "second": 0 },
-                "time_to": null,
-                "location": "Sea of Tranquility"
-            },
-            {
-                "name": "World War II",
-                "description": "Global conflict",
-                "time_from": { "year": 1939, "month": 9, "day": 1 },
-                "time_to": { "year": 1945, "month": 9, "day": 2 },
-                "location": null
-            }
-        ]);
+        let json = serde_json::json!({
+            "events": [
+                {
+                    "name": "Moon Landing",
+                    "description": "First humans on the Moon",
+                    "time_from": { "year": 1969, "month": 7, "day": 20, "hour": 20, "minute": 17, "second": 0 },
+                    "time_to": null,
+                    "location": "Sea of Tranquility"
+                },
+                {
+                    "name": "World War II",
+                    "description": "Global conflict",
+                    "time_from": { "year": 1939, "month": 9, "day": 1 },
+                    "time_to": { "year": 1945, "month": 9, "day": 2 },
+                    "location": null
+                }
+            ]
+        });
 
         let llm = Arc::new(MockLlm::with_json(json));
         let extractor = TemporalEventExtractor::new(llm);
@@ -211,22 +224,24 @@ mod tests {
 
     #[tokio::test]
     async fn extract_events_filters_empty_names() {
-        let json = serde_json::json!([
-            {
-                "name": "",
-                "description": null,
-                "time_from": null,
-                "time_to": null,
-                "location": null
-            },
-            {
-                "name": "Valid Event",
-                "description": "Has a name",
-                "time_from": { "year": 2020, "month": 1, "day": 1 },
-                "time_to": null,
-                "location": null
-            }
-        ]);
+        let json = serde_json::json!({
+            "events": [
+                {
+                    "name": "",
+                    "description": null,
+                    "time_from": null,
+                    "time_to": null,
+                    "location": null
+                },
+                {
+                    "name": "Valid Event",
+                    "description": "Has a name",
+                    "time_from": { "year": 2020, "month": 1, "day": 1 },
+                    "time_to": null,
+                    "location": null
+                }
+            ]
+        });
 
         let llm = Arc::new(MockLlm::with_json(json));
         let extractor = TemporalEventExtractor::new(llm);

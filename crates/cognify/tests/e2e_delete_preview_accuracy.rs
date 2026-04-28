@@ -137,14 +137,14 @@ async fn test_delete_preview_counts_match_execution() {
     let cognify_result = match cognify(
         data_items,
         dataset.id,
-        None,
+        Some(owner_id),
         None,
         llm.clone() as Arc<dyn Llm>,
         storage.clone() as Arc<dyn StorageTrait>,
         graph_db.clone() as Arc<dyn GraphDBTrait>,
         vector_db.clone() as Arc<dyn VectorDB>,
         embedding_engine.clone() as Arc<dyn EmbeddingEngine>,
-        None,
+        Some(database.clone()),
         Arc::new(NoOpOntologyResolver::new()),
         &config,
     )
