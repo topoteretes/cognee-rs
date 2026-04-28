@@ -195,6 +195,17 @@ pub enum ApiError {
     #[error("not implemented: {0}")]
     NotImplemented(String),
 
+    /// 501 `{"detail": "...", "code": "..."}` — structured stub envelope.
+    ///
+    /// Field order is wire-load-bearing: `detail` first, then `code`, matching
+    /// Python's `JSONResponse({"detail": ..., "code": ...})` insertion order.
+    /// Used by the notebooks `/run` stub and the responses stub.
+    #[error("not implemented stub: {detail}")]
+    NotImplementedStub {
+        code: &'static str,
+        detail: &'static str,
+    },
+
     // ── P4 read-path error variants ───────────────────────────────────────────
     //
     // DO NOT NORMALIZE — these envelopes are wire-compatibility constraints
@@ -345,6 +356,26 @@ impl IntoResponse for ApiError {
             ApiError::OntologyEnvelope(msg, status) => (status, json!({"error": msg})),
             ApiError::DeprecatedConflict(msg) => (StatusCode::CONFLICT, json!({"error": msg})),
             ApiError::NotImplemented(msg) => (StatusCode::NOT_IMPLEMENTED, json!({"detail": msg})),
+            ApiError::NotImplementedStub { code, detail } => {
+                // Field order is load-bearing: detail first, then code
+                // (matches Python's JSONResponse dict insertion order).
+                // serde_json::Map uses BTreeMap (no preserve_order feature),
+                // so we emit a raw JSON string to guarantee field order.
+                let raw = format!(
+                    "{{\"detail\":{},\"code\":{}}}",
+                    serde_json::Value::String(detail.to_string()),
+                    serde_json::Value::String(code.to_string()),
+                );
+                return (
+                    StatusCode::NOT_IMPLEMENTED,
+                    axum::response::Response::builder()
+                        .status(StatusCode::NOT_IMPLEMENTED)
+                        .header(axum::http::header::CONTENT_TYPE, "application/json")
+                        .body(axum::body::Body::from(raw))
+                        .expect("valid response builder args"),
+                )
+                    .into_response();
+            }
             ApiError::SearchError {
                 status,
                 error,
@@ -493,6 +524,59 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::NOT_IMPLEMENTED);
         let body = body_json(resp).await;
         assert_eq!(body["detail"], "Storage scheme 's3' not supported");
+    }
+
+    #[tokio::test]
+    async fn test_not_implemented_stub_status_and_field_order() {
+        let resp = ApiError::NotImplementedStub {
+            code: "X",
+            detail: "y",
+        }
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::NOT_IMPLEMENTED);
+
+        // Verify exact byte output — field order is load-bearing.
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let body_str = std::str::from_utf8(&bytes).expect("utf8");
+        assert_eq!(body_str, r#"{"detail":"y","code":"X"}"#);
+    }
+
+    #[tokio::test]
+    async fn test_not_implemented_stub_notebook_run() {
+        let resp = ApiError::NotImplementedStub {
+            code: "NOTEBOOK_RUN_NOT_IMPLEMENTED",
+            detail: "Notebook cell execution is not implemented in this build",
+        }
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::NOT_IMPLEMENTED);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let body_str = std::str::from_utf8(&bytes).expect("utf8");
+        assert_eq!(
+            body_str,
+            r#"{"detail":"Notebook cell execution is not implemented in this build","code":"NOTEBOOK_RUN_NOT_IMPLEMENTED"}"#
+        );
+    }
+
+    #[tokio::test]
+    async fn test_not_implemented_stub_responses() {
+        let resp = ApiError::NotImplementedStub {
+            code: "RESPONSES_NOT_IMPLEMENTED",
+            detail: "OpenAI Responses API surface is not implemented in this build",
+        }
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::NOT_IMPLEMENTED);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let body_str = std::str::from_utf8(&bytes).expect("utf8");
+        assert_eq!(
+            body_str,
+            r#"{"detail":"OpenAI Responses API surface is not implemented in this build","code":"RESPONSES_NOT_IMPLEMENTED"}"#
+        );
     }
 
     // ── PipelineErrored variant tests ─────────────────────────────────────────

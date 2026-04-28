@@ -10,7 +10,9 @@ use std::sync::Arc;
 use thiserror::Error;
 use uuid::Uuid;
 
-use cognee_database::{DatabaseError, Notebook, NotebookDb, NotebookUpdatePatch};
+use cognee_database::{
+    DatabaseError, Notebook, NotebookDb, NotebookUpdatePatch, seed_tutorials_if_first_call,
+};
 
 pub use tutorial::{TUTORIAL_BASICS_ID, TUTORIAL_PYTHON_DEV_ID};
 
@@ -32,7 +34,7 @@ pub async fn list_notebooks(
     db: &Arc<dyn NotebookDb>,
     user_id: Uuid,
 ) -> Result<Vec<Notebook>, NotebookError> {
-    tutorial::seed_tutorials_if_first_call(db.as_ref(), user_id).await?;
+    seed_tutorials_if_first_call(db.as_ref(), user_id).await?;
     Ok(db.list_by_owner(user_id).await?)
 }
 

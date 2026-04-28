@@ -106,6 +106,9 @@ pub async fn build_router(state: AppState) -> Result<Router, ServerError> {
         .nest("/api/v1/activity", routers::activity::router())
         .nest("/api/v1/sync", routers::sync::router())
         .nest("/api/v1/checks", routers::checks::router())
+        // P7 notebooks + responses (responses is a 501 stub in Stage A)
+        .nest("/api/v1/notebooks", routers::notebooks::router())
+        .nest("/api/v1/responses", routers::responses::router())
         // Middleware stack (outer → inner): trace → CORS → body limit
         .layer(RequestBodyLimitLayer::new(body_limit))
         .layer(middleware::cors::cors_layer(&state.config))

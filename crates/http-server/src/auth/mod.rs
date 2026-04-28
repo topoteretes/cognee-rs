@@ -25,5 +25,8 @@ pub mod verify;
 
 pub use context::AuthContext;
 pub use extractor::{AuthMethod, AuthenticatedUser, OptionalAuthenticatedUser, RequireSuperuser};
-pub use mailer::{LoggingMailer, Mailer};
+pub use mailer::{
+    ConsoleMailer, LoggingMailer, MailEvent, MailEventKind, Mailer, MailerError, SmtpMailer,
+    build_default as build_default_mailer,
+};
 pub use superuser::SuperuserOnly;

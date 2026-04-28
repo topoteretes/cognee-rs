@@ -11,6 +11,11 @@ mod traits;
 mod types;
 pub mod uuid_hex;
 
+// Re-export tutorial seeder for use by cognee-http-server (which can't depend on cognee-lib).
+pub use ops::tutorial_seeder::{
+    TUTORIAL_BASICS_ID, TUTORIAL_PYTHON_DEV_ID, seed_tutorials_if_first_call,
+};
+
 pub use auth::{
     ActiveUserWithApiKeyCount, ApiKey, ApiKeyRepository, AuthUser, CreateUserPayload,
     SeaOrmApiKeyRepository, SeaOrmUserAuthRepository, UpdateUserPayload, UserAuthRepository,
@@ -23,7 +28,10 @@ pub use sea_orm::DatabaseConnection;
 pub use sync::{
     SeaOrmSyncOperationRepository, SyncOperationRepository, SyncOperationRow, SyncOperationStatus,
 };
-pub use traits::{AclDb, DeleteDb, IngestDb, Notebook, NotebookDb, NotebookUpdatePatch, RoleDb, SearchHistoryDb, TenantDb, UserDb};
+pub use traits::{
+    AclDb, DeleteDb, IngestDb, Notebook, NotebookDb, NotebookUpdatePatch, RoleDb, SearchHistoryDb,
+    TenantDb, UserDb,
+};
 pub use types::{
     ArtifactReference, DatabaseError, GraphEdge, GraphMetrics, GraphNode, PipelineRun,
     PipelineRunStatus, SearchHistoryEntry, SearchHistoryEntryType, TaskRun,

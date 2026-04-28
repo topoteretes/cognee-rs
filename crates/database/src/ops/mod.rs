@@ -10,4 +10,5 @@ pub mod role;
 pub mod search_history;
 pub mod task_runs;
 pub mod tenant;
+pub mod tutorial_seeder;
 pub mod user;

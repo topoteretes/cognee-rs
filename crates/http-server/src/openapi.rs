@@ -37,7 +37,32 @@ use utoipa::{
         crate::routers::llm::post_infer_schema,
         crate::routers::visualize::get_visualize,
         crate::routers::visualize::post_visualize_multi,
-    )
+        // P7 notebooks + responses
+        crate::routers::notebooks::list_notebooks,
+        crate::routers::notebooks::create_notebook,
+        crate::routers::notebooks::update_notebook,
+        crate::routers::notebooks::delete_notebook,
+        crate::routers::notebooks::run_notebook_cell,
+        crate::routers::responses::create_response,
+    ),
+    components(schemas(
+        // P7 notebook + responses DTOs
+        crate::dto::notebooks::NotebookDTO,
+        crate::dto::notebooks::NotebookCellDTO,
+        crate::dto::notebooks::NotebookDataDTO,
+        crate::dto::notebooks::RunCodeDataDTO,
+        crate::dto::notebooks::RunCodeOutcomeDTO,
+        crate::dto::responses::ResponseRequestDTO,
+        crate::dto::responses::CogneeModelDTO,
+        crate::dto::responses::ToolFunctionDTO,
+        crate::dto::responses::FunctionDTO,
+        crate::dto::responses::FunctionParametersDTO,
+        crate::dto::responses::ResponseBodyDTO,
+        crate::dto::responses::ResponseToolCallDTO,
+        crate::dto::responses::FunctionCallDTO,
+        crate::dto::responses::ToolCallOutputDTO,
+        crate::dto::responses::ChatUsageDTO,
+    ))
 )]
 pub struct ApiDoc;
 

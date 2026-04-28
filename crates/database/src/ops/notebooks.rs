@@ -2,7 +2,7 @@
 
 use async_trait::async_trait;
 use chrono::Utc;
-use sea_orm::{prelude::*, DatabaseConnection, QueryOrder, Set};
+use sea_orm::{DatabaseConnection, QueryOrder, Set, prelude::*};
 use uuid::Uuid;
 
 use crate::conversions::map_sea_err;
@@ -48,7 +48,8 @@ impl NotebookDb for DatabaseConnection {
         cells: serde_json::Value,
         deletable: bool,
     ) -> Result<Notebook, DatabaseError> {
-        self.create_seeded(Uuid::new_v4(), owner_id, name, cells, deletable).await
+        self.create_seeded(Uuid::new_v4(), owner_id, name, cells, deletable)
+            .await
     }
 
     async fn create_seeded(
@@ -70,7 +71,11 @@ impl NotebookDb for DatabaseConnection {
             created_at: Set(now),
         };
 
-        active.insert(self).await.map_err(map_sea_err).and_then(model_to_notebook)
+        active
+            .insert(self)
+            .await
+            .map_err(map_sea_err)
+            .and_then(model_to_notebook)
     }
 
     async fn get_by_id_and_owner(
@@ -135,7 +140,7 @@ impl NotebookDb for DatabaseConnection {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cognee_database::{connect, initialize};
+    use crate::{connect, initialize};
     use serde_json::json;
 
     async fn in_memory_db() -> DatabaseConnection {

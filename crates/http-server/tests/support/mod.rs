@@ -415,6 +415,50 @@ impl Llm for FailingLlm {
     }
 }
 
+// ─── P7 helpers (notebooks) ──────────────────────────────────────────────────
+
+/// Build a fresh `AppState` backed by a `DatabaseConnection` with all migrations
+/// (including the P7 `notebooks` table).  Auth is `require_authentication: false`
+/// so tests can supply explicit bearer tokens without seeding JWT secrets.
+///
+/// Returns `(state, mail_events)`.
+pub async fn build_notebooks_state() -> (AppState, Arc<std::sync::Mutex<Vec<MailEvent>>>) {
+    let db = build_search_db().await;
+
+    let db_for_auth: sea_orm::DatabaseConnection = (*db).clone();
+    let user_repo = Arc::new(SeaOrmUserAuthRepository {
+        db: db_for_auth.clone(),
+    });
+    let api_key_repo = Arc::new(SeaOrmApiKeyRepository {
+        db: db_for_auth.clone(),
+    });
+
+    use cognee_http_server::config::Environment;
+    let cfg = HttpServerConfig {
+        require_authentication: false,
+        env: Environment::Dev,
+        ..HttpServerConfig::default()
+    };
+
+    let (mailer, events) = ConsoleMailer::new();
+    let auth = AuthContext::from_env(&cfg, user_repo, api_key_repo).expect("auth context");
+
+    let handles = build_component_handles(db.clone(), None, None, None);
+
+    let state = AppState {
+        config: Arc::new(cfg),
+        pipelines: AppState::noop_pipelines(),
+        lib: Some(handles),
+        auth: Some(Arc::new(auth)),
+        mailer: Arc::new(mailer),
+        health: None,
+        spans: Arc::new(cognee_http_server::observability::SpanBuffer::default()),
+        sync: Arc::new(cognee_http_server::sync::SyncRegistry::new()),
+    };
+
+    (state, events)
+}
+
 /// Build a `ComponentHandles` plumbing the supplied DB, optional search
 /// orchestrator, optional LLM, and optional graph DB. File storage and
 /// delete service use minimal-on-disk defaults rooted at a tempdir.
