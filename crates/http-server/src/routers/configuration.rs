@@ -56,6 +56,15 @@ fn model_to_dto(m: pc::Model) -> Result<PrincipalConfigurationDTO, ApiError> {
     })
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/v1/configuration/get_user_configuration/",
+    tag = "configuration",
+    responses(
+        (status = 200, description = "all configurations owned by the caller", body = Vec<PrincipalConfigurationDTO>),
+        (status = 401, description = "unauthorized"),
+    )
+)]
 #[tracing::instrument(skip(state), name = "cognee.api.configuration.list")]
 pub async fn list_user_configurations(
     user: AuthenticatedUser,
@@ -75,6 +84,16 @@ pub async fn list_user_configurations(
     Ok(Json(body))
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/v1/configuration/get_user_configuration/{config_id}",
+    tag = "configuration",
+    params(("config_id" = Uuid, Path, description = "configuration id")),
+    responses(
+        (status = 200, description = "stored configuration JSON, or `{}` if not found"),
+        (status = 401, description = "unauthorized"),
+    )
+)]
 #[tracing::instrument(skip(state), name = "cognee.api.configuration.get")]
 pub async fn get_user_configuration(
     _user: AuthenticatedUser,
@@ -95,6 +114,17 @@ pub async fn get_user_configuration(
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/v1/configuration/store_user_configuration",
+    tag = "configuration",
+    request_body = StorePrincipalConfigurationPayloadDTO,
+    responses(
+        (status = 200, description = "configuration upserted; body is JSON null"),
+        (status = 400, description = "empty name or non-object config"),
+        (status = 401, description = "unauthorized"),
+    )
+)]
 #[tracing::instrument(skip(state, payload), name = "cognee.api.configuration.store")]
 pub async fn store_user_configuration(
     user: AuthenticatedUser,

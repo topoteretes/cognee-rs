@@ -95,6 +95,15 @@ async fn require_tenant_owner(
 
 // ── §2.1 GET /tenants/me ────────────────────────────────────────────────────
 
+#[utoipa::path(
+    get,
+    path = "/api/v1/permissions/tenants/me",
+    tag = "permissions",
+    responses(
+        (status = 200, description = "tenants the caller belongs to", body = Vec<TenantSummary>),
+        (status = 401, description = "unauthorized"),
+    )
+)]
 #[tracing::instrument(skip(state), name = "cognee.api.permissions.list_my_tenants")]
 pub async fn list_my_tenants(
     user: AuthenticatedUser,
@@ -118,6 +127,17 @@ pub async fn list_my_tenants(
 
 // ── §2.2 GET /tenants/{tenant_id}/roles ─────────────────────────────────────
 
+#[utoipa::path(
+    get,
+    path = "/api/v1/permissions/tenants/{tenant_id}/roles",
+    tag = "permissions",
+    params(("tenant_id" = Uuid, Path, description = "tenant id")),
+    responses(
+        (status = 200, description = "roles defined in the tenant", body = Vec<RoleSummary>),
+        (status = 401, description = "unauthorized"),
+        (status = 403, description = "not a tenant admin"),
+    )
+)]
 #[tracing::instrument(
     skip(state),
     name = "cognee.api.permissions.list_tenant_roles",
@@ -149,6 +169,20 @@ pub async fn list_tenant_roles(
 
 // ── §2.3 GET /tenants/{tenant_id}/roles/{role_id}/users ─────────────────────
 
+#[utoipa::path(
+    get,
+    path = "/api/v1/permissions/tenants/{tenant_id}/roles/{role_id}/users",
+    tag = "permissions",
+    params(
+        ("tenant_id" = Uuid, Path, description = "tenant id"),
+        ("role_id" = Uuid, Path, description = "role id"),
+    ),
+    responses(
+        (status = 200, description = "users assigned to the role", body = Vec<UserInRole>),
+        (status = 401, description = "unauthorized"),
+        (status = 403, description = "not a tenant admin"),
+    )
+)]
 #[tracing::instrument(
     skip(state),
     name = "cognee.api.permissions.list_users_in_role",
@@ -178,6 +212,20 @@ pub async fn list_users_in_role(
 
 // ── §2.4 GET /tenants/{tenant_id}/roles/users/{user_id} ─────────────────────
 
+#[utoipa::path(
+    get,
+    path = "/api/v1/permissions/tenants/{tenant_id}/roles/users/{user_id}",
+    tag = "permissions",
+    params(
+        ("tenant_id" = Uuid, Path, description = "tenant id"),
+        ("user_id" = Uuid, Path, description = "user id"),
+    ),
+    responses(
+        (status = 200, description = "roles the user has in the tenant", body = Vec<RoleSummary>),
+        (status = 401, description = "unauthorized"),
+        (status = 403, description = "not a tenant admin"),
+    )
+)]
 #[tracing::instrument(
     skip(state),
     name = "cognee.api.permissions.list_user_roles",
@@ -209,6 +257,17 @@ pub async fn list_user_roles(
 
 // ── §2.5 GET /tenants/{tenant_id}/users ─────────────────────────────────────
 
+#[utoipa::path(
+    get,
+    path = "/api/v1/permissions/tenants/{tenant_id}/users",
+    tag = "permissions",
+    params(("tenant_id" = Uuid, Path, description = "tenant id")),
+    responses(
+        (status = 200, description = "users that belong to the tenant", body = Vec<UserInTenant>),
+        (status = 401, description = "unauthorized"),
+        (status = 403, description = "not a tenant admin"),
+    )
+)]
 #[tracing::instrument(
     skip(state),
     name = "cognee.api.permissions.list_users_in_tenant",
@@ -248,6 +307,21 @@ pub async fn list_users_in_tenant(
 
 // ── §2.6 POST /datasets/{principal_id} — grant ACL ──────────────────────────
 
+#[utoipa::path(
+    post,
+    path = "/api/v1/permissions/datasets/{principal_id}",
+    tag = "permissions",
+    params(
+        ("principal_id" = Uuid, Path, description = "principal that receives the grant"),
+        ("permission_name" = String, Query, description = "one of read|write|delete|share"),
+    ),
+    request_body = GrantDatasetPermissionBody,
+    responses(
+        (status = 200, description = "permission assigned", body = MessageResponse),
+        (status = 400, description = "invalid permission name"),
+        (status = 401, description = "unauthorized"),
+    )
+)]
 #[tracing::instrument(
     skip(state, body),
     name = "cognee.api.permissions.grant_dataset_permission",
@@ -305,6 +379,18 @@ pub async fn grant_dataset_permission(
 
 // ── §2.7 POST /roles?role_name=  (owner-only) ──────────────────────────────
 
+#[utoipa::path(
+    post,
+    path = "/api/v1/permissions/roles",
+    tag = "permissions",
+    params(("role_name" = String, Query, description = "human-readable role name")),
+    responses(
+        (status = 200, description = "role created", body = CreateRoleResponse),
+        (status = 400, description = "empty role name"),
+        (status = 401, description = "unauthorized"),
+        (status = 403, description = "not the tenant owner"),
+    )
+)]
 #[tracing::instrument(skip(state), name = "cognee.api.permissions.create_role")]
 pub async fn create_role(
     user: AuthenticatedUser,
@@ -346,6 +432,17 @@ pub async fn create_role(
 
 // ── §2.8 POST /tenants?tenant_name= ────────────────────────────────────────
 
+#[utoipa::path(
+    post,
+    path = "/api/v1/permissions/tenants",
+    tag = "permissions",
+    params(("tenant_name" = String, Query, description = "human-readable tenant name")),
+    responses(
+        (status = 200, description = "tenant created", body = CreateTenantResponse),
+        (status = 400, description = "empty tenant name"),
+        (status = 401, description = "unauthorized"),
+    )
+)]
 #[tracing::instrument(skip(state), name = "cognee.api.permissions.create_tenant")]
 pub async fn create_tenant(
     user: AuthenticatedUser,
@@ -373,6 +470,16 @@ pub async fn create_tenant(
 
 // ── §2.9 POST /tenants/select ──────────────────────────────────────────────
 
+#[utoipa::path(
+    post,
+    path = "/api/v1/permissions/tenants/select",
+    tag = "permissions",
+    request_body = SelectTenantDTO,
+    responses(
+        (status = 200, description = "current tenant set on the caller", body = SelectTenantResponse),
+        (status = 401, description = "unauthorized"),
+    )
+)]
 #[tracing::instrument(skip(state, body), name = "cognee.api.permissions.select_tenant")]
 pub async fn select_tenant(
     user: AuthenticatedUser,
@@ -392,6 +499,21 @@ pub async fn select_tenant(
 
 // ── §2.10 POST /users/{user_id}/roles?role_id=  (owner-only) ───────────────
 
+#[utoipa::path(
+    post,
+    path = "/api/v1/permissions/users/{user_id}/roles",
+    tag = "permissions",
+    params(
+        ("user_id" = Uuid, Path, description = "target user"),
+        ("role_id" = Uuid, Query, description = "role to assign"),
+    ),
+    responses(
+        (status = 200, description = "role assigned", body = MessageResponse),
+        (status = 401, description = "unauthorized"),
+        (status = 403, description = "not the tenant owner"),
+        (status = 404, description = "role not found"),
+    )
+)]
 #[tracing::instrument(
     skip(state),
     name = "cognee.api.permissions.assign_role",
@@ -426,6 +548,20 @@ pub async fn assign_role(
 
 // ── §2.11 POST /users/{user_id}/tenants?tenant_id=  (owner-only) ──────────
 
+#[utoipa::path(
+    post,
+    path = "/api/v1/permissions/users/{user_id}/tenants",
+    tag = "permissions",
+    params(
+        ("user_id" = Uuid, Path, description = "target user"),
+        ("tenant_id" = Uuid, Query, description = "tenant to add the user to"),
+    ),
+    responses(
+        (status = 200, description = "user added to tenant", body = MessageResponse),
+        (status = 401, description = "unauthorized"),
+        (status = 403, description = "not the tenant owner"),
+    )
+)]
 #[tracing::instrument(
     skip(state),
     name = "cognee.api.permissions.add_user_to_tenant",
@@ -453,6 +589,20 @@ pub async fn add_user_to_tenant(
 
 // ── §2.12 DELETE /tenants/{tenant_id}/users/{user_id} ─────────────────────
 
+#[utoipa::path(
+    delete,
+    path = "/api/v1/permissions/tenants/{tenant_id}/users/{user_id}",
+    tag = "permissions",
+    params(
+        ("tenant_id" = Uuid, Path, description = "tenant id"),
+        ("user_id" = Uuid, Path, description = "user to remove"),
+    ),
+    responses(
+        (status = 200, description = "user removed from tenant", body = MessageResponse),
+        (status = 401, description = "unauthorized"),
+        (status = 403, description = "not a tenant admin"),
+    )
+)]
 #[tracing::instrument(
     skip(state),
     name = "cognee.api.permissions.remove_user_from_tenant",

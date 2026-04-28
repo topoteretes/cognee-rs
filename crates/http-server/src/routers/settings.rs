@@ -215,6 +215,15 @@ fn store() -> &'static SettingsStore {
 
 // ── Handlers ───────────────────────────────────────────────────────────────
 
+#[utoipa::path(
+    get,
+    path = "/api/v1/settings",
+    tag = "settings",
+    responses(
+        (status = 200, description = "current settings (api keys redacted)", body = SettingsDTO),
+        (status = 401, description = "unauthorized"),
+    )
+)]
 #[tracing::instrument(skip(_state), name = "cognee.api.settings.get")]
 pub async fn get_settings(
     _user: AuthenticatedUser,
@@ -248,6 +257,17 @@ pub async fn get_settings(
     Ok(Json(dto))
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/v1/settings",
+    tag = "settings",
+    request_body = SettingsPayloadDTO,
+    responses(
+        (status = 200, description = "settings saved; body is JSON null"),
+        (status = 401, description = "unauthorized"),
+        (status = 422, description = "invalid payload"),
+    )
+)]
 #[tracing::instrument(skip(_state, payload), name = "cognee.api.settings.save")]
 pub async fn save_settings(
     _user: AuthenticatedUser,
