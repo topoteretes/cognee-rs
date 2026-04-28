@@ -34,3 +34,8 @@ js/cognee-neon/target/
 js/node_modules/
 js/lib/
 js/cognee_neon.node
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo

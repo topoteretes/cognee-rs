@@ -4,9 +4,9 @@
 
 ## 0. Current state (updated 2026-04-28)
 
-**Resume point: start at task 10 — P8 (cross-SDK HTTP parity harness).**
+**All 10 tasks complete. No resume point — the full port is done.**
 
-Phases completed in previous sessions (do NOT re-run them):
+Phases completed (do NOT re-run them):
 
 | Phase | Commit | Notes |
 |---|---|---|
@@ -19,10 +19,11 @@ Phases completed in previous sessions (do NOT re-run them):
 | P5 | `aefb105` + `7ae78e3` | Admin + RBAC (/permissions, /settings, /configuration); RBAC migration |
 | P6 | `0e928bf` | Observability (/activity, /sync, /checks, SpanBufferLayer) |
 | P7 | `bf01ef6` + `85fecf8` | Advanced + email flows (/notebooks, /responses stub, SMTP mailer) |
+| P8 | `2faf3ac` | Cross-SDK HTTP parity harness (dual-server Compose, pytest fixtures, 23 test files, CI workflow) |
 
-Doc-update commits: `4ab6a53` (P3-prereq), `7cf39a5` (P1), `66e8ef6` (P2), `6fbdf38` (P3), `6406410` (P4), `dc80f4e` (P5), `bfc74e3` (P6).
+Doc-update commits: `4ab6a53` (P3-prereq), `7cf39a5` (P1), `66e8ef6` (P2), `6fbdf38` (P3), `6406410` (P4), `dc80f4e` (P5), `bfc74e3` (P6), `3bdf1e4` (P8).
 
-**Latest commit on branch:** `85fecf8` (`git log --oneline -1` to verify before starting).
+**Latest commit on branch:** `3bdf1e4` (`git log --oneline -1` to verify before starting).
 
 ### Key architectural facts established so far
 
