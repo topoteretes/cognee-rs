@@ -1931,6 +1931,13 @@ fn edge_slug(edge_text: &str) -> Uuid {
     Uuid::new_v5(&Uuid::NAMESPACE_OID, normalized.as_bytes())
 }
 
+/// Deterministic triplet slug, matching `Triplet::new`.
+fn triplet_slug(source_id: Uuid, relationship_name: &str, target_id: Uuid) -> Uuid {
+    let raw = format!("{source_id}{relationship_name}{target_id}");
+    let normalized = raw.to_lowercase().replace(' ', "_").replace('\'', "");
+    Uuid::new_v5(&Uuid::NAMESPACE_OID, normalized.as_bytes())
+}
+
 /// Write provenance node and edge records to the relational database.
 ///
 /// Mirrors the Python `upsert_nodes()` / `upsert_edges()` calls in
@@ -1957,6 +1964,18 @@ async fn upsert_provenance(
     // to the originating Data item.
     let chunk_data_map: HashMap<Uuid, Uuid> =
         chunks.iter().map(|c| (c.base.id, c.document_id)).collect();
+    let entity_data_map: HashMap<Uuid, Uuid> = entities
+        .iter()
+        .filter_map(|pair| {
+            pair.entity
+                .base
+                .get_metadata("chunk_id")
+                .and_then(|v| v.as_str())
+                .and_then(|s| Uuid::parse_str(s).ok())
+                .and_then(|chunk_id| chunk_data_map.get(&chunk_id).copied())
+                .map(|data_id| (pair.entity.base.id, data_id))
+        })
+        .collect();
 
     // ── Provenance nodes ────────────────────────────────────────────────
     let mut prov_nodes: Vec<GraphNode> = Vec::new();
@@ -2093,8 +2112,12 @@ async fn upsert_provenance(
             edge_pair.relationship_name.clone()
         };
 
-        // Resolve data_id from source entity
-        let data_id = Uuid::nil(); // edges span entities; use nil
+        let source_data_id = entity_data_map.get(&edge_pair.source_entity_id).copied();
+        let target_data_id = entity_data_map.get(&edge_pair.target_entity_id).copied();
+        let data_id = match (source_data_id, target_data_id) {
+            (Some(source), Some(target)) if source == target => source,
+            _ => Uuid::nil(),
+        };
 
         prov_edges.push(GraphEdge {
             id: provenance_edge_id(
@@ -2105,7 +2128,11 @@ async fn upsert_provenance(
                 &edge_text,
                 edge_pair.target_entity_id,
             ),
-            slug: edge_slug(&edge_text),
+            slug: triplet_slug(
+                edge_pair.source_entity_id,
+                &edge_text,
+                edge_pair.target_entity_id,
+            ),
             user_id,
             data_id,
             dataset_id,

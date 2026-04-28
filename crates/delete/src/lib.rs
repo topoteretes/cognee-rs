@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use cognee_database::{DeleteDb, GraphEdge, GraphNode};
 use cognee_graph::GraphDBTrait;
-use cognee_models::Dataset;
+use cognee_models::{Dataset, EdgeType, Triplet};
 use cognee_session::SessionStore;
 use cognee_storage::{StorageError, StorageTrait};
 use cognee_vector::VectorDB;
@@ -895,18 +895,17 @@ impl DeleteService {
                 }
             }
 
-            // Edges contribute to EdgeType_relationship_name and Triplet_text
+            // Edges contribute to EdgeType_relationship_name and Triplet_text.
             for edge in edges {
                 by_collection
                     .entry(("EdgeType".to_string(), "relationship_name".to_string()))
                     .or_default()
-                    .push(edge.slug);
+                    .push(EdgeType::deterministic_id(&edge.relationship_name));
 
-                // Triplet ID is the edge slug as well (matching cognify pipeline)
                 by_collection
                     .entry(("Triplet".to_string(), "text".to_string()))
                     .or_default()
-                    .push(edge.slug);
+                    .push(triplet_vector_id(edge));
             }
 
             for ((data_type, field_name), ids) in &by_collection {
@@ -1488,6 +1487,16 @@ fn parse_indexed_fields(value: &serde_json::Value) -> Vec<String> {
             vec![]
         }
     }
+}
+
+fn triplet_vector_id(edge: &GraphEdge) -> Uuid {
+    Triplet::new(
+        edge.source_node_id,
+        edge.destination_node_id,
+        edge.relationship_name.clone(),
+        String::new(),
+    )
+    .id
 }
 
 #[cfg(test)]
@@ -2115,8 +2124,34 @@ mod tests {
         let (dataset_id, data_id) = seed_dataset_with_data(&db, &storage, owner, "edge_ds").await;
 
         // Seed provenance edges
-        let edge_slug = Uuid::new_v4();
-        seed_provenance_edges(&db, dataset_id, data_id, owner, &[edge_slug], "knows").await;
+        let source_id = Uuid::new_v4();
+        let target_id = Uuid::new_v4();
+        let relationship_name = "knows";
+        let triplet_id = Triplet::new(
+            source_id,
+            target_id,
+            relationship_name.to_string(),
+            String::new(),
+        )
+        .id;
+        ops::graph_storage::upsert_edges(
+            &db,
+            &[GraphEdge {
+                id: Uuid::new_v4(),
+                slug: triplet_id,
+                user_id: owner,
+                data_id,
+                dataset_id,
+                source_node_id: source_id,
+                destination_node_id: target_id,
+                relationship_name: relationship_name.to_string(),
+                label: None,
+                attributes: None,
+                created_at: chrono::Utc::now(),
+            }],
+        )
+        .await
+        .unwrap();
 
         // Create EdgeType and Triplet collections and index points
         vector_db
@@ -2128,12 +2163,15 @@ mod tests {
             .await
             .unwrap();
 
-        let et_point = cognee_vector::VectorPoint::new(edge_slug, vec![1.0, 0.0, 0.0]);
+        let et_point = cognee_vector::VectorPoint::new(
+            EdgeType::deterministic_id(relationship_name),
+            vec![1.0, 0.0, 0.0],
+        );
         vector_db
             .index_points("EdgeType", "relationship_name", &[et_point])
             .await
             .unwrap();
-        let triplet_point = cognee_vector::VectorPoint::new(edge_slug, vec![0.0, 1.0, 0.0]);
+        let triplet_point = cognee_vector::VectorPoint::new(triplet_id, vec![0.0, 1.0, 0.0]);
         vector_db
             .index_points("Triplet", "text", &[triplet_point])
             .await
