@@ -113,6 +113,19 @@ Indexes: `email` UNIQUE, `tenant_id`. See [auth.md §11](auth.md#11-database-sch
 
 `owner_id` is *not* a hard FK — Python's column has no `ForeignKey(...)` constraint. Match this so cascades behave identically. Application logic enforces the integrity.
 
+> **Implementation divergence (landed in P5, commits aefb105 + 2652aea):** the
+> existing migration `m20250422_000001_user_tenant_role_tables.rs` declared
+> `owner_id` as `TEXT NOT NULL` rather than the `NULL` shape this section
+> specifies. We did **not** re-issue the column at P5 (would have required a
+> destructive `ALTER` or a churn migration). Instead, the `bootstrap_default_principals`
+> entrypoint inserts the `default_tenant` row with `owner_id` set to the
+> default-user id as a placeholder. Application code never depends on
+> `owner_id` being meaningful for the default tenant, and the shape stays
+> compatible with Python writers (Python always populates `owner_id` because
+> every tenant it creates has a creator). Re-aligning the column with Python's
+> nullability is tracked as a future migration. Cross-reference:
+> [implementation/p5-admin.md §1.1](implementation/p5-admin.md#11-implementation-divergences-recorded-post-landing).
+
 ### 3.4 `roles`
 
 | Column | Type | Constraints | Source |
@@ -299,6 +312,15 @@ async fn bootstrap_default_principals(db: &Db) -> Result<(), DbError> {
 ```
 
 The default user's password is empty (it's never used for login — `REQUIRE_AUTHENTICATION=false` is the only path that surfaces them). Same as Python.
+
+> **As-landed (P5, commits aefb105 + 2652aea):** the actual bootstrap order
+> creates the default user **first**, then the default tenant, because
+> `tenants.owner_id` is `NOT NULL` in the existing migration (see §3.3
+> divergence note). Bootstrap inserts `tenants(owner_id = default_user.id)`
+> as a placeholder, then back-fills `users.tenant_id = default_tenant.id`,
+> then upserts the `(default_user, default_tenant)` `user_tenants` row. The
+> end state is identical to the snippet above; only the insert order differs
+> to satisfy the column's NOT NULL constraint.
 
 ## 7. `tenant_id` on related tables
 

@@ -37,9 +37,9 @@ One row per router. Update the row in the same PR that lands or changes the unde
 | 18 | recall | `/api/v1/recall` | [recall.md](recall.md) | **Done** |
 | 19 | forget | `/api/v1/forget` | [forget.md](forget.md) | **Done** |
 | 20 | delete (deprecated) | `/api/v1/delete` | [delete.md](delete.md) | **Done** |
-| 21 | settings | `/api/v1/settings` | [settings.md](settings.md) | **Draft** |
-| 22 | configuration | `/api/v1/configuration` | [configuration.md](configuration.md) | **Draft** |
-| 23 | permissions | `/api/v1/permissions` | [permissions.md](permissions.md) | **Draft** |
+| 21 | settings | `/api/v1/settings` | [settings.md](settings.md) | **Done** |
+| 22 | configuration | `/api/v1/configuration` | [configuration.md](configuration.md) | **Done** |
+| 23 | permissions | `/api/v1/permissions` | [permissions.md](permissions.md) | **Done** |
 | 24 | visualize | `/api/v1/visualize` | [visualize.md](visualize.md) | **Done** |
 | 25 | activity | `/api/v1/activity` | [activity.md](activity.md) | **Draft** |
 | 26 | sync | `/api/v1/sync` | [sync.md](sync.md) | **Draft** |

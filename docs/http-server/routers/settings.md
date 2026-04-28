@@ -259,6 +259,7 @@ pub fn should_persist_api_key(submitted: &str) -> bool {
 3. **`endpoint` and `api_version` fields are read-only** — surfaced on `GET` but not in the input DTO. Match Python exactly: input DTO does not accept these fields.
 4. **`bedrock` asymmetry** — `bedrock` is in the GET-advertised providers but not the POST `Literal`. Replicate the asymmetry verbatim. The frontend treats `bedrock` as read-only.
 5. **No admin gate** — Python lets any authenticated user rewrite the global LLM / vector-DB config. Rust matches. The cross-SDK parity test confirms a non-superuser can save without 403.
+6. **Settings-singleton placement** — *Resolved during P5 (commit 2652aea)*: the spec called for a `cognee_lib::settings` façade that the router thinly wraps, but `cognee-lib`'s `server` feature already gates `cognee-http-server`, so a back-edge from `cognee-lib::settings` to the router would create a feature cycle. The process-singleton `SettingsStore` therefore lives directly in `crates/http-server/src/routers/settings.rs`. Wire shape, redaction policy, and provider/model lists still match Python verbatim. If a non-HTTP consumer ever needs these settings, lift the singleton into a sibling `cognee-settings` crate without churning HTTP code.
 
 ## 7. References
 
