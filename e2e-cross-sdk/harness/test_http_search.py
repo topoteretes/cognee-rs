@@ -1,0 +1,63 @@
+"""Phase-1 parity tests for POST /api/v1/search.
+
+Parameterized over SearchType in {Chunks, Summaries, ChunksLexical} only at
+phase-1 (LLM-heavy types ride in phase-2).
+
+Run after seed_dataset_with_text + seed_cognify against both servers.
+Ignore extension: ``{"$..tenant_id", "$..owner_id", "$..results[*].score"}``
+(cosine scores may differ in the last decimal).
+"""
+
+import pytest
+
+from http_helpers import DEFAULT_IGNORE, assert_responses_match
+from seed import seed_cognify, seed_dataset_with_text
+
+_SEARCH_IGNORE = DEFAULT_IGNORE | {
+    "$..tenant_id",
+    "$..owner_id",
+    "$..results[*].score",
+}
+
+_PHASE1_SEARCH_TYPES = [
+    "Chunks",
+    "Summaries",
+    "ChunksLexical",
+]
+
+_SEED_TEXT = (
+    "The knowledge graph stores entities and their relationships.  "
+    "Cognee ingests text, extracts facts, and links them in a graph.  "
+    "This enables semantic search over structured knowledge."
+)
+
+
+@pytest.fixture(scope="module")
+def seeded_dataset(authed_clients, unique_dataset_name):
+    """Seed both servers with text and return the dataset IDs."""
+    dataset_ids: dict[str, str | None] = {}
+    for side, client in authed_clients.items():
+        resp = seed_dataset_with_text(client, name=unique_dataset_name, text=_SEED_TEXT)
+        dataset_ids[side] = resp.get("dataset_id") or resp.get("id")
+    return dataset_ids
+
+
+@pytest.mark.parametrize("search_type", _PHASE1_SEARCH_TYPES)
+def test_search_type_parity(authed_clients, seeded_dataset, search_type):
+    """POST /api/v1/search returns equivalent results for both servers.
+
+    Only SearchType in {Chunks, Summaries, ChunksLexical} are tested here —
+    they do not require a live LLM call.
+    """
+    payload = {
+        "query": "knowledge graph entities",
+        "search_type": search_type,
+    }
+    py = authed_clients["py"].post("/api/v1/search", json=payload)
+    rs = authed_clients["rs"].post("/api/v1/search", json=payload)
+
+    # If both 404 (endpoint not yet wired), skip rather than fail
+    if py.status_code == 404 and rs.status_code == 404:
+        pytest.skip(f"POST /api/v1/search not yet implemented for {search_type}")
+
+    assert_responses_match(py, rs, ignore=_SEARCH_IGNORE)

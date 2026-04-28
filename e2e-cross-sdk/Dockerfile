@@ -38,6 +38,13 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     cargo build --release --package cognee-cli \
     && cp target/release/cognee-cli /usr/local/bin/cognee-cli-rust
 
+# Build the HTTP server binary in release mode (feature-gated `bin`)
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,target=/build/cognee-rust/target \
+    cargo build --release --package cognee-http-server --features bin \
+    && cp target/release/cognee-http-server /usr/local/bin/cognee-http-server
+
 # Download ONNX embedding models (needed by Rust CLI for cognify)
 RUN mkdir -p /opt/models \
     && curl -fL "https://huggingface.co/Xenova/bge-small-en-v1.5/resolve/main/onnx/model_quantized.onnx" \
@@ -82,6 +89,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Copy Rust CLI binary
 COPY --from=rust-builder /usr/local/bin/cognee-cli-rust /usr/local/bin/cognee-cli-rust
 
+# Copy Rust HTTP server binary
+COPY --from=rust-builder /usr/local/bin/cognee-http-server /usr/local/bin/cognee-http-server
+
 # Copy ONNX models
 COPY --from=rust-builder /opt/models/ /opt/models/
 
@@ -102,6 +112,12 @@ COPY cognee-rust/e2e-cross-sdk/test_data/ /test_data/
 
 # Copy harness code
 COPY cognee-rust/e2e-cross-sdk/harness/ /harness/
+
+# Copy dual-server entrypoint scripts
+COPY cognee-rust/e2e-cross-sdk/bin/ /usr/local/bin/
+
+# Make scripts executable
+RUN chmod +x /usr/local/bin/start_servers.sh /harness/wait_for_health.sh
 
 WORKDIR /workspace
 

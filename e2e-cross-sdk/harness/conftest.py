@@ -5,6 +5,17 @@ The core flow:
 2. Extract owner_id and tenant_id from the Python SQLite database.
 3. Configure the Rust CLI to use those same IDs.
 4. Run Rust ``add`` with ``--tenant-id`` so UUID5 inputs match Python exactly.
+
+HTTP fixture hygiene notes
+--------------------------
+The ``/py`` and ``/rs`` tmpfs workspaces are wiped per ``docker compose run``
+invocation but NOT between tests within a single run.  Tests must not rely on
+a clean DB between test functions — use ``unique_dataset_name`` to avoid
+cross-test contamination, and add explicit teardown when the test creates
+persistent state (API keys, named datasets, etc.).
+
+The Python-side DB migrations are run once at container start (via
+``start_servers.sh``).  The Rust server runs its own migrations on first boot.
 """
 
 import os
@@ -192,3 +203,88 @@ def both_cognified(tmp_path):
     assert result.returncode == 0, f"Rust cognify failed:\n{result.stdout}\n{result.stderr}"
 
     return py_ws, rust_ws
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# HTTP parity fixtures
+# ─────────────────────────────────────────────────────────────────────────────
+# These fixtures are used exclusively by test_http_*.py files and drive two
+# live HTTP servers (Python uvicorn on :8000, Rust cognee-http-server on :8001)
+# that are started by the e2e-http-tests Compose service's entrypoint.
+# ─────────────────────────────────────────────────────────────────────────────
+
+import httpx
+import uuid as _uuid
+
+PY_BASE = "http://127.0.0.1:8000"
+RS_BASE = "http://127.0.0.1:8001"
+
+
+@pytest.fixture
+def py_client():
+    """httpx.Client pre-configured for the Python uvicorn server."""
+    with httpx.Client(base_url=PY_BASE, timeout=60.0) as c:
+        yield c
+
+
+@pytest.fixture
+def rs_client():
+    """httpx.Client pre-configured for the Rust cognee-http-server."""
+    with httpx.Client(base_url=RS_BASE, timeout=60.0) as c:
+        yield c
+
+
+@pytest.fixture
+def both_clients(py_client, rs_client):
+    """Dict with both clients keyed by 'py' and 'rs'."""
+    return {"py": py_client, "rs": rs_client}
+
+
+@pytest.fixture
+def authed_clients(both_clients):
+    """Register + login on both servers; return clients with auth cookies/headers set.
+
+    Register uses JSON with ``email``; login uses OAuth2 form with ``username``
+    (matching e2e-parity.md §4 and FastAPI-users behaviour).
+    """
+    creds = {"username": "test@example.com", "password": "test_password_123"}
+    for name, c in both_clients.items():
+        # Bootstrap user — ignore 409 / 422 "already exists" on re-runs.
+        c.post(
+            "/api/v1/auth/register",
+            json={
+                "email": creds["username"],
+                "password": creds["password"],
+                "is_verified": True,
+            },
+        )
+        r = c.post("/api/v1/auth/login", data=creds)
+        assert r.status_code == 200, f"{name} login failed: {r.text}"
+    return both_clients
+
+
+# ── Data-hygiene fixtures ──────────────────────────────────────────────────────
+
+
+@pytest.fixture
+def unique_dataset_name(request):
+    """Return a function-scoped unique dataset name to avoid cross-test contamination."""
+    return f"test_{request.node.name}_{_uuid.uuid4().hex[:8]}"
+
+
+@pytest.fixture
+def cleanup_api_keys(both_clients):
+    """Collect issued API-key IDs and DELETE them at teardown.
+
+    Usage::
+
+        def test_create_key(authed_clients, cleanup_api_keys):
+            r = authed_clients["py"].post("/api/v1/api-keys", json={"name": "k"})
+            cleanup_api_keys["py"].append(r.json()["id"])
+    """
+    issued: dict = {"py": [], "rs": []}
+    yield issued
+    for side, ids in issued.items():
+        c = both_clients[side]
+        for key_id in ids:
+            c.delete(f"/api/v1/api-keys/{key_id}")

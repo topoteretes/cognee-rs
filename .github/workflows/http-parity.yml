@@ -1,0 +1,88 @@
+name: HTTP Parity
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - "crates/http-server/**"
+      - "cognee/api/**"
+      - "e2e-cross-sdk/**"
+  workflow_dispatch:
+    inputs:
+      run_phase3:
+        description: "Run phase-3 specialty tests (websocket, sync, permissions, visualize)"
+        required: false
+        default: "false"
+        type: boolean
+
+concurrency:
+  group: http-parity-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  http-parity:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      # ── Docker layer cache ────────────────────────────────────────────────
+      - name: Cache Docker layers
+        uses: actions/cache@v4
+        with:
+          path: /tmp/.buildx-cache
+          key: >-
+            buildx-http-parity-${{
+              hashFiles(
+                'cognee-rust/e2e-cross-sdk/Dockerfile',
+                'cognee-rust/Cargo.lock'
+              )
+            }}
+          restore-keys: |
+            buildx-http-parity-
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # ── Phase-1: no LLM required ──────────────────────────────────────────
+      - name: Phase-1 — health, auth, datasets, add, search, forget, openapi, errors
+        run: >-
+          docker compose
+          -f cognee-rust/e2e-cross-sdk/docker-compose.yml
+          run --rm e2e-http-tests
+          pytest -vs /harness/
+          -k "test_http_(health|auth|datasets|add|search|forget|openapi|errors|self)"
+          --tb=short
+
+      # ── Phase-2: LLM-gated (requires OPENAI_KEY secret) ──────────────────
+      - name: Phase-2 — cognify, remember, recall, memify, improve, llm (LLM-gated)
+        if: ${{ secrets.OPENAI_KEY != '' }}
+        env:
+          OPENAI_TOKEN: ${{ secrets.OPENAI_KEY }}
+          OPENAI_URL: https://api.openai.com/v1
+          OPENAI_MODEL: gpt-4o-mini
+        run: >-
+          docker compose
+          -f cognee-rust/e2e-cross-sdk/docker-compose.yml
+          run --rm e2e-http-tests
+          pytest -vs /harness/
+          -k "test_http_(cognify|remember|recall|memify|improve|llm)"
+          --tb=short
+
+      # ── Phase-3: specialty (manual via workflow_dispatch only) ────────────
+      - name: Phase-3 — websocket, sync, permissions, visualize (manual only)
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_phase3 == 'true' }}
+        env:
+          OPENAI_TOKEN: ${{ secrets.OPENAI_KEY }}
+          OPENAI_URL: https://api.openai.com/v1
+          OPENAI_MODEL: gpt-4o-mini
+        run: >-
+          docker compose
+          -f cognee-rust/e2e-cross-sdk/docker-compose.yml
+          run --rm e2e-http-tests
+          pytest -vs /harness/
+          -k "test_http_(websocket|sync|permissions|visualize)"
+          --tb=short

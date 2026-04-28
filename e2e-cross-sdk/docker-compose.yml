@@ -10,3 +10,17 @@ services:
     tmpfs:
       - /workspace                                # ephemeral workspace per run
     command: ["pytest", "-vs", "/harness/"]
+
+  e2e-http-tests:
+    build:
+      context: ../..                              # /home/dmytro/dev/cognee/ (monorepo root)
+      dockerfile: cognee-rust/e2e-cross-sdk/Dockerfile
+    env_file:
+      - ../.env                                   # cognee-rust/.env (OPENAI_TOKEN, OPENAI_MODEL, etc.)
+    environment:
+      - LLM_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
+    tmpfs:
+      - /py                                       # ephemeral Python server workspace
+      - /rs                                       # ephemeral Rust server workspace
+    entrypoint: ["/usr/local/bin/start_servers.sh"]
+    command: ["pytest", "-vs", "/harness/", "-k", "test_http_"]
