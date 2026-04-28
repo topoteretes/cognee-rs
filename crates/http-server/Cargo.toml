@@ -39,6 +39,7 @@ hyper = { version = "1", features = ["server", "http1", "http2"] }
 cognee-models = { path = "../models" }
 cognee-core = { path = "../core", features = ["pipeline-run-registry"] }
 cognee-database = { path = "../database", features = ["sqlite"] }
+sea-orm = { version = "1", default-features = false, features = ["runtime-tokio-rustls", "with-chrono", "with-uuid", "with-json"] }
 cognee-storage = { path = "../storage" }
 cognee-ingestion = { path = "../ingestion" }
 cognee-delete = { path = "../delete" }

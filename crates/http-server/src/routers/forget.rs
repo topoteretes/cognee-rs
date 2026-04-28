@@ -22,7 +22,7 @@ use crate::dto::forget::{
     ForgetMode, ForgetPayloadDTO, ForgetResponseDTO,
 };
 use crate::error::ApiError;
-use crate::permissions::check_permission;
+use crate::permissions::check_permission_via_handles;
 use crate::state::AppState;
 
 // ─── canonical error message (Python parity) ─────────────────────────────────
@@ -77,8 +77,7 @@ pub async fn post_forget(
                     )
                 })?;
 
-            // TODO(P5): wire full PermissionsRepository once tenants_rbac migration lands
-            check_permission(&db, user.id, dataset.id, "delete")
+            check_permission_via_handles(components, user.id, dataset.id, "delete")
                 .await
                 .map_err(|_| {
                     ApiError::OntologyEnvelope(
@@ -128,8 +127,7 @@ pub async fn post_forget(
                     )
                 })?;
 
-            // TODO(P5): wire full PermissionsRepository once tenants_rbac migration lands
-            check_permission(&db, user.id, dataset.id, "delete")
+            check_permission_via_handles(components, user.id, dataset.id, "delete")
                 .await
                 .map_err(|_| {
                     ApiError::OntologyEnvelope(
@@ -163,7 +161,6 @@ pub async fn post_forget(
         // ── Mode 3: delete everything the user owns ───────────────────────
         ForgetMode::Everything => {
             // No upfront permission check — the delete service filters by owner.
-            // TODO(P5): wire full PermissionsRepository once tenants_rbac migration lands
             let datasets = IngestDb::list_datasets_by_owner(&*db, user.id)
                 .await
                 .map_err(|e| {

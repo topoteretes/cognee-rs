@@ -4,6 +4,7 @@ mod conversions;
 pub mod entities;
 pub mod migrator;
 pub mod ops;
+pub mod permissions;
 pub mod pipelines;
 mod traits;
 mod types;

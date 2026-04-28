@@ -20,7 +20,7 @@ use uuid::Uuid;
 
 use crate::auth::AuthenticatedUser;
 use crate::dto::delete::{DeleteMode, DeleteQuery, DeleteSuccessResponseDTO};
-use crate::permissions::check_permission;
+use crate::permissions::check_permission_via_handles;
 use crate::state::AppState;
 
 // ─── Deprecation headers ──────────────────────────────────────────────────────
@@ -76,8 +76,9 @@ pub async fn delete_data_deprecated(
     let db = components.database.clone();
     let delete_service = components.delete_service.clone();
 
-    // TODO(P5): wire full PermissionsRepository once tenants_rbac migration lands
-    if let Err(e) = check_permission(&db, user.id, query.dataset_id, "delete").await {
+    if let Err(e) =
+        check_permission_via_handles(components, user.id, query.dataset_id, "delete").await
+    {
         return build_conflict_response(&e.to_string(), headers);
     }
 

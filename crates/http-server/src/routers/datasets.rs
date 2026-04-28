@@ -23,7 +23,7 @@ use crate::dto::datasets::{
     DatasetStatusQuery,
 };
 use crate::error::ApiError;
-use crate::permissions::check_permission;
+use crate::permissions::check_permission_via_handles;
 use crate::responses::raw_file::serve_local_file;
 use crate::state::AppState;
 
@@ -100,20 +100,17 @@ pub async fn get_dataset_status(
         return Ok(Json(HashMap::new()));
     }
 
-    let db = state
-        .components()
-        .ok_or_else(|| {
-            ApiError::WriteEnvelopeError("components not initialized".into(), StatusCode::CONFLICT)
-        })?
-        .database
-        .clone();
+    let components = state.components().ok_or_else(|| {
+        ApiError::WriteEnvelopeError("components not initialized".into(), StatusCode::CONFLICT)
+    })?;
+    let db = components.database.clone();
 
     let mut result: HashMap<String, String> = HashMap::new();
 
     for &dataset_id in &query.dataset {
-        // TODO(P5): wire full PermissionsRepository once tenants_rbac migration lands
+        // PermissionsRepository::user_can per tenants.md §5.1.
         // Silently skip datasets the caller can't read.
-        let has_access = check_permission(&db, user.id, dataset_id, "read")
+        let has_access = check_permission_via_handles(components, user.id, dataset_id, "read")
             .await
             .is_ok();
         if !has_access && crate::permissions::is_authorization_required() {
@@ -154,19 +151,15 @@ pub async fn get_dataset_data(
     State(state): State<AppState>,
     Path(dataset_id): Path<Uuid>,
 ) -> Result<axum::response::Response, ApiError> {
-    let db = state
-        .components()
-        .ok_or_else(|| {
-            ApiError::ErrorMessageError(
-                format!("Dataset ({dataset_id}) not found."),
-                StatusCode::NOT_FOUND,
-            )
-        })?
-        .database
-        .clone();
+    let components = state.components().ok_or_else(|| {
+        ApiError::ErrorMessageError(
+            format!("Dataset ({dataset_id}) not found."),
+            StatusCode::NOT_FOUND,
+        )
+    })?;
+    let db = components.database.clone();
 
-    // TODO(P5): wire full PermissionsRepository once tenants_rbac migration lands
-    check_permission(&db, user.id, dataset_id, "read").await?;
+    check_permission_via_handles(components, user.id, dataset_id, "read").await?;
 
     let raw_data = DeleteDb::get_dataset_data(&*db, dataset_id)
         .await
@@ -208,14 +201,12 @@ pub async fn get_raw_data(
     State(state): State<AppState>,
     Path((dataset_id, data_id)): Path<(Uuid, Uuid)>,
 ) -> Result<axum::response::Response, ApiError> {
-    let db = state
+    let components = state
         .components()
-        .ok_or_else(|| ApiError::NotFound(format!("Dataset ({dataset_id}) not found.")))?
-        .database
-        .clone();
+        .ok_or_else(|| ApiError::NotFound(format!("Dataset ({dataset_id}) not found.")))?;
+    let db = components.database.clone();
 
-    // TODO(P5): wire full PermissionsRepository once tenants_rbac migration lands
-    check_permission(&db, user.id, dataset_id, "read").await?;
+    check_permission_via_handles(components, user.id, dataset_id, "read").await?;
 
     let data = IngestDb::get_data(&*db, data_id)
         .await
@@ -297,19 +288,15 @@ pub async fn get_dataset_schema(
     State(state): State<AppState>,
     Path(dataset_id): Path<Uuid>,
 ) -> Result<Json<DatasetSchemaResponseDTO>, ApiError> {
-    if let Some(components) = state.components() {
-        let db = &components.database;
-        // TODO(P5): wire full PermissionsRepository once tenants_rbac migration lands
-        // Permission check — 404 if not accessible.
-        if check_permission(db, user.id, dataset_id, "read")
+    if let Some(components) = state.components()
+        && check_permission_via_handles(components, user.id, dataset_id, "read")
             .await
             .is_err()
-        {
-            return Err(ApiError::WriteEnvelopeError(
-                "Dataset not found".into(),
-                StatusCode::NOT_FOUND,
-            ));
-        }
+    {
+        return Err(ApiError::WriteEnvelopeError(
+            "Dataset not found".into(),
+            StatusCode::NOT_FOUND,
+        ));
     }
 
     // TODO(blocking): implement dataset_configurations table in cognee-models/cognee-database
@@ -377,9 +364,7 @@ pub async fn update_dataset_schema(
     Json(_payload): Json<DatasetSchemaPayloadDTO>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     if let Some(components) = state.components() {
-        let db = &components.database;
-        // TODO(P5): wire full PermissionsRepository once tenants_rbac migration lands
-        check_permission(db, user.id, dataset_id, "write")
+        check_permission_via_handles(components, user.id, dataset_id, "write")
             .await
             .map_err(|_| {
                 ApiError::WriteEnvelopeError("Dataset not found".into(), StatusCode::NOT_FOUND)
@@ -439,8 +424,7 @@ pub async fn delete_dataset(
     let db = components.database.clone();
     let delete_service = components.delete_service.clone();
 
-    // TODO(P5): wire full PermissionsRepository once tenants_rbac migration lands
-    check_permission(&db, user.id, dataset_id, "delete")
+    check_permission_via_handles(components, user.id, dataset_id, "delete")
         .await
         .map_err(|_| ApiError::NotFound(format!("Dataset ({dataset_id}) not accessible.")))?;
 
@@ -480,8 +464,7 @@ pub async fn delete_data_item(
     let db = components.database.clone();
     let delete_service = components.delete_service.clone();
 
-    // TODO(P5): wire full PermissionsRepository once tenants_rbac migration lands
-    check_permission(&db, user.id, dataset_id, "delete")
+    check_permission_via_handles(components, user.id, dataset_id, "delete")
         .await
         .map_err(|_| ApiError::NotFound(format!("Dataset/Data ({data_id}) not accessible.")))?;
 

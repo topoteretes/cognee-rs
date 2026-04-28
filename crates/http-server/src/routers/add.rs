@@ -177,8 +177,10 @@ pub async fn post_add(
     let db = components.database.clone();
     let storage = components.storage.clone();
 
-    // TODO(P5): wire full PermissionsRepository once tenants_rbac migration lands
-    // Permission check omitted here — add auto-creates datasets if needed.
+    // No upfront permission gate: add auto-creates datasets when missing.
+    // Per-dataset write/share grants are issued by the ingest pipeline once
+    // the dataset is materialised (PermissionsRepository resolution covers
+    // subsequent endpoints).
 
     // Determine dataset name (prefer name over id).
     let dataset_name = if let Some(ref name) = req.dataset_name {

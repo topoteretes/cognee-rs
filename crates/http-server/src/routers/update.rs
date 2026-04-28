@@ -45,8 +45,10 @@ pub async fn patch_update(
         }
     }
 
-    // TODO(P5): wire full PermissionsRepository once tenants_rbac migration lands
-    // TODO(update): implement full update pipeline (delete + re-add + cognify)
+    // The full update pipeline (delete + re-add + cognify) is not yet ported
+    // (TODO(update)). Once it lands, the gate will be:
+    //   check_permission_via_handles(components, user.id, dataset_id, "write").await?;
+    // For now this endpoint short-circuits with 501.
     let _ = (user, state, query);
 
     let body = json!({

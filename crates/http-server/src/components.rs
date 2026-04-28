@@ -10,6 +10,7 @@
 use std::sync::Arc;
 
 use cognee_database::DatabaseConnection;
+use cognee_database::permissions::PermissionsRepository;
 use cognee_delete::DeleteService;
 use cognee_graph::GraphDBTrait;
 use cognee_llm::Llm;
@@ -48,6 +49,15 @@ pub struct ComponentHandles {
 
     /// Knowledge-graph DB used by the visualize router.
     pub graph_db: Option<Arc<dyn GraphDBTrait>>,
+
+    /// SeaORM-backed `PermissionsRepository` for the 8-step `user_can`
+    /// resolution per `tenants.md §5.1`.
+    ///
+    /// Kept optional so test fixtures that build a bare `ComponentHandles`
+    /// without the new repo continue to compile; the
+    /// [`crate::permissions::check_permission`] helper falls back to
+    /// `AclDb::has_permission_with_roles` when this slot is `None`.
+    pub permissions: Option<Arc<dyn PermissionsRepository>>,
 }
 
 impl ComponentHandles {
