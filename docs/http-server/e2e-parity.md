@@ -318,9 +318,9 @@ A `--keep-running` mode (in the entrypoint) leaves both servers up so a develope
 
 1. **Single-container vs two-container layout**: keeping both servers in one container is simpler but couples their lifecycles. If parallelization across servers becomes a bottleneck, split into two services that share a network. Defer.
 2. **Shared workspace vs per-server**: per-server today. If we want to test "Python writes, Rust reads" via *direct shared workspace* (skipping HTTP), the existing CLI parity tests already cover that — keep this suite HTTP-only.
-3. **Snapshot vs structural diffs**: the suite leans structural. For a few endpoints (e.g. `/openapi.json`) we may want a committed snapshot to detect *additions* on the Python side that Rust hasn't picked up yet. Add per-endpoint snapshots in a follow-up.
+3. ~~**Snapshot vs structural diffs**~~ **Resolved (P8)**: `harness/golden/openapi.python.json` is committed as an informational reference snapshot; the structural-diff test does not assert on this file but reviewers can diff it to detect Python-side additions. Per-endpoint snapshots remain a follow-up.
 4. **Time-bound runs**: phase-2 tests with LLM calls can take 60s+. Consider a `--quick` mode that mocks the LLM via `MOCK_EMBEDDING=true` + a cached LLM response fixture — separate proposal.
-5. **WebSocket binary diff**: the WS test currently asserts JSON shape. Should we also diff the *exact ordering* of frames? The test does so today (event sequence). What if Python yields more events than Rust due to throttling differences? Document acceptable yield-count delta (`±2` is reasonable).
+5. ~~**WebSocket binary diff**~~ **Resolved (P8)**: `WS_YIELD_TOLERANCE = 2` is the accepted yield-count delta, encoded as a named constant in `harness/http_helpers.py`. The WS test asserts both frame shape and that the frame-count difference between the two servers does not exceed this value.
 6. **TLS**: the suite runs over plain HTTP. Production deployments terminate TLS at a proxy; this suite doesn't. If a TLS-specific behavior bug ever appears, add a fixture with `httpx-tls` and self-signed certs.
 
 ## 13. References

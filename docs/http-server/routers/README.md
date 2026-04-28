@@ -17,33 +17,33 @@ One row per router. Update the row in the same PR that lands or changes the unde
 
 | # | Router | Mount prefix | Doc | Status |
 |---|---|---|---|---|
-| 1 | health | `/health` | [health.md](health.md) | **Done** |
-| 2 | auth (login/logout/me) | `/api/v1/auth` | [auth.md](auth.md) | **Done** |
-| 3 | auth — register | `/api/v1/auth` | [auth-register.md](auth-register.md) | **Done** |
+| 1 | health | `/health` | [health.md](health.md) | **Done** — P8 Wave-A parity: [`test_http_health.py`](../../../e2e-cross-sdk/harness/test_http_health.py) |
+| 2 | auth (login/logout/me) | `/api/v1/auth` | [auth.md](auth.md) | **Done** — P8 Wave-A parity: [`test_http_auth.py`](../../../e2e-cross-sdk/harness/test_http_auth.py) |
+| 3 | auth — register | `/api/v1/auth` | [auth-register.md](auth-register.md) | **Done** — P8 Wave-A parity: [`test_http_auth.py`](../../../e2e-cross-sdk/harness/test_http_auth.py) |
 | 4 | auth — reset-password | `/api/v1/auth` | [auth-reset-password.md](auth-reset-password.md) | **Done** |
 | 5 | auth — verify | `/api/v1/auth` | [auth-verify.md](auth-verify.md) | **Done** |
 | 6 | api_keys | `/api/v1/auth/api-keys` | [api-keys.md](api-keys.md) | **Done** |
 | 7 | users | `/api/v1/users` | [users.md](users.md) | **Done** |
 | 8 | users — user_id_by_email | `/api/v1/users/get-user-id` | [users-by-email.md](users-by-email.md) | **Done** |
-| 9 | add | `/api/v1/add` | [add.md](add.md) | **Done** |
+| 9 | add | `/api/v1/add` | [add.md](add.md) | **Done** — P8 Wave-A parity: [`test_http_add.py`](../../../e2e-cross-sdk/harness/test_http_add.py) |
 | 10 | update | `/api/v1/update` | [update.md](update.md) | **Done** |
-| 11 | datasets | `/api/v1/datasets` | [datasets.md](datasets.md) | **Done** |
+| 11 | datasets | `/api/v1/datasets` | [datasets.md](datasets.md) | **Done** — P8 Wave-A parity: [`test_http_datasets.py`](../../../e2e-cross-sdk/harness/test_http_datasets.py) |
 | 12 | ontologies | `/api/v1/ontologies` | [ontologies.md](ontologies.md) | **Done** |
-| 13 | cognify | `/api/v1/cognify` | [cognify.md](cognify.md) | **Done** |
-| 14 | memify | `/api/v1/memify` | [memify.md](memify.md) | **Done** |
-| 15 | remember | `/api/v1/remember` | [remember.md](remember.md) | **Done** |
-| 16 | improve | `/api/v1/improve` | [improve.md](improve.md) | **Done** |
-| 17 | search | `/api/v1/search` | [search.md](search.md) | **Done** |
-| 18 | recall | `/api/v1/recall` | [recall.md](recall.md) | **Done** |
-| 19 | forget | `/api/v1/forget` | [forget.md](forget.md) | **Done** |
+| 13 | cognify | `/api/v1/cognify` | [cognify.md](cognify.md) | **Done** — P8 Wave-B parity: [`test_http_cognify.py`](../../../e2e-cross-sdk/harness/test_http_cognify.py); Wave-C WS: [`test_http_websocket.py`](../../../e2e-cross-sdk/harness/test_http_websocket.py) |
+| 14 | memify | `/api/v1/memify` | [memify.md](memify.md) | **Done** — P8 Wave-B parity: [`test_http_memify.py`](../../../e2e-cross-sdk/harness/test_http_memify.py) |
+| 15 | remember | `/api/v1/remember` | [remember.md](remember.md) | **Done** — P8 Wave-B parity: [`test_http_remember.py`](../../../e2e-cross-sdk/harness/test_http_remember.py) |
+| 16 | improve | `/api/v1/improve` | [improve.md](improve.md) | **Done** — P8 Wave-B parity: [`test_http_improve.py`](../../../e2e-cross-sdk/harness/test_http_improve.py) |
+| 17 | search | `/api/v1/search` | [search.md](search.md) | **Done** — P8 Wave-A parity (Chunks/Summaries/ChunksLexical): [`test_http_search.py`](../../../e2e-cross-sdk/harness/test_http_search.py) |
+| 18 | recall | `/api/v1/recall` | [recall.md](recall.md) | **Done** — P8 Wave-B parity: [`test_http_recall.py`](../../../e2e-cross-sdk/harness/test_http_recall.py) |
+| 19 | forget | `/api/v1/forget` | [forget.md](forget.md) | **Done** — P8 Wave-A parity: [`test_http_forget.py`](../../../e2e-cross-sdk/harness/test_http_forget.py) |
 | 20 | delete (deprecated) | `/api/v1/delete` | [delete.md](delete.md) | **Done** |
 | 21 | settings | `/api/v1/settings` | [settings.md](settings.md) | **Done** |
 | 22 | configuration | `/api/v1/configuration` | [configuration.md](configuration.md) | **Done** |
-| 23 | permissions | `/api/v1/permissions` | [permissions.md](permissions.md) | **Done** |
-| 24 | visualize | `/api/v1/visualize` | [visualize.md](visualize.md) | **Done** |
+| 23 | permissions | `/api/v1/permissions` | [permissions.md](permissions.md) | **Done** — P8 Wave-C parity: [`test_http_permissions.py`](../../../e2e-cross-sdk/harness/test_http_permissions.py) |
+| 24 | visualize | `/api/v1/visualize` | [visualize.md](visualize.md) | **Done** — P8 Wave-C parity: [`test_http_visualize.py`](../../../e2e-cross-sdk/harness/test_http_visualize.py) |
 | 25 | activity | `/api/v1/activity` | [activity.md](activity.md) | **Done** |
-| 26 | sync | `/api/v1/sync` | [sync.md](sync.md) | **Done** |
-| 27 | llm | `/api/v1/llm` | [llm.md](llm.md) | **Done** |
+| 26 | sync | `/api/v1/sync` | [sync.md](sync.md) | **Done** — P8 Wave-C parity: [`test_http_sync.py`](../../../e2e-cross-sdk/harness/test_http_sync.py) |
+| 27 | llm | `/api/v1/llm` | [llm.md](llm.md) | **Done** — P8 Wave-B parity: [`test_http_llm.py`](../../../e2e-cross-sdk/harness/test_http_llm.py) |
 | 28 | responses | `/api/v1/responses` | [responses.md](responses.md) | **Done** |
 | 29 | notebooks | `/api/v1/notebooks` | [notebooks.md](notebooks.md) | **Done** |
 | 30 | checks (cloud) | `/api/v1/checks` | [checks.md](checks.md) | **Done** |
