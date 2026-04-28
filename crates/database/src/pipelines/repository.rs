@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
 use crate::types::{DatabaseError, PipelineRun, PipelineRunStatus};
@@ -9,6 +10,24 @@ use crate::types::{DatabaseError, PipelineRun, PipelineRunStatus};
 pub type PipelineRunRow = PipelineRun;
 /// Type alias for the database error used in this module.
 type DbError = DatabaseError;
+
+/// Row returned by [`PipelineRunRepository::list_recent_with_attribution`].
+///
+/// Joins `pipeline_runs ⨝ datasets ⨝ users` so the activity router can show
+/// "who/what/which dataset" attribution in one query (no N+1).
+#[derive(Debug, Clone)]
+pub struct PipelineRunWithAttributionRow {
+    pub id: Uuid,
+    pub created_at: DateTime<Utc>,
+    pub status: PipelineRunStatus,
+    pub pipeline_run_id: Uuid,
+    pub pipeline_name: String,
+    pub pipeline_id: Uuid,
+    pub dataset_id: Option<Uuid>,
+    pub dataset_name: Option<String>,
+    pub owner_id: Option<Uuid>,
+    pub owner_email: Option<String>,
+}
 
 /// Persistence abstraction for pipeline run status rows.
 ///
@@ -47,6 +66,39 @@ pub trait PipelineRunRepository: Send + Sync {
         dataset_id: Option<Uuid>,
         limit: u32,
     ) -> Result<Vec<PipelineRunRow>, DbError>;
+
+    /// Recent runs *with attribution* (dataset + owner). Powers
+    /// `GET /api/v1/activity/pipeline-runs`. Single SELECT joining
+    /// `pipeline_runs ⨝ datasets ⨝ users` (LEFT JOIN both ways so orphaned
+    /// runs whose dataset has been deleted still surface).
+    ///
+    /// Optional `dataset_id` narrows to a single dataset; `None` returns
+    /// rows across every dataset on the server.
+    ///
+    /// Default impl falls back to [`Self::list_recent`] without the join — used
+    /// only by mock implementations.
+    async fn list_recent_with_attribution(
+        &self,
+        dataset_id: Option<Uuid>,
+        limit: u32,
+    ) -> Result<Vec<PipelineRunWithAttributionRow>, DbError> {
+        let rows = self.list_recent(dataset_id, limit).await?;
+        Ok(rows
+            .into_iter()
+            .map(|r| PipelineRunWithAttributionRow {
+                id: r.id,
+                created_at: r.created_at,
+                status: r.status,
+                pipeline_run_id: r.pipeline_run_id,
+                pipeline_name: r.pipeline_name,
+                pipeline_id: r.pipeline_id,
+                dataset_id: Some(r.dataset_id),
+                dataset_name: None,
+                owner_id: None,
+                owner_email: None,
+            })
+            .collect())
+    }
 
     /// Restart-orphan reset: rewrite any row stuck in `INITIATED` / `STARTED`
     /// without a more recent successor to `ERRORED` with the given `reason`.

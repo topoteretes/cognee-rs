@@ -35,3 +35,6 @@ pub mod principal_configuration;
 pub mod role_default_permission;
 pub mod tenant_default_permission;
 pub mod user_default_permission;
+
+// P6 sync_operations (cloud sync state):
+pub mod sync_operation;

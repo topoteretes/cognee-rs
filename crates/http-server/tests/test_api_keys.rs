@@ -69,8 +69,8 @@ async fn list_keys_requires_auth() {
         auth: Some(Arc::new(auth)),
         mailer: Arc::new(mailer),
         health: None,
-        spans: None,
-        sync: None,
+        spans: Arc::new(cognee_http_server::observability::SpanBuffer::default()),
+        sync: Arc::new(cognee_http_server::sync::SyncRegistry::new()),
     };
     let app = test_router(state).await;
 
@@ -265,8 +265,8 @@ async fn list_keys_masked_when_hash_api_key_enabled() {
         auth: Some(Arc::new(auth)),
         mailer: Arc::new(mailer),
         health: None,
-        spans: None,
-        sync: None,
+        spans: Arc::new(cognee_http_server::observability::SpanBuffer::default()),
+        sync: Arc::new(cognee_http_server::sync::SyncRegistry::new()),
     };
 
     let user = seed_user(&state, "hashedkey@example.com", "Str0ng!Pass#1").await;

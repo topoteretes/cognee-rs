@@ -5,17 +5,17 @@ use async_trait::async_trait;
 use chrono::Utc;
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder,
-    QuerySelect,
+    QuerySelect, RelationTrait,
 };
 use serde_json::json;
 use uuid::Uuid;
 
-use crate::conversions::domain_status_to_entity;
-use crate::entities::pipeline_run;
+use crate::conversions::{domain_status_to_entity, entity_status_to_domain};
+use crate::entities::{dataset, pipeline_run, user};
 use crate::types::{DatabaseError, PipelineRun, PipelineRunStatus};
 use crate::uuid_hex;
 
-use super::repository::{PipelineRunRepository, PipelineRunRow};
+use super::repository::{PipelineRunRepository, PipelineRunRow, PipelineRunWithAttributionRow};
 
 /// SeaORM-backed implementation of [`PipelineRunRepository`].
 ///
@@ -124,6 +124,116 @@ impl PipelineRunRepository for SeaOrmPipelineRunRepository {
             .map_err(|e| DatabaseError::QueryError(format!("list_recent query failed: {e}")))?;
 
         Ok(rows.into_iter().map(PipelineRun::from).collect())
+    }
+
+    async fn list_recent_with_attribution(
+        &self,
+        dataset_id: Option<Uuid>,
+        limit: u32,
+    ) -> Result<Vec<PipelineRunWithAttributionRow>, DatabaseError> {
+        use sea_orm::JoinType;
+
+        // SeaORM JOIN — uses the relationships defined on the entities. We
+        // perform a single LEFT JOIN to `datasets` and a second LEFT JOIN to
+        // `users` keyed on `datasets.owner_id`. Orphaned runs (dataset deleted)
+        // surface with NULL columns.
+        let mut query = pipeline_run::Entity::find()
+            .select_only()
+            .column(pipeline_run::Column::Id)
+            .column(pipeline_run::Column::CreatedAt)
+            .column(pipeline_run::Column::Status)
+            .column(pipeline_run::Column::PipelineRunId)
+            .column(pipeline_run::Column::PipelineName)
+            .column(pipeline_run::Column::PipelineId)
+            .column(pipeline_run::Column::DatasetId)
+            .column_as(dataset::Column::Name, "dataset_name")
+            .column_as(dataset::Column::OwnerId, "dataset_owner_id")
+            .column_as(user::Column::Email, "owner_email")
+            .join(JoinType::LeftJoin, pipeline_run::Relation::Dataset.def())
+            .join(
+                JoinType::LeftJoin,
+                dataset::Entity::belongs_to(user::Entity)
+                    .from(dataset::Column::OwnerId)
+                    .to(user::Column::Id)
+                    .into(),
+            )
+            .order_by_desc(pipeline_run::Column::CreatedAt)
+            .limit(u64::from(limit));
+
+        if let Some(did) = dataset_id {
+            query = query.filter(pipeline_run::Column::DatasetId.eq(uuid_hex::to_hex(did)));
+        }
+
+        // Build the row tuple manually — SeaORM's JOIN needs `into_tuple` /
+        // `into_model` to surface the joined columns. We use `into_tuple`
+        // mapped to a positional vector of optional strings/types.
+        let raw = query
+            .into_tuple::<(
+                String,
+                chrono::DateTime<Utc>,
+                pipeline_run::PipelineRunStatus,
+                String,
+                String,
+                String,
+                String,
+                Option<String>,
+                Option<String>,
+                Option<String>,
+            )>()
+            .all(self.db.as_ref())
+            .await
+            .map_err(|e| {
+                DatabaseError::QueryError(format!("list_recent_with_attribution query failed: {e}"))
+            })?;
+
+        let mut rows = Vec::with_capacity(raw.len());
+        for (
+            id_hex,
+            created_at,
+            status,
+            pipeline_run_hex,
+            pipeline_name,
+            pipeline_id_hex,
+            dataset_id_hex,
+            dataset_name,
+            owner_id_hex,
+            owner_email,
+        ) in raw
+        {
+            // `dataset_id` is NOT NULL in our schema, but the LEFT JOIN may
+            // produce a row with no dataset attribution (orphaned). Treat
+            // empty/zero dataset_id as None so the wire shape matches Python.
+            let dataset_uuid = uuid_hex::from_hex(&dataset_id_hex).ok();
+            let owner_uuid = owner_id_hex
+                .as_deref()
+                .and_then(|s| uuid_hex::from_hex(s).ok());
+            // Determine dataset attribution presence: when dataset_name is
+            // None the LEFT JOIN didn't match (orphan).
+            let (dataset_id_field, dataset_name_field) = if dataset_name.is_some() {
+                (dataset_uuid, dataset_name)
+            } else {
+                (dataset_uuid, None)
+            };
+
+            rows.push(PipelineRunWithAttributionRow {
+                id: uuid_hex::from_hex(&id_hex)
+                    .map_err(|e| DatabaseError::QueryError(format!("invalid id hex: {e}")))?,
+                created_at,
+                status: entity_status_to_domain(status),
+                pipeline_run_id: uuid_hex::from_hex(&pipeline_run_hex).map_err(|e| {
+                    DatabaseError::QueryError(format!("invalid pipeline_run_id hex: {e}"))
+                })?,
+                pipeline_name,
+                pipeline_id: uuid_hex::from_hex(&pipeline_id_hex).map_err(|e| {
+                    DatabaseError::QueryError(format!("invalid pipeline_id hex: {e}"))
+                })?,
+                dataset_id: dataset_id_field,
+                dataset_name: dataset_name_field,
+                owner_id: owner_uuid,
+                owner_email,
+            });
+        }
+        Ok(rows)
     }
 
     async fn reset_orphans(&self, reason: &str) -> Result<u64, DatabaseError> {

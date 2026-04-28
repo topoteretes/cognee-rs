@@ -140,4 +140,24 @@ pub async fn on_shutdown(state: &crate::state::AppState) {
     } else {
         tracing::info!("pipeline registry shutdown complete");
     }
+
+    // Abort every in-flight cloud sync and mark the durable rows `failed`
+    // with reason `"server_shutdown"` — analogous to the pipeline-run
+    // registry's shutdown sweep ([../pipelines.md §12]).
+    let aborted = state.sync.abort_all();
+    if !aborted.is_empty() {
+        tracing::info!(
+            "aborted {} in-flight cloud sync(s) on shutdown",
+            aborted.len()
+        );
+        if let Some(handles) = state.components()
+            && let Some(sync_ops) = handles.sync_ops.as_ref()
+        {
+            for run_id in &aborted {
+                if let Err(e) = sync_ops.mark_failed(run_id, "server_shutdown").await {
+                    tracing::warn!(error = %e, run_id = %run_id, "failed to mark sync as failed on shutdown");
+                }
+            }
+        }
+    }
 }

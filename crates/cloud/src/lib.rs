@@ -41,8 +41,10 @@ pub mod device_auth;
 pub mod disconnect;
 pub mod error;
 pub mod management_api;
+pub mod operations;
 pub mod serve;
 pub mod state;
+pub mod sync;
 
 pub use cloud_client::{CloudClient, ImproveDataset, RememberData};
 pub use credentials::CloudCredentials;
@@ -57,6 +59,7 @@ pub use management_api::{
     ManagementApiClient, TenantInfo, create_tenant, email_to_tenant_name, get_current_tenant,
     get_or_create_api_key, get_service_url,
 };
+pub use operations::check_api_key;
 pub use serve::{ServeConfig, serve, serve_cloud, serve_url};
 pub use state::{
     clear_client, get_client, get_remote_client, is_connected, is_remote_mode, set_client,

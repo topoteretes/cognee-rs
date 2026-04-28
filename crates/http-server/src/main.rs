@@ -13,7 +13,9 @@ use std::net::SocketAddr;
 
 use anyhow::Context as _;
 use clap::Parser;
+use cognee_http_server::observability::{BufferConfig, SpanBuffer, SpanBufferLayer};
 use cognee_http_server::{AppState, HttpServerConfig};
+use std::sync::Arc;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -48,8 +50,11 @@ async fn main() -> anyhow::Result<()> {
     // 1. Load .env from the current directory (binary-only concern).
     let _ = dotenv::dotenv();
 
-    // 2. Install the tracing subscriber (the library does NOT do this).
-    init_tracing();
+    // 2. Install the tracing subscriber + the SpanBufferLayer feeding
+    //    /api/v1/activity/spans. The buffer survives subscriber install so we
+    //    can hand the same `Arc<SpanBuffer>` to `AppState::build` below.
+    let spans = Arc::new(SpanBuffer::new(BufferConfig::from_env()));
+    init_tracing(spans.clone());
 
     // 3. Parse CLI args.
     let args = Args::parse();
@@ -70,10 +75,12 @@ async fn main() -> anyhow::Result<()> {
         cfg.env = env_val;
     }
 
-    // 5. Build application state.
-    let state = AppState::build(cfg.clone())
+    // 5. Build application state. Replace the default span buffer with the
+    //    one already feeding the subscriber.
+    let mut state = AppState::build(cfg.clone())
         .await
         .context("failed to build AppState")?;
+    state.spans = spans;
 
     // 6. Bind and serve.
     let addr: SocketAddr = format!("{}:{}", cfg.host, cfg.port)
@@ -87,12 +94,25 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn init_tracing() {
+/// Build the layered subscriber: env filter → fmt::Layer (stdout) →
+/// `SpanBufferLayer` (in-memory ring for `/api/v1/activity/spans`). The library
+/// crate does NOT install a subscriber — embedders own that.
+fn init_tracing(spans: Arc<SpanBuffer>) {
+    use tracing_subscriber::Registry;
+    use tracing_subscriber::layer::SubscriberExt;
+    use tracing_subscriber::util::SubscriberInitExt;
     use tracing_subscriber::{EnvFilter, fmt};
 
     let filter =
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info,ort=warn"));
 
+    let fmt_layer = fmt::layer().with_target(false);
+    let buffer_layer = SpanBufferLayer::new((*spans).clone());
+
     // Ignore the error — a subscriber may already be installed in tests.
-    let _ = fmt().with_env_filter(filter).with_target(false).try_init();
+    let _ = Registry::default()
+        .with(filter)
+        .with(fmt_layer)
+        .with(buffer_layer)
+        .try_init();
 }

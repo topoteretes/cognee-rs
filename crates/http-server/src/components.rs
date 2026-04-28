@@ -10,6 +10,7 @@
 use std::sync::Arc;
 
 use cognee_database::DatabaseConnection;
+use cognee_database::SyncOperationRepository;
 use cognee_database::permissions::PermissionsRepository;
 use cognee_delete::DeleteService;
 use cognee_graph::GraphDBTrait;
@@ -58,6 +59,11 @@ pub struct ComponentHandles {
     /// [`crate::permissions::check_permission`] helper falls back to
     /// `AclDb::has_permission_with_roles` when this slot is `None`.
     pub permissions: Option<Arc<dyn PermissionsRepository>>,
+
+    /// `sync_operations` repository — wires `POST /api/v1/sync` and
+    /// `GET /api/v1/sync/status`. Optional so test fixtures that don't
+    /// exercise the cloud sync flow can leave it unset.
+    pub sync_ops: Option<Arc<dyn SyncOperationRepository>>,
 }
 
 impl ComponentHandles {

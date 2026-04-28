@@ -109,8 +109,8 @@ async fn custom_prompt_no_auth_returns_401_with_canonical_envelope() {
         auth: Some(Arc::new(auth)),
         mailer: Arc::new(mailer),
         health: None,
-        spans: None,
-        sync: None,
+        spans: Arc::new(cognee_http_server::observability::SpanBuffer::default()),
+        sync: Arc::new(cognee_http_server::sync::SyncRegistry::new()),
     };
     let app = cognee_http_server::build_router(state)
         .await

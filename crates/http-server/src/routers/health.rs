@@ -345,8 +345,8 @@ mod tests {
             auth: None,
             mailer: Arc::new(crate::auth::LoggingMailer),
             health: Some(Arc::new(checker)),
-            spans: None,
-            sync: None,
+            spans: Arc::new(crate::observability::SpanBuffer::default()),
+            sync: Arc::new(crate::sync::SyncRegistry::new()),
         };
         // Suppress unused assignment warning — state is consumed by with_state.
         let _ = &mut state;

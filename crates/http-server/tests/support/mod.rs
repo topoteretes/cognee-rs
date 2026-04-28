@@ -152,8 +152,8 @@ pub async fn build_auth_test_state() -> (AppState, Arc<std::sync::Mutex<Vec<Mail
         auth: Some(Arc::new(auth)),
         mailer: Arc::new(mailer),
         health: None,
-        spans: None,
-        sync: None,
+        spans: Arc::new(cognee_http_server::observability::SpanBuffer::default()),
+        sync: Arc::new(cognee_http_server::sync::SyncRegistry::new()),
     };
 
     (state, events)
@@ -212,8 +212,8 @@ pub async fn build_auth_required_test_state() -> (AppState, Arc<std::sync::Mutex
         auth: Some(Arc::new(auth)),
         mailer: Arc::new(mailer),
         health: None,
-        spans: None,
-        sync: None,
+        spans: Arc::new(cognee_http_server::observability::SpanBuffer::default()),
+        sync: Arc::new(cognee_http_server::sync::SyncRegistry::new()),
     };
 
     (state, events)
@@ -443,6 +443,9 @@ pub fn build_component_handles(
     let permissions: Option<Arc<dyn cognee_database::permissions::PermissionsRepository>> = Some(
         Arc::new(cognee_database::permissions::SeaOrmPermissionsRepository::new(db.clone())),
     );
+    let sync_ops: Option<Arc<dyn cognee_database::SyncOperationRepository>> = Some(Arc::new(
+        cognee_database::SeaOrmSyncOperationRepository::new(db.clone()),
+    ));
     Arc::new(ComponentHandles {
         database: db,
         storage,
@@ -452,6 +455,7 @@ pub fn build_component_handles(
         llm,
         graph_db,
         permissions,
+        sync_ops,
     })
 }
 
@@ -511,8 +515,8 @@ pub async fn build_permissions_state() -> AppState {
         auth: Some(Arc::new(auth)),
         mailer: Arc::new(mailer),
         health: None,
-        spans: None,
-        sync: None,
+        spans: Arc::new(cognee_http_server::observability::SpanBuffer::default()),
+        sync: Arc::new(cognee_http_server::sync::SyncRegistry::new()),
     }
 }
 

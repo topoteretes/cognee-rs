@@ -15,6 +15,8 @@ use crate::{
     components::ComponentHandles,
     config::{HttpServerConfig, RegistryConfig},
     error::ServerError,
+    observability::{BufferConfig, SpanBuffer},
+    sync::SyncRegistry,
 };
 
 // ─── AppState ────────────────────────────────────────────────────────────────
@@ -56,15 +58,14 @@ pub struct AppState {
     // TODO(P1): wire Arc<dyn cognee_lib::health::HealthChecker> here
     pub health: Option<Arc<dyn crate::routers::health::HealthChecker>>,
 
-    /// In-memory OTEL-style span buffer for /api/v1/activity/spans.
-    /// `None` in P0 — wired in the observability phase.
-    // TODO(P6): wire Arc<SpanBuffer> here
-    pub spans: Option<Arc<()>>,
+    /// In-memory span buffer feeding `GET /api/v1/activity/spans`.
+    /// Always populated — `BufferConfig::from_env()` reads the cap. To
+    /// effectively disable the buffer pass `BufferConfig { max_traces: 0, .. }`.
+    pub spans: Arc<SpanBuffer>,
 
-    /// Sync registry for /api/v1/sync endpoints.
-    /// `None` in P0 — wired when the sync router lands.
-    // TODO(P7): wire Arc<SyncRegistry> here
-    pub sync: Option<Arc<()>>,
+    /// In-memory registry tracking one running cloud sync per user. Always
+    /// populated; the registry itself starts empty.
+    pub sync: Arc<SyncRegistry>,
 }
 
 impl AppState {
@@ -101,8 +102,8 @@ impl AppState {
             auth: None,
             mailer: Arc::new(crate::auth::LoggingMailer),
             health: None,
-            spans: None,
-            sync: None,
+            spans: Arc::new(SpanBuffer::new(BufferConfig::from_env())),
+            sync: Arc::new(SyncRegistry::new()),
         })
     }
 
@@ -198,8 +199,8 @@ impl AppState {
             auth: None,
             mailer: Arc::new(crate::auth::LoggingMailer),
             health: None,
-            spans: None,
-            sync: None,
+            spans: Arc::new(SpanBuffer::new(BufferConfig::from_env())),
+            sync: Arc::new(SyncRegistry::new()),
         })
     }
 }

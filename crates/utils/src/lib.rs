@@ -5,6 +5,7 @@
 
 pub mod id_generation;
 pub mod retry;
+pub mod tracing_keys;
 
 pub use id_generation::{NAMESPACE_OID, generate_edge_name, generate_node_id, generate_node_name};
 pub use retry::{RetryConfig, RetryDecision, retry_with_backoff};

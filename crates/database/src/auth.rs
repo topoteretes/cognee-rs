@@ -76,6 +76,22 @@ fn row_to_auth_user(m: user::Model) -> Result<AuthUser, DatabaseError> {
     })
 }
 
+/// Row returned by [`UserAuthRepository::list_active_with_api_key_counts`].
+///
+/// Mirrors the `users LEFT JOIN user_api_key GROUP BY users.id` shape needed
+/// by `GET /api/v1/activity/agents` — see Python's L162–L194.
+#[derive(Debug, Clone)]
+pub struct ActiveUserWithApiKeyCount {
+    pub id: Uuid,
+    pub email: String,
+    pub is_superuser: bool,
+    pub is_active: bool,
+    pub is_verified: bool,
+    pub tenant_id: Option<Uuid>,
+    pub created_at: chrono::DateTime<Utc>,
+    pub api_key_count: u64,
+}
+
 // ─── ApiKey model ─────────────────────────────────────────────────────────────
 
 /// One row from `user_api_key`.
@@ -115,6 +131,15 @@ pub trait UserAuthRepository: Send + Sync + 'static {
     -> Result<AuthUser, DatabaseError>;
     async fn delete_by_id(&self, id: Uuid) -> Result<(), DatabaseError>;
     async fn count_for_tenant(&self, tenant_id: Option<Uuid>) -> Result<u64, DatabaseError>;
+
+    /// `users LEFT JOIN user_api_key GROUP BY users.id WHERE users.is_active = true`.
+    ///
+    /// Powers `GET /api/v1/activity/agents`. No tenant filter (Python parity);
+    /// returns every active user in the system. Default impl falls through to
+    /// per-row queries — overridden by the SeaORM impl with a single grouped query.
+    async fn list_active_with_api_key_counts(
+        &self,
+    ) -> Result<Vec<ActiveUserWithApiKeyCount>, DatabaseError>;
 }
 
 // ─── ApiKeyRepository trait ────────────────────────────────────────────────────
@@ -268,6 +293,62 @@ impl UserAuthRepository for SeaOrmUserAuthRepository {
             .await
             .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
         Ok(count)
+    }
+
+    async fn list_active_with_api_key_counts(
+        &self,
+    ) -> Result<Vec<ActiveUserWithApiKeyCount>, DatabaseError> {
+        // Pull every active user, then count their API keys with one batched
+        // query against `user_api_key`. Python issues two SELECTs and joins in
+        // memory — we do the same to keep the JOIN portable across SQLite and
+        // Postgres without dialect-specific GROUP BY behavior.
+        let users = user::Entity::find()
+            .filter(user::Column::IsActive.eq(true))
+            .all(&self.db)
+            .await
+            .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
+
+        if users.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let user_ids: Vec<String> = users.iter().map(|u| u.id.clone()).collect();
+        let api_keys = user_api_key::Entity::find()
+            .filter(user_api_key::Column::UserId.is_in(user_ids))
+            .all(&self.db)
+            .await
+            .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
+
+        let mut counts: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
+        for ak in api_keys {
+            *counts.entry(ak.user_id).or_default() += 1;
+        }
+
+        let mut rows = Vec::with_capacity(users.len());
+        for u in users {
+            let id = Uuid::parse_str(&u.id)
+                .map_err(|e| DatabaseError::QueryError(format!("invalid user id: {e}")))?;
+            let tenant_id = u
+                .tenant_id
+                .as_deref()
+                .map(|s| {
+                    Uuid::parse_str(s)
+                        .map_err(|e| DatabaseError::QueryError(format!("invalid tenant_id: {e}")))
+                })
+                .transpose()?;
+            let api_key_count = counts.get(&u.id).copied().unwrap_or(0);
+            rows.push(ActiveUserWithApiKeyCount {
+                id,
+                email: u.email,
+                is_superuser: u.is_superuser,
+                is_active: u.is_active,
+                is_verified: u.is_verified,
+                tenant_id,
+                created_at: u.created_at,
+                api_key_count,
+            });
+        }
+        Ok(rows)
     }
 }
 

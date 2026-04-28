@@ -8,6 +8,13 @@
 //! The standalone binary's `init_tracing()` does that.  Library embedders
 //! install their own subscriber.  Keeping the layer separate makes the access-log
 //! shape consistent across all entry points.
+//!
+//! ## Header redaction
+//!
+//! [`REDACTED_HEADERS`] lists the request headers excluded from access-log
+//! span attributes. The list is case-insensitive — see [`is_header_redacted`].
+//! Authorization, Cookie, X-Api-Key are redacted by default per
+//! [`docs/http-server/observability.md §7`](../../../docs/http-server/observability.md#7-access-logging).
 
 use std::time::Duration;
 
@@ -47,6 +54,19 @@ impl<B> MakeSpan<B> for HttpMakeSpan {
             latency_ms = tracing::field::Empty,
         )
     }
+}
+
+/// Headers excluded from access-log span attributes.
+///
+/// Case-insensitive. Match against an incoming header name with
+/// [`is_header_redacted`].
+pub const REDACTED_HEADERS: &[&str] = &["authorization", "cookie", "x-api-key"];
+
+/// Returns `true` if the supplied header name should be redacted from access
+/// logs.
+pub fn is_header_redacted(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    REDACTED_HEADERS.iter().any(|h| **h == lower)
 }
 
 /// Convenience re-export so callers can write `middleware::tracing::trace_layer()`.

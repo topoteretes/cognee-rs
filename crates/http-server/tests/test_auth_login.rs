@@ -207,8 +207,8 @@ async fn get_auth_me_no_token_when_auth_required_returns_401() {
         auth: Some(Arc::new(auth)),
         mailer: Arc::new(mailer),
         health: None,
-        spans: None,
-        sync: None,
+        spans: Arc::new(cognee_http_server::observability::SpanBuffer::default()),
+        sync: Arc::new(cognee_http_server::sync::SyncRegistry::new()),
     };
     let app = test_router(state).await;
 

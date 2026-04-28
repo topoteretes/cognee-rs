@@ -48,6 +48,8 @@ cognee-search = { path = "../search" }
 cognee-llm = { path = "../llm" }
 cognee-graph = { path = "../graph" }
 cognee-visualization = { path = "../visualization" }
+cognee-cloud = { path = "../cloud" }
+cognee-utils = { path = "../utils" }
 
 # Serialization
 serde = { workspace = true, features = ["derive"] }
@@ -74,7 +76,8 @@ chrono = { workspace = true, features = ["serde"] }
 thiserror = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["registry", "std"] }
+regex = "1"
 async-trait = { workspace = true }
 dashmap = "6"
 bytes = "1"

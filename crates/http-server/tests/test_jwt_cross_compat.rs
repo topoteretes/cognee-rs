@@ -67,6 +67,11 @@ impl UserAuthRepository for NopUserRepo {
     async fn count_for_tenant(&self, _: Option<Uuid>) -> Result<u64, DatabaseError> {
         Ok(0)
     }
+    async fn list_active_with_api_key_counts(
+        &self,
+    ) -> Result<Vec<cognee_database::ActiveUserWithApiKeyCount>, DatabaseError> {
+        Ok(vec![])
+    }
 }
 
 #[async_trait::async_trait]

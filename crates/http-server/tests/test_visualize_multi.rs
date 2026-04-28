@@ -69,8 +69,8 @@ async fn non_superuser_returns_403_with_error_envelope() {
         auth: Some(Arc::new(auth)),
         mailer: Arc::new(mailer),
         health: None,
-        spans: None,
-        sync: None,
+        spans: Arc::new(cognee_http_server::observability::SpanBuffer::default()),
+        sync: Arc::new(cognee_http_server::sync::SyncRegistry::new()),
     };
 
     let regular = seed_user(&state, "user@example.com", "passw0rd!").await;

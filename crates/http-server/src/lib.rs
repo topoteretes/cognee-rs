@@ -15,12 +15,14 @@ pub mod error;
 pub mod lifecycle;
 pub mod middleware;
 pub mod multipart;
+pub mod observability;
 pub mod openapi;
 pub mod permissions;
 pub mod pipelines;
 pub mod responses;
 pub mod routers;
 pub mod state;
+pub mod sync;
 
 pub use config::HttpServerConfig;
 pub use error::{ApiError, ServerError};
@@ -100,6 +102,10 @@ pub async fn build_router(state: AppState) -> Result<Router, ServerError> {
         .nest("/api/v1/permissions", routers::permissions::router())
         .nest("/api/v1/settings", routers::settings::router())
         .nest("/api/v1/configuration", routers::configuration::router())
+        // P6 observability + cloud-sync + cloud-checks
+        .nest("/api/v1/activity", routers::activity::router())
+        .nest("/api/v1/sync", routers::sync::router())
+        .nest("/api/v1/checks", routers::checks::router())
         // Middleware stack (outer → inner): trace → CORS → body limit
         .layer(RequestBodyLimitLayer::new(body_limit))
         .layer(middleware::cors::cors_layer(&state.config))
