@@ -70,10 +70,14 @@ impl From<WireSearchType> for cognee_search::types::SearchType {
 
 /// Mirrors Python `SearchPayloadDTO` in
 /// [`get_search_router.py:25-36`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/search/routers/get_search_router.py#L25-L36).
+///
+/// `SearchPayloadDTO` inherits `InDTO`, so the wire is camelCase per Decision
+/// 10 with snake_case accepted as an inbound alias.
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct SearchPayloadDTO {
     /// Python: `search_type: SearchType = SearchType.GRAPH_COMPLETION`
-    #[serde(default = "default_search_type")]
+    #[serde(default = "default_search_type", alias = "search_type")]
     pub search_type: WireSearchType,
 
     /// Python: `datasets: Optional[list[str]] = None`
@@ -81,7 +85,7 @@ pub struct SearchPayloadDTO {
     pub datasets: Option<Vec<String>>,
 
     /// Python: `dataset_ids: Optional[list[UUID]] = None`
-    #[serde(default)]
+    #[serde(default, alias = "dataset_ids")]
     pub dataset_ids: Option<Vec<Uuid>>,
 
     /// Python: `query: str = "What is in the document?"`
@@ -89,19 +93,19 @@ pub struct SearchPayloadDTO {
     pub query: String,
 
     /// Python: `system_prompt: Optional[str] = "Answer the question..."`.
-    #[serde(default = "default_system_prompt")]
+    #[serde(default = "default_system_prompt", alias = "system_prompt")]
     pub system_prompt: Option<String>,
 
     /// Python: `node_name: Optional[list[str]] = None`
-    #[serde(default)]
+    #[serde(default, alias = "node_name")]
     pub node_name: Option<Vec<String>>,
 
     /// Python: `top_k: Optional[int] = 10`
-    #[serde(default = "default_top_k")]
+    #[serde(default = "default_top_k", alias = "top_k")]
     pub top_k: Option<i32>,
 
     /// Python: `only_context: bool = False`
-    #[serde(default)]
+    #[serde(default, alias = "only_context")]
     pub only_context: bool,
 
     /// Python: `verbose: bool = False`
@@ -148,7 +152,11 @@ impl Default for SearchPayloadDTO {
 /// Carries only the four fields the frontend relies on; the underlying
 /// `SearchHistoryEntry` row has `query_id`/`entry_type`/`query_type` columns
 /// that are intentionally not exposed for Python parity.
+///
+/// `SearchHistoryItem` inherits `OutDTO` in Python, so the wire is camelCase
+/// (e.g. `createdAt`) per Decision 10.
 #[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct SearchHistoryItemDTO {
     pub id: Uuid,
     pub text: String,
@@ -179,7 +187,11 @@ impl SearchHistoryItemDTO {
 ///
 /// `search_result` is polymorphic — see `flatten_search_response` for the
 /// per-`SearchOutput` variant mapping.
+///
+/// `SearchResult` inherits `OutDTO` in Python, so the wire is camelCase
+/// (`searchResult`, `datasetId`, `datasetName`) per Decision 10.
 #[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct SearchResultDTO {
     pub search_result: Value,
     pub dataset_id: Option<Uuid>,
@@ -403,6 +415,104 @@ mod tests {
         );
         let dto_list = flatten_search_response(response);
         assert_eq!(dto_list[0].search_result["message"], "ok");
+    }
+
+    #[test]
+    fn search_dto_accepts_camelcase_input() {
+        let json = r#"{
+            "searchType": "GRAPH_COMPLETION",
+            "datasetIds": ["00000000-0000-0000-0000-000000000001"],
+            "systemPrompt": "sys",
+            "nodeName": ["n"],
+            "topK": 7,
+            "onlyContext": true
+        }"#;
+        let payload: SearchPayloadDTO = serde_json::from_str(json).expect("camelCase parse");
+        assert_eq!(payload.search_type, WireSearchType::GraphCompletion);
+        assert_eq!(payload.dataset_ids.as_ref().map(|v| v.len()), Some(1));
+        assert_eq!(payload.system_prompt.as_deref(), Some("sys"));
+        assert_eq!(payload.top_k, Some(7));
+        assert!(payload.only_context);
+    }
+
+    #[test]
+    fn search_dto_accepts_snake_case_input_via_alias() {
+        let json = r#"{
+            "search_type": "GRAPH_COMPLETION",
+            "dataset_ids": ["00000000-0000-0000-0000-000000000001"],
+            "system_prompt": "sys",
+            "node_name": ["n"],
+            "top_k": 7,
+            "only_context": true
+        }"#;
+        let payload: SearchPayloadDTO = serde_json::from_str(json).expect("snake_case parse");
+        assert_eq!(payload.search_type, WireSearchType::GraphCompletion);
+        assert_eq!(payload.dataset_ids.as_ref().map(|v| v.len()), Some(1));
+        assert_eq!(payload.system_prompt.as_deref(), Some("sys"));
+        assert_eq!(payload.top_k, Some(7));
+        assert!(payload.only_context);
+    }
+
+    #[test]
+    fn search_dto_serializes_camelcase_only() {
+        let dto = SearchPayloadDTO::default();
+        let s = serde_json::to_string(&dto).expect("serialize");
+        for k in [
+            "\"searchType\"",
+            "\"systemPrompt\"",
+            "\"topK\"",
+            "\"onlyContext\"",
+        ] {
+            assert!(s.contains(k), "missing {k} in {s}");
+        }
+        for forbidden in [
+            "\"search_type\"",
+            "\"dataset_ids\"",
+            "\"system_prompt\"",
+            "\"node_name\"",
+            "\"top_k\"",
+            "\"only_context\"",
+        ] {
+            assert!(
+                !s.contains(forbidden),
+                "snake_case key {forbidden} leaked: {s}"
+            );
+        }
+    }
+
+    #[test]
+    fn search_history_item_dto_serializes_camelcase_only() {
+        let dto = SearchHistoryItemDTO {
+            id: Uuid::nil(),
+            text: "hi".into(),
+            user: "user".into(),
+            created_at: chrono::Utc::now(),
+        };
+        let s = serde_json::to_string(&dto).expect("serialize");
+        assert!(s.contains("\"createdAt\""), "missing createdAt: {s}");
+        assert!(
+            !s.contains("\"created_at\""),
+            "snake_case created_at leaked: {s}"
+        );
+    }
+
+    #[test]
+    fn search_result_dto_serializes_camelcase_only() {
+        let dto = SearchResultDTO {
+            search_result: Value::String("x".into()),
+            dataset_id: Some(Uuid::nil()),
+            dataset_name: Some("ds".into()),
+        };
+        let s = serde_json::to_string(&dto).expect("serialize");
+        for k in ["\"searchResult\"", "\"datasetId\"", "\"datasetName\""] {
+            assert!(s.contains(k), "missing {k} in {s}");
+        }
+        for forbidden in ["\"search_result\"", "\"dataset_id\"", "\"dataset_name\""] {
+            assert!(
+                !s.contains(forbidden),
+                "snake_case key {forbidden} leaked: {s}"
+            );
+        }
     }
 
     #[test]

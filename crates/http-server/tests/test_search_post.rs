@@ -48,7 +48,7 @@ async fn empty_post_body_uses_defaults() {
     let body = body_json(resp).await;
     let arr = body.as_array().expect("array");
     assert_eq!(arr.len(), 1);
-    assert_eq!(arr[0]["search_result"], "ans");
+    assert_eq!(arr[0]["searchResult"], "ans");
 }
 
 #[tokio::test]
@@ -61,7 +61,7 @@ async fn graph_completion_returns_string_search_result() {
     .await;
     assert_eq!(resp.status(), 200);
     let body = body_json(resp).await;
-    assert!(body[0]["search_result"].is_string());
+    assert!(body[0]["searchResult"].is_string());
 }
 
 #[tokio::test]
@@ -73,7 +73,7 @@ async fn graph_completion_cot_returns_string() {
     )
     .await;
     assert_eq!(resp.status(), 200);
-    assert!(body_json(resp).await[0]["search_result"].is_string());
+    assert!(body_json(resp).await[0]["searchResult"].is_string());
 }
 
 #[tokio::test]
@@ -85,7 +85,7 @@ async fn graph_completion_context_extension_returns_string() {
     )
     .await;
     assert_eq!(resp.status(), 200);
-    assert!(body_json(resp).await[0]["search_result"].is_string());
+    assert!(body_json(resp).await[0]["searchResult"].is_string());
 }
 
 #[tokio::test]
@@ -97,7 +97,7 @@ async fn graph_summary_completion_returns_string() {
     )
     .await;
     assert_eq!(resp.status(), 200);
-    assert!(body_json(resp).await[0]["search_result"].is_string());
+    assert!(body_json(resp).await[0]["searchResult"].is_string());
 }
 
 #[tokio::test]
@@ -105,7 +105,7 @@ async fn rag_completion_returns_string() {
     let app = make_app_with_text(SearchType::RagCompletion, "rag").await;
     let resp = post_search(app, json!({"search_type": "RAG_COMPLETION", "query": "x"})).await;
     assert_eq!(resp.status(), 200);
-    assert!(body_json(resp).await[0]["search_result"].is_string());
+    assert!(body_json(resp).await[0]["searchResult"].is_string());
 }
 
 #[tokio::test]
@@ -122,7 +122,7 @@ async fn triplet_completion_returns_array() {
     )
     .await;
     assert_eq!(resp.status(), 200);
-    assert!(body_json(resp).await[0]["search_result"].is_array());
+    assert!(body_json(resp).await[0]["searchResult"].is_array());
 }
 
 #[tokio::test]
@@ -135,7 +135,7 @@ async fn chunks_returns_array() {
     let app = make_app_with_items(SearchType::Chunks, items).await;
     let resp = post_search(app, json!({"search_type": "CHUNKS", "query": "x"})).await;
     assert_eq!(resp.status(), 200);
-    assert!(body_json(resp).await[0]["search_result"].is_array());
+    assert!(body_json(resp).await[0]["searchResult"].is_array());
 }
 
 #[tokio::test]
@@ -148,7 +148,7 @@ async fn summaries_returns_array() {
     let app = make_app_with_items(SearchType::Summaries, items).await;
     let resp = post_search(app, json!({"search_type": "SUMMARIES", "query": "x"})).await;
     assert_eq!(resp.status(), 200);
-    assert!(body_json(resp).await[0]["search_result"].is_array());
+    assert!(body_json(resp).await[0]["searchResult"].is_array());
 }
 
 #[tokio::test]
@@ -161,7 +161,7 @@ async fn temporal_returns_array() {
     let app = make_app_with_items(SearchType::Temporal, items).await;
     let resp = post_search(app, json!({"search_type": "TEMPORAL", "query": "x"})).await;
     assert_eq!(resp.status(), 200);
-    assert!(body_json(resp).await[0]["search_result"].is_array());
+    assert!(body_json(resp).await[0]["searchResult"].is_array());
 }
 
 #[tokio::test]

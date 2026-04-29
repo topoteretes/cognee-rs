@@ -1,7 +1,21 @@
 //! DTOs for `/api/v1/permissions/*` per `routers/permissions.md §4`.
 //!
-//! Wire shape is uniformly snake_case; **do not** apply `rename_all = "camelCase"`
-//! anywhere in this module.
+//! Per Decision 10 (camelCase wire convention), this module is a **mixed bag**
+//! because Python's permissions handlers return plain `JSONResponse` dicts —
+//! not `OutDTO` subclasses. Concretely:
+//!
+//! - `SelectTenantDTO` (an `InDTO` in Python) **does** follow Decision 10:
+//!   the wire is camelCase (`tenantId`) with `tenant_id` accepted as an
+//!   inbound alias.
+//! - All response DTOs (`MessageResponse`, `CreateRoleResponse`,
+//!   `CreateTenantResponse`, `SelectTenantResponse`, `TenantSummary`,
+//!   `RoleSummary`, `UserInRole`, `UserInTenant`) emit snake_case because
+//!   their Python counterparts are plain dicts built with literal snake_case
+//!   keys via `JSONResponse(content={...})`. `jsonable_encoder` does not
+//!   synthesize aliases for plain dicts.
+//! - Query-parameter DTOs (`GrantDatasetPermissionQuery`, `CreateRoleQuery`,
+//!   `CreateTenantQuery`, `AssignRoleQuery`, `AddUserToTenantQuery`) keep
+//!   snake_case — FastAPI does not apply `alias_generator` to query params.
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -11,10 +25,14 @@ use uuid::Uuid;
 
 /// Body for `POST /tenants/select`. `tenant_id: null` is a meaningful signal
 /// (clear the user's current tenant) — see `routers/permissions.md §2.9`.
+///
+/// Python's `SelectTenantDTO` inherits `InDTO`, so the wire is camelCase
+/// (`tenantId`) per Decision 10. Snake_case `tenant_id` is accepted as an
+/// inbound alias for compatibility with `populate_by_name=True` clients.
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "camelCase")]
 pub struct SelectTenantDTO {
-    #[serde(default)]
+    #[serde(default, alias = "tenant_id")]
     pub tenant_id: Option<Uuid>,
 }
 
@@ -150,6 +168,7 @@ mod tests {
 
     #[test]
     fn select_tenant_dto_accepts_null_tenant_id() {
+        // Snake-case input retained as alias for Python's `populate_by_name=True`.
         let parsed: SelectTenantDTO =
             serde_json::from_str(r#"{"tenant_id": null}"#).expect("parse");
         assert_eq!(parsed.tenant_id, None);
@@ -159,6 +178,41 @@ mod tests {
     fn select_tenant_dto_accepts_missing_field() {
         let parsed: SelectTenantDTO = serde_json::from_str("{}").expect("parse");
         assert_eq!(parsed.tenant_id, None);
+    }
+
+    #[test]
+    fn select_tenant_dto_accepts_camelcase_input() {
+        let parsed: SelectTenantDTO =
+            serde_json::from_str(r#"{"tenantId": "00000000-0000-0000-0000-000000000001"}"#)
+                .expect("parse camelCase");
+        assert_eq!(
+            parsed.tenant_id,
+            Some(Uuid::parse_str("00000000-0000-0000-0000-000000000001").expect("uuid"))
+        );
+    }
+
+    #[test]
+    fn select_tenant_dto_accepts_snake_case_input_via_alias() {
+        let parsed: SelectTenantDTO =
+            serde_json::from_str(r#"{"tenant_id": "00000000-0000-0000-0000-000000000001"}"#)
+                .expect("parse snake_case");
+        assert_eq!(
+            parsed.tenant_id,
+            Some(Uuid::parse_str("00000000-0000-0000-0000-000000000001").expect("uuid"))
+        );
+    }
+
+    #[test]
+    fn select_tenant_dto_serializes_camelcase_only() {
+        let dto = SelectTenantDTO {
+            tenant_id: Some(Uuid::nil()),
+        };
+        let s = serde_json::to_string(&dto).expect("serialize");
+        assert!(s.contains("\"tenantId\""), "missing tenantId: {s}");
+        assert!(
+            !s.contains("\"tenant_id\""),
+            "snake_case tenant_id leaked: {s}"
+        );
     }
 
     #[test]

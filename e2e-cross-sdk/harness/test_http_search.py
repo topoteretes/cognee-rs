@@ -61,3 +61,20 @@ def test_search_type_parity(authed_clients, seeded_dataset, search_type):
         pytest.skip(f"POST /api/v1/search not yet implemented for {search_type}")
 
     assert_responses_match(py, rs, ignore=_SEARCH_IGNORE)
+
+    # CLEAN-01 §5.4: response-key casing parity. POST /api/v1/search returns a
+    # `Vec<SearchResultDTO>` whose Python counterpart inherits `OutDTO`, so the
+    # wire must be camelCase on both sides — no underscores in top-level keys.
+    if py.status_code == 200 and rs.status_code == 200:
+        for resp in (py, rs):
+            try:
+                body = resp.json()
+            except ValueError:
+                continue
+            if isinstance(body, list):
+                for item in body:
+                    if isinstance(item, dict):
+                        for key in item.keys():
+                            assert "_" not in key, (
+                                f"snake_case key found in /api/v1/search response: {key} (full body: {body})"
+                            )

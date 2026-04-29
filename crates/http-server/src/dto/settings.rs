@@ -7,7 +7,7 @@ use utoipa::ToSchema;
 // ── Selectable provider/model lists ────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "camelCase")]
 pub struct ConfigChoice {
     pub value: String,
     pub label: String,
@@ -16,7 +16,7 @@ pub struct ConfigChoice {
 // ── GET response ────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "camelCase")]
 pub struct LLMConfigOutputDTO {
     pub provider: String,
     pub model: String,
@@ -28,7 +28,7 @@ pub struct LLMConfigOutputDTO {
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "camelCase")]
 pub struct VectorDBConfigOutputDTO {
     pub provider: String,
     pub url: String,
@@ -37,7 +37,7 @@ pub struct VectorDBConfigOutputDTO {
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "camelCase")]
 pub struct SettingsDTO {
     pub llm: LLMConfigOutputDTO,
     pub vector_db: VectorDBConfigOutputDTO,
@@ -46,10 +46,11 @@ pub struct SettingsDTO {
 // ── POST request body ───────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Deserialize, ToSchema)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "camelCase")]
 pub struct LLMConfigInputDTO {
     pub provider: LlmProvider,
     pub model: String,
+    #[serde(alias = "api_key")]
     pub api_key: String,
 }
 
@@ -67,10 +68,11 @@ pub enum LlmProvider {
 }
 
 #[derive(Debug, Clone, Deserialize, ToSchema)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "camelCase")]
 pub struct VectorDBConfigInputDTO {
     pub provider: VectorDbProvider,
     pub url: String,
+    #[serde(alias = "api_key")]
     pub api_key: String,
 }
 
@@ -83,11 +85,11 @@ pub enum VectorDbProvider {
 }
 
 #[derive(Debug, Clone, Deserialize, ToSchema)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "camelCase")]
 pub struct SettingsPayloadDTO {
     #[serde(default)]
     pub llm: Option<LLMConfigInputDTO>,
-    #[serde(default)]
+    #[serde(default, alias = "vector_db")]
     pub vector_db: Option<VectorDBConfigInputDTO>,
 }
 

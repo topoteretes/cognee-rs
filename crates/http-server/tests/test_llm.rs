@@ -38,7 +38,7 @@ async fn custom_prompt_happy_path_returns_canned() {
     let resp = app.oneshot(req).await.expect("resp");
     assert_eq!(resp.status(), 200);
     let body = body_json(resp).await;
-    assert_eq!(body["custom_prompt"], "custom prompt body");
+    assert_eq!(body["customPrompt"], "custom prompt body");
 }
 
 #[tokio::test]
@@ -148,8 +148,8 @@ async fn infer_schema_happy_path_returns_parsed_schema() {
     let resp = app.oneshot(req).await.expect("resp");
     assert_eq!(resp.status(), 200);
     let body = body_json(resp).await;
-    assert!(body["graph_schema"]["entity_types"].is_array());
-    assert!(body["graph_schema"]["relationship_types"].is_array());
+    assert!(body["graphSchema"]["entity_types"].is_array());
+    assert!(body["graphSchema"]["relationship_types"].is_array());
 }
 
 #[tokio::test]

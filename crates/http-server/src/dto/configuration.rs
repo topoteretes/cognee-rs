@@ -6,8 +6,12 @@ use uuid::Uuid;
 
 /// Body for `POST /store_user_configuration`. Mirrors Python's
 /// `StorePrincipalConfigurationPayloadDTO` — JSON body, **not** multipart.
+///
+/// Inherits `InDTO` in Python — wire is camelCase per Decision 10. All fields
+/// are single-word, so the rename has no current wire effect; the attribute
+/// is kept for forward consistency.
 #[derive(Debug, Clone, Deserialize, ToSchema)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "camelCase")]
 pub struct StorePrincipalConfigurationPayloadDTO {
     pub name: String,
     pub config: serde_json::Value,

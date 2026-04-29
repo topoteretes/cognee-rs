@@ -10,12 +10,14 @@ use uuid::Uuid;
 
 /// `POST /api/v1/sync` request body.
 ///
-/// Pydantic: `dataset_ids: Optional[List[UUID]] = None`.
+/// Pydantic: `dataset_ids: Optional[List[UUID]] = None`. Inherits `InDTO`,
+/// so the wire is camelCase (`datasetIds`); snake_case is accepted as an
+/// inbound alias.
 #[derive(Debug, Clone, Default, Deserialize, ToSchema)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "camelCase")]
 pub struct SyncRequestDTO {
     /// `None` or `[]` means "all writable datasets for the caller".
-    #[serde(default)]
+    #[serde(default, alias = "dataset_ids")]
     pub dataset_ids: Option<Vec<Uuid>>,
 }
 

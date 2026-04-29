@@ -22,7 +22,7 @@ async fn get_settings_returns_dto_shape() {
     assert_eq!(resp.status(), StatusCode::OK);
     let body = support::body_json(resp).await;
     assert!(body["llm"].is_object());
-    assert!(body["vector_db"].is_object());
+    assert!(body["vectorDb"].is_object());
     assert!(body["llm"]["providers"].is_array());
     assert!(body["llm"]["models"].is_object());
 }
@@ -55,7 +55,7 @@ async fn save_then_get_round_trips_redacted_key() {
     let resp2 = support::oneshot_get(app, "/api/v1/settings").await;
     assert_eq!(resp2.status(), StatusCode::OK);
     let body2 = support::body_json(resp2).await;
-    let api_key = body2["llm"]["api_key"]
+    let api_key = body2["llm"]["apiKey"]
         .as_str()
         .expect("redacted api_key string");
     assert!(api_key.starts_with("sk-1234567"));
@@ -83,7 +83,7 @@ async fn save_with_starred_key_does_not_overwrite() {
     // Confirm the prefix landed.
     let resp_before = support::oneshot_get(app.clone(), "/api/v1/settings").await;
     let body_before = support::body_json(resp_before).await;
-    let key_before = body_before["llm"]["api_key"]
+    let key_before = body_before["llm"]["apiKey"]
         .as_str()
         .unwrap_or("")
         .to_string();
@@ -109,7 +109,7 @@ async fn save_with_starred_key_does_not_overwrite() {
     // (Python parity per `routers/settings.md §2.2`).
     let resp_after = support::oneshot_get(app, "/api/v1/settings").await;
     let body_after = support::body_json(resp_after).await;
-    let key_after = body_after["llm"]["api_key"]
+    let key_after = body_after["llm"]["apiKey"]
         .as_str()
         .unwrap_or("")
         .to_string();
@@ -154,7 +154,7 @@ async fn partial_save_leaves_other_subobject_untouched() {
     // Snapshot the vector_db section before any LLM-only save.
     let resp = support::oneshot_get(app.clone(), "/api/v1/settings").await;
     let body = support::body_json(resp).await;
-    let vector_before = body["vector_db"].clone();
+    let vector_before = body["vectorDb"].clone();
 
     // Send LLM-only save.
     let payload = json!({
@@ -172,7 +172,7 @@ async fn partial_save_leaves_other_subobject_untouched() {
     let resp = support::oneshot_get(app, "/api/v1/settings").await;
     let body = support::body_json(resp).await;
     assert_eq!(
-        body["vector_db"], vector_before,
+        body["vectorDb"], vector_before,
         "partial save must leave vector_db untouched"
     );
 }

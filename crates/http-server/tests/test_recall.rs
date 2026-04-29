@@ -36,7 +36,7 @@ async fn post_recall_returns_search_results() {
     let resp = app.oneshot(req).await.expect("resp");
     assert_eq!(resp.status(), 200);
     let body = body_json(resp).await;
-    assert_eq!(body[0]["search_result"], "ans");
+    assert_eq!(body[0]["searchResult"], "ans");
 }
 
 #[tokio::test]

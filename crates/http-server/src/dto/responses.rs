@@ -22,7 +22,11 @@ pub enum CogneeModelDTO {
 }
 
 /// Mirrors `cognee.api.v1.responses.models.ResponseRequest`.
+///
+/// Inherits `InDTO` in Python — wire is camelCase per Decision 10. Snake_case
+/// `tool_choice` and `max_completion_tokens` are accepted as inbound aliases.
 #[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct ResponseRequestDTO {
     /// Model selector. Only `"cognee-v1"` accepted today.
     #[serde(default)]
@@ -34,7 +38,10 @@ pub struct ResponseRequestDTO {
     /// Tool selection policy.  `"auto"` | `"none"` | `"required"` or a
     /// JSON object `{"type":"function","function":{"name":"..."}}`.
     /// Stored as `Value` to match Python's `Union[str, Dict[str, Any]]`.
-    #[serde(default = "ResponseRequestDTO::default_tool_choice")]
+    #[serde(
+        default = "ResponseRequestDTO::default_tool_choice",
+        alias = "tool_choice"
+    )]
     pub tool_choice: Value,
     /// Optional end-user identifier forwarded to OpenAI for abuse-tracking.
     pub user: Option<String>,
@@ -42,6 +49,7 @@ pub struct ResponseRequestDTO {
     #[serde(default = "ResponseRequestDTO::default_temperature")]
     pub temperature: f32,
     /// Optional cap on completion tokens.
+    #[serde(alias = "max_completion_tokens")]
     pub max_completion_tokens: Option<u32>,
 }
 
@@ -95,7 +103,10 @@ impl FunctionParametersDTO {
 
 /// Mirrors `cognee.api.v1.responses.models.ResponseBody`.
 /// Stage B returns this; Stage A never constructs it (returns 501 instead).
+///
+/// Inherits `OutDTO` in Python — wire is camelCase (`toolCalls`).
 #[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct ResponseBodyDTO {
     /// Server-generated id; format `resp_<hex>`.
     pub id: String,
@@ -160,7 +171,7 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn round_trip_response_request_dto() {
+    fn round_trip_response_request_dto_snake_case_via_alias() {
         let input = json!({
             "model": "cognee-v1",
             "input": "What is the meaning of life?",
@@ -177,6 +188,19 @@ mod tests {
     }
 
     #[test]
+    fn round_trip_response_request_dto_camelcase() {
+        let input = json!({
+            "model": "cognee-v1",
+            "input": "x",
+            "toolChoice": "auto",
+            "maxCompletionTokens": 64
+        });
+        let dto: ResponseRequestDTO = serde_json::from_value(input).expect("deserialize camelCase");
+        assert_eq!(dto.input, "x");
+        assert_eq!(dto.max_completion_tokens, Some(64));
+    }
+
+    #[test]
     fn tool_choice_accepts_object_variant() {
         let input = json!({
             "input": "hello",
@@ -185,5 +209,25 @@ mod tests {
         let dto: ResponseRequestDTO =
             serde_json::from_value(input).expect("deserialize with object tool_choice");
         assert!(dto.tool_choice.is_object());
+    }
+
+    #[test]
+    fn response_body_dto_serializes_camelcase_only() {
+        let dto = ResponseBodyDTO {
+            id: "resp_1".into(),
+            created: 0,
+            model: "cognee-v1".into(),
+            object: "response".into(),
+            status: "completed".into(),
+            tool_calls: vec![],
+            usage: None,
+            metadata: None,
+        };
+        let s = serde_json::to_string(&dto).expect("serialize");
+        assert!(s.contains("\"toolCalls\""), "missing toolCalls: {s}");
+        assert!(
+            !s.contains("\"tool_calls\""),
+            "snake_case tool_calls leaked: {s}"
+        );
     }
 }

@@ -5,12 +5,15 @@ use utoipa::ToSchema;
 use uuid::Uuid;
 
 /// Request body for `POST /api/v1/forget`. Python `InDTO` (camelCase wire).
+///
+/// Snake_case `data_id` is accepted as an inbound alias for compatibility
+/// with Python's `populate_by_name=True`.
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ForgetPayloadDTO {
     /// UUID of a specific data item to remove. Requires `dataset` to be set
     /// when used (mode 1). Ignored when `everything=true`.
-    #[serde(default)]
+    #[serde(default, alias = "data_id")]
     pub data_id: Option<Uuid>,
 
     /// Dataset name OR UUID. Set alone (mode 2) deletes the whole dataset.

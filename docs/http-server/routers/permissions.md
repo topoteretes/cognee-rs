@@ -329,13 +329,20 @@ use uuid::Uuid;
 // ── Request DTOs ────────────────────────────────────────────────────────────
 
 /// Body for `POST /tenants/select`.
+///
+/// `SelectTenantDTO` inherits `InDTO` in Python, so the wire is camelCase
+/// per Decision 10 (`tenantId`). Snake_case `tenant_id` is accepted as an
+/// inbound alias for compatibility with `populate_by_name=True`. This is
+/// the only DTO in this module that follows the camelCase rule — every
+/// response struct below stays snake_case because Python returns plain
+/// `JSONResponse(content={...})` dicts whose keys are not aliased.
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "camelCase")]
 pub struct SelectTenantDTO {
     /// Target tenant. `None` (JSON `null`) selects the user's default
     /// single-user tenant by setting `users.tenant_id = NULL`. Mirrors Python's
     /// `SelectTenantDTO.tenant_id: UUID | None = None`.
-    #[serde(default)]
+    #[serde(default, alias = "tenant_id")]
     pub tenant_id: Option<Uuid>,
 }
 

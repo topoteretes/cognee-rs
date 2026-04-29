@@ -28,30 +28,34 @@ pub use crate::error::RecallErrorBody;
 ///
 /// Field-for-field identical to `SearchPayloadDTO`. **Do NOT** add `session_id`
 /// or `auto_route` here — Python's HTTP DTO doesn't expose them.
+///
+/// `RecallPayloadDTO` inherits `InDTO`, so the wire is camelCase per
+/// Decision 10 with snake_case accepted as an inbound alias.
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct RecallPayloadDTO {
-    #[serde(default = "default_search_type")]
+    #[serde(default = "default_search_type", alias = "search_type")]
     pub search_type: WireSearchType,
 
     #[serde(default)]
     pub datasets: Option<Vec<String>>,
 
-    #[serde(default)]
+    #[serde(default, alias = "dataset_ids")]
     pub dataset_ids: Option<Vec<Uuid>>,
 
     #[serde(default = "default_query")]
     pub query: String,
 
-    #[serde(default = "default_system_prompt")]
+    #[serde(default = "default_system_prompt", alias = "system_prompt")]
     pub system_prompt: Option<String>,
 
-    #[serde(default)]
+    #[serde(default, alias = "node_name")]
     pub node_name: Option<Vec<String>>,
 
-    #[serde(default = "default_top_k")]
+    #[serde(default = "default_top_k", alias = "top_k")]
     pub top_k: Option<i32>,
 
-    #[serde(default)]
+    #[serde(default, alias = "only_context")]
     pub only_context: bool,
 
     #[serde(default)]
@@ -98,6 +102,86 @@ mod tests {
         let json = r#"{"session_id": "ignored", "auto_route": true, "query": "x"}"#;
         let payload: RecallPayloadDTO = serde_json::from_str(json).expect("parses");
         assert_eq!(payload.query, "x");
+    }
+
+    #[test]
+    fn recall_dto_accepts_camelcase_input() {
+        let json = r#"{
+            "searchType": "GRAPH_COMPLETION",
+            "datasetIds": ["00000000-0000-0000-0000-000000000001"],
+            "systemPrompt": "sys",
+            "nodeName": ["n"],
+            "topK": 5,
+            "onlyContext": true,
+            "query": "hi"
+        }"#;
+        let payload: RecallPayloadDTO = serde_json::from_str(json).expect("parse camelCase");
+        assert_eq!(payload.search_type, WireSearchType::GraphCompletion);
+        assert_eq!(payload.dataset_ids.as_ref().map(|v| v.len()), Some(1));
+        assert_eq!(payload.system_prompt.as_deref(), Some("sys"));
+        assert_eq!(payload.node_name.as_ref().map(|v| v.len()), Some(1));
+        assert_eq!(payload.top_k, Some(5));
+        assert!(payload.only_context);
+        assert_eq!(payload.query, "hi");
+    }
+
+    #[test]
+    fn recall_dto_accepts_snake_case_input_via_alias() {
+        let json = r#"{
+            "search_type": "GRAPH_COMPLETION",
+            "dataset_ids": ["00000000-0000-0000-0000-000000000001"],
+            "system_prompt": "sys",
+            "node_name": ["n"],
+            "top_k": 5,
+            "only_context": true,
+            "query": "hi"
+        }"#;
+        let payload: RecallPayloadDTO = serde_json::from_str(json).expect("parse snake_case");
+        assert_eq!(payload.search_type, WireSearchType::GraphCompletion);
+        assert_eq!(payload.dataset_ids.as_ref().map(|v| v.len()), Some(1));
+        assert_eq!(payload.system_prompt.as_deref(), Some("sys"));
+        assert_eq!(payload.node_name.as_ref().map(|v| v.len()), Some(1));
+        assert_eq!(payload.top_k, Some(5));
+        assert!(payload.only_context);
+    }
+
+    #[test]
+    fn recall_dto_serializes_camelcase_only() {
+        let dto = RecallPayloadDTO {
+            search_type: WireSearchType::GraphCompletion,
+            datasets: None,
+            dataset_ids: Some(vec![uuid::Uuid::nil()]),
+            query: "q".into(),
+            system_prompt: Some("sys".into()),
+            node_name: Some(vec!["n".into()]),
+            top_k: Some(5),
+            only_context: true,
+            verbose: false,
+        };
+        let s = serde_json::to_string(&dto).expect("serialize");
+        for k in [
+            "\"searchType\"",
+            "\"datasetIds\"",
+            "\"systemPrompt\"",
+            "\"nodeName\"",
+            "\"topK\"",
+            "\"onlyContext\"",
+        ] {
+            assert!(s.contains(k), "missing {k} in {s}");
+        }
+        for forbidden in [
+            "\"search_type\"",
+            "\"dataset_ids\"",
+            "\"system_prompt\"",
+            "\"node_name\"",
+            "\"top_k\"",
+            "\"only_context\"",
+        ] {
+            assert!(
+                !s.contains(forbidden),
+                "snake_case key {forbidden} leaked: {s}"
+            );
+        }
     }
 
     #[test]
