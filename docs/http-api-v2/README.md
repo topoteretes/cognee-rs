@@ -59,17 +59,18 @@ Endpoints under `/api/v1/auth`, `/api/v1/add`, `/api/v1/cognify`, `/api/v1/searc
 
 Each row links to a self-contained implementation plan under [`tasks/`](tasks/). Reflects branch `main` as of 2026-04-28 (post-P8).
 
-### Pre-port cleanup (Phase 0)
+### Pre-port cleanup & enablers (Phase 0)
 
-Lands **before** Phase A. Fixes v1 wire-shape drift surfaced during the Decision 10 audit.
+Lands **before** Phase A. Holds (a) v1 wire-shape drift fixes surfaced during the Decision 10 audit, and (b) library/runtime enablers that downstream phases consume.
 
 | # | Task | Scope | Status | Blocks |
 |---|---|---|---|---|
 | CLEAN-01 | [v1 HTTP DTO casing audit and fix (camelCase wire parity)](tasks/clean-01-v1-dto-camelcase.md) | Audit every v1 request/response DTO; flip `rename_all = "snake_case"` → `"camelCase"` and add per-field `serde(alias)` for input compatibility. Add unit + integration + OpenAPI-schema regression tests so the convention is enforced going forward. | **Done** (commit e146835) | every v2 task that adds or modifies a body/response DTO |
+| LIB-06 | [Generic pipeline payload mechanism + library-side CamelCase remember status](tasks/lib-06-pipeline-payload-mechanism.md) | Lands the `PipelineWatcher::on_payload_field` event channel + DB-backed accumulator (new `pipeline_run_payload_fields` table) + `completed_at`/`elapsed_seconds()` on `PipelineRunInfo` + `run_id` on `PipelineContext` + library `RememberStatus` CamelCase serde + `RememberResult.elapsed_seconds: Option<f64>` + `RememberResult.entry_type`/`entry_id`. See task doc for the 15 implementation steps and 4 phases. Decision 15 (two-layer status convention; **no** wire divergence). Listed under Phase 0 because it must execute before E-01 / E-02 / LIB-01; categorically it's a library prerequisite (also indexed in the Library prerequisites table below for cross-reference). | **Not Started** | E-01, E-02, LIB-01 |
 
 ### Library prerequisites
 
-These five changes must land before (or alongside) the HTTP work — they are dependencies of the missing/partial endpoints below.
+These six changes must land before (or alongside) the HTTP work — they are dependencies of the missing/partial endpoints below.
 
 | # | Task | Scope | Status | Blocks |
 |---|---|---|---|---|
@@ -78,6 +79,7 @@ These five changes must land before (or alongside) the HTTP work — they are de
 | LIB-03 | [`session_records` + `session_model_usage` schema and entities](tasks/lib-03-session-records-schema.md) | SeaORM entities + migration only. The repository trait + impl + tests live in **LIB-05** (Decision 13 split). | **Not Started** | LIB-05 |
 | LIB-04 | [Refactor `improve()` to `ImproveParams` struct](tasks/lib-04-improve-params-struct.md) | Mechanical refactor of `cognee_lib::api::improve::improve()`'s 17-positional-parameter signature to a single `ImproveParams<'_>` struct. 5 call sites migrate. Decision 8 — pulled out of E-05 to keep that task scoped to "DTO + handler". | **Not Started** | LIB-01, E-05 |
 | LIB-05 | [`SessionLifecycleDb` trait + repository impl + tests](tasks/lib-05-session-records-repo.md) | The `SessionLifecycleDb` trait with `ensure_and_touch_session` / `accumulate_usage` / `get_session_row` / `list_session_rows` / `aggregate_stats` / `cost_by_model`, its concrete impl on `DatabaseConnection`, the effective-status SQL helper, and 8 repository tests. Second half of the original LIB-03 scope (Decision 13 split). | **Not Started** | E-09, E-10, E-11, E-12 |
+| LIB-06 | [Generic pipeline payload mechanism + library-side CamelCase remember status](tasks/lib-06-pipeline-payload-mechanism.md) | Four pieces: (1) extend `cognee_core::PipelineRunInfo` with `completed_at` + `elapsed_seconds()` and add `run_id` to `PipelineContext`; (2) new `PipelineWatcher::on_payload_field(...)` event hook + `TaskContext::publish_payload_field(...)` helper — payload lives in the watcher event channel, NOT as state on the snapshot; (3) DB-backed default accumulator — new `pipeline_run_payload_fields` table + `PipelineRunRepository` trait extension + `SeaOrmPipelineRunRepository` impl + `DefaultPipelineRunRegistry::get_payload(run_id)` accessor; (4) `cognee_lib::api::remember` updates: `RememberStatus` serde flip to CamelCase `PipelineRun*` strings (library-internal consistency), `From<PipelineRunStatus>`, `RememberResult.elapsed_seconds: Option<f64>`, plus `RememberResult.entry_type` / `entry_id` fields (Q-F — relieves LIB-01 of that scope). Convenience functions (`cognify`/`memify`/`add`) get explicit TODO markers — they bypass `cognee_core::execute()` today, so are out of scope. The HTTP wire keeps Python's lowercase status format; E-01 owns the lowercase translation at the DTO boundary. **No wire divergence** (Decision 15 — two-layer status convention). | **Not Started** | E-01, E-02, LIB-01 |
 
 ### Endpoints
 
@@ -85,7 +87,7 @@ The Python source-of-truth column links to the file that defines each handler in
 
 | # | Endpoint | Python source | Status | Plan |
 |---|---|---|---|---|
-| E-01 | `POST /api/v1/remember` | [`get_remember_router.py:28`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/remember/routers/get_remember_router.py#L28) | **Implemented** | [tasks/e-01-remember.md](tasks/e-01-remember.md) |
+| E-01 | `POST /api/v1/remember` | [`get_remember_router.py:28`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/remember/routers/get_remember_router.py#L28) | **In Progress** — verify-only short-circuit found wire-shape gaps in `RememberResultDTO` (missing `items_processed`/`elapsed_seconds`/`session_ids`/`content_hash`/`items`; non-Python `status` literals); see [E-01 §3.1](tasks/e-01-remember.md#31-divergences-from-python-wire-output-investigation-2026-04-29) | [tasks/e-01-remember.md](tasks/e-01-remember.md) |
 | E-02 | `POST /api/v1/remember/entry` | [`get_remember_router.py:115`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/remember/routers/get_remember_router.py#L115) | **Missing** | [tasks/e-02-remember-entry.md](tasks/e-02-remember-entry.md) |
 | E-03 | `GET /api/v1/recall` | [`get_recall_router.py:58`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/recall/routers/get_recall_router.py#L58) | **Implemented** | [tasks/e-03-recall-history.md](tasks/e-03-recall-history.md) |
 | E-04 | `POST /api/v1/recall` | [`get_recall_router.py:78`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/recall/routers/get_recall_router.py#L78) | **Partial** — DTO omits `session_id` / `scope` | [tasks/e-04-recall-search.md](tasks/e-04-recall-search.md) |
@@ -107,15 +109,15 @@ The Python source-of-truth column links to the file that defines each handler in
 
 | State | Cleanup | Library | Endpoints |
 |---|---|---|---|
-| Not Started | — | 5 | — |
-| In Progress | — | — | — |
+| Not Started | — | 6 | — |
+| In Progress | — | — | 1 (E-01) |
 | Done | 1 (CLEAN-01) | — | — |
 | Missing | — | — | 5 (E-02, E-09, E-10, E-11, E-12) |
 | Partial | — | — | 2 (E-04, E-05) |
-| Implemented (verify) | — | — | 5 (E-01, E-03, E-06, E-07, E-08) |
-| **Total** | **1** | **5** | **12** |
+| Implemented (verify) | — | — | 4 (E-03, E-06, E-07, E-08) |
+| **Total** | **1** | **6** | **12** |
 
-Grand total: **18 tasks** (1 cleanup + 5 library + 12 endpoints).
+Grand total: **19 tasks** (1 cleanup + 6 library + 12 endpoints).
 
 ## 4. Summary of findings
 
@@ -148,12 +150,12 @@ These are flagged in the per-endpoint gap docs that will follow this README.
 
 ## 5. Sub-document index
 
-The 18 task docs in [`tasks/`](tasks/) (1 cleanup + 5 library + 12 endpoint) are the authoritative implementation plans. The [implementation prompt](IMPLEMENTATION-PROMPT.md) drives execution.
+The 19 task docs in [`tasks/`](tasks/) (1 cleanup + 6 library + 12 endpoint) are the authoritative implementation plans. The [implementation prompt](IMPLEMENTATION-PROMPT.md) drives execution.
 
 | # | Document | Scope | Status |
 |---|---|---|---|
-| 1 | [tasks/](tasks/) | Per-task implementation plans. One file for the v1 cleanup (CLEAN-01), one per library prerequisite (LIB-01 to LIB-05), and one per endpoint (E-01 to E-12). | **Done** |
-| 2 | [IMPLEMENTATION-PROMPT.md](IMPLEMENTATION-PROMPT.md) | Sequential task list (Phases 0 → A → B → C → D, 18 tasks total) + four-agent pipeline (investigation → implementation → review → doc-update) the driver model copy-pastes per task. Mirrors [`../http-server/implementation/IMPLEMENTATION-PROMPT.md`](../http-server/implementation/IMPLEMENTATION-PROMPT.md), adapted to the flatter v2 doc tree. | **Done** |
+| 1 | [tasks/](tasks/) | Per-task implementation plans. One file for the v1 cleanup (CLEAN-01), one per library prerequisite (LIB-01 to LIB-06), and one per endpoint (E-01 to E-12). | **Done** |
+| 2 | [IMPLEMENTATION-PROMPT.md](IMPLEMENTATION-PROMPT.md) | Sequential task list (Phases 0 → A → B → C → D, 19 tasks total) + four-agent pipeline (investigation → implementation → review → doc-update) the driver model copy-pastes per task. Mirrors [`../http-server/implementation/IMPLEMENTATION-PROMPT.md`](../http-server/implementation/IMPLEMENTATION-PROMPT.md), adapted to the flatter v2 doc tree. | **Done** |
 | 3 | [e2e-parity.md](e2e-parity.md) | Add v2 endpoints to the existing cross-SDK harness in `e2e-cross-sdk/`. The v1 harness (commit `2faf3ac`) is a template; v2 needs new `test_http_v2_*.py` files for the 7 partial/missing endpoints. Per-task plans already enumerate the test files; this doc would aggregate the wave plan. | **Not Started** |
 
 Each task doc is the owner of its slice of the work; this README is the single source of truth for **what's where** at the v2 layer.

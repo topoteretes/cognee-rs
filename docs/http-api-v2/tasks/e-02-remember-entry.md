@@ -4,7 +4,7 @@
 |---|---|
 | Wire path | `POST /api/v1/remember/entry` |
 | Status | **Missing** |
-| Depends on | LIB-01 (`remember_entry()` facade), LIB-02 (`add_agent_trace_step`). |
+| Depends on | **LIB-06** (`RememberResult.entry_type` / `entry_id` library fields + `RememberStatus` enum), **LIB-01** (`remember_entry()` facade), **LIB-02** (`add_agent_trace_step`). |
 | Effort | ~0.5 day (after libraries land). |
 | Owner crate | `cognee-http-server` |
 
@@ -46,21 +46,21 @@ No route registered. `POST /api/v1/remember/entry` returns `404` from the cognee
 
 ## 4. Implementation steps
 
-> **Decision (2026-04-29) — Decision 5**: this task owns the structural extension of `RememberResultDTO` with `entry_type: Option<String>` and `entry_id: Option<String>`. Both fields use `#[serde(skip_serializing_if = "Option::is_none")]` so the existing `POST /remember` file-payload responses (E-01) stay byte-identical. The library-side `cognee_lib::RememberResult` extension is owned by LIB-01; this task wires those fields through to the HTTP DTO. Investigation agent: do not re-litigate.
+> **Decision (2026-04-29) — Decision 5**: this task owns the structural extension of `RememberResultDTO` with `entry_type: Option<String>` and `entry_id: Option<String>`. Both fields use `#[serde(skip_serializing_if = "Option::is_none")]` so the existing `POST /remember` file-payload responses (E-01) stay byte-identical (Python omits both keys on the file path). The library-side fields on `cognee_lib::api::remember::RememberResult` are added by **LIB-06** (Q-F, Decision 15); LIB-01's `remember_entry()` facade populates them for the typed-entry path; this task (E-02) wires them through to the HTTP DTO. Investigation agent: do not re-litigate.
 
-1. **Extend `RememberResultDTO`** in `crates/http-server/src/dto/remember.rs:42` (the parent struct already uses camelCase per CLEAN-01):
+1. **Extend `RememberResultDTO`** in [`crates/http-server/src/dto/remember.rs:41`](../../../crates/http-server/src/dto/remember.rs). **The parent struct uses `rename_all = "snake_case"`** (per [CLEAN-01 §3.1](clean-01-v1-dto-camelcase.md) carve-out — Python's `RememberResult.to_dict()` returns a plain dict, not a pydantic `BaseModel`, so the wire keys are snake_case). Add the two new fields with snake_case wire names:
    ```rust
    #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
-   #[serde(rename_all = "camelCase")]
+   #[serde(rename_all = "snake_case")]   // ← KEEP snake_case (CLEAN-01 §3.1 carve-out)
    pub struct RememberResultDTO {
-       ...existing fields (already camelCase from CLEAN-01)...
+       ...existing fields (snake_case)...
        #[serde(skip_serializing_if = "Option::is_none")]
-       pub entry_type: Option<String>,    // wire: "entryType"; values "qa" | "trace" | "feedback"
+       pub entry_type: Option<String>,    // wire: "entry_type"; values "qa" | "trace" | "feedback"
        #[serde(skip_serializing_if = "Option::is_none")]
-       pub entry_id:   Option<String>,    // wire: "entryId"
+       pub entry_id:   Option<String>,    // wire: "entry_id"
    }
    ```
-   Add a deserialization round-trip test confirming the file-payload response (no `entryType` key) and the entry response (with `entryType` populated) both encode correctly. Negative-test: assert the response body has NO `entry_type` snake_case key — only `entryType`.
+   Add a serialization round-trip test confirming the file-payload response (no `entry_type` key) and the entry response (with `entry_type` populated) both encode correctly. The OpenAPI camelCase regression test from CLEAN-01 already whitelists `RememberResultDTO`; no whitelist change needed.
 
 2. **Request DTO** in a new `crates/http-server/src/dto/remember_entry.rs`:
    ```rust

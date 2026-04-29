@@ -10,21 +10,22 @@ If you are starting a clean session, read these documents before doing anything:
 2. [`README.md §1.1 Wire conventions`](README.md#11-wire-conventions-project-wide-set-by-decision-6) — timestamp / casing / envelope / validation rules. **Every** v2 task obeys these.
 3. [`README.md §1.2 v2 acknowledged divergences`](README.md#12-v2-acknowledged-divergences-changes-to-steady-state-wire-output) — the one Rust↔Python wire divergence (`order_by` validation on `/sessions`).
 4. **§0** of this file — current resume point + phase table.
-5. **§0.5 Decisions log** of this file — index of every project-wide decision (D-1 through D-14) with a one-line summary and where it's canonically recorded.
+5. **§0.5 Decisions log** of this file — index of every project-wide decision (Decisions 1 through 15) with a one-line summary and where it's canonically recorded. Decision 15 (the two-layer status convention for `/remember`) is the most recent and is owned by **LIB-06**.
 6. The task doc for the resume point in §0 — start your work there.
 
 ## 0. Current state
 
-**1 task complete (CLEAN-01). Resume point: TASK A-1 (E-01).**
+**1 task complete (CLEAN-01). Resume point: TASK 0-2 (LIB-06).**
 
-The v2 doc package landed in commits ending `…/docs/http-api-v2/`. All 18 tasks (1 pre-port cleanup + 5 library prerequisites + 12 endpoints) are at status **Not Started** in the [README](README.md) status tables, except CLEAN-01 which is **Done** (commit e146835).
+The v2 doc package landed in commits ending `…/docs/http-api-v2/`. 18 of 19 tasks are at status **Not Started** in the [README](README.md) status tables (1 pre-port cleanup + 6 library prerequisites + 12 endpoints; CLEAN-01 done as commit e146835).
 
 Phases and their tasks (do them in this order — see §2 for the dependency rationale):
 
 | Phase | ID | Task | Notes |
 |---|---|---|---|
-| **0 — Pre-port cleanup** | 0-1 | [CLEAN-01](tasks/clean-01-v1-dto-camelcase.md) | **Done** (commit e146835) — Fix v1 HTTP DTO casing drift (snake_case → camelCase wire parity). Adds an OpenAPI-schema regression test that prevents future drift. Decision 10. |
-| **A — Verify** | A-1 | [E-01](tasks/e-01-remember.md) | `POST /remember` — confirm parity, add cross-SDK test |
+| **0 — Pre-port cleanup & enablers** | 0-1 | [CLEAN-01](tasks/clean-01-v1-dto-camelcase.md) | **Done** (commit e146835) — Fix v1 HTTP DTO casing drift (snake_case → camelCase wire parity). Adds an OpenAPI-schema regression test that prevents future drift. Decision 10. |
+| **0 — Pre-port cleanup & enablers** | 0-2 | [LIB-06](tasks/lib-06-pipeline-payload-mechanism.md) | Generic pipeline payload event channel via `PipelineWatcher::on_payload_field`, DB-backed accumulator (new `pipeline_run_payload_fields` table + repo trait extension + SeaORM impl + registry accessor), `completed_at`/`elapsed_seconds()` on `PipelineRunInfo`, `run_id` on `PipelineContext`, library `RememberStatus` flip to CamelCase + `From<PipelineRunStatus>` + `Started` variant, `RememberResult.elapsed_seconds: Option<f64>`, `RememberResult.entry_type`/`entry_id`. Convenience-function TODOs note that `cognify`/`memify`/`add` bypass `execute()` today and are deferred. HTTP wire keeps Python's lowercase status (E-01 translates). Decision 15 — **no** wire divergence. Must land before E-01 / E-02 / LIB-01. |
+| **A — Verify** | A-1 | [E-01](tasks/e-01-remember.md) | `POST /remember` — **In Progress** (verify-only short-circuit found wire-shape gaps; see [tasks/e-01-remember.md §3.1](tasks/e-01-remember.md#31-divergences-from-python-wire-output-investigation-2026-04-29) — no longer pure verify-only). Consumes LIB-06's mechanism + library CamelCase enum, then translates `status` to Python's lowercase at the HTTP DTO boundary. |
 |   | A-2 | [E-03](tasks/e-03-recall-history.md) | `GET /recall` — confirm parity + Decision 6 polish (owns the `iso8601_offset` serde helper) |
 |   | A-3 | [E-06](tasks/e-06-forget.md) | `POST /forget` — confirm parity |
 |   | A-4 | [E-07](tasks/e-07-visualize.md) | `GET /visualize` — confirm parity |
@@ -78,7 +79,8 @@ Every project-wide decision is recorded in a "Decision (2026-04-29) — Decision
 | 11 | Visualize HTML byte-parity strategy | Template-extracted JSON equality — regex out the seven `__*_DATA__` JS variable substitutions, structural-diff with stable sort. Bundle hash / CDN URL / theme / layout out of scope. | [tasks/e-07-visualize.md §4](tasks/e-07-visualize.md) and [tasks/e-08-visualize-multi.md §4](tasks/e-08-visualize-multi.md) |
 | 12 | Session abandon-threshold default | `1800` seconds (30 min). Env var `SESSION_ABANDON_AFTER_SECONDS` (no `COGNEE_` prefix). Verified against [`cognee/modules/session_lifecycle/metrics.py:47-52`](https://github.com/topoteretes/cognee/blob/main/cognee/modules/session_lifecycle/metrics.py#L47-L52). | [tasks/lib-03-session-records-schema.md §4 step 4](tasks/lib-03-session-records-schema.md) |
 | 13 | LIB-03 commit count | Split into two tasks: **LIB-03** (schema/entities/migration only) and **LIB-05** (`SessionLifecycleDb` trait + impl + 8 tests). One commit per task. | [tasks/lib-03-session-records-schema.md](tasks/lib-03-session-records-schema.md) header + [tasks/lib-05-session-records-repo.md](tasks/lib-05-session-records-repo.md) header |
-| 14 | Commit prefix | `http-api-v2:` for all 18 commits including CLEAN-01. | §8.2 below |
+| 14 | Commit prefix | `http-api-v2:` for all 19 commits including CLEAN-01 and LIB-06. | §8.2 below |
+| 15 | Two-layer status convention: library CamelCase, HTTP wire lowercase | `cognee_lib::api::remember::RememberStatus` emits CamelCase strings (`"PipelineRunStarted"` / `"PipelineRunCompleted"` / `"PipelineRunErrored"` / `"SessionStored"`) for **internal consistency** with the other four Rust pipeline APIs. The HTTP `/remember` and `/remember/entry` routers **temporarily translate** to Python's lowercase wire format (`"running"` / `"completed"` / `"errored"` / `"session_stored"`) to preserve strict Python wire parity. Translation lives at the HTTP DTO boundary (`crates/http-server/src/dto/remember.rs`), not inside the library. **No new wire divergence is introduced** — D-2 is intentionally NOT created. The translation is "temporary" in the sense that it's a transitional adapter; if Python ever switches its remember status enum to CamelCase, the translation simply goes away. Owned by **LIB-06** (lib enum) + **E-01** (HTTP translation). | [tasks/lib-06-pipeline-payload-mechanism.md](tasks/lib-06-pipeline-payload-mechanism.md) §4 step 4; [tasks/e-01-remember.md §4 step 3](tasks/e-01-remember.md#4-implementation-steps-revised-by-2026-04-29-investigation) |
 
 ### Project-wide infrastructure introduced by this port
 
@@ -87,6 +89,13 @@ Every project-wide decision is recorded in a "Decision (2026-04-29) — Decision
 | `crates/http-server/src/dto/util.rs::iso8601_offset` (serde helper for `DateTime<Utc>`) | E-03 (Decision 6) | every later task with a `DateTime<Utc>` wire field — E-09's `SessionRowDTO`, E-10's `SessionStatsDTO`, E-12's detail response |
 | `crates/http-server/src/middleware/validation.rs::Query` (`ValidatedQuery<T>` query-param extractor with the Python validation envelope) | E-09 (Decision 9) | every later task with query-param validation needs |
 | OpenAPI camelCase regression test | CLEAN-01 (Decision 10) | every task that adds a DTO — the test prevents new snake_case fields from landing |
+| `cognee_core::PipelineRunInfo.completed_at: Option<DateTime<Utc>>` + `elapsed_seconds() -> Option<f64>` accessor | LIB-06 (Decision 15) | every consumer that wants wall-clock duration without re-tracking |
+| `cognee_core::PipelineContext.run_id: Option<Uuid>` (set by `execute()` so tasks can attribute payload events) | LIB-06 (Q-I) | `TaskContext::publish_payload_field` and any future per-run-attribution code |
+| `cognee_core::PipelineWatcher::on_payload_field(run_id, key, value)` watcher event hook (default no-op) + `TaskContext::publish_payload_field(...)` helper | LIB-06 (Q-G/Q-J, Decision 15) | tasks running inside `cognee_core::execute()` that need to attach run-scoped metadata; future P5 wiring of real `remember()` HTTP execution |
+| `cognee_database::PipelineRunRepository::set_payload_field` / `get_payload` trait methods + `pipeline_run_payload_fields` table + SeaORM entity | LIB-06 (Q-H) | `DefaultPipelineRunRegistry`'s `ScopedRunWatcher` (persists payload), `get_payload(run_id)` accessor, future consumers reading accumulated payload |
+| `cognee_lib::api::remember::RememberStatus` CamelCase serde (emits `"PipelineRunStarted"` / `"PipelineRunCompleted"` / `"PipelineRunErrored"` / `"SessionStored"` for library-internal consistency) + `From<cognee_core::pipeline::PipelineRunStatus>` | LIB-06 (Decision 15) | E-01's HTTP translation layer, E-02's `/remember/entry` response, LIB-01's `remember_entry()` facade |
+| `cognee_lib::api::remember::RememberResult.entry_type` / `entry_id` fields | LIB-06 (Q-F) | LIB-01 (populates them for typed-entry path), E-02 (HTTP DTO wiring) |
+| `crates/http-server/src/dto/remember.rs::WireRememberStatus` (typed lowercase wire enum with `From<cognee_lib::api::remember::RememberStatus>`) | E-01 (Q-E, Decision 15) | E-02 (`/remember/entry` reuses the same DTO + translation) |
 | `cognee_models::memory::{MemoryEntry, QAEntry, TraceEntry, FeedbackEntry}` types | LIB-01 (Decision 2) | E-02 |
 | `cognee_lib::api::improve::ImproveParams<'_>` struct | LIB-04 (Decision 8) | LIB-01 (touches one of the call sites), E-05 (adds 3 v2 fields) |
 
@@ -94,7 +103,7 @@ When a later task's investigation agent finds the upstream module missing, it re
 
 ---
 
-You are implementing the cognee-rust HTTP API v2 surface (`crates/http-server/src/routers/{remember,recall,improve,forget,visualize,sessions}.rs`, related DTOs, five library/database changes, one pre-port v1 cleanup, and cross-SDK parity tests) by working sequentially through 18 implementation tasks. The task docs in [`tasks/`](tasks/) own the **what** and **why**; this prompt owns the **how to drive each task to completion**. Never skip a task and never run two in parallel.
+You are implementing the cognee-rust HTTP API v2 surface (`crates/http-server/src/routers/{remember,recall,improve,forget,visualize,sessions}.rs`, related DTOs, six library/database changes, one pre-port v1 cleanup, and cross-SDK parity tests) by working sequentially through 19 implementation tasks. The task docs in [`tasks/`](tasks/) own the **what** and **why**; this prompt owns the **how to drive each task to completion**. Never skip a task and never run two in parallel.
 
 ## 1. Mission
 
@@ -106,15 +115,17 @@ There are no Rust-only divergences in the v2 surface. Every Rust route maps to a
 
 ## 2. Task list
 
-Execute the 18 tasks in the order listed in §0. **Do not skip ahead, do not reorder, do not run two tasks in parallel.**
+Execute the 19 tasks in the order listed in §0. **Do not skip ahead, do not reorder, do not run two tasks in parallel.**
 
 ### Why this order?
 
 Phases 0 → A → B → C → D are arranged so each task's dependencies are satisfied by an earlier task:
 
-- **Phase 0** lands the v1 HTTP DTO casing cleanup (CLEAN-01). Must run before any v2 task that adds or modifies a body/response DTO, otherwise the camelCase convention can't be applied consistently. Surfaced by the Decision 10 audit: Python's `InDTO`/`OutDTO` emit camelCase via `to_camel` alias generator; v1 has drift. CLEAN-01 also lands an OpenAPI-schema regression test that locks in the convention forever.
+- **Phase 0** lands two cross-cutting enablers that downstream phases depend on:
+  - **0-1 CLEAN-01** — v1 HTTP DTO casing cleanup. Must run before any v2 task that adds or modifies a body/response DTO, otherwise the camelCase convention can't be applied consistently. Surfaced by the Decision 10 audit: Python's `InDTO`/`OutDTO` emit camelCase via `to_camel` alias generator; v1 has drift. Lands the OpenAPI-schema regression test that locks in the convention forever.
+  - **0-2 LIB-06** — generic pipeline payload mechanism + library-side `RememberStatus` CamelCase serde + DB-backed payload accumulator. Must run before E-01 / E-02 / LIB-01 — they all consume the new types. Decision 15 records the two-layer status convention (library CamelCase, HTTP wire lowercase translated by E-01).
 - **Phase A** verifies the existing implemented endpoints first. Catches any regressions or undocumented divergences **before** new code lands and makes them harder to spot. A-2 (E-03) additionally owns the project-wide `iso8601_offset` serde helper introduced by Decision 6 — every later task that ships a `DateTime<Utc>` field reuses it.
-- **Phase B** lands the five library/database prerequisites. Endpoints that depend on them (D-1, D-2..D-5) and Phase C (E-05) are blocked until B is done. Within B:
+- **Phase B** lands the five long-form library/database prerequisites (LIB-01..LIB-05). LIB-06 lands earlier in Phase 0 because E-01 / E-02 in Phase A depend on it. Endpoints that depend on them (D-1, D-2..D-5) and Phase C (E-05) are blocked until B is done. Within B:
   - B-1 (LIB-02 — trace step) is independent.
   - B-2 (LIB-03 — session_records schema + entities + migration) is independent.
   - B-3 (LIB-05 — session_records repository) depends on B-2 (Decision 13 split: schema lands first, repo second; LIB-03 and LIB-05 are kept adjacent so the work flows as one chunk).
@@ -200,7 +211,7 @@ Your task doc: docs/http-api-v2/tasks/${TASK_DOC}
    - Acceptance-criteria checkboxes that already pass → mark them.
    - Status mismatches between the task doc and README §3 → fix the README row.
 
-8. Update the README.md status tables for the current task: `Not Started` → `In Progress`. Decrement the corresponding "Status roll-up" count.
+8. Update the README.md status tables for the current task: `Not Started` → `In Progress`. Decrement the corresponding "Status roll-up" count. **Note for LIB-06**: it is dual-listed in §3 (Phase 0 enablers table for execution order; Library prerequisites table for category) — flip the Status column in **both** rows. The roll-up count is not double-counted; LIB-06 contributes one to the Library count.
 
 9. Final report: one of these four verdicts:
    - **READY** — task is applicable, docs are now actualized, hand off to the implementation agent. Include a list of the §4 steps the implementation agent must execute (excluding any already-done ones).
@@ -380,15 +391,15 @@ The commit that landed: ${COMMIT_SHA}  (or "no code change required" if there is
 **Steps**:
 
 1. Update `docs/http-api-v2/README.md`:
-   - In the §3 Pre-port cleanup OR Library prerequisites OR Endpoints table (whichever owns this task), flip the Status column from `In Progress` to `Done`. Append `(commit ${COMMIT_SHA_SHORT})` to the row, or `(verified, no code change)` if there was no commit.
+   - In the §3 Pre-port cleanup & enablers OR Library prerequisites OR Endpoints table (whichever owns this task), flip the Status column from `In Progress` to `Done`. Append `(commit ${COMMIT_SHA_SHORT})` to the row, or `(verified, no code change)` if there was no commit. **Note**: LIB-06 is dual-listed (Phase 0 for execution order, Library prerequisites for category) — flip the status in **both** tables when LIB-06 lands.
    - Update the §3 "Status roll-up" counts:
      - Decrement the count of the previous bucket the task was in (Not Started / Missing / Partial / Implemented).
      - Add or increment a `Done` row in the roll-up (add the row if it doesn't exist yet).
-     - Re-verify the grand-total line at the bottom of the roll-up still reads `18 tasks (1 cleanup + 5 library + 12 endpoints)`.
+     - Re-verify the grand-total line at the bottom of the roll-up still reads `19 tasks (1 cleanup + 6 library + 12 endpoints)`.
 
 2. Update `docs/http-api-v2/IMPLEMENTATION-PROMPT.md` §0 ("Current state"):
    - Flip the row for this task in the §0 phase table from `Not Started` to `Done` with the commit SHA short hash.
-   - Update the resume point at the top of §0: "Resume point: TASK ${NEXT_TASK_ID} (${NEXT_TASK_REF})." Use the next row in §0 that is still Not Started. If this was the last task, change to "All 18 tasks complete. No resume point — the v2 port is done."
+   - Update the resume point at the top of §0: "Resume point: TASK ${NEXT_TASK_ID} (${NEXT_TASK_REF})." Use the next row in §0 that is still Not Started. If this was the last task, change to "All 19 tasks complete. No resume point — the v2 port is done."
 
 3. Update the task doc itself (`docs/http-api-v2/tasks/${TASK_DOC}`):
    - Flip the Status field in the table at the top from `Not Started` to `Done` (or `Done — no code change` for verify-only).
@@ -437,7 +448,7 @@ All work lands directly on `main` — no per-task or per-phase feature branches.
 
 ### 8.2 Commit message
 
-> **Decision (2026-04-29) — Decision 14**: confirmed `http-api-v2:` prefix for **all 18 tasks**, including CLEAN-01 (which technically fixes v1 wire-shape drift but is bookkept as task `0-1` in this port's plan). Bundling everything under one prefix makes the "what changed in the v2 port?" answer trivially `git log --grep=^http-api-v2:`. Investigation agent: do not re-litigate.
+> **Decision (2026-04-29) — Decision 14**: confirmed `http-api-v2:` prefix for **all 19 tasks**, including CLEAN-01 (technically a v1 wire-shape fix, bookkept as task `0-1`) and LIB-06 (added 2026-04-29 as task `0-2`). Bundling everything under one prefix makes the "what changed in the v2 port?" answer trivially `git log --grep=^http-api-v2:`. Investigation agent: do not re-litigate.
 
 Use a heredoc to preserve formatting:
 
@@ -477,7 +488,7 @@ If any fails, fix before committing — do not commit a broken state.
 ### 8.5 Status tracking
 
 Three places hold status:
-1. [README.md §3](README.md#3-tasks--implementation-status) — Pre-port cleanup + Library prerequisites + Endpoints tables + status roll-up. **Authoritative.**
+1. [README.md §3](README.md#3-tasks--implementation-status) — Pre-port cleanup & enablers + Library prerequisites + Endpoints tables + status roll-up. **Authoritative.**
 2. [IMPLEMENTATION-PROMPT.md §0](IMPLEMENTATION-PROMPT.md#0-current-state) — phase table + resume point at the top.
 3. Each [task doc](tasks/) — Status field at the top + acceptance checkboxes at the bottom.
 
@@ -525,8 +536,8 @@ Reply "go" to proceed, or hand back for review.
 - [README §1.1 Wire conventions](README.md#11-wire-conventions-project-wide-set-by-decision-6) — project-wide rules every DTO obeys.
 - [README §1.2 v2 acknowledged divergences](README.md#12-v2-acknowledged-divergences-changes-to-steady-state-wire-output) — the one v2 wire-shape divergence (D-1).
 - [§0 of this file](#0-current-state) — phase table + resume point.
-- [§0.5 Decisions log](#05-decisions-log) — index of all 14 decisions and the project-wide infrastructure they introduced.
-- [Tasks directory](tasks/) — 18 task docs (1 CLEAN + 5 LIB + 12 E).
+- [§0.5 Decisions log](#05-decisions-log) — index of all 15 decisions and the project-wide infrastructure they introduced.
+- [Tasks directory](tasks/) — 19 task docs (1 CLEAN + 6 LIB + 12 E).
 - [v1 strict-parity rule](../http-server/plan.md#1-goal) — the rule v2 inherits.
 - [v1 IMPLEMENTATION-PROMPT](../http-server/implementation/IMPLEMENTATION-PROMPT.md) — sibling driver this prompt is modelled on; reference for any pattern not explicit here.
 - [SDK v2 gap analysis](../api-v2/README.md) — the in-process Rust API parity baseline (most v2 SDK functions are already implemented).

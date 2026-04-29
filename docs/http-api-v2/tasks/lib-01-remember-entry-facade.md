@@ -5,7 +5,7 @@
 | Scope | New library function + new shared types. |
 | Status | **Not Started** |
 | Blocks | E-02 (`POST /remember/entry`). |
-| Depends on | LIB-02 (`SessionManager::add_agent_trace_step`). |
+| Depends on | **LIB-06** (adds `RememberResult.entry_type` / `entry_id` fields + the new `RememberStatus` CamelCase enum — see Decision 15 / Q-F), **LIB-02** (`SessionManager::add_agent_trace_step`). |
 | Effort | ~0.5 day. |
 | Owner crates | `cognee-models`, `cognee-lib`. |
 
@@ -105,12 +105,7 @@ The HTTP endpoint at [`POST /api/v1/remember/entry`](../../http-api-v2/tasks/e-0
    ```
    Field-for-field with Python (see `cognee/memory/entries.py`). `QAEntry::context` defaults to `""`, `TraceEntry::status` defaults to `"success"`, `TraceEntry::generate_feedback_with_llm` defaults to `false`. The `serde(alias)` on every multi-word field accepts snake_case inputs (Python `populate_by_name=True` parity).
 
-2. **Extend `RememberResult`** in `crates/lib/src/api/remember.rs`:
-   ```rust
-   pub entry_type: Option<String>,   // "qa" | "trace" | "feedback"
-   pub entry_id:   Option<String>,
-   ```
-   `Display` / `to_dict()` impls populate them (already match Python field names per the api-v2 doc).
+2. **`RememberResult.entry_type` / `entry_id` fields** — already present after LIB-06 lands (Q-F / Decision 15). LIB-01 just populates them in step 3 below; no struct extension is needed in this task. If for any reason LIB-06 was skipped or partially landed, the implementation agent must report **BLOCKED** and stop — do not re-add the fields here.
 
 3. **Add `remember_entry()` facade** alongside the existing `remember()`:
    ```rust
@@ -130,7 +125,7 @@ The HTTP endpoint at [`POST /api/v1/remember/entry`](../../http-api-v2/tasks/e-0
      - `MemoryEntry::Feedback(f)` → `SessionManager::add_feedback(...)` → returns `f.qa_id` on success.
    - Sets `result.entry_type` from the discriminator string (`"qa" | "trace" | "feedback"`).
    - Sets `result.entry_id` to the cache-returned id.
-   - Sets `result.status = "session_stored"` on success, `"errored"` + populated `error` on failure (mirror Python's exact strings).
+   - Sets `result.status = RememberStatus::SessionStored` on success, `RememberStatus::Errored` + populated `error` on failure. The library `RememberStatus` enum (CamelCase serde, owned by LIB-06 / Decision 15) serializes the variants as `"SessionStored"` / `"PipelineRunErrored"`. The HTTP DTO translates to Python's lowercase `"session_stored"` / `"errored"` at the wire boundary (E-01).
 
 4. **Re-export from `cognee-lib`**:
    - `pub use cognee_models::memory::{MemoryEntry, QAEntry, TraceEntry, FeedbackEntry};`
