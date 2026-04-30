@@ -29,7 +29,9 @@ pub use error::{ApiError, DatasetError};
 pub use forget::{DatasetRef, ForgetResult, ForgetTarget, forget};
 pub use improve::{ImproveParams, ImproveResult, improve};
 pub use prune::{PruneResult, PruneTarget, prune_data, prune_system};
-pub use recall::{RecallItem, RecallResult, RecallSource, recall};
+pub use recall::{
+    RecallItem, RecallResult, RecallScope, RecallSource, ScopeInput, normalize_scope, recall,
+};
 pub use remember::{RememberItemInfo, RememberResult, RememberStatus, remember, remember_entry};
 pub use update::{UpdateResult, update};
 pub use user::get_or_create_default_user;

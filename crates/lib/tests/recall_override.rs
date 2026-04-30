@@ -71,6 +71,8 @@ async fn recall_records_router_override() {
         None,
         &orchestrator,
         None,
+        None,
+        None,
     )
     .await
     .expect("recall should succeed against the stub retriever");
@@ -115,6 +117,8 @@ async fn recall_auto_route_does_not_record_override() {
         None,
         &orchestrator,
         None,
+        None,
+        None,
     )
     .await
     .expect("recall should succeed");
@@ -150,6 +154,8 @@ async fn recall_explicit_without_auto_route_skips_router() {
         None,
         None,
         &orchestrator,
+        None,
+        None,
         None,
     )
     .await
