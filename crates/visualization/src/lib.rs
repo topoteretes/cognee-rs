@@ -80,44 +80,79 @@ pub async fn render(graph_db: &dyn GraphDBTrait) -> Result<String, Visualization
     html::build_html(&serialized, None)
 }
 
-/// Render a combined HTML visualization aggregating multiple `(user_id, graph_db)`
+/// Render a combined HTML visualization aggregating multiple `(user_label, graph_db)`
 /// pairs into one output.
 ///
-/// Each pair's nodes are tagged with a `user_id` attribute (UUID-stringified)
-/// so the d3 template can color-code by user. Edges from all pairs are
-/// concatenated unchanged.
+/// Each pair's nodes are tagged with a `source_user` attribute carrying the
+/// supplied human-readable label so the d3 template can color-code by user.
+/// Mirrors Python's `aggregate_multi_user_graphs()` in
+/// [`cognee/modules/visualization/cognee_network_visualization.py:115-157`](https://github.com/topoteretes/cognee/blob/main/cognee/modules/visualization/cognee_network_visualization.py#L115-L157):
 ///
-/// Mirrors Python's `visualize_multi_user_graph()` in
-/// [`cognee/api/v1/visualize/visualize.py`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/visualize/visualize.py).
+/// - Nodes are deduplicated by `str(node_id)` with **first-write-wins**
+///   semantics so iteration order across the supplied pairs determines the
+///   surviving node entry.
+/// - Edges are deduplicated by the `(source, target, relation)` tuple.
+/// - The `source_user` field is only populated when the inbound node does not
+///   already carry one (Python's `if not node_info.get("source_user")`).
+///
 /// An empty input produces a valid-but-empty HTML document.
 ///
-/// `pairs` is a slice of `(user_id_string, graph_db)` tuples; the user-id is
-/// taken as a `&str` to keep the visualization crate decoupled from the
-/// `cognee_models::User` type. Callers stringify their UUID/ID before invoking.
+/// `pairs` is a slice of `(user_label, graph_db)` tuples; the label is taken
+/// as an arbitrary `&str` to keep this crate decoupled from
+/// `cognee_models::User`. Callers should resolve the underlying user record
+/// and pass `user.email` (or the stringified id as a fallback) so the
+/// `userColors` palette key matches Python.
 pub async fn render_multi_user(
     pairs: &[(String, std::sync::Arc<dyn GraphDBTrait>)],
 ) -> Result<String, VisualizationError> {
     use std::borrow::Cow;
+    use std::collections::{HashMap, HashSet};
 
-    let mut all_nodes = Vec::new();
-    let mut all_edges = Vec::new();
-    for (user_id, gdb) in pairs {
+    // First-write-wins by stringified node id (mirror Python L142).
+    let mut all_nodes: HashMap<String, cognee_graph::GraphNode> = HashMap::new();
+    let mut node_order: Vec<String> = Vec::new();
+
+    // Edge dedupe by (source, target, relation) (mirror Python L150-155).
+    let mut all_edges: Vec<cognee_graph::EdgeData> = Vec::new();
+    let mut seen_edges: HashSet<(String, String, String)> = HashSet::new();
+
+    for (user_label, gdb) in pairs {
         let (nodes, edges) = gdb.get_graph_data().await?;
         for (node_id, mut node_info) in nodes {
-            node_info.insert(
-                Cow::Borrowed("user_id"),
-                serde_json::Value::String(user_id.clone()),
-            );
-            // `source_user` participates in the existing color-by-user
-            // template, so populate it as well to drive the d3 palette.
-            node_info.insert(
-                Cow::Borrowed("source_user"),
-                serde_json::Value::String(user_id.clone()),
-            );
-            all_nodes.push((node_id, node_info));
+            let key = node_id.to_string();
+            if all_nodes.contains_key(&key) {
+                continue;
+            }
+            // Mirror Python's `if not node_info.get("source_user"): node_info["source_user"] = user_label`
+            // — preserve any pre-existing `source_user` on the node so the
+            // owning user's value (if already tagged) survives.
+            let needs_label = match node_info.get("source_user") {
+                Some(serde_json::Value::String(s)) if !s.is_empty() => false,
+                Some(serde_json::Value::Null) | None => true,
+                _ => false,
+            };
+            if needs_label {
+                node_info.insert(
+                    Cow::Borrowed("source_user"),
+                    serde_json::Value::String(user_label.clone()),
+                );
+            }
+            node_order.push(key.clone());
+            all_nodes.insert(key, (node_id, node_info));
         }
-        all_edges.extend(edges);
+        for edge in edges {
+            let edge_key = (edge.0.to_string(), edge.1.to_string(), edge.2.clone());
+            if seen_edges.insert(edge_key) {
+                all_edges.push(edge);
+            }
+        }
     }
-    let serialized = serialize::serialize_graph(all_nodes, all_edges);
+
+    let ordered_nodes: Vec<cognee_graph::GraphNode> = node_order
+        .into_iter()
+        .filter_map(|k| all_nodes.remove(&k))
+        .collect();
+
+    let serialized = serialize::serialize_graph(ordered_nodes, all_edges);
     html::build_html(&serialized, None)
 }

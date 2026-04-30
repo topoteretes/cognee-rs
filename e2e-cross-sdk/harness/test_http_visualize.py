@@ -248,3 +248,269 @@ def test_visualize_negative_detects_divergence(authed_clients, unique_dataset_na
         f"py nodes: {py_payload.get('nodes')}\n"
         f"rs nodes: {rs_payload.get('nodes')}"
     )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# POST /api/v1/visualize/multi — superuser-only multi-(user,dataset) aggregation
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# Per docs/http-api-v2/tasks/e-08-visualize-multi.md §4 (Decision 16):
+# - Both backends share the snake_case `[{"user_id": <uuid>, "dataset_id": <uuid>}]`
+#   wire shape (Python uses raw `BaseModel`, not the camelCase `InDTO/OutDTO`).
+# - Non-superusers receive `403 {"error": "Superuser privileges required for
+#   multi-user visualization"}` from both sides.
+# - On success: `render_multi_user` deduplicates nodes by `str(node_id)` (first-
+#   write-wins) and edges by `(source, target, relation)` (mirror Python
+#   `cognee_network_visualization.py:142,150-155`).
+# - Each node is tagged with `source_user = user.email or str(user.id)` so the
+#   `userColors` palette key matches Python.
+#
+# The harness here exercises what is reachable without DB-level superuser
+# bootstrap: the 403-envelope parity. The dedupe + email-label parity tests
+# require a superuser session that the current harness cannot manufacture
+# cross-backend (the Python default user has a password, the Rust default user
+# does not — see `crates/database/src/migrator/m20250422_*.rs`). They probe for
+# the capability and skip cleanly if missing, so adding a superuser fixture
+# later turns them green automatically.
+
+_MULTI_SUPERUSER_CREDS = {
+    "username": "default_user@example.com",
+    "password": "default_password",
+}
+
+
+def _try_superuser_login(client) -> bool:
+    """Attempt to authenticate as the well-known superuser on a backend.
+
+    Returns True if both `/auth/login` and a follow-up `/users/me` confirm the
+    session belongs to a superuser; False otherwise. Used to gracefully skip
+    the multi-visualize parity tests when the harness's DB bootstrap does not
+    seed a known-password superuser.
+    """
+    r = client.post("/api/v1/auth/login", data=_MULTI_SUPERUSER_CREDS)
+    if r.status_code != 200:
+        return False
+    me = client.get("/api/v1/users/me")
+    if me.status_code != 200:
+        return False
+    body = me.json()
+    return bool(body.get("is_superuser"))
+
+
+def _resolve_user_id(client) -> str | None:
+    """Return the calling user's id via `/users/me`, or None on failure."""
+    r = client.get("/api/v1/users/me")
+    if r.status_code != 200:
+        return None
+    body = r.json()
+    return body.get("id")
+
+
+def test_visualize_multi_non_superuser_403_parity(authed_clients):
+    """A regular caller hitting `POST /multi` receives a parity-shaped 403.
+
+    The caller is the test user registered by the `authed_clients` fixture
+    (not a superuser). Both backends must reject with status 403 and the
+    Python-defined `{"error": "Superuser privileges required for multi-user
+    visualization"}` envelope (NOT FastAPI's canonical `{"detail": …}`).
+    """
+    body = "[]"
+    py = authed_clients["py"].post(
+        "/api/v1/visualize/multi", content=body, headers={"content-type": "application/json"}
+    )
+    rs = authed_clients["rs"].post(
+        "/api/v1/visualize/multi", content=body, headers={"content-type": "application/json"}
+    )
+
+    if py.status_code == 404 and rs.status_code == 404:
+        pytest.skip("/api/v1/visualize/multi not yet implemented on either backend")
+
+    assert py.status_code == 403, f"py status {py.status_code}: {py.text[:400]}"
+    assert rs.status_code == 403, f"rs status {rs.status_code}: {rs.text[:400]}"
+    py_body = py.json()
+    rs_body = rs.json()
+    assert py_body == {"error": "Superuser privileges required for multi-user visualization"}, (
+        f"py 403 envelope divergence: {py_body!r}"
+    )
+    assert rs_body == {"error": "Superuser privileges required for multi-user visualization"}, (
+        f"rs 403 envelope divergence: {rs_body!r}"
+    )
+
+
+def _bootstrap_multi_superuser(both_clients) -> dict[str, dict] | None:
+    """Try to log in as superuser on both backends and return the resolved
+    `(user_id, dataset_id)` for a freshly-seeded dataset on each side.
+
+    Returns ``None`` if either backend cannot mint a superuser session — the
+    caller should `pytest.skip` in that case. This isolates the
+    capability-probing logic so each multi-visualize parity test stays focused.
+    """
+    out: dict[str, dict] = {}
+    for side, client in both_clients.items():
+        if not _try_superuser_login(client):
+            return None
+        uid = _resolve_user_id(client)
+        if not uid:
+            return None
+        out[side] = {"user_id": uid, "client": client}
+    return out
+
+
+def _seed_multi_pair(client, *, name: str, text: str) -> str:
+    """Seed one dataset on `client` and return its dataset id."""
+    r = seed_dataset_with_text(client, name=name, text=text)
+    ds_id = r.get("dataset_id") or r.get("id")
+    assert ds_id, f"could not obtain dataset_id from add response: {r!r}"
+    seed_cognify(client, dataset_id=ds_id)
+    return ds_id
+
+
+def test_visualize_multi_smoke(both_clients, unique_dataset_name):
+    """`POST /multi` with a two-pair array returns 200 text/html with all 7 markers."""
+    creds = _bootstrap_multi_superuser(both_clients)
+    if creds is None:
+        pytest.skip("multi-visualize harness needs a known-password superuser on both backends")
+
+    pairs_per_side: dict[str, list[dict]] = {}
+    for side, info in creds.items():
+        client = info["client"]
+        ds1 = _seed_multi_pair(client, name=f"{unique_dataset_name}_a", text=_SEED_TEXT)
+        ds2 = _seed_multi_pair(client, name=f"{unique_dataset_name}_b", text=_OTHER_SEED_TEXT)
+        pairs_per_side[side] = [
+            {"user_id": info["user_id"], "dataset_id": ds1},
+            {"user_id": info["user_id"], "dataset_id": ds2},
+        ]
+
+    py = creds["py"]["client"].post("/api/v1/visualize/multi", json=pairs_per_side["py"])
+    rs = creds["rs"]["client"].post("/api/v1/visualize/multi", json=pairs_per_side["rs"])
+
+    assert py.status_code == 200, f"py /multi status {py.status_code}: {py.text[:400]}"
+    assert rs.status_code == 200, f"rs /multi status {rs.status_code}: {rs.text[:400]}"
+
+    for side, resp in (("py", py), ("rs", rs)):
+        ctype = resp.headers.get("content-type", "")
+        assert ctype.lower().startswith("text/html"), f"{side} content-type {ctype!r}"
+        for _key, marker, _pattern in _PAYLOAD_PATTERNS:
+            assert marker in resp.text, f"{side} /multi missing marker {marker!r}"
+
+
+def test_visualize_multi_payload_equality_disjoint(both_clients, unique_dataset_name):
+    """Disjoint graphs across two pairs: structural payload equality required."""
+    creds = _bootstrap_multi_superuser(both_clients)
+    if creds is None:
+        pytest.skip("multi-visualize harness needs a known-password superuser on both backends")
+
+    pairs_per_side: dict[str, list[dict]] = {}
+    for side, info in creds.items():
+        client = info["client"]
+        ds1 = _seed_multi_pair(client, name=f"{unique_dataset_name}_a", text=_SEED_TEXT)
+        ds2 = _seed_multi_pair(client, name=f"{unique_dataset_name}_b", text=_OTHER_SEED_TEXT)
+        pairs_per_side[side] = [
+            {"user_id": info["user_id"], "dataset_id": ds1},
+            {"user_id": info["user_id"], "dataset_id": ds2},
+        ]
+
+    py = creds["py"]["client"].post("/api/v1/visualize/multi", json=pairs_per_side["py"])
+    rs = creds["rs"]["client"].post("/api/v1/visualize/multi", json=pairs_per_side["rs"])
+    assert py.status_code == rs.status_code == 200, (
+        f"multi-disjoint status mismatch: py={py.status_code} rs={rs.status_code}"
+    )
+
+    py_payload = _normalize_payload(_extract_payload(py.text))
+    rs_payload = _normalize_payload(_extract_payload(rs.text))
+
+    for key, _marker, _pattern in _PAYLOAD_PATTERNS:
+        assert py_payload[key] == rs_payload[key], (
+            f"/multi disjoint payload divergence for key {key!r}\n"
+            f"py: {json.dumps(py_payload[key], sort_keys=True)[:1000]}\n"
+            f"rs: {json.dumps(rs_payload[key], sort_keys=True)[:1000]}"
+        )
+
+
+def test_visualize_multi_payload_equality_overlapping(both_clients, unique_dataset_name):
+    """Overlapping pairs (same dataset twice): dedupe parity required.
+
+    Each pair references the same dataset, guaranteeing every node id and edge
+    `(source, target, relation)` triple appears in both halves of the input.
+    Python and Rust must collapse these to a single entry per id and triple.
+    """
+    creds = _bootstrap_multi_superuser(both_clients)
+    if creds is None:
+        pytest.skip("multi-visualize harness needs a known-password superuser on both backends")
+
+    pairs_per_side: dict[str, list[dict]] = {}
+    for side, info in creds.items():
+        client = info["client"]
+        ds = _seed_multi_pair(client, name=f"{unique_dataset_name}_overlap", text=_SEED_TEXT)
+        pairs_per_side[side] = [
+            {"user_id": info["user_id"], "dataset_id": ds},
+            {"user_id": info["user_id"], "dataset_id": ds},
+        ]
+
+    py = creds["py"]["client"].post("/api/v1/visualize/multi", json=pairs_per_side["py"])
+    rs = creds["rs"]["client"].post("/api/v1/visualize/multi", json=pairs_per_side["rs"])
+    assert py.status_code == rs.status_code == 200, (
+        f"multi-overlap status mismatch: py={py.status_code} rs={rs.status_code}"
+    )
+
+    py_payload = _normalize_payload(_extract_payload(py.text))
+    rs_payload = _normalize_payload(_extract_payload(rs.text))
+
+    # Dedupe correctness: an overlapping payload must not have grown — the
+    # repeated pair should collapse exactly back to the single-pair shape.
+    py_single = creds["py"]["client"].post(
+        "/api/v1/visualize/multi", json=[pairs_per_side["py"][0]]
+    )
+    rs_single = creds["rs"]["client"].post(
+        "/api/v1/visualize/multi", json=[pairs_per_side["rs"][0]]
+    )
+    assert py_single.status_code == rs_single.status_code == 200
+    py_single_payload = _normalize_payload(_extract_payload(py_single.text))
+    rs_single_payload = _normalize_payload(_extract_payload(rs_single.text))
+
+    for key in ("nodes", "links"):
+        assert py_payload[key] == py_single_payload[key], (
+            f"py /multi did not dedupe for key {key!r}: overlapped vs single diverged"
+        )
+        assert rs_payload[key] == rs_single_payload[key], (
+            f"rs /multi did not dedupe for key {key!r}: overlapped vs single diverged"
+        )
+
+    for key, _marker, _pattern in _PAYLOAD_PATTERNS:
+        assert py_payload[key] == rs_payload[key], (
+            f"/multi overlapping payload divergence for key {key!r}\n"
+            f"py: {json.dumps(py_payload[key], sort_keys=True)[:1000]}\n"
+            f"rs: {json.dumps(rs_payload[key], sort_keys=True)[:1000]}"
+        )
+
+
+def test_visualize_multi_user_colors_keys_match(both_clients, unique_dataset_name):
+    """`userColors` keys parity → proves the email-label semantics agree.
+
+    Each backend should key the palette by `user.email or str(user.id)` per
+    Python `cognee_network_visualization.py:138`. With both sides logged in as
+    the same default-user email, the resulting palette key set must match.
+    """
+    creds = _bootstrap_multi_superuser(both_clients)
+    if creds is None:
+        pytest.skip("multi-visualize harness needs a known-password superuser on both backends")
+
+    pairs_per_side: dict[str, list[dict]] = {}
+    for side, info in creds.items():
+        client = info["client"]
+        ds = _seed_multi_pair(client, name=f"{unique_dataset_name}_colors", text=_SEED_TEXT)
+        pairs_per_side[side] = [{"user_id": info["user_id"], "dataset_id": ds}]
+
+    py = creds["py"]["client"].post("/api/v1/visualize/multi", json=pairs_per_side["py"])
+    rs = creds["rs"]["client"].post("/api/v1/visualize/multi", json=pairs_per_side["rs"])
+    assert py.status_code == rs.status_code == 200
+
+    py_payload = _extract_payload(py.text)
+    rs_payload = _extract_payload(rs.text)
+
+    py_keys = set((py_payload.get("user_colors") or {}).keys())
+    rs_keys = set((rs_payload.get("user_colors") or {}).keys())
+    assert py_keys == rs_keys, (
+        f"/multi userColors key divergence: py={py_keys!r} rs={rs_keys!r}\n"
+        "Decision 16: both sides must label nodes with `user.email or str(user.id)`."
+    )

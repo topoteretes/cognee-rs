@@ -157,7 +157,27 @@ pub async fn post_visualize_multi(
                 "graph database is not wired".to_string(),
             ));
         };
-        user_pairs.push((pair.user_id.to_string(), graph_db));
+
+        // Resolve the target user to a human-readable label so the
+        // `userColors` palette key matches Python's
+        // `getattr(user, "email", None) or str(user.id)` at
+        // `cognee_network_visualization.py:138`. Lookup failure (or a missing
+        // auth context) collapses into the existing 409 catch-all.
+        let user_label = if let Some(auth) = state.auth.as_ref() {
+            match auth
+                .user_repo
+                .find_by_id(pair.user_id)
+                .await
+                .map_err(|err| ApiError::VisualizeError(StatusCode::CONFLICT, err.to_string()))?
+            {
+                Some(u) if !u.email.is_empty() => u.email,
+                _ => pair.user_id.to_string(),
+            }
+        } else {
+            pair.user_id.to_string()
+        };
+
+        user_pairs.push((user_label, graph_db));
     }
 
     let html = cognee_visualization::render_multi_user(&user_pairs)
