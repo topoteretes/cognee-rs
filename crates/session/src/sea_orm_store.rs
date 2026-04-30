@@ -10,7 +10,7 @@ use crate::error::SessionError;
 use crate::migrator::SessionMigrator;
 use crate::sea_orm_backend::{entity, ops};
 use crate::session_store::{SessionQAUpdate, SessionStore};
-use crate::types::{SessionQAEntry, UsedGraphElementIds};
+use crate::types::{SessionQAEntry, SessionTraceStep, UsedGraphElementIds};
 
 /// SeaORM-backed session store using the `session_qa_entries` table.
 ///
@@ -138,5 +138,22 @@ impl SessionStore for SeaOrmSessionStore {
         context: &str,
     ) -> Result<(), SessionError> {
         ops::set_graph_context(&self.db, session_id, user_id, context).await
+    }
+
+    async fn save_trace_step(
+        &self,
+        user_id: &str,
+        session_id: &str,
+        step: SessionTraceStep,
+    ) -> Result<String, SessionError> {
+        ops::save_trace_step(&self.db, user_id, session_id, step).await
+    }
+
+    async fn read_trace_steps(
+        &self,
+        user_id: &str,
+        session_id: &str,
+    ) -> Result<Vec<SessionTraceStep>, SessionError> {
+        ops::read_trace_steps(&self.db, user_id, session_id).await
     }
 }

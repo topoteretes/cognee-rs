@@ -19,7 +19,7 @@ mod sea_orm_store;
 pub use error::SessionError;
 pub use session_manager::SessionManager;
 pub use session_store::{SessionQAUpdate, SessionStore};
-pub use types::{SessionContext, SessionQAEntry, UsedGraphElementIds};
+pub use types::{SessionContext, SessionQAEntry, SessionTraceStep, UsedGraphElementIds};
 
 #[cfg(feature = "fs")]
 pub use fs_store::FsSessionStore;

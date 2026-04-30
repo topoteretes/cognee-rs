@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use cognee_session::{SeaOrmSessionStore, SessionManager, SessionStore};
+use cognee_session::{SeaOrmSessionStore, SessionManager, SessionStore, SessionTraceStep};
 use sea_orm::Database;
 
 async fn setup_store() -> Arc<SeaOrmSessionStore> {
@@ -487,4 +487,96 @@ async fn session_manager_graph_context_round_trip() {
 
     let ctx = sm.get_graph_context(Some("s1"), None).await.unwrap();
     assert_eq!(ctx.as_deref(), Some("knowledge snapshot"));
+}
+
+// -------------------------------------------------------------------------
+// Tests for LIB-02 — agent trace step persistence
+// -------------------------------------------------------------------------
+
+fn make_step(trace_id: &str, origin: &str) -> SessionTraceStep {
+    SessionTraceStep {
+        trace_id: trace_id.to_string(),
+        origin_function: origin.to_string(),
+        status: "success".to_string(),
+        memory_query: "q?".to_string(),
+        memory_context: "ctx".to_string(),
+        method_params: serde_json::json!({"k": "v"}),
+        method_return_value: Some(serde_json::json!([1, 2, 3])),
+        error_message: String::new(),
+        session_feedback: "fb".to_string(),
+    }
+}
+
+#[tokio::test]
+async fn test_sea_orm_save_and_read_trace_step() {
+    let store = setup_store().await;
+    let step = make_step("trace-1", "fn.foo");
+
+    let returned = store
+        .save_trace_step("user-a", "sess-1", step)
+        .await
+        .unwrap();
+    assert_eq!(returned, "trace-1");
+
+    let read = store.read_trace_steps("user-a", "sess-1").await.unwrap();
+    assert_eq!(read.len(), 1);
+    assert_eq!(read[0].trace_id, "trace-1");
+    assert_eq!(read[0].origin_function, "fn.foo");
+    assert_eq!(read[0].status, "success");
+    assert_eq!(read[0].memory_query, "q?");
+    assert_eq!(read[0].memory_context, "ctx");
+    assert_eq!(read[0].method_params, serde_json::json!({"k": "v"}));
+    assert_eq!(
+        read[0].method_return_value,
+        Some(serde_json::json!([1, 2, 3]))
+    );
+    assert_eq!(read[0].session_feedback, "fb");
+}
+
+#[tokio::test]
+async fn test_sea_orm_trace_steps_oldest_first() {
+    let store = setup_store().await;
+
+    for i in 0..3 {
+        let step = make_step(&format!("trace-{i}"), "fn");
+        store
+            .save_trace_step("user-a", "sess-1", step)
+            .await
+            .unwrap();
+    }
+
+    let read = store.read_trace_steps("user-a", "sess-1").await.unwrap();
+    assert_eq!(read.len(), 3);
+    assert_eq!(read[0].trace_id, "trace-0");
+    assert_eq!(read[1].trace_id, "trace-1");
+    assert_eq!(read[2].trace_id, "trace-2");
+}
+
+#[tokio::test]
+async fn test_sea_orm_trace_step_isolation() {
+    let store = setup_store().await;
+
+    store
+        .save_trace_step("user-a", "sess-1", make_step("a-1", "fn"))
+        .await
+        .unwrap();
+    store
+        .save_trace_step("user-b", "sess-1", make_step("b-1", "fn"))
+        .await
+        .unwrap();
+    store
+        .save_trace_step("user-a", "sess-2", make_step("a-2", "fn"))
+        .await
+        .unwrap();
+
+    let a1 = store.read_trace_steps("user-a", "sess-1").await.unwrap();
+    let b1 = store.read_trace_steps("user-b", "sess-1").await.unwrap();
+    let a2 = store.read_trace_steps("user-a", "sess-2").await.unwrap();
+
+    assert_eq!(a1.len(), 1);
+    assert_eq!(a1[0].trace_id, "a-1");
+    assert_eq!(b1.len(), 1);
+    assert_eq!(b1[0].trace_id, "b-1");
+    assert_eq!(a2.len(), 1);
+    assert_eq!(a2[0].trace_id, "a-2");
 }

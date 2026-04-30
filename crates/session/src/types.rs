@@ -48,3 +48,37 @@ pub struct SessionContext {
     pub history: Vec<Message>,
     pub formatted_history: String,
 }
+
+/// One agent-trace step persisted in a session — mirrors Python's
+/// `SessionAgentTraceEntry` (no `created_at`; ordering is positional).
+///
+/// Library-internal type; kept `snake_case` to match Python's persisted JSON
+/// shape so cross-SDK reads stay byte-equal. This is **not** an HTTP DTO —
+/// the wire-side camelCase rule (Decision 10) does not apply here.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionTraceStep {
+    /// Server-generated UUID4 — returned by `SessionManager::add_agent_trace_step`.
+    pub trace_id: String,
+    pub origin_function: String,
+    /// Free-form per Python validator; typically `"success"` / `"error"`.
+    pub status: String,
+    #[serde(default)]
+    pub memory_query: String,
+    #[serde(default)]
+    pub memory_context: String,
+    /// Default `{}` — matches Python's `default_factory=dict`.
+    #[serde(default = "empty_object")]
+    pub method_params: serde_json::Value,
+    #[serde(default)]
+    pub method_return_value: Option<serde_json::Value>,
+    #[serde(default)]
+    pub error_message: String,
+    /// LLM-resolved feedback string — generation owned by `SessionManager`
+    /// (LIB-01); callers in this task pass `""` until LIB-01 lands.
+    #[serde(default)]
+    pub session_feedback: String,
+}
+
+fn empty_object() -> serde_json::Value {
+    serde_json::Value::Object(serde_json::Map::new())
+}

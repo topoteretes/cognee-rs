@@ -6,7 +6,7 @@ use tracing::debug;
 
 use crate::error::SessionError;
 use crate::session_store::{SessionQAUpdate, SessionStore};
-use crate::types::SessionQAEntry;
+use crate::types::{SessionQAEntry, SessionTraceStep};
 
 const DEFAULT_SESSION_ID: &str = "default_session";
 const DEFAULT_HISTORY_LIMIT: usize = 10;
@@ -238,6 +238,62 @@ impl SessionManager {
         self.store
             .set_graph_context(resolved_id, user_id, context)
             .await
+    }
+
+    /// Append one agent-trace step to the session and return the generated
+    /// `trace_id` (UUID4).
+    ///
+    /// Mirrors Python's `SessionManager.add_agent_trace_step`. The Python
+    /// version also generates `session_feedback` via an LLM call before
+    /// persisting; that responsibility belongs to LIB-01 (`remember_entry`).
+    /// In this task callers pass `session_feedback` directly (default `""`).
+    #[allow(clippy::too_many_arguments)]
+    pub async fn add_agent_trace_step(
+        &self,
+        user_id: &str,
+        session_id: Option<&str>,
+        origin_function: &str,
+        status: &str,
+        memory_query: &str,
+        memory_context: &str,
+        method_params: serde_json::Value,
+        method_return_value: Option<serde_json::Value>,
+        error_message: &str,
+        session_feedback: &str,
+    ) -> Result<String, SessionError> {
+        let resolved_id = self.resolve_session_id(session_id);
+        let trace_id = uuid::Uuid::new_v4().to_string();
+        let step = SessionTraceStep {
+            trace_id: trace_id.clone(),
+            origin_function: origin_function.to_string(),
+            status: status.to_string(),
+            memory_query: memory_query.to_string(),
+            memory_context: memory_context.to_string(),
+            method_params,
+            method_return_value,
+            error_message: error_message.to_string(),
+            session_feedback: session_feedback.to_string(),
+        };
+        self.store.save_trace_step(user_id, resolved_id, step).await
+    }
+
+    /// Retrieve agent-trace steps for a session, oldest-first.
+    ///
+    /// If `last_n` is `Some(n)`, the trailing `n` entries are returned
+    /// (mirrors Python's `entries[-last_n:]`).
+    pub async fn get_agent_trace_session(
+        &self,
+        user_id: &str,
+        session_id: Option<&str>,
+        last_n: Option<usize>,
+    ) -> Result<Vec<SessionTraceStep>, SessionError> {
+        let resolved_id = self.resolve_session_id(session_id);
+        let mut entries = self.store.read_trace_steps(user_id, resolved_id).await?;
+        if let Some(n) = last_n {
+            let drop = entries.len().saturating_sub(n);
+            entries = entries.split_off(drop);
+        }
+        Ok(entries)
     }
 }
 

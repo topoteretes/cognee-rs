@@ -20,7 +20,7 @@ use uuid::Uuid;
 
 use crate::error::SessionError;
 use crate::session_store::{SessionQAUpdate, SessionStore};
-use crate::types::{SessionQAEntry, UsedGraphElementIds};
+use crate::types::{SessionQAEntry, SessionTraceStep, UsedGraphElementIds};
 
 /// JSON layout of a single entry on disk — matches the Python `SessionQAEntry`
 /// model fields so the serialised form is cross-SDK compatible.
@@ -139,6 +139,34 @@ fn graph_context_file(base: &Path, user_id: Option<&str>, session_id: &str) -> P
     let uid = user_id.unwrap_or("default");
     base.join(uid)
         .join(format!("_graph_context_{session_id}.json"))
+}
+
+fn trace_session_file(base: &Path, user_id: &str, session_id: &str) -> PathBuf {
+    base.join(user_id).join(format!("{session_id}.traces.json"))
+}
+
+async fn load_trace_steps(path: &Path) -> Result<Vec<SessionTraceStep>, SessionError> {
+    match fs::read_to_string(path).await {
+        Ok(contents) if !contents.is_empty() => serde_json::from_str(&contents)
+            .map_err(|e| SessionError::StoreError(format!("json parse error: {e}"))),
+        Ok(_) => Ok(vec![]),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(vec![]),
+        Err(e) => Err(SessionError::StoreError(format!("fs read error: {e}"))),
+    }
+}
+
+async fn save_trace_steps(path: &Path, steps: &[SessionTraceStep]) -> Result<(), SessionError> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .await
+            .map_err(|e| SessionError::StoreError(format!("fs mkdir error: {e}")))?;
+    }
+    let json = serde_json::to_string_pretty(steps)
+        .map_err(|e| SessionError::StoreError(format!("json error: {e}")))?;
+    fs::write(path, json)
+        .await
+        .map_err(|e| SessionError::StoreError(format!("fs write error: {e}")))?;
+    Ok(())
 }
 
 /// Apply a `SessionQAUpdate` to an `FsQAEntry` in place.
@@ -342,6 +370,29 @@ impl SessionStore for FsSessionStore {
             .await
             .map_err(|e| SessionError::StoreError(format!("fs write error: {e}")))?;
         Ok(())
+    }
+
+    async fn save_trace_step(
+        &self,
+        user_id: &str,
+        session_id: &str,
+        step: SessionTraceStep,
+    ) -> Result<String, SessionError> {
+        let path = trace_session_file(&self.base_dir, user_id, session_id);
+        let mut steps = load_trace_steps(&path).await?;
+        let trace_id = step.trace_id.clone();
+        steps.push(step);
+        save_trace_steps(&path, &steps).await?;
+        Ok(trace_id)
+    }
+
+    async fn read_trace_steps(
+        &self,
+        user_id: &str,
+        session_id: &str,
+    ) -> Result<Vec<SessionTraceStep>, SessionError> {
+        let path = trace_session_file(&self.base_dir, user_id, session_id);
+        load_trace_steps(&path).await
     }
 }
 

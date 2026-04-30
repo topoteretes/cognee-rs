@@ -13,7 +13,7 @@ use uuid::Uuid;
 
 use crate::error::SessionError;
 use crate::session_store::{SessionQAUpdate, SessionStore};
-use crate::types::{SessionQAEntry, UsedGraphElementIds};
+use crate::types::{SessionQAEntry, SessionTraceStep, UsedGraphElementIds};
 
 /// A single Q&A entry as serialised to/from Redis (Python-compatible JSON).
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -116,6 +116,10 @@ fn redis_entry_to_domain(e: &RedisQAEntry, session_id: &str) -> SessionQAEntry {
 fn graph_context_key(user_id: Option<&str>, session_id: &str) -> String {
     let uid = user_id.unwrap_or("default");
     format!("graph_knowledge:{uid}:{session_id}")
+}
+
+fn trace_key(user_id: &str, session_id: &str) -> String {
+    format!("cognee:trace:{user_id}:{session_id}")
 }
 
 /// Apply a `SessionQAUpdate` to a `RedisQAEntry` in place.
@@ -363,5 +367,40 @@ impl SessionStore for RedisSessionStore {
         let mut conn = self.conn.clone();
         conn.set::<_, _, ()>(&key, context).await.map_err(map_err)?;
         Ok(())
+    }
+
+    async fn save_trace_step(
+        &self,
+        user_id: &str,
+        session_id: &str,
+        step: SessionTraceStep,
+    ) -> Result<String, SessionError> {
+        let trace_id = step.trace_id.clone();
+        let json = serde_json::to_string(&step)
+            .map_err(|e| SessionError::StoreError(format!("json error: {e}")))?;
+
+        // Python uses RPUSH (NOT LPUSH) so LRANGE 0 -1 returns oldest-first.
+        let key = trace_key(user_id, session_id);
+        let mut conn = self.conn.clone();
+        conn.rpush::<_, _, ()>(&key, &json).await.map_err(map_err)?;
+
+        Ok(trace_id)
+    }
+
+    async fn read_trace_steps(
+        &self,
+        user_id: &str,
+        session_id: &str,
+    ) -> Result<Vec<SessionTraceStep>, SessionError> {
+        let key = trace_key(user_id, session_id);
+        let mut conn = self.conn.clone();
+        let raw: Vec<String> = conn.lrange(&key, 0, -1).await.map_err(map_err)?;
+
+        raw.iter()
+            .map(|s| {
+                serde_json::from_str::<SessionTraceStep>(s)
+                    .map_err(|e| SessionError::StoreError(format!("json parse error: {e}")))
+            })
+            .collect()
     }
 }

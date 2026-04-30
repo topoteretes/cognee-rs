@@ -8,6 +8,7 @@ use uuid::Uuid;
 use super::entity;
 use crate::error::SessionError;
 use crate::session_store::SessionQAUpdate;
+use crate::types::SessionTraceStep;
 
 fn map_db_err(e: sea_orm::DbErr) -> SessionError {
     SessionError::StoreError(e.to_string())
@@ -211,6 +212,96 @@ pub async fn get_graph_context(
         .await
         .map_err(map_db_err)?;
     Ok(model.map(|m| m.context))
+}
+
+/// Append one agent-trace step. Returns the persisted `trace_id`.
+pub async fn save_trace_step(
+    db: &DatabaseConnection,
+    user_id: &str,
+    session_id: &str,
+    step: SessionTraceStep,
+) -> Result<String, SessionError> {
+    let method_params_json = serde_json::to_string(&step.method_params)
+        .map_err(|e| SessionError::StoreError(format!("json error: {e}")))?;
+    let method_return_value_json = match &step.method_return_value {
+        Some(v) => Some(
+            serde_json::to_string(v)
+                .map_err(|e| SessionError::StoreError(format!("json error: {e}")))?,
+        ),
+        None => None,
+    };
+
+    // Assign next `seq` for this `(user_id, session_id)` so reads return
+    // entries in stable insertion order (independent of timestamp resolution).
+    let max_seq: Option<i64> = entity::trace_step::Entity::find()
+        .filter(entity::trace_step::Column::UserId.eq(user_id))
+        .filter(entity::trace_step::Column::SessionId.eq(session_id))
+        .order_by_desc(entity::trace_step::Column::Seq)
+        .limit(1)
+        .one(db)
+        .await
+        .map_err(map_db_err)?
+        .map(|m| m.seq);
+    let next_seq = max_seq.unwrap_or(0) + 1;
+
+    let trace_id = step.trace_id.clone();
+    let model = entity::trace_step::ActiveModel {
+        trace_id: Set(trace_id.clone()),
+        user_id: Set(user_id.to_string()),
+        session_id: Set(session_id.to_string()),
+        seq: Set(next_seq),
+        created_at: Set(Utc::now()),
+        origin_function: Set(step.origin_function),
+        status: Set(step.status),
+        memory_query: Set(step.memory_query),
+        memory_context: Set(step.memory_context),
+        method_params: Set(method_params_json),
+        method_return_value: Set(method_return_value_json),
+        error_message: Set(step.error_message),
+        session_feedback: Set(step.session_feedback),
+    };
+    model.insert(db).await.map_err(map_db_err)?;
+    Ok(trace_id)
+}
+
+/// Read agent-trace steps for `(user_id, session_id)`, ordered oldest-first.
+pub async fn read_trace_steps(
+    db: &DatabaseConnection,
+    user_id: &str,
+    session_id: &str,
+) -> Result<Vec<SessionTraceStep>, SessionError> {
+    let models = entity::trace_step::Entity::find()
+        .filter(entity::trace_step::Column::UserId.eq(user_id))
+        .filter(entity::trace_step::Column::SessionId.eq(session_id))
+        .order_by_asc(entity::trace_step::Column::Seq)
+        .all(db)
+        .await
+        .map_err(map_db_err)?;
+
+    let mut out = Vec::with_capacity(models.len());
+    for m in models {
+        let method_params: serde_json::Value = serde_json::from_str(&m.method_params)
+            .map_err(|e| SessionError::StoreError(format!("json parse error: {e}")))?;
+        let method_return_value = match m.method_return_value {
+            Some(s) => Some(
+                serde_json::from_str::<serde_json::Value>(&s)
+                    .map_err(|e| SessionError::StoreError(format!("json parse error: {e}")))?,
+            ),
+            None => None,
+        };
+        out.push(SessionTraceStep {
+            trace_id: m.trace_id,
+            origin_function: m.origin_function,
+            status: m.status,
+            memory_query: m.memory_query,
+            memory_context: m.memory_context,
+            method_params,
+            method_return_value,
+            error_message: m.error_message,
+            session_feedback: m.session_feedback,
+        });
+    }
+    Ok(out)
 }
 
 /// Store (or overwrite) the graph context for a session.

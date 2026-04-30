@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use async_trait::async_trait;
 
 use crate::error::SessionError;
-use crate::types::{SessionQAEntry, UsedGraphElementIds};
+use crate::types::{SessionQAEntry, SessionTraceStep, UsedGraphElementIds};
 
 /// Partial update DTO for a QA entry.
 ///
@@ -97,4 +97,39 @@ pub trait SessionStore: Send + Sync {
         user_id: Option<&str>,
         context: &str,
     ) -> Result<(), SessionError>;
+
+    /// Append one agent-trace step to the session's trace list.
+    ///
+    /// Returns the persisted `trace_id` (caller-provided — `SessionManager`
+    /// generates it via UUID4 before invoking).
+    ///
+    /// Default impl returns `SessionError::StoreError` so backends that have
+    /// not been updated to support trace steps still compile. The fs / redis /
+    /// sea-orm backends override this with a real implementation.
+    async fn save_trace_step(
+        &self,
+        user_id: &str,
+        session_id: &str,
+        step: SessionTraceStep,
+    ) -> Result<String, SessionError> {
+        let _ = (user_id, session_id, step);
+        Err(SessionError::StoreError(
+            "save_trace_step not implemented for this backend".into(),
+        ))
+    }
+
+    /// Retrieve agent-trace steps for the given session (oldest-first).
+    ///
+    /// `SessionManager::get_agent_trace_session` performs `last_n` slicing on
+    /// top of the returned list. Default impl returns `SessionError::StoreError`.
+    async fn read_trace_steps(
+        &self,
+        user_id: &str,
+        session_id: &str,
+    ) -> Result<Vec<SessionTraceStep>, SessionError> {
+        let _ = (user_id, session_id);
+        Err(SessionError::StoreError(
+            "read_trace_steps not implemented for this backend".into(),
+        ))
+    }
 }

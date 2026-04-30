@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use cognee_session::{FsSessionStore, SessionManager, SessionStore};
+use cognee_session::{FsSessionStore, SessionManager, SessionStore, SessionTraceStep};
 
 fn setup_store(dir: &std::path::Path) -> Arc<FsSessionStore> {
     Arc::new(FsSessionStore::new(dir))
@@ -230,4 +230,100 @@ async fn session_manager_round_trip() {
     assert_eq!(messages[1].content, "a1");
     assert_eq!(messages[2].content, "q2");
     assert_eq!(messages[3].content, "a2");
+}
+
+// -------------------------------------------------------------------------
+// Tests for LIB-02 — agent trace step persistence
+// -------------------------------------------------------------------------
+
+fn make_step(trace_id: &str, origin: &str) -> SessionTraceStep {
+    SessionTraceStep {
+        trace_id: trace_id.to_string(),
+        origin_function: origin.to_string(),
+        status: "success".to_string(),
+        memory_query: "what is rust?".to_string(),
+        memory_context: "context blob".to_string(),
+        method_params: serde_json::json!({"k": "v"}),
+        method_return_value: Some(serde_json::json!({"result": 42})),
+        error_message: String::new(),
+        session_feedback: "feedback text".to_string(),
+    }
+}
+
+#[tokio::test]
+async fn test_fs_save_and_read_trace_step() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = setup_store(dir.path());
+    let step = make_step("trace-1", "memory.search");
+
+    let returned = store
+        .save_trace_step("user-a", "sess-1", step.clone())
+        .await
+        .unwrap();
+    assert_eq!(returned, "trace-1");
+
+    let read = store.read_trace_steps("user-a", "sess-1").await.unwrap();
+    assert_eq!(read.len(), 1);
+    assert_eq!(read[0].trace_id, "trace-1");
+    assert_eq!(read[0].origin_function, "memory.search");
+    assert_eq!(read[0].status, "success");
+    assert_eq!(read[0].memory_query, "what is rust?");
+    assert_eq!(read[0].memory_context, "context blob");
+    assert_eq!(read[0].method_params, serde_json::json!({"k": "v"}));
+    assert_eq!(
+        read[0].method_return_value,
+        Some(serde_json::json!({"result": 42}))
+    );
+    assert_eq!(read[0].error_message, "");
+    assert_eq!(read[0].session_feedback, "feedback text");
+}
+
+#[tokio::test]
+async fn test_fs_trace_steps_oldest_first() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = setup_store(dir.path());
+
+    for i in 0..3 {
+        let step = make_step(&format!("trace-{i}"), "fn");
+        store
+            .save_trace_step("user-a", "sess-1", step)
+            .await
+            .unwrap();
+    }
+
+    let read = store.read_trace_steps("user-a", "sess-1").await.unwrap();
+    assert_eq!(read.len(), 3);
+    assert_eq!(read[0].trace_id, "trace-0");
+    assert_eq!(read[1].trace_id, "trace-1");
+    assert_eq!(read[2].trace_id, "trace-2");
+}
+
+#[tokio::test]
+async fn test_fs_trace_step_isolation() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = setup_store(dir.path());
+
+    store
+        .save_trace_step("user-a", "sess-1", make_step("a-1", "fn"))
+        .await
+        .unwrap();
+    store
+        .save_trace_step("user-b", "sess-1", make_step("b-1", "fn"))
+        .await
+        .unwrap();
+    store
+        .save_trace_step("user-a", "sess-2", make_step("a-2", "fn"))
+        .await
+        .unwrap();
+
+    let a1 = store.read_trace_steps("user-a", "sess-1").await.unwrap();
+    let b1 = store.read_trace_steps("user-b", "sess-1").await.unwrap();
+    let a2 = store.read_trace_steps("user-a", "sess-2").await.unwrap();
+
+    assert_eq!(a1.len(), 1);
+    assert_eq!(a1[0].trace_id, "a-1");
+    assert_eq!(b1.len(), 1);
+    assert_eq!(b1[0].trace_id, "b-1");
+    assert_eq!(a2.len(), 1);
+    assert_eq!(a2[0].trace_id, "a-2");
 }
