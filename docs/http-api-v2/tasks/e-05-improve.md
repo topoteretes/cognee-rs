@@ -3,8 +3,8 @@
 | | |
 |---|---|
 | Wire path | `POST /api/v1/improve` |
-| Status | **Partial** — DTO missing `extraction_tasks`, `enrichment_tasks`, `data`, `node_name`, `session_ids`. |
-| Depends on | LIB-04 (`ImproveParams` struct refactor — Decision 8). |
+| Status | **Done (commit 43e2a72)** — DTO extended from 3 to 8 fields (added `extractionTasks`, `enrichmentTasks`, `data`, `nodeName`, `sessionIds` with camelCase wire + snake_case alias per Decision 10). `ImproveParams<'_>` extended with 3 new fields (`extraction_tasks`, `enrichment_tasks`, `data`); all 5 LIB-04 call sites updated. Handler tracing scope adds `session_ids_count`/`extraction_tasks_count`/`enrichment_tasks_count`/`node_name_count`/`has_data` per Python parity at `get_improve_router.py:67-74`. **The no-op handler stub stays in place** — wiring the real `cognee_lib::api::improve::improve(...)` call is the deferred P5 follow-up (cycle constraint plus missing `ComponentHandles` slots). 5 new integration + 4 DTO unit + 4 lib regression tests + cross-SDK harness. **No new wire divergence.** |
+| Depends on | LIB-04 (`ImproveParams` struct refactor — Decision 8) — **Done (commit 9f1879e)**. |
 | Effort | ~1 day (down from 1.5 — the refactor that would have been bundled in here is now its own task LIB-04). |
 | Owner crate | `cognee-http-server` |
 
@@ -39,9 +39,12 @@ Behavior reminder (from [`api-v2/improve.md`](../../api-v2/improve.md)): when `s
 
 ## 3. Current Rust state
 
-- DTO at [`crates/http-server/src/dto/improve.rs:14`](../../../crates/http-server/src/dto/improve.rs#L14) has only `dataset_name`, `dataset_id`, `run_in_background`.
-- Handler at `crates/http-server/src/routers/improve.rs:159` calls `cognee_lib::api::improve::improve(...)` but does NOT pass `session_ids`.
-- `cognee_lib::api::improve::improve` accepts an `ImproveParams<'_>` struct after **LIB-04** lands (B-4 in the §0 phase order). This task assumes that struct exists; if LIB-04 hasn't run yet the investigation agent must report BLOCKED.
+- DTO at [`crates/http-server/src/dto/improve.rs:17`](../../../crates/http-server/src/dto/improve.rs#L17) has only `dataset_name`, `dataset_id`, `run_in_background`. `rename_all = "camelCase"` and per-field `serde(alias)` for snake_case input are already in place (CLEAN-01, Decision 10).
+- Handler at [`crates/http-server/src/routers/improve.rs:32`](../../../crates/http-server/src/routers/improve.rs#L32) does **NOT** call `cognee_lib::api::improve::improve(...)`. The dispatched work at line 87 is a no-op stub: `box_pipeline_future(async move { Ok::<(), std::io::Error>(()) })`. The line 86 TODO marks this as "wire real improve() call once ComponentHandles gains graph/vector handles".
+- **Cycle constraint** (same as E-04): `crates/http-server/Cargo.toml:36-38` documents that `cognee-lib` is intentionally NOT a direct dep, because cognee-lib's `server` feature pulls cognee-http-server. The handler cannot `use cognee_lib::api::improve::*` directly.
+- `cognee_lib::api::improve::ImproveParams<'a>` exists ([`crates/lib/src/api/improve.rs:61-101`](../../../crates/lib/src/api/improve.rs#L61-L101)) with the 18 fields LIB-04 specified, **no `Default` derive** (option (b) per LIB-04 §3 step 2). Constructor must spell out every field.
+- `ComponentHandles` ([`crates/http-server/src/components.rs:26-82`](../../../crates/http-server/src/components.rs#L26-L82)) currently exposes: `database`, `storage`, `delete_service`, `ontology_manager`, `search_orchestrator`, `llm`, `graph_db`, `permissions`, `sync_ops`, `session_store`, `session_manager`. **Missing for improve**: `vector_db`, `embedding_engine`, `add_pipeline`, `checkpoint_store`, `cognify_config`, `ontology_resolver` (only `ontology_manager` is present). Calling `improve()` from the handler requires extending ComponentHandles or replicating logic inline at the http-server layer.
+- Existing tests: [`crates/http-server/tests/test_improve.rs`](../../../crates/http-server/tests/test_improve.rs) (88 LOC, no v2-field coverage), [`crates/http-server/tests/test_improve_420.rs`](../../../crates/http-server/tests/test_improve_420.rs) (110 LOC, 420 quirk only), [`e2e-cross-sdk/harness/test_http_improve.py`](../../../e2e-cross-sdk/harness/test_http_improve.py) (69 LOC, no v2 fields).
 
 ## 4. Implementation steps
 
@@ -83,22 +86,52 @@ Behavior reminder (from [`api-v2/improve.md`](../../api-v2/improve.md)): when `s
    ```
    These are pure-data fields with `Default::default() == None`; no other call site needs to change.
 
-3. **Update the handler** at `crates/http-server/src/routers/improve.rs:82`:
+3. **Update the handler** at [`crates/http-server/src/routers/improve.rs:32`](../../../crates/http-server/src/routers/improve.rs#L32). The handler today dispatches a no-op stub (`box_pipeline_future(async move { Ok::<(), std::io::Error>(()) })` at line 87). E-05's scope **is not** wiring the real `improve()` library call (that's the deferred P5 work flagged by the line 86 TODO and gated on `ComponentHandles` gaining `vector_db` / `embedding_engine` / `add_pipeline` / `checkpoint_store` / `cognify_config`, plus the **`cognee-lib` cycle constraint** at `crates/http-server/Cargo.toml:36-38`). E-05's scope is:
+   - Plumb the five new payload fields through `dispatch_pipeline` so they're observable in tracing / telemetry.
+   - Confirm the wire DTO matches Python field-for-field.
+   - Where possible, exercise stage selection logic via the existing stub path (e.g. log when `session_ids` is non-empty so cross-SDK harness can observe the difference even with the stub).
+
    ```rust
-   let result = cognee_lib::api::improve::improve(
-       cognee_lib::api::improve::ImproveParams {
-           dataset_name: payload.dataset_name.unwrap_or_default(),
-           // ...existing infra fields populated from `components` / `user` exactly as before...
-           extraction_tasks: payload.extraction_tasks,
-           enrichment_tasks: payload.enrichment_tasks,
-           data: payload.data,
-           node_name: payload.node_name,
-           session_ids: payload.session_ids,
-           ..ImproveParams::default()         // only valid if LIB-04 chose Default-derive (option (a)); otherwise spell out every field
-       },
-   ).await?;
+   let session_ids_count = payload.session_ids.as_ref().map_or(0, |s| s.len());
+   tracing::info!(
+       session_ids_count,
+       extraction_tasks = ?payload.extraction_tasks.as_ref().map(|v| v.len()),
+       enrichment_tasks = ?payload.enrichment_tasks.as_ref().map(|v| v.len()),
+       node_name_count = ?payload.node_name.as_ref().map(|v| v.len()),
+       has_data = payload.data.as_deref().is_some_and(|d| !d.is_empty()),
+       "improve payload received"
+   );
+   // dispatch stub remains; real improve() call is the P5 follow-up
    ```
-   The exact constructor shape depends on LIB-04's choice between Default-derive vs spell-out-every-field (LIB-04 §3 step 2 picks (b) — spell out — by default).
+
+   When the cycle constraint is resolved (P5: extend `ComponentHandles` with the missing handles, OR follow the E-04 pattern of replicating the orchestration inline at http-server using public exports from `cognee-cognify`), the constructor shape will be:
+   ```rust
+   let result = some_callable_improve(ImproveParams {
+       dataset_name: payload.dataset_name.unwrap_or_default(),
+       session_ids: payload.session_ids,
+       node_name: payload.node_name,
+       owner_id: user.id,
+       tenant_id: user.tenant_id,
+       feedback_alpha: 0.3,
+       llm: components.llm.clone().expect("llm wired"),
+       storage: components.storage.clone(),
+       graph_db: components.graph_db.clone().expect("graph_db wired"),
+       vector_db: /* TODO P5 */,
+       embedding_engine: /* TODO P5 */,
+       ontology_resolver: /* TODO P5 */,
+       db: Some(components.database.clone()),
+       session_store: components.session_store.clone(),
+       session_manager: components.session_manager.clone(),
+       add_pipeline: /* TODO P5 */,
+       checkpoint_store: /* TODO P5 */,
+       cognify_config: /* TODO P5 */,
+       // E-05 NEW v2 fields:
+       extraction_tasks: payload.extraction_tasks,
+       enrichment_tasks: payload.enrichment_tasks,
+       data: payload.data,
+   }).await?;
+   ```
+   LIB-04 chose option (b) (no `Default` derive) — every field must be named explicitly; `..ImproveParams::default()` will not compile.
 
 4. **OpenAPI** — re-derive `ToSchema`; the new fields with `serde(default)` produce `nullable: true` schemas matching Python's `Optional[...]` shape.
 
@@ -106,20 +139,27 @@ Behavior reminder (from [`api-v2/improve.md`](../../api-v2/improve.md)): when `s
 
 ## 5. Tests
 
-- Update `crates/http-server/src/dto/improve.rs` tests with deserialization round-trips for every new field.
-- `crates/http-server/tests/test_improve.rs`:
-  - `session_ids_triggers_session_bridge_path` — mock `improve()` and assert it received the session_ids list.
-  - `empty_session_ids_runs_memify_only` — same, but session_ids is `None` or `[]`.
-  - `extraction_tasks_and_enrichment_tasks_passed_through`.
-  - `node_name_filters_subset_of_graph` (regression for memify path).
-- Cross-SDK in `e2e-cross-sdk/harness/test_http_v2_improve.py`: drive both backends with `{"session_ids": ["s1"], ...}` and confirm both write the same node/edge counts post-flow.
+- Update [`crates/http-server/src/dto/improve.rs`](../../../crates/http-server/src/dto/improve.rs) inline tests with deserialization round-trips for every new field (camelCase + snake_case alias paths; serialization-only-emits-camelCase assertion mirroring the existing pattern at lines 36-86).
+- [`crates/http-server/tests/test_improve.rs`](../../../crates/http-server/tests/test_improve.rs):
+  - `session_ids_accepted_camelcase` — `{"sessionIds": ["s1","s2"], "datasetName": "ds"}` returns 200; payload reaches the handler.
+  - `session_ids_accepted_snake_case_alias` — same with `session_ids`.
+  - `extraction_tasks_and_enrichment_tasks_passed_through` — both wire keys + their snake_case aliases.
+  - `node_name_camelcase_and_alias` — `nodeName` + `node_name`.
+  - `data_field_round_trip` — single-word, no rename.
+  - When the real library call lands (post-P5), additional integration tests gate on `MemifyResult.stages_executed` containing the four stage names. Until then the stub-mode tests just verify the DTO plumbing.
+- Cross-SDK in `e2e-cross-sdk/harness/test_http_v2_improve.py` (NEW — distinct from existing `test_http_improve.py` which covers v1-era fields only): drive both backends with `{"sessionIds": ["s1"], "extractionTasks": [], "enrichmentTasks": [], "data": "", "nodeName": [], "datasetName": "ds"}` and confirm:
+  - Both return the same wire shape (PipelineRunInfoDTO).
+  - Cross-byte equality of every camelCase key emitted.
+  - When the stub is replaced (post-P5), node/edge counts converge.
 
 ## 6. Acceptance criteria
 
-- [ ] `ImprovePayloadDTO` matches Python's `ImprovePayloadDTO` field-for-field.
-- [ ] `session_ids` reaches `cognee_lib::api::improve::improve` without dropping.
-- [ ] When `session_ids` is set, the 4-stage session bridge runs (verifiable via mocked `MemifyResult.stages_executed`).
-- [ ] Cross-SDK structural parity test passes.
+- [x] `ImprovePayloadDTO` matches Python's `ImprovePayloadDTO` field-for-field (8 fields total: `extractionTasks`, `enrichmentTasks`, `data`, `datasetName`, `datasetId`, `nodeName`, `runInBackground`, `sessionIds`).
+- [x] All 5 new fields accept both camelCase (wire) and snake_case (input alias).
+- [x] `ImproveParams<'_>` extended with `extraction_tasks: Option<Vec<String>>`, `enrichment_tasks: Option<Vec<String>>`, `data: Option<String>` — workspace `cargo check --all-targets` passes (all 5 LIB-04 call sites updated, option (b) preserved — no `Default` derive).
+- [x] `session_ids` is observable in handler tracing (`session_ids_count` field in the `tracing::info!`).
+- [ ] When the real library call lands (P5 follow-up), the 4-stage session bridge runs (verifiable via `ImproveResult.stages_run`). **Deferred to P5.**
+- [x] Cross-SDK structural parity test passes for the wire DTO; stage-level parity gated on P5.
 
 ## 7. References
 
