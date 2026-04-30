@@ -15,9 +15,9 @@ If you are starting a clean session, read these documents before doing anything:
 
 ## 0. Current state
 
-**9 tasks complete (CLEAN-01, LIB-06, E-01, E-03, E-06, E-07, E-08, LIB-02, LIB-03). Resume point: TASK B-3 (LIB-05).**
+**10 tasks complete (CLEAN-01, LIB-06, E-01, E-03, E-06, E-07, E-08, LIB-02, LIB-03, LIB-05). Resume point: TASK B-4 (LIB-04).**
 
-The v2 doc package landed in commits ending `…/docs/http-api-v2/`. 10 of 19 tasks are at status **Not Started** (1 cleanup + 3 library prerequisites + 5 endpoints done; 3 library prerequisites + 7 endpoints remain; CLEAN-01 e146835, LIB-06 b39cd05, E-01 037cad2, E-03 0dafdee, E-06 verified-no-code-change, E-07 35d6b3c, E-08 afa048f, LIB-02 eec6f79, LIB-03 82728f2).
+The v2 doc package landed in commits ending `…/docs/http-api-v2/`. 9 of 19 tasks are at status **Not Started** (1 cleanup + 4 library prerequisites + 5 endpoints done; 2 library prerequisites + 7 endpoints remain; CLEAN-01 e146835, LIB-06 b39cd05, E-01 037cad2, E-03 0dafdee, E-06 verified-no-code-change, E-07 35d6b3c, E-08 afa048f, LIB-02 eec6f79, LIB-03 82728f2, LIB-05 60c934a).
 
 Phases and their tasks (do them in this order — see §2 for the dependency rationale):
 
@@ -32,7 +32,7 @@ Phases and their tasks (do them in this order — see §2 for the dependency rat
 |   | A-5 | [E-08](tasks/e-08-visualize-multi.md) | `POST /visualize/multi` — **Done (commit afa048f, Decision 16 — Option A convergence).** |
 | **B — Library prerequisites** | B-1 | [LIB-02](tasks/lib-02-session-manager-trace-step.md) | `add_agent_trace_step` (independent) — **Done (commit eec6f79).** |
 |   | B-2 | [LIB-03](tasks/lib-03-session-records-schema.md) | **Done (commit 82728f2).** `session_records` + `session_model_usage` schema + entities + migration (Decision 13 — first half of the original LIB-03 scope). |
-|   | B-3 | [LIB-05](tasks/lib-05-session-records-repo.md) | `SessionLifecycleDb` trait + `DatabaseConnection` impl + 8 repository tests (Decision 13 — second half; depends on LIB-03) |
+|   | B-3 | [LIB-05](tasks/lib-05-session-records-repo.md) | **Done (commit 60c934a).** `SessionLifecycleDb` trait + `DatabaseConnection` impl + 8 repository tests (Decision 13 — second half; depends on LIB-03). Read-time effective-status helper translates Python's runtime abandon-threshold (default 1800s, Decision 12). |
 |   | B-4 | [LIB-04](tasks/lib-04-improve-params-struct.md) | Refactor `improve()` to `ImproveParams` struct (independent; must run before LIB-01 because LIB-01 modifies one of the call sites) |
 |   | B-5 | [LIB-01](tasks/lib-01-remember-entry-facade.md) | `remember_entry()` facade (depends on B-1, consumes B-4's `ImproveParams` shape) |
 | **C — Partial endpoints** | C-1 | [E-04](tasks/e-04-recall-search.md) | `POST /recall` — add `session_id` + `scope` |
@@ -103,6 +103,7 @@ Every project-wide decision is recorded in a "Decision (2026-04-29) — Decision
 | `cognee_session::session_store::SessionStore::{save_trace_step, read_trace_steps}` trait methods (default impls return `SessionError::StoreError`; fs / redis (RPUSH) / sea_orm backends override) + `m20260429_000003_session_trace_steps` migration + `SessionTraceStepEntity` SeaORM entity | LIB-02 (landed eec6f79) | LIB-01, E-02, E-12 |
 | `cognee_session::session_manager::SessionManager::{add_agent_trace_step, get_agent_trace_session}` wrappers (server-generated UUID4 `trace_id`; `last_n` tail-truncate) | LIB-02 (landed eec6f79) | LIB-01 (typed-trace persistence), E-12 (detail endpoint reads back via `get_agent_trace_session`) |
 | `cognee_database::entities::{session_record, session_model_usage}` SeaORM entities (composite PKs, `to_dict()` helpers with Python field-order parity via `serde_json/preserve_order`) + `m20260501_000003_session_records` migration (creates both tables + four named indexes `ix_session_records_{user_id,dataset_id,last_activity_at,status}`) | LIB-03 (landed 82728f2) | LIB-05 (`SessionLifecycleDb` trait + impl), E-09, E-10, E-11, E-12 |
+| `cognee_database::SessionLifecycleDb` trait (6 async methods: `ensure_and_touch_session`, `accumulate_usage`, `get_session_row`, `list_session_rows`, `aggregate_stats`, `cost_by_model`) + `DatabaseConnection` impl + read-time `effective_status_expr` helper (`now() - SESSION_ABANDON_AFTER_SECONDS` bound as SQL parameter, default 1800s per Decision 12) + 5 domain types (`SessionListFilters`, `SessionListPage` with `has_more()`, `SessionRowWithStatus` with `to_dict()`, `SessionStats`, `CostByModelRow`) + 8 repo tests | LIB-05 (Decisions 3, 12, 13; landed 60c934a) | E-09 (`GET /sessions`), E-10 (`/sessions/stats`), E-11 (`/sessions/cost-by-model`), E-12 (`/sessions/{id}`) |
 
 When a later task's investigation agent finds the upstream module missing, it reports **BLOCKED** and names the prerequisite task — never re-implements it locally.
 

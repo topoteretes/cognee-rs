@@ -2,8 +2,8 @@
 
 | | |
 |---|---|
-| Scope | The `SessionLifecycleDb` trait, its concrete impl on `DatabaseConnection`, the effective-status helper, and 7 repository tests. |
-| Status | **Not Started** |
+| Scope | The `SessionLifecycleDb` trait, its concrete impl on `DatabaseConnection`, the effective-status helper, and 8 repository tests. |
+| Status | **Done (commit 60c934a)** — `SessionLifecycleDb` trait + impl + 8 repo tests landed. Raw SQL via `Statement::from_sql_and_values` was used for the `ensure_and_touch_session` UPSERT (COALESCE backfill + WHERE clause on update — neither portably expressible via SeaORM's `OnConflict`) and the per-model upsert in `accumulate_usage`. `aggregate_stats` uses a Rust-side row-load fold for durations to match Python's SQLite parity at `get_sessions_router.py:148-158`. `accumulate_usage` includes an `errored: bool` parameter mirroring Python `metrics.py:142`. |
 | Blocks | E-09, E-10, E-11, E-12 (entire `/sessions` router). |
 | Depends on | LIB-03 (entities + migration must exist). |
 | Effort | ~1.25 days. |
@@ -116,12 +116,12 @@ Effective-status SQL behavior: `status == "running" AND last_activity_at < now()
 
 ## 6. Acceptance criteria
 
-- [ ] `SessionLifecycleDb` trait defined with all 6 methods.
-- [ ] All 6 methods implemented on `DatabaseConnection` with row-for-row Python parity.
-- [ ] Effective-status logic reports `"abandoned"` purely at read time (no rows mutated).
-- [ ] All 8 new tests pass under `cargo test -p cognee-database --test test_session_lifecycle_repo`.
-- [ ] No regression in LIB-03's schema tests or any other previously-passing test.
-- [ ] `scripts/check_all.sh` clean.
+- [x] `SessionLifecycleDb` trait defined with all 6 methods.
+- [x] All 6 methods implemented on `DatabaseConnection` with row-for-row Python parity.
+- [x] Effective-status logic reports `"abandoned"` purely at read time (no rows mutated).
+- [x] All 8 new tests pass under `cargo test -p cognee-database --features sqlite --test test_session_lifecycle_repo`.
+- [x] No regression in LIB-03's schema tests or any other previously-passing test.
+- [x] `scripts/check_all.sh` clean (Rust + C API + Python; pre-existing JS jest `node:path` issue safe to ignore per IMPLEMENTATION-PROMPT.md §0).
 
 ## 7. References
 
