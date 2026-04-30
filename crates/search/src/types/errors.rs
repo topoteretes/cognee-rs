@@ -68,3 +68,9 @@ impl From<cognee_database::DatabaseError> for SearchError {
         Self::DatabaseError(value.to_string())
     }
 }
+
+impl From<cognee_session::SessionError> for SearchError {
+    fn from(value: cognee_session::SessionError) -> Self {
+        Self::DatabaseError(value.to_string())
+    }
+}

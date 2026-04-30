@@ -3,6 +3,7 @@ pub mod observability;
 pub mod orchestration;
 pub mod query_router;
 pub mod query_router_stats;
+pub mod recall_scope;
 pub mod retrievers;
 pub mod types;
 pub mod utils;
@@ -11,6 +12,7 @@ pub use cognee_session::{SeaOrmSessionStore, SessionContext, SessionManager, Ses
 pub use orchestration::{SearchBuilder, SearchOrchestrator, SearchTypeRegistry};
 pub use query_router::{RouteResult, route_query};
 pub use query_router_stats::{clear_override_counts, override_counts_snapshot, record_override};
+pub use recall_scope::{RecallItem, RecallScope, RecallSource, ScopeInput, normalize_scope};
 pub use retrievers::{
     ChunksRetriever, CodingRulesRetriever, CompletionRetriever, CypherSearchRetriever,
     FeedbackRetriever, FeelingLuckyRetriever, GraphCompletionContextExtensionRetriever,
