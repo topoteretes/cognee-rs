@@ -94,7 +94,7 @@ The Python source-of-truth column links to the file that defines each handler in
 | E-05 | `POST /api/v1/improve` | [`get_improve_router.py:39`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/improve/routers/get_improve_router.py#L39) | **Partial** — DTO omits `session_ids` / `extraction_tasks` / `enrichment_tasks` / `data` / `node_name` | [tasks/e-05-improve.md](tasks/e-05-improve.md) |
 | E-06 | `POST /api/v1/forget` | [`get_forget_router.py:25`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/forget/routers/get_forget_router.py#L25) | **Done — verified, no code change** | [tasks/e-06-forget.md](tasks/e-06-forget.md) |
 | E-07 | `GET /api/v1/visualize` | [`get_visualize_router.py`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/users/routers/get_visualize_router.py) | **Done (commit 35d6b3c)** | [tasks/e-07-visualize.md](tasks/e-07-visualize.md) |
-| E-08 | `POST /api/v1/visualize/multi` | [`get_visualize_router.py:77`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/users/routers/get_visualize_router.py#L77) (mounted at `/api/v1/visualize` per [`client.py:241`](https://github.com/topoteretes/cognee/blob/main/cognee/api/client.py#L241)) | **Implemented** | [tasks/e-08-visualize-multi.md](tasks/e-08-visualize-multi.md) |
+| E-08 | `POST /api/v1/visualize/multi` | [`get_visualize_router.py:77`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/users/routers/get_visualize_router.py#L77) (mounted at `/api/v1/visualize` per [`client.py:241`](https://github.com/topoteretes/cognee/blob/main/cognee/api/client.py#L241)) | **Done (commit afa048f, Decision 16 — Option A)** | [tasks/e-08-visualize-multi.md](tasks/e-08-visualize-multi.md) |
 | E-09 | `GET /api/v1/sessions` | [`get_sessions_router.py:64`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/sessions/routers/get_sessions_router.py#L64) | **Missing** | [tasks/e-09-sessions-list.md](tasks/e-09-sessions-list.md) |
 | E-10 | `GET /api/v1/sessions/stats` | [`get_sessions_router.py:112`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/sessions/routers/get_sessions_router.py#L112) | **Missing** | [tasks/e-10-sessions-stats.md](tasks/e-10-sessions-stats.md) |
 | E-11 | `GET /api/v1/sessions/cost-by-model` | [`get_sessions_router.py:198`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/sessions/routers/get_sessions_router.py#L198) | **Missing** | [tasks/e-11-sessions-cost-by-model.md](tasks/e-11-sessions-cost-by-model.md) |
@@ -110,13 +110,12 @@ The Python source-of-truth column links to the file that defines each handler in
 | State | Cleanup | Library | Endpoints |
 |---|---|---|---|
 | Not Started | — | 5 | — |
-| Done | 1 (CLEAN-01) | 1 (LIB-06) | 4 (E-01, E-03, E-06, E-07) |
+| Done | 1 (CLEAN-01) | 1 (LIB-06) | 5 (E-01, E-03, E-06, E-07, E-08) |
 | Missing | — | — | 5 (E-02, E-09, E-10, E-11, E-12) |
 | Partial | — | — | 2 (E-04, E-05) |
-| Implemented (verify) | — | — | 1 (E-08) |
 | **Total** | **1** | **6** | **12** |
 
-Grand total: **19 tasks** (1 cleanup + 6 library + 12 endpoints).
+Grand total: **19 tasks** (1 cleanup + 6 library + 12 endpoints). **Phase A — Verify is now complete** (CLEAN-01 + LIB-06 enablers, plus E-01, E-03, E-06, E-07, E-08); resume point moves to Phase B Library prerequisites (B-1 / LIB-02).
 
 ## 4. Summary of findings
 
