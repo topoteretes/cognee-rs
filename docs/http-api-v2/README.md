@@ -80,6 +80,7 @@ These six changes must land before (or alongside) the HTTP work — they are dep
 | LIB-04 | [Refactor `improve()` to `ImproveParams` struct](tasks/lib-04-improve-params-struct.md) | Mechanical refactor of `cognee_lib::api::improve::improve()`'s 18-positional-parameter signature to a single `ImproveParams<'_>` struct. 5 call sites migrate. Decision 8 — pulled out of E-05 to keep that task scoped to "DTO + handler". | **Done** (commit 9f1879e) | LIB-01, E-05 |
 | LIB-05 | [`SessionLifecycleDb` trait + repository impl + tests](tasks/lib-05-session-records-repo.md) | The `SessionLifecycleDb` trait with `ensure_and_touch_session` / `accumulate_usage` / `get_session_row` / `list_session_rows` / `aggregate_stats` / `cost_by_model`, its concrete impl on `DatabaseConnection`, the effective-status SQL helper, and 8 repository tests. Second half of the original LIB-03 scope (Decision 13 split). | **Done** (commit 60c934a) | E-09, E-10, E-11, E-12 |
 | LIB-06 | [Generic pipeline payload mechanism + library-side CamelCase remember status](tasks/lib-06-pipeline-payload-mechanism.md) | Four pieces: (1) extend `cognee_core::PipelineRunInfo` with `completed_at` + `elapsed_seconds()` and add `run_id` to `PipelineContext`; (2) new `PipelineWatcher::on_payload_field(...)` event hook + `TaskContext::publish_payload_field(...)` helper — payload lives in the watcher event channel, NOT as state on the snapshot; (3) DB-backed default accumulator — new `pipeline_run_payload_fields` table + `PipelineRunRepository` trait extension + `SeaOrmPipelineRunRepository` impl + `DefaultPipelineRunRegistry::get_payload(run_id)` accessor; (4) `cognee_lib::api::remember` updates: `RememberStatus` serde flip to CamelCase `PipelineRun*` strings (library-internal consistency), `From<PipelineRunStatus>`, `RememberResult.elapsed_seconds: Option<f64>`, plus `RememberResult.entry_type` / `entry_id` fields (Q-F — relieves LIB-01 of that scope). Convenience functions (`cognify`/`memify`/`add`) get explicit TODO markers — they bypass `cognee_core::execute()` today, so are out of scope. The HTTP wire keeps Python's lowercase status format; E-01 owns the lowercase translation at the DTO boundary. **No wire divergence** (Decision 15 — two-layer status convention). | **Done** (commit b39cd05) | E-01, E-02, LIB-01 |
+| LIB-07 | [`recall()` scope widening](tasks/lib-07-recall-scope-widening.md) | Widen `cognee_lib::api::recall::recall()` to accept `scope: Option<Vec<RecallScope>>` and implement source fan-out across `graph` / `session` / `trace` / `graph_context`. New `RecallScope` enum + `normalize_scope()` helper + private `_search_session` / `_search_trace` / `_fetch_graph_context` helpers + 14 tests. Per **Decision 17** (2026-04-30), this was split out of E-04 so that E-04 retains strict Python parity (no D-2 wire divergence). | **Not Started** | E-04 |
 
 ### Endpoints
 
@@ -90,7 +91,7 @@ The Python source-of-truth column links to the file that defines each handler in
 | E-01 | `POST /api/v1/remember` | [`get_remember_router.py:28`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/remember/routers/get_remember_router.py#L28) | **Done** (commit 037cad2) | [tasks/e-01-remember.md](tasks/e-01-remember.md) |
 | E-02 | `POST /api/v1/remember/entry` | [`get_remember_router.py:115`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/remember/routers/get_remember_router.py#L115) | **Missing** | [tasks/e-02-remember-entry.md](tasks/e-02-remember-entry.md) |
 | E-03 | `GET /api/v1/recall` | [`get_recall_router.py:58`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/recall/routers/get_recall_router.py#L58) | **Done** (commit 0dafdee) | [tasks/e-03-recall-history.md](tasks/e-03-recall-history.md) |
-| E-04 | `POST /api/v1/recall` | [`get_recall_router.py:78`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/recall/routers/get_recall_router.py#L78) | **Partial** — DTO omits `session_id` / `scope` | [tasks/e-04-recall-search.md](tasks/e-04-recall-search.md) |
+| E-04 | `POST /api/v1/recall` | [`get_recall_router.py:78`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/recall/routers/get_recall_router.py#L78) | **In Progress** — DTO omits `session_id` / `scope` | [tasks/e-04-recall-search.md](tasks/e-04-recall-search.md) |
 | E-05 | `POST /api/v1/improve` | [`get_improve_router.py:39`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/improve/routers/get_improve_router.py#L39) | **Partial** — DTO omits `session_ids` / `extraction_tasks` / `enrichment_tasks` / `data` / `node_name` | [tasks/e-05-improve.md](tasks/e-05-improve.md) |
 | E-06 | `POST /api/v1/forget` | [`get_forget_router.py:25`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/forget/routers/get_forget_router.py#L25) | **Done — verified, no code change** | [tasks/e-06-forget.md](tasks/e-06-forget.md) |
 | E-07 | `GET /api/v1/visualize` | [`get_visualize_router.py`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/users/routers/get_visualize_router.py) | **Done (commit 35d6b3c)** | [tasks/e-07-visualize.md](tasks/e-07-visualize.md) |
@@ -109,12 +110,14 @@ The Python source-of-truth column links to the file that defines each handler in
 
 | State | Cleanup | Library | Endpoints |
 |---|---|---|---|
+| Not Started | — | 1 (LIB-07) | — |
 | Done | 1 (CLEAN-01) | 6 (LIB-01, LIB-02, LIB-03, LIB-04, LIB-05, LIB-06) | 5 (E-01, E-03, E-06, E-07, E-08) |
+| In Progress | — | — | 1 (E-04 — blocked on LIB-07) |
 | Missing | — | — | 5 (E-02, E-09, E-10, E-11, E-12) |
-| Partial | — | — | 2 (E-04, E-05) |
-| **Total** | **1** | **6** | **12** |
+| Partial | — | — | 1 (E-05) |
+| **Total** | **1** | **7** | **12** |
 
-Grand total: **19 tasks** (1 cleanup + 6 library + 12 endpoints). **Phases A and B — Verify and Library prerequisites — are complete** (CLEAN-01 + all 6 LIB-* + 5 verify endpoints E-01, E-03, E-06, E-07, E-08). Resume point moves to **C-1 (E-04)** — Phase C Partial endpoints.
+Grand total: **20 tasks** (1 cleanup + 7 library + 12 endpoints; LIB-07 added 2026-04-30 per Decision 17). **Phase A — Verify is complete** (CLEAN-01 + LIB-06 enablers + 5 verify endpoints E-01, E-03, E-06, E-07, E-08); Phase B Library prerequisites is nearly complete (6 of 7 done; resume point moves to **B-6 LIB-07** — recall-scope widening — before E-04 in Phase C).
 
 ## 4. Summary of findings
 
