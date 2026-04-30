@@ -76,7 +76,7 @@ These six changes must land before (or alongside) the HTTP work — they are dep
 |---|---|---|---|---|
 | LIB-01 | [`remember_entry()` facade + `MemoryEntry` types](tasks/lib-01-remember-entry-facade.md) | New library function in `cognee-lib`; new `QAEntry` / `TraceEntry` / `FeedbackEntry` discriminated-union types in `cognee-models`. | **Not Started** | E-02 |
 | LIB-02 | [`SessionManager::add_agent_trace_step` parity](tasks/lib-02-session-manager-trace-step.md) | New `SessionTraceStep` type, `SessionStore::save_trace_step` / `read_trace_steps` on all three backends (fs / redis / sea_orm), wrapper methods on `SessionManager`. SeaORM migration for `session_trace_steps`. | **Done** (commit eec6f79) | LIB-01, E-02, E-12 |
-| LIB-03 | [`session_records` + `session_model_usage` schema and entities](tasks/lib-03-session-records-schema.md) | SeaORM entities + migration only. The repository trait + impl + tests live in **LIB-05** (Decision 13 split). | **Not Started** | LIB-05 |
+| LIB-03 | [`session_records` + `session_model_usage` schema and entities](tasks/lib-03-session-records-schema.md) | SeaORM entities + migration only. The repository trait + impl + tests live in **LIB-05** (Decision 13 split). | **Done** (commit 82728f2) | LIB-05 |
 | LIB-04 | [Refactor `improve()` to `ImproveParams` struct](tasks/lib-04-improve-params-struct.md) | Mechanical refactor of `cognee_lib::api::improve::improve()`'s 17-positional-parameter signature to a single `ImproveParams<'_>` struct. 5 call sites migrate. Decision 8 — pulled out of E-05 to keep that task scoped to "DTO + handler". | **Not Started** | LIB-01, E-05 |
 | LIB-05 | [`SessionLifecycleDb` trait + repository impl + tests](tasks/lib-05-session-records-repo.md) | The `SessionLifecycleDb` trait with `ensure_and_touch_session` / `accumulate_usage` / `get_session_row` / `list_session_rows` / `aggregate_stats` / `cost_by_model`, its concrete impl on `DatabaseConnection`, the effective-status SQL helper, and 8 repository tests. Second half of the original LIB-03 scope (Decision 13 split). | **Not Started** | E-09, E-10, E-11, E-12 |
 | LIB-06 | [Generic pipeline payload mechanism + library-side CamelCase remember status](tasks/lib-06-pipeline-payload-mechanism.md) | Four pieces: (1) extend `cognee_core::PipelineRunInfo` with `completed_at` + `elapsed_seconds()` and add `run_id` to `PipelineContext`; (2) new `PipelineWatcher::on_payload_field(...)` event hook + `TaskContext::publish_payload_field(...)` helper — payload lives in the watcher event channel, NOT as state on the snapshot; (3) DB-backed default accumulator — new `pipeline_run_payload_fields` table + `PipelineRunRepository` trait extension + `SeaOrmPipelineRunRepository` impl + `DefaultPipelineRunRegistry::get_payload(run_id)` accessor; (4) `cognee_lib::api::remember` updates: `RememberStatus` serde flip to CamelCase `PipelineRun*` strings (library-internal consistency), `From<PipelineRunStatus>`, `RememberResult.elapsed_seconds: Option<f64>`, plus `RememberResult.entry_type` / `entry_id` fields (Q-F — relieves LIB-01 of that scope). Convenience functions (`cognify`/`memify`/`add`) get explicit TODO markers — they bypass `cognee_core::execute()` today, so are out of scope. The HTTP wire keeps Python's lowercase status format; E-01 owns the lowercase translation at the DTO boundary. **No wire divergence** (Decision 15 — two-layer status convention). | **Done** (commit b39cd05) | E-01, E-02, LIB-01 |
@@ -109,13 +109,13 @@ The Python source-of-truth column links to the file that defines each handler in
 
 | State | Cleanup | Library | Endpoints |
 |---|---|---|---|
-| Not Started | — | 4 | — |
-| Done | 1 (CLEAN-01) | 2 (LIB-02, LIB-06) | 5 (E-01, E-03, E-06, E-07, E-08) |
+| Not Started | — | 3 | — |
+| Done | 1 (CLEAN-01) | 3 (LIB-02, LIB-03, LIB-06) | 5 (E-01, E-03, E-06, E-07, E-08) |
 | Missing | — | — | 5 (E-02, E-09, E-10, E-11, E-12) |
 | Partial | — | — | 2 (E-04, E-05) |
 | **Total** | **1** | **6** | **12** |
 
-Grand total: **19 tasks** (1 cleanup + 6 library + 12 endpoints). **Phase A — Verify is complete** (CLEAN-01 + LIB-06 enablers, plus E-01, E-03, E-06, E-07, E-08); Phase B Library prerequisites is in progress with B-1 (LIB-02) done; resume point moves to B-2 (LIB-03).
+Grand total: **19 tasks** (1 cleanup + 6 library + 12 endpoints). **Phase A — Verify is complete** (CLEAN-01 + LIB-06 enablers, plus E-01, E-03, E-06, E-07, E-08); Phase B Library prerequisites is in progress with B-1 (LIB-02) and B-2 (LIB-03) done; resume point moves to B-3 (LIB-05).
 
 ## 4. Summary of findings
 
