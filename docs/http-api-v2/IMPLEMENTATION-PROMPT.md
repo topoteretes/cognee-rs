@@ -15,9 +15,9 @@ If you are starting a clean session, read these documents before doing anything:
 
 ## 0. Current state
 
-**7 tasks complete (CLEAN-01, LIB-06, E-01, E-03, E-06, E-07, E-08). Resume point: TASK B-1 (LIB-02) — Phase A complete; entering Phase B.**
+**8 tasks complete (CLEAN-01, LIB-06, E-01, E-03, E-06, E-07, E-08, LIB-02). Resume point: TASK B-2 (LIB-03).**
 
-The v2 doc package landed in commits ending `…/docs/http-api-v2/`. 12 of 19 tasks are at status **Not Started** (1 cleanup + 1 library prerequisite + 5 endpoints done; 5 library prerequisites + 7 endpoints remain; CLEAN-01 e146835, LIB-06 b39cd05, E-01 037cad2, E-03 0dafdee, E-06 verified-no-code-change, E-07 35d6b3c, E-08 afa048f).
+The v2 doc package landed in commits ending `…/docs/http-api-v2/`. 11 of 19 tasks are at status **Not Started** (1 cleanup + 2 library prerequisites + 5 endpoints done; 4 library prerequisites + 7 endpoints remain; CLEAN-01 e146835, LIB-06 b39cd05, E-01 037cad2, E-03 0dafdee, E-06 verified-no-code-change, E-07 35d6b3c, E-08 afa048f, LIB-02 eec6f79).
 
 Phases and their tasks (do them in this order — see §2 for the dependency rationale):
 
@@ -30,7 +30,7 @@ Phases and their tasks (do them in this order — see §2 for the dependency rat
 |   | A-3 | [E-06](tasks/e-06-forget.md) | `POST /forget` — **Done — verified, no code change.** Investigation 2026-04-29: zero divergences vs Python `cognee/api/v1/forget/routers/get_forget_router.py`; existing cross-SDK harness `e2e-cross-sdk/harness/test_http_forget.py` already covers all three modes + non-existent. Verify-only short-circuit per §0 Lessons #3. |
 |   | A-4 | [E-07](tasks/e-07-visualize.md) | `GET /visualize` — **Done (commit 35d6b3c).** Cross-SDK harness rewrite for Decision 11: replaced stale `<!--JSON_ISLAND_START/END-->` greps with the seven-`__*_DATA__` extraction strategy. No code change in `crates/`; harness now structurally diffs the seven JS-variable JSON payloads (nodes/links/schema + four color maps) with stable sort, reverses Python's `</` → `<\/` escape before `json.loads`, and includes a negative test asserting the harness detects real graph differences. |
 |   | A-5 | [E-08](tasks/e-08-visualize-multi.md) | `POST /visualize/multi` — **Done (commit afa048f, Decision 16 — Option A convergence).** |
-| **B — Library prerequisites** | B-1 | [LIB-02](tasks/lib-02-session-manager-trace-step.md) | `add_agent_trace_step` (independent) |
+| **B — Library prerequisites** | B-1 | [LIB-02](tasks/lib-02-session-manager-trace-step.md) | `add_agent_trace_step` (independent) — **Done (commit eec6f79).** |
 |   | B-2 | [LIB-03](tasks/lib-03-session-records-schema.md) | `session_records` + `session_model_usage` schema + entities + migration (Decision 13 — first half of the original LIB-03 scope) |
 |   | B-3 | [LIB-05](tasks/lib-05-session-records-repo.md) | `SessionLifecycleDb` trait + `DatabaseConnection` impl + 8 repository tests (Decision 13 — second half; depends on LIB-03) |
 |   | B-4 | [LIB-04](tasks/lib-04-improve-params-struct.md) | Refactor `improve()` to `ImproveParams` struct (independent; must run before LIB-01 because LIB-01 modifies one of the call sites) |
@@ -99,6 +99,9 @@ Every project-wide decision is recorded in a "Decision (2026-04-29) — Decision
 | `crates/http-server/src/dto/remember.rs::WireRememberStatus` (typed lowercase wire enum; standalone — no `From<cognee_lib::api::remember::RememberStatus>` impl, deferred to P5 per the http-server↔lib cycle constraint discovered in [tasks/e-01-remember.md §3](tasks/e-01-remember.md#3-current-rust-state)) | E-01 (Q-E, Decision 15; landed commit 037cad2) | E-02 (`/remember/entry` reuses the same DTO + translation) |
 | `cognee_models::memory::{MemoryEntry, QAEntry, TraceEntry, FeedbackEntry}` types | LIB-01 (Decision 2) | E-02 |
 | `cognee_lib::api::improve::ImproveParams<'_>` struct | LIB-04 (Decision 8) | LIB-01 (touches one of the call sites), E-05 (adds 3 v2 fields) |
+| `cognee_session::types::SessionTraceStep` (persisted shape — no `created_at`, includes `session_feedback`) | LIB-02 (landed eec6f79) | LIB-01 (`remember_entry()` typed-trace path), E-02, E-12 (`/sessions/{id}` returns trace tail) |
+| `cognee_session::session_store::SessionStore::{save_trace_step, read_trace_steps}` trait methods (default impls return `SessionError::StoreError`; fs / redis (RPUSH) / sea_orm backends override) + `m20260429_000003_session_trace_steps` migration + `SessionTraceStepEntity` SeaORM entity | LIB-02 (landed eec6f79) | LIB-01, E-02, E-12 |
+| `cognee_session::session_manager::SessionManager::{add_agent_trace_step, get_agent_trace_session}` wrappers (server-generated UUID4 `trace_id`; `last_n` tail-truncate) | LIB-02 (landed eec6f79) | LIB-01 (typed-trace persistence), E-12 (detail endpoint reads back via `get_agent_trace_session`) |
 
 When a later task's investigation agent finds the upstream module missing, it reports **BLOCKED** and names the prerequisite task — never re-implements it locally.
 
