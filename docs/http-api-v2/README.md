@@ -87,7 +87,7 @@ The Python source-of-truth column links to the file that defines each handler in
 
 | # | Endpoint | Python source | Status | Plan |
 |---|---|---|---|---|
-| E-01 | `POST /api/v1/remember` | [`get_remember_router.py:28`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/remember/routers/get_remember_router.py#L28) | **In Progress** — verify-only short-circuit found wire-shape gaps in `RememberResultDTO` (missing `items_processed`/`elapsed_seconds`/`session_ids`/`content_hash`/`items`; non-Python `status` literals); see [E-01 §3.1](tasks/e-01-remember.md#31-divergences-from-python-wire-output-investigation-2026-04-29) | [tasks/e-01-remember.md](tasks/e-01-remember.md) |
+| E-01 | `POST /api/v1/remember` | [`get_remember_router.py:28`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/remember/routers/get_remember_router.py#L28) | **Done** (commit 037cad2) | [tasks/e-01-remember.md](tasks/e-01-remember.md) |
 | E-02 | `POST /api/v1/remember/entry` | [`get_remember_router.py:115`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/remember/routers/get_remember_router.py#L115) | **Missing** | [tasks/e-02-remember-entry.md](tasks/e-02-remember-entry.md) |
 | E-03 | `GET /api/v1/recall` | [`get_recall_router.py:58`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/recall/routers/get_recall_router.py#L58) | **Implemented** | [tasks/e-03-recall-history.md](tasks/e-03-recall-history.md) |
 | E-04 | `POST /api/v1/recall` | [`get_recall_router.py:78`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/recall/routers/get_recall_router.py#L78) | **Partial** — DTO omits `session_id` / `scope` | [tasks/e-04-recall-search.md](tasks/e-04-recall-search.md) |
@@ -110,8 +110,8 @@ The Python source-of-truth column links to the file that defines each handler in
 | State | Cleanup | Library | Endpoints |
 |---|---|---|---|
 | Not Started | — | 5 | — |
-| In Progress | — | — | 1 (E-01) |
-| Done | 1 (CLEAN-01) | 1 (LIB-06) | — |
+| In Progress | — | — | — |
+| Done | 1 (CLEAN-01) | 1 (LIB-06) | 1 (E-01) |
 | Missing | — | — | 5 (E-02, E-09, E-10, E-11, E-12) |
 | Partial | — | — | 2 (E-04, E-05) |
 | Implemented (verify) | — | — | 4 (E-03, E-06, E-07, E-08) |

@@ -15,9 +15,9 @@ If you are starting a clean session, read these documents before doing anything:
 
 ## 0. Current state
 
-**2 tasks complete (CLEAN-01, LIB-06). Resume point: TASK A-1 (E-01).**
+**3 tasks complete (CLEAN-01, LIB-06, E-01). Resume point: TASK A-2 (E-03).**
 
-The v2 doc package landed in commits ending `…/docs/http-api-v2/`. 17 of 19 tasks are at status **Not Started** (1 cleanup done + 1 library prerequisite done; 6 library prerequisites and 12 endpoints remain; CLEAN-01 done as commit e146835, LIB-06 done as commit b39cd05).
+The v2 doc package landed in commits ending `…/docs/http-api-v2/`. 16 of 19 tasks are at status **Not Started** (1 cleanup + 1 library prerequisite + 1 endpoint done; 5 library prerequisites + 11 endpoints remain; CLEAN-01 e146835, LIB-06 b39cd05, E-01 037cad2).
 
 Phases and their tasks (do them in this order — see §2 for the dependency rationale):
 
@@ -25,7 +25,7 @@ Phases and their tasks (do them in this order — see §2 for the dependency rat
 |---|---|---|---|
 | **0 — Pre-port cleanup & enablers** | 0-1 | [CLEAN-01](tasks/clean-01-v1-dto-camelcase.md) | **Done** (commit e146835) — Fix v1 HTTP DTO casing drift (snake_case → camelCase wire parity). Adds an OpenAPI-schema regression test that prevents future drift. Decision 10. |
 | **0 — Pre-port cleanup & enablers** | 0-2 | [LIB-06](tasks/lib-06-pipeline-payload-mechanism.md) | **Done (commit b39cd05).** Generic pipeline payload event channel via `PipelineWatcher::on_payload_field`, DB-backed accumulator (new `pipeline_run_payload_fields` table + repo trait extension + SeaORM impl + registry accessor), `completed_at`/`elapsed_seconds()` on `PipelineRunInfo`, `run_id` on `PipelineContext`, library `RememberStatus` flip to CamelCase + `From<PipelineRunStatus>` + `Started` variant, `RememberResult.elapsed_seconds: Option<f64>`, `RememberResult.entry_type`/`entry_id`. Convenience-function TODOs note that `cognify`/`memify`/`add` bypass `execute()` today and are deferred. HTTP wire keeps Python's lowercase status (E-01 translates). Decision 15 — **no** wire divergence. Must land before E-01 / E-02 / LIB-01. |
-| **A — Verify** | A-1 | [E-01](tasks/e-01-remember.md) | `POST /remember` — **In Progress** (verify-only short-circuit found wire-shape gaps; see [tasks/e-01-remember.md §3.1](tasks/e-01-remember.md#31-divergences-from-python-wire-output-investigation-2026-04-29) — no longer pure verify-only). Consumes LIB-06's mechanism + library CamelCase enum, then translates `status` to Python's lowercase at the HTTP DTO boundary. |
+| **A — Verify** | A-1 | [E-01](tasks/e-01-remember.md) | `POST /remember` — **Done (commit 037cad2).** Brought `RememberResultDTO` to byte-for-byte parity with Python's `RememberResult.to_dict()` (added `items_processed`/`elapsed_seconds`/`session_ids`/`content_hash`/`items`; flipped `dataset_id`/`pipeline_run_id` to `Option<Uuid>`); introduced `WireRememberStatus` standalone wire enum that emits Python's lowercase strings (Decision 15). The `From<cognee_lib::api::remember::RememberStatus>` impl is deferred to the P5 wiring task (cycle constraint). |
 |   | A-2 | [E-03](tasks/e-03-recall-history.md) | `GET /recall` — confirm parity + Decision 6 polish (owns the `iso8601_offset` serde helper) |
 |   | A-3 | [E-06](tasks/e-06-forget.md) | `POST /forget` — confirm parity |
 |   | A-4 | [E-07](tasks/e-07-visualize.md) | `GET /visualize` — confirm parity |
@@ -95,7 +95,7 @@ Every project-wide decision is recorded in a "Decision (2026-04-29) — Decision
 | `cognee_database::PipelineRunRepository::set_payload_field` / `get_payload` trait methods + `pipeline_run_payload_fields` table + SeaORM entity | LIB-06 (Q-H) | `DefaultPipelineRunRegistry`'s `ScopedRunWatcher` (persists payload), `get_payload(run_id)` accessor, future consumers reading accumulated payload |
 | `cognee_lib::api::remember::RememberStatus` CamelCase serde (emits `"PipelineRunStarted"` / `"PipelineRunCompleted"` / `"PipelineRunErrored"` / `"SessionStored"` for library-internal consistency) + `From<cognee_core::pipeline::PipelineRunStatus>` | LIB-06 (Decision 15) | E-01's HTTP translation layer, E-02's `/remember/entry` response, LIB-01's `remember_entry()` facade |
 | `cognee_lib::api::remember::RememberResult.entry_type` / `entry_id` fields | LIB-06 (Q-F) | LIB-01 (populates them for typed-entry path), E-02 (HTTP DTO wiring) |
-| `crates/http-server/src/dto/remember.rs::WireRememberStatus` (typed lowercase wire enum with `From<cognee_lib::api::remember::RememberStatus>`) | E-01 (Q-E, Decision 15) | E-02 (`/remember/entry` reuses the same DTO + translation) |
+| `crates/http-server/src/dto/remember.rs::WireRememberStatus` (typed lowercase wire enum; standalone — no `From<cognee_lib::api::remember::RememberStatus>` impl, deferred to P5 per the http-server↔lib cycle constraint discovered in [tasks/e-01-remember.md §3](tasks/e-01-remember.md#3-current-rust-state)) | E-01 (Q-E, Decision 15; landed commit 037cad2) | E-02 (`/remember/entry` reuses the same DTO + translation) |
 | `cognee_models::memory::{MemoryEntry, QAEntry, TraceEntry, FeedbackEntry}` types | LIB-01 (Decision 2) | E-02 |
 | `cognee_lib::api::improve::ImproveParams<'_>` struct | LIB-04 (Decision 8) | LIB-01 (touches one of the call sites), E-05 (adds 3 v2 fields) |
 
