@@ -92,7 +92,7 @@ The Python source-of-truth column links to the file that defines each handler in
 | E-01 | `POST /api/v1/remember` | [`get_remember_router.py:28`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/remember/routers/get_remember_router.py#L28) | **Done** (commit 037cad2) | [tasks/e-01-remember.md](tasks/e-01-remember.md) |
 | E-02 | `POST /api/v1/remember/entry` | [`get_remember_router.py:115`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/remember/routers/get_remember_router.py#L115) | **Missing** | [tasks/e-02-remember-entry.md](tasks/e-02-remember-entry.md) |
 | E-03 | `GET /api/v1/recall` | [`get_recall_router.py:58`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/recall/routers/get_recall_router.py#L58) | **Done** (commit 0dafdee) | [tasks/e-03-recall-history.md](tasks/e-03-recall-history.md) |
-| E-04 | `POST /api/v1/recall` | [`get_recall_router.py:78`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/recall/routers/get_recall_router.py#L78) | **In Progress** — DTO omits `session_id` / `scope` | [tasks/e-04-recall-search.md](tasks/e-04-recall-search.md) |
+| E-04 | `POST /api/v1/recall` | [`get_recall_router.py:78`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/recall/routers/get_recall_router.py#L78) | **Done** (commit 9981e79) | [tasks/e-04-recall-search.md](tasks/e-04-recall-search.md) |
 | E-05 | `POST /api/v1/improve` | [`get_improve_router.py:39`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/improve/routers/get_improve_router.py#L39) | **Partial** — DTO omits `session_ids` / `extraction_tasks` / `enrichment_tasks` / `data` / `node_name` | [tasks/e-05-improve.md](tasks/e-05-improve.md) |
 | E-06 | `POST /api/v1/forget` | [`get_forget_router.py:25`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/forget/routers/get_forget_router.py#L25) | **Done — verified, no code change** | [tasks/e-06-forget.md](tasks/e-06-forget.md) |
 | E-07 | `GET /api/v1/visualize` | [`get_visualize_router.py`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/users/routers/get_visualize_router.py) | **Done (commit 35d6b3c)** | [tasks/e-07-visualize.md](tasks/e-07-visualize.md) |
@@ -111,13 +111,12 @@ The Python source-of-truth column links to the file that defines each handler in
 
 | State | Cleanup | Library | Endpoints |
 |---|---|---|---|
-| Done | 1 (CLEAN-01) | 8 (LIB-01, LIB-02, LIB-03, LIB-04, LIB-05, LIB-06, LIB-07, LIB-08) | 5 (E-01, E-03, E-06, E-07, E-08) |
-| In Progress | — | — | 1 (E-04) |
+| Done | 1 (CLEAN-01) | 8 (LIB-01, LIB-02, LIB-03, LIB-04, LIB-05, LIB-06, LIB-07, LIB-08) | 6 (E-01, E-03, E-04, E-06, E-07, E-08) |
 | Missing | — | — | 5 (E-02, E-09, E-10, E-11, E-12) |
 | Partial | — | — | 1 (E-05) |
 | **Total** | **1** | **8** | **12** |
 
-Grand total: **21 tasks** (1 cleanup + 8 library + 12 endpoints; LIB-07 added 2026-04-30 per Decision 17; LIB-08 added 2026-04-30 per Decision 18). **Phases A and B are now complete** (CLEAN-01 + all 8 LIB-* + 5 verify endpoints). Resume point moves to **C-1 (E-04)** — Phase C Partial endpoints, with LIB-07's library widening (now reachable via `cognee-search`) available for the HTTP layer to consume.
+Grand total: **21 tasks** (1 cleanup + 8 library + 12 endpoints; LIB-07 added 2026-04-30 per Decision 17; LIB-08 added 2026-04-30 per Decision 18). **Phases A and B are complete; Phase C is in progress** (C-1 E-04 done; C-2 E-05 pending). Resume point moves to **C-2 (E-05)** — `POST /improve` add session_ids + extraction/enrichment/data/node_name (consumes LIB-04's `ImproveParams` shape).
 
 ## 4. Summary of findings
 
