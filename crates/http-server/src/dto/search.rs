@@ -162,6 +162,10 @@ pub struct SearchHistoryItemDTO {
     pub text: String,
     /// `"user"` for query rows, `"system"` for result rows.
     pub user: String,
+    /// Wire format: RFC 3339 with explicit `+00:00` offset and microsecond
+    /// precision (Python parity per Decision 6). See
+    /// [`crate::dto::util::iso8601_offset`].
+    #[serde(with = "crate::dto::util::iso8601_offset")]
     pub created_at: DateTime<Utc>,
 }
 

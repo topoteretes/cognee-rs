@@ -70,4 +70,15 @@ async fn post_then_get_returns_query_and_result_rows() {
         .collect();
     assert!(users.contains(&"user"), "missing query row");
     assert!(users.contains(&"system"), "missing result row");
+
+    // Decision 6: every wire-visible `DateTime<Utc>` field must serialize with
+    // an explicit `+00:00` offset (Python `datetime.isoformat()` parity), not
+    // chrono's default `Z` suffix.
+    let created_at = arr[0]["createdAt"]
+        .as_str()
+        .expect("createdAt must be a string");
+    assert!(
+        created_at.ends_with("+00:00"),
+        "createdAt must end with +00:00 offset, got: {created_at}"
+    );
 }

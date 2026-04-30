@@ -3,6 +3,72 @@
 use serde::{Deserialize, Deserializer, Serialize, de};
 use uuid::Uuid;
 
+// ─── iso8601_offset (Decision 6) ──────────────────────────────────────────────
+
+/// Serde helper module for `chrono::DateTime<Utc>` fields whose wire format
+/// must match Python's `datetime.isoformat()` shape.
+///
+/// Python's pydantic `OutDTO.model_dump()` calls `datetime.isoformat()` which
+/// emits an explicit `+00:00` offset and microsecond precision (e.g.
+/// `"2026-04-29T14:32:01.123456+00:00"`). chrono's default `Serialize` impl
+/// instead emits `"…Z"` with nanosecond precision, which causes byte-level
+/// drift against the Python SDK on every wire-visible timestamp.
+///
+/// This helper is the project-wide remedy (per
+/// [`docs/http-api-v2/README.md` §1.1 — Decision 6](../../../../docs/http-api-v2/README.md#11-wire-conventions-project-wide-set-by-decision-6)):
+///
+/// - **Serialization**: emits `%Y-%m-%dT%H:%M:%S%.6f%:z` — explicit `+00:00`
+///   offset, microsecond precision, truncating any sub-microsecond digits.
+/// - **Deserialization**: leniently accepts any RFC 3339 string via
+///   `chrono::DateTime::parse_from_rfc3339`, so both `"…+00:00"` and `"…Z"`
+///   round-trip cleanly. The parsed timestamp is converted to UTC.
+///
+/// # Usage
+///
+/// ```rust,ignore
+/// use chrono::{DateTime, Utc};
+///
+/// #[derive(Serialize, Deserialize)]
+/// struct MyDto {
+///     #[serde(with = "crate::dto::util::iso8601_offset")]
+///     created_at: DateTime<Utc>,
+/// }
+/// ```
+pub mod iso8601_offset {
+    use chrono::{DateTime, Utc};
+    use serde::{Deserialize, Deserializer, Serializer, de};
+
+    /// RFC 3339 with explicit `+00:00` offset and microsecond precision.
+    ///
+    /// `%.6f` truncates fractional seconds to 6 digits (microseconds), matching
+    /// Python's default `datetime.isoformat()` output for non-naive UTC values.
+    pub fn serialize<S>(dt: &DateTime<Utc>, s: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let formatted = dt.format("%Y-%m-%dT%H:%M:%S%.6f%:z").to_string();
+        s.serialize_str(&formatted)
+    }
+
+    /// Parse any RFC 3339 timestamp (with `Z` or numeric offset) and convert
+    /// to UTC. Returns a serde error on malformed input.
+    pub fn deserialize<'de, D>(d: D) -> Result<DateTime<Utc>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(d)?;
+        DateTime::parse_from_rfc3339(&s)
+            .map(|dt| dt.with_timezone(&Utc))
+            .map_err(|err| {
+                de::Error::custom(format!(
+                    "invalid RFC 3339 timestamp {s:?}: {err}",
+                    s = s,
+                    err = err
+                ))
+            })
+    }
+}
+
 // ─── DatasetIdRef ─────────────────────────────────────────────────────────────
 
 /// A nullable dataset-id field that accepts three forms:
@@ -183,5 +249,89 @@ mod tests {
 
         let none = DatasetIdRef(None);
         assert_eq!(none.into_inner(), None);
+    }
+
+    // ─── iso8601_offset (Decision 6) ─────────────────────────────────────────
+
+    use chrono::{DateTime, TimeZone, Utc};
+    use serde::Serialize;
+
+    #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+    struct TsWrapper {
+        #[serde(with = "super::iso8601_offset")]
+        ts: DateTime<Utc>,
+    }
+
+    #[test]
+    fn serializes_utc_with_plus_zero_zero() {
+        // 2026-04-29T14:32:01Z -> "2026-04-29T14:32:01.000000+00:00"
+        let ts = Utc
+            .with_ymd_and_hms(2026, 4, 29, 14, 32, 1)
+            .single()
+            .expect("valid UTC datetime");
+        let w = TsWrapper { ts };
+        let s = serde_json::to_string(&w).expect("serialize");
+        assert!(
+            s.contains("\"2026-04-29T14:32:01.000000+00:00\""),
+            "expected +00:00 offset in: {s}"
+        );
+        assert!(
+            !s.contains("Z\""),
+            "should not emit chrono's default Z suffix: {s}"
+        );
+    }
+
+    #[test]
+    fn deserializes_z_suffix() {
+        let json = r#"{"ts":"2026-04-29T14:32:01Z"}"#;
+        let w: TsWrapper = serde_json::from_str(json).expect("Z suffix should parse");
+        let expected = Utc
+            .with_ymd_and_hms(2026, 4, 29, 14, 32, 1)
+            .single()
+            .expect("valid UTC datetime");
+        assert_eq!(w.ts, expected);
+    }
+
+    #[test]
+    fn deserializes_plus_zero_zero() {
+        let json = r#"{"ts":"2026-04-29T14:32:01+00:00"}"#;
+        let w: TsWrapper = serde_json::from_str(json).expect("+00:00 offset should parse");
+        let expected = Utc
+            .with_ymd_and_hms(2026, 4, 29, 14, 32, 1)
+            .single()
+            .expect("valid UTC datetime");
+        assert_eq!(w.ts, expected);
+    }
+
+    #[test]
+    fn round_trip_microsecond_precision() {
+        let json = r#"{"ts":"2026-04-29T14:32:01.123456+00:00"}"#;
+        let w: TsWrapper = serde_json::from_str(json).expect("microsecond input");
+        let s = serde_json::to_string(&w).expect("serialize");
+        assert!(
+            s.contains("\"2026-04-29T14:32:01.123456+00:00\""),
+            "round-trip should preserve microseconds: {s}"
+        );
+    }
+
+    #[test]
+    fn truncates_nanoseconds_to_microseconds_on_serialize() {
+        // Build a datetime carrying 123_456_789 ns; the helper must drop the
+        // last three digits ("789") so the wire matches Python microseconds.
+        let ts = Utc
+            .with_ymd_and_hms(2026, 4, 29, 14, 32, 1)
+            .single()
+            .expect("valid UTC datetime")
+            + chrono::Duration::nanoseconds(123_456_789);
+        let w = TsWrapper { ts };
+        let s = serde_json::to_string(&w).expect("serialize");
+        assert!(
+            s.contains("\"2026-04-29T14:32:01.123456+00:00\""),
+            "expected microsecond truncation, got: {s}"
+        );
+        assert!(
+            !s.contains("123456789"),
+            "nanoseconds should be truncated, got: {s}"
+        );
     }
 }
