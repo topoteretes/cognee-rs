@@ -500,6 +500,8 @@ pub fn build_component_handles(
         graph_db,
         permissions,
         sync_ops,
+        session_store: None,
+        session_manager: None,
     })
 }
 

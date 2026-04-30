@@ -7,7 +7,8 @@
 //!
 //! See `docs/http-server/routers/recall.md` §4 for the per-router spec.
 
-use serde::{Deserialize, Serialize};
+use cognee_search::recall_scope::{RecallScope, ScopeInput, normalize_scope};
+use serde::{Deserialize, Deserializer, Serialize};
 use utoipa::ToSchema;
 use uuid::Uuid;
 
@@ -24,13 +25,14 @@ pub use crate::dto::search::{
 pub use crate::error::RecallErrorBody;
 
 /// Mirrors Python `RecallPayloadDTO`
-/// ([`get_recall_router.py:23-34`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/recall/routers/get_recall_router.py#L23-L34)).
-///
-/// Field-for-field identical to `SearchPayloadDTO`. **Do NOT** add `session_id`
-/// or `auto_route` here — Python's HTTP DTO doesn't expose them.
+/// ([`get_recall_router.py:23-48`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/recall/routers/get_recall_router.py#L23-L48)).
 ///
 /// `RecallPayloadDTO` inherits `InDTO`, so the wire is camelCase per
 /// Decision 10 with snake_case accepted as an inbound alias.
+///
+/// E-04 added `session_id` and `scope` (per Decisions 17 + 18). The DTO
+/// delegates `scope` normalization to
+/// [`cognee_search::recall_scope::normalize_scope`].
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct RecallPayloadDTO {
@@ -60,6 +62,66 @@ pub struct RecallPayloadDTO {
 
     #[serde(default)]
     pub verbose: bool,
+
+    /// Optional session id — when set, `_search_session` and (under `auto`)
+    /// the session-first short-circuit run. Wire is camelCase
+    /// (`sessionId`) per Decision 10; snake_case accepted as alias.
+    #[serde(default, alias = "session_id")]
+    pub session_id: Option<String>,
+
+    /// Optional source scope — `null | string | list<string>`. Normalized
+    /// via [`cognee_search::recall_scope::normalize_scope`]; unknown values
+    /// surface as a `serde::de::Error::custom` whose message is
+    /// byte-identical to Python (`entries.py:99-103`).
+    ///
+    /// `#[schema(value_type = ...)]` would mis-document the wire shape
+    /// (string OR list of strings), so the DTO field stays untyped at the
+    /// OpenAPI layer — full schema documentation is deferred.
+    #[schema(value_type = Option<Vec<String>>)]
+    #[serde(default, deserialize_with = "deserialize_scope")]
+    pub scope: Option<Vec<RecallScope>>,
+}
+
+/// Custom deserializer for the `scope` field.
+///
+/// Accepts:
+/// - `null` -> `Some(vec![RecallScope::Auto])` (Python: `["auto"]`).
+/// - `"graph"` -> `Some(vec![RecallScope::Graph])`.
+/// - `["graph", "session"]` -> `Some(vec![Graph, Session])`.
+/// - `"all"` -> the canonical four-source list.
+///
+/// Builds a [`ScopeInput`] from the raw JSON, dispatches into
+/// [`normalize_scope`], and surfaces unknowns through
+/// [`serde::de::Error::custom`] so the validation envelope ends up at
+/// `400 {"detail":[{"loc":["body"],...}]}` via the `ValidatedJson`
+/// extractor.
+fn deserialize_scope<'de, D>(de: D) -> Result<Option<Vec<RecallScope>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    use serde::de::Error as _;
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Raw {
+        Single(String),
+        Many(Vec<String>),
+        Null,
+    }
+
+    // `Option<Raw>` gives us `null` -> `None`; otherwise we forward to
+    // `normalize_scope`. Note that Python treats `null` and a missing field
+    // identically (-> `["auto"]`), so we map both to `Some(vec![Auto])`.
+    let raw: Option<Raw> = Option::<Raw>::deserialize(de)?;
+    let scope_input: Option<ScopeInput> = match raw {
+        None | Some(Raw::Null) => None,
+        Some(Raw::Single(s)) => Some(ScopeInput::Single(s)),
+        Some(Raw::Many(v)) => Some(ScopeInput::Many(v)),
+    };
+
+    match normalize_scope(scope_input) {
+        Ok(v) => Ok(Some(v)),
+        Err(err) => Err(D::Error::custom(err.to_string())),
+    }
 }
 
 impl Default for RecallPayloadDTO {
@@ -74,6 +136,8 @@ impl Default for RecallPayloadDTO {
             top_k: default_top_k(),
             only_context: false,
             verbose: false,
+            session_id: None,
+            scope: None,
         }
     }
 }
@@ -94,14 +158,67 @@ mod tests {
     }
 
     #[test]
-    fn test_recall_dto_does_not_accept_session_id() {
-        // session_id and auto_route are deliberately not on the recall DTO
-        // (Python parity). serde without `deny_unknown_fields` will silently
-        // ignore them — assert that supplying them does not change the shape
-        // of the deserialized struct.
-        let json = r#"{"session_id": "ignored", "auto_route": true, "query": "x"}"#;
-        let payload: RecallPayloadDTO = serde_json::from_str(json).expect("parses");
+    fn recall_dto_accepts_session_id() {
+        // camelCase wire form (Decision 10).
+        let json = r#"{"sessionId": "s1", "query": "x"}"#;
+        let payload: RecallPayloadDTO = serde_json::from_str(json).expect("parse camelCase");
+        assert_eq!(payload.session_id.as_deref(), Some("s1"));
         assert_eq!(payload.query, "x");
+
+        // snake_case alias.
+        let json2 = r#"{"session_id": "s2", "query": "y"}"#;
+        let payload2: RecallPayloadDTO = serde_json::from_str(json2).expect("parse snake_case");
+        assert_eq!(payload2.session_id.as_deref(), Some("s2"));
+    }
+
+    #[test]
+    fn recall_dto_accepts_scope_as_string() {
+        let json = r#"{"query": "x", "scope": "graph"}"#;
+        let payload: RecallPayloadDTO = serde_json::from_str(json).expect("parse scope=graph");
+        assert_eq!(payload.scope, Some(vec![RecallScope::Graph]));
+    }
+
+    #[test]
+    fn recall_dto_accepts_scope_as_list() {
+        let json = r#"{"query": "x", "scope": ["graph", "session"]}"#;
+        let payload: RecallPayloadDTO = serde_json::from_str(json).expect("parse scope list");
+        assert_eq!(
+            payload.scope,
+            Some(vec![RecallScope::Graph, RecallScope::Session])
+        );
+    }
+
+    #[test]
+    fn recall_dto_scope_all_expands_to_four_sources() {
+        let json = r#"{"query": "x", "scope": "all"}"#;
+        let payload: RecallPayloadDTO = serde_json::from_str(json).expect("parse scope=all");
+        assert_eq!(
+            payload.scope,
+            Some(vec![
+                RecallScope::Graph,
+                RecallScope::Session,
+                RecallScope::Trace,
+                RecallScope::GraphContext,
+            ])
+        );
+    }
+
+    #[test]
+    fn recall_dto_scope_null_normalizes_to_auto() {
+        let json = r#"{"query": "x", "scope": null}"#;
+        let payload: RecallPayloadDTO = serde_json::from_str(json).expect("parse scope=null");
+        assert_eq!(payload.scope, Some(vec![RecallScope::Auto]));
+    }
+
+    #[test]
+    fn recall_dto_scope_unknown_returns_serde_error() {
+        let json = r#"{"query": "x", "scope": "foo"}"#;
+        let err = serde_json::from_str::<RecallPayloadDTO>(json).expect_err("should error");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("Unknown recall scope(s)"),
+            "msg should contain 'Unknown recall scope(s)': {msg}"
+        );
     }
 
     #[test]
@@ -157,6 +274,8 @@ mod tests {
             top_k: Some(5),
             only_context: true,
             verbose: false,
+            session_id: None,
+            scope: None,
         };
         let s = serde_json::to_string(&dto).expect("serialize");
         for k in [

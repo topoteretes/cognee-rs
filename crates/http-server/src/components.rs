@@ -16,7 +16,7 @@ use cognee_delete::DeleteService;
 use cognee_graph::GraphDBTrait;
 use cognee_llm::Llm;
 use cognee_ontology::OntologyManager;
-use cognee_search::SearchOrchestrator;
+use cognee_search::{SearchOrchestrator, SessionManager, SessionStore};
 use cognee_storage::StorageTrait;
 
 /// Pre-initialized pipeline component handles shared across all P2 handlers.
@@ -64,6 +64,21 @@ pub struct ComponentHandles {
     /// `GET /api/v1/sync/status`. Optional so test fixtures that don't
     /// exercise the cloud sync flow can leave it unset.
     pub sync_ops: Option<Arc<dyn SyncOperationRepository>>,
+
+    /// Backing store for session Q&A history — wires the `session` source
+    /// of `POST /api/v1/recall` (Python `_search_session`,
+    /// `recall.py:146-208`). `None` means session-source recall returns
+    /// empty (matches Python's `is_available` short-circuit at
+    /// `recall.py:170-171`). Reuses the `SessionStore` re-exported by
+    /// `cognee-search` to avoid pulling `cognee-session` into the crate's
+    /// non-dev dependency graph.
+    pub session_store: Option<Arc<dyn SessionStore>>,
+
+    /// Manager for agent-trace sessions and the per-session graph context
+    /// snapshot — wires the `trace` and `graph_context` sources of
+    /// `POST /api/v1/recall` (Python `_search_trace` /
+    /// `_fetch_graph_context`). `None` means both sources return empty.
+    pub session_manager: Option<Arc<SessionManager>>,
 }
 
 impl ComponentHandles {

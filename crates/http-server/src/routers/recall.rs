@@ -16,11 +16,14 @@ use axum::{
     routing::{get, post},
 };
 
-use cognee_search::types::{SearchError as CoreSearchError, SearchRequest};
+use cognee_search::recall_scope::{
+    RecallItem, RecallScope, RecallSource, fetch_graph_context, run_graph, search_session,
+    search_trace,
+};
+use cognee_search::types::SearchError as CoreSearchError;
 
 use crate::auth::AuthenticatedUser;
-use crate::dto::recall::{RecallHistoryItemDTO, RecallPayloadDTO, RecallResultDTO};
-use crate::dto::search::flatten_search_response;
+use crate::dto::recall::{RecallHistoryItemDTO, RecallPayloadDTO};
 use crate::error::{ApiError, RecallErrorBody};
 use crate::middleware::validation::Json as ValidatedJson;
 use crate::state::AppState;
@@ -88,18 +91,21 @@ pub async fn get_recall_history(
 
 // ─── POST /api/v1/recall ──────────────────────────────────────────────────────
 
-/// `POST /api/v1/recall` — semantic search (wire-level alias for `/search`).
+/// `POST /api/v1/recall` — multi-source semantic recall.
 ///
-/// Delegates to the same `SearchOrchestrator` as `/api/v1/search` (Python
-/// parity — must NOT call the library-level `cognee_lib::api::recall::recall`,
-/// which would diverge from the Python HTTP contract).
+/// Calls `cognee_search::recall_scope::*` helpers directly because the
+/// http-server -> lib cycle constraint (`Cargo.toml:35-37`) forbids
+/// importing `cognee_lib::api::recall::recall`. The fan-out logic mirrors
+/// Python `recall.py:373-531` byte-for-byte (per Decisions 17 + 18 — the
+/// LIB-08 lift makes the four `pub` helpers reachable without a cycle).
 #[utoipa::path(
     post,
     path = "/api/v1/recall",
     tag = "recall",
     request_body = RecallPayloadDTO,
     responses(
-        (status = 200, description = "recall results", body = Vec<RecallResultDTO>),
+        (status = 200, description = "recall results — flat list of dicts each tagged with `_source`", body = Vec<serde_json::Value>),
+        (status = 400, description = "validation error", body = serde_json::Value),
         (status = 401, description = "unauthorized"),
         (status = 409, description = "catch-all", body = RecallErrorBody),
         (status = 422, description = "prerequisites not met", body = RecallErrorBody),
@@ -118,7 +124,7 @@ pub async fn post_recall(
     user: AuthenticatedUser,
     State(state): State<AppState>,
     ValidatedJson(payload): ValidatedJson<RecallPayloadDTO>,
-) -> Result<Json<Vec<RecallResultDTO>>, ApiError> {
+) -> Result<Json<Vec<serde_json::Value>>, ApiError> {
     let Some(orchestrator) = state
         .components()
         .and_then(|c| c.search_orchestrator.clone())
@@ -131,39 +137,167 @@ pub async fn post_recall(
         });
     };
 
-    let request = SearchRequest {
-        query_text: payload.query,
-        search_type: payload.search_type.into(),
-        top_k: payload
-            .top_k
-            .and_then(|n| if n > 0 { Some(n as usize) } else { None }),
-        datasets: payload.datasets,
-        dataset_ids: payload.dataset_ids,
-        system_prompt: payload.system_prompt,
-        system_prompt_path: None,
-        only_context: Some(payload.only_context),
-        use_combined_context: None,
-        session_id: None,
-        node_type: None,
-        node_name: payload.node_name,
-        node_name_filter_operator: None,
-        wide_search_top_k: None,
-        triplet_distance_penalty: None,
-        save_interaction: None,
-        user_id: Some(user.id),
-        verbose: Some(payload.verbose),
-        feedback_influence: None,
-        retriever_specific_config: None,
-        response_schema: None,
-        custom_search_type: None,
-        auto_feedback_detection: None,
-        neighborhood_depth: None,
-        neighborhood_seed_top_k: None,
+    // Component handles for the optional session-backed sources. Both stay
+    // `None` when the embedder did not wire them — the helpers gracefully
+    // return `Ok(vec![])` in that case (Python `is_available` short-circuit
+    // at `recall.py:170-171`).
+    let session_store = state
+        .components()
+        .and_then(|c| c.session_store.as_ref().cloned());
+    let session_manager = state
+        .components()
+        .and_then(|c| c.session_manager.as_ref().cloned());
+
+    // -- Resolve scope to a concrete source list (mirrors
+    //    `cognee_lib::api::recall::recall()` at `crates/lib/src/api/recall.rs:78-100`,
+    //    Python `recall.py:373-386`). --
+    let normalized: Vec<RecallScope> = match payload.scope {
+        None => vec![RecallScope::Auto],
+        Some(v) if v.is_empty() => vec![RecallScope::Auto],
+        Some(v) => v,
     };
 
-    match orchestrator.search(&request).await {
-        Ok(response) => Ok(Json(flatten_search_response(response))),
-        Err(err) => Err(map_recall_error(err)),
+    let session_id_owned = payload.session_id.clone();
+    let session_id_opt: Option<&str> = session_id_owned.as_deref();
+    let user_id_string = user.id.to_string();
+    let user_id_opt: Option<&str> = Some(user_id_string.as_str());
+    let top_k: usize = payload
+        .top_k
+        .and_then(|n| if n > 0 { Some(n as usize) } else { None })
+        .unwrap_or(10);
+    let datasets: Option<Vec<String>> = payload.datasets.clone();
+    let query_type: Option<cognee_search::SearchType> = Some(payload.search_type.into());
+
+    let auto_mode = normalized.as_slice() == [RecallScope::Auto];
+    let (sources, auto_fallthrough): (Vec<RecallScope>, bool) = if auto_mode {
+        match (session_id_opt, datasets.as_ref(), query_type) {
+            (Some(_), None, None) => (vec![RecallScope::Session, RecallScope::Graph], true),
+            (Some(_), _, _) => (vec![RecallScope::Session, RecallScope::Graph], false),
+            (None, _, _) => (vec![RecallScope::Graph], false),
+        }
+    } else {
+        (normalized, false)
+    };
+
+    // -- Iterate sources in resolved order (mirrors `recall.rs:151-197`,
+    //    Python `recall.py:503-513`). --
+    let mut merged: Vec<RecallItem> = Vec::new();
+    let span = tracing::Span::current();
+    for src in &sources {
+        // Auto-mode short-circuit: a session hit skips the graph runner.
+        if auto_fallthrough && *src == RecallScope::Graph && !merged.is_empty() {
+            break;
+        }
+
+        let part: Vec<RecallItem> = match src {
+            RecallScope::Auto => continue, // sentinel — already resolved
+            RecallScope::Session => search_session(
+                &payload.query,
+                session_id_opt,
+                user_id_opt,
+                top_k,
+                session_store.as_deref(),
+            )
+            .await
+            .map_err(map_recall_error)?,
+            RecallScope::Trace => search_trace(
+                &payload.query,
+                session_id_opt,
+                user_id_opt,
+                top_k,
+                session_manager.as_deref(),
+            )
+            .await
+            .map_err(map_recall_error)?,
+            RecallScope::GraphContext => {
+                fetch_graph_context(session_id_opt, user_id_opt, session_manager.as_deref())
+                    .await
+                    .map_err(map_recall_error)?
+            }
+            RecallScope::Graph => {
+                let (items, _used_type, _was_auto, _response) = run_graph(
+                    &payload.query,
+                    query_type,
+                    datasets.clone(),
+                    top_k,
+                    /* auto_route = */ false,
+                    session_id_opt,
+                    orchestrator.as_ref(),
+                    &span,
+                )
+                .await
+                .map_err(map_recall_error)?;
+                items
+            }
+        };
+        merged.extend(part);
+    }
+
+    // -- Map to Python's wire shape: flat list of dicts, each carrying its
+    //    own `_source` field (Python `recall.py:191-208` for session,
+    //    `recall.py:252-278` for trace, `recall.py:289-315` for
+    //    graph_context, `recall.py:455-498` for graph). --
+    let out: Vec<serde_json::Value> = merged.into_iter().map(item_to_wire).collect();
+    Ok(Json(out))
+}
+
+/// Convert a [`RecallItem`] into its Python-parity wire JSON.
+///
+/// The Python implementation injects `_source` into each per-source dict
+/// (Python `recall.py:208/278/315/495-498`). Rust mirrors that:
+/// - `Session` / `Trace` content is already a JSON object — inject
+///   `_source` next to its existing keys.
+/// - `GraphContext` content is the raw snapshot string — wrap it as
+///   `{"_source": "graph_context", "content": <string>}` (Python
+///   `recall.py:314` returns exactly that shape).
+/// - `Graph` content is whatever `run_graph` produced (object, string,
+///   array). For object-shaped content inject `_source`; for non-object
+///   content wrap as `{"text": <s>, "_source": "graph"}` (mirrors Python's
+///   string-fallback behavior — Python emits the bare string, but the
+///   Rust wire wraps it for consistent `_source` tagging across all rows).
+fn item_to_wire(item: RecallItem) -> serde_json::Value {
+    let source_str = item.source.as_str();
+    match item.source {
+        RecallSource::Session | RecallSource::Trace => {
+            // search_session / search_trace already produce a JSON object —
+            // mutate to inject "_source".
+            inject_source_into_object(item.content, source_str)
+        }
+        RecallSource::GraphContext => {
+            // fetch_graph_context returns a JSON string snapshot; wrap it
+            // under "content" per Python `recall.py:314`.
+            serde_json::json!({
+                "_source": source_str,
+                "content": item.content,
+            })
+        }
+        RecallSource::Graph => match item.content {
+            v @ serde_json::Value::Object(_) => inject_source_into_object(v, source_str),
+            other => serde_json::json!({
+                "text": other,
+                "_source": source_str,
+            }),
+        },
+    }
+}
+
+/// Mutate a JSON object to add `"_source": <src>`. If the input is not an
+/// object the helper falls back to wrapping under a `value` key so the
+/// `_source` field is always present (defensive — `search_session` and
+/// `search_trace` always produce an object today).
+fn inject_source_into_object(value: serde_json::Value, src: &str) -> serde_json::Value {
+    match value {
+        serde_json::Value::Object(mut map) => {
+            map.insert(
+                "_source".to_string(),
+                serde_json::Value::String(src.to_string()),
+            );
+            serde_json::Value::Object(map)
+        }
+        other => serde_json::json!({
+            "value": other,
+            "_source": src,
+        }),
     }
 }
 

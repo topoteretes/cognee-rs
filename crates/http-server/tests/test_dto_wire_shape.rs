@@ -185,7 +185,15 @@ async fn post_recall_accepts_camelcase_body() {
 }
 
 #[tokio::test]
-async fn post_recall_response_keys_are_camelcase() {
+async fn post_recall_response_keys_match_python_shape() {
+    // E-04 (Decisions 17 + 18) replaced the v1 RecallResultDTO envelope
+    // with Python's flat-list-with-`_source` wire shape. The `_source`
+    // key is snake_case BY DESIGN — it is the literal Python wire key
+    // (`recall.py:208/278/315/495-498`) and must NOT be camelCased.
+    // Per-source content keys (e.g. `created_at` for session entries,
+    // `trace_id` for traces) likewise mirror Python literally; converting
+    // them would break cross-SDK parity. So this test asserts the shape
+    // contract, not the no-underscore rule.
     let app = build_search_app().await;
     let req = Request::builder()
         .method("POST")
@@ -196,8 +204,12 @@ async fn post_recall_response_keys_are_camelcase() {
     let resp = app.oneshot(req).await.expect("resp");
     assert_eq!(resp.status(), 200);
     let body = body_json(resp).await;
-    for entry in body.as_array().expect("array") {
-        assert_keys_have_no_underscore(entry, "post_recall response item");
+    let arr = body.as_array().expect("array");
+    for entry in arr {
+        assert!(
+            entry["_source"].is_string(),
+            "every recall item must have a string `_source`: {entry}"
+        );
     }
 }
 
