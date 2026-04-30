@@ -30,6 +30,6 @@ pub use forget::{DatasetRef, ForgetResult, ForgetTarget, forget};
 pub use improve::{ImproveParams, ImproveResult, improve};
 pub use prune::{PruneResult, PruneTarget, prune_data, prune_system};
 pub use recall::{RecallItem, RecallResult, RecallSource, recall};
-pub use remember::{RememberItemInfo, RememberResult, RememberStatus, remember};
+pub use remember::{RememberItemInfo, RememberResult, RememberStatus, remember, remember_entry};
 pub use update::{UpdateResult, update};
 pub use user::get_or_create_default_user;

@@ -11,18 +11,18 @@ use std::time::Instant;
 
 use cognee_cognify::cognify;
 use cognee_cognify::{CognifyConfig, CognifyResult, MemifyConfig, MemifyResult, run_memify};
-use cognee_database::{CheckpointStore, DatabaseConnection};
+use cognee_database::{CheckpointStore, DatabaseConnection, SessionLifecycleDb};
 use cognee_embedding::EmbeddingEngine;
 use cognee_graph::GraphDBTrait;
 use cognee_ingestion::AddPipeline;
 use cognee_llm::Llm;
-use cognee_models::DataInput;
+use cognee_models::{DataInput, FeedbackEntry, MemoryEntry, QAEntry, TraceEntry};
 use cognee_ontology::OntologyResolver;
-use cognee_session::{SessionManager, SessionStore};
+use cognee_session::{SessionManager, SessionQAUpdate, SessionStore};
 use cognee_storage::StorageTrait;
 use cognee_vector::VectorDB;
 use serde::{Deserialize, Serialize};
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 use super::error::ApiError;
@@ -550,6 +550,240 @@ async fn remember_session(
         error: improve_error,
         entry_type: None,
         entry_id: None,
+        cognify_result: None,
+        memify_result: None,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Typed-entry dispatch (`remember_entry`) — LIB-01 / Decision 2 / Decision 5
+// ---------------------------------------------------------------------------
+
+/// Dispatch a typed [`MemoryEntry`] to the appropriate `SessionManager`
+/// method.
+///
+/// Mirrors Python's `_dispatch_session_entry` at
+/// `cognee/api/v1/remember/remember.py:190-313`. The `entry_type` /
+/// `entry_id` fields on the returned [`RememberResult`] are populated for
+/// **all three** branches; the HTTP DTO at `crates/http-server/src/dto/`
+/// (E-02) carries them through to the wire.
+///
+/// **Behavior**:
+/// - Empty `session_id` returns `Err(ApiError::InvalidArgument)` (Python
+///   parity: `ValueError` → HTTP 400 at the handler boundary).
+/// - Best-effort pre-upsert via [`SessionLifecycleDb::ensure_and_touch_session`];
+///   any failure is logged at `debug` level and swallowed (Python parity:
+///   `try/except` around the pre-upsert at `remember.py:232-253`).
+/// - `MemoryEntry::Qa` → [`SessionManager::save_qa`]; if any of
+///   `feedback_text` / `feedback_score` / `used_graph_element_ids` is set,
+///   a follow-up [`SessionManager::update_qa`] applies the partial update.
+///   `entry_type = "qa"`, `entry_id = qa_id`.
+/// - `MemoryEntry::Trace` → [`SessionManager::add_agent_trace_step`].
+///   `method_params.unwrap_or(Value::Null)` is passed because the Rust
+///   signature requires a non-`Option` value. `session_feedback = ""`
+///   (LLM-driven generation is a follow-up — `generate_feedback_with_llm`
+///   is not honored here; see TODO below). `entry_type = "trace"`,
+///   `entry_id = trace_id`.
+/// - `MemoryEntry::Feedback` → [`SessionManager::add_feedback`]. On
+///   `Ok(true)` the result reports `RememberStatus::SessionStored` with
+///   `entry_id = qa_id`. On `Ok(false)` the result reports
+///   `RememberStatus::Errored` with `error = Some("add_feedback: QA <id>
+///   not found in session <sid>")`. `entry_type = "feedback"`.
+///
+/// **TODO(LIB-01-followup)**: when `TraceEntry::generate_feedback_with_llm`
+/// is `true`, Python calls the LLM to generate a `session_feedback` string
+/// before persisting. That requires plumbing an `Arc<dyn Llm>` and an
+/// LLM-feedback prompt through `SessionManager` and is deferred.
+#[allow(clippy::too_many_arguments)]
+pub async fn remember_entry(
+    entry: MemoryEntry,
+    dataset_name: &str,
+    session_id: &str,
+    owner_id: Uuid,
+    _tenant_id: Option<Uuid>,
+    db: Option<Arc<DatabaseConnection>>,
+    _session_store: Option<Arc<dyn SessionStore>>,
+    session_manager: Option<Arc<SessionManager>>,
+) -> Result<RememberResult, ApiError> {
+    let start = Instant::now();
+
+    if session_id.is_empty() {
+        return Err(ApiError::InvalidArgument(
+            "session_id is required for typed memory entries".to_string(),
+        ));
+    }
+
+    let sm = session_manager.ok_or_else(|| {
+        ApiError::InvalidArgument("SessionManager is required for typed memory entries".to_string())
+    })?;
+
+    // Best-effort pre-upsert of the session_records row. Mirrors Python's
+    // try/except at remember.py:232-253 — any failure is logged at debug
+    // and we proceed without a dataset_id binding.
+    if let Some(ref database) = db
+        && let Err(exc) = SessionLifecycleDb::ensure_and_touch_session(
+            database.as_ref(),
+            session_id,
+            owner_id,
+            None,
+        )
+        .await
+    {
+        debug!(
+            session_id = session_id,
+            "remember_entry: pre-upsert session_record failed (non-fatal): {exc}"
+        );
+    }
+
+    let user_id_str = owner_id.to_string();
+    let entry_type_str = entry.type_str();
+
+    let mut status = RememberStatus::SessionStored;
+    let entry_id: Option<String>;
+    let mut error: Option<String> = None;
+
+    match entry {
+        MemoryEntry::Qa(q) => {
+            let QAEntry {
+                question,
+                answer,
+                context,
+                feedback_text,
+                feedback_score,
+                used_graph_element_ids,
+            } = q;
+
+            let qa_id = sm
+                .save_qa(
+                    Some(session_id),
+                    Some(&user_id_str),
+                    &question,
+                    &answer,
+                    Some(context.as_str()),
+                )
+                .await?;
+
+            // Follow-up partial update when any of the optional fields are
+            // present. Composes existing methods rather than widening
+            // `save_qa`'s public signature (see task §3 rationale).
+            if feedback_text.is_some()
+                || feedback_score.is_some()
+                || used_graph_element_ids.is_some()
+            {
+                let used_graph_element_ids_typed = match used_graph_element_ids {
+                    Some(value) => Some(Some(serde_json::from_value(value).map_err(|e| {
+                        ApiError::InvalidArgument(format!(
+                            "used_graph_element_ids does not match {{node_ids:[], edge_ids:[]}} shape: {e}"
+                        ))
+                    })?)),
+                    None => None,
+                };
+
+                let updates = SessionQAUpdate {
+                    feedback_text: feedback_text.map(Some),
+                    feedback_score: feedback_score.map(Some),
+                    used_graph_element_ids: used_graph_element_ids_typed,
+                    ..Default::default()
+                };
+
+                sm.update_qa(Some(session_id), Some(&user_id_str), &qa_id, updates)
+                    .await?;
+            }
+
+            entry_id = Some(qa_id);
+        }
+
+        MemoryEntry::Trace(t) => {
+            let TraceEntry {
+                origin_function,
+                status: trace_status,
+                method_params,
+                method_return_value,
+                memory_query,
+                memory_context,
+                error_message,
+                generate_feedback_with_llm,
+            } = t;
+
+            // TODO(LIB-01-followup): generate_feedback_with_llm requires
+            // wiring an `Arc<dyn Llm>` + prompt template through
+            // `SessionManager`. For now we always pass `session_feedback = ""`.
+            if generate_feedback_with_llm {
+                debug!(
+                    session_id = session_id,
+                    "remember_entry: generate_feedback_with_llm=true \
+                     ignored (LIB-01-followup; passing empty session_feedback)"
+                );
+            }
+
+            let trace_id = sm
+                .add_agent_trace_step(
+                    &user_id_str,
+                    Some(session_id),
+                    &origin_function,
+                    &trace_status,
+                    &memory_query,
+                    &memory_context,
+                    method_params.unwrap_or(serde_json::Value::Null),
+                    method_return_value,
+                    &error_message,
+                    "",
+                )
+                .await?;
+
+            entry_id = Some(trace_id);
+        }
+
+        MemoryEntry::Feedback(f) => {
+            let FeedbackEntry {
+                qa_id,
+                feedback_text,
+                feedback_score,
+            } = f;
+
+            let ok = sm
+                .add_feedback(
+                    Some(session_id),
+                    Some(&user_id_str),
+                    &qa_id,
+                    feedback_text.as_deref(),
+                    feedback_score,
+                )
+                .await?;
+
+            if !ok {
+                status = RememberStatus::Errored;
+                error = Some(format!(
+                    "add_feedback: QA {qa_id} not found in session {session_id}"
+                ));
+            }
+            // Python parity: entry_id is set to the input qa_id even on
+            // not-found (remember.py:307: `result.entry_id = entry.qa_id`).
+            entry_id = Some(qa_id);
+        }
+    }
+
+    info!(
+        session_id = session_id,
+        entry_type = entry_type_str,
+        entry_id = entry_id.as_deref().unwrap_or(""),
+        status = ?status,
+        "remember_entry: dispatched typed memory entry"
+    );
+
+    Ok(RememberResult {
+        status,
+        dataset_name: dataset_name.to_string(),
+        dataset_id: None,
+        session_ids: Some(vec![session_id.to_string()]),
+        pipeline_run_id: None,
+        elapsed_seconds: Some(start.elapsed().as_secs_f64()),
+        content_hash: None,
+        items_processed: 0,
+        items: vec![],
+        error,
+        entry_type: Some(entry_type_str.to_string()),
+        entry_id,
         cognify_result: None,
         memify_result: None,
     })
