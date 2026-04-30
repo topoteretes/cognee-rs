@@ -19,7 +19,9 @@ use cognee_models::DataInput;
 use uuid::Uuid;
 
 use crate::auth::AuthenticatedUser;
-use crate::dto::remember::{RememberFormDTO, RememberResultDTO, UploadedFilePart};
+use crate::dto::remember::{
+    RememberFormDTO, RememberResultDTO, UploadedFilePart, WireRememberStatus,
+};
 use crate::error::ApiError;
 use crate::multipart::{MultipartOpts, UploadGuard, check_filename_traversal, parse_multipart};
 use crate::pipelines::dispatch::{DispatchOutcome, box_pipeline_future, dispatch_pipeline};
@@ -94,6 +96,17 @@ async fn parse_remember_multipart(
         }
     }
 
+    // Python parity: `session_id: Optional[str] = Form(default=None, examples=[""])`
+    // (`get_remember_router.py:34`). Empty string is treated as `None`.
+    if let Some(vals) = parsed.fields.get("session_id")
+        && let Some(v) = vals.first()
+    {
+        let trimmed = v.trim();
+        if !trimmed.is_empty() {
+            form.session_id = Some(trimmed.to_owned());
+        }
+    }
+
     if let Some(vals) = parsed.fields.get("chunks_per_batch")
         && let Some(v) = vals.first()
         && let Ok(n) = v.trim().parse::<u32>()
@@ -135,8 +148,18 @@ pub async fn post_remember(
     State(state): State<AppState>,
     multipart: Multipart,
 ) -> Result<impl IntoResponse, ApiError> {
+    // Capture wall-clock start to populate `RememberResultDTO.elapsed_seconds`
+    // (Python parity — `RememberResult.elapsed_seconds`).
+    let started = std::time::Instant::now();
     let request_id = Uuid::new_v4().to_string();
     let (form, files, _guard) = parse_remember_multipart(multipart, &request_id).await?;
+
+    // TODO(P5): forward `form.session_id` to the real
+    // `cognee_lib::api::remember::remember()` call once ComponentHandles
+    // gains all required handles. Currently the cognify+memify path is a
+    // stub (see comment near `dispatch_pipeline` below); session_id is
+    // captured by the parser but not yet wired through the dispatch site.
+    let _session_id = form.session_id.clone();
 
     // ── Dataset resolution ────────────────────────────────────────────────────
     let db = state.components().map(|c| c.database.clone());
@@ -264,15 +287,30 @@ pub async fn post_remember(
         }
     };
 
+    // Decision 15: HTTP wire emits Python-parity lowercase strings.
+    // Background dispatch → `running`; blocking → `completed`. The
+    // `errored` and `session_stored` variants are produced once the real
+    // `remember()` call is wired in P5.
+    let status = if run_in_background {
+        WireRememberStatus::Running
+    } else {
+        WireRememberStatus::Completed
+    };
+
+    // TODO(P5): once the real `cognee_lib::api::remember::remember()` call
+    // is wired through ComponentHandles, populate `session_ids`,
+    // `content_hash`, and `items` from the returned `RememberResult`. Until
+    // then, only locally-known fields are set.
     let result = RememberResultDTO {
-        status: if run_in_background {
-            "PipelineRunStarted".into()
-        } else {
-            "PipelineRunCompleted".into()
-        },
-        pipeline_run_id,
-        dataset_id,
+        status,
+        pipeline_run_id: Some(pipeline_run_id),
+        dataset_id: Some(dataset_id),
         dataset_name,
+        items_processed: files.len() as u32,
+        elapsed_seconds: Some(started.elapsed().as_secs_f64()),
+        session_ids: None,
+        content_hash: None,
+        items: None,
         error: None,
     };
 

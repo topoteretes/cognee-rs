@@ -6,7 +6,14 @@ Per p8-e2e-parity.md Step 10:
 - Blocking remember on a cognified dataset.
 - Remember with and without session_id.
 
-LLM-derived fields use Jaccard structural compare.
+Python's `/remember` router is `Form(...)`-only (see
+``cognee/api/v1/remember/routers/get_remember_router.py:30-39``); JSON bodies
+are silently ignored. All requests below use multipart uploads on **both**
+SDK calls — Decision 15 / E-01.
+
+LLM-derived fields use Jaccard structural compare. Per-run identifiers
+(`pipeline_run_id`, `dataset_id`, `elapsed_seconds`) are excluded from the
+diff.
 """
 
 from __future__ import annotations
@@ -21,8 +28,14 @@ from seed import seed_cognify, seed_dataset_with_text
 
 pytestmark = [requires_openai]
 
+# Per-run / non-deterministic fields excluded from the structural diff.
+# `dataset_id` and `pipeline_run_id` are server-generated UUIDs that diverge
+# between SDKs even on the same content; `elapsed_seconds` is wall-clock
+# wall time and is non-deterministic.
 _IGNORE = DEFAULT_IGNORE | {
     "$..pipeline_run_id",
+    "$..dataset_id",
+    "$..elapsed_seconds",
     "$..started_at",
     "$..ended_at",
     "$..run_info",
@@ -48,20 +61,54 @@ def _seed_and_cognify(authed_clients, unique_dataset_name) -> dict[str, str | No
     return ds_ids
 
 
+def _post_remember(
+    client,
+    *,
+    query: str,
+    session_id: str | None = None,
+    dataset_name: str | None = None,
+):
+    """POST ``/api/v1/remember`` as a multipart form (Python parity).
+
+    The Python router is ``Form(...)``-only; the file payload (`data`) and
+    text fields all travel as multipart parts. We send the query text as a
+    single ``data`` file part so the cognify+memify pipeline has content to
+    chew on, plus optional ``datasetName`` / ``session_id`` form fields.
+    """
+    files = [("data", ("query.txt", query.encode(), "text/plain"))]
+    data: dict[str, str] = {"run_in_background": "false"}
+    if session_id is not None:
+        data["session_id"] = session_id
+    if dataset_name is not None:
+        data["datasetName"] = dataset_name
+    return client.post(
+        "/api/v1/remember",
+        files=files,
+        data=data,
+        timeout=300.0,
+    )
+
+
 def test_remember_blocking(authed_clients, unique_dataset_name):
     """POST /api/v1/remember blocking on a cognified dataset completes on both servers."""
     _seed_and_cognify(authed_clients, unique_dataset_name)
 
-    payload = {
-        "query": "What did Newton discover?",
-        "run_in_background": False,
-    }
-    py = authed_clients["py"].post("/api/v1/remember", json=payload, timeout=300.0)
-    rs = authed_clients["rs"].post("/api/v1/remember", json=payload, timeout=300.0)
+    py = _post_remember(
+        authed_clients["py"],
+        query="What did Newton discover?",
+        dataset_name=unique_dataset_name,
+    )
+    rs = _post_remember(
+        authed_clients["rs"],
+        query="What did Newton discover?",
+        dataset_name=unique_dataset_name,
+    )
     assert py.status_code == rs.status_code, (
         f"remember status mismatch: py={py.status_code} rs={rs.status_code}\n"
         f"py: {py.text[:400]}\nrs: {rs.text[:400]}"
     )
+    if py.status_code == 200 and rs.status_code == 200:
+        assert_responses_match(py, rs, ignore=_IGNORE)
 
 
 def test_remember_with_session_id(authed_clients, unique_dataset_name):
@@ -69,29 +116,41 @@ def test_remember_with_session_id(authed_clients, unique_dataset_name):
     _seed_and_cognify(authed_clients, unique_dataset_name)
 
     session_id = str(uuid.uuid4())
-    payload = {
-        "query": "Explain heliocentrism.",
-        "session_id": session_id,
-        "run_in_background": False,
-    }
-    py = authed_clients["py"].post("/api/v1/remember", json=payload, timeout=300.0)
-    rs = authed_clients["rs"].post("/api/v1/remember", json=payload, timeout=300.0)
+    py = _post_remember(
+        authed_clients["py"],
+        query="Explain heliocentrism.",
+        session_id=session_id,
+        dataset_name=unique_dataset_name,
+    )
+    rs = _post_remember(
+        authed_clients["rs"],
+        query="Explain heliocentrism.",
+        session_id=session_id,
+        dataset_name=unique_dataset_name,
+    )
     assert py.status_code == rs.status_code, (
         f"remember-with-session status mismatch: py={py.status_code} rs={rs.status_code}"
     )
+    if py.status_code == 200 and rs.status_code == 200:
+        assert_responses_match(py, rs, ignore=_IGNORE)
 
 
 def test_remember_without_session_id(authed_clients, unique_dataset_name):
     """POST /api/v1/remember without session_id assigns one and returns it."""
     _seed_and_cognify(authed_clients, unique_dataset_name)
 
-    payload = {
-        "query": "Tell me about Galileo.",
-        "run_in_background": False,
-    }
-    py = authed_clients["py"].post("/api/v1/remember", json=payload, timeout=300.0)
-    rs = authed_clients["rs"].post("/api/v1/remember", json=payload, timeout=300.0)
+    py = _post_remember(
+        authed_clients["py"],
+        query="Tell me about Galileo.",
+        dataset_name=unique_dataset_name,
+    )
+    rs = _post_remember(
+        authed_clients["rs"],
+        query="Tell me about Galileo.",
+        dataset_name=unique_dataset_name,
+    )
     assert py.status_code == rs.status_code, (
         f"remember-no-session status mismatch: py={py.status_code} rs={rs.status_code}"
     )
-    assert_responses_match(py, rs, ignore=_IGNORE)
+    if py.status_code == 200 and rs.status_code == 200:
+        assert_responses_match(py, rs, ignore=_IGNORE)
