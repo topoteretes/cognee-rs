@@ -7,6 +7,7 @@ pub mod notebooks;
 pub mod pipeline_runs;
 pub mod role;
 pub mod search_history;
+pub mod session_lifecycle;
 pub mod task_runs;
 pub mod tenant;
 pub mod tutorial_seeder;
