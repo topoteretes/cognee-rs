@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | Wire path | n/a — library + database task |
-| Status | **Not Started** |
+| Status | **Done (commit b39cd05)** |
 | Phase | **0 — Pre-port enabler** (TASK 0-2) |
 | Depends on | none. |
 | Blocks | E-01 (consumes the watcher event hook + the new library `RememberStatus` enum + the `Option<f64>` `elapsed_seconds`), E-02 (consumes `RememberResult.entry_type` / `entry_id` added here, and the same status enum), LIB-01 (consumes `RememberResult.entry_type` / `entry_id`). |
@@ -17,7 +17,7 @@
 >
 > **No new wire divergence is introduced.** The v2 `/remember` and `/remember/entry` HTTP responses match Python byte-for-byte. The two-layer split is purely a Rust-internal design choice. **Investigation agent: do not re-litigate.**
 
-> **Resolved design questions (2026-04-29)** — answers are baked into §4 below; included here so a fresh-session implementer doesn't re-litigate:
+> **Resolved design questions (2026-04-29)** — answers are baked into §4 below and fully landed in commit b39cd05; preserved here for reference so a fresh-session implementer doesn't re-litigate:
 >
 > - **Q-A — Scope of "all background pipelines":** Only pipelines that go through `cognee_core::execute()` participate in the new payload mechanism. The `cognify` / `memify` / `add` *convenience* functions used by `cognee_lib::api::remember::remember()` today are **hand-rolled** (they bypass `cognee_core::execute()` — see §3 finding 1). LIB-06 lands the runtime + watcher + DB plumbing for the `execute()`-routed pipelines and adds an explicit TODO in each convenience function pointing to a future task that routes them through `execute()`.
 > - **Q-B / Q-G — Mutation channel:** Payload mutations flow through `PipelineWatcher`, **not** through shared mutable state on `TaskContext`. New trait method `on_payload_field(run_id, key, value)`. Tasks call a thin `TaskContext::publish_payload_field(...)` helper that delegates to the attached watcher. This mirrors how lifecycle events (`on_pipeline_run_started/completed/errored`) already flow.
@@ -259,10 +259,10 @@ pub trait PipelineRunRepository: Send + Sync {
 }
 ```
 
-**Step 8. New SeaORM migration** `m20260429_000002_pipeline_run_payload_fields.rs` (sequential after the existing `m20260429_000001_sync_operations.rs`):
+**Step 8. New SeaORM migration** `m20260501_000002_pipeline_run_payload_fields.rs` (sequential after the existing `m20260501_000001_create_notebooks.rs`, which is currently the last registered migration in [`crates/database/src/migrator/mod.rs`](../../../crates/database/src/migrator/mod.rs)):
 
 ```rust
-// crates/database/src/migrator/m20260429_000002_pipeline_run_payload_fields.rs
+// crates/database/src/migrator/m20260501_000002_pipeline_run_payload_fields.rs
 use sea_orm_migration::prelude::*;
 
 #[derive(DeriveMigrationName)]
@@ -494,7 +494,7 @@ The HTTP-side translation (`WireRememberStatus` enum + `From<RememberStatus>`) i
 
 Update `Display` impl to handle `Option<f64>` (skip the elapsed line when `None`; mirror Python's `__repr__` which only includes elapsed when set).
 
-Existing tests in [`crates/lib/tests/remember_tests.rs`](../../../crates/lib/tests/remember_tests.rs) that hard-code an `f64` for `elapsed_seconds` need to be updated to wrap in `Some(...)`.
+Existing tests in [`crates/lib/tests/remember_sync_only.rs`](../../../crates/lib/tests/remember_sync_only.rs) (verified 2026-04-29: the only file containing a `RememberResult { ... elapsed_seconds: 0.0 ... }` literal is `remember_sync_only.rs:119-125`, **not** `remember_tests.rs`) that hard-code an `f64` for `elapsed_seconds` need to be updated to wrap in `Some(...)`.
 
 **Step 15. Convenience-function TODO markers** (resolves Q-A scope): add a doc-comment + `// TODO(LIB-06)` line in each of:
 
@@ -556,35 +556,35 @@ All four use in-memory SQLite (`sqlite::memory:`) per the project test pattern (
 - `remember_status_from_pipeline_run_status_translation_table` — exhaustive match over `cognee_core::pipeline::PipelineRunStatus` (4 variants → 3 `RememberStatus` outcomes).
 - `remember_result_elapsed_seconds_serializes_as_null_when_none` — `to_dict()` on a result with `elapsed_seconds: None` includes `"elapsed_seconds": null` in the JSON (Python parity).
 
-**5.6 Update `crates/lib/tests/remember_tests.rs`** — fix the hard-coded `elapsed_seconds: f64` literals to be `Some(...)`. The existing `is_success` truth table is unchanged.
+**5.6 Update `crates/lib/tests/remember_sync_only.rs`** — fix the hard-coded `elapsed_seconds: f64` literal at line 125 to be `Some(...)`. (Originally cited as `remember_tests.rs`, corrected 2026-04-29 — the literal lives in `remember_sync_only.rs:119-125`, not `remember_tests.rs`.) The existing `is_success` truth table is unchanged.
 
 **No HTTP-server-level tests in this task** — those land in E-01 (which consumes both the watcher event channel via P5 future wiring and the new `RememberStatus` enum at the DTO boundary).
 
 ## 6. Acceptance criteria
 
-- [ ] `PipelineContext` has `run_id: Option<Uuid>`; `TaskContext::with_run_id` exists.
-- [ ] `cognee_core::execute()` sets `pipeline_ctx.run_id` on the `TaskContext` clones it builds for tasks.
-- [ ] `PipelineRunInfo` has `completed_at: Option<DateTime<Utc>>` and `elapsed_seconds() -> Option<f64>`.
-- [ ] `cognee_core::execute()` sets `completed_at` at terminal-state transitions before notifying watchers.
-- [ ] `PipelineWatcher::on_payload_field(run_id, key, value)` exists with default no-op.
-- [ ] `TaskContext::publish_payload_field(key, value)` exists, delegates to attached watcher, silently no-ops when watcher / run_id is missing.
-- [ ] `PipelineRunRepository::set_payload_field` and `::get_payload` exist on the trait.
-- [ ] New `pipeline_run_payload_fields` table created via migration `m20260429_000002_pipeline_run_payload_fields.rs`; `up()` and `down()` both reversible.
-- [ ] `pipeline_run_payload_field` SeaORM entity exists and is re-exported from `entities/mod.rs`.
-- [ ] `SeaOrmPipelineRunRepository` implements both new methods; concurrent upserts on different keys do not contend.
-- [ ] `ScopedRunWatcher::on_payload_field` is overridden to call `repo.set_payload_field(...)`; failures are logged not propagated.
-- [ ] `DefaultPipelineRunRegistry::get_payload(run_id)` accessor exists.
-- [ ] `RememberStatus` has 4 variants and per-variant `#[serde(rename = "PipelineRun*")]` (or `"SessionStored"`) — emits CamelCase strings.
-- [ ] `From<cognee_core::pipeline::PipelineRunStatus> for RememberStatus` exhaustive.
-- [ ] `RememberResult.elapsed_seconds: Option<f64>`; `Display` updated.
-- [ ] `RememberResult.entry_type: Option<String>`, `entry_id: Option<String>` exist.
-- [ ] TODO markers added to `cognify` / `memify` / `add` convenience functions referencing this task.
-- [ ] All tests in §5 (5.1–5.6) pass.
-- [ ] `cargo check --all-targets` clean.
-- [ ] `cargo test --workspace` green (debug mode).
-- [ ] `scripts/check_all.sh` green (modulo pre-existing JS / OPENAI_TOKEN failures).
-- [ ] **No** D-2 entry in README §1.2 (Decision 15 is recorded as a two-layer convention, not a wire divergence).
-- [ ] **No** wire-shape change to `/cognify` `/memify` `/add` `/improve` — verified by existing wire-shape tests.
+- [x] `PipelineContext` has `run_id: Option<Uuid>`; `TaskContext::with_run_id` exists.
+- [x] `cognee_core::execute()` sets `pipeline_ctx.run_id` on the `TaskContext` clones it builds for tasks.
+- [x] `PipelineRunInfo` has `completed_at: Option<DateTime<Utc>>` and `elapsed_seconds() -> Option<f64>`.
+- [x] `cognee_core::execute()` sets `completed_at` at terminal-state transitions before notifying watchers.
+- [x] `PipelineWatcher::on_payload_field(run_id, key, value)` exists with default no-op.
+- [x] `TaskContext::publish_payload_field(key, value)` exists, delegates to attached watcher, silently no-ops when watcher / run_id is missing.
+- [x] `PipelineRunRepository::set_payload_field` and `::get_payload` exist on the trait.
+- [x] New `pipeline_run_payload_fields` table created via migration `m20260501_000002_pipeline_run_payload_fields.rs`; `up()` and `down()` both reversible.
+- [x] `pipeline_run_payload_field` SeaORM entity exists and is re-exported from `entities/mod.rs`.
+- [x] `SeaOrmPipelineRunRepository` implements both new methods; concurrent upserts on different keys do not contend.
+- [x] `ScopedRunWatcher::on_payload_field` is overridden to call `repo.set_payload_field(...)`; failures are logged not propagated.
+- [x] `DefaultPipelineRunRegistry::get_payload(run_id)` accessor exists.
+- [x] `RememberStatus` has 4 variants and per-variant `#[serde(rename = "PipelineRun*")]` (or `"SessionStored"`) — emits CamelCase strings.
+- [x] `From<cognee_core::pipeline::PipelineRunStatus> for RememberStatus` exhaustive.
+- [x] `RememberResult.elapsed_seconds: Option<f64>`; `Display` updated.
+- [x] `RememberResult.entry_type: Option<String>`, `entry_id: Option<String>` exist.
+- [x] TODO markers added to `cognify` / `memify` / `add` convenience functions referencing this task.
+- [x] All tests in §5 (5.1–5.6) pass.
+- [x] `cargo check --all-targets` clean.
+- [x] `cargo test --workspace` green (debug mode).
+- [x] `scripts/check_all.sh` green (modulo pre-existing JS / OPENAI_TOKEN failures).
+- [x] **No** D-2 entry in README §1.2 (Decision 15 is recorded as a two-layer convention, not a wire divergence).
+- [x] **No** wire-shape change to `/cognify` `/memify` `/add` `/improve` — verified by existing wire-shape tests.
 
 ## 7. References
 
