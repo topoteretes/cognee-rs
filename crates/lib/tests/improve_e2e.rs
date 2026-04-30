@@ -104,6 +104,9 @@ async fn improve_without_sessions_runs_only_memify() {
         add_pipeline: Some(&h.add_pipeline),
         checkpoint_store: Some(h.checkpoint_store.clone() as Arc<_>),
         cognify_config: &config,
+        extraction_tasks: None,
+        enrichment_tasks: None,
+        data: None,
     })
     .await
     .unwrap();
@@ -140,6 +143,9 @@ async fn improve_skips_stage1_when_session_backends_missing() {
         add_pipeline: None,
         checkpoint_store: None,
         cognify_config: &config,
+        extraction_tasks: None,
+        enrichment_tasks: None,
+        data: None,
     })
     .await
     .unwrap();

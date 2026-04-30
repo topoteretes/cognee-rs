@@ -513,6 +513,11 @@ async fn remember_session(
             add_pipeline: Some(add_pipeline.as_ref()),
             checkpoint_store,
             cognify_config: &cognify_config,
+            // E-05: v2 power-user fields not exercised by remember()'s
+            // internal session-improve path.
+            extraction_tasks: None,
+            enrichment_tasks: None,
+            data: None,
         })
         .await;
 

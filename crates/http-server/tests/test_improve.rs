@@ -86,3 +86,164 @@ async fn post_improve_end_to_end_skips_without_openai() {
          ComponentHandles yet"
     );
 }
+
+// ─── E-05 v2 payload field plumbing ──────────────────────────────────────────
+//
+// These tests verify that the five v2 fields added to `ImprovePayloadDTO`
+// (`sessionIds`, `extractionTasks`, `enrichmentTasks`, `data`, `nodeName`) are
+// accepted on the wire in both camelCase and snake_case forms. The handler
+// dispatches a no-op stub (the real `cognee.improve()` call is the deferred P5
+// follow-up), so these tests assert HTTP 200 and successful payload parsing.
+
+/// `sessionIds` (camelCase) is accepted and the handler returns 200.
+#[tokio::test]
+async fn session_ids_accepted_camelcase() {
+    let app = test_app().await;
+
+    let body = json!({
+        "sessionIds": ["s1", "s2"],
+        "datasetName": "ds_session_camel"
+    });
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/v1/improve")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(serde_json::to_string(&body).unwrap()))
+        .unwrap();
+
+    let resp = app.oneshot(req).await.expect("oneshot");
+    assert_eq!(
+        resp.status(),
+        StatusCode::OK,
+        "sessionIds (camelCase) should be accepted"
+    );
+}
+
+/// `session_ids` (snake_case alias) is accepted and the handler returns 200.
+#[tokio::test]
+async fn session_ids_accepted_snake_case_alias() {
+    let app = test_app().await;
+
+    let body = json!({
+        "session_ids": ["s1"],
+        "dataset_name": "ds_session_snake"
+    });
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/v1/improve")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(serde_json::to_string(&body).unwrap()))
+        .unwrap();
+
+    let resp = app.oneshot(req).await.expect("oneshot");
+    assert_eq!(
+        resp.status(),
+        StatusCode::OK,
+        "session_ids (snake_case alias) should be accepted"
+    );
+}
+
+/// `extractionTasks` and `enrichmentTasks` are accepted in both wire forms.
+#[tokio::test]
+async fn extraction_tasks_and_enrichment_tasks_passed_through() {
+    let app_camel = test_app().await;
+    let body_camel = json!({
+        "extractionTasks": ["t1"],
+        "enrichmentTasks": ["e1"],
+        "datasetName": "ds_tasks_camel"
+    });
+    let req_camel = Request::builder()
+        .method("POST")
+        .uri("/api/v1/improve")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(serde_json::to_string(&body_camel).unwrap()))
+        .unwrap();
+    let resp_camel = app_camel.oneshot(req_camel).await.expect("oneshot");
+    assert_eq!(
+        resp_camel.status(),
+        StatusCode::OK,
+        "camelCase tasks fields should be accepted"
+    );
+
+    let app_snake = test_app().await;
+    let body_snake = json!({
+        "extraction_tasks": ["t1"],
+        "enrichment_tasks": ["e1"],
+        "dataset_name": "ds_tasks_snake"
+    });
+    let req_snake = Request::builder()
+        .method("POST")
+        .uri("/api/v1/improve")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(serde_json::to_string(&body_snake).unwrap()))
+        .unwrap();
+    let resp_snake = app_snake.oneshot(req_snake).await.expect("oneshot");
+    assert_eq!(
+        resp_snake.status(),
+        StatusCode::OK,
+        "snake_case tasks aliases should be accepted"
+    );
+}
+
+/// `nodeName` and its `node_name` snake_case alias are accepted.
+#[tokio::test]
+async fn node_name_camelcase_and_alias() {
+    let app_camel = test_app().await;
+    let body_camel = json!({
+        "nodeName": ["n1", "n2"],
+        "datasetName": "ds_node_camel"
+    });
+    let req_camel = Request::builder()
+        .method("POST")
+        .uri("/api/v1/improve")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(serde_json::to_string(&body_camel).unwrap()))
+        .unwrap();
+    let resp_camel = app_camel.oneshot(req_camel).await.expect("oneshot");
+    assert_eq!(
+        resp_camel.status(),
+        StatusCode::OK,
+        "nodeName (camelCase) should be accepted"
+    );
+
+    let app_snake = test_app().await;
+    let body_snake = json!({
+        "node_name": ["n1"],
+        "dataset_name": "ds_node_snake"
+    });
+    let req_snake = Request::builder()
+        .method("POST")
+        .uri("/api/v1/improve")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(serde_json::to_string(&body_snake).unwrap()))
+        .unwrap();
+    let resp_snake = app_snake.oneshot(req_snake).await.expect("oneshot");
+    assert_eq!(
+        resp_snake.status(),
+        StatusCode::OK,
+        "node_name (snake_case alias) should be accepted"
+    );
+}
+
+/// `data` (single-word, no rename) round-trips on the wire.
+#[tokio::test]
+async fn data_field_round_trip() {
+    let app = test_app().await;
+    let body = json!({
+        "data": "some inline payload",
+        "datasetName": "ds_data"
+    });
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/v1/improve")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(serde_json::to_string(&body).unwrap()))
+        .unwrap();
+
+    let resp = app.oneshot(req).await.expect("oneshot");
+    assert_eq!(
+        resp.status(),
+        StatusCode::OK,
+        "data field should be accepted as-is"
+    );
+}

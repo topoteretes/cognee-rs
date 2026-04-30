@@ -76,7 +76,8 @@ async fn make_harness() -> Harness {
 // (a) Compile-time: no run_in_background parameter
 //
 // If run_in_background were still present, the calls below would fail to
-// compile because `ImproveParams` has exactly 18 fields (not 19).
+// compile because `ImproveParams` has exactly 21 fields (18 from LIB-04 plus
+// the three v2 fields added in E-05: extraction_tasks, enrichment_tasks, data).
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
@@ -119,6 +120,9 @@ async fn improve_with_sessions_runs_at_least_memify() {
         add_pipeline: Some(&h.add_pipeline),
         checkpoint_store: Some(h.checkpoint_store.clone() as Arc<_>),
         cognify_config: &config,
+        extraction_tasks: None,
+        enrichment_tasks: None,
+        data: None,
     })
     .await
     .unwrap();
@@ -161,6 +165,9 @@ async fn improve_without_sessions_runs_only_memify() {
         add_pipeline: Some(&h.add_pipeline),
         checkpoint_store: Some(h.checkpoint_store.clone() as Arc<_>),
         cognify_config: &config,
+        extraction_tasks: None,
+        enrichment_tasks: None,
+        data: None,
     })
     .await
     .unwrap();

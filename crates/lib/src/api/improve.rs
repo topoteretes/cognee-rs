@@ -56,8 +56,12 @@ pub struct ImproveResult {
 /// pass `None` explicitly for the `Option<...>` fields.
 ///
 /// LIB-04 (Decision 8) introduced this struct to replace the previous 18
-/// positional parameters. E-05 will extend it with three additional v2 fields
-/// (`extraction_tasks`, `enrichment_tasks`, `data`).
+/// positional parameters. E-05 (this commit) extended it with three v2
+/// power-user fields — `extraction_tasks`, `enrichment_tasks`, `data` —
+/// matching Python's `ImprovePayloadDTO` field-for-field. They are pure-data
+/// fields and currently informational: the orchestrator does not yet branch
+/// on them, but they are accepted by the constructor so callers (especially
+/// the HTTP layer) can plumb the raw payload through without dropping fields.
 pub struct ImproveParams<'a> {
     /// Dataset name to operate on (Stage 2 persistence + Stage 4 lookup).
     pub dataset_name: String,
@@ -71,6 +75,18 @@ pub struct ImproveParams<'a> {
     pub tenant_id: Option<Uuid>,
     /// Mixing factor for feedback weight propagation (Stage 1).
     pub feedback_alpha: f64,
+
+    /// Optional list of extraction-task identifiers (Python parity:
+    /// `extraction_tasks: Optional[List[str]]`). Currently informational —
+    /// reserved for future power-user overrides matching Python's
+    /// `ImproveKwargs.extraction_tasks`.
+    pub extraction_tasks: Option<Vec<String>>,
+    /// Optional list of enrichment-task identifiers (Python parity:
+    /// `enrichment_tasks: Optional[List[str]]`). Currently informational.
+    pub enrichment_tasks: Option<Vec<String>>,
+    /// Optional inline text payload (Python parity: `data: Optional[str]`).
+    /// Currently informational; reserved for future power-user overrides.
+    pub data: Option<String>,
 
     /// LLM handle (used by Stage 2 cognify-of-session-text).
     pub llm: Arc<dyn Llm>,
@@ -126,6 +142,12 @@ pub async fn improve(params: ImproveParams<'_>) -> Result<ImproveResult, ApiErro
         add_pipeline,
         checkpoint_store,
         cognify_config,
+        // E-05 v2 power-user fields — currently informational; the orchestrator
+        // does not yet branch on them. Accepting them here keeps the struct
+        // shape Python-parity-aligned for HTTP plumbing.
+        extraction_tasks: _extraction_tasks,
+        enrichment_tasks: _enrichment_tasks,
+        data: _data,
     } = params;
 
     let mut result = ImproveResult::default();

@@ -81,9 +81,36 @@ pub async fn post_improve(
 
     let run_in_background = payload.run_in_background.unwrap_or(false);
 
+    // ── Telemetry plumbing (E-05) ──────────────────────────────────────────────
+    // Mirrors Python's per-field telemetry on the improve handler
+    // (`get_improve_router.py:67-74`). The five v2 payload fields are observed
+    // here so cross-SDK harnesses can confirm they reach the handler even while
+    // the dispatched work below remains a no-op stub.
+    let session_ids_count = payload.session_ids.as_ref().map_or(0, |s| s.len());
+    let extraction_tasks_count = payload.extraction_tasks.as_ref().map(|v| v.len());
+    let enrichment_tasks_count = payload.enrichment_tasks.as_ref().map(|v| v.len());
+    let node_name_count = payload.node_name.as_ref().map(|v| v.len());
+    let has_data = payload.data.as_deref().is_some_and(|d| !d.is_empty());
+    tracing::info!(
+        session_ids_count,
+        extraction_tasks_count = ?extraction_tasks_count,
+        enrichment_tasks_count = ?enrichment_tasks_count,
+        node_name_count = ?node_name_count,
+        has_data,
+        run_in_background,
+        dataset_id = %dataset_id,
+        "improve payload received"
+    );
+
     // ── Dispatch ────────────────────────────────────────────────────────────────
     // Blocking gap stub — improve requires the same components as memify.
     // TODO(P5): wire real improve() call once ComponentHandles gains graph/vector handles.
+    // E-05 scope: DTO + ImproveParams + telemetry only. Wiring the real
+    // `cognee_lib::api::improve::improve(...)` call is impossible from
+    // http-server without resolving the cycle constraint
+    // (`crates/http-server/Cargo.toml:36-38`) and adding `vector_db`,
+    // `embedding_engine`, `add_pipeline`, `checkpoint_store`, `cognify_config`,
+    // and `ontology_resolver` slots to `ComponentHandles`. Deferred to P5.
     let work = box_pipeline_future(async move { Ok::<(), std::io::Error>(()) });
 
     let outcome = dispatch_pipeline(
