@@ -494,13 +494,13 @@ async fn remember_session(
     // Optional self-improvement via improve() — inline (synchronous).
     let mut improve_error: Option<String> = None;
     if self_improvement {
-        let improve_result = improve(
-            dataset_name,
-            Some(vec![session_id.to_string()]),
-            None,
+        let improve_result = improve(crate::api::improve::ImproveParams {
+            dataset_name: dataset_name.to_string(),
+            session_ids: Some(vec![session_id.to_string()]),
+            node_name: None,
             owner_id,
             tenant_id,
-            0.1, // default feedback_alpha
+            feedback_alpha: 0.1, // default feedback_alpha
             llm,
             storage,
             graph_db,
@@ -510,10 +510,10 @@ async fn remember_session(
             db,
             session_store,
             session_manager,
-            Some(add_pipeline.as_ref()),
+            add_pipeline: Some(add_pipeline.as_ref()),
             checkpoint_store,
-            &cognify_config,
-        )
+            cognify_config: &cognify_config,
+        })
         .await;
 
         match improve_result {

@@ -13,7 +13,7 @@ use cognee_database::{DatabaseConnection, IngestDb, SeaOrmCheckpointStore, conne
 use cognee_embedding::MockEmbeddingEngine;
 use cognee_graph::MockGraphDB;
 use cognee_ingestion::AddPipeline;
-use cognee_lib::api::improve::improve;
+use cognee_lib::api::improve::{ImproveParams, improve};
 use cognee_ontology::{NoOpOntologyResolver, OntologyResolver};
 use cognee_session::{FsSessionStore, SessionManager, SessionStore};
 use cognee_storage::{LocalStorage, StorageTrait};
@@ -85,26 +85,26 @@ async fn improve_without_sessions_runs_only_memify() {
     let llm: Arc<dyn cognee_llm::Llm> = Arc::new(MockLlm::empty());
     let config = CognifyConfig::default();
 
-    let r = improve(
-        "ds_memify",
-        None,
-        None,
-        owner,
-        None,
-        0.1,
+    let r = improve(ImproveParams {
+        dataset_name: "ds_memify".to_string(),
+        session_ids: None,
+        node_name: None,
+        owner_id: owner,
+        tenant_id: None,
+        feedback_alpha: 0.1,
         llm,
-        Arc::clone(&h.storage),
-        h.graph_db.clone() as Arc<_>,
-        h.vector_db.clone() as Arc<_>,
-        h.embedding_engine.clone() as Arc<_>,
-        Arc::clone(&h.ontology),
-        Some(Arc::clone(&h.db)),
-        Some(Arc::clone(&h.session_store)),
-        Some(Arc::clone(&h.session_manager)),
-        Some(&h.add_pipeline),
-        Some(h.checkpoint_store.clone() as Arc<_>),
-        &config,
-    )
+        storage: Arc::clone(&h.storage),
+        graph_db: h.graph_db.clone() as Arc<_>,
+        vector_db: h.vector_db.clone() as Arc<_>,
+        embedding_engine: h.embedding_engine.clone() as Arc<_>,
+        ontology_resolver: Arc::clone(&h.ontology),
+        db: Some(Arc::clone(&h.db)),
+        session_store: Some(Arc::clone(&h.session_store)),
+        session_manager: Some(Arc::clone(&h.session_manager)),
+        add_pipeline: Some(&h.add_pipeline),
+        checkpoint_store: Some(h.checkpoint_store.clone() as Arc<_>),
+        cognify_config: &config,
+    })
     .await
     .unwrap();
 
@@ -121,26 +121,26 @@ async fn improve_skips_stage1_when_session_backends_missing() {
 
     // Provide session_ids but no session_store/manager — stages 1, 2, 4
     // should all be skipped (with warnings), Stage 3 still runs.
-    let r = improve(
-        "ds_nosess",
-        Some(vec!["s1".to_string()]),
-        None,
-        owner,
-        None,
-        0.1,
+    let r = improve(ImproveParams {
+        dataset_name: "ds_nosess".to_string(),
+        session_ids: Some(vec!["s1".to_string()]),
+        node_name: None,
+        owner_id: owner,
+        tenant_id: None,
+        feedback_alpha: 0.1,
         llm,
-        Arc::clone(&h.storage),
-        h.graph_db.clone() as Arc<_>,
-        h.vector_db.clone() as Arc<_>,
-        h.embedding_engine.clone() as Arc<_>,
-        Arc::clone(&h.ontology),
-        Some(Arc::clone(&h.db)),
-        None,
-        None,
-        None,
-        None,
-        &config,
-    )
+        storage: Arc::clone(&h.storage),
+        graph_db: h.graph_db.clone() as Arc<_>,
+        vector_db: h.vector_db.clone() as Arc<_>,
+        embedding_engine: h.embedding_engine.clone() as Arc<_>,
+        ontology_resolver: Arc::clone(&h.ontology),
+        db: Some(Arc::clone(&h.db)),
+        session_store: None,
+        session_manager: None,
+        add_pipeline: None,
+        checkpoint_store: None,
+        cognify_config: &config,
+    })
     .await
     .unwrap();
 

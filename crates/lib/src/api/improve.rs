@@ -47,31 +47,87 @@ pub struct ImproveResult {
     pub edges_synced: usize,
 }
 
+/// Parameters for [`improve`].
+///
+/// All fields are required at construction time — `Default` is intentionally
+/// not derived because several fields (`owner_id`, the engine handles, and
+/// `cognify_config`) have no sensible default value. This forces every caller
+/// to think about each dependency. Callers that omit optional behavior should
+/// pass `None` explicitly for the `Option<...>` fields.
+///
+/// LIB-04 (Decision 8) introduced this struct to replace the previous 18
+/// positional parameters. E-05 will extend it with three additional v2 fields
+/// (`extraction_tasks`, `enrichment_tasks`, `data`).
+pub struct ImproveParams<'a> {
+    /// Dataset name to operate on (Stage 2 persistence + Stage 4 lookup).
+    pub dataset_name: String,
+    /// Session ids that drive Stages 1, 2, and 4. `None` or empty skips them.
+    pub session_ids: Option<Vec<String>>,
+    /// Optional graph node-name filter applied to the memify (Stage 3) pass.
+    pub node_name: Option<Vec<String>>,
+    /// Owner UUID under which graph/session reads and writes are scoped.
+    pub owner_id: Uuid,
+    /// Optional tenant UUID for multi-tenant deployments.
+    pub tenant_id: Option<Uuid>,
+    /// Mixing factor for feedback weight propagation (Stage 1).
+    pub feedback_alpha: f64,
+
+    /// LLM handle (used by Stage 2 cognify-of-session-text).
+    pub llm: Arc<dyn Llm>,
+    /// File storage handle.
+    pub storage: Arc<dyn StorageTrait>,
+    /// Graph database handle.
+    pub graph_db: Arc<dyn GraphDBTrait>,
+    /// Vector database handle.
+    pub vector_db: Arc<dyn VectorDB>,
+    /// Embedding engine handle.
+    pub embedding_engine: Arc<dyn EmbeddingEngine>,
+    /// Ontology resolver handle.
+    pub ontology_resolver: Arc<dyn OntologyResolver>,
+
+    /// Metadata DB connection. Required for Stage 4 (dataset lookup).
+    pub db: Option<Arc<DatabaseConnection>>,
+    /// Session backing store. Required for Stages 1 and 2.
+    pub session_store: Option<Arc<dyn SessionStore>>,
+    /// Session manager. Required for Stages 1 and 4.
+    pub session_manager: Option<Arc<SessionManager>>,
+    /// Add pipeline (borrowed). Required for Stage 2.
+    pub add_pipeline: Option<&'a AddPipeline>,
+    /// Checkpoint store. Required for Stage 4.
+    pub checkpoint_store: Option<Arc<dyn CheckpointStore>>,
+
+    /// Borrowed cognify configuration used by Stage 2 persistence.
+    pub cognify_config: &'a CognifyConfig,
+}
+
 /// Bidirectional session-graph bridge.
 ///
 /// Background dispatch is a host-side concern — this function is strictly
 /// synchronous. Stage 4 always runs when sessions are present.
-#[allow(clippy::too_many_arguments)]
-pub async fn improve(
-    dataset_name: &str,
-    session_ids: Option<Vec<String>>,
-    node_name: Option<Vec<String>>,
-    owner_id: Uuid,
-    tenant_id: Option<Uuid>,
-    feedback_alpha: f64,
-    llm: Arc<dyn Llm>,
-    storage: Arc<dyn StorageTrait>,
-    graph_db: Arc<dyn GraphDBTrait>,
-    vector_db: Arc<dyn VectorDB>,
-    embedding_engine: Arc<dyn EmbeddingEngine>,
-    ontology_resolver: Arc<dyn OntologyResolver>,
-    db: Option<Arc<DatabaseConnection>>,
-    session_store: Option<Arc<dyn SessionStore>>,
-    session_manager: Option<Arc<SessionManager>>,
-    add_pipeline: Option<&AddPipeline>,
-    checkpoint_store: Option<Arc<dyn CheckpointStore>>,
-    cognify_config: &CognifyConfig,
-) -> Result<ImproveResult, ApiError> {
+///
+/// All inputs are passed via [`ImproveParams`] (see Decision 8 / LIB-04).
+pub async fn improve(params: ImproveParams<'_>) -> Result<ImproveResult, ApiError> {
+    let ImproveParams {
+        dataset_name,
+        session_ids,
+        node_name,
+        owner_id,
+        tenant_id,
+        feedback_alpha,
+        llm,
+        storage,
+        graph_db,
+        vector_db,
+        embedding_engine,
+        ontology_resolver,
+        db,
+        session_store,
+        session_manager,
+        add_pipeline,
+        checkpoint_store,
+        cognify_config,
+    } = params;
+
     let mut result = ImproveResult::default();
     let has_sessions = session_ids.as_ref().is_some_and(|ids| !ids.is_empty());
 
@@ -125,7 +181,7 @@ pub async fn improve(
             (Some(store), Some(pipeline)) => {
                 match persist_sessions_in_knowledge_graph(
                     sids,
-                    dataset_name,
+                    &dataset_name,
                     owner_id,
                     tenant_id,
                     Arc::clone(store),
@@ -210,7 +266,7 @@ pub async fn improve(
                 // Stage 4 requires a dataset UUID. Resolve from the name.
                 let dataset_id_opt = cognee_database::ops::datasets::get_dataset_by_name(
                     dbc.as_ref(),
-                    dataset_name,
+                    &dataset_name,
                     owner_id,
                     tenant_id,
                 )
@@ -220,7 +276,7 @@ pub async fn improve(
                 .map(|ds| ds.id);
                 let Some(dataset_id) = dataset_id_opt else {
                     warn!(
-                        dataset_name = dataset_name,
+                        dataset_name = %dataset_name,
                         "improve stage 4: dataset not found; skipping sync_graph_to_session"
                     );
                     return Ok(result);
