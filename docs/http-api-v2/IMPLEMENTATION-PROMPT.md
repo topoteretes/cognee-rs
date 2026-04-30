@@ -15,9 +15,9 @@ If you are starting a clean session, read these documents before doing anything:
 
 ## 0. Current state
 
-**5 tasks complete (CLEAN-01, LIB-06, E-01, E-03, E-06). Resume point: TASK A-4 (E-07).**
+**6 tasks complete (CLEAN-01, LIB-06, E-01, E-03, E-06, E-07). Resume point: TASK A-5 (E-08).**
 
-The v2 doc package landed in commits ending `…/docs/http-api-v2/`. 14 of 19 tasks are at status **Not Started** (1 cleanup + 1 library prerequisite + 3 endpoints done; 5 library prerequisites + 9 endpoints remain; CLEAN-01 e146835, LIB-06 b39cd05, E-01 037cad2, E-03 0dafdee, E-06 verified-no-code-change).
+The v2 doc package landed in commits ending `…/docs/http-api-v2/`. 13 of 19 tasks are at status **Not Started** (1 cleanup + 1 library prerequisite + 4 endpoints done; 5 library prerequisites + 8 endpoints remain; CLEAN-01 e146835, LIB-06 b39cd05, E-01 037cad2, E-03 0dafdee, E-06 verified-no-code-change, E-07 35d6b3c).
 
 Phases and their tasks (do them in this order — see §2 for the dependency rationale):
 
@@ -28,7 +28,7 @@ Phases and their tasks (do them in this order — see §2 for the dependency rat
 | **A — Verify** | A-1 | [E-01](tasks/e-01-remember.md) | `POST /remember` — **Done (commit 037cad2).** Brought `RememberResultDTO` to byte-for-byte parity with Python's `RememberResult.to_dict()` (added `items_processed`/`elapsed_seconds`/`session_ids`/`content_hash`/`items`; flipped `dataset_id`/`pipeline_run_id` to `Option<Uuid>`); introduced `WireRememberStatus` standalone wire enum that emits Python's lowercase strings (Decision 15). The `From<cognee_lib::api::remember::RememberStatus>` impl is deferred to the P5 wiring task (cycle constraint). |
 |   | A-2 | [E-03](tasks/e-03-recall-history.md) | `GET /recall` — **Done (commit 0dafdee).** Decision 6 polish — landed the project-wide `iso8601_offset` serde helper at `crates/http-server/src/dto/util.rs` (5 unit tests) and applied it to `SearchHistoryItemDTO::created_at` (shared between `GET /search` and `GET /recall`). Cross-SDK parity test `e2e-cross-sdk/harness/test_http_v2_recall_history.py` asserts byte equality on `createdAt`. |
 |   | A-3 | [E-06](tasks/e-06-forget.md) | `POST /forget` — **Done — verified, no code change.** Investigation 2026-04-29: zero divergences vs Python `cognee/api/v1/forget/routers/get_forget_router.py`; existing cross-SDK harness `e2e-cross-sdk/harness/test_http_forget.py` already covers all three modes + non-existent. Verify-only short-circuit per §0 Lessons #3. |
-|   | A-4 | [E-07](tasks/e-07-visualize.md) | `GET /visualize` — confirm parity |
+|   | A-4 | [E-07](tasks/e-07-visualize.md) | `GET /visualize` — **Done (commit 35d6b3c).** Cross-SDK harness rewrite for Decision 11: replaced stale `<!--JSON_ISLAND_START/END-->` greps with the seven-`__*_DATA__` extraction strategy. No code change in `crates/`; harness now structurally diffs the seven JS-variable JSON payloads (nodes/links/schema + four color maps) with stable sort, reverses Python's `</` → `<\/` escape before `json.loads`, and includes a negative test asserting the harness detects real graph differences. |
 |   | A-5 | [E-08](tasks/e-08-visualize-multi.md) | `POST /visualize/multi` — confirm parity (was previously mislabelled as a Rust-only divergence; corrected 2026-04-29) |
 | **B — Library prerequisites** | B-1 | [LIB-02](tasks/lib-02-session-manager-trace-step.md) | `add_agent_trace_step` (independent) |
 |   | B-2 | [LIB-03](tasks/lib-03-session-records-schema.md) | `session_records` + `session_model_usage` schema + entities + migration (Decision 13 — first half of the original LIB-03 scope) |
