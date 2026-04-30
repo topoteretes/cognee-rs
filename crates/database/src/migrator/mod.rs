@@ -10,6 +10,7 @@ mod m20260428_000001_tenants_rbac;
 mod m20260429_000001_sync_operations;
 mod m20260501_000001_create_notebooks;
 mod m20260501_000002_pipeline_run_payload_fields;
+mod m20260501_000003_session_records;
 
 pub struct Migrator;
 
@@ -27,6 +28,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260429_000001_sync_operations::Migration),
             Box::new(m20260501_000001_create_notebooks::Migration),
             Box::new(m20260501_000002_pipeline_run_payload_fields::Migration),
+            Box::new(m20260501_000003_session_records::Migration),
         ]
     }
 }

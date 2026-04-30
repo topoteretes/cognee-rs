@@ -41,3 +41,7 @@ pub mod sync_operation;
 
 // P7 notebooks:
 pub mod notebook;
+
+// LIB-03 session lifecycle (consumed by LIB-05's `SessionLifecycleDb`):
+pub mod session_model_usage;
+pub mod session_record;
