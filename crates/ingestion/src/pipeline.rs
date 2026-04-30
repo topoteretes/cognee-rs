@@ -768,6 +768,16 @@ impl AddPipeline {
         self
     }
 
+    // TODO(LIB-06 follow-up): this convenience function bypasses
+    // `cognee_core::execute()` and therefore does not emit payload events via
+    // `PipelineWatcher::on_payload_field`. Tasks running inside this function
+    // cannot publish run-scoped payload that downstream consumers (e.g.
+    // `cognee_lib::api::remember::remember()`) can read via
+    // `PipelineRunRegistry::get_payload(run_id)`. To enable that, this
+    // function would need to route through `cognee_core::execute()` with a
+    // pipeline built via `build_add_pipeline`. Tracked in
+    // `docs/http-api-v2/tasks/lib-06-pipeline-payload-mechanism.md` §3
+    // finding 1.
     #[instrument(
         name = "ingestion.add",
         skip(self, inputs),
@@ -791,6 +801,11 @@ impl AddPipeline {
     }
 
     /// Like [`add`](Self::add), but accepts additional optional parameters.
+    // TODO(LIB-06 follow-up): see the matching note on [`Self::add`] —
+    // bypasses `cognee_core::execute()` and does not emit
+    // `PipelineWatcher::on_payload_field` events. Tracked in
+    // `docs/http-api-v2/tasks/lib-06-pipeline-payload-mechanism.md` §3
+    // finding 1.
     #[instrument(
         name = "ingestion.add_with_params",
         skip(self, inputs, params),

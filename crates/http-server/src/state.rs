@@ -159,6 +159,22 @@ impl PipelineRunRepository for NoOpPipelineRunRepository {
     async fn reset_orphans(&self, _reason: &str) -> Result<u64, cognee_database::DatabaseError> {
         Ok(0)
     }
+
+    async fn set_payload_field(
+        &self,
+        _run_id: uuid::Uuid,
+        _key: &str,
+        _value: serde_json::Value,
+    ) -> Result<(), cognee_database::DatabaseError> {
+        Ok(())
+    }
+
+    async fn get_payload(
+        &self,
+        _run_id: uuid::Uuid,
+    ) -> Result<serde_json::Map<String, serde_json::Value>, cognee_database::DatabaseError> {
+        Ok(serde_json::Map::new())
+    }
 }
 
 // ─── Build state with a real database ─────────────────────────────────────────

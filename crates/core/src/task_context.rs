@@ -31,6 +31,11 @@ pub struct PipelineContext {
     /// The data item currently being processed.
     /// Set per-item by the executor before calling a task.
     pub current_data: Option<Arc<dyn Value>>,
+    /// Random per-invocation run id. Set by [`crate::pipeline::execute`] when
+    /// it creates `PipelineRunInfo`. Used by tasks (via
+    /// [`TaskContext::publish_payload_field`]) to attribute payload events.
+    /// `None` when the task is not running inside `execute()`.
+    pub run_id: Option<Uuid>,
 }
 /// Runtime dependencies and control tokens for a single pipeline task.
 ///
@@ -109,6 +114,49 @@ impl TaskContext {
             exec_status: Arc::clone(&self.exec_status),
             pipeline_watcher: self.pipeline_watcher.clone(),
         })
+    }
+
+    /// Create a new `Arc<TaskContext>` with `run_id` set on the pipeline
+    /// context. All other fields are shallow-cloned.
+    ///
+    /// Returns the original `Arc` unchanged if no `pipeline_ctx` is present.
+    pub fn with_run_id(self: &Arc<Self>, run_id: Uuid) -> Arc<Self> {
+        let mut pipeline_ctx = match &self.pipeline_ctx {
+            Some(ctx) => ctx.clone(),
+            None => return Arc::clone(self),
+        };
+        pipeline_ctx.run_id = Some(run_id);
+        Arc::new(TaskContext {
+            thread_pool: Arc::clone(&self.thread_pool),
+            database: Arc::clone(&self.database),
+            graph_db: Arc::clone(&self.graph_db),
+            vector_db: Arc::clone(&self.vector_db),
+            cancellation: self.cancellation.clone(),
+            progress: self.progress.clone(),
+            pipeline_ctx: Some(pipeline_ctx),
+            exec_status: Arc::clone(&self.exec_status),
+            pipeline_watcher: self.pipeline_watcher.clone(),
+        })
+    }
+
+    /// Publish a run-scoped payload field. Tasks running inside
+    /// [`crate::pipeline::execute`] call this to attach metadata that downstream
+    /// observers read via the registry's payload accumulator.
+    ///
+    /// Silently no-ops if no `pipeline_watcher` is attached or if
+    /// `pipeline_ctx.run_id` was never set (i.e. the task is not running
+    /// inside `execute()`).
+    pub async fn publish_payload_field(&self, key: &str, value: serde_json::Value) {
+        let Some(w) = self.pipeline_watcher.as_ref() else {
+            return;
+        };
+        let Some(pctx) = self.pipeline_ctx.as_ref() else {
+            return;
+        };
+        let Some(run_id) = pctx.run_id else {
+            return;
+        };
+        w.on_payload_field(run_id, key, value).await;
     }
 }
 /// Fluent builder for [`TaskContext`].

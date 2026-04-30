@@ -105,4 +105,22 @@ pub trait PipelineRunRepository: Send + Sync {
     ///
     /// Returns the number of rows rewritten.
     async fn reset_orphans(&self, reason: &str) -> Result<u64, DbError>;
+
+    /// Upsert a single payload field for a run. Concurrent calls with the
+    /// same `(run_id, key)` are last-write-wins per row; calls with different
+    /// keys do not contend.
+    async fn set_payload_field(
+        &self,
+        run_id: Uuid,
+        key: &str,
+        value: serde_json::Value,
+    ) -> Result<(), DbError>;
+
+    /// Read all payload fields for a run as a `serde_json::Map`. Returns an
+    /// empty map (not `None`) when the run has no payload events; returns
+    /// `Err` only on actual DB failures.
+    async fn get_payload(
+        &self,
+        run_id: Uuid,
+    ) -> Result<serde_json::Map<String, serde_json::Value>, DbError>;
 }

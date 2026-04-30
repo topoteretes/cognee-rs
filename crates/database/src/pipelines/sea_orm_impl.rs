@@ -11,7 +11,7 @@ use serde_json::json;
 use uuid::Uuid;
 
 use crate::conversions::{domain_status_to_entity, entity_status_to_domain};
-use crate::entities::{dataset, pipeline_run, user};
+use crate::entities::{dataset, pipeline_run, pipeline_run_payload_field, user};
 use crate::types::{DatabaseError, PipelineRun, PipelineRunStatus};
 use crate::uuid_hex;
 
@@ -308,5 +308,55 @@ impl PipelineRunRepository for SeaOrmPipelineRunRepository {
         }
 
         Ok(count)
+    }
+
+    async fn set_payload_field(
+        &self,
+        run_id: Uuid,
+        key: &str,
+        value: serde_json::Value,
+    ) -> Result<(), DatabaseError> {
+        use sea_orm::sea_query::OnConflict;
+
+        let now = Utc::now();
+        let model = pipeline_run_payload_field::ActiveModel {
+            pipeline_run_id: sea_orm::ActiveValue::Set(uuid_hex::to_hex(run_id)),
+            key: sea_orm::ActiveValue::Set(key.to_owned()),
+            value: sea_orm::ActiveValue::Set(value),
+            created_at: sea_orm::ActiveValue::Set(now),
+            updated_at: sea_orm::ActiveValue::Set(now),
+        };
+
+        pipeline_run_payload_field::Entity::insert(model)
+            .on_conflict(
+                OnConflict::columns([
+                    pipeline_run_payload_field::Column::PipelineRunId,
+                    pipeline_run_payload_field::Column::Key,
+                ])
+                .update_columns([
+                    pipeline_run_payload_field::Column::Value,
+                    pipeline_run_payload_field::Column::UpdatedAt,
+                ])
+                .to_owned(),
+            )
+            .exec(self.db.as_ref())
+            .await
+            .map_err(|e| {
+                DatabaseError::QueryError(format!("set_payload_field upsert failed: {e}"))
+            })?;
+        Ok(())
+    }
+
+    async fn get_payload(
+        &self,
+        run_id: Uuid,
+    ) -> Result<serde_json::Map<String, serde_json::Value>, DatabaseError> {
+        let rows = pipeline_run_payload_field::Entity::find()
+            .filter(pipeline_run_payload_field::Column::PipelineRunId.eq(uuid_hex::to_hex(run_id)))
+            .all(self.db.as_ref())
+            .await
+            .map_err(|e| DatabaseError::QueryError(format!("get_payload query failed: {e}")))?;
+
+        Ok(rows.into_iter().map(|m| (m.key, m.value)).collect())
     }
 }

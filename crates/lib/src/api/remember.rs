@@ -29,15 +29,43 @@ use super::error::ApiError;
 use super::improve::improve;
 
 /// Status of a remember operation.
+///
+/// **Decision 15** — library layer emits CamelCase `"PipelineRunStarted"`/
+/// `"PipelineRunCompleted"`/`"PipelineRunErrored"`/`"SessionStored"` so the
+/// in-process Rust SDK shares one status vocabulary with
+/// `cognee_core::PipelineRunStatus`. The HTTP layer (E-01) translates this
+/// to Python's lowercase wire format at the DTO boundary for strict Python
+/// wire parity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
 pub enum RememberStatus {
+    /// Pipeline has been initiated/started but has not yet finished.
+    ///
+    /// Currently unused by the synchronous SDK [`remember`] (which always
+    /// returns a terminal state). Exists for symmetry with
+    /// [`cognee_core::pipeline::PipelineRunStatus`] and for future async /
+    /// HTTP background-mode emission.
+    #[serde(rename = "PipelineRunStarted")]
+    Started,
     /// Pipeline finished successfully.
+    #[serde(rename = "PipelineRunCompleted")]
     Completed,
     /// Pipeline finished with an error.
+    #[serde(rename = "PipelineRunErrored")]
     Errored,
     /// Session-mode only: data was stored in the session cache.
+    #[serde(rename = "SessionStored")]
     SessionStored,
+}
+
+impl From<cognee_core::pipeline::PipelineRunStatus> for RememberStatus {
+    fn from(s: cognee_core::pipeline::PipelineRunStatus) -> Self {
+        use cognee_core::pipeline::PipelineRunStatus;
+        match s {
+            PipelineRunStatus::Initiated | PipelineRunStatus::Started => Self::Started,
+            PipelineRunStatus::Completed => Self::Completed,
+            PipelineRunStatus::Errored => Self::Errored,
+        }
+    }
 }
 
 /// Per-item information in the remember result.
@@ -64,12 +92,22 @@ pub struct RememberResult {
     pub dataset_id: Option<Uuid>,
     pub session_ids: Option<Vec<String>>,
     pub pipeline_run_id: Option<Uuid>,
-    pub elapsed_seconds: f64,
+    /// Wall-clock seconds the operation took. `None` when the operation has
+    /// not produced a duration (Python parity:
+    /// `RememberResult.elapsed_seconds: Optional[float]`).
+    pub elapsed_seconds: Option<f64>,
     /// Content hash of the first item (Python parity for deduplication tracking).
     pub content_hash: Option<String>,
     pub items_processed: usize,
     pub items: Vec<RememberItemInfo>,
     pub error: Option<String>,
+    /// Type discriminator for typed-entry remember (`"qa"` / `"trace"` /
+    /// `"feedback"`). Populated by `remember_entry()` (LIB-01) in the
+    /// typed-entry path; `None` for the file/text path.
+    pub entry_type: Option<String>,
+    /// Typed-entry id from `SessionManager`. Populated alongside
+    /// [`Self::entry_type`].
+    pub entry_id: Option<String>,
     #[serde(skip)]
     pub cognify_result: Option<CognifyResult>,
     #[serde(skip)]
@@ -125,7 +163,9 @@ impl fmt::Display for RememberResult {
         if let Some(ref h) = self.content_hash {
             write!(f, ", content_hash={h:?}")?;
         }
-        write!(f, ", elapsed={:.1}s", self.elapsed_seconds)?;
+        if let Some(elapsed) = self.elapsed_seconds {
+            write!(f, ", elapsed={elapsed:.1}s")?;
+        }
         if let Some(ref e) = self.error {
             write!(f, ", error={e:?}")?;
         }
@@ -378,11 +418,13 @@ async fn remember_permanent_blocking(
         dataset_id: Some(outcome.dataset_id),
         session_ids: None,
         pipeline_run_id: Some(outcome.pipeline_run_id),
-        elapsed_seconds: elapsed,
+        elapsed_seconds: Some(elapsed),
         content_hash: outcome.content_hash,
         items_processed: outcome.items_processed,
         items: outcome.items,
         error: None,
+        entry_type: None,
+        entry_id: None,
         cognify_result: Some(outcome.cognify_result),
         memify_result: outcome.memify_result,
     })
@@ -501,11 +543,13 @@ async fn remember_session(
         dataset_id: None,
         session_ids: Some(vec![session_id.to_string()]),
         pipeline_run_id: None,
-        elapsed_seconds: elapsed,
+        elapsed_seconds: Some(elapsed),
         content_hash: None,
         items_processed: data.len(),
         items: vec![],
         error: improve_error,
+        entry_type: None,
+        entry_id: None,
         cognify_result: None,
         memify_result: None,
     })
@@ -523,9 +567,85 @@ mod tests {
     fn remember_status_serde_roundtrip_errored() {
         let s = RememberStatus::Errored;
         let j = serde_json::to_string(&s).expect("serialize");
-        assert_eq!(j, "\"errored\"");
+        assert_eq!(j, "\"PipelineRunErrored\"");
         let back: RememberStatus = serde_json::from_str(&j).expect("deserialize");
         assert_eq!(back, RememberStatus::Errored);
+    }
+
+    #[test]
+    fn remember_status_serializes_to_pipeline_run_camelcase() {
+        // Decision 15 (LIB-06): library status emits CamelCase
+        // "PipelineRun*" / "SessionStored" — matches the
+        // `cognee_core::PipelineRunStatus` family. HTTP-side translation
+        // (E-01) maps these to Python's lowercase wire format.
+        assert_eq!(
+            serde_json::to_string(&RememberStatus::Started).expect("ser"),
+            "\"PipelineRunStarted\""
+        );
+        assert_eq!(
+            serde_json::to_string(&RememberStatus::Completed).expect("ser"),
+            "\"PipelineRunCompleted\""
+        );
+        assert_eq!(
+            serde_json::to_string(&RememberStatus::Errored).expect("ser"),
+            "\"PipelineRunErrored\""
+        );
+        assert_eq!(
+            serde_json::to_string(&RememberStatus::SessionStored).expect("ser"),
+            "\"SessionStored\""
+        );
+    }
+
+    #[test]
+    fn remember_status_deserializes_from_pipeline_run_camelcase() {
+        for (s, expected) in [
+            ("\"PipelineRunStarted\"", RememberStatus::Started),
+            ("\"PipelineRunCompleted\"", RememberStatus::Completed),
+            ("\"PipelineRunErrored\"", RememberStatus::Errored),
+            ("\"SessionStored\"", RememberStatus::SessionStored),
+        ] {
+            let got: RememberStatus = serde_json::from_str(s).expect("deserialize");
+            assert_eq!(got, expected, "for input {s}");
+        }
+    }
+
+    #[test]
+    fn remember_status_from_pipeline_run_status_translation_table() {
+        use cognee_core::pipeline::PipelineRunStatus;
+        // Exhaustive match — adding a variant to PipelineRunStatus forces
+        // this test to be updated.
+        assert_eq!(
+            RememberStatus::from(PipelineRunStatus::Initiated),
+            RememberStatus::Started
+        );
+        assert_eq!(
+            RememberStatus::from(PipelineRunStatus::Started),
+            RememberStatus::Started
+        );
+        assert_eq!(
+            RememberStatus::from(PipelineRunStatus::Completed),
+            RememberStatus::Completed
+        );
+        assert_eq!(
+            RememberStatus::from(PipelineRunStatus::Errored),
+            RememberStatus::Errored
+        );
+    }
+
+    #[test]
+    fn remember_result_elapsed_seconds_serializes_as_null_when_none() {
+        let mut r = sample_result(RememberStatus::Completed);
+        r.elapsed_seconds = None;
+        let v = r.to_dict();
+        let obj = v.as_object().expect("object");
+        assert!(
+            obj.contains_key("elapsed_seconds"),
+            "elapsed_seconds key should be present even when None (Python parity)"
+        );
+        assert!(
+            obj.get("elapsed_seconds").is_some_and(|v| v.is_null()),
+            "elapsed_seconds should serialize as null when None"
+        );
     }
 
     #[test]
@@ -598,11 +718,13 @@ mod tests {
             dataset_id: None,
             session_ids: None,
             pipeline_run_id: None,
-            elapsed_seconds: 1.23,
+            elapsed_seconds: Some(1.23),
             content_hash: None,
             items_processed: 0,
             items: Vec::new(),
             error: None,
+            entry_type: None,
+            entry_id: None,
             cognify_result: None,
             memify_result: None,
         }

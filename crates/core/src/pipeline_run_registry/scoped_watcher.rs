@@ -170,6 +170,16 @@ impl PipelineWatcher for ScopedRunWatcher {
         });
     }
 
+    async fn on_payload_field(&self, run_id: Uuid, key: &str, value: serde_json::Value) {
+        if let Err(e) = self.db.set_payload_field(run_id, key, value).await {
+            tracing::warn!(
+                run_id = %run_id,
+                key = %key,
+                "ScopedRunWatcher: DB write for payload field failed (non-fatal): {e}"
+            );
+        }
+    }
+
     async fn on_pipeline_run_errored(&self, run: &PipelineRunInfo, error: &str) {
         // 1. Write durable row — non-fatal on failure.
         let run_info = Some(json!({"error": error}));

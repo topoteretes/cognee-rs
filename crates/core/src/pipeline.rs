@@ -304,6 +304,20 @@ pub struct PipelineRunInfo {
     pub status: PipelineRunStatus,
     /// When the run was initiated.
     pub started_at: chrono::DateTime<chrono::Utc>,
+    /// When the run reached a terminal state (`Completed` or `Errored`).
+    /// `None` while the run is still in flight.
+    pub completed_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+impl PipelineRunInfo {
+    /// Wall-clock seconds between [`Self::started_at`] and
+    /// [`Self::completed_at`]. Returns `None` while the run is still in
+    /// flight (i.e. `completed_at` is unset).
+    pub fn elapsed_seconds(&self) -> Option<f64> {
+        let end = self.completed_at?;
+        let dur_ms = (end - self.started_at).num_milliseconds();
+        Some(dur_ms as f64 / 1000.0)
+    }
 }
 
 /// High-level status of a pipeline run.
@@ -419,6 +433,16 @@ pub trait PipelineWatcher: Send + Sync {
 
     /// Called when a task fails (after retries exhausted).
     async fn on_task_errored(&self, _run: &PipelineRunInfo, _task_name: &str, _error: &str) {}
+
+    /// Tasks emit run-scoped key/value payload via this hook. Default no-op.
+    ///
+    /// Mirrors Python's free-form `PipelineRunInfo.payload` field but as an
+    /// event stream rather than shared state on the snapshot. The
+    /// registry-side `ScopedRunWatcher` overrides this to persist the field
+    /// through `PipelineRunRepository::set_payload_field`. Consumers who need
+    /// the accumulated payload query the registry's `get_payload(run_id)`
+    /// helper.
+    async fn on_payload_field(&self, _run_id: Uuid, _key: &str, _value: serde_json::Value) {}
 }
 
 pub struct NoopWatcher;
@@ -495,7 +519,12 @@ pub async fn execute(
         dataset_id,
         status: PipelineRunStatus::Started,
         started_at: chrono::Utc::now(),
+        completed_at: None,
     };
+
+    // Propagate `run_id` into the pipeline context so tasks can attribute
+    // payload events via `TaskContext::publish_payload_field`.
+    let ctx = ctx.with_run_id(run_id);
 
     watcher
         .on_pipeline(pipeline_id, PipelineStatus::Started { task_count })
@@ -532,6 +561,7 @@ pub async fn execute(
     match &result {
         Ok(outputs) => {
             run_info.status = PipelineRunStatus::Completed;
+            run_info.completed_at = Some(chrono::Utc::now());
             watcher
                 .on_pipeline(
                     pipeline_id,
@@ -546,6 +576,7 @@ pub async fn execute(
         }
         Err(ExecutionError::Cancelled) => {
             run_info.status = PipelineRunStatus::Errored;
+            run_info.completed_at = Some(chrono::Utc::now());
             watcher
                 .on_pipeline(pipeline_id, PipelineStatus::Cancelled)
                 .await;
@@ -555,6 +586,7 @@ pub async fn execute(
         }
         Err(e) => {
             run_info.status = PipelineRunStatus::Errored;
+            run_info.completed_at = Some(chrono::Utc::now());
             let task_index = match e {
                 ExecutionError::TaskFailed { task_index, .. } => *task_index,
                 _ => 0,
@@ -1224,6 +1256,42 @@ mod tests {
             exec_status: Arc::new(NoopExecStatusManager),
             pipeline_watcher: None,
         })
+    }
+
+    #[test]
+    fn pipeline_run_info_elapsed_seconds_returns_none_before_completion() {
+        let info = PipelineRunInfo {
+            run_id: Uuid::new_v4(),
+            pipeline_id: Uuid::new_v4(),
+            pipeline_name: "test".to_string(),
+            user_id: None,
+            dataset_id: None,
+            status: PipelineRunStatus::Started,
+            started_at: chrono::Utc::now(),
+            completed_at: None,
+        };
+        assert_eq!(info.elapsed_seconds(), None);
+    }
+
+    #[test]
+    fn pipeline_run_info_elapsed_seconds_returns_positive_after_completion() {
+        let now = chrono::Utc::now();
+        let started_at = now - chrono::Duration::milliseconds(100);
+        let info = PipelineRunInfo {
+            run_id: Uuid::new_v4(),
+            pipeline_id: Uuid::new_v4(),
+            pipeline_name: "test".to_string(),
+            user_id: None,
+            dataset_id: None,
+            status: PipelineRunStatus::Completed,
+            started_at,
+            completed_at: Some(now),
+        };
+        let elapsed = info
+            .elapsed_seconds()
+            .expect("elapsed_seconds should be Some when completed_at is set");
+        assert!(elapsed > 0.0, "elapsed should be positive, got {elapsed}");
+        assert!(elapsed < 1.0, "elapsed should be < 1s, got {elapsed}");
     }
 
     #[tokio::test]

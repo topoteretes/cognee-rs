@@ -60,6 +60,7 @@ fn fake_run(run_id: Uuid, status: CoreStatus) -> PipelineRunInfo {
         dataset_id: None,
         status,
         started_at: chrono::Utc::now(),
+        completed_at: None,
     }
 }
 

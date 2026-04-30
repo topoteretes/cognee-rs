@@ -44,6 +44,16 @@ pub struct MemifyResult {
 ///
 /// # Returns
 /// A `MemifyResult` with counts of extracted and indexed triplets.
+//
+// TODO(LIB-06 follow-up): this convenience function bypasses
+// `cognee_core::execute()` and therefore does not emit payload events via
+// `PipelineWatcher::on_payload_field`. To enable run-scoped payload
+// emission for downstream consumers (e.g.
+// `cognee_lib::api::remember::remember()`), this function would need to
+// route through `cognee_core::execute()` with a memify pipeline built via
+// the task framework. Tracked in
+// `docs/http-api-v2/tasks/lib-06-pipeline-payload-mechanism.md` §3
+// finding 1.
 pub async fn memify(
     graph_db: &dyn GraphDBTrait,
     vector_db: &dyn VectorDB,

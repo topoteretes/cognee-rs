@@ -90,6 +90,15 @@ impl DefaultPipelineRunRegistry {
         Ok(Self::new(repo, cfg))
     }
 
+    /// Fetch the accumulated payload for a run. Returns an empty map if the
+    /// run has no payload events; returns `Err` only on DB failure.
+    pub async fn get_payload(
+        &self,
+        run_id: Uuid,
+    ) -> Result<serde_json::Map<String, serde_json::Value>, cognee_database::DatabaseError> {
+        self.repo.get_payload(run_id).await
+    }
+
     /// Construct a `ScopedRunWatcher` for the given run id, capturing the
     /// run's event channel sink. Returns `None` if the run slot does not exist.
     pub async fn watcher_for(&self, run_id: Uuid) -> Option<Arc<ScopedRunWatcher>> {
