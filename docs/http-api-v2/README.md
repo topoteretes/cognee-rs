@@ -74,7 +74,7 @@ These six changes must land before (or alongside) the HTTP work — they are dep
 
 | # | Task | Scope | Status | Blocks |
 |---|---|---|---|---|
-| LIB-01 | [`remember_entry()` facade + `MemoryEntry` types](tasks/lib-01-remember-entry-facade.md) | New library function in `cognee-lib`; new `QAEntry` / `TraceEntry` / `FeedbackEntry` discriminated-union types in `cognee-models`. | **Not Started** | E-02 |
+| LIB-01 | [`remember_entry()` facade + `MemoryEntry` types](tasks/lib-01-remember-entry-facade.md) | New library function in `cognee-lib`; new `QAEntry` / `TraceEntry` / `FeedbackEntry` discriminated-union types in `cognee-models`. | **Done** (commit 0818644) | E-02 |
 | LIB-02 | [`SessionManager::add_agent_trace_step` parity](tasks/lib-02-session-manager-trace-step.md) | New `SessionTraceStep` type, `SessionStore::save_trace_step` / `read_trace_steps` on all three backends (fs / redis / sea_orm), wrapper methods on `SessionManager`. SeaORM migration for `session_trace_steps`. | **Done** (commit eec6f79) | LIB-01, E-02, E-12 |
 | LIB-03 | [`session_records` + `session_model_usage` schema and entities](tasks/lib-03-session-records-schema.md) | SeaORM entities + migration only. The repository trait + impl + tests live in **LIB-05** (Decision 13 split). | **Done** (commit 82728f2) | LIB-05 |
 | LIB-04 | [Refactor `improve()` to `ImproveParams` struct](tasks/lib-04-improve-params-struct.md) | Mechanical refactor of `cognee_lib::api::improve::improve()`'s 18-positional-parameter signature to a single `ImproveParams<'_>` struct. 5 call sites migrate. Decision 8 — pulled out of E-05 to keep that task scoped to "DTO + handler". | **Done** (commit 9f1879e) | LIB-01, E-05 |
@@ -109,13 +109,12 @@ The Python source-of-truth column links to the file that defines each handler in
 
 | State | Cleanup | Library | Endpoints |
 |---|---|---|---|
-| Not Started | — | 1 | — |
-| Done | 1 (CLEAN-01) | 5 (LIB-02, LIB-03, LIB-04, LIB-05, LIB-06) | 5 (E-01, E-03, E-06, E-07, E-08) |
+| Done | 1 (CLEAN-01) | 6 (LIB-01, LIB-02, LIB-03, LIB-04, LIB-05, LIB-06) | 5 (E-01, E-03, E-06, E-07, E-08) |
 | Missing | — | — | 5 (E-02, E-09, E-10, E-11, E-12) |
 | Partial | — | — | 2 (E-04, E-05) |
 | **Total** | **1** | **6** | **12** |
 
-Grand total: **19 tasks** (1 cleanup + 6 library + 12 endpoints). **Phase A — Verify is complete** (CLEAN-01 + LIB-06 enablers, plus E-01, E-03, E-06, E-07, E-08); Phase B Library prerequisites is nearly complete with B-1 (LIB-02), B-2 (LIB-03), B-3 (LIB-05), and B-4 (LIB-04) done; resume point moves to B-5 (LIB-01) — the final library prerequisite before Phase C.
+Grand total: **19 tasks** (1 cleanup + 6 library + 12 endpoints). **Phases A and B — Verify and Library prerequisites — are complete** (CLEAN-01 + all 6 LIB-* + 5 verify endpoints E-01, E-03, E-06, E-07, E-08). Resume point moves to **C-1 (E-04)** — Phase C Partial endpoints.
 
 ## 4. Summary of findings
 
