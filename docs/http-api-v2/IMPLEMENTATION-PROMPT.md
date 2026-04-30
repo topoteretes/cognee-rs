@@ -15,9 +15,9 @@ If you are starting a clean session, read these documents before doing anything:
 
 ## 0. Current state
 
-**3 tasks complete (CLEAN-01, LIB-06, E-01). Resume point: TASK A-2 (E-03).**
+**4 tasks complete (CLEAN-01, LIB-06, E-01, E-03). Resume point: TASK A-3 (E-06).**
 
-The v2 doc package landed in commits ending `…/docs/http-api-v2/`. 16 of 19 tasks are at status **Not Started** (1 cleanup + 1 library prerequisite + 1 endpoint done; 5 library prerequisites + 11 endpoints remain; CLEAN-01 e146835, LIB-06 b39cd05, E-01 037cad2).
+The v2 doc package landed in commits ending `…/docs/http-api-v2/`. 15 of 19 tasks are at status **Not Started** (1 cleanup + 1 library prerequisite + 2 endpoints done; 5 library prerequisites + 10 endpoints remain; CLEAN-01 e146835, LIB-06 b39cd05, E-01 037cad2, E-03 0dafdee).
 
 Phases and their tasks (do them in this order — see §2 for the dependency rationale):
 
@@ -26,7 +26,7 @@ Phases and their tasks (do them in this order — see §2 for the dependency rat
 | **0 — Pre-port cleanup & enablers** | 0-1 | [CLEAN-01](tasks/clean-01-v1-dto-camelcase.md) | **Done** (commit e146835) — Fix v1 HTTP DTO casing drift (snake_case → camelCase wire parity). Adds an OpenAPI-schema regression test that prevents future drift. Decision 10. |
 | **0 — Pre-port cleanup & enablers** | 0-2 | [LIB-06](tasks/lib-06-pipeline-payload-mechanism.md) | **Done (commit b39cd05).** Generic pipeline payload event channel via `PipelineWatcher::on_payload_field`, DB-backed accumulator (new `pipeline_run_payload_fields` table + repo trait extension + SeaORM impl + registry accessor), `completed_at`/`elapsed_seconds()` on `PipelineRunInfo`, `run_id` on `PipelineContext`, library `RememberStatus` flip to CamelCase + `From<PipelineRunStatus>` + `Started` variant, `RememberResult.elapsed_seconds: Option<f64>`, `RememberResult.entry_type`/`entry_id`. Convenience-function TODOs note that `cognify`/`memify`/`add` bypass `execute()` today and are deferred. HTTP wire keeps Python's lowercase status (E-01 translates). Decision 15 — **no** wire divergence. Must land before E-01 / E-02 / LIB-01. |
 | **A — Verify** | A-1 | [E-01](tasks/e-01-remember.md) | `POST /remember` — **Done (commit 037cad2).** Brought `RememberResultDTO` to byte-for-byte parity with Python's `RememberResult.to_dict()` (added `items_processed`/`elapsed_seconds`/`session_ids`/`content_hash`/`items`; flipped `dataset_id`/`pipeline_run_id` to `Option<Uuid>`); introduced `WireRememberStatus` standalone wire enum that emits Python's lowercase strings (Decision 15). The `From<cognee_lib::api::remember::RememberStatus>` impl is deferred to the P5 wiring task (cycle constraint). |
-|   | A-2 | [E-03](tasks/e-03-recall-history.md) | `GET /recall` — confirm parity + Decision 6 polish (owns the `iso8601_offset` serde helper) |
+|   | A-2 | [E-03](tasks/e-03-recall-history.md) | `GET /recall` — **Done (commit 0dafdee).** Decision 6 polish — landed the project-wide `iso8601_offset` serde helper at `crates/http-server/src/dto/util.rs` (5 unit tests) and applied it to `SearchHistoryItemDTO::created_at` (shared between `GET /search` and `GET /recall`). Cross-SDK parity test `e2e-cross-sdk/harness/test_http_v2_recall_history.py` asserts byte equality on `createdAt`. |
 |   | A-3 | [E-06](tasks/e-06-forget.md) | `POST /forget` — confirm parity |
 |   | A-4 | [E-07](tasks/e-07-visualize.md) | `GET /visualize` — confirm parity |
 |   | A-5 | [E-08](tasks/e-08-visualize-multi.md) | `POST /visualize/multi` — confirm parity (was previously mislabelled as a Rust-only divergence; corrected 2026-04-29) |
@@ -86,7 +86,7 @@ Every project-wide decision is recorded in a "Decision (2026-04-29) — Decision
 
 | Module / Type | Owned by | Consumed by |
 |---|---|---|
-| `crates/http-server/src/dto/util.rs::iso8601_offset` (serde helper for `DateTime<Utc>`) | E-03 (Decision 6) | every later task with a `DateTime<Utc>` wire field — E-09's `SessionRowDTO`, E-10's `SessionStatsDTO`, E-12's detail response |
+| `crates/http-server/src/dto/util.rs::iso8601_offset` (serde helper for `DateTime<Utc>`) | E-03 (Decision 6; landed 0dafdee) | every later task with a `DateTime<Utc>` wire field — E-09's `SessionRowDTO`, E-10's `SessionStatsDTO`, E-12's detail response |
 | `crates/http-server/src/middleware/validation.rs::Query` (`ValidatedQuery<T>` query-param extractor with the Python validation envelope) | E-09 (Decision 9) | every later task with query-param validation needs |
 | OpenAPI camelCase regression test | CLEAN-01 (Decision 10) | every task that adds a DTO — the test prevents new snake_case fields from landing |
 | `cognee_core::PipelineRunInfo.completed_at: Option<DateTime<Utc>>` + `elapsed_seconds() -> Option<f64>` accessor | LIB-06 (Decision 15) | every consumer that wants wall-clock duration without re-tracking |
