@@ -41,11 +41,11 @@ Behavior reminder (from [`api-v2/improve.md`](../../api-v2/improve.md)): when `s
 
 - DTO at [`crates/http-server/src/dto/improve.rs:14`](../../../crates/http-server/src/dto/improve.rs#L14) has only `dataset_name`, `dataset_id`, `run_in_background`.
 - Handler at `crates/http-server/src/routers/improve.rs:159` calls `cognee_lib::api::improve::improve(...)` but does NOT pass `session_ids`.
-- `cognee_lib::api::improve::improve` accepts an `ImproveParams<'_>` struct after **LIB-04** lands (B-3 in the §0 phase order). This task assumes that struct exists; if LIB-04 hasn't run yet the investigation agent must report BLOCKED.
+- `cognee_lib::api::improve::improve` accepts an `ImproveParams<'_>` struct after **LIB-04** lands (B-4 in the §0 phase order). This task assumes that struct exists; if LIB-04 hasn't run yet the investigation agent must report BLOCKED.
 
 ## 4. Implementation steps
 
-> **Decision (2026-04-29) — Decision 8**: this task does NOT refactor the `improve()` signature. That work is owned by **LIB-04** (B-3 in the phase order) and lands before this task. E-05 just adds three new fields (`extraction_tasks`, `enrichment_tasks`, `data`) to the `ImproveParams` struct LIB-04 introduces, plus the HTTP DTO and handler wiring. Investigation agent: do not re-litigate.
+> **Decision (2026-04-29) — Decision 8**: this task does NOT refactor the `improve()` signature. That work is owned by **LIB-04** (B-4 in the phase order) and lands before this task. E-05 just adds three new fields (`extraction_tasks`, `enrichment_tasks`, `data`) to the `ImproveParams` struct LIB-04 introduces, plus the HTTP DTO and handler wiring. Investigation agent: do not re-litigate.
 
 1. **Extend the DTO** to match Python field-for-field. Wire format is camelCase per Decision 10; snake_case input forms accepted via `serde(alias)`:
    ```rust

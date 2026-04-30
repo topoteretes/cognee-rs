@@ -15,9 +15,9 @@ If you are starting a clean session, read these documents before doing anything:
 
 ## 0. Current state
 
-**10 tasks complete (CLEAN-01, LIB-06, E-01, E-03, E-06, E-07, E-08, LIB-02, LIB-03, LIB-05). Resume point: TASK B-4 (LIB-04).**
+**11 tasks complete (CLEAN-01, LIB-06, E-01, E-03, E-06, E-07, E-08, LIB-02, LIB-03, LIB-05, LIB-04). Resume point: TASK B-5 (LIB-01).**
 
-The v2 doc package landed in commits ending `…/docs/http-api-v2/`. 9 of 19 tasks are at status **Not Started** (1 cleanup + 4 library prerequisites + 5 endpoints done; 2 library prerequisites + 7 endpoints remain; CLEAN-01 e146835, LIB-06 b39cd05, E-01 037cad2, E-03 0dafdee, E-06 verified-no-code-change, E-07 35d6b3c, E-08 afa048f, LIB-02 eec6f79, LIB-03 82728f2, LIB-05 60c934a).
+The v2 doc package landed in commits ending `…/docs/http-api-v2/`. 8 of 19 tasks are at status **Not Started** (1 cleanup + 5 library prerequisites + 5 endpoints done; 1 library prerequisite + 7 endpoints remain; CLEAN-01 e146835, LIB-06 b39cd05, E-01 037cad2, E-03 0dafdee, E-06 verified-no-code-change, E-07 35d6b3c, E-08 afa048f, LIB-02 eec6f79, LIB-03 82728f2, LIB-05 60c934a, LIB-04 9f1879e).
 
 Phases and their tasks (do them in this order — see §2 for the dependency rationale):
 
@@ -33,7 +33,7 @@ Phases and their tasks (do them in this order — see §2 for the dependency rat
 | **B — Library prerequisites** | B-1 | [LIB-02](tasks/lib-02-session-manager-trace-step.md) | `add_agent_trace_step` (independent) — **Done (commit eec6f79).** |
 |   | B-2 | [LIB-03](tasks/lib-03-session-records-schema.md) | **Done (commit 82728f2).** `session_records` + `session_model_usage` schema + entities + migration (Decision 13 — first half of the original LIB-03 scope). |
 |   | B-3 | [LIB-05](tasks/lib-05-session-records-repo.md) | **Done (commit 60c934a).** `SessionLifecycleDb` trait + `DatabaseConnection` impl + 8 repository tests (Decision 13 — second half; depends on LIB-03). Read-time effective-status helper translates Python's runtime abandon-threshold (default 1800s, Decision 12). |
-|   | B-4 | [LIB-04](tasks/lib-04-improve-params-struct.md) | Refactor `improve()` to `ImproveParams` struct (independent; must run before LIB-01 because LIB-01 modifies one of the call sites) |
+|   | B-4 | [LIB-04](tasks/lib-04-improve-params-struct.md) | **Done (commit 9f1879e).** Refactored `improve()` to take an `ImproveParams<'_>` struct (18 fields, no `Default` derive); migrated all 5 call sites (`remember.rs::self_improvement` + 2 in `improve_e2e.rs` + 2 in `improve_sync_only.rs`); removed `#[allow(clippy::too_many_arguments)]`. Wire shape unchanged. |
 |   | B-5 | [LIB-01](tasks/lib-01-remember-entry-facade.md) | `remember_entry()` facade (depends on B-1, consumes B-4's `ImproveParams` shape) |
 | **C — Partial endpoints** | C-1 | [E-04](tasks/e-04-recall-search.md) | `POST /recall` — add `session_id` + `scope` |
 |   | C-2 | [E-05](tasks/e-05-improve.md) | `POST /improve` — add `session_ids` + extraction/enrichment/data/node_name (consumes B-4's `ImproveParams`) |
@@ -98,7 +98,7 @@ Every project-wide decision is recorded in a "Decision (2026-04-29) — Decision
 | `cognee_lib::api::remember::RememberResult.entry_type` / `entry_id` fields | LIB-06 (Q-F) | LIB-01 (populates them for typed-entry path), E-02 (HTTP DTO wiring) |
 | `crates/http-server/src/dto/remember.rs::WireRememberStatus` (typed lowercase wire enum; standalone — no `From<cognee_lib::api::remember::RememberStatus>` impl, deferred to P5 per the http-server↔lib cycle constraint discovered in [tasks/e-01-remember.md §3](tasks/e-01-remember.md#3-current-rust-state)) | E-01 (Q-E, Decision 15; landed commit 037cad2) | E-02 (`/remember/entry` reuses the same DTO + translation) |
 | `cognee_models::memory::{MemoryEntry, QAEntry, TraceEntry, FeedbackEntry}` types | LIB-01 (Decision 2) | E-02 |
-| `cognee_lib::api::improve::ImproveParams<'_>` struct | LIB-04 (Decision 8) | LIB-01 (touches one of the call sites), E-05 (adds 3 v2 fields) |
+| `cognee_lib::api::improve::ImproveParams<'_>` struct (18 fields, no `Default` derive; `cognify_config` and `add_pipeline` borrow lifetimes preserved) | LIB-04 (Decision 8; landed 9f1879e) | LIB-01 (touches one of the call sites), E-05 (adds 3 v2 fields) |
 | `cognee_session::types::SessionTraceStep` (persisted shape — no `created_at`, includes `session_feedback`) | LIB-02 (landed eec6f79) | LIB-01 (`remember_entry()` typed-trace path), E-02, E-12 (`/sessions/{id}` returns trace tail) |
 | `cognee_session::session_store::SessionStore::{save_trace_step, read_trace_steps}` trait methods (default impls return `SessionError::StoreError`; fs / redis (RPUSH) / sea_orm backends override) + `m20260429_000003_session_trace_steps` migration + `SessionTraceStepEntity` SeaORM entity | LIB-02 (landed eec6f79) | LIB-01, E-02, E-12 |
 | `cognee_session::session_manager::SessionManager::{add_agent_trace_step, get_agent_trace_session}` wrappers (server-generated UUID4 `trace_id`; `last_n` tail-truncate) | LIB-02 (landed eec6f79) | LIB-01 (typed-trace persistence), E-12 (detail endpoint reads back via `get_agent_trace_session`) |
