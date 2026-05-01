@@ -6,8 +6,8 @@ on:
   pull_request:
     paths:
       - "crates/http-server/**"
-      - "cognee/api/**"
       - "e2e-cross-sdk/**"
+      - ".github/workflows/http-parity.yml"
   workflow_dispatch:
     inputs:
       run_phase3:
@@ -25,9 +25,29 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      # The Dockerfile copies from BOTH cognee-rust/ and cognee/ siblings
+      # (multi-stage build: Rust binaries from this repo + Python venv from
+      # the cognee Python repo), and docker-compose.yml uses `context: ../..`.
+      # We replicate the local monorepo layout (`~/dev/cognee/{cognee-rust,cognee}`)
+      # by checking both repos out as siblings under $GITHUB_WORKSPACE.
+      - name: Checkout cognee-rust
+        uses: actions/checkout@v4
         with:
+          path: cognee-rust
           submodules: recursive
+
+      - name: Checkout cognee (Python sibling repo)
+        uses: actions/checkout@v4
+        with:
+          repository: topoteretes/cognee
+          ref: main
+          path: cognee
+
+      # docker-compose.yml declares `env_file: ../.env`; missing files abort
+      # `docker compose run`, so create an empty stub. Real env vars are
+      # passed through process env in each phase.
+      - name: Stub cognee-rust/.env (required by docker-compose env_file)
+        run: touch cognee-rust/.env
 
       # ── Docker layer cache ────────────────────────────────────────────────
       - name: Cache Docker layers
@@ -58,9 +78,12 @@ jobs:
           --tb=short
 
       # ── Phase-2: LLM-gated (requires OPENAI_KEY secret) ──────────────────
+      # The `secrets` context is not available in step-level `if:` expressions,
+      # so we route the secret through `env.HAS_OPENAI_KEY` and gate on that.
       - name: Phase-2 — cognify, remember, recall, memify, improve, llm (LLM-gated)
-        if: ${{ secrets.OPENAI_KEY != '' }}
+        if: ${{ env.HAS_OPENAI_KEY == 'true' }}
         env:
+          HAS_OPENAI_KEY: ${{ secrets.OPENAI_KEY != '' }}
           OPENAI_TOKEN: ${{ secrets.OPENAI_KEY }}
           OPENAI_URL: https://api.openai.com/v1
           OPENAI_MODEL: gpt-4o-mini
