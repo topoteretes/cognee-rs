@@ -90,7 +90,7 @@ The Python source-of-truth column links to the file that defines each handler in
 | # | Endpoint | Python source | Status | Plan |
 |---|---|---|---|---|
 | E-01 | `POST /api/v1/remember` | [`get_remember_router.py:28`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/remember/routers/get_remember_router.py#L28) | **Done** (commit 037cad2) | [tasks/e-01-remember.md](tasks/e-01-remember.md) |
-| E-02 | `POST /api/v1/remember/entry` | [`get_remember_router.py:115`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/remember/routers/get_remember_router.py#L115) | **Missing** | [tasks/e-02-remember-entry.md](tasks/e-02-remember-entry.md) |
+| E-02 | `POST /api/v1/remember/entry` | [`get_remember_router.py:115`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/remember/routers/get_remember_router.py#L115) | **Done** (commit 75c0886) | [tasks/e-02-remember-entry.md](tasks/e-02-remember-entry.md) |
 | E-03 | `GET /api/v1/recall` | [`get_recall_router.py:58`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/recall/routers/get_recall_router.py#L58) | **Done** (commit 0dafdee) | [tasks/e-03-recall-history.md](tasks/e-03-recall-history.md) |
 | E-04 | `POST /api/v1/recall` | [`get_recall_router.py:78`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/recall/routers/get_recall_router.py#L78) | **Done** (commit 9981e79) | [tasks/e-04-recall-search.md](tasks/e-04-recall-search.md) |
 | E-05 | `POST /api/v1/improve` | [`get_improve_router.py:39`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/improve/routers/get_improve_router.py#L39) | **Done** (commit 43e2a72) — DTO + telemetry plumbing only; real library wire-up is the deferred P5 follow-up (cycle constraint, same as E-04). | [tasks/e-05-improve.md](tasks/e-05-improve.md) |
@@ -111,11 +111,11 @@ The Python source-of-truth column links to the file that defines each handler in
 
 | State | Cleanup | Library | Endpoints |
 |---|---|---|---|
-| Done | 1 (CLEAN-01) | 8 (LIB-01, LIB-02, LIB-03, LIB-04, LIB-05, LIB-06, LIB-07, LIB-08) | 7 (E-01, E-03, E-04, E-05, E-06, E-07, E-08) |
-| Missing | — | — | 5 (E-02, E-09, E-10, E-11, E-12) |
+| Done | 1 (CLEAN-01) | 8 (LIB-01, LIB-02, LIB-03, LIB-04, LIB-05, LIB-06, LIB-07, LIB-08) | 8 (E-01, E-02, E-03, E-04, E-05, E-06, E-07, E-08) |
+| Missing | — | — | 4 (E-09, E-10, E-11, E-12) |
 | **Total** | **1** | **8** | **12** |
 
-Grand total: **21 tasks** (1 cleanup + 8 library + 12 endpoints; LIB-07 added 2026-04-30 per Decision 17; LIB-08 added 2026-04-30 per Decision 18). **Phases A, B, and C are complete.** Resume point moves to **D-1 (E-02)** — `POST /remember/entry` (depends on LIB-01, landed). Phase D Missing endpoints next (E-02, E-09, E-10, E-11, E-12).
+Grand total: **21 tasks** (1 cleanup + 8 library + 12 endpoints; LIB-07 added 2026-04-30 per Decision 17; LIB-08 added 2026-04-30 per Decision 18). **Phases A, B, C complete; Phase D in progress (1 of 5 done).** Resume point moves to **D-2 (E-09)** — `GET /sessions` (depends on LIB-05, landed). Remaining endpoints: E-09, E-10, E-11, E-12 — all `/sessions` dashboard endpoints depending on LIB-05's `SessionLifecycleDb` trait.
 
 ## 4. Summary of findings
 
