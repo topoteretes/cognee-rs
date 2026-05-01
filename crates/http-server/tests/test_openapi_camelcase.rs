@@ -126,6 +126,10 @@ const SNAKE_CASE_WHITELIST: &[(&str, &str)] = &[
         "CostByModelDTO",
         "Plain list-of-dicts: Python's `cost_by_model` returns `jsonable_encoder([...])` (`get_sessions_router.py:241-251`) — E-11 carve-out, same as the list and stats endpoints.",
     ),
+    (
+        "SessionDetailDTO",
+        "Plain dict: Python's `get_session_detail` returns `jsonable_encoder(record)` (`get_sessions_router.py:289-307`) — E-12 carve-out, same as the list/stats/cost-by-model endpoints.",
+    ),
     // ── Remember (plain-dict response, Python `RememberResult.to_dict()`) ────
     (
         "RememberResultDTO",

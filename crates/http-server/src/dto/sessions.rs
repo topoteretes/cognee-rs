@@ -274,6 +274,43 @@ impl From<cognee_database::CostByModelRow> for CostByModelDTO {
     }
 }
 
+/// Response DTO for `GET /api/v1/sessions/{session_id}` (E-12).
+///
+/// snake_case wire — Python returns a plain dict via `jsonable_encoder`
+/// at [`get_sessions_router.py:289-307`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/sessions/routers/get_sessions_router.py#L289-L307),
+/// not an `OutDTO`, so `to_camel` does not apply (same parity carve-out
+/// as the three sibling DTOs).
+///
+/// The body is the `SessionRowWithStatus.to_dict()` shape (12 + 1 keys —
+/// 12 from `SessionRecord.to_dict()` plus the read-time `effective_status`)
+/// extended with five extra keys: `label`, `msg_count`, `tool_calls`, and
+/// the truncated `qas` / `traces` lists. `#[serde(flatten)]` on `record`
+/// keeps the row keys at the top level for byte parity with Python.
+///
+/// `qas` / `traces` are typed as `serde_json::Value` to match Python's
+/// untyped dicts coming out of `SessionStore::get_latest_qa_entries` and
+/// `SessionManager::get_agent_trace_session`.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct SessionDetailDTO {
+    /// The `SessionRowWithStatus.to_dict()` row body, flattened to the
+    /// top level (12 row fields + `effective_status`).
+    #[serde(flatten)]
+    pub record: SessionRowDTO,
+    /// First non-empty QA `question` truncated to 120 chars, else first
+    /// non-empty trace `origin_function`, else `None`.
+    pub label: Option<String>,
+    /// Pre-truncation length of the QA list.
+    pub msg_count: usize,
+    /// Pre-truncation length of the trace list.
+    pub tool_calls: usize,
+    /// Trailing-20 QA entries (oldest of the 20 first), serialized as
+    /// untyped JSON dicts to match Python's wire shape.
+    pub qas: Vec<serde_json::Value>,
+    /// Trailing-20 trace steps (oldest of the 20 first), serialized as
+    /// untyped JSON dicts to match Python's wire shape.
+    pub traces: Vec<serde_json::Value>,
+}
+
 impl From<cognee_database::SessionRowWithStatus> for SessionRowDTO {
     fn from(row: cognee_database::SessionRowWithStatus) -> Self {
         let cognee_database::SessionRowWithStatus {
@@ -458,6 +495,74 @@ mod tests {
         assert!(!s.contains("costUsd"), "must not emit camelCase: {s}");
         assert!(!s.contains("tokensIn"), "must not emit camelCase: {s}");
         assert!(!s.contains("tokensOut"), "must not emit camelCase: {s}");
+    }
+
+    #[test]
+    fn session_detail_dto_emits_snake_case_keys_and_flattens_record() {
+        use chrono::TimeZone;
+        let row = SessionRowDTO {
+            session_id: "s".into(),
+            user_id: "u".into(),
+            dataset_id: None,
+            status: "running".into(),
+            started_at: chrono::Utc
+                .with_ymd_and_hms(2026, 4, 29, 0, 0, 0)
+                .single()
+                .expect("valid"),
+            last_activity_at: chrono::Utc
+                .with_ymd_and_hms(2026, 4, 29, 0, 0, 1)
+                .single()
+                .expect("valid"),
+            ended_at: None,
+            tokens_in: 1,
+            tokens_out: 2,
+            cost_usd: 0.5,
+            error_count: 0,
+            last_model: Some("gpt-4o".into()),
+            effective_status: "running".into(),
+        };
+        let dto = SessionDetailDTO {
+            record: row,
+            label: Some("hello".into()),
+            msg_count: 3,
+            tool_calls: 4,
+            qas: vec![serde_json::json!({"question": "q?", "answer": "a"})],
+            traces: vec![serde_json::json!({"origin_function": "tool"})],
+        };
+        let s = serde_json::to_string(&dto).expect("serialize");
+        // Flattened row keys live at top level (no `record` wrapper).
+        assert!(
+            s.contains("\"session_id\""),
+            "expected flattened session_id: {s}"
+        );
+        assert!(
+            s.contains("\"effective_status\""),
+            "expected flattened effective_status: {s}"
+        );
+        assert!(
+            !s.contains("\"record\""),
+            "must not wrap row in `record`: {s}"
+        );
+        // Five extra fields, snake_case.
+        assert!(s.contains("\"label\""), "expected label key: {s}");
+        assert!(
+            s.contains("\"msg_count\""),
+            "expected snake_case msg_count: {s}"
+        );
+        assert!(
+            s.contains("\"tool_calls\""),
+            "expected snake_case tool_calls: {s}"
+        );
+        assert!(s.contains("\"qas\""), "expected qas key: {s}");
+        assert!(s.contains("\"traces\""), "expected traces key: {s}");
+        // Decision 6 timestamp shape leaks through the flatten.
+        assert!(
+            s.contains("+00:00"),
+            "expected Decision-6 +00:00 timestamp: {s}"
+        );
+        // Reject camelCase variants.
+        assert!(!s.contains("msgCount"), "must not emit camelCase: {s}");
+        assert!(!s.contains("toolCalls"), "must not emit camelCase: {s}");
     }
 
     #[test]

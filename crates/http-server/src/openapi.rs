@@ -41,6 +41,8 @@ use utoipa::{
         crate::routers::sessions::get_stats,
         // E-11 — sessions cost-by-model
         crate::routers::sessions::cost_by_model,
+        // E-12 — sessions detail
+        crate::routers::sessions::get_session_detail,
         crate::routers::llm::post_custom_prompt,
         crate::routers::llm::post_infer_schema,
         crate::routers::visualize::get_visualize,
@@ -86,6 +88,8 @@ use utoipa::{
         crate::dto::sessions::SessionStatsDTO,
         // E-11 — sessions cost-by-model DTO (CostByModelQuery is `IntoParams`-only)
         crate::dto::sessions::CostByModelDTO,
+        // E-12 — sessions detail DTO (snake_case wire — Python parity carve-out)
+        crate::dto::sessions::SessionDetailDTO,
         // P5 permissions DTOs
         crate::dto::permissions::SelectTenantDTO,
         crate::dto::permissions::GrantDatasetPermissionBody,
