@@ -49,6 +49,13 @@ jobs:
       - name: Stub cognee-rust/.env (required by docker-compose env_file)
         run: touch cognee-rust/.env
 
+      # Cargo.lock is gitignored (workspace policy: see .gitignore:6) but the
+      # rust-builder stage does `COPY cognee-rust/Cargo.lock ./`, so we
+      # materialize it on the host before docker build. `generate-lockfile`
+      # only resolves the dependency graph; it does not compile anything.
+      - name: Generate Cargo.lock (gitignored, required by Dockerfile COPY)
+        run: cargo generate-lockfile --manifest-path cognee-rust/Cargo.toml
+
       # ── Docker layer cache ────────────────────────────────────────────────
       - name: Cache Docker layers
         uses: actions/cache@v4
