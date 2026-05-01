@@ -100,7 +100,7 @@ The Python source-of-truth column links to the file that defines each handler in
 | E-09 | `GET /api/v1/sessions` | [`get_sessions_router.py:64`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/sessions/routers/get_sessions_router.py#L64) | **Done** (commit c42b513) | [tasks/e-09-sessions-list.md](tasks/e-09-sessions-list.md) |
 | E-10 | `GET /api/v1/sessions/stats` | [`get_sessions_router.py:112`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/sessions/routers/get_sessions_router.py#L112) | **Done** (commit 0043fcf) | [tasks/e-10-sessions-stats.md](tasks/e-10-sessions-stats.md) |
 | E-11 | `GET /api/v1/sessions/cost-by-model` | [`get_sessions_router.py:198`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/sessions/routers/get_sessions_router.py#L198) | **Done** (commit f27aa06) | [tasks/e-11-sessions-cost-by-model.md](tasks/e-11-sessions-cost-by-model.md) |
-| E-12 | `GET /api/v1/sessions/{session_id}` | [`get_sessions_router.py:254`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/sessions/routers/get_sessions_router.py#L254) | **Missing** | [tasks/e-12-sessions-detail.md](tasks/e-12-sessions-detail.md) |
+| E-12 | `GET /api/v1/sessions/{session_id}` | [`get_sessions_router.py:254`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/sessions/routers/get_sessions_router.py#L254) | **Done** (commit b36f9ea) | [tasks/e-12-sessions-detail.md](tasks/e-12-sessions-detail.md) |
 
 ### Legend
 - **Implemented** — route exists, DTO matches Python, handler delegates to the right library function, parity tests would pass. Task plan is verification-only.
@@ -111,11 +111,10 @@ The Python source-of-truth column links to the file that defines each handler in
 
 | State | Cleanup | Library | Endpoints |
 |---|---|---|---|
-| Done | 1 (CLEAN-01) | 8 (LIB-01, LIB-02, LIB-03, LIB-04, LIB-05, LIB-06, LIB-07, LIB-08) | 11 (E-01, E-02, E-03, E-04, E-05, E-06, E-07, E-08, E-09, E-10, E-11) |
-| Missing | — | — | 1 (E-12) |
+| Done | 1 (CLEAN-01) | 8 (LIB-01, LIB-02, LIB-03, LIB-04, LIB-05, LIB-06, LIB-07, LIB-08) | 12 (all: E-01, E-02, E-03, E-04, E-05, E-06, E-07, E-08, E-09, E-10, E-11, E-12) |
 | **Total** | **1** | **8** | **12** |
 
-Grand total: **21 tasks** (1 cleanup + 8 library + 12 endpoints; LIB-07 added 2026-04-30 per Decision 17; LIB-08 added 2026-04-30 per Decision 18). **Phases A, B, C complete; Phase D 4-of-5 done. One task remaining.** Resume point moves to **D-5 (E-12)** — `GET /sessions/{session_id}` (depends on LIB-02 + LIB-05 + E-09 router-mount; landed). This is the **final task** of the v2 port.
+Grand total: **🎉 ALL 21 of 21 tasks done. The v2 HTTP API port is complete.** 1 cleanup + 8 library prerequisites (incl. LIB-07 added 2026-04-30 per Decision 17, LIB-08 added 2026-04-30 per Decision 18) + 12 endpoints. Only 1 acknowledged Rust↔Python wire divergence in the steady-state output (D-1 — `?order_by=<unknown>` on `/sessions` returns 400 instead of falling back silently); all other endpoints are byte-for-byte parity.
 
 ## 4. Summary of findings
 

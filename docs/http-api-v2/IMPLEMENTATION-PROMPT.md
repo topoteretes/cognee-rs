@@ -15,9 +15,9 @@ If you are starting a clean session, read these documents before doing anything:
 
 ## 0. Current state
 
-**20 tasks complete (CLEAN-01, LIB-06, E-01, E-03, E-06, E-07, E-08, LIB-02, LIB-03, LIB-05, LIB-04, LIB-01, LIB-07, LIB-08, E-04, E-05, E-02, E-09, E-10, E-11). Resume point: TASK D-5 (E-12) — `GET /sessions/{session_id}` (final task; depends on LIB-02 + LIB-05 + E-09 router-mount).**
+**🎉 ALL 21 TASKS COMPLETE. The v2 HTTP API port is done.**
 
-The v2 doc package landed in commits ending `…/docs/http-api-v2/`. The port has **21 tasks** total (Decision 17 added LIB-07; Decision 18 added LIB-08). 20 of 21 tasks landed; 1 remaining (E-12). Landed commits: CLEAN-01 e146835, LIB-06 b39cd05, E-01 037cad2, E-03 0dafdee, E-06 verified-no-code-change, E-07 35d6b3c, E-08 afa048f, LIB-02 eec6f79, LIB-03 82728f2, LIB-05 60c934a, LIB-04 9f1879e, LIB-01 0818644, LIB-07 7d25c0b, LIB-08 f98cac7, E-04 9981e79, E-05 43e2a72, E-02 75c0886, E-09 c42b513, E-10 0043fcf, E-11 f27aa06.
+Final commit list: CLEAN-01 e146835, LIB-06 b39cd05, E-01 037cad2, E-03 0dafdee, E-06 verified-no-code-change, E-07 35d6b3c, E-08 afa048f, LIB-02 eec6f79, LIB-03 82728f2, LIB-05 60c934a, LIB-04 9f1879e, LIB-01 0818644, LIB-07 7d25c0b, LIB-08 f98cac7, E-04 9981e79, E-05 43e2a72, E-02 75c0886, E-09 c42b513, E-10 0043fcf, E-11 f27aa06, **E-12 b36f9ea**.
 
 Phases and their tasks (do them in this order — see §2 for the dependency rationale):
 
@@ -43,7 +43,7 @@ Phases and their tasks (do them in this order — see §2 for the dependency rat
 |   | D-2 | [E-09](tasks/e-09-sessions-list.md) | `GET /sessions` (depends on B-3) — **Done (commit c42b513).** Created `/sessions` router scaffold + `ValidatedQuery<T>` extractor (Decision 9 / divergence D-1) for D-3..D-5 to consume. New `iso8601_offset_option` helper for `Option<DateTime<Utc>>` fields. Sessions DTOs (`RangeWindow`/`OrderBy`/`ListSessionsQuery`/`SessionListResponseDTO`/`SessionRowDTO`) snake_case wire (CLEAN-01 carve-out — Python's plain dict). 7 integration tests + cross-SDK harness. Reviewer-amended: 500 wire-shape fixed `{detail}` → `{error}` per Python parity at `:108-110`. |
 |   | D-3 | [E-10](tasks/e-10-sessions-stats.md) | `GET /sessions/stats` (depends on B-3) — **Done (commit 0043fcf).** New `get_stats` handler reusing E-09's `/sessions` router scaffold + `ValidatedQuery<T>` extractor + `range_since` helper + permitted-datasets pattern. `SessionStatsDTO` with 14 fields (snake_case wire — CLEAN-01 carve-out for Python's plain dict). `RangeWindow::as_wire_str` for the input-echo. 8 integration tests + cross-SDK harness extension. **No new wire divergence.** |
 |   | D-4 | [E-11](tasks/e-11-sessions-cost-by-model.md) | `GET /sessions/cost-by-model` (depends on B-3) — **Done (commit f27aa06).** New `cost_by_model` handler reusing E-09's `/sessions` router scaffold + `ValidatedQuery<T>` extractor + `range_since` helper + permitted-datasets pattern. `CostByModelDTO` (5 fields, snake_case wire — CLEAN-01 carve-out for Python's plain dict) + `From<CostByModelRow>` impl. 9 integration tests + cross-SDK harness extension. **No new wire divergence.** |
-|   | D-5 | [E-12](tasks/e-12-sessions-detail.md) | `GET /sessions/{id}` (depends on B-1 + B-3) |
+|   | D-5 | [E-12](tasks/e-12-sessions-detail.md) | `GET /sessions/{id}` — **Done (commit b36f9ea).** New `get_session_detail` handler reusing E-09's `/sessions` router scaffold + permitted-datasets pattern. `SessionDetailDTO` flattens `SessionRowDTO` + adds `label`/`msg_count`/`tool_calls`/`qas`/`traces` (snake_case wire). 404 path uses `{detail}` envelope (Python FastAPI HTTPException parity — only v2 endpoint with this shape). 9 integration tests + cross-SDK harness. **No new wire divergence. v2 port complete.** |
 
 **Latest commit on branch:** check with `git log --oneline -1` before starting.
 
