@@ -66,6 +66,7 @@ pub mod remember;
 pub mod remember_entry;
 pub mod responses;
 pub mod search;
+pub mod sessions;
 pub mod settings;
 pub mod sync;
 pub mod update;

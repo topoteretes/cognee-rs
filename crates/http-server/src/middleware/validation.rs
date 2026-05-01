@@ -6,8 +6,8 @@
 
 use axum::{
     body::Bytes,
-    extract::{FromRequest, Request},
-    http::header,
+    extract::{FromRequest, FromRequestParts, Request},
+    http::{header, request::Parts},
 };
 use serde::de::DeserializeOwned;
 use serde_json::json;
@@ -103,6 +103,72 @@ where
     }
 }
 
+// ─── Query extractor (E-09 / Decision 9) ─────────────────────────────────────
+
+/// Query-string extractor that maps `serde_urlencoded` failures to
+/// `ApiError::Validation` with the same Python-shaped `{detail: [...], body: ...}`
+/// envelope used by [`Json<T>`].
+///
+/// Sibling to [`Json<T>`] for query-string parameters. Lands as project-wide
+/// infrastructure per Decision 9 (acknowledged divergence D-1) and is owned by
+/// E-09 — every later v2 task with query-param validation needs reuses it.
+///
+/// On parse failure the extractor:
+///   - sets HTTP status to 400 (Python's global 422→400 override applies);
+///   - best-effort extracts the field name from the `serde_urlencoded` error
+///     message and emits `loc = ["query", "<field>"]`. Falls back to
+///     `loc = ["query"]` when the field cannot be determined.
+///   - sets `type = "value_error"`.
+///
+/// Re-exported as `ValidatedQuery` at the module root.
+pub struct Query<T>(pub T);
+
+impl<T, S> FromRequestParts<S> for Query<T>
+where
+    T: DeserializeOwned,
+    S: Send + Sync,
+{
+    type Rejection = ApiError;
+
+    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
+        let raw = parts.uri.query().unwrap_or("");
+        // Use `serde_path_to_error` to recover the path of the offending field
+        // since `serde_urlencoded` does not include the field name in its
+        // error messages for typed deserialization failures (e.g. unknown
+        // enum variants on a `#[serde(rename = ...)]` field).
+        let de = serde_urlencoded::Deserializer::new(form_urlencoded::parse(raw.as_bytes()));
+        match serde_path_to_error::deserialize::<_, T>(de) {
+            Ok(value) => Ok(Query(value)),
+            Err(err) => {
+                let path = err.path().to_string();
+                let inner_msg = err.into_inner().to_string();
+                let loc = if path.is_empty() || path == "." {
+                    json!(["query"])
+                } else {
+                    // `serde_path_to_error` returns dotted paths like
+                    // `order_by` for top-level fields. Take the leaf segment.
+                    let leaf = path.rsplit('.').next().unwrap_or(path.as_str());
+                    json!(["query", leaf])
+                };
+                Err(ApiError::Validation(ValidationDetails {
+                    detail: json!([{
+                        "loc": loc,
+                        "msg": inner_msg,
+                        "type": "value_error"
+                    }]),
+                    body: None,
+                }))
+            }
+        }
+    }
+}
+
+// ─── Re-exports ──────────────────────────────────────────────────────────────
+
+/// Re-export of [`Query`] for handlers/tests that prefer the unambiguous name
+/// over the bare `Query` (which can clash with `axum::extract::Query`).
+pub use Query as ValidatedQuery;
+
 // ─── Unit tests ──────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -112,7 +178,7 @@ mod tests {
         Router,
         body::{Body, to_bytes},
         http::{Request, StatusCode},
-        routing::post,
+        routing::{get, post},
     };
     use serde::Deserialize;
     use tower::ServiceExt;
@@ -173,5 +239,102 @@ mod tests {
 
         let resp = app().oneshot(req).await.expect("response");
         assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    // ── ValidatedQuery<T> tests (E-09 / Decision 9) ────────────────────────
+
+    #[derive(Deserialize, Default)]
+    enum TestOrderBy {
+        #[default]
+        #[serde(rename = "last_activity_at")]
+        LastActivityAt,
+        #[serde(rename = "started_at")]
+        StartedAt,
+    }
+
+    #[derive(Deserialize)]
+    struct TestQuery {
+        #[serde(default)]
+        order_by: TestOrderBy,
+        #[serde(default = "default_limit")]
+        limit: u32,
+    }
+
+    fn default_limit() -> u32 {
+        50
+    }
+
+    async fn query_handler(Query(q): Query<TestQuery>) -> String {
+        format!(
+            "limit={} ord={}",
+            q.limit,
+            matches!(q.order_by, TestOrderBy::LastActivityAt)
+        )
+    }
+
+    fn query_app() -> Router {
+        Router::new().route("/", get(query_handler))
+    }
+
+    #[tokio::test]
+    async fn valid_query_succeeds() {
+        let req = Request::builder()
+            .method("GET")
+            .uri("/?order_by=started_at&limit=42")
+            .body(Body::empty())
+            .expect("request");
+
+        let resp = query_app().oneshot(req).await.expect("response");
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn unknown_order_by_returns_400_with_python_envelope() {
+        let req = Request::builder()
+            .method("GET")
+            .uri("/?order_by=banana")
+            .body(Body::empty())
+            .expect("request");
+
+        let resp = query_app().oneshot(req).await.expect("response");
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let bytes = to_bytes(resp.into_body(), usize::MAX).await.expect("bytes");
+        let body: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
+
+        assert!(body["detail"].is_array(), "detail should be array: {body}");
+        let entry = &body["detail"][0];
+        let loc = entry["loc"].as_array().expect("loc array");
+        assert_eq!(loc[0], "query");
+        // Best-effort field name; should resolve to `order_by`.
+        assert_eq!(loc[1], "order_by", "loc should target order_by: {body}");
+        let ty = entry["type"].as_str().expect("type str");
+        assert!(
+            ty.ends_with("value_error"),
+            "type should be value_error: {ty}"
+        );
+    }
+
+    #[tokio::test]
+    async fn out_of_range_limit_returns_400_with_python_envelope() {
+        // u32 deserialization rejects negative values; this asserts the
+        // envelope shape on parse failures driven by serde_urlencoded.
+        let req = Request::builder()
+            .method("GET")
+            .uri("/?limit=-1")
+            .body(Body::empty())
+            .expect("request");
+
+        let resp = query_app().oneshot(req).await.expect("response");
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let bytes = to_bytes(resp.into_body(), usize::MAX).await.expect("bytes");
+        let body: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
+
+        assert!(body["detail"].is_array());
+        let entry = &body["detail"][0];
+        let loc = entry["loc"].as_array().expect("loc array");
+        assert_eq!(loc[0], "query");
+        assert_eq!(loc[1], "limit", "loc should target limit: {body}");
+        let ty = entry["type"].as_str().expect("type str");
+        assert!(ty.ends_with("value_error"));
     }
 }

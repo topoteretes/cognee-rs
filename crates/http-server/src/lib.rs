@@ -96,6 +96,7 @@ pub async fn build_router(state: AppState) -> Result<Router, ServerError> {
         // P4 read-path routers
         .nest("/api/v1/search", routers::search::router())
         .nest("/api/v1/recall", routers::recall::router())
+        .nest("/api/v1/sessions", routers::sessions::router())
         .nest("/api/v1/llm", routers::llm::router())
         .nest("/api/v1/visualize", routers::visualize::router())
         // P5 admin routers

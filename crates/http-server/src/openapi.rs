@@ -35,6 +35,8 @@ use utoipa::{
         crate::routers::search::post_search,
         crate::routers::recall::get_recall_history,
         crate::routers::recall::post_recall,
+        // E-09 — sessions list
+        crate::routers::sessions::list_sessions,
         crate::routers::llm::post_custom_prompt,
         crate::routers::llm::post_infer_schema,
         crate::routers::visualize::get_visualize,
@@ -71,6 +73,11 @@ use utoipa::{
         crate::dto::remember::RememberResultDTO,
         crate::dto::remember::RememberItemDTO,
         crate::dto::remember::WireRememberStatus,
+        // E-09 — sessions DTOs (snake_case wire — Python parity carve-out)
+        crate::dto::sessions::SessionListResponseDTO,
+        crate::dto::sessions::SessionRowDTO,
+        crate::dto::sessions::OrderBy,
+        crate::dto::sessions::RangeWindow,
         // P5 permissions DTOs
         crate::dto::permissions::SelectTenantDTO,
         crate::dto::permissions::GrantDatasetPermissionBody,

@@ -109,6 +109,15 @@ const SNAKE_CASE_WHITELIST: &[(&str, &str)] = &[
         "ChatUsageDTO",
         "Python: bare `BaseModel` `ChatUsage` — `prompt_tokens`/`completion_tokens`/`total_tokens` literal.",
     ),
+    // ── Sessions (E-09 — Python returns plain dict, not OutDTO) ──────────────
+    (
+        "SessionListResponseDTO",
+        "Plain dict: Python's `list_sessions` returns `JSONResponse(content={...})` (`get_sessions_router.py:99-107`) so wire keys are snake_case (E-09 carve-out).",
+    ),
+    (
+        "SessionRowDTO",
+        "Plain dict: Python's `SessionRecord.to_dict()` (`models.py:68-86`) returns a snake_case dict — E-09 carve-out.",
+    ),
     // ── Remember (plain-dict response, Python `RememberResult.to_dict()`) ────
     (
         "RememberResultDTO",

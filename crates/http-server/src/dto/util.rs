@@ -69,6 +69,60 @@ pub mod iso8601_offset {
     }
 }
 
+// ─── iso8601_offset_option (Decision 6 — Option<DateTime<Utc>>) ───────────────
+
+/// Sibling of [`iso8601_offset`] for `Option<DateTime<Utc>>` fields.
+///
+/// `None` round-trips to / from JSON `null`. `Some(dt)` emits the same
+/// `%Y-%m-%dT%H:%M:%S%.6f%:z` shape as [`iso8601_offset`] and accepts any
+/// RFC 3339 string on input.
+///
+/// # Usage
+///
+/// ```rust,ignore
+/// #[derive(Serialize, Deserialize)]
+/// struct MyDto {
+///     #[serde(with = "crate::dto::util::iso8601_offset_option", default)]
+///     ended_at: Option<chrono::DateTime<chrono::Utc>>,
+/// }
+/// ```
+pub mod iso8601_offset_option {
+    use chrono::{DateTime, Utc};
+    use serde::{Deserialize, Deserializer, Serializer, de};
+
+    pub fn serialize<S>(dt: &Option<DateTime<Utc>>, s: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match dt {
+            Some(t) => {
+                let formatted = t.format("%Y-%m-%dT%H:%M:%S%.6f%:z").to_string();
+                s.serialize_some(&formatted)
+            }
+            None => s.serialize_none(),
+        }
+    }
+
+    pub fn deserialize<'de, D>(d: D) -> Result<Option<DateTime<Utc>>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let opt: Option<String> = Option::deserialize(d)?;
+        match opt {
+            None => Ok(None),
+            Some(s) => DateTime::parse_from_rfc3339(&s)
+                .map(|dt| Some(dt.with_timezone(&Utc)))
+                .map_err(|err| {
+                    de::Error::custom(format!(
+                        "invalid RFC 3339 timestamp {s:?}: {err}",
+                        s = s,
+                        err = err
+                    ))
+                }),
+        }
+    }
+}
+
 // ─── DatasetIdRef ─────────────────────────────────────────────────────────────
 
 /// A nullable dataset-id field that accepts three forms:
@@ -312,6 +366,42 @@ mod tests {
             s.contains("\"2026-04-29T14:32:01.123456+00:00\""),
             "round-trip should preserve microseconds: {s}"
         );
+    }
+
+    // ─── iso8601_offset_option round-trip ─────────────────────────────────
+
+    #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+    struct OptTsWrapper {
+        #[serde(with = "super::iso8601_offset_option", default)]
+        ts: Option<DateTime<Utc>>,
+    }
+
+    #[test]
+    fn iso8601_offset_option_round_trip_some_and_none() {
+        // Some -> emits the offset shape.
+        let ts = Utc
+            .with_ymd_and_hms(2026, 4, 29, 14, 32, 1)
+            .single()
+            .expect("valid UTC datetime");
+        let w = OptTsWrapper { ts: Some(ts) };
+        let s = serde_json::to_string(&w).expect("serialize Some");
+        assert!(
+            s.contains("\"2026-04-29T14:32:01.000000+00:00\""),
+            "Some(...) should emit +00:00 offset shape: {s}"
+        );
+
+        // None -> JSON null.
+        let w_none = OptTsWrapper { ts: None };
+        let s_none = serde_json::to_string(&w_none).expect("serialize None");
+        assert_eq!(s_none, r#"{"ts":null}"#);
+
+        // Round-trip null and an offset string.
+        let parsed_null: OptTsWrapper = serde_json::from_str(r#"{"ts":null}"#).expect("null");
+        assert_eq!(parsed_null.ts, None);
+
+        let parsed_some: OptTsWrapper =
+            serde_json::from_str(r#"{"ts":"2026-04-29T14:32:01.000000+00:00"}"#).expect("some");
+        assert_eq!(parsed_some.ts, Some(ts));
     }
 
     #[test]
