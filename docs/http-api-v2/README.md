@@ -99,7 +99,7 @@ The Python source-of-truth column links to the file that defines each handler in
 | E-08 | `POST /api/v1/visualize/multi` | [`get_visualize_router.py:77`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/users/routers/get_visualize_router.py#L77) (mounted at `/api/v1/visualize` per [`client.py:241`](https://github.com/topoteretes/cognee/blob/main/cognee/api/client.py#L241)) | **Done (commit afa048f, Decision 16 — Option A)** | [tasks/e-08-visualize-multi.md](tasks/e-08-visualize-multi.md) |
 | E-09 | `GET /api/v1/sessions` | [`get_sessions_router.py:64`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/sessions/routers/get_sessions_router.py#L64) | **Done** (commit c42b513) | [tasks/e-09-sessions-list.md](tasks/e-09-sessions-list.md) |
 | E-10 | `GET /api/v1/sessions/stats` | [`get_sessions_router.py:112`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/sessions/routers/get_sessions_router.py#L112) | **Done** (commit 0043fcf) | [tasks/e-10-sessions-stats.md](tasks/e-10-sessions-stats.md) |
-| E-11 | `GET /api/v1/sessions/cost-by-model` | [`get_sessions_router.py:198`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/sessions/routers/get_sessions_router.py#L198) | **Missing** | [tasks/e-11-sessions-cost-by-model.md](tasks/e-11-sessions-cost-by-model.md) |
+| E-11 | `GET /api/v1/sessions/cost-by-model` | [`get_sessions_router.py:198`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/sessions/routers/get_sessions_router.py#L198) | **Done** (commit f27aa06) | [tasks/e-11-sessions-cost-by-model.md](tasks/e-11-sessions-cost-by-model.md) |
 | E-12 | `GET /api/v1/sessions/{session_id}` | [`get_sessions_router.py:254`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/sessions/routers/get_sessions_router.py#L254) | **Missing** | [tasks/e-12-sessions-detail.md](tasks/e-12-sessions-detail.md) |
 
 ### Legend
@@ -111,11 +111,11 @@ The Python source-of-truth column links to the file that defines each handler in
 
 | State | Cleanup | Library | Endpoints |
 |---|---|---|---|
-| Done | 1 (CLEAN-01) | 8 (LIB-01, LIB-02, LIB-03, LIB-04, LIB-05, LIB-06, LIB-07, LIB-08) | 10 (E-01, E-02, E-03, E-04, E-05, E-06, E-07, E-08, E-09, E-10) |
-| Missing | — | — | 2 (E-11, E-12) |
+| Done | 1 (CLEAN-01) | 8 (LIB-01, LIB-02, LIB-03, LIB-04, LIB-05, LIB-06, LIB-07, LIB-08) | 11 (E-01, E-02, E-03, E-04, E-05, E-06, E-07, E-08, E-09, E-10, E-11) |
+| Missing | — | — | 1 (E-12) |
 | **Total** | **1** | **8** | **12** |
 
-Grand total: **21 tasks** (1 cleanup + 8 library + 12 endpoints; LIB-07 added 2026-04-30 per Decision 17; LIB-08 added 2026-04-30 per Decision 18). **Phases A, B, C complete; Phase D 3-of-5 done.** Resume point moves to **D-4 (E-11)** — `GET /sessions/cost-by-model` (LIB-05 landed; reuses E-09's scaffolding). Remaining: E-11, E-12.
+Grand total: **21 tasks** (1 cleanup + 8 library + 12 endpoints; LIB-07 added 2026-04-30 per Decision 17; LIB-08 added 2026-04-30 per Decision 18). **Phases A, B, C complete; Phase D 4-of-5 done. One task remaining.** Resume point moves to **D-5 (E-12)** — `GET /sessions/{session_id}` (depends on LIB-02 + LIB-05 + E-09 router-mount; landed). This is the **final task** of the v2 port.
 
 ## 4. Summary of findings
 
