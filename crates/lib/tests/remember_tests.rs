@@ -249,7 +249,7 @@ async fn display_and_to_dict_on_session_result() {
     let obj = dict.as_object().expect("to_dict returns an object");
     assert_eq!(
         obj.get("status").and_then(|v| v.as_str()),
-        Some("session_stored")
+        Some("SessionStored")
     );
     assert_eq!(
         obj.get("dataset_name").and_then(|v| v.as_str()),
