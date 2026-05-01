@@ -19,23 +19,28 @@ use axum::{Json, Router, extract::State, http::StatusCode, routing::get};
 use chrono::{DateTime, Duration, Utc};
 use serde_json::json;
 
-use cognee_database::{AclDb, SessionLifecycleDb, SessionListFilters};
+use cognee_database::{AclDb, SessionLifecycleDb, SessionListFilters, SessionStats};
 
 use crate::auth::AuthenticatedUser;
-use crate::dto::sessions::{ListSessionsQuery, RangeWindow, SessionListResponseDTO, SessionRowDTO};
+use crate::dto::sessions::{
+    ListSessionsQuery, RangeWindow, SessionListResponseDTO, SessionRowDTO, SessionStatsDTO,
+    StatsQuery,
+};
 use crate::error::{ApiError, ValidationDetails};
 use crate::middleware::validation::ValidatedQuery;
 use crate::state::AppState;
 
 /// Build the `/api/v1/sessions` sub-router.
 ///
-/// E-09 mounts only `GET /` (list). E-10/E-11/E-12 will add their handlers
-/// below — keep the doc-comment in sync as routes land:
-///   * `.route("/stats", get(get_stats))` (E-10)
+/// E-09 mounts `GET /` (list); E-10 adds `GET /stats`. E-11/E-12 will
+/// add the remaining handlers below — keep the doc-comment in sync as
+/// routes land:
 ///   * `.route("/cost-by-model", get(cost_by_model))` (E-11)
 ///   * `.route("/{session_id}", get(get_session_detail))` (E-12)
 pub fn router() -> Router<AppState> {
-    Router::new().route("/", get(list_sessions))
+    Router::new()
+        .route("/", get(list_sessions))
+        .route("/stats", get(get_stats))
 }
 
 // ─── GET /api/v1/sessions ─────────────────────────────────────────────────────
@@ -154,6 +159,128 @@ pub async fn list_sessions(
             tracing::error!(error = %err, "list_sessions failed");
             Err(ApiError::OntologyEnvelope(
                 "list failed".to_string(),
+                StatusCode::INTERNAL_SERVER_ERROR,
+            ))
+        }
+    }
+}
+
+// ─── GET /api/v1/sessions/stats ───────────────────────────────────────────────
+
+/// `GET /api/v1/sessions/stats` — aggregate counters for the dashboard
+/// stat cards + status bar.
+///
+/// Mirrors Python `get_stats` at
+/// [`get_sessions_router.py:112-196`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/sessions/routers/get_sessions_router.py#L112-L196).
+///
+/// Visibility model: caller's own sessions are always counted; sessions
+/// attached to a dataset the caller has `read` permission on are also
+/// counted via [`AclDb::authorized_dataset_ids_with_roles`].
+///
+/// Response wire shape: snake_case (Python returns a plain dict via
+/// `jsonable_encoder`, not an `OutDTO`). 14 fields: `range` echoes the
+/// input + 13 counters from
+/// [`cognee_database::SessionStats`](../../../cognee_database/struct.SessionStats.html).
+#[utoipa::path(
+    get,
+    path = "/api/v1/sessions/stats",
+    tag = "sessions",
+    params(StatsQuery),
+    responses(
+        (status = 200, description = "dashboard counters", body = SessionStatsDTO),
+        (status = 401, description = "unauthorized"),
+        (status = 500, description = "stats failed"),
+    )
+)]
+#[tracing::instrument(
+    name = "cognee.api.sessions.stats",
+    skip(state),
+    fields(
+        cognee.session.user_id = %user.id,
+        cognee.session.range = ?query.range,
+    )
+)]
+pub async fn get_stats(
+    State(state): State<AppState>,
+    user: AuthenticatedUser,
+    ValidatedQuery(query): ValidatedQuery<StatsQuery>,
+) -> Result<Json<SessionStatsDTO>, ApiError> {
+    let components = state.components().ok_or_else(|| {
+        // Treat un-wired components like the Python catch-all: 500 with
+        // `{"error": "stats failed"}` (Python `get_sessions_router.py:108-110`
+        // pattern reused across the read endpoints).
+        tracing::error!("get_stats: components not configured");
+        ApiError::OntologyEnvelope(
+            "stats failed".to_string(),
+            StatusCode::INTERNAL_SERVER_ERROR,
+        )
+    })?;
+
+    // Resolve permitted dataset ids — Python's `_permitted_dataset_ids_for`
+    // swallows every exception and returns empty
+    // (`get_sessions_router.py:55-58`).
+    let permitted_dataset_ids = match components
+        .database
+        .authorized_dataset_ids_with_roles(user.id, "read")
+        .await
+    {
+        Ok(ids) => ids,
+        Err(err) => {
+            tracing::warn!(error = %err, "authorized_dataset_ids_with_roles failed; proceeding with empty set");
+            Vec::new()
+        }
+    };
+
+    let since = range_since(query.range);
+
+    match components
+        .database
+        .aggregate_stats(user.id, &permitted_dataset_ids, since)
+        .await
+    {
+        Ok(stats) => {
+            let SessionStats {
+                sessions,
+                total_spend_usd,
+                avg_spend_per_session_usd,
+                tokens_in,
+                tokens_out,
+                tokens_total,
+                agent_time_s,
+                avg_session_s,
+                success_rate,
+                completed,
+                failed,
+                abandoned,
+                running,
+            } = stats;
+            Ok(Json(SessionStatsDTO {
+                range: query.range.as_wire_str().to_string(),
+                sessions,
+                total_spend_usd,
+                avg_spend_per_session_usd,
+                tokens_in,
+                tokens_out,
+                tokens_total,
+                agent_time_s,
+                avg_session_s,
+                success_rate,
+                completed,
+                failed,
+                abandoned,
+                running,
+            }))
+        }
+        Err(err) => {
+            // Python parity: the underlying SeaORM/repo errors bubble up
+            // through `_permitted_dataset_ids_for` / `aggregate_stats` and
+            // hit the same catch-all envelope used by `list_sessions` at
+            // `:108-110`. Use `OntologyEnvelope` — its render is
+            // `{"error": <msg>}` at the given status, matching Python's
+            // `JSONResponse(status_code=500, content={...})`.
+            tracing::error!(error = %err, "get_stats failed");
+            Err(ApiError::OntologyEnvelope(
+                "stats failed".to_string(),
                 StatusCode::INTERNAL_SERVER_ERROR,
             ))
         }

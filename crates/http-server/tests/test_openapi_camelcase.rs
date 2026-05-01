@@ -118,6 +118,10 @@ const SNAKE_CASE_WHITELIST: &[(&str, &str)] = &[
         "SessionRowDTO",
         "Plain dict: Python's `SessionRecord.to_dict()` (`models.py:68-86`) returns a snake_case dict — E-09 carve-out.",
     ),
+    (
+        "SessionStatsDTO",
+        "Plain dict: Python's `get_stats` returns `jsonable_encoder({...})` (`get_sessions_router.py:179-196`) — E-10 carve-out, same as the list response.",
+    ),
     // ── Remember (plain-dict response, Python `RememberResult.to_dict()`) ────
     (
         "RememberResultDTO",

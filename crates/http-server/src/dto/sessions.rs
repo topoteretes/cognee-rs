@@ -79,6 +79,22 @@ impl OrderBy {
     }
 }
 
+impl RangeWindow {
+    /// Wire-string form of the variant. Used by `GET /sessions/stats` to
+    /// echo the input `range` back into the response body — Python emits
+    /// the literal input string at
+    /// [`get_sessions_router.py:181`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/sessions/routers/get_sessions_router.py#L181),
+    /// even when the input was the default.
+    pub fn as_wire_str(self) -> &'static str {
+        match self {
+            Self::H24 => "24h",
+            Self::D7 => "7d",
+            Self::D30 => "30d",
+            Self::All => "all",
+        }
+    }
+}
+
 // ─── Query struct ─────────────────────────────────────────────────────────────
 
 fn default_limit() -> u32 {
@@ -123,6 +139,22 @@ pub struct ListSessionsQuery {
     pub descending: bool,
 }
 
+/// Query parameters for `GET /api/v1/sessions/stats`.
+///
+/// Wire names match the literal Rust field names (snake_case) — Python's
+/// `Query()` does not apply `alias_generator` to query params. Out of
+/// scope for Decision 10 (which targets body DTOs, not query strings).
+///
+/// Mirrors Python's `Query(...)` defaults at
+/// [`get_sessions_router.py:114-115`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/sessions/routers/get_sessions_router.py#L114-L115).
+#[derive(Debug, Clone, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct StatsQuery {
+    /// Time window. Default `30d`.
+    #[serde(default)]
+    pub range: RangeWindow,
+}
+
 // ─── Response DTOs (snake_case wire) ──────────────────────────────────────────
 
 /// Paginated envelope for `GET /api/v1/sessions`.
@@ -163,6 +195,39 @@ pub struct SessionRowDTO {
     pub error_count: i32,
     pub last_model: Option<String>,
     pub effective_status: String,
+}
+
+/// Response envelope for `GET /api/v1/sessions/stats`.
+///
+/// snake_case wire — Python returns a plain dict via `jsonable_encoder`
+/// at
+/// [`get_sessions_router.py:179-196`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/sessions/routers/get_sessions_router.py#L179-L196),
+/// not an `OutDTO`, so `to_camel` does not apply (same parity carve-out
+/// as the list endpoint).
+///
+/// Field-for-field parity with the Python response body. The first field
+/// (`range`) is the input echo Python emits at
+/// [`:181`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/sessions/routers/get_sessions_router.py#L181);
+/// the remaining 13 fields come from
+/// [`cognee_database::SessionStats`](../../../cognee_database/struct.SessionStats.html).
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct SessionStatsDTO {
+    /// Echo of the input `range` query parameter (literal string, even
+    /// when the input was the default).
+    pub range: String,
+    pub sessions: i64,
+    pub total_spend_usd: f64,
+    pub avg_spend_per_session_usd: f64,
+    pub tokens_in: i64,
+    pub tokens_out: i64,
+    pub tokens_total: i64,
+    pub agent_time_s: f64,
+    pub avg_session_s: f64,
+    pub success_rate: f64,
+    pub completed: i64,
+    pub failed: i64,
+    pub abandoned: i64,
+    pub running: i64,
 }
 
 impl From<cognee_database::SessionRowWithStatus> for SessionRowDTO {
@@ -242,6 +307,71 @@ mod tests {
         // Decision 9 / D-1: typed enum rejects unknown variants.
         let res: Result<ListSessionsQuery, _> = serde_urlencoded::from_str("order_by=banana");
         assert!(res.is_err(), "unknown order_by must be rejected");
+    }
+
+    #[test]
+    fn stats_query_defaults_to_30d() {
+        let q: StatsQuery = serde_urlencoded::from_str("").expect("empty query");
+        assert_eq!(q.range, RangeWindow::D30);
+    }
+
+    #[test]
+    fn range_window_as_wire_str_round_trips() {
+        assert_eq!(RangeWindow::H24.as_wire_str(), "24h");
+        assert_eq!(RangeWindow::D7.as_wire_str(), "7d");
+        assert_eq!(RangeWindow::D30.as_wire_str(), "30d");
+        assert_eq!(RangeWindow::All.as_wire_str(), "all");
+    }
+
+    #[test]
+    fn session_stats_dto_emits_snake_case_keys() {
+        let dto = SessionStatsDTO {
+            range: "30d".into(),
+            sessions: 3,
+            total_spend_usd: 1.5,
+            avg_spend_per_session_usd: 0.5,
+            tokens_in: 10,
+            tokens_out: 20,
+            tokens_total: 30,
+            agent_time_s: 12.5,
+            avg_session_s: 4.0,
+            success_rate: 0.75,
+            completed: 2,
+            failed: 1,
+            abandoned: 0,
+            running: 0,
+        };
+        let s = serde_json::to_string(&dto).expect("serialize");
+        // snake_case wire keys — Python parity (plain dict response).
+        assert!(s.contains("\"range\""), "expected range key: {s}");
+        assert!(
+            s.contains("\"total_spend_usd\""),
+            "expected snake_case total_spend_usd: {s}"
+        );
+        assert!(
+            s.contains("\"avg_spend_per_session_usd\""),
+            "expected snake_case avg_spend_per_session_usd: {s}"
+        );
+        assert!(
+            s.contains("\"success_rate\""),
+            "expected snake_case success_rate: {s}"
+        );
+        assert!(
+            s.contains("\"agent_time_s\""),
+            "expected snake_case agent_time_s: {s}"
+        );
+        assert!(
+            s.contains("\"avg_session_s\""),
+            "expected snake_case avg_session_s: {s}"
+        );
+        assert!(
+            s.contains("\"tokens_total\""),
+            "expected snake_case tokens_total: {s}"
+        );
+        // Reject camelCase variants — these would indicate Decision 10
+        // accidentally applied.
+        assert!(!s.contains("totalSpendUsd"), "must not emit camelCase: {s}");
+        assert!(!s.contains("successRate"), "must not emit camelCase: {s}");
     }
 
     #[test]

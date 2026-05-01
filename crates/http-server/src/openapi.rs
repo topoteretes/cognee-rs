@@ -37,6 +37,8 @@ use utoipa::{
         crate::routers::recall::post_recall,
         // E-09 — sessions list
         crate::routers::sessions::list_sessions,
+        // E-10 — sessions stats
+        crate::routers::sessions::get_stats,
         crate::routers::llm::post_custom_prompt,
         crate::routers::llm::post_infer_schema,
         crate::routers::visualize::get_visualize,
@@ -78,6 +80,8 @@ use utoipa::{
         crate::dto::sessions::SessionRowDTO,
         crate::dto::sessions::OrderBy,
         crate::dto::sessions::RangeWindow,
+        // E-10 — sessions stats DTO (StatsQuery is `IntoParams`-only)
+        crate::dto::sessions::SessionStatsDTO,
         // P5 permissions DTOs
         crate::dto::permissions::SelectTenantDTO,
         crate::dto::permissions::GrantDatasetPermissionBody,
