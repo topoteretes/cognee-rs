@@ -23,8 +23,8 @@ use cognee_database::{AclDb, SessionLifecycleDb, SessionListFilters, SessionStat
 
 use crate::auth::AuthenticatedUser;
 use crate::dto::sessions::{
-    ListSessionsQuery, RangeWindow, SessionListResponseDTO, SessionRowDTO, SessionStatsDTO,
-    StatsQuery,
+    CostByModelDTO, CostByModelQuery, ListSessionsQuery, RangeWindow, SessionListResponseDTO,
+    SessionRowDTO, SessionStatsDTO, StatsQuery,
 };
 use crate::error::{ApiError, ValidationDetails};
 use crate::middleware::validation::ValidatedQuery;
@@ -32,15 +32,15 @@ use crate::state::AppState;
 
 /// Build the `/api/v1/sessions` sub-router.
 ///
-/// E-09 mounts `GET /` (list); E-10 adds `GET /stats`. E-11/E-12 will
-/// add the remaining handlers below — keep the doc-comment in sync as
-/// routes land:
-///   * `.route("/cost-by-model", get(cost_by_model))` (E-11)
+/// E-09 mounts `GET /` (list); E-10 adds `GET /stats`; E-11 adds
+/// `GET /cost-by-model`. E-12 will add the remaining handler below —
+/// keep the doc-comment in sync as routes land:
 ///   * `.route("/{session_id}", get(get_session_detail))` (E-12)
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", get(list_sessions))
         .route("/stats", get(get_stats))
+        .route("/cost-by-model", get(cost_by_model))
 }
 
 // ─── GET /api/v1/sessions ─────────────────────────────────────────────────────
@@ -281,6 +281,102 @@ pub async fn get_stats(
             tracing::error!(error = %err, "get_stats failed");
             Err(ApiError::OntologyEnvelope(
                 "stats failed".to_string(),
+                StatusCode::INTERNAL_SERVER_ERROR,
+            ))
+        }
+    }
+}
+
+// ─── GET /api/v1/sessions/cost-by-model ───────────────────────────────────────
+
+/// `GET /api/v1/sessions/cost-by-model` — per-model cost + token
+/// breakdown for the dashboard's "Spend by model" widget.
+///
+/// Mirrors Python `cost_by_model` at
+/// [`get_sessions_router.py:198-252`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/sessions/routers/get_sessions_router.py#L198-L252).
+///
+/// Visibility model: caller's own sessions are always counted; sessions
+/// attached to a dataset the caller has `read` permission on are also
+/// counted via [`AclDb::authorized_dataset_ids_with_roles`].
+///
+/// Response wire shape: a plain JSON array (not an envelope) of 5-field
+/// snake_case rows. Python returns a plain list of dicts via
+/// `jsonable_encoder` (`get_sessions_router.py:241-251`), so `to_camel`
+/// does not apply (same parity carve-out as the list and stats
+/// endpoints). Sorted by `SUM(cost_usd)` descending; null-model rows
+/// fold into a single `"unknown"` bucket (LIB-05's repo applies the
+/// fallback at `crates/database/src/ops/session_lifecycle.rs:822`).
+#[utoipa::path(
+    get,
+    path = "/api/v1/sessions/cost-by-model",
+    tag = "sessions",
+    params(CostByModelQuery),
+    responses(
+        (status = 200, description = "per-model cost + token breakdown", body = Vec<CostByModelDTO>),
+        (status = 401, description = "unauthorized"),
+        (status = 500, description = "cost-by-model failed"),
+    )
+)]
+#[tracing::instrument(
+    name = "cognee.api.sessions.cost_by_model",
+    skip(state),
+    fields(
+        cognee.session.user_id = %user.id,
+        cognee.session.range = ?query.range,
+    )
+)]
+pub async fn cost_by_model(
+    State(state): State<AppState>,
+    user: AuthenticatedUser,
+    ValidatedQuery(query): ValidatedQuery<CostByModelQuery>,
+) -> Result<Json<Vec<CostByModelDTO>>, ApiError> {
+    let components = state.components().ok_or_else(|| {
+        // Treat un-wired components like the Python catch-all: 500 with
+        // `{"error": "cost-by-model failed"}` (Python `get_sessions_router.py:108-110`
+        // pattern reused across the read endpoints).
+        tracing::error!("cost_by_model: components not configured");
+        ApiError::OntologyEnvelope(
+            "cost-by-model failed".to_string(),
+            StatusCode::INTERNAL_SERVER_ERROR,
+        )
+    })?;
+
+    // Resolve permitted dataset ids — Python's `_permitted_dataset_ids_for`
+    // swallows every exception and returns empty
+    // (`get_sessions_router.py:55-58`).
+    let permitted_dataset_ids = match components
+        .database
+        .authorized_dataset_ids_with_roles(user.id, "read")
+        .await
+    {
+        Ok(ids) => ids,
+        Err(err) => {
+            tracing::warn!(error = %err, "authorized_dataset_ids_with_roles failed; proceeding with empty set");
+            Vec::new()
+        }
+    };
+
+    let since = range_since(query.range);
+
+    match components
+        .database
+        .cost_by_model(user.id, &permitted_dataset_ids, since)
+        .await
+    {
+        Ok(rows) => {
+            let dtos: Vec<CostByModelDTO> = rows.into_iter().map(CostByModelDTO::from).collect();
+            Ok(Json(dtos))
+        }
+        Err(err) => {
+            // Python parity: the underlying SeaORM/repo errors bubble up
+            // through `_permitted_dataset_ids_for` / `cost_by_model` and
+            // hit the same catch-all envelope used by `list_sessions` at
+            // `:108-110`. Use `OntologyEnvelope` — its render is
+            // `{"error": <msg>}` at the given status, matching Python's
+            // `JSONResponse(status_code=500, content={...})`.
+            tracing::error!(error = %err, "cost_by_model failed");
+            Err(ApiError::OntologyEnvelope(
+                "cost-by-model failed".to_string(),
                 StatusCode::INTERNAL_SERVER_ERROR,
             ))
         }

@@ -155,6 +155,22 @@ pub struct StatsQuery {
     pub range: RangeWindow,
 }
 
+/// Query parameters for `GET /api/v1/sessions/cost-by-model`.
+///
+/// Wire names match the literal Rust field names (snake_case) — Python's
+/// `Query()` does not apply `alias_generator` to query params. Out of
+/// scope for Decision 10 (which targets body DTOs, not query strings).
+///
+/// Mirrors Python's `Query(...)` default at
+/// [`get_sessions_router.py:200`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/sessions/routers/get_sessions_router.py#L200).
+#[derive(Debug, Clone, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct CostByModelQuery {
+    /// Time window. Default `30d`.
+    #[serde(default)]
+    pub range: RangeWindow,
+}
+
 // ─── Response DTOs (snake_case wire) ──────────────────────────────────────────
 
 /// Paginated envelope for `GET /api/v1/sessions`.
@@ -228,6 +244,34 @@ pub struct SessionStatsDTO {
     pub failed: i64,
     pub abandoned: i64,
     pub running: i64,
+}
+
+/// Per-model row for `GET /api/v1/sessions/cost-by-model`.
+///
+/// snake_case wire — Python returns a plain list-of-dicts via
+/// `jsonable_encoder` ([`get_sessions_router.py:241-251`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/sessions/routers/get_sessions_router.py#L241-L251)),
+/// not an `OutDTO`, so `to_camel` does not apply (same parity carve-out
+/// as the list and stats endpoints). Field-for-field parity with
+/// [`cognee_database::CostByModelRow`](../../../cognee_database/struct.CostByModelRow.html).
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct CostByModelDTO {
+    pub model: String,
+    pub session_count: i64,
+    pub cost_usd: f64,
+    pub tokens_in: i64,
+    pub tokens_out: i64,
+}
+
+impl From<cognee_database::CostByModelRow> for CostByModelDTO {
+    fn from(row: cognee_database::CostByModelRow) -> Self {
+        Self {
+            model: row.model,
+            session_count: row.session_count,
+            cost_usd: row.cost_usd,
+            tokens_in: row.tokens_in,
+            tokens_out: row.tokens_out,
+        }
+    }
 }
 
 impl From<cognee_database::SessionRowWithStatus> for SessionRowDTO {
@@ -372,6 +416,48 @@ mod tests {
         // accidentally applied.
         assert!(!s.contains("totalSpendUsd"), "must not emit camelCase: {s}");
         assert!(!s.contains("successRate"), "must not emit camelCase: {s}");
+    }
+
+    #[test]
+    fn cost_by_model_query_defaults_to_30d() {
+        let q: CostByModelQuery = serde_urlencoded::from_str("").expect("empty query");
+        assert_eq!(q.range, RangeWindow::D30);
+    }
+
+    #[test]
+    fn cost_by_model_dto_emits_snake_case_keys() {
+        let dto = CostByModelDTO {
+            model: "gpt-4o-mini".into(),
+            session_count: 3,
+            cost_usd: 1.25,
+            tokens_in: 100,
+            tokens_out: 200,
+        };
+        let s = serde_json::to_string(&dto).expect("serialize");
+        // snake_case wire keys — Python parity (plain list-of-dicts response).
+        assert!(s.contains("\"model\""), "expected model key: {s}");
+        assert!(
+            s.contains("\"session_count\""),
+            "expected snake_case session_count: {s}"
+        );
+        assert!(
+            s.contains("\"cost_usd\""),
+            "expected snake_case cost_usd: {s}"
+        );
+        assert!(
+            s.contains("\"tokens_in\""),
+            "expected snake_case tokens_in: {s}"
+        );
+        assert!(
+            s.contains("\"tokens_out\""),
+            "expected snake_case tokens_out: {s}"
+        );
+        // Reject camelCase variants — these would indicate Decision 10
+        // accidentally applied.
+        assert!(!s.contains("sessionCount"), "must not emit camelCase: {s}");
+        assert!(!s.contains("costUsd"), "must not emit camelCase: {s}");
+        assert!(!s.contains("tokensIn"), "must not emit camelCase: {s}");
+        assert!(!s.contains("tokensOut"), "must not emit camelCase: {s}");
     }
 
     #[test]
