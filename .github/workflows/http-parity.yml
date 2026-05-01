@@ -56,6 +56,20 @@ jobs:
       - name: Generate Cargo.lock (gitignored, required by Dockerfile COPY)
         run: cargo generate-lockfile --manifest-path cognee-rust/Cargo.toml
 
+      # ubuntu-latest ships with ~14 GB free; lbug's C++ link step needs more
+      # headroom than that once cargo registry, target cache, and Docker
+      # layers are factored in. Mirror ci.yml's Test job cleanup.
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: false
+          swap-storage: true
+          docker-images: true
+
       # ── Docker layer cache ────────────────────────────────────────────────
       - name: Cache Docker layers
         uses: actions/cache@v4
