@@ -28,6 +28,8 @@ use utoipa::{
     ),
     modifiers(&SecurityAddon),
     paths(
+        // E-02 — typed-entry remember
+        crate::routers::remember::post_remember_entry,
         // P4 read-path handlers
         crate::routers::search::get_search_history,
         crate::routers::search::post_search,
@@ -64,6 +66,11 @@ use utoipa::{
         crate::routers::responses::create_response,
     ),
     components(schemas(
+        // E-02 — typed-entry remember DTOs
+        crate::dto::remember_entry::RememberEntryRequestDTO,
+        crate::dto::remember::RememberResultDTO,
+        crate::dto::remember::RememberItemDTO,
+        crate::dto::remember::WireRememberStatus,
         // P5 permissions DTOs
         crate::dto::permissions::SelectTenantDTO,
         crate::dto::permissions::GrantDatasetPermissionBody,

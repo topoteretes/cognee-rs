@@ -13,16 +13,22 @@ use axum::{
     response::IntoResponse,
     routing::post,
 };
-use cognee_database::IngestDb;
+use cognee_database::{IngestDb, SessionLifecycleDb};
 use cognee_ingestion::{AddParams, AddPipeline};
 use cognee_models::DataInput;
+use cognee_models::memory::{FeedbackEntry, MemoryEntry, QAEntry, TraceEntry};
+use cognee_search::SessionManager;
+use cognee_session::{SessionError, SessionQAUpdate};
+use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::auth::AuthenticatedUser;
 use crate::dto::remember::{
     RememberFormDTO, RememberResultDTO, UploadedFilePart, WireRememberStatus,
 };
-use crate::error::ApiError;
+use crate::dto::remember_entry::RememberEntryRequestDTO;
+use crate::error::{ApiError, ValidationDetails};
+use crate::middleware::validation::Json as ValidatedJson;
 use crate::multipart::{MultipartOpts, UploadGuard, check_filename_traversal, parse_multipart};
 use crate::pipelines::dispatch::{DispatchOutcome, box_pipeline_future, dispatch_pipeline};
 use crate::state::AppState;
@@ -312,15 +318,283 @@ pub async fn post_remember(
         content_hash: None,
         items: None,
         error: None,
+        // Typed-entry-only fields — `None` on the file/text path
+        // (Python parity: `entry_type` / `entry_id` are absent when
+        // remember was invoked with file/text data, not a `MemoryEntry`).
+        entry_type: None,
+        entry_id: None,
     };
 
     Ok((StatusCode::OK, Json(result)))
 }
 
+// ─── post_remember_entry ──────────────────────────────────────────────────────
+
+/// `POST /api/v1/remember/entry` — typed memory-entry dispatch.
+///
+/// Python parity: `cognee/api/v1/remember/routers/get_remember_router.py:115-164`.
+///
+/// **Inline replication** of `cognee_lib::api::remember::remember_entry`
+/// (`crates/lib/src/api/remember.rs:603-792`) to work around the
+/// `cognee-http-server` ↔ `cognee-lib` cycle constraint
+/// (`Cargo.toml:35-37`). The library facade is the canonical in-process
+/// Rust SDK entry point for non-HTTP callers; this handler is a parallel
+/// implementation that mirrors the same `match` on the `MemoryEntry`
+/// variants byte-for-byte. **See also**: if Python's
+/// `_dispatch_session_entry` ever changes shape, both this handler **and**
+/// `cognee_lib::api::remember::remember_entry` must be updated.
+///
+/// Status codes match Python:
+/// - `200` — success.
+/// - `400` — empty `session_id` (validation envelope) or unknown
+///   discriminator (`ValidatedJson` rejects at deserialization time).
+/// - `503` — session cache not configured (`Python RuntimeError → 503`).
+/// - `409 {"error": "An error occurred during remember."}` — catch-all.
+#[utoipa::path(
+    post,
+    path = "/api/v1/remember/entry",
+    tag = "remember",
+    request_body = RememberEntryRequestDTO,
+    responses(
+        (status = 200, description = "typed entry stored", body = RememberResultDTO),
+        (status = 400, description = "validation error", body = serde_json::Value),
+        (status = 401, description = "unauthorized"),
+        (status = 409, description = "catch-all", body = serde_json::Value),
+        (status = 503, description = "session cache unavailable", body = serde_json::Value),
+    )
+)]
+#[tracing::instrument(
+    name = "cognee.api.remember_entry",
+    skip(state, payload),
+    fields(
+        endpoint = "POST /v1/remember/entry",
+        cognee.user_id = %user.id,
+        entry_type = tracing::field::Empty,
+    ),
+)]
+pub async fn post_remember_entry(
+    user: AuthenticatedUser,
+    State(state): State<AppState>,
+    ValidatedJson(payload): ValidatedJson<RememberEntryRequestDTO>,
+) -> Result<Json<RememberResultDTO>, ApiError> {
+    let started = std::time::Instant::now();
+
+    // ── Pre-handler validation: empty session_id ─────────────────────────
+    // Python's library raises `ValueError("session_id is required ...")` →
+    // 400. The HTTP layer additionally requires the Pydantic-style
+    // validation envelope (Decision 7, task §5).
+    if payload.session_id.trim().is_empty() {
+        return Err(ApiError::Validation(ValidationDetails {
+            detail: serde_json::json!([{
+                "loc": ["body", "session_id"],
+                "msg": "session_id is required for typed memory entries",
+                "type": "value_error",
+            }]),
+            body: None,
+        }));
+    }
+
+    // Record the entry_type discriminator on the current span for telemetry.
+    let entry_type_str = payload.entry.type_str();
+    tracing::Span::current().record("entry_type", entry_type_str);
+
+    // ── Resolve required handles from ComponentHandles ───────────────────
+    let components = state
+        .components()
+        .ok_or_else(|| ApiError::DeprecatedConflict("An error occurred during remember.".into()))?;
+    let session_manager: Arc<SessionManager> = components
+        .session_manager
+        .clone()
+        .ok_or_else(|| ApiError::ServiceUnavailable("Session cache is not configured.".into()))?;
+    let database = components.database.clone();
+
+    // ── Best-effort pre-upsert of the session_records row ────────────────
+    // Mirrors `crates/lib/src/api/remember.rs:625-641` — log-and-swallow at
+    // debug level on failure (non-fatal).
+    if let Err(exc) = SessionLifecycleDb::ensure_and_touch_session(
+        database.as_ref(),
+        &payload.session_id,
+        user.id,
+        None,
+    )
+    .await
+    {
+        tracing::debug!(
+            session_id = %payload.session_id,
+            "post_remember_entry: pre-upsert session_record failed (non-fatal): {exc}"
+        );
+    }
+
+    // ── Dispatch by variant — mirrors crates/lib/src/api/remember.rs:650-769
+    let user_id_str = user.id.to_string();
+    let mut wire_status = WireRememberStatus::SessionStored;
+    let mut error_msg: Option<String> = None;
+
+    let entry_id: String = match payload.entry {
+        MemoryEntry::Qa(QAEntry {
+            question,
+            answer,
+            context,
+            feedback_text,
+            feedback_score,
+            used_graph_element_ids,
+        }) => {
+            let qa_id = session_manager
+                .save_qa(
+                    Some(&payload.session_id),
+                    Some(&user_id_str),
+                    &question,
+                    &answer,
+                    Some(context.as_str()),
+                )
+                .await
+                .map_err(map_session_err)?;
+
+            // Follow-up partial update when any of the optional fields
+            // are present (mirrors `crates/lib/src/api/remember.rs:674-696`).
+            if feedback_text.is_some()
+                || feedback_score.is_some()
+                || used_graph_element_ids.is_some()
+            {
+                let used_graph_element_ids_typed = match used_graph_element_ids {
+                    Some(value) => Some(Some(serde_json::from_value(value).map_err(|e| {
+                        ApiError::BadRequest(format!(
+                            "used_graph_element_ids does not match \
+                             {{node_ids:[], edge_ids:[]}} shape: {e}"
+                        ))
+                    })?)),
+                    None => None,
+                };
+
+                let updates = SessionQAUpdate {
+                    feedback_text: feedback_text.map(Some),
+                    feedback_score: feedback_score.map(Some),
+                    used_graph_element_ids: used_graph_element_ids_typed,
+                    ..Default::default()
+                };
+
+                session_manager
+                    .update_qa(
+                        Some(&payload.session_id),
+                        Some(&user_id_str),
+                        &qa_id,
+                        updates,
+                    )
+                    .await
+                    .map_err(map_session_err)?;
+            }
+
+            qa_id
+        }
+
+        MemoryEntry::Trace(TraceEntry {
+            origin_function,
+            status: trace_status,
+            method_params,
+            method_return_value,
+            memory_query,
+            memory_context,
+            error_message,
+            generate_feedback_with_llm,
+        }) => {
+            // TODO(LIB-01-followup): generate_feedback_with_llm requires
+            // wiring an `Arc<dyn Llm>` + prompt template through
+            // `SessionManager`. For now we always pass `session_feedback = ""`.
+            if generate_feedback_with_llm {
+                tracing::debug!(
+                    session_id = %payload.session_id,
+                    "post_remember_entry: generate_feedback_with_llm=true \
+                     ignored (LIB-01-followup; passing empty session_feedback)"
+                );
+            }
+
+            session_manager
+                .add_agent_trace_step(
+                    &user_id_str,
+                    Some(&payload.session_id),
+                    &origin_function,
+                    &trace_status,
+                    &memory_query,
+                    &memory_context,
+                    method_params.unwrap_or(serde_json::Value::Null),
+                    method_return_value,
+                    &error_message,
+                    "",
+                )
+                .await
+                .map_err(map_session_err)?
+        }
+
+        MemoryEntry::Feedback(FeedbackEntry {
+            qa_id,
+            feedback_text,
+            feedback_score,
+        }) => {
+            let ok = session_manager
+                .add_feedback(
+                    Some(&payload.session_id),
+                    Some(&user_id_str),
+                    &qa_id,
+                    feedback_text.as_deref(),
+                    feedback_score,
+                )
+                .await
+                .map_err(map_session_err)?;
+
+            if !ok {
+                wire_status = WireRememberStatus::Errored;
+                error_msg = Some(format!(
+                    "add_feedback: QA {qa_id} not found in session {}",
+                    payload.session_id,
+                ));
+            }
+            // Python parity: entry_id is set to the input qa_id even on
+            // not-found (remember.py:307: `result.entry_id = entry.qa_id`).
+            qa_id
+        }
+    };
+
+    let result = RememberResultDTO {
+        status: wire_status,
+        pipeline_run_id: None,
+        dataset_id: None,
+        dataset_name: payload.dataset_name,
+        items_processed: 0,
+        elapsed_seconds: Some(started.elapsed().as_secs_f64()),
+        session_ids: Some(vec![payload.session_id]),
+        content_hash: None,
+        items: None,
+        error: error_msg,
+        entry_type: Some(entry_type_str.to_string()),
+        entry_id: Some(entry_id),
+    };
+
+    Ok(Json(result))
+}
+
+/// Map a `cognee_session::SessionError` to the matching `ApiError` per
+/// Python parity (task §3 step 3 + task §4):
+/// - `StoreError` whose message contains `"cache unavailable"` → 503
+///   `{"error": "..."}` (Python `RuntimeError → 503`).
+/// - everything else → 409 `{"error": "An error occurred during remember."}`.
+fn map_session_err(err: SessionError) -> ApiError {
+    match err {
+        SessionError::StoreError(ref msg) if msg.contains("cache unavailable") => {
+            ApiError::ServiceUnavailable(msg.clone())
+        }
+        other => {
+            tracing::error!(error = %other, "remember_entry: session dispatch failed");
+            ApiError::DeprecatedConflict("An error occurred during remember.".into())
+        }
+    }
+}
+
 // ─── router ──────────────────────────────────────────────────────────────────
 
 pub fn router() -> Router<AppState> {
-    Router::new().route("/", post(post_remember))
+    Router::new()
+        .route("/", post(post_remember))
+        .route("/entry", post(post_remember_entry))
 }
 
 // ─── Unit tests ───────────────────────────────────────────────────────────────

@@ -63,6 +63,7 @@ pub mod permissions;
 pub mod pipeline_run;
 pub mod recall;
 pub mod remember;
+pub mod remember_entry;
 pub mod responses;
 pub mod search;
 pub mod settings;

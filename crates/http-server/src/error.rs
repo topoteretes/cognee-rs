@@ -195,6 +195,15 @@ pub enum ApiError {
     #[error("not implemented: {0}")]
     NotImplemented(String),
 
+    /// 503 `{"error": "..."}` — service unavailable.
+    ///
+    /// Used by `/api/v1/remember/entry` when the session cache is not
+    /// configured. Mirrors Python's
+    /// `JSONResponse(status_code=503, content={"error": str(error)})`
+    /// (`get_remember_router.py:158-160`).
+    #[error("service unavailable: {0}")]
+    ServiceUnavailable(String),
+
     /// 501 `{"detail": "...", "code": "..."}` — structured stub envelope.
     ///
     /// Field order is wire-load-bearing: `detail` first, then `code`, matching
@@ -356,6 +365,9 @@ impl IntoResponse for ApiError {
             ApiError::OntologyEnvelope(msg, status) => (status, json!({"error": msg})),
             ApiError::DeprecatedConflict(msg) => (StatusCode::CONFLICT, json!({"error": msg})),
             ApiError::NotImplemented(msg) => (StatusCode::NOT_IMPLEMENTED, json!({"detail": msg})),
+            ApiError::ServiceUnavailable(msg) => {
+                (StatusCode::SERVICE_UNAVAILABLE, json!({"error": msg}))
+            }
             ApiError::NotImplementedStub { code, detail } => {
                 // Field order is load-bearing: detail first, then code
                 // (matches Python's JSONResponse dict insertion order).

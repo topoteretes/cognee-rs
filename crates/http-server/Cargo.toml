@@ -45,6 +45,7 @@ cognee-ingestion = { path = "../ingestion" }
 cognee-delete = { path = "../delete" }
 cognee-ontology = { path = "../ontology" }
 cognee-search = { path = "../search" }
+cognee-session = { path = "../session" }
 cognee-llm = { path = "../llm" }
 cognee-graph = { path = "../graph" }
 cognee-visualization = { path = "../visualization" }
@@ -104,6 +105,6 @@ chrono = { workspace = true }
 sea-orm = { version = "1", default-features = false, features = ["sqlx-sqlite", "runtime-tokio-native-tls", "macros"] }
 cognee-database = { path = "../database", features = ["sqlite"] }
 cognee-graph = { path = "../graph", features = ["testing"] }
-cognee-session = { path = "../session" }
+cognee-session = { path = "../session", features = ["fs"] }
 async-trait = { workspace = true }
 tempfile = { workspace = true }

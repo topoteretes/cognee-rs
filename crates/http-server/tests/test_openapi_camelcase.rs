@@ -109,6 +109,15 @@ const SNAKE_CASE_WHITELIST: &[(&str, &str)] = &[
         "ChatUsageDTO",
         "Python: bare `BaseModel` `ChatUsage` — `prompt_tokens`/`completion_tokens`/`total_tokens` literal.",
     ),
+    // ── Remember (plain-dict response, Python `RememberResult.to_dict()`) ────
+    (
+        "RememberResultDTO",
+        "Plain dict: Python's `RememberResult.to_dict()` returns a plain dict (not a pydantic BaseModel) so wire keys are snake_case (CLEAN-01 §3.1 carve-out).",
+    ),
+    (
+        "RememberItemDTO",
+        "Plain dict: per-item info embedded in `RememberResult.to_dict()` — same snake_case carve-out.",
+    ),
 ];
 
 fn is_camel_case(name: &str) -> bool {

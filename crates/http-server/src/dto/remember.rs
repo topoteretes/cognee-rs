@@ -129,6 +129,19 @@ pub struct RememberResultDTO {
     pub items: Option<Vec<RememberItemDTO>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// Discriminator string for the typed-entry path
+    /// (`"qa"` / `"trace"` / `"feedback"`).
+    ///
+    /// Reserved for `POST /api/v1/remember/entry` (E-02, Decision 5). Skipped
+    /// when `None` so the existing file-payload responses (E-01) stay
+    /// byte-identical (Python omits both keys on the file path).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub entry_type: Option<String>,
+    /// Cache-returned entry id (`qa_id` / `trace_id`). For feedback entries
+    /// this is the input `qa_id` even when the QA was not found in the
+    /// session (Python parity at `remember.py:307`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub entry_id: Option<String>,
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -173,6 +186,8 @@ mod tests {
             content_hash: None,
             items: None,
             error: None,
+            entry_type: None,
+            entry_id: None,
         };
         let v = serde_json::to_value(&dto).expect("to_value");
         let obj = v.as_object().expect("object");
@@ -216,6 +231,8 @@ mod tests {
                 token_count: Some(42),
             }]),
             error: None,
+            entry_type: None,
+            entry_id: None,
         };
         let v = serde_json::to_value(&dto).expect("to_value");
         let obj = v.as_object().expect("object");
@@ -229,5 +246,38 @@ mod tests {
         assert_eq!(items[0]["name"], "doc.txt");
         assert_eq!(items[0]["content_hash"], "hash");
         assert_eq!(items[0]["token_count"], 42);
+
+        // Without `entry_type` / `entry_id` set, both keys must be absent
+        // — the file/text path of `RememberResultDTO` does not carry them
+        // (Python parity, Decision 5).
+        assert!(!obj.contains_key("entry_type"));
+        assert!(!obj.contains_key("entry_id"));
+    }
+
+    /// E-02, Decision 5: when the typed-entry handler populates the new
+    /// `entry_type` / `entry_id` fields, they must serialize to the wire
+    /// under their snake_case names alongside the rest of the DTO.
+    #[test]
+    fn remember_result_dto_serializes_entry_fields_when_set() {
+        let dto = RememberResultDTO {
+            status: WireRememberStatus::SessionStored,
+            pipeline_run_id: None,
+            dataset_id: None,
+            dataset_name: "main_dataset".into(),
+            items_processed: 0,
+            elapsed_seconds: Some(0.01),
+            session_ids: Some(vec!["sess-1".into()]),
+            content_hash: None,
+            items: None,
+            error: None,
+            entry_type: Some("qa".into()),
+            entry_id: Some("qa-abc-123".into()),
+        };
+        let v = serde_json::to_value(&dto).expect("to_value");
+        let obj = v.as_object().expect("object");
+
+        assert_eq!(obj["status"], "session_stored");
+        assert_eq!(obj["entry_type"], "qa");
+        assert_eq!(obj["entry_id"], "qa-abc-123");
     }
 }
