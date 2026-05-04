@@ -64,6 +64,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 ENV UV_LINK_MODE=copy
 
+# Create a relocatable venv up-front so script shebangs use a sh-shim that
+# resolves at runtime instead of the absolute /build/.venv/bin/python path.
+# This lets the harness stage COPY the venv to /opt/python-venv with no
+# shebang rewriting required (the previous sed-based fix only matched
+# `python3` shebangs, missing `python` entries like uvicorn).
+RUN uv venv --relocatable /build/.venv
+
 # Copy dependency files first for layer caching
 COPY cognee/pyproject.toml cognee/uv.lock cognee/README.md ./
 
@@ -95,13 +102,13 @@ COPY --from=rust-builder /usr/local/bin/cognee-http-server /usr/local/bin/cognee
 # Copy ONNX models
 COPY --from=rust-builder /opt/models/ /opt/models/
 
-# Copy Python virtualenv and fix up shebangs for the new location
+# Copy Python virtualenv. The venv was created with `uv venv --relocatable`
+# in stage 2, so script shebangs already use a sh-shim that resolves the
+# python interpreter relative to the script's own location — no shebang
+# rewriting needed.
 COPY --from=python-builder /build/.venv /opt/python-venv
 ENV PATH="/opt/python-venv/bin:$PATH"
-# Fix shebangs that point to the build-time venv path
-RUN find /opt/python-venv/bin -type f -exec \
-    sed -i 's|#!/build/.venv/bin/python3|#!/opt/python-venv/bin/python3|g' {} + 2>/dev/null; \
-    ln -sf /opt/python-venv/bin/cognee-cli /usr/local/bin/cognee-cli-python
+RUN ln -sf /opt/python-venv/bin/cognee-cli /usr/local/bin/cognee-cli-python
 
 # Install harness dependencies
 COPY cognee-rust/e2e-cross-sdk/harness/requirements.txt /tmp/requirements.txt
