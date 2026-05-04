@@ -36,11 +36,17 @@ jobs:
           path: cognee-rust
           submodules: recursive
 
+      # Pinned to a `dev`-branch SHA that ships the Ladybug shim (kuzu/ has
+      # been re-exported from `ladybug` since 1.0.5). On `main` kuzu is still
+      # a hard pip dep that's not installed in the harness venv, causing
+      # `ModuleNotFoundError: No module named 'kuzu'` during alembic migrations.
+      # Bump this SHA periodically; pinning beats `ref: dev` so upstream
+      # churn can't silently break our CI.
       - name: Checkout cognee (Python sibling repo)
         uses: actions/checkout@v4
         with:
           repository: topoteretes/cognee
-          ref: main
+          ref: b9014c1661bff1d1d8bc831f3d31bc5a965bcaa3
           path: cognee
 
       # docker-compose.yml declares `env_file: ../.env`; missing files abort

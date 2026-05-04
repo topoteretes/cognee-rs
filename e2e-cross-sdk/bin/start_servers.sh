@@ -32,6 +32,17 @@ export MOCK_EMBEDDING="${MOCK_EMBEDDING:-}"
 export COGNEE_E2E_EMBED_MODEL_PATH="${COGNEE_E2E_EMBED_MODEL_PATH:-/opt/models/BGE-Small-v1.5-model_quantized.onnx}"
 export COGNEE_E2E_TOKENIZER_PATH="${COGNEE_E2E_TOKENIZER_PATH:-/opt/models/bge-small-tokenizer.json}"
 
+# ── Python cognee storage roots ──────────────────────────────────────────────
+# BaseConfig.{data,system,cache}_root_directory default to paths resolved via
+# Path(__file__).parent of the installed cognee package — i.e. inside
+# /opt/python-venv/lib/python3.12/site-packages/cognee/, which is read-only.
+# Point them at the per-run tmpfs PY_WORKSPACE so the SQLite migration can
+# actually create its DB file and so cleanup is automatic between runs.
+export DATA_ROOT_DIRECTORY="${DATA_ROOT_DIRECTORY:-$PY_WORKSPACE/.data_storage}"
+export SYSTEM_ROOT_DIRECTORY="${SYSTEM_ROOT_DIRECTORY:-$PY_WORKSPACE/.cognee_system}"
+export CACHE_ROOT_DIRECTORY="${CACHE_ROOT_DIRECTORY:-$PY_WORKSPACE/.cognee_cache}"
+mkdir -p "$DATA_ROOT_DIRECTORY" "$SYSTEM_ROOT_DIRECTORY/databases" "$CACHE_ROOT_DIRECTORY"
+
 # ── Run Python DB migrations once before booting uvicorn ────────────────────
 echo "[start_servers] Running Python DB migrations..."
 (cd "$PY_WORKSPACE" && python -m cognee.run_migrations 2>&1 || true)
