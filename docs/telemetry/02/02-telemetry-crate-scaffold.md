@@ -212,15 +212,32 @@ between lines 31 and 32:
 #![deny(rust_2018_idioms)]
 #![warn(missing_docs)]
 
-use serde_json::Value;
 use thiserror::Error;
 use uuid::Uuid;
+
+// `serde_json::Value` is only available when the `telemetry` feature is on
+// (it is an optional dep). Re-export an alias `PropertyValue` so the public
+// signature compiles in both feature states. In the noop branch the alias
+// resolves to `()` so callers passing `None` still typecheck; downstream
+// crates that pass real JSON values must enable the `telemetry` feature.
+//
+// Implementation note: the public `send_telemetry` signature is finalised
+// in task 02-06 — the scaffold here uses the simplest type that compiles
+// in both branches.
 
 #[cfg(feature = "telemetry")]
 mod real;
 
 #[cfg(not(feature = "telemetry"))]
 mod noop;
+
+#[cfg(feature = "telemetry")]
+pub use serde_json::Value as PropertyValue;
+
+#[cfg(not(feature = "telemetry"))]
+/// Placeholder property type used when the `telemetry` feature is
+/// disabled. Replaced by `serde_json::Value` once the feature is on.
+pub type PropertyValue = ();
 
 /// Modules that are always compiled (their bodies vary by feature
 /// state). Each has a `#[cfg]` split internally — see the per-task
@@ -293,23 +310,20 @@ impl From<Option<Uuid>> for UserIdRef<'_> {
 pub fn send_telemetry<'a>(
     event_name: &str,
     user_id: impl Into<UserIdRef<'a>>,
-    additional_properties: Option<Value>,
+    additional_properties: Option<PropertyValue>,
 ) {
-    let _ = (event_name, user_id.into(), additional_properties);
+    let user_id = user_id.into();
     #[cfg(feature = "telemetry")]
-    real::send_telemetry_impl(event_name, _user_id_unused(), additional_properties);
-    // Noop branch falls through — `noop::send_telemetry_impl` is a
-    // free function call only when `feature = "telemetry"` is off.
+    {
+        real::send_telemetry_impl(event_name, user_id, additional_properties);
+    }
     #[cfg(not(feature = "telemetry"))]
-    noop::send_telemetry_impl(event_name);
-}
-
-// Placeholder: keep the compiler happy until task 02-05 fills the
-// real dispatcher in. Task 02-06 deletes this and wires the real
-// signature.
-#[cfg(feature = "telemetry")]
-fn _user_id_unused<'a>() -> UserIdRef<'a> {
-    UserIdRef::None
+    {
+        // Drop borrowed/owned args explicitly so unused-variable lints
+        // don't fire when the telemetry feature is off.
+        let _ = (event_name, user_id, additional_properties);
+        noop::send_telemetry_impl();
+    }
 }
 ```
 
@@ -322,8 +336,8 @@ replace the placeholder bodies:
 - [Task 02-05](05-client-dispatch-and-optout.md) fills `env::*` and
   the `real::send_telemetry_impl` body.
 - [Task 02-06](06-public-api-and-noop.md) finalises the public
-  surface (replaces the placeholder `_user_id_unused()` and wires the
-  real noop body).
+  surface and wires the real noop body (e.g. emitting a `tracing::trace!`
+  event in place of the current empty stub).
 
 ### 4.5 Create `crates/telemetry/src/real.rs` and `noop.rs` stubs
 
@@ -333,13 +347,12 @@ replace the placeholder bodies:
 //! Real (`feature = "telemetry"`) implementation of `send_telemetry`.
 //! Body lands in `docs/telemetry/02/05-client-dispatch-and-optout.md`.
 
-use crate::UserIdRef;
-use serde_json::Value;
+use crate::{PropertyValue, UserIdRef};
 
 pub(crate) fn send_telemetry_impl(
     _event_name: &str,
     _user_id: UserIdRef<'_>,
-    _additional_properties: Option<Value>,
+    _additional_properties: Option<PropertyValue>,
 ) {
     // Stub — replaced in task 02-05.
 }
@@ -352,7 +365,7 @@ pub(crate) fn send_telemetry_impl(
 //! `send_telemetry`. Body lands in
 //! `docs/telemetry/02/06-public-api-and-noop.md`.
 
-pub(crate) fn send_telemetry_impl(_event_name: &str) {
+pub(crate) fn send_telemetry_impl() {
     // No-op. Compiled when the `telemetry` feature is disabled.
 }
 ```
