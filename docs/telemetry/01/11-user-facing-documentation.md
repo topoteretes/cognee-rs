@@ -22,7 +22,7 @@ The doc is **recipe-driven**: each downstream destination gets a self-contained 
 
 ## Pre-conditions
 
-- Tasks 02–08 are merged; the public API surface (`cognee_observability::init_telemetry`, `TelemetryGuard`, `Settings.otel_*` fields) is stable and re-exported from `cognee_lib::observability`.
+- Tasks 02–08 are merged; the public API surface (`cognee_observability::init_telemetry`, `TelemetryGuard`, `Settings.otel_*` fields) is stable and re-exported from `cognee_lib::telemetry` (the module is gated on the `telemetry` cargo feature).
 - The `telemetry` cargo feature on `cognee-lib`, `cognee-cli`, and `cognee-http-server` is wired and gated as decided in [01-otel-otlp-export.md §Design decisions (locked)](../01-otel-otlp-export.md#design-decisions-locked) (OFF by default, opt-in).
 - Env vars are finalised: `COGNEE_TRACING_ENABLED`, `OTEL_SERVICE_NAME`, `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_HEADERS`, `OTEL_EXPORTER_OTLP_PROTOCOL`, `OTEL_SPAN_PROCESSOR`, `OTEL_TRACES_SAMPLER`, `OTEL_TRACES_SAMPLER_ARG`, `ENV`.
 
@@ -63,13 +63,15 @@ Append a short OpenTelemetry section to the crate-level rustdoc (currently only 
 //!
 //! ```no_run
 //! # #[cfg(feature = "telemetry")] {
-//! use cognee_lib::observability::{init_telemetry, TelemetryGuard};
+//! use cognee_lib::telemetry::{init_telemetry, TelemetryGuard};
 //! use cognee_lib::config::Settings;
+//! use tracing_subscriber::Registry;
 //!
 //! let settings = Settings::from_env();
-//! let _guard: TelemetryGuard = init_telemetry(&settings)
+//! let (_layer, _guard) = init_telemetry::<Registry>(&settings)
 //!     .expect("telemetry init");
-//! // ... run cognee; spans are flushed when `_guard` is dropped.
+//! // ... compose `_layer` onto your subscriber; spans are flushed when
+//! // `_guard` is dropped.
 //! # }
 //! ```
 //!
@@ -116,7 +118,7 @@ Suggested addition (head of `crates/observability/src/lib.rs`):
 //! settings.otel_exporter_otlp_endpoint = "http://localhost:4317".into();
 //!
 //! let (otel_layer, guard): (_, TelemetryGuard) =
-//!     init_telemetry(&settings).expect("telemetry init");
+//!     init_telemetry::<Registry>(&settings).expect("telemetry init");
 //!
 //! Registry::default()
 //!     .with(tracing_subscriber::EnvFilter::from_default_env())
@@ -277,7 +279,7 @@ For embedders building their own subscriber stack:
 
 ```rust
 use cognee_lib::config::Settings;
-use cognee_lib::observability::{init_telemetry, TelemetryGuard};
+use cognee_lib::telemetry::{init_telemetry, TelemetryGuard};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Registry};
 
 fn main() -> anyhow::Result<()> {
@@ -285,7 +287,7 @@ fn main() -> anyhow::Result<()> {
     settings.otel_service_name = "my-cognee".into();
     settings.otel_exporter_otlp_endpoint = "http://localhost:4317".into();
 
-    let (otel_layer, guard): (_, TelemetryGuard) = init_telemetry(&settings)?;
+    let (otel_layer, guard): (_, TelemetryGuard) = init_telemetry::<Registry>(&settings)?;
 
     Registry::default()
         .with(tracing_subscriber::EnvFilter::from_default_env())
@@ -304,9 +306,13 @@ fn main() -> anyhow::Result<()> {
 `SdkTracerProvider::force_flush()` followed by `shutdown()` so the last
 batch always reaches the collector before the process exits.
 
-When the `telemetry` feature is **off**, `init_telemetry` is still
-defined and returns a no-op layer plus a no-op guard, so call sites need
-not be feature-gated.
+When the `telemetry` feature is **off** on `cognee-lib`, the
+`cognee_lib::telemetry` module is not compiled and the
+`cognee-observability` crate is not linked at all. Embedders that want a
+single uniform call site can depend on `cognee-observability` directly
+(its own `telemetry` feature controls the OTEL deps): with the feature
+off, `init_telemetry` still compiles and returns an identity layer plus
+a noop guard, so call sites need not be feature-gated.
 
 ## Recipes
 

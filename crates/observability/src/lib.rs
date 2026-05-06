@@ -1,8 +1,60 @@
-//! OpenTelemetry SDK bring-up and `tracing` bridge for cognee.
+//! # cognee-observability
+//!
+//! OpenTelemetry tracing pipeline for Cognee-Rust. Bridges the existing
+//! `tracing` instrumentation (60+ `#[tracing::instrument]` sites across
+//! the workspace) into an OTLP exporter so spans flow to a collector.
 //!
 //! This crate is the single home for OTEL configuration, OTLP exporter
 //! construction, the `tracing-opentelemetry` bridge layer, and the RAII
 //! [`TelemetryGuard`] that flushes pending spans on drop.
+//!
+//! ## Activation
+//!
+//! Tracing is activated when **either** of:
+//! - `Settings.cognee_tracing_enabled == true`
+//!   (env: `COGNEE_TRACING_ENABLED=true`)
+//! - `Settings.otel_exporter_otlp_endpoint` is non-empty
+//!   (env: `OTEL_EXPORTER_OTLP_ENDPOINT=https://...`)
+//!
+//! Either path triggers the same provider setup. This mirrors Python's
+//! `is_tracing_enabled()` lazy-init semantics in
+//! `cognee/modules/observability/trace_context.py`.
+//!
+//! ## Programmatic init
+//!
+//! Drive [`init_telemetry`] from a [`SettingsView`] implementation. The
+//! [`EnvSettingsView`] adapter reads the standard env vars directly, so
+//! callers that don't want to depend on `cognee-lib` can still bring up
+//! the pipeline:
+//!
+//! ```ignore
+//! use cognee_observability::{init_telemetry, EnvSettingsView, TelemetryGuard};
+//! use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Registry};
+//!
+//! let settings = EnvSettingsView::from_env();
+//!
+//! let (otel_layer, guard): (_, TelemetryGuard) =
+//!     init_telemetry::<Registry>(&settings).expect("telemetry init");
+//!
+//! Registry::default()
+//!     .with(otel_layer)
+//!     .with(tracing_subscriber::EnvFilter::from_default_env())
+//!     .with(tracing_subscriber::fmt::layer())
+//!     .init();
+//!
+//! // Hold `guard` for the lifetime of your process; dropping it
+//! // calls `force_flush()` then `shutdown()` on the OTEL provider.
+//! drop(guard);
+//! ```
+//!
+//! Embedders that already use `cognee_lib::config::Settings` can pass it
+//! directly — `Settings` implements [`SettingsView`].
+//!
+//! ## Configuration
+//!
+//! See [`docs/observability/opentelemetry.md`](https://github.com/topoteretes/cognee-rust/blob/main/docs/observability/opentelemetry.md)
+//! for the full env-var reference and deployment recipes (Tempo, Honeycomb,
+//! Dash0, in-cluster Collector).
 //!
 //! ## Feature flags
 //!

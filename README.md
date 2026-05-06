@@ -104,3 +104,18 @@ This script initializes and exports the required test environment:
 - `COGNEE_E2E_TOKENIZER_PATH` (defaults to `target/models/bge-small-tokenizer.json`)
 
 If model/tokenizer files are missing, the script downloads them automatically.
+
+## Observability
+
+Cognee emits OpenTelemetry traces from every pipeline stage. To export them
+to an OTLP collector:
+
+```bash
+cargo build --release --features telemetry
+OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp.your-collector:4317 \
+  cognee-cli search --query "what did we ingest yesterday?"
+```
+
+See [`docs/observability/opentelemetry.md`](docs/observability/opentelemetry.md)
+for the full guide (env vars, recipes for Grafana Tempo, Honeycomb, Dash0,
+and in-cluster Collectors).

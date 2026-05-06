@@ -1,6 +1,6 @@
 # Task 10 — End-to-end OTLP export integration test against an in-process fake collector
 
-**Status:** Not started
+**Status**: Implemented in commit 6f08918
 **Owner:** _unassigned_
 **Depends on:**
 - [Task 04 — Implement `init_telemetry` and `TelemetryGuard`](./04-init-telemetry-implementation.md) — provides the real OTEL bring-up that this test exercises. **Now committed**: the actual signature is `init_telemetry<S>(settings: &dyn SettingsView) -> Result<(BoxedTelemetryLayer<S>, TelemetryGuard), TelemetryInitError>`. There is no `TelemetrySettings` struct — callers pass any `SettingsView` impl (e.g. `EnvSettingsView`, `cognee_lib::Settings`, or a per-test `StaticSettings`).
@@ -428,3 +428,11 @@ No production source files are modified by this task; no other crate's manifest 
   - [tokio `TcpListener::local_addr`](https://docs.rs/tokio/latest/tokio/net/struct.TcpListener.html#method.local_addr) and [`tokio_stream::wrappers::TcpListenerStream`](https://docs.rs/tokio-stream/latest/tokio_stream/wrappers/struct.TcpListenerStream.html).
   - [OTLP / gRPC export specification](https://opentelemetry.io/docs/specs/otlp/#otlpgrpc) — wire format we are asserting on.
   - [`tracing::subscriber::with_default`](https://docs.rs/tracing/latest/tracing/subscriber/fn.with_default.html) — thread-local installation semantics.
+
+## Implementation notes
+
+The shipped test deviates from the plan in three ways; recorded here for future readers:
+
+1. **Lost-wakeup race fix and worker-thread blocking fix.** The `Notified` future is registered and enabled (via `tokio::pin!` + `notified.as_mut().enable()`) **before** the flush is triggered, eliminating a race where the export could land in the gap between `drop(guard)` and `notified.await` and the wakeup would be lost. Additionally, `drop(guard)` is moved into `tokio::task::spawn_blocking` so the synchronous `force_flush` + `shutdown_with_timeout` calls in `TelemetryGuard::drop` (task 04) do not block the tokio worker hosting the in-process gRPC server — without this the fake collector cannot drain the in-flight RPC and the test deadlocks. The outer `tokio::time::timeout` is bumped from 5s to 10s for headroom on slower CI shards.
+2. **No direct `prost` dev-dep.** The plan implied potentially adding `prost` directly; in practice the test does not name `prost` types — `opentelemetry-proto` re-exports everything (`AnyValue`, `KeyValue`, etc.) needed for the assertions, so no extra dev-dep was added beyond those listed in §4.1.
+3. **Rust 2024 let-chains instead of `#[allow(clippy::collapsible_if)]`.** The nested `if let Some(...) { if let Some(...) { ... } }` walk over the protobuf is written as a single `if let A && let B && let C` chain, leaning on edition 2024 let-chains. This avoids the clippy attribute the plan suggested and reads more linearly.

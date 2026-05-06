@@ -4,6 +4,28 @@
 //! - add (`AddPipeline`)
 //! - cognify (`cognify()` free function and related types)
 //! - search (`SearchBuilder`/`SearchOrchestrator` and related types)
+//!
+//! ## OpenTelemetry support
+//!
+//! Cognee emits structured spans for every pipeline stage, search retriever,
+//! and HTTP route. To export them to an OTLP collector (Grafana Tempo,
+//! Honeycomb, Dash0, in-cluster `otel-collector`, ...), enable the
+//! `telemetry` cargo feature and set `OTEL_EXPORTER_OTLP_ENDPOINT`:
+//!
+//! ```ignore
+//! use cognee_lib::telemetry::{init_telemetry, TelemetryGuard};
+//! use cognee_lib::config::{ConfigManager, Settings};
+//! use tracing_subscriber::Registry;
+//!
+//! let settings: Settings = ConfigManager::from_env().settings().clone();
+//! let (_layer, _guard) = init_telemetry::<Registry>(&settings)
+//!     .expect("telemetry init");
+//! // ... compose `_layer` onto your subscriber; spans are flushed when
+//! // `_guard` is dropped.
+//! ```
+//!
+//! See [`docs/observability/opentelemetry.md`](https://github.com/topoteretes/cognee-rust/blob/main/docs/observability/opentelemetry.md)
+//! for the full operator guide, env-var reference, and deployment recipes.
 
 pub mod core {
     pub use cognee_core::*;
