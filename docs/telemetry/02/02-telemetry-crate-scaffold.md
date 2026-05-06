@@ -1,6 +1,6 @@
 # Task 02-02 — Scaffold the `cognee-telemetry` workspace crate
 
-**Status**: ⬜ unimplemented
+**Status**: implemented in commit df49a32 (note: outer doc-comment above pub mod ids converted to plain // to satisfy clippy's mixed_attributes_style lint).
 **Owner**: _unassigned_
 **Depends on**: [Task 02-01 — Workspace dependencies](01-workspace-deps.md)
 **Blocks**:
