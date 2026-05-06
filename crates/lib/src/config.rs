@@ -1489,6 +1489,77 @@ mod tests {
 
     #[test]
     #[serial_test::serial]
+    fn overlay_picks_up_otel_exporter_otlp_endpoint() {
+        // SAFETY: test is serial — no other thread reads/writes env concurrently.
+        unsafe { std::env::set_var("OTEL_EXPORTER_OTLP_ENDPOINT", "http://collector:4317") };
+        let mut s = Settings::default();
+        s.overlay_from_env();
+        unsafe { std::env::remove_var("OTEL_EXPORTER_OTLP_ENDPOINT") };
+
+        assert_eq!(s.otel_exporter_otlp_endpoint, "http://collector:4317");
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn overlay_picks_up_otel_exporter_otlp_headers() {
+        // SAFETY: test is serial — no other thread reads/writes env concurrently.
+        unsafe {
+            std::env::set_var(
+                "OTEL_EXPORTER_OTLP_HEADERS",
+                "authorization=Bearer abc,x-trace=on",
+            )
+        };
+        let mut s = Settings::default();
+        s.overlay_from_env();
+        unsafe { std::env::remove_var("OTEL_EXPORTER_OTLP_HEADERS") };
+
+        assert_eq!(
+            s.otel_exporter_otlp_headers,
+            "authorization=Bearer abc,x-trace=on"
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn overlay_picks_up_otel_exporter_otlp_protocol() {
+        // SAFETY: test is serial — no other thread reads/writes env concurrently.
+        unsafe { std::env::set_var("OTEL_EXPORTER_OTLP_PROTOCOL", "http/protobuf") };
+        let mut s = Settings::default();
+        s.overlay_from_env();
+        unsafe { std::env::remove_var("OTEL_EXPORTER_OTLP_PROTOCOL") };
+
+        assert_eq!(s.otel_exporter_otlp_protocol, "http/protobuf");
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn overlay_picks_up_otel_span_processor() {
+        // SAFETY: test is serial — no other thread reads/writes env concurrently.
+        unsafe { std::env::set_var("OTEL_SPAN_PROCESSOR", "simple") };
+        let mut s = Settings::default();
+        s.overlay_from_env();
+        unsafe { std::env::remove_var("OTEL_SPAN_PROCESSOR") };
+
+        assert_eq!(s.otel_span_processor, "simple");
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn overlay_picks_up_otel_traces_sampler() {
+        // SAFETY: test is serial — no other thread reads/writes env concurrently.
+        unsafe { std::env::set_var("OTEL_TRACES_SAMPLER", "parentbased_traceidratio") };
+        unsafe { std::env::set_var("OTEL_TRACES_SAMPLER_ARG", "0.25") };
+        let mut s = Settings::default();
+        s.overlay_from_env();
+        unsafe { std::env::remove_var("OTEL_TRACES_SAMPLER") };
+        unsafe { std::env::remove_var("OTEL_TRACES_SAMPLER_ARG") };
+
+        assert_eq!(s.otel_traces_sampler, "parentbased_traceidratio");
+        assert_eq!(s.otel_traces_sampler_arg, "0.25");
+    }
+
+    #[test]
+    #[serial_test::serial]
     fn overlay_picks_up_rate_limit_requests() {
         // SAFETY: test is serial — no other thread reads/writes env concurrently.
         unsafe { std::env::set_var("LLM_RATE_LIMIT_REQUESTS", "120") };
@@ -1537,6 +1608,12 @@ mod tests {
         assert_eq!(s.storage_backend, "local");
         assert!(!s.cognee_tracing_enabled);
         assert_eq!(s.otel_service_name, "cognee");
+        assert_eq!(s.otel_exporter_otlp_endpoint, "");
+        assert_eq!(s.otel_exporter_otlp_headers, "");
+        assert_eq!(s.otel_exporter_otlp_protocol, "grpc");
+        assert_eq!(s.otel_span_processor, "batch");
+        assert_eq!(s.otel_traces_sampler, "");
+        assert_eq!(s.otel_traces_sampler_arg, "");
         assert!(!s.enable_last_accessed);
         assert_eq!(s.embedding_provider, "onnx");
     }

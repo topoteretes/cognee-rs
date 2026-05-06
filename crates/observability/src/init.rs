@@ -8,8 +8,20 @@
 use crate::TelemetryInitError;
 use crate::guard::TelemetryGuard;
 use crate::settings::SettingsView;
+use std::sync::OnceLock;
 use tracing::Subscriber;
 use tracing_subscriber::{layer::Layer, registry::LookupSpan};
+
+/// Process-global marker recording whether *this crate* has installed an
+/// OTEL tracer provider. Set exactly once after a successful
+/// `set_tracer_provider` call inside `init_telemetry`. Replaces the older
+/// Debug-string sniff against `opentelemetry::global::tracer_provider()`,
+/// which broke at OTEL 0.31 because the `GlobalTracerProvider` wrapper's
+/// Debug repr is the opaque string `"GlobalTracerProvider"` regardless of
+/// the inner provider type — the substring `"Noop"` never appears, so the
+/// old heuristic returned `true` on a fresh process and prevented
+/// telemetry from ever being installed.
+static OUR_PROVIDER_INSTALLED: OnceLock<()> = OnceLock::new();
 
 /// Type-erased layer compatible with any `tracing` registry that supports
 /// `LookupSpan`. Boxing is what lets the disabled and enabled paths return
@@ -27,28 +39,27 @@ pub fn is_tracing_enabled(settings: &dyn SettingsView) -> bool {
     settings.tracing_enabled() || !settings.otlp_endpoint().is_empty()
 }
 
-/// Mirror of Python `_is_auto_instrumented`: detect whether something
-/// else has already installed a non-noop global tracer provider.
+/// Has *this crate* already installed an OTEL tracer provider in the
+/// current process?
+///
+/// Returns `true` once `init_telemetry` has successfully installed an
+/// SDK provider via `opentelemetry::global::set_tracer_provider`, and
+/// `false` otherwise. The semantic shifted at OTEL 0.31 from the older
+/// "has SOMETHING installed OTEL?" host-detection heuristic to "have we
+/// installed it?". The OTEL 0.31 API does not expose a stable way to
+/// distinguish the default noop provider from an SDK provider installed
+/// by an external auto-instrumentation tool (Datadog, Dash0, etc.), so
+/// we instead track our own installation site explicitly.
+///
+/// The legitimate use of this predicate is **idempotency**: a second
+/// `init_telemetry` call within the same process must not overwrite the
+/// provider we already installed; it returns a bridged tracing layer
+/// plus a noop guard so the original guard's flush-on-drop behaviour is
+/// preserved.
 ///
 /// Without `telemetry` this can never be true (no OTEL deps to look at).
-#[cfg(feature = "telemetry")]
 pub fn already_instrumented() -> bool {
-    // FIXME(otel-0.32+): the API crate does not expose a stable way to
-    // identify the default noop provider, so we sniff the Debug repr.
-    // The 0.31 default Debug repr contains "Noop"/"NoopTracerProvider";
-    // an SDK provider installed by Datadog or Dash0 prints its own
-    // type name. The dangerous failure mode (real provider classified
-    // as noop) would let us overwrite it; we err on the side of NOT
-    // installing — see the rationale in 04-init-telemetry-implementation.md.
-    let provider = opentelemetry::global::tracer_provider();
-    let dbg = format!("{provider:?}");
-    !(dbg.contains("Noop") || dbg.contains("NoopTracerProvider"))
-}
-
-/// Stub used when `telemetry` is off — no provider can exist.
-#[cfg(not(feature = "telemetry"))]
-pub fn already_instrumented() -> bool {
-    false
+    OUR_PROVIDER_INSTALLED.get().is_some()
 }
 
 fn noop_layer<S>() -> BoxedTelemetryLayer<S>
@@ -111,6 +122,10 @@ where
         let provider = telemetry_real::build_provider(settings)?;
 
         opentelemetry::global::set_tracer_provider(provider.clone());
+        // Mark our installation so that subsequent `init_telemetry`
+        // calls in the same process bridge to the existing provider
+        // rather than overwriting it.
+        let _ = OUR_PROVIDER_INSTALLED.set(());
 
         // 0.31 removed `tracer_builder("cognee")` in favour of building
         // an `InstrumentationScope` and passing it to `tracer_with_scope`.
@@ -276,6 +291,7 @@ mod telemetry_real {
 mod tests {
     use super::*;
     use crate::settings::EnvSettingsView;
+    use crate::settings::SettingsView;
     use tracing_subscriber::Registry;
     use tracing_subscriber::layer::SubscriberExt;
 
@@ -287,5 +303,59 @@ mod tests {
         let (layer, guard) = result.expect("init_telemetry returned Ok above");
         assert!(!guard.has_provider());
         let _subscriber = Registry::default().with(layer);
+    }
+
+    struct StaticSettings {
+        tracing_enabled: bool,
+        otlp_endpoint: String,
+    }
+
+    impl SettingsView for StaticSettings {
+        fn tracing_enabled(&self) -> bool {
+            self.tracing_enabled
+        }
+        fn service_name(&self) -> &str {
+            "cognee-test"
+        }
+        fn otlp_endpoint(&self) -> &str {
+            &self.otlp_endpoint
+        }
+        fn otlp_headers(&self) -> &str {
+            ""
+        }
+        fn otlp_protocol(&self) -> &str {
+            "grpc"
+        }
+        fn span_processor(&self) -> &str {
+            "batch"
+        }
+        fn traces_sampler(&self) -> &str {
+            ""
+        }
+        fn traces_sampler_arg(&self) -> &str {
+            ""
+        }
+    }
+
+    #[test]
+    fn is_tracing_enabled_python_parity() {
+        let cases = [
+            (false, "", false),
+            (false, "http://example:4317", true),
+            (true, "", true),
+            (true, "http://example:4317", true),
+        ];
+
+        for (flag, endpoint, expected) in cases {
+            let s = StaticSettings {
+                tracing_enabled: flag,
+                otlp_endpoint: endpoint.to_string(),
+            };
+            assert_eq!(
+                is_tracing_enabled(&s),
+                expected,
+                "is_tracing_enabled(flag={flag}, endpoint={endpoint:?}) should be {expected}"
+            );
+        }
     }
 }

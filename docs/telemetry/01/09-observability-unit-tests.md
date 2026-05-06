@@ -1,8 +1,8 @@
 # Task 09 — Unit tests for `cognee-observability`
 
-**Status:** Not started
+**Status:** Largely-already-implemented by tasks 04/07/08 — only the residual gap items below remain.
 **Owner:** _unassigned_
-**Depends on:** [Task 02 — Scaffold the `cognee-observability` workspace crate](./02-observability-crate-scaffold.md), [Task 04 — Implement `init_telemetry` and `TelemetryGuard`](./04-implement-init-otel-and-guard.md), [Task 08 — Noop fallback (and `Settings` field overlay)](./08-noop-fallback-and-tests.md)
+**Depends on:** [Task 02 — Scaffold the `cognee-observability` workspace crate](./02-observability-crate-scaffold.md), [Task 04 — Implement `init_telemetry` and `TelemetryGuard`](./04-init-telemetry-implementation.md), [Task 08 — Noop fallback (and `Settings` field overlay)](./08-noop-fallback.md)
 **Blocks:** Nothing (terminal task within the test pyramid; integration tests against a fake OTLP collector are tracked separately as action item 10 in the parent doc).
 **Parent doc:** [01 — OpenTelemetry SDK + OTLP Export Wiring](../01-otel-otlp-export.md)
 
@@ -12,13 +12,14 @@
 
 Add the focused unit-test suite for the new `cognee-observability` crate plus the small overlay-test additions in `cognee-lib::config`. Together they cover:
 
-- `parse_otlp_headers` happy paths and one error / skip case.
-- `is_tracing_enabled` Python-parity logic (locked decision 2: settings flag **OR** non-empty endpoint).
-- `init_telemetry` returning a noop guard when both inputs are empty.
-- `init_telemetry` building and globally installing a real provider when an endpoint is set.
-- `already_instrumented()` on a fresh process (returns `false`) and after a provider has been installed (returns `true`).
-- `Settings` field defaults and env-var overlay for the three new keys introduced by decisions 4 and 5: `OTEL_EXPORTER_OTLP_PROTOCOL`, `OTEL_SPAN_PROCESSOR`, `OTEL_TRACES_SAMPLER`, `OTEL_TRACES_SAMPLER_ARG`.
-- `TelemetryGuard::drop` invokes `force_flush` + `shutdown` on the installed provider.
+- `parse_otlp_headers` happy paths and one error / skip case. **DONE — shipped in task 04 (commit 9b99576).** 6 tests live in `crates/observability/src/headers.rs` (`empty_input`, `single_pair`, `multiple_pairs_with_whitespace`, `malformed_pairs_skipped`, `empty_value_kept`, `trailing_comma`).
+- `is_tracing_enabled` Python-parity logic (locked decision 2: settings flag **OR** non-empty endpoint). **REMAINING — see test 9 in §6.**
+- `init_telemetry` returning a noop guard when both inputs are empty. **DONE — shipped in task 08 (commit 5b925c7) as `init_telemetry_noop_when_tracing_disabled` in `crates/observability/src/init.rs`.** Asserts via `guard.has_provider() == false`.
+- `init_telemetry` building and globally installing a real provider when an endpoint is set. **REMAINING — see tests 7, 8 in §6.**
+- `already_instrumented()` on a fresh process (returns `false`) and after a provider has been installed (returns `true`). **REMAINING — see tests 10, 11 in §6.**
+- `Settings` field defaults and env-var overlay for the new OTEL keys. **PARTIALLY DONE.** `overlay_picks_up_otel_service_name` already exists (currently around `crates/lib/src/config.rs:1480`); defaults for `cognee_tracing_enabled` and `otel_service_name` already pinned (currently around `crates/lib/src/config.rs:1538-1539`) inside `default_values_are_correct`. Overlay tests for `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_HEADERS`, `OTEL_EXPORTER_OTLP_PROTOCOL`, `OTEL_SPAN_PROCESSOR`, `OTEL_TRACES_SAMPLER`, `OTEL_TRACES_SAMPLER_ARG`, plus default-pin extension for those six fields, **REMAIN** (see tests 12–15 in §6).
+- `EnvSettingsView::from_env()` parsing of the eight OTEL env vars including truthy/falsy `COGNEE_TRACING_ENABLED`. **DONE — shipped in task 07 (commit 56433e5).** 4 tests in `crates/observability/src/settings.rs` (`from_env_empty_matches_defaults`, `tracing_enabled_truthy_values`, `tracing_enabled_falsy_values`, `from_env_reads_all_fields`).
+- `TelemetryGuard::drop` invokes `force_flush` + `shutdown` on the installed provider. **REMAINING but blocked.** See test 16 in §6 — the proposed `RecordingProcessor` helper does not exist and the current guard holds `SdkTracerProvider` directly (not a custom processor); a different test strategy is needed.
 
 The integration test against a real (or stub) OTLP collector is **not** in this task — it lives in action item 10 of the parent doc and gets its own per-task sub-doc when it is ready to be split out.
 
@@ -39,17 +40,17 @@ The integration test against a real (or stub) OTLP collector is **not** in this 
 
 ### Why serial execution matters
 
-Both `init_telemetry` (when activated) and `already_instrumented_after_set_true` mutate **process-global** OTEL state via `opentelemetry::global::set_tracer_provider`. The OTEL Rust SDK's global provider is install-once-and-cached: after one test installs a provider, subsequent parallel tests see it. We use `#[serial_test::serial]` (already a workspace dev-dependency, see [`Cargo.toml:78`](../../../Cargo.toml)) on every test that touches global state. The same applies to env-var tests — `cargo test` shares a single process, and `std::env::set_var` is process-global.
+Both `init_telemetry` (when activated) and `already_instrumented_after_set_true` mutate **process-global** OTEL state via `opentelemetry::global::set_tracer_provider`. The OTEL Rust SDK's global provider is install-once-and-cached: after one test installs a provider, subsequent parallel tests see it. We use `#[serial_test::serial]` (already a workspace dev-dependency, see [`Cargo.toml:83`](../../../Cargo.toml#L83)) on every test that touches global state. Note that `serial_test` is already wired into `cognee-lib`'s `[dev-dependencies]` ([`crates/lib/Cargo.toml:127`](../../../crates/lib/Cargo.toml#L127)) but **not** yet into `cognee-observability` — §4.1 adds it. The same applies to env-var tests — `cargo test` shares a single process, and `std::env::set_var` is process-global.
 
 ### Why we test settings-overlay logic in `cognee-lib`, not here
 
-Per [task 02 §4.3](./02-observability-crate-scaffold.md), the `TelemetrySettings` input struct lives in `cognee-observability`, but the **env-var overlay** is implemented inside `cognee-lib::config::Settings::overlay_from_env` (which task 08 extends with the new fields). Tests for the overlay therefore belong in [`crates/lib/src/config.rs`](../../../crates/lib/src/config.rs)'s existing `#[cfg(test)] mod tests`, not in the observability crate. This keeps each test next to the code it exercises and matches the convention of the existing overlay tests (see [`crates/lib/src/config.rs:1083-1207`](../../../crates/lib/src/config.rs#L1083)).
+Per [task 02 §4.3](./02-observability-crate-scaffold.md), the OTEL settings input lives in `cognee-observability` as the `SettingsView` trait (with `EnvSettingsView` as the env-driven impl), but the **env-var overlay** for `cognee-lib::Settings` is implemented inside `Settings::overlay_from_env` (which task 08 extends with the new fields). Tests for the overlay therefore belong in [`crates/lib/src/config.rs`](../../../crates/lib/src/config.rs)'s existing `#[cfg(test)] mod tests`, not in the observability crate. This keeps each test next to the code it exercises and matches the convention of the existing overlay tests (see the `overlay_picks_up_*` block starting around [`crates/lib/src/config.rs:1129`](../../../crates/lib/src/config.rs#L1129)).
 
 ## 3. Pre-conditions
 
-- [Task 02](./02-observability-crate-scaffold.md): the `cognee-observability` crate exists with `TelemetrySettings`, `TelemetryGuard`, `TelemetryInitError`, and the `init_telemetry` (now also called `init_telemetry`) entry point.
-- [Task 04](./04-implement-init-otel-and-guard.md): the `real::init` body builds a real `SdkTracerProvider`, installs it globally, returns the guard whose `Drop` calls `force_flush` + `shutdown`. `parse_otlp_headers`, `is_tracing_enabled`, `already_instrumented` are public functions or `pub(crate)` with `#[cfg(test)]` accessors.
-- [Task 08](./08-noop-fallback-and-tests.md): `Settings` has the new fields `otel_exporter_otlp_protocol`, `otel_span_processor`, `otel_traces_sampler`, `otel_traces_sampler_arg`, with defaults `"grpc"`, `"batch"`, `""`, `""` respectively, and the corresponding env-var overlay branches in `Settings::overlay_from_env`.
+- [Task 02](./02-observability-crate-scaffold.md): the `cognee-observability` crate exists with the `SettingsView` trait, `EnvSettingsView`, `TelemetryGuard`, `TelemetryInitError`, and the `init_telemetry` entry point.
+- [Task 04](./04-init-telemetry-implementation.md): the real `init_telemetry` body builds a real `SdkTracerProvider`, installs it globally, returns `(BoxedTelemetryLayer<S>, TelemetryGuard)` whose `Drop` calls `force_flush` + `shutdown_with_timeout`. `parse_otlp_headers`, `is_tracing_enabled`, `already_instrumented` are all public functions on the crate root.
+- [Task 08](./08-noop-fallback.md): `Settings` has the new fields `otel_exporter_otlp_protocol`, `otel_span_processor`, `otel_traces_sampler`, `otel_traces_sampler_arg`, with defaults `"grpc"`, `"batch"`, `""`, `""` respectively, and the corresponding env-var overlay branches in `Settings::overlay_from_env`.
 
 If any of those land later than expected, mark the dependent tests `#[ignore]` with a TODO referencing the task that gates them — do **not** weaken the assertions to make them pass.
 
@@ -57,7 +58,7 @@ If any of those land later than expected, mark the dependent tests `#[ignore]` w
 
 ### 4.1 Add dev-dependencies to `crates/observability/Cargo.toml`
 
-The crate already has `tokio` as a dev-dep from task 02. Add `serial_test` (workspace dep) and `temp-env` for safe env-var save/restore inside helpers — this is preferable to the unsafe `std::env::set_var` pattern in `crates/lib`, but only if a workspace-level `temp-env` is acceptable; if not, fall back to the `unsafe { std::env::set_var(...) }` + `serial_test::serial` pattern used in [`crates/lib/src/config.rs`](../../../crates/lib/src/config.rs#L1083).
+The crate currently has only `tokio` under `[dev-dependencies]` (see [`crates/observability/Cargo.toml:35-36`](../../../crates/observability/Cargo.toml#L35)); it does NOT yet pull in `serial_test`. This task must add `serial_test = { workspace = true }` so tests 7, 8, 10, 11 (and 16 if unblocked) compile. `temp-env` is optional — recommended only if a workspace-level dep is acceptable; if not, fall back to the `unsafe { std::env::set_var(...) }` + `serial_test::serial` pattern used in [`crates/lib/src/config.rs`](../../../crates/lib/src/config.rs#L1129).
 
 ```toml
 [dev-dependencies]
@@ -85,13 +86,13 @@ Tests that exercise the full `init_telemetry` path live here rather than co-loca
 
 ### 4.4 Add overlay tests to `crates/lib/src/config.rs`'s existing `mod tests`
 
-Match the existing pattern (see [`config.rs:1083-1207`](../../../crates/lib/src/config.rs#L1083)): `#[serial_test::serial]`, `unsafe { std::env::set_var(...) }`, `Settings::default().overlay_from_env()`, then `unsafe { std::env::remove_var(...) }`. Add three tests, one per new env var (the fourth, `OTEL_TRACES_SAMPLER_ARG`, is covered in the same test as `OTEL_TRACES_SAMPLER` to keep the file size in check).
+Match the existing pattern (see the `overlay_picks_up_*` block starting at [`config.rs:1129`](../../../crates/lib/src/config.rs#L1129) and continuing through [`:1518`](../../../crates/lib/src/config.rs#L1518)): `#[serial_test::serial]`, `unsafe { std::env::set_var(...) }`, `Settings::default().overlay_from_env()`, then `unsafe { std::env::remove_var(...) }`. Add tests for the remaining new env vars (the `OTEL_TRACES_SAMPLER_ARG` variant is covered in the same test as `OTEL_TRACES_SAMPLER` to keep the file size in check).
 
 ## 5. Resulting code
 
 ### 5.1 `crates/observability/src/headers.rs` — `#[cfg(test)] mod tests`
 
-The function under test is added by task 04 with this signature (verbatim from [`01/04-implement-init-otel-and-guard.md`](./04-implement-init-otel-and-guard.md), reproduced here only so the tests are self-explanatory):
+The function under test is added by task 04 with this signature (verbatim from [`01/04-init-telemetry-implementation.md`](./04-init-telemetry-implementation.md), reproduced here only so the tests are self-explanatory):
 
 ```rust
 /// Parse the comma-separated `key=value` form used by
@@ -379,7 +380,7 @@ async fn telemetry_guard_drop_calls_shutdown() {
 
 ### 5.3 `crates/lib/src/config.rs` — additions to `mod tests`
 
-Append next to the existing `overlay_picks_up_*` tests (around [`config.rs:1207`](../../../crates/lib/src/config.rs#L1207)). The pattern (`unsafe { std::env::set_var(...) }` + `serial_test::serial` + cleanup) is copied verbatim from the surrounding tests for consistency:
+Append next to the existing `overlay_picks_up_*` tests (the block runs from around [`config.rs:1129`](../../../crates/lib/src/config.rs#L1129) through [`:1518`](../../../crates/lib/src/config.rs#L1518)). The pattern (`unsafe { std::env::set_var(...) }` + `serial_test::serial` + cleanup) is copied verbatim from the surrounding tests for consistency:
 
 ```rust
 #[test]
@@ -440,26 +441,35 @@ fn settings_default_otel_fields_match_decisions() {
 
 ## 6. List of tests (mirrors §"Testing strategy" → "Unit tests" of the parent doc)
 
-| # | Name | File | Notes |
-|---|---|---|---|
-| 1 | `parse_otlp_headers_empty` | `crates/observability/src/headers.rs` | Pure. |
-| 2 | `parse_otlp_headers_single` | `crates/observability/src/headers.rs` | Pure. |
-| 3 | `parse_otlp_headers_multi` | `crates/observability/src/headers.rs` | Pure. |
-| 4 | `parse_otlp_headers_whitespace` | `crates/observability/src/headers.rs` | Pure. |
-| 5 | `parse_otlp_headers_invalid_pair_is_skipped` | `crates/observability/src/headers.rs` | Documents the lenient skip-on-malformed contract. |
-| 6 | `init_telemetry_disabled_returns_noop` | `crates/observability/tests/init.rs` | `#[serial]`. |
-| 7 | `init_telemetry_endpoint_only_activates` | `crates/observability/tests/init.rs` | `#[serial]`. Implicit activation — decision 2. |
-| 8 | `init_telemetry_flag_only_no_endpoint` | `crates/observability/tests/init.rs` | `#[serial]`. Pins Python parity. |
-| 9 | `is_tracing_enabled_python_parity` | `crates/observability/tests/init.rs` | `#[serial]` (cheap; kept serial for env hygiene). 2×2 table. |
-| 10 | `already_instrumented_default_false` | `crates/observability/tests/init.rs` | `#[serial]`. **Must run first** in this binary. |
-| 11 | `already_instrumented_after_set_true` | `crates/observability/tests/init.rs` | `#[serial]`. Installs its own provider to be order-independent. |
-| 12 | `overlay_picks_up_otel_exporter_otlp_protocol` | `crates/lib/src/config.rs` (`mod tests`) | `#[serial]` + `set_var`/`remove_var`. |
-| 13 | `overlay_picks_up_otel_span_processor` | `crates/lib/src/config.rs` (`mod tests`) | `#[serial]`. |
-| 14 | `overlay_picks_up_otel_traces_sampler` | `crates/lib/src/config.rs` (`mod tests`) | `#[serial]`. Covers `OTEL_TRACES_SAMPLER` + `OTEL_TRACES_SAMPLER_ARG`. |
-| 15 | `settings_default_otel_fields_match_decisions` | `crates/lib/src/config.rs` (`mod tests`) | Pure. |
-| 16 | `telemetry_guard_drop_calls_shutdown` | `crates/observability/tests/init.rs` | `#[serial]`. Uses the test-only `RecordingProcessor` helper that task 04 must expose. |
+Status legend: **DONE** (already shipped), **TODO** (still to add), **BLOCKED** (design question must be resolved first).
 
-(Tests 1–11 are the parent doc's seven listed tests, expanded with the four sub-cases for header parsing and the two sides of `already_instrumented`. Tests 12–16 cover the config-overlay + defaults that the task description explicitly requested.)
+| # | Name | File | Status | Notes |
+|---|---|---|---|---|
+| 1 | `empty_input` | `crates/observability/src/headers.rs` | **DONE** (task 04) | Pure. Originally proposed as `parse_otlp_headers_empty`. |
+| 2 | `single_pair` | `crates/observability/src/headers.rs` | **DONE** (task 04) | Pure. Covers what was proposed as `parse_otlp_headers_single`. |
+| 3 | `multiple_pairs_with_whitespace` | `crates/observability/src/headers.rs` | **DONE** (task 04) | Pure. Combined `parse_otlp_headers_multi` + `..._whitespace`. |
+| 4 | `malformed_pairs_skipped` | `crates/observability/src/headers.rs` | **DONE** (task 04) | Pure. Covers `parse_otlp_headers_invalid_pair_is_skipped`. |
+| 5 | `empty_value_kept` + `trailing_comma` | `crates/observability/src/headers.rs` | **DONE** (task 04) | Two extra tests beyond the original proposal. |
+| 6 | `init_telemetry_noop_when_tracing_disabled` | `crates/observability/src/init.rs` | **DONE** (task 08) | Asserts via `guard.has_provider() == false`. Inline `#[cfg(test)] mod tests`, not a separate `tests/init.rs` binary. |
+| 7 | `init_telemetry_endpoint_only_activates` | `crates/observability/tests/init.rs` (new) | **TODO** | `#[serial]`. Implicit activation — decision 2. Build with `--features telemetry`. |
+| 8 | `init_telemetry_flag_only_no_endpoint` | `crates/observability/tests/init.rs` (new) | **TODO** | `#[serial]`. Pins Python parity — current `build_exporter` will likely error on empty endpoint, so this test may need to assert an `Err(TelemetryInitError::ExporterBuild)` instead, or task 04 needs an extra branch. **Confirm against `crates/observability/src/init.rs::build_exporter` before writing.** |
+| 9 | `is_tracing_enabled_python_parity` | `crates/observability/src/init.rs` `#[cfg(test)] mod tests` | **TODO** | Pure — no env, no global state. 2×2 truth table over `(tracing_enabled, otlp_endpoint)`. Build a small in-test impl of `SettingsView` (or reuse `EnvSettingsView` with explicit field overrides). No `#[serial]` needed. |
+| 10 | `already_instrumented_default_false` | `crates/observability/tests/init.rs` (new) | **TODO** | `#[serial]`. Must be first in alphabetical order in this binary. Feature-gated. |
+| 11 | `already_instrumented_after_set_true` | `crates/observability/tests/init.rs` (new) | **TODO** | `#[serial]`. Installs its own provider to be order-independent. Feature-gated. |
+| 12 | `overlay_picks_up_otel_service_name` | `crates/lib/src/config.rs` (`mod tests`, currently around line 1480) | **DONE** (pre-task-09, see commit history of `config.rs`) | The protocol/headers/endpoint variants below are the actual gap. |
+| 12b | `overlay_picks_up_otel_exporter_otlp_endpoint` | `crates/lib/src/config.rs` (`mod tests`) | **TODO** | `#[serial]` + `set_var`/`remove_var`. |
+| 12c | `overlay_picks_up_otel_exporter_otlp_headers` | `crates/lib/src/config.rs` (`mod tests`) | **TODO** | `#[serial]`. |
+| 12d | `overlay_picks_up_otel_exporter_otlp_protocol` | `crates/lib/src/config.rs` (`mod tests`) | **TODO** | `#[serial]`. |
+| 13 | `overlay_picks_up_otel_span_processor` | `crates/lib/src/config.rs` (`mod tests`) | **TODO** | `#[serial]`. |
+| 14 | `overlay_picks_up_otel_traces_sampler` | `crates/lib/src/config.rs` (`mod tests`) | **TODO** | `#[serial]`. Covers `OTEL_TRACES_SAMPLER` + `OTEL_TRACES_SAMPLER_ARG`. |
+| 15 | extend `default_values_are_correct` (currently around line 1521) with the 6 new OTEL fields | `crates/lib/src/config.rs` (`mod tests`) | **TODO** | Pure. Currently pins only `cognee_tracing_enabled` and `otel_service_name`. Extend to cover `otel_exporter_otlp_endpoint=""`, `otel_exporter_otlp_headers=""`, `otel_exporter_otlp_protocol="grpc"`, `otel_span_processor="batch"`, `otel_traces_sampler=""`, `otel_traces_sampler_arg=""`. Avoid creating a new test — append asserts to the existing one. |
+| 16 | `telemetry_guard_drop_calls_shutdown` | `crates/observability/tests/init.rs` (new) | **BLOCKED** | The proposed `RecordingProcessor` helper does **not** exist and the current `TelemetryGuard` holds `SdkTracerProvider` directly (`crates/observability/src/guard.rs:23-26`). To add this test, either (a) add a `pub(crate)` test-only constructor that swaps the provider for a recording fake, (b) write the test as an integration-style assertion that drives a real OTLP exporter and observes the side effects through it, or (c) drop the test and rely on action item 10's collector-based integration test. Resolve as a §11 design question before writing. |
+
+API-name corrections vs original §1 list (apply when porting the §5.2 sketch into real test code):
+- `init_telemetry` returns `Result<(BoxedTelemetryLayer<S>, TelemetryGuard), TelemetryInitError>`, not just a guard — see [`crates/observability/src/init.rs:79-86`](../../../crates/observability/src/init.rs#L79). It is generic over the subscriber type, so call sites must spell `init_telemetry::<Registry>(&settings)` or rely on inference.
+- The settings input is `&dyn SettingsView` ([`crates/observability/src/settings.rs:13-30`](../../../crates/observability/src/settings.rs#L13)), not a struct literal `TelemetrySettings`. There is no `TelemetrySettings` type in the current crate. The proposed test bodies in §5.2 must be rewritten to use either `EnvSettingsView` (which exposes `Default` and `from_env`, but no public field setters — wrap it in a thin in-test `struct StaticSettings { ... }` impl of `SettingsView`), or build that small in-test impl directly.
+- Headers function is `pub fn parse_otlp_headers` (not `pub(crate)`); see [`crates/observability/src/lib.rs:45`](../../../crates/observability/src/lib.rs#L45).
+- Test 6's noop assertion uses `TelemetryGuard::has_provider()` ([`guard.rs:53-62`](../../../crates/observability/src/guard.rs#L53), cfg-gated for `test/debug_assertions`), not `already_instrumented()`.
 
 ## 7. Verification
 
@@ -489,12 +499,25 @@ Expected outcomes:
 
 | File | Change |
 |---|---|
-| `crates/observability/Cargo.toml` | Add `serial_test = { workspace = true }` (and optionally `temp-env`) under `[dev-dependencies]`. |
-| `crates/observability/src/headers.rs` | **New `mod tests`** appended (5 unit tests for `parse_otlp_headers`). The module file itself is created by [task 04](./04-implement-init-otel-and-guard.md) — this task adds only the bottom `#[cfg(test)] mod tests` block. |
-| `crates/observability/tests/init.rs` | **New file.** Integration-style unit tests covering `init_telemetry`, `is_tracing_enabled`, `already_instrumented`, and `TelemetryGuard::drop`. |
-| [`crates/lib/src/config.rs`](../../../crates/lib/src/config.rs) | Append four tests to the existing `#[cfg(test)] mod tests` block ([line 1083](../../../crates/lib/src/config.rs#L1083)): three overlay tests + one defaults pin. |
+| `crates/observability/Cargo.toml` | Add `serial_test = { workspace = true }` under `[dev-dependencies]` (currently only `tokio` is there — see [`crates/observability/Cargo.toml:35-36`](../../../crates/observability/Cargo.toml#L35)). |
+| `crates/observability/src/headers.rs` | **DONE** — task 04 already shipped 6 unit tests; nothing further required. |
+| `crates/observability/src/init.rs` | Add `is_tracing_enabled_python_parity` (test 9) inside the existing `#[cfg(test)] mod tests` block (currently around lines 275-291). Pure, no `#[serial]`. |
+| `crates/observability/tests/init.rs` | **New file** for tests 7, 8, 10, 11 (test 16 stays deferred — see §8b). All `#[serial]`, all gated `#[cfg(feature = "telemetry")]`. |
+| [`crates/lib/src/config.rs`](../../../crates/lib/src/config.rs) | Add overlay tests 12b, 12c, 12d, 13, 14 (5 new tests). Extend the existing `default_values_are_correct` (currently around line 1521) with assertions for the 6 OTEL fields not yet pinned. |
 
-No production code is added or modified by this task — only tests and the `[dev-dependencies]` entry.
+No production code is added or modified by this task — only tests and (optionally) a `[dev-dependencies]` line.
+
+## 8b. Open design question (must resolve before writing test 16)
+
+How should `telemetry_guard_drop_calls_shutdown` (test 16) observe the `force_flush` + `shutdown` side effects?
+
+The current `TelemetryGuard` holds `SdkTracerProvider` directly (`crates/observability/src/guard.rs:22-26`) and `Drop` calls `provider.force_flush()` + `provider.shutdown_with_timeout(...)` on it. There is no recording processor injection point. Options:
+
+1. **Add a test-only constructor** to `TelemetryGuard` that builds an `SdkTracerProvider` wired with a custom `SpanProcessor` impl that records flush/shutdown calls. Pros: small surface; cons: requires hand-rolling a `SpanProcessor` mock and exposing a `pub(crate)` or `#[cfg(test)] pub` constructor.
+2. **Drop test 16** and rely on action item 10's collector-based integration test (which already exercises the flush-on-drop path end-to-end via spans actually arriving at a fake collector). Pros: zero new code; cons: leaves the unit-level RAII assertion uncovered until 10 lands.
+3. **Inspect the provider's internal state** after drop. Not viable — the SDK doesn't expose a stable "is shutdown" predicate.
+
+Recommended: **option 2** (drop test 16 from this task, document it as covered by action item 10) unless the team explicitly wants the unit-level assertion. If option 1 is preferred, the test helper must live in `crates/observability/src/guard.rs` behind `#[cfg(any(test, feature = "testing"))]` and be added in a follow-up to task 04, not in this task.
 
 ## 9. Risks
 
@@ -509,7 +532,7 @@ No production code is added or modified by this task — only tests and the `[de
 
 3. **OTEL crate may require a non-empty endpoint when an exporter is requested.** Test `init_telemetry_flag_only_no_endpoint` assumes that with `flag=true, endpoint=""`, task 04 will skip the OTLP exporter and still build the provider (Python parity). If the OTEL Rust SDK panics during `with_endpoint("")` (some versions do), task 04 must guard against that path, and this test will catch it. The `expect(...)` message tells a future debugger exactly where to look.
 
-4. **`#[deny(missing_docs)]` on the crate root** ([task 02 §4.3](./02-observability-crate-scaffold.md)). The `RecordingProcessor` test helper assumed in test 16 must therefore be exposed under a `#[doc(hidden)]` `pub mod testing` inside the crate, or under `#[cfg(any(test, feature = "testing"))]` with a doc string. Reviewers of task 04 should make sure that helper exists; otherwise test 16 must be `#[ignore]`d with a TODO.
+4. **`#[deny(missing_docs)]` on the crate root** ([task 02 §4.3](./02-observability-crate-scaffold.md), confirmed at [`crates/observability/src/lib.rs:34`](../../../crates/observability/src/lib.rs#L34)). The `RecordingProcessor` test helper that the §5.2 sketch of test 16 assumes does **not** exist in the current crate; if a future revision chooses to land that helper rather than deferring test 16 to action item 10, it must be exposed under a `#[doc(hidden)]` `pub mod testing` or under `#[cfg(any(test, feature = "testing"))]` with a doc string. This task as-is keeps test 16 deferred (see §8b).
 
 5. **`temp-env` is optional in this task.** The tests as written use `std::env::set_var` directly to avoid needing a workspace-level dep change. If reviewers prefer `temp-env::with_var(... || { ... })`, the test bodies become safer against panic-mid-test (they auto-restore env on unwind) and the `unsafe` blocks vanish — but adding the dep is a separate decision out of scope here.
 
@@ -518,10 +541,10 @@ No production code is added or modified by this task — only tests and the `[de
 ## 10. References
 
 - Parent doc: [`../01-otel-otlp-export.md`](../01-otel-otlp-export.md), in particular the [Testing strategy → Unit tests](../01-otel-otlp-export.md#unit-tests) subsection (the canonical list this task expands), the [Design decisions](../01-otel-otlp-export.md#design-decisions-locked) table (decisions 2, 4, 5, 10), and [Action items](../01-otel-otlp-export.md#action-items) #9.
-- [`02-observability-crate-scaffold.md`](./02-observability-crate-scaffold.md) — defines `TelemetrySettings`, `TelemetryGuard`, `TelemetryInitError`, the `tests/` directory location, and `[dev-dependencies]` already in place.
-- [`04-implement-init-otel-and-guard.md`](./04-implement-init-otel-and-guard.md) — provides `parse_otlp_headers`, `is_tracing_enabled`, `already_instrumented`, the real `TelemetryGuard::Drop` body, and (per §9 risk 4) the `RecordingProcessor` test helper.
-- [`08-noop-fallback-and-tests.md`](./08-noop-fallback-and-tests.md) — adds the new `Settings` fields (`otel_exporter_otlp_protocol`, `otel_span_processor`, `otel_traces_sampler`, `otel_traces_sampler_arg`) and their `overlay_from_env` branches, which tests 12–15 cover.
-- Existing overlay-test patterns to mirror: [`crates/lib/src/config.rs:1083-1207`](../../../crates/lib/src/config.rs#L1083).
-- Workspace dev-deps already available: [`Cargo.toml:78`](../../../Cargo.toml) (`serial_test = "3.2"`).
+- [`02-observability-crate-scaffold.md`](./02-observability-crate-scaffold.md) — defines the `SettingsView` trait, `EnvSettingsView`, `TelemetryGuard`, `TelemetryInitError`, the `tests/` directory location, and `[dev-dependencies]` already in place.
+- [`04-init-telemetry-implementation.md`](./04-init-telemetry-implementation.md) — provides `parse_otlp_headers`, `is_tracing_enabled`, `already_instrumented`, and the real `TelemetryGuard::Drop` body. The `RecordingProcessor` test helper that test 16 needs does **not** exist; see §8b for the deferral plan.
+- [`08-noop-fallback.md`](./08-noop-fallback.md) — adds the new `Settings` fields (`otel_exporter_otlp_protocol`, `otel_span_processor`, `otel_traces_sampler`, `otel_traces_sampler_arg`) and their `overlay_from_env` branches, which tests 12–15 cover.
+- Existing overlay-test patterns to mirror: the `overlay_picks_up_*` block starting at [`crates/lib/src/config.rs:1129`](../../../crates/lib/src/config.rs#L1129).
+- Workspace dev-deps already available: [`Cargo.toml:83`](../../../Cargo.toml#L83) (`serial_test = "3.2"`).
 - Project conventions: [`../../../.claude/CLAUDE.md`](../../../.claude/CLAUDE.md) — section "Test Patterns" (serial tests, `#[tokio::test]`, co-located inline tests vs `tests/`).
 - OpenTelemetry Rust SDK install-once global semantics: [`opentelemetry_sdk` 0.31 docs](https://docs.rs/opentelemetry_sdk/0.31.0/opentelemetry_sdk/) → `global::set_tracer_provider`.

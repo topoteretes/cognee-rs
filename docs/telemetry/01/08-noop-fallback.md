@@ -1,6 +1,6 @@
 # Task 08 — No-deps fallback for `cognee-observability`
 
-**Status:** Not started
+**Status**: Implemented in commit 5b925c7
 **Owner:** _unassigned_
 **Depends on:**
 - [Task 02 — Scaffold the `cognee-observability` workspace crate](./02-observability-crate-scaffold.md) (provides the crate skeleton, `TelemetryGuard`, `SettingsView`, `EnvSettingsView`).
