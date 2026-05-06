@@ -1,6 +1,7 @@
 # Task 02-03 — Identity derivation (`anonymous_id`, `persistent_id`, `api_key_tracking_id`)
 
 **Status**: ⬜ unimplemented
+**Status**: implemented in commit 7795ad2 (note: collapsed nested `if let && !is_empty()` into a single guard for clippy collapsible_if; smoke tests use unsafe { set_var/remove_var } with SAFETY comments referencing serial_test::serial).
 **Owner**: _unassigned_
 **Depends on**:
 - [Task 02-01 — Workspace deps](01-workspace-deps.md) — `pbkdf2`, `hmac`, `hex`, `once_cell`.
@@ -57,7 +58,7 @@ are therefore frozen and a fixture-based test
 | Algorithm | PBKDF2-HMAC-SHA256 | Python `hashlib.pbkdf2_hmac("sha256", ...)` |
 | Iterations | `100_000` | utils.py:24 |
 | Output length (`dklen`) | `16` bytes | utils.py:24 |
-| Default salt | `b"cognee.telemetry.api-key-tracking.v1"` (38 bytes UTF-8) | utils.py:25-27 |
+| Default salt | `b"cognee.telemetry.api-key-tracking.v1"` (36 bytes UTF-8) | utils.py:25-27 |
 | Output prefix | literal `"ak_"` | utils.py:163 |
 | Hex case | lowercase | Python `derived.hex()` default |
 
