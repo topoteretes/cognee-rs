@@ -6,6 +6,9 @@
 
 use std::sync::Arc;
 
+#[cfg(feature = "telemetry")]
+use cognee_observability::TelemetryGuard;
+
 use cognee_core::PipelineRunRegistry;
 use cognee_core::pipeline_run_registry::DefaultPipelineRunRegistry;
 use cognee_database::{DatabaseConnection, PipelineRunRepository, SeaOrmPipelineRunRepository};
@@ -66,6 +69,13 @@ pub struct AppState {
     /// In-memory registry tracking one running cloud sync per user. Always
     /// populated; the registry itself starts empty.
     pub sync: Arc<SyncRegistry>,
+
+    /// Flush-on-drop guard for the OpenTelemetry exporter (decision 9).
+    /// Held only for its `Drop` side effect: the last `Arc` released calls
+    /// `provider.force_flush()` + `provider.shutdown()`. `None` when built
+    /// without explicit telemetry init (test paths, library embedders).
+    #[cfg(feature = "telemetry")]
+    pub telemetry_guard: Option<Arc<TelemetryGuard>>,
 }
 
 impl AppState {
@@ -104,6 +114,8 @@ impl AppState {
             health: None,
             spans: Arc::new(SpanBuffer::new(BufferConfig::from_env())),
             sync: Arc::new(SyncRegistry::new()),
+            #[cfg(feature = "telemetry")]
+            telemetry_guard: None,
         })
     }
 
@@ -217,6 +229,8 @@ impl AppState {
             health: None,
             spans: Arc::new(SpanBuffer::new(BufferConfig::from_env())),
             sync: Arc::new(SyncRegistry::new()),
+            #[cfg(feature = "telemetry")]
+            telemetry_guard: None,
         })
     }
 }

@@ -209,6 +209,8 @@ async fn get_auth_me_no_token_when_auth_required_returns_401() {
         health: None,
         spans: Arc::new(cognee_http_server::observability::SpanBuffer::default()),
         sync: Arc::new(cognee_http_server::sync::SyncRegistry::new()),
+        #[cfg(feature = "telemetry")]
+        telemetry_guard: None,
     };
     let app = test_router(state).await;
 

@@ -29,7 +29,7 @@ mod error;
 pub use guard::TelemetryGuard;
 pub use headers::parse_otlp_headers;
 pub use init::{BoxedTelemetryLayer, already_instrumented, init_telemetry, is_tracing_enabled};
-pub use settings::SettingsView;
+pub use settings::{EnvSettingsView, SettingsView};
 
 #[cfg(feature = "telemetry")]
 pub use error::TelemetryInitError;

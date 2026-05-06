@@ -47,21 +47,23 @@ struct Args {
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> anyhow::Result<()> {
-    // 1. Load .env from the current directory (binary-only concern).
     let _ = dotenv::dotenv();
 
-    // 2. Install the tracing subscriber + the SpanBufferLayer feeding
-    //    /api/v1/activity/spans. The buffer survives subscriber install so we
-    //    can hand the same `Arc<SpanBuffer>` to `AppState::build` below.
     let spans = Arc::new(SpanBuffer::new(BufferConfig::from_env()));
+
+    // Decision 11: read OTEL settings from env *before* installing the
+    // subscriber so the OTEL bridge layer can be composed in one shot.
+    #[cfg(feature = "telemetry")]
+    let telemetry_guard = {
+        let settings = cognee_observability::EnvSettingsView::from_env();
+        init_tracing(&settings, spans.clone())
+    };
+    #[cfg(not(feature = "telemetry"))]
     init_tracing(spans.clone());
 
-    // 3. Parse CLI args.
     let args = Args::parse();
 
-    // 4. Build config: start from env, then overlay CLI flags.
     let mut cfg = HttpServerConfig::from_env().context("failed to load config from environment")?;
-    // CLI flags override env vars (highest precedence).
     cfg.host = args.host;
     cfg.port = args.port;
     if let Some(origins) = args.cors_allowed_origins {
@@ -75,14 +77,15 @@ async fn main() -> anyhow::Result<()> {
         cfg.env = env_val;
     }
 
-    // 5. Build application state. Replace the default span buffer with the
-    //    one already feeding the subscriber.
     let mut state = AppState::build(cfg.clone())
         .await
         .context("failed to build AppState")?;
     state.spans = spans;
+    #[cfg(feature = "telemetry")]
+    {
+        state.telemetry_guard = telemetry_guard;
+    }
 
-    // 6. Bind and serve.
     let addr: SocketAddr = format!("{}:{}", cfg.host, cfg.port)
         .parse()
         .context("invalid bind address")?;
@@ -94,25 +97,68 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Build the layered subscriber: env filter → fmt::Layer (stdout) →
-/// `SpanBufferLayer` (in-memory ring for `/api/v1/activity/spans`). The library
-/// crate does NOT install a subscriber — embedders own that.
+/// Build the layered subscriber:
+///
+/// `tracing-opentelemetry::layer` → `EnvFilter` → `fmt::layer (stdout)` →
+/// `SpanBufferLayer`.
+///
+/// The OTEL layer must sit directly above `Registry` because the boxed
+/// `Layer<Registry>` returned by `init_telemetry::<Registry>` does not
+/// satisfy `Layer<Layered<...>>` for nested subscriber types.
+#[cfg(feature = "telemetry")]
+fn init_tracing(
+    settings: &cognee_observability::EnvSettingsView,
+    spans: Arc<SpanBuffer>,
+) -> Option<Arc<cognee_observability::TelemetryGuard>> {
+    use tracing_subscriber::Registry;
+    use tracing_subscriber::layer::SubscriberExt;
+    use tracing_subscriber::util::SubscriberInitExt;
+    use tracing_subscriber::{EnvFilter, fmt};
+
+    let env_filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info,ort=warn"));
+    let fmt_layer = fmt::layer().with_target(false);
+    let span_buffer_layer = SpanBufferLayer::new((*spans).clone());
+
+    let (telemetry_layer, telemetry_guard) =
+        match cognee_observability::init_telemetry::<Registry>(settings) {
+            Ok(pair) => pair,
+            Err(err) => {
+                tracing::warn!(?err, "telemetry init failed; continuing without OTEL");
+                (
+                    Box::new(tracing_subscriber::layer::Identity::new())
+                        as cognee_observability::BoxedTelemetryLayer<Registry>,
+                    cognee_observability::TelemetryGuard::noop(),
+                )
+            }
+        };
+
+    // Tests may install a subscriber first; treat install failure as soft.
+    let _ = Registry::default()
+        .with(telemetry_layer)
+        .with(env_filter)
+        .with(fmt_layer)
+        .with(span_buffer_layer)
+        .try_init();
+
+    Some(Arc::new(telemetry_guard))
+}
+
+#[cfg(not(feature = "telemetry"))]
 fn init_tracing(spans: Arc<SpanBuffer>) {
     use tracing_subscriber::Registry;
     use tracing_subscriber::layer::SubscriberExt;
     use tracing_subscriber::util::SubscriberInitExt;
     use tracing_subscriber::{EnvFilter, fmt};
 
-    let filter =
+    let env_filter =
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info,ort=warn"));
-
     let fmt_layer = fmt::layer().with_target(false);
-    let buffer_layer = SpanBufferLayer::new((*spans).clone());
+    let span_buffer_layer = SpanBufferLayer::new((*spans).clone());
 
-    // Ignore the error — a subscriber may already be installed in tests.
     let _ = Registry::default()
-        .with(filter)
+        .with(env_filter)
         .with(fmt_layer)
-        .with(buffer_layer)
+        .with(span_buffer_layer)
         .try_init();
 }

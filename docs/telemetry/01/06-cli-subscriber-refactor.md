@@ -1,5 +1,7 @@
 # Task 01-06: Refactor the CLI subscriber to compose the OTEL bridge layer
 
+**Status**: Implemented in commit 5b64d7d
+
 ## Status
 
 Not started.
@@ -424,9 +426,9 @@ fn main() -> StdExitCode {
         let fmt_layer = fmt::layer().with_target(false);
 
         let _ = Registry::default()
+            .with(telemetry_layer)
             .with(env_filter)
             .with(fmt_layer)
-            .with(telemetry_layer)
             .try_init();
 
         telemetry_guard
@@ -602,3 +604,7 @@ in [task 01-03](03-cognee-lib-feature-wiring.md)).
 - `tracing_subscriber` layer composition:
   [`SubscriberExt::with`](https://docs.rs/tracing-subscriber/latest/tracing_subscriber/layer/trait.SubscriberExt.html)
   and [`SubscriberInitExt::try_init`](https://docs.rs/tracing-subscriber/latest/tracing_subscriber/util/trait.SubscriberInitExt.html#method.try_init).
+
+## Implementation notes
+
+- Subscriber composition reordered to `.with(telemetry_layer).with(env_filter).with(fmt_layer)` because the sub-doc's original ordering does not typecheck: `init_telemetry::<Registry>` returns `Box<dyn Layer<Registry> + Send + Sync>`, and stacking that boxed layer after `EnvFilter`/`fmt::Layer` would require it to implement `Layer<Layered<Fmt, Layered<EnvFilter, Registry>>>`. Slotting the boxed `Layer<Registry>` directly above `Registry` first is the only ordering that compiles. Functionally equivalent — `tracing-subscriber` layer ordering does not affect which spans/events reach each layer (EnvFilter applies globally; fmt and OTEL each observe surviving spans independently). Sibling task [01-07](07-http-server-subscriber-refactor.md) should adopt the same ordering.

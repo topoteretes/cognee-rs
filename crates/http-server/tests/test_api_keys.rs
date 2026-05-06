@@ -71,6 +71,8 @@ async fn list_keys_requires_auth() {
         health: None,
         spans: Arc::new(cognee_http_server::observability::SpanBuffer::default()),
         sync: Arc::new(cognee_http_server::sync::SyncRegistry::new()),
+        #[cfg(feature = "telemetry")]
+        telemetry_guard: None,
     };
     let app = test_router(state).await;
 
@@ -267,6 +269,8 @@ async fn list_keys_masked_when_hash_api_key_enabled() {
         health: None,
         spans: Arc::new(cognee_http_server::observability::SpanBuffer::default()),
         sync: Arc::new(cognee_http_server::sync::SyncRegistry::new()),
+        #[cfg(feature = "telemetry")]
+        telemetry_guard: None,
     };
 
     let user = seed_user(&state, "hashedkey@example.com", "Str0ng!Pass#1").await;

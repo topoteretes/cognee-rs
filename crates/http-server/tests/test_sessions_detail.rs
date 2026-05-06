@@ -85,6 +85,8 @@ async fn build_sessions_detail_state() -> (AppState, Arc<dyn SessionStore>, Arc<
         health: None,
         spans: std::sync::Arc::new(cognee_http_server::observability::SpanBuffer::default()),
         sync: std::sync::Arc::new(cognee_http_server::sync::SyncRegistry::new()),
+        #[cfg(feature = "telemetry")]
+        telemetry_guard: None,
     };
     (state, store, sm)
 }
@@ -438,6 +440,8 @@ async fn detail_returns_empty_lists_when_session_manager_unavailable() {
         health: None,
         spans: std::sync::Arc::new(cognee_http_server::observability::SpanBuffer::default()),
         sync: std::sync::Arc::new(cognee_http_server::sync::SyncRegistry::new()),
+        #[cfg(feature = "telemetry")]
+        telemetry_guard: None,
     };
 
     let alice = seed_user_id(&state, "alice-no-sm@example.com").await;

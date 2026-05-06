@@ -111,6 +111,8 @@ async fn custom_prompt_no_auth_returns_401_with_canonical_envelope() {
         health: None,
         spans: Arc::new(cognee_http_server::observability::SpanBuffer::default()),
         sync: Arc::new(cognee_http_server::sync::SyncRegistry::new()),
+        #[cfg(feature = "telemetry")]
+        telemetry_guard: None,
     };
     let app = cognee_http_server::build_router(state)
         .await

@@ -154,6 +154,8 @@ pub async fn build_auth_test_state() -> (AppState, Arc<std::sync::Mutex<Vec<Mail
         health: None,
         spans: Arc::new(cognee_http_server::observability::SpanBuffer::default()),
         sync: Arc::new(cognee_http_server::sync::SyncRegistry::new()),
+        #[cfg(feature = "telemetry")]
+        telemetry_guard: None,
     };
 
     (state, events)
@@ -214,6 +216,8 @@ pub async fn build_auth_required_test_state() -> (AppState, Arc<std::sync::Mutex
         health: None,
         spans: Arc::new(cognee_http_server::observability::SpanBuffer::default()),
         sync: Arc::new(cognee_http_server::sync::SyncRegistry::new()),
+        #[cfg(feature = "telemetry")]
+        telemetry_guard: None,
     };
 
     (state, events)
@@ -454,6 +458,8 @@ pub async fn build_notebooks_state() -> (AppState, Arc<std::sync::Mutex<Vec<Mail
         health: None,
         spans: Arc::new(cognee_http_server::observability::SpanBuffer::default()),
         sync: Arc::new(cognee_http_server::sync::SyncRegistry::new()),
+        #[cfg(feature = "telemetry")]
+        telemetry_guard: None,
     };
 
     (state, events)
@@ -563,6 +569,8 @@ pub async fn build_permissions_state() -> AppState {
         health: None,
         spans: Arc::new(cognee_http_server::observability::SpanBuffer::default()),
         sync: Arc::new(cognee_http_server::sync::SyncRegistry::new()),
+        #[cfg(feature = "telemetry")]
+        telemetry_guard: None,
     }
 }
 

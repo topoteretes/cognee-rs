@@ -3,14 +3,14 @@
 - **Status:** Planned (not yet implemented)
 - **Owner / Dependencies:**
   - **Depends on:**
-    - Task [`02` — bootstrap the `cognee-observability` crate](./02-cognee-observability-crate.md) (provides `TelemetryGuard`, `init_telemetry`, the noop fallback layer)
-    - Task [`03` — `telemetry` feature wiring across crates](./03-cognee-lib-feature-wiring.md) (adds the `telemetry` feature to `crates/http-server/Cargo.toml` plus the optional `cognee-observability` dependency)
-    - Task [`04` — OTLP exporter + `SdkTracerProvider` builder inside `cognee-observability`](./04-otlp-exporter-builder.md) *(once written)* (the actual OTEL provider this task installs)
-    - Task [`05` — `cognee-lib` `init_telemetry` re-exports & subscriber helper](./05-cognee-lib-public-api.md) *(once written)* (defines the public API surface the http-server calls into; if the helper lives in `cognee-observability` directly, this task imports from there instead — see task 03 note about avoiding the `cognee-lib` cycle)
+    - Task [`02` — bootstrap the `cognee-observability` crate](./02-observability-crate-scaffold.md) (provides `TelemetryGuard`, `init_telemetry`, the noop fallback layer, the `SettingsView` trait)
+    - Task [`03` — `telemetry` feature wiring across crates](./03-cognee-lib-feature-wiring.md) (adds the `telemetry` feature to `crates/http-server/Cargo.toml` plus the **optional** `cognee-observability` dependency)
+    - Task [`04` — `init_telemetry` implementation](./04-init-telemetry-implementation.md) (the actual OTEL provider this task installs and the `BoxedTelemetryLayer<Registry>` return shape that constrains layer ordering)
+    - Task [`05` — `cognee-lib` re-exports](./05-cognee-lib-reexports.md) (defines the public re-export surface; this task imports from `cognee-observability` directly because `cognee-http-server` intentionally does not depend on `cognee-lib`)
   - **Sibling references:**
-    - Task [`06` — CLI subscriber refactor](./06-cli-subscriber-refactor.md) — same composition pattern, but the CLI keeps the guard in a local `main()` binding rather than on a long-lived state struct.
-    - Task [`09` — graceful shutdown / flush hook](./09-graceful-shutdown-flush.md) *(once written)* — depends on this task because it reaches into `AppState` to extract and drop the guard explicitly.
-    - Task [`10` — integration test against a fake OTLP collector](./10-integration-test-fake-collector.md) *(once written)* — exercises the composition this task installs.
+    - Task [`06` — CLI subscriber refactor](./06-cli-subscriber-refactor.md) — same composition pattern (and same type-stacking constraint on the boxed `Layer<Registry>`); the CLI keeps the guard in a local `main()` binding rather than on a long-lived state struct.
+    - Task [`09` — observability unit tests](./09-observability-unit-tests.md) — exercises the `init_telemetry` paths this task installs.
+    - Task [`10` — OTEL export integration test](./10-otel-export-integration-test.md) — exercises the composition this task installs against a fake collector.
 - **Anchor in parent:** action item 7 of [`../01-otel-otlp-export.md`](../01-otel-otlp-export.md#action-items) ("Refactor the HTTP server subscriber"), bound by [Design decisions 1, 9, 10, 11](../01-otel-otlp-export.md#design-decisions-locked).
 
 ## Rationale
@@ -18,8 +18,8 @@
 Today, the http-server subscriber in
 [`crates/http-server/src/main.rs:100`](../../../crates/http-server/src/main.rs#L100)
 composes only `EnvFilter → fmt → SpanBufferLayer`. After tasks 02–05 land
-we have a `cognee_observability::init_telemetry(&Settings)` helper that
-returns `(OtelLayer, TelemetryGuard)`, where the layer is either a real
+we have a `cognee_observability::init_telemetry::<Registry>(&settings)` helper that
+returns `(BoxedTelemetryLayer<Registry>, TelemetryGuard)`, where the layer is either a real
 `tracing-opentelemetry` bridge or `tracing_subscriber::layer::Identity`
 when the `telemetry` feature is off (or the feature is on but neither
 `COGNEE_TRACING_ENABLED` nor `OTEL_EXPORTER_OTLP_ENDPOINT` is set —
@@ -45,7 +45,7 @@ the refactor:
    in task 03.
 3. **Decision 10 — guard type name `TelemetryGuard`.** The field on
    `AppState` is called `telemetry_guard` and types as
-   `Option<TelemetryGuard>` for the noop+real symmetry described
+   `Option<Arc<TelemetryGuard>>` for the noop+real symmetry described
    below.
 
 ### Subscriber composition order
@@ -54,23 +54,31 @@ Per the parent doc's [Subscriber composition](../01-otel-otlp-export.md#subscrib
 section the order is
 
 ```
-EnvFilter → fmt::layer (stdout) → tracing-opentelemetry::layer → SpanBufferLayer
+tracing-opentelemetry::layer → EnvFilter → fmt::layer (stdout) → SpanBufferLayer
 ```
+
+There is one hard type-system constraint that pins this ordering: the
+boxed `Layer<Registry>` returned by `init_telemetry::<Registry>` only
+typechecks when slotted **directly above `Registry`**. Any other
+position would require the boxed layer to satisfy `Layer<Layered<...>>`
+for an arbitrarily nested subscriber type — a bound the `Box<dyn
+Layer<Registry>>` shape does not provide. See task 06's Implementation
+notes for the full type-stacking explanation; the same constraint
+applies here verbatim, with the addition of the `SpanBufferLayer` as a
+fourth layer at the end.
 
 `tracing_subscriber::Layer` runs registered layers in the order they
 were added: `Registry::default().with(A).with(B).with(C)` invokes
-`A`'s callbacks first, then `B`'s, then `C`'s, for each event. So
-adding the OTEL bridge before `SpanBufferLayer` means the OTEL layer
-observes spans first and `SpanBufferLayer` runs last, which is what
-we want: the OTEL layer reads span metadata and translates it into
-OTEL semantic conventions; `SpanBufferLayer` then independently reads
-the same metadata into its in-memory ring. Neither layer mutates
-shared span state, so the order is functionally equivalent for both
-sinks today, but keeping the OTEL layer first matches the Python
-ordering (Python attaches `SimpleSpanProcessor(otlp_exporter)` to
-the same provider as `SimpleSpanProcessor(in_memory_exporter)`, so
-both observe spans on commit; we mirror that with the OTEL bridge
-running first).
+`A`'s callbacks first, then `B`'s, then `C`'s, for each event. The OTEL
+bridge therefore observes spans before `EnvFilter`, `fmt`, and
+`SpanBufferLayer`. Both the OTEL layer and `SpanBufferLayer`
+independently read span metadata; neither mutates shared span state, so
+the ordering between them is functionally equivalent for both sinks
+today, but the OTEL-first slotting is forced by the type constraint and
+matches the Python ordering (Python attaches
+`SimpleSpanProcessor(otlp_exporter)` to the same provider as
+`SimpleSpanProcessor(in_memory_exporter)`, so both observe spans on
+commit; we mirror that with the OTEL bridge running first).
 
 ### Comparison with Python's `setup_tracing`
 
@@ -87,13 +95,15 @@ span") via two `tracing` layers on one `Registry`.
 
 ## Pre-conditions
 
-- Task [`02`](./02-cognee-observability-crate.md) merged: the
-  `cognee-observability` crate exists with `init_telemetry(&Settings)
-  -> Result<(OtelLayer, TelemetryGuard), TelemetryInitError>` and a
-  `TelemetryGuard` whose `Drop` calls
+- Task [`02`](./02-observability-crate-scaffold.md) merged: the
+  `cognee-observability` crate exists with `init_telemetry::<S>(&dyn
+  SettingsView) -> Result<(BoxedTelemetryLayer<S>, TelemetryGuard), TelemetryInitError>`
+  and a `TelemetryGuard` whose `Drop` calls
   `provider.force_flush()` followed by `provider.shutdown()`. Under
-  `not(feature = "telemetry")`, `OtelLayer = tracing_subscriber::layer::Identity`
-  and `TelemetryGuard` is a zero-sized noop.
+  `not(feature = "telemetry")`, the boxed layer collapses to
+  `tracing_subscriber::layer::Identity` and `TelemetryGuard` is a
+  zero-sized noop. The crate also defines `SettingsView` (the
+  borrow-only OTEL-fields view) in its public API.
 - Task [`03`](./03-cognee-lib-feature-wiring.md) merged: the
   `crates/http-server/Cargo.toml` manifest now contains
   ```toml
@@ -103,25 +113,108 @@ span") via two `tracing` layers on one `Registry`.
   ```toml
   telemetry = ["dep:cognee-observability", "cognee-observability/telemetry", "cognee-core/telemetry"]
   ```
-- Task [`04`](./04-otlp-exporter-builder.md): `init_telemetry` actually
-  builds an `SdkTracerProvider` with an OTLP exporter when the
-  `telemetry` feature is on and the relevant env vars / settings are
-  present.
-- Task [`05`](./05-cognee-lib-public-api.md) optional: the
-  `cognee_lib::observability` re-export exists. If task 05 chose to
-  expose `TelemetryGuard` only via `cognee_lib`, this task would import
-  from there; per task 03's manifest note ("the HTTP server
-  intentionally does not depend on `cognee-lib`"), the http-server
-  imports the symbol directly from `cognee_observability` instead.
+  Because `cognee-observability` is `optional = true`, every reference
+  to its types in `cognee-http-server` source must be cfg-gated under
+  `#[cfg(feature = "telemetry")]`.
+- Task [`04`](./04-init-telemetry-implementation.md): `init_telemetry`
+  actually builds an `SdkTracerProvider` with an OTLP exporter when
+  the `telemetry` feature is on and the relevant env vars / settings
+  are present.
+- Task [`05`](./05-cognee-lib-reexports.md) optional: the
+  `cognee_lib::observability` re-export exists. `cognee-http-server`
+  does not import from `cognee-lib` (per task 03's manifest note: "the
+  HTTP server intentionally does not depend on `cognee-lib`"); it
+  reads the OTEL settings directly from environment variables via the
+  new `EnvSettingsView` helper described below.
 
 ## Step-by-step
 
-### 1. Add `telemetry_guard` field to `AppState`
+### 1. Add `EnvSettingsView` to `cognee-observability`
+
+Because `cognee-http-server` does **not** depend on `cognee-lib`, it
+cannot use `cognee_lib::Settings` to drive `init_telemetry`. The
+cleanest fix is to add a tiny env-backed implementation of the
+existing `SettingsView` trait inside `cognee-observability` itself, so
+that any crate which already pulls in `cognee-observability` (e.g. the
+HTTP server, future workers, examples) can call `init_telemetry`
+without a `cognee-lib` round-trip.
+
+Edit `crates/observability/src/settings.rs` (or, if the file grows, a
+new sibling module re-exported from `settings.rs`) to add:
+
+```rust
+/// Snapshot of OTEL-relevant env vars usable as a `SettingsView`. Lets
+/// crates that don't depend on `cognee-lib::Settings` (e.g. the HTTP
+/// server) drive `init_telemetry` directly from the environment.
+#[derive(Debug, Default, Clone)]
+pub struct EnvSettingsView {
+    tracing_enabled: bool,
+    service_name: String,
+    otlp_endpoint: String,
+    otlp_headers: String,
+    otlp_protocol: String,
+    span_processor: String,
+    traces_sampler: String,
+    traces_sampler_arg: String,
+}
+
+impl EnvSettingsView {
+    /// Read all eight OTEL env vars at construction time. Missing/empty
+    /// vars fall back to the same defaults `cognee-lib::Settings` uses
+    /// (mirror those defaults — keep them in one source of truth in
+    /// this crate, e.g. `pub(crate) const` definitions, so a future
+    /// drift between `cognee-lib::Settings::default()` and this view
+    /// is caught by a unit test rather than silently desynchronising).
+    pub fn from_env() -> Self { /* ... */ }
+}
+
+impl SettingsView for EnvSettingsView {
+    fn tracing_enabled(&self) -> bool { self.tracing_enabled }
+    fn service_name(&self) -> &str { &self.service_name }
+    fn otlp_endpoint(&self) -> &str { &self.otlp_endpoint }
+    fn otlp_headers(&self) -> &str { &self.otlp_headers }
+    fn otlp_protocol(&self) -> &str { &self.otlp_protocol }
+    fn span_processor(&self) -> &str { &self.span_processor }
+    fn traces_sampler(&self) -> &str { &self.traces_sampler }
+    fn traces_sampler_arg(&self) -> &str { &self.traces_sampler_arg }
+}
+```
+
+The env vars to read (these names are taken verbatim from
+`Settings::overlay_from_env()` in `crates/lib/src/config.rs`, so the
+two views stay aligned):
+
+| Env var | Field | Notes |
+|---|---|---|
+| `COGNEE_TRACING_ENABLED` | `tracing_enabled` | Lowercase-compare against `"true"`, `"1"`, `"yes"`. Default `false`. |
+| `OTEL_SERVICE_NAME` | `service_name` | Default `"cognee"` (matches `Settings::default()`). |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | `otlp_endpoint` | Default `""`. |
+| `OTEL_EXPORTER_OTLP_HEADERS` | `otlp_headers` | Default `""`. |
+| `OTEL_EXPORTER_OTLP_PROTOCOL` | `otlp_protocol` | Default `"grpc"` (matches `Settings::default()`). |
+| `OTEL_SPAN_PROCESSOR` | `span_processor` | Default `"batch"` (matches `Settings::default()`). |
+| `OTEL_TRACES_SAMPLER` | `traces_sampler` | Default `""` (let SDK read its own env var). |
+| `OTEL_TRACES_SAMPLER_ARG` | `traces_sampler_arg` | Default `""`. |
+
+These defaults are cross-checked against
+`crates/lib/src/config.rs::Settings::default()` lines 644–651 (the
+`-- Observability --` block). Any future change to those defaults must
+be mirrored in `EnvSettingsView::from_env()`'s fallback constants — a
+unit test in `cognee-observability` should assert the two stay equal
+by constructing both with empty env and comparing each field.
+
+Then export the new type in `crates/observability/src/lib.rs`
+alongside the existing public re-exports:
+
+```rust
+pub use settings::{EnvSettingsView, SettingsView};
+```
+
+### 2. Add `telemetry_guard` field to `AppState`
 
 Edit
 [`crates/http-server/src/state.rs`](../../../crates/http-server/src/state.rs).
 
-The current struct (line 28) is
+The current struct (line 29) is
 
 ```rust
 #[derive(Clone)]
@@ -152,11 +245,12 @@ Two complications:
   is "last `Arc` dropped" — see the Risks section about background
   tasks.
 
-Add the field as `Option<Arc<TelemetryGuard>>` (Option so the noop /
-testing constructions can pass `None`):
+Because task 03 keeps `cognee-observability` strictly **optional**
+behind the `telemetry` feature, the import and the field itself must
+be cfg-gated:
 
 ```rust
-// new import
+// new import — only when the telemetry feature is on
 #[cfg(feature = "telemetry")]
 use cognee_observability::TelemetryGuard;
 
@@ -175,57 +269,38 @@ pub struct AppState {
     /// `Drop` side effect — calling `provider.force_flush()` then
     /// `provider.shutdown()` when the last `Arc` is released.
     ///
-    /// `None` when built from `AppState::build` without an explicit guard
-    /// (test paths, library embedders that manage telemetry themselves) and
-    /// also when the `telemetry` feature is off — the field still exists
-    /// under both feature configurations to keep `AppState`'s shape stable
-    /// (decision 1).
-    #[cfg_attr(not(feature = "telemetry"), allow(dead_code))]
+    /// Only present when the `telemetry` feature is enabled; under
+    /// `not(feature = "telemetry")` `AppState` does not carry this field
+    /// at all (and `cognee-observability` is not in the dep graph).
+    /// `None` when built from `AppState::build` without an explicit
+    /// guard (test paths, library embedders that manage telemetry
+    /// themselves).
+    #[cfg(feature = "telemetry")]
     pub telemetry_guard: Option<Arc<TelemetryGuard>>,
 }
 ```
 
-For the off-feature build, declare a stub `TelemetryGuard` type alias
-so the field type still resolves. Either:
-
-- Re-export the noop `TelemetryGuard` from `cognee-observability`
-  unconditionally (decision: do this — task 02 already covers it; the
-  optional dep is the *gateway*, not the type itself, for the noop
-  variant. Concretely: `cognee-observability` defines `TelemetryGuard`
-  in its always-compiled API surface; the `telemetry` feature only
-  controls whether `Drop` actually shuts down a real provider). In
-  that case the optional-dep gating in task 03 is wrong — revisit
-  there. **Recommended option.**
-- Or, define a local zero-sized `TelemetryGuard` struct in `state.rs`
-  under `#[cfg(not(feature = "telemetry"))]` and use the
-  `cognee_observability` import only under `#[cfg(feature = "telemetry")]`.
-  This keeps task 03 unchanged but adds a small surface duplication.
-
-This sub-doc assumes the **first** approach: `cognee-observability` is
-a non-optional zero-cost dep that exposes `TelemetryGuard` always, and
-the `telemetry` feature inside that crate gates the *real* OTEL stack.
-If task 03 keeps `cognee-observability` optional, fall back to the
-second approach and gate the field with `#[cfg(feature = "telemetry")]`.
-
 Update both `AppState::build` (line 88) and `AppState::build_with_db`
-(line 188) to default `telemetry_guard: None`.
+(line 188) to default `telemetry_guard: None` under the same cfg gate
+(see the diff in step 5). Code paths that match on `AppState` literally
+(currently zero in-tree) must mirror the cfg-gated initializer.
 
-### 2. Refactor `init_tracing` to compose the OTEL layer
+### 3. Refactor `init_tracing` to compose the OTEL layer
 
 Replace the body of `init_tracing` in
 [`crates/http-server/src/main.rs:100`](../../../crates/http-server/src/main.rs#L100).
-The new function takes `&Settings` (loaded from `cognee_lib::Settings`
-or via the http-server's `HttpServerConfig` if it already wraps the
-relevant fields) and returns `Result<Option<Arc<TelemetryGuard>>,
-anyhow::Error>` so `main()` can attach the result to `AppState`:
+The new function takes a `&dyn SettingsView` (constructed in `main`
+via `EnvSettingsView::from_env()`) and returns
+`Option<Arc<TelemetryGuard>>` so `main()` can attach the result to
+`AppState`:
 
 ```rust
 /// Build the layered subscriber:
 ///
 /// ```
-/// EnvFilter
+/// tracing-opentelemetry::layer  (real OTEL bridge or Identity)  ← must sit directly above Registry
+///   → EnvFilter
 ///   → fmt::layer (stdout)
-///   → tracing-opentelemetry::layer  (real OTEL bridge or Identity)
 ///   → SpanBufferLayer               (in-memory ring for /api/v1/activity/spans)
 /// ```
 ///
@@ -233,38 +308,48 @@ anyhow::Error>` so `main()` can attach the result to `AppState`:
 /// so the caller can install it on `AppState` (decision 9). When the OTEL
 /// stack is disabled (feature off, or env vars unset — decision 2), the OTEL
 /// layer collapses to `Identity` and the guard is a noop.
+///
+/// The OTEL layer's position is forced by the boxed `Layer<Registry>`
+/// type returned by `init_telemetry::<Registry>` — see task 06's
+/// Implementation notes for the full type-stacking explanation.
+#[cfg(feature = "telemetry")]
 fn init_tracing(
-    settings: &cognee_lib::Settings,
+    settings: &cognee_observability::EnvSettingsView,
     spans: Arc<SpanBuffer>,
-) -> anyhow::Result<Option<Arc<cognee_observability::TelemetryGuard>>> {
+) -> Option<Arc<cognee_observability::TelemetryGuard>> {
     use tracing_subscriber::Registry;
     use tracing_subscriber::layer::SubscriberExt;
     use tracing_subscriber::util::SubscriberInitExt;
     use tracing_subscriber::{EnvFilter, fmt};
 
-    let filter = EnvFilter::try_from_default_env()
+    let env_filter = EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| EnvFilter::new("info,ort=warn"));
     let fmt_layer = fmt::layer().with_target(false);
-    let buffer_layer = SpanBufferLayer::new((*spans).clone());
+    let span_buffer_layer = SpanBufferLayer::new((*spans).clone());
 
-    let (otel_layer, guard) = cognee_observability::init_telemetry(settings)
-        .map_err(|e| anyhow::anyhow!("failed to initialise OTEL bridge: {e}"))?;
+    let (telemetry_layer, telemetry_guard) =
+        cognee_observability::init_telemetry::<Registry>(settings)
+            .unwrap_or_else(|err| {
+                tracing::warn!(?err, "telemetry init failed; continuing without OTEL");
+                (
+                    Box::new(tracing_subscriber::layer::Identity::new()),
+                    cognee_observability::TelemetryGuard::noop(),
+                )
+            });
 
-    // Composition order matches docs/telemetry/01-otel-otlp-export.md
-    // ("Subscriber composition"): EnvFilter → fmt → otel → SpanBufferLayer.
-    // tracing-subscriber runs layers in registration order, so the OTEL
-    // bridge sees spans before SpanBufferLayer does. Both layers read span
-    // metadata; neither mutates shared state, so this ordering is correct
-    // and matches the CLI subscriber (task 06).
+    // Composition order is forced by the boxed Layer<Registry> type:
+    // telemetry_layer must sit directly above Registry. SpanBufferLayer
+    // is a concrete generic layer and stacks on top freely.
     Registry::default()
-        .with(filter)
+        .with(telemetry_layer)
+        .with(env_filter)
         .with(fmt_layer)
-        .with(otel_layer)
-        .with(buffer_layer)
+        .with(span_buffer_layer)
         .try_init()
-        .map_err(|e| anyhow::anyhow!("failed to install global tracing subscriber: {e}"))?;
+        .map_err(|e| tracing::warn!(?e, "failed to install global tracing subscriber"))
+        .ok();
 
-    Ok(Some(Arc::new(guard)))
+    Some(Arc::new(telemetry_guard))
 }
 ```
 
@@ -272,28 +357,55 @@ Two notes:
 
 - The current `init_tracing` swallows the `try_init` error (`let _ =
   ...`) because tests may install a subscriber first. The refactor
-  promotes the error: at binary startup we *expect* nobody else has
-  installed one. If a future test embeds `cognee-http-server` in-process
-  with its own subscriber, that test should call `build_router` and
-  `run` instead of `main`.
+  preserves that softness via `.map_err(...).ok()` so the binary
+  startup path is best-effort consistent with today's behaviour.
 - `init_telemetry`'s `Result<(_, TelemetryGuard), _>` is unwrapped via
-  `?`; the noop variant returns `Ok((Identity, NoopGuard))` so the
-  `?` is a guaranteed-no-error path when telemetry is off (decision 1).
+  `unwrap_or_else` so a misconfigured OTLP endpoint cannot crash the
+  server — we log and fall back to `Identity` + `TelemetryGuard::noop()`.
+  The `noop()` constructor lives in `cognee-observability` (decision 1
+  / task 02).
 
-### 3. Wire the guard into `main()`
+When the `telemetry` feature is **off**, define a stub `init_tracing`
+that mirrors today's body (no OTEL layer, no guard, no return value):
+
+```rust
+#[cfg(not(feature = "telemetry"))]
+fn init_tracing(spans: Arc<SpanBuffer>) {
+    use tracing_subscriber::Registry;
+    use tracing_subscriber::layer::SubscriberExt;
+    use tracing_subscriber::util::SubscriberInitExt;
+    use tracing_subscriber::{EnvFilter, fmt};
+
+    let env_filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new("info,ort=warn"));
+    let fmt_layer = fmt::layer().with_target(false);
+    let span_buffer_layer = SpanBufferLayer::new((*spans).clone());
+
+    let _ = Registry::default()
+        .with(env_filter)
+        .with(fmt_layer)
+        .with(span_buffer_layer)
+        .try_init();
+}
+```
+
+### 4. Wire the guard into `main()`
 
 Modify `main` in
 [`crates/http-server/src/main.rs:48`](../../../crates/http-server/src/main.rs#L48)
 to:
 
-1. Load settings *before* installing the subscriber (decision 11).
-   `cognee_lib::Settings::load()` (or the appropriate
-   `cognee_observability::Settings` accessor) reads
-   `COGNEE_TRACING_ENABLED`, `OTEL_SERVICE_NAME`,
-   `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_HEADERS`.
-2. Call `init_tracing(&settings, spans.clone())` and bind the returned
-   guard.
-3. After `AppState::build`, set `state.telemetry_guard = guard`.
+1. Construct `EnvSettingsView::from_env()` *before* installing the
+   subscriber (decision 11). This reads `COGNEE_TRACING_ENABLED`,
+   `OTEL_SERVICE_NAME`, `OTEL_EXPORTER_OTLP_ENDPOINT`,
+   `OTEL_EXPORTER_OTLP_HEADERS`, `OTEL_EXPORTER_OTLP_PROTOCOL`,
+   `OTEL_SPAN_PROCESSOR`, `OTEL_TRACES_SAMPLER`,
+   `OTEL_TRACES_SAMPLER_ARG`.
+2. Call `init_tracing(&settings, spans.clone())` (telemetry-on) or
+   `init_tracing(spans.clone())` (telemetry-off) and bind the
+   returned guard.
+3. After `AppState::build`, set `state.telemetry_guard = guard`
+   (telemetry-on path only).
 4. Pass `state` to `cognee_http_server::run(addr, state)`.
 
 The full revised `main.rs`:
@@ -332,22 +444,23 @@ struct Args {
 async fn main() -> anyhow::Result<()> {
     let _ = dotenv::dotenv();
 
-    // 1. Load settings BEFORE installing the subscriber (decision 11).
-    //    Subscribed OTEL must see correct config on the first span emitted.
-    let settings = cognee_lib::Settings::load()
-        .context("failed to load cognee settings")?;
-
-    // 2. Build the in-memory span buffer.
+    // 1. Build the in-memory span buffer (still needed by both feature paths).
     let spans = Arc::new(SpanBuffer::new(BufferConfig::from_env()));
 
-    // 3. Compose subscriber: EnvFilter → fmt → OTEL bridge → SpanBufferLayer.
-    //    Returns the flush-on-drop guard produced by cognee-observability.
-    let telemetry_guard = init_tracing(&settings, spans.clone())?;
+    // 2. Compose subscriber. With `telemetry` on, also install the OTEL
+    //    bridge and capture the flush-on-drop guard.
+    #[cfg(feature = "telemetry")]
+    let telemetry_guard = {
+        let settings = cognee_observability::EnvSettingsView::from_env();
+        init_tracing(&settings, spans.clone())
+    };
+    #[cfg(not(feature = "telemetry"))]
+    init_tracing(spans.clone());
 
-    // 4. Parse CLI args.
+    // 3. Parse CLI args.
     let args = Args::parse();
 
-    // 5. Build HTTP config with CLI-flag overrides.
+    // 4. Build HTTP config with CLI-flag overrides.
     let mut cfg = HttpServerConfig::from_env()
         .context("failed to load config from environment")?;
     cfg.host = args.host;
@@ -363,14 +476,17 @@ async fn main() -> anyhow::Result<()> {
         cfg.env = env_val;
     }
 
-    // 6. Build application state and attach the guard (decision 9).
+    // 5. Build application state and attach the guard (decision 9).
     let mut state = AppState::build(cfg.clone())
         .await
         .context("failed to build AppState")?;
     state.spans = spans;
-    state.telemetry_guard = telemetry_guard;
+    #[cfg(feature = "telemetry")]
+    {
+        state.telemetry_guard = telemetry_guard;
+    }
 
-    // 7. Bind and serve. axum's graceful shutdown (already wired in
+    // 6. Bind and serve. axum's graceful shutdown (already wired in
     //    `run` via `with_graceful_shutdown(shutdown_signal(state))`) drops
     //    the state when the future completes; that drops the last Arc<
     //    TelemetryGuard>, which calls provider.force_flush() + shutdown()
@@ -386,38 +502,64 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "telemetry")]
 fn init_tracing(
-    settings: &cognee_lib::Settings,
+    settings: &cognee_observability::EnvSettingsView,
     spans: Arc<SpanBuffer>,
-) -> anyhow::Result<Option<Arc<cognee_observability::TelemetryGuard>>> {
+) -> Option<Arc<cognee_observability::TelemetryGuard>> {
     use tracing_subscriber::Registry;
     use tracing_subscriber::layer::SubscriberExt;
     use tracing_subscriber::util::SubscriberInitExt;
     use tracing_subscriber::{EnvFilter, fmt};
 
-    let filter = EnvFilter::try_from_default_env()
+    let env_filter = EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| EnvFilter::new("info,ort=warn"));
     let fmt_layer = fmt::layer().with_target(false);
-    let buffer_layer = SpanBufferLayer::new((*spans).clone());
+    let span_buffer_layer = SpanBufferLayer::new((*spans).clone());
 
-    let (otel_layer, guard) = cognee_observability::init_telemetry(settings)
-        .map_err(|e| anyhow::anyhow!("failed to initialise OTEL bridge: {e}"))?;
+    let (telemetry_layer, telemetry_guard) =
+        cognee_observability::init_telemetry::<Registry>(settings)
+            .unwrap_or_else(|err| {
+                tracing::warn!(?err, "telemetry init failed; continuing without OTEL");
+                (
+                    Box::new(tracing_subscriber::layer::Identity::new()),
+                    cognee_observability::TelemetryGuard::noop(),
+                )
+            });
 
-    Registry::default()
-        .with(filter)
+    let _ = Registry::default()
+        .with(telemetry_layer)
+        .with(env_filter)
         .with(fmt_layer)
-        .with(otel_layer)
-        .with(buffer_layer)
-        .try_init()
-        .map_err(|e| anyhow::anyhow!("failed to install global tracing subscriber: {e}"))?;
+        .with(span_buffer_layer)
+        .try_init();
 
-    Ok(Some(Arc::new(guard)))
+    Some(Arc::new(telemetry_guard))
+}
+
+#[cfg(not(feature = "telemetry"))]
+fn init_tracing(spans: Arc<SpanBuffer>) {
+    use tracing_subscriber::Registry;
+    use tracing_subscriber::layer::SubscriberExt;
+    use tracing_subscriber::util::SubscriberInitExt;
+    use tracing_subscriber::{EnvFilter, fmt};
+
+    let env_filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new("info,ort=warn"));
+    let fmt_layer = fmt::layer().with_target(false);
+    let span_buffer_layer = SpanBufferLayer::new((*spans).clone());
+
+    let _ = Registry::default()
+        .with(env_filter)
+        .with(fmt_layer)
+        .with(span_buffer_layer)
+        .try_init();
 }
 ```
 
-### 4. Confirm graceful shutdown drops the guard
+### 5. Confirm graceful shutdown drops the guard
 
-[`crates/http-server/src/lib.rs:128`](../../../crates/http-server/src/lib.rs#L128)
+[`crates/http-server/src/lib.rs:129`](../../../crates/http-server/src/lib.rs#L129)
 already implements `shutdown_signal(state: AppState)` and
 [`run` line 172](../../../crates/http-server/src/lib.rs#L172) wires it
 into `axum::serve(...).with_graceful_shutdown(...)` under the `bin`
@@ -442,10 +584,15 @@ outlives the server, that task holds a clone of `Arc<TelemetryGuard>`
 and the guard's `Drop` is delayed until the task finishes. For
 short-lived tasks this is fine; for the cloud-sync background loop
 (`SyncRegistry`) and the pipeline-run background workers we should
-**explicitly extract and drop the guard** during `lifecycle::on_shutdown`:
+**explicitly extract and drop the guard** during `lifecycle::on_shutdown`.
+Per task 04, the actual flush-on-drop is owned by `TelemetryGuard::Drop`
+itself — the explicit `Arc::into_inner` + `drop()` step is purely a
+synchronisation aid to make the flush land *inside* `on_shutdown`
+rather than whenever the last clone goes away:
 
 ```rust
 // inside on_shutdown, after awaiting other shutdown work
+#[cfg(feature = "telemetry")]
 if let Some(guard) = state.telemetry_guard.clone() {
     if let Some(inner) = Arc::into_inner(guard) {
         // inner: TelemetryGuard — Drop runs here, synchronously.
@@ -459,23 +606,26 @@ if let Some(guard) = state.telemetry_guard.clone() {
 }
 ```
 
-Wiring this explicit extraction is task 09's responsibility; this task
-just makes sure the field exists and is populated.
+There is no separate "graceful shutdown / flush" task: the flush is a
+side effect of `TelemetryGuard::Drop` (task 04). This task's
+responsibility is just to make sure the field exists, is populated,
+and is dropped at the right moment.
 
-### 5. Show the diff to `AppState`
+### 6. Show the diff to `AppState`
 
 ```diff
 --- a/crates/http-server/src/state.rs
 +++ b/crates/http-server/src/state.rs
-@@ -1,6 +1,8 @@
+@@ -1,6 +1,9 @@
  use std::sync::Arc;
 
++#[cfg(feature = "telemetry")]
 +use cognee_observability::TelemetryGuard;
 +
  use cognee_core::PipelineRunRegistry;
  use cognee_core::pipeline_run_registry::DefaultPipelineRunRegistry;
  use cognee_database::{DatabaseConnection, PipelineRunRepository, SeaOrmPipelineRunRepository};
-@@ -28,6 +30,18 @@
+@@ -29,6 +32,15 @@
  #[derive(Clone)]
  pub struct AppState {
      pub config: Arc<HttpServerConfig>,
@@ -491,12 +641,12 @@ just makes sure the field exists and is populated.
 +    /// Held only for its `Drop` side effect: the last `Arc` released calls
 +    /// `provider.force_flush()` + `provider.shutdown()`. `None` when built
 +    /// without explicit telemetry init (test paths, library embedders).
-+    /// Under `not(feature = "telemetry")`, `TelemetryGuard` is a zero-sized
-+    /// noop type re-exported by `cognee-observability`.
-+    #[cfg_attr(not(feature = "telemetry"), allow(dead_code))]
++    /// Only present when the `telemetry` feature is enabled (cognee-observability
++    /// is `optional = true` in Cargo.toml — see task 03).
++    #[cfg(feature = "telemetry")]
 +    pub telemetry_guard: Option<Arc<TelemetryGuard>>,
  }
-@@ -98,6 +112,7 @@
+@@ -98,6 +112,8 @@
          Ok(Self {
              config: Arc::new(config),
              pipelines,
@@ -506,10 +656,11 @@ just makes sure the field exists and is populated.
              health: None,
              spans: Arc::new(SpanBuffer::new(BufferConfig::from_env())),
              sync: Arc::new(SyncRegistry::new()),
++            #[cfg(feature = "telemetry")]
 +            telemetry_guard: None,
          })
      }
-@@ -212,6 +227,7 @@
+@@ -211,6 +227,8 @@
          Ok(Self {
              config: Arc::new(config),
              pipelines,
@@ -519,25 +670,28 @@ just makes sure the field exists and is populated.
              health: None,
              spans: Arc::new(SpanBuffer::new(BufferConfig::from_env())),
              sync: Arc::new(SyncRegistry::new()),
++            #[cfg(feature = "telemetry")]
 +            telemetry_guard: None,
          })
      }
  }
 ```
 
-If task 02 chose to keep `cognee-observability` strictly optional, wrap
-the import and the field in `#[cfg(feature = "telemetry")]` instead and
-mirror the wrap on every `AppState { ... }` literal in tests. Prefer the
-unconditional approach (described above) — it keeps `AppState`'s shape
-stable across feature flags and avoids `cfg`-gated test scaffolding.
+The cfg-gating means callers that only ever build with the default
+feature set (no `telemetry`) never see the field and never need to
+mention it in `AppState { ... }` literals. Callers that build with
+`--features telemetry` initialise it to `None` in tests; the binary
+path in `main.rs` (also gated under `cfg(feature = "telemetry")`)
+overwrites it with the real `Some(Arc::new(guard))` after subscriber
+init.
 
 ## Verification
 
 After landing this task:
 
 1. **Default-off compile** — `cargo check -p cognee-http-server`
-   succeeds. `init_telemetry` returns `(Identity, NoopGuard)`; no OTEL
-   crates are linked. Confirm with
+   succeeds. `cognee-observability` is *not* in the dep graph;
+   `AppState` does not have a `telemetry_guard` field. Confirm with
    `cargo tree -p cognee-http-server | grep opentelemetry` returning
    empty.
 2. **Telemetry-on compile** —
@@ -549,15 +703,22 @@ After landing this task:
    passes (decision 1 contract: telemetry is never silently activated
    by an unrelated feature).
 4. **Existing test suite green** —
-   `cargo test -p cognee-http-server` (uses real and mock state). The
-   `telemetry_guard: None` default keeps every existing constructor
-   site source-compatible.
+   `cargo test -p cognee-http-server` (default features) and
+   `cargo test -p cognee-http-server --features telemetry` both pass.
+   The `telemetry_guard: None` default keeps every existing
+   constructor site source-compatible under the telemetry-on build.
 5. **`/api/v1/activity/spans` regression check** — start the server
    without OTEL env vars, hit `/`, then
    `GET /api/v1/activity/spans` and confirm the request span still
    appears (proves `SpanBufferLayer` still receives spans after the
    composition change).
-6. **Manual OTEL smoke test** —
+6. **`EnvSettingsView` parity** — a unit test in
+   `cognee-observability` constructs both `EnvSettingsView::from_env()`
+   (with empty env) and the relevant subset of
+   `cognee_lib::Settings::default()` (mirrored manually if no
+   `cognee-lib` dev-dep) and asserts every field matches. Drift is a
+   bug.
+7. **Manual OTEL smoke test** —
    ```bash
    docker run --rm -p 4317:4317 otel/opentelemetry-collector:latest
    OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317 \
@@ -572,16 +733,19 @@ After landing this task:
 
 ## Files modified
 
-- [`crates/http-server/src/state.rs`](../../../crates/http-server/src/state.rs)
-  — add `telemetry_guard: Option<Arc<TelemetryGuard>>` field, default
-  to `None` in both constructors.
-- [`crates/http-server/src/main.rs`](../../../crates/http-server/src/main.rs)
-  — load settings before subscriber init (decision 11), refactor
-  `init_tracing` to compose the OTEL bridge layer between `fmt` and
-  `SpanBufferLayer`, return the `TelemetryGuard` to `main`, attach it
-  to `AppState` before `run`.
-- (No changes to `crates/http-server/src/lib.rs` for the basic flow;
-  task 09 will add explicit guard extraction in `lifecycle::on_shutdown`.)
+| File | Crate | Change |
+|---|---|---|
+| [`crates/observability/src/settings.rs`](../../../crates/observability/src/settings.rs) | `cognee-observability` | Add `EnvSettingsView` struct + `SettingsView` impl (env-backed view used by callers that don't depend on `cognee-lib`). |
+| [`crates/observability/src/lib.rs`](../../../crates/observability/src/lib.rs) | `cognee-observability` | Add `pub use settings::EnvSettingsView;` to the public re-exports. |
+| [`crates/http-server/src/state.rs`](../../../crates/http-server/src/state.rs) | `cognee-http-server` | Add `#[cfg(feature = "telemetry")]`-gated `telemetry_guard: Option<Arc<TelemetryGuard>>` field, default to `None` in both `AppState::build` and `AppState::build_with_db`. |
+| [`crates/http-server/src/main.rs`](../../../crates/http-server/src/main.rs) | `cognee-http-server` | Construct `EnvSettingsView::from_env()` before subscriber init (decision 11), refactor `init_tracing` into telemetry-on (composes OTEL bridge layer at the bottom of the layered subscriber) and telemetry-off variants, return the `TelemetryGuard` to `main`, attach it to `AppState` before `run`. |
+
+(No changes to `crates/http-server/src/lib.rs` for the basic flow;
+the explicit `Arc::into_inner` + `drop()` step inside
+`lifecycle::on_shutdown` is left to a follow-up if/when background
+tasks start to retain `AppState` clones past the server stop. The
+flush itself is owned by `TelemetryGuard::Drop` per task 04, so there
+is no separate flush-task to schedule.)
 
 ## Risks
 
@@ -597,14 +761,13 @@ After landing this task:
   the guard's `Drop` is postponed until that task completes. For a
   graceful SIGTERM-then-exit flow this means the final batch is
   flushed *eventually* but the binary may exit before the flush
-  completes — losing spans. **Mitigation:** task 09 adds an explicit
-  `Arc::into_inner` + `drop()` step inside `lifecycle::on_shutdown`,
-  after awaiting other shutdown work, so the guard's `Drop` fires
-  synchronously inside `on_shutdown` and the flush completes before
-  `axum::serve` returns. This is the design path; document it in
-  task 09 with a `tracing::warn!` log when `Arc::into_inner` returns
-  `None` so operators see when background tasks held the guard past
-  shutdown.
+  completes — losing spans. **Mitigation:** the explicit
+  `Arc::into_inner` + `drop()` step inside `lifecycle::on_shutdown`
+  (sketched in step 5) makes the guard's `Drop` fire synchronously
+  inside `on_shutdown` and the flush completes before `axum::serve`
+  returns. The `tracing::warn!` log when `Arc::into_inner` returns
+  `None` makes operator-visible the case where background tasks held
+  the guard past shutdown.
 - **No `with_graceful_shutdown` in the library code path.**
   [`run` line 181](../../../crates/http-server/src/lib.rs#L181) shows
   the `not(feature = "bin")` branch uses bare `axum::serve(...).await`
@@ -612,39 +775,45 @@ After landing this task:
   without `bin` therefore never see a "graceful stop" — when their
   caller drops the future, `state` is dropped immediately, and the
   guard's `Drop` runs synchronously inside the embedder's runtime.
-  This is acceptable but worth documenting; flag in task 09 whether to
-  extend the library-only branch with a `tokio::sync::CancellationToken`
-  parameter so embedders can opt in to the same flush behaviour.
-- **Composition-order assumption.** This task assumes
-  `Registry::default().with(A).with(B).with(C)` runs A's callbacks
-  before B's before C's. That is the documented behaviour of
-  `tracing_subscriber::layer::SubscriberExt`: `Layered<L, S>::on_event`
-  invokes `self.inner.on_event` (the prior subscriber) and then
-  `self.layer.on_event` (the newly added layer). So *literally* layers
-  run **last-added-first** at the function-call level — but each
-  layer's callbacks are independent reads of the same span data, so
-  the observable behaviour is order-agnostic. The order in this doc
-  matches what the parent doc 01 specifies; both are valid because
-  no layer mutates shared state. If a future layer *does* mutate
-  shared state (e.g. attribute redaction before OTEL export), the
-  order documented here may need re-examination. Add a unit test in
-  task 04 that asserts both layers receive every span in a fixture
-  pipeline.
-- **Settings load coupling.** Calling `cognee_lib::Settings::load()`
-  before subscriber init means any tracing emitted by `Settings::load`
+  This is acceptable but worth documenting.
+- **Layer-ordering type constraint.** The boxed `Layer<Registry>`
+  returned by `init_telemetry::<Registry>` only typechecks when slotted
+  directly above `Registry`. The composition order in this doc
+  (`Registry → telemetry_layer → env_filter → fmt_layer → span_buffer_layer`)
+  is the only valid arrangement; reordering would surface as a
+  compile-time `Layer<Layered<...>>` bound failure. See task 06's
+  Implementation notes for the full type-stacking explanation. Callbacks
+  on each layer are independent reads of the same span data, so the
+  observable behaviour remains order-agnostic for current layers; if a
+  future layer mutates shared state, re-examine.
+- **`EnvSettingsView` / `Settings::default()` drift.** Because
+  `EnvSettingsView::from_env()` mirrors the defaults from
+  `crates/lib/src/config.rs::Settings::default()` (lines 644–651) but
+  does not import the type, a future change to `Settings::default()`
+  could silently desynchronise the two. Mitigation: a unit test in
+  `cognee-observability` (added in step 1, exercised by task 09)
+  asserts field-by-field equality between `EnvSettingsView::from_env()`
+  with empty env and the expected default constants — drift makes the
+  test fail loudly.
+- **Settings load coupling.** Calling `EnvSettingsView::from_env()`
+  before subscriber init means any tracing emitted during that call
   itself goes to a default subscriber (or is dropped). Decision 11
   accepts this trade-off — the alternative (two-stage init: temp
   subscriber → load settings → swap to real subscriber) introduces a
   global-subscriber-replace path that `tracing` does not natively
-  support without `with_default` scoping.
+  support without `with_default` scoping. `EnvSettingsView::from_env()`
+  is just a series of `std::env::var` reads, so it emits no spans in
+  practice.
 - **Test build with `bin` but without `telemetry`.** The `bin` feature
   is required for `main.rs` to compile (it gates `clap` and `dotenv`).
   Tests typically build the library, not the bin, so the new
   `telemetry_guard` field needs to be settable from
-  `#[cfg(test)]` `AppState` literals. Setting it to `None` is always
-  valid; verify all in-tree test fixtures that build `AppState`
-  manually (search for `AppState {` literal — currently zero hits;
-  tests use `AppState::build` so this risk is mostly theoretical).
+  `#[cfg(test)]` `AppState` literals — but only under
+  `#[cfg(feature = "telemetry")]`, since the field does not exist
+  otherwise. Setting it to `None` is always valid; verify all in-tree
+  test fixtures that build `AppState` manually (search for
+  `AppState {` literal — currently zero hits; tests use
+  `AppState::build` so this risk is mostly theoretical).
 
 ## References
 
@@ -652,16 +821,23 @@ After landing this task:
   (especially [Subscriber composition](../01-otel-otlp-export.md#subscriber-composition)
   and [Design decisions 1, 9, 10, 11](../01-otel-otlp-export.md#design-decisions-locked))
 - Sibling sub-docs:
-  - [`02-cognee-observability-crate.md`](./02-cognee-observability-crate.md)
+  - [`02-observability-crate-scaffold.md`](./02-observability-crate-scaffold.md)
   - [`03-cognee-lib-feature-wiring.md`](./03-cognee-lib-feature-wiring.md)
+  - [`04-init-telemetry-implementation.md`](./04-init-telemetry-implementation.md)
+  - [`05-cognee-lib-reexports.md`](./05-cognee-lib-reexports.md)
   - [`06-cli-subscriber-refactor.md`](./06-cli-subscriber-refactor.md)
+  - [`09-observability-unit-tests.md`](./09-observability-unit-tests.md)
+  - [`10-otel-export-integration-test.md`](./10-otel-export-integration-test.md)
 - Source files referenced:
+  - [`crates/observability/src/settings.rs`](../../../crates/observability/src/settings.rs)
+  - [`crates/observability/src/lib.rs`](../../../crates/observability/src/lib.rs)
   - [`crates/http-server/src/main.rs`](../../../crates/http-server/src/main.rs)
   - [`crates/http-server/src/lib.rs`](../../../crates/http-server/src/lib.rs)
   - [`crates/http-server/src/state.rs`](../../../crates/http-server/src/state.rs)
   - [`crates/http-server/src/observability/mod.rs`](../../../crates/http-server/src/observability/mod.rs)
   - [`crates/http-server/src/observability/span_buffer_layer.rs`](../../../crates/http-server/src/observability/span_buffer_layer.rs)
   - [`crates/http-server/Cargo.toml`](../../../crates/http-server/Cargo.toml)
+  - [`crates/lib/src/config.rs`](../../../crates/lib/src/config.rs) (default values for the OTEL settings, mirrored in `EnvSettingsView`)
 - External:
   - [`tracing_subscriber::Layer` trait docs](https://docs.rs/tracing-subscriber/latest/tracing_subscriber/layer/trait.Layer.html)
   - [`tracing_subscriber::layer::SubscriberExt::with`](https://docs.rs/tracing-subscriber/latest/tracing_subscriber/layer/trait.SubscriberExt.html#method.with)

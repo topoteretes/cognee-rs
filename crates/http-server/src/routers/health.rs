@@ -347,6 +347,8 @@ mod tests {
             health: Some(Arc::new(checker)),
             spans: Arc::new(crate::observability::SpanBuffer::default()),
             sync: Arc::new(crate::sync::SyncRegistry::new()),
+            #[cfg(feature = "telemetry")]
+            telemetry_guard: None,
         };
         // Suppress unused assignment warning — state is consumed by with_state.
         let _ = &mut state;

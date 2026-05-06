@@ -69,6 +69,8 @@ async fn build_sessions_state() -> AppState {
         health: None,
         spans: std::sync::Arc::new(cognee_http_server::observability::SpanBuffer::default()),
         sync: std::sync::Arc::new(cognee_http_server::sync::SyncRegistry::new()),
+        #[cfg(feature = "telemetry")]
+        telemetry_guard: None,
     }
 }
 
