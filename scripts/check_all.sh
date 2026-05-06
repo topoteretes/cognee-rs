@@ -27,6 +27,18 @@ cargo clippy --all-targets -- -D warnings
 
 echo ""
 echo "================================================================"
+echo "=== Rust: Compilation check (telemetry feature) ==="
+echo "================================================================"
+cargo check --all-targets --features telemetry
+
+echo ""
+echo "================================================================"
+echo "=== Rust: Compilation check (no default features, cognee-lib) ==="
+echo "================================================================"
+cargo check -p cognee-lib --no-default-features
+
+echo ""
+echo "================================================================"
 echo "=== C API: Building and running examples ==="
 echo "================================================================"
 "$REPO_ROOT/capi/scripts/check.sh"

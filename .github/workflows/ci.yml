@@ -63,6 +63,35 @@ jobs:
       - name: clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
 
+      # Telemetry feature is OFF by default per design decision 1, so the
+      # default `cargo check --all-targets` above only covers the noop arm.
+      # This step exercises the OTEL-on code path (init_telemetry, OTLP
+      # exporter, tracing-opentelemetry bridge) at compile time.
+      - name: Compilation check (telemetry feature)
+        env:
+          CARGO_TARGET_DIR: target/telemetry
+        run: cargo check --all-targets --features telemetry
+
+      # Mirror of the above for clippy. Catches cfg-gated lints that the
+      # noop-arm clippy run cannot see. We do NOT pass `--all-features`
+      # because the workspace also ships android-* features that change
+      # link targets; we want the precise (default + telemetry) combo a
+      # downstream user would enable via `cargo build --features telemetry`.
+      - name: clippy (telemetry feature)
+        env:
+          CARGO_TARGET_DIR: target/telemetry
+        run: cargo clippy --all-targets --features telemetry -- -D warnings
+
+      # Canary for cfg(not(feature = "telemetry")) drift: ensures the noop
+      # path in cognee-observability compiles cleanly even if `default`
+      # ever grows a transitive dep that accidentally enables telemetry.
+      # Scoped to `-p cognee-lib` to keep the build small (no rebuild of
+      # the full workspace's binaries).
+      - name: Compilation check (no default features)
+        env:
+          CARGO_TARGET_DIR: target/no-default
+        run: cargo check -p cognee-lib --no-default-features
+
   # ── Stage 2: Build and run tests (depends on lint) ────────────────────
   test:
     name: Test (stable)
@@ -125,8 +154,26 @@ jobs:
       - name: Test
         run: bash scripts/run_tests_with_openai.sh
 
+      # Telemetry-feature test lane. The integration test from task 01-10
+      # spawns an in-process tonic gRPC server on 127.0.0.1:0; no external
+      # OTLP collector is needed. Scoped to `-p cognee-observability`
+      # because that is where init_telemetry, OtelGuard, and the OTLP
+      # parity tests live; the rest of the workspace is already tested
+      # in the noop arm above.
+      - name: Test (telemetry feature)
+        env:
+          CARGO_TARGET_DIR: target/telemetry
+        run: cargo test -p cognee-observability --features telemetry -- --nocapture
+
       - name: Build docs
         run: cargo doc --no-deps
+
+      # Optional: rustdoc with the telemetry feature on, to catch
+      # cfg(feature = "telemetry") doc-link breakage from task 01-11.
+      - name: Build docs (telemetry feature)
+        env:
+          CARGO_TARGET_DIR: target/telemetry
+        run: cargo doc --no-deps --features telemetry
 
   # ── Stage 3: Language binding checks (depends on test, parallel with each other) ──
   capi-check:

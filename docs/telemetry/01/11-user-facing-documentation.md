@@ -1,6 +1,6 @@
 # Task 11 — User-facing OpenTelemetry documentation
 
-**Status:** Planned
+**Status**: Implemented in commit 06ece23
 **Owner:** Observability working group
 **Depends on:** Tasks [02 — observability crate scaffold](02-observability-crate-scaffold.md), [03 — `cognee-lib` feature wiring](03-cognee-lib-feature-wiring.md), 04 — config field additions, [05 — `cognee-lib` re-exports](05-cognee-lib-reexports.md), [06 — CLI subscriber refactor](06-cli-subscriber-refactor.md), 07 — HTTP-server subscriber refactor, 08 — no-deps fallback. The doc must describe the public API and env vars **as shipped**, so it lands after the implementation tasks settle.
 **Referenced by:** Task 12 (CI) — the no-default-features lane should also build the rustdoc snippets that this task adds.
