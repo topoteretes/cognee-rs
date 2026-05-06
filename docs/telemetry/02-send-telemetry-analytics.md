@@ -581,44 +581,51 @@ fixture files trivially regenerable and serves as evidence of byte-parity.
 
 ## Action items
 
-1. **Add deps** to [`Cargo.toml`](../../Cargo.toml) `[workspace.dependencies]`:
-   `pbkdf2 = "0.12"`, `hmac = "0.12"`, `hex = "0.4"`. (`reqwest`, `sha2`,
-   `serde_json`, `dirs`, `chrono`, `tracing`, `uuid` already present.)
-2. **Create** `crates/utils/src/telemetry/` with submodules `ids`,
-   `sanitize`, `payload`, `client`, `env` per the layout above.
-3. **Wire** `cognee-utils`'s new `telemetry` feature flag and re-export
-   `pub use telemetry::send_telemetry;` from
-   [`crates/utils/src/lib.rs`](../../crates/utils/src/lib.rs).
-4. **Propagate** the `telemetry` feature up through
-   [`crates/lib/Cargo.toml`](../../crates/lib/Cargo.toml) and
-   [`crates/cli/Cargo.toml`](../../crates/cli/) default lists.
-5. **Replace** the tracing-only block at
-   [`crates/lib/src/api/forget.rs:103-123`](../../crates/lib/src/api/forget.rs#L103-L123)
-   with a real `send_telemetry()` call.
-6. **Port the rest of the catalog** (table above): pipeline lifecycle in
-   `crates/core/src/pipeline.rs`, task lifecycle in
-   `crates/core/src/task.rs`, search in `crates/search/src/orchestrator.rs`,
-   recall/remember in `crates/lib/src/api/`, plus the HTTP-server router
-   files in `crates/http-server/src/routers/`.
-7. **Unit tests** under `crates/utils/src/telemetry/` covering:
-   - PBKDF2 byte-level parity vs Python fixture
-   - `ak_` prefix + 32-hex-char length invariants
-   - Different keys with same visible tail produce different IDs
-     (mirror of `test_api_key_tracking_id_uses_full_key_not_visible_tail`)
-   - Custom salt env var produces different ID
-     (mirror of `test_api_key_tracking_id_supports_deployment_salt`)
-   - `_sanitize_nested_properties` recursively replaces `url` keys
-   - Empty `LLM_API_KEY` → empty string
-   - Persistent ID file is created on first read and stable on second read
-8. **Integration test** spinning up a `wiremock` proxy on `127.0.0.1`,
-   redirecting `PROXY_URL` via a test-only env override, asserting the JSON
-   body matches the Python schema exactly (including `api_key_hash` alias).
-9. **Opt-out integration test**: set `TELEMETRY_DISABLED=1` and verify the
-   wiremock receives zero requests over a 1s window.
-10. **Cross-SDK e2e**: extend `e2e-cross-sdk/` with a test that sets a fixed
-    `LLM_API_KEY`, runs Python `send_telemetry` and Rust `send_telemetry`
-    against a single shared wiremock, and asserts both payloads carry the
-    same `api_key_tracking_id` and `persistent_id`.
+Each item below has a dedicated implementation sub-document under [`02/`](02/) with rationale, prerequisites, step-by-step source-level changes, verification commands, files modified, and risks. **The sub-docs are authoritative**: where they refine details based on the locked design decisions (especially decision 1 — `telemetry` is **on** by default for `cognee-lib`/`cognee-cli` — and decision 6 — code lives in a new `cognee-telemetry` crate, not inside `cognee-utils`), follow the sub-doc rather than the high-level summary here.
+
+| # | Action item | Sub-doc | Depends on | Status |
+|---|---|---|---|---|
+| 1 | Add workspace dependencies (`pbkdf2 = "0.12"`, `hmac = "0.12"`, `hex = "0.4"`, `once_cell = "1"`) to `[workspace.dependencies]`. Confirm `reqwest`, `sha2`, `serde_json`, `dirs`, `chrono`, `tracing`, `uuid` are already present. | [02/01-workspace-deps.md](02/01-workspace-deps.md) | — | ⬜ |
+| 2 | Create the new `cognee-telemetry` workspace crate (manifest, `lib.rs` skeleton, feature wiring, register in workspace `members`). Scaffold only — implementations land in tasks 3–6. | [02/02-telemetry-crate-scaffold.md](02/02-telemetry-crate-scaffold.md) | 1 | ⬜ |
+| 3 | Implement the three identity layers: `get_anonymous_id` (`<project_root>/.anon_id` + `TRACKING_ID` override), `get_persistent_id` (`~/.cognee/.persistent_id`), and `get_api_key_tracking_id` (PBKDF2-HMAC-SHA256, 100 000 iter, dklen 16, byte-parity to Python). | [02/03-id-derivation.md](02/03-id-derivation.md) | 2 | ⬜ |
+| 4 | Implement `TelemetryPayload` (serde-serialized, exact Python field names including `api_key_hash` alias) and the recursive `sanitize_nested_properties` helper that hashes `url` keys via `uuid5(NAMESPACE_OID, value)`. | [02/04-payload-and-sanitize.md](02/04-payload-and-sanitize.md) | 2 | ⬜ |
+| 5 | Implement the HTTP client (`reqwest` singleton, fire-and-forget `tokio::spawn`), opt-out checks (`TELEMETRY_DISABLED`, `ENV in {test,dev}`), and the runtime-fallback path (decision 5 — log warning + spin up a one-shot single-thread `Runtime` when no tokio handle is present). | [02/05-client-dispatch-and-optout.md](02/05-client-dispatch-and-optout.md) | 3, 4 | ⬜ |
+| 6 | Wire the `telemetry` feature through `cognee-telemetry`, `cognee-lib` (default ON per decision 1), `cognee-cli` (default ON), `android-default` (OFF). Implement the noop fallback so the public API compiles when the feature is off. Export `cognee_lib::telemetry::send_telemetry`. | [02/06-public-api-and-noop.md](02/06-public-api-and-noop.md) | 2, 5 | ⬜ |
+| 7 | Replace the placeholder in [`crates/lib/src/api/forget.rs:103-123`](../../crates/lib/src/api/forget.rs#L103-L123) with a real `send_telemetry` call. Port all SDK call sites (`recall`, `remember`, `improve`, search orchestrator, session add_qa) and HTTP router endpoints (~30 handlers). Pipeline + task lifecycle (`Pipeline Run Started/Completed/Errored`, `${task_type} Task Started/Completed/Errored`) is split out to gap [03](../03-pipeline-task-api-events.md). | [02/07-callsite-migration.md](02/07-callsite-migration.md) | 6 | ⬜ |
+| 8 | Unit tests under `crates/telemetry/src/`: PBKDF2 byte-parity vs Python fixture, `ak_` format invariants, custom-salt divergence, empty `LLM_API_KEY`, sanitize URL replacement, anonymous/persistent file create + read-stable, opt-out env checks. | [02/08-unit-tests.md](02/08-unit-tests.md) | 3, 4, 5 | ⬜ |
+| 9 | Integration tests with `mockito` (workspace already uses it; do **not** add `wiremock`): full payload schema parity vs Python (jsonschema), opt-out via `TELEMETRY_DISABLED`, fire-and-forget timeout (proxy stalls, dispatch returns < 100 ms). | [02/09-integration-tests.md](02/09-integration-tests.md) | 5, 7 | ⬜ |
+| 10 | Cross-SDK parity test: extend `e2e-cross-sdk/` with a shared mock that records both Python and Rust telemetry payloads for the same `LLM_API_KEY` and home directory; assert identical `api_key_tracking_id` and `persistent_id`. | [02/10-cross-sdk-parity.md](02/10-cross-sdk-parity.md) | 7, 9 | ⬜ |
+| 11 | User-facing docs: `docs/observability/send_telemetry.md` (env vars, opt-out recipes, privacy note, salt rotation, payload schema, troubleshooting). Plus rustdoc on the public API and a README pointer. | [02/11-user-docs.md](02/11-user-docs.md) | 5, 6, 7 | ⬜ |
+| 12 | CI updates: ensure both `--features telemetry` and `--no-default-features` lanes cover the new crate; add a network-isolation lane that asserts no outbound HTTP fires when `TELEMETRY_DISABLED=1`. | [02/12-ci-updates.md](02/12-ci-updates.md) | 7, 8, 9 | ⬜ |
+
+### Suggested execution order
+
+A clean PR sequence based on the dependency graph above:
+
+1. **PR 1** (foundation): tasks 01 + 02 — workspace deps, new crate scaffold.
+2. **PR 2** (parity-critical core): tasks 03 + 04 — ID derivation (PBKDF2 byte-parity is the load-bearing piece) and payload/sanitize.
+3. **PR 3** (transport + public surface): tasks 05 + 06 — client/dispatch/opt-out, feature wiring through `cognee-lib` + `cognee-cli`, noop fallback. The noop must land with the real impl so default-off builds keep working.
+4. **PR 4** (callsites + tests): tasks 07 + 08 + 09 — replace `forget.rs` placeholder, port the catalog, unit + integration tests.
+5. **PR 5** (cross-SDK + ops): tasks 10 + 11 + 12 — Python ↔ Rust parity test, user docs, CI lanes.
+
+## Design decisions (locked)
+
+These supersede the earlier "Open questions" — answers were obtained from the project owner on 2026-05-06 and are the binding contract for all per-task sub-docs under [`02/`](02/).
+
+| # | Decision | Resolution | Implication |
+|---|---|---|---|
+| 1 | `telemetry` cargo feature default | **ON** by default in `cognee-lib` and `cognee-cli`; **OFF** in `android-default` (mirrors Python's enabled-by-default with `TELEMETRY_DISABLED` kill switch) | Plain `cargo build` of `cognee-cli` ships telemetry; Android builds opt out. Users disable at runtime via `TELEMETRY_DISABLED=1` or compile-time via `--no-default-features`. |
+| 2 | Proxy URL | **Reuse** Python's `https://test.prometh.ai`. Add a new property field `sdk_runtime: "rust"` (alongside `cognee_version`) so dashboards can distinguish SDK origin without losing cross-SDK identity grouping | Same proxy, same identity space — one user moving between SDKs counts as one. |
+| 3 | `Pipeline Run Started` settings dump | **Hand-curated subset** — provider names, model names, feature flags only. **Never** serialize the full `Config` struct (would leak deployment URLs/keys) | Define a `current_settings_for_telemetry()` helper that explicitly lists allowed fields. Detail belongs in gap [03](../03-pipeline-task-api-events.md), but the principle is locked here. |
+| 4 | Emission ownership | **SDK function = single source of truth.** HTTP routers and CLI subcommands add a thin `endpoint` property (e.g. `endpoint = "POST /api/v1/forget"`) but do **not** duplicate the SDK-level event | Avoids double-counting. Routers wrap the SDK call and `additional_properties` is merged with the router's contribution. |
+| 5 | Tokio runtime fallback | When `tokio::runtime::Handle::try_current()` returns `Err`, log a warning at `WARN` level (`tracing::warn!`) and spin up a one-shot `tokio::runtime::Builder::new_current_thread().enable_io().enable_time().build()` to dispatch the request, blocking up to `TELEMETRY_REQUEST_TIMEOUT` | Embedded/Android entry points still emit events; the warning surfaces the inefficiency so callers can switch to async if they care. |
+| 6 | Module placement | New workspace crate **`cognee-telemetry`** (sibling of `cognee-utils`, `cognee-observability`, etc.) | Keeps the dep set (`pbkdf2`, `hmac`, `reqwest`) out of `cognee-utils`'s blast radius. Mirrors the per-concern crate split that gap 01 used for `cognee-observability`. |
+| 7 | Sub-doc grouping | Twelve sub-docs under [`02/`](02/) following the gap 01 pattern (00-runbook + 01..12 per-task) | Action items in this parent doc are grouped (e.g. "client + dispatch + opt-out" → one sub-doc) so the count matches gap 01 even though Python's surface is wider. |
+| 8 | Investigation depth | Same as gap 01: per-file line-number citations, full step-by-step diffs, verification commands, files modified, risks | Sub-docs must be self-contained enough that a fresh Claude Code session can drive each task with no prior context. |
+| 9 | Pipeline / task lifecycle events | **Out of scope** for this gap — moved to gap [03](../03-pipeline-task-api-events.md). This gap covers the *transport* (`send_telemetry` itself + identity layers + opt-out + the existing `forget.rs` placeholder + a representative slice of SDK + router callsites) | Keeps gap 02 shippable in one initiative; gap 03 then reuses the transport for the high-volume pipeline events. |
+| 10 | HTTP-mocking library | **`mockito`** (already a dev-dep of `cognee-cli` and `cognee-cloud`) — do **not** introduce `wiremock` | Avoids a redundant test dep; one HTTP-mock library across the workspace. |
+| 11 | Provenance of API key | The `api_key_tracking_id` derivation reads `LLM_API_KEY` from the process environment at *event-emission time*, **not** at startup | Matches Python's lazy read in `_get_api_key_tracking_id()`. Allows tests to set the env in-test without re-importing. |
+| 12 | Salt overrides for deployments | Honour `TELEMETRY_API_KEY_TRACKING_SALT` (UTF-8 bytes of the env value) — same name and semantics as Python | A deployment can put its fleet in a private namespace; default public salt is intentionally well-known so OSS installs converge to one analytics namespace. |
 
 ---
 
@@ -671,33 +678,13 @@ analytics namespace.
 
 ## Open questions
 
-1. **Default state.** Python defaults to *enabled*, with `TELEMETRY_DISABLED`
-   as the kill switch. Should Rust mirror this (enabled by default for SDK
-   parity), or should it default to *disabled* for the more privacy-sensitive
-   edge/Android target audience? Recommendation: **enabled by default in the
-   `cognee-lib` build, disabled by default in the `cognee-android` build**.
-2. **Proxy URL.** Reuse `https://test.prometh.ai`, or stand up a separate
-   Rust-namespaced endpoint (e.g. `https://rust.prometh.ai`) so analytics
-   dashboards can distinguish SDK origin without a payload field?
-   Recommendation: add a `sdk_runtime: "rust"` field to `properties` and
-   reuse the same URL — keeps cross-SDK identity grouping intact.
-3. **Settings dump.** Python's `Pipeline Run Started` payload spreads the
-   full `get_current_settings()` dict into `additional_properties`. The
-   equivalent Rust struct is `cognee_lib::config::Config` — should we serialize
-   the whole thing (potentially leaking deployment-specific configuration), or
-   pick a hand-curated subset (provider names, model names, feature flags but
-   not URLs/keys)?
-4. **CLI vs library callsites.** Python's analytics fires from `aiohttp`
-   route handlers — i.e. the HTTP server. Rust today has both
-   `crates/cli` (interactive) and `crates/http-server`. Should both layers
-   emit events, or only one to avoid double-counting? Recommendation: emit
-   from the SDK function (single source of truth), have routers/CLI add a
-   thin "endpoint" property.
-5. **Tokio runtime requirement.** `dispatch()` requires a current tokio
-   runtime. The CLI binary already wraps `main` in `#[tokio::main]`. Is there
-   any embedded/Android entry point that calls into cognee from a non-async
-   context? If so, the dispatch helper should fall back to spinning up a
-   one-shot single-thread runtime, or simply log and drop.
+These were superseded by the [Design decisions (locked)](#design-decisions-locked) table above on 2026-05-06. Kept here as a paper trail of the original questions and the rationale considered before locking.
+
+1. ~~**Default state.**~~ Resolved by decision 1 — ON by default in `cognee-lib`/`cognee-cli`, OFF in `android-default`.
+2. ~~**Proxy URL.**~~ Resolved by decision 2 — reuse `https://test.prometh.ai`, add `sdk_runtime: "rust"` field.
+3. ~~**Settings dump.**~~ Resolved by decision 3 — hand-curated subset; never serialize full `Config`.
+4. ~~**CLI vs library callsites.**~~ Resolved by decision 4 — SDK function is single source of truth; routers/CLI add `endpoint` property.
+5. ~~**Tokio runtime requirement.**~~ Resolved by decision 5 — log warning + spin up a one-shot single-thread runtime.
 
 ---
 
