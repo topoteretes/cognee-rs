@@ -1,23 +1,30 @@
-//! Input struct for [`crate::init_telemetry`].
+//! Read-only view of the observability-relevant subset of `Settings`.
 //!
-//! Defined here (rather than re-using `cognee_lib::config::Settings`) so
-//! that this crate sits at the bottom of the workspace dependency graph
-//! and does not pull in `cognee-lib`. `cognee-lib` constructs a
-//! `TelemetrySettings` from its own `Settings` in task 05.
+//! Defined here (not in `cognee-lib`) to avoid a hard dependency on the
+//! umbrella crate. `cognee-lib::Settings` implements this trait in a
+//! sibling task so HTTP middleware and other upstream callers can drive
+//! [`crate::init_telemetry`] without going through `cognee-lib`.
 
-/// Subset of cognee settings required to initialize OpenTelemetry.
+/// Borrow-only adapter over the OTEL fields of cognee `Settings`.
 ///
-/// Keeping this struct minimal lets us evolve `cognee-lib::Settings`
-/// without breaking the observability ABI.
-#[derive(Debug, Clone, Default)]
-#[non_exhaustive]
-pub struct TelemetrySettings {
+/// All accessors return `&str` / `bool` so implementations can avoid
+/// cloning. `Send + Sync` so the trait object can travel across async
+/// task boundaries.
+pub trait SettingsView: Send + Sync {
     /// Mirrors `Settings.cognee_tracing_enabled`.
-    pub tracing_enabled: bool,
+    fn tracing_enabled(&self) -> bool;
     /// Mirrors `Settings.otel_service_name`.
-    pub service_name: String,
+    fn service_name(&self) -> &str;
     /// Mirrors `Settings.otel_exporter_otlp_endpoint`.
-    pub exporter_otlp_endpoint: String,
+    fn otlp_endpoint(&self) -> &str;
     /// Mirrors `Settings.otel_exporter_otlp_headers`.
-    pub exporter_otlp_headers: String,
+    fn otlp_headers(&self) -> &str;
+    /// Mirrors `Settings.otel_exporter_otlp_protocol`.
+    fn otlp_protocol(&self) -> &str;
+    /// Mirrors `Settings.otel_span_processor`.
+    fn span_processor(&self) -> &str;
+    /// Mirrors `Settings.otel_traces_sampler`.
+    fn traces_sampler(&self) -> &str;
+    /// Mirrors `Settings.otel_traces_sampler_arg`.
+    fn traces_sampler_arg(&self) -> &str;
 }

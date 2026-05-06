@@ -688,10 +688,16 @@ where
 
         // Use the cloned provider for our own tracer so the bridge
         // does not depend on the global state being set.
+        //
+        // 0.31 removed `tracer_builder("cognee")` in favour of
+        // building an `InstrumentationScope` and passing it to
+        // `tracer_with_scope`.
         use opentelemetry::trace::TracerProvider as _;
-        let tracer = provider.tracer_builder("cognee")
+        use opentelemetry::InstrumentationScope;
+        let scope = InstrumentationScope::builder("cognee")
             .with_version(env!("CARGO_PKG_VERSION"))
             .build();
+        let tracer = provider.tracer_with_scope(scope);
         let layer = tracing_opentelemetry::layer().with_tracer(tracer);
 
         Ok((Box::new(layer), TelemetryGuard::from_provider(provider)))

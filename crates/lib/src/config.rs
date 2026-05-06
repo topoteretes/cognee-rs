@@ -138,6 +138,28 @@ pub struct Settings {
     pub otel_exporter_otlp_endpoint: String,
     pub otel_exporter_otlp_headers: String,
 
+    /// OTLP transport: `"grpc"` (default) or `"http/protobuf"`.
+    /// Mirrors the OTEL spec env var `OTEL_EXPORTER_OTLP_PROTOCOL`.
+    pub otel_exporter_otlp_protocol: String,
+
+    /// Span processor mode: `"batch"` (default) or `"simple"`.
+    /// `simple` is synchronous-per-span and intended only for
+    /// debugging or for collectors known to misbehave with batches.
+    pub otel_span_processor: String,
+
+    /// Sampler name passed through to the OTEL SDK.
+    /// Empty string means: do not override; let the SDK read
+    /// `OTEL_TRACES_SAMPLER` itself (default `parentbased_always_on`).
+    /// Recognised values follow the OTEL spec:
+    /// `always_on`, `always_off`, `traceidratio`, `parentbased_always_on`,
+    /// `parentbased_always_off`, `parentbased_traceidratio`.
+    pub otel_traces_sampler: String,
+
+    /// Argument for the sampler. Currently only meaningful for the
+    /// `traceidratio` / `parentbased_traceidratio` samplers, which expect
+    /// a 0.0–1.0 ratio. Empty string means: do not override.
+    pub otel_traces_sampler_arg: String,
+
     // -- Feature flags -----------------------------------------------------------
     pub enable_last_accessed: bool,
 }
@@ -473,6 +495,18 @@ impl Settings {
         if let Some(v) = str_var("OTEL_EXPORTER_OTLP_HEADERS") {
             self.otel_exporter_otlp_headers = v;
         }
+        if let Some(v) = str_var("OTEL_EXPORTER_OTLP_PROTOCOL") {
+            self.otel_exporter_otlp_protocol = v;
+        }
+        if let Some(v) = str_var("OTEL_SPAN_PROCESSOR") {
+            self.otel_span_processor = v;
+        }
+        if let Some(v) = str_var("OTEL_TRACES_SAMPLER") {
+            self.otel_traces_sampler = v;
+        }
+        if let Some(v) = str_var("OTEL_TRACES_SAMPLER_ARG") {
+            self.otel_traces_sampler_arg = v;
+        }
 
         // -- Feature flags -------------------------------------------------------
         if let Some(v) = str_var("ENABLE_LAST_ACCESSED") {
@@ -611,6 +645,10 @@ impl Default for Settings {
             otel_service_name: "cognee".to_string(),
             otel_exporter_otlp_endpoint: String::new(),
             otel_exporter_otlp_headers: String::new(),
+            otel_exporter_otlp_protocol: "grpc".to_string(),
+            otel_span_processor: "batch".to_string(),
+            otel_traces_sampler: String::new(),
+            otel_traces_sampler_arg: String::new(),
 
             // Feature flags
             enable_last_accessed: false,

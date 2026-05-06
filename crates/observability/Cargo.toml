@@ -12,6 +12,8 @@ telemetry = [
     "dep:opentelemetry-otlp",
     "dep:opentelemetry-semantic-conventions",
     "dep:tracing-opentelemetry",
+    "dep:tonic",
+    "dep:http",
 ]
 
 [dependencies]
@@ -24,6 +26,11 @@ opentelemetry_sdk = { workspace = true, optional = true }
 opentelemetry-otlp = { workspace = true, optional = true }
 opentelemetry-semantic-conventions = { workspace = true, optional = true }
 tracing-opentelemetry = { workspace = true, optional = true }
+# Required for building gRPC `MetadataMap` headers when the `telemetry`
+# feature is enabled. Pinned to the version `opentelemetry-otlp 0.31`
+# uses transitively, so a single tonic 0.14 graph is reused.
+tonic = { version = "=0.14", default-features = false, optional = true }
+http = { version = "1", optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
