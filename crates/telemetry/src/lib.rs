@@ -50,14 +50,8 @@ pub type PropertyValue = ();
 /// `api_key_tracking_id`). See [`docs/telemetry/02/03-id-derivation.md`]
 /// for the design.
 pub mod ids;
-pub mod sanitize {
-    //! URL-sanitisation. Implementation lands in
-    //! `docs/telemetry/02/04-payload-and-sanitize.md`.
-}
-pub mod payload {
-    //! `TelemetryPayload` serde struct. Implementation lands in
-    //! `docs/telemetry/02/04-payload-and-sanitize.md`.
-}
+pub mod payload;
+pub mod sanitize;
 pub mod env {
     //! Env-var parsing and opt-out checks. Implementation lands in
     //! `docs/telemetry/02/05-client-dispatch-and-optout.md`.
