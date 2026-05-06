@@ -284,7 +284,7 @@ monitoring_tool: object = Observer.NONE
 
 Each gap is broken out into a dedicated sub-document with deep investigation, design, and numbered action items.
 
-1. **Wire OpenTelemetry SDK + OTLP exporter** — makes the existing `OTEL_*` config fields actually do something. Add `tracing-opentelemetry` bridge so all 51 existing `#[instrument]` spans flow out. → [01-otel-otlp-export.md](01-otel-otlp-export.md) (3/12 sub-tasks complete)
+1. **Wire OpenTelemetry SDK + OTLP exporter** — makes the existing `OTEL_*` config fields actually do something. Add `tracing-opentelemetry` bridge so all 51 existing `#[instrument]` spans flow out. → [01-otel-otlp-export.md](01-otel-otlp-export.md) (4/12 sub-tasks complete)
 2. **Implement `send_telemetry()` analytics client** — proxy URL, anon/persistent ID files, PBKDF2 api-key tracking ID, opt-out semantics, async fire-and-forget HTTP. → [02-send-telemetry-analytics.md](02-send-telemetry-analytics.md)
 3. **Emit pipeline & task lifecycle events** — `Pipeline Run Started/Completed/Errored`, per-task variants, and API events (`cognee.recall`, `cognee.improve`, `cognee.forget`). → [03-pipeline-task-api-events.md](03-pipeline-task-api-events.md)
 4. **Instrument DB adapters** — Qdrant, Ladybug, SeaORM/SQLite with `cognee.db.{vector,graph}.{search,query}` spans + `cognee.db.system/query/row_count` attributes; promote `redact_secrets()` to `cognee-utils`. → [04-db-adapter-instrumentation.md](04-db-adapter-instrumentation.md)

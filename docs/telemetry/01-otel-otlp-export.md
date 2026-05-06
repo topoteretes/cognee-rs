@@ -492,7 +492,7 @@ Each item below has a dedicated implementation sub-document under [`01/`](01/) w
 | 1 | Add OpenTelemetry workspace dependencies (`opentelemetry`, `opentelemetry_sdk`, `opentelemetry-otlp`, `opentelemetry-semantic-conventions`, `tracing-opentelemetry`) pinned to `=0.31` / `=0.32` with both `grpc-tonic` and `http-proto` features. | [01/01-workspace-otel-deps.md](01/01-workspace-otel-deps.md) | — | ✅ 8cc50bb |
 | 2 | Create the new `cognee-observability` workspace crate (manifest, `lib.rs` skeleton, feature wiring, register in workspace `members`). Scaffold only — implementation lands in task 4. | [01/02-observability-crate-scaffold.md](01/02-observability-crate-scaffold.md) | 1 | ✅ c88df3d |
 | 3 | Forward the `telemetry` feature through `cognee-lib`, `cognee-cli`, and `cognee-http-server` to `cognee-observability/telemetry` + `cognee-core/telemetry`. **Not** in any `default = [...]` per decision 1. | [01/03-cognee-lib-feature-wiring.md](01/03-cognee-lib-feature-wiring.md) | 2 | ✅ ef813b9 |
-| 4 | Implement `init_telemetry`, `TelemetryGuard`, `is_tracing_enabled`, `already_instrumented`, `parse_otlp_headers`, plus four new `Settings` fields (`otel_exporter_otlp_protocol`, `otel_span_processor`, `otel_traces_sampler`, `otel_traces_sampler_arg`) with env overlay. | [01/04-init-telemetry-implementation.md](01/04-init-telemetry-implementation.md) | 1, 2, 3 | |
+| 4 | Implement `init_telemetry`, `TelemetryGuard`, `is_tracing_enabled`, `already_instrumented`, `parse_otlp_headers`, plus four new `Settings` fields (`otel_exporter_otlp_protocol`, `otel_span_processor`, `otel_traces_sampler`, `otel_traces_sampler_arg`) with env overlay. | [01/04-init-telemetry-implementation.md](01/04-init-telemetry-implementation.md) | 1, 2, 3 | ✅ 9b99576 |
 | 5 | Re-export the public observability API from `cognee_lib::observability` so embedders use it through the umbrella crate. | [01/05-cognee-lib-reexports.md](01/05-cognee-lib-reexports.md) | 2, 3, 4 | |
 | 6 | Refactor `crates/cli/src/main.rs`: move `load_settings()` into `main()` ahead of subscriber init (decision 11), compose the OTEL bridge layer with the existing `fmt` layer, hold the `TelemetryGuard` for the lifetime of `main`. | [01/06-cli-subscriber-refactor.md](01/06-cli-subscriber-refactor.md) | 4, 5 | |
 | 7 | Refactor the HTTP server subscriber: compose `fmt` + OTEL bridge + `SpanBufferLayer`, store `TelemetryGuard` on `AppState` (decision 9), ensure flush on graceful shutdown. | [01/07-http-server-subscriber-refactor.md](01/07-http-server-subscriber-refactor.md) | 4, 5 | |
@@ -501,6 +501,9 @@ Each item below has a dedicated implementation sub-document under [`01/`](01/) w
 | 10 | End-to-end integration test against an in-process tonic fake `TraceService`: assert spans actually flow over OTLP. | [01/10-otel-export-integration-test.md](01/10-otel-export-integration-test.md) | 4, 6, 9 | |
 | 11 | User-facing documentation: new `docs/observability/opentelemetry.md` with env-var table, recipes (Tempo, Honeycomb, Dash0, in-cluster collector), span catalog, troubleshooting. Plus rustdoc updates and a README pointer. | [01/11-user-facing-documentation.md](01/11-user-facing-documentation.md) | 2–8 | |
 | 12 | CI updates: add `--features telemetry` lanes (`check`, `clippy`, `test`, optional `doc`) and a `--no-default-features` lane in `.github/workflows/ci.yml` and `scripts/check_all.sh`. | [01/12-ci-updates.md](01/12-ci-updates.md) | 4, 8, 9, 10 | |
+
+Note: an out-of-band rename fixup commit `27c2bb2` aligned identifier
+names across the observability crate; no logic change.
 
 ### Suggested execution order
 

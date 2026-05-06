@@ -2,7 +2,7 @@
 
 ## Status
 
-Not started.
+**Status**: Implemented in commit 9b99576
 
 ## Owner / dependencies
 
@@ -975,6 +975,29 @@ fully cover this task. The one borderline item, "should
 `already_instrumented` use Debug-sniffing or downcasting?", is
 documented inline as a `// FIXME(otel-0.32+):` review note rather
 than escalated.
+
+## Implementation notes
+
+The implementation deviates from this sub-doc text in three intentional ways:
+
+1. **`deployment.environment.name` literal.** The resource builder uses the
+   literal string `"deployment.environment.name"` instead of
+   `semres::DEPLOYMENT_ENVIRONMENT_NAME` because that constant is gated
+   behind the `semconv_experimental` feature in
+   `opentelemetry-semantic-conventions` 0.31. The string value matches
+   the spec, so wire format is identical.
+2. **Inline `init.rs` instead of `real.rs`/`noop.rs`.** Rather than
+   splitting the implementation into `crates/observability/src/real.rs`
+   and `crates/observability/src/noop.rs`, the feature-on and feature-off
+   paths live as inline `cfg(feature = "telemetry")` branches inside
+   a single new `crates/observability/src/init.rs`. Same observable
+   behaviour, simpler module shape.
+3. **`tonic` and `http` added as optional deps.** `tonic = "=0.14"` and
+   `http = "1"` were added to `crates/observability/Cargo.toml` under the
+   `telemetry` feature so the gRPC exporter branch can construct a
+   `MetadataMap`. `opentelemetry-otlp` 0.31 only re-exports `MetadataMap`
+   itself — not `MetadataKey` / `MetadataValue` — so we depend on `tonic`
+   directly for those types.
 
 ## References
 
