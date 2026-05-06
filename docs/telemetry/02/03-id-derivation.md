@@ -327,18 +327,30 @@ live in [task 02-08](08-unit-tests.md)):
 mod smoke {
     use super::*;
 
+    // Note: workspace uses Rust edition 2024, where `std::env::set_var`
+    // and `std::env::remove_var` are `unsafe` (concurrent env mutation
+    // is process-wide UB). The full byte-parity matrix in task 02-08
+    // adds `serial_test::serial` so the unsafe is sound; these smoke
+    // tests follow the same pattern.
+
     #[test]
     fn empty_llm_api_key_produces_empty_tracking_id() {
-        // SAFETY: tests setting env are gated by serial_test in 02-08.
-        std::env::remove_var("LLM_API_KEY");
-        std::env::remove_var("TELEMETRY_API_KEY_TRACKING_SALT");
+        // SAFETY: no other thread mutates env in this single-test block;
+        //   full ordering across the suite is enforced in 02-08 via serial_test.
+        unsafe {
+            std::env::remove_var("LLM_API_KEY");
+            std::env::remove_var("TELEMETRY_API_KEY_TRACKING_SALT");
+        }
         assert_eq!(get_api_key_tracking_id(), "");
     }
 
     #[test]
     fn tracking_id_format() {
-        std::env::set_var("LLM_API_KEY", "sk-test");
-        std::env::remove_var("TELEMETRY_API_KEY_TRACKING_SALT");
+        // SAFETY: see sibling test.
+        unsafe {
+            std::env::set_var("LLM_API_KEY", "sk-test");
+            std::env::remove_var("TELEMETRY_API_KEY_TRACKING_SALT");
+        }
         let id = get_api_key_tracking_id();
         assert!(id.starts_with("ak_"));
         assert_eq!(id.len(), 3 + 32);

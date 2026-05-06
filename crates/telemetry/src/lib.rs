@@ -46,10 +46,10 @@ pub type PropertyValue = ();
 // Modules that are always compiled (their bodies vary by feature
 // state). Each has a `#[cfg]` split internally — see the per-task
 // sub-docs for details.
-pub mod ids {
-    //! Identity-layer helpers. Implementations land in
-    //! `docs/telemetry/02/03-id-derivation.md`.
-}
+/// Identity-layer helpers (`anonymous_id`, `persistent_id`,
+/// `api_key_tracking_id`). See [`docs/telemetry/02/03-id-derivation.md`]
+/// for the design.
+pub mod ids;
 pub mod sanitize {
     //! URL-sanitisation. Implementation lands in
     //! `docs/telemetry/02/04-payload-and-sanitize.md`.
