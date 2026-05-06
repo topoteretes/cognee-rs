@@ -1,8 +1,10 @@
 # Task 01-12: CI updates — `--features telemetry` lane and noop-fallback lane
 
+**Status**: Implemented in commit 0fc9adb
+
 ## Status
 
-Not started.
+Implemented in commit 0fc9adb.
 
 ## Owner / dependencies
 

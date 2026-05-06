@@ -284,14 +284,17 @@ monitoring_tool: object = Observer.NONE
 
 Each gap is broken out into a dedicated sub-document with deep investigation, design, and numbered action items.
 
-1. **Wire OpenTelemetry SDK + OTLP exporter** — makes the existing `OTEL_*` config fields actually do something. Add `tracing-opentelemetry` bridge so all 51 existing `#[instrument]` spans flow out. → [01-otel-otlp-export.md](01-otel-otlp-export.md) (11/12 sub-tasks complete)
-2. **Implement `send_telemetry()` analytics client** — proxy URL, anon/persistent ID files, PBKDF2 api-key tracking ID, opt-out semantics, async fire-and-forget HTTP. → [02-send-telemetry-analytics.md](02-send-telemetry-analytics.md)
-3. **Emit pipeline & task lifecycle events** — `Pipeline Run Started/Completed/Errored`, per-task variants, and API events (`cognee.recall`, `cognee.improve`, `cognee.forget`). → [03-pipeline-task-api-events.md](03-pipeline-task-api-events.md)
-4. **Instrument DB adapters** — Qdrant, Ladybug, SeaORM/SQLite with `cognee.db.{vector,graph}.{search,query}` spans + `cognee.db.system/query/row_count` attributes; promote `redact_secrets()` to `cognee-utils`. → [04-db-adapter-instrumentation.md](04-db-adapter-instrumentation.md)
-5. **Provenance stamping on DataPoints** — `source_pipeline`, `source_task`, `source_user`, `source_node_set`, `source_content_hash` attached to every yielded DataPoint with a per-run visited set. → [05-datapoint-provenance.md](05-datapoint-provenance.md)
-6. **File logging with rotation** — mirror Python's `COGNEE_LOG_FILE`, `COGNEE_LOGS_DIR`, `COGNEE_LOG_MAX_BYTES`, etc.; rotating non-blocking appender; library noise suppression. → [06-file-logging-rotation.md](06-file-logging-rotation.md)
-7. **Auto-init tracing in bindings** — PyO3, Neon, C API entry points so embedders get telemetry without extra setup; avoid double-emission when embedded in the Python SDK. → [07-bindings-auto-init.md](07-bindings-auto-init.md)
-8. **Pipeline run status lifecycle** — schema and four-state lifecycle are defined but `INITIATED` is never written, `run_info` content drifts from Python, and library-level pipelines bypass the registry entirely. → [08-pipeline-run-status.md](08-pipeline-run-status.md)
+1. **Implement `send_telemetry()` analytics client** — proxy URL, anon/persistent ID files, PBKDF2 api-key tracking ID, opt-out semantics, async fire-and-forget HTTP. → [02-send-telemetry-analytics.md](02-send-telemetry-analytics.md)
+2. **Emit pipeline & task lifecycle events** — `Pipeline Run Started/Completed/Errored`, per-task variants, and API events (`cognee.recall`, `cognee.improve`, `cognee.forget`). → [03-pipeline-task-api-events.md](03-pipeline-task-api-events.md)
+3. **Instrument DB adapters** — Qdrant, Ladybug, SeaORM/SQLite with `cognee.db.{vector,graph}.{search,query}` spans + `cognee.db.system/query/row_count` attributes; promote `redact_secrets()` to `cognee-utils`. → [04-db-adapter-instrumentation.md](04-db-adapter-instrumentation.md)
+4. **Provenance stamping on DataPoints** — `source_pipeline`, `source_task`, `source_user`, `source_node_set`, `source_content_hash` attached to every yielded DataPoint with a per-run visited set. → [05-datapoint-provenance.md](05-datapoint-provenance.md)
+5. **File logging with rotation** — mirror Python's `COGNEE_LOG_FILE`, `COGNEE_LOGS_DIR`, `COGNEE_LOG_MAX_BYTES`, etc.; rotating non-blocking appender; library noise suppression. → [06-file-logging-rotation.md](06-file-logging-rotation.md)
+6. **Auto-init tracing in bindings** — PyO3, Neon, C API entry points so embedders get telemetry without extra setup; avoid double-emission when embedded in the Python SDK. → [07-bindings-auto-init.md](07-bindings-auto-init.md)
+7. **Pipeline run status lifecycle** — schema and four-state lifecycle are defined but `INITIATED` is never written, `run_info` content drifts from Python, and library-level pipelines bypass the registry entirely. → [08-pipeline-run-status.md](08-pipeline-run-status.md)
+
+### Completed work
+
+- ✅ **Wire OpenTelemetry SDK + OTLP exporter** — wired the existing `OTEL_*` config fields end-to-end: `init_telemetry`, `tracing-opentelemetry` bridge, OTLP gRPC/HTTP exporters, RAII flush guard, CLI + HTTP server subscriber composition, unit + integration tests, CI lanes, user docs. → [01-otel-otlp-export.md](01-otel-otlp-export.md) (complete — see commits `8cc50bb..0fc9adb`).
 
 ---
 

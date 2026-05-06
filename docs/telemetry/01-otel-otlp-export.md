@@ -1,5 +1,15 @@
 # OpenTelemetry SDK + OTLP Export Wiring
 
+**Status: this gap is closed.** All 12 sub-tasks shipped between commits
+`8cc50bb` and `0fc9adb` (plus one rename fixup `27c2bb2`). The Rust port
+now wires the OpenTelemetry SDK end-to-end: `init_telemetry` builds a
+`SdkTracerProvider` with OTLP exporter, the `tracing-opentelemetry`
+bridge feeds all 51+ `#[instrument]` sites into the OTEL pipeline, the
+CLI and HTTP server compose the bridge into their subscriber stacks,
+and CI exercises both the `--features telemetry` and noop-fallback
+arms. See [Closure summary](#closure-summary) at the bottom of this
+document for the full commit list.
+
 ## Overview
 
 The Rust port emits structured spans through the `tracing` ecosystem (51+
@@ -500,7 +510,7 @@ Each item below has a dedicated implementation sub-document under [`01/`](01/) w
 | 9 | Unit tests for the observability crate: header parsing, `is_tracing_enabled` parity table, `init_telemetry` noop/active paths, `already_instrumented`, `TelemetryGuard::drop`, plus `Settings` env-overlay tests in `cognee-lib`. | [01/09-observability-unit-tests.md](01/09-observability-unit-tests.md) | 4, 8 | ✅ 52c2be7 |
 | 10 | End-to-end integration test against an in-process tonic fake `TraceService`: assert spans actually flow over OTLP. | [01/10-otel-export-integration-test.md](01/10-otel-export-integration-test.md) | 4, 6, 9 | ✅ 6f08918 |
 | 11 | User-facing documentation: new `docs/observability/opentelemetry.md` with env-var table, recipes (Tempo, Honeycomb, Dash0, in-cluster collector), span catalog, troubleshooting. Plus rustdoc updates and a README pointer. | [01/11-user-facing-documentation.md](01/11-user-facing-documentation.md) | 2–8 | ✅ 06ece23 |
-| 12 | CI updates: add `--features telemetry` lanes (`check`, `clippy`, `test`, optional `doc`) and a `--no-default-features` lane in `.github/workflows/ci.yml` and `scripts/check_all.sh`. | [01/12-ci-updates.md](01/12-ci-updates.md) | 4, 8, 9, 10 | |
+| 12 | CI updates: add `--features telemetry` lanes (`check`, `clippy`, `test`, optional `doc`) and a `--no-default-features` lane in `.github/workflows/ci.yml` and `scripts/check_all.sh`. | [01/12-ci-updates.md](01/12-ci-updates.md) | 4, 8, 9, 10 | ✅ 0fc9adb |
 
 Note: an out-of-band rename fixup commit `27c2bb2` aligned identifier
 names across the observability crate; no logic change.
@@ -595,3 +605,24 @@ asserting both SDKs emit comparable span sets for the same operation.
 - [OpenTelemetry Rust GitHub releases](https://github.com/open-telemetry/opentelemetry-rust/releases)
 - [OTEL semantic conventions: resource attributes](https://opentelemetry.io/docs/specs/semconv/resource/)
 - [OTLP spec: env vars (`OTEL_EXPORTER_OTLP_*`)](https://opentelemetry.io/docs/specs/otel/protocol/exporter/)
+
+## Closure summary
+
+This gap is closed. The 13 commits below shipped the work, in the order
+they landed on `main`:
+
+| # | Commit | Subject |
+|---|---|---|
+| 01-01 | `8cc50bb` | add OTEL/OTLP workspace dependencies |
+| fixup | `27c2bb2` | rename `init_otel` → `init_telemetry` across crate and docs |
+| 01-02 | `c88df3d` | scaffold `cognee-observability` crate |
+| 01-03 | `ef813b9` | wire `telemetry` feature through `cognee-lib` |
+| 01-04 | `9b99576` | implement `init_telemetry` with OTLP exporter and RAII guard |
+| 01-05 | `10bf00d` | re-export telemetry surface from `cognee-lib` |
+| 01-06 | `5b64d7d` | wire `init_telemetry` into the CLI subscriber stack |
+| 01-07 | `56433e5` | wire `init_telemetry` into HTTP server + add `EnvSettingsView` |
+| 01-08 | `5b925c7` | pin noop `init_telemetry` contract with test and rustdoc |
+| 01-09 | `52c2be7` | add observability unit tests + fix `already_instrumented` heuristic |
+| 01-10 | `6f08918` | add OTLP gRPC export integration test |
+| 01-11 | `06ece23` | add user-facing OTEL/OTLP documentation |
+| 01-12 | `0fc9adb` | add CI lanes for `telemetry` feature |
