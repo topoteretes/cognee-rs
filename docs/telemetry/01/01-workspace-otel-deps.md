@@ -10,9 +10,9 @@ Not started.
   [01-otel-otlp-export](../01-otel-otlp-export.md) initiative — it
   introduces the manifest entries that every later task references.
 - **Blocks**:
-  - [Task 01-02 — `cognee-observability` crate scaffold](02-cognee-observability-crate.md)
+  - [Task 01-02 — `cognee-observability` crate scaffold](02-observability-crate-scaffold.md)
     (its `[dependencies]` will pull from these workspace entries).
-  - [Task 01-04 — `init_telemetry` implementation](04-init-telemetry.md)
+  - [Task 01-04 — `init_telemetry` implementation](04-init-telemetry-implementation.md)
     (consumes the OTEL types declared here).
   - Indirectly all other 01/* tasks, since they build on the crate
     scaffolded in 01-02.
@@ -27,7 +27,7 @@ satisfy the architecture in
 | Crate | Why it is required |
 |---|---|
 | `opentelemetry` | Stable API surface (`KeyValue`, `global`, `trace::TracerProvider`). Every downstream crate that touches OTEL must depend on the API crate. |
-| `opentelemetry_sdk` | Concrete `SdkTracerProvider`, `Resource`, `BatchSpanProcessor`. Needed to build the provider in [task 01-04](04-init-telemetry.md). |
+| `opentelemetry_sdk` | Concrete `SdkTracerProvider`, `Resource`, `BatchSpanProcessor`. Needed to build the provider in [task 01-04](04-init-telemetry-implementation.md). |
 | `opentelemetry-otlp` | OTLP exporter (gRPC + HTTP/protobuf). The whole point of the gap is OTLP export. |
 | `opentelemetry-semantic-conventions` | Stable string constants (`SERVICE_NAME`, `SERVICE_VERSION`, `DEPLOYMENT_ENVIRONMENT_NAME`). Hand-rolling these strings is error-prone and version-coupled to the OTEL spec. |
 | `tracing-opentelemetry` | The bridge layer that converts the 62+ existing `#[tracing::instrument]` sites into OTEL spans without per-site changes. |
@@ -97,12 +97,12 @@ None.
      Note: cargo treats `opentelemetry_sdk` (underscore) as
      alphabetically after the hyphenated forms because `_` (0x5F) >
      `-` (0x2D); place it last among the four.
-   - `tracing-opentelemetry` goes between `tokio-stream` (line 97) and
-     `toml` (line 98) — i.e. immediately above `tracing` (line 99).
-     Wait — `tracing-opentelemetry` sorts *after* `tracing-subscriber`
-     in alphabetical order (`-o` < `-s`), so the correct position is
-     between `tracing` (line 99) and `tracing-subscriber` (line 100).
-     Verify lexicographic order locally before committing.
+   - `tracing-opentelemetry` sorts *between* `tracing` and
+     `tracing-subscriber` in alphabetical order (`-o` (0x6F) <
+     `-s` (0x73), so `tracing-opentelemetry` < `tracing-subscriber`),
+     which means the correct position is between `tracing` (line 99)
+     and `tracing-subscriber` (line 100). Verify lexicographic order
+     locally before committing.
 
    Lines to add:
 
@@ -148,7 +148,7 @@ None.
    Until a workspace member actually depends on `opentelemetry`, the
    first `cargo tree` will print "package not found" — that is
    expected. The second confirms what `tonic` version is currently in
-   the lockfile (the qdrant fork) so [task 01-02](02-cognee-observability-crate.md)
+   the lockfile (the qdrant fork) so [task 01-02](02-observability-crate-scaffold.md)
    knows what it has to coexist with.
 
 6. (Optional but recommended) Verify the registry has the exact pins
@@ -161,7 +161,7 @@ None.
 
 7. Commit only `Cargo.toml`. Do **not** commit `Cargo.lock` changes
    yet — the lock will only meaningfully update once
-   [task 01-02](02-cognee-observability-crate.md) introduces a
+   [task 01-02](02-observability-crate-scaffold.md) introduces a
    consumer.
 
 ## Resulting file diff
@@ -227,7 +227,7 @@ Run each command and confirm the expected outcome:
    a *modern* `tonic` (≥ 0.12). The qdrant fork is based on tonic
    `0.11.0` and is unlikely to satisfy the OTLP exporter's API
    expectations. **Mitigation paths**, in priority order, to be
-   resolved in [task 01-02](02-cognee-observability-crate.md) when the
+   resolved in [task 01-02](02-observability-crate-scaffold.md) when the
    first consumer actually pulls `opentelemetry-otlp`:
    - Disable the `grpc-tonic` feature, ship HTTP/protobuf only as the
      default, and document gRPC as "build it yourself with a custom
@@ -242,7 +242,7 @@ Run each command and confirm the expected outcome:
 
    This task only declares the workspace dep — it does not yet
    compile against the patched tonic, so the conflict will not surface
-   until [task 01-02](02-cognee-observability-crate.md). It must be
+   until [task 01-02](02-observability-crate-scaffold.md). It must be
    re-evaluated there.
 
 2. **`hyper` patch conflict.** Similarly,
@@ -276,7 +276,7 @@ Run each command and confirm the expected outcome:
    0.31 declares some constants `unstable_*`. The names referenced
    later (`SERVICE_NAME`, `SERVICE_VERSION`,
    `DEPLOYMENT_ENVIRONMENT_NAME`) are stable as of this version. If
-   the implementer of [task 01-04](04-init-telemetry.md) reaches for
+   the implementer of [task 01-04](04-init-telemetry-implementation.md) reaches for
    an unstable constant, they may need to enable a non-default
    feature on this crate. Out of scope here.
 
@@ -286,16 +286,17 @@ This task **only** edits `[workspace.dependencies]`. The following are
 explicitly deferred:
 
 - Adding any of these crates to a member crate's `[dependencies]`
-  table — that is [task 01-02](02-cognee-observability-crate.md)
+  table — that is [task 01-02](02-observability-crate-scaffold.md)
   (`cognee-observability` crate scaffold) and
-  [task 01-04](04-init-telemetry.md) (`init_telemetry` implementation).
+  [task 01-04](04-init-telemetry-implementation.md) (`init_telemetry` implementation).
 - Wiring the `telemetry` cargo feature in `cognee-lib` or
-  `cognee-cli` — that is [task 01-07](07-cli-feature-wiring.md) and
-  related.
+  `cognee-cli` — that is
+  [task 01-03](03-cognee-lib-feature-wiring.md) and
+  [task 01-06](06-cli-subscriber-refactor.md).
 - Adding any source code, modules, or runtime initialisation —
   scaffolded by tasks 01-02 and onwards.
 - Updating `Cargo.lock` with the new entries — happens automatically
-  as part of [task 01-02](02-cognee-observability-crate.md).
+  as part of [task 01-02](02-observability-crate-scaffold.md).
 
 ## References
 
