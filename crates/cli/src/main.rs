@@ -3,6 +3,7 @@ mod commands;
 mod config_store;
 mod error;
 
+use std::process::ExitCode as StdExitCode;
 use std::sync::Arc;
 
 use clap::Parser;
@@ -15,17 +16,17 @@ use commands::serve;
 #[cfg(feature = "visualization")]
 use commands::visualize;
 use commands::{add, add_and_cognify, cognify, config, delete, memify, run_sequence, search};
-use config_store::load_settings;
+use config_store::{Settings, load_settings};
 use error::{CliError, ExitCode};
 use tracing::error;
 use tracing_subscriber::EnvFilter;
+#[cfg(feature = "telemetry")]
+use tracing_subscriber::{Registry, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
-fn run() -> Result<(), CliError> {
+fn run(settings: Settings) -> Result<(), CliError> {
     let cli = Cli::parse();
 
-    // Load JSON config then overlay env vars (.env + shell env).
-    // Priority: defaults < JSON config < env vars.
-    let settings = load_settings()?;
+    // Priority: defaults < JSON config < env vars (settings already overlaid in main).
     let config = ConfigManager::new(settings);
     let cm = Arc::new(ComponentManager::new(config));
 
@@ -47,21 +48,67 @@ fn run() -> Result<(), CliError> {
     }
 }
 
-fn main() {
+fn main() -> StdExitCode {
+    // Settings load runs before subscriber install so init_telemetry sees the
+    // correct configuration on the first span (decision 11). No subscriber is
+    // installed yet, so failures must go to stderr directly.
+    let settings = match load_settings() {
+        Ok(settings) => settings,
+        Err(error) => {
+            eprintln!("Error: {error}");
+            return StdExitCode::from(error.exit_code() as u8);
+        }
+    };
+
     // Suppress verbose ONNX Runtime graph-optimizer logs (ort crate) by default.
     // Users can re-enable them with RUST_LOG="info,ort=info".
     let env_filter =
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info,ort=warn"));
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(env_filter)
-        .with_target(false)
-        .try_init();
 
-    match run() {
-        Ok(()) => std::process::exit(ExitCode::Success as i32),
+    #[cfg(not(feature = "telemetry"))]
+    {
+        let _ = tracing_subscriber::fmt()
+            .with_env_filter(env_filter)
+            .with_target(false)
+            .try_init();
+    }
+
+    #[cfg(feature = "telemetry")]
+    let _telemetry_guard = {
+        use cognee_lib::telemetry::{TelemetryGuard, init_telemetry};
+        use tracing_subscriber::{Layer, layer::Identity};
+
+        // Telemetry init failure must not abort the user's CLI command —
+        // fall back to a noop layer + noop guard.
+        let (telemetry_layer, telemetry_guard): (
+            Box<dyn Layer<Registry> + Send + Sync>,
+            TelemetryGuard,
+        ) = match init_telemetry::<Registry>(&settings) {
+            Ok(pair) => pair,
+            Err(err) => {
+                eprintln!("warning: failed to initialise OTEL telemetry: {err}");
+                (Box::new(Identity::new()), TelemetryGuard::noop())
+            }
+        };
+
+        let fmt_layer = fmt::layer().with_target(false);
+
+        let _ = Registry::default()
+            .with(telemetry_layer)
+            .with(env_filter)
+            .with(fmt_layer)
+            .try_init();
+
+        telemetry_guard
+    };
+
+    // Returning ExitCode (rather than calling process::exit) lets locals —
+    // including _telemetry_guard — drop, flushing the final span batch.
+    match run(settings) {
+        Ok(()) => StdExitCode::from(ExitCode::Success as u8),
         Err(error) => {
             error!("Error: {error}");
-            std::process::exit(error.exit_code() as i32);
+            StdExitCode::from(error.exit_code() as u8)
         }
     }
 }

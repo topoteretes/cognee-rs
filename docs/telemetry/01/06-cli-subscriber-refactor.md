@@ -7,22 +7,24 @@ Not started.
 ## Owner / dependencies
 
 - **Depends on**:
-  - [Task 01-02 — `cognee-observability` crate scaffold](02-cognee-observability-crate.md)
+  - [Task 01-02 — `cognee-observability` crate scaffold](02-observability-crate-scaffold.md)
     (the new crate that hosts `init_telemetry` and `TelemetryGuard`).
-  - [Task 01-04 — `init_telemetry` implementation](04-init-telemetry.md)
+  - [Task 01-04 — `init_telemetry` implementation](04-init-telemetry-implementation.md)
     (provides the function this task calls; defines the layer/guard pair
     returned to the subscriber).
   - [Task 01-05 — `cognee-lib` re-exports](05-cognee-lib-reexports.md)
     (this task imports the symbols via
-    `cognee_lib::observability::{init_telemetry, TelemetryGuard}` so the
-    CLI does not depend on `cognee-observability` directly).
-  - [Task 01-03 — `telemetry` cargo feature wiring](03-telemetry-feature-wiring.md)
+    `cognee_lib::telemetry::{init_telemetry, TelemetryGuard, ...}` so the
+    CLI does not depend on `cognee-observability` directly). Note: the
+    re-export module is named `telemetry` (matching the cargo feature
+    name), not `observability`.
+  - [Task 01-03 — `telemetry` cargo feature wiring](03-cognee-lib-feature-wiring.md)
     (specifically the `telemetry = ["cognee-lib/telemetry"]` forwarding
     feature on `crates/cli/Cargo.toml`, which is **off** in
     `default` per [decision 1](../01-otel-otlp-export.md#design-decisions-locked) and
     [decision 7](../01-otel-otlp-export.md#design-decisions-locked)).
 - **Blocks**:
-  - [Task 01-09 — Unit tests](09-unit-tests.md)
+  - [Task 01-09 — Unit tests](09-observability-unit-tests.md)
     (the CLI smoke tests reference the post-refactor structure of
     `main()`).
 - **Siblings (parallel work)**:
@@ -71,16 +73,25 @@ Three independent changes are required, all in
 
 ## Pre-conditions
 
-- Tasks [01-02](02-cognee-observability-crate.md),
-  [01-03](03-telemetry-feature-wiring.md),
-  [01-04](04-init-telemetry.md) and
+- Tasks [01-02](02-observability-crate-scaffold.md),
+  [01-03](03-cognee-lib-feature-wiring.md),
+  [01-04](04-init-telemetry-implementation.md) and
   [01-05](05-cognee-lib-reexports.md) are merged.
-- `cognee_lib::observability::init_telemetry` exists with the signature
-  agreed in task 01-04, returning a `(Layer, TelemetryGuard)` pair (or
-  `Result<...>` — see [§ "init_telemetry error handling"](#init_telemetry-error-handling)
-  below). Both the `cfg(feature = "telemetry")` and
-  `cfg(not(feature = "telemetry"))` paths compile per
-  [decision 1](../01-otel-otlp-export.md#design-decisions-locked).
+- `cognee_lib::telemetry::init_telemetry` exists with the signature
+  shipped by task 01-04:
+  `init_telemetry<S>(settings: &dyn SettingsView) -> Result<(BoxedTelemetryLayer<S>, TelemetryGuard), TelemetryInitError>`,
+  where `BoxedTelemetryLayer<S> = Box<dyn Layer<S> + Send + Sync + 'static>`.
+  When `cognee_tracing_enabled` is false and the OTLP endpoint is empty,
+  the function returns `Ok` with a noop layer + noop guard — i.e. the
+  function never *needs* to fail to handle the disabled case. `Err`
+  values come from genuine misconfiguration (unknown protocol, sampler,
+  span processor, exporter build failure).
+- The `cognee_lib::telemetry` module is gated behind the
+  `cognee-lib/telemetry` cargo feature (see task 01-05 commit
+  `10bf00d`); the CLI must `cfg(feature = "telemetry")`-gate every use
+  of these symbols. With telemetry **off** (the default per
+  [decision 1](../01-otel-otlp-export.md#design-decisions-locked)) the
+  CLI keeps today's single-layer `tracing_subscriber::fmt()` init.
 
 ## Step-by-step
 
@@ -149,39 +160,39 @@ Reorder the body of `main()` so that the new sequence is:
 
 #### `init_telemetry` error handling
 
-`init_telemetry(&settings)` may legitimately fail (e.g. the OTLP
-endpoint URL is malformed, or the gRPC channel cannot be constructed
-synchronously). Per the design intent of "telemetry failure should not
-break the user's CLI command", **a failure here must not abort the
-process**. The recommended pattern:
+`init_telemetry(&settings)` may legitimately fail when the operator
+supplies an unrecognised value for `OTEL_EXPORTER_OTLP_PROTOCOL`,
+`OTEL_SPAN_PROCESSOR`, or `OTEL_TRACES_SAMPLER`, or when the OTLP
+exporter cannot be built (malformed endpoint, missing TLS material,
+etc.). Note: the **disabled** path (no `COGNEE_TRACING_ENABLED`, no
+endpoint) is *not* an error — task 04 returns `Ok` with a noop layer +
+noop guard in that case, so the CLI does not need to special-case it.
+
+Per the design intent of "telemetry failure should not break the user's
+CLI command", a `TelemetryInitError` must not abort the process.
+Because `init_telemetry` is generic over the subscriber type and there
+is no public re-export of the internal `noop_layer<S>` helper, the
+fallback must use `tracing_subscriber::layer::Identity::new()` directly
+plus `TelemetryGuard::noop()` (both already in the public API per
+task 04). The recommended pattern:
 
 ```rust
-let (telemetry_layer, telemetry_guard) =
-    match cognee_lib::observability::init_telemetry(&settings) {
-        Ok(pair) => pair,
+use cognee_lib::telemetry::{init_telemetry, TelemetryGuard};
+use tracing_subscriber::{Layer, Registry, layer::Identity};
+
+let (telemetry_layer, _telemetry_guard): (Box<dyn Layer<Registry> + Send + Sync>, TelemetryGuard) =
+    match init_telemetry::<Registry>(&settings) {
+        Ok((layer, guard)) => (layer, guard),
         Err(err) => {
             eprintln!("warning: failed to initialise OTEL telemetry: {err}");
-            cognee_lib::observability::noop_telemetry()
+            (Box::new(Identity::new()), TelemetryGuard::noop())
         }
     };
 ```
 
-Where `noop_telemetry()` returns the same `(Layer, TelemetryGuard)`
-shape but with a `Layer::default()` (i.e. `tracing_subscriber::layer::Identity`)
-and a noop guard. Task [01-04](04-init-telemetry.md) is responsible for
-exposing this helper alongside `init_telemetry`. If task 01-04 instead
-chose to make `init_telemetry` infallible (returning the noop pair on
-failure internally and emitting the warning itself), this match
-collapses to a single line:
-
-```rust
-let (telemetry_layer, telemetry_guard) =
-    cognee_lib::observability::init_telemetry(&settings);
-```
-
-Either shape is acceptable; this task should match whichever signature
-01-04 settled on. The new `main.rs` shown below uses the `Result` form
-because it is the more conservative assumption.
+The explicit `init_telemetry::<Registry>` turbofish pins the generic
+parameter so the boxed layer matches the registry type used in the
+composition step below.
 
 #### Settings load failure path
 
@@ -208,10 +219,11 @@ let settings = match load_settings() {
 on the failure path, keeping the pattern uniform with the success path
 avoids a footgun.)
 
-### 3. Compose the subscriber explicitly
+### 3. Compose the subscriber explicitly (telemetry-on path)
 
-Switch from the `tracing_subscriber::fmt()` shortcut (which installs a
-single-layer subscriber) to an explicit `Registry`-based composition:
+When the `telemetry` feature is **on**, switch from the
+`tracing_subscriber::fmt()` shortcut (which installs a single-layer
+subscriber) to an explicit `Registry`-based composition:
 
 ```rust
 use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt, Registry};
@@ -233,6 +245,12 @@ resilience: if a host process already installed a global subscriber
 (e.g. an integration-test harness), we silently skip re-installation
 instead of panicking. This matches today's `let _ = tracing_subscriber::fmt()...try_init();`
 pattern at line 55.
+
+When the `telemetry` feature is **off**, keep today's
+`tracing_subscriber::fmt()...try_init()` shortcut verbatim — there is
+no second layer to compose, and `cognee_lib::telemetry::*` is not in
+scope. Both branches live behind `#[cfg(feature = "telemetry")]` /
+`#[cfg(not(feature = "telemetry"))]` blocks in `main()`.
 
 ### 4. Hold the guard for the lifetime of `main`
 
@@ -291,6 +309,13 @@ implements it.
 
 ## Resulting code
 
+The `telemetry` cargo feature is **off** by default
+([decision 1](../01-otel-otlp-export.md#design-decisions-locked)), so
+the CLI must compile and run with or without it. The cleanest shape is
+to keep one `main()` body and `cfg`-gate just the OTEL composition
+step. With the feature off, the existing `tracing_subscriber::fmt()`
+shortcut is preserved.
+
 ```rust
 mod cli;
 mod commands;
@@ -313,8 +338,10 @@ use commands::{add, add_and_cognify, cognify, config, delete, memify, run_sequen
 use config_store::{Settings, load_settings};
 use error::{CliError, ExitCode};
 use tracing::error;
+use tracing_subscriber::EnvFilter;
+#[cfg(feature = "telemetry")]
 use tracing_subscriber::{
-    EnvFilter, Registry, fmt, layer::SubscriberExt, util::SubscriberInitExt,
+    Registry, fmt, layer::SubscriberExt, util::SubscriberInitExt,
 };
 
 fn run(settings: Settings) -> Result<(), CliError> {
@@ -358,33 +385,55 @@ fn main() -> StdExitCode {
         }
     };
 
-    // Step 2: Build the OTEL bridge layer + guard. Failure must not
-    //         abort the CLI — fall back to a noop pair and continue.
-    let (telemetry_layer, _telemetry_guard) =
-        match cognee_lib::observability::init_telemetry(&settings) {
-            Ok(pair) => pair,
-            Err(err) => {
-                eprintln!("warning: failed to initialise OTEL telemetry: {err}");
-                cognee_lib::observability::noop_telemetry()
-            }
-        };
-
-    // Step 3: Compose the subscriber.
+    // Step 2: Install the subscriber. The shape diverges based on
+    //         whether the `telemetry` feature is on.
     //
     //         Suppress verbose ONNX Runtime graph-optimizer logs (ort
     //         crate) by default. Users can re-enable them with
     //         RUST_LOG="info,ort=info".
     let env_filter =
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info,ort=warn"));
-    let fmt_layer = fmt::layer().with_target(false);
 
-    let _ = Registry::default()
-        .with(env_filter)
-        .with(fmt_layer)
-        .with(telemetry_layer)
-        .try_init();
+    #[cfg(not(feature = "telemetry"))]
+    {
+        let _ = tracing_subscriber::fmt()
+            .with_env_filter(env_filter)
+            .with_target(false)
+            .try_init();
+    }
 
-    // Step 4: Run the command. The guard is held until `main` returns.
+    #[cfg(feature = "telemetry")]
+    let _telemetry_guard = {
+        use cognee_lib::telemetry::{TelemetryGuard, init_telemetry};
+        use tracing_subscriber::{Layer, layer::Identity};
+
+        // Build the OTEL bridge layer + guard. Genuine misconfiguration
+        // (unknown protocol, sampler, etc.) must not abort the CLI —
+        // fall back to a noop layer + noop guard and continue.
+        let (telemetry_layer, telemetry_guard): (
+            Box<dyn Layer<Registry> + Send + Sync>,
+            TelemetryGuard,
+        ) = match init_telemetry::<Registry>(&settings) {
+            Ok(pair) => pair,
+            Err(err) => {
+                eprintln!("warning: failed to initialise OTEL telemetry: {err}");
+                (Box::new(Identity::new()), TelemetryGuard::noop())
+            }
+        };
+
+        let fmt_layer = fmt::layer().with_target(false);
+
+        let _ = Registry::default()
+            .with(env_filter)
+            .with(fmt_layer)
+            .with(telemetry_layer)
+            .try_init();
+
+        telemetry_guard
+    };
+
+    // Step 3: Run the command. The guard (when present) is held until
+    //         `main` returns so its `Drop` flushes the final batch.
     match run(settings) {
         Ok(()) => StdExitCode::from(ExitCode::Success as u8),
         Err(error) => {
@@ -414,7 +463,7 @@ Notes on the diff:
 - `crates/cli/src/main.rs` — only file touched in this task.
 
 No other CLI source file changes; no `Cargo.toml` changes (those live
-in [task 01-03](03-telemetry-feature-wiring.md)).
+in [task 01-03](03-cognee-lib-feature-wiring.md)).
 
 ## Verification
 
@@ -495,14 +544,15 @@ in [task 01-03](03-telemetry-feature-wiring.md)).
   not a regression — but it does mean a misconfigured embedder that
   installs its own subscriber will silently lose OTEL bridging from the
   CLI. Mitigation: document this in the user-facing observability
-  guide ([task 01-11](11-documentation.md)).
+  guide ([task 01-11](11-user-facing-documentation.md)).
 
 - **Guard `Drop` may block on a slow collector.** If the OTLP collector
   is slow to acknowledge the final flush, `main()` will block on guard
   drop. The flush timeout is bounded by the SDK's batch-processor
-  configuration ([task 01-04](04-init-telemetry.md) sets it). This is
-  desirable for trace fidelity but might surprise users running short
-  CLI commands. Tunable via the standard `OTEL_BSP_*` env vars.
+  configuration ([task 01-04](04-init-telemetry-implementation.md) sets it).
+  This is desirable for trace fidelity but might surprise users
+  running short CLI commands. Tunable via the standard `OTEL_BSP_*` env
+  vars.
 
 - **`Settings` clone semantics.** `Settings` is `Clone` today (it is a
   plain `serde`-derived struct in
@@ -523,10 +573,10 @@ in [task 01-03](03-telemetry-feature-wiring.md)).
   handle.
 
 - **Re-export drift between `cognee-lib` and `cognee-observability`.**
-  This task imports symbols from `cognee_lib::observability::*` and
-  expects task 01-05 to keep that path stable. If 01-05 chooses a
-  different path (e.g. `cognee_lib::telemetry::*`), this task's import
-  block must be updated in lockstep.
+  This task imports symbols from `cognee_lib::telemetry::*` (the path
+  task 01-05 settled on, matching the cargo feature name; see commit
+  `10bf00d`). If a future PR renames it, this task's import block must
+  be updated in lockstep.
 
 ## References
 
@@ -535,12 +585,12 @@ in [task 01-03](03-telemetry-feature-wiring.md)).
   [§ "Shutdown handling"](../01-otel-otlp-export.md#shutdown-handling),
   and the [locked design decisions](../01-otel-otlp-export.md#design-decisions-locked).
 - Sibling tasks:
-  - [01-02 `cognee-observability` crate scaffold](02-cognee-observability-crate.md)
-  - [01-03 `telemetry` cargo feature wiring](03-telemetry-feature-wiring.md)
-  - [01-04 `init_telemetry` implementation](04-init-telemetry.md)
+  - [01-02 `cognee-observability` crate scaffold](02-observability-crate-scaffold.md)
+  - [01-03 `telemetry` cargo feature wiring](03-cognee-lib-feature-wiring.md)
+  - [01-04 `init_telemetry` implementation](04-init-telemetry-implementation.md)
   - [01-05 `cognee-lib` re-exports](05-cognee-lib-reexports.md)
   - [01-07 HTTP server subscriber refactor](07-http-server-subscriber-refactor.md)
-  - [01-09 Unit tests](09-unit-tests.md)
+  - [01-09 Unit tests](09-observability-unit-tests.md)
 - Source files:
   - [`crates/cli/src/main.rs`](../../../crates/cli/src/main.rs)
   - [`crates/cli/src/config_store.rs`](../../../crates/cli/src/config_store.rs)
