@@ -1,13 +1,21 @@
 name: HTTP Parity
 
+# TODO(http-parity): re-enable push/pull_request triggers once cognee Python's
+# `fix/db-migrations` branch merges to dev. Today the Python alembic chain
+# fails on a virgin SQLite DB because its initial migration
+# (cognee/alembic/versions/8057ae7329c2_initial_migration.py) is a no-op and
+# subsequent revisions like ab7e313804ae_permission_system_rework assume the
+# `acls` table already exists. The harness's tmpfs `/py` workspace is a true
+# virgin DB on every run, so Python uvicorn never reaches a healthy /health
+# state, wait_for_health.sh times out, and Phase-1 fails before pytest runs.
+# The upstream fix is on `origin/fix/db-migrations` (commit 8ab385033) which
+# replaces the no-op initial migration with a comprehensive
+# deadbeef0001_new_initial_schema.py covering every base table (~30
+# create_table calls including `acls`). When that lands on dev:
+#   1. Bump the cognee `ref:` SHA in the Checkout step below.
+#   2. Restore the on.push / on.pull_request triggers (see git history).
+# Until then the workflow only runs on workflow_dispatch.
 on:
-  push:
-    branches: [main]
-  pull_request:
-    paths:
-      - "crates/http-server/**"
-      - "e2e-cross-sdk/**"
-      - ".github/workflows/http-parity.yml"
   workflow_dispatch:
     inputs:
       run_phase3:
