@@ -585,7 +585,7 @@ Each item below has a dedicated implementation sub-document under [`02/`](02/) w
 
 | # | Action item | Sub-doc | Depends on | Status |
 |---|---|---|---|---|
-| 1 | Add workspace dependencies (`pbkdf2 = "0.12"`, `hmac = "0.12"`, `hex = "0.4"`, `once_cell = "1"`) to `[workspace.dependencies]`. Confirm `reqwest`, `sha2`, `serde_json`, `dirs`, `chrono`, `tracing`, `uuid` are already present. | [02/01-workspace-deps.md](02/01-workspace-deps.md) | — | ⬜ |
+| 1 | Add workspace dependencies (`pbkdf2 = "0.12"`, `hmac = "0.12"`, `hex = "0.4"`, `once_cell = "1"`) to `[workspace.dependencies]`. Confirm `reqwest`, `sha2`, `serde_json`, `dirs`, `chrono`, `tracing`, `uuid` are already present. | [02/01-workspace-deps.md](02/01-workspace-deps.md) | — | ✅ 66fc86a |
 | 2 | Create the new `cognee-telemetry` workspace crate (manifest, `lib.rs` skeleton, feature wiring, register in workspace `members`). Scaffold only — implementations land in tasks 3–6. | [02/02-telemetry-crate-scaffold.md](02/02-telemetry-crate-scaffold.md) | 1 | ⬜ |
 | 3 | Implement the three identity layers: `get_anonymous_id` (`<project_root>/.anon_id` + `TRACKING_ID` override), `get_persistent_id` (`~/.cognee/.persistent_id`), and `get_api_key_tracking_id` (PBKDF2-HMAC-SHA256, 100 000 iter, dklen 16, byte-parity to Python). | [02/03-id-derivation.md](02/03-id-derivation.md) | 2 | ⬜ |
 | 4 | Implement `TelemetryPayload` (serde-serialized, exact Python field names including `api_key_hash` alias) and the recursive `sanitize_nested_properties` helper that hashes `url` keys via `uuid5(NAMESPACE_OID, value)`. | [02/04-payload-and-sanitize.md](02/04-payload-and-sanitize.md) | 2 | ⬜ |
