@@ -147,14 +147,12 @@ once_cell = "1"
 
 ### 4.5 Insert `pbkdf2`
 
-Sort position: `pbkdf2` slots between `pdfium-render` (line 74) and
-`predicates` (line 75). Cargo treats `pb` < `pd` < `pe` so the
-correct order is `pdf-extract`, `pdfium-auto`, `pdfium-render`,
-`pbkdf2`, `predicates` — wait, that's wrong: `pb` < `pd`, so
-`pbkdf2` actually slots **before** `pdf-extract`. Verify by sorting
-the four strings alphabetically:
+Sort position: alphabetically `pbkdf2` (`pb`) comes after `ort` (line 70)
+and before `pdf-extract` (line 71). Verify by sorting the strings
+alphabetically:
 
 ```
+ort
 pbkdf2
 pdf-extract
 pdfium-auto
@@ -162,9 +160,8 @@ pdfium-render
 predicates
 ```
 
-So the insertion point is **between `opentelemetry_sdk` (line 70)**
-(actually, `o` < `p`, so any `p*` entry comes after) **and the
-existing `pdf-extract` (line 71)**. Insert after line 70:
+So the insertion point is **between `ort` (line 70) and `pdf-extract`
+(line 71)**. Insert after line 70:
 
 ```toml
 pbkdf2 = { version = "0.12", default-features = false }
@@ -188,6 +185,7 @@ opentelemetry = { version = "=0.31", default-features = false, features = ["trac
 opentelemetry-otlp = { version = "=0.31", default-features = false, features = ["trace", "grpc-tonic", "http-proto", "reqwest-client"] }
 opentelemetry-semantic-conventions = "=0.31"
 opentelemetry_sdk = { version = "=0.31", default-features = false, features = ["trace", "rt-tokio"] }
+ort = { version = "2.0.0-rc.11", features = ["ndarray", "cuda", "tensorrt"] }
 pbkdf2 = { version = "0.12", default-features = false }
 pdf-extract = "0.10"
 ...

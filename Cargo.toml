@@ -57,17 +57,21 @@ edge = { git = "https://github.com/qdrant/qdrant", package = "edge", default-fea
 env_logger = "0.11"
 futures = "0.3"
 futures-util = "0.3"
+hex = "0.4"
+hmac = "0.12"
 lbug = "0.14"
 log = "0.4"
 mail-parser = "0.11"
 mime_guess = "2.0"
 ndarray = "0.17"
 notify = "6.1"
+once_cell = "1"
 opentelemetry = { version = "=0.31", default-features = false, features = ["trace"] }
 opentelemetry-otlp = { version = "=0.31", default-features = false, features = ["trace", "grpc-tonic", "http-proto", "reqwest-client"] }
 opentelemetry-semantic-conventions = "=0.31"
 opentelemetry_sdk = { version = "=0.31", default-features = false, features = ["trace", "rt-tokio"] }
 ort = { version = "2.0.0-rc.11", features = ["ndarray", "cuda", "tensorrt"] }
+pbkdf2 = { version = "0.12", default-features = false }
 pdf-extract = "0.10"
 quick-xml = "0.39"
 pdfium-auto = "0.3"
