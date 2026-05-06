@@ -1,6 +1,6 @@
 # Task 02-04 — `TelemetryPayload` struct + URL sanitization
 
-**Status**: ⬜ unimplemented
+**Status**: implemented in commit 0c053b5 (note: collapsed nested if into a let-chain for clippy; sanitize_nested_properties takes a names: &[&str] slice rather than hard-coding "url" to mirror Python's parametrized helper; noop sanitize signature uses &mut () since serde_json is feature-gated).
 **Owner**: _unassigned_
 **Depends on**:
 - [Task 02-02 — Crate scaffold](02-telemetry-crate-scaffold.md) — empty `payload`/`sanitize` modules.
