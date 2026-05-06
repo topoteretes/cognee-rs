@@ -3,9 +3,9 @@
 **Status:** Not started
 **Owner:** _unassigned_
 **Depends on:**
-- [Task 04 — Implement `init_telemetry` and `TelemetryGuard`](./04-implement-init-otel-and-guard.md) — provides the real OTEL bring-up that this test exercises.
-- [Task 06 — Refactor CLI subscriber](./06-refactor-cli-subscriber.md) — locks the public composition shape (`init_telemetry(&TelemetrySettings)` returning a guard plus a layer) that the test mirrors. (If task 06 is renumbered, follow whichever sub-doc owns the call-site refactor — the test only depends on the public API shape.)
-- [Task 09 — Unit tests in `cognee-observability`](./09-unit-tests-observability.md) — covers the small helpers (`parse_otlp_headers`, `already_instrumented`, noop fallback). This task is the orthogonal *integration* counterpart that proves spans actually leave the process.
+- [Task 04 — Implement `init_telemetry` and `TelemetryGuard`](./04-init-telemetry-implementation.md) — provides the real OTEL bring-up that this test exercises. **Now committed**: the actual signature is `init_telemetry<S>(settings: &dyn SettingsView) -> Result<(BoxedTelemetryLayer<S>, TelemetryGuard), TelemetryInitError>`. There is no `TelemetrySettings` struct — callers pass any `SettingsView` impl (e.g. `EnvSettingsView`, `cognee_lib::Settings`, or a per-test `StaticSettings`).
+- [Task 06 — Refactor CLI subscriber](./06-cli-subscriber-refactor.md) — locks the public composition shape (`init_telemetry(&dyn SettingsView)` returning `(layer, guard)`) that the test mirrors. (If task 06 is renumbered, follow whichever sub-doc owns the call-site refactor — the test only depends on the public API shape.)
+- [Task 09 — Unit tests in `cognee-observability`](./09-observability-unit-tests.md) — covers the small helpers (`parse_otlp_headers`, `already_instrumented`, noop fallback). This task is the orthogonal *integration* counterpart that proves spans actually leave the process.
 
 **Soft pre-conditions (manifest-level):** [Task 01 — workspace OTEL deps](./01-workspace-otel-deps.md), [Task 02 — `cognee-observability` crate scaffold](./02-observability-crate-scaffold.md), [Task 03 — `cognee-lib` feature wiring](./03-cognee-lib-feature-wiring.md). The integration test lives inside `cognee-observability` itself, so only tasks 01/02/04 are strictly required at runtime; 03 is needed for the parent doc's downstream wiring but does not affect this test.
 
@@ -23,8 +23,8 @@ Add a single integration test, `crates/observability/tests/otel_export.rs`, that
 
 1. Stands up a fake OTLP/gRPC `TraceService` on `127.0.0.1:0` inside the test process.
 2. Points cognee's OTEL bring-up at it via `OTEL_EXPORTER_OTLP_ENDPOINT`.
-3. Calls `init_telemetry(&TelemetrySettings { tracing_enabled: true, exporter_otlp_endpoint: …, … })`.
-4. Emits one `#[tracing::instrument]`-annotated function call inside a `tracing::subscriber::with_default` scope.
+3. Calls `init_telemetry(&settings)` with a `SettingsView` impl whose `tracing_enabled() == true` and `otlp_endpoint() == "http://127.0.0.1:<port>"`. The function returns `(BoxedTelemetryLayer<Registry>, TelemetryGuard)`.
+4. Composes the returned layer onto a fresh `Registry` and emits one `#[tracing::instrument]`-annotated function call inside a `tracing::subscriber::with_default` scope.
 5. Drops the `TelemetryGuard` (forcing flush + shutdown).
 6. Asserts the fake collector received at least one `ExportTraceServiceRequest` containing a span named `"test.span"`, attribute `foo == "bar"`, and resource attribute `service.name == "cognee"`.
 
@@ -49,7 +49,7 @@ The OTEL `opentelemetry-proto` crate publishes pre-generated tonic server + clie
 
 ### Why `#![cfg(feature = "telemetry")]`
 
-When the `telemetry` feature is off, `init_telemetry` returns a noop guard ([task 08](./08-noop-fallback-and-tests.md)), no exporter is built, and no bytes ever leave the process. Compiling and running this test under `--no-default-features` would therefore vacuously pass (collector receives nothing, assertion fails) or vacuously skip (depending on how we coded it). Gating the *whole file* via `#![cfg(feature = "telemetry")]` makes the intent explicit: this test exists to validate the real export path and is meaningless without it.
+When the `telemetry` feature is off, `init_telemetry` returns an identity layer plus a noop guard ([task 08](./08-noop-fallback.md)), no exporter is built, and no bytes ever leave the process. Compiling and running this test under `--no-default-features` would therefore vacuously pass (collector receives nothing, assertion fails) or vacuously skip (depending on how we coded it). Gating the *whole file* via `#![cfg(feature = "telemetry")]` makes the intent explicit: this test exists to validate the real export path and is meaningless without it.
 
 ## 3. Pre-conditions
 
@@ -66,28 +66,28 @@ Append the following under the existing `[dev-dependencies]` table introduced in
 ```toml
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time", "sync", "net"] }
+tokio-stream = { version = "0.1", features = ["net"] }
 opentelemetry-proto = { version = "=0.31", default-features = false, features = ["gen-tonic", "trace"] }
-tonic = { workspace = true }
+tonic = { version = "=0.14", default-features = false, features = ["server", "transport", "router"] }
 serial_test = { workspace = true }
 ```
 
 Notes:
 
-- `tokio` already exists in `[dev-dependencies]` from task 02 with `["macros", "rt-multi-thread"]`; this patch widens the feature set to add `time` (for `sleep`/`timeout`), `sync` (for `oneshot` shutdown channel), and `net` (so we can call `TcpListener::bind` with the tokio runtime). Cargo unifies feature sets, so the final dev build has the union.
-- `tonic` is **not** currently a `[workspace.dependencies]` entry. Two options:
-  1. Reference it through `opentelemetry-proto`'s re-export (it re-exports `tonic` via `opentelemetry_proto::tonic::collector::trace::v1::trace_service_server`). Then we don't need a direct `tonic` dev-dep at all. **Preferred** — fewer manifest changes.
-  2. Add `tonic = "..."` to `[workspace.dependencies]` and reference here as `tonic = { workspace = true }`. This requires picking a version compatible with the patched fork the workspace already uses (`qdrant/tonic v0.11.0-qdrant`). The patch substitutes regardless of the requested version, so a lenient `tonic = "0.12"` should work; verify with `cargo tree -p cognee-observability --features telemetry -i tonic`.
-
-  This sub-doc uses **option (1)**: import `tonic` types via the `opentelemetry_proto::tonic` re-export. The dev-deps block therefore omits the explicit `tonic` line. If task 04 finds it needs `tonic` at the workspace level for a different reason, switch to option (2) and update §5.1 below accordingly.
+- `tokio` already exists in `[dev-dependencies]` from task 02 with `["macros", "rt-multi-thread"]`. Cargo unifies feature sets across the build graph; this patch widens it to also include `time` (for `tokio::time::timeout`), `sync` (for `oneshot` shutdown channel), and `net` (so `tokio::net::TcpListener` is available). The first two already arrive transitively via the workspace `tokio` definition (`features = ["rt-multi-thread", "macros", "sync", "time", "fs", "io-util"]`), but listing them explicitly here keeps the dev-dep self-describing.
+- `tokio-stream` is needed for `tokio_stream::wrappers::TcpListenerStream`, which lives behind the `net` feature. The workspace `tokio-stream` entry only enables `["sync"]`, so we add a fresh `[dev-dependencies]` line with `["net"]`. Cargo will unify with the runtime `["sync"]` feature when the workspace dep is also active in another crate.
+- `tonic` is required as a direct dev-dep because the test imports `tonic::{transport::Server, Request, Response, Status}` and uses `#[tonic::async_trait]` to implement the generated `TraceService` server. **It is NOT sufficient to import via `opentelemetry_proto::tonic::...`** — that is the proto-generated submodule (named "tonic" only because `gen-tonic` produced it), not a re-export of the `tonic` crate itself. Pin to `=0.14` to match the version `opentelemetry-otlp 0.31` already pulls into the lockfile (the workspace's `[patch.crates-io]` block redirects an unrelated `tonic 0.11.x` request from qdrant to a fork; tonic 0.14 from crates.io is unpatched and is what `opentelemetry-otlp` resolves against). Disable default features and turn on only what we need (`server`, `transport`, `router`).
 - `opentelemetry-proto` is gated to `dev-dependencies` only — never a runtime dep. The `gen-tonic` feature compiles the tonic server/client bindings; without it only the prost types are exposed and we can't `impl TraceService for …`. The `trace` feature scopes the generated code to just the trace pillar (we don't need metrics or logs here).
-- `serial_test` is added because the OTEL global `TracerProvider` is process-wide (set via `opentelemetry::global::set_tracer_provider`). Two parallel telemetry tests would race on that global. We mark this test with `#[serial_test::serial]` to be safe even if future tests are added.
+- `serial_test` is already in `[dev-dependencies]` (added in task 02). The OTEL global `TracerProvider` is process-wide (set via `opentelemetry::global::set_tracer_provider`); two parallel telemetry tests would race on that global, so we mark this test with `#[serial_test::serial]`.
 
 Final dev-deps shape after this change:
 
 ```toml
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time", "sync", "net"] }
+tokio-stream = { version = "0.1", features = ["net"] }
 opentelemetry-proto = { version = "=0.31", default-features = false, features = ["gen-tonic", "trace"] }
+tonic = { version = "=0.14", default-features = false, features = ["server", "transport", "router"] }
 serial_test = { workspace = true }
 ```
 
@@ -98,8 +98,8 @@ Full test file — see [§5 Resulting code](#5-resulting-code) for the verbatim 
 1. **`#![cfg(feature = "telemetry")]` at the top** — the whole file is excluded under default features.
 2. **`MockTraceService`** — a struct holding `Arc<Mutex<Vec<ExportTraceServiceRequest>>>` plus an `Arc<Notify>` so the test can `await` arrival of the first request rather than `sleep`-and-hope.
 3. **gRPC server lifecycle** — bind to `127.0.0.1:0`, read back the port via `TcpListener::local_addr`, hand the listener to `tonic::transport::Server::serve_with_incoming_shutdown`, drive shutdown via a `tokio::sync::oneshot` channel.
-4. **Exporter wiring** — set `OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:<port>` *before* calling `init_telemetry`. The OTEL SDK reads it directly. `TelemetrySettings.exporter_otlp_endpoint` is also populated for symmetry — task 04 decides which wins; the env var is the canonical OTEL knob.
-5. **Subscriber composition** — fresh `Registry` + `tracing_opentelemetry::layer().with_tracer(tracer)`. We do **not** install globally with `subscriber.try_init()` because that would persist between test runs in the same process. Use `tracing::subscriber::with_default(subscriber, || { … })` instead.
+4. **Exporter wiring** — populate a `StaticSettings` (a tiny `SettingsView` impl in the test file) with the endpoint, and also set `OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:<port>` *before* calling `init_telemetry` so any OTEL SDK code paths that consult the env directly see the same value. `init_telemetry` reads the endpoint via `settings.otlp_endpoint()` (see [task 04 init.rs](../../../crates/observability/src/init.rs)).
+5. **Subscriber composition** — `init_telemetry` returns the bridge layer ready to use. Compose it onto a fresh `Registry` via `Registry::default().with(layer)` and install through `tracing::subscriber::with_default(subscriber, || { … })`. We do **not** install globally with `subscriber.try_init()` because that would persist between test runs in the same process.
 6. **Span emission** — call a function annotated `#[tracing::instrument(name = "test.span", fields(foo = "bar"))]`. Inside, do nothing (no I/O). The instrumentation alone produces the span on entry/exit.
 7. **Flush** — drop the `TelemetryGuard` *inside* the `with_default` scope so the bridge layer is still installed when the SDK calls back to record exit. The `Drop` impl (task 04) calls `force_flush()` then `shutdown()`. The batch processor must finish writing to the gRPC channel before `shutdown()` returns.
 8. **Wait** — `tokio::time::timeout(Duration::from_secs(5), notify.notified())` to await the first request. 5 s is generous for a localhost gRPC call; on a healthy CI box it returns in <100 ms.
@@ -132,7 +132,9 @@ This will exercise `cargo fmt --check`, `cargo check --all-targets`, `cargo clip
 ```toml
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time", "sync", "net"] }
+tokio-stream = { version = "0.1", features = ["net"] }
 opentelemetry-proto = { version = "=0.31", default-features = false, features = ["gen-tonic", "trace"] }
+tonic = { version = "=0.14", default-features = false, features = ["server", "transport", "router"] }
 serial_test = { workspace = true }
 ```
 
@@ -163,7 +165,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use cognee_observability::{init_telemetry, TelemetrySettings};
+use cognee_observability::{init_telemetry, SettingsView};
 
 use opentelemetry_proto::tonic::collector::trace::v1::{
     trace_service_server::{TraceService, TraceServiceServer},
@@ -240,45 +242,55 @@ fn emit_span() {
     // span on entry/exit. We don't want any extra noise spans inside.
 }
 
+/// Tiny in-test `SettingsView` impl. We don't reach for `EnvSettingsView`
+/// because we want explicit control over every field independent of
+/// process env state.
+struct StaticSettings {
+    endpoint: String,
+}
+
+impl SettingsView for StaticSettings {
+    fn tracing_enabled(&self) -> bool { true }
+    fn service_name(&self) -> &str { "cognee" }
+    fn otlp_endpoint(&self) -> &str { &self.endpoint }
+    fn otlp_headers(&self) -> &str { "" }
+    fn otlp_protocol(&self) -> &str { "grpc" }
+    fn span_processor(&self) -> &str { "batch" }
+    fn traces_sampler(&self) -> &str { "" }
+    fn traces_sampler_arg(&self) -> &str { "" }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[serial_test::serial]
 async fn spans_flow_to_otlp_collector() {
     let (captured, addr, shutdown_tx, server_task) = spawn_mock_collector().await;
 
-    // Point cognee at our fake collector. The OTEL SDK reads
-    // OTEL_EXPORTER_OTLP_ENDPOINT directly; TelemetrySettings is populated for
-    // symmetry / explicitness.
+    // Point cognee at our fake collector. The endpoint is fed via
+    // `StaticSettings` (the canonical path); we also export the env var
+    // for any OTEL SDK code path that consults it directly.
     let endpoint = format!("http://{addr}");
     // SAFETY: tests in this file are serialised by `#[serial_test::serial]`
     // and `--test-threads=1`, so this env-var write does not race with other
-    // telemetry tests.
-    std::env::set_var("OTEL_EXPORTER_OTLP_ENDPOINT", &endpoint);
+    // telemetry tests. `set_var` is `unsafe` on edition 2024.
+    unsafe { std::env::set_var("OTEL_EXPORTER_OTLP_ENDPOINT", &endpoint) };
 
-    let settings = TelemetrySettings {
-        tracing_enabled: true,
-        service_name: "cognee".to_string(),
-        exporter_otlp_endpoint: endpoint.clone(),
-        exporter_otlp_headers: String::new(),
-    };
+    let settings = StaticSettings { endpoint: endpoint.clone() };
 
-    // Real OTEL bring-up. Returns a guard that flushes + shuts down on drop,
-    // and (per task 04) also exposes a tracing_subscriber::Layer that bridges
-    // tracing → OTEL. The exact accessor name is decided in task 04; here we
-    // assume `guard.tracer_for_test()` returns the `opentelemetry::trace::Tracer`
-    // we need to attach the bridge to a fresh Registry. If task 04 names it
-    // differently, update this call site.
-    let guard = init_telemetry(&settings).expect("init_telemetry must succeed when telemetry feature is on and endpoint is reachable");
+    // Real OTEL bring-up. Returns the bridge layer plus a guard whose Drop
+    // calls force_flush() + shutdown_with_timeout() (see
+    // crates/observability/src/guard.rs).
+    let (layer, guard) = init_telemetry::<Registry>(&settings)
+        .expect("init_telemetry must succeed when telemetry feature is on and endpoint is reachable");
 
-    let tracer = guard.tracer_for_test();
-    let otel_layer = tracing_opentelemetry::layer().with_tracer(tracer);
-    let subscriber = Registry::default().with(otel_layer);
+    let subscriber = Registry::default().with(layer);
 
     tracing::subscriber::with_default(subscriber, || {
         emit_span();
     });
 
-    // Force the batch processor to flush before we assert. Dropping the guard
-    // calls force_flush() + shutdown() per task 04.
+    // Force the batch processor to flush before we assert. Dropping the
+    // guard calls force_flush() + shutdown_with_timeout() per task 04
+    // (`crates/observability/src/guard.rs`).
     drop(guard);
 
     // Wait up to 5s for the first ExportTraceServiceRequest to arrive.
@@ -364,9 +376,9 @@ async fn spans_flow_to_otlp_collector() {
 
 #### Notes on the test file
 
-- The `tokio_stream` import (`tokio_stream::wrappers::TcpListenerStream`) requires `tokio-stream` in `[dev-dependencies]`. It is already in `[workspace.dependencies]` (with `features = ["sync"]`). Add `tokio-stream = { workspace = true, features = ["net"] }` to `crates/observability/Cargo.toml`'s `[dev-dependencies]` if `cargo check` complains about the missing `net` feature; the wrapper for `TcpListener` lives behind it. (If task 04 already added `tokio-stream` to runtime deps, the dev-dep is unnecessary.)
-- The `guard.tracer_for_test()` accessor referenced above is **not** defined in this task — it lives in task 04's `TelemetryGuard` impl. If task 04 prefers a different surface (e.g. `opentelemetry::global::tracer("cognee")` after `init_telemetry` has installed the provider globally), replace the `let tracer = guard.tracer_for_test();` line with `let tracer = opentelemetry::global::tracer("cognee");`. The rest of the test is unaffected. This sub-doc explicitly leaves the choice to task 04 and documents both forms.
-- The OTLP exporter inside `init_telemetry` will, by default, use the **batch** span processor (locked by [decision 4](../01-otel-otlp-export.md#design-decisions-locked)). The batch processor flushes asynchronously; `force_flush()` synchronously waits for the in-flight batch to drain (with a configurable timeout). The 5 s `tokio::time::timeout` is the upper bound on `force_flush + network round-trip` for localhost gRPC; if the test ever flakes, the SDK's flush timeout is the first thing to inspect.
+- The `tokio_stream` import (`tokio_stream::wrappers::TcpListenerStream`) requires the `net` feature, which the workspace `tokio-stream = { version = "0.1", features = ["sync"] }` does **not** enable. We therefore add a fresh `tokio-stream = { version = "0.1", features = ["net"] }` line under `[dev-dependencies]` rather than reusing `{ workspace = true }` (because activating `[features.net]` from a dev-dep that points at the workspace entry would conflict with the workspace-level feature set).
+- `init_telemetry` itself returns the `tracing-opentelemetry` bridge layer; there is no separate "fetch the tracer" step. We destructure `(layer, guard)` from the call result and compose `layer` onto the registry directly. The `TelemetryGuard` API surface is intentionally minimal — a `has_provider()` inspector exists under `cfg(any(test, debug_assertions))` for parity tests but is not needed here.
+- The OTLP exporter inside `init_telemetry` uses the **batch** span processor by default (locked by [decision 4](../01-otel-otlp-export.md#design-decisions-locked)). The batch processor flushes asynchronously; `force_flush()` synchronously waits for the in-flight batch to drain, then `shutdown_with_timeout(5s)` (see `guard.rs`) finalises. The 5 s `tokio::time::timeout` on `notified()` is the upper bound on `force_flush + network round-trip` for localhost gRPC; if the test ever flakes, the SDK's flush timeout is the first thing to inspect.
 
 ## 6. Verification
 
@@ -394,7 +406,7 @@ Once all three of the assertions pass:
 
 | File | Change |
 |---|---|
-| [`crates/observability/Cargo.toml`](../../../crates/observability/Cargo.toml) | **Modify.** Add `opentelemetry-proto`, `serial_test`, and the additional `tokio` features (`time`, `sync`, `net`) under `[dev-dependencies]`. Optionally add `tokio-stream = { workspace = true, features = ["net"] }` if `TcpListenerStream` is not already reachable. |
+| [`crates/observability/Cargo.toml`](../../../crates/observability/Cargo.toml) | **Modify.** Add `opentelemetry-proto`, `tonic` (direct dev-dep), and `tokio-stream = { features = ["net"] }` under `[dev-dependencies]`; widen the existing `tokio` dev-dep features to include `time`, `sync`, `net`. `serial_test` is already present from task 02. |
 | `crates/observability/tests/otel_export.rs` | **New.** The integration test in §5.2 above. |
 
 No production source files are modified by this task; no other crate's manifest is touched.
@@ -407,9 +419,9 @@ No production source files are modified by this task; no other crate's manifest 
   - [Action items](../01-otel-otlp-export.md#action-items) item 10.
 - Sibling sub-docs:
   - [`02-observability-crate-scaffold.md`](./02-observability-crate-scaffold.md) — owns the `Cargo.toml` we extend in §4.1.
-  - [`04-implement-init-otel-and-guard.md`](./04-implement-init-otel-and-guard.md) — owns `init_telemetry`, `TelemetryGuard`, and the `tracer_for_test()` (or equivalent) accessor.
-  - [`08-noop-fallback-and-tests.md`](./08-noop-fallback-and-tests.md) — explains why this test is `#![cfg(feature = "telemetry")]`-gated.
-  - [`09-unit-tests-observability.md`](./09-unit-tests-observability.md) — the orthogonal unit-test sub-doc (parsers, helpers); this is the integration counterpart.
+  - [`04-init-telemetry-implementation.md`](./04-init-telemetry-implementation.md) — owns `init_telemetry` and `TelemetryGuard`. The bridge layer is returned from `init_telemetry` directly; no separate tracer accessor is needed.
+  - [`08-noop-fallback.md`](./08-noop-fallback.md) — explains why this test is `#![cfg(feature = "telemetry")]`-gated.
+  - [`09-observability-unit-tests.md`](./09-observability-unit-tests.md) — the orthogonal unit-test sub-doc (parsers, helpers); this is the integration counterpart.
 - External documentation:
   - [`opentelemetry-proto` crate](https://docs.rs/opentelemetry-proto/0.31.0/opentelemetry_proto/) — `tonic::collector::trace::v1::trace_service_server::{TraceService, TraceServiceServer}`, `ExportTraceServiceRequest`, `ExportTraceServiceResponse`, `tonic::common::v1::any_value::Value`.
   - [tonic guide — implementing a server](https://github.com/hyperium/tonic) — `Server::builder().add_service(...).serve_with_incoming_shutdown(...)`.

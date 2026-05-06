@@ -33,5 +33,8 @@ tonic = { version = "=0.14", default-features = false, optional = true }
 http = { version = "1", optional = true }
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time", "sync", "net"] }
+tokio-stream = { version = "0.1", features = ["net"] }
+opentelemetry-proto = { version = "=0.31", default-features = false, features = ["gen-tonic", "trace"] }
+tonic = { version = "=0.14", default-features = false, features = ["server", "transport", "router"] }
 serial_test = { workspace = true }

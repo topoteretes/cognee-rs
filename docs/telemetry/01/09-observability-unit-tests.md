@@ -1,6 +1,17 @@
 # Task 09 — Unit tests for `cognee-observability`
 
-**Status:** Largely-already-implemented by tasks 04/07/08 — only the residual gap items below remain.
+**Status**: Implemented in commit 52c2be7
+
+## Implementation notes
+
+Deviations from the as-written task plan recorded for downstream reviewers:
+
+1. **Production fix to `already_instrumented()`**: replaced the broken Debug-string heuristic (which always returned `true` against OTEL 0.31, silently disabling our telemetry path) with a `static OUR_PROVIDER_INSTALLED: OnceLock<()>` set after `set_tracer_provider()`. The function's semantics shifted from "host has installed any OTEL provider" detection to "we have installed it" idempotency, and it is no longer feature-gated. This change was outside the original tests-only task scope but was required because the integration tests would otherwise have pinned a broken behavior. Discovered while writing tests 7/8/10/11.
+2. **Tests 7, 8, 10, and 11 were collapsed into a single `init_telemetry_full_activation_lifecycle` test** in `crates/observability/tests/init.rs`. Rationale: `OnceLock` is per-process; `#[serial]` enforces non-overlap but not deterministic ordering across separate `#[test]` functions. A single linear test walks the full lifecycle (default-noop → endpoint activation → flag activation → idempotent re-entry).
+3. **Empty-endpoint and unknown-protocol error cases are not covered in this binary** because the `OnceLock` shortcut takes the bridge branch on every call after first install. This is documented in test comments. Covering these paths would require a separate test binary.
+4. **Defaults extension**: `default_values_are_correct` in `crates/lib/src/config.rs` now pins all 8 OTEL fields (it previously pinned only `cognee_tracing_enabled` and `otel_service_name`).
+
+**Original status:** Largely-already-implemented by tasks 04/07/08 — only the residual gap items below remain.
 **Owner:** _unassigned_
 **Depends on:** [Task 02 — Scaffold the `cognee-observability` workspace crate](./02-observability-crate-scaffold.md), [Task 04 — Implement `init_telemetry` and `TelemetryGuard`](./04-init-telemetry-implementation.md), [Task 08 — Noop fallback (and `Settings` field overlay)](./08-noop-fallback.md)
 **Blocks:** Nothing (terminal task within the test pyramid; integration tests against a fake OTLP collector are tracked separately as action item 10 in the parent doc).
