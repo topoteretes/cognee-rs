@@ -1,8 +1,6 @@
 # Task 01-01: Add OpenTelemetry workspace dependencies
 
-## Status
-
-Not started.
+**Status**: Implemented in commit 8cc50bb
 
 ## Owner / dependencies
 

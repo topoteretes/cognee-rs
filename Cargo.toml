@@ -28,6 +28,7 @@ members = [
     "crates/visualization",
     "crates/cloud",
     "crates/http-server",
+    "crates/observability",
 
     # TODO: Move this out of the main workspace to avoid pulling in testing features and C FFI dependencies for all members
     "capi/cognee-capi",
