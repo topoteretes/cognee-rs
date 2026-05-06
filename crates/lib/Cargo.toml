@@ -37,8 +37,16 @@ android-litert = ["cognee-llm/android-litert"]
 # External telemetry event export (opt-in). When enabled, the high-level API
 # functions emit `tracing` events on the `cognee.telemetry` target so
 # downstream subscribers (OTEL log exporter, tracing_subscriber::Layer, etc.)
-# can capture them. Mirrors Python's `send_telemetry()` calls.
-telemetry = []
+# can capture them. Mirrors Python's `send_telemetry()` calls. This feature
+# also pulls in the `cognee-observability` crate which installs the
+# OpenTelemetry SDK + OTLP exporter (see docs/telemetry/01-otel-otlp-export.md)
+# and forwards to `cognee-core/telemetry` so pipeline-runner event emission
+# is enabled in lockstep.
+telemetry = [
+    "dep:cognee-observability",
+    "cognee-observability/telemetry",
+    "cognee-core/telemetry",
+]
 
 # Document format loaders (forwarded from cognee-ingestion)
 pdf-pdfium        = ["cognee-ingestion/pdf-pdfium"]
@@ -89,6 +97,7 @@ cognee-graph = { path = "../graph" }
 cognee-ingestion = { path = "../ingestion" }
 cognee-llm = { path = "../llm" }
 cognee-models = { path = "../models" }
+cognee-observability = { path = "../observability", optional = true }
 cognee-ontology = { path = "../ontology" }
 cognee-search = { path = "../search" }
 cognee-session = { path = "../session" }

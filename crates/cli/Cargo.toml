@@ -35,6 +35,7 @@ sqlite        = ["cognee-lib/sqlite"]
 postgres      = ["cognee-lib/postgres"]
 hf-tokenizer  = ["cognee-lib/hf-tokenizer"]
 tiktoken      = ["cognee-lib/tiktoken"]
+telemetry     = ["cognee-lib/telemetry"]
 visualization = ["cognee-lib/visualization"]
 
 # Document format loaders (forwarded through cognee-lib)

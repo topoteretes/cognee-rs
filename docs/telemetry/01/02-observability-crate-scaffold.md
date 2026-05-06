@@ -1,6 +1,6 @@
 # Task 02 — Scaffold the `cognee-observability` workspace crate
 
-**Status:** Not started
+**Status**: Implemented in commit c88df3d
 **Owner:** _unassigned_
 **Depends on:** [Task 01 — Add OTEL workspace dependencies](./01-workspace-otel-deps.md)
 **Blocks:** [Task 03 — Wire `telemetry` feature on `cognee-lib`](./03-cognee-lib-feature-wiring.md), [Task 04 — Implement `init_otel` and `TelemetryGuard`](./04-init-telemetry-implementation.md), [Task 05 — Re-exports & subscriber composition helper](./05-cognee-lib-reexports.md), [Task 06 — Refactor CLI subscriber](./06-cli-subscriber-refactor.md), [Task 07 — Refactor HTTP server subscriber](./07-http-server-subscriber-refactor.md)

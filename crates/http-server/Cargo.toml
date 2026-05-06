@@ -22,6 +22,11 @@ bin = [
     "tokio/rt-multi-thread",
     "tokio/signal",
 ]
+telemetry = [
+    "dep:cognee-observability",
+    "cognee-observability/telemetry",
+    "cognee-core/telemetry",
+]
 
 [dependencies]
 # Web framework and HTTP stack — do NOT use workspace hyper; the workspace
@@ -37,6 +42,7 @@ hyper = { version = "1", features = ["server", "http1", "http2"] }
 # create a cycle when cognee-lib's `server` feature pulls in cognee-http-server.
 # Concrete cognee-lib types are wired via AppState in P1+.
 cognee-models = { path = "../models" }
+cognee-observability = { path = "../observability", optional = true }
 cognee-core = { path = "../core", features = ["pipeline-run-registry"] }
 cognee-database = { path = "../database", features = ["sqlite"] }
 sea-orm = { version = "1", default-features = false, features = ["runtime-tokio-rustls", "with-chrono", "with-uuid", "with-json"] }
