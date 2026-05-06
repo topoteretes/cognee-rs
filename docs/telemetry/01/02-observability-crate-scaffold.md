@@ -3,17 +3,17 @@
 **Status**: Implemented in commit c88df3d
 **Owner:** _unassigned_
 **Depends on:** [Task 01 — Add OTEL workspace dependencies](./01-workspace-otel-deps.md)
-**Blocks:** [Task 03 — Wire `telemetry` feature on `cognee-lib`](./03-cognee-lib-feature-wiring.md), [Task 04 — Implement `init_otel` and `TelemetryGuard`](./04-init-telemetry-implementation.md), [Task 05 — Re-exports & subscriber composition helper](./05-cognee-lib-reexports.md), [Task 06 — Refactor CLI subscriber](./06-cli-subscriber-refactor.md), [Task 07 — Refactor HTTP server subscriber](./07-http-server-subscriber-refactor.md)
+**Blocks:** [Task 03 — Wire `telemetry` feature on `cognee-lib`](./03-cognee-lib-feature-wiring.md), [Task 04 — Implement `init_telemetry` and `TelemetryGuard`](./04-init-telemetry-implementation.md), [Task 05 — Re-exports & subscriber composition helper](./05-cognee-lib-reexports.md), [Task 06 — Refactor CLI subscriber](./06-cli-subscriber-refactor.md), [Task 07 — Refactor HTTP server subscriber](./07-http-server-subscriber-refactor.md)
 **Parent doc:** [01 — OpenTelemetry SDK + OTLP Export Wiring](../01-otel-otlp-export.md)
 
 ---
 
 ## 1. Goal
 
-Create a brand-new workspace crate, **`cognee-observability`**, which will host all OTEL bring-up code, the `TelemetryGuard` RAII handle, and the `init_otel(...)` entry point. This task is **scaffold only**:
+Create a brand-new workspace crate, **`cognee-observability`**, which will host all OTEL bring-up code, the `TelemetryGuard` RAII handle, and the `init_telemetry(...)` entry point. This task is **scaffold only**:
 
 - Crate manifest with the `telemetry` cargo feature wired to optional OTEL dependencies.
-- `lib.rs` skeleton with public-API stubs (`TelemetryGuard`, `OtelInitError`, module declarations) so dependent tasks can land their pieces in parallel.
+- `lib.rs` skeleton with public-API stubs (`TelemetryGuard`, `TelemetryInitError`, module declarations) so dependent tasks can land their pieces in parallel.
 - A clean `#[cfg(feature = "telemetry")] mod real;` / `#[cfg(not)] mod noop;` split — empty modules for now, real bodies arrive in tasks 04 and 08.
 - Workspace registration so `cargo metadata` and `cargo check` see the crate.
 
@@ -26,7 +26,7 @@ Decision 6 in the [parent doc's "Design decisions (locked)" table](../01-otel-ot
 1. **Reusability across binaries.** `cognee-http-server` is a workspace member that does **not** depend on `cognee-lib` for its binary entry point — it links a few smaller cognee crates directly. Putting OTEL bring-up inside `cognee-lib` would either force `cognee-http-server` to take the whole umbrella as a dep (large), or force us to duplicate the subscriber composition. A sibling crate is depended on by both `cognee-cli` (via `cognee-lib`) and `cognee-http-server` directly.
 2. **Dependency hygiene with feature off.** The OTEL crate set (`opentelemetry`, `opentelemetry_sdk`, `opentelemetry-otlp` with `tonic` + `reqwest`, `tracing-opentelemetry`) is heavy. With the `telemetry` feature gated at the leaf crate, a `cargo build -p cognee-lib --no-default-features` excludes them entirely. If the same gating lived inside `cognee-lib`, every `cognee-lib` consumer would see the optional deps in their `Cargo.lock` resolution graph (Cargo still resolves optional deps for feature unification).
 3. **Per-concern crate split convention.** The workspace already has dedicated crates for narrow concerns (`cognee-utils`, `cognee-session`, `cognee-ontology`, `cognee-delete`, etc.). Observability is a comparable cross-cutting concern; a sibling crate matches the pattern in the [project guide](../../../.claude/CLAUDE.md#rust-workspace-structure).
-4. **Testability.** Integration tests for OTEL exporters (task 10 of the parent doc) live inside this crate and don't need to drag in the rest of `cognee-lib`'s features (sqlite/qdrant/onnx/etc.) just to spin up an `init_otel` test.
+4. **Testability.** Integration tests for OTEL exporters (task 10 of the parent doc) live inside this crate and don't need to drag in the rest of `cognee-lib`'s features (sqlite/qdrant/onnx/etc.) just to spin up an `init_telemetry` test.
 5. **Future home for `SpanBufferLayer`.** If the in-memory ring buffer that powers `/api/v1/activity/spans` is later generalized out of `cognee-http-server`, this crate is its natural new home (see Open extensions, §10).
 
 ## 3. Pre-conditions
@@ -60,7 +60,7 @@ edition.workspace = true
 default = []
 
 # Pulls in the OpenTelemetry SDK + OTLP exporter + tracing bridge.
-# When disabled, the public API still compiles but `init_otel` returns a
+# When disabled, the public API still compiles but `init_telemetry` returns a
 # noop `TelemetryGuard` and an identity tracing layer. See task 08 for the
 # noop body.
 telemetry = [
@@ -90,8 +90,8 @@ tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 ```
 
 Notes on this manifest:
-- No `cognee-*` path dependencies. The `Settings` argument that `init_otel` will eventually accept is taken as a borrowed struct from `cognee-lib`. To avoid a circular `cognee-lib` ↔ `cognee-observability` dep, **task 04** will introduce a small input struct (`OtelSettings`) defined inside this crate and `cognee-lib` will convert its `Settings` into it. That keeps this crate at the bottom of the dep graph.
-- `tracing-subscriber` is always-on because the public return type of `init_otel` is a boxed/identity `tracing_subscriber::Layer` regardless of feature state.
+- No `cognee-*` path dependencies. The `Settings` argument that `init_telemetry` will eventually accept is taken as a borrowed struct from `cognee-lib`. To avoid a circular `cognee-lib` ↔ `cognee-observability` dep, **task 04** will introduce a small input struct (`TelemetrySettings`) defined inside this crate and `cognee-lib` will convert its `Settings` into it. That keeps this crate at the bottom of the dep graph.
+- `tracing-subscriber` is always-on because the public return type of `init_telemetry` is a boxed/identity `tracing_subscriber::Layer` regardless of feature state.
 - `opentelemetry-otlp` features (`grpc-tonic`, `http-proto`, `reqwest-client`, `trace`) are configured at the workspace-deps layer in [task 01](./01-workspace-otel-deps.md), so we just write `{ workspace = true, optional = true }` here.
 - Workspace lints inheritance (`lints.workspace = true`) is **not** used elsewhere in this repo (verified by grepping `lints.workspace` across `crates/*` and the root `Cargo.toml`); we omit it to match the existing convention.
 
@@ -111,9 +111,9 @@ Skeleton-only contents:
 //! - `telemetry` (off by default) — pulls in `opentelemetry`,
 //!   `opentelemetry_sdk`, `opentelemetry-otlp`,
 //!   `opentelemetry-semantic-conventions`, and `tracing-opentelemetry`.
-//!   When enabled, [`init_otel`] builds a real `SdkTracerProvider`,
+//!   When enabled, [`init_telemetry`] builds a real `SdkTracerProvider`,
 //!   installs it globally, and returns a guard that flushes on drop.
-//!   When disabled, [`init_otel`] still compiles but returns an identity
+//!   When disabled, [`init_telemetry`] still compiles but returns an identity
 //!   tracing layer plus a noop guard, so embedders can call it
 //!   unconditionally.
 //!
@@ -132,9 +132,9 @@ mod real;
 #[cfg(not(feature = "telemetry"))]
 mod noop;
 
-pub use error::OtelInitError;
+pub use error::TelemetryInitError;
 pub use guard::TelemetryGuard;
-pub use settings::OtelSettings;
+pub use settings::TelemetrySettings;
 
 /// Initialize OpenTelemetry tracing for the current process.
 ///
@@ -143,7 +143,7 @@ pub use settings::OtelSettings;
 /// (real path) and
 /// [task 08](../../docs/telemetry/01/08-noop-fallback.md)
 /// (noop path). Both arms return [`TelemetryGuard`] today.
-pub fn init_otel(_settings: &OtelSettings) -> Result<TelemetryGuard, OtelInitError> {
+pub fn init_telemetry(_settings: &TelemetrySettings) -> Result<TelemetryGuard, TelemetryInitError> {
     #[cfg(feature = "telemetry")]
     {
         real::init(_settings)
@@ -160,7 +160,7 @@ And the small supporting files (also stubs):
 `crates/observability/src/error.rs`:
 
 ```rust
-//! Errors surfaced by [`crate::init_otel`].
+//! Errors surfaced by [`crate::init_telemetry`].
 
 use thiserror::Error;
 
@@ -169,7 +169,7 @@ use thiserror::Error;
 /// Variants will be filled in by [task 04](../../docs/telemetry/01/04-init-telemetry-implementation.md).
 #[derive(Debug, Error)]
 #[non_exhaustive]
-pub enum OtelInitError {
+pub enum TelemetryInitError {
     /// Placeholder so the enum is non-empty until task 04 lands real
     /// variants (exporter build failures, header parse errors, etc.).
     #[error("OTEL initialization not yet implemented")]
@@ -180,7 +180,7 @@ pub enum OtelInitError {
 `crates/observability/src/guard.rs`:
 
 ```rust
-//! RAII handle returned by [`crate::init_otel`].
+//! RAII handle returned by [`crate::init_telemetry`].
 
 /// RAII handle that flushes and shuts down the global tracer provider on
 /// drop.
@@ -210,12 +210,12 @@ impl TelemetryGuard {
 `crates/observability/src/settings.rs`:
 
 ```rust
-//! Input struct for [`crate::init_otel`].
+//! Input struct for [`crate::init_telemetry`].
 //!
 //! Defined here (rather than re-using `cognee_lib::config::Settings`) so
 //! that this crate sits at the bottom of the workspace dependency graph
 //! and does not pull in `cognee-lib`. `cognee-lib` constructs an
-//! `OtelSettings` from its own `Settings` in
+//! `TelemetrySettings` from its own `Settings` in
 //! [task 05](../../docs/telemetry/01/05-cognee-lib-reexports.md).
 
 /// Subset of cognee settings required to initialize OpenTelemetry.
@@ -226,7 +226,7 @@ impl TelemetryGuard {
 /// without breaking the observability ABI.
 #[derive(Debug, Clone, Default)]
 #[non_exhaustive]
-pub struct OtelSettings {
+pub struct TelemetrySettings {
     /// Mirrors `Settings.cognee_tracing_enabled`.
     pub tracing_enabled: bool,
     /// Mirrors `Settings.otel_service_name`.
@@ -244,9 +244,9 @@ pub struct OtelSettings {
 //! Real OTEL bring-up. Body lands in
 //! [task 04](../../docs/telemetry/01/04-init-telemetry-implementation.md).
 
-use crate::{OtelInitError, OtelSettings, TelemetryGuard};
+use crate::{TelemetryInitError, TelemetrySettings, TelemetryGuard};
 
-pub(crate) fn init(_settings: &OtelSettings) -> Result<TelemetryGuard, OtelInitError> {
+pub(crate) fn init(_settings: &TelemetrySettings) -> Result<TelemetryGuard, TelemetryInitError> {
     // TODO(task 04): build SdkTracerProvider, install globally, return
     // guard that flushes on drop.
     Ok(TelemetryGuard::noop())
@@ -260,9 +260,9 @@ pub(crate) fn init(_settings: &OtelSettings) -> Result<TelemetryGuard, OtelInitE
 //! body lands in
 //! [task 08](../../docs/telemetry/01/08-noop-fallback.md).
 
-use crate::{OtelInitError, OtelSettings, TelemetryGuard};
+use crate::{TelemetryInitError, TelemetrySettings, TelemetryGuard};
 
-pub(crate) fn init(_settings: &OtelSettings) -> Result<TelemetryGuard, OtelInitError> {
+pub(crate) fn init(_settings: &TelemetrySettings) -> Result<TelemetryGuard, TelemetryInitError> {
     Ok(TelemetryGuard::noop())
 }
 ```
@@ -347,9 +347,9 @@ tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 //! - `telemetry` (off by default) — pulls in `opentelemetry`,
 //!   `opentelemetry_sdk`, `opentelemetry-otlp`,
 //!   `opentelemetry-semantic-conventions`, and `tracing-opentelemetry`.
-//!   When enabled, [`init_otel`] builds a real `SdkTracerProvider`,
+//!   When enabled, [`init_telemetry`] builds a real `SdkTracerProvider`,
 //!   installs it globally, and returns a guard that flushes on drop.
-//!   When disabled, [`init_otel`] still compiles but returns an identity
+//!   When disabled, [`init_telemetry`] still compiles but returns an identity
 //!   tracing layer plus a noop guard, so embedders can call it
 //!   unconditionally.
 
@@ -365,12 +365,12 @@ mod real;
 #[cfg(not(feature = "telemetry"))]
 mod noop;
 
-pub use error::OtelInitError;
+pub use error::TelemetryInitError;
 pub use guard::TelemetryGuard;
-pub use settings::OtelSettings;
+pub use settings::TelemetrySettings;
 
 /// Initialize OpenTelemetry tracing for the current process.
-pub fn init_otel(_settings: &OtelSettings) -> Result<TelemetryGuard, OtelInitError> {
+pub fn init_telemetry(_settings: &TelemetrySettings) -> Result<TelemetryGuard, TelemetryInitError> {
     #[cfg(feature = "telemetry")]
     {
         real::init(_settings)
@@ -447,10 +447,10 @@ This is required by the [project `CLAUDE.md`](../../../.claude/CLAUDE.md#build--
 |---|---|
 | [`Cargo.toml`](../../../Cargo.toml) | Add `"crates/observability"` to `[workspace] members`. |
 | `crates/observability/Cargo.toml` | **New.** Manifest with `telemetry` feature wiring optional OTEL deps. |
-| `crates/observability/src/lib.rs` | **New.** Skeleton with `init_otel`, module declarations, public re-exports. |
-| `crates/observability/src/error.rs` | **New.** `OtelInitError` enum stub. |
+| `crates/observability/src/lib.rs` | **New.** Skeleton with `init_telemetry`, module declarations, public re-exports. |
+| `crates/observability/src/error.rs` | **New.** `TelemetryInitError` enum stub. |
 | `crates/observability/src/guard.rs` | **New.** `TelemetryGuard` struct with placeholder fields. |
-| `crates/observability/src/settings.rs` | **New.** `OtelSettings` input struct. |
+| `crates/observability/src/settings.rs` | **New.** `TelemetrySettings` input struct. |
 | `crates/observability/src/real.rs` | **New.** Telemetry-on stub (real body in task 04). |
 | `crates/observability/src/noop.rs` | **New.** Telemetry-off stub (real body in task 08). |
 
@@ -458,7 +458,7 @@ No other crates change in this task. Cross-crate wiring lives in tasks 03 (cargo
 
 ## 8. Risks
 
-1. **Circular dependency with `cognee-lib`.** This crate must **not** depend on `cognee-lib` (which already depends transitively on most siblings). The mitigation is the dedicated `OtelSettings` struct in §4.3 — `cognee-lib` converts its bigger `Settings` into `OtelSettings` at the call site (task 05). Reviewers should fail the PR if any `cognee_lib::` path appears in `crates/observability/`.
+1. **Circular dependency with `cognee-lib`.** This crate must **not** depend on `cognee-lib` (which already depends transitively on most siblings). The mitigation is the dedicated `TelemetrySettings` struct in §4.3 — `cognee-lib` converts its bigger `Settings` into `TelemetrySettings` at the call site (task 05). Reviewers should fail the PR if any `cognee_lib::` path appears in `crates/observability/`.
 2. **Feature unification across the workspace.** Cargo unifies features per package across the dep graph. If any crate later writes `cognee-observability = { ..., features = ["telemetry"] }` unconditionally, every workspace consumer ends up with OTEL deps. Tasks 03 and 07 are written to forward the flag through cargo features only; CI lane `cargo check -p cognee-lib --no-default-features` (task 12 of the parent doc) will catch regressions.
 3. **Naming collision.** `cognee-observability` is a new name; double-check `crates.io` does not already publish it under our account before any future `cargo publish`. (Not relevant for the workspace path-dep build.)
 4. **User enables `telemetry` but workspace dep missing.** If task 01 is not yet merged, `cargo check -p cognee-observability --features telemetry` fails with `error: failed to select a version for the requirement opentelemetry = ...`. Ensure the dependency PR (task 01) is merged before this one, or land them together.
@@ -468,7 +468,19 @@ No other crates change in this task. Cross-crate wiring lives in tasks 03 (cargo
 
 - **Hosting `SpanBufferLayer` here.** Today the in-memory ring buffer that backs `/api/v1/activity/spans` lives in [`crates/http-server/src/observability/`](../../../crates/http-server/src/observability/). If a future task generalizes it for the CLI / SDK use-case, this crate is the natural new home (it already owns the OTEL layer and would be at the same layer of the dep graph). Tracked under "Future Work" in the [root gap analysis](../gap-analysis.md#future-work--out-of-scope).
 - **Metrics & logs.** Decision 12 puts metric and log exporters out of scope for this initiative. When they land, they slot into `cognee-observability/src/{metrics,logs}.rs` next to the existing `real`/`noop` modules and reuse the same `telemetry` feature flag.
-- **Sampling configuration.** [Task 04](./04-init-telemetry-implementation.md) covers sampler wiring per decision 5; the public `OtelSettings` struct will gain `traces_sampler` / `traces_sampler_arg` fields then. This task intentionally keeps `OtelSettings` minimal so the surface to update later is small.
+- **Sampling configuration.** [Task 04](./04-init-telemetry-implementation.md) covers sampler wiring per decision 5; the public `TelemetrySettings` struct will gain `traces_sampler` / `traces_sampler_arg` fields then. This task intentionally keeps `TelemetrySettings` minimal so the surface to update later is small.
+
+## Implementation notes
+
+After the scaffold landed, the public identifiers were renamed to match the
+broader telemetry naming used by sibling tasks 04–10:
+
+- `init_otel` → `init_telemetry`
+- `OtelInitError` → `TelemetryInitError`
+- `OtelSettings` → `TelemetrySettings`
+
+The renamed names are what shipped on `main`; this doc body has been
+back-filled to reference them.
 
 ## 10. References
 

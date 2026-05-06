@@ -291,15 +291,15 @@ Create
 ```rust
 // crates/lib/src/observability/otel.rs
 #[cfg(feature = "telemetry")]
-pub use real::{init_otel, OtelGuard, OtelInitError};
+pub use real::{init_telemetry, OtelGuard, TelemetryInitError};
 
 #[cfg(not(feature = "telemetry"))]
-pub fn init_otel(_settings: &Settings) -> Result<OtelGuard, OtelInitError> {
+pub fn init_telemetry(_settings: &Settings) -> Result<OtelGuard, TelemetryInitError> {
     Ok(OtelGuard::noop())
 }
 ```
 
-`OtelGuard` is the RAII flush handle returned by `init_otel`. Dropping
+`OtelGuard` is the RAII flush handle returned by `init_telemetry`. Dropping
 it calls `provider.shutdown()`. This mirrors the
 `tracing_appender::non_blocking::WorkerGuard` pattern.
 
@@ -315,7 +315,7 @@ embedder depends on.
 pub mod otel;
 
 // re-exports in lib.rs
-pub use observability::otel::{init_otel, OtelGuard};
+pub use observability::otel::{init_telemetry, OtelGuard};
 ```
 
 Add helper functions matching Python:
@@ -345,7 +345,7 @@ pub fn build_subscriber(
         .unwrap_or_else(|_| EnvFilter::new("info,ort=warn"));
     let fmt = tracing_subscriber::fmt::layer().with_target(false);
 
-    let (otel_layer, guard) = otel::init_otel(settings)?;
+    let (otel_layer, guard) = otel::init_telemetry(settings)?;
 
     let subscriber = Registry::default()
         .with(filter)
@@ -469,7 +469,7 @@ holds it on `AppState`. Both call paths drop the guard before
 
 ### When is OTEL enabled?
 
-`init_otel(settings)` returns the bridge layer + guard if **either** of
+`init_telemetry(settings)` returns the bridge layer + guard if **either** of
 these is true:
 
 - `settings.cognee_tracing_enabled == true` (from
@@ -479,7 +479,7 @@ these is true:
   even without an explicit `enable_tracing()` call — see
   `is_tracing_enabled()` lazy init in trace_context.py:54–61).
 
-When OTEL is disabled, `init_otel` returns a noop layer (a
+When OTEL is disabled, `init_telemetry` returns a noop layer (a
 `tracing_subscriber::layer::Identity`) so the subscriber composition
 stays the same shape.
 
@@ -491,7 +491,7 @@ Each item below has a dedicated implementation sub-document under [`01/`](01/) w
 |---|---|---|---|---|
 | 1 | Add OpenTelemetry workspace dependencies (`opentelemetry`, `opentelemetry_sdk`, `opentelemetry-otlp`, `opentelemetry-semantic-conventions`, `tracing-opentelemetry`) pinned to `=0.31` / `=0.32` with both `grpc-tonic` and `http-proto` features. | [01/01-workspace-otel-deps.md](01/01-workspace-otel-deps.md) | — | ✅ 8cc50bb |
 | 2 | Create the new `cognee-observability` workspace crate (manifest, `lib.rs` skeleton, feature wiring, register in workspace `members`). Scaffold only — implementation lands in task 4. | [01/02-observability-crate-scaffold.md](01/02-observability-crate-scaffold.md) | 1 | ✅ c88df3d |
-| 3 | Forward the `telemetry` feature through `cognee-lib`, `cognee-cli`, and `cognee-http-server` to `cognee-observability/telemetry` + `cognee-core/telemetry`. **Not** in any `default = [...]` per decision 1. | [01/03-cognee-lib-feature-wiring.md](01/03-cognee-lib-feature-wiring.md) | 2 | |
+| 3 | Forward the `telemetry` feature through `cognee-lib`, `cognee-cli`, and `cognee-http-server` to `cognee-observability/telemetry` + `cognee-core/telemetry`. **Not** in any `default = [...]` per decision 1. | [01/03-cognee-lib-feature-wiring.md](01/03-cognee-lib-feature-wiring.md) | 2 | ✅ ef813b9 |
 | 4 | Implement `init_telemetry`, `TelemetryGuard`, `is_tracing_enabled`, `already_instrumented`, `parse_otlp_headers`, plus four new `Settings` fields (`otel_exporter_otlp_protocol`, `otel_span_processor`, `otel_traces_sampler`, `otel_traces_sampler_arg`) with env overlay. | [01/04-init-telemetry-implementation.md](01/04-init-telemetry-implementation.md) | 1, 2, 3 | |
 | 5 | Re-export the public observability API from `cognee_lib::observability` so embedders use it through the umbrella crate. | [01/05-cognee-lib-reexports.md](01/05-cognee-lib-reexports.md) | 2, 3, 4 | |
 | 6 | Refactor `crates/cli/src/main.rs`: move `load_settings()` into `main()` ahead of subscriber init (decision 11), compose the OTEL bridge layer with the existing `fmt` layer, hold the `TelemetryGuard` for the lifetime of `main`. | [01/06-cli-subscriber-refactor.md](01/06-cli-subscriber-refactor.md) | 4, 5 | |
@@ -551,9 +551,9 @@ In `crates/lib/src/observability/otel.rs` (`#[cfg(test)] mod tests`):
 - `parse_otlp_headers_single` — `"k=v"` → `[("k", "v")]`.
 - `parse_otlp_headers_multi` — `"a=1,b=2"` → two entries.
 - `parse_otlp_headers_whitespace` — surrounding spaces trimmed.
-- `init_otel_disabled_returns_noop` — no env vars → guard is noop,
+- `init_telemetry_disabled_returns_noop` — no env vars → guard is noop,
   layer is identity.
-- `init_otel_enabled_builds_provider` — set env vars, assert provider
+- `init_telemetry_enabled_builds_provider` — set env vars, assert provider
   was set globally and its type is `SdkTracerProvider`.
 - `already_instrumented_default_false` — fresh process; without
   calling `set_tracer_provider`, returns `false`.
@@ -566,7 +566,7 @@ In `crates/lib/src/observability/otel.rs` (`#[cfg(test)] mod tests`):
   `opentelemetry-proto`'s `TraceService` on `127.0.0.1:0`.
 - Set `OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:<port>`.
 - Build a `Settings` with `cognee_tracing_enabled = true`.
-- Call `init_otel(&settings)`, attach the bridge to a fresh
+- Call `init_telemetry(&settings)`, attach the bridge to a fresh
   `Registry`, install via `tracing::subscriber::with_default`.
 - Inside, call a function decorated with
   `#[tracing::instrument(name = "test.span", fields(foo = "bar"))]`.

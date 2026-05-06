@@ -2,7 +2,7 @@
 
 **Status:** Not started
 **Owner:** _unassigned_
-**Depends on:** [Task 02 — Scaffold the `cognee-observability` workspace crate](./02-observability-crate-scaffold.md), [Task 04 — Implement `init_otel` and `TelemetryGuard`](./04-implement-init-otel-and-guard.md), [Task 08 — Noop fallback (and `Settings` field overlay)](./08-noop-fallback-and-tests.md)
+**Depends on:** [Task 02 — Scaffold the `cognee-observability` workspace crate](./02-observability-crate-scaffold.md), [Task 04 — Implement `init_telemetry` and `TelemetryGuard`](./04-implement-init-otel-and-guard.md), [Task 08 — Noop fallback (and `Settings` field overlay)](./08-noop-fallback-and-tests.md)
 **Blocks:** Nothing (terminal task within the test pyramid; integration tests against a fake OTLP collector are tracked separately as action item 10 in the parent doc).
 **Parent doc:** [01 — OpenTelemetry SDK + OTLP Export Wiring](../01-otel-otlp-export.md)
 
@@ -43,11 +43,11 @@ Both `init_telemetry` (when activated) and `already_instrumented_after_set_true`
 
 ### Why we test settings-overlay logic in `cognee-lib`, not here
 
-Per [task 02 §4.3](./02-observability-crate-scaffold.md), the `OtelSettings` input struct lives in `cognee-observability`, but the **env-var overlay** is implemented inside `cognee-lib::config::Settings::overlay_from_env` (which task 08 extends with the new fields). Tests for the overlay therefore belong in [`crates/lib/src/config.rs`](../../../crates/lib/src/config.rs)'s existing `#[cfg(test)] mod tests`, not in the observability crate. This keeps each test next to the code it exercises and matches the convention of the existing overlay tests (see [`crates/lib/src/config.rs:1083-1207`](../../../crates/lib/src/config.rs#L1083)).
+Per [task 02 §4.3](./02-observability-crate-scaffold.md), the `TelemetrySettings` input struct lives in `cognee-observability`, but the **env-var overlay** is implemented inside `cognee-lib::config::Settings::overlay_from_env` (which task 08 extends with the new fields). Tests for the overlay therefore belong in [`crates/lib/src/config.rs`](../../../crates/lib/src/config.rs)'s existing `#[cfg(test)] mod tests`, not in the observability crate. This keeps each test next to the code it exercises and matches the convention of the existing overlay tests (see [`crates/lib/src/config.rs:1083-1207`](../../../crates/lib/src/config.rs#L1083)).
 
 ## 3. Pre-conditions
 
-- [Task 02](./02-observability-crate-scaffold.md): the `cognee-observability` crate exists with `OtelSettings`, `TelemetryGuard`, `OtelInitError`, and the `init_otel` (now also called `init_telemetry`) entry point.
+- [Task 02](./02-observability-crate-scaffold.md): the `cognee-observability` crate exists with `TelemetrySettings`, `TelemetryGuard`, `TelemetryInitError`, and the `init_telemetry` (now also called `init_telemetry`) entry point.
 - [Task 04](./04-implement-init-otel-and-guard.md): the `real::init` body builds a real `SdkTracerProvider`, installs it globally, returns the guard whose `Drop` calls `force_flush` + `shutdown`. `parse_otlp_headers`, `is_tracing_enabled`, `already_instrumented` are public functions or `pub(crate)` with `#[cfg(test)]` accessors.
 - [Task 08](./08-noop-fallback-and-tests.md): `Settings` has the new fields `otel_exporter_otlp_protocol`, `otel_span_processor`, `otel_traces_sampler`, `otel_traces_sampler_arg`, with defaults `"grpc"`, `"batch"`, `""`, `""` respectively, and the corresponding env-var overlay branches in `Settings::overlay_from_env`.
 
@@ -189,19 +189,19 @@ mod tests {
 //!      invocation) is the only true reset.
 
 use cognee_observability::{
-    init_telemetry, is_tracing_enabled, already_instrumented, OtelSettings, TelemetryGuard,
+    init_telemetry, is_tracing_enabled, already_instrumented, TelemetrySettings, TelemetryGuard,
 };
 
-/// Build an `OtelSettings` with the given flag and endpoint and all
+/// Build an `TelemetrySettings` with the given flag and endpoint and all
 /// other fields defaulted. Encapsulates the shape so a future field
 /// addition only touches this helper.
-fn settings(tracing_enabled: bool, endpoint: &str) -> OtelSettings {
-    OtelSettings {
+fn settings(tracing_enabled: bool, endpoint: &str) -> TelemetrySettings {
+    TelemetrySettings {
         tracing_enabled,
         service_name: "cognee-test".to_string(),
         exporter_otlp_endpoint: endpoint.to_string(),
         exporter_otlp_headers: String::new(),
-        ..OtelSettings::default()
+        ..TelemetrySettings::default()
     }
 }
 
@@ -518,7 +518,7 @@ No production code is added or modified by this task — only tests and the `[de
 ## 10. References
 
 - Parent doc: [`../01-otel-otlp-export.md`](../01-otel-otlp-export.md), in particular the [Testing strategy → Unit tests](../01-otel-otlp-export.md#unit-tests) subsection (the canonical list this task expands), the [Design decisions](../01-otel-otlp-export.md#design-decisions-locked) table (decisions 2, 4, 5, 10), and [Action items](../01-otel-otlp-export.md#action-items) #9.
-- [`02-observability-crate-scaffold.md`](./02-observability-crate-scaffold.md) — defines `OtelSettings`, `TelemetryGuard`, `OtelInitError`, the `tests/` directory location, and `[dev-dependencies]` already in place.
+- [`02-observability-crate-scaffold.md`](./02-observability-crate-scaffold.md) — defines `TelemetrySettings`, `TelemetryGuard`, `TelemetryInitError`, the `tests/` directory location, and `[dev-dependencies]` already in place.
 - [`04-implement-init-otel-and-guard.md`](./04-implement-init-otel-and-guard.md) — provides `parse_otlp_headers`, `is_tracing_enabled`, `already_instrumented`, the real `TelemetryGuard::Drop` body, and (per §9 risk 4) the `RecordingProcessor` test helper.
 - [`08-noop-fallback-and-tests.md`](./08-noop-fallback-and-tests.md) — adds the new `Settings` fields (`otel_exporter_otlp_protocol`, `otel_span_processor`, `otel_traces_sampler`, `otel_traces_sampler_arg`) and their `overlay_from_env` branches, which tests 12–15 cover.
 - Existing overlay-test patterns to mirror: [`crates/lib/src/config.rs:1083-1207`](../../../crates/lib/src/config.rs#L1083).

@@ -1,6 +1,6 @@
 # Action item 3 — Wire the `telemetry` cargo feature in `cognee-lib`, `cognee-cli`, and `cognee-http-server`
 
-- **Status:** Not started
+- **Status**: Implemented in commit ef813b9
 - **Owner / dependencies:**
   - **Depends on:** task [`02` — bootstrap the `cognee-observability` crate](./02-cognee-observability-crate.md) (this task assumes `cognee-observability` exists with its own `telemetry` feature that activates the OTEL stack).
   - **Blocks:** task [`05` — `cognee-lib` `init_telemetry` re-exports & subscriber helper](./05-cognee-lib-public-api.md), task [`06` — CLI subscriber refactor](./06-cli-subscriber-refactor.md), task [`07` — HTTP-server subscriber refactor](./07-http-server-subscriber-refactor.md).

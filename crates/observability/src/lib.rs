@@ -9,10 +9,10 @@
 //! - `telemetry` (off by default) — pulls in `opentelemetry`,
 //!   `opentelemetry_sdk`, `opentelemetry-otlp`,
 //!   `opentelemetry-semantic-conventions`, and `tracing-opentelemetry`.
-//!   When enabled, [`init_otel`] builds a real `SdkTracerProvider`,
+//!   When enabled, [`init_telemetry`] builds a real `SdkTracerProvider`,
 //!   installs it globally, and returns a guard that flushes on drop.
-//!   When disabled, [`init_otel`] still compiles but returns an identity
-//!   tracing layer plus a noop guard, so embedders can call it
+//!   When disabled, [`init_telemetry`] still compiles but returns an
+//!   identity tracing layer plus a noop guard, so embedders can call it
 //!   unconditionally.
 
 #![deny(missing_docs)]
@@ -27,12 +27,14 @@ mod real;
 #[cfg(not(feature = "telemetry"))]
 mod noop;
 
-pub use error::OtelInitError;
+pub use error::TelemetryInitError;
 pub use guard::TelemetryGuard;
-pub use settings::OtelSettings;
+pub use settings::TelemetrySettings;
 
 /// Initialize OpenTelemetry tracing for the current process.
-pub fn init_otel(_settings: &OtelSettings) -> Result<TelemetryGuard, OtelInitError> {
+pub fn init_telemetry(
+    _settings: &TelemetrySettings,
+) -> Result<TelemetryGuard, TelemetryInitError> {
     #[cfg(feature = "telemetry")]
     {
         real::init(_settings)

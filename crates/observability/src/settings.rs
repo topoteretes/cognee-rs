@@ -1,9 +1,9 @@
-//! Input struct for [`crate::init_otel`].
+//! Input struct for [`crate::init_telemetry`].
 //!
 //! Defined here (rather than re-using `cognee_lib::config::Settings`) so
 //! that this crate sits at the bottom of the workspace dependency graph
-//! and does not pull in `cognee-lib`. `cognee-lib` constructs an
-//! `OtelSettings` from its own `Settings` in task 05.
+//! and does not pull in `cognee-lib`. `cognee-lib` constructs a
+//! `TelemetrySettings` from its own `Settings` in task 05.
 
 /// Subset of cognee settings required to initialize OpenTelemetry.
 ///
@@ -11,7 +11,7 @@
 /// without breaking the observability ABI.
 #[derive(Debug, Clone, Default)]
 #[non_exhaustive]
-pub struct OtelSettings {
+pub struct TelemetrySettings {
     /// Mirrors `Settings.cognee_tracing_enabled`.
     pub tracing_enabled: bool,
     /// Mirrors `Settings.otel_service_name`.

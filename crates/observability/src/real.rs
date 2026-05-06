@@ -1,7 +1,9 @@
 //! Real OTEL bring-up. Body lands in task 04.
 
-use crate::{OtelInitError, OtelSettings, TelemetryGuard};
+use crate::{TelemetryGuard, TelemetryInitError, TelemetrySettings};
 
-pub(crate) fn init(_settings: &OtelSettings) -> Result<TelemetryGuard, OtelInitError> {
+pub(crate) fn init(
+    _settings: &TelemetrySettings,
+) -> Result<TelemetryGuard, TelemetryInitError> {
     Ok(TelemetryGuard::noop())
 }

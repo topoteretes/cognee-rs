@@ -4,14 +4,14 @@
 **Owner:** _unassigned_
 **Depends on:**
 - [Task 04 — Implement `init_telemetry` and `TelemetryGuard`](./04-implement-init-otel-and-guard.md) — provides the real OTEL bring-up that this test exercises.
-- [Task 06 — Refactor CLI subscriber](./06-refactor-cli-subscriber.md) — locks the public composition shape (`init_telemetry(&OtelSettings)` returning a guard plus a layer) that the test mirrors. (If task 06 is renumbered, follow whichever sub-doc owns the call-site refactor — the test only depends on the public API shape.)
+- [Task 06 — Refactor CLI subscriber](./06-refactor-cli-subscriber.md) — locks the public composition shape (`init_telemetry(&TelemetrySettings)` returning a guard plus a layer) that the test mirrors. (If task 06 is renumbered, follow whichever sub-doc owns the call-site refactor — the test only depends on the public API shape.)
 - [Task 09 — Unit tests in `cognee-observability`](./09-unit-tests-observability.md) — covers the small helpers (`parse_otlp_headers`, `already_instrumented`, noop fallback). This task is the orthogonal *integration* counterpart that proves spans actually leave the process.
 
 **Soft pre-conditions (manifest-level):** [Task 01 — workspace OTEL deps](./01-workspace-otel-deps.md), [Task 02 — `cognee-observability` crate scaffold](./02-observability-crate-scaffold.md), [Task 03 — `cognee-lib` feature wiring](./03-cognee-lib-feature-wiring.md). The integration test lives inside `cognee-observability` itself, so only tasks 01/02/04 are strictly required at runtime; 03 is needed for the parent doc's downstream wiring but does not affect this test.
 
 **Parent doc:** [01 — OpenTelemetry SDK + OTLP Export Wiring](../01-otel-otlp-export.md), specifically the [Testing strategy → Integration test](../01-otel-otlp-export.md#integration-test) section, which prescribes:
 
-> Spawn a tonic gRPC server implementing `opentelemetry-proto`'s `TraceService` on `127.0.0.1:0`. Set `OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:<port>`. Build a `Settings` with `cognee_tracing_enabled = true`. Call `init_otel(&settings)`, attach the bridge to a fresh `Registry`, install via `tracing::subscriber::with_default`. Inside, call a function decorated with `#[tracing::instrument(name = "test.span", fields(foo = "bar"))]`. Drop the guard; assert the server received exactly one batch with one span named `"test.span"`, attribute `foo == "bar"`, resource attribute `service.name == "cognee"`.
+> Spawn a tonic gRPC server implementing `opentelemetry-proto`'s `TraceService` on `127.0.0.1:0`. Set `OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:<port>`. Build a `Settings` with `cognee_tracing_enabled = true`. Call `init_telemetry(&settings)`, attach the bridge to a fresh `Registry`, install via `tracing::subscriber::with_default`. Inside, call a function decorated with `#[tracing::instrument(name = "test.span", fields(foo = "bar"))]`. Drop the guard; assert the server received exactly one batch with one span named `"test.span"`, attribute `foo == "bar"`, resource attribute `service.name == "cognee"`.
 
 This sub-doc turns that paragraph into runnable code.
 
@@ -23,7 +23,7 @@ Add a single integration test, `crates/observability/tests/otel_export.rs`, that
 
 1. Stands up a fake OTLP/gRPC `TraceService` on `127.0.0.1:0` inside the test process.
 2. Points cognee's OTEL bring-up at it via `OTEL_EXPORTER_OTLP_ENDPOINT`.
-3. Calls `init_telemetry(&OtelSettings { tracing_enabled: true, exporter_otlp_endpoint: …, … })`.
+3. Calls `init_telemetry(&TelemetrySettings { tracing_enabled: true, exporter_otlp_endpoint: …, … })`.
 4. Emits one `#[tracing::instrument]`-annotated function call inside a `tracing::subscriber::with_default` scope.
 5. Drops the `TelemetryGuard` (forcing flush + shutdown).
 6. Asserts the fake collector received at least one `ExportTraceServiceRequest` containing a span named `"test.span"`, attribute `foo == "bar"`, and resource attribute `service.name == "cognee"`.
@@ -98,7 +98,7 @@ Full test file — see [§5 Resulting code](#5-resulting-code) for the verbatim 
 1. **`#![cfg(feature = "telemetry")]` at the top** — the whole file is excluded under default features.
 2. **`MockTraceService`** — a struct holding `Arc<Mutex<Vec<ExportTraceServiceRequest>>>` plus an `Arc<Notify>` so the test can `await` arrival of the first request rather than `sleep`-and-hope.
 3. **gRPC server lifecycle** — bind to `127.0.0.1:0`, read back the port via `TcpListener::local_addr`, hand the listener to `tonic::transport::Server::serve_with_incoming_shutdown`, drive shutdown via a `tokio::sync::oneshot` channel.
-4. **Exporter wiring** — set `OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:<port>` *before* calling `init_telemetry`. The OTEL SDK reads it directly. `OtelSettings.exporter_otlp_endpoint` is also populated for symmetry — task 04 decides which wins; the env var is the canonical OTEL knob.
+4. **Exporter wiring** — set `OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:<port>` *before* calling `init_telemetry`. The OTEL SDK reads it directly. `TelemetrySettings.exporter_otlp_endpoint` is also populated for symmetry — task 04 decides which wins; the env var is the canonical OTEL knob.
 5. **Subscriber composition** — fresh `Registry` + `tracing_opentelemetry::layer().with_tracer(tracer)`. We do **not** install globally with `subscriber.try_init()` because that would persist between test runs in the same process. Use `tracing::subscriber::with_default(subscriber, || { … })` instead.
 6. **Span emission** — call a function annotated `#[tracing::instrument(name = "test.span", fields(foo = "bar"))]`. Inside, do nothing (no I/O). The instrumentation alone produces the span on entry/exit.
 7. **Flush** — drop the `TelemetryGuard` *inside* the `with_default` scope so the bridge layer is still installed when the SDK calls back to record exit. The `Drop` impl (task 04) calls `force_flush()` then `shutdown()`. The batch processor must finish writing to the gRPC channel before `shutdown()` returns.
@@ -163,7 +163,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use cognee_observability::{init_telemetry, OtelSettings};
+use cognee_observability::{init_telemetry, TelemetrySettings};
 
 use opentelemetry_proto::tonic::collector::trace::v1::{
     trace_service_server::{TraceService, TraceServiceServer},
@@ -246,7 +246,7 @@ async fn spans_flow_to_otlp_collector() {
     let (captured, addr, shutdown_tx, server_task) = spawn_mock_collector().await;
 
     // Point cognee at our fake collector. The OTEL SDK reads
-    // OTEL_EXPORTER_OTLP_ENDPOINT directly; OtelSettings is populated for
+    // OTEL_EXPORTER_OTLP_ENDPOINT directly; TelemetrySettings is populated for
     // symmetry / explicitness.
     let endpoint = format!("http://{addr}");
     // SAFETY: tests in this file are serialised by `#[serial_test::serial]`
@@ -254,7 +254,7 @@ async fn spans_flow_to_otlp_collector() {
     // telemetry tests.
     std::env::set_var("OTEL_EXPORTER_OTLP_ENDPOINT", &endpoint);
 
-    let settings = OtelSettings {
+    let settings = TelemetrySettings {
         tracing_enabled: true,
         service_name: "cognee".to_string(),
         exporter_otlp_endpoint: endpoint.clone(),

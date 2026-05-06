@@ -1,4 +1,4 @@
-//! RAII handle returned by [`crate::init_otel`].
+//! RAII handle returned by [`crate::init_telemetry`].
 
 /// RAII handle that flushes and shuts down the global tracer provider on
 /// drop.
