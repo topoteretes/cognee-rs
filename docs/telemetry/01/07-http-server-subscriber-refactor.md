@@ -1,6 +1,6 @@
 # Action item 7 — Refactor `cognee-http-server` subscriber composition and store `TelemetryGuard` on `AppState`
 
-- **Status:** Planned (not yet implemented)
+- **Status**: Implemented in commit 56433e5
 - **Owner / Dependencies:**
   - **Depends on:**
     - Task [`02` — bootstrap the `cognee-observability` crate](./02-observability-crate-scaffold.md) (provides `TelemetryGuard`, `init_telemetry`, the noop fallback layer, the `SettingsView` trait)
@@ -814,6 +814,33 @@ is no separate flush-task to schedule.)
   test fixtures that build `AppState` manually (search for
   `AppState {` literal — currently zero hits; tests use
   `AppState::build` so this risk is mostly theoretical).
+
+## Implementation notes
+
+Recording deviations from the plan as landed in commit 56433e5:
+
+1. **`EnvSettingsView` added to `cognee-observability`.** Per the design
+   decision approved during sub-doc revision, step 1 of this doc
+   introduced a new env-backed implementation of `SettingsView` inside
+   `cognee-observability` so that `cognee-http-server` (which
+   intentionally does not depend on `cognee-lib`) can drive
+   `init_telemetry` directly from environment variables. Shipped as
+   designed.
+2. **14 `AppState` test fixtures touched.** The "Risks" section of this
+   doc claimed `AppState { ... }` literals had "currently zero hits" —
+   that turned out to be stale. The implementation added
+   `#[cfg(feature = "telemetry")] telemetry_guard: None,` to 14 test
+   fixture sites that construct `AppState` literally. No production-code
+   sites needed similar updates beyond the two `AppState::build*`
+   constructors already enumerated in step 6.
+3. **Graceful-shutdown `Arc::into_inner` step deliberately deferred.**
+   `AppState` moves into `run()` and drops when `axum::serve` returns,
+   so the guard's `Drop` runs there. No background tasks currently
+   retain `AppState` past server stop, so the explicit
+   `Arc::into_inner` + `drop()` synchronisation aid sketched in step 5
+   was not added in this commit. Acceptable per the "Files modified"
+   note in this sub-doc; revisit when a background task starts
+   retaining `AppState` clones beyond server shutdown.
 
 ## References
 

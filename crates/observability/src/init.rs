@@ -271,3 +271,21 @@ mod telemetry_real {
             })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::settings::EnvSettingsView;
+    use tracing_subscriber::Registry;
+    use tracing_subscriber::layer::SubscriberExt;
+
+    #[test]
+    fn init_telemetry_noop_when_tracing_disabled() {
+        let settings = EnvSettingsView::default();
+        let result = init_telemetry::<Registry>(&settings);
+        assert!(result.is_ok());
+        let (layer, guard) = result.expect("init_telemetry returned Ok above");
+        assert!(!guard.has_provider());
+        let _subscriber = Registry::default().with(layer);
+    }
+}

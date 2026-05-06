@@ -3,562 +3,164 @@
 **Status:** Not started
 **Owner:** _unassigned_
 **Depends on:**
-- [Task 02 — Scaffold the `cognee-observability` workspace crate](./02-observability-crate-scaffold.md) (provides the crate skeleton, `TelemetryGuard`, `TelemetrySettings`, and the `#[cfg]`-gated `real` / `noop` module split).
-- [Task 04 — Implement `init_telemetry` and `TelemetryGuard`](./04-implement-init-otel-and-guard.md) (defines the `BoxedTelemetryLayer` type alias and the public return signature `Result<(BoxedTelemetryLayer, TelemetryGuard), TelemetryInitError>` the noop path must mirror exactly).
+- [Task 02 — Scaffold the `cognee-observability` workspace crate](./02-observability-crate-scaffold.md) (provides the crate skeleton, `TelemetryGuard`, `SettingsView`, `EnvSettingsView`).
+- [Task 04 — Implement `init_telemetry` and `TelemetryGuard`](./04-init-telemetry-implementation.md) (already shipped the unified `init.rs`, the `BoxedTelemetryLayer<S>` alias, the `TelemetryInitError` enum, and the runtime noop branch).
 
 **Blocks:**
 - [Task 05 — `cognee-lib` re-exports & subscriber composition helper](./05-cognee-lib-reexports.md)
-- [Task 06 — Refactor CLI subscriber](./06-refactor-cli-subscriber.md)
-- [Task 07 — Refactor HTTP server subscriber](./07-refactor-http-server-subscriber.md)
+- [Task 06 — Refactor CLI subscriber](./06-cli-subscriber-refactor.md)
+- [Task 07 — Refactor HTTP server subscriber](./07-http-server-subscriber-refactor.md)
 
 **Parent doc:** [01 — OpenTelemetry SDK + OTLP Export Wiring](../01-otel-otlp-export.md)
 
 ---
 
+## 0. What changed since this sub-doc was first drafted
+
+The bulk of what task 08 originally described — a separate `noop.rs` mirroring a `real.rs` module, a non-generic `Box<dyn Layer<Registry>>` alias, and a rename of `OtelInitError` → `TelemetryInitError` — was absorbed into **task 04 (commit `9b99576`)**. That commit landed a single `crates/observability/src/init.rs` with inline `#[cfg(feature = "telemetry")]` branching instead of two parallel modules, and improved the layer alias to `BoxedTelemetryLayer<S>` (generic over the subscriber `S`) so call sites are not pinned to `tracing_subscriber::Registry`. The error enum was renamed to `TelemetryInitError` in commit `27c2bb2`.
+
+The runtime contract this task was originally chartered to deliver is therefore **already in place**:
+
+- `init_telemetry` is feature-agnostic: with `--features telemetry` off it returns `Ok((noop_layer, TelemetryGuard::noop()))`; with the feature on it still returns the same shape when `is_tracing_enabled(settings)` is `false`.
+- `is_tracing_enabled(&dyn SettingsView)` returns `tracing_enabled || !otlp_endpoint.is_empty()` per parent [decision 6](../01-otel-otlp-export.md#design-decisions-locked) (implicit activation when an endpoint is set). This corrects the original sub-doc, which mistakenly proposed "noop always returns false".
+- `TelemetryGuard::noop()` is publicly constructible and `has_provider()` is exposed in `cfg(test)` / `debug_assertions` builds for inspection.
+- `parse_otlp_headers` lives in `crates/observability/src/headers.rs` with its own unit tests and is exported unconditionally.
+- A stub `TelemetryInitError::FeatureDisabled` is defined on the no-feature path so that downstream code can name the type without cfg-gating.
+
+What remains for this task is **only the two small gaps** below; gap (b) (CI tree-grep proving no OTEL deps under `--no-default-features`) is **deferred to [task 12](./12-ci-updates.md)**.
+
+- **Gap (a) — Unit test pinning the noop contract.** The repo currently has no test that locks the "tracing disabled → Ok with noop guard" behaviour. We add one to `crates/observability/src/init.rs` and run it under both `--no-default-features` and `--features telemetry`.
+- **Gap (c) — Feature-state contract paragraph in the crate-level rustdoc.** The current `lib.rs` rustdoc describes the feature flag in prose but does not explicitly nail down the two-pronged noop guarantee (compile-off OR runtime-disabled). We add a short, normative paragraph.
+
 ## 1. Goal
 
-When `cognee-observability` is built **without** `--features telemetry` (the default per [decision 1](../01-otel-otlp-export.md#design-decisions-locked) of the locked design table), the public surface — `init_telemetry`, `TelemetryGuard`, `TelemetryInitError`, `is_tracing_enabled`, `parse_otlp_headers`, `BoxedTelemetryLayer` — must still exist with **identical signatures** to the `telemetry`-on path, with noop semantics:
+Make the noop semantics that already exist in code observable in two places they currently are not:
 
-- `init_telemetry(_: &TelemetrySettings) -> Result<(BoxedTelemetryLayer, TelemetryGuard), TelemetryInitError>` always succeeds with an identity layer plus an empty guard.
-- `TelemetryGuard::noop()` is a zero-sized struct whose `Drop` is empty.
-- The returned `BoxedTelemetryLayer` is type-erased so callers in `cognee-cli`, `cognee-http-server`, and `cognee-lib` write `Registry::default().with(...).with(layer)` regardless of feature state.
+1. A unit test, so the contract cannot regress silently.
+2. The crate-level rustdoc, so embedders reading `cargo doc` see the contract spelled out.
 
-This is the foundation for [decision 1](../01-otel-otlp-export.md#design-decisions-locked) — every default `cargo build` hits this path. If it fails to compile, the whole project fails to build by default.
+That is the entire scope of task 08 as it stands today.
 
-## 2. Rationale
+## 2. Rationale (kept brief, see prior context for the long form)
 
-### 2.1 Why a uniform API across feature states
+### 2.1 Uniform API across feature states
 
-[Tasks 06](./06-refactor-cli-subscriber.md) and [07](./07-refactor-http-server-subscriber.md) refactor the CLI and HTTP server `init_tracing()` functions to compose an OTEL bridge layer into the existing `tracing-subscriber::Registry`. If `init_telemetry` had a different signature in the two feature states (or only existed in one), every call site would need a `#[cfg(feature = "telemetry")]` fork — multiplying compile-time configurations and creating a class of bugs where the off-path is rarely exercised. By keeping the signature identical, the `with(...)` chain in those two binaries compiles unchanged whether telemetry is on or off.
+[Tasks 06](./06-cli-subscriber-refactor.md) and [07](./07-http-server-subscriber-refactor.md) need to call `init_telemetry` once and unconditionally compose the returned layer. If the disabled-feature path either failed to compile or returned a structurally different value, every call site would need a `#[cfg(feature = "telemetry")]` fork. Task 04 already enforced the uniform shape; the unit test in step 1 below is what keeps it that way.
 
-This mirrors the established pattern of `tracing_subscriber::layer::Identity` (returned by `Layer::and_then` and similar combinators when one side is a noop) and `tracing_appender::non_blocking::WorkerGuard` (always returned, even when writes go nowhere meaningful).
+### 2.2 Why the noop is `tracing_subscriber::layer::Identity`
 
-### 2.2 Why type erasure (`Box<dyn Layer<...>>`)
+`Identity` is a unit struct that implements `Layer<S>` for any `S: Subscriber`, with all methods left as the trait defaults — it observes nothing and forwards nothing. `init.rs` boxes it into `BoxedTelemetryLayer<S>` for both the disabled and the runtime-noop paths. No custom `NoopLayer` is needed.
 
-The real `tracing-opentelemetry::OpenTelemetryLayer<S, Tracer>` is a concrete generic type with two type parameters; the noop path wants to return either `tracing_subscriber::layer::Identity` (the canonical noop layer) or a custom `NoopLayer<S>`. These types are **structurally different**, so the only way to give callers a uniform return type is type erasure.
+### 2.3 Two paths to "noop"
 
-Two options exist:
+There are two distinct ways callers can land on the noop branch, and both must behave identically:
 
-1. **`Box<dyn Layer<Registry> + Send + Sync + 'static>`** — heap allocation, dynamic dispatch on every `on_event` / `on_enter` / `on_exit`. The vtable cost is dwarfed by anything OTEL does, and the noop arm pays at most one box allocation at process start.
-2. **An `enum BoxedTelemetryLayer { Real(...), Noop(Identity) }`** — would require mirroring `Layer<S>` by hand and would bake `OpenTelemetryLayer`'s exact generics into the enum, defeating the goal of cfg-isolation.
+- **Compile-time off**: built without the `telemetry` feature. No OTEL crates are linked; the function body falls through to `Box::new(Identity::new())`.
+- **Runtime off**: built *with* `telemetry` but `is_tracing_enabled(settings)` returns `false` (no `COGNEE_TRACING_ENABLED=true` and an empty `OTEL_EXPORTER_OTLP_ENDPOINT`). Same return value.
 
-Option 1 wins. The alias is:
-
-```rust
-pub type BoxedTelemetryLayer =
-    Box<dyn tracing_subscriber::Layer<tracing_subscriber::Registry>
-        + Send
-        + Sync
-        + 'static>;
-```
-
-This alias is defined **regardless of feature state** (it depends only on `tracing-subscriber`, which is an always-on dep per [task 02 §4.2](./02-observability-crate-scaffold.md#42-create-cratesobservabilitycargotoml)). Both the `real` and `noop` modules box their layer into it.
-
-### 2.3 Why `tracing_subscriber::layer::Identity` is the right noop
-
-Per `tracing-subscriber` 0.3, [`tracing_subscriber::layer::Identity`](https://docs.rs/tracing-subscriber/0.3/tracing_subscriber/layer/struct.Identity.html) is a unit struct that implements `Layer<S>` for **any** `S: Subscriber` with all methods left as the trait defaults (i.e. it observes nothing and forwards nothing). Concretely:
-
-- `Identity` is `Send + Sync + 'static` (no fields).
-- `impl<S: Subscriber> Layer<S> for Identity` exists upstream — verified against the published rustdoc; it has been stable since 0.3.0.
-- `Identity::new()` is a `const fn`; we call it once and box the result.
-
-Therefore we don't need to hand-roll a `NoopLayer<S>`. If a future `tracing-subscriber` release changes `Identity`'s bounds, swap to a tiny `pub struct NoopLayer; impl<S: Subscriber> Layer<S> for NoopLayer {}` — the `Layer` trait's default methods all return `()` so the impl body is empty.
-
-### 2.4 Why `parse_otlp_headers` lives in both paths
-
-`parse_otlp_headers(&str) -> Vec<(String, String)>` is pure string-splitting logic (parses the comma-separated `key=value` form Python uses for `OTEL_EXPORTER_OTLP_HEADERS`). It has zero OTEL dependencies — the function builds plain `String` tuples. Hosting it in both paths means:
-
-- Unit tests for header parsing (per [parent doc §Testing strategy](../01-otel-otlp-export.md#testing-strategy)) run under default features (no OTEL deps in the test build → faster CI).
-- Future code that wants to *display* configured headers (e.g. a `cognee config show` command) can call it without flipping `--features telemetry`.
-
-Same argument applies to `is_tracing_enabled(&TelemetrySettings) -> bool` — a 3-line function that checks a flag and a string emptiness check.
+The unit test in step 1 covers both states; the rustdoc in step 2 names them.
 
 ## 3. Pre-conditions
 
-- [Task 02](./02-observability-crate-scaffold.md) is merged: the crate exists, `TelemetrySettings` and `TelemetryGuard` stubs are in place, `lib.rs` has the `#[cfg]`-gated `real` / `noop` module split, and `cargo check -p cognee-observability` passes.
-- [Task 04](./04-implement-init-otel-and-guard.md) is merged or in flight: it defines `BoxedTelemetryLayer`, fills `real::init_telemetry`, and pins the `Result<(BoxedTelemetryLayer, TelemetryGuard), TelemetryInitError>` return signature and the `TelemetryInitError` enum's variants.
-  - **Coordination note:** if task 04 lands first, this task only fills `noop.rs`. If they land in parallel, this task introduces `BoxedTelemetryLayer` in `lib.rs` (so it is visible to both arms) and task 04 reuses it. The author of whichever PR merges second rebases.
+- [Task 02](./02-observability-crate-scaffold.md) merged.
+- [Task 04](./04-init-telemetry-implementation.md) merged (commit `9b99576` and follow-up `27c2bb2`).
 - A clean `cargo check --workspace` on `main`.
 
 ## 4. Step-by-step
 
-### 4.1 Define `BoxedTelemetryLayer` in `lib.rs`
+### Step 1 — Pin the noop contract with a unit test
 
-The alias must be visible regardless of feature state, so it lives in `lib.rs` (not in `real.rs` or `noop.rs`):
+**File:** `crates/observability/src/init.rs`. Extend the existing `#[cfg(test)] mod tests` block (or add one if absent — at the bottom of the file).
 
-```rust
-// crates/observability/src/lib.rs (additions)
+**Test name:** `init_telemetry_noop_when_tracing_disabled`.
 
-use tracing_subscriber::Registry;
+**Body sketch (≤ 30 lines):**
 
-/// Boxed `tracing-subscriber` layer returned by [`init_telemetry`].
-///
-/// The concrete type differs by feature state:
-///
-/// - With `--features telemetry`: a boxed `tracing_opentelemetry::OpenTelemetryLayer<Registry, Tracer>`.
-/// - Without: a boxed [`tracing_subscriber::layer::Identity`] (observes nothing).
-///
-/// Type erasure lets call sites compose the layer uniformly:
-///
-/// ```ignore
-/// let (layer, _guard) = cognee_observability::init_telemetry(&settings)?;
-/// let subscriber = tracing_subscriber::Registry::default()
-///     .with(filter)
-///     .with(fmt_layer)
-///     .with(layer); // <-- same code regardless of feature state
-/// ```
-pub type BoxedTelemetryLayer =
-    Box<dyn tracing_subscriber::Layer<Registry> + Send + Sync + 'static>;
-```
+- Construct an `EnvSettingsView::default()` (or any `SettingsView` impl with `tracing_enabled() == false` and an empty `otlp_endpoint()`).
+- Call `init_telemetry::<tracing_subscriber::Registry>(&settings)` and assert the result is `Ok`.
+- Assert `guard.has_provider() == false` — the inspector is gated on `cfg(any(test, debug_assertions))` per `crates/observability/src/guard.rs` so it is callable from this test under both feature states.
+- Wire the returned layer into a `tracing_subscriber::Registry::default().with(layer)` chain to confirm it composes; this is the lightest possible "the layer is the identity layer" check that does not depend on internal OTEL types.
 
-### 4.2 Update the `init_telemetry` return signature in `lib.rs`
+The test must compile and pass under **both** `cargo test -p cognee-observability` (default features, `telemetry` off) and `cargo test -p cognee-observability --features telemetry`. On the `telemetry`-on path the test exercises the runtime noop branch (`is_tracing_enabled` returns `false` for the default settings); on the off path it exercises the compile-time branch.
 
-Replace the placeholder from task 02 (which returned `Result<TelemetryGuard, TelemetryInitError>`) with the final form coordinated with task 04:
+The test is intentionally tiny — it locks the contract, it does **not** test the OTEL plumbing. Provider-build, sampler, and exporter behaviour live in [task 09](./09-observability-unit-tests.md) and the integration suite in [task 10](./10-otel-export-integration-test.md).
 
-```rust
-pub fn init_telemetry(
-    settings: &TelemetrySettings,
-) -> Result<(BoxedTelemetryLayer, TelemetryGuard), TelemetryInitError> {
-    #[cfg(feature = "telemetry")]
-    {
-        real::init(settings)
-    }
-    #[cfg(not(feature = "telemetry"))]
-    {
-        noop::init(settings)
-    }
-}
-```
+### Step 2 — Add a "Feature-state contract" rustdoc paragraph
 
-Also rename `TelemetryInitError` → `TelemetryInitError` to match [decision 10](../01-otel-otlp-export.md#design-decisions-locked) (broader name to allow future log/metric error variants).
+**File:** `crates/observability/src/lib.rs`. Insertion point: just below the existing `## Feature flags` subsection of the crate-level `//!` rustdoc, as a new `## Feature-state contract` subsection.
 
-### 4.3 Flesh out `crates/observability/src/noop.rs`
+**Content (5–10 lines, prose):**
 
-Replace the stub from task 02 with the final body. **Gated** `#[cfg(not(feature = "telemetry"))]` (the `mod noop;` declaration in `lib.rs` is itself gated, so the gate inside the file is belt-and-braces but documents intent and lets `cargo check --features telemetry` still parse the file if it is ever included unconditionally during refactor).
+> [`init_telemetry`] returns `Ok((noop_layer, TelemetryGuard::noop()))` whenever the process is *not* configured to export spans — specifically when **either** (1) the `telemetry` cargo feature is **off** at compile time, **or** (2) [`is_tracing_enabled`] returns `false` at runtime (i.e. `COGNEE_TRACING_ENABLED` is not truthy and `OTEL_EXPORTER_OTLP_ENDPOINT` is empty). On both paths the returned layer is a boxed [`tracing_subscriber::layer::Identity`] that observes nothing, and the guard's `Drop` runs no code. [`TelemetryGuard::noop`] is publicly constructible for tests and embedders that want the same shape without going through `init_telemetry`. This mirrors parent [decision 6](../../docs/telemetry/01/01-otel-otlp-export.md#design-decisions-locked) (implicit activation: an endpoint alone is enough to opt in).
 
-```rust
-//! Noop fallback for the `cognee-observability` public API.
-//!
-//! Active when the `telemetry` cargo feature is **off** (the default).
-//! Every public function below mirrors the signature of its counterpart in
-//! [`crate::real`] but performs no work and pulls in no OTEL crates. See
-//! [`docs/telemetry/01/08-noop-fallback.md`](../../docs/telemetry/01/08-noop-fallback.md)
-//! for the rationale.
+The paragraph is normative: any future change that breaks either branch of the contract must update this paragraph, the test in step 1, and the parent decision table together.
 
-use tracing_subscriber::layer::Identity;
-
-use crate::{BoxedTelemetryLayer, TelemetrySettings, TelemetryGuard, TelemetryInitError};
-
-/// Build the noop bridge layer + guard. Always succeeds.
-pub(crate) fn init(
-    _settings: &TelemetrySettings,
-) -> Result<(BoxedTelemetryLayer, TelemetryGuard), TelemetryInitError> {
-    let layer: BoxedTelemetryLayer = Box::new(Identity::new());
-    Ok((layer, TelemetryGuard::noop()))
-}
-
-/// Mirror of `crate::real::is_tracing_enabled`. With `telemetry` off, the
-/// answer is always `false` because nothing in the process can export
-/// spans even if the user opted in via env. Callers that want to gate
-/// log lines on the user's *intent* should read `TelemetrySettings` directly.
-#[inline]
-#[must_use]
-pub fn is_tracing_enabled(_settings: &TelemetrySettings) -> bool {
-    false
-}
-
-/// Pure-logic header parser, available regardless of feature state.
-///
-/// Splits the OTEL-standard `OTEL_EXPORTER_OTLP_HEADERS` form
-/// (`"key1=value1,key2=value2"`) into a list of `(key, value)` pairs.
-/// Whitespace around keys and values is trimmed. Empty entries are
-/// skipped. An entry without `=` is ignored.
-#[must_use]
-pub fn parse_otlp_headers(raw: &str) -> Vec<(String, String)> {
-    raw.split(',')
-        .filter_map(|entry| {
-            let entry = entry.trim();
-            if entry.is_empty() {
-                return None;
-            }
-            let (k, v) = entry.split_once('=')?;
-            Some((k.trim().to_string(), v.trim().to_string()))
-        })
-        .collect()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn init_returns_ok_with_noop_guard() {
-        let settings = TelemetrySettings::default();
-        let (_layer, _guard) = init(&settings).expect("noop init never fails");
-        // Dropping the guard must be a no-op; if Drop did anything bad
-        // this test would crash.
-    }
-
-    #[test]
-    fn is_tracing_enabled_is_always_false() {
-        let mut settings = TelemetrySettings::default();
-        settings.tracing_enabled = true;
-        settings.exporter_otlp_endpoint = "http://localhost:4317".into();
-        assert!(!is_tracing_enabled(&settings));
-    }
-
-    #[test]
-    fn parse_otlp_headers_empty() {
-        assert!(parse_otlp_headers("").is_empty());
-    }
-
-    #[test]
-    fn parse_otlp_headers_single() {
-        let parsed = parse_otlp_headers("authorization=Bearer abc");
-        assert_eq!(
-            parsed,
-            vec![("authorization".to_string(), "Bearer abc".to_string())]
-        );
-    }
-
-    #[test]
-    fn parse_otlp_headers_multi_with_whitespace() {
-        let parsed = parse_otlp_headers(" a = 1 , b=2 ,, c =3");
-        assert_eq!(
-            parsed,
-            vec![
-                ("a".to_string(), "1".to_string()),
-                ("b".to_string(), "2".to_string()),
-                ("c".to_string(), "3".to_string()),
-            ]
-        );
-    }
-
-    #[test]
-    fn parse_otlp_headers_skips_malformed() {
-        let parsed = parse_otlp_headers("good=ok,bad,also=fine");
-        assert_eq!(
-            parsed,
-            vec![
-                ("good".to_string(), "ok".to_string()),
-                ("also".to_string(), "fine".to_string()),
-            ]
-        );
-    }
-}
-```
-
-### 4.4 Flesh out `TelemetryGuard` Drop semantics
-
-In `crates/observability/src/guard.rs` keep `TelemetryGuard::noop()` as the cheap constructor. The `Drop` impl is shared between feature states (see [task 04](./04-implement-init-otel-and-guard.md) for the real-path body); under `not(feature = "telemetry")` the struct has no fields beyond `_private: ()` so `Drop` is automatically empty. To document this:
-
-```rust
-// crates/observability/src/guard.rs (final form)
-
-/// RAII handle returned by [`crate::init_telemetry`].
-///
-/// Holding the guard for the lifetime of `main()` (CLI) or for as long as
-/// `AppState` is alive (HTTP server) ensures the final batch of spans is
-/// exported before the process exits. With the `telemetry` feature off,
-/// the guard is zero-sized and its `Drop` runs no code — it exists only
-/// so call sites can be uniform.
-#[must_use = "TelemetryGuard must be held for the lifetime of the process to flush spans on shutdown"]
-pub struct TelemetryGuard {
-    #[cfg(feature = "telemetry")]
-    pub(crate) provider: Option<opentelemetry_sdk::trace::SdkTracerProvider>,
-    #[cfg(not(feature = "telemetry"))]
-    _private: (),
-}
-
-impl TelemetryGuard {
-    /// Construct a noop guard. Used by the off-path and by tests.
-    #[inline]
-    pub(crate) fn noop() -> Self {
-        Self {
-            #[cfg(feature = "telemetry")]
-            provider: None,
-            #[cfg(not(feature = "telemetry"))]
-            _private: (),
-        }
-    }
-}
-
-#[cfg(not(feature = "telemetry"))]
-impl Drop for TelemetryGuard {
-    fn drop(&mut self) {
-        // intentionally empty — noop guard
-    }
-}
-
-// The `#[cfg(feature = "telemetry")] impl Drop` lives in `real.rs`
-// alongside the provider field; see task 04.
-```
-
-This makes the noop `Drop` explicit (vs. relying on the absence of an impl) and ensures the file produces an `impl Drop` symbol in both feature states for tooling consistency.
-
-### 4.5 Wire the cfg-gated module switching in `lib.rs`
-
-The final shape (after task 02's scaffold + this task's renames + task 04's signature) is:
-
-```rust
-// crates/observability/src/lib.rs (final glue)
-
-#![deny(missing_docs)]
-
-mod error;
-mod guard;
-pub mod settings;
-
-#[cfg(feature = "telemetry")]
-mod real;
-
-#[cfg(not(feature = "telemetry"))]
-mod noop;
-
-pub use error::TelemetryInitError;
-pub use guard::TelemetryGuard;
-pub use settings::TelemetrySettings;
-
-// `is_tracing_enabled` and `parse_otlp_headers` are exposed from whichever
-// arm is active. The signatures match exactly so external callers cannot
-// observe a difference.
-#[cfg(feature = "telemetry")]
-pub use real::{is_tracing_enabled, parse_otlp_headers};
-
-#[cfg(not(feature = "telemetry"))]
-pub use noop::{is_tracing_enabled, parse_otlp_headers};
-
-// (BoxedTelemetryLayer + init_telemetry as defined in §4.1 / §4.2.)
-```
-
-`init_telemetry` itself stays in `lib.rs` and dispatches into the active module — a single function whose body is `#[cfg]`-forked, so rustdoc renders one entry regardless of feature state.
-
-### 4.6 Document the cross-arm contract in module-level rustdoc
-
-Add a short paragraph at the top of `lib.rs` (inside the existing `//!` block from task 02):
-
-> **Feature-state contract:** every `pub` item below has the same signature
-> regardless of whether `telemetry` is enabled. With the feature on, real
-> OTEL machinery is built; off, the same functions return zero-cost noops.
-> Call sites can therefore depend on this crate unconditionally and let
-> the cargo feature decide at link time whether spans actually leave the
-> process. See
-> [docs/telemetry/01/08-noop-fallback.md](../../docs/telemetry/01/08-noop-fallback.md)
-> for the contract rationale.
-
-### 4.7 Verify both paths compile
+## 5. Verification
 
 ```bash
-# Default features — no OTEL deps.
-cargo check -p cognee-observability
+# Step 1 unit test — default features (telemetry feature off, compile-time noop branch).
+cargo test -p cognee-observability init_telemetry_noop_when_tracing_disabled
 
-# Telemetry on — full OTEL stack.
-cargo check -p cognee-observability --features telemetry
+# Step 1 unit test — telemetry feature on (runtime noop branch).
+cargo test -p cognee-observability --features telemetry init_telemetry_noop_when_tracing_disabled
 
-# Make sure all dependent crates still compile under both shapes.
-cargo check --workspace
-cargo check --workspace --features cognee-lib/telemetry
-```
-
-Both `cargo check -p cognee-observability` runs must succeed and produce **identical public-item rustdoc** modulo the body of `init_telemetry`. Confirm via:
-
-```bash
+# Step 2 rustdoc — confirm the new "Feature-state contract" subsection renders.
 cargo doc -p cognee-observability --no-deps
-cargo doc -p cognee-observability --no-deps --features telemetry
-diff -r target/doc/cognee_observability target/doc/cognee_observability  # before/after run, structural sanity
-```
+# Open target/doc/cognee_observability/index.html and verify the section is
+# visible under the crate-level docs.
 
-(The `diff` is illustrative — in practice run each `cargo doc` against a fresh `target/`, copy the HTML aside, then compare. The public-item index pages should differ only in feature badges, not in items listed.)
-
-## 5. Resulting code
-
-### 5.1 `crates/observability/src/noop.rs` — full final contents
-
-(See §4.3 above for the verbatim file. No additional source is required.)
-
-### 5.2 `crates/observability/src/lib.rs` — cfg-switching glue (excerpt)
-
-```rust
-//! OpenTelemetry SDK bring-up and `tracing` bridge for cognee.
-//!
-//! ## Feature flags
-//!
-//! - `telemetry` (off by default) — pulls in the OTEL Rust SDK and
-//!   builds a real `SdkTracerProvider`. With the feature off, every
-//!   public function below is a zero-cost noop with the same signature.
-//!
-//! **Feature-state contract:** every `pub` item has the same signature
-//! regardless of whether `telemetry` is enabled. See
-//! [docs/telemetry/01/08-noop-fallback.md](../../docs/telemetry/01/08-noop-fallback.md).
-
-#![deny(missing_docs)]
-
-use tracing_subscriber::Registry;
-
-mod error;
-mod guard;
-pub mod settings;
-
-#[cfg(feature = "telemetry")]
-mod real;
-#[cfg(not(feature = "telemetry"))]
-mod noop;
-
-pub use error::TelemetryInitError;
-pub use guard::TelemetryGuard;
-pub use settings::TelemetrySettings;
-
-#[cfg(feature = "telemetry")]
-pub use real::{is_tracing_enabled, parse_otlp_headers};
-#[cfg(not(feature = "telemetry"))]
-pub use noop::{is_tracing_enabled, parse_otlp_headers};
-
-/// Boxed `tracing-subscriber` layer returned by [`init_telemetry`].
-pub type BoxedTelemetryLayer =
-    Box<dyn tracing_subscriber::Layer<Registry> + Send + Sync + 'static>;
-
-/// Initialize telemetry. With `telemetry` off, returns an identity layer
-/// and a noop guard. With it on, builds a real `SdkTracerProvider`,
-/// installs it globally, and returns the bridge layer + RAII flush guard.
-pub fn init_telemetry(
-    settings: &TelemetrySettings,
-) -> Result<(BoxedTelemetryLayer, TelemetryGuard), TelemetryInitError> {
-    #[cfg(feature = "telemetry")]
-    {
-        real::init(settings)
-    }
-    #[cfg(not(feature = "telemetry"))]
-    {
-        noop::init(settings)
-    }
-}
-```
-
-### 5.3 `error.rs` adjustment
-
-Rename `TelemetryInitError` → `TelemetryInitError`, kept `#[non_exhaustive]`. The `NotImplemented` placeholder from task 02 stays until task 04 fills in real variants; the noop path never returns an error variant.
-
-```rust
-//! Errors surfaced by [`crate::init_telemetry`].
-
-use thiserror::Error;
-
-/// Errors returned during telemetry initialization.
-#[derive(Debug, Error)]
-#[non_exhaustive]
-pub enum TelemetryInitError {
-    /// Placeholder until task 04 lands real variants.
-    #[error("telemetry initialization not yet implemented")]
-    NotImplemented,
-}
-```
-
-(The noop path uses `Result<..., TelemetryInitError>` only to match the real signature; it always returns `Ok(...)`.)
-
-## 6. Verification
-
-Run from the repo root:
-
-```bash
-# 1. Default features — feature OFF — no OTEL deps in the resolved graph.
-cargo check -p cognee-observability
-cargo tree -p cognee-observability | grep -E 'opentelemetry|tracing-opentelemetry' \
-    && echo "UNEXPECTED: OTEL deps with feature off" \
-    || echo "OK: no OTEL deps without feature"
-
-# 2. Telemetry ON — OTEL deps must resolve and the same surface compile.
-cargo check -p cognee-observability --features telemetry
-
-# 3. Unit tests for the noop arm (header parser, init smoke, drop smoke).
-cargo test -p cognee-observability
-
-# 4. Whole workspace with feature OFF — proves CLI / HTTP server compile
-#    against the noop API.
-cargo check --workspace --all-targets
-
-# 5. CLI binary smoke (default features, telemetry off) — must run a
-#    no-op command without panic.
-cargo run --bin cognee -- --help
-
-# 6. HTTP server binary smoke (default features, telemetry off) — must
-#    start, accept a /healthz, and shut down cleanly. Drop of
-#    AppState.guard must not block.
-cargo run --bin cognee-http-server -- --help
-
-# 7. Rustdoc parity — render both feature states and confirm the public
-#    API listing is the same set of items.
-cargo doc -p cognee-observability --no-deps
-cargo doc -p cognee-observability --no-deps --features telemetry
-
-# 8. Project-wide gate.
+# Project gate.
 scripts/check_all.sh
 ```
 
 Expected:
 
-- `cargo check -p cognee-observability` (no features) succeeds and emits **zero** OTEL deps in `cargo tree`.
-- `cargo test -p cognee-observability` passes the five `noop::tests` cases (init, is-enabled, three header-parsing cases).
-- `cargo check --workspace --all-targets` succeeds — this is the strongest signal that callers in `cognee-cli` and `cognee-http-server` did not regress.
-- Both `cargo doc` runs produce HTML that lists the same public items: `init_telemetry`, `BoxedTelemetryLayer`, `TelemetryGuard`, `TelemetryInitError`, `TelemetrySettings`, `is_tracing_enabled`, `parse_otlp_headers`.
-- `scripts/check_all.sh` exits 0 (fmt + check + clippy + capi/python/js binding checks per the [project guide](../../../.claude/CLAUDE.md#build--development)).
+- Both `cargo test` runs pass; the new test exits 0 in each.
+- `cargo doc` produces HTML that includes the new `## Feature-state contract` subsection.
+- `scripts/check_all.sh` exits 0.
 
-## 7. Files modified
+The `cargo tree --no-default-features | grep -E 'opentelemetry|tracing-opentelemetry'` check that proves no OTEL crates leak into the default build is **deferred to [task 12](./12-ci-updates.md)**, which owns the workspace CI lanes.
+
+## 6. Files modified
 
 | File | Change |
 |---|---|
-| [`crates/observability/src/lib.rs`](../../../crates/observability/src/lib.rs) | Define `BoxedTelemetryLayer` type alias; finalize `init_telemetry` signature; cfg-gate `pub use` of `is_tracing_enabled` / `parse_otlp_headers`; document feature-state contract. |
-| [`crates/observability/src/noop.rs`](../../../crates/observability/src/noop.rs) | Replace task-02 stub with the full noop body — `init`, `is_tracing_enabled`, `parse_otlp_headers`, plus `#[cfg(test)]` unit tests. |
-| [`crates/observability/src/guard.rs`](../../../crates/observability/src/guard.rs) | Add `#[cfg(not(feature = "telemetry"))] impl Drop` (empty body); split fields by feature gate. |
-| [`crates/observability/src/error.rs`](../../../crates/observability/src/error.rs) | Rename `TelemetryInitError` → `TelemetryInitError` ([decision 10](../01-otel-otlp-export.md#design-decisions-locked)). |
+| [`crates/observability/src/init.rs`](../../../crates/observability/src/init.rs) | Add `init_telemetry_noop_when_tracing_disabled` unit test in the `#[cfg(test)] mod tests` block. |
+| [`crates/observability/src/lib.rs`](../../../crates/observability/src/lib.rs) | Add a `## Feature-state contract` subsection to the crate-level `//!` rustdoc. |
 
-No source outside `crates/observability/` is changed in this task. The dependent refactors (CLI, HTTP server, `cognee-lib` re-exports) live in [tasks 05](./05-cognee-lib-reexports.md), [06](./06-refactor-cli-subscriber.md), and [07](./07-refactor-http-server-subscriber.md).
+No source outside `crates/observability/` is changed in this task.
 
-## 8. Risks
+## 7. Risks
 
-1. **Type signature drift between `real` and `noop`.** If task 04 evolves `init_telemetry` to return e.g. `Result<(BoxedTelemetryLayer, TelemetryGuard, ResourceHandle), TelemetryInitError>` but the noop arm still returns the 2-tuple, `cargo check --no-default-features` breaks at every call site. **Mitigation:** the function signature lives in `lib.rs` (single source of truth) and the two `mod` arms must implement `pub(crate) fn init(&TelemetrySettings) -> Result<(BoxedTelemetryLayer, TelemetryGuard), TelemetryInitError>` exactly. Add a CI lane that runs `cargo check --workspace --all-targets` (default features) — already covered by [parent doc action item 12](../01-otel-otlp-export.md#action-items).
+1. **Type signature drift between feature states.** If a future change to `init.rs` evolves the return type but only updates one cfg branch, `cargo check --no-default-features` breaks at every call site. **Mitigation:** the unit test in step 1 runs in *both* feature states (the verification block runs `cargo test` twice) and exercises the same call. CI in [task 12](./12-ci-updates.md) re-runs both lanes.
+2. **`has_provider()` visibility regression.** The test calls `guard.has_provider()`, which is gated on `cfg(any(test, debug_assertions))`. If a future cleanup tightens that gate, the test breaks. **Mitigation:** if `has_provider()` is ever removed or further restricted, replace the assertion with a structural `matches!`-style check on a private accessor added for testing, or with the looser "the returned layer composes onto a registry without panic" assertion already in the test body.
+3. **Doc paragraph drift from parent decisions.** The rustdoc paragraph references parent decision 6. If decision 6 is renumbered or renegotiated, the paragraph and the parent table can fall out of sync. **Mitigation:** any change to decision 6 must update this paragraph in the same PR.
 
-2. **`tracing_subscriber::layer::Identity` trait bounds.** The plan relies on `Identity: Layer<Registry> + Send + Sync + 'static`. This is true today (verified against `tracing-subscriber` 0.3 rustdoc), but a future major-version bump could change it. **Mitigation:** if `Identity` ever fails to satisfy the bounds, replace with a 5-line custom layer:
-
-   ```rust
-   pub(crate) struct NoopLayer;
-   impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for NoopLayer {}
-   ```
-
-   The Layer trait's default method bodies are all `()`, so the impl block is genuinely empty.
-
-3. **`Box<dyn Layer<Registry>>` vs subscriber composition with `EnvFilter`.** `tracing-subscriber` uses an `S: Subscriber` generic on `Layer`. If a future call site writes `Registry::default().with(filter).with(layer)` where `filter` produces a `Filtered<L, F, S>` such that `S != Registry`, the `Box<dyn Layer<Registry>>` may not compose. **Mitigation:** [task 05](./05-cognee-lib-reexports.md) defines the composition order canonically; the boxed layer always sits at the same position in the chain. If a real call site needs a non-`Registry` `S`, lift the alias to be generic (`type BoxedTelemetryLayer<S> = Box<dyn Layer<S> + ...>`) — but resist that until needed because it complicates the noop side.
-
-4. **Future cross-arm symbol drift.** If a later task adds an OTEL-only symbol (e.g. `set_resource_attributes(...)`) and forgets to add a noop counterpart, callers can only use it under `--features telemetry` — defeating the uniform-API goal. **Mitigation:** document in `crates/observability/src/lib.rs` (per §4.6) that **every** `pub` item must have a counterpart in both arms; reviewers reject PRs that violate this.
-
-5. **`#![deny(missing_docs)]` + cfg-gated re-exports.** Doc-comments live on the items in `real.rs` and `noop.rs`, not on the `pub use` lines. If only one arm documents an item, `cargo doc -p cognee-observability` fails on the other. **Mitigation:** copy doc-comments verbatim across arms (header parser is a good example). A small `#[doc = include_str!("../docs/parse_otlp_headers.md")]` indirection could DRY this up, but is overkill for two functions.
-
-6. **`tracing-subscriber` already in default deps but only used here.** If a future workspace-wide cleanup proposes making `tracing-subscriber` optional in `cognee-observability`, the noop path breaks (it needs `Identity`). **Mitigation:** the [task 02 manifest](./02-observability-crate-scaffold.md#42-create-cratesobservabilitycargotoml) declares `tracing-subscriber.workspace = true` (always-on); this task does not change that, and a comment in `Cargo.toml` should note that the noop arm requires `Identity`.
-
-## 9. References
+## 8. References
 
 - Parent gap doc: [`../01-otel-otlp-export.md`](../01-otel-otlp-export.md), in particular the
-  ["When is OTEL enabled?"](../01-otel-otlp-export.md#when-is-otel-enabled) subsection (which
-  states the noop layer is `tracing_subscriber::layer::Identity`),
-  [Action items](../01-otel-otlp-export.md#action-items) #8 (this task) and #12 (CI lane covering
-  the no-deps build), and [Design decisions table](../01-otel-otlp-export.md#design-decisions-locked)
+  ["When is OTEL enabled?"](../01-otel-otlp-export.md#when-is-otel-enabled) subsection,
+  [Action items](../01-otel-otlp-export.md#action-items) #8 (this task) and #12 (the deferred
+  CI lane), and [Design decisions table](../01-otel-otlp-export.md#design-decisions-locked)
   decisions 1, 6, 10.
 - Sibling sub-docs:
   - [`02-observability-crate-scaffold.md`](./02-observability-crate-scaffold.md) — pre-condition
-    (crate skeleton, `TelemetrySettings`, initial `noop.rs` stub).
-  - [`04-implement-init-otel-and-guard.md`](./04-implement-init-otel-and-guard.md) — pre-condition
-    (`BoxedTelemetryLayer`, `TelemetryInitError` variants, real `init_telemetry`).
+    (crate skeleton, `SettingsView`, `EnvSettingsView`).
+  - [`04-init-telemetry-implementation.md`](./04-init-telemetry-implementation.md) — pre-condition
+    and the source of the unified `init.rs` plus `BoxedTelemetryLayer<S>` (commit `9b99576`).
   - [`05-cognee-lib-reexports.md`](./05-cognee-lib-reexports.md) — first downstream consumer of
     the uniform API.
-  - [`06-refactor-cli-subscriber.md`](./06-refactor-cli-subscriber.md),
-    [`07-refactor-http-server-subscriber.md`](./07-refactor-http-server-subscriber.md) — both
+  - [`06-cli-subscriber-refactor.md`](./06-cli-subscriber-refactor.md),
+    [`07-http-server-subscriber-refactor.md`](./07-http-server-subscriber-refactor.md) — both
     rely on `with(layer)` compiling regardless of feature state.
+  - [`09-observability-unit-tests.md`](./09-observability-unit-tests.md) — owns the broader unit
+    test suite (sampler, protocol, exporter); this task only adds the single noop-contract test.
+  - [`12-ci-updates.md`](./12-ci-updates.md) — owns the deferred `cargo tree` no-OTEL-deps check.
 - External:
   - [`tracing_subscriber::layer::Identity`](https://docs.rs/tracing-subscriber/0.3/tracing_subscriber/layer/struct.Identity.html)
-    — canonical noop layer.
+    — canonical noop layer used by `init.rs::noop_layer`.
   - [`tracing_subscriber::Layer`](https://docs.rs/tracing-subscriber/0.3/tracing_subscriber/layer/trait.Layer.html)
     — trait whose default methods are no-ops.
-  - [`tracing_appender::non_blocking::WorkerGuard`](https://docs.rs/tracing-appender/latest/tracing_appender/non_blocking/struct.WorkerGuard.html)
-    — precedent for "always return an RAII guard, even when its drop is cheap".
 - Project conventions: [`../../../.claude/CLAUDE.md`](../../../.claude/CLAUDE.md), specifically the
   [Coding conventions](../../../.claude/CLAUDE.md#coding-conventions) section (no `unwrap()` in
   non-test code; `expect("...")` only with a justifying message).

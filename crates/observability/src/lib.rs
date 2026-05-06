@@ -15,6 +15,21 @@
 //!   When disabled, [`init_telemetry`] still compiles but returns an
 //!   identity tracing layer plus a noop guard, so embedders can call it
 //!   unconditionally.
+//!
+//! ## Feature-state contract
+//!
+//! [`init_telemetry`] returns `Ok((noop_layer, TelemetryGuard::noop()))`
+//! whenever the process is not configured to export spans — specifically
+//! when **either** (1) the `telemetry` cargo feature is **off** at compile
+//! time, **or** (2) [`is_tracing_enabled`] returns `false` at runtime
+//! (`COGNEE_TRACING_ENABLED` is not truthy and
+//! `OTEL_EXPORTER_OTLP_ENDPOINT` is empty). On both paths the returned
+//! layer is a boxed [`tracing_subscriber::layer::Identity`] that observes
+//! nothing, and the guard's `Drop` runs no code. [`TelemetryGuard::noop`]
+//! is publicly constructible for tests and embedders that want the same
+//! shape without going through [`init_telemetry`]. This mirrors parent
+//! [decision 6](../../../docs/telemetry/01-otel-otlp-export.md#design-decisions-locked)
+//! (implicit activation: an endpoint alone is enough to opt in).
 
 #![deny(missing_docs)]
 
