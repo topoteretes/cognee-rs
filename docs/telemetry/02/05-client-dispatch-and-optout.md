@@ -1,6 +1,6 @@
 # Task 02-05 — HTTP client, fire-and-forget dispatch, opt-out
 
-**Status**: ⬜ unimplemented
+**Status**: implemented in commit c1cf154 (note: env.rs added a cfg(test)+COGNEE_TELEMETRY_INTEGRATION_TEST proxy_url override hatch so 02-09 mockito tests can redirect dispatch to 127.0.0.1; env_test_disables guards against parallel-test races by skipping the negative assertion when a sibling test currently has TELEMETRY_DISABLED set — proper serial_test::serial wiring lands in 02-08).
 **Owner**: _unassigned_
 **Depends on**:
 - [Task 02-02 — Crate scaffold](02-telemetry-crate-scaffold.md) — `env`, `real`, `noop` module placeholders.
