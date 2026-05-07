@@ -171,6 +171,24 @@ pub fn tenant_id_for_telemetry(tenant_id: Option<Uuid>) -> String {
     }
 }
 
+/// Returns the cognee crate version string for use in analytics
+/// payloads. Matches Python's `cognee.__version__`.
+///
+/// Equivalent to `env!("CARGO_PKG_VERSION")` evaluated inside the
+/// `cognee-telemetry` crate. The workspace pins all cognee crates to
+/// the same version via `version.workspace = true`, so the value is
+/// the same as `cognee-lib`'s reported version. Lifecycle emitters in
+/// `cognee-core` and elsewhere should call this accessor instead of
+/// inlining `env!("CARGO_PKG_VERSION")`, which would otherwise expand
+/// to the calling crate's version.
+///
+/// Always available — does not depend on the `telemetry` feature
+/// flag.
+#[inline]
+pub fn cognee_version() -> &'static str {
+    env!("CARGO_PKG_VERSION")
+}
+
 /// Fire-and-forget product-analytics event.
 ///
 /// Returns immediately; the HTTP POST is dispatched on a detached

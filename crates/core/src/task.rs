@@ -256,6 +256,32 @@ impl Task {
                 | Task::AsyncStreamBatch(_)
         )
     }
+
+    /// Python-compat label used in the `${task_type} Task Started/
+    /// Completed/Errored` analytics event names.
+    ///
+    /// Mirrors Python's
+    /// [`tasks/task.py:194-207`](https://github.com/topoteretes/cognee/blob/main/cognee/modules/pipelines/tasks/task.py#L194-L207)
+    /// `inspect.isasyncgenfunction` / `iscoroutinefunction` branch:
+    ///
+    /// | Rust variant | Python label |
+    /// |---|---|
+    /// | `Task::Sync`, `Task::SyncBatch` | `"Function"` |
+    /// | `Task::Async`, `Task::AsyncBatch` | `"Coroutine"` |
+    /// | `Task::SyncIter`, `Task::SyncIterBatch` | `"Generator"` |
+    /// | `Task::AsyncStream`, `Task::AsyncStreamBatch` | `"Async Generator"` |
+    ///
+    /// The match is intentionally exhaustive (no wildcard arm) so that
+    /// adding a new `Task::*` variant fails the build until the
+    /// analytics mapping is decided.
+    pub fn python_task_type(&self) -> &'static str {
+        match self {
+            Task::Sync(_) | Task::SyncBatch(_) => "Function",
+            Task::Async(_) | Task::AsyncBatch(_) => "Coroutine",
+            Task::SyncIter(_) | Task::SyncIterBatch(_) => "Generator",
+            Task::AsyncStream(_) | Task::AsyncStreamBatch(_) => "Async Generator",
+        }
+    }
 }
 
 impl Task {
@@ -1170,5 +1196,97 @@ mod tests {
             par.name.as_deref(),
             Some("parallel([classify, embed, task_2])")
         );
+    }
+
+    /// Tests for [`Task::python_task_type`] — the 8-variant Rust → 4-string
+    /// Python label mapping consumed by the analytics emitters in
+    /// `crates/core/src/pipeline.rs::call_with_retry()`.
+    mod python_task_type {
+        use super::*;
+        use futures::stream;
+
+        #[test]
+        fn sync_variant_maps_to_function() {
+            let t = Task::sync_typed(|_: &i32, _| Ok(Box::new(0_i32)));
+            assert_eq!(t.python_task_type(), "Function");
+        }
+
+        #[test]
+        fn sync_batch_variant_maps_to_function() {
+            let t = Task::sync_batch_typed(|_: &[&i32], _| Ok(Box::new(0_i32)));
+            assert_eq!(t.python_task_type(), "Function");
+        }
+
+        #[test]
+        fn async_variant_maps_to_coroutine() {
+            let t = Task::async_fn_typed(|_: &i32, _| Box::pin(async move { Ok(Box::new(0_i32)) }));
+            assert_eq!(t.python_task_type(), "Coroutine");
+        }
+
+        #[test]
+        fn async_batch_variant_maps_to_coroutine() {
+            let t = Task::async_batch_typed(|_: &[&i32], _| {
+                Box::pin(async move { Ok(Box::new(0_i32)) })
+            });
+            assert_eq!(t.python_task_type(), "Coroutine");
+        }
+
+        #[test]
+        fn sync_iter_variant_maps_to_generator() {
+            let t = Task::sync_iter_typed(|_: &i32, _| Ok(std::iter::empty::<Box<i32>>()));
+            assert_eq!(t.python_task_type(), "Generator");
+        }
+
+        #[test]
+        fn sync_iter_batch_variant_maps_to_generator() {
+            let t = Task::sync_iter_batch_typed(|_: &[&i32], _| Ok(std::iter::empty::<Box<i32>>()));
+            assert_eq!(t.python_task_type(), "Generator");
+        }
+
+        #[test]
+        fn async_stream_variant_maps_to_async_generator() {
+            let t = Task::async_stream_typed(|_: &i32, _| Ok(stream::empty::<Box<i32>>()));
+            assert_eq!(t.python_task_type(), "Async Generator");
+        }
+
+        #[test]
+        fn async_stream_batch_variant_maps_to_async_generator() {
+            let t = Task::async_stream_batch_typed(|_: &[&i32], _| Ok(stream::empty::<Box<i32>>()));
+            assert_eq!(t.python_task_type(), "Async Generator");
+        }
+
+        #[test]
+        fn covers_all_eight_variants_with_four_distinct_labels() {
+            let labels: std::collections::HashSet<&'static str> = [
+                Task::sync_typed(|_: &i32, _| Ok(Box::new(0_i32))).python_task_type(),
+                Task::sync_batch_typed(|_: &[&i32], _| Ok(Box::new(0_i32))).python_task_type(),
+                Task::async_fn_typed(|_: &i32, _| Box::pin(async move { Ok(Box::new(0_i32)) }))
+                    .python_task_type(),
+                Task::async_batch_typed(|_: &[&i32], _| {
+                    Box::pin(async move { Ok(Box::new(0_i32)) })
+                })
+                .python_task_type(),
+                Task::sync_iter_typed(|_: &i32, _| Ok(std::iter::empty::<Box<i32>>()))
+                    .python_task_type(),
+                Task::sync_iter_batch_typed(|_: &[&i32], _| Ok(std::iter::empty::<Box<i32>>()))
+                    .python_task_type(),
+                Task::async_stream_typed(|_: &i32, _| Ok(stream::empty::<Box<i32>>()))
+                    .python_task_type(),
+                Task::async_stream_batch_typed(|_: &[&i32], _| Ok(stream::empty::<Box<i32>>()))
+                    .python_task_type(),
+            ]
+            .into_iter()
+            .collect();
+
+            assert_eq!(
+                labels.len(),
+                4,
+                "expected exactly 4 distinct Python task-type labels, got {labels:?}"
+            );
+            assert!(labels.contains("Function"));
+            assert!(labels.contains("Coroutine"));
+            assert!(labels.contains("Generator"));
+            assert!(labels.contains("Async Generator"));
+        }
     }
 }
