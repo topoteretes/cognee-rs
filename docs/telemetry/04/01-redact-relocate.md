@@ -56,29 +56,48 @@ After this task:
 ## 3. Pre-conditions
 
 - A clean `cargo check --all-targets` on `main`.
-- `regex = "1"` is already a workspace dep (verified at
-  [`Cargo.toml:95`](../../Cargo.toml#L95)).
+- `regex = "1"` is currently only a **direct dep** of `cognee-http-server`
+  ([`crates/http-server/Cargo.toml:95`](../../crates/http-server/Cargo.toml#L95));
+  it is **not** in the workspace `[workspace.dependencies]` table
+  ([`Cargo.toml:51`](../../Cargo.toml#L51) onwards). This task promotes
+  it to a workspace dep so both `cognee-utils` and `cognee-http-server`
+  can pin to the same version via `workspace = true`.
 - No outstanding edits to
   [`crates/utils/`](../../crates/utils/) or
   [`crates/http-server/src/observability/redaction.rs`](../../crates/http-server/src/observability/redaction.rs).
 
 ## 4. Step-by-step
 
-### 4.1 Add `regex` dep to `cognee-utils`
+### 4.1 Promote `regex` to a workspace dep, then add it to `cognee-utils`
 
-Edit [`crates/utils/Cargo.toml`](../../crates/utils/Cargo.toml):
+The workspace `[workspace.dependencies]` table
+([`Cargo.toml:51`](../../Cargo.toml#L51)) does **not** currently
+declare `regex` — only `cognee-http-server` has it as a direct dep
+(`regex = "1"` at
+[`crates/http-server/Cargo.toml:95`](../../crates/http-server/Cargo.toml#L95)).
+Promote it to the workspace so both crates pin to the same version.
 
-```toml
-[dependencies]
-# ... existing deps ...
+1. Edit the root [`Cargo.toml`](../../Cargo.toml): add
+   `regex = "1"` inside `[workspace.dependencies]` (alphabetical
+   placement near `rand`/`rayon`).
 
-# Secret redaction (cognee_utils::redact)
-regex = { workspace = true }
-```
+2. Edit [`crates/http-server/Cargo.toml`](../../crates/http-server/Cargo.toml):
+   change the `regex = "1"` direct pin (line 95) to
+   `regex = { workspace = true }` so the http-server keeps using the
+   same crate, just via the workspace table.
 
-The workspace already declares `regex = "1"` at
-[`Cargo.toml:95`](../../Cargo.toml#L95), so this picks it up via
-`workspace = true`. No version pin needed.
+3. Edit [`crates/utils/Cargo.toml`](../../crates/utils/Cargo.toml):
+
+   ```toml
+   [dependencies]
+   # ... existing deps ...
+
+   # Secret redaction (cognee_utils::redact)
+   regex = { workspace = true }
+   ```
+
+After these three edits, `cargo check -p cognee-utils -p cognee-http-server`
+should still succeed; only the dep declaration site moved.
 
 ### 4.2 Create `crates/utils/src/redact.rs`
 
@@ -238,8 +257,13 @@ scripts/check_all.sh
 
 ## 6. Files modified
 
+- [`Cargo.toml`](../../Cargo.toml) — promote `regex = "1"` into
+  `[workspace.dependencies]`.
+- [`crates/http-server/Cargo.toml`](../../crates/http-server/Cargo.toml)
+  — switch the existing direct `regex = "1"` pin to
+  `regex = { workspace = true }`.
 - [`crates/utils/Cargo.toml`](../../crates/utils/Cargo.toml) — add
-  `regex` direct dep (workspace).
+  `regex = { workspace = true }` direct dep.
 - [`crates/utils/src/redact.rs`](../../crates/utils/src/redact.rs) —
   NEW. Contains `redact()`, `patterns()`, and the six unit tests
   (`redacts_openai_key`, `redacts_api_key_assignment`,

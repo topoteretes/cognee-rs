@@ -16,5 +16,8 @@ rand.workspace = true
 # UUID generation
 uuid = { workspace = true, features = ["v4", "v5"] }
 
+# Secret redaction (cognee_utils::redact)
+regex = { workspace = true }
+
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

@@ -4,8 +4,10 @@
 //! including retry logic, ID generation, and other utilities.
 
 pub mod id_generation;
+pub mod redact;
 pub mod retry;
 pub mod tracing_keys;
 
 pub use id_generation::{NAMESPACE_OID, generate_edge_name, generate_node_id, generate_node_name};
+pub use redact::redact;
 pub use retry::{RetryConfig, RetryDecision, retry_with_backoff};
