@@ -2,6 +2,12 @@
 
 **Status**: ⬜ unimplemented
 **Owner**: _unassigned_
+
+> **Note (review pass 2):** This is the **second consecutive A-pass**
+> for this task. The first A-pass identified blockers but did not edit
+> the sub-doc; this pass folds the fixes inline. If a third correction
+> pass is needed, the orchestrator should escalate (the loop is
+> diverging, not converging).
 **Depends on**:
 - [Task 02-03 — Identity derivation](03-id-derivation.md)
 - [Task 02-04 — Payload + sanitize](04-payload-and-sanitize.md)
@@ -60,8 +66,22 @@ Tests that mutate `std::env::set_var` race with each other under
 sequential. We use the
 [`serial_test`](https://crates.io/crates/serial_test) crate
 (already a workspace dep — `serial_test = "3.2"` per
-[`Cargo.toml:83`](../../../Cargo.toml#L83)). Mark each env-mutating
+[`Cargo.toml:88`](../../../Cargo.toml#L88)). Mark each env-mutating
 test with `#[serial_test::serial]`.
+
+The crate itself doesn't yet pull `serial_test` into its
+`[dev-dependencies]`; this task adds it (see step 4.0 below).
+
+### Edition-2024 unsafe-env requirement
+
+The workspace is on Rust edition 2024 where
+`std::env::set_var` and `std::env::remove_var` are `unsafe`
+(concurrent env mutation is process-wide UB). Every test that
+mutates env vars in this task **must** wrap the call in
+`unsafe { ... }` with a SAFETY comment that points at the
+`#[serial]` ordering (or the `EnvGuard` lifecycle) as the soundness
+argument. The `EnvGuard::Drop` impl below also wraps its restore
+calls in `unsafe`.
 
 ### Why `tempfile::TempDir` for filesystem tests
 
@@ -78,6 +98,23 @@ path.
 - `cargo test -p cognee-telemetry --features telemetry --lib` builds.
 
 ## 4. Step-by-step
+
+### 4.0 Manifest updates
+
+Add `serial_test` to `crates/telemetry/Cargo.toml` so the env-mutating
+tests can import `serial_test::serial`:
+
+```toml
+[dev-dependencies]
+mockito = "1"
+tempfile.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }
+serial_test = { workspace = true }
+```
+
+(Workspace already pins `serial_test = "3.2"` at
+[`Cargo.toml:88`](../../../Cargo.toml#L88) — see [task 02-05](05-client-dispatch-and-optout.md)
+for the workspace-level addition.)
 
 ### 4.1 Generate the PBKDF2 fixture
 
@@ -196,9 +233,41 @@ fn pbkdf2_byte_parity_with_python() {
 }
 ```
 
-### 4.3 Add ID-helper tests to `crates/telemetry/src/ids.rs`
+### 4.3 Replace ID-helper smoke tests with the full matrix
 
-Append to the `#[cfg(all(test, feature = "telemetry"))]` block:
+The current `ids.rs` has a `#[cfg(all(test, feature = "telemetry"))]
+mod smoke` with two smoke tests
+(`empty_llm_api_key_produces_empty_tracking_id` and
+`tracking_id_format`) added in [task 02-03](03-id-derivation.md).
+The full matrix below **supersedes** those — delete the `smoke` mod
+when adding `ids_tests`. Keeping both would duplicate coverage and
+make `#[serial]` ordering across modules harder to reason about.
+
+The `PERSISTENT_ID` / `ANON_ID` `Lazy<Mutex<Option<String>>>` caches
+in `mod inner` are private, and the test module sits at file-scope
+outside `mod inner`. Rather than widening their visibility (which
+would leak internals to the rest of the crate), expose a single
+`pub(crate) fn reset_caches_for_test()` helper alongside the statics
+and have the tests call it. This keeps the cache-bust API
+narrowly-scoped and easy to grep for.
+
+In `crates/telemetry/src/ids.rs`, inside `mod inner` (next to the
+`Lazy` statics), add:
+
+```rust
+/// Cache-busting helper for tests. Not exposed outside the crate,
+/// and only intended for the `ids_tests` module — production code
+/// has no reason to drop these caches.
+#[cfg(test)]
+pub(crate) fn reset_caches_for_test() {
+    // lock poison is unrecoverable
+    *ANON_ID.lock().unwrap() = None;
+    *PERSISTENT_ID.lock().unwrap() = None;
+}
+```
+
+Then **replace** the existing `mod smoke` with the matrix below
+(at file scope, outside `mod inner`):
 
 ```rust
 #[cfg(all(test, feature = "telemetry"))]
@@ -209,6 +278,11 @@ mod ids_tests {
 
     /// Save and restore HOME / TRACKING_ID / LLM_API_KEY around each
     /// test so we don't pollute the suite environment.
+    ///
+    /// Soundness: every env mutation is gated by `#[serial]`, so no
+    /// other test in this crate is reading or writing the same vars
+    /// while this guard is alive. The `Drop` impl restores the
+    /// previous values inside the same serial section.
     struct EnvGuard {
         home: Option<String>,
         tracking_id: Option<String>,
@@ -233,9 +307,14 @@ mod ids_tests {
                 ("LLM_API_KEY", &self.llm_api_key),
                 ("TELEMETRY_API_KEY_TRACKING_SALT", &self.salt),
             ] {
-                match v {
-                    Some(v) => std::env::set_var(k, v),
-                    None => std::env::remove_var(k),
+                // SAFETY: the `#[serial]` attribute on every test that
+                //   constructs an `EnvGuard` guarantees no concurrent
+                //   reader/writer of these vars while Drop runs.
+                unsafe {
+                    match v {
+                        Some(v) => std::env::set_var(k, v),
+                        None => std::env::remove_var(k),
+                    }
                 }
             }
         }
@@ -245,8 +324,13 @@ mod ids_tests {
     #[serial]
     fn ak_format_invariants() {
         let _g = EnvGuard::snapshot();
-        std::env::set_var("LLM_API_KEY", "sk-test");
-        std::env::remove_var("TELEMETRY_API_KEY_TRACKING_SALT");
+        // SAFETY: `#[serial]` orders this test against all other
+        //   env-mutating tests in the crate; `_g` restores prior
+        //   values on drop.
+        unsafe {
+            std::env::set_var("LLM_API_KEY", "sk-test");
+            std::env::remove_var("TELEMETRY_API_KEY_TRACKING_SALT");
+        }
         let id = get_api_key_tracking_id();
         assert!(id.starts_with("ak_"));
         assert_eq!(id.len(), 35);
@@ -257,7 +341,10 @@ mod ids_tests {
     #[serial]
     fn empty_llm_api_key_returns_empty() {
         let _g = EnvGuard::snapshot();
-        std::env::remove_var("LLM_API_KEY");
+        // SAFETY: see ak_format_invariants.
+        unsafe {
+            std::env::remove_var("LLM_API_KEY");
+        }
         assert_eq!(get_api_key_tracking_id(), "");
     }
 
@@ -269,10 +356,16 @@ mod ids_tests {
         // tail. Mirror of Python's
         // `test_api_key_tracking_id_uses_full_key_not_visible_tail`.
         let _g = EnvGuard::snapshot();
-        std::env::remove_var("TELEMETRY_API_KEY_TRACKING_SALT");
-        std::env::set_var("LLM_API_KEY", "sk-aaaaaaaaaaaaaa1234");
+        // SAFETY: `#[serial]` ordering, see EnvGuard.
+        unsafe {
+            std::env::remove_var("TELEMETRY_API_KEY_TRACKING_SALT");
+            std::env::set_var("LLM_API_KEY", "sk-aaaaaaaaaaaaaa1234");
+        }
         let id_a = get_api_key_tracking_id();
-        std::env::set_var("LLM_API_KEY", "sk-bbbbbbbbbbbbbb1234");
+        // SAFETY: still inside the same serial section.
+        unsafe {
+            std::env::set_var("LLM_API_KEY", "sk-bbbbbbbbbbbbbb1234");
+        }
         let id_b = get_api_key_tracking_id();
         assert_ne!(id_a, id_b);
     }
@@ -283,10 +376,16 @@ mod ids_tests {
         // Mirror of Python's
         // `test_api_key_tracking_id_supports_deployment_salt`.
         let _g = EnvGuard::snapshot();
-        std::env::set_var("LLM_API_KEY", "sk-test");
-        std::env::remove_var("TELEMETRY_API_KEY_TRACKING_SALT");
+        // SAFETY: `#[serial]` ordering.
+        unsafe {
+            std::env::set_var("LLM_API_KEY", "sk-test");
+            std::env::remove_var("TELEMETRY_API_KEY_TRACKING_SALT");
+        }
         let default_id = get_api_key_tracking_id();
-        std::env::set_var("TELEMETRY_API_KEY_TRACKING_SALT", "private-salt-2026");
+        // SAFETY: still inside the same serial section.
+        unsafe {
+            std::env::set_var("TELEMETRY_API_KEY_TRACKING_SALT", "private-salt-2026");
+        }
         let custom_id = get_api_key_tracking_id();
         assert_ne!(default_id, custom_id);
     }
@@ -296,10 +395,12 @@ mod ids_tests {
     fn persistent_id_create_then_stable() {
         let _g = EnvGuard::snapshot();
         let dir = TempDir::new().expect("tempdir");
-        std::env::set_var("HOME", dir.path());
+        // SAFETY: `#[serial]` ordering.
+        unsafe {
+            std::env::set_var("HOME", dir.path());
+        }
         // Wipe the cache so the test re-reads the (new) HOME.
-        *PERSISTENT_ID.lock().unwrap() = None;
-        *ANON_ID.lock().unwrap() = None;
+        super::inner::reset_caches_for_test();
 
         let first = get_persistent_id();
         assert!(!first.is_empty());
@@ -308,11 +409,11 @@ mod ids_tests {
         // File should now exist.
         let path = dir.path().join(".cognee").join(".persistent_id");
         assert!(path.exists());
-        let on_disk = std::fs::read_to_string(&path).unwrap();
+        let on_disk = std::fs::read_to_string(&path).expect("persistent_id file readable");
         assert_eq!(on_disk.trim(), first);
 
         // Wipe cache; second call should read the same file.
-        *PERSISTENT_ID.lock().unwrap() = None;
+        super::inner::reset_caches_for_test();
         let second = get_persistent_id();
         assert_eq!(first, second);
     }
@@ -321,8 +422,11 @@ mod ids_tests {
     #[serial]
     fn tracking_id_env_overrides_anon_id() {
         let _g = EnvGuard::snapshot();
-        std::env::set_var("TRACKING_ID", "fixed-anon-12345");
-        *ANON_ID.lock().unwrap() = None; // wipe cache
+        // SAFETY: `#[serial]` ordering.
+        unsafe {
+            std::env::set_var("TRACKING_ID", "fixed-anon-12345");
+        }
+        super::inner::reset_caches_for_test();
         assert_eq!(get_anonymous_id(), "fixed-anon-12345");
     }
 
@@ -331,19 +435,20 @@ mod ids_tests {
     fn tracking_id_empty_env_does_not_override() {
         let _g = EnvGuard::snapshot();
         let dir = TempDir::new().expect("tempdir");
-        std::env::set_var("HOME", dir.path());
-        std::env::set_var("TRACKING_ID", "");
-        *ANON_ID.lock().unwrap() = None;
+        // SAFETY: `#[serial]` ordering.
+        unsafe {
+            std::env::set_var("HOME", dir.path());
+            std::env::set_var("TRACKING_ID", "");
+        }
+        super::inner::reset_caches_for_test();
         let id = get_anonymous_id();
         assert_ne!(id, ""); // empty TRACKING_ID is treated as unset
     }
 }
 ```
 
-Note: the `PERSISTENT_ID` and `ANON_ID` `Lazy<Mutex<Option<String>>>`
-caches from [task 02-03](03-id-derivation.md) need to be visible to
-the test module. If they're currently `pub(crate)`, no change needed.
-If `private`, expose as `pub(crate)` for tests.
+Note: `super::inner::reset_caches_for_test()` is `pub(crate)` and
+gated on `cfg(test)`, so it never leaks into release builds.
 
 ### 4.4 Sanitize tests
 
@@ -370,9 +475,41 @@ fn keys_other_than_names_are_left_alone() {
 ### 4.5 Env-module tests
 
 Already added inline in [task 02-05](05-client-dispatch-and-optout.md)
-(`crates/telemetry/src/env.rs` `#[cfg(test)] mod tests`). Confirm
-the tests are `#[serial_test::serial]` (the [task 02-05] sample uses
-`#[test]` — wrap them in `#[serial]` so they don't race).
+(`crates/telemetry/src/env.rs` `#[cfg(test)] mod tests`). Those four
+tests (`telemetry_disabled_truthy_value`,
+`telemetry_disabled_empty_value`, `env_test_disables`,
+`timeout_default_and_clamp`) currently rely on a hand-rolled
+race-guard that reads `TELEMETRY_DISABLED` before asserting. Replace
+that with `#[serial_test::serial]`:
+
+1. Add `use serial_test::serial;` at the top of `mod tests`.
+2. Annotate **every** test in the module with `#[serial]` (in
+   addition to `#[test]`).
+3. Delete the race-guard read of `TELEMETRY_DISABLED` in
+   `env_test_disables` (and the surrounding comment) — `#[serial]`
+   removes the need for it; the `assert!(!is_disabled())` becomes
+   unconditional.
+4. Tighten the SAFETY comments on each `unsafe { std::env::set_var(...) }`
+   block to reference `#[serial]` instead of "we still wrap each call
+   in `unsafe`" boilerplate.
+
+After the rewrite, each test looks like:
+
+```rust
+#[test]
+#[serial]
+fn telemetry_disabled_truthy_value() {
+    // SAFETY: `#[serial]` orders this test against every other
+    //   env-mutating test in the crate, so no concurrent reader/writer
+    //   of TELEMETRY_DISABLED / ENV exists while this body runs.
+    unsafe {
+        std::env::remove_var("ENV");
+        std::env::set_var("TELEMETRY_DISABLED", "1");
+    }
+    assert!(is_disabled());
+    // ... rest of body, all env mutation in `unsafe` blocks ...
+}
+```
 
 ### 4.6 Public-API smoke tests
 
@@ -385,25 +522,40 @@ Create `crates/telemetry/tests/public_api.rs`:
 
 use cognee_telemetry::send_telemetry;
 use serde_json::json;
+use serial_test::serial;
 
 #[test]
+#[serial]
 fn callable_with_uuid_user_id() {
     let id = uuid::Uuid::new_v4();
     // No assertion: this is a compile-time and "doesn't panic" check.
     // Set TELEMETRY_DISABLED so we don't try to hit the network.
-    std::env::set_var("TELEMETRY_DISABLED", "1");
+    // SAFETY: `#[serial]` orders this against every other env-mutating
+    //   test in the crate; nothing else reads/writes
+    //   TELEMETRY_DISABLED while this body runs.
+    unsafe {
+        std::env::set_var("TELEMETRY_DISABLED", "1");
+    }
     send_telemetry("test.event", id, Some(json!({"k": "v"})));
 }
 
 #[test]
+#[serial]
 fn callable_with_str_user_id() {
-    std::env::set_var("TELEMETRY_DISABLED", "1");
+    // SAFETY: see callable_with_uuid_user_id.
+    unsafe {
+        std::env::set_var("TELEMETRY_DISABLED", "1");
+    }
     send_telemetry("test.event", "anonymous", None);
 }
 
 #[test]
+#[serial]
 fn callable_with_optional_uuid_user_id() {
-    std::env::set_var("TELEMETRY_DISABLED", "1");
+    // SAFETY: see callable_with_uuid_user_id.
+    unsafe {
+        std::env::set_var("TELEMETRY_DISABLED", "1");
+    }
     let id: Option<uuid::Uuid> = None;
     send_telemetry("test.event", id, None);
 }
@@ -458,18 +610,30 @@ cargo clippy -p cognee-telemetry --features telemetry --tests -- -D warnings
 
 ## 6. Files modified
 
+- `crates/telemetry/Cargo.toml` — add
+  `serial_test = { workspace = true }` to `[dev-dependencies]`
+  (workspace pin already at [`Cargo.toml:88`](../../../Cargo.toml#L88)).
 - `scripts/generate_python_fixtures.py` — new file.
 - `crates/telemetry/tests/fixtures/pbkdf2_vectors.json` — new file
   (committed; regenerate by running the script).
 - `crates/telemetry/tests/byte_parity.rs` — new file.
-- `crates/telemetry/tests/public_api.rs` — new file.
+- `crates/telemetry/tests/public_api.rs` — new file (uses
+  `serial_test::serial` and wraps every `std::env::set_var` in
+  `unsafe`).
 - `crates/telemetry/tests/noop_fallback.rs` — new file.
-- `crates/telemetry/src/ids.rs` — append `ids_tests` mod (extends
-  the smoke tests from [task 02-03](03-id-derivation.md)).
+- `crates/telemetry/src/ids.rs` — (a) add
+  `pub(crate) fn reset_caches_for_test()` inside `mod inner`,
+  gated on `cfg(test)`; (b) **delete** the existing `mod smoke`
+  block from [task 02-03](03-id-derivation.md); (c) add the new
+  `ids_tests` mod with the full matrix. All env mutation wrapped
+  in `unsafe` with SAFETY comments referencing `#[serial]`.
 - `crates/telemetry/src/sanitize.rs` — append two tests (extends
   the inline tests from [task 02-04](04-payload-and-sanitize.md)).
-- `crates/telemetry/src/env.rs` — wrap tests with
-  `#[serial_test::serial]` (small fix-up of [task 02-05](05-client-dispatch-and-optout.md)).
+- `crates/telemetry/src/env.rs` — wrap each existing test with
+  `#[serial_test::serial]`, drop the hand-rolled race-guard in
+  `env_test_disables`, and tighten SAFETY comments on the
+  `unsafe { std::env::set_var(...) }` blocks (small fix-up of
+  [task 02-05](05-client-dispatch-and-optout.md)).
 
 ## 7. Risks
 

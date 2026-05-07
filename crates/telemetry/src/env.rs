@@ -73,36 +73,42 @@ pub fn proxy_url() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
 
     // Workspace uses Rust edition 2024, where `std::env::set_var` and
     // `std::env::remove_var` are `unsafe` (concurrent env mutation is
-    // process-wide UB). These tests mutate disjoint env vars, but we
-    // still wrap each call in `unsafe` to compile under edition 2024.
+    // process-wide UB). `#[serial]` orders these tests against every
+    // other env-mutating test in the crate, which is the soundness
+    // argument for the `unsafe` blocks below.
 
     #[test]
+    #[serial]
     fn telemetry_disabled_truthy_value() {
-        // SAFETY: edition-2024 unsafe-env requirement; this test
-        //   touches `TELEMETRY_DISABLED` only and is fast enough that
-        //   accidental concurrent reads in other tests will at worst
-        //   observe one of the two valid states.
+        // SAFETY: `#[serial]` orders this test against every other
+        //   env-mutating test in the crate, so no concurrent reader/writer
+        //   of TELEMETRY_DISABLED / ENV exists while this body runs.
         unsafe {
             std::env::remove_var("ENV");
             std::env::set_var("TELEMETRY_DISABLED", "1");
         }
         assert!(is_disabled());
+        // SAFETY: still inside the same serial section.
         unsafe {
             std::env::set_var("TELEMETRY_DISABLED", "false");
         }
         // Python checks for *any* non-empty value; we mirror.
         assert!(is_disabled());
+        // SAFETY: still inside the same serial section.
         unsafe {
             std::env::remove_var("TELEMETRY_DISABLED");
         }
     }
 
     #[test]
+    #[serial]
     fn telemetry_disabled_empty_value() {
-        // SAFETY: see sibling test.
+        // SAFETY: `#[serial]` orders this test against every other
+        //   env-mutating test in the crate.
         unsafe {
             std::env::remove_var("ENV");
             std::env::set_var("TELEMETRY_DISABLED", "");
@@ -110,63 +116,68 @@ mod tests {
         // Python's `if os.getenv("TELEMETRY_DISABLED"):` treats empty
         // as falsy — we do too.
         assert!(!is_disabled());
+        // SAFETY: still inside the same serial section.
         unsafe {
             std::env::remove_var("TELEMETRY_DISABLED");
         }
     }
 
     #[test]
+    #[serial]
     fn env_test_disables() {
-        // SAFETY: see sibling test. Note that this test races with
-        // `telemetry_disabled_truthy_value` if run in parallel — task
-        // 02-08 will add `serial_test::serial` to harden this. For
-        // now we read `TELEMETRY_DISABLED` ourselves and skip the
-        // negative assertion when a sibling test has set it.
+        // SAFETY: `#[serial]` orders this test against every other
+        //   env-mutating test in the crate; no need for the previous
+        //   hand-rolled race-guard read of `TELEMETRY_DISABLED`.
         unsafe {
+            std::env::remove_var("TELEMETRY_DISABLED");
             std::env::set_var("ENV", "test");
         }
         assert!(is_disabled());
+        // SAFETY: still inside the same serial section.
         unsafe {
             std::env::set_var("ENV", "dev");
         }
         assert!(is_disabled());
+        // SAFETY: still inside the same serial section.
         unsafe {
             std::env::set_var("ENV", "production");
         }
-        let td_set = std::env::var("TELEMETRY_DISABLED")
-            .map(|v| !v.is_empty())
-            .unwrap_or(false);
-        if !td_set {
-            assert!(!is_disabled());
-        }
+        assert!(!is_disabled());
+        // SAFETY: still inside the same serial section.
         unsafe {
             std::env::remove_var("ENV");
         }
     }
 
     #[test]
+    #[serial]
     fn timeout_default_and_clamp() {
-        // SAFETY: see sibling test.
+        // SAFETY: `#[serial]` orders this test against every other
+        //   env-mutating test in the crate.
         unsafe {
             std::env::remove_var("TELEMETRY_REQUEST_TIMEOUT");
         }
         assert_eq!(request_timeout_secs(), 5);
 
+        // SAFETY: still inside the same serial section.
         unsafe {
             std::env::set_var("TELEMETRY_REQUEST_TIMEOUT", "0");
         }
         assert_eq!(request_timeout_secs(), 1);
 
+        // SAFETY: still inside the same serial section.
         unsafe {
             std::env::set_var("TELEMETRY_REQUEST_TIMEOUT", "120");
         }
         assert_eq!(request_timeout_secs(), 60);
 
+        // SAFETY: still inside the same serial section.
         unsafe {
             std::env::set_var("TELEMETRY_REQUEST_TIMEOUT", "10");
         }
         assert_eq!(request_timeout_secs(), 10);
 
+        // SAFETY: still inside the same serial section.
         unsafe {
             std::env::remove_var("TELEMETRY_REQUEST_TIMEOUT");
         }

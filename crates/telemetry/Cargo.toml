@@ -49,3 +49,15 @@ chrono       = { workspace = true, optional = true }
 mockito = "1"
 tempfile.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }
+serial_test = { workspace = true }
+# Used by the byte-parity integration test under tests/byte_parity.rs to
+# mirror the same PBKDF2 stack as the implementation, plus serde_json /
+# hex for fixture decoding. Workspace versions are pinned in the root
+# Cargo.toml.
+pbkdf2 = { workspace = true }
+hmac = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }

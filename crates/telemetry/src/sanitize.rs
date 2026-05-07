@@ -98,4 +98,18 @@ mod tests {
         sanitize_nested_properties(&mut v, &["url"]);
         assert_eq!(v["url"], 42);
     }
+
+    #[test]
+    fn empty_object_is_unchanged() {
+        let mut v = json!({});
+        sanitize_nested_properties(&mut v, &["url"]);
+        assert_eq!(v, json!({}));
+    }
+
+    #[test]
+    fn keys_other_than_names_are_left_alone() {
+        let mut v = json!({"endpoint": "/api/v1/forget"});
+        sanitize_nested_properties(&mut v, &["url"]);
+        assert_eq!(v["endpoint"], "/api/v1/forget");
+    }
 }

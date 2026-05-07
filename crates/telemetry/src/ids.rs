@@ -32,6 +32,17 @@ mod inner {
     /// Cached persistent id. Same caching rationale as above.
     static PERSISTENT_ID: Lazy<Mutex<Option<String>>> = Lazy::new(|| Mutex::new(None));
 
+    /// Cache-busting helper for tests. Not exposed outside the crate,
+    /// and only intended for the `ids_tests` module — production code
+    /// has no reason to drop these caches.
+    #[cfg(test)]
+    pub(crate) fn reset_caches_for_test() {
+        // lock poison is unrecoverable
+        *ANON_ID.lock().unwrap() = None;
+        // lock poison is unrecoverable
+        *PERSISTENT_ID.lock().unwrap() = None;
+    }
+
     /// Project-local anonymous identifier.
     pub fn get_anonymous_id() -> String {
         if let Ok(v) = std::env::var("TRACKING_ID")
@@ -208,41 +219,181 @@ pub use inner::get_api_key_tracking_id;
 pub use inner::get_persistent_id;
 
 #[cfg(all(test, feature = "telemetry"))]
-mod smoke {
+mod ids_tests {
     use super::*;
+    use serial_test::serial;
+    use tempfile::TempDir;
 
-    // Note: workspace uses Rust edition 2024, where `std::env::set_var`
-    // and `std::env::remove_var` are `unsafe` (concurrent env mutation
-    // is process-wide UB). The full byte-parity matrix in task 02-08
-    // adds `serial_test::serial` so the unsafe is sound; these smoke
-    // tests follow the same pattern.
-
-    #[test]
-    fn empty_llm_api_key_produces_empty_tracking_id() {
-        // SAFETY: no other thread mutates env in this single-test block;
-        //   full ordering across the suite is enforced in 02-08 via serial_test.
-        unsafe {
-            std::env::remove_var("LLM_API_KEY");
-            std::env::remove_var("TELEMETRY_API_KEY_TRACKING_SALT");
+    /// Save and restore HOME / TRACKING_ID / LLM_API_KEY around each
+    /// test so we don't pollute the suite environment.
+    ///
+    /// Soundness: every env mutation is gated by `#[serial]`, so no
+    /// other test in this crate is reading or writing the same vars
+    /// while this guard is alive. The `Drop` impl restores the
+    /// previous values inside the same serial section.
+    struct EnvGuard {
+        home: Option<String>,
+        tracking_id: Option<String>,
+        llm_api_key: Option<String>,
+        salt: Option<String>,
+    }
+    impl EnvGuard {
+        fn snapshot() -> Self {
+            Self {
+                home: std::env::var("HOME").ok(),
+                tracking_id: std::env::var("TRACKING_ID").ok(),
+                llm_api_key: std::env::var("LLM_API_KEY").ok(),
+                salt: std::env::var("TELEMETRY_API_KEY_TRACKING_SALT").ok(),
+            }
         }
-        assert_eq!(get_api_key_tracking_id(), "");
+    }
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            for (k, v) in [
+                ("HOME", &self.home),
+                ("TRACKING_ID", &self.tracking_id),
+                ("LLM_API_KEY", &self.llm_api_key),
+                ("TELEMETRY_API_KEY_TRACKING_SALT", &self.salt),
+            ] {
+                // SAFETY: the `#[serial]` attribute on every test that
+                //   constructs an `EnvGuard` guarantees no concurrent
+                //   reader/writer of these vars while Drop runs.
+                unsafe {
+                    match v {
+                        Some(v) => std::env::set_var(k, v),
+                        None => std::env::remove_var(k),
+                    }
+                }
+            }
+        }
     }
 
     #[test]
-    fn tracking_id_format() {
-        // SAFETY: see sibling test.
+    #[serial]
+    fn ak_format_invariants() {
+        let _g = EnvGuard::snapshot();
+        // SAFETY: `#[serial]` orders this test against all other
+        //   env-mutating tests in the crate; `_g` restores prior
+        //   values on drop.
         unsafe {
             std::env::set_var("LLM_API_KEY", "sk-test");
             std::env::remove_var("TELEMETRY_API_KEY_TRACKING_SALT");
         }
         let id = get_api_key_tracking_id();
         assert!(id.starts_with("ak_"));
-        assert_eq!(id.len(), 3 + 32);
+        assert_eq!(id.len(), 35);
         assert!(
             id[3..]
                 .chars()
-                .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
-            "expected lowercase hex suffix, got {id:?}"
+                .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
         );
+    }
+
+    #[test]
+    #[serial]
+    fn empty_llm_api_key_returns_empty() {
+        let _g = EnvGuard::snapshot();
+        // SAFETY: see ak_format_invariants.
+        unsafe {
+            std::env::remove_var("LLM_API_KEY");
+        }
+        assert_eq!(get_api_key_tracking_id(), "");
+    }
+
+    #[test]
+    #[serial]
+    fn full_key_used_not_visible_tail() {
+        // Two keys sharing the last 4 chars must produce different
+        // tracking ids — the whole key is hashed, not just the visible
+        // tail. Mirror of Python's
+        // `test_api_key_tracking_id_uses_full_key_not_visible_tail`.
+        let _g = EnvGuard::snapshot();
+        // SAFETY: `#[serial]` ordering, see EnvGuard.
+        unsafe {
+            std::env::remove_var("TELEMETRY_API_KEY_TRACKING_SALT");
+            std::env::set_var("LLM_API_KEY", "sk-aaaaaaaaaaaaaa1234");
+        }
+        let id_a = get_api_key_tracking_id();
+        // SAFETY: still inside the same serial section.
+        unsafe {
+            std::env::set_var("LLM_API_KEY", "sk-bbbbbbbbbbbbbb1234");
+        }
+        let id_b = get_api_key_tracking_id();
+        assert_ne!(id_a, id_b);
+    }
+
+    #[test]
+    #[serial]
+    fn deployment_salt_changes_id() {
+        // Mirror of Python's
+        // `test_api_key_tracking_id_supports_deployment_salt`.
+        let _g = EnvGuard::snapshot();
+        // SAFETY: `#[serial]` ordering.
+        unsafe {
+            std::env::set_var("LLM_API_KEY", "sk-test");
+            std::env::remove_var("TELEMETRY_API_KEY_TRACKING_SALT");
+        }
+        let default_id = get_api_key_tracking_id();
+        // SAFETY: still inside the same serial section.
+        unsafe {
+            std::env::set_var("TELEMETRY_API_KEY_TRACKING_SALT", "private-salt-2026");
+        }
+        let custom_id = get_api_key_tracking_id();
+        assert_ne!(default_id, custom_id);
+    }
+
+    #[test]
+    #[serial]
+    fn persistent_id_create_then_stable() {
+        let _g = EnvGuard::snapshot();
+        let dir = TempDir::new().expect("tempdir");
+        // SAFETY: `#[serial]` ordering.
+        unsafe {
+            std::env::set_var("HOME", dir.path());
+        }
+        // Wipe the cache so the test re-reads the (new) HOME.
+        super::inner::reset_caches_for_test();
+
+        let first = get_persistent_id();
+        assert!(!first.is_empty());
+        assert!(uuid::Uuid::parse_str(&first).is_ok());
+
+        // File should now exist.
+        let path = dir.path().join(".cognee").join(".persistent_id");
+        assert!(path.exists());
+        let on_disk = std::fs::read_to_string(&path).expect("persistent_id file readable");
+        assert_eq!(on_disk.trim(), first);
+
+        // Wipe cache; second call should read the same file.
+        super::inner::reset_caches_for_test();
+        let second = get_persistent_id();
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    #[serial]
+    fn tracking_id_env_overrides_anon_id() {
+        let _g = EnvGuard::snapshot();
+        // SAFETY: `#[serial]` ordering.
+        unsafe {
+            std::env::set_var("TRACKING_ID", "fixed-anon-12345");
+        }
+        super::inner::reset_caches_for_test();
+        assert_eq!(get_anonymous_id(), "fixed-anon-12345");
+    }
+
+    #[test]
+    #[serial]
+    fn tracking_id_empty_env_does_not_override() {
+        let _g = EnvGuard::snapshot();
+        let dir = TempDir::new().expect("tempdir");
+        // SAFETY: `#[serial]` ordering.
+        unsafe {
+            std::env::set_var("HOME", dir.path());
+            std::env::set_var("TRACKING_ID", "");
+        }
+        super::inner::reset_caches_for_test();
+        let id = get_anonymous_id();
+        assert_ne!(id, ""); // empty TRACKING_ID is treated as unset
     }
 }
