@@ -26,6 +26,10 @@ Desktop.ini
 # Environment variables
 .env
 
+# Telemetry runtime artifacts (anonymous instance ID files)
+.anon_id
+**/.anon_id
+
 # C API build artifacts
 capi/build/
 
