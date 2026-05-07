@@ -1,6 +1,6 @@
 # Task 02-08 — Unit tests for `cognee-telemetry`
 
-**Status**: ⬜ unimplemented
+**Status**: implemented in commit 8d3e799 (note: chose option (b) — pub(crate) reset_caches_for_test() helper inside mod inner — over module placement; replaced existing 2 smoke tests with the full mod ids_tests; added scripts/generate_python_fixtures.py + tests/fixtures/pbkdf2_vectors.json + tests/byte_parity.rs as the load-bearing PBKDF2 parity check; tests/public_api.rs uses TELEMETRY_DISABLED=1 to stay offline; tests/noop_fallback.rs confirms default-off path).
 **Owner**: _unassigned_
 
 > **Note (review pass 2):** This is the **second consecutive A-pass**
