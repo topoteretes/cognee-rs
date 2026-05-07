@@ -1,6 +1,6 @@
 # Task 02-06 — Public API freeze, noop fallback, feature wiring
 
-**Status**: ⬜ unimplemented
+**Status**: implemented in commit 7cea4c6 (note: sub-doc rewritten by sub-agent A's second pass to preserve gap-01's crates/lib/src/telemetry.rs in place — original draft would have deleted cognee_observability::* re-exports and the SettingsView impl. PropertyValue alias kept rather than making serde_json non-optional. UserIdRef gained Clone for callsite ergonomics. http-server default flipped to ["telemetry"]).
 **Owner**: _unassigned_
 **Depends on**:
 - [Task 02-02 — Crate scaffold](02-telemetry-crate-scaffold.md)
