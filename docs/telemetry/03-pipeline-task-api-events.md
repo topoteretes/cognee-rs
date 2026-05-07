@@ -550,3 +550,40 @@ they landed on `main`:
 | 03-08 | `dc28025` | docs — mark action item 08 complete |
 | 03-09 | `bc8ed86` | user-facing telemetry docs for new events |
 | 03-09 | _this commit_ | mark action item 09 complete + add planning sub-docs |
+
+### Known follow-ups
+
+Two items were intentionally deferred. They are tracked here so they
+are not lost; both fall outside the scope guard the runbook drew at
+the start of gap 03.
+
+1. **Caller-side wiring of `Pipeline::telemetry_settings`.**
+   `cognee_core::pipeline::execute()` now emits the four pipeline
+   lifecycle events and reads the curated settings allowlist from
+   `Pipeline.telemetry_settings`. The carrier is unpopulated for the
+   production SDK paths (cognify, ingestion, memify) because they
+   bypass `execute()` entirely — see the source comments at
+   [`crates/cognify/src/tasks.rs:1719`](../../crates/cognify/src/tasks.rs#L1719),
+   [`crates/cognify/src/memify/pipeline.rs:49`](../../crates/cognify/src/memify/pipeline.rs#L49),
+   and [`crates/ingestion/src/pipeline.rs:772`](../../crates/ingestion/src/pipeline.rs#L772).
+   The natural place to wire this is the library-side
+   `pipeline_runs` work tracked under
+   [gap 08 → §D Library-side wiring](08-pipeline-run-status.md#d-library-side-wiring-write-pipeline_runs-rows-from-cli-runs):
+   when those entry points learn to call `execute()` (or its registry
+   wrapper), they should also pass
+   `Pipeline::with_telemetry_settings(settings.telemetry_snapshot())`
+   so the events carry the provider/model snapshot.
+
+2. **Search lifecycle integration test.**
+   Sub-doc [03/08-tests.md §4.3.6](03/08-tests.md) sketched a
+   `crates/search/`-side mockito test asserting both
+   `cognee.search EXECUTION STARTED` and `EXECUTION COMPLETED` POSTs.
+   It was skipped because the host crate (`cognee-core` tests) cannot
+   add a dev-dep on `cognee-search` without a backwards crate-graph
+   edge, and because the cross-SDK byte-parity harness in
+   [`e2e-cross-sdk/`](../../e2e-cross-sdk/) already covers the
+   `EXECUTION COMPLETED` payload. Adding it to `crates/search/tests/`
+   is feasible (the `SearchOrchestrator` constructor + a registry stub
+   for one search type is enough) but was scoped out as duplicate
+   coverage. Tracked in
+   [gap-analysis.md → Future work / out of scope](gap-analysis.md#future-work--out-of-scope).

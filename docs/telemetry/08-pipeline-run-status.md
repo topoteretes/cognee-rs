@@ -374,6 +374,17 @@ In `ScopedRunWatcher` and in `DefaultPipelineRunRegistry::run_work_inline` / `re
 
 Add an opt-in pipeline registry handle to the cognify/memify/ingestion library APIs so callers (CLI, examples) can persist runs. Concretely: the top-level `cognify`/`memify` functions in `crates/cognify/src/` accept an optional `Arc<dyn PipelineRunRepository>`, and when present, log the four-state lifecycle around the inner call to `pipeline::execute`. Or expose `register_inline` from the library facade.
 
+> **Telemetry tie-in (carryover from gap 03-04).** When this section lands, the
+> same wiring should pass the per-call `Settings::telemetry_snapshot()` through
+> `Pipeline::with_telemetry_settings(...)` before invoking `execute()`. Today
+> the `Pipeline.telemetry_settings` carrier exists and `execute()` emits
+> `Pipeline Run Started`/`Completed`/`Errored` analytics events, but production
+> SDK paths bypass `execute()` so the snapshot is never populated and those
+> events never fire for cognify/memify/ingestion runs. See
+> [03/04-pipeline-lifecycle-events.md](03/04-pipeline-lifecycle-events.md)
+> for the carrier API and [03-pipeline-task-api-events.md §Closure summary →
+> Known follow-ups](03-pipeline-task-api-events.md#known-follow-ups).
+
 ### E. Make `dataset_id` nullable in the schema (Python parity)
 
 A new migration drops the FK, allows `NULL`, and updates the entity:
