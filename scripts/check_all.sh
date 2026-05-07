@@ -39,6 +39,18 @@ cargo check -p cognee-lib --no-default-features
 
 echo ""
 echo "================================================================"
+echo "=== Rust: Test (telemetry crate noop fallback) ==="
+echo "================================================================"
+# Mirrors the no-default-features test lane in .github/workflows/ci.yml.
+# Exercises crates/telemetry/tests/noop_fallback.rs at runtime so the
+# cfg(not(feature = "telemetry")) path catches regressions locally before
+# they reach CI. Separate CARGO_TARGET_DIR keeps the noop build's rustc
+# fingerprint distinct from the workspace's default-features build.
+CARGO_TARGET_DIR=target/check-noop \
+    cargo test -p cognee-telemetry --no-default-features --tests
+
+echo ""
+echo "================================================================"
 echo "=== C API: Building and running examples ==="
 echo "================================================================"
 "$REPO_ROOT/capi/scripts/check.sh"

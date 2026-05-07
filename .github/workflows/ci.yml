@@ -156,14 +156,31 @@ jobs:
 
       # Telemetry-feature test lane. The integration test from task 01-10
       # spawns an in-process tonic gRPC server on 127.0.0.1:0; no external
-      # OTLP collector is needed. Scoped to `-p cognee-observability`
-      # because that is where init_telemetry, OtelGuard, and the OTLP
-      # parity tests live; the rest of the workspace is already tested
-      # in the noop arm above.
-      - name: Test (telemetry feature)
+      # OTLP collector is needed. Covers both the OTEL crate
+      # (cognee-observability) and the product-analytics crate
+      # (cognee-telemetry, gap 02). TELEMETRY_DISABLED=1 is set globally
+      # for belt-and-braces network isolation: the mockito-driven
+      # integration tests (byte_parity, dispatch_with_mockito) explicitly
+      # opt back in via COGNEE_TELEMETRY_INTEGRATION_TEST and inject the
+      # mockito URL, while every other code path stays disabled so no
+      # accidental egress to the live test.prometh.ai proxy can occur.
+      - name: Test (telemetry feature, observability + telemetry crates)
         env:
           CARGO_TARGET_DIR: target/telemetry
-        run: cargo test -p cognee-observability --features telemetry -- --nocapture
+          TELEMETRY_DISABLED: "1"
+        run: |
+          cargo test -p cognee-observability --features telemetry -- --nocapture
+          cargo test -p cognee-telemetry --features telemetry -- --nocapture
+
+      # Noop-fallback test lane for the cognee-telemetry crate. Exercises
+      # crates/telemetry/tests/noop_fallback.rs (task 02-08) so we catch
+      # cfg(not(feature = "telemetry")) drift at *runtime*, not just at
+      # compile time. Reuses target/no-default for cache locality with the
+      # sibling lint-job step.
+      - name: Test (no default features, telemetry crate noop fallback)
+        env:
+          CARGO_TARGET_DIR: target/no-default
+        run: cargo test -p cognee-telemetry --no-default-features -- --nocapture
 
       - name: Build docs
         run: cargo doc --no-deps

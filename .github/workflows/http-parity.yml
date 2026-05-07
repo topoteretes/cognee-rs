@@ -112,6 +112,20 @@ jobs:
           -k "test_http_(health|auth|datasets|add|search|forget|openapi|errors|self)"
           --tb=short
 
+      # ── Telemetry parity: cross-SDK identity-layer comparison ────────────
+      # Asserts api_key_tracking_id and persistent_id parity between the
+      # Python and Rust SDKs. Uses the local `telemetry-proxy` service
+      # (mock for test.prometh.ai) declared in docker-compose.yml — no
+      # OPENAI_KEY required, no live network egress. The `e2e-telemetry`
+      # service runs `pytest -vs /harness/test_telemetry_parity.py` against
+      # both the Rust `cognee-telemetry-emit` binary and the Python SDK,
+      # then diffs the captured payloads.
+      - name: Telemetry parity (cross-SDK identity layers)
+        run: >-
+          docker compose
+          -f cognee-rust/e2e-cross-sdk/docker-compose.yml
+          run --rm e2e-telemetry
+
       # ── Phase-2: LLM-gated (requires OPENAI_KEY secret) ──────────────────
       # The `secrets` context is not available in step-level `if:` expressions,
       # so we route the secret through `env.HAS_OPENAI_KEY` and gate on that.
