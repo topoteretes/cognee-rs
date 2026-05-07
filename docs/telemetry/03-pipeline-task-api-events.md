@@ -370,7 +370,7 @@ rather than this high-level summary.
 | 6 | Emit `cognee.search EXECUTION STARTED` at the top of `SearchOrchestrator::search` to pair with the existing `EXECUTION COMPLETED` emitter. Backfill `tenant_id` on both. | [03/06-search-execution-events.md](03/06-search-execution-events.md) | 1 | ✅ 6be3e8e |
 | 7 | Wrap the body of `cognee_lib::api::improve::improve()` in a `tracing::info_span!("cognee.api.improve", ...)` to bring OTEL parity with Python. Bundled into this gap per decision 4. | [03/07-improve-otel-span.md](03/07-improve-otel-span.md) | — | ✅ ca4224e |
 | 8 | Unit + integration tests: `python_task_type` mapping (8→4); settings allowlist snapshot tests; mockito-driven full-pipeline integration test asserting the 4-event sequence (`Pipeline Run Started`, `Coroutine Task Started`, `Coroutine Task Completed`, `Pipeline Run Completed`); error path; opt-out test; fire-and-forget timing test (proxy stalls 5 s, dispatch returns < 100 ms). | [03/08-tests.md](03/08-tests.md) | 4, 5, 6 | ✅ 07356c7 |
-| 9 | User-facing docs: extend `docs/observability/send_telemetry.md` with the new event catalog (pipeline + task + search). CI updates if needed (existing `cognee-telemetry` lanes from gap 02-12 already cover the crate). | [03/09-docs-and-ci.md](03/09-docs-and-ci.md) | 4, 5, 6, 7 | ⬜ |
+| 9 | User-facing docs: extend `docs/observability/send_telemetry.md` with the new event catalog (pipeline + task + search). CI updates if needed (existing `cognee-telemetry` lanes from gap 02-12 already cover the crate). | [03/09-docs-and-ci.md](03/09-docs-and-ci.md) | 4, 5, 6, 7 | ✅ bc8ed86 |
 
 ### Suggested execution order
 
@@ -524,3 +524,29 @@ questions and the rationale considered before locking.
   - [gap-analysis.md](gap-analysis.md) — the parent index (do not edit)
 - Per-task sub-docs: [03/](03/)
 - Implementation runbook: [03/00-implementation-runbook.md](03/00-implementation-runbook.md)
+
+## Closure summary
+
+This gap is closed. The 18 commits below shipped the work, in the order
+they landed on `main`:
+
+| # | Commit | Subject |
+|---|---|---|
+| 03-01 | `70e2d8e` | thread `tenant_id` through `PipelineContext` + `PipelineRunInfo`; add `tenant_id_for_telemetry` helper |
+| 03-01 | `a47e5db` | docs — mark action item 01 complete |
+| 03-02 | `cf74d7e` | add `Task::python_task_type` + `cognee_telemetry::cognee_version` helpers |
+| 03-02 | `3b390eb` | docs — mark action item 02 complete |
+| 03-03 | `cde4024` | add `Settings::telemetry_snapshot` allowlist helper |
+| 03-03 | `de088b2` | docs — mark action item 03 complete |
+| 03-04 | `694dd5a` | emit `Pipeline Run Started`/`Completed`/`Errored` from `execute()` |
+| 03-04 | `3fc1bb0` | docs — mark action item 04 complete |
+| 03-05 | `365e6ad` | emit `${task_type} Task Started`/`Completed`/`Errored` from `call_with_retry` |
+| 03-05 | `7b9d2f3` | docs — mark action item 05 complete |
+| 03-06 | `6be3e8e` | emit `cognee.search EXECUTION STARTED` + backfill `tenant_id` |
+| 03-06 | `138a5c6` | docs — mark action item 06 complete |
+| 03-07 | `ca4224e` | add `cognee.api.improve` OTEL span |
+| 03-07 | `8ac3df5` | docs — mark action item 07 complete |
+| 03-08 | `07356c7` | integration tests for pipeline + task lifecycle events |
+| 03-08 | `dc28025` | docs — mark action item 08 complete |
+| 03-09 | `bc8ed86` | user-facing telemetry docs for new events |
+| 03-09 | _this commit_ | mark action item 09 complete + add planning sub-docs |
