@@ -49,13 +49,13 @@ pub type PropertyValue = ();
 /// Identity-layer helpers (`anonymous_id`, `persistent_id`,
 /// `api_key_tracking_id`). See [`docs/telemetry/02/03-id-derivation.md`]
 /// for the design.
+pub mod env;
 pub mod ids;
 pub mod payload;
 pub mod sanitize;
-pub mod env {
-    //! Env-var parsing and opt-out checks. Implementation lands in
-    //! `docs/telemetry/02/05-client-dispatch-and-optout.md`.
-}
+
+#[cfg(feature = "telemetry")]
+mod client;
 
 /// Errors returned by the telemetry surface.
 #[derive(Debug, Error)]
