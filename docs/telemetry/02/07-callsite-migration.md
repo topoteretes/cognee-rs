@@ -1,6 +1,6 @@
 # Task 02-07 — Replace `forget.rs` placeholder + port the callsite catalog
 
-**Status**: ⬜ unimplemented
+**Status**: implemented in commit 8b096bb (note: routers are deferred per Option A — SDK callsites fire once and the ~32 HTTP router endpoints will add a thin endpoint property in a follow-up. Search orchestrator's three Ok(...) return paths route through a new emit_search_completed helper to avoid drift. cognee-lib/telemetry now activates cognee-search/telemetry and cognee-session/telemetry so the workspace toggle stays a single switch).
 **Owner**: _unassigned_
 **Depends on**: [Task 02-06 — Public API + noop fallback](06-public-api-and-noop.md)
 **Blocks**:
