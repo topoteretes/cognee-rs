@@ -149,11 +149,11 @@ with the `additional_properties` listed.
 |---|---|---|---|
 | `cognee.forget` | forget.py:79 | [`crates/lib/src/api/forget.rs:103`](../../../crates/lib/src/api/forget.rs#L103) | `target`, `dataset`, `data_id`, `cognee_version` (already done in §4.1) |
 | `cognee.recall` | recall.py:402 | [`crates/lib/src/api/recall.rs:65`](../../../crates/lib/src/api/recall.rs#L65) | `query_length`, `scope`, `auto_route`, `top_k`, `search_type`, `session_id`, `datasets`, `dataset_ids` |
-| `cognee.remember` | remember.py:624 | `crates/lib/src/api/remember.rs` (function around line 100, confirm at impl time) | `mode`, `data_size_bytes`, `item_count`, `session_id` |
-| `cognee.improve` | improve.py:91 | `crates/lib/src/api/improve.rs` (function around line 112) | `dataset`, `session_count`, `session_ids`, `run_in_background`, `cognee_version` |
-| `cognee.search EXECUTION STARTED` | search.py:74 | [`crates/search/src/orchestration/search_orchestrator.rs:106`](../../../crates/search/src/orchestration/search_orchestrator.rs#L106) (just inside the `search()` method, after the `#[tracing::instrument]` span opens) | `cognee_version`, `tenant_id` |
-| `cognee.search EXECUTION COMPLETED` | search.py:115 | same file, just before the `Ok(...)` return | `cognee_version`, `tenant_id` |
-| `cognee.session.add_qa` | session_manager.py:171 | `crates/session/src/session_manager.rs:96` (`save_qa` method, after the row is persisted) | `session_id`, `data_size_bytes`, `has_feedback`, `has_graph_elements` |
+| `cognee.remember` | remember.py:624 | [`crates/lib/src/api/remember.rs:198`](../../../crates/lib/src/api/remember.rs#L198) (`pub async fn remember`). Note also `remember_entry` at line 603 — the typed-entry path. Decide whether to emit from one or both per Python parity (Python emits in the single `remember` function regardless of path). | `mode`, `data_size_bytes`, `item_count`, `session_id` |
+| `cognee.improve` | improve.py:91 | [`crates/lib/src/api/improve.rs:125`](../../../crates/lib/src/api/improve.rs#L125) (`pub async fn improve(params: ImproveParams<'_>)`). | `dataset`, `session_count`, `session_ids`, `run_in_background`, `cognee_version` |
+| `cognee.search EXECUTION STARTED` | search.py:74 | [`crates/search/src/orchestration/search_orchestrator.rs:114`](../../../crates/search/src/orchestration/search_orchestrator.rs#L114) — `#[tracing::instrument]` is at line 106; `pub async fn search` signature is at line 114; emit just inside the function body after `{`. | `cognee_version`, `tenant_id` |
+| `cognee.search EXECUTION COMPLETED` | search.py:115 | same file — three `Ok(...)` returns exist (early short-circuits at lines 294 and 337, final at line 385). Cleanest pattern: bind `let response = ...;` then emit once before `Ok(response)` at line 385, *or* extract a small `emit_completed(...)` helper called from each return path. Implementer's choice; document in commit message. | `cognee_version`, `tenant_id` |
+| `cognee.session.add_qa` | session_manager.py:171 | [`crates/session/src/session_manager.rs:96`](../../../crates/session/src/session_manager.rs#L96) (`save_qa` method, after the row is persisted) | `session_id`, `data_size_bytes`, `has_feedback`, `has_graph_elements` |
 
 **Search EXECUTION started/completed pair** — emit at the boundaries
 of the orchestrator. Skip the `EXECUTION FAILED` analogue for now;

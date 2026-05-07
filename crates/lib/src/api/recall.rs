@@ -219,6 +219,30 @@ pub async fn recall(
         "recall: completed"
     );
 
+    // Mirrors Python `send_telemetry("cognee.recall", ...)` from
+    // cognee/api/v1/recall/recall.py:402.
+    #[cfg(feature = "telemetry")]
+    {
+        let search_type_label = graph_search_type
+            .or(query_type)
+            .map(|t| format!("{t:?}"))
+            .unwrap_or_default();
+        cognee_telemetry::send_telemetry(
+            "cognee.recall",
+            user_id.unwrap_or("sdk"),
+            Some(serde_json::json!({
+                "query_length": query_text.len(),
+                "scope": span_scope,
+                "auto_route": auto_route,
+                "top_k": top_k,
+                "search_type": search_type_label,
+                "session_id": session_id,
+                "datasets": datasets,
+                "dataset_ids": serde_json::Value::Null,
+            })),
+        );
+    }
+
     Ok(RecallResult {
         items: merged,
         search_type_used: graph_search_type,

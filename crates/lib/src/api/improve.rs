@@ -153,6 +153,24 @@ pub async fn improve(params: ImproveParams<'_>) -> Result<ImproveResult, ApiErro
     let mut result = ImproveResult::default();
     let has_sessions = session_ids.as_ref().is_some_and(|ids| !ids.is_empty());
 
+    // Mirrors Python `send_telemetry("cognee.improve", ...)` from
+    // cognee/api/v1/improve/improve.py:91.
+    #[cfg(feature = "telemetry")]
+    {
+        let session_count = session_ids.as_ref().map(|v| v.len()).unwrap_or(0);
+        cognee_telemetry::send_telemetry(
+            "cognee.improve",
+            owner_id,
+            Some(serde_json::json!({
+                "dataset": dataset_name.clone(),
+                "session_count": session_count,
+                "session_ids": session_ids.clone(),
+                "run_in_background": false,
+                "cognee_version": env!("CARGO_PKG_VERSION"),
+            })),
+        );
+    }
+
     // ---- Stage 1: Apply Feedback Weights ----
     if has_sessions {
         let sids = session_ids

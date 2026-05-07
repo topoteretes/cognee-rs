@@ -50,6 +50,8 @@ telemetry = [
     "cognee-observability/telemetry",
     "cognee-core/telemetry",
     "cognee-telemetry/telemetry",
+    "cognee-search/telemetry",
+    "cognee-session/telemetry",
 ]
 
 # Document format loaders (forwarded from cognee-ingestion)

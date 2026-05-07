@@ -102,9 +102,30 @@ impl SessionManager {
         context: Option<&str>,
     ) -> Result<String, SessionError> {
         let resolved_id = self.resolve_session_id(session_id);
-        self.store
+        let qa_id = self
+            .store
             .create_qa_entry(resolved_id, user_id, question, answer, context)
-            .await
+            .await?;
+
+        // Mirrors Python `send_telemetry("cognee.session.add_qa", ...)` from
+        // cognee/memory/session_manager.py:171.
+        #[cfg(feature = "telemetry")]
+        {
+            let data_size_bytes =
+                question.len() + answer.len() + context.map(|c| c.len()).unwrap_or(0);
+            cognee_telemetry::send_telemetry(
+                "cognee.session.add_qa",
+                user_id.unwrap_or("sdk"),
+                Some(serde_json::json!({
+                    "session_id": resolved_id,
+                    "data_size_bytes": data_size_bytes,
+                    "has_feedback": false,
+                    "has_graph_elements": false,
+                })),
+            );
+        }
+
+        Ok(qa_id)
     }
 
     /// Delete all Q&A entries for a session.

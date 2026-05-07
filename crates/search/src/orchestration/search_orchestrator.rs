@@ -8,6 +8,28 @@ use cognee_llm::Llm;
 use cognee_session::{SessionContext, SessionManager};
 use std::sync::Arc;
 
+/// Fire-and-forget product analytics event for a successful search.
+///
+/// Mirrors Python `send_telemetry("cognee.search EXECUTION COMPLETED", ...)`
+/// from `cognee/api/v1/search/search.py:115`. Called from each of the
+/// `Ok(...)` return paths in [`SearchOrchestrator::search`] so a single
+/// success emits exactly one analytics event.
+#[cfg(feature = "telemetry")]
+fn emit_search_completed(request: &SearchRequest) {
+    cognee_telemetry::send_telemetry(
+        "cognee.search EXECUTION COMPLETED",
+        request.user_id,
+        Some(serde_json::json!({
+            "cognee_version": env!("CARGO_PKG_VERSION"),
+            "tenant_id": serde_json::Value::Null,
+        })),
+    );
+}
+
+#[cfg(not(feature = "telemetry"))]
+#[inline]
+fn emit_search_completed(_request: &SearchRequest) {}
+
 pub struct SearchOrchestrator {
     registry: SearchTypeRegistry,
     database: Option<Arc<dyn SearchHistoryDb>>,
@@ -291,6 +313,7 @@ impl SearchOrchestrator {
             self.log_result_if_enabled(logged_query_id, &response, request.user_id)
                 .await;
 
+            emit_search_completed(request);
             return Ok(response);
         }
 
@@ -334,6 +357,7 @@ impl SearchOrchestrator {
                     request.use_combined_context(),
                     request.verbose(),
                 );
+                emit_search_completed(request);
                 return Ok(response);
             }
             // If feedback with follow-up, or no feedback, proceed normally
@@ -382,6 +406,7 @@ impl SearchOrchestrator {
         self.log_result_if_enabled(logged_query_id, &response, request.user_id)
             .await;
 
+        emit_search_completed(request);
         Ok(response)
     }
 

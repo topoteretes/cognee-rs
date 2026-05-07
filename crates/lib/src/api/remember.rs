@@ -217,6 +217,35 @@ pub async fn remember(
 ) -> Result<RememberResult, ApiError> {
     let start = Instant::now();
 
+    // Mirrors Python `send_telemetry("cognee.remember", ...)` from
+    // cognee/api/v1/remember/remember.py:624.
+    #[cfg(feature = "telemetry")]
+    {
+        let data_size_bytes: usize = data
+            .iter()
+            .map(|d| match d {
+                DataInput::Text(s) => s.len(),
+                _ => 0,
+            })
+            .sum();
+        let item_count = data.len();
+        let mode = if session_id.is_some() {
+            "session"
+        } else {
+            "permanent"
+        };
+        cognee_telemetry::send_telemetry(
+            "cognee.remember",
+            owner_id,
+            Some(serde_json::json!({
+                "mode": mode,
+                "data_size_bytes": data_size_bytes,
+                "item_count": item_count,
+                "session_id": session_id,
+            })),
+        );
+    }
+
     // -- Session Memory Mode --
     if let Some(sid) = session_id {
         return remember_session(

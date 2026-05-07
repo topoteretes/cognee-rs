@@ -8,9 +8,11 @@ default = []
 redis = ["dep:redis"]
 fs = []
 sea-orm-store = ["dep:sea-orm", "dep:sea-orm-migration"]
+telemetry = ["cognee-telemetry/telemetry"]
 
 [dependencies]
 cognee-llm = { path = "../llm" }
+cognee-telemetry = { path = "../telemetry" }
 async-trait.workspace = true
 chrono.workspace = true
 thiserror.workspace = true

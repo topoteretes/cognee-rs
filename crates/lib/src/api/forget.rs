@@ -100,8 +100,8 @@ pub async fn forget(
     delete_service: &DeleteService,
     db: Option<&dyn IngestDb>,
 ) -> Result<ForgetResult, ApiError> {
-    // Telemetry: emit an external event log (gated behind the `telemetry`
-    // feature flag). Mirrors Python's `send_telemetry("cognee.forget", ...)`.
+    // Mirrors Python `send_telemetry("cognee.forget", ...)` from
+    // cognee/api/v1/forget/forget.py:79.
     #[cfg(feature = "telemetry")]
     {
         let (target_label, dataset_dbg, data_id_dbg) = match &target {
@@ -111,14 +111,15 @@ pub async fn forget(
             ForgetTarget::Dataset { dataset } => ("dataset", format!("{dataset:?}"), String::new()),
             ForgetTarget::All => ("everything", String::new(), String::new()),
         };
-        tracing::info!(
-            target: "cognee.telemetry",
-            event = "cognee.forget",
-            forget_target = target_label,
-            dataset = %dataset_dbg,
-            data_id = %data_id_dbg,
-            cognee_version = env!("CARGO_PKG_VERSION"),
-            owner_id = %owner_id,
+        cognee_telemetry::send_telemetry(
+            "cognee.forget",
+            owner_id,
+            Some(serde_json::json!({
+                "target": target_label,
+                "dataset": dataset_dbg,
+                "data_id": data_id_dbg,
+                "cognee_version": env!("CARGO_PKG_VERSION"),
+            })),
         );
     }
 

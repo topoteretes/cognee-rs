@@ -3,12 +3,17 @@ name = "cognee-search"
 version.workspace = true
 edition.workspace = true
 
+[features]
+default = []
+telemetry = ["cognee-telemetry/telemetry"]
+
 [dependencies]
 cognee-embedding = { path = "../embedding" }
 cognee-database = { path = "../database" }
 cognee-graph = { path = "../graph" }
 cognee-llm = { path = "../llm" }
 cognee-session = { path = "../session", features = ["sea-orm-store"] }
+cognee-telemetry = { path = "../telemetry" }
 cognee-vector = { path = "../vector" }
 
 async-trait.workspace = true
