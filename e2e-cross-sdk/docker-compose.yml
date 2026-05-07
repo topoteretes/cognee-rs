@@ -24,3 +24,53 @@ services:
       - /rs                                       # ephemeral Rust server workspace
     entrypoint: ["/usr/local/bin/start_servers.sh"]
     command: ["pytest", "-vs", "/harness/", "-k", "test_http_"]
+
+  # Mock proxy for the cross-SDK telemetry parity test. Captures every
+  # POST body to a shared volume so the pytest can read both the Python
+  # and Rust send_telemetry payloads. See
+  # docs/telemetry/02/10-cross-sdk-parity.md for the full design.
+  telemetry-proxy:
+    image: python:3.11-slim
+    working_dir: /app
+    command: ["python", "/app/telemetry_proxy.py"]
+    volumes:
+      - ./bin/telemetry_proxy.py:/app/telemetry_proxy.py:ro
+      - telemetry-captures:/captures
+    expose:
+      - "9090"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9090/_health').read()"]
+      interval: 1s
+      timeout: 1s
+      retries: 30
+
+  # Cross-SDK telemetry parity test runner. Drives Python and Rust
+  # send_telemetry once each against the mock proxy and asserts
+  # identity parity (api_key_tracking_id, persistent_id). The shared
+  # cognee-home volume mounts at /root/.cognee on both sides so the
+  # persistent_id file is the same on disk for both SDKs.
+  e2e-telemetry:
+    build:
+      context: ../..                              # /home/dmytro/dev/cognee/ (monorepo root)
+      dockerfile: cognee-rust/e2e-cross-sdk/Dockerfile
+    env_file:
+      - ../.env                                   # cognee-rust/.env (OPENAI_TOKEN, OPENAI_MODEL, etc.)
+    environment:
+      - LLM_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
+      - COGNEE_TELEMETRY_PROXY_URL_FOR_TESTS=http://telemetry-proxy:9090
+      - COGNEE_TELEMETRY_INTEGRATION_TEST=1
+      - LLM_API_KEY=sk-test-fixture-cross-sdk
+      - TRACKING_ID=fixed-anon-cross-sdk
+    tmpfs:
+      - /workspace
+    depends_on:
+      telemetry-proxy:
+        condition: service_healthy
+    volumes:
+      - cognee-home:/root/.cognee
+      - telemetry-captures:/captures:ro
+    command: ["pytest", "-vs", "/harness/test_telemetry_parity.py"]
+
+volumes:
+  telemetry-captures:
+  cognee-home:

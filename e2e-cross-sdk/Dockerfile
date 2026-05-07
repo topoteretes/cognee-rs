@@ -30,6 +30,13 @@ COPY cognee-rust/crates/ crates/
 COPY cognee-rust/examples/ examples/
 COPY cognee-rust/capi/ capi/
 COPY cognee-rust/python/ python/
+# Harness-only crate that drives cognee_lib::telemetry::send_telemetry
+# directly. Source lives under e2e-cross-sdk/bin/telemetry_emit.rs;
+# manifest lives under e2e-cross-sdk/telemetry-emit/Cargo.toml. Both
+# are needed at workspace resolution time because the workspace root
+# Cargo.toml lists `e2e-cross-sdk/telemetry-emit` as a member.
+COPY cognee-rust/e2e-cross-sdk/telemetry-emit/ e2e-cross-sdk/telemetry-emit/
+COPY cognee-rust/e2e-cross-sdk/bin/telemetry_emit.rs e2e-cross-sdk/bin/telemetry_emit.rs
 
 # Build the CLI in release mode; cache cargo registry and target dir
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
@@ -44,6 +51,14 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/build/cognee-rust/target \
     cargo build --release --package cognee-http-server --features bin \
     && cp target/release/cognee-http-server /usr/local/bin/cognee-http-server
+
+# Build the harness-only telemetry emit binary used by the cross-SDK
+# parity test (docs/telemetry/02/10-cross-sdk-parity.md).
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,target=/build/cognee-rust/target \
+    cargo build --release --package cognee-telemetry-emit \
+    && cp target/release/cognee-telemetry-emit /usr/local/bin/cognee-telemetry-emit
 
 # Download ONNX embedding models (needed by Rust CLI for cognify)
 RUN mkdir -p /opt/models \
@@ -104,6 +119,9 @@ COPY --from=rust-builder /usr/local/bin/cognee-cli-rust /usr/local/bin/cognee-cl
 
 # Copy Rust HTTP server binary
 COPY --from=rust-builder /usr/local/bin/cognee-http-server /usr/local/bin/cognee-http-server
+
+# Copy harness-only telemetry emit binary (cross-SDK parity test)
+COPY --from=rust-builder /usr/local/bin/cognee-telemetry-emit /usr/local/bin/cognee-telemetry-emit
 
 # Copy ONNX models
 COPY --from=rust-builder /opt/models/ /opt/models/

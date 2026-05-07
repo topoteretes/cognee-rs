@@ -34,6 +34,13 @@ members = [
     # TODO: Move this out of the main workspace to avoid pulling in testing features and C FFI dependencies for all members
     "capi/cognee-capi",
     "python",
+
+    # Harness-only binary used by the e2e-cross-sdk telemetry parity
+    # test (docs/telemetry/02/10-cross-sdk-parity.md). Source lives at
+    # e2e-cross-sdk/bin/telemetry_emit.rs alongside other harness
+    # helpers; the manifest is kept in this sibling crate dir so it
+    # stays out of the production crates/ tree.
+    "e2e-cross-sdk/telemetry-emit",
 ]
 resolver = "3"
 
