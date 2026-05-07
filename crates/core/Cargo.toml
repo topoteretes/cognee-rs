@@ -31,3 +31,10 @@ cognee-models = { path = "../models" }
 cognee-vector = { path = "../vector", features = ["testing"] }
 chrono.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+# Added by gap 03-08 (telemetry pipeline + task lifecycle integration tests).
+# Workspace declares `serial_test` and `tempfile`; `mockito` is consumed as
+# a direct version spec, mirroring the existing pattern in
+# `crates/telemetry/Cargo.toml`.
+mockito = "1"
+serial_test = { workspace = true }
+tempfile = { workspace = true }
