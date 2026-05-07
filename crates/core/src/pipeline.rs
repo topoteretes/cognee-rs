@@ -108,6 +108,15 @@ pub struct Pipeline {
     /// task chain.  Default `1` = strictly sequential (current behaviour).
     /// Values > 1 use `buffer_unordered` for data-item-level parallelism.
     pub concurrency: usize,
+    /// Optional pre-built telemetry settings snapshot (the `| config`
+    /// merge from Python's pipeline lifecycle events). When `None`,
+    /// `Pipeline Run *` analytics events emit with no settings merged
+    /// in. Populated by `cognee-lib` from `Config::telemetry_snapshot()`.
+    ///
+    /// Carried as a plain field rather than a feature-gated one so the
+    /// `Pipeline` struct shape is stable across feature flips. The
+    /// snapshot is only consumed when the `telemetry` feature is on.
+    pub telemetry_settings: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
 impl Pipeline {
@@ -121,6 +130,7 @@ impl Pipeline {
             batch_size: 32,
             data_id_fn: None,
             concurrency: 1,
+            telemetry_settings: None,
         }
     }
 
@@ -160,6 +170,17 @@ impl Pipeline {
     pub fn with_concurrency(mut self, n: usize) -> Self {
         assert!(n > 0, "concurrency must be > 0");
         self.concurrency = n;
+        self
+    }
+
+    /// Attach a pre-built telemetry settings snapshot (the `| config`
+    /// merge for `Pipeline Run Started/Completed/Errored` analytics
+    /// events). See [`Pipeline::telemetry_settings`] for details.
+    pub fn with_telemetry_settings(
+        mut self,
+        settings: serde_json::Map<String, serde_json::Value>,
+    ) -> Self {
+        self.telemetry_settings = Some(settings);
         self
     }
 }
@@ -281,6 +302,7 @@ impl<I: Value, O: Value> PipelineBuilder<I, O> {
             batch_size: self.batch_size,
             data_id_fn: self.data_id_fn,
             concurrency: self.concurrency,
+            telemetry_settings: None,
         }
     }
 }
@@ -475,6 +497,59 @@ pub enum ExecutionError {
     #[error("invalid pipeline configuration: {reason}")]
     InvalidConfig { reason: String },
 }
+/// Emit a `Pipeline Run *` analytics event.
+///
+/// Used by [`execute`] at the three terminal arms (Started, Completed,
+/// Errored) to mirror Python's `cognee.modules.pipelines.operations.run_tasks_with_telemetry`
+/// emissions. The payload carries `pipeline_name`, `cognee_version`,
+/// and `tenant_id` (with the literal `"Single User Tenant"` fallback
+/// per locked decision 1) merged on top of the caller's curated
+/// settings snapshot (locked decision 5). Per locked decision 6,
+/// `dataset_id` and `pipeline_run_id` are intentionally omitted from
+/// the analytics payload — they remain on the OTEL span only.
+///
+/// No error string is included on the `Pipeline Run Errored` payload
+/// (Python parity, see sub-doc §2.2).
+#[cfg(feature = "telemetry")]
+fn emit_pipeline_event(
+    event_name: &str,
+    user_id: Option<Uuid>,
+    pipeline_name: &str,
+    tenant_id: Option<Uuid>,
+    settings: Option<&serde_json::Map<String, serde_json::Value>>,
+) {
+    use serde_json::{Map, Value};
+
+    let mut props: Map<String, Value> = settings.cloned().unwrap_or_default();
+    props.insert(
+        "pipeline_name".into(),
+        Value::String(pipeline_name.to_string()),
+    );
+    props.insert(
+        "cognee_version".into(),
+        Value::String(cognee_telemetry::cognee_version().to_string()),
+    );
+    props.insert(
+        "tenant_id".into(),
+        Value::String(cognee_telemetry::tenant_id_for_telemetry(tenant_id)),
+    );
+
+    cognee_telemetry::send_telemetry(event_name, user_id, Some(Value::Object(props)));
+}
+
+/// No-op stand-in when the `telemetry` feature is disabled. Keeps the
+/// `execute()` body free of `#[cfg]` clutter.
+#[cfg(not(feature = "telemetry"))]
+#[inline]
+fn emit_pipeline_event(
+    _event_name: &str,
+    _user_id: Option<Uuid>,
+    _pipeline_name: &str,
+    _tenant_id: Option<Uuid>,
+    _settings: Option<&serde_json::Map<String, serde_json::Value>>,
+) {
+}
+
 /// Execute `pipeline` against a set of `inputs`.
 ///
 /// Each input item is run through the full task chain.  When
@@ -537,6 +612,15 @@ pub async fn execute(
         .await;
     watcher.on_pipeline_run_started(&run_info).await;
 
+    // ── Analytics: Pipeline Run Started ─────────────────────────────────
+    emit_pipeline_event(
+        "Pipeline Run Started",
+        user_id,
+        &run_info.pipeline_name,
+        tenant_id,
+        pipeline.telemetry_settings.as_ref(),
+    );
+
     let weights: Vec<u32> = pipeline.tasks.iter().map(|t| t.weight).collect();
     let task_subtokens =
         ctx.progress
@@ -579,6 +663,15 @@ pub async fn execute(
             watcher
                 .on_pipeline_run_completed(&run_info, outputs.len())
                 .await;
+
+            // ── Analytics: Pipeline Run Completed ───────────────────────
+            emit_pipeline_event(
+                "Pipeline Run Completed",
+                user_id,
+                &run_info.pipeline_name,
+                tenant_id,
+                pipeline.telemetry_settings.as_ref(),
+            );
         }
         Err(ExecutionError::Cancelled) => {
             run_info.status = PipelineRunStatus::Errored;
@@ -589,6 +682,16 @@ pub async fn execute(
             watcher
                 .on_pipeline_run_errored(&run_info, "pipeline was cancelled")
                 .await;
+
+            // ── Analytics: Pipeline Run Errored ─────────────────────────
+            // No error string on the wire (Python parity, locked decision).
+            emit_pipeline_event(
+                "Pipeline Run Errored",
+                user_id,
+                &run_info.pipeline_name,
+                tenant_id,
+                pipeline.telemetry_settings.as_ref(),
+            );
         }
         Err(e) => {
             run_info.status = PipelineRunStatus::Errored;
@@ -609,6 +712,16 @@ pub async fn execute(
             watcher
                 .on_pipeline_run_errored(&run_info, &e.to_string())
                 .await;
+
+            // ── Analytics: Pipeline Run Errored ─────────────────────────
+            // No error string on the wire (Python parity, locked decision).
+            emit_pipeline_event(
+                "Pipeline Run Errored",
+                user_id,
+                &run_info.pipeline_name,
+                tenant_id,
+                pipeline.telemetry_settings.as_ref(),
+            );
         }
     }
 

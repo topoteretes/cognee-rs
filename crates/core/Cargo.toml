@@ -4,12 +4,13 @@ version.workspace = true
 edition.workspace = true
 
 [features]
-telemetry = []
+telemetry = ["cognee-telemetry/telemetry"]
 pipeline-run-registry = []
 
 [dependencies]
 cognee-database = { path = "../database" }
 cognee-graph = { path = "../graph" }
+cognee-telemetry = { path = "../telemetry" }
 cognee-vector = { path = "../vector" }
 
 async-trait.workspace = true
