@@ -43,6 +43,20 @@ mod inner {
         *PERSISTENT_ID.lock().unwrap() = None;
     }
 
+    /// Wipe the cached anonymous and persistent IDs so the next call
+    /// re-reads from disk. Test-only: gated by
+    /// `cfg(any(test, debug_assertions))` so it stays out of release
+    /// builds. Integration tests in `crates/telemetry/tests/` need this
+    /// because the `pub(crate)` helper above is not visible to them.
+    #[cfg(any(test, debug_assertions))]
+    #[doc(hidden)]
+    pub fn __test_only_reset_caches() {
+        // lock poison is unrecoverable
+        *ANON_ID.lock().unwrap() = None;
+        // lock poison is unrecoverable
+        *PERSISTENT_ID.lock().unwrap() = None;
+    }
+
     /// Project-local anonymous identifier.
     pub fn get_anonymous_id() -> String {
         if let Ok(v) = std::env::var("TRACKING_ID")
@@ -217,6 +231,15 @@ pub use inner::get_api_key_tracking_id;
 /// Machine-local persistent identifier (uuid4, file-backed at
 /// `~/.cognee/.persistent_id`).
 pub use inner::get_persistent_id;
+
+/// Test-only cache-buster re-export. Gated by `debug_assertions` so it
+/// is not exposed in release builds; integration tests under
+/// `crates/telemetry/tests/` need this because the `pub(crate)`
+/// `reset_caches_for_test` is not reachable from a separate test
+/// binary.
+#[cfg(all(any(test, debug_assertions), feature = "telemetry"))]
+#[doc(hidden)]
+pub use inner::__test_only_reset_caches;
 
 #[cfg(all(test, feature = "telemetry"))]
 mod ids_tests {

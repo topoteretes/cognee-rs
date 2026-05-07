@@ -101,14 +101,21 @@ struct IsolatedEnv {
 impl IsolatedEnv {
     fn install(server_url: &str) -> Self {
         let home = TempDir::new().expect("tempdir");
-        std::env::set_var("HOME", home.path());
-        std::env::set_var("TRACKING_ID", "fixed-anon-12345");
-        std::env::set_var("LLM_API_KEY", "sk-test-fixture");
-        std::env::remove_var("TELEMETRY_API_KEY_TRACKING_SALT");
-        std::env::remove_var("TELEMETRY_DISABLED");
-        std::env::remove_var("ENV");
-        std::env::set_var("COGNEE_TELEMETRY_INTEGRATION_TEST", "1");
-        std::env::set_var("COGNEE_TELEMETRY_PROXY_URL_FOR_TESTS", server_url);
+        // Workspace uses Rust edition 2024 where `set_var` /
+        // `remove_var` are `unsafe`. `#[serial]` orders this against
+        // every other env-mutating test in the binary.
+        // SAFETY: serial section, no concurrent reader/writer of these
+        //   vars while this body runs.
+        unsafe {
+            std::env::set_var("HOME", home.path());
+            std::env::set_var("TRACKING_ID", "fixed-anon-12345");
+            std::env::set_var("LLM_API_KEY", "sk-test-fixture");
+            std::env::remove_var("TELEMETRY_API_KEY_TRACKING_SALT");
+            std::env::remove_var("TELEMETRY_DISABLED");
+            std::env::remove_var("ENV");
+            std::env::set_var("COGNEE_TELEMETRY_INTEGRATION_TEST", "1");
+            std::env::set_var("COGNEE_TELEMETRY_PROXY_URL_FOR_TESTS", server_url);
+        }
         // Wipe the persistent-id / anon-id caches so the new HOME
         // takes effect.
         cognee_telemetry::ids::__test_only_reset_caches();
@@ -128,7 +135,11 @@ impl Drop for IsolatedEnv {
             "COGNEE_TELEMETRY_INTEGRATION_TEST",
             "COGNEE_TELEMETRY_PROXY_URL_FOR_TESTS",
         ] {
-            std::env::remove_var(k);
+            // SAFETY: Drop runs inside the same `#[serial]` section as
+            //   `install`, so no concurrent access exists.
+            unsafe {
+                std::env::remove_var(k);
+            }
         }
     }
 }
@@ -223,7 +234,11 @@ async fn opt_out_via_telemetry_disabled() {
         .create_async()
         .await;
     let _env = IsolatedEnv::install(&server.url());
-    std::env::set_var("TELEMETRY_DISABLED", "1");
+    // SAFETY: `#[serial]` orders this against every other env-mutating
+    //   test; `_env`'s Drop will remove TELEMETRY_DISABLED on exit.
+    unsafe {
+        std::env::set_var("TELEMETRY_DISABLED", "1");
+    }
 
     send_telemetry("cognee.forget", "user", None);
 
@@ -267,19 +282,32 @@ async fn fire_and_forget_does_not_block_caller() {
 
 `cognee_telemetry::ids::__test_only_reset_caches()` is a small
 public-but-hidden helper that wipes the `Lazy<Mutex<...>>` caches
-for `ANON_ID` and `PERSISTENT_ID`. Add it to
-`crates/telemetry/src/ids.rs`:
+for `ANON_ID` and `PERSISTENT_ID`. Note that `ids.rs` already has a
+`pub(crate) fn reset_caches_for_test()` gated by `#[cfg(test)]` —
+that one is only visible from in-crate unit tests, NOT from
+integration tests in `tests/`. Add a separate public-but-hidden
+helper to `crates/telemetry/src/ids.rs` (must live in the
+`#[cfg(feature = "telemetry")] mod inner` block alongside the
+`Lazy` statics, then be re-exported at module level):
 
 ```rust
+// Inside `#[cfg(feature = "telemetry")] mod inner { ... }`:
+
 /// Wipe the cached anonymous and persistent IDs so the next call
 /// re-reads from disk. Test-only: gated by `cfg(any(test, debug_assertions))`
 /// to avoid leaking into release builds.
 #[cfg(any(test, debug_assertions))]
 #[doc(hidden)]
 pub fn __test_only_reset_caches() {
-    if let Ok(mut g) = ANON_ID.lock() { *g = None; }
-    if let Ok(mut g) = PERSISTENT_ID.lock() { *g = None; }
+    // lock poison is unrecoverable
+    *ANON_ID.lock().unwrap() = None;
+    // lock poison is unrecoverable
+    *PERSISTENT_ID.lock().unwrap() = None;
 }
+
+// And at the bottom of `ids.rs`, alongside the existing re-exports:
+#[cfg(all(any(test, debug_assertions), feature = "telemetry"))]
+pub use inner::__test_only_reset_caches;
 ```
 
 Gating it behind `debug_assertions` keeps it accessible from
