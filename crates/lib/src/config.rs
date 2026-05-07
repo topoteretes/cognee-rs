@@ -531,6 +531,58 @@ impl Settings {
             self.relational_db_url.clone()
         }
     }
+
+    /// Returns the redacted property dict merged into `Pipeline Run *`
+    /// analytics events.
+    ///
+    /// **Allowlist-only.** Mirrors Python's `get_current_settings()`
+    /// shape but covers only provider/model identifiers and a few
+    /// dimension/strategy fields — see
+    /// [`docs/telemetry/03/03-settings-snapshot.md`](https://github.com/topoteretes/cognee-rust/blob/main/docs/telemetry/03/03-settings-snapshot.md)
+    /// for the rationale on what is omitted (URLs, credentials,
+    /// file paths).
+    ///
+    /// Adding a field here is intentional — there is a snapshot test
+    /// that will fail until it is acknowledged.
+    pub fn telemetry_snapshot(&self) -> serde_json::Map<String, serde_json::Value> {
+        use serde_json::Value;
+        let mut m = serde_json::Map::new();
+        m.insert("sdk_runtime".into(), Value::String("rust".into()));
+        m.insert(
+            "vector_db_provider".into(),
+            Value::String(self.vector_db_provider.clone()),
+        );
+        m.insert(
+            "graph_db_provider".into(),
+            Value::String(self.graph_database_provider.clone()),
+        );
+        m.insert(
+            "relational_db_provider".into(),
+            Value::String(self.db_provider.clone()),
+        );
+        m.insert(
+            "llm_provider".into(),
+            Value::String(self.llm_provider.clone()),
+        );
+        m.insert("llm_model".into(), Value::String(self.llm_model.clone()));
+        m.insert(
+            "embedding_provider".into(),
+            Value::String(self.embedding_provider.clone()),
+        );
+        m.insert(
+            "embedding_model".into(),
+            Value::String(self.embedding_model_name.clone()),
+        );
+        m.insert(
+            "embedding_dimensions".into(),
+            Value::Number(self.embedding_dimensions.into()),
+        );
+        m.insert(
+            "chunk_strategy".into(),
+            Value::String(self.chunk_strategy.clone()),
+        );
+        m
+    }
 }
 
 impl Default for Settings {
@@ -1628,5 +1680,71 @@ mod tests {
         unsafe { std::env::remove_var("EMBEDDING_ENDPOINT") };
 
         assert_eq!(s.embedding_endpoint, "https://api.example.com/embed");
+    }
+
+    #[test]
+    fn telemetry_snapshot_only_emits_allowlisted_keys() {
+        let cfg = Settings::default();
+        let snap = cfg.telemetry_snapshot();
+        let keys: std::collections::BTreeSet<&str> = snap.keys().map(String::as_str).collect();
+        let expected: std::collections::BTreeSet<&str> = [
+            "sdk_runtime",
+            "vector_db_provider",
+            "graph_db_provider",
+            "relational_db_provider",
+            "llm_provider",
+            "llm_model",
+            "embedding_provider",
+            "embedding_model",
+            "embedding_dimensions",
+            "chunk_strategy",
+        ]
+        .iter()
+        .copied()
+        .collect();
+        assert_eq!(
+            keys, expected,
+            "telemetry_snapshot must not leak fields outside the allowlist"
+        );
+    }
+
+    #[test]
+    fn telemetry_snapshot_redacts_credentials_and_urls() {
+        let cfg = Settings {
+            llm_api_key: "sk-secret".into(),
+            embedding_api_key: "sk-also-secret".into(),
+            vector_db_password: "vector-pass".into(),
+            db_password: "db-pass".into(),
+            relational_db_url: "postgres://user:pass@host/db".into(),
+            embedding_endpoint: "https://internal.example/v1/embed".into(),
+            ..Settings::default()
+        };
+
+        let snap = cfg.telemetry_snapshot();
+        let json =
+            serde_json::to_string(&snap).expect("serde_json::Map<String,Value> always serializes");
+        for forbidden in [
+            "sk-secret",
+            "sk-also-secret",
+            "vector-pass",
+            "db-pass",
+            "postgres://",
+            "internal.example",
+        ] {
+            assert!(
+                !json.contains(forbidden),
+                "telemetry_snapshot leaked credential/URL substring: {forbidden}"
+            );
+        }
+    }
+
+    #[test]
+    fn telemetry_snapshot_carries_sdk_runtime_rust() {
+        let cfg = Settings::default();
+        let snap = cfg.telemetry_snapshot();
+        assert_eq!(
+            snap.get("sdk_runtime"),
+            Some(&serde_json::Value::String("rust".into()))
+        );
     }
 }
