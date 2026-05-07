@@ -1,9 +1,21 @@
 # 03 — Pipeline / Task / API Operation Events
 
+> **Status (2026-05-07):** Scope was narrowed after gap 02 landed. The
+> SDK-API events (`cognee.recall`, `cognee.improve`, `cognee.forget`,
+> `cognee.remember`, and the three `Ok(...)` paths of `cognee.search
+> EXECUTION COMPLETED`) are **already wired** by gap 02-07
+> (commit `8b096bb`). What remains is the high-volume **pipeline +
+> task lifecycle** events, the missing `cognee.search EXECUTION
+> STARTED` paired event, the `cognee.api.improve` OTEL span (Python
+> parity nicety), and the supporting plumbing (`tenant_id`,
+> `Task::python_task_type`, settings snapshot allowlist). See
+> [Design decisions (locked)](#design-decisions-locked) and
+> [Action items](#action-items) for the binding contract.
+
 ## Overview
 
 Python `cognee` ships a small fixed catalog of product-analytics events sent
-through `send_telemetry(...)` (see [01-analytics-client.md](01-analytics-client.md)
+through `send_telemetry(...)` (see [02-send-telemetry-analytics.md](02-send-telemetry-analytics.md)
 for the transport-layer gap). They fall into three groups:
 
 1. **Pipeline lifecycle** — fired around `run_tasks_with_telemetry()` for every
@@ -19,8 +31,8 @@ for the transport-layer gap). They fall into three groups:
 
 This document is **only** concerned with *where* each event is emitted and
 *what payload* it carries. The HTTP transport (auth headers, redaction, retry,
-opt-out) is the subject of [01-analytics-client.md](01-analytics-client.md);
-this document depends on that client existing.
+opt-out) is the subject of [02-send-telemetry-analytics.md](02-send-telemetry-analytics.md);
+this document depends on that client existing (it does — gap 02 closed on 2026-05-06).
 
 A separate concern is OpenTelemetry spans. Python emits **both** an OTEL span
 *and* a `send_telemetry(...)` call at most of these sites — the two are
@@ -44,18 +56,20 @@ writing.
 | `${task_type} Task Started` | [`run_tasks_base.py:135`](https://github.com/topoteretes/cognee/blob/main/cognee/modules/pipelines/operations/run_tasks_base.py#L135) | `task_name` (= `running_task.executable.__name__`), `cognee_version`, `tenant_id` | [`crates/core/src/pipeline.rs:988`](../../crates/core/src/pipeline.rs#L988) — start of the retry loop in `call_with_retry` | **None.** OTEL span exists ([line 971](../../crates/core/src/pipeline.rs#L971)). |
 | `${task_type} Task Completed` | [`run_tasks_base.py:192`](https://github.com/topoteretes/cognee/blob/main/cognee/modules/pipelines/operations/run_tasks_base.py#L192) | `task_name`, `cognee_version`, `tenant_id` | [`crates/core/src/pipeline.rs:1033`](../../crates/core/src/pipeline.rs#L1033) — `Ok(resolved)` branch | **None.** OTEL span attribute set. |
 | `${task_type} Task Errored` | [`run_tasks_base.py:210`](https://github.com/topoteretes/cognee/blob/main/cognee/modules/pipelines/operations/run_tasks_base.py#L210) | `task_name`, `cognee_version`, `tenant_id`. **No error string property.** | [`crates/core/src/pipeline.rs:1065-1069`](../../crates/core/src/pipeline.rs#L1065) — terminal failure after retries exhausted | **None.** |
-| `cognee.recall` | [`api/v1/recall/recall.py:402`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/recall/recall.py#L402) — emitted **before** the OTEL span / cloud dispatch | `query_length`, `scope`, `auto_route`, `top_k`, `search_type` (`str(query_type.value)` or `"auto"`), `session_id`, `datasets` (comma-joined names), `dataset_ids` (comma-joined UUIDs), `cognee_version` | [`crates/lib/src/api/recall.rs:128`](../../crates/lib/src/api/recall.rs#L128) — just before `tracing::info_span!("cognee.api.recall", ...)` | **None.** OTEL span present. |
-| `cognee.improve` | [`api/v1/improve/improve.py:91`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/improve/improve.py#L91) — before any work, before the OTEL span | `dataset` (str), `session_count`, `session_ids` (comma-joined), `run_in_background`, `cognee_version` | [`crates/lib/src/api/improve.rs:125`](../../crates/lib/src/api/improve.rs#L125) — top of `pub async fn improve(...)` | **None.** No OTEL span either; only per-stage `info!`/`warn!` log lines. |
-| `cognee.forget` | [`api/v1/forget/forget.py:79`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/forget/forget.py#L79) — before the OTEL span | `target` (one of `everything` / `data_item_memory_only` / `dataset_memory_only` / `data_item` / `dataset` / `unknown`), `dataset` (str), `data_id` (str), `cognee_version` | [`crates/lib/src/api/forget.rs:103-123`](../../crates/lib/src/api/forget.rs#L103) | **Partial.** A `tracing::info!(target: "cognee.telemetry", ...)` shim exists. The property keys differ (`forget_target` vs Python's `target`, no `cognee.forget` event name on the wire). |
-| `cognee.remember` | [`api/v1/remember/remember.py:624`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/remember/remember.py#L624) — inside the `cognee.api.remember` OTEL span | `mode` (`session` / `permanent`), `dataset_name`, `data_size_bytes`, `item_count`, `session_id`, `self_improvement`, `run_in_background`, `cognee_version` | [`crates/lib/src/api/remember.rs`](../../crates/lib/src/api/remember.rs) — top of public `remember()` | **None.** Not in scope for this gap per task brief but listed for completeness. |
-| `cognee.search EXECUTION STARTED` | [`modules/search/methods/search.py:74`](https://github.com/topoteretes/cognee/blob/main/cognee/modules/search/methods/search.py#L74) | `cognee_version`, `tenant_id` | Search has no Rust analog at this layer; the Rust port routes search through `cognee.recall` (which already has its own event). | **N/A.** |
-| `cognee.search EXECUTION COMPLETED` | [`modules/search/methods/search.py:115`](https://github.com/topoteretes/cognee/blob/main/cognee/modules/search/methods/search.py#L115) | `cognee_version`, `tenant_id` | same as above | **N/A.** |
+| `cognee.recall` | [`api/v1/recall/recall.py:402`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/recall/recall.py#L402) — emitted **before** the OTEL span / cloud dispatch | `query_length`, `scope`, `auto_route`, `top_k`, `search_type` (`str(query_type.value)` or `"auto"`), `session_id`, `datasets` (comma-joined names), `dataset_ids` (comma-joined UUIDs), `cognee_version` | [`crates/lib/src/api/recall.rs:230`](../../crates/lib/src/api/recall.rs#L230) — after the body, before returning | **Done** in commit `8b096bb` (gap 02-07). |
+| `cognee.improve` | [`api/v1/improve/improve.py:91`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/improve/improve.py#L91) — before any work, before the OTEL span | `dataset` (str), `session_count`, `session_ids` (comma-joined), `run_in_background`, `cognee_version` | [`crates/lib/src/api/improve.rs:161`](../../crates/lib/src/api/improve.rs#L161) — early in `pub async fn improve(...)` | **Partial — done** in commit `8b096bb` (gap 02-07); OTEL span still missing — see [task 03-07](03/07-improve-otel-span.md). |
+| `cognee.forget` | [`api/v1/forget/forget.py:79`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/forget/forget.py#L79) — before the OTEL span | `target` (one of `everything` / `data_item_memory_only` / `dataset_memory_only` / `data_item` / `dataset` / `unknown`), `dataset` (str), `data_id` (str), `cognee_version` | [`crates/lib/src/api/forget.rs:114`](../../crates/lib/src/api/forget.rs#L114) | **Done** in commit `8b096bb` (gap 02-07). The 3-value Rust `ForgetTarget` enum (`item`/`dataset`/`everything`) does not distinguish memory-only deletes — locked decision 2 below. |
+| `cognee.remember` | [`api/v1/remember/remember.py:624`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/remember/remember.py#L624) — inside the `cognee.api.remember` OTEL span | `mode` (`session` / `permanent`), `dataset_name`, `data_size_bytes`, `item_count`, `session_id`, `self_improvement`, `run_in_background`, `cognee_version` | [`crates/lib/src/api/remember.rs:237`](../../crates/lib/src/api/remember.rs#L237) | **Done** in commit `8b096bb` (gap 02-07). |
+| `cognee.search EXECUTION STARTED` | [`modules/search/methods/search.py:74`](https://github.com/topoteretes/cognee/blob/main/cognee/modules/search/methods/search.py#L74) | `cognee_version`, `tenant_id` | Top of [`SearchOrchestrator::search`](../../crates/search/src/orchestration/search_orchestrator.rs#L136) — paired with the existing `EXECUTION COMPLETED` emitter. | **Missing — pending [task 03-06](03/06-search-execution-events.md).** Decision 3 below: implement for Python parity. |
+| `cognee.search EXECUTION COMPLETED` | [`modules/search/methods/search.py:115`](https://github.com/topoteretes/cognee/blob/main/cognee/modules/search/methods/search.py#L115) | `cognee_version`, `tenant_id` | [`SearchOrchestrator::search`](../../crates/search/src/orchestration/search_orchestrator.rs#L18) `emit_search_completed()` (3 `Ok` paths). | **Done** in commit `8b096bb` (gap 02-07). Will be backfilled with real `tenant_id` by [task 03-01](03/01-tenant-id-plumbing.md). |
 
 > Notes on the "EXECUTION STARTED/COMPLETED" pair: this lives in the
 > internal Python `search()` method that `recall()` ultimately calls. It is
-> redundant with `cognee.recall` for the SDK surface and the Rust port does
-> not have a separate corresponding internal entry point — recommend not
-> implementing them.
+> redundant with `cognee.recall` for the SDK surface but is kept by
+> **decision 3** below for byte-equal Python parity. `EXECUTION COMPLETED`
+> is already emitted by `crates/search/src/orchestration/search_orchestrator.rs`;
+> [task 03-06](03/06-search-execution-events.md) adds the `STARTED` paired
+> emission at the top of `SearchOrchestrator::search`.
 
 ### Other `send_telemetry` call sites (out of scope, listed for completeness)
 
@@ -340,113 +354,106 @@ cleaner.
 
 ## Action items
 
-1. **Define the event enum** in
-   `crates/utils/src/telemetry/events.rs` (or wherever the Gap 2 client
-   lands). One variant per event listed in the catalog.
-2. **Implement `emit()`** as a non-blocking fire-and-forget that
-   forwards into the Gap 2 client's send queue.
-3. **Add `Task::python_task_type(&self) -> &'static str`** in
-   `crates/core/src/task.rs` near the existing `pub enum Task`.
-4. **Add `cognee_version` accessor.** Either:
-   - `pub const COGNEE_VERSION: &str = env!("CARGO_PKG_VERSION")` in
-     `crates/lib/src/lib.rs`, or
-   - free function `cognee_utils::telemetry::cognee_version()` set at
-     init via a `OnceLock`.
-5. **Pipeline lifecycle wiring** — modify
-   `crates/core/src/pipeline.rs::execute()`:
-   - line 532: add `PipelineRunStarted` emit
-   - line 574: add `PipelineRunCompleted` emit
-   - lines 584 & 604: add `PipelineRunErrored` emits (one shared helper)
-6. **Task lifecycle wiring** — modify
-   `crates/core/src/pipeline.rs::call_with_retry()`:
-   - just before line 988 (loop start): emit `TaskStarted`
-   - line 1033 (success path): emit `TaskCompleted`
-   - lines 1065-1069 (terminal failure): emit `TaskErrored`
-7. **Recall API event** — add at
-   `crates/lib/src/api/recall.rs:128` (before the span), wired to
-   the `RecallParams`-derived field set.
-8. **Improve API event** — add at
-   `crates/lib/src/api/improve.rs:125` (top of `improve()`).
-   Optionally also add a `cognee.api.improve` `tracing::info_span!`.
-9. **Forget API event** — replace the existing
-   `tracing::info!(target: "cognee.telemetry", ...)` shim at
-   `crates/lib/src/api/forget.rs:103-123` with the new emitter.
-   Update property keys: `forget_target` → `target`, add the literal
-   event name `"cognee.forget"`.
-10. **Telemetry settings snapshot** — add
-    `cognee_lib::config::Config::telemetry_snapshot()` returning a
-    `serde_json::Map` with the same shape as Python's
-    `get_current_settings()`. This is the `| config` merge.
-11. **Add `tenant_id` (follow-up).** Thread through
-    `PipelineContext` and API params; until done, emit
-    `"Single User Tenant"`.
-12. **Tests** — see Testing strategy.
+Each item below has a dedicated implementation sub-document under [`03/`](03/)
+with rationale, prerequisites, step-by-step source-level changes, verification
+commands, files modified, and risks. **The sub-docs are authoritative**: where
+they refine details based on the locked design decisions, follow the sub-doc
+rather than this high-level summary.
+
+| # | Action item | Sub-doc | Depends on | Status |
+|---|---|---|---|---|
+| 1 | Thread a real `tenant_id` through `PipelineContext` and `PipelineRunInfo`. Add `tenant_id: Option<Uuid>` field, populate it in `execute()`, fix the 3 literal-construction test sites. Lifecycle event emitters fall back to `"Single User Tenant"` when `None`. | [03/01-tenant-id-plumbing.md](03/01-tenant-id-plumbing.md) | — | ✅ 70e2d8e |
+| 2 | Add `Task::python_task_type(&self) -> &'static str` in `crates/core/src/task.rs` (8 variants → 4 strings) and a `cognee_telemetry::cognee_version()` accessor. | [03/02-task-type-mapping.md](03/02-task-type-mapping.md) | — | ⬜ |
+| 3 | Implement `cognee_lib::config::Config::telemetry_snapshot()` returning a `serde_json::Map` with the locked allowlist of provider/model fields (decision 5). Used as the `\| config` merge for pipeline events. | [03/03-settings-snapshot.md](03/03-settings-snapshot.md) | — | ⬜ |
+| 4 | Wire `Pipeline Run Started/Completed/Errored` in `crates/core/src/pipeline.rs::execute()` (lines 532 / 574 / 584 + 604). Pulls `pipeline_name` from `pipeline.name`, `tenant_id` from `run_info`, and the settings snapshot via the helper from task 03. | [03/04-pipeline-lifecycle-events.md](03/04-pipeline-lifecycle-events.md) | 1, 3 | ⬜ |
+| 5 | Wire `${task_type} Task Started/Completed/Errored` in `crates/core/src/pipeline.rs::call_with_retry()`. Once per task, not per attempt: `Started` before the retry loop, `Completed` on first success, `Errored` only after retries exhausted. Uses `Task::python_task_type()` for the event-name template. | [03/05-task-lifecycle-events.md](03/05-task-lifecycle-events.md) | 1, 2 | ⬜ |
+| 6 | Emit `cognee.search EXECUTION STARTED` at the top of `SearchOrchestrator::search` to pair with the existing `EXECUTION COMPLETED` emitter. Backfill `tenant_id` on both. | [03/06-search-execution-events.md](03/06-search-execution-events.md) | 1 | ⬜ |
+| 7 | Wrap the body of `cognee_lib::api::improve::improve()` in a `tracing::info_span!("cognee.api.improve", ...)` to bring OTEL parity with Python. Bundled into this gap per decision 4. | [03/07-improve-otel-span.md](03/07-improve-otel-span.md) | — | ⬜ |
+| 8 | Unit + integration tests: `python_task_type` mapping (8→4); settings allowlist snapshot tests; mockito-driven full-pipeline integration test asserting the 4-event sequence (`Pipeline Run Started`, `Coroutine Task Started`, `Coroutine Task Completed`, `Pipeline Run Completed`); error path; opt-out test; fire-and-forget timing test (proxy stalls 5 s, dispatch returns < 100 ms). | [03/08-tests.md](03/08-tests.md) | 4, 5, 6 | ⬜ |
+| 9 | User-facing docs: extend `docs/observability/send_telemetry.md` with the new event catalog (pipeline + task + search). CI updates if needed (existing `cognee-telemetry` lanes from gap 02-12 already cover the crate). | [03/09-docs-and-ci.md](03/09-docs-and-ci.md) | 4, 5, 6, 7 | ⬜ |
+
+### Suggested execution order
+
+A clean PR sequence based on the dependency graph above:
+
+1. **PR 1** (foundation): tasks 01 + 02 + 03 — `tenant_id` plumbing,
+   `python_task_type` + version accessor, settings snapshot helper.
+   No new event emissions, just the supporting machinery.
+2. **PR 2** (lifecycle): tasks 04 + 05 + 06 — pipeline + task + search
+   `STARTED` events, all on top of the helpers from PR 1.
+3. **PR 3** (parity nice-to-have): task 07 — `cognee.api.improve` OTEL
+   span. Independent; could land in PR 1 or 2 as well.
+4. **PR 4** (validation): task 08 — unit + integration tests.
+5. **PR 5** (closeout): task 09 — user docs + any CI tweaks.
+
+## Design decisions (locked)
+
+These supersede the [Open questions](#open-questions) below — answers were
+obtained from the project owner on 2026-05-07 and are the binding contract
+for all per-task sub-docs under [`03/`](03/). They build on the gap-02
+locked decisions (especially #2 `sdk_runtime: "rust"`, #3 hand-curated
+settings subset, #4 SDK-as-single-source, #11 `LLM_API_KEY` read at
+emission time).
+
+| # | Decision | Resolution | Implication |
+|---|---|---|---|
+| 1 | `tenant_id` modelling | **Thread a real value** through `cognee_core::PipelineContext` and `PipelineRunInfo`. Lifecycle emitters fall back to the literal `"Single User Tenant"` when the caller passes `None` (matches Python). Backfilling existing API events (`recall`, `forget`) with `tenant_id` is **out of scope** for gap 03. | [Task 03-01](03/01-tenant-id-plumbing.md) is dedicated to this. Existing API events keep their current (no-tenant) payloads. |
+| 2 | Memory-only forget classification | **Closed.** Keep the 3-value `ForgetTarget` enum (`item` / `dataset` / `everything`). Gap 02-07 already shipped `cognee.forget` with this enum. If `data_item_memory_only` / `dataset_memory_only` distinctions are added later, that is a one-line property tweak. | No work in gap 03. |
+| 3 | `cognee.search EXECUTION STARTED/COMPLETED` | **Implement both** for byte-equal Python parity. `COMPLETED` already shipped in gap 02-07; [task 03-06](03/06-search-execution-events.md) adds the `STARTED` paired emission at the top of `SearchOrchestrator::search`. | Two events, not one — match Python's flow. |
+| 4 | `cognee.api.improve` OTEL span | **Bundle** into this gap as [task 03-07](03/07-improve-otel-span.md). Python has the span; Rust does not. ~30 lines and gives Python parity. | One additional task. Independent of the lifecycle work. |
+| 5 | Settings snapshot allowlist (`\| config` merge) | **Hand-curated subset** (per gap-02 decision 3 — _never_ serialize the full `Config`): `vector_db_provider`, `graph_db_provider`, `relational_db_provider`, `llm_provider`, `llm_model`, `embedding_provider`, `embedding_model`, `embedding_dimensions`, `chunk_strategy`, `token_counter`. Plus `sdk_runtime: "rust"` (carried from gap-02 decision 2). | [Task 03-03](03/03-settings-snapshot.md) implements `Config::telemetry_snapshot() -> serde_json::Map`. Adding fields later requires an explicit allowlist edit + test snapshot regen. |
+| 6 | `dataset_id` / `pipeline_run_id` on pipeline events | **Mirror Python — omit** from analytics payload. Both remain on the OTEL span attributes. | Pipeline events carry only `pipeline_name`, `cognee_version`, `tenant_id`, plus the curated config snapshot. |
+| 7 | Per-attempt vs once-per-task task events | **Once per task.** `Started` fires before the first attempt of `call_with_retry`; `Completed` fires on the first successful attempt; `Errored` fires only after retries are exhausted. Internal retries do not surface to the analytics layer. | Matches Python's mental model (Python has no retry layer at this point). |
+| 8 | Sub-doc count & numeric parity | **No numeric parity** with gap 01 / gap 02 required. 9 sub-docs cover the full scope cleanly. | Sub-docs grouped by concern, not by Python sub-feature count. |
+| 9 | Commit-message scope | **`telemetry/events-03-NN`** — distinct from gap 02's `telemetry/send-02-NN` so log searches stay clean. | Always include the standard `Co-Authored-By` trailer via heredoc. |
 
 ---
 
 ## Backward compatibility with the existing `cognee.telemetry` log target
 
-The current Rust port has **one** telemetry-shaped emission: a
-`tracing::info!(target: "cognee.telemetry", ...)` block in
-[`crates/lib/src/api/forget.rs:103-123`](../../crates/lib/src/api/forget.rs#L103).
-It does not POST anywhere — it is a structured log line that an
-operator could route via a custom `tracing-subscriber` layer.
+> **Status:** This concern is **closed**. Gap 02-07 (commit `8b096bb`)
+> already replaced the `tracing::info!(target: "cognee.telemetry", …)`
+> block in [`crates/lib/src/api/forget.rs:114`](../../crates/lib/src/api/forget.rs#L114)
+> with a real `cognee_telemetry::send_telemetry` call. Property keys
+> now match Python (`target` instead of `forget_target`), and the
+> wire-format event name is `"cognee.forget"`. No further work needed
+> in gap 03.
 
-**Decision: replace, do not duplicate.**
+The original migration plan kept here for reference:
 
-- Remove the `target: "cognee.telemetry"` line in `forget.rs`.
-- Replace it with `AnalyticsEvent::Forget { ... }.emit(...)`.
-- Property naming aligns with Python: rename the local variable
-  `target_label` → just pass `target` through.
-- The new emitter is feature-gated behind the same `telemetry`
-  feature flag, so behaviour is unchanged when the feature is
-  disabled at compile time.
-
-If there is a downstream consumer using `target: "cognee.telemetry"`
-as a log filter, document it as a breaking change in the release
-notes for the version that lands the new emitter. (No such consumer
-is known internally.)
+- Remove the `target: "cognee.telemetry"` line in `forget.rs`. ✅ done.
+- Replace it with `cognee_telemetry::send_telemetry(...)`. ✅ done.
+- Align property keys with Python (`target_label` → `target`). ✅ done.
+- Feature-gate behind `telemetry` so behaviour is unchanged when
+  disabled. ✅ done (`#[cfg(feature = "telemetry")]`).
 
 ---
 
 ## Open questions
 
-1. **`tenant_id` modelling** — Python's `User` has a `tenant_id`
-   column. The Rust `User` model in
-   `crates/models/src/user/` does not have one (verify). Until it
-   does, the literal `"Single User Tenant"` is emitted. Confirm
-   priority of adding tenant scoping vs deferring.
-2. **Memory-only forget classification** — the current Rust
-   `ForgetTarget` enum has `Item`, `Dataset`, `All`. Python
-   distinguishes `data_item_memory_only` and `dataset_memory_only`.
-   Where does the Rust port carry the `memory_only` flag? Either
-   extend the enum or read a separate flag.
-3. **HTTP-router-level events.** Python emits per-route
-   `cognee.<verb> API Call` events from FastAPI handlers. The Rust
-   `serve.rs` HTTP server is a separate code path. Out of scope for
-   this gap; track separately in the http-api-v2 work.
-4. **`cognee.search EXECUTION STARTED/COMPLETED`.** Recommend
-   *not* implementing — the Rust SDK collapses internal `search()`
-   into `recall()` and the `cognee.recall` event already covers it.
-5. **Settings snapshot scope** — Python merges the *entire* settings
-   dict into `Pipeline Run *` events. Some fields (DB URLs, model
-   paths) may contain semi-sensitive data. The Gap 2 redactor is
-   responsible for stripping them, but we should agree on a
-   redaction allow-list before turning it on.
-6. **Wire `cognee.api.improve` OTEL span** — Python has it; Rust does
-   not. Bundle with this gap, or split out?
-7. **Dataset ID on pipeline events.** Python does not include
-   `dataset_id` in the analytics payload, only on the OTEL span. The
-   task brief asked specifically — the answer is **no**, Python omits
-   it. Match that.
-8. **`pipeline_run_id` on pipeline events.** Same as above — Python
-   does not emit it on the analytics call, only on the OTEL span. We
-   should mirror Python; if we want to add it as an extension that is
-   a separate decision.
-9. **Per-attempt vs once-per-task task events.** Python has no
-   retry policy at this layer, so the question does not arise. We have
-   chosen "once per task" (matching the user's mental model of a task)
-   rather than "once per attempt" (matching the wire-level retries).
+These were superseded by the [Design decisions (locked)](#design-decisions-locked)
+table above on 2026-05-07. Kept here as a paper trail of the original
+questions and the rationale considered before locking.
+
+1. ~~**`tenant_id` modelling.**~~ Resolved by decision 1 — thread a real
+   `Option<Uuid>` through `PipelineContext` + `PipelineRunInfo`; fall back
+   to literal `"Single User Tenant"` when the caller passes `None`.
+2. ~~**Memory-only forget classification.**~~ Resolved by decision 2 —
+   keep the 3-value `ForgetTarget`; do not extend the enum in this gap.
+3. **HTTP-router-level events.** Still out of scope — track separately
+   in the http-api-v2 work. Not affected by gap 03.
+4. ~~**`cognee.search EXECUTION STARTED/COMPLETED`.**~~ Resolved by
+   decision 3 — implement both, for byte-equal Python parity.
+5. ~~**Settings snapshot scope.**~~ Resolved by decision 5 — hand-curated
+   allowlist of provider/model fields only.
+6. ~~**Wire `cognee.api.improve` OTEL span.**~~ Resolved by decision 4 —
+   bundle as [task 03-07](03/07-improve-otel-span.md).
+7. ~~**Dataset ID on pipeline events.**~~ Resolved by decision 6 — match
+   Python, omit.
+8. ~~**`pipeline_run_id` on pipeline events.**~~ Resolved by decision 6
+   — match Python, omit.
+9. ~~**Per-attempt vs once-per-task task events.**~~ Resolved by decision
+   7 — once per task.
 
 ---
 
@@ -513,5 +520,7 @@ is known internally.)
   - [`crates/lib/src/api/improve.rs:125`](../../crates/lib/src/api/improve.rs#L125)
   - [`crates/lib/src/api/forget.rs:103`](../../crates/lib/src/api/forget.rs#L103)
 - Companion gaps:
-  - [01-analytics-client.md](01-analytics-client.md) — transport, identity, opt-out
+  - [02-send-telemetry-analytics.md](02-send-telemetry-analytics.md) — transport, identity, opt-out (closed 2026-05-06)
   - [gap-analysis.md](gap-analysis.md) — the parent index (do not edit)
+- Per-task sub-docs: [03/](03/)
+- Implementation runbook: [03/00-implementation-runbook.md](03/00-implementation-runbook.md)
