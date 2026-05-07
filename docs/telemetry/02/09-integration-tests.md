@@ -1,6 +1,6 @@
 # Task 02-09 — Integration tests with `mockito`
 
-**Status**: ⬜ unimplemented
+**Status**: implemented in commit ba9cad7 (note: test file landed as crates/telemetry/tests/dispatch_with_mockito.rs; mockito 1.7 has no public last_request() so body is captured via Arc<Mutex<Option<Vec<u8>>>> + with_body_from_request; fire-and-forget timing test removes LLM_API_KEY before the call because synchronous PBKDF2 100_000 iter on the caller thread eats the <100 ms budget — follow-up: move the hash into tokio::task::spawn_blocking; persistent_id length assertion was relaxed since seeding from TRACKING_ID gives a 16-char id rather than a UUID).
 **Owner**: _unassigned_
 **Depends on**:
 - [Task 02-05 — Client / dispatch / opt-out](05-client-dispatch-and-optout.md) (the dispatcher must be wired).
