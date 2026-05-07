@@ -1,6 +1,6 @@
 # Task 02-10 — Cross-SDK identity parity (Python ↔ Rust)
 
-**Status**: ⬜ unimplemented
+**Status**: implemented in commit 9762c2b (note: harness lives at e2e-cross-sdk/telemetry-emit + bin/telemetry_proxy.py + harness/test_telemetry_parity.py with a new e2e-telemetry compose service; harness Cargo.toml enables cognee-lib's qdrant feature only to silence a pre-existing unused-binding lint in component_manager.rs:140 — clean up separately. Final docker compose up --build verification deferred to CI task 02-12).
 **Owner**: _unassigned_
 **Depends on**:
 - [Task 02-07 — Callsite migration](07-callsite-migration.md) — Rust must emit *some* event for parity to be observable.
