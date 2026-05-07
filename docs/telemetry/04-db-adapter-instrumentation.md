@@ -362,59 +362,44 @@ window so adapter call sites only ever import from one place.
 
 ## Action items
 
-In dependency order:
+Each item below has a dedicated implementation sub-document under
+[`04/`](04/) with rationale, prerequisites, step-by-step source-level
+changes, verification commands, files modified, and risks. **The
+sub-docs are authoritative**: where they refine details based on the
+locked design decisions, follow the sub-doc rather than this
+high-level summary.
 
-1. **Move `redact()` to `cognee-utils`.**
-   - New file `crates/utils/src/redact.rs` with `pub fn redact(&str) -> Cow<'_, str>`
-     and the four-pattern `OnceLock<Vec<Regex>>`.
-   - Add `regex = "1"` to `crates/utils/Cargo.toml`.
-   - Re-export from `crates/utils/src/lib.rs`.
-   - Update `crates/http-server/src/observability/redaction.rs` to call
-     `cognee_utils::redact::redact` and keep only the JSON walker.
+| #  | Action item | Sub-doc | Depends on | Status |
+|----|---|---|---|---|
+| 01 | Relocate `redact()` from `crates/http-server/src/observability/redaction.rs` to a new module `cognee_utils::redact`, leaving the JSON walker (`redact_attributes`) in http-server. Adds `regex` direct dep to `cognee-utils`. | [04/01-redact-relocate.md](04/01-redact-relocate.md) | — | ⬜ |
+| 02 | Make `crates/utils/src/tracing_keys.rs` the single source of truth for `cognee.*` semantic-attribute key constants; replace `crates/search/src/observability.rs` body with `pub use cognee_utils::tracing_keys::*;`. Adds `cognee-utils` dep on `cognee-search` (if not already). | [04/02-tracing-constants-dedupe.md](04/02-tracing-constants-dedupe.md) | — | ⬜ |
+| 03 | Add `SpanCapture` test helper to `cognee-test-utils` (`tracing::Layer` capturing structured fields into `Mutex<Vec<CapturedSpan>>`). Used by every adapter integration test in 04-10. | [04/03-span-capture-test-helper.md](04/03-span-capture-test-helper.md) | — | ⬜ |
+| 04 | Instrument `QdrantAdapter::{search_similar, index_points, delete_points, delete_collection}` with `cognee.db.vector.*` spans (`cognee.db.system="qdrant"`, `cognee.vector.collection`, `cognee.vector.result_count` / `cognee.db.row_count`). Adds `cognee-utils` dep on `cognee-vector`. | [04/04-qdrant-instrumentation.md](04/04-qdrant-instrumentation.md) | 02 | ⬜ |
+| 05 | Instrument `LadybugAdapter::execute_query` (the private fan-in helper) with `cognee.db.graph.query` (`cognee.db.system="ladybug"`, `cognee.db.query` truncate-then-redact, `cognee.db.row_count`). Covers all 24 public methods transitively. Adds `cognee-utils` dep on `cognee-graph`. | [04/05-ladybug-instrumentation.md](04/05-ladybug-instrumentation.md) | 01, 02 | ⬜ |
+| 06 | Add `cognee.llm.model` / `cognee.llm.provider="openai"` fields to the existing `llm.api_call` and `llm.transcription_api_call` `#[instrument]` blocks on `OpenAIAdapter`. Adds `cognee-utils` dep on `cognee-llm`. | [04/06-openai-llm-fields.md](04/06-openai-llm-fields.md) | 02 | ⬜ |
+| 07 | Add `#[instrument]` with `cognee.llm.model` / `cognee.llm.provider="litert"` on `LiteRtAdapter::generate` and `create_structured_output_with_messages_raw`. Feature-gated behind `android-litert`. | [04/07-litert-llm-fields.md](04/07-litert-llm-fields.md) | 02 | ⬜ |
+| 08 | Mirror the Qdrant / Ladybug instrumentation onto `pgvector_adapter` (`cognee.db.system="pgvector"`) and `pg_graph_adapter::query` (`cognee.db.system="postgres"`). Decision 3 puts these in scope for cloud users. | [04/08-pg-adapters.md](04/08-pg-adapters.md) | 01, 02, 04, 05 | ⬜ |
+| 09 | Ops-level instrumentation of every public function in `crates/database/src/ops/*.rs` (~80 functions across 14 files) with `cognee.db.relational.<file_stem>.<fn>` spans. Adds a `database_system_label(&db)` helper that maps SeaORM backend → `"sqlite"` / `"postgres"` / `"mysql"`. | [04/09-seaorm-ops-instrumentation.md](04/09-seaorm-ops-instrumentation.md) | 02 | ⬜ |
+| 10 | Adapter span-instrumentation integration tests using the `SpanCapture` helper from 03. Six new test files: `qdrant_span_instrumentation`, `ladybug_span_instrumentation`, `openai_span_instrumentation` (mockito), `pgvector_span_instrumentation` (skip-on-no-pg), `pg_graph_span_instrumentation` (same), `relational_ops_span_instrumentation` (15 smoke tests). | [04/10-tests.md](04/10-tests.md) | 03, 04, 05, 06, 08, 09 | ⬜ |
+| 11 | Docs: extend `docs/observability/opentelemetry.md` with the canonical span-name / attribute reference. Update `docs/telemetry/gap-analysis.md` section 4 to mark the LLM/DB span gap closed. CI: add a Postgres lane for the pg-side span tests if not already present. Closure summary at the bottom of this doc. | [04/11-docs-and-ci.md](04/11-docs-and-ci.md) | 01–10 | ⬜ |
 
-2. **Deduplicate constants.**
-   - Make `crates/search/src/observability.rs` re-export
-     `cognee_utils::tracing_keys::*` instead of redeclaring.
+### Suggested execution order
 
-3. **Instrument `QdrantAdapter`** ([`crates/vector/src/qdrant_adapter.rs`](../../crates/vector/src/qdrant_adapter.rs)).
-   - `search_similar:283` → span name `cognee.db.vector.search`,
-     attrs `cognee.db.system="qdrant"`, `cognee.vector.collection`,
-     `cognee.vector.result_count`.
-   - `index_points:250` → span name `cognee.db.vector.upsert`,
-     attrs `cognee.db.system="qdrant"`, `cognee.vector.collection`,
-     `cognee.db.row_count = points.len()`.
-   - `delete_points:329` → span name `cognee.db.vector.delete`,
-     attrs `cognee.db.system="qdrant"`, `cognee.vector.collection`,
-     `cognee.db.row_count = point_ids.len()`.
-   - `delete_collection:315` and `collection_size:354` → optional but cheap;
-     same naming convention.
+A clean PR sequence based on the dependency graph:
 
-4. **Instrument `LadybugAdapter::execute_query`** ([`crates/graph/src/ladybug.rs:156`](../../crates/graph/src/ladybug.rs#L156)).
-   - Span name `cognee.db.graph.query`,
-     attrs `cognee.db.system="ladybug"`, `cognee.db.query` (truncated 500 +
-     redacted), `cognee.db.row_count = rows.len()`.
-   - All public methods that go through `execute_query` are instrumented
-     transitively.
-
-5. **Add LLM model/provider fields** to
-   [`crates/llm/src/adapters/openai.rs:138`](../../crates/llm/src/adapters/openai.rs#L138)
-   and `:729`.
-   - `fields(cognee.llm.model = self.model.as_str(), cognee.llm.provider = "openai")`
-     on `call_api`.
-   - Same on `call_transcription_api` with `self.transcription_model`.
-   - Repeat in `crates/llm/src/adapters/litert.rs` if present, with provider
-     label `"litert"`.
-
-6. **Optional / deferred:** instrument `pgvector_adapter`, `pg_graph_adapter`,
-   and `crates/database/src/ops/*.rs`. Python has no spans on these paths so
-   parity tests won't drive them; they are still useful for OTLP consumers.
-
-7. **Tests** — see *Testing strategy* below. Add at minimum one happy-path test
-   per adapter asserting span name + the three required attributes appear with
-   correct values.
-
-8. **Update gap-analysis.md** (separate, owner: telemetry tracker) to mark this
-   gap as closed once 3-5 land. **This task does not edit gap-analysis.md.**
+1. **PR 1** (foundation): tasks 01 + 02 + 03 — `redact()` relocation,
+   constants dedupe, `SpanCapture` test helper. No new spans yet.
+2. **PR 2** (core adapters): tasks 04 + 05 + 06 — Qdrant + Ladybug +
+   OpenAI. Covers the default backends every cognee-rust deployment
+   uses.
+3. **PR 3** (Android): task 07 — LiteRT. Independent of PR 2; can
+   land in parallel.
+4. **PR 4** (cloud / postgres): task 08 — pgvector + pg_graph
+   adapters. Independent of PR 3.
+5. **PR 5** (relational): task 09 — SeaORM ops-level instrumentation.
+   Largest mechanical diff but isolated.
+6. **PR 6** (validation): task 10 — adapter span tests.
+7. **PR 7** (closeout): task 11 — docs + CI + gap closure.
 
 ---
 
@@ -444,28 +429,23 @@ In dependency order:
 
 ---
 
-## Open questions
+## Design decisions (locked)
 
-1. **SeaORM instrumentation granularity.** Should we instrument every ORM call
-   (per-query span, high cardinality, partly redundant with SeaORM's own
-   `sqlx::query` events) or only the higher-level `crates/database/src/ops/`
-   functions (one span per logical operation: `data::lookup`,
-   `permissions::grant`)? Python instruments neither; the Rust answer should
-   probably be "ops level only" to keep span count manageable. **Decision
-   pending.**
-2. **`cognee.db.query` for Qdrant.** Python's LanceDB span omits
-   `cognee.db.query` because there is no SQL string. Should Rust set a
-   synthetic value (e.g. `"vector_search(top_k=15)"`) for consistency, or
-   leave it absent? Recommend: leave absent, matching Python LanceDB.
-3. **PG adapters.** Should they get instrumented in the same PR even though
-   Python doesn't cover them? Recommend: yes — same code shape, low cost, and
-   they're production-relevant for cloud users.
-4. **Span level.** Python uses default level (INFO). Rust default for
-   `#[instrument]` is also INFO. Confirm: do we want INFO for query spans, or
-   bump to DEBUG? Recommend: INFO for parity, with the subscriber's env-filter
-   gating noise.
-5. **Litert adapter.** Was not inspected by this investigation. Confirm it
-   exists and add provider="litert" before closing the gap.
+Approved by the project owner on 2026-05-07. **Do not re-litigate.** Sub-agents
+may surface new evidence that contradicts a decision; if so, escalate to the
+user before changing course.
+
+| # | Decision | Rationale | Affected tasks |
+|---|---|---|---|
+| 1 | **SeaORM instrumentation is ops-level only.** Add one span per public function in `crates/database/src/ops/*.rs` (e.g. `data::create_data`, `datasets::list_datasets`). Do **not** instrument every individual SeaORM/sqlx call. | Per-call spans are noisy and partly redundant with SeaORM's own `sqlx::query` events. Python instruments neither layer; ops-level keeps span count manageable while still covering every logical DB op. | [04-09](04/09-seaorm-ops-instrumentation.md) |
+| 2 | **Omit `cognee.db.query` on Qdrant spans** (and on the Rust pgvector adapter). | Matches Python's LanceDB instrumentation — there is no SQL string for a vector lookup. The collection name + `cognee.vector.result_count` are sufficient. | [04-04](04/04-qdrant-instrumentation.md), [04-08](04/08-pg-adapters.md) |
+| 3 | **PG adapters (`pgvector_adapter`, `pg_graph_adapter`) are in scope.** Same span shape as Qdrant / Ladybug; `cognee.db.system="pgvector"` / `cognee.db.system="postgres"`. | Same code shape, low cost, production-relevant for cloud users. | [04-08](04/08-pg-adapters.md) |
+| 4 | **LiteRT lives in its own task.** `cognee.llm.{model,provider}` fields go on `LiteRtAdapter::generate` (and `create_structured_output_with_messages_raw`), with `provider = "litert"`. | The adapter is feature-gated (`android-litert`) and uses a different call shape from `OpenAIAdapter`; bundling would add `#[cfg(feature = "android-litert")]` noise to the OpenAI task. Splitting keeps each diff small and reviewable. | [04-06](04/06-openai-llm-fields.md), [04-07](04/07-litert-llm-fields.md) |
+| 5 | **Span level is INFO for all adapter spans.** | Matches Python (`new_span` defaults to INFO) and matches the existing default for `#[tracing::instrument]`. Operators tune verbosity via `RUST_LOG` / OTEL sampler. | All adapter tasks |
+| 6 | **Test strategy is Approach B.** Add a `SpanCapture` helper in `cognee-test-utils` implementing `tracing::Layer` and pushing `(name, fields)` to a `Mutex<Vec<…>>`. Each adapter integration test installs it as the test subscriber and asserts span name + structured field values. | Approach A (`tracing-test` + `logs_contain`) only sees the formatted text and is brittle for asserting structured field values byte-for-byte. The cross-SDK parity tests need structured assertions. | [04-03](04/03-span-capture-test-helper.md), [04-10](04/10-tests.md) |
+| 7 | **Foundation cleanups are two separate tasks** (not bundled). | `redact()` relocation and the constants dedupe are mechanically independent. Splitting keeps each commit minimal and revertable. | [04-01](04/01-redact-relocate.md), [04-02](04/02-tracing-constants-dedupe.md) |
+| 8 | **Adapter instrumentation is unconditional — no feature gate.** Tracing span macros are always compiled and consumed by whichever subscriber the embedder attaches; the cost of an unsubscribed span is negligible. The `telemetry` cargo feature gates analytics events (gap 02/03), not tracing spans. | Mirrors how `#[tracing::instrument]` is already used elsewhere in the workspace (`crates/llm/src/adapters/openai.rs`, `crates/lib/src/api/recall.rs`, etc.). | All adapter tasks |
+| 9 | **Truncation order is `redact(query[..min(query.len(), 500)])`** — truncate first, then redact, matching Python's `redact_secrets(query[:500])`. | Reversing the order would let a redacted form longer than 500 chars be re-truncated and split the literal `***REDACTED***` marker. | [04-05](04/05-ladybug-instrumentation.md) |
 
 ---
 
