@@ -150,6 +150,7 @@ async fn make_ctx(watcher: Arc<dyn PipelineWatcher>) -> Arc<TaskContext> {
             pipeline_id: Uuid::new_v4(),
             pipeline_name: "scoped_watcher_payload_test".to_string(),
             user_id: None,
+            tenant_id: None,
             dataset_id: None,
             current_data: None,
             run_id: None,

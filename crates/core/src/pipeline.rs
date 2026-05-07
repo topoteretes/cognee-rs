@@ -298,6 +298,10 @@ pub struct PipelineRunInfo {
     pub pipeline_name: String,
     /// Owner / tenant.
     pub user_id: Option<Uuid>,
+    /// Tenant the pipeline run belongs to. `None` for single-user
+    /// deployments. Emitted as `"Single User Tenant"` on the wire
+    /// when `None` (Python parity).
+    pub tenant_id: Option<Uuid>,
     /// Dataset being processed.
     pub dataset_id: Option<Uuid>,
     /// Current run status.
@@ -507,6 +511,7 @@ pub async fn execute(
     let task_count = pipeline.tasks.len();
 
     let user_id = ctx.pipeline_ctx.as_ref().and_then(|p| p.user_id);
+    let tenant_id = ctx.pipeline_ctx.as_ref().and_then(|p| p.tenant_id);
     let dataset_id = ctx.pipeline_ctx.as_ref().and_then(|p| p.dataset_id);
     let pipeline_id = deterministic_pipeline_id(pipeline.name.as_deref(), user_id, dataset_id)
         .unwrap_or(pipeline.id);
@@ -516,6 +521,7 @@ pub async fn execute(
         pipeline_id,
         pipeline_name: pipeline.name.clone().unwrap_or_default(),
         user_id,
+        tenant_id,
         dataset_id,
         status: PipelineRunStatus::Started,
         started_at: chrono::Utc::now(),
@@ -1265,6 +1271,7 @@ mod tests {
             pipeline_id: Uuid::new_v4(),
             pipeline_name: "test".to_string(),
             user_id: None,
+            tenant_id: None,
             dataset_id: None,
             status: PipelineRunStatus::Started,
             started_at: chrono::Utc::now(),
@@ -1282,6 +1289,7 @@ mod tests {
             pipeline_id: Uuid::new_v4(),
             pipeline_name: "test".to_string(),
             user_id: None,
+            tenant_id: None,
             dataset_id: None,
             status: PipelineRunStatus::Completed,
             started_at,

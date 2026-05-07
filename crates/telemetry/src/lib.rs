@@ -155,6 +155,22 @@ impl From<Option<Uuid>> for UserIdRef<'_> {
     }
 }
 
+/// Format a `tenant_id` for the telemetry wire payload, mirroring
+/// Python `str(user.tenant_id) if user.tenant_id else "Single User Tenant"`.
+///
+/// Lifecycle emitters (pipeline, task, search) thread an
+/// `Option<Uuid>` through the runtime context and call this helper at
+/// the emission site so the on-the-wire string is byte-for-byte
+/// identical to the Python implementation when no tenant has been
+/// configured.
+#[inline]
+pub fn tenant_id_for_telemetry(tenant_id: Option<Uuid>) -> String {
+    match tenant_id {
+        Some(id) => id.to_string(),
+        None => "Single User Tenant".to_string(),
+    }
+}
+
 /// Fire-and-forget product-analytics event.
 ///
 /// Returns immediately; the HTTP POST is dispatched on a detached

@@ -26,6 +26,10 @@ pub struct PipelineContext {
     pub pipeline_name: String,
     /// Owner / tenant executing the pipeline.
     pub user_id: Option<Uuid>,
+    /// Tenant the pipeline run belongs to. `None` for single-user
+    /// deployments — telemetry emitters substitute the literal
+    /// `"Single User Tenant"` to match Python's behaviour.
+    pub tenant_id: Option<Uuid>,
     /// Dataset being processed.
     pub dataset_id: Option<Uuid>,
     /// The data item currently being processed.
