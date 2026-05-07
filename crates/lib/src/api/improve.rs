@@ -153,11 +153,23 @@ pub async fn improve(params: ImproveParams<'_>) -> Result<ImproveResult, ApiErro
     let mut result = ImproveResult::default();
     let has_sessions = session_ids.as_ref().is_some_and(|ids| !ids.is_empty());
 
+    // Wrap the body in a `cognee.api.improve` OTEL span for parity with
+    // Python's `cognee.api.v1.improve.improve()` (gap 03 / task 03-07).
+    // Attribute names mirror the analytics payload below and the Python
+    // span's verbose names (`dataset`, `session_count`, `run_in_background`).
+    let session_count = session_ids.as_ref().map(|v| v.len()).unwrap_or(0);
+    let span = tracing::info_span!(
+        "cognee.api.improve",
+        dataset = %dataset_name,
+        session_count = session_count,
+        run_in_background = false,
+    );
+    let _enter = span.enter();
+
     // Mirrors Python `send_telemetry("cognee.improve", ...)` from
     // cognee/api/v1/improve/improve.py:91.
     #[cfg(feature = "telemetry")]
     {
-        let session_count = session_ids.as_ref().map(|v| v.len()).unwrap_or(0);
         cognee_telemetry::send_telemetry(
             "cognee.improve",
             owner_id,
