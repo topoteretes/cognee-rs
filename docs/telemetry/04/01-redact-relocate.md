@@ -1,6 +1,6 @@
 # Task 04-01 — Move `redact()` from `cognee-http-server` to `cognee-utils`
 
-**Status**: ⬜ unimplemented
+**Status**: ✅ implemented in commit 21f10e8
 **Owner**: _unassigned_
 **Depends on**: —
 **Blocks**:

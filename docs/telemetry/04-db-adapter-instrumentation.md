@@ -371,7 +371,7 @@ high-level summary.
 
 | #  | Action item | Sub-doc | Depends on | Status |
 |----|---|---|---|---|
-| 01 | Relocate `redact()` from `crates/http-server/src/observability/redaction.rs` to a new module `cognee_utils::redact`, leaving the JSON walker (`redact_attributes`) in http-server. Adds `regex` direct dep to `cognee-utils`. | [04/01-redact-relocate.md](04/01-redact-relocate.md) | — | ⬜ |
+| 01 | Relocate `redact()` from `crates/http-server/src/observability/redaction.rs` to a new module `cognee_utils::redact`, leaving the JSON walker (`redact_attributes`) in http-server. Adds `regex` direct dep to `cognee-utils`. | [04/01-redact-relocate.md](04/01-redact-relocate.md) | — | ✅ 21f10e8 |
 | 02 | Make `crates/utils/src/tracing_keys.rs` the single source of truth for `cognee.*` semantic-attribute key constants; replace `crates/search/src/observability.rs` body with `pub use cognee_utils::tracing_keys::*;`. Adds `cognee-utils` dep on `cognee-search` (if not already). | [04/02-tracing-constants-dedupe.md](04/02-tracing-constants-dedupe.md) | — | ⬜ |
 | 03 | Add `SpanCapture` test helper to `cognee-test-utils` (`tracing::Layer` capturing structured fields into `Mutex<Vec<CapturedSpan>>`). Used by every adapter integration test in 04-10. | [04/03-span-capture-test-helper.md](04/03-span-capture-test-helper.md) | — | ⬜ |
 | 04 | Instrument `QdrantAdapter::{search_similar, index_points, delete_points, delete_collection}` with `cognee.db.vector.*` spans (`cognee.db.system="qdrant"`, `cognee.vector.collection`, `cognee.vector.result_count` / `cognee.db.row_count`). Adds `cognee-utils` dep on `cognee-vector`. | [04/04-qdrant-instrumentation.md](04/04-qdrant-instrumentation.md) | 02 | ⬜ |
