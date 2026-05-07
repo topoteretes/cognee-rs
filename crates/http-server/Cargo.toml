@@ -13,7 +13,9 @@ path = "src/main.rs"
 required-features = ["bin"]
 
 [features]
-default = []
+# decision 1: telemetry is ON by default in cognee-http-server. Disable with
+# --no-default-features for compile-time opt-out.
+default = ["telemetry"]
 # Enables the standalone-binary entry point and its arg-parsing deps.
 bin = [
     "dep:clap",

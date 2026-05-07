@@ -157,7 +157,6 @@ pub mod config;
 pub mod context;
 pub mod error;
 
-#[cfg(feature = "telemetry")]
 pub mod telemetry;
 
 pub use api::notebooks::{

@@ -109,7 +109,18 @@ bar than opt-out.
 ### 4.1 Finalise `crates/telemetry/src/lib.rs`
 
 Replace the contents written in [task 02-02](02-telemetry-crate-scaffold.md)
-with the production form:
+with the production form. **Note**: `serde_json` is `optional = true`
+in [`crates/telemetry/Cargo.toml`](../../../crates/telemetry/Cargo.toml)
+(gated behind the `telemetry` feature), so the public signature must
+not name `serde_json::Value` directly — it would not compile under
+`--no-default-features`. Reuse the existing `PropertyValue` type alias
+from the [task 02-02](02-telemetry-crate-scaffold.md) scaffold:
+- with `feature = "telemetry"` on, `PropertyValue = serde_json::Value`,
+- with the feature off, `PropertyValue = ()`.
+
+This is the simpler of the two options (the alternative — moving
+`serde_json` out of `optional` — would pull `serde_json` into every
+no-features build of the workspace).
 
 ```rust
 //! Cognee product-analytics client (`send_telemetry`).
@@ -119,6 +130,7 @@ with the production form:
 //! # Quick start
 //!
 //! ```no_run
+//! # #[cfg(feature = "telemetry")] {
 //! use cognee_telemetry::send_telemetry;
 //! use serde_json::json;
 //!
@@ -127,6 +139,7 @@ with the production form:
 //!     "user-id-string",
 //!     Some(json!({ "endpoint": "POST /api/v1/forget" })),
 //! );
+//! # }
 //! ```
 //!
 //! # Opt-out
@@ -141,7 +154,6 @@ with the production form:
 #![deny(rust_2018_idioms)]
 #![warn(missing_docs)]
 
-use serde_json::Value;
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -156,6 +168,19 @@ pub mod env;
 pub mod ids;
 pub mod payload;
 pub mod sanitize;
+
+/// Property value type for `additional_properties`. Resolves to
+/// `serde_json::Value` when the `telemetry` feature is on, or `()`
+/// when it is off. Keep all public signatures referring to this alias
+/// rather than `serde_json::Value` directly so the surface compiles
+/// under `--no-default-features`.
+#[cfg(feature = "telemetry")]
+pub use serde_json::Value as PropertyValue;
+
+/// Placeholder property type used when the `telemetry` feature is
+/// disabled. Replaced by `serde_json::Value` once the feature is on.
+#[cfg(not(feature = "telemetry"))]
+pub type PropertyValue = ();
 
 /// Errors returned by [`try_send_telemetry`].
 #[derive(Debug, Error)]
@@ -217,7 +242,7 @@ impl From<Option<Uuid>> for UserIdRef<'_> {
 pub fn send_telemetry<'a>(
     event_name: &str,
     user_id: impl Into<UserIdRef<'a>>,
-    additional_properties: Option<Value>,
+    additional_properties: Option<PropertyValue>,
 ) {
     let _ = try_send_telemetry(event_name, user_id, additional_properties);
 }
@@ -232,7 +257,7 @@ pub fn send_telemetry<'a>(
 pub fn try_send_telemetry<'a>(
     event_name: &str,
     user_id: impl Into<UserIdRef<'a>>,
-    additional_properties: Option<Value>,
+    additional_properties: Option<PropertyValue>,
 ) -> Result<(), TelemetryError> {
     let user_id = user_id.into();
     #[cfg(feature = "telemetry")]
@@ -241,7 +266,10 @@ pub fn try_send_telemetry<'a>(
     }
     #[cfg(not(feature = "telemetry"))]
     {
-        noop::send_telemetry_impl(event_name, user_id, additional_properties);
+        // Drop borrowed/owned args explicitly so unused-variable lints
+        // don't fire when the telemetry feature is off.
+        let _ = (event_name, user_id, additional_properties);
+        noop::send_telemetry_impl();
     }
     Ok(())
 }
@@ -251,32 +279,36 @@ Key changes vs the [task 02-02](02-telemetry-crate-scaffold.md) skeleton:
 
 - Public functions are `send_telemetry` and `try_send_telemetry`.
 - The placeholder `_user_id_unused()` is gone.
+- `PropertyValue` is preserved from the scaffold (resolves to
+  `serde_json::Value` with the feature on, `()` with it off).
 - All five sub-modules are `pub mod ...;` (no inline placeholders).
 - The `client` module is private (`mod client;` without `pub`).
+- `TelemetryError` is unconditional (matches the scaffold) so callers
+  can name it in both feature states via the `cognee-lib` re-export.
 
 ### 4.2 Replace `crates/telemetry/src/noop.rs` body
+
+The `lib.rs` `try_send_telemetry` body above explicitly drops the
+arguments (`let _ = (event_name, user_id, additional_properties);`)
+before calling `noop::send_telemetry_impl()`, so the noop body takes
+**no** arguments and cannot reference `serde_json::Value` (unavailable
+when the feature is off). It just emits a single tracing line.
 
 ```rust
 //! Noop (`feature = "telemetry"` off) implementation of
 //! `send_telemetry`. Compiled when the `telemetry` cargo feature is
 //! disabled.
 //!
-//! Every entry point becomes a no-op that emits a single
-//! `tracing::debug!` line. Identity helpers in [`crate::ids`] return
-//! empty strings.
+//! The entry point becomes a no-op that emits a single
+//! `tracing::debug!` line. The caller in `lib.rs` discards the
+//! arguments before invoking us, so this function takes none —
+//! avoiding any reference to `serde_json::Value` (which is gated on
+//! the `telemetry` feature). Identity helpers in [`crate::ids`]
+//! return empty strings.
 
-use serde_json::Value;
-
-use crate::UserIdRef;
-
-pub(crate) fn send_telemetry_impl(
-    event_name: &str,
-    _user_id: UserIdRef<'_>,
-    _additional_properties: Option<Value>,
-) {
+pub(crate) fn send_telemetry_impl() {
     tracing::debug!(
         target: "cognee.telemetry",
-        event = event_name,
         "send_telemetry called but telemetry feature disabled at compile time"
     );
 }
@@ -287,27 +319,38 @@ pub(crate) fn send_telemetry_impl(
 #### 4.3.1 Add the dep
 
 In [`crates/lib/Cargo.toml`](../../../crates/lib/Cargo.toml)
-`[dependencies]` (currently lines 87-116):
+`[dependencies]` (currently lines 87-116), add `cognee-telemetry` as
+a **non-optional** dep so its public symbols (`send_telemetry`,
+`TelemetryError`, `UserIdRef`, `PropertyValue`) resolve in both feature
+states:
 
 ```toml
-cognee-telemetry = { path = "../telemetry", optional = true }
+cognee-telemetry = { path = "../telemetry" }
 ```
+
+(See [§4.3.5](#435-extend-crateslibsrctelemetryrs-with-the-send_telemetry-re-exports)
+for why this is non-optional. The leaf crate has no transitive deps
+when its own `telemetry` feature is off, so the cost is negligible.)
 
 #### 4.3.2 Update the `telemetry` feature
 
 The existing `telemetry` feature (lines 45-49 per gap 01) currently
-gates `cognee-observability`. Extend it to **also** gate the new
-`cognee-telemetry` crate:
+gates `cognee-observability`. Extend it to **also** activate
+`cognee-telemetry/telemetry` (which flips the leaf body from noop to
+real):
 
 ```toml
 telemetry = [
     "dep:cognee-observability",
     "cognee-observability/telemetry",
     "cognee-core/telemetry",
-    "dep:cognee-telemetry",
     "cognee-telemetry/telemetry",
 ]
 ```
+
+Note: no `"dep:cognee-telemetry"` entry — the dep is unconditional now
+(see [§4.3.1](#431-add-the-dep)). Only the leaf's `telemetry` feature
+is toggled.
 
 #### 4.3.3 Add `telemetry` to `default`
 
@@ -331,50 +374,157 @@ Edit the `android-default = [...]` list (currently lines 65-78). The
 list must **not** include `"telemetry"`. If it currently does (it
 shouldn't from gap 01 since gap 01 left it off), remove it.
 
-#### 4.3.5 Add the re-export
+#### 4.3.5 Extend `crates/lib/src/telemetry.rs` with the send_telemetry re-exports
 
-In [`crates/lib/src/lib.rs`](../../../crates/lib/src/lib.rs), the
-existing `#[cfg(feature = "telemetry")] pub mod telemetry;` line
-(160-161 per the explore report) currently re-exports the gap-01
-observability surface. Replace with a more targeted module:
+[`crates/lib/src/telemetry.rs`](../../../crates/lib/src/telemetry.rs)
+already exists from gap 01 and contains the
+`cognee_observability::*` re-exports (`init_telemetry`,
+`TelemetryGuard`, `EnvSettingsView`, `BoxedTelemetryLayer`,
+`SettingsView`, `TelemetryInitError`, `already_instrumented`,
+`is_tracing_enabled`, `parse_otlp_headers`) plus the
+`impl SettingsView for Settings` block that wires
+`crates/lib/src/config/Settings` to the OTEL setup.
+
+**Do not replace the file.** Edit it in place — keep every existing
+re-export and the `SettingsView` impl, then **append** the
+`send_telemetry` surface below them.
+
+The file is already gated with `#[cfg(feature = "telemetry")]` at the
+`pub mod telemetry;` declaration in
+[`crates/lib/src/lib.rs`](../../../crates/lib/src/lib.rs) (line 161).
+Inside the file, however, the body currently runs **only** when the
+feature is on; we want a parallel "feature off" body so callers can
+name `cognee_lib::telemetry::send_telemetry` and
+`cognee_lib::telemetry::TelemetryError` in both feature states.
+
+This requires two changes:
+
+1. Drop the `#[cfg(feature = "telemetry")]` from the `pub mod telemetry;`
+   line in `crates/lib/src/lib.rs` (so the module is always declared)
+   — see step 4.3.5b below.
+2. Inside `crates/lib/src/telemetry.rs`, split the body into a
+   feature-on branch (existing content) and a feature-off branch
+   (new noop re-exports).
+
+**`crates/lib/src/telemetry.rs` after the edit** (full file):
 
 ```rust
-/// Product-analytics client. Re-exports of
-/// [`cognee_telemetry`](../cognee_telemetry/) for embedders.
+//! Telemetry surface for embedders.
+//!
+//! Re-exports the public API of [`cognee_observability`] (OTEL setup,
+//! gap 01) and [`cognee_telemetry`] (`send_telemetry` product-analytics
+//! client, gap 02) so consumers reach both through the same
+//! `cognee_lib::telemetry` namespace.
+//!
+//! When the `telemetry` cargo feature is on, observability re-exports
+//! pull in `cognee-observability` and the `send_telemetry` re-exports
+//! pull in the real `cognee-telemetry` impl. When the feature is off,
+//! observability re-exports vanish and the `send_telemetry` re-exports
+//! resolve to the noop bodies inside `cognee-telemetry` (so
+//! `cognee_telemetry::send_telemetry` and
+//! `cognee_telemetry::TelemetryError` are always available — they
+//! exist regardless of feature state in the leaf crate).
+
+// --- gap 01: OTEL/observability surface (feature-gated) ---------------------
+
 #[cfg(feature = "telemetry")]
-pub mod telemetry {
-    pub use cognee_telemetry::{
-        env, ids, payload, sanitize, send_telemetry, try_send_telemetry, TelemetryError,
-        UserIdRef,
-    };
-}
+pub use cognee_observability::{
+    BoxedTelemetryLayer, SettingsView, TelemetryGuard, TelemetryInitError, already_instrumented,
+    init_telemetry, is_tracing_enabled, parse_otlp_headers,
+};
 
-/// Noop stub when the feature is off — the type signatures still
-/// resolve so callers compile in both states.
-#[cfg(not(feature = "telemetry"))]
-pub mod telemetry {
-    use serde_json::Value;
+#[cfg(feature = "telemetry")]
+use crate::config::Settings;
 
-    pub fn send_telemetry(_event_name: &str, _user_id: &str, _additional: Option<Value>) {}
-    pub fn try_send_telemetry(
-        _event_name: &str,
-        _user_id: &str,
-        _additional: Option<Value>,
-    ) -> Result<(), std::convert::Infallible> {
-        Ok(())
+#[cfg(feature = "telemetry")]
+impl SettingsView for Settings {
+    fn tracing_enabled(&self) -> bool {
+        self.cognee_tracing_enabled
+    }
+
+    fn service_name(&self) -> &str {
+        &self.otel_service_name
+    }
+
+    fn otlp_endpoint(&self) -> &str {
+        &self.otel_exporter_otlp_endpoint
+    }
+
+    fn otlp_headers(&self) -> &str {
+        &self.otel_exporter_otlp_headers
+    }
+
+    fn otlp_protocol(&self) -> &str {
+        &self.otel_exporter_otlp_protocol
+    }
+
+    fn span_processor(&self) -> &str {
+        &self.otel_span_processor
+    }
+
+    fn traces_sampler(&self) -> &str {
+        &self.otel_traces_sampler
+    }
+
+    fn traces_sampler_arg(&self) -> &str {
+        &self.otel_traces_sampler_arg
     }
 }
+
+// --- gap 02: send_telemetry product-analytics surface (always available) ----
+//
+// `cognee_telemetry::{send_telemetry, try_send_telemetry, TelemetryError,
+// UserIdRef, PropertyValue}` are exported by the leaf crate in BOTH
+// feature states (the leaf crate switches between real and noop bodies
+// internally, but the symbols are stable). Re-export them unconditionally
+// so callers compile under `--no-default-features` and can name
+// `cognee_lib::telemetry::TelemetryError`.
+
+pub use cognee_telemetry::{
+    PropertyValue, TelemetryError, UserIdRef, send_telemetry, try_send_telemetry,
+};
+
+#[cfg(feature = "telemetry")]
+pub use cognee_telemetry::{env, ids, payload, sanitize};
 ```
 
-The noop sibling exposes a narrower signature on purpose: when the
-real `cognee-telemetry` crate isn't compiled, `UserIdRef` doesn't
-exist either, so callers must pass a `&str`. This is documented in
-the rustdoc.
+**4.3.5b** — In [`crates/lib/src/lib.rs`](../../../crates/lib/src/lib.rs),
+remove the `#[cfg(feature = "telemetry")]` attribute on the
+`pub mod telemetry;` declaration (currently lines 160-161) so the
+module is always compiled. The internals of the module are themselves
+`#[cfg]`-gated above:
 
-If sub-tasks rely on the full noop surface (e.g. `ids::*` returning
-empty strings), enrich the noop module accordingly. The minimal
-form above is sufficient for the [task 02-07](07-callsite-migration.md)
-call sites.
+```rust
+// Before (lib.rs lines 160-161):
+//   #[cfg(feature = "telemetry")]
+//   pub mod telemetry;
+//
+// After:
+pub mod telemetry;
+```
+
+**Pre-condition for 4.3.5b**: `cognee-telemetry` must be a
+**non-optional** dependency of `cognee-lib` so that
+`cognee_telemetry::{send_telemetry, TelemetryError, …}` resolve in
+both feature states. Update [step 4.3.1](#431-add-the-dep) to drop
+`optional = true`:
+
+```toml
+cognee-telemetry = { path = "../telemetry" }
+```
+
+The `cognee-lib/telemetry` feature still toggles
+`cognee-telemetry/telemetry` (the leaf crate's own feature), which is
+what flips the leaf body between real and noop. See
+[step 4.3.2](#432-update-the-telemetry-feature) — the
+`"dep:cognee-telemetry"` entry is no longer needed once the dep is
+unconditional, but `"cognee-telemetry/telemetry"` stays.
+
+The leaf crate is small (no transitive deps when the feature is off —
+see [`crates/telemetry/Cargo.toml`](../../../crates/telemetry/Cargo.toml)
+where everything except `thiserror`, `tracing`, `tokio`, `uuid` is
+`optional = true`), so making it non-optional adds no compile-time
+cost to `--no-default-features` builds.
 
 #### 4.3.6 Add to the prelude (optional)
 
@@ -472,24 +622,39 @@ Additionally, eyeball:
 
 ## 6. Files modified
 
-- `crates/telemetry/src/lib.rs` — final public-surface form.
-- `crates/telemetry/src/noop.rs` — full body (replaces stub from
+- `crates/telemetry/src/lib.rs` — final public-surface form
+  (`send_telemetry` + `try_send_telemetry`, both using `PropertyValue`
+  alias so the signature compiles in both feature states).
+- `crates/telemetry/src/noop.rs` — final body (zero-arg
+  `send_telemetry_impl()` that emits one `tracing::debug!` line;
+  replaces the stub from
   [task 02-02](02-telemetry-crate-scaffold.md)).
-- `crates/lib/Cargo.toml` — extend `telemetry` feature, add
-  `cognee-telemetry` dep, add `telemetry` to `default`, confirm
+- `crates/lib/Cargo.toml` — add non-optional `cognee-telemetry` dep,
+  extend the `telemetry` feature to activate
+  `cognee-telemetry/telemetry`, add `telemetry` to `default`, confirm
   `android-default` excludes it.
-- `crates/lib/src/lib.rs` — replace existing `telemetry` module with
-  the re-exports above.
+- `crates/lib/src/lib.rs` — drop the `#[cfg(feature = "telemetry")]`
+  attribute on `pub mod telemetry;` so the module is always declared
+  (the file's internals stay feature-gated).
+- `crates/lib/src/telemetry.rs` — **edit in place**: keep all existing
+  `cognee_observability::*` re-exports and the `impl SettingsView for
+  Settings` block, then append the unconditional
+  `cognee_telemetry::{PropertyValue, TelemetryError, UserIdRef,
+  send_telemetry, try_send_telemetry}` re-exports plus the
+  feature-gated `cognee_telemetry::{env, ids, payload, sanitize}`
+  re-exports.
 - `crates/cli/Cargo.toml` — add `telemetry` to `default`.
-- `crates/http-server/Cargo.toml` — add `telemetry` to `default`.
+- `crates/http-server/Cargo.toml` — add `telemetry` to `default`
+  (already present per gap 01? — verify with `git blame`; only edit
+  if missing).
 
 ## 7. Risks
 
 | Risk | Likelihood | Mitigation |
 |---|---|---|
 | Adding `telemetry` to `cognee-lib/default` breaks downstream consumers that built with default features but didn't have `cognee-telemetry`'s deps cached | One-time CI cache miss; mitigated by [task 02-12](12-ci-updates.md) | Document the change in the changelog. CI lanes already exercise both feature states (gap 01 added the off-default lane). |
-| The two `telemetry` modules in `cognee-lib` (gap-01 observability re-exports vs gap-02 send_telemetry re-exports) collide on the same name | Real risk — both gap-01 and this task want `cognee_lib::telemetry::*` | Resolve by consolidating into one module: `pub use cognee_observability::*; pub use cognee_telemetry::*;` Document any name collisions discovered at implementation time and rename on the gap-02 side if needed. |
-| Noop fallback signature drift from real signature breaks call sites under `--no-default-features` | Possible — the noop module exposes a narrower API | The noop signature accepts `&str` for `user_id`, which is sufficient for every cataloged call site in [task 02-07](07-callsite-migration.md). Document the constraint in the rustdoc. |
+| The two `telemetry` modules in `cognee-lib` (gap-01 observability re-exports vs gap-02 send_telemetry re-exports) collide on the same name | **Resolved** — single module `crates/lib/src/telemetry.rs` consolidates both via [§4.3.5](#435-extend-crateslibsrctelemetryrs-with-the-send_telemetry-re-exports). No name collisions in the current symbol sets (`init_telemetry`/`TelemetryGuard`/`SettingsView` from observability vs `send_telemetry`/`TelemetryError`/`UserIdRef` from `cognee-telemetry`). Re-check at implementation time. | Single module ownership avoids the divergence. |
+| Noop fallback signature drift from real signature breaks call sites under `--no-default-features` | **Resolved** — both feature branches expose the same `send_telemetry`, `try_send_telemetry`, `TelemetryError`, `UserIdRef`, `PropertyValue` symbols from the leaf crate (the leaf swaps real/noop bodies internally). Callers see one stable surface. | Tested by the `cargo check --workspace --no-default-features` lane in [§4.6](#46-verify). |
 | `cognee-http-server` already has `telemetry` in `default` from gap 01 — adding it again is a no-op edit | Low risk; explore report confirms gap-01 left it off-default | Confirm with `git blame` before editing. |
 | `try_send_telemetry` returning `Ok(())` without checking dispatch lies to callers | Documented contract; tests use `JoinHandle` indirectly via mockito assertions | The `Result` return is for future use (e.g. when the runtime fallback fails). Keeping it now means we don't break callers later when we tighten the contract. |
 

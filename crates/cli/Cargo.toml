@@ -24,6 +24,9 @@ default = [
     "unstructured",
     "visualization",
     "cloud",
+    # decision 1: telemetry is ON by default in cognee-cli. Disable with
+    # --no-default-features for compile-time opt-out.
+    "telemetry",
 ]
 cloud         = ["cognee-lib/cloud"]
 onnx          = ["cognee-lib/onnx"]

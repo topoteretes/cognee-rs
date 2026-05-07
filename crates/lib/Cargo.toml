@@ -19,6 +19,9 @@ default = [
     "unstructured",
     "visualization",
     "cloud",
+    # decision 1: telemetry is ON by default in cognee-lib. Disable with
+    # --no-default-features for compile-time opt-out.
+    "telemetry",
 ]
 cloud          = ["dep:cognee-cloud"]
 server         = ["dep:cognee-http-server"]
@@ -46,6 +49,7 @@ telemetry = [
     "dep:cognee-observability",
     "cognee-observability/telemetry",
     "cognee-core/telemetry",
+    "cognee-telemetry/telemetry",
 ]
 
 # Document format loaders (forwarded from cognee-ingestion)
@@ -102,6 +106,7 @@ cognee-ontology = { path = "../ontology" }
 cognee-search = { path = "../search" }
 cognee-session = { path = "../session" }
 cognee-storage = { path = "../storage" }
+cognee-telemetry = { path = "../telemetry" }
 cognee-vector = { path = "../vector" }
 cognee-visualization = { path = "../visualization", optional = true }
 async-trait.workspace = true
