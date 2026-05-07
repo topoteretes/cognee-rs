@@ -1,6 +1,6 @@
 # Task 02-11 — User-facing documentation
 
-**Status**: ⬜ unimplemented
+**Status**: implemented in commit 126ae23.
 **Owner**: _unassigned_
 **Depends on**:
 - [Task 02-05 — Client / dispatch / opt-out](05-client-dispatch-and-optout.md)
