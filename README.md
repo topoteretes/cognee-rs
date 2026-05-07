@@ -119,3 +119,9 @@ OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp.your-collector:4317 \
 See [`docs/observability/opentelemetry.md`](docs/observability/opentelemetry.md)
 for the full guide (env vars, recipes for Grafana Tempo, Honeycomb, Dash0,
 and in-cluster Collectors).
+
+- **Product analytics** — opt-out HTTP events to
+  `https://test.prometh.ai`. Mirrors Python's `send_telemetry`. See
+  [`docs/observability/send_telemetry.md`](docs/observability/send_telemetry.md)
+  for the full reference (env vars, payload schema, salt rotation,
+  privacy notes).
