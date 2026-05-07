@@ -8,6 +8,29 @@ use cognee_llm::Llm;
 use cognee_session::{SessionContext, SessionManager};
 use std::sync::Arc;
 
+/// Fire-and-forget product analytics event for the start of a search.
+///
+/// Mirrors Python `send_telemetry("cognee.search EXECUTION STARTED", ...)`
+/// from `cognee/api/v1/search/search.py:74`. Called once at the top of
+/// [`SearchOrchestrator::search`] so the event fires unconditionally
+/// (including on early-return error paths) — matching Python's
+/// behaviour where `EXECUTION STARTED` is emitted before any work.
+#[cfg(feature = "telemetry")]
+fn emit_search_started(request: &SearchRequest) {
+    cognee_telemetry::send_telemetry(
+        "cognee.search EXECUTION STARTED",
+        request.user_id,
+        Some(serde_json::json!({
+            "cognee_version": cognee_telemetry::cognee_version(),
+            "tenant_id": cognee_telemetry::tenant_id_for_telemetry(None),
+        })),
+    );
+}
+
+#[cfg(not(feature = "telemetry"))]
+#[inline]
+fn emit_search_started(_request: &SearchRequest) {}
+
 /// Fire-and-forget product analytics event for a successful search.
 ///
 /// Mirrors Python `send_telemetry("cognee.search EXECUTION COMPLETED", ...)`
@@ -20,8 +43,8 @@ fn emit_search_completed(request: &SearchRequest) {
         "cognee.search EXECUTION COMPLETED",
         request.user_id,
         Some(serde_json::json!({
-            "cognee_version": env!("CARGO_PKG_VERSION"),
-            "tenant_id": serde_json::Value::Null,
+            "cognee_version": cognee_telemetry::cognee_version(),
+            "tenant_id": cognee_telemetry::tenant_id_for_telemetry(None),
         })),
     );
 }
@@ -137,6 +160,8 @@ impl SearchOrchestrator {
         &self,
         request: &SearchRequest,
     ) -> Result<SearchResponse, crate::types::SearchError> {
+        emit_search_started(request);
+
         let retriever: crate::retrievers::SearchRetrieverRef =
             if let Some(ref custom_type) = request.custom_search_type {
                 self.registry.get_by_name(custom_type).ok_or_else(|| {
