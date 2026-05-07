@@ -550,6 +550,52 @@ fn emit_pipeline_event(
 ) {
 }
 
+/// Emit a `${task_type} Task <stage>` analytics event via
+/// `cognee_telemetry::send_telemetry`. `stage` is one of `"Started"`,
+/// `"Completed"`, or `"Errored"`. The `${task_type}` portion of the
+/// event name is rendered from [`Task::python_task_type`] and resolves
+/// to one of `Function`, `Coroutine`, `Generator`, or `Async Generator`.
+///
+/// Payload keys (Python parity, see sub-doc 03/05 §1):
+/// - `task_name` — falls back to `"unknown"` when the optional
+///   `task_name` parameter is `None`, matching the OTEL span fallback.
+/// - `cognee_version` — from `cognee_telemetry::cognee_version()`.
+/// - `tenant_id` — from `cognee_telemetry::tenant_id_for_telemetry`
+///   (literal `"Single User Tenant"` when `None`).
+///
+/// Per locked decision 7, this fires **once per task**, not per retry
+/// attempt — call sites must live outside the `for attempt` loop.
+/// Per Python parity (sub-doc §2.3), the `Errored` payload deliberately
+/// omits the error string.
+#[cfg(feature = "telemetry")]
+fn emit_task_event(
+    stage: &'static str,
+    task: &Task,
+    task_name: Option<&str>,
+    user_id: Option<Uuid>,
+    tenant_id: Option<Uuid>,
+) {
+    let event_name = format!("{} Task {}", task.python_task_type(), stage);
+    let props = serde_json::json!({
+        "task_name": task_name.unwrap_or("unknown"),
+        "cognee_version": cognee_telemetry::cognee_version(),
+        "tenant_id": cognee_telemetry::tenant_id_for_telemetry(tenant_id),
+    });
+    cognee_telemetry::send_telemetry(&event_name, user_id, Some(props));
+}
+
+/// No-op stand-in when the `telemetry` feature is disabled.
+#[cfg(not(feature = "telemetry"))]
+#[inline]
+fn emit_task_event(
+    _stage: &'static str,
+    _task: &Task,
+    _task_name: Option<&str>,
+    _user_id: Option<Uuid>,
+    _tenant_id: Option<Uuid>,
+) {
+}
+
 /// Execute `pipeline` against a set of `inputs`.
 ///
 /// Each input item is run through the full task chain.  When
@@ -1104,6 +1150,15 @@ async fn call_with_retry(
     let scoped_ctx = env.ctx.with_progress(subtoken);
     let task_ctx = scoped_ctx.with_current_data(input.clone());
 
+    // Resolve identity once (outside the retry loop) — per locked
+    // decision 7, task lifecycle events fire once per task, not per
+    // attempt.
+    let user_id = env.ctx.pipeline_ctx.as_ref().and_then(|p| p.user_id);
+    let tenant_id = env.ctx.pipeline_ctx.as_ref().and_then(|p| p.tenant_id);
+
+    // Telemetry first, then watcher (matches `execute()` ordering).
+    emit_task_event("Started", task, task_name, user_id, tenant_id);
+
     for attempt in 1..=max_attempts {
         let call = task.call(input.clone(), Arc::clone(&task_ctx));
         match resolve_call(call).await {
@@ -1149,6 +1204,7 @@ async fn call_with_retry(
                         .await;
                 }
 
+                emit_task_event("Completed", task, task_name, user_id, tenant_id);
                 return Ok(resolved);
             }
             Err(e) => {
@@ -1186,6 +1242,9 @@ async fn call_with_retry(
 
     #[cfg(feature = "telemetry")]
     span.record("task.error", error_str.as_str());
+
+    // Telemetry first, then watcher (matches `execute()` ordering).
+    emit_task_event("Errored", task, task_name, user_id, tenant_id);
 
     env.watcher
         .on_task(
