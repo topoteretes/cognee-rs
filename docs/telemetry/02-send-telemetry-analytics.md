@@ -596,7 +596,7 @@ Each item below has a dedicated implementation sub-document under [`02/`](02/) w
 | 9 | Integration tests with `mockito` (workspace already uses it; do **not** add `wiremock`): full payload schema parity vs Python (jsonschema), opt-out via `TELEMETRY_DISABLED`, fire-and-forget timeout (proxy stalls, dispatch returns < 100 ms). | [02/09-integration-tests.md](02/09-integration-tests.md) | 5, 7 | ✅ ba9cad7 |
 | 10 | Cross-SDK parity test: extend `e2e-cross-sdk/` with a shared mock that records both Python and Rust telemetry payloads for the same `LLM_API_KEY` and home directory; assert identical `api_key_tracking_id` and `persistent_id`. | [02/10-cross-sdk-parity.md](02/10-cross-sdk-parity.md) | 7, 9 | ✅ 9762c2b |
 | 11 | User-facing docs: `docs/observability/send_telemetry.md` (env vars, opt-out recipes, privacy note, salt rotation, payload schema, troubleshooting). Plus rustdoc on the public API and a README pointer. | [02/11-user-docs.md](02/11-user-docs.md) | 5, 6, 7 | ✅ 126ae23 |
-| 12 | CI updates: ensure both `--features telemetry` and `--no-default-features` lanes cover the new crate; add a network-isolation lane that asserts no outbound HTTP fires when `TELEMETRY_DISABLED=1`. | [02/12-ci-updates.md](02/12-ci-updates.md) | 7, 8, 9 | ⬜ |
+| 12 | CI updates: ensure both `--features telemetry` and `--no-default-features` lanes cover the new crate; add a network-isolation lane that asserts no outbound HTTP fires when `TELEMETRY_DISABLED=1`. | [02/12-ci-updates.md](02/12-ci-updates.md) | 7, 8, 9 | ✅ d66f490 |
 
 ### Suggested execution order
 
@@ -726,3 +726,28 @@ cross-SDK test runs inside the existing Docker Compose harness in
   (Feature strategy section; "no `unwrap()` in non-test code")
 - PBKDF2 standard: NIST SP 800-132
 - Crates: [`pbkdf2`](https://crates.io/crates/pbkdf2), [`hmac`](https://crates.io/crates/hmac), [`sha2`](https://crates.io/crates/sha2), [`reqwest`](https://crates.io/crates/reqwest), [`dirs`](https://crates.io/crates/dirs)
+
+## Closure summary
+
+This gap is closed. The 12 commits below shipped the work, in the order
+they landed on `main`:
+
+| # | Commit | Subject |
+|---|---|---|
+| 02-01 | `66fc86a` | add `cognee-telemetry` workspace dependencies (`pbkdf2`, `hmac`, `hex`, `once_cell`) |
+| 02-02 | `df49a32` | scaffold `cognee-telemetry` crate |
+| 02-03 | `7795ad2` | implement identity layers (`anonymous_id`, `persistent_id`, `api_key_tracking_id`) with PBKDF2 byte-parity |
+| 02-04 | `0c053b5` | implement `TelemetryPayload` schema and recursive URL `sanitize_nested_properties` helper |
+| 02-05 | `c1cf154` | implement HTTP client dispatch, opt-out checks, and tokio runtime fallback |
+| 02-06 | `7cea4c6` | wire `telemetry` feature through `cognee-lib`/`cognee-cli` and add noop fallback |
+| 02-07 | `8b096bb` | migrate SDK + HTTP router callsites to real `send_telemetry` |
+| 02-08 | `8d3e799` | add unit tests covering ID derivation, sanitize, and opt-out paths |
+| 02-09 | `ba9cad7` | add mockito-driven integration tests for payload schema and fire-and-forget timeout |
+| 02-10 | `9762c2b` | add cross-SDK telemetry parity harness under `e2e-cross-sdk/` |
+| 02-11 | `126ae23` | add user-facing `send_telemetry` documentation |
+| 02-12 | `d66f490` | extend CI lanes to cover `cognee-telemetry` (default, telemetry-feature, no-default-features, network isolation) |
+
+Pipeline + task lifecycle events (Python's `Pipeline Run Started`/
+`Completed`/`Errored` and `${task_type} Task Started`/`Completed`/
+`Errored`) remain tracked separately under
+[gap 03](./03-pipeline-task-api-events.md) per decision 9.

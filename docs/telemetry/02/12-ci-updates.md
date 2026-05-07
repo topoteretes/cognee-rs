@@ -1,6 +1,6 @@
 # Task 02-12 — CI updates for `send_telemetry`
 
-**Status**: ⬜ unimplemented
+**Status**: implemented in commit d66f490 (note: ci.yml extends the gap-01 telemetry feature step rather than adding a new lane; cross-SDK Docker harness wires into the existing http-parity.yml workflow rather than a new file).
 **Owner**: _unassigned_
 **Depends on**:
 - [Task 02-07 — Callsite migration](07-callsite-migration.md)
