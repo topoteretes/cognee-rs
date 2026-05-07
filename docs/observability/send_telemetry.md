@@ -183,6 +183,65 @@ Notes:
   `api_key_hash`, `sdk_runtime`, `cognee_version`) MUST NOT be passed
   in `additional_properties`.
 
+## Pipeline + task lifecycle events
+
+Fired automatically by every pipeline run that goes through
+`cognee_core::pipeline::execute()`. Mirrors Python's emission from
+`run_tasks_with_telemetry.py` and `run_tasks_base.py`. Pipeline-run
+events are emitted *next to* the `PipelineWatcher` callbacks, not
+through them — the watcher is a structural extension point and is
+not part of the analytics surface.
+
+| Event | When fired | Identity | Properties |
+|---|---|---|---|
+| `Pipeline Run Started` | After `execute()` builds `run_info`, before tasks run. | `user_id` from `PipelineContext.user_id` (else `"sdk"`). | `pipeline_name`, `cognee_version`, `tenant_id` (`"Single User Tenant"` when unset), plus the curated config snapshot — see below. |
+| `Pipeline Run Completed` | On the `Ok(...)` arm of `execute()`. | same | same |
+| `Pipeline Run Errored` | On both `Err` arms (`Cancelled` and generic `Err`). No error string in the payload. | same | same |
+| `${task_type} Task Started` | Once per task, before the first attempt of `call_with_retry`. | same as enclosing run | `task_name` (else `"unknown"`), `cognee_version`, `tenant_id` |
+| `${task_type} Task Completed` | Once per task, on the first successful attempt. | same | same |
+| `${task_type} Task Errored` | Once per task, after retries are exhausted. No error string. | same | same |
+
+`${task_type}` is one of `Function`, `Coroutine`, `Generator`, or
+`Async Generator` — see `Task::python_task_type()` in
+[`crates/core/src/task.rs`](../../crates/core/src/task.rs) for the
+mapping. Async closures resolve to `Coroutine`, sync closures to
+`Function`; `Generator` and `Async Generator` are reserved for the
+streaming task variants and are emitted byte-equal to Python.
+
+### Curated `Pipeline Run *` config snapshot
+
+The settings dump merged into `Pipeline Run Started/Completed/Errored`
+events is a hand-curated allowlist — never the full `Config` struct.
+Currently allowed:
+
+- `sdk_runtime` (`"rust"` literal)
+- `vector_db_provider`, `graph_db_provider`, `relational_db_provider`
+- `llm_provider`, `llm_model`
+- `embedding_provider`, `embedding_model`, `embedding_dimensions`
+- `chunk_strategy`
+
+Adding a field to this allowlist requires a code change in
+[`crates/lib/src/config.rs`](../../crates/lib/src/config.rs)
+(`Settings::telemetry_snapshot()`) and an update to the snapshot test
+that locks the wire shape. URLs, credentials, and file paths
+(including `embedding_model_path`, `embedding_endpoint`, and any API
+key) are intentionally omitted from this snapshot. The wider redaction
+contract is the same as for caller-supplied `additional_properties`
+(see the [Wire format reference](#wire-format-reference) above and
+the privacy section below).
+
+## Search lifecycle events
+
+| Event | When fired | Identity | Properties |
+|---|---|---|---|
+| `cognee.search EXECUTION STARTED` | First statement of `SearchOrchestrator::search`, before any work. | `request.user_id` | `cognee_version`, `tenant_id` |
+| `cognee.search EXECUTION COMPLETED` | Each `Ok(...)` return path of `SearchOrchestrator::search`. Not fired on errors. | same | same |
+
+These are the internal-pipeline pair; the user-facing SDK entry point
+emits `cognee.recall` once per call (see the table in
+[`docs/telemetry/03-pipeline-task-api-events.md`](../telemetry/03-pipeline-task-api-events.md)
+for the full SDK-API event catalog).
+
 ## Privacy and compliance
 
 `api_key_tracking_id` is a salted PBKDF2-HMAC-SHA256 hash of
