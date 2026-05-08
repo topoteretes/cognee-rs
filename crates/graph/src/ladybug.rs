@@ -3,11 +3,14 @@
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use cognee_utils::redact::redact;
+use cognee_utils::tracing_keys::{COGNEE_DB_QUERY, COGNEE_DB_ROW_COUNT};
 use lbug::{Connection, Database, SystemConfig, Value as LbugValue};
 use serde_json::{Value, json};
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
+use tracing::{Span, instrument};
 
 use crate::{EdgeData, GraphDBError, GraphDBResult, GraphDBTrait, GraphNode, NodeData};
 
@@ -153,7 +156,35 @@ impl LadybugAdapter {
     ///
     /// Helper method that executes a Cypher query and converts the QueryResult
     /// to a Vec of Vec of JSON values for easier processing.
+    #[instrument(
+        name = "cognee.db.graph.query",
+        level = "info",
+        skip_all,
+        fields(
+            cognee.db.system = "ladybug",
+            cognee.db.query = tracing::field::Empty,
+            cognee.db.row_count = tracing::field::Empty,
+        ),
+        err,
+    )]
     fn execute_query(&self, query: &str) -> GraphDBResult<Vec<Vec<serde_json::Value>>> {
+        // Truncate-then-redact (locked decision 9). The 500-char
+        // truncation must come BEFORE redact() so a redacted form
+        // longer than 500 chars cannot be re-truncated and split the
+        // literal `***REDACTED***` marker. Walk to the last UTF-8
+        // char boundary at-or-before byte 500 so non-ASCII queries
+        // do not panic on slicing.
+        let truncated = if query.len() > 500 {
+            let mut end = 500;
+            while !query.is_char_boundary(end) {
+                end -= 1;
+            }
+            &query[..end]
+        } else {
+            query
+        };
+        Span::current().record(COGNEE_DB_QUERY, redact(truncated).as_ref());
+
         let conn = Connection::new(&self.db).map_err(|e| {
             GraphDBError::ConnectionError(format!("Failed to create connection: {}", e))
         })?;
@@ -166,6 +197,7 @@ impl LadybugAdapter {
             .map(|row| row.into_iter().map(Self::lbug_value_to_json).collect())
             .collect();
 
+        Span::current().record(COGNEE_DB_ROW_COUNT, rows.len() as i64);
         Ok(rows)
     }
 

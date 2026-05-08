@@ -32,6 +32,7 @@ sea-orm-migration = { version = "1.1", features = [
 
 # Internal dependencies
 cognee-models = { path = "../models" }
+cognee-utils = { path = "../utils" }
 
 [features]
 ladybug = ["dep:lbug"]
