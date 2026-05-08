@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use cognee_lib::add::AddPipeline;
 use cognee_lib::cognify::{ChunkStrategy, CognifyConfig, cognify};
-use cognee_lib::database::{IngestDb, ops};
+use cognee_lib::database::{IngestDb, UserDb, ops};
 use cognee_lib::models::DataInput;
 use cognee_lib::ontology::{NoOpOntologyResolver, OntologyResolver, RdfLibOntologyResolver};
 use cognee_lib::{ComponentManager, PipelineContext};
@@ -143,10 +143,20 @@ pub fn run(args: AddAndCognifyArgs, cm: Arc<ComponentManager>) -> Result<(), Cli
             args.dataset_name
         );
 
+        // Best-effort lookup of `User.email` for provenance stamping; falls
+        // back to `user_id.to_string()` inside `cognify()`.
+        let user_email = database
+            .get_user(owner_id)
+            .await
+            .ok()
+            .flatten()
+            .map(|u| u.email);
+
         let result = cognify(
             added_data,
             dataset.id,
             Some(owner_id),
+            user_email,
             None,
             llm,
             storage,

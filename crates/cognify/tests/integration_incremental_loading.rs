@@ -134,6 +134,7 @@ async fn run_pipeline_with_incremental_flag(
         dataset_id,
         None,
         None,
+        None,
         llm,
         storage,
         graph_db,

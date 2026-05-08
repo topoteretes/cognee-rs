@@ -86,6 +86,7 @@ async fn text_summary_payload_contains_text_field() {
         dataset_id,
         None,
         None,
+        None,
         llm,
         storage,
         graph_db,

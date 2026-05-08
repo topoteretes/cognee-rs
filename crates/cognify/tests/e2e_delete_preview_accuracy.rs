@@ -139,6 +139,7 @@ async fn test_delete_preview_counts_match_execution() {
         dataset.id,
         Some(owner_id),
         None,
+        None,
         llm.clone() as Arc<dyn Llm>,
         storage.clone() as Arc<dyn StorageTrait>,
         graph_db.clone() as Arc<dyn GraphDBTrait>,

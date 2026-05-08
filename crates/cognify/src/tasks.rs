@@ -1730,6 +1730,7 @@ pub async fn cognify(
     data_items: Vec<Data>,
     dataset_id: Uuid,
     user_id: Option<Uuid>,
+    user_email: Option<String>,
     tenant_id: Option<Uuid>,
     llm: Arc<dyn Llm>,
     storage: Arc<dyn StorageTrait>,
@@ -1765,8 +1766,12 @@ pub async fn cognify(
         config.chunks_per_batch, config.max_chunk_size
     );
 
-    // Derive user string for provenance stamping
-    let user_str = user_id.as_ref().map(|id| id.to_string());
+    // Derive user string for provenance stamping. Mirrors `user_label()` on
+    // `PipelineContext`: prefer the looked-up email, fall back to the UUID
+    // when no `User` row was fetched (unauthenticated CLI runs, etc.).
+    let user_str = user_email
+        .clone()
+        .or_else(|| user_id.as_ref().map(|id| id.to_string()));
     let user_str_ref = user_str.as_deref();
 
     let input = CognifyInput {

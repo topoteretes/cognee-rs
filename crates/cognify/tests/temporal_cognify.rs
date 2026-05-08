@@ -204,6 +204,7 @@ async fn temporal_cognify_creates_event_and_timestamp_nodes() {
         Uuid::new_v4(),
         None,
         None,
+        None,
         llm,
         storage,
         Arc::clone(&graph_db),
@@ -337,6 +338,7 @@ async fn temporal_cognify_populates_event_name_vector_collection() {
     match cognify(
         vec![data_item],
         Uuid::new_v4(),
+        None,
         None,
         None,
         llm,

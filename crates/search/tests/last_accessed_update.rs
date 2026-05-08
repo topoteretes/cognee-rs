@@ -169,6 +169,7 @@ async fn test_search_updates_last_accessed_timestamp() {
         dataset.id,
         None,
         None,
+        None,
         Arc::clone(&llm),
         Arc::clone(&storage),
         Arc::clone(&graph_db),

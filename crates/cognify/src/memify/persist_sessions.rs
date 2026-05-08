@@ -215,6 +215,7 @@ pub async fn persist_sessions_in_knowledge_graph(
             add_result,
             dataset_id,
             Some(owner_id),
+            None,
             tenant_id,
             Arc::clone(&llm),
             Arc::clone(&storage),

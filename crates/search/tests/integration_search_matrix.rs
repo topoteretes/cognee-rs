@@ -194,6 +194,7 @@ async fn test_search_type_matrix() {
         dataset.id,
         None,
         None,
+        None,
         Arc::clone(&llm),
         Arc::clone(&storage),
         Arc::clone(&graph_db),

@@ -204,6 +204,7 @@ async fn test_search_returns_empty_for_deleted_doc_and_non_empty_for_remaining()
         dataset.id,
         Some(owner_id),
         None,
+        None,
         llm.clone() as Arc<dyn Llm>,
         storage.clone(),
         graph_db.clone(),

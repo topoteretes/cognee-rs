@@ -192,6 +192,7 @@ async fn test_default_backend_add_cognify_search_delete() {
         dataset.id,
         None,
         None,
+        None,
         llm.clone() as Arc<dyn Llm>,
         storage.clone() as Arc<dyn StorageTrait>,
         graph_db.clone() as Arc<dyn GraphDBTrait>,

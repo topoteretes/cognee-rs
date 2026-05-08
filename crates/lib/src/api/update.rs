@@ -7,7 +7,7 @@
 use std::sync::Arc;
 
 use cognee_cognify::{CognifyConfig, CognifyResult, cognify};
-use cognee_database::DatabaseConnection;
+use cognee_database::{DatabaseConnection, UserDb};
 use cognee_delete::{DeleteMode, DeleteRequest, DeleteResult, DeleteScope, DeleteService};
 use cognee_embedding::EmbeddingEngine;
 use cognee_graph::GraphDBTrait;
@@ -88,10 +88,23 @@ pub async fn update(
         // Generate a dataset ID from the dataset name (deterministic).
         let dataset_id = cognee_ingestion::generate_dataset_id(dataset_name, owner_id, tenant_id);
 
+        // Best-effort lookup of `User.email` for provenance stamping; falls
+        // back to `user_id.to_string()` inside `cognify()` when missing.
+        let user_email = match db.as_ref() {
+            Some(database) => database
+                .get_user(owner_id)
+                .await
+                .ok()
+                .flatten()
+                .map(|u| u.email),
+            None => None,
+        };
+
         let result = cognify(
             data_items.clone(),
             dataset_id,
             Some(owner_id),
+            user_email,
             tenant_id,
             llm,
             storage,

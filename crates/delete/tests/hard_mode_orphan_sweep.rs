@@ -201,6 +201,7 @@ async fn test_hard_mode_sweeps_orphan_entities() {
         dataset.id,
         None,
         None,
+        None,
         llm.clone() as Arc<dyn Llm>,
         storage.clone() as Arc<dyn StorageTrait>,
         graph_db.clone() as Arc<dyn GraphDBTrait>,
@@ -375,6 +376,7 @@ async fn test_soft_mode_preserves_orphan_entities() {
     if let Err(e) = cognify(
         all_data_items,
         dataset.id,
+        None,
         None,
         None,
         llm.clone() as Arc<dyn Llm>,

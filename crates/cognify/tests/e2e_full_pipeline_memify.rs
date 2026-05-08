@@ -177,6 +177,7 @@ async fn test_full_pipeline_add_cognify_memify_search_delete() {
         dataset.id,
         Some(owner_id),
         None,
+        None,
         llm.clone() as Arc<dyn Llm>,
         storage.clone() as Arc<dyn StorageTrait>,
         graph_db.clone() as Arc<dyn GraphDBTrait>,
