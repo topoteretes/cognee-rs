@@ -12,8 +12,12 @@ use sea_orm::{ConnectionTrait, Database, DatabaseBackend, DatabaseConnection, St
 use sea_orm_migration::MigratorTrait;
 use std::collections::HashMap;
 use std::fmt;
-use tracing::debug;
+use tracing::{Span, debug, instrument};
 use uuid::Uuid;
+
+use cognee_utils::tracing_keys::{
+    COGNEE_DB_ROW_COUNT, COGNEE_VECTOR_COLLECTION, COGNEE_VECTOR_RESULT_COUNT,
+};
 
 use crate::error::{VectorDBError, VectorDBResult};
 use crate::models::{SearchResult, VectorPoint};
@@ -228,6 +232,17 @@ impl VectorDB for PgVectorAdapter {
         }
     }
 
+    #[instrument(
+        name = "cognee.db.vector.upsert",
+        level = "info",
+        skip_all,
+        fields(
+            cognee.db.system = "pgvector",
+            cognee.vector.collection = tracing::field::Empty,
+            cognee.db.row_count = tracing::field::Empty,
+        ),
+        err,
+    )]
     async fn index_points(
         &self,
         data_type: &str,
@@ -239,6 +254,7 @@ impl VectorDB for PgVectorAdapter {
         }
 
         let coll = Self::collection_name(data_type, field_name)?;
+        Span::current().record(COGNEE_VECTOR_COLLECTION, coll.as_str());
 
         // Dimension check.
         let expected_dim = points[0].vector.len();
@@ -294,9 +310,21 @@ impl VectorDB for PgVectorAdapter {
                 .map_err(|e| VectorDBError::StorageError(e.to_string()))?;
         }
 
+        Span::current().record(COGNEE_DB_ROW_COUNT, points.len() as i64);
         Ok(())
     }
 
+    #[instrument(
+        name = "cognee.db.vector.search",
+        level = "info",
+        skip_all,
+        fields(
+            cognee.db.system = "pgvector",
+            cognee.vector.collection = tracing::field::Empty,
+            cognee.vector.result_count = tracing::field::Empty,
+        ),
+        err,
+    )]
     async fn search_similar(
         &self,
         data_type: &str,
@@ -305,6 +333,7 @@ impl VectorDB for PgVectorAdapter {
         top_k: usize,
     ) -> VectorDBResult<Vec<SearchResult>> {
         let coll = Self::collection_name(data_type, field_name)?;
+        Span::current().record(COGNEE_VECTOR_COLLECTION, coll.as_str());
 
         let vec_str = Self::format_vector(query_vector);
 
@@ -353,11 +382,23 @@ impl VectorDB for PgVectorAdapter {
             });
         }
 
+        Span::current().record(COGNEE_VECTOR_RESULT_COUNT, results.len() as i64);
         Ok(results)
     }
 
+    #[instrument(
+        name = "cognee.db.vector.delete_collection",
+        level = "info",
+        skip_all,
+        fields(
+            cognee.db.system = "pgvector",
+            cognee.vector.collection = tracing::field::Empty,
+        ),
+        err,
+    )]
     async fn delete_collection(&self, data_type: &str, field_name: &str) -> VectorDBResult<()> {
         let coll = Self::collection_name(data_type, field_name)?;
+        Span::current().record(COGNEE_VECTOR_COLLECTION, coll.as_str());
 
         let drop = Table::drop()
             .table(Alias::new(&coll))
@@ -382,6 +423,17 @@ impl VectorDB for PgVectorAdapter {
         Ok(())
     }
 
+    #[instrument(
+        name = "cognee.db.vector.delete",
+        level = "info",
+        skip_all,
+        fields(
+            cognee.db.system = "pgvector",
+            cognee.vector.collection = tracing::field::Empty,
+            cognee.db.row_count = tracing::field::Empty,
+        ),
+        err,
+    )]
     async fn delete_points(
         &self,
         data_type: &str,
@@ -393,6 +445,7 @@ impl VectorDB for PgVectorAdapter {
         }
 
         let coll = Self::collection_name(data_type, field_name)?;
+        Span::current().record(COGNEE_VECTOR_COLLECTION, coll.as_str());
 
         let query = Query::delete()
             .from_table(Alias::new(&coll))
@@ -407,6 +460,7 @@ impl VectorDB for PgVectorAdapter {
             .await
             .map_err(|e| VectorDBError::StorageError(e.to_string()))?;
 
+        Span::current().record(COGNEE_DB_ROW_COUNT, point_ids.len() as i64);
         Ok(())
     }
 
