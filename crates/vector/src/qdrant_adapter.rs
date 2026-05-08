@@ -15,8 +15,12 @@ use shard::query::{ScoringQuery, ShardQueryRequest};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
-use tracing::warn;
+use tracing::{Span, instrument, warn};
 use uuid::Uuid;
+
+use cognee_utils::tracing_keys::{
+    COGNEE_DB_ROW_COUNT, COGNEE_VECTOR_COLLECTION, COGNEE_VECTOR_RESULT_COUNT,
+};
 
 use crate::error::{VectorDBError, VectorDBResult};
 use crate::models::{SearchResult, VectorPoint};
@@ -247,6 +251,17 @@ impl VectorDB for QdrantAdapter {
         Ok(shard_path.exists() && shard_path.is_dir())
     }
 
+    #[instrument(
+        name = "cognee.db.vector.upsert",
+        level = "info",
+        skip_all,
+        fields(
+            cognee.db.system = "qdrant",
+            cognee.vector.collection = tracing::field::Empty,
+            cognee.db.row_count = tracing::field::Empty,
+        ),
+        err,
+    )]
     async fn index_points(
         &self,
         data_type: &str,
@@ -258,6 +273,7 @@ impl VectorDB for QdrantAdapter {
         }
 
         let collection = Self::collection_name(data_type, field_name);
+        Span::current().record(COGNEE_VECTOR_COLLECTION, collection.as_str());
 
         let expected_dim = points[0].vector.len();
         for point in points {
@@ -277,9 +293,21 @@ impl VectorDB for QdrantAdapter {
             .update(PointOperation(UpsertPoints(PointsBatch(batch))))
             .map_err(|e| VectorDBError::StorageError(e.to_string()))?;
 
+        Span::current().record(COGNEE_DB_ROW_COUNT, points.len() as i64);
         Ok(())
     }
 
+    #[instrument(
+        name = "cognee.db.vector.search",
+        level = "info",
+        skip_all,
+        fields(
+            cognee.db.system = "qdrant",
+            cognee.vector.collection = tracing::field::Empty,
+            cognee.vector.result_count = tracing::field::Empty,
+        ),
+        err,
+    )]
     async fn search_similar(
         &self,
         data_type: &str,
@@ -288,6 +316,7 @@ impl VectorDB for QdrantAdapter {
         top_k: usize,
     ) -> VectorDBResult<Vec<SearchResult>> {
         let collection = Self::collection_name(data_type, field_name);
+        Span::current().record(COGNEE_VECTOR_COLLECTION, collection.as_str());
 
         let shard = self.get_or_create_shard(&collection, self.dimension)?;
 
@@ -309,11 +338,25 @@ impl VectorDB for QdrantAdapter {
             })
             .map_err(|e| VectorDBError::StorageError(e.to_string()))?;
 
-        Ok(results.iter().map(Self::from_qdrant_result).collect())
+        let mapped: Vec<SearchResult> = results.iter().map(Self::from_qdrant_result).collect();
+        Span::current().record(COGNEE_VECTOR_RESULT_COUNT, mapped.len() as i64);
+        Ok(mapped)
     }
 
+    #[instrument(
+        name = "cognee.db.vector.delete_collection",
+        level = "info",
+        skip_all,
+        fields(
+            cognee.db.system = "qdrant",
+            cognee.vector.collection = tracing::field::Empty,
+        ),
+        err,
+    )]
     async fn delete_collection(&self, data_type: &str, field_name: &str) -> VectorDBResult<()> {
         let collection = Self::collection_name(data_type, field_name);
+        Span::current().record(COGNEE_VECTOR_COLLECTION, collection.as_str());
+
         let mut shards = self.shards.write().unwrap(); // lock poison is unrecoverable
 
         shards.remove(&collection);
@@ -326,6 +369,17 @@ impl VectorDB for QdrantAdapter {
         Ok(())
     }
 
+    #[instrument(
+        name = "cognee.db.vector.delete",
+        level = "info",
+        skip_all,
+        fields(
+            cognee.db.system = "qdrant",
+            cognee.vector.collection = tracing::field::Empty,
+            cognee.db.row_count = tracing::field::Empty,
+        ),
+        err,
+    )]
     async fn delete_points(
         &self,
         data_type: &str,
@@ -337,6 +391,8 @@ impl VectorDB for QdrantAdapter {
         }
 
         let collection = Self::collection_name(data_type, field_name);
+        Span::current().record(COGNEE_VECTOR_COLLECTION, collection.as_str());
+
         let shard = self.get_or_create_shard(&collection, self.dimension)?;
 
         let ids: Vec<ExtendedPointId> = point_ids
@@ -348,6 +404,7 @@ impl VectorDB for QdrantAdapter {
             .update(PointOperation(DeletePoints { ids }))
             .map_err(|e| VectorDBError::StorageError(e.to_string()))?;
 
+        Span::current().record(COGNEE_DB_ROW_COUNT, point_ids.len() as i64);
         Ok(())
     }
 
