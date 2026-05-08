@@ -1,6 +1,6 @@
 # Task 04-08 — Instrument `pgvector_adapter` (pg_graph deferred)
 
-**Status**: ⬜ scope narrowed by orchestrator on user direction (decision: drop pg_graph, pgvector only)
+**Status**: ✅ implemented in commit 16ecc16 (pgvector only — pg_graph deferred per user decision)
 **Owner**: _unassigned_
 **Depends on**:
 - [Task 04-02](02-tracing-constants-dedupe.md) — `cognee_utils::tracing_keys::*`.
