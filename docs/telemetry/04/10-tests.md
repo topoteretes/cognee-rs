@@ -1,6 +1,6 @@
 # Task 04-10 — Adapter instrumentation tests
 
-**Status**: ⬜ unimplemented
+**Status**: ✅ implemented in commit 92dbaa6 (5 test files; pg_graph_span_instrumentation deferred per 04-08 user decision; OpenAI tests use httpmock not mockito)
 **Owner**: _unassigned_
 **Depends on**:
 - [Task 04-03](03-span-capture-test-helper.md) — needs the `SpanCapture` helper.
