@@ -6,10 +6,13 @@
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use cognee_utils::tracing_keys::{COGNEE_DB_ROW_COUNT, COGNEE_DB_SYSTEM};
 use sea_orm::sea_query::OnConflict;
 use sea_orm::{ActiveValue, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
+use tracing::{Span, instrument};
 
 use crate::conversions::map_sea_err;
+use crate::database_system_label;
 use crate::entities::graph_sync_checkpoint;
 use crate::types::DatabaseError;
 
@@ -28,25 +31,49 @@ pub trait CheckpointStore: Send + Sync {
 
 /// Load the checkpoint timestamp for a key from the `graph_sync_checkpoints`
 /// table, or `None` if the key does not exist.
+#[instrument(
+    name = "cognee.db.relational.checkpoint.load_checkpoint",
+    level = "info",
+    skip_all,
+    fields(
+        cognee.db.system = tracing::field::Empty,
+        cognee.db.row_count = tracing::field::Empty,
+    ),
+    err,
+)]
 pub async fn load_checkpoint(
     db: &DatabaseConnection,
     key: &str,
 ) -> Result<Option<DateTime<Utc>>, DatabaseError> {
+    Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
     let row = graph_sync_checkpoint::Entity::find()
         .filter(graph_sync_checkpoint::Column::Key.eq(key))
         .one(db)
         .await
         .map_err(map_sea_err)?;
-    Ok(row.map(|m| m.ts))
+    let result = row.map(|m| m.ts);
+    Span::current().record(
+        COGNEE_DB_ROW_COUNT,
+        if result.is_some() { 1i64 } else { 0i64 },
+    );
+    Ok(result)
 }
 
 /// Persist `ts` under `key` in the `graph_sync_checkpoints` table. Inserts
 /// a new row or updates the existing one (upsert on the primary key).
+#[instrument(
+    name = "cognee.db.relational.checkpoint.save_checkpoint",
+    level = "info",
+    skip_all,
+    fields(cognee.db.system = tracing::field::Empty),
+    err,
+)]
 pub async fn save_checkpoint(
     db: &DatabaseConnection,
     key: &str,
     ts: DateTime<Utc>,
 ) -> Result<(), DatabaseError> {
+    Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
     let model = graph_sync_checkpoint::ActiveModel {
         key: ActiveValue::Set(key.to_string()),
         ts: ActiveValue::Set(ts),

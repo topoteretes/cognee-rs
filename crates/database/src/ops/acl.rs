@@ -1,12 +1,15 @@
 //! ACL database operations: permission checks, grants, and revocations.
 
 use chrono::Utc;
+use cognee_utils::tracing_keys::{COGNEE_DB_ROW_COUNT, COGNEE_DB_SYSTEM};
 use sea_orm::prelude::*;
 use sea_orm::{DatabaseConnection, QuerySelect, Set};
+use tracing::{Span, instrument};
 use uuid::Uuid;
 
 use std::collections::HashSet;
 
+use crate::database_system_label;
 use crate::entities::{acl, permission, principal, user_role, user_tenant};
 use crate::types::DatabaseError;
 use crate::uuid_hex;
@@ -15,12 +18,20 @@ use crate::uuid_hex;
 pub const PERMISSION_NAMES: &[&str] = &["read", "write", "delete", "share"];
 
 /// Check if a principal has a specific permission on a dataset.
+#[instrument(
+    name = "cognee.db.relational.acl.has_permission",
+    level = "info",
+    skip_all,
+    fields(cognee.db.system = tracing::field::Empty),
+    err,
+)]
 pub async fn has_permission(
     db: &DatabaseConnection,
     principal_id: Uuid,
     dataset_id: Uuid,
     permission_name: &str,
 ) -> Result<bool, DatabaseError> {
+    Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
     let count = acl::Entity::find()
         .inner_join(permission::Entity)
         .filter(acl::Column::PrincipalId.eq(uuid_hex::to_hex(principal_id)))
@@ -34,11 +45,22 @@ pub async fn has_permission(
 }
 
 /// Return all dataset IDs for which the principal has the given permission.
+#[instrument(
+    name = "cognee.db.relational.acl.authorized_dataset_ids",
+    level = "info",
+    skip_all,
+    fields(
+        cognee.db.system = tracing::field::Empty,
+        cognee.db.row_count = tracing::field::Empty,
+    ),
+    err,
+)]
 pub async fn authorized_dataset_ids(
     db: &DatabaseConnection,
     principal_id: Uuid,
     permission_name: &str,
 ) -> Result<Vec<Uuid>, DatabaseError> {
+    Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
     let rows = acl::Entity::find()
         .inner_join(permission::Entity)
         .filter(acl::Column::PrincipalId.eq(uuid_hex::to_hex(principal_id)))
@@ -48,21 +70,30 @@ pub async fn authorized_dataset_ids(
         .await
         .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
 
-    let ids = rows
+    let ids: Vec<Uuid> = rows
         .iter()
         .filter_map(|row| uuid_hex::from_hex(&row.dataset_id).ok())
         .collect();
 
+    Span::current().record(COGNEE_DB_ROW_COUNT, ids.len() as i64);
     Ok(ids)
 }
 
 /// Grant a permission on a dataset to a principal. Idempotent.
+#[instrument(
+    name = "cognee.db.relational.acl.grant_permission",
+    level = "info",
+    skip_all,
+    fields(cognee.db.system = tracing::field::Empty),
+    err,
+)]
 pub async fn grant_permission(
     db: &DatabaseConnection,
     principal_id: Uuid,
     dataset_id: Uuid,
     permission_name: &str,
 ) -> Result<(), DatabaseError> {
+    Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
     // Look up the permission by name
     let perm = permission::Entity::find()
         .filter(permission::Column::Name.eq(permission_name))
@@ -108,12 +139,20 @@ pub async fn grant_permission(
 }
 
 /// Revoke a permission on a dataset from a principal.
+#[instrument(
+    name = "cognee.db.relational.acl.revoke_permission",
+    level = "info",
+    skip_all,
+    fields(cognee.db.system = tracing::field::Empty),
+    err,
+)]
 pub async fn revoke_permission(
     db: &DatabaseConnection,
     principal_id: Uuid,
     dataset_id: Uuid,
     permission_name: &str,
 ) -> Result<(), DatabaseError> {
+    Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
     let perm = permission::Entity::find()
         .filter(permission::Column::Name.eq(permission_name))
         .one(db)
@@ -135,11 +174,19 @@ pub async fn revoke_permission(
 }
 
 /// Ensure a principal row exists (upsert by ID).
+#[instrument(
+    name = "cognee.db.relational.acl.ensure_principal",
+    level = "info",
+    skip_all,
+    fields(cognee.db.system = tracing::field::Empty),
+    err,
+)]
 pub async fn ensure_principal(
     db: &DatabaseConnection,
     principal_id: Uuid,
     principal_type: &str,
 ) -> Result<(), DatabaseError> {
+    Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
     let hex_id = uuid_hex::to_hex(principal_id);
     let existing = principal::Entity::find_by_id(hex_id.clone())
         .one(db)
@@ -170,11 +217,19 @@ pub async fn ensure_principal(
 /// on a dataset. Ensures the principal row exists first.
 ///
 /// Uses direct database connection operations.
+#[instrument(
+    name = "cognee.db.relational.acl.grant_all_permissions_on_dataset",
+    level = "info",
+    skip_all,
+    fields(cognee.db.system = tracing::field::Empty),
+    err,
+)]
 pub async fn grant_all_permissions_on_dataset(
     db: &DatabaseConnection,
     principal_id: Uuid,
     dataset_id: Uuid,
 ) -> Result<(), DatabaseError> {
+    Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
     ensure_principal(db, principal_id, "user").await?;
 
     for perm_name in PERMISSION_NAMES {
@@ -189,6 +244,12 @@ pub async fn grant_all_permissions_on_dataset(
 ///
 /// This version works with any `&dyn AclDb` implementation, making it usable
 /// from the ingestion pipeline without requiring a concrete `DatabaseConnection`.
+#[instrument(
+    name = "cognee.db.relational.acl.grant_all_permissions_on_dataset_via_trait",
+    level = "info",
+    skip_all,
+    err
+)]
 pub async fn grant_all_permissions_on_dataset_via_trait(
     acl_db: &dyn crate::traits::AclDb,
     principal_id: Uuid,
@@ -211,12 +272,20 @@ pub async fn grant_all_permissions_on_dataset_via_trait(
 /// 1. Direct user ACL
 /// 2. Tenant-level ACL for each tenant the user belongs to
 /// 3. Role-level ACL for each role the user holds
+#[instrument(
+    name = "cognee.db.relational.acl.has_permission_with_roles",
+    level = "info",
+    skip_all,
+    fields(cognee.db.system = tracing::field::Empty),
+    err,
+)]
 pub async fn has_permission_with_roles(
     db: &DatabaseConnection,
     user_id: Uuid,
     dataset_id: Uuid,
     permission_name: &str,
 ) -> Result<bool, DatabaseError> {
+    Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
     // 1. Direct user ACL
     if has_permission(db, user_id, dataset_id, permission_name).await? {
         return Ok(true);
@@ -259,11 +328,22 @@ pub async fn has_permission_with_roles(
 
 /// Return all dataset IDs the user can access via direct, tenant, or
 /// role grants. Deduplicates results.
+#[instrument(
+    name = "cognee.db.relational.acl.authorized_dataset_ids_with_roles",
+    level = "info",
+    skip_all,
+    fields(
+        cognee.db.system = tracing::field::Empty,
+        cognee.db.row_count = tracing::field::Empty,
+    ),
+    err,
+)]
 pub async fn authorized_dataset_ids_with_roles(
     db: &DatabaseConnection,
     user_id: Uuid,
     permission_name: &str,
 ) -> Result<Vec<Uuid>, DatabaseError> {
+    Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
     let mut all_ids: HashSet<Uuid> = HashSet::new();
 
     // 1. Direct user ACL
@@ -300,5 +380,7 @@ pub async fn authorized_dataset_ids_with_roles(
         all_ids.extend(role_datasets);
     }
 
-    Ok(all_ids.into_iter().collect())
+    let result: Vec<Uuid> = all_ids.into_iter().collect();
+    Span::current().record(COGNEE_DB_ROW_COUNT, result.len() as i64);
+    Ok(result)
 }

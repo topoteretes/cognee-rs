@@ -3,11 +3,14 @@
 use async_trait::async_trait;
 use chrono::Utc;
 use cognee_models::{Tenant, User};
+use cognee_utils::tracing_keys::{COGNEE_DB_ROW_COUNT, COGNEE_DB_SYSTEM};
 use sea_orm::prelude::*;
 use sea_orm::{DatabaseConnection, Set};
+use tracing::{Span, instrument};
 use uuid::Uuid;
 
 use crate::conversions::map_sea_err;
+use crate::database_system_label;
 use crate::entities::{principal, tenant, user, user_tenant};
 use crate::traits::TenantDb;
 use crate::types::DatabaseError;
@@ -41,7 +44,15 @@ fn model_to_user(m: user::Model) -> Result<User, DatabaseError> {
 
 #[async_trait]
 impl TenantDb for DatabaseConnection {
+    #[instrument(
+        name = "cognee.db.relational.tenant.create_tenant",
+        level = "info",
+        skip_all,
+        fields(cognee.db.system = tracing::field::Empty),
+        err,
+    )]
     async fn create_tenant(&self, t: &Tenant) -> Result<Tenant, DatabaseError> {
+        Span::current().record(COGNEE_DB_SYSTEM, database_system_label(self));
         let hex_id = uuid_hex::to_hex(t.id);
         let now = Utc::now();
 
@@ -81,15 +92,42 @@ impl TenantDb for DatabaseConnection {
             .ok_or_else(|| DatabaseError::NotFound("Tenant not found after insert".to_string()))
     }
 
+    #[instrument(
+        name = "cognee.db.relational.tenant.get_tenant",
+        level = "info",
+        skip_all,
+        fields(
+            cognee.db.system = tracing::field::Empty,
+            cognee.db.row_count = tracing::field::Empty,
+        ),
+        err,
+    )]
     async fn get_tenant(&self, id: Uuid) -> Result<Option<Tenant>, DatabaseError> {
+        Span::current().record(COGNEE_DB_SYSTEM, database_system_label(self));
         let model = tenant::Entity::find_by_id(uuid_hex::to_hex(id))
             .one(self)
             .await
             .map_err(map_sea_err)?;
-        model.map(model_to_tenant).transpose()
+        let result = model.map(model_to_tenant).transpose()?;
+        Span::current().record(
+            COGNEE_DB_ROW_COUNT,
+            if result.is_some() { 1i64 } else { 0i64 },
+        );
+        Ok(result)
     }
 
+    #[instrument(
+        name = "cognee.db.relational.tenant.list_tenants_for_user",
+        level = "info",
+        skip_all,
+        fields(
+            cognee.db.system = tracing::field::Empty,
+            cognee.db.row_count = tracing::field::Empty,
+        ),
+        err,
+    )]
     async fn list_tenants_for_user(&self, user_id: Uuid) -> Result<Vec<Tenant>, DatabaseError> {
+        Span::current().record(COGNEE_DB_SYSTEM, database_system_label(self));
         let user_hex = uuid_hex::to_hex(user_id);
 
         // Find all tenant IDs from user_tenants junction.
@@ -101,6 +139,7 @@ impl TenantDb for DatabaseConnection {
 
         let tenant_ids: Vec<String> = junctions.into_iter().map(|j| j.tenant_id).collect();
         if tenant_ids.is_empty() {
+            Span::current().record(COGNEE_DB_ROW_COUNT, 0i64);
             return Ok(vec![]);
         }
 
@@ -110,14 +149,27 @@ impl TenantDb for DatabaseConnection {
             .await
             .map_err(map_sea_err)?;
 
-        models.into_iter().map(model_to_tenant).collect()
+        let rows: Vec<Tenant> = models
+            .into_iter()
+            .map(model_to_tenant)
+            .collect::<Result<_, _>>()?;
+        Span::current().record(COGNEE_DB_ROW_COUNT, rows.len() as i64);
+        Ok(rows)
     }
 
+    #[instrument(
+        name = "cognee.db.relational.tenant.add_user_to_tenant",
+        level = "info",
+        skip_all,
+        fields(cognee.db.system = tracing::field::Empty),
+        err,
+    )]
     async fn add_user_to_tenant(
         &self,
         user_id: Uuid,
         tenant_id: Uuid,
     ) -> Result<(), DatabaseError> {
+        Span::current().record(COGNEE_DB_SYSTEM, database_system_label(self));
         let model = user_tenant::ActiveModel {
             user_id: Set(uuid_hex::to_hex(user_id)),
             tenant_id: Set(uuid_hex::to_hex(tenant_id)),
@@ -132,11 +184,19 @@ impl TenantDb for DatabaseConnection {
         Ok(())
     }
 
+    #[instrument(
+        name = "cognee.db.relational.tenant.remove_user_from_tenant",
+        level = "info",
+        skip_all,
+        fields(cognee.db.system = tracing::field::Empty),
+        err,
+    )]
     async fn remove_user_from_tenant(
         &self,
         user_id: Uuid,
         tenant_id: Uuid,
     ) -> Result<(), DatabaseError> {
+        Span::current().record(COGNEE_DB_SYSTEM, database_system_label(self));
         user_tenant::Entity::delete_many()
             .filter(user_tenant::Column::UserId.eq(uuid_hex::to_hex(user_id)))
             .filter(user_tenant::Column::TenantId.eq(uuid_hex::to_hex(tenant_id)))
@@ -146,11 +206,19 @@ impl TenantDb for DatabaseConnection {
         Ok(())
     }
 
+    #[instrument(
+        name = "cognee.db.relational.tenant.select_tenant",
+        level = "info",
+        skip_all,
+        fields(cognee.db.system = tracing::field::Empty),
+        err,
+    )]
     async fn select_tenant(
         &self,
         user_id: Uuid,
         tenant_id: Option<Uuid>,
     ) -> Result<User, DatabaseError> {
+        Span::current().record(COGNEE_DB_SYSTEM, database_system_label(self));
         let user_hex = uuid_hex::to_hex(user_id);
 
         let existing = user::Entity::find_by_id(user_hex.clone())

@@ -5,6 +5,7 @@
 
 use include_dir::{Dir, include_dir};
 use serde_json::{Value, json};
+use tracing::instrument;
 use uuid::{Uuid, uuid};
 
 use crate::traits::NotebookDb;
@@ -111,6 +112,12 @@ const TUTORIALS: &[TutorialSpec] = &[
 /// Idempotent: if both tutorial ids already exist for this owner, this is
 /// a no-op.  If either is missing it is inserted with the deterministic UUID5
 /// id and `deletable=false`.
+#[instrument(
+    name = "cognee.db.relational.tutorial_seeder.seed_tutorials_if_first_call",
+    level = "info",
+    skip_all,
+    err
+)]
 pub async fn seed_tutorials_if_first_call(
     db: &dyn NotebookDb,
     user_id: Uuid,

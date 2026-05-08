@@ -21,6 +21,21 @@ pub use auth::{
     SeaOrmApiKeyRepository, SeaOrmUserAuthRepository, UpdateUserPayload, UserAuthRepository,
 };
 pub use connection::{connect, initialize};
+
+/// Map the active SeaORM backend to a `cognee.db.system` string
+/// matching the values used by the vector / graph adapters.
+///
+/// The tag values mirror Python's observability layer
+/// (`cognee/modules/observability/tracing.py`) and the
+/// `cognee.db.system` attribute exposed by every relational op span.
+pub fn database_system_label(db: &sea_orm::DatabaseConnection) -> &'static str {
+    use sea_orm::{ConnectionTrait, DatabaseBackend};
+    match db.get_database_backend() {
+        DatabaseBackend::Sqlite => "sqlite",
+        DatabaseBackend::Postgres => "postgres",
+        DatabaseBackend::MySql => "mysql",
+    }
+}
 pub use ops::checkpoint::{CheckpointStore, SeaOrmCheckpointStore};
 pub use pipelines::sea_orm_impl::SeaOrmPipelineRunRepository;
 pub use pipelines::{PipelineRunRepository, PipelineRunWithAttributionRow};

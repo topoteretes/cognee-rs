@@ -31,13 +31,16 @@
 use std::env;
 
 use chrono::{DateTime, Duration, Utc};
+use cognee_utils::tracing_keys::{COGNEE_DB_ROW_COUNT, COGNEE_DB_SYSTEM};
 use sea_orm::{
     ColumnTrait, ConnectionTrait, DatabaseBackend, DatabaseConnection, EntityTrait,
     FromQueryResult, QueryFilter, Statement, Value,
 };
+use tracing::{Span, instrument};
 use uuid::Uuid;
 
 use crate::conversions::map_sea_err;
+use crate::database_system_label;
 use crate::entities::session_record;
 use crate::traits::{
     CostByModelRow, SessionLifecycleDb, SessionListFilters, SessionListPage, SessionRowWithStatus,
@@ -92,12 +95,20 @@ fn effective_status_sql_fragment(threshold: DateTime<Utc>) -> (String, Value) {
 // ensure_and_touch_session
 // ---------------------------------------------------------------------------
 
+#[instrument(
+    name = "cognee.db.relational.session_lifecycle.ensure_and_touch_session",
+    level = "info",
+    skip_all,
+    fields(cognee.db.system = tracing::field::Empty),
+    err,
+)]
 pub async fn ensure_and_touch_session(
     db: &DatabaseConnection,
     session_id: &str,
     user_id: Uuid,
     dataset_id: Option<Uuid>,
 ) -> Result<(), DatabaseError> {
+    Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
     let now = Utc::now();
     let backend = db.get_database_backend();
 
@@ -155,6 +166,13 @@ pub async fn ensure_and_touch_session(
 // parity; introducing a struct just to silence clippy would diverge from
 // the reference shape without adding value.
 #[allow(clippy::too_many_arguments)]
+#[instrument(
+    name = "cognee.db.relational.session_lifecycle.accumulate_usage",
+    level = "info",
+    skip_all,
+    fields(cognee.db.system = tracing::field::Empty),
+    err,
+)]
 pub async fn accumulate_usage(
     db: &DatabaseConnection,
     session_id: &str,
@@ -165,6 +183,7 @@ pub async fn accumulate_usage(
     cost_usd: f64,
     errored: bool,
 ) -> Result<(), DatabaseError> {
+    Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
     // Skip the no-op shortcut from Python `metrics.py:150-151`: nothing
     // to credit, no error to count, no model to remember.
     if tokens_in == 0 && tokens_out == 0 && cost_usd == 0.0 && !errored && model.is_none() {
@@ -323,6 +342,16 @@ pub async fn accumulate_usage(
 // get_session_row
 // ---------------------------------------------------------------------------
 
+#[instrument(
+    name = "cognee.db.relational.session_lifecycle.get_session_row",
+    level = "info",
+    skip_all,
+    fields(
+        cognee.db.system = tracing::field::Empty,
+        cognee.db.row_count = tracing::field::Empty,
+    ),
+    err,
+)]
 pub async fn get_session_row(
     db: &DatabaseConnection,
     session_id: &str,
@@ -330,6 +359,7 @@ pub async fn get_session_row(
     permitted_dataset_ids: &[Uuid],
     prefer_other_owner: bool,
 ) -> Result<Option<SessionRowWithStatus>, DatabaseError> {
+    Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
     let user_hex = uuid_hex::to_hex(user_id);
 
     // Visibility: caller's own OR session's dataset in permitted set.
@@ -353,6 +383,7 @@ pub async fn get_session_row(
 
     let rows = query.all(db).await.map_err(map_sea_err)?;
     if rows.is_empty() {
+        Span::current().record(COGNEE_DB_ROW_COUNT, 0i64);
         return Ok(None);
     }
 
@@ -369,6 +400,7 @@ pub async fn get_session_row(
 
     let threshold = abandon_threshold_ts();
     let effective = compute_effective_status(&chosen, threshold);
+    Span::current().record(COGNEE_DB_ROW_COUNT, 1i64);
     Ok(Some(SessionRowWithStatus {
         record: chosen,
         effective_status: effective,
@@ -424,10 +456,21 @@ struct CountRow {
     n: i64,
 }
 
+#[instrument(
+    name = "cognee.db.relational.session_lifecycle.list_session_rows",
+    level = "info",
+    skip_all,
+    fields(
+        cognee.db.system = tracing::field::Empty,
+        cognee.db.row_count = tracing::field::Empty,
+    ),
+    err,
+)]
 pub async fn list_session_rows(
     db: &DatabaseConnection,
     filters: SessionListFilters,
 ) -> Result<SessionListPage, DatabaseError> {
+    Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
     let backend = db.get_database_backend();
     let threshold = abandon_threshold_ts();
     let (eff_sql, eff_param) = effective_status_sql_fragment(threshold);
@@ -543,6 +586,7 @@ pub async fn list_session_rows(
         })
         .collect();
 
+    Span::current().record(COGNEE_DB_ROW_COUNT, sessions.len() as i64);
     Ok(SessionListPage {
         sessions,
         total,
@@ -576,12 +620,20 @@ struct StatusBucketRow {
     c: i64,
 }
 
+#[instrument(
+    name = "cognee.db.relational.session_lifecycle.aggregate_stats",
+    level = "info",
+    skip_all,
+    fields(cognee.db.system = tracing::field::Empty),
+    err,
+)]
 pub async fn aggregate_stats(
     db: &DatabaseConnection,
     user_id: Uuid,
     permitted_dataset_ids: &[Uuid],
     since: Option<DateTime<Utc>>,
 ) -> Result<SessionStats, DatabaseError> {
+    Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
     let backend = db.get_database_backend();
     let user_hex = uuid_hex::to_hex(user_id);
 
@@ -756,12 +808,23 @@ struct CostRow {
     tokens_out: i64,
 }
 
+#[instrument(
+    name = "cognee.db.relational.session_lifecycle.cost_by_model",
+    level = "info",
+    skip_all,
+    fields(
+        cognee.db.system = tracing::field::Empty,
+        cognee.db.row_count = tracing::field::Empty,
+    ),
+    err,
+)]
 pub async fn cost_by_model(
     db: &DatabaseConnection,
     user_id: Uuid,
     permitted_dataset_ids: &[Uuid],
     since: Option<DateTime<Utc>>,
 ) -> Result<Vec<CostByModelRow>, DatabaseError> {
+    Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
     let backend = db.get_database_backend();
     let user_hex = uuid_hex::to_hex(user_id);
 
@@ -816,7 +879,7 @@ pub async fn cost_by_model(
         .await
         .map_err(map_sea_err)?;
 
-    Ok(rows
+    let result: Vec<CostByModelRow> = rows
         .into_iter()
         .map(|r| CostByModelRow {
             model: r.model.unwrap_or_else(|| "unknown".to_string()),
@@ -825,7 +888,9 @@ pub async fn cost_by_model(
             tokens_in: r.tokens_in,
             tokens_out: r.tokens_out,
         })
-        .collect())
+        .collect();
+    Span::current().record(COGNEE_DB_ROW_COUNT, result.len() as i64);
+    Ok(result)
 }
 
 // ---------------------------------------------------------------------------

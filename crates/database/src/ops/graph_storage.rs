@@ -1,20 +1,31 @@
 use chrono::{DateTime, Utc};
+use cognee_utils::tracing_keys::{COGNEE_DB_ROW_COUNT, COGNEE_DB_SYSTEM};
 use sea_orm::sea_query::OnConflict;
 use sea_orm::{
     ColumnTrait, Condition, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter,
     QueryOrder, QuerySelect,
 };
+use tracing::{Span, instrument};
 use uuid::Uuid;
 
 use crate::conversions::map_sea_err;
+use crate::database_system_label;
 use crate::entities::{edge, node};
 use crate::types::{DatabaseError, GraphEdge, GraphNode};
 use crate::uuid_hex;
 
+#[instrument(
+    name = "cognee.db.relational.graph_storage.upsert_nodes",
+    level = "info",
+    skip_all,
+    fields(cognee.db.system = tracing::field::Empty),
+    err,
+)]
 pub async fn upsert_nodes(
     db: &DatabaseConnection,
     nodes: &[GraphNode],
 ) -> Result<(), DatabaseError> {
+    Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
     if nodes.is_empty() {
         return Ok(());
     }
@@ -40,23 +51,46 @@ pub async fn upsert_nodes(
     Ok(())
 }
 
+#[instrument(
+    name = "cognee.db.relational.graph_storage.get_nodes_by_dataset",
+    level = "info",
+    skip_all,
+    fields(
+        cognee.db.system = tracing::field::Empty,
+        cognee.db.row_count = tracing::field::Empty,
+    ),
+    err,
+)]
 pub async fn get_nodes_by_dataset(
     db: &DatabaseConnection,
     dataset_id: Uuid,
 ) -> Result<Vec<GraphNode>, DatabaseError> {
-    node::Entity::find()
+    Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
+    let rows: Vec<GraphNode> = node::Entity::find()
         .filter(node::Column::DatasetId.eq(uuid_hex::to_hex(dataset_id)))
         .order_by_asc(node::Column::CreatedAt)
         .all(db)
         .await
-        .map_err(map_sea_err)
-        .map(|v| v.into_iter().map(GraphNode::from).collect())
+        .map_err(map_sea_err)?
+        .into_iter()
+        .map(GraphNode::from)
+        .collect();
+    Span::current().record(COGNEE_DB_ROW_COUNT, rows.len() as i64);
+    Ok(rows)
 }
 
+#[instrument(
+    name = "cognee.db.relational.graph_storage.delete_nodes_by_data",
+    level = "info",
+    skip_all,
+    fields(cognee.db.system = tracing::field::Empty),
+    err,
+)]
 pub async fn delete_nodes_by_data(
     db: &DatabaseConnection,
     data_id: Uuid,
 ) -> Result<(), DatabaseError> {
+    Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
     node::Entity::delete_many()
         .filter(node::Column::DataId.eq(uuid_hex::to_hex(data_id)))
         .exec(db)
@@ -65,10 +99,18 @@ pub async fn delete_nodes_by_data(
     Ok(())
 }
 
+#[instrument(
+    name = "cognee.db.relational.graph_storage.upsert_edges",
+    level = "info",
+    skip_all,
+    fields(cognee.db.system = tracing::field::Empty),
+    err,
+)]
 pub async fn upsert_edges(
     db: &DatabaseConnection,
     edges: &[GraphEdge],
 ) -> Result<(), DatabaseError> {
+    Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
     if edges.is_empty() {
         return Ok(());
     }
@@ -95,17 +137,32 @@ pub async fn upsert_edges(
     Ok(())
 }
 
+#[instrument(
+    name = "cognee.db.relational.graph_storage.get_edges_by_dataset",
+    level = "info",
+    skip_all,
+    fields(
+        cognee.db.system = tracing::field::Empty,
+        cognee.db.row_count = tracing::field::Empty,
+    ),
+    err,
+)]
 pub async fn get_edges_by_dataset(
     db: &DatabaseConnection,
     dataset_id: Uuid,
 ) -> Result<Vec<GraphEdge>, DatabaseError> {
-    edge::Entity::find()
+    Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
+    let rows: Vec<GraphEdge> = edge::Entity::find()
         .filter(edge::Column::DatasetId.eq(uuid_hex::to_hex(dataset_id)))
         .order_by_asc(edge::Column::CreatedAt)
         .all(db)
         .await
-        .map_err(map_sea_err)
-        .map(|v| v.into_iter().map(GraphEdge::from).collect())
+        .map_err(map_sea_err)?
+        .into_iter()
+        .map(GraphEdge::from)
+        .collect();
+    Span::current().record(COGNEE_DB_ROW_COUNT, rows.len() as i64);
+    Ok(rows)
 }
 
 /// Return edges for `dataset_id` created strictly after `since`, ordered by
@@ -113,12 +170,23 @@ pub async fn get_edges_by_dataset(
 /// `improve()` for incremental graph→session synchronisation.
 ///
 /// When `since` is `None`, returns the oldest `limit` edges in the dataset.
+#[instrument(
+    name = "cognee.db.relational.graph_storage.get_edges_since",
+    level = "info",
+    skip_all,
+    fields(
+        cognee.db.system = tracing::field::Empty,
+        cognee.db.row_count = tracing::field::Empty,
+    ),
+    err,
+)]
 pub async fn get_edges_since(
     db: &DatabaseConnection,
     dataset_id: Uuid,
     since: Option<DateTime<Utc>>,
     limit: u64,
 ) -> Result<Vec<GraphEdge>, DatabaseError> {
+    Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
     let mut q = edge::Entity::find()
         .filter(edge::Column::DatasetId.eq(uuid_hex::to_hex(dataset_id)))
         .order_by_asc(edge::Column::CreatedAt)
@@ -126,33 +194,62 @@ pub async fn get_edges_since(
     if let Some(ts) = since {
         q = q.filter(edge::Column::CreatedAt.gt(ts));
     }
-    q.all(db)
+    let rows: Vec<GraphEdge> = q
+        .all(db)
         .await
-        .map_err(map_sea_err)
-        .map(|v| v.into_iter().map(GraphEdge::from).collect())
+        .map_err(map_sea_err)?
+        .into_iter()
+        .map(GraphEdge::from)
+        .collect();
+    Span::current().record(COGNEE_DB_ROW_COUNT, rows.len() as i64);
+    Ok(rows)
 }
 
 /// Batch-fetch nodes by their string IDs (hex form). Used by Stage 4 to
 /// resolve edge endpoints to full node metadata for JSON-line rendering.
+#[instrument(
+    name = "cognee.db.relational.graph_storage.get_nodes_by_ids",
+    level = "info",
+    skip_all,
+    fields(
+        cognee.db.system = tracing::field::Empty,
+        cognee.db.row_count = tracing::field::Empty,
+    ),
+    err,
+)]
 pub async fn get_nodes_by_ids(
     db: &DatabaseConnection,
     ids: &[String],
 ) -> Result<Vec<GraphNode>, DatabaseError> {
+    Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
     if ids.is_empty() {
+        Span::current().record(COGNEE_DB_ROW_COUNT, 0i64);
         return Ok(Vec::new());
     }
-    node::Entity::find()
+    let rows: Vec<GraphNode> = node::Entity::find()
         .filter(node::Column::Id.is_in(ids.to_vec()))
         .all(db)
         .await
-        .map_err(map_sea_err)
-        .map(|v| v.into_iter().map(GraphNode::from).collect())
+        .map_err(map_sea_err)?
+        .into_iter()
+        .map(GraphNode::from)
+        .collect();
+    Span::current().record(COGNEE_DB_ROW_COUNT, rows.len() as i64);
+    Ok(rows)
 }
 
+#[instrument(
+    name = "cognee.db.relational.graph_storage.delete_edges_by_data",
+    level = "info",
+    skip_all,
+    fields(cognee.db.system = tracing::field::Empty),
+    err,
+)]
 pub async fn delete_edges_by_data(
     db: &DatabaseConnection,
     data_id: Uuid,
 ) -> Result<(), DatabaseError> {
+    Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
     edge::Entity::delete_many()
         .filter(edge::Column::DataId.eq(uuid_hex::to_hex(data_id)))
         .exec(db)
@@ -166,12 +263,23 @@ pub async fn delete_edges_by_data(
 // ---------------------------------------------------------------------------
 
 /// Get all provenance nodes for a specific `(data_id, dataset_id)` pair.
+#[instrument(
+    name = "cognee.db.relational.graph_storage.get_nodes_by_data",
+    level = "info",
+    skip_all,
+    fields(
+        cognee.db.system = tracing::field::Empty,
+        cognee.db.row_count = tracing::field::Empty,
+    ),
+    err,
+)]
 pub async fn get_nodes_by_data(
     db: &DatabaseConnection,
     data_id: Uuid,
     dataset_id: Uuid,
 ) -> Result<Vec<GraphNode>, DatabaseError> {
-    node::Entity::find()
+    Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
+    let rows: Vec<GraphNode> = node::Entity::find()
         .filter(
             Condition::all()
                 .add(node::Column::DataId.eq(uuid_hex::to_hex(data_id)))
@@ -180,17 +288,32 @@ pub async fn get_nodes_by_data(
         .order_by_asc(node::Column::CreatedAt)
         .all(db)
         .await
-        .map_err(map_sea_err)
-        .map(|v| v.into_iter().map(GraphNode::from).collect())
+        .map_err(map_sea_err)?
+        .into_iter()
+        .map(GraphNode::from)
+        .collect();
+    Span::current().record(COGNEE_DB_ROW_COUNT, rows.len() as i64);
+    Ok(rows)
 }
 
 /// Get all provenance edges for a specific `(data_id, dataset_id)` pair.
+#[instrument(
+    name = "cognee.db.relational.graph_storage.get_edges_by_data",
+    level = "info",
+    skip_all,
+    fields(
+        cognee.db.system = tracing::field::Empty,
+        cognee.db.row_count = tracing::field::Empty,
+    ),
+    err,
+)]
 pub async fn get_edges_by_data(
     db: &DatabaseConnection,
     data_id: Uuid,
     dataset_id: Uuid,
 ) -> Result<Vec<GraphEdge>, DatabaseError> {
-    edge::Entity::find()
+    Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
+    let rows: Vec<GraphEdge> = edge::Entity::find()
         .filter(
             Condition::all()
                 .add(edge::Column::DataId.eq(uuid_hex::to_hex(data_id)))
@@ -199,8 +322,12 @@ pub async fn get_edges_by_data(
         .order_by_asc(edge::Column::CreatedAt)
         .all(db)
         .await
-        .map_err(map_sea_err)
-        .map(|v| v.into_iter().map(GraphEdge::from).collect())
+        .map_err(map_sea_err)?
+        .into_iter()
+        .map(GraphEdge::from)
+        .collect();
+    Span::current().record(COGNEE_DB_ROW_COUNT, rows.len() as i64);
+    Ok(rows)
 }
 
 // ---------------------------------------------------------------------------
@@ -208,10 +335,18 @@ pub async fn get_edges_by_data(
 // ---------------------------------------------------------------------------
 
 /// Delete all provenance node rows for a given dataset.
+#[instrument(
+    name = "cognee.db.relational.graph_storage.delete_nodes_by_dataset",
+    level = "info",
+    skip_all,
+    fields(cognee.db.system = tracing::field::Empty),
+    err,
+)]
 pub async fn delete_nodes_by_dataset(
     db: &DatabaseConnection,
     dataset_id: Uuid,
 ) -> Result<(), DatabaseError> {
+    Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
     node::Entity::delete_many()
         .filter(node::Column::DatasetId.eq(uuid_hex::to_hex(dataset_id)))
         .exec(db)
@@ -221,10 +356,18 @@ pub async fn delete_nodes_by_dataset(
 }
 
 /// Delete all provenance edge rows for a given dataset.
+#[instrument(
+    name = "cognee.db.relational.graph_storage.delete_edges_by_dataset",
+    level = "info",
+    skip_all,
+    fields(cognee.db.system = tracing::field::Empty),
+    err,
+)]
 pub async fn delete_edges_by_dataset(
     db: &DatabaseConnection,
     dataset_id: Uuid,
 ) -> Result<(), DatabaseError> {
+    Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
     edge::Entity::delete_many()
         .filter(edge::Column::DatasetId.eq(uuid_hex::to_hex(dataset_id)))
         .exec(db)
@@ -238,11 +381,19 @@ pub async fn delete_edges_by_dataset(
 // ---------------------------------------------------------------------------
 
 /// Delete provenance node rows for a specific `(data_id, dataset_id)` pair.
+#[instrument(
+    name = "cognee.db.relational.graph_storage.delete_nodes_for_data",
+    level = "info",
+    skip_all,
+    fields(cognee.db.system = tracing::field::Empty),
+    err,
+)]
 pub async fn delete_nodes_for_data(
     db: &DatabaseConnection,
     data_id: Uuid,
     dataset_id: Uuid,
 ) -> Result<(), DatabaseError> {
+    Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
     node::Entity::delete_many()
         .filter(
             Condition::all()
@@ -256,11 +407,19 @@ pub async fn delete_nodes_for_data(
 }
 
 /// Delete provenance edge rows for a specific `(data_id, dataset_id)` pair.
+#[instrument(
+    name = "cognee.db.relational.graph_storage.delete_edges_for_data",
+    level = "info",
+    skip_all,
+    fields(cognee.db.system = tracing::field::Empty),
+    err,
+)]
 pub async fn delete_edges_for_data(
     db: &DatabaseConnection,
     data_id: Uuid,
     dataset_id: Uuid,
 ) -> Result<(), DatabaseError> {
+    Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
     edge::Entity::delete_many()
         .filter(
             Condition::all()
@@ -278,11 +437,22 @@ pub async fn delete_edges_for_data(
 // ---------------------------------------------------------------------------
 
 /// Count provenance node rows for a specific `(data_id, dataset_id)` pair.
+#[instrument(
+    name = "cognee.db.relational.graph_storage.count_nodes_for_data",
+    level = "info",
+    skip_all,
+    fields(
+        cognee.db.system = tracing::field::Empty,
+        cognee.db.row_count = tracing::field::Empty,
+    ),
+    err,
+)]
 pub async fn count_nodes_for_data(
     db: &DatabaseConnection,
     data_id: Uuid,
     dataset_id: Uuid,
 ) -> Result<usize, DatabaseError> {
+    Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
     let count = node::Entity::find()
         .filter(
             Condition::all()
@@ -292,15 +462,27 @@ pub async fn count_nodes_for_data(
         .count(db)
         .await
         .map_err(map_sea_err)?;
+    Span::current().record(COGNEE_DB_ROW_COUNT, count as i64);
     Ok(count as usize)
 }
 
 /// Count provenance edge rows for a specific `(data_id, dataset_id)` pair.
+#[instrument(
+    name = "cognee.db.relational.graph_storage.count_edges_for_data",
+    level = "info",
+    skip_all,
+    fields(
+        cognee.db.system = tracing::field::Empty,
+        cognee.db.row_count = tracing::field::Empty,
+    ),
+    err,
+)]
 pub async fn count_edges_for_data(
     db: &DatabaseConnection,
     data_id: Uuid,
     dataset_id: Uuid,
 ) -> Result<usize, DatabaseError> {
+    Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
     let count = edge::Entity::find()
         .filter(
             Condition::all()
@@ -310,6 +492,7 @@ pub async fn count_edges_for_data(
         .count(db)
         .await
         .map_err(map_sea_err)?;
+    Span::current().record(COGNEE_DB_ROW_COUNT, count as i64);
     Ok(count as usize)
 }
 
@@ -321,11 +504,22 @@ pub async fn count_edges_for_data(
 /// appear in any other row within the same dataset with a different `data_id`.
 ///
 /// This is the Rust equivalent of Python's shared-slug exclusion logic.
+#[instrument(
+    name = "cognee.db.relational.graph_storage.get_unique_nodes_for_data",
+    level = "info",
+    skip_all,
+    fields(
+        cognee.db.system = tracing::field::Empty,
+        cognee.db.row_count = tracing::field::Empty,
+    ),
+    err,
+)]
 pub async fn get_unique_nodes_for_data(
     db: &DatabaseConnection,
     data_id: Uuid,
     dataset_id: Uuid,
 ) -> Result<Vec<GraphNode>, DatabaseError> {
+    Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
     let data_hex = uuid_hex::to_hex(data_id);
     let dataset_hex = uuid_hex::to_hex(dataset_id);
 
@@ -341,6 +535,7 @@ pub async fn get_unique_nodes_for_data(
         .map_err(map_sea_err)?;
 
     if all_nodes.is_empty() {
+        Span::current().record(COGNEE_DB_ROW_COUNT, 0i64);
         return Ok(vec![]);
     }
 
@@ -362,20 +557,33 @@ pub async fn get_unique_nodes_for_data(
     let shared_set: std::collections::HashSet<&str> =
         shared_slugs.iter().map(|s| s.as_str()).collect();
 
-    Ok(all_nodes
+    let rows: Vec<GraphNode> = all_nodes
         .into_iter()
         .filter(|n| !shared_set.contains(n.slug.as_str()))
         .map(GraphNode::from)
-        .collect())
+        .collect();
+    Span::current().record(COGNEE_DB_ROW_COUNT, rows.len() as i64);
+    Ok(rows)
 }
 
 /// Return edges belonging to `(data_id, dataset_id)` whose slug does NOT
 /// appear in any other row within the same dataset with a different `data_id`.
+#[instrument(
+    name = "cognee.db.relational.graph_storage.get_unique_edges_for_data",
+    level = "info",
+    skip_all,
+    fields(
+        cognee.db.system = tracing::field::Empty,
+        cognee.db.row_count = tracing::field::Empty,
+    ),
+    err,
+)]
 pub async fn get_unique_edges_for_data(
     db: &DatabaseConnection,
     data_id: Uuid,
     dataset_id: Uuid,
 ) -> Result<Vec<GraphEdge>, DatabaseError> {
+    Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
     let data_hex = uuid_hex::to_hex(data_id);
     let dataset_hex = uuid_hex::to_hex(dataset_id);
 
@@ -391,6 +599,7 @@ pub async fn get_unique_edges_for_data(
         .map_err(map_sea_err)?;
 
     if all_edges.is_empty() {
+        Span::current().record(COGNEE_DB_ROW_COUNT, 0i64);
         return Ok(vec![]);
     }
 
@@ -412,9 +621,11 @@ pub async fn get_unique_edges_for_data(
     let shared_set: std::collections::HashSet<&str> =
         shared_slugs.iter().map(|s| s.as_str()).collect();
 
-    Ok(all_edges
+    let rows: Vec<GraphEdge> = all_edges
         .into_iter()
         .filter(|e| !shared_set.contains(e.slug.as_str()))
         .map(GraphEdge::from)
-        .collect())
+        .collect();
+    Span::current().record(COGNEE_DB_ROW_COUNT, rows.len() as i64);
+    Ok(rows)
 }

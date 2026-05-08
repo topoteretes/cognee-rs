@@ -10,6 +10,7 @@ postgres = ["sea-orm/sqlx-postgres"]
 
 [dependencies]
 cognee-models     = { path = "../models" }
+cognee-utils      = { path = "../utils" }
 async-trait.workspace = true
 chrono.workspace  = true
 include_dir = "0.7"

@@ -2,10 +2,13 @@
 
 use async_trait::async_trait;
 use chrono::Utc;
+use cognee_utils::tracing_keys::{COGNEE_DB_ROW_COUNT, COGNEE_DB_SYSTEM};
 use sea_orm::{DatabaseConnection, QueryOrder, Set, prelude::*};
+use tracing::{Span, instrument};
 use uuid::Uuid;
 
 use crate::conversions::map_sea_err;
+use crate::database_system_label;
 use crate::entities::notebook;
 use crate::traits::{Notebook, NotebookDb, NotebookUpdatePatch};
 use crate::types::DatabaseError;
@@ -30,7 +33,18 @@ fn model_to_notebook(m: notebook::Model) -> Result<Notebook, DatabaseError> {
 
 #[async_trait]
 impl NotebookDb for DatabaseConnection {
+    #[instrument(
+        name = "cognee.db.relational.notebooks.list_by_owner",
+        level = "info",
+        skip_all,
+        fields(
+            cognee.db.system = tracing::field::Empty,
+            cognee.db.row_count = tracing::field::Empty,
+        ),
+        err,
+    )]
     async fn list_by_owner(&self, owner_id: Uuid) -> Result<Vec<Notebook>, DatabaseError> {
+        Span::current().record(COGNEE_DB_SYSTEM, database_system_label(self));
         let models: Vec<notebook::Model> = notebook::Entity::find()
             .filter(notebook::Column::OwnerId.eq(uuid_hex::to_hex(owner_id)))
             .order_by_asc(notebook::Column::CreatedAt)
@@ -38,9 +52,21 @@ impl NotebookDb for DatabaseConnection {
             .await
             .map_err(map_sea_err)?;
 
-        models.into_iter().map(model_to_notebook).collect()
+        let rows: Vec<Notebook> = models
+            .into_iter()
+            .map(model_to_notebook)
+            .collect::<Result<_, _>>()?;
+        Span::current().record(COGNEE_DB_ROW_COUNT, rows.len() as i64);
+        Ok(rows)
     }
 
+    #[instrument(
+        name = "cognee.db.relational.notebooks.create",
+        level = "info",
+        skip_all,
+        fields(cognee.db.system = tracing::field::Empty),
+        err,
+    )]
     async fn create(
         &self,
         owner_id: Uuid,
@@ -48,10 +74,18 @@ impl NotebookDb for DatabaseConnection {
         cells: serde_json::Value,
         deletable: bool,
     ) -> Result<Notebook, DatabaseError> {
+        Span::current().record(COGNEE_DB_SYSTEM, database_system_label(self));
         self.create_seeded(Uuid::new_v4(), owner_id, name, cells, deletable)
             .await
     }
 
+    #[instrument(
+        name = "cognee.db.relational.notebooks.create_seeded",
+        level = "info",
+        skip_all,
+        fields(cognee.db.system = tracing::field::Empty),
+        err,
+    )]
     async fn create_seeded(
         &self,
         id: Uuid,
@@ -60,6 +94,7 @@ impl NotebookDb for DatabaseConnection {
         cells: serde_json::Value,
         deletable: bool,
     ) -> Result<Notebook, DatabaseError> {
+        Span::current().record(COGNEE_DB_SYSTEM, database_system_label(self));
         let now = Utc::now();
 
         let active = notebook::ActiveModel {
@@ -78,11 +113,22 @@ impl NotebookDb for DatabaseConnection {
             .and_then(model_to_notebook)
     }
 
+    #[instrument(
+        name = "cognee.db.relational.notebooks.get_by_id_and_owner",
+        level = "info",
+        skip_all,
+        fields(
+            cognee.db.system = tracing::field::Empty,
+            cognee.db.row_count = tracing::field::Empty,
+        ),
+        err,
+    )]
     async fn get_by_id_and_owner(
         &self,
         id: Uuid,
         owner_id: Uuid,
     ) -> Result<Option<Notebook>, DatabaseError> {
+        Span::current().record(COGNEE_DB_SYSTEM, database_system_label(self));
         let model = notebook::Entity::find()
             .filter(notebook::Column::Id.eq(uuid_hex::to_hex(id)))
             .filter(notebook::Column::OwnerId.eq(uuid_hex::to_hex(owner_id)))
@@ -90,15 +136,31 @@ impl NotebookDb for DatabaseConnection {
             .await
             .map_err(map_sea_err)?;
 
-        model.map(model_to_notebook).transpose()
+        let result = model.map(model_to_notebook).transpose()?;
+        Span::current().record(
+            COGNEE_DB_ROW_COUNT,
+            if result.is_some() { 1i64 } else { 0i64 },
+        );
+        Ok(result)
     }
 
+    #[instrument(
+        name = "cognee.db.relational.notebooks.update",
+        level = "info",
+        skip_all,
+        fields(
+            cognee.db.system = tracing::field::Empty,
+            cognee.db.row_count = tracing::field::Empty,
+        ),
+        err,
+    )]
     async fn update(
         &self,
         id: Uuid,
         owner_id: Uuid,
         patch: NotebookUpdatePatch,
     ) -> Result<Option<Notebook>, DatabaseError> {
+        Span::current().record(COGNEE_DB_SYSTEM, database_system_label(self));
         let model = notebook::Entity::find()
             .filter(notebook::Column::Id.eq(uuid_hex::to_hex(id)))
             .filter(notebook::Column::OwnerId.eq(uuid_hex::to_hex(owner_id)))
@@ -107,6 +169,7 @@ impl NotebookDb for DatabaseConnection {
             .map_err(map_sea_err)?;
 
         let Some(model) = model else {
+            Span::current().record(COGNEE_DB_ROW_COUNT, 0i64);
             return Ok(None);
         };
 
@@ -120,10 +183,23 @@ impl NotebookDb for DatabaseConnection {
         }
 
         let updated = active.update(self).await.map_err(map_sea_err)?;
-        model_to_notebook(updated).map(Some)
+        let result = model_to_notebook(updated).map(Some)?;
+        Span::current().record(
+            COGNEE_DB_ROW_COUNT,
+            if result.is_some() { 1i64 } else { 0i64 },
+        );
+        Ok(result)
     }
 
+    #[instrument(
+        name = "cognee.db.relational.notebooks.delete",
+        level = "info",
+        skip_all,
+        fields(cognee.db.system = tracing::field::Empty),
+        err,
+    )]
     async fn delete(&self, id: Uuid, owner_id: Uuid) -> Result<bool, DatabaseError> {
+        Span::current().record(COGNEE_DB_SYSTEM, database_system_label(self));
         let result = notebook::Entity::delete_many()
             .filter(notebook::Column::Id.eq(uuid_hex::to_hex(id)))
             .filter(notebook::Column::OwnerId.eq(uuid_hex::to_hex(owner_id)))
