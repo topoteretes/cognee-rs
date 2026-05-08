@@ -16,7 +16,10 @@ use cognee_litert_lm::{
     OptionalArgs, SamplerParams, SamplerType, SessionConfig,
 };
 use serde_json::{Value, json};
-use tracing::{debug, warn};
+use tracing::{debug, instrument, warn};
+
+#[allow(unused_imports)]
+use cognee_utils::tracing_keys::{COGNEE_LLM_MODEL, COGNEE_LLM_PROVIDER};
 
 use crate::error::{LlmError, LlmResult};
 use crate::llm_trait::Llm;
@@ -687,6 +690,15 @@ impl LiteRtAdapter {
 
 #[async_trait]
 impl Llm for LiteRtAdapter {
+    #[instrument(
+        name = "llm.litert_call",
+        level = "info",
+        skip_all,
+        fields(
+            cognee.llm.model = self.model.as_str(),
+            cognee.llm.provider = "litert",
+        ),
+    )]
     async fn generate(
         &self,
         messages: Vec<Message>,
@@ -717,6 +729,15 @@ impl Llm for LiteRtAdapter {
         })
     }
 
+    #[instrument(
+        name = "llm.litert_structured_call",
+        level = "info",
+        skip_all,
+        fields(
+            cognee.llm.model = self.model.as_str(),
+            cognee.llm.provider = "litert",
+        ),
+    )]
     async fn create_structured_output_with_messages_raw(
         &self,
         mut messages: Vec<Message>,
