@@ -1121,6 +1121,103 @@ mod tests {
         assert_eq!(result1[0].id, result2[0].id);
     }
 
+    /// Regression guard for telemetry gap 05-02 (DataPoint provenance audit).
+    ///
+    /// Provenance task 05-03's `extract_content_hash_from_value` walks every
+    /// input `Data` looking for the first non-empty `content_hash`. If any
+    /// ingestion path leaves the column empty, downstream stamping silently
+    /// regresses. This test asserts that every `DataInput` variant reachable
+    /// from `process_data_input` produces a non-empty hex digest, and that
+    /// the value round-trips through the SeaORM `Data` <-> `data::Model`
+    /// conversion (the canonical DB read path).
+    #[tokio::test]
+    async fn test_content_hash_non_empty_across_variants_and_db_roundtrip() {
+        let (pipeline, db) = make_pipeline().await;
+        let owner_id = Uuid::new_v4();
+
+        // 1. Text input.
+        let text_data = pipeline
+            .add(
+                vec![DataInput::Text("Provenance audit text".to_string())],
+                "audit_text",
+                owner_id,
+                None,
+            )
+            .await
+            .unwrap();
+        assert!(
+            !text_data[0].content_hash.is_empty(),
+            "Text input must populate content_hash"
+        );
+
+        // 2. File input.
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "Provenance audit file").unwrap();
+        let file_path = temp_file.path().to_str().unwrap().to_string();
+        let file_data = pipeline
+            .add(
+                vec![DataInput::FilePath(file_path)],
+                "audit_file",
+                owner_id,
+                None,
+            )
+            .await
+            .unwrap();
+        assert!(
+            !file_data[0].content_hash.is_empty(),
+            "FilePath input must populate content_hash"
+        );
+
+        // 3. Binary input.
+        let binary_data = pipeline
+            .add(
+                vec![DataInput::Binary {
+                    name: "audit.bin".to_string(),
+                    data: b"provenance audit binary".to_vec(),
+                }],
+                "audit_binary",
+                owner_id,
+                None,
+            )
+            .await
+            .unwrap();
+        assert!(
+            !binary_data[0].content_hash.is_empty(),
+            "Binary input must populate content_hash"
+        );
+
+        // 4. DataItem wrapper — must propagate the inner Text variant's hash.
+        let wrapped = pipeline
+            .add(
+                vec![DataInput::DataItem {
+                    data: Box::new(DataInput::Text("Wrapped audit text".to_string())),
+                    label: "wrapped".to_string(),
+                    external_metadata: None,
+                }],
+                "audit_wrapped",
+                owner_id,
+                None,
+            )
+            .await
+            .unwrap();
+        assert!(
+            !wrapped[0].content_hash.is_empty(),
+            "DataItem(Text) must populate content_hash"
+        );
+
+        // 5. Round-trip through the DB read path: the value `add()` returned
+        //    must equal the value `get_data()` reads back via
+        //    `From<data::Model> for Data`.
+        let reread = ops::data::get_data(&db, text_data[0].id)
+            .await
+            .unwrap()
+            .expect("data row exists immediately after add()");
+        assert_eq!(
+            reread.content_hash, text_data[0].content_hash,
+            "content_hash must round-trip through SeaORM <-> Data conversion"
+        );
+    }
+
     #[tokio::test]
     async fn test_dataset_id_is_deterministic() {
         let (pipeline, db) = make_pipeline().await;
