@@ -78,6 +78,12 @@ pub struct DataPoint {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_user: Option<String>,
 
+    /// Content hash of the raw `Data` artefact that produced this DataPoint.
+    /// Propagates from upstream `Data.content_hash` through every task in
+    /// the cognify pipeline, enabling content-addressed lineage queries.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_content_hash: Option<String>,
+
     /// Feedback weight (default 0.5, matching Python)
     #[serde(default = "default_feedback_weight")]
     pub feedback_weight: f64,
@@ -105,6 +111,7 @@ impl DataPoint {
             source_task: None,
             source_node_set: None,
             source_user: None,
+            source_content_hash: None,
             feedback_weight: 0.5,
         }
     }
@@ -130,6 +137,7 @@ impl DataPoint {
             source_task: None,
             source_node_set: None,
             source_user: None,
+            source_content_hash: None,
             feedback_weight: 0.5,
         }
     }
@@ -185,6 +193,7 @@ mod tests {
         assert!(dp.source_task.is_none());
         assert!(dp.source_node_set.is_none());
         assert!(dp.source_user.is_none());
+        assert!(dp.source_content_hash.is_none());
         assert!((dp.feedback_weight - 0.5).abs() < f64::EPSILON);
         assert!(dp.created_at > 0);
         assert!(dp.updated_at > 0);
@@ -225,6 +234,24 @@ mod tests {
         let dp = DataPoint::new("Entity", None);
         let json_str = dp.get_embeddable_data();
         assert!(json_str.contains("\"type\":\"Entity\""));
+    }
+
+    #[test]
+    fn source_content_hash_round_trips_when_set_and_omitted_when_none() {
+        let mut dp = DataPoint::new("Entity", None);
+        assert!(
+            !serde_json::to_string(&dp)
+                .unwrap()
+                .contains("source_content_hash"),
+            "absent field must be skipped by serde"
+        );
+
+        dp.source_content_hash = Some("md5:abcdef".to_string());
+        let json = serde_json::to_string(&dp).unwrap();
+        assert!(json.contains(r#""source_content_hash":"md5:abcdef""#));
+
+        let parsed: DataPoint = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.source_content_hash.as_deref(), Some("md5:abcdef"));
     }
 
     #[test]

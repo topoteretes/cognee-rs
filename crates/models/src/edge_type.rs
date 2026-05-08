@@ -97,6 +97,7 @@ impl EdgeType {
                 source_task: None,
                 source_node_set: None,
                 source_user: None,
+                source_content_hash: None,
                 feedback_weight: 0.5,
             },
             relationship_name: name,
