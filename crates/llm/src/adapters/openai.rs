@@ -9,6 +9,9 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use tracing::{debug, instrument, warn};
 
+#[allow(unused_imports)]
+use cognee_utils::tracing_keys::{COGNEE_LLM_MODEL, COGNEE_LLM_PROVIDER};
+
 use crate::error::{LlmError, LlmResult};
 use crate::llm_trait::Llm;
 use crate::transcriber::{Transcriber, TranscriptionOutput, validate_audio_format};
@@ -135,7 +138,16 @@ impl OpenAIAdapter {
     /// - HTTP 5xx (server errors)
     ///
     /// Errors on HTTP 400 and 401 are returned immediately without retrying.
-    #[instrument(name = "llm.api_call", skip(self, request_body), fields(url = tracing::field::Empty))]
+    #[instrument(
+        name = "llm.api_call",
+        level = "info",
+        skip(self, request_body),
+        fields(
+            url = tracing::field::Empty,
+            cognee.llm.model = self.model.as_str(),
+            cognee.llm.provider = "openai",
+        ),
+    )]
     async fn call_api(&self, request_body: Value) -> LlmResult<OpenAIResponse> {
         let url = format!("{}/chat/completions", self.base_url);
         tracing::Span::current().record("url", url.as_str());
@@ -726,7 +738,16 @@ fn audio_mime_type(format: &str) -> &'static str {
 
 impl OpenAIAdapter {
     /// Call the Whisper transcription API with the same retry logic as `call_api`.
-    #[instrument(name = "llm.transcription_api_call", skip(self, form), fields(url = tracing::field::Empty))]
+    #[instrument(
+        name = "llm.transcription_api_call",
+        level = "info",
+        skip(self, form),
+        fields(
+            url = tracing::field::Empty,
+            cognee.llm.model = self.transcription_model.as_str(),
+            cognee.llm.provider = "openai",
+        ),
+    )]
     async fn call_transcription_api(
         &self,
         form: reqwest::multipart::Form,

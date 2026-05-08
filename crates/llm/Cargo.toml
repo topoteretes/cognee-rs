@@ -32,6 +32,9 @@ reqwest = { workspace = true, features = ["multipart"] }
 log.workspace = true
 tracing.workspace = true
 
+# Shared tracing-key constants
+cognee-utils = { path = "../utils" }
+
 # Android local LLM backend (feature-gated)
 cognee-litert-lm = { workspace = true, optional = true }
 
