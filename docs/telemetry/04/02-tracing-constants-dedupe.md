@@ -1,6 +1,6 @@
 # Task 04-02 — Deduplicate `cognee.*` tracing-key constants
 
-**Status**: ⬜ unimplemented
+**Status**: ✅ implemented in commit 1e03ac9
 **Owner**: _unassigned_
 **Depends on**: —
 **Blocks**:
