@@ -381,7 +381,7 @@ high-level summary.
 | 08 | pgvector adapter spans (pg_graph deferred — see sub-doc note). Mirror the Qdrant instrumentation onto `pgvector_adapter` (`cognee.db.system="pgvector"`). pg_graph instrumentation is deferred pending a fan-in refactor: the only public `query` method is a stub returning `QueryError("not supported")`, so meaningful coverage requires wrapping the ~22 typed methods. Decision 3 remains a goal. | [04/08-pg-adapters.md](04/08-pg-adapters.md) | 02, 04 | ✅ 16ecc16 |
 | 09 | Ops-level instrumentation of every public function in `crates/database/src/ops/*.rs` (~93 functions across 13 ops files; the `mod.rs` and helper-only file in `crates/database/src/ops/` are not ops) with `cognee.db.relational.<file_stem>.<fn>` spans. Adds a `database_system_label(&db)` helper that maps SeaORM backend → `"sqlite"` / `"postgres"` / `"mysql"`. | [04/09-seaorm-ops-instrumentation.md](04/09-seaorm-ops-instrumentation.md) | 02 | ✅ 176301b |
 | 10 | Adapter span-instrumentation integration tests using the `SpanCapture` helper from 03. Six new test files: `qdrant_span_instrumentation`, `ladybug_span_instrumentation`, `openai_span_instrumentation` (mockito), `pgvector_span_instrumentation` (skip-on-no-pg), `pg_graph_span_instrumentation` (same), `relational_ops_span_instrumentation` (15 smoke tests). | [04/10-tests.md](04/10-tests.md) | 03, 04, 05, 06, 08, 09 | ✅ 92dbaa6 |
-| 11 | Docs: extend `docs/observability/opentelemetry.md` with the canonical span-name / attribute reference. Update `docs/telemetry/gap-analysis.md` section 4 to mark the LLM/DB span gap closed. CI: add a Postgres lane for the pg-side span tests if not already present. Closure summary at the bottom of this doc. | [04/11-docs-and-ci.md](04/11-docs-and-ci.md) | 01–10 | ✅ _this commit_ |
+| 11 | Docs: extend `docs/observability/opentelemetry.md` with the canonical span-name / attribute reference. Update `docs/telemetry/gap-analysis.md` section 4 to mark the LLM/DB span gap closed. CI: add a Postgres lane for the pg-side span tests if not already present. Closure summary at the bottom of this doc. | [04/11-docs-and-ci.md](04/11-docs-and-ci.md) | 01–10 | ✅ f78dd1f |
 
 ### Suggested execution order
 
@@ -565,7 +565,7 @@ as a pair (implementation commit + sub-doc status flip).
 | 04-09 | `d332089` | telemetry/db-spans-04-09: mark action item 09 complete |
 | 04-10 | `92dbaa6` | telemetry/db-spans-04-10: add adapter span integration tests using `SpanCapture` |
 | 04-10 | `0158aad` | telemetry/db-spans-04-10: mark action item 10 complete |
-| 04-11 | _this commit_ | telemetry/db-spans-04-11: docs + CI + gap closure |
+| 04-11 | `f78dd1f` | telemetry/db-spans-04-11: docs + CI + gap closure |
 
 ### What the gap delivered
 

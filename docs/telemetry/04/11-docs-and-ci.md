@@ -1,6 +1,6 @@
 # Task 04-11 — Docs + CI updates + gap closure
 
-**Status**: ⬜ unimplemented
+**Status**: ✅ implemented in commit f78dd1f
 **Owner**: _unassigned_
 **Depends on**: every prior task in this gap (01–10).
 **Blocks**: —
