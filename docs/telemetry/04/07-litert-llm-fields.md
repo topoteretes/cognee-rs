@@ -1,6 +1,6 @@
 # Task 04-07 — Add `cognee.llm.{model,provider}` fields to `LiteRtAdapter`
 
-**Status**: ⬜ unimplemented
+**Status**: ✅ implemented in commit ca28fba
 **Owner**: _unassigned_
 **Depends on**:
 - [Task 04-02](02-tracing-constants-dedupe.md) — `COGNEE_LLM_MODEL`/`COGNEE_LLM_PROVIDER` constants.
