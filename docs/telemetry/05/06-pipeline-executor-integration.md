@@ -1,6 +1,6 @@
 # Task 05-06 — Pipeline executor integration (`call_with_retry`, `process_iter`, `process_stream`)
 
-**Status**: ⬜ not started
+**Status**: implemented in commit 7199d43 (introduced stamp_tree_dyn helper for dyn Value cascade; TextSummary deferred to 05-09).
 **Owner**: _unassigned_
 **Depends on**:
 - [Task 05-03 — Provenance core](03-provenance-core.md) (`stamp_tree`, extractors).
