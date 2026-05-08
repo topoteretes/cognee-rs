@@ -1,6 +1,6 @@
 # Task 05-10 — Tests (unit + pipeline integration + cross-SDK parity)
 
-**Status**: ⬜ not started
+**Status**: implemented in commit f3d8194 (4 new test files + MockVectorDB::get_payload helper + cognee-models dev-dep on cognee-vector + cross-SDK parity Python test).
 **Owner**: _unassigned_
 **Depends on**:
 - [Task 05-03 — Provenance core](03-provenance-core.md) (`stamp_tree` + extract helpers).
