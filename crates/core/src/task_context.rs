@@ -1,4 +1,5 @@
-use std::sync::Arc;
+use std::collections::HashSet;
+use std::sync::{Arc, Mutex};
 
 use cognee_database::DatabaseConnection;
 use cognee_graph::GraphDBTrait;
@@ -40,6 +41,34 @@ pub struct PipelineContext {
     /// [`TaskContext::publish_payload_field`]) to attribute payload events.
     /// `None` when the task is not running inside `execute()`.
     pub run_id: Option<Uuid>,
+    /// Email of the user running the pipeline, if known. Used by the
+    /// provenance-stamping algorithm to populate
+    /// `DataPoint.source_user`. Mirrors Python's `user.email`.
+    /// Resolution priority is captured by [`PipelineContext::user_label`].
+    pub user_email: Option<String>,
+    /// DataPoints already stamped during this pipeline run, keyed on
+    /// their UUID. Shared across all tasks via the per-run
+    /// `PipelineContext` so a DataPoint that survives multiple tasks
+    /// is stamped exactly once — with the **first** task's name.
+    /// Mirrors Python's `PipelineContext._provenance_visited`.
+    pub provenance_visited: Arc<Mutex<HashSet<Uuid>>>,
+}
+
+impl PipelineContext {
+    /// Resolved label used as `DataPoint.source_user` by the
+    /// provenance-stamping algorithm.
+    ///
+    /// Priority order (matches Python's `user.email or str(user.id)`,
+    /// locked decision 4):
+    ///
+    /// 1. `user_email` if set.
+    /// 2. Else `user_id.to_string()` if set.
+    /// 3. Else `None` (the DP keeps its own value, or stays unstamped).
+    pub fn user_label(&self) -> Option<String> {
+        self.user_email
+            .clone()
+            .or_else(|| self.user_id.map(|id| id.to_string()))
+    }
 }
 /// Runtime dependencies and control tokens for a single pipeline task.
 ///
@@ -107,6 +136,29 @@ impl TaskContext {
             None => return Arc::clone(self),
         };
         pipeline_ctx.current_data = Some(data);
+        Arc::new(TaskContext {
+            thread_pool: Arc::clone(&self.thread_pool),
+            database: Arc::clone(&self.database),
+            graph_db: Arc::clone(&self.graph_db),
+            vector_db: Arc::clone(&self.vector_db),
+            cancellation: self.cancellation.clone(),
+            progress: self.progress.clone(),
+            pipeline_ctx: Some(pipeline_ctx),
+            exec_status: Arc::clone(&self.exec_status),
+            pipeline_watcher: self.pipeline_watcher.clone(),
+        })
+    }
+
+    /// Create a new `Arc<TaskContext>` with `user_email` set on the pipeline
+    /// context. All `Arc` fields are shallow-cloned.
+    ///
+    /// Returns the original `Arc` unchanged if no `pipeline_ctx` is present.
+    pub fn with_user_email(self: &Arc<Self>, email: String) -> Arc<Self> {
+        let mut pipeline_ctx = match &self.pipeline_ctx {
+            Some(ctx) => ctx.clone(),
+            None => return Arc::clone(self),
+        };
+        pipeline_ctx.user_email = Some(email);
         Arc::new(TaskContext {
             thread_pool: Arc::clone(&self.thread_pool),
             database: Arc::clone(&self.database),
@@ -275,5 +327,59 @@ impl TaskContextBuilder {
         };
 
         Ok((handle, ctx))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn user_label_prefers_email() {
+        let ctx = PipelineContext {
+            pipeline_id: Uuid::new_v4(),
+            pipeline_name: "test".into(),
+            user_id: Some(Uuid::new_v4()),
+            tenant_id: None,
+            dataset_id: None,
+            current_data: None,
+            run_id: None,
+            user_email: Some("alice@example.com".into()),
+            provenance_visited: Arc::new(Mutex::new(HashSet::new())),
+        };
+        assert_eq!(ctx.user_label().as_deref(), Some("alice@example.com"));
+    }
+
+    #[test]
+    fn user_label_falls_back_to_user_id() {
+        let uid = Uuid::new_v4();
+        let ctx = PipelineContext {
+            pipeline_id: Uuid::new_v4(),
+            pipeline_name: "test".into(),
+            user_id: Some(uid),
+            tenant_id: None,
+            dataset_id: None,
+            current_data: None,
+            run_id: None,
+            user_email: None,
+            provenance_visited: Arc::new(Mutex::new(HashSet::new())),
+        };
+        assert_eq!(ctx.user_label(), Some(uid.to_string()));
+    }
+
+    #[test]
+    fn user_label_is_none_when_neither_set() {
+        let ctx = PipelineContext {
+            pipeline_id: Uuid::new_v4(),
+            pipeline_name: "test".into(),
+            user_id: None,
+            tenant_id: None,
+            dataset_id: None,
+            current_data: None,
+            run_id: None,
+            user_email: None,
+            provenance_visited: Arc::new(Mutex::new(HashSet::new())),
+        };
+        assert!(ctx.user_label().is_none());
     }
 }

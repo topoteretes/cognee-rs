@@ -7,7 +7,7 @@
 //! - The helper silently no-ops when no watcher is attached.
 //! - The helper silently no-ops when `pipeline_ctx.run_id` is `None`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -95,6 +95,8 @@ async fn make_ctx_with_watcher(watcher: Arc<dyn PipelineWatcher>) -> Arc<TaskCon
             dataset_id: None,
             current_data: None,
             run_id: None,
+            user_email: None,
+            provenance_visited: Arc::new(Mutex::new(HashSet::new())),
         }),
         exec_status: Arc::new(NoopExecStatusManager),
         pipeline_watcher: Some(watcher),
@@ -120,6 +122,8 @@ async fn make_ctx_without_watcher() -> Arc<TaskContext> {
             dataset_id: None,
             current_data: None,
             run_id: Some(Uuid::new_v4()),
+            user_email: None,
+            provenance_visited: Arc::new(Mutex::new(HashSet::new())),
         }),
         exec_status: Arc::new(NoopExecStatusManager),
         pipeline_watcher: None,

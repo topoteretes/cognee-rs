@@ -21,6 +21,7 @@
 
 #![cfg(feature = "telemetry")]
 
+use std::collections::HashSet;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
@@ -137,6 +138,8 @@ async fn build_test_task_context_with_tenant(tenant_id: Option<Uuid>) -> Arc<Tas
             dataset_id: None,
             current_data: None,
             run_id: None,
+            user_email: None,
+            provenance_visited: Arc::new(Mutex::new(HashSet::new())),
         }),
         exec_status: Arc::new(NoopExecStatusManager),
         pipeline_watcher: None,

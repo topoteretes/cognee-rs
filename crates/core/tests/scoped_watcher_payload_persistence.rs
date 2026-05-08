@@ -8,10 +8,10 @@
 
 #![cfg(feature = "pipeline-run-registry")]
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use cognee_core::cancellation::cancellation_pair;
@@ -154,6 +154,8 @@ async fn make_ctx(watcher: Arc<dyn PipelineWatcher>) -> Arc<TaskContext> {
             dataset_id: None,
             current_data: None,
             run_id: None,
+            user_email: None,
+            provenance_visited: Arc::new(Mutex::new(HashSet::new())),
         }),
         exec_status: Arc::new(NoopExecStatusManager),
         pipeline_watcher: Some(watcher),
@@ -178,8 +180,6 @@ fn payload_publishing_task() -> Task {
 
 #[tokio::test]
 async fn scoped_watcher_persists_payload_via_repo() {
-    use std::sync::Mutex;
-
     struct CapturingWatcher {
         inner: Arc<ScopedRunWatcher>,
         captured_run_id: Mutex<Option<Uuid>>,
