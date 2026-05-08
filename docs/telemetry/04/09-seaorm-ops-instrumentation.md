@@ -1,6 +1,6 @@
 # Task 04-09 — Instrument `crates/database/src/ops/*.rs` (ops-level)
 
-**Status**: ⬜ unimplemented
+**Status**: ✅ implemented in commit 176301b (~93 `#[instrument]` annotations across 13 ops files plus the `database_system_label` helper in `lib.rs`; `mod.rs` is not an ops file, so the actual file count is 13 rather than the 14 estimated above)
 **Owner**: _unassigned_
 **Depends on**:
 - [Task 04-02](02-tracing-constants-dedupe.md) — `cognee_utils::tracing_keys::COGNEE_DB_SYSTEM`.
