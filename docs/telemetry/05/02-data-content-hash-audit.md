@@ -1,6 +1,7 @@
 # Task 05-02 — Audit `Data.content_hash` propagation through Rust ingestion
 
 **Status**: ⬜ not started
+**Status**: implemented in commit e2dfdd6 (audit confirmed no production fix required; added regression test).
 **Owner**: _unassigned_
 **Depends on**: —
 **Blocks**:
