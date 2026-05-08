@@ -75,6 +75,28 @@ impl MockVectorDB {
         *slot = Some(msg.into());
     }
 
+    /// Return the metadata payload stored against `point_id` in the
+    /// `(data_type, field_name)` collection, or `None` if the collection
+    /// or point is unknown.
+    ///
+    /// Used by provenance-payload regression tests (gap 05-10) to verify
+    /// the full DataPoint dump round-trips through `index_points`.
+    pub fn get_payload(
+        &self,
+        data_type: &str,
+        field_name: &str,
+        point_id: Uuid,
+    ) -> Option<HashMap<String, serde_json::Value>> {
+        let key = Self::collection_key(data_type, field_name);
+        let collections = self.collections.lock().unwrap(); // lock poison is unrecoverable
+        let collection = collections.get(&key)?;
+        collection
+            .points
+            .iter()
+            .find(|p| p.id == point_id)
+            .map(|p| p.metadata.clone())
+    }
+
     /// Compute cosine similarity between two vectors
     fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
         let dot: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();

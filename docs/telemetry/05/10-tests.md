@@ -27,7 +27,7 @@ Three layers of test coverage:
 | Pipeline integration | `crates/core/tests/provenance_pipeline_integration.rs` (NEW) | A 3-task in-memory pipeline that emits DocumentChunk → Entity → Triplet, run via `cognee_core::execute`, asserting every output DataPoint has the expected `source_pipeline` / `source_task` / `source_user` / `source_node_set` / `source_content_hash`. |
 | Cognify E2E | `crates/cognify/tests/provenance_e2e.rs` (NEW) | Run a real `cognify_pipeline` against a small fixture and assert the four expected `source_task` values (`classify_documents`, `extract_chunks_from_documents`, `extract_graph_from_data`, `summarize_text`) appear on the resulting graph nodes. |
 | Vector payload regression | `crates/vector/tests/provenance_payload.rs` (NEW) | Index a freshly stamped DataPoint via the cognify add-data-points path; pull it back via `search_similar`; assert all five `source_*` keys land in the metadata payload. |
-| Cross-SDK parity | `e2e-cross-sdk/tests/test_provenance_parity.py` (NEW) | Run identical fixtures through Python and Rust SDKs in the existing Docker harness; assert the multiset of `source_task` values per node-type overlaps ≥90% across the two SDKs. |
+| Cross-SDK parity | `e2e-cross-sdk/harness/test_provenance_parity.py` (NEW) | Run identical fixtures through Python and Rust SDKs in the existing Docker harness; assert the multiset of `source_task` values per node-type overlaps ≥90% across the two SDKs. (Pytest discovery roots at `e2e-cross-sdk/harness/`, NOT `tests/`.) |
 
 ## 2. Rationale
 
@@ -278,10 +278,12 @@ If `MockVectorDB` does not have a `get_payload` method, add one in
 `cognee-test-utils` (single-line addition, returns the
 `HashMap<String, Value>` for a given point ID).
 
-### 4.5 Cross-SDK parity test (`e2e-cross-sdk/tests/test_provenance_parity.py`)
+### 4.5 Cross-SDK parity test (`e2e-cross-sdk/harness/test_provenance_parity.py`)
 
 Add a new pytest file under
-[`e2e-cross-sdk/tests/`](../../e2e-cross-sdk/tests/) that:
+[`e2e-cross-sdk/harness/`](../../e2e-cross-sdk/harness/) (the harness
+directory is the actual pytest discovery root in this repo — there is
+no `e2e-cross-sdk/tests/` directory) that:
 
 1. Runs `python -m cognee add` then `python -m cognee cognify` on a
    fixed corpus.
@@ -305,11 +307,13 @@ Add a new pytest file under
      chunk_index)`.
 
 Use the existing `Dockerfile` build path; mirror
-[`test_cognify_structural.py`](../../e2e-cross-sdk/tests/test_cognify_structural.py)
-for the fixture-loading boilerplate.
+[`test_cognify_structural.py`](../../e2e-cross-sdk/harness/test_cognify_structural.py)
+for the fixture-loading boilerplate (and reuse the `python_workspace`
+/ `rust_workspace` / DB-helper fixtures defined in
+[`harness/conftest.py`](../../e2e-cross-sdk/harness/conftest.py)).
 
 ```python
-# e2e-cross-sdk/tests/test_provenance_parity.py
+# e2e-cross-sdk/harness/test_provenance_parity.py
 import os
 import pytest
 
@@ -346,9 +350,10 @@ def test_provenance_parity(rust_cognified_graph, python_cognified_graph):
 
 ### 4.6 Wire the parity test into the existing pytest discovery
 
-`pytest` already discovers `e2e-cross-sdk/tests/test_*.py` via the
-existing `pytest.ini` / `conftest.py`. No new wiring needed in this
-task; CI lane confirmation is in [05-11](11-docs-and-ci.md).
+`pytest` already discovers `e2e-cross-sdk/harness/test_*.py` via the
+existing harness configuration / `harness/conftest.py`. No new wiring
+needed in this task; CI lane confirmation is in
+[05-11](11-docs-and-ci.md).
 
 ## 5. Verification
 
@@ -382,9 +387,9 @@ scripts/check_all.sh
   — NEW. One payload-shape regression test.
 - (Conditional) [`crates/test-utils/src/lib.rs`](../../crates/test-utils/src/lib.rs)
   — `MockVectorDB::get_payload` if the test needs it.
-- [`e2e-cross-sdk/tests/test_provenance_parity.py`](../../e2e-cross-sdk/tests/test_provenance_parity.py)
+- [`e2e-cross-sdk/harness/test_provenance_parity.py`](../../e2e-cross-sdk/harness/test_provenance_parity.py)
   — NEW.
-- (Conditional) [`e2e-cross-sdk/tests/conftest.py`](../../e2e-cross-sdk/tests/conftest.py)
+- (Conditional) [`e2e-cross-sdk/harness/conftest.py`](../../e2e-cross-sdk/harness/conftest.py)
   if a new fixture (`rust_cognified_graph`, `python_cognified_graph`)
   needs to be added.
 
