@@ -10,6 +10,7 @@ pipeline-run-registry = []
 [dependencies]
 cognee-database = { path = "../database" }
 cognee-graph = { path = "../graph" }
+cognee-models = { path = "../models" }
 cognee-telemetry = { path = "../telemetry" }
 cognee-vector = { path = "../vector" }
 

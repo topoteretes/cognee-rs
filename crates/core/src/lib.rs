@@ -18,6 +18,7 @@ pub mod error;
 pub mod exec_status;
 pub mod pipeline;
 pub mod progress;
+pub mod provenance;
 pub mod runtime;
 pub mod task;
 pub mod task_context;
@@ -35,6 +36,10 @@ pub use pipeline::{
     RetryDelay, RetryPolicy, TaskStatus, execute, execute_blocking, execute_in_background,
 };
 pub use progress::ProgressToken;
+pub use provenance::{
+    HasDataPoint, ProvenanceContext, extract_content_hash_from_value, extract_node_set_from_value,
+    stamp_tree,
+};
 pub use runtime::AsyncRuntime;
 pub use task::{
     AsyncBatchFn, AsyncFn, AsyncStreamBatchFn, AsyncStreamFn, SyncBatchFn, SyncFn, SyncIterBatchFn,
