@@ -194,3 +194,81 @@ fn downcast_to_datapoint(value: &dyn Value) -> Option<&DataPoint> {
     // lockstep with their `HasDataPoint` impls (gap 05-04).
     None
 }
+
+/// Type-erased dispatch for [`stamp_tree`].
+///
+/// Recognises every `HasDataPoint` container type from `cognee-models`
+/// (the executor's canonical set; gap 05-04) plus their bare `Vec<T>`
+/// containers as emitted by tasks. Returns `true` if the concrete type
+/// was recognised and stamped, `false` for "passed through unchanged"
+/// (matches Python's no-op branch for non-DataPoint values).
+///
+/// `cognify::TextSummary` is intentionally absent — gap 05-07 §4.7
+/// chose option (b): keep `TextSummary` out of the dyn cascade in
+/// `cognee-core` to avoid a `cognee-cognify` dependency. Cognify
+/// pre-stamps `TextSummary` via its local helper (locked decision 6).
+pub fn stamp_tree_dyn(
+    value: &mut dyn Value,
+    ctx: &ProvenanceContext<'_>,
+    visited: &mut HashSet<Uuid>,
+) -> bool {
+    use cognee_models::{Document, DocumentChunk, EdgeType, Entity, EntityType};
+
+    let any = value.as_any_mut();
+
+    if let Some(d) = any.downcast_mut::<Document>() {
+        stamp_tree(d, ctx, visited);
+        return true;
+    }
+    if let Some(d) = any.downcast_mut::<DocumentChunk>() {
+        stamp_tree(d, ctx, visited);
+        return true;
+    }
+    if let Some(d) = any.downcast_mut::<Entity>() {
+        stamp_tree(d, ctx, visited);
+        return true;
+    }
+    if let Some(d) = any.downcast_mut::<EntityType>() {
+        stamp_tree(d, ctx, visited);
+        return true;
+    }
+    if let Some(d) = any.downcast_mut::<EdgeType>() {
+        stamp_tree(d, ctx, visited);
+        return true;
+    }
+
+    // Vec<T> containers — task outputs that wrap multiple DataPoints
+    // (e.g. `Vec<DocumentChunk>` from a chunking task). Walk and recurse.
+    if let Some(items) = any.downcast_mut::<Vec<Document>>() {
+        for item in items.iter_mut() {
+            stamp_tree(item, ctx, visited);
+        }
+        return true;
+    }
+    if let Some(items) = any.downcast_mut::<Vec<DocumentChunk>>() {
+        for item in items.iter_mut() {
+            stamp_tree(item, ctx, visited);
+        }
+        return true;
+    }
+    if let Some(items) = any.downcast_mut::<Vec<Entity>>() {
+        for item in items.iter_mut() {
+            stamp_tree(item, ctx, visited);
+        }
+        return true;
+    }
+    if let Some(items) = any.downcast_mut::<Vec<EntityType>>() {
+        for item in items.iter_mut() {
+            stamp_tree(item, ctx, visited);
+        }
+        return true;
+    }
+    if let Some(items) = any.downcast_mut::<Vec<EdgeType>>() {
+        for item in items.iter_mut() {
+            stamp_tree(item, ctx, visited);
+        }
+        return true;
+    }
+
+    false
+}

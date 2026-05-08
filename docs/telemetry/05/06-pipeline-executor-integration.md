@@ -29,7 +29,7 @@ Three call sites in
 2. **`process_iter`** (line 1068) and **`process_stream`** (line 1096):
    stamp each `Box<dyn Value>` **before** it is converted into
    `Arc<dyn Value>` for `dispatch_batch`.
-3. **`execute`** (line 486 / nearby `PipelineRunInfo` initialisation):
+3. **`execute`** (line 611 / nearby `PipelineRunInfo` initialisation):
    ensure the per-run `PipelineContext` has a non-empty
    `provenance_visited` (today, all callers either rely on the builder
    default or pass an empty Mutex; gap 05-05 makes this implicit).
@@ -45,7 +45,7 @@ Behaviour after this task:
   they hand off to the next task.
 
 The existing
-[`ExecStatusManager::stamp_provenance` audit-log call at line 1194-1205](../../crates/core/src/pipeline.rs#L1194-L1205)
+[`ExecStatusManager::stamp_provenance` audit-log call at lines 1180-1205](../../crates/core/src/pipeline.rs#L1180-L1205)
 **stays intact**. Per locked decision 3, the two functions coexist.
 
 ## 2. Rationale
@@ -341,11 +341,21 @@ while let Some(mut item) = stream.next().await {
 ### 4.6 Initialise the visited set when `execute()` builds the run
 
 Find the `PipelineContext` construction inside
-[`pipeline.rs::execute`](../../crates/core/src/pipeline.rs#L486)
+[`pipeline.rs::execute`](../../crates/core/src/pipeline.rs#L611)
 (around the per-run `PipelineContext` setup; if `execute()` does not
 construct one and instead reuses a caller-supplied one, the
 initialisation already happens at the lib API layer — verify and
 either initialise here or note in §7).
+
+**Confirmation (post-05-05):** `execute()` does **not** construct
+`PipelineContext`. The caller supplies `Arc<TaskContext>` and `execute`
+only adjusts the `run_id` via `ctx.with_run_id(run_id)`. So:
+
+- The lib API layer is the right place to ensure `provenance_visited`
+  is populated (the `Default` impl from 05-05 already does this — every
+  freshly-built `PipelineContext` has an empty `Arc<Mutex<HashSet>>`).
+- For cross-run isolation, prefer the **clear** form below at the top
+  of `execute()` (right after `let ctx = ctx.with_run_id(run_id)`):
 
 If a per-run construction exists, ensure it sets:
 

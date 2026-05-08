@@ -653,6 +653,15 @@ pub async fn execute(
     // payload events via `TaskContext::publish_payload_field`.
     let ctx = ctx.with_run_id(run_id);
 
+    // Clear the per-run provenance visited-set so each pipeline run is
+    // isolated (a recycled `TaskContext` would otherwise carry stamps
+    // from the previous run). Locked decision 2: visited-set is keyed
+    // on `DataPoint.id: Uuid`. See gap 05-06 §4.6.
+    if let Some(pctx) = ctx.pipeline_ctx.as_ref() {
+        // lock poison is unrecoverable
+        pctx.provenance_visited.lock().unwrap().clear();
+    }
+
     watcher
         .on_pipeline(pipeline_id, PipelineStatus::Started { task_count })
         .await;
@@ -857,6 +866,34 @@ enum Resolved {
     Iter(ValueIter),
     Stream(ValueStream),
 }
+
+/// Bundle of inputs needed to construct a [`crate::provenance::ProvenanceContext`]
+/// at the iter / stream consumption sites. Built once per task in
+/// [`execute_from`] and threaded through [`process_iter`] /
+/// [`process_stream`] / [`dispatch_batch`] so the per-item stamping
+/// loop does not re-walk the input value on every yield.
+///
+/// See gap 05-06 §4.4 for the design rationale.
+#[derive(Clone)]
+struct ProvenanceInputs<'a> {
+    pipeline_name: &'a str,
+    task_name: &'a str,
+    user_label: Option<String>,
+    input_node_set: Option<String>,
+    input_content_hash: Option<String>,
+}
+
+impl<'a> ProvenanceInputs<'a> {
+    fn ctx(&'a self) -> crate::provenance::ProvenanceContext<'a> {
+        crate::provenance::ProvenanceContext {
+            pipeline_name: self.pipeline_name,
+            task_name: self.task_name,
+            user_label: self.user_label.as_deref(),
+            node_set: self.input_node_set.as_deref(),
+            content_hash: self.input_content_hash.as_deref(),
+        }
+    }
+}
 /// Parameters that are constant for the entire pipeline run.
 /// Bundled into one struct to keep recursive function signatures short.
 struct ExecEnv<'a> {
@@ -946,6 +983,21 @@ fn execute_from<'a>(
         // the value may differ from the dedup check at index 0).
         let data_id = env.data_id_fn.as_ref().and_then(|f| f(Arc::clone(&input)));
 
+        // Build the per-task provenance inputs once. Walks the input
+        // value to extract the inherited `node_set` / `content_hash`
+        // (Python parity: `_extract_node_set` / `_extract_content_hash`
+        // in `run_tasks_base.py`). Reused by `call_with_retry` (Single
+        // branch) and by `process_iter` / `process_stream` (eager
+        // per-item stamping at consumption — locked decision 8).
+        let user_label_owned = env.ctx.pipeline_ctx.as_ref().and_then(|p| p.user_label());
+        let prov_inputs = ProvenanceInputs {
+            pipeline_name: env.pipeline_name.unwrap_or(""),
+            task_name: task_label,
+            user_label: user_label_owned,
+            input_node_set: crate::provenance::extract_node_set_from_value(input.as_ref()),
+            input_content_hash: crate::provenance::extract_content_hash_from_value(input.as_ref()),
+        };
+
         let resolved = call_with_retry(
             &info.task,
             input,
@@ -953,6 +1005,7 @@ fn execute_from<'a>(
             task_name,
             data_id.as_deref(),
             info.summary_template.as_deref(),
+            &prov_inputs,
             env,
         )
         .await?;
@@ -985,10 +1038,10 @@ fn execute_from<'a>(
         match resolved {
             Resolved::Single(v) => execute_from(rest, v, first_index + 1, env).await,
             Resolved::Iter(iter) => {
-                process_iter(iter, rest, batch_size, first_index + 1, env).await
+                process_iter(iter, rest, batch_size, first_index + 1, &prov_inputs, env).await
             }
             Resolved::Stream(stream) => {
-                process_stream(stream, rest, batch_size, first_index + 1, env).await
+                process_stream(stream, rest, batch_size, first_index + 1, &prov_inputs, env).await
             }
         }
     })
@@ -1009,6 +1062,7 @@ fn dispatch_batch<'a>(
     batch: Vec<Box<dyn Value>>,
     tail: &'a [TaskInfo],
     first_index: usize,
+    prov_inputs: &'a ProvenanceInputs<'a>,
     env: &'a ExecEnv<'a>,
 ) -> BoxFuture<'a, Result<Vec<Arc<dyn Value>>, ExecutionError>> {
     Box::pin(async move {
@@ -1022,6 +1076,14 @@ fn dispatch_batch<'a>(
 
         if next_info.task.is_batch() {
             // Call the batch task directly with the accumulated slice.
+            // Note: batch tasks bypass `call_with_retry` and therefore
+            // provenance stamping (gap 05-06 §8). Items in `batch`
+            // were already stamped before being pushed by the
+            // upstream `process_iter` / `process_stream`. Pass
+            // `prov_inputs` through so any nested iter / stream from
+            // the batch task's output reuses the visited-set
+            // (already-stamped items short-circuit; new items adopt
+            // the parent task's provenance as a best-effort default).
             let call = next_info.task.call_batch(&batch, env.ctx.clone());
             let resolved =
                 resolve_call(call)
@@ -1040,14 +1102,15 @@ fn dispatch_batch<'a>(
                         .first()
                         .and_then(|t| t.batch_size)
                         .unwrap_or(env.default_batch_size);
-                    process_iter(iter, rest, batch_size, first_index + 1, env).await
+                    process_iter(iter, rest, batch_size, first_index + 1, prov_inputs, env).await
                 }
                 Resolved::Stream(stream) => {
                     let batch_size = rest
                         .first()
                         .and_then(|t| t.batch_size)
                         .unwrap_or(env.default_batch_size);
-                    process_stream(stream, rest, batch_size, first_index + 1, env).await
+                    process_stream(stream, rest, batch_size, first_index + 1, prov_inputs, env)
+                        .await
                 }
             }
         } else {
@@ -1065,26 +1128,35 @@ fn dispatch_batch<'a>(
 
 /// Gather items from a synchronous iterator in `batch_size` chunks, run the
 /// tail pipeline on each chunk, and collect all outputs.
+///
+/// Each item is **eagerly stamped** with provenance before being pushed
+/// into the batch (locked decision 8). The visited-set on the
+/// `PipelineContext` short-circuits re-stamping a DataPoint that has
+/// already been seen by an upstream task in the same run.
 async fn process_iter(
     iter: ValueIter,
     tail: &[TaskInfo],
     batch_size: usize,
     first_index: usize,
+    prov_inputs: &ProvenanceInputs<'_>,
     env: &ExecEnv<'_>,
 ) -> Result<Vec<Arc<dyn Value>>, ExecutionError> {
     let mut outputs = Vec::new();
     let mut batch: Vec<Box<dyn Value>> = Vec::with_capacity(batch_size);
 
-    for item in iter {
+    for mut item in iter {
+        stamp_boxed_item(&mut item, prov_inputs, env);
         batch.push(item);
         if batch.len() >= batch_size {
-            outputs
-                .append(&mut dispatch_batch(mem::take(&mut batch), tail, first_index, env).await?);
+            outputs.append(
+                &mut dispatch_batch(mem::take(&mut batch), tail, first_index, prov_inputs, env)
+                    .await?,
+            );
         }
     }
 
     if !batch.is_empty() {
-        outputs.append(&mut dispatch_batch(batch, tail, first_index, env).await?);
+        outputs.append(&mut dispatch_batch(batch, tail, first_index, prov_inputs, env).await?);
     }
 
     Ok(outputs)
@@ -1093,35 +1165,60 @@ async fn process_iter(
 /// Gather items from an async stream in `batch_size` chunks, run the tail
 /// pipeline on each full chunk (waiting for it to finish) before pulling the
 /// next chunk.
+///
+/// Each item is **eagerly stamped** with provenance before being pushed
+/// into the batch (locked decision 8); see [`process_iter`] for the
+/// rationale.
 async fn process_stream(
     mut stream: ValueStream,
     tail: &[TaskInfo],
     batch_size: usize,
     first_index: usize,
+    prov_inputs: &ProvenanceInputs<'_>,
     env: &ExecEnv<'_>,
 ) -> Result<Vec<Arc<dyn Value>>, ExecutionError> {
     let mut outputs = Vec::new();
     let mut batch: Vec<Box<dyn Value>> = Vec::with_capacity(batch_size);
 
-    while let Some(item) = stream.next().await {
+    while let Some(mut item) = stream.next().await {
+        stamp_boxed_item(&mut item, prov_inputs, env);
         batch.push(item);
         if batch.len() >= batch_size {
-            outputs
-                .append(&mut dispatch_batch(mem::take(&mut batch), tail, first_index, env).await?);
+            outputs.append(
+                &mut dispatch_batch(mem::take(&mut batch), tail, first_index, prov_inputs, env)
+                    .await?,
+            );
         }
     }
 
     if !batch.is_empty() {
-        outputs.append(&mut dispatch_batch(batch, tail, first_index, env).await?);
+        outputs.append(&mut dispatch_batch(batch, tail, first_index, prov_inputs, env).await?);
     }
 
     Ok(outputs)
+}
+
+/// Eagerly stamp a single boxed iter / stream item using the
+/// pipeline's shared visited-set. Mirrors the per-yield call site in
+/// Python's `run_tasks_base.py` (locked decision 8).
+fn stamp_boxed_item(
+    item: &mut Box<dyn Value>,
+    prov_inputs: &ProvenanceInputs<'_>,
+    env: &ExecEnv<'_>,
+) {
+    if let Some(pctx) = env.ctx.pipeline_ctx.as_ref() {
+        // lock poison is unrecoverable
+        let mut visited = pctx.provenance_visited.lock().unwrap();
+        let prov_ctx = prov_inputs.ctx();
+        let _ = crate::provenance::stamp_tree_dyn(item.as_mut(), &prov_ctx, &mut visited);
+    }
 }
 /// Call `task` on `input`, retrying on failure according to `env.policy`.
 ///
 /// Retry applies to the task call itself (including awaiting async tasks and
 /// setting up iterators / streams).  Individual items emitted by an already-
 /// initialised iterator or stream are not retried.
+#[allow(clippy::too_many_arguments)]
 async fn call_with_retry(
     task: &Task,
     input: Arc<dyn Value>,
@@ -1129,6 +1226,7 @@ async fn call_with_retry(
     task_name: Option<&str>,
     data_id: Option<&str>,
     #[allow(unused_variables)] summary_template: Option<&str>,
+    prov_inputs: &ProvenanceInputs<'_>,
     env: &ExecEnv<'_>,
 ) -> Result<Resolved, ExecutionError> {
     // ── Telemetry span (only when feature is enabled) ───────────────────
@@ -1162,7 +1260,7 @@ async fn call_with_retry(
     for attempt in 1..=max_attempts {
         let call = task.call(input.clone(), Arc::clone(&task_ctx));
         match resolve_call(call).await {
-            Ok(resolved) => {
+            Ok(mut resolved) => {
                 // ── Telemetry: record result count ──────────────────────
                 #[cfg(feature = "telemetry")]
                 {
@@ -1174,6 +1272,28 @@ async fn call_with_retry(
                     if let Some(template) = summary_template {
                         let summary = template.replace("{n}", &result_count.to_string());
                         span.record("task.result_summary", summary.as_str());
+                    }
+                }
+
+                // ── Provenance stamping (DataPoint trees) ──────────────
+                // Locked decision 8: `Resolved::Single` is stamped here;
+                // `Iter` / `Stream` items are stamped eagerly at the
+                // consumption site in `process_iter` / `process_stream`.
+                // The audit-log call below (locked decision 3) is
+                // separate — both coexist.
+                if let Resolved::Single(ref mut v) = resolved
+                    && let Some(pctx) = env.ctx.pipeline_ctx.as_ref()
+                {
+                    let prov_ctx = prov_inputs.ctx();
+                    // lock poison is unrecoverable
+                    let mut visited = pctx.provenance_visited.lock().unwrap();
+                    if let Some(inner) = Arc::get_mut(v) {
+                        let _ = crate::provenance::stamp_tree_dyn(inner, &prov_ctx, &mut visited);
+                    } else {
+                        tracing::warn!(
+                            "skipping provenance stamping: shared Arc<dyn Value> for task '{}'",
+                            prov_inputs.task_name
+                        );
                     }
                 }
 

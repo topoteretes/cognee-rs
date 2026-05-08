@@ -38,7 +38,7 @@ pub use pipeline::{
 pub use progress::ProgressToken;
 pub use provenance::{
     HasDataPoint, ProvenanceContext, extract_content_hash_from_value, extract_node_set_from_value,
-    stamp_tree,
+    stamp_tree, stamp_tree_dyn,
 };
 pub use runtime::AsyncRuntime;
 pub use task::{
