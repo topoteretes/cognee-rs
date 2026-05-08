@@ -93,15 +93,11 @@ COPY cognee/pyproject.toml cognee/uv.lock cognee/README.md ./
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-install-project --no-dev --no-editable
 
-# Copy project source and install. cognee dev declares
-# `[tool.hatch.build.targets.wheel] packages = ["cognee", "distributed", "kuzu"]`
-# in pyproject.toml; the `kuzu/` directory is a compat shim re-exporting
-# `ladybug` so legacy `import kuzu` keeps working after the engine swap.
-# Without it the wheel uv builds is missing the kuzu package and Alembic's
-# top-level `import kuzu` in b9274c27a25a_kuzu_11_migration.py fails.
+# Copy project source and install. cognee declares
+# `[tool.hatch.build.targets.wheel] packages = ["cognee", "distributed"]`
+# in pyproject.toml.
 COPY cognee/cognee /build/cognee
 COPY cognee/distributed /build/distributed
-COPY cognee/kuzu /build/kuzu
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev --no-editable
 
