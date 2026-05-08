@@ -7,7 +7,7 @@
 - [Task 04-04 — Qdrant](04-qdrant-instrumentation.md) — needs the Qdrant spans.
 - [Task 04-05 — Ladybug](05-ladybug-instrumentation.md) — needs the Ladybug span.
 - [Task 04-06 — OpenAI](06-openai-llm-fields.md) — needs the LLM fields.
-- [Task 04-08 — PG](08-pg-adapters.md) — pg-side tests skip without DB_PROVIDER=postgres.
+- [Task 04-08 — PG](08-pg-adapters.md) — pgvector-side tests skip without DB_PROVIDER=postgres. (pg_graph instrumentation is deferred — no test suite for it in this task.)
 - [Task 04-09 — SeaORM](09-seaorm-ops-instrumentation.md) — needs the relational spans.
 **Blocks**:
 - [Task 04-11 — Docs + CI](11-docs-and-ci.md) — depends on green tests.
@@ -32,14 +32,24 @@ Test files (one per adapter crate):
 |---|---|---|
 | `crates/vector/tests/qdrant_span_instrumentation.rs` | `cognee-vector` | `QdrantAdapter::{search_similar, index_points, delete_points, delete_collection}` |
 | `crates/graph/tests/ladybug_span_instrumentation.rs` | `cognee-graph` | `LadybugAdapter::execute_query` (via public methods) + redaction round-trip |
-| `crates/llm/tests/openai_span_instrumentation.rs` | `cognee-llm` | `OpenAIAdapter::{call_api, call_transcription_api}` (via mockito) |
+| `crates/llm/tests/openai_span_instrumentation.rs` | `cognee-llm` | `OpenAIAdapter::{call_api, call_transcription_api}` (via httpmock) |
 | `crates/vector/tests/pgvector_span_instrumentation.rs` | `cognee-vector` | `PgVectorAdapter::*` — gated on `pg_test_url()` |
-| `crates/graph/tests/pg_graph_span_instrumentation.rs` | `cognee-graph` | `PgGraphAdapter::query` — gated on `pg_test_url()` |
 | `crates/database/tests/relational_ops_span_instrumentation.rs` | `cognee-database` | One representative op per file (15 files → 15 assertions) |
 
-The OpenAI test uses `mockito` (already a workspace dev-dep per
-gap-02 decision 10) to bind a fake server on `127.0.0.1`; no
-outbound network calls.
+> **Deferred:** `pg_graph_span_instrumentation.rs` is **out of scope for this
+> task**. Per the user decision recorded in [04-08](08-pg-adapters.md), the
+> `pg_graph_adapter` is not yet instrumented — its public `query` is a stub
+> returning `QueryError("not supported")` and meaningful coverage requires a
+> ~22-method fan-in refactor. The pg_graph test suite will land in the
+> follow-up task that introduces that refactor.
+
+The OpenAI test uses **`httpmock`** to bind a fake server on `127.0.0.1`;
+no outbound network calls. `httpmock = "0.8"` is already a dev-dep on
+[`crates/llm/Cargo.toml`](../../crates/llm/Cargo.toml), so no Cargo
+changes are required for the LLM crate. (Note: `mockito` is *not* a
+workspace dev-dep — it is declared per-crate where used. The original
+draft of this sub-doc cited `mockito`; the LLM crate already standardises
+on `httpmock`, so we follow that.)
 
 ## 2. Rationale
 
@@ -63,7 +73,7 @@ existing pattern in
 
 - All adapter tasks (04-04 through 04-09) are complete.
 - `cognee-test-utils` exports `SpanCapture` (task 04-03).
-- `mockito` is a workspace dev-dep.
+- `httpmock = "0.8"` is already a dev-dep on `crates/llm/Cargo.toml` (per-crate, not workspace). No `mockito` is required.
 - A clean `cargo check --all-targets` on `main`.
 
 ## 4. Step-by-step
@@ -81,9 +91,13 @@ Each crate that gains a new test file needs `cognee-test-utils` in
 ```toml
 [dev-dependencies]
 cognee-test-utils = { path = "../test-utils" }
-mockito = { workspace = true }   # only on cognee-llm, if not already present
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+# cognee-llm already has `httpmock = "0.8"` for HTTP mocking — no add needed.
 ```
+
+`crates/database/Cargo.toml` already lists
+`cognee-test-utils = { path = "../test-utils" }` (line 35); confirm before
+re-adding.
 
 ### 4.2 Qdrant tests — `crates/vector/tests/qdrant_span_instrumentation.rs`
 
@@ -309,50 +323,36 @@ async fn long_query_truncated_to_500_chars_before_redaction() {
 
 ### 4.4 OpenAI tests — `crates/llm/tests/openai_span_instrumentation.rs`
 
+The LLM crate already pins `httpmock = "0.8"` as a dev-dep, so we use that
+(not `mockito`) to mock the chat-completions endpoint. The implementor
+should confirm `OpenAIAdapter::new` (or builder) signature, the chat
+completions URL path the adapter posts to, and the smallest valid response
+shape that `OpenAIResponse` deserialises — these tend to drift over time.
+
 ```rust
 //! Span attribute integration tests for the OpenAI adapter using
-//! mockito (no real API calls).
+//! httpmock (no real API calls).
 
 use cognee_llm::adapters::openai::OpenAIAdapter;
-use cognee_llm::types::{Message, MessageRole};
 use cognee_test_utils::SpanCapture;
+use httpmock::prelude::*;
 
 #[tokio::test]
 async fn call_api_records_cognee_llm_model_and_provider() {
-    let mut server = mockito::Server::new_async().await;
-    let _m = server
-        .mock("POST", "/chat/completions")
-        .with_status(200)
-        .with_header("content-type", "application/json")
-        .with_body(
-            r#"{
+    let server = MockServer::start_async().await;
+    let _m = server.mock_async(|when, then| {
+        when.method(POST).path("/chat/completions");
+        then.status(200)
+            .header("content-type", "application/json")
+            .body(r#"{
                 "choices": [{"message": {"content": "hi"}, "finish_reason": "stop", "index": 0}],
                 "model": "gpt-4o-mini"
-            }"#,
-        )
-        .create_async()
-        .await;
+            }"#);
+    }).await;
 
     let capture = SpanCapture::install();
-    let adapter = OpenAIAdapter::new(
-        "test-key".to_string(),
-        Some(server.url()),
-        Some("gpt-4o-mini".to_string()),
-        None,
-        None,
-    )
-    .expect("adapter");
-
-    let _resp = adapter
-        .generate(
-            vec![Message {
-                role: MessageRole::User,
-                content: "hi".to_string(),
-            }],
-            None,
-        )
-        .await
-        .expect("call");
+    let adapter = /* construct OpenAIAdapter pointing at server.base_url() with model "gpt-4o-mini" */;
+    let _resp = /* drive a call_api / generate path */;
 
     let spans = capture.spans();
     let s = spans
@@ -364,14 +364,12 @@ async fn call_api_records_cognee_llm_model_and_provider() {
 }
 ```
 
-`OpenAIAdapter::new` signature must be confirmed at task time
-(constructor argument order tends to drift). The mock body should
-match the smallest valid OpenAI response shape that
-`OpenAIResponse` can deserialize.
+### 4.5 PG tests — `crates/vector/tests/pgvector_span_instrumentation.rs`
 
-### 4.5 PG tests — `crates/vector/tests/pgvector_span_instrumentation.rs` and `crates/graph/tests/pg_graph_span_instrumentation.rs`
+`pg_graph_span_instrumentation.rs` is **deferred** (see the table note in
+§1) and is not created in this task.
 
-Each test starts with:
+The pgvector test starts with:
 
 ```rust
 let Some(url) = cognee_test_utils::pg_test_url() else { return };
@@ -381,8 +379,8 @@ let Some(url) = cognee_test_utils::pg_test_url() else { return };
 Postgres provider configured. CI runs Postgres in a sidecar container
 when `DB_PROVIDER=postgres` is set.
 
-The body mirrors the Qdrant / Ladybug tests with `cognee.db.system`
-asserted as `"pgvector"` / `"postgres"` respectively.
+The body mirrors the Qdrant tests with `cognee.db.system` asserted as
+`"pgvector"`.
 
 ### 4.6 Relational ops test — `crates/database/tests/relational_ops_span_instrumentation.rs`
 
@@ -468,7 +466,7 @@ scripts/check_all.sh
   `cognee-test-utils` dev-dep if missing.
 - [`crates/graph/Cargo.toml`](../../crates/graph/Cargo.toml) — same.
 - [`crates/llm/Cargo.toml`](../../crates/llm/Cargo.toml) — add
-  `cognee-test-utils` and `mockito` dev-deps if missing.
+  `cognee-test-utils` dev-dep if missing (`httpmock = "0.8"` is already pinned).
 - [`crates/database/Cargo.toml`](../../crates/database/Cargo.toml) — same.
 - [`crates/vector/tests/qdrant_span_instrumentation.rs`](../../crates/vector/tests/qdrant_span_instrumentation.rs)
   — NEW. ~120 lines, four `#[tokio::test]` functions.
@@ -479,8 +477,6 @@ scripts/check_all.sh
   call_transcription_api with Whisper-shaped mock body).
 - [`crates/vector/tests/pgvector_span_instrumentation.rs`](../../crates/vector/tests/pgvector_span_instrumentation.rs)
   — NEW. Skip-on-no-pg mirror of qdrant_span_instrumentation.
-- [`crates/graph/tests/pg_graph_span_instrumentation.rs`](../../crates/graph/tests/pg_graph_span_instrumentation.rs)
-  — NEW. Skip-on-no-pg mirror of ladybug_span_instrumentation.
 - [`crates/database/tests/relational_ops_span_instrumentation.rs`](../../crates/database/tests/relational_ops_span_instrumentation.rs)
   — NEW. ~15 small `#[tokio::test]` functions.
 
@@ -491,7 +487,7 @@ scripts/check_all.sh
 | `OpenAIAdapter::new` signature drift | Real — verify constructor at task time before writing the test. | Sub-agent A re-reads. |
 | Tests run in parallel and share global `tracing` state | None — `SpanCapture::install()` uses thread-local `set_default`, so each test owns its own subscriber. | Already verified in 04-03 self-tests. |
 | Char-boundary truncation rounds the recorded query length below 500 (e.g. to 498) on byte-edge cases | Real and intentional — the test asserts `<= 500`, not `== 500`. | Already in the assertion in 4.3. |
-| Mockito body doesn't match `OpenAIResponse` deserialization | Real — confirm with the actual `OpenAIResponse` struct in `crates/llm/src/adapters/openai.rs`. | Sub-agent B reads the deserialize impl before writing the mock body. |
+| `httpmock` body doesn't match `OpenAIResponse` deserialization | Real — confirm with the actual `OpenAIResponse` struct in `crates/llm/src/adapters/openai.rs`. | Sub-agent B reads the deserialize impl before writing the mock body. |
 | Postgres tests run in CI without a sidecar and fail | Already handled — skip when `pg_test_url()` returns `None`. | n/a |
 
 ## 8. Out of scope

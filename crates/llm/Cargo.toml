@@ -39,6 +39,7 @@ cognee-utils = { path = "../utils" }
 cognee-litert-lm = { workspace = true, optional = true }
 
 [dev-dependencies]
+cognee-test-utils = { path = "../test-utils" }
 dotenv.workspace = true
 httpmock = "0.8"
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

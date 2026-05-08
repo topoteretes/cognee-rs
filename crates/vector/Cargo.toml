@@ -45,3 +45,5 @@ cognee-utils = { path = "../utils" }
 [dev-dependencies]
 tempfile.workspace = true
 serial_test.workspace = true
+cognee-test-utils = { path = "../test-utils" }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
