@@ -1,6 +1,6 @@
 # Task 05-04 — `HasDataPoint` impls for model containers
 
-**Status**: ⬜ not started — placement decision locked: `HasDataPoint` trait moves into `cognee-models` (option 1); `cognee-core::provenance` re-exports it so existing public paths keep working.
+**Status**: implemented in commit 6af9040 (option-1 placement: trait moved to cognee-models, re-exported from cognee-core::provenance).
 **Owner**: _unassigned_
 **Depends on**:
 - [Task 05-03 — Provenance core](03-provenance-core.md) (defines the `HasDataPoint` trait and the algorithm).

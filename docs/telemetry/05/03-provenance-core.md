@@ -8,9 +8,8 @@
 > `cognee_core::provenance` so the public paths
 > (`cognee_core::provenance::HasDataPoint`, `cognee_core::HasDataPoint`)
 > stay unchanged. The algorithm (`stamp_tree`, `ProvenanceContext`,
-> the extract helpers) stays in this module. The commit landing the
-> trait move will be referenced from 05-04's status header once it
-> commits.
+> the extract helpers) stays in this module. Trait move landed in
+> commit 6af9040.
 
 **Owner**: _unassigned_
 **Depends on**:
