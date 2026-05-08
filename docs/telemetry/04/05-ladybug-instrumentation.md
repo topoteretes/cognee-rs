@@ -1,6 +1,6 @@
 # Task 04-05 — Instrument `LadybugAdapter::execute_query`
 
-**Status**: ⬜ unimplemented
+**Status**: ✅ implemented in commit 2683ba1
 **Owner**: _unassigned_
 **Depends on**:
 - [Task 04-01](01-redact-relocate.md) — needs `cognee_utils::redact::redact`.
