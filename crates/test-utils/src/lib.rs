@@ -13,6 +13,7 @@ pub mod mock_role_db;
 pub mod mock_tenant_db;
 pub mod mock_transcriber;
 pub mod mock_user_db;
+pub mod span_capture;
 
 use std::sync::Arc;
 
@@ -28,6 +29,7 @@ pub use mock_role_db::MockRoleDb;
 pub use mock_tenant_db::MockTenantDb;
 pub use mock_transcriber::MockTranscriber;
 pub use mock_user_db::MockUserDb;
+pub use span_capture::{CapturedSpan, SpanCapture, SpanCaptureGuard};
 
 /// Returns a PostgreSQL connection URL built from environment variables, or `None`
 /// if `DB_PROVIDER` is not set to `"postgres"`.

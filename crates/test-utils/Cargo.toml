@@ -13,6 +13,8 @@ cognee-llm = { path = "../llm" }
 cognee-storage = { path = "../storage", features = ["testing"] }
 cognee-vector = { path = "../vector", features = ["testing"] }
 serde_json.workspace = true
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["registry"] }
 uuid.workspace = true
 
 [dev-dependencies]
