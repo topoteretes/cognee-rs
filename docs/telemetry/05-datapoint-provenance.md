@@ -552,7 +552,7 @@ high-level summary.
 | 08 | Add `cognee_models::DataPoint::vector_metadata()` helper that produces the canonical `HashMap<String, serde_json::Value>` payload (full pydantic-equivalent dump). Apply at every `VectorPoint::new(...)` site in `crates/cognify/src/tasks.rs` (six call sites for the six vector collections, plus the two temporal sites). | [05/08-vector-payload-full-dump.md](05/08-vector-payload-full-dump.md) | 01 | ✅ 83c1bfb |
 | 09 | Pre-stamp inside `extract_graph_from_data` using the new `ProvenanceContext` so freshly-constructed `Entity` / `EntityType` / `EdgeType` DataPoints carry `source_pipeline="cognify_pipeline"` + `source_task="extract_graph_from_data"` at the moment they're emitted. Keep cognify's local `stamp_provenance` helper (decision 6); add a docstring cross-reference to `cognee_core::provenance::stamp_tree`. | [05/09-cognify-prestamp.md](05/09-cognify-prestamp.md) | 03 | ✅ 9777f49 |
 | 10 | Tests: unit tests for `stamp_tree` (8 cases ported from Python), pipeline integration test in `crates/core/tests/`, cognify E2E provenance assertions in `crates/cognify/tests/`, vector-payload regression in `crates/vector/tests/`, and `e2e-cross-sdk/tests/test_provenance_parity.py`. | [05/10-tests.md](05/10-tests.md) | 03, 06, 07, 08, 09 | ✅ f3d8194 |
-| 11 | Docs: update `docs/telemetry/gap-analysis.md` Provenance row from "Not found" → "Implemented (gap 05)". CI: ensure `e2e-cross-sdk` provenance test runs on the same lane as `test_cognify_structural.py`. Closure summary at the bottom of this doc. | [05/11-docs-and-ci.md](05/11-docs-and-ci.md) | 01–10 | ⬜ |
+| 11 | Docs: update `docs/telemetry/gap-analysis.md` Provenance row from "Not found" → "Implemented (gap 05)". CI: ensure `e2e-cross-sdk` provenance test runs on the same lane as `test_cognify_structural.py`. Closure summary at the bottom of this doc. | [05/11-docs-and-ci.md](05/11-docs-and-ci.md) | 01–10 | ✅ 28a6bf4 |
 
 ### Suggested execution order
 
@@ -686,3 +686,105 @@ the existing `test_cognify_structural.py`.
   [crates/visualization/src/lib.rs](../../crates/visualization/src/lib.rs)
 - Existing telemetry gap analysis:
   [./gap-analysis.md](./gap-analysis.md)
+
+---
+
+## Closure summary
+
+Gap 05 closed in 22 commits. The table below lists every commit in
+landing order — each sub-task lands as a pair (implementation commit
++ sub-doc status flip).
+
+| # | Commit | Subject |
+|---|---|---|
+| 05-01 | `c80b128` | telemetry/provenance-05-01: add source_content_hash field to DataPoint |
+| 05-01 | `9938edd` | telemetry/provenance-05-01: mark action item 01 complete |
+| 05-02 | `e2dfdd6` | telemetry/provenance-05-02: audit Data.content_hash propagation |
+| 05-02 | `0edbec2` | telemetry/provenance-05-02: mark action item 02 complete |
+| 05-03 | `dede1d4` | telemetry/provenance-05-03: add stamp_tree and HasDataPoint trait |
+| 05-03 | `15a959f` | telemetry/provenance-05-03: mark action item 03 complete |
+| 05-04 | `6af9040` | telemetry/provenance-05-04: relocate HasDataPoint to cognee-models and add impls |
+| 05-04 | `e28b807` | telemetry/provenance-05-04: mark action item 04 complete |
+| 05-05 | `d1b4c96` | telemetry/provenance-05-05: add provenance_visited and user_email to PipelineContext |
+| 05-05 | `638c8ad` | telemetry/provenance-05-05: mark action item 05 complete |
+| 05-06 | `7199d43` | telemetry/provenance-05-06: stamp DataPoints eagerly in pipeline executor |
+| 05-06 | `bdcc0e4` | telemetry/provenance-05-06: mark action item 06 complete |
+| 05-07 | `06ffc74` | telemetry/provenance-05-07: thread user_email into cognify call sites |
+| 05-07 | `6ddf326` | telemetry/provenance-05-07: mark action item 07 complete |
+| 05-08 | `83c1bfb` | telemetry/provenance-05-08: dump full DataPoint into vector payload |
+| 05-08 | `fb2847d` | telemetry/provenance-05-08: mark action item 08 complete |
+| 05-09 | `9777f49` | telemetry/provenance-05-09: pre-stamp LLM-extracted entities and edge types |
+| 05-09 | `bb250d9` | telemetry/provenance-05-09: mark action item 09 complete |
+| 05-10 | `f3d8194` | telemetry/provenance-05-10: add provenance integration and cross-SDK parity tests |
+| 05-10 | `a456007` | telemetry/provenance-05-10: mark action item 10 complete |
+| 05-11 | `28a6bf4` | telemetry/provenance-05-11: close gap 05 with provenance docs and parity CI lane |
+| 05-11 | _(this commit)_ | telemetry/provenance-05-11: mark action item 11 complete + close gap 05 |
+
+### What the gap delivered
+
+- [`cognee_models::DataPoint`](../../crates/models/src/data_point.rs)
+  now carries the full `source_pipeline` / `source_task` /
+  `source_user` / `source_node_set` / `source_content_hash`
+  provenance set, matching Python's pydantic shape.
+- A canonical stamping algorithm in
+  [`cognee_core::provenance::stamp_tree`](../../crates/core/src/provenance.rs)
+  with eight Python-parity unit tests (the `HasDataPoint` trait
+  itself lives in `cognee-models` so model containers can implement
+  it without depending on `cognee-core`).
+- The pipeline executor stamps every emitted DataPoint after every
+  successful task — `Resolved::Single`, iterator, and stream task
+  variants — with a per-run visited-set keyed on `DataPoint.id` so a
+  DP shared across tasks is stamped exactly once with the first
+  task's name.
+- `cognify_pipeline` produces graph nodes whose `source_task` covers
+  the four expected stages: `classify_documents`,
+  `extract_chunks_from_documents`, `extract_graph_from_data`,
+  `summarize_text`. LLM-extracted `Entity` / `EntityType` / `EdgeType`
+  DataPoints are pre-stamped at construction so the executor walk is
+  a no-op for those nodes.
+- Vector-store payloads now carry the full DataPoint dump via
+  `DataPoint::vector_metadata()`, enabling byte-comparable cross-SDK
+  parity.
+- `user_email` is plumbed through `cognee_lib`'s cognify / memify /
+  add / search entry points so `source_user` matches Python's
+  `user.email or str(user.id)` resolution.
+- New cross-SDK parity test
+  [`e2e-cross-sdk/harness/test_provenance_parity.py`](../../e2e-cross-sdk/harness/test_provenance_parity.py)
+  asserts `source_pipeline` equality, non-empty `source_user`, and
+  ≥0.5 Jaccard similarity on `source_task` multisets per node-type
+  between Python and Rust SDKs. Wired into
+  [`.github/workflows/http-parity.yml`](../../.github/workflows/http-parity.yml)
+  as a new LLM-gated step.
+
+### Known follow-ups
+
+The gap closes with the following intentional deferrals tracked here so
+they aren't lost:
+
+- **`http-parity.yml` is `workflow_dispatch`-only.** The push/PR
+  triggers on that workflow are commented out pending an upstream
+  Python migration fix (see the file header). The new provenance
+  parity step is wired in but only fires on manual dispatch until
+  push/PR triggers are restored. Re-enabling those triggers is out
+  of scope of gap 05 and tracked separately.
+- **Convergence onto a single stamping site for cognify.** Locked
+  decision 6 retained the local
+  [`stamp_provenance` helper](../../crates/cognify/src/tasks.rs)
+  alongside the executor walk so the convenience `cognify()` function
+  keeps stamping. A follow-up should switch `cognify()` to internally
+  route through `cognee_core::execute(build_cognify_pipeline(...))`
+  and then remove the local helper. Out of scope here because the
+  routing change has its own parity-risk profile (concurrency, retry,
+  watcher events) unrelated to provenance.
+- **`HasDataPoint` for `Triplet`.** Triplet does not embed a
+  `DataPoint` today (it has its own `id: Uuid`). Adding it would
+  unify the stamping path for triplet vectors. Likely follow-up if a
+  future feature needs `source_*` lineage on triplet edges.
+- **`source_content_hash` lineage queries.** The field is now
+  populated end-to-end but no `forget()` / search retriever consumes
+  it yet. The "forget every graph node derived from this raw file"
+  feature is now unblocked but not implemented.
+- **OTel attributes for provenance.** Could attach `source_pipeline`
+  / `source_task` to span attributes in `cognee.pipeline.task` so
+  OTel consumers see provenance at trace level. Cheap follow-up; out
+  of scope here.

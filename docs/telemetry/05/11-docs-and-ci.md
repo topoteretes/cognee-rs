@@ -1,6 +1,6 @@
 # Task 05-11 — Docs + CI + gap closure
 
-**Status**: ⬜ not started
+**Status**: implemented in commit 28a6bf4 (provenance docs section + http-parity.yml CI step + gap-analysis update; workflow_dispatch-only trigger limitation noted as follow-up).
 **Owner**: _unassigned_
 **Depends on**: tasks 01–10 committed.
 
