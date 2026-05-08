@@ -1,6 +1,7 @@
 # Task 05-07 — User-label plumbing (`User.email` → `PipelineContext::user_email`)
 
 **Status**: ⬜ not started
+**Status**: implemented in commit 06ffc74 (cognify() user_str derivation now mirrors PipelineContext::user_label() so executor-driven and convenience paths attribute identically).
 **Owner**: _unassigned_
 **Depends on**:
 - [Task 05-05 — `PipelineContext` fields](05-pipeline-context-fields.md) (the `user_email` field exists).
