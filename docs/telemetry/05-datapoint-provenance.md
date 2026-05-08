@@ -510,39 +510,68 @@ also gives correct stamps when running outside `execute()`).
 
 ---
 
+## Design decisions (locked)
+
+Approved by the project owner on 2026-05-08. **Do not re-litigate.** Sub-agents
+may surface new evidence that contradicts a decision; if so, escalate to the
+user before changing course.
+
+| # | Decision | Rationale | Affected tasks |
+|---|---|---|---|
+| 1 | **Walk via the `HasDataPoint` trait, not `serde_json` reflection.** Compile-time recursion through model containers; types not implementing `HasDataPoint` are silently passed through (matches Python's "if not DataPoint, no-op"). | Faster than serialize/deserialize round-trip, refactor-safe (the compiler enforces every container is wired), and avoids the brittleness of pretending Rust has Python's `model_fields` reflection. | [05-03](05/03-provenance-core.md), [05-04](05/04-has-datapoint-impls.md) |
+| 2 | **Visited-set identity is `DataPoint.id: Uuid`.** Python uses Python `id(obj)` (pointer identity); Rust uses the stable UUID. A DataPoint cloned across tasks is therefore stamped exactly once with the **first** task's name. | UUIDs survive cloning, which matches the practical intent (a chunk shared across two tasks should not be double-stamped). Pointer identity in Rust is unstable across `Arc::clone` / move-into-Arc, so it's a poor key. | [05-03](05/03-provenance-core.md), [05-06](05/06-pipeline-executor-integration.md) |
+| 3 | **Keep `ExecStatusManager::stamp_provenance` as-is** (the audit-log hook). Document the distinction between it and the new `cognee_core::provenance::stamp_tree` in module-level rustdoc; do not rename either. | Renaming the trait method ripples into `NoopExecStatusManager` and any future production impl, plus the call site in `pipeline.rs`. The cost of churn outweighs the small confusion of two functions sharing a name in different namespaces. | [05-03](05/03-provenance-core.md), [05-06](05/06-pipeline-executor-integration.md) |
+| 4 | **Add `user_email: Option<String>` to `PipelineContext`** *and* a helper method `user_label() -> Option<String>` that resolves to `email.or_else(|| user_id.map(\|id\| id.to_string()))` so the stamping site does the resolution once. | Mirrors Python's `user.email or str(user.id)` exactly, but keeps the resolution at the read site so the field semantics are unambiguous (`user_email` always means "the email if known"). The helper avoids duplicating the fallback expression at every call site. | [05-05](05/05-pipeline-context-fields.md), [05-07](05/07-user-label-plumbing.md) |
+| 5 | **Vector-store payload is the full DataPoint dump** (Python parity), not just the five `source_*` keys. A new `vector_metadata_from_dp(&DataPoint)` helper produces the canonical `HashMap<String, Value>`; existing per-call `with_metadata("type", …)` / `with_metadata("name", …)` calls keep adding context-specific extras (e.g. `field`, `dataset_id`, `document_id`, `chunk_index`). | Python serializes the entire pydantic model into the LanceDB payload. Diverging means `e2e-cross-sdk` payload parity tests would have to special-case Rust shape. The added keys are all `Option<…>` with `skip_serializing_if = "Option::is_none"`, so absent provenance does not bloat payloads. | [05-08](05/08-vector-payload-full-dump.md) |
+| 6 | **Keep cognify's local `stamp_provenance` helper** alongside executor-driven stamping. Both code paths land stamping; the new `if dp.source_X.is_none()` guards make double-stamping a no-op. | The convenience `cognify()` function bypasses `cognee_core::execute()` and is the path that production CLI / API calls use today. Removing the local helper without first switching `cognify()` to a pipeline-driven execution would silently regress provenance for the dominant code path. Convergence onto a single stamping site is a follow-up tracked in [05-09](05/09-cognify-prestamp.md). | [05-09](05/09-cognify-prestamp.md) |
+| 7 | **`Data.content_hash` propagation has its own audit task.** Before relying on `Data.content_hash` in `extract_content_hash_from_value`, verify that Rust ingestion populates it consistently and that the field round-trips through the pipeline executor (it is `String`, not `Option<String>`). Any gap found is fixed inside that task. | The proposed propagation logic depends on `Data.content_hash` being non-empty for every ingested item; if ingestion has paths where it stays default-empty, downstream provenance silently regresses. Auditing first protects every later task. | [05-02](05/02-data-content-hash-audit.md) |
+| 8 | **Stream and iterator items are stamped eagerly, at consumption.** Each `Box<dyn Value>` is stamped inside `process_iter` / `process_stream` *before* it is converted into `Arc<dyn Value>` for `dispatch_batch`. No lazy stream-wrapper. | Eager stamping mirrors Python's per-yield call site in `run_tasks_base.py` (where stamping happens inside the `async for result_data in running_task.execute(...)` loop). Lazy would fragment the visited-set lock acquisition and complicate cancellation semantics. | [05-06](05/06-pipeline-executor-integration.md) |
+| 9 | **Pre-stamping inside `extract_graph_from_data` is in scope.** Mirror Python's `_stamp_provenance_deep` in [`tasks/graph/extract_graph_from_data.py`](https://github.com/topoteretes/cognee/blob/main/cognee/tasks/graph/extract_graph_from_data.py#L31): freshly-LLM-constructed entities/types/edges get `source_pipeline="cognify_pipeline"` + `source_task="extract_graph_from_data"` at construction time, so the executor's recursion into the task output is a no-op for those nodes. | Without it, executor-driven stamping is correct but spends cycles re-walking already-stamped subtrees. More importantly, parity tests that compare Python and Rust DPs will see the same pre-stamp pattern when the recursion order differs. | [05-09](05/09-cognify-prestamp.md) |
+| 10 | **Cross-SDK parity test (`test_provenance_parity.py`) is in scope of this gap.** It lands as part of [05-10](05/10-tests.md), gated on the same docker harness as `test_cognify_structural.py`. | The parity gate is the only end-to-end signal that Rust's stamping algorithm matches Python's after both ingestion and cognify run. Splitting into a follow-up risks the gap closing without a regression-detecting cross-SDK test. | [05-10](05/10-tests.md) |
+
+---
+
 ## Action items
 
-1. **`crates/models/src/data_point.rs`** — add `source_content_hash`,
-   initialise in constructors, extend tests.
-2. **`crates/core/src/provenance.rs` (new)** — define `HasDataPoint`,
-   `ProvenanceContext`, `stamp_tree`, plus the input-extraction helpers
-   (`extract_node_set_from_value`, `extract_content_hash_from_value`).
-3. **`crates/core/src/lib.rs`** — re-export the new module.
-4. **`crates/core/src/task_context.rs`** — extend `PipelineContext` with
-   `provenance_visited: Arc<Mutex<HashSet<Uuid>>>` and `user_email: Option<String>`.
-5. **`crates/core/src/pipeline.rs::execute`** — initialise the visited set
-   when building the per-run `PipelineContext`; thread it through `ExecEnv`
-   if not already reachable via `ctx.pipeline_ctx`.
-6. **`crates/core/src/pipeline.rs::call_with_retry`** — after `resolve_call`
-   succeeds, walk the resolved value and stamp via the new helper.
-7. **`crates/core/src/pipeline.rs::process_stream` / `process_iter`** —
-   if items can carry DataPoints, stamp at consumption time too (covers
-   stream-yielded items that arrive after the task call has already
-   returned).
-8. **`crates/models/src/{entity,entity_type,edge_type,document,document_chunk,triplet,...}.rs`** —
-   implement `HasDataPoint`, including `for_each_child_mut` for nested
-   container fields.
-9. **`crates/cognify/src/tasks.rs`** — remove the local `stamp_provenance`
-   helper; rely on the executor. Keep the pre-stamp inside
-   `integrate_chunk_graphs` (rename to use the new `ProvenanceContext`).
-10. **Vector payload helpers** — add `vector_metadata_from_dp` and call it
-    from every `VectorPoint::new(...)` site that originates from a
-    DataPoint.
-11. **`crates/lib/src/api/...`** — when the user has an email, populate
-    `PipelineContext::user_email` so visualization labels match Python's.
-12. **Update [`docs/telemetry/gap-analysis.md`](./gap-analysis.md)** —
-    mark "Provenance stamping per DataPoint" row from "Not found" to
-    "Implemented" once 1-11 ship. *(Out of scope for this doc.)*
+Each item below has a dedicated implementation sub-document under
+[`05/`](05/) with rationale, prerequisites, step-by-step source-level
+changes, verification commands, files modified, and risks. **The
+sub-docs are authoritative**: where they refine details based on the
+locked design decisions, follow the sub-doc rather than this
+high-level summary.
+
+| #  | Action item | Sub-doc | Depends on | Status |
+|----|---|---|---|---|
+| 01 | Add `source_content_hash: Option<String>` to `cognee_models::DataPoint`. Initialise to `None` in `DataPoint::new` / `DataPoint::with_metadata`. Extend the inline tests. | [05/01-source-content-hash-field.md](05/01-source-content-hash-field.md) | — | ⬜ |
+| 02 | Audit `Data.content_hash` propagation through Rust ingestion. Verify it is always populated by `add()`, that it survives `Data` clones across the pipeline, and confirm nothing zeros it out. Fix any path that drops the hash. | [05/02-data-content-hash-audit.md](05/02-data-content-hash-audit.md) | — | ⬜ |
+| 03 | Create `crates/core/src/provenance.rs`: `HasDataPoint` trait, `ProvenanceContext`, `stamp_tree`, `extract_node_set_from_value`, `extract_content_hash_from_value`. Re-export from `cognee_core::lib`. Eight unit tests ported from Python's `test_provenance_stamping.py`. | [05/03-provenance-core.md](05/03-provenance-core.md) | 01 | ⬜ |
+| 04 | Implement `HasDataPoint` for every `cognee_models` container that wraps a `DataPoint`: `Entity`, `EntityType`, `EdgeType`, `Document`, `DocumentChunk`, `Triplet`, `TextSummary`, plus any other `#[serde(flatten)] base: DataPoint` types. Wire `for_each_child_mut` for nested fields (e.g. `Entity::entity_type`). | [05/04-has-datapoint-impls.md](05/04-has-datapoint-impls.md) | 03 | ⬜ |
+| 05 | Extend `cognee_core::PipelineContext` with `provenance_visited: Arc<Mutex<HashSet<Uuid>>>` and `user_email: Option<String>`. Add the helper method `user_label() -> Option<String>` (`email.or_else(\|\| user_id.map(\|id\| id.to_string()))`). Thread the new fields through `TaskContextBuilder`. | [05/05-pipeline-context-fields.md](05/05-pipeline-context-fields.md) | — | ⬜ |
+| 06 | Hook stamping into `cognee_core::pipeline`: initialise the visited set when `execute()` builds the per-run `PipelineContext`; in `call_with_retry`, after `resolve_call` succeeds, walk `Resolved::Single` and stamp; in `process_iter` / `process_stream`, stamp each `Box<dyn Value>` eagerly before push to `dispatch_batch`. Build the `ProvenanceContext` from `env.pipeline_name`, `task_name`, the pipeline `user_label()`, and node-set / content-hash extracted from the input. | [05/06-pipeline-executor-integration.md](05/06-pipeline-executor-integration.md) | 03, 04, 05 | ⬜ |
+| 07 | Plumb `user_email` through `cognee_lib` API entry points (`cognify`, `memify`, `add`, `search` factory paths) so `PipelineContext::user_email` is populated when a `User` row is available. Falls through cleanly when only a `user_id` is available. | [05/07-user-label-plumbing.md](05/07-user-label-plumbing.md) | 05 | ⬜ |
+| 08 | Add `cognee_models::DataPoint::vector_metadata()` helper that produces the canonical `HashMap<String, serde_json::Value>` payload (full pydantic-equivalent dump). Apply at every `VectorPoint::new(...)` site in `crates/cognify/src/tasks.rs` (six call sites for the six vector collections, plus the two temporal sites). | [05/08-vector-payload-full-dump.md](05/08-vector-payload-full-dump.md) | 01 | ⬜ |
+| 09 | Pre-stamp inside `extract_graph_from_data` using the new `ProvenanceContext` so freshly-constructed `Entity` / `EntityType` / `EdgeType` DataPoints carry `source_pipeline="cognify_pipeline"` + `source_task="extract_graph_from_data"` at the moment they're emitted. Keep cognify's local `stamp_provenance` helper (decision 6); add a docstring cross-reference to `cognee_core::provenance::stamp_tree`. | [05/09-cognify-prestamp.md](05/09-cognify-prestamp.md) | 03 | ⬜ |
+| 10 | Tests: unit tests for `stamp_tree` (8 cases ported from Python), pipeline integration test in `crates/core/tests/`, cognify E2E provenance assertions in `crates/cognify/tests/`, vector-payload regression in `crates/vector/tests/`, and `e2e-cross-sdk/tests/test_provenance_parity.py`. | [05/10-tests.md](05/10-tests.md) | 03, 06, 07, 08, 09 | ⬜ |
+| 11 | Docs: update `docs/telemetry/gap-analysis.md` Provenance row from "Not found" → "Implemented (gap 05)". CI: ensure `e2e-cross-sdk` provenance test runs on the same lane as `test_cognify_structural.py`. Closure summary at the bottom of this doc. | [05/11-docs-and-ci.md](05/11-docs-and-ci.md) | 01–10 | ⬜ |
+
+### Suggested execution order
+
+A clean PR sequence based on the dependency graph:
+
+1. **PR 1** (foundation): tasks 01 + 02 + 05 — `source_content_hash`
+   field, content-hash audit, `PipelineContext` fields. No new
+   stamping behaviour yet.
+2. **PR 2** (core machinery): tasks 03 + 04 — `provenance.rs` module
+   plus `HasDataPoint` impls. Standalone unit-testable.
+3. **PR 3** (executor wiring): task 06 — pipeline-driven stamping.
+   Now visible end-to-end.
+4. **PR 4** (label plumbing): task 07 — `user_email` flows from
+   `User` row to vector / graph payload.
+5. **PR 5** (vector parity): task 08 — full DataPoint dump in vector
+   payloads.
+6. **PR 6** (cognify pre-stamp): task 09.
+7. **PR 7** (validation): task 10 — unit + integration + cross-SDK.
+8. **PR 8** (closeout): task 11 — docs + CI + gap closure.
 
 ---
 
