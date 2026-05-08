@@ -14,6 +14,7 @@ cognee-graph = { path = "../graph" }
 cognee-llm = { path = "../llm" }
 cognee-session = { path = "../session", features = ["sea-orm-store"] }
 cognee-telemetry = { path = "../telemetry" }
+cognee-utils = { path = "../utils" }
 cognee-vector = { path = "../vector" }
 
 async-trait.workspace = true
