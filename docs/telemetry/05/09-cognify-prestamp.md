@@ -1,6 +1,6 @@
 # Task 05-09 — Pre-stamp inside `extract_graph_from_data` / `expand_with_nodes_and_edges`
 
-**Status**: ⬜ not started
+**Status**: implemented in commit 9777f49 (pre_stamp_extraction helper; expand_with_nodes_and_edges and process_ontology_nodes gain user_label + visited-set parameters; add_data_points pre-stamps edge_types Vec; cognify's local stamp_provenance preserved per decision 6).
 **Owner**: _unassigned_
 **Depends on**:
 - [Task 05-03 — Provenance core](03-provenance-core.md) (`ProvenanceContext`, `stamp_tree`).
