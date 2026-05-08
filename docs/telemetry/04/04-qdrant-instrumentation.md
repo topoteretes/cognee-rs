@@ -1,6 +1,6 @@
 # Task 04-04 — Instrument `QdrantAdapter` (search / upsert / delete)
 
-**Status**: ⬜ unimplemented
+**Status**: ✅ implemented in commit 1d3fda1
 **Owner**: _unassigned_
 **Depends on**:
 - [Task 04-02](02-tracing-constants-dedupe.md) — needs `cognee_utils::tracing_keys::COGNEE_VECTOR_RESULT_COUNT` and `COGNEE_VECTOR_COLLECTION` consolidated.
