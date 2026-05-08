@@ -1,6 +1,6 @@
 # Task 05-01 — Add `source_content_hash` field on `DataPoint`
 
-**Status**: ⬜ not started
+**Status**: ✅ c80b128 — also added `source_content_hash: None` to the struct-literal `DataPoint` site in `crates/models/src/edge_type.rs::new_deterministic`.
 **Owner**: _unassigned_
 **Depends on**: —
 **Blocks**:
