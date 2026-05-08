@@ -314,3 +314,5 @@ scripts/check_all.sh
   [task 05-06](06-pipeline-executor-integration.md).
 - Adding more telemetry-flavoured fields to `PipelineContext`. Other
   signals (api_key_tracking_id, anonymous_id) live elsewhere.
+
+**Status**: implemented in commit d1b4c96 (note: TaskContextBuilder unchanged; new fields land via existing pipeline_context() setter; with_user_email() convenience added on TaskContext for ad-hoc updates).
