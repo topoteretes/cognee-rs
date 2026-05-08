@@ -1,6 +1,7 @@
 # Task 05-08 — Full DataPoint dump in vector-store payloads
 
 **Status**: ⬜ not started
+**Status**: implemented in commit 83c1bfb (memify index_triplets site carries a §4.7 option-B TODO; full source_* propagation deferred until edge_type is threaded through that path).
 **Owner**: _unassigned_
 **Depends on**:
 - [Task 05-01 — `source_content_hash` field](01-source-content-hash-field.md) (the helper serialises the field).
