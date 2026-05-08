@@ -31,15 +31,15 @@ formally close gap 04. Specifically:
    - Add a "Closure summary" section at the bottom listing every
      commit in landing order (mirroring gap 03's closure summary).
 4. Update CI:
-   - Confirm `lib-tests.yml` picks up the new test files
+   - Confirm `.github/workflows/ci.yml` picks up the new test files
      automatically (cargo test --workspace already does).
    - Add a `cognee-database --features postgres` lane if it isn't
      already running, so the relational ops tests exercise both
      SQLite and Postgres.
-   - Confirm `capi-check.yml`, `js-check.yml`, `python-check.yml`
-     still pass — bindings are unaffected by adapter spans, but
-     `cargo build` may pull in `regex` differently across the
-     workspace.
+   - Confirm the binding-check steps inside `.github/workflows/ci.yml`
+     (capi/js/python) still pass — bindings are unaffected by adapter
+     spans, but `cargo build` may pull in `regex` differently across
+     the workspace.
 
 ## 2. Rationale
 
@@ -90,8 +90,9 @@ surrounding span.
 **Rust:** closed in [`04-db-adapter-instrumentation.md`](04-db-adapter-instrumentation.md)
 — see commits `<list>`. Spans are emitted by `QdrantAdapter`,
 `LadybugAdapter`, `OpenAIAdapter` (host), `LiteRtAdapter` (Android),
-`PgVectorAdapter`, `PgGraphAdapter`, and every public function in
-`crates/database/src/ops/*.rs`. The `redact_secrets` helper now
+`PgVectorAdapter`, and every public function in
+`crates/database/src/ops/*.rs`. Per-method `pg_graph_adapter` spans
+are deferred (see 04-08 sub-doc note). The `redact_secrets` helper now
 lives at [`cognee_utils::redact::redact`](../../crates/utils/src/redact.rs)
 so adapter crates can call it without depending on
 `cognee-http-server`. Constants are consolidated under
@@ -195,6 +196,11 @@ Edit [`docs/telemetry/04-db-adapter-instrumentation.md`](../04-db-adapter-instru
 - For each row, replace the placeholder `Status: ⬜` with `✅ <SHA>`
   (sub-agent E does this incrementally per task; this task only
   fills in the final 04-10 / 04-11 rows).
+- Update row 09 of the parent doc's Action items table — the
+  original estimate of "~80 functions across 14 files" is stale.
+  Replace it with the actually-landed numbers: ~93 functions across
+  13 ops files (the `mod.rs` and helper-only file in
+  `crates/database/src/ops/` are not ops).
 - Append a "Closure summary" section at the bottom, listing every
   commit in landing order. Format mirrors gap 03's closure summary.
 
@@ -221,7 +227,7 @@ Gap 04 closed in 11 commits between <date> and <date>:
 
 - 5 adapter crates instrumented (vector × 2, graph × 2, llm × 1
   with OpenAI host, LiteRT Android).
-- ~80 ops-level spans on `crates/database/src/ops/`.
+- ~93 ops-level spans across 13 ops files in `crates/database/src/ops/`.
 - `cognee_utils::redact::redact` now reachable from any adapter
   crate.
 - `cognee_utils::tracing_keys::*` is the single source of truth for
@@ -246,7 +252,7 @@ Gap 04 closed in 11 commits between <date> and <date>:
 
 ### 4.4 Update CI
 
-Edit [`.github/workflows/lib-tests.yml`](../../.github/workflows/lib-tests.yml).
+Edit [`.github/workflows/ci.yml`](../../../.github/workflows/ci.yml).
 
 The new test files (`*_span_instrumentation.rs`) are picked up by
 `cargo test --workspace` automatically. **Verify** that the
@@ -289,6 +295,10 @@ If a Postgres lane already exists for other tests, just add the
 two `cargo test` invocations there — don't duplicate the service
 container.
 
+(Note: gap 04 does not introduce a `pg_graph_span_instrumentation`
+test file because per-method `PgGraphAdapter` spans were deferred in
+04-08; drop that line if no such test exists yet.)
+
 ### 4.5 Smoke pass
 
 ```bash
@@ -328,7 +338,7 @@ scripts/check_all.sh
   if it does not exist yet).
 - [`docs/telemetry/04-db-adapter-instrumentation.md`](../04-db-adapter-instrumentation.md)
   — Action items column flip + Closure summary.
-- [`.github/workflows/lib-tests.yml`](../../.github/workflows/lib-tests.yml)
+- [`.github/workflows/ci.yml`](../../../.github/workflows/ci.yml)
   — Postgres span-instrumentation lane.
 
 ## 7. Risks
@@ -336,7 +346,7 @@ scripts/check_all.sh
 | Risk | Likelihood | Mitigation |
 |---|---|---|
 | `docs/observability/opentelemetry.md` does not exist yet | Possible — gap-analysis.md mentions it as canonical but the file may be a stub. | If absent, create it with the bare scaffolding shown in 4.2. |
-| Postgres CI lane is flaky on `lib-tests.yml` | Real for any service-container job. | Use the same health-check pattern as the existing pgvector tests (see `lib-tests.yml` history). |
+| Postgres CI lane is flaky on `ci.yml` | Real for any service-container job. | Use the same health-check pattern as the existing pgvector tests (see `ci.yml` history). |
 | The closure summary lists wrong SHAs because tasks were rebased | Possible if any task was amended after committing. | Sub-agent E reads `git log` directly at task time rather than copying from the orchestrator's per-task report. |
 | Markdown links use the wrong relative path after the parent doc moves | Low — the docs/ tree is stable. | The grep in 5 catches obvious breakage. |
 

@@ -192,6 +192,72 @@ jobs:
           CARGO_TARGET_DIR: target/telemetry
         run: cargo doc --no-deps --features telemetry
 
+  # ── Stage 2.5: Postgres-only span tests (depends on lint, runs in parallel with `test`) ──
+  # The pgvector adapter span tests in
+  # `crates/vector/tests/pgvector_span_instrumentation.rs` skip silently
+  # when `cognee_test_utils::pg_test_url()` returns `None`, so the host
+  # `test` lane's `cargo test --workspace` invocation never actually
+  # exercises them. This dedicated lane spins up a Postgres service
+  # container with the pgvector extension so the spans land on a real
+  # backend in CI. Added in gap 04 (task 04-11) once
+  # `PgvectorAdapter` started emitting `cognee.db.vector.*` spans with
+  # `cognee.db.system="pgvector"`.
+  #
+  # `pg_graph_adapter` is intentionally not exercised here — per-method
+  # span instrumentation was deferred in 04-08 pending a fan-in
+  # refactor (the public `query` is a stub returning
+  # `QueryError("not supported")`).
+  pgvector-spans:
+    name: Test (Postgres span lane)
+    needs: lint
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: cognee_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DB_PROVIDER: postgres
+      DB_HOST: localhost
+      DB_PORT: "5432"
+      DB_NAME: cognee_test
+      DB_USERNAME: postgres
+      DB_PASSWORD: postgres
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install mold linker
+        uses: rui314/setup-mold@v1
+        with:
+          make-default: true
+
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - name: Cache cargo/target
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: workspace-v3
+
+      - name: Run pgvector span instrumentation tests
+        run: cargo test -p cognee-vector --test pgvector_span_instrumentation -- --nocapture
+
   # ── Stage 3: Language binding checks (depends on test, parallel with each other) ──
   capi-check:
     name: C API Check

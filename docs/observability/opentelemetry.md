@@ -323,6 +323,82 @@ Switch to a Collector deployment (DaemonSet or per-namespace) and have
 your apps point at the local Collector. Don't export directly to a
 managed vendor from every pod.
 
+## Adapter span reference
+
+After [gap 04](../telemetry/04-db-adapter-instrumentation.md), every
+database / vector / LLM call goes through a named tracing span.
+Operators can filter on these in Tempo / Honeycomb / any OTLP consumer.
+
+### Vector adapters
+
+| Span name | `cognee.db.system` values | Attributes |
+|---|---|---|
+| `cognee.db.vector.search` | `qdrant`, `pgvector` | `cognee.vector.collection`, `cognee.vector.result_count` |
+| `cognee.db.vector.upsert` | `qdrant`, `pgvector` | `cognee.vector.collection`, `cognee.db.row_count` |
+| `cognee.db.vector.delete` | `qdrant`, `pgvector` | `cognee.vector.collection`, `cognee.db.row_count` |
+| `cognee.db.vector.delete_collection` | `qdrant`, `pgvector` | `cognee.vector.collection` |
+
+Vector spans intentionally omit `cognee.db.query` — there is no SQL
+string for a vector lookup. The collection name and result-count are
+the canonical observability points (matches Python's LanceDB
+instrumentation).
+
+### Graph adapters
+
+| Span name | `cognee.db.system` values | Attributes |
+|---|---|---|
+| `cognee.db.graph.query` | `ladybug` | `cognee.db.query` (truncated to 500 chars then redacted), `cognee.db.row_count` |
+
+`pg_graph_adapter` is **not yet instrumented**: its public `query`
+returns `QueryError("not supported")`, so meaningful coverage requires
+a fan-in refactor of the ~22 typed methods. Tracked as a follow-up in
+[gap 04 → Known follow-ups](../telemetry/04-db-adapter-instrumentation.md#known-follow-ups).
+
+### Relational ops
+
+Span names follow the pattern `cognee.db.relational.<file_stem>.<fn_name>`
+— one per public function in
+[`crates/database/src/ops/*.rs`](../../crates/database/src/ops/) (~93
+functions across 13 ops files). Attributes:
+
+- `cognee.db.system` — `sqlite`, `postgres`, or `mysql`, derived from
+  the active SeaORM `DatabaseBackend`.
+- `cognee.db.row_count` — set when the operation returns a `Vec<_>`
+  (list / lookup paths).
+
+### LLM adapters
+
+| Span name | `cognee.llm.provider` values | Attributes |
+|---|---|---|
+| `llm.api_call` | `openai` | `cognee.llm.model`, `cognee.llm.provider`, `url` |
+| `llm.transcription_api_call` | `openai` | `cognee.llm.model` (sourced from `transcription_model`), `cognee.llm.provider`, `url` |
+| `llm.litert_call` | `litert` (Android only) | `cognee.llm.model`, `cognee.llm.provider` |
+| `llm.litert_structured_call` | `litert` (Android only) | `cognee.llm.model`, `cognee.llm.provider` |
+
+LiteRT spans are compiled in only when `cognee-llm` is built with the
+`android-litert` feature.
+
+### Sample query — Tempo / Grafana
+
+```logql
+{cognee.db.system="ladybug"} | json | cognee.db.row_count > 0
+```
+
+### Redaction
+
+`cognee.db.query` values are passed through
+[`cognee_utils::redact::redact`](../../crates/utils/src/redact.rs)
+before recording. The four-pattern set masks OpenAI-style keys
+(`sk-…`), generic `api_key=` assignments, `Bearer …` tokens, and
+`password=` assignments. The first 6 characters of each match survive
+(so `sk-AAA***REDACTED***` is still distinguishable in traces).
+
+The constants used as field keys live in
+[`cognee_utils::tracing_keys`](../../crates/utils/src/tracing_keys.rs);
+[`cognee_search::observability`](../../crates/search/src/observability.rs)
+re-exports them for backwards compatibility with existing search call
+sites.
+
 ## Future work
 
 OpenTelemetry **metrics** and **logs** export are out of scope for the

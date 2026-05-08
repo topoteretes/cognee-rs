@@ -56,16 +56,29 @@ The Rust http-server has `/api/v1/activity/pipeline-runs` reading a DB table, so
 
 ---
 
-## 4. LLM / DB Span Coverage
+## 4. LLM / DB Span Coverage — closed by gap 04
 
-Python instruments **every** LLM adapter via `@observe(as_type="generation"|"transcription")` and sets `cognee.llm.model`/`cognee.llm.provider`. Vector and graph adapters (LanceDB, Neo4j, Ladybug, Kuzu) wrap queries in `cognee.db.{vector,graph}.{search,query}` spans with `cognee.db.system`, `cognee.db.query` (with `redact_secrets`), `cognee.db.row_count`.
+Python instruments the active graph adapter (Neo4j or Ladybug) and the
+LanceDB vector adapter via `new_span("cognee.db.{graph,vector}.*")`
+with `cognee.db.system` / `cognee.db.query` / `cognee.db.row_count`
+attributes. LLM adapters add `cognee.llm.{model,provider}` to their
+surrounding span.
 
-**Rust status:**
-
-- LLM: [openai.rs:138,729](../../crates/llm/src/adapters/openai.rs#L138) has `llm.api_call` / `llm.transcription_api_call`
-- Verify `cognee.llm.model` / `cognee.llm.provider` are set as attributes (not just span name)
-- **No equivalent spans on QdrantAdapter, LadybugAdapter, SqliteDatabase queries** — Python's `cognee.db.*` instrumentation is not mirrored. [crates/utils/src/tracing_keys.rs](../../crates/utils/src/tracing_keys.rs) defines the constants but no call sites use them.
-- No query-text redaction utility (Python has `redact_secrets()` in `cognee/modules/observability/tracing.py`)
+**Rust:** closed in
+[`04-db-adapter-instrumentation.md`](04-db-adapter-instrumentation.md).
+Spans are emitted by `QdrantAdapter`, `LadybugAdapter`, `OpenAIAdapter`
+(host), `LiteRtAdapter` (Android), `PgVectorAdapter`, and every public
+function in `crates/database/src/ops/*.rs`. Per-method
+`pg_graph_adapter` spans are deferred (see the
+[gap 04 closure summary](04-db-adapter-instrumentation.md#known-follow-ups)
+for the rationale). The `redact_secrets` helper now lives at
+[`cognee_utils::redact::redact`](../../crates/utils/src/redact.rs) so
+adapter crates can call it without depending on `cognee-http-server`.
+Constants are consolidated under
+[`cognee_utils::tracing_keys`](../../crates/utils/src/tracing_keys.rs);
+[`cognee_search::observability`](../../crates/search/src/observability.rs)
+is a re-export shim for backwards compatibility with existing search
+call sites.
 
 ---
 
@@ -116,7 +129,7 @@ Python SDK auto-initializes telemetry on import. Rust bindings ([capi/](../../ca
 - [crates/search/src/observability.rs](../../crates/search/src/observability.rs) — 18 `cognee.*` constants
 - [crates/utils/src/tracing_keys.rs](../../crates/utils/src/tracing_keys.rs) — 13 `cognee.*` constants
 
-These mirror Python's namespaces but several (`cognee.db.system`, `cognee.db.query`, `cognee.db.row_count`, `cognee.llm.provider`) are defined and unused.
+These mirror Python's namespaces. Every key is now consumed by at least one call site after gap 04 closure (Qdrant, Ladybug, pgvector, OpenAI, LiteRT, and the relational ops layer in `crates/database/src/ops/*.rs`).
 
 ### Telemetry feature flag
 
@@ -286,15 +299,21 @@ Each gap is broken out into a dedicated sub-document with deep investigation, de
 
 1. **Implement `send_telemetry()` analytics client** — proxy URL, anon/persistent ID files, PBKDF2 api-key tracking ID, opt-out semantics, async fire-and-forget HTTP. → [02-send-telemetry-analytics.md](02-send-telemetry-analytics.md)
 2. **Emit pipeline & task lifecycle events** — `Pipeline Run Started/Completed/Errored`, per-task variants, and API events (`cognee.recall`, `cognee.improve`, `cognee.forget`). → [03-pipeline-task-api-events.md](03-pipeline-task-api-events.md)
-3. **Instrument DB adapters** — Qdrant, Ladybug, SeaORM/SQLite with `cognee.db.{vector,graph}.{search,query}` spans + `cognee.db.system/query/row_count` attributes; promote `redact_secrets()` to `cognee-utils`. → [04-db-adapter-instrumentation.md](04-db-adapter-instrumentation.md)
-4. **Provenance stamping on DataPoints** — `source_pipeline`, `source_task`, `source_user`, `source_node_set`, `source_content_hash` attached to every yielded DataPoint with a per-run visited set. → [05-datapoint-provenance.md](05-datapoint-provenance.md)
-5. **File logging with rotation** — mirror Python's `COGNEE_LOG_FILE`, `COGNEE_LOGS_DIR`, `COGNEE_LOG_MAX_BYTES`, etc.; rotating non-blocking appender; library noise suppression. → [06-file-logging-rotation.md](06-file-logging-rotation.md)
-6. **Auto-init tracing in bindings** — PyO3, Neon, C API entry points so embedders get telemetry without extra setup; avoid double-emission when embedded in the Python SDK. → [07-bindings-auto-init.md](07-bindings-auto-init.md)
-7. **Pipeline run status lifecycle** — schema and four-state lifecycle are defined but `INITIATED` is never written, `run_info` content drifts from Python, and library-level pipelines bypass the registry entirely. → [08-pipeline-run-status.md](08-pipeline-run-status.md)
+3. **Provenance stamping on DataPoints** — `source_pipeline`, `source_task`, `source_user`, `source_node_set`, `source_content_hash` attached to every yielded DataPoint with a per-run visited set. → [05-datapoint-provenance.md](05-datapoint-provenance.md)
+4. **File logging with rotation** — mirror Python's `COGNEE_LOG_FILE`, `COGNEE_LOGS_DIR`, `COGNEE_LOG_MAX_BYTES`, etc.; rotating non-blocking appender; library noise suppression. → [06-file-logging-rotation.md](06-file-logging-rotation.md)
+5. **Auto-init tracing in bindings** — PyO3, Neon, C API entry points so embedders get telemetry without extra setup; avoid double-emission when embedded in the Python SDK. → [07-bindings-auto-init.md](07-bindings-auto-init.md)
+6. **Pipeline run status lifecycle** — schema and four-state lifecycle are defined but `INITIATED` is never written, `run_info` content drifts from Python, and library-level pipelines bypass the registry entirely. → [08-pipeline-run-status.md](08-pipeline-run-status.md)
 
 ### Completed work
 
 - ✅ **Wire OpenTelemetry SDK + OTLP exporter** — wired the existing `OTEL_*` config fields end-to-end: `init_telemetry`, `tracing-opentelemetry` bridge, OTLP gRPC/HTTP exporters, RAII flush guard, CLI + HTTP server subscriber composition, unit + integration tests, CI lanes, user docs. → [01-otel-otlp-export.md](01-otel-otlp-export.md) (complete — see commits `8cc50bb..0fc9adb`).
+- ✅ **Instrument DB / LLM adapters with spans + attributes** — Qdrant,
+  Ladybug, pgvector, SeaORM ops, OpenAI, LiteRT now emit
+  `cognee.db.{vector,graph,relational}.*` and `cognee.llm.*` spans.
+  Redaction helper relocated to `cognee-utils`. Constants consolidated.
+  → [04-db-adapter-instrumentation.md](04-db-adapter-instrumentation.md)
+  (complete — see the
+  [closure summary](04-db-adapter-instrumentation.md#closure-summary)).
 
 ---
 

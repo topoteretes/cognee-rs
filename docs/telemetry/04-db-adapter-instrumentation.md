@@ -379,9 +379,9 @@ high-level summary.
 | 06 | Add `cognee.llm.model` / `cognee.llm.provider="openai"` fields to the existing `llm.api_call` and `llm.transcription_api_call` `#[instrument]` blocks on `OpenAIAdapter`. Adds `cognee-utils` dep on `cognee-llm`. | [04/06-openai-llm-fields.md](04/06-openai-llm-fields.md) | 02 | ✅ d3409e9 |
 | 07 | Add `#[instrument]` with `cognee.llm.model` / `cognee.llm.provider="litert"` on `LiteRtAdapter::generate` and `create_structured_output_with_messages_raw`. Feature-gated behind `android-litert`. | [04/07-litert-llm-fields.md](04/07-litert-llm-fields.md) | 02 | ✅ ca28fba |
 | 08 | pgvector adapter spans (pg_graph deferred — see sub-doc note). Mirror the Qdrant instrumentation onto `pgvector_adapter` (`cognee.db.system="pgvector"`). pg_graph instrumentation is deferred pending a fan-in refactor: the only public `query` method is a stub returning `QueryError("not supported")`, so meaningful coverage requires wrapping the ~22 typed methods. Decision 3 remains a goal. | [04/08-pg-adapters.md](04/08-pg-adapters.md) | 02, 04 | ✅ 16ecc16 |
-| 09 | Ops-level instrumentation of every public function in `crates/database/src/ops/*.rs` (~80 functions across 14 files) with `cognee.db.relational.<file_stem>.<fn>` spans. Adds a `database_system_label(&db)` helper that maps SeaORM backend → `"sqlite"` / `"postgres"` / `"mysql"`. | [04/09-seaorm-ops-instrumentation.md](04/09-seaorm-ops-instrumentation.md) | 02 | ✅ 176301b |
+| 09 | Ops-level instrumentation of every public function in `crates/database/src/ops/*.rs` (~93 functions across 13 ops files; the `mod.rs` and helper-only file in `crates/database/src/ops/` are not ops) with `cognee.db.relational.<file_stem>.<fn>` spans. Adds a `database_system_label(&db)` helper that maps SeaORM backend → `"sqlite"` / `"postgres"` / `"mysql"`. | [04/09-seaorm-ops-instrumentation.md](04/09-seaorm-ops-instrumentation.md) | 02 | ✅ 176301b |
 | 10 | Adapter span-instrumentation integration tests using the `SpanCapture` helper from 03. Six new test files: `qdrant_span_instrumentation`, `ladybug_span_instrumentation`, `openai_span_instrumentation` (mockito), `pgvector_span_instrumentation` (skip-on-no-pg), `pg_graph_span_instrumentation` (same), `relational_ops_span_instrumentation` (15 smoke tests). | [04/10-tests.md](04/10-tests.md) | 03, 04, 05, 06, 08, 09 | ✅ 92dbaa6 |
-| 11 | Docs: extend `docs/observability/opentelemetry.md` with the canonical span-name / attribute reference. Update `docs/telemetry/gap-analysis.md` section 4 to mark the LLM/DB span gap closed. CI: add a Postgres lane for the pg-side span tests if not already present. Closure summary at the bottom of this doc. | [04/11-docs-and-ci.md](04/11-docs-and-ci.md) | 01–10 | ⬜ |
+| 11 | Docs: extend `docs/observability/opentelemetry.md` with the canonical span-name / attribute reference. Update `docs/telemetry/gap-analysis.md` section 4 to mark the LLM/DB span gap closed. CI: add a Postgres lane for the pg-side span tests if not already present. Closure summary at the bottom of this doc. | [04/11-docs-and-ci.md](04/11-docs-and-ci.md) | 01–10 | ✅ _this commit_ |
 
 ### Suggested execution order
 
@@ -532,3 +532,81 @@ byte-for-byte, which is what the cross-SDK parity tests need.
 - Sibling docs:
   - [`gap-analysis.md`](gap-analysis.md) sections 4 (LLM/DB span coverage) and the broader telemetry pillars.
   - [`../http-server/observability.md`](../http-server/observability.md) — ring-buffer span store and `/api/v1/activity/spans` endpoint that consumes whatever attributes the adapters emit.
+  - [`../observability/opentelemetry.md`](../observability/opentelemetry.md) — operator-facing OTLP / Tempo / Honeycomb / Dash0 reference; the "Adapter span reference" section there documents every span name + attribute set landed by this gap.
+
+---
+
+## Closure summary
+
+Gap 04 closed in 23 commits between 2026-05-07 and 2026-05-08. The
+table below lists every commit in landing order — each sub-task lands
+as a pair (implementation commit + sub-doc status flip).
+
+| # | Commit | Subject |
+|---|---|---|
+| 04-00 | `d20a571` | telemetry/db-spans-04-00: add gap-04 planning sub-docs |
+| 04-01 | `21f10e8` | telemetry/db-spans-04-01: relocate `redact()` to `cognee-utils` |
+| 04-01 | `0f9f3ca` | telemetry/db-spans-04-01: mark action item 01 complete |
+| 04-02 | `1e03ac9` | telemetry/db-spans-04-02: dedupe `cognee.*` tracing key constants into `cognee-utils` |
+| 04-02 | `610ccf9` | telemetry/db-spans-04-02: mark action item 02 complete |
+| 04-03 | `0578c1f` | telemetry/db-spans-04-03: add `SpanCapture` `tracing::Layer` test helper to `cognee-test-utils` |
+| 04-03 | `628bcde` | telemetry/db-spans-04-03: mark action item 03 complete |
+| 04-04 | `1d3fda1` | telemetry/db-spans-04-04: instrument `QdrantAdapter` search/upsert/delete with `cognee.db.vector.*` spans |
+| 04-04 | `05d066e` | telemetry/db-spans-04-04: mark action item 04 complete |
+| 04-05 | `2683ba1` | telemetry/db-spans-04-05: instrument `LadybugAdapter::execute_query` with `cognee.db.graph.query` span |
+| 04-05 | `d942202` | telemetry/db-spans-04-05: mark action item 05 complete |
+| 04-06 | `d3409e9` | telemetry/db-spans-04-06: add `cognee.llm.{model,provider}` fields to `OpenAIAdapter` spans |
+| 04-06 | `54178e7` | telemetry/db-spans-04-06: mark action item 06 complete |
+| 04-07 | `ca28fba` | telemetry/db-spans-04-07: instrument `LiteRtAdapter::generate` / `create_structured_output` with `cognee.llm.*` fields |
+| 04-07 | `a0812b0` | telemetry/db-spans-04-07: mark action item 07 complete |
+| 04-08 | `16ecc16` | telemetry/db-spans-04-08: instrument `PgvectorAdapter`; defer `pg_graph` fan-in |
+| 04-08 | `d37401d` | telemetry/db-spans-04-08: mark action item 08 complete |
+| 04-09 | `176301b` | telemetry/db-spans-04-09: instrument SeaORM ops crate with `cognee.db.relational.*` spans |
+| 04-09 | `d332089` | telemetry/db-spans-04-09: mark action item 09 complete |
+| 04-10 | `92dbaa6` | telemetry/db-spans-04-10: add adapter span integration tests using `SpanCapture` |
+| 04-10 | `0158aad` | telemetry/db-spans-04-10: mark action item 10 complete |
+| 04-11 | _this commit_ | telemetry/db-spans-04-11: docs + CI + gap closure |
+
+### What the gap delivered
+
+- 5 adapter crates instrumented: vector (Qdrant + pgvector), graph
+  (Ladybug), and LLM (OpenAI on the host, LiteRT on Android).
+- ~93 ops-level spans across 13 ops files in
+  [`crates/database/src/ops/`](../../crates/database/src/ops/).
+- [`cognee_utils::redact::redact`](../../crates/utils/src/redact.rs) is
+  now reachable from any adapter crate (previously trapped in
+  `cognee-http-server`).
+- [`cognee_utils::tracing_keys`](../../crates/utils/src/tracing_keys.rs)
+  is the single source of truth for `cognee.*` semantic-attribute key
+  constants;
+  [`cognee_search::observability`](../../crates/search/src/observability.rs)
+  is a re-export shim.
+- [`cognee_test_utils::SpanCapture`](../../crates/test-utils/src/span_capture.rs)
+  lets every adapter integration test assert on structured field
+  values byte-for-byte.
+- 6 new integration test files (~30 individual `#[tokio::test]`
+  functions) under
+  `crates/{vector,graph,llm,database}/tests/*_span_instrumentation.rs`.
+- Operator-facing docs in
+  [`docs/observability/opentelemetry.md`](../observability/opentelemetry.md)
+  document every span name + attribute introduced by this gap.
+
+### Known follow-ups
+
+The gap closes with the following intentional deferrals tracked here so
+they aren't lost:
+
+- **Per-method `pg_graph_adapter` spans** — locked decision 1 plus the
+  04-08 sub-doc deferred this. The only public `query` method on
+  `PgGraphAdapter` is a stub returning `QueryError("not supported")`,
+  so meaningful coverage requires wrapping the ~22 typed methods. The
+  `cognee.db.system="postgres"` span shape from Decision 3 remains the
+  goal; revisit when cloud users ask for higher granularity.
+- **Cross-SDK OTEL parity test** — assert that Python and Rust emit
+  comparable span sets for the same operation against a shared
+  collector. Already listed under
+  [`gap-analysis.md` "Future work"](gap-analysis.md#future-work--out-of-scope).
+- **LiteRT on-device span tests** — the LiteRT spans compile only
+  under `--features android-litert` and run on physical devices;
+  asserting on them requires the Android runner, not host CI. Future
+  Android-runner work.
