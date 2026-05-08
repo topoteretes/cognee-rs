@@ -2306,14 +2306,21 @@ async fn index_data_points(
             .iter()
             .zip(vectors)
             .map(|(chunk, vector)| {
-                let mut point = VectorPoint::new(chunk.base.id, vector)
-                    .with_metadata("type", json!("DocumentChunk"))
+                let mut point = VectorPoint::new(chunk.base.id, vector);
+
+                // 1. Full DataPoint dump (Python parity — see gap-05/08).
+                //    Provides `type`, `belongs_to_set`, all source_* keys, etc.
+                for (k, v) in chunk.base.vector_metadata() {
+                    point = point.with_metadata(k, v);
+                }
+
+                // 2. Context-specific keys not present on the DataPoint.
+                point = point
                     .with_metadata("field", json!("text"))
                     .with_metadata("text", json!(chunk.text.clone()))
                     .with_metadata("dataset_id", json!(dataset_id.to_string()))
                     .with_metadata("document_id", json!(chunk.document_id.to_string()))
-                    .with_metadata("chunk_index", json!(chunk.chunk_index))
-                    .with_metadata("belongs_to_set", json!(chunk.base.belongs_to_set));
+                    .with_metadata("chunk_index", json!(chunk.chunk_index));
                 if let Some(uid) = user_id {
                     point = point.with_metadata("user_id", json!(uid.to_string()));
                 }
@@ -2356,8 +2363,15 @@ async fn index_data_points(
             .iter()
             .zip(vectors)
             .map(|(entity, vector)| {
-                let mut point = VectorPoint::new(entity.entity.base.id, vector)
-                    .with_metadata("type", json!("Entity"))
+                let mut point = VectorPoint::new(entity.entity.base.id, vector);
+
+                // 1. Full DataPoint dump (Python parity — see gap-05/08).
+                for (k, v) in entity.entity.base.vector_metadata() {
+                    point = point.with_metadata(k, v);
+                }
+
+                // 2. Context-specific keys not present on the DataPoint.
+                point = point
                     .with_metadata("field", json!("name"))
                     .with_metadata("dataset_id", json!(dataset_id.to_string()))
                     .with_metadata("entity_type", json!(entity.entity_type.name.clone()));
@@ -2414,8 +2428,15 @@ async fn index_data_points(
                 .iter()
                 .zip(vectors)
                 .map(|(et, vector)| {
-                    let mut point = VectorPoint::new(et.base.id, vector)
-                        .with_metadata("type", json!("EntityType"))
+                    let mut point = VectorPoint::new(et.base.id, vector);
+
+                    // 1. Full DataPoint dump (Python parity — see gap-05/08).
+                    for (k, v) in et.base.vector_metadata() {
+                        point = point.with_metadata(k, v);
+                    }
+
+                    // 2. Context-specific keys not present on the DataPoint.
+                    point = point
                         .with_metadata("field", json!("name"))
                         .with_metadata("dataset_id", json!(dataset_id.to_string()));
                     if let Some(uid) = user_id {
@@ -2461,8 +2482,15 @@ async fn index_data_points(
             .iter()
             .zip(vectors)
             .map(|(summary, vector)| {
-                let mut point = VectorPoint::new(summary.base.id, vector)
-                    .with_metadata("type", json!("TextSummary"))
+                let mut point = VectorPoint::new(summary.base.id, vector);
+
+                // 1. Full DataPoint dump (Python parity — see gap-05/08).
+                for (k, v) in summary.base.vector_metadata() {
+                    point = point.with_metadata(k, v);
+                }
+
+                // 2. Context-specific keys not present on the DataPoint.
+                point = point
                     .with_metadata("field", json!("text"))
                     .with_metadata("text", json!(summary.text.clone()))
                     .with_metadata("dataset_id", json!(dataset_id.to_string()));
@@ -2512,16 +2540,49 @@ async fn index_data_points(
                 .await
                 .map_err(|e| CognifyError::EmbeddingError(e.to_string()))?;
 
+            // Index the EdgeType DataPoints by relationship name so each
+            // triplet payload can inherit its originating edge's
+            // provenance (`source_*`) keys per gap-05/08 §4.4. Triplet
+            // itself has no embedded `DataPoint`, so we narrow the
+            // dump to just the five `source_*` keys to avoid colliding
+            // with Triplet's own flat fields (id, type, etc.).
+            let edge_type_by_name: std::collections::HashMap<&str, &EdgeType> = edge_types
+                .iter()
+                .map(|et| (et.relationship_name.as_str(), et))
+                .collect();
+
             let triplet_points: Vec<VectorPoint> = triplets
                 .iter()
                 .zip(triplet_vectors)
                 .map(|(triplet, vector)| {
-                    VectorPoint::new(triplet.id, vector)
+                    let mut point = VectorPoint::new(triplet.id, vector)
                         .with_metadata("type", json!("Triplet"))
                         .with_metadata("field", json!("text"))
                         .with_metadata("source_id", json!(triplet.source_entity_id.to_string()))
                         .with_metadata("target_id", json!(triplet.target_entity_id.to_string()))
-                        .with_metadata("relationship", json!(triplet.relationship_name.clone()))
+                        .with_metadata("relationship", json!(triplet.relationship_name.clone()));
+
+                    // Triplet special case (gap-05/08 §4.4): copy only the
+                    // five `source_*` keys from the originating EdgeType's
+                    // DataPoint, so Triplet's own flat fields are not
+                    // overwritten.
+                    if let Some(edge_type) =
+                        edge_type_by_name.get(triplet.relationship_name.as_str())
+                    {
+                        for (k, v) in edge_type.base.vector_metadata() {
+                            if matches!(
+                                k.as_str(),
+                                "source_pipeline"
+                                    | "source_task"
+                                    | "source_user"
+                                    | "source_node_set"
+                                    | "source_content_hash"
+                            ) {
+                                point = point.with_metadata(k, v);
+                            }
+                        }
+                    }
+                    point
                 })
                 .collect();
 
@@ -2563,8 +2624,15 @@ async fn index_data_points(
             .iter()
             .zip(vectors)
             .map(|(et, vector)| {
-                let mut point = VectorPoint::new(et.base.id, vector)
-                    .with_metadata("type", json!("EdgeType"))
+                let mut point = VectorPoint::new(et.base.id, vector);
+
+                // 1. Full DataPoint dump (Python parity — see gap-05/08).
+                for (k, v) in et.base.vector_metadata() {
+                    point = point.with_metadata(k, v);
+                }
+
+                // 2. Context-specific keys not present on the DataPoint.
+                point = point
                     .with_metadata("field", json!("relationship_name"))
                     .with_metadata("relationship_name", json!(et.relationship_name.clone()))
                     .with_metadata("number_of_edges", json!(et.number_of_edges))

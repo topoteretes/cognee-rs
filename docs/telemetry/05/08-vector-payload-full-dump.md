@@ -277,9 +277,21 @@ need to accommodate — flag any unexpected match for the user.
 
 ### 4.7 Update the `points` build for memify
 
-[`crates/cognify/src/memify.rs`](../../crates/cognify/src/memify.rs)
-(or wherever the memify pipeline indexes triplets) has its own vector
-construction. Apply the §4.4 special-case there too.
+[`crates/cognify/src/memify/index_triplets.rs`](../../crates/cognify/src/memify/index_triplets.rs)
+indexes triplets via its own `VectorPoint::new(triplet.id, vector)` site
+(around line 78). It has the same flat per-field `with_metadata` shape
+as the cognify Triplet site in §4.4. Apply the §4.4 special-case there
+too — note that memify walks edges directly without an `edge_type` in
+scope, so for the memify path either:
+
+- thread the originating `EdgeType` through to the indexing site and
+  apply the same `source_*`-only override, or
+- (simpler) leave memify's per-field payload unchanged for now and
+  document the gap, deferring full provenance flow to the follow-up
+  cognify/memify convergence work.
+
+Pick the simplest option that keeps the cross-SDK parity test green;
+escalate if neither holds.
 
 ## 5. Verification
 
@@ -312,8 +324,9 @@ scripts/check_all.sh
   six `VectorPoint::new(…)` sites + two temporal sites updated to the
   "full dump + context extras" pattern. Triplet site applies the
   §4.4 special-case.
-- [`crates/cognify/src/memify.rs`](../../crates/cognify/src/memify.rs)
-  (or its triplet-indexing site) — same update.
+- [`crates/cognify/src/memify/index_triplets.rs`](../../crates/cognify/src/memify/index_triplets.rs)
+  — same update applied at the `VectorPoint::new(triplet.id, vector)`
+  call site (around line 78), per §4.7.
 - (Conditional) any cognify integration test under
   [`crates/cognify/tests/`](../../crates/cognify/tests/) that asserts
   the old payload shape — update assertions.

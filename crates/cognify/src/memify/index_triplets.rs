@@ -75,6 +75,17 @@ pub async fn index_triplets(
             .map(|(triplet, vector)| {
                 // Metadata MUST match cognify's add_data_points() so
                 // TripletRetriever works consistently.
+                //
+                // TODO(gap-05/08 §4.7): unlike cognify's `add_data_points`
+                // path, memify walks edges directly via the graph DB
+                // and does not have the originating `EdgeType` DataPoint
+                // in scope at this site. As a result, the five
+                // provenance `source_*` keys that cognify-built triplet
+                // payloads carry (per gap-05/08 §4.4) are NOT propagated
+                // here yet. Threading the EdgeType through is deferred
+                // to the cognify/memify convergence work; cross-SDK
+                // parity tests for memify-built triplets will need to
+                // tolerate this gap until then.
                 let mut point = VectorPoint::new(triplet.id, vector)
                     .with_metadata("type", json!("Triplet"))
                     .with_metadata("field", json!("text"))
