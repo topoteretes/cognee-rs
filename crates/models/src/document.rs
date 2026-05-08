@@ -4,6 +4,7 @@ use uuid::Uuid;
 
 use crate::Data;
 use crate::DataPoint;
+use crate::has_datapoint::HasDataPoint;
 
 /// A classified document derived from a Data item.
 ///
@@ -147,6 +148,17 @@ pub fn classify_documents(data_items: &[Data]) -> Vec<Document> {
             Some(doc)
         })
         .collect()
+}
+
+impl HasDataPoint for Document {
+    fn data_point(&self) -> &DataPoint {
+        &self.base
+    }
+    fn data_point_mut(&mut self) -> &mut DataPoint {
+        &mut self.base
+    }
+    // for_each_child_mut: default no-op — Document has no nested
+    // DataPoint-bearing fields (links to its source `Data` by `data_id: Uuid`).
 }
 
 #[cfg(test)]
@@ -514,5 +526,16 @@ mod tests {
         assert_eq!(docs.len(), 1);
         assert!(docs[0].base.belongs_to_set.is_none());
         assert!(docs[0].base.source_node_set.is_none());
+    }
+
+    #[test]
+    fn document_implements_has_datapoint() {
+        let data = vec![make_data("text/plain", "txt")];
+        let docs = classify_documents(&data);
+        assert_eq!(docs.len(), 1);
+        let dp_id = docs[0].base.id;
+        assert_eq!(docs[0].data_point().id, dp_id);
+        let mut doc = docs[0].clone();
+        assert_eq!(doc.data_point_mut().id, dp_id);
     }
 }

@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::DataPoint;
+use crate::has_datapoint::HasDataPoint;
 
 /// Storage-layer edge type model.
 ///
@@ -126,6 +127,17 @@ impl EdgeType {
     pub fn count(&self) -> i32 {
         self.number_of_edges
     }
+}
+
+impl HasDataPoint for EdgeType {
+    fn data_point(&self) -> &DataPoint {
+        &self.base
+    }
+    fn data_point_mut(&mut self) -> &mut DataPoint {
+        &mut self.base
+    }
+    // for_each_child_mut: default no-op — EdgeType has no nested
+    // `HasDataPoint` children.
 }
 
 #[cfg(test)]
@@ -260,5 +272,14 @@ mod tests {
         let id1 = EdgeType::deterministic_id("works_at");
         let id2 = EdgeType::deterministic_id("located_in");
         assert_ne!(id1, id2, "different names must produce different UUIDs");
+    }
+
+    #[test]
+    fn edge_type_implements_has_datapoint() {
+        let et = EdgeType::new("rel", None);
+        let dp_id = et.base.id;
+        assert_eq!(et.data_point().id, dp_id);
+        let mut et2 = et;
+        assert_eq!(et2.data_point_mut().id, dp_id);
     }
 }

@@ -3,6 +3,7 @@ use serde_json::json;
 use uuid::Uuid;
 
 use crate::DataPoint;
+use crate::has_datapoint::HasDataPoint;
 
 /// A chunk of text extracted from a document during the cognify pipeline.
 ///
@@ -63,5 +64,39 @@ impl DocumentChunk {
             is_part_of: Some(document_id),
             contains: vec![],
         }
+    }
+}
+
+impl HasDataPoint for DocumentChunk {
+    fn data_point(&self) -> &DataPoint {
+        &self.base
+    }
+    fn data_point_mut(&mut self) -> &mut DataPoint {
+        &mut self.base
+    }
+    // for_each_child_mut: default no-op — DocumentChunk references its
+    // parent `Document` by `document_id: Uuid` (and `is_part_of: Option<Uuid>`),
+    // not via an owned child.
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn document_chunk_implements_has_datapoint() {
+        let document_id = Uuid::new_v4();
+        let chunk = DocumentChunk::new(
+            Uuid::new_v4(),
+            "hello".into(),
+            1,
+            0,
+            "paragraph_end".into(),
+            document_id,
+        );
+        let dp_id = chunk.base.id;
+        assert_eq!(chunk.data_point().id, dp_id);
+        let mut chunk2 = chunk;
+        assert_eq!(chunk2.data_point_mut().id, dp_id);
     }
 }

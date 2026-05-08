@@ -1,6 +1,17 @@
 # Task 05-03 — Provenance core module (`HasDataPoint`, `stamp_tree`, extractors)
 
 **Status**: ⬜ not started
+
+> **Post-landing follow-up (locked in 05-04):** the `HasDataPoint`
+> trait declared here is moved to `cognee-models` as part of
+> [task 05-04](04-has-datapoint-impls.md) §4.1, and re-exported from
+> `cognee_core::provenance` so the public paths
+> (`cognee_core::provenance::HasDataPoint`, `cognee_core::HasDataPoint`)
+> stay unchanged. The algorithm (`stamp_tree`, `ProvenanceContext`,
+> the extract helpers) stays in this module. The commit landing the
+> trait move will be referenced from 05-04's status header once it
+> commits.
+
 **Owner**: _unassigned_
 **Depends on**:
 - [Task 05-01 — `source_content_hash` field](01-source-content-hash-field.md) (the trait writes the field).

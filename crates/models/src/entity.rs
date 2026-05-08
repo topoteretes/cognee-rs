@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::DataPoint;
+use crate::has_datapoint::HasDataPoint;
 
 /// Storage-layer entity model.
 ///
@@ -107,6 +108,18 @@ impl Entity {
     }
 }
 
+impl HasDataPoint for Entity {
+    fn data_point(&self) -> &DataPoint {
+        &self.base
+    }
+    fn data_point_mut(&mut self) -> &mut DataPoint {
+        &mut self.base
+    }
+    // for_each_child_mut: default no-op — Entity references its EntityType
+    // by UUID (`is_a: Option<Uuid>`), not by ownership. If a future variant
+    // owns an `entity_type: Box<EntityType>` field, override here to recurse.
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -182,5 +195,14 @@ mod tests {
 
         entity.set_entity_type(type_id);
         assert_eq!(entity.is_a, Some(type_id));
+    }
+
+    #[test]
+    fn entity_implements_has_datapoint() {
+        let e = Entity::new("Foo", None, "desc", None);
+        let dp_id = e.base.id;
+        assert_eq!(e.data_point().id, dp_id);
+        let mut e2 = e;
+        assert_eq!(e2.data_point_mut().id, dp_id);
     }
 }

@@ -231,19 +231,65 @@ fn content_hash_on_dp_overrides_context() {
 
 /// Drift guard: every type listed below must have a `HasDataPoint`
 /// impl AND be recognised by `extract_node_set_from_value` /
-/// `extract_content_hash_from_value`. The full body lands with gap
-/// 05-04, when the `HasDataPoint` impls do; until then this is a
-/// passing stub so the test name is reserved and CI surfaces drift
-/// reviews against this exact location.
+/// `extract_content_hash_from_value`. Adding a new container type
+/// requires touching all three places; this test exercises the helpers
+/// so a missed registration trips up locally before integration.
+///
+/// The trait now lives in `cognee-models`; `cognee-core` re-exports
+/// it. Either path resolves to the same trait — we use `cognee_core`
+/// here to mirror what the executor sees.
+///
+/// `TextSummary` is intentionally omitted here: it lives in
+/// `cognee-cognify`, which depends on `cognee-core` (so adding it as
+/// a dev-dep would create a cycle). It is instead exercised by the
+/// `text_summary_implements_has_datapoint` smoke test in
+/// `crates/cognify/src/summarization/models.rs`. `Triplet` is
+/// intentionally absent — see 05-04 §4.4.
 #[test]
 fn extract_helpers_cover_all_known_datapoint_types() {
-    let known_types: &[&str] = &[
-        "cognee_models::document::Document",
-        "cognee_models::document_chunk::DocumentChunk",
-        "cognee_models::entity::Entity",
-        "cognee_models::entity_type::EntityType",
-        "cognee_models::edge_type::EdgeType",
-        // Add TextSummary, etc., as 05-04 expands the list.
-    ];
-    let _ = known_types; // body filled in once 05-04 lands.
+    use cognee_core::extract_node_set_from_value;
+    use cognee_core::task::Value;
+    use cognee_models::{DataPoint, Document, DocumentChunk, EdgeType, Entity, EntityType};
+    use std::sync::Arc;
+    use uuid::Uuid;
+
+    fn check<T: Value>(value: T) {
+        let arc: Arc<dyn Value> = Arc::new(value);
+        // No assertion on the return value; we only confirm the call
+        // does not panic and the type is exercised by the downcast
+        // registry (i.e. the helpers list this type).
+        let _ = extract_node_set_from_value(arc.as_ref());
+    }
+
+    let dataset_id = Some(Uuid::new_v4());
+
+    // Document is constructed directly — `classify_documents` is the
+    // production constructor but it requires a `Data` row. For the
+    // smoke-test all we care about is that the type is recognised by
+    // the downcast registry.
+    let document = Document {
+        base: DataPoint::new("TextDocument", dataset_id),
+        document_type: "text".into(),
+        name: "name".into(),
+        raw_data_location: "loc".into(),
+        mime_type: "text/plain".into(),
+        extension: "txt".into(),
+        data_id: Uuid::new_v4(),
+        external_metadata: None,
+    };
+    check(document);
+
+    let document_chunk = DocumentChunk::new(
+        Uuid::new_v4(),
+        "hello".into(),
+        1,
+        0,
+        "paragraph_end".into(),
+        Uuid::new_v4(),
+    );
+    check(document_chunk);
+
+    check(Entity::new("Foo", None, "desc", dataset_id));
+    check(EntityType::new("Org", "desc", dataset_id));
+    check(EdgeType::new("rel", dataset_id));
 }

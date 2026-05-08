@@ -1,6 +1,6 @@
 # Task 05-04 — `HasDataPoint` impls for model containers
 
-**Status**: ⬜ not started
+**Status**: ⬜ not started — placement decision locked: `HasDataPoint` trait moves into `cognee-models` (option 1); `cognee-core::provenance` re-exports it so existing public paths keep working.
 **Owner**: _unassigned_
 **Depends on**:
 - [Task 05-03 — Provenance core](03-provenance-core.md) (defines the `HasDataPoint` trait and the algorithm).
@@ -60,42 +60,78 @@ impl overrides `for_each_child_mut` to walk the child.
 
 - [Task 05-03](03-provenance-core.md) is committed.
 - Clean `cargo check --all-targets` on `main`.
-- Each crate that hosts a target type already depends on `cognee-core`
-  (or transitively via `cognee-models`); verify with
-  `cargo tree -p cognee-models` and `cargo tree -p cognee-cognify`.
+- `cognee-cognify` already depends on `cognee-models` (verify with
+  `cargo tree -p cognee-cognify | grep cognee-models`); the
+  `TextSummary` impl in §4.3b uses the trait via `cognee_models::HasDataPoint`.
+- `cognee-core` already depends on `cognee-models` (it is part of the
+  algorithm crate's input set); verify with
+  `cargo tree -p cognee-core | grep cognee-models` so the re-export in §4.2
+  compiles.
 
 ## 4. Step-by-step
 
-### 4.1 Decide where impls live
+### 4.1 Move the trait into `cognee-models` (placement decision — option 1)
 
-Two options:
+The `HasDataPoint` trait declared by 05-03 in
+`crates/core/src/provenance.rs` moves to a new module
+`crates/models/src/has_datapoint.rs`, alongside the six model impls
+landing in this task. The algorithm (`stamp_tree`,
+`ProvenanceContext`, `extract_node_set_from_value`,
+`extract_content_hash_from_value`) stays in `crates/core/src/provenance.rs`
+and imports the trait from `cognee_models`.
 
-- **(a)** Co-locate each impl with its struct (one impl block per file
-  in `crates/models/src/*.rs` and `crates/cognify/src/summarization/models.rs`).
-- **(b)** Centralise in a new file `crates/models/src/has_datapoint_impls.rs`.
+Concretely:
 
-**Choose (a).** Co-location keeps the trait impl next to the struct
-declaration, which is idiomatic Rust and makes refactors (renaming a
-field, adding a child) less likely to forget the impl.
+1. Cut the `pub trait HasDataPoint { … }` block from
+   `crates/core/src/provenance.rs` and paste it into a new file
+   `crates/models/src/has_datapoint.rs`. Keep the doc-comment exactly
+   as it was in 05-03.
+2. In `crates/models/src/lib.rs`, add `pub mod has_datapoint;` and
+   `pub use has_datapoint::HasDataPoint;` so the trait is re-exported
+   from the crate root.
+3. In `crates/core/src/provenance.rs`, replace the trait declaration
+   with `pub use cognee_models::HasDataPoint;`. This preserves the
+   existing public API: `cognee_core::provenance::HasDataPoint` and
+   `cognee_core::HasDataPoint` (via the re-export in
+   `crates/core/src/lib.rs` from 05-03 §4.5) still resolve to the
+   same trait.
+4. Update the crate root re-exports in
+   `crates/core/src/lib.rs` if needed: the `pub use provenance::{ … HasDataPoint … }`
+   line from 05-03 stays as written — the `provenance` module now
+   re-exports the trait from `cognee_models`, and the lib.rs re-export
+   forwards it transparently. No downstream caller needs an import
+   change.
+
+**Why option 1 is correct here.** The six target containers all live
+in `cognee-models` (and one in `cognee-cognify` which already depends
+on `cognee-models`). Putting the trait in `cognee-models` keeps the
+trait next to its primary impls and avoids forcing `cognee-models` to
+depend on `cognee-core` just to see a trait it owns morally. The
+algorithm (`stamp_tree`) still lives in `cognee-core` because that is
+where the executor calls it.
 
 ### 4.2 Add the import to each model file
 
-Top of each target file, add:
+Top of each target file in `crates/models/src/`, add:
 
 ```rust
-use cognee_core::HasDataPoint;
+use crate::has_datapoint::HasDataPoint;
+use crate::DataPoint; // already in scope in most of these files
 ```
 
-If `cognee_models` does not currently depend on `cognee-core`, **stop**:
-take the alternative path proposed in
-[`03-provenance-core.md` §4.1](03-provenance-core.md#41-decide-the-traits-home-crate)
-to declare the trait in `cognee-models` itself. Sub-agent A flags this
-escalation.
+In `crates/cognify/src/summarization/models.rs`, add:
 
-### 4.3 Implement `HasDataPoint` for each flat container
+```rust
+use cognee_models::HasDataPoint;
+```
+
+(This file already imports `cognee_models::DataPoint`.)
+
+### 4.3a Implement `HasDataPoint` for the five `cognee-models` containers
 
 Pattern, repeated for `Document`, `DocumentChunk`, `Entity`,
-`EntityType`, `EdgeType`, `TextSummary`:
+`EntityType`, `EdgeType` — each lives in its own `crates/models/src/*.rs`
+file alongside the struct declaration:
 
 ```rust
 impl HasDataPoint for Entity {
@@ -110,9 +146,36 @@ impl HasDataPoint for Entity {
 }
 ```
 
+All six target structs (the five above plus `TextSummary`) carry their
+DataPoint via `#[serde(flatten)] pub base: DataPoint`, so `&self.base`
+/ `&mut self.base` is the correct accessor in every case (verified in
+the source: `crates/models/src/{document,document_chunk,entity,entity_type,edge_type}.rs`
+and `crates/cognify/src/summarization/models.rs`).
+
 For each impl, do **not** add a docstring beyond a single comment
 explaining why `for_each_child_mut` is the default (Rust readers will
 otherwise wonder if the recursion was forgotten).
+
+### 4.3b Implement `HasDataPoint` for `TextSummary` in `cognee-cognify`
+
+Same shape, in `crates/cognify/src/summarization/models.rs`:
+
+```rust
+impl HasDataPoint for TextSummary {
+    fn data_point(&self) -> &DataPoint {
+        &self.base
+    }
+    fn data_point_mut(&mut self) -> &mut DataPoint {
+        &mut self.base
+    }
+    // for_each_child_mut: default no-op — TextSummary's `made_from`
+    // reference is a UUID, not an owned child.
+}
+```
+
+`cognee-cognify` already depends on `cognee-models`, so the trait is
+visible via `use cognee_models::HasDataPoint;` (added in §4.2) without
+any new Cargo.toml change.
 
 ### 4.4 (No impl) `Triplet` — document the skip
 
@@ -139,7 +202,10 @@ flesh-outs:
 fn extract_helpers_cover_all_known_datapoint_types() {
     use cognee_models::{Document, DocumentChunk, Entity, EntityType, EdgeType, DataPoint};
     use cognee_cognify::TextSummary;
-    use cognee_core::extract_node_set_from_value;
+    // The trait now lives in cognee-models; cognee-core re-exports it.
+    // Either path resolves to the same trait — use cognee-core here to
+    // mirror what the executor sees.
+    use cognee_core::{HasDataPoint, extract_node_set_from_value};
     use std::sync::Arc;
     use uuid::Uuid;
 
@@ -174,12 +240,25 @@ defence; this test is the smoke alarm.
 
 ### 4.6 Add a `HasDataPoint` smoke test per crate
 
-Append to each target crate's existing test module a one-liner:
+Two test locations (one per crate that hosts impls):
+
+- **`cognee-models`** — append five smoke tests to the existing inline
+  test modules in `crates/models/src/{document,document_chunk,entity,entity_type,edge_type}.rs`
+  (or one consolidated module under `crates/models/tests/has_datapoint.rs`,
+  whichever matches the existing convention in that file — most of
+  these files already have inline `#[cfg(test)] mod tests` blocks, so
+  prefer inline). The trait is in scope via `use crate::HasDataPoint;`
+  (re-exported from the crate root in §4.1 step 2).
+- **`cognee-cognify`** — append one smoke test for `TextSummary` to the
+  existing test module in `crates/cognify/src/summarization/models.rs`.
+  Trait via `use cognee_models::HasDataPoint;`.
+
+Pattern (one per type, ~6 lines each):
 
 ```rust
 #[test]
 fn entity_implements_has_datapoint() {
-    use cognee_core::HasDataPoint;
+    use crate::HasDataPoint; // in cognee-models; or `use cognee_models::HasDataPoint;` in cognify
     let e = Entity::new("Foo", None, "desc".into(), None);
     let dp_id = e.base.id;
     assert_eq!(e.data_point().id, dp_id);
@@ -229,6 +308,16 @@ scripts/check_all.sh
 
 ## 6. Files modified
 
+- [`crates/models/src/has_datapoint.rs`](../../crates/models/src/has_datapoint.rs)
+  — NEW. Holds the `HasDataPoint` trait moved from
+  `crates/core/src/provenance.rs` (placement decision, §4.1).
+- [`crates/models/src/lib.rs`](../../crates/models/src/lib.rs)
+  — add `pub mod has_datapoint;` and `pub use has_datapoint::HasDataPoint;`.
+- [`crates/core/src/provenance.rs`](../../crates/core/src/provenance.rs)
+  — remove the trait declaration; replace with
+  `pub use cognee_models::HasDataPoint;` so existing
+  `cognee_core::provenance::HasDataPoint` and `cognee_core::HasDataPoint`
+  paths keep resolving.
 - [`crates/models/src/document.rs`](../../crates/models/src/document.rs)
 - [`crates/models/src/document_chunk.rs`](../../crates/models/src/document_chunk.rs)
 - [`crates/models/src/entity.rs`](../../crates/models/src/entity.rs)
@@ -238,15 +327,15 @@ scripts/check_all.sh
 - [`crates/cognify/src/summarization/models.rs`](../../crates/cognify/src/summarization/models.rs)
 - [`crates/core/tests/provenance.rs`](../../crates/core/tests/provenance.rs)
   — replace the drift-guard stub from 05-03 with the real assertions.
-- (Conditional) [`crates/models/Cargo.toml`](../../crates/models/Cargo.toml)
-  if a `cognee-core` direct dep is needed; usually transitive.
+- No Cargo.toml changes: `cognee-cognify` already depends on
+  `cognee-models`; `cognee-core` already depends on `cognee-models`.
 
 ## 7. Risks
 
 | Risk | Likelihood | Mitigation |
 |---|---|---|
 | Hidden DataPoint container we missed (e.g. a memify-specific type) | Medium | Run `grep -rn "#\[serde(flatten)\]" crates/ | grep -B1 -A1 "DataPoint"` at the start of the task; flag every hit not in the target list. |
-| Adding the `cognee-core` dep to `cognee-models` introduces a cycle | Low — `cognee-core` already depends on `cognee-models`, not the reverse | If a cycle appears, take the §4.1 alternative: declare the trait in `cognee-models`. Escalate via sub-agent A. |
+| The trait move breaks any out-of-tree consumer that pinned `cognee_core::provenance::HasDataPoint` to a specific item path | Low — the re-export in §4.1 step 3 keeps the public path stable | Verified at integration time by `cargo check --all-targets`; no further mitigation needed. |
 | The smoke tests churn `Entity::new` / `DocumentChunk::new` signatures | Low — the test bodies are tiny and constructors are stable | Trivial fix at sub-agent C time. |
 
 ## 8. Out of scope

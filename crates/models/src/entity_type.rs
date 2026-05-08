@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::DataPoint;
+use crate::has_datapoint::HasDataPoint;
 
 /// Storage-layer entity type model.
 ///
@@ -107,6 +108,17 @@ impl EntityType {
     }
 }
 
+impl HasDataPoint for EntityType {
+    fn data_point(&self) -> &DataPoint {
+        &self.base
+    }
+    fn data_point_mut(&mut self) -> &mut DataPoint {
+        &mut self.base
+    }
+    // for_each_child_mut: default no-op — EntityType is a leaf in the
+    // model graph (no owned `HasDataPoint` children).
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -190,5 +202,14 @@ mod tests {
 
         assert!(et.is_ontology_valid());
         assert_eq!(et.name, "Person");
+    }
+
+    #[test]
+    fn entity_type_implements_has_datapoint() {
+        let et = EntityType::new("Org", "desc", None);
+        let dp_id = et.base.id;
+        assert_eq!(et.data_point().id, dp_id);
+        let mut et2 = et;
+        assert_eq!(et2.data_point_mut().id, dp_id);
     }
 }

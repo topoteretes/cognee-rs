@@ -14,6 +14,13 @@ use uuid::Uuid;
 /// Example: "Steve Jobs: Co-founder of Apple-›founded-›Apple Inc.: Technology company"
 ///
 /// Python reference: cognee/modules/engine/models/Triplet.py
+//
+// `Triplet` intentionally does NOT implement `HasDataPoint`: it does
+// not embed a `DataPoint` (it has its own `id: Uuid` field and is
+// constructed deterministically via UUID v5 from the edge key). Its
+// provenance lands via the vector-store payload helper in
+// `cognee_core::provenance` indirectly when the originating edge is
+// stamped, not via `stamp_tree` recursion. See gap-05 task 05-04 §4.4.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Triplet {
     /// Unique identifier for this triplet.

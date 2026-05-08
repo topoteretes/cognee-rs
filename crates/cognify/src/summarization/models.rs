@@ -5,6 +5,7 @@
 //! - cognee/shared/data_models.py (SummarizedContent)
 
 use cognee_models::DataPoint;
+use cognee_models::HasDataPoint;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -95,6 +96,17 @@ impl TextSummary {
             model,
         )
     }
+}
+
+impl HasDataPoint for TextSummary {
+    fn data_point(&self) -> &DataPoint {
+        &self.base
+    }
+    fn data_point_mut(&mut self) -> &mut DataPoint {
+        &mut self.base
+    }
+    // for_each_child_mut: default no-op — TextSummary's `made_from`
+    // reference is a `Option<Uuid>`, not an owned child.
 }
 
 #[cfg(test)]
@@ -196,5 +208,20 @@ mod tests {
         assert!(summary.base.created_at > 0);
         assert!(summary.base.updated_at > 0);
         assert_eq!(summary.base.version, 1);
+    }
+
+    #[test]
+    fn text_summary_implements_has_datapoint() {
+        let chunk_id = Uuid::new_v4();
+        let summary = TextSummary::new(
+            chunk_id,
+            "Summary text".to_string(),
+            None,
+            "gpt-4".to_string(),
+        );
+        let dp_id = summary.base.id;
+        assert_eq!(summary.data_point().id, dp_id);
+        let mut s2 = summary;
+        assert_eq!(s2.data_point_mut().id, dp_id);
     }
 }
