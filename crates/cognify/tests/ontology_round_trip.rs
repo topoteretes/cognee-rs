@@ -83,6 +83,7 @@ async fn test_ontology_round_trip_with_real_resolver() {
         dataset_id,
         &HashSet::new(),
         &resolver,
+        None,
     )
     .await;
 
@@ -166,6 +167,7 @@ async fn test_ontology_unmatched_type_not_validated() {
         dataset_id,
         &HashSet::new(),
         &resolver,
+        None,
     )
     .await;
 
@@ -201,6 +203,7 @@ async fn test_ontology_noop_resolver_leaves_everything_unvalidated() {
         dataset_id,
         &HashSet::new(),
         &resolver,
+        None,
     )
     .await;
 

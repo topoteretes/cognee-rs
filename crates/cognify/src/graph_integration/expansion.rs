@@ -6,6 +6,7 @@
 use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 
+use cognee_core::{HasDataPoint, ProvenanceContext, stamp_tree};
 use cognee_models::{Entity, EntityType};
 use cognee_ontology::traits::OntologyEdge;
 use cognee_ontology::{AttachedOntologyNode, NodeCategory, OntologyResolver};
@@ -13,6 +14,37 @@ use tracing::warn;
 
 use crate::fact_extraction::{KnowledgeGraph, Node};
 use crate::graph_integration::types::{GraphEdgePair, GraphNodePair};
+
+/// Stamp a freshly-constructed `Entity` / `EntityType` / `EdgeType` at
+/// emission time so the pipeline executor's recursion finds
+/// `source_pipeline` and `source_task` already set.
+///
+/// Mirrors Python's `_stamp_provenance_deep` in
+/// `cognee/tasks/graph/extract_graph_from_data.py`.
+///
+/// `user_label` is the resolved provenance label
+/// (see [`cognee_core::PipelineContext::user_label`] for the canonical
+/// shape). Pass `None` if the user is not known at construction time —
+/// the executor walk fills the field in later.
+///
+/// Per locked decision 6 of `docs/telemetry/05-datapoint-provenance.md`,
+/// this pre-stamp coexists with cognify's local `stamp_provenance`
+/// helper at `crates/cognify/src/tasks.rs`; the `if dp.source_X.is_none()`
+/// guards inside [`stamp_tree`] make double-stamping a no-op.
+pub(crate) fn pre_stamp_extraction(
+    target: &mut dyn HasDataPoint,
+    user_label: Option<&str>,
+    visited: &mut HashSet<Uuid>,
+) {
+    let ctx = ProvenanceContext {
+        pipeline_name: "cognify_pipeline",
+        task_name: "extract_graph_from_data",
+        user_label,
+        node_set: None,
+        content_hash: None,
+    };
+    stamp_tree(target, &ctx, visited);
+}
 
 /// Core graph integration function. Converts LLM-layer KnowledgeGraph objects
 /// to storage-layer Entity/EntityType pairs.
@@ -47,7 +79,15 @@ pub async fn expand_with_nodes_and_edges(
     dataset_id: Uuid,
     existing_edges_set: &HashSet<String>,
     ontology_resolver: &dyn OntologyResolver,
+    user_label: Option<&str>,
 ) -> (Vec<GraphNodePair>, Vec<GraphEdgePair>) {
+    // Function-local visited set for the pre-stamp pass. The executor's
+    // per-run set sees the same DataPoints during its own walk and
+    // short-circuits via the `if dp.source_pipeline.is_none()` guard
+    // (locked decision 2). The two visited sets do not need to share
+    // state.
+    let mut local_visited: HashSet<Uuid> = HashSet::new();
+
     // Maps for deduplication
     let mut node_map = HashMap::new();
     let mut edge_map = HashMap::new();
@@ -77,6 +117,7 @@ pub async fn expand_with_nodes_and_edges(
 
             if !type_map.contains_key(&effective_key) {
                 let mut et = EntityType::from_node_type(&node.node_type, Some(dataset_id));
+                pre_stamp_extraction(&mut et, user_label, &mut local_visited);
 
                 if ontology_resolver.is_loaded() {
                     match ontology_resolver.get_subgraph(&node.node_type, "classes", true) {
@@ -101,6 +142,8 @@ pub async fn expand_with_nodes_and_edges(
                                 &type_map,
                                 &mut ontology_types_map,
                                 &mut ontology_entities_map,
+                                user_label,
+                                &mut local_visited,
                             );
                             process_ontology_edges(
                                 &onto_edges,
@@ -159,6 +202,7 @@ pub async fn expand_with_nodes_and_edges(
                     dataset_id,
                     chunk_id,
                 );
+                pre_stamp_extraction(&mut entity_pair.entity, user_label, &mut local_visited);
 
                 if ontology_resolver.is_loaded() {
                     match ontology_resolver.get_subgraph(&node.name, "individuals", true) {
@@ -204,6 +248,8 @@ pub async fn expand_with_nodes_and_edges(
                     &type_map,
                     &mut ontology_types_map,
                     &mut ontology_entities_map,
+                    user_label,
+                    &mut local_visited,
                 );
                 process_ontology_edges(
                     &ont_edges,
@@ -342,6 +388,7 @@ fn normalize_edge_name(name: &str) -> String {
 /// All produced items receive deterministic UUID5 IDs and `ontology_valid = true`.
 /// Duplicates are skipped when a matching key already exists in the LLM-produced
 /// maps (`node_map`, `type_map`) or in the ontology output maps.
+#[allow(clippy::too_many_arguments)]
 fn process_ontology_nodes(
     ontology_nodes: &[AttachedOntologyNode],
     dataset_id: Uuid,
@@ -349,6 +396,8 @@ fn process_ontology_nodes(
     type_map: &HashMap<String, EntityType>,
     ontology_types_map: &mut HashMap<String, EntityType>,
     ontology_entities_map: &mut HashMap<String, GraphNodePair>,
+    user_label: Option<&str>,
+    visited: &mut HashSet<Uuid>,
 ) {
     for node in ontology_nodes {
         let node_id = ontology_name_to_uuid(&node.name);
@@ -372,6 +421,7 @@ fn process_ontology_nodes(
                 let mut et = EntityType::new(&node.name, &node.name, Some(dataset_id));
                 et.base.id = node_id;
                 et.base.set_ontology_valid(true);
+                pre_stamp_extraction(&mut et, user_label, visited);
                 ontology_types_map.insert(dedup_key, et);
             }
             NodeCategory::Individuals => {
@@ -386,11 +436,13 @@ fn process_ontology_nodes(
                 let mut entity = Entity::new(&node.name, None, &node.name, Some(dataset_id));
                 entity.base.id = node_id;
                 entity.base.set_ontology_valid(true);
+                pre_stamp_extraction(&mut entity, user_label, visited);
 
                 // Placeholder EntityType for the GraphNodePair
                 let mut placeholder_et =
                     EntityType::new("OntologyIndividual", "", Some(dataset_id));
                 placeholder_et.base.id = ontology_name_to_uuid("ontologyindividual");
+                pre_stamp_extraction(&mut placeholder_et, user_label, visited);
 
                 let pair = GraphNodePair {
                     entity,
@@ -480,6 +532,7 @@ mod tests {
             dataset_id,
             &HashSet::new(),
             &noop(),
+            None,
         )
         .await;
 
@@ -509,6 +562,7 @@ mod tests {
             dataset_id,
             &HashSet::new(),
             &noop(),
+            None,
         )
         .await;
 
@@ -530,6 +584,7 @@ mod tests {
             dataset_id,
             &HashSet::new(),
             &noop(),
+            None,
         )
         .await;
 
@@ -556,6 +611,7 @@ mod tests {
             dataset_id,
             &HashSet::new(),
             &noop(),
+            None,
         )
         .await;
 
@@ -576,6 +632,7 @@ mod tests {
             dataset_id,
             &HashSet::new(),
             &noop(),
+            None,
         )
         .await;
 
@@ -610,6 +667,7 @@ mod tests {
             dataset_id,
             &HashSet::new(),
             &noop(),
+            None,
         )
         .await;
 
@@ -623,7 +681,7 @@ mod tests {
         let dataset_id = Uuid::new_v4();
 
         let (nodes, edges) =
-            expand_with_nodes_and_edges(vec![], dataset_id, &HashSet::new(), &noop()).await;
+            expand_with_nodes_and_edges(vec![], dataset_id, &HashSet::new(), &noop(), None).await;
 
         assert_eq!(nodes.len(), 0);
         assert_eq!(edges.len(), 0);
@@ -668,6 +726,7 @@ mod tests {
             dataset_id,
             &HashSet::new(),
             &noop(),
+            None,
         )
         .await;
 
@@ -714,6 +773,7 @@ mod tests {
             dataset_id,
             &HashSet::new(),
             &noop(),
+            None,
         )
         .await;
 
@@ -834,6 +894,7 @@ mod tests {
             dataset_id,
             &HashSet::new(),
             &resolver,
+            None,
         )
         .await;
 
@@ -896,6 +957,7 @@ mod tests {
             dataset_id,
             &HashSet::new(),
             &noop(),
+            None,
         )
         .await;
 
@@ -965,6 +1027,8 @@ mod tests {
             &type_map,
             &mut ontology_types_map,
             &mut ontology_entities_map,
+            None,
+            &mut HashSet::new(),
         );
 
         assert_eq!(ontology_types_map.len(), 2);
@@ -1013,6 +1077,8 @@ mod tests {
             &type_map,
             &mut ontology_types_map,
             &mut ontology_entities_map,
+            None,
+            &mut HashSet::new(),
         );
 
         // Should be skipped because it already exists in type_map
@@ -1040,6 +1106,8 @@ mod tests {
             &type_map,
             &mut ontology_types_map,
             &mut ontology_entities_map,
+            None,
+            &mut HashSet::new(),
         );
 
         assert_eq!(ontology_entities_map.len(), 1);
@@ -1170,6 +1238,7 @@ mod tests {
             dataset_id,
             &HashSet::new(),
             &resolver,
+            None,
         )
         .await;
 
@@ -1217,6 +1286,7 @@ mod tests {
             dataset_id,
             &HashSet::new(),
             &resolver,
+            None,
         )
         .await;
 
@@ -1261,6 +1331,7 @@ mod tests {
             dataset_id,
             &HashSet::new(),
             &resolver,
+            None,
         )
         .await;
 
@@ -1323,6 +1394,7 @@ mod tests {
             dataset_id,
             &HashSet::new(),
             &resolver,
+            None,
         )
         .await;
 
@@ -1383,6 +1455,7 @@ mod tests {
             dataset_id,
             &HashSet::new(),
             &resolver,
+            None,
         )
         .await;
 
@@ -1400,5 +1473,66 @@ mod tests {
         // Concept type is NOT in the ontology
         assert!(!qt.entity_type.is_ontology_valid());
         assert_eq!(qt.entity_type.name, "Concept");
+    }
+
+    #[tokio::test]
+    async fn pre_stamp_sets_pipeline_and_task_on_entity_types() {
+        // Freshly-LLM-constructed Entity / EntityType DataPoints emerge
+        // from `expand_with_nodes_and_edges` with `source_pipeline` and
+        // `source_task` already set, mirroring Python's
+        // `_stamp_provenance_deep` in `extract_graph_from_data.py`.
+        let dataset_id = Uuid::new_v4();
+        let chunk_id = Uuid::new_v4();
+        let graph = create_test_graph();
+
+        let (nodes, _edges) = expand_with_nodes_and_edges(
+            vec![(chunk_id, graph)],
+            dataset_id,
+            &HashSet::new(),
+            &noop(),
+            Some("alice@example.com"),
+        )
+        .await;
+
+        assert!(!nodes.is_empty(), "expected at least one node");
+        for pair in &nodes {
+            assert_eq!(
+                pair.entity_type.base.source_pipeline.as_deref(),
+                Some("cognify_pipeline"),
+                "EntityType '{}' should be pre-stamped with cognify_pipeline",
+                pair.entity_type.name
+            );
+            assert_eq!(
+                pair.entity_type.base.source_task.as_deref(),
+                Some("extract_graph_from_data"),
+                "EntityType '{}' should be pre-stamped with extract_graph_from_data",
+                pair.entity_type.name
+            );
+            assert_eq!(
+                pair.entity_type.base.source_user.as_deref(),
+                Some("alice@example.com"),
+                "EntityType '{}' should carry the supplied user_label",
+                pair.entity_type.name
+            );
+
+            assert_eq!(
+                pair.entity.base.source_pipeline.as_deref(),
+                Some("cognify_pipeline"),
+                "Entity '{}' should be pre-stamped with cognify_pipeline",
+                pair.entity.name
+            );
+            assert_eq!(
+                pair.entity.base.source_task.as_deref(),
+                Some("extract_graph_from_data"),
+                "Entity '{}' should be pre-stamped with extract_graph_from_data",
+                pair.entity.name
+            );
+            assert_eq!(
+                pair.entity.base.source_user.as_deref(),
+                Some("alice@example.com"),
+                "Entity '{}' should carry the supplied user_label",
+                pair.entity.name
+            );
+        }
     }
 }

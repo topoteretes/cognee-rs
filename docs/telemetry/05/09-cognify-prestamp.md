@@ -132,12 +132,23 @@ locate the construction sites:
 
 - Line 79 — `let mut et = EntityType::from_node_type(...)` — pre-stamp
   before insertion into `type_map`.
-- Wherever `Entity::new(...)` is called inside the loop body — pre-stamp
-  the constructed entity.
-- Wherever `EdgeType::new_deterministic(...)` is called (line 764 in
-  `tasks.rs`) — pre-stamp before insertion into the edge map.
-- Ontology-derived entities (`process_ontology_nodes`, line 97-104) —
-  these still come from the same task, so pre-stamp them too.
+- `create_entity_node(...)` (called at line 156, defined at line 294) —
+  pre-stamp the constructed entity *after* `create_entity_node` returns
+  but *before* `e.insert(entity_pair)` at line 195.
+- Ontology-derived entities and entity types constructed inside
+  [`process_ontology_nodes`](../../crates/cognify/src/graph_integration/expansion.rs#L345)
+  (line 372 `EntityType::new` for `NodeCategory::Classes`; line 386
+  `Entity::new` for `NodeCategory::Individuals`). These still come from
+  the same task, so pre-stamp them too — pass a mutable reference to
+  `local_visited` and the `user_label` into `process_ontology_nodes`.
+
+`EdgeType::new_deterministic(...)` is **not** called inside
+`expand_with_nodes_and_edges`; it's called at
+[`tasks.rs:764`](../../crates/cognify/src/tasks.rs#L764) inside
+`add_data_points`. Pre-stamping `EdgeType` is handled separately in §4.5
+below (or as a sibling change inside `add_data_points`), not as part of
+the expansion-layer signature change. The expansion change only covers
+`Entity` and `EntityType`.
 
 Pattern:
 
@@ -222,16 +233,32 @@ Without it, future maintainers will see two helpers with the same
 purpose and try to "consolidate" — accidentally regressing one path
 or the other.
 
-### 4.5 (Optional) Pre-stamp in `extract_dlt_fk_edges`
+### 4.5 Pre-stamp `EdgeType` inside `add_data_points`
 
-Cognify's
-[`extract_dlt_fk_edges`](../../crates/cognify/src/tasks.rs) builds
-`EdgeType` entries deterministically from DLT schema metadata. Apply
-the same pre-stamp pattern there if the DLT path produces fresh
-DataPoints. (If DLT edges only carry `EdgeType` references, not
-DataPoints, this is a no-op and can be skipped.)
+`EdgeType` DataPoints are constructed at
+[`tasks.rs:761-768`](../../crates/cognify/src/tasks.rs#L761) inside
+`add_data_points`, not inside `expand_with_nodes_and_edges`. After the
+construction loop, walk the freshly-built `edge_types: Vec<EdgeType>`
+and pre-stamp each one with the same `("cognify_pipeline",
+"extract_graph_from_data")` context (the LLM-derived edge-type names
+trace back to the entity extraction task) using a function-local
+`HashSet<Uuid>`:
 
-Sub-agent A confirms whether DLT touches DataPoints and decides.
+```rust
+let mut local_visited: HashSet<Uuid> = HashSet::new();
+let user_label = /* derive as in §4.3 */;
+for et in &mut edge_types {
+    pre_stamp_extraction(et, user_label, &mut local_visited);
+}
+```
+
+Place the helper call inline; do not change `add_data_points`'s
+signature for this. The user label here can come from `input.user_id`
+(string-form) — the executor walk fills in the email-form later.
+
+DLT-derived edges (`extract_dlt_fk_edges`, line 1302) construct
+`GraphEdgePair` instances rather than DataPoints; they carry no
+DataPoint to stamp, so no pre-stamp call is needed in that path.
 
 ### 4.6 Add a unit test
 
@@ -312,8 +339,11 @@ scripts/check_all.sh
 - [`crates/cognify/src/tasks.rs`](../../crates/cognify/src/tasks.rs)
   — pass `user_label` to `expand_with_nodes_and_edges`; expand the
   docstring on the local `stamp_provenance` helper.
-- (Conditional, §4.5) [`crates/cognify/src/tasks.rs`](../../crates/cognify/src/tasks.rs)'s
-  DLT FK extraction site if it constructs DataPoints.
+- §4.5: pre-stamp loop over freshly-built `edge_types` inside
+  `add_data_points` at
+  [`tasks.rs:761-768`](../../crates/cognify/src/tasks.rs#L761). DLT FK
+  extraction (`extract_dlt_fk_edges`) does not need a stamp because it
+  produces edges, not DataPoints.
 
 ## 7. Risks
 

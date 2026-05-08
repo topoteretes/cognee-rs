@@ -406,12 +406,22 @@ pub async fn extract_graph_from_data(
     let graphs_only: Vec<KnowledgeGraph> = all_graphs.iter().map(|(_, g)| g.clone()).collect();
     let existing_edges_set = retrieve_existing_edges(graph_db.as_ref(), &graphs_only).await?;
 
-    // Merge and deduplicate graphs (with DB awareness)
+    // Merge and deduplicate graphs (with DB awareness).
+    //
+    // The string-form `user_id` is the best label we have at this
+    // point in the pipeline-driven path — `ExtractedChunks` does not
+    // carry `user_email`. The executor's downstream walk
+    // (`PipelineContext::user_label()`, task 05-07) fills in the
+    // email-form label later if the run has it; the pre-stamp's
+    // `if dp.source_user.is_none()` guard then skips, so the more
+    // specific value wins.
+    let user_label = input.user_id.as_ref().map(|id| id.to_string());
     let (nodes, edges) = expand_with_nodes_and_edges(
         all_graphs,
         input.dataset_id,
         &existing_edges_set,
         ontology_resolver.as_ref(),
+        user_label.as_deref(),
     )
     .await;
 
@@ -758,7 +768,7 @@ pub async fn add_data_points(
             .or_insert(0) += 1;
     }
 
-    let edge_types: Vec<EdgeType> = edge_type_counts
+    let mut edge_types: Vec<EdgeType> = edge_type_counts
         .into_iter()
         .map(|(name, count)| {
             let mut et = EdgeType::new_deterministic(&name, Some(input.dataset_id));
@@ -766,6 +776,28 @@ pub async fn add_data_points(
             et
         })
         .collect();
+
+    // Pre-stamp freshly-built EdgeType DataPoints at construction time,
+    // mirroring the Entity / EntityType pre-stamp inside
+    // `expand_with_nodes_and_edges`. The LLM-derived edge-type names
+    // trace back to the entity-extraction task, so the `source_pipeline`
+    // / `source_task` literals match. The executor's downstream walk
+    // (task 05-06) finds these fields already set and short-circuits.
+    //
+    // DLT-derived edges (`extract_dlt_fk_edges`) construct
+    // `GraphEdgePair` instances rather than DataPoints; they carry no
+    // DataPoint to stamp, so no pre-stamp call is needed there.
+    {
+        let user_label = input.user_id.as_ref().map(|id| id.to_string());
+        let mut local_visited: HashSet<Uuid> = HashSet::new();
+        for et in &mut edge_types {
+            crate::graph_integration::expansion::pre_stamp_extraction(
+                et,
+                user_label.as_deref(),
+                &mut local_visited,
+            );
+        }
+    }
 
     if !edge_types.is_empty() {
         let edge_type_refs: Vec<&EdgeType> = edge_types.iter().collect();
@@ -1687,6 +1719,18 @@ struct DltTableMeta {
 // ---------------------------------------------------------------------------
 
 /// Stamp pipeline provenance fields on a [`DataPoint`].
+///
+/// Used by the **convenience [`cognify`] entry point** which bypasses
+/// `cognee_core::execute()` and therefore does not benefit from the
+/// executor-driven walk in
+/// [`cognee_core::provenance::stamp_tree`]. Per locked decision 6 of
+/// `docs/telemetry/05-datapoint-provenance.md`, both code paths land
+/// stamping; the `if dp.source_X.is_none()` guards make double-stamping
+/// a no-op.
+///
+/// Pipeline-driven cognify uses the executor walk via
+/// [`cognee_core::provenance::stamp_tree_dyn`] — see
+/// `crates/core/src/provenance.rs`.
 ///
 /// Only sets each field if it is currently `None`, so earlier (more specific)
 /// stamps are never overwritten.  Mirrors the Python
