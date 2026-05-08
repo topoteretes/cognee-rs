@@ -1,6 +1,6 @@
 # Task 04-06 — Add `cognee.llm.{model,provider}` fields to `OpenAIAdapter`
 
-**Status**: ⬜ unimplemented
+**Status**: ✅ implemented in commit d3409e9
 **Owner**: _unassigned_
 **Depends on**:
 - [Task 04-02](02-tracing-constants-dedupe.md) — needs `cognee_utils::tracing_keys::COGNEE_LLM_MODEL`/`COGNEE_LLM_PROVIDER`.
