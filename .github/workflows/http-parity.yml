@@ -144,6 +144,24 @@ jobs:
           -k "test_http_(cognify|remember|recall|memify|improve|llm)"
           --tb=short
 
+      # ── Cross-SDK provenance parity (LLM-gated) ─────────────────────────
+      # Asserts gap-05 DataPoint provenance parity between Python and
+      # Rust SDKs (source_pipeline / source_task / source_user). See
+      # docs/telemetry/05-datapoint-provenance.md.
+      - name: Provenance parity (LLM-gated)
+        if: ${{ env.HAS_OPENAI_KEY == 'true' }}
+        env:
+          HAS_OPENAI_KEY: ${{ secrets.OPENAI_KEY != '' }}
+          OPENAI_TOKEN: ${{ secrets.OPENAI_KEY }}
+          OPENAI_URL: https://api.openai.com/v1
+          OPENAI_MODEL: gpt-4o-mini
+        run: >-
+          docker compose
+          -f cognee-rust/e2e-cross-sdk/docker-compose.yml
+          run --rm e2e-tests
+          pytest -vs /harness/test_provenance_parity.py
+          --tb=short
+
       # ── Phase-3: specialty (manual via workflow_dispatch only) ────────────
       - name: Phase-3 — websocket, sync, permissions, visualize (manual only)
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_phase3 == 'true' }}

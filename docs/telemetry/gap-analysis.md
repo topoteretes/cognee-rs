@@ -50,7 +50,7 @@ Opt-out: `TELEMETRY_DISABLED=1`, auto-disabled when `ENV=test|dev`.
 | `pipeline_runs` table with `PipelineRunStatus` enum | Yes — `cognee/modules/pipelines/models/PipelineRun.py` | Partial — see [crates/core/src/pipeline_run_registry/](../../crates/core/src/pipeline_run_registry/) |
 | Statuses: `INITIATED`, `STARTED`, `COMPLETED`, `ERRORED` | Yes — four explicit `log_pipeline_run_*` ops | Verify Rust enum & API parity |
 | `run_info` JSON column for flexible metadata | Yes | Verify |
-| Provenance stamping per DataPoint (source_pipeline, source_task, source_user, source_node_set, source_content_hash) | Yes — in `run_tasks_base.py` | Not found |
+| Provenance stamping per DataPoint (source_pipeline, source_task, source_user, source_node_set, source_content_hash) | Yes — in `run_tasks_base.py` | Implemented (gap 05) — see [`05-datapoint-provenance.md`](05-datapoint-provenance.md) |
 
 The Rust http-server has `/api/v1/activity/pipeline-runs` reading a DB table, so *some* persistence exists, but the Python four-state lifecycle and provenance stamping should be verified against the Rust pipeline implementation.
 
@@ -299,10 +299,9 @@ Each gap is broken out into a dedicated sub-document with deep investigation, de
 
 1. **Implement `send_telemetry()` analytics client** — proxy URL, anon/persistent ID files, PBKDF2 api-key tracking ID, opt-out semantics, async fire-and-forget HTTP. → [02-send-telemetry-analytics.md](02-send-telemetry-analytics.md)
 2. **Emit pipeline & task lifecycle events** — `Pipeline Run Started/Completed/Errored`, per-task variants, and API events (`cognee.recall`, `cognee.improve`, `cognee.forget`). → [03-pipeline-task-api-events.md](03-pipeline-task-api-events.md)
-3. **Provenance stamping on DataPoints** — `source_pipeline`, `source_task`, `source_user`, `source_node_set`, `source_content_hash` attached to every yielded DataPoint with a per-run visited set. → [05-datapoint-provenance.md](05-datapoint-provenance.md)
-4. **File logging with rotation** — mirror Python's `COGNEE_LOG_FILE`, `COGNEE_LOGS_DIR`, `COGNEE_LOG_MAX_BYTES`, etc.; rotating non-blocking appender; library noise suppression. → [06-file-logging-rotation.md](06-file-logging-rotation.md)
-5. **Auto-init tracing in bindings** — PyO3, Neon, C API entry points so embedders get telemetry without extra setup; avoid double-emission when embedded in the Python SDK. → [07-bindings-auto-init.md](07-bindings-auto-init.md)
-6. **Pipeline run status lifecycle** — schema and four-state lifecycle are defined but `INITIATED` is never written, `run_info` content drifts from Python, and library-level pipelines bypass the registry entirely. → [08-pipeline-run-status.md](08-pipeline-run-status.md)
+3. **File logging with rotation** — mirror Python's `COGNEE_LOG_FILE`, `COGNEE_LOGS_DIR`, `COGNEE_LOG_MAX_BYTES`, etc.; rotating non-blocking appender; library noise suppression. → [06-file-logging-rotation.md](06-file-logging-rotation.md)
+4. **Auto-init tracing in bindings** — PyO3, Neon, C API entry points so embedders get telemetry without extra setup; avoid double-emission when embedded in the Python SDK. → [07-bindings-auto-init.md](07-bindings-auto-init.md)
+5. **Pipeline run status lifecycle** — schema and four-state lifecycle are defined but `INITIATED` is never written, `run_info` content drifts from Python, and library-level pipelines bypass the registry entirely. → [08-pipeline-run-status.md](08-pipeline-run-status.md)
 
 ### Completed work
 
@@ -314,6 +313,14 @@ Each gap is broken out into a dedicated sub-document with deep investigation, de
   → [04-db-adapter-instrumentation.md](04-db-adapter-instrumentation.md)
   (complete — see the
   [closure summary](04-db-adapter-instrumentation.md#closure-summary)).
+- ✅ **Provenance stamping on DataPoints** — every DataPoint
+  emitted by the pipeline executor now carries `source_pipeline`,
+  `source_task`, `source_user`, `source_node_set`,
+  `source_content_hash`, mirroring Python. Vector-store payloads
+  carry the full DataPoint dump.
+  → [05-datapoint-provenance.md](05-datapoint-provenance.md)
+  (complete — see the
+  [closure summary](05-datapoint-provenance.md#closure-summary)).
 
 ---
 

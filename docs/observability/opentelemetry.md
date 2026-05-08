@@ -399,6 +399,56 @@ The constants used as field keys live in
 re-exports them for backwards compatibility with existing search call
 sites.
 
+## DataPoint provenance fields
+
+After [gap 05](../telemetry/05-datapoint-provenance.md), every
+`DataPoint` emitted by the pipeline executor — and every node and
+vector payload that flows from one — carries a fixed set of
+`source_*` provenance fields stamped from the run's
+`PipelineContext`. These fields are populated automatically by
+[`cognee_core::provenance::stamp_tree`](../../crates/core/src/provenance.rs)
+(invoked from the executor after every successful task) and by the
+local `stamp_provenance` helper in
+[`crates/cognify/src/tasks.rs`](../../crates/cognify/src/tasks.rs).
+Operators can rely on them to attribute any node, edge, or vector to
+the pipeline run, the task within that run, the invoking user, the
+declared node-set tag, and the originating raw content hash.
+
+| Field | Type | Source | Notes |
+|---|---|---|---|
+| `source_pipeline` | `String` | `PipelineContext::pipeline_name` | Always set; e.g. `cognify_pipeline`, `add_pipeline`, `memify_pipeline`. |
+| `source_task` | `String` | task name from `TaskContext` | Always set when the executor stamps. Cognify pre-stamps the four stages: `classify_documents`, `extract_chunks_from_documents`, `extract_graph_from_data`, `summarize_text`. |
+| `source_user` | `Option<String>` | `PipelineContext::user_label()` (email-first, falls back to `user_id`) | `None` for anonymous runs. |
+| `source_node_set` | `Option<Vec<String>>` | extracted from the source DataPoint's `node_set` metadata if present | Mirrors Python's `extract_node_set_from_value`. |
+| `source_content_hash` | `Option<String>` | extracted from the originating `Data.content_hash` | Mirrors Python's `extract_content_hash_from_value`; lets `forget()` and lineage queries trace back to the raw file. |
+
+These fields are visible in three places:
+
+1. **Graph nodes** — every node materialised through `add_data_points`
+   carries the five fields as JSON properties. Filter Tempo / Honeycomb
+   on `cognee.dataset_id` plus a `cognee.db.system="ladybug"` span to
+   correlate against task-level lifecycle events.
+2. **Vector payloads** — vector-store payloads carry the **full
+   pydantic-equivalent DataPoint dump**, not just the five `source_*`
+   keys (locked decision 5 of gap 05). Cross-SDK byte-comparable
+   parity is asserted by
+   [`e2e-cross-sdk/harness/test_provenance_parity.py`](../../e2e-cross-sdk/harness/test_provenance_parity.py).
+3. **Relational provenance rows** — the existing
+   `ExecStatusManager::stamp_provenance` audit hook (locked decision 3,
+   unchanged by gap 05) continues to write its per-DataPoint audit row
+   in parallel.
+
+Stamping is **idempotent per run**: a `provenance_visited` set keyed
+on `DataPoint.id: Uuid` (locked decision 2) ensures a DataPoint shared
+across tasks is stamped exactly once with the first task's name.
+Stream / iterator items are stamped eagerly at consumption (locked
+decision 8) so downstream tasks see the populated fields.
+
+OTel span attributes do **not** currently carry the `source_*` set —
+provenance is recorded on the persisted DataPoint, not on the span.
+Adding `cognee.provenance.source_pipeline` / `source_task` to span
+attributes is a [tracked follow-up](../telemetry/05-datapoint-provenance.md#known-follow-ups).
+
 ## Future work
 
 OpenTelemetry **metrics** and **logs** export are out of scope for the

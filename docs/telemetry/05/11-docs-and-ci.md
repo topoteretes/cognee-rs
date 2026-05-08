@@ -18,12 +18,21 @@ Close the gap. Three concrete outputs:
    `Implemented (gap 05)`, and add gap 05 to the "Completed work"
    list.
 2. **CI lane** — confirm
-   [`e2e-cross-sdk/tests/test_provenance_parity.py`](../../e2e-cross-sdk/tests/test_provenance_parity.py)
+   [`e2e-cross-sdk/harness/test_provenance_parity.py`](../../e2e-cross-sdk/harness/test_provenance_parity.py)
    (added in [05-10 §4.5](10-tests.md#45-cross-sdk-parity-test-e2e-cross-sdktestststest_provenance_paritypy))
-   runs on the same lane as `test_cognify_structural.py`. Today the
-   cross-SDK lane runs all tests under `e2e-cross-sdk/tests/` via
-   pytest discovery, so the wiring is automatic; this task is the
-   verification that it actually executes there.
+   runs in CI. Reality on this branch is uglier than the original
+   plan assumed: the only cross-SDK workflow is
+   [`.github/workflows/http-parity.yml`](../../.github/workflows/http-parity.yml),
+   it is gated on `workflow_dispatch` only (push/PR triggers are
+   commented out pending an upstream Python migration fix — see the
+   header comment on that file), and every `pytest` invocation in it
+   uses an explicit `-k "test_http_(…)"` filter that **excludes**
+   `test_provenance_parity`. The `ci.yml` workflow does not run
+   `e2e-cross-sdk` at all. So a one-line additive `docker compose
+   run` step must be added to `http-parity.yml` (Phase-2, since it
+   needs `OPENAI_KEY`), gated on `HAS_OPENAI_KEY`, that invokes
+   `pytest -vs /harness/test_provenance_parity.py` against the
+   `e2e-tests` service. See §4.2 below for the exact YAML.
 3. **Closure summary** — append a "Closure summary" section to
    [`docs/telemetry/05-datapoint-provenance.md`](../05-datapoint-provenance.md)
    listing every commit in landing order (mirrors
@@ -74,41 +83,63 @@ Edit
 - **Detailed Inventory — Rust Side**, "Things Rust has that Python
   doesn't" — no change.
 
-### 4.2 Confirm the CI lane runs the parity test
+### 4.2 Add a CI step that runs the parity test
 
 Inspect
 [`e2e-cross-sdk/`](../../e2e-cross-sdk/) and the GitHub Actions
-workflow that runs it:
+workflows that touch it:
 
 ```bash
 grep -rn "e2e-cross-sdk\|cross-sdk\|provenance_parity" .github/workflows/
 ```
 
-Expected: the existing cross-SDK workflow (`e2e-cross-sdk.yml` or
-similar) runs `pytest` over the whole `tests/` directory. Pytest's
-default discovery picks up the new `test_provenance_parity.py` for
-free.
-
-If the workflow narrows discovery to specific files (e.g.
-`pytest tests/test_cognify_structural.py`), edit the workflow to
-include the new test:
+Reality on this branch: the only workflow that builds the
+cross-SDK harness is
+[`.github/workflows/http-parity.yml`](../../.github/workflows/http-parity.yml).
+Every existing pytest invocation there is `-k`-filtered to
+`test_http_(…)` patterns, so pytest discovery alone will **not**
+run `test_provenance_parity.py`. Add a new additive step to
+`http-parity.yml`, immediately after the existing "Phase-2"
+LLM-gated step, that explicitly runs the parity test against the
+plain `e2e-tests` service (which does not need the dual-server
+`start_servers.sh` entrypoint, only LLM credentials):
 
 ```yaml
-- name: Run cross-SDK tests
-  run: |
-    cd e2e-cross-sdk
-    docker compose run --rm tests pytest tests/test_provenance_parity.py
+# ── Cross-SDK provenance parity (LLM-gated) ─────────────────────────
+# Asserts gap-05 DataPoint provenance parity between Python and
+# Rust SDKs (source_pipeline / source_task / source_user). See
+# docs/telemetry/05-datapoint-provenance.md.
+- name: Provenance parity (LLM-gated)
+  if: ${{ env.HAS_OPENAI_KEY == 'true' }}
+  env:
+    HAS_OPENAI_KEY: ${{ secrets.OPENAI_KEY != '' }}
+    OPENAI_TOKEN: ${{ secrets.OPENAI_KEY }}
+    OPENAI_URL: https://api.openai.com/v1
+    OPENAI_MODEL: gpt-4o-mini
+  run: >-
+    docker compose
+    -f cognee-rust/e2e-cross-sdk/docker-compose.yml
+    run --rm e2e-tests
+    pytest -vs /harness/test_provenance_parity.py
+    --tb=short
 ```
 
-(Better yet, drop the explicit path so pytest discovers everything
-under `tests/`.)
+Do NOT remove or weaken the existing `-k` filters on the other
+phases; they are intentional. Add this as a new step only.
+
+Note that `http-parity.yml` is currently `workflow_dispatch`-only
+(the push/PR triggers are commented out pending the upstream
+Python migration fix tracked in the file header). Re-enabling
+push triggers is out of scope of gap 05; document the limitation
+in the closure summary instead.
 
 ### 4.3 Verify locally that the test runs in CI shape
 
 ```bash
 cd e2e-cross-sdk
-docker compose build
-docker compose up --abort-on-container-exit
+docker compose build e2e-tests
+docker compose run --rm e2e-tests \
+  pytest -vs /harness/test_provenance_parity.py --tb=short
 ```
 
 If the test runs and passes, the lane is confirmed.
@@ -158,7 +189,7 @@ and append a new section at the bottom:
 - Vector-store payloads now carry the full DataPoint dump, enabling
   byte-comparable cross-SDK parity.
 - New cross-SDK test
-  [`e2e-cross-sdk/tests/test_provenance_parity.py`](../../e2e-cross-sdk/tests/test_provenance_parity.py)
+  [`e2e-cross-sdk/harness/test_provenance_parity.py`](../../e2e-cross-sdk/harness/test_provenance_parity.py)
   asserts ≥0.5 Jaccard similarity on `source_task` multisets per
   node-type and exact equality of `source_pipeline` and
   non-emptiness of `source_user`.
@@ -217,12 +248,14 @@ Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
 # 1. Compile (no Rust changes expected, but be safe).
 cargo check --all-targets
 
-# 2. Cross-SDK harness still runs end-to-end.
+# 2. The parity test passes locally in the same shape as CI.
 cd e2e-cross-sdk
-docker compose up --build --abort-on-container-exit
+docker compose build e2e-tests
+docker compose run --rm e2e-tests \
+  pytest -vs /harness/test_provenance_parity.py --tb=short
 
-# 3. The parity test specifically passes.
-docker compose run --rm tests pytest tests/test_provenance_parity.py -v
+# 3. Confirm the new step is well-formed YAML.
+yamllint .github/workflows/http-parity.yml   # if available; otherwise eyeball
 
 # 4. Full check.
 scripts/check_all.sh
@@ -232,8 +265,9 @@ scripts/check_all.sh
 
 - [`docs/telemetry/gap-analysis.md`](../gap-analysis.md)
 - [`docs/telemetry/05-datapoint-provenance.md`](../05-datapoint-provenance.md)
-- (Conditional) [`.github/workflows/<cross-sdk-workflow>.yml`](../../.github/workflows/)
-  if §4.2 finds the workflow narrows pytest discovery.
+- [`.github/workflows/http-parity.yml`](../../.github/workflows/http-parity.yml)
+  — new "Provenance parity (LLM-gated)" step appended after the
+  existing Phase-2 step. See §4.2 for the exact YAML.
 
 ## 7. Risks
 
