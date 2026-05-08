@@ -1,6 +1,6 @@
 # Task 04-03 — `SpanCapture` test helper in `cognee-test-utils`
 
-**Status**: ⬜ unimplemented
+**Status**: ✅ implemented in commit 0578c1f
 **Owner**: _unassigned_
 **Depends on**: —
 **Blocks**:
