@@ -1,6 +1,6 @@
 # Task 06-07 — Refactor `crates/http-server/src/main.rs` to use `init_logging`
 
-**Status**: ⬜ not started
+**Status**: implemented in commit 5d9eb3c
 **Owner**: _unassigned_
 **Depends on**: [Task 06-05 — init_logging](05-init-logging.md).
 **Blocks**:
