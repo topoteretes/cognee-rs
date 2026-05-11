@@ -1,6 +1,7 @@
 use pyo3::prelude::*;
 
 mod cancellation;
+mod default_subscriber;
 mod error;
 mod logging;
 mod pipeline;
@@ -13,6 +14,12 @@ mod watcher;
 /// Python bindings for the cognee-core pipeline engine.
 #[pymodule]
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    // Gap 07 task 02 — install the default tracing → Python `logging`
+    // bridge before any class registration so events emitted during
+    // module init are captured. Idempotent; honours
+    // `COGNEE_BINDING_SUPPRESS_LOGS`.
+    default_subscriber::install(m.py());
+
     m.add_class::<pipeline::PyPipeline>()?;
     m.add_class::<pipeline::PyPipelineRunHandle>()?;
     m.add_class::<task_context::PyTaskContext>()?;
