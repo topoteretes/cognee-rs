@@ -12,6 +12,7 @@ cognee-core = { path = "../crates/core" }
 cognee-database = { path = "../crates/database", features = ["sqlite"] }
 cognee-graph = { path = "../crates/graph", features = ["testing"] }
 cognee-vector = { path = "../crates/vector", features = ["testing"] }
+cognee-logging = { path = "../crates/logging" }
 pyo3 = { version = "0.23", features = ["extension-module"] }
 pyo3-async-runtimes = { version = "0.23", features = ["tokio-runtime"] }
 tokio = { workspace = true }

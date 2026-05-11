@@ -8,6 +8,9 @@ export interface NativeBindings {
   initWithThreads(n: number): void;
   shutdown(): void;
 
+  // Logging (gap-06): argument-less, idempotent.
+  setupLogging(): void;
+
   // Values
   valueFromNumber(n: number): NativeBox;
   valueFromBool(b: boolean): NativeBox;

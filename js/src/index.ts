@@ -11,6 +11,17 @@ export function shutdown(): void {
   native.shutdown();
 }
 
+/**
+ * Initialize cognee's logging subsystem from environment variables.
+ *
+ * All configuration is via env vars (`COGNEE_LOG_*`, `LOG_FILE_NAME`,
+ * `LOG_LEVEL`, `RUST_LOG`); set them before calling. Calling this
+ * function more than once is a no-op (idempotent).
+ */
+export function setupLogging(): void {
+  native.setupLogging();
+}
+
 // Re-exports
 export { CogneeValue } from "./value";
 export {

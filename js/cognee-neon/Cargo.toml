@@ -14,6 +14,7 @@ cognee-core = { path = "../../crates/core" }
 cognee-database = { path = "../../crates/database", features = ["sqlite"] }
 cognee-graph = { path = "../../crates/graph", features = ["testing"] }
 cognee-vector = { path = "../../crates/vector", features = ["testing"] }
+cognee-logging = { path = "../../crates/logging" }
 neon = { version = "1", default-features = false, features = ["napi-6"] }
 async-trait = "0.1.89"
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "time"] }

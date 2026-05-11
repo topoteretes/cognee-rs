@@ -39,6 +39,11 @@ static CgErrorCode negate(const CgValue* input, const CgTaskContext* ctx,
 }
 
 int main(void) {
+    /* Smoke-check the gap-06 logging entrypoint exports correctly.
+     * 0 = success (or idempotent re-call). Non-zero on env-var config
+     * error. Either way we proceed — the example does not require
+     * logging to be functional. */
+    (void)cognee_setup_logging();
     CHECK(cg_init());
 
     CgCancellationHandle* handle = NULL;

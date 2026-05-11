@@ -12,6 +12,7 @@
 
 mod cancellation;
 mod error;
+mod logging;
 mod pipeline;
 mod pipeline_exec;
 mod progress;
@@ -31,6 +32,9 @@ fn main(mut cx: ModuleContext) -> NeonResult<()> {
     cx.export_function("init", runtime::init)?;
     cx.export_function("initWithThreads", runtime::init_with_threads)?;
     cx.export_function("shutdown", runtime::shutdown)?;
+
+    // Logging entrypoint (gap-06): argument-less, idempotent.
+    cx.export_function("setupLogging", logging::setup_logging)?;
 
     // Values
     cx.export_function("valueFromNumber", value::value_from_number)?;

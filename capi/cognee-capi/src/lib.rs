@@ -14,6 +14,7 @@ pub mod cancellation;
 pub mod error;
 pub mod exec_status;
 pub mod iterator;
+pub mod logging;
 pub mod pipeline;
 pub mod pipeline_exec;
 pub mod progress;

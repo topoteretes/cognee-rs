@@ -11,6 +11,7 @@ from cognee_pipeline._native import (
     ProgressToken,
     TaskContext,
     TaskFailedError,
+    setup_logging,
 )
 
 __all__ = [
@@ -24,4 +25,5 @@ __all__ = [
     "CancelledError",
     "NoTasksError",
     "InvalidConfigError",
+    "setup_logging",
 ]

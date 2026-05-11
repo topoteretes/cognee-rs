@@ -26,6 +26,12 @@ CgErrorCode cg_init_with_threads(size_t n);
 void cg_shutdown(void);
 void cg_string_destroy(char* s);
 
+/* Logging (gap-06): argument-less, idempotent.
+ * Initializes cognee's logging subsystem from environment variables
+ * (COGNEE_LOG_*, LOG_FILE_NAME, LOG_LEVEL, RUST_LOG).
+ * Returns 0 on success (or idempotent re-call), non-zero on error. */
+int cognee_setup_logging(void);
+
 typedef struct CgValue CgValue;
 typedef struct CgValueIter CgValueIter;
 typedef struct CgTask CgTask;
