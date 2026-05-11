@@ -39,6 +39,10 @@ js/node_modules/
 js/lib/
 js/cognee_neon.node
 
+# JS lockfile — only pins dev-deps (jest, ts-jest, typescript); regeneration
+# under older Node versions produces churn (lockfileVersion 1 vs 3).
+js/package-lock.json
+
 # Python cache
 __pycache__/
 *.pyc
