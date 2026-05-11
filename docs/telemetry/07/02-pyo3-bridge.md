@@ -1,6 +1,6 @@
 # Task 07-02 — PyO3 `pyo3-log` bridge for default Rust→Python event routing
 
-**Status**: ⬜ not started
+**Status**: implemented in commit 674f76f (note: used a custom TracingToLogLayer instead of relying on pyo3-log as a tracing-subscriber sink, because workspace `tracing` does not enable the `log-always` feature; also added `tracing`, `tracing-subscriber`, `log = "0.4"` as direct deps to python/Cargo.toml beyond the original "Files modified" list — see commit body).
 **Owner**: _unassigned_
 **Depends on**: [Task 07-01 — Workspace deps](01-workspace-deps.md).
 **Blocks**:
