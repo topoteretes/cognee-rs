@@ -426,34 +426,70 @@ This default applies only when neither `RUST_LOG` nor `LOG_LEVEL` is set. Users 
 
 ---
 
-## Action Items
+## Design decisions (locked)
 
-1. **Add dependency** — append `tracing-appender = "0.2"` to `[workspace.dependencies]` in [`Cargo.toml`](../../Cargo.toml) and enable the `json` feature on `tracing-subscriber`.
-2. **Create `crates/utils/src/logging.rs`** (or a new `crates/logging` crate) exposing:
-   - `LoggingConfig::from_env()` — reads all env vars listed above.
-   - `init_logging(cfg, extra_layers) -> LogGuards`.
-   - Helpers `resolve_logs_dir()` (mirroring Python priority) and `propagate_log_file_name()` (writes to env so children inherit).
-   - Custom `FormatEvent` impl producing Python-compatible `<ts> [<LEVEL>] <msg> k=v ... [logger]` for `plain` format.
-   - Cleanup pass that mirrors `cleanup_old_logs()` (glob `*.log`, sort by mtime desc, unlink past `COGNEE_LOG_MAX_FILES`).
-3. **Refactor [`crates/cli/src/main.rs:50–58`](../../crates/cli/src/main.rs#L50-L58)** — replace inline `fmt()` setup with `cognee_utils::logging::init_logging(...)` and hold the returned guards in `main()`'s scope.
-4. **Refactor [`crates/http-server/src/main.rs:100–118`](../../crates/http-server/src/main.rs#L100-L118)** — pass `SpanBufferLayer` as `extra_layers` to the new helper. Keep the `Arc<SpanBuffer>` wiring intact.
-5. **Update default `EnvFilter`** in both binaries to the noise-suppression baseline above (or move that knowledge into `LoggingConfig::default_filter()`).
-6. **Expose Python binding** in [`python/`](../../python) — a `cognee_rust.setup_logging(level=None, logs_dir=None, ...)` function that calls into the shared init helper.
-7. **Add CLI flags** (optional) — `--log-level`, `--log-file`, `--log-format` to `crates/cli/src/cli.rs` for ad-hoc overrides.
-8. **Document** the new env vars in `README.md`, the CLI docs under [`docs/cli/`](../cli/), and add a deployment note in [`docs/http-server/`](../http-server/).
-9. **Wire Android demo** — set `COGNEE_LOGS_DIR=/data/local/tmp/cognee/runtime/logs` in [`scripts/android-run.sh`](../../scripts/android-run.sh) and [`demo/run_cognee_rust_demo_android.sh`](../../demo/run_cognee_rust_demo_android.sh).
-10. **Cross-SDK parity test** in [`e2e-cross-sdk/`](../../e2e-cross-sdk) — assert that both Python and Rust create at least one `*.log` file under `COGNEE_LOGS_DIR` after a pipeline run.
+Approved by the project owner on 2026-05-11. **Do not re-litigate.**
+Sub-agents may surface new evidence that contradicts a decision; if so,
+escalate to the user before changing course.
+
+| # | Decision | Rationale | Affected tasks |
+|---|---|---|---|
+| 1 | **Time-based rotation for v1.** Use `tracing-appender::RollingFileAppender` with `Rotation::DAILY` as the default. Size-based parity with Python's `COGNEE_LOG_MAX_BYTES` is deferred to a follow-up (will sit behind a feature flag using `tracing-rolling-file` or a hand-rolled `MakeWriter`). `COGNEE_LOG_MAX_BYTES` is accepted as a documented no-op so existing Python `.env` files keep parsing. | Time-based rotation has a battle-tested crate; size-based parity adds a new dependency or significant glue code for a knob most users will not tune. Deferring keeps gap 06 small enough to land cleanly while still closing the "no rotation at all" hole. | [06-02](06/02-logging-config.md), [06-05](06/05-init-logging.md) |
+| 2 | **New `crates/logging/` crate.** The shared init lives in its own workspace member exposing `LoggingConfig`, `init_logging`, `LogGuards`, the custom `FormatEvent`, and helpers (`resolve_logs_dir`, `propagate_log_file_name`, `cleanup_old_logs`). Only binaries (`cli`, `http-server`) and bindings depend on it; library crates do not. | Mirrors gap 05's pattern of putting the new machinery in a dedicated module. Keeps `crates/utils/` minimal (it has no logging knowledge today) and prevents accidental library-side init by making the crate boundary an explicit gate. | [06-02](06/02-logging-config.md), [06-03](06/03-paths-and-cleanup.md), [06-04](06/04-python-plain-formatter.md), [06-05](06/05-init-logging.md) |
+| 3 | **Configurable output format.** Add `COGNEE_LOG_FORMAT={plain\|json}` with `plain` default. The selection applies to both the stdout `fmt` layer and the file `fmt` layer in one shot (no mixed-mode). JSON mode uses `tracing-subscriber`'s built-in `fmt::layer().json()`. | Plain matches Python's text-friendly default for development; JSON is strictly better for production ingestion. Coupling stdout + file keeps the mental model simple ("one format per process"). | [06-02](06/02-logging-config.md), [06-05](06/05-init-logging.md) |
+| 4 | **Custom Python-compatible plain formatter.** The file sink (and the stdout sink when format=plain) must emit the *byte-exact* Python line shape: `<ts ISO8601 with µs> [<LEVEL ljust(8)>] <msg> k=v ... [<logger_name>]`. Implement a `FormatEvent` in `crates/logging` plus a small visitor that gathers field key/values. | The cross-SDK parity test (decision 12) requires per-message string equality after stripping timestamp + logger-name. The default `tracing-subscriber` formatter cannot produce this shape. | [06-04](06/04-python-plain-formatter.md), [06-10](06/10-tests.md) |
+| 5 | **Replicate Python's `LOG_FILE_NAME` multi-process behavior.** The first process to call `init_logging` generates `<dir>/<YYYY-MM-DD_HH-MM-SS>.log`, writes the absolute path to `LOG_FILE_NAME` in its own env, and any child process spawned afterward reuses that filename. Multi-process rotation is not protected — document the warning loudly. | Python's broken-but-pragmatic behavior is what users observe in production. Splitting children into separate files would break the existing log-aggregation expectations of cognee users. Per-PID files can be a follow-up. | [06-03](06/03-paths-and-cleanup.md), [06-05](06/05-init-logging.md), [06-11](06/11-docs-and-ci.md) |
+| 6 | **Adopt broad library-noise suppression as the default filter.** When neither `RUST_LOG` nor `LOG_LEVEL` is set, install: `info,ort=warn,reqwest=warn,hyper=warn,h2=warn,rustls=warn,sqlx=warn,sea_orm=warn,sea_orm_migration=warn,tower_http=warn,qdrant_segment=warn,qdrant_shard=warn`. Expose as `LoggingConfig::default_filter()`. | The current `info,ort=warn` baseline still leaks reqwest/hyper/sqlx noise. Setting once in the new helper means every binary inherits the same baseline; users override via `RUST_LOG` exactly like today. | [06-05](06/05-init-logging.md), [06-06](06/06-cli-refactor.md), [06-07](06/07-http-server-refactor.md) |
+| 7 | **`LOG_LEVEL` is a fallback for `RUST_LOG`.** When `RUST_LOG` is set, it wins (richer per-module syntax). When `RUST_LOG` is unset but `LOG_LEVEL` is, parse `LOG_LEVEL` as a bare level (`info`, `debug`, …) and feed it into `EnvFilter::new`. When both are unset, use `default_filter()` (decision 6). | Python's only knob is `LOG_LEVEL`; Rust's `RUST_LOG` is strictly more expressive. Honouring `LOG_LEVEL` gives Python users a familiar override without giving up `RUST_LOG`'s precedence. | [06-02](06/02-logging-config.md), [06-05](06/05-init-logging.md) |
+| 8 | **Env-var configuration is the only surface for v1.** No new CLI flags on `crates/cli/src/cli.rs` (no `--log-level`, `--log-file`, `--log-format`). All config flows through `LoggingConfig::from_env()`. | Keeps the CLI surface stable, mirrors Python which has no CLI flags for logging, and avoids two ways to set the same value. Flags can be added later if needed. | [06-06](06/06-cli-refactor.md) |
+| 9 | **All three bindings expose `setup_logging()`.** Python (PyO3), JS (Neon), and C (cbindgen) each get a callable that wraps `LoggingConfig::from_env()` + `init_logging`. The C signature is the minimal `int cognee_setup_logging(void)` (returns 0/non-zero); JS is `setupLogging()`; Python is `setup_logging()`. None take arguments — they read env vars exactly like the binaries. The returned `LogGuards` is stashed in a binding-specific singleton so worker threads inherit the subscriber. | Parity across all three SDK surfaces. Argument-less wrappers keep the FFI shape trivial; advanced users set env vars before importing the binding. | [06-08](06/08-binding-entrypoints.md) |
+| 10 | **Android demo wires `COGNEE_LOGS_DIR` automatically.** `scripts/android-run.sh` and `demo/run_cognee_rust_demo_android.sh` set `COGNEE_LOGS_DIR=/data/local/tmp/cognee/runtime/logs` and ensure the directory exists before the first CLI invocation (`adb shell mkdir -p`). No CLI changes; the binary picks up the env var via the shared helper. | The Android device's `$HOME` is read-only (already documented in `MEMORY.md`); the runtime base path is the only safely-writable location. Doing this in the demo scripts rather than the binary keeps Android-specific knowledge out of `cognee-logging`. | [06-09](06/09-android-wiring.md) |
+| 11 | **Cleanup is startup-only.** `cleanup_old_logs(dir, max_files)` runs exactly once, at the end of `init_logging`. No periodic re-scan, no on-rotation hook. Matches Python's behavior. | Periodic cleanup needs a background task and a shutdown story; the marginal value is low because `tracing-appender`'s daily rotation already bounds growth between init calls. | [06-03](06/03-paths-and-cleanup.md), [06-05](06/05-init-logging.md) |
+| 12 | **Cross-SDK parity is loose at the file level, strict per message.** The `e2e-cross-sdk` test asserts that (a) both Python and Rust create at least one `*.log` under a shared `COGNEE_LOGS_DIR`, and (b) for a common synthetic line (a known startup banner emitted by both SDKs), the per-message body — everything after the timestamp and before the logger-name bracket — is byte-equal. Separate filenames per SDK are acceptable. | Loose filename matching keeps the test stable against PID/process-order variation. Per-message equality is the actual parity contract: a user `grep`ing both logs should see the same human-readable lines. | [06-04](06/04-python-plain-formatter.md), [06-10](06/10-tests.md), [06-11](06/11-docs-and-ci.md) |
+| 13 | **`SpanBufferLayer` stays independent.** The HTTP server's in-memory ring buffer is composed alongside the new file/stdout layers via the `extra_layers` parameter of `init_logging`. It is *not* mirrored to the file sink (the buffer serves the `/spans` HTTP endpoint, not archive). | Keeps the buffer's purpose single-responsibility and avoids doubling write volume for an in-memory artefact that callers can dump via the existing HTTP route. | [06-07](06/07-http-server-refactor.md) |
+| 14 | **`COGNEE_LOG_MAX_FILES` is env-driven.** Python hard-codes `MAX_LOG_FILES=10`; Rust exposes it as the env var `COGNEE_LOG_MAX_FILES` (default `10`). Used by both `cleanup_old_logs` and as the `max_log_files` hint to `tracing-appender`'s builder when supported. | Zero cost to add; matches the rest of the env-var surface; gives operators a way to tune retention for disk-constrained edge devices. | [06-02](06/02-logging-config.md), [06-03](06/03-paths-and-cleanup.md) |
 
 ---
 
-## Open Questions
+## Action items
 
-1. **Size vs time rotation.** Should we ship size-based rotation for byte-exact parity with Python (`tracing-rolling-file` or hand-rolled), or accept time-based rotation (`tracing-appender::Rotation::DAILY`) as "good enough"? Edge devices (Android) may justify size-based given fixed-storage constraints. **Lean: time-based v1, size-based behind a feature flag in v2.**
-2. **JSON-only or configurable?** Always-on JSON is operationally cleaner for production but worse for grep/tail in development. **Lean: configurable with `plain` default**, since Python's CLI users are accustomed to plain text.
-3. **Library-level init.** Should `cognee-lib` provide a `try_init_logging()` that runs once on first use if the binary forgot? Risk: silently swallowing the embedder's own subscriber choice. **Lean: no.** Keep init binary-only and document it loudly.
-4. **Multi-process file sharing.** Python's `LOG_FILE_NAME` mechanism is multi-process-unsafe with `RotatingFileHandler`. Should the Rust port replicate the (broken) Python behavior, or sidestep it by giving each process its own file under `<dir>/<ts>-<pid>.log`? **Lean: replicate `LOG_FILE_NAME` for SDK parity, but add a doc warning about concurrent rotation.**
-5. **`MAX_LOG_FILES` env-var.** Python hard-codes 10. Should Rust expose `COGNEE_LOG_MAX_FILES` and let users tune it? **Lean: yes**, since it costs nothing to add.
-6. **Console + file format coupling.** When `COGNEE_LOG_FORMAT=json`, should that affect both stdout and file, or only file? **Lean: both** — easier mental model and matches what production users expect.
+Each item below has a dedicated implementation sub-document under
+[`06/`](06/) with rationale, prerequisites, step-by-step source-level
+changes, verification commands, files modified, and risks. **The
+sub-docs are authoritative**: where they refine details based on the
+locked design decisions, follow the sub-doc rather than this
+high-level summary.
+
+| #  | Action item | Sub-doc | Depends on | Status |
+|----|---|---|---|---|
+| 01 | Add `tracing-appender = "0.2"` to `[workspace.dependencies]` and flip `tracing-subscriber`'s feature list to include `"json"`. No code consumers yet — this lands as a workspace-deps-only commit so later tasks compile in isolation. | [06/01-workspace-deps.md](06/01-workspace-deps.md) | — | ⬜ |
+| 02 | Create the `cognee-logging` workspace crate (`crates/logging/`). Define `LoggingConfig` with all eight env-driven fields (`enabled`, `logs_dir`, `log_file_name`, `rotation`, `format`, `backup_count`, `max_files`, `level_filter`). Implement `LoggingConfig::from_env()` resolving all env vars per the table in §"Env Var Catalog" + decisions 1, 3, 6, 7, 14. No subscriber install yet. | [06/02-logging-config.md](06/02-logging-config.md) | 01 | ⬜ |
+| 03 | Inside `cognee-logging`, implement `resolve_logs_dir()` (mirror Python priority: `COGNEE_LOGS_DIR` → `/tmp/cognee_logs` → `None`), `propagate_log_file_name()` (generate timestamped filename, write to env, idempotent on re-call), and `cleanup_old_logs(dir, max_files)` (glob `*.log`, sort by mtime desc, unlink past N). Unit-test all three. | [06/03-paths-and-cleanup.md](06/03-paths-and-cleanup.md) | 02 | ⬜ |
+| 04 | Inside `cognee-logging`, implement the custom `FormatEvent` (`PythonPlainFormatter`) that produces Python's byte-exact line shape: `<ts %Y-%m-%dT%H:%M:%S.%f> [<LEVEL ljust(8)>] <msg>[ k=v ...] [<logger>]`. Includes a small `Visit` impl gathering keyed fields. Snapshot-test against a known event. | [06/04-python-plain-formatter.md](06/04-python-plain-formatter.md) | 02 | ⬜ |
+| 05 | Inside `cognee-logging`, implement `LogGuards`, `default_filter()`, and `init_logging(cfg, extra_layers) -> LogGuards`. Compose: `EnvFilter` → stdout layer (plain or json per cfg) → optional file layer (plain or json) → caller's `extra_layers`. Wires `propagate_log_file_name()` and `cleanup_old_logs()` at the right moments. Holds the `WorkerGuard` from `tracing-appender::non_blocking`. | [06/05-init-logging.md](06/05-init-logging.md) | 03, 04 | ⬜ |
+| 06 | Refactor [`crates/cli/src/main.rs`](../../crates/cli/src/main.rs) to call `cognee_logging::init_logging(LoggingConfig::from_env(), [])`. Hold the returned `LogGuards` in `main()`'s scope (drops on exit to flush). Preserve both the `telemetry` cfg branch and the non-telemetry branch — the telemetry branch composes its OTEL layer via `extra_layers`. | [06/06-cli-refactor.md](06/06-cli-refactor.md) | 05 | ⬜ |
+| 07 | Refactor [`crates/http-server/src/main.rs`](../../crates/http-server/src/main.rs) `init_tracing` (both cfg branches) to call `cognee_logging::init_logging(..., extra_layers)` and pass `SpanBufferLayer` (+ optional `telemetry_layer`) via `extra_layers`. Keep `Arc<SpanBuffer>` wiring intact; hold the returned `LogGuards`. | [06/07-http-server-refactor.md](07-http-server-refactor.md) | 05 | ⬜ |
+| 08 | Expose `setup_logging()` in `python/src/lib.rs` (PyO3 module attribute), `js/cognee-neon/src/lib.rs` (`registerFunction("setupLogging", ...)`), and `capi/cognee-capi/src/lib.rs` (`cognee_setup_logging() -> c_int`). All three are argument-less wrappers around `cognee_logging::init_logging(LoggingConfig::from_env(), [])` that stash the returned `LogGuards` in a `OnceLock`/`Mutex` so subsequent calls become no-ops. | [06/08-binding-entrypoints.md](06/08-binding-entrypoints.md) | 05 | ⬜ |
+| 09 | Wire `COGNEE_LOGS_DIR=/data/local/tmp/cognee/runtime/logs` through [`scripts/android-run.sh`](../../scripts/android-run.sh) and [`demo/run_cognee_rust_demo_android.sh`](../../demo/run_cognee_rust_demo_android.sh). Ensure `adb shell mkdir -p` runs before the first CLI invocation. Pass the env var alongside the existing `HOME=` / `RUST_LOG=` exports. | [06/09-android-wiring.md](06/09-android-wiring.md) | 05 | ⬜ |
+| 10 | Tests: unit tests inside `crates/logging` (resolution priority, filename generation, rotation trigger, cleanup, format parity, JSON mode, disabled), CLI integration test in `crates/cli/tests/`, HTTP-server integration test in `crates/http-server/tests/`, multi-process `LOG_FILE_NAME` inheritance test, and `e2e-cross-sdk/harness/test_logging_parity.py`. | [06/10-tests.md](06/10-tests.md) | 02–08 | ⬜ |
+| 11 | Docs + CI: update [`docs/telemetry/gap-analysis.md`](./gap-analysis.md) (file logging row → "Implemented (gap 06)"), add the env-var table + warnings to `README.md`, CLI docs under [`docs/cli/`](../cli/), and `docs/http-server/`. Wire `test_logging_parity.py` into the same workflow that runs `test_provenance_parity.py`. Write the "Closure summary" section at the bottom of this doc. | [06/11-docs-and-ci.md](06/11-docs-and-ci.md) | 01–10 | ⬜ |
+
+### Suggested execution order
+
+A clean PR sequence based on the dependency graph:
+
+1. **PR 1** (foundation): tasks 01 + 02 + 03 + 04 — workspace deps,
+   config struct, path helpers, formatter. Pure library work, no
+   subscriber install.
+2. **PR 2** (init helper): task 05 — `init_logging` + `default_filter`
+   + `LogGuards`. Unit-tested in isolation against a captured-buffer
+   sink.
+3. **PR 3** (binaries): tasks 06 + 07 — CLI and HTTP server adopt the
+   helper. End-to-end file logging starts working.
+4. **PR 4** (bindings): task 08 — Python/JS/C `setup_logging()`.
+5. **PR 5** (android): task 09 — demo env wiring.
+6. **PR 6** (validation): task 10 — unit + integration + cross-SDK.
+7. **PR 7** (closeout): task 11 — docs + CI + gap closure.
 
 ---
 
