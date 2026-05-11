@@ -11,11 +11,25 @@
 //! slot first wins, the loser becomes a no-op. The default subscriber
 //! is the "events are never silently dropped" baseline.
 
-use std::sync::Once;
+use std::sync::{Once, OnceLock};
 
-use tracing_subscriber::{EnvFilter, fmt};
+use tracing_subscriber::{
+    EnvFilter, Registry, fmt, layer::SubscriberExt, reload, util::SubscriberInitExt,
+};
 
 static INIT: Once = Once::new();
+
+/// Process-global reload handle for the OTEL telemetry layer slot.
+///
+/// Set by [`install`] when the default subscriber is installed; consumed
+/// by `setupTelemetry()` (gap 07 task 05) to swap a real
+/// `BoxedTelemetryLayer<Registry>` into the registry. `None` only when
+/// the default subscriber was suppressed via
+/// `COGNEE_BINDING_SUPPRESS_LOGS=<non-empty>`.
+#[allow(clippy::type_complexity)]
+pub(crate) static OTEL_RELOAD_HANDLE: OnceLock<
+    reload::Handle<Option<cognee_observability::BoxedTelemetryLayer<Registry>>, Registry>,
+> = OnceLock::new();
 
 /// Install the default stderr `fmt` subscriber.
 ///
@@ -40,14 +54,25 @@ pub(crate) fn install() {
         let filter = EnvFilter::try_from_default_env()
             .unwrap_or_else(|_| EnvFilter::new(cognee_logging::default_filter()));
 
+        // Reserve a reload-capable slot for the OTEL layer. Starts
+        // empty (None); `setupTelemetry()` (gap 07 task 05) swaps in a
+        // real `BoxedTelemetryLayer<Registry>` via the handle stashed
+        // in `OTEL_RELOAD_HANDLE`.
+        let (otel_slot, handle) =
+            reload::Layer::new(None::<cognee_observability::BoxedTelemetryLayer<Registry>>);
+        let _ = OTEL_RELOAD_HANDLE.set(handle);
+
         // `try_init` rather than `init` — if `setupLogging()` (gap 06)
         // or any other code installed a subscriber first, we soft-fail
         // and let that subscriber own the global slot. Matches PyO3
         // semantics from 07-02.
-        let _ = fmt()
-            .with_writer(std::io::stderr)
-            .with_ansi(true)
-            .with_env_filter(filter)
+        // The reload slot is typed `Layer<Registry>`; compose it
+        // against the bare `Registry` before the env filter so that
+        // subsequent `.with(...)` calls layer on top of the result.
+        let _ = Registry::default()
+            .with(otel_slot)
+            .with(filter)
+            .with(fmt::layer().with_writer(std::io::stderr).with_ansi(true))
             .try_init();
     });
 }

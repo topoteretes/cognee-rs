@@ -16,6 +16,9 @@ cognee-logging = { path = "../../crates/logging" }
 # by default per gap 07 decision 3.
 cognee-observability = { path = "../../crates/observability", features = ["telemetry"] }
 cognee-telemetry     = { path = "../../crates/telemetry",     features = ["telemetry"] }
+# Required by `cognee_init_otlp` to pass `Registry` as the type
+# parameter to `cognee_observability::init_telemetry::<Registry>`.
+tracing-subscriber   = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "sync"] }
 futures.workspace = true
 tokio-stream = "0.1"

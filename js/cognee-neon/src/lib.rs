@@ -22,6 +22,7 @@ mod runtime;
 mod task;
 mod task_context;
 mod task_info;
+mod telemetry_otlp;
 mod value;
 mod watcher;
 
@@ -43,6 +44,11 @@ fn main(mut cx: ModuleContext) -> NeonResult<()> {
 
     // Logging entrypoint (gap-06): argument-less, idempotent.
     cx.export_function("setupLogging", logging::setup_logging)?;
+
+    // Telemetry (OTLP) entrypoint (gap-07 task 05): argument-less,
+    // idempotent. Composes the OTEL layer on top of the default
+    // stderr subscriber installed above.
+    cx.export_function("setupTelemetry", telemetry_otlp::setup_telemetry)?;
 
     // Values
     cx.export_function("valueFromNumber", value::value_from_number)?;

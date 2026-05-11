@@ -30,9 +30,11 @@ pub fn task_context_mock(mut cx: FunctionContext) -> JsResult<JsObject> {
         .build()
         .and_then(|rt| {
             rt.block_on(async {
-                let db = cognee_database::connect("sqlite::memory:").await
+                let db = cognee_database::connect("sqlite::memory:")
+                    .await
                     .map_err(|e| std::io::Error::other(e.to_string()))?;
-                cognee_database::initialize(&db).await
+                cognee_database::initialize(&db)
+                    .await
                     .map_err(|e| std::io::Error::other(e.to_string()))?;
                 Ok::<_, std::io::Error>(db)
             })

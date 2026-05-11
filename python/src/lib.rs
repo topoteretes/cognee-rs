@@ -8,6 +8,7 @@ mod pipeline;
 mod progress;
 mod task;
 mod task_context;
+mod telemetry_otlp;
 mod value;
 mod watcher;
 
@@ -28,6 +29,11 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     // Logging entrypoint (gap-06): argument-less, idempotent.
     m.add_function(wrap_pyfunction!(logging::setup_logging, m)?)?;
+
+    // Telemetry (OTLP) entrypoint (gap-07 task 05): argument-less,
+    // idempotent. Composes the OTEL layer on top of the default
+    // tracing → Python `logging` bridge installed above.
+    m.add_function(wrap_pyfunction!(telemetry_otlp::setup_telemetry, m)?)?;
 
     // Register exception types.
     error::register(m)?;

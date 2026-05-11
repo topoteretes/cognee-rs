@@ -32,6 +32,18 @@ void cg_string_destroy(char* s);
  * Returns 0 on success (or idempotent re-call), non-zero on error. */
 int cognee_setup_logging(void);
 
+/* OTLP telemetry (gap-07): argument-less, idempotent.
+ * Initializes OpenTelemetry export from environment variables
+ * (COGNEE_TRACING_ENABLED, OTEL_EXPORTER_OTLP_ENDPOINT,
+ * OTEL_EXPORTER_OTLP_HEADERS, OTEL_SERVICE_NAME and related OTEL_*).
+ * If neither COGNEE_TRACING_ENABLED=true nor a non-empty endpoint is
+ * set, returns 0 without installing anything.
+ * Returns: 0 = success/no-op, 1 = lock poison, 2 = init failed.
+ * v1 limitation: the C binding does not install a reload-capable
+ * tracing subscriber; only spans emitted via the OpenTelemetry SDK
+ * directly reach the collector. See docs/telemetry/07. */
+int cognee_init_otlp(void);
+
 typedef struct CgValue CgValue;
 typedef struct CgValueIter CgValueIter;
 typedef struct CgTask CgTask;

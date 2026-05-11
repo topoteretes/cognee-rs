@@ -33,6 +33,24 @@ export function setupLogging(): void {
   native.setupLogging();
 }
 
+/**
+ * Initialize OpenTelemetry / OTLP export from environment variables.
+ *
+ * Reads `COGNEE_TRACING_ENABLED`, `OTEL_EXPORTER_OTLP_ENDPOINT`,
+ * `OTEL_EXPORTER_OTLP_HEADERS`, `OTEL_SERVICE_NAME` and related
+ * `OTEL_*` env vars. When neither `COGNEE_TRACING_ENABLED=true` nor a
+ * non-empty `OTEL_EXPORTER_OTLP_ENDPOINT` is set, the call returns
+ * successfully without installing anything (no-config = no-op).
+ *
+ * When `OTEL_SERVICE_NAME` is unset, defaults to `cognee.node-binding`
+ * (gap 07 decision 8). The user's explicit value always wins.
+ *
+ * Calling more than once is a no-op (idempotent).
+ */
+export function setupTelemetry(): void {
+  native.setupTelemetry();
+}
+
 // Re-exports
 export { CogneeValue } from "./value";
 export {

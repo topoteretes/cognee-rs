@@ -30,16 +30,34 @@
 //! global logger.
 
 use std::fmt::Write as _;
-use std::sync::Once;
+use std::sync::{Once, OnceLock};
 
 use pyo3::prelude::*;
 use tracing::field::{Field, Visit};
 use tracing_log::AsLog;
 use tracing_subscriber::{
-    EnvFilter, Layer, Registry, layer::SubscriberExt, util::SubscriberInitExt,
+    EnvFilter, Layer, Registry, layer::SubscriberExt, reload, util::SubscriberInitExt,
 };
 
 static INIT: Once = Once::new();
+
+/// Process-global reload handle for the OTEL telemetry layer slot.
+///
+/// Set by [`install`] when the default subscriber is installed; consumed
+/// by `setup_telemetry()` (gap 07 task 05) to swap a real
+/// `BoxedTelemetryLayer<Registry>` into the registry without having to
+/// build a second `Subscriber` (which would silently lose its layers
+/// because the global slot is already claimed).
+///
+/// The handle is `None` only when the default subscriber was suppressed
+/// via `COGNEE_BINDING_SUPPRESS_LOGS=<non-empty>`; in that case
+/// `setup_telemetry()` still stashes the guard but logs that OTLP
+/// routing through `tracing` is disabled (direct OTEL SDK calls still
+/// reach the collector through the installed `TracerProvider`).
+#[allow(clippy::type_complexity)]
+pub(crate) static OTEL_RELOAD_HANDLE: OnceLock<
+    reload::Handle<Option<cognee_observability::BoxedTelemetryLayer<Registry>>, Registry>,
+> = OnceLock::new();
 
 /// Install the default bridge subscriber. Idempotent.
 ///
@@ -67,11 +85,23 @@ pub(crate) fn install(py: Python<'_>) {
         let filter = EnvFilter::try_from_default_env()
             .unwrap_or_else(|_| EnvFilter::new(cognee_logging::default_filter()));
 
-        // (3) Compose a Registry with the env filter and the explicit
+        // (3) Reserve a reload-capable slot for the OTEL layer. Starts
+        //     empty (None); `setup_telemetry()` (gap 07 task 05) swaps
+        //     in a real `BoxedTelemetryLayer<Registry>` via the handle
+        //     stashed in `OTEL_RELOAD_HANDLE`.
+        let (otel_slot, handle) =
+            reload::Layer::new(None::<cognee_observability::BoxedTelemetryLayer<Registry>>);
+        let _ = OTEL_RELOAD_HANDLE.set(handle);
+
+        // (4) Compose a Registry with the reload slot first (it is
+        //     typed as `Layer<Registry>`, so it must compose against
+        //     the bare `Registry` before further layering changes the
+        //     subscriber type), then the env filter, then the
         //     tracing → log forwarder. `try_init` is soft: if a host
         //     already installed a `tracing::Subscriber`, theirs wins
         //     and our layer is dropped on the floor.
         let _ = Registry::default()
+            .with(otel_slot)
             .with(filter)
             .with(TracingToLogLayer)
             .try_init();

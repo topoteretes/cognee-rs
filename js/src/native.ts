@@ -11,6 +11,9 @@ export interface NativeBindings {
   // Logging (gap-06): argument-less, idempotent.
   setupLogging(): void;
 
+  // Telemetry (gap-07 task 05): argument-less, idempotent.
+  setupTelemetry(): void;
+
   // Values
   valueFromNumber(n: number): NativeBox;
   valueFromBool(b: boolean): NativeBox;

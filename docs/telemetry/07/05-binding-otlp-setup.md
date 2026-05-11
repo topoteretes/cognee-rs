@@ -122,7 +122,7 @@ pub(crate) fn install(py: Python<'_>) {
         let _ = Registry::default()
             .with(filter)
             .with(otel_slot)
-            .with(tracing_log_layer())
+            .with(TracingToLogLayer)
             .try_init();
     });
     let _ = py;
@@ -408,10 +408,12 @@ to regenerate.
 
 ### 4.5 PyO3 / Neon: `init_telemetry` Layer composability check
 
-`init_telemetry::<Registry>(&settings)` returns
-`BoxedTelemetryLayer<Registry>` which is
-`Box<dyn Layer<Registry> + Send + Sync + 'static>`
-([`crates/observability/src/init.rs:90`](../../../crates/observability/src/init.rs#L90)).
+`init_telemetry::<Registry>(&settings)`
+([`crates/observability/src/init.rs:90`](../../../crates/observability/src/init.rs#L90))
+returns `(BoxedTelemetryLayer<Registry>, TelemetryGuard)` where
+`BoxedTelemetryLayer<S>` is the type alias
+`Box<dyn Layer<S> + Send + Sync + 'static>` defined at
+[`crates/observability/src/init.rs:30`](../../../crates/observability/src/init.rs#L30).
 The reload slot type is `Option<BoxedTelemetryLayer<Registry>>`.
 
 Verify the implementor pins the same `tracing-subscriber` version
@@ -421,6 +423,15 @@ across:
 - transitive deps used by `cognee-observability`
 
 A mismatch produces an opaque `Layer` trait-mismatch error.
+
+The `tracing_subscriber::reload` module is gated behind the `std`
+feature, which is part of `tracing-subscriber`'s default feature
+set. Workspace pins (`features = ["env-filter", "fmt", "json"]`,
+`features = ["env-filter", "fmt"]` in Neon) do NOT disable
+defaults, so `reload::Layer` / `reload::Handle` are available
+without any `Cargo.toml` change. If the workspace ever moves to
+`default-features = false`, add `"std"` (or `"reload"` explicitly
+if upstream extracts it) to the feature list.
 
 ## 5. Verification
 
