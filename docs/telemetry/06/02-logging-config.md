@@ -1,6 +1,6 @@
 # Task 06-02 — Create `cognee-logging` crate skeleton + `LoggingConfig`
 
-**Status**: ⬜ not started
+**Status**: implemented in commit 86f7e1e (note: `license.workspace = true` omitted from `crates/logging/Cargo.toml` because root `[workspace.package]` has no `license` field)
 **Owner**: _unassigned_
 **Depends on**: [Task 06-01 — Workspace deps](01-workspace-deps.md).
 **Blocks**:
