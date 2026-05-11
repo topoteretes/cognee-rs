@@ -1,6 +1,6 @@
 # Task 06-01 — Workspace dependencies for file logging
 
-**Status**: ⬜ not started
+**Status**: ✅ implemented in commit ca62d29
 **Owner**: _unassigned_
 **Depends on**: —
 **Blocks**:
