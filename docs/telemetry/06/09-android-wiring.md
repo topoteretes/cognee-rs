@@ -1,6 +1,6 @@
 # Task 06-09 — Wire `COGNEE_LOGS_DIR` through Android run + demo scripts
 
-**Status**: ⬜ not started
+**Status**: implemented in commit 1172ab6
 **Owner**: _unassigned_
 **Depends on**: [Task 06-05 — init_logging](05-init-logging.md) (the binary must honour `COGNEE_LOGS_DIR`).
 **Blocks**: —
