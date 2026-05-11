@@ -574,7 +574,7 @@ that preceded the implementation.
 | 06-10 | `1f61f0d` | telemetry/logging-06-10: add integration + cross-SDK parity tests |
 | 06-10 | `2a7c6c7` | telemetry/logging-06-10: mark action item 10 complete |
 | 06-11 | `382d0cd` | telemetry/logging-06-11: close gap 06 with logging docs and parity CI lane |
-| 06-11 | _(this commit)_ | telemetry/logging-06-11: mark action item 11 complete + close gap 06 |
+| 06-11 | `4d7cce0` | telemetry/logging-06-11: mark action item 11 complete + close gap 06 |
 
 ### What the gap delivered
 
