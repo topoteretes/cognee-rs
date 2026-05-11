@@ -11,10 +11,10 @@
 
 mod config;
 mod formatter;
+mod init;
 mod paths;
-// Future modules — declared by sibling tasks:
-// mod init;         // 06-05: init_logging + LogGuards + default_filter
 
 pub use config::{LogFormat, LogRotation, LoggingConfig, LoggingConfigError};
 pub use formatter::PythonPlainFormatter;
+pub use init::{BoxedLayer, LogGuards, default_filter, init_logging};
 pub use paths::{cleanup_old_logs, propagate_log_file_name, resolve_logs_dir};
