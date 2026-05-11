@@ -3,6 +3,7 @@ use std::sync::OnceLock;
 use cognee_core::AsyncRuntime;
 
 use crate::error::{CgErrorCode, set_last_error};
+use crate::panic_hook;
 
 static GLOBAL_RUNTIME: OnceLock<AsyncRuntime> = OnceLock::new();
 
@@ -18,11 +19,17 @@ fn init_runtime(rt: AsyncRuntime) -> CgErrorCode {
 
 /// Initialize the global async runtime with default settings.
 ///
+/// Also installs a process-wide panic hook (one-shot) that writes
+/// `[cognee-capi panic]` records to stderr. Subsequent calls do
+/// not replace the hook.
+///
 /// Must be called before `cg_pipeline_execute_in_background` or
 /// `cg_pipeline_execute_async`. Safe to call multiple times (second call
-/// returns an error but is harmless).
+/// returns an error but is harmless; the panic hook is only installed
+/// on the first successful call).
 #[unsafe(no_mangle)]
 pub extern "C" fn cg_init() -> CgErrorCode {
+    panic_hook::install_once();
     match AsyncRuntime::new() {
         Ok(rt) => init_runtime(rt),
         Err(e) => {
@@ -33,8 +40,13 @@ pub extern "C" fn cg_init() -> CgErrorCode {
 }
 
 /// Initialize the global async runtime with `n` worker threads.
+///
+/// Also installs a process-wide panic hook (one-shot) that writes
+/// `[cognee-capi panic]` records to stderr. Subsequent calls do
+/// not replace the hook.
 #[unsafe(no_mangle)]
 pub extern "C" fn cg_init_with_threads(n: usize) -> CgErrorCode {
+    panic_hook::install_once();
     if n == 0 {
         set_last_error("thread count must be > 0");
         return CgErrorCode::InvalidArgument;

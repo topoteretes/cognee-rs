@@ -15,6 +15,7 @@ pub mod error;
 pub mod exec_status;
 pub mod iterator;
 pub mod logging;
+mod panic_hook;
 pub mod pipeline;
 pub mod pipeline_exec;
 pub mod progress;

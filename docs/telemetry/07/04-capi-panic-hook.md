@@ -50,7 +50,8 @@ Concretely:
 ## 3. Pre-conditions
 
 - [`capi/cognee-capi/src/runtime.rs`](../../../capi/cognee-capi/src/runtime.rs)
-  defines `cg_init` and `cg_init_with_threads` at lines 25–49.
+  defines `cg_init` at lines 24–33 and `cg_init_with_threads` at
+  lines 36–49.
 - No existing panic hook is set by the C binding.
 
 ## 4. Step-by-step
