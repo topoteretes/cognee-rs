@@ -1,6 +1,6 @@
 # Task 06-04 — Python-byte-exact `PythonPlainFormatter`
 
-**Status**: ⬜ not started
+**Status**: implemented in commit 0dea3ce (note: `regex.workspace = true` added as a dev-dependency to `crates/logging/Cargo.toml` for parity-regex tests)
 **Owner**: _unassigned_
 **Depends on**: [Task 06-02 — Logging config](02-logging-config.md).
 **Blocks**:
