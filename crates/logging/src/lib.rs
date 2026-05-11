@@ -10,9 +10,10 @@
 #![deny(missing_docs)]
 
 mod config;
+mod paths;
 // Future modules — declared by sibling tasks:
-// mod paths;        // 06-03: resolve_logs_dir + propagate_log_file_name + cleanup_old_logs
 // mod formatter;    // 06-04: PythonPlainFormatter
 // mod init;         // 06-05: init_logging + LogGuards + default_filter
 
 pub use config::{LogFormat, LogRotation, LoggingConfig, LoggingConfigError};
+pub use paths::{cleanup_old_logs, propagate_log_file_name, resolve_logs_dir};
