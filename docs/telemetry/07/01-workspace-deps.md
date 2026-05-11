@@ -47,10 +47,12 @@ files.
   (and vice versa, depending on which init pattern is selected). The
   Python sub-doc 07-02 uses the `tracing → log → pyo3-log → Python`
   flow.
-- `pyo3-log = "0.4"` is the line that pairs with `pyo3 = "0.23"`
+- `pyo3-log = "0.12"` is the line that pairs with `pyo3 = "0.23"`
   (current pin at [`python/Cargo.toml:16`](../../../python/Cargo.toml#L16)).
-  The implementor must verify the latest 0.4.x compatible with PyO3
-  0.23 at task-execution time.
+  Earlier drafts of this sub-doc referenced `pyo3-log = "0.4"`, but
+  `pyo3-log` was renumbered to track PyO3's major version: `0.4.x`
+  paired with `pyo3 0.16`, while `pyo3-log 0.12.x` is the line that
+  supports `pyo3 0.23`. The implementor pinned `0.12` accordingly.
 - Landing the manifest changes as a standalone commit lets later tasks
   do pure-source additions with focused `Cargo.lock` deltas.
 
@@ -62,7 +64,7 @@ files.
 - `cognee-observability` already exposes the `telemetry` feature
   ([`crates/observability/Cargo.toml:9-17`](../../../crates/observability/Cargo.toml#L9-L17)).
 - `cognee-telemetry` already exposes the `telemetry` feature
-  ([`crates/telemetry/Cargo.toml:7`](../../../crates/telemetry/Cargo.toml#L7)).
+  ([`crates/telemetry/Cargo.toml:13-24`](../../../crates/telemetry/Cargo.toml#L13-L24)).
 
 ## 4. Step-by-step
 
@@ -74,7 +76,7 @@ Edit [`python/Cargo.toml`](../../../python/Cargo.toml). Append to
 ```toml
 # Bridge Rust `tracing` events into Python `logging` (gap 07 decision 5).
 tracing-log = "0.2"
-pyo3-log    = "0.4"
+pyo3-log    = "0.12"
 
 # Optional opentelemetry / send_telemetry surfaces. Both have noop
 # bodies when the `telemetry` feature is off, so the binding can
@@ -175,7 +177,7 @@ scripts/check_all.sh
 
 | Risk | Likelihood | Mitigation |
 |---|---|---|
-| `pyo3-log 0.4` pin is wrong for `pyo3 = 0.23` | Medium — `pyo3-log` major versions track PyO3 major versions; verify at execution time via [crates.io](https://crates.io/crates/pyo3-log) and pick the highest 0.4.x or whichever line declares PyO3 0.23 compat. | Implementor verifies before committing; sub-agent C runs `cargo check` which will surface mismatched pyo3 versions immediately. |
+| `pyo3-log 0.4` pin is wrong for `pyo3 = 0.23` | Materialised — `pyo3-log` major versions track PyO3 major versions; the original `0.4` reference was stale. Resolved by pinning `pyo3-log = "0.12"` (the line that declares `pyo3 0.23` compat). | Implementor verified `cargo check` passes with `pyo3-log = "0.12"`; doc updated to reflect the actual pin. |
 | Adding `cognee-observability` to the C binding bloats the cdylib | Medium — opentelemetry SDK + tonic add ~MB. | Accepted (decision 3). Document in 07-08 README; embedders that care opt-out by building with `--no-default-features` on the binding once feature wiring exists. |
 | Neon binding has a separate `Cargo.lock`; manifest deltas don't propagate | Low — explicit `cd js/cognee-neon && cargo check` in the verification step refreshes it. | Implementor commits both lockfiles. |
 | The Neon binding pins `tonic`/`hyper`/`tar` via `[patch.crates-io]`. Adding `cognee-observability` (which depends on `tonic 0.14`) may conflict. | Medium — the existing Neon `[patch.crates-io]` block patches `tonic` to a qdrant fork at v0.11. cognee-observability needs tonic 0.14. | Sub-agent C must run the Neon `cargo check` and surface any patch conflict; if it occurs, escalate to the user (this would change the design of the patch table, which is shared with the qdrant integration). |

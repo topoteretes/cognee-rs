@@ -13,6 +13,17 @@ cognee-database = { path = "../crates/database", features = ["sqlite"] }
 cognee-graph = { path = "../crates/graph", features = ["testing"] }
 cognee-vector = { path = "../crates/vector", features = ["testing"] }
 cognee-logging = { path = "../crates/logging" }
+# Bridge Rust `tracing` events into Python `logging` (gap 07 decision 5).
+tracing-log = "0.2"
+pyo3-log    = "0.12"
+
+# Optional opentelemetry / send_telemetry surfaces. Both have noop
+# bodies when the `telemetry` feature is off, so the binding can
+# still build under `--no-default-features` once feature wiring is
+# in place (out of scope for v1 — feature is on by default here per
+# gap 07 decision 3).
+cognee-observability = { path = "../crates/observability", features = ["telemetry"] }
+cognee-telemetry     = { path = "../crates/telemetry",     features = ["telemetry"] }
 pyo3 = { version = "0.23", features = ["extension-module"] }
 pyo3-async-runtimes = { version = "0.23", features = ["tokio-runtime"] }
 tokio = { workspace = true }
