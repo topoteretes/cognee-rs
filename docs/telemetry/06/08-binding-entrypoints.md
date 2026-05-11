@@ -1,6 +1,6 @@
 # Task 06-08 — `setup_logging()` in Python, JS, and C bindings
 
-**Status**: ⬜ not started
+**Status**: implemented in commit c14ba2a (note: also added `python/tests/test_logging_smoke.py`, `js/__tests__/logging.test.ts`, and a `cognee_setup_logging()` call in `capi/examples/example_pipeline.c` — broader than the original "Files modified" list)
 **Owner**: _unassigned_
 **Depends on**: [Task 06-05 — init_logging](05-init-logging.md).
 **Blocks**:
