@@ -1,6 +1,6 @@
 # Task 07-03 — Neon default stderr subscriber on module init
 
-**Status**: ⬜ not started
+**Status**: implemented in commit 422d874.
 **Owner**: _unassigned_
 **Depends on**: [Task 07-01 — Workspace deps](01-workspace-deps.md).
 **Blocks**:
