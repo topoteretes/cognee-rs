@@ -1,6 +1,6 @@
 # Task 07-05 — Per-binding OTLP setup entrypoint
 
-**Status**: ⬜ not started
+**Status**: implemented in commit cccb9ed (note: PyO3 and Neon default_subscribers from tasks 02/03 were rewritten to embed a reload::Layer placeholder for OTLP composition; capi has no reload slot in v1 so tracing→OTLP from C is not wired; capi/include/cognee.h is hand-maintained and was updated by hand; bundles a pre-existing fmt drift in js/cognee-neon/src/task_context.rs — see commit body).
 **Owner**: _unassigned_
 **Depends on**:
 - [Task 07-01 — Workspace deps](01-workspace-deps.md) (binding crates depend on `cognee-observability` with the `telemetry` feature).
