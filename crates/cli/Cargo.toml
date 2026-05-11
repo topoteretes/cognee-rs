@@ -61,6 +61,7 @@ android-default = ["cognee-lib/android-default"]
 clap = { workspace = true, features = ["derive"] }
 dotenv.workspace = true
 cognee-lib = { path = "../lib" }
+cognee-logging = { path = "../logging" }
 chrono.workspace = true
 dirs.workspace = true
 serde.workspace = true

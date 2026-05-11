@@ -113,6 +113,26 @@ pub struct LoggingConfig {
 }
 
 impl LoggingConfig {
+    /// Build a [`LoggingConfig`] with all defaults — equivalent to
+    /// what [`Self::from_env`] returns on an empty environment.
+    ///
+    /// Used by binaries / bindings as the fallback when
+    /// `from_env()` rejects a malformed user-provided env var: rather
+    /// than aborting startup we keep logging on with documented
+    /// defaults.
+    pub fn defaults() -> Self {
+        Self {
+            file_enabled: true,
+            logs_dir_override: None,
+            log_file_name: None,
+            rotation: LogRotation::Daily,
+            format: LogFormat::Plain,
+            backup_count: 5,
+            max_files: 10,
+            level_filter: None,
+        }
+    }
+
     /// Build a [`LoggingConfig`] by reading the env-var surface
     /// documented on the struct.
     ///

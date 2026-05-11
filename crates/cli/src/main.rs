@@ -19,9 +19,6 @@ use commands::{add, add_and_cognify, cognify, config, delete, memify, run_sequen
 use config_store::{Settings, load_settings};
 use error::{CliError, ExitCode};
 use tracing::error;
-use tracing_subscriber::EnvFilter;
-#[cfg(feature = "telemetry")]
-use tracing_subscriber::{Registry, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
 fn run(settings: Settings) -> Result<(), CliError> {
     let cli = Cli::parse();
@@ -60,23 +57,29 @@ fn main() -> StdExitCode {
         }
     };
 
-    // Suppress verbose ONNX Runtime graph-optimizer logs (ort crate) by default.
-    // Users can re-enable them with RUST_LOG="info,ort=info".
-    let env_filter =
-        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info,ort=warn"));
+    // Decision 6 (default filter via init_logging) + decision 8
+    // (env-var-only — no new CLI flags). The env-var surface lives in
+    // `cognee-logging::LoggingConfig`; if parsing fails we keep startup
+    // alive by falling back to the documented defaults instead of
+    // aborting before any log line could surface the problem.
+    let logging_cfg = match cognee_logging::LoggingConfig::from_env() {
+        Ok(cfg) => cfg,
+        Err(err) => {
+            eprintln!("warning: invalid logging env var: {err}; falling back to defaults");
+            cognee_logging::LoggingConfig::defaults()
+        }
+    };
 
     #[cfg(not(feature = "telemetry"))]
-    {
-        let _ = tracing_subscriber::fmt()
-            .with_env_filter(env_filter)
-            .with_target(false)
-            .try_init();
-    }
+    let _log_guards = cognee_logging::init_logging(
+        logging_cfg,
+        std::iter::empty::<cognee_logging::BoxedLayer>(),
+    );
 
     #[cfg(feature = "telemetry")]
-    let _telemetry_guard = {
+    let (_log_guards, _telemetry_guard) = {
         use cognee_lib::telemetry::{TelemetryGuard, init_telemetry};
-        use tracing_subscriber::{Layer, layer::Identity};
+        use tracing_subscriber::{Layer, Registry, layer::Identity};
 
         // Telemetry init failure must not abort the user's CLI command —
         // fall back to a noop layer + noop guard.
@@ -91,19 +94,13 @@ fn main() -> StdExitCode {
             }
         };
 
-        let fmt_layer = fmt::layer().with_target(false);
-
-        let _ = Registry::default()
-            .with(telemetry_layer)
-            .with(env_filter)
-            .with(fmt_layer)
-            .try_init();
-
-        telemetry_guard
+        let guards = cognee_logging::init_logging(logging_cfg, std::iter::once(telemetry_layer));
+        (guards, telemetry_guard)
     };
 
     // Returning ExitCode (rather than calling process::exit) lets locals —
-    // including _telemetry_guard — drop, flushing the final span batch.
+    // including _telemetry_guard and _log_guards — drop, flushing the
+    // final span batch and any buffered log lines.
     match run(settings) {
         Ok(()) => StdExitCode::from(ExitCode::Success as u8),
         Err(error) => {
