@@ -51,15 +51,60 @@ async fn main() -> anyhow::Result<()> {
 
     let spans = Arc::new(SpanBuffer::new(BufferConfig::from_env()));
 
-    // Decision 11: read OTEL settings from env *before* installing the
-    // subscriber so the OTEL bridge layer can be composed in one shot.
-    #[cfg(feature = "telemetry")]
-    let telemetry_guard = {
-        let settings = cognee_observability::EnvSettingsView::from_env();
-        init_tracing(&settings, spans.clone())
+    // Decision 6 (default filter via init_logging) + decision 8
+    // (env-var-only — no new CLI flags). The env-var surface lives in
+    // `cognee-logging::LoggingConfig`; if parsing fails we keep startup
+    // alive by falling back to the documented defaults instead of
+    // aborting before any log line could surface the problem.
+    let logging_cfg = match cognee_logging::LoggingConfig::from_env() {
+        Ok(cfg) => cfg,
+        Err(err) => {
+            eprintln!("warning: invalid logging env var: {err}; falling back to defaults");
+            cognee_logging::LoggingConfig::defaults()
+        }
     };
+
+    // Decision 13: `SpanBufferLayer` powers the `/spans` HTTP endpoint
+    // and stays independent of the file sink. We compose it via
+    // `extra_layers` so init_logging never mirrors its content into the
+    // rotating file appender.
+    let span_buffer_layer: cognee_logging::BoxedLayer =
+        Box::new(SpanBufferLayer::new((*spans).clone()));
+
     #[cfg(not(feature = "telemetry"))]
-    init_tracing(spans.clone());
+    let _log_guards = cognee_logging::init_logging(logging_cfg, std::iter::once(span_buffer_layer));
+
+    #[cfg(feature = "telemetry")]
+    let (_log_guards, telemetry_guard) = {
+        use tracing_subscriber::Registry;
+        use tracing_subscriber::layer::Identity;
+
+        // Decision 11: read OTEL settings from env *before* installing
+        // the subscriber so the OTEL bridge layer can be composed in
+        // one shot. Telemetry init failure must not abort the server —
+        // fall back to a noop layer + noop guard.
+        let settings = cognee_observability::EnvSettingsView::from_env();
+        let (telemetry_layer, telemetry_guard) =
+            match cognee_observability::init_telemetry::<Registry>(&settings) {
+                Ok(pair) => pair,
+                Err(err) => {
+                    eprintln!("warning: failed to initialise OTEL telemetry: {err}");
+                    (
+                        Box::new(Identity::new())
+                            as cognee_observability::BoxedTelemetryLayer<Registry>,
+                        cognee_observability::TelemetryGuard::noop(),
+                    )
+                }
+            };
+
+        // `cognee_observability::BoxedTelemetryLayer<Registry>` and
+        // `cognee_logging::BoxedLayer` are structurally identical
+        // (`Box<dyn Layer<Registry> + Send + Sync + 'static>`), so the
+        // OTEL layer drops directly into the `extra_layers` vector.
+        let extras: Vec<cognee_logging::BoxedLayer> = vec![telemetry_layer, span_buffer_layer];
+        let guards = cognee_logging::init_logging(logging_cfg, extras);
+        (guards, Some(Arc::new(telemetry_guard)))
+    };
 
     let args = Args::parse();
 
@@ -95,70 +140,4 @@ async fn main() -> anyhow::Result<()> {
         .context("server error")?;
 
     Ok(())
-}
-
-/// Build the layered subscriber:
-///
-/// `tracing-opentelemetry::layer` → `EnvFilter` → `fmt::layer (stdout)` →
-/// `SpanBufferLayer`.
-///
-/// The OTEL layer must sit directly above `Registry` because the boxed
-/// `Layer<Registry>` returned by `init_telemetry::<Registry>` does not
-/// satisfy `Layer<Layered<...>>` for nested subscriber types.
-#[cfg(feature = "telemetry")]
-fn init_tracing(
-    settings: &cognee_observability::EnvSettingsView,
-    spans: Arc<SpanBuffer>,
-) -> Option<Arc<cognee_observability::TelemetryGuard>> {
-    use tracing_subscriber::Registry;
-    use tracing_subscriber::layer::SubscriberExt;
-    use tracing_subscriber::util::SubscriberInitExt;
-    use tracing_subscriber::{EnvFilter, fmt};
-
-    let env_filter =
-        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info,ort=warn"));
-    let fmt_layer = fmt::layer().with_target(false);
-    let span_buffer_layer = SpanBufferLayer::new((*spans).clone());
-
-    let (telemetry_layer, telemetry_guard) =
-        match cognee_observability::init_telemetry::<Registry>(settings) {
-            Ok(pair) => pair,
-            Err(err) => {
-                tracing::warn!(?err, "telemetry init failed; continuing without OTEL");
-                (
-                    Box::new(tracing_subscriber::layer::Identity::new())
-                        as cognee_observability::BoxedTelemetryLayer<Registry>,
-                    cognee_observability::TelemetryGuard::noop(),
-                )
-            }
-        };
-
-    // Tests may install a subscriber first; treat install failure as soft.
-    let _ = Registry::default()
-        .with(telemetry_layer)
-        .with(env_filter)
-        .with(fmt_layer)
-        .with(span_buffer_layer)
-        .try_init();
-
-    Some(Arc::new(telemetry_guard))
-}
-
-#[cfg(not(feature = "telemetry"))]
-fn init_tracing(spans: Arc<SpanBuffer>) {
-    use tracing_subscriber::Registry;
-    use tracing_subscriber::layer::SubscriberExt;
-    use tracing_subscriber::util::SubscriberInitExt;
-    use tracing_subscriber::{EnvFilter, fmt};
-
-    let env_filter =
-        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info,ort=warn"));
-    let fmt_layer = fmt::layer().with_target(false);
-    let span_buffer_layer = SpanBufferLayer::new((*spans).clone());
-
-    let _ = Registry::default()
-        .with(env_filter)
-        .with(fmt_layer)
-        .with(span_buffer_layer)
-        .try_init();
 }
