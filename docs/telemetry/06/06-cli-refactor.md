@@ -1,6 +1,6 @@
 # Task 06-06 — Refactor `crates/cli/src/main.rs` to use `init_logging`
 
-**Status**: ⬜ not started
+**Status**: implemented in commit 0c22fc1 (note: also added `LoggingConfig::defaults()` to `crates/logging/src/config.rs` as a minor cross-task fixup so the env-parse-failure fallback in `main()` is copy-free)
 **Owner**: _unassigned_
 **Depends on**: [Task 06-05 — init_logging](05-init-logging.md).
 **Blocks**:
