@@ -472,7 +472,7 @@ high-level summary.
 | 08 | Expose `setup_logging()` in `python/src/lib.rs` (PyO3 module attribute), `js/cognee-neon/src/lib.rs` (`registerFunction("setupLogging", ...)`), and `capi/cognee-capi/src/lib.rs` (`cognee_setup_logging() -> c_int`). All three are argument-less wrappers around `cognee_logging::init_logging(LoggingConfig::from_env(), [])` that stash the returned `LogGuards` in a `OnceLock`/`Mutex` so subsequent calls become no-ops. | [06/08-binding-entrypoints.md](06/08-binding-entrypoints.md) | 05 | ✅ c14ba2a |
 | 09 | Wire `COGNEE_LOGS_DIR=/data/local/tmp/cognee/runtime/logs` through [`scripts/android-run.sh`](../../scripts/android-run.sh) and [`demo/run_cognee_rust_demo_android.sh`](../../demo/run_cognee_rust_demo_android.sh). Ensure `adb shell mkdir -p` runs before the first CLI invocation. Pass the env var alongside the existing `HOME=` / `RUST_LOG=` exports. | [06/09-android-wiring.md](06/09-android-wiring.md) | 05 | ✅ 1172ab6 |
 | 10 | Tests: unit tests inside `crates/logging` (resolution priority, filename generation, rotation trigger, cleanup, format parity, JSON mode, disabled), CLI integration test in `crates/cli/tests/`, HTTP-server integration test in `crates/http-server/tests/`, multi-process `LOG_FILE_NAME` inheritance test, and `e2e-cross-sdk/harness/test_logging_parity.py`. | [06/10-tests.md](06/10-tests.md) | 02–08 | ✅ 1f61f0d |
-| 11 | Docs + CI: update [`docs/telemetry/gap-analysis.md`](./gap-analysis.md) (file logging row → "Implemented (gap 06)"), add the env-var table + warnings to `README.md`, CLI docs under [`docs/cli/`](../cli/), and `docs/http-server/`. Wire `test_logging_parity.py` into the same workflow that runs `test_provenance_parity.py`. Write the "Closure summary" section at the bottom of this doc. | [06/11-docs-and-ci.md](06/11-docs-and-ci.md) | 01–10 | ⬜ |
+| 11 | Docs + CI: update [`docs/telemetry/gap-analysis.md`](./gap-analysis.md) (file logging row → "Implemented (gap 06)"), add the env-var table + warnings to `README.md`, CLI docs under [`docs/cli/`](../cli/), and `docs/http-server/`. Wire `test_logging_parity.py` into the same workflow that runs `test_provenance_parity.py`. Write the "Closure summary" section at the bottom of this doc. | [06/11-docs-and-ci.md](06/11-docs-and-ci.md) | 01–10 | ✅ 382d0cd |
 
 ### Suggested execution order
 
@@ -573,7 +573,7 @@ that preceded the implementation.
 | 06-10 | `fdd2110` | telemetry/logging-06-10: fix CARGO_BIN_EXE binary-name reference in sub-doc |
 | 06-10 | `1f61f0d` | telemetry/logging-06-10: add integration + cross-SDK parity tests |
 | 06-10 | `2a7c6c7` | telemetry/logging-06-10: mark action item 10 complete |
-| 06-11 | `<SHA>` | telemetry/logging-06-11: close gap 06 with logging docs and parity CI lane |
+| 06-11 | `382d0cd` | telemetry/logging-06-11: close gap 06 with logging docs and parity CI lane |
 | 06-11 | _(this commit)_ | telemetry/logging-06-11: mark action item 11 complete + close gap 06 |
 
 ### What the gap delivered

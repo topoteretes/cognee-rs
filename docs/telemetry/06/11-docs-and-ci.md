@@ -1,7 +1,7 @@
 # Task 06-11 — Docs + CI + gap closure
 
-**Status**: ⬜ not started
-**Owner**: _unassigned_
+**Status**: ✅ implemented in commit 382d0cd
+**Owner**: sub-agent E
 **Depends on**: 06-01 through 06-10.
 **Blocks**: —
 
