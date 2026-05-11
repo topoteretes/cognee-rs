@@ -16,3 +16,16 @@ dirs.workspace = true
 tempfile.workspace = true
 serial_test.workspace = true
 regex.workspace = true
+
+# Helper binary exercised by `tests/multi_process_inheritance.rs`.
+# The parent test spawns this child via `std::process::Command` and
+# the child inherits `LOG_FILE_NAME` so all processes append to one
+# file (decision 5 of docs/telemetry/06-file-logging-rotation.md).
+[[bin]]
+name = "logging_child_smoke"
+path = "tests/bin/child_smoke.rs"
+test = false
+doctest = false
+bench = false
+required-features = []
+

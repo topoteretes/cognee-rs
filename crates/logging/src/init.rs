@@ -435,6 +435,63 @@ mod tests {
 
     #[test]
     #[serial]
+    fn init_logging_json_mode_emits_parseable_json_lines() {
+        // Task 06-10 §4.5 — optional smoke for the JSON format. Drive
+        // `init_logging` with `COGNEE_LOG_FORMAT=json` and confirm that
+        // any lines the file appender wrote can be parsed as JSON
+        // objects carrying the `tracing` shape (`level`, `target`,
+        // `fields.message`).
+        let dir = tempdir().expect("tempdir creates");
+        let guard = EnvGuard::new();
+        guard.set(
+            "COGNEE_LOGS_DIR",
+            dir.path().to_str().expect("utf-8 tmp path"),
+        );
+        guard.set("COGNEE_LOG_FORMAT", "json");
+        guard.set("COGNEE_LOG_ROTATION", "never");
+        let cfg = LoggingConfig::from_env().expect("config parses");
+        assert_eq!(cfg.format, crate::LogFormat::Json);
+
+        let guards = init_logging(cfg, std::iter::empty::<BoxedLayer>());
+        tracing::info!("json_mode_smoke_event");
+        drop(guards); // flush non-blocking writer
+
+        // Scan the tempdir; any line in a `*.log` file should parse
+        // as a JSON object with the canonical tracing keys. We accept
+        // an empty result set when another test already installed a
+        // subscriber (init_logging hits the soft-fail branch).
+        let mut parsed_any = false;
+        for entry in std::fs::read_dir(dir.path())
+            .expect("read tmpdir")
+            .flatten()
+        {
+            let p = entry.path();
+            if p.extension().and_then(|s| s.to_str()) != Some("log") {
+                continue;
+            }
+            let Ok(body) = std::fs::read_to_string(&p) else {
+                continue;
+            };
+            for line in body.lines().filter(|l| !l.is_empty()) {
+                let v: serde_json::Value = serde_json::from_str(line).expect("json line parses");
+                assert!(v.is_object(), "expected JSON object, got: {line}");
+                assert!(v.get("level").is_some(), "missing `level` in {line}");
+                assert!(v.get("target").is_some(), "missing `target` in {line}");
+                assert!(
+                    v.get("fields").and_then(|f| f.get("message")).is_some(),
+                    "missing `fields.message` in {line}"
+                );
+                parsed_any = true;
+            }
+        }
+        // If another test installed a subscriber first, no lines land
+        // in our file — that's the documented soft-fail branch. We do
+        // not assert `parsed_any` to avoid ordering flakes.
+        let _ = parsed_any;
+    }
+
+    #[test]
+    #[serial]
     fn init_logging_soft_fails_when_subscriber_already_installed() {
         // Install a throwaway subscriber first so init_logging hits the
         // soft-fail branch deterministically.
