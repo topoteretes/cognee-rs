@@ -376,59 +376,63 @@ covers the case where a user *did* set the opt-in but is also using the
 Python SDK. Documented as: "if you are using `cognee` (Python), do not set
 `COGNEE_RUST_TELEMETRY`."
 
+## Design decisions (locked)
+
+Approved by the project owner on 2026-05-11. **Do not re-litigate.**
+Sub-agents may surface new evidence that contradicts a decision; if so,
+escalate to the user before changing course.
+
+| # | Decision | Rationale | Affected tasks |
+|---|---|---|---|
+| 1 | **Hybrid auto-init: minimal default subscriber + explicit heavy init.** PyO3 and Neon install a *minimal* event-routing subscriber on module load (Python → `pyo3-log` bridge into Python `logging`, Neon → `tracing-subscriber::fmt` to stderr) so `tracing::*` events are never silently dropped. File logging, OTLP, and analytics remain behind the existing/new explicit `setup_logging()` / `setup_telemetry()` / `setup_telemetry_analytics()` calls. C API stays fully explicit. | Gap-06 decision 9 (explicit, argument-less `setup_logging`) is preserved for side-effectful machinery, while the parent doc's "events should never silently disappear" requirement is satisfied by a cheap default subscriber. Hosts that don't want auto-init opt out via `COGNEE_BINDING_SUPPRESS_LOGS=1`. | [07-02](07/02-pyo3-bridge.md), [07-03](07/03-neon-default-subscriber.md) |
+| 2 | **OTLP gets its own entrypoint per binding.** Add `setup_telemetry()` (Python `_native` module attribute), `setupTelemetry()` (Neon export), and `cognee_init_otlp()` (C, returns `c_int`). Each composes `cognee_observability::init_telemetry::<Registry>(&EnvSettingsView::from_env())` and stashes the returned `TelemetryGuard` in a binding-local `OnceLock<Mutex<Option<…>>>`. `setup_logging()` is **not** extended — keeping logging and OTEL on separate seams mirrors the CLI/server split (`init_logging` vs `init_telemetry`). | One helper per concern, parity with binaries, idempotent like `setup_logging`. Lets hosts call only what they need. | [07-05](07/05-binding-otlp-setup.md) |
+| 3 | **All three binding crates enable the `telemetry` cargo feature by default.** `python/Cargo.toml`, `js/cognee-neon/Cargo.toml`, and `capi/cognee-capi/Cargo.toml` each declare `cognee-observability = { …, features = ["telemetry"] }` (and pull the same feature on `cognee-lib`/`cognee-telemetry` where they consume them). Disabling requires the embedder to rebuild with `--no-default-features` against an exposed binding feature flag. | Parity with `cognee-cli` (which enables `telemetry` in its default feature set) and matches the most common embedded use case. Build-size cost is accepted; size-sensitive consumers turn the feature off explicitly. | [07-01](07/01-workspace-deps.md), [07-05](07/05-binding-otlp-setup.md) |
+| 4 | **Bindings ship `setup_telemetry_analytics()` plumbing now even though no binding call site emits `send_telemetry` yet.** Bindings expose pipeline-only surface today, so `cognee_telemetry::send_telemetry` is unreachable from the PyO3/Neon API. Sub-doc 06 still adds the install/suppression policy and the singleton guard so a future binding expansion that wraps `cognee_lib::api::*` cannot accidentally double-emit before the policy is in place. | Locks the policy ahead of the consumer. Cheap to add: the bindings expose a no-arg function that just records whether analytics are "armed" for the process. Until a real `send_telemetry` call site lands inside a binding, this stays idle. | [07-06](07/06-host-sdk-sentinel.md) |
+| 5 | **`pyo3-log` is the canonical Python event sink.** The PyO3 binding installs a `tracing_log::LogTracer` → `pyo3_log::Logger` bridge inside `#[pymodule]` so Rust events arrive in Python's `logging` module under the `cognee.*` logger tree. Hosts control level/format via standard `logging.basicConfig`/`logging.dictConfig`. Calling `setup_logging()` afterwards is still legal and adds the rotating file appender on top — both subscribers coexist via `tracing_subscriber::Registry`. | Python users coming from the upstream `cognee` SDK expect `logging.getLogger("cognee").setLevel(DEBUG)` to "just work." `pyo3-log` is the standard bridge crate; `tracing-log` provides the tracing → log adapter. | [07-02](07/02-pyo3-bridge.md), [07-07](07/07-tests.md) |
+| 6 | **`cg_init` installs a one-shot panic hook.** When `cg_init` is called, register `std::panic::set_hook` (guarded by a `OnceLock`) that writes the panic location + message + backtrace marker to stderr. Subsequent calls do not re-install. Coexists with `cognee_setup_logging` — both can run; the panic hook fires even when no `tracing` subscriber is installed. | C embedders today see segfaults or silent aborts when Rust panics cross the FFI. A panic hook costs nothing and turns "the process died" into a diagnosable log line. | [07-04](07/04-capi-panic-hook.md) |
+| 7 | **JS callback bridge (parent-doc Option B) is deferred.** No `setLogger(cb)` JS surface is shipped in gap 07. The stderr fmt subscriber from decision 1 is the only Neon default; hosts that want structured routing into `pino`/Winston catch stderr or wait for a follow-up gap. | Channel-backed callback layers are significantly heavier to design and test correctly, and no consumer has asked for it yet. Defer with documented follow-up. | (none — out of scope) |
+| 8 | **Binding-specific `OTEL_SERVICE_NAME` defaults.** When a binding installs OTLP (decision 2) and `OTEL_SERVICE_NAME` is empty, it sets the resource attribute `service.name` to `cognee.python-binding`, `cognee.node-binding`, or `cognee.capi-binding` respectively. The user's explicit env var always wins; this only patches the *default*. | Dashboards can distinguish embedded-from-Python use from cognee-cli/cognee-http-server traces without users needing to set the env var per binding. | [07-05](07/05-binding-otlp-setup.md) |
+| 9 | **No Android-specific task.** The Android runner uses the `cognee-cli` binary, not the bindings; gap 06 already wired `COGNEE_LOGS_DIR` through `scripts/android-run.sh`. Gap 07 deliberately does nothing on Android. | Scope discipline — Android is consumer of CLI, not of bindings. | (none — explicitly out) |
+| 10 | **`COGNEE_HOST_SDK` is a non-empty sentinel suppresses binding-side `send_telemetry`.** Inside `cognee-telemetry`, extend `env::is_disabled()` to also return `true` when `COGNEE_HOST_SDK` is set to any non-empty value AND the call originates from a binding-armed analytics install (tracked via a `BINDING_ARMED: OnceLock<bool>` set by `setup_telemetry_analytics`). Calls from the host (e.g. via `cognee_lib::api::forget` invoked directly in a Rust process) ignore the sentinel — they remain controlled by `TELEMETRY_DISABLED`/`ENV`. | The sentinel must suppress only the *binding-originating* path. The same `cognee-telemetry` crate is reused by both CLI and bindings, so a global suppression would silence the CLI too whenever a user happens to have `COGNEE_HOST_SDK` in their env. | [07-06](07/06-host-sdk-sentinel.md) |
+| 11 | **PyO3 default analytics policy is OFF; Neon default is ON; C is explicit-only.** When `setup_telemetry_analytics` is called from each binding, Python only "arms" analytics if `COGNEE_RUST_TELEMETRY=1` is set (and `COGNEE_HOST_SDK` is unset). Neon arms unless `TELEMETRY_DISABLED=1`/`ENV in {test,dev}`/`COGNEE_HOST_SDK` is set. C arms whenever the embedder explicitly calls `cognee_init_telemetry()` (subject to the same `COGNEE_HOST_SDK`/`TELEMETRY_DISABLED` checks). | Mirrors the parent-doc "Telemetry defaults per binding" table verbatim — Python defers identity ownership to the upstream `cognee` SDK; Neon is the canonical sender in the JS ecosystem; C has no convention, so it stays explicit. | [07-06](07/06-host-sdk-sentinel.md) |
+| 12 | **Idempotent singleton pattern for all three new entrypoints.** `setup_telemetry()` and `setup_telemetry_analytics()` mirror `setup_logging()`'s `OnceLock<Mutex<Option<…>>>` shape from gap 06 task 08. First call installs and stashes the guard; subsequent calls are no-ops returning success. No `shutdown_*()` wrappers in v1. | Consistent ergonomic across the three new functions and the existing `setup_logging`. Hosts can call all three from any thread without coordinating. Matches gap-06 decision 9. | [07-05](07/05-binding-otlp-setup.md), [07-06](07/06-host-sdk-sentinel.md) |
+| 13 | **Cross-SDK no-double-emit test is marked pending.** Sub-doc 07 includes the test scaffold but `xfails`/skips it until a future gap surfaces `cognee_lib::api::*` through PyO3 so the cross-SDK harness has something to invoke from Python that triggers `send_telemetry`. The harness wiring lands so the test runs the moment a binding side ever emits. | Decision 4 keeps the policy plumbing idle; until a real emission path exists, this test cannot fail in a meaningful way. Land the harness and skip-marker so we never forget the cross-check. | [07-07](07/07-tests.md) |
+
+---
+
 ## Action items
 
-### Python (PyO3)
+Each item below has a dedicated implementation sub-document under
+[`07/`](07/) with rationale, prerequisites, step-by-step source-level
+changes, verification commands, files modified, and risks. **The
+sub-docs are authoritative**: where they refine details based on the
+locked design decisions, follow the sub-doc rather than this
+high-level summary.
 
-1. Add `pyo3-log = "0.12"` and `tracing-log = "0.2"` to
-   `python/Cargo.toml`.
-2. Add a `init_telemetry(py)` helper in `python/src/lib.rs`, called once
-   from the `#[pymodule]` body using `Once`.
-3. Wire env-gated OTLP layer (Gap 1) and file layer (Gap 6) into the same
-   helper.
-4. Expose a `configure_logging(level: str = "INFO", file: str | None = None)`
-   Python helper (in `cognee_pipeline/__init__.py`) that maps to a Rust fn so
-   embedders can override after import.
-5. Default product analytics to **off** in Python; opt-in via
-   `COGNEE_RUST_TELEMETRY=1`.
-6. Suppress analytics when `COGNEE_HOST_SDK=python` is present.
-7. Document interaction with `cognee.shared.logging_utils.setup_logging` in
-   `python/README.md` (host's `logging` config governs).
+| #  | Action item | Sub-doc | Depends on | Status |
+|----|---|---|---|---|
+| 01 | Workspace + binding manifests: add `pyo3-log = "0.4"` and `tracing-log = "0.2"` to `python/Cargo.toml`. Enable the `telemetry` feature on `cognee-observability` (and on `cognee-lib` where the binding consumes it) for `python/`, `js/cognee-neon/`, `capi/cognee-capi/`. No code consumers yet — pure manifest work. | [07/01-workspace-deps.md](07/01-workspace-deps.md) | — | ⬜ |
+| 02 | PyO3 module init: install `tracing_log::LogTracer` + a `Registry` with `pyo3_log::Logger` so all Rust `tracing::*` events route through Python's `logging` module. Gated by `COGNEE_BINDING_SUPPRESS_LOGS=1` (skip install). Idempotent via `Once`. Wired from `#[pymodule] fn _native`. | [07/02-pyo3-bridge.md](07/02-pyo3-bridge.md) | 01 | ⬜ |
+| 03 | Neon module init: install a stderr `tracing_subscriber::fmt` layer in `#[neon::main]`. Honours `COGNEE_BINDING_SUPPRESS_LOGS=1`. Idempotent. Composes with later `setupLogging` via `try_init` semantics. | [07/03-neon-default-subscriber.md](07/03-neon-default-subscriber.md) | 01 | ⬜ |
+| 04 | C API panic hook: install `std::panic::set_hook` from `cg_init`, guarded by `OnceLock`, that writes panic site + message to stderr. Coexists with `cognee_setup_logging`. | [07/04-capi-panic-hook.md](07/04-capi-panic-hook.md) | — | ⬜ |
+| 05 | Per-binding OTLP entrypoint: add `setup_telemetry()` (PyO3, Neon) + `cognee_init_otlp()` (C) that build `EnvSettingsView`, apply binding-specific `OTEL_SERVICE_NAME` default (decision 8), call `cognee_observability::init_telemetry`, install the returned `BoxedTelemetryLayer` as a new `Layer` on top of the binding's existing `Registry`, and stash `TelemetryGuard` in a singleton. | [07/05-binding-otlp-setup.md](07/05-binding-otlp-setup.md) | 01, 02, 03 | ⬜ |
+| 06 | Per-binding analytics plumbing + `COGNEE_HOST_SDK` sentinel: add `setup_telemetry_analytics()` (PyO3, Neon) + `cognee_init_telemetry()` (C). Implement the per-binding default policy (decision 11). Extend `cognee_telemetry::env::is_disabled` with a `BINDING_ARMED` guard so the `COGNEE_HOST_SDK` sentinel only suppresses binding-armed emissions (decision 10). | [07/06-host-sdk-sentinel.md](07/06-host-sdk-sentinel.md) | 01 | ⬜ |
+| 07 | Tests: `python/tests/test_pyo3_log_bridge.py` (events arrive in Python `logging`), `python/tests/test_setup_telemetry_idempotent.py`, Neon `js/__tests__/default_subscriber.test.ts` + `setup_telemetry.test.ts`, C smoke test (panic hook + `cognee_init_otlp` via `capi/scripts/check.sh`), cross-SDK `e2e-cross-sdk/harness/test_telemetry_no_double_emit.py` (skip until binding emits). | [07/07-tests.md](07/07-tests.md) | 02–06 | ⬜ |
+| 08 | Docs + CI: update [`gap-analysis.md`](./gap-analysis.md) §6 to point at gap 07 closure. Add README sections to `python/`, `js/`, `capi/` covering `COGNEE_BINDING_SUPPRESS_LOGS`, `COGNEE_RUST_TELEMETRY`, `COGNEE_HOST_SDK`, the `setup_*` matrix. Add a CI lane that runs the new Python/JS smoke tests on push. Write the "Closure summary" section at the bottom of this doc. | [07/08-docs-and-ci.md](07/08-docs-and-ci.md) | 01–07 | ⬜ |
 
-### Neon (JS)
+### Suggested execution order
 
-1. Add `tracing-subscriber` (with `env-filter`, `fmt`) to
-   `js/cognee-neon/Cargo.toml`.
-2. Install a stderr fmt subscriber in `#[neon::main]` (Option A).
-3. Honour `COGNEE_NEON_SUPPRESS_LOGS` env var to disable.
-4. Add an `init_telemetry()` JS export (mirrors `init()`) that wires the
-   OTLP + file + analytics layers under the same env-gating.
-5. Default product analytics to **on** with the standard
-   `TELEMETRY_DISABLED` / `ENV` opt-out.
-6. (Stretch) Option B JS callback bridge.
+A clean PR sequence based on the dependency graph:
 
-### C API
-
-1. New module `capi/cognee-capi/src/observability.rs` exporting
-   `cg_init_logging`, `cg_init_otlp`, `cg_init_telemetry`.
-2. Add `CG_ERROR_ALREADY_INITIALIZED` to `error::CgErrorCode`.
-3. Install panic hook in `cg_init` so panics across FFI go to stderr even
-   without `cg_init_logging`.
-4. Update generated `cognee.h` (cbindgen) — verify `cbindgen.toml` exports
-   the new symbols.
-5. Document calling order in `capi/README.md`: `cg_init` →
-   (optional) `cg_init_logging` → (optional) `cg_init_otlp` →
-   (optional) `cg_init_telemetry`.
-
-### Cross-cutting
-
-1. Honour `COGNEE_HOST_SDK` env var across all three bindings to suppress
-   double-emission.
-2. Add an `e2e-cross-sdk` test that imports `cognee_pipeline` from the
-   Python `cognee` SDK environment and asserts only **one** `send_telemetry`
-   POST is observed (mock the proxy URL).
-3. Bump `gap-analysis.md` §6 status when each binding lands (left for a
-   separate PR — do not edit it here).
+1. **PR 1** (foundation): tasks 01 + 04 — manifests + panic hook. Both
+   are pure additions with no cross-dependencies.
+2. **PR 2** (default subscribers): tasks 02 + 03 — PyO3 `pyo3-log`
+   bridge and Neon stderr fmt subscriber. Standalone modules behind
+   `COGNEE_BINDING_SUPPRESS_LOGS`.
+3. **PR 3** (OTLP per binding): task 05.
+4. **PR 4** (analytics plumbing + sentinel): task 06.
+5. **PR 5** (validation): task 07.
+6. **PR 6** (closeout): task 08 — docs + CI + gap closure.
 
 ## Open questions
 
