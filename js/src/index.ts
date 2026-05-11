@@ -1,3 +1,14 @@
+/**
+ * Environment variables consumed by the Rust core on import:
+ *
+ *   COGNEE_BINDING_SUPPRESS_LOGS=1  — suppress the default
+ *     tracing-subscriber stderr install (gap 07 decision 1). Set
+ *     before `require`ing this module if your host owns its logger.
+ *
+ * After import, call `setupLogging()` to add file logging,
+ * `setupTelemetry()` to add OTLP export, and
+ * `setupTelemetryAnalytics()` to enable product-analytics emission.
+ */
 import { native } from "./native";
 
 // Runtime

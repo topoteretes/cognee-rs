@@ -11,6 +11,7 @@
 //! - **Watcher**: Pipeline event observer via JS callbacks
 
 mod cancellation;
+mod default_subscriber;
 mod error;
 mod logging;
 mod pipeline;
@@ -28,6 +29,13 @@ use neon::prelude::*;
 
 #[neon::main]
 fn main(mut cx: ModuleContext) -> NeonResult<()> {
+    // gap 07 decision 1: install the default stderr subscriber before
+    // any function is registered so events emitted during export
+    // setup are captured. Honours `COGNEE_BINDING_SUPPRESS_LOGS=1`
+    // and is idempotent / composes with `setupLogging()` (gap 06)
+    // via `try_init` semantics.
+    default_subscriber::install();
+
     // Runtime
     cx.export_function("init", runtime::init)?;
     cx.export_function("initWithThreads", runtime::init_with_threads)?;
