@@ -48,6 +48,7 @@ pub async fn create_user(
             is_superuser: false,
             is_verified: true, // cognee default
             tenant_id: None,
+            parent_user_id: None,
         })
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e)))?;

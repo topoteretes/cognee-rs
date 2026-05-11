@@ -23,7 +23,7 @@ pub mod superuser;
 pub mod users_service;
 pub mod verify;
 
-pub use context::AuthContext;
+pub use context::{AuthContext, ExtraAuthValidator};
 pub use extractor::{AuthMethod, AuthenticatedUser, OptionalAuthenticatedUser, RequireSuperuser};
 pub use mailer::{
     ConsoleMailer, LoggingMailer, MailEvent, MailEventKind, Mailer, MailerError, SmtpMailer,

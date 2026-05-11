@@ -5,12 +5,32 @@
 
 use std::{sync::Arc, time::Duration};
 
+use async_trait::async_trait;
+use axum::http::HeaderMap;
 use secrecy::SecretString;
 
 use crate::config::{Environment, HttpServerConfig};
 use crate::error::ServerError;
 
-use cognee_database::{ApiKeyRepository, UserAuthRepository};
+use cognee_database::{ApiKeyRepository, AuthUser, UserAuthRepository};
+
+// ─── ExtraAuthValidator ─────────────────────────────────────────────────────
+
+/// Extension point for external authentication providers (e.g. Auth0, OIDC).
+///
+/// When set on [`AuthContext::extra_validator`], the
+/// [`AuthenticatedUser`](super::extractor::AuthenticatedUser) extractor calls
+/// this before its built-in resolution chain (API key → JWT → cookie →
+/// default user). If it returns `Some(AuthUser)`, that user is accepted
+/// immediately; if `None`, the extractor falls through to the next method.
+#[async_trait]
+pub trait ExtraAuthValidator: Send + Sync + 'static {
+    async fn validate(
+        &self,
+        headers: &HeaderMap,
+        user_repo: &dyn UserAuthRepository,
+    ) -> Option<AuthUser>;
+}
 
 // ─── AuthContext ──────────────────────────────────────────────────────────────
 
@@ -38,6 +58,10 @@ pub struct AuthContext {
 
     pub user_repo: Arc<dyn UserAuthRepository>,
     pub api_key_repo: Arc<dyn ApiKeyRepository>,
+
+    /// Optional external auth validator (e.g. Auth0).  Checked first by the
+    /// `AuthenticatedUser` extractor before the built-in chain.
+    pub extra_validator: Option<Arc<dyn ExtraAuthValidator>>,
 }
 
 impl AuthContext {
@@ -117,6 +141,7 @@ impl AuthContext {
 
             user_repo,
             api_key_repo,
+            extra_validator: None,
         })
     }
 }

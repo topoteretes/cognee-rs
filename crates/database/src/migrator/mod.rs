@@ -11,6 +11,7 @@ mod m20260429_000001_sync_operations;
 mod m20260501_000001_create_notebooks;
 mod m20260501_000002_pipeline_run_payload_fields;
 mod m20260501_000003_session_records;
+mod m20260512_000001_add_parent_user_id;
 
 pub struct Migrator;
 
@@ -29,6 +30,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260501_000001_create_notebooks::Migration),
             Box::new(m20260501_000002_pipeline_run_payload_fields::Migration),
             Box::new(m20260501_000003_session_records::Migration),
+            Box::new(m20260512_000001_add_parent_user_id::Migration),
         ]
     }
 }

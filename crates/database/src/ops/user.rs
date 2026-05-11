@@ -119,6 +119,7 @@ impl UserDb for DatabaseConnection {
             is_superuser: Set(u.is_superuser),
             is_verified: Set(true),
             tenant_id: Set(uuid_hex::to_hex_opt(u.tenant_id)),
+            parent_user_id: Set(None),
             created_at: Set(u.created_at),
             updated_at: Set(u.updated_at),
         };

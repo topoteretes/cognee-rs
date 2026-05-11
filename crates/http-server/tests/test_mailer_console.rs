@@ -16,6 +16,8 @@ fn fake_user(email: &str) -> AuthUser {
         is_superuser: false,
         is_verified: true,
         tenant_id: None,
+        parent_user_id: None,
+        created_at: chrono::Utc::now(),
     }
 }
 
