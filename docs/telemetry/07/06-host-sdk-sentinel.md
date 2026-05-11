@@ -1,6 +1,6 @@
 # Task 07-06 — Per-binding analytics plumbing + `COGNEE_HOST_SDK` sentinel
 
-**Status**: ⬜ not started
+**Status**: implemented in commit fb686a2 (note: capi/include/cognee.h is hand-maintained — cognee_init_telemetry declaration added by hand; PyO3 accepts COGNEE_RUST_TELEMETRY ∈ {"1","true"} case-insensitive).
 **Owner**: _unassigned_
 **Depends on**: [Task 07-01 — Workspace deps](01-workspace-deps.md).
 **Blocks**:
