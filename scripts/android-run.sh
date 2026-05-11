@@ -143,6 +143,7 @@ echo "  Binary:   ${BINARY}"
 echo "  Args:     ${ARGS_STR:-<none>}"
 echo "  RUST_LOG: ${RUST_LOG}"
 echo "  Device:   ${DEVICE_DIR}"
+echo "  Logs:     ${DEVICE_DIR}/runtime/logs"
 if [[ ${#FORWARD_PORTS[@]} -gt 0 ]]; then
     echo "  Ports:    ${FORWARD_PORTS[*]}"
 fi
@@ -156,9 +157,11 @@ done
 
 "${ADB}" shell \
     "mkdir -p ${DEVICE_DIR}/tmp && \
+     mkdir -p ${DEVICE_DIR}/runtime/logs && \
      cd ${DEVICE_DIR} && \
      HOME=${DEVICE_DIR} \
      TMPDIR=${DEVICE_DIR}/tmp \
+     COGNEE_LOGS_DIR=${DEVICE_DIR}/runtime/logs \
      LLVM_PROFILE_FILE=${DEVICE_DIR}/default.profraw \
      PATH=${DEVICE_DIR}/bin:\$PATH \
      LD_LIBRARY_PATH=${DEVICE_DIR}/lib \

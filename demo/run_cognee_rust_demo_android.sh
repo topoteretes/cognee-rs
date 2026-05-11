@@ -534,6 +534,7 @@ main() {
   ok "✅ Android demo completed successfully"
   ok "   Dataset:          ${DATASET_NAME}"
   ok "   Device dir:       ${DEVICE_DIR}"
+  ok "   Logs:             adb pull ${DEVICE_DIR}/runtime/logs ./android-demo-logs"
   ok "   LLM backend:      ${LLM_BACKEND}"
   if [[ "${LLM_BACKEND}" == "ollama" ]]; then
     ok "   Ollama (host):    ${OLLAMA_OPENAI_BASE_URL}"
