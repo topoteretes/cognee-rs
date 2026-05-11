@@ -1,6 +1,6 @@
 # Task 06-03 — `resolve_logs_dir`, `propagate_log_file_name`, `cleanup_old_logs`
 
-**Status**: ⬜ not started
+**Status**: implemented in commit 038e6a8 (note: `dirs.workspace = true` added to `crates/logging/Cargo.toml`; the `filetime`-based mtime ordering in test 6 was replaced with `std::thread::sleep`-based ordering since `filetime` is not a workspace dep)
 **Owner**: _unassigned_
 **Depends on**: [Task 06-02 — Logging config](02-logging-config.md).
 **Blocks**:
