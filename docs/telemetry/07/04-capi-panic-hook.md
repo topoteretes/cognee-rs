@@ -1,6 +1,6 @@
 # Task 07-04 — C API panic hook on `cg_init`
 
-**Status**: ⬜ not started
+**Status**: implemented in commit b19be00.
 **Owner**: _unassigned_
 **Depends on**: —
 **Blocks**:
