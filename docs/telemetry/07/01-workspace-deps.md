@@ -1,6 +1,6 @@
 # Task 07-01 — Workspace + binding manifests for auto-init
 
-**Status**: ⬜ not started
+**Status**: implemented in commit d8641c0 (note: pyo3-log pinned to "0.12" rather than the drafted "0.4" because that major series tracks pyo3 0.23 — see commit body).
 **Owner**: _unassigned_
 **Depends on**: —
 **Blocks**:

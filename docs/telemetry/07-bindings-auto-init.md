@@ -411,7 +411,7 @@ high-level summary.
 
 | #  | Action item | Sub-doc | Depends on | Status |
 |----|---|---|---|---|
-| 01 | Workspace + binding manifests: add `pyo3-log = "0.4"` and `tracing-log = "0.2"` to `python/Cargo.toml`. Enable the `telemetry` feature on `cognee-observability` (and on `cognee-lib` where the binding consumes it) for `python/`, `js/cognee-neon/`, `capi/cognee-capi/`. No code consumers yet — pure manifest work. | [07/01-workspace-deps.md](07/01-workspace-deps.md) | — | ⬜ |
+| 01 | Workspace + binding manifests: add `pyo3-log = "0.4"` and `tracing-log = "0.2"` to `python/Cargo.toml`. Enable the `telemetry` feature on `cognee-observability` (and on `cognee-lib` where the binding consumes it) for `python/`, `js/cognee-neon/`, `capi/cognee-capi/`. No code consumers yet — pure manifest work. | [07/01-workspace-deps.md](07/01-workspace-deps.md) | — | ✅ d8641c0 |
 | 02 | PyO3 module init: install `tracing_log::LogTracer` + a `Registry` with `pyo3_log::Logger` so all Rust `tracing::*` events route through Python's `logging` module. Gated by `COGNEE_BINDING_SUPPRESS_LOGS=1` (skip install). Idempotent via `Once`. Wired from `#[pymodule] fn _native`. | [07/02-pyo3-bridge.md](07/02-pyo3-bridge.md) | 01 | ⬜ |
 | 03 | Neon module init: install a stderr `tracing_subscriber::fmt` layer in `#[neon::main]`. Honours `COGNEE_BINDING_SUPPRESS_LOGS=1`. Idempotent. Composes with later `setupLogging` via `try_init` semantics. | [07/03-neon-default-subscriber.md](07/03-neon-default-subscriber.md) | 01 | ⬜ |
 | 04 | C API panic hook: install `std::panic::set_hook` from `cg_init`, guarded by `OnceLock`, that writes panic site + message to stderr. Coexists with `cognee_setup_logging`. | [07/04-capi-panic-hook.md](07/04-capi-panic-hook.md) | — | ⬜ |
