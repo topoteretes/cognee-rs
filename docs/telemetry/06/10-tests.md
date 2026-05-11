@@ -1,6 +1,6 @@
 # Task 06-10 — Tests for file logging + rotation + cross-SDK parity
 
-**Status**: ⬜ not started
+**Status**: implemented in commit 1f61f0d (notes: (1) HTTP-server integration test uses the layer-composition alternative that this doc explicitly permits — exercising `cognee_logging::init_logging` directly with a `SpanBufferLayer` in `extra_layers` and a tower handler — rather than booting the full server, which would double-install the global subscriber; (2) added `test = false, doctest = false, bench = false` to the `[[bin]] logging_child_smoke` declaration in `crates/logging/Cargo.toml` to avoid cargo treating it as a test target; (3) the cross-SDK `test_logging_parity.py` uses the existing `PYTHON_RUNNER`/`RUST_CLI` constants from `harness/helpers.py` instead of the `python_env`/`rust_env` fixtures referenced in the original sub-doc draft, matching the convention of the other parity tests in the harness)
 **Owner**: _unassigned_
 **Depends on**: 06-02 through 06-08 (every implementation task).
 **Blocks**:
