@@ -72,7 +72,7 @@ use tempfile::tempdir;
 #[test]
 fn cli_creates_log_file_in_cognee_logs_dir() {
     let dir = tempdir().expect("tempdir");
-    let bin = env!("CARGO_BIN_EXE_cognee_cli");
+    let bin = env!("CARGO_BIN_EXE_cognee-cli");
 
     let output = Command::new(bin)
         .env("COGNEE_LOGS_DIR", dir.path())
@@ -103,10 +103,10 @@ fn cli_creates_log_file_in_cognee_logs_dir() {
 }
 ```
 
-The exact binary name comes from `CARGO_BIN_EXE_<binary>`. Verify
-in [`crates/cli/Cargo.toml`](../../../crates/cli/Cargo.toml) whether
-the binary is named `cognee_cli` or `cognee` and adjust the env var
-name accordingly.
+The exact binary name comes from `CARGO_BIN_EXE_<binary>`. The
+binary name in [`crates/cli/Cargo.toml`](../../../crates/cli/Cargo.toml)
+is `cognee-cli` (`[[bin]] name = "cognee-cli"`), so the env var is
+`CARGO_BIN_EXE_cognee-cli` (with the hyphen, not an underscore).
 
 ### 4.2 HTTP server integration test
 
