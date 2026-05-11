@@ -23,6 +23,7 @@ from cognee_pipeline._native import (
     TaskFailedError,
     setup_logging,
     setup_telemetry,
+    setup_telemetry_analytics,
 )
 
 __all__ = [
@@ -38,4 +39,5 @@ __all__ = [
     "InvalidConfigError",
     "setup_logging",
     "setup_telemetry",
+    "setup_telemetry_analytics",
 ]

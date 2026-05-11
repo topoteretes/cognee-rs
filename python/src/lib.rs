@@ -8,6 +8,7 @@ mod pipeline;
 mod progress;
 mod task;
 mod task_context;
+mod telemetry_analytics;
 mod telemetry_otlp;
 mod value;
 mod watcher;
@@ -34,6 +35,15 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // idempotent. Composes the OTEL layer on top of the default
     // tracing → Python `logging` bridge installed above.
     m.add_function(wrap_pyfunction!(telemetry_otlp::setup_telemetry, m)?)?;
+
+    // Analytics entrypoint (gap-07 task 06): argument-less, idempotent.
+    // Arms `send_telemetry` only when the per-binding policy permits
+    // (PyO3 default OFF unless `COGNEE_RUST_TELEMETRY=1` and
+    // `COGNEE_HOST_SDK` is unset). Decisions 10, 11, 12.
+    m.add_function(wrap_pyfunction!(
+        telemetry_analytics::setup_telemetry_analytics,
+        m
+    )?)?;
 
     // Register exception types.
     error::register(m)?;

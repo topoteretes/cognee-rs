@@ -22,6 +22,7 @@ mod runtime;
 mod task;
 mod task_context;
 mod task_info;
+mod telemetry_analytics;
 mod telemetry_otlp;
 mod value;
 mod watcher;
@@ -49,6 +50,15 @@ fn main(mut cx: ModuleContext) -> NeonResult<()> {
     // idempotent. Composes the OTEL layer on top of the default
     // stderr subscriber installed above.
     cx.export_function("setupTelemetry", telemetry_otlp::setup_telemetry)?;
+
+    // Analytics entrypoint (gap-07 task 06): argument-less, idempotent.
+    // Arms `send_telemetry` per the Neon default policy (ON unless
+    // TELEMETRY_DISABLED / ENV in {test,dev} / COGNEE_HOST_SDK is set).
+    // Decisions 10, 11, 12.
+    cx.export_function(
+        "setupTelemetryAnalytics",
+        telemetry_analytics::setup_telemetry_analytics,
+    )?;
 
     // Values
     cx.export_function("valueFromNumber", value::value_from_number)?;

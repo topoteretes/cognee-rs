@@ -6,12 +6,58 @@
 //! short-circuit on `is_disabled()` *before* deriving identities or
 //! sanitizing properties.
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// Set to `true` when a binding (PyO3, Neon, or C API) has called its
+/// `setup_telemetry_analytics` / `cognee_init_telemetry` entrypoint
+/// and the binding-specific policy allowed emission.
+///
+/// Gates the `COGNEE_HOST_SDK` sentinel in [`is_disabled`]: pure-Rust
+/// embedders (CLI, http-server) using `cognee_lib::api::*` do not set
+/// this flag and are therefore not suppressed by `COGNEE_HOST_SDK`.
+///
+/// Mutated exclusively via [`arm_binding_emission`]; read via
+/// [`is_binding_armed`] and inside [`is_disabled`].
+static BINDING_ARMED: AtomicBool = AtomicBool::new(false);
+
+/// Called from a binding entrypoint after the per-binding policy
+/// permits emission. Idempotent — subsequent calls are no-ops.
+///
+/// Gap 07 decisions 10 + 11: the `COGNEE_HOST_SDK` sentinel must
+/// suppress only binding-armed emissions. Bindings call this from
+/// `setup_telemetry_analytics` / `cognee_init_telemetry` once the
+/// per-binding policy has decided to arm analytics.
+pub fn arm_binding_emission() {
+    BINDING_ARMED.store(true, Ordering::SeqCst);
+}
+
+/// Returns the current value of the binding-armed flag.
+///
+/// See [`arm_binding_emission`] for the lifecycle.
+pub fn is_binding_armed() -> bool {
+    BINDING_ARMED.load(Ordering::SeqCst)
+}
+
+/// Test-only reset for the `BINDING_ARMED` flag. Keeps env-mutating
+/// unit tests independent of one another. Not exposed outside `cfg(test)`.
+#[cfg(test)]
+pub(crate) fn reset_binding_armed() {
+    BINDING_ARMED.store(false, Ordering::SeqCst);
+}
+
 /// Returns `true` if the user has explicitly disabled telemetry, or
 /// if the process is running in a `test` or `dev` environment.
 ///
 /// Mirrors Python utils.py:194-199 — `TELEMETRY_DISABLED` is treated
 /// as truthy whenever it is set to a non-empty string, and `ENV` is
 /// treated as disabling for the literal values `test` and `dev`.
+///
+/// Additionally — per gap 07 decision 10 — returns `true` when a
+/// binding has armed analytics (see [`arm_binding_emission`]) AND
+/// `COGNEE_HOST_SDK` is set to any non-empty value. The sentinel
+/// scope is narrowed to binding-armed callers so the pure-Rust
+/// embedder path (CLI, http-server) is unaffected even when an
+/// upstream process has set `COGNEE_HOST_SDK`.
 pub fn is_disabled() -> bool {
     if let Ok(v) = std::env::var("TELEMETRY_DISABLED")
         && !v.is_empty()
@@ -20,6 +66,14 @@ pub fn is_disabled() -> bool {
     }
     if let Ok(env) = std::env::var("ENV")
         && (env == "test" || env == "dev")
+    {
+        return true;
+    }
+    // Decision 10: COGNEE_HOST_SDK only suppresses emissions armed by a
+    // binding, never the pure-Rust embedder path.
+    if is_binding_armed()
+        && let Ok(v) = std::env::var("COGNEE_HOST_SDK")
+        && !v.is_empty()
     {
         return true;
     }
@@ -146,6 +200,50 @@ mod tests {
         // SAFETY: still inside the same serial section.
         unsafe {
             std::env::remove_var("ENV");
+        }
+    }
+
+    #[test]
+    #[serial]
+    fn is_disabled_when_binding_armed_and_host_sdk_set() {
+        // SAFETY: `#[serial]` orders this test against every other
+        //   env-mutating test in the crate.
+        unsafe {
+            std::env::remove_var("TELEMETRY_DISABLED");
+            std::env::remove_var("ENV");
+        }
+        reset_binding_armed();
+        arm_binding_emission();
+        // SAFETY: still inside the same serial section.
+        unsafe {
+            std::env::set_var("COGNEE_HOST_SDK", "python");
+        }
+        assert!(is_disabled());
+        // SAFETY: still inside the same serial section.
+        unsafe {
+            std::env::remove_var("COGNEE_HOST_SDK");
+        }
+        reset_binding_armed();
+    }
+
+    #[test]
+    #[serial]
+    fn is_not_disabled_when_only_host_sdk_set_without_arming() {
+        // SAFETY: `#[serial]` orders this test against every other
+        //   env-mutating test in the crate.
+        unsafe {
+            std::env::remove_var("TELEMETRY_DISABLED");
+            std::env::remove_var("ENV");
+        }
+        reset_binding_armed();
+        // SAFETY: still inside the same serial section.
+        unsafe {
+            std::env::set_var("COGNEE_HOST_SDK", "python");
+        }
+        assert!(!is_disabled());
+        // SAFETY: still inside the same serial section.
+        unsafe {
+            std::env::remove_var("COGNEE_HOST_SDK");
         }
     }
 

@@ -14,6 +14,11 @@ export interface NativeBindings {
   // Telemetry (gap-07 task 05): argument-less, idempotent.
   setupTelemetry(): void;
 
+  // Analytics (gap-07 task 06): argument-less, idempotent. Returns
+  // `true` if armed by this call (or a prior call), `false` if the
+  // per-binding policy suppressed emission.
+  setupTelemetryAnalytics(): boolean;
+
   // Values
   valueFromNumber(n: number): NativeBox;
   valueFromBool(b: boolean): NativeBox;

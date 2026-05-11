@@ -24,6 +24,7 @@ pub mod runtime;
 pub mod task;
 pub mod task_context;
 pub mod task_info;
+pub mod telemetry_analytics;
 pub mod telemetry_otlp;
 pub mod thread_pool;
 #[macro_use]
