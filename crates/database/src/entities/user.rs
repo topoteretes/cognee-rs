@@ -13,6 +13,7 @@ pub struct Model {
     pub is_superuser: bool,
     pub is_verified: bool,
     pub tenant_id: Option<String>,
+    pub parent_user_id: Option<String>,
     pub created_at: DateTimeUtc,
     pub updated_at: Option<DateTimeUtc>,
 }

@@ -29,6 +29,8 @@ pub struct AuthUser {
     pub is_superuser: bool,
     pub is_verified: bool,
     pub tenant_id: Option<Uuid>,
+    pub parent_user_id: Option<Uuid>,
+    pub created_at: chrono::DateTime<Utc>,
 }
 
 /// Payload for creating a new user.
@@ -41,6 +43,7 @@ pub struct CreateUserPayload {
     pub is_superuser: bool,
     pub is_verified: bool,
     pub tenant_id: Option<Uuid>,
+    pub parent_user_id: Option<Uuid>,
 }
 
 /// Fields that can be updated on a user row.
@@ -65,6 +68,14 @@ fn row_to_auth_user(m: user::Model) -> Result<AuthUser, DatabaseError> {
                 .map_err(|e| DatabaseError::QueryError(format!("invalid tenant_id: {e}")))
         })
         .transpose()?;
+    let parent_user_id = m
+        .parent_user_id
+        .as_deref()
+        .map(|s| {
+            Uuid::parse_str(s)
+                .map_err(|e| DatabaseError::QueryError(format!("invalid parent_user_id: {e}")))
+        })
+        .transpose()?;
     Ok(AuthUser {
         id,
         email: m.email,
@@ -73,6 +84,8 @@ fn row_to_auth_user(m: user::Model) -> Result<AuthUser, DatabaseError> {
         is_superuser: m.is_superuser,
         is_verified: m.is_verified,
         tenant_id,
+        parent_user_id,
+        created_at: m.created_at,
     })
 }
 
@@ -224,6 +237,11 @@ impl UserAuthRepository for SeaOrmUserAuthRepository {
             is_superuser: Set(payload.is_superuser),
             is_verified: Set(payload.is_verified),
             tenant_id: Set(payload.tenant_id.map(|t| t.to_string().replace('-', ""))),
+            parent_user_id: Set(
+                payload
+                    .parent_user_id
+                    .map(|p| p.to_string().replace('-', "")),
+            ),
             created_at: Set(now),
             updated_at: Set(None),
         };
@@ -442,6 +460,7 @@ mod tests {
                 is_superuser BOOLEAN NOT NULL DEFAULT 0,
                 is_verified BOOLEAN NOT NULL DEFAULT 1,
                 tenant_id TEXT,
+                parent_user_id TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT
             )",
@@ -499,6 +518,7 @@ mod tests {
             is_superuser: false,
             is_verified: true,
             tenant_id: None,
+            parent_user_id: None,
         };
         let user = user_repo.create(payload).await.expect("create");
         assert_eq!(user.email, "test@example.com");

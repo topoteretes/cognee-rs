@@ -119,6 +119,8 @@ async fn test_smtp_real_send() {
         is_superuser: false,
         is_verified: false,
         tenant_id: None,
+        parent_user_id: None,
+        created_at: chrono::Utc::now(),
     };
 
     mailer.send_register_welcome(&user).await.expect("send");

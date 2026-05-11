@@ -649,6 +649,7 @@ pub async fn seed_perm_user(state: &AppState, email: &str, password: &str) -> Au
             is_superuser: false,
             is_verified: true,
             tenant_id: None,
+            parent_user_id: None,
         })
         .await
         .expect("create user")

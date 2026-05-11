@@ -56,6 +56,7 @@ async fn seed_user(db: &DatabaseConnection, id: Uuid, email: &str) {
         is_superuser: false,
         is_verified: true,
         tenant_id: None,
+        parent_user_id: None,
     })
     .await
     .expect("create user");

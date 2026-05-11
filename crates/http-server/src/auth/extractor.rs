@@ -1,7 +1,8 @@
 //! `AuthenticatedUser` + `OptionalAuthenticatedUser` + `RequireSuperuser`
 //! extractors for axum handlers.
 //!
-//! Resolution order (matches Python):
+//! Resolution order:
+//! 0. `ExtraAuthValidator` (if configured) — e.g. Auth0 RS256 JWT
 //! 1. `X-Api-Key` header → lookup_api_key
 //! 2. `Authorization: Bearer <jwt>` → decode_login_jwt
 //! 3. Cookie `<cookie_name>=<jwt>` → decode_login_jwt
@@ -52,6 +53,24 @@ impl FromRequestParts<AppState> for AuthenticatedUser {
             // No auth context wired — use default-user behaviour
             return default_user_from_state(state).await;
         };
+
+        // ── 0. External validator (SaaS Auth0, etc.) ────────────────────────
+        if let Some(ref extra) = auth.extra_validator
+            && let Some(user) = extra.validate(&parts.headers, auth.user_repo.as_ref()).await
+        {
+            if !user.is_active {
+                return Err(ApiError::LoginBadCredentials);
+            }
+            return Ok(Self {
+                id: user.id,
+                email: user.email,
+                is_superuser: user.is_superuser,
+                is_verified: user.is_verified,
+                is_active: user.is_active,
+                tenant_id: user.tenant_id,
+                auth_method: AuthMethod::BearerJwt,
+            });
+        }
 
         // ── 1. X-Api-Key header ──────────────────────────────────────────────
         if let Some(api_key_val) = parts.headers.get("X-Api-Key").and_then(|v| v.to_str().ok())

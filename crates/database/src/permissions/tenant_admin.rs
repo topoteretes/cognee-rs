@@ -118,6 +118,7 @@ mod tests {
             is_superuser: Set(false),
             is_verified: Set(true),
             tenant_id: Set(Some(tenant_hex.clone())),
+            parent_user_id: Set(None),
             created_at: Set(now),
             updated_at: Set(None),
         })
@@ -165,6 +166,7 @@ mod tests {
             is_superuser: Set(false),
             is_verified: Set(true),
             tenant_id: Set(None),
+            parent_user_id: Set(None),
             created_at: Set(now),
             updated_at: Set(None),
         })
