@@ -1,6 +1,6 @@
 # Task 06-05 — `init_logging`, `LogGuards`, and `default_filter`
 
-**Status**: ⬜ not started
+**Status**: implemented in commit 18f0475
 **Owner**: _unassigned_
 **Depends on**:
 - [Task 06-02 — Logging config](02-logging-config.md)
