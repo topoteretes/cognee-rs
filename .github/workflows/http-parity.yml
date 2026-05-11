@@ -162,6 +162,26 @@ jobs:
           pytest -vs /harness/test_provenance_parity.py
           --tb=short
 
+      # ── Cross-SDK logging parity (no LLM needed) ────────────────────────
+      # Asserts gap-06 file-logging parity between Python and Rust SDKs:
+      # loose per-filename presence, strict per-message byte equality.
+      # See docs/telemetry/06-file-logging-rotation.md. The test itself
+      # does not require OpenAI, but the entire workflow is
+      # workflow_dispatch-only today (see file header about the alembic
+      # migration freeze); we keep the HAS_OPENAI_KEY gate so this step
+      # gracefully skips on forks without the secret. When push/PR
+      # triggers are restored, the gate continues to work unchanged.
+      - name: Logging parity (no LLM needed)
+        if: ${{ env.HAS_OPENAI_KEY == 'true' }}
+        env:
+          HAS_OPENAI_KEY: ${{ secrets.OPENAI_KEY != '' }}
+        run: >-
+          docker compose
+          -f cognee-rust/e2e-cross-sdk/docker-compose.yml
+          run --rm e2e-tests
+          pytest -vs /harness/test_logging_parity.py
+          --tb=short
+
       # ── Phase-3: specialty (manual via workflow_dispatch only) ────────────
       - name: Phase-3 — websocket, sync, permissions, visualize (manual only)
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_phase3 == 'true' }}

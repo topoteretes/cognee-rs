@@ -539,3 +539,92 @@ A clean PR sequence based on the dependency graph:
 - `tracing-rolling-file` (size-based alternative): https://docs.rs/tracing-rolling-file
 - `tracing-subscriber` JSON formatter: https://docs.rs/tracing-subscriber/latest/tracing_subscriber/fmt/format/struct.Json.html
 - Python stdlib `RotatingFileHandler`: https://docs.python.org/3/library/logging.handlers.html#rotatingfilehandler
+
+---
+
+## Closure summary
+
+Gap 06 closed in 24 commits. The table below lists every commit in
+landing order — each sub-task lands as a pair (implementation commit
++ sub-doc status flip), except 06-10 which also carries a sub-doc fix
+that preceded the implementation.
+
+| # | Commit | Subject |
+|---|---|---|
+| 06-00 | `3e8f49c` | telemetry/logging-06-00: add gap-06 design decisions and implementation runbook |
+| 06-01 | `ca62d29` | telemetry/logging-06-01: add tracing-appender workspace dep |
+| 06-01 | `f0704cf` | telemetry/logging-06-01: mark action item 01 complete |
+| 06-02 | `86f7e1e` | telemetry/logging-06-02: add cognee-logging crate with LoggingConfig::from_env |
+| 06-02 | `79f2cb0` | telemetry/logging-06-02: mark action item 02 complete |
+| 06-03 | `038e6a8` | telemetry/logging-06-03: add paths and cleanup helpers |
+| 06-03 | `09e5a2a` | telemetry/logging-06-03: mark action item 03 complete |
+| 06-04 | `0dea3ce` | telemetry/logging-06-04: add PythonPlainFormatter |
+| 06-04 | `a3af402` | telemetry/logging-06-04: mark action item 04 complete |
+| 06-05 | `18f0475` | telemetry/logging-06-05: add init_logging composition with LogGuards |
+| 06-05 | `817ab51` | telemetry/logging-06-05: mark action item 05 complete |
+| 06-06 | `0c22fc1` | telemetry/logging-06-06: refactor cognee-cli to cognee_logging::init_logging |
+| 06-06 | `8a19525` | telemetry/logging-06-06: mark action item 06 complete |
+| 06-07 | `5d9eb3c` | telemetry/logging-06-07: route http-server through cognee_logging |
+| 06-07 | `f6418a9` | telemetry/logging-06-07: mark action item 07 complete |
+| 06-08 | `c14ba2a` | telemetry/logging-06-08: expose setup_logging() in python/JS/C bindings |
+| 06-08 | `274ad66` | telemetry/logging-06-08: mark action item 08 complete |
+| 06-09 | `1172ab6` | telemetry/logging-06-09: wire COGNEE_LOGS_DIR through Android scripts |
+| 06-09 | `57215df` | telemetry/logging-06-09: mark action item 09 complete |
+| 06-10 | `fdd2110` | telemetry/logging-06-10: fix CARGO_BIN_EXE binary-name reference in sub-doc |
+| 06-10 | `1f61f0d` | telemetry/logging-06-10: add integration + cross-SDK parity tests |
+| 06-10 | `2a7c6c7` | telemetry/logging-06-10: mark action item 10 complete |
+| 06-11 | `<SHA>` | telemetry/logging-06-11: close gap 06 with logging docs and parity CI lane |
+| 06-11 | _(this commit)_ | telemetry/logging-06-11: mark action item 11 complete + close gap 06 |
+
+### What the gap delivered
+
+- New [`cognee-logging`](../../crates/logging/) workspace crate
+  exposing `LoggingConfig::from_env()`, `init_logging`, `LogGuards`,
+  and the Python-byte-exact `PythonPlainFormatter`.
+- File-based logging with daily time-based rotation, backed by
+  `tracing-appender::RollingFileAppender` + non-blocking writer.
+- Multi-process `LOG_FILE_NAME` inheritance matching Python's
+  parent-writes / children-inherit semantics.
+- Broad library-noise suppression as the default filter (`info,
+  ort=warn, reqwest=warn, hyper=warn, h2=warn, rustls=warn,
+  sqlx=warn, sea_orm=warn, sea_orm_migration=warn, tower_http=warn,
+  qdrant_segment=warn, qdrant_shard=warn`) applied when neither
+  `RUST_LOG` nor `LOG_LEVEL` is set.
+- `LOG_LEVEL` env-var fallback for Python parity, with `RUST_LOG`
+  retaining precedence.
+- `setup_logging()` entrypoints in Python (PyO3), JS (Neon), and C
+  (extern "C") bindings, each idempotent via singleton `LogGuards`.
+- Android demo automatically wires
+  `COGNEE_LOGS_DIR=/data/local/tmp/cognee/runtime/logs`.
+- Cross-SDK parity test
+  [`test_logging_parity.py`](../../e2e-cross-sdk/harness/test_logging_parity.py)
+  asserting loose file-presence + strict per-message byte equality.
+  Wired into
+  [`.github/workflows/http-parity.yml`](../../.github/workflows/http-parity.yml)
+  as a new step alongside the existing provenance parity step.
+
+### Known follow-ups
+
+The gap closes with the following intentional deferrals tracked here
+so they aren't lost:
+
+- **Size-based rotation.** Decision 1 deferred this; `COGNEE_LOG_MAX_BYTES`
+  is currently accepted as a documented no-op. A follow-up should
+  either implement size-based via `tracing-rolling-file` behind a
+  feature flag, or remove the env var.
+- **Per-process file isolation.** Decision 5 chose to replicate
+  Python's `LOG_FILE_NAME` inheritance (multi-process rotation is
+  racy). A future enhancement could opt in to per-PID files via a
+  new `COGNEE_LOG_PER_PROCESS=true` toggle.
+- **OTel log signals.** This gap added file logging; the OTEL
+  bridge (gap 01) handles trace signals. Bridging tracing events
+  into OTLP log signals is a separate concern.
+- **JSON vs plain format coupling.** Decision 3 coupled stdout +
+  file format. A future split (e.g. JSON to file, plain to stdout)
+  would help log-shipper deployments.
+- **`http-parity.yml` is `workflow_dispatch`-only.** Same caveat as
+  gap 05: the push/PR triggers on that workflow are commented out
+  pending an upstream Python migration fix (see the file header).
+  The new logging parity step is wired in but only fires on manual
+  dispatch until push/PR triggers are restored. Re-enabling those
+  triggers is out of scope of gap 06 and tracked separately.

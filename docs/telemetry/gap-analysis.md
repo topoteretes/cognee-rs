@@ -87,9 +87,9 @@ call sites.
 | | Python | Rust |
 |---|---|---|
 | Framework | structlog + stdlib logging | `tracing` + `tracing-subscriber` |
-| File output | `PlainFileHandler`, 50MB rotation, 5 backups | Stdout only |
-| Log dir resolution (`COGNEE_LOGS_DIR`, BaseConfig) | Yes | No |
-| Suppression of noisy libs (litellm, openai) | Yes | Partial via `RUST_LOG="info,ort=warn"` |
+| File output | `PlainFileHandler`, 50MB rotation, 5 backups | ✅ Implemented in [gap 06](06-file-logging-rotation.md) — `tracing-appender::RollingFileAppender` with daily time-based rotation (size-based deferred) |
+| Log dir resolution (`COGNEE_LOGS_DIR`, BaseConfig) | Yes | ✅ Implemented in [gap 06](06-file-logging-rotation.md) — see [`cognee_logging::resolve_logs_dir`](../../crates/logging/src/paths.rs) |
+| Suppression of noisy libs (litellm, openai) | Yes | ✅ Implemented in [gap 06](06-file-logging-rotation.md) — broad library-noise default filter applied when `RUST_LOG`/`LOG_LEVEL` are unset |
 
 ---
 

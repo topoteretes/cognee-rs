@@ -160,6 +160,24 @@ LRU on `trace_order`. When a new trace pushes the count past `max_traces`, the o
 
 A safety cap on `max_spans_per_trace` prevents pathological producers from blowing memory on a single trace.
 
+## 4.5. File logging
+
+The HTTP server inherits the same file-logging behaviour as the CLI
+(see the project README's "Logging" section). When deploying behind
+a process supervisor (systemd, supervisord, Docker), prefer setting
+`COGNEE_LOGS_DIR` to a host-mounted volume so logs persist across
+restarts.
+
+The in-memory `SpanBufferLayer` that powers `/spans` is **not**
+mirrored to disk. To archive spans, scrape the `/spans` endpoint or
+configure the OTEL exporter (see [`observability.md`](observability.md)).
+
+Multi-process deployments: avoid running multiple HTTP-server
+instances with the same `LOG_FILE_NAME` env var. The rotation is
+not coordinated across processes and can corrupt the shared file.
+Either set distinct `COGNEE_LOGS_DIR` per worker or `unset
+LOG_FILE_NAME` in each worker's environment.
+
 ## 5. Secret redaction
 
 Python redacts known secret patterns at *export* time (regex pass over span attributes — see [`redact_secrets`](https://github.com/topoteretes/cognee/blob/main/cognee/modules/observability/tracing.py)). We redact at *record* time inside `SpanBufferLayer::on_close` so:

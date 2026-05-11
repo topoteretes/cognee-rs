@@ -125,3 +125,28 @@ and in-cluster Collectors).
   [`docs/observability/send_telemetry.md`](docs/observability/send_telemetry.md)
   for the full reference (env vars, payload schema, salt rotation,
   privacy notes).
+
+### Logging
+
+Cognee writes structured logs to **stdout** and (when a writable
+directory is available) to a rotating file under
+`~/.cognee/logs/<timestamp>.log`. File logging is owned by the
+[`cognee-logging`](crates/logging/) workspace crate, which both the
+CLI and HTTP server initialise via `cognee_logging::init_logging`.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `COGNEE_LOG_FILE` | `true` | Master toggle (`false`/`0`/`no` disables file logging). |
+| `COGNEE_LOGS_DIR` | `~/.cognee/logs` | Log directory. Falls back to `/tmp/cognee_logs` if the primary is unwritable. |
+| `COGNEE_LOG_FORMAT` | `plain` | `plain` (Python-compatible text) or `json` (JSON lines). Applies to both stdout and file. |
+| `COGNEE_LOG_ROTATION` | `daily` | One of `daily` / `hourly` / `minutely` / `never`. Time-based only; size-based rotation is a future enhancement. |
+| `COGNEE_LOG_BACKUP_COUNT` | `5` | Files kept by the active rotation policy. |
+| `COGNEE_LOG_MAX_FILES` | `10` | Startup-time cap; older files past this count are removed. |
+| `LOG_LEVEL` | `info` | Fallback level when `RUST_LOG` is unset. `RUST_LOG` wins when both are set. |
+| `LOG_FILE_NAME` | _(generated)_ | Set automatically by the parent process and inherited by children, so all processes append to one file. |
+
+> **Multi-process warning** — when several cognee processes share a
+> log file via `LOG_FILE_NAME`, rotation is not coordinated.
+> Concurrent rotation events from multiple processes can corrupt
+> the log. If you run sharded workers, give each shard a different
+> `COGNEE_LOGS_DIR` (or unset `LOG_FILE_NAME` per shard).
