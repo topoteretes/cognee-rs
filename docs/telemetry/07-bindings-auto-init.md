@@ -418,7 +418,7 @@ high-level summary.
 | 05 | Per-binding OTLP entrypoint: add `setup_telemetry()` (PyO3, Neon) + `cognee_init_otlp()` (C) that build `EnvSettingsView`, apply binding-specific `OTEL_SERVICE_NAME` default (decision 8), call `cognee_observability::init_telemetry`, install the returned `BoxedTelemetryLayer` as a new `Layer` on top of the binding's existing `Registry`, and stash `TelemetryGuard` in a singleton. | [07/05-binding-otlp-setup.md](07/05-binding-otlp-setup.md) | 01, 02, 03 | ✅ cccb9ed |
 | 06 | Per-binding analytics plumbing + `COGNEE_HOST_SDK` sentinel: add `setup_telemetry_analytics()` (PyO3, Neon) + `cognee_init_telemetry()` (C). Implement the per-binding default policy (decision 11). Extend `cognee_telemetry::env::is_disabled` with a `BINDING_ARMED` guard so the `COGNEE_HOST_SDK` sentinel only suppresses binding-armed emissions (decision 10). | [07/06-host-sdk-sentinel.md](07/06-host-sdk-sentinel.md) | 01 | ✅ fb686a2 |
 | 07 | Tests: `python/tests/test_pyo3_log_bridge.py` (events arrive in Python `logging`), `python/tests/test_setup_telemetry_idempotent.py`, Neon `js/__tests__/default_subscriber.test.ts` + `setup_telemetry.test.ts`, C smoke test (panic hook + `cognee_init_otlp` via `capi/scripts/check.sh`), cross-SDK `e2e-cross-sdk/harness/test_telemetry_no_double_emit.py` (skip until binding emits). | [07/07-tests.md](07/07-tests.md) | 02–06 | ✅ 4958704 |
-| 08 | Docs + CI: update [`gap-analysis.md`](./gap-analysis.md) §6 to point at gap 07 closure. Add README sections to `python/`, `js/`, `capi/` covering `COGNEE_BINDING_SUPPRESS_LOGS`, `COGNEE_RUST_TELEMETRY`, `COGNEE_HOST_SDK`, the `setup_*` matrix. Add a CI lane that runs the new Python/JS smoke tests on push. Write the "Closure summary" section at the bottom of this doc. | [07/08-docs-and-ci.md](07/08-docs-and-ci.md) | 01–07 | ⬜ |
+| 08 | Docs + CI: update [`gap-analysis.md`](./gap-analysis.md) §6 to point at gap 07 closure. Add README sections to `python/`, `js/`, `capi/` covering `COGNEE_BINDING_SUPPRESS_LOGS`, `COGNEE_RUST_TELEMETRY`, `COGNEE_HOST_SDK`, the `setup_*` matrix. Add a CI lane that runs the new Python/JS smoke tests on push. Write the "Closure summary" section at the bottom of this doc. | [07/08-docs-and-ci.md](07/08-docs-and-ci.md) | 01–07 | ✅ 68e6ac4 |
 
 ### Suggested execution order
 
@@ -516,3 +516,108 @@ A clean PR sequence based on the dependency graph:
 - External: [`pyo3-log` docs](https://docs.rs/pyo3-log),
   [`tracing-log` docs](https://docs.rs/tracing-log),
   [Neon `Channel` API](https://docs.rs/neon/latest/neon/event/struct.Channel.html)
+
+---
+
+## Closure summary
+
+Gap 07 closed in 17 commits. The table below lists every commit in
+landing order — each sub-task lands as a pair (implementation
+commit + sub-doc status flip), following the gap-06 convention. The
+final task ships docs, CI wiring, and this closure summary in a
+single commit.
+
+| # | Commit | Subject | Task |
+|---|---|---|---|
+| 07-00 | `a3522d2` | telemetry/bindings-07-00: lock gap-07 decisions and scope action items | 07-00 |
+| 07-01 | `d8641c0` | telemetry/bindings-07-01: enable telemetry feature on binding crates | 07-01 |
+| 07-01 | `8af699f` | telemetry/bindings-07-01: mark action item 01 complete | 07-01 |
+| 07-02 | `674f76f` | telemetry/bindings-07-02: install pyo3-log bridge in _native module | 07-02 |
+| 07-02 | `62f3179` | telemetry/bindings-07-02: mark action item 02 complete | 07-02 |
+| 07-03 | `422d874` | telemetry/bindings-07-03: install stderr fmt subscriber in #[neon::main] | 07-03 |
+| 07-03 | `b1fc88d` | telemetry/bindings-07-03: mark action item 03 complete | 07-03 |
+| 07-04 | `b19be00` | telemetry/bindings-07-04: install panic hook from cg_init | 07-04 |
+| 07-04 | `8e0d920` | telemetry/bindings-07-04: mark action item 04 complete | 07-04 |
+| 07-05 | `cccb9ed` | telemetry/bindings-07-05: add setup_telemetry / cognee_init_otlp entrypoints | 07-05 |
+| 07-05 | `77489b8` | telemetry/bindings-07-05: mark action item 05 complete | 07-05 |
+| 07-06 | `fb686a2` | telemetry/bindings-07-06: add setup_telemetry_analytics + binding-armed sentinel | 07-06 |
+| 07-06 | `2ad3fd0` | telemetry/bindings-07-06: mark action item 06 complete | 07-06 |
+| 07-07 | `4958704` | telemetry/bindings-07-07: add binding tests + panic-hook smoke harness | 07-07 |
+| 07-07 | `225d75e` | telemetry/bindings-07-07: mark action item 07 complete | 07-07 |
+| 07-08 | `68e6ac4` | telemetry/bindings-07-08: add binding READMEs and refresh gap-analysis | 07-08 |
+| 07-08 | _(this commit)_ | telemetry/bindings-07-08: close gap with action item 08 + closure summary | 07-08 |
+
+### What the gap delivered
+
+- Default `tracing` subscriber per binding installed automatically
+  on module load: PyO3 routes Rust `tracing::*` events into Python's
+  `logging` module via `pyo3-log` + `tracing-log::LogTracer`; Neon
+  installs `tracing-subscriber::fmt` writing to stderr. Both honour
+  `COGNEE_BINDING_SUPPRESS_LOGS=1` to opt out and are idempotent.
+- C API panic hook installed by `cg_init` (one-shot, guarded by
+  `OnceLock`) writes `[cognee-capi panic] <message> at
+  <file:line:col>` to stderr so FFI panics are debuggable even
+  without a tracing subscriber.
+- New `setup_telemetry()` (Python / Neon) and `cognee_init_otlp()`
+  (C) entrypoints composing
+  `cognee_observability::init_telemetry::<Registry>` with
+  binding-specific `OTEL_SERVICE_NAME` defaults
+  (`cognee.python-binding`, `cognee.node-binding`,
+  `cognee.capi-binding`) when the host doesn't set the var. Each
+  stashes the returned `TelemetryGuard` in a binding-local
+  `OnceLock<Mutex<Option<…>>>` so subsequent calls are no-ops.
+- New `setup_telemetry_analytics()` (Python / Neon) and
+  `cognee_init_telemetry()` (C) entrypoints implementing the
+  per-binding default policy from decision 11 (Python OFF unless
+  `COGNEE_RUST_TELEMETRY=1`, Neon ON unless
+  `TELEMETRY_DISABLED`/`ENV in {test,dev}`/`COGNEE_HOST_SDK` set,
+  C explicit-only).
+- `COGNEE_HOST_SDK` sentinel honoured by
+  `cognee_telemetry::env::is_disabled` only when a binding has
+  explicitly armed analytics (tracked via `BINDING_ARMED:
+  OnceLock<bool>`), so the CLI/HTTP-server path is not
+  inadvertently silenced.
+- All three binding crates enable the `telemetry` cargo feature on
+  `cognee-observability` by default (decision 3), so the OTLP
+  entrypoints work out of the box without rebuild.
+- Cross-SDK no-double-emit harness wired into `e2e-cross-sdk/`,
+  skipped pending a future gap that surfaces `cognee_lib::api::*`
+  through bindings (decision 13).
+- Binding READMEs (`python/README.md`, `js/README.md`,
+  `capi/README.md`) documenting the four-step init matrix
+  (`setup_logging` / `setup_telemetry` / `setup_telemetry_analytics`
+  / `COGNEE_BINDING_SUPPRESS_LOGS`) and the analytics defaults
+  table. Gap-07 smoke tests run inside the existing `capi-check` /
+  `python-check` / `js-check` CI jobs via the per-binding
+  `scripts/check.sh` files.
+
+### What was deliberately deferred
+
+The gap closes with the following locked-decision deferrals tracked
+here so they aren't lost:
+
+- **JS callback bridge (parent-doc Option B).** Decision 7 deferred
+  the `cognee.setLogger((level, target, message, fields) => …)`
+  surface. The stderr fmt subscriber from decision 1 is the only
+  Neon default; hosts that want structured routing into `pino` /
+  Winston catch stderr or wait for a follow-up gap.
+- **Android-specific work.** Decision 9 excluded Android from gap
+  07. The Android runner uses the `cognee-cli` binary, not the
+  bindings, and gap 06 already wired `COGNEE_LOGS_DIR` through
+  `scripts/android-run.sh`.
+- **Cross-SDK no-double-emit assertion.** Decision 13 marked the
+  test pending: the harness scaffold lands in `e2e-cross-sdk/` but
+  the assertion is skipped until a future gap surfaces
+  `cognee_lib::api::*` through PyO3 so the cross-SDK harness has
+  something to invoke from Python that triggers `send_telemetry`.
+  The harness wiring lands now so the test runs the moment a
+  binding ever emits.
+- **C API tracing → OTLP wiring.** Task 07-05's v1 limitation: the
+  C binding's `cognee_init_otlp` initialises the OpenTelemetry
+  `TracerProvider` and stashes the `TelemetryGuard`, but the
+  returned `BoxedTelemetryLayer` is not composed into a
+  `tracing::Subscriber` because the C API has no reload-capable
+  subscriber today. Spans created directly against the OTEL SDK
+  still export; `tracing::*` events from Rust crates called via
+  the C API do not reach OTLP. A follow-up should add a
+  reload-capable C subscriber for parity with PyO3 / Neon.

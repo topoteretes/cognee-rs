@@ -1,6 +1,6 @@
 # Task 07-08 — Docs and CI for gap 07 closure
 
-**Status**: ⬜ not started
+**Status**: implemented in commit 68e6ac4.
 **Owner**: _unassigned_
 **Depends on**: tasks 07-01 through 07-07.
 **Blocks**: —
