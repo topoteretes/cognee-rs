@@ -20,32 +20,28 @@ use std::future::Future;
 use uuid::Uuid;
 
 use cognee_core::pipeline_run_registry::{PipelineFuture, RunHandle, RunOutcome, RunSpec};
+// IDs live in `cognee-core` so library callers (e.g. the reset helpers in
+// `cognee-lib`) can derive them without depending on `cognee-http-server`.
+use cognee_core::pipeline_run_registry::ids as id_helpers;
 
 use crate::{auth::AuthenticatedUser, error::ApiError, state::AppState};
 
-// ─── Public ID helpers ────────────────────────────────────────────────────────
+// ─── Public ID helpers (delegate to cognee-core) ──────────────────────────────
 
 /// `pipeline_id = uuid5(OID, "{user_id}{pipeline_name}{dataset_id}")`
 ///
-/// Matches [Python's `generate_pipeline_id`](https://github.com/topoteretes/cognee/blob/main/cognee/modules/pipelines/utils/generate_pipeline_id.py).
-///
-/// `dataset_id` defaults to `Uuid::nil()` when absent (ad-hoc paths).
+/// Thin delegate over [`cognee_core::pipeline_run_registry::ids::pipeline_id`]
+/// — re-exported here for back-compat with existing HTTP server call sites.
 pub fn pipeline_id(user_id: Uuid, dataset_id: Uuid, pipeline_name: &str) -> Uuid {
-    let s = format!("{}{}{}", user_id, pipeline_name, dataset_id);
-    Uuid::new_v5(&Uuid::NAMESPACE_OID, s.as_bytes())
+    id_helpers::pipeline_id(user_id, dataset_id, pipeline_name)
 }
 
 /// `pipeline_run_id = uuid5(OID, "{pipeline_id}_{dataset_id}")`
 ///
-/// Matches [Python's `generate_pipeline_run_id`](https://github.com/topoteretes/cognee/blob/main/cognee/modules/pipelines/utils/generate_pipeline_run_id.py).
-///
-/// Note: this id is **not unique across separate runs** of the same pipeline —
-/// Python intentionally reuses it so a re-cognify of the same dataset returns
-/// the same `pipeline_run_id`. The `id` column in `pipeline_runs` is the true
-/// PK; multiple rows can share the same `pipeline_run_id`.
+/// Thin delegate over
+/// [`cognee_core::pipeline_run_registry::ids::pipeline_run_id`].
 pub fn pipeline_run_id(pipeline_id: Uuid, dataset_id: Uuid) -> Uuid {
-    let s = format!("{}_{}", pipeline_id, dataset_id);
-    Uuid::new_v5(&Uuid::NAMESPACE_OID, s.as_bytes())
+    id_helpers::pipeline_run_id(pipeline_id, dataset_id)
 }
 
 // ─── DispatchOutcome ─────────────────────────────────────────────────────────

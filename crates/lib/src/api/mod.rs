@@ -16,6 +16,7 @@ pub mod error;
 pub mod forget;
 pub mod improve;
 pub mod notebooks;
+pub mod pipeline_runs;
 pub mod prune;
 pub mod recall;
 pub mod remember;
@@ -28,6 +29,7 @@ pub use datasets::{DatasetDb, DatasetManager};
 pub use error::{ApiError, DatasetError};
 pub use forget::{DatasetRef, ForgetResult, ForgetTarget, forget};
 pub use improve::{ImproveParams, ImproveResult, improve};
+pub use pipeline_runs::{reset_dataset_pipeline_run_status, reset_pipeline_run_status};
 pub use prune::{PruneResult, PruneTarget, prune_data, prune_system};
 pub use recall::{
     RecallItem, RecallResult, RecallScope, RecallSource, ScopeInput, normalize_scope, recall,

@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+cognee-core = { path = "../core", features = ["pipeline-run-registry"] }
 cognee-database = { path = "../database" }
 cognee-graph = { path = "../graph" }
 cognee-models = { path = "../models" }

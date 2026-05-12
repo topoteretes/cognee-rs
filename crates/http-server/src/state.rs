@@ -187,6 +187,14 @@ impl PipelineRunRepository for NoOpPipelineRunRepository {
     ) -> Result<serde_json::Map<String, serde_json::Value>, cognee_database::DatabaseError> {
         Ok(serde_json::Map::new())
     }
+
+    async fn list_pipeline_names_for_dataset(
+        &self,
+        _dataset_id: uuid::Uuid,
+    ) -> Result<Vec<(String, cognee_database::PipelineRunStatus)>, cognee_database::DatabaseError>
+    {
+        Ok(Vec::new())
+    }
 }
 
 // ─── Build state with a real database ─────────────────────────────────────────

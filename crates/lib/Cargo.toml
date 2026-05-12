@@ -95,7 +95,7 @@ cognee-chunking = { path = "../chunking" }
 cognee-cloud = { path = "../cloud", optional = true }
 cognee-http-server = { path = "../http-server", optional = true }
 cognee-cognify = { path = "../cognify" }
-cognee-core = { path = "../core" }
+cognee-core = { path = "../core", features = ["pipeline-run-registry"] }
 cognee-delete = { path = "../delete" }
 cognee-database = { path = "../database" }
 cognee-embedding = { path = "../embedding" }

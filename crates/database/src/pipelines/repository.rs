@@ -123,4 +123,18 @@ pub trait PipelineRunRepository: Send + Sync {
         &self,
         run_id: Uuid,
     ) -> Result<serde_json::Map<String, serde_json::Value>, DbError>;
+
+    /// Return one `(pipeline_name, latest_status)` pair per distinct pipeline
+    /// name that has at least one row for `dataset_id`. "Latest" is by
+    /// `created_at DESC`.
+    ///
+    /// Used by `cognee_lib::api::pipeline_runs::reset_dataset_pipeline_run_status`
+    /// to decide which `(dataset_id, pipeline_name)` pairs need a fresh
+    /// `INITIATED` row, skipping ones that are already pending. Will be
+    /// superseded by `get_pipeline_runs_by_dataset` once action item 08-06
+    /// lands; see [docs/telemetry/08/05-reset-helpers.md §3](../../../docs/telemetry/08/05-reset-helpers.md).
+    async fn list_pipeline_names_for_dataset(
+        &self,
+        dataset_id: Uuid,
+    ) -> Result<Vec<(String, PipelineRunStatus)>, DbError>;
 }

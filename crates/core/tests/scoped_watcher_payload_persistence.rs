@@ -106,6 +106,13 @@ impl PipelineRunRepository for FailingRepo {
             "synthetic failure for test".to_string(),
         ))
     }
+
+    async fn list_pipeline_names_for_dataset(
+        &self,
+        _dataset_id: Uuid,
+    ) -> Result<Vec<(String, PipelineRunStatus)>, DatabaseError> {
+        Ok(Vec::new())
+    }
 }
 
 // ---------------------------------------------------------------------------

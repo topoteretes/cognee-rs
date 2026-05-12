@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use cognee_lib::PipelineContext;
 use cognee_lib::api::DatasetRef;
-use cognee_lib::database::{AclDb, IngestDb};
+use cognee_lib::database::{AclDb, IngestDb, PipelineRunRepository, SeaOrmPipelineRunRepository};
 use cognee_lib::delete::{
     AuthorizedDeleteService, DeleteMode, DeleteRequest, DeleteScope, DeleteService,
 };
@@ -59,12 +59,20 @@ pub fn run(args: DeleteArgs, cm: Arc<cognee_lib::ComponentManager>) -> Result<()
         let request =
             build_request_async(args, owner_id, database.clone() as Arc<dyn IngestDb>).await?;
 
+        // Python parity (gap 08-05): wire the pipeline-runs repository so a
+        // dataset deletion writes a fresh `INITIATED` row for every pipeline
+        // registered against it. Without this a subsequent re-cognify would
+        // be short-circuited by `check_pipeline_run_qualification` (08-08).
+        let pipeline_run_repo: Arc<dyn PipelineRunRepository> =
+            Arc::new(SeaOrmPipelineRunRepository::new(database.clone()));
+
         let service = DeleteService::new(
             storage,
             database.clone() as Arc<dyn cognee_lib::database::DeleteDb>,
         )
         .with_graph_db(graph_db)
-        .with_vector_db(vector_db);
+        .with_vector_db(vector_db)
+        .with_pipeline_run_repo(pipeline_run_repo);
 
         if enforce_acl {
             let acl_db: Arc<dyn AclDb> = database.clone();

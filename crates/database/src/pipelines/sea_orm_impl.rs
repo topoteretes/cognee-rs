@@ -362,4 +362,32 @@ impl PipelineRunRepository for SeaOrmPipelineRunRepository {
 
         Ok(rows.into_iter().map(|m| (m.key, m.value)).collect())
     }
+
+    async fn list_pipeline_names_for_dataset(
+        &self,
+        dataset_id: Uuid,
+    ) -> Result<Vec<(String, PipelineRunStatus)>, DatabaseError> {
+        // Fetch every row for `dataset_id`, newest first, then collapse to one
+        // entry per distinct `pipeline_name` (keeping the first / newest seen).
+        let rows = pipeline_run::Entity::find()
+            .filter(pipeline_run::Column::DatasetId.eq(uuid_hex::to_hex(dataset_id)))
+            .order_by_desc(pipeline_run::Column::CreatedAt)
+            .all(self.db.as_ref())
+            .await
+            .map_err(|e| {
+                DatabaseError::QueryError(format!(
+                    "list_pipeline_names_for_dataset query failed: {e}"
+                ))
+            })?;
+
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut out = Vec::new();
+        for row in rows {
+            if seen.insert(row.pipeline_name.clone()) {
+                let run: PipelineRun = row.into();
+                out.push((run.pipeline_name, run.status));
+            }
+        }
+        Ok(out)
+    }
 }
