@@ -188,11 +188,25 @@ impl PipelineRunRepository for NoOpPipelineRunRepository {
         Ok(serde_json::Map::new())
     }
 
-    async fn list_pipeline_names_for_dataset(
+    async fn get_pipeline_run(
+        &self,
+        _pipeline_run_id: uuid::Uuid,
+    ) -> Result<Option<cognee_database::PipelineRun>, cognee_database::DatabaseError> {
+        Ok(None)
+    }
+
+    async fn get_pipeline_run_by_dataset(
         &self,
         _dataset_id: uuid::Uuid,
-    ) -> Result<Vec<(String, cognee_database::PipelineRunStatus)>, cognee_database::DatabaseError>
-    {
+        _pipeline_name: &str,
+    ) -> Result<Option<cognee_database::PipelineRun>, cognee_database::DatabaseError> {
+        Ok(None)
+    }
+
+    async fn get_pipeline_runs_by_dataset(
+        &self,
+        _dataset_id: uuid::Uuid,
+    ) -> Result<Vec<cognee_database::PipelineRun>, cognee_database::DatabaseError> {
         Ok(Vec::new())
     }
 }

@@ -124,17 +124,43 @@ pub trait PipelineRunRepository: Send + Sync {
         run_id: Uuid,
     ) -> Result<serde_json::Map<String, serde_json::Value>, DbError>;
 
-    /// Return one `(pipeline_name, latest_status)` pair per distinct pipeline
-    /// name that has at least one row for `dataset_id`. "Latest" is by
-    /// `created_at DESC`.
+    /// Return the latest row for `pipeline_run_id` (ordered by `created_at DESC`).
     ///
-    /// Used by `cognee_lib::api::pipeline_runs::reset_dataset_pipeline_run_status`
-    /// to decide which `(dataset_id, pipeline_name)` pairs need a fresh
-    /// `INITIATED` row, skipping ones that are already pending. Will be
-    /// superseded by `get_pipeline_runs_by_dataset` once action item 08-06
-    /// lands; see [docs/telemetry/08/05-reset-helpers.md §3](../../../docs/telemetry/08/05-reset-helpers.md).
-    async fn list_pipeline_names_for_dataset(
+    /// Multiple rows share the same `pipeline_run_id` per locked decision 12 —
+    /// Python intentionally reuses it across status transitions. This method
+    /// picks the most recent.
+    ///
+    /// Python parity: matches
+    /// [`get_pipeline_run.py`](https://github.com/topoteretes/cognee/blob/main/cognee/modules/pipelines/methods/get_pipeline_run.py).
+    /// Python uses `session.scalar()` without an `ORDER BY` — the Rust port
+    /// adds an explicit `ORDER BY created_at DESC` which is a *stronger*
+    /// guarantee consistent with decision 12 ("latest by `created_at` defines
+    /// current state"). Intentional, not drift.
+    async fn get_pipeline_run(&self, pipeline_run_id: Uuid)
+    -> Result<Option<PipelineRun>, DbError>;
+
+    /// Return the latest run for `(dataset_id, pipeline_name)` by `created_at`.
+    ///
+    /// Python parity: matches
+    /// [`get_pipeline_run_by_dataset.py`](https://github.com/topoteretes/cognee/blob/main/cognee/modules/pipelines/methods/get_pipeline_run_by_dataset.py).
+    async fn get_pipeline_run_by_dataset(
         &self,
         dataset_id: Uuid,
-    ) -> Result<Vec<(String, PipelineRunStatus)>, DbError>;
+        pipeline_name: &str,
+    ) -> Result<Option<PipelineRun>, DbError>;
+
+    /// Return one latest row per distinct `pipeline_name` that has runs for
+    /// `dataset_id`. Result order is unspecified.
+    ///
+    /// Supersedes the temporary `list_pipeline_names_for_dataset` helper that
+    /// task 08-05 introduced. Used by
+    /// `cognee_lib::api::pipeline_runs::reset_dataset_pipeline_run_status`
+    /// and the delete crate's prune flow to enumerate pipelines per dataset.
+    ///
+    /// Python parity: matches
+    /// [`get_pipeline_runs_by_dataset.py`](https://github.com/topoteretes/cognee/blob/main/cognee/modules/pipelines/methods/get_pipeline_runs_by_dataset.py).
+    async fn get_pipeline_runs_by_dataset(
+        &self,
+        dataset_id: Uuid,
+    ) -> Result<Vec<PipelineRun>, DbError>;
 }

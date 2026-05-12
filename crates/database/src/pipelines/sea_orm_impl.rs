@@ -363,29 +363,64 @@ impl PipelineRunRepository for SeaOrmPipelineRunRepository {
         Ok(rows.into_iter().map(|m| (m.key, m.value)).collect())
     }
 
-    async fn list_pipeline_names_for_dataset(
+    async fn get_pipeline_run(
+        &self,
+        pipeline_run_id: Uuid,
+    ) -> Result<Option<PipelineRun>, DatabaseError> {
+        let row = pipeline_run::Entity::find()
+            .filter(pipeline_run::Column::PipelineRunId.eq(uuid_hex::to_hex(pipeline_run_id)))
+            .order_by_desc(pipeline_run::Column::CreatedAt)
+            .one(self.db.as_ref())
+            .await
+            .map_err(|e| {
+                DatabaseError::QueryError(format!("get_pipeline_run query failed: {e}"))
+            })?;
+        Ok(row.map(PipelineRun::from))
+    }
+
+    async fn get_pipeline_run_by_dataset(
         &self,
         dataset_id: Uuid,
-    ) -> Result<Vec<(String, PipelineRunStatus)>, DatabaseError> {
-        // Fetch every row for `dataset_id`, newest first, then collapse to one
-        // entry per distinct `pipeline_name` (keeping the first / newest seen).
+        pipeline_name: &str,
+    ) -> Result<Option<PipelineRun>, DatabaseError> {
+        // `dataset_id` is the function parameter (non-nullable `Uuid`); we
+        // match the column against the hex string. Per decision 4 the column
+        // is `Option<String>` post-08-01 but a literal `eq(...)` only matches
+        // non-NULL rows — exactly what we want here.
+        let row = pipeline_run::Entity::find()
+            .filter(pipeline_run::Column::DatasetId.eq(uuid_hex::to_hex(dataset_id)))
+            .filter(pipeline_run::Column::PipelineName.eq(pipeline_name))
+            .order_by_desc(pipeline_run::Column::CreatedAt)
+            .one(self.db.as_ref())
+            .await
+            .map_err(|e| {
+                DatabaseError::QueryError(format!("get_pipeline_run_by_dataset query failed: {e}"))
+            })?;
+        Ok(row.map(PipelineRun::from))
+    }
+
+    async fn get_pipeline_runs_by_dataset(
+        &self,
+        dataset_id: Uuid,
+    ) -> Result<Vec<PipelineRun>, DatabaseError> {
+        // Fetch every row for `dataset_id`, newest first, then collapse to
+        // one entry per distinct `pipeline_name` (keeping the first / newest
+        // seen). Matches Python's behaviour where the helper groups by
+        // pipeline_name and picks the latest row.
         let rows = pipeline_run::Entity::find()
             .filter(pipeline_run::Column::DatasetId.eq(uuid_hex::to_hex(dataset_id)))
             .order_by_desc(pipeline_run::Column::CreatedAt)
             .all(self.db.as_ref())
             .await
             .map_err(|e| {
-                DatabaseError::QueryError(format!(
-                    "list_pipeline_names_for_dataset query failed: {e}"
-                ))
+                DatabaseError::QueryError(format!("get_pipeline_runs_by_dataset query failed: {e}"))
             })?;
 
         let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
         let mut out = Vec::new();
         for row in rows {
             if seen.insert(row.pipeline_name.clone()) {
-                let run: PipelineRun = row.into();
-                out.push((run.pipeline_name, run.status));
+                out.push(PipelineRun::from(row));
             }
         }
         Ok(out)

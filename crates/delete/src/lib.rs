@@ -635,20 +635,21 @@ impl DeleteService {
             return Ok(());
         };
 
-        let names = repo
-            .list_pipeline_names_for_dataset(dataset_id)
+        let runs = repo
+            .get_pipeline_runs_by_dataset(dataset_id)
             .await
             .map_err(|e| {
                 DeleteError::Runtime(format!(
-                    "Failed to list pipeline names for dataset {dataset_id}: {e}"
+                    "Failed to list pipeline runs for dataset {dataset_id}: {e}"
                 ))
             })?;
 
-        for (name, latest_status) in names {
-            if matches!(latest_status, PipelineRunStatus::Initiated) {
+        for run in runs {
+            if matches!(run.status, PipelineRunStatus::Initiated) {
                 // Python skips runs already pending to avoid duplicate rows.
                 continue;
             }
+            let name = run.pipeline_name;
             let pid = pipeline_id(owner_id, dataset_id, &name);
             let prid = pipeline_run_id(pid, dataset_id);
             repo.log_pipeline_run(

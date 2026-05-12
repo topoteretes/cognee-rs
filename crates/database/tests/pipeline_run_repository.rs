@@ -262,6 +262,276 @@ async fn reset_orphans_does_not_rewrite_completed_successor() {
 // list_recent — basic smoke test
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// get_pipeline_run — empty / single / latest of many
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn get_pipeline_run_returns_none_when_no_rows() {
+    let db = make_db().await;
+    let repo = make_repo(Arc::clone(&db));
+
+    let result = repo
+        .get_pipeline_run(Uuid::new_v4())
+        .await
+        .expect("get_pipeline_run empty");
+    assert!(result.is_none());
+}
+
+#[tokio::test]
+async fn get_pipeline_run_returns_single_row() {
+    let db = make_db().await;
+    let ds = Uuid::new_v4();
+    create_dataset(&db, ds).await;
+    let repo = make_repo(Arc::clone(&db));
+
+    let prid = Uuid::new_v4();
+    let pid = Uuid::new_v4();
+    repo.log_pipeline_run(
+        prid,
+        pid,
+        "single_p",
+        Some(ds),
+        PipelineRunStatus::Started,
+        None,
+    )
+    .await
+    .expect("log");
+
+    let result = repo
+        .get_pipeline_run(prid)
+        .await
+        .expect("get_pipeline_run single")
+        .expect("row present");
+    assert_eq!(result.pipeline_run_id, prid);
+    assert_eq!(result.status, PipelineRunStatus::Started);
+}
+
+#[tokio::test]
+async fn get_pipeline_run_returns_latest_of_many() {
+    let db = make_db().await;
+    let ds = Uuid::new_v4();
+    create_dataset(&db, ds).await;
+    let repo = make_repo(Arc::clone(&db));
+
+    let prid = Uuid::new_v4();
+    let pid = Uuid::new_v4();
+
+    // Multiple rows sharing pipeline_run_id (decision 12 reuse semantics).
+    for status in [
+        PipelineRunStatus::Initiated,
+        PipelineRunStatus::Started,
+        PipelineRunStatus::Completed,
+    ] {
+        repo.log_pipeline_run(prid, pid, "reuse_p", Some(ds), status, None)
+            .await
+            .expect("log");
+        // Small sleep so created_at strictly increases — SQLite stores
+        // sub-microsecond datetimes but two same-instant rows would tie
+        // the ORDER BY and the test could observe either order.
+        tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+    }
+
+    let result = repo
+        .get_pipeline_run(prid)
+        .await
+        .expect("get_pipeline_run latest")
+        .expect("row present");
+    assert_eq!(result.status, PipelineRunStatus::Completed);
+}
+
+// ---------------------------------------------------------------------------
+// get_pipeline_run_by_dataset — empty / single / multiple
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn get_pipeline_run_by_dataset_returns_none_when_empty() {
+    let db = make_db().await;
+    let ds = Uuid::new_v4();
+    create_dataset(&db, ds).await;
+    let repo = make_repo(Arc::clone(&db));
+
+    let result = repo
+        .get_pipeline_run_by_dataset(ds, "missing_p")
+        .await
+        .expect("query");
+    assert!(result.is_none());
+}
+
+#[tokio::test]
+async fn get_pipeline_run_by_dataset_returns_single_match() {
+    let db = make_db().await;
+    let ds = Uuid::new_v4();
+    create_dataset(&db, ds).await;
+    let repo = make_repo(Arc::clone(&db));
+
+    repo.log_pipeline_run(
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+        "by_ds_p",
+        Some(ds),
+        PipelineRunStatus::Initiated,
+        None,
+    )
+    .await
+    .expect("log");
+
+    let result = repo
+        .get_pipeline_run_by_dataset(ds, "by_ds_p")
+        .await
+        .expect("query")
+        .expect("row present");
+    assert_eq!(result.pipeline_name, "by_ds_p");
+    assert_eq!(result.status, PipelineRunStatus::Initiated);
+}
+
+#[tokio::test]
+async fn get_pipeline_run_by_dataset_returns_latest_match() {
+    let db = make_db().await;
+    let ds = Uuid::new_v4();
+    create_dataset(&db, ds).await;
+    let repo = make_repo(Arc::clone(&db));
+
+    let prid = Uuid::new_v4();
+    let pid = Uuid::new_v4();
+
+    for status in [
+        PipelineRunStatus::Initiated,
+        PipelineRunStatus::Started,
+        PipelineRunStatus::Errored,
+    ] {
+        repo.log_pipeline_run(prid, pid, "latest_p", Some(ds), status, None)
+            .await
+            .expect("log");
+        tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+    }
+
+    let result = repo
+        .get_pipeline_run_by_dataset(ds, "latest_p")
+        .await
+        .expect("query")
+        .expect("row present");
+    assert_eq!(result.status, PipelineRunStatus::Errored);
+}
+
+// ---------------------------------------------------------------------------
+// get_pipeline_runs_by_dataset — empty / one name / multiple names / dedup
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn get_pipeline_runs_by_dataset_returns_empty_when_no_rows() {
+    let db = make_db().await;
+    let ds = Uuid::new_v4();
+    create_dataset(&db, ds).await;
+    let repo = make_repo(Arc::clone(&db));
+
+    let rows = repo.get_pipeline_runs_by_dataset(ds).await.expect("query");
+    assert!(rows.is_empty());
+}
+
+#[tokio::test]
+async fn get_pipeline_runs_by_dataset_one_pipeline_name() {
+    let db = make_db().await;
+    let ds = Uuid::new_v4();
+    create_dataset(&db, ds).await;
+    let repo = make_repo(Arc::clone(&db));
+
+    repo.log_pipeline_run(
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+        "solo_p",
+        Some(ds),
+        PipelineRunStatus::Completed,
+        None,
+    )
+    .await
+    .expect("log");
+
+    let rows = repo.get_pipeline_runs_by_dataset(ds).await.expect("query");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].pipeline_name, "solo_p");
+}
+
+#[tokio::test]
+async fn get_pipeline_runs_by_dataset_multiple_pipeline_names() {
+    let db = make_db().await;
+    let ds = Uuid::new_v4();
+    create_dataset(&db, ds).await;
+    let repo = make_repo(Arc::clone(&db));
+
+    for name in ["a_p", "b_p", "c_p"] {
+        repo.log_pipeline_run(
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            name,
+            Some(ds),
+            PipelineRunStatus::Initiated,
+            None,
+        )
+        .await
+        .expect("log");
+    }
+
+    let rows = repo.get_pipeline_runs_by_dataset(ds).await.expect("query");
+    assert_eq!(rows.len(), 3);
+    let mut names: Vec<&str> = rows.iter().map(|r| r.pipeline_name.as_str()).collect();
+    names.sort();
+    assert_eq!(names, vec!["a_p", "b_p", "c_p"]);
+}
+
+#[tokio::test]
+async fn get_pipeline_runs_by_dataset_dedupes_to_latest_per_name() {
+    let db = make_db().await;
+    let ds = Uuid::new_v4();
+    create_dataset(&db, ds).await;
+    let repo = make_repo(Arc::clone(&db));
+
+    let pid_a = Uuid::new_v4();
+    let prid_a = Uuid::new_v4();
+    // "name_a": Initiated → Started → Completed (3 rows, latest is Completed)
+    for status in [
+        PipelineRunStatus::Initiated,
+        PipelineRunStatus::Started,
+        PipelineRunStatus::Completed,
+    ] {
+        repo.log_pipeline_run(prid_a, pid_a, "name_a", Some(ds), status, None)
+            .await
+            .expect("log a");
+        tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+    }
+
+    let pid_b = Uuid::new_v4();
+    let prid_b = Uuid::new_v4();
+    // "name_b": Initiated → Errored (2 rows, latest is Errored)
+    for status in [PipelineRunStatus::Initiated, PipelineRunStatus::Errored] {
+        repo.log_pipeline_run(prid_b, pid_b, "name_b", Some(ds), status, None)
+            .await
+            .expect("log b");
+        tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+    }
+
+    let rows = repo.get_pipeline_runs_by_dataset(ds).await.expect("query");
+
+    // One row per distinct pipeline_name, each the latest by created_at.
+    assert_eq!(rows.len(), 2, "expected one row per pipeline_name");
+    let by_name: HashMap<String, PipelineRunStatus> = rows
+        .into_iter()
+        .map(|r| (r.pipeline_name, r.status))
+        .collect();
+    assert_eq!(
+        by_name.get("name_a").cloned(),
+        Some(PipelineRunStatus::Completed)
+    );
+    assert_eq!(
+        by_name.get("name_b").cloned(),
+        Some(PipelineRunStatus::Errored)
+    );
+}
+
+// ---------------------------------------------------------------------------
+// list_recent — basic smoke test
+// ---------------------------------------------------------------------------
+
 #[tokio::test]
 async fn list_recent_returns_rows_in_desc_order() {
     let db = make_db().await;

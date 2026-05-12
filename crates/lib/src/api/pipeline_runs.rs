@@ -72,13 +72,8 @@ pub async fn reset_pipeline_run_status(
 /// Matches Python's
 /// [`reset_dataset_pipeline_run_status`](https://github.com/topoteretes/cognee/blob/main/cognee/modules/pipelines/layers/reset_dataset_pipeline_run_status.py).
 ///
-/// # Sequencing note
-///
-/// Today the dataset enumeration goes through the
-/// [`PipelineRunRepository::list_pipeline_names_for_dataset`] trait method
-/// added by this same gap (08-05). Once action item 08-06 lands
-/// `get_pipeline_runs_by_dataset`, this implementation should switch over
-/// and the inline helper can be removed.
+/// Uses [`PipelineRunRepository::get_pipeline_runs_by_dataset`] (one latest
+/// row per `pipeline_name`) to enumerate the work — see action item 08-06.
 ///
 /// # Errors
 ///
@@ -89,18 +84,18 @@ pub async fn reset_dataset_pipeline_run_status(
     user_id: Uuid,
     dataset_id: Uuid,
 ) -> Result<(), ApiError> {
-    let names = repo
-        .list_pipeline_names_for_dataset(dataset_id)
+    let runs = repo
+        .get_pipeline_runs_by_dataset(dataset_id)
         .await
-        .map_err(|e| ApiError::InvalidArgument(format!("list_pipeline_names_for_dataset: {e}")))?;
+        .map_err(|e| ApiError::InvalidArgument(format!("get_pipeline_runs_by_dataset: {e}")))?;
 
-    for (name, latest_status) in names {
-        if matches!(latest_status, PipelineRunStatus::Initiated) {
+    for run in runs {
+        if matches!(run.status, PipelineRunStatus::Initiated) {
             // Python skips runs already at INITIATED to avoid stacking
             // duplicate rows when prune fires repeatedly.
             continue;
         }
-        reset_pipeline_run_status(repo.clone(), user_id, dataset_id, &name).await?;
+        reset_pipeline_run_status(repo.clone(), user_id, dataset_id, &run.pipeline_name).await?;
     }
     Ok(())
 }

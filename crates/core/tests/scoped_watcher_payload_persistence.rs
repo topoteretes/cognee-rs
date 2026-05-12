@@ -107,10 +107,25 @@ impl PipelineRunRepository for FailingRepo {
         ))
     }
 
-    async fn list_pipeline_names_for_dataset(
+    async fn get_pipeline_run(
+        &self,
+        _pipeline_run_id: Uuid,
+    ) -> Result<Option<cognee_database::PipelineRun>, DatabaseError> {
+        Ok(None)
+    }
+
+    async fn get_pipeline_run_by_dataset(
         &self,
         _dataset_id: Uuid,
-    ) -> Result<Vec<(String, PipelineRunStatus)>, DatabaseError> {
+        _pipeline_name: &str,
+    ) -> Result<Option<cognee_database::PipelineRun>, DatabaseError> {
+        Ok(None)
+    }
+
+    async fn get_pipeline_runs_by_dataset(
+        &self,
+        _dataset_id: Uuid,
+    ) -> Result<Vec<cognee_database::PipelineRun>, DatabaseError> {
         Ok(Vec::new())
     }
 }
