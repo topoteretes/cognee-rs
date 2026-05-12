@@ -60,6 +60,10 @@ pub struct RunSpec {
     pub pipeline_name: String,
     pub user_id: Option<Uuid>,
     pub dataset_id: Option<Uuid>,
+    /// IDs of the `Data` rows the run is processing. Surfaced into
+    /// `pipeline_runs.run_info["data"]` by the watcher (see task 08-03).
+    /// Empty when the run has no `Data` input (rare; ad-hoc paths).
+    pub data_ids: Vec<Uuid>,
 }
 
 /// Configurable bounds for the in-memory registry.

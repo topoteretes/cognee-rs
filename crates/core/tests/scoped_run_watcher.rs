@@ -59,6 +59,7 @@ fn fake_run(run_id: Uuid, status: CoreStatus) -> PipelineRunInfo {
         user_id: None,
         tenant_id: None,
         dataset_id: None,
+        data_ids: Vec::new(),
         status,
         started_at: chrono::Utc::now(),
         completed_at: None,

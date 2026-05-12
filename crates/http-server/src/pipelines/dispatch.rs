@@ -100,6 +100,11 @@ pub async fn dispatch_pipeline(
         pipeline_name: pipeline_name.to_owned(),
         user_id: Some(user.id),
         dataset_id,
+        // HTTP dispatch does not see the resolved `Data` rows at this
+        // layer — they live inside the boxed pipeline future. Task 08-07
+        // will wire `data_ids` through the library entry points; until
+        // then the watcher emits Python's `"None"` branch.
+        data_ids: Vec::new(),
     };
 
     if run_in_background {

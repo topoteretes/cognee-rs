@@ -326,6 +326,10 @@ pub struct PipelineRunInfo {
     pub tenant_id: Option<Uuid>,
     /// Dataset being processed.
     pub dataset_id: Option<Uuid>,
+    /// `Data.id`s for the inputs of the run. Surfaced into
+    /// `run_info["data"]` by the watcher. Empty when the run has no
+    /// `Data` input.
+    pub data_ids: Vec<Uuid>,
     /// Current run status.
     pub status: PipelineRunStatus,
     /// When the run was initiated.
@@ -637,6 +641,25 @@ pub async fn execute(
     let pipeline_id = deterministic_pipeline_id(pipeline.name.as_deref(), user_id, dataset_id)
         .unwrap_or(pipeline.id);
 
+    // Collect `Data.id`s from the inputs for the watcher's `run_info["data"]`
+    // payload. Uses the pipeline's `data_id_fn` extractor when present; falls
+    // back to an empty vec, which the watcher maps to Python's `"None"`.
+    //
+    // `DataIdFn` returns `Option<String>` (the extractor stringifies whatever
+    // identity its inputs carry). For `run_info["data"]` we only surface the
+    // ones that parse as canonical UUIDs — anything else is silently
+    // dropped, mirroring Python's `list[Data]` branch which only emits
+    // `str(item.id)` for genuine `Data` instances.
+    let data_ids: Vec<Uuid> = if let Some(id_fn) = pipeline.data_id_fn.as_ref() {
+        inputs
+            .iter()
+            .filter_map(|x| id_fn(Arc::clone(x)))
+            .filter_map(|s| Uuid::parse_str(&s).ok())
+            .collect()
+    } else {
+        Vec::new()
+    };
+
     let mut run_info = PipelineRunInfo {
         run_id,
         pipeline_id,
@@ -644,6 +667,7 @@ pub async fn execute(
         user_id,
         tenant_id,
         dataset_id,
+        data_ids,
         status: PipelineRunStatus::Started,
         started_at: chrono::Utc::now(),
         completed_at: None,
@@ -1565,6 +1589,7 @@ mod tests {
             user_id: None,
             tenant_id: None,
             dataset_id: None,
+            data_ids: Vec::new(),
             status: PipelineRunStatus::Started,
             started_at: chrono::Utc::now(),
             completed_at: None,
@@ -1583,6 +1608,7 @@ mod tests {
             user_id: None,
             tenant_id: None,
             dataset_id: None,
+            data_ids: Vec::new(),
             status: PipelineRunStatus::Completed,
             started_at,
             completed_at: Some(now),
