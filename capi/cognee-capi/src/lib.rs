@@ -31,3 +31,14 @@ pub mod thread_pool;
 pub mod util;
 pub mod value;
 pub mod watcher;
+
+/// Test-only no-return helper. Behind the `testing-panic` cargo
+/// feature so it never leaks into release artefacts. Used by the
+/// gap-07 capi smoke tests (`capi/examples/panic_hook_smoke.c`) to
+/// verify the panic hook installed by `cg_init` writes
+/// `[cognee-capi panic]` to stderr before unwind.
+#[cfg(feature = "testing-panic")]
+#[unsafe(no_mangle)]
+pub extern "C" fn cg_test_force_panic() -> ! {
+    panic!("test panic from gap 07 task 07-04 smoke test");
+}

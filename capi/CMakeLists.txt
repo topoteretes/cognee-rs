@@ -3,11 +3,23 @@ project(cognee-capi C)
 
 set(CARGO_TARGET_DIR "${CMAKE_SOURCE_DIR}/../target")
 
+# Optional cargo features forwarded to the cognee-capi Rust build.
+# Used by `capi/scripts/check.sh` to enable `testing-panic` when
+# building the gap-07 panic-hook smoke binary.
+set(COGNEE_CAPI_CARGO_FEATURES "" CACHE STRING
+    "Extra cargo features to enable when building cognee-capi (comma-separated)")
+
+if(COGNEE_CAPI_CARGO_FEATURES)
+    set(CARGO_FEATURE_ARGS --features "${COGNEE_CAPI_CARGO_FEATURES}")
+else()
+    set(CARGO_FEATURE_ARGS "")
+endif()
+
 # Build Rust library via cargo
 add_custom_target(cognee_capi_cargo ALL
-    COMMAND cargo build --manifest-path "${CMAKE_SOURCE_DIR}/cognee-capi/Cargo.toml"
+    COMMAND cargo build --manifest-path "${CMAKE_SOURCE_DIR}/cognee-capi/Cargo.toml" ${CARGO_FEATURE_ARGS}
     WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/.."
-    COMMENT "Building cognee-capi Rust library"
+    COMMENT "Building cognee-capi Rust library (features: ${COGNEE_CAPI_CARGO_FEATURES})"
 )
 
 # Import the built static library

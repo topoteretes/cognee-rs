@@ -6,6 +6,14 @@ edition.workspace = true
 [lib]
 crate-type = ["cdylib", "staticlib"]
 
+[features]
+# Test-only opt-in: exposes `cg_test_force_panic`, a no-return symbol
+# that always panics. Used by the capi smoke tests under
+# `capi/examples/panic_hook_smoke.c` to verify the gap-07 panic hook
+# fires across FFI. Must NOT be enabled in release builds — the
+# function exists exactly to crash the process.
+testing-panic = []
+
 [dependencies]
 cognee-core = { path = "../../crates/core" }
 cognee-database = { path = "../../crates/database", features = ["sqlite"] }
