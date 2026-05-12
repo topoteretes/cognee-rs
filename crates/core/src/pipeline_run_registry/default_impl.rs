@@ -5,7 +5,6 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use futures::Stream;
-use serde_json::json;
 use tokio::sync::{RwLock, broadcast, watch};
 use tokio_stream::StreamExt as _;
 use tokio_stream::wrappers::BroadcastStream;
@@ -32,6 +31,9 @@ struct RunSlot {
     finished_at: Option<DateTime<Utc>>,
     abort_handle: Option<tokio::task::AbortHandle>,
     meta: RunHandle,
+    /// Carried from `RunSpec.data_ids`. Surfaced into
+    /// `pipeline_runs.run_info["data"]` by the direct DB writes below.
+    data_ids: Vec<Uuid>,
 }
 
 // ---------------------------------------------------------------------------
@@ -213,6 +215,7 @@ impl DefaultPipelineRunRegistry {
             // subscribers attached before the producer don't lose events.
             existing.meta = meta.clone();
             existing.started_at = now;
+            existing.data_ids = spec.data_ids.clone();
             // Reset phase to Pending in case the placeholder was never set.
             let _ = existing.phase_tx.send(RunPhase::Pending);
             return meta;
@@ -228,6 +231,7 @@ impl DefaultPipelineRunRegistry {
             finished_at: None,
             abort_handle: None,
             meta: meta.clone(),
+            data_ids: spec.data_ids.clone(),
         };
 
         runs.insert(run_id, slot);
@@ -285,11 +289,15 @@ impl DefaultPipelineRunRegistry {
 
         // Log the STARTED row (best-effort).
         let runs_read = self.runs.read().await;
-        let meta = runs_read.get(&run_id).map(|s| s.meta.clone());
+        let slot_snapshot = runs_read
+            .get(&run_id)
+            .map(|s| (s.meta.clone(), s.data_ids.clone()));
         drop(runs_read);
 
-        if let Some(m) = &meta {
+        if let Some((m, data_ids)) = &slot_snapshot {
             let pipeline_id = Uuid::new_v5(&Uuid::NAMESPACE_OID, m.pipeline_name.as_bytes());
+            // Python parity: STARTED writes `{"data": data_info(data)}`.
+            let run_info = Some(super::run_info_for_running(data_ids));
             let result = self
                 .repo
                 .log_pipeline_run(
@@ -298,7 +306,7 @@ impl DefaultPipelineRunRegistry {
                     &m.pipeline_name,
                     m.dataset_id,
                     DbStatus::Started,
-                    None,
+                    run_info,
                 )
                 .await;
             if let Err(e) = result {
@@ -315,15 +323,21 @@ impl DefaultPipelineRunRegistry {
         };
 
         // Log the terminal row (best-effort).
-        if let Some(m) = &meta {
+        if let Some((m, data_ids)) = &slot_snapshot {
             let pipeline_id = Uuid::new_v5(&Uuid::NAMESPACE_OID, m.pipeline_name.as_bytes());
-            let db_status = match &phase {
-                RunPhase::Completed => DbStatus::Completed,
-                _ => DbStatus::Errored,
-            };
-            let run_info = match &phase {
-                RunPhase::Errored { message } => Some(json!({"error": message})),
-                _ => None,
+            let (db_status, run_info) = match &phase {
+                RunPhase::Completed => (
+                    DbStatus::Completed,
+                    // Python parity: COMPLETED writes `{"data": data_info(data)}`.
+                    Some(super::run_info_for_running(data_ids)),
+                ),
+                RunPhase::Errored { message } => (
+                    DbStatus::Errored,
+                    // Python parity: ERRORED writes
+                    // `{"data": data_info(data), "error": str(e)}`.
+                    Some(super::run_info_for_errored(data_ids, message)),
+                ),
+                _ => (DbStatus::Errored, None),
             };
             let result = self
                 .repo
@@ -387,6 +401,7 @@ impl PipelineRunRegistry for DefaultPipelineRunRegistry {
         let pipeline_name = spec.pipeline_name.clone();
         let dataset_id = spec.dataset_id;
         let user_id = spec.user_id;
+        let data_ids = spec.data_ids.clone();
 
         // We can't easily move `self` or an `Arc<Self>` into the task without
         // exposing the internal state. Instead, replicate the inline run logic
@@ -394,9 +409,10 @@ impl PipelineRunRegistry for DefaultPipelineRunRegistry {
         let join_handle = tokio::spawn({
             let pipeline_name_clone = pipeline_name.clone();
             async move {
-                // Emit STARTED.
+                // Emit STARTED — Python parity: `{"data": data_info(data)}`.
                 let pipeline_id =
                     Uuid::new_v5(&Uuid::NAMESPACE_OID, pipeline_name_clone.as_bytes());
+                let started_run_info = Some(super::run_info_for_running(&data_ids));
                 let result = repo
                     .log_pipeline_run(
                         run_id,
@@ -404,7 +420,7 @@ impl PipelineRunRegistry for DefaultPipelineRunRegistry {
                         &pipeline_name_clone,
                         dataset_id,
                         DbStatus::Started,
-                        None,
+                        started_run_info,
                     )
                     .await;
                 if let Err(e) = result {
@@ -420,13 +436,19 @@ impl PipelineRunRegistry for DefaultPipelineRunRegistry {
                 };
 
                 // Log terminal row.
-                let db_status = match &phase {
-                    RunPhase::Completed => DbStatus::Completed,
-                    _ => DbStatus::Errored,
-                };
-                let run_info = match &phase {
-                    RunPhase::Errored { message } => Some(json!({"error": message})),
-                    _ => None,
+                let (db_status, run_info) = match &phase {
+                    RunPhase::Completed => (
+                        DbStatus::Completed,
+                        // Python parity: COMPLETED writes `{"data": data_info(data)}`.
+                        Some(super::run_info_for_running(&data_ids)),
+                    ),
+                    RunPhase::Errored { message } => (
+                        DbStatus::Errored,
+                        // Python parity: ERRORED writes
+                        // `{"data": data_info(data), "error": str(e)}`.
+                        Some(super::run_info_for_errored(&data_ids, message)),
+                    ),
+                    _ => (DbStatus::Errored, None),
                 };
                 let result = repo
                     .log_pipeline_run(
@@ -577,6 +599,7 @@ impl PipelineRunRegistry for DefaultPipelineRunRegistry {
                         finished_at: None,
                         abort_handle: None,
                         meta: placeholder_meta,
+                        data_ids: Vec::new(),
                     });
                     let mut order = self
                         .eviction_order
@@ -635,17 +658,23 @@ impl PipelineRunRegistry for DefaultPipelineRunRegistry {
 
         // Optionally write an ERRORED row.
         if self.cfg.abort_writes_errored_row {
-            let pipeline_name = {
+            let (pipeline_name, dataset_id, data_ids) = {
                 let runs = self.runs.read().await;
                 runs.get(&run_id)
-                    .map(|s| s.meta.pipeline_name.clone())
+                    .map(|s| {
+                        (
+                            s.meta.pipeline_name.clone(),
+                            s.meta.dataset_id,
+                            s.data_ids.clone(),
+                        )
+                    })
                     .unwrap_or_default()
             };
-            let dataset_id = {
-                let runs = self.runs.read().await;
-                runs.get(&run_id).and_then(|s| s.meta.dataset_id)
-            };
             let pipeline_id = Uuid::new_v5(&Uuid::NAMESPACE_OID, pipeline_name.as_bytes());
+            // Python parity: ERRORED writes
+            // `{"data": data_info(data), "error": str(e)}`. For aborts the
+            // error message is the literal "abort".
+            let run_info = Some(super::run_info_for_errored(&data_ids, "abort"));
             let result = self
                 .repo
                 .log_pipeline_run(
@@ -654,7 +683,7 @@ impl PipelineRunRegistry for DefaultPipelineRunRegistry {
                     &pipeline_name,
                     dataset_id,
                     DbStatus::Errored,
-                    Some(json!({"reason": "abort"})),
+                    run_info,
                 )
                 .await;
             if let Err(e) = result {

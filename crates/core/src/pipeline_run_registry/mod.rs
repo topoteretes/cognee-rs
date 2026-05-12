@@ -4,7 +4,9 @@ pub mod scoped_watcher;
 pub mod trait_def;
 pub mod types;
 
-pub use data_info::data_info;
+pub use data_info::{
+    data_info, run_info_for_errored, run_info_for_initiated, run_info_for_running,
+};
 pub use default_impl::DefaultPipelineRunRegistry;
 pub use scoped_watcher::ScopedRunWatcher;
 pub use trait_def::PipelineRunRegistry;

@@ -2,7 +2,6 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use chrono::Utc;
-use serde_json::json;
 use uuid::Uuid;
 
 use cognee_database::{PipelineRunRepository, PipelineRunStatus as DbStatus};
@@ -110,6 +109,8 @@ impl PipelineWatcher for ScopedRunWatcher {
 
     async fn on_pipeline_run_started(&self, run: &PipelineRunInfo) {
         // 1. Write durable row — non-fatal on failure.
+        //    Python parity: `run_info = {"data": data_info(data)}`.
+        let run_info = Some(super::run_info_for_running(&run.data_ids));
         let db_result = self
             .db
             .log_pipeline_run(
@@ -118,7 +119,7 @@ impl PipelineWatcher for ScopedRunWatcher {
                 &run.pipeline_name,
                 run.dataset_id,
                 core_to_db_status(&run.status),
-                None,
+                run_info,
             )
             .await;
 
@@ -141,6 +142,9 @@ impl PipelineWatcher for ScopedRunWatcher {
 
     async fn on_pipeline_run_completed(&self, run: &PipelineRunInfo, _output_count: usize) {
         // 1. Write durable row — non-fatal on failure.
+        //    Python parity: `run_info = {"data": data_info(data)}` — same
+        //    shape as STARTED.
+        let run_info = Some(super::run_info_for_running(&run.data_ids));
         let db_result = self
             .db
             .log_pipeline_run(
@@ -149,7 +153,7 @@ impl PipelineWatcher for ScopedRunWatcher {
                 &run.pipeline_name,
                 run.dataset_id,
                 DbStatus::Completed,
-                None,
+                run_info,
             )
             .await;
 
@@ -182,7 +186,8 @@ impl PipelineWatcher for ScopedRunWatcher {
 
     async fn on_pipeline_run_errored(&self, run: &PipelineRunInfo, error: &str) {
         // 1. Write durable row — non-fatal on failure.
-        let run_info = Some(json!({"error": error}));
+        //    Python parity: `run_info = {"data": data_info(data), "error": str(e)}`.
+        let run_info = Some(super::run_info_for_errored(&run.data_ids, error));
         let db_result = self
             .db
             .log_pipeline_run(

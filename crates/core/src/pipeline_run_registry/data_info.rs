@@ -10,7 +10,7 @@
 //! (same wire shape as Python's `if not data: data_info = "None"`) or a
 //! list of UUIDs.
 
-use serde_json::Value;
+use serde_json::{Map, Value};
 use uuid::Uuid;
 
 /// Build the value Python writes under `run_info["data"]`.
@@ -38,6 +38,50 @@ pub fn data_info(data_ids: &[Uuid]) -> Value {
                 .collect(),
         )
     }
+}
+
+/// Build `run_info` for the `STARTED` / `COMPLETED` rows.
+///
+/// Matches Python (`log_pipeline_run_start.py` / `log_pipeline_run_complete.py`):
+///
+/// ```text
+/// run_info = {"data": data_info(data)}
+/// ```
+pub fn run_info_for_running(data_ids: &[Uuid]) -> Value {
+    let mut m = Map::with_capacity(1);
+    m.insert("data".into(), data_info(data_ids));
+    Value::Object(m)
+}
+
+/// Build `run_info` for the `ERRORED` row.
+///
+/// Matches Python (`log_pipeline_run_error.py`):
+///
+/// ```text
+/// run_info = {"data": data_info(data), "error": str(e)}
+/// ```
+///
+/// `serde_json::Map` preserves insertion order, so `data` always precedes
+/// `error` on the wire — required for byte-identical parity with Python.
+pub fn run_info_for_errored(data_ids: &[Uuid], error: &str) -> Value {
+    let mut m = Map::with_capacity(2);
+    m.insert("data".into(), data_info(data_ids));
+    m.insert("error".into(), Value::String(error.to_string()));
+    Value::Object(m)
+}
+
+/// Build `run_info` for the `INITIATED` row.
+///
+/// Matches Python (`log_pipeline_run_initiated.py`):
+///
+/// ```text
+/// run_info = {}
+/// ```
+///
+/// Reserved for task 08-04 — currently exported and unit-tested but no
+/// production caller invokes it.
+pub fn run_info_for_initiated() -> Value {
+    Value::Object(Map::new())
 }
 
 #[cfg(test)]
@@ -72,5 +116,56 @@ mod tests {
                 "33333333-3333-3333-3333-333333333333",
             ])
         );
+    }
+
+    // ── run_info_for_running ─────────────────────────────────────────
+
+    #[test]
+    fn running_run_info_with_empty_data_emits_none_literal() {
+        let v = run_info_for_running(&[]);
+        assert_eq!(v.to_string(), "{\"data\":\"None\"}");
+    }
+
+    #[test]
+    fn running_run_info_with_single_id_matches_python_shape() {
+        let id =
+            Uuid::parse_str("00000000-0000-0000-0000-000000000001").expect("valid uuid literal");
+        let v = run_info_for_running(&[id]);
+        assert_eq!(
+            v.to_string(),
+            "{\"data\":[\"00000000-0000-0000-0000-000000000001\"]}"
+        );
+    }
+
+    // ── run_info_for_errored ─────────────────────────────────────────
+
+    #[test]
+    fn errored_run_info_with_empty_data_includes_error() {
+        let v = run_info_for_errored(&[], "boom");
+        // `data` precedes `error` because Map preserves insertion order.
+        assert_eq!(v.to_string(), "{\"data\":\"None\",\"error\":\"boom\"}");
+    }
+
+    #[test]
+    fn errored_run_info_includes_data_and_error() {
+        let id =
+            Uuid::parse_str("00000000-0000-0000-0000-000000000002").expect("valid uuid literal");
+        let v = run_info_for_errored(&[id], "boom");
+        let obj = v.as_object().expect("object");
+        let data = obj.get("data").expect("data key");
+        assert_eq!(data.as_array().expect("array").len(), 1);
+        assert_eq!(obj.get("error").and_then(Value::as_str), Some("boom"));
+        // Key order on the wire: `data` first, then `error`.
+        let keys: Vec<&str> = obj.keys().map(|k| k.as_str()).collect();
+        assert_eq!(keys, vec!["data", "error"]);
+    }
+
+    // ── run_info_for_initiated ───────────────────────────────────────
+
+    #[test]
+    fn initiated_run_info_is_empty_object() {
+        let v = run_info_for_initiated();
+        assert_eq!(v.to_string(), "{}");
+        assert!(v.as_object().expect("object").is_empty());
     }
 }
