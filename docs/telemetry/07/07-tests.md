@@ -1,6 +1,6 @@
 # Task 07-07 — Tests for gap 07
 
-**Status**: ⬜ not started
+**Status**: implemented in commit 4958704 (note: panic_hook_smoke runs in a separate cmake build dir gated by COGNEE_BUILD_PANIC_SMOKE=ON + cognee-capi/testing-panic cargo feature; .gitignore gains capi/build-*/ for the transient dirs; default_subscriber.test.ts uses process.exit(0) instead of cog.shutdown() to avoid a separate pre-existing post-pipeline hang).
 **Owner**: _unassigned_
 **Depends on**: tasks 07-02 through 07-06 — every implementation task must be in place before tests land.
 **Blocks**:
