@@ -1,6 +1,6 @@
 # Task 08-02 — `data_info` helper + `RunSpec.data_ids` carrier
 
-**Status**: not yet implemented (⬜)
+**Status**: implemented in commit f05c04e (executor uses data_id_fn + Uuid::parse_str filter_map; non-UUID extractor outputs silently dropped, matching Python list[Data] semantics)
 **Owner**: _unassigned_
 **Depends on**: 08-01.
 **Blocks**:
