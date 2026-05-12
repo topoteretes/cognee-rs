@@ -1,6 +1,6 @@
 # Task 08-05 — `reset_pipeline_run_status` + `reset_dataset_pipeline_run_status` helpers
 
-**Status**: not yet implemented (⬜)
+**Status**: implemented in commit ee4a4b2 (also promoted pipeline_id/pipeline_run_id helpers from http-server/dispatch.rs to core/pipeline_run_registry/ids.rs so cognee-lib + cognee-delete can use them; the new trait method list_pipeline_names_for_dataset is provisional and may be superseded when 08-06 lands get_pipeline_runs_by_dataset)
 **Owner**: _unassigned_
 **Depends on**: 08-04.
 **Blocks**:
