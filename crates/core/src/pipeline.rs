@@ -440,6 +440,16 @@ pub trait PipelineWatcher: Send + Sync {
 
     // ── Rich lifecycle events (default no-ops) ──────────────────────────
 
+    /// Called before any task runs. Persists the initial `INITIATED` row in
+    /// the Python lifecycle. Default no-op — watchers that don't persist
+    /// runs can ignore this.
+    ///
+    /// Does NOT broadcast a `RunEvent` — the in-memory event stream remains
+    /// four-kinded (`Started`/`Yield`/`Completed`/`Errored`/`AlreadyCompleted`).
+    /// Subscribers only see the run "exists" once `Started` fires
+    /// (locked decision 13).
+    async fn on_pipeline_run_initiated(&self, _run: &PipelineRunInfo) {}
+
     /// Called when the pipeline run is first created (before any tasks).
     async fn on_pipeline_run_started(&self, _run: &PipelineRunInfo) {}
 
@@ -668,7 +678,7 @@ pub async fn execute(
         tenant_id,
         dataset_id,
         data_ids,
-        status: PipelineRunStatus::Started,
+        status: PipelineRunStatus::Initiated,
         started_at: chrono::Utc::now(),
         completed_at: None,
     };
@@ -686,6 +696,16 @@ pub async fn execute(
         pctx.provenance_visited.lock().unwrap().clear();
     }
 
+    // ── INITIATED ──────────────────────────────────────────────────────────
+    // Write the audit row BEFORE transitioning to STARTED. The `NoTasks` /
+    // `InvalidConfig` guards above ensure malformed pipelines produce zero
+    // rows (matching Python: `run_tasks` is only called once tasks are
+    // validated upstream). Locked decisions 1 + 13: emit INITIATED at the
+    // executor level; no `RunEvent` broadcast.
+    watcher.on_pipeline_run_initiated(&run_info).await;
+
+    // ── STARTED ────────────────────────────────────────────────────────────
+    run_info.status = PipelineRunStatus::Started;
     watcher
         .on_pipeline(pipeline_id, PipelineStatus::Started { task_count })
         .await;

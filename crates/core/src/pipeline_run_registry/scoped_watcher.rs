@@ -107,6 +107,35 @@ impl PipelineWatcher for ScopedRunWatcher {
 
     // ── Rich lifecycle events ─────────────────────────────────────────────
 
+    async fn on_pipeline_run_initiated(&self, run: &PipelineRunInfo) {
+        // Write durable row — non-fatal on failure.
+        // Python parity: `run_info = {}` (per log_pipeline_run_initiated.py).
+        let run_info = Some(super::run_info_for_initiated());
+        let db_result = self
+            .db
+            .log_pipeline_run(
+                run.run_id,
+                run.pipeline_id,
+                &run.pipeline_name,
+                run.dataset_id,
+                DbStatus::Initiated,
+                run_info,
+            )
+            .await;
+
+        if let Err(e) = db_result {
+            tracing::warn!(
+                run_id = %self.run_id,
+                "ScopedRunWatcher: DB write for Initiated failed (non-fatal): {e}"
+            );
+        }
+
+        // Locked decision 13: no `RunEvent` broadcast for INITIATED. The
+        // phase watch stays at its initial `Pending` value (set when the
+        // slot was created in `DefaultPipelineRunRegistry`) until
+        // `on_pipeline_run_started` flips it to `Running`.
+    }
+
     async fn on_pipeline_run_started(&self, run: &PipelineRunInfo) {
         // 1. Write durable row — non-fatal on failure.
         //    Python parity: `run_info = {"data": data_info(data)}`.
