@@ -56,7 +56,9 @@ impl FromRequestParts<AppState> for AuthenticatedUser {
 
         // ── 0. External validator (SaaS Auth0, etc.) ────────────────────────
         if let Some(ref extra) = auth.extra_validator
-            && let Some(user) = extra.validate(&parts.headers, auth.user_repo.as_ref()).await
+            && let Some(user) = extra
+                .validate(&parts.headers, auth.user_repo.as_ref())
+                .await
         {
             if !user.is_active {
                 return Err(ApiError::LoginBadCredentials);

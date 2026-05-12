@@ -237,11 +237,9 @@ impl UserAuthRepository for SeaOrmUserAuthRepository {
             is_superuser: Set(payload.is_superuser),
             is_verified: Set(payload.is_verified),
             tenant_id: Set(payload.tenant_id.map(|t| t.to_string().replace('-', ""))),
-            parent_user_id: Set(
-                payload
-                    .parent_user_id
-                    .map(|p| p.to_string().replace('-', "")),
-            ),
+            parent_user_id: Set(payload
+                .parent_user_id
+                .map(|p| p.to_string().replace('-', ""))),
             created_at: Set(now),
             updated_at: Set(None),
         };

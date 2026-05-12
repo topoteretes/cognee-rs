@@ -46,6 +46,7 @@ async fn seed_user(db: &DatabaseConnection, user_id: Uuid, is_superuser: bool) {
         is_superuser: Set(is_superuser),
         is_verified: Set(true),
         tenant_id: Set(None),
+        parent_user_id: Set(None),
         created_at: Set(now),
         updated_at: Set(None),
     })
