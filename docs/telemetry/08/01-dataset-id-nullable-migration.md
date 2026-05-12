@@ -1,6 +1,6 @@
 # Task 08-01 — Make `dataset_id` nullable + drop FK
 
-**Status**: not yet implemented (⬜)
+**Status**: implemented in commit 526c892 (delete-lib test renamed from `…cascades…` to `…preserves…` to match new behaviour)
 **Owner**: _unassigned_
 **Depends on**: —
 **Blocks**:
