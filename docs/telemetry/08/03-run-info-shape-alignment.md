@@ -1,6 +1,6 @@
 # Task 08-03 — Align `run_info` JSON shape with Python
 
-**Status**: not yet implemented (⬜)
+**Status**: implemented in commit edd47d5 (abort path also changed from {"reason":"abort"} to Python-style {"data": …, "error": "abort"} for shape consistency; no consumer depended on the old shape)
 **Owner**: _unassigned_
 **Depends on**: 08-02.
 **Blocks**:
