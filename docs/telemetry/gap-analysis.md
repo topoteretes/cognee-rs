@@ -95,7 +95,15 @@ call sites.
 
 ## 6. Bindings (capi/python/js/android)
 
-Python SDK auto-initializes telemetry on import. Rust bindings ([capi/](../../capi/), [python/](../../python/), [js/](../../js/)) **do not initialize tracing at all** — caller must wire it. This means a Python user dropping in `cognee-rust` via PyO3 loses telemetry entirely until they configure subscribers themselves.
+Python SDK auto-initializes telemetry on import. ✅ **Implemented in
+[gap 07](07-bindings-auto-init.md)** — Rust bindings now ship
+auto-init for the default tracing bridge plus explicit
+`setup_logging()` (gap 06), `setup_telemetry()` (gap 07),
+`setup_telemetry_analytics()` (gap 07) entrypoints. PyO3 bridges
+into Python's `logging` via `pyo3-log`; Neon writes a stderr fmt
+subscriber by default; C API stays fully explicit (with a panic
+hook installed by `cg_init` for FFI debuggability). Auto-init can
+be suppressed via `COGNEE_BINDING_SUPPRESS_LOGS=1`.
 
 ---
 

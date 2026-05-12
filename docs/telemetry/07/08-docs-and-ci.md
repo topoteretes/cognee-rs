@@ -17,13 +17,18 @@ Close gap 07 by:
 1. Updating
    [`docs/telemetry/gap-analysis.md`](../gap-analysis.md) §6 to point
    at gap 07 closure (status: ✅ Implemented).
-2. Adding a "Binding init matrix" section to each binding's README:
-   - [`python/README.md`](../../../python/README.md) (or `pyproject.toml`
-     long_description block — verify existing layout).
-   - [`js/README.md`](../../../js/README.md).
-   - [`capi/README.md`](../../../capi/README.md).
-3. Adding a CI lane (or extending an existing one) that runs the
-   new Python and Neon smoke tests on push/PR.
+2. Adding a "Binding init matrix" section by **creating** a new
+   README in each binding (none currently exist):
+   - [`python/README.md`](../../../python/README.md) — new file.
+     (The crate currently ships `pyproject.toml` only; the README
+     will be picked up as the wheel long-description.)
+   - [`js/README.md`](../../../js/README.md) — new file.
+   - [`capi/README.md`](../../../capi/README.md) — new file.
+3. Extending the per-binding `scripts/check.sh` files so the gap-07
+   tests run inside the existing `python-check`, `js-check`, and
+   `capi-check` jobs in
+   [`.github/workflows/ci.yml`](../../../.github/workflows/ci.yml)
+   (lines 261–331) — no new workflow file required.
 4. Writing the "Closure summary" section at the bottom of
    [`docs/telemetry/07-bindings-auto-init.md`](../07-bindings-auto-init.md).
 
@@ -43,9 +48,15 @@ Close gap 07 by:
 ## 3. Pre-conditions
 
 - All preceding tasks committed.
-- Existing CI workflows live under
-  [`.github/workflows/`](../../../.github/workflows/).
-- Each binding has at least one README that ships with the package.
+- The single CI workflow lives at
+  [`.github/workflows/ci.yml`](../../../.github/workflows/ci.yml)
+  and already runs `capi-check`, `python-check`, and `js-check`
+  jobs that invoke `capi/scripts/check.sh`,
+  `python/scripts/check.sh`, and `js/scripts/check.sh`
+  respectively. Gap-07 tests are picked up automatically by
+  extending those scripts.
+- None of `python/README.md`, `js/README.md`, `capi/README.md`
+  currently exist — task 08 creates them.
 
 ## 4. Step-by-step
 
@@ -127,46 +138,36 @@ you need chained or routed handling.
 
 ### 4.3 CI lane
 
-Extend `.github/workflows/lib-tests.yml` (or add a new
-`bindings-tests.yml`) with two jobs:
+Do **not** add a new workflow file. The existing
+[`.github/workflows/ci.yml`](../../../.github/workflows/ci.yml)
+already defines three Stage-3 binding jobs (lines 261–331):
 
-```yaml
-python-bindings:
-  runs-on: ubuntu-latest
-  steps:
-    - uses: actions/checkout@v4
-    - uses: actions/setup-python@v5
-      with: { python-version: '3.12' }
-    - uses: dtolnay/rust-toolchain@stable
-    - name: Build wheel
-      run: bash python/scripts/check.sh
-    - name: Install wheel + run gap-07 tests
-      run: |
-        pip install maturin
-        cd python && maturin develop --release
-        pytest tests/test_pyo3_log_bridge.py \
-               tests/test_setup_telemetry_idempotent.py \
-               tests/test_setup_telemetry_analytics.py -v
+| Job | Runs |
+|---|---|
+| `capi-check` | `bash capi/scripts/check.sh` |
+| `python-check` | `bash python/scripts/check.sh` (inside a venv with `maturin`, `pytest`, `pytest-asyncio`) |
+| `js-check` | `bash js/scripts/check.sh` |
 
-js-bindings:
-  runs-on: ubuntu-latest
-  steps:
-    - uses: actions/checkout@v4
-    - uses: actions/setup-node@v4
-      with: { node-version: '20' }
-    - uses: dtolnay/rust-toolchain@stable
-    - name: Build addon
-      run: bash js/scripts/check.sh
-    - name: Run gap-07 tests
-      run: |
-        cd js && npm install && npm test -- default_subscriber setup_telemetry setup_telemetry_analytics
-```
+Gap-07 already wired the C smoke tests into `capi/scripts/check.sh`
+(see the "Gap 07 smoke tests" block in that file). For Python and
+JS, extend the existing scripts so the new tests run inside the
+already-passing CI jobs:
 
-If `python/scripts/check.sh` and `js/scripts/check.sh` already exist
-(they do, see [`python/scripts/check.sh`](../../../python/scripts/check.sh)
-and [`js/scripts/check.sh`](../../../js/scripts/check.sh)) and run
-the right test commands, prefer extending those scripts over
-adding jobs — keeps CI definition compact.
+- `python/scripts/check.sh` runs `pytest tests/ -v`, which already
+  picks up any new file under `python/tests/` — confirm the
+  gap-07 test files (`test_pyo3_log_bridge.py`,
+  `test_setup_telemetry_idempotent.py`,
+  `test_setup_telemetry_analytics.py`) land in that directory and
+  no further script change is needed.
+- `js/scripts/check.sh` runs `npm test`, which routes to
+  `jest.config.js`. Confirm the gap-07 Jest specs
+  (`default_subscriber`, `setup_telemetry`,
+  `setup_telemetry_analytics`) live under `js/__tests__/` so the
+  default Jest pattern picks them up.
+
+If either condition fails, prefer adding an explicit invocation to
+the binding's `scripts/check.sh` over editing `ci.yml`, so the CI
+lane stays declaration-free.
 
 ### 4.4 Closure summary
 
@@ -228,39 +229,43 @@ the loop completes.)
 
 ## 5. Verification
 
+`scripts/check_all.sh` is the canonical local gate. It runs (in
+order): `cargo fmt --check`, `cargo check --all-targets`,
+`cargo clippy --all-targets -- -D warnings`,
+`cargo check --all-targets --features telemetry`,
+`cargo check -p cognee-lib --no-default-features`,
+`cargo test -p cognee-telemetry --no-default-features --tests`,
+then `capi/scripts/check.sh`, `python/scripts/check.sh`, and
+`js/scripts/check.sh` — which is exactly what the
+`capi-check` / `python-check` / `js-check` CI jobs invoke.
+
 ```bash
-# 1. Gap-analysis edit doesn't break markdown.
-markdownlint docs/telemetry/gap-analysis.md
-
-# 2. CI workflow YAML parses.
-yamllint .github/workflows/
-
-# 3. Each binding README renders.
-markdownlint python/README.md js/README.md capi/README.md
-
-# 4. Full check.
+# Single command — exercises every gap-07 surface this task adds.
 scripts/check_all.sh
 ```
+
+There is no markdownlint or yamllint step in the project's check
+suite; doc edits are verified by review only.
 
 ## 6. Files modified
 
 - [`docs/telemetry/gap-analysis.md`](../gap-analysis.md) — §6 status flip.
 - [`docs/telemetry/07-bindings-auto-init.md`](../07-bindings-auto-init.md) —
   "Closure summary" section.
-- [`python/README.md`](../../../python/README.md) — Initialisation section.
-- [`js/README.md`](../../../js/README.md) — Initialisation section.
-- [`capi/README.md`](../../../capi/README.md) — Initialisation section.
-- `.github/workflows/lib-tests.yml` (or new `bindings-tests.yml`) — jobs.
-- Optionally [`python/scripts/check.sh`](../../../python/scripts/check.sh),
-  [`js/scripts/check.sh`](../../../js/scripts/check.sh) — extend to
-  run gap-07 tests.
+- [`python/README.md`](../../../python/README.md) — **new file** with Initialisation section.
+- [`js/README.md`](../../../js/README.md) — **new file** with Initialisation section.
+- [`capi/README.md`](../../../capi/README.md) — **new file** with Initialisation section.
+- Optionally [`python/scripts/check.sh`](../../../python/scripts/check.sh)
+  and [`js/scripts/check.sh`](../../../js/scripts/check.sh) — only
+  if the gap-07 test files do not match the existing `pytest tests/`
+  / `npm test` discovery patterns. No `.github/workflows/ci.yml`
+  edit is expected.
 
 ## 7. Risks
 
 | Risk | Likelihood | Mitigation |
 |---|---|---|
-| `markdownlint` not installed in CI image | Low — already used by gap 05/06 lanes. | Reuse the same step from those gaps. |
-| CI lane runtime balloons with the new Python/Node test commands | Medium — Python wheel build is ~1m. | Cache `~/.cargo` and `~/.cache/pip`; reuse the lane already configured for `lib-tests.yml`. |
+| CI lane runtime balloons with the new Python/Node test commands | Medium — Python wheel build is ~1m. | The existing `python-check` / `js-check` jobs already use `Swatinem/rust-cache@v2` with `shared-key: workspace-v3`; adding tests inside the same `scripts/check.sh` reuses the same cache. |
 | READMEs duplicate content that already lives in `docs/telemetry/07-bindings-auto-init.md` | Acknowledged — bindings need self-contained docs because npm/PyPI consumers don't browse the repo docs. | Keep the README sections short (matrix tables, no narrative). Link to the gap doc for rationale. |
 | `gap-analysis.md` §6 line shifts since the doc was written | Medium | Sub-agent A's update step uses `grep`+`sed` rather than line-number reference. |
 
