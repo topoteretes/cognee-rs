@@ -1,6 +1,6 @@
 # Task 08-06 — Reader helpers on `PipelineRunRepository`
 
-**Status**: not yet implemented (⬜)
+**Status**: implemented in commit 78c73c7 (also removed the provisional list_pipeline_names_for_dataset trait method from 08-05; both callers in cognee-lib + cognee-delete migrated to get_pipeline_runs_by_dataset and kept the skip-already-Initiated semantics)
 **Owner**: _unassigned_
 **Depends on**: 08-01.
 **Blocks**:
@@ -146,17 +146,24 @@ pub async fn reset_dataset_pipeline_run_status(
 }
 ```
 
+A second caller of `list_pipeline_names_for_dataset` lives in [`crates/delete/src/lib.rs`](../../crates/delete/src/lib.rs#L637) (around line 637, inside `prune_pipeline_state_for_dataset`). It consumes the same `(name, latest_status)` shape and must be swapped to `get_pipeline_runs_by_dataset` in the same PR — otherwise removing `list_pipeline_names_for_dataset` from the trait leaves the delete crate uncompilable.
+
 Remove `list_pipeline_names_for_dataset` from the repo trait + impl + any mocks that picked it up in task 08-05.
 
-### 4.4 Update mocks
+### 4.4 Update non-SeaOrm impls
 
-[`cognee-test-utils`](../../crates/test-utils/) does not include a `MockPipelineRunRepository` today — tests use the real `SeaOrmPipelineRunRepository` against an in-memory SQLite pool. No mock to update. Confirm via:
+[`cognee-test-utils`](../../crates/test-utils/) does not include a `MockPipelineRunRepository` today — most tests use the real `SeaOrmPipelineRunRepository` against an in-memory SQLite pool. However, the following non-SeaOrm impls of `PipelineRunRepository` exist in the tree and must gain stubs for the three new methods (and lose `list_pipeline_names_for_dataset` if/when it is dropped):
+
+- `NoOpPipelineRunRepository` in [`crates/http-server/src/state.rs`](../../crates/http-server/src/state.rs)
+- `FailingRepo` in [`crates/core/tests/scoped_watcher_payload_persistence.rs`](../../crates/core/tests/scoped_watcher_payload_persistence.rs)
+
+Stubs should return `Ok(None)` for the two single-row readers (`get_pipeline_run`, `get_pipeline_run_by_dataset`) and `Ok(vec![])` for the multi-row reader (`get_pipeline_runs_by_dataset`). Confirm coverage via:
 
 ```bash
 rg "impl PipelineRunRepository for" crates/
 ```
 
-If any test-only impl exists, add the three new methods (returning `Ok(None)` / `Ok(vec![])`).
+If any additional test-only impl appears, apply the same `Ok(None)` / `Ok(vec![])` pattern.
 
 ### 4.5 Build + test
 
@@ -192,7 +199,11 @@ scripts/check_all.sh
 | Adding three trait methods inflates the binding surface (PyO3 / Neon) | None — bindings don't surface the trait directly. | No impact. |
 | Refactor of 08-05's `list_pipeline_names_for_dataset` requires a follow-up commit | Low — bundled in this PR. | Land both file changes in this task. |
 
-## 8. Out of scope
+## 8. Python-parity notes
+
+- Python's [`get_pipeline_run`](https://github.com/topoteretes/cognee/blob/main/cognee/modules/pipelines/methods/get_pipeline_run.py) calls `session.scalar()` without an `ORDER BY` clause — it returns whatever row the database surfaces first. The Rust plan strictly orders by `created_at DESC` and picks the latest, which is a *stronger* guarantee consistent with locked decision 12 ("latest by `created_at` defines current state"). Intentional, not drift.
+
+## 9. Out of scope
 
 - A unified `find_runs(filter)` method. The three Python parity helpers are explicit; a generic finder is harder to align cross-SDK.
 - Returning `pipeline_runs` joined with attribution (owner, dataset name) — that's `list_recent_with_attribution`'s domain.
