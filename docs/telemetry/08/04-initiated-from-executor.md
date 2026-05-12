@@ -1,6 +1,6 @@
 # Task 08-04 — Emit `INITIATED` from `pipeline::execute`
 
-**Status**: not yet implemented (⬜)
+**Status**: implemented in commit 29a99f8
 **Owner**: _unassigned_
 **Depends on**: 08-03.
 **Blocks**:
@@ -40,7 +40,7 @@ Decision 1 picked Option A (executor-level): every non-HTTP caller (library `cog
 
 ### 4.1 Add `on_pipeline_run_initiated` to the trait
 
-Edit [`crates/core/src/pipeline.rs`](../../crates/core/src/pipeline.rs) `PipelineWatcher` trait around line 437:
+Edit [`crates/core/src/pipeline.rs`](../../crates/core/src/pipeline.rs) `PipelineWatcher` trait around line 444 (immediately before the existing `on_pipeline_run_started` default impl):
 
 ```rust
 // Insert before on_pipeline_run_started:
@@ -57,7 +57,7 @@ async fn on_pipeline_run_initiated(&self, _run: &PipelineRunInfo) {}
 
 ### 4.2 Emit `INITIATED` from `execute`
 
-Edit [`crates/core/src/pipeline.rs`](../../crates/core/src/pipeline.rs) around line 640-670:
+Edit [`crates/core/src/pipeline.rs`](../../crates/core/src/pipeline.rs) around line 663-692:
 
 ```rust
 let mut run_info = PipelineRunInfo {
@@ -110,9 +110,9 @@ emit_pipeline_event(
 // ... rest of execute unchanged ...
 ```
 
-> **Note:** the `NoTasks` early return at the top of `execute` (line ~620 — search for `if pipeline.tasks.is_empty()`) currently returns before any watcher event fires. After this change, decide whether `INITIATED` should fire even for the `NoTasks` case. The Python equivalent never calls `run_tasks` with zero tasks, so the question is academic; **the chosen behaviour: emit `INITIATED` but skip `STARTED`, then bubble the `NoTasks` error and emit `ERRORED`** so the audit trail reflects the failed configuration. Move the `INITIATED` emission to *after* the `NoTasks` guard — if the pipeline has no tasks, no INITIATED row is written either; this keeps the executor's contract that "no tasks → no run".
+> **Note:** the `NoTasks` early return at the top of `execute` (line 621 — `if pipeline.tasks.is_empty()`) returns `ExecutionError::NoTasks` before any watcher event fires. **Chosen behaviour:** preserve this contract — when the pipeline has no tasks, no `INITIATED` row is written either ("no tasks → no run"). Likewise the `InvalidConfig` guards for `batch_size == 0` / `concurrency == 0` (lines 624-633) fire before any row is written, so a malformed config produces zero rows. The `INITIATED` emission lands *after* all three guards and after `let mut run_info = PipelineRunInfo { ... };` (currently line 663), and *before* the task subtoken split + `on_pipeline_run_started` call (currently line 692).
 >
-> Final placement: directly after `let mut run_info = PipelineRunInfo { ... };` and *before* the task subtoken split, but *after* the `if pipeline.tasks.is_empty()` early return at the top of the function.
+> Python's `run_tasks` is only called once tasks are validated upstream, so this matches Python behaviour: zero-task pipelines never produce a row at any state.
 
 ### 4.3 Implement `on_pipeline_run_initiated` on `ScopedRunWatcher`
 
