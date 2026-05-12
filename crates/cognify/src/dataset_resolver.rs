@@ -188,7 +188,7 @@ pub async fn cognify_datasets(
                 pipeline_run_id,
                 pipeline_name: COGNIFY_PIPELINE_NAME.to_string(),
                 pipeline_id: pipeline_run_id,
-                dataset_id: dataset.id,
+                dataset_id: Some(dataset.id),
                 run_info: None,
             };
             create_pipeline_run(db_conn, run).await?;
@@ -320,7 +320,7 @@ pub async fn cognify_dataset_refs(
                 pipeline_run_id,
                 pipeline_name: COGNIFY_PIPELINE_NAME.to_string(),
                 pipeline_id: pipeline_run_id,
-                dataset_id: dataset.id,
+                dataset_id: Some(dataset.id),
                 run_info: None,
             };
             create_pipeline_run(db_conn, run).await?;

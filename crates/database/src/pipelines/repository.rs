@@ -92,7 +92,7 @@ pub trait PipelineRunRepository: Send + Sync {
                 pipeline_run_id: r.pipeline_run_id,
                 pipeline_name: r.pipeline_name,
                 pipeline_id: r.pipeline_id,
-                dataset_id: Some(r.dataset_id),
+                dataset_id: r.dataset_id,
                 dataset_name: None,
                 owner_id: None,
                 owner_email: None,

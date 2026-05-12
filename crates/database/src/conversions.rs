@@ -298,7 +298,7 @@ impl From<pipeline_run::Model> for PipelineRun {
             pipeline_run_id: uuid_hex::from_hex(&m.pipeline_run_id).expect("DB stores only valid UUID hex strings; corruption indicates data integrity failure"),
             pipeline_name: m.pipeline_name,
             pipeline_id: uuid_hex::from_hex(&m.pipeline_id).expect("DB stores only valid UUID hex strings; corruption indicates data integrity failure"),
-            dataset_id: uuid_hex::from_hex(&m.dataset_id).expect("DB stores only valid UUID hex strings; corruption indicates data integrity failure"),
+            dataset_id: uuid_hex::from_hex_opt(m.dataset_id.as_deref()).expect("DB stores only valid UUID hex strings; corruption indicates data integrity failure"),
             run_info: m.run_info,
         }
     }
@@ -313,7 +313,7 @@ impl From<&PipelineRun> for pipeline_run::ActiveModel {
             pipeline_run_id: Set(uuid_hex::to_hex(r.pipeline_run_id)),
             pipeline_name: Set(r.pipeline_name.clone()),
             pipeline_id: Set(uuid_hex::to_hex(r.pipeline_id)),
-            dataset_id: Set(uuid_hex::to_hex(r.dataset_id)),
+            dataset_id: Set(uuid_hex::to_hex_opt(r.dataset_id)),
             run_info: Set(r.run_info.clone()),
         }
     }

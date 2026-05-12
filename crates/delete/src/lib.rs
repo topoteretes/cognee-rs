@@ -3242,7 +3242,7 @@ mod tests {
             pipeline_run_id: Uuid::new_v4(),
             pipeline_name: "cognify_pipeline".to_string(),
             pipeline_id: Uuid::new_v4(),
-            dataset_id,
+            dataset_id: Some(dataset_id),
             run_info: None,
         };
         ops::pipeline_runs::create_pipeline_run(&db, pipeline_run)
@@ -3291,7 +3291,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_dataset_deletion_cascades_pipeline_runs() {
+    async fn test_dataset_deletion_preserves_pipeline_runs() {
+        // Post-08-01: the `pipeline_runs.dataset_id` FK CASCADE has been
+        // dropped (Python parity — Python's `pipeline_runs.dataset_id` is a
+        // plain nullable column with no FK). The audit-trail row therefore
+        // survives a dataset deletion; the orphaned row simply retains its
+        // historical `dataset_id` value pointing at a now-deleted dataset.
         let (svc, storage, db) = make_service().await;
         let owner = Uuid::new_v4();
         let (dataset_id, _data_id) =
@@ -3305,7 +3310,7 @@ mod tests {
             pipeline_run_id: Uuid::new_v4(),
             pipeline_name: "cognify_pipeline".to_string(),
             pipeline_id: Uuid::new_v4(),
-            dataset_id,
+            dataset_id: Some(dataset_id),
             run_info: None,
         };
         ops::pipeline_runs::create_pipeline_run(&db, pipeline_run)
@@ -3336,16 +3341,15 @@ mod tests {
 
         assert_eq!(result.deleted_datasets, 1);
 
-        // Pipeline runs are handled by FK CASCADE (delete_dataset triggers it),
-        // so deleted_pipeline_runs counter should be 0 for dataset-scoped deletion.
-        // But the rows should still be gone.
+        // Post-08-01: pipeline_runs are NOT cascade-deleted (the FK is gone).
+        // The audit row survives, still keyed by the now-orphaned dataset_id.
         let status_after =
             ops::pipeline_runs::get_latest_pipeline_status(&db, "cognify_pipeline", dataset_id)
                 .await
                 .unwrap();
         assert!(
-            status_after.is_none(),
-            "pipeline run should be cascade-deleted with the dataset"
+            status_after.is_some(),
+            "pipeline run should survive dataset deletion (no FK CASCADE post-08-01)"
         );
     }
 

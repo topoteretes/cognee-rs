@@ -63,7 +63,7 @@ pub struct PipelineRun {
     pub pipeline_run_id: Uuid,
     pub pipeline_name: String,
     pub pipeline_id: Uuid,
-    pub dataset_id: Uuid,
+    pub dataset_id: Option<Uuid>,
     pub run_info: Option<serde_json::Value>,
 }
 

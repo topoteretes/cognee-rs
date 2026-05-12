@@ -47,15 +47,8 @@ impl PipelineRunRepository for SeaOrmPipelineRunRepository {
     ) -> Result<Uuid, DatabaseError> {
         let row_id = Uuid::new_v4();
 
-        // The `pipeline_runs` table has a NOT NULL FK to `datasets.id`.
-        // When `dataset_id` is `None` (ad-hoc run without a dataset), we skip
-        // the durable write and return the generated id. Ad-hoc runs are tracked
-        // in-memory only; callers that need persistence must supply a valid dataset_id.
-        let dataset_id_val = match dataset_id {
-            Some(id) => id,
-            None => return Ok(row_id),
-        };
-
+        // `dataset_id` is nullable post-08-01; ad-hoc runs without a dataset
+        // persist with `NULL` in the column rather than being silently dropped.
         let active = pipeline_run::ActiveModel {
             id: sea_orm::ActiveValue::Set(uuid_hex::to_hex(row_id)),
             created_at: sea_orm::ActiveValue::Set(Utc::now()),
@@ -63,7 +56,7 @@ impl PipelineRunRepository for SeaOrmPipelineRunRepository {
             pipeline_run_id: sea_orm::ActiveValue::Set(uuid_hex::to_hex(pipeline_run_id)),
             pipeline_name: sea_orm::ActiveValue::Set(pipeline_name.to_string()),
             pipeline_id: sea_orm::ActiveValue::Set(uuid_hex::to_hex(pipeline_id)),
-            dataset_id: sea_orm::ActiveValue::Set(uuid_hex::to_hex(dataset_id_val)),
+            dataset_id: sea_orm::ActiveValue::Set(uuid_hex::to_hex_opt(dataset_id)),
             run_info: sea_orm::ActiveValue::Set(run_info),
         };
 
@@ -99,7 +92,14 @@ impl PipelineRunRepository for SeaOrmPipelineRunRepository {
         for row in rows {
             let run: PipelineRun = row.into();
             // Only keep the first (most recent) entry per dataset_id.
-            result.entry(run.dataset_id).or_insert(run.status);
+            // Ad-hoc rows (dataset_id = None) are not surfaced by
+            // latest_status — they don't belong to any dataset bucket the
+            // caller asked about (the input filter was already keyed by
+            // dataset_id, so a None row would not have matched the IN clause
+            // anyway; we filter defensively here for clarity).
+            if let Some(did) = run.dataset_id {
+                result.entry(did).or_insert(run.status);
+            }
         }
 
         Ok(result)
@@ -175,7 +175,7 @@ impl PipelineRunRepository for SeaOrmPipelineRunRepository {
                 String,
                 String,
                 String,
-                String,
+                Option<String>,
                 Option<String>,
                 Option<String>,
                 Option<String>,
@@ -200,15 +200,18 @@ impl PipelineRunRepository for SeaOrmPipelineRunRepository {
             owner_email,
         ) in raw
         {
-            // `dataset_id` is NOT NULL in our schema, but the LEFT JOIN may
-            // produce a row with no dataset attribution (orphaned). Treat
-            // empty/zero dataset_id as None so the wire shape matches Python.
-            let dataset_uuid = uuid_hex::from_hex(&dataset_id_hex).ok();
+            // `dataset_id` is nullable post-08-01 — the column may genuinely
+            // be NULL (ad-hoc run without a dataset), and the LEFT JOIN may
+            // also yield NULL when the referenced dataset has been deleted.
+            // Both cases collapse to `None` in the projection.
+            let dataset_uuid = dataset_id_hex
+                .as_deref()
+                .and_then(|s| uuid_hex::from_hex(s).ok());
             let owner_uuid = owner_id_hex
                 .as_deref()
                 .and_then(|s| uuid_hex::from_hex(s).ok());
             // Determine dataset attribution presence: when dataset_name is
-            // None the LEFT JOIN didn't match (orphan).
+            // None the LEFT JOIN didn't match (orphan or NULL dataset_id).
             let (dataset_id_field, dataset_name_field) = if dataset_name.is_some() {
                 (dataset_uuid, dataset_name)
             } else {

@@ -26,8 +26,8 @@ pub struct Model {
     pub pipeline_name: String,
     #[sea_orm(indexed)]
     pub pipeline_id: String,
-    #[sea_orm(indexed)]
-    pub dataset_id: String,
+    #[sea_orm(indexed, nullable)]
+    pub dataset_id: Option<String>,
     #[sea_orm(column_type = "Json", nullable)]
     pub run_info: Option<Json>,
 }
