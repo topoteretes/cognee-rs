@@ -1,6 +1,6 @@
 # LIB-06-01 — Route `AddPipeline::add` through `pipeline::execute`
 
-**Status**: not yet implemented (⬜)
+**Status**: implemented in commit 82aac59 (fixed `extract_data_outputs` downcast to use `(*o).as_any()` to bypass blanket `Arc<dyn Value>` impl; added `sqlite` feature to cognee-database dev-dep; grew `ComponentHandles` with `vector_db` + `thread_pool` slots)
 **Owner**: _unassigned_
 **Depends on**: —
 **Blocks**:
