@@ -134,7 +134,13 @@ async fn test_search_updates_last_accessed_timestamp() {
     let owner_id = Uuid::nil();
 
     // ── Ingest text ──────────────────────────────────────────────────────────
-    let ingest = AddPipeline::new(Arc::clone(&storage), database.clone() as Arc<dyn IngestDb>);
+    let ingest = AddPipeline::new(Arc::clone(&storage), database.clone() as Arc<dyn IngestDb>)
+        .with_thread_pool(Arc::new(
+            cognee_core::RayonThreadPool::with_default_threads().unwrap(),
+        ))
+        .with_graph_db(Arc::clone(&graph_db))
+        .with_vector_db(Arc::clone(&vector_db))
+        .with_database(Arc::clone(&database));
     ingest
         .add(
             vec![DataInput::Text(

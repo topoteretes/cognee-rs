@@ -7,8 +7,10 @@ edition.workspace = true
 async-trait.workspace = true
 cognee-core = { path = "../core" }
 cognee-database = { path = "../database" }
+cognee-graph = { path = "../graph" }
 cognee-models = { path = "../models" }
 cognee-storage = { path = "../storage" }
+cognee-vector = { path = "../vector" }
 cognee-utils = { path = "../utils" }
 md-5.workspace = true
 sha2.workspace = true
@@ -49,9 +51,11 @@ unstructured-odp = ["dep:quick-xml", "dep:zip"]
 unstructured = ["unstructured-xlsx", "unstructured-docx", "unstructured-pptx", "unstructured-epub", "unstructured-eml", "unstructured-odt", "unstructured-odp"]
 
 [dev-dependencies]
-cognee-database = { path = "../database" }
+cognee-database = { path = "../database", features = ["sqlite"] }
 cognee-delete = { path = "../delete" }
+cognee-graph = { path = "../graph", features = ["testing"] }
 cognee-storage = { path = "../storage", features = ["testing"] }
 cognee-test-utils = { path = "../test-utils" }
+cognee-vector = { path = "../vector", features = ["testing"] }
 tempfile.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

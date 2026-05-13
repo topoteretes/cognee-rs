@@ -56,6 +56,7 @@ cognee-search = { path = "../search" }
 cognee-session = { path = "../session" }
 cognee-llm = { path = "../llm" }
 cognee-graph = { path = "../graph" }
+cognee-vector = { path = "../vector" }
 cognee-logging = { path = "../logging" }
 cognee-visualization = { path = "../visualization" }
 cognee-cloud = { path = "../cloud" }
@@ -117,6 +118,7 @@ chrono = { workspace = true }
 sea-orm = { version = "1", default-features = false, features = ["sqlx-sqlite", "runtime-tokio-native-tls", "macros"] }
 cognee-database = { path = "../database", features = ["sqlite"] }
 cognee-graph = { path = "../graph", features = ["testing"] }
+cognee-vector = { path = "../vector", features = ["testing"] }
 cognee-session = { path = "../session", features = ["fs"] }
 async-trait = { workspace = true }
 tempfile = { workspace = true }

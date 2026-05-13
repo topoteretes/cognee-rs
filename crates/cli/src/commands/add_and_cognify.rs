@@ -53,7 +53,23 @@ pub fn run(args: AddAndCognifyArgs, cm: Arc<ComponentManager>) -> Result<(), Cli
             .map_err(|e| CliError::Runtime(format!("{e}")))?;
 
         // ── Add ──────────────────────────────────────────────────────────────
-        let ingest = AddPipeline::new(Arc::clone(&storage), database.clone() as Arc<dyn IngestDb>);
+        let graph_db_for_add = cm
+            .graph_db()
+            .await
+            .map_err(|e| CliError::Runtime(format!("{e}")))?;
+        let vector_db_for_add = cm
+            .vector_db()
+            .await
+            .map_err(|e| CliError::Runtime(format!("{e}")))?;
+        let thread_pool_for_add = Arc::new(
+            cognee_lib::core::RayonThreadPool::with_default_threads()
+                .map_err(|e| CliError::Runtime(format!("Failed to build thread pool: {e}")))?,
+        );
+        let ingest = AddPipeline::new(Arc::clone(&storage), database.clone() as Arc<dyn IngestDb>)
+            .with_thread_pool(thread_pool_for_add)
+            .with_graph_db(graph_db_for_add)
+            .with_vector_db(vector_db_for_add)
+            .with_database(Arc::clone(&database));
 
         let inputs = args
             .data

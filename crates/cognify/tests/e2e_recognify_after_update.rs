@@ -258,7 +258,13 @@ async fn test_recognify_after_content_update() {
         .with_triplet_embeddings(false);
 
     // ── Step 1: Ingest text_v1 (Alice at TechCorp) ─────────────────────────
-    let ingest = AddPipeline::new(Arc::clone(&storage), database.clone() as Arc<dyn IngestDb>);
+    let ingest = AddPipeline::new(Arc::clone(&storage), database.clone() as Arc<dyn IngestDb>)
+        .with_thread_pool(Arc::new(
+            cognee_core::RayonThreadPool::with_default_threads().unwrap(),
+        ))
+        .with_graph_db(Arc::clone(&graph_db))
+        .with_vector_db(Arc::clone(&vector_db))
+        .with_database(Arc::clone(&database));
     let data_items_v1 = ingest
         .add(
             vec![DataInput::Text(TEXT_V1.to_string())],

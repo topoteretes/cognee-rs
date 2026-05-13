@@ -148,7 +148,13 @@ async fn test_search_type_matrix() {
     let owner_id = Uuid::nil();
 
     // ── Step 3: Ingest two documents into the same dataset ───────────────────
-    let ingest = AddPipeline::new(Arc::clone(&storage), database.clone() as Arc<dyn IngestDb>);
+    let ingest = AddPipeline::new(Arc::clone(&storage), database.clone() as Arc<dyn IngestDb>)
+        .with_thread_pool(Arc::new(
+            cognee_core::RayonThreadPool::with_default_threads().unwrap(),
+        ))
+        .with_graph_db(Arc::clone(&graph_db))
+        .with_vector_db(Arc::clone(&vector_db))
+        .with_database(Arc::clone(&database));
     ingest
         .add(
             vec![DataInput::Text(GERMANY_TEXT.to_string())],

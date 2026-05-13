@@ -504,6 +504,8 @@ pub fn build_component_handles(
         search_orchestrator,
         llm,
         graph_db,
+        vector_db: None,
+        thread_pool: None,
         permissions,
         sync_ops,
         session_store: None,

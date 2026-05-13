@@ -222,8 +222,33 @@ pub async fn post_add(
     }
 
     // Build and run the add pipeline.
+    // LIB-06: `AddPipeline::add_with_params` now routes through
+    // `cognee_core::pipeline::execute`, which requires graph/vector
+    // backends + thread pool on the AddPipeline builder. Missing handles
+    // surface as `ApiError::Internal` (the convenience function returns
+    // `IngestionError::MissingBackend`).
+    let Some(graph_db) = components.graph_db.clone() else {
+        return Err(ApiError::Internal(anyhow::anyhow!(
+            "graph_db not wired in ComponentHandles; cannot run add pipeline"
+        )));
+    };
+    let Some(vector_db) = components.vector_db.clone() else {
+        return Err(ApiError::Internal(anyhow::anyhow!(
+            "vector_db not wired in ComponentHandles; cannot run add pipeline"
+        )));
+    };
+    let Some(thread_pool) = components.thread_pool.clone() else {
+        return Err(ApiError::Internal(anyhow::anyhow!(
+            "thread_pool not wired in ComponentHandles; cannot run add pipeline"
+        )));
+    };
+
     let pipeline = AddPipeline::new(storage, db.clone() as Arc<dyn IngestDb>)
-        .with_acl_db(db.clone() as Arc<dyn AclDb>);
+        .with_acl_db(db.clone() as Arc<dyn AclDb>)
+        .with_thread_pool(thread_pool)
+        .with_graph_db(graph_db)
+        .with_vector_db(vector_db)
+        .with_database(db.clone());
 
     let params = AddParams {
         node_set: req.node_set.clone(),

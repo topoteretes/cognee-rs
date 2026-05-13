@@ -95,7 +95,13 @@ async fn test_triplet_vector_cleanup_after_data_delete() {
         .with_triplet_embeddings(false); // memify will create triplets
 
     // ── Step 1: Ingest two documents ────────────────────────────────────
-    let ingest = AddPipeline::new(Arc::clone(&storage), database.clone() as Arc<dyn IngestDb>);
+    let ingest = AddPipeline::new(Arc::clone(&storage), database.clone() as Arc<dyn IngestDb>)
+        .with_thread_pool(Arc::new(
+            cognee_core::RayonThreadPool::with_default_threads().unwrap(),
+        ))
+        .with_graph_db(Arc::clone(&graph_db))
+        .with_vector_db(Arc::clone(&vector_db))
+        .with_database(Arc::clone(&database));
 
     let data_ai = ingest
         .add(

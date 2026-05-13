@@ -1,7 +1,10 @@
+use cognee_core::RayonThreadPool;
 use cognee_database::{IngestDb, connect, initialize};
+use cognee_graph::MockGraphDB;
 use cognee_ingestion::AddPipeline;
 use cognee_models::DataInput;
 use cognee_storage::{LocalStorage, StorageTrait};
+use cognee_vector::MockVectorDB;
 use std::path::PathBuf;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -28,7 +31,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create ingestion pipeline
     println!("3. Creating ingestion pipeline...");
-    let pipeline = AddPipeline::new(storage.clone(), database.clone() as Arc<dyn IngestDb>);
+    let pipeline = AddPipeline::new(storage.clone(), database.clone() as Arc<dyn IngestDb>)
+        .with_thread_pool(Arc::new(RayonThreadPool::with_default_threads()?))
+        .with_graph_db(Arc::new(MockGraphDB::new()))
+        .with_vector_db(Arc::new(MockVectorDB::new()))
+        .with_database(Arc::clone(&database));
     println!("   ✓ Pipeline created\n");
 
     // Create a test user

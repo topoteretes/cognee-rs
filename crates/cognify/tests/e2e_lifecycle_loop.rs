@@ -155,7 +155,13 @@ async fn test_readd_and_recognify_after_delete() {
     // FIRST CYCLE: add -> cognify
     // ═════════════════════════════════════════════════════════════════════════
 
-    let ingest = AddPipeline::new(Arc::clone(&storage), database.clone() as Arc<dyn IngestDb>);
+    let ingest = AddPipeline::new(Arc::clone(&storage), database.clone() as Arc<dyn IngestDb>)
+        .with_thread_pool(Arc::new(
+            cognee_core::RayonThreadPool::with_default_threads().unwrap(),
+        ))
+        .with_graph_db(Arc::clone(&graph_db))
+        .with_vector_db(Arc::clone(&vector_db))
+        .with_database(Arc::clone(&database));
     let data_items_1 = ingest
         .add(
             vec![DataInput::Text(TEST_TEXT.to_string())],
@@ -305,7 +311,13 @@ async fn test_readd_and_recognify_after_delete() {
     // SECOND CYCLE: re-add -> re-cognify -> search
     // ═════════════════════════════════════════════════════════════════════════
 
-    let ingest_2 = AddPipeline::new(Arc::clone(&storage), database.clone() as Arc<dyn IngestDb>);
+    let ingest_2 = AddPipeline::new(Arc::clone(&storage), database.clone() as Arc<dyn IngestDb>)
+        .with_thread_pool(Arc::new(
+            cognee_core::RayonThreadPool::with_default_threads().unwrap(),
+        ))
+        .with_graph_db(Arc::clone(&graph_db))
+        .with_vector_db(Arc::clone(&vector_db))
+        .with_database(Arc::clone(&database));
     let data_items_2 = ingest_2
         .add(
             vec![DataInput::Text(TEST_TEXT.to_string())],

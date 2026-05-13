@@ -30,6 +30,7 @@ tracing.workspace = true
 uuid = { workspace = true, features = ["serde", "v4"] }
 
 [dev-dependencies]
+cognee-core      = { path = "../core" }
 cognee-database  = { path = "../database" }
 cognee-embedding = { path = "../embedding", features = ["onnx"] }
 cognee-graph     = { path = "../graph", features = ["testing", "ladybug"] }

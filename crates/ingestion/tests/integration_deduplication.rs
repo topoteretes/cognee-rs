@@ -8,11 +8,14 @@
 //! The PostgreSQL variant is skipped automatically when `DB_PROVIDER` is not
 //! set to `"postgres"` in the environment.
 
+use cognee_core::RayonThreadPool;
 use cognee_database::{DeleteDb, IngestDb, connect, initialize, ops};
 use cognee_delete::{DeleteMode, DeleteRequest, DeleteScope, DeleteService};
+use cognee_graph::MockGraphDB;
 use cognee_ingestion::AddPipeline;
 use cognee_models::DataInput;
 use cognee_storage::{LocalStorage, StorageTrait};
+use cognee_vector::MockVectorDB;
 use std::io::Write;
 use std::sync::Arc;
 use tempfile::{NamedTempFile, TempDir};
@@ -49,7 +52,11 @@ async fn make_pipeline(
     let pipeline = AddPipeline::new(
         storage.clone() as Arc<dyn StorageTrait>,
         db.clone() as Arc<dyn IngestDb>,
-    );
+    )
+    .with_thread_pool(Arc::new(RayonThreadPool::with_default_threads().unwrap()))
+    .with_graph_db(Arc::new(MockGraphDB::new()))
+    .with_vector_db(Arc::new(MockVectorDB::new()))
+    .with_database(Arc::clone(&db));
     (pipeline, db, storage)
 }
 

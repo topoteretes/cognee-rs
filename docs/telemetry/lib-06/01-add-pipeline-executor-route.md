@@ -337,22 +337,63 @@ Each builds `AddPipeline`, then calls `.add(...)`. After this task,
 ### 4.8 Update bindings + examples + tests
 
 ```bash
-rg "AddPipeline::new\|AddPipeline {" capi/ js/ python/ examples/ crates/ | grep -v test
+rg "AddPipeline::new" crates/ examples/ capi/ js/ python/
+rg "\.add_with_params\(" crates/
 ```
 
-Every call site receives the new builder calls. The `AddPipeline::new`
-signature stays unchanged so non-test callers that don't need the
-executor route keep working — but `.add()` errors out at runtime with
-`IngestionError::MissingBackend` if a backend is missing. **Document this
-in the `AddPipeline::new` doc-comment** so callers know to use the
-builder.
+Every direct construction site receives the new builder calls. The
+`AddPipeline::new` signature stays unchanged so non-test callers that
+don't need the executor route keep working — but `.add()` errors out at
+runtime with `IngestionError::MissingBackend` if a backend is missing.
+**Document this in the `AddPipeline::new` doc-comment** so callers know to
+use the builder.
 
-Test fixtures at
-[`crates/ingestion/src/pipeline.rs::tests`](../../crates/ingestion/src/pipeline.rs#L866-end)
-construct `AddPipeline::new` and call `.add()`. Each test must add the
-`.with_thread_pool` / `.with_graph_db` / `.with_vector_db` /
-`.with_database` calls; use mocks from `cognee-test-utils` (gate behind
-`#[cfg(feature = "testing")]` if not already).
+**Audit (as of `70f2ecc`, this audit landed on 2026-05-13)** — direct
+`AddPipeline::new` construction sites:
+
+- [`crates/ingestion/src/pipeline.rs::tests::make_pipeline`](../../crates/ingestion/src/pipeline.rs#L874)
+  (unit tests).
+- [`examples/add_example.rs`](../../examples/add_example.rs),
+  [`examples/cognify_example.rs`](../../examples/cognify_example.rs).
+- [`crates/lib/tests/improve_e2e.rs`](../../crates/lib/tests/improve_e2e.rs),
+  [`crates/lib/tests/improve_sync_only.rs`](../../crates/lib/tests/improve_sync_only.rs),
+  [`crates/lib/tests/remember_sync_only.rs`](../../crates/lib/tests/remember_sync_only.rs),
+  [`crates/lib/tests/remember_tests.rs`](../../crates/lib/tests/remember_tests.rs).
+
+`AddPipeline::add` / `add_with_params` call sites (struct receivers):
+
+- [`crates/cli/src/commands/add.rs`](../../crates/cli/src/commands/add.rs#L51).
+- [`crates/cli/src/commands/add_and_cognify.rs`](../../crates/cli/src/commands/add_and_cognify.rs#L65).
+- [`crates/http-server/src/routers/add.rs`](../../crates/http-server/src/routers/add.rs#L235).
+- [`crates/http-server/src/routers/remember.rs`](../../crates/http-server/src/routers/remember.rs#L248).
+- [`crates/cognify/src/memify/persist_sessions.rs`](../../crates/cognify/src/memify/persist_sessions.rs#L140).
+- Cognify integration tests under `crates/cognify/tests/` (~10 files —
+  `e2e_triplet_vector_cleanup`, `e2e_lifecycle_loop`,
+  `integration_default_backend`, `e2e_recognify_after_update`,
+  `provenance_e2e`, `e2e_shared_entity_graph_delete`,
+  `e2e_delete_preview_accuracy`, `e2e_full_pipeline_memify`, etc.).
+
+Functions that pass `&AddPipeline` through (no construction; signature is
+unchanged but the embedded `.add(...)` call now needs backends populated
+on the underlying struct):
+
+- [`crates/lib/src/api/remember.rs`](../../crates/lib/src/api/remember.rs)
+  (4 callsites at lines 205, 318, 427, 493).
+- [`crates/lib/src/api/update.rs`](../../crates/lib/src/api/update.rs#L58).
+- [`crates/lib/src/api/improve.rs`](../../crates/lib/src/api/improve.rs#L111).
+
+Bindings (`capi/`, `js/`, `python/`) do **not** construct `AddPipeline`
+directly — they go through `cognee_lib::api` higher-level entry points
+(`remember`, `update`, `improve`). The blast radius for bindings is at
+the lib API level: whichever helper builds the `Arc<AddPipeline>` is the
+one that must call the new `.with_thread_pool(...)` / etc. builders.
+Confirm by reading the actual `Arc::new(AddPipeline::new(...))` site in
+each binding harness during implementation.
+
+Each test fixture and lib test must add the `.with_thread_pool` /
+`.with_graph_db` / `.with_vector_db` / `.with_database` calls; use mocks
+from `cognee-test-utils` (gate behind `#[cfg(feature = "testing")]` if
+not already).
 
 ### 4.9 Leave the `TODO(LIB-06 follow-up)` comments in place
 
@@ -372,15 +413,37 @@ Decision 13 keeps them until [LIB-06-05](05-cleanup-todos.md) removes them.
 - [`crates/ingestion/src/error.rs`](../../crates/ingestion/src/error.rs)
   (if it exists; else inline in `pipeline.rs`) — new error variants.
 - [`crates/cli/src/commands/add.rs`](../../crates/cli/src/commands/add.rs),
-  [`add_and_cognify.rs`](../../crates/cli/src/commands/add_and_cognify.rs),
-  [`run_sequence.rs`](../../crates/cli/src/commands/run_sequence.rs) —
-  wire backends into `AddPipeline` via builders.
-- `capi/src/`, `js/src/`, `python/src/` — bindings. Each binding owns the
-  backend `Arc`s in its `CogneeRuntime` (or equivalent) and threads them
-  into `AddPipeline`.
-- `examples/add_*.rs` — pass backends.
-- `crates/ingestion/src/pipeline.rs` tests — same.
-- `crates/ingestion/tests/*` (if any) — same.
+  [`add_and_cognify.rs`](../../crates/cli/src/commands/add_and_cognify.rs) —
+  wire backends into `AddPipeline` via builders. (`run_sequence.rs` does
+  not call `AddPipeline` directly today — verify before editing.)
+- [`crates/http-server/src/routers/add.rs`](../../crates/http-server/src/routers/add.rs),
+  [`crates/http-server/src/routers/remember.rs`](../../crates/http-server/src/routers/remember.rs) —
+  callers of `.add_with_params(...)`. The pipeline they call is built
+  upstream (likely in `ComponentManager` / HTTP startup); update the
+  build site to attach backends.
+- [`crates/cognify/src/memify/persist_sessions.rs`](../../crates/cognify/src/memify/persist_sessions.rs) —
+  calls `.add_with_params(...)` on an inherited `AddPipeline`. Sub-agent
+  B confirms the upstream construction site is backend-equipped.
+- [`crates/lib/src/api/remember.rs`](../../crates/lib/src/api/remember.rs),
+  [`update.rs`](../../crates/lib/src/api/update.rs),
+  [`improve.rs`](../../crates/lib/src/api/improve.rs) — accept
+  `&AddPipeline` / `Arc<AddPipeline>`; no signature change but the
+  callers that construct the pipeline must attach backends.
+- Bindings (`capi/`, `js/`, `python/`) — do NOT construct `AddPipeline`
+  directly. They invoke `cognee_lib::api::{remember,update,improve}`.
+  The change ripples through whichever binding-side factory builds the
+  underlying `AddPipeline` instance — investigate during implementation.
+- [`examples/add_example.rs`](../../examples/add_example.rs),
+  [`examples/cognify_example.rs`](../../examples/cognify_example.rs) —
+  pass backends.
+- [`crates/ingestion/src/pipeline.rs::tests`](../../crates/ingestion/src/pipeline.rs#L866)
+  — same.
+- [`crates/lib/tests/improve_e2e.rs`](../../crates/lib/tests/improve_e2e.rs),
+  [`improve_sync_only.rs`](../../crates/lib/tests/improve_sync_only.rs),
+  [`remember_sync_only.rs`](../../crates/lib/tests/remember_sync_only.rs),
+  [`remember_tests.rs`](../../crates/lib/tests/remember_tests.rs) — same.
+- `crates/cognify/tests/*.rs` (10+ integration tests calling `.add(...)`)
+  — same.
 
 ## 6. Verification
 

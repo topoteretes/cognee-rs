@@ -128,6 +128,8 @@ fn build_handles_with_session(db: Arc<DatabaseConnection>) -> Arc<ComponentHandl
         search_orchestrator: None,
         llm: None,
         graph_db: None,
+        vector_db: None,
+        thread_pool: None,
         permissions,
         sync_ops,
         session_store: Some(store),

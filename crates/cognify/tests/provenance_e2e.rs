@@ -113,7 +113,13 @@ async fn cognify_e2e_stamps_with_expected_task_names() {
     let owner_id = Uuid::new_v4();
 
     // ── Step 1: ingest a single text item ────────────────────────────────
-    let ingest = AddPipeline::new(Arc::clone(&storage), database.clone() as Arc<dyn IngestDb>);
+    let ingest = AddPipeline::new(Arc::clone(&storage), database.clone() as Arc<dyn IngestDb>)
+        .with_thread_pool(Arc::new(
+            cognee_core::RayonThreadPool::with_default_threads().unwrap(),
+        ))
+        .with_graph_db(Arc::clone(&graph_db))
+        .with_vector_db(Arc::clone(&vector_db))
+        .with_database(Arc::clone(&database));
     let data_items = ingest
         .add(
             vec![DataInput::Text(FIXTURE_TEXT.to_string())],

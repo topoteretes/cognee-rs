@@ -4,10 +4,13 @@
 
 use std::sync::Arc;
 
+use cognee_core::RayonThreadPool;
 use cognee_database::{IngestDb, connect, initialize};
+use cognee_graph::MockGraphDB;
 use cognee_ingestion::AddPipeline;
 use cognee_models::DataInput;
 use cognee_storage::{LocalStorage, StorageTrait};
+use cognee_vector::MockVectorDB;
 use uuid::Uuid;
 
 #[tokio::main]
@@ -28,7 +31,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Ingest some text data
     let owner_id = Uuid::new_v4();
-    let ingest = AddPipeline::new(storage.clone(), database.clone() as Arc<dyn IngestDb>);
+    let ingest = AddPipeline::new(storage.clone(), database.clone() as Arc<dyn IngestDb>)
+        .with_thread_pool(Arc::new(RayonThreadPool::with_default_threads()?))
+        .with_graph_db(Arc::new(MockGraphDB::new()))
+        .with_vector_db(Arc::new(MockVectorDB::new()))
+        .with_database(Arc::clone(&database));
 
     let inputs = vec![
         DataInput::Text(

@@ -48,9 +48,15 @@ async fn make_harness() -> Harness {
     let storage: Arc<dyn StorageTrait> = Arc::new(LocalStorage::new(temp.path().join("storage")));
     storage.initialize().await.unwrap();
     let ingest_db: Arc<dyn IngestDb> = db.clone();
-    let add_pipeline = AddPipeline::new(Arc::clone(&storage), ingest_db);
     let graph_db = Arc::new(MockGraphDB::new());
     let vector_db = Arc::new(MockVectorDB::new());
+    let add_pipeline = AddPipeline::new(Arc::clone(&storage), ingest_db)
+        .with_thread_pool(Arc::new(
+            cognee_lib::core::RayonThreadPool::with_default_threads().unwrap(),
+        ))
+        .with_graph_db(graph_db.clone() as Arc<dyn cognee_graph::GraphDBTrait>)
+        .with_vector_db(vector_db.clone() as Arc<dyn cognee_vector::VectorDB>)
+        .with_database(Arc::clone(&db));
     let embedding_engine = Arc::new(MockEmbeddingEngine::new(16));
     let ontology: Arc<dyn OntologyResolver> = Arc::new(NoOpOntologyResolver::new());
     let session_store: Arc<dyn SessionStore> = Arc::new(FsSessionStore::new(sess_dir.path()));

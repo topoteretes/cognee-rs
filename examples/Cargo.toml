@@ -54,14 +54,17 @@ testing = ["dep:tempfile"]
 
 [dependencies]
 # Workspace crates (instead of duplicates)
+cognee-core = { path = "../crates/core" }
 cognee-storage = { path = "../crates/storage" }
 cognee-database = { path = "../crates/database" }
+cognee-graph = { path = "../crates/graph", features = ["testing"] }
 cognee-ingestion = { path = "../crates/ingestion" }
 cognee-models = { path = "../crates/models" }
 cognee-chunking = { path = "../crates/chunking" }
 cognee-cognify = { path = "../crates/cognify" }
 cognee-llm = { path = "../crates/llm" }
 cognee-embedding = { path = "../crates/embedding" }
+cognee-vector = { path = "../crates/vector", features = ["testing"] }
 
 # Keep existing dependencies that examples need
 async-trait.workspace = true

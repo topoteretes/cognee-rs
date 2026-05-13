@@ -235,11 +235,33 @@ pub async fn post_remember(
             ..AddParams::default()
         };
 
+        // LIB-06: AddPipeline now routes through `pipeline::execute` and
+        // requires graph/vector/thread_pool. Missing handles surface as
+        // 409 catch-all to match Python parity.
+        let Some(graph_db) = components.graph_db.clone() else {
+            return Err(ApiError::DeprecatedConflict(
+                "An error occurred during remember.".into(),
+            ));
+        };
+        let Some(vector_db) = components.vector_db.clone() else {
+            return Err(ApiError::DeprecatedConflict(
+                "An error occurred during remember.".into(),
+            ));
+        };
+        let Some(thread_pool) = components.thread_pool.clone() else {
+            return Err(ApiError::DeprecatedConflict(
+                "An error occurred during remember.".into(),
+            ));
+        };
         let pipeline = AddPipeline::new(
             storage_arc,
             db_arc.clone() as std::sync::Arc<dyn cognee_database::IngestDb>,
         )
-        .with_acl_db(db_arc as std::sync::Arc<dyn cognee_database::AclDb>);
+        .with_acl_db(db_arc.clone() as std::sync::Arc<dyn cognee_database::AclDb>)
+        .with_thread_pool(thread_pool)
+        .with_graph_db(graph_db)
+        .with_vector_db(vector_db)
+        .with_database(db_arc);
 
         // Run add synchronously — errors map to 409 {"error": "An error occurred
         // during remember."} per Python parity (not {"detail": "..."}).

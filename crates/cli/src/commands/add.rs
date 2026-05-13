@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use cognee_lib::add::AddPipeline;
+use cognee_lib::core::RayonThreadPool;
 use cognee_lib::models::DataInput;
 use cognee_lib::{ComponentManager, PipelineContext};
 use tracing::info;
@@ -38,8 +39,27 @@ pub fn run(args: AddArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> {
             .database()
             .await
             .map_err(|e| CliError::Runtime(format!("{e}")))?;
+        let graph_db = cm
+            .graph_db()
+            .await
+            .map_err(|e| CliError::Runtime(format!("{e}")))?;
+        let vector_db = cm
+            .vector_db()
+            .await
+            .map_err(|e| CliError::Runtime(format!("{e}")))?;
+        let thread_pool = Arc::new(
+            RayonThreadPool::with_default_threads()
+                .map_err(|e| CliError::Runtime(format!("Failed to build thread pool: {e}")))?,
+        );
 
-        let pipeline = AddPipeline::new(storage, database);
+        let pipeline = AddPipeline::new(
+            storage,
+            Arc::clone(&database) as Arc<dyn cognee_lib::database::IngestDb>,
+        )
+        .with_thread_pool(thread_pool)
+        .with_graph_db(graph_db)
+        .with_vector_db(vector_db)
+        .with_database(database);
 
         let inputs = args
             .data

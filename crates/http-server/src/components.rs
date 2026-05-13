@@ -9,6 +9,7 @@
 
 use std::sync::Arc;
 
+use cognee_core::CpuPool;
 use cognee_database::DatabaseConnection;
 use cognee_database::SyncOperationRepository;
 use cognee_database::permissions::PermissionsRepository;
@@ -18,6 +19,7 @@ use cognee_llm::Llm;
 use cognee_ontology::OntologyManager;
 use cognee_search::{SearchOrchestrator, SessionManager, SessionStore};
 use cognee_storage::StorageTrait;
+use cognee_vector::VectorDB;
 
 /// Pre-initialized pipeline component handles shared across all P2 handlers.
 ///
@@ -50,6 +52,16 @@ pub struct ComponentHandles {
 
     /// Knowledge-graph DB used by the visualize router.
     pub graph_db: Option<Arc<dyn GraphDBTrait>>,
+
+    /// Vector DB handle required by [`cognee_core::TaskContext`] when the
+    /// add / cognify / memify convenience functions route through
+    /// `pipeline::execute` (LIB-06). `None` means the corresponding
+    /// pipeline handlers surface a 500 / 409 envelope at runtime.
+    pub vector_db: Option<Arc<dyn VectorDB>>,
+
+    /// CPU pool used by [`cognee_core::TaskContext`]. Same routing notes
+    /// as [`vector_db`](Self::vector_db).
+    pub thread_pool: Option<Arc<dyn CpuPool>>,
 
     /// SeaORM-backed `PermissionsRepository` for the 8-step `user_can`
     /// resolution per `tenants.md §5.1`.

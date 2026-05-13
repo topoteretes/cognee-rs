@@ -163,7 +163,13 @@ async fn test_search_returns_empty_for_deleted_doc_and_non_empty_for_remaining()
     let owner_id = Uuid::nil();
 
     // ── Step 1: Ingest two distinct documents into one dataset ───────────
-    let ingest = AddPipeline::new(Arc::clone(&storage), database.clone() as Arc<dyn IngestDb>);
+    let ingest = AddPipeline::new(Arc::clone(&storage), database.clone() as Arc<dyn IngestDb>)
+        .with_thread_pool(Arc::new(
+            cognee_core::RayonThreadPool::with_default_threads().unwrap(),
+        ))
+        .with_graph_db(Arc::clone(&graph_db))
+        .with_vector_db(Arc::clone(&vector_db))
+        .with_database(Arc::clone(&database));
 
     let germany_data = ingest
         .add(

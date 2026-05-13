@@ -14,10 +14,19 @@ use std::sync::Arc;
 use tracing::{info, instrument};
 use uuid::Uuid;
 
-use cognee_core::{Pipeline, PipelineBuilder, TypedTask};
-use cognee_database::{AclDb, IngestDb};
+use cognee_core::CpuPool;
+#[cfg(test)]
+use cognee_core::RayonThreadPool;
+use cognee_core::pipeline::DataIdFn;
+use cognee_core::task::Value;
+use cognee_core::{
+    NoopWatcher, Pipeline, PipelineBuilder, PipelineContext, TaskContextBuilder, TypedTask,
+};
+use cognee_database::{AclDb, DatabaseConnection, IngestDb};
+use cognee_graph::GraphDBTrait;
 use cognee_models::{Data, DataInput, Dataset};
 use cognee_storage::StorageTrait;
+use cognee_vector::VectorDB;
 
 use crate::content_hasher::HashAlgorithm;
 use crate::id_generation::{generate_data_id, generate_dataset_id};
@@ -640,8 +649,50 @@ pub fn make_persist_data_task_with_acl(
     tenant_id: Option<Uuid>,
     acl_db: Option<Arc<dyn AclDb>>,
 ) -> TypedTask<ProcessedInput, Data> {
+    make_persist_data_task_with_acl_and_params(
+        database,
+        dataset_name,
+        owner_id,
+        tenant_id,
+        acl_db,
+        AddParamsInjection::default(),
+    )
+}
+
+/// Pre-serialised [`AddParams`] payload injected into [`ProcessedInput`] by
+/// the persist closure. Constructed once per pipeline so the cost of
+/// serialising `node_set` is paid up-front, not per item.
+///
+/// Locked Decision 7 (LIB-06) — `AddParams` is wired in via the task
+/// closure rather than a `RunSpec` / `TaskContext` extension.
+#[derive(Debug, Clone, Default)]
+struct AddParamsInjection {
+    node_set_json: Option<String>,
+    importance_weight: Option<f64>,
+    target_dataset_id: Option<Uuid>,
+}
+
+/// Build a persist task whose closure also patches the [`ProcessedInput`]
+/// with the [`AddParams`] fields (`node_set`, `importance_weight`) and
+/// honours an optional `dataset_id` override.
+fn make_persist_data_task_with_acl_and_params(
+    database: Arc<dyn IngestDb>,
+    dataset_name: String,
+    owner_id: Uuid,
+    tenant_id: Option<Uuid>,
+    acl_db: Option<Arc<dyn AclDb>>,
+    add_params: AddParamsInjection,
+) -> TypedTask<ProcessedInput, Data> {
     TypedTask::async_fn(move |processed: &ProcessedInput, _ctx| {
-        let processed = processed.clone();
+        let mut processed = processed.clone();
+        // Decision 7 (LIB-06): inject add-specific params inside the task.
+        if let Some(ref ns) = add_params.node_set_json {
+            processed.node_set = Some(ns.clone());
+        }
+        if let Some(w) = add_params.importance_weight {
+            processed.importance_weight = Some(w);
+        }
+        let override_ds = add_params.target_dataset_id;
         let database = Arc::clone(&database);
         let dataset_name = dataset_name.clone();
         let acl_db = acl_db.clone();
@@ -653,7 +704,7 @@ pub fn make_persist_data_task_with_acl(
                 owner_id,
                 tenant_id,
                 acl_db.as_deref(),
-                None,
+                override_ds,
             )
             .await
             .map(Box::new)
@@ -697,18 +748,55 @@ pub fn build_add_pipeline_with_acl(
     tenant_id: Option<Uuid>,
     acl_db: Option<Arc<dyn AclDb>>,
 ) -> Pipeline {
+    build_add_pipeline_internal(
+        storage,
+        database,
+        hash_algorithm,
+        dataset_name,
+        owner_id,
+        tenant_id,
+        acl_db,
+        AddParamsInjection::default(),
+    )
+}
+
+/// Internal builder used by both [`build_add_pipeline_with_acl`] and the
+/// executor-routed [`AddPipeline::add_with_params`]. Threads
+/// [`AddParamsInjection`] into the persist task and attaches a
+/// `data_id_fn` so the executor's `run_info["data"]` carrier is populated
+/// once gap-08 task 07 wires `DbPipelineWatcher` (the carrier today goes
+/// to [`cognee_core::NoopWatcher`] which ignores it).
+#[allow(clippy::too_many_arguments)]
+fn build_add_pipeline_internal(
+    storage: Arc<dyn StorageTrait>,
+    database: Arc<dyn IngestDb>,
+    hash_algorithm: HashAlgorithm,
+    dataset_name: &str,
+    owner_id: Uuid,
+    tenant_id: Option<Uuid>,
+    acl_db: Option<Arc<dyn AclDb>>,
+    add_params: AddParamsInjection,
+) -> Pipeline {
+    // Locked Decision 4 (LIB-06): the per-input `data_id_fn` operates on
+    // the pipeline input (`DataInput`), which has no UUID until
+    // `persist_data` runs. Return `None` here; the executor's run_info
+    // `data_ids` stays empty (the watcher maps it to Python's `"None"`).
+    // Gap-08 task 07 revisits this once the watcher is real.
+    let data_id_fn: DataIdFn = Arc::new(|_v: Arc<dyn Value>| None);
     PipelineBuilder::new_with_task(
         "ingestion.add",
         make_process_input_task(Arc::clone(&storage), hash_algorithm, owner_id, tenant_id),
     )
-    .add_task(make_persist_data_task_with_acl(
+    .add_task(make_persist_data_task_with_acl_and_params(
         database,
         dataset_name.to_string(),
         owner_id,
         tenant_id,
         acl_db,
+        add_params,
     ))
     .with_name("ingestion")
+    .with_data_id(data_id_fn)
     .build()
 }
 
@@ -718,9 +806,16 @@ pub fn build_add_pipeline_with_acl(
 
 /// Ingest pipeline driven by the cognee-core task framework.
 ///
-/// Wraps [`build_add_pipeline`] and the underlying free functions
-/// ([`process_input`] + [`persist_data`]) behind a simple
-/// `add(inputs, dataset_name, owner_id, tenant_id) -> Vec<Data>` API.
+/// Routes [`add`](Self::add) / [`add_with_params`](Self::add_with_params)
+/// through [`cognee_core::pipeline::execute`] so the executor's lifecycle
+/// hooks fire and `TaskContext`-aware tasks can publish run-scoped payload
+/// (LIB-06 / gap 08-07).
+///
+/// Backend handles required by [`cognee_core::TaskContextBuilder`]
+/// — `thread_pool`, `graph_db`, `vector_db`, `database` — must be attached
+/// via the chainable builders before calling `add()`. `AddPipeline::new`
+/// does **not** populate them; calling `add()` on an under-configured
+/// pipeline returns `IngestionError::MissingBackend { ... }`.
 ///
 /// For composable pipeline-based execution (with concurrency, retry, etc.),
 /// use [`build_add_pipeline`] + [`cognee_core::execute`] directly.
@@ -731,16 +826,33 @@ pub struct AddPipeline {
     database: Arc<dyn IngestDb>,
     hash_algorithm: HashAlgorithm,
     acl_db: Option<Arc<dyn AclDb>>,
+    // ─── Executor-context handles (LIB-06) ────────────────────────────────
+    thread_pool: Option<Arc<dyn CpuPool>>,
+    graph_db: Option<Arc<dyn GraphDBTrait>>,
+    vector_db: Option<Arc<dyn VectorDB>>,
+    db_connection: Option<Arc<DatabaseConnection>>,
 }
 
 impl AddPipeline {
     /// Create with the default MD5 hashing (Python-compatible).
+    ///
+    /// **Note:** `add()` routes through [`cognee_core::pipeline::execute`]
+    /// and requires the four executor-context handles attached via
+    /// [`with_thread_pool`](Self::with_thread_pool),
+    /// [`with_graph_db`](Self::with_graph_db),
+    /// [`with_vector_db`](Self::with_vector_db),
+    /// [`with_database`](Self::with_database). A missing handle surfaces as
+    /// `IngestionError::MissingBackend` at `add()` time.
     pub fn new(storage: Arc<dyn StorageTrait>, database: Arc<dyn IngestDb>) -> Self {
         Self {
             storage,
             database,
             hash_algorithm: HashAlgorithm::default(),
             acl_db: None,
+            thread_pool: None,
+            graph_db: None,
+            vector_db: None,
+            db_connection: None,
         }
     }
 
@@ -755,6 +867,10 @@ impl AddPipeline {
             database,
             hash_algorithm,
             acl_db: None,
+            thread_pool: None,
+            graph_db: None,
+            vector_db: None,
+            db_connection: None,
         }
     }
 
@@ -768,16 +884,32 @@ impl AddPipeline {
         self
     }
 
-    // TODO(LIB-06 follow-up): this convenience function bypasses
-    // `cognee_core::execute()` and therefore does not emit payload events via
-    // `PipelineWatcher::on_payload_field`. Tasks running inside this function
-    // cannot publish run-scoped payload that downstream consumers (e.g.
-    // `cognee_lib::api::remember::remember()`) can read via
-    // `PipelineRunRegistry::get_payload(run_id)`. To enable that, this
-    // function would need to route through `cognee_core::execute()` with a
-    // pipeline built via `build_add_pipeline`. Tracked in
-    // `docs/http-api-v2/tasks/lib-06-pipeline-payload-mechanism.md` §3
-    // finding 1.
+    /// Attach the CPU pool used by [`cognee_core::TaskContext`].
+    pub fn with_thread_pool(mut self, pool: Arc<dyn CpuPool>) -> Self {
+        self.thread_pool = Some(pool);
+        self
+    }
+
+    /// Attach the graph database backend used by [`cognee_core::TaskContext`].
+    pub fn with_graph_db(mut self, graph: Arc<dyn GraphDBTrait>) -> Self {
+        self.graph_db = Some(graph);
+        self
+    }
+
+    /// Attach the vector database backend used by [`cognee_core::TaskContext`].
+    pub fn with_vector_db(mut self, vectors: Arc<dyn VectorDB>) -> Self {
+        self.vector_db = Some(vectors);
+        self
+    }
+
+    /// Attach the relational [`DatabaseConnection`] used by
+    /// [`cognee_core::TaskContext`]. This is the same SeaORM handle the
+    /// SQL-backed `IngestDb` is built on.
+    pub fn with_database(mut self, db: Arc<DatabaseConnection>) -> Self {
+        self.db_connection = Some(db);
+        self
+    }
+
     #[instrument(
         name = "ingestion.add",
         skip(self, inputs),
@@ -801,11 +933,6 @@ impl AddPipeline {
     }
 
     /// Like [`add`](Self::add), but accepts additional optional parameters.
-    // TODO(LIB-06 follow-up): see the matching note on [`Self::add`] —
-    // bypasses `cognee_core::execute()` and does not emit
-    // `PipelineWatcher::on_payload_field` events. Tracked in
-    // `docs/http-api-v2/tasks/lib-06-pipeline-payload-mechanism.md` §3
-    // finding 1.
     #[instrument(
         name = "ingestion.add_with_params",
         skip(self, inputs, params),
@@ -819,44 +946,145 @@ impl AddPipeline {
         tenant_id: Option<Uuid>,
         params: &AddParams,
     ) -> Result<Vec<Data>, Box<dyn std::error::Error>> {
+        // ── Resolve executor-context handles ─────────────────────────────
+        let thread_pool = self
+            .thread_pool
+            .clone()
+            .ok_or(IngestionError::MissingBackend {
+                which: "thread_pool",
+            })?;
+        let graph_db = self
+            .graph_db
+            .clone()
+            .ok_or(IngestionError::MissingBackend { which: "graph_db" })?;
+        let vector_db = self
+            .vector_db
+            .clone()
+            .ok_or(IngestionError::MissingBackend { which: "vector_db" })?;
+        let db_connection = self
+            .db_connection
+            .clone()
+            .ok_or(IngestionError::MissingBackend { which: "database" })?;
+
+        // ── Pre-serialise add-params (Decision 7) ────────────────────────
         let node_set_json = params
             .node_set
             .as_ref()
             .map(serde_json::to_string)
             .transpose()
             .map_err(|e| format!("Failed to serialize node_set: {e}"))?;
+        let add_params_inj = AddParamsInjection {
+            node_set_json,
+            importance_weight: params.importance_weight,
+            target_dataset_id: params.dataset_id,
+        };
 
-        let mut created_data = Vec::new();
+        // ── Build the typed pipeline ─────────────────────────────────────
+        let pipeline = build_add_pipeline_internal(
+            Arc::clone(&self.storage),
+            Arc::clone(&self.database),
+            self.hash_algorithm,
+            dataset_name,
+            owner_id,
+            tenant_id,
+            self.acl_db.clone(),
+            add_params_inj,
+        );
 
-        for input in &inputs {
-            let mut processed = process_input(
-                input,
-                &*self.storage,
-                self.hash_algorithm,
-                owner_id,
-                tenant_id,
-            )
-            .await?;
+        // ── Build the TaskContext ────────────────────────────────────────
+        // The executor re-derives `PipelineRunInfo.pipeline_id` from
+        // `(pipeline.name, user_id, dataset_id)` — see
+        // `cognee_core::pipeline::execute` and `deterministic_pipeline_id`.
+        // We carry `pipeline.id` here as the placeholder; the watcher
+        // observes the derived value.
+        let pipeline_ctx = PipelineContext {
+            pipeline_id: pipeline.id,
+            pipeline_name: pipeline.name.clone().unwrap_or_default(),
+            user_id: Some(owner_id),
+            tenant_id,
+            dataset_id: params.dataset_id,
+            current_data: None,
+            run_id: None,
+            user_email: None,
+            provenance_visited: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+        };
 
-            // Wire add-specific parameters into the processed input.
-            processed.node_set = node_set_json.clone();
-            processed.importance_weight = params.importance_weight;
+        let (_cancel_handle, ctx) = TaskContextBuilder::new()
+            .thread_pool(thread_pool)
+            .database(db_connection)
+            .graph_db(graph_db)
+            .vector_db(vector_db)
+            .pipeline_context(pipeline_ctx)
+            .build()
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
+        let ctx = Arc::new(ctx);
 
-            let data = persist_data_with_acl(
-                &processed,
-                &*self.database,
-                dataset_name,
-                owner_id,
-                tenant_id,
-                self.acl_db.as_deref(),
-                params.dataset_id,
-            )
-            .await?;
-            created_data.push(data);
-        }
+        // ── Erase typed inputs ───────────────────────────────────────────
+        let typed_inputs: Vec<Arc<dyn Value>> = inputs
+            .into_iter()
+            .map(|i| Arc::new(i) as Arc<dyn Value>)
+            .collect();
 
-        Ok(created_data)
+        // ── Run the executor (Decision 11: NoopWatcher) ──────────────────
+        let outputs = cognee_core::pipeline::execute(&pipeline, typed_inputs, ctx, &NoopWatcher)
+            .await
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
+
+        extract_data_outputs(outputs)
     }
+}
+
+// ---------------------------------------------------------------------------
+// Output extraction (Decision 9)
+// ---------------------------------------------------------------------------
+
+/// Downcast the executor's [`Arc<dyn Value>`] outputs back to the concrete
+/// [`Data`] type the convenience function promises.
+///
+/// Returns [`IngestionError::OutputTypeMismatch`] when the downcast fails —
+/// a programmer error indicating the pipeline's last task does not emit
+/// `Data`.
+fn extract_data_outputs(
+    outputs: Vec<Arc<dyn Value>>,
+) -> Result<Vec<Data>, Box<dyn std::error::Error>> {
+    let mut data_vec = Vec::with_capacity(outputs.len());
+    for o in outputs {
+        // Explicit deref through `Arc` to reach the inner `dyn Value`, then
+        // call `as_any` via vtable dispatch. Without this, method resolution
+        // finds `<Arc<dyn Value> as Value>::as_any()` (via the blanket impl)
+        // which downcasts to `Arc<dyn Value>` and never to `Data`. Mirrors
+        // the pattern in `cognee_core::task::Task::borrow_input`.
+        let d = (*o).as_any().downcast_ref::<Data>().cloned().ok_or(
+            IngestionError::OutputTypeMismatch {
+                expected: "Data",
+                actual: "unknown",
+            },
+        )?;
+        data_vec.push(d);
+    }
+    Ok(data_vec)
+}
+
+// ---------------------------------------------------------------------------
+// IngestionError
+// ---------------------------------------------------------------------------
+
+/// Error returned by [`AddPipeline::add`] when a required executor-context
+/// handle was not attached, or when the pipeline's typed output cannot be
+/// downcast to [`Data`].
+#[derive(Debug, thiserror::Error)]
+pub enum IngestionError {
+    /// A required `AddPipeline` builder field was not attached before
+    /// calling `add()`.
+    #[error("AddPipeline missing required backend: {which}")]
+    MissingBackend { which: &'static str },
+    /// The executor returned an output the pipeline cannot downcast to the
+    /// expected concrete type.
+    #[error("AddPipeline output type mismatch: expected {expected}, actual {actual}")]
+    OutputTypeMismatch {
+        expected: &'static str,
+        actual: &'static str,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -867,7 +1095,9 @@ impl AddPipeline {
 mod tests {
     use super::*;
     use cognee_database::{connect, initialize, ops};
+    use cognee_graph::MockGraphDB;
     use cognee_storage::MockStorage;
+    use cognee_vector::MockVectorDB;
     use std::io::Write;
     use tempfile::NamedTempFile;
 
@@ -876,7 +1106,11 @@ mod tests {
         initialize(&db).await.unwrap();
         let db = Arc::new(db);
         let storage: Arc<dyn StorageTrait> = Arc::new(MockStorage::new());
-        let pipeline = AddPipeline::new(storage, db.clone() as Arc<dyn IngestDb>);
+        let pipeline = AddPipeline::new(storage, db.clone() as Arc<dyn IngestDb>)
+            .with_thread_pool(Arc::new(RayonThreadPool::with_default_threads().unwrap()))
+            .with_graph_db(Arc::new(MockGraphDB::new()))
+            .with_vector_db(Arc::new(MockVectorDB::new()))
+            .with_database(Arc::clone(&db));
         (pipeline, db)
     }
 

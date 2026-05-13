@@ -4,10 +4,13 @@
 //! data is added to multiple datasets, and that the MD5-based naming and
 //! junction-table linking behave as expected.
 
+use cognee_core::RayonThreadPool;
 use cognee_database::{IngestDb, connect, initialize, ops};
+use cognee_graph::MockGraphDB;
 use cognee_ingestion::AddPipeline;
 use cognee_models::DataInput;
 use cognee_storage::{LocalStorage, StorageTrait};
+use cognee_vector::MockVectorDB;
 use std::io::Write;
 use std::sync::Arc;
 use tempfile::{NamedTempFile, TempDir};
@@ -37,7 +40,11 @@ async fn make_pipeline(
     let pipeline = AddPipeline::new(
         storage.clone() as Arc<dyn StorageTrait>,
         db.clone() as Arc<dyn IngestDb>,
-    );
+    )
+    .with_thread_pool(Arc::new(RayonThreadPool::with_default_threads().unwrap()))
+    .with_graph_db(Arc::new(MockGraphDB::new()))
+    .with_vector_db(Arc::new(MockVectorDB::new()))
+    .with_database(Arc::clone(&db));
     (pipeline, db, storage)
 }
 
