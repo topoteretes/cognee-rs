@@ -1,6 +1,6 @@
 # LIB-06-02 — Route `memify::memify` through `pipeline::execute`
 
-**Status**: not yet implemented (⬜)
+**Status**: implemented in commit 64b6182 (memify and run_memify grew thread_pool + database params per decision 1; HTTP route untouched since it's a P5 TODO stub; lib API improve/remember skip-with-warn when handles missing)
 **Owner**: _unassigned_
 **Depends on**: — (independent of LIB-06-01 in code; runbook sequences after 01 for narrative continuity)
 **Blocks**:
