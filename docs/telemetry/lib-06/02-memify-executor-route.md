@@ -56,11 +56,13 @@ the executor route:
   the new arguments (use `MockGraphDB`, `MockVectorDB`,
   `MockEmbeddingEngine`).
 - **Decision 11** — `NoopWatcher` only. No `pipeline_run_repo` parameter.
-- **Decision 14** — Pipeline name: `"memify"` (matches the existing
-  `pub fn build_memify_index_only_pipeline` we are adding; **confirm with
-  sub-agent A** that `stamp_provenance` calls in memify use
-  `"memify_pipeline"` or `"memify"` consistently, and that the chosen
-  builder name matches).
+- **Decision 14** — Pipeline name: `"memify"` (matches the new
+  `pub fn build_memify_index_only_pipeline`). Sub-agent A confirms
+  (`rg "memify_pipeline\|\"memify\"" crates/cognify/src/memify/`,
+  against `362cc9b`) that memify does **not** stamp provenance manually
+  anywhere — no `stamp_provenance` calls, no `"memify_pipeline"` string
+  literal exists. The builder name `"memify"` is therefore trivially
+  byte-stable; no inline literal needs rewriting.
 
 ## 3. Pre-conditions
 
@@ -79,15 +81,15 @@ the executor route:
 ### 4.1 Ensure `Vec<Triplet>` is `Value`-compatible
 
 Per locked Decision 8 (2026-05-13) there is **no placeholder ZST**. The
-executor input is the pre-extracted `Vec<Triplet>` itself. Sub-agent A
-confirms by inspecting
-[`crates/core/src/pipeline.rs::execute`](../../crates/core/src/pipeline.rs#L625)'s
-`inputs: Vec<Arc<dyn Value>>` parameter and the `Value` trait definition,
-then ensures `Vec<Triplet>` satisfies the trait. If `Vec<Triplet>` does
-not already implement `Value`, add the impl in `cognee_models` (next to
-the `Triplet` definition) — a thin newtype wrapper is acceptable if a
-blanket `impl<T: Value> Value for Vec<T>` is not available; pick whichever
-is least invasive. Do **not** reintroduce a `MemifyTrigger` placeholder.
+executor input is the pre-extracted `Vec<Triplet>` itself.
+
+**Confirmed (sub-agent A, against `362cc9b`):** `Value` is defined in
+[`crates/core/src/task.rs:16`](../../crates/core/src/task.rs#L16) with a
+blanket auto-impl `impl<T: Any + Send + Sync + 'static> Value for T`.
+`Triplet` is a plain `Send + Sync + 'static` struct in `cognee_models`,
+so `Vec<Triplet>` already implements `Value`. **No new impl needs to
+land** — sub-agent B passes `Arc::new(triplets) as Arc<dyn Value>`
+directly. Do **not** reintroduce a `MemifyTrigger` placeholder.
 
 ### 4.2 Build the typed-task closure (index-only)
 
@@ -271,12 +273,38 @@ from `RayonThreadPool::with_default_threads()?`.
 ### 4.7 Update bindings + examples + tests
 
 ```bash
-rg "memify\(" capi/ js/ python/ examples/ crates/ | grep -v test
+rg "run_memify\(|memify::memify\(|cognify::memify\b" capi/ js/ python/ examples/ crates/
 ```
 
-Each call site gains `thread_pool` + `database` parameters. Bindings use
-their own DB connection (already owned for the existing relational
-work). Examples in `examples/memify_*.rs` (if any) — same.
+Confirmed call sites (sub-agent A, against `362cc9b`):
+
+- `crates/cli/src/commands/memify.rs:84` — gains `thread_pool` +
+  `database` parameters.
+- `crates/lib/src/api/improve.rs:281` — gains the new parameters; the
+  caller already owns `Arc<DatabaseConnection>` (`improve.rs` references
+  `cognee_database::DatabaseConnection`).
+- `crates/lib/src/api/remember.rs:388` — same.
+- `crates/http-server/src/routers/memify.rs:22` — the HTTP route handler
+  calls `run_memify`; gains the same arguments (server already owns
+  `Arc<DatabaseConnection>` + a `CpuPool` via app state).
+- Tests: `crates/cognify/tests/integration_memify.rs`,
+  `crates/cognify/tests/e2e_memify.rs`,
+  `crates/cognify/tests/e2e_full_pipeline_memify.rs`,
+  `crates/cognify/tests/e2e_delete_preview_accuracy.rs`,
+  `crates/cognify/tests/e2e_triplet_vector_cleanup.rs`,
+  `crates/lib/tests/improve_e2e.rs`,
+  `crates/lib/tests/improve_sync_only.rs`. Each test constructs an
+  in-memory SQLite via `cognee_database::connect("sqlite::memory:")`
+  and a `RayonThreadPool::with_default_threads()?`.
+- No `examples/memify_*.rs` exists today; nothing to update under
+  `examples/`.
+- No standalone `capi/`, `js/`, `python/` memify entry points exist (the
+  bindings expose memify only transitively through `improve`/`remember`,
+  which already get updated via the `crates/lib/src/api/` changes
+  above). Confirm with the rg above before committing.
+
+Bindings use their own DB connection (already owned for the existing
+relational work).
 
 ### 4.8 Leave the `TODO(LIB-06 follow-up)` comment
 
@@ -292,8 +320,10 @@ Decision 13 keeps it until LIB-06-05.
   - Rewrite `memify` body to call `pipeline::execute` with
     `Vec<Triplet>` as the executor input.
   - Add `extract_memify_outputs` helper.
-  - If `Vec<Triplet>` does not already implement the executor's `Value`
-    trait, add the impl (in `cognee_models`, next to `Triplet`).
+  - **No `Value` impl needed for `Vec<Triplet>`** — the executor's
+    `Value` trait has a blanket auto-impl
+    (`crates/core/src/task.rs:16`); `Vec<Triplet>` qualifies
+    automatically. Confirmed by sub-agent A against `362cc9b`.
 - [`crates/cognify/src/memify/error.rs`](../../crates/cognify/src/memify/error.rs)
   (or inline) — new error variants.
 - [`crates/cognify/src/memify/mod.rs`](../../crates/cognify/src/memify/mod.rs) —
@@ -333,7 +363,7 @@ cd e2e-cross-sdk && docker compose up --build --abort-on-container-exit && cd -
 
 | Risk | Likelihood | Mitigation |
 |---|---|---|
-| `Vec<Triplet>` may not implement `Value` | Medium | Per locked Decision 8 (2026-05-13) the executor input is `Vec<Triplet>` directly; if the `Value` impl is missing, add `impl Value for Vec<Triplet>` in `cognee_models` (or use a thin wrapper). |
+| `Vec<Triplet>` may not implement `Value` | **None — confirmed by sub-agent A against `362cc9b`** | `Value` has a blanket auto-impl for any `T: Any + Send + Sync + 'static` (`crates/core/src/task.rs:16`); `Vec<Triplet>` satisfies it automatically. No new impl required. |
 | Custom-data branch and graph-extraction branch use different *first* tasks; conditional `PipelineBuilder` complicates the design | Low — collapsed by Decision 8 | Pre-flight check produces `Vec<Triplet>`; one-task index-only pipeline indexes them. Both branches converge. |
 | `index_triplets` takes `&dyn` today; switching to `Arc<dyn>` for the executor closure is a noisy refactor | Low | `&*arc` deref is acceptable; no signature change to `index_triplets` itself. |
 | Memify lacks any provenance stamping today, so equivalence is trivial — but check via `rg "stamp_provenance" crates/cognify/src/memify/` | Low | Sub-agent A confirms. If stamping is added by `stamp_tree_dyn` only on the new path, that's a behaviour change — flag in commit body. |

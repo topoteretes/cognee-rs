@@ -188,11 +188,15 @@ async fn test_triplet_vector_cleanup_after_data_delete() {
 
     // ── Step 3: Memify both datasets ────────────────────────────────────
     let memify_config = MemifyConfig::default();
+    let memify_pool: Arc<dyn cognee_core::CpuPool> =
+        Arc::new(cognee_core::RayonThreadPool::with_default_threads().expect("rayon pool"));
 
     let memify_ai = memify(
-        graph_db.as_ref(),
-        vector_db.as_ref(),
-        embedding_engine.as_ref(),
+        Arc::clone(&graph_db),
+        Arc::clone(&vector_db),
+        Arc::clone(&embedding_engine),
+        Arc::clone(&memify_pool),
+        Arc::clone(&database),
         Some(ds_ai.id),
         None,
         None,
@@ -202,9 +206,11 @@ async fn test_triplet_vector_cleanup_after_data_delete() {
     .expect("memify ds_ai");
 
     let memify_q = memify(
-        graph_db.as_ref(),
-        vector_db.as_ref(),
-        embedding_engine.as_ref(),
+        Arc::clone(&graph_db),
+        Arc::clone(&vector_db),
+        Arc::clone(&embedding_engine),
+        memify_pool,
+        Arc::clone(&database),
         Some(ds_q.id),
         None,
         None,

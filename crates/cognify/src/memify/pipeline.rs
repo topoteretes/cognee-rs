@@ -3,8 +3,17 @@
 //! The `memify` function extracts triplets from an existing knowledge graph
 //! and indexes them into the vector database for semantic search.
 
+use std::sync::Arc;
+
+use cognee_core::pipeline::DataIdFn;
+use cognee_core::task::Value;
+use cognee_core::{
+    CpuPool, NoopWatcher, Pipeline, PipelineBuilder, PipelineContext, TaskContextBuilder, TypedTask,
+};
+use cognee_database::DatabaseConnection;
 use cognee_embedding::EmbeddingEngine;
 use cognee_graph::GraphDBTrait;
+use cognee_models::Triplet;
 use cognee_vector::VectorDB;
 use tracing::info;
 use uuid::Uuid;
@@ -24,40 +33,111 @@ pub struct MemifyResult {
     pub index_result: IndexResult,
 }
 
+// ---------------------------------------------------------------------------
+// Typed task: Vec<Triplet> -> IndexResult
+// ---------------------------------------------------------------------------
+
+/// Build the one-task closure that indexes a pre-extracted batch of
+/// [`Triplet`]s into the vector database.
+///
+/// Locked Decision 8 (LIB-06, 2026-05-13): memify's executor-routed
+/// pipeline is a single "index-only" task whose input is the
+/// `Vec<Triplet>` produced by the pre-flight extraction step in
+/// [`memify`].
+fn make_index_triplets_task(
+    vector_db: Arc<dyn VectorDB>,
+    embedding_engine: Arc<dyn EmbeddingEngine>,
+    dataset_id: Option<Uuid>,
+    user_id: Option<Uuid>,
+    tenant_id: Option<Uuid>,
+) -> TypedTask<Vec<Triplet>, IndexResult> {
+    TypedTask::async_fn(move |triplets: &Vec<Triplet>, _ctx| {
+        let triplets = triplets.clone();
+        let vector_db = Arc::clone(&vector_db);
+        let embedding_engine = Arc::clone(&embedding_engine);
+        Box::pin(async move {
+            index_triplets(
+                &triplets,
+                &*vector_db,
+                &*embedding_engine,
+                dataset_id,
+                user_id,
+                tenant_id,
+            )
+            .await
+            .map(Box::new)
+            .map_err(|e| format!("{e}").into())
+        })
+    })
+}
+
+/// Build the executor-routed memify pipeline.
+///
+/// One task: `Vec<Triplet>` -> [`IndexResult`]. Triplet extraction
+/// (graph-DB query or custom-data synthesis) and the empty-triplets
+/// short-circuit happen *outside* this pipeline in [`memify`] — see
+/// locked Decision 8 of [LIB-06-02][doc].
+///
+/// [doc]: ../../../../docs/telemetry/lib-06/02-memify-executor-route.md
+pub fn build_memify_index_only_pipeline(
+    vector_db: Arc<dyn VectorDB>,
+    embedding_engine: Arc<dyn EmbeddingEngine>,
+    dataset_id: Option<Uuid>,
+    user_id: Option<Uuid>,
+    tenant_id: Option<Uuid>,
+) -> Pipeline {
+    // Decision 4 (LIB-06): memify has no `Data` inputs. The watcher's
+    // run_info `data_ids` carrier stays empty (Python's `"None"` branch).
+    let data_id_fn: DataIdFn = Arc::new(|_v: Arc<dyn Value>| None);
+    PipelineBuilder::new_with_task(
+        "memify",
+        make_index_triplets_task(vector_db, embedding_engine, dataset_id, user_id, tenant_id),
+    )
+    .with_name("memify")
+    .with_data_id(data_id_fn)
+    .build()
+}
+
 /// Run the memify pipeline: extract triplets from the graph and index them.
 ///
 /// # Algorithm
-/// 1. Validate configuration
-/// 2. Extract triplets from the graph database
-/// 3. If no triplets found, return early with zeros
-/// 4. Index triplets into the vector database
-/// 5. Return summary result
+/// 1. Validate configuration.
+/// 2. Pre-flight: extract triplets from the graph database (or synthesise
+///    them from `config.custom_data`).
+/// 3. If no triplets found, return early with zeros.
+/// 4. Build the one-task index-only pipeline (Decision 8) and route through
+///    [`cognee_core::pipeline::execute`] with `NoopWatcher` (Decision 11).
+/// 5. Downcast the executor output back to [`IndexResult`] and return a
+///    [`MemifyResult`].
 ///
 /// # Arguments
-/// * `graph_db` - Graph database containing the knowledge graph
-/// * `vector_db` - Vector database for storing triplet embeddings
-/// * `embedding_engine` - Engine to generate text embeddings
-/// * `dataset_id` - Optional dataset ID for metadata tagging
-/// * `user_id` - Optional user ID for metadata tagging
-/// * `tenant_id` - Optional tenant ID for metadata tagging
-/// * `config` - Pipeline configuration
+/// * `graph_db` — Graph database containing the knowledge graph.
+/// * `vector_db` — Vector database for storing triplet embeddings.
+/// * `embedding_engine` — Engine to generate text embeddings.
+/// * `thread_pool` — CPU pool for [`cognee_core::TaskContext`] (LIB-06
+///   Decision 1).
+/// * `database` — Relational [`DatabaseConnection`] for
+///   [`cognee_core::TaskContext`] (LIB-06 Decision 1).
+/// * `dataset_id` — Optional dataset ID for metadata tagging.
+/// * `user_id` — Optional user ID for metadata tagging.
+/// * `tenant_id` — Optional tenant ID for metadata tagging.
+/// * `config` — Pipeline configuration.
 ///
 /// # Returns
-/// A `MemifyResult` with counts of extracted and indexed triplets.
+/// A [`MemifyResult`] with counts of extracted and indexed triplets.
 //
-// TODO(LIB-06 follow-up): this convenience function bypasses
-// `cognee_core::execute()` and therefore does not emit payload events via
-// `PipelineWatcher::on_payload_field`. To enable run-scoped payload
-// emission for downstream consumers (e.g.
-// `cognee_lib::api::remember::remember()`), this function would need to
-// route through `cognee_core::execute()` with a memify pipeline built via
-// the task framework. Tracked in
-// `docs/http-api-v2/tasks/lib-06-pipeline-payload-mechanism.md` §3
-// finding 1.
+// TODO(LIB-06 follow-up): the `NoopWatcher` here means `PipelineWatcher`
+// lifecycle hooks (`on_pipeline_run_initiated/started/completed/errored`,
+// `on_payload_field`) are dropped. Telemetry gap 08-07 swaps it for a real
+// `DbPipelineWatcher` once the four-state `pipeline_runs` audit trail
+// lands. Tracked in `docs/telemetry/08/07-library-pipeline-wiring.md`.
+#[allow(clippy::too_many_arguments)]
 pub async fn memify(
-    graph_db: &dyn GraphDBTrait,
-    vector_db: &dyn VectorDB,
-    embedding_engine: &dyn EmbeddingEngine,
+    graph_db: Arc<dyn GraphDBTrait>,
+    vector_db: Arc<dyn VectorDB>,
+    embedding_engine: Arc<dyn EmbeddingEngine>,
+    thread_pool: Arc<dyn CpuPool>,
+    database: Arc<DatabaseConnection>,
     dataset_id: Option<Uuid>,
     user_id: Option<Uuid>,
     tenant_id: Option<Uuid>,
@@ -66,13 +146,12 @@ pub async fn memify(
     // 1. Validate configuration.
     config.validate()?;
 
-    // 2. Extract triplets from the graph database (or use custom data).
+    // 2. Pre-flight: extract triplets from the graph database (or use custom data).
     let triplets = if let Some(ref custom_data) = config.custom_data {
         // When custom data is provided, convert JSON values to Triplet objects.
         // Each value should be a JSON object with "source_node", "relationship_name",
         // and "target_node" fields. UUIDs are generated deterministically from the
         // text values.
-        use cognee_models::Triplet;
         let mut custom_triplets = Vec::new();
         for value in custom_data {
             let source = value
@@ -103,10 +182,12 @@ pub async fn memify(
         );
         custom_triplets
     } else {
-        extract_triplets_from_graph_db(graph_db, config).await?
+        extract_triplets_from_graph_db(&*graph_db, config).await?
     };
 
-    // 3. If empty, return early with zeros.
+    let triplet_count = triplets.len();
+
+    // 3. If empty, return early with zeros — skip the executor entirely.
     if triplets.is_empty() {
         info!("No triplets extracted from graph; nothing to index");
         return Ok(MemifyResult {
@@ -118,26 +199,88 @@ pub async fn memify(
         });
     }
 
-    // 4. Index triplets into the vector database.
-    let index_result = index_triplets(
-        &triplets,
-        vector_db,
-        embedding_engine,
+    // 4. Build the one-task index-only pipeline and run it through
+    //    `pipeline::execute` (Decision 8 / 11).
+    let pipeline = build_memify_index_only_pipeline(
+        Arc::clone(&vector_db),
+        Arc::clone(&embedding_engine),
         dataset_id,
         user_id,
         tenant_id,
-    )
-    .await?;
+    );
+
+    // The executor re-derives `PipelineRunInfo.pipeline_id` from
+    // `(pipeline.name, user_id, dataset_id)`; we still carry `pipeline.id`
+    // through `PipelineContext` as the placeholder.
+    let pipeline_ctx = PipelineContext {
+        pipeline_id: pipeline.id,
+        pipeline_name: pipeline.name.clone().unwrap_or_default(),
+        user_id,
+        tenant_id,
+        dataset_id,
+        current_data: None,
+        run_id: None,
+        user_email: None,
+        provenance_visited: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+    };
+
+    let (_cancel_handle, ctx) = TaskContextBuilder::new()
+        .thread_pool(thread_pool)
+        .database(database)
+        .graph_db(Arc::clone(&graph_db))
+        .vector_db(Arc::clone(&vector_db))
+        .pipeline_context(pipeline_ctx)
+        .build()
+        .map_err(|e| MemifyError::Context(e.to_string()))?;
+    let ctx = Arc::new(ctx);
+
+    let inputs: Vec<Arc<dyn Value>> = vec![Arc::new(triplets) as Arc<dyn Value>];
+
+    let outputs = cognee_core::pipeline::execute(&pipeline, inputs, ctx, &NoopWatcher)
+        .await
+        .map_err(|e| MemifyError::Execute(e.to_string()))?;
+
+    let index_result = extract_memify_outputs(outputs)?;
 
     // 5. Log summary and return.
     info!(
         "Memify complete: {} triplets extracted, {} indexed",
-        triplets.len(),
-        index_result.indexed_count
+        triplet_count, index_result.indexed_count
     );
 
     Ok(MemifyResult {
-        triplet_count: triplets.len(),
+        triplet_count,
         index_result,
     })
+}
+
+// ---------------------------------------------------------------------------
+// Output extraction (Decision 9)
+// ---------------------------------------------------------------------------
+
+/// Downcast the executor's [`Arc<dyn Value>`] outputs back to the concrete
+/// [`IndexResult`] the memify convenience function promises.
+///
+/// Returns [`MemifyError::OutputTypeMismatch`] when the downcast fails — a
+/// programmer error indicating the pipeline's last task does not emit
+/// `IndexResult`.
+fn extract_memify_outputs(outputs: Vec<Arc<dyn Value>>) -> Result<IndexResult, MemifyError> {
+    let first = outputs
+        .into_iter()
+        .next()
+        .ok_or(MemifyError::OutputTypeMismatch {
+            expected: "IndexResult",
+            actual: "empty",
+        })?;
+    // Explicit deref through `Arc` to reach the inner `dyn Value`, then call
+    // `as_any` via vtable dispatch — mirrors the pattern in
+    // `cognee_ingestion::pipeline::extract_data_outputs` (LIB-06-01).
+    (*first)
+        .as_any()
+        .downcast_ref::<IndexResult>()
+        .cloned()
+        .ok_or(MemifyError::OutputTypeMismatch {
+            expected: "IndexResult",
+            actual: "unknown",
+        })
 }

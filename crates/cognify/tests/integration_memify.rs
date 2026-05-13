@@ -4,16 +4,32 @@ use cognee_cognify::graph_integration::{GraphEdgePair, GraphNodePair};
 use cognee_cognify::memify::extract_triplets::extract_triplets_from_graph_db;
 use cognee_cognify::memify::{MemifyConfig, memify};
 use cognee_cognify::triplet_creation::create_triplets_from_graph;
-use cognee_embedding::MockEmbeddingEngine;
+use cognee_core::{CpuPool, RayonThreadPool};
+use cognee_database::{DatabaseConnection, connect, initialize};
+use cognee_embedding::{EmbeddingEngine, MockEmbeddingEngine};
 use cognee_graph::{GraphDBTrait, MockGraphDB};
 use cognee_models::{Entity, EntityType};
 use cognee_vector::{MockVectorDB, VectorDB};
 use serde_json::json;
 use std::collections::HashMap;
+use std::sync::Arc;
 use uuid::Uuid;
 
+/// Build the executor-context handles required by the LIB-06 memify
+/// signature.  Returns an in-memory SQLite-backed [`DatabaseConnection`]
+/// and a default Rayon thread pool.
+async fn make_ctx_handles() -> (Arc<dyn CpuPool>, Arc<DatabaseConnection>) {
+    let db = connect("sqlite::memory:")
+        .await
+        .expect("connect in-memory DB");
+    initialize(&db).await.expect("initialize schema");
+    let pool: Arc<dyn CpuPool> =
+        Arc::new(RayonThreadPool::with_default_threads().expect("rayon pool"));
+    (pool, Arc::new(db))
+}
+
 /// Helper: add a node to the mock graph with name and description.
-async fn add_node(db: &MockGraphDB, id: Uuid, name: &str, description: &str) {
+async fn add_node(db: &dyn GraphDBTrait, id: Uuid, name: &str, description: &str) {
     let mut node_json = serde_json::Map::new();
     node_json.insert("id".to_string(), json!(id.to_string()));
     node_json.insert("name".to_string(), json!(name));
@@ -26,14 +42,14 @@ async fn add_node(db: &MockGraphDB, id: Uuid, name: &str, description: &str) {
 }
 
 /// Helper: add an edge between two nodes.
-async fn add_edge(db: &MockGraphDB, source: Uuid, target: Uuid, relationship: &str) {
+async fn add_edge(db: &dyn GraphDBTrait, source: Uuid, target: Uuid, relationship: &str) {
     db.add_edge(&source.to_string(), &target.to_string(), relationship, None)
         .await
         .unwrap();
 }
 
 /// Seed a small graph with 3 nodes and 2 edges for reuse across tests.
-async fn seed_graph(db: &MockGraphDB) -> (Uuid, Uuid, Uuid) {
+async fn seed_graph(db: &dyn GraphDBTrait) -> (Uuid, Uuid, Uuid) {
     let id_a = Uuid::new_v4();
     let id_b = Uuid::new_v4();
     let id_c = Uuid::new_v4();
@@ -49,17 +65,20 @@ async fn seed_graph(db: &MockGraphDB) -> (Uuid, Uuid, Uuid) {
 
 #[tokio::test]
 async fn test_memify_end_to_end() {
-    let graph_db = MockGraphDB::new();
-    let vector_db = MockVectorDB::new();
-    let engine = MockEmbeddingEngine::new(8);
+    let graph_db: Arc<dyn GraphDBTrait> = Arc::new(MockGraphDB::new());
+    let vector_db: Arc<dyn VectorDB> = Arc::new(MockVectorDB::new());
+    let engine: Arc<dyn EmbeddingEngine> = Arc::new(MockEmbeddingEngine::new(8));
+    let (pool, database) = make_ctx_handles().await;
     let config = MemifyConfig::default();
 
-    let (_a, _b, _c) = seed_graph(&graph_db).await;
+    let (_a, _b, _c) = seed_graph(&*graph_db).await;
 
     let result = memify(
-        &graph_db,
-        &vector_db,
-        &engine,
+        Arc::clone(&graph_db),
+        Arc::clone(&vector_db),
+        Arc::clone(&engine),
+        pool,
+        database,
         Some(Uuid::new_v4()),
         Some(Uuid::new_v4()),
         None,
@@ -82,20 +101,41 @@ async fn test_memify_end_to_end() {
 
 #[tokio::test]
 async fn test_memify_idempotent() {
-    let graph_db = MockGraphDB::new();
-    let vector_db = MockVectorDB::new();
-    let engine = MockEmbeddingEngine::new(8);
+    let graph_db: Arc<dyn GraphDBTrait> = Arc::new(MockGraphDB::new());
+    let vector_db: Arc<dyn VectorDB> = Arc::new(MockVectorDB::new());
+    let engine: Arc<dyn EmbeddingEngine> = Arc::new(MockEmbeddingEngine::new(8));
+    let (pool, database) = make_ctx_handles().await;
     let config = MemifyConfig::default();
 
-    seed_graph(&graph_db).await;
+    seed_graph(&*graph_db).await;
 
-    let r1 = memify(&graph_db, &vector_db, &engine, None, None, None, &config)
-        .await
-        .unwrap();
+    let r1 = memify(
+        Arc::clone(&graph_db),
+        Arc::clone(&vector_db),
+        Arc::clone(&engine),
+        Arc::clone(&pool),
+        Arc::clone(&database),
+        None,
+        None,
+        None,
+        &config,
+    )
+    .await
+    .unwrap();
 
-    let r2 = memify(&graph_db, &vector_db, &engine, None, None, None, &config)
-        .await
-        .unwrap();
+    let r2 = memify(
+        Arc::clone(&graph_db),
+        Arc::clone(&vector_db),
+        Arc::clone(&engine),
+        Arc::clone(&pool),
+        Arc::clone(&database),
+        None,
+        None,
+        None,
+        &config,
+    )
+    .await
+    .unwrap();
 
     // Same number of triplets extracted both times
     assert_eq!(r1.triplet_count, r2.triplet_count);
@@ -111,14 +151,25 @@ async fn test_memify_idempotent() {
 
 #[tokio::test]
 async fn test_memify_empty_graph() {
-    let graph_db = MockGraphDB::new();
-    let vector_db = MockVectorDB::new();
-    let engine = MockEmbeddingEngine::new(8);
+    let graph_db: Arc<dyn GraphDBTrait> = Arc::new(MockGraphDB::new());
+    let vector_db: Arc<dyn VectorDB> = Arc::new(MockVectorDB::new());
+    let engine: Arc<dyn EmbeddingEngine> = Arc::new(MockEmbeddingEngine::new(8));
+    let (pool, database) = make_ctx_handles().await;
     let config = MemifyConfig::default();
 
-    let result = memify(&graph_db, &vector_db, &engine, None, None, None, &config)
-        .await
-        .unwrap();
+    let result = memify(
+        Arc::clone(&graph_db),
+        Arc::clone(&vector_db),
+        Arc::clone(&engine),
+        pool,
+        database,
+        None,
+        None,
+        None,
+        &config,
+    )
+    .await
+    .unwrap();
 
     assert_eq!(result.triplet_count, 0);
     assert_eq!(result.index_result.indexed_count, 0);
@@ -264,14 +315,17 @@ async fn test_memify_idempotent_ids_match_cognify() {
 
 #[tokio::test]
 async fn test_memify_rejects_invalid_config() {
-    let graph_db = MockGraphDB::new();
-    let vector_db = MockVectorDB::new();
-    let engine = MockEmbeddingEngine::new(8);
+    let graph_db: Arc<dyn GraphDBTrait> = Arc::new(MockGraphDB::new());
+    let vector_db: Arc<dyn VectorDB> = Arc::new(MockVectorDB::new());
+    let engine: Arc<dyn EmbeddingEngine> = Arc::new(MockEmbeddingEngine::new(8));
+    let (pool, database) = make_ctx_handles().await;
     let config = MemifyConfig::default().with_triplet_batch_size(0);
 
-    let err = memify(&graph_db, &vector_db, &engine, None, None, None, &config)
-        .await
-        .unwrap_err();
+    let err = memify(
+        graph_db, vector_db, engine, pool, database, None, None, None, &config,
+    )
+    .await
+    .unwrap_err();
 
     assert!(
         err.to_string().contains("triplet_batch_size"),
@@ -284,7 +338,7 @@ async fn test_memify_rejects_invalid_config() {
 /// Used by the filter-path integration tests below to populate primary /
 /// non-primary nodes exercised by `get_nodeset_subgraph`.
 async fn add_typed_node(
-    db: &MockGraphDB,
+    db: &dyn GraphDBTrait,
     id: Uuid,
     name: &str,
     node_type: &str,
@@ -314,7 +368,7 @@ async fn add_typed_node(
 /// With type=Entity, names=[Alice,Bob]:
 /// OR  → included = {Alice,Bob,Carol,Idea1} → all 3 edges survive.
 /// AND → included = {Alice,Bob}             → only Alice-knows-Bob survives.
-async fn seed_filter_graph(db: &MockGraphDB) -> (Uuid, Uuid, Uuid, Uuid) {
+async fn seed_filter_graph(db: &dyn GraphDBTrait) -> (Uuid, Uuid, Uuid, Uuid) {
     let alice = Uuid::new_v4();
     let bob = Uuid::new_v4();
     let carol = Uuid::new_v4();
@@ -334,11 +388,12 @@ async fn seed_filter_graph(db: &MockGraphDB) -> (Uuid, Uuid, Uuid, Uuid) {
 
 #[tokio::test]
 async fn test_memify_with_type_and_names_filter_or() {
-    let graph_db = MockGraphDB::new();
-    let vector_db = MockVectorDB::new();
-    let engine = MockEmbeddingEngine::new(8);
+    let graph_db: Arc<dyn GraphDBTrait> = Arc::new(MockGraphDB::new());
+    let vector_db: Arc<dyn VectorDB> = Arc::new(MockVectorDB::new());
+    let engine: Arc<dyn EmbeddingEngine> = Arc::new(MockEmbeddingEngine::new(8));
+    let (pool, database) = make_ctx_handles().await;
 
-    let (_alice, _bob, _carol, _idea1) = seed_filter_graph(&graph_db).await;
+    let (_alice, _bob, _carol, _idea1) = seed_filter_graph(&*graph_db).await;
 
     let config = MemifyConfig::default()
         .with_node_type_filter("Entity".to_string())
@@ -346,9 +401,11 @@ async fn test_memify_with_type_and_names_filter_or() {
         .with_node_name_filter_operator("OR".to_string());
 
     let result = memify(
-        &graph_db,
-        &vector_db,
-        &engine,
+        Arc::clone(&graph_db),
+        Arc::clone(&vector_db),
+        Arc::clone(&engine),
+        pool,
+        database,
         Some(Uuid::new_v4()),
         Some(Uuid::new_v4()),
         None,
@@ -372,11 +429,12 @@ async fn test_memify_with_type_and_names_filter_or() {
 
 #[tokio::test]
 async fn test_memify_with_type_and_names_filter_and() {
-    let graph_db = MockGraphDB::new();
-    let vector_db = MockVectorDB::new();
-    let engine = MockEmbeddingEngine::new(8);
+    let graph_db: Arc<dyn GraphDBTrait> = Arc::new(MockGraphDB::new());
+    let vector_db: Arc<dyn VectorDB> = Arc::new(MockVectorDB::new());
+    let engine: Arc<dyn EmbeddingEngine> = Arc::new(MockEmbeddingEngine::new(8));
+    let (pool, database) = make_ctx_handles().await;
 
-    let (_alice, _bob, _carol, _idea1) = seed_filter_graph(&graph_db).await;
+    let (_alice, _bob, _carol, _idea1) = seed_filter_graph(&*graph_db).await;
 
     let config = MemifyConfig::default()
         .with_node_type_filter("Entity".to_string())
@@ -384,9 +442,11 @@ async fn test_memify_with_type_and_names_filter_and() {
         .with_node_name_filter_operator("AND".to_string());
 
     let result = memify(
-        &graph_db,
-        &vector_db,
-        &engine,
+        Arc::clone(&graph_db),
+        Arc::clone(&vector_db),
+        Arc::clone(&engine),
+        pool,
+        database,
         Some(Uuid::new_v4()),
         Some(Uuid::new_v4()),
         None,

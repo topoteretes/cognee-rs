@@ -17,6 +17,7 @@
 use std::sync::Arc;
 
 use cognee_cognify::memify::{MemifyConfig, memify};
+use cognee_core::{CpuPool, RayonThreadPool};
 use cognee_database::{DatabaseConnection, SearchHistoryDb, connect, initialize};
 use cognee_embedding::{EmbeddingEngine, config::OnnxEmbeddingConfig, onnx::OnnxEmbeddingEngine};
 use cognee_graph::{GraphDBTrait, LadybugAdapter};
@@ -210,10 +211,14 @@ async fn test_memify_e2e_real_embedding_real_qdrant() {
 
     // ── Run memify on the seeded graph ──────────────────────────────────────
     let memify_config = MemifyConfig::default();
+    let pool: Arc<dyn CpuPool> =
+        Arc::new(RayonThreadPool::with_default_threads().expect("rayon pool"));
     let result = memify(
-        graph_db.as_ref(),
-        vector_db.as_ref(),
-        embedding_engine.as_ref(),
+        Arc::clone(&graph_db),
+        Arc::clone(&vector_db),
+        Arc::clone(&embedding_engine),
+        pool,
+        Arc::clone(&database),
         Some(Uuid::new_v4()), // dataset_id
         Some(Uuid::new_v4()), // user_id
         None,                 // tenant_id

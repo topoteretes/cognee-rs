@@ -36,7 +36,7 @@ pub use persist_sessions::{
     PersistSessionsError, PersistSessionsResult, USER_SESSIONS_NODE_SET,
     persist_sessions_in_knowledge_graph,
 };
-pub use pipeline::{MemifyResult, memify};
+pub use pipeline::{MemifyResult, build_memify_index_only_pipeline, memify};
 pub use sync_graph_session::{
     BATCH_SIZE, DEFAULT_MAX_LINES, SyncError, SyncResult, checkpoint_key, sync_graph_to_session,
 };

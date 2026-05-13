@@ -363,6 +363,11 @@ async fn run_permanent_inner(
         None => None,
     };
 
+    // Clone the optional DB handle so memify (which now requires it per
+    // LIB-06 Decision 1) can still reach the relational connection after
+    // cognify consumes its copy.
+    let db_for_memify = db.clone();
+
     // Cognify.
     let cognify_result = cognify(
         data_items,
@@ -385,20 +390,40 @@ async fn run_permanent_inner(
     // Optional self-improvement via memify.
     let memify_result = if self_improvement {
         let config = MemifyConfig::default();
-        match run_memify(
-            &*graph_db,
-            &*vector_db,
-            &*embedding_engine,
-            Some(dataset_id),
-            Some(owner_id),
-            tenant_id,
-            &config,
-        )
-        .await
-        {
-            Ok(r) => Some(r),
-            Err(e) => {
-                warn!("memify phase failed (non-fatal): {e}");
+        match db_for_memify {
+            Some(database) => match cognee_core::RayonThreadPool::with_default_threads() {
+                Ok(pool) => {
+                    let thread_pool: Arc<dyn cognee_core::CpuPool> = Arc::new(pool);
+                    match run_memify(
+                        Arc::clone(&graph_db),
+                        Arc::clone(&vector_db),
+                        Arc::clone(&embedding_engine),
+                        thread_pool,
+                        database,
+                        Some(dataset_id),
+                        Some(owner_id),
+                        tenant_id,
+                        &config,
+                    )
+                    .await
+                    {
+                        Ok(r) => Some(r),
+                        Err(e) => {
+                            warn!("memify phase failed (non-fatal): {e}");
+                            None
+                        }
+                    }
+                }
+                Err(e) => {
+                    warn!("memify phase skipped (non-fatal): rayon pool init: {e}");
+                    None
+                }
+            },
+            None => {
+                warn!(
+                    "memify phase skipped: a relational database connection is required by the \
+                     LIB-06 executor-routed memify"
+                );
                 None
             }
         }

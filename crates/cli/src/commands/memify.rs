@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use cognee_lib::cognee_core::{CpuPool, RayonThreadPool};
 use cognee_lib::cognify::{MemifyConfig, run_memify};
 use cognee_lib::database::ops;
 use cognee_lib::{ComponentManager, PipelineContext};
@@ -81,10 +82,17 @@ pub fn run(args: MemifyArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> 
 
             info!("Dataset '{dataset_name}': running memify");
 
+            let thread_pool: Arc<dyn CpuPool> = Arc::new(
+                RayonThreadPool::with_default_threads()
+                    .map_err(|e| CliError::Runtime(format!("Failed to build thread pool: {e}")))?,
+            );
+
             let result = run_memify(
-                &*graph_db,
-                &*vector_db,
-                &*embedding_engine,
+                Arc::clone(&graph_db),
+                Arc::clone(&vector_db),
+                Arc::clone(&embedding_engine),
+                thread_pool,
+                Arc::clone(&database),
                 Some(dataset.id),
                 Some(owner_id),
                 dataset.tenant_id,

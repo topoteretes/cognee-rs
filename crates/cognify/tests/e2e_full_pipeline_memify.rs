@@ -233,10 +233,14 @@ async fn test_full_pipeline_add_cognify_memify_search_delete() {
 
     // ── Step 3: Memify ───────────────────────────────────────────────────────
     let memify_config = MemifyConfig::default();
+    let memify_pool: Arc<dyn cognee_core::CpuPool> =
+        Arc::new(cognee_core::RayonThreadPool::with_default_threads().expect("rayon pool"));
     let memify_result = memify(
-        graph_db.as_ref(),
-        vector_db.as_ref(),
-        embedding_engine.as_ref(),
+        Arc::clone(&graph_db),
+        Arc::clone(&vector_db),
+        Arc::clone(&embedding_engine),
+        memify_pool,
+        Arc::clone(&database),
         Some(dataset.id),
         None, // user_id
         None, // tenant_id

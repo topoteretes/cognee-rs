@@ -278,27 +278,45 @@ pub async fn improve(params: ImproveParams<'_>) -> Result<ImproveResult, ApiErro
     } else {
         MemifyConfig::default()
     };
-    match run_memify(
-        &*graph_db,
-        &*vector_db,
-        &*embedding_engine,
-        None,
-        Some(owner_id),
-        tenant_id,
-        &memify_config,
-    )
-    .await
-    {
-        Ok(mr) => {
-            info!(
-                triplets = mr.triplet_count,
-                "improve stage 3 (memify) complete"
+    match db.as_ref() {
+        Some(database) => match cognee_core::RayonThreadPool::with_default_threads() {
+            Ok(pool) => {
+                let thread_pool: Arc<dyn cognee_core::CpuPool> = Arc::new(pool);
+                match run_memify(
+                    Arc::clone(&graph_db),
+                    Arc::clone(&vector_db),
+                    Arc::clone(&embedding_engine),
+                    thread_pool,
+                    Arc::clone(database),
+                    None,
+                    Some(owner_id),
+                    tenant_id,
+                    &memify_config,
+                )
+                .await
+                {
+                    Ok(mr) => {
+                        info!(
+                            triplets = mr.triplet_count,
+                            "improve stage 3 (memify) complete"
+                        );
+                        result.memify_result = Some(mr);
+                        result.stages_run.push("memify".to_string());
+                    }
+                    Err(e) => {
+                        warn!("improve stage 3 (memify) failed (non-fatal): {e}");
+                    }
+                }
+            }
+            Err(e) => {
+                warn!("improve stage 3 (memify) failed (non-fatal): rayon pool init: {e}");
+            }
+        },
+        None => {
+            warn!(
+                "improve stage 3: a relational database connection is required by the LIB-06 \
+                 executor-routed memify; skipping memify"
             );
-            result.memify_result = Some(mr);
-            result.stages_run.push("memify".to_string());
-        }
-        Err(e) => {
-            warn!("improve stage 3 (memify) failed (non-fatal): {e}");
         }
     }
 

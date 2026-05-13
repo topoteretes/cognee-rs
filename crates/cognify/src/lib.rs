@@ -25,8 +25,8 @@ pub use graph_integration::{
 pub use memify::{
     FeedbackApplyResult, FeedbackError, MemifyConfig, MemifyError, MemifyResult, MemifyTask,
     PersistSessionsError, PersistSessionsResult, SyncError, SyncResult,
-    apply_feedback_weights_pipeline, memify as run_memify, persist_sessions_in_knowledge_graph,
-    sync_graph_to_session,
+    apply_feedback_weights_pipeline, build_memify_index_only_pipeline, memify as run_memify,
+    persist_sessions_in_knowledge_graph, sync_graph_to_session,
 };
 pub use pipeline::{CognifyResult, IndexedFieldsStats};
 pub use summarization::{SummarizedContent, SummaryExtractor, TextSummary};
