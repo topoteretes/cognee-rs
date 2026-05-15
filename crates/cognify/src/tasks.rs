@@ -1837,38 +1837,39 @@ pub async fn cognify(
     }
 
     // ── Branch: temporal vs. standard pipeline ──────────────────────────────
-    // LIB-06-03 only routes the **standard** branch through `pipeline::execute`.
-    // The temporal branch keeps its inline implementation (its inline
-    // `stamp_provenance` calls live above) until LIB-06-04 lands.
-    if effective_config.temporal_cognify {
-        return cognify_temporal_inline(
-            data_items,
-            dataset_id,
-            user_id,
-            user_email,
-            tenant_id,
-            llm,
-            storage,
-            graph_db,
-            vector_db,
-            embedding_engine,
-            database,
-            &effective_config,
+    // LIB-06-04: both branches now route through `pipeline::execute`. The
+    // selection happens *before* `execute()` per locked Decision 2 — temporal
+    // is a distinct `Pipeline` with its own task DAG. Per locked option (a)
+    // (user decision 2026-05-15), the shared tasks
+    // (`make_classify_documents_task`, `make_extract_chunks_task`) stamp
+    // `Document` / `DocumentChunk` DataPoints with
+    // `source_pipeline = "cognify"` (the LIB-06-03 constant) on both
+    // branches; the temporal pipeline keeps its distinct identity at the
+    // `pipeline_runs` row level via `build_temporal_cognify_pipeline`'s
+    // `with_name("temporal-cognify")`.
+    let is_temporal = effective_config.temporal_cognify;
+    let pipeline = if is_temporal {
+        build_temporal_cognify_pipeline(
+            Arc::clone(&storage),
+            Arc::clone(&graph_db),
+            Arc::clone(&vector_db),
+            Arc::clone(&embedding_engine),
+            Arc::clone(&llm),
+            Some(Arc::clone(&database)),
+            effective_config.clone(),
         )
-        .await;
-    }
-
-    // ── Standard branch — route through `pipeline::execute` ─────────────────
-    let pipeline = build_cognify_pipeline(
-        Arc::clone(&storage),
-        Arc::clone(&graph_db),
-        Arc::clone(&vector_db),
-        Arc::clone(&embedding_engine),
-        Arc::clone(&llm),
-        Some(Arc::clone(&database)),
-        Arc::clone(&ontology_resolver),
-        effective_config.clone(),
-    );
+    } else {
+        build_cognify_pipeline(
+            Arc::clone(&storage),
+            Arc::clone(&graph_db),
+            Arc::clone(&vector_db),
+            Arc::clone(&embedding_engine),
+            Arc::clone(&llm),
+            Some(Arc::clone(&database)),
+            Arc::clone(&ontology_resolver),
+            effective_config.clone(),
+        )
+    };
 
     // The executor re-derives `PipelineRunInfo.pipeline_id` from
     // `(pipeline.name, user_id, dataset_id)`; we still carry `pipeline.id`
@@ -1916,12 +1917,18 @@ pub async fn cognify(
     // `Err(...)` to the caller but does not roll back the run state. This
     // is acceptable today because the watcher is `NoopWatcher`; gap 08-07
     // documents the trade-off when DbPipelineWatcher lands.
-    extract_dlt_fk_edges(
-        &result.chunks,
-        &result.documents_for_dlt,
-        Arc::clone(&graph_db),
-    )
-    .await?;
+    //
+    // LIB-06-04: skip DLT FK extraction on the temporal branch — temporal
+    // does not propagate `documents_for_dlt` (and Python's temporal cognify
+    // does not run DLT teardown either).
+    if !is_temporal {
+        extract_dlt_fk_edges(
+            &result.chunks,
+            &result.documents_for_dlt,
+            Arc::clone(&graph_db),
+        )
+        .await?;
+    }
 
     Ok(result)
 }
@@ -1957,101 +1964,6 @@ fn extract_cognify_outputs(outputs: Vec<Arc<dyn Value>>) -> Result<CognifyResult
             expected: "CognifyResult",
             actual: "unknown",
         })
-}
-
-// ---------------------------------------------------------------------------
-// Temporal branch — inline implementation (LIB-06-04 will route it)
-// ---------------------------------------------------------------------------
-
-/// Inline temporal cognify pipeline. Preserves the pre-LIB-06 behaviour for
-/// the `config.temporal_cognify == true` branch verbatim. LIB-06-04 routes it
-/// through `pipeline::execute` via `build_temporal_cognify_pipeline`.
-#[allow(clippy::too_many_arguments)]
-async fn cognify_temporal_inline(
-    data_items: Vec<Data>,
-    dataset_id: Uuid,
-    user_id: Option<Uuid>,
-    user_email: Option<String>,
-    tenant_id: Option<Uuid>,
-    llm: Arc<dyn Llm>,
-    storage: Arc<dyn StorageTrait>,
-    graph_db: Arc<dyn GraphDBTrait>,
-    vector_db: Arc<dyn VectorDB>,
-    embedding_engine: Arc<dyn EmbeddingEngine>,
-    database: Arc<DatabaseConnection>,
-    config: &CognifyConfig,
-) -> Result<CognifyResult, CognifyError> {
-    // Derive user string for provenance stamping. Mirrors `user_label()` on
-    // `PipelineContext`: prefer the looked-up email, fall back to the UUID
-    // when no `User` row was fetched (unauthenticated CLI runs, etc.).
-    let user_str = user_email
-        .clone()
-        .or_else(|| user_id.as_ref().map(|id| id.to_string()));
-    let user_str_ref = user_str.as_deref();
-
-    let input = CognifyInput {
-        data_items,
-        dataset_id,
-        user_id,
-        tenant_id,
-    };
-
-    // Task 1: Classify documents
-    let mut classified = classify_documents(&input)?;
-    for doc in &mut classified.documents {
-        stamp_provenance(
-            &mut doc.base,
-            "cognify_pipeline",
-            "classify_documents",
-            user_str_ref,
-        );
-    }
-
-    if classified.documents.is_empty() {
-        return Ok(CognifyResult::empty());
-    }
-
-    // Task 2: Extract text chunks
-    let loader_registry = LoaderRegistry::default();
-    let mut extracted_chunks = extract_chunks_from_documents(
-        &classified,
-        &*storage,
-        config.max_chunk_size,
-        config.token_counter_kind.clone(),
-        Some(&*database),
-        &loader_registry,
-    )
-    .await?;
-    for chunk in &mut extracted_chunks.chunks {
-        stamp_provenance(
-            &mut chunk.base,
-            "cognify_pipeline",
-            "extract_chunks_from_documents",
-            user_str_ref,
-        );
-    }
-
-    if extracted_chunks.chunks.is_empty() {
-        return Ok(CognifyResult::empty());
-    }
-
-    info!("Extracted {} chunks", extracted_chunks.chunks.len());
-    info!("Running temporal cognify pipeline (event/timestamp extraction).");
-
-    // Temporal Task 3: Extract events (two LLM passes)
-    let temporal_events =
-        extract_temporal_events(&extracted_chunks, Arc::clone(&llm), config).await?;
-
-    info!(
-        "Temporal extraction complete: {} events",
-        temporal_events.events.len()
-    );
-
-    // Temporal Task 4: Persist to graph + vector
-    let result =
-        add_temporal_data_points(&temporal_events, graph_db, vector_db, embedding_engine).await?;
-
-    Ok(result)
 }
 
 // ---------------------------------------------------------------------------
