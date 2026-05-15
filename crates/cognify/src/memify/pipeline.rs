@@ -126,11 +126,11 @@ pub fn build_memify_index_only_pipeline(
 /// # Returns
 /// A [`MemifyResult`] with counts of extracted and indexed triplets.
 //
-// TODO(LIB-06 follow-up): the `NoopWatcher` here means `PipelineWatcher`
-// lifecycle hooks (`on_pipeline_run_initiated/started/completed/errored`,
-// `on_payload_field`) are dropped. Telemetry gap 08-07 swaps it for a real
-// `DbPipelineWatcher` once the four-state `pipeline_runs` audit trail
-// lands. Tracked in `docs/telemetry/08/07-library-pipeline-wiring.md`.
+// gap-08 task 07: swap `NoopWatcher` for `DbPipelineWatcher` here once the
+// watcher type lands so `PipelineWatcher` lifecycle hooks
+// (`on_pipeline_run_initiated/started/completed/errored`, `on_payload_field`)
+// are persisted to the `pipeline_runs` audit trail. Tracked in
+// `docs/telemetry/08/07-library-pipeline-wiring.md`.
 #[allow(clippy::too_many_arguments)]
 pub async fn memify(
     graph_db: Arc<dyn GraphDBTrait>,

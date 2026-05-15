@@ -1776,17 +1776,6 @@ fn stamp_provenance(dp: &mut DataPoint, pipeline: &str, task: &str, user: Option
 ///
 /// For composable pipeline-based execution (with concurrency, retry, progress
 /// tracking), use [`build_cognify_pipeline`] + [`cognee_core::execute`].
-///
-// TODO(LIB-06 follow-up): this convenience function bypasses
-// `cognee_core::execute()` and therefore does not emit payload events via
-// `PipelineWatcher::on_payload_field`. Tasks running inside this function
-// cannot publish run-scoped payload that downstream consumers (e.g.
-// `cognee_lib::api::remember::remember()`) can read via
-// `PipelineRunRegistry::get_payload(run_id)`. To enable that, this
-// function would need to route through `cognee_core::execute()` with a
-// pipeline built via `build_cognify_pipeline`. Tracked in
-// `docs/http-api-v2/tasks/lib-06-pipeline-payload-mechanism.md` §3
-// finding 1.
 #[allow(clippy::too_many_arguments)]
 pub async fn cognify(
     data_items: Vec<Data>,

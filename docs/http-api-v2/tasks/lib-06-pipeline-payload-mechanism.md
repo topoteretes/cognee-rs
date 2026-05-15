@@ -517,6 +517,14 @@ Existing tests in [`crates/lib/tests/remember_sync_only.rs`](../../../crates/lib
 
 These TODOs are the canonical record that the convenience-function refactor is deferred. No code change beyond the comment.
 
+> **Closure note (2026-05-15):** The convenience-function refactor has since
+> landed; see [`docs/telemetry/lib-06-executor-routed-convenience.md`](../../telemetry/lib-06-executor-routed-convenience.md).
+> The `cognify` and ingestion convenience functions now route through
+> `cognee_core::pipeline::execute`, and their `TODO(LIB-06 follow-up)`
+> markers were removed by LIB-06-05. The memify TODO was rewritten to
+> point at gap-08 task 07 (`DbPipelineWatcher` swap), which is the only
+> remaining piece of the original bypass concern.
+
 ## 5. Tests
 
 Add tests in this order (each must pass before the next is written, so the implementation agent can keep `cargo check --all-targets` clean throughout).
