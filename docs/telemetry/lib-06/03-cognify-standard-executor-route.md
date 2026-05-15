@@ -1,6 +1,6 @@
 # LIB-06-03 — Route `cognify::cognify` standard branch through `pipeline::execute`
 
-**Status**: not yet implemented (⬜)
+**Status**: implemented in commit a9701db (load-bearing fixup: stamp_tree_dyn cannot walk cognify's wrapper struct outputs, so each make_*_task body stamps its DataPoint outputs in-body before returning; the executor's automatic stamp pass remains as a redundant no-op for cognify; provenance_e2e passes with env-loaded OpenAI access)
 **Owner**: _unassigned_
 **Depends on**: LIB-06-01 (working executor-route + downcast example).
 **Blocks**:
