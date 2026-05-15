@@ -1,6 +1,6 @@
 # LIB-06-05 — Cleanup `TODO(LIB-06 follow-up)` markers
 
-**Status**: not yet implemented (⬜)
+**Status**: implemented in commit d1b7f75
 **Owner**: _unassigned_
 **Depends on**: LIB-06-01, LIB-06-02, LIB-06-03, LIB-06-04 (all four convenience functions must route through `execute()` before the TODOs can be honestly removed).
 **Blocks**:
