@@ -19,6 +19,7 @@
 
 use std::sync::Arc;
 
+use cognee_core::CpuPool;
 use cognee_database::DatabaseConnection;
 use cognee_embedding::EmbeddingEngine;
 use cognee_graph::GraphDBTrait;
@@ -105,7 +106,8 @@ pub async fn persist_sessions_in_knowledge_graph(
     graph_db: Arc<dyn GraphDBTrait>,
     vector_db: Arc<dyn VectorDB>,
     embedding_engine: Arc<dyn EmbeddingEngine>,
-    db: Option<Arc<DatabaseConnection>>,
+    database: Arc<DatabaseConnection>,
+    thread_pool: Arc<dyn CpuPool>,
     ontology_resolver: Arc<dyn OntologyResolver>,
     cognify_config: &CognifyConfig,
 ) -> Result<PersistSessionsResult, PersistSessionsError> {
@@ -165,46 +167,28 @@ pub async fn persist_sessions_in_knowledge_graph(
         // not currently return the dataset_id directly, so we derive it from
         // the node_set-tagged Data entries through the same helper that
         // cognify_dataset_refs uses: look up by name/owner.
-        //
-        // For simplicity and to match the Python code path which passes
-        // the whole list to cognify([dataset_id]), we fetch the dataset_id
-        // from the relational DB here if available. If `db` is None we
-        // still call cognify() by constructing a nil dataset id — but this
-        // should not happen in practice since AddPipeline requires a DB.
-        let dataset_id = match &db {
-            Some(dbc) => {
-                match cognee_database::ops::datasets::get_dataset_by_name(
-                    dbc.as_ref(),
-                    dataset_name,
-                    owner_id,
-                    tenant_id,
-                )
-                .await
-                {
-                    Ok(Some(ds)) => ds.id,
-                    Ok(None) => {
-                        warn!(
-                            session_id = sid,
-                            dataset_name = dataset_name,
-                            "persist_sessions: dataset lookup returned None"
-                        );
-                        result.sessions_failed += 1;
-                        continue;
-                    }
-                    Err(e) => {
-                        warn!(
-                            session_id = sid,
-                            "persist_sessions: dataset lookup failed: {e}"
-                        );
-                        result.sessions_failed += 1;
-                        continue;
-                    }
-                }
-            }
-            None => {
+        let dataset_id = match cognee_database::ops::datasets::get_dataset_by_name(
+            database.as_ref(),
+            dataset_name,
+            owner_id,
+            tenant_id,
+        )
+        .await
+        {
+            Ok(Some(ds)) => ds.id,
+            Ok(None) => {
                 warn!(
                     session_id = sid,
-                    "persist_sessions: no DatabaseConnection supplied, skipping cognify"
+                    dataset_name = dataset_name,
+                    "persist_sessions: dataset lookup returned None"
+                );
+                result.sessions_failed += 1;
+                continue;
+            }
+            Err(e) => {
+                warn!(
+                    session_id = sid,
+                    "persist_sessions: dataset lookup failed: {e}"
                 );
                 result.sessions_failed += 1;
                 continue;
@@ -222,7 +206,8 @@ pub async fn persist_sessions_in_knowledge_graph(
             Arc::clone(&graph_db),
             Arc::clone(&vector_db),
             Arc::clone(&embedding_engine),
-            db.clone(),
+            Arc::clone(&database),
+            Arc::clone(&thread_pool),
             Arc::clone(&ontology_resolver),
             cognify_config,
         )

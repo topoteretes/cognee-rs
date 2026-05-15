@@ -8,6 +8,7 @@
 //! Run with: cargo test --package cognee-cognify --test integration_embeddings
 
 use cognee_cognify::{CognifyConfig, CognifyResult, cognify};
+use cognee_database::{DatabaseConnection, connect, initialize};
 use cognee_embedding::{config::OnnxEmbeddingConfig, onnx::OnnxEmbeddingEngine};
 use cognee_graph::MockGraphDB;
 use cognee_models::Data;
@@ -24,6 +25,23 @@ use test_data::{
     TEST_TEXT_EMBEDDINGS_BASIC, TEST_TEXT_EMBEDDINGS_ENTITY, TEST_TEXT_EMBEDDINGS_TRIPLETS_DEFAULT,
 };
 use test_utils::create_adapter_from_env;
+
+/// Build an in-memory SQLite [`DatabaseConnection`] for the executor-routed
+/// `cognify()` (LIB-06 Decision 1 requires it).
+async fn make_in_memory_db() -> Arc<DatabaseConnection> {
+    let conn = connect("sqlite::memory:")
+        .await
+        .expect("connect in-memory sqlite");
+    initialize(&conn).await.expect("initialize");
+    Arc::new(conn)
+}
+
+/// Build a default-thread [`cognee_core::RayonThreadPool`] wrapped in the
+/// [`cognee_core::CpuPool`] trait object — required by `cognify()` (LIB-06
+/// Decision 1).
+fn make_thread_pool() -> Arc<dyn cognee_core::CpuPool> {
+    Arc::new(cognee_core::RayonThreadPool::with_default_threads().expect("RayonThreadPool init"))
+}
 
 fn get_embedding_model_dir() -> String {
     if let Ok(model_dir) = std::env::var("COGNEE_TEST_MODEL_DIR") {
@@ -100,7 +118,8 @@ async fn test_pipeline_with_embeddings() {
         graph_db,
         vector_db,
         embedding_engine,
-        None,
+        make_in_memory_db().await,
+        make_thread_pool(),
         Arc::new(NoOpOntologyResolver::new()),
         &config,
     )
@@ -230,7 +249,8 @@ async fn test_pipeline_requires_embeddings() {
         graph_db,
         vector_db,
         embedding_engine,
-        None,
+        make_in_memory_db().await,
+        make_thread_pool(),
         Arc::new(NoOpOntologyResolver::new()),
         &config,
     )
@@ -318,7 +338,8 @@ async fn test_embedding_semantic_similarity() {
             Arc::clone(&graph_db),
             Arc::clone(&vector_db),
             Arc::clone(&embedding_engine),
-            None,
+            make_in_memory_db().await,
+            make_thread_pool(),
             Arc::new(NoOpOntologyResolver::new()),
             &config,
         )
@@ -410,7 +431,8 @@ async fn test_entity_name_indexing() {
         graph_db,
         vector_db.clone(),
         embedding_engine,
-        None,
+        make_in_memory_db().await,
+        make_thread_pool(),
         Arc::new(NoOpOntologyResolver::new()),
         &config,
     )
@@ -540,7 +562,8 @@ async fn test_triplet_embeddings_disabled_by_default() {
         graph_db,
         vector_db.clone(),
         embedding_engine,
-        None,
+        make_in_memory_db().await,
+        make_thread_pool(),
         Arc::new(NoOpOntologyResolver::new()),
         &config,
     )
@@ -629,7 +652,8 @@ async fn test_triplet_embeddings_enabled() {
         graph_db,
         vector_db.clone(),
         embedding_engine,
-        None,
+        make_in_memory_db().await,
+        make_thread_pool(),
         Arc::new(NoOpOntologyResolver::new()),
         &config,
     )

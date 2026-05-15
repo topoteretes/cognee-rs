@@ -9,8 +9,9 @@
 //! - `extract_graph_from_data`
 //! - `summarize_text`
 //!
-//! Plus the cross-cutting fields: `source_pipeline = "cognify_pipeline"`
-//! on every node, and `source_user` carrying the user label
+//! Plus the cross-cutting fields: `source_pipeline = "cognify"`
+//! on every node (Decision 14 of LIB-06 locked the pipeline name on the
+//! builder string), and `source_user` carrying the user label
 //! (email-or-uuid per locked decision 4).
 //!
 //! Gated on `OPENAI_TOKEN` + the embedding model dir; skips silently
@@ -141,6 +142,10 @@ async fn cognify_e2e_stamps_with_expected_task_names() {
         .with_summarization(true)
         .with_triplet_embeddings(false);
 
+    let thread_pool: Arc<dyn cognee_core::CpuPool> = Arc::new(
+        cognee_core::RayonThreadPool::with_default_threads().expect("RayonThreadPool init"),
+    );
+
     let result = match cognify(
         data_items,
         dataset.id,
@@ -152,7 +157,8 @@ async fn cognify_e2e_stamps_with_expected_task_names() {
         Arc::clone(&graph_db),
         Arc::clone(&vector_db),
         Arc::clone(&embedding_engine),
-        Some(database.clone()),
+        database.clone(),
+        thread_pool,
         Arc::new(NoOpOntologyResolver::new()),
         &config,
     )
@@ -177,7 +183,7 @@ async fn cognify_e2e_stamps_with_expected_task_names() {
     let mut record = |dp: &cognee_models::DataPoint| {
         assert_eq!(
             dp.source_pipeline.as_deref(),
-            Some("cognify_pipeline"),
+            Some("cognify"),
             "source_pipeline must be set on every stamped DataPoint"
         );
         assert_eq!(

@@ -10,6 +10,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use cognee_cognify::{CognifyConfig, cognify};
+use cognee_database::{DatabaseConnection, connect, initialize};
 use cognee_embedding::{EmbeddingEngine, error::EmbeddingError};
 use cognee_graph::MockGraphDB;
 use cognee_llm::{GenerationOptions, GenerationResponse, Llm, LlmError, Message};
@@ -129,6 +130,17 @@ async fn run_pipeline_with_incremental_flag(
 
     let config = CognifyConfig::default().with_incremental_loading(incremental_loading);
 
+    let db: Arc<DatabaseConnection> = {
+        let conn = connect("sqlite::memory:").await?;
+        initialize(&conn).await?;
+        Arc::new(conn)
+    };
+    let thread_pool: Arc<dyn cognee_core::CpuPool> = Arc::new(
+        cognee_core::RayonThreadPool::with_default_threads().map_err(|e| {
+            Box::new(std::io::Error::other(e.to_string())) as Box<dyn std::error::Error>
+        })?,
+    );
+
     let result = cognify(
         vec![data],
         dataset_id,
@@ -140,7 +152,8 @@ async fn run_pipeline_with_incremental_flag(
         graph_db,
         vector_db,
         embedding_engine,
-        None,
+        db,
+        thread_pool,
         Arc::new(NoOpOntologyResolver::new()),
         &config,
     )

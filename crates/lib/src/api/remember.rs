@@ -368,6 +368,16 @@ async fn run_permanent_inner(
     // cognify consumes its copy.
     let db_for_memify = db.clone();
 
+    // LIB-06-03: `cognify()` now requires `Arc<DatabaseConnection>` and an
+    // `Arc<dyn CpuPool>` (Decision 1).
+    let database = db
+        .clone()
+        .ok_or_else(|| ApiError::Cognify("cognify requires a DatabaseConnection".to_string()))?;
+    let thread_pool: Arc<dyn cognee_core::CpuPool> = Arc::new(
+        cognee_core::RayonThreadPool::with_default_threads()
+            .map_err(|e| ApiError::Cognify(format!("failed to construct thread pool: {e}")))?,
+    );
+
     // Cognify.
     let cognify_result = cognify(
         data_items,
@@ -380,7 +390,8 @@ async fn run_permanent_inner(
         Arc::clone(&graph_db),
         Arc::clone(&vector_db),
         Arc::clone(&embedding_engine),
-        db,
+        database,
+        thread_pool,
         ontology_resolver,
         cognify_config,
     )

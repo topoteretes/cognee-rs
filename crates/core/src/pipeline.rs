@@ -256,6 +256,50 @@ impl<I: Value, O: Value> PipelineBuilder<I, O> {
         }
     }
 
+    /// Append a task with an explicit human-readable name.
+    ///
+    /// Equivalent to [`add_task`](Self::add_task) followed by setting the
+    /// resulting [`TaskInfo::name`]. The name is what the executor's
+    /// `stamp_tree_dyn` writes into `DataPoint.source_task` and what the
+    /// `PipelineWatcher` lifecycle hooks observe.
+    pub fn add_task_named<O2: Value>(
+        mut self,
+        task: TypedTask<O, O2>,
+        name: impl Into<String>,
+    ) -> PipelineBuilder<I, O2> {
+        self.tasks.push(TaskInfo::from(task).with_name(name));
+        PipelineBuilder {
+            description: self.description,
+            name: self.name,
+            tasks: self.tasks,
+            retry_policy: self.retry_policy,
+            batch_size: self.batch_size,
+            data_id_fn: self.data_id_fn,
+            concurrency: self.concurrency,
+            _marker: PhantomData,
+        }
+    }
+
+    /// Set the human-readable name of the **first** task already pushed by
+    /// [`new_with_task`](Self::new_with_task).
+    ///
+    /// Used by builders that want to name the seed task without restructuring
+    /// the constructor. The name is what the executor's `stamp_tree_dyn`
+    /// writes into `DataPoint.source_task`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if no tasks have been pushed yet (impossible via the public
+    /// API, since `new_with_task` always seeds one).
+    pub fn with_first_task_name(mut self, name: impl Into<String>) -> Self {
+        let first = self
+            .tasks
+            .first_mut()
+            .expect("PipelineBuilder always has at least the seed task from new_with_task");
+        first.name = Some(name.into());
+        self
+    }
+
     /// Set a human-readable name (used as key for status tracking).
     pub fn with_name(mut self, name: impl Into<String>) -> Self {
         self.name = Some(name.into());

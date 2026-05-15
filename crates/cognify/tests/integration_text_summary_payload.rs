@@ -17,6 +17,7 @@ use std::sync::Arc;
 use cognee_ontology::NoOpOntologyResolver;
 
 use cognee_cognify::{CognifyConfig, cognify};
+use cognee_database::{DatabaseConnection, connect, initialize};
 use cognee_embedding::MockEmbeddingEngine;
 use cognee_models::Data;
 use cognee_storage::{MockStorage, StorageTrait};
@@ -81,6 +82,17 @@ async fn text_summary_payload_contains_text_field() {
     let dataset_id = Uuid::new_v4();
     let config = CognifyConfig::default(); // enable_summarization defaults to true
 
+    let db: Arc<DatabaseConnection> = {
+        let conn = connect("sqlite::memory:")
+            .await
+            .expect("connect in-memory sqlite");
+        initialize(&conn).await.expect("initialize");
+        Arc::new(conn)
+    };
+    let thread_pool: Arc<dyn cognee_core::CpuPool> = Arc::new(
+        cognee_core::RayonThreadPool::with_default_threads().expect("RayonThreadPool init"),
+    );
+
     let result = cognify(
         vec![data_item],
         dataset_id,
@@ -92,7 +104,8 @@ async fn text_summary_payload_contains_text_field() {
         graph_db,
         vector_db.clone() as Arc<dyn VectorDB>,
         embedding_engine,
-        None,
+        db,
+        thread_pool,
         Arc::new(NoOpOntologyResolver::new()),
         &config,
     )

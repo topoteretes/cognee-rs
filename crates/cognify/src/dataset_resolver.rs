@@ -11,6 +11,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use chrono::Utc;
+use cognee_core::CpuPool;
 use cognee_database::ops::pipeline_runs::{create_pipeline_run, get_latest_pipeline_status};
 use cognee_database::{DatabaseConnection, PipelineRun, PipelineRunStatus};
 use cognee_embedding::engine::EmbeddingEngine;
@@ -110,7 +111,8 @@ pub async fn cognify_datasets(
     graph_db: Arc<dyn GraphDBTrait>,
     vector_db: Arc<dyn VectorDB>,
     embedding_engine: Arc<dyn EmbeddingEngine>,
-    db: Option<Arc<DatabaseConnection>>,
+    database: Arc<DatabaseConnection>,
+    thread_pool: Arc<dyn CpuPool>,
     ontology_resolver: Arc<dyn OntologyResolver>,
     config: &CognifyConfig,
 ) -> Result<Vec<CognifyResult>, CognifyError> {
@@ -128,11 +130,9 @@ pub async fn cognify_datasets(
 
     for dataset in &datasets {
         // --- Pipeline cache check ---
-        if config.use_pipeline_cache
-            && let Some(ref db_conn) = db
-        {
+        if config.use_pipeline_cache {
             let status =
-                get_latest_pipeline_status(db_conn, COGNIFY_PIPELINE_NAME, dataset.id).await?;
+                get_latest_pipeline_status(&database, COGNIFY_PIPELINE_NAME, dataset.id).await?;
             if matches!(status, Some(PipelineRunStatus::Completed)) {
                 info!(
                     dataset_name = %dataset.name,
@@ -172,27 +172,26 @@ pub async fn cognify_datasets(
             Arc::clone(&graph_db),
             Arc::clone(&vector_db),
             Arc::clone(&embedding_engine),
-            db.clone(),
+            Arc::clone(&database),
+            Arc::clone(&thread_pool),
             Arc::clone(&ontology_resolver),
             config,
         )
         .await?;
 
         // --- Record successful pipeline run ---
-        if let Some(ref db_conn) = db {
-            let pipeline_run_id = Uuid::new_v4();
-            let run = PipelineRun {
-                id: Uuid::new_v4(),
-                created_at: Utc::now(),
-                status: PipelineRunStatus::Completed,
-                pipeline_run_id,
-                pipeline_name: COGNIFY_PIPELINE_NAME.to_string(),
-                pipeline_id: pipeline_run_id,
-                dataset_id: Some(dataset.id),
-                run_info: None,
-            };
-            create_pipeline_run(db_conn, run).await?;
-        }
+        let pipeline_run_id = Uuid::new_v4();
+        let run = PipelineRun {
+            id: Uuid::new_v4(),
+            created_at: Utc::now(),
+            status: PipelineRunStatus::Completed,
+            pipeline_run_id,
+            pipeline_name: COGNIFY_PIPELINE_NAME.to_string(),
+            pipeline_id: pipeline_run_id,
+            dataset_id: Some(dataset.id),
+            run_info: None,
+        };
+        create_pipeline_run(&database, run).await?;
 
         results.push(result);
     }
@@ -220,7 +219,8 @@ pub async fn cognify_dataset_refs(
     graph_db: Arc<dyn GraphDBTrait>,
     vector_db: Arc<dyn VectorDB>,
     embedding_engine: Arc<dyn EmbeddingEngine>,
-    db: Option<Arc<DatabaseConnection>>,
+    database: Arc<DatabaseConnection>,
+    thread_pool: Arc<dyn CpuPool>,
     ontology_resolver: Arc<dyn OntologyResolver>,
     config: &CognifyConfig,
 ) -> Result<Vec<CognifyResult>, CognifyError> {
@@ -262,11 +262,9 @@ pub async fn cognify_dataset_refs(
 
     let mut results = Vec::new();
     for dataset in &all_datasets {
-        if config.use_pipeline_cache
-            && let Some(ref db_conn) = db
-        {
+        if config.use_pipeline_cache {
             let status =
-                get_latest_pipeline_status(db_conn, COGNIFY_PIPELINE_NAME, dataset.id).await?;
+                get_latest_pipeline_status(&database, COGNIFY_PIPELINE_NAME, dataset.id).await?;
             if matches!(status, Some(PipelineRunStatus::Completed)) {
                 info!(
                     dataset_name = %dataset.name,
@@ -305,26 +303,25 @@ pub async fn cognify_dataset_refs(
             Arc::clone(&graph_db),
             Arc::clone(&vector_db),
             Arc::clone(&embedding_engine),
-            db.clone(),
+            Arc::clone(&database),
+            Arc::clone(&thread_pool),
             Arc::clone(&ontology_resolver),
             config,
         )
         .await?;
 
-        if let Some(ref db_conn) = db {
-            let pipeline_run_id = Uuid::new_v4();
-            let run = PipelineRun {
-                id: Uuid::new_v4(),
-                created_at: Utc::now(),
-                status: PipelineRunStatus::Completed,
-                pipeline_run_id,
-                pipeline_name: COGNIFY_PIPELINE_NAME.to_string(),
-                pipeline_id: pipeline_run_id,
-                dataset_id: Some(dataset.id),
-                run_info: None,
-            };
-            create_pipeline_run(db_conn, run).await?;
-        }
+        let pipeline_run_id = Uuid::new_v4();
+        let run = PipelineRun {
+            id: Uuid::new_v4(),
+            created_at: Utc::now(),
+            status: PipelineRunStatus::Completed,
+            pipeline_run_id,
+            pipeline_name: COGNIFY_PIPELINE_NAME.to_string(),
+            pipeline_id: pipeline_run_id,
+            dataset_id: Some(dataset.id),
+            run_info: None,
+        };
+        create_pipeline_run(&database, run).await?;
 
         results.push(result);
     }

@@ -100,6 +100,14 @@ pub async fn update(
             None => None,
         };
 
+        let database = db.clone().ok_or_else(|| {
+            ApiError::Cognify("cognify requires a DatabaseConnection".to_string())
+        })?;
+        let thread_pool: Arc<dyn cognee_core::CpuPool> = Arc::new(
+            cognee_core::RayonThreadPool::with_default_threads()
+                .map_err(|e| ApiError::Cognify(format!("failed to construct thread pool: {e}")))?,
+        );
+
         let result = cognify(
             data_items.clone(),
             dataset_id,
@@ -111,7 +119,8 @@ pub async fn update(
             graph_db,
             vector_db,
             embedding_engine,
-            db,
+            database,
+            thread_pool,
             ontology_resolver,
             cognify_config,
         )

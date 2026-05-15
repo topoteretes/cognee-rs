@@ -48,6 +48,18 @@ pub enum CognifyError {
 
     #[error("Unsupported document type: {0}")]
     UnsupportedDocumentType(String),
+
+    #[error("Task context build failed: {0}")]
+    ContextBuild(String),
+
+    #[error("Pipeline execution failed: {0}")]
+    Execute(String),
+
+    #[error("Output type mismatch: expected {expected}, got {actual}")]
+    OutputTypeMismatch {
+        expected: &'static str,
+        actual: &'static str,
+    },
 }
 
 /// Convert GraphDBError to CognifyError

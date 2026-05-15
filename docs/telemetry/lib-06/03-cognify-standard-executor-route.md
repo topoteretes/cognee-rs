@@ -20,8 +20,12 @@ runs the five-stage cognify pipeline inline. The function has six concrete
 divergences from the executor route (see parent doc "Current Rust state"):
 
 1. Auto-chunk-size config mutation (lines 1794-1806).
-2. Per-task `stamp_provenance` calls (lines 1832-1839, 1858-1865,
-   1905-1918, 1924-1931).
+2. Five inline `stamp_provenance` calls in the convenience function
+   (lines 1833, 1859, 1906, 1912, 1925) — one per pipeline stage plus
+   the per-pair entity / entity-type stamps inside the graph-extraction
+   loop. Each call stamps a single `&mut DataPoint` (e.g. `&mut doc.base`,
+   `&mut pair.entity.base`, `&mut pair.entity_type.base`) with the
+   pipeline name, task name, and user reference.
 3. Empty-document and empty-chunk short-circuits (lines 1841-1843,
    1867-1869).
 4. Temporal branch — out of scope here (LIB-06-04 handles it).
@@ -54,26 +58,31 @@ function but defers to LIB-06-04 for the executor route.
   let outputs = pipeline::execute(&pipeline, inputs, ctx, &NoopWatcher).await?;
   let result = extract_cognify_outputs(outputs)?;
   // ── post-pipeline teardown ──
-  extract_dlt_fk_edges(&result.chunks_for_dlt, &result.documents_for_dlt, graph_db).await?;
+  extract_dlt_fk_edges(&result.chunks, &result.documents_for_dlt, graph_db).await?;
   Ok(result)
   ```
 
   This requires the cognify pipeline output to *include* the chunks and
-  documents lists the DLT helper needs. Today they live on `summarized`
-  (`SummarizedText`) inside the convenience function. The final task
-  (`make_add_data_points_task`) currently returns `CognifyResult`; we
-  must either:
-    - (a) Extend `CognifyResult` with `chunks_for_dlt: Vec<DocumentChunk>`
-      and `documents_for_dlt: Vec<Document>` fields, or
+  documents lists the DLT helper needs. `CognifyResult.chunks` already
+  exists at
+  [`crates/cognify/src/pipeline.rs:17`](../../crates/cognify/src/pipeline.rs#L17)
+  and carries the chunks the teardown step needs — reuse it directly.
+  The documents list, however, has no home today; the final task
+  (`make_add_data_points_task`) currently returns `CognifyResult`, so
+  we must either:
+    - (a) Extend `CognifyResult` with a single new
+      `documents_for_dlt: Vec<Document>` field (and reuse the existing
+      `chunks` field for the chunk argument), or
     - (b) Run `extract_dlt_fk_edges` inside a no-op typed task that sits
       *before* `make_add_data_points_task` and consumes the
       `SummarizedText` directly.
 
   **Locked choice**: (a). Reasons: (i) keeps the teardown semantics
   identical to today, (ii) avoids re-architecting `make_add_data_points_task`,
-  (iii) the new fields are populated from the existing `summarized` value
-  that already flows into that task — zero new computation. Sub-agent A:
-  verify the field-add doesn't break any binding that serialises
+  (iii) the new field is populated from the existing `summarized` value
+  that already flows into that task — zero new computation, and the
+  chunk list piggybacks on the field that's already populated. Sub-agent
+  A: verify the field-add doesn't break any binding that serialises
   `CognifyResult`.
 - **Decision 6** — Auto-chunk-size: clone the config, call
   `with_auto_chunk_size(...)` if default, pass the cloned config to
@@ -109,6 +118,18 @@ function but defers to LIB-06-04 for the executor route.
   meaningful.
 - Cross-SDK harness baseline: `cd e2e-cross-sdk && docker compose up
   --build --abort-on-container-exit` passes on HEAD.
+- **Task-name byte-match audit.** Inspect
+  `make_classify_documents_task`, `make_extract_chunks_task`,
+  `make_extract_graph_task`, `make_summarize_text_task`, and
+  `make_add_data_points_task` in `crates/cognify/src/tasks.rs` and
+  confirm each builder's `.with_name(...)` string matches the inline
+  `stamp_provenance` task literal byte-for-byte: `classify_documents`,
+  `extract_chunks_from_documents`, `extract_graph_from_data`,
+  `summarize_text`, and the `add_data_points` task name used by the
+  final stamp. Any mismatch must be fixed in the **task builder** (not
+  in the convenience function) so the executor's automatic `source_task`
+  stamp ends up byte-identical to the previous inline stamp — Decision
+  3's provenance-equivalence gate depends on this.
 
 ## 4. Step-by-step
 
@@ -122,13 +143,27 @@ rg "\"cognify_pipeline\"\|\"cognify\"" crates/cognify/src/tasks.rs
 The audit surfaces the divergence between the builder's
 `with_name("cognify")` and the inline `stamp_provenance(...,
 "cognify_pipeline", ...)` calls. **Resolution (locked 2026-05-13):**
-rewrite every inline `"cognify_pipeline"` literal in the convenience
-function (and in any helper this gap removes) to `"cognify"`. After the
-rewrite, the only `source_pipeline` value stamped by the executor is
-`"cognify"`. Sub-agent B applies the rewrite; sub-agent A confirms no
-`"cognify_pipeline"` literal survives in `crates/cognify/src/tasks.rs`
-after the refactor (legacy mentions in tests / docs that reference the
-historical name are fine).
+rewrite every inline `"cognify_pipeline"` literal **inside the
+convenience function in `crates/cognify/src/tasks.rs`** (the five
+`stamp_provenance` call sites at lines 1833, 1859, 1906, 1912, 1925) to
+`"cognify"`. After the rewrite, the only `source_pipeline` value stamped
+by the executor is `"cognify"`. Sub-agent B applies the rewrite;
+sub-agent A confirms no `"cognify_pipeline"` literal survives in
+`crates/cognify/src/tasks.rs` after the refactor (legacy mentions in
+tests / docs that reference the historical name are fine).
+
+**Out of scope for LIB-06-03 — DO NOT rewrite the dispatch-layer
+literal.** The constant `COGNIFY_PIPELINE_NAME = "cognify_pipeline"` in
+[`crates/cognify/src/dataset_resolver.rs:32`](../../crates/cognify/src/dataset_resolver.rs#L32),
+its references in `expansion.rs`, and the 30+ call sites that match
+against `"cognify_pipeline"` in `crates/http-server/`, `crates/delete/`,
+and the datasets API are the **`pipeline_runs.pipeline_name` dispatch
+layer** — an independent identifier used to look up pipeline runs by
+dataset, drive deletes, and route HTTP dispatch. It has no relationship
+to the DataPoint `source_pipeline` stamp this gap rewrites. Touching the
+dispatch constant would break `delete`, dataset-status lookups, and
+HTTP dispatch routing. Leave every `"cognify_pipeline"` occurrence
+outside `crates/cognify/src/tasks.rs` untouched.
 
 ### 4.2 Extend `CognifyResult` with DLT-teardown carriers
 
@@ -137,24 +172,30 @@ wherever `CognifyResult` is defined):
 
 ```rust
 pub struct CognifyResult {
-    // ... existing fields ...
-    /// Documents and chunks needed by the post-pipeline
-    /// `extract_dlt_fk_edges` teardown step. Populated by the final
-    /// task in `build_cognify_pipeline`; empty in the temporal branch.
+    // ... existing fields, including `pub chunks: Vec<DocumentChunk>` ...
+    /// Documents needed by the post-pipeline `extract_dlt_fk_edges`
+    /// teardown step. Populated by the final task in
+    /// `build_cognify_pipeline`; empty in the temporal branch. The
+    /// matching chunk list reuses the existing `chunks` field.
     pub documents_for_dlt: Vec<Document>,
-    pub chunks_for_dlt: Vec<DocumentChunk>,
 }
 ```
 
+Only `documents_for_dlt` is new — `chunks` already exists on
+`CognifyResult` (see
+[`crates/cognify/src/pipeline.rs:17`](../../crates/cognify/src/pipeline.rs#L17))
+and the teardown call passes it directly to
+`extract_dlt_fk_edges(&result.chunks, &result.documents_for_dlt, …)`.
 Update `make_add_data_points_task` and `add_data_points` to populate
-these fields from the `SummarizedText` input.
+`documents_for_dlt` from the `SummarizedText` input (the `chunks` field
+is already populated today).
 
 If `CognifyResult` is serialised by bindings (PyO3, Neon) or by tests,
 sub-agent A audits via `rg "CognifyResult" crates/ capi/ js/ python/` and
-the implementor adds `#[serde(skip)]` on the new fields if they should
-not appear in the binding wire shape. **Locked choice**: do `#[serde(skip)]`
-the two new fields — they are internal teardown carriers, not part of the
-public result shape.
+the implementor adds `#[serde(skip)]` on the new field if it should not
+appear in the binding wire shape. **Locked choice**: `#[serde(skip)]` on
+`documents_for_dlt` — it is an internal teardown carrier, not part of
+the public result shape.
 
 ### 4.3 Rewrite the convenience function
 
@@ -238,7 +279,7 @@ pub async fn cognify(
     let result = extract_cognify_outputs(outputs)?;
 
     // Decision 5: post-pipeline teardown.
-    extract_dlt_fk_edges(&result.chunks_for_dlt, &result.documents_for_dlt, Arc::clone(&graph_db)).await?;
+    extract_dlt_fk_edges(&result.chunks, &result.documents_for_dlt, Arc::clone(&graph_db)).await?;
 
     Ok(result)
 }
@@ -335,14 +376,17 @@ Decision 13 keeps it until LIB-06-05.
 - [`crates/cognify/src/tasks.rs`](../../crates/cognify/src/tasks.rs):
   - Rewrite `cognify` to call `pipeline::execute`.
   - Add `extract_cognify_outputs` helper.
-  - Extend `CognifyResult` with `documents_for_dlt` and `chunks_for_dlt`
-    (both `#[serde(skip)]`).
+  - Extend `CognifyResult` with `documents_for_dlt` (`#[serde(skip)]`);
+    reuse the existing `chunks` field for the DLT teardown's chunk
+    argument.
   - Update `make_add_data_points_task` / `add_data_points` to populate
-    those fields.
-  - Rewrite every inline `stamp_provenance(..., "cognify_pipeline", ...)`
-    literal to `"cognify"` so the post-refactor `source_pipeline` value
-    matches `build_cognify_pipeline`'s `with_name("cognify")`. The
-    builder name itself does **not** change.
+    `documents_for_dlt`.
+  - Rewrite the five inline `stamp_provenance(..., "cognify_pipeline",
+    ...)` literals (lines 1833, 1859, 1906, 1912, 1925) to `"cognify"`
+    so the post-refactor `source_pipeline` value matches
+    `build_cognify_pipeline`'s `with_name("cognify")`. The builder name
+    itself does **not** change, and the dispatch-layer constant in
+    `dataset_resolver.rs` is **not** touched (see §4.1).
 - [`crates/cognify/src/error.rs`](../../crates/cognify/src/error.rs) (or
   inline) — new error variants.
 - [`crates/cli/src/commands/cognify.rs`](../../crates/cli/src/commands/cognify.rs),
@@ -352,7 +396,20 @@ Decision 13 keeps it until LIB-06-05.
 - `capi/src/`, `js/src/`, `python/src/` cognify entry points.
 - `examples/cognify_*.rs`, `examples/fact_extraction*.rs`,
   `examples/*ladybug*.rs` etc. — update call sites.
-- `crates/cognify/tests/*`, `crates/cli/tests/*` — same.
+- `crates/cognify/tests/*`, `crates/cli/tests/*` — update call sites.
+- Additional non-test consumers and integration tests that pass through
+  the cognify entry point (signature now requires `thread_pool` and a
+  non-`Option` `database`):
+  - [`crates/search/tests/integration_search_matrix.rs`](../../crates/search/tests/integration_search_matrix.rs)
+  - [`crates/search/tests/last_accessed_update.rs`](../../crates/search/tests/last_accessed_update.rs)
+  - [`crates/search/tests/search_after_partial_delete.rs`](../../crates/search/tests/search_after_partial_delete.rs)
+  - [`crates/delete/tests/hard_mode_orphan_sweep.rs`](../../crates/delete/tests/hard_mode_orphan_sweep.rs)
+  - [`crates/lib/src/api/update.rs`](../../crates/lib/src/api/update.rs)
+  - [`crates/lib/src/api/remember.rs`](../../crates/lib/src/api/remember.rs)
+  - [`crates/cognify/src/memify/persist_sessions.rs`](../../crates/cognify/src/memify/persist_sessions.rs)
+  - [`crates/cognify/src/dataset_resolver.rs`](../../crates/cognify/src/dataset_resolver.rs)
+    — call-site updates only; the `COGNIFY_PIPELINE_NAME` dispatch
+    constant defined here stays unchanged (see §4.1).
 
 ## 6. Verification
 
@@ -398,6 +455,7 @@ provenance equivalence. Fix it; do **not** loosen the tolerances.
 | `RayonThreadPool` construction in bindings adds startup cost / global state | Low | Bindings already initialise other backends at startup; the thread pool is small. If thread-pool creation fails, bindings surface the error at init time. |
 | Cross-SDK test runs against real OpenAI and is slow / flaky | Medium | Pin the OpenAI model in `e2e-cross-sdk` to a known-stable version. The harness already has tolerances; sub-agent C does not loosen them. If a single run flakes, re-run once. If two runs flake on different metrics, escalate. |
 | `Arc<dyn CpuPool>` not exported / not constructable from `cognee_core` | Low | Sub-agent A confirms `cognee_core::RayonThreadPool::with_default_threads` is public; if not, expose it. |
+| **`HasDataPoint::for_each_child_mut` parity** — `stamp_tree_dyn` recurses into child DataPoints via `for_each_child_mut`, whereas the inline calls only stamp the immediate `&mut doc.base`, `&mut pair.entity.base`, and `&mut pair.entity_type.base`. Net effect today appears equivalent (the inline path manually stamps `entity` then `entity_type` in sequence), but the equivalence holds only if `HasDataPoint::for_each_child_mut` is correctly implemented for `GraphNodePair` (and any other types whose `base` is currently stamped inline) so the recursive walk visits exactly the same `DataPoint`s the inline code touched — no more, no fewer. | Medium | Sub-agent C verifies by running the full provenance E2E suite + `cargo test -p cognee-cognify provenance_e2e`. Any drift in `source_*` stamps across DataPoints (e.g. an entity-type stamp going missing, or a previously-unstamped child suddenly carrying provenance) fails Decision 3's gate. |
 
 ## 8. Out of scope
 

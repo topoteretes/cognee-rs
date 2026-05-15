@@ -37,7 +37,11 @@ pub(crate) fn pre_stamp_extraction(
     visited: &mut HashSet<Uuid>,
 ) {
     let ctx = ProvenanceContext {
-        pipeline_name: "cognify_pipeline",
+        // Locked Decision 14 (LIB-06): the pipeline name carried on
+        // every stamped DataPoint is `"cognify"`. Must byte-match
+        // [`crate::tasks::COGNIFY_PIPELINE_STAMP_NAME`] and the
+        // `.with_name("cognify")` set on `build_cognify_pipeline`.
+        pipeline_name: "cognify",
         task_name: "extract_graph_from_data",
         user_label,
         node_set: None,
@@ -1498,8 +1502,8 @@ mod tests {
         for pair in &nodes {
             assert_eq!(
                 pair.entity_type.base.source_pipeline.as_deref(),
-                Some("cognify_pipeline"),
-                "EntityType '{}' should be pre-stamped with cognify_pipeline",
+                Some("cognify"),
+                "EntityType '{}' should be pre-stamped with cognify",
                 pair.entity_type.name
             );
             assert_eq!(
@@ -1517,8 +1521,8 @@ mod tests {
 
             assert_eq!(
                 pair.entity.base.source_pipeline.as_deref(),
-                Some("cognify_pipeline"),
-                "Entity '{}' should be pre-stamped with cognify_pipeline",
+                Some("cognify"),
+                "Entity '{}' should be pre-stamped with cognify",
                 pair.entity.name
             );
             assert_eq!(

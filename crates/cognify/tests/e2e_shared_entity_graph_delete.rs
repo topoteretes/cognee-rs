@@ -160,7 +160,10 @@ async fn test_shared_entity_graph_delete() {
         graph_db.clone(),
         vector_db.clone(),
         embedding_engine.clone(),
-        Some(Arc::clone(&database)),
+        Arc::clone(&database),
+        Arc::new(
+            cognee_core::RayonThreadPool::with_default_threads().expect("RayonThreadPool init"),
+        ) as Arc<dyn cognee_core::CpuPool>,
         ontology.clone(),
         &config,
     )
@@ -184,7 +187,10 @@ async fn test_shared_entity_graph_delete() {
         graph_db.clone(),
         vector_db.clone(),
         embedding_engine.clone(),
-        Some(Arc::clone(&database)),
+        Arc::clone(&database),
+        Arc::new(
+            cognee_core::RayonThreadPool::with_default_threads().expect("RayonThreadPool init"),
+        ) as Arc<dyn cognee_core::CpuPool>,
         ontology.clone(),
         &config,
     )

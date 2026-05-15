@@ -299,7 +299,10 @@ async fn test_recognify_after_content_update() {
         graph_db.clone() as Arc<dyn GraphDBTrait>,
         vector_db.clone() as Arc<dyn VectorDB>,
         embedding_engine.clone() as Arc<dyn EmbeddingEngine>,
-        Some(Arc::clone(&database)),
+        Arc::clone(&database),
+        Arc::new(
+            cognee_core::RayonThreadPool::with_default_threads().expect("RayonThreadPool init"),
+        ) as Arc<dyn cognee_core::CpuPool>,
         Arc::clone(&ontology),
         &config,
     )
@@ -382,7 +385,10 @@ async fn test_recognify_after_content_update() {
         graph_db.clone() as Arc<dyn GraphDBTrait>,
         vector_db.clone() as Arc<dyn VectorDB>,
         embedding_engine.clone() as Arc<dyn EmbeddingEngine>,
-        Some(Arc::clone(&database)),
+        Arc::clone(&database),
+        Arc::new(
+            cognee_core::RayonThreadPool::with_default_threads().expect("RayonThreadPool init"),
+        ) as Arc<dyn cognee_core::CpuPool>,
         Arc::clone(&ontology),
         &config,
     )

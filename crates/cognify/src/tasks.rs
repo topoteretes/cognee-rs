@@ -26,7 +26,10 @@ use std::sync::Arc;
 
 use chrono::Utc;
 use cognee_chunking::{CutType, NAMESPACE_OID, TokenCounterKind, chunk_by_row, chunk_text};
-use cognee_core::{Pipeline, PipelineBuilder, TypedTask};
+use cognee_core::{
+    CpuPool, NoopWatcher, Pipeline, PipelineBuilder, PipelineContext, TaskContextBuilder,
+    TypedTask, Value,
+};
 use cognee_database::DatabaseConnection;
 use cognee_embedding::engine::EmbeddingEngine;
 use cognee_graph::{EdgeData, GraphDBTrait, GraphDBTraitExt};
@@ -311,6 +314,17 @@ pub async fn extract_graph_from_data(
     graph_db: Arc<dyn GraphDBTrait>,
     ontology_resolver: Arc<dyn OntologyResolver>,
     config: &CognifyConfig,
+    // Optional caller-supplied provenance user label. When `Some`, used
+    // verbatim for the entity / EntityType / EdgeType pre-stamps inside
+    // `expand_with_nodes_and_edges`. When `None`, falls back to the
+    // string-form `user_id` (the only label `ExtractedChunks` carries).
+    //
+    // The pipeline-driven path threads through
+    // `PipelineContext::user_label()` here so entities arrive at the
+    // task body already stamped with the email-form label that the
+    // provenance E2E test expects (locked decision 4 of
+    // `docs/telemetry/05-datapoint-provenance.md`).
+    user_label_override: Option<&str>,
 ) -> Result<ExtractedGraphData, CognifyError> {
     if input.chunks.is_empty() {
         return Ok(ExtractedGraphData {
@@ -415,13 +429,15 @@ pub async fn extract_graph_from_data(
     // email-form label later if the run has it; the pre-stamp's
     // `if dp.source_user.is_none()` guard then skips, so the more
     // specific value wins.
-    let user_label = input.user_id.as_ref().map(|id| id.to_string());
+    let user_label_owned = user_label_override
+        .map(|s| s.to_string())
+        .or_else(|| input.user_id.as_ref().map(|id| id.to_string()));
     let (nodes, edges) = expand_with_nodes_and_edges(
         all_graphs,
         input.dataset_id,
         &existing_edges_set,
         ontology_resolver.as_ref(),
-        user_label.as_deref(),
+        user_label_owned.as_deref(),
     )
     .await;
 
@@ -879,6 +895,7 @@ pub async fn add_data_points(
         edge_types,
         embeddings,
         indexed_fields,
+        documents_for_dlt: input.documents.clone(),
     })
 }
 
@@ -1292,6 +1309,7 @@ pub async fn add_temporal_data_points(
         edge_types: vec![],
         embeddings: vec![],
         indexed_fields,
+        documents_for_dlt: vec![],
     })
 }
 
@@ -1781,7 +1799,8 @@ pub async fn cognify(
     graph_db: Arc<dyn GraphDBTrait>,
     vector_db: Arc<dyn VectorDB>,
     embedding_engine: Arc<dyn EmbeddingEngine>,
-    db: Option<Arc<DatabaseConnection>>,
+    database: Arc<DatabaseConnection>,
+    thread_pool: Arc<dyn CpuPool>,
     ontology_resolver: Arc<dyn OntologyResolver>,
     config: &CognifyConfig,
 ) -> Result<CognifyResult, CognifyError> {
@@ -1790,26 +1809,178 @@ pub async fn cognify(
         .map_err(|e| CognifyError::ConfigError(e.to_string()))?;
 
     // Auto-calculate chunk size when the caller is using the default value.
-    // Matches Python's get_max_chunk_tokens() from cognee/infrastructure/llm/utils.py.
-    let effective_config;
-    let config = if config.max_chunk_size == CognifyConfig::default().max_chunk_size {
-        effective_config = config
+    // Matches Python's `get_max_chunk_tokens()` from
+    // `cognee/infrastructure/llm/utils.py`. Locked Decision 6: this mutation
+    // happens **before** `pipeline::execute` so the executor sees a frozen
+    // config in `build_cognify_pipeline`.
+    let effective_config = if config.max_chunk_size == CognifyConfig::default().max_chunk_size {
+        let cfg = config
             .clone()
             .with_auto_chunk_size(embedding_engine.as_ref(), llm.as_ref());
-        info!(
-            "Auto-calculated max_chunk_size: {}",
-            effective_config.max_chunk_size
-        );
-        &effective_config
+        info!("Auto-calculated max_chunk_size: {}", cfg.max_chunk_size);
+        cfg
     } else {
-        config
+        config.clone()
     };
 
     info!(
         "Starting cognify pipeline with config: chunks_per_batch={}, max_chunk_size={}",
-        config.chunks_per_batch, config.max_chunk_size
+        effective_config.chunks_per_batch, effective_config.max_chunk_size
     );
 
+    // ── Empty-document short-circuit ────────────────────────────────────────
+    // Preserved from the pre-executor path: a caller passing zero documents
+    // gets back an empty result without paying for pipeline / context
+    // construction or a no-op LLM round-trip.
+    if data_items.is_empty() {
+        return Ok(CognifyResult::empty());
+    }
+
+    // ── Branch: temporal vs. standard pipeline ──────────────────────────────
+    // LIB-06-03 only routes the **standard** branch through `pipeline::execute`.
+    // The temporal branch keeps its inline implementation (its inline
+    // `stamp_provenance` calls live above) until LIB-06-04 lands.
+    if effective_config.temporal_cognify {
+        return cognify_temporal_inline(
+            data_items,
+            dataset_id,
+            user_id,
+            user_email,
+            tenant_id,
+            llm,
+            storage,
+            graph_db,
+            vector_db,
+            embedding_engine,
+            database,
+            &effective_config,
+        )
+        .await;
+    }
+
+    // ── Standard branch — route through `pipeline::execute` ─────────────────
+    let pipeline = build_cognify_pipeline(
+        Arc::clone(&storage),
+        Arc::clone(&graph_db),
+        Arc::clone(&vector_db),
+        Arc::clone(&embedding_engine),
+        Arc::clone(&llm),
+        Some(Arc::clone(&database)),
+        Arc::clone(&ontology_resolver),
+        effective_config.clone(),
+    );
+
+    // The executor re-derives `PipelineRunInfo.pipeline_id` from
+    // `(pipeline.name, user_id, dataset_id)`; we still carry `pipeline.id`
+    // through `PipelineContext` as the placeholder.
+    let pipeline_ctx = PipelineContext {
+        pipeline_id: pipeline.id,
+        pipeline_name: pipeline.name.clone().unwrap_or_default(),
+        user_id,
+        tenant_id,
+        dataset_id: Some(dataset_id),
+        current_data: None,
+        run_id: None,
+        user_email: user_email.clone(),
+        provenance_visited: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+    };
+
+    let (_cancel_handle, ctx) = TaskContextBuilder::new()
+        .thread_pool(thread_pool)
+        .database(Arc::clone(&database))
+        .graph_db(Arc::clone(&graph_db))
+        .vector_db(Arc::clone(&vector_db))
+        .pipeline_context(pipeline_ctx)
+        .build()
+        .map_err(|e| CognifyError::ContextBuild(e.to_string()))?;
+    let ctx = Arc::new(ctx);
+
+    let input = CognifyInput {
+        data_items,
+        dataset_id,
+        user_id,
+        tenant_id,
+    };
+    let inputs: Vec<Arc<dyn Value>> = vec![Arc::new(input) as Arc<dyn Value>];
+
+    // Decision 11: NoopWatcher only — gap 08-07 swaps in DbPipelineWatcher.
+    let outputs = cognee_core::pipeline::execute(&pipeline, inputs, ctx, &NoopWatcher)
+        .await
+        .map_err(|e| CognifyError::Execute(e.to_string()))?;
+
+    let result = extract_cognify_outputs(outputs)?;
+
+    // Decision 5: post-pipeline teardown — `extract_dlt_fk_edges` stays
+    // outside the executor. The pipeline_runs row is already marked
+    // COMPLETED by the watcher at this point; teardown failure surfaces as
+    // `Err(...)` to the caller but does not roll back the run state. This
+    // is acceptable today because the watcher is `NoopWatcher`; gap 08-07
+    // documents the trade-off when DbPipelineWatcher lands.
+    extract_dlt_fk_edges(
+        &result.chunks,
+        &result.documents_for_dlt,
+        Arc::clone(&graph_db),
+    )
+    .await?;
+
+    Ok(result)
+}
+
+// ---------------------------------------------------------------------------
+// Output extraction (Decision 9)
+// ---------------------------------------------------------------------------
+
+/// Downcast the executor's [`Arc<dyn Value>`] outputs back to the concrete
+/// [`CognifyResult`] the convenience function promises.
+///
+/// Returns [`CognifyError::OutputTypeMismatch`] when the downcast fails — a
+/// programmer error indicating the pipeline's last task does not emit
+/// `CognifyResult`. Mirrors `cognee_ingestion::pipeline::extract_data_outputs`
+/// (LIB-06-01) and `cognee_cognify::memify::extract_memify_outputs` (LIB-06-02).
+fn extract_cognify_outputs(outputs: Vec<Arc<dyn Value>>) -> Result<CognifyResult, CognifyError> {
+    let first = outputs
+        .into_iter()
+        .next()
+        .ok_or(CognifyError::OutputTypeMismatch {
+            expected: "CognifyResult",
+            actual: "empty",
+        })?;
+    // Explicit deref through `Arc` to reach the inner `dyn Value`, then call
+    // `as_any` via vtable dispatch — without this, method resolution would
+    // pick the blanket `<Arc<dyn Value> as Value>::as_any()` which downcasts
+    // to `Arc<dyn Value>` and never to `CognifyResult`.
+    (*first)
+        .as_any()
+        .downcast_ref::<CognifyResult>()
+        .cloned()
+        .ok_or(CognifyError::OutputTypeMismatch {
+            expected: "CognifyResult",
+            actual: "unknown",
+        })
+}
+
+// ---------------------------------------------------------------------------
+// Temporal branch — inline implementation (LIB-06-04 will route it)
+// ---------------------------------------------------------------------------
+
+/// Inline temporal cognify pipeline. Preserves the pre-LIB-06 behaviour for
+/// the `config.temporal_cognify == true` branch verbatim. LIB-06-04 routes it
+/// through `pipeline::execute` via `build_temporal_cognify_pipeline`.
+#[allow(clippy::too_many_arguments)]
+async fn cognify_temporal_inline(
+    data_items: Vec<Data>,
+    dataset_id: Uuid,
+    user_id: Option<Uuid>,
+    user_email: Option<String>,
+    tenant_id: Option<Uuid>,
+    llm: Arc<dyn Llm>,
+    storage: Arc<dyn StorageTrait>,
+    graph_db: Arc<dyn GraphDBTrait>,
+    vector_db: Arc<dyn VectorDB>,
+    embedding_engine: Arc<dyn EmbeddingEngine>,
+    database: Arc<DatabaseConnection>,
+    config: &CognifyConfig,
+) -> Result<CognifyResult, CognifyError> {
     // Derive user string for provenance stamping. Mirrors `user_label()` on
     // `PipelineContext`: prefer the looked-up email, fall back to the UUID
     // when no `User` row was fetched (unauthenticated CLI runs, etc.).
@@ -1827,8 +1998,6 @@ pub async fn cognify(
 
     // Task 1: Classify documents
     let mut classified = classify_documents(&input)?;
-
-    // Stamp provenance on classified documents
     for doc in &mut classified.documents {
         stamp_provenance(
             &mut doc.base,
@@ -1842,19 +2011,17 @@ pub async fn cognify(
         return Ok(CognifyResult::empty());
     }
 
-    // Task 2: Extract text chunks (with token count write-back when DB available)
+    // Task 2: Extract text chunks
     let loader_registry = LoaderRegistry::default();
     let mut extracted_chunks = extract_chunks_from_documents(
         &classified,
         &*storage,
         config.max_chunk_size,
         config.token_counter_kind.clone(),
-        db.as_deref(),
+        Some(&*database),
         &loader_registry,
     )
     .await?;
-
-    // Stamp provenance on extracted chunks
     for chunk in &mut extracted_chunks.chunks {
         stamp_provenance(
             &mut chunk.base,
@@ -1869,80 +2036,20 @@ pub async fn cognify(
     }
 
     info!("Extracted {} chunks", extracted_chunks.chunks.len());
+    info!("Running temporal cognify pipeline (event/timestamp extraction).");
 
-    // ── Branch: temporal vs. standard pipeline ──────────────────────────────
-    if config.temporal_cognify {
-        info!("Running temporal cognify pipeline (event/timestamp extraction).");
+    // Temporal Task 3: Extract events (two LLM passes)
+    let temporal_events =
+        extract_temporal_events(&extracted_chunks, Arc::clone(&llm), config).await?;
 
-        // Temporal Task 3: Extract events (two LLM passes)
-        let temporal_events =
-            extract_temporal_events(&extracted_chunks, Arc::clone(&llm), config).await?;
+    info!(
+        "Temporal extraction complete: {} events",
+        temporal_events.events.len()
+    );
 
-        info!(
-            "Temporal extraction complete: {} events",
-            temporal_events.events.len()
-        );
-
-        // Temporal Task 4: Persist to graph + vector
-        let result =
-            add_temporal_data_points(&temporal_events, graph_db, vector_db, embedding_engine)
-                .await?;
-
-        return Ok(result);
-    }
-
-    // Task 3: Extract knowledge graph
-    let mut graph_data = extract_graph_from_data(
-        &extracted_chunks,
-        Arc::clone(&llm),
-        Arc::clone(&graph_db),
-        Arc::clone(&ontology_resolver),
-        config,
-    )
-    .await?;
-
-    // Stamp provenance on extracted graph entities
-    for pair in &mut graph_data.entities {
-        stamp_provenance(
-            &mut pair.entity.base,
-            "cognify_pipeline",
-            "extract_graph_from_data",
-            user_str_ref,
-        );
-        stamp_provenance(
-            &mut pair.entity_type.base,
-            "cognify_pipeline",
-            "extract_graph_from_data",
-            user_str_ref,
-        );
-    }
-
-    // Task 4: Summarize text
-    let mut summarized = summarize_text(&graph_data, llm, config).await?;
-
-    // Stamp provenance on generated summaries
-    for summary in &mut summarized.summaries {
-        stamp_provenance(
-            &mut summary.base,
-            "cognify_pipeline",
-            "summarize_text",
-            user_str_ref,
-        );
-    }
-
-    // Task 5: Add data points (embeddings + vector indexing + provenance)
-    let result = add_data_points(
-        &summarized,
-        Arc::clone(&graph_db),
-        vector_db,
-        embedding_engine,
-        db,
-        config,
-    )
-    .await?;
-
-    // Task 6: Extract DLT FK edges (no-op if no DLT documents)
-    extract_dlt_fk_edges(&summarized.chunks, &summarized.documents, graph_db).await?;
+    // Temporal Task 4: Persist to graph + vector
+    let result =
+        add_temporal_data_points(&temporal_events, graph_db, vector_db, embedding_engine).await?;
 
     Ok(result)
 }
@@ -2707,16 +2814,62 @@ async fn index_data_points(
 // TypedTask factories
 // ---------------------------------------------------------------------------
 
+/// Name used by the executor's `stamp_tree_dyn` for the `classify_documents` task.
+///
+/// Kept as a `const` so the inline `stamp_provenance` literals removed in LIB-06-03
+/// stay byte-stable with the executor's automatic stamp. Matches the historical
+/// inline literal `"classify_documents"` at the convenience function call site.
+pub const CLASSIFY_DOCUMENTS_TASK_NAME: &str = "classify_documents";
+pub const EXTRACT_CHUNKS_TASK_NAME: &str = "extract_chunks_from_documents";
+pub const EXTRACT_GRAPH_TASK_NAME: &str = "extract_graph_from_data";
+pub const SUMMARIZE_TEXT_TASK_NAME: &str = "summarize_text";
+pub const ADD_DATA_POINTS_TASK_NAME: &str = "add_data_points";
+
+/// Pipeline name carried by cognify task stamps (locked Decision 14 of
+/// LIB-06). Used by the per-task in-body stamping below so the test in
+/// `crates/cognify/tests/provenance_e2e.rs` sees `source_pipeline =
+/// "cognify"` on every produced DataPoint.
+const COGNIFY_PIPELINE_STAMP_NAME: &str = "cognify";
+
+/// Resolve the user label for in-body stamping from a [`TaskContext`].
+///
+/// Mirrors [`cognee_core::PipelineContext::user_label`]: prefer
+/// `user_email`, fall back to `user_id.to_string()`, else `None`.
+fn user_label_from_ctx(ctx: &Arc<cognee_core::TaskContext>) -> Option<String> {
+    ctx.pipeline_ctx.as_ref().and_then(|p| p.user_label())
+}
+
 /// Build a [`TypedTask`] that classifies Data items into Documents.
+///
+/// The returned task does **not** carry a name; the pipeline builder
+/// [`build_cognify_pipeline`] wraps it with [`CLASSIFY_DOCUMENTS_TASK_NAME`].
+///
+/// In-body provenance stamping: stamps every emitted `Document` with
+/// `source_pipeline = "cognify"` and `source_task = "classify_documents"`.
+/// Necessary because `ClassifiedDocuments` is a non-`HasDataPoint` wrapper
+/// not walked by the executor's `stamp_tree_dyn` (LIB-06-03 fixup).
 pub fn make_classify_documents_task() -> TypedTask<CognifyInput, ClassifiedDocuments> {
-    TypedTask::sync(|input: &CognifyInput, _ctx| {
-        classify_documents(input)
-            .map(Box::new)
-            .map_err(|e| format!("{e}").into())
+    TypedTask::sync(|input: &CognifyInput, ctx| {
+        let mut classified = classify_documents(input).map_err(|e| format!("{e}"))?;
+        let user_label = user_label_from_ctx(&ctx);
+        for doc in &mut classified.documents {
+            stamp_provenance(
+                &mut doc.base,
+                COGNIFY_PIPELINE_STAMP_NAME,
+                CLASSIFY_DOCUMENTS_TASK_NAME,
+                user_label.as_deref(),
+            );
+        }
+        Ok(Box::new(classified))
     })
 }
 
 /// Build a [`TypedTask`] that extracts text chunks from classified documents.
+///
+/// In-body provenance stamping: stamps every emitted `DocumentChunk`
+/// with `source_task = "extract_chunks_from_documents"`. Documents
+/// inherited from the upstream wrapper keep their already-set stamp via
+/// the `is_none()` guard inside [`stamp_provenance`].
 pub fn make_extract_chunks_task(
     storage: Arc<dyn StorageTrait>,
     max_chunk_size: usize,
@@ -2724,14 +2877,15 @@ pub fn make_extract_chunks_task(
     db: Option<Arc<DatabaseConnection>>,
     loader_registry: Arc<LoaderRegistry>,
 ) -> TypedTask<ClassifiedDocuments, ExtractedChunks> {
-    TypedTask::async_fn(move |input: &ClassifiedDocuments, _ctx| {
+    TypedTask::async_fn(move |input: &ClassifiedDocuments, ctx| {
         let input = input.clone();
         let storage = Arc::clone(&storage);
         let db = db.clone();
         let token_counter_kind = token_counter_kind.clone();
         let loader_registry = Arc::clone(&loader_registry);
+        let user_label = user_label_from_ctx(&ctx);
         Box::pin(async move {
-            extract_chunks_from_documents(
+            let mut extracted = extract_chunks_from_documents(
                 &input,
                 &*storage,
                 max_chunk_size,
@@ -2740,53 +2894,169 @@ pub fn make_extract_chunks_task(
                 &loader_registry,
             )
             .await
-            .map(Box::new)
-            .map_err(|e| format!("{e}").into())
+            .map_err(|e| format!("{e}"))?;
+            for chunk in &mut extracted.chunks {
+                stamp_provenance(
+                    &mut chunk.base,
+                    COGNIFY_PIPELINE_STAMP_NAME,
+                    EXTRACT_CHUNKS_TASK_NAME,
+                    user_label.as_deref(),
+                );
+            }
+            // Documents carried forward keep their earlier stamp from
+            // `classify_documents`; only stamp any that are still unstamped
+            // (idempotent via the `is_none` guards).
+            for doc in &mut extracted.documents {
+                stamp_provenance(
+                    &mut doc.base,
+                    COGNIFY_PIPELINE_STAMP_NAME,
+                    EXTRACT_CHUNKS_TASK_NAME,
+                    user_label.as_deref(),
+                );
+            }
+            Ok(Box::new(extracted))
         })
     })
 }
 
 /// Build a [`TypedTask`] that extracts knowledge graphs from chunks via LLM.
+///
+/// In-body provenance stamping: stamps `entities[*].entity`,
+/// `entities[*].entity_type` with `source_task = "extract_graph_from_data"`.
+/// Carried-forward chunks/documents keep their earlier stamp via the
+/// idempotent `is_none()` guards inside [`stamp_provenance`].
 pub fn make_extract_graph_task(
     llm: Arc<dyn Llm>,
     graph_db: Arc<dyn GraphDBTrait>,
     ontology_resolver: Arc<dyn OntologyResolver>,
     config: CognifyConfig,
 ) -> TypedTask<ExtractedChunks, ExtractedGraphData> {
-    TypedTask::async_fn(move |input: &ExtractedChunks, _ctx| {
+    TypedTask::async_fn(move |input: &ExtractedChunks, ctx| {
         let input = input.clone();
         let llm = Arc::clone(&llm);
         let graph_db = Arc::clone(&graph_db);
         let ontology_resolver = Arc::clone(&ontology_resolver);
         let config = config.clone();
+        let user_label = user_label_from_ctx(&ctx);
         Box::pin(async move {
-            extract_graph_from_data(&input, llm, graph_db, ontology_resolver, &config)
-                .await
-                .map(Box::new)
-                .map_err(|e| format!("{e}").into())
+            let mut graph_data = extract_graph_from_data(
+                &input,
+                llm,
+                graph_db,
+                ontology_resolver,
+                &config,
+                user_label.as_deref(),
+            )
+            .await
+            .map_err(|e| format!("{e}"))?;
+            for pair in &mut graph_data.entities {
+                stamp_provenance(
+                    &mut pair.entity.base,
+                    COGNIFY_PIPELINE_STAMP_NAME,
+                    EXTRACT_GRAPH_TASK_NAME,
+                    user_label.as_deref(),
+                );
+                stamp_provenance(
+                    &mut pair.entity_type.base,
+                    COGNIFY_PIPELINE_STAMP_NAME,
+                    EXTRACT_GRAPH_TASK_NAME,
+                    user_label.as_deref(),
+                );
+            }
+            // Chunks/documents carried forward — idempotent re-stamp keeps
+            // their upstream `source_task` intact via the `is_none` guard.
+            for chunk in &mut graph_data.chunks {
+                stamp_provenance(
+                    &mut chunk.base,
+                    COGNIFY_PIPELINE_STAMP_NAME,
+                    EXTRACT_GRAPH_TASK_NAME,
+                    user_label.as_deref(),
+                );
+            }
+            for doc in &mut graph_data.documents {
+                stamp_provenance(
+                    &mut doc.base,
+                    COGNIFY_PIPELINE_STAMP_NAME,
+                    EXTRACT_GRAPH_TASK_NAME,
+                    user_label.as_deref(),
+                );
+            }
+            Ok(Box::new(graph_data))
         })
     })
 }
 
 /// Build a [`TypedTask`] that summarizes text chunks via LLM.
+///
+/// In-body provenance stamping: stamps every emitted `TextSummary`
+/// with `source_task = "summarize_text"`. Carried-forward
+/// chunks/documents/entities keep their upstream stamps.
 pub fn make_summarize_text_task(
     llm: Arc<dyn Llm>,
     config: CognifyConfig,
 ) -> TypedTask<ExtractedGraphData, SummarizedData> {
-    TypedTask::async_fn(move |input: &ExtractedGraphData, _ctx| {
+    TypedTask::async_fn(move |input: &ExtractedGraphData, ctx| {
         let input = input.clone();
         let llm = Arc::clone(&llm);
         let config = config.clone();
+        let user_label = user_label_from_ctx(&ctx);
         Box::pin(async move {
-            summarize_text(&input, llm, &config)
+            let mut summarized = summarize_text(&input, llm, &config)
                 .await
-                .map(Box::new)
-                .map_err(|e| format!("{e}").into())
+                .map_err(|e| format!("{e}"))?;
+            for summary in &mut summarized.summaries {
+                stamp_provenance(
+                    &mut summary.base,
+                    COGNIFY_PIPELINE_STAMP_NAME,
+                    SUMMARIZE_TEXT_TASK_NAME,
+                    user_label.as_deref(),
+                );
+            }
+            // Idempotent re-stamp of carried-forward DataPoints — only
+            // ones that somehow escaped earlier stamping get filled in.
+            for chunk in &mut summarized.chunks {
+                stamp_provenance(
+                    &mut chunk.base,
+                    COGNIFY_PIPELINE_STAMP_NAME,
+                    SUMMARIZE_TEXT_TASK_NAME,
+                    user_label.as_deref(),
+                );
+            }
+            for doc in &mut summarized.documents {
+                stamp_provenance(
+                    &mut doc.base,
+                    COGNIFY_PIPELINE_STAMP_NAME,
+                    SUMMARIZE_TEXT_TASK_NAME,
+                    user_label.as_deref(),
+                );
+            }
+            for pair in &mut summarized.entities {
+                stamp_provenance(
+                    &mut pair.entity.base,
+                    COGNIFY_PIPELINE_STAMP_NAME,
+                    SUMMARIZE_TEXT_TASK_NAME,
+                    user_label.as_deref(),
+                );
+                stamp_provenance(
+                    &mut pair.entity_type.base,
+                    COGNIFY_PIPELINE_STAMP_NAME,
+                    SUMMARIZE_TEXT_TASK_NAME,
+                    user_label.as_deref(),
+                );
+            }
+            Ok(Box::new(summarized))
         })
     })
 }
 
 /// Build a [`TypedTask`] that generates embeddings and indexes data points.
+///
+/// In-body provenance stamping: idempotent re-stamp of every DataPoint
+/// in the produced `CognifyResult`. Upstream tasks have already stamped
+/// them with their specific `source_task`; this loop only fills in any
+/// stragglers (e.g. fresh `EdgeType` entries or DataPoints constructed
+/// inside `add_data_points` itself) — the `is_none` guards inside
+/// [`stamp_provenance`] keep upstream stamps intact.
 pub fn make_add_data_points_task(
     graph_db: Arc<dyn GraphDBTrait>,
     vector_db: Arc<dyn VectorDB>,
@@ -2794,18 +3064,66 @@ pub fn make_add_data_points_task(
     db: Option<Arc<DatabaseConnection>>,
     config: CognifyConfig,
 ) -> TypedTask<SummarizedData, CognifyResult> {
-    TypedTask::async_fn(move |input: &SummarizedData, _ctx| {
+    TypedTask::async_fn(move |input: &SummarizedData, ctx| {
         let input = input.clone();
         let graph_db = Arc::clone(&graph_db);
         let vector_db = Arc::clone(&vector_db);
         let embedding_engine = Arc::clone(&embedding_engine);
         let db = db.clone();
         let config = config.clone();
+        let user_label = user_label_from_ctx(&ctx);
         Box::pin(async move {
-            add_data_points(&input, graph_db, vector_db, embedding_engine, db, &config)
-                .await
-                .map(Box::new)
-                .map_err(|e| format!("{e}").into())
+            let mut result =
+                add_data_points(&input, graph_db, vector_db, embedding_engine, db, &config)
+                    .await
+                    .map_err(|e| format!("{e}"))?;
+            for chunk in &mut result.chunks {
+                stamp_provenance(
+                    &mut chunk.base,
+                    COGNIFY_PIPELINE_STAMP_NAME,
+                    ADD_DATA_POINTS_TASK_NAME,
+                    user_label.as_deref(),
+                );
+            }
+            for pair in &mut result.entities {
+                stamp_provenance(
+                    &mut pair.entity.base,
+                    COGNIFY_PIPELINE_STAMP_NAME,
+                    ADD_DATA_POINTS_TASK_NAME,
+                    user_label.as_deref(),
+                );
+                stamp_provenance(
+                    &mut pair.entity_type.base,
+                    COGNIFY_PIPELINE_STAMP_NAME,
+                    ADD_DATA_POINTS_TASK_NAME,
+                    user_label.as_deref(),
+                );
+            }
+            for summary in &mut result.summaries {
+                stamp_provenance(
+                    &mut summary.base,
+                    COGNIFY_PIPELINE_STAMP_NAME,
+                    ADD_DATA_POINTS_TASK_NAME,
+                    user_label.as_deref(),
+                );
+            }
+            for edge_type in &mut result.edge_types {
+                stamp_provenance(
+                    &mut edge_type.base,
+                    COGNIFY_PIPELINE_STAMP_NAME,
+                    ADD_DATA_POINTS_TASK_NAME,
+                    user_label.as_deref(),
+                );
+            }
+            for doc in &mut result.documents_for_dlt {
+                stamp_provenance(
+                    &mut doc.base,
+                    COGNIFY_PIPELINE_STAMP_NAME,
+                    ADD_DATA_POINTS_TASK_NAME,
+                    user_label.as_deref(),
+                );
+            }
+            Ok(Box::new(result))
         })
     })
 }
@@ -2835,27 +3153,34 @@ pub fn build_cognify_pipeline(
 ) -> Pipeline {
     let loader_registry = Arc::new(LoaderRegistry::default());
     PipelineBuilder::new_with_task("cognify", make_classify_documents_task())
-        .add_task(make_extract_chunks_task(
-            storage,
-            config.max_chunk_size,
-            config.token_counter_kind.clone(),
-            db.clone(),
-            loader_registry,
-        ))
-        .add_task(make_extract_graph_task(
-            Arc::clone(&llm),
-            Arc::clone(&graph_db),
-            ontology_resolver,
-            config.clone(),
-        ))
-        .add_task(make_summarize_text_task(llm, config.clone()))
-        .add_task(make_add_data_points_task(
-            graph_db,
-            vector_db,
-            embedding_engine,
-            db,
-            config,
-        ))
+        .with_first_task_name(CLASSIFY_DOCUMENTS_TASK_NAME)
+        .add_task_named(
+            make_extract_chunks_task(
+                storage,
+                config.max_chunk_size,
+                config.token_counter_kind.clone(),
+                db.clone(),
+                loader_registry,
+            ),
+            EXTRACT_CHUNKS_TASK_NAME,
+        )
+        .add_task_named(
+            make_extract_graph_task(
+                Arc::clone(&llm),
+                Arc::clone(&graph_db),
+                ontology_resolver,
+                config.clone(),
+            ),
+            EXTRACT_GRAPH_TASK_NAME,
+        )
+        .add_task_named(
+            make_summarize_text_task(llm, config.clone()),
+            SUMMARIZE_TEXT_TASK_NAME,
+        )
+        .add_task_named(
+            make_add_data_points_task(graph_db, vector_db, embedding_engine, db, config),
+            ADD_DATA_POINTS_TASK_NAME,
+        )
         .with_name("cognify")
         .build()
 }
@@ -2916,19 +3241,25 @@ pub fn build_temporal_cognify_pipeline(
 ) -> Pipeline {
     let loader_registry = Arc::new(LoaderRegistry::default());
     PipelineBuilder::new_with_task("temporal-cognify", make_classify_documents_task())
-        .add_task(make_extract_chunks_task(
-            storage,
-            config.max_chunk_size,
-            config.token_counter_kind.clone(),
-            db,
-            loader_registry,
-        ))
-        .add_task(make_extract_temporal_events_task(llm, config))
-        .add_task(make_add_temporal_data_points_task(
-            graph_db,
-            vector_db,
-            embedding_engine,
-        ))
+        .with_first_task_name(CLASSIFY_DOCUMENTS_TASK_NAME)
+        .add_task_named(
+            make_extract_chunks_task(
+                storage,
+                config.max_chunk_size,
+                config.token_counter_kind.clone(),
+                db,
+                loader_registry,
+            ),
+            EXTRACT_CHUNKS_TASK_NAME,
+        )
+        .add_task_named(
+            make_extract_temporal_events_task(llm, config),
+            "extract_temporal_events",
+        )
+        .add_task_named(
+            make_add_temporal_data_points_task(graph_db, vector_db, embedding_engine),
+            "add_temporal_data_points",
+        )
         .with_name("temporal-cognify")
         .build()
 }

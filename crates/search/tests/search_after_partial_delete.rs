@@ -205,6 +205,10 @@ async fn test_search_returns_empty_for_deleted_doc_and_non_empty_for_remaining()
         .with_summarization(false)
         .with_triplet_embeddings(false);
 
+    let thread_pool: Arc<dyn cognee_core::CpuPool> = Arc::new(
+        cognee_core::RayonThreadPool::with_default_threads().expect("RayonThreadPool init"),
+    );
+
     if let Err(e) = cognify(
         all_items,
         dataset.id,
@@ -216,7 +220,8 @@ async fn test_search_returns_empty_for_deleted_doc_and_non_empty_for_remaining()
         graph_db.clone(),
         vector_db.clone(),
         embedding_engine.clone(),
-        Some(Arc::clone(&database)),
+        Arc::clone(&database),
+        thread_pool,
         Arc::new(NoOpOntologyResolver::new()),
         &config,
     )

@@ -168,6 +168,11 @@ pub fn run(args: AddAndCognifyArgs, cm: Arc<ComponentManager>) -> Result<(), Cli
             .flatten()
             .map(|u| u.email);
 
+        let thread_pool: Arc<dyn cognee_lib::core::CpuPool> = Arc::new(
+            cognee_lib::core::RayonThreadPool::with_default_threads()
+                .map_err(|e| CliError::Runtime(format!("failed to construct thread pool: {e}")))?,
+        );
+
         let result = cognify(
             added_data,
             dataset.id,
@@ -179,7 +184,8 @@ pub fn run(args: AddAndCognifyArgs, cm: Arc<ComponentManager>) -> Result<(), Cli
             graph_db,
             vector_db,
             embedding_engine,
-            Some(Arc::clone(&database)),
+            Arc::clone(&database),
+            thread_pool,
             ontology_resolver,
             &cognify_config,
         )

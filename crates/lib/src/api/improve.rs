@@ -229,8 +229,21 @@ pub async fn improve(params: ImproveParams<'_>) -> Result<ImproveResult, ApiErro
         let sids = session_ids
             .as_ref()
             .expect("has_sessions guarantees session_ids is Some with non-empty vec");
-        match (session_store.as_ref(), add_pipeline) {
-            (Some(store), Some(pipeline)) => {
+        // LIB-06-03: `persist_sessions_in_knowledge_graph` now requires
+        // `Arc<DatabaseConnection>` and `Arc<dyn CpuPool>`.
+        let stage2_db = db.clone();
+        match (session_store.as_ref(), add_pipeline, stage2_db) {
+            (Some(store), Some(pipeline), Some(database)) => {
+                let thread_pool: Arc<dyn cognee_core::CpuPool> =
+                    match cognee_core::RayonThreadPool::with_default_threads() {
+                        Ok(pool) => Arc::new(pool),
+                        Err(e) => {
+                            warn!(
+                                "improve stage 2: failed to construct thread pool: {e}; skipping persist_sessions"
+                            );
+                            return Ok(result);
+                        }
+                    };
                 match persist_sessions_in_knowledge_graph(
                     sids,
                     &dataset_name,
@@ -243,7 +256,8 @@ pub async fn improve(params: ImproveParams<'_>) -> Result<ImproveResult, ApiErro
                     Arc::clone(&graph_db),
                     Arc::clone(&vector_db),
                     Arc::clone(&embedding_engine),
-                    db.clone(),
+                    database,
+                    thread_pool,
                     Arc::clone(&ontology_resolver),
                     cognify_config,
                 )
@@ -266,7 +280,7 @@ pub async fn improve(params: ImproveParams<'_>) -> Result<ImproveResult, ApiErro
             }
             _ => {
                 warn!(
-                    "improve stage 2: session_store and add_pipeline are required; skipping persist_sessions"
+                    "improve stage 2: session_store, add_pipeline, and DatabaseConnection are required; skipping persist_sessions"
                 );
             }
         }

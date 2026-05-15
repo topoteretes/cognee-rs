@@ -170,6 +170,10 @@ async fn test_search_updates_last_accessed_timestamp() {
         .with_summarization(false)
         .with_triplet_embeddings(false);
 
+    let thread_pool: Arc<dyn cognee_core::CpuPool> = Arc::new(
+        cognee_core::RayonThreadPool::with_default_threads().expect("RayonThreadPool init"),
+    );
+
     match cognify(
         data_items,
         dataset.id,
@@ -181,7 +185,8 @@ async fn test_search_updates_last_accessed_timestamp() {
         Arc::clone(&graph_db),
         Arc::clone(&vector_db),
         Arc::clone(&embedding_engine),
-        None,
+        Arc::clone(&database),
+        thread_pool,
         Arc::new(NoOpOntologyResolver::new()),
         &config,
     )

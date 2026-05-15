@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use cognee_cognify::{CognifyConfig, cognify};
+use cognee_database::{DatabaseConnection, connect, initialize};
 use cognee_embedding::mock::MockEmbeddingEngine;
 use cognee_graph::{GraphDBTrait, LadybugAdapter};
 use cognee_llm::error::{LlmError, LlmResult};
@@ -23,6 +24,18 @@ use uuid::Uuid;
 mod test_utils;
 
 const BIOGRAPHY_TEXT: &str = include_str!("test_data/biography.txt");
+
+async fn make_in_memory_db() -> Arc<DatabaseConnection> {
+    let conn = connect("sqlite::memory:")
+        .await
+        .expect("connect in-memory sqlite");
+    initialize(&conn).await.expect("initialize");
+    Arc::new(conn)
+}
+
+fn make_thread_pool() -> Arc<dyn cognee_core::CpuPool> {
+    Arc::new(cognee_core::RayonThreadPool::with_default_threads().expect("RayonThreadPool init"))
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -210,7 +223,8 @@ async fn temporal_cognify_creates_event_and_timestamp_nodes() {
         Arc::clone(&graph_db),
         vector_db,
         embedding_engine,
-        None,
+        make_in_memory_db().await,
+        make_thread_pool(),
         Arc::new(NoOpOntologyResolver::new()),
         &config,
     )
@@ -346,7 +360,8 @@ async fn temporal_cognify_populates_event_name_vector_collection() {
         graph_db,
         Arc::clone(&vector_db) as Arc<dyn VectorDB>,
         embedding_engine,
-        None,
+        make_in_memory_db().await,
+        make_thread_pool(),
         Arc::new(NoOpOntologyResolver::new()),
         &config,
     )

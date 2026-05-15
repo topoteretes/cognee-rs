@@ -99,7 +99,10 @@ async fn persist_empty_sessions_returns_zero() {
         h.graph_db.clone() as Arc<_>,
         h.vector_db.clone() as Arc<_>,
         h.embedding_engine.clone() as Arc<_>,
-        Some(Arc::clone(&h.db)),
+        Arc::clone(&h.db),
+        Arc::new(
+            cognee_core::RayonThreadPool::with_default_threads().expect("RayonThreadPool init"),
+        ) as Arc<dyn cognee_core::CpuPool>,
         Arc::clone(&h.ontology),
         &config,
     )
@@ -151,7 +154,10 @@ async fn persist_tags_nodes_with_user_sessions_node_set() {
         h.graph_db.clone() as Arc<_>,
         h.vector_db.clone() as Arc<_>,
         h.embedding_engine.clone() as Arc<_>,
-        Some(Arc::clone(&h.db)),
+        Arc::clone(&h.db),
+        Arc::new(
+            cognee_core::RayonThreadPool::with_default_threads().expect("RayonThreadPool init"),
+        ) as Arc<dyn cognee_core::CpuPool>,
         Arc::clone(&h.ontology),
         &config,
     )

@@ -151,7 +151,10 @@ async fn test_delete_preview_counts_match_execution() {
         graph_db.clone() as Arc<dyn GraphDBTrait>,
         vector_db.clone() as Arc<dyn VectorDB>,
         embedding_engine.clone() as Arc<dyn EmbeddingEngine>,
-        Some(database.clone()),
+        database.clone(),
+        Arc::new(
+            cognee_core::RayonThreadPool::with_default_threads().expect("RayonThreadPool init"),
+        ) as Arc<dyn cognee_core::CpuPool>,
         Arc::new(NoOpOntologyResolver::new()),
         &config,
     )

@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 
-use cognee_models::{DocumentChunk, EdgeType, Embedding};
+use cognee_models::{Document, DocumentChunk, EdgeType, Embedding};
 
 use crate::graph_integration::{GraphEdgePair, GraphNodePair};
 use crate::summarization::TextSummary;
@@ -33,6 +33,16 @@ pub struct CognifyResult {
 
     /// Statistics about indexed fields
     pub indexed_fields: IndexedFieldsStats,
+
+    /// Documents needed by the post-pipeline
+    /// [`crate::tasks::extract_dlt_fk_edges`] teardown step. Populated by the
+    /// final task in [`crate::tasks::build_cognify_pipeline`]; empty in the
+    /// temporal branch (which does not run DLT FK extraction). The matching
+    /// chunk list reuses the existing [`Self::chunks`] field.
+    ///
+    /// Not serialised — internal teardown carrier, not part of the public
+    /// result shape.
+    pub documents_for_dlt: Vec<Document>,
 }
 
 impl CognifyResult {
@@ -46,6 +56,7 @@ impl CognifyResult {
             edge_types: vec![],
             embeddings: vec![],
             indexed_fields: IndexedFieldsStats::default(),
+            documents_for_dlt: vec![],
         }
     }
 }
