@@ -1,6 +1,6 @@
 # LIB-06-04 — Route cognify temporal branch through `pipeline::execute`
 
-**Status**: not yet implemented (⬜)
+**Status**: implemented in commit 8ffcd88 (user-locked option (a) on 2026-05-15: temporal-branch Document/DocumentChunk source_pipeline shifted from "cognify_pipeline" to "cognify", matching the shared in-body stamping constant from LIB-06-03; temporal pipeline_name stays "temporal-cognify" at the run-row level via build_temporal_cognify_pipeline's with_name)
 **Owner**: _unassigned_
 **Depends on**: LIB-06-03 (standard cognify executor route + helpers).
 **Blocks**:
@@ -42,17 +42,50 @@ with `build_temporal_cognify_pipeline`.
   ```
 
   Then one `execute()` call.
-- **Decision 3** — Provenance equivalence is verified. The temporal
-  branch today does not appear to call `stamp_provenance` inline (audit
-  via `rg "stamp_provenance" crates/cognify/src/tasks.rs | grep -i
-  temporal`). The executor's `stamp_tree_dyn` is the only stamping path
-  on this branch post-refactor, so temporal-cognify DataPoints *gain*
-  `source_pipeline` / `source_task` / `source_user` etc. stamping for
-  the first time. **Locked decision (2026-05-13): this behaviour change
-  is accepted.** It improves parity with the non-temporal branch and
-  with Python (which stamps provenance on temporal data too). Sub-agent
-  B notes the change loudly in the commit body; no escalation is
-  required.
+- **Decision 3** — Provenance equivalence. **Correction (audit
+  2026-05-15):** `cognify_temporal_inline` already stamps provenance
+  inline on `Document` and `DocumentChunk` DataPoints (see
+  `crates/cognify/src/tasks.rs:2002` and `:2026`), but uses the literal
+  `"cognify_pipeline"` for `source_pipeline` (not `"cognify"` and not
+  `"temporal-cognify"`). The two temporal-specific stages
+  (`extract_temporal_events`, `add_temporal_data_points`) do **not**
+  stamp — `add_temporal_data_points` writes raw `serde_json::Value`
+  graph nodes and vector points rather than `DataPoint` structs, so
+  `stamp_provenance` (which mutates `DataPoint`) is not applicable
+  there.
+
+  **Implication for the refactor:** LIB-06-03 discovered that
+  `stamp_tree_dyn` cannot walk wrapper struct outputs
+  (`ClassifiedDocuments`, `ExtractedChunks`, etc.) and added per-task
+  in-body stamping inside each `make_*_task` (see
+  `make_classify_documents_task` at `:2851` and `make_extract_chunks_task`
+  at `:2873`). Since `build_temporal_cognify_pipeline` reuses
+  `make_classify_documents_task` and `make_extract_chunks_task` from
+  the standard branch (confirmed at `tasks.rs:3243-3253`), the
+  `Document` / `DocumentChunk` DataPoints will **already be stamped**
+  post-refactor — but with `source_pipeline = "cognify"` (the constant
+  `COGNIFY_PIPELINE_STAMP_NAME` at `:2832`), **not**
+  `"temporal-cognify"`. This is a byte-stable *regression* vs. today's
+  inline stamping which uses `"cognify_pipeline"`. **Decision needed
+  before sub-agent B starts:** either (a) keep
+  `COGNIFY_PIPELINE_STAMP_NAME = "cognify"` everywhere — the standard
+  branch already uses it and there are no tests asserting
+  `"cognify_pipeline"` — and document the temporal stamp value as
+  `"cognify"`; or (b) thread a per-pipeline stamp constant through
+  `make_classify_documents_task` / `make_extract_chunks_task` so the
+  temporal branch can stamp `"temporal-cognify"` instead. **Sub-agent A
+  recommends (a)**: simpler, matches the standard branch literally,
+  and the `with_name("temporal-cognify")` on the builder still gives
+  the run-row layer the distinct pipeline name for telemetry.
+
+  `make_extract_temporal_events_task` and
+  `make_add_temporal_data_points_task` (`tasks.rs:3189-3224`) do not
+  currently stamp; their outputs (`ExtractedTemporalEvents`,
+  `CognifyResult`) are wrappers that the executor's `stamp_tree_dyn`
+  also cannot walk. However, since neither produces `DataPoint`
+  instances (graph nodes are raw JSON; vector points carry no
+  provenance columns today), **no in-body stamping is needed for these
+  two tasks**. Sub-agent B confirms by inspection during the refactor.
 - **Decision 5** — Confirm `extract_dlt_fk_edges` does NOT run for
   temporal. Today it doesn't (the temporal branch early-returns at line
   1891). Post-refactor:
@@ -80,11 +113,16 @@ with `build_temporal_cognify_pipeline`.
 - LIB-06-03 committed and verified (cognify E2E + cross-SDK passing on
   the standard branch).
 - `cargo check --all-targets` passes on HEAD.
-- A temporal-cognify test exists (or is added): the implementor
-  identifies an existing temporal test fixture in `crates/cognify/tests/`
-  or in `e2e-cross-sdk/`. If none exists, sub-agent B adds the small
-  fixture described in §4.4 as part of this task — verification is not
-  meaningful without one. No escalation required.
+- A temporal-cognify test already exists at
+  [`crates/cognify/tests/temporal_cognify.rs`](../../crates/cognify/tests/temporal_cognify.rs)
+  (audit 2026-05-15) covering Event/Timestamp node creation and
+  Event-name vector indexing. Sub-agent B treats §4.4 as a no-op (the
+  fixture is in place) and only **adds** an assertion gating Decision
+  3: after a temporal cognify run, `chunks[*].base.source_pipeline ==
+  Some("cognify")` and `chunks[*].base.source_task ==
+  Some("extract_chunks_from_documents")` — equivalent to the inline
+  stamps today (modulo the `"cognify_pipeline"` → `"cognify"` literal
+  change called out in §2 Decision 3).
 
 ## 4. Step-by-step
 
@@ -152,33 +190,26 @@ if !effective_config.temporal_cognify {
 Ok(result)
 ```
 
-Or equivalently, populate `chunks_for_dlt` / `documents_for_dlt` as
-empty for the temporal branch (LIB-06-03's `make_add_data_points_task`
-already only populates them for the standard branch — sub-agent A
-confirms `make_add_temporal_data_points_task` does NOT populate them).
-In that case `extract_dlt_fk_edges` runs unconditionally and is a no-op
-on empty inputs. **Locked preference**: explicit branch — easier to
-read.
+Or equivalently, populate `documents_for_dlt` as empty for the
+temporal branch — `make_add_temporal_data_points_task` calls
+`add_temporal_data_points` which returns `CognifyResult::empty()`
+(`tasks.rs:1035`) or populates only `event`-side fields, so
+`documents_for_dlt` is always empty on the temporal branch (the
+chunk-side input to `extract_dlt_fk_edges` is `result.chunks` which is
+also empty on temporal — `add_temporal_data_points` does not propagate
+chunks). In that case `extract_dlt_fk_edges` runs unconditionally and
+is a no-op on empty inputs. **Locked preference**: explicit branch —
+easier to read.
 
 ### 4.4 Test fixture
 
-If no temporal-cognify test exists today, add one:
-
-```rust
-#[tokio::test]
-#[serial_test::serial]
-async fn cognify_temporal_branch_routes_through_executor() {
-    // Build minimal cognify inputs (one Data item).
-    // Set config.temporal_cognify = true.
-    // Run cognify(...).await.
-    // Assert: result is Ok, vector DB has the expected temporal data
-    //   collection, graph DB has expected event nodes.
-}
-```
-
-The fixture lives in `crates/cognify/tests/` or alongside the existing
-fact-extraction tests. Use the existing `OPENAI_*` env vars for LLM
-access; gate with `#[ignore]` if no key is set so CI continues to work.
+[`crates/cognify/tests/temporal_cognify.rs`](../../crates/cognify/tests/temporal_cognify.rs)
+already exists with two tests:
+`temporal_cognify_creates_event_and_timestamp_nodes` and
+`temporal_cognify_populates_event_name_vector_collection`. Sub-agent B
+runs both pre- and post-refactor to confirm no regression. The §2
+Decision 3 stamping change is gated by adding one provenance assertion
+to one of the existing tests — no new test file is needed.
 
 ### 4.5 Leave the `TODO(LIB-06 follow-up)` comment
 
@@ -221,8 +252,9 @@ scripts/check_all.sh
 
 | Risk | Likelihood | Mitigation |
 |---|---|---|
-| Temporal branch *gains* provenance stamping post-refactor — behaviour change | **High (but accepted)** | Locked 2026-05-13: the change is accepted (Decision 3 in this sub-doc). Sub-agent B documents it loudly in the commit body. No escalation required; no opt-out. |
-| No temporal-cognify test exists — verification is impossible | Medium | Sub-agent A audits via `rg "temporal_cognify\|TemporalCognify" crates/cognify/tests/`. If none, sub-agent B adds the §4.4 fixture as part of this task (locked 2026-05-13). |
+| Temporal branch *changes* provenance stamping literal post-refactor: `source_pipeline` flips from `"cognify_pipeline"` (current inline value) to `"cognify"` (the `COGNIFY_PIPELINE_STAMP_NAME` constant reused from LIB-06-03's `make_classify_documents_task` / `make_extract_chunks_task`) | **Low (accepted)** | No test asserts the `"cognify_pipeline"` literal today (`rg "cognify_pipeline" crates/` returns only the source line and this doc). Sub-agent B documents the change in the commit body. The temporal pipeline's distinct identity is preserved via `with_name("temporal-cognify")` on the builder, which feeds the pipeline-runs row, not the per-DataPoint stamp. |
+| Temporal-specific tasks (`extract_temporal_events`, `add_temporal_data_points`) skip in-body stamping | Low | Their outputs do not contain `DataPoint` instances — graph nodes are raw `serde_json::Value`, vector points have no provenance columns. Sub-agent B verifies during refactor. |
+| ~~No temporal-cognify test exists~~ | n/a | Fixture exists at `crates/cognify/tests/temporal_cognify.rs` (audit 2026-05-15). §4.4 is a no-op except for the new provenance assertion. |
 | `build_temporal_cognify_pipeline` already takes `Option<Arc<DatabaseConnection>>` whereas the standard `build_cognify_pipeline` does too — the convenience function's `database: Arc<DatabaseConnection>` (required) gets wrapped in `Some(...)` to pass through. No semantic change. | Low | Trivial. |
 | Cross-SDK regression on the standard branch due to a refactor side effect | Low — LIB-06-03 already covered this gate | Re-run sub-agent C's full verification for LIB-06-03. |
 | Temporal pipeline output shape differs from `CognifyResult` | Medium | `make_add_temporal_data_points_task` returns `CognifyResult` already (confirmed at line 2887 of `tasks.rs`). `extract_cognify_outputs` reuses cleanly. |
