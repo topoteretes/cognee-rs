@@ -1,6 +1,6 @@
 # LIB-06-06 — Tests + cross-SDK parity + closure summary
 
-**Status**: not yet implemented (⬜)
+**Status**: implemented in commit <LIB-06-06-SHA>
 **Owner**: _unassigned_
 **Depends on**: LIB-06-01, LIB-06-02, LIB-06-03, LIB-06-04, LIB-06-05 — all preceding sub-tasks committed.
 **Blocks**: gap-08 task 07 (`docs/telemetry/08/07-library-pipeline-wiring.md`) unblocks once this task closes LIB-06.

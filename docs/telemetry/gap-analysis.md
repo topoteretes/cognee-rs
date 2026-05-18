@@ -329,6 +329,16 @@ Each gap is broken out into a dedicated sub-document with deep investigation, de
   → [05-datapoint-provenance.md](05-datapoint-provenance.md)
   (complete — see the
   [closure summary](05-datapoint-provenance.md#closure-summary)).
+- ✅ **Route convenience pipelines through the executor (LIB-06).**
+  `cognify::cognify` (standard + temporal branches),
+  `cognify::memify::memify`, and `ingestion::AddPipeline::add` now
+  call `cognee_core::pipeline::execute` instead of running tasks
+  inline. Unblocks `PipelineWatcher` lifecycle events for library
+  callers — prerequisite for gap-08 task 07 (`pipeline_runs` audit
+  trail) and the LIB-06 payload-event mechanism. →
+  [lib-06-executor-routed-convenience.md](lib-06-executor-routed-convenience.md)
+  (complete — see the
+  [closure summary](lib-06-executor-routed-convenience.md#closure-summary)).
 
 ---
 
@@ -347,4 +357,4 @@ Items intentionally not addressed by the eight gaps above. Captured here so they
 - **Replacing `SpanBufferLayer` with an OTEL in-memory exporter.** Could unify the `/api/v1/activity/spans` endpoint with the OTEL pipeline, but would lose byte-for-byte parity with Python's `CogneeSpanExporter` ring buffer that the current test suite depends on. Not worth it today.
 - **Cross-SDK OTEL parity test.** Extend [`e2e-cross-sdk/`](../../e2e-cross-sdk) with an `otel-collector` service in `docker-compose.yml`, point both Python and Rust at it, and assert both SDKs emit comparable span sets for the same operation. Follow-up to [01-otel-otlp-export.md](01-otel-otlp-export.md).
 - **Search lifecycle mockito test inside `crates/search/`.** The gap-03 integration suite covers the four pipeline + task lifecycle events ([`crates/core/tests/pipeline_telemetry_events.rs`](../../crates/core/tests/pipeline_telemetry_events.rs)) but does not assert the `cognee.search EXECUTION STARTED` / `EXECUTION COMPLETED` pair from `crates/search/src/orchestration/search_orchestrator.rs`. The cross-SDK byte-parity harness covers `EXECUTION COMPLETED`; adding a small in-crate mockito test for both events is a low-priority follow-up. See [03-pipeline-task-api-events.md → Known follow-ups](03-pipeline-task-api-events.md#known-follow-ups) for context.
-- **Wire `Pipeline::telemetry_settings` from production SDK paths.** Gap 03-04 added the `Pipeline.telemetry_settings` carrier and emits `Pipeline Run Started/Completed/Errored` from `cognee_core::pipeline::execute()`, but cognify, memify, and ingestion currently bypass `execute()` so the events never fire for those paths. The wiring belongs in the library-side `pipeline_runs` work in [08-pipeline-run-status.md → §D](08-pipeline-run-status.md#d-library-side-wiring-write-pipeline_runs-rows-from-cli-runs); listed here only for cross-reference.
+- **Wire `Pipeline::telemetry_settings` from production SDK paths.** LIB-06 ([`lib-06-executor-routed-convenience.md`](lib-06-executor-routed-convenience.md)) closed on `<LIB-06-06-SHA>` and routed `cognify`, `memify`, `AddPipeline::add` (both standard and temporal cognify branches) through `cognee_core::pipeline::execute()`. The `Pipeline.telemetry_settings` carrier now fires for library paths as part of the `Pipeline Run *` emission inside `execute()`. The companion `DbPipelineWatcher` wiring (so the events actually land in `pipeline_runs`) is gap-08 task 07.

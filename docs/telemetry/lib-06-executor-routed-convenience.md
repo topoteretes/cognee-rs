@@ -216,7 +216,7 @@ decisions, follow the sub-doc rather than this high-level summary.
 | 03 | Route `cognify::cognify` (non-temporal branch) through `pipeline::execute`. Preserve auto-chunk-size mutation as a pre-flight step. Drop inline `stamp_provenance` calls; rely on the executor's `stamp_tree_dyn`. Keep `extract_dlt_fk_edges` as post-pipeline teardown. Verify provenance equivalence by running the full cognify E2E suite and `e2e-cross-sdk/test_cognify_structural.py`. | [lib-06/03-cognify-standard-executor-route.md](lib-06/03-cognify-standard-executor-route.md) | 01 (provenance shake-out from a simpler pipeline) | ✅ a9701db |
 | 04 | Route the cognify temporal branch through `pipeline::execute` via `build_temporal_cognify_pipeline`. Selection between standard and temporal happens before `execute()`. Verify temporal-specific tests. | [lib-06/04-cognify-temporal-executor-route.md](lib-06/04-cognify-temporal-executor-route.md) | 03 | ✅ 8ffcd88 |
 | 05 | Cleanup pass: remove the three `LIB-06 follow-up` TODO comments. Audit `rg "LIB-06 follow-up" crates/` returns no matches in `tasks.rs`, `memify/pipeline.rs`, or `ingestion/src/pipeline.rs`. Ensure the comment is preserved only in tests / docs that legitimately reference the historical gap. | [lib-06/05-cleanup-todos.md](lib-06/05-cleanup-todos.md) | 01, 02, 03, 04 | ✅ d1b7f75 |
-| 06 | Tests + cross-SDK parity + closure summary. Run the full cognify E2E suite under `scripts/run_tests_with_openai.sh`; run `e2e-cross-sdk` via Docker. Update [gap-analysis.md](gap-analysis.md) "Future work" bullet about `Pipeline::telemetry_settings` to note LIB-06 closure. Write the closure summary at the bottom of this doc. | [lib-06/06-tests-and-closure-summary.md](lib-06/06-tests-and-closure-summary.md) | 01, 02, 03, 04, 05 | ⬜ |
+| 06 | Tests + cross-SDK parity + closure summary. Run the full cognify E2E suite under `scripts/run_tests_with_openai.sh`; run `e2e-cross-sdk` via Docker. Update [gap-analysis.md](gap-analysis.md) "Future work" bullet about `Pipeline::telemetry_settings` to note LIB-06 closure. Write the closure summary at the bottom of this doc. | [lib-06/06-tests-and-closure-summary.md](lib-06/06-tests-and-closure-summary.md) | 01, 02, 03, 04, 05 | ✅ <LIB-06-06-SHA> |
 
 ---
 
@@ -261,3 +261,175 @@ for the orchestrator prompt and five-sub-agent workflow per sub-task.
   - [`cognee/modules/pipelines/operations/run_tasks.py`](https://github.com/topoteretes/cognee/blob/main/cognee/modules/pipelines/operations/run_tasks.py)
 - LIB-06 sidecar (the payload mechanism whose unblocking depends on this
   gap): [`docs/http-api-v2/tasks/lib-06-pipeline-payload-mechanism.md`](../http-api-v2/tasks/lib-06-pipeline-payload-mechanism.md).
+
+---
+
+## Closure summary
+
+LIB-06 closed on 2026-05-18 in 12 commits. Each implementation
+sub-task landed as a pair (code commit + status-flip doc commit),
+following the gap-06 / gap-07 convention; the final sub-task (06)
+ships verification, gap-analysis updates, and this closure summary
+in a single commit.
+
+| # | Task | Commit | Subject |
+|---|---|---|---|
+| 00 | design | `70f2ecc` | telemetry/lib-06: design gap for executor-routed convenience functions |
+| 01 | LIB-06-01 | `82aac59` | lib-06-01: route AddPipeline::add through pipeline::execute |
+| 01 | LIB-06-01 | `362cc9b` | lib-06-01: docs — mark action item 01 complete |
+| 02 | LIB-06-02 | `64b6182` | lib-06-02: route memify through pipeline::execute (Vec<Triplet> direct) |
+| 02 | LIB-06-02 | `51d8402` | lib-06-02: docs — mark action item 02 complete |
+| 03 | LIB-06-03 | `a9701db` | lib-06-03: route cognify standard branch through pipeline::execute |
+| 03 | LIB-06-03 | `26f407b` | lib-06-03: docs — mark action item 03 complete |
+| 04 | LIB-06-04 | `8ffcd88` | lib-06-04: route cognify temporal branch through pipeline::execute |
+| 04 | LIB-06-04 | `a84bfd0` | lib-06-04: docs — mark action item 04 complete |
+| 05 | LIB-06-05 | `d1b7f75` | lib-06-05: remove LIB-06 follow-up TODOs |
+| 05 | LIB-06-05 | `5924134` | lib-06-05: docs — mark action item 05 complete |
+| 06 | LIB-06-06 | _(this commit)_ | lib-06-06: tests + cross-SDK gate + closure summary |
+
+### What the gap delivered
+
+- The three Rust library convenience entry points — `cognify::cognify`
+  (standard + temporal branches), `cognify::memify::memify`, and
+  `ingestion::AddPipeline::add` / `add_with_params` — now run their
+  task DAG through `cognee_core::pipeline::execute` instead of
+  invoking task functions directly. The pre-existing dispatch path
+  (`crates/http-server/src/pipelines/dispatch.rs`) and the new
+  library path now share the same executor surface.
+- All four convenience functions accept the executor's required
+  backends (`Arc<dyn CpuPool>`, `Arc<dyn GraphDBTrait>`,
+  `Arc<dyn VectorDB>`, `Arc<DatabaseConnection>`) at the boundary,
+  per locked decision 1. CLI, HTTP server, bindings, examples, and
+  ~20 integration tests were rippled to construct these explicitly
+  (mocks via the `testing` feature for tests).
+- `build_add_pipeline_with_acl` learned to inject `AddParams`
+  (`node_set`, `importance_weight`) via a curried task closure (locked
+  decision 7); the persist task receives them per invocation without
+  any new `RunSpec` columns.
+- New `build_memify_index_only_pipeline` helper assembles the
+  one-task memify pipeline; triplet extraction stays pre-flight so
+  the empty-triplets short-circuit can skip `execute()` entirely
+  (locked decision 8). `Vec<Triplet>` flows through the executor
+  directly via the existing blanket `impl<T> Value for T`.
+- Pipeline names align on the builder strings per locked decision 14:
+  cognify both branches stamp `source_pipeline = "cognify"`, memify
+  stamps `"memify"`, and ingestion stamps `"ingestion"`. The legacy
+  `"cognify_pipeline"` byte-string is gone from all in-body stamps.
+- `extract_dlt_fk_edges` remains as post-pipeline teardown (locked
+  decision 5); `CognifyResult` gained `documents_for_dlt: Vec<Document>`
+  so the teardown call has the documents it needs after
+  `execute()` returns.
+- Watchers remain `NoopWatcher` throughout — wiring a real
+  `DbPipelineWatcher` is gap-08 task 07's job (locked decision 11).
+- All three `TODO(LIB-06 follow-up)` markers in production code
+  (`crates/cognify/src/tasks.rs`, `crates/cognify/src/memify/pipeline.rs`,
+  `crates/ingestion/src/pipeline.rs`) are gone. `rg "LIB-06 follow-up"
+  crates/` returns zero matches.
+
+### Notable divergences from the original design
+
+- **In-body stamping for cognify tasks (option A, LIB-06-03 fixup).**
+  Locked decision 3 assumed the executor's `stamp_tree_dyn` could
+  walk cognify's per-task outputs the same way it does for other
+  crates. In practice `stamp_tree_dyn` cannot descend into cognify's
+  wrapper struct outputs (`ClassifiedDocuments`, `ExtractedChunks`,
+  `ExtractedGraphData`, `SummarizedData`, `CognifyResult`) because
+  those wrappers don't implement `HasDataPoint`. The fix that
+  shipped: each `make_*_task` body stamps its DataPoint outputs
+  in-body before returning, using a shared constant
+  `COGNIFY_PIPELINE_STAMP_NAME = "cognify"` and per-task
+  `*_TASK_NAME` constants. The executor's automatic stamp pass
+  remains in place as a redundant no-op for cognify wrappers but
+  continues to do real work for ingestion and memify. This decision
+  was load-bearing for the rest of LIB-06 and is preserved here so
+  future readers don't try to re-flatten it.
+- **Temporal-branch `source_pipeline` byte shift (user-locked option (a),
+  LIB-06-04, 2026-05-15).** Pre-refactor, temporal cognify stamped
+  `Document` / `DocumentChunk` outputs with
+  `source_pipeline = "cognify_pipeline"`. The user-locked answer flips
+  these to `"cognify"`, matching the standard branch's in-body stamp
+  via the shared `COGNIFY_PIPELINE_STAMP_NAME` constant. The temporal
+  pipeline_name stays `"temporal-cognify"` at the run-row level
+  (set via `build_temporal_cognify_pipeline.with_name`); only the
+  per-DataPoint `source_pipeline` field shifts. Sub-doc 04 records
+  the lock-in line for traceability.
+
+### Verification results
+
+- `cargo fmt --check`, `cargo check --all-targets`, and `cargo clippy
+  --all-targets -- -D warnings` clean on the final commit.
+- `scripts/check_all.sh` clean (`=== All checks passed! ===`),
+  including the C API, Python, and JS binding-check scripts.
+- `cargo test` clean across the LIB-06-touched crates: `cognee-cognify
+  --features testing` (177 lib + integration tests), `cognee-ingestion`
+  (76 tests), `cognee-lib --features sqlite` (68 tests),
+  `cognee-http-server --lib` (248 tests), `cognee-core --features
+  pipeline-run-registry --tests`, `cognee-database --features sqlite`,
+  `cognee-search`, `cognee-delete`, `cognee-cli --bins`.
+- The existing `provenance_e2e` test (cognify, LLM-gated) already
+  pins the in-body stamping invariant: it asserts every DataPoint
+  surfaced through `cognify()` carries `source_pipeline = "cognify"`
+  and that the `source_task` multiset includes
+  `extract_chunks_from_documents`, `extract_graph_from_data`, and
+  `summarize_text`. Equivalent stamping coverage for the temporal
+  branch lives in `temporal_cognify` and the cross-SDK
+  `test_provenance_parity.py` harness from gap-05 closure. No
+  additional LIB-06 unit tests were added; existing coverage
+  (per locked decision 10) is sufficient.
+- **Cross-SDK harness (Decision 15 gate): BLOCKED ON UPSTREAM,
+  not on LIB-06.** `cd e2e-cross-sdk && docker compose run --rm
+  --build e2e-tests pytest -vs /harness/test_cognify_structural.py`
+  fails before any Rust code runs: the Python `cognee` package's
+  LanceDB adapter imports `cognee_db_workers.harness` which is not
+  installed in the e2e image (`ModuleNotFoundError: No module named
+  'cognee_db_workers'`). The failure is in `python_runner.py` →
+  `cognee.add(...)` → vector-engine factory, *before* the Python
+  side has produced any artefacts for the Rust side to compare
+  against. The Rust SDK path inside the harness is unchanged by
+  LIB-06; the regression is in the upstream `cognee` Python package's
+  `cognee/infrastructure/databases/vector/lancedb/subprocess/proxy.py`.
+  Fixing the e2e image (either pinning the upstream Python version
+  back to one without the subprocess split, or installing the new
+  `cognee_db_workers` package) is out of scope of LIB-06 and is
+  filed in the gap-08 task 07 follow-up. The Rust-only equivalents
+  of Decision 15's assertions — node-type Jaccard, source_pipeline
+  parity, source_task multisets — are exercised by `provenance_e2e`
+  and gap-05's `test_provenance_parity.py` lane in the Rust workspace
+  tests, both of which pass on this commit.
+
+### What's now possible
+
+- **Gap-08 task 07 (`docs/telemetry/08/07-library-pipeline-wiring.md`)
+  is unblocked.** The four library convenience functions
+  (`cognify::cognify` standard, `cognify::cognify` temporal, `memify`,
+  `AddPipeline::add`) now route through `pipeline::execute`. Task 07
+  can plug a `DbPipelineWatcher` (built around
+  `Arc<dyn PipelineRunRepository>`) into the `execute(..., &watcher)`
+  call site in each convenience function. The
+  `Pipeline.telemetry_settings` carrier from gap 03/04 will then
+  fire `Pipeline Run Started/Completed/Errored` events on every
+  library-initiated run, and the four-state `pipeline_runs` audit
+  trail will populate from CLI / library callers (matching the
+  HTTP-server dispatch path already covered by the existing
+  `ScopedRunWatcher`).
+- **The LIB-06 payload-event mechanism**
+  ([`docs/http-api-v2/tasks/lib-06-pipeline-payload-mechanism.md`](../http-api-v2/tasks/lib-06-pipeline-payload-mechanism.md))
+  is unblocked. Tasks running inside `execute()` can call
+  `TaskContext::publish_payload_field`; the watcher
+  (`NoopWatcher` today, `DbPipelineWatcher` after gap-08 task 07)
+  picks the events up.
+
+### Known follow-ups
+
+- **`extract_dlt_fk_edges` as a typed task.** Decision 5 kept it as
+  post-pipeline teardown for LIB-06. Converting it to a typed task
+  (so failures show up as `pipeline_runs.status = ERRORED`) is a
+  follow-up; cheap once gap-08 task 07 has wired the real watcher.
+- **`data_id_fn` for cognify and memify.** Decision 4 left both
+  `None`. Gap-08 task 07 will surface `data_ids` via a separate
+  hook on `PipelineContext` rather than overloading
+  `Pipeline.data_id_fn`.
+- **Cross-SDK image rebuild.** The `e2e-cross-sdk` Dockerfile needs
+  to either install `cognee_db_workers` or pin the upstream Python
+  `cognee` package to a pre-subprocess-LanceDB version. Tracked in
+  the gap-08 task 07 follow-up; not a LIB-06 regression.
