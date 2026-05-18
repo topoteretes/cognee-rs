@@ -486,7 +486,7 @@ high-level summary.
 | 07 | Wire `Arc<dyn PipelineRunRepository>` through `cognify`, `memify`, ingestion (`AddPipeline`) entry points. Add `NoopPipelineRunRepository` to `cognee-database` as the default. Update CLI subcommands (`cognify`, `memify`, `add`, `add_and_cognify`, `run_sequence`) to construct the real repo from the SQLite connection. | [08/07-library-pipeline-wiring.md](08/07-library-pipeline-wiring.md) | 04 | ✅ f64fcac |
 | 08 | Implement `check_pipeline_run_qualification` at the cognify entry point (and memify): read latest status via `get_pipeline_run_by_dataset`; short-circuit on `Completed`, reject on `Started`. Emit an `AlreadyCompleted` `RunEvent` for the short-circuit path. | [08/08-check-qualification.md](08/08-check-qualification.md) | 06, 07 | ✅ 506f0d1 |
 | 09 | Tests: extend `crates/database/tests/pipeline_run_repository.rs` (four-state round-trip, dataset_id=None, exact `run_info` shape, reset helper); new `crates/core/tests/pipeline_run_lifecycle.rs` (executor emits four rows); new `crates/http-server/tests/activity_pipeline_runs.rs`; new `e2e-cross-sdk/test_pipeline_runs_parity.py`. | [08/09-tests.md](08/09-tests.md) | 02–08 | ✅ 08c5140 |
-| 10 | Docs + CI: update `docs/telemetry/gap-analysis.md` row for §7 (if applicable) to point at gap 08 closure; document the four-state lifecycle in `docs/http-server/pipelines.md`; write the "Closure summary" section at the bottom of this doc. | [08/10-docs-and-ci.md](08/10-docs-and-ci.md) | 01–09 | ✅ <SHA TBD> |
+| 10 | Docs + CI: update `docs/telemetry/gap-analysis.md` row for §7 (if applicable) to point at gap 08 closure; document the four-state lifecycle in `docs/http-server/pipelines.md`; write the "Closure summary" section at the bottom of this doc. | [08/10-docs-and-ci.md](08/10-docs-and-ci.md) | 01–09 | ✅ a9db0c4 |
 
 ---
 
@@ -602,8 +602,8 @@ documentation, and this closure summary in a single commit.
 | 08-08 | `5f23fb0` | telemetry/pipeline-runs-08-08: docs — mark action item 08 complete | 08-08 |
 | 08-09 | `08c5140` | telemetry/pipeline-runs-08-09: add four-state lifecycle test coverage | 08-09 |
 | 08-09 | `0f9e488` | telemetry/pipeline-runs-08-09: docs — mark action item 09 complete | 08-09 |
-| 08-10 | _(this commit)_ | telemetry/pipeline-runs-08-10: closure summary + docs + CI | 08-10 |
-| 08-10 | _(doc-flip)_ | telemetry/pipeline-runs-08-10: docs — mark action item 10 complete | 08-10 |
+| 08-10 | `a9db0c4` | telemetry/pipeline-runs-08-10: closure summary + docs + CI | 08-10 |
+| 08-10 | _(this doc-flip commit)_ | telemetry/pipeline-runs-08-10: docs — mark action item 10 complete | 08-10 |
 
 ### Sibling gap opened mid-stream
 
