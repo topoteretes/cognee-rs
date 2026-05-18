@@ -1,6 +1,6 @@
 # Task 08-08 — `check_pipeline_run_qualification` gate
 
-**Status**: not yet implemented (⬜)
+**Status**: implemented in commit 506f0d1 (Qualification helper landed at `crates/cognify/src/qualification.rs`; cognify uses `pipeline_name = "cognify"` for standard and `"temporal-cognify"` for the temporal branch; memify gates only when `dataset_id.is_some()` so ad-hoc custom-data memify keeps working; CognifyResult/MemifyResult gained `already_completed` + `prior_pipeline_run_id` fields; `DefaultPipelineRunRegistry::publish_already_completed(run_id)` helper exists for HTTP — the cognify/memify HTTP routes are stubs today, so the helper is wire-ready but not yet called)
 **Owner**: _unassigned_
 **Depends on**: 08-06, 08-07.
 **Blocks**:
