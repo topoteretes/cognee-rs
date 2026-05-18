@@ -93,6 +93,25 @@ The mapping to durable status:
 
 The HTTP DTO layer in `crates/http-server/src/dto/pipeline_run.rs` owns both translations (`PipelineRunStatus` ↔ `DATASET_PROCESSING_*`, registry event ↔ `PipelineRun*`).
 
+### 3.4 Four-state lifecycle on the `pipeline_runs` table
+
+After [telemetry gap 08](../telemetry/08-pipeline-run-status.md), every pipeline (cognify, memify, ingestion) — whether invoked through the HTTP server, the CLI, or as a library call — writes the full Python-faithful four-state trail to the `pipeline_runs` table. Each transition is a **new row** sharing the same `pipeline_run_id`; the latest row by `created_at` defines the current state.
+
+```
+INITIATED → STARTED → (COMPLETED | ERRORED)
+```
+
+| State | When written | `run_info` JSON body |
+|---|---|---|
+| `INITIATED` | `cognee_core::pipeline::execute` emits before the first task begins (Option A; Decision 1). | `{}` |
+| `STARTED` | `pipeline::execute` emits as the first task starts running. | `{"data": ["<uuid>", "<uuid>", …]}` or `{"data": "None"}` when the input has no `Data` items. |
+| `COMPLETED` | `pipeline::execute` emits after the last task succeeds. | Same shape as `STARTED`. |
+| `ERRORED` | `pipeline::execute` emits when any task fails (top-level error handler). | `{"data": [...], "error": "<message>"}` |
+
+`data_info` (the JSON serialised under `"data"`) is byte-identical to Python's helper: a `[String]` array of stringified `Data.id`s for `Vec<Data>` inputs, the literal string `"None"` for empty inputs, and `format!("{:?}", input)` for repr-fallback inputs. The helper lives at `cognee_core::pipeline_run_registry::data_info`.
+
+`GET /api/v1/activity/pipeline-runs` projects the latest row per `(pipeline_name, dataset_id)` and returns the `DATASET_PROCESSING_*` wire string for `status`. The library-side API surface (`reset_pipeline_run_status`, `reset_dataset_pipeline_run_status`, the reader trio on `PipelineRunRepository`, and the `check_pipeline_run_qualification` gate) is documented under [`docs/telemetry/08-pipeline-run-status.md` § Closure summary](../telemetry/08-pipeline-run-status.md#closure-summary).
+
 ## 4. Identifiers
 
 ### 4.1 `pipeline_id` (deterministic)

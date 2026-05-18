@@ -486,7 +486,7 @@ high-level summary.
 | 07 | Wire `Arc<dyn PipelineRunRepository>` through `cognify`, `memify`, ingestion (`AddPipeline`) entry points. Add `NoopPipelineRunRepository` to `cognee-database` as the default. Update CLI subcommands (`cognify`, `memify`, `add`, `add_and_cognify`, `run_sequence`) to construct the real repo from the SQLite connection. | [08/07-library-pipeline-wiring.md](08/07-library-pipeline-wiring.md) | 04 | ✅ f64fcac |
 | 08 | Implement `check_pipeline_run_qualification` at the cognify entry point (and memify): read latest status via `get_pipeline_run_by_dataset`; short-circuit on `Completed`, reject on `Started`. Emit an `AlreadyCompleted` `RunEvent` for the short-circuit path. | [08/08-check-qualification.md](08/08-check-qualification.md) | 06, 07 | ✅ 506f0d1 |
 | 09 | Tests: extend `crates/database/tests/pipeline_run_repository.rs` (four-state round-trip, dataset_id=None, exact `run_info` shape, reset helper); new `crates/core/tests/pipeline_run_lifecycle.rs` (executor emits four rows); new `crates/http-server/tests/activity_pipeline_runs.rs`; new `e2e-cross-sdk/test_pipeline_runs_parity.py`. | [08/09-tests.md](08/09-tests.md) | 02–08 | ✅ 08c5140 |
-| 10 | Docs + CI: update `docs/telemetry/gap-analysis.md` row for §7 (if applicable) to point at gap 08 closure; document the four-state lifecycle in `docs/http-server/pipelines.md`; write the "Closure summary" section at the bottom of this doc. | [08/10-docs-and-ci.md](08/10-docs-and-ci.md) | 01–09 | ⬜ |
+| 10 | Docs + CI: update `docs/telemetry/gap-analysis.md` row for §7 (if applicable) to point at gap 08 closure; document the four-state lifecycle in `docs/http-server/pipelines.md`; write the "Closure summary" section at the bottom of this doc. | [08/10-docs-and-ci.md](08/10-docs-and-ci.md) | 01–09 | ✅ <SHA TBD> |
 
 ---
 
@@ -568,3 +568,215 @@ high-level summary.
 - Adjacent:
   - [`docs/http-server/pipelines.md`](../http-server/pipelines.md)
   - [`docs/http-api-v2/tasks/lib-06-pipeline-payload-mechanism.md`](../http-api-v2/tasks/lib-06-pipeline-payload-mechanism.md)
+
+---
+
+## Closure summary
+
+Gap 08 closed in 22 commits (plus one pre-flight fix and one mid-stream
+decision-wording correction). The table below lists every commit in
+landing order — each sub-task lands as a pair (implementation
+commit + sub-doc status flip), following the gap-06 / gap-07
+convention. The final task ships docs, the four-state lifecycle
+documentation, and this closure summary in a single commit.
+
+| # | Commit | Subject | Task |
+|---|---|---|---|
+| pre-flight | `4f045f2` | database/tests: fix permissions_repository seed + fmt drift on main | (pre-flight to unblock the runbook; not a gap-08 task) |
+| 08-00 | `9cd0d67` | telemetry/pipeline-runs-08: land plan docs and mark 08-01 complete | 08-00 (plan-doc commit; bundled with 08-01 doc-flip) |
+| 08-01 | `526c892` | telemetry/pipeline-runs-08-01: make pipeline_run.dataset_id nullable | 08-01 |
+| 08-02 | `f05c04e` | telemetry/pipeline-runs-08-02: add data_info helper + RunSpec/PipelineRunInfo data_ids plumbing | 08-02 |
+| 08-02 | `60826a4` | telemetry/pipeline-runs-08-02: docs — mark action item 02 complete | 08-02 |
+| 08-03 | `edd47d5` | telemetry/pipeline-runs-08-03: align run_info JSON shape with Python | 08-03 |
+| 08-03 | `528f1ce` | telemetry/pipeline-runs-08-03: docs — mark action item 03 complete | 08-03 |
+| 08-04 | `29a99f8` | telemetry/pipeline-runs-08-04: emit INITIATED from pipeline::execute | 08-04 |
+| 08-04 | `63e3bf1` | telemetry/pipeline-runs-08-04: docs — mark action item 04 complete | 08-04 |
+| 08-05 | `ee4a4b2` | telemetry/pipeline-runs-08-05: reset helpers + delete/CLI plumbing | 08-05 |
+| 08-05 | `1a9ab9b` | telemetry/pipeline-runs-08-05: docs — mark action item 05 complete | 08-05 |
+| 08-06 | `78c73c7` | telemetry/pipeline-runs-08-06: add three reader methods to PipelineRunRepository | 08-06 |
+| 08-06 | `205bc8a` | telemetry/pipeline-runs-08-06: docs — mark action item 06 complete | 08-06 |
+| decision-fix | `56f020e` | telemetry/pipeline-runs-08: correct Decision 11 wording on DbPipelineWatcher | (in-stream decision-text correction once LIB-06 design landed) |
+| 08-07 | `f64fcac` | telemetry/pipeline-runs-08-07: wire DbPipelineWatcher through library convenience entry points | 08-07 |
+| 08-07 | `ade75cd` | telemetry/pipeline-runs-08-07: docs — mark action item 07 complete | 08-07 |
+| 08-08 | `506f0d1` | telemetry/pipeline-runs-08-08: add check_pipeline_run_qualification to cognify + memify | 08-08 |
+| 08-08 | `5f23fb0` | telemetry/pipeline-runs-08-08: docs — mark action item 08 complete | 08-08 |
+| 08-09 | `08c5140` | telemetry/pipeline-runs-08-09: add four-state lifecycle test coverage | 08-09 |
+| 08-09 | `0f9e488` | telemetry/pipeline-runs-08-09: docs — mark action item 09 complete | 08-09 |
+| 08-10 | _(this commit)_ | telemetry/pipeline-runs-08-10: closure summary + docs + CI | 08-10 |
+| 08-10 | _(doc-flip)_ | telemetry/pipeline-runs-08-10: docs — mark action item 10 complete | 08-10 |
+
+### Sibling gap opened mid-stream
+
+Task 08-07 ("wire `Arc<dyn PipelineRunRepository>` through the library
+convenience entry points") discovered that `cognify::cognify`,
+`cognify::memify::memify`, and `ingestion::AddPipeline::add` ran their
+tasks **inline** rather than through `cognee_core::pipeline::execute`,
+so a `DbPipelineWatcher` plumbed in at the library API surface would
+never receive watcher events. Closing this required its own design and
+implementation pass landed as **LIB-06** (parent doc:
+[`lib-06-executor-routed-convenience.md`](lib-06-executor-routed-convenience.md);
+closed on commit `b5ccc96`, summary-SHA fill-in on `da04bd6`). LIB-06
+routed the three convenience functions through `pipeline::execute`,
+giving 08-07 the watcher path it needed. The
+[gap-analysis.md "Completed work" bullet](gap-analysis.md#completed-work)
+records the closure.
+
+### What gap 08 delivered
+
+- **Schema parity (08-01).** `pipeline_runs.dataset_id` is now nullable
+  and the FK to `datasets(id)` is gone. SQLite migration rebuilds the
+  table (no in-place DROP FK); Postgres uses
+  `ALTER TABLE … DROP CONSTRAINT … DROP NOT NULL`. The silent-drop
+  branch in `SeaOrmPipelineRunRepository` (formerly at
+  `sea_orm_impl.rs:54-58`) that would discard ad-hoc runs with
+  `dataset_id = None` is removed. Domain `PipelineRun.dataset_id`
+  becomes `Option<Uuid>` and every downstream consumer (HTTP
+  activity router, `list_recent_with_attribution`, conversions)
+  threads the optional through.
+- **`data_info` helper (08-02).** New
+  `cognee_core::pipeline_run_registry::data_info::data_info(input)`
+  mirrors Python byte-for-byte: `[String]` for `Vec<Data>` inputs
+  (each item `data.id.to_string()`), the literal string `"None"`
+  for empty inputs, and `format!("{:?}", input)` for repr-fallback
+  inputs. `RunSpec` and `PipelineRunInfo` gain `data_ids: Vec<Uuid>`
+  carriers populated by the dispatch site.
+- **`run_info` shape alignment (08-03).** `ScopedRunWatcher` and the
+  library-side `DbPipelineWatcher` now write
+  `Some(json!({"data": data_info}))` on `Started` / `Completed` and
+  `Some(json!({"data": data_info, "error": msg}))` on `Errored`
+  rather than `None` / `{"error": …}` — wire-identical to Python.
+  `INITIATED` rows carry `run_info = {}`.
+- **`INITIATED` from the executor (08-04, Decision 1, Option A).**
+  `cognee_core::pipeline::execute` emits `Initiated` before the first
+  task runs via a new `PipelineWatcher::on_pipeline_run_initiated`
+  hook (default no-op). The watcher persists the row; non-HTTP
+  callers (CLI cognify/memify/ingestion, embedded library users)
+  automatically get the four-state trail without registering through
+  the HTTP server's registry.
+- **Reset helpers (08-05).** `cognee_lib::api::pipeline_runs::{
+  reset_pipeline_run_status, reset_dataset_pipeline_run_status}`
+  match Python's API. The `pipeline_id` / `pipeline_run_id`
+  derivation helpers were promoted from `http-server/dispatch.rs`
+  into `cognee_core::pipeline_run_registry::ids` so the library and
+  delete crates can use them without dragging in the HTTP server.
+  Wired into `crates/delete/src/` and the CLI delete subcommand.
+- **Reader helpers (08-06).** `PipelineRunRepository` gains
+  `get_pipeline_run(pipeline_run_id) -> Option<PipelineRun>`,
+  `get_pipeline_run_by_dataset(dataset_id, pipeline_name) ->
+  Option<PipelineRun>` (latest by `created_at`), and
+  `get_pipeline_runs_by_dataset(dataset_id) -> Vec<PipelineRun>`
+  (one latest row per pipeline name). Existing `latest_status`
+  preserved unchanged.
+- **Library-pipeline wiring (08-07).** `cognify::cognify`,
+  `cognify::memify::memify`, and `ingestion::AddPipeline::add`
+  accept `Arc<dyn PipelineRunRepository>` (default
+  `NoopPipelineRunRepository` for embedded users with no DB).
+  A new `DbPipelineWatcher` in
+  `crates/core/src/pipeline_run_registry/db_watcher.rs` wraps the
+  repository and is passed as the `watcher` to `pipeline::execute`.
+  CLI subcommands (`cognify`, `memify`, `add`, `add_and_cognify`,
+  `run_sequence`) construct the real SeaORM repo. This is the
+  payoff of the **LIB-06 sibling gap** — without LIB-06's executor
+  routing, the watcher would never have seen library runs.
+- **Qualification gate (08-08).** `cognify(...)` and `memify(...)`
+  consult `check_pipeline_run_qualification` before running tasks.
+  `Completed` short-circuits and returns `CognifyResult {
+  already_completed: true, .. }` without re-running; `Started`
+  rejects with `CognifyError::PipelineAlreadyRunning` /
+  `MemifyError::PipelineAlreadyRunning`. Ingestion is intentionally
+  excluded (Decision 3) because Python doesn't gate it. Re-cognify
+  is unlocked by calling `reset_pipeline_run_status` first.
+- **Test coverage (08-09).** Four-state round-trips in
+  `crates/database/tests/pipeline_run_repository.rs`, executor-level
+  lifecycle in `crates/core/tests/pipeline_run_lifecycle.rs`, HTTP
+  surface in `crates/http-server/tests/activity_pipeline_runs.rs`,
+  reset-helper assertions in `crates/lib/tests/pipeline_runs_reset.rs`
+  (kept in `cognee-lib` to avoid a `cognee-database → cognee-lib`
+  cycle), CLI E2E in `crates/cli/tests/cli_pipeline_runs.rs`, and a
+  cross-SDK parity test scaffold in
+  `e2e-cross-sdk/harness/test_pipeline_runs_parity.py`.
+
+### Notable design pivots
+
+- **Option A in-body stamping in cognify tasks (LIB-06-03).** When
+  routing the standard cognify branch through `pipeline::execute`,
+  LIB-06 task 03 found that the executor's outer-loop status writes
+  could not pick up per-task DataPoint provenance unless the tasks
+  themselves stamped fields **inside** their bodies. Option A
+  (in-body stamping) was load-bearing for gap-05 provenance parity
+  and is recorded in
+  [`lib-06-executor-routed-convenience.md`](lib-06-executor-routed-convenience.md).
+- **Option (a) temporal `source_pipeline` shift.** The temporal
+  cognify branch (LIB-06-04) keeps the same `pipeline_name`
+  (`"cognify_pipeline"`) for the `pipeline_runs` row but stamps
+  `source_pipeline = "cognify_temporal_pipeline"` on the produced
+  DataPoints. The library-API-facing dispatch name and the
+  provenance-stamp name are intentionally distinct (see next
+  bullet).
+- **Dispatch-name vs stamp-name distinction (Decision 11 refinement,
+  commit `56f020e`).** Decision 11's original wording conflated the
+  watcher dispatch name with the in-DataPoint `source_pipeline`
+  stamp. The refinement clarifies that the watcher records the
+  dispatch-time pipeline name (one of `"cognify_pipeline"`,
+  `"memify_pipeline"`, `"add_pipeline"`) while individual tasks
+  stamp their own logical pipeline name. Both paths converge on the
+  same `PipelineRunRepository` trait, but the row's `pipeline_name`
+  column and the DataPoint's `source_pipeline` field are not
+  required to match.
+
+### What's now possible
+
+- **Four-state pipeline_run trail across every surface.** Library
+  callers, HTTP-server routes, and CLI subcommands all write the
+  same `INITIATED → STARTED → (COMPLETED | ERRORED)` audit trail to
+  `pipeline_runs`. `GET /api/v1/activity/pipeline-runs` returns
+  full coverage instead of only HTTP-driven runs.
+- **`check_pipeline_run_qualification` gates cognify/memify against
+  re-runs.** A second `cognify(...)` on an already-completed dataset
+  short-circuits (returns `already_completed: true`) instead of
+  wasting LLM calls; concurrent calls on a running dataset reject
+  cleanly with `PipelineAlreadyRunning`.
+- **Reset helpers in `cognee-lib` for prune flows.** Users can call
+  `reset_pipeline_run_status(repo, user, dataset, "cognify_pipeline")`
+  to invalidate a completed run so the next `cognify(...)` proceeds
+  normally. `reset_dataset_pipeline_run_status` does the same for
+  every pipeline name attached to a dataset. Plumbed into the
+  delete / prune cascade so dataset-reset implicitly invalidates the
+  cognify trail.
+- **Cross-SDK schema agreement.** Python `cognee` and Rust
+  `cognee-rust` now share a byte-identical `pipeline_runs` schema
+  and `run_info` JSON shape; both SDKs can read each other's rows
+  without translation.
+
+### Known limitations / out of scope
+
+- **Cross-SDK parity test needs the Docker harness to actually run.**
+  `e2e-cross-sdk/harness/test_pipeline_runs_parity.py` lands as part
+  of 08-09 but is only exercised by `cd e2e-cross-sdk && docker
+  compose up --build`. CI runs the harness on push to main; local
+  runs are opt-in.
+- **HTTP cognify/memify routes are P5 stubs.** The
+  `publish_already_completed` helper (08-08) is wire-ready in
+  `crates/http-server/src/pipelines/dispatch.rs` but the cognify and
+  memify HTTP routes themselves remain P5 stubs — the short-circuit
+  path is therefore not yet exercised on the HTTP surface. When
+  those routes ship, no further work is needed.
+- **Ingestion has no qualification gate (Decision 3).** Python does
+  not gate ingestion against re-runs and neither does Rust. A
+  re-`add` on the same dataset always proceeds; deduplication
+  happens at the content-hash level inside the ingestion pipeline,
+  not via `check_pipeline_run_qualification`.
+- **`pipeline_run_payload_fields` sidecar stays Rust-only
+  (Decision 9).** LIB-06's payload-fields table has no Python
+  counterpart and is not projected into `run_info` on cross-SDK
+  reads.
+- **Shutdown / orphan-recovery semantics unchanged from earlier
+  gaps.** Gap 08 does not introduce new graceful-shutdown behaviour;
+  the existing `reset_orphans` path documented in
+  [`docs/http-server/pipelines.md`](../http-server/pipelines.md)
+  §12 still owns server-restart cleanup.
+- **`CognifyResult.already_completed` not yet surfaced through
+  bindings.** PyO3 / Neon serialise `CognifyResult` and the new
+  `already_completed: bool` field appears with `#[serde(default)]`
+  so older binding clients ignore it. Add an explicit return-type
+  variant when a binding consumer needs to act on the short-circuit.

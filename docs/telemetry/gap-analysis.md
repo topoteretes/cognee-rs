@@ -45,14 +45,29 @@ Opt-out: `TELEMETRY_DISABLED=1`, auto-disabled when `ENV=test|dev`.
 
 ## 3. Pipeline Run Status Persistence
 
-| | Python | Rust |
-|---|---|---|
-| `pipeline_runs` table with `PipelineRunStatus` enum | Yes — `cognee/modules/pipelines/models/PipelineRun.py` | Partial — see [crates/core/src/pipeline_run_registry/](../../crates/core/src/pipeline_run_registry/) |
-| Statuses: `INITIATED`, `STARTED`, `COMPLETED`, `ERRORED` | Yes — four explicit `log_pipeline_run_*` ops | Verify Rust enum & API parity |
-| `run_info` JSON column for flexible metadata | Yes | Verify |
-| Provenance stamping per DataPoint (source_pipeline, source_task, source_user, source_node_set, source_content_hash) | Yes — in `run_tasks_base.py` | Implemented (gap 05) — see [`05-datapoint-provenance.md`](05-datapoint-provenance.md) |
-
-The Rust http-server has `/api/v1/activity/pipeline-runs` reading a DB table, so *some* persistence exists, but the Python four-state lifecycle and provenance stamping should be verified against the Rust pipeline implementation.
+✅ **Implemented in [gap 08](08-pipeline-run-status.md).** Rust now
+writes the full four-state Python lifecycle (`INITIATED → STARTED →
+COMPLETED | ERRORED`) for every cognify / memify / ingestion run,
+regardless of whether the run originated from the HTTP server, the
+CLI, or an embedded library caller. `pipeline_runs.dataset_id` is
+nullable and FK-less to match Python; `run_info` JSON is
+byte-identical to Python's shape (`{"data": [...]}` on
+`STARTED` / `COMPLETED`, `{"data": [...], "error": "..."}` on
+`ERRORED`, `{}` on `INITIATED`). The Rust library exposes
+`reset_pipeline_run_status` and `reset_dataset_pipeline_run_status`
+helpers under `cognee_lib::api::pipeline_runs`, plus three reader
+helpers (`get_pipeline_run`, `get_pipeline_run_by_dataset`,
+`get_pipeline_runs_by_dataset`) on `PipelineRunRepository`. The
+cognify and memify entry points consult
+`check_pipeline_run_qualification` to short-circuit
+already-completed datasets and reject already-running ones. Per-
+DataPoint provenance (`source_pipeline`, `source_task`,
+`source_user`, `source_node_set`, `source_content_hash`) was closed
+earlier by [gap 05](05-datapoint-provenance.md). Cross-SDK parity is
+asserted by
+[`e2e-cross-sdk/harness/test_pipeline_runs_parity.py`](../../e2e-cross-sdk/harness/test_pipeline_runs_parity.py).
+See the [gap-08 closure summary](08-pipeline-run-status.md#closure-summary)
+for the per-commit audit trail.
 
 ---
 
@@ -309,7 +324,7 @@ Each gap is broken out into a dedicated sub-document with deep investigation, de
 2. **Emit pipeline & task lifecycle events** — `Pipeline Run Started/Completed/Errored`, per-task variants, and API events (`cognee.recall`, `cognee.improve`, `cognee.forget`). → [03-pipeline-task-api-events.md](03-pipeline-task-api-events.md)
 3. **File logging with rotation** — mirror Python's `COGNEE_LOG_FILE`, `COGNEE_LOGS_DIR`, `COGNEE_LOG_MAX_BYTES`, etc.; rotating non-blocking appender; library noise suppression. → [06-file-logging-rotation.md](06-file-logging-rotation.md)
 4. **Auto-init tracing in bindings** — PyO3, Neon, C API entry points so embedders get telemetry without extra setup; avoid double-emission when embedded in the Python SDK. → [07-bindings-auto-init.md](07-bindings-auto-init.md)
-5. **Pipeline run status lifecycle** — schema and four-state lifecycle are defined but `INITIATED` is never written, `run_info` content drifts from Python, and library-level pipelines bypass the registry entirely. → [08-pipeline-run-status.md](08-pipeline-run-status.md)
+5. ~~**Pipeline run status lifecycle**~~ — closed by [gap 08](08-pipeline-run-status.md). Full four-state lifecycle, Python-shaped `run_info`, library-pipeline coverage (cognify / memify / ingestion), qualification gate, and reset helpers all landed. See the [gap-08 closure summary](08-pipeline-run-status.md#closure-summary).
 
 ### Completed work
 
@@ -329,6 +344,16 @@ Each gap is broken out into a dedicated sub-document with deep investigation, de
   → [05-datapoint-provenance.md](05-datapoint-provenance.md)
   (complete — see the
   [closure summary](05-datapoint-provenance.md#closure-summary)).
+- ✅ **Pipeline run status lifecycle (gap 08).** Full four-state
+  `INITIATED → STARTED → COMPLETED | ERRORED` trail for every
+  cognify / memify / ingestion run across HTTP, CLI, and library
+  surfaces. `pipeline_runs.dataset_id` nullable + FK-less, `run_info`
+  JSON byte-identical to Python, reset helpers and reader trio
+  exposed under `cognee_lib::api::pipeline_runs`,
+  `check_pipeline_run_qualification` gates cognify / memify against
+  re-runs. → [08-pipeline-run-status.md](08-pipeline-run-status.md)
+  (complete — see the
+  [closure summary](08-pipeline-run-status.md#closure-summary)).
 - ✅ **Route convenience pipelines through the executor (LIB-06).**
   `cognify::cognify` (standard + temporal branches),
   `cognify::memify::memify`, and `ingestion::AddPipeline::add` now

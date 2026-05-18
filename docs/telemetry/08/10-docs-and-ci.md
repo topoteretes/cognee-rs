@@ -1,6 +1,6 @@
 # Task 08-10 — Docs and CI for gap 08 closure
 
-**Status**: not yet implemented (⬜)
+**Status**: implemented in commit <SHA TBD>
 **Owner**: _unassigned_
 **Depends on**: tasks 08-01 through 08-09.
 **Blocks**: —
