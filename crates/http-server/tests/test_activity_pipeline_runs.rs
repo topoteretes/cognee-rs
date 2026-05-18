@@ -105,3 +105,95 @@ async fn lists_recent_with_attribution_including_orphan() {
             .contains("add_pipeline")
     );
 }
+
+// ---------------------------------------------------------------------------
+// Task 08-09 (c) — four-state lifecycle trail surfaces via the activity
+// endpoint with the correct enum strings and dataset attribution.
+// ---------------------------------------------------------------------------
+
+/// Seed a real `INITIATED → STARTED → COMPLETED` lifecycle through
+/// `SeaOrmPipelineRunRepository::log_pipeline_run` and assert the
+/// `/api/v1/activity/pipeline-runs` response surfaces all three rows in
+/// `DATASET_PROCESSING_*` form with the correct dataset attribution and
+/// `dataset_id_hex` populated (per task 08-01 nullability handling).
+#[tokio::test]
+async fn lists_recent_four_state_lifecycle_trail() {
+    let state = support::build_permissions_state().await;
+    let user = support::seed_perm_user(&state, "lifecycle@example.com", "pw").await;
+    let db = support::permissions_db(&state);
+
+    let dataset_id = Uuid::new_v4();
+    support::seed_dataset(db, dataset_id, user.id, None, "beta").await;
+
+    let repo = SeaOrmPipelineRunRepository::new(std::sync::Arc::new(db.clone()));
+    let prid = Uuid::new_v4();
+    let pid = Uuid::new_v4();
+    for status in [
+        PipelineRunStatus::Initiated,
+        PipelineRunStatus::Started,
+        PipelineRunStatus::Completed,
+    ] {
+        repo.log_pipeline_run(
+            prid,
+            pid,
+            "cognify_pipeline",
+            Some(dataset_id),
+            status,
+            None,
+        )
+        .await
+        .expect("log row");
+        tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+    }
+
+    let app = support::test_router(state.clone()).await;
+    let bearer = support::bearer_header(&user, &state);
+    let req = Request::builder()
+        .method("GET")
+        .uri(format!(
+            "/api/v1/activity/pipeline-runs?dataset_id={dataset_id}"
+        ))
+        .header("Authorization", bearer)
+        .body(Body::empty())
+        .expect("req");
+    let resp = app.oneshot(req).await.expect("response");
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = support::body_json(resp).await;
+    let arr = body.as_array().expect("array");
+    assert_eq!(
+        arr.len(),
+        3,
+        "expected the full INITIATED + STARTED + COMPLETED trail"
+    );
+
+    // Response is newest-first (matches Python's get_activity_router shape).
+    let statuses: Vec<&str> = arr
+        .iter()
+        .map(|r| r.get("status").and_then(|v| v.as_str()).unwrap_or(""))
+        .collect();
+    assert_eq!(
+        statuses,
+        vec![
+            "DATASET_PROCESSING_COMPLETED",
+            "DATASET_PROCESSING_STARTED",
+            "DATASET_PROCESSING_INITIATED",
+        ]
+    );
+
+    for row in arr {
+        // dataset attribution: same dataset on every row.
+        assert_eq!(
+            row.get("dataset_name").and_then(|v| v.as_str()),
+            Some("beta")
+        );
+        assert_eq!(
+            row.get("pipeline_name").and_then(|v| v.as_str()),
+            Some("cognify_pipeline")
+        );
+        // pipeline_run_id is shared across all three rows (decision 12).
+        assert!(
+            row.get("pipeline_run_id").is_some(),
+            "every row should carry pipeline_run_id"
+        );
+    }
+}

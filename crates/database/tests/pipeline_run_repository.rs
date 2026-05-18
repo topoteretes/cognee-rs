@@ -9,6 +9,7 @@ use cognee_database::{
     connect, initialize, ops,
 };
 use cognee_models::Dataset;
+use serde_json::{Map, Value};
 use uuid::Uuid;
 
 async fn make_db() -> Arc<DatabaseConnection> {
@@ -560,3 +561,346 @@ async fn list_recent_returns_rows_in_desc_order() {
     // First row is the most recent (Completed).
     assert_eq!(rows[0].status, PipelineRunStatus::Completed);
 }
+
+// ---------------------------------------------------------------------------
+// Task 08-09 — gap-binding integration tests
+// ---------------------------------------------------------------------------
+//
+// The unit-level run_info helpers are exercised inline in
+// `crates/core/src/pipeline_run_registry/data_info.rs`. The tests below
+// confirm that the persisted JSON makes a full round-trip through SeaORM
+// (write → read) preserving Python-parity byte shape, and that the
+// four-state lifecycle / dataset_id=None / reset-helper paths behave as
+// locked decisions 1, 4, 5, 7 mandate.
+
+// ---------------------------------------------------------------------------
+// (08-09) Four-state lifecycle round-trip — Initiated → Started → Completed
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn four_state_lifecycle_round_trip_completed() {
+    let db = make_db().await;
+    let ds = Uuid::new_v4();
+    create_dataset(&db, ds).await;
+    let repo = make_repo(Arc::clone(&db));
+
+    let prid = Uuid::new_v4();
+    let pid = Uuid::new_v4();
+
+    for status in [
+        PipelineRunStatus::Initiated,
+        PipelineRunStatus::Started,
+        PipelineRunStatus::Completed,
+    ] {
+        repo.log_pipeline_run(prid, pid, "cognify_pipeline", Some(ds), status, None)
+            .await
+            .expect("log");
+        tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+    }
+
+    // get_pipeline_run returns the latest row keyed on pipeline_run_id.
+    let latest_by_id = repo
+        .get_pipeline_run(prid)
+        .await
+        .expect("get_pipeline_run")
+        .expect("row present");
+    assert_eq!(latest_by_id.status, PipelineRunStatus::Completed);
+
+    // get_pipeline_run_by_dataset returns the latest row keyed on
+    // (dataset_id, pipeline_name).
+    let latest_by_ds = repo
+        .get_pipeline_run_by_dataset(ds, "cognify_pipeline")
+        .await
+        .expect("get_pipeline_run_by_dataset")
+        .expect("row present");
+    assert_eq!(latest_by_ds.status, PipelineRunStatus::Completed);
+
+    // get_pipeline_runs_by_dataset returns one latest row per pipeline_name.
+    let rows = repo
+        .get_pipeline_runs_by_dataset(ds)
+        .await
+        .expect("get_pipeline_runs_by_dataset");
+    assert_eq!(rows.len(), 1, "exactly one pipeline_name for this dataset");
+    assert_eq!(rows[0].status, PipelineRunStatus::Completed);
+    assert_eq!(rows[0].pipeline_name, "cognify_pipeline");
+}
+
+// ---------------------------------------------------------------------------
+// (08-09) Four-state lifecycle round-trip — Initiated → Started → Errored
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn four_state_lifecycle_round_trip_errored() {
+    let db = make_db().await;
+    let ds = Uuid::new_v4();
+    create_dataset(&db, ds).await;
+    let repo = make_repo(Arc::clone(&db));
+
+    let prid = Uuid::new_v4();
+    let pid = Uuid::new_v4();
+
+    for status in [
+        PipelineRunStatus::Initiated,
+        PipelineRunStatus::Started,
+        PipelineRunStatus::Errored,
+    ] {
+        repo.log_pipeline_run(prid, pid, "cognify_pipeline", Some(ds), status, None)
+            .await
+            .expect("log");
+        tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+    }
+
+    let latest = repo
+        .get_pipeline_run_by_dataset(ds, "cognify_pipeline")
+        .await
+        .expect("query")
+        .expect("row present");
+    assert_eq!(latest.status, PipelineRunStatus::Errored);
+}
+
+// ---------------------------------------------------------------------------
+// (08-09) dataset_id = None — row persists after 08-01 nullability migration
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn log_pipeline_run_persists_with_none_dataset_id() {
+    let db = make_db().await;
+    let repo = make_repo(Arc::clone(&db));
+
+    let prid = Uuid::new_v4();
+    let pid = Uuid::new_v4();
+    let row_id = repo
+        .log_pipeline_run(
+            prid,
+            pid,
+            "ad_hoc_pipeline",
+            None,
+            PipelineRunStatus::Started,
+            None,
+        )
+        .await
+        .expect("log");
+
+    // Row is reachable via get_pipeline_run (keyed on pipeline_run_id).
+    let row = repo
+        .get_pipeline_run(prid)
+        .await
+        .expect("get_pipeline_run")
+        .expect("row present even though dataset_id is None");
+    assert_eq!(row.pipeline_run_id, prid);
+    assert!(
+        row.dataset_id.is_none(),
+        "dataset_id should round-trip as None after 08-01"
+    );
+
+    // The orphan does NOT appear in get_pipeline_run_by_dataset for any
+    // arbitrary dataset — the dataset-keyed reader filters on a concrete
+    // `dataset_id` value, so NULL rows are never returned.
+    let some_other_ds = Uuid::new_v4();
+    let nothing = repo
+        .get_pipeline_run_by_dataset(some_other_ds, "ad_hoc_pipeline")
+        .await
+        .expect("query");
+    assert!(
+        nothing.is_none(),
+        "dataset-keyed reader must NOT surface dataset_id=NULL rows"
+    );
+
+    // list_recent(None, _) surfaces the orphan (no filter).
+    let rows = repo.list_recent(None, 10).await.expect("list_recent all");
+    assert!(rows.iter().any(|r| r.id == row_id));
+}
+
+// ---------------------------------------------------------------------------
+// (08-09) Exact run_info JSON shape — STARTED row stores `{"data":[<uuid>]}`
+// ---------------------------------------------------------------------------
+//
+// Tests the persistence round-trip: write a typed Started row with a
+// hand-built `{"data": [uuid, uuid]}` payload (same shape as
+// `cognee_core::pipeline_run_registry::run_info_for_running(&ids)`), read
+// the row back, and serialise the column to a JSON string.  The string
+// must be byte-identical including key ordering (locked decision 5).
+#[tokio::test]
+async fn run_info_started_shape_is_byte_identical_to_python() {
+    let db = make_db().await;
+    let ds = Uuid::new_v4();
+    create_dataset(&db, ds).await;
+    let repo = make_repo(Arc::clone(&db));
+
+    let uuid1 = Uuid::parse_str("00000000-0000-0000-0000-000000000001").expect("uuid lit");
+    let uuid2 = Uuid::parse_str("00000000-0000-0000-0000-000000000002").expect("uuid lit");
+
+    // Build the payload exactly like run_info_for_running(&[uuid1, uuid2]).
+    let mut m = Map::with_capacity(1);
+    m.insert(
+        "data".into(),
+        Value::Array(vec![
+            Value::String(uuid1.to_string()),
+            Value::String(uuid2.to_string()),
+        ]),
+    );
+    let payload = Value::Object(m);
+    // Sanity check the input matches the byte-identical wire shape.
+    assert_eq!(
+        payload.to_string(),
+        "{\"data\":[\"00000000-0000-0000-0000-000000000001\",\
+         \"00000000-0000-0000-0000-000000000002\"]}"
+    );
+
+    let prid = Uuid::new_v4();
+    let pid = Uuid::new_v4();
+    repo.log_pipeline_run(
+        prid,
+        pid,
+        "shape_p",
+        Some(ds),
+        PipelineRunStatus::Started,
+        Some(payload),
+    )
+    .await
+    .expect("log");
+
+    let row = repo
+        .get_pipeline_run(prid)
+        .await
+        .expect("get_pipeline_run")
+        .expect("row present");
+    let run_info = row.run_info.expect("run_info populated");
+    // Byte-identical, including key order and absence of whitespace.
+    assert_eq!(
+        run_info.to_string(),
+        "{\"data\":[\"00000000-0000-0000-0000-000000000001\",\
+         \"00000000-0000-0000-0000-000000000002\"]}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// (08-09) Exact run_info JSON shape — ERRORED row stores `data` BEFORE `error`
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn run_info_errored_shape_preserves_data_before_error() {
+    let db = make_db().await;
+    let ds = Uuid::new_v4();
+    create_dataset(&db, ds).await;
+    let repo = make_repo(Arc::clone(&db));
+
+    let uuid1 = Uuid::parse_str("00000000-0000-0000-0000-000000000003").expect("uuid lit");
+
+    // run_info_for_errored(&[uuid1], "boom"): keys "data" then "error".
+    let mut m = Map::with_capacity(2);
+    m.insert(
+        "data".into(),
+        Value::Array(vec![Value::String(uuid1.to_string())]),
+    );
+    m.insert("error".into(), Value::String("boom".to_string()));
+    let payload = Value::Object(m);
+
+    let prid = Uuid::new_v4();
+    let pid = Uuid::new_v4();
+    repo.log_pipeline_run(
+        prid,
+        pid,
+        "err_p",
+        Some(ds),
+        PipelineRunStatus::Errored,
+        Some(payload),
+    )
+    .await
+    .expect("log");
+
+    let row = repo
+        .get_pipeline_run(prid)
+        .await
+        .expect("get_pipeline_run")
+        .expect("row present");
+    let run_info = row.run_info.expect("run_info populated");
+
+    // Byte-identical wire shape (data first, then error).
+    assert_eq!(
+        run_info.to_string(),
+        "{\"data\":[\"00000000-0000-0000-0000-000000000003\"],\"error\":\"boom\"}"
+    );
+
+    let obj = run_info.as_object().expect("object");
+    let keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+    assert_eq!(keys, vec!["data", "error"], "data must precede error");
+}
+
+// ---------------------------------------------------------------------------
+// (08-09) Exact run_info JSON shape — empty data_ids emit `{"data":"None"}`
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn run_info_running_shape_with_empty_data_writes_none_literal() {
+    let db = make_db().await;
+    let ds = Uuid::new_v4();
+    create_dataset(&db, ds).await;
+    let repo = make_repo(Arc::clone(&db));
+
+    // run_info_for_running(&[]) → {"data": "None"} (literal string).
+    let mut m = Map::with_capacity(1);
+    m.insert("data".into(), Value::String("None".to_string()));
+    let payload = Value::Object(m);
+
+    let prid = Uuid::new_v4();
+    let pid = Uuid::new_v4();
+    repo.log_pipeline_run(
+        prid,
+        pid,
+        "none_p",
+        Some(ds),
+        PipelineRunStatus::Started,
+        Some(payload),
+    )
+    .await
+    .expect("log");
+
+    let row = repo
+        .get_pipeline_run(prid)
+        .await
+        .expect("get_pipeline_run")
+        .expect("row present");
+    let run_info = row.run_info.expect("run_info populated");
+    assert_eq!(run_info.to_string(), "{\"data\":\"None\"}");
+}
+
+// ---------------------------------------------------------------------------
+// (08-09) Exact run_info JSON shape — INITIATED row stores `{}`
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn run_info_initiated_shape_is_empty_object() {
+    let db = make_db().await;
+    let ds = Uuid::new_v4();
+    create_dataset(&db, ds).await;
+    let repo = make_repo(Arc::clone(&db));
+
+    let prid = Uuid::new_v4();
+    let pid = Uuid::new_v4();
+    repo.log_pipeline_run(
+        prid,
+        pid,
+        "init_p",
+        Some(ds),
+        PipelineRunStatus::Initiated,
+        Some(Value::Object(Map::new())),
+    )
+    .await
+    .expect("log");
+
+    let row = repo
+        .get_pipeline_run(prid)
+        .await
+        .expect("get_pipeline_run")
+        .expect("row present");
+    let run_info = row.run_info.expect("run_info populated");
+    assert_eq!(run_info.to_string(), "{}");
+}
+
+// ---------------------------------------------------------------------------
+// Reset-helper tests live in `crates/lib/tests/pipeline_runs_reset.rs`
+// because `reset_pipeline_run_status` / `reset_dataset_pipeline_run_status`
+// are part of the `cognee-lib` public API and adding `cognee-lib` as a
+// dev-dependency of `cognee-database` would create a build cycle.
+// ---------------------------------------------------------------------------
