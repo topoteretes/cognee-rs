@@ -101,6 +101,34 @@ impl DefaultPipelineRunRegistry {
         self.repo.get_payload(run_id).await
     }
 
+    /// Publish a synthetic [`RunEventKind::AlreadyCompleted`] event into the
+    /// per-run broadcast channel for `run_id`.
+    ///
+    /// Used by the HTTP cognify boxed-future path (and any analogous caller)
+    /// to surface the `check_pipeline_run_qualification` short-circuit to
+    /// WebSocket subscribers — see gap 08-08 §4.5 and locked decision 13.
+    /// The short-circuit happens inside the convenience `cognify(...)`
+    /// before `pipeline::execute` runs, so the executor's watcher events do
+    /// not fire; this method bridges that gap by publishing directly to the
+    /// slot.
+    ///
+    /// Returns `true` if the run slot exists and the event was sent (or
+    /// dropped because no subscribers were attached); `false` if the slot is
+    /// unknown.
+    pub async fn publish_already_completed(&self, run_id: Uuid) -> bool {
+        let runs = self.runs.read().await;
+        let Some(slot) = runs.get(&run_id) else {
+            return false;
+        };
+        let _ = slot.event_tx.send(RunEvent {
+            run_id,
+            kind: RunEventKind::AlreadyCompleted,
+            payload: serde_json::Value::Null,
+            at: Utc::now(),
+        });
+        true
+    }
+
     /// Construct a `ScopedRunWatcher` for the given run id, capturing the
     /// run's event channel sink. Returns `None` if the run slot does not exist.
     pub async fn watcher_for(&self, run_id: Uuid) -> Option<Arc<ScopedRunWatcher>> {

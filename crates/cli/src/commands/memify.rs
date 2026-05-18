@@ -110,6 +110,18 @@ pub fn run(args: MemifyArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> 
                 ))
             })?;
 
+            // Gap 08-08: surface the short-circuit verdict (Python parity).
+            if result.already_completed {
+                if let Some(prior) = result.prior_pipeline_run_id {
+                    info!(
+                        "Dataset '{dataset_name}': already complete (prior pipeline_run_id={prior}); skipping memify."
+                    );
+                } else {
+                    info!("Dataset '{dataset_name}': already complete; skipping memify.");
+                }
+                continue;
+            }
+
             total_triplets += result.triplet_count;
             total_indexed += result.index_result.indexed_count;
             total_batches += result.index_result.batch_count;

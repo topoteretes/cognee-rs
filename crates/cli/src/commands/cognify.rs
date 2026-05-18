@@ -189,6 +189,18 @@ pub fn run(args: CognifyArgs, cm: Arc<ComponentManager>) -> Result<(), CliError>
                 ))
             })?;
 
+            // Gap 08-08: surface the short-circuit verdict (Python parity).
+            if result.already_completed {
+                if let Some(prior) = result.prior_pipeline_run_id {
+                    info!(
+                        "Dataset '{dataset_name}': already complete (prior pipeline_run_id={prior}); skipping cognify."
+                    );
+                } else {
+                    info!("Dataset '{dataset_name}': already complete; skipping cognify.");
+                }
+                continue;
+            }
+
             total_chunks += result.chunks.len();
             total_entities += result.entities.len();
             total_edges += result.edges.len();

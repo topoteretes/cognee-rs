@@ -56,6 +56,7 @@ use crate::graph_integration::{
     retrieve_existing_edges,
 };
 use crate::pipeline::{CognifyResult, IndexedFieldsStats};
+use crate::qualification::{Qualification, check_pipeline_run_qualification};
 use crate::summarization::{SummaryExtractor, TextSummary};
 use crate::temporal_extraction::{TemporalEntityEnricher, TemporalEventExtractor};
 use cognee_models::DataPoint;
@@ -896,6 +897,8 @@ pub async fn add_data_points(
         embeddings,
         indexed_fields,
         documents_for_dlt: input.documents.clone(),
+        already_completed: false,
+        prior_pipeline_run_id: None,
     })
 }
 
@@ -1310,6 +1313,8 @@ pub async fn add_temporal_data_points(
         embeddings: vec![],
         indexed_fields,
         documents_for_dlt: vec![],
+        already_completed: false,
+        prior_pipeline_run_id: None,
     })
 }
 
@@ -1817,6 +1822,39 @@ pub async fn cognify(
         "Starting cognify pipeline with config: chunks_per_batch={}, max_chunk_size={}",
         effective_config.chunks_per_batch, effective_config.max_chunk_size
     );
+
+    // ── Qualification gate (gap 08-08, locked decision 3) ───────────────────
+    // Python-parity `check_pipeline_run_qualification`: read the latest
+    // `pipeline_runs` row for `(dataset_id, pipeline_name)` and decide
+    // whether to proceed, short-circuit, or reject. The pipeline name used
+    // here MUST match what `DbPipelineWatcher` will persist on the next
+    // `pipeline::execute` call — that is the `Pipeline.name` set below
+    // (`"cognify"` or `"temporal-cognify"`).
+    let pipeline_name: &str = if effective_config.temporal_cognify {
+        "temporal-cognify"
+    } else {
+        "cognify"
+    };
+    match check_pipeline_run_qualification(pipeline_run_repo.as_ref(), dataset_id, pipeline_name)
+        .await
+        .map_err(|e| CognifyError::DatabaseError(e.to_string()))?
+    {
+        Qualification::AlreadyCompleted(prior) => {
+            info!(
+                dataset_id = %dataset_id,
+                pipeline_run_id = %prior.pipeline_run_id,
+                "cognify: dataset already completed; short-circuiting (Python parity)"
+            );
+            return Ok(CognifyResult::already_completed(prior.pipeline_run_id));
+        }
+        Qualification::AlreadyRunning(_prior) => {
+            return Err(CognifyError::PipelineAlreadyRunning {
+                pipeline_name: pipeline_name.to_string(),
+                dataset_id,
+            });
+        }
+        Qualification::Proceed => {}
+    }
 
     // ── Empty-document short-circuit ────────────────────────────────────────
     // Preserved from the pre-executor path: a caller passing zero documents

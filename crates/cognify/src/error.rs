@@ -1,6 +1,7 @@
 //! Error types for the cognify pipeline.
 
 use thiserror::Error;
+use uuid::Uuid;
 
 #[derive(Debug, Error)]
 pub enum CognifyError {
@@ -59,6 +60,20 @@ pub enum CognifyError {
     OutputTypeMismatch {
         expected: &'static str,
         actual: &'static str,
+    },
+
+    /// Returned when the qualification gate finds an in-flight pipeline run
+    /// for the same `(pipeline_name, dataset_id)` pair (latest status =
+    /// `STARTED`). Caller should not start a second run concurrently.
+    ///
+    /// Python parity: Python's `check_pipeline_run_qualification` returns
+    /// `False` (skip silently) in this case; the Rust port surfaces it as an
+    /// error so callers can distinguish the "rejected" path from the
+    /// short-circuit "already completed" path. See doc 08 §13 / 08-08 §4.3.
+    #[error("pipeline {pipeline_name} for dataset {dataset_id} is already running")]
+    PipelineAlreadyRunning {
+        pipeline_name: String,
+        dataset_id: Uuid,
     },
 }
 

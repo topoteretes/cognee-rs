@@ -23,6 +23,7 @@ use super::config::MemifyConfig;
 use super::error::MemifyError;
 use super::extract_triplets::extract_triplets_from_graph_db;
 use super::index_triplets::{IndexResult, index_triplets};
+use crate::qualification::{Qualification, check_pipeline_run_qualification};
 
 /// Result of the memify pipeline.
 #[derive(Debug, Clone)]
@@ -32,6 +33,41 @@ pub struct MemifyResult {
 
     /// Details about vector indexing.
     pub index_result: IndexResult,
+
+    /// `true` when this result was synthesised by the
+    /// `check_pipeline_run_qualification` short-circuit (latest
+    /// `pipeline_runs` row was `COMPLETED`). All other fields are zero.
+    pub already_completed: bool,
+
+    /// The `pipeline_run_id` of the prior completed run that triggered the
+    /// short-circuit. `None` on normal results.
+    pub prior_pipeline_run_id: Option<Uuid>,
+}
+
+impl MemifyResult {
+    /// Create an empty result with zeroed counts.
+    pub fn empty() -> Self {
+        Self {
+            triplet_count: 0,
+            index_result: IndexResult {
+                indexed_count: 0,
+                batch_count: 0,
+            },
+            already_completed: false,
+            prior_pipeline_run_id: None,
+        }
+    }
+
+    /// Create a short-circuit "already completed" result tagged with the
+    /// prior `pipeline_run_id`. Mirrors
+    /// [`crate::CognifyResult::already_completed`]. See doc 08-08 §4.4.
+    pub fn already_completed(pipeline_run_id: Uuid) -> Self {
+        Self {
+            already_completed: true,
+            prior_pipeline_run_id: Some(pipeline_run_id),
+            ..Self::empty()
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -144,6 +180,36 @@ pub async fn memify(
     // 1. Validate configuration.
     config.validate()?;
 
+    // 1b. Qualification gate (gap 08-08, locked decision 3) ────────────────
+    // Skip when `dataset_id` is `None` — Python's gate only applies per
+    // dataset, and ad-hoc memify runs without a dataset cannot be looked up
+    // via `get_pipeline_run_by_dataset`. The pipeline name used here matches
+    // what the executor-routed pipeline persists (`build_memify_index_only_pipeline`
+    // sets `with_name("memify")`).
+    let pipeline_name = "memify";
+    if let Some(ds_id) = dataset_id {
+        match check_pipeline_run_qualification(pipeline_run_repo.as_ref(), ds_id, pipeline_name)
+            .await
+            .map_err(|e| MemifyError::Database(e.to_string()))?
+        {
+            Qualification::AlreadyCompleted(prior) => {
+                info!(
+                    dataset_id = %ds_id,
+                    pipeline_run_id = %prior.pipeline_run_id,
+                    "memify: dataset already completed; short-circuiting (Python parity)"
+                );
+                return Ok(MemifyResult::already_completed(prior.pipeline_run_id));
+            }
+            Qualification::AlreadyRunning(_prior) => {
+                return Err(MemifyError::PipelineAlreadyRunning {
+                    pipeline_name: pipeline_name.to_string(),
+                    dataset_id: Some(ds_id),
+                });
+            }
+            Qualification::Proceed => {}
+        }
+    }
+
     // 2. Pre-flight: extract triplets from the graph database (or use custom data).
     let triplets = if let Some(ref custom_data) = config.custom_data {
         // When custom data is provided, convert JSON values to Triplet objects.
@@ -188,13 +254,7 @@ pub async fn memify(
     // 3. If empty, return early with zeros — skip the executor entirely.
     if triplets.is_empty() {
         info!("No triplets extracted from graph; nothing to index");
-        return Ok(MemifyResult {
-            triplet_count: 0,
-            index_result: IndexResult {
-                indexed_count: 0,
-                batch_count: 0,
-            },
-        });
+        return Ok(MemifyResult::empty());
     }
 
     // 4. Build the one-task index-only pipeline and run it through
@@ -252,6 +312,8 @@ pub async fn memify(
     Ok(MemifyResult {
         triplet_count,
         index_result,
+        already_completed: false,
+        prior_pipeline_run_id: None,
     })
 }
 

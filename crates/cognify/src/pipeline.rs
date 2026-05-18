@@ -6,6 +6,7 @@
 use std::collections::HashMap;
 
 use cognee_models::{Document, DocumentChunk, EdgeType, Embedding};
+use uuid::Uuid;
 
 use crate::graph_integration::{GraphEdgePair, GraphNodePair};
 use crate::summarization::TextSummary;
@@ -43,6 +44,19 @@ pub struct CognifyResult {
     /// Not serialised — internal teardown carrier, not part of the public
     /// result shape.
     pub documents_for_dlt: Vec<Document>,
+
+    /// `true` when this result was synthesised by the
+    /// `check_pipeline_run_qualification` short-circuit (latest
+    /// `pipeline_runs` row was `COMPLETED`). All other fields are empty.
+    ///
+    /// CLI prints "already complete" when set; HTTP-server returns
+    /// `200 OK` with `status = "PipelineRunAlreadyCompleted"`. See doc 08-08
+    /// §4.3 and locked decision 13.
+    pub already_completed: bool,
+
+    /// The `pipeline_run_id` of the prior completed run that triggered the
+    /// short-circuit. `None` on normal (non-short-circuit) results.
+    pub prior_pipeline_run_id: Option<Uuid>,
 }
 
 impl CognifyResult {
@@ -57,6 +71,20 @@ impl CognifyResult {
             embeddings: vec![],
             indexed_fields: IndexedFieldsStats::default(),
             documents_for_dlt: vec![],
+            already_completed: false,
+            prior_pipeline_run_id: None,
+        }
+    }
+
+    /// Create a short-circuit "already completed" result tagged with the
+    /// prior `pipeline_run_id`. All payload vectors are empty — callers that
+    /// need the prior run's outputs should query the graph / vector store
+    /// directly (matches Python parity). See doc 08-08 §4.3.
+    pub fn already_completed(pipeline_run_id: Uuid) -> Self {
+        Self {
+            already_completed: true,
+            prior_pipeline_run_id: Some(pipeline_run_id),
+            ..Self::empty()
         }
     }
 }

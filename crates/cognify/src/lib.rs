@@ -6,6 +6,7 @@ pub mod graph_extraction;
 pub mod graph_integration;
 pub mod memify;
 pub mod pipeline;
+pub mod qualification;
 pub mod summarization;
 pub mod tasks;
 pub mod temporal_extraction;
@@ -29,6 +30,7 @@ pub use memify::{
     persist_sessions_in_knowledge_graph, sync_graph_to_session,
 };
 pub use pipeline::{CognifyResult, IndexedFieldsStats};
+pub use qualification::{Qualification, check_pipeline_run_qualification};
 pub use summarization::{SummarizedContent, SummaryExtractor, TextSummary};
 pub use tasks::{
     ClassifiedDocuments, CognifyInput, ExtractedChunks, ExtractedGraphData,
