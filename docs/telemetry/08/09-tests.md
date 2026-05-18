@@ -1,6 +1,6 @@
 # Task 08-09 — Tests for gap 08
 
-**Status**: not yet implemented (⬜)
+**Status**: implemented in commit 08c5140 (sub-doc named a new file `crates/http-server/tests/activity_pipeline_runs.rs`; orchestrator extended the existing `test_activity_pipeline_runs.rs` instead — same coverage. Reset-helper tests live in `crates/lib/tests/pipeline_runs_reset.rs` from 08-05 — cognee-database can't depend on cognee-lib's reset API. Cross-SDK `test_pipeline_runs_parity.py` lives under `e2e-cross-sdk/harness/`; not executed locally, CI runs via docker compose)
 **Owner**: _unassigned_
 **Depends on**: tasks 08-01 through 08-08 — every implementation task must be in place before tests land.
 **Blocks**:
