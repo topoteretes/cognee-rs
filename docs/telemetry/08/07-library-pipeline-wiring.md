@@ -1,6 +1,6 @@
 # Task 08-07 — Wire `PipelineRunRepository` through library pipelines
 
-**Status**: not yet implemented (⬜)
+**Status**: implemented in commit f64fcac (LIB-06 pre-requisite made the wiring a one-line-per-function `&NoopWatcher` → `&DbPipelineWatcher::new(repo)` swap; the only sub-doc divergence was scope expansion to 41 files — 17 test fixtures + 3 lib::api callers + 4 cognify internals — forced by adding the required `pipeline_run_repo` parameter to the three convenience functions)
 **Owner**: _unassigned_
 **Depends on**: 08-04, **LIB-06 (closure commit `b5ccc96`)** — all three convenience functions now route through `cognee_core::pipeline::execute` with `&NoopWatcher`. This task swaps the watcher only.
 **Blocks**:
