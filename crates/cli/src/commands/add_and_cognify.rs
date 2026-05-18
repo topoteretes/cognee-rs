@@ -2,7 +2,9 @@ use std::sync::Arc;
 
 use cognee_lib::add::AddPipeline;
 use cognee_lib::cognify::{ChunkStrategy, CognifyConfig, cognify};
-use cognee_lib::database::{IngestDb, UserDb, ops};
+use cognee_lib::database::{
+    IngestDb, PipelineRunRepository, SeaOrmPipelineRunRepository, UserDb, ops,
+};
 use cognee_lib::models::DataInput;
 use cognee_lib::ontology::{NoOpOntologyResolver, OntologyResolver, RdfLibOntologyResolver};
 use cognee_lib::{ComponentManager, PipelineContext};
@@ -65,11 +67,17 @@ pub fn run(args: AddAndCognifyArgs, cm: Arc<ComponentManager>) -> Result<(), Cli
             cognee_lib::core::RayonThreadPool::with_default_threads()
                 .map_err(|e| CliError::Runtime(format!("Failed to build thread pool: {e}")))?,
         );
+        // Gap 08-07: persist the four-state `pipeline_runs` trail through
+        // both phases.
+        let pipeline_run_repo: Arc<dyn PipelineRunRepository> =
+            Arc::new(SeaOrmPipelineRunRepository::new(Arc::clone(&database)));
+
         let ingest = AddPipeline::new(Arc::clone(&storage), database.clone() as Arc<dyn IngestDb>)
             .with_thread_pool(thread_pool_for_add)
             .with_graph_db(graph_db_for_add)
             .with_vector_db(vector_db_for_add)
-            .with_database(Arc::clone(&database));
+            .with_database(Arc::clone(&database))
+            .with_pipeline_run_repo(Arc::clone(&pipeline_run_repo));
 
         let inputs = args
             .data
@@ -185,6 +193,7 @@ pub fn run(args: AddAndCognifyArgs, cm: Arc<ComponentManager>) -> Result<(), Cli
             vector_db,
             embedding_engine,
             Arc::clone(&database),
+            pipeline_run_repo,
             thread_pool,
             ontology_resolver,
             &cognify_config,

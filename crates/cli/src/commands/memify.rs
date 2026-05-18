@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use cognee_lib::cognee_core::{CpuPool, RayonThreadPool};
 use cognee_lib::cognify::{MemifyConfig, run_memify};
-use cognee_lib::database::ops;
+use cognee_lib::database::{PipelineRunRepository, SeaOrmPipelineRunRepository, ops};
 use cognee_lib::{ComponentManager, PipelineContext};
 use tracing::{debug, info};
 use uuid::Uuid;
@@ -87,12 +87,17 @@ pub fn run(args: MemifyArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> 
                     .map_err(|e| CliError::Runtime(format!("Failed to build thread pool: {e}")))?,
             );
 
+            // Gap 08-07: persist the four-state `pipeline_runs` trail.
+            let pipeline_run_repo: Arc<dyn PipelineRunRepository> =
+                Arc::new(SeaOrmPipelineRunRepository::new(Arc::clone(&database)));
+
             let result = run_memify(
                 Arc::clone(&graph_db),
                 Arc::clone(&vector_db),
                 Arc::clone(&embedding_engine),
                 thread_pool,
                 Arc::clone(&database),
+                pipeline_run_repo,
                 Some(dataset.id),
                 Some(owner_id),
                 dataset.tenant_id,

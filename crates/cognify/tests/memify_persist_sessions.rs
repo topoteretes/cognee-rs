@@ -100,6 +100,8 @@ async fn persist_empty_sessions_returns_zero() {
         h.vector_db.clone() as Arc<_>,
         h.embedding_engine.clone() as Arc<_>,
         Arc::clone(&h.db),
+        Arc::new(cognee_database::NoopPipelineRunRepository::new())
+            as Arc<dyn cognee_database::PipelineRunRepository>,
         Arc::new(
             cognee_core::RayonThreadPool::with_default_threads().expect("RayonThreadPool init"),
         ) as Arc<dyn cognee_core::CpuPool>,
@@ -155,6 +157,8 @@ async fn persist_tags_nodes_with_user_sessions_node_set() {
         h.vector_db.clone() as Arc<_>,
         h.embedding_engine.clone() as Arc<_>,
         Arc::clone(&h.db),
+        Arc::new(cognee_database::NoopPipelineRunRepository::new())
+            as Arc<dyn cognee_database::PipelineRunRepository>,
         Arc::new(
             cognee_core::RayonThreadPool::with_default_threads().expect("RayonThreadPool init"),
         ) as Arc<dyn cognee_core::CpuPool>,

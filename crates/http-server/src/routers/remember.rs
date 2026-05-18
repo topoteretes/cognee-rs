@@ -13,7 +13,7 @@ use axum::{
     response::IntoResponse,
     routing::post,
 };
-use cognee_database::{IngestDb, SessionLifecycleDb};
+use cognee_database::{IngestDb, NoopPipelineRunRepository, SessionLifecycleDb};
 use cognee_ingestion::{AddParams, AddPipeline};
 use cognee_models::DataInput;
 use cognee_models::memory::{FeedbackEntry, MemoryEntry, QAEntry, TraceEntry};
@@ -253,6 +253,10 @@ pub async fn post_remember(
                 "An error occurred during remember.".into(),
             ));
         };
+        // Gap 08-07: HTTP `dispatch_pipeline` already writes the
+        // four-state `pipeline_runs` trail through `ScopedRunWatcher`.
+        // Pass a no-op repo so `AddPipeline`'s inner `DbPipelineWatcher`
+        // does not double-write.
         let pipeline = AddPipeline::new(
             storage_arc,
             db_arc.clone() as std::sync::Arc<dyn cognee_database::IngestDb>,
@@ -261,7 +265,8 @@ pub async fn post_remember(
         .with_thread_pool(thread_pool)
         .with_graph_db(graph_db)
         .with_vector_db(vector_db)
-        .with_database(db_arc);
+        .with_database(db_arc)
+        .with_pipeline_run_repo(NoopPipelineRunRepository::arc());
 
         // Run add synchronously — errors map to 409 {"error": "An error occurred
         // during remember."} per Python parity (not {"detail": "..."}).

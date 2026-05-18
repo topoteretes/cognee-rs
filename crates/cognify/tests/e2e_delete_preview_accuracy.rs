@@ -152,6 +152,8 @@ async fn test_delete_preview_counts_match_execution() {
         vector_db.clone() as Arc<dyn VectorDB>,
         embedding_engine.clone() as Arc<dyn EmbeddingEngine>,
         database.clone(),
+        Arc::new(cognee_database::NoopPipelineRunRepository::new())
+            as Arc<dyn cognee_database::PipelineRunRepository>,
         Arc::new(
             cognee_core::RayonThreadPool::with_default_threads().expect("RayonThreadPool init"),
         ) as Arc<dyn cognee_core::CpuPool>,
@@ -192,6 +194,8 @@ async fn test_delete_preview_counts_match_execution() {
         Arc::clone(&embedding_engine),
         memify_pool,
         Arc::clone(&database),
+        Arc::new(cognee_database::NoopPipelineRunRepository::new())
+            as Arc<dyn cognee_database::PipelineRunRepository>,
         Some(dataset.id),
         None,
         None,

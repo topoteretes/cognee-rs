@@ -221,6 +221,8 @@ async fn test_search_returns_empty_for_deleted_doc_and_non_empty_for_remaining()
         vector_db.clone(),
         embedding_engine.clone(),
         Arc::clone(&database),
+        Arc::new(cognee_database::NoopPipelineRunRepository::new())
+            as Arc<dyn cognee_database::PipelineRunRepository>,
         thread_pool,
         Arc::new(NoOpOntologyResolver::new()),
         &config,

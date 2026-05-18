@@ -2,13 +2,21 @@
 
 **Status**: not yet implemented (⬜)
 **Owner**: _unassigned_
-**Depends on**: 08-04.
+**Depends on**: 08-04, **LIB-06 (closure commit `b5ccc96`)** — all three convenience functions now route through `cognee_core::pipeline::execute` with `&NoopWatcher`. This task swaps the watcher only.
 **Blocks**:
 - [Task 08-08 — Qualification check](08-check-qualification.md) (qualification runs inside cognify/memify and needs the wired-through repo).
 - [Task 08-09 — Tests](09-tests.md) (cross-SDK test asserts CLI cognify produces the four-state trail).
 
 **Parent doc**: [08 — Pipeline Run Status Persistence](../08-pipeline-run-status.md)
-**Locked decisions**: 2 (always-on registry for library pipelines; `NoopPipelineRunRepository` default), 11 (`DbPipelineWatcher` is the watcher type library pipelines use).
+**Locked decisions**: 2 (always-on registry for library pipelines; `NoopPipelineRunRepository` default), 11 (`DbPipelineWatcher` is the watcher type library pipelines use, located at `crates/core/src/pipeline_run_registry/db_watcher.rs` per commit `56f020e`).
+
+> **Post-LIB-06 simplification.** This doc was drafted before LIB-06 routed
+> `cognify`, `memify`, and `AddPipeline::add` through `pipeline::execute`. Now
+> that they do (with `&NoopWatcher`), each convenience function only needs
+> to **replace its `&NoopWatcher` argument with `&DbPipelineWatcher::new(repo)`**.
+> No manual hook plumbing at the top/bottom of the function body is needed —
+> `pipeline::execute` already emits INITIATED (task 08-04, commit `29a99f8`),
+> STARTED, COMPLETED, and ERRORED.
 
 ---
 
@@ -36,15 +44,27 @@ Decision 11 keeps the single-point-of-truth invariant: both the HTTP-driven `Sco
 ## 3. Pre-conditions
 
 - Tasks 08-01, 08-02, 08-03, 08-04 committed.
-- `run_info_for_*` helpers exposed from `cognee_core::pipeline_run_registry` (tasks 08-02, 08-03).
-- `PipelineWatcher::on_pipeline_run_initiated` trait method present (task 08-04).
-- `PipelineRunRepository` accepts `Option<Uuid>` for `dataset_id` (task 08-01).
+- `run_info_for_*` helpers exposed from `cognee_core::pipeline_run_registry` (tasks 08-02, 08-03). **Verified** at `crates/core/src/pipeline_run_registry/data_info.rs:50,66,83` and re-exported via `crates/core/src/pipeline_run_registry/mod.rs:9`.
+- `PipelineWatcher::on_pipeline_run_initiated` trait method present (task 08-04). **Verified** at `crates/core/src/pipeline.rs:495` and called from `pipeline::execute` at `crates/core/src/pipeline.rs:749`.
+- `PipelineRunRepository` accepts `Option<Uuid>` for `dataset_id` (task 08-01). **Verified** at `crates/database/src/pipelines/repository.rs:43-51`.
+- **LIB-06 fully landed** (verified: main is at `da04bd6`, closure SHA `b5ccc96` on `git log --oneline`). The three convenience functions reach `pipeline::execute` with `&NoopWatcher`:
+  - `crates/cognify/src/tasks.rs:1897` — `cognee_core::pipeline::execute(&pipeline, inputs, ctx, &NoopWatcher)`
+  - `crates/cognify/src/memify/pipeline.rs:239` — same shape
+  - `crates/ingestion/src/pipeline.rs:1029` — same shape
 
 ## 4. Step-by-step
 
 ### 4.1 `NoopPipelineRunRepository`
 
-Add to [`crates/database/src/pipelines/`](../../crates/database/src/pipelines/) as a new file `noop_impl.rs`:
+> **Trait drift note (post task 08-05/08-06).** The trait signatures in this section's skeleton predate the most recent reader/orphan changes. Implementor must align to the actual trait at [`crates/database/src/pipelines/repository.rs`](../../crates/database/src/pipelines/repository.rs):
+> - `reset_orphans(&self, reason: &str) -> Result<u64, DbError>` — takes a `reason` and returns the rewritten-row count, not `()`.
+> - `list_recent` returns `Vec<PipelineRunRow>`, not `Vec<PipelineRun>`.
+> - `get_payload` returns `serde_json::Map<String, serde_json::Value>`, not `HashMap`.
+> - Error type is `DbError`, not `DatabaseError`.
+> - `list_recent_with_attribution` already has a default impl that falls back to `list_recent`; the noop can omit it.
+> - Also promote `NoOpPipelineRunRepository` from `crates/http-server/src/state.rs:136` (currently `pub(crate)`) into the new public type in `cognee-database`, rename to `NoopPipelineRunRepository` (Rust convention), and replace the http-server's private copy with a re-export.
+
+Add to [`crates/database/src/pipelines/`](../../crates/database/src/pipelines/) as a new file `noop_impl.rs` (template — adjust to current trait):
 
 ```rust
 //! In-memory no-op `PipelineRunRepository` for embedded uses without a DB.
@@ -310,7 +330,7 @@ Re-export from `crates/core/src/pipeline_run_registry/mod.rs`.
 
 ### 4.3 Update `cognify` signature
 
-Edit [`crates/cognify/src/tasks.rs::cognify`](../../crates/cognify/src/tasks.rs) (line 1773):
+Edit [`crates/cognify/src/tasks.rs::cognify`](../../crates/cognify/src/tasks.rs) (line 1773). The single change in the body is at **line 1897** — replace `&NoopWatcher` with `&DbPipelineWatcher::new(repo)`:
 
 ```rust
 pub async fn cognify(
@@ -329,27 +349,26 @@ pub async fn cognify(
     ontology_resolver: Arc<dyn OntologyResolver>,
     config: &CognifyConfig,
 ) -> Result<CognifyResult, CognifyError> {
-    // ...
-    // Construct the watcher and pass it to `pipeline::execute`.
+    // ... existing code unchanged up through line 1896 ...
     let watcher = DbPipelineWatcher::new(pipeline_run_repo.clone());
-    // ... existing code that builds tasks ...
-    let outputs = cognee_core::pipeline::execute(
-        &pipeline,
-        inputs,
-        &ctx,
-        &watcher, // ← was &NoopWatcher (or similar)
-    ).await?;
-    // ...
+    let outputs = cognee_core::pipeline::execute(&pipeline, inputs, ctx, &watcher).await?;
+    // ... rest of function unchanged ...
 }
 ```
 
-If the current code calls `execute` with a `NoopWatcher`, replace with `&DbPipelineWatcher::new(...)`. If the cognify body is built around lower-level `cognee_core::Pipeline` primitives, find the single call site of `cognee_core::pipeline::execute` and pass the watcher.
+Post-LIB-06, there is **only one** call to `cognee_core::pipeline::execute` in `cognify` (at line 1897). No additional hook plumbing is needed — `pipeline::execute` already fires `on_pipeline_run_initiated` / `Started` / `Completed` / `Errored`.
 
 ### 4.4 Update `memify`, `cognify_datasets`, `AddPipeline::add`
 
-Same shape: each function gains an `Arc<dyn PipelineRunRepository>` parameter and constructs `DbPipelineWatcher` to pass to `pipeline::execute`.
+Same one-line swap inside each function — replace `&NoopWatcher` with `&DbPipelineWatcher::new(repo)`:
+- `crates/cognify/src/memify/pipeline.rs:239`
+- `crates/ingestion/src/pipeline.rs:1029`
+
+`cognify_datasets` and `cognify_dataset_refs` ([`crates/cognify/src/dataset_resolver.rs:104`, `:212`](../../crates/cognify/src/dataset_resolver.rs)) do not call `pipeline::execute` directly — they loop over datasets and call `cognify(...)` per dataset. They only need the new parameter added and propagated into each `cognify(...)` call.
 
 For `AddPipeline::add` ([`crates/ingestion/src/pipeline.rs:786`](../../crates/ingestion/src/pipeline.rs#L786)), the pipeline-run trail mirrors Python's `cognee.add()` which also writes to `pipeline_runs`. The pipeline name is `"ingestion_pipeline"` (Python parity — search `cognee/modules/pipelines/operations/run_tasks.py` for the exact string).
+
+Also remove the now-stale `// gap-08 task 07: swap NoopWatcher for DbPipelineWatcher` comment at `crates/cognify/src/memify/pipeline.rs:129` and the equivalent stub comment at `crates/cognify/src/tasks.rs:1896` once the swap lands.
 
 ### 4.5 CLI: pass the real repo
 
@@ -384,13 +403,13 @@ Repeat in:
 - [`crates/cli/src/commands/add_and_cognify.rs`](../../crates/cli/src/commands/add_and_cognify.rs)
 - [`crates/cli/src/commands/run_sequence.rs`](../../crates/cli/src/commands/run_sequence.rs)
 
-### 4.6 HTTP-server: keep `ScopedRunWatcher`
+### 4.6 HTTP-server: keep `ScopedRunWatcher` — exclusive watcher invariant
 
-The http-server's dispatch path already uses `ScopedRunWatcher` through the registry. It must NOT also construct a `DbPipelineWatcher` — that would write each row twice. Verify the boxed pipeline future in [`crates/http-server/src/pipelines/`](../../crates/http-server/src/pipelines/) calls `cognify(...)` without a watcher of its own (or with a `NoopWatcher`), and rely on the registry-injected `ScopedRunWatcher` for the persistence.
+The http-server's dispatch path already uses `ScopedRunWatcher` through the registry. `pipeline::execute` accepts exactly one `&dyn PipelineWatcher`; whichever watcher is wired in is the sole writer for that run. The risk is that the HTTP path now calls `cognify(...)` / `memify(...)` / `AddPipeline::add(...)` and those functions internally construct `DbPipelineWatcher`, while the surrounding registry boxed-future also installs `ScopedRunWatcher` on a *different* `pipeline::execute` invocation — producing two row-sets per logical run.
 
-Concretely: the HTTP path passes a `NoopPipelineRunRepository` to `cognify(...)` so the `DbPipelineWatcher` inside cognify becomes a no-op, then the registry's `ScopedRunWatcher` provides the rows. Document this carefully in the commit body — it is the load-bearing invariant.
+**Required mitigation (load-bearing):** the HTTP boxed futures in [`crates/http-server/src/pipelines/`](../../crates/http-server/src/pipelines/) MUST pass `NoopPipelineRunRepository::arc()` into `cognify(...)` / `memify(...)` / `AddPipeline::add(...)`, so the internal `DbPipelineWatcher` becomes a no-op and the registry's `ScopedRunWatcher` is the sole writer. Add an integration test in task 09 that asserts exactly one row per status per HTTP cognify (four total).
 
-> **Alternative (cleaner):** make `cognify`'s `Arc<dyn PipelineRunRepository>` parameter actually drive watcher selection — if it is the noop, skip constructing the watcher; if it is a real repo, build `DbPipelineWatcher`. The HTTP path passes the noop and uses the registry; the CLI path passes the real repo. Both paths converge on a single point-of-truth (decision 11): one `PipelineRunRepository` per call, one set of rows.
+> **Alternative considered (and recommended):** inside each convenience function, branch on the repo identity — if the caller passed a `NoopPipelineRunRepository`, pass `&NoopWatcher` to `pipeline::execute`; otherwise construct and pass `&DbPipelineWatcher`. This avoids the runtime cost of two no-op `await`s per status and makes the "registry-only" path explicit. But it requires a downcast / type tag; the simpler implementation (always construct `DbPipelineWatcher`) is acceptable because writes to `NoopPipelineRunRepository` are `Ok(...)` cheap.
 
 ### 4.7 Examples and tests
 

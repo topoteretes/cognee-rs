@@ -20,7 +20,7 @@
 use std::sync::Arc;
 
 use cognee_core::CpuPool;
-use cognee_database::DatabaseConnection;
+use cognee_database::{DatabaseConnection, PipelineRunRepository};
 use cognee_embedding::EmbeddingEngine;
 use cognee_graph::GraphDBTrait;
 use cognee_ingestion::{AddParams, AddPipeline};
@@ -107,6 +107,7 @@ pub async fn persist_sessions_in_knowledge_graph(
     vector_db: Arc<dyn VectorDB>,
     embedding_engine: Arc<dyn EmbeddingEngine>,
     database: Arc<DatabaseConnection>,
+    pipeline_run_repo: Arc<dyn PipelineRunRepository>,
     thread_pool: Arc<dyn CpuPool>,
     ontology_resolver: Arc<dyn OntologyResolver>,
     cognify_config: &CognifyConfig,
@@ -207,6 +208,7 @@ pub async fn persist_sessions_in_knowledge_graph(
             Arc::clone(&vector_db),
             Arc::clone(&embedding_engine),
             Arc::clone(&database),
+            Arc::clone(&pipeline_run_repo),
             Arc::clone(&thread_pool),
             Arc::clone(&ontology_resolver),
             cognify_config,

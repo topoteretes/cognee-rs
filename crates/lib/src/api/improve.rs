@@ -16,7 +16,9 @@ use cognee_cognify::{
     CognifyConfig, MemifyConfig, MemifyResult, apply_feedback_weights_pipeline,
     persist_sessions_in_knowledge_graph, run_memify, sync_graph_to_session,
 };
-use cognee_database::{CheckpointStore, DatabaseConnection};
+use cognee_database::{
+    CheckpointStore, DatabaseConnection, PipelineRunRepository, SeaOrmPipelineRunRepository,
+};
 use cognee_embedding::EmbeddingEngine;
 use cognee_graph::GraphDBTrait;
 use cognee_ingestion::AddPipeline;
@@ -244,6 +246,8 @@ pub async fn improve(params: ImproveParams<'_>) -> Result<ImproveResult, ApiErro
                             return Ok(result);
                         }
                     };
+                let pipeline_run_repo: Arc<dyn PipelineRunRepository> =
+                    Arc::new(SeaOrmPipelineRunRepository::new(Arc::clone(&database)));
                 match persist_sessions_in_knowledge_graph(
                     sids,
                     &dataset_name,
@@ -257,6 +261,7 @@ pub async fn improve(params: ImproveParams<'_>) -> Result<ImproveResult, ApiErro
                     Arc::clone(&vector_db),
                     Arc::clone(&embedding_engine),
                     database,
+                    pipeline_run_repo,
                     thread_pool,
                     Arc::clone(&ontology_resolver),
                     cognify_config,
@@ -296,12 +301,15 @@ pub async fn improve(params: ImproveParams<'_>) -> Result<ImproveResult, ApiErro
         Some(database) => match cognee_core::RayonThreadPool::with_default_threads() {
             Ok(pool) => {
                 let thread_pool: Arc<dyn cognee_core::CpuPool> = Arc::new(pool);
+                let pipeline_run_repo: Arc<dyn PipelineRunRepository> =
+                    Arc::new(SeaOrmPipelineRunRepository::new(Arc::clone(database)));
                 match run_memify(
                     Arc::clone(&graph_db),
                     Arc::clone(&vector_db),
                     Arc::clone(&embedding_engine),
                     thread_pool,
                     Arc::clone(database),
+                    pipeline_run_repo,
                     None,
                     Some(owner_id),
                     tenant_id,

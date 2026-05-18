@@ -13,7 +13,7 @@ use async_trait::async_trait;
 use chrono::Utc;
 use cognee_core::CpuPool;
 use cognee_database::ops::pipeline_runs::{create_pipeline_run, get_latest_pipeline_status};
-use cognee_database::{DatabaseConnection, PipelineRun, PipelineRunStatus};
+use cognee_database::{DatabaseConnection, PipelineRun, PipelineRunRepository, PipelineRunStatus};
 use cognee_embedding::engine::EmbeddingEngine;
 use cognee_graph::GraphDBTrait;
 use cognee_llm::Llm;
@@ -112,6 +112,7 @@ pub async fn cognify_datasets(
     vector_db: Arc<dyn VectorDB>,
     embedding_engine: Arc<dyn EmbeddingEngine>,
     database: Arc<DatabaseConnection>,
+    pipeline_run_repo: Arc<dyn PipelineRunRepository>,
     thread_pool: Arc<dyn CpuPool>,
     ontology_resolver: Arc<dyn OntologyResolver>,
     config: &CognifyConfig,
@@ -173,6 +174,7 @@ pub async fn cognify_datasets(
             Arc::clone(&vector_db),
             Arc::clone(&embedding_engine),
             Arc::clone(&database),
+            Arc::clone(&pipeline_run_repo),
             Arc::clone(&thread_pool),
             Arc::clone(&ontology_resolver),
             config,
@@ -220,6 +222,7 @@ pub async fn cognify_dataset_refs(
     vector_db: Arc<dyn VectorDB>,
     embedding_engine: Arc<dyn EmbeddingEngine>,
     database: Arc<DatabaseConnection>,
+    pipeline_run_repo: Arc<dyn PipelineRunRepository>,
     thread_pool: Arc<dyn CpuPool>,
     ontology_resolver: Arc<dyn OntologyResolver>,
     config: &CognifyConfig,
@@ -304,6 +307,7 @@ pub async fn cognify_dataset_refs(
             Arc::clone(&vector_db),
             Arc::clone(&embedding_engine),
             Arc::clone(&database),
+            Arc::clone(&pipeline_run_repo),
             Arc::clone(&thread_pool),
             Arc::clone(&ontology_resolver),
             config,

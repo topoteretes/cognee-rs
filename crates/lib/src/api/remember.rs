@@ -11,7 +11,10 @@ use std::time::Instant;
 
 use cognee_cognify::cognify;
 use cognee_cognify::{CognifyConfig, CognifyResult, MemifyConfig, MemifyResult, run_memify};
-use cognee_database::{CheckpointStore, DatabaseConnection, SessionLifecycleDb, UserDb};
+use cognee_database::{
+    CheckpointStore, DatabaseConnection, PipelineRunRepository, SeaOrmPipelineRunRepository,
+    SessionLifecycleDb, UserDb,
+};
 use cognee_embedding::EmbeddingEngine;
 use cognee_graph::GraphDBTrait;
 use cognee_ingestion::AddPipeline;
@@ -379,6 +382,11 @@ async fn run_permanent_inner(
     );
 
     // Cognify.
+    // Gap 08-07: persist the four-state `pipeline_runs` trail through the
+    // real SeaORM repo when a database is available; embedded callers fall
+    // back to the no-op repo.
+    let pipeline_run_repo: Arc<dyn PipelineRunRepository> =
+        Arc::new(SeaOrmPipelineRunRepository::new(Arc::clone(&database)));
     let cognify_result = cognify(
         data_items,
         dataset_id,
@@ -391,6 +399,7 @@ async fn run_permanent_inner(
         Arc::clone(&vector_db),
         Arc::clone(&embedding_engine),
         database,
+        Arc::clone(&pipeline_run_repo),
         thread_pool,
         ontology_resolver,
         cognify_config,
@@ -405,12 +414,15 @@ async fn run_permanent_inner(
             Some(database) => match cognee_core::RayonThreadPool::with_default_threads() {
                 Ok(pool) => {
                     let thread_pool: Arc<dyn cognee_core::CpuPool> = Arc::new(pool);
+                    let pipeline_run_repo: Arc<dyn PipelineRunRepository> =
+                        Arc::new(SeaOrmPipelineRunRepository::new(Arc::clone(&database)));
                     match run_memify(
                         Arc::clone(&graph_db),
                         Arc::clone(&vector_db),
                         Arc::clone(&embedding_engine),
                         thread_pool,
                         database,
+                        pipeline_run_repo,
                         Some(dataset_id),
                         Some(owner_id),
                         tenant_id,

@@ -224,6 +224,8 @@ async fn temporal_cognify_creates_event_and_timestamp_nodes() {
         vector_db,
         embedding_engine,
         make_in_memory_db().await,
+        Arc::new(cognee_database::NoopPipelineRunRepository::new())
+            as Arc<dyn cognee_database::PipelineRunRepository>,
         make_thread_pool(),
         Arc::new(NoOpOntologyResolver::new()),
         &config,
@@ -361,6 +363,8 @@ async fn temporal_cognify_populates_event_name_vector_collection() {
         Arc::clone(&vector_db) as Arc<dyn VectorDB>,
         embedding_engine,
         make_in_memory_db().await,
+        Arc::new(cognee_database::NoopPipelineRunRepository::new())
+            as Arc<dyn cognee_database::PipelineRunRepository>,
         make_thread_pool(),
         Arc::new(NoOpOntologyResolver::new()),
         &config,

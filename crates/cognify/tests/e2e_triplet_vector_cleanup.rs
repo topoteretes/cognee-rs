@@ -148,6 +148,8 @@ async fn test_triplet_vector_cleanup_after_data_delete() {
         vector_db.clone(),
         embedding_engine.clone(),
         Arc::clone(&database),
+        Arc::new(cognee_database::NoopPipelineRunRepository::new())
+            as Arc<dyn cognee_database::PipelineRunRepository>,
         Arc::new(
             cognee_core::RayonThreadPool::with_default_threads().expect("RayonThreadPool init"),
         ) as Arc<dyn cognee_core::CpuPool>,
@@ -175,6 +177,8 @@ async fn test_triplet_vector_cleanup_after_data_delete() {
         vector_db.clone(),
         embedding_engine.clone(),
         Arc::clone(&database),
+        Arc::new(cognee_database::NoopPipelineRunRepository::new())
+            as Arc<dyn cognee_database::PipelineRunRepository>,
         Arc::new(
             cognee_core::RayonThreadPool::with_default_threads().expect("RayonThreadPool init"),
         ) as Arc<dyn cognee_core::CpuPool>,
@@ -203,6 +207,8 @@ async fn test_triplet_vector_cleanup_after_data_delete() {
         Arc::clone(&embedding_engine),
         Arc::clone(&memify_pool),
         Arc::clone(&database),
+        Arc::new(cognee_database::NoopPipelineRunRepository::new())
+            as Arc<dyn cognee_database::PipelineRunRepository>,
         Some(ds_ai.id),
         None,
         None,
@@ -217,6 +223,8 @@ async fn test_triplet_vector_cleanup_after_data_delete() {
         Arc::clone(&embedding_engine),
         memify_pool,
         Arc::clone(&database),
+        Arc::new(cognee_database::NoopPipelineRunRepository::new())
+            as Arc<dyn cognee_database::PipelineRunRepository>,
         Some(ds_q.id),
         None,
         None,

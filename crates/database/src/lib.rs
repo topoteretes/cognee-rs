@@ -38,7 +38,9 @@ pub fn database_system_label(db: &sea_orm::DatabaseConnection) -> &'static str {
 }
 pub use ops::checkpoint::{CheckpointStore, SeaOrmCheckpointStore};
 pub use pipelines::sea_orm_impl::SeaOrmPipelineRunRepository;
-pub use pipelines::{PipelineRunRepository, PipelineRunWithAttributionRow};
+pub use pipelines::{
+    NoopPipelineRunRepository, PipelineRunRepository, PipelineRunWithAttributionRow,
+};
 pub use sea_orm::DatabaseConnection;
 pub use sync::{
     SeaOrmSyncOperationRepository, SyncOperationRepository, SyncOperationRow, SyncOperationStatus,

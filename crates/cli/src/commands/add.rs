@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use cognee_lib::add::AddPipeline;
 use cognee_lib::core::RayonThreadPool;
+use cognee_lib::database::{PipelineRunRepository, SeaOrmPipelineRunRepository};
 use cognee_lib::models::DataInput;
 use cognee_lib::{ComponentManager, PipelineContext};
 use tracing::info;
@@ -52,6 +53,11 @@ pub fn run(args: AddArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> {
                 .map_err(|e| CliError::Runtime(format!("Failed to build thread pool: {e}")))?,
         );
 
+        // Gap 08-07: persist the four-state `pipeline_runs` trail so CLI
+        // add shows up in `/api/v1/activity/pipeline-runs`.
+        let pipeline_run_repo: Arc<dyn PipelineRunRepository> =
+            Arc::new(SeaOrmPipelineRunRepository::new(Arc::clone(&database)));
+
         let pipeline = AddPipeline::new(
             storage,
             Arc::clone(&database) as Arc<dyn cognee_lib::database::IngestDb>,
@@ -59,7 +65,8 @@ pub fn run(args: AddArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> {
         .with_thread_pool(thread_pool)
         .with_graph_db(graph_db)
         .with_vector_db(vector_db)
-        .with_database(database);
+        .with_database(database)
+        .with_pipeline_run_repo(pipeline_run_repo);
 
         let inputs = args
             .data

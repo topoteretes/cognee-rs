@@ -119,6 +119,8 @@ async fn test_pipeline_with_embeddings() {
         vector_db,
         embedding_engine,
         make_in_memory_db().await,
+        Arc::new(cognee_database::NoopPipelineRunRepository::new())
+            as Arc<dyn cognee_database::PipelineRunRepository>,
         make_thread_pool(),
         Arc::new(NoOpOntologyResolver::new()),
         &config,
@@ -250,6 +252,8 @@ async fn test_pipeline_requires_embeddings() {
         vector_db,
         embedding_engine,
         make_in_memory_db().await,
+        Arc::new(cognee_database::NoopPipelineRunRepository::new())
+            as Arc<dyn cognee_database::PipelineRunRepository>,
         make_thread_pool(),
         Arc::new(NoOpOntologyResolver::new()),
         &config,
@@ -339,6 +343,8 @@ async fn test_embedding_semantic_similarity() {
             Arc::clone(&vector_db),
             Arc::clone(&embedding_engine),
             make_in_memory_db().await,
+            Arc::new(cognee_database::NoopPipelineRunRepository::new())
+                as Arc<dyn cognee_database::PipelineRunRepository>,
             make_thread_pool(),
             Arc::new(NoOpOntologyResolver::new()),
             &config,
@@ -432,6 +438,8 @@ async fn test_entity_name_indexing() {
         vector_db.clone(),
         embedding_engine,
         make_in_memory_db().await,
+        Arc::new(cognee_database::NoopPipelineRunRepository::new())
+            as Arc<dyn cognee_database::PipelineRunRepository>,
         make_thread_pool(),
         Arc::new(NoOpOntologyResolver::new()),
         &config,
@@ -563,6 +571,8 @@ async fn test_triplet_embeddings_disabled_by_default() {
         vector_db.clone(),
         embedding_engine,
         make_in_memory_db().await,
+        Arc::new(cognee_database::NoopPipelineRunRepository::new())
+            as Arc<dyn cognee_database::PipelineRunRepository>,
         make_thread_pool(),
         Arc::new(NoOpOntologyResolver::new()),
         &config,
@@ -653,6 +663,8 @@ async fn test_triplet_embeddings_enabled() {
         vector_db.clone(),
         embedding_engine,
         make_in_memory_db().await,
+        Arc::new(cognee_database::NoopPipelineRunRepository::new())
+            as Arc<dyn cognee_database::PipelineRunRepository>,
         make_thread_pool(),
         Arc::new(NoOpOntologyResolver::new()),
         &config,

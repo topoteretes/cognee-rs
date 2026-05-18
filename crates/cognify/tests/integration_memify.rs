@@ -79,6 +79,8 @@ async fn test_memify_end_to_end() {
         Arc::clone(&engine),
         pool,
         database,
+        Arc::new(cognee_database::NoopPipelineRunRepository::new())
+            as Arc<dyn cognee_database::PipelineRunRepository>,
         Some(Uuid::new_v4()),
         Some(Uuid::new_v4()),
         None,
@@ -115,6 +117,8 @@ async fn test_memify_idempotent() {
         Arc::clone(&engine),
         Arc::clone(&pool),
         Arc::clone(&database),
+        Arc::new(cognee_database::NoopPipelineRunRepository::new())
+            as Arc<dyn cognee_database::PipelineRunRepository>,
         None,
         None,
         None,
@@ -129,6 +133,8 @@ async fn test_memify_idempotent() {
         Arc::clone(&engine),
         Arc::clone(&pool),
         Arc::clone(&database),
+        Arc::new(cognee_database::NoopPipelineRunRepository::new())
+            as Arc<dyn cognee_database::PipelineRunRepository>,
         None,
         None,
         None,
@@ -163,6 +169,8 @@ async fn test_memify_empty_graph() {
         Arc::clone(&engine),
         pool,
         database,
+        Arc::new(cognee_database::NoopPipelineRunRepository::new())
+            as Arc<dyn cognee_database::PipelineRunRepository>,
         None,
         None,
         None,
@@ -322,7 +330,17 @@ async fn test_memify_rejects_invalid_config() {
     let config = MemifyConfig::default().with_triplet_batch_size(0);
 
     let err = memify(
-        graph_db, vector_db, engine, pool, database, None, None, None, &config,
+        graph_db,
+        vector_db,
+        engine,
+        pool,
+        database,
+        Arc::new(cognee_database::NoopPipelineRunRepository::new())
+            as Arc<dyn cognee_database::PipelineRunRepository>,
+        None,
+        None,
+        None,
+        &config,
     )
     .await
     .unwrap_err();
@@ -406,6 +424,8 @@ async fn test_memify_with_type_and_names_filter_or() {
         Arc::clone(&engine),
         pool,
         database,
+        Arc::new(cognee_database::NoopPipelineRunRepository::new())
+            as Arc<dyn cognee_database::PipelineRunRepository>,
         Some(Uuid::new_v4()),
         Some(Uuid::new_v4()),
         None,
@@ -447,6 +467,8 @@ async fn test_memify_with_type_and_names_filter_and() {
         Arc::clone(&engine),
         pool,
         database,
+        Arc::new(cognee_database::NoopPipelineRunRepository::new())
+            as Arc<dyn cognee_database::PipelineRunRepository>,
         Some(Uuid::new_v4()),
         Some(Uuid::new_v4()),
         None,

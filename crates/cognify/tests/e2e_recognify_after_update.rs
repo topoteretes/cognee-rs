@@ -300,6 +300,8 @@ async fn test_recognify_after_content_update() {
         vector_db.clone() as Arc<dyn VectorDB>,
         embedding_engine.clone() as Arc<dyn EmbeddingEngine>,
         Arc::clone(&database),
+        Arc::new(cognee_database::NoopPipelineRunRepository::new())
+            as Arc<dyn cognee_database::PipelineRunRepository>,
         Arc::new(
             cognee_core::RayonThreadPool::with_default_threads().expect("RayonThreadPool init"),
         ) as Arc<dyn cognee_core::CpuPool>,
@@ -386,6 +388,8 @@ async fn test_recognify_after_content_update() {
         vector_db.clone() as Arc<dyn VectorDB>,
         embedding_engine.clone() as Arc<dyn EmbeddingEngine>,
         Arc::clone(&database),
+        Arc::new(cognee_database::NoopPipelineRunRepository::new())
+            as Arc<dyn cognee_database::PipelineRunRepository>,
         Arc::new(
             cognee_core::RayonThreadPool::with_default_threads().expect("RayonThreadPool init"),
         ) as Arc<dyn cognee_core::CpuPool>,

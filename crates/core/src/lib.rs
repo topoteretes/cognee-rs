@@ -51,8 +51,9 @@ pub use thread_pool::{CpuPool, CpuPoolExt, RayonThreadPool};
 
 #[cfg(feature = "pipeline-run-registry")]
 pub use pipeline_run_registry::{
-    DefaultPipelineRunRegistry, PipelineFuture, PipelineRunRegistry, RegistryConfig, RegistryError,
-    RunEvent, RunEventKind, RunHandle, RunOutcome, RunPhase, RunSpec, ScopedRunWatcher,
+    DbPipelineWatcher, DefaultPipelineRunRegistry, PipelineFuture, PipelineRunRegistry,
+    RegistryConfig, RegistryError, RunEvent, RunEventKind, RunHandle, RunOutcome, RunPhase,
+    RunSpec, ScopedRunWatcher,
 };
 
 // Re-export the repository trait from cognee-database for ergonomics.

@@ -1,7 +1,9 @@
 use std::sync::Arc;
 
 use cognee_lib::cognify::{ChunkStrategy, CognifyConfig, cognify};
-use cognee_lib::database::{DatabaseConnection, UserDb, ops};
+use cognee_lib::database::{
+    DatabaseConnection, PipelineRunRepository, SeaOrmPipelineRunRepository, UserDb, ops,
+};
 use cognee_lib::ontology::{NoOpOntologyResolver, OntologyResolver, RdfLibOntologyResolver};
 use cognee_lib::{ComponentManager, PipelineContext};
 use tracing::{debug, info, warn};
@@ -158,6 +160,11 @@ pub fn run(args: CognifyArgs, cm: Arc<ComponentManager>) -> Result<(), CliError>
                 })?,
             );
 
+            // Gap 08-07: persist the four-state `pipeline_runs` trail so
+            // CLI cognify shows up in `/api/v1/activity/pipeline-runs`.
+            let pipeline_run_repo: Arc<dyn PipelineRunRepository> =
+                Arc::new(SeaOrmPipelineRunRepository::new(Arc::clone(&database)));
+
             let result = cognify(
                 data_items,
                 dataset.id,
@@ -170,6 +177,7 @@ pub fn run(args: CognifyArgs, cm: Arc<ComponentManager>) -> Result<(), CliError>
                 Arc::clone(&vector_db),
                 Arc::clone(&embedding_engine),
                 Arc::clone(&database),
+                pipeline_run_repo,
                 thread_pool,
                 Arc::clone(&ontology_resolver),
                 &cognify_config,

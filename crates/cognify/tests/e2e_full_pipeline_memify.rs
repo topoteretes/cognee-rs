@@ -190,6 +190,8 @@ async fn test_full_pipeline_add_cognify_memify_search_delete() {
         vector_db.clone() as Arc<dyn VectorDB>,
         embedding_engine.clone() as Arc<dyn EmbeddingEngine>,
         database.clone(),
+        Arc::new(cognee_database::NoopPipelineRunRepository::new())
+            as Arc<dyn cognee_database::PipelineRunRepository>,
         Arc::new(
             cognee_core::RayonThreadPool::with_default_threads().expect("RayonThreadPool init"),
         ) as Arc<dyn cognee_core::CpuPool>,
@@ -244,6 +246,8 @@ async fn test_full_pipeline_add_cognify_memify_search_delete() {
         Arc::clone(&embedding_engine),
         memify_pool,
         Arc::clone(&database),
+        Arc::new(cognee_database::NoopPipelineRunRepository::new())
+            as Arc<dyn cognee_database::PipelineRunRepository>,
         Some(dataset.id),
         None, // user_id
         None, // tenant_id

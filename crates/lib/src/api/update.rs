@@ -7,7 +7,9 @@
 use std::sync::Arc;
 
 use cognee_cognify::{CognifyConfig, CognifyResult, cognify};
-use cognee_database::{DatabaseConnection, UserDb};
+use cognee_database::{
+    DatabaseConnection, PipelineRunRepository, SeaOrmPipelineRunRepository, UserDb,
+};
 use cognee_delete::{DeleteMode, DeleteRequest, DeleteResult, DeleteScope, DeleteService};
 use cognee_embedding::EmbeddingEngine;
 use cognee_graph::GraphDBTrait;
@@ -108,6 +110,9 @@ pub async fn update(
                 .map_err(|e| ApiError::Cognify(format!("failed to construct thread pool: {e}")))?,
         );
 
+        // Gap 08-07: persist the four-state `pipeline_runs` trail.
+        let pipeline_run_repo: Arc<dyn PipelineRunRepository> =
+            Arc::new(SeaOrmPipelineRunRepository::new(Arc::clone(&database)));
         let result = cognify(
             data_items.clone(),
             dataset_id,
@@ -120,6 +125,7 @@ pub async fn update(
             vector_db,
             embedding_engine,
             database,
+            pipeline_run_repo,
             thread_pool,
             ontology_resolver,
             cognify_config,

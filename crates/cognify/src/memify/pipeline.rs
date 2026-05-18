@@ -6,11 +6,12 @@
 use std::sync::Arc;
 
 use cognee_core::pipeline::DataIdFn;
+use cognee_core::pipeline_run_registry::DbPipelineWatcher;
 use cognee_core::task::Value;
 use cognee_core::{
-    CpuPool, NoopWatcher, Pipeline, PipelineBuilder, PipelineContext, TaskContextBuilder, TypedTask,
+    CpuPool, Pipeline, PipelineBuilder, PipelineContext, TaskContextBuilder, TypedTask,
 };
-use cognee_database::DatabaseConnection;
+use cognee_database::{DatabaseConnection, PipelineRunRepository};
 use cognee_embedding::EmbeddingEngine;
 use cognee_graph::GraphDBTrait;
 use cognee_models::Triplet;
@@ -106,7 +107,9 @@ pub fn build_memify_index_only_pipeline(
 ///    them from `config.custom_data`).
 /// 3. If no triplets found, return early with zeros.
 /// 4. Build the one-task index-only pipeline (Decision 8) and route through
-///    [`cognee_core::pipeline::execute`] with `NoopWatcher` (Decision 11).
+///    [`cognee_core::pipeline::execute`] with a
+///    [`cognee_core::pipeline_run_registry::DbPipelineWatcher`] backed by
+///    the caller-supplied `pipeline_run_repo` (Decision 11, gap 08-07).
 /// 5. Downcast the executor output back to [`IndexResult`] and return a
 ///    [`MemifyResult`].
 ///
@@ -125,12 +128,6 @@ pub fn build_memify_index_only_pipeline(
 ///
 /// # Returns
 /// A [`MemifyResult`] with counts of extracted and indexed triplets.
-//
-// gap-08 task 07: swap `NoopWatcher` for `DbPipelineWatcher` here once the
-// watcher type lands so `PipelineWatcher` lifecycle hooks
-// (`on_pipeline_run_initiated/started/completed/errored`, `on_payload_field`)
-// are persisted to the `pipeline_runs` audit trail. Tracked in
-// `docs/telemetry/08/07-library-pipeline-wiring.md`.
 #[allow(clippy::too_many_arguments)]
 pub async fn memify(
     graph_db: Arc<dyn GraphDBTrait>,
@@ -138,6 +135,7 @@ pub async fn memify(
     embedding_engine: Arc<dyn EmbeddingEngine>,
     thread_pool: Arc<dyn CpuPool>,
     database: Arc<DatabaseConnection>,
+    pipeline_run_repo: Arc<dyn PipelineRunRepository>,
     dataset_id: Option<Uuid>,
     user_id: Option<Uuid>,
     tenant_id: Option<Uuid>,
@@ -236,7 +234,10 @@ pub async fn memify(
 
     let inputs: Vec<Arc<dyn Value>> = vec![Arc::new(triplets) as Arc<dyn Value>];
 
-    let outputs = cognee_core::pipeline::execute(&pipeline, inputs, ctx, &NoopWatcher)
+    // Decision 11 (gap 08-07): persist the four-state `pipeline_runs` trail
+    // through the caller-supplied repository.
+    let watcher = DbPipelineWatcher::new(pipeline_run_repo);
+    let outputs = cognee_core::pipeline::execute(&pipeline, inputs, ctx, &watcher)
         .await
         .map_err(|e| MemifyError::Execute(e.to_string()))?;
 

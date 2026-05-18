@@ -105,6 +105,8 @@ async fn text_summary_payload_contains_text_field() {
         vector_db.clone() as Arc<dyn VectorDB>,
         embedding_engine,
         db,
+        Arc::new(cognee_database::NoopPipelineRunRepository::new())
+            as Arc<dyn cognee_database::PipelineRunRepository>,
         thread_pool,
         Arc::new(NoOpOntologyResolver::new()),
         &config,

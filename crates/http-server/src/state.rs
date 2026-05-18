@@ -11,7 +11,10 @@ use cognee_observability::TelemetryGuard;
 
 use cognee_core::PipelineRunRegistry;
 use cognee_core::pipeline_run_registry::DefaultPipelineRunRegistry;
-use cognee_database::{DatabaseConnection, PipelineRunRepository, SeaOrmPipelineRunRepository};
+use cognee_database::{
+    DatabaseConnection, NoopPipelineRunRepository, PipelineRunRepository,
+    SeaOrmPipelineRunRepository,
+};
 
 use crate::{
     auth::{AuthContext, Mailer},
@@ -80,10 +83,10 @@ pub struct AppState {
 
 impl AppState {
     /// Build a no-op `Arc<dyn PipelineRunRegistry>` backed by a
-    /// `NoOpPipelineRunRepository`.  Useful in tests that construct `AppState`
+    /// `NoopPipelineRunRepository`.  Useful in tests that construct `AppState`
     /// directly without a real database.
     pub fn noop_pipelines() -> Arc<dyn PipelineRunRegistry> {
-        let repo = Arc::new(NoOpPipelineRunRepository) as Arc<dyn PipelineRunRepository>;
+        let repo = NoopPipelineRunRepository::arc();
         let cfg = RegistryConfig::default();
         DefaultPipelineRunRegistry::new(repo, cfg)
     }
@@ -98,9 +101,10 @@ impl AppState {
     pub async fn build(config: HttpServerConfig) -> Result<Self, ServerError> {
         // Build an in-memory-only pipeline run repository backed by a temporary
         // SQLite database.  The real repository (backed by the server's own DB)
-        // is wired when `lib` is populated.  For now we use a NoOp repo so the
+        // is wired when `lib` is populated.  For now we use the shared
+        // `cognee_database::NoopPipelineRunRepository` (gap 08-07) so the
         // registry is always non-None.
-        let repo = Arc::new(NoOpPipelineRunRepository) as Arc<dyn PipelineRunRepository>;
+        let repo = NoopPipelineRunRepository::arc();
         let registry_cfg = config.to_registry_config();
         let pipelines: Arc<dyn PipelineRunRegistry> =
             DefaultPipelineRunRegistry::new(repo, registry_cfg);
@@ -125,89 +129,6 @@ impl AppState {
     /// wired. Most integration tests build their own `ComponentHandles` directly.
     pub fn components(&self) -> Option<&ComponentHandles> {
         self.lib.as_deref()
-    }
-}
-
-// ─── NoOpPipelineRunRepository ────────────────────────────────────────────────
-
-/// No-op repository used when no real DB is wired (P0/P1 test helpers).
-///
-/// All writes are silently discarded; reads return empty results.
-struct NoOpPipelineRunRepository;
-
-#[async_trait::async_trait]
-impl PipelineRunRepository for NoOpPipelineRunRepository {
-    async fn log_pipeline_run(
-        &self,
-        pipeline_run_id: uuid::Uuid,
-        _pipeline_id: uuid::Uuid,
-        _pipeline_name: &str,
-        _dataset_id: Option<uuid::Uuid>,
-        _status: cognee_database::PipelineRunStatus,
-        _run_info: Option<serde_json::Value>,
-    ) -> Result<uuid::Uuid, cognee_database::DatabaseError> {
-        Ok(pipeline_run_id)
-    }
-
-    async fn latest_status(
-        &self,
-        _dataset_ids: &[uuid::Uuid],
-        _pipeline_name: &str,
-    ) -> Result<
-        std::collections::HashMap<uuid::Uuid, cognee_database::PipelineRunStatus>,
-        cognee_database::DatabaseError,
-    > {
-        Ok(std::collections::HashMap::new())
-    }
-
-    async fn list_recent(
-        &self,
-        _dataset_id: Option<uuid::Uuid>,
-        _limit: u32,
-    ) -> Result<Vec<cognee_database::PipelineRun>, cognee_database::DatabaseError> {
-        Ok(Vec::new())
-    }
-
-    async fn reset_orphans(&self, _reason: &str) -> Result<u64, cognee_database::DatabaseError> {
-        Ok(0)
-    }
-
-    async fn set_payload_field(
-        &self,
-        _run_id: uuid::Uuid,
-        _key: &str,
-        _value: serde_json::Value,
-    ) -> Result<(), cognee_database::DatabaseError> {
-        Ok(())
-    }
-
-    async fn get_payload(
-        &self,
-        _run_id: uuid::Uuid,
-    ) -> Result<serde_json::Map<String, serde_json::Value>, cognee_database::DatabaseError> {
-        Ok(serde_json::Map::new())
-    }
-
-    async fn get_pipeline_run(
-        &self,
-        _pipeline_run_id: uuid::Uuid,
-    ) -> Result<Option<cognee_database::PipelineRun>, cognee_database::DatabaseError> {
-        Ok(None)
-    }
-
-    async fn get_pipeline_run_by_dataset(
-        &self,
-        _dataset_id: uuid::Uuid,
-        _pipeline_name: &str,
-    ) -> Result<Option<cognee_database::PipelineRun>, cognee_database::DatabaseError> {
-        Ok(None)
-    }
-
-    async fn get_pipeline_runs_by_dataset(
-        &self,
-        _dataset_id: uuid::Uuid,
-    ) -> Result<Vec<cognee_database::PipelineRun>, cognee_database::DatabaseError> {
-        Ok(Vec::new())
     }
 }
 

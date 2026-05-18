@@ -158,6 +158,8 @@ async fn cognify_e2e_stamps_with_expected_task_names() {
         Arc::clone(&vector_db),
         Arc::clone(&embedding_engine),
         database.clone(),
+        Arc::new(cognee_database::NoopPipelineRunRepository::new())
+            as Arc<dyn cognee_database::PipelineRunRepository>,
         thread_pool,
         Arc::new(NoOpOntologyResolver::new()),
         &config,

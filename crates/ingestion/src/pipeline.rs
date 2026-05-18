@@ -18,11 +18,10 @@ use cognee_core::CpuPool;
 #[cfg(test)]
 use cognee_core::RayonThreadPool;
 use cognee_core::pipeline::DataIdFn;
+use cognee_core::pipeline_run_registry::DbPipelineWatcher;
 use cognee_core::task::Value;
-use cognee_core::{
-    NoopWatcher, Pipeline, PipelineBuilder, PipelineContext, TaskContextBuilder, TypedTask,
-};
-use cognee_database::{AclDb, DatabaseConnection, IngestDb};
+use cognee_core::{Pipeline, PipelineBuilder, PipelineContext, TaskContextBuilder, TypedTask};
+use cognee_database::{AclDb, DatabaseConnection, IngestDb, PipelineRunRepository};
 use cognee_graph::GraphDBTrait;
 use cognee_models::{Data, DataInput, Dataset};
 use cognee_storage::StorageTrait;
@@ -764,8 +763,9 @@ pub fn build_add_pipeline_with_acl(
 /// executor-routed [`AddPipeline::add_with_params`]. Threads
 /// [`AddParamsInjection`] into the persist task and attaches a
 /// `data_id_fn` so the executor's `run_info["data"]` carrier is populated
-/// once gap-08 task 07 wires `DbPipelineWatcher` (the carrier today goes
-/// to [`cognee_core::NoopWatcher`] which ignores it).
+/// for the
+/// [`cognee_core::pipeline_run_registry::DbPipelineWatcher`] wired by
+/// [`AddPipeline::with_pipeline_run_repo`] (gap 08-07).
 #[allow(clippy::too_many_arguments)]
 fn build_add_pipeline_internal(
     storage: Arc<dyn StorageTrait>,
@@ -831,6 +831,8 @@ pub struct AddPipeline {
     graph_db: Option<Arc<dyn GraphDBTrait>>,
     vector_db: Option<Arc<dyn VectorDB>>,
     db_connection: Option<Arc<DatabaseConnection>>,
+    // ─── Pipeline-run trail (gap 08-07) ───────────────────────────────────
+    pipeline_run_repo: Option<Arc<dyn PipelineRunRepository>>,
 }
 
 impl AddPipeline {
@@ -853,6 +855,7 @@ impl AddPipeline {
             graph_db: None,
             vector_db: None,
             db_connection: None,
+            pipeline_run_repo: None,
         }
     }
 
@@ -871,6 +874,7 @@ impl AddPipeline {
             graph_db: None,
             vector_db: None,
             db_connection: None,
+            pipeline_run_repo: None,
         }
     }
 
@@ -907,6 +911,18 @@ impl AddPipeline {
     /// SQL-backed `IngestDb` is built on.
     pub fn with_database(mut self, db: Arc<DatabaseConnection>) -> Self {
         self.db_connection = Some(db);
+        self
+    }
+
+    /// Attach the `PipelineRunRepository` used to persist the four-state
+    /// `pipeline_runs` trail (gap 08-07).
+    ///
+    /// Embedded callers pass `Arc::new(NoopPipelineRunRepository::new())`
+    /// (or simply omit this call — the pipeline defaults to no-op). CLI
+    /// and HTTP callers pass `Arc::new(SeaOrmPipelineRunRepository::new(db))`
+    /// so the rows surface in `/api/v1/activity/pipeline-runs`.
+    pub fn with_pipeline_run_repo(mut self, repo: Arc<dyn PipelineRunRepository>) -> Self {
+        self.pipeline_run_repo = Some(repo);
         self
     }
 
@@ -1025,8 +1041,15 @@ impl AddPipeline {
             .map(|i| Arc::new(i) as Arc<dyn Value>)
             .collect();
 
-        // ── Run the executor (Decision 11: NoopWatcher) ──────────────────
-        let outputs = cognee_core::pipeline::execute(&pipeline, typed_inputs, ctx, &NoopWatcher)
+        // ── Run the executor (gap 08-07 Decision 11: DbPipelineWatcher
+        //    persists the four-state `pipeline_runs` trail; defaults to a
+        //    no-op repo when the caller hasn't attached one). ───────────────
+        let pipeline_run_repo = self
+            .pipeline_run_repo
+            .clone()
+            .unwrap_or_else(cognee_database::NoopPipelineRunRepository::arc);
+        let watcher = DbPipelineWatcher::new(pipeline_run_repo);
+        let outputs = cognee_core::pipeline::execute(&pipeline, typed_inputs, ctx, &watcher)
             .await
             .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
 

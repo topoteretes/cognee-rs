@@ -26,11 +26,11 @@ use std::sync::Arc;
 
 use chrono::Utc;
 use cognee_chunking::{CutType, NAMESPACE_OID, TokenCounterKind, chunk_by_row, chunk_text};
+use cognee_core::pipeline_run_registry::DbPipelineWatcher;
 use cognee_core::{
-    CpuPool, NoopWatcher, Pipeline, PipelineBuilder, PipelineContext, TaskContextBuilder,
-    TypedTask, Value,
+    CpuPool, Pipeline, PipelineBuilder, PipelineContext, TaskContextBuilder, TypedTask, Value,
 };
-use cognee_database::DatabaseConnection;
+use cognee_database::{DatabaseConnection, PipelineRunRepository};
 use cognee_embedding::engine::EmbeddingEngine;
 use cognee_graph::{EdgeData, GraphDBTrait, GraphDBTraitExt};
 use cognee_ingestion::loaders::{LoaderOutput, LoaderRegistry};
@@ -1789,6 +1789,7 @@ pub async fn cognify(
     vector_db: Arc<dyn VectorDB>,
     embedding_engine: Arc<dyn EmbeddingEngine>,
     database: Arc<DatabaseConnection>,
+    pipeline_run_repo: Arc<dyn PipelineRunRepository>,
     thread_pool: Arc<dyn CpuPool>,
     ontology_resolver: Arc<dyn OntologyResolver>,
     config: &CognifyConfig,
@@ -1893,8 +1894,13 @@ pub async fn cognify(
     };
     let inputs: Vec<Arc<dyn Value>> = vec![Arc::new(input) as Arc<dyn Value>];
 
-    // Decision 11: NoopWatcher only — gap 08-07 swaps in DbPipelineWatcher.
-    let outputs = cognee_core::pipeline::execute(&pipeline, inputs, ctx, &NoopWatcher)
+    // Decision 11 (gap 08-07): `DbPipelineWatcher` persists the four-state
+    // `pipeline_runs` trail through the caller-supplied repository.
+    // Embedded callers pass `NoopPipelineRunRepository`; CLI / HTTP callers
+    // pass a `SeaOrmPipelineRunRepository` to surface rows in the
+    // `/api/v1/activity/pipeline-runs` endpoint.
+    let watcher = DbPipelineWatcher::new(pipeline_run_repo);
+    let outputs = cognee_core::pipeline::execute(&pipeline, inputs, ctx, &watcher)
         .await
         .map_err(|e| CognifyError::Execute(e.to_string()))?;
 
@@ -1903,9 +1909,7 @@ pub async fn cognify(
     // Decision 5: post-pipeline teardown — `extract_dlt_fk_edges` stays
     // outside the executor. The pipeline_runs row is already marked
     // COMPLETED by the watcher at this point; teardown failure surfaces as
-    // `Err(...)` to the caller but does not roll back the run state. This
-    // is acceptable today because the watcher is `NoopWatcher`; gap 08-07
-    // documents the trade-off when DbPipelineWatcher lands.
+    // `Err(...)` to the caller but does not roll back the run state.
     //
     // LIB-06-04: skip DLT FK extraction on the temporal branch — temporal
     // does not propagate `documents_for_dlt` (and Python's temporal cognify

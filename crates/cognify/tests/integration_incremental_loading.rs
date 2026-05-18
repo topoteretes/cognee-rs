@@ -153,6 +153,8 @@ async fn run_pipeline_with_incremental_flag(
         vector_db,
         embedding_engine,
         db,
+        Arc::new(cognee_database::NoopPipelineRunRepository::new())
+            as Arc<dyn cognee_database::PipelineRunRepository>,
         thread_pool,
         Arc::new(NoOpOntologyResolver::new()),
         &config,

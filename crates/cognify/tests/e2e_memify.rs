@@ -219,6 +219,8 @@ async fn test_memify_e2e_real_embedding_real_qdrant() {
         Arc::clone(&embedding_engine),
         pool,
         Arc::clone(&database),
+        Arc::new(cognee_database::NoopPipelineRunRepository::new())
+            as Arc<dyn cognee_database::PipelineRunRepository>,
         Some(Uuid::new_v4()), // dataset_id
         Some(Uuid::new_v4()), // user_id
         None,                 // tenant_id
