@@ -506,6 +506,8 @@ pub fn build_component_handles(
         graph_db,
         vector_db: None,
         thread_pool: None,
+        embedding_engine: None,
+        ontology_resolver: None,
         permissions,
         sync_ops,
         session_store: None,

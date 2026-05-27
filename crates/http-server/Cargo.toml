@@ -50,6 +50,8 @@ cognee-database = { path = "../database", features = ["sqlite"] }
 sea-orm = { version = "1", default-features = false, features = ["runtime-tokio-rustls", "with-chrono", "with-uuid", "with-json"] }
 cognee-storage = { path = "../storage" }
 cognee-ingestion = { path = "../ingestion" }
+cognee-cognify = { path = "../cognify" }
+cognee-embedding = { path = "../embedding" }
 cognee-delete = { path = "../delete" }
 cognee-ontology = { path = "../ontology" }
 cognee-search = { path = "../search" }
@@ -117,8 +119,10 @@ serial_test = { workspace = true }
 chrono = { workspace = true }
 sea-orm = { version = "1", default-features = false, features = ["sqlx-sqlite", "runtime-tokio-native-tls", "macros"] }
 cognee-database = { path = "../database", features = ["sqlite"] }
-cognee-graph = { path = "../graph", features = ["testing"] }
-cognee-vector = { path = "../vector", features = ["testing"] }
+cognee-graph = { path = "../graph", features = ["testing", "ladybug"] }
+cognee-vector = { path = "../vector", features = ["testing", "qdrant"] }
+cognee-embedding = { path = "../embedding", features = ["onnx"] }
 cognee-session = { path = "../session", features = ["fs"] }
+dotenv = { workspace = true }
 async-trait = { workspace = true }
 tempfile = { workspace = true }

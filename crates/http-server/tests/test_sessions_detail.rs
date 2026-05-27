@@ -130,6 +130,8 @@ fn build_handles_with_session(db: Arc<DatabaseConnection>) -> Arc<ComponentHandl
         graph_db: None,
         vector_db: None,
         thread_pool: None,
+        embedding_engine: None,
+        ontology_resolver: None,
         permissions,
         sync_ops,
         session_store: Some(store),
