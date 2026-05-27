@@ -2,11 +2,15 @@
 //!
 //! Python parity: `cognee/api/v1/memify/routers/get_memify_router.py`.
 
+use std::sync::Arc;
+
 use axum::{Json, Router, extract::State, http::StatusCode, response::IntoResponse, routing::post};
-use cognee_database::IngestDb;
+use cognee_cognify::{MemifyConfig, run_memify};
+use cognee_database::{IngestDb, NoopPipelineRunRepository};
 use uuid::Uuid;
 
 use crate::auth::AuthenticatedUser;
+use crate::components::ComponentHandles;
 use crate::dto::memify::MemifyPayloadDTO;
 use crate::dto::pipeline_run::PipelineRunInfoDTO;
 use crate::error::{ApiError, PipelineErrorSource};
@@ -75,12 +79,27 @@ pub async fn post_memify(
 
     let run_in_background = payload.run_in_background.unwrap_or(false);
 
+    // ── Build MemifyConfig from payload ────────────────────────────────────────
+    // The current `MemifyPayloadDTO` only carries `dataset_name`, `dataset_id`,
+    // and `run_in_background`. Python's full payload surface (extraction_tasks,
+    // enrichment_tasks, node_name, node_type, data) is not yet plumbed into the
+    // DTO; for now we use `MemifyConfig::default()`, matching the CLI's defaults.
+    let memify_config = Arc::new(MemifyConfig::default());
+
     // ── Dispatch ────────────────────────────────────────────────────────────────
-    // The actual memify work (graph read + triplet embedding + vector indexing)
-    // requires components not yet wired in the http-server (cognee-lib cycle).
-    // This is a documented blocking gap — stub returns Ok(()) immediately.
-    // TODO(P5): wire real memify() call once ComponentHandles gains graph/vector handles.
-    let work = box_pipeline_future(async move { Ok::<(), std::io::Error>(()) });
+    let components = state.components();
+    let user_for_run = user.clone();
+    let config_for_run = Arc::clone(&memify_config);
+    let components_owned = components.cloned();
+
+    let work = box_pipeline_future(async move {
+        let Some(components) = components_owned else {
+            return Err(MemifyDispatchError(
+                "Component handles not initialized; cannot run memify pipeline".to_string(),
+            ));
+        };
+        run_real_memify(&components, &user_for_run, dataset_id, &config_for_run).await
+    });
 
     let outcome = dispatch_pipeline(
         &state,
@@ -138,6 +157,80 @@ pub async fn post_memify(
     };
 
     Ok((StatusCode::OK, Json(run_info)))
+}
+
+// ─── Memify execution helpers ────────────────────────────────────────────────
+
+/// Boxed-future-compatible error type for the memify pipeline path.
+///
+/// `dispatch_pipeline` expects `Box<dyn Error + Send + Sync>`; this wrapper
+/// carries the underlying message back to the registry so it surfaces in the
+/// `RunPhase::Errored { message }` payload.
+#[derive(Debug)]
+struct MemifyDispatchError(String);
+
+impl std::fmt::Display for MemifyDispatchError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for MemifyDispatchError {}
+
+/// Drive a single dataset through the memify enrichment pipeline.
+///
+/// Picks up `GraphDBTrait` / `VectorDB` / `EmbeddingEngine` / `CpuPool`
+/// handles from `ComponentHandles`, threads them through
+/// [`cognee_cognify::run_memify`], and surfaces missing-handle / runtime
+/// errors as `MemifyDispatchError` so the registry's
+/// `RunPhase::Errored { message }` carries the underlying cause.
+async fn run_real_memify(
+    components: &ComponentHandles,
+    user: &AuthenticatedUser,
+    dataset_id: Uuid,
+    config: &MemifyConfig,
+) -> Result<(), MemifyDispatchError> {
+    // ── Pull required backend handles ─────────────────────────────────────────
+    let graph_db = components
+        .graph_db
+        .clone()
+        .ok_or_else(|| MemifyDispatchError("graph_db not wired in ComponentHandles".into()))?;
+    let vector_db = components
+        .vector_db
+        .clone()
+        .ok_or_else(|| MemifyDispatchError("vector_db not wired in ComponentHandles".into()))?;
+    let embedding_engine = components.embedding_engine.clone().ok_or_else(|| {
+        MemifyDispatchError("embedding_engine not wired in ComponentHandles".into())
+    })?;
+    let thread_pool = components
+        .thread_pool
+        .clone()
+        .ok_or_else(|| MemifyDispatchError("thread_pool not wired in ComponentHandles".into()))?;
+
+    let database = components.database.clone();
+
+    // Gap 08-07: the outer `dispatch_pipeline` already wires
+    // `DefaultPipelineRunRegistry` (backed by `SeaOrmPipelineRunRepository`)
+    // for the four-state `pipeline_runs` trail. Hand the inner memify a
+    // no-op repo so its `DbPipelineWatcher` does not produce a second row-set.
+    let pipeline_run_repo = NoopPipelineRunRepository::arc();
+
+    run_memify(
+        graph_db,
+        vector_db,
+        embedding_engine,
+        thread_pool,
+        database,
+        pipeline_run_repo,
+        Some(dataset_id),
+        Some(user.id),
+        user.tenant_id,
+        config,
+    )
+    .await
+    .map_err(|e| MemifyDispatchError(format!("memify failed: {e}")))?;
+
+    Ok(())
 }
 
 // ─── router ──────────────────────────────────────────────────────────────────
@@ -198,6 +291,11 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 
+    /// Verifies the dataset-name → uuid5 resolution path dispatches without a DB.
+    ///
+    /// Uses `run_in_background=true` to assert the response shape without
+    /// running the real memify pipeline (which would 500 without backends —
+    /// see `post_memify_with_dataset_id_surfaces_missing_components`).
     #[tokio::test]
     async fn post_memify_with_dataset_name_no_db_dispatches() {
         let state = test_state().await;
@@ -205,7 +303,7 @@ mod tests {
             .route("/", post(post_memify_no_auth))
             .with_state(state);
 
-        let body = json!({ "dataset_name": "my_dataset" });
+        let body = json!({ "dataset_name": "my_dataset", "run_in_background": true });
         let req = Request::builder()
             .method("POST")
             .uri("/")
@@ -217,6 +315,10 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
     }
 
+    /// Verifies the dataset-id resolution path dispatches without a DB.
+    ///
+    /// Uses `run_in_background=true` to assert the dispatch wiring without
+    /// running the real memify pipeline (which would 500 without backends).
     #[tokio::test]
     async fn post_memify_with_dataset_id_no_db_dispatches() {
         let state = test_state().await;
@@ -225,7 +327,10 @@ mod tests {
             .with_state(state);
 
         let dataset_id = Uuid::new_v4();
-        let body = json!({ "datasetId": dataset_id.to_string() });
+        let body = json!({
+            "datasetId": dataset_id.to_string(),
+            "run_in_background": true
+        });
         let req = Request::builder()
             .method("POST")
             .uri("/")
@@ -235,6 +340,45 @@ mod tests {
 
         let resp = app.oneshot(req).await.expect("oneshot");
         assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    /// Blocking dispatch without backends wired now reaches the real memify
+    /// path and surfaces the missing-component error through the
+    /// `Pipeline run errored` envelope. Mirrors
+    /// `routers::cognify::tests::post_cognify_with_dataset_ids_surfaces_missing_components`.
+    #[tokio::test]
+    async fn post_memify_with_dataset_id_surfaces_missing_components() {
+        let state = test_state().await;
+        let app = Router::new()
+            .route("/", post(post_memify_no_auth))
+            .with_state(state);
+
+        let dataset_id = Uuid::new_v4();
+        let body = json!({
+            "datasetId": dataset_id.to_string(),
+            "run_in_background": false
+        });
+        let req = Request::builder()
+            .method("POST")
+            .uri("/")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(serde_json::to_string(&body).unwrap()))
+            .unwrap();
+
+        let resp = app.oneshot(req).await.expect("oneshot");
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        let body_bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert_eq!(v["error"], "Pipeline run errored");
+        let detail = v["detail"].as_str().unwrap_or_default();
+        assert!(
+            detail.contains("Component handles not initialized")
+                || detail.contains("not wired in ComponentHandles"),
+            "error detail must point at the missing-component path, got: {detail}"
+        );
     }
 
     #[tokio::test]
