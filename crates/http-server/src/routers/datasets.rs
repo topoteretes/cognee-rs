@@ -266,15 +266,41 @@ fn strip_file_prefix(uri: &str) -> &str {
 
 /// `GET /api/v1/datasets/{dataset_id}/graph` — rendered knowledge graph.
 ///
-/// **BLOCKING GAP**: `get_formatted_graph_data` does not exist in the Rust codebase.
-/// Returns 501 until the graph-rendering function is added to `cognee-graph` or `cognee-lib`.
+/// Returns `200 OK` with the JSON shape
+/// `{"nodes": [{id, label, type, properties}, ...], "edges": [{source, target, label}, ...]}`.
+///
+/// When the `graph_db` handle is not wired (e.g. test mode), the response is
+/// the same shape with empty arrays — `{"nodes": [], "edges": []}` — to
+/// preserve the wire contract for clients that never need to distinguish a
+/// truly-empty graph from "backend not configured".
 pub async fn get_dataset_graph(
-    _user: AuthenticatedUser,
-    _state: State<AppState>,
-    _dataset_id: Path<Uuid>,
+    user: AuthenticatedUser,
+    State(state): State<AppState>,
+    Path(dataset_id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    // TODO(blocking): implement get_formatted_graph_data in cognee-graph/cognee-lib
-    Err(ApiError::NotImplemented("Not implemented".into()))
+    // When backends are not wired (test mode), return the empty-graph
+    // fallback so the response shape is stable. Mirrors `get_dataset_schema`.
+    let Some(components) = state.components() else {
+        return Ok(Json(serde_json::json!({"nodes": [], "edges": []})));
+    };
+
+    // Permission gate — mirrors the `/schema` endpoint above.
+    if check_permission_via_handles(components, user.id, dataset_id, "read")
+        .await
+        .is_err()
+    {
+        return Err(ApiError::WriteEnvelopeError(
+            "Dataset not found".into(),
+            StatusCode::NOT_FOUND,
+        ));
+    }
+
+    let snapshot = components
+        .formatted_graph_data(Some(dataset_id), user.id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!("graph render failed: {e}")))?;
+
+    Ok(Json(snapshot))
 }
 
 // ─── 2.6  GET /{dataset_id}/schema ───────────────────────────────────────────

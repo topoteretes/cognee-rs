@@ -291,6 +291,27 @@ pub async fn ws_subscribe(
         use futures::StreamExt as _;
         let mut rx = state.pipelines.subscribe(pipeline_run_id);
 
+        // ── Recover the run's `dataset_id` and `user_id` ───────────────────────
+        // The registry trait does not expose the per-run handle, so we query the
+        // pipeline_runs table directly via `SeaOrmPipelineRunRepository`. The
+        // result is cached for the lifetime of this subscription so we don't
+        // re-query on every event.
+        let dataset_user = if let Some(components) = state.components() {
+            use cognee_database::{PipelineRunRepository, SeaOrmPipelineRunRepository};
+            let repo = SeaOrmPipelineRunRepository::new(components.database.clone());
+            match repo.get_pipeline_run(pipeline_run_id).await {
+                Ok(Some(run)) => {
+                    // owner / user_id is not stored on the run row; fall back to
+                    // a nil UUID — the formatter currently ignores user_id, but
+                    // we still pass a real value if one becomes recoverable.
+                    Some((run.dataset_id, Uuid::nil()))
+                }
+                Ok(None) | Err(_) => None,
+            }
+        } else {
+            None
+        };
+
         // ── Forward events ─────────────────────────────────────────────────────
         // Strict Python parity (websocket.md §6):
         // - PipelineRunCompleted → forward TEXT frame + Close 1000.
@@ -301,15 +322,22 @@ pub async fn ws_subscribe(
             let status = event_kind_to_python_string(&event.kind).to_owned();
             // `formatted_graph_data` is called on every event (including Yield) —
             // wasteful but matches Python parity (websocket.md §5.3).
-            let graph_payload = state
-                .components()
-                .map(|c| {
-                    // Blocking gap: the real formatted_graph_data is a TODO(P5).
-                    // The stub on ComponentHandles already returns the right shape.
-                    let _ = c;
-                    json!({"nodes": [], "edges": []})
-                })
-                .unwrap_or(json!({}));
+            let graph_payload = if let Some(components) = state.components() {
+                let (dataset_id, user_id) = dataset_user.unwrap_or((None, Uuid::nil()));
+                components
+                    .formatted_graph_data(dataset_id, user_id)
+                    .await
+                    .unwrap_or_else(|err| {
+                        tracing::warn!(
+                            "formatted_graph_data failed for run {}: {}",
+                            pipeline_run_id,
+                            err
+                        );
+                        json!({"nodes": [], "edges": []})
+                    })
+            } else {
+                json!({})
+            };
 
             let frame = CognifyWsFrameDTO {
                 pipeline_run_id,
