@@ -109,20 +109,26 @@ impl ComponentHandles {
     /// Return the formatted knowledge-graph data for a dataset as the JSON
     /// shape `{"nodes": [...], "edges": [...]}`.
     ///
-    /// **Blocking gap**: the underlying `get_formatted_graph_data` function
-    /// has not yet been ported from Python. Returns an empty graph
-    /// `{"nodes": [], "edges": []}` until the implementation lands.
+    /// Wires to `cognee_graph::get_formatted_graph_data` when both a
+    /// `graph_db` handle and a `dataset_id` are available. When either is
+    /// missing — e.g. the server is running in test mode without backends —
+    /// returns the empty-graph fallback `{"nodes": [], "edges": []}` so that
+    /// the WS frame still has a valid shape.
     ///
-    /// The WebSocket handler calls this on every event and substitutes `{}`
-    /// on any error, so a stub return is correct wire-parity for now.
-    ///
-    /// TODO: wire to `cognee_graph::get_formatted_graph_data(dataset_id, user)`
-    /// once that function is ported.
+    /// Python parity: `cognee.modules.graph.methods.get_formatted_graph_data`.
     pub async fn formatted_graph_data(
         &self,
-        _dataset_id: Option<uuid::Uuid>,
-        _user_id: uuid::Uuid,
+        dataset_id: Option<uuid::Uuid>,
+        user_id: uuid::Uuid,
     ) -> Result<serde_json::Value, anyhow::Error> {
-        Ok(serde_json::json!({"nodes": [], "edges": []}))
+        let Some(graph_db) = self.graph_db.as_ref() else {
+            return Ok(serde_json::json!({"nodes": [], "edges": []}));
+        };
+        let Some(did) = dataset_id else {
+            return Ok(serde_json::json!({"nodes": [], "edges": []}));
+        };
+        cognee_graph::get_formatted_graph_data(graph_db.as_ref(), did, user_id)
+            .await
+            .map_err(|e| anyhow::anyhow!("get_formatted_graph_data failed: {e}"))
     }
 }
