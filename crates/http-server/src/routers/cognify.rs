@@ -4,6 +4,7 @@
 //! Python parity: `cognee/api/v1/cognify/routers/get_cognify_router.py`.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use axum::{
     Json, Router,
@@ -12,11 +13,14 @@ use axum::{
     response::IntoResponse,
     routing::{get, post},
 };
-use cognee_database::IngestDb;
+use cognee_cognify::{ChunkStrategy, CognifyConfig, cognify as run_cognify};
+use cognee_database::{IngestDb, NoopPipelineRunRepository, UserDb, ops as db_ops};
+use cognee_ontology::{NoOpOntologyResolver, OntologyResolver};
 use serde_json::json;
 use uuid::Uuid;
 
 use crate::auth::AuthenticatedUser;
+use crate::components::ComponentHandles;
 use crate::dto::cognify::{CognifyPayloadDTO, CognifyResponseDTO, CognifyWsFrameDTO};
 use crate::dto::pipeline_run::{PipelineRunInfoDTO, event_kind_to_python_string};
 use crate::error::{ApiError, PipelineErrorSource};
@@ -121,18 +125,35 @@ pub async fn post_cognify(
 
     let run_in_background = payload.run_in_background.unwrap_or(false);
 
+    // ── Build CognifyConfig from payload overrides ─────────────────────────────
+    // Mirrors the CLI's defaults: ChunkStrategy::Paragraph, default
+    // chunks_per_batch unless overridden, optional custom_prompt.
+    let mut cognify_config = CognifyConfig::default().with_chunk_strategy(ChunkStrategy::Paragraph);
+    if let Some(batch) = payload.chunks_per_batch {
+        cognify_config = cognify_config.with_chunks_per_batch(batch.max(1) as usize);
+    }
+    if let Some(ref prompt) = payload.custom_prompt {
+        cognify_config = cognify_config.with_custom_prompt(prompt.clone());
+    }
+    let cognify_config = Arc::new(cognify_config);
+
     // ── Per-dataset fan-out ────────────────────────────────────────────────────
     let mut response: CognifyResponseDTO = HashMap::new();
     let mut errors: Vec<(Uuid, String, String)> = Vec::new(); // (id, name, msg)
 
     for (dataset_id, dataset_name) in dataset_pairs {
-        // The actual cognify work (LLM + graph + vector) requires components not
-        // yet wired in the http-server (cognee-lib cycle prevention).
-        // This is a documented blocking gap: the stub returns Ok(()) immediately.
-        // TODO(P5): wire real cognify() call once ComponentHandles gains LLM/graph/vector handles.
+        let components = state.components();
+        let user_for_run = user.clone();
+        let config_for_run = Arc::clone(&cognify_config);
+        let components_owned = components.cloned();
+
         let work = box_pipeline_future(async move {
-            // Blocking gap stub — always succeeds.
-            Ok::<(), std::io::Error>(())
+            let Some(components) = components_owned else {
+                return Err(CognifyDispatchError(
+                    "Component handles not initialized; cannot run cognify pipeline".to_string(),
+                ));
+            };
+            run_real_cognify(&components, &user_for_run, dataset_id, &config_for_run).await
         });
 
         match dispatch_pipeline(
@@ -233,6 +254,112 @@ pub async fn post_cognify(
     }
 
     Ok((StatusCode::OK, Json(response)))
+}
+
+// ─── Cognify execution helpers ───────────────────────────────────────────────
+
+/// Boxed-future-compatible error type for the cognify pipeline path.
+///
+/// `dispatch_pipeline` expects `Box<dyn Error + Send + Sync>`; this wrapper
+/// carries the underlying message back to the registry so it surfaces in the
+/// `RunPhase::Errored { message }` payload.
+#[derive(Debug)]
+struct CognifyDispatchError(String);
+
+impl std::fmt::Display for CognifyDispatchError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for CognifyDispatchError {}
+
+/// Drive a single dataset through the cognify pipeline.
+///
+/// Resolves the dataset's `Data` rows, picks up `Llm` / `EmbeddingEngine` /
+/// `GraphDBTrait` / `VectorDB` / `CpuPool` handles from `ComponentHandles`,
+/// and delegates to [`cognee_cognify::cognify`].
+///
+/// Surfaces missing-handle and runtime errors as `CognifyDispatchError` so the
+/// registry's `RunPhase::Errored { message }` carries the underlying cause.
+async fn run_real_cognify(
+    components: &ComponentHandles,
+    user: &AuthenticatedUser,
+    dataset_id: Uuid,
+    config: &CognifyConfig,
+) -> Result<(), CognifyDispatchError> {
+    // ── Pull required backend handles ─────────────────────────────────────────
+    let llm = components
+        .llm
+        .clone()
+        .ok_or_else(|| CognifyDispatchError("llm not wired in ComponentHandles".into()))?;
+    let graph_db = components
+        .graph_db
+        .clone()
+        .ok_or_else(|| CognifyDispatchError("graph_db not wired in ComponentHandles".into()))?;
+    let vector_db = components
+        .vector_db
+        .clone()
+        .ok_or_else(|| CognifyDispatchError("vector_db not wired in ComponentHandles".into()))?;
+    let embedding_engine = components.embedding_engine.clone().ok_or_else(|| {
+        CognifyDispatchError("embedding_engine not wired in ComponentHandles".into())
+    })?;
+    let thread_pool = components
+        .thread_pool
+        .clone()
+        .ok_or_else(|| CognifyDispatchError("thread_pool not wired in ComponentHandles".into()))?;
+
+    let storage = components.storage.clone();
+    let database = components.database.clone();
+    // Default to a pass-through resolver when no ontology is configured — same
+    // behaviour as the CLI's `--ontology-file` fallback.
+    let ontology_resolver: Arc<dyn OntologyResolver> = components
+        .ontology_resolver
+        .clone()
+        .unwrap_or_else(|| Arc::new(NoOpOntologyResolver::new()));
+
+    // ── Resolve dataset data rows ─────────────────────────────────────────────
+    let data_items = db_ops::datasets::get_dataset_data(&database, dataset_id)
+        .await
+        .map_err(|e| {
+            CognifyDispatchError(format!("failed to load data for dataset {dataset_id}: {e}"))
+        })?;
+
+    // Best-effort user_email lookup for provenance stamping (matches CLI).
+    let user_email = database
+        .get_user(user.id)
+        .await
+        .ok()
+        .flatten()
+        .map(|u| u.email);
+
+    // Gap 08-07: the outer `dispatch_pipeline` already wires
+    // `DefaultPipelineRunRegistry` (backed by `SeaOrmPipelineRunRepository`)
+    // for the four-state `pipeline_runs` trail. Hand the inner cognify a
+    // no-op repo so its `DbPipelineWatcher` does not produce a second row-set.
+    let pipeline_run_repo = NoopPipelineRunRepository::arc();
+
+    run_cognify(
+        data_items,
+        dataset_id,
+        Some(user.id),
+        user_email,
+        user.tenant_id,
+        llm,
+        storage,
+        graph_db,
+        vector_db,
+        embedding_engine,
+        database,
+        pipeline_run_repo,
+        thread_pool,
+        ontology_resolver,
+        config,
+    )
+    .await
+    .map_err(|e| CognifyDispatchError(format!("cognify failed: {e}")))?;
+
+    Ok(())
 }
 
 // ─── ws_subscribe ─────────────────────────────────────────────────────────────
@@ -437,8 +564,12 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 
+    /// Blocking dispatch without backends wired now reaches the real cognify
+    /// path and surfaces the missing-component error through the
+    /// `Pipeline run errored` envelope. This is the post-implementation
+    /// behaviour — before the cognify wiring landed, the stub returned 200.
     #[tokio::test]
-    async fn post_cognify_with_dataset_ids_dispatches() {
+    async fn post_cognify_with_dataset_ids_surfaces_missing_components() {
         let state = test_state().await;
         let app = Router::new()
             .route("/", post(post_cognify_no_auth))
@@ -458,12 +589,23 @@ mod tests {
             .unwrap();
 
         let resp = app.oneshot(req).await.expect("oneshot");
-        // No DB wired — dataset lookup returns id.to_string() as name → succeeds.
-        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        let body_bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert_eq!(v["error"], "Pipeline run errored");
+        let detail = v["detail"].as_str().unwrap_or_default();
+        assert!(
+            detail.contains("Component handles not initialized")
+                || detail.contains("not wired in ComponentHandles"),
+            "error detail must point at the missing-component path, got: {detail}"
+        );
     }
 
     #[tokio::test]
-    async fn post_cognify_with_dataset_names_no_db_dispatches() {
+    async fn post_cognify_with_dataset_names_surfaces_missing_components() {
         let state = test_state().await;
         let app = Router::new()
             .route("/", post(post_cognify_no_auth))
@@ -482,8 +624,7 @@ mod tests {
             .unwrap();
 
         let resp = app.oneshot(req).await.expect("oneshot");
-        // No DB wired — deterministic uuid5 name mapping used → succeeds.
-        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 
     #[tokio::test]
@@ -553,6 +694,9 @@ mod tests {
 
     /// Python parity: `dataset_ids` overrides `datasets` — handler resolves only
     /// the UUID list (does not merge the two).
+    ///
+    /// Uses `run_in_background=true` to assert the response shape without
+    /// running the real cognify pipeline (which would 500 without backends).
     #[tokio::test]
     async fn post_cognify_dataset_ids_overrides_datasets() {
         let state = test_state().await;
@@ -565,7 +709,7 @@ mod tests {
             // Both present — dataset_ids must win (Python parity).
             "datasets": ["name_that_should_be_ignored"],
             "dataset_ids": [dataset_id],
-            "run_in_background": false
+            "run_in_background": true
         });
 
         let req = Request::builder()
