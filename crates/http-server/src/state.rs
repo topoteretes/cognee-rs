@@ -59,9 +59,9 @@ pub struct AppState {
     /// SMTP impl deferred to P7.
     pub mailer: Arc<dyn Mailer>,
 
-    /// Health checker for /health endpoints.
-    /// `None` in P0 — wired when cognee_lib::health lands.
-    // TODO(P1): wire Arc<dyn cognee_lib::health::HealthChecker> here
+    /// Health checker for /health endpoints. `None` falls back to a
+    /// synthetic `MockHealthChecker`. Embedders populate by calling
+    /// [`AppState::install_real_health_checker`] after wiring `lib`.
     pub health: Option<Arc<dyn crate::routers::health::HealthChecker>>,
 
     /// In-memory span buffer feeding `GET /api/v1/activity/spans`.
