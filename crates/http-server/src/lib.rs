@@ -12,6 +12,7 @@ pub mod components;
 pub mod config;
 pub mod dto;
 pub mod error;
+pub mod health;
 pub mod lifecycle;
 pub mod middleware;
 pub mod multipart;

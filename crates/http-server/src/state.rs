@@ -130,6 +130,21 @@ impl AppState {
     pub fn components(&self) -> Option<&ComponentHandles> {
         self.lib.as_deref()
     }
+
+    /// Replace the `health` field with a `RealHealthChecker` built from the
+    /// currently-wired `ComponentHandles`. No-op when `lib` is `None`.
+    ///
+    /// Embedders that wire `state.lib` themselves should call this after
+    /// populating the handles to upgrade from the default `MockHealthChecker`
+    /// fallback used by `get_checker` at request time. Without this call the
+    /// `/health` endpoints answer from the placeholder mock — a regression
+    /// guard test in `tests/test_health_real.rs` enforces the real path.
+    pub fn install_real_health_checker(&mut self) {
+        if let Some(handles) = &self.lib {
+            let checker = crate::health::RealHealthChecker::new(Arc::clone(handles), &self.config);
+            self.health = Some(Arc::new(checker));
+        }
+    }
 }
 
 // ─── Build state with a real database ─────────────────────────────────────────

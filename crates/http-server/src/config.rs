@@ -89,6 +89,29 @@ pub struct HttpServerConfig {
     /// Wall-clock timeout for `POST /api/v1/notebooks/{id}/{cell}/run`.
     /// Env: `NOTEBOOK_RUN_TIMEOUT_SECS`. Default: 30 s.
     pub notebook_run_timeout: Duration,
+
+    // ── Health checker knobs ─────────────────────────────────────────────────
+    /// Whether the `/health/detailed` probe should test the LLM provider and
+    /// the embedding engine.
+    /// Env: `COGNEE_HEALTH_PROBE_LLM`. Default: `false`.
+    ///
+    /// LLM probes consume tokens; embedding probes can hit a remote provider,
+    /// so both are opt-in. When `false`, the corresponding entries are omitted
+    /// from the report (mirrors Python's opt-in behavior).
+    pub health_probe_llm: bool,
+
+    /// Per-probe timeout in milliseconds. Each component probe is wrapped in
+    /// `tokio::time::timeout(..)` with this value; expiry yields an
+    /// `Unhealthy` (critical) or `Degraded` (non-critical) entry.
+    /// Env: `COGNEE_HEALTH_PROBE_TIMEOUT_MS`. Default: 2000.
+    pub health_probe_timeout_ms: u64,
+
+    /// In-process cache TTL for the aggregated `HealthCheckReport`.
+    /// Back-to-back `/health` requests within this window are served from
+    /// cache to avoid hammering all backends from k8s liveness probes.
+    /// Env: `COGNEE_HEALTH_CACHE_TTL_MS`. Default: 5000. Set to `0` to
+    /// disable caching.
+    pub health_cache_ttl_ms: u64,
 }
 
 impl Default for HttpServerConfig {
@@ -108,6 +131,9 @@ impl Default for HttpServerConfig {
             pipeline_registry_channel_capacity: 64,
             pipeline_registry_abort_writes_errored: true,
             notebook_run_timeout: Duration::from_secs(30),
+            health_probe_llm: false,
+            health_probe_timeout_ms: 2000,
+            health_cache_ttl_ms: 5000,
         }
     }
 }
@@ -188,6 +214,22 @@ impl HttpServerConfig {
                 ServerError::Other(anyhow::anyhow!("NOTEBOOK_RUN_TIMEOUT_SECS: {e}"))
             })?;
             cfg.notebook_run_timeout = Duration::from_secs(secs);
+        }
+
+        // Health checker knobs
+        if let Ok(v) = std::env::var("COGNEE_HEALTH_PROBE_LLM") {
+            cfg.health_probe_llm =
+                matches!(v.to_ascii_lowercase().as_str(), "true" | "1" | "yes" | "on");
+        }
+        if let Ok(v) = std::env::var("COGNEE_HEALTH_PROBE_TIMEOUT_MS") {
+            cfg.health_probe_timeout_ms = v.parse::<u64>().map_err(|e| {
+                ServerError::Other(anyhow::anyhow!("COGNEE_HEALTH_PROBE_TIMEOUT_MS: {e}"))
+            })?;
+        }
+        if let Ok(v) = std::env::var("COGNEE_HEALTH_CACHE_TTL_MS") {
+            cfg.health_cache_ttl_ms = v.parse::<u64>().map_err(|e| {
+                ServerError::Other(anyhow::anyhow!("COGNEE_HEALTH_CACHE_TTL_MS: {e}"))
+            })?;
         }
 
         Ok(cfg)
