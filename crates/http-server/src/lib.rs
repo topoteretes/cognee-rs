@@ -20,6 +20,7 @@ pub mod openapi;
 pub mod permissions;
 pub mod pipelines;
 pub mod responses;
+pub mod responses_dispatch;
 pub mod routers;
 pub mod state;
 pub mod sync;

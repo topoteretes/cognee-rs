@@ -56,6 +56,7 @@ pub mod dynamic_model;
 pub mod error;
 pub mod llm_trait;
 pub mod prompts;
+pub mod responses_client;
 pub mod schema;
 pub mod transcriber;
 pub mod types;
@@ -67,6 +68,7 @@ pub use config::{LlmConfig, LlmProvider};
 pub use dynamic_model::{DynamicGraphModel, GraphModelError, graph_schema_to_graph_model};
 pub use error::{LlmError, LlmResult};
 pub use llm_trait::{Llm, LlmExt};
+pub use responses_client::{OpenAIResponsesClient, ResponsesClient, ResponsesRequest};
 pub use schema::{
     build_schema_prompt, generate_json_schema, generate_json_schema_string, graph_model_to_schema,
     graph_model_to_schema_string,

@@ -17,6 +17,7 @@ use cognee_delete::DeleteService;
 use cognee_embedding::EmbeddingEngine;
 use cognee_graph::GraphDBTrait;
 use cognee_llm::Llm;
+use cognee_llm::ResponsesClient;
 use cognee_ontology::{OntologyManager, OntologyResolver};
 use cognee_search::{SearchOrchestrator, SessionManager, SessionStore};
 use cognee_storage::StorageTrait;
@@ -103,6 +104,12 @@ pub struct ComponentHandles {
     /// `POST /api/v1/recall` (Python `_search_trace` /
     /// `_fetch_graph_context`). `None` means both sources return empty.
     pub session_manager: Option<Arc<SessionManager>>,
+
+    /// OpenAI Responses API client — wires `POST /api/v1/responses`
+    /// (Python `get_responses_router.py`). `None` means the handler
+    /// returns `500` "responses client is not wired" until embedders
+    /// populate it.
+    pub responses_client: Option<Arc<dyn ResponsesClient>>,
 }
 
 impl ComponentHandles {

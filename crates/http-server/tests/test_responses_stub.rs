@@ -1,9 +1,11 @@
-//! Integration tests for `POST /api/v1/responses` (Stage-A 501 stub).
+//! Integration tests for `POST /api/v1/responses` (Stage B).
 //!
 //! Covers:
 //! - 401 when unauthenticated
-//! - 501 with `{"detail": "...", "code": "..."}` for any authenticated request
-//! - Field order: detail before code (Python JSONResponse parity)
+//! - Auth + validation envelopes are preserved
+//! - The handler no longer returns 501 — instead surfaces a `500 {"detail": ...}`
+//!   envelope when no `ResponsesClient` is wired (the integration tests
+//!   exercise the success path against a real upstream).
 //! - Content-Type is `application/json`
 
 mod support;
@@ -15,8 +17,8 @@ use axum::{
 use tower::ServiceExt;
 
 use support::{
-    bearer_header, build_auth_required_test_state, build_notebooks_state, seed_perm_user,
-    test_router,
+    bearer_header, body_json, build_auth_required_test_state, build_notebooks_state,
+    seed_perm_user, test_router,
 };
 
 // ─── Auth guard ──────────────────────────────────────────────────────────────
@@ -37,12 +39,15 @@ async fn responses_no_auth_returns_401() {
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
 }
 
-// ─── 501 stub ─────────────────────────────────────────────────────────────────
+// ─── Stage B happy / unwired paths ───────────────────────────────────────────
 
+/// With no `responses_client` wired the handler must NOT return 501 — that
+/// would be a regression to Stage A. It instead surfaces a 500 with the
+/// canonical `{"detail": "..."}` envelope.
 #[tokio::test]
-async fn responses_authenticated_returns_501() {
+async fn responses_authenticated_no_responses_client_returns_500_not_501() {
     let (state, _) = build_notebooks_state().await;
-    let user = seed_perm_user(&state, "resp_stub@example.com", "Str0ng!Pass#1").await;
+    let user = seed_perm_user(&state, "resp_unwired@example.com", "Str0ng!Pass#1").await;
     let auth = bearer_header(&user, &state);
     let app = test_router(state).await;
 
@@ -55,13 +60,19 @@ async fn responses_authenticated_returns_501() {
         .expect("request");
 
     let resp = app.oneshot(req).await.expect("response");
-    assert_eq!(resp.status(), StatusCode::NOT_IMPLEMENTED);
+    assert_ne!(
+        resp.status(),
+        StatusCode::NOT_IMPLEMENTED,
+        "Stage B handler must not return 501"
+    );
+    // When components are wired but the responses client is None we return 500.
+    assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
 }
 
 #[tokio::test]
-async fn responses_501_field_order_detail_before_code() {
+async fn responses_authenticated_no_responses_client_uses_detail_envelope() {
     let (state, _) = build_notebooks_state().await;
-    let user = seed_perm_user(&state, "resp_order@example.com", "Str0ng!Pass#1").await;
+    let user = seed_perm_user(&state, "resp_envelope@example.com", "Str0ng!Pass#1").await;
     let auth = bearer_header(&user, &state);
     let app = test_router(state).await;
 
@@ -74,21 +85,16 @@ async fn responses_501_field_order_detail_before_code() {
         .expect("request");
 
     let resp = app.oneshot(req).await.expect("response");
-    assert_eq!(resp.status(), StatusCode::NOT_IMPLEMENTED);
-
-    // Field order is load-bearing: detail must come before code.
-    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
-        .await
-        .expect("body");
-    let body_str = std::str::from_utf8(&bytes).expect("utf8");
-    assert_eq!(
-        body_str,
-        r#"{"detail":"OpenAI Responses API surface is not implemented in this build","code":"RESPONSES_NOT_IMPLEMENTED"}"#,
+    assert_ne!(resp.status(), StatusCode::NOT_IMPLEMENTED);
+    let body = body_json(resp).await;
+    assert!(
+        body.get("detail").is_some(),
+        "expected canonical detail envelope, got {body}"
     );
 }
 
 #[tokio::test]
-async fn responses_501_content_type_is_json() {
+async fn responses_authenticated_content_type_is_json() {
     let (state, _) = build_notebooks_state().await;
     let user = seed_perm_user(&state, "resp_ct@example.com", "Str0ng!Pass#1").await;
     let auth = bearer_header(&user, &state);
