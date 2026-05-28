@@ -85,6 +85,10 @@ pub struct HttpServerConfig {
     /// Set to false for strict Python parity (Python leaves rows as STARTED on
     /// unclean shutdown). See pipelines.md §12.
     pub pipeline_registry_abort_writes_errored: bool,
+
+    /// Wall-clock timeout for `POST /api/v1/notebooks/{id}/{cell}/run`.
+    /// Env: `NOTEBOOK_RUN_TIMEOUT_SECS`. Default: 30 s.
+    pub notebook_run_timeout: Duration,
 }
 
 impl Default for HttpServerConfig {
@@ -103,6 +107,7 @@ impl Default for HttpServerConfig {
             pipeline_registry_finished_retention_secs: 3600,
             pipeline_registry_channel_capacity: 64,
             pipeline_registry_abort_writes_errored: true,
+            notebook_run_timeout: Duration::from_secs(30),
         }
     }
 }
@@ -176,6 +181,13 @@ impl HttpServerConfig {
         if let Ok(v) = std::env::var("PIPELINE_REGISTRY_ABORT_WRITES_ERRORED") {
             cfg.pipeline_registry_abort_writes_errored =
                 !matches!(v.to_ascii_lowercase().as_str(), "false" | "0" | "no");
+        }
+
+        if let Ok(v) = std::env::var("NOTEBOOK_RUN_TIMEOUT_SECS") {
+            let secs = v.parse::<u64>().map_err(|e| {
+                ServerError::Other(anyhow::anyhow!("NOTEBOOK_RUN_TIMEOUT_SECS: {e}"))
+            })?;
+            cfg.notebook_run_timeout = Duration::from_secs(secs);
         }
 
         Ok(cfg)

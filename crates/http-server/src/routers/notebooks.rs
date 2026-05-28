@@ -19,7 +19,7 @@ use uuid::Uuid;
 use cognee_database::{NotebookDb, seed_tutorials_if_first_call};
 
 use crate::auth::AuthenticatedUser;
-use crate::dto::notebooks::{NotebookDTO, NotebookDataDTO, RunCodeDataDTO};
+use crate::dto::notebooks::{NotebookDTO, NotebookDataDTO, RunCodeDataDTO, RunCodeOutcomeDTO};
 use crate::error::ApiError;
 use crate::middleware::validation::Json as ValidatedJson;
 use crate::state::AppState;
@@ -254,15 +254,24 @@ async fn delete_notebook(
     }
 }
 
-// ─── POST /{notebook_id}/{cell_id}/run — Stage A 501 stub ────────────────────
+// ─── POST /{notebook_id}/{cell_id}/run — Stage B subprocess execution ────────
 
 /// `POST /api/v1/notebooks/{notebook_id}/{cell_id}/run` — execute a code cell.
 ///
-/// **Stage A stub**: auth, path parsing, body validation, and notebook lookup
-/// all run normally.  A found notebook returns `501` with the documented body.
+/// Auth, path parsing, body validation, and notebook lookup all run normally.
 /// A missing notebook returns `404` first (404 beats 501 in priority order).
 ///
-/// Stage B will replace the 501 with real subprocess execution.
+/// If a [`crate::notebook_runner::NotebookRunner`] is wired into the
+/// `ComponentHandles`, the handler executes `body.content` via that runner
+/// and returns `200 {"result": [...], "error": null|"<traceback>"}` mirroring
+/// the Python parity wire shape (`get_notebooks_router.py:79-83`). When no
+/// runner is wired, the handler returns the legacy `501 {"detail": "...",
+/// "code": "NOTEBOOK_RUN_NOT_IMPLEMENTED"}` envelope so embedders that
+/// intentionally disable code execution preserve the Stage A contract.
+///
+/// Python parity note: the cell_id is ignored — Python's handler executes the
+/// body's `content` string, not the stored cell's source. The cell_id is
+/// addressing only.
 #[utoipa::path(
     post,
     path = "/api/v1/notebooks/{notebook_id}/{cell_id}/run",
@@ -274,31 +283,30 @@ async fn delete_notebook(
     ),
     request_body = RunCodeDataDTO,
     responses(
-        (status = 200, description = "execution result (Stage B only)"),
+        (status = 200, description = "execution outcome", body = RunCodeOutcomeDTO),
         (status = 400, description = "validation error"),
         (status = 401, description = "unauthorized"),
         (status = 404, description = "notebook not found"),
-        (status = 501, description = "not implemented (Stage A stub)"),
+        (status = 501, description = "runner not configured (embedder disabled code execution)"),
     ),
-    extensions(("x-cognee-stub" = json!(true)))
 )]
 #[tracing::instrument(
     name = "cognee.api.notebooks.run_cell",
-    skip(state, _body),
+    skip(state, body),
     fields(
         cognee.user.id = %user.id,
         cognee.notebook.id = %notebook_id,
         cognee.notebook.cell_id = %cell_id,
-        cognee.notebook.run_outcome = "stubbed",
+        cognee.notebook.run_outcome = tracing::field::Empty,
     )
 )]
 async fn run_notebook_cell(
     user: AuthenticatedUser,
     State(state): State<AppState>,
     Path((notebook_id, cell_id)): Path<(Uuid, Uuid)>,
-    ValidatedJson(_body): ValidatedJson<RunCodeDataDTO>,
+    ValidatedJson(body): ValidatedJson<RunCodeDataDTO>,
 ) -> Result<Response, ApiError> {
-    let _ = cell_id; // addressing only — not validated against stored cells
+    let _ = cell_id; // addressing only — Python ignores cell_id and runs body.content
 
     let db = notebooks_db(&state)?;
 
@@ -311,12 +319,44 @@ async fn run_notebook_cell(
         return Ok(notebook_not_found());
     }
 
-    // Stage A: always 501 for authenticated, well-formed, found-notebook calls.
-    Ok(ApiError::NotImplementedStub {
-        code: "NOTEBOOK_RUN_NOT_IMPLEMENTED",
-        detail: "Notebook cell execution is not implemented in this build",
-    }
-    .into_response())
+    // Pull the runner handle from ComponentHandles. When unwired we preserve
+    // the Stage A 501 envelope for backwards compatibility.
+    let runner = state.components().and_then(|c| c.notebook_runner.clone());
+    let Some(runner) = runner else {
+        tracing::Span::current().record("cognee.notebook.run_outcome", "stubbed");
+        return Ok(ApiError::NotImplementedStub {
+            code: "NOTEBOOK_RUN_NOT_IMPLEMENTED",
+            detail: "Notebook cell execution is not implemented in this build",
+        }
+        .into_response());
+    };
+
+    let timeout = state.config.notebook_run_timeout;
+    let outcome = runner.run_cell(&body.content, timeout).await.map_err(|e| {
+        tracing::error!(error = %e, "notebook runner failed");
+        // Scrub the underlying error message; embedders shouldn't leak
+        // subprocess details to API clients.
+        ApiError::Internal(anyhow::anyhow!("Notebook cell execution failed"))
+    })?;
+
+    tracing::Span::current().record(
+        "cognee.notebook.run_outcome",
+        if outcome.error.is_some() {
+            "errored"
+        } else {
+            "ok"
+        },
+    );
+
+    let dto = RunCodeOutcomeDTO {
+        result: outcome
+            .print_output
+            .into_iter()
+            .map(serde_json::Value::String)
+            .collect(),
+        error: outcome.error,
+    };
+    Ok((StatusCode::OK, Json(dto)).into_response())
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -349,5 +389,29 @@ mod tests {
         assert_eq!(body["error"], "Notebook not found");
         // Must NOT have a "detail" key — this router uses "error", not "detail".
         assert!(body.get("detail").is_none());
+    }
+
+    /// Inline regression guard: maps a `RunCellOutcome` to `RunCodeOutcomeDTO`
+    /// and verifies the wire shape that the handler emits on the success
+    /// path. The full request roundtrip is covered by the integration tests
+    /// in `tests/test_notebooks_run_stub.rs`.
+    #[test]
+    fn outcome_to_dto_wire_shape() {
+        let outcome = crate::notebook_runner::RunCellOutcome {
+            print_output: vec!["2".to_owned(), "hello".to_owned()],
+            error: None,
+        };
+        let dto = RunCodeOutcomeDTO {
+            result: outcome
+                .print_output
+                .into_iter()
+                .map(serde_json::Value::String)
+                .collect(),
+            error: outcome.error,
+        };
+        let v = serde_json::to_value(&dto).expect("serialize dto");
+        assert_eq!(v["result"][0], "2");
+        assert_eq!(v["result"][1], "hello");
+        assert!(v["error"].is_null());
     }
 }
