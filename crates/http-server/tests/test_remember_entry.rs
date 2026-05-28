@@ -75,6 +75,7 @@ fn build_handles_with_session(db: Arc<DatabaseConnection>) -> Arc<ComponentHandl
         sync_ops: None,
         session_store: Some(store),
         session_manager: Some(session_manager),
+        responses_client: None,
     })
 }
 
@@ -107,6 +108,7 @@ fn build_handles_without_session(db: Arc<DatabaseConnection>) -> Arc<ComponentHa
         sync_ops: None,
         session_store: None,
         session_manager: None,
+        responses_client: None,
     })
 }
 
