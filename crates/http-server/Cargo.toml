@@ -57,6 +57,7 @@ cognee-session = { path = "../session" }
 cognee-llm = { path = "../llm" }
 cognee-graph = { path = "../graph" }
 cognee-vector = { path = "../vector" }
+cognee-embedding = { path = "../embedding" }
 cognee-logging = { path = "../logging" }
 cognee-visualization = { path = "../visualization" }
 cognee-cloud = { path = "../cloud" }
@@ -119,6 +120,7 @@ sea-orm = { version = "1", default-features = false, features = ["sqlx-sqlite", 
 cognee-database = { path = "../database", features = ["sqlite"] }
 cognee-graph = { path = "../graph", features = ["testing"] }
 cognee-vector = { path = "../vector", features = ["testing"] }
+cognee-embedding = { path = "../embedding" }
 cognee-session = { path = "../session", features = ["fs"] }
 async-trait = { workspace = true }
 tempfile = { workspace = true }

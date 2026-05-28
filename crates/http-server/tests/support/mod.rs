@@ -503,6 +503,7 @@ pub fn build_component_handles(
         ontology_manager,
         search_orchestrator,
         llm,
+        embedding_engine: None,
         graph_db,
         vector_db: None,
         thread_pool: None,

@@ -14,6 +14,7 @@ use cognee_database::DatabaseConnection;
 use cognee_database::SyncOperationRepository;
 use cognee_database::permissions::PermissionsRepository;
 use cognee_delete::DeleteService;
+use cognee_embedding::EmbeddingEngine;
 use cognee_graph::GraphDBTrait;
 use cognee_llm::Llm;
 use cognee_ontology::OntologyManager;
@@ -49,6 +50,12 @@ pub struct ComponentHandles {
 
     /// Configured LLM adapter for `/api/v1/llm/*` handlers.
     pub llm: Option<Arc<dyn Llm>>,
+
+    /// Embedding engine. Optional — used by the `/health` checker
+    /// (opt-in via `HttpServerConfig::health_probe_llm`) and by future
+    /// embedding-aware handlers. `None` is acceptable: the health probe
+    /// reports the component as missing rather than failing.
+    pub embedding_engine: Option<Arc<dyn EmbeddingEngine>>,
 
     /// Knowledge-graph DB used by the visualize router.
     pub graph_db: Option<Arc<dyn GraphDBTrait>>,

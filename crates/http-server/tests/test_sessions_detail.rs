@@ -127,6 +127,7 @@ fn build_handles_with_session(db: Arc<DatabaseConnection>) -> Arc<ComponentHandl
         ontology_manager,
         search_orchestrator: None,
         llm: None,
+        embedding_engine: None,
         graph_db: None,
         vector_db: None,
         thread_pool: None,
