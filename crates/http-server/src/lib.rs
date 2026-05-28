@@ -15,6 +15,7 @@ pub mod error;
 pub mod lifecycle;
 pub mod middleware;
 pub mod multipart;
+pub mod notebook_runner;
 pub mod observability;
 pub mod openapi;
 pub mod permissions;

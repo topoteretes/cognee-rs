@@ -137,6 +137,7 @@ fn build_handles_with_session(db: Arc<DatabaseConnection>) -> Arc<ComponentHandl
         session_store: Some(store),
         session_manager: Some(session_manager),
         responses_client: None,
+        notebook_runner: None,
     })
 }
 

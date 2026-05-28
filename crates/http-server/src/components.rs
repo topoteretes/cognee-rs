@@ -23,6 +23,8 @@ use cognee_search::{SearchOrchestrator, SessionManager, SessionStore};
 use cognee_storage::StorageTrait;
 use cognee_vector::VectorDB;
 
+use crate::notebook_runner::NotebookRunner;
+
 /// Pre-initialized pipeline component handles shared across all P2 handlers.
 ///
 /// Obtained from `state.components()`.
@@ -110,6 +112,13 @@ pub struct ComponentHandles {
     /// returns `500` "responses client is not wired" until embedders
     /// populate it.
     pub responses_client: Option<Arc<dyn ResponsesClient>>,
+
+    /// Notebook cell execution backend used by
+    /// `POST /api/v1/notebooks/{notebook_id}/{cell_id}/run`. `None` means
+    /// the handler returns 501 — the same envelope it returned in Stage A
+    /// before Stage B landed — preserving wire compatibility for embedders
+    /// that don't want to expose code execution.
+    pub notebook_runner: Option<Arc<dyn NotebookRunner>>,
 }
 
 impl ComponentHandles {

@@ -78,6 +78,7 @@ fn build_handles_with_session(db: Arc<DatabaseConnection>) -> Arc<ComponentHandl
         session_store: Some(store),
         session_manager: Some(session_manager),
         responses_client: None,
+        notebook_runner: None,
     })
 }
 
@@ -113,6 +114,7 @@ fn build_handles_without_session(db: Arc<DatabaseConnection>) -> Arc<ComponentHa
         session_store: None,
         session_manager: None,
         responses_client: None,
+        notebook_runner: None,
     })
 }
 

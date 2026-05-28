@@ -101,7 +101,7 @@ async-trait = { workspace = true }
 dashmap = "6"
 bytes = "1"
 futures = { workspace = true }
-tokio = { workspace = true, features = ["rt", "sync", "time", "net", "io-util", "fs"] }
+tokio = { workspace = true, features = ["rt", "sync", "time", "net", "io-util", "fs", "process"] }
 tokio-stream = { workspace = true }
 tokio-util = { version = "0.7", features = ["io"] }
 mime_guess = "2"
@@ -109,6 +109,11 @@ mime_guess = "2"
 # Binary-only deps (optional; pulled in by the `bin` feature only)
 clap = { workspace = true, features = ["derive", "env"], optional = true }
 dotenv = { workspace = true, optional = true }
+
+# Unix-only: setrlimit() for the notebook subprocess runner's memory/CPU
+# caps. Falls back to wall-clock-timeout-only on non-Unix.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }

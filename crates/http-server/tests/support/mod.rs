@@ -513,6 +513,7 @@ pub fn build_component_handles(
         session_store: None,
         session_manager: None,
         responses_client: None,
+        notebook_runner: None,
     })
 }
 

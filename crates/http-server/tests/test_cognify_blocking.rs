@@ -193,6 +193,7 @@ async fn post_cognify_blocking_executes_real_pipeline() {
         session_store: None,
         session_manager: None,
         responses_client: None,
+        notebook_runner: None,
     });
 
     // No auth context is wired, so the extractor falls back to the synthetic

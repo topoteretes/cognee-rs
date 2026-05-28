@@ -277,6 +277,7 @@ async fn post_memify_blocking_indexes_triplets() {
         session_store: None,
         session_manager: None,
         responses_client: None,
+        notebook_runner: None,
     });
 
     // No auth context is wired, so the extractor falls back to the synthetic

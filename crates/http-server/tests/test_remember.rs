@@ -199,6 +199,7 @@ async fn post_remember_blocking_runs_full_pipeline() {
         session_store: None,
         session_manager: None,
         responses_client: None,
+        notebook_runner: None,
     });
 
     // No auth context is wired, so the extractor falls back to the synthetic
