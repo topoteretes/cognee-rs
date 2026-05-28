@@ -64,13 +64,13 @@ pub struct ComponentHandles {
     /// as [`vector_db`](Self::vector_db).
     pub thread_pool: Option<Arc<dyn CpuPool>>,
 
-    /// Text embedding engine used by the cognify pipeline to vectorise
-    /// chunks, entities, and summaries. `None` means the cognify HTTP
-    /// handler returns a 500 envelope at runtime.
+    /// Text embedding engine used by the cognify pipeline (chunks, entities,
+    /// summaries). `None` means the cognify / update handlers surface a 500
+    /// envelope at runtime.
     pub embedding_engine: Option<Arc<dyn EmbeddingEngine>>,
 
     /// Ontology resolver passed into the cognify pipeline. `None` means
-    /// the cognify HTTP handler falls back to a pass-through
+    /// the cognify / update handlers fall back to a pass-through
     /// `NoOpOntologyResolver`, matching the CLI default when no
     /// `ontology_file_path` is configured.
     pub ontology_resolver: Option<Arc<dyn OntologyResolver>>,
