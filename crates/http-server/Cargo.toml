@@ -50,6 +50,8 @@ cognee-database = { path = "../database", features = ["sqlite"] }
 sea-orm = { version = "1", default-features = false, features = ["runtime-tokio-rustls", "with-chrono", "with-uuid", "with-json"] }
 cognee-storage = { path = "../storage" }
 cognee-ingestion = { path = "../ingestion" }
+cognee-cognify = { path = "../cognify" }
+cognee-embedding = { path = "../embedding" }
 cognee-delete = { path = "../delete" }
 cognee-ontology = { path = "../ontology" }
 cognee-search = { path = "../search" }

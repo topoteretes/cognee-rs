@@ -1,8 +1,11 @@
 //! Integration tests for `PATCH /api/v1/update`.
 //!
-//! Full update (delete + re-add + cognify) is deferred until P3 provides the
-//! cognify pipeline. Tests here cover auth guard, route existence, and the
-//! current 501 stub response.
+//! These tests cover the auth guard, route existence, and the query-param
+//! contract. The full delete + re-add + cognify pipeline is exercised in
+//! [`test_update_pipeline.rs`].
+//!
+//! Inline regression-guard tests living inside `routers/update.rs` assert
+//! that the handler never returns `501 Not Implemented` again.
 
 mod support;
 
@@ -47,7 +50,12 @@ async fn test_update_no_auth_returns_401() {
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
 }
 
-/// With auth → gets past auth, hits the 501 stub (full implementation requires P3).
+/// With auth → gets past auth and runs the real update pipeline.
+///
+/// In a backend-less test state, the handler reaches the component-resolution
+/// path and surfaces a 500 (missing handles). The point of this test is to
+/// assert that auth did not block the request and that the route is wired —
+/// **and to fail loudly if the handler ever returns 501 again**.
 #[tokio::test]
 async fn test_update_authenticated_hits_stub() {
     let (state, _) = build_auth_test_state().await;
@@ -76,9 +84,15 @@ async fn test_update_authenticated_hits_stub() {
         .expect("request");
 
     let resp = app.oneshot(req).await.expect("response");
-    // 501 is the expected stub response; any non-401 means auth passed.
+    // Any non-401/405 status means auth passed and the route exists.
     assert_ne!(resp.status(), StatusCode::UNAUTHORIZED);
     assert_ne!(resp.status(), StatusCode::METHOD_NOT_ALLOWED);
+    // Tier-3 regression guard: never 501.
+    assert_ne!(
+        resp.status(),
+        StatusCode::NOT_IMPLEMENTED,
+        "PATCH /api/v1/update must not return 501 — the real pipeline must run"
+    );
 }
 
 /// Missing query params (`data_id` or `dataset_id`) → 4xx client error.

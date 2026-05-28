@@ -14,9 +14,10 @@ use cognee_database::DatabaseConnection;
 use cognee_database::SyncOperationRepository;
 use cognee_database::permissions::PermissionsRepository;
 use cognee_delete::DeleteService;
+use cognee_embedding::EmbeddingEngine;
 use cognee_graph::GraphDBTrait;
 use cognee_llm::Llm;
-use cognee_ontology::OntologyManager;
+use cognee_ontology::{OntologyManager, OntologyResolver};
 use cognee_search::{SearchOrchestrator, SessionManager, SessionStore};
 use cognee_storage::StorageTrait;
 use cognee_vector::VectorDB;
@@ -62,6 +63,17 @@ pub struct ComponentHandles {
     /// CPU pool used by [`cognee_core::TaskContext`]. Same routing notes
     /// as [`vector_db`](Self::vector_db).
     pub thread_pool: Option<Arc<dyn CpuPool>>,
+
+    /// Text embedding engine used by the cognify pipeline (chunks, entities,
+    /// summaries). `None` means the cognify / update handlers surface a 500
+    /// envelope at runtime.
+    pub embedding_engine: Option<Arc<dyn EmbeddingEngine>>,
+
+    /// Ontology resolver passed into the cognify pipeline. `None` means
+    /// the cognify handler falls back to a pass-through
+    /// `NoOpOntologyResolver`, matching the CLI default when no
+    /// `ontology_file_path` is configured.
+    pub ontology_resolver: Option<Arc<dyn OntologyResolver>>,
 
     /// SeaORM-backed `PermissionsRepository` for the 8-step `user_can`
     /// resolution per `tenants.md §5.1`.
