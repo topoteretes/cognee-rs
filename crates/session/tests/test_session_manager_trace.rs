@@ -36,7 +36,7 @@ async fn test_add_agent_trace_step_returns_trace_id() {
             serde_json::json!({}),
             None,
             "",
-            "",
+            false,
         )
         .await
         .expect("add should succeed");
@@ -71,7 +71,7 @@ async fn test_trace_step_uuid_uniqueness() {
                 serde_json::json!({}),
                 None,
                 "",
-                "",
+                false,
             )
             .await
             .expect("add should succeed");
@@ -97,7 +97,7 @@ async fn test_get_agent_trace_session_last_n() {
                 serde_json::json!({}),
                 None,
                 "",
-                "",
+                false,
             )
             .await
             .expect("add should succeed");
@@ -132,7 +132,7 @@ async fn test_get_agent_trace_session_default_returns_all() {
             serde_json::json!({}),
             None,
             "",
-            "",
+            false,
         )
         .await
         .expect("add should succeed");
@@ -231,7 +231,7 @@ async fn test_unimplemented_backend_returns_store_error() {
             serde_json::json!({}),
             None,
             "",
-            "",
+            false,
         )
         .await
         .expect_err("should error");

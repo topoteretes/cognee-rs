@@ -75,7 +75,11 @@ fn build_handles_with_session_and_llm(
     let store: Arc<dyn cognee_session::SessionStore> =
         Arc::new(FsSessionStore::new(session_dir.path().to_path_buf()));
     Box::leak(Box::new(session_dir));
-    let session_manager = Arc::new(SessionManager::new(store.clone()));
+    let session_manager = Arc::new(if let Some(ref llm_ref) = llm {
+        SessionManager::new(store.clone()).with_llm(Arc::clone(llm_ref))
+    } else {
+        SessionManager::new(store.clone())
+    });
 
     let handles = Arc::new(ComponentHandles {
         database: db,

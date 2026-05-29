@@ -107,7 +107,7 @@ async fn seed_trace(manager: &SessionManager, origin: &str, query: &str, ctx: &s
             serde_json::json!({}),
             None,
             "",
-            "",
+            false,
         )
         .await
         .expect("add trace step");

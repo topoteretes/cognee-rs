@@ -1,4 +1,5 @@
 mod error;
+mod feedback;
 mod session_manager;
 mod session_store;
 mod types;

@@ -1,10 +1,12 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use cognee_llm::Llm;
 use cognee_llm::Message;
 use tracing::debug;
 
 use crate::error::SessionError;
+use crate::feedback;
 use crate::session_store::{SessionQAUpdate, SessionStore};
 use crate::types::{SessionQAEntry, SessionTraceStep};
 
@@ -16,10 +18,12 @@ const DEFAULT_HISTORY_LIMIT: usize = 10;
 /// Analogous to Python's `SessionManager`. Loads conversation history as
 /// `Vec<Message>` for LLM multi-turn conversations, and saves Q&A entries
 /// after each search completion.
+#[derive(Clone)]
 pub struct SessionManager {
     store: Arc<dyn SessionStore>,
     default_session_id: String,
     history_limit: usize,
+    llm: Option<Arc<dyn Llm>>,
 }
 
 impl SessionManager {
@@ -28,7 +32,13 @@ impl SessionManager {
             store,
             default_session_id: DEFAULT_SESSION_ID.to_string(),
             history_limit: DEFAULT_HISTORY_LIMIT,
+            llm: None,
         }
+    }
+
+    pub fn with_llm(mut self, llm: Arc<dyn Llm>) -> Self {
+        self.llm = Some(llm);
+        self
     }
 
     pub fn with_default_session_id(mut self, id: impl Into<String>) -> Self {
@@ -264,10 +274,12 @@ impl SessionManager {
     /// Append one agent-trace step to the session and return the generated
     /// `trace_id` (UUID4).
     ///
-    /// Mirrors Python's `SessionManager.add_agent_trace_step`. The Python
-    /// version also generates `session_feedback` via an LLM call before
-    /// persisting; that responsibility belongs to LIB-01 (`remember_entry`).
-    /// In this task callers pass `session_feedback` directly (default `""`).
+    /// Mirrors Python's `SessionManager.add_agent_trace_step`.
+    ///
+    /// When `generate_feedback` is `true`, this method attempts to use the
+    /// configured LLM (`with_llm`) to summarize `method_return_value`; if no
+    /// LLM is wired or generation fails, it falls back to deterministic
+    /// feedback (`<origin> succeeded/failed`).
     #[allow(clippy::too_many_arguments)]
     pub async fn add_agent_trace_step(
         &self,
@@ -280,10 +292,32 @@ impl SessionManager {
         method_params: serde_json::Value,
         method_return_value: Option<serde_json::Value>,
         error_message: &str,
-        session_feedback: &str,
+        generate_feedback: bool,
     ) -> Result<String, SessionError> {
         let resolved_id = self.resolve_session_id(session_id);
         let trace_id = uuid::Uuid::new_v4().to_string();
+        let session_feedback = if generate_feedback {
+            if let Some(llm) = self.llm.as_ref() {
+                feedback::generate_session_feedback(
+                    llm.as_ref(),
+                    origin_function,
+                    status,
+                    method_return_value.as_ref(),
+                    error_message,
+                )
+                .await
+            } else {
+                tracing::warn!(
+                    origin_function,
+                    session_id = resolved_id,
+                    "add_agent_trace_step: generate_feedback=true but no LLM wired; using deterministic fallback"
+                );
+                feedback::fallback_feedback(origin_function, status, error_message)
+            }
+        } else {
+            feedback::fallback_feedback(origin_function, status, error_message)
+        };
+
         let step = SessionTraceStep {
             trace_id: trace_id.clone(),
             origin_function: origin_function.to_string(),
@@ -293,7 +327,7 @@ impl SessionManager {
             method_params,
             method_return_value,
             error_message: error_message.to_string(),
-            session_feedback: session_feedback.to_string(),
+            session_feedback,
         };
         self.store.save_trace_step(user_id, resolved_id, step).await
     }

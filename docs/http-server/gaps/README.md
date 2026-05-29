@@ -88,15 +88,13 @@ Key outcomes:
 There is still an explicit escape hatch: `COGNEE_DISABLE_DEFAULT_BACKENDS=1`
 preserves the old minimal startup path for test or constrained deployments.
 
-### C2: Live TODO / blocking markers still in source
+### C2: Live TODO / blocking markers in routers
 
-| File | Line | Marker | Tracks |
-|---|---|---|---|
-| [routers/remember.rs](../../../crates/http-server/src/routers/remember.rs#L724) | 724 | `// TODO(LIB-01-followup): wire Arc<dyn Llm> through SessionManager` | Gap 7 follow-up |
+No live `// TODO(...)` / `// Blocking gap` markers remain in
+[crates/http-server/src/routers/](../../../crates/http-server/src/routers/).
 
-The stale `// TODO(P1): wire Arc<dyn cognee_lib::health::HealthChecker>` marker
-in `state.rs` was cleaned up on **2026-05-28** as part of this audit — health
-is now wired (gap 6).
+The previous Gap 7 follow-up marker in `routers/remember.rs` is now landed via
+shared feedback generation in `cognee-session::SessionManager`.
 
 ### C3: `ComponentHandles` slots with silent vs. loud degradation
 
@@ -117,6 +115,5 @@ Python-parity behaviors.
 
 ## Recommended next work (in priority order)
 
-1. **Gap 7 follow-up** — thread `Arc<dyn Llm>` through SessionManager to remove the remaining `// TODO(LIB-01-followup)` path in remember-entry internals.
-2. **Tier 3 follow-up (update endpoint)** — convert env-gated update integration coverage from contract-only to stronger side-effect assertions.
-3. **Responses parity follow-up** — extend `/api/v1/responses` cognify tool toward Python's inline add+cognify behavior.
+1. **Tier 3 follow-up (update endpoint)** — convert env-gated update integration coverage from contract-only to stronger side-effect assertions.
+2. **Responses parity follow-up** — extend `/api/v1/responses` cognify tool toward Python's inline add+cognify behavior.

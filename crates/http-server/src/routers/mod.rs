@@ -14,7 +14,6 @@ pub mod cognify;
 pub mod configuration;
 pub mod datasets;
 pub mod delete;
-mod feedback;
 pub mod forget;
 pub mod health;
 pub mod improve;

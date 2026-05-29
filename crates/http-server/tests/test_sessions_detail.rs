@@ -258,7 +258,7 @@ async fn detail_label_falls_back_to_origin_function_when_no_qas() {
         serde_json::Value::Null,
         None,
         "",
-        "",
+        false,
     )
     .await
     .expect("seed trace");
@@ -368,7 +368,7 @@ async fn detail_caps_qas_and_traces_at_20_with_pretruncation_counts() {
             serde_json::Value::Null,
             None,
             "",
-            "",
+            false,
         )
         .await
         .expect("seed trace");

@@ -676,10 +676,9 @@ async fn remember_session(
 ///   `entry_type = "qa"`, `entry_id = qa_id`.
 /// - `MemoryEntry::Trace` → [`SessionManager::add_agent_trace_step`].
 ///   `method_params.unwrap_or(Value::Null)` is passed because the Rust
-///   signature requires a non-`Option` value. `session_feedback = ""`
-///   (LLM-driven generation is a follow-up — `generate_feedback_with_llm`
-///   is not honored here; see TODO below). `entry_type = "trace"`,
-///   `entry_id = trace_id`.
+///   signature requires a non-`Option` value. Feedback generation happens
+///   inside `SessionManager` based on `generate_feedback_with_llm` and
+///   whether an LLM is wired. `entry_type = "trace"`, `entry_id = trace_id`.
 /// - `MemoryEntry::Feedback` → [`SessionManager::add_feedback`]. On
 ///   `Ok(true)` the result reports `RememberStatus::SessionStored` with
 ///   `entry_id = qa_id`. On `Ok(false)` the result reports
@@ -717,9 +716,14 @@ pub async fn remember_entry(
         ));
     }
 
-    let sm = session_manager.ok_or_else(|| {
+    let base_session_manager = session_manager.ok_or_else(|| {
         ApiError::InvalidArgument("SessionManager is required for typed memory entries".to_string())
     })?;
+    let sm = if let Some(llm) = llm.clone() {
+        Arc::new(base_session_manager.as_ref().clone().with_llm(llm))
+    } else {
+        base_session_manager
+    };
 
     // Best-effort pre-upsert of the session_records row. Mirrors Python's
     // try/except at remember.py:232-253 — any failure is logged at debug
@@ -809,43 +813,6 @@ pub async fn remember_entry(
                 generate_feedback_with_llm,
             } = t;
 
-            // Generate (or look up the deterministic fallback for) the
-            // `session_feedback` string before persisting the trace step.
-            //
-            // Parity bump vs. legacy Rust behaviour: even when
-            // `generate_feedback_with_llm` is `false`, Python still records
-            // the deterministic fallback (`session_manager.py:289-294`). The
-            // previous Rust implementation wrote `""`; we now match Python.
-            let session_feedback: String = if generate_feedback_with_llm {
-                if let Some(ref llm) = llm {
-                    super::remember_feedback::generate_session_feedback(
-                        llm.as_ref(),
-                        &origin_function,
-                        &trace_status,
-                        method_return_value.as_ref(),
-                        &error_message,
-                    )
-                    .await
-                } else {
-                    warn!(
-                        session_id = session_id,
-                        "remember_entry: generate_feedback_with_llm=true but no \
-                         Llm handle provided; using deterministic fallback"
-                    );
-                    super::remember_feedback::fallback_feedback(
-                        &origin_function,
-                        &trace_status,
-                        &error_message,
-                    )
-                }
-            } else {
-                super::remember_feedback::fallback_feedback(
-                    &origin_function,
-                    &trace_status,
-                    &error_message,
-                )
-            };
-
             let trace_id = sm
                 .add_agent_trace_step(
                     &user_id_str,
@@ -857,7 +824,7 @@ pub async fn remember_entry(
                     method_params.unwrap_or(serde_json::Value::Null),
                     method_return_value,
                     &error_message,
-                    &session_feedback,
+                    generate_feedback_with_llm,
                 )
                 .await?;
 

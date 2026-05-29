@@ -36,7 +36,6 @@ use crate::error::{ApiError, ValidationDetails};
 use crate::middleware::validation::Json as ValidatedJson;
 use crate::multipart::{MultipartOpts, UploadGuard, check_filename_traversal, parse_multipart};
 use crate::pipelines::dispatch::{DispatchOutcome, box_pipeline_future, dispatch_pipeline};
-use crate::routers::feedback;
 use crate::state::AppState;
 
 // ─── parse_remember_multipart ─────────────────────────────────────────────────
@@ -627,10 +626,16 @@ pub async fn post_remember_entry(
     let components = state
         .components()
         .ok_or_else(|| ApiError::DeprecatedConflict("An error occurred during remember.".into()))?;
-    let session_manager: Arc<SessionManager> = components
-        .session_manager
-        .clone()
-        .ok_or_else(|| ApiError::ServiceUnavailable("Session cache is not configured.".into()))?;
+    let session_manager: Arc<SessionManager> = {
+        let base = components.session_manager.clone().ok_or_else(|| {
+            ApiError::ServiceUnavailable("Session cache is not configured.".into())
+        })?;
+        if let Some(llm) = components.llm.clone() {
+            Arc::new(base.as_ref().clone().with_llm(llm))
+        } else {
+            base
+        }
+    };
     let database = components.database.clone();
 
     // ── Best-effort pre-upsert of the session_records row ────────────────
@@ -721,53 +726,21 @@ pub async fn post_remember_entry(
             memory_context,
             error_message,
             generate_feedback_with_llm,
-        }) => {
-            // Generate (or look up the deterministic fallback for) the
-            // `session_feedback` string before persisting the trace step.
-            //
-            // Parity bump vs. Python: when `generate_feedback_with_llm` is
-            // `false`, Python still records the deterministic fallback
-            // (`session_manager.py:289-294`). The Rust handler previously
-            // wrote `""`; we now match Python on both branches.
-            let session_feedback: String = if generate_feedback_with_llm {
-                if let Some(llm) = components.llm.as_ref() {
-                    feedback::generate_session_feedback(
-                        llm.as_ref(),
-                        &origin_function,
-                        &trace_status,
-                        method_return_value.as_ref(),
-                        &error_message,
-                    )
-                    .await
-                } else {
-                    tracing::warn!(
-                        session_id = %payload.session_id,
-                        "post_remember_entry: generate_feedback_with_llm=true \
-                         but ComponentHandles.llm is None; using deterministic \
-                         fallback"
-                    );
-                    feedback::fallback_feedback(&origin_function, &trace_status, &error_message)
-                }
-            } else {
-                feedback::fallback_feedback(&origin_function, &trace_status, &error_message)
-            };
-
-            session_manager
-                .add_agent_trace_step(
-                    &user_id_str,
-                    Some(&payload.session_id),
-                    &origin_function,
-                    &trace_status,
-                    &memory_query,
-                    &memory_context,
-                    method_params.unwrap_or(serde_json::Value::Null),
-                    method_return_value,
-                    &error_message,
-                    &session_feedback,
-                )
-                .await
-                .map_err(map_session_err)?
-        }
+        }) => session_manager
+            .add_agent_trace_step(
+                &user_id_str,
+                Some(&payload.session_id),
+                &origin_function,
+                &trace_status,
+                &memory_query,
+                &memory_context,
+                method_params.unwrap_or(serde_json::Value::Null),
+                method_return_value,
+                &error_message,
+                generate_feedback_with_llm,
+            )
+            .await
+            .map_err(map_session_err)?,
 
         MemoryEntry::Feedback(FeedbackEntry {
             qa_id,

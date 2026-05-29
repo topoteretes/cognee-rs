@@ -20,7 +20,6 @@ pub mod pipeline_runs;
 pub mod prune;
 pub mod recall;
 pub mod remember;
-mod remember_feedback;
 #[cfg(feature = "cloud")]
 pub mod serve;
 pub mod update;
