@@ -10,9 +10,9 @@
 use std::sync::Arc;
 
 use cognee_core::CpuPool;
-use cognee_database::DatabaseConnection;
 use cognee_database::SyncOperationRepository;
 use cognee_database::permissions::PermissionsRepository;
+use cognee_database::{CheckpointStore, DatabaseConnection};
 use cognee_delete::DeleteService;
 use cognee_embedding::EmbeddingEngine;
 use cognee_graph::GraphDBTrait;
@@ -106,6 +106,10 @@ pub struct ComponentHandles {
     /// `POST /api/v1/recall` (Python `_search_trace` /
     /// `_fetch_graph_context`). `None` means both sources return empty.
     pub session_manager: Option<Arc<SessionManager>>,
+
+    /// Checkpoint store used by improve Stage 4 (`sync_graph_to_session`) to
+    /// persist per-session high-water marks and avoid re-syncing old edges.
+    pub checkpoint_store: Option<Arc<dyn CheckpointStore>>,
 
     /// OpenAI Responses API client — wires `POST /api/v1/responses`
     /// (Python `get_responses_router.py`). `None` means the handler

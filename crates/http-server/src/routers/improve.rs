@@ -10,7 +10,15 @@
 //! See `ApiError::PipelineErrored { pipeline_source: Improve }` in `error.rs`.
 
 use axum::{Json, Router, extract::State, http::StatusCode, response::IntoResponse, routing::post};
-use cognee_database::IngestDb;
+use cognee_cognify::memify::sync_graph_session::DEFAULT_MAX_LINES;
+use cognee_cognify::{
+    ChunkStrategy, CognifyConfig, MemifyConfig, apply_feedback_weights_pipeline,
+    persist_sessions_in_knowledge_graph, run_memify, sync_graph_to_session,
+};
+use cognee_database::{IngestDb, NoopPipelineRunRepository};
+use cognee_ingestion::AddPipeline;
+use cognee_ontology::{NoOpOntologyResolver, OntologyResolver};
+use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::auth::AuthenticatedUser;
@@ -81,11 +89,10 @@ pub async fn post_improve(
 
     let run_in_background = payload.run_in_background.unwrap_or(false);
 
-    // ── Telemetry plumbing (E-05) ──────────────────────────────────────────────
+    // ── Telemetry plumbing ─────────────────────────────────────────────────────
     // Mirrors Python's per-field telemetry on the improve handler
     // (`get_improve_router.py:67-74`). The five v2 payload fields are observed
-    // here so cross-SDK harnesses can confirm they reach the handler even while
-    // the dispatched work below remains a no-op stub.
+    // here so cross-SDK harnesses can confirm they reach the handler.
     let session_ids_count = payload.session_ids.as_ref().map_or(0, |s| s.len());
     let extraction_tasks_count = payload.extraction_tasks.as_ref().map(|v| v.len());
     let enrichment_tasks_count = payload.enrichment_tasks.as_ref().map(|v| v.len());
@@ -103,15 +110,24 @@ pub async fn post_improve(
     );
 
     // ── Dispatch ────────────────────────────────────────────────────────────────
-    // Blocking gap stub — improve requires the same components as memify.
-    // TODO(P5): wire real improve() call once ComponentHandles gains graph/vector handles.
-    // E-05 scope: DTO + ImproveParams + telemetry only. Wiring the real
-    // `cognee_lib::api::improve::improve(...)` call is impossible from
-    // http-server without resolving the cycle constraint
-    // (`crates/http-server/Cargo.toml:36-38`) and adding `vector_db`,
-    // `embedding_engine`, `add_pipeline`, `checkpoint_store`, `cognify_config`,
-    // and `ontology_resolver` slots to `ComponentHandles`. Deferred to P5.
-    let work = box_pipeline_future(async move { Ok::<(), std::io::Error>(()) });
+    let payload_for_run = payload.clone();
+    let components = state.lib.clone();
+    let user_for_run = user.clone();
+    let dataset_name_for_run = dataset_name.clone();
+
+    let work = box_pipeline_future(async move {
+        let components = components
+            .as_ref()
+            .ok_or_else(|| ImproveDispatchError("components not initialized".into()))?;
+        run_real_improve(
+            components.as_ref(),
+            &user_for_run,
+            dataset_id,
+            &dataset_name_for_run,
+            &payload_for_run,
+        )
+        .await
+    });
 
     let outcome = dispatch_pipeline(
         &state,
@@ -180,6 +196,189 @@ pub async fn post_improve(
     Ok((StatusCode::OK, Json(run_info)))
 }
 
+#[derive(Debug)]
+struct ImproveDispatchError(String);
+
+impl std::fmt::Display for ImproveDispatchError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl std::error::Error for ImproveDispatchError {}
+
+async fn run_real_improve(
+    components: &crate::components::ComponentHandles,
+    user: &AuthenticatedUser,
+    dataset_id: Uuid,
+    dataset_name: &str,
+    payload: &ImprovePayloadDTO,
+) -> Result<(), ImproveDispatchError> {
+    let graph_db = components
+        .graph_db
+        .clone()
+        .ok_or_else(|| ImproveDispatchError("graph_db not wired in ComponentHandles".into()))?;
+    let vector_db = components
+        .vector_db
+        .clone()
+        .ok_or_else(|| ImproveDispatchError("vector_db not wired in ComponentHandles".into()))?;
+    let embedding_engine = components.embedding_engine.clone().ok_or_else(|| {
+        ImproveDispatchError("embedding_engine not wired in ComponentHandles".into())
+    })?;
+    let thread_pool = components
+        .thread_pool
+        .clone()
+        .ok_or_else(|| ImproveDispatchError("thread_pool not wired in ComponentHandles".into()))?;
+
+    let database = components.database.clone();
+    let storage = components.storage.clone();
+    let session_ids = payload
+        .session_ids
+        .as_ref()
+        .filter(|ids| !ids.is_empty())
+        .cloned();
+    let has_sessions = session_ids.is_some();
+    let feedback_alpha = 0.5f64;
+
+    let ontology_resolver: Arc<dyn OntologyResolver> = components
+        .ontology_resolver
+        .clone()
+        .unwrap_or_else(|| Arc::new(NoOpOntologyResolver::new()));
+
+    // ---- Stage 1: Apply Feedback Weights ----
+    if let Some(sids) = session_ids.as_ref() {
+        match (
+            components.session_store.as_ref(),
+            components.session_manager.as_ref(),
+        ) {
+            (Some(store), Some(manager)) => {
+                if let Err(e) = apply_feedback_weights_pipeline(
+                    sids,
+                    user.id,
+                    feedback_alpha,
+                    graph_db.as_ref(),
+                    Arc::clone(store),
+                    Arc::clone(manager),
+                )
+                .await
+                {
+                    tracing::warn!("improve stage 1 (feedback_weights) failed (non-fatal): {e}");
+                }
+            }
+            _ => {
+                tracing::warn!(
+                    "improve stage 1: session_store and session_manager are required; skipping feedback_weights"
+                );
+            }
+        }
+    }
+
+    // ---- Stage 2: Persist Session Q&A to Graph ----
+    if let Some(sids) = session_ids.as_ref() {
+        match (components.session_store.as_ref(), components.llm.as_ref()) {
+            (Some(store), Some(llm)) => {
+                let add_pipeline = AddPipeline::new(storage.clone(), database.clone())
+                    .with_thread_pool(thread_pool.clone())
+                    .with_graph_db(graph_db.clone())
+                    .with_vector_db(vector_db.clone())
+                    .with_database(database.clone())
+                    .with_pipeline_run_repo(NoopPipelineRunRepository::arc());
+
+                let cognify_config =
+                    CognifyConfig::default().with_chunk_strategy(ChunkStrategy::Paragraph);
+
+                if let Err(e) = persist_sessions_in_knowledge_graph(
+                    sids,
+                    dataset_name,
+                    user.id,
+                    user.tenant_id,
+                    Arc::clone(store),
+                    &add_pipeline,
+                    Arc::clone(llm),
+                    storage.clone(),
+                    graph_db.clone(),
+                    vector_db.clone(),
+                    embedding_engine.clone(),
+                    database.clone(),
+                    NoopPipelineRunRepository::arc(),
+                    thread_pool.clone(),
+                    Arc::clone(&ontology_resolver),
+                    &cognify_config,
+                )
+                .await
+                {
+                    tracing::warn!("improve stage 2 (persist_sessions) failed (non-fatal): {e}");
+                }
+            }
+            _ => {
+                tracing::warn!(
+                    "improve stage 2: session_store and llm are required; skipping persist_sessions"
+                );
+            }
+        }
+    }
+
+    // ---- Stage 3: Default Enrichment (always) ----
+    let memify_config = if let Some(names) = payload.node_name.clone() {
+        MemifyConfig::default().with_node_name_filter(names)
+    } else {
+        MemifyConfig::default()
+    };
+
+    run_memify(
+        graph_db.clone(),
+        vector_db,
+        embedding_engine,
+        thread_pool,
+        database.clone(),
+        NoopPipelineRunRepository::arc(),
+        Some(dataset_id),
+        Some(user.id),
+        user.tenant_id,
+        &memify_config,
+    )
+    .await
+    .map_err(|e| ImproveDispatchError(format!("memify failed: {e}")))?;
+
+    // ---- Stage 4: Sync Graph to Session Cache ----
+    if has_sessions {
+        match (
+            session_ids.as_ref(),
+            components.session_manager.as_ref(),
+            components.checkpoint_store.as_ref(),
+        ) {
+            (Some(sids), Some(manager), Some(checkpoint_store)) => {
+                let user_id_str = user.id.to_string();
+                for sid in sids {
+                    if let Err(e) = sync_graph_to_session(
+                        &user_id_str,
+                        sid,
+                        dataset_id,
+                        database.as_ref(),
+                        manager.as_ref(),
+                        checkpoint_store.as_ref(),
+                        DEFAULT_MAX_LINES,
+                    )
+                    .await
+                    {
+                        tracing::warn!(
+                            session_id = sid,
+                            "improve stage 4 failed for session (non-fatal): {e}"
+                        );
+                    }
+                }
+            }
+            _ => {
+                tracing::warn!(
+                    "improve stage 4: session_manager and checkpoint_store are required; skipping sync_graph_to_session"
+                );
+            }
+        }
+    }
+
+    Ok(())
+}
+
 // ─── router ──────────────────────────────────────────────────────────────────
 
 pub fn router() -> Router<AppState> {
@@ -246,7 +445,7 @@ mod tests {
             .route("/", post(post_improve_no_auth))
             .with_state(state);
 
-        let body = json!({ "dataset_name": "my_dataset" });
+        let body = json!({ "dataset_name": "my_dataset", "run_in_background": true });
         let req = Request::builder()
             .method("POST")
             .uri("/")
@@ -266,7 +465,7 @@ mod tests {
             .with_state(state);
 
         let dataset_id = Uuid::new_v4();
-        let body = json!({ "datasetId": dataset_id.to_string() });
+        let body = json!({ "datasetId": dataset_id.to_string(), "runInBackground": true });
         let req = Request::builder()
             .method("POST")
             .uri("/")

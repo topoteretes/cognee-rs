@@ -82,8 +82,8 @@ async fn post_improve_end_to_end_skips_without_openai() {
     }
 
     eprintln!(
-        "test_improve: skipping end-to-end — real improve() is not wired through \
-         ComponentHandles yet"
+        "test_improve: skipping end-to-end — set OPENAI_URL + OPENAI_TOKEN and \
+         a fully wired component fixture to run this path"
     );
 }
 
@@ -91,9 +91,9 @@ async fn post_improve_end_to_end_skips_without_openai() {
 //
 // These tests verify that the five v2 fields added to `ImprovePayloadDTO`
 // (`sessionIds`, `extractionTasks`, `enrichmentTasks`, `data`, `nodeName`) are
-// accepted on the wire in both camelCase and snake_case forms. The handler
-// dispatches a no-op stub (the real `cognee.improve()` call is the deferred P5
-// follow-up), so these tests assert HTTP 200 and successful payload parsing.
+// accepted on the wire in both camelCase and snake_case forms. We run them in
+// background mode so they assert payload parsing independently from backend
+// component wiring.
 
 /// `sessionIds` (camelCase) is accepted and the handler returns 200.
 #[tokio::test]
@@ -102,7 +102,8 @@ async fn session_ids_accepted_camelcase() {
 
     let body = json!({
         "sessionIds": ["s1", "s2"],
-        "datasetName": "ds_session_camel"
+        "datasetName": "ds_session_camel",
+        "runInBackground": true
     });
     let req = Request::builder()
         .method("POST")
@@ -126,7 +127,8 @@ async fn session_ids_accepted_snake_case_alias() {
 
     let body = json!({
         "session_ids": ["s1"],
-        "dataset_name": "ds_session_snake"
+        "dataset_name": "ds_session_snake",
+        "run_in_background": true
     });
     let req = Request::builder()
         .method("POST")
@@ -150,7 +152,8 @@ async fn extraction_tasks_and_enrichment_tasks_passed_through() {
     let body_camel = json!({
         "extractionTasks": ["t1"],
         "enrichmentTasks": ["e1"],
-        "datasetName": "ds_tasks_camel"
+        "datasetName": "ds_tasks_camel",
+        "runInBackground": true
     });
     let req_camel = Request::builder()
         .method("POST")
@@ -169,7 +172,8 @@ async fn extraction_tasks_and_enrichment_tasks_passed_through() {
     let body_snake = json!({
         "extraction_tasks": ["t1"],
         "enrichment_tasks": ["e1"],
-        "dataset_name": "ds_tasks_snake"
+        "dataset_name": "ds_tasks_snake",
+        "run_in_background": true
     });
     let req_snake = Request::builder()
         .method("POST")
@@ -191,7 +195,8 @@ async fn node_name_camelcase_and_alias() {
     let app_camel = test_app().await;
     let body_camel = json!({
         "nodeName": ["n1", "n2"],
-        "datasetName": "ds_node_camel"
+        "datasetName": "ds_node_camel",
+        "runInBackground": true
     });
     let req_camel = Request::builder()
         .method("POST")
@@ -209,7 +214,8 @@ async fn node_name_camelcase_and_alias() {
     let app_snake = test_app().await;
     let body_snake = json!({
         "node_name": ["n1"],
-        "dataset_name": "ds_node_snake"
+        "dataset_name": "ds_node_snake",
+        "run_in_background": true
     });
     let req_snake = Request::builder()
         .method("POST")
@@ -231,7 +237,8 @@ async fn data_field_round_trip() {
     let app = test_app().await;
     let body = json!({
         "data": "some inline payload",
-        "datasetName": "ds_data"
+        "datasetName": "ds_data",
+        "runInBackground": true
     });
     let req = Request::builder()
         .method("POST")
@@ -246,4 +253,20 @@ async fn data_field_round_trip() {
         StatusCode::OK,
         "data field should be accepted as-is"
     );
+}
+
+/// Blocking improve with no wired components surfaces the parity 420 status.
+#[tokio::test]
+async fn blocking_improve_without_components_returns_420() {
+    let app = test_app().await;
+    let body = json!({ "datasetName": "ds_blocking_420" });
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/v1/improve")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(serde_json::to_string(&body).unwrap()))
+        .unwrap();
+
+    let resp = app.oneshot(req).await.expect("oneshot");
+    assert_eq!(resp.status().as_u16(), 420);
 }

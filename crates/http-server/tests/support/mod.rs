@@ -512,6 +512,7 @@ pub fn build_component_handles(
         sync_ops,
         session_store: None,
         session_manager: None,
+        checkpoint_store: None,
         responses_client: None,
         notebook_runner: None,
     })

@@ -10,9 +10,9 @@
 //!
 //! This is the headline parity test for P3.
 //!
-//! Since the no-op stub always succeeds, we exercise the `PipelineErrored`
-//! path via `ApiError::PipelineErrored { pipeline_source: Improve, ... }`
-//! directly, matching the handler's own code path for the errored case.
+//! This test exercises the parity contract directly through
+//! `ApiError::PipelineErrored { pipeline_source: Improve, ... }` so the 420
+//! mapping remains guarded independently of backend fixture complexity.
 
 mod support;
 

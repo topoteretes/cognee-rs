@@ -192,6 +192,7 @@ async fn post_cognify_blocking_executes_real_pipeline() {
         sync_ops: None,
         session_store: None,
         session_manager: None,
+        checkpoint_store: None,
         responses_client: None,
         notebook_runner: None,
     });

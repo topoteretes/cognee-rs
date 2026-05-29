@@ -198,6 +198,7 @@ async fn post_remember_blocking_runs_full_pipeline() {
         sync_ops: None,
         session_store: None,
         session_manager: None,
+        checkpoint_store: None,
         responses_client: None,
         notebook_runner: None,
     });

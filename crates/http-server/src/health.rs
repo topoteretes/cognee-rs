@@ -518,6 +518,7 @@ mod tests {
             sync_ops: None,
             session_store: None,
             session_manager: None,
+            checkpoint_store: None,
             ontology_resolver: None,
             responses_client: None,
             notebook_runner: None,

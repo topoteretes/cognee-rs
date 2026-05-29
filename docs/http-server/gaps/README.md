@@ -26,7 +26,7 @@ A gap qualifies when at least one of these is true:
 | # | Endpoint | Source | Status | Notes |
 |---|---|---|---|---|
 | 1 | `POST /api/v1/memify` | [routers/memify.rs:95](../../../crates/http-server/src/routers/memify.rs#L95) | **landed** | Merge `3b4ac97`, gap `5f9e181`. `run_real_memify` helper wires the real pipeline. Integration test `post_memify_blocking_indexes_triplets` in [tests/test_memify.rs](../../../crates/http-server/tests/test_memify.rs) asserts the `("Triplet","text")` vector collection is non-empty after the call. Deviation: `MemifyConfig::default()` used; `MemifyPayloadDTO` extension to carry `extraction_tasks`/`enrichment_tasks`/node filters deferred. |
-| 2 | `POST /api/v1/improve` | [routers/improve.rs:106-114](../../../crates/http-server/src/routers/improve.rs#L106-L114) | **not-started** ([plan](impl/02-improve-pipeline-wiring.md)) | Still ships `box_pipeline_future(async move { Ok::<(), std::io::Error>(()) })` at line 114. Live markers in source: `// Blocking gap stub — improve requires the same components as memify.` (L106) and `// TODO(P5): wire real improve() call once ComponentHandles gains graph/vector handles.` (L107). [tests/test_improve.rs](../../../crates/http-server/tests/test_improve.rs) is a skip-stub. Plan: inline Option-A composition (`run_real_improve` helper) mirroring gap 03's pattern; adds `checkpoint_store` slot to `ComponentHandles`. |
+| 2 | `POST /api/v1/improve` | [routers/improve.rs](../../../crates/http-server/src/routers/improve.rs) | **landed** ([plan](impl/02-improve-pipeline-wiring.md)) | Real improve execution is now wired via `run_real_improve`: Stage 1 `apply_feedback_weights_pipeline` (when session handles are present), Stage 2 `persist_sessions_in_knowledge_graph` (when session store + llm are present), Stage 3 `run_memify` (always), Stage 4 `sync_graph_to_session` (when checkpoint store is present). `ComponentHandles` gained `checkpoint_store`. Tests in [tests/test_improve.rs](../../../crates/http-server/tests/test_improve.rs) now cover payload acceptance and blocking 420 behavior when components are unwired; [tests/test_improve_420.rs](../../../crates/http-server/tests/test_improve_420.rs) still guards the raw-DTO 420 parity contract. |
 | 3 | `POST /api/v1/remember` (cognify+memify leg) | [routers/remember.rs:313](../../../crates/http-server/src/routers/remember.rs#L313) | **landed** | Merge `51a6b7d`, gap `72850c6`. Both stub futures replaced with inline `run_remember_cognify_memify` (Option A — `cognee-http-server` cannot depend on `cognee-lib` due to the workspace cycle). 409 Python-parity envelope retained as catch-all. Integration test [tests/test_remember.rs](../../../crates/http-server/tests/test_remember.rs) asserts graph edges + non-empty `Triplet` vector collection. |
 
 ## Tier 2 — Placeholder content (200 OK, empty/synthetic body)
@@ -55,11 +55,11 @@ so a future regression to silent `200 OK` from the 501 branch would fail loudly.
 
 ## Progress as of 2026-05-29
 
-- **Tier 1: 2 of 3 closed.** Gap 02 (improve) still ships the no-op `box_pipeline_future(Ok(()))`.
-- **Tier 2: 4 of 6 closed.** Gaps 04 (graph data), 5a (schema GET), 5b (schema PUT), and 06 (health, binary-degraded) landed; gaps 7 (feedback LLM) and 8 (forget cloud proxy) still open with explicit `// TODO(LIB-01-followup)` or `// TODO(cloud)` markers in source.
+- **Tier 1: 3 of 3 closed.**
+- **Tier 2: 5 of 6 closed.** Gaps 04 (graph data), 5a (schema GET), 5b (schema PUT), 06 (health, binary-degraded), and 7 (feedback LLM) landed; gap 8 (forget cloud proxy) remains open with an explicit `// TODO(cloud)` marker.
 - **Tier 3: 3 of 3 closed.** ✅ All have inline `status != 501` regression guards.
 
-**Total: 9 of 12 gaps landed.** (The original count was 11; gap 5 was split into 5a/5b by code reading.)
+**Total: 11 of 12 gaps landed.** (The original count was 11; gap 5 was split into 5a/5b by code reading.)
 
 ---
 
@@ -90,7 +90,6 @@ standalone binary still serves the placeholder/404/501 envelopes.
 
 | File | Line | Marker | Tracks |
 |---|---|---|---|
-| [routers/improve.rs](../../../crates/http-server/src/routers/improve.rs#L106) | 106-107 | `// Blocking gap stub`, `// TODO(P5)` | Gap 2 |
 | [routers/remember.rs](../../../crates/http-server/src/routers/remember.rs#L724) | 724 | `// TODO(LIB-01-followup): wire Arc<dyn Llm> through SessionManager` | Gap 7 |
 | [routers/forget.rs](../../../crates/http-server/src/routers/forget.rs#L57) | 57 | `// TODO(cloud): proxy via cloud client` | Gap 8 (future feature) |
 
@@ -117,7 +116,5 @@ Python-parity behaviors.
 
 ## Recommended next gaps (in priority order)
 
-1. **Gap 7 — `POST /remember/entry` LLM feedback path** (Tier 2). Wire `Arc<dyn Llm>` + prompt template through `SessionManager`. Tightly scoped.
-2. **C1 — standalone binary wiring** (cross-cutting, biggest lever). Closes the "binary serves real responses" gap for every already-landed feature at once.
-3. **Gap 2 — `POST /improve`** (Tier 1). Requires the library composition or inline Option-A equivalent. Same crate-cycle constraint as gap 3.
-4. **Gap 8 — forget cloud proxy** (future feature, not a regression). Only worth doing once `state.lib.cloud_client` is added.
+1. **C1 — standalone binary wiring** (cross-cutting, biggest lever). Closes the "binary serves real responses" gap for every already-landed feature at once.
+2. **Gap 8 — forget cloud proxy** (future feature, not a regression). Only worth doing once `state.lib.cloud_client` is added.

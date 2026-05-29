@@ -13,12 +13,12 @@ pub use super::pipeline_run::PipelineRunInfoDTO;
 /// Mirrors Python's `ImprovePayloadDTO` (an `InDTO`). Wire is camelCase per
 /// Decision 10; snake_case is accepted as input via per-field aliases.
 ///
-/// E-05 brought this DTO to full Python parity (8 fields). The five v2
-/// additions — `extraction_tasks`, `enrichment_tasks`, `data`, `node_name`,
-/// `session_ids` — match Python `cognee/api/v1/improve/routers/get_improve_router.py:21-37`
-/// field-for-field. The handler currently plumbs them into the tracing scope
-/// only; the real `cognee.improve()` call is a deferred P5 follow-up gated on
-/// the `cognee-lib` cycle constraint and missing `ComponentHandles` slots.
+/// The v2 additions — `extraction_tasks`, `enrichment_tasks`, `data`,
+/// `node_name`, `session_ids` — match Python
+/// `cognee/api/v1/improve/routers/get_improve_router.py:21-37` field-for-field.
+/// The HTTP handler now wires these fields into the real improve-stage
+/// execution path (feedback weights, session persistence, memify, and optional
+/// graph-to-session sync).
 #[derive(Debug, Clone, Default, Deserialize, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ImprovePayloadDTO {
