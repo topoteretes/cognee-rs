@@ -2,6 +2,7 @@
 // Phase 2 entities (existing tables):
 pub mod data;
 pub mod dataset;
+pub mod dataset_configuration;
 pub mod dataset_data;
 pub mod query;
 pub mod result_log;

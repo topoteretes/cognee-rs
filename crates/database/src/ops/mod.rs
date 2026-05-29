@@ -1,6 +1,7 @@
 pub mod acl;
 pub mod checkpoint;
 pub mod data;
+pub mod dataset_configurations;
 pub mod datasets;
 pub mod graph_storage;
 pub mod notebooks;

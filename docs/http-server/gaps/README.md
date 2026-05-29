@@ -1,9 +1,10 @@
 # cognee-http-server — Gap Inventory
 
-This inventory was re-derived from the source code on **2026-05-28** by reading
-every handler in [crates/http-server/src/routers/](../../../crates/http-server/src/routers/)
-and cross-referencing against the integration tests in
-[crates/http-server/tests/](../../../crates/http-server/tests/). It is the
+This inventory was re-checked against the source code on **2026-05-29**.
+The status entries below still match the current handlers in
+[crates/http-server/src/routers/](../../../crates/http-server/src/routers/)
+and the integration tests in
+[crates/http-server/tests/](../../../crates/http-server/tests/). It remains the
 authoritative list — the previous tree was untracked and lost, and the
 git-log-derived reconstruction missed several gaps that still exist as TODO/
 "Blocking gap" markers in the code.
@@ -33,8 +34,8 @@ A gap qualifies when at least one of these is true:
 | # | Endpoint | Source | Status | Notes |
 |---|---|---|---|---|
 | 4 | `GET /api/v1/datasets/{id}/graph` and `WS /api/v1/cognify/subscribe/{id}` payload | [routers/datasets.rs:298-301](../../../crates/http-server/src/routers/datasets.rs#L298-L301), [routers/cognify.rs:452-465](../../../crates/http-server/src/routers/cognify.rs#L452-L465) | **landed** | Merge `58e1233`, gap `6fab673`. New `cognee_graph::get_formatted_graph_data` (Python parity port). `ComponentHandles::formatted_graph_data` calls the real helper when `graph_db` is wired; empty-shape fallback when `None` is intentional (Python parity). Tests: [tests/test_datasets_graph.rs](../../../crates/http-server/tests/test_datasets_graph.rs), [tests/test_cognify_websocket.rs](../../../crates/http-server/tests/test_cognify_websocket.rs). Deviations: visualize router calls `cognee_visualization::render*` directly (not through the new helper); WS handler passes nil `user_id` because the run row doesn't carry it; cross-SDK WS parity deferred. |
-| **5a** | `GET /api/v1/datasets/{dataset_id}/schema` | [routers/datasets.rs:312-333](../../../crates/http-server/src/routers/datasets.rs#L312-L333) | **not-started** ([plan](impl/05-dataset-configuration.md)) | Returns `{"graph_schema": null, "custom_prompt": null}` unconditionally. Live markers in source: `/// **BLOCKING GAP**: get_dataset_configuration does not exist.` (L310) and `// TODO(blocking): implement dataset_configurations table in cognee-models/cognee-database` (L328). [tests/test_datasets_schema.rs](../../../crates/http-server/tests/test_datasets_schema.rs) is a skip-stub. Plan covers both 5a and 5b: new `dataset_configurations` table + entity + `DatasetConfigDb` trait, then wire both handlers. Three Python-parity decisions locked (per-dataset scoping, 200+nulls when no row, `{"status":"ok"}` PUT body). |
-| **5b** | `PUT /api/v1/datasets/{dataset_id}/schema` | [routers/datasets.rs:386-402](../../../crates/http-server/src/routers/datasets.rs#L386-L402) | **not-started** ([plan](impl/05-dataset-configuration.md)) | Returns `{"status": "ok"}` after the permission check; the schema payload is bound but ignored (`Json(_payload)`). Live markers: `/// **BLOCKING GAP**: dataset_configurations table does not exist.` (L383) and `// TODO(blocking): implement dataset_configurations upsert in cognee-database` (L400). Covered by the same plan as 5a. |
+| **5a** | `GET /api/v1/datasets/{dataset_id}/schema` | [routers/datasets.rs:312-333](../../../crates/http-server/src/routers/datasets.rs#L312-L333) | **landed** | Returns the persisted `graph_schema` / `custom_prompt` when a row exists and the Python-parity `{"graph_schema": null, "custom_prompt": null}` body when it does not. Covered by [tests/test_datasets_schema.rs](../../../crates/http-server/tests/test_datasets_schema.rs). |
+| **5b** | `PUT /api/v1/datasets/{dataset_id}/schema` | [routers/datasets.rs:386-402](../../../crates/http-server/src/routers/datasets.rs#L386-L402) | **landed** | Upserts the row via `DatasetConfigDb` and still returns the Python-parity envelope `{"status": "ok"}`. Covered by [tests/test_datasets_schema.rs](../../../crates/http-server/tests/test_datasets_schema.rs). |
 | 6 | `GET /api/v1/health` (synthetic component entries) | [routers/health.rs:134-150](../../../crates/http-server/src/routers/health.rs#L134-L150) | **landed (binary-degraded)** | Merge `07ae8c8`, gap `31a48ca`. `RealHealthChecker` with concurrent probes (graph DB / vector DB / SQLite / file storage; opt-in LLM and embedding) matching Python parity status model. [tests/test_health_real.rs](../../../crates/http-server/tests/test_health_real.rs) covers healthy / degraded / unhealthy / cache. **Important systemic limitation:** `AppState::install_real_health_checker()` must be called by embedders after wiring `state.lib`. The standalone binary ([src/main.rs](../../../crates/http-server/src/main.rs)) does not yet wire `state.lib`, so the binary still serves the `MockHealthChecker`. See [C1 below](#c1-standalone-binary-wiring-pre-existing-systemic). |
 | **7** | `POST /api/v1/remember/entry` (`generate_feedback_with_llm` path) | [routers/remember.rs](../../../crates/http-server/src/routers/remember.rs) | **landed** ([plan](impl/11-remember-feedback-llm.md)) | Merge `492df0f`, gap `3479f33`. Generates feedback in the handler via `feedback::generate_session_feedback` using `ComponentHandles.llm`, with `tokio::time::timeout` (8 s default), ANSI/control-char scrubbing, 500-char cap, and Python-parity deterministic fallback on every non-success path. LLM response NEVER logged verbatim. Mirror change applied to `cognee_lib::api::remember::remember_entry`. Parity bump locked: when `generate_feedback_with_llm=false`, deterministic fallback is written (was previously empty string). |
 | **8** | `POST /api/v1/forget` (cloud proxy short-circuit) | [routers/forget.rs:57](../../../crates/http-server/src/routers/forget.rs#L57) | **not-started (low priority)** ([plan](impl/10-forget-cloud-proxy.md)) | Local delete works correctly through `DeleteService`. The cloud-proxy branch is a TODO comment only. There is no `cloud_client` field on `state.lib` yet. Not a regression — multi-tenant cloud routing is a future feature. Plan adds a `CloudDeleteClient` trait + `ComponentHandles` slot; Stage A is the trait+slot+handler branch, Stage B (real HTTP impl) is optional and explicitly deferred. |
@@ -52,13 +53,13 @@ so a future regression to silent `200 OK` from the 501 branch would fail loudly.
 
 ---
 
-## Progress as of 2026-05-28
+## Progress as of 2026-05-29
 
 - **Tier 1: 2 of 3 closed.** Gap 02 (improve) still ships the no-op `box_pipeline_future(Ok(()))`.
-- **Tier 2: 2 of 6 closed.** Gaps 04 (graph data) and 06 (health, binary-degraded) landed; gaps 5a (schema GET), 5b (schema PUT), 7 (feedback LLM), and 8 (forget cloud proxy) all still open with explicit `// TODO(blocking)` or `// TODO(LIB-01-followup)` markers in source.
+- **Tier 2: 4 of 6 closed.** Gaps 04 (graph data), 5a (schema GET), 5b (schema PUT), and 06 (health, binary-degraded) landed; gaps 7 (feedback LLM) and 8 (forget cloud proxy) still open with explicit `// TODO(LIB-01-followup)` or `// TODO(cloud)` markers in source.
 - **Tier 3: 3 of 3 closed.** ✅ All have inline `status != 501` regression guards.
 
-**Total: 7 of 12 gaps landed.** (The original count was 11; gap 5 was split into 5a/5b by code reading.)
+**Total: 9 of 12 gaps landed.** (The original count was 11; gap 5 was split into 5a/5b by code reading.)
 
 ---
 
@@ -70,13 +71,14 @@ so a future regression to silent `200 OK` from the 501 branch would fail loudly.
 `AppState::build(cfg)` but **never** populates `state.lib`, `state.health`, or
 the `ComponentHandles`. Consequence: every landed gap that depends on
 `ComponentHandles` works in tests (which wire their own state) but the
-standalone binary still serves the placeholder/501 envelopes.
+standalone binary still serves the placeholder/404/501 envelopes.
 
 | Endpoint | Behavior in tests | Behavior in standalone binary |
 |---|---|---|
 | `POST /memify` | Runs real memify | Returns `PipelineRunCompleted` with no actual work |
 | `POST /remember` | Runs full add → cognify → memify | Returns `PipelineRunCompleted` with no actual work |
 | `GET /datasets/{id}/graph` | Returns populated snapshot | Returns `{"nodes": [], "edges": []}` |
+| `GET/PUT /datasets/{id}/schema` | Returns / saves the dataset schema | Returns 404 because `state.lib` is not wired |
 | `GET /health` | Probes real backends | Returns `MockHealthChecker` synthetic entries |
 | `PATCH /update` | Runs delete + add + cognify | Returns 500 (vector_db / embedding_engine not wired) |
 | `POST /responses` | Routes through `OpenAIResponsesClient` | Returns 500 "responses client is not wired" |
@@ -89,8 +91,6 @@ standalone binary still serves the placeholder/501 envelopes.
 | File | Line | Marker | Tracks |
 |---|---|---|---|
 | [routers/improve.rs](../../../crates/http-server/src/routers/improve.rs#L106) | 106-107 | `// Blocking gap stub`, `// TODO(P5)` | Gap 2 |
-| [routers/datasets.rs](../../../crates/http-server/src/routers/datasets.rs#L328) | 328 | `// TODO(blocking): implement dataset_configurations table` | Gap 5a |
-| [routers/datasets.rs](../../../crates/http-server/src/routers/datasets.rs#L400) | 400 | `// TODO(blocking): implement dataset_configurations upsert` | Gap 5b |
 | [routers/remember.rs](../../../crates/http-server/src/routers/remember.rs#L724) | 724 | `// TODO(LIB-01-followup): wire Arc<dyn Llm> through SessionManager` | Gap 7 |
 | [routers/forget.rs](../../../crates/http-server/src/routers/forget.rs#L57) | 57 | `// TODO(cloud): proxy via cloud client` | Gap 8 (future feature) |
 
@@ -117,8 +117,7 @@ Python-parity behaviors.
 
 ## Recommended next gaps (in priority order)
 
-1. **Gap 5a + 5b — dataset schema GET/PUT** (Tier 2, blocked on a new `dataset_configurations` table in `cognee-database`). Tackle together. Includes a migration.
-2. **Gap 7 — `POST /remember/entry` LLM feedback path** (Tier 2). Wire `Arc<dyn Llm>` + prompt template through `SessionManager`. Tightly scoped.
-3. **C1 — standalone binary wiring** (cross-cutting, biggest lever). Closes the "binary serves real responses" gap for every already-landed feature at once.
-4. **Gap 2 — `POST /improve`** (Tier 1). Requires the library composition or inline Option-A equivalent. Same crate-cycle constraint as gap 3.
-5. **Gap 8 — forget cloud proxy** (future feature, not a regression). Only worth doing once `state.lib.cloud_client` is added.
+1. **Gap 7 — `POST /remember/entry` LLM feedback path** (Tier 2). Wire `Arc<dyn Llm>` + prompt template through `SessionManager`. Tightly scoped.
+2. **C1 — standalone binary wiring** (cross-cutting, biggest lever). Closes the "binary serves real responses" gap for every already-landed feature at once.
+3. **Gap 2 — `POST /improve`** (Tier 1). Requires the library composition or inline Option-A equivalent. Same crate-cycle constraint as gap 3.
+4. **Gap 8 — forget cloud proxy** (future feature, not a regression). Only worth doing once `state.lib.cloud_client` is added.

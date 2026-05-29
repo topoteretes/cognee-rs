@@ -12,7 +12,9 @@ use axum::{
     http::StatusCode,
     routing::{delete, get, post, put},
 };
-use cognee_database::{AclDb, DeleteDb, IngestDb, PipelineRunStatus as DbPipelineRunStatus};
+use cognee_database::{
+    AclDb, DatasetConfigDb, DeleteDb, IngestDb, PipelineRunStatus as DbPipelineRunStatus,
+};
 use cognee_delete::{DeleteMode, DeleteRequest, DeleteScope};
 use cognee_models::Dataset;
 use uuid::Uuid;
@@ -314,21 +316,23 @@ pub async fn get_dataset_schema(
     State(state): State<AppState>,
     Path(dataset_id): Path<Uuid>,
 ) -> Result<Json<DatasetSchemaResponseDTO>, ApiError> {
-    if let Some(components) = state.components()
-        && check_permission_via_handles(components, user.id, dataset_id, "read")
-            .await
-            .is_err()
-    {
-        return Err(ApiError::WriteEnvelopeError(
-            "Dataset not found".into(),
-            StatusCode::NOT_FOUND,
-        ));
-    }
+    let components = state.components().ok_or_else(|| {
+        ApiError::WriteEnvelopeError("Dataset not found".into(), StatusCode::NOT_FOUND)
+    })?;
 
-    // TODO(blocking): implement dataset_configurations table in cognee-models/cognee-database
+    check_permission_via_handles(components, user.id, dataset_id, "read")
+        .await
+        .map_err(|_| {
+            ApiError::WriteEnvelopeError("Dataset not found".into(), StatusCode::NOT_FOUND)
+        })?;
+
+    let config = DatasetConfigDb::get_by_dataset_id(&*components.database, dataset_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {e}")))?;
+
     Ok(Json(DatasetSchemaResponseDTO {
-        graph_schema: None,
-        custom_prompt: None,
+        graph_schema: config.as_ref().and_then(|c| c.graph_schema.clone()),
+        custom_prompt: config.and_then(|c| c.custom_prompt),
     }))
 }
 
@@ -387,17 +391,27 @@ pub async fn update_dataset_schema(
     user: AuthenticatedUser,
     State(state): State<AppState>,
     Path(dataset_id): Path<Uuid>,
-    Json(_payload): Json<DatasetSchemaPayloadDTO>,
+    Json(payload): Json<DatasetSchemaPayloadDTO>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    if let Some(components) = state.components() {
-        check_permission_via_handles(components, user.id, dataset_id, "write")
-            .await
-            .map_err(|_| {
-                ApiError::WriteEnvelopeError("Dataset not found".into(), StatusCode::NOT_FOUND)
-            })?;
-    }
+    let components = state.components().ok_or_else(|| {
+        ApiError::WriteEnvelopeError("Dataset not found".into(), StatusCode::NOT_FOUND)
+    })?;
 
-    // TODO(blocking): implement dataset_configurations upsert in cognee-database
+    check_permission_via_handles(components, user.id, dataset_id, "write")
+        .await
+        .map_err(|_| {
+            ApiError::WriteEnvelopeError("Dataset not found".into(), StatusCode::NOT_FOUND)
+        })?;
+
+    let patch = cognee_database::DatasetConfigurationPatch {
+        graph_schema: payload.graph_schema,
+        custom_prompt: payload.custom_prompt,
+    };
+
+    DatasetConfigDb::upsert(&*components.database, dataset_id, patch)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {e}")))?;
+
     Ok(Json(serde_json::json!({"status": "ok"})))
 }
 

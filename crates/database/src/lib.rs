@@ -46,9 +46,10 @@ pub use sync::{
     SeaOrmSyncOperationRepository, SyncOperationRepository, SyncOperationRow, SyncOperationStatus,
 };
 pub use traits::{
-    AclDb, CostByModelRow, DeleteDb, IngestDb, Notebook, NotebookDb, NotebookUpdatePatch, RoleDb,
-    SearchHistoryDb, SessionLifecycleDb, SessionListFilters, SessionListPage, SessionRowWithStatus,
-    SessionStats, TenantDb, UserDb,
+    AclDb, CostByModelRow, DatasetConfigDb, DatasetConfiguration, DatasetConfigurationPatch,
+    DeleteDb, IngestDb, Notebook, NotebookDb, NotebookUpdatePatch, RoleDb, SearchHistoryDb,
+    SessionLifecycleDb, SessionListFilters, SessionListPage, SessionRowWithStatus, SessionStats,
+    TenantDb, UserDb,
 };
 pub use types::{
     DatabaseError, GraphEdge, GraphMetrics, GraphNode, PipelineRun, PipelineRunStatus,

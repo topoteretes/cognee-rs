@@ -69,8 +69,9 @@ pub struct DatasetCreationPayload {
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct DatasetSchemaPayloadDTO {
-    /// Free-form JSON object describing the dataset's graph schema. `null`
-    /// vs absent are distinct: `null` clears the field, absent leaves it.
+    /// Free-form JSON object describing the dataset's graph schema.
+    /// `Option<T>` does not distinguish explicit `null` from omission, so the
+    /// handler treats both as "leave unchanged" on update and `NULL` on insert.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub graph_schema: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
