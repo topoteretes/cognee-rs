@@ -308,9 +308,6 @@ pub async fn get_dataset_graph(
 // ─── 2.6  GET /{dataset_id}/schema ───────────────────────────────────────────
 
 /// `GET /api/v1/datasets/{dataset_id}/schema` — read graph schema + custom prompt.
-///
-/// **BLOCKING GAP**: `get_dataset_configuration` does not exist.
-/// Returns `{"graph_schema": null, "custom_prompt": null}` as placeholder.
 pub async fn get_dataset_schema(
     user: AuthenticatedUser,
     State(state): State<AppState>,
@@ -384,9 +381,6 @@ pub async fn create_new_dataset(
 // ─── 2.8  PUT /{dataset_id}/schema ───────────────────────────────────────────
 
 /// `PUT /api/v1/datasets/{dataset_id}/schema` — upsert graph schema + custom prompt.
-///
-/// **BLOCKING GAP**: `dataset_configurations` table does not exist.
-/// Returns `{"status": "ok"}` as placeholder after permission check.
 pub async fn update_dataset_schema(
     user: AuthenticatedUser,
     State(state): State<AppState>,
