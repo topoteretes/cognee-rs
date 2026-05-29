@@ -36,6 +36,7 @@ use crate::error::{ApiError, ValidationDetails};
 use crate::middleware::validation::Json as ValidatedJson;
 use crate::multipart::{MultipartOpts, UploadGuard, check_filename_traversal, parse_multipart};
 use crate::pipelines::dispatch::{DispatchOutcome, box_pipeline_future, dispatch_pipeline};
+use crate::routers::feedback;
 use crate::state::AppState;
 
 // ─── parse_remember_multipart ─────────────────────────────────────────────────
@@ -721,16 +722,35 @@ pub async fn post_remember_entry(
             error_message,
             generate_feedback_with_llm,
         }) => {
-            // TODO(LIB-01-followup): generate_feedback_with_llm requires
-            // wiring an `Arc<dyn Llm>` + prompt template through
-            // `SessionManager`. For now we always pass `session_feedback = ""`.
-            if generate_feedback_with_llm {
-                tracing::debug!(
-                    session_id = %payload.session_id,
-                    "post_remember_entry: generate_feedback_with_llm=true \
-                     ignored (LIB-01-followup; passing empty session_feedback)"
-                );
-            }
+            // Generate (or look up the deterministic fallback for) the
+            // `session_feedback` string before persisting the trace step.
+            //
+            // Parity bump vs. Python: when `generate_feedback_with_llm` is
+            // `false`, Python still records the deterministic fallback
+            // (`session_manager.py:289-294`). The Rust handler previously
+            // wrote `""`; we now match Python on both branches.
+            let session_feedback: String = if generate_feedback_with_llm {
+                if let Some(llm) = components.llm.as_ref() {
+                    feedback::generate_session_feedback(
+                        llm.as_ref(),
+                        &origin_function,
+                        &trace_status,
+                        method_return_value.as_ref(),
+                        &error_message,
+                    )
+                    .await
+                } else {
+                    tracing::warn!(
+                        session_id = %payload.session_id,
+                        "post_remember_entry: generate_feedback_with_llm=true \
+                         but ComponentHandles.llm is None; using deterministic \
+                         fallback"
+                    );
+                    feedback::fallback_feedback(&origin_function, &trace_status, &error_message)
+                }
+            } else {
+                feedback::fallback_feedback(&origin_function, &trace_status, &error_message)
+            };
 
             session_manager
                 .add_agent_trace_step(
@@ -743,7 +763,7 @@ pub async fn post_remember_entry(
                     method_params.unwrap_or(serde_json::Value::Null),
                     method_return_value,
                     &error_message,
-                    "",
+                    &session_feedback,
                 )
                 .await
                 .map_err(map_session_err)?

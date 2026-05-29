@@ -260,6 +260,7 @@ async fn test_qa_entry_dispatch_returns_qa_id() {
         None,
         Some(store.clone() as Arc<dyn SessionStore>),
         Some(sm),
+        None,
     )
     .await
     .expect("dispatch must succeed");
@@ -308,6 +309,7 @@ async fn test_qa_entry_with_optional_fields_persists_via_update_qa() {
         None,
         Some(store.clone() as Arc<dyn SessionStore>),
         Some(sm),
+        None,
     )
     .await
     .expect("dispatch must succeed");
@@ -357,6 +359,7 @@ async fn test_trace_entry_dispatch() {
         None,
         Some(store.clone() as Arc<dyn SessionStore>),
         Some(sm),
+        None,
     )
     .await
     .expect("dispatch must succeed");
@@ -376,7 +379,10 @@ async fn test_trace_entry_dispatch() {
     assert_eq!(step.status, "success");
     assert_eq!(step.memory_query, "what?");
     assert_eq!(step.memory_context, "ctx");
-    assert_eq!(step.session_feedback, "");
+    // Gap 07 parity bump: deterministic fallback is recorded even when
+    // `generate_feedback_with_llm` is false (matches Python's
+    // `_fallback_agent_trace_feedback`).
+    assert_eq!(step.session_feedback, "search succeeded.");
     // method_params dispatched as a json value.
     assert_eq!(step.method_params, serde_json::json!({"q": "hello"}));
 }
@@ -402,6 +408,7 @@ async fn test_feedback_entry_dispatch_returns_qa_id_on_success() {
         None,
         Some(store.clone() as Arc<dyn SessionStore>),
         Some(sm),
+        None,
     )
     .await
     .expect("dispatch must succeed");
@@ -435,6 +442,7 @@ async fn test_feedback_entry_returns_errored_when_qa_missing() {
         None,
         Some(store.clone() as Arc<dyn SessionStore>),
         Some(sm),
+        None,
     )
     .await
     .expect("dispatch must surface as Ok with Errored status");
@@ -471,6 +479,7 @@ async fn test_missing_session_id_returns_error() {
         None,
         Some(store as Arc<dyn SessionStore>),
         Some(sm),
+        None,
     )
     .await
     .expect_err("empty session_id must return Err");
