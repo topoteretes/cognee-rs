@@ -26,6 +26,7 @@ pub mod responses_dispatch;
 pub mod routers;
 pub mod state;
 pub mod sync;
+pub mod wiring;
 
 pub use config::HttpServerConfig;
 pub use error::{ApiError, ServerError};

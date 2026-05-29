@@ -51,14 +51,14 @@ sea-orm = { version = "1", default-features = false, features = ["runtime-tokio-
 cognee-storage = { path = "../storage" }
 cognee-ingestion = { path = "../ingestion" }
 cognee-cognify = { path = "../cognify" }
-cognee-embedding = { path = "../embedding" }
+cognee-embedding = { path = "../embedding", features = ["onnx"] }
 cognee-delete = { path = "../delete" }
 cognee-ontology = { path = "../ontology" }
 cognee-search = { path = "../search" }
 cognee-session = { path = "../session" }
 cognee-llm = { path = "../llm" }
-cognee-graph = { path = "../graph" }
-cognee-vector = { path = "../vector" }
+cognee-graph = { path = "../graph", features = ["ladybug"] }
+cognee-vector = { path = "../vector", features = ["qdrant"] }
 cognee-logging = { path = "../logging" }
 cognee-visualization = { path = "../visualization" }
 cognee-cloud = { path = "../cloud" }

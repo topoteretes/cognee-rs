@@ -5,9 +5,9 @@
 //! Only the standalone binary calls `from_env()`; library embedders construct
 //! `HttpServerConfig` directly.
 
-use std::{str::FromStr, time::Duration};
+use std::{path::PathBuf, str::FromStr, time::Duration};
 
-use secrecy::SecretString;
+use secrecy::{ExposeSecret, SecretString};
 
 use crate::error::ServerError;
 
@@ -112,10 +112,169 @@ pub struct HttpServerConfig {
     /// Env: `COGNEE_HEALTH_CACHE_TTL_MS`. Default: 5000. Set to `0` to
     /// disable caching.
     pub health_cache_ttl_ms: u64,
+
+    // ── Standalone backend wiring knobs ─────────────────────────────────────
+    /// Root directory for ingested data files (LocalStorage).
+    /// Env: `DATA_ROOT_DIRECTORY`.
+    pub data_root_directory: PathBuf,
+
+    /// Root directory for system state (graph/vector/sqlite files).
+    /// Env: `SYSTEM_ROOT_DIRECTORY`.
+    pub system_root_directory: PathBuf,
+
+    /// Relational DB URL.
+    /// Env: `RELATIONAL_DB_URL` (fallback `DATABASE_URL`).
+    pub relational_db_url: String,
+
+    /// Graph provider name.
+    /// Env: `GRAPH_DATABASE_PROVIDER`. Default: `ladybug`.
+    pub graph_provider: String,
+
+    /// Graph file path (for embedded ladybug graph DB).
+    /// Env: `GRAPH_FILE_PATH`.
+    pub graph_file_path: PathBuf,
+
+    /// Vector provider name.
+    /// Env: `VECTOR_DB_PROVIDER`. Default: `qdrant`.
+    pub vector_provider: String,
+
+    /// Vector DB URL/path (embedded qdrant dir by default).
+    /// Env: `VECTOR_DB_URL`.
+    pub vector_db_url: String,
+
+    /// Embedding provider name.
+    /// Env: `EMBEDDING_PROVIDER`.
+    pub embedding_provider: String,
+
+    /// Embedding vector dimensions.
+    /// Env: `EMBEDDING_DIMENSIONS`.
+    pub embedding_dimensions: u32,
+
+    /// Embedding model identifier.
+    /// Env: `EMBEDDING_MODEL_NAME` (fallback `EMBEDDING_MODEL`).
+    pub embedding_model_name: String,
+
+    /// Embedding model file path (ONNX).
+    /// Env: `EMBEDDING_MODEL_PATH`.
+    pub embedding_model_path: Option<PathBuf>,
+
+    /// Embedding tokenizer file path (ONNX).
+    /// Env: `EMBEDDING_TOKENIZER_PATH`.
+    pub embedding_tokenizer_path: Option<PathBuf>,
+
+    /// Embedding endpoint for remote providers.
+    /// Env: `EMBEDDING_ENDPOINT`.
+    pub embedding_endpoint: String,
+
+    /// Embedding API key.
+    /// Env: `EMBEDDING_API_KEY` (fallbacks: `LLM_API_KEY`, `OPENAI_TOKEN`).
+    pub embedding_api_key: SecretString,
+
+    /// LLM provider name.
+    /// Env: `LLM_PROVIDER`.
+    pub llm_provider: String,
+
+    /// LLM model name.
+    /// Env: `LLM_MODEL` (fallback `OPENAI_MODEL`).
+    pub llm_model: String,
+
+    /// LLM API key.
+    /// Env: `LLM_API_KEY` (fallback `OPENAI_TOKEN`).
+    pub llm_api_key: SecretString,
+
+    /// LLM endpoint.
+    /// Env: `LLM_ENDPOINT` (fallback `OPENAI_URL`).
+    pub llm_endpoint: String,
+
+    /// LLM retry count for both structured-output and network retries.
+    /// Env: `LLM_MAX_RETRIES`.
+    pub llm_max_retries: u32,
+
+    /// Session store backend selector.
+    /// Env: `COGNEE_SESSION_STORE`.
+    pub session_store_backend: String,
+
+    /// Session root directory (for fs-based stores).
+    /// Env: `COGNEE_SESSION_DIR`.
+    pub session_root_directory: PathBuf,
+
+    /// Whether notebook code execution backend is enabled.
+    /// Env: `COGNEE_NOTEBOOK_RUNNER_ENABLED`.
+    pub notebook_runner_enabled: bool,
+
+    /// Whether Responses API client should be wired.
+    /// Env: `COGNEE_RESPONSES_CLIENT_ENABLED`.
+    pub responses_client_enabled: bool,
+
+    /// Disable standalone default backend wiring in `main`.
+    /// Env: `COGNEE_DISABLE_DEFAULT_BACKENDS`.
+    pub disable_default_backends: bool,
+}
+
+fn default_cache_root() -> PathBuf {
+    if let Ok(xdg) = std::env::var("XDG_CACHE_HOME") {
+        PathBuf::from(xdg).join("cognee")
+    } else if let Ok(home) = std::env::var("HOME") {
+        PathBuf::from(home).join(".cache").join("cognee")
+    } else {
+        PathBuf::from("./.cognee")
+    }
+}
+
+fn parse_env_bool(v: &str) -> bool {
+    matches!(
+        v.trim().to_ascii_lowercase().as_str(),
+        "true" | "1" | "yes" | "on"
+    )
+}
+
+fn parse_env_bool_with_default(v: &str, default: bool) -> bool {
+    let trimmed = v.trim().to_ascii_lowercase();
+    if matches!(trimmed.as_str(), "true" | "1" | "yes" | "on") {
+        true
+    } else if matches!(trimmed.as_str(), "false" | "0" | "no" | "off") {
+        false
+    } else {
+        default
+    }
+}
+
+fn first_non_empty_env(keys: &[&str]) -> Option<String> {
+    for key in keys {
+        if let Ok(v) = std::env::var(key) {
+            let trimmed = v.trim();
+            if !trimmed.is_empty() {
+                return Some(trimmed.to_string());
+            }
+        }
+    }
+    None
+}
+
+fn default_relational_db_url(system_root_directory: &std::path::Path) -> String {
+    format!(
+        "sqlite://{}",
+        system_root_directory.join("cognee.db").display()
+    )
+}
+
+fn default_graph_file_path(system_root_directory: &std::path::Path) -> PathBuf {
+    system_root_directory.join("graph")
+}
+
+fn default_vector_db_url(system_root_directory: &std::path::Path) -> String {
+    system_root_directory.join("vectors").display().to_string()
+}
+
+fn default_session_root_directory(system_root_directory: &std::path::Path) -> PathBuf {
+    system_root_directory.join("sessions")
 }
 
 impl Default for HttpServerConfig {
     fn default() -> Self {
+        let cache_root = default_cache_root();
+        let data_root = cache_root.join("data");
+        let system_root = cache_root.join("system");
         Self {
             host: "0.0.0.0".into(),
             port: 8000,
@@ -134,6 +293,30 @@ impl Default for HttpServerConfig {
             health_probe_llm: false,
             health_probe_timeout_ms: 2000,
             health_cache_ttl_ms: 5000,
+            data_root_directory: data_root,
+            system_root_directory: system_root.clone(),
+            relational_db_url: default_relational_db_url(&system_root),
+            graph_provider: "ladybug".to_string(),
+            graph_file_path: default_graph_file_path(&system_root),
+            vector_provider: "qdrant".to_string(),
+            vector_db_url: default_vector_db_url(&system_root),
+            embedding_provider: "onnx".to_string(),
+            embedding_dimensions: 384,
+            embedding_model_name: "bge-small-en-v1.5".to_string(),
+            embedding_model_path: None,
+            embedding_tokenizer_path: None,
+            embedding_endpoint: String::new(),
+            embedding_api_key: SecretString::new(String::new().into()),
+            llm_provider: "openai".to_string(),
+            llm_model: "gpt-4o-mini".to_string(),
+            llm_api_key: SecretString::new(String::new().into()),
+            llm_endpoint: String::new(),
+            llm_max_retries: 3,
+            session_store_backend: "seaorm".to_string(),
+            session_root_directory: default_session_root_directory(&system_root),
+            notebook_runner_enabled: false,
+            responses_client_enabled: false,
+            disable_default_backends: false,
         }
     }
 }
@@ -145,6 +328,7 @@ impl HttpServerConfig {
     /// construct `HttpServerConfig` directly.
     pub fn from_env() -> Result<Self, ServerError> {
         let mut cfg = Self::default();
+        let default_system_root_directory = cfg.system_root_directory.clone();
 
         if let Ok(v) = std::env::var("HTTP_API_HOST") {
             cfg.host = v;
@@ -232,6 +416,114 @@ impl HttpServerConfig {
             })?;
         }
 
+        // Standalone backend wiring knobs
+        if let Ok(v) = std::env::var("DATA_ROOT_DIRECTORY") {
+            cfg.data_root_directory = PathBuf::from(v);
+        }
+        if let Ok(v) = std::env::var("SYSTEM_ROOT_DIRECTORY") {
+            cfg.system_root_directory = PathBuf::from(v);
+
+            // Keep standalone wiring coherent: if dependent paths still match
+            // their old defaults, rebase them to the new system root.
+            if cfg.relational_db_url == default_relational_db_url(&default_system_root_directory) {
+                cfg.relational_db_url = default_relational_db_url(&cfg.system_root_directory);
+            }
+            if cfg.graph_file_path == default_graph_file_path(&default_system_root_directory) {
+                cfg.graph_file_path = default_graph_file_path(&cfg.system_root_directory);
+            }
+            if cfg.vector_db_url == default_vector_db_url(&default_system_root_directory) {
+                cfg.vector_db_url = default_vector_db_url(&cfg.system_root_directory);
+            }
+            if cfg.session_root_directory
+                == default_session_root_directory(&default_system_root_directory)
+            {
+                cfg.session_root_directory =
+                    default_session_root_directory(&cfg.system_root_directory);
+            }
+        }
+
+        if let Some(v) = first_non_empty_env(&["RELATIONAL_DB_URL", "DATABASE_URL"]) {
+            cfg.relational_db_url = v;
+        }
+
+        if let Ok(v) = std::env::var("GRAPH_DATABASE_PROVIDER") {
+            cfg.graph_provider = v;
+        }
+        if let Ok(v) = std::env::var("GRAPH_FILE_PATH") {
+            cfg.graph_file_path = PathBuf::from(v);
+        }
+
+        if let Ok(v) = std::env::var("VECTOR_DB_PROVIDER") {
+            cfg.vector_provider = v;
+        }
+        if let Ok(v) = std::env::var("VECTOR_DB_URL") {
+            cfg.vector_db_url = v;
+        }
+
+        if let Ok(v) = std::env::var("EMBEDDING_PROVIDER") {
+            cfg.embedding_provider = v;
+        }
+        if let Ok(v) = std::env::var("EMBEDDING_DIMENSIONS") {
+            cfg.embedding_dimensions = v
+                .parse::<u32>()
+                .map_err(|e| ServerError::Other(anyhow::anyhow!("EMBEDDING_DIMENSIONS: {e}")))?;
+        }
+        if let Some(v) = first_non_empty_env(&["EMBEDDING_MODEL_NAME", "EMBEDDING_MODEL"]) {
+            cfg.embedding_model_name = v;
+        }
+        if let Ok(v) = std::env::var("EMBEDDING_MODEL_PATH") {
+            cfg.embedding_model_path = Some(PathBuf::from(v));
+        }
+        if let Ok(v) = std::env::var("EMBEDDING_TOKENIZER_PATH") {
+            cfg.embedding_tokenizer_path = Some(PathBuf::from(v));
+        }
+        if let Ok(v) = std::env::var("EMBEDDING_ENDPOINT") {
+            cfg.embedding_endpoint = v;
+        }
+        if let Some(v) = first_non_empty_env(&["EMBEDDING_API_KEY", "LLM_API_KEY", "OPENAI_TOKEN"])
+        {
+            cfg.embedding_api_key = SecretString::new(v.into());
+        }
+
+        if let Ok(v) = std::env::var("LLM_PROVIDER") {
+            cfg.llm_provider = v;
+        }
+        if let Some(v) = first_non_empty_env(&["LLM_MODEL", "OPENAI_MODEL"]) {
+            cfg.llm_model = v;
+        }
+        if let Some(v) = first_non_empty_env(&["LLM_API_KEY", "OPENAI_TOKEN"]) {
+            cfg.llm_api_key = SecretString::new(v.into());
+        }
+        if let Some(v) = first_non_empty_env(&["LLM_ENDPOINT", "OPENAI_URL"]) {
+            cfg.llm_endpoint = v;
+        }
+        if let Ok(v) = std::env::var("LLM_MAX_RETRIES") {
+            cfg.llm_max_retries = v
+                .parse::<u32>()
+                .map_err(|e| ServerError::Other(anyhow::anyhow!("LLM_MAX_RETRIES: {e}")))?;
+        }
+
+        if let Ok(v) = std::env::var("COGNEE_SESSION_STORE") {
+            cfg.session_store_backend = v;
+        }
+        if let Ok(v) = std::env::var("COGNEE_SESSION_DIR") {
+            cfg.session_root_directory = PathBuf::from(v);
+        }
+
+        if let Ok(v) = std::env::var("COGNEE_NOTEBOOK_RUNNER_ENABLED") {
+            cfg.notebook_runner_enabled = parse_env_bool(&v);
+        }
+
+        if let Ok(v) = std::env::var("COGNEE_RESPONSES_CLIENT_ENABLED") {
+            cfg.responses_client_enabled = parse_env_bool_with_default(&v, false);
+        } else {
+            cfg.responses_client_enabled = !cfg.llm_api_key.expose_secret().is_empty();
+        }
+
+        if let Ok(v) = std::env::var("COGNEE_DISABLE_DEFAULT_BACKENDS") {
+            cfg.disable_default_backends = parse_env_bool(&v);
+        }
+
         Ok(cfg)
     }
 }
@@ -254,6 +546,7 @@ impl HttpServerConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use secrecy::ExposeSecret;
 
     #[test]
     fn test_defaults() {
@@ -307,6 +600,83 @@ mod tests {
         assert_eq!(
             "anything".parse::<Environment>().unwrap(),
             Environment::Prod
+        );
+    }
+
+    #[test]
+    fn test_bool_backend_flags_from_env() {
+        // SAFETY: test-only; no concurrent threads modify these env vars.
+        unsafe {
+            std::env::set_var("COGNEE_NOTEBOOK_RUNNER_ENABLED", "yes");
+            std::env::set_var("COGNEE_RESPONSES_CLIENT_ENABLED", "1");
+            std::env::set_var("COGNEE_DISABLE_DEFAULT_BACKENDS", "true");
+        }
+        let cfg = HttpServerConfig::from_env().expect("from_env");
+        // SAFETY: test-only.
+        unsafe {
+            std::env::remove_var("COGNEE_NOTEBOOK_RUNNER_ENABLED");
+            std::env::remove_var("COGNEE_RESPONSES_CLIENT_ENABLED");
+            std::env::remove_var("COGNEE_DISABLE_DEFAULT_BACKENDS");
+        }
+
+        assert!(cfg.notebook_runner_enabled);
+        assert!(cfg.responses_client_enabled);
+        assert!(cfg.disable_default_backends);
+    }
+
+    #[test]
+    fn test_llm_fallback_env_aliases() {
+        // SAFETY: test-only; no concurrent threads modify these env vars.
+        unsafe {
+            std::env::set_var("OPENAI_TOKEN", "test-key");
+            std::env::set_var("OPENAI_MODEL", "gpt-test");
+            std::env::set_var("OPENAI_URL", "https://example.test/v1");
+            std::env::remove_var("LLM_API_KEY");
+            std::env::remove_var("LLM_MODEL");
+            std::env::remove_var("LLM_ENDPOINT");
+        }
+        let cfg = HttpServerConfig::from_env().expect("from_env");
+        // SAFETY: test-only.
+        unsafe {
+            std::env::remove_var("OPENAI_TOKEN");
+            std::env::remove_var("OPENAI_MODEL");
+            std::env::remove_var("OPENAI_URL");
+        }
+
+        assert_eq!(cfg.llm_api_key.expose_secret(), "test-key");
+        assert_eq!(cfg.llm_model, "gpt-test");
+        assert_eq!(cfg.llm_endpoint, "https://example.test/v1");
+    }
+
+    #[test]
+    fn test_system_root_directory_rebases_dependent_defaults() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let new_root = temp.path().join("custom-system-root");
+
+        // SAFETY: test-only; no concurrent threads modify these env vars.
+        unsafe {
+            std::env::set_var("SYSTEM_ROOT_DIRECTORY", &new_root);
+            std::env::remove_var("RELATIONAL_DB_URL");
+            std::env::remove_var("DATABASE_URL");
+            std::env::remove_var("GRAPH_FILE_PATH");
+            std::env::remove_var("VECTOR_DB_URL");
+            std::env::remove_var("COGNEE_SESSION_DIR");
+        }
+
+        let cfg = HttpServerConfig::from_env().expect("from_env");
+
+        // SAFETY: test-only.
+        unsafe {
+            std::env::remove_var("SYSTEM_ROOT_DIRECTORY");
+        }
+
+        assert_eq!(cfg.system_root_directory, new_root);
+        assert_eq!(cfg.relational_db_url, default_relational_db_url(&new_root));
+        assert_eq!(cfg.graph_file_path, default_graph_file_path(&new_root));
+        assert_eq!(cfg.vector_db_url, default_vector_db_url(&new_root));
+        assert_eq!(
+            cfg.session_root_directory,
+            default_session_root_directory(&new_root)
         );
     }
 }

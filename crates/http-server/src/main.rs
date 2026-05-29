@@ -14,7 +14,7 @@ use std::net::SocketAddr;
 use anyhow::Context as _;
 use clap::Parser;
 use cognee_http_server::observability::{BufferConfig, SpanBuffer, SpanBufferLayer};
-use cognee_http_server::{AppState, HttpServerConfig};
+use cognee_http_server::{AppState, HttpServerConfig, wiring};
 use std::sync::Arc;
 
 #[derive(Parser, Debug)]
@@ -31,10 +31,6 @@ struct Args {
     /// Bind port. Env: HTTP_API_PORT.
     #[arg(long, env = "HTTP_API_PORT", default_value_t = 8000)]
     port: u16,
-
-    /// Path to a JSON config file (optional; env vars override).
-    #[arg(long, env = "COGNEE_HTTP_CONFIG")]
-    config: Option<std::path::PathBuf>,
 
     /// Comma-separated CORS allowed origins. Env: CORS_ALLOWED_ORIGINS.
     #[arg(long, env = "CORS_ALLOWED_ORIGINS")]
@@ -122,9 +118,32 @@ async fn main() -> anyhow::Result<()> {
         cfg.env = env_val;
     }
 
-    let mut state = AppState::build(cfg.clone())
-        .await
-        .context("failed to build AppState")?;
+    let handles = if cfg.disable_default_backends {
+        tracing::warn!(
+            "COGNEE_DISABLE_DEFAULT_BACKENDS is enabled; skipping default backend wiring"
+        );
+        None
+    } else {
+        Some(
+            wiring::wire_default_backends(&cfg)
+                .await
+                .context("failed to wire default backend handles")?,
+        )
+    };
+
+    let mut state = match handles {
+        Some(handles) => {
+            let mut state = AppState::build_with_db(cfg.clone(), handles.database.clone())
+                .await
+                .context("failed to build AppState with database")?;
+            state.lib = Some(Arc::new(handles));
+            state.install_real_health_checker();
+            state
+        }
+        None => AppState::build(cfg.clone())
+            .await
+            .context("failed to build AppState")?,
+    };
     state.spans = spans;
     #[cfg(feature = "telemetry")]
     {

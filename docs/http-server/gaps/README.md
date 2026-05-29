@@ -36,7 +36,7 @@ A gap qualifies when at least one of these is true:
 | 4 | `GET /api/v1/datasets/{id}/graph` and `WS /api/v1/cognify/subscribe/{id}` payload | [routers/datasets.rs:298-301](../../../crates/http-server/src/routers/datasets.rs#L298-L301), [routers/cognify.rs:452-465](../../../crates/http-server/src/routers/cognify.rs#L452-L465) | **landed** | Merge `58e1233`, gap `6fab673`. New `cognee_graph::get_formatted_graph_data` (Python parity port). `ComponentHandles::formatted_graph_data` calls the real helper when `graph_db` is wired; empty-shape fallback when `None` is intentional (Python parity). Tests: [tests/test_datasets_graph.rs](../../../crates/http-server/tests/test_datasets_graph.rs), [tests/test_cognify_websocket.rs](../../../crates/http-server/tests/test_cognify_websocket.rs). Deviations: visualize router calls `cognee_visualization::render*` directly (not through the new helper); WS handler passes nil `user_id` because the run row doesn't carry it; cross-SDK WS parity deferred. |
 | **5a** | `GET /api/v1/datasets/{dataset_id}/schema` | [routers/datasets.rs:312-333](../../../crates/http-server/src/routers/datasets.rs#L312-L333) | **landed** | Returns the persisted `graph_schema` / `custom_prompt` when a row exists and the Python-parity `{"graph_schema": null, "custom_prompt": null}` body when it does not. Covered by [tests/test_datasets_schema.rs](../../../crates/http-server/tests/test_datasets_schema.rs). |
 | **5b** | `PUT /api/v1/datasets/{dataset_id}/schema` | [routers/datasets.rs:386-402](../../../crates/http-server/src/routers/datasets.rs#L386-L402) | **landed** | Upserts the row via `DatasetConfigDb` and still returns the Python-parity envelope `{"status": "ok"}`. Covered by [tests/test_datasets_schema.rs](../../../crates/http-server/tests/test_datasets_schema.rs). |
-| 6 | `GET /api/v1/health` (synthetic component entries) | [routers/health.rs:134-150](../../../crates/http-server/src/routers/health.rs#L134-L150) | **landed (binary-degraded)** | Merge `07ae8c8`, gap `31a48ca`. `RealHealthChecker` with concurrent probes (graph DB / vector DB / SQLite / file storage; opt-in LLM and embedding) matching Python parity status model. [tests/test_health_real.rs](../../../crates/http-server/tests/test_health_real.rs) covers healthy / degraded / unhealthy / cache. **Important systemic limitation:** `AppState::install_real_health_checker()` must be called by embedders after wiring `state.lib`. The standalone binary ([src/main.rs](../../../crates/http-server/src/main.rs)) does not yet wire `state.lib`, so the binary still serves the `MockHealthChecker`. See [C1 below](#c1-standalone-binary-wiring-pre-existing-systemic). |
+| 6 | `GET /api/v1/health` (synthetic component entries) | [routers/health.rs:134-150](../../../crates/http-server/src/routers/health.rs#L134-L150) | **landed** | Merge `07ae8c8`, gap `31a48ca`. `RealHealthChecker` with concurrent probes (graph DB / vector DB / SQLite / file storage; opt-in LLM and embedding) matching Python parity status model. [tests/test_health_real.rs](../../../crates/http-server/tests/test_health_real.rs) covers healthy / degraded / unhealthy / cache. The standalone binary now wires default backends in [src/wiring.rs](../../../crates/http-server/src/wiring.rs) and installs the real health checker from [src/main.rs](../../../crates/http-server/src/main.rs). |
 | **7** | `POST /api/v1/remember/entry` (`generate_feedback_with_llm` path) | [routers/remember.rs](../../../crates/http-server/src/routers/remember.rs) | **landed** ([plan](impl/11-remember-feedback-llm.md)) | Merge `492df0f`, gap `3479f33`. Generates feedback in the handler via `feedback::generate_session_feedback` using `ComponentHandles.llm`, with `tokio::time::timeout` (8 s default), ANSI/control-char scrubbing, 500-char cap, and Python-parity deterministic fallback on every non-success path. LLM response NEVER logged verbatim. Mirror change applied to `cognee_lib::api::remember::remember_entry`. Parity bump locked: when `generate_feedback_with_llm=false`, deterministic fallback is written (was previously empty string). |
 | **8** | `POST /api/v1/forget` (cloud proxy short-circuit) | [routers/forget.rs:57](../../../crates/http-server/src/routers/forget.rs#L57) | **not-started (low priority)** ([plan](impl/10-forget-cloud-proxy.md)) | Local delete works correctly through `DeleteService`. The cloud-proxy branch is a TODO comment only. There is no `cloud_client` field on `state.lib` yet. Not a regression — multi-tenant cloud routing is a future feature. Plan adds a `CloudDeleteClient` trait + `ComponentHandles` slot; Stage A is the trait+slot+handler branch, Stage B (real HTTP impl) is optional and explicitly deferred. |
 
@@ -65,26 +65,28 @@ so a future regression to silent `200 OK` from the 501 branch would fail loudly.
 
 ## Cross-cutting issues
 
-### C1: Standalone binary wiring (pre-existing systemic) — [plan](impl/C1-standalone-binary-wiring.md)
+### C1: Standalone binary wiring — landed
 
-[crates/http-server/src/main.rs](../../../crates/http-server/src/main.rs) calls
-`AppState::build(cfg)` but **never** populates `state.lib`, `state.health`, or
-the `ComponentHandles`. Consequence: every landed gap that depends on
-`ComponentHandles` works in tests (which wire their own state) but the
-standalone binary still serves the placeholder/404/501 envelopes.
+The standalone binary now builds default backend handles in
+[crates/http-server/src/wiring.rs](../../../crates/http-server/src/wiring.rs),
+uses them from [crates/http-server/src/main.rs](../../../crates/http-server/src/main.rs),
+sets `state.lib`, and calls `state.install_real_health_checker()`.
+
+Key outcomes:
 
 | Endpoint | Behavior in tests | Behavior in standalone binary |
 |---|---|---|
-| `POST /memify` | Runs real memify | Returns `PipelineRunCompleted` with no actual work |
-| `POST /remember` | Runs full add → cognify → memify | Returns `PipelineRunCompleted` with no actual work |
-| `GET /datasets/{id}/graph` | Returns populated snapshot | Returns `{"nodes": [], "edges": []}` |
-| `GET/PUT /datasets/{id}/schema` | Returns / saves the dataset schema | Returns 404 because `state.lib` is not wired |
-| `GET /health` | Probes real backends | Returns `MockHealthChecker` synthetic entries |
-| `PATCH /update` | Runs delete + add + cognify | Returns 500 (vector_db / embedding_engine not wired) |
-| `POST /responses` | Routes through `OpenAIResponsesClient` | Returns 500 "responses client is not wired" |
-| `POST /notebooks/{id}/{cell}/run` | Runs `python3` subprocess | Returns 501 (notebook_runner not wired) |
+| `POST /memify` | Runs real memify | Runs real memify when default backends are enabled |
+| `POST /remember` | Runs full add → cognify → memify | Runs full pipeline when default backends are enabled |
+| `GET /datasets/{id}/graph` | Returns populated snapshot | Uses wired `graph_db` instead of empty fallback |
+| `GET/PUT /datasets/{id}/schema` | Returns / saves the dataset schema | Uses wired DB-backed handlers |
+| `GET /health` | Probes real backends | Uses `RealHealthChecker` instead of `MockHealthChecker` |
+| `PATCH /update` | Runs delete + add + cognify | Uses wired graph/vector/embedding backends |
+| `POST /responses` | Routes through `OpenAIResponsesClient` | Can wire a real responses client when enabled and configured |
+| `POST /notebooks/{id}/{cell}/run` | Runs `python3` subprocess | Can wire `SubprocessRunner` when enabled |
 
-**Fix:** see [impl/C1-standalone-binary-wiring.md](impl/C1-standalone-binary-wiring.md) — adds a `wire_default_backends(cfg: &HttpServerConfig) -> ComponentHandles` constructor in a new `wiring.rs` module, calls it from `main.rs`, then calls `state.install_real_health_checker()`. The plan also defines ~22 new config fields (`DATA_ROOT_DIRECTORY`, `RELATIONAL_DB_URL`, embedding/LLM/session/notebook settings) with sensible defaults, and a smoke test that boots the binary against in-memory backends to confirm `/health/detailed` returns real probes. This is the largest single piece of outstanding work and unblocks the binary for all landed gaps simultaneously.
+There is still an explicit escape hatch: `COGNEE_DISABLE_DEFAULT_BACKENDS=1`
+preserves the old minimal startup path for test or constrained deployments.
 
 ### C2: Live TODO / blocking markers still in source
 
@@ -116,5 +118,4 @@ Python-parity behaviors.
 
 ## Recommended next gaps (in priority order)
 
-1. **C1 — standalone binary wiring** (cross-cutting, biggest lever). Closes the "binary serves real responses" gap for every already-landed feature at once.
-2. **Gap 8 — forget cloud proxy** (future feature, not a regression). Only worth doing once `state.lib.cloud_client` is added.
+1. **Gap 8 — forget cloud proxy** (future feature, not a regression). Only worth doing once `state.lib.cloud_client` is added.
