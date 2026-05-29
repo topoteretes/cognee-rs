@@ -235,4 +235,4 @@ All tests go in [crates/http-server/tests/test_remember_entry.rs](../../../../cr
 
 ## Status
 
-**not-started**
+**landed** — merged into main as `492df0f`, gap commit `3479f33`. Deviations: (1) helpers duplicated between `crates/http-server/src/routers/feedback.rs` and `crates/lib/src/api/remember_feedback.rs` (the cycle constraint prevents sharing); functional surface is byte-identical, drift would be a latent bug. (2) Timeout uses `COGNEE_FEEDBACK_LLM_TIMEOUT_MS` env override (default 8 s) rather than a `cfg(test)` const, so the timeout-failure test can run integration-mode; the test is `#[serial_test::serial]` with an RAII `EnvGuard` to prevent leakage. (3) Parity bump locked: when `generate_feedback_with_llm=false`, the handler now writes the deterministic fallback (Python parity) instead of the previous Rust empty string.
