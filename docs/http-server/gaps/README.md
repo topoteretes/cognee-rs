@@ -38,7 +38,7 @@ A gap qualifies when at least one of these is true:
 | **5b** | `PUT /api/v1/datasets/{dataset_id}/schema` | [routers/datasets.rs:386-402](../../../crates/http-server/src/routers/datasets.rs#L386-L402) | **landed** | Upserts the row via `DatasetConfigDb` and still returns the Python-parity envelope `{"status": "ok"}`. Covered by [tests/test_datasets_schema.rs](../../../crates/http-server/tests/test_datasets_schema.rs). |
 | 6 | `GET /api/v1/health` (synthetic component entries) | [routers/health.rs:134-150](../../../crates/http-server/src/routers/health.rs#L134-L150) | **landed** | Merge `07ae8c8`, gap `31a48ca`. `RealHealthChecker` with concurrent probes (graph DB / vector DB / SQLite / file storage; opt-in LLM and embedding) matching Python parity status model. [tests/test_health_real.rs](../../../crates/http-server/tests/test_health_real.rs) covers healthy / degraded / unhealthy / cache. The standalone binary now wires default backends in [src/wiring.rs](../../../crates/http-server/src/wiring.rs) and installs the real health checker from [src/main.rs](../../../crates/http-server/src/main.rs). |
 | **7** | `POST /api/v1/remember/entry` (`generate_feedback_with_llm` path) | [routers/remember.rs](../../../crates/http-server/src/routers/remember.rs) | **landed** ([plan](impl/11-remember-feedback-llm.md)) | Merge `492df0f`, gap `3479f33`. Generates feedback in the handler via `feedback::generate_session_feedback` using `ComponentHandles.llm`, with `tokio::time::timeout` (8 s default), ANSI/control-char scrubbing, 500-char cap, and Python-parity deterministic fallback on every non-success path. LLM response NEVER logged verbatim. Mirror change applied to `cognee_lib::api::remember::remember_entry`. Parity bump locked: when `generate_feedback_with_llm=false`, deterministic fallback is written (was previously empty string). |
-| **8** | `POST /api/v1/forget` (cloud proxy short-circuit) | [routers/forget.rs:57](../../../crates/http-server/src/routers/forget.rs#L57) | **not-started (low priority)** ([plan](impl/10-forget-cloud-proxy.md)) | Local delete works correctly through `DeleteService`. The cloud-proxy branch is a TODO comment only. There is no `cloud_client` field on `state.lib` yet. Not a regression — multi-tenant cloud routing is a future feature. Plan adds a `CloudDeleteClient` trait + `ComponentHandles` slot; Stage A is the trait+slot+handler branch, Stage B (real HTTP impl) is optional and explicitly deferred. |
+| **8** | `POST /api/v1/forget` (cloud proxy short-circuit) | [routers/forget.rs](../../../crates/http-server/src/routers/forget.rs) | **landed** ([plan](impl/10-forget-cloud-proxy.md)) | Added `CloudDeleteClient` + `CloudClientError` in [src/cloud_client.rs](../../../crates/http-server/src/cloud_client.rs), wired optional `cloud_client` on `ComponentHandles`, and implemented early short-circuit proxying in [routers/forget.rs](../../../crates/http-server/src/routers/forget.rs). When no cloud client is wired, the local `DeleteService` flow remains unchanged. Cloud failures are scrubbed and mapped to 502/503 envelopes without leaking upstream payloads. Coverage in [tests/test_forget.rs](../../../crates/http-server/tests/test_forget.rs) includes proxy success, proxy error mapping, and no-cloud fallback behavior. |
 
 ## Tier 3 — Honest `501 Not Implemented` (with regression guards)
 
@@ -56,10 +56,10 @@ so a future regression to silent `200 OK` from the 501 branch would fail loudly.
 ## Progress as of 2026-05-29
 
 - **Tier 1: 3 of 3 closed.**
-- **Tier 2: 5 of 6 closed.** Gaps 04 (graph data), 5a (schema GET), 5b (schema PUT), 06 (health, binary-degraded), and 7 (feedback LLM) landed; gap 8 (forget cloud proxy) remains open with an explicit `// TODO(cloud)` marker.
+- **Tier 2: 6 of 6 closed.**
 - **Tier 3: 3 of 3 closed.** ✅ All have inline `status != 501` regression guards.
 
-**Total: 11 of 12 gaps landed.** (The original count was 11; gap 5 was split into 5a/5b by code reading.)
+**Total: 12 of 12 gaps landed.** (The original count was 11; gap 5 was split into 5a/5b by code reading.)
 
 ---
 
@@ -92,8 +92,7 @@ preserves the old minimal startup path for test or constrained deployments.
 
 | File | Line | Marker | Tracks |
 |---|---|---|---|
-| [routers/remember.rs](../../../crates/http-server/src/routers/remember.rs#L724) | 724 | `// TODO(LIB-01-followup): wire Arc<dyn Llm> through SessionManager` | Gap 7 |
-| [routers/forget.rs](../../../crates/http-server/src/routers/forget.rs#L57) | 57 | `// TODO(cloud): proxy via cloud client` | Gap 8 (future feature) |
+| [routers/remember.rs](../../../crates/http-server/src/routers/remember.rs#L724) | 724 | `// TODO(LIB-01-followup): wire Arc<dyn Llm> through SessionManager` | Gap 7 follow-up |
 
 The stale `// TODO(P1): wire Arc<dyn cognee_lib::health::HealthChecker>` marker
 in `state.rs` was cleaned up on **2026-05-28** as part of this audit — health
@@ -116,6 +115,8 @@ Python-parity behaviors.
 
 ---
 
-## Recommended next gaps (in priority order)
+## Recommended next work (in priority order)
 
-1. **Gap 8 — forget cloud proxy** (future feature, not a regression). Only worth doing once `state.lib.cloud_client` is added.
+1. **Gap 7 follow-up** — thread `Arc<dyn Llm>` through SessionManager to remove the remaining `// TODO(LIB-01-followup)` path in remember-entry internals.
+2. **Tier 3 follow-up (update endpoint)** — convert env-gated update integration coverage from contract-only to stronger side-effect assertions.
+3. **Responses parity follow-up** — extend `/api/v1/responses` cognify tool toward Python's inline add+cognify behavior.

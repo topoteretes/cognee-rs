@@ -5,16 +5,84 @@
 
 mod support;
 
+use std::sync::{Arc, Mutex};
+
+use async_trait::async_trait;
 use axum::{
     body::Body,
     http::{Request, StatusCode},
 };
+use cognee_http_server::auth::AuthMethod;
+use cognee_http_server::cloud_client::{CloudClientError, CloudDeleteClient};
+use cognee_http_server::components::ComponentHandles;
+use cognee_http_server::dto::forget::{
+    DatasetRef, ForgetEverythingResponse, ForgetPayloadDTO, ForgetResponseDTO,
+};
 use tower::ServiceExt;
+use uuid::Uuid;
 
 use support::{
-    bearer_header, body_json, build_auth_required_test_state, build_auth_test_state, seed_user,
-    test_router,
+    bearer_header, body_json, build_auth_required_test_state, build_auth_test_state,
+    build_component_handles, build_search_db, seed_user, test_router,
 };
+
+#[derive(Clone)]
+struct MockCloudDeleteClient {
+    response: Result<ForgetResponseDTO, CloudClientError>,
+    calls: Arc<Mutex<Vec<ForwardForgetCall>>>,
+}
+
+#[derive(Clone, Debug)]
+struct ForwardForgetCall {
+    payload: ForgetPayloadDTO,
+    user_id: Uuid,
+    auth_method: AuthMethod,
+}
+
+#[async_trait]
+impl CloudDeleteClient for MockCloudDeleteClient {
+    async fn forward_forget(
+        &self,
+        payload: &ForgetPayloadDTO,
+        user: &cognee_http_server::auth::AuthenticatedUser,
+    ) -> Result<ForgetResponseDTO, CloudClientError> {
+        self.calls
+            .lock()
+            .expect("mock cloud calls lock")
+            .push(ForwardForgetCall {
+                payload: payload.clone(),
+                user_id: user.id,
+                auth_method: user.auth_method,
+            });
+        self.response.clone()
+    }
+}
+
+fn with_cloud_client(
+    mut state: cognee_http_server::AppState,
+    cloud_client: Arc<dyn CloudDeleteClient>,
+) -> cognee_http_server::AppState {
+    let existing = state
+        .lib
+        .as_ref()
+        .map(|handles| (**handles).clone())
+        .expect("component handles must be wired before injecting cloud client");
+    state.lib = Some(Arc::new(ComponentHandles {
+        cloud_client: Some(cloud_client),
+        ..existing
+    }));
+    state
+}
+
+async fn with_minimal_components(
+    mut state: cognee_http_server::AppState,
+) -> cognee_http_server::AppState {
+    if state.lib.is_none() {
+        let db = build_search_db().await;
+        state.lib = Some(build_component_handles(db, None, None, None));
+    }
+    state
+}
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
@@ -23,10 +91,11 @@ fn json_body(value: serde_json::Value) -> Body {
 }
 
 fn post_forget(uri: &str, body: serde_json::Value, auth: &str) -> axum::http::Request<Body> {
-    Request::builder()
-        .method("POST")
-        .uri(uri)
-        .header("Authorization", auth)
+    let mut builder = Request::builder().method("POST").uri(uri);
+    if !auth.is_empty() {
+        builder = builder.header("Authorization", auth);
+    }
+    builder
         .header("content-type", "application/json")
         .body(json_body(body))
         .expect("request")
@@ -102,7 +171,7 @@ async fn test_forget_data_id_only_returns_422() {
 #[tokio::test]
 async fn test_forget_everything_true_ignores_extra_fields() {
     let (state, _) = build_auth_test_state().await;
-    let user = seed_user(&state, "forget_all@example.com", "Str0ng!Pass#1").await;
+    let user = seed_user(&state, "forget_everything@example.com", "Str0ng!Pass#1").await;
     let auth = bearer_header(&user, &state);
     let app = test_router(state).await;
 
@@ -180,4 +249,105 @@ async fn test_forget_dataset_only_resolves_to_mode2() {
     // Since we can't distinguish without backends, we just assert the route is reachable.
     assert_ne!(resp.status(), StatusCode::METHOD_NOT_ALLOWED);
     assert_ne!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn test_forget_proxies_success_via_cloud_client() {
+    let (state, _) = build_auth_test_state().await;
+    let user = seed_user(&state, "forget_cloud_ok@example.com", "Str0ng!Pass#1").await;
+    let auth = bearer_header(&user, &state);
+    let state = with_minimal_components(state).await;
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let cloud_client = Arc::new(MockCloudDeleteClient {
+        response: Ok(ForgetResponseDTO::Everything(ForgetEverythingResponse {
+            datasets_removed: 7,
+            status: "success".into(),
+        })),
+        calls: Arc::clone(&calls),
+    });
+    let app = test_router(with_cloud_client(state, cloud_client)).await;
+
+    let resp = app
+        .oneshot(post_forget(
+            "/api/v1/forget",
+            serde_json::json!({"dataset": "nonexistent_dataset"}),
+            &auth,
+        ))
+        .await
+        .expect("response");
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_json(resp).await;
+    assert_eq!(body["datasets_removed"], 7);
+    assert_eq!(body["status"], "success");
+
+    let calls = calls.lock().expect("mock cloud calls lock");
+    assert_eq!(calls.len(), 1);
+    assert!(matches!(
+        calls[0].payload.dataset.as_ref(),
+        Some(DatasetRef::Name(name)) if name == "nonexistent_dataset"
+    ));
+    assert_eq!(calls[0].user_id, user.id);
+    assert_eq!(calls[0].auth_method, AuthMethod::BearerJwt);
+}
+
+#[tokio::test]
+async fn test_forget_cloud_proxy_error_is_scrubbed() {
+    let (state, _) = build_auth_test_state().await;
+    let user = seed_user(&state, "forget_cloud_err@example.com", "Str0ng!Pass#1").await;
+    let auth = bearer_header(&user, &state);
+    let state = with_minimal_components(state).await;
+    let cloud_client = Arc::new(MockCloudDeleteClient {
+        response: Err(CloudClientError::Upstream { status: 502 }),
+        calls: Arc::new(Mutex::new(Vec::new())),
+    });
+    let app = test_router(with_cloud_client(state, cloud_client)).await;
+
+    let resp = app
+        .oneshot(post_forget(
+            "/api/v1/forget",
+            serde_json::json!({"everything": true}),
+            &auth,
+        ))
+        .await
+        .expect("response");
+
+    assert_eq!(resp.status(), StatusCode::BAD_GATEWAY);
+    let body = body_json(resp).await;
+    assert_eq!(body["error"], "An error occurred during deletion.");
+    assert!(!body.to_string().contains("502"));
+}
+
+#[tokio::test]
+async fn test_forget_without_cloud_client_keeps_local_path() {
+    let (state, _) = build_auth_test_state().await;
+    let user = seed_user(&state, "forget_local_only@example.com", "Str0ng!Pass#1").await;
+    let auth = bearer_header(&user, &state);
+    let state = with_minimal_components(state).await;
+
+    assert!(
+        state
+            .components()
+            .expect("component handles are wired in auth test state")
+            .cloud_client
+            .is_none()
+    );
+
+    let app = test_router(state).await;
+
+    let resp = app
+        .oneshot(post_forget(
+            "/api/v1/forget",
+            serde_json::json!({"dataset": "nonexistent_dataset"}),
+            &auth,
+        ))
+        .await
+        .expect("response");
+
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let body = body_json(resp).await;
+    assert_eq!(
+        body["error"],
+        "Invalid request parameters. Specify dataset, data_id+dataset, or everything=True."
+    );
 }

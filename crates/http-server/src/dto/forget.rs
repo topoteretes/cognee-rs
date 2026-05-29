@@ -8,7 +8,7 @@ use uuid::Uuid;
 ///
 /// Snake_case `data_id` is accepted as an inbound alias for compatibility
 /// with Python's `populate_by_name=True`.
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ForgetPayloadDTO {
     /// UUID of a specific data item to remove. Requires `dataset` to be set
@@ -66,7 +66,7 @@ impl<'de> Deserialize<'de> for DatasetRef {
 }
 
 /// Response variants. Wire is snake_case (Python returns plain dicts, not `OutDTO`).
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub struct ForgetDataItemResponse {
     pub data_id: Uuid,
@@ -74,21 +74,21 @@ pub struct ForgetDataItemResponse {
     pub status: String, // "success"
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub struct ForgetDatasetResponse {
     pub dataset_id: Uuid,
     pub status: String,
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub struct ForgetEverythingResponse {
     pub datasets_removed: usize,
     pub status: String,
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 #[serde(untagged)]
 pub enum ForgetResponseDTO {
     DataItem(ForgetDataItemResponse),

@@ -97,6 +97,7 @@ pub async fn wire_default_backends(
         database,
         storage,
         delete_service,
+        cloud_client: None,
         ontology_manager,
         search_orchestrator,
         llm,

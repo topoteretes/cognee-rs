@@ -180,6 +180,7 @@ async fn post_cognify_blocking_executes_real_pipeline() {
         database: Arc::clone(&database),
         storage,
         delete_service,
+        cloud_client: None,
         ontology_manager,
         search_orchestrator: None,
         llm: Some(llm),

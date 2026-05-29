@@ -17,6 +17,7 @@ use cognee_database::IngestDb;
 use cognee_delete::{DeleteMode, DeleteRequest, DeleteScope};
 
 use crate::auth::AuthenticatedUser;
+use crate::cloud_client::CloudClientError;
 use crate::dto::forget::{
     DatasetRef, ForgetDataItemResponse, ForgetDatasetResponse, ForgetEverythingResponse,
     ForgetMode, ForgetPayloadDTO, ForgetResponseDTO,
@@ -54,7 +55,13 @@ pub async fn post_forget(
     let db = components.database.clone();
     let delete_service = components.delete_service.clone();
 
-    // TODO(cloud): proxy via cloud client when state.lib.cloud_client.is_some()
+    if let Some(cloud_client) = components.cloud_client.as_ref() {
+        return cloud_client
+            .forward_forget(&payload, &user)
+            .await
+            .map(Json)
+            .map_err(map_cloud_error);
+    }
 
     match mode {
         // ── Mode 1: delete one data item ──────────────────────────────────
@@ -229,4 +236,20 @@ async fn resolve_dataset(
 
 pub fn router() -> Router<AppState> {
     Router::new().route("/", post(post_forget))
+}
+
+fn map_cloud_error(error: CloudClientError) -> ApiError {
+    let (message, status) = match error {
+        CloudClientError::Upstream { .. } | CloudClientError::MalformedResponse => (
+            "An error occurred during deletion.",
+            StatusCode::BAD_GATEWAY,
+        ),
+        CloudClientError::Unreachable => (
+            "Deletion service is unavailable.",
+            StatusCode::SERVICE_UNAVAILABLE,
+        ),
+    };
+
+    tracing::error!(error = ?error, "forget cloud proxy failed");
+    ApiError::OntologyEnvelope(message.into(), status)
 }

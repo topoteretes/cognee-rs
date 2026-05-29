@@ -264,6 +264,7 @@ async fn post_memify_blocking_indexes_triplets() {
         database: Arc::clone(&database),
         storage,
         delete_service,
+        cloud_client: None,
         ontology_manager,
         search_orchestrator: None,
         llm: Some(llm),

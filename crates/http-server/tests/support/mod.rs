@@ -84,6 +84,7 @@ pub async fn setup_auth_db() -> sea_orm::DatabaseConnection {
             is_superuser BOOLEAN NOT NULL DEFAULT 0,
             is_verified BOOLEAN NOT NULL DEFAULT 1,
             tenant_id TEXT,
+            parent_user_id TEXT,
             created_at TEXT NOT NULL,
             updated_at TEXT
         )",
@@ -500,6 +501,7 @@ pub fn build_component_handles(
         database: db,
         storage,
         delete_service,
+        cloud_client: None,
         ontology_manager,
         search_orchestrator,
         llm,

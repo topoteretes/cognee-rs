@@ -124,6 +124,7 @@ fn build_handles_with_session(db: Arc<DatabaseConnection>) -> Arc<ComponentHandl
         database: db,
         storage,
         delete_service,
+        cloud_client: None,
         ontology_manager,
         search_orchestrator: None,
         llm: None,

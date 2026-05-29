@@ -8,6 +8,7 @@
 //! returned `Router` in their own runtime.
 
 pub mod auth;
+pub mod cloud_client;
 pub mod components;
 pub mod config;
 pub mod dto;

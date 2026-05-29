@@ -23,6 +23,7 @@ use cognee_search::{SearchOrchestrator, SessionManager, SessionStore};
 use cognee_storage::StorageTrait;
 use cognee_vector::VectorDB;
 
+use crate::cloud_client::CloudDeleteClient;
 use crate::notebook_runner::NotebookRunner;
 
 /// Pre-initialized pipeline component handles shared across all P2 handlers.
@@ -38,6 +39,9 @@ pub struct ComponentHandles {
 
     /// Fully configured `DeleteService` (with storage + DB wired).
     pub delete_service: Arc<DeleteService>,
+
+    /// Optional cloud delete proxy used by `POST /api/v1/forget`.
+    pub cloud_client: Option<Arc<dyn CloudDeleteClient>>,
 
     /// Ontology manager (per-user file storage).
     pub ontology_manager: Arc<OntologyManager>,

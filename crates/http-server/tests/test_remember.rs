@@ -186,6 +186,7 @@ async fn post_remember_blocking_runs_full_pipeline() {
         database: Arc::clone(&database),
         storage: Arc::clone(&storage),
         delete_service,
+        cloud_client: None,
         ontology_manager,
         search_orchestrator: None,
         llm: Some(llm),

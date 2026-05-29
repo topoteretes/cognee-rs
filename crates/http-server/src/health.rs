@@ -507,6 +507,7 @@ mod tests {
             database: db,
             storage: storage_handle,
             delete_service,
+            cloud_client: None,
             ontology_manager,
             search_orchestrator: None,
             llm,
