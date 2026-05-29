@@ -15,6 +15,7 @@ mod support;
 
 use std::sync::Arc;
 
+use async_trait::async_trait;
 use axum::{
     body::Body,
     http::{Request, StatusCode, header},
@@ -23,6 +24,8 @@ use cognee_database::{DatabaseConnection, connect, initialize};
 use cognee_delete::DeleteService;
 use cognee_http_server::components::ComponentHandles;
 use cognee_http_server::{AppState, HttpServerConfig, build_router};
+use cognee_llm::types::{GenerationOptions, GenerationResponse, Message};
+use cognee_llm::{Llm, LlmError, LlmResult};
 use cognee_ontology::OntologyManager;
 use cognee_session::{FsSessionStore, SessionManager};
 use cognee_storage::LocalStorage;
@@ -41,6 +44,19 @@ async fn build_search_db_local() -> Arc<DatabaseConnection> {
 /// Build a `ComponentHandles` wired with an FS-backed `SessionStore` +
 /// `SessionManager`. Used by the success-path tests.
 fn build_handles_with_session(db: Arc<DatabaseConnection>) -> Arc<ComponentHandles> {
+    let (handles, _sm) = build_handles_with_session_and_llm(db, None);
+    handles
+}
+
+/// Build a `ComponentHandles` wired with an FS-backed `SessionStore` +
+/// `SessionManager`, optionally injecting a custom `Llm` adapter.
+///
+/// Returns `(handles, session_manager)` so tests can read back persisted
+/// trace steps directly via `SessionManager::get_agent_trace_session`.
+fn build_handles_with_session_and_llm(
+    db: Arc<DatabaseConnection>,
+    llm: Option<Arc<dyn Llm>>,
+) -> (Arc<ComponentHandles>, Arc<SessionManager>) {
     let storage_dir = tempfile::tempdir().expect("tmp storage");
     let storage = Arc::new(LocalStorage::new(storage_dir.path().to_path_buf()))
         as Arc<dyn cognee_storage::StorageTrait>;
@@ -61,13 +77,13 @@ fn build_handles_with_session(db: Arc<DatabaseConnection>) -> Arc<ComponentHandl
     Box::leak(Box::new(session_dir));
     let session_manager = Arc::new(SessionManager::new(store.clone()));
 
-    Arc::new(ComponentHandles {
+    let handles = Arc::new(ComponentHandles {
         database: db,
         storage,
         delete_service,
         ontology_manager,
         search_orchestrator: None,
-        llm: None,
+        llm,
         graph_db: None,
         vector_db: None,
         thread_pool: None,
@@ -76,10 +92,11 @@ fn build_handles_with_session(db: Arc<DatabaseConnection>) -> Arc<ComponentHandl
         permissions: None,
         sync_ops: None,
         session_store: Some(store),
-        session_manager: Some(session_manager),
+        session_manager: Some(Arc::clone(&session_manager)),
         responses_client: None,
         notebook_runner: None,
-    })
+    });
+    (handles, session_manager)
 }
 
 /// Build a `ComponentHandles` **without** a session manager — used to verify
@@ -126,6 +143,22 @@ async fn build_app_with_session() -> axum::Router {
     state.lib = Some(handles);
     build_router(state).await.expect("router")
 }
+
+/// Like [`build_app_with_session`] but injects a custom `Llm` adapter and
+/// returns the wired `SessionManager` so the test can read back persisted
+/// trace steps.
+async fn build_app_with_session_and_llm(llm: Arc<dyn Llm>) -> (axum::Router, Arc<SessionManager>) {
+    let db = build_search_db_local().await;
+    let (handles, session_manager) = build_handles_with_session_and_llm(db, Some(llm));
+    let cfg = HttpServerConfig::default();
+    let mut state = AppState::build(cfg).await.expect("build state");
+    state.lib = Some(handles);
+    let app = build_router(state).await.expect("router");
+    (app, session_manager)
+}
+
+// Default anonymous user id used by `AuthenticatedUser` when auth is disabled.
+const DEFAULT_USER_ID: &str = "00000000-0000-0000-0000-000000000000";
 
 async fn build_app_without_session() -> axum::Router {
     let db = build_search_db_local().await;
@@ -175,7 +208,16 @@ async fn qa_entry_returns_session_stored_with_entry_type_qa() {
 
 #[tokio::test]
 async fn trace_entry_returns_session_stored_with_entry_type_trace() {
-    let app = build_app_with_session().await;
+    // Gap 07 parity bump: `generate_feedback_with_llm` defaults to `false`,
+    // but the deterministic fallback is recorded regardless (Python parity:
+    // `session_manager.py:289-294`). With `status: "success"`, the persisted
+    // `session_feedback` should be `"search succeeded."`.
+    let db = build_search_db_local().await;
+    let (handles, sm) = build_handles_with_session_and_llm(db, None);
+    let cfg = HttpServerConfig::default();
+    let mut state = AppState::build(cfg).await.expect("build state");
+    state.lib = Some(handles);
+    let app = build_router(state).await.expect("router");
 
     let raw = r#"{
         "entry": {
@@ -199,6 +241,210 @@ async fn trace_entry_returns_session_stored_with_entry_type_trace() {
     assert!(!id.is_empty());
     // Default dataset name parity check (Python: `dataset_name = "main_dataset"`).
     assert_eq!(obj["dataset_name"], "main_dataset");
+
+    // Verify the deterministic fallback was recorded.
+    let steps = sm
+        .get_agent_trace_session(DEFAULT_USER_ID, Some("s-trace"), None)
+        .await
+        .expect("read trace session");
+    assert_eq!(steps.len(), 1);
+    assert_eq!(steps[0].session_feedback, "search succeeded.");
+}
+
+// ─── Gap 07 — LLM feedback path ──────────────────────────────────────────────
+
+/// Test A — `generateFeedbackWithLlm: true` invokes the wired LLM and the
+/// scrubbed response is persisted as `session_feedback`.
+#[tokio::test]
+async fn trace_entry_with_generate_feedback_llm_uses_mock_llm_text() {
+    use cognee_test_utils::MockLlm;
+
+    let llm: Arc<dyn Llm> = Arc::new(MockLlm::new(vec![
+        "This is a deterministic feedback.".to_string(),
+    ]));
+    let (app, sm) = build_app_with_session_and_llm(llm).await;
+
+    let raw = r#"{
+        "entry": {
+            "type": "trace",
+            "originFunction": "search",
+            "status": "success",
+            "methodReturnValue": {"hits": 3},
+            "memoryQuery": "what?",
+            "memoryContext": "ctx",
+            "generateFeedbackWithLlm": true
+        },
+        "sessionId": "s-llm-ok"
+    }"#;
+    let resp = app.oneshot(json_request(raw)).await.expect("resp");
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let v = body_json(resp).await;
+    let obj = v.as_object().expect("object");
+    assert_eq!(obj["status"], "session_stored");
+    assert_eq!(obj["entry_type"], "trace");
+    let entry_id = obj["entry_id"].as_str().expect("entry_id");
+    assert!(!entry_id.is_empty());
+
+    let steps = sm
+        .get_agent_trace_session(DEFAULT_USER_ID, Some("s-llm-ok"), None)
+        .await
+        .expect("read trace session");
+    assert_eq!(steps.len(), 1);
+    assert_eq!(
+        steps[0].session_feedback,
+        "This is a deterministic feedback."
+    );
+}
+
+/// Inline test LLM that always returns an error from `generate`.
+struct ErrLlm;
+
+#[async_trait]
+impl Llm for ErrLlm {
+    async fn generate(
+        &self,
+        _messages: Vec<Message>,
+        _options: Option<GenerationOptions>,
+    ) -> LlmResult<GenerationResponse> {
+        Err(LlmError::ApiError("simulated provider failure".into()))
+    }
+
+    async fn create_structured_output_with_messages_raw(
+        &self,
+        _messages: Vec<Message>,
+        _json_schema: &serde_json::Value,
+        _options: Option<GenerationOptions>,
+    ) -> LlmResult<serde_json::Value> {
+        Err(LlmError::ApiError("simulated provider failure".into()))
+    }
+
+    fn model(&self) -> &str {
+        "err-llm"
+    }
+}
+
+/// Test B — LLM `generate` returns `Err(_)` ⇒ handler writes the deterministic
+/// fallback (`"<origin> succeeded."`).
+#[tokio::test]
+async fn trace_entry_llm_error_falls_back_to_deterministic_feedback() {
+    let llm: Arc<dyn Llm> = Arc::new(ErrLlm);
+    let (app, sm) = build_app_with_session_and_llm(llm).await;
+
+    let raw = r#"{
+        "entry": {
+            "type": "trace",
+            "originFunction": "search",
+            "status": "success",
+            "methodReturnValue": {"hits": 3},
+            "memoryQuery": "what?",
+            "memoryContext": "ctx",
+            "generateFeedbackWithLlm": true
+        },
+        "sessionId": "s-llm-err"
+    }"#;
+    let resp = app.oneshot(json_request(raw)).await.expect("resp");
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let steps = sm
+        .get_agent_trace_session(DEFAULT_USER_ID, Some("s-llm-err"), None)
+        .await
+        .expect("read trace session");
+    assert_eq!(steps.len(), 1);
+    assert_eq!(steps[0].session_feedback, "search succeeded.");
+}
+
+/// Inline test LLM that sleeps far past the feedback timeout.
+struct SlowLlm;
+
+#[async_trait]
+impl Llm for SlowLlm {
+    async fn generate(
+        &self,
+        _messages: Vec<Message>,
+        _options: Option<GenerationOptions>,
+    ) -> LlmResult<GenerationResponse> {
+        tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+        Ok(GenerationResponse {
+            content: "never reached".into(),
+            model: "slow".into(),
+            usage: None,
+            finish_reason: None,
+        })
+    }
+
+    async fn create_structured_output_with_messages_raw(
+        &self,
+        _messages: Vec<Message>,
+        _json_schema: &serde_json::Value,
+        _options: Option<GenerationOptions>,
+    ) -> LlmResult<serde_json::Value> {
+        tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+        Ok(serde_json::Value::Null)
+    }
+
+    fn model(&self) -> &str {
+        "slow-llm"
+    }
+}
+
+/// Test C — LLM call exceeds the feedback timeout ⇒ handler returns within
+/// the test budget and writes the deterministic fallback.
+///
+/// Sets `COGNEE_FEEDBACK_LLM_TIMEOUT_MS=300` so the slow-LLM future is
+/// cancelled well before the 30 s sleep would resolve. Marked `#[serial]`
+/// because the env mutation is process-wide and otherwise could leak into
+/// concurrently-running tests in the same binary.
+#[tokio::test]
+#[serial_test::serial]
+async fn trace_entry_llm_timeout_falls_back() {
+    // SAFETY: `serial_test::serial` ensures no other test runs while this
+    // env var is set. We always restore it on exit via a guard.
+    struct EnvGuard;
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            // SAFETY: still inside the serialised test region.
+            unsafe {
+                std::env::remove_var("COGNEE_FEEDBACK_LLM_TIMEOUT_MS");
+            }
+        }
+    }
+    // SAFETY: serial-tested.
+    unsafe {
+        std::env::set_var("COGNEE_FEEDBACK_LLM_TIMEOUT_MS", "300");
+    }
+    let _guard = EnvGuard;
+
+    let llm: Arc<dyn Llm> = Arc::new(SlowLlm);
+    let (app, sm) = build_app_with_session_and_llm(llm).await;
+
+    let raw = r#"{
+        "entry": {
+            "type": "trace",
+            "originFunction": "cognify",
+            "status": "success",
+            "methodReturnValue": {"hits": 3},
+            "memoryQuery": "q",
+            "memoryContext": "c",
+            "generateFeedbackWithLlm": true
+        },
+        "sessionId": "s-llm-slow"
+    }"#;
+    let start = std::time::Instant::now();
+    let resp = app.oneshot(json_request(raw)).await.expect("resp");
+    let elapsed = start.elapsed();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert!(
+        elapsed < std::time::Duration::from_secs(2),
+        "handler should return within ~2s (test-only short timeout); took {elapsed:?}"
+    );
+
+    let steps = sm
+        .get_agent_trace_session(DEFAULT_USER_ID, Some("s-llm-slow"), None)
+        .await
+        .expect("read trace session");
+    assert_eq!(steps.len(), 1);
+    assert_eq!(steps[0].session_feedback, "cognify succeeded.");
 }
 
 // ─── 3. Feedback entry — success path ─────────────────────────────────────────

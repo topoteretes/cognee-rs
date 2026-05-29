@@ -686,10 +686,17 @@ async fn remember_session(
 ///   `RememberStatus::Errored` with `error = Some("add_feedback: QA <id>
 ///   not found in session <sid>")`. `entry_type = "feedback"`.
 ///
-/// **TODO(LIB-01-followup)**: when `TraceEntry::generate_feedback_with_llm`
-/// is `true`, Python calls the LLM to generate a `session_feedback` string
-/// before persisting. That requires plumbing an `Arc<dyn Llm>` and an
-/// LLM-feedback prompt through `SessionManager` and is deferred.
+/// **LLM feedback**: When `TraceEntry::generate_feedback_with_llm` is `true`
+/// and `llm` is `Some`, the trace entry's `session_feedback` is produced by
+/// calling the LLM with the
+/// `agent_trace_feedback_summary_system` prompt (Python parity); the call is
+/// bounded by an 8-second timeout. On timeout, LLM error, missing `llm`
+/// handle, or empty `method_return_value`, the implementation falls back to
+/// the deterministic Python-parity strings (`"<origin> succeeded."` /
+/// `"<origin> failed. Reason: ..."` / `"<origin> failed."`). When
+/// `generate_feedback_with_llm` is `false`, the deterministic fallback is
+/// recorded regardless — also Python parity
+/// (`session_manager.py:289-294`).
 #[allow(clippy::too_many_arguments)]
 pub async fn remember_entry(
     entry: MemoryEntry,
@@ -700,6 +707,7 @@ pub async fn remember_entry(
     db: Option<Arc<DatabaseConnection>>,
     _session_store: Option<Arc<dyn SessionStore>>,
     session_manager: Option<Arc<SessionManager>>,
+    llm: Option<Arc<dyn Llm>>,
 ) -> Result<RememberResult, ApiError> {
     let start = Instant::now();
 
@@ -801,16 +809,42 @@ pub async fn remember_entry(
                 generate_feedback_with_llm,
             } = t;
 
-            // TODO(LIB-01-followup): generate_feedback_with_llm requires
-            // wiring an `Arc<dyn Llm>` + prompt template through
-            // `SessionManager`. For now we always pass `session_feedback = ""`.
-            if generate_feedback_with_llm {
-                debug!(
-                    session_id = session_id,
-                    "remember_entry: generate_feedback_with_llm=true \
-                     ignored (LIB-01-followup; passing empty session_feedback)"
-                );
-            }
+            // Generate (or look up the deterministic fallback for) the
+            // `session_feedback` string before persisting the trace step.
+            //
+            // Parity bump vs. legacy Rust behaviour: even when
+            // `generate_feedback_with_llm` is `false`, Python still records
+            // the deterministic fallback (`session_manager.py:289-294`). The
+            // previous Rust implementation wrote `""`; we now match Python.
+            let session_feedback: String = if generate_feedback_with_llm {
+                if let Some(ref llm) = llm {
+                    super::remember_feedback::generate_session_feedback(
+                        llm.as_ref(),
+                        &origin_function,
+                        &trace_status,
+                        method_return_value.as_ref(),
+                        &error_message,
+                    )
+                    .await
+                } else {
+                    warn!(
+                        session_id = session_id,
+                        "remember_entry: generate_feedback_with_llm=true but no \
+                         Llm handle provided; using deterministic fallback"
+                    );
+                    super::remember_feedback::fallback_feedback(
+                        &origin_function,
+                        &trace_status,
+                        &error_message,
+                    )
+                }
+            } else {
+                super::remember_feedback::fallback_feedback(
+                    &origin_function,
+                    &trace_status,
+                    &error_message,
+                )
+            };
 
             let trace_id = sm
                 .add_agent_trace_step(
@@ -823,7 +857,7 @@ pub async fn remember_entry(
                     method_params.unwrap_or(serde_json::Value::Null),
                     method_return_value,
                     &error_message,
-                    "",
+                    &session_feedback,
                 )
                 .await?;
 

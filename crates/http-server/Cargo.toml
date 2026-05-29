@@ -131,3 +131,4 @@ cognee-session = { path = "../session", features = ["fs"] }
 dotenv = { workspace = true }
 async-trait = { workspace = true }
 tempfile = { workspace = true }
+cognee-test-utils = { path = "../test-utils" }
