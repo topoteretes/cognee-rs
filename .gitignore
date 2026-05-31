@@ -48,3 +48,10 @@ js/package-lock.json
 __pycache__/
 *.pyc
 *.pyo
+
+# Local scratch workspace files
+.tmp/
+
+# Generated Locust benchmark artifacts
+e2e-cross-sdk/performance/locust/results/
+results/
