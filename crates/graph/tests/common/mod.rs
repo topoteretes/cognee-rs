@@ -124,10 +124,22 @@ pub async fn test_delete_nodes_batch(db: &dyn GraphDBTrait) {
     assert!(!db.has_node("d3").await.unwrap());
 }
 
-// NOTE: Upsert semantics (re-adding a node with the same ID updates it) are
-// backend-specific. Ladybug does not support upsert — it errors on duplicate
-// primary keys. PostgreSQL uses INSERT ... ON CONFLICT DO UPDATE. Upsert tests
-// live in backend-specific test files, not in this shared suite.
+pub async fn test_node_upsert_same_id(db: &dyn GraphDBTrait) {
+    db.delete_graph().await.unwrap();
+
+    let original = TestNode::new("u1", "Original", "Person", 10);
+    let replacement = TestNode::new("u1", "Updated", "Person", 20);
+
+    db.add_node(&original).await.unwrap();
+    db.add_node(&replacement).await.unwrap();
+
+    let fetched = db.get_node("u1").await.unwrap().expect("node should exist");
+    assert_eq!(fetched.get("name").unwrap().as_str().unwrap(), "Updated");
+    assert_eq!(fetched.get("value").unwrap().as_i64().unwrap(), 20);
+
+    let metrics = db.get_graph_metrics(false).await.unwrap();
+    assert_eq!(metrics.get("node_count").unwrap().as_i64().unwrap(), 1);
+}
 
 // -- edge CRUD ---------------------------------------------------------------
 
@@ -195,7 +207,36 @@ pub async fn test_get_edges(db: &dyn GraphDBTrait) {
     assert_eq!(edges.len(), 2);
 }
 
-// NOTE: Edge upsert tests are backend-specific (see note above for nodes).
+pub async fn test_edge_upsert_same_key(db: &dyn GraphDBTrait) {
+    db.delete_graph().await.unwrap();
+
+    let a = TestNode::new("uea", "A", "T", 0);
+    let b = TestNode::new("ueb", "B", "T", 0);
+    db.add_nodes(&[&a, &b]).await.unwrap();
+
+    let mut original_props = HashMap::new();
+    original_props.insert(Cow::Borrowed("since"), json!(2020));
+
+    let mut replacement_props = HashMap::new();
+    replacement_props.insert(Cow::Borrowed("since"), json!(2024));
+    replacement_props.insert(Cow::Borrowed("strength"), json!("high"));
+
+    db.add_edge("uea", "ueb", "knows", Some(original_props))
+        .await
+        .unwrap();
+    db.add_edge("uea", "ueb", "knows", Some(replacement_props))
+        .await
+        .unwrap();
+
+    let edges = db.get_edges("uea").await.unwrap();
+    assert_eq!(edges.len(), 1);
+    assert_eq!(edges[0].2, "knows");
+    assert_eq!(edges[0].3.get("since").unwrap().as_i64().unwrap(), 2024);
+    assert_eq!(
+        edges[0].3.get("strength").unwrap().as_str().unwrap(),
+        "high"
+    );
+}
 
 // -- graph queries -----------------------------------------------------------
 

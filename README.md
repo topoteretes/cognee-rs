@@ -30,6 +30,15 @@ It’s designed to run efficiently on constrained devices (smartwatch, phone)
 - **Local models** — Phi4
 - **Graph store** — We do not use graph database, as we store structure embeddings in the vector collections + optionally retrieve and build relevant subgraphs.
 
+## Graph Backend Concurrency
+
+For file-backed graph storage, Python's reference implementation documents a
+default single-owning-process model for SQLite/Ladybug/LanceDB access, while
+also supporting an opt-in Redis-backed shared Ladybug lock for multi-process
+coordination. Rust currently matches that default model: Ladybug writes are
+idempotent and serialized in-process, but cross-process locking is intentionally
+out of scope.
+
 ## Quick Start
 
 ### Local LLM with Ollama

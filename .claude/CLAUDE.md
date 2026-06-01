@@ -71,6 +71,12 @@ cognee-rust/
 
 **cognee-graph** — Graph database abstraction for knowledge graph storage and traversal. Trait: `GraphDBTrait` (+ `GraphDBTraitExt`). Impls: `LadybugAdapter` (embedded Ladybug), `MockGraphDB`.
 
+For Ladybug-backed graph storage, keep the Python parity nuance in mind: Python
+documents a default single-owning-process model for file-backed DB access and
+adds opt-in Redis-backed coordination for multi-process Ladybug deployments.
+Rust currently matches the default model: graph writes are idempotent and
+serialized in-process, and cross-process locking is intentionally out of scope.
+
 **cognee-vector** — Vector database abstraction for similarity search. Trait: `VectorDB`. Impls: `QdrantAdapter` (embedded Qdrant), `MockVectorDB`.
 
 **cognee-ontology** — RDF/OWL ontology integration for entity validation. Trait: `OntologyResolver`. Impls: `RdfLibOntologyResolver`, `NoOpOntologyResolver` (pass-through).
@@ -113,6 +119,10 @@ cognee-rust/
 - **LLM integration** — `OpenAiAdapter` (OpenAI-compatible, works with Ollama/vLLM), `LiteRtAdapter` (Android local inference via LiteRT, feature-gated)
 - **Embedding engine** — Multi-provider via `EmbeddingConfig::from_env()` + `create_engine()` factory. Providers: `OnnxEmbeddingEngine` (local ONNX Runtime, BGE-Small-v1.5 default), `OpenAICompatibleEmbeddingEngine` (OpenAI/Azure/vLLM/llama.cpp/TEI with retry and input sanitization), `OllamaEmbeddingEngine` (concurrent per-text requests, char-based truncation), `MockEmbeddingEngine` (zero vectors via `MOCK_EMBEDDING=true`). Env vars match Python SDK: `EMBEDDING_PROVIDER`, `EMBEDDING_MODEL`, `EMBEDDING_DIMENSIONS`, `EMBEDDING_ENDPOINT`, `EMBEDDING_API_KEY` (with `LLM_API_KEY` fallback)
 - **Graph storage** — Ladybug embedded graph DB
+- **Graph storage concurrency** — Rust Ladybug matches Python's default
+  single-process file-backed model. Python also has an opt-in Redis-backed
+  shared Ladybug lock for multi-process coordination; Rust does not currently
+  implement cross-process locking.
 - **Vector storage** — Embedded Qdrant with metadata filtering
 - **Search pipeline** — 15 search types: GraphCompletion (default), GraphCompletionCot, GraphCompletionContextExtension, GraphSummaryCompletion, TripletCompletion, RagCompletion, Chunks, Summaries, Temporal, Cypher, NaturalLanguage, FeelingLucky, Feedback, CodingRules, ChunksLexical
 - **Session management** — `SessionStore` trait with `FsSessionStore`, `RedisSessionStore`, `SeaOrmSessionStore` backends; integrated in search pipeline for QA history

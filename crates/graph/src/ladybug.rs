@@ -9,7 +9,7 @@ use lbug::{Connection, Database, SystemConfig, Value as LbugValue};
 use serde_json::{Value, json};
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tracing::{Span, instrument};
 
 use crate::{EdgeData, GraphDBError, GraphDBResult, GraphDBTrait, GraphNode, NodeData};
@@ -77,6 +77,15 @@ fn sanitize_json_control_chars(s: &str) -> Cow<'_, str> {
 /// This adapter provides a complete implementation of GraphDBTrait using
 /// the Ladybug (lbug) embedded graph database.
 ///
+/// Parity note:
+/// Python documents the default file-backed deployment model as a single
+/// owning process for SQLite/Ladybug/LanceDB access (for example via the
+/// API server `--api-url` mode and single-worker session locks), while also
+/// supporting an opt-in Redis-backed shared Ladybug lock for multi-process
+/// coordination. Rust currently matches the default single-process model:
+/// overlapping writes are serialized in-process, and cross-process locking is
+/// intentionally out of scope.
+///
 /// # Schema
 ///
 /// The adapter creates the following schema:
@@ -116,6 +125,9 @@ fn sanitize_json_control_chars(s: &str) -> Cow<'_, str> {
 pub struct LadybugAdapter {
     db_path: String,
     db: Arc<Database>,
+    // Single-process assumption: this lock serializes overlapping writes
+    // within one process. Cross-process locking is intentionally out of scope.
+    write_lock: Arc<Mutex<()>>,
 }
 
 impl LadybugAdapter {
@@ -144,6 +156,7 @@ impl LadybugAdapter {
         Ok(Self {
             db_path: db_path.to_string(),
             db: Arc::new(db),
+            write_lock: Arc::new(Mutex::new(())),
         })
     }
 
@@ -409,6 +422,138 @@ impl LadybugAdapter {
         }
         true
     }
+
+    fn escape_cypher_string(value: &str) -> String {
+        value.replace('\\', "\\\\").replace('\'', "\\'")
+    }
+
+    fn upsert_node_with_conn(
+        &self,
+        conn: &Connection,
+        props: &NodeProperties,
+    ) -> GraphDBResult<()> {
+        let id = Self::escape_cypher_string(&props.id);
+        let name = Self::escape_cypher_string(&props.name);
+        let node_type = Self::escape_cypher_string(&props.node_type);
+        let properties = Self::escape_cypher_string(&props.properties);
+        let created_at_str = props.created_at.format("%Y-%m-%d %H:%M:%S%.6f").to_string();
+        let updated_at_str = props.updated_at.format("%Y-%m-%d %H:%M:%S%.6f").to_string();
+
+        let exists_query = format!("MATCH (n:Node) WHERE n.id = '{id}' RETURN COUNT(n) AS count");
+        let exists = conn
+            .query(&exists_query)
+            .map_err(|e| GraphDBError::NodeError(format!("Failed to check node existence: {e}")))?
+            .next()
+            .and_then(|row| row.into_iter().next())
+            .and_then(|value| match value {
+                LbugValue::Int64(count) => Some(count > 0),
+                LbugValue::Int32(count) => Some(count > 0),
+                LbugValue::UInt64(count) => Some(count > 0),
+                LbugValue::UInt32(count) => Some(count > 0),
+                _ => None,
+            })
+            .unwrap_or(false);
+
+        let query = if exists {
+            format!(
+                r#"MATCH (n:Node) WHERE n.id = '{id}'
+SET n.name = '{name}',
+    n.type = '{node_type}',
+    n.updated_at = timestamp('{updated_at_str}'),
+    n.properties = '{properties}'"#
+            )
+        } else {
+            format!(
+                r#"CREATE (:Node {{
+    id: '{id}',
+    name: '{name}',
+    type: '{node_type}',
+    created_at: timestamp('{created_at_str}'),
+    updated_at: timestamp('{updated_at_str}'),
+    properties: '{properties}'
+}})"#
+            )
+        };
+
+        conn.query(&query).map_err(|e| {
+            GraphDBError::NodeError(format!("Failed to upsert node '{}': {e}", props.id))
+        })?;
+
+        Ok(())
+    }
+
+    fn serialize_edge_properties(
+        &self,
+        properties: Option<HashMap<Cow<'static, str>, serde_json::Value>>,
+    ) -> GraphDBResult<String> {
+        if let Some(props) = properties {
+            let mut val = serde_json::to_value(&props).map_err(GraphDBError::SerializationError)?;
+            sanitize_json_value(&mut val);
+            serde_json::to_string(&val).map_err(GraphDBError::SerializationError)
+        } else {
+            Ok("{}".to_string())
+        }
+    }
+
+    fn upsert_edge_with_conn(
+        &self,
+        conn: &Connection,
+        source_id: &str,
+        target_id: &str,
+        relationship_name: &str,
+        properties_json: &str,
+        updated_at: DateTime<Utc>,
+    ) -> GraphDBResult<()> {
+        let source_id = Self::escape_cypher_string(source_id);
+        let target_id = Self::escape_cypher_string(target_id);
+        let relationship_name = Self::escape_cypher_string(relationship_name);
+        let properties_json = Self::escape_cypher_string(properties_json);
+        let timestamp_str = updated_at.format("%Y-%m-%d %H:%M:%S%.6f").to_string();
+
+        let exists_query = format!(
+            "MATCH (a:Node)-[r:EDGE]->(b:Node) WHERE a.id = '{source_id}' AND b.id = '{target_id}' AND r.relationship_name = '{relationship_name}' RETURN COUNT(r) AS count"
+        );
+        let exists = conn
+            .query(&exists_query)
+            .map_err(|e| GraphDBError::EdgeError(format!("Failed to check edge existence: {e}")))?
+            .next()
+            .and_then(|row| row.into_iter().next())
+            .and_then(|value| match value {
+                LbugValue::Int64(count) => Some(count > 0),
+                LbugValue::Int32(count) => Some(count > 0),
+                LbugValue::UInt64(count) => Some(count > 0),
+                LbugValue::UInt32(count) => Some(count > 0),
+                _ => None,
+            })
+            .unwrap_or(false);
+
+        let query = if exists {
+            format!(
+                r#"MATCH (a:Node)-[r:EDGE]->(b:Node)
+WHERE a.id = '{source_id}' AND b.id = '{target_id}' AND r.relationship_name = '{relationship_name}'
+SET r.updated_at = timestamp('{timestamp_str}'),
+    r.properties = '{properties_json}'"#
+            )
+        } else {
+            format!(
+                r#"MATCH (a:Node {{id: '{source_id}'}}), (b:Node {{id: '{target_id}'}})
+CREATE (a)-[:EDGE {{
+    relationship_name: '{relationship_name}',
+    created_at: timestamp('{timestamp_str}'),
+    updated_at: timestamp('{timestamp_str}'),
+    properties: '{properties_json}'
+}}]->(b)"#
+            )
+        };
+
+        conn.query(&query).map_err(|e| {
+            GraphDBError::EdgeError(format!(
+                "Failed to upsert edge {source_id} -[{relationship_name}]-> {target_id}: {e}"
+            ))
+        })?;
+
+        Ok(())
+    }
 }
 
 /// Helper struct for node properties extracted from DataPoint
@@ -533,35 +678,14 @@ impl GraphDBTrait for LadybugAdapter {
 
     async fn add_node_raw(&self, node: Value) -> GraphDBResult<()> {
         let props = self.serialize_to_node_props(&node)?;
+        let _write_guard = self.write_lock.lock().map_err(|_| {
+            GraphDBError::ConnectionError("Ladybug write lock poisoned".to_string())
+        })?;
         let conn = Connection::new(&self.db).map_err(|e| {
             GraphDBError::ConnectionError(format!("Failed to create connection: {}", e))
         })?;
 
-        // Format timestamp for Ladybug
-        let created_at_str = props.created_at.format("%Y-%m-%d %H:%M:%S%.6f").to_string();
-        let updated_at_str = props.updated_at.format("%Y-%m-%d %H:%M:%S%.6f").to_string();
-
-        let query = format!(
-            r#"CREATE (:Node {{
-                id: '{}',
-                name: '{}',
-                type: '{}',
-                created_at: timestamp('{}'),
-                updated_at: timestamp('{}'),
-                properties: '{}'
-            }})"#,
-            props.id.replace('\\', "\\\\").replace('\'', "\\'"),
-            props.name.replace('\\', "\\\\").replace('\'', "\\'"),
-            props.node_type.replace('\\', "\\\\").replace('\'', "\\'"),
-            created_at_str,
-            updated_at_str,
-            props.properties.replace('\\', "\\\\").replace('\'', "\\'")
-        );
-
-        conn.query(&query)
-            .map_err(|e| GraphDBError::NodeError(format!("Failed to add node: {}", e)))?;
-
-        Ok(())
+        self.upsert_node_with_conn(&conn, &props)
     }
 
     async fn add_nodes_raw(&self, nodes: Vec<Value>) -> GraphDBResult<()> {
@@ -573,6 +697,14 @@ impl GraphDBTrait for LadybugAdapter {
             return Ok(());
         }
 
+        let _write_guard = self.write_lock.lock().map_err(|_| {
+            GraphDBError::ConnectionError("Ladybug write lock poisoned".to_string())
+        })?;
+
+        let conn = Connection::new(&self.db).map_err(|e| {
+            GraphDBError::ConnectionError(format!("Failed to create connection: {}", e))
+        })?;
+
         // Process in batches
         for chunk in nodes.chunks(BATCH_SIZE) {
             // Serialize all nodes in this chunk first to catch any serialization errors early
@@ -581,49 +713,9 @@ impl GraphDBTrait for LadybugAdapter {
                 node_props.push(self.serialize_to_node_props(node)?);
             }
 
-            // Build batched query with multiple CREATE statements
-            let conn = Connection::new(&self.db).map_err(|e| {
-                GraphDBError::ConnectionError(format!("Failed to create connection: {}", e))
-            })?;
-
-            // Create multiple nodes in a single query
-            let create_statements: Vec<String> = node_props
-                .iter()
-                .map(|props| {
-                    let created_at_str =
-                        props.created_at.format("%Y-%m-%d %H:%M:%S%.6f").to_string();
-                    let updated_at_str =
-                        props.updated_at.format("%Y-%m-%d %H:%M:%S%.6f").to_string();
-
-                    format!(
-                        r#"CREATE (:Node {{
-                id: '{}',
-                name: '{}',
-                type: '{}',
-                created_at: timestamp('{}'),
-                updated_at: timestamp('{}'),
-                properties: '{}'
-            }})"#,
-                        props.id.replace('\\', "\\\\").replace('\'', "\\'"),
-                        props.name.replace('\\', "\\\\").replace('\'', "\\'"),
-                        props.node_type.replace('\\', "\\\\").replace('\'', "\\'"),
-                        created_at_str,
-                        updated_at_str,
-                        props.properties.replace('\\', "\\\\").replace('\'', "\\'")
-                    )
-                })
-                .collect();
-
-            // Execute all CREATE statements in a single query
-            let batch_query = create_statements.join(";\n");
-
-            conn.query(&batch_query).map_err(|e| {
-                GraphDBError::NodeError(format!(
-                    "Failed to add {} nodes in batch: {}",
-                    chunk.len(),
-                    e
-                ))
-            })?;
+            for props in &node_props {
+                self.upsert_node_with_conn(&conn, props)?;
+            }
         }
 
         Ok(())
@@ -736,48 +828,41 @@ impl GraphDBTrait for LadybugAdapter {
         relationship_name: &str,
         properties: Option<HashMap<Cow<'static, str>, serde_json::Value>>,
     ) -> GraphDBResult<()> {
+        let _write_guard = self.write_lock.lock().map_err(|_| {
+            GraphDBError::ConnectionError("Ladybug write lock poisoned".to_string())
+        })?;
         let conn = Connection::new(&self.db).map_err(|e| {
             GraphDBError::ConnectionError(format!("Failed to create connection: {}", e))
         })?;
 
         let now = Utc::now();
-        let timestamp_str = now.format("%Y-%m-%d %H:%M:%S%.6f").to_string();
+        let props_json = self.serialize_edge_properties(properties)?;
 
-        let props_json = if let Some(props) = properties {
-            let mut val = serde_json::to_value(&props).map_err(GraphDBError::SerializationError)?;
-            sanitize_json_value(&mut val);
-            serde_json::to_string(&val).map_err(GraphDBError::SerializationError)?
-        } else {
-            "{}".to_string()
-        };
-
-        // First, match both nodes
-        let query = format!(
-            r#"MATCH (a:Node {{id: '{}'}}), (b:Node {{id: '{}'}})
-            CREATE (a)-[:EDGE {{
-                relationship_name: '{}',
-                created_at: timestamp('{}'),
-                updated_at: timestamp('{}'),
-                properties: '{}'
-            }}]->(b)"#,
-            source_id.replace('\\', "\\\\").replace('\'', "\\'"),
-            target_id.replace('\\', "\\\\").replace('\'', "\\'"),
-            relationship_name.replace('\\', "\\\\").replace('\'', "\\'"),
-            timestamp_str,
-            timestamp_str,
-            props_json.replace('\\', "\\\\").replace('\'', "\\'")
-        );
-
-        conn.query(&query)
-            .map_err(|e| GraphDBError::EdgeError(format!("Failed to add edge: {}", e)))?;
-
-        Ok(())
+        self.upsert_edge_with_conn(
+            &conn,
+            source_id,
+            target_id,
+            relationship_name,
+            &props_json,
+            now,
+        )
     }
 
     async fn add_edges(&self, edges: &[EdgeData]) -> GraphDBResult<()> {
+        if edges.is_empty() {
+            return Ok(());
+        }
+
+        let _write_guard = self.write_lock.lock().map_err(|_| {
+            GraphDBError::ConnectionError("Ladybug write lock poisoned".to_string())
+        })?;
+        let conn = Connection::new(&self.db).map_err(|e| {
+            GraphDBError::ConnectionError(format!("Failed to create connection: {}", e))
+        })?;
+
         for edge in edges {
-            self.add_edge(&edge.0, &edge.1, &edge.2, Some(edge.3.clone()))
-                .await?;
+            let props_json = self.serialize_edge_properties(Some(edge.3.clone()))?;
+            self.upsert_edge_with_conn(&conn, &edge.0, &edge.1, &edge.2, &props_json, Utc::now())?;
         }
         Ok(())
     }
@@ -1509,6 +1594,7 @@ mod tests {
     use serde::Serialize;
     use serial_test::serial;
     use tempfile::TempDir;
+    use tokio::task::JoinSet;
 
     /// Simple test node for testing batch operations
     #[derive(Debug, Clone, Serialize)]
@@ -1702,6 +1788,25 @@ mod tests {
         let charlie = adapter.get_node("test-c").await.unwrap().unwrap();
         assert_eq!(charlie.get("name").unwrap().as_str().unwrap(), "Charlie");
         assert_eq!(charlie.get("value").unwrap().as_i64().unwrap(), 300);
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_add_node_upserts_duplicate_id() {
+        let (adapter, _temp_dir) = setup_adapter().await;
+
+        let original = TestNode::new("dup-node", "Original", 100);
+        let replacement = TestNode::new("dup-node", "Updated", 200);
+
+        adapter.add_node(&original).await.unwrap();
+        adapter.add_node(&replacement).await.unwrap();
+
+        let node = adapter.get_node("dup-node").await.unwrap().unwrap();
+        assert_eq!(node.get("name").unwrap().as_str().unwrap(), "Updated");
+        assert_eq!(node.get("value").unwrap().as_i64().unwrap(), 200);
+
+        let metrics = adapter.get_graph_metrics(false).await.unwrap();
+        assert_eq!(metrics.get("node_count").unwrap().as_i64().unwrap(), 1);
     }
 
     #[tokio::test]
@@ -1957,6 +2062,104 @@ mod tests {
         assert_eq!(
             edge_props.get("strength").unwrap().as_str().unwrap(),
             "strong"
+        );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_add_edge_upserts_duplicate_key() {
+        let (adapter, _temp_dir) = setup_adapter().await;
+
+        let node_a = TestNode::new("edge-a", "Node A", 1);
+        let node_b = TestNode::new("edge-b", "Node B", 2);
+        adapter.add_node(&node_a).await.unwrap();
+        adapter.add_node(&node_b).await.unwrap();
+
+        let mut original_props = HashMap::new();
+        original_props.insert(Cow::Borrowed("since"), json!(2020));
+
+        let mut replacement_props = HashMap::new();
+        replacement_props.insert(Cow::Borrowed("since"), json!(2024));
+        replacement_props.insert(Cow::Borrowed("strength"), json!("high"));
+
+        adapter
+            .add_edge("edge-a", "edge-b", "knows", Some(original_props))
+            .await
+            .unwrap();
+        adapter
+            .add_edge("edge-a", "edge-b", "knows", Some(replacement_props))
+            .await
+            .unwrap();
+
+        let edges = adapter.get_edges("edge-a").await.unwrap();
+        assert_eq!(edges.len(), 1);
+        assert_eq!(edges[0].2, "knows");
+        assert_eq!(edges[0].3.get("since").unwrap().as_i64().unwrap(), 2024);
+        assert_eq!(
+            edges[0].3.get("strength").unwrap().as_str().unwrap(),
+            "high"
+        );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_concurrent_upsert_regression_single_process() {
+        let (adapter, _temp_dir) = setup_adapter().await;
+        let adapter = Arc::new(adapter);
+
+        let mut node_tasks = JoinSet::new();
+        for idx in 0..16 {
+            let adapter = Arc::clone(&adapter);
+            node_tasks.spawn(async move {
+                let node = TestNode::new("race-node", &format!("Name-{idx}"), idx);
+                adapter.add_node(&node).await
+            });
+        }
+
+        while let Some(join_result) = node_tasks.join_next().await {
+            let op_result = join_result.expect("node task should not panic");
+            assert!(op_result.is_ok(), "node upsert should not fail");
+        }
+
+        let race_node = adapter
+            .get_node("race-node")
+            .await
+            .unwrap()
+            .expect("race-node should exist");
+        assert!(
+            race_node.get("name").and_then(|v| v.as_str()).is_some(),
+            "race-node should preserve string fields"
+        );
+
+        let mut edge_tasks = JoinSet::new();
+        for idx in 0..16 {
+            let adapter = Arc::clone(&adapter);
+            edge_tasks.spawn(async move {
+                let mut props = HashMap::new();
+                props.insert(Cow::Borrowed("iteration"), json!(idx));
+                adapter
+                    .add_edge("race-node", "race-node", "self", Some(props))
+                    .await
+            });
+        }
+
+        while let Some(join_result) = edge_tasks.join_next().await {
+            let op_result = join_result.expect("edge task should not panic");
+            assert!(op_result.is_ok(), "edge upsert should not fail");
+        }
+
+        assert!(
+            adapter
+                .has_edge("race-node", "race-node", "self")
+                .await
+                .unwrap(),
+            "self edge should exist"
+        );
+        let metrics = adapter.get_graph_metrics(false).await.unwrap();
+        assert_eq!(
+            metrics.get("edge_count").unwrap().as_i64().unwrap(),
+            1,
+            "self edge should remain idempotent"
         );
     }
 
