@@ -376,6 +376,55 @@ async fn test_search_type_matrix() {
     );
     println!("✓ Chunks context: mentions germany/netherlands");
 
+    // ── Step 11b: Context assertion for GraphCompletion (only_context=true) ──
+    // This is the combination used by the Locust benchmark: the graph retriever
+    // returns ranked edges (source→relationship→target + entity texts) without
+    // calling the LLM.  Verify that the raw edge payloads contain relevant text.
+    let graph_ctx = SearchRequest {
+        query_text: query.to_string(),
+        search_type: SearchType::GraphCompletion,
+        top_k: None,
+        datasets: None,
+        dataset_ids: None,
+        system_prompt: None,
+        system_prompt_path: None,
+        only_context: Some(true),
+        use_combined_context: None,
+        session_id: None,
+        node_type: None,
+        node_name: None,
+        node_name_filter_operator: None,
+        wide_search_top_k: None,
+        triplet_distance_penalty: None,
+        save_interaction: Some(false),
+        user_id: None,
+        verbose: None,
+        feedback_influence: None,
+        retriever_specific_config: None,
+        response_schema: None,
+        custom_search_type: None,
+        auto_feedback_detection: None,
+        neighborhood_depth: None,
+        neighborhood_seed_top_k: None,
+    };
+    let graph_ctx_resp = orchestrator
+        .search(&graph_ctx)
+        .await
+        .expect("graph completion context search");
+    assert!(
+        is_non_empty(&graph_ctx_resp),
+        "GraphCompletion context should return non-empty edges"
+    );
+    let graph_ctx_text = response_text(&graph_ctx_resp);
+    assert!(
+        graph_ctx_text.contains("germany") || graph_ctx_text.contains("netherlands"),
+        "GraphCompletion context edges should mention germany or netherlands; got: {}",
+        &graph_ctx_text[..graph_ctx_text.len().min(300)]
+    );
+    println!(
+        "✓ GraphCompletion context (only_context=true): non-empty, mentions germany/netherlands"
+    );
+
     // ── Step 12: Search history count ────────────────────────────────────────
     // The orchestrator saves interactions without a user_id, so retrieve all history.
     let history = orchestrator

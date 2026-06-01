@@ -195,8 +195,7 @@ async fn wire_vector_db(cfg: &HttpServerConfig) -> Result<Arc<dyn VectorDB>, Ser
 }
 
 fn build_embedding_config(cfg: &HttpServerConfig) -> Option<EmbeddingConfig> {
-    let mut embedding_cfg = EmbeddingConfig::default();
-    embedding_cfg.provider = match cfg.embedding_provider.trim().to_ascii_lowercase().as_str() {
+    let provider = match cfg.embedding_provider.trim().to_ascii_lowercase().as_str() {
         "onnx" => EmbeddingProvider::Onnx,
         "fastembed" => EmbeddingProvider::Fastembed,
         "openai" => EmbeddingProvider::OpenAi,
@@ -208,8 +207,12 @@ fn build_embedding_config(cfg: &HttpServerConfig) -> Option<EmbeddingConfig> {
             return None;
         }
     };
-    embedding_cfg.model = cfg.embedding_model_name.clone();
-    embedding_cfg.dimensions = cfg.embedding_dimensions as usize;
+    let mut embedding_cfg = EmbeddingConfig {
+        provider,
+        model: cfg.embedding_model_name.clone(),
+        dimensions: cfg.embedding_dimensions as usize,
+        ..Default::default()
+    };
     if !cfg.embedding_endpoint.trim().is_empty() {
         embedding_cfg.endpoint = Some(cfg.embedding_endpoint.clone());
     }
@@ -229,9 +232,7 @@ fn build_embedding_config(cfg: &HttpServerConfig) -> Option<EmbeddingConfig> {
 }
 
 async fn wire_embedding_engine(cfg: &HttpServerConfig) -> Option<Arc<dyn EmbeddingEngine>> {
-    let Some(embedding_cfg) = build_embedding_config(cfg) else {
-        return None;
-    };
+    let embedding_cfg = build_embedding_config(cfg)?;
 
     match embedding_cfg.create_engine().await {
         Ok(engine) => Some(engine),
@@ -364,12 +365,14 @@ mod tests {
 
     #[test]
     fn build_embedding_config_applies_explicit_onnx_asset_paths() {
-        let mut cfg = HttpServerConfig::default();
-        cfg.embedding_provider = "onnx".to_string();
-        cfg.embedding_model_name = "custom-bge".to_string();
-        cfg.embedding_dimensions = 768;
-        cfg.embedding_model_path = Some(PathBuf::from("/tmp/model.onnx"));
-        cfg.embedding_tokenizer_path = Some(PathBuf::from("/tmp/tokenizer.json"));
+        let cfg = HttpServerConfig {
+            embedding_provider: "onnx".to_string(),
+            embedding_model_name: "custom-bge".to_string(),
+            embedding_dimensions: 768,
+            embedding_model_path: Some(PathBuf::from("/tmp/model.onnx")),
+            embedding_tokenizer_path: Some(PathBuf::from("/tmp/tokenizer.json")),
+            ..Default::default()
+        };
 
         let embedding_cfg = build_embedding_config(&cfg).expect("embedding config");
 

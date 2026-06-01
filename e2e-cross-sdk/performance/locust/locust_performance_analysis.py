@@ -17,6 +17,7 @@ import io
 import os
 import random
 import signal
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -264,7 +265,7 @@ class SingleDatasetFlow(AddCognifySearchFlow):
 class SingleDatasetCogneeTest(HttpUser):
     tasks = [SingleDatasetFlow]
     wait_time = between(5, 10)
-    # Kept disabled until shared-dataset cognify behavior is validated in Rust server.
+    # TODO: Return weight when scenario is fixed to handle concurrent cognify calls on the same dataset.
     weight = 0
 
 
@@ -281,12 +282,67 @@ def wait_for_server(url: str, timeout: float = 240.0) -> None:
     raise SystemExit(f"Cognee server at {url} did not become ready in {timeout}s")
 
 
-def start_rust_server(host: str, port: str) -> subprocess.Popen:
+def prepare_server_environment(manage_server: bool) -> tuple[dict[str, str], Path | None]:
+    """Prepare environment for Rust server startup.
+
+    When benchmark-managed server mode is enabled, this defaults to isolated
+    state roots per run to avoid cross-run contamination from previous Ladybug
+    or sqlite/vector state.
+    """
     env = {
         **os.environ,
+        "REQUIRE_AUTHENTICATION": "false",
+    }
+
+    if not manage_server:
+        return env, None
+
+    use_unique_state = parse_bool(os.environ.get("COGNEE_LOCUST_UNIQUE_STATE"), True)
+    if not use_unique_state:
+        return env, None
+
+    keep_state = parse_bool(os.environ.get("COGNEE_LOCUST_KEEP_STATE"), False)
+    configured_root = os.environ.get("COGNEE_LOCUST_STATE_ROOT", "").strip()
+
+    cleanup_root: Path | None = None
+    if configured_root:
+        state_root = Path(configured_root).expanduser().resolve()
+        if state_root.exists():
+            shutil.rmtree(state_root)
+        state_root.mkdir(parents=True, exist_ok=True)
+    else:
+        state_root = Path(tempfile.mkdtemp(prefix="cognee-locust-state-"))
+        if not keep_state:
+            cleanup_root = state_root
+
+    data_root = state_root / "data"
+    system_root = state_root / "system"
+    session_root = state_root / "sessions"
+    data_root.mkdir(parents=True, exist_ok=True)
+    system_root.mkdir(parents=True, exist_ok=True)
+    session_root.mkdir(parents=True, exist_ok=True)
+
+    env.update(
+        {
+            "DATA_ROOT_DIRECTORY": str(data_root),
+            "SYSTEM_ROOT_DIRECTORY": str(system_root),
+            "COGNEE_SESSION_DIR": str(session_root),
+        }
+    )
+
+    if cleanup_root is None:
+        print(f"Using benchmark server state root: {state_root}")
+    else:
+        print(f"Using isolated benchmark server state root: {state_root}")
+
+    return env, cleanup_root
+
+
+def start_rust_server(host: str, port: str, server_env: dict[str, str]) -> subprocess.Popen:
+    env = {
+        **server_env,
         "HTTP_API_HOST": host,
         "HTTP_API_PORT": port,
-        "REQUIRE_AUTHENTICATION": "false",
     }
 
     # Prefer an explicit binary path if set; otherwise use cargo run.
@@ -380,9 +436,11 @@ if __name__ == "__main__":
     manage_server = parse_bool(os.environ.get("COGNEE_LOCUST_MANAGE_SERVER"), True)
 
     server_proc: subprocess.Popen | None = None
+    cleanup_state_root: Path | None = None
     try:
+        server_env, cleanup_state_root = prepare_server_environment(manage_server)
         if manage_server:
-            server_proc = start_rust_server(host, port)
+            server_proc = start_rust_server(host, port, server_env)
         wait_for_server(f"{base_url}/health")
         exit_code = run_headless(base_url, sys.argv[1:])
     finally:
@@ -397,5 +455,7 @@ if __name__ == "__main__":
                     os.killpg(server_proc.pid, signal.SIGKILL)
                 except ProcessLookupError:
                     pass
+        if cleanup_state_root is not None:
+            shutil.rmtree(cleanup_state_root, ignore_errors=True)
 
     sys.exit(exit_code)
