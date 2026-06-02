@@ -1,5 +1,10 @@
 # Implementation Plan: Ontology Management (Gap 7)
 
+> **Status (2026-06): COMPLETED.** `OntologyManager` and `OntologyMetadata` have
+> been implemented in `crates/ontology/src/manager.rs` with `upload`,
+> `upload_batch`, `list`, `get_contents`, `get_contents_batch`, `delete`, and
+> `build_resolver` as planned. Retained as a historical record.
+
 This document provides the step-by-step implementation plan for adding ontology file management capabilities to the Rust SDK, matching the Python `OntologyService` API.
 
 ---

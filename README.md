@@ -24,11 +24,14 @@ It’s designed to run efficiently on constrained devices (smartwatch, phone)
 
 ## Technology Stack
 
-- **Rust** — We use rust  for the POC.
-- **Qdrant** — Qdrant as vector storage.
-- **BAML** — llm model management.  
-- **Local models** — Phi4
-- **Graph store** — We do not use graph database, as we store structure embeddings in the vector collections + optionally retrieve and build relevant subgraphs.
+- **Rust** — edition 2024 workspace (resolver 3).
+- **Vector store** — embedded [Qdrant](https://qdrant.tech/) (`segment`/`shard` engine) with metadata filtering.
+- **Graph store** — embedded [Ladybug](https://crates.io/crates/lbug) graph database for knowledge-graph storage and traversal.
+- **LLM** — OpenAI-compatible HTTP adapter (`OpenAIAdapter`, works with OpenAI/Ollama/vLLM/llama.cpp) plus an on-device `LiteRtAdapter` (Android, feature-gated).
+- **Embeddings** — multi-provider engine: local ONNX Runtime (BGE-Small-v1.5), OpenAI-compatible HTTP, Ollama, and a mock provider for tests.
+- **Relational metadata** — SQLite/Postgres via SeaORM.
+
+See [.claude/CLAUDE.md](.claude/CLAUDE.md) for the full crate-by-crate breakdown of the workspace.
 
 ## Graph Backend Concurrency
 
@@ -43,25 +46,60 @@ out of scope.
 
 ### Local LLM with Ollama
 
-We provide a Docker setup for running Ollama with OpenAI-compatible API:
+Cognee talks to any OpenAI-compatible chat endpoint. The simplest local option
+is [Ollama](https://ollama.com/), which exposes an OpenAI-compatible API at
+`http://localhost:11434/v1`:
 
 ```bash
-cd docker/ollama
-./start.sh
+ollama serve &
+ollama pull llama3.2:3b   # small, fast (~2GB)
 ```
 
-This will start:
-- **Ollama** with OpenAI-compatible API at `http://localhost:11434/v1`
-- **Web UI** at `http://localhost:3000`
-- Automatically pulls `llama3.2:3b` model (small, fast, ~2GB)
+Then point cognee at it:
 
-See [docker/ollama/README.md](docker/ollama/README.md) for detailed documentation.
+```bash
+export OPENAI_URL=http://localhost:11434/v1
+export OPENAI_TOKEN=not-needed
+export OPENAI_MODEL=llama3.2:3b
+```
+
+For a fully scripted end-to-end demo (spins up Ollama in Docker, runs
+add → cognify → search), see [demo/run_cognee_rust_demo.sh](demo/run_cognee_rust_demo.sh)
+and the shared helpers in [demo/lib/demo_common.sh](demo/lib/demo_common.sh).
 
 ### Building the Project
 
 ```bash
 cargo build --release
 ```
+
+The CLI binary is `cognee-cli` (built from the `cognee-cli` crate).
+
+### CLI Usage
+
+The core pipeline is `add` → `cognify` → `search`:
+
+```bash
+# 1. Ingest data into a dataset (defaults to "main_dataset")
+cognee-cli add ./notes.txt "some inline text" -d my_dataset
+
+# 2. Build the knowledge graph from one or more datasets
+cognee-cli cognify -d my_dataset
+
+# 1+2 in one step
+cognee-cli add-and-cognify ./notes.txt -d my_dataset
+
+# 3. Query it (default query type is GRAPH_COMPLETION)
+cognee-cli search "what did we learn about X?" -t GRAPH_COMPLETION -d my_dataset -k 10
+```
+
+Other subcommands: `memify` (enrich an existing graph with triplet embeddings),
+`delete`, `config` (`get`/`set`/`unset`), `run-sequence` (run a scripted
+add/cognify/search sequence), and — when built with their feature flags —
+`visualize` (render the graph to HTML), `serve`, and `disconnect` (cloud).
+
+Run `cognee-cli <command> --help` for the full flag list. See
+[docs/cli/](docs/cli/) for logging and LLM-retry configuration.
 
 ### Android Local LLM (LiteRT-LM)
 
@@ -101,18 +139,27 @@ cargo test --workspace
 For local full-suite execution (including LLM and ONNX/tokenizer dependent tests), use:
 
 ```bash
-./scripts/run_tests_with_local_env.sh
+# Run the whole workspace (downloads embedding models if missing,
+# single-threaded for LLM isolation):
+bash scripts/run_tests_with_openai.sh
+
+# Or a single test by name:
+bash scripts/run_tests_with_openai.sh test_fact_extraction
 ```
 
-This script initializes and exports the required test environment:
+This script sources `scripts/lib/common.sh`, which downloads the BGE-Small-v1.5
+ONNX artifacts from HuggingFace if not already cached, then runs
+`cargo test --workspace -- --nocapture --test-threads=1`. The relevant
+environment variables are:
 
-- `OPENAI_URL` (auto-detected from `http://localhost:11435/v1` or `http://localhost:11434/v1`, or pre-set value)
-- `OPENAI_TOKEN` (defaults to `not-needed` for local Ollama)
-- `OPENAI_MODEL` (uses pre-set value, otherwise auto-detected from `${OPENAI_URL}/models`, fallback `gpt-4o-mini`)
-- `COGNEE_E2E_EMBED_MODEL_PATH` (defaults to `target/models/BGE-Small-v1.5-model_quantized.onnx`)
-- `COGNEE_E2E_TOKENIZER_PATH` (defaults to `target/models/bge-small-tokenizer.json`)
-
-If model/tokenizer files are missing, the script downloads them automatically.
+| Variable | Required | Default | Purpose |
+|---|---|---|---|
+| `OPENAI_URL` | Yes | — | OpenAI-compatible API base URL |
+| `OPENAI_TOKEN` | Yes | — | API key (`not-needed` for local Ollama) |
+| `OPENAI_MODEL` | No | `gpt-4o-mini` | LLM model name |
+| `COGNEE_TEST_MODEL_DIR` | No | `target/models` | Cache dir for embedding models |
+| `COGNEE_E2E_EMBED_MODEL_PATH` | No | auto from model dir | BGE-Small-v1.5 ONNX model |
+| `COGNEE_E2E_TOKENIZER_PATH` | No | auto from model dir | BGE-Small tokenizer.json |
 
 ## Observability
 

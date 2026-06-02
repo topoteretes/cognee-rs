@@ -111,6 +111,42 @@ Companion docs: [../plan.md](../plan.md), [../architecture.md](../architecture.m
   - The `chunks_per_batch=10` default differs from cognify's `None` default. Honour the literal default.
   - Python returns `jsonable_encoder(result.to_dict())` — UUIDs become strings, datetimes become ISO 8601 strings. Rust `serde_json::to_value(result)` with proper `chrono::DateTime<Utc>` serialization yields the same output.
 
+### 2.2 `POST /api/v1/remember/entry` — store a typed memory entry
+
+A JSON (not multipart) sibling endpoint that writes a single typed memory entry — a QA pair, an agent trace step, or feedback on a prior QA — into the session cache for a given `session_id`, rather than ingesting + cognifying files. It mirrors Python's `RememberEntryRequest` route at [`get_remember_router.py:101-113`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/remember/routers/get_remember_router.py#L101-L113).
+
+- **Auth**: `required` (`AuthenticatedUser`).
+- **Path params**: none.
+- **Query params**: none.
+- **Request body**: `application/json`, DTO `RememberEntryRequestDTO` (`crates/http-server/src/dto/remember_entry.rs`). Wire is **camelCase** (Decision 10); snake_case forms are also accepted via per-field `serde(alias = ...)` for Python `populate_by_name=True` parity.
+
+  | Field | Rust type | Required | Notes |
+  |---|---|---|---|
+  | `entry` | `cognee_models::memory::MemoryEntry` | Yes | Discriminated union tagged by `type`: `"qa"` / `"trace"` / `"feedback"`. Unknown `type` values fail to parse (`400`). |
+  | `datasetName` (alias `dataset_name`) | `String` | No (default `"main_dataset"`) | Target dataset name. |
+  | `sessionId` (alias `session_id`) | `String` | Yes | Session to attach the entry to. Empty/whitespace-only values are rejected with the Pydantic-style validation envelope (`400`). |
+
+  The `entry` union variants (see `cognee_models::memory`): `qa` (`question`, `answer`, optional `context`, `feedbackText`, `feedbackScore`, `usedGraphElementIds`), `trace` (agent trace step), `feedback` (references a prior `qaId`).
+
+- **Response body**: `200 OK`, `application/json`, `RememberResultDTO` (same struct as §2.1). `status` is `SessionStored` for the typed-entry path. The stored entry id is returned in the result.
+- **Error responses**:
+
+  | Status | Body | Condition |
+  |---|---|---|
+  | `400` | `{"detail": [{"loc": ["body", "session_id"], "msg": "session_id is required for typed memory entries", "type": "value_error"}]}` | Missing/empty `session_id`. |
+  | `400` | `{"detail": [...], "body": ...}` | Malformed body / unknown `entry.type`. Canonical `ApiError::Validation`. |
+  | `401` | `{"detail": "Unauthorized"}` | Missing/invalid auth. |
+  | `409` | `{"error": "An error occurred during remember."}` | Catch-all (e.g. components not wired). Same `{error}` envelope and `409` status as the multipart `POST /` path. |
+  | `503` | `{"detail": "Session cache is not configured."}` | The session manager / session cache is not wired into `ComponentHandles`. |
+
+- **Side effects**: best-effort upsert of the `session_records` row for `session_id` (log-and-swallow on failure), then writes the entry to the session cache via `SessionManager` (e.g. `save_qa` for the `qa` variant). Does **not** run add/cognify and does **not** write graph/vector data.
+- **Delegation target**: `SessionManager` (from `ComponentHandles`, augmented with the configured LLM when present) plus `SessionLifecycleDb::ensure_and_touch_session`. Mirrors `crates/lib/src/api/remember.rs:625-769`.
+- **Validation rules**: `session_id` must be non-empty after trimming (handler-level check). `entry` must deserialize into a known `MemoryEntry` variant.
+- **Permission gate**: none beyond auth — the entry is scoped to the caller's `user_id`.
+- **OpenAPI**: tag `remember`. Request body `RememberEntryRequestDTO`; the `entry` field is schema-typed as `serde_json::Value` (the `MemoryEntry` union lives in `cognee-models` without `ToSchema`). Responses `200`/`400`/`401`/`409`/`503`.
+- **Telemetry**: span name `cognee.api.remember_entry`. Attributes: `endpoint = "POST /v1/remember/entry"`, `cognee.user_id`, `entry_type` (the union discriminator, recorded after parse).
+- **Python parity notes**: camelCase wire with snake_case aliases (`populate_by_name=True`). `datasetName` defaults to `"main_dataset"`. The catch-all reuses the same `409 {"error": ...}` envelope as the multipart endpoint.
+
 ## 3. Cross-cutting behavior
 
 - **Pipeline name**: the cognify portion uses `"cognify_pipeline"` (the same name `/api/v1/cognify` uses). The deterministic `pipeline_run_id` returned in the response collides intentionally — calling `/api/v1/remember` then `/api/v1/cognify` on the same dataset returns `PipelineRunAlreadyCompleted` for the second call.

@@ -1,6 +1,29 @@
 # Gap 4: User / Authentication / Multi-Tenancy
 
-This document details the user management, authentication, and multi-tenancy capabilities present in the Python SDK that are absent from the Rust implementation.
+> **Status (2026-06): RESOLVED.** The user/tenant/role model and permission
+> system have been implemented. The "Rust Current State" section below describes
+> the *pre-implementation* baseline and is retained for historical context. As
+> built, the Rust SDK now provides:
+> - `User` / `Tenant` / `Role` / permission models —
+>   `crates/models/src/{user,tenant,role,permission}.rs`
+> - `UserDb`, `TenantDb`, `RoleDb` traits + impls —
+>   `crates/database/src/traits/{user_db,tenant_db,role_db}.rs` and
+>   `crates/database/src/ops/{user,tenant,role}.rs`
+> - Role/tenant-aware ACL resolution — `has_permission_with_roles` and
+>   `authorized_dataset_ids_with_roles` on `AclDb`
+>   (`crates/database/src/traits/acl_db.rs`)
+> - Tenant switching — `TenantDb::select_tenant`
+> - Migrations — `m20250422_000001_user_tenant_role_tables`,
+>   `m20260428_000001_tenants_rbac`, `m20260512_000001_add_parent_user_id`
+> - Default-user bootstrap — `get_or_create_default_user`
+>   (`crates/lib/src/api/user.rs`)
+>
+> Authentication (JWT, API keys, OAuth2) and password hashing remain
+> intentionally out of scope (HTTP-server concerns), as noted at the end of this
+> document. The Gap Analysis table near the bottom has been updated to reflect
+> implemented status.
+
+This document details the user management, authentication, and multi-tenancy capabilities present in the Python SDK that were absent from the Rust implementation.
 
 **Implementation plan:** [impl/04-user-auth-tenancy-plan.md](impl/04-user-auth-tenancy-plan.md)
 
@@ -171,25 +194,28 @@ These match Python's `PERMISSION_TYPES` but are defined only in the `ops` module
 
 ## Gap Analysis
 
+> **Updated to reflect current (resolved) state.** The "Rust" column now
+> describes what is implemented.
+
 | # | Feature | Python | Rust | Status |
 |---|---------|--------|------|--------|
-| 1 | **User model** | Full `User` class (email, password, roles, tenants) | No User struct; raw UUID from config | **Missing** |
-| 2 | **Default user** | Auto-created in DB on first API call, cached | Static UUID string from config, no DB record | **Missing** |
-| 3 | **User CRUD** | create, read, update, delete users | None | **Missing** |
+| 1 | **User model** | Full `User` class (email, password, roles, tenants) | `User` struct in `crates/models/src/user.rs` | **Implemented** |
+| 2 | **Default user** | Auto-created in DB on first API call, cached | `get_or_create_default_user()` in `crates/lib/src/api/user.rs` + seed migration | **Implemented** |
+| 3 | **User CRUD** | create, read, update, delete users | `UserDb` trait + `ops/user.rs` | **Implemented** |
 | 4 | **Password hashing** | Via `fastapi-users` (`SQLAlchemyBaseUserTableUUID`) | None (out of scope -- HTTP concern) | **Out of scope** |
-| 5 | **Tenant model** | `Tenant` class with name, owner, users M2M | No struct; `tenant_id` passed as `Option<Uuid>` parameter | **Missing** |
-| 6 | **Tenant CRUD** | create, list, select, add/remove users | None | **Missing** |
-| 7 | **Role model** | `Role` class with name, tenant FK, users M2M | None | **Missing** |
-| 8 | **Role CRUD** | create role, assign user to role, list roles | None | **Missing** |
-| 9 | **ACL model** | `ACL` class linking principal -> permission -> dataset | `AclDb` trait with `principals`, `permissions`, `acls` tables | **Partial** |
-| 10 | **Permission constants** | `PERMISSION_TYPES = ["read", "write", "delete", "share"]` | `PERMISSION_NAMES` in `ops::acl` + seeded DB rows | **Partial** (not in models crate) |
-| 11 | **Permission inheritance** | User -> Tenant -> Role chain via `get_all_user_permission_datasets()` | Flat principal -> dataset only (no role/tenant resolution) | **Missing** |
+| 5 | **Tenant model** | `Tenant` class with name, owner, users M2M | `Tenant` struct in `crates/models/src/tenant.rs` | **Implemented** |
+| 6 | **Tenant CRUD** | create, list, select, add/remove users | `TenantDb` trait + `ops/tenant.rs` | **Implemented** |
+| 7 | **Role model** | `Role` class with name, tenant FK, users M2M | `Role` struct in `crates/models/src/role.rs` | **Implemented** |
+| 8 | **Role CRUD** | create role, assign user to role, list roles | `RoleDb` trait + `ops/role.rs` | **Implemented** |
+| 9 | **ACL model** | `ACL` class linking principal -> permission -> dataset | `AclDb` trait with `principals`, `permissions`, `acls` tables | **Implemented** |
+| 10 | **Permission constants** | `PERMISSION_TYPES = ["read", "write", "delete", "share"]` | `crates/models/src/permission.rs` + `PERMISSION_NAMES` in `ops::acl` + seeded DB rows | **Implemented** |
+| 11 | **Permission inheritance** | User -> Tenant -> Role chain via `get_all_user_permission_datasets()` | `has_permission_with_roles` / `authorized_dataset_ids_with_roles` on `AclDb` | **Implemented** |
 | 12 | **Default permissions on dataset creation** | Auto-grant read/write/delete to owner | Via `AddPipeline::with_acl_db()` grants all four | **Implemented** |
 | 13 | **Cross-user sharing** | `grant_permission()` API | `AclDb::grant_permission()` trait method | **Implemented** |
-| 14 | **Tenant switching** | `select_tenant(user_id, tenant_id)` with membership validation | Not supported | **Missing** |
+| 14 | **Tenant switching** | `select_tenant(user_id, tenant_id)` with membership validation | `TenantDb::select_tenant` | **Implemented** |
 | 15 | **Authentication** | JWT, API keys, cookies, OAuth2 via `fastapi-users` | None (out of scope -- HTTP concern) | **Out of scope** |
-| 16 | **User management permissions** | Role-based (`has_user_management_permission`) | None | **Missing** |
-| 17 | **Default permission tables** | `user_default_permissions`, `tenant_default_permissions`, `role_default_permissions` | None | **Missing** (deferred) |
+| 16 | **User management permissions** | Role-based (`has_user_management_permission`) | Role/tenant ACL resolution (see #11); dedicated helper still thin | **Mostly implemented** |
+| 17 | **Default permission tables** | `user_default_permissions`, `tenant_default_permissions`, `role_default_permissions` | Explicit grants used instead of default-permission tables | **Deferred** (by design) |
 
 ---
 

@@ -1,12 +1,33 @@
 # Telemetry Gap Analysis: Rust vs Python Cognee
 
+> **Status (2026-06): RESOLVED.** All telemetry pillars analysed here have since
+> been implemented. **OpenTelemetry/OTLP export** now lives in the
+> `cognee-observability` crate (`crates/observability/src/init.rs`,
+> `guard.rs`, `settings.rs`), wired to the existing `OTEL_*` config fields.
+> **Product-analytics event tracking** (`send_telemetry`) is implemented in the
+> `cognee-telemetry` crate (`crates/telemetry/src/`: `lib.rs`, `real.rs`,
+> `client.rs`, `ids.rs`, `payload.rs`, `env.rs`), including the `prometh.ai`
+> proxy, anon/persistent ID files, PBKDF2 api-key tracking ID, and
+> `TELEMETRY_DISABLED`/`ENV` opt-out. Sections 1 and 2 below describe the
+> *pre-implementation* state and are retained for historical context; the
+> "Completed work" list near the bottom tracks the closures.
+
 ## Summary
 
-The Rust port has solid **structured tracing infrastructure** (51 instrumented spans, semantic attributes, in-memory ring buffer, redaction layer, observability HTTP API) — in some ways the span scaffolding is *cleaner* than Python's. But it is missing two whole telemetry pillars that Python ships with: **OpenTelemetry/OTLP export** and **product-analytics event tracking** (the `send_telemetry` proxy). Pipeline-status persistence is also incomplete.
+The Rust port had solid **structured tracing infrastructure** (51 instrumented spans, semantic attributes, in-memory ring buffer, redaction layer, observability HTTP API) — in some ways the span scaffolding is *cleaner* than Python's. At the time of this analysis it was missing two whole telemetry pillars that Python ships with: **OpenTelemetry/OTLP export** and **product-analytics event tracking** (the `send_telemetry` proxy). Both — and pipeline-status persistence — have since been implemented (see status note above and the "Completed work" section).
 
 ---
 
-## 1. OpenTelemetry / OTLP Export — biggest gap
+## 1. OpenTelemetry / OTLP Export — RESOLVED (was biggest gap)
+
+> **Implemented** in the `cognee-observability` crate. `init_telemetry()`
+> (`crates/observability/src/init.rs`) builds an `SdkTracerProvider`, installs
+> a `tracing-opentelemetry` bridge layer, and exports via OTLP gRPC/HTTP using
+> the `opentelemetry`, `opentelemetry_sdk`, `opentelemetry-otlp`,
+> `opentelemetry-semantic-conventions`, and `tracing-opentelemetry` deps
+> (see `crates/observability/Cargo.toml`). The `OTEL_*` config fields are now
+> wired end-to-end (no longer a no-op). The table below reflects the original
+> pre-implementation snapshot.
 
 | | Python | Rust |
 |---|---|---|
@@ -22,7 +43,19 @@ The Rust port has solid **structured tracing infrastructure** (51 instrumented s
 
 ---
 
-## 2. Product Analytics (`send_telemetry`) — completely missing
+## 2. Product Analytics (`send_telemetry`) — RESOLVED (was completely missing)
+
+> **Implemented** in the `cognee-telemetry` crate. `send_telemetry()` /
+> `try_send_telemetry()` (`crates/telemetry/src/lib.rs`, dispatched via
+> `real.rs`) fire async fire-and-forget events to the same
+> `https://test.prometh.ai` proxy (`env.rs::proxy_url`). The three identity
+> layers are in `ids.rs`: `get_anonymous_id` (`<project_root>/.anon_id`),
+> `get_persistent_id` (`~/.cognee/.persistent_id`), and `get_api_key_tracking_id`
+> (PBKDF2-HMAC-SHA256). Opt-out via `TELEMETRY_DISABLED` and `ENV=test|dev`
+> lives in `env.rs::is_disabled`. The `cognee.forget` event is emitted from
+> `crates/lib/src/api/forget.rs` (gated behind the `telemetry` feature); the
+> event payload shape is in `payload.rs`. The pre-implementation description
+> below is retained for historical context.
 
 Python ships a **custom telemetry proxy** at `https://test.prometh.ai` (NOT PostHog — that's a declared-but-unused optional dep). Events:
 
@@ -187,24 +220,31 @@ These mirror Python's namespaces. Every key is now consumed by at least one call
 | `RUST_LOG` | [crates/http-server/src/main.rs:106-107](../../crates/http-server/src/main.rs#L106-L107) | `info,ort=warn` | Used |
 | `COGNEE_SPAN_BUFFER_MAX_TRACES` | [crates/http-server/src/observability/span_buffer.rs:79-81](../../crates/http-server/src/observability/span_buffer.rs#L79-L81) | 50 | Used |
 | `COGNEE_SPAN_BUFFER_MAX_SPANS_PER_TRACE` | same | 1024 | Used |
-| `COGNEE_TRACING_ENABLED` | [crates/lib/src/config.rs:463-465](../../crates/lib/src/config.rs#L463-L465) | false | Parsed, unused |
-| `OTEL_SERVICE_NAME` | [crates/lib/src/config.rs:467-468](../../crates/lib/src/config.rs#L467-L468) | empty | Parsed, unused |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | [crates/lib/src/config.rs:470-471](../../crates/lib/src/config.rs#L470-L471) | empty | Parsed, unused |
-| `OTEL_EXPORTER_OTLP_HEADERS` | [crates/lib/src/config.rs:473-474](../../crates/lib/src/config.rs#L473-L474) | empty | Parsed, unused |
+| `COGNEE_TRACING_ENABLED` | crates/lib/src/config.rs | false | Used (drives `is_tracing_enabled` in `cognee-observability`) |
+| `OTEL_SERVICE_NAME` | crates/lib/src/config.rs | empty | Used (OTEL resource `service.name`) |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | crates/lib/src/config.rs | empty | Used (OTLP exporter endpoint) |
+| `OTEL_EXPORTER_OTLP_HEADERS` | crates/lib/src/config.rs | empty | Used (OTLP exporter headers) |
+| `TELEMETRY_DISABLED` | crates/telemetry/src/env.rs | unset | Used (product-analytics opt-out) |
 
 ### Crate coverage
 
 - **Crates with `tracing`:** `core`, `ingestion`, `search`, `delete`, `database`, `http-server`, `cli`, `llm`, `embedding`, `vector`, `graph`, `storage`, `session`, `chunking`, `cognify`, `cloud`, `visualization`
 - **Crates without `tracing`:** `models`, `ontology`, `test-utils`, `utils`
-- **No `opentelemetry`, `prometheus`, `metrics` deps anywhere**
+- **`opentelemetry` deps now present** in the `cognee-observability` crate
+  (`opentelemetry`, `opentelemetry_sdk`, `opentelemetry-otlp`,
+  `opentelemetry-semantic-conventions`, `tracing-opentelemetry`; feature-gated).
+  Dedicated `prometheus`/`metrics` exporters remain absent (see "Future work").
 
 ### Bindings
 
-| Binding | Telemetry init |
+> **Updated:** auto-init landed in gap 07 (see section 6). The "None" entries
+> below were the pre-implementation snapshot.
+
+| Binding | Telemetry init (current) |
 |---|---|
-| Python (PyO3) | None — caller owns subscriber setup |
-| C API | None — caller owns observability |
-| JS (Neon) | None |
+| Python (PyO3) | Auto-init tracing bridge into Python `logging` via `pyo3-log`; explicit `setup_logging` / `setup_telemetry` / `setup_telemetry_analytics` |
+| C API | Explicit (`cg_init` installs a panic hook); caller owns observability |
+| JS (Neon) | Auto-init stderr fmt subscriber by default |
 
 ---
 
@@ -318,12 +358,23 @@ monitoring_tool: object = Observer.NONE
 
 ## Prioritized Gap List
 
-Each gap is broken out into a dedicated sub-document with deep investigation, design, and numbered action items.
+> **All resolved.** Every prioritized item below has been closed. Each remains
+> linked to its dedicated sub-document for the investigation/design/action-item
+> trail. Strikethrough marks completion.
 
-1. **Implement `send_telemetry()` analytics client** — proxy URL, anon/persistent ID files, PBKDF2 api-key tracking ID, opt-out semantics, async fire-and-forget HTTP. → [02-send-telemetry-analytics.md](02-send-telemetry-analytics.md)
-2. **Emit pipeline & task lifecycle events** — `Pipeline Run Started/Completed/Errored`, per-task variants, and API events (`cognee.recall`, `cognee.improve`, `cognee.forget`). → [03-pipeline-task-api-events.md](03-pipeline-task-api-events.md)
-3. **File logging with rotation** — mirror Python's `COGNEE_LOG_FILE`, `COGNEE_LOGS_DIR`, `COGNEE_LOG_MAX_BYTES`, etc.; rotating non-blocking appender; library noise suppression. → [06-file-logging-rotation.md](06-file-logging-rotation.md)
-4. **Auto-init tracing in bindings** — PyO3, Neon, C API entry points so embedders get telemetry without extra setup; avoid double-emission when embedded in the Python SDK. → [07-bindings-auto-init.md](07-bindings-auto-init.md)
+1. ~~**Implement `send_telemetry()` analytics client**~~ — done. Proxy URL,
+   anon/persistent ID files, PBKDF2 api-key tracking ID, opt-out semantics, and
+   async fire-and-forget HTTP all implemented in the `cognee-telemetry` crate
+   (`crates/telemetry/src/`). → [02-send-telemetry-analytics.md](02-send-telemetry-analytics.md)
+2. ~~**Emit pipeline & task lifecycle events**~~ — done. `Pipeline Run
+   Started/Completed/Errored`, per-task variants, and API events
+   (`cognee.recall`, `cognee.improve`, `cognee.forget`) are emitted (e.g.
+   `crates/lib/src/api/forget.rs`). → [03-pipeline-task-api-events.md](03-pipeline-task-api-events.md)
+3. ~~**File logging with rotation**~~ — done. `COGNEE_LOG_FILE`,
+   `COGNEE_LOGS_DIR`, `LOG_LEVEL`, rotating non-blocking appender, and library
+   noise suppression in the `cognee-logging` crate. → [06-file-logging-rotation.md](06-file-logging-rotation.md)
+4. ~~**Auto-init tracing in bindings**~~ — done. PyO3, Neon, and C API entry
+   points auto-init (see section 6). → [07-bindings-auto-init.md](07-bindings-auto-init.md)
 5. ~~**Pipeline run status lifecycle**~~ — closed by [gap 08](08-pipeline-run-status.md). Full four-state lifecycle, Python-shaped `run_info`, library-pipeline coverage (cognify / memify / ingestion), qualification gate, and reset helpers all landed. See the [gap-08 closure summary](08-pipeline-run-status.md#closure-summary).
 
 ### Completed work

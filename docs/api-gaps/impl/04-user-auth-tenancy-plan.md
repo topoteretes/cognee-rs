@@ -1,5 +1,14 @@
 # Implementation Plan: User / Authentication / Multi-Tenancy
 
+> **Status (2026-06): COMPLETED.** The models, traits, ops, migrations, and
+> default-user bootstrap described in this plan have been implemented. See the
+> resolved status note at the top of [04-user-auth-tenancy.md](../04-user-auth-tenancy.md)
+> for the as-built locations. File names and exact signatures may differ from
+> the proposals below (e.g. the migration is
+> `m20250422_000001_user_tenant_role_tables` with follow-ups
+> `m20260428_000001_tenants_rbac` and `m20260512_000001_add_parent_user_id`).
+> Retained as a historical record.
+
 This plan covers closing the user management, role-based access control, and multi-tenancy gaps between the Python and Rust SDKs (see [04-user-auth-tenancy.md](../04-user-auth-tenancy.md)).
 
 ---

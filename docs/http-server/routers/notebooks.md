@@ -1,11 +1,11 @@
 # Router: notebooks
 
-The `notebooks` router exposes a per-user, server-stored Jupyter-like notebook surface used by the cognee-frontend's "Notebooks" panel. Each notebook is a list of typed cells (`markdown` or `code`) persisted in the relational DB; users can list, create, update, and delete them. A separate `POST /{notebook_id}/{cell_id}/run` endpoint executes a single Python code cell inside a process-local sandbox — this is the only piece that's *not* a CRUD operation, and it is the only piece deferred to Stage B in the Rust port.
+The `notebooks` router exposes a per-user, server-stored Jupyter-like notebook surface used by the cognee-frontend's "Notebooks" panel. Each notebook is a list of typed cells (`markdown` or `code`) persisted in the relational DB; users can list, create, update, and delete them. A separate `POST /{notebook_id}/{cell_id}/run` endpoint executes a single Python code cell inside a process-local sandbox — this is the only piece that's *not* a CRUD operation.
 
-This router is intentionally split into two scopes:
+This router has two scopes:
 
-- **CRUD scope (Stage A deliverable)** — `GET`, `POST`, `PUT`, `DELETE` over the `notebooks` table. Pure SQLite/Postgres I/O, identical wire shape to Python.
-- **Sandbox scope (Stage B deliverable)** — `POST /{notebook_id}/{cell_id}/run`. Requires a Python execution environment we do not yet ship. Stage A returns `501 Not Implemented` with a documented JSON body.
+- **CRUD scope** — `GET`, `POST`, `PUT`, `DELETE` over the `notebooks` table. Pure SQLite/Postgres I/O, identical wire shape to Python.
+- **Sandbox scope** — `POST /{notebook_id}/{cell_id}/run`. Executes the cell through the wired [`crate::notebook_runner::NotebookRunner`]; when no runner is configured the endpoint returns `501 Not Implemented` with a documented JSON body (the original Stage A contract, preserved for embedders that disable execution).
 
 Companion docs: [../plan.md](../plan.md), [../architecture.md](../architecture.md), [../auth.md](../auth.md), [../observability.md](../observability.md), [../tenants.md](../tenants.md).
 
@@ -99,10 +99,11 @@ Five endpoints. Listed in HTTP-method order (`GET → POST → PUT → DELETE`);
 
 ### 2.4 `POST /{notebook_id}/{cell_id}/run` — execute a code cell
 
-> **Stage A deliverable: stub returning `501 Not Implemented`.**
-> **Stage B deliverable: real sandbox-backed execution.**
+> **Current behavior**: real execution when a `NotebookRunner` is wired into
+> the `ComponentHandles`; `501 Not Implemented` (with the documented JSON body)
+> only when no runner is configured.
 
-The endpoint is registered in Stage A so frontends and SDKs that probe its existence (or call it expecting future support) get a structured error. Implementation of the actual Python evaluator is gated on choosing a sandbox strategy (see §2.4.4 below).
+The endpoint runs `body.content` through the configured [`crate::notebook_runner::NotebookRunner`] and returns `200 {"result": [...], "error": null|"<traceback>"}` mirroring the Python wire shape ([`get_notebooks_router.py:79-83`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/notebooks/routers/get_notebooks_router.py#L79-L83)). When no runner is wired (embedders that intentionally disable code execution) the handler falls back to the legacy `501 {"detail": "...", "code": "NOTEBOOK_RUN_NOT_IMPLEMENTED"}` envelope, preserving the original Stage A contract for those builds. Auth, path parsing, body validation, and notebook lookup always run first — a missing notebook returns `404` before either the `200` or `501` path. The sandbox-strategy analysis in §2.4.4 below records why the subprocess approach was chosen for the runner.
 
 #### 2.4.1 Wire contract (both phases)
 
@@ -131,13 +132,15 @@ The endpoint is registered in Stage A so frontends and SDKs that probe its exist
   | `400` | `{"detail": [...], "body": ...}` | Validation error on `content` field. |
   | `401` | `{"detail": "Unauthorized"}` | — |
   | `404` | `{"error": "Notebook not found"}` | Same `{"error": ...}` envelope as `PUT`/`DELETE`. |
-  | `501` | `{"detail": "Notebook cell execution is not implemented in this build", "code": "NOTEBOOK_RUN_NOT_IMPLEMENTED"}` | **Stage A only**: returned for every authenticated, well-formed call — even when the notebook exists. Stage B removes this. |
+  | `501` | `{"detail": "Notebook cell execution is not implemented in this build", "code": "NOTEBOOK_RUN_NOT_IMPLEMENTED"}` | **Only when no `NotebookRunner` is wired** (embedder disabled code execution). When a runner is present this path is never taken; execution returns `200` instead. |
 
 - **Permission gate**: ownership check via `get_notebook(notebook_id, user_id)`. The `cell_id` is **not validated against the notebook's stored cells** in Python — the cell content comes from the request body, not the DB. We replicate this; the `cell_id` is purely an addressing/telemetry value. Document this in the OpenAPI description.
 - **OpenAPI**: tag `notebooks`. Path params `notebook_id: uuid`, `cell_id: uuid`. Add `x-cognee-stub: true` extension on Stage A to flag stub status to introspection tools.
 - **Telemetry**: span name `cognee.api.notebooks.run_cell`. Attributes: `cognee.notebook.id`, `cognee.notebook.cell_id`, `cognee.notebook.run_outcome` (`"stubbed"` in Stage A, `"success"` / `"user_error"` in Stage B).
 
-#### 2.4.2 Stage A stub — exact behavior
+#### 2.4.2 No-runner fallback — exact behavior
+
+The sketch below shows the **no-runner** path (the original Stage A stub, retained as the fallback when no `NotebookRunner` is wired). When a runner *is* present the handler instead calls it and returns `200 {"result": [...], "error": null|str}` per §2.4.3.
 
 ```rust
 async fn run_notebook_cell(
@@ -162,11 +165,11 @@ async fn run_notebook_cell(
 
 The stub still validates auth, parses the path, looks up the notebook (so a missing notebook beats the stub status — `404` first, `501` second), and validates the body — so frontends that test their request shape against `/run` see real validation errors instead of accidentally false-positive `501`s.
 
-#### 2.4.3 Stage B — real execution
+#### 2.4.3 Real execution
 
-When Stage B lands, the handler swaps in the chosen execution backend and returns the `{"result": [...], "error": null|str}` envelope. The 501 fallback is removed; nothing else in the wire contract changes.
+When a `NotebookRunner` is wired, the handler runs the cell through it and returns the `{"result": [...], "error": null|str}` envelope. The 501 fallback applies only when no runner is configured; nothing else in the wire contract changes.
 
-Delegation target (Stage B): `cognee_lib::notebooks::run_cell(content: &str) -> CellRunOutcome`, where:
+Delegation target: the wired `NotebookRunner`; the conceptual signature is `run_cell(content: &str) -> CellRunOutcome`, where:
 
 ```rust
 pub struct CellRunOutcome {
@@ -200,6 +203,29 @@ The Rust port does **not** have a host Python interpreter — porting `exec()` o
 - The `\xa0` (non-breaking space) → `\n` substitution in [`run_in_local_sandbox.py:23`](https://github.com/topoteretes/cognee/blob/main/cognee/modules/notebooks/operations/run_in_local_sandbox.py#L23) accommodates code copy-pasted from web UIs that mangles spacing. The Rust port (Stage B) must do the same substitution before passing content to the subprocess.
 - Python uses `loop.run_in_executor(...)` ([`run_async`](https://github.com/topoteretes/cognee/blob/main/cognee/infrastructure/utils/run_async.py)) so the sandbox runs on a worker thread, not the request thread. The Rust subprocess approach is naturally non-blocking.
 - The `result` field elements are passed through `jsonable_encoder` — strings stay as JSON strings, dicts as JSON objects, etc. Match this in the Rust subprocess parser.
+
+### 2.5 `DELETE /{notebook_id}` — delete a notebook
+
+- **Auth**: `required` (`AuthenticatedUser`).
+- **Path params**: `notebook_id: Uuid`.
+- **Query params**: none.
+- **Request body**: none.
+- **Response body**: `200 OK`, `application/json`, empty object `{}`. Python returns `{}` from the route on a successful delete; we match it. Note the success status is `200`, **not** `204`.
+- **Error responses**:
+
+  | Status | Body shape | Condition |
+  |---|---|---|
+  | `401` | `{"detail": "Unauthorized"}` | Missing/invalid auth. |
+  | `404` | `{"error": "Notebook not found"}` | Notebook id not owned by caller, or doesn't exist. Same `{"error": ...}` envelope as `PUT`/`run` (see §3). |
+  | `500` | `{"detail": "Internal server error"}` | DB delete failed. |
+
+- **Side effects**: deletes the matching row (`WHERE id = $1 AND owner_id = $2`). The delete is unconditional of the `deletable` column at the route layer — the frontend hides the delete control for tutorial notebooks, but the endpoint does not re-check `deletable`.
+- **Delegation target**: `NotebookDb::delete(notebook_id, user_id) -> bool` (returns whether a row was removed). `false` maps to the `404 {"error": "Notebook not found"}` envelope.
+- **Validation rules**: `notebook_id` parsed via `Path<Uuid>`; malformed UUIDs trigger `400 {"detail": "..."}`.
+- **Permission gate**: ownership check via `WHERE id = $1 AND owner_id = $2`. A row owned by another user returns `404` (not `403`), matching the `PUT` handler — avoids leaking the existence of foreign rows.
+- **OpenAPI**: tag `notebooks`. Path param `notebook_id: uuid`. Responses `200`/`401`/`404`/`500`.
+- **Telemetry**: span name `cognee.api.notebooks.delete`. Attributes: `cognee.user.id`, `cognee.notebook.id`.
+- **Python parity notes**: the 404 envelope is `{"error": ...}`, not `{"detail": ...}` — same deviation as the `PUT` handler.
 
 ## 3. Cross-cutting behavior
 

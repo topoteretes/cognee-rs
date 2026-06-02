@@ -190,26 +190,10 @@ Run the unit tests:
 cargo test --package cognee-llm --lib
 ```
 
-### Integration Tests with Ollama
+### Integration Tests
 
-The crate includes integration tests that use a local Ollama instance for realistic testing:
-
-```bash
-# Run all integration tests (requires Ollama)
-./scripts/run_tests_with_local_env.sh
-
-# Run a specific test
-./scripts/run_tests_with_local_env.sh test_entity_extraction
-```
-
-The test script automatically:
-- Starts the Ollama Docker container if not running
-- Waits for the model to be ready
-- Sets environment variables (`OPENAI_URL`, `OPENAI_TOKEN`, `OPENAI_MODEL`)
-- Runs the tests
-- Shows cleanup instructions
-
-**Manual testing:**
+The crate includes integration tests that exercise a real OpenAI-compatible
+endpoint (OpenAI, or a local Ollama instance via its OpenAI-compatible API):
 
 ```bash
 # Set environment variables
@@ -223,16 +207,13 @@ cargo test --package cognee-llm --test integration_openai -- --nocapture
 
 Tests will automatically skip if environment variables are not set.
 
-## Next Steps
+## Adapters
 
-- **Anthropic adapter**: Claude support with prompt caching
-- **Ollama native adapter**: Direct HTTP/gRPC without OpenAI compatibility layer
-- **ONNX adapter**: Local inference with quantized models
-- **Streaming support**: Real-time token streaming for all adapters
+Implemented:
+- **`OpenAIAdapter`** — OpenAI-compatible APIs (also works with Ollama/vLLM/LocalAI)
+- **`LiteRtAdapter`** — Android on-device inference via LiteRT (behind the
+  `android-litert` feature, `target_os = "android"`)
 
-## Next Steps
-
-Planned adapters:
+Planned:
 - Anthropic adapter (Claude with tool use)
-- Ollama adapter (OpenAI-compatible API)
-- Local ONNX Runtime adapter (on-device inference)
+- Streaming support: real-time token streaming for all adapters

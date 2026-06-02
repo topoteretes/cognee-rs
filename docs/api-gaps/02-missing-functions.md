@@ -1,6 +1,19 @@
 # Gap 2: Functions Missing from Rust Entirely
 
-This document details every high-level API function present in the Python SDK v1 that has no equivalent in the Rust codebase.
+> **Status (2026-06): RESOLVED.** All six functions are now implemented under
+> `crates/lib/src/api/`:
+> - `forget()` → `crates/lib/src/api/forget.rs`
+> - `update()` → `crates/lib/src/api/update.rs`
+> - `prune_data()` / `prune_system()` → `crates/lib/src/api/prune.rs`
+> - `recall()` → `crates/lib/src/api/recall.rs`
+> - `remember()` / `remember_entry()` → `crates/lib/src/api/remember.rs`
+> - `improve()` → `crates/lib/src/api/improve.rs`
+>
+> All are re-exported from `crates/lib/src/api/mod.rs`. The per-function
+> "Status" lines below are retained as the original analysis; each is now
+> **Implemented**.
+
+This document details every high-level API function present in the Python SDK v1 that had no equivalent in the Rust codebase.
 
 **Implementation plan:** [`impl/02-missing-functions-plan.md`](impl/02-missing-functions-plan.md)
 
@@ -8,7 +21,7 @@ This document details every high-level API function present in the Python SDK v1
 
 ## 1. `remember()` -- Smart Ingestion with Session Bridging
 
-**Status: Not Started**
+**Status: Implemented** (`crates/lib/src/api/remember.rs`)
 
 ### Python Reference
 
@@ -65,7 +78,7 @@ A promise-like object with:
 
 ## 2. `recall()` -- Smart Search with Session Routing
 
-**Status: Not Started**
+**Status: Implemented** (`crates/lib/src/api/recall.rs`)
 
 ### Python Reference
 
@@ -113,7 +126,7 @@ async def recall(
 
 ## 3. `improve()` -- Bidirectional Session-Graph Bridge
 
-**Status: Not Started** (Stage 3 exists as `memify()`)
+**Status: Implemented** (`crates/lib/src/api/improve.rs`; all four stages, building on `memify()` for Stage 3)
 
 ### Python Reference
 
@@ -167,7 +180,7 @@ async def improve(
 
 ## 4. `update()` -- Data Replacement
 
-**Status: Not Started**
+**Status: Implemented** (`crates/lib/src/api/update.rs`)
 
 ### Python Reference
 
@@ -206,7 +219,7 @@ Note: The Python `update()` takes `dataset_id: UUID` (not name), meaning the cal
 
 ## 5. `forget()` -- Unified Deletion API
 
-**Status: Not Started**
+**Status: Implemented** (`crates/lib/src/api/forget.rs`; uses a `ForgetTarget` enum for the three scopes)
 
 ### Python Reference
 
@@ -246,7 +259,7 @@ Dataset name-to-ID resolution is available via `IngestDb::get_dataset_by_name()`
 
 ## 6. `prune` -- System/Data Cleanup
 
-**Status: Not Started**
+**Status: Implemented** (`crates/lib/src/api/prune.rs`; `prune_data()` + `prune_system()` with a `PruneTarget` selector)
 
 ### Python Reference
 
@@ -292,20 +305,16 @@ Note: Python's `prune_system` also handles multi-tenant "backend access control"
 
 ## Summary
 
-| Function | Status | Complexity | Depends On |
-|----------|--------|------------|------------|
-| `remember()` | **Not Started** | Medium | `improve()`, Session Manager |
-| `recall()` | **Not Started** | Medium | Session keyword search, query router |
-| `improve()` | **Not Started** (Stage 3 only as `memify()`) | High | Feedback fields, graph property updates, session sync |
-| `update()` | **Not Started** | Low | Existing delete + add + cognify |
-| `forget()` | **Not Started** | Low | Existing `DeleteService`, session prune |
-| `prune` | **Not Started** | Low-Medium | Trait extensions for bulk cleanup |
+| Function | Status | Location |
+|----------|--------|----------|
+| `remember()` | **Implemented** | `crates/lib/src/api/remember.rs` |
+| `recall()` | **Implemented** | `crates/lib/src/api/recall.rs` |
+| `improve()` | **Implemented** | `crates/lib/src/api/improve.rs` |
+| `update()` | **Implemented** | `crates/lib/src/api/update.rs` |
+| `forget()` | **Implemented** | `crates/lib/src/api/forget.rs` |
+| `prune` | **Implemented** | `crates/lib/src/api/prune.rs` |
 
-### Recommended Implementation Order
+### Recommended Implementation Order (historical)
 
-1. **`forget()`** -- Low complexity, thin wrapper over existing `DeleteService`
-2. **`update()`** -- Low complexity, composition of existing primitives
-3. **`prune`** -- Low-Medium, requires trait extensions but straightforward
-4. **`recall()`** -- Medium, session keyword search is simple; auto-router can start rule-based
-5. **`remember()`** -- Medium, depends on `improve()` for full feature parity
-6. **`improve()`** -- High, requires feedback system, graph property updates, session sync
+The original implementation order (all now complete): `forget()` → `update()`
+→ `prune` → `recall()` → `remember()` → `improve()`.

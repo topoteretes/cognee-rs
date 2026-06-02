@@ -1,5 +1,12 @@
 # Implementation Plan: Missing API Functions (Gap 2)
 
+> **Status (2026-06): COMPLETED.** All six functions described in this plan have
+> been implemented under `crates/lib/src/api/` (`forget.rs`, `update.rs`,
+> `prune.rs`, `recall.rs`, `remember.rs`, `improve.rs`). Some final signatures
+> differ from the proposals below (e.g. `forget()` uses a `ForgetTarget` enum
+> and `improve()` takes an `ImproveParams` struct), but the functionality is in
+> place. This plan is retained as a historical record.
+
 Detailed step-by-step plan for implementing the 6 missing high-level API functions.
 Each section specifies exact files to create/modify, proposed signatures, and dependencies.
 

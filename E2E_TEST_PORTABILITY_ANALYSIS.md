@@ -108,7 +108,7 @@ const AI_TEXT: &str = include_str!("test_data/artificial_intelligence.txt");
 
 **File:** `crates/cognify/tests/integration_default_backend.rs`
 
-Required env vars (set by `scripts/run_tests_with_local_env.sh`):
+Required env vars (set by `scripts/run_tests_with_openai.sh`):
 `OPENAI_TOKEN`, `OPENAI_URL`, `OPENAI_MODEL`, `COGNEE_E2E_EMBED_MODEL_PATH`
 
 ```
@@ -227,7 +227,7 @@ const QUANTUM_TEXT: &str = include_str!("test_data/quantum_computers.txt");
 
 **File:** `crates/search/tests/integration_search_matrix.rs`
 
-Required env vars (set by `scripts/run_tests_with_local_env.sh`):
+Required env vars (set by `scripts/run_tests_with_openai.sh`):
 `OPENAI_TOKEN`, `OPENAI_URL`, `OPENAI_MODEL`, `COGNEE_E2E_EMBED_MODEL_PATH`
 
 ```

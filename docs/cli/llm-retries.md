@@ -4,10 +4,12 @@ The Rust CLI supports configuring structured-output retry attempts for OpenAI-co
 
 ## Commands
 
-You can override retries per command run with:
+The `--llm-max-retries` flag is accepted by `cognify`, `add-and-cognify`, and
+`search`. You can override retries per command run with:
 
 ```bash
 cognee-cli cognify --llm-max-retries 4
+cognee-cli add-and-cognify ./data --llm-max-retries 4
 cognee-cli search "What is TechCorp?" --llm-max-retries 4
 ```
 

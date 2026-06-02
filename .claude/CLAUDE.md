@@ -31,8 +31,15 @@ cognee-rust/
 │   ├── ontology/               # Ontology resolution (RDF/JSON-LD loader, NoOp resolver)
 │   ├── delete/                 # Dataset/data deletion across all backends
 │   ├── core/                   # Task pipeline orchestration framework
+│   ├── cloud/                  # Cloud integration: serve()/disconnect() + CloudClient (ports Python serve/)
+│   ├── http-server/            # axum HTTP server (library + cognee-http-server binary)
+│   ├── visualization/          # Interactive self-contained HTML knowledge-graph visualization (d3.js)
+│   ├── observability/          # OpenTelemetry tracing pipeline (OTLP exporter, telemetry feature)
+│   ├── telemetry/              # Product-analytics client (send_telemetry → prometh.ai, opt-out)
+│   ├── logging/                # Shared file logging (rotation, Python-compatible plain formatter)
 │   ├── lib/                    # Top-level library aggregating all crates
-│   ├── cli/                    # CLI binary (add, cognify, search, delete, config, run-sequence)
+│   ├── cli/                    # CLI binary (add, cognify, memify, search, delete, config, run-sequence, visualize, serve)
+│   ├── bench/                  # Criterion benchmarks (add + cognify + search pipeline)
 │   ├── utils/                  # Shared utilities
 │   └── test-utils/             # Mock implementations (MockStorage, MockGraphDB, MockVectorDB)
 ├── capi/                       # C API bindings (FFI)
@@ -85,11 +92,25 @@ serialized in-process, and cross-process locking is intentionally out of scope.
 
 **cognee-core** — Async runtime, task scheduling, and pipeline execution primitives. Traits: `PipelineWatcher`, `ExecStatusManager`. Impls: `NoopWatcher`, `RayonThreadPool`, `NoopExecStatusManager`.
 
-**cognee-lib** — Unified public API facade that re-exports all crates.
+**cognee-cloud** — Cloud integration. Ports Python's `cognee/api/v1/serve/` so the Rust `serve()` / `disconnect()` stay behavior- and on-disk-format-compatible with the Python reference. Main types: `CloudClient`, plus `serve()`/`disconnect()` entry points. Surfaces via the CLI `serve`/`disconnect` subcommands (feature-gated).
 
-**cognee-cli** — Command-line binary: `add`, `cognify`, `add-and-cognify`, `memify`, `search`, `delete`, `config`, `run-sequence`.
+**cognee-http-server** — `axum`-based HTTP server. Library exposes `build_router` (assembles the router with all middleware and sub-routers), `run` (binds a TCP listener and drives `axum::serve`), and `AppState`. Also builds the `cognee-http-server` binary. Routers mirror the Python FastAPI surface under `/api/v1/*` (add, cognify, memify, search, datasets, delete, users, permissions, auth, sessions, notebooks, remember, etc.). Documented in `docs/http-server/` (per-router docs under `routers/`).
 
-**cognee-utils** — Shared utilities (retry logic, ID generation).
+**cognee-visualization** — Interactive HTML knowledge-graph visualization. Ports the Python `cognee_network_visualization` module: renders all nodes + edges of a `GraphDBTrait` into a single self-contained HTML file using d3.js v7 (force-directed layout, Canvas rendering). Entry points: `visualize`/`render`/`render_multi_user`. Surfaces via the CLI `visualize` subcommand.
+
+**cognee-observability** — OpenTelemetry tracing pipeline. Bridges the workspace's `#[tracing::instrument]` sites into an OTLP exporter. Entry point: `init_telemetry` (returns a tracing layer + RAII `TelemetryGuard` that flushes on drop). Activated by `COGNEE_TRACING_ENABLED=true` or a non-empty `OTEL_EXPORTER_OTLP_ENDPOINT`; the real exporter is gated behind the `telemetry` feature (no-op layer otherwise). See `docs/observability/opentelemetry.md`.
+
+**cognee-telemetry** — Product-analytics client (`send_telemetry`). Mirrors Python's `send_telemetry`: a fire-and-forget POST to `https://test.prometh.ai` per public API call. Enabled by default (Python parity); opt out with `TELEMETRY_DISABLED`, `ENV=test|dev`, or `--no-default-features`. See `docs/observability/send_telemetry.md`.
+
+**cognee-logging** — Shared file-based logging: rotation, the Python-compatible plain-text formatter, and a default library-noise-suppressing `EnvFilter`. Entry point: `init_logging`, called by the CLI and HTTP server. Internal infrastructure — library crates must not depend on it. Env-var surface (`COGNEE_LOG_*`, `LOG_LEVEL`, `LOG_FILE_NAME`) documented in the root README's "Logging" section.
+
+**cognee-bench** — Criterion benchmark crate (`batch_add_cognify` bench) exercising the add + cognify + search pipeline.
+
+**cognee-lib** — Unified public API facade. Re-exports all crates and adds an `api/` module with top-level functions mirroring the Python SDK: `forget`, `update`, `prune`, `recall`, `remember`, `improve`, plus `DatasetManager`. Houses the shared `Settings`/`config` (with runtime setters like `set_llm_*`, `set_embedding_*`, `set_vector_db_*`).
+
+**cognee-cli** — Command-line binary (`cognee-cli`): `add`, `cognify`, `add-and-cognify`, `memify`, `search`, `delete`, `config`, `run-sequence`, plus feature-gated `visualize`, `serve`, `disconnect`.
+
+**cognee-utils** — Shared utilities: retry logic, deterministic ID generation (`generate_node_id`, `generate_edge_name`, `generate_node_name`, `NAMESPACE_OID`), secret redaction (`redact`), and tracing attribute keys (`tracing_keys`).
 
 **cognee-test-utils** — Test helpers and mock implementations for integration tests.
 
@@ -128,8 +149,14 @@ serialized in-process, and cross-process locking is intentionally out of scope.
 - **Session management** — `SessionStore` trait with `FsSessionStore`, `RedisSessionStore`, `SeaOrmSessionStore` backends; integrated in search pipeline for QA history
 - **Ontology resolution** — RDF/JSON-LD/Turtle ontology loading with entity type matching
 - **Deletion** — scoped cascading across relational DB, graph DB, vector DB, and file storage (with dry-run via `preview()`)
-- **CLI** — `add`, `cognify`, `add-and-cognify`, `search`, `delete`, `config`, `run-sequence`
+- **CLI** — `add`, `cognify`, `add-and-cognify`, `memify`, `search`, `delete`, `config`, `run-sequence`, plus feature-gated `visualize`, `serve`, `disconnect`
 - **Memify pipeline** — Standalone graph enrichment: reads existing knowledge graph via `GraphDBTrait`, creates `Triplet` objects from all edges, embeds triplet text, indexes into `"Triplet"/"text"` vector collection. Idempotent (re-runnable). Configurable via `MemifyConfig` with optional node type/name filtering. CLI: `memify` subcommand.
+- **HTTP server** — `cognee-http-server` (axum) exposing the Python FastAPI surface under `/api/v1/*` (add, cognify, memify, search, datasets, delete, users, permissions, auth, sessions, notebooks, remember, etc.). Documented in `docs/http-server/`.
+- **Cloud serve/disconnect** — `cognee-cloud` ports Python's `serve()`/`disconnect()` (on-disk-format-compatible); surfaced via CLI `serve`/`disconnect`.
+- **Top-level API parity** — `cognee-lib`'s `api/` module adds `forget`, `update`, `prune`, `recall`, `remember`, `improve`, and `DatasetManager`, plus runtime config setters, matching the Python SDK surface.
+- **Knowledge-graph visualization** — `cognee-visualization` renders a self-contained d3.js HTML view of the graph (`visualize`/`render`/`render_multi_user`); CLI `visualize`.
+- **Observability & analytics** — `cognee-observability` (OpenTelemetry/OTLP tracing, `telemetry` feature) and `cognee-telemetry` (opt-out product analytics). See `docs/observability/`.
+- **Logging** — `cognee-logging` (`init_logging`): stdout + rotating file logs, Python-compatible plain formatter, JSON option. Used by CLI and HTTP server.
 - **Language bindings** — C API (`capi/`), Python via PyO3 (`python/`), JavaScript via Neon (`js/`), Android runner (`android/`)
 - **Cross-SDK E2E tests** — `e2e-cross-sdk/` with Docker harness: add parity, cross-read, cognify structural comparison (Python ↔ Rust)
 - **Test suite** — Python-compat ID tests, schema compatibility tests, E2E search matrix (9 search types), CLI E2E tests, deletion tests, embedding tests, fact extraction tests
@@ -158,10 +185,13 @@ serialized in-process, and cross-process locking is intentionally out of scope.
 | `chrono` | Timestamps |
 | `tokenizers` | HuggingFace tokenization (embedding engine + chunking token counter) |
 | `tiktoken-rs` | OpenAI cl100k_base BPE tokenization (chunking token counter, optional) |
-| `tracing` | Structured logging and instrumentation |
+| `tracing` / `tracing-subscriber` | Structured logging and instrumentation |
+| `opentelemetry` / `opentelemetry-otlp` / `tracing-opentelemetry` | OTLP trace export (behind `telemetry` feature) |
+| `axum` / `tower` / `tower-http` | HTTP server (`cognee-http-server`) |
 | `async-trait` | Async trait support |
 | `thiserror` | Error type derivation |
 | `clap` | CLI argument parsing |
+| `criterion` | Benchmarking (`cognee-bench`) |
 | `pyo3` | Python bindings |
 | `neon` | Node.js/JavaScript bindings |
 

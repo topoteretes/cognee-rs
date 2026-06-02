@@ -15,5 +15,5 @@ canonical table and the multi-process rotation warning.
 CLI-specific example — emit JSON-formatted logs to a custom directory:
 
 ```bash
-COGNEE_LOG_FORMAT=json COGNEE_LOGS_DIR=/var/log/cognee cognee cognify ./data
+COGNEE_LOG_FORMAT=json COGNEE_LOGS_DIR=/var/log/cognee cognee-cli cognify -d main_dataset
 ```

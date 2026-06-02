@@ -41,3 +41,40 @@ let result = retry_with_backoff(
 - `max_delay_ms`: Maximum delay cap
 - `backoff_multiplier`: Exponential backoff multiplier (default: 2.0)
 - `jitter_factor`: Optional randomization factor (0.0 to 1.0)
+
+### ID Generation
+
+Deterministic UUID v5 generation (content-addressed) and name normalization,
+shared across the codebase via the `NAMESPACE_OID` constant.
+
+```rust
+use cognee_utils::{generate_node_id, generate_edge_name, generate_node_name};
+
+// Same normalized input → same UUID (lowercase, spaces → underscores, drop apostrophes)
+let id = generate_node_id("Alice Smith"); // UUID v5 of "alice_smith"
+
+// Edge names normalize like node IDs but return the string label
+assert_eq!(generate_edge_name("Works At"), "works_at");
+
+// Node names normalize for display (lowercase, drop apostrophes, keep spaces)
+assert_eq!(generate_node_name("Alice Smith"), "alice smith");
+```
+
+### Secret Redaction
+
+`redact` mirrors Python's `redact_secrets`: it masks OpenAI-style keys,
+`api_key=`/`api-key=`, `Bearer <token>`, and `password=` values, keeping the
+first 6 characters and replacing the rest with `***REDACTED***`. Returns a
+`Cow<str>` to avoid allocating when there is nothing to redact.
+
+```rust
+use cognee_utils::redact;
+
+let safe = redact("Authorization: Bearer sk-secret-token");
+```
+
+### Tracing Attribute Keys
+
+`tracing_keys` exposes shared `cognee.*` span-attribute key constants (e.g.
+`COGNEE_LLM_MODEL`, `COGNEE_SEARCH_TYPE`, `COGNEE_PIPELINE_NAME`) so
+instrumentation across crates uses consistent attribute names.

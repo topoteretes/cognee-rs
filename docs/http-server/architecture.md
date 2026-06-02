@@ -277,6 +277,7 @@ pub async fn build_router(state: AppState) -> Result<Router, ServerError> {
         .nest("/activity",      activity::router())
         .nest("/remember",      remember::router())
         .nest("/recall",        recall::router())
+        .nest("/sessions",      sessions::router())
         .nest("/improve",       improve::router())
         .nest("/forget",        forget::router());
 

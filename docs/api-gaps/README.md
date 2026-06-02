@@ -1,5 +1,12 @@
 # Cognee Rust SDK — API v1 Gap Analysis
 
+> **Status (2026-06): RESOLVED — historical document.** Every gap catalogued
+> below has since been implemented in the Rust codebase. This file is retained
+> as a planning/audit record; the per-gap status tables and notes have been
+> annotated inline with where the implementation now lives. The "Recommended
+> Implementation Order" and "Document Structure" sections describe the original
+> plan and no longer reflect outstanding work.
+
 This document catalogs the verified differences between the Python cognee SDK's v1 library API and the Rust implementation. The focus is on **library-level methods** exposed through the umbrella crate (`cognee-lib`), not HTTP endpoints or horizontal feature breadth (number of search types, file formats, LLM providers, etc.).
 
 Each gap has a description document and a separate implementation plan in [impl/](impl/).
@@ -8,7 +15,11 @@ Each gap has a description document and a separate implementation plan in [impl/
 
 ---
 
-## 1. Missing Parameters on Existing Functions
+## 1. Missing Parameters on Existing Functions — RESOLVED
+
+> **Status: Implemented.** The missing parameters have been added to the
+> pipeline functions and config builders. Backend overrides and the additional
+> `add`/`cognify`/`search`/`memify` parameters are wired through.
 
 The core pipeline functions (`add`, `cognify`, `search`, `memify`) exist in both SDKs but the Rust versions accept fewer parameters than their Python equivalents.
 
@@ -35,7 +46,11 @@ The core pipeline functions (`add`, `cognify`, `search`, `memify`) exist in both
 
 ---
 
-## 2. Functions Missing from Rust Entirely
+## 2. Functions Missing from Rust Entirely — RESOLVED
+
+> **Status: Implemented.** All six functions now exist under
+> `crates/lib/src/api/`: `forget.rs`, `update.rs`, `prune.rs`, `recall.rs`,
+> `remember.rs`, `improve.rs` (re-exported from `crates/lib/src/api/mod.rs`).
 
 Six high-level API functions from the Python SDK have no equivalent in Rust. These are convenience compositions and session-integration layers built on top of the core primitives.
 
@@ -58,7 +73,13 @@ Notable findings from verification:
 
 ---
 
-## 3. Configuration API
+## 3. Configuration API — RESOLVED
+
+> **Status: Implemented.** Runtime setter methods now exist on the config type
+> in `crates/lib/src/config.rs` (e.g. `set_llm_provider`, `set_llm_model`,
+> `set_embedding_provider`, `set_embedding_endpoint`, `set_embedding_api_key`,
+> `set_vector_db_provider`, …). The original description below is retained for
+> historical context.
 
 The Python SDK provides 33 runtime setter methods on a `config` class. The Rust SDK has **no setter methods**. Configuration is read once from environment variables at startup, and `ComponentManager` caches components in `tokio::sync::OnceCell` fields (one-time lazy init, no reinitialization).
 
@@ -76,11 +97,22 @@ Additional finding: `Settings` struct lacks `embedding_provider`, `embedding_end
 
 ---
 
-## 4. User / Authentication / Multi-Tenancy
+## 4. User / Authentication / Multi-Tenancy — RESOLVED
+
+> **Status: Implemented.** The Rust SDK now ships `User`/`Tenant`/`Role`/
+> permission models (`crates/models/src/{user,tenant,role,permission}.rs`),
+> `UserDb`/`TenantDb`/`RoleDb` traits + ops (`crates/database/src/traits/` and
+> `crates/database/src/ops/`), role/tenant-aware ACL resolution
+> (`has_permission_with_roles`, `authorized_dataset_ids_with_roles`),
+> `select_tenant`, the user/tenant/role migrations
+> (`m20250422_000001_user_tenant_role_tables`, `m20260428_000001_tenants_rbac`,
+> `m20260512_000001_add_parent_user_id`), and `get_or_create_default_user`
+> (`crates/lib/src/api/user.rs`). Authentication (JWT/OAuth) remains an
+> out-of-scope HTTP concern as noted in the gap doc.
 
 The Python SDK has a full user management layer with polymorphic principal hierarchy (`User`/`Tenant`/`Role` all inheriting `Principal`), 3-level permission resolution (user → tenant → role), and auto-created default user.
 
-The Rust SDK has **no user model**. It uses a static `default_user_id` UUID from config. However, the ACL infrastructure is more complete than initially described:
+The Rust SDK historically had **no user model** (static `default_user_id` UUID from config). At the time of writing, the ACL infrastructure was already more complete than initially described:
 - `principals`, `permissions`, and `acls` tables already exist (from `m20250201_000001_acl_tables` migration)
 - `AclDb` trait with `has_permission`, `authorized_dataset_ids`, `grant_permission`, `revoke_permission`
 - `PERMISSION_NAMES` constants defined in `ops/acl.rs`
@@ -99,7 +131,12 @@ The Rust SDK has **no user model**. It uses a static `default_user_id` UUID from
 
 ---
 
-## 5. Dataset Management
+## 5. Dataset Management — RESOLVED
+
+> **Status: Implemented.** The `DatasetManager` facade now exists at
+> `crates/lib/src/api/datasets.rs` (with a `DatasetDb` supertrait over
+> `IngestDb + DeleteDb`), exposing `list_datasets`, `list_data`, `has_data`,
+> `get_status`, `empty_dataset`, `delete_data`, `delete_all`, etc.
 
 The Python SDK provides a `datasets` class with 8 methods for dataset CRUD. Rust has extensive low-level infrastructure but **no high-level facade** composing it with permission checks.
 
@@ -117,7 +154,14 @@ The gap is a `DatasetManager` facade that unifies these into Python-equivalent c
 
 ---
 
-## 6. Session Management
+## 6. Session Management — RESOLVED
+
+> **Status: Implemented.** `SessionQAEntry` now carries `feedback_text`,
+> `feedback_score`, and `used_graph_element_ids`
+> (`crates/session/src/types.rs`), and the `SessionStore` trait gained
+> `update_qa_entry`, `get_graph_context`, and `set_graph_context`
+> (`crates/session/src/session_store.rs`). Feedback-driven enrichment is wired
+> through `improve()`.
 
 Both SDKs have session storage (Fs, Redis, SeaOrm backends). The Python SDK builds a feedback-driven enrichment cycle on top that Rust lacks.
 
@@ -136,9 +180,14 @@ Key finding from verification: FS and Redis store implementations already have i
 
 ---
 
-## 7. Ontology Management
+## 7. Ontology Management — RESOLVED
 
-Core ontology resolution is **fully implemented** in both SDKs (with Rust having broader format support). The gap is in **file management** — CRUD operations on ontology files.
+> **Status: Implemented.** The `OntologyManager` (with `OntologyMetadata`) now
+> exists at `crates/ontology/src/manager.rs`, providing `upload`,
+> `upload_batch`, `list`, `get_contents`, `get_contents_batch`, `delete`, and
+> `build_resolver` with per-user storage and metadata tracking.
+
+Core ontology resolution is **fully implemented** in both SDKs (with Rust having broader format support). The gap was in **file management** — CRUD operations on ontology files.
 
 Verification corrections:
 - Python API is `OntologyService` class methods (not standalone functions), with `ontology_key` parameter for keying files
@@ -156,9 +205,18 @@ Verification corrections:
 
 ---
 
-## 8. Environment Variable Coverage
+## 8. Environment Variable Coverage — RESOLVED
 
-The Python SDK reads 105 environment variables. The Rust SDK covers 43 (counting both central `Settings` and crate-local configs).
+> **Status: Implemented.** The previously-uncovered categories are now read:
+> Session/Cache (`CACHE_BACKEND`, `CACHE_HOST`, `CACHE_PORT`, `CACHE_USERNAME`,
+> `CACHE_PASSWORD`, `SESSION_TTL_SECONDS`, `CACHE_ROOT_DIRECTORY` in
+> `crates/lib/src/config.rs`), Authentication (`DEFAULT_USER_EMAIL`,
+> `DEFAULT_USER_PASSWORD`), Observability (`OTEL_*` wired via the
+> `cognee-observability` crate), and Logging (`COGNEE_LOGS_DIR`,
+> `COGNEE_LOG_FILE`, `LOG_LEVEL`, etc. in `crates/logging/`). The coverage
+> table below reflects the original snapshot.
+
+The Python SDK reads 105 environment variables. The Rust SDK covered 43 at the time of this snapshot (counting both central `Settings` and crate-local configs).
 
 | Category | Python Vars | Rust Covered | Coverage |
 |----------|-------------|-------------|----------|
@@ -183,6 +241,9 @@ Key finding: Several embedding env vars (`EMBEDDING_API_KEY`, `EMBEDDING_ENDPOIN
 ---
 
 ## Recommended Implementation Order
+
+> **Historical.** All phases below have since been completed. Retained as a
+> record of the original sequencing plan.
 
 Based on dependency chains and impact:
 

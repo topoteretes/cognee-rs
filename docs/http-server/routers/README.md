@@ -35,18 +35,19 @@ One row per router. Update the row in the same PR that lands or changes the unde
 | 16 | improve | `/api/v1/improve` | [improve.md](improve.md) | **Done** — P8 Wave-B parity: [`test_http_improve.py`](../../../e2e-cross-sdk/harness/test_http_improve.py) |
 | 17 | search | `/api/v1/search` | [search.md](search.md) | **Done** — P8 Wave-A parity (Chunks/Summaries/ChunksLexical): [`test_http_search.py`](../../../e2e-cross-sdk/harness/test_http_search.py) |
 | 18 | recall | `/api/v1/recall` | [recall.md](recall.md) | **Done** — P8 Wave-B parity: [`test_http_recall.py`](../../../e2e-cross-sdk/harness/test_http_recall.py) |
-| 19 | forget | `/api/v1/forget` | [forget.md](forget.md) | **Done** — P8 Wave-A parity: [`test_http_forget.py`](../../../e2e-cross-sdk/harness/test_http_forget.py) |
-| 20 | delete (deprecated) | `/api/v1/delete` | [delete.md](delete.md) | **Done** |
-| 21 | settings | `/api/v1/settings` | [settings.md](settings.md) | **Done** |
-| 22 | configuration | `/api/v1/configuration` | [configuration.md](configuration.md) | **Done** |
-| 23 | permissions | `/api/v1/permissions` | [permissions.md](permissions.md) | **Done** — P8 Wave-C parity: [`test_http_permissions.py`](../../../e2e-cross-sdk/harness/test_http_permissions.py) |
-| 24 | visualize | `/api/v1/visualize` | [visualize.md](visualize.md) | **Done** — P8 Wave-C parity: [`test_http_visualize.py`](../../../e2e-cross-sdk/harness/test_http_visualize.py) |
-| 25 | activity | `/api/v1/activity` | [activity.md](activity.md) | **Done** |
-| 26 | sync | `/api/v1/sync` | [sync.md](sync.md) | **Done** — P8 Wave-C parity: [`test_http_sync.py`](../../../e2e-cross-sdk/harness/test_http_sync.py) |
-| 27 | llm | `/api/v1/llm` | [llm.md](llm.md) | **Done** — P8 Wave-B parity: [`test_http_llm.py`](../../../e2e-cross-sdk/harness/test_http_llm.py) |
-| 28 | responses | `/api/v1/responses` | [responses.md](responses.md) | **Done** |
-| 29 | notebooks | `/api/v1/notebooks` | [notebooks.md](notebooks.md) | **Done** |
-| 30 | checks (cloud) | `/api/v1/checks` | [checks.md](checks.md) | **Done** |
+| 19 | sessions | `/api/v1/sessions` | [sessions.md](sessions.md) | **Done** |
+| 20 | forget | `/api/v1/forget` | [forget.md](forget.md) | **Done** — P8 Wave-A parity: [`test_http_forget.py`](../../../e2e-cross-sdk/harness/test_http_forget.py) |
+| 21 | delete (deprecated) | `/api/v1/delete` | [delete.md](delete.md) | **Done** |
+| 22 | settings | `/api/v1/settings` | [settings.md](settings.md) | **Done** |
+| 23 | configuration | `/api/v1/configuration` | [configuration.md](configuration.md) | **Done** |
+| 24 | permissions | `/api/v1/permissions` | [permissions.md](permissions.md) | **Done** — P8 Wave-C parity: [`test_http_permissions.py`](../../../e2e-cross-sdk/harness/test_http_permissions.py) |
+| 25 | visualize | `/api/v1/visualize` | [visualize.md](visualize.md) | **Done** — P8 Wave-C parity: [`test_http_visualize.py`](../../../e2e-cross-sdk/harness/test_http_visualize.py) |
+| 26 | activity | `/api/v1/activity` | [activity.md](activity.md) | **Done** |
+| 27 | sync | `/api/v1/sync` | [sync.md](sync.md) | **Done** — P8 Wave-C parity: [`test_http_sync.py`](../../../e2e-cross-sdk/harness/test_http_sync.py) |
+| 28 | llm | `/api/v1/llm` | [llm.md](llm.md) | **Done** — P8 Wave-B parity: [`test_http_llm.py`](../../../e2e-cross-sdk/harness/test_http_llm.py) |
+| 29 | responses | `/api/v1/responses` | [responses.md](responses.md) | **Done** |
+| 30 | notebooks | `/api/v1/notebooks` | [notebooks.md](notebooks.md) | **Done** |
+| 31 | checks (cloud) | `/api/v1/checks` | [checks.md](checks.md) | **Done** |
 
 The implementation phases in [../plan.md](../plan.md#4-implementation-phases) drive the order in which these docs need to be ready.
 
@@ -192,7 +193,7 @@ When creating per-router docs, prioritize as the implementation plan suggests ([
 2. **P1** (auth): `auth`, `auth-register`, `auth-reset-password`, `auth-verify`, `api-keys`, `users`, `users-by-email`.
 3. **P2** (write path): `add`, `datasets`, `ontologies`, `update`, `delete`, `forget`.
 4. **P3** (pipelines + WS): `cognify`, `memify`, `remember`, `improve`.
-5. **P4** (read path): `search`, `recall`, `llm`, `visualize`.
+5. **P4** (read path): `search`, `recall`, `sessions`, `llm`, `visualize`.
 6. **P5** (admin): `permissions`, `settings`, `configuration`.
 7. **P6** (observability): `activity`, `sync`, `checks`.
 8. **P7** (advanced): `notebooks`, `responses`.

@@ -1,99 +1,100 @@
 # Cognee-Embedding
 
-Embedding generation for Cognee-Rust using local ONNX models with HuggingFace tokenizers.
+Multi-provider text embedding engine for Cognee-Rust. Supports local ONNX
+inference (BGE-Small-v1.5) plus OpenAI-compatible and Ollama HTTP backends,
+selected at runtime via `EmbeddingConfig`.
+
+## Providers
+
+Selected via `EmbeddingProvider` (or the `EMBEDDING_PROVIDER` env var):
+
+- **`OnnxEmbeddingEngine`** (`onnx` feature) — local ONNX Runtime inference via
+  `ort`, with HuggingFace tokenizers; auto-downloads models from HuggingFace Hub
+- **`OpenAICompatibleEmbeddingEngine`** — OpenAI/Azure/vLLM/llama.cpp/TEI via HTTP
+  (retry + input sanitization)
+- **`OllamaEmbeddingEngine`** — Ollama `/api/embed`
+- **`MockEmbeddingEngine`** — zero vectors for testing (`MOCK_EMBEDDING=true`)
+
+The default provider is **OpenAI `text-embedding-3-small`** (1536-d) on host
+platforms and local **ONNX** on Android (when the `onnx` feature is enabled).
 
 ## Features
 
-- **ONNX Runtime:** Efficient local inference via `ort` crate
+- **ONNX Runtime:** Efficient local inference via `ort` crate (behind the `onnx` feature)
 - **HuggingFace Tokenizers:** Proper BPE/WordPiece tokenization matching Python fastembed
 - **Batch Processing:** Process multiple texts in single inference call
 - **L2 Normalization:** Unit vectors for cosine similarity
-- **Python Parity:** Embeddings match Python's FastembedEmbeddingEngine
 - **Async API:** Non-blocking via `spawn_blocking`
 
 ## Quick Start
 
-### Automatic Download (Recommended)
+### From environment (Recommended)
 
-The embedding engine will automatically download models and tokenizers from HuggingFace Hub if not found locally:
+`EmbeddingConfig::from_env()` reads the same env vars as the Python SDK and
+`create_engine()` returns the appropriate provider as `Arc<dyn EmbeddingEngine>`:
 
 ```rust
-use cognee_embedding::{
-    config::EmbeddingConfig,
-    engine::EmbeddingEngine,
-    onnx::OnnxEmbeddingEngine,
-};
+use cognee_embedding::EmbeddingConfig;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // 1. Configure engine
-    let config = EmbeddingConfig::bge_small("./target/models");
-    
+    // Reads EMBEDDING_PROVIDER, EMBEDDING_MODEL, EMBEDDING_ENDPOINT, etc.
+    let config = EmbeddingConfig::from_env();
+    let engine = config.create_engine().await?;
+
+    let texts = ["Cognee transforms documents into AI memory"];
+    let embeddings = engine.embed(&texts).await?;
+
+    println!("Dimension: {}", embeddings[0].len());
+    Ok(())
+}
+```
+
+### Local ONNX with automatic download
+
+With the `onnx` feature, `OnnxEmbeddingEngine` auto-downloads the model and
+tokenizer from HuggingFace Hub if not found locally. It is configured with an
+`OnnxEmbeddingConfig`:
+
+```rust
+use cognee_embedding::{EmbeddingEngine, OnnxEmbeddingConfig, OnnxEmbeddingEngine};
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // 1. Configure the ONNX engine (BGE-Small-v1.5 by default)
+    let config = OnnxEmbeddingConfig::bge_small("./target/models");
+
     // 2. Create engine (auto-downloads model and tokenizer if missing)
     let engine = OnnxEmbeddingEngine::with_auto_download(config).await?;
-    
-    // 3. Embed texts
-    let texts = vec![
-        "Cognee transforms documents into AI memory".to_string(),
-        "Knowledge graphs enable semantic search".to_string(),
+
+    // 3. Embed texts (note: embed() takes &[&str])
+    let texts = [
+        "Cognee transforms documents into AI memory",
+        "Knowledge graphs enable semantic search",
     ];
-    
+
     let embeddings = engine.embed(&texts).await?;
-    
-    // 4. Use embeddings (each is 384-dim L2-normalized vector)
+
+    // 4. Use embeddings (each is a 384-dim L2-normalized vector)
     for (text, embedding) in texts.iter().zip(embeddings) {
         println!("Text: {}", text);
         println!("Dimension: {}", embedding.len());
         let norm: f32 = embedding.iter().map(|x| x * x).sum::<f32>().sqrt();
         println!("L2 Norm: {:.6}", norm);  // Should be ~1.0
     }
-    
+
     Ok(())
 }
 ```
 
-### Manual Download (Advanced)
+### Manual model placement (Advanced)
 
-If you prefer to download models manually or use pre-existing models, you can use the standard constructor:
+If you prefer to download models manually, use the synchronous constructor
+`OnnxEmbeddingEngine::new(config)` instead of `with_auto_download`. It expects
+the files referenced by the config to already exist:
 
-```rust
-use cognee_embedding::{
-    config::EmbeddingConfig,
-    engine::EmbeddingEngine,
-    onnx::OnnxEmbeddingEngine,
-};
-
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // 1. Manually ensure models exist in target directory
-    // - Model: ./target/models/BGE-Small-v1.5-model_quantized.onnx
-    // - Tokenizer: ./target/models/bge-small-tokenizer.json
-    
-    // 2. Configure engine
-    let config = EmbeddingConfig::bge_small("./target/models");
-    
-    // 2. Create engine
-    let engine = OnnxEmbeddingEngine::new(config)?;
-    
-    // 3. Embed texts
-    let texts = vec![
-        "Cognee transforms documents into AI memory".to_string(),
-        "Knowledge graphs enable semantic search".to_string(),
-    ];
-    
-    let embeddings = engine.embed(&texts).await?;
-    
-    // 4. Use embeddings (each is 384-dim L2-normalized vector)
-    for (text, embedding) in texts.iter().zip(embeddings) {
-        println!("Text: {}", text);
-        println!("Dimension: {}", embedding.len());
-        let norm: f32 = embedding.iter().map(|x| x * x).sum::<f32>().sqrt();
-        println!("L2 Norm: {:.6}", norm);  // Should be ~1.0
-    }
-    
-    Ok(())
-}
-```
+- Model: `./target/models/BGE-Small-v1.5-model_quantized.onnx`
+- Tokenizer: `./target/models/bge-small-tokenizer.json`
 
 ## Models Supported
 
@@ -106,7 +107,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 - **Max sequence:** 512 tokens
 
 ```rust
-let config = EmbeddingConfig::bge_small("./target/models");
+let config = OnnxEmbeddingConfig::bge_small("./target/models");
 ```
 
 ### all-MiniLM-L6-v2
@@ -118,7 +119,7 @@ let config = EmbeddingConfig::bge_small("./target/models");
 - **Max sequence:** 256 tokens
 
 ```rust
-let config = EmbeddingConfig::minilm_l6("./target/models");
+let config = OnnxEmbeddingConfig::minilm_l6("./target/models");
 ```
 
 ## Download API
@@ -170,7 +171,7 @@ cargo test --package cognee-embedding --test integration -- --ignored
 ```rust
 #[async_trait]
 pub trait EmbeddingEngine: Send + Sync {
-    async fn embed(&self, texts: &[String]) -> EmbeddingResult<Vec<Vec<f32>>>;
+    async fn embed(&self, texts: &[&str]) -> EmbeddingResult<Vec<Vec<f32>>>;
     fn dimension(&self) -> usize;
     fn batch_size(&self) -> usize;
     fn max_sequence_length(&self) -> usize;
@@ -179,16 +180,46 @@ pub trait EmbeddingEngine: Send + Sync {
 
 ### Configuration
 
+`EmbeddingConfig` is the provider-agnostic top-level config (use
+`EmbeddingConfig::from_env()` or `EmbeddingConfig::default()`):
+
 ```rust
 pub struct EmbeddingConfig {
-    pub model_path: PathBuf,        // Path to .onnx file
-    pub tokenizer_path: PathBuf,    // Path to tokenizer.json
-    pub model_name: String,          // Display name
+    pub provider: EmbeddingProvider,        // Onnx / Fastembed / OpenAi / OpenAiCompatible / Ollama / Mock
+    pub model: String,                      // Model identifier
+    pub dimensions: usize,                  // Output dimensions
+    pub endpoint: Option<String>,           // API endpoint (HTTP providers)
+    pub api_key: Option<String>,            // EMBEDDING_API_KEY / LLM_API_KEY
+    pub api_version: Option<String>,        // e.g. Azure API version
+    pub max_completion_tokens: usize,       // default 8191
+    pub batch_size: usize,                  // default 36
+    pub mock: bool,                         // force mock zero vectors
+    #[cfg(feature = "onnx")]
+    pub onnx: OnnxEmbeddingConfig,          // ONNX-only settings
+    pub huggingface_tokenizer: Option<String>,
+}
+```
+
+`OnnxEmbeddingConfig` (behind the `onnx` feature) holds the ONNX-only fields:
+
+```rust
+pub struct OnnxEmbeddingConfig {
+    pub model_path: PathBuf,         // Path to .onnx file
+    pub tokenizer_path: PathBuf,     // Path to tokenizer.json
+    pub model_name: String,          // Display name / auto-download selector
     pub dimensions: usize,           // Output dimensions
     pub max_sequence_length: usize,  // Max tokens
     pub batch_size: usize,           // Batch size
 }
 ```
+
+### Environment variables
+
+`EmbeddingConfig::from_env()` reads (Python-SDK-compatible names):
+`EMBEDDING_PROVIDER`, `MOCK_EMBEDDING`, `EMBEDDING_MODEL`, `EMBEDDING_DIMENSIONS`,
+`EMBEDDING_ENDPOINT`, `EMBEDDING_API_KEY` (fallback `LLM_API_KEY`),
+`EMBEDDING_API_VERSION`, `EMBEDDING_MAX_COMPLETION_TOKENS`, `EMBEDDING_BATCH_SIZE`,
+`HUGGINGFACE_TOKENIZER`.
 
 ## Architecture
 
@@ -219,16 +250,11 @@ Download the model first:
 cargo run --example embedding_engine_example
 ```
 
-### "Failed to load tokenizer"
+### "Failed to load tokenizer" / "Tokenizer.json not found"
 
-Download the tokenizer:
-```bash
-python scripts/download-tokenizer.py
-```
-
-### "Tokenizer.json not found"
-
-Make sure you've run the download script. The tokenizer must be at:
+Use `OnnxEmbeddingEngine::with_auto_download(...)` (or the example above) to
+fetch the model and tokenizer from HuggingFace Hub automatically. If you place
+files manually, the tokenizer must be at:
 `./target/models/bge-small-tokenizer.json`
 
 ## License

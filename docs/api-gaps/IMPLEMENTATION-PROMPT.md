@@ -1,5 +1,10 @@
 # API Gaps Implementation Prompt
 
+> **Status (2026-06): COMPLETED.** All 8 gaps this runbook targets have been
+> implemented in the Rust codebase (see the resolved status notes in
+> `README.md` and the individual gap docs). This prompt is retained as a
+> historical record of the process that was followed.
+
 Use this prompt to implement all 8 API gaps from `docs/api-gaps/README.md` sequentially.
 
 ---
