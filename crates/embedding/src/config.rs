@@ -139,27 +139,45 @@ pub struct EmbeddingConfig {
 
 impl Default for EmbeddingConfig {
     fn default() -> Self {
-        #[cfg(feature = "onnx")]
-        let (provider, model, dimensions, onnx) = {
-            let onnx = OnnxEmbeddingConfig::default();
-            let dimensions = onnx.dimensions;
-            let model = onnx.model_name.clone();
-            (EmbeddingProvider::Onnx, model, dimensions, onnx)
+        // On Android, local ONNX inference is the right default (edge deployment).
+        // Everywhere else, match the Python SDK default: OpenAI text-embedding-3-small.
+        #[cfg(all(feature = "onnx", target_os = "android"))]
+        let (provider, model, dimensions, endpoint) = {
+            let onnx_cfg = OnnxEmbeddingConfig::default();
+            (
+                EmbeddingProvider::Onnx,
+                onnx_cfg.model_name.clone(),
+                onnx_cfg.dimensions,
+                None,
+            )
         };
+        #[cfg(all(feature = "onnx", not(target_os = "android")))]
+        let (provider, model, dimensions, endpoint) = (
+            EmbeddingProvider::OpenAi,
+            "text-embedding-3-small".to_string(),
+            1536usize,
+            Some("https://api.openai.com/v1".to_string()),
+        );
         #[cfg(not(feature = "onnx"))]
-        let (provider, model, dimensions) = (EmbeddingProvider::Mock, String::new(), 384usize);
+        let (provider, model, dimensions, endpoint) = (
+            EmbeddingProvider::OpenAi,
+            "text-embedding-3-small".to_string(),
+            1536usize,
+            Some("https://api.openai.com/v1".to_string()),
+        );
+
         Self {
             provider,
             model,
             dimensions,
-            endpoint: None,
+            endpoint,
             api_key: None,
             api_version: None,
             max_completion_tokens: 8191,
             batch_size: 36,
             mock: false,
             #[cfg(feature = "onnx")]
-            onnx,
+            onnx: OnnxEmbeddingConfig::default(),
             huggingface_tokenizer: None,
         }
     }
@@ -326,13 +344,27 @@ mod tests {
     use super::*;
 
     #[test]
-    #[cfg(feature = "onnx")]
-    fn test_default_is_onnx() {
+    #[cfg(all(feature = "onnx", target_os = "android"))]
+    fn test_default_is_onnx_on_android() {
         let config = EmbeddingConfig::default();
         assert_eq!(config.provider, EmbeddingProvider::Onnx);
         assert_eq!(config.dimensions, 384);
         assert_eq!(config.batch_size, 36);
         assert_eq!(config.max_completion_tokens, 8191);
+        assert!(!config.mock);
+    }
+
+    #[test]
+    #[cfg(not(target_os = "android"))]
+    fn test_default_is_openai_off_android() {
+        let config = EmbeddingConfig::default();
+        assert_eq!(config.provider, EmbeddingProvider::OpenAi);
+        assert_eq!(config.model, "text-embedding-3-small");
+        assert_eq!(config.dimensions, 1536);
+        assert_eq!(
+            config.endpoint.as_deref(),
+            Some("https://api.openai.com/v1")
+        );
         assert!(!config.mock);
     }
 
@@ -346,10 +378,17 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "onnx")]
-    fn test_effective_provider_passthrough() {
+    #[cfg(all(feature = "onnx", target_os = "android"))]
+    fn test_effective_provider_passthrough_onnx() {
         let config = EmbeddingConfig::default();
         assert_eq!(config.effective_provider(), EmbeddingProvider::Onnx);
+    }
+
+    #[test]
+    #[cfg(not(target_os = "android"))]
+    fn test_effective_provider_passthrough_openai() {
+        let config = EmbeddingConfig::default();
+        assert_eq!(config.effective_provider(), EmbeddingProvider::OpenAi);
     }
 
     // env-var tests mutate global process state and must not run in parallel.
