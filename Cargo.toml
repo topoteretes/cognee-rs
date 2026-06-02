@@ -29,6 +29,8 @@ members = [
     "crates/visualization",
     "crates/cloud",
     "crates/http-server",
+    # Criterion benchmarks for the Rust HTTP server and pipelines
+    "crates/bench",
     "crates/observability",
     "crates/telemetry",
 
