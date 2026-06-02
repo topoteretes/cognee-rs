@@ -10,26 +10,6 @@ name = "add_example"
 path = "add_example.rs"
 
 [[example]]
-name = "embeddings"
-path = "embeddings.rs"
-
-[[example]]
-name = "ladybug"
-path = "ladybug.rs"
-
-[[example]]
-name = "llm_fact_extraction"
-path = "llm_fact_extraction.rs"
-
-[[example]]
-name = "qdrant"
-path = "qdrant.rs"
-
-[[example]]
-name = "simple_example"
-path = "simple_example.rs"
-
-[[example]]
 name = "cognify_example"
 path = "cognify_example.rs"
 
@@ -45,15 +25,8 @@ path = "summarization_example.rs"
 name = "embedding_engine_example"
 path = "embedding_engine_example.rs"
 
-[features]
-default = []
-# Enable this feature to build libonnxruntime from source as a dynamic library.
-# Automatically enabled for Android targets (which get NNAPI support).
-onnx_dynamic_library = ["ort/load-dynamic"]
-testing = ["dep:tempfile"]
-
 [dependencies]
-# Workspace crates (instead of duplicates)
+# Workspace crates
 cognee-core = { path = "../crates/core" }
 cognee-storage = { path = "../crates/storage" }
 cognee-database = { path = "../crates/database" }
@@ -66,41 +39,8 @@ cognee-llm = { path = "../crates/llm" }
 cognee-embedding = { path = "../crates/embedding" }
 cognee-vector = { path = "../crates/vector", features = ["testing"] }
 
-# Keep existing dependencies that examples need
-async-trait.workspace = true
-chrono.workspace = true
-common.workspace = true
-edge.workspace = true
-lbug.workspace = true
-log.workspace = true
-ndarray.workspace = true
-ort.workspace = true
-rand.workspace = true
-segment.workspace = true
-serde.workspace = true
-serde_json.workspace = true
-shard.workspace = true
-thiserror.workspace = true
-tokenizers.workspace = true
 tokio.workspace = true
-tracing-subscriber.workspace = true
 uuid.workspace = true
 
-# Dependencies from merged crates
-sha2.workspace = true
-mime_guess.workspace = true
-sqlx = { workspace = true, features = ["runtime-tokio", "sqlite", "uuid", "chrono"] }
-tempfile = { workspace = true, optional = true }
-
-# Enable load-dynamic for Android targets automatically (for NNAPI support)
-[target.'cfg(target_os = "android")'.dependencies]
-ort = { workspace = true, features = ["load-dynamic"] }
-
 [dev-dependencies]
-anyhow.workspace = true
-dotenv.workspace = true
 env_logger.workspace = true
-notify.workspace = true
-rand.workspace = true
-tempfile.workspace = true
-tokio.workspace = true

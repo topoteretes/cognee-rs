@@ -149,11 +149,8 @@ Supported model names: `"bge-small-en-v1.5"`, `"all-MiniLM-L6-v2"`
 ## Running Examples
 
 ```bash
-# Basic usage example
+# Basic usage example (downloads the BGE-Small model on first run)
 cargo run --example embedding_engine_example
-
-# Run with model download
-cargo run --example embeddings  # Downloads BGE-Small model
 ```
 
 ## Running Tests
@@ -219,7 +216,7 @@ This implementation matches Python's `FastembedEmbeddingEngine` by:
 
 Download the model first:
 ```bash
-cargo run --example embeddings
+cargo run --example embedding_engine_example
 ```
 
 ### "Failed to load tokenizer"

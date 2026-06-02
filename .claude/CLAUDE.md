@@ -39,7 +39,7 @@ cognee-rust/
 ├── js/                         # JavaScript/Node bindings (Neon)
 ├── python/                     # Python bindings (PyO3)
 ├── android/                    # Android runner
-├── examples/                   # Usage examples (add, cognify, embeddings, fact extraction, qdrant, ladybug, etc.)
+├── examples/                   # Usage examples using the cognee crates (add, cognify, fact extraction, summarization, embedding engine)
 ├── demo/                       # Demo scripts (host and Android)
 ├── scripts/                    # Build, check, and deployment scripts
 ├── docs/                       # Documentation
