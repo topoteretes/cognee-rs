@@ -9,7 +9,7 @@ Mounted at `/api/v1/users`, distinct from `/api/v1/auth` (which carries `/login`
 
 This doc captures the **wire contract** Rust must replicate; we do not reproduce fastapi-users' Python internals. Authoritative external reference: [fastapi-users users router docs](https://fastapi-users.github.io/fastapi-users/latest/configuration/routers/users/). The single endpoint at `/api/v1/users/get-user-id` lives in [users-by-email.md](users-by-email.md).
 
-Companion docs: [../plan.md](../plan.md), [../architecture.md](../architecture.md), [../auth.md](../auth.md), [../tenants.md](../tenants.md), [auth.md](auth.md), [auth-register.md](auth-register.md).
+Companion docs: [../architecture.md](../architecture.md), [../auth.md](../auth.md), [../tenants.md](../tenants.md), [auth.md](auth.md), [auth-register.md](auth-register.md).
 
 ## 1. Mount & file
 

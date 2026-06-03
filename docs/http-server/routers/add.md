@@ -2,7 +2,7 @@
 
 Multipart ingest endpoint that takes a list of files (or URL/file-path strings packed as parts) and adds them to a dataset, kicking off the `add_pipeline`. This is the front door of the cognee write path — it is *not* responsible for knowledge-graph extraction (that is `cognify`); it stores raw bytes, hashes them, and registers `Data` rows under the target dataset.
 
-Companion docs: [../plan.md](../plan.md), [../architecture.md](../architecture.md), [../auth.md](../auth.md), [../tenants.md](../tenants.md), [../pipelines.md](../pipelines.md), [../observability.md](../observability.md).
+Companion docs: [../architecture.md](../architecture.md), [../auth.md](../auth.md), [../tenants.md](../tenants.md), [../pipelines.md](../pipelines.md), [../observability.md](../observability.md).
 
 ## 1. Mount & file
 - Mount prefix: `/api/v1/add`

@@ -2,7 +2,7 @@
 
 Liveness/readiness probes for the cognee HTTP server. Two unauthenticated GET endpoints — one cheap (`GET /health`) intended for k8s/load-balancer probes, and one expensive (`GET /health/detailed`) that fans out to every backend (relational DB, vector DB, graph DB, file storage, optionally LLM and embedding service) and returns a structured per-component report. The router is the only public, no-auth endpoint other than `/` and the auth-login routes; everything else in the `/api/v1` tree gates on the `AuthenticatedUser` extractor.
 
-Companion docs: [../plan.md](../plan.md), [../architecture.md](../architecture.md), [../observability.md](../observability.md).
+Companion docs: [../architecture.md](../architecture.md), [../observability.md](../observability.md).
 
 ## 1. Mount & file
 - Mount prefix: `/health` (NOT `/api/v1/health` — see [`client.py:282-286`](https://github.com/topoteretes/cognee/blob/main/cognee/api/client.py#L282-L286)).
@@ -214,4 +214,3 @@ The HTTP DTOs are produced by `From<&HealthCheckReport>` / `From<&ComponentHealt
 - Span-name conventions: [../observability.md §3.4](../observability.md#34-span-name-conventions).
 - Access-log filtering for noisy probes: [../observability.md §7](../observability.md#7-access-logging).
 - Error model that this router intentionally bypasses: [../architecture.md §9](../architecture.md#9-error-handling).
-- Implementation phase that lands this router: [../plan.md §4 (P0)](../plan.md#4-implementation-phases).

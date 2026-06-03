@@ -2,7 +2,7 @@
 
 The CRUD-and-everything-else router for datasets and the `Data` rows inside them. Eleven endpoints: list/create/delete the dataset itself, list/delete data items inside, fetch the rendered knowledge graph, fetch and update the per-dataset graph schema, query pipeline status, and stream the original raw bytes back to the client. This is the biggest router in the API by surface area.
 
-Companion docs: [../plan.md](../plan.md), [../architecture.md](../architecture.md), [../auth.md](../auth.md), [../tenants.md](../tenants.md), [../observability.md](../observability.md), [delete.md](delete.md), [add.md](add.md).
+Companion docs: [../architecture.md](../architecture.md), [../auth.md](../auth.md), [../tenants.md](../tenants.md), [../observability.md](../observability.md), [delete.md](delete.md), [add.md](add.md).
 
 ## 1. Mount & file
 - Mount prefix: `/api/v1/datasets`

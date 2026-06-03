@@ -11,7 +11,7 @@ The verify JWT uses its own secret (`FASTAPI_USERS_VERIFICATION_TOKEN_SECRET`) a
 
 This doc captures the **wire contract** Rust must replicate; we do not reproduce fastapi-users' Python internals. Authoritative external reference: [fastapi-users verify router docs](https://fastapi-users.github.io/fastapi-users/latest/configuration/routers/verify/).
 
-Companion docs: [../plan.md](../plan.md), [../architecture.md](../architecture.md), [../auth.md](../auth.md), [auth.md](auth.md), [auth-register.md](auth-register.md), [auth-reset-password.md](auth-reset-password.md).
+Companion docs: [../architecture.md](../architecture.md), [../auth.md](../auth.md), [auth.md](auth.md), [auth-register.md](auth-register.md), [auth-reset-password.md](auth-reset-password.md).
 
 ## 1. Mount & file
 

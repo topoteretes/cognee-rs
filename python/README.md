@@ -106,11 +106,10 @@ sentinel that the upstream package sets automatically.
 | `COGNEE_RUST_TELEMETRY` | Opt in to Python-side `send_telemetry` analytics (off by default). |
 | `COGNEE_HOST_SDK` | Set by the upstream Python `cognee` SDK to suppress binding-armed analytics emission (decision 10). |
 | `RUST_LOG`, `LOG_LEVEL` | Standard `tracing-subscriber` env-filter level overrides. |
-| `COGNEE_LOG_*`, `LOG_FILE_NAME` | Consumed by `setup_logging()` — see [gap 06](../docs/telemetry/06-file-logging-rotation.md). |
+| `COGNEE_LOG_*`, `LOG_FILE_NAME` | Consumed by `setup_logging()` — see the workspace README's "Logging" section. |
 | `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_HEADERS`, `OTEL_SERVICE_NAME` and other `OTEL_*` vars | Consumed by `setup_telemetry()`. |
 | `TELEMETRY_DISABLED`, `ENV` | Honoured by `setup_telemetry_analytics()` via `cognee_telemetry::env::is_disabled`. |
 
 ## References
 
-- Design doc: [docs/telemetry/07-bindings-auto-init.md](../docs/telemetry/07-bindings-auto-init.md)
-- Gap-analysis: [docs/telemetry/gap-analysis.md §6](../docs/telemetry/gap-analysis.md)
+- Observability docs: [docs/observability/opentelemetry.md](../docs/observability/opentelemetry.md), [docs/observability/send_telemetry.md](../docs/observability/send_telemetry.md)

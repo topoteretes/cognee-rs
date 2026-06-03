@@ -2,7 +2,7 @@
 
 Multipart `PATCH` endpoint that replaces an existing document in a dataset by deleting it and re-adding the new payload, then re-running cognify on the affected dataset. Distinct from `/add` (which appends) and `/datasets/{id}/data/{did}` `DELETE` (which only deletes); `update` chains delete → add → cognify in a single call.
 
-Companion docs: [../plan.md](../plan.md), [../architecture.md](../architecture.md), [../auth.md](../auth.md), [../tenants.md](../tenants.md), [../pipelines.md](../pipelines.md), [add.md](add.md).
+Companion docs: [../architecture.md](../architecture.md), [../auth.md](../auth.md), [../tenants.md](../tenants.md), [../pipelines.md](../pipelines.md), [add.md](add.md).
 
 ## 1. Mount & file
 - Mount prefix: `/api/v1/update`

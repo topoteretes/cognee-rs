@@ -2,7 +2,7 @@
 
 A deprecated single-endpoint router that aliases the canonical `DELETE /api/v1/datasets/{dataset_id}/data/{data_id}` (see [datasets.md §2.11](datasets.md#211-delete-apiv1datasetsdataset_iddatadata_id--delete-one-data-item)). Kept for backwards compatibility with clients pinned to cognee ≤ 0.3.8; new clients should use the canonical route.
 
-Companion docs: [../plan.md](../plan.md), [../architecture.md](../architecture.md), [../auth.md](../auth.md), [../tenants.md](../tenants.md), [datasets.md](datasets.md), [forget.md](forget.md).
+Companion docs: [../architecture.md](../architecture.md), [../auth.md](../auth.md), [../tenants.md](../tenants.md), [datasets.md](datasets.md), [forget.md](forget.md).
 
 ## 1. Mount & file
 - Mount prefix: `/api/v1/delete`

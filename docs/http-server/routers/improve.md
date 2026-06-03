@@ -7,7 +7,7 @@ It distinguishes itself from `/api/v1/memify` (same enrichment pipeline, no sess
 1. Returning **`420`** on `PipelineRunErrored` instead of the standard `500` (Python parity quirk — see §2.1 error responses).
 2. Calling the `improve` library function rather than `memify` directly.
 
-Companion docs: [../plan.md](../plan.md), [../architecture.md](../architecture.md), [../auth.md](../auth.md), [../pipelines.md](../pipelines.md), [memify.md](memify.md), [../tenants.md](../tenants.md), [../observability.md](../observability.md).
+Companion docs: [../architecture.md](../architecture.md), [../auth.md](../auth.md), [../pipelines.md](../pipelines.md), [memify.md](memify.md), [../tenants.md](../tenants.md), [../observability.md](../observability.md).
 
 ## 1. Mount & file
 - Mount prefix: `/api/v1/improve`

@@ -2,7 +2,7 @@
 
 The `/api/v1/recall` router is the memory-oriented companion to `/api/v1/search`. It accepts the same wire DTO and the same `SearchType` enum, but layers two behaviors on top: (1) **session-first retrieval** — when the caller passes a `session_id` without explicit `datasets`, Q&A entries cached on the session are searched by keyword overlap before falling through to the graph; and (2) **automatic query-type routing** — when `query_type` is omitted (or supplied with `auto_route=true`), the rule-based `route_query()` classifier picks one of the 15 `SearchType` values from the natural-language query without an LLM call. Both behaviors are already implemented at the library layer; this doc specs the HTTP wrapper.
 
-Companion docs: [../plan.md](../plan.md), [../architecture.md](../architecture.md), [../auth.md](../auth.md), [../observability.md](../observability.md), [../../api-v2/recall.md](../../api-v2/recall.md), [../../api-v2/impl/recall-plan.md](../../api-v2/impl/recall-plan.md), [routers/search.md](search.md).
+Companion docs: [../architecture.md](../architecture.md), [../auth.md](../auth.md), [../observability.md](../observability.md), [routers/search.md](search.md).
 
 ## 1. Mount & file
 - Mount prefix: `/api/v1/recall`
@@ -92,7 +92,7 @@ The Python SDK's library-level `recall()` function exposes scope detection, auto
 | Session-first dispatch | Yes | No |
 | Result `_source` tagging | Yes | No |
 
-Library docs for these capabilities live in [../../api-v2/recall.md](../../api-v2/recall.md). They are intentionally not in scope for this HTTP router doc — adding them to the wire DTO would diverge from Python.
+These capabilities live in the library-level recall API (`cognee_lib::api::recall`). They are intentionally not in scope for this HTTP router doc — adding them to the wire DTO would diverge from Python.
 
 ### 3.2 Error envelope inconsistency
 
@@ -208,7 +208,7 @@ Same as in [search.md §4](search.md#searchtype-wire-shapes) — all 15 `SearchT
 2. **Telemetry parity (PostHog)** — Python's `send_telemetry(...)` is skipped in Rust per [../observability.md §1](../observability.md#1-goals--non-goals). Confirm this gap is documented for the user-facing CHANGELOG.
 3. **Empty `[]` permission-denied response** — Python returns `200 []` rather than `403`, which is a deliberate UX choice (recall is "always succeed"). Confirm the e2e parity test asserts on `200` not `403`.
 4. **Search-history history-write idempotency** — does Python double-write when the SDK retries? If so, Rust matches; if not, Rust matches; either way confirm via a parity test.
-5. **Library-level recall reachability** — embedders who call `cognee_lib::api::recall::recall` directly should still get auto-routing and session-first dispatch. The HTTP layer simply doesn't expose them. Confirm the embedder docs ([../../api-v2/recall.md](../../api-v2/recall.md)) make this distinction clear.
+5. **Library-level recall reachability** — embedders who call `cognee_lib::api::recall::recall` directly should still get auto-routing and session-first dispatch. The HTTP layer simply doesn't expose them. Confirm the embedder-facing docs make this distinction clear.
 3. **`?include_source=true` query parameter**: should the HTTP layer expose the library's `_source: "session" | "graph"` tag? Useful for frontends building "Recent activity" UIs that distinguish session-cached answers. Recommend yes, behind an opt-in query param to keep default wire format Python-compatible.
 4. **Override counter exposure**: where does `record_override`'s state surface to the operator? Options: (a) a new `GET /api/v1/activity/recall-overrides` endpoint, (b) a span attribute on every recall request, (c) only via the in-memory span buffer (current state). Recommend (c) for phase 4; revisit if misrouting becomes a real issue.
 5. **Session search algorithm**: the library uses `HashSet::intersection` (token overlap, min length 2). For a session with thousands of Q&A entries, this is O(n) per call. Should the session store cache an inverted index? Out of scope for the HTTP doc — flag in [`crates/session/`](../../../crates/session/).
@@ -224,7 +224,5 @@ Same as in [search.md §4](search.md#searchtype-wire-shapes) — all 15 `SearchT
 - Rust query router: [`crates/search/src/query_router.rs`](../../../crates/search/src/query_router.rs).
 - Rust override-counter module: [`crates/search/src/query_router_stats.rs`](../../../crates/search/src/query_router_stats.rs).
 - Companion: [routers/search.md](search.md).
-- API v2 design doc: [../../api-v2/recall.md](../../api-v2/recall.md).
-- API v2 implementation plan: [../../api-v2/impl/recall-plan.md](../../api-v2/impl/recall-plan.md).
 - [../auth.md §2](../auth.md#2-three-auth-mechanisms--precedence-and-resolution) for authentication resolution.
 - [../observability.md §3.3](../observability.md#33-span-instrumentation-conventions) for the tracing-attribute keys cited above.

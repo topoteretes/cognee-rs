@@ -2,7 +2,7 @@
 
 Specification for the Rust HTTP server's tracing, span buffering, and access-log strategy. Drives the implementation of `/api/v1/activity/spans`, the structured logs ingested by deployments, and the per-handler tracing that feeds both. Pipeline-run history (the *durable* observability tier) is covered in [pipelines.md](pipelines.md); this doc is the *live* tier.
 
-Companion docs: [plan.md](plan.md), [architecture.md](architecture.md), [pipelines.md](pipelines.md).
+Companion docs: [architecture.md](architecture.md), [pipelines.md](pipelines.md).
 
 ## 1. Goals & non-goals
 
@@ -80,7 +80,7 @@ Match Python's structure: `cognee.<area>.<operation>`. Examples:
 
 - `cognee.api.add` — handler for `POST /api/v1/add`.
 - `cognee.api.cognify` — handler for `POST /api/v1/cognify`.
-- `cognee.api.recall` — already implemented (commit 598d553); the parity attributes referenced in [`docs/api-v2/README.md`](../api-v2/README.md) emit through this span.
+- `cognee.api.recall` — already implemented (commit 598d553); the recall parity attributes emit through this span.
 - `cognee.cognify.extract_graph` — pipeline task.
 - `cognee.search.graph_completion` — retriever.
 - `cognee.db.query` — repository method.

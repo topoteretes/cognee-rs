@@ -1,6 +1,6 @@
 # HTTP Server — Architecture Decisions
 
-This document locks in the structural decisions for the Rust HTTP server port of [`cognee/api/client.py`](https://github.com/topoteretes/cognee/blob/main/cognee/api/client.py). Scope here is *how the server is assembled*: crates, libraries, runtime, middleware stack, configuration, lifecycle. Endpoint-by-endpoint specs, auth internals, and pipeline-job details live in their own sub-documents referenced from [`plan.md`](plan.md).
+This document locks in the structural decisions for the Rust HTTP server port of [`cognee/api/client.py`](https://github.com/topoteretes/cognee/blob/main/cognee/api/client.py). Scope here is *how the server is assembled*: crates, libraries, runtime, middleware stack, configuration, lifecycle. Endpoint-by-endpoint specs, auth internals, and pipeline-job details live in their own sub-documents in this folder (`auth.md`, `pipelines.md`, `routers/*.md`, etc.).
 
 ## 1. Goals & non-goals
 
@@ -612,7 +612,6 @@ No runtime GIL, no dynamic dispatch on handlers, no global mutable state — all
 | WebSocket protocol | `websocket.md` | Needs exact message shape parity with the Python WS handler. |
 | OTEL span buffer | `observability.md` | Needs a decision on `tracing-opentelemetry` vs custom layer. |
 | Multi-tenant + RBAC schema | `tenants.md` | Requires SeaORM migrations matching the Python Alembic schema. |
-| Cross-SDK HTTP parity harness | `e2e-parity.md` | Docker harness work, parallel to endpoint ports. |
 
 ## 22. Open questions
 
@@ -629,4 +628,4 @@ No runtime GIL, no dynamic dispatch on handlers, no global mutable state — all
 - Existing CLI binary (unchanged by this work): [`crates/cli/src/main.rs`](../../crates/cli/src/main.rs).
 - Existing library facade: [`crates/lib/src/lib.rs`](../../crates/lib/src/lib.rs) — the `cognee_lib::http` re-export module is added behind a non-default `server` feature (see §16).
 - Cloud crate (reference for "new feature-gated crate" pattern): [`crates/cloud/`](../../crates/cloud/).
-- Memory API (callable via this server): [`docs/api-v2/README.md`](../api-v2/README.md).
+- Memory API (callable via this server): [`crates/lib/src/api/`](../../crates/lib/src/api/) (`recall`, `remember`, `improve`, `forget`).

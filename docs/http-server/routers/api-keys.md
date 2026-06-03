@@ -4,7 +4,7 @@ Per-user API-key management. Lets an authenticated user list, create, and delete
 
 The router is mounted alongside `/api/v1/auth` (despite being a different Python source file) because it shares the auth wire surface; users see it as the "API key" tab on the auth UI.
 
-Companion docs: [../plan.md](../plan.md), [../architecture.md](../architecture.md), [../auth.md](../auth.md), [../tenants.md](../tenants.md), [auth.md](auth.md).
+Companion docs: [../architecture.md](../architecture.md), [../auth.md](../auth.md), [../tenants.md](../tenants.md), [auth.md](auth.md).
 
 ## 1. Mount & file
 

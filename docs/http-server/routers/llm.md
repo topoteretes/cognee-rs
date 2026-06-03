@@ -2,7 +2,7 @@
 
 The `/api/v1/llm` router exposes two thin LLM-utility endpoints used by the cognee frontend's "Schema Builder" UI: `POST /custom-prompt` synthesizes a custom extraction prompt from a JSON-Schema-style graph model, and `POST /infer-schema` proposes a graph model from sample text. Both delegate directly to `cognee-llm` adapters via two prompt templates in `cognee-cognify`'s prompt library; neither touches the relational DB, vector DB, or graph DB. The endpoints exist purely to let the frontend bootstrap a `graph_model` argument for `/api/v1/cognify`.
 
-Companion docs: [../plan.md](../plan.md), [../architecture.md](../architecture.md), [../auth.md](../auth.md), [../observability.md](../observability.md).
+Companion docs: [../architecture.md](../architecture.md), [../auth.md](../auth.md), [../observability.md](../observability.md).
 
 ## 1. Mount & file
 - Mount prefix: `/api/v1/llm`

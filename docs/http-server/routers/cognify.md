@@ -7,7 +7,7 @@ The router exposes two endpoints:
 1. `POST /api/v1/cognify` — kicks off the cognify pipeline (blocking or background).
 2. `GET /api/v1/cognify/subscribe/{pipeline_run_id}` — WebSocket upgrade that streams `RunEvent` frames for an in-flight or just-finished run.
 
-Companion docs: [../plan.md](../plan.md), [../architecture.md](../architecture.md), [../auth.md](../auth.md), [../pipelines.md](../pipelines.md), [../websocket.md](../websocket.md), [../tenants.md](../tenants.md), [../observability.md](../observability.md).
+Companion docs: [../architecture.md](../architecture.md), [../auth.md](../auth.md), [../pipelines.md](../pipelines.md), [../websocket.md](../websocket.md), [../tenants.md](../tenants.md), [../observability.md](../observability.md).
 
 ## 1. Mount & file
 - Mount prefix: `/api/v1/cognify`

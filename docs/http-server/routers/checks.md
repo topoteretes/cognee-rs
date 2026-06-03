@@ -4,7 +4,7 @@ Cloud connection validation. The frontend's "is my Cognee Cloud API key still go
 
 This is the smallest router in the server (one endpoint) and exists primarily so the UI can light up a "connected to cloud" indicator without asking the user to attempt a real cloud operation.
 
-Companion docs: [../plan.md](../plan.md), [../architecture.md](../architecture.md), [../auth.md](../auth.md).
+Companion docs: [../architecture.md](../architecture.md), [../auth.md](../auth.md).
 
 ## 1. Mount & file
 - Mount prefix: `/api/v1/checks`

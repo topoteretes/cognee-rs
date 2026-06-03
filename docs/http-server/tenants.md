@@ -2,7 +2,7 @@
 
 Specification for the relational schema and permission-resolution logic that backs the Rust HTTP server's multi-tenant story. Mirrors Python's [`cognee/modules/users/models/`](https://github.com/topoteretes/cognee/tree/main/cognee/modules/users/models) and [`permissions/`](https://github.com/topoteretes/cognee/tree/main/cognee/modules/users/permissions) layout so a Python-seeded database is readable by Rust and vice versa.
 
-Companion docs: [plan.md](plan.md), [architecture.md](architecture.md), [auth.md](auth.md). Per-route contracts for `/api/v1/permissions/*` will live in `routers/permissions.md` (separate doc).
+Companion docs: [architecture.md](architecture.md), [auth.md](auth.md). Per-route contracts for `/api/v1/permissions/*` will live in `routers/permissions.md` (separate doc).
 
 ## 1. Goals & non-goals
 

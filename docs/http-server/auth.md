@@ -2,7 +2,7 @@
 
 This document specifies the authentication subsystem for the Rust HTTP server. It covers wire-level compatibility with Python's [fastapi-users](https://fastapi-users.github.io/fastapi-users/)-based stack, the password hashing migration plan, the API-key model, and the database schema. Endpoint contracts that *use* auth are described in their own router docs; this doc describes auth itself.
 
-Companion docs: [plan.md](plan.md), [architecture.md](architecture.md).
+Companion docs: [architecture.md](architecture.md).
 
 ## 1. Goals & non-goals
 

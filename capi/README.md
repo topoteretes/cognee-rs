@@ -127,11 +127,10 @@ closure summary for details.
 | `COGNEE_HOST_SDK` | Suppress binding-armed analytics emission when the host is an embedding SDK (decision 10). |
 | `TELEMETRY_DISABLED`, `ENV` | Standard analytics opt-outs honoured by `cognee_init_telemetry()`. |
 | `RUST_LOG`, `LOG_LEVEL` | Standard `tracing-subscriber` env-filter level overrides. |
-| `COGNEE_LOG_*`, `LOG_FILE_NAME` | Consumed by `cognee_setup_logging()` — see [gap 06](../docs/telemetry/06-file-logging-rotation.md). |
+| `COGNEE_LOG_*`, `LOG_FILE_NAME` | Consumed by `cognee_setup_logging()` — see the workspace README's "Logging" section. |
 | `COGNEE_TRACING_ENABLED`, `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_HEADERS`, `OTEL_SERVICE_NAME` and other `OTEL_*` vars | Consumed by `cognee_init_otlp()`. |
 
 ## References
 
 - Public header: [`include/cognee.h`](include/cognee.h)
-- Design doc: [docs/telemetry/07-bindings-auto-init.md](../docs/telemetry/07-bindings-auto-init.md)
-- Gap-analysis: [docs/telemetry/gap-analysis.md §6](../docs/telemetry/gap-analysis.md)
+- Observability docs: [docs/observability/opentelemetry.md](../docs/observability/opentelemetry.md), [docs/observability/send_telemetry.md](../docs/observability/send_telemetry.md)

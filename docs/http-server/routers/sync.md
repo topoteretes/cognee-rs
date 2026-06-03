@@ -2,7 +2,7 @@
 
 Cloud-sync endpoints. Triggers a long-running, three-step idempotent file-sync between the local cognee instance and a Cognee Cloud tenant: hash-diff → upload missing → download missing → trigger remote and local cognify. Concurrency rule: **one running sync per user** — a second `POST` while another sync is in progress returns `409` with details about the running operation.
 
-Companion docs: [../plan.md](../plan.md), [../architecture.md](../architecture.md), [../auth.md](../auth.md), [../pipelines.md](../pipelines.md), [../tenants.md](../tenants.md).
+Companion docs: [../architecture.md](../architecture.md), [../auth.md](../auth.md), [../pipelines.md](../pipelines.md), [../tenants.md](../tenants.md).
 
 ## 1. Mount & file
 - Mount prefix: `/api/v1/sync`

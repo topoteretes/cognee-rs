@@ -2,12 +2,14 @@
 
 The `notebooks` router exposes a per-user, server-stored Jupyter-like notebook surface used by the cognee-frontend's "Notebooks" panel. Each notebook is a list of typed cells (`markdown` or `code`) persisted in the relational DB; users can list, create, update, and delete them. A separate `POST /{notebook_id}/{cell_id}/run` endpoint executes a single Python code cell inside a process-local sandbox — this is the only piece that's *not* a CRUD operation.
 
+**Status: implemented.** CRUD, first-call tutorial seeding (`seed_tutorials_if_first_call`), and cell execution are all shipped. Cell execution uses a `SubprocessRunner` wired in when the runtime config flag `notebook_runner_enabled` is set; when it is unset (embedders that disable code execution) `/run` returns `501 Not Implemented` with a documented JSON body.
+
 This router has two scopes:
 
 - **CRUD scope** — `GET`, `POST`, `PUT`, `DELETE` over the `notebooks` table. Pure SQLite/Postgres I/O, identical wire shape to Python.
-- **Sandbox scope** — `POST /{notebook_id}/{cell_id}/run`. Executes the cell through the wired [`crate::notebook_runner::NotebookRunner`]; when no runner is configured the endpoint returns `501 Not Implemented` with a documented JSON body (the original Stage A contract, preserved for embedders that disable execution).
+- **Sandbox scope** — `POST /{notebook_id}/{cell_id}/run`. Executes the cell through the wired [`crate::notebook_runner::NotebookRunner`]; when no runner is configured the endpoint returns `501 Not Implemented` with a documented JSON body (the no-runner fallback, preserved for embedders that disable execution).
 
-Companion docs: [../plan.md](../plan.md), [../architecture.md](../architecture.md), [../auth.md](../auth.md), [../observability.md](../observability.md), [../tenants.md](../tenants.md).
+Companion docs: [../architecture.md](../architecture.md), [../auth.md](../auth.md), [../observability.md](../observability.md), [../tenants.md](../tenants.md).
 
 ## 1. Mount & file
 
@@ -37,7 +39,7 @@ Five endpoints. Listed in HTTP-method order (`GET → POST → PUT → DELETE`);
   | `500` | `{"detail": "Internal server error"}` | DB error reading `notebooks` table. |
 
 - **Side effects**: on first call per user, the server seeds two tutorial notebooks via [`create_tutorial_notebooks`](https://github.com/topoteretes/cognee/blob/main/cognee/modules/notebooks/methods/create_tutorial_notebooks.py). The Rust port replicates this seed-on-first-list behavior so the frontend's onboarding works identically.
-- **Delegation target**: `cognee_lib::notebooks::list_notebooks(user_id) -> Vec<Notebook>` — TBD; the `cognee-lib` facade does not currently expose notebook methods. Stage A implementation adds a thin `cognee_lib::notebooks` module wrapping a new `cognee-database` repository (see §5).
+- **Delegation target**: the `cognee-database` `NotebookDb` repository (the handlers call it directly; tutorial seeding goes through `seed_tutorials_if_first_call`).
 - **Validation rules**: none beyond auth.
 - **Permission gate**: implicit "owner" filter — the SELECT is scoped to `WHERE owner_id = $1`. No explicit `PermissionsRepository` check.
 - **OpenAPI**: tag `notebooks`. Response schema `NotebookDTO[]`.
@@ -103,7 +105,7 @@ Five endpoints. Listed in HTTP-method order (`GET → POST → PUT → DELETE`);
 > the `ComponentHandles`; `501 Not Implemented` (with the documented JSON body)
 > only when no runner is configured.
 
-The endpoint runs `body.content` through the configured [`crate::notebook_runner::NotebookRunner`] and returns `200 {"result": [...], "error": null|"<traceback>"}` mirroring the Python wire shape ([`get_notebooks_router.py:79-83`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/notebooks/routers/get_notebooks_router.py#L79-L83)). When no runner is wired (embedders that intentionally disable code execution) the handler falls back to the legacy `501 {"detail": "...", "code": "NOTEBOOK_RUN_NOT_IMPLEMENTED"}` envelope, preserving the original Stage A contract for those builds. Auth, path parsing, body validation, and notebook lookup always run first — a missing notebook returns `404` before either the `200` or `501` path. The sandbox-strategy analysis in §2.4.4 below records why the subprocess approach was chosen for the runner.
+The endpoint runs `body.content` through the configured [`crate::notebook_runner::NotebookRunner`] and returns `200 {"result": [...], "error": null|"<traceback>"}` mirroring the Python wire shape ([`get_notebooks_router.py:79-83`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/notebooks/routers/get_notebooks_router.py#L79-L83)). When no runner is wired (embedders that intentionally disable code execution) the handler falls back to the legacy `501 {"detail": "...", "code": "NOTEBOOK_RUN_NOT_IMPLEMENTED"}` envelope for those builds. Auth, path parsing, body validation, and notebook lookup always run first — a missing notebook returns `404` before either the `200` or `501` path. The sandbox-strategy analysis in §2.4.4 below records why the subprocess approach was chosen for the runner.
 
 #### 2.4.1 Wire contract (both phases)
 
@@ -135,12 +137,12 @@ The endpoint runs `body.content` through the configured [`crate::notebook_runner
   | `501` | `{"detail": "Notebook cell execution is not implemented in this build", "code": "NOTEBOOK_RUN_NOT_IMPLEMENTED"}` | **Only when no `NotebookRunner` is wired** (embedder disabled code execution). When a runner is present this path is never taken; execution returns `200` instead. |
 
 - **Permission gate**: ownership check via `get_notebook(notebook_id, user_id)`. The `cell_id` is **not validated against the notebook's stored cells** in Python — the cell content comes from the request body, not the DB. We replicate this; the `cell_id` is purely an addressing/telemetry value. Document this in the OpenAPI description.
-- **OpenAPI**: tag `notebooks`. Path params `notebook_id: uuid`, `cell_id: uuid`. Add `x-cognee-stub: true` extension on Stage A to flag stub status to introspection tools.
-- **Telemetry**: span name `cognee.api.notebooks.run_cell`. Attributes: `cognee.notebook.id`, `cognee.notebook.cell_id`, `cognee.notebook.run_outcome` (`"stubbed"` in Stage A, `"success"` / `"user_error"` in Stage B).
+- **OpenAPI**: tag `notebooks`. Path params `notebook_id: uuid`, `cell_id: uuid`.
+- **Telemetry**: span name `cognee.api.notebooks.run_cell`. Attributes: `cognee.notebook.id`, `cognee.notebook.cell_id`, `cognee.notebook.run_outcome` (`"success"` / `"user_error"`, or `"not_configured"` on the no-runner fallback).
 
 #### 2.4.2 No-runner fallback — exact behavior
 
-The sketch below shows the **no-runner** path (the original Stage A stub, retained as the fallback when no `NotebookRunner` is wired). When a runner *is* present the handler instead calls it and returns `200 {"result": [...], "error": null|str}` per §2.4.3.
+The sketch below shows the **no-runner** path (the fallback when no `NotebookRunner` is wired). When a runner *is* present the handler instead calls it and returns `200 {"result": [...], "error": null|str}` per §2.4.3.
 
 ```rust
 async fn run_notebook_cell(
@@ -163,7 +165,7 @@ async fn run_notebook_cell(
 }
 ```
 
-The stub still validates auth, parses the path, looks up the notebook (so a missing notebook beats the stub status — `404` first, `501` second), and validates the body — so frontends that test their request shape against `/run` see real validation errors instead of accidentally false-positive `501`s.
+The fallback still validates auth, parses the path, looks up the notebook (so a missing notebook beats the fallback status — `404` first, `501` second), and validates the body — so frontends that test their request shape against `/run` see real validation errors instead of accidentally false-positive `501`s.
 
 #### 2.4.3 Real execution
 
@@ -194,13 +196,13 @@ The Rust port does **not** have a host Python interpreter — porting `exec()` o
 |---|---|---|---|
 | **A. Subprocess to host `python3`** | Trivially correct (it's actual CPython). Same `cognee` Python SDK already installed in dev environments. Trivial to add timeouts (`tokio::process::Command` + `Child::kill`). | Requires CPython at runtime — a footgun for the all-Rust deployment story (Android, embedded, distroless containers). Subprocess auth/state replication is non-trivial: the sandbox needs the same DB pool / config as the parent. Adds a full `pip install cognee` to the deployment. | **Phase-2 default for self-hosted dev deployments.** Document the Python dep clearly. |
 | **B. Embedded RustPython** | Pure Rust; no external interpreter. Runs in-process. | RustPython does not implement the entire CPython stdlib, and notably has incomplete `asyncio` support — Python's wrapper code uses `asyncio.set_event_loop`/`asyncio.run`, which is exactly the path RustPython is weakest on. The user's notebook code typically does `await cognee.add(...)`, which requires both `asyncio` *and* a working `cognee` Python package — neither is shippable through RustPython. | **Rejected** for cell execution; possibly viable later if cells are restricted to non-async pure-Python expressions. |
-| **C. Wasm sandbox (Pyodide / wasmtime)** | True sandbox; resource-limited; OS-isolated. Runs everywhere wasmtime runs. | Pyodide ships ~10 MiB of Python wasm + stdlib; `cognee` Python package would need a wasm build, which doesn't exist. Pyodide cannot call back into the host process to reach the live cognee DB / graph / vector store, defeating the whole purpose of running cells. | **Rejected** for cell execution in Stage B. Re-evaluate if the use case shifts to "demo/teaching mode" where cells run against a stubbed cognee. |
+| **C. Wasm sandbox (Pyodide / wasmtime)** | True sandbox; resource-limited; OS-isolated. Runs everywhere wasmtime runs. | Pyodide ships ~10 MiB of Python wasm + stdlib; `cognee` Python package would need a wasm build, which doesn't exist. Pyodide cannot call back into the host process to reach the live cognee DB / graph / vector store, defeating the whole purpose of running cells. | **Rejected** for cell execution. Re-evaluate if the use case shifts to "demo/teaching mode" where cells run against a stubbed cognee. |
 
-**Stage B plan**: default to **strategy A** (subprocess), feature-gated behind a `notebooks-sandbox-subprocess` cargo feature on `cognee-http-server`. The subprocess is invoked with `python3 -c <wrapper>`, the user's content is passed via stdin, and the parent waits with a configurable timeout. Stdout is parsed line-by-line into the `result` array; stderr is captured into `error`. Subprocess CWD and env are scoped to a per-cell tempdir. `RLIMIT_AS` (memory) and `RLIMIT_CPU` (CPU seconds) caps are set on Unix.
+**As shipped**: `SubprocessRunner` implements **strategy A** (subprocess). It is wired in at runtime when `notebook_runner_enabled` is set on the server config (not a cargo feature). The subprocess is invoked with `python3`, the user's content is passed via stdin, and the parent waits with a configurable timeout. Stdout is parsed line-by-line into the `result` array; stderr is captured into `error`. Subprocess CWD and env are scoped to a per-cell tempdir. `RLIMIT_AS` (memory) and `RLIMIT_CPU` (CPU seconds) caps are set on Unix.
 
 #### 2.4.5 Python parity notes for the run endpoint
 
-- The `\xa0` (non-breaking space) → `\n` substitution in [`run_in_local_sandbox.py:23`](https://github.com/topoteretes/cognee/blob/main/cognee/modules/notebooks/operations/run_in_local_sandbox.py#L23) accommodates code copy-pasted from web UIs that mangles spacing. The Rust port (Stage B) must do the same substitution before passing content to the subprocess.
+- The `\xa0` (non-breaking space) → `\n` substitution in [`run_in_local_sandbox.py:23`](https://github.com/topoteretes/cognee/blob/main/cognee/modules/notebooks/operations/run_in_local_sandbox.py#L23) accommodates code copy-pasted from web UIs that mangles spacing. The Rust port does the same substitution before passing content to the subprocess.
 - Python uses `loop.run_in_executor(...)` ([`run_async`](https://github.com/topoteretes/cognee/blob/main/cognee/infrastructure/utils/run_async.py)) so the sandbox runs on a worker thread, not the request thread. The Rust subprocess approach is naturally non-blocking.
 - The `result` field elements are passed through `jsonable_encoder` — strings stay as JSON strings, dicts as JSON objects, etc. Match this in the Rust subprocess parser.
 
@@ -233,7 +235,7 @@ The Rust port does **not** have a host Python interpreter — porting `exec()` o
 - **Ownership scoping**: every read/write filters on `owner_id = user.id`. There is no admin override; superusers see only their own notebooks. (Python is the same; the frontend uses the per-user notebook set as a private workspace.)
 - **404 envelope**: this router uses `{"error": "Notebook not found"}` instead of the standard `{"detail": "..."}`. Reproduced for compat.
 - **Tutorial seeding**: lazy on first `GET /` per user. The seeded notebooks have **deterministic UUID5 ids** derived from `(NAMESPACE_OID, "Cognee Basics - tutorial 🧠")` and `(NAMESPACE_OID, "Python Development with Cognee - tutorial 🧠")`. The Rust port reads the same tutorial source files and produces the same ids — verified by a parity test. See `crates/http-server/tests/test_notebooks.rs`.
-- **Tenant scope**: notebooks have no `tenant_id` column. They are bound to `owner_id` only. Future multi-tenancy work needs to decide whether to add the column; for Stage A we do not.
+- **Tenant scope**: notebooks have no `tenant_id` column. They are bound to `owner_id` only. Future multi-tenancy work needs to decide whether to add the column; currently we do not.
 
 ## 4. DTO definitions
 
@@ -293,7 +295,7 @@ pub struct RunCodeDataDTO {
     pub content: String,
 }
 
-/// Stage B outcome. Wire shape: `{"result": [...], "error": null|str}`.
+/// Run-cell outcome. Wire shape: `{"result": [...], "error": null|str}`.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct RunCodeOutcomeDTO {
     pub result: Vec<serde_json::Value>,
@@ -319,50 +321,24 @@ Pydantic-to-Rust field mapping table:
 | `NotebookData.cells` | `NotebookDataDTO.cells` | `Optional[List[NotebookCell]] = []` → `Vec<NotebookCellDTO>` (default `[]`) | — |
 | `RunCodeData.content` | `RunCodeDataDTO.content` | `str = Field(...)` → `String` | — |
 
-## 5. Implementation tasks
+## 5. Implementation (shipped)
 
-Stage A (CRUD + stubbed `/run`):
+As built:
 
-1. **Migration** — add a SeaORM migration `crates/database/src/migrator/m_xxxx_create_notebooks.rs` matching Python's `notebooks` table:
-   - `id UUID PK`
-   - `owner_id UUID NOT NULL` (index)
-   - `name TEXT NOT NULL`
-   - `cells JSONB NOT NULL DEFAULT '[]'::jsonb` (or `JSON` in SQLite)
-   - `deletable BOOLEAN NOT NULL DEFAULT TRUE`
-   - `created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`
-2. **Repository** — add `crates/database/src/repositories/notebook_repository.rs` exposing `list_by_owner`, `create`, `get_by_id_and_owner`, `update`, `delete`. Behind a new `NotebookDb` trait so cross-DB (SQLite/Postgres) testing works.
-3. **Cognee-lib facade** — add `cognee_lib::notebooks` module with `list_notebooks`, `create_notebook`, `update_notebook`, `delete_notebook`, plus the lazy tutorial seeder.
-4. **Tutorial seeder** — port [`create_tutorial_notebooks.py`](https://github.com/topoteretes/cognee/blob/main/cognee/modules/notebooks/methods/create_tutorial_notebooks.py): walk `crates/http-server/assets/tutorials/` (Rust mirror of Python's `cognee/modules/notebooks/tutorials/`), parse `cell-N.md`/`cell-N.py` into `NotebookCell` rows, derive notebook id with `Uuid::new_v5(NAMESPACE_OID, name)` to match Python.
-5. **DTOs** — `crates/http-server/src/dto/notebooks.rs` per §4.
-6. **Handlers** — `crates/http-server/src/routers/notebooks.rs` with `list`, `create`, `update`, `delete`, and the **stub `/run`**.
-7. **OpenAPI** — `#[utoipa::path(...)]` on each handler with the `notebooks` tag.
-8. **Unit tests** — DTO round-trip, 404 envelope shape, stub 501 body.
-9. **Integration tests** — `crates/http-server/tests/test_notebooks.rs`:
-   - Create → list → update → delete round trip.
-   - First-call list seeds two tutorial notebooks; their ids are deterministic across runs.
-   - `/run` returns 501 with the documented body when the notebook exists; 404 when it doesn't (404 wins over 501).
-   - Per-user isolation: user A cannot read/update/delete user B's notebook (404, not 403).
-10. **Cross-SDK parity** — `e2e-cross-sdk/harness/test_http_notebooks.py`:
-    - List response from Python and Rust produce the same tutorial notebook ids (UUID5 deterministic).
-    - Create + read-back round-trips between SDKs.
-    - The unusual `{"error": "..."}` 404 envelope is byte-identical.
-
-Stage B (sandbox `/run`):
-
-11. Add `notebooks-sandbox-subprocess` feature to `crates/http-server/Cargo.toml`.
-12. Implement `cognee_lib::notebooks::run_cell` using `tokio::process::Command` to invoke `python3` with the user code wrapped in the same async harness Python uses.
-13. Add resource limits (`RLIMIT_AS`, `RLIMIT_CPU`, wallclock timeout via `tokio::time::timeout`).
-14. Add `NotebookSandboxConfig` (timeout, memory cap, python binary path) plumbed through `HttpServerConfig`.
-15. Add tests that drive a real subprocess (gated behind `cfg(unix)` + `python3` availability — graceful skip on CI without Python installed).
+- **Migration** — SeaORM migration under `crates/database/src/migrator/` creates the `notebooks` table matching Python's schema (`id`, `owner_id` indexed, `name`, `cells` JSON, `deletable`, `created_at`).
+- **Repository** — the `NotebookDb` trait in `cognee-database` exposes the list/create/get/update/delete operations and works across SQLite/Postgres.
+- **Tutorial seeding** — `seed_tutorials_if_first_call` seeds the two tutorial notebooks on a fresh user's first `GET /`, with deterministic UUID5 ids matching Python (verified by a parity test).
+- **DTOs** — `crates/http-server/src/dto/notebooks.rs` per §4.
+- **Handlers** — `crates/http-server/src/routers/notebooks.rs` with `list`, `create`, `update`, `delete`, and `run` (the latter delegating to the wired `NotebookRunner`, or the 501 fallback when none is configured).
+- **Cell execution** — `crate::notebook_runner::SubprocessRunner` (`tokio::process::Command` → `python3`, content via stdin, wallclock timeout, `RLIMIT_AS`/`RLIMIT_CPU` on Unix), wired in when `notebook_runner_enabled` is set.
+- **Tests** — inline + `crates/http-server/tests/`: CRUD round-trip, deterministic tutorial ids, per-user isolation, 404-before-501 ordering, and the no-runner 501 fallback. Cross-SDK parity in `e2e-cross-sdk/harness/test_http_notebooks.py`.
 
 ## 6. Open questions
 
-1. **Tutorial assets** — Python ships tutorial cells as files in the package data (`cognee/modules/notebooks/tutorials/`). Where do the equivalent files live in the Rust workspace? Options: (a) duplicate the files into `crates/http-server/assets/tutorials/` and `include_dir!` them; (b) read them from a configured filesystem path at runtime; (c) skip tutorial seeding in Stage A and revisit. **Proposed**: (a), so the binary is self-contained.
-2. **Empty `cells` overwrite** — Python's `PUT` does not clear the cells list when the request body has `"cells": []`. Frontends therefore *cannot* delete all cells from a notebook via this endpoint. Should we keep the bug for parity, or fix it (and break parity)? **Proposed**: keep parity; document loudly. Frontend can work around by sending a single empty markdown cell.
-3. **Sandbox strategy commitment** — Stage B defaults to subprocess CPython (strategy A in §2.4.4). Is that acceptable to the deployment story for self-hosted dev (Docker, brew)? Or do we want to push harder on a wasm-isolated path even at the cost of a stubbed cognee SDK inside the sandbox?
-4. **Sandbox `cognee` package availability** — when Stage B ships, the subprocess needs `pip install cognee` available so user code can do `await cognee.add(...)`. Should the Rust HTTP server image bundle CPython + the cognee Python wheel, or document it as an operator-installed prerequisite? **Proposed**: optional Docker stage that adds Python + cognee, gated behind a build arg.
-5. **Sandbox auth/state propagation** — when a notebook cell calls `cognee.add(...)`, which credentials does it use? Python relies on the global config + default user. The subprocess approach would need to inherit `OPENAI_API_KEY`, DB connection strings, and a service account / API key for the running user. How do we scope this safely so a notebook can't use the operator's keys against another tenant?
-6. **Tenancy retrofit** — the table has no `tenant_id`. If we later add multi-tenant notebooks, do we migrate by deriving `tenant_id` from `owner_id`'s primary tenant, or do we leave the column null and treat notebooks as user-scoped forever?
+1. **Empty `cells` overwrite** — Python's `PUT` does not clear the cells list when the request body has `"cells": []`. Frontends therefore *cannot* delete all cells from a notebook via this endpoint. We keep the bug for parity; documented here. Frontend can work around by sending a single empty markdown cell.
+2. **Sandbox `cognee` package availability** — the execution subprocess needs `pip install cognee` available so user code can do `await cognee.add(...)`. Should the Rust HTTP server image bundle CPython + the cognee Python wheel, or document it as an operator-installed prerequisite? **Proposed**: optional Docker stage that adds Python + cognee, gated behind a build arg.
+3. **Sandbox auth/state propagation** — when a notebook cell calls `cognee.add(...)`, which credentials does it use? Python relies on the global config + default user. The subprocess would need to inherit `OPENAI_API_KEY`, DB connection strings, and a service account / API key for the running user. How do we scope this safely so a notebook can't use the operator's keys against another tenant?
+4. **Tenancy retrofit** — the table has no `tenant_id`. If we later add multi-tenant notebooks, do we migrate by deriving `tenant_id` from `owner_id`'s primary tenant, or do we leave the column null and treat notebooks as user-scoped forever?
 
 ## 7. References
 
@@ -381,4 +357,3 @@ Stage B (sandbox `/run`):
 - Cross-router conventions: [README.md §3](README.md#3-cross-router-conventions)
 - Auth extractor specification: [../auth.md §2](../auth.md#2-three-auth-mechanisms--precedence-and-resolution)
 - Telemetry attribute conventions: [../observability.md §3.3](../observability.md#33-span-instrumentation-conventions)
-- Plan reference (phase 7 / advanced): [../plan.md §7](../plan.md#7-implementation-phases)

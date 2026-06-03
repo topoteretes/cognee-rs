@@ -4,7 +4,7 @@ The bread-and-butter session router. It accepts an OAuth2-style password form on
 
 This router covers the three custom routes [`cognee/api/v1/users/routers/get_auth_router.py`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/users/routers/get_auth_router.py) defines explicitly. The fastapi-users-provided register / reset-password / verify routers, even though they share the same `/api/v1/auth` mount, live in their own per-router docs ([auth-register.md](auth-register.md), [auth-reset-password.md](auth-reset-password.md), [auth-verify.md](auth-verify.md)). The API-key management surface mounted under the same prefix is in [api-keys.md](api-keys.md).
 
-Companion docs: [../plan.md](../plan.md), [../architecture.md](../architecture.md), [../auth.md](../auth.md), [../tenants.md](../tenants.md), [../observability.md](../observability.md).
+Companion docs: [../architecture.md](../architecture.md), [../auth.md](../auth.md), [../tenants.md](../tenants.md), [../observability.md](../observability.md).
 
 ## 1. Mount & file
 

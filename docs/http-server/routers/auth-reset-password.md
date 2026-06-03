@@ -9,7 +9,7 @@ Both rely on a separate JWT secret (`FASTAPI_USERS_RESET_PASSWORD_TOKEN_SECRET`)
 
 This doc captures the **wire contract** Rust must replicate; we do not reproduce fastapi-users' Python internals. Authoritative external reference: [fastapi-users reset-password router docs](https://fastapi-users.github.io/fastapi-users/latest/configuration/routers/reset/).
 
-Companion docs: [../plan.md](../plan.md), [../architecture.md](../architecture.md), [../auth.md](../auth.md), [auth.md](auth.md), [auth-register.md](auth-register.md), [auth-verify.md](auth-verify.md).
+Companion docs: [../architecture.md](../architecture.md), [../auth.md](../auth.md), [auth.md](auth.md), [auth-register.md](auth-register.md), [auth-verify.md](auth-verify.md).
 
 ## 1. Mount & file
 

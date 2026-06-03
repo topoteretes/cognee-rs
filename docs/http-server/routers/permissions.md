@@ -7,7 +7,7 @@ is the largest router in the server (13 endpoints) and the only one that mutates
 permission-resolution algorithm it relies on are specified in [`../tenants.md`](../tenants.md);
 this doc only covers the HTTP surface and authorization checks per route.
 
-Companion docs: [../plan.md](../plan.md), [../architecture.md](../architecture.md),
+Companion docs: [../architecture.md](../architecture.md),
 [../auth.md](../auth.md), [../tenants.md](../tenants.md), [../observability.md](../observability.md).
 
 ## 1. Mount & file

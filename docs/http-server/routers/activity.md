@@ -2,7 +2,7 @@
 
 Activity & telemetry endpoints. Powers the frontend's activity timeline, trace viewer, agent registry, and dataset memory export. Five endpoints with very different shapes: a JOIN query against `pipeline_runs` (durable observability), a read of the in-memory span buffer (live observability), a tenant-scoped user listing, an agent listing derived from `@cognee.agent` email suffixes, and a Markdown report builder for a single dataset.
 
-Companion docs: [../plan.md](../plan.md), [../architecture.md](../architecture.md), [../auth.md](../auth.md), [../pipelines.md](../pipelines.md), [../observability.md](../observability.md), [../tenants.md](../tenants.md).
+Companion docs: [../architecture.md](../architecture.md), [../auth.md](../auth.md), [../pipelines.md](../pipelines.md), [../observability.md](../observability.md), [../tenants.md](../tenants.md).
 
 ## 1. Mount & file
 - Mount prefix: `/api/v1/activity`

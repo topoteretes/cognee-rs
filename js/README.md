@@ -89,10 +89,9 @@ ecosystem (there is no upstream JS cognee SDK to defer to).
 | `COGNEE_HOST_SDK` | Suppress binding-armed analytics emission when the host is an embedding SDK (decision 10). |
 | `TELEMETRY_DISABLED`, `ENV` | Standard analytics opt-outs honoured by `setupTelemetryAnalytics()`. |
 | `RUST_LOG`, `LOG_LEVEL` | Standard `tracing-subscriber` env-filter level overrides. |
-| `COGNEE_LOG_*`, `LOG_FILE_NAME` | Consumed by `setupLogging()` — see [gap 06](../docs/telemetry/06-file-logging-rotation.md). |
+| `COGNEE_LOG_*`, `LOG_FILE_NAME` | Consumed by `setupLogging()` — see the workspace README's "Logging" section. |
 | `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_HEADERS`, `OTEL_SERVICE_NAME` and other `OTEL_*` vars | Consumed by `setupTelemetry()`. |
 
 ## References
 
-- Design doc: [docs/telemetry/07-bindings-auto-init.md](../docs/telemetry/07-bindings-auto-init.md)
-- Gap-analysis: [docs/telemetry/gap-analysis.md §6](../docs/telemetry/gap-analysis.md)
+- Observability docs: [docs/observability/opentelemetry.md](../docs/observability/opentelemetry.md), [docs/observability/send_telemetry.md](../docs/observability/send_telemetry.md)

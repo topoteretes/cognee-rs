@@ -2,7 +2,7 @@
 
 Each FastAPI router in [`cognee/api/v1/`](https://github.com/topoteretes/cognee/tree/main/cognee/api/v1) gets its own design document under this directory. This README is the **index, status table, and per-doc template** — write a new file per router as you take it on; do not lump multiple routers into one file.
 
-Companion docs: [../plan.md](../plan.md), [../architecture.md](../architecture.md), [../auth.md](../auth.md), [../pipelines.md](../pipelines.md), [../websocket.md](../websocket.md), [../observability.md](../observability.md), [../tenants.md](../tenants.md), [../e2e-parity.md](../e2e-parity.md).
+Companion docs: [../architecture.md](../architecture.md), [../auth.md](../auth.md), [../pipelines.md](../pipelines.md), [../websocket.md](../websocket.md), [../observability.md](../observability.md), [../tenants.md](../tenants.md).
 
 ## 1. Status table
 
@@ -49,7 +49,7 @@ One row per router. Update the row in the same PR that lands or changes the unde
 | 30 | notebooks | `/api/v1/notebooks` | [notebooks.md](notebooks.md) | **Done** |
 | 31 | checks (cloud) | `/api/v1/checks` | [checks.md](checks.md) | **Done** |
 
-The implementation phases in [../plan.md](../plan.md#4-implementation-phases) drive the order in which these docs need to be ready.
+All 31 routers above are implemented and shipped; this table tracks each router's spec and cross-SDK parity status.
 
 ## 2. Per-doc template
 
@@ -61,7 +61,7 @@ Every per-router doc must use the structure below. Fill all sections; if a secti
 Brief one-paragraph summary: what the router does, who calls it, and the one or two sentences that
 distinguish it from related routers (e.g. `/api/v1/recall` vs `/api/v1/search`).
 
-Companion docs: [../plan.md](../plan.md), [../architecture.md](../architecture.md), [../auth.md](../auth.md),
+Companion docs: [../architecture.md](../architecture.md), [../auth.md](../auth.md),
 and any sub-doc relevant to this router (e.g. [../pipelines.md](../pipelines.md) for routers that dispatch jobs).
 
 ## 1. Mount & file
@@ -187,7 +187,7 @@ Each endpoint gets a `#[utoipa::path(...)]` annotation declaring tags, parameter
 
 ## 4. Suggested writing order
 
-When creating per-router docs, prioritize as the implementation plan suggests ([../plan.md §4](../plan.md#4-implementation-phases)):
+The routers were originally written in the implementation-phase order below (retained as orientation for how the surface is grouped):
 
 1. **P0** (foundation): `health`.
 2. **P1** (auth): `auth`, `auth-register`, `auth-reset-password`, `auth-verify`, `api-keys`, `users`, `users-by-email`.
@@ -203,5 +203,4 @@ Each per-router doc lands as part of the PR that implements that router. The doc
 ## 5. References
 
 - Python router files: [`cognee/api/v1/<name>/routers/`](https://github.com/topoteretes/cognee/tree/main/cognee/api/v1).
-- Cross-SDK parity test files: `e2e-cross-sdk/harness/test_http_<name>.py` (see [../e2e-parity.md §5](../e2e-parity.md#5-test-inventory)).
-- Implementation phases: [../plan.md §4](../plan.md#4-implementation-phases).
+- Cross-SDK parity test files: `e2e-cross-sdk/harness/test_http_<name>.py`.

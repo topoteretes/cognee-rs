@@ -2,7 +2,7 @@
 
 Specification for the live pipeline-progress WebSocket at **`/api/v1/cognify/subscribe/{pipeline_run_id}`**. This is the only WebSocket endpoint Python exposes ([`get_cognify_router.py`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/cognify/routers/get_cognify_router.py) — the `subscribe_to_cognify_info` block). The Rust server replicates it byte-for-byte so existing frontend / SDK clients work unchanged.
 
-Companion docs: [plan.md](plan.md), [architecture.md](architecture.md), [pipelines.md](pipelines.md) (defines the `RunEvent` channel this endpoint consumes), [auth.md](auth.md) (the JWT semantics used for the auth handshake).
+Companion docs: [architecture.md](architecture.md), [pipelines.md](pipelines.md) (defines the `RunEvent` channel this endpoint consumes), [auth.md](auth.md) (the JWT semantics used for the auth handshake).
 
 ## 1. Goals & non-goals
 

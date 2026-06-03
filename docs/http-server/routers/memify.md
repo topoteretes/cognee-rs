@@ -4,7 +4,7 @@ The memify router runs Cognee's enrichment pipeline on top of an existing knowle
 
 It distinguishes itself from `/api/v1/cognify` (graph *creation* from data) and `/api/v1/improve` (memify-shaped alias with an additional session-bridging dimension — see [improve.md](improve.md)).
 
-Companion docs: [../plan.md](../plan.md), [../architecture.md](../architecture.md), [../auth.md](../auth.md), [../pipelines.md](../pipelines.md), [../tenants.md](../tenants.md), [../observability.md](../observability.md).
+Companion docs: [../architecture.md](../architecture.md), [../auth.md](../auth.md), [../pipelines.md](../pipelines.md), [../tenants.md](../tenants.md), [../observability.md](../observability.md).
 
 ## 1. Mount & file
 - Mount prefix: `/api/v1/memify`

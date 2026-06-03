@@ -4,7 +4,7 @@ This document specifies how the Rust HTTP server tracks long-running pipeline op
 
 Library functions in `cognee-lib` stay synchronous (callers `.await` them to completion). The `run_in_background` flag is purely a **hosting concern**: the HTTP server decides whether to await the future inline or hand it to the registry's spawn path. There is no `run_in_background` flag in the library API.
 
-Companion docs: [plan.md](plan.md), [architecture.md](architecture.md), [auth.md](auth.md), [websocket.md](websocket.md) (consumes the channel exposed here), [routers/cognify.md](routers/cognify.md), [routers/memify.md](routers/memify.md), [routers/remember.md](routers/remember.md), [routers/improve.md](routers/improve.md).
+Companion docs: [architecture.md](architecture.md), [auth.md](auth.md), [websocket.md](websocket.md) (consumes the channel exposed here), [routers/cognify.md](routers/cognify.md), [routers/memify.md](routers/memify.md), [routers/remember.md](routers/remember.md), [routers/improve.md](routers/improve.md).
 
 ## 1. Goals & non-goals
 
@@ -95,7 +95,7 @@ The HTTP DTO layer in `crates/http-server/src/dto/pipeline_run.rs` owns both tra
 
 ### 3.4 Four-state lifecycle on the `pipeline_runs` table
 
-After [telemetry gap 08](../telemetry/08-pipeline-run-status.md), every pipeline (cognify, memify, ingestion) — whether invoked through the HTTP server, the CLI, or as a library call — writes the full Python-faithful four-state trail to the `pipeline_runs` table. Each transition is a **new row** sharing the same `pipeline_run_id`; the latest row by `created_at` defines the current state.
+Every pipeline (cognify, memify, ingestion) — whether invoked through the HTTP server, the CLI, or as a library call — writes the full Python-faithful four-state trail to the `pipeline_runs` table. Each transition is a **new row** sharing the same `pipeline_run_id`; the latest row by `created_at` defines the current state.
 
 ```
 INITIATED → STARTED → (COMPLETED | ERRORED)
@@ -110,7 +110,7 @@ INITIATED → STARTED → (COMPLETED | ERRORED)
 
 `data_info` (the JSON serialised under `"data"`) is byte-identical to Python's helper: a `[String]` array of stringified `Data.id`s for `Vec<Data>` inputs, the literal string `"None"` for empty inputs, and `format!("{:?}", input)` for repr-fallback inputs. The helper lives at `cognee_core::pipeline_run_registry::data_info`.
 
-`GET /api/v1/activity/pipeline-runs` projects the latest row per `(pipeline_name, dataset_id)` and returns the `DATASET_PROCESSING_*` wire string for `status`. The library-side API surface (`reset_pipeline_run_status`, `reset_dataset_pipeline_run_status`, the reader trio on `PipelineRunRepository`, and the `check_pipeline_run_qualification` gate) is documented under [`docs/telemetry/08-pipeline-run-status.md` § Closure summary](../telemetry/08-pipeline-run-status.md#closure-summary).
+`GET /api/v1/activity/pipeline-runs` projects the latest row per `(pipeline_name, dataset_id)` and returns the `DATASET_PROCESSING_*` wire string for `status`. The library-side API surface includes `reset_pipeline_run_status`, `reset_dataset_pipeline_run_status`, the reader trio on `PipelineRunRepository`, and the `check_pipeline_run_qualification` gate.
 
 ## 4. Identifiers
 

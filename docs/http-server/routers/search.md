@@ -2,7 +2,7 @@
 
 The `/api/v1/search` router is the primary read-path entry point. `POST /` runs a semantic search across the user's knowledge graph using one of fifteen `SearchType` strategies and persists the question/answer pair to the search history. `GET /` returns the last 50 history rows. Compared to `/api/v1/recall`, this router does **not** auto-route the query type (the caller picks one explicitly via `search_type`) and does **not** perform session-first lookup; recall layers both on top of the same underlying `SearchOrchestrator`.
 
-Companion docs: [../plan.md](../plan.md), [../architecture.md](../architecture.md), [../auth.md](../auth.md), [../tenants.md](../tenants.md), [../observability.md](../observability.md).
+Companion docs: [../architecture.md](../architecture.md), [../auth.md](../auth.md), [../tenants.md](../tenants.md), [../observability.md](../observability.md).
 
 ## 1. Mount & file
 - Mount prefix: `/api/v1/search`

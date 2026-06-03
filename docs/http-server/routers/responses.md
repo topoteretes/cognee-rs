@@ -2,12 +2,9 @@
 
 The `responses` router exposes an **OpenAI-compatible Responses API** in front of the cognee tool surface (`add`, `cognify`, `search`, `prune`). A client posts a natural-language `input` plus a tools schema; the server forwards the request to OpenAI's [`/v1/responses` endpoint](https://platform.openai.com/docs/api-reference/responses/create), then dispatches any returned `function_call` items into the matching cognee Python function and folds the results back into an OpenAI-shaped `ResponseBody`. This lets ChatGPT-flavored clients (and tools that already speak the Responses API) drive cognee operations through tool calls without bespoke integration code.
 
-This router is **deferred entirely to Stage B** in the Rust port. Stage A ships a stub that returns `501 Not Implemented` so OpenAPI consumers see the route exist and so SDKs that probe it during boot don't 404. The future-design portion of this doc captures the wire shape and dispatch behavior in enough detail to drop the real implementation in without re-design.
+**Status: implemented.** The router calls the configured `ResponsesClient` (OpenAI Responses API), dispatches returned `function_call` items into the matching cognee operation (`search` / `cognify`) via [`responses_dispatch.rs`](../../../crates/http-server/src/responses_dispatch.rs), and folds the results back into the OpenAI-shaped `ResponseBodyDTO`. There is no `501` stub path — a regression test (`responses_no_longer_returns_501`) guards against reintroducing one. The sections below document the wire contract and dispatch behavior as shipped.
 
-> **Stage A deliverable**: route registered, DTOs defined, `POST /` returns `501` with the documented body. No OpenAI client code shipped.
-> **Stage B deliverable**: real OpenAI Responses API integration, function-call dispatch into `cognee_lib::*`, full response envelope.
-
-Companion docs: [../plan.md](../plan.md), [../architecture.md](../architecture.md), [../auth.md](../auth.md), [../observability.md](../observability.md).
+Companion docs: [../architecture.md](../architecture.md), [../auth.md](../auth.md), [../observability.md](../observability.md).
 
 ## 1. Mount & file
 
@@ -23,19 +20,17 @@ Mount registration: [`cognee/api/client.py:252`](https://github.com/topoteretes/
 
 ## 2. Endpoints
 
-One endpoint. Stage A ships only the stub.
+One endpoint.
 
 ### 2.1 `POST /` — create a response (OpenAI-compatible)
 
-#### 2.1.1 Wire contract (target shape, both phases honor envelope)
+#### 2.1.1 Wire contract
 
 - **Auth**: `required` (`AuthenticatedUser`).
 - **Path params**: none.
 - **Query params**: none.
 - **Request body**: `application/json`, `ResponseRequestDTO` — see §4.
-- **Response body**:
-  - **Stage B**: `200 OK`, `application/json`, `ResponseBodyDTO` — see §4. The `tool_calls` array contains every dispatched cognee function call with its inline result.
-  - **Stage A**: `501 Not Implemented`, `application/json`, `{"detail": "OpenAI Responses API surface is not implemented in this build", "code": "RESPONSES_NOT_IMPLEMENTED"}`.
+- **Response body**: `200 OK`, `application/json`, `ResponseBodyDTO` — see §4. The `tool_calls` array contains every dispatched cognee function call with its inline result.
 
 - **Error responses**:
 
@@ -43,19 +38,16 @@ One endpoint. Stage A ships only the stub.
   |---|---|---|
   | `400` | `{"detail": [...], "body": ...}` | Validation error on `ResponseRequestDTO` (e.g. missing `input`, malformed tool definition). |
   | `401` | `{"detail": "Unauthorized"}` | No credential; `REQUIRE_AUTHENTICATION=true`. |
-  | `429` (Stage B) | `{"detail": "Upstream OpenAI rate limit exceeded"}` | OpenAI returned 429; we forward as a structured `ApiError::TooManyRequests`. |
-  | `502` (Stage B) | `{"detail": "Upstream OpenAI error: <message>"}` | OpenAI returned a non-2xx other than 429, or the upstream connection failed. |
-  | `500` (Stage B) | `{"detail": "<message>"}` | Function-dispatch error after the upstream call succeeded. **Note**: per Python's current behavior, dispatch errors are folded *into the response body* (`tool_calls[i].output.status = "error"`) and the HTTP status remains `200`. We replicate that — `500` is reserved for *router-level* failures (DB, panics, framework). |
-  | `501` (Stage A only) | `{"detail": "OpenAI Responses API surface is not implemented in this build", "code": "RESPONSES_NOT_IMPLEMENTED"}` | Stub. |
+  | `429` | `{"detail": "Upstream OpenAI rate limit exceeded"}` | OpenAI returned 429; we forward as a structured `ApiError::TooManyRequests`. |
+  | `502` | `{"detail": "Upstream OpenAI error: <message>"}` | OpenAI returned a non-2xx other than 429, or the upstream connection failed. |
+  | `500` | `{"detail": "<message>"}` | Function-dispatch error after the upstream call succeeded. **Note**: per Python's current behavior, dispatch errors are folded *into the response body* (`tool_calls[i].output.status = "error"`) and the HTTP status remains `200`. We replicate that — `500` is reserved for *router-level* failures (DB, panics, framework). |
 
-- **Side effects** (Stage B):
+- **Side effects**:
   - One outgoing HTTP request to `https://api.openai.com/v1/responses` (or the configured base URL).
   - For each `function_call` in the upstream response, a synchronous in-process call to the matching `cognee_lib::*` function (`add`, `cognify`, `search`, `prune`). These can in turn write to the relational DB, graph DB, vector DB, file storage, embedding engine, and LLM.
   - Costs OpenAI tokens; the response includes a `usage` block.
 
-- **Delegation target**: TBD — Stage B.
-  - Stage B introduces `cognee_lib::responses::dispatch(input, tools, tool_choice, temperature, user) -> ResponseBodyDTO`.
-  - Internally it calls a thin OpenAI client (reuse the `reqwest`+`rustls` stack already set up for `cognee-llm`) and a `dispatch_function` analogue that pattern-matches function names to cognee facade calls.
+- **Delegation target**: the handler (`create_response` in `crates/http-server/src/routers/responses.rs`) calls the configured `ResponsesClient` for the upstream request, then routes each returned `function_call` through `crate::responses_dispatch` (the `dispatch_function` analogue that pattern-matches function names to cognee facade calls). The upstream client reuses the `reqwest`+`rustls` stack from `cognee-llm`.
 
 - **Validation rules**:
   - `input` is required and non-empty (Pydantic `str` field with no default; matched in Rust by `String` non-`Option`).
@@ -66,9 +58,9 @@ One endpoint. Stage A ships only the stub.
   - `max_completion_tokens` is `Option<u32>`. Forwarded verbatim to the upstream call.
   - `user` is `Option<String>`. Forwarded as the OpenAI `user` field for abuse-tracking.
 
-- **Permission gate**: implicit. The dispatcher uses `get_default_user()` in Python ([`dispatch_function.py:35`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/responses/dispatch_function.py#L35)) — *not* the authenticated user. This is a **known parity quirk**: `tool_calls.search` runs as the default user even when the caller is logged in as someone else. The Rust port mirrors this for compat in Stage B but flags it as an open question (see §6).
+- **Permission gate**: implicit. The dispatcher uses `get_default_user()` in Python ([`dispatch_function.py:35`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/responses/dispatch_function.py#L35)) — *not* the authenticated user. This is a **known parity quirk**: `tool_calls.search` runs as the default user even when the caller is logged in as someone else. The Rust port mirrors this for compat but flags it as an open question (see §6).
 
-- **OpenAPI**: tag `responses`. Stage A: mark with `x-cognee-stub: true`. Stage B: full request/response schemas; security scheme inherited from global config.
+- **OpenAPI**: tag `responses`; full request/response schemas; security scheme inherited from global config.
 
 - **Telemetry**: span name `cognee.api.responses.create`. Attributes:
   - `cognee.llm.provider = "openai"`
@@ -78,32 +70,12 @@ One endpoint. Stage A ships only the stub.
   - `cognee.llm.usage.prompt_tokens`, `cognee.llm.usage.completion_tokens`, `cognee.llm.usage.total_tokens`
 
 - **Python parity notes**:
-  - Python **hard-codes the upstream model to `"gpt-4o"`** ([line 57](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/responses/routers/get_responses_router.py#L57)) regardless of `request.model`. The `request.model` value is reflected in the response (`response.model = request.model`) but is otherwise ignored. We replicate this in Stage B — same hard-coded model, same value-passthrough in the response.
+  - Python **hard-codes the upstream model to `"gpt-4o"`** ([line 57](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/responses/routers/get_responses_router.py#L57)) regardless of `request.model`. The `request.model` value is reflected in the response (`response.model = request.model`) but is otherwise ignored. We replicate this — same hard-coded model, same value-passthrough in the response.
   - The upstream call uses `client.responses.create(...)`, which is the **new** OpenAI Responses API (not Chat Completions). The shape of `response.output` is a list of items, each with a `type` discriminator (`"message"`, `"function_call"`, etc.). We only inspect `function_call` items.
   - Function dispatch errors are caught and stuffed into the response body — they do not raise. The HTTP status stays `200` even when every tool call errors.
-  - The `dispatch_function` resolves the user via `get_default_user()`, **not** via the request's `AuthenticatedUser`. This means tool calls execute under the default user's identity regardless of who initiated the response. Rust matches Python verbatim — Stage B implementation must call `cognee_lib::default_user()` for the dispatch context, not `AuthenticatedUser`.
+  - The `dispatch_function` resolves the user via `get_default_user()`, **not** via the request's `AuthenticatedUser`. This means tool calls execute under the default user's identity regardless of who initiated the response. Rust matches Python verbatim — the dispatch context uses the default user, not `AuthenticatedUser`.
 
-#### 2.1.2 Stage A stub — exact behavior
-
-```rust
-async fn create_response(
-    State(_state): State<AppState>,
-    user: AuthenticatedUser,            // still enforced — auth is not deferred
-    Json(_req): Json<ResponseRequestDTO>,// still validated — bad payloads see 400, not 501
-) -> Result<Response, ApiError> {
-    Ok((
-        StatusCode::NOT_IMPLEMENTED,
-        Json(json!({
-            "detail": "OpenAI Responses API surface is not implemented in this build",
-            "code":   "RESPONSES_NOT_IMPLEMENTED",
-        })),
-    ).into_response())
-}
-```
-
-Auth and request-body validation **are** enforced in Stage A — only the upstream OpenAI call and dispatch are absent. This means a client can integration-test its request shape today and start receiving real responses the day Stage B ships, without changing client code paths.
-
-#### 2.1.3 Stage B — full implementation flow
+#### 2.1.2 Implementation flow
 
 The handler: (1) validates `ResponseRequestDTO`; (2) builds an upstream request with `model="gpt-4o"` override (see §3.3), `input`, `tools or DEFAULT_TOOLS`, `tool_choice`, `temperature`, `user`, `max_completion_tokens`; (3) `POST`s to `<base>/v1/responses`; (4) iterates the upstream `output` array, dispatching each `type == "function_call"` item per the table in §3.4; (5) folds each result into a `ResponseToolCallDTO` (`output.status = "success"` or `"error"`); (6) assembles `ResponseBodyDTO { id, created, model = request.model, object = "response", status = "completed", tool_calls, usage }` and returns `200 OK`.
 
@@ -121,11 +93,11 @@ Note the **two divergent source files** in the Python tree: [`default_tools.py`]
 
 ### 3.3 Upstream model override
 
-Python hard-codes the upstream model to `"gpt-4o"` regardless of `request.model` ([line 57](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/responses/routers/get_responses_router.py#L57)). The request's `CogneeModel` enum has only one variant (`"cognee-v1"`), so the field is a routing key, not a model selector. Stage B keeps the override; an env var to lift the default is open question §6.3.
+Python hard-codes the upstream model to `"gpt-4o"` regardless of `request.model` ([line 57](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/responses/routers/get_responses_router.py#L57)). The request's `CogneeModel` enum has only one variant (`"cognee-v1"`), so the field is a routing key, not a model selector. The override is kept; lifting the default via an env var is an open question (see §6).
 
 ### 3.4 Function-call dispatch
 
-Stage B implements a single `match` on the function name from the upstream output:
+The dispatcher does a single `match` on the function name from the upstream output:
 
 | Function name | Cognee facade call | Result string |
 |---|---|---|
@@ -134,11 +106,11 @@ Stage B implements a single `match` on the function name from the upstream outpu
 | `prune` | `cognee_lib::api::prune::prune_data()` (and/or `prune_system()` per Python's `cognee.prune` semantics). | `"Memory has been pruned successfully."` |
 | anything else | — | `"Error: Unknown function <name>"` (HTTP 200, in-band). |
 
-The `SearchOrchestrator`, `AddPipeline`, `cognify`, and `prune_*` facades all exist on the Rust side today; Stage B work is wiring, not new functionality. Note that `add` is a *module* in `cognee_lib`, not a function — the corresponding entry point is `AddPipeline::run`.
+The `SearchOrchestrator`, `AddPipeline`, `cognify`, and `prune_*` facades all exist on the Rust side; the dispatcher is wiring over them, not new functionality. Note that `add` is a *module* in `cognee_lib`, not a function — the corresponding entry point is `AddPipeline::run`.
 
 ### 3.5 OpenAI client, sync-only execution, telemetry
 
-- **Client**: reuse the existing `reqwest` (rustls) stack from `cognee-llm`. Do not pull in a third-party "openai" Rust crate — the Responses API surface is small and dependency hygiene matters. Stage B adds `crates/http-server/src/openai/responses_client.rs` with `OpenAiResponsesRequest` and `OpenAiResponsesResponse` types deserialized from OpenAI's wire shape.
+- **Client**: built on the existing `reqwest` (rustls) stack from `cognee-llm` — no third-party "openai" Rust crate, since the Responses API surface is small and dependency hygiene matters. The `ResponsesClient` uses internal request/response wire types deserialized from OpenAI's shape, kept separate from the public DTOs.
 - **No background-job mode**: this endpoint has no `run_in_background` flag. Long-running tool calls (e.g. `cognify`) block until completion; timeout-sensitive clients should call `/api/v1/cognify` directly with `run_in_background=true`.
 - **Telemetry**: per [../observability.md §5](../observability.md#5-secret-redaction), the redaction layer must scrub the OpenAI bearer token from captured attributes. Concretely: never record `Authorization` headers, and ensure `OPENAI_API_KEY` is not logged when emitting upstream-error spans.
 
@@ -244,7 +216,7 @@ pub struct ResponseBodyDTO {
     pub model: String,
     /// Always `"response"`.
     pub object: String,
-    /// Always `"completed"` in Stage B (Python does not differentiate states).
+    /// Always `"completed"` (Python does not differentiate states).
     pub status: String,
     /// One entry per dispatched `function_call` from the upstream output.
     pub tool_calls: Vec<ResponseToolCallDTO>,
@@ -302,37 +274,29 @@ The DTO docstrings in §4.1–4.2 describe each field. A handful of mappings des
 - `type` (Python) → `kind` (Rust) on `ToolFunctionDTO`, `FunctionParametersDTO`, `ResponseToolCallDTO`. Renamed via `#[serde(rename = "type")]` because `type` is a Rust keyword; the wire shape stays `"type": "function" | "object"`.
 - `tool_choice` (`Union[str, Dict[str, Any]]`) → `serde_json::Value`. Don't try to model the union as a Rust enum — OpenAI keeps adding shapes, and a `Value` round-trips them safely.
 - `FunctionCall.arguments` is a **string of JSON**, not a JSON object. OpenAI emits it that way and clients parse it themselves; we forward bytes-for-bytes.
-- `ChatUsage` field names (`prompt_tokens`, `completion_tokens`, `total_tokens`) are the **renamed** versions. OpenAI's Responses API returns `input_tokens` / `output_tokens`; Python's handler ([line 165–168](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/responses/routers/get_responses_router.py#L165-L168)) maps them. Stage B keeps the rename for client compat — see open question §6.2.
+- `ChatUsage` field names (`prompt_tokens`, `completion_tokens`, `total_tokens`) are the **renamed** versions. OpenAI's Responses API returns `input_tokens` / `output_tokens`; Python's handler ([line 165–168](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/responses/routers/get_responses_router.py#L165-L168)) maps them. We keep the rename for client compat — see open question §6.
 - `ResponseBody.id` falls back to a server-generated `resp_<hex>` only when the upstream omits an id; normally the upstream id is forwarded.
 - `ResponseBody.metadata` is `Dict[str, Any] = None` in Python — semantically optional. Use `Option<HashMap<String, Value>>`, emit as `null` when unset.
 - All `*_<hex>` factories use `uuid::Uuid::new_v4()` rendered as `format!("{}_{}", prefix, uuid.simple())` to match Python's `uuid.uuid4().hex`.
 
-## 5. Implementation tasks
+## 5. Implementation (shipped)
 
-**Stage A — stub** (lands with the rest of phase 7):
+The router is fully implemented. The pieces, as built:
 
-1. Add `crates/http-server/src/dto/responses.rs` with the DTOs in §4 (`#[derive(ToSchema)]`).
-2. Add `crates/http-server/src/routers/responses.rs` with a single `POST /` handler that returns `501` per §2.1.2. Auth is enforced and request validation still runs — bad payloads see `400`, not `501`.
-3. Embed `DEFAULT_TOOLS` as a `static Lazy<Value>` (snapshot-tested against Python's serialized form).
-4. Add OpenAPI annotations (`tag = "responses"`, `x-cognee-stub: true`).
-5. Tests in `crates/http-server/tests/test_responses.rs`: DTO round-trip; stub returns 501 with exact body; auth still 401; bad body still 400.
-
-**Stage B — real implementation**:
-
-6. Add `crates/http-server/src/openai/responses_client.rs` with `OpenAiResponsesClient` (`reqwest` + `rustls`). Base URL configurable via `OPENAI_API_BASE` (default `https://api.openai.com/v1`). Define internal wire types separately from the public DTOs.
-7. Add `crates/http-server/src/dispatch/responses_dispatch.rs` that matches function names per §3.4 and folds outcomes into `ResponseToolCallDTO`. Resolve `user` via `default_user` for parity (open question §6.4).
-8. Wire `cognee_lib::responses::create_response(...)` through the facade so other consumers (MCP, embedders) can reuse the dispatcher.
-9. Replace the 501 stub. Upstream error mapping: 429 → `TooManyRequests`; other non-2xx and connect/timeout errors → `BadGateway`. Function-dispatch errors fold into `tool_calls[i].output.status = "error"`; HTTP stays 200.
-10. Tests: `wiremock`/`httpmock` mock OpenAI; assert request shape, dispatch, response assembly, error folding, unknown-function fallback string. Cross-SDK parity test in `e2e-cross-sdk/harness/test_http_responses.py` against a shared mock upstream.
+- DTOs in `crates/http-server/src/dto/responses.rs` (the structs in §4).
+- The `POST /` handler in `crates/http-server/src/routers/responses.rs` — validates `ResponseRequestDTO`, calls the configured `ResponsesClient`, dispatches tool calls, and assembles `ResponseBodyDTO`. No `501` path remains (guarded by `responses_no_longer_returns_501`).
+- `DEFAULT_TOOLS` (`crate::responses_dispatch::default_tools()`), snapshot-aligned with Python's router-local serialized form.
+- Function-call dispatch in `crates/http-server/src/responses_dispatch.rs` — matches function names per §3.4 and folds outcomes into `ResponseToolCallDTO`; resolves `user` via the default user for parity (see §6).
+- Upstream error mapping: 429 → `TooManyRequests`; other non-2xx and connect/timeout errors → `BadGateway`. Function-dispatch errors fold into `tool_calls[i].output.status = "error"`; HTTP stays `200`.
+- Tests in `crates/http-server/src/routers/responses.rs` (inline) and `crates/http-server/tests/`: DTO round-trip, search/cognify dispatch, empty-tool-call case, id synthesis, and the 501-regression guard.
 
 ## 6. Open questions
 
-1. **Stage B timing** — when does the OpenAI Responses integration justify the dependency surface? Stage A stub buys us time, but the frontend roadmap may demand it sooner than the rest of Stage B ships. Decide before merging this doc whether Stage B is a single milestone or splits into "stub + DTOs landed" (now) and "real upstream" (later).
-2. **`ChatUsage` field renaming** — Python receives `input_tokens` / `output_tokens` from OpenAI's Responses API and renames them to `prompt_tokens` / `completion_tokens` on output. This is a hold-over from Chat Completions. Should Stage B keep the rename for client-compat, or pass through the new names? **Proposed**: keep rename; document the divergence from raw OpenAI output.
+1. **`ChatUsage` field renaming** — Python receives `input_tokens` / `output_tokens` from OpenAI's Responses API and renames them to `prompt_tokens` / `completion_tokens` on output (a hold-over from Chat Completions). The Rust port keeps the rename for client-compat; this diverges from raw OpenAI output and is documented rather than changed.
 3. **Hard-coded `gpt-4o`** — Python hard-codes the upstream model. Rust matches: hard-coded `"gpt-4o"`, no `COGNEE_RESPONSES_UPSTREAM_MODEL` env var. Operators wanting to change it must rebuild from source — same constraint Python deployments have.
 4. **Default tools schema source of truth** — Python has *two* `default_tools.py` files (top-level and router-local) with diverging contents; the router-local one wins at runtime. Rust matches that runtime behavior by porting the router-local file's contents into a single Rust constant. The duplicate Python file's contents are not used at runtime by Python either, so the wire behavior is identical. (Internal consolidation, not a wire divergence.)
 5. **Dispatcher `user` resolution** — Python uses `get_default_user()`, ignoring the authenticated request user. Rust matches verbatim: tool calls execute under the default user's identity. No warning span attribute, no behavior change. Strict wire and side-effect parity.
-6. **OpenAI bearer token leakage** — the upstream client must not log the `Authorization: Bearer sk-...` header at any level. The redaction layer in [observability.md §5](../observability.md#5-secret-redaction) handles attribute redaction, but stdout `reqwest` debug logs (when `RUST_LOG=trace`) bypass it. Should Stage B disable `reqwest` trace logging unconditionally, or rely on operator discipline?
+6. **OpenAI bearer token leakage** — the upstream client must not log the `Authorization: Bearer sk-...` header at any level. The redaction layer in [observability.md §5](../observability.md#5-secret-redaction) handles attribute redaction, but stdout `reqwest` debug logs (when `RUST_LOG=trace`) bypass it. Should we disable `reqwest` trace logging unconditionally, or rely on operator discipline?
 
 ## 7. References
 
@@ -344,6 +308,5 @@ The DTO docstrings in §4.1–4.2 describe each field. A handful of mappings des
 - Mount registration: [`cognee/api/client.py:252`](https://github.com/topoteretes/cognee/blob/main/cognee/api/client.py#L252)
 - OpenAI Responses API reference: [https://platform.openai.com/docs/api-reference/responses/create](https://platform.openai.com/docs/api-reference/responses/create)
 - Cross-router conventions: [README.md §3](README.md#3-cross-router-conventions)
-- Plan reference (phase 7 / advanced): [../plan.md §7](../plan.md#7-implementation-phases) and [../plan.md §10 Q6](../plan.md#10-risks--open-questions)
 - Auth extractor: [../auth.md §2](../auth.md#2-three-auth-mechanisms--precedence-and-resolution)
 - Telemetry conventions: [../observability.md §3.3-3.4](../observability.md#33-span-instrumentation-conventions)

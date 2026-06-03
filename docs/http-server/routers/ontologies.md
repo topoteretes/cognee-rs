@@ -2,7 +2,7 @@
 
 Multipart endpoint for uploading and listing OWL/RDF ontology files. Ontologies are user-scoped and stored under a per-user directory; the upload validates the `.owl` extension and the user-provided `ontology_key` for shape, then writes the file plus a JSON metadata index. Cognify pipelines can later reference these files by key (the ontology integration is described in [`cognee-ontology`](../../crates/ontology/) and is out of scope for this doc).
 
-Companion docs: [../plan.md](../plan.md), [../architecture.md](../architecture.md), [../auth.md](../auth.md), [../tenants.md](../tenants.md), [../observability.md](../observability.md).
+Companion docs: [../architecture.md](../architecture.md), [../auth.md](../auth.md), [../tenants.md](../tenants.md), [../observability.md](../observability.md).
 
 ## 1. Mount & file
 - Mount prefix: `/api/v1/ontologies`

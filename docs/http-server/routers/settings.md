@@ -6,7 +6,7 @@ only: `GET` returns the current snapshot together with the list of selectable pr
 `POST` partially updates either or both sub-configurations. The endpoint deliberately couples the
 LLM and vector-DB configs because the frontend treats them as a single "settings" panel.
 
-Companion docs: [../plan.md](../plan.md), [../architecture.md](../architecture.md),
+Companion docs: [../architecture.md](../architecture.md),
 [../auth.md](../auth.md), [../observability.md](../observability.md).
 
 ## 1. Mount & file

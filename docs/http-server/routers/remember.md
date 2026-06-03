@@ -4,7 +4,7 @@ The remember router is the one-shot "ingest + cognify" endpoint: it accepts a mu
 
 It distinguishes itself from `/api/v1/add` (multipart upload only — no graph extraction) and `/api/v1/cognify` (graph extraction only — no upload). Internally it calls both in sequence; the response shape comes from `cognee.api.v1.remember.remember.RememberResult.to_dict()`.
 
-Companion docs: [../plan.md](../plan.md), [../architecture.md](../architecture.md), [../auth.md](../auth.md), [../pipelines.md](../pipelines.md), [../tenants.md](../tenants.md), [../observability.md](../observability.md).
+Companion docs: [../architecture.md](../architecture.md), [../auth.md](../auth.md), [../pipelines.md](../pipelines.md), [../tenants.md](../tenants.md), [../observability.md](../observability.md).
 
 ## 1. Mount & file
 - Mount prefix: `/api/v1/remember`

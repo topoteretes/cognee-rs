@@ -4,7 +4,7 @@ A single-endpoint router that resolves an email address to a user's UUID. Used b
 
 The endpoint has its own dedicated router file in Python because it is a cognee-specific addition — fastapi-users does not provide a "get id by email" lookup.
 
-Companion docs: [../plan.md](../plan.md), [../architecture.md](../architecture.md), [../auth.md](../auth.md), [../tenants.md](../tenants.md), [users.md](users.md), [auth.md](auth.md).
+Companion docs: [../architecture.md](../architecture.md), [../auth.md](../auth.md), [../tenants.md](../tenants.md), [users.md](users.md), [auth.md](auth.md).
 
 ## 1. Mount & file
 

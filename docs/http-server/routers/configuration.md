@@ -6,7 +6,7 @@ ingestion templates, and LLM system-prompt presets without giving them their own
 schema. Three endpoints: store-or-update by name, fetch by config ID, list-all-mine. Distinct
 from `/api/v1/settings` (which is global server config) and from the user's auth profile.
 
-Companion docs: [../plan.md](../plan.md), [../architecture.md](../architecture.md),
+Companion docs: [../architecture.md](../architecture.md),
 [../auth.md](../auth.md), [../tenants.md](../tenants.md), [../observability.md](../observability.md).
 
 ## 1. Mount & file

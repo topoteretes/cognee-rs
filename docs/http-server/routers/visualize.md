@@ -2,7 +2,7 @@
 
 The `/api/v1/visualize` router serves single-file HTML knowledge-graph visualizations rendered by the existing `cognee-visualization` crate (a force-directed d3.js graph viewer). `GET /` renders the graph for one of the caller's datasets; `POST /multi` aggregates several users' datasets into a combined visualization (superuser-only). Both endpoints return `text/html` directly — they do **not** return JSON. This is the only router in the API that returns HTML as its happy-path response.
 
-Companion docs: [../plan.md](../plan.md), [../architecture.md](../architecture.md), [../auth.md](../auth.md), [../tenants.md](../tenants.md), [../observability.md](../observability.md).
+Companion docs: [../architecture.md](../architecture.md), [../auth.md](../auth.md), [../tenants.md](../tenants.md), [../observability.md](../observability.md).
 
 ## 1. Mount & file
 - Mount prefix: `/api/v1/visualize`

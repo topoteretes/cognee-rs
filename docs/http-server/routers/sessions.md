@@ -4,7 +4,7 @@ Session-management dashboard endpoints. Powers the frontend's "Sessions" panel: 
 
 This router belongs to the v2 memory-API effort; its handlers cite "Decision N / divergence D-N" rationale notes that live alongside the broader v2 wire-shape conventions.
 
-Companion docs: [../plan.md](../plan.md), [../architecture.md](../architecture.md), [../auth.md](../auth.md), [../observability.md](../observability.md), [../tenants.md](../tenants.md).
+Companion docs: [../architecture.md](../architecture.md), [../auth.md](../auth.md), [../observability.md](../observability.md), [../tenants.md](../tenants.md).
 
 ## 1. Mount & file
 - Mount prefix: `/api/v1/sessions`

@@ -4,7 +4,7 @@ The fastapi-users-provided register router, mounted alongside the cognee auth ro
 
 This doc captures the **wire contract** Rust must replicate; we do not reproduce fastapi-users' Python internals (UserManager, Strategy chains, etc.). Authoritative external reference: [fastapi-users register router docs](https://fastapi-users.github.io/fastapi-users/latest/configuration/routers/register/).
 
-Companion docs: [../plan.md](../plan.md), [../architecture.md](../architecture.md), [../auth.md](../auth.md), [../tenants.md](../tenants.md), [auth.md](auth.md), [users.md](users.md).
+Companion docs: [../architecture.md](../architecture.md), [../auth.md](../auth.md), [../tenants.md](../tenants.md), [auth.md](auth.md), [users.md](users.md).
 
 ## 1. Mount & file
 
