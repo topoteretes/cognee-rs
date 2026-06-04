@@ -39,6 +39,17 @@ pub enum SdkError {
     /// end-to-end (e.g. `s3` / recursive `dataItem` inputs).
     #[error("unsupported: {0}")]
     Unsupported(String),
+
+    /// The native function was called but the required Cargo feature was not
+    /// compiled into this build of `cognee-neon`. Use a build that includes
+    /// the relevant feature (e.g. `visualization`, `cloud`).
+    ///
+    /// This variant is only constructed in `#[cfg(not(feature = "..."))]`
+    /// bodies that are compiled out when the default features are active,
+    /// so the dead-code lint is suppressed.
+    #[allow(dead_code)]
+    #[error("feature not built: {0}")]
+    FeatureNotBuilt(String),
 }
 
 impl SdkError {
@@ -52,6 +63,7 @@ impl SdkError {
             SdkError::Runtime(_) => "RUNTIME_ERROR",
             SdkError::Validation(_) => "VALIDATION_ERROR",
             SdkError::Unsupported(_) => "UNSUPPORTED",
+            SdkError::FeatureNotBuilt(_) => "FEATURE_NOT_BUILT",
         }
     }
 }

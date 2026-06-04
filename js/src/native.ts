@@ -309,6 +309,59 @@ export type CogneeNotebook = any;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type CogneeSessionQAEntry = any;
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 6 types
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Options accepted by `cogneeVisualize` / `cogneeVisualizeToFile`. */
+export interface CogneeVisualizeOptions {
+  /**
+   * Absolute path for the output HTML file.  Used only by
+   * `cogneeVisualizeToFile`; ignored by `cogneeVisualize`.
+   * Defaults to `~/graph_visualization.html` when absent.
+   */
+  destinationPath?: string;
+}
+
+/**
+ * Result of `cogneeServe`.  The `CloudClient` handle is not exposed to JS;
+ * use `serviceUrl` to log / verify the connection.
+ */
+export interface CogneeServeResult {
+  connected: true;
+  serviceUrl: string;
+}
+
+/** Options accepted by `cogneeServe`. */
+export interface CogneeServeOptions {
+  /**
+   * Direct service URL.  When set, selects **direct mode** — no Auth0
+   * device-code flow; requires a running Cognee HTTP server at this URL.
+   * When absent, **cloud mode** is used (device-code flow, requires a TTY).
+   */
+  url?: string;
+  /** API key for authenticating against the service URL. */
+  apiKey?: string;
+  /** Override for the management API base URL (cloud mode only). */
+  cloudUrl?: string;
+  /** Override for the Auth0 tenant domain (cloud mode only). */
+  auth0Domain?: string;
+  /** Override for the Auth0 native-app client ID (cloud mode only). */
+  auth0ClientId?: string;
+  /** Override for the Auth0 API audience (cloud mode only). */
+  auth0Audience?: string;
+}
+
+/** Options accepted by `cogneeDisconnect`. */
+export interface CogneeDisconnectOptions {
+  /**
+   * When `true`, the on-disk credential cache
+   * (`~/.cognee/cloud_credentials.json`) is deleted so the next
+   * `cogneeServe()` must re-authenticate.  Defaults to `false`.
+   */
+  wipeCredentials?: boolean;
+}
+
 /** Shape of the native Neon module. */
 export interface NativeBindings {
   // Runtime
@@ -522,6 +575,40 @@ export interface NativeBindings {
     context: string,
     opts?: object
   ): Promise<void>;
+
+  // Visualization ops (Phase 6).
+  //
+  // `cogneeVisualize` returns the d3.js force-directed HTML visualization of
+  // the current knowledge graph as a string (no disk I/O in the binding layer).
+  // `cogneeVisualizeToFile` writes the HTML to disk and returns the absolute
+  // path; `opts.destinationPath` overrides the default `~/graph_visualization.html`.
+  //
+  // Both functions throw a typed error with `code = "FEATURE_NOT_BUILT"` when the
+  // `visualization` feature was not compiled into this build of cognee-neon.
+  cogneeVisualize(
+    handle: NativeBox,
+    opts?: CogneeVisualizeOptions
+  ): Promise<string>;
+  cogneeVisualizeToFile(
+    handle: NativeBox,
+    opts?: CogneeVisualizeOptions
+  ): Promise<string>;
+
+  // Cloud ops (Phase 6): serve / disconnect.
+  //
+  // `cogneeServe` connects the SDK to a Cognee Cloud instance.  When
+  // `opts.url` is provided, **direct mode** is used (no Auth0 flow; works
+  // headlessly).  Otherwise **cloud mode** runs the Auth0 device-code flow,
+  // which requires a TTY.  Returns `{ connected: true, serviceUrl }`.
+  //
+  // `cogneeDisconnect` tears down the cloud-routed mode and reverts to local
+  // execution.  `opts.wipeCredentials` (default false) additionally removes
+  // the on-disk credential cache.
+  //
+  // Both functions throw a typed error with `code = "FEATURE_NOT_BUILT"` when
+  // the `cloud` feature was not compiled into this build of cognee-neon.
+  cogneeServe(opts?: CogneeServeOptions): Promise<CogneeServeResult>;
+  cogneeDisconnect(opts?: CogneeDisconnectOptions): Promise<void>;
 
   // Config surface (Phase 2). Granular setters are synchronous and return
   // `void`; each bumps the config version, which version-invalidates the

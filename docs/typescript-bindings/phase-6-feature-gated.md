@@ -15,42 +15,148 @@ Surfaces **#18 `visualize`** (feature `visualization`) and **#19 `serve` / `disc
 ## Structures
 
 ### Cargo features (`js/cognee-neon/Cargo.toml`)
-- Define `visualization` and `cloud` features on `cognee-neon` that forward to the matching
-  `cognee-lib` features. Decide the **default** set: per the project feature strategy,
-  non-platform features are on by default in the umbrella/CLI — so `visualization` likely
-  defaults on; `cloud` may stay opt-in. Align with `cognee-cli`'s defaults.
+
+Both `visualization` and `cloud` are in `cognee-lib`'s **default** feature set (verified in
+`crates/lib/Cargo.toml` — both listed under `[features] default = [...]`), and both appear in
+`cognee-cli`'s defaults. Follow the same convention: **both features are in the `default` list
+of `cognee-neon`**, forwarding directly to `cognee-lib`.
+
+Add to `js/cognee-neon/Cargo.toml`:
+```toml
+[features]
+default = ["visualization", "cloud"]   # plus existing: qdrant, ladybug, onnx, hf-tokenizer, tiktoken, sqlite, testing
+visualization = ["cognee-lib/visualization"]
+cloud         = ["cognee-lib/cloud"]
+```
+
+`cognee-neon` currently has no `[features]` section at all — this phase adds one.
+
+### Visualization API: exact signatures (verified)
+
+`cognee_visualization` exposes two async free functions:
+
+```rust
+// Writes HTML to disk; returns the absolute PathBuf of the file.
+pub async fn visualize(
+    graph_db: &dyn GraphDBTrait,
+    output_path: Option<&Path>,
+) -> Result<PathBuf, VisualizationError>
+
+// Returns the HTML string without writing to disk.
+pub async fn render(
+    graph_db: &dyn GraphDBTrait,
+) -> Result<String, VisualizationError>
+```
+
+Both are re-exported through `cognee-lib`:
+- `cognee_lib::visualize` (top-level re-export — `visualize` only)
+- `cognee_lib::visualization::render` (via `pub use cognee_visualization::*` inside the
+  `visualization` module)
+
+**Important:** `cognee_lib::visualize` writes to a file and returns a `PathBuf`, **not** an HTML
+string. The binding must choose one of two approaches:
+
+**Recommended:** expose two binding functions:
+- `cogneeVisualize(handle, opts?) -> Promise<string>` — calls `render()` and returns the HTML
+  string directly (no disk I/O in the binding layer; caller decides what to do with it).
+- `cogneeVisualizeToFile(handle, opts?) -> Promise<string>` — calls `visualize()` with an
+  optional `opts.destinationPath`; returns the path string as written.
+
+The CLI uses `visualize()` (file path returned); for the Node SDK, `render()` returning the HTML
+string is more composable. **Update the plan:** the primary TS binding should return HTML string
+via `render()`; a secondary `visualizeToFile` binding may also be provided.
+
+`render` takes `&dyn GraphDBTrait` — obtain via `handle.services().await?.graph_db` (an
+`Arc<dyn GraphDBTrait>`; dereference with `&*`). No `ServeConfig` or session involvement.
+
+### Cloud API: exact signatures (verified)
+
+`cognee-lib` re-exports under `#[cfg(feature = "cloud")]`:
+```rust
+pub use cognee_cloud::{
+    CloudClient, CloudCredentials, CloudError, CloudResult,
+    ServeConfig, disconnect, serve, serve_cloud, serve_url,
+};
+```
+
+Key function signatures:
+```rust
+pub async fn serve(config: ServeConfig) -> CloudResult<Arc<CloudClient>>
+pub async fn serve_url(url: impl Into<String>, api_key: Option<impl Into<String>>) -> CloudResult<Arc<CloudClient>>
+pub async fn serve_cloud() -> CloudResult<Arc<CloudClient>>
+pub async fn disconnect(wipe_credentials: bool) -> CloudResult<()>
+```
+
+`ServeConfig` fields:
+- `url: Option<String>` — direct mode when set
+- `api_key: Option<String>`
+- `cloud_url: Option<String>` — management API URL override
+- `auth0_domain / auth0_client_id / auth0_audience: Option<String>`
+
+`CloudClient` return value: the binding **does not** need to expose the `CloudClient` handle to
+JS — `serve()` installs the client process-wide via `set_client()` internally. Return a simple
+success JSON `{ "serviceUrl": "...", "email": "..." }` by reading `client.service_url` and the
+credential file, or just `{ "connected": true, "serviceUrl": "..." }`.
+
+Note: `serve()` / `disconnect()` do **not** take a `CogneeHandle` — they operate on a
+process-wide singleton (`state::set_client`). The `handle` parameter in the binding signatures
+is only needed if config or component initialization must happen before serving. For the
+minimal binding, pass just the JSON config, no handle required.
 
 ### Native functions (cfg-gated)
-- `cogneeVisualize(handle, opts?) -> Promise<string>` (cfg `visualization`)
-  - Calls `visualization::visualize` over `svc.graph_db`; returns the self-contained HTML as a
-    string, or writes to `opts.destinationPath` and returns the path.
-- `cogneeServe(handle, opts?) -> Promise<...>` and `cogneeDisconnect(handle) -> Promise<...>`
-  (cfg `cloud`)
-  - Map to `cloud::serve` / `serve_url` / `serve_cloud` / `disconnect`; marshal `ServeConfig` and
-    `CloudCredentials` as JSON. Preserve on-disk-format compatibility (the Rust cloud crate
-    already guarantees this).
-- Registration in `lib.rs` is `#[cfg(feature = ...)]`-gated; absent features simply don't export.
+
+New source file: `js/cognee-neon/src/sdk_visualization.rs` (cfg `visualization`)
+- `cogneeVisualize(handle, opts?) -> Promise<string>` — calls `render(&*graph_db)`, returns HTML
+  string. `handle` is needed to get `graph_db`. `opts` is unused / reserved for future extension.
+- `cogneeVisualizeToFile(handle, opts?) -> Promise<string>` — calls `visualize(&*graph_db,
+  destination_path.as_deref())`, returns the written file path as a string.
+
+New source file: `js/cognee-neon/src/sdk_cloud.rs` (cfg `cloud`)
+- `cogneeServe(opts?) -> Promise<object>` — deserializes JSON opts into `ServeConfig` fields,
+  calls `serve(config)`, returns `{ "connected": true, "serviceUrl": "..." }`.
+- `cogneeDisconnect(opts?) -> Promise<void>` — calls `disconnect(wipe_credentials)` where
+  `wipe_credentials` defaults to `false`.
+
+Registration in `lib.rs` is `#[cfg(feature = "...")]`-gated; absent features simply don't
+export the functions (they remain `undefined` in the JS module object).
+
+### Error propagation
+
+Wrap `VisualizationError` and `CloudError` into `SdkError::ServiceBuild(err.to_string())` (or
+add dedicated variants). The `throw_sdk_error` helper already exists in `errors.rs`.
 
 ## Functionalities
 
-- `visualize` produces the d3.js HTML graph view (force-directed, Canvas) for the current graph.
-- `serve` / `disconnect` connect/disconnect the local instance to the cognee cloud.
+- `cogneeVisualize` produces the d3.js HTML graph view (force-directed, Canvas) for the current
+  graph, returning the HTML as a string.
+- `cogneeVisualizeToFile` writes the HTML to disk and returns the path.
+- `cogneeServe` / `cogneeDisconnect` connect/disconnect the local instance to the cognee cloud.
 - **TS guard:** the Phase 7 layer detects when a native export is `undefined` and throws a clear
   `CogneeFeatureNotBuiltError("visualization")` rather than a cryptic "not a function".
 
 ## Dependencies & ordering
 
-Needs Phase 1 (handle/services). `visualize` benefits from Phases 3–5 (a populated graph) but is
-independent code-wise. Can be done in parallel with Phase 5.
+Needs Phase 1 (handle/services for `graph_db` access). `visualize` benefits from Phases 3–5 (a
+populated graph) but is independent code-wise. Cloud functions don't need the `CogneeHandle`
+beyond optional component init. Can be done in parallel with Phase 5.
 
 ## Risks
 
-- Feature combinations multiply the build/prebuild matrix — keep the default set small and
-  documented; ensure the npm prebuilds state which features they include.
-- `cloud` pulls additional dependencies; keep it opt-in unless there's demand.
+- **`serve` / `disconnect` are process-wide singletons**, not scoped to a `CogneeHandle`.
+  Cloud mode runs an interactive OAuth2 device-code flow (TTY prompt) — document that this
+  requires a terminal and cannot run headless unless env vars provide the service URL + API key.
+- **`visualize` vs `render` naming:** the crate exposes both. The plan previously said
+  `cogneeVisualize` returns "HTML string or path" — that conflated two different functions.
+  Corrected above: `render()` → HTML string; `visualize()` → file path.
+- Feature combinations multiply the build/prebuild matrix — both features are default, so the
+  standard prebuild covers them; a `--no-default-features` build strips them.
+- `cloud` pulls reqwest + Auth0 + management API deps — already in `cognee-lib`'s defaults.
 
 ## Done when
 
-- In a `visualization` build, `cogneeVisualize` returns valid HTML for a non-empty graph.
-- In a `cloud` build, `serve` / `disconnect` are callable.
+- In a `visualization` build, `cogneeVisualize` returns valid HTML string for a non-empty graph.
+- In a `visualization` build, `cogneeVisualizeToFile` writes the file and returns the path.
+- In a `cloud` build, `cogneeServe` and `cogneeDisconnect` are callable (direct mode with URL +
+  API key works without a TTY; cloud mode is callable and documented as TTY-required).
 - In builds without a feature, the TS layer throws a clear, typed "feature not built" error.
+- `js/scripts/check.sh` passes (compile + lint, no LLM required).

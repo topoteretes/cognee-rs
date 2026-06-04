@@ -23,11 +23,13 @@ mod run_handle;
 mod runtime;
 mod sdk;
 mod sdk_admin;
+mod sdk_cloud;
 mod sdk_data;
 mod sdk_datasets;
 mod sdk_memory;
 mod sdk_ops;
 mod sdk_retrieval;
+mod sdk_visualization;
 mod services;
 mod task;
 mod task_context;
@@ -113,6 +115,19 @@ fn main(mut cx: ModuleContext) -> NeonResult<()> {
     cx.export_function("cogneeDeleteFeedback", sdk_admin::cognee_delete_feedback)?;
     cx.export_function("cogneeGetGraphContext", sdk_admin::cognee_get_graph_context)?;
     cx.export_function("cogneeSetGraphContext", sdk_admin::cognee_set_graph_context)?;
+
+    // Visualization ops (Phase 6): render HTML string / write to file.
+    // Always registered; throws FEATURE_NOT_BUILT when the feature is absent.
+    cx.export_function("cogneeVisualize", sdk_visualization::cognee_visualize)?;
+    cx.export_function(
+        "cogneeVisualizeToFile",
+        sdk_visualization::cognee_visualize_to_file,
+    )?;
+
+    // Cloud ops (Phase 6): serve / disconnect.
+    // Always registered; throws FEATURE_NOT_BUILT when the feature is absent.
+    cx.export_function("cogneeServe", sdk_cloud::cognee_serve)?;
+    cx.export_function("cogneeDisconnect", sdk_cloud::cognee_disconnect)?;
 
     // Config surface (Phase 2): granular + bulk + generic setters, read-back.
     // LLM

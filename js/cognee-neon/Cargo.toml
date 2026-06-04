@@ -9,6 +9,34 @@ edition = "2024"
 [lib]
 crate-type = ["cdylib"]
 
+[features]
+# visualization and cloud mirror cognee-lib and cognee-cli defaults.
+# A --no-default-features build strips both; they are always present in
+# the standard prebuild.
+default = [
+    "visualization",
+    "cloud",
+    # engine features — unchanged from Phase 0–5
+    "qdrant",
+    "ladybug",
+    "onnx",
+    "hf-tokenizer",
+    "tiktoken",
+    "sqlite",
+    "testing",
+]
+visualization = ["cognee-lib/visualization"]
+cloud         = ["cognee-lib/cloud"]
+# Engine features forwarded to cognee-lib (already listed in [dependencies]
+# below; declared here so cargo --features / --no-default-features works).
+qdrant        = ["cognee-lib/qdrant"]
+ladybug       = ["cognee-lib/ladybug"]
+onnx          = ["cognee-lib/onnx"]
+hf-tokenizer  = ["cognee-lib/hf-tokenizer"]
+tiktoken      = ["cognee-lib/tiktoken"]
+sqlite        = ["cognee-lib/sqlite"]
+testing       = ["cognee-lib/testing"]
+
 [dependencies]
 # Full cognee SDK. Phase 0 links this to prove the foundation compiles and
 # produces a loadable `.node`; later phases expose the SDK functions.
@@ -17,17 +45,8 @@ crate-type = ["cdylib"]
 # hf-tokenizer, tiktoken) plus `sqlite` (used by the legacy `task_context.rs`
 # mock, which connects to `sqlite::memory:`) and `testing` (re-exports the
 # mock graph/vector backends through `cognee_lib`, and keeps the legacy mock
-# `TaskContext` working). Heavier loaders (pdf-pdfium, unstructured) and the
-# `telemetry`/`cloud`/`visualization` flags are deferred to later phases.
-cognee-lib = { path = "../../crates/lib", default-features = false, features = [
-    "qdrant",
-    "ladybug",
-    "onnx",
-    "hf-tokenizer",
-    "tiktoken",
-    "sqlite",
-    "testing",
-] }
+# `TaskContext` working). Phase 6 adds visualization and cloud.
+cognee-lib = { path = "../../crates/lib", default-features = false }
 # Kept as direct deps so the legacy engine modules (task_context.rs etc.) keep
 # their existing crate-path imports without a rewire. These are path deps, so
 # they resolve to the same versions `cognee-lib` pulls in.
