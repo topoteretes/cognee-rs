@@ -11,9 +11,79 @@ export interface NativeBindings {
   // SDK handle & service facade (Phase 1). `cogneeNew` is sync (no I/O);
   // `cogneeWarm`/`cogneeOwnerId` are async (build engines + resolve the
   // default user via Python default-user semantics).
+  //
+  // `cogneeNew` precedence is a true 3-way overlay: `defaults < env < object`.
+  // With no/`null`/`undefined` argument the env-derived Settings are used.
+  // With an object/JSON-string argument, ONLY the keys it provides override the
+  // env-derived Settings; absent keys keep their env (or default) value.
   cogneeNew(settings?: object | string): NativeBox;
   cogneeWarm(handle: NativeBox): Promise<void>;
   cogneeOwnerId(handle: NativeBox): Promise<string>;
+
+  // Config surface (Phase 2). Granular setters are synchronous and return
+  // `void`; each bumps the config version, which version-invalidates the
+  // cached services so the next op rebuilds the engines. The generic `configSet`
+  // and the bulk setters are fallible and throw a typed `Error` (with a `code`
+  // of `UNKNOWN_CONFIG_KEY` / `CONFIG_TYPE_MISMATCH`) on a bad key/value.
+  // Keys are the canonical `Settings`/env field names.
+  //
+  // LLM
+  configSetLlmProvider(handle: NativeBox, value: string): void;
+  configSetLlmModel(handle: NativeBox, value: string): void;
+  configSetLlmApiKey(handle: NativeBox, value: string): void;
+  configSetLlmEndpoint(handle: NativeBox, value: string): void;
+  configSetLlmApiVersion(handle: NativeBox, value: string): void;
+  configSetLlmTemperature(handle: NativeBox, value: number): void;
+  configSetLlmStreaming(handle: NativeBox, value: boolean): void;
+  configSetLlmMaxCompletionTokens(handle: NativeBox, value: number): void;
+  configSetLlmMaxRetries(handle: NativeBox, value: number): void;
+  configSetLlmMaxParallelRequests(handle: NativeBox, value: number): void;
+  // Embedding
+  configSetEmbeddingProvider(handle: NativeBox, value: string): void;
+  configSetEmbeddingModel(handle: NativeBox, value: string): void;
+  configSetEmbeddingDimensions(handle: NativeBox, value: number): void;
+  configSetEmbeddingEndpoint(handle: NativeBox, value: string): void;
+  configSetEmbeddingApiKey(handle: NativeBox, value: string): void;
+  configSetEmbeddingModelPath(handle: NativeBox, value: string): void;
+  configSetEmbeddingTokenizerPath(handle: NativeBox, value: string): void;
+  // Vector DB
+  configSetVectorDbProvider(handle: NativeBox, value: string): void;
+  configSetVectorDbUrl(handle: NativeBox, value: string): void;
+  configSetVectorDbKey(handle: NativeBox, value: string): void;
+  configSetVectorDbHost(handle: NativeBox, value: string): void;
+  configSetVectorDbPort(handle: NativeBox, value: number): void;
+  configSetVectorDbName(handle: NativeBox, value: string): void;
+  // Graph DB
+  configSetGraphDatabaseProvider(handle: NativeBox, value: string): void;
+  configSetGraphModel(handle: NativeBox, value: string): void;
+  configSetGraphFilePath(handle: NativeBox, value: string): void;
+  // Chunking
+  configSetChunkStrategy(handle: NativeBox, value: string): void;
+  configSetChunkEngine(handle: NativeBox, value: string): void;
+  configSetChunkSize(handle: NativeBox, value: number): void;
+  configSetChunkOverlap(handle: NativeBox, value: number): void;
+  // Paths
+  configSetSystemRootDirectory(handle: NativeBox, value: string): void;
+  configSetDataRootDirectory(handle: NativeBox, value: string): void;
+  configSetCacheRootDirectory(handle: NativeBox, value: string): void;
+  configSetLogsRootDirectory(handle: NativeBox, value: string): void;
+  // Ontology
+  configSetOntologyFilePath(handle: NativeBox, value: string): void;
+  configSetOntologyResolver(handle: NativeBox, value: string): void;
+  configSetOntologyMatchingStrategy(handle: NativeBox, value: string): void;
+  // Other
+  configSetMonitoringTool(handle: NativeBox, value: string): void;
+  configSetClassificationModel(handle: NativeBox, value: string): void;
+  configSetSummarizationModel(handle: NativeBox, value: string): void;
+  // Generic + bulk + read-back
+  configSet(handle: NativeBox, key: string, value: unknown): void;
+  configSetLlmConfig(handle: NativeBox, values: object): void;
+  configSetEmbeddingConfig(handle: NativeBox, values: object): void;
+  configSetVectorDbConfig(handle: NativeBox, values: object): void;
+  configSetGraphDbConfig(handle: NativeBox, values: object): void;
+  // `getConfig` returns a snapshot of the current Settings with secret fields
+  // (api keys, passwords, OTLP headers) blanked to "***REDACTED***".
+  getConfig(handle: NativeBox): Record<string, unknown>;
 
   // Logging (gap-06): argument-less, idempotent.
   setupLogging(): void;

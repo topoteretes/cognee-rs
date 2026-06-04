@@ -11,6 +11,7 @@
 //! - **Watcher**: Pipeline event observer via JS callbacks
 
 mod cancellation;
+mod config;
 mod default_subscriber;
 mod error;
 mod errors;
@@ -50,6 +51,135 @@ fn main(mut cx: ModuleContext) -> NeonResult<()> {
     cx.export_function("cogneeNew", sdk::cognee_new)?;
     cx.export_function("cogneeWarm", sdk::cognee_warm)?;
     cx.export_function("cogneeOwnerId", sdk::cognee_owner_id)?;
+
+    // Config surface (Phase 2): granular + bulk + generic setters, read-back.
+    // LLM
+    cx.export_function("configSetLlmProvider", config::config_set_llm_provider)?;
+    cx.export_function("configSetLlmModel", config::config_set_llm_model)?;
+    cx.export_function("configSetLlmApiKey", config::config_set_llm_api_key)?;
+    cx.export_function("configSetLlmEndpoint", config::config_set_llm_endpoint)?;
+    cx.export_function("configSetLlmApiVersion", config::config_set_llm_api_version)?;
+    cx.export_function(
+        "configSetLlmTemperature",
+        config::config_set_llm_temperature,
+    )?;
+    cx.export_function("configSetLlmStreaming", config::config_set_llm_streaming)?;
+    cx.export_function(
+        "configSetLlmMaxCompletionTokens",
+        config::config_set_llm_max_completion_tokens,
+    )?;
+    cx.export_function("configSetLlmMaxRetries", config::config_set_llm_max_retries)?;
+    cx.export_function(
+        "configSetLlmMaxParallelRequests",
+        config::config_set_llm_max_parallel_requests,
+    )?;
+    // Embedding
+    cx.export_function(
+        "configSetEmbeddingProvider",
+        config::config_set_embedding_provider,
+    )?;
+    cx.export_function(
+        "configSetEmbeddingModel",
+        config::config_set_embedding_model,
+    )?;
+    cx.export_function(
+        "configSetEmbeddingDimensions",
+        config::config_set_embedding_dimensions,
+    )?;
+    cx.export_function(
+        "configSetEmbeddingEndpoint",
+        config::config_set_embedding_endpoint,
+    )?;
+    cx.export_function(
+        "configSetEmbeddingApiKey",
+        config::config_set_embedding_api_key,
+    )?;
+    cx.export_function(
+        "configSetEmbeddingModelPath",
+        config::config_set_embedding_model_path,
+    )?;
+    cx.export_function(
+        "configSetEmbeddingTokenizerPath",
+        config::config_set_embedding_tokenizer_path,
+    )?;
+    // Vector DB
+    cx.export_function(
+        "configSetVectorDbProvider",
+        config::config_set_vector_db_provider,
+    )?;
+    cx.export_function("configSetVectorDbUrl", config::config_set_vector_db_url)?;
+    cx.export_function("configSetVectorDbKey", config::config_set_vector_db_key)?;
+    cx.export_function("configSetVectorDbHost", config::config_set_vector_db_host)?;
+    cx.export_function("configSetVectorDbPort", config::config_set_vector_db_port)?;
+    cx.export_function("configSetVectorDbName", config::config_set_vector_db_name)?;
+    // Graph DB
+    cx.export_function(
+        "configSetGraphDatabaseProvider",
+        config::config_set_graph_database_provider,
+    )?;
+    cx.export_function("configSetGraphModel", config::config_set_graph_model)?;
+    cx.export_function("configSetGraphFilePath", config::config_set_graph_file_path)?;
+    // Chunking
+    cx.export_function("configSetChunkStrategy", config::config_set_chunk_strategy)?;
+    cx.export_function("configSetChunkEngine", config::config_set_chunk_engine)?;
+    cx.export_function("configSetChunkSize", config::config_set_chunk_size)?;
+    cx.export_function("configSetChunkOverlap", config::config_set_chunk_overlap)?;
+    // Paths
+    cx.export_function(
+        "configSetSystemRootDirectory",
+        config::config_set_system_root_directory,
+    )?;
+    cx.export_function(
+        "configSetDataRootDirectory",
+        config::config_set_data_root_directory,
+    )?;
+    cx.export_function(
+        "configSetCacheRootDirectory",
+        config::config_set_cache_root_directory,
+    )?;
+    cx.export_function(
+        "configSetLogsRootDirectory",
+        config::config_set_logs_root_directory,
+    )?;
+    // Ontology
+    cx.export_function(
+        "configSetOntologyFilePath",
+        config::config_set_ontology_file_path,
+    )?;
+    cx.export_function(
+        "configSetOntologyResolver",
+        config::config_set_ontology_resolver,
+    )?;
+    cx.export_function(
+        "configSetOntologyMatchingStrategy",
+        config::config_set_ontology_matching_strategy,
+    )?;
+    // Other
+    cx.export_function(
+        "configSetMonitoringTool",
+        config::config_set_monitoring_tool,
+    )?;
+    cx.export_function(
+        "configSetClassificationModel",
+        config::config_set_classification_model,
+    )?;
+    cx.export_function(
+        "configSetSummarizationModel",
+        config::config_set_summarization_model,
+    )?;
+    // Generic + bulk + read-back
+    cx.export_function("configSet", config::config_set)?;
+    cx.export_function("configSetLlmConfig", config::config_set_llm_config)?;
+    cx.export_function(
+        "configSetEmbeddingConfig",
+        config::config_set_embedding_config,
+    )?;
+    cx.export_function(
+        "configSetVectorDbConfig",
+        config::config_set_vector_db_config,
+    )?;
+    cx.export_function("configSetGraphDbConfig", config::config_set_graph_db_config)?;
+    cx.export_function("getConfig", config::get_config)?;
 
     // Logging entrypoint (gap-06): argument-less, idempotent.
     cx.export_function("setupLogging", logging::setup_logging)?;

@@ -16,7 +16,7 @@ Last updated: 2026-06-04
 |---|---|---|---|---|---|
 | 0 | [Scaffolding & build](phase-0-scaffolding.md) | ✅ | ts-bindings/phase-0-scaffolding | 3cdffa7 | done |
 | 1 | [Handle & service facade](phase-1-handle-and-services.md) | ✅ | ts-bindings/phase-1-handle-facade | e87fa44 | done (keystone) |
-| 2 | [Config surface](phase-2-config.md) | ⬜ | — | — | |
+| 2 | [Config surface](phase-2-config.md) | ✅ | ts-bindings/phase-2-config | 6988d0d | done |
 | 3 | [Pipeline ops (add/cognify)](phase-3-pipeline-ops.md) | ⬜ | — | — | |
 | 4 | [Retrieval (search/recall)](phase-4-retrieval.md) | ⬜ | — | — | |
 | 5 | [Remaining SDK](phase-5-remaining-sdk.md) | ⬜ | — | — | |
@@ -42,9 +42,9 @@ Check off the criteria as they land (the granular view behind the status column)
 - [x] Tier-A test constructs + warms a handle (mock embedding, temp dir)
 
 ### Phase 2 — Config surface
-- [ ] all granular setters exposed; bulk + generic `set(key,value)`
-- [ ] Settings construction from object and from env
-- [ ] `config.test.ts` (Tier-A) green, incl. `UnknownKey` + rebuild-on-change
+- [x] all granular setters exposed; bulk + generic `set(key,value)`
+- [x] Settings construction from object and from env
+- [x] `config.test.ts` (Tier-A) green, incl. `UnknownKey` + rebuild-on-change
 
 ### Phase 3 — Pipeline ops
 - [ ] `add` (text/file) with dedup + dataset creation
@@ -99,4 +99,6 @@ Record cross-cutting decisions as they're made (one line each), so later phases 
 | 2026-06-04 | `cognee-neon` stays a standalone crate (Option A) with its own `[patch.crates-io]` table mirroring the root workspace (`tar`/`tonic`/`hyper` qdrant forks); revisit joining the workspace if patch drift becomes painful. | 0 |
 | 2026-06-04 | `owner_id` is derived via Python default-user semantics: `uuid5` of the configured default-user email (matching the Python SDK's default user), so Rust and Python produce comparable owner-scoped IDs. | 1 |
 | 2026-06-04 | `CogneeServices` is cached on the handle and invalidated by config version: a `Settings` version bump triggers a full services rebuild; runtime (tokio) init is idempotent and shared across handles. | 1 |
+| 2026-06-04 | Extended the shared `cognee-lib` `ConfigManager` (Option B) with granular setters + widened bulk dispatch rather than mapping config in the binding, so Rust/TS/CLI share one config surface. | 2 |
+| 2026-06-04 | `cogneeNew` constructs `Settings` via a `defaults < env < object` overlay (object wins; absent fields fall back to env, then defaults). | 2 |
 | | _(e.g. package renamed to `cognee`)_ | 7 |

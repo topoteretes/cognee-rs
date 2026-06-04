@@ -108,10 +108,24 @@ impl CogneeHandle {
 
 /// `cogneeNew(settingsJson?) -> JsBox<CogneeHandle>`
 ///
-/// Pure/sync: builds `Settings` (from a JSON string/object if given, else
-/// `from_env()`), wraps in `ConfigManager` → `ComponentManager`. Does NOT touch
-/// the DB and does NOT resolve `owner_id`. Ensures the global tokio runtime
-/// exists so later async exports can `spawn` onto it.
+/// Pure/sync: builds `Settings`, wraps in `ConfigManager` → `ComponentManager`.
+/// Does NOT touch the DB and does NOT resolve `owner_id`. Ensures the global
+/// tokio runtime exists so later async exports can `spawn` onto it.
+///
+/// **Precedence is a true 3-way overlay: `defaults < env < object`.**
+/// - With no / `null` / `undefined` argument → `ConfigManager::from_env()`
+///   (defaults overlaid by env).
+/// - With an argument (a JS object or a JSON string whose keys are `Settings`
+///   field names) → start from the env-derived `Settings` and apply **only the
+///   keys the object actually provides** on top. Fields absent from the object
+///   keep their env (or default) value; fields present in the object win.
+///
+/// The overlay is done at the `serde_json::Value` level (not via a
+/// `serde(default)` re-deserialization of a partial object, which cannot tell
+/// "absent" from "equal to the default" and would silently reset absent fields
+/// to defaults): the env `Settings` is serialized to a JSON object, the
+/// provided keys are merged onto it, then the merged object is deserialized
+/// back into `Settings`.
 pub fn cognee_new(mut cx: FunctionContext) -> JsResult<JsBox<CogneeHandle>> {
     // Make sure the runtime is up — the handle path never requires init().
     ensure_runtime().or_else(|e| cx.throw_error(e))?;
@@ -130,10 +144,26 @@ pub fn cognee_new(mut cx: FunctionContext) -> JsResult<JsBox<CogneeHandle>> {
             } else {
                 stringify_js(&mut cx, arg)?
             };
-            // `Settings` is `#[serde(default)]`, so partial JSON overlays onto
-            // the defaults.
-            serde_json::from_str::<Settings>(&json)
-                .or_else(|e| cx.throw_error(format!("invalid settings JSON: {e}")))?
+            // Parse the argument as a JSON object (reject anything else).
+            let provided = match serde_json::from_str::<serde_json::Value>(&json) {
+                Ok(serde_json::Value::Object(map)) => map,
+                Ok(_) => return cx.throw_error("settings must be a JSON object"),
+                Err(e) => return cx.throw_error(format!("invalid settings JSON: {e}")),
+            };
+
+            // Start from the env-derived Settings (defaults + env overlay) and
+            // merge ONLY the keys the object actually provides on top — so
+            // env/default values for absent keys survive (defaults < env < object).
+            let base = settings_from_env();
+            let mut merged = serde_json::to_value(&base)
+                .or_else(|e| cx.throw_error(format!("failed to serialize base settings: {e}")))?;
+            if let serde_json::Value::Object(ref mut base_map) = merged {
+                for (key, value) in provided {
+                    base_map.insert(key, value);
+                }
+            }
+            serde_json::from_value::<Settings>(merged)
+                .or_else(|e| cx.throw_error(format!("invalid settings: {e}")))?
         }
     };
 
