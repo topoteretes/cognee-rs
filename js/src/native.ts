@@ -1,6 +1,60 @@
 /** Opaque native handle types returned by the Neon addon. */
 export type NativeBox = object;
 
+/** A single `add` input (discriminated union; see `cogneeAdd`). */
+export type CogneeDataInput =
+  | { type: "text"; text: string }
+  | { type: "file"; path: string }
+  | { type: "url"; url: string }
+  | { type: "binary"; bytes: Buffer | number[] | string; name: string };
+
+/** Options accepted by `cogneeAdd` / the add phase of `cogneeAddAndCognify`. */
+export interface CogneeAddOptions {
+  /** Tenant UUID string (multi-tenant scoping); defaults to none. */
+  tenant?: string;
+}
+
+/** Per-call cognify config overrides (applied on top of the handle config). */
+export interface CogneeCognifyOptions {
+  tenant?: string;
+  chunkSize?: number;
+  chunkOverlap?: number;
+  summarization?: boolean;
+  temporalCognify?: boolean;
+  /** Index `"source → relation → target"` triplet embeddings. */
+  triplet?: boolean;
+}
+
+/**
+ * Result of `cogneeAdd`.
+ *
+ * `AddPipeline::add` returns one row per input including duplicates (the
+ * duplicate path returns the pre-existing row), so the binding pre-scans the
+ * dataset and partitions the result: `added` holds only the items newly created
+ * by this call, `deduplicated` holds the ones that already existed. An empty
+ * `added` array (`addedCount === 0`) means every submitted item was a duplicate.
+ */
+export interface CogneeAddResult {
+  datasetName: string;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  added: any[];
+  addedCount: number;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  deduplicated: any[];
+  deduplicatedCount: number;
+}
+
+/** Result of `cogneeCognify` — counts hand-built from the pipeline result. */
+export interface CogneeCognifyResult {
+  chunks: number;
+  entities: number;
+  edges: number;
+  summaries: number;
+  embeddings: number;
+  alreadyCompleted: boolean;
+  priorPipelineRunId: string | null;
+}
+
 /** Shape of the native Neon module. */
 export interface NativeBindings {
   // Runtime
@@ -19,6 +73,38 @@ export interface NativeBindings {
   cogneeNew(settings?: object | string): NativeBox;
   cogneeWarm(handle: NativeBox): Promise<void>;
   cogneeOwnerId(handle: NativeBox): Promise<string>;
+
+  // Pipeline ops (Phase 3). All async (build engines + run the pipeline).
+  //
+  // `dataInput` is a discriminated union (single item or an array):
+  //   { type: "text"; text: string }
+  //   { type: "file"; path: string }
+  //   { type: "url"; url: string }        // ingestion-only; not wired e2e yet
+  //   { type: "binary"; bytes: Buffer | number[] | string /* base64 */; name: string }
+  // (`name` is REQUIRED for binary — used for MIME detection. `s3` and the
+  // recursive `dataItem` variant are not supported.)
+  //
+  // `add` returns `{ added, deduplicated, … }`: `added` holds only the items
+  // newly created by this call, `deduplicated` the ones that already existed.
+  // An empty `added` array (`addedCount === 0`) means every submitted item was a
+  // pre-existing duplicate.
+  cogneeAdd(
+    handle: NativeBox,
+    dataInput: CogneeDataInput | CogneeDataInput[],
+    datasetName: string,
+    opts?: CogneeAddOptions
+  ): Promise<CogneeAddResult>;
+  cogneeCognify(
+    handle: NativeBox,
+    dataset: string,
+    opts?: CogneeCognifyOptions
+  ): Promise<CogneeCognifyResult>;
+  cogneeAddAndCognify(
+    handle: NativeBox,
+    dataInput: CogneeDataInput | CogneeDataInput[],
+    datasetName: string,
+    opts?: CogneeAddOptions & CogneeCognifyOptions
+  ): Promise<{ add: CogneeAddResult; cognify: CogneeCognifyResult }>;
 
   // Config surface (Phase 2). Granular setters are synchronous and return
   // `void`; each bumps the config version, which version-invalidates the

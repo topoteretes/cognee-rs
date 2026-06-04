@@ -52,6 +52,8 @@ futures = "0.3"
 uuid = { version = "1.21", features = ["v4", "v5", "serde"] }
 thiserror = "2.0"
 serde_json = "1"
+# Decode base64 `bytes` for binary `DataInput` inputs over the JSON bridge.
+base64 = "0.22"
 
 [patch.crates-io]
 tar = { git = "https://github.com/qdrant/tar-rs", branch = "main" }

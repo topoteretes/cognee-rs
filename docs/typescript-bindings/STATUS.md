@@ -8,7 +8,7 @@ and commit agent to keep it current).
 
 **Legend:** ⬜ Not started · 🟡 In progress · 🔵 In review · ⛔ Blocked · ✅ Done
 
-Last updated: 2026-06-04
+Last updated: 2026-06-04 (Phase 3)
 
 ## Status table
 
@@ -17,7 +17,7 @@ Last updated: 2026-06-04
 | 0 | [Scaffolding & build](phase-0-scaffolding.md) | ✅ | ts-bindings/phase-0-scaffolding | 3cdffa7 | done |
 | 1 | [Handle & service facade](phase-1-handle-and-services.md) | ✅ | ts-bindings/phase-1-handle-facade | e87fa44 | done (keystone) |
 | 2 | [Config surface](phase-2-config.md) | ✅ | ts-bindings/phase-2-config | 6988d0d | done |
-| 3 | [Pipeline ops (add/cognify)](phase-3-pipeline-ops.md) | ⬜ | — | — | |
+| 3 | [Pipeline ops (add/cognify)](phase-3-pipeline-ops.md) | ✅ | ts-bindings/phase-3-pipeline-ops | 418ab2d | done |
 | 4 | [Retrieval (search/recall)](phase-4-retrieval.md) | ⬜ | — | — | |
 | 5 | [Remaining SDK](phase-5-remaining-sdk.md) | ⬜ | — | — | |
 | 6 | [Feature-gated surfaces](phase-6-feature-gated.md) | ⬜ | — | — | |
@@ -47,10 +47,10 @@ Check off the criteria as they land (the granular view behind the status column)
 - [x] `config.test.ts` (Tier-A) green, incl. `UnknownKey` + rebuild-on-change
 
 ### Phase 3 — Pipeline ops
-- [ ] `add` (text/file) with dedup + dataset creation
-- [ ] `cognify` + `add-and-cognify`
-- [ ] `add.test.ts` (Tier-A, no LLM) green
-- [ ] live `add → cognify` round-trip verified
+- [x] `add` (text/file) with dedup + dataset creation
+- [x] `cognify` + `add-and-cognify`
+- [x] `add.test.ts` (Tier-A, no LLM) green
+- [x] live `add → cognify` round-trip verified (Tier-B, skips cleanly in CI)
 
 ### Phase 4 — Retrieval
 - [ ] `search` over all `SearchType`
@@ -101,4 +101,7 @@ Record cross-cutting decisions as they're made (one line each), so later phases 
 | 2026-06-04 | `CogneeServices` is cached on the handle and invalidated by config version: a `Settings` version bump triggers a full services rebuild; runtime (tokio) init is idempotent and shared across handles. | 1 |
 | 2026-06-04 | Extended the shared `cognee-lib` `ConfigManager` (Option B) with granular setters + widened bulk dispatch rather than mapping config in the binding, so Rust/TS/CLI share one config surface. | 2 |
 | 2026-06-04 | `cogneeNew` constructs `Settings` via a `defaults < env < object` overlay (object wins; absent fields fall back to env, then defaults). | 2 |
+| 2026-06-04 | `add()` partitions added vs deduplicated via pre-scan since `AddPipeline` returns all items including duplicates (duplicate path returns the pre-existing row); pre-scan counts rows in the dataset before the run and post-scan computes the delta. | 3 |
+| 2026-06-04 | `DataInput` discriminated union marshalled explicitly in Rust: `type` field drives a `match`; `binary.bytes` accepts `Buffer`/`number[]`/base64-string via `base64` crate; `url`/`s3` return `Unsupported` until wired end-to-end. | 3 |
+| 2026-06-04 | `CognifyResult` is hand-built JSON from pipeline output fields (chunks, entities, edges, summaries, embeddings, alreadyCompleted, priorPipelineRunId) rather than deriving `Serialize` on internal types. | 3 |
 | | _(e.g. package renamed to `cognee`)_ | 7 |

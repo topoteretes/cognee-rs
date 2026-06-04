@@ -29,6 +29,16 @@ pub enum SdkError {
     /// A runtime / infrastructure failure (e.g. building the tokio runtime).
     #[error("runtime error: {0}")]
     Runtime(String),
+
+    /// Invalid input from the JS boundary (bad shape / missing field / parse
+    /// failure). Maps to a developer error, not an infrastructure failure.
+    #[error("validation error: {0}")]
+    Validation(String),
+
+    /// A requested input variant or feature is recognised but not yet wired
+    /// end-to-end (e.g. `s3` / recursive `dataItem` inputs).
+    #[error("unsupported: {0}")]
+    Unsupported(String),
 }
 
 impl SdkError {
@@ -40,6 +50,8 @@ impl SdkError {
             SdkError::ServiceBuild(_) => "SERVICE_BUILD_ERROR",
             SdkError::UserBootstrap(_) => "USER_BOOTSTRAP_ERROR",
             SdkError::Runtime(_) => "RUNTIME_ERROR",
+            SdkError::Validation(_) => "VALIDATION_ERROR",
+            SdkError::Unsupported(_) => "UNSUPPORTED",
         }
     }
 }
