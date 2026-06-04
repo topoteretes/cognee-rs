@@ -13,12 +13,15 @@
 mod cancellation;
 mod default_subscriber;
 mod error;
+mod errors;
 mod logging;
 mod pipeline;
 mod pipeline_exec;
 mod progress;
 mod run_handle;
 mod runtime;
+mod sdk;
+mod services;
 mod task;
 mod task_context;
 mod task_info;
@@ -42,6 +45,11 @@ fn main(mut cx: ModuleContext) -> NeonResult<()> {
     cx.export_function("init", runtime::init)?;
     cx.export_function("initWithThreads", runtime::init_with_threads)?;
     cx.export_function("shutdown", runtime::shutdown)?;
+
+    // SDK handle & service facade (Phase 1).
+    cx.export_function("cogneeNew", sdk::cognee_new)?;
+    cx.export_function("cogneeWarm", sdk::cognee_warm)?;
+    cx.export_function("cogneeOwnerId", sdk::cognee_owner_id)?;
 
     // Logging entrypoint (gap-06): argument-less, idempotent.
     cx.export_function("setupLogging", logging::setup_logging)?;

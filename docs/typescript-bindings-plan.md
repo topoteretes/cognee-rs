@@ -74,9 +74,9 @@ like `ComponentManager`:
 | `thread_pool` | `RayonThreadPool::with_default_threads()` |
 | `pipeline_run_repo` | `SeaOrmPipelineRunRepository::new(db)` |
 | `add_pipeline` | `AddPipeline::new(storage, db).with_*()` |
-| `delete_service` | `DeleteService::new(...)` |
-| `search_orchestrator` | `SearchBuilder::new(...).with_*().build()` |
-| `session_store` / `session_manager` | per `cache_backend` |
+| `delete_service` | `DeleteService::new(storage, db as DeleteDb).with_graph_db().with_vector_db().with_pipeline_run_repo()` |
+| `search_orchestrator` | `SearchBuilder::new(...).with_session_manager().with_dataset_resolver().build()` |
+| `session_store` / `session_manager` | v1: always `SeaOrmSessionStore` (fs/redis features not built in cognee-neon); per-`cache_backend` deferred |
 | `ontology_resolver` | per config (RdfLib / NoOp) |
 | `cognify_config` | from `Settings` |
 | `checkpoint_store` | optional, per config |

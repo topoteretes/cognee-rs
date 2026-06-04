@@ -8,6 +8,13 @@ export interface NativeBindings {
   initWithThreads(n: number): void;
   shutdown(): void;
 
+  // SDK handle & service facade (Phase 1). `cogneeNew` is sync (no I/O);
+  // `cogneeWarm`/`cogneeOwnerId` are async (build engines + resolve the
+  // default user via Python default-user semantics).
+  cogneeNew(settings?: object | string): NativeBox;
+  cogneeWarm(handle: NativeBox): Promise<void>;
+  cogneeOwnerId(handle: NativeBox): Promise<string>;
+
   // Logging (gap-06): argument-less, idempotent.
   setupLogging(): void;
 

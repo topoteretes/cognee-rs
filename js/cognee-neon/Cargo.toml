@@ -49,7 +49,9 @@ neon = { version = "1", default-features = false, features = ["napi-6"] }
 async-trait = "0.1.89"
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "time"] }
 futures = "0.3"
-uuid = { version = "1.21", features = ["v4", "serde"] }
+uuid = { version = "1.21", features = ["v4", "v5", "serde"] }
+thiserror = "2.0"
+serde_json = "1"
 
 [patch.crates-io]
 tar = { git = "https://github.com/qdrant/tar-rs", branch = "main" }

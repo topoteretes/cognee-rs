@@ -15,7 +15,7 @@ Last updated: 2026-06-04
 | Phase | Task | Status | Branch | Commit | Notes |
 |---|---|---|---|---|---|
 | 0 | [Scaffolding & build](phase-0-scaffolding.md) | ✅ | ts-bindings/phase-0-scaffolding | 3cdffa7 | done |
-| 1 | [Handle & service facade](phase-1-handle-and-services.md) | ⬜ | — | — | keystone |
+| 1 | [Handle & service facade](phase-1-handle-and-services.md) | ✅ | ts-bindings/phase-1-handle-facade | e87fa44 | done (keystone) |
 | 2 | [Config surface](phase-2-config.md) | ⬜ | — | — | |
 | 3 | [Pipeline ops (add/cognify)](phase-3-pipeline-ops.md) | ⬜ | — | — | |
 | 4 | [Retrieval (search/recall)](phase-4-retrieval.md) | ⬜ | — | — | |
@@ -36,10 +36,10 @@ Check off the criteria as they land (the granular view behind the status column)
 - [x] standalone-vs-workspace + `[patch.crates-io]` decision recorded
 
 ### Phase 1 — Handle & service facade
-- [ ] `CogneeHandle` constructs from TS and survives across calls
-- [ ] `CogneeServices` builds all engines + derived services
-- [ ] config-version bump triggers a services rebuild
-- [ ] Tier-A test constructs + warms a handle (mock embedding, temp dir)
+- [x] `CogneeHandle` constructs from TS and survives across calls
+- [x] `CogneeServices` builds all engines + derived services
+- [x] config-version bump triggers a services rebuild
+- [x] Tier-A test constructs + warms a handle (mock embedding, temp dir)
 
 ### Phase 2 — Config surface
 - [ ] all granular setters exposed; bulk + generic `set(key,value)`
@@ -97,4 +97,6 @@ Record cross-cutting decisions as they're made (one line each), so later phases 
 | Date | Decision | Phase |
 |---|---|---|
 | 2026-06-04 | `cognee-neon` stays a standalone crate (Option A) with its own `[patch.crates-io]` table mirroring the root workspace (`tar`/`tonic`/`hyper` qdrant forks); revisit joining the workspace if patch drift becomes painful. | 0 |
+| 2026-06-04 | `owner_id` is derived via Python default-user semantics: `uuid5` of the configured default-user email (matching the Python SDK's default user), so Rust and Python produce comparable owner-scoped IDs. | 1 |
+| 2026-06-04 | `CogneeServices` is cached on the handle and invalidated by config version: a `Settings` version bump triggers a full services rebuild; runtime (tokio) init is idempotent and shared across handles. | 1 |
 | | _(e.g. package renamed to `cognee`)_ | 7 |
