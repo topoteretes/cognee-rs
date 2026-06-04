@@ -17,7 +17,7 @@ Last updated: 2026-06-04 (Phase 3)
 | 0 | [Scaffolding & build](phase-0-scaffolding.md) | ✅ | ts-bindings/phase-0-scaffolding | 3cdffa7 | done |
 | 1 | [Handle & service facade](phase-1-handle-and-services.md) | ✅ | ts-bindings/phase-1-handle-facade | e87fa44 | done (keystone) |
 | 2 | [Config surface](phase-2-config.md) | ✅ | ts-bindings/phase-2-config | 6988d0d | done |
-| 3 | [Pipeline ops (add/cognify)](phase-3-pipeline-ops.md) | ✅ | ts-bindings/phase-3-pipeline-ops | 418ab2d | done |
+| 3 | [Pipeline ops (add/cognify)](phase-3-pipeline-ops.md) | ✅ | ts-bindings/phase-3-pipeline-ops | ffeea54 | done |
 | 4 | [Retrieval (search/recall)](phase-4-retrieval.md) | ⬜ | — | — | |
 | 5 | [Remaining SDK](phase-5-remaining-sdk.md) | ⬜ | — | — | |
 | 6 | [Feature-gated surfaces](phase-6-feature-gated.md) | ⬜ | — | — | |
