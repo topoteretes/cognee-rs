@@ -10,6 +10,27 @@ edition = "2024"
 crate-type = ["cdylib"]
 
 [dependencies]
+# Full cognee SDK. Phase 0 links this to prove the foundation compiles and
+# produces a loadable `.node`; later phases expose the SDK functions.
+#
+# Feature set: the engine features the SDK needs (qdrant, ladybug, onnx,
+# hf-tokenizer, tiktoken) plus `sqlite` (used by the legacy `task_context.rs`
+# mock, which connects to `sqlite::memory:`) and `testing` (re-exports the
+# mock graph/vector backends through `cognee_lib`, and keeps the legacy mock
+# `TaskContext` working). Heavier loaders (pdf-pdfium, unstructured) and the
+# `telemetry`/`cloud`/`visualization` flags are deferred to later phases.
+cognee-lib = { path = "../../crates/lib", default-features = false, features = [
+    "qdrant",
+    "ladybug",
+    "onnx",
+    "hf-tokenizer",
+    "tiktoken",
+    "sqlite",
+    "testing",
+] }
+# Kept as direct deps so the legacy engine modules (task_context.rs etc.) keep
+# their existing crate-path imports without a rewire. These are path deps, so
+# they resolve to the same versions `cognee-lib` pulls in.
 cognee-core = { path = "../../crates/core" }
 cognee-database = { path = "../../crates/database", features = ["sqlite"] }
 cognee-graph = { path = "../../crates/graph", features = ["testing"] }

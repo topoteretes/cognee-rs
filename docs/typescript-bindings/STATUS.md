@@ -8,13 +8,13 @@ and commit agent to keep it current).
 
 **Legend:** ⬜ Not started · 🟡 In progress · 🔵 In review · ⛔ Blocked · ✅ Done
 
-Last updated: 2026-06-03
+Last updated: 2026-06-04
 
 ## Status table
 
 | Phase | Task | Status | Branch | Commit | Notes |
 |---|---|---|---|---|---|
-| 0 | [Scaffolding & build](phase-0-scaffolding.md) | ⬜ | — | — | |
+| 0 | [Scaffolding & build](phase-0-scaffolding.md) | ✅ | ts-bindings/phase-0-scaffolding | 3cdffa7 | done |
 | 1 | [Handle & service facade](phase-1-handle-and-services.md) | ⬜ | — | — | keystone |
 | 2 | [Config surface](phase-2-config.md) | ⬜ | — | — | |
 | 3 | [Pipeline ops (add/cognify)](phase-3-pipeline-ops.md) | ⬜ | — | — | |
@@ -30,10 +30,10 @@ Last updated: 2026-06-03
 Check off the criteria as they land (the granular view behind the status column).
 
 ### Phase 0 — Scaffolding & build
-- [ ] `.node` linking `cognee-lib` loads via `require()`
-- [ ] existing engine/logging/telemetry/smoke tests pass with `cognee-lib` linked
-- [ ] `.node` size + cold-build-time baseline recorded
-- [ ] standalone-vs-workspace + `[patch.crates-io]` decision recorded
+- [x] `.node` linking `cognee-lib` loads via `require()`
+- [x] existing engine/logging/telemetry/smoke tests pass with `cognee-lib` linked
+- [x] `.node` size + cold-build-time baseline recorded
+- [x] standalone-vs-workspace + `[patch.crates-io]` decision recorded
 
 ### Phase 1 — Handle & service facade
 - [ ] `CogneeHandle` constructs from TS and survives across calls
@@ -96,5 +96,5 @@ Record cross-cutting decisions as they're made (one line each), so later phases 
 
 | Date | Decision | Phase |
 |---|---|---|
-| | _(e.g. standalone crate, keep separate patch table)_ | 0 |
+| 2026-06-04 | `cognee-neon` stays a standalone crate (Option A) with its own `[patch.crates-io]` table mirroring the root workspace (`tar`/`tonic`/`hyper` qdrant forks); revisit joining the workspace if patch drift becomes painful. | 0 |
 | | _(e.g. package renamed to `cognee`)_ | 7 |
