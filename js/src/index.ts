@@ -93,3 +93,16 @@ export {
 } from "./watcher";
 export { RunHandle } from "./run-handle";
 export { RunResult } from "./run-result";
+export {
+  CogneeError,
+  ComponentError,
+  ServiceBuildError,
+  UserBootstrapError,
+  RuntimeError,
+  ValidationError,
+  UnsupportedError,
+  FeatureNotBuiltError,
+  UnknownConfigKeyError,
+  ConfigTypeMismatchError,
+  wrapNativeError,
+} from "./errors";

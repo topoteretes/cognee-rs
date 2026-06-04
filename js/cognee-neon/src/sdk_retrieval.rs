@@ -34,44 +34,9 @@ use cognee_lib::api::{ScopeInput, normalize_scope, recall};
 use cognee_lib::search::{SearchRequest, SearchType};
 
 use crate::errors::{SdkError, throw_sdk_error};
+use crate::json::{js_to_value, parse_js};
 use crate::runtime::runtime;
 use crate::sdk::CogneeHandle;
-
-// ---------------------------------------------------------------------------
-// JS <-> JSON helpers (reuse the same pattern from sdk_ops.rs).
-// ---------------------------------------------------------------------------
-
-/// Parse a JSON string into a JS value via the global `JSON.parse`.
-fn parse_js<'cx, C: Context<'cx>>(cx: &mut C, json: &str) -> JsResult<'cx, JsValue> {
-    let global = cx.global_object();
-    let json_obj: Handle<JsObject> = global.get(cx, "JSON")?;
-    let parse: Handle<JsFunction> = json_obj.get(cx, "parse")?;
-    let arg = cx.string(json);
-    parse.call_with(cx).arg(arg).apply(cx)
-}
-
-/// Stringify a JS value via the global `JSON.stringify`.
-fn stringify_js<'cx>(
-    cx: &mut FunctionContext<'cx>,
-    val: Handle<'cx, JsValue>,
-) -> NeonResult<String> {
-    let global = cx.global_object();
-    let json: Handle<JsObject> = global.get(cx, "JSON")?;
-    let stringify: Handle<JsFunction> = json.get(cx, "stringify")?;
-    let result: Handle<JsValue> = stringify.call_with(cx).arg(val).apply(cx)?;
-    let s = result.downcast_or_throw::<JsString, _>(cx)?;
-    Ok(s.value(cx))
-}
-
-/// Convert a JS value into a `serde_json::Value`.
-fn js_to_value<'cx>(
-    cx: &mut FunctionContext<'cx>,
-    val: Handle<'cx, JsValue>,
-) -> NeonResult<serde_json::Value> {
-    let json = stringify_js(cx, val)?;
-    serde_json::from_str::<serde_json::Value>(&json)
-        .or_else(|e| cx.throw_error(format!("invalid JSON value: {e}")))
-}
 
 // ---------------------------------------------------------------------------
 // SearchType parsing.

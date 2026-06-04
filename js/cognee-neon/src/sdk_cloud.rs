@@ -33,20 +33,9 @@ use neon::prelude::*;
 use crate::errors::{SdkError, throw_sdk_error};
 // Only used in the feature-enabled paths.
 #[cfg(feature = "cloud")]
-use crate::runtime::runtime;
-
-// ---------------------------------------------------------------------------
-// JSON helper.
-// ---------------------------------------------------------------------------
-
+use crate::json::{parse_js, read_opts};
 #[cfg(feature = "cloud")]
-fn parse_js<'cx, C: Context<'cx>>(cx: &mut C, json: &str) -> JsResult<'cx, JsValue> {
-    let global = cx.global_object();
-    let json_obj: Handle<JsObject> = global.get(cx, "JSON")?;
-    let parse: Handle<JsFunction> = json_obj.get(cx, "parse")?;
-    let arg = cx.string(json);
-    parse.call_with(cx).arg(arg).apply(cx)
-}
+use crate::runtime::runtime;
 
 // ---------------------------------------------------------------------------
 // Feature-gated implementations.
@@ -211,23 +200,3 @@ pub fn cognee_disconnect(mut cx: FunctionContext) -> JsResult<JsPromise> {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Helpers.
-// ---------------------------------------------------------------------------
-
-/// Read an optional JS argument into a `serde_json::Value` (null if absent).
-#[cfg(feature = "cloud")]
-fn read_opts(cx: &mut FunctionContext<'_>, idx: usize) -> NeonResult<serde_json::Value> {
-    match cx.argument_opt(idx) {
-        Some(arg) if !arg.is_a::<JsUndefined, _>(cx) && !arg.is_a::<JsNull, _>(cx) => {
-            let global = cx.global_object();
-            let json_obj: Handle<JsObject> = global.get(cx, "JSON")?;
-            let stringify: Handle<JsFunction> = json_obj.get(cx, "stringify")?;
-            let result: Handle<JsValue> = stringify.call_with(cx).arg(arg).apply(cx)?;
-            let s = result.downcast_or_throw::<JsString, _>(cx)?;
-            serde_json::from_str::<serde_json::Value>(&s.value(cx))
-                .or_else(|e| cx.throw_error(format!("invalid JSON opts: {e}")))
-        }
-        _ => Ok(serde_json::Value::Null),
-    }
-}

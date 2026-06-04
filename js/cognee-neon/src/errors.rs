@@ -68,15 +68,20 @@ impl SdkError {
     }
 }
 
-/// Throw a JS `Error` carrying the message and a `code` property from an
-/// [`SdkError`]. Mirrors the helpers in `error.rs`.
+/// Throw a JS `Error` carrying the message, a `code` property, and a `kind`
+/// property from an [`SdkError`].
+///
+/// Both `code` and `kind` carry the same string value. `kind` is the stable
+/// API identifier; `code` is kept as a backwards-compatible alias so existing
+/// call-sites that check `e.code` continue to work.
 pub fn throw_sdk_error<'cx, T>(cx: &mut impl Context<'cx>, err: SdkError) -> NeonResult<T> {
     let code = err.code();
     let msg = err.to_string();
     let js_err = cx.error(msg)?;
+    let obj = js_err.downcast_or_throw::<JsObject, _>(cx)?;
     let code_val = cx.string(code);
-    js_err
-        .downcast_or_throw::<JsObject, _>(cx)?
-        .set(cx, "code", code_val)?;
+    let kind_val = cx.string(code);
+    obj.set(cx, "code", code_val)?;
+    obj.set(cx, "kind", kind_val)?;
     cx.throw(js_err)
 }

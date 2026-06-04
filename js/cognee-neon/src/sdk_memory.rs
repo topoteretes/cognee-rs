@@ -20,59 +20,13 @@ use uuid::Uuid;
 use cognee_lib::api::{ImproveParams, remember, remember_entry};
 use cognee_lib::cognify::{MemifyConfig, run_memify};
 use cognee_lib::database::{PipelineRunRepository, SeaOrmPipelineRunRepository};
-use cognee_lib::models::{DataInput, FeedbackEntry, MemoryEntry, QAEntry, TraceEntry};
+use cognee_lib::models::{FeedbackEntry, MemoryEntry, QAEntry, TraceEntry};
 
 use crate::errors::{SdkError, throw_sdk_error};
+use crate::json::{js_to_value, marshal_inputs, parse_js, read_opts};
 use crate::runtime::runtime;
 use crate::sdk::CogneeHandle;
 
-// ---------------------------------------------------------------------------
-// JSON helpers (shared with other sdk_* modules — each module has its own copy
-// to avoid making them part of a shared public surface; a future Phase-8
-// consolidation can factor them out).
-// ---------------------------------------------------------------------------
-
-pub(crate) fn parse_js<'cx, C: Context<'cx>>(cx: &mut C, json: &str) -> JsResult<'cx, JsValue> {
-    let global = cx.global_object();
-    let json_obj: Handle<JsObject> = global.get(cx, "JSON")?;
-    let parse: Handle<JsFunction> = json_obj.get(cx, "parse")?;
-    let arg = cx.string(json);
-    parse.call_with(cx).arg(arg).apply(cx)
-}
-
-pub(crate) fn stringify_js<'cx>(
-    cx: &mut FunctionContext<'cx>,
-    val: Handle<'cx, JsValue>,
-) -> NeonResult<String> {
-    let global = cx.global_object();
-    let json: Handle<JsObject> = global.get(cx, "JSON")?;
-    let stringify: Handle<JsFunction> = json.get(cx, "stringify")?;
-    let result: Handle<JsValue> = stringify.call_with(cx).arg(val).apply(cx)?;
-    let s = result.downcast_or_throw::<JsString, _>(cx)?;
-    Ok(s.value(cx))
-}
-
-pub(crate) fn js_to_value<'cx>(
-    cx: &mut FunctionContext<'cx>,
-    val: Handle<'cx, JsValue>,
-) -> NeonResult<serde_json::Value> {
-    let json = stringify_js(cx, val)?;
-    serde_json::from_str::<serde_json::Value>(&json)
-        .or_else(|e| cx.throw_error(format!("invalid JSON value: {e}")))
-}
-
-/// Read an optional JS argument into a `serde_json::Value` (null if absent).
-pub(crate) fn read_opts<'cx>(
-    cx: &mut FunctionContext<'cx>,
-    idx: i32,
-) -> NeonResult<serde_json::Value> {
-    match cx.argument_opt(idx as usize) {
-        Some(arg) if !arg.is_a::<JsUndefined, _>(cx) && !arg.is_a::<JsNull, _>(cx) => {
-            js_to_value(cx, arg)
-        }
-        _ => Ok(serde_json::Value::Null),
-    }
-}
 
 /// Parse an optional `tenant` UUID string out of an `opts` object.
 fn opts_tenant(opts: &serde_json::Value) -> Result<Option<Uuid>, SdkError> {
@@ -551,97 +505,3 @@ async fn run_improve(
         .map_err(|e| SdkError::Runtime(format!("failed to serialize ImproveResult: {e}")))
 }
 
-// ---------------------------------------------------------------------------
-// Input marshalling helpers (copied from sdk_ops.rs to avoid cross-module dep).
-// ---------------------------------------------------------------------------
-
-fn marshal_one(value: &serde_json::Value) -> Result<DataInput, SdkError> {
-    let obj = value
-        .as_object()
-        .ok_or_else(|| SdkError::Validation("each data input must be an object".to_string()))?;
-    let ty = obj
-        .get("type")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| SdkError::Validation("data input is missing a string `type`".to_string()))?;
-
-    match ty {
-        "text" => {
-            let text = obj.get("text").and_then(|v| v.as_str()).ok_or_else(|| {
-                SdkError::Validation("text input requires a `text` string".into())
-            })?;
-            Ok(DataInput::Text(text.to_string()))
-        }
-        "file" => {
-            let path = obj.get("path").and_then(|v| v.as_str()).ok_or_else(|| {
-                SdkError::Validation("file input requires a `path` string".into())
-            })?;
-            Ok(DataInput::FilePath(path.to_string()))
-        }
-        "url" => {
-            let url = obj
-                .get("url")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| SdkError::Validation("url input requires a `url` string".into()))?;
-            Ok(DataInput::Url(url.to_string()))
-        }
-        "binary" => {
-            use base64::Engine as _;
-            let name = obj
-                .get("name")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| {
-                    SdkError::Validation(
-                        "binary input requires a `name` string (used for MIME detection)".into(),
-                    )
-                })?
-                .to_string();
-            let bytes_val = obj
-                .get("bytes")
-                .ok_or_else(|| SdkError::Validation("binary input requires `bytes`".to_string()))?;
-            let data = match bytes_val {
-                serde_json::Value::String(s) => base64::engine::general_purpose::STANDARD
-                    .decode(s)
-                    .map_err(|e| SdkError::Validation(format!("invalid base64 `bytes`: {e}")))?,
-                serde_json::Value::Array(arr) => arr
-                    .iter()
-                    .map(|v| {
-                        v.as_u64()
-                            .filter(|n| *n <= 255)
-                            .map(|n| n as u8)
-                            .ok_or_else(|| {
-                                SdkError::Validation(
-                                    "binary `bytes` array must contain bytes 0..=255".into(),
-                                )
-                            })
-                    })
-                    .collect::<Result<Vec<u8>, _>>()?,
-                _ => {
-                    return Err(SdkError::Validation(
-                        "binary `bytes` must be a base64 string or a byte array".to_string(),
-                    ));
-                }
-            };
-            Ok(DataInput::Binary { data, name })
-        }
-        "s3" => Err(SdkError::Unsupported(
-            "s3 inputs are not yet supported".into(),
-        )),
-        other => Err(SdkError::Validation(format!(
-            "unknown data input type `{other}`"
-        ))),
-    }
-}
-
-fn marshal_inputs(value: &serde_json::Value) -> Result<Vec<DataInput>, SdkError> {
-    match value {
-        serde_json::Value::Array(items) => {
-            if items.is_empty() {
-                return Err(SdkError::Validation(
-                    "dataInput array must not be empty".to_string(),
-                ));
-            }
-            items.iter().map(marshal_one).collect()
-        }
-        other => marshal_one(other).map(|input| vec![input]),
-    }
-}

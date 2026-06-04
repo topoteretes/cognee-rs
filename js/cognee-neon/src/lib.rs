@@ -15,6 +15,7 @@ mod config;
 mod default_subscriber;
 mod error;
 mod errors;
+mod json;
 mod logging;
 mod pipeline;
 mod pipeline_exec;

@@ -25,6 +25,8 @@ use crate::errors::{SdkError, throw_sdk_error};
 #[cfg(feature = "visualization")]
 use std::sync::Arc;
 #[cfg(feature = "visualization")]
+use crate::json::read_opts;
+#[cfg(feature = "visualization")]
 use crate::runtime::runtime;
 #[cfg(feature = "visualization")]
 use crate::sdk::CogneeHandle;
@@ -168,23 +170,3 @@ pub fn cognee_visualize_to_file(mut cx: FunctionContext) -> JsResult<JsPromise> 
     }
 }
 
-// ---------------------------------------------------------------------------
-// Helpers.
-// ---------------------------------------------------------------------------
-
-/// Read an optional JS argument into a `serde_json::Value` (null if absent).
-#[cfg(feature = "visualization")]
-fn read_opts(cx: &mut FunctionContext<'_>, idx: usize) -> NeonResult<serde_json::Value> {
-    match cx.argument_opt(idx) {
-        Some(arg) if !arg.is_a::<JsUndefined, _>(cx) && !arg.is_a::<JsNull, _>(cx) => {
-            let global = cx.global_object();
-            let json_obj: Handle<JsObject> = global.get(cx, "JSON")?;
-            let stringify: Handle<JsFunction> = json_obj.get(cx, "stringify")?;
-            let result: Handle<JsValue> = stringify.call_with(cx).arg(arg).apply(cx)?;
-            let s = result.downcast_or_throw::<JsString, _>(cx)?;
-            serde_json::from_str::<serde_json::Value>(&s.value(cx))
-                .or_else(|e| cx.throw_error(format!("invalid JSON opts: {e}")))
-        }
-        _ => Ok(serde_json::Value::Null),
-    }
-}

@@ -20,26 +20,11 @@ use cognee_lib::api::{
     DatasetRef, ForgetTarget, PruneTarget, forget, prune_data, prune_system, update,
 };
 use cognee_lib::database::IngestDb;
-use cognee_lib::models::DataInput;
 
 use crate::errors::{SdkError, throw_sdk_error};
+use crate::json::{cognify_result_json, js_to_value, marshal_inputs, parse_js, read_opts};
 use crate::runtime::runtime;
 use crate::sdk::CogneeHandle;
-use crate::sdk_memory::{js_to_value, parse_js, read_opts};
-
-// Re-use the cognify_result_json helper — duplicate local copy to avoid
-// cross-module coupling; Phase-8 consolidation will factor these out.
-fn cognify_result_json(result: &cognee_lib::cognify::CognifyResult) -> serde_json::Value {
-    json!({
-        "chunks": result.chunks.len(),
-        "entities": result.entities.len(),
-        "edges": result.edges.len(),
-        "summaries": result.summaries.len(),
-        "embeddings": result.embeddings.len(),
-        "alreadyCompleted": result.already_completed,
-        "priorPipelineRunId": result.prior_pipeline_run_id.map(|id| id.to_string()),
-    })
-}
 
 // ---------------------------------------------------------------------------
 // opts helpers
@@ -358,97 +343,3 @@ async fn run_prune_system(
         .map_err(|e| SdkError::Runtime(format!("failed to serialize PruneResult: {e}")))
 }
 
-// ---------------------------------------------------------------------------
-// Input marshalling helpers (local copy — avoids cross-module coupling).
-// ---------------------------------------------------------------------------
-
-fn marshal_one(value: &serde_json::Value) -> Result<DataInput, SdkError> {
-    let obj = value
-        .as_object()
-        .ok_or_else(|| SdkError::Validation("each data input must be an object".to_string()))?;
-    let ty = obj
-        .get("type")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| SdkError::Validation("data input is missing a string `type`".to_string()))?;
-
-    match ty {
-        "text" => {
-            let text = obj.get("text").and_then(|v| v.as_str()).ok_or_else(|| {
-                SdkError::Validation("text input requires a `text` string".into())
-            })?;
-            Ok(DataInput::Text(text.to_string()))
-        }
-        "file" => {
-            let path = obj.get("path").and_then(|v| v.as_str()).ok_or_else(|| {
-                SdkError::Validation("file input requires a `path` string".into())
-            })?;
-            Ok(DataInput::FilePath(path.to_string()))
-        }
-        "url" => {
-            let url = obj
-                .get("url")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| SdkError::Validation("url input requires a `url` string".into()))?;
-            Ok(DataInput::Url(url.to_string()))
-        }
-        "binary" => {
-            use base64::Engine as _;
-            let name = obj
-                .get("name")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| {
-                    SdkError::Validation(
-                        "binary input requires a `name` string (used for MIME detection)".into(),
-                    )
-                })?
-                .to_string();
-            let bytes_val = obj
-                .get("bytes")
-                .ok_or_else(|| SdkError::Validation("binary input requires `bytes`".to_string()))?;
-            let data = match bytes_val {
-                serde_json::Value::String(s) => base64::engine::general_purpose::STANDARD
-                    .decode(s)
-                    .map_err(|e| SdkError::Validation(format!("invalid base64 `bytes`: {e}")))?,
-                serde_json::Value::Array(arr) => arr
-                    .iter()
-                    .map(|v| {
-                        v.as_u64()
-                            .filter(|n| *n <= 255)
-                            .map(|n| n as u8)
-                            .ok_or_else(|| {
-                                SdkError::Validation(
-                                    "binary `bytes` array must contain bytes 0..=255".into(),
-                                )
-                            })
-                    })
-                    .collect::<Result<Vec<u8>, _>>()?,
-                _ => {
-                    return Err(SdkError::Validation(
-                        "binary `bytes` must be a base64 string or a byte array".to_string(),
-                    ));
-                }
-            };
-            Ok(DataInput::Binary { data, name })
-        }
-        "s3" => Err(SdkError::Unsupported(
-            "s3 inputs are not yet supported".into(),
-        )),
-        other => Err(SdkError::Validation(format!(
-            "unknown data input type `{other}`"
-        ))),
-    }
-}
-
-fn marshal_inputs(value: &serde_json::Value) -> Result<Vec<DataInput>, SdkError> {
-    match value {
-        serde_json::Value::Array(items) => {
-            if items.is_empty() {
-                return Err(SdkError::Validation(
-                    "dataInput array must not be empty".to_string(),
-                ));
-            }
-            items.iter().map(marshal_one).collect()
-        }
-        other => marshal_one(other).map(|input| vec![input]),
-    }
-}

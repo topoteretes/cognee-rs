@@ -16,6 +16,7 @@ use cognee_lib::ComponentManager;
 use cognee_lib::config::{ConfigManager, Settings};
 
 use crate::errors::{SdkError, throw_sdk_error};
+use crate::json::stringify_js;
 use crate::runtime::{ensure_runtime, runtime};
 use crate::services::CogneeServices;
 
@@ -219,15 +220,3 @@ fn settings_from_env() -> Settings {
     ConfigManager::from_env().read().clone()
 }
 
-/// Stringify a JS value via the global `JSON.stringify`.
-fn stringify_js<'cx>(
-    cx: &mut FunctionContext<'cx>,
-    val: Handle<'cx, JsValue>,
-) -> NeonResult<String> {
-    let global = cx.global_object();
-    let json: Handle<JsObject> = global.get(cx, "JSON")?;
-    let stringify: Handle<JsFunction> = json.get(cx, "stringify")?;
-    let result: Handle<JsValue> = stringify.call_with(cx).arg(val).apply(cx)?;
-    let s = result.downcast_or_throw::<JsString, _>(cx)?;
-    Ok(s.value(cx))
-}

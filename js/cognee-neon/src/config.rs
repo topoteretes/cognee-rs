@@ -22,6 +22,7 @@ use neon::prelude::*;
 
 use cognee_lib::config::ConfigError;
 
+use crate::json::{js_to_value, parse_js};
 use crate::sdk::CogneeHandle;
 
 /// Secret/credential fields that must never be echoed back through
@@ -47,40 +48,8 @@ const SECRET_FIELDS: &[&str] = &[
 const REDACTED: &str = "***REDACTED***";
 
 // ---------------------------------------------------------------------------
-// JS <-> serde_json marshalling (JSON.stringify / JSON.parse round-trip).
+// Config-local helpers.
 // ---------------------------------------------------------------------------
-
-/// Stringify a JS value via the global `JSON.stringify`.
-fn stringify_js<'cx>(
-    cx: &mut FunctionContext<'cx>,
-    val: Handle<'cx, JsValue>,
-) -> NeonResult<String> {
-    let global = cx.global_object();
-    let json: Handle<JsObject> = global.get(cx, "JSON")?;
-    let stringify: Handle<JsFunction> = json.get(cx, "stringify")?;
-    let result: Handle<JsValue> = stringify.call_with(cx).arg(val).apply(cx)?;
-    let s = result.downcast_or_throw::<JsString, _>(cx)?;
-    Ok(s.value(cx))
-}
-
-/// Parse a JSON string into a JS value via the global `JSON.parse`.
-fn parse_js<'cx>(cx: &mut FunctionContext<'cx>, json: &str) -> JsResult<'cx, JsValue> {
-    let global = cx.global_object();
-    let json_obj: Handle<JsObject> = global.get(cx, "JSON")?;
-    let parse: Handle<JsFunction> = json_obj.get(cx, "parse")?;
-    let arg = cx.string(json);
-    parse.call_with(cx).arg(arg).apply(cx)
-}
-
-/// Convert a JS value (object) into a `serde_json::Value`.
-fn js_to_value<'cx>(
-    cx: &mut FunctionContext<'cx>,
-    val: Handle<'cx, JsValue>,
-) -> NeonResult<serde_json::Value> {
-    let json = stringify_js(cx, val)?;
-    serde_json::from_str::<serde_json::Value>(&json)
-        .or_else(|e| cx.throw_error(format!("invalid JSON value: {e}")))
-}
 
 /// Convert a JS object argument into a `HashMap<String, serde_json::Value>` for
 /// the bulk setters.
@@ -94,8 +63,11 @@ fn js_to_map<'cx>(
     }
 }
 
-/// Throw a [`ConfigError`] as a JS `Error` carrying a `code` field, mirroring
-/// the `errors.rs` / `throw_sdk_error` convention.
+/// Throw a [`ConfigError`] as a JS `Error` carrying both `code` and `kind`
+/// fields, mirroring the `errors.rs` / `throw_sdk_error` convention.
+///
+/// Both properties carry the same string value. `kind` is the stable API
+/// identifier; `code` is kept as a backwards-compatible alias.
 fn throw_config_error<'cx, T>(cx: &mut FunctionContext<'cx>, err: ConfigError) -> NeonResult<T> {
     let code = match err {
         ConfigError::UnknownKey(_) => "UNKNOWN_CONFIG_KEY",
@@ -103,10 +75,11 @@ fn throw_config_error<'cx, T>(cx: &mut FunctionContext<'cx>, err: ConfigError) -
     };
     let msg = err.to_string();
     let js_err = cx.error(msg)?;
+    let obj = js_err.downcast_or_throw::<JsObject, _>(cx)?;
     let code_val = cx.string(code);
-    js_err
-        .downcast_or_throw::<JsObject, _>(cx)?
-        .set(cx, "code", code_val)?;
+    let kind_val = cx.string(code);
+    obj.set(cx, "code", code_val)?;
+    obj.set(cx, "kind", kind_val)?;
     cx.throw(js_err)
 }
 
