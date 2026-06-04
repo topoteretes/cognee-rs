@@ -8,7 +8,7 @@ and commit agent to keep it current).
 
 **Legend:** ⬜ Not started · 🟡 In progress · 🔵 In review · ⛔ Blocked · ✅ Done
 
-Last updated: 2026-06-04 (Phase 4)
+Last updated: 2026-06-04 (Phase 5)
 
 ## Status table
 
@@ -19,7 +19,7 @@ Last updated: 2026-06-04 (Phase 4)
 | 2 | [Config surface](phase-2-config.md) | ✅ | ts-bindings/phase-2-config | 6988d0d | done |
 | 3 | [Pipeline ops (add/cognify)](phase-3-pipeline-ops.md) | ✅ | ts-bindings/phase-3-pipeline-ops | ffeea54 | done |
 | 4 | [Retrieval (search/recall)](phase-4-retrieval.md) | ✅ | ts-bindings/phase-4-retrieval | 33efc35 | done |
-| 5 | [Remaining SDK](phase-5-remaining-sdk.md) | ⬜ | — | — | |
+| 5 | [Remaining SDK](phase-5-remaining-sdk.md) | ✅ | ts-bindings/phase-5-remaining-sdk | — | done |
 | 6 | [Feature-gated surfaces](phase-6-feature-gated.md) | ⬜ | — | — | |
 | 7 | [TS layer & actualization](phase-7-typescript-layer.md) | ⬜ | — | — | |
 | 8 | [Errors & marshalling](phase-8-errors-marshalling.md) | ⬜ | — | — | |
@@ -59,12 +59,12 @@ Check off the criteria as they land (the granular view behind the status column)
 - [x] live `add → cognify → search` / `recall` round-trip
 
 ### Phase 5 — Remaining SDK
-- [ ] remember / remember_entry / memify / improve
-- [ ] forget / delete / update / prune
-- [ ] DatasetManager (list/has/status/empty/delete)
-- [ ] sessions / pipeline-run resets / default user
-- [ ] notebooks scope decided (in or out)
-- [ ] Tier-A (datasets/forget/prune/sessions) + Tier-B (memory ops) tests
+- [x] remember / remember_entry / memify / improve
+- [x] forget / delete / update / prune
+- [x] DatasetManager (list/has/status/empty/delete)
+- [x] sessions / pipeline-run resets / default user
+- [x] notebooks scope decided (in scope — api::notebooks is SDK-level)
+- [x] Tier-A (datasets/forget/prune/sessions) + Tier-B (memory ops) tests
 
 ### Phase 6 — Feature-gated surfaces
 - [ ] `visualize` returns HTML in a `visualization` build
@@ -107,4 +107,10 @@ Record cross-cutting decisions as they're made (one line each), so later phases 
 | 2026-06-04 | `SearchType` parsed via `serde_json::from_value(Value::String(s))` using `SCREAMING_SNAKE_CASE` serde attribute — same path as the HTTP server, guaranteed to stay in sync. | 4 |
 | 2026-06-04 | `RecallResult` hand-built JSON: `items`/`search_type_used`/`search_response` are each `Serialize` and serialized individually; `auto_routed` bool copied directly; camelCase keys used in the output JSON. | 4 |
 | 2026-06-04 | `ScopeInput` constructed directly from opts strings (no serde): `ScopeInput::Single(s)` or `ScopeInput::Many(vec)` then passed to `normalize_scope`; empty `Many` yields `None` so `recall()` applies its own Auto default. | 4 |
+| 2026-06-04 | Phase 5: notebooks included in scope — `api::notebooks` is an SDK-level facade (not feature-gated, not HTTP-only); exposed as `cogneeListNotebooks`, `cogneeCreateNotebook`, `cogneeUpdateNotebook`, `cogneeDeleteNotebook`. | 5 |
+| 2026-06-04 | `MemifyResult` hand-built JSON: `{ tripletCount, indexedCount, batchCount, alreadyCompleted, priorPipelineRunId }` — `MemifyResult` derives `Debug, Clone` only (not `Serialize`). | 5 |
+| 2026-06-04 | `ImproveResult` hand-built JSON: `{ stagesRun, memifyResult, feedbackEntriesProcessed, feedbackEntriesApplied, sessionsPersisted, edgesSynced }` — `ImproveResult` derives `Debug, Clone, Default` only. | 5 |
+| 2026-06-04 | `ForgetResult` hand-built JSON: `{ target, deleteResult }` — `ForgetResult` derives `Debug, Clone` only; nested `DeleteResult` IS `Serialize` and passes through serde directly. | 5 |
+| 2026-06-04 | `UpdateResult` hand-built JSON: `{ deletedDataId, deleteResult, newData, cognifyResult }` — reuses `cognify_result_json` helper for the last field (local copy per-module, Phase-8 consolidation will factor out). | 5 |
+| 2026-06-04 | `PruneResult` hand-built JSON: `{ dataPruned, graphPruned, vectorPruned, metadataPruned, cachePruned }` — `PruneResult` derives `Debug, Clone, Default` only; `cogneePruneData` and `cogneePruneSystem` split into two exports matching the two Rust API functions. | 5 |
 | | _(e.g. package renamed to `cognee`)_ | 7 |

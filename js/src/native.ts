@@ -155,6 +155,160 @@ export interface CogneeRecallResult {
   searchResponse: any | null;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 5 types
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Options accepted by `cogneeRemember`. */
+export interface CogneeRememberOptions {
+  /** Session ID — switches to session-memory mode (no graph writes). */
+  sessionId?: string;
+  /** Run a memify pass after cognify (default false). */
+  selfImprovement?: boolean;
+  /** Tenant UUID string (multi-tenant scoping). */
+  tenant?: string;
+}
+
+/** Result of `cogneeRemember` / `cogneeRememberEntry`. Mirrors `RememberResult` (Serialize). */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export type CogneeRememberResult = any;
+
+/** A typed memory entry for `cogneeRememberEntry`. */
+export type CogneeMemoryEntry =
+  | {
+      type: "qa";
+      question?: string;
+      answer?: string;
+      context?: string;
+      feedbackText?: string;
+      feedbackScore?: number;
+      usedGraphElementIds?: object;
+    }
+  | {
+      type: "trace";
+      originFunction: string;
+      status?: string;
+      memoryQuery?: string;
+      memoryContext?: string;
+      methodParams?: unknown;
+      methodReturnValue?: unknown;
+      errorMessage?: string;
+      generateFeedbackWithLlm?: boolean;
+    }
+  | {
+      type: "feedback";
+      qaId: string;
+      feedbackText?: string;
+      feedbackScore?: number;
+    };
+
+/** Options accepted by `cogneeMemify`. */
+export interface CogneeMemifyOptions {
+  tripletBatchSize?: number;
+  nodeTypeFilter?: string;
+  nodeNameFilter?: string[];
+  nodeNameFilterOperator?: string;
+}
+
+/** Result of `cogneeMemify`. Hand-built from `MemifyResult` (not Serialize). */
+export interface CogneeMemifyResult {
+  tripletCount: number;
+  indexedCount: number;
+  batchCount: number;
+  alreadyCompleted: boolean;
+  priorPipelineRunId: string | null;
+}
+
+/** Options accepted by `cogneeImprove`. */
+export interface CogneeImproveOptions {
+  datasetName: string;
+  sessionIds?: string[];
+  /** Node name filter for the memify stage. */
+  nodeName?: string[];
+  feedbackAlpha?: number;
+  tenant?: string;
+}
+
+/** Result of `cogneeImprove`. Hand-built from `ImproveResult` (not Serialize). */
+export interface CogneeImproveResult {
+  stagesRun: string[];
+  memifyResult: CogneeMemifyResult | null;
+  feedbackEntriesProcessed: number;
+  feedbackEntriesApplied: number;
+  sessionsPersisted: number;
+  edgesSynced: number;
+}
+
+/** Target for `cogneeForget`. */
+export type CogneeForgetTarget =
+  | { kind: "item"; dataId: string; dataset: { name: string } | { id: string } }
+  | { kind: "dataset"; dataset: { name: string } | { id: string } }
+  | { kind: "all" };
+
+/** Result of `cogneeForget`. Hand-built JSON. */
+export interface CogneeForgetResult {
+  target: string;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  deleteResult: any;
+}
+
+/** Options accepted by `cogneeUpdate`. */
+export interface CogneeUpdateOptions {
+  tenant?: string;
+}
+
+/** Result of `cogneeUpdate`. Hand-built JSON. */
+export interface CogneeUpdateResult {
+  deletedDataId: string;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  deleteResult: any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  newData: any[];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  cognifyResult: any | null;
+}
+
+/** Options accepted by `cogneePruneSystem`. */
+export interface CogneePruneSystemOptions {
+  pruneGraph?: boolean;
+  pruneVector?: boolean;
+  pruneMetadata?: boolean;
+  pruneCache?: boolean;
+}
+
+/** Result of `cogneePruneSystem`. Hand-built JSON. */
+export interface CogneePruneResult {
+  dataPruned: boolean;
+  graphPruned: boolean;
+  vectorPruned: boolean;
+  metadataPruned: boolean;
+  cachePruned: boolean;
+}
+
+/** A dataset row. Mirrors `cognee_models::Dataset` (Serialize). */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export type CogneeDataset = any;
+
+/** A data item row. Mirrors `cognee_models::Data` (Serialize). */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export type CogneeData = any;
+
+/** Result of a delete operation. Mirrors `DeleteResult` (Serialize). */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export type CogneeDeleteResult = any;
+
+/** A user row. Mirrors `cognee_models::User` (Serialize). */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export type CogneeUser = any;
+
+/** A notebook row. Mirrors `Notebook` (Serialize). */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export type CogneeNotebook = any;
+
+/** A session Q&A entry. Mirrors `SessionQAEntry` (Serialize). */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export type CogneeSessionQAEntry = any;
+
 /** Shape of the native Neon module. */
 export interface NativeBindings {
   // Runtime
@@ -227,6 +381,147 @@ export interface NativeBindings {
     query: string,
     opts?: CogneeRecallOptions
   ): Promise<CogneeRecallResult>;
+
+  // Memory ops (Phase 5): remember / remember_entry / memify / improve.
+  //
+  // `cogneeRemember` is a one-call add+cognify+optional-improve composite.
+  // opts.selfImprovement triggers a memify pass after cognify.
+  // opts.sessionId switches to session-memory mode (no graph writes).
+  //
+  // `cogneeRememberEntry` stores a typed MemoryEntry in a session. The
+  // `entry` discriminated union supports "qa", "trace", and "feedback" types.
+  //
+  // `cogneeMemify` indexes triplet embeddings from the existing knowledge graph.
+  // NOTE: extraction_tasks, enrichment_tasks, custom_data fields in MemifyConfig
+  // are closures and cannot be passed from JS.
+  //
+  // `cogneeImprove` runs the four-stage session-graph bridge pipeline.
+  cogneeRemember(
+    handle: NativeBox,
+    dataInput: CogneeDataInput | CogneeDataInput[],
+    datasetName: string,
+    opts?: CogneeRememberOptions
+  ): Promise<CogneeRememberResult>;
+  cogneeRememberEntry(
+    handle: NativeBox,
+    entry: CogneeMemoryEntry,
+    datasetName: string,
+    sessionId: string,
+    opts?: { tenant?: string }
+  ): Promise<CogneeRememberResult>;
+  cogneeMemify(
+    handle: NativeBox,
+    opts?: CogneeMemifyOptions
+  ): Promise<CogneeMemifyResult>;
+  cogneeImprove(
+    handle: NativeBox,
+    opts: CogneeImproveOptions
+  ): Promise<CogneeImproveResult>;
+
+  // Data ops (Phase 5): forget / update / prune.
+  //
+  // `cogneeForget` deletes data scoped by the ForgetTarget union.
+  // `cogneeUpdate` is a delete-then-re-add-then-re-cognify composite.
+  // `cogneePruneData` removes all files from storage.
+  // `cogneePruneSystem` wipes graph/vector/session backends selectively.
+  cogneeForget(
+    handle: NativeBox,
+    target: CogneeForgetTarget,
+    opts?: { tenant?: string }
+  ): Promise<CogneeForgetResult>;
+  cogneeUpdate(
+    handle: NativeBox,
+    dataId: string,
+    newData: CogneeDataInput | CogneeDataInput[],
+    datasetName: string,
+    opts?: CogneeUpdateOptions
+  ): Promise<CogneeUpdateResult>;
+  cogneePruneData(handle: NativeBox): Promise<void>;
+  cogneePruneSystem(
+    handle: NativeBox,
+    opts?: CogneePruneSystemOptions
+  ): Promise<CogneePruneResult>;
+
+  // Dataset manager ops (Phase 5).
+  cogneeListDatasets(handle: NativeBox): Promise<CogneeDataset[]>;
+  cogneeListData(handle: NativeBox, datasetId: string): Promise<CogneeData[]>;
+  cogneeHasData(handle: NativeBox, datasetId: string): Promise<boolean>;
+  cogneeDatasetStatus(
+    handle: NativeBox,
+    datasetIds: string[]
+  ): Promise<Record<string, string>>;
+  cogneeEmptyDataset(
+    handle: NativeBox,
+    datasetId: string
+  ): Promise<CogneeDeleteResult>;
+  cogneeDeleteData(
+    handle: NativeBox,
+    datasetId: string,
+    dataId: string,
+    opts?: { softDelete?: boolean; deleteDatasetIfEmpty?: boolean }
+  ): Promise<CogneeDeleteResult>;
+  cogneeDeleteAllDatasets(handle: NativeBox): Promise<CogneeDeleteResult[]>;
+
+  // Pipeline-run resets (Phase 5).
+  cogneeResetPipelineRunStatus(
+    handle: NativeBox,
+    datasetId: string,
+    pipelineName: string
+  ): Promise<void>;
+  cogneeResetDatasetPipelineRunStatus(
+    handle: NativeBox,
+    datasetId: string
+  ): Promise<void>;
+
+  // Default user (Phase 5).
+  cogneeGetOrCreateDefaultUser(handle: NativeBox): Promise<CogneeUser>;
+
+  // Notebooks (Phase 5).
+  cogneeListNotebooks(handle: NativeBox): Promise<CogneeNotebook[]>;
+  cogneeCreateNotebook(
+    handle: NativeBox,
+    name: string,
+    cells?: unknown,
+    deletable?: boolean
+  ): Promise<CogneeNotebook>;
+  cogneeUpdateNotebook(
+    handle: NativeBox,
+    id: string,
+    patch: { name?: string; cells?: unknown }
+  ): Promise<CogneeNotebook | null>;
+  cogneeDeleteNotebook(handle: NativeBox, id: string): Promise<boolean>;
+
+  // Session ops (Phase 5).
+  cogneeGetSession(
+    handle: NativeBox,
+    sessionId: string,
+    opts?: { lastN?: number }
+  ): Promise<CogneeSessionQAEntry[]>;
+  cogneeAddFeedback(
+    handle: NativeBox,
+    sessionId: string,
+    qaId: string,
+    feedbackText?: string,
+    feedbackScore?: number,
+    opts?: object
+  ): Promise<boolean>;
+  cogneeDeleteFeedback(
+    handle: NativeBox,
+    sessionId: string,
+    qaId: string,
+    opts?: object
+  ): Promise<boolean>;
+  cogneeGetGraphContext(
+    handle: NativeBox,
+    sessionId: string,
+    opts?: object
+  ): Promise<string | null>;
+  cogneeSetGraphContext(
+    handle: NativeBox,
+    sessionId: string,
+    context: string,
+    opts?: object
+  ): Promise<void>;
 
   // Config surface (Phase 2). Granular setters are synchronous and return
   // `void`; each bumps the config version, which version-invalidates the
