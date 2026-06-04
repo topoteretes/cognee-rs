@@ -8,7 +8,7 @@ and commit agent to keep it current).
 
 **Legend:** ⬜ Not started · 🟡 In progress · 🔵 In review · ⛔ Blocked · ✅ Done
 
-Last updated: 2026-06-04 (Phase 3)
+Last updated: 2026-06-04 (Phase 4)
 
 ## Status table
 
@@ -18,7 +18,7 @@ Last updated: 2026-06-04 (Phase 3)
 | 1 | [Handle & service facade](phase-1-handle-and-services.md) | ✅ | ts-bindings/phase-1-handle-facade | e87fa44 | done (keystone) |
 | 2 | [Config surface](phase-2-config.md) | ✅ | ts-bindings/phase-2-config | 6988d0d | done |
 | 3 | [Pipeline ops (add/cognify)](phase-3-pipeline-ops.md) | ✅ | ts-bindings/phase-3-pipeline-ops | ffeea54 | done |
-| 4 | [Retrieval (search/recall)](phase-4-retrieval.md) | ⬜ | — | — | |
+| 4 | [Retrieval (search/recall)](phase-4-retrieval.md) | ✅ | ts-bindings/phase-4-retrieval | TBD | done |
 | 5 | [Remaining SDK](phase-5-remaining-sdk.md) | ⬜ | — | — | |
 | 6 | [Feature-gated surfaces](phase-6-feature-gated.md) | ⬜ | — | — | |
 | 7 | [TS layer & actualization](phase-7-typescript-layer.md) | ⬜ | — | — | |
@@ -53,10 +53,10 @@ Check off the criteria as they land (the granular view behind the status column)
 - [x] live `add → cognify` round-trip verified (Tier-B, skips cleanly in CI)
 
 ### Phase 4 — Retrieval
-- [ ] `search` over all `SearchType`
-- [ ] `recall` with scopes + session routing
-- [ ] `SearchType` ↔ string mapping locked (Tier-A)
-- [ ] live `add → cognify → search` / `recall` round-trip
+- [x] `search` over all `SearchType`
+- [x] `recall` with scopes + session routing
+- [x] `SearchType` ↔ string mapping locked (Tier-A)
+- [x] live `add → cognify → search` / `recall` round-trip
 
 ### Phase 5 — Remaining SDK
 - [ ] remember / remember_entry / memify / improve
@@ -104,4 +104,7 @@ Record cross-cutting decisions as they're made (one line each), so later phases 
 | 2026-06-04 | `add()` partitions added vs deduplicated via pre-scan since `AddPipeline` returns all items including duplicates (duplicate path returns the pre-existing row); pre-scan counts rows in the dataset before the run and post-scan computes the delta. | 3 |
 | 2026-06-04 | `DataInput` discriminated union marshalled explicitly in Rust: `type` field drives a `match`; `binary.bytes` accepts `Buffer`/`number[]`/base64-string via `base64` crate; `url`/`s3` return `Unsupported` until wired end-to-end. | 3 |
 | 2026-06-04 | `CognifyResult` is hand-built JSON from pipeline output fields (chunks, entities, edges, summaries, embeddings, alreadyCompleted, priorPipelineRunId) rather than deriving `Serialize` on internal types. | 3 |
+| 2026-06-04 | `SearchType` parsed via `serde_json::from_value(Value::String(s))` using `SCREAMING_SNAKE_CASE` serde attribute — same path as the HTTP server, guaranteed to stay in sync. | 4 |
+| 2026-06-04 | `RecallResult` hand-built JSON: `items`/`search_type_used`/`search_response` are each `Serialize` and serialized individually; `auto_routed` bool copied directly; camelCase keys used in the output JSON. | 4 |
+| 2026-06-04 | `ScopeInput` constructed directly from opts strings (no serde): `ScopeInput::Single(s)` or `ScopeInput::Many(vec)` then passed to `normalize_scope`; empty `Many` yields `None` so `recall()` applies its own Auto default. | 4 |
 | | _(e.g. package renamed to `cognee`)_ | 7 |

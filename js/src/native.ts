@@ -55,6 +55,106 @@ export interface CogneeCognifyResult {
   priorPipelineRunId: string | null;
 }
 
+/** All 15 search type wire names (SCREAMING_SNAKE_CASE, matching Rust serde). */
+export type SearchTypeString =
+  | "SUMMARIES"
+  | "CHUNKS"
+  | "RAG_COMPLETION"
+  | "TRIPLET_COMPLETION"
+  | "GRAPH_COMPLETION"
+  | "GRAPH_SUMMARY_COMPLETION"
+  | "CYPHER"
+  | "NATURAL_LANGUAGE"
+  | "GRAPH_COMPLETION_COT"
+  | "GRAPH_COMPLETION_CONTEXT_EXTENSION"
+  | "FEELING_LUCKY"
+  | "FEEDBACK"
+  | "TEMPORAL"
+  | "CODING_RULES"
+  | "CHUNKS_LEXICAL";
+
+/** Recall scope wire names (snake_case; "all" expands to all four concrete scopes). */
+export type RecallScopeString =
+  | "auto"
+  | "graph"
+  | "session"
+  | "trace"
+  | "graph_context"
+  | "all";
+
+/** Options accepted by `cogneeSearch`. All fields are optional. */
+export interface CogneeSearchOptions {
+  /** SCREAMING_SNAKE_CASE search type. Defaults to "GRAPH_COMPLETION". */
+  searchType?: SearchTypeString;
+  /** Dataset names to restrict the search to. */
+  datasets?: string[];
+  /** Dataset UUIDs to restrict the search to. */
+  datasetIds?: string[];
+  /** Maximum number of results to return. */
+  topK?: number;
+  /** System prompt override for completion-generating retrievers. */
+  systemPrompt?: string;
+  /** Session ID for QA history persistence. */
+  sessionId?: string;
+  /** Filter results by node type. */
+  nodeType?: string;
+  /** Filter results by one or more node names. */
+  nodeName?: string[];
+  /** Return only the context without running completion. */
+  onlyContext?: boolean;
+  /** Combine context from multiple retrieval paths. */
+  useCombinedContext?: boolean;
+  /** Include verbose diagnostics in the response. */
+  verbose?: boolean;
+  /** Persist this query+result to search history (defaults to true). */
+  saveInteraction?: boolean;
+  /** Detect feedback about the previous response before searching. */
+  autoFeedbackDetection?: boolean;
+  /** User UUID override (defaults to the handle's owner). */
+  userId?: string;
+}
+
+/** Options accepted by `cogneeRecall`. All fields are optional. */
+export interface CogneeRecallOptions {
+  /** SCREAMING_SNAKE_CASE search type for the graph retrieval leg. */
+  searchType?: SearchTypeString;
+  /** Dataset names to restrict graph search to. */
+  datasets?: string[];
+  /** Maximum number of results per source. Defaults to 10. */
+  topK?: number;
+  /** Automatically select the best search type (defaults to false). */
+  autoRoute?: boolean;
+  /** Session ID for session-first routing. */
+  sessionId?: string;
+  /**
+   * Recall scope: a single scope string or an array.
+   * "auto" (default) → session-first routing when sessionId is set, else graph.
+   * "all" → fan out across all four concrete sources.
+   */
+  scope?: RecallScopeString | RecallScopeString[];
+}
+
+/**
+ * Raw search response from `cogneeSearch`.
+ * Mirrors `cognee_search::SearchResponse` (fully Serialize on the Rust side).
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export type CogneeSearchResponse = any;
+
+/** Result returned by `cogneeRecall`. */
+export interface CogneeRecallResult {
+  /** Source-tagged result items from all contributing sources. */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  items: any[];
+  /** The search type used for the graph retrieval leg, or null. */
+  searchTypeUsed: SearchTypeString | null;
+  /** Whether auto-routing was applied. */
+  autoRouted: boolean;
+  /** The raw graph search response, or null if no graph leg ran. */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  searchResponse: any | null;
+}
+
 /** Shape of the native Neon module. */
 export interface NativeBindings {
   // Runtime
@@ -105,6 +205,28 @@ export interface NativeBindings {
     datasetName: string,
     opts?: CogneeAddOptions & CogneeCognifyOptions
   ): Promise<{ add: CogneeAddResult; cognify: CogneeCognifyResult }>;
+
+  // Retrieval ops (Phase 4): search / recall.
+  //
+  // `cogneeSearch` sends a typed query to the knowledge graph.  `searchType`
+  // defaults to "GRAPH_COMPLETION"; all 15 SCREAMING_SNAKE_CASE variants are
+  // accepted. `SearchResponse` is passed through Rust serde so its shape
+  // mirrors `cognee_search::SearchResponse`.
+  //
+  // `cogneeRecall` adds session-first routing: it checks session QA history by
+  // keyword overlap, then falls back to graph search. `scope` controls which
+  // sources contribute; "auto" (default) picks based on the presence of
+  // `sessionId` and other opts.
+  cogneeSearch(
+    handle: NativeBox,
+    query: string,
+    opts?: CogneeSearchOptions
+  ): Promise<CogneeSearchResponse>;
+  cogneeRecall(
+    handle: NativeBox,
+    query: string,
+    opts?: CogneeRecallOptions
+  ): Promise<CogneeRecallResult>;
 
   // Config surface (Phase 2). Granular setters are synchronous and return
   // `void`; each bumps the config version, which version-invalidates the

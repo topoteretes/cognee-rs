@@ -23,6 +23,7 @@ mod run_handle;
 mod runtime;
 mod sdk;
 mod sdk_ops;
+mod sdk_retrieval;
 mod services;
 mod task;
 mod task_context;
@@ -57,6 +58,10 @@ fn main(mut cx: ModuleContext) -> NeonResult<()> {
     cx.export_function("cogneeAdd", sdk_ops::cognee_add)?;
     cx.export_function("cogneeCognify", sdk_ops::cognee_cognify)?;
     cx.export_function("cogneeAddAndCognify", sdk_ops::cognee_add_and_cognify)?;
+
+    // Retrieval ops (Phase 4): search / recall.
+    cx.export_function("cogneeSearch", sdk_retrieval::cognee_search)?;
+    cx.export_function("cogneeRecall", sdk_retrieval::cognee_recall)?;
 
     // Config surface (Phase 2): granular + bulk + generic setters, read-back.
     // LLM
