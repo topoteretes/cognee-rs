@@ -20,7 +20,7 @@ Last updated: 2026-06-04 (Phase 6)
 | 3 | [Pipeline ops (add/cognify)](phase-3-pipeline-ops.md) | ✅ | ts-bindings/phase-3-pipeline-ops | ffeea54 | done |
 | 4 | [Retrieval (search/recall)](phase-4-retrieval.md) | ✅ | ts-bindings/phase-4-retrieval | 33efc35 | done |
 | 5 | [Remaining SDK](phase-5-remaining-sdk.md) | ✅ | ts-bindings/phase-5-remaining-sdk | 5330435 | done |
-| 6 | [Feature-gated surfaces](phase-6-feature-gated.md) | ✅ | ts-bindings/phase-6-feature-gated | TBD | done |
+| 6 | [Feature-gated surfaces](phase-6-feature-gated.md) | ✅ | ts-bindings/phase-6-feature-gated | 335dca5 | done |
 | 7 | [TS layer & actualization](phase-7-typescript-layer.md) | ⬜ | — | — | |
 | 8 | [Errors & marshalling](phase-8-errors-marshalling.md) | ⬜ | — | — | |
 | 9 | [Tests & CI](phase-9-tests-ci.md) | ⬜ | — | — | |
