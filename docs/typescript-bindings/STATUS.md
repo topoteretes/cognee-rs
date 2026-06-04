@@ -18,7 +18,7 @@ Last updated: 2026-06-04 (Phase 4)
 | 1 | [Handle & service facade](phase-1-handle-and-services.md) | ✅ | ts-bindings/phase-1-handle-facade | e87fa44 | done (keystone) |
 | 2 | [Config surface](phase-2-config.md) | ✅ | ts-bindings/phase-2-config | 6988d0d | done |
 | 3 | [Pipeline ops (add/cognify)](phase-3-pipeline-ops.md) | ✅ | ts-bindings/phase-3-pipeline-ops | ffeea54 | done |
-| 4 | [Retrieval (search/recall)](phase-4-retrieval.md) | ✅ | ts-bindings/phase-4-retrieval | TBD | done |
+| 4 | [Retrieval (search/recall)](phase-4-retrieval.md) | ✅ | ts-bindings/phase-4-retrieval | 33efc35 | done |
 | 5 | [Remaining SDK](phase-5-remaining-sdk.md) | ⬜ | — | — | |
 | 6 | [Feature-gated surfaces](phase-6-feature-gated.md) | ⬜ | — | — | |
 | 7 | [TS layer & actualization](phase-7-typescript-layer.md) | ⬜ | — | — | |
