@@ -88,6 +88,26 @@ From [observability/](observability/) and the logging crate:
 - **Size-based log rotation** — only daily time-based rotation is implemented
   (`tracing-appender::RollingFileAppender`); Python's 50 MB size-based rotation is not matched.
 
+## Language bindings — TypeScript / Node (`js/`)
+
+The Phase-3 pipeline ops (`cogneeAdd` / `cogneeCognify` / `cogneeAddAndCognify`) accept a
+discriminated-union `dataInput` (`{ type, … }`). The supported variants track what
+`DataInput` flows end-to-end today:
+
+- **`text` / `file` / `binary`** — fully supported (`binary` requires a `name`, used for MIME
+  detection; `bytes` may be a base64 string, a byte array, or a Node `Buffer`).
+- **`url`** — accepted and marshalled to `DataInput::Url`, but ingestion through the streaming
+  `DataInput` path is not wired (see "URL processing in `DataInput`" above), so a `url` input
+  currently surfaces an unsupported error from the pipeline rather than crawling the page.
+- **`s3`** — rejected at the boundary with an `UNSUPPORTED` error (`DataInput::S3Path` is a stub).
+- **Recursive `dataItem`** (`DataInput::DataItem`) — out of scope for the v1 binding; rejected with
+  an `UNSUPPORTED` error.
+
+`cogneeAdd` returns one record per input including duplicates (the pipeline's duplicate branch
+returns the pre-existing row), so the binding partitions the result into `added` (newly created) vs
+`deduplicated` (already existed) by content-addressed id; there is no in-pipeline "drop duplicates
+from the result" behavior to rely on.
+
 ## Cross-SDK parity harness
 
 The HTTP parity harness ships. Follow-ups noted in its (now-removed) design doc:

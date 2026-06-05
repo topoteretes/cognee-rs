@@ -1,11 +1,12 @@
 {
-  "name": "@cognee/pipeline",
+  "name": "cognee",
   "version": "0.1.0",
-  "description": "Node.js bindings for the cognee-core pipeline engine",
+  "description": "Node.js bindings for the cognee AI-memory SDK",
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
   "scripts": {
-    "build:rust": "cd cognee-neon && cargo build --release && cp target/release/libcognee_neon.so ../cognee_neon.node || cp target/release/libcognee_neon.dylib ../cognee_neon.node || cp target/release/cognee_neon.dll ../cognee_neon.node",
+    "build:rust": "cd cognee-neon && cargo build --release && cd .. && node scripts/copy-artifact.js release",
+    "build:rust:debug": "cd cognee-neon && cargo build && cd .. && node scripts/copy-artifact.js debug",
     "build:ts": "tsc",
     "build": "npm run build:rust && npm run build:ts",
     "test": "jest --config jest.config.js"

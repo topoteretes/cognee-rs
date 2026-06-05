@@ -1,4 +1,21 @@
 /**
+ * cognee — Node.js bindings for the cognee AI-memory SDK.
+ *
+ * Quick start:
+ * ```ts
+ * import { Cognee } from 'cognee';
+ *
+ * const c = new Cognee({ llmModel: "gpt-4o-mini" });
+ * await c.warm();
+ * await c.add({ type: "text", text: "…" }, "main");
+ * await c.cognify("main");
+ * const results = await c.search("my query");
+ * ```
+ *
+ * Migration: Before: import { Pipeline } from '@cognee/pipeline'
+ *            After:  import { pipeline } from 'cognee'
+ *                    const { Pipeline } = pipeline
+ *
  * Environment variables consumed by the Rust core on import:
  *
  *   COGNEE_BINDING_SUPPRESS_LOGS=1  — suppress the default
@@ -93,3 +110,43 @@ export {
 } from "./watcher";
 export { RunHandle } from "./run-handle";
 export { RunResult } from "./run-result";
+export {
+  CogneeError,
+  ComponentError,
+  ServiceBuildError,
+  UserBootstrapError,
+  RuntimeError,
+  ValidationError,
+  UnsupportedError,
+  FeatureNotBuiltError,
+  UnknownConfigKeyError,
+  ConfigTypeMismatchError,
+  wrapNativeError,
+} from "./errors";
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SDK-level exports (Phase 7)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** The main Cognee SDK class, module-level cloud functions, and sub-object types. */
+export {
+  Cognee,
+  serve,
+  disconnect,
+  type CogneeConfigObject,
+  type CogneeDatasetObject,
+  type CogneeSessionObject,
+} from "./cognee";
+
+/** All user-facing Cognee* TypeScript types. */
+export * from "./types";
+
+/**
+ * Low-level pipeline engine API (legacy).
+ *
+ * ```ts
+ * import { pipeline } from 'cognee';
+ * const p = new pipeline.Pipeline();
+ * ```
+ */
+export * as pipeline from "./pipeline";

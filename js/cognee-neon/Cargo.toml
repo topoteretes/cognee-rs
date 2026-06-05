@@ -9,7 +9,47 @@ edition = "2024"
 [lib]
 crate-type = ["cdylib"]
 
+[features]
+# visualization and cloud mirror cognee-lib and cognee-cli defaults.
+# A --no-default-features build strips both; they are always present in
+# the standard prebuild.
+default = [
+    "visualization",
+    "cloud",
+    # engine features — unchanged from Phase 0–5
+    "qdrant",
+    "ladybug",
+    "onnx",
+    "hf-tokenizer",
+    "tiktoken",
+    "sqlite",
+    "testing",
+]
+visualization = ["cognee-lib/visualization"]
+cloud         = ["cognee-lib/cloud"]
+# Engine features forwarded to cognee-lib (already listed in [dependencies]
+# below; declared here so cargo --features / --no-default-features works).
+qdrant        = ["cognee-lib/qdrant"]
+ladybug       = ["cognee-lib/ladybug"]
+onnx          = ["cognee-lib/onnx"]
+hf-tokenizer  = ["cognee-lib/hf-tokenizer"]
+tiktoken      = ["cognee-lib/tiktoken"]
+sqlite        = ["cognee-lib/sqlite"]
+testing       = ["cognee-lib/testing"]
+
 [dependencies]
+# Full cognee SDK. Phase 0 links this to prove the foundation compiles and
+# produces a loadable `.node`; later phases expose the SDK functions.
+#
+# Feature set: the engine features the SDK needs (qdrant, ladybug, onnx,
+# hf-tokenizer, tiktoken) plus `sqlite` (used by the legacy `task_context.rs`
+# mock, which connects to `sqlite::memory:`) and `testing` (re-exports the
+# mock graph/vector backends through `cognee_lib`, and keeps the legacy mock
+# `TaskContext` working). Phase 6 adds visualization and cloud.
+cognee-lib = { path = "../../crates/lib", default-features = false }
+# Kept as direct deps so the legacy engine modules (task_context.rs etc.) keep
+# their existing crate-path imports without a rewire. These are path deps, so
+# they resolve to the same versions `cognee-lib` pulls in.
 cognee-core = { path = "../../crates/core" }
 cognee-database = { path = "../../crates/database", features = ["sqlite"] }
 cognee-graph = { path = "../../crates/graph", features = ["testing"] }
@@ -28,7 +68,11 @@ neon = { version = "1", default-features = false, features = ["napi-6"] }
 async-trait = "0.1.89"
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "time"] }
 futures = "0.3"
-uuid = { version = "1.21", features = ["v4", "serde"] }
+uuid = { version = "1.21", features = ["v4", "v5", "serde"] }
+thiserror = "2.0"
+serde_json = "1"
+# Decode base64 `bytes` for binary `DataInput` inputs over the JSON bridge.
+base64 = "0.22"
 
 [patch.crates-io]
 tar = { git = "https://github.com/qdrant/tar-rs", branch = "main" }
