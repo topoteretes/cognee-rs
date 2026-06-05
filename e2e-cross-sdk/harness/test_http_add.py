@@ -8,6 +8,9 @@ Ignore extension: ``{"$..tenant_id", "$..data_id", "$..dataset_id",
 The ``content_hash`` field is NOT ignored — it must match.
 """
 
+from contextlib import contextmanager
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
 from http_helpers import DEFAULT_IGNORE, assert_responses_match
 
 _ADD_IGNORE = DEFAULT_IGNORE | {
@@ -22,6 +25,50 @@ _SAMPLE_TEXT = (
     "persistent, queryable knowledge graphs.  This test file is used "
     "for cross-SDK parity verification."
 )
+
+_URL_FIXTURE_HTML = b"""\
+<html>
+  <head><title>HTTP URL Fixture</title></head>
+  <body>
+    <h1>HTTP add URL heading</h1>
+    <p>Served from the local pytest fixture.</p>
+  </body>
+</html>
+"""
+
+
+class _UrlFixtureHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == "/robots.txt":
+            self.send_response(404)
+            self.end_headers()
+            return
+        if self.path == "/page.html":
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(_URL_FIXTURE_HTML)))
+            self.end_headers()
+            self.wfile.write(_URL_FIXTURE_HTML)
+            return
+        self.send_response(404)
+        self.end_headers()
+
+    def log_message(self, *_args):
+        pass
+
+
+@contextmanager
+def local_url_fixture():
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _UrlFixtureHandler)
+    try:
+        import threading
+
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        yield f"http://127.0.0.1:{server.server_port}/page.html"
+    finally:
+        server.shutdown()
+        server.server_close()
 
 
 def test_add_text_upload(authed_clients, unique_dataset_name):
@@ -60,12 +107,14 @@ def test_add_multi_file_upload(authed_clients, unique_dataset_name):
 
 def test_add_url_ingestion(authed_clients, unique_dataset_name):
     """POST /api/v1/add with a URL source ingests the page on both servers."""
-    payload = {
-        "url": "https://raw.githubusercontent.com/topoteretes/cognee/main/README.md",
-        "dataset_name": unique_dataset_name,
-    }
-    py = authed_clients["py"].post("/api/v1/add", json=payload)
-    rs = authed_clients["rs"].post("/api/v1/add", json=payload)
+    with local_url_fixture() as url:
+        files = {"data": ("url.txt", url.encode(), "text/plain")}
+        data = {
+            "dataset_name": unique_dataset_name,
+            "datasetName": unique_dataset_name,
+        }
+        py = authed_clients["py"].post("/api/v1/add", files=files, data=data)
+        rs = authed_clients["rs"].post("/api/v1/add", files=files, data=data)
     # Status codes must agree (both may error or both succeed)
     assert py.status_code == rs.status_code, (
         f"URL ingest status mismatch: py={py.status_code} rs={rs.status_code}\n"

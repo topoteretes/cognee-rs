@@ -5,6 +5,10 @@ UUID5 IDs, filenames, metadata fields, and stored file bytes.  No LLM
 or API key is required.
 """
 
+import json
+from contextlib import contextmanager
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
 from helpers import (
     open_db,
     query_data,
@@ -16,10 +20,66 @@ from helpers import (
     read_stored_file,
     run_python_cli,
     run_rust_cli,
+    write_rust_config,
     NLP_TEXT_FILE,
     QC_TEXT_FILE,
     DATASET_NAME,
 )
+
+
+_URL_FIXTURE_HTML = b"""\
+<html>
+  <head>
+    <title>Cross SDK URL Fixture</title>
+    <style>.hidden { display: none; }</style>
+  </head>
+  <body>
+    <h1>Cross SDK URL heading</h1>
+    <p>Local URL fixture body for add parity.</p>
+    <script>window.secret = true;</script>
+  </body>
+</html>
+"""
+
+
+class _UrlFixtureHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == "/robots.txt":
+            self.send_response(404)
+            self.end_headers()
+            return
+        if self.path == "/page.html":
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(_URL_FIXTURE_HTML)))
+            self.end_headers()
+            self.wfile.write(_URL_FIXTURE_HTML)
+            return
+        self.send_response(404)
+        self.end_headers()
+
+    def log_message(self, *_args):
+        pass
+
+
+@contextmanager
+def local_url_fixture():
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _UrlFixtureHandler)
+    try:
+        import threading
+
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        yield f"http://127.0.0.1:{server.server_port}/page.html"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def _json_metadata(row):
+    raw = row.get("external_metadata")
+    assert raw, f"expected external_metadata in row: {row}"
+    return json.loads(raw)
 
 
 # ── Content hash ─────────────────────────────────────────────────────────────
@@ -163,6 +223,81 @@ def test_add_stored_file_content_matches(both_added):
         f"  Python location:  {py_row['raw_data_location']}\n"
         f"  Rust location:    {rust_row['raw_data_location']}"
     )
+
+
+# ── URL inputs ───────────────────────────────────────────────────────────────
+
+
+def test_add_url_metadata_locations_and_hash_match(tmp_path):
+    """Both SDKs ingest a local URL into matching extracted/raw artifacts."""
+    py_ws = tmp_path / "python_url"
+    rust_ws = tmp_path / "rust_url"
+    py_ws.mkdir()
+    rust_ws.mkdir()
+    dataset = "url_parity"
+
+    with local_url_fixture() as url:
+        py_result = run_python_cli(py_ws, ["add", url, "-d", dataset], check=False)
+        assert py_result.returncode == 0, (
+            f"Python URL add failed:\n{py_result.stdout}\n{py_result.stderr}"
+        )
+
+        py_conn = open_db(python_db_path(py_ws))
+        py_data = query_data(py_conn)
+        py_owner = query_datasets(py_conn)[0]["owner_id"]
+        py_tenant = query_datasets(py_conn)[0].get("tenant_id")
+        py_conn.close()
+
+        write_rust_config(rust_ws, user_id=str(py_owner))
+        rust_args = ["add", url, "-d", dataset]
+        if py_tenant:
+            rust_args.extend(["--tenant-id", str(py_tenant)])
+        rust_result = run_rust_cli(rust_ws, rust_args, check=False)
+        assert rust_result.returncode == 0, (
+            f"Rust URL add failed:\n{rust_result.stdout}\n{rust_result.stderr}"
+        )
+
+    py_conn = open_db(python_db_path(py_ws))
+    rust_conn = open_db(rust_db_path(rust_ws))
+    py_row = query_data(py_conn)[0]
+    rust_row = query_data(rust_conn)[0]
+    py_conn.close()
+    rust_conn.close()
+
+    assert py_row["content_hash"] == rust_row["content_hash"]
+    assert py_row["raw_content_hash"] == rust_row["raw_content_hash"]
+    assert py_row["extension"] == rust_row["extension"] == "txt"
+    assert py_row["mime_type"] == rust_row["mime_type"] == "text/plain"
+    assert py_row["original_extension"] == rust_row["original_extension"] == "html"
+    assert py_row["original_mime_type"] == rust_row["original_mime_type"] == "text/html"
+    assert py_row["loader_engine"] == rust_row["loader_engine"] == "beautiful_soup_loader"
+    assert py_row["raw_data_location"].endswith(".txt")
+    assert rust_row["raw_data_location"].endswith(".txt")
+    assert py_row["original_data_location"].endswith(".html")
+    assert rust_row["original_data_location"].endswith(".html")
+
+    py_extracted = read_stored_file(py_ws / ".data_storage", py_row["raw_data_location"])
+    rust_extracted = read_stored_file(rust_ws / ".data_storage", rust_row["raw_data_location"])
+    assert py_extracted == rust_extracted
+    extracted_text = py_extracted.decode()
+    assert "Cross SDK URL heading" in extracted_text
+    assert "Local URL fixture body for add parity." in extracted_text
+    assert "<html>" not in extracted_text
+    assert "window.secret" not in extracted_text
+
+    py_raw = read_stored_file(py_ws / ".data_storage", py_row["original_data_location"])
+    rust_raw = read_stored_file(rust_ws / ".data_storage", rust_row["original_data_location"])
+    assert py_raw == rust_raw == _URL_FIXTURE_HTML
+
+    py_meta = _json_metadata(py_row)
+    rust_meta = _json_metadata(rust_row)
+    for key in ("source", "url", "final_url", "content_type", "title"):
+        assert py_meta.get(key) == rust_meta.get(key), (
+            f"URL metadata mismatch for {key}: py={py_meta} rust={rust_meta}"
+        )
+    assert py_meta["source"] == "url"
+    assert py_meta["content_type"] == "text/html; charset=utf-8"
+    assert py_meta["title"] == "Cross SDK URL Fixture"
 
 
 # ── Deduplication ────────────────────────────────────────────────────────────

@@ -1,6 +1,8 @@
 use assert_cmd::Command;
+use md5::{Digest, Md5};
 use predicates::prelude::*;
-use std::path::Path;
+use rusqlite::Connection;
+use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 use uuid::Uuid;
 
@@ -21,6 +23,67 @@ fn config_set(config_home: &TempDir, workdir: &Path, key: &str, json_value: &str
         .args(["config", "set", key, json_value])
         .assert()
         .success();
+}
+
+fn config_set_with_temp_home(config_home: &TempDir, workdir: &Path, key: &str, json_value: &str) {
+    make_cmd_in(config_home, workdir)
+        .env("HOME", config_home.path())
+        .args(["config", "set", key, json_value])
+        .assert()
+        .success();
+}
+
+#[derive(Debug)]
+struct DataRow {
+    raw_data_location: String,
+    original_data_location: String,
+    extension: String,
+    mime_type: String,
+    content_hash: String,
+    original_extension: Option<String>,
+    original_mime_type: Option<String>,
+    loader_engine: Option<String>,
+    raw_content_hash: Option<String>,
+    external_metadata: Option<String>,
+}
+
+fn read_single_data_row(db_path: &Path) -> DataRow {
+    let conn = Connection::open(db_path).expect("open sqlite database");
+    conn.query_row(
+        "SELECT raw_data_location, original_data_location, extension, mime_type, \
+                content_hash, original_extension, original_mime_type, loader_engine, \
+                raw_content_hash, external_metadata \
+         FROM data",
+        [],
+        |row| {
+            Ok(DataRow {
+                raw_data_location: row.get(0)?,
+                original_data_location: row.get(1)?,
+                extension: row.get(2)?,
+                mime_type: row.get(3)?,
+                content_hash: row.get(4)?,
+                original_extension: row.get(5)?,
+                original_mime_type: row.get(6)?,
+                loader_engine: row.get(7)?,
+                raw_content_hash: row.get(8)?,
+                external_metadata: row.get(9)?,
+            })
+        },
+    )
+    .expect("single data row")
+}
+
+fn file_uri_to_path(uri: &str) -> PathBuf {
+    let path = uri
+        .strip_prefix("file://")
+        .expect("stored location should be a file URI");
+    PathBuf::from(path)
+}
+
+fn md5_hex(bytes: &[u8]) -> String {
+    let mut hasher = Md5::new();
+    hasher.update(bytes);
+    format!("{:x}", hasher.finalize())
 }
 
 #[test]
@@ -241,6 +304,105 @@ fn add_succeeds_with_local_temp_paths() {
         .stdout(predicate::str::contains(
             "Success: Added 1 item(s) to dataset 'e2e_dataset'.",
         ));
+}
+
+#[test]
+fn add_url_stores_extracted_text_raw_html_and_metadata() {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("build tokio runtime");
+    let (url, _server) = rt.block_on(async {
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock("GET", "/robots.txt")
+            .with_status(404)
+            .create_async()
+            .await;
+        let html = concat!(
+            "<html><head><title>Local Fixture</title>",
+            "<style>.hidden{display:none}</style></head>",
+            "<body><h1>Visible URL title</h1>",
+            "<p>Boundary text from a local fixture.</p>",
+            "<script>window.secret = true;</script></body></html>"
+        );
+        server
+            .mock("GET", "/page.html")
+            .with_status(200)
+            .with_header("content-type", "text/html; charset=utf-8")
+            .with_body(html)
+            .create_async()
+            .await;
+        (format!("{}/page.html", server.url()), server)
+    });
+
+    let config_home = TempDir::new().expect("temp dir should be created");
+    let workdir = TempDir::new().expect("temp dir should be created");
+    let db_file_path = workdir.path().join("cognee.db");
+    let db_url = format!("sqlite://{}", db_file_path.display());
+    std::fs::File::create(&db_file_path).expect("sqlite database file should be created");
+
+    config_set_with_temp_home(
+        &config_home,
+        workdir.path(),
+        "default_user_id",
+        "\"00000000-0000-0000-0000-000000000000\"",
+    );
+    config_set_with_temp_home(
+        &config_home,
+        workdir.path(),
+        "data_root_directory",
+        &format!("\"{}\"", workdir.path().join("cognee_data").display()),
+    );
+    config_set_with_temp_home(
+        &config_home,
+        workdir.path(),
+        "relational_db_url",
+        &format!("\"{}\"", db_url),
+    );
+
+    make_cmd_in(&config_home, workdir.path())
+        .env("HOME", config_home.path())
+        .args(["add", &url, "--dataset-name", "url_e2e_dataset"])
+        .assert()
+        .success();
+
+    let row = read_single_data_row(&db_file_path);
+    assert_eq!(row.extension, "txt");
+    assert_eq!(row.mime_type, "text/plain");
+    assert_eq!(row.original_extension.as_deref(), Some("html"));
+    assert_eq!(row.original_mime_type.as_deref(), Some("text/html"));
+    assert_eq!(row.loader_engine.as_deref(), Some("beautiful_soup_loader"));
+    assert!(row.raw_data_location.ends_with(".txt"));
+    assert!(row.original_data_location.ends_with(".html"));
+    assert_ne!(row.raw_data_location, row.original_data_location);
+
+    let extracted = std::fs::read(file_uri_to_path(&row.raw_data_location))
+        .expect("read extracted text payload");
+    let extracted_text = String::from_utf8(extracted.clone()).expect("extracted text is utf8");
+    assert!(extracted_text.contains("Visible URL title"));
+    assert!(extracted_text.contains("Boundary text from a local fixture."));
+    assert!(!extracted_text.contains("<html>"));
+    assert!(!extracted_text.contains("window.secret"));
+    assert_eq!(row.content_hash, md5_hex(&extracted));
+    assert_eq!(
+        row.raw_content_hash.as_deref(),
+        Some(row.content_hash.as_str())
+    );
+
+    let raw_html =
+        std::fs::read(file_uri_to_path(&row.original_data_location)).expect("read raw html");
+    assert!(String::from_utf8_lossy(&raw_html).contains("<title>Local Fixture</title>"));
+    assert!(String::from_utf8_lossy(&raw_html).contains("window.secret = true"));
+
+    let metadata: serde_json::Value =
+        serde_json::from_str(row.external_metadata.as_deref().expect("url metadata"))
+            .expect("metadata json");
+    assert_eq!(metadata["source"], "url");
+    assert_eq!(metadata["url"], url);
+    assert_eq!(metadata["final_url"], url);
+    assert_eq!(metadata["content_type"], "text/html; charset=utf-8");
+    assert_eq!(metadata["title"], "Local Fixture");
 }
 
 #[test]

@@ -185,3 +185,39 @@ async fn test_add_empty_node_set_does_not_reject() {
         "empty node_set should not cause 400"
     );
 }
+
+/// A small `data` part whose body is an HTTP URL should parse as URL input,
+/// not as invalid multipart. This auth-only state intentionally has no add
+/// components wired, so a later 500 is acceptable; the boundary check is that
+/// URL detection gets past request validation.
+#[tokio::test]
+async fn test_add_data_part_url_does_not_reject() {
+    let (state, _) = build_auth_test_state().await;
+    let user = seed_user(&state, "add_url@example.com", "Str0ng!Pass#1").await;
+    let auth_header = bearer_header(&user, &state);
+    let app = test_router(state).await;
+
+    let boundary = "testboundary_url";
+    let local_url = "http://127.0.0.1:7777/page.html";
+    let body_str = format!(
+        "--{boundary}\r\nContent-Disposition: form-data; name=\"datasetName\"\r\n\r\nurl_ds\r\n--{boundary}\r\nContent-Disposition: form-data; name=\"data\"; filename=\"url.txt\"\r\nContent-Type: text/plain\r\n\r\n{local_url}\r\n--{boundary}--\r\n"
+    );
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/v1/add")
+        .header("Authorization", auth_header)
+        .header(
+            "content-type",
+            format!("multipart/form-data; boundary={boundary}"),
+        )
+        .body(Body::from(body_str))
+        .expect("request");
+
+    let resp = app.oneshot(req).await.expect("response");
+    assert_ne!(
+        resp.status(),
+        StatusCode::BAD_REQUEST,
+        "URL data part should pass add request validation"
+    );
+}
