@@ -176,7 +176,7 @@ pub fn cleanup_old_logs(dir: &Path, max_files: usize) {
     }
 
     // Sort by mtime descending — newest first.
-    log_files.sort_by(|a, b| b.1.cmp(&a.1));
+    log_files.sort_by_key(|b| std::cmp::Reverse(b.1));
 
     if log_files.len() <= max_files {
         return;
