@@ -17,7 +17,7 @@ use cognee_cognify::{
     ChunkStrategy, CognifyConfig, MemifyConfig, cognify as run_cognify, run_memify,
 };
 use cognee_database::{IngestDb, NoopPipelineRunRepository, SessionLifecycleDb, UserDb};
-use cognee_ingestion::{AddParams, AddPipeline};
+use cognee_ingestion::{AddParams, AddPipeline, generate_dataset_id};
 use cognee_models::memory::{FeedbackEntry, MemoryEntry, QAEntry, TraceEntry};
 use cognee_models::{Data, DataInput};
 use cognee_ontology::{NoOpOntologyResolver, OntologyResolver};
@@ -193,8 +193,10 @@ pub async fn post_remember(
             match db.get_dataset_by_name(name, user.id, user.tenant_id).await {
                 Ok(Some(ds)) => ds.id,
                 Ok(None) => {
-                    // Python auto-creates the dataset on remember — generate a new id.
-                    Uuid::new_v4()
+                    // Python auto-creates the dataset on remember.
+                    // Use the same deterministic ID the add pipeline will create
+                    // so FK constraints on dataset_id pass after add runs.
+                    generate_dataset_id(name, user.id, user.tenant_id)
                 }
                 Err(e) => {
                     return Err(ApiError::Internal(anyhow::anyhow!(
@@ -965,6 +967,96 @@ mod tests {
         assert!(
             v.get("detail").is_none(),
             "remember catch-all body must NOT contain 'detail' key"
+        );
+    }
+
+    /// Regression: when the dataset does not yet exist the handler's fallback
+    /// `dataset_id` must equal what `AddPipeline::add_with_params` creates in
+    /// the DB.  Before the fix the handler used `Uuid::new_v4()` (random),
+    /// while `add_with_params` used `generate_dataset_id(...)` (deterministic
+    /// UUID5). The mismatch caused `upsert_provenance` to insert `graph_nodes`
+    /// rows whose `dataset_id` had no matching row in `datasets`, producing a
+    /// SQLite FOREIGN KEY constraint failure (code 787) → 409 response.
+    #[tokio::test]
+    async fn new_dataset_fallback_id_matches_add_pipeline_created_id() {
+        use std::sync::Arc;
+
+        use cognee_core::RayonThreadPool;
+        use cognee_database::{AclDb, IngestDb, connect, initialize};
+        use cognee_ingestion::{AddPipeline, generate_dataset_id};
+        use cognee_models::DataInput;
+        use cognee_storage::{LocalStorage, StorageTrait};
+        use cognee_test_utils::{MockGraphDB, MockVectorDB};
+
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+
+        // ── Minimal backends ─────────────────────────────────────────────
+        let storage = Arc::new(LocalStorage::new(temp_dir.path().join("storage")));
+        storage.initialize().await.expect("storage init");
+
+        let db_path = temp_dir.path().join("test.db");
+        std::fs::File::create(&db_path).expect("create db file");
+        let db_url = format!("sqlite://{}", db_path.display());
+        let db_conn = connect(&db_url).await.expect("connect");
+        initialize(&db_conn).await.expect("initialize");
+        let database = Arc::new(db_conn);
+
+        let graph_db = Arc::new(MockGraphDB::new());
+        let vector_db = Arc::new(MockVectorDB::new());
+        let thread_pool = Arc::new(RayonThreadPool::with_default_threads().expect("thread pool"));
+
+        let dataset_name = "regression_fk_new_dataset";
+        let owner_id = Uuid::nil();
+        let tenant_id: Option<Uuid> = None;
+
+        // ── Pre-condition: dataset does not exist yet ─────────────────────
+        let before = database
+            .get_dataset_by_name(dataset_name, owner_id, tenant_id)
+            .await
+            .expect("db lookup");
+        assert!(
+            before.is_none(),
+            "pre-condition: dataset must not exist before the test runs"
+        );
+
+        // ── What the fixed handler computes in the Ok(None) branch ────────
+        let handler_fallback_id = generate_dataset_id(dataset_name, owner_id, tenant_id);
+
+        // ── Run add_with_params — this creates the dataset in the DB ──────
+        let pipeline = AddPipeline::new(
+            Arc::clone(&storage) as Arc<dyn StorageTrait>,
+            Arc::clone(&database) as Arc<dyn IngestDb>,
+        )
+        .with_acl_db(Arc::clone(&database) as Arc<dyn AclDb>)
+        .with_thread_pool(Arc::clone(&thread_pool) as Arc<dyn cognee_core::CpuPool>)
+        .with_graph_db(Arc::clone(&graph_db) as Arc<dyn cognee_graph::GraphDBTrait>)
+        .with_vector_db(Arc::clone(&vector_db) as Arc<dyn cognee_vector::VectorDB>)
+        .with_database(Arc::clone(&database));
+
+        pipeline
+            .add(
+                vec![DataInput::Text("hello world".to_string())],
+                dataset_name,
+                owner_id,
+                tenant_id,
+            )
+            .await
+            .expect("add_with_params");
+
+        // ── The dataset must now exist in the DB ──────────────────────────
+        let created = database
+            .get_dataset_by_name(dataset_name, owner_id, tenant_id)
+            .await
+            .expect("db lookup after add")
+            .expect("dataset must exist after add");
+
+        // ── Core assertion: both sides must agree on the UUID ─────────────
+        assert_eq!(
+            handler_fallback_id, created.id,
+            "handler fallback id ({handler_fallback_id}) must equal the id \
+             AddPipeline created in the DB ({}) — mismatch causes a FOREIGN \
+             KEY constraint failure on graph_nodes.dataset_id",
+            created.id
         );
     }
 }
