@@ -1,6 +1,6 @@
 # Router: add
 
-Multipart ingest endpoint that takes a list of files (or URL/file-path strings packed as parts) and adds them to a dataset, kicking off the `add_pipeline`. This is the front door of the cognee write path — it is *not* responsible for knowledge-graph extraction (that is `cognify`); it stores raw bytes, hashes them, and registers `Data` rows under the target dataset.
+Multipart ingest endpoint that takes a list of files (or URL/file-path strings packed as parts) and adds them to a dataset, kicking off the `add_pipeline`. This is the front door of the cognee write path — it is *not* responsible for knowledge-graph extraction (that is `cognify`); it stores raw bytes, hashes them, and registers `Data` rows under the target dataset. For HTTP(S) URL inputs, the add pipeline fetches the resource, routes by response MIME type, stores URL metadata, and leaves web provenance graph nodes to the later cognify step.
 
 Companion docs: [../architecture.md](../architecture.md), [../auth.md](../auth.md), [../tenants.md](../tenants.md), [../pipelines.md](../pipelines.md), [../observability.md](../observability.md).
 
@@ -62,7 +62,7 @@ Companion docs: [../architecture.md](../architecture.md), [../auth.md](../auth.m
 
 | Part name | Required | Cardinality | Content type | Backing | Notes |
 |---|---|---|---|---|---|
-| `data` | No (but the call is meaningless without it; Python defaults to `None`) | 0..N | `application/octet-stream` (or `text/*`, `application/pdf`, ...) | Streamed to a per-request temp file via `tokio::fs::File`. Each part is independently spooled. | Each `data` part is one file. URLs and S3 paths are passed as **text parts whose body is the URL string** (Python's `UploadFile` accepts a `BinaryIO` and the SDK pattern-matches on the value to detect a URL string — see [`add.py:84-89`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/add/add.py#L84-L89) and `resolve_data_directories` / `resolve_dlt_sources`). Rust will convert each part to a `DataInput` variant: `FilePath` for spooled files, `Url` if the part body deserializes to a `http(s)?://` or `s3://` string and is shorter than 4 KiB. |
+| `data` | No (but the call is meaningless without it; Python defaults to `None`) | 0..N | `application/octet-stream` (or `text/*`, `application/pdf`, ...) | Streamed to a per-request temp file via `tokio::fs::File`. Each part is independently spooled. | Each `data` part is one file. URLs and S3 paths are passed as **text parts whose body is the URL string** (Python's `UploadFile` accepts a `BinaryIO` and the SDK pattern-matches on the value to detect a URL string — see [`add.py:84-89`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/add/add.py#L84-L89) and `resolve_data_directories` / `resolve_dlt_sources`). Rust converts each part to a `DataInput` variant: `FilePath` for spooled files, `Url` if the part body deserializes to an `http://`, `https://`, or `s3://` string and is shorter than 4 KiB. HTTP(S) `Url` inputs are fetched by the add pipeline; `s3://` inputs still fail at the core S3 stub. |
 | `datasetName` | Conditional | 0..1 | `text/plain` | Form field | Either `datasetName` or `datasetId` must be present (validated post-parse). Defaults to the literal `"main_dataset"` in the SDK if neither is given, but the **HTTP layer rejects** the missing-both case with 400. |
 | `datasetId` | Conditional | 0..1 | `text/plain` | Form field | UUID v4. Empty string `""` is treated as "absent" (Python uses `Union[UUID, Literal[""], None]` to make Swagger happy — [`get_add_router.py:43`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/add/routers/get_add_router.py#L43)). When set, it MUST refer to an existing dataset; otherwise 404. |
 | `node_set` | No | 0..N | `text/plain` | Form field, repeated | Each repetition is one tag. Python defaults to `[""]` and substitutes `None` when only the empty default is sent (`get_add_router.py:108-109`). The Rust handler reproduces: an empty list, a single empty string, or absence all map to `None`. |
@@ -85,9 +85,17 @@ Companion docs: [../architecture.md](../architecture.md), [../auth.md](../auth.m
   - There is no out-of-band signal (no `X-Url-Part: true` header) — clients communicate intent purely through body size + scheme prefix.
   - Filename presence does **not** disambiguate. A part named `link.txt` whose body is `https://example.com/foo` is a URL.
 
+  **URL ingestion behavior**:
+  - URL fetching follows redirects and records both the requested URL and final URL. The metadata stored on the `Data` row is JSON with `source: "url"`, `url`, `final_url`, `content_type`, and, for HTML pages with a title, `title`.
+  - MIME routing uses the response `Content-Type` essence first, then falls back to the final URL path extension when needed. `text/html` and `application/xhtml+xml` are parsed as HTML; `text/plain`, `application/json`, and `text/csv` are stored as text; `application/pdf`, `image/*`, and `audio/*` are stored as binary data under the response-derived source extension.
+  - HTML URL inputs create two storage objects: `raw_data_location` points at extracted readable text stored as `text/plain` (`.txt`), while `original_data_location` points at the raw fetched HTML source (`.html` or `.xhtml`). The `Data` row keeps `extension = "txt"`, `mime_type = "text/plain"`, and `original_extension` / `original_mime_type` for the fetched source.
+  - Non-HTML URL inputs store one object; `raw_data_location` and `original_data_location` are the same stored payload unless another conversion path is added later.
+
 - **Side effects**:
   - **File storage**: each spooled file is hashed (MD5 by default, matching Python — see [`cognee-ingestion`'s `ContentHasher`](../../crates/ingestion/src/)) and stored at `LocalStorage::store_stream(...)` under `text_<md5>.<ext>` (text content) or `<filename>` (binary). Streaming, no buffer.
+    - For HTTP(S) URL inputs, `AddPipeline::add()` resolves the URL before streaming. HTML responses store extracted text as the primary payload and store the raw HTML source separately; other supported MIME types store the fetched response body directly.
   - **Relational DB**: inserts/updates one `data` row per file with `(id, name, extension, mime_type, content_hash, raw_data_location, owner_id, tenant_id, dataset_id)`; updates `pipeline_runs` (`add_pipeline` start + completion); resets prior `add_pipeline` and `cognify_pipeline` runs for this dataset (`reset_dataset_pipeline_run_status`, `add.py:221-223`).
+    - URL-derived rows also persist `original_data_location`, `original_extension`, `original_mime_type`, `loader_engine`, and `external_metadata` so later document conversion and cognify can recover web provenance.
   - **Graph DB**: none — `add` does not write to graph.
   - **Vector DB**: none.
   - **Channels**: none on `run_in_background=false`. (Background path is not exposed via HTTP; see §3.4.)
@@ -138,6 +146,8 @@ When `datasetName` is given and no dataset of that name exists for the user, the
 ### 3.3 No `cognify` triggered
 
 `/add` does **not** invoke the cognify pipeline. The pipeline runs the `add_pipeline` only — see [`add.py:233`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/add/add.py#L233). Knowledge-graph extraction is a separate `POST /api/v1/cognify` call.
+
+For URL-sourced documents, cognify reads the URL metadata written by add and, when web provenance is enabled, creates deterministic `WebPage` and `WebSite` nodes. It links each `DocumentChunk` to the page with `SOURCED_FROM` and links the page to its site with `PART_OF`. Invalid metadata, non-HTTP(S) URLs, and non-URL documents are skipped.
 
 ### 3.4 `run_in_background` not exposed
 

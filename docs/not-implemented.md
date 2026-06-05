@@ -18,9 +18,10 @@ Implemented") and restated here for one consolidated view:
   image, and audio, but only `text/*` files are extracted end-to-end. Actual extraction for the
   other types is not implemented.
 - **S3 support** — `DataInput::S3Path` returns an error stub.
-- **URL processing in `DataInput`** — `DataInput::Url` in `process_by_chunks()` returns an
-  unsupported error. (URL crawling works in the ingestion pipeline, but not in the streaming
-  `DataInput` path.)
+- **Direct URL streaming in `DataInput::process_by_chunks()`** — calling `process_by_chunks()`
+  directly on `DataInput::Url` returns an unsupported error because URLs must first be fetched and
+  canonicalized. Core ingestion is wired: `AddPipeline::add()` resolves HTTP(S) URL inputs, stores
+  content and URL metadata, and leaves graph provenance to cognify.
 - **Default tokenizer features in CI** — `HuggingFaceTokenCounter` and `TikTokenCounter` are behind
   optional feature flags (`hf-tokenizer`, `tiktoken`); CI builds may need to enable them explicitly.
 
@@ -96,9 +97,9 @@ discriminated-union `dataInput` (`{ type, … }`). The supported variants track 
 
 - **`text` / `file` / `binary`** — fully supported (`binary` requires a `name`, used for MIME
   detection; `bytes` may be a base64 string, a byte array, or a Node `Buffer`).
-- **`url`** — accepted and marshalled to `DataInput::Url`, but ingestion through the streaming
-  `DataInput` path is not wired (see "URL processing in `DataInput`" above), so a `url` input
-  currently surfaces an unsupported error from the pipeline rather than crawling the page.
+- **`url`** — accepted and marshalled to `DataInput::Url`. The normal add pipeline resolves HTTP(S)
+  URLs; only callers that bypass the pipeline and invoke `DataInput::process_by_chunks()` directly
+  hit the direct-streaming gap above.
 - **`s3`** — rejected at the boundary with an `UNSUPPORTED` error (`DataInput::S3Path` is a stub).
 - **Recursive `dataItem`** (`DataInput::DataItem`) — out of scope for the v1 binding; rejected with
   an `UNSUPPORTED` error.

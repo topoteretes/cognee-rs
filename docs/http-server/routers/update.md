@@ -57,7 +57,7 @@ Companion docs: [../architecture.md](../architecture.md), [../auth.md](../auth.m
 
 | Part name | Required | Cardinality | Content type | Backing | Notes |
 |---|---|---|---|---|---|
-| `data` | No (Python defaults to `None`) | 0..N | `application/octet-stream` etc. | Streamed to temp file | Same handling as `/add`: each part is one new file (or URL string < 4 KiB). The replacement may be **multiple** new documents — this is unusual but matches the Python signature (`List[UploadFile]`, `update.py:14`). |
+| `data` | No (Python defaults to `None`) | 0..N | `application/octet-stream` etc. | Streamed to temp file | Same handling as `/add`: each part is one new file (or URL/S3 string < 4 KiB). HTTP(S) URL strings are fetched by the add phase with the MIME routing, HTML two-file storage, and URL metadata described in [add.md §2.1.1](add.md#211-multipart-parts). The replacement may be **multiple** new documents — this is unusual but matches the Python signature (`List[UploadFile]`, `update.py:14`). |
 | `node_set` | No | 0..N | `text/plain` | Form field, repeated | Same `[""]`-defaults-to-`None` normalization as `/add`. |
 
   No `datasetName` or `datasetId` parts — those live in the query string.
@@ -73,6 +73,7 @@ Companion docs: [../architecture.md](../architecture.md), [../auth.md](../auth.m
   - **Graph DB**: removes nodes/edges associated with the old `data_id` (via `delete_data_nodes_and_edges`), then re-extracts them in the cognify step. Briefly graph state is missing the document; clients polling `/datasets/{id}/graph` during the window may see partial data.
   - **Vector DB**: removes vector points for the deleted `data_id`, then re-inserts new ones during cognify. Same partial-state window.
   - **File storage**: deletes the old raw file (`legacy_delete` + `delete_data`), stores new files via `LocalStorage::store_stream`.
+    - If a replacement part is an HTTP(S) URL, the chained add step fetches and stores it exactly like `/add`; the chained cognify step can then rebuild `WebPage` / `WebSite` provenance for the replacement content.
   - **Channels**: none in phase 2 (no background mode exposed).
 - **Delegation target**: `cognee_lib::api::update::update(data_id, files, dataset_id, user, node_set, ...)`. Internally chains:
   1. `cognee_lib::api::datasets::datasets::delete_data(dataset_id, data_id, user)` — [`update.py:80-84`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/update/update.py#L80-L84).

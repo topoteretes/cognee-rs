@@ -93,6 +93,10 @@ cognee-cli add-and-cognify ./notes.txt -d my_dataset
 cognee-cli search "what did we learn about X?" -t GRAPH_COMPLETION -d my_dataset -k 10
 ```
 
+`add` also accepts HTTP(S) URLs. The ingestion pipeline fetches the page or file,
+routes it by MIME type, stores URL metadata, and, after `cognify`, can create
+`WebPage` / `WebSite` provenance nodes for URL-sourced chunks.
+
 Other subcommands: `memify` (enrich an existing graph with triplet embeddings),
 `delete`, `config` (`get`/`set`/`unset`), `run-sequence` (run a scripted
 add/cognify/search sequence), and — when built with their feature flags —

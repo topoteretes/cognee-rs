@@ -102,7 +102,7 @@ export interface NativeBindings {
   // `dataInput` is a discriminated union (single item or an array):
   //   { type: "text"; text: string }
   //   { type: "file"; path: string }
-  //   { type: "url"; url: string }        // ingestion-only; not wired e2e yet
+  //   { type: "url"; url: string }        // resolved by AddPipeline; cognify/search need normal setup
   //   { type: "binary"; bytes: Buffer | number[] | string /* base64 */; name: string }
   // (`name` is REQUIRED for binary — used for MIME detection. `s3` and the
   // recursive `dataItem` variant are not supported.)

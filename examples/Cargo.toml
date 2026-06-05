@@ -25,9 +25,13 @@ path = "summarization_example.rs"
 name = "embedding_engine_example"
 path = "embedding_engine_example.rs"
 
+[[example]]
+name = "url_ingestion"
+path = "url_ingestion.rs"
+
 [dependencies]
 # Workspace crates
-cognee-core = { path = "../crates/core" }
+cognee-core = { path = "../crates/core", features = ["pipeline-run-registry"] }
 cognee-storage = { path = "../crates/storage" }
 cognee-database = { path = "../crates/database" }
 cognee-graph = { path = "../crates/graph", features = ["testing"] }
@@ -36,7 +40,7 @@ cognee-models = { path = "../crates/models" }
 cognee-chunking = { path = "../crates/chunking" }
 cognee-cognify = { path = "../crates/cognify" }
 cognee-llm = { path = "../crates/llm" }
-cognee-embedding = { path = "../crates/embedding" }
+cognee-embedding = { path = "../crates/embedding", features = ["onnx"] }
 cognee-vector = { path = "../crates/vector", features = ["testing"] }
 
 tokio.workspace = true
