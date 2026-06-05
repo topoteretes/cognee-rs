@@ -129,6 +129,7 @@ cognee-graph = { path = "../graph", features = ["testing"] }
 cognee-vector = { path = "../vector", features = ["testing"] }
 cognee-session = { path = "../session", features = ["fs"] }
 cognee-database = { path = "../database", features = ["sqlite"] }
+mockito = "1"
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 serial_test = { workspace = true }
