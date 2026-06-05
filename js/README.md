@@ -39,6 +39,11 @@ const results = await c.search("What does the fox do?");
 console.log(results);
 ```
 
+A fully-annotated runnable example is available at
+[`examples/add-cognify-search.ts`](examples/add-cognify-search.ts). It walks through
+the full `add → cognify → search` pipeline and includes a comment block describing the
+required environment variables and how to run it with `ts-node`.
+
 ## Constructor
 
 ```ts

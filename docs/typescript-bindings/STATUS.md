@@ -23,7 +23,7 @@ Last updated: 2026-06-05 (Phase 9)
 | 6 | [Feature-gated surfaces](phase-6-feature-gated.md) | ✅ | ts-bindings/phase-6-feature-gated | 335dca5 | done |
 | 7 | [TS layer & actualization](phase-7-typescript-layer.md) | ✅ | ts-bindings/phase-7-ts-layer | 587cac6 | done |
 | 8 | [Errors & marshalling](phase-8-errors-marshalling.md) | ✅ | ts-bindings/phase-8-errors-marshalling | bf462a1 | done |
-| 9 | [Tests & CI](phase-9-tests-ci.md) | ⬜ | — | — | |
+| 9 | [Tests & CI](phase-9-tests-ci.md) | ✅ | ts-bindings/phase-9-tests-ci | — | done |
 
 ## Per-phase exit criteria
 
@@ -85,10 +85,12 @@ Check off the criteria as they land (the granular view behind the status column)
 - [x] `errors.test.ts` (Tier-A) green
 
 ### Phase 9 — Tests & CI
-- [ ] Tier-A suite green in the `js-check` CI job
-- [ ] Tier-B e2e runs with creds, skips cleanly without
-- [ ] runnable `add → cognify → search` example
-- [ ] CI wiring decision (Tier-B in `js-check` vs cross-SDK) recorded
+- [x] Phase-8 regression fixed: `js/src/cognee.ts` + `types.ts` restored; `package.json` `"name"` = `"cognee"`; `tsc` produces consistent `lib/`
+- [x] Tier-A suite green in the `js-check` CI job (12 suites pass, 129 tests pass)
+- [x] Tier-B skips cleanly in `js-check` without credentials (1 suite skipped, 8 tests skipped, 0 failures)
+- [x] Runnable `js/examples/add-cognify-search.ts` example committed
+- [x] `js/README.md` updated with example pointer (Phase-7 already rewrote the main content)
+- [x] CI wiring decision recorded in the decision log (Tier-B stays out of `js-check`)
 
 ## Decision log
 
@@ -115,7 +117,9 @@ Record cross-cutting decisions as they're made (one line each), so later phases 
 | 2026-06-04 | `PruneResult` hand-built JSON: `{ dataPruned, graphPruned, vectorPruned, metadataPruned, cachePruned }` — `PruneResult` derives `Debug, Clone, Default` only; `cogneePruneData` and `cogneePruneSystem` split into two exports matching the two Rust API functions. | 5 |
 | 2026-06-04 | `visualization` and `cloud` features default ON in `cognee-neon`, mirroring `cognee-lib` and `cognee-cli` defaults; a `--no-default-features` build strips both. Functions are always registered in `lib.rs`; the feature-absent body rejects with `FEATURE_NOT_BUILT` so callers get a typed error rather than a cryptic "not a function". | 6 |
 | 2026-06-04 | `FeatureNotBuilt(String)` variant added to `SdkError`; annotated `#[allow(dead_code)]` because it is only constructed in `#[cfg(not(feature = "..."))]` branches that are compiled out when defaults are active. `code()` returns `"FEATURE_NOT_BUILT"`. | 6 |
-| 2026-06-05 | Phase 7: package renamed to `cognee` (unscoped); `Cognee` class wraps all native exports; `serve`/`disconnect` are module-level; legacy `@cognee/pipeline` exports preserved flat under `pipeline` namespace. | 7 |
+| 2026-06-04 | Package renamed to `cognee` in Phase 7 commit 587cac6; `js/src/cognee.ts` + `types.ts` added; `index.ts` re-exports `Cognee` class. Phase-8 inadvertently reverted these — to be restored in Phase 9. | 7 |
 | 2026-06-04 | Phase 8: single `json.rs` conversion path — `js_to_serde`, `serde_to_js`, `read_opts` are the canonical helpers; all private per-module copies removed; `cognify_result_json` and `marshal_inputs`/`marshal_one` extracted to `json.rs` as well. | 8 |
 | 2026-06-04 | Phase 8: `throw_sdk_error` and `throw_config_error` now attach both `code` and `kind` (same string value) to thrown errors; `kind` is the stable API identifier, `code` is the backwards-compatible alias. | 8 |
 | 2026-06-04 | Phase 8: Neon 1.1 cannot call JS constructors, so typed subclasses live in the TS layer; Rust throws a plain `Error` with `code`+`kind`; `wrapNativeError` in `errors.ts` re-wraps to the correct `CogneeError` subclass by reading `kind`. Tier-A `errors.test.ts` asserts `code`/`kind` on raw native errors (no Phase-7 class needed). | 8 |
+| 2026-06-05 | Phase 8 regression: `js/src/cognee.ts` and `js/src/types.ts` were deleted in Phase-8, and `package.json` `"name"` was reverted from `"cognee"` to `"@cognee/pipeline"`. Phase-9 must restore these as its first task before adding the example. | 9 |
+| 2026-06-05 | Tier-B CI decision: Tier-B tests stay out of `js-check` — they already skip cleanly; adding model downloads + OPENAI_KEY to `js-check` doubles cost for coverage already provided by the Rust `test` lane. Future home is the cross-SDK Docker harness or a dedicated JS e2e job. | 9 |

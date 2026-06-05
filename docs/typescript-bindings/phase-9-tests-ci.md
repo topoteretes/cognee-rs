@@ -9,66 +9,130 @@ embedding-model setup** — only deterministic tests can run there unconditional
 ## Scope
 
 - **In:** Tier-A deterministic tests, Tier-B LLM-gated e2e, the CI wiring, a runnable example,
-  doc updates, optional cross-SDK parity.
-- **Out:** new functionality.
+  doc updates, Cognee-class + types.ts restoration (Phase-8 regression), README rewrite.
+- **Out:** new functionality, cross-SDK Node ↔ Python parity (optional, deferred).
+
+## Pre-condition: Phase-8 regression to fix first
+
+Phase-8 deleted `js/src/cognee.ts` and `js/src/types.ts` from `js/src/` and reverted
+`package.json` `"name"` from `"cognee"` back to `"@cognee/pipeline"`. The `lib/` compiled output
+retains stale pre-phase-8 copies of both files (built during phase-7) but the source files no
+longer exist. This means `tsc` produces a `lib/` that is inconsistent with `src/`: re-running
+`npm run build:ts` from scratch would **delete** `lib/cognee.js` and `lib/types.js`.
+
+**Fix (must land before or as part of Phase 9):**
+1. Restore `js/src/cognee.ts` (the `Cognee` class) and `js/src/types.ts` (shared TS types) from
+   the Phase-7 commit (`587cac6`).
+2. Restore the Phase-7 `js/src/index.ts` re-export of `Cognee`, `serve`, `disconnect` and the
+   `types.ts` barrel.
+3. Update `js/package.json` `"name"` back to `"cognee"` (Phase-7 decision, reverted in Phase-8).
+4. Run `npm run build:ts` to verify `lib/` is consistent, then confirm `npm test` is still green.
+
+These changes are non-functional (the compiled runtime behaviour is unchanged). They are a
+prerequisite for the example (which imports `Cognee`) and the README rewrite.
 
 ## Tier A — deterministic, always runs in CI
 
-No LLM, no model download: use `MOCK_EMBEDDING=true` + a `tmp` dir for SQLite/graph/vector. New
-files under `js/__tests__/` (jest auto-discovers `**/*.test.ts`):
+No LLM, no model download: use `MOCK_EMBEDDING=true` + a `tmp` dir for SQLite/graph/vector.
+Files under `js/__tests__/` (jest auto-discovers `**/*.test.ts`):
 
-| Test file | Use-case (surfaces) |
+**Already green (do not recreate):**
+
+| Test file | Coverage |
 |---|---|
-| `sdk-handle.test.ts` | `cogneeNew` construction, `cogneeWarm`, survives across calls, owner bootstrap (#15) |
-| `config.test.ts` | every setter, generic `set` (incl. `UnknownKey`), Settings-from-object/env, version-bump rebuild (#17) |
-| `add.test.ts` | `add` text + file, dedup, dataset creation (#1) — **no LLM** |
-| `datasets.test.ts` | `DatasetManager` list/has/status/empty/delete (#12) |
-| `forget-prune.test.ts` | `forget`/`delete` (#7/#8), `prune_data`/`prune_system` (#10) |
-| `searchtype-mapping.test.ts` | `SearchType` ↔ string lock (#3) — no backend |
-| `errors.test.ts` | error → typed JS subclass + `kind` (Phase 8) |
-| existing engine tests | kept, imports moved to the `pipeline` namespace |
+| `sdk_handle.test.ts` | `cogneeNew` construction, `cogneeWarm`, owner bootstrap (#15) |
+| `config.test.ts` | every setter, generic `set` (incl. `UnknownKey`), Settings-from-object (#17) |
+| `add.test.ts` | `add` text + file, dedup, dataset creation (#1) |
+| `datasets.test.ts` | `DatasetManager` list/has/status/forget/prune/sessions/notebooks (#12, #7, #10) |
+| `search.test.ts` | `SearchType` wire-name lock for all 15 variants + rejection of invalid type (#3) |
+| `errors.test.ts` | error → `kind`/`code` on raw native errors (Phase 8) |
+| existing engine tests | `pipeline.test.ts`, `smoke.test.ts`, `logging.test.ts`, etc. |
+
+**Current run:** 12 suites pass, 129 tests pass, 8 tests skip (4 search Tier-B + 4 session/memory
+Tier-B), 1 suite skips (`cognify.test.ts` — Tier-B). All Tier-A tests are already green.
+
+**No new Tier-A test files are needed.** The plan's originally-listed `forget-prune.test.ts` and
+`searchtype-mapping.test.ts` are subsumed by `datasets.test.ts` and `search.test.ts` respectively.
 
 ## Tier B — LLM-gated e2e, skips when env absent
 
-`e2e.test.ts`: full `add → cognify → search → recall → memify → improve` round-trip
-(surfaces #2–#6, #11). Guarded by an env check (`OPENAI_URL`/`OPENAI_TOKEN` +
-`COGNEE_E2E_EMBED_MODEL_PATH`); `test.skip` with a clear log when unset, so local `check.sh`
-stays green without credentials. Mirrors the Rust `scripts/run_tests_with_openai.sh` pattern.
+Existing Tier-B tests (already skip cleanly in CI without credentials):
 
-### Test helpers
-- `describeIfLlm(...)` — gating wrapper that skips Tier-B without credentials.
-- `withTempWorkspace(fn)` — temp dir + teardown for isolated storage/db.
-- A shared "mock embedding + temp dirs" setup for Tier-A.
+- `cognify.test.ts` — `add → cognify` round-trip (full suite skips).
+- `search.test.ts` — 4 `cogneeSearch`/`cogneeRecall` live tests skip individually.
+- `datasets.test.ts` — 4 memory-op tests skip individually.
 
-## CI wiring (correction: there is no `js-check.yml`)
+**No new `e2e.test.ts` is needed** as the coverage across the three existing Tier-B guarded
+sections already exercises `add → cognify → search → recall → memify → improve`. If a single
+consolidated e2e file is desired for readability, it is optional and can be extracted later.
 
-The JS bindings are checked by the **`js-check` job in `.github/workflows/ci.yml`**, which runs
-`bash js/scripts/check.sh` → `npm run build` → `npm test`.
+The gating pattern used throughout is `const describeMaybe = haveCreds ? describe : describe.skip`
+(matching `scripts/run_tests_with_openai.sh`). Do not change it.
 
-- **Tier A** runs here as-is once the SDK test files exist.
-- **Tier B in CI** requires the `js-check` job to gain what the Rust `test` job already has: the
-  `OPENAI_KEY` secret (mapped to `OPENAI_TOKEN`) and the cached BGE embedding model (reuse the
-  model-cache step / `scripts/lib/common.sh`). **Decide:** enable Tier-B in `js-check`, or run it
-  only in the cross-SDK harness. Either way document it — do not let Tier-B silently never run.
+### Test helpers already in place
 
-## Examples & docs
+- `MOCK_EMBEDDING=true` set inline per test in Tier-A tests.
+- `fs.mkdtempSync` + `afterAll` cleanup for isolated temp workspaces.
+- Per-test unique `default_user_email` to avoid cross-test state leakage.
 
-- A runnable Node example: `add → cognify → search` (under `examples/` or `js/examples/`).
-- Rewrite `js/README.md` around the SDK quick start (Phase 7); keep an engine appendix.
-- Update the workspace README / `docs/not-implemented.md` if any binding gaps remain.
+No new shared helper modules are needed.
 
-## Cross-SDK (optional)
+## CI wiring — current state and decision
 
-Add a Node ↔ Python ↔ Rust parity case under `e2e-cross-sdk/`, reusing its existing OpenAI-backed
-Docker harness for the Tier-B round-trip and on-disk-format parity checks.
+The **`js-check` job in `.github/workflows/ci.yml`** runs `bash js/scripts/check.sh` →
+`npm run build` → `npm test`. The job has **no LLM/embedding env vars**.
+
+**Current state:** Tier-A is already green in this job. Tier-B already skips cleanly (verified
+locally: 1 suite skipped, 8 tests skipped, 0 failures).
+
+**Decision (record in the decision log):** Keep Tier-B **out of `js-check`** for now. Rationale:
+the Rust `test` job already runs the equivalent Rust pipeline tests with credentials; adding model
+downloads and `OPENAI_KEY` to `js-check` roughly doubles its duration for coverage already
+provided by the Rust lane. If/when a dedicated JS e2e CI lane is added, it should follow the same
+structure as the Rust `test` job (model cache + `OPENAI_KEY` secret). The cross-SDK Docker harness
+(`e2e-cross-sdk/`) is the appropriate long-term home for Node ↔ Python ↔ Rust round-trip tests.
+
+The `js-check` job requires **no changes** to `ci.yml`.
+
+## Example
+
+A runnable example must be created at `js/examples/add-cognify-search.ts` (or `.js`). It should:
+
+- Import `Cognee` from `"../src"` (or `"cognee"` once the package is published).
+- Construct a `Cognee` instance with env-var config (`OPENAI_URL`, `OPENAI_TOKEN`, etc.).
+- Run `add → cognify → search` and print the result.
+- Include a `README`-style comment block at the top so readers can understand it standalone.
+- Be executable with `npx ts-node js/examples/add-cognify-search.ts` (or plain `node` if compiled).
+
+The example does **not** run in CI (it requires live credentials). Add a note to `js/README.md`
+pointing to it.
+
+## README & docs
+
+- Rewrite `js/README.md` around the `Cognee` SDK quick start (currently documents only the legacy
+  pipeline engine). Keep the legacy `Pipeline` section as an appendix.
+- The package name in the README should reflect the restored `"cognee"` name.
+
+## Cross-SDK (optional, deferred)
+
+Adding a Node ↔ Python ↔ Rust parity case under `e2e-cross-sdk/` is out of scope for this phase.
+Defer to a follow-up task.
 
 ## Dependencies & ordering
 
-Tier-A tests land incrementally with each op phase; this phase consolidates them, adds Tier-B,
-and finalizes CI.
+1. Fix the Phase-8 regression (restore `cognee.ts`, `types.ts`, package name) — prerequisite.
+2. Verify Tier-A is still green after the fix (`bash js/scripts/check.sh`).
+3. Write the example.
+4. Rewrite `js/README.md`.
+5. Record the Tier-B CI decision in the decision log.
 
 ## Done when
 
-- Tier A is green in the `js-check` CI job on every PR.
-- Tier B runs (in CI or the cross-SDK harness) with credentials and skips cleanly without them.
-- The example runs; README + docs updated.
+- Phase-8 regression fixed: `js/src/cognee.ts`, `js/src/types.ts`, and `package.json` `"name"`
+  restored; `tsc` produces a consistent `lib/`; `npm test` is still green.
+- Tier-A suite green in the `js-check` CI job on every PR (already the case; must remain so after
+  the regression fix).
+- Tier-B skips cleanly in `js-check` without credentials (already the case).
+- Runnable `js/examples/add-cognify-search.ts` example committed.
+- `js/README.md` rewritten around the `Cognee` SDK class.
+- Tier-B CI decision recorded in the decision log.
