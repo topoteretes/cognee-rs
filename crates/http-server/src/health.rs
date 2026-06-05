@@ -130,10 +130,10 @@ impl RealHealthChecker {
                 (HealthStatus::Unhealthy, true) => {
                     overall = HealthStatus::Unhealthy;
                 }
-                (HealthStatus::Unhealthy, false) | (HealthStatus::Degraded, _) => {
-                    if overall == HealthStatus::Healthy {
-                        overall = HealthStatus::Degraded;
-                    }
+                (HealthStatus::Unhealthy, false) | (HealthStatus::Degraded, _)
+                    if overall == HealthStatus::Healthy =>
+                {
+                    overall = HealthStatus::Degraded;
                 }
                 _ => {}
             }
