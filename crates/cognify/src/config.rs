@@ -98,6 +98,14 @@ pub struct CognifyConfig {
     /// Extracts events and timestamps for temporal reasoning
     pub temporal_cognify: bool,
 
+    /// Create WebPage/WebSite provenance nodes for URL-sourced documents.
+    ///
+    /// When true, documents whose external metadata was produced by URL
+    /// ingestion create deterministic WebPage and WebSite nodes plus
+    /// `DocumentChunk -> SOURCED_FROM -> WebPage` and
+    /// `WebPage -> PART_OF -> WebSite` edges.
+    pub create_web_page_nodes: bool,
+
     /// Batch size for data processing in temporal cognify.
     /// Python parameter: data_per_batch (default: 20)
     pub data_per_batch: usize,
@@ -178,6 +186,7 @@ impl Default for CognifyConfig {
             use_pipeline_cache: false,
 
             temporal_cognify: false,
+            create_web_page_nodes: true,
             data_per_batch: 20,
 
             token_counter_kind: TokenCounterKind::from_env(),
@@ -270,6 +279,12 @@ impl CognifyConfig {
     /// Enable or disable temporal cognify.
     pub fn with_temporal_cognify(mut self, enable: bool) -> Self {
         self.temporal_cognify = enable;
+        self
+    }
+
+    /// Enable or disable WebPage/WebSite provenance graph construction.
+    pub fn with_web_page_nodes(mut self, enable: bool) -> Self {
+        self.create_web_page_nodes = enable;
         self
     }
 

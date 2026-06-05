@@ -21,6 +21,7 @@
 //! - [`TypedTask`] factories: [`make_classify_documents_task`], etc.
 //! - Pipeline builders: [`build_cognify_pipeline`], [`build_temporal_cognify_pipeline`]
 
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -46,6 +47,7 @@ use serde::Serialize;
 use serde_json::json;
 use tokio::sync::Semaphore;
 use tracing::{info, warn};
+use url::Url;
 use uuid::Uuid;
 
 use crate::config::CognifyConfig;
@@ -516,6 +518,197 @@ pub async fn extract_graph_from_data(
         user_id: input.user_id,
         tenant_id: input.tenant_id,
     })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct WebPageMetadata {
+    url: String,
+    domain: String,
+    title: Option<String>,
+}
+
+fn parse_web_page_metadata(document: &Document) -> Option<WebPageMetadata> {
+    let metadata = document.external_metadata.as_ref()?;
+    let value: serde_json::Value = serde_json::from_str(metadata).ok()?;
+    let source = value.get("source").and_then(|v| v.as_str())?;
+    if source != "url" {
+        return None;
+    }
+
+    let url = value
+        .get("final_url")
+        .or_else(|| value.get("url"))
+        .and_then(|v| v.as_str())?;
+    let parsed = Url::parse(url).ok()?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return None;
+    }
+    let domain = parsed.host_str()?.to_ascii_lowercase();
+    let title = value
+        .get("title")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+
+    Some(WebPageMetadata {
+        url: parsed.to_string(),
+        domain,
+        title,
+    })
+}
+
+fn web_page_id(url: &str) -> Uuid {
+    Uuid::new_v5(&Uuid::NAMESPACE_OID, format!("WebPage:{url}").as_bytes())
+}
+
+fn web_site_id(domain: &str) -> Uuid {
+    Uuid::new_v5(
+        &Uuid::NAMESPACE_OID,
+        format!("WebSite:{}", domain.to_ascii_lowercase()).as_bytes(),
+    )
+}
+
+fn first_chars(value: &str, limit: usize) -> String {
+    value.chars().take(limit).collect()
+}
+
+fn document_content_preview(document_id: Uuid, chunks: &[DocumentChunk]) -> String {
+    let mut preview = String::new();
+    for chunk in chunks
+        .iter()
+        .filter(|chunk| chunk.document_id == document_id)
+    {
+        if !preview.is_empty() {
+            preview.push('\n');
+        }
+        preview.push_str(&chunk.text);
+        if preview.chars().count() >= 500 {
+            break;
+        }
+    }
+    first_chars(&preview, 500)
+}
+
+fn empty_edge_props() -> HashMap<Cow<'static, str>, serde_json::Value> {
+    HashMap::new()
+}
+
+/// Create deterministic WebPage/WebSite graph provenance for URL-sourced documents.
+///
+/// Uses only URL metadata carried on [`Document::external_metadata`], produced
+/// by ingestion for URL inputs. Invalid JSON, non-URL metadata, unparsable URLs,
+/// and non-HTTP(S) URLs are skipped.
+pub async fn create_web_page_nodes(
+    documents: &[Document],
+    chunks: &[DocumentChunk],
+    graph_db: Arc<dyn GraphDBTrait>,
+) -> Result<(), CognifyError> {
+    if documents.is_empty() || chunks.is_empty() {
+        return Ok(());
+    }
+
+    let mut nodes_by_id: HashMap<String, serde_json::Value> = HashMap::new();
+    let mut candidate_edges: Vec<EdgeData> = Vec::new();
+    let mut seen_edges: HashSet<(String, String, String)> = HashSet::new();
+
+    for document in documents {
+        let Some(metadata) = parse_web_page_metadata(document) else {
+            continue;
+        };
+
+        let page_id = web_page_id(&metadata.url);
+        let site_id = web_site_id(&metadata.domain);
+        let page_id_str = page_id.to_string();
+        let site_id_str = site_id.to_string();
+
+        nodes_by_id.insert(
+            page_id_str.clone(),
+            json!({
+                "id": page_id_str,
+                "type": "WebPage",
+                "url": metadata.url,
+                "title": metadata.title,
+                "content": document_content_preview(document.base.id, chunks),
+            }),
+        );
+        nodes_by_id.insert(
+            site_id_str.clone(),
+            json!({
+                "id": site_id_str,
+                "type": "WebSite",
+                "domain": metadata.domain,
+            }),
+        );
+
+        push_unique_edge(
+            &mut candidate_edges,
+            &mut seen_edges,
+            page_id_str.clone(),
+            site_id_str,
+            "PART_OF",
+        );
+
+        for chunk in chunks
+            .iter()
+            .filter(|chunk| chunk.document_id == document.base.id)
+        {
+            push_unique_edge(
+                &mut candidate_edges,
+                &mut seen_edges,
+                chunk.base.id.to_string(),
+                page_id_str.clone(),
+                "SOURCED_FROM",
+            );
+        }
+    }
+
+    if !nodes_by_id.is_empty() {
+        graph_db
+            .add_nodes_raw(nodes_by_id.into_values().collect())
+            .await
+            .map_err(CognifyError::from)?;
+    }
+
+    if candidate_edges.is_empty() {
+        return Ok(());
+    }
+
+    let existing_edges = graph_db
+        .has_edges(&candidate_edges)
+        .await
+        .map_err(CognifyError::from)?;
+    let existing_keys: HashSet<(String, String, String)> = existing_edges
+        .into_iter()
+        .map(|(source, target, relationship, _)| (source, target, relationship))
+        .collect();
+    let missing_edges: Vec<EdgeData> = candidate_edges
+        .into_iter()
+        .filter(|(source, target, relationship, _)| {
+            !existing_keys.contains(&(source.clone(), target.clone(), relationship.clone()))
+        })
+        .collect();
+
+    if !missing_edges.is_empty() {
+        graph_db
+            .add_edges(&missing_edges)
+            .await
+            .map_err(CognifyError::from)?;
+    }
+
+    Ok(())
+}
+
+fn push_unique_edge(
+    edges: &mut Vec<EdgeData>,
+    seen: &mut HashSet<(String, String, String)>,
+    source: String,
+    target: String,
+    relationship: &str,
+) {
+    let key = (source.clone(), target.clone(), relationship.to_string());
+    if seen.insert(key) {
+        edges.push((source, target, relationship.to_string(), empty_edge_props()));
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2885,13 +3078,18 @@ pub fn make_extract_graph_task(
             let mut graph_data = extract_graph_from_data(
                 &input,
                 llm,
-                graph_db,
+                Arc::clone(&graph_db),
                 ontology_resolver,
                 &config,
                 user_label.as_deref(),
             )
             .await
             .map_err(|e| format!("{e}"))?;
+            if config.create_web_page_nodes {
+                create_web_page_nodes(&graph_data.documents, &graph_data.chunks, graph_db)
+                    .await
+                    .map_err(|e| format!("{e}"))?;
+            }
             for pair in &mut graph_data.entities {
                 stamp_provenance(
                     &mut pair.entity.base,
@@ -3574,6 +3772,251 @@ mod tests {
             !old_guard_fires,
             "The old 3-way guard should NOT fire when tenant_id is None"
         );
+    }
+
+    fn test_document_with_metadata(doc_id: Uuid, external_metadata: Option<String>) -> Document {
+        let mut base = DataPoint::new("TextDocument", None);
+        base.id = doc_id;
+        Document {
+            base,
+            document_type: "text".to_string(),
+            name: "test.txt".to_string(),
+            raw_data_location: "file:///tmp/test.txt".to_string(),
+            mime_type: "text/plain".to_string(),
+            extension: "txt".to_string(),
+            data_id: doc_id,
+            external_metadata,
+        }
+    }
+
+    fn test_chunk(chunk_id: Uuid, doc_id: Uuid, text: &str) -> DocumentChunk {
+        DocumentChunk::new(
+            chunk_id,
+            text.to_string(),
+            text.split_whitespace().count(),
+            0,
+            "paragraph_end".to_string(),
+            doc_id,
+        )
+    }
+
+    fn url_metadata(url: &str, final_url: &str, title: &str) -> String {
+        json!({
+            "source": "url",
+            "url": url,
+            "final_url": final_url,
+            "content_type": "text/html",
+            "title": title,
+        })
+        .to_string()
+    }
+
+    #[test]
+    fn cognify_config_creates_web_page_nodes_by_default() {
+        assert!(CognifyConfig::default().create_web_page_nodes);
+        assert!(
+            !CognifyConfig::default()
+                .with_web_page_nodes(false)
+                .create_web_page_nodes
+        );
+    }
+
+    #[tokio::test]
+    async fn create_web_page_nodes_creates_deterministic_page_site_and_edges() {
+        let graph = Arc::new(cognee_graph::MockGraphDB::new());
+        let doc_id = Uuid::parse_str("00000000-0000-0000-0000-000000000101").unwrap();
+        let chunk_id = Uuid::parse_str("00000000-0000-0000-0000-000000000201").unwrap();
+        let final_url = "https://Example.com/path?q=1";
+        let documents = vec![test_document_with_metadata(
+            doc_id,
+            Some(url_metadata(
+                "https://example.com/start",
+                final_url,
+                "Example title",
+            )),
+        )];
+        let chunks = vec![test_chunk(chunk_id, doc_id, "Visible page content")];
+
+        create_web_page_nodes(&documents, &chunks, graph.clone())
+            .await
+            .unwrap();
+
+        let page_id = web_page_id("https://example.com/path?q=1").to_string();
+        let site_id = web_site_id("example.com").to_string();
+        let (nodes, edges) = graph.get_graph_data().await.unwrap();
+        assert_eq!(nodes.len(), 2);
+
+        let page = graph.get_node(&page_id).await.unwrap().unwrap();
+        assert_eq!(page.get("type").and_then(|v| v.as_str()), Some("WebPage"));
+        assert_eq!(
+            page.get("url").and_then(|v| v.as_str()),
+            Some("https://example.com/path?q=1")
+        );
+        assert_eq!(
+            page.get("title").and_then(|v| v.as_str()),
+            Some("Example title")
+        );
+        assert_eq!(
+            page.get("content").and_then(|v| v.as_str()),
+            Some("Visible page content")
+        );
+        assert!(
+            page.get("created_at").is_none(),
+            "WebPage node payload should be deterministic"
+        );
+
+        let site = graph.get_node(&site_id).await.unwrap().unwrap();
+        assert_eq!(site.get("type").and_then(|v| v.as_str()), Some("WebSite"));
+        assert_eq!(
+            site.get("domain").and_then(|v| v.as_str()),
+            Some("example.com")
+        );
+
+        assert_eq!(edges.len(), 2);
+        assert!(edges.iter().any(|(source, target, rel, _)| {
+            source == &page_id && target == &site_id && rel == "PART_OF"
+        }));
+        assert!(edges.iter().any(|(source, target, rel, _)| {
+            source == &chunk_id.to_string() && target == &page_id && rel == "SOURCED_FROM"
+        }));
+    }
+
+    #[tokio::test]
+    async fn create_web_page_nodes_truncates_content_to_500_chars() {
+        let graph = Arc::new(cognee_graph::MockGraphDB::new());
+        let doc_id = Uuid::new_v4();
+        let long_text = "a".repeat(650);
+        let documents = vec![test_document_with_metadata(
+            doc_id,
+            Some(url_metadata(
+                "https://example.com/long",
+                "https://example.com/long",
+                "Long",
+            )),
+        )];
+        let chunks = vec![test_chunk(Uuid::new_v4(), doc_id, &long_text)];
+
+        create_web_page_nodes(&documents, &chunks, graph.clone())
+            .await
+            .unwrap();
+
+        let page_id = web_page_id("https://example.com/long").to_string();
+        let page = graph.get_node(&page_id).await.unwrap().unwrap();
+        assert_eq!(
+            page.get("content")
+                .and_then(|v| v.as_str())
+                .unwrap()
+                .chars()
+                .count(),
+            500
+        );
+    }
+
+    #[tokio::test]
+    async fn create_web_page_nodes_skips_invalid_and_non_url_metadata() {
+        let graph = Arc::new(cognee_graph::MockGraphDB::new());
+        let doc_with_invalid_json =
+            test_document_with_metadata(Uuid::new_v4(), Some("{not valid json".to_string()));
+        let non_url_doc = test_document_with_metadata(
+            Uuid::new_v4(),
+            Some(json!({"source": "dlt", "url": "https://example.com"}).to_string()),
+        );
+        let bad_url_doc = test_document_with_metadata(
+            Uuid::new_v4(),
+            Some(json!({"source": "url", "final_url": "not a url"}).to_string()),
+        );
+        let chunks = vec![
+            test_chunk(Uuid::new_v4(), doc_with_invalid_json.base.id, "a"),
+            test_chunk(Uuid::new_v4(), non_url_doc.base.id, "b"),
+            test_chunk(Uuid::new_v4(), bad_url_doc.base.id, "c"),
+        ];
+
+        create_web_page_nodes(
+            &[doc_with_invalid_json, non_url_doc, bad_url_doc],
+            &chunks,
+            graph.clone(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(graph.node_count(), 0);
+        assert_eq!(graph.edge_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn create_web_page_nodes_is_idempotent_for_edges() {
+        let graph = Arc::new(cognee_graph::MockGraphDB::new());
+        let doc_id = Uuid::new_v4();
+        let documents = vec![test_document_with_metadata(
+            doc_id,
+            Some(url_metadata(
+                "https://example.com/idempotent",
+                "https://example.com/idempotent",
+                "Idempotent",
+            )),
+        )];
+        let chunks = vec![test_chunk(Uuid::new_v4(), doc_id, "content")];
+
+        create_web_page_nodes(&documents, &chunks, graph.clone())
+            .await
+            .unwrap();
+        create_web_page_nodes(&documents, &chunks, graph.clone())
+            .await
+            .unwrap();
+
+        assert_eq!(graph.node_count(), 2);
+        assert_eq!(graph.edge_count(), 2);
+    }
+
+    #[tokio::test]
+    async fn make_extract_graph_task_wires_web_page_nodes_and_respects_opt_out() {
+        use cognee_ontology::NoOpOntologyResolver;
+        use cognee_test_utils::{MockLlm, test_task_context};
+
+        let doc_id = Uuid::new_v4();
+        let input = ExtractedChunks {
+            chunks: vec![test_chunk(Uuid::new_v4(), doc_id, "content")],
+            documents: vec![test_document_with_metadata(
+                doc_id,
+                Some(url_metadata(
+                    "https://example.com/wired",
+                    "https://example.com/wired",
+                    "Wired",
+                )),
+            )],
+            dataset_id: Uuid::new_v4(),
+            user_id: None,
+            tenant_id: None,
+        };
+
+        let graph = Arc::new(cognee_graph::MockGraphDB::new());
+        let (_, ctx, _) = test_task_context().await;
+        let task = make_extract_graph_task(
+            Arc::new(MockLlm::empty()),
+            graph.clone(),
+            Arc::new(NoOpOntologyResolver::new()),
+            CognifyConfig::default(),
+        );
+        let TypedTask::Async(run) = task else {
+            panic!("extract graph task should be async");
+        };
+        run(&input, ctx.clone()).await.unwrap();
+        assert_eq!(graph.node_count(), 2);
+        assert_eq!(graph.edge_count(), 2);
+
+        let graph = Arc::new(cognee_graph::MockGraphDB::new());
+        let task = make_extract_graph_task(
+            Arc::new(MockLlm::empty()),
+            graph.clone(),
+            Arc::new(NoOpOntologyResolver::new()),
+            CognifyConfig::default().with_web_page_nodes(false),
+        );
+        let TypedTask::Async(run) = task else {
+            panic!("extract graph task should be async");
+        };
+        run(&input, ctx).await.unwrap();
+        assert_eq!(graph.node_count(), 0);
+        assert_eq!(graph.edge_count(), 0);
     }
 
     #[tokio::test]
