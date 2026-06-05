@@ -636,7 +636,7 @@ impl Default for Settings {
             chunk_size: 1500,
             chunk_overlap: 10,
 
-            relational_db_url: "sqlite:./cognee.db".to_string(),
+            relational_db_url: "sqlite:./cognee.db?mode=rwc".to_string(),
             migration_db_url: String::new(),
 
             db_provider: "sqlite".to_string(),

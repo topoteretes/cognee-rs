@@ -25,7 +25,12 @@
  * After import, call `setupLogging()` to add file logging,
  * `setupTelemetry()` to add OTLP export, and
  * `setupTelemetryAnalytics()` to enable product-analytics emission.
+ *
+ * This module also attempts to load `.env` automatically (first from
+ * `process.cwd()`, then from its parent directory). Set
+ * `COGNEE_DISABLE_DOTENV=1` to disable auto-loading.
  */
+import "./env";
 import { native } from "./native";
 
 // Runtime

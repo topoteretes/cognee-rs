@@ -39,6 +39,9 @@ js/cognee-neon/target/
 js/node_modules/
 js/lib/
 js/cognee_neon.node
+js/.cognee_system/
+js/.data_storage/
+js/cognee.db
 
 # JS lockfile — only pins dev-deps (jest, ts-jest, typescript); regeneration
 # under older Node versions produces churn (lockfileVersion 1 vs 3).
