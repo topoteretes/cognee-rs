@@ -23,7 +23,7 @@ Last updated: 2026-06-05 (Phase 9)
 | 6 | [Feature-gated surfaces](phase-6-feature-gated.md) | ✅ | ts-bindings/phase-6-feature-gated | 335dca5 | done |
 | 7 | [TS layer & actualization](phase-7-typescript-layer.md) | ✅ | ts-bindings/phase-7-ts-layer | 587cac6 | done |
 | 8 | [Errors & marshalling](phase-8-errors-marshalling.md) | ✅ | ts-bindings/phase-8-errors-marshalling | bf462a1 | done |
-| 9 | [Tests & CI](phase-9-tests-ci.md) | ✅ | ts-bindings/phase-9-tests-ci | — | done |
+| 9 | [Tests & CI](phase-9-tests-ci.md) | ✅ | ts-bindings/phase-9-tests-ci | 8c75eb3 | done |
 
 ## Per-phase exit criteria
 
