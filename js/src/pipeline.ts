@@ -104,3 +104,34 @@ export class Pipeline {
     ) as Promise<CogneeValue[]>;
   }
 }
+
+// Legacy engine re-exports (added in Phase 7).
+// These are re-exported here so that `import * as pipeline from 'cognee'`
+// (via `export * as pipeline from "./pipeline"` in index.ts) gives access to
+// the full low-level engine API under the `pipeline` namespace.
+export { CogneeValue } from "./value";
+export {
+  TaskFn,
+  IterTaskFn,
+  BatchTaskFn,
+  TaskOptions,
+  TaskInfo,
+  createTask,
+  createIterTask,
+  createBatchTask,
+} from "./task";
+export { TaskContext } from "./task-context";
+export {
+  CancellationHandle,
+  CancellationToken,
+  createCancellationPair,
+} from "./cancellation";
+export { ProgressToken } from "./progress";
+export {
+  WatcherEvents,
+  Watcher,
+  createWatcher,
+  createNoopWatcher,
+} from "./watcher";
+export { RunHandle } from "./run-handle";
+export { RunResult } from "./run-result";

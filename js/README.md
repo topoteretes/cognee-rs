@@ -1,97 +1,370 @@
-# cognee-neon
+# cognee
 
 Node.js bindings for the [cognee-rust](https://github.com/topoteretes/cognee-rust)
-pipeline engine, built with [Neon](https://neon-bindings.com/).
+AI-memory SDK, built with [Neon](https://neon-bindings.com/).
+
+Cognee transforms raw text, files, and URLs into a persistent, queryable knowledge graph
+via a three-stage pipeline: **add** (ingest) → **cognify** (extract) → **search** (retrieve).
 
 ## Installation
 
 ```bash
-npm install cognee-neon
+npm install cognee
 ```
 
 ## Quick start
 
 ```ts
-import { init, Pipeline } from "cognee-neon";
+import { init, Cognee } from 'cognee';
 
+// Boot the Rust async runtime (call once at process start).
 init();
-const pipeline = new Pipeline();
-// ... configure tasks, run, etc.
+
+const c = new Cognee({
+  llmModel:   "gpt-4o-mini",
+  llmApiKey:  process.env.OPENAI_API_KEY,
+});
+
+// Warm up engines (builds embedding model, resolves default user).
+await c.warm();
+
+// Ingest content into a named dataset.
+await c.add({ type: "text", text: "The quick brown fox jumps over the lazy dog." }, "demo");
+
+// Extract entities and relationships into the knowledge graph.
+await c.cognify("demo");
+
+// Query the graph.
+const results = await c.search("What does the fox do?");
+console.log(results);
 ```
 
-## Initialisation
-
-cognee's Rust core uses `tracing` for structured diagnostics and
-optionally exports spans via OpenTelemetry (OTLP). When the Neon
-addon is loaded, a minimal default subscriber is installed so events
-are never silently dropped: a `tracing-subscriber::fmt` layer writing
-to **stderr** with `EnvFilter` defaults of `info,ort=warn` (overridable
-via `RUST_LOG` / `LOG_LEVEL`).
-
-### Opt-out
-
-Set `COGNEE_BINDING_SUPPRESS_LOGS=1` **before** `require`ing the
-module to skip the default subscriber. The host then owns subscriber
-setup.
-
-```bash
-COGNEE_BINDING_SUPPRESS_LOGS=1 node my_app.js
-```
-
-### Optional upgrades
-
-Three idempotent setup functions are exported from `cognee-neon`.
-Each one composes additional layers on top of the default
-subscriber. Calling order does not matter; calling any of them more
-than once is a no-op.
-
-| Call | Effect | Idempotent |
-|---|---|---|
-| `setupLogging()` | Adds the rotating file appender (default `~/.cognee/logs/<ts>.log`, daily rotation, configurable via `COGNEE_LOG_*`, `LOG_FILE_NAME`, `LOG_LEVEL`, `RUST_LOG`). | Yes |
-| `setupTelemetry()` | Composes an OTLP exporter when `OTEL_EXPORTER_OTLP_ENDPOINT` is set; reads all standard `OTEL_*` env vars. Defaults `service.name` to `cognee.node-binding` when unset (the user's explicit value always wins). Returns `void`. | Yes |
-| `setupTelemetryAnalytics()` | Arms product-analytics emission (`https://test.prometh.ai`) per the Node.js policy below. Returns `true` if armed by this call (or a prior call), `false` if the policy suppressed emission. | Yes |
-
-Example with everything on:
+## Constructor
 
 ```ts
-import {
-  init,
-  setupLogging,
-  setupTelemetry,
-  setupTelemetryAnalytics,
-} from "cognee-neon";
-
-init();
-setupLogging();            // file logging
-setupTelemetry();          // OTLP export
-const armed = setupTelemetryAnalytics(); // analytics
-console.log(`analytics armed: ${armed}`);
+const c = new Cognee(settings?)
 ```
 
-### Analytics defaults
+`settings` is an optional object (or JSON string) that overrides env-derived defaults.
+Keys are the canonical Settings field names (`llmModel`, `embeddingProvider`,
+`vectorDbProvider`, etc.). Absent keys keep their env-variable or compiled-in default.
 
-For the Node.js binding, analytics emission is **ON by default** —
-Neon is the canonical sender of `send_telemetry` events in the JS
-ecosystem (there is no upstream JS cognee SDK to defer to).
+## Config
 
-| Condition | Behaviour |
-|---|---|
-| No suppression vars set | Armed. Returns `true`. |
-| `TELEMETRY_DISABLED=1` | Not armed. Returns `false`. |
-| `ENV=test` or `ENV=dev` | Not armed. Returns `false`. |
-| `COGNEE_HOST_SDK=<any non-empty>` | Not armed. Returns `false`. |
+Use `c.config` to change settings after construction. Granular setters are synchronous
+and take effect immediately (the engines are lazily rebuilt on the next pipeline call).
+
+```ts
+c.config.setLlmModel("gpt-4o");
+c.config.setLlmApiKey(process.env.OPENAI_API_KEY!);
+c.config.setEmbeddingProvider("openai");
+c.config.setEmbeddingModel("text-embedding-3-small");
+
+// Bulk setter (throws on unknown key or type mismatch):
+c.config.setLlmConfig({ model: "gpt-4o", temperature: 0.2 });
+
+// Generic key-value setter:
+c.config.set("llmModel", "gpt-4o-mini");
+
+// Read back the current config (secret fields are redacted):
+const cfg = c.config.get();
+console.log(cfg);
+```
+
+## Pipeline operations
+
+### add
+
+Ingest one or more data items into a named dataset.
+
+```ts
+// Text
+await c.add({ type: "text", text: "…" }, "my-dataset");
+
+// File
+await c.add({ type: "file", path: "/abs/path/to/doc.txt" }, "my-dataset");
+
+// URL
+await c.add({ type: "url", url: "https://example.com/article" }, "my-dataset");
+
+// Binary (name is required for MIME detection)
+await c.add({ type: "binary", bytes: buffer, name: "report.pdf" }, "my-dataset");
+
+// Multiple items at once
+await c.add([
+  { type: "text", text: "First document" },
+  { type: "file", path: "/abs/path/two.txt" },
+], "my-dataset");
+```
+
+### cognify
+
+Extract entities and relationships into the knowledge graph.
+
+```ts
+await c.cognify("my-dataset");
+
+// With options
+await c.cognify("my-dataset", {
+  chunkSize: 512,
+  summarization: true,
+  triplet: true,       // also index triplet embeddings (enables TripletCompletion search)
+});
+```
+
+### addAndCognify
+
+Ingest and extract in a single call.
+
+```ts
+const { add, cognify } = await c.addAndCognify(
+  { type: "text", text: "…" },
+  "my-dataset"
+);
+```
+
+## Search and recall
+
+### search
+
+Query the knowledge graph. Defaults to `GRAPH_COMPLETION`.
+
+```ts
+const result = await c.search("What is the capital of France?");
+
+// With options
+const result = await c.search("summarise recent events", {
+  searchType: "SUMMARIES",
+  topK: 5,
+  datasets: ["news"],
+});
+```
+
+All 15 search types are supported (SCREAMING_SNAKE_CASE):
+`GRAPH_COMPLETION`, `SUMMARIES`, `CHUNKS`, `RAG_COMPLETION`, `TRIPLET_COMPLETION`,
+`GRAPH_SUMMARY_COMPLETION`, `CYPHER`, `NATURAL_LANGUAGE`, `GRAPH_COMPLETION_COT`,
+`GRAPH_COMPLETION_CONTEXT_EXTENSION`, `FEELING_LUCKY`, `FEEDBACK`, `TEMPORAL`,
+`CODING_RULES`, `CHUNKS_LEXICAL`.
+
+### recall
+
+Session-first routing: checks session QA history before falling back to graph search.
+
+```ts
+const result = await c.recall("What did we discuss?", {
+  sessionId: "session-uuid",
+  scope: "auto",   // "graph" | "session" | "trace" | "graph_context" | "all"
+});
+```
+
+## Memory operations
+
+### remember
+
+Composite add + cognify with an optional improvement pass.
+
+```ts
+await c.remember({ type: "text", text: "…" }, "my-dataset", {
+  selfImprovement: true,   // run memify after cognify
+  sessionId: "session-id", // session-only mode (no graph writes)
+});
+```
+
+### memify
+
+Index triplet embeddings from the existing knowledge graph.
+Enables `TripletCompletion` search. Idempotent.
+
+```ts
+await c.memify();
+```
+
+### improve
+
+Run the four-stage session-graph bridge pipeline.
+
+```ts
+await c.improve({
+  datasetName: "my-dataset",
+  sessionIds: ["session-uuid"],
+});
+```
+
+## Datasets
+
+```ts
+const datasets   = await c.datasets.list();
+const items      = await c.datasets.listData(datasetId);
+const hasContent = await c.datasets.has(datasetId);
+const statuses   = await c.datasets.status([id1, id2]);
+
+await c.datasets.empty(datasetId);
+await c.datasets.deleteData(datasetId, dataId);
+await c.datasets.deleteAll();
+```
+
+## Sessions
+
+```ts
+const entries = await c.sessions.get("session-uuid", { lastN: 10 });
+
+await c.sessions.addFeedback("session-uuid", "qa-uuid", "Great answer!", 5);
+await c.sessions.deleteFeedback("session-uuid", "qa-uuid");
+
+const ctx = await c.sessions.getGraphContext("session-uuid");
+await c.sessions.setGraphContext("session-uuid", "new context");
+```
+
+## Data lifecycle
+
+```ts
+// Forget a single item
+await c.forget({ kind: "item", dataId: "uuid", dataset: { name: "my-dataset" } });
+
+// Forget an entire dataset
+await c.forget({ kind: "dataset", dataset: { name: "my-dataset" } });
+
+// Forget everything
+await c.forget({ kind: "all" });
+
+// Replace a data item (delete → re-add → re-cognify)
+await c.update("old-data-uuid", { type: "text", text: "updated content" }, "my-dataset");
+
+// Remove all files from storage (metadata DB untouched)
+await c.pruneData();
+
+// Wipe graph, vector, metadata, and/or cache backends
+await c.pruneSystem({ pruneGraph: true, pruneVector: true });
+```
+
+## Cloud: serve / disconnect
+
+`serve` and `disconnect` are module-level functions (not instance methods) because
+they operate on global cloud state.
+
+```ts
+import { serve, disconnect } from 'cognee';
+
+// Direct mode (no Auth0 flow; headless-friendly)
+const { serviceUrl } = await serve({ url: "http://localhost:8000", apiKey: "key" });
+console.log("Connected to", serviceUrl);
+
+// Cloud mode (Auth0 device-code flow — requires a TTY)
+await serve();
+
+// Tear down
+await disconnect();
+await disconnect({ wipeCredentials: true }); // also removes the local credential cache
+```
+
+## Visualisation
+
+```ts
+// Get the HTML string
+const html = await c.visualize();
+
+// Write to a file (returns the absolute path)
+const path = await c.visualizeToFile({ destinationPath: "/tmp/graph.html" });
+```
+
+Requires the `visualization` feature compiled into the native addon.
+
+## Initialisation and observability
+
+```ts
+import { init, setupLogging, setupTelemetry, setupTelemetryAnalytics } from 'cognee';
+
+// Boot the Rust tokio runtime (required before any async op).
+init();
+
+// Optional: add file logging (reads COGNEE_LOG_*, LOG_FILE_NAME, LOG_LEVEL).
+setupLogging();
+
+// Optional: enable OTLP trace export (reads OTEL_* env vars).
+setupTelemetry();
+
+// Optional: enable product-analytics emission (returns true if armed).
+const armed = setupTelemetryAnalytics();
+```
+
+Set `COGNEE_BINDING_SUPPRESS_LOGS=1` before `require`ing the module to skip the
+auto-installed stderr subscriber if your host manages the logging pipeline.
 
 ## Environment variables
 
 | Variable | Purpose |
 |---|---|
 | `COGNEE_BINDING_SUPPRESS_LOGS` | Suppress the auto-installed stderr fmt subscriber. |
-| `COGNEE_HOST_SDK` | Suppress binding-armed analytics emission when the host is an embedding SDK (decision 10). |
-| `TELEMETRY_DISABLED`, `ENV` | Standard analytics opt-outs honoured by `setupTelemetryAnalytics()`. |
-| `RUST_LOG`, `LOG_LEVEL` | Standard `tracing-subscriber` env-filter level overrides. |
-| `COGNEE_LOG_*`, `LOG_FILE_NAME` | Consumed by `setupLogging()` — see the workspace README's "Logging" section. |
-| `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_HEADERS`, `OTEL_SERVICE_NAME` and other `OTEL_*` vars | Consumed by `setupTelemetry()`. |
+| `COGNEE_HOST_SDK` | Suppress binding-armed analytics when the host is an embedding SDK. |
+| `TELEMETRY_DISABLED`, `ENV` | Standard analytics opt-outs for `setupTelemetryAnalytics()`. |
+| `RUST_LOG`, `LOG_LEVEL` | `tracing-subscriber` env-filter level overrides. |
+| `COGNEE_LOG_*`, `LOG_FILE_NAME` | Consumed by `setupLogging()`. |
+| `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_SERVICE_NAME`, `OTEL_*` | Consumed by `setupTelemetry()`. |
+
+---
+
+## Appendix: low-level pipeline API
+
+The original pipeline engine API is available under the `pipeline` namespace:
+
+```ts
+import { pipeline, init } from 'cognee';
+
+init();
+
+const task = pipeline.createTask((input: pipeline.CogneeValue, ctx: pipeline.TaskContext) => {
+  // process input …
+  return input;
+});
+
+const p = new pipeline.Pipeline("my pipeline");
+p.addTask(new pipeline.TaskInfo(task));
+
+const [result] = await p.execute([pipeline.CogneeValue.fromString("hello")], ctx);
+```
+
+All symbols previously exported from `@cognee/pipeline` are available at the top
+level of `cognee` for backward compatibility, and also under `pipeline.*`:
+
+```ts
+import {
+  Pipeline,
+  TaskInfo,
+  createTask,
+  CogneeValue,
+  TaskContext,
+  RunHandle,
+  CancellationHandle,
+  CancellationToken,
+  createCancellationPair,
+  ProgressToken,
+  Watcher,
+  createWatcher,
+  createNoopWatcher,
+} from 'cognee';
+```
+
+---
+
+## Migration guide
+
+Rename the package and update imports:
+
+```diff
+- import { Pipeline } from '@cognee/pipeline';
++ import { pipeline } from 'cognee';
++ const { Pipeline } = pipeline;
+```
+
+Or use the flat re-exports (still supported):
+
+```ts
+import { Pipeline } from 'cognee'; // flat legacy export — unchanged
+```
+
+---
 
 ## References
 
-- Observability docs: [docs/observability/opentelemetry.md](../docs/observability/opentelemetry.md), [docs/observability/send_telemetry.md](../docs/observability/send_telemetry.md)
+- Observability: [docs/observability/opentelemetry.md](../docs/observability/opentelemetry.md), [docs/observability/send_telemetry.md](../docs/observability/send_telemetry.md)
+- Source: [cognee-rust](https://github.com/topoteretes/cognee-rust)

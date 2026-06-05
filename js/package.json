@@ -1,7 +1,7 @@
 {
-  "name": "@cognee/pipeline",
+  "name": "cognee",
   "version": "0.1.0",
-  "description": "Node.js bindings for the cognee-core pipeline engine",
+  "description": "Node.js bindings for the cognee AI-memory SDK",
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
   "scripts": {

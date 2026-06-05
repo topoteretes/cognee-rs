@@ -8,7 +8,7 @@ and commit agent to keep it current).
 
 **Legend:** ⬜ Not started · 🟡 In progress · 🔵 In review · ⛔ Blocked · ✅ Done
 
-Last updated: 2026-06-04 (Phase 8)
+Last updated: 2026-06-05 (Phase 9)
 
 ## Status table
 
@@ -21,7 +21,7 @@ Last updated: 2026-06-04 (Phase 8)
 | 4 | [Retrieval (search/recall)](phase-4-retrieval.md) | ✅ | ts-bindings/phase-4-retrieval | 33efc35 | done |
 | 5 | [Remaining SDK](phase-5-remaining-sdk.md) | ✅ | ts-bindings/phase-5-remaining-sdk | 5330435 | done |
 | 6 | [Feature-gated surfaces](phase-6-feature-gated.md) | ✅ | ts-bindings/phase-6-feature-gated | 335dca5 | done |
-| 7 | [TS layer & actualization](phase-7-typescript-layer.md) | ⬜ | — | — | |
+| 7 | [TS layer & actualization](phase-7-typescript-layer.md) | ✅ | ts-bindings/phase-7-ts-layer | 587cac6 | done |
 | 8 | [Errors & marshalling](phase-8-errors-marshalling.md) | ✅ | ts-bindings/phase-8-errors-marshalling | bf462a1 | done |
 | 9 | [Tests & CI](phase-9-tests-ci.md) | ⬜ | — | — | |
 
@@ -73,11 +73,11 @@ Check off the criteria as they land (the granular view behind the status column)
 - [x] default feature set decided + documented
 
 ### Phase 7 — TS layer & actualization
-- [ ] `Cognee` class with typed methods + `types.ts`
-- [ ] legacy engine re-homed under `cognee.pipeline.*`
-- [ ] package identity decided; `package.json`/`index.ts`/`native.ts` updated
-- [ ] existing `js/` files updated or intentionally re-exported
-- [ ] `README.md` rewritten around the SDK
+- [x] `Cognee` class with typed methods + `types.ts`
+- [x] legacy engine re-homed under `cognee.pipeline.*`
+- [x] package identity decided; `package.json`/`index.ts`/`native.ts` updated
+- [x] existing `js/` files updated or intentionally re-exported
+- [x] `README.md` rewritten around the SDK
 
 ### Phase 8 — Errors & marshalling
 - [x] `json.rs` single conversion path; no `JSON.parse` shortcuts remain
@@ -115,7 +115,7 @@ Record cross-cutting decisions as they're made (one line each), so later phases 
 | 2026-06-04 | `PruneResult` hand-built JSON: `{ dataPruned, graphPruned, vectorPruned, metadataPruned, cachePruned }` — `PruneResult` derives `Debug, Clone, Default` only; `cogneePruneData` and `cogneePruneSystem` split into two exports matching the two Rust API functions. | 5 |
 | 2026-06-04 | `visualization` and `cloud` features default ON in `cognee-neon`, mirroring `cognee-lib` and `cognee-cli` defaults; a `--no-default-features` build strips both. Functions are always registered in `lib.rs`; the feature-absent body rejects with `FEATURE_NOT_BUILT` so callers get a typed error rather than a cryptic "not a function". | 6 |
 | 2026-06-04 | `FeatureNotBuilt(String)` variant added to `SdkError`; annotated `#[allow(dead_code)]` because it is only constructed in `#[cfg(not(feature = "..."))]` branches that are compiled out when defaults are active. `code()` returns `"FEATURE_NOT_BUILT"`. | 6 |
-| | _(e.g. package renamed to `cognee`)_ | 7 |
+| 2026-06-05 | Phase 7: package renamed to `cognee` (unscoped); `Cognee` class wraps all native exports; `serve`/`disconnect` are module-level; legacy `@cognee/pipeline` exports preserved flat under `pipeline` namespace. | 7 |
 | 2026-06-04 | Phase 8: single `json.rs` conversion path — `js_to_serde`, `serde_to_js`, `read_opts` are the canonical helpers; all private per-module copies removed; `cognify_result_json` and `marshal_inputs`/`marshal_one` extracted to `json.rs` as well. | 8 |
 | 2026-06-04 | Phase 8: `throw_sdk_error` and `throw_config_error` now attach both `code` and `kind` (same string value) to thrown errors; `kind` is the stable API identifier, `code` is the backwards-compatible alias. | 8 |
 | 2026-06-04 | Phase 8: Neon 1.1 cannot call JS constructors, so typed subclasses live in the TS layer; Rust throws a plain `Error` with `code`+`kind`; `wrapNativeError` in `errors.ts` re-wraps to the correct `CogneeError` subclass by reading `kind`. Tier-A `errors.test.ts` asserts `code`/`kind` on raw native errors (no Phase-7 class needed). | 8 |
