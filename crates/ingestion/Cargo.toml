@@ -57,5 +57,6 @@ cognee-graph = { path = "../graph", features = ["testing"] }
 cognee-storage = { path = "../storage", features = ["testing"] }
 cognee-test-utils = { path = "../test-utils" }
 cognee-vector = { path = "../vector", features = ["testing"] }
+mockito = "1"
 tempfile.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

@@ -30,7 +30,7 @@ use cognee_vector::VectorDB;
 use crate::content_hasher::HashAlgorithm;
 use crate::id_generation::{generate_data_id, generate_dataset_id};
 use crate::loader_registry::get_loader_name;
-use crate::url_crawler::{HtmlParser, UrlFetcher};
+use crate::url_resolver::resolve_url_input;
 
 // ---------------------------------------------------------------------------
 // AddParams
@@ -56,62 +56,6 @@ pub struct AddParams {
     pub importance_weight: Option<f64>,
 }
 
-/// Extract the MIME essence (e.g. `"text/html"`) from a full Content-Type
-/// header value like `"text/html; charset=utf-8"`.
-fn mime_essence(content_type: &str) -> &str {
-    content_type
-        .split(';')
-        .next()
-        .unwrap_or(content_type)
-        .trim()
-}
-
-/// Infer a MIME type from a URL path extension. Returns `"text/plain"` as
-/// fallback when the URL has no recognisable extension.
-fn mime_from_url(url: &str) -> String {
-    if let Ok(parsed) = url::Url::parse(url) {
-        let path = parsed.path();
-        if let Some(dot) = path.rfind('.') {
-            let ext = &path[dot..]; // e.g. ".pdf"
-            let guess = mime_guess::from_path(ext).first_or_text_plain();
-            return guess.to_string();
-        }
-    }
-    "text/plain".to_string()
-}
-
-/// Derive `(extension, mime, loader_engine)` from a MIME essence string.
-fn metadata_from_mime(essence: &str) -> (String, String, String) {
-    let ext = match essence {
-        "text/html" | "application/xhtml+xml" => "html",
-        "text/plain" => "txt",
-        "application/json" => "json",
-        "text/csv" => "csv",
-        "application/pdf" => "pdf",
-        _ if essence.starts_with("image/") => {
-            // Pick a common extension from the sub-type
-            match essence {
-                "image/png" => "png",
-                "image/jpeg" => "jpg",
-                "image/gif" => "gif",
-                "image/webp" => "webp",
-                "image/svg+xml" => "svg",
-                _ => "bin",
-            }
-        }
-        _ if essence.starts_with("audio/") => match essence {
-            "audio/mpeg" => "mp3",
-            "audio/wav" => "wav",
-            "audio/ogg" => "ogg",
-            _ => "bin",
-        },
-        _ => "bin",
-    };
-    let mime = essence.to_string();
-    let loader = get_loader_name(ext).to_string();
-    (ext.to_string(), mime, loader)
-}
-
 // ---------------------------------------------------------------------------
 // ProcessedInput
 // ---------------------------------------------------------------------------
@@ -126,6 +70,8 @@ pub struct ProcessedInput {
     pub data_id: Uuid,
     pub storage_location: String,
     pub label: Option<String>,
+    pub stored_extension: String,
+    pub stored_mime_type: String,
     pub original_extension: String,
     pub original_mime_type: String,
     pub loader_engine: String,
@@ -160,72 +106,43 @@ pub async fn process_input(
 ) -> Result<ProcessedInput, Box<dyn std::error::Error>> {
     use tokio::sync::Mutex;
 
-    // For URL inputs: fetch the resource and route based on Content-Type.
-    // HTML → extract plain text; text/json → store as-is; binary → store raw bytes.
-    // The original URL is preserved via `extract_original_location`.
-    let (resolved_input, url_metadata): (Option<DataInput>, Option<(String, String, String)>) =
-        if let DataInput::Url(url) = input {
-            let fetch_result = UrlFetcher::new()?.fetch_with_metadata(url).await?;
-            let raw_essence = mime_essence(&fetch_result.content_type);
-            // When server omits Content-Type, sniff from the URL path extension
-            let essence = if raw_essence.is_empty() {
-                mime_from_url(&fetch_result.url)
-            } else {
-                raw_essence.to_string()
-            };
-            let meta = metadata_from_mime(&essence);
-
-            let data_input = if essence == "text/html" || essence == "application/xhtml+xml" {
-                let html = String::from_utf8(fetch_result.bytes)
-                    .map_err(|e| format!("Invalid UTF-8 in HTML response from {url}: {e}"))?;
-                let text = HtmlParser::extract_text(&html);
-                DataInput::Text(text)
-            } else if essence == "text/plain"
-                || essence == "application/json"
-                || essence == "text/csv"
-            {
-                let text = String::from_utf8(fetch_result.bytes)
-                    .map_err(|e| format!("Invalid UTF-8 in text response from {url}: {e}"))?;
-                DataInput::Text(text)
-            } else if essence.starts_with("image/")
-                || essence.starts_with("audio/")
-                || essence == "application/pdf"
-            {
-                let ext = &meta.0;
-                let file_name = format!("url_fetched.{ext}");
-                DataInput::Binary {
-                    data: fetch_result.bytes,
-                    name: file_name,
-                }
-            } else {
-                // Unknown type — treat as text
-                let text = String::from_utf8(fetch_result.bytes).unwrap_or_else(|e| {
-                    tracing::warn!(
-                        "Non-UTF-8 response from {url} with Content-Type {essence}, \
-                         storing lossy conversion: {e}"
-                    );
-                    String::from_utf8_lossy(e.as_bytes()).into_owned()
-                });
-                DataInput::Text(text)
-            };
-
-            (Some(data_input), Some(meta))
-        } else {
-            (None, None)
-        };
-    let effective_input: &DataInput = resolved_input.as_ref().unwrap_or(input);
+    let resolved_url = if let DataInput::Url(url) = input {
+        Some(resolve_url_input(url).await?)
+    } else {
+        None
+    };
+    let effective_input: &DataInput = resolved_url
+        .as_ref()
+        .map(|resolved| &resolved.input)
+        .unwrap_or(input);
 
     // Determine filename and metadata before streaming.
     // For URL inputs the Content-Type-derived metadata takes precedence.
-    let (file_name, original_extension, original_mime_type, label, loader_engine) =
-        if let Some((ext, mime, loader)) = url_metadata {
-            let fname = format!("text_placeholder.{ext}");
-            (fname, ext, mime, None, loader)
-        } else {
-            let (fname, ext, mime, lbl) = extract_file_metadata(input);
-            let loader = get_loader_name(&ext).to_string();
-            (fname, ext, mime, lbl, loader)
-        };
+    let (
+        file_name,
+        stored_extension,
+        stored_mime_type,
+        original_extension,
+        original_mime_type,
+        label,
+        loader_engine,
+    ) = if let Some(resolved) = resolved_url.as_ref() {
+        let metadata = &resolved.metadata;
+        let fname = format!("text_placeholder.{}", metadata.stored_extension);
+        (
+            fname,
+            metadata.stored_extension.clone(),
+            metadata.stored_mime_type.clone(),
+            metadata.source_extension.clone(),
+            metadata.source_mime_type.clone(),
+            None,
+            metadata.loader_engine.clone(),
+        )
+    } else {
+        let (fname, ext, mime, lbl) = extract_file_metadata(input);
+        let loader = get_loader_name(&ext).to_string();
+        (fname, ext.clone(), mime.clone(), ext, mime, lbl, loader)
+    };
 
     // Use Arc<Mutex<>> so closures can share the hasher and writer
     let size_counter: Arc<Mutex<i64>> = Arc::new(Mutex::new(0i64));
@@ -290,6 +207,8 @@ pub async fn process_input(
         data_id,
         storage_location,
         label,
+        stored_extension,
+        stored_mime_type,
         original_extension,
         original_mime_type,
         loader_engine: loader_engine.to_string(),
@@ -422,8 +341,8 @@ pub async fn persist_data_with_acl(
         processed.name.clone(),
         processed.raw_data_uri.clone(),
         processed.original_location.clone(),
-        processed.original_extension.clone(),
-        processed.original_mime_type.clone(),
+        processed.stored_extension.clone(),
+        processed.stored_mime_type.clone(),
         processed.content_hash.clone(),
         processed.owner_id,
     )
@@ -1119,8 +1038,9 @@ mod tests {
     use super::*;
     use cognee_database::{connect, initialize, ops};
     use cognee_graph::MockGraphDB;
-    use cognee_storage::MockStorage;
+    use cognee_storage::{LocalStorage, MockStorage};
     use cognee_vector::MockVectorDB;
+    use mockito::{Server, ServerGuard};
     use std::io::Write;
     use tempfile::NamedTempFile;
 
@@ -1135,6 +1055,91 @@ mod tests {
             .with_vector_db(Arc::new(MockVectorDB::new()))
             .with_database(Arc::clone(&db));
         (pipeline, db)
+    }
+
+    async fn server_with_robots() -> ServerGuard {
+        let mut server = Server::new_async().await;
+        server
+            .mock("GET", "/robots.txt")
+            .with_status(404)
+            .create_async()
+            .await;
+        server
+    }
+
+    #[tokio::test]
+    async fn test_process_input_url_html_stores_text_with_source_metadata() {
+        let mut server = server_with_robots().await;
+        let html = "<html><head><title>Example</title></head><body><h1>Visible text</h1><script>hidden()</script></body></html>";
+        let url = format!("{}/page.html", server.url());
+        let _mock = server
+            .mock("GET", "/page.html")
+            .with_header("content-type", "text/html; charset=utf-8")
+            .with_body(html)
+            .create_async()
+            .await;
+        let temp_dir = tempfile::tempdir().unwrap();
+        let storage = LocalStorage::new(temp_dir.path().to_path_buf());
+
+        let processed = process_input(
+            &DataInput::Url(url.clone()),
+            &storage,
+            HashAlgorithm::Md5,
+            Uuid::new_v4(),
+            None,
+        )
+        .await
+        .unwrap();
+
+        let stored = storage.retrieve(&processed.storage_location).await.unwrap();
+        let stored_text = String::from_utf8(stored).unwrap();
+        assert!(stored_text.contains("Visible text"));
+        assert!(!stored_text.contains("<html>"));
+        assert_eq!(processed.stored_extension, "txt");
+        assert_eq!(processed.stored_mime_type, "text/plain");
+        assert_eq!(processed.original_extension, "html");
+        assert_eq!(processed.original_mime_type, "text/html");
+        assert_eq!(processed.loader_engine, "beautiful_soup_loader");
+        assert_eq!(processed.original_location, url);
+    }
+
+    #[tokio::test]
+    async fn test_persist_data_url_html_uses_stored_type_and_preserves_source_type() {
+        let mut server = server_with_robots().await;
+        let url = format!("{}/page", server.url());
+        let _mock = server
+            .mock("GET", "/page")
+            .with_header("content-type", "application/xhtml+xml")
+            .with_body("<html><body>XHTML body</body></html>")
+            .create_async()
+            .await;
+        let db = connect("sqlite::memory:").await.unwrap();
+        initialize(&db).await.unwrap();
+        let temp_dir = tempfile::tempdir().unwrap();
+        let storage = LocalStorage::new(temp_dir.path().to_path_buf());
+        let owner_id = Uuid::new_v4();
+
+        let processed = process_input(
+            &DataInput::Url(url),
+            &storage,
+            HashAlgorithm::Md5,
+            owner_id,
+            None,
+        )
+        .await
+        .unwrap();
+        let data = persist_data(&processed, &db, "url-html", owner_id, None)
+            .await
+            .unwrap();
+
+        assert_eq!(data.extension, "txt");
+        assert_eq!(data.mime_type, "text/plain");
+        assert_eq!(data.original_extension.as_deref(), Some("html"));
+        assert_eq!(
+            data.original_mime_type.as_deref(),
+            Some("application/xhtml+xml")
+        );
+        assert_eq!(data.loader_engine.as_deref(), Some("beautiful_soup_loader"));
     }
 
     #[tokio::test]

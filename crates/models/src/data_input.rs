@@ -63,7 +63,7 @@ impl DataInput {
             Self::Url(_url) => {
                 return Err(E::from(std::io::Error::new(
                     std::io::ErrorKind::Unsupported,
-                    "URL processing not yet supported",
+                    "URL inputs must be resolved before streaming. Use cognee_ingestion::resolve_url_input() or AddPipeline::add().",
                 )));
             }
             Self::S3Path(_s3_path) => {
@@ -186,5 +186,20 @@ mod tests {
             external_metadata: None,
         };
         assert_eq!(item.classify(), "text");
+    }
+
+    #[tokio::test]
+    async fn test_url_process_by_chunks_error_message() {
+        let input = DataInput::Url("https://example.com".to_string());
+        let err = input
+            .process_by_chunks(|_| async { Ok::<(), std::io::Error>(()) })
+            .await
+            .unwrap_err();
+
+        assert_eq!(err.kind(), std::io::ErrorKind::Unsupported);
+        assert_eq!(
+            err.to_string(),
+            "URL inputs must be resolved before streaming. Use cognee_ingestion::resolve_url_input() or AddPipeline::add()."
+        );
     }
 }
