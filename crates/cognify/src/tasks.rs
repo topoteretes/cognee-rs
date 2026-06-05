@@ -3861,7 +3861,7 @@ mod tests {
             Some("Visible page content")
         );
         assert!(
-            page.get("created_at").is_none(),
+            !page.contains_key("created_at"),
             "WebPage node payload should be deterministic"
         );
 
