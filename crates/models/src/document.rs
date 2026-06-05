@@ -69,8 +69,20 @@ fn is_dlt_sourced(external_metadata: &Option<String>) -> bool {
     external_metadata
         .as_ref()
         .and_then(|m| serde_json::from_str::<serde_json::Value>(m).ok())
-        .and_then(|v| v.get("source")?.as_str().map(|s| s == "dlt"))
+        .map(|v| metadata_value_is_dlt_sourced(&v))
         .unwrap_or(false)
+}
+
+fn metadata_value_is_dlt_sourced(value: &serde_json::Value) -> bool {
+    value
+        .get("source")
+        .and_then(|source| source.as_str())
+        .map(|source| source == "dlt")
+        .unwrap_or(false)
+        || value
+            .get("data_item_external_metadata")
+            .map(metadata_value_is_dlt_sourced)
+            .unwrap_or(false)
 }
 
 /// Classify Data items into Documents based on file extension.
@@ -214,6 +226,37 @@ mod tests {
     }
 
     #[test]
+    fn classifies_extracted_html_url_text_as_text_document() {
+        let data = vec![
+            Data::builder(
+                Uuid::new_v4(),
+                "text_hash",
+                "file:///storage/text_hash.txt",
+                "file:///storage/source.html",
+                "txt",
+                "text/plain",
+                "hash123",
+                Uuid::new_v4(),
+            )
+            .original_extension("html")
+            .original_mime_type("text/html")
+            .loader_engine("beautiful_soup_loader")
+            .external_metadata(
+                r#"{"source":"url","url":"https://example.test","content_type":"text/html"}"#,
+            )
+            .build(),
+        ];
+
+        let docs = classify_documents(&data);
+
+        assert_eq!(docs.len(), 1);
+        assert_eq!(docs[0].document_type, "text");
+        assert_eq!(docs[0].base.data_type, "TextDocument");
+        assert_eq!(docs[0].extension, "txt");
+        assert_eq!(docs[0].mime_type, "text/plain");
+    }
+
+    #[test]
     fn classifies_pdf() {
         let data = vec![make_data("application/pdf", "pdf")];
         let docs = classify_documents(&data);
@@ -352,6 +395,19 @@ mod tests {
         let docs = classify_documents(&data);
         assert_eq!(docs.len(), 1);
         assert_eq!(docs[0].document_type, "dlt_row");
+    }
+
+    #[test]
+    fn dlt_detection_survives_url_metadata_merge_conflict() {
+        let data = vec![make_data_with_metadata(
+            "text/plain",
+            "txt",
+            r#"{"source":"url","url":"https://example.test","data_item_external_metadata":{"source":"dlt","table":"events"}}"#,
+        )];
+        let docs = classify_documents(&data);
+        assert_eq!(docs.len(), 1);
+        assert_eq!(docs[0].document_type, "dlt_row");
+        assert_eq!(docs[0].base.data_type, "DltRowDocument");
     }
 
     #[test]

@@ -30,7 +30,7 @@ use cognee_vector::VectorDB;
 use crate::content_hasher::HashAlgorithm;
 use crate::id_generation::{generate_data_id, generate_dataset_id};
 use crate::loader_registry::get_loader_name;
-use crate::url_resolver::resolve_url_input;
+use crate::url_resolver::{UrlMetadata, resolve_url_input};
 
 // ---------------------------------------------------------------------------
 // AddParams
@@ -79,6 +79,7 @@ pub struct ProcessedInput {
     pub name: String,
     pub raw_data_uri: String,
     pub original_location: String,
+    pub raw_source_uri: Option<String>,
     pub owner_id: Uuid,
     pub tenant_id: Option<Uuid>,
     pub external_metadata: Option<String>,
@@ -106,15 +107,8 @@ pub async fn process_input(
 ) -> Result<ProcessedInput, Box<dyn std::error::Error>> {
     use tokio::sync::Mutex;
 
-    let resolved_url = if let DataInput::Url(url) = input {
-        Some(resolve_url_input(url).await?)
-    } else {
-        None
-    };
-    let effective_input: &DataInput = resolved_url
-        .as_ref()
-        .map(|resolved| &resolved.input)
-        .unwrap_or(input);
+    let (effective_input, resolved_url_metadata, resolved_label, data_item_metadata) =
+        resolve_input_for_processing(input).await?;
 
     // Determine filename and metadata before streaming.
     // For URL inputs the Content-Type-derived metadata takes precedence.
@@ -126,8 +120,7 @@ pub async fn process_input(
         original_mime_type,
         label,
         loader_engine,
-    ) = if let Some(resolved) = resolved_url.as_ref() {
-        let metadata = &resolved.metadata;
+    ) = if let Some(metadata) = resolved_url_metadata.as_ref() {
         let fname = format!("text_placeholder.{}", metadata.stored_extension);
         (
             fname,
@@ -135,13 +128,23 @@ pub async fn process_input(
             metadata.stored_mime_type.clone(),
             metadata.source_extension.clone(),
             metadata.source_mime_type.clone(),
-            None,
+            resolved_label,
             metadata.loader_engine.clone(),
         )
     } else {
         let (fname, ext, mime, lbl) = extract_file_metadata(input);
         let loader = get_loader_name(&ext).to_string();
         (fname, ext.clone(), mime.clone(), ext, mime, lbl, loader)
+    };
+
+    let raw_source_uri = if let Some(metadata) = resolved_url_metadata.as_ref()
+        && is_html_url_metadata(metadata)
+    {
+        let raw_file_name = format!("source_placeholder.{}", metadata.source_extension);
+        let raw_location = storage.store(&metadata.raw_bytes, &raw_file_name).await?;
+        Some(storage_location_to_uri(storage.base_path(), &raw_location))
+    } else {
+        None
     };
 
     // Use Arc<Mutex<>> so closures can share the hasher and writer
@@ -190,17 +193,16 @@ pub async fn process_input(
     // Compute derived fields that previously lived in add()
     let raw_data_uri = storage_location_to_uri(storage.base_path(), &storage_location);
     let name = extract_name(input, &content_hash);
-    let original_location = match input {
-        DataInput::Text(_) => raw_data_uri.clone(),
-        _ => extract_original_location(input),
+    let original_location = if let Some(uri) = raw_source_uri.clone() {
+        uri
+    } else {
+        match input {
+            DataInput::Text(_) => raw_data_uri.clone(),
+            _ => extract_original_location(input),
+        }
     };
-
-    let external_metadata = match input {
-        DataInput::DataItem {
-            external_metadata, ..
-        } => external_metadata.clone(),
-        _ => None,
-    };
+    let external_metadata =
+        merge_external_metadata(data_item_metadata, resolved_url_metadata.as_ref())?;
 
     Ok(ProcessedInput {
         content_hash,
@@ -216,6 +218,7 @@ pub async fn process_input(
         name,
         raw_data_uri,
         original_location,
+        raw_source_uri,
         owner_id,
         tenant_id,
         external_metadata,
@@ -477,6 +480,109 @@ fn storage_location_to_uri(base_path: &str, location: &str) -> String {
         };
         format!("file://{}", abs.display())
     }
+}
+
+async fn resolve_input_for_processing(
+    input: &DataInput,
+) -> Result<
+    (
+        DataInput,
+        Option<UrlMetadata>,
+        Option<String>,
+        Option<String>,
+    ),
+    Box<dyn std::error::Error>,
+> {
+    match input {
+        DataInput::Url(url) => {
+            let resolved = resolve_url_input(url).await?;
+            Ok((resolved.input, Some(resolved.metadata), None, None))
+        }
+        DataInput::DataItem {
+            data,
+            label,
+            external_metadata,
+        } => {
+            if let DataInput::Url(url) = data.as_ref() {
+                let resolved = resolve_url_input(url).await?;
+                Ok((
+                    resolved.input,
+                    Some(resolved.metadata),
+                    Some(label.clone()),
+                    external_metadata.clone(),
+                ))
+            } else {
+                Ok((
+                    input.clone(),
+                    None,
+                    Some(label.clone()),
+                    external_metadata.clone(),
+                ))
+            }
+        }
+        _ => Ok((input.clone(), None, None, None)),
+    }
+}
+
+fn is_html_url_metadata(metadata: &UrlMetadata) -> bool {
+    metadata.essence == "text/html" || metadata.essence == "application/xhtml+xml"
+}
+
+fn merge_external_metadata(
+    data_item_metadata: Option<String>,
+    url_metadata: Option<&UrlMetadata>,
+) -> Result<Option<String>, serde_json::Error> {
+    let Some(metadata) = url_metadata else {
+        return Ok(data_item_metadata);
+    };
+
+    let mut merged = serde_json::Map::new();
+    let mut user_metadata_object = None;
+    let mut has_conflict = false;
+
+    if let Some(user_metadata) = data_item_metadata {
+        match serde_json::from_str::<serde_json::Value>(&user_metadata) {
+            Ok(serde_json::Value::Object(user_object)) => {
+                user_metadata_object = Some(serde_json::Value::Object(user_object.clone()));
+                for (key, value) in user_object {
+                    merged.insert(key, value);
+                }
+            }
+            _ => {
+                merged.insert(
+                    "data_item_external_metadata_raw".to_string(),
+                    serde_json::Value::String(user_metadata),
+                );
+            }
+        }
+    }
+
+    let url_fields = [
+        ("source", serde_json::json!("url")),
+        ("url", serde_json::json!(metadata.requested_url.clone())),
+        ("final_url", serde_json::json!(metadata.final_url.clone())),
+        (
+            "content_type",
+            serde_json::json!(metadata.content_type.clone()),
+        ),
+    ];
+    for (key, value) in url_fields {
+        if merged.contains_key(key) {
+            has_conflict = true;
+        }
+        merged.insert(key.to_string(), value);
+    }
+    if let Some(title) = &metadata.title {
+        if merged.contains_key("title") {
+            has_conflict = true;
+        }
+        merged.insert("title".to_string(), serde_json::json!(title));
+    }
+    if has_conflict && let Some(user_metadata) = user_metadata_object {
+        merged.insert("data_item_external_metadata".to_string(), user_metadata);
+    }
+
+    serde_json::to_string(&serde_json::Value::Object(merged)).map(Some)
 }
 
 /// Derive a human-readable name for the stored Data record.
@@ -1070,7 +1176,7 @@ mod tests {
     #[tokio::test]
     async fn test_process_input_url_html_stores_text_with_source_metadata() {
         let mut server = server_with_robots().await;
-        let html = "<html><head><title>Example</title></head><body><h1>Visible text</h1><script>hidden()</script></body></html>";
+        let html = "<html><head><title>Example</title><style>.x{display:none}</style></head><body><h1>Visible text</h1><script>hidden()</script></body></html>";
         let url = format!("{}/page.html", server.url());
         let _mock = server
             .mock("GET", "/page.html")
@@ -1091,26 +1197,44 @@ mod tests {
         .await
         .unwrap();
 
-        let stored = storage.retrieve(&processed.storage_location).await.unwrap();
+        let raw_source_uri = processed.raw_source_uri.as_ref().unwrap();
+        let raw_html = storage.retrieve(raw_source_uri).await.unwrap();
+        assert_eq!(raw_html, html.as_bytes());
+        assert!(raw_source_uri.ends_with(".html"));
+        assert!(processed.raw_data_uri.ends_with(".txt"));
+        assert_ne!(processed.raw_data_uri, *raw_source_uri);
+
+        let stored = storage.retrieve(&processed.raw_data_uri).await.unwrap();
         let stored_text = String::from_utf8(stored).unwrap();
         assert!(stored_text.contains("Visible text"));
         assert!(!stored_text.contains("<html>"));
+        assert!(!stored_text.contains("hidden()"));
+        assert!(!stored_text.contains("display:none"));
         assert_eq!(processed.stored_extension, "txt");
         assert_eq!(processed.stored_mime_type, "text/plain");
         assert_eq!(processed.original_extension, "html");
         assert_eq!(processed.original_mime_type, "text/html");
         assert_eq!(processed.loader_engine, "beautiful_soup_loader");
-        assert_eq!(processed.original_location, url);
+        assert_eq!(processed.original_location, *raw_source_uri);
+
+        let metadata: serde_json::Value =
+            serde_json::from_str(processed.external_metadata.as_ref().unwrap()).unwrap();
+        assert_eq!(metadata["source"], "url");
+        assert_eq!(metadata["url"], url);
+        assert_eq!(metadata["final_url"], url);
+        assert_eq!(metadata["content_type"], "text/html; charset=utf-8");
+        assert_eq!(metadata["title"], "Example");
     }
 
     #[tokio::test]
-    async fn test_persist_data_url_html_uses_stored_type_and_preserves_source_type() {
+    async fn test_persist_data_url_html_uses_text_payload_and_raw_html_original_location() {
         let mut server = server_with_robots().await;
         let url = format!("{}/page", server.url());
+        let html = "<html><head><title>XHTML</title></head><body>XHTML body</body></html>";
         let _mock = server
             .mock("GET", "/page")
             .with_header("content-type", "application/xhtml+xml")
-            .with_body("<html><body>XHTML body</body></html>")
+            .with_body(html)
             .create_async()
             .await;
         let db = connect("sqlite::memory:").await.unwrap();
@@ -1134,12 +1258,163 @@ mod tests {
 
         assert_eq!(data.extension, "txt");
         assert_eq!(data.mime_type, "text/plain");
+        assert!(data.raw_data_location.ends_with(".txt"));
+        assert!(data.original_data_location.ends_with(".html"));
+        assert_ne!(data.raw_data_location, data.original_data_location);
+        assert_eq!(
+            storage
+                .retrieve(&data.original_data_location)
+                .await
+                .unwrap(),
+            html.as_bytes()
+        );
         assert_eq!(data.original_extension.as_deref(), Some("html"));
         assert_eq!(
             data.original_mime_type.as_deref(),
             Some("application/xhtml+xml")
         );
         assert_eq!(data.loader_engine.as_deref(), Some("beautiful_soup_loader"));
+    }
+
+    #[tokio::test]
+    async fn test_data_item_url_merges_metadata_and_preserves_label() {
+        let mut server = server_with_robots().await;
+        let url = format!("{}/wrapped", server.url());
+        let _mock = server
+            .mock("GET", "/wrapped")
+            .with_header("content-type", "text/html")
+            .with_body("<html><head><title>Wrapped</title></head><body>Wrapped body</body></html>")
+            .create_async()
+            .await;
+        let db = connect("sqlite::memory:").await.unwrap();
+        initialize(&db).await.unwrap();
+        let temp_dir = tempfile::tempdir().unwrap();
+        let storage = LocalStorage::new(temp_dir.path().to_path_buf());
+        let owner_id = Uuid::new_v4();
+        let processed = process_input(
+            &DataInput::DataItem {
+                data: Box::new(DataInput::Url(url.clone())),
+                label: "wrapped-label".to_string(),
+                external_metadata: Some(r#"{"custom":"keep","rank":7}"#.to_string()),
+            },
+            &storage,
+            HashAlgorithm::Md5,
+            owner_id,
+            None,
+        )
+        .await
+        .unwrap();
+        let data = persist_data(&processed, &db, "wrapped-url", owner_id, None)
+            .await
+            .unwrap();
+
+        assert_eq!(data.label.as_deref(), Some("wrapped-label"));
+        assert_eq!(data.extension, "txt");
+        assert!(data.original_data_location.ends_with(".html"));
+        let metadata: serde_json::Value =
+            serde_json::from_str(data.external_metadata.as_ref().unwrap()).unwrap();
+        assert_eq!(metadata["custom"], "keep");
+        assert_eq!(metadata["rank"], 7);
+        assert_eq!(metadata["source"], "url");
+        assert_eq!(metadata["url"], url);
+        assert_eq!(metadata["final_url"], url);
+        assert_eq!(metadata["content_type"], "text/html");
+        assert_eq!(metadata["title"], "Wrapped");
+    }
+
+    #[tokio::test]
+    async fn test_data_item_url_invalid_or_non_object_metadata_preserved_under_raw_field() {
+        let mut server = server_with_robots().await;
+        let cases = [
+            ("/invalid-meta", "not-json"),
+            ("/non-object-meta", r#"["not","an","object"]"#),
+        ];
+
+        for (path, user_metadata) in cases {
+            let url = format!("{}{}", server.url(), path);
+            let _mock = server
+                .mock("GET", path)
+                .with_header("content-type", "text/html")
+                .with_body("<html><body>Metadata body</body></html>")
+                .create_async()
+                .await;
+            let temp_dir = tempfile::tempdir().unwrap();
+            let storage = LocalStorage::new(temp_dir.path().to_path_buf());
+            let owner_id = Uuid::new_v4();
+
+            let processed = process_input(
+                &DataInput::DataItem {
+                    data: Box::new(DataInput::Url(url.clone())),
+                    label: "invalid-meta".to_string(),
+                    external_metadata: Some(user_metadata.to_string()),
+                },
+                &storage,
+                HashAlgorithm::Md5,
+                owner_id,
+                None,
+            )
+            .await
+            .unwrap();
+
+            let metadata: serde_json::Value =
+                serde_json::from_str(processed.external_metadata.as_ref().unwrap()).unwrap();
+            assert_eq!(metadata["data_item_external_metadata_raw"], user_metadata);
+            assert_eq!(metadata["source"], "url");
+            assert_eq!(metadata["url"], url);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_non_html_url_inputs_do_not_store_raw_source_copy() {
+        let mut server = server_with_robots().await;
+        let cases = [
+            ("/plain", "text/plain", "plain body", "txt", "text/plain"),
+            (
+                "/json",
+                "application/json",
+                r#"{"hello":"world"}"#,
+                "json",
+                "application/json",
+            ),
+            ("/csv", "text/csv", "a,b\n1,2\n", "csv", "text/csv"),
+            (
+                "/pdf",
+                "application/pdf",
+                "%PDF-1.7\n",
+                "pdf",
+                "application/pdf",
+            ),
+        ];
+
+        for (path, content_type, body, expected_ext, expected_mime) in cases {
+            let url = format!("{}{}", server.url(), path);
+            let _mock = server
+                .mock("GET", path)
+                .with_header("content-type", content_type)
+                .with_body(body)
+                .create_async()
+                .await;
+            let temp_dir = tempfile::tempdir().unwrap();
+            let storage = LocalStorage::new(temp_dir.path().to_path_buf());
+            let processed = process_input(
+                &DataInput::Url(url.clone()),
+                &storage,
+                HashAlgorithm::Md5,
+                Uuid::new_v4(),
+                None,
+            )
+            .await
+            .unwrap();
+
+            assert_eq!(processed.raw_source_uri, None);
+            assert_eq!(processed.original_location, url);
+            assert_eq!(processed.stored_extension, expected_ext);
+            assert_eq!(processed.stored_mime_type, expected_mime);
+            assert_eq!(
+                storage.retrieve(&processed.raw_data_uri).await.unwrap(),
+                body.as_bytes()
+            );
+        }
     }
 
     #[tokio::test]
