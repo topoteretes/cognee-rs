@@ -1,0 +1,10 @@
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix : <http://test.cognee.ai/ontology#> .
+
+:ZetaDomainRoot a owl:Class ;
+    rdfs:label "ZetaDomainRoot" .
+
+:Algorithm a owl:Class ;
+    rdfs:subClassOf :ZetaDomainRoot ;
+    rdfs:label "Algorithm" .

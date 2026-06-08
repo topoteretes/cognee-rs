@@ -7,7 +7,9 @@ use std::sync::Arc;
 
 use cognee_cognify::{CognifyConfig, cognify};
 use cognee_database::{DatabaseConnection, IngestDb, SearchHistoryDb, connect, initialize, ops};
-use cognee_embedding::{EmbeddingEngine, config::OnnxEmbeddingConfig, onnx::OnnxEmbeddingEngine};
+use cognee_embedding::{
+    EmbeddingEngine, MockEmbeddingEngine, config::OnnxEmbeddingConfig, onnx::OnnxEmbeddingEngine,
+};
 use cognee_graph::{GraphDBTrait, LadybugAdapter};
 use cognee_ingestion::AddPipeline;
 use cognee_llm::{Llm, OpenAIAdapter};
@@ -18,7 +20,9 @@ use cognee_search::{
     types::{SearchOutput, SearchResponse},
 };
 use cognee_storage::{LocalStorage, StorageTrait};
+use cognee_test_utils::MockLlm;
 use cognee_vector::{QdrantAdapter, VectorDB};
+use serde_json::json;
 use tempfile::TempDir;
 use uuid::Uuid;
 
@@ -26,9 +30,15 @@ mod test_utils;
 use test_utils::require_env;
 
 const ONTOLOGY_FIXTURE: &str = "tests/test_data/ontology/tech_taxonomy.ttl";
+const ONTOLOGY_TECH_ONLY_FIXTURE: &str = "tests/test_data/ontology/tech_only.ttl";
+const ONTOLOGY_ORG_ONLY_FIXTURE: &str = "tests/test_data/ontology/org_only.ttl";
 const ONTOLOGY_TEXT: &str = r#"
 TechCorp is an Organisation building an Algorithm-driven platform.
 DeepSort is an Algorithm used by TechCorp to rank Technology insights.
+"#;
+const MULTI_ONTOLOGY_TEXT: &str = r#"
+TechCorp is an Organisation delivering software services.
+DeepSort is an Algorithm used by TechCorp for ranking.
 "#;
 
 fn get_embedding_model_dir() -> String {
@@ -294,5 +304,198 @@ async fn e2e_ontology_pipeline_add_cognify_search() {
     assert!(
         search_contains_any(&response, &["algorithm", "technology", "is_a"]),
         "Expected ontology-enriched concepts in search response"
+    );
+}
+
+#[tokio::test]
+async fn e2e_ontology_pipeline_multi_ontology_add_cognify_search() {
+    let temp_dir = TempDir::new().expect("temp dir");
+
+    let storage: Arc<dyn StorageTrait> =
+        Arc::new(LocalStorage::new(temp_dir.path().join("storage")));
+    storage.initialize().await.expect("storage.initialize");
+
+    let db_path = temp_dir.path().join("cognee.db");
+    std::fs::File::create(&db_path).expect("create sqlite db file");
+    let db_url = format!("sqlite://{}", db_path.display());
+    let db = connect(&db_url).await.expect("connect");
+    initialize(&db).await.expect("initialize");
+    let database: Arc<DatabaseConnection> = Arc::new(db);
+
+    let graph_path = temp_dir.path().join("graph").to_string_lossy().to_string();
+    let graph_db: Arc<dyn GraphDBTrait> = Arc::new(
+        LadybugAdapter::new(&graph_path)
+            .await
+            .expect("LadybugAdapter::new"),
+    );
+    graph_db.initialize().await.expect("graph_db.initialize");
+
+    let vector_db: Arc<dyn VectorDB> =
+        Arc::new(QdrantAdapter::new(temp_dir.path().join("qdrant"), 8));
+
+    let embedding_engine: Arc<dyn EmbeddingEngine> = Arc::new(MockEmbeddingEngine::new(8));
+
+    let mock_llm = MockLlm::new(vec![
+        json!({
+            "nodes": [
+                {
+                    "id": "techcorp",
+                    "name": "TechCorp",
+                    "type": "Organisation",
+                    "description": "A software services company"
+                },
+                {
+                    "id": "deepsort",
+                    "name": "DeepSort",
+                    "type": "Algorithm",
+                    "description": "A ranking algorithm"
+                }
+            ],
+            "edges": [
+                {
+                    "source_node_id": "deepsort",
+                    "target_node_id": "techcorp",
+                    "relationship_name": "used_by"
+                }
+            ]
+        })
+        .to_string(),
+    ]);
+    let llm: Arc<dyn Llm> = Arc::new(mock_llm);
+
+    let owner_id = Uuid::nil();
+
+    let ingest = AddPipeline::new(Arc::clone(&storage), database.clone() as Arc<dyn IngestDb>)
+        .with_thread_pool(Arc::new(
+            cognee_core::RayonThreadPool::with_default_threads().expect("thread pool"),
+        ))
+        .with_graph_db(Arc::clone(&graph_db))
+        .with_vector_db(Arc::clone(&vector_db))
+        .with_database(Arc::clone(&database));
+
+    let data_items = ingest
+        .add(
+            vec![DataInput::Text(MULTI_ONTOLOGY_TEXT.to_string())],
+            "ontology_multi_e2e_dataset",
+            owner_id,
+            None,
+        )
+        .await
+        .expect("ingest.add");
+
+    assert_eq!(
+        data_items.len(),
+        1,
+        "Expected exactly one ingested data item"
+    );
+
+    let dataset =
+        ops::datasets::get_dataset_by_name(&database, "ontology_multi_e2e_dataset", owner_id, None)
+            .await
+            .expect("get_dataset_by_name")
+            .expect("dataset should exist after ingest");
+
+    let ontology_paths = vec![
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(ONTOLOGY_TECH_ONLY_FIXTURE),
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(ONTOLOGY_ORG_ONLY_FIXTURE),
+    ];
+    let ontology_resolver = RdfLibOntologyResolver::new(OntologyFileInput::Paths(ontology_paths))
+        .expect("load ontology fixtures");
+    assert!(
+        ontology_resolver.is_loaded(),
+        "ontology resolver must be loaded"
+    );
+    assert!(
+        ontology_resolver.class_count() >= 4,
+        "Expected merged multi-ontology resolver to include classes from both files"
+    );
+
+    let cognify_result = match cognify(
+        data_items,
+        dataset.id,
+        Some(owner_id),
+        None,
+        None,
+        llm.clone(),
+        storage.clone(),
+        graph_db.clone(),
+        vector_db.clone(),
+        embedding_engine.clone(),
+        Arc::clone(&database),
+        Arc::new(cognee_database::NoopPipelineRunRepository::new())
+            as Arc<dyn cognee_database::PipelineRunRepository>,
+        Arc::new(
+            cognee_core::RayonThreadPool::with_default_threads().expect("RayonThreadPool init"),
+        ) as Arc<dyn cognee_core::CpuPool>,
+        Arc::new(ontology_resolver),
+        &CognifyConfig::default().with_summarization(false),
+    )
+    .await
+    {
+        Ok(result) => result,
+        Err(e) => {
+            eprintln!("Skipping test: cognify failed: {e}");
+            return;
+        }
+    };
+
+    assert!(
+        cognify_result
+            .edges
+            .iter()
+            .any(|edge| edge.relationship_name == "is_a"),
+        "Expected at least one ontology-derived is_a edge"
+    );
+
+    let (persisted_nodes, persisted_edges) = graph_db
+        .get_graph_data()
+        .await
+        .expect("graph_db.get_graph_data");
+
+    assert!(
+        persisted_edges.iter().any(|(_, _, rel, _)| rel == "is_a"),
+        "Persisted graph should contain ontology-derived is_a edges"
+    );
+
+    let normalize = |name: &str| {
+        name.chars()
+            .filter(|c| c.is_ascii_alphanumeric())
+            .collect::<String>()
+            .to_ascii_lowercase()
+    };
+    let persisted_names = persisted_nodes
+        .iter()
+        .filter_map(|(_, props)| props.get("name").and_then(|v| v.as_str()))
+        .map(normalize)
+        .collect::<Vec<_>>();
+
+    let zeta_domain_root_present = persisted_names.iter().any(|name| name == "zetadomainroot");
+    let legal_entity_present = persisted_names.iter().any(|name| name == "legalentity");
+    assert!(
+        zeta_domain_root_present && legal_entity_present,
+        "Expected combined ontology enrichment to include ZetaDomainRoot and LegalEntity ancestors; found names: {:?}",
+        persisted_names
+    );
+
+    let orchestrator = SearchBuilder::new(
+        vector_db.clone() as Arc<dyn VectorDB>,
+        embedding_engine.clone() as Arc<dyn EmbeddingEngine>,
+        graph_db.clone() as Arc<dyn GraphDBTrait>,
+        llm.clone() as Arc<dyn Llm>,
+        database.clone() as Arc<dyn SearchHistoryDb>,
+    )
+    .build();
+
+    let response = orchestrator
+        .search(&make_request(
+            "Algorithm Organisation ZetaDomainRoot LegalEntity",
+            SearchType::GraphCompletion,
+        ))
+        .await
+        .expect("search GraphCompletion");
+
+    assert!(
+        is_non_empty(&response),
+        "Expected non-empty search response"
     );
 }

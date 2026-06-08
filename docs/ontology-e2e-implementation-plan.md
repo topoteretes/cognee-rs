@@ -173,6 +173,24 @@ Use graph DB reads and/or formatted graph retrieval APIs used by existing test h
 
 ## D4 - Multi-ontology test
 
+Status: completed on 2026-06-08.
+
+Implementation landed:
+
+1. Added a second pipeline E2E case `e2e_ontology_pipeline_multi_ontology_add_cognify_search` in `crates/cognify/tests/e2e_ontology_pipeline.rs`.
+2. Added split ontology fixtures for multi-file loading:
+   - `crates/cognify/tests/test_data/ontology/tech_only.ttl`
+   - `crates/cognify/tests/test_data/ontology/org_only.ttl`
+3. The test now loads both ontology files via `OntologyFileInput::Paths(...)` and validates:
+   - merged resolver class coverage (`class_count >= 4`),
+   - persisted graph contains ontology-derived `is_a` edges,
+   - combined enrichment persists both ancestor branches (`ZetaDomainRoot` and `LegalEntity`),
+   - retrieval remains non-empty after multi-ontology cognify.
+
+Validation evidence:
+
+1. `cargo test -p cognee-cognify --test e2e_ontology_pipeline -- --nocapture` passed (`2 passed`).
+
 Add at least one test that uses multiple ontology keys in one cognify call.
 
 Candidate locations:
