@@ -4,6 +4,7 @@
 //! Python parity: `cognee/api/v1/cognify/routers/get_cognify_router.py`.
 
 use std::collections::HashMap;
+use std::io::Cursor;
 use std::sync::Arc;
 
 use axum::{
@@ -15,7 +16,9 @@ use axum::{
 };
 use cognee_cognify::{ChunkStrategy, CognifyConfig, cognify as run_cognify};
 use cognee_database::{IngestDb, NoopPipelineRunRepository, UserDb, ops as db_ops};
-use cognee_ontology::{NoOpOntologyResolver, OntologyResolver};
+use cognee_ontology::{
+    NoOpOntologyResolver, OntologyFileInput, OntologyResolver, RdfLibOntologyResolver,
+};
 use serde_json::json;
 use uuid::Uuid;
 
@@ -125,6 +128,27 @@ pub async fn post_cognify(
 
     let run_in_background = payload.run_in_background.unwrap_or(false);
 
+    // Build a request-scoped ontology resolver from explicit payload keys.
+    // If keys are provided and any key is unknown, return a non-200 error
+    // instead of silently falling back to the no-op resolver.
+    let request_ontology_resolver = if payload.ontology_key.is_some() {
+        let manager = state
+            .components()
+            .ok_or_else(|| {
+                ApiError::OntologyEnvelope(
+                    "components not initialized".into(),
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                )
+            })?
+            .ontology_manager
+            .clone();
+
+        resolve_request_ontology_resolver(&manager, user.id, payload.ontology_key.as_deref())
+            .await?
+    } else {
+        None
+    };
+
     // ── Build CognifyConfig from payload overrides ─────────────────────────────
     // Mirrors the CLI's defaults: ChunkStrategy::Paragraph, default
     // chunks_per_batch unless overridden, optional custom_prompt.
@@ -145,6 +169,14 @@ pub async fn post_cognify(
         let components = state.components();
         let user_for_run = user.clone();
         let config_for_run = Arc::clone(&cognify_config);
+        let ontology_resolver_for_run: Arc<dyn OntologyResolver> =
+            if let Some(ref resolver) = request_ontology_resolver {
+                Arc::clone(resolver)
+            } else {
+                components
+                    .and_then(|c| c.ontology_resolver.clone())
+                    .unwrap_or_else(|| Arc::new(NoOpOntologyResolver::new()))
+            };
         let components_owned = components.cloned();
 
         let work = box_pipeline_future(async move {
@@ -153,7 +185,14 @@ pub async fn post_cognify(
                     "Component handles not initialized; cannot run cognify pipeline".to_string(),
                 ));
             };
-            run_real_cognify(&components, &user_for_run, dataset_id, &config_for_run).await
+            run_real_cognify(
+                &components,
+                &user_for_run,
+                dataset_id,
+                &config_for_run,
+                ontology_resolver_for_run,
+            )
+            .await
         });
 
         match dispatch_pipeline(
@@ -256,6 +295,68 @@ pub async fn post_cognify(
     Ok((StatusCode::OK, Json(response)))
 }
 
+/// Build a per-request ontology resolver from explicit payload keys.
+///
+/// Guarantees user scoping (`user_id`) and key scoping (only provided keys).
+/// Unknown keys are returned as a non-200 API error.
+async fn resolve_request_ontology_resolver(
+    manager: &cognee_ontology::OntologyManager,
+    user_id: Uuid,
+    ontology_keys: Option<&[String]>,
+) -> Result<Option<Arc<dyn OntologyResolver>>, ApiError> {
+    let Some(keys) = ontology_keys else {
+        return Ok(None);
+    };
+
+    let normalized_keys: Vec<String> = keys
+        .iter()
+        .map(|k| k.trim().to_owned())
+        .filter(|k| !k.is_empty())
+        .collect();
+
+    if normalized_keys.is_empty() {
+        return Ok(None);
+    }
+
+    let key_refs: Vec<&str> = normalized_keys.iter().map(|k| k.as_str()).collect();
+    let contents = manager
+        .get_contents_batch(user_id, &key_refs)
+        .await
+        .map_err(|e| match e {
+            cognee_ontology::OntologyError::NotFound(msg) => {
+                ApiError::OntologyEnvelope(msg, StatusCode::NOT_FOUND)
+            }
+            cognee_ontology::OntologyError::InvalidFormat(msg) => {
+                ApiError::OntologyEnvelope(msg, StatusCode::BAD_REQUEST)
+            }
+            other => {
+                ApiError::OntologyEnvelope(other.to_string(), StatusCode::INTERNAL_SERVER_ERROR)
+            }
+        })?;
+
+    let readers: Vec<Box<dyn std::io::Read>> = contents
+        .into_iter()
+        .map(|bytes| Box::new(Cursor::new(bytes)) as Box<dyn std::io::Read>)
+        .collect();
+
+    let resolver =
+        RdfLibOntologyResolver::new(OntologyFileInput::Readers(readers)).map_err(|e| {
+            ApiError::OntologyEnvelope(
+                format!("Failed to construct ontology resolver: {e}"),
+                StatusCode::BAD_REQUEST,
+            )
+        })?;
+
+    if !resolver.is_loaded() {
+        return Err(ApiError::OntologyEnvelope(
+            "No valid ontology content could be loaded for the provided ontology keys".into(),
+            StatusCode::BAD_REQUEST,
+        ));
+    }
+
+    Ok(Some(Arc::new(resolver)))
+}
+
 // ─── Cognify execution helpers ───────────────────────────────────────────────
 
 /// Boxed-future-compatible error type for the cognify pipeline path.
@@ -287,6 +388,7 @@ async fn run_real_cognify(
     user: &AuthenticatedUser,
     dataset_id: Uuid,
     config: &CognifyConfig,
+    ontology_resolver: Arc<dyn OntologyResolver>,
 ) -> Result<(), CognifyDispatchError> {
     // ── Pull required backend handles ─────────────────────────────────────────
     let llm = components
@@ -311,13 +413,6 @@ async fn run_real_cognify(
 
     let storage = components.storage.clone();
     let database = components.database.clone();
-    // Default to a pass-through resolver when no ontology is configured — same
-    // behaviour as the CLI's `--ontology-file` fallback.
-    let ontology_resolver: Arc<dyn OntologyResolver> = components
-        .ontology_resolver
-        .clone()
-        .unwrap_or_else(|| Arc::new(NoOpOntologyResolver::new()));
-
     // ── Resolve dataset data rows ─────────────────────────────────────────────
     let data_items = db_ops::datasets::get_dataset_data(&database, dataset_id)
         .await
@@ -524,6 +619,7 @@ mod tests {
         http::{Request, StatusCode, header},
     };
     use serde_json::json;
+    use tempfile::tempdir;
     use tower::ServiceExt;
 
     /// Build a minimal app state without backends for validation tests.
@@ -763,5 +859,62 @@ mod tests {
             v.get("name_that_should_be_ignored").is_none(),
             "datasets list must be ignored when dataset_ids is present"
         );
+    }
+
+    #[tokio::test]
+    async fn resolve_request_ontology_resolver_unknown_key_returns_not_found() {
+        let dir = tempdir().expect("tempdir");
+        let manager = cognee_ontology::OntologyManager::new(dir.path());
+        let user_id = Uuid::new_v4();
+
+        let result = resolve_request_ontology_resolver(
+            &manager,
+            user_id,
+            Some(&["missing-key".to_string()]),
+        )
+        .await;
+
+        match result {
+            Err(ApiError::OntologyEnvelope(msg, status)) => {
+                assert_eq!(status, StatusCode::NOT_FOUND);
+                assert!(msg.contains("missing-key") || msg.contains("not found"));
+            }
+            Err(other) => panic!("expected OntologyEnvelope 404, got {other:?}"),
+            Ok(_) => panic!("expected error for missing ontology key"),
+        }
+    }
+
+    #[tokio::test]
+    async fn resolve_request_ontology_resolver_is_user_scoped() {
+        let dir = tempdir().expect("tempdir");
+        let manager = cognee_ontology::OntologyManager::new(dir.path());
+
+        let user_with_upload = Uuid::new_v4();
+        let other_user = Uuid::new_v4();
+        let ontology = br#"@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+<http://example.org/Vehicle> a owl:Class ;
+    rdfs:label \"Vehicle\" .
+"#;
+
+        manager
+            .upload(user_with_upload, "vehicles", "vehicles.ttl", ontology, None)
+            .await
+            .expect("upload ontology");
+
+        let result = resolve_request_ontology_resolver(
+            &manager,
+            other_user,
+            Some(&["vehicles".to_string()]),
+        )
+        .await;
+
+        match result {
+            Err(ApiError::OntologyEnvelope(_, status)) => {
+                assert_eq!(status, StatusCode::NOT_FOUND);
+            }
+            Err(other) => panic!("expected OntologyEnvelope 404, got {other:?}"),
+            Ok(_) => panic!("expected user-scoped key lookup to fail"),
+        }
     }
 }
