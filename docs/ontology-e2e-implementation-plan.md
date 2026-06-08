@@ -206,6 +206,27 @@ Core assertions:
 
 ## D5 - Cross-SDK parity tests
 
+Status: implemented on 2026-06-08; runtime validation currently blocked by existing HTTP harness startup failure.
+
+Implementation landed:
+
+1. Added `e2e-cross-sdk/harness/test_http_ontology.py` covering cross-SDK ontology parity flow:
+   - upload ontology (`POST /api/v1/ontologies`),
+   - add dataset (`POST /api/v1/add`),
+   - cognify with `ontologyKey` (`POST /api/v1/cognify`),
+   - ontology-aware retrieval checks (`POST /api/v1/search`).
+2. Added negative parity assertion for unknown ontology key (`404` on both servers).
+3. Added tolerant semantic checks for ontology concepts in search payloads instead of strict LLM-text equality.
+
+Validation evidence:
+
+1. Syntax check passed: `python3 -m py_compile e2e-cross-sdk/harness/test_http_ontology.py`.
+2. Containerized run attempted twice via:
+   - `docker compose run --rm e2e-http-tests pytest -q /harness/test_http_ontology.py`
+3. Both attempts were blocked before pytest execution by existing harness startup issue:
+   - Python server health probe timeout (`http://127.0.0.1:8000/health`),
+   - startup logs show unrelated Python migration failure in packaged env (`sqlalchemy.exc.NoSuchTableError: acls`) before timeout.
+
 Add parity scenario in:
 
 - `e2e-cross-sdk/harness/`
