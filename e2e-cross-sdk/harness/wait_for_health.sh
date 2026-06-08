@@ -9,7 +9,18 @@ set -euo pipefail
 URL="${1:?Usage: wait_for_health.sh <url>}"
 
 for i in $(seq 1 60); do
-    if curl -fsS --max-time 1 "$URL" > /dev/null 2>&1; then
+    if python - "$URL" <<'PY'
+import sys
+import urllib.request
+
+url = sys.argv[1]
+try:
+    with urllib.request.urlopen(url, timeout=1) as resp:
+        raise SystemExit(0 if resp.status == 200 else 1)
+except Exception:
+    raise SystemExit(1)
+PY
+    then
         echo "[wait_for_health] $URL is healthy (attempt $i)"
         exit 0
     fi

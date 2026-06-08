@@ -206,7 +206,7 @@ Core assertions:
 
 ## D5 - Cross-SDK parity tests
 
-Status: implemented on 2026-06-08; runtime validation currently blocked by existing HTTP harness startup failure.
+Status: implemented on 2026-06-08; runtime validation blocked pending rebuilt e2e HTTP image.
 
 Implementation landed:
 
@@ -217,15 +217,16 @@ Implementation landed:
    - ontology-aware retrieval checks (`POST /api/v1/search`).
 2. Added negative parity assertion for unknown ontology key (`404` on both servers).
 3. Added tolerant semantic checks for ontology concepts in search payloads instead of strict LLM-text equality.
+4. Fixed harness health-probe dependency issue in `e2e-cross-sdk/harness/wait_for_health.sh` by replacing `curl` with a Python stdlib probe so startup no longer depends on `curl` being installed in the image.
 
 Validation evidence:
 
 1. Syntax check passed: `python3 -m py_compile e2e-cross-sdk/harness/test_http_ontology.py`.
 2. Containerized run attempted twice via:
    - `docker compose run --rm e2e-http-tests pytest -q /harness/test_http_ontology.py`
-3. Both attempts were blocked before pytest execution by existing harness startup issue:
-   - Python server health probe timeout (`http://127.0.0.1:8000/health`),
-   - startup logs show unrelated Python migration failure in packaged env (`sqlalchemy.exc.NoSuchTableError: acls`) before timeout.
+3. Root cause identified for health timeout: harness readiness script used `curl`, but the e2e harness image does not install `curl`.
+4. Fix applied in-repo (`wait_for_health.sh` uses Python stdlib HTTP probe now).
+5. Full runtime re-validation is pending completion of rebuilt `e2e-http-tests` image.
 
 Add parity scenario in:
 
