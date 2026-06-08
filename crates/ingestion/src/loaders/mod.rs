@@ -200,4 +200,70 @@ mod tests {
         let loader = registry.get("text");
         assert!(loader.is_some());
     }
+
+    /// Verify that an `ImageLoader` can be registered under "image" and is
+    /// discoverable by `get("image")` with the correct engine name.
+    #[cfg(feature = "image-loader")]
+    #[test]
+    fn test_registry_has_image_loader() {
+        use std::sync::Arc;
+
+        use cognee_test_utils::MockLlm;
+
+        use super::image::ImageLoader;
+
+        let mock_llm = Arc::new(MockLlm::empty());
+        let image_loader = ImageLoader::new(mock_llm);
+
+        let mut registry = LoaderRegistry::default_registry();
+        registry.register("image", Arc::new(image_loader));
+
+        let loader = registry.get("image");
+        assert!(
+            loader.is_some(),
+            "registry must contain an \"image\" loader"
+        );
+        assert_eq!(
+            loader.expect("just checked is_some").engine_name(),
+            "image_loader",
+            "ImageLoader engine_name must be \"image_loader\""
+        );
+    }
+
+    /// Verify that an `AudioLoader` can be registered under "audio" and is
+    /// discoverable by `get("audio")` with the correct engine name.
+    #[cfg(feature = "audio-loader")]
+    #[test]
+    fn test_registry_has_audio_loader() {
+        use std::sync::Arc;
+
+        use cognee_llm::TranscriptionOutput;
+        use cognee_test_utils::MockTranscriber;
+
+        use super::audio::AudioLoader;
+
+        let mock_transcriber = Arc::new(MockTranscriber::new(
+            "mock-whisper",
+            vec![TranscriptionOutput {
+                text: "hello".to_string(),
+                language: None,
+                duration: None,
+            }],
+        ));
+        let audio_loader = AudioLoader::new(mock_transcriber);
+
+        let mut registry = LoaderRegistry::default_registry();
+        registry.register("audio", Arc::new(audio_loader));
+
+        let loader = registry.get("audio");
+        assert!(
+            loader.is_some(),
+            "registry must contain an \"audio\" loader"
+        );
+        assert_eq!(
+            loader.expect("just checked is_some").engine_name(),
+            "audio_loader",
+            "AudioLoader engine_name must be \"audio_loader\""
+        );
+    }
 }

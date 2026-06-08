@@ -4114,4 +4114,144 @@ mod tests {
         // All chunks (both DLT and non-DLT) are still passed through.
         assert_eq!(result.chunks.len(), 2);
     }
+
+    /// Regression guard: an image document must produce ≥1 chunk and must NOT
+    /// return `CognifyError::UnsupportedDocumentType`.
+    #[cfg(feature = "image-loader")]
+    #[tokio::test]
+    async fn test_image_document_produces_chunks() {
+        use cognee_ingestion::loaders::image::ImageLoader;
+        use cognee_test_utils::MockLlm;
+
+        let storage = Arc::new(MockStorage::new());
+        // Store fake image bytes so the loader can retrieve them.
+        let location = storage
+            .store(b"fake-image-bytes", "test.jpg")
+            .await
+            .expect("MockStorage store should succeed");
+
+        let doc_id = Uuid::new_v4();
+        let mut base = DataPoint::new("ImageDocument", None);
+        base.id = doc_id;
+        base.set_metadata("index_fields", serde_json::json!(["name"]));
+        let doc = Document {
+            base,
+            document_type: "image".to_string(),
+            name: "test.jpg".to_string(),
+            raw_data_location: location,
+            mime_type: "image/jpeg".to_string(),
+            extension: "jpg".to_string(),
+            data_id: doc_id,
+            external_metadata: None,
+        };
+
+        let input = ClassifiedDocuments {
+            documents: vec![doc],
+            dataset_id: Uuid::new_v4(),
+            user_id: None,
+            tenant_id: None,
+        };
+
+        // Build a registry that contains an ImageLoader backed by a MockLlm
+        // that returns a vision description.
+        let mock_llm = Arc::new(
+            MockLlm::new(vec![])
+                .with_vision_responses(vec!["An image description for testing.".to_string()]),
+        );
+        let mut registry = LoaderRegistry::default();
+        registry.register("image", Arc::new(ImageLoader::new(mock_llm)));
+
+        let result = extract_chunks_from_documents(
+            &input,
+            &*storage,
+            100,
+            TokenCounterKind::Word,
+            None,
+            &registry,
+        )
+        .await;
+
+        // Must not be UnsupportedDocumentType — that is the regression we guard.
+        assert!(
+            !matches!(result, Err(CognifyError::UnsupportedDocumentType(_))),
+            "image document must not produce UnsupportedDocumentType"
+        );
+        let chunks = result.expect("extract_chunks_from_documents should succeed for image docs");
+        assert!(
+            !chunks.chunks.is_empty(),
+            "image document should produce at least one chunk"
+        );
+    }
+
+    /// Regression guard: an audio document must produce ≥1 chunk and must NOT
+    /// return `CognifyError::UnsupportedDocumentType`.
+    #[cfg(feature = "audio-loader")]
+    #[tokio::test]
+    async fn test_audio_document_produces_chunks() {
+        use cognee_ingestion::loaders::audio::AudioLoader;
+        use cognee_llm::TranscriptionOutput;
+        use cognee_test_utils::MockTranscriber;
+
+        let storage = Arc::new(MockStorage::new());
+        // Store fake audio bytes so the loader can retrieve them.
+        let location = storage
+            .store(b"fake-audio-bytes", "test.mp3")
+            .await
+            .expect("MockStorage store should succeed");
+
+        let doc_id = Uuid::new_v4();
+        let mut base = DataPoint::new("AudioDocument", None);
+        base.id = doc_id;
+        base.set_metadata("index_fields", serde_json::json!(["name"]));
+        let doc = Document {
+            base,
+            document_type: "audio".to_string(),
+            name: "test.mp3".to_string(),
+            raw_data_location: location,
+            mime_type: "audio/mpeg".to_string(),
+            extension: "mp3".to_string(),
+            data_id: doc_id,
+            external_metadata: None,
+        };
+
+        let input = ClassifiedDocuments {
+            documents: vec![doc],
+            dataset_id: Uuid::new_v4(),
+            user_id: None,
+            tenant_id: None,
+        };
+
+        // Build a registry that contains an AudioLoader backed by a MockTranscriber.
+        let mock_transcriber = Arc::new(MockTranscriber::new(
+            "mock-whisper",
+            vec![TranscriptionOutput {
+                text: "Test transcript.".to_string(),
+                language: None,
+                duration: None,
+            }],
+        ));
+        let mut registry = LoaderRegistry::default();
+        registry.register("audio", Arc::new(AudioLoader::new(mock_transcriber)));
+
+        let result = extract_chunks_from_documents(
+            &input,
+            &*storage,
+            100,
+            TokenCounterKind::Word,
+            None,
+            &registry,
+        )
+        .await;
+
+        // Must not be UnsupportedDocumentType — that is the regression we guard.
+        assert!(
+            !matches!(result, Err(CognifyError::UnsupportedDocumentType(_))),
+            "audio document must not produce UnsupportedDocumentType"
+        );
+        let chunks = result.expect("extract_chunks_from_documents should succeed for audio docs");
+        assert!(
+            !chunks.chunks.is_empty(),
+            "audio document should produce at least one chunk"
+        );
+    }
 }

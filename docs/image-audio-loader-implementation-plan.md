@@ -1,6 +1,6 @@
 # Implementation Plan: Image & Audio Document Loaders
 
-Status: in progress (T1 done)
+Status: complete (T1–T7 done)
 Scope: close the only remaining **extraction** gap between the Rust and Python
 cognee SDKs — image and audio documents. Both are already *classified* correctly
 in Rust; they fail only at the extraction step because no loader is wired in.
@@ -392,7 +392,7 @@ already done.
 - [x] `audio.rs` loader (`Transcriber`, `audio_loader` engine name, format handling)
 - [x] Registry registers `image`/`audio` when handles + features present
 - [x] `CognifyConfig.transcriber: Option<Arc<dyn Transcriber>>` + wiring in `build_cognify_pipeline`
-- [ ] Audio format whitelist decision documented and enforced
-- [ ] Unit + integration tests (mock LLM / `MockTranscriber`)
+- [x] Audio format whitelist decision documented and enforced
+- [x] Unit + integration tests (mock LLM / `MockTranscriber`)
 - [x] Features added to `cognee-lib` / `cognee-cli` defaults
 - [x] `scripts/check_all.sh` green (fmt, check, clippy -D warnings, binding checks)
