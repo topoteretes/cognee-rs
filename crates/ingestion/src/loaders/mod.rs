@@ -4,6 +4,8 @@
 //! [`LoaderRegistry`] struct, and [`LoaderError`] type for routing
 //! document content through type-specific extraction logic.
 
+#[cfg(feature = "audio-loader")]
+pub mod audio;
 #[cfg(feature = "csv-loader")]
 pub mod csv_loader;
 #[cfg(feature = "image-loader")]

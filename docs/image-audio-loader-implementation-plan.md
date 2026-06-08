@@ -389,7 +389,7 @@ already done.
 
 - [x] `cognee-ingestion` gains optional `cognee-llm` dep + `image-loader`/`audio-loader` features
 - [x] `image.rs` loader (`transcribe_image`, `image_loader` engine name, `Text` output)
-- [ ] `audio.rs` loader (`Transcriber`, `audio_loader` engine name, format handling)
+- [x] `audio.rs` loader (`Transcriber`, `audio_loader` engine name, format handling)
 - [ ] Registry registers `image`/`audio` when handles + features present
 - [ ] `CognifyConfig.transcriber: Option<Arc<dyn Transcriber>>` + wiring in `build_cognify_pipeline`
 - [ ] Audio format whitelist decision documented and enforced
