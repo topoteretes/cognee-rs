@@ -68,6 +68,22 @@ Missing:
 
 ## D1 - Pipeline E2E test (Rust crate level)
 
+Status: completed on 2026-06-08.
+
+Implementation landed:
+
+1. Added `crates/cognify/tests/e2e_ontology_pipeline.rs`.
+2. Added ontology fixture `crates/cognify/tests/test_data/ontology/tech_taxonomy.ttl`.
+3. Assertions now cover:
+   - at least one ontology-valid entity type,
+   - ontology-derived `is_a` edges in result and persisted graph,
+   - persisted ancestor nodes (`Technology` or `LegalEntity`),
+   - ontology-enriched search discoverability (`GraphCompletion`).
+
+Validation evidence:
+
+1. `cargo test -p cognee-cognify --test e2e_ontology_pipeline -- --nocapture` passed.
+
 Create:
 
 - `crates/cognify/tests/e2e_ontology_pipeline.rs`
