@@ -109,6 +109,21 @@ Environment:
 
 ## D2 - HTTP integration E2E test (Rust HTTP server level)
 
+Status: completed on 2026-06-08.
+
+Implementation landed:
+
+1. Added `crates/http-server/tests/test_ontology_cognify_search_e2e.rs`.
+2. Test flow now covers:
+   - ontology upload via `POST /api/v1/ontologies`,
+   - blocking cognify with payload `ontologyKey` via `POST /api/v1/cognify`,
+   - retrieval check via `POST /api/v1/search`,
+   - negative unknown-key contract (`404`) for cognify.
+
+Validation evidence:
+
+1. `cargo test -p cognee-http-server --test test_ontology_cognify_search_e2e -- --nocapture` passed.
+
 Extend or add tests under:
 
 - `crates/http-server/tests/`
