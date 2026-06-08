@@ -19,6 +19,7 @@ use cognee_models::DataInput;
 use cognee_ontology::OntologyManager;
 use cognee_search::{SearchBuilder, SearchOrchestrator};
 use cognee_storage::{LocalStorage, StorageTrait};
+use cognee_test_utils::e2e_embedding_model_dir;
 use cognee_vector::{QdrantAdapter, VectorDB};
 use tempfile::TempDir;
 use tower::ServiceExt;
@@ -72,15 +73,6 @@ fn require_env(var_name: &str) -> String {
     panic!("Required environment variable '{var_name}' is not set");
 }
 
-fn get_embedding_model_dir() -> String {
-    if let Ok(model_path) = std::env::var("COGNEE_E2E_EMBED_MODEL_PATH")
-        && let Some(parent) = std::path::Path::new(&model_path).parent()
-    {
-        return parent.to_string_lossy().to_string();
-    }
-    "./target/models".to_string()
-}
-
 fn search_payload_contains_any_markers(payload: &serde_json::Value, markers: &[&str]) -> bool {
     let haystack = payload.to_string().to_ascii_lowercase();
     markers
@@ -93,7 +85,6 @@ async fn upload_cognify_search_with_ontology_key_and_unknown_key_negative() {
     let _ = require_env("OPENAI_URL");
     let _ = require_env("OPENAI_TOKEN");
     let _ = require_env("OPENAI_MODEL");
-    let _ = require_env("COGNEE_E2E_EMBED_MODEL_PATH");
 
     let temp_dir = TempDir::new().expect("temp dir");
 
@@ -119,12 +110,14 @@ async fn upload_cognify_search_with_ontology_key_and_unknown_key_negative() {
     let vector_db: Arc<dyn VectorDB> =
         Arc::new(QdrantAdapter::new(temp_dir.path().join("qdrant"), 384));
 
-    let model_dir = get_embedding_model_dir();
+    let model_dir = e2e_embedding_model_dir();
     let embedding_engine: Arc<dyn EmbeddingEngine> =
-        match OnnxEmbeddingEngine::new(OnnxEmbeddingConfig::bge_small(&model_dir)) {
+        match OnnxEmbeddingEngine::with_auto_download(OnnxEmbeddingConfig::bge_small(&model_dir))
+            .await
+        {
             Ok(engine) => Arc::new(engine),
             Err(e) => {
-                eprintln!("Skipping test: failed to load embedding model: {e}");
+                eprintln!("Skipping test: failed to prepare embedding model: {e}");
                 return;
             }
         };

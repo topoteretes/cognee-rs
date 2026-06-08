@@ -15,7 +15,7 @@ pub mod mock_transcriber;
 pub mod mock_user_db;
 pub mod span_capture;
 
-use std::sync::Arc;
+use std::{path::PathBuf, sync::Arc};
 
 use cognee_core::{CancellationHandle, RayonThreadPool, TaskContext, TaskContextBuilder};
 use cognee_database::DatabaseConnection;
@@ -30,6 +30,35 @@ pub use mock_tenant_db::MockTenantDb;
 pub use mock_transcriber::MockTranscriber;
 pub use mock_user_db::MockUserDb;
 pub use span_capture::{CapturedSpan, SpanCapture, SpanCaptureGuard};
+
+/// Resolve the directory used for local ONNX embedding artifacts in E2E tests.
+///
+/// Precedence:
+/// 1. Parent directory of `COGNEE_E2E_EMBED_MODEL_PATH`
+/// 2. Parent directory of `EMBEDDING_MODEL_PATH`
+/// 3. `COGNEE_TEST_MODEL_DIR`
+/// 4. Workspace-local `target/models`
+pub fn e2e_embedding_model_dir() -> PathBuf {
+    if let Ok(model_path) = std::env::var("COGNEE_E2E_EMBED_MODEL_PATH")
+        && let Some(parent) = std::path::Path::new(&model_path).parent()
+    {
+        return parent.to_path_buf();
+    }
+    if let Ok(model_path) = std::env::var("EMBEDDING_MODEL_PATH")
+        && let Some(parent) = std::path::Path::new(&model_path).parent()
+    {
+        return parent.to_path_buf();
+    }
+    if let Ok(model_dir) = std::env::var("COGNEE_TEST_MODEL_DIR") {
+        return model_dir.into();
+    }
+
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(|path| path.parent())
+        .expect("crate should live under workspace/crates")
+        .join("target/models")
+}
 
 /// Returns a PostgreSQL connection URL built from environment variables, or `None`
 /// if `DB_PROVIDER` is not set to `"postgres"`.

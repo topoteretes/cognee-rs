@@ -20,7 +20,7 @@ use cognee_search::{
     types::{SearchOutput, SearchResponse},
 };
 use cognee_storage::{LocalStorage, StorageTrait};
-use cognee_test_utils::MockLlm;
+use cognee_test_utils::{MockLlm, e2e_embedding_model_dir};
 use cognee_vector::{QdrantAdapter, VectorDB};
 use serde_json::json;
 use tempfile::TempDir;
@@ -40,15 +40,6 @@ const MULTI_ONTOLOGY_TEXT: &str = r#"
 TechCorp is an Organisation delivering software services.
 DeepSort is an Algorithm used by TechCorp for ranking.
 "#;
-
-fn get_embedding_model_dir() -> String {
-    if let Ok(model_path) = std::env::var("COGNEE_E2E_EMBED_MODEL_PATH")
-        && let Some(parent) = std::path::Path::new(&model_path).parent()
-    {
-        return parent.to_string_lossy().to_string();
-    }
-    "./target/models".to_string()
-}
 
 fn make_request(query: &str, search_type: SearchType) -> SearchRequest {
     SearchRequest {
@@ -126,7 +117,6 @@ async fn e2e_ontology_pipeline_add_cognify_search() {
     let _ = require_env("OPENAI_URL");
     let _ = require_env("OPENAI_TOKEN");
     let _ = require_env("OPENAI_MODEL");
-    let _ = require_env("COGNEE_E2E_EMBED_MODEL_PATH");
 
     let temp_dir = TempDir::new().expect("temp dir");
 
@@ -152,12 +142,14 @@ async fn e2e_ontology_pipeline_add_cognify_search() {
     let vector_db: Arc<dyn VectorDB> =
         Arc::new(QdrantAdapter::new(temp_dir.path().join("qdrant"), 384));
 
-    let model_dir = get_embedding_model_dir();
+    let model_dir = e2e_embedding_model_dir();
     let embedding_engine: Arc<dyn EmbeddingEngine> =
-        match OnnxEmbeddingEngine::new(OnnxEmbeddingConfig::bge_small(&model_dir)) {
+        match OnnxEmbeddingEngine::with_auto_download(OnnxEmbeddingConfig::bge_small(&model_dir))
+            .await
+        {
             Ok(engine) => Arc::new(engine),
             Err(e) => {
-                eprintln!("Skipping test: failed to load embedding model: {e}");
+                eprintln!("Skipping test: failed to prepare embedding model: {e}");
                 return;
             }
         };
