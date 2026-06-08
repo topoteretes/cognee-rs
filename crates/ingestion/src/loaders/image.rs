@@ -68,18 +68,18 @@ pub fn image_mime_type(doc: &Document) -> String {
     }
 
     // Try to infer from the document name (typically has the original extension).
-    if let Some(mime) = mime_guess::from_path(&doc.name).first() {
-        if mime.type_() == mime_guess::mime::IMAGE {
-            return mime.to_string();
-        }
+    if let Some(mime) = mime_guess::from_path(&doc.name).first()
+        && mime.type_() == mime_guess::mime::IMAGE
+    {
+        return mime.to_string();
     }
 
     // Fall back to the raw_data_location path (file:// URI or plain path).
     let location = doc.raw_data_location.trim_start_matches("file://");
-    if let Some(mime) = mime_guess::from_path(location).first() {
-        if mime.type_() == mime_guess::mime::IMAGE {
-            return mime.to_string();
-        }
+    if let Some(mime) = mime_guess::from_path(location).first()
+        && mime.type_() == mime_guess::mime::IMAGE
+    {
+        return mime.to_string();
     }
 
     // Universal fallback — JPEG is the most common image format and is

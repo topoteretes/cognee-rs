@@ -394,5 +394,5 @@ already done.
 - [x] `CognifyConfig.transcriber: Option<Arc<dyn Transcriber>>` + wiring in `build_cognify_pipeline`
 - [ ] Audio format whitelist decision documented and enforced
 - [ ] Unit + integration tests (mock LLM / `MockTranscriber`)
-- [ ] Features added to `cognee-lib` / `cognee-cli` defaults
-- [ ] `scripts/check_all.sh` green (fmt, check, clippy -D warnings, binding checks)
+- [x] Features added to `cognee-lib` / `cognee-cli` defaults
+- [x] `scripts/check_all.sh` green (fmt, check, clippy -D warnings, binding checks)
