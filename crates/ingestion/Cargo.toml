@@ -35,6 +35,7 @@ calamine = { workspace = true, optional = true }
 mail-parser = { workspace = true, optional = true }
 quick-xml = { workspace = true, optional = true }
 zip = { workspace = true, optional = true }
+cognee-llm = { path = "../llm", optional = true }
 
 [features]
 default = []
@@ -49,6 +50,8 @@ unstructured-eml = ["dep:mail-parser"]
 unstructured-odt = ["dep:quick-xml", "dep:zip"]
 unstructured-odp = ["dep:quick-xml", "dep:zip"]
 unstructured = ["unstructured-xlsx", "unstructured-docx", "unstructured-pptx", "unstructured-epub", "unstructured-eml", "unstructured-odt", "unstructured-odp"]
+image-loader = ["dep:cognee-llm"]
+audio-loader = ["dep:cognee-llm"]
 
 [dev-dependencies]
 cognee-database = { path = "../database", features = ["sqlite"] }
