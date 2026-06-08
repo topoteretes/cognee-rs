@@ -34,6 +34,10 @@ use cognee_core::{
 use cognee_database::{DatabaseConnection, PipelineRunRepository};
 use cognee_embedding::engine::EmbeddingEngine;
 use cognee_graph::{EdgeData, GraphDBTrait, GraphDBTraitExt};
+#[cfg(feature = "audio-loader")]
+use cognee_ingestion::loaders::audio::AudioLoader;
+#[cfg(feature = "image-loader")]
+use cognee_ingestion::loaders::image::ImageLoader;
 use cognee_ingestion::loaders::{LoaderOutput, LoaderRegistry};
 use cognee_llm::Llm;
 use cognee_models::{
@@ -3292,7 +3296,18 @@ pub fn build_cognify_pipeline(
     ontology_resolver: Arc<dyn OntologyResolver>,
     config: CognifyConfig,
 ) -> Pipeline {
-    let loader_registry = Arc::new(LoaderRegistry::default());
+    #[allow(unused_mut)]
+    let mut registry = LoaderRegistry::default_registry();
+    #[cfg(feature = "image-loader")]
+    registry.register("image", Arc::new(ImageLoader::new(Arc::clone(&llm))));
+    #[cfg(feature = "audio-loader")]
+    if let Some(ref transcriber_handle) = config.transcriber {
+        registry.register(
+            "audio",
+            Arc::new(AudioLoader::new(Arc::clone(&transcriber_handle.0))),
+        );
+    }
+    let loader_registry = Arc::new(registry);
     PipelineBuilder::new_with_task("cognify", make_classify_documents_task())
         .with_first_task_name(CLASSIFY_DOCUMENTS_TASK_NAME)
         .add_task_named(
@@ -3380,7 +3395,18 @@ pub fn build_temporal_cognify_pipeline(
     db: Option<Arc<DatabaseConnection>>,
     config: CognifyConfig,
 ) -> Pipeline {
-    let loader_registry = Arc::new(LoaderRegistry::default());
+    #[allow(unused_mut)]
+    let mut registry = LoaderRegistry::default_registry();
+    #[cfg(feature = "image-loader")]
+    registry.register("image", Arc::new(ImageLoader::new(Arc::clone(&llm))));
+    #[cfg(feature = "audio-loader")]
+    if let Some(ref transcriber_handle) = config.transcriber {
+        registry.register(
+            "audio",
+            Arc::new(AudioLoader::new(Arc::clone(&transcriber_handle.0))),
+        );
+    }
+    let loader_registry = Arc::new(registry);
     PipelineBuilder::new_with_task("temporal-cognify", make_classify_documents_task())
         .with_first_task_name(CLASSIFY_DOCUMENTS_TASK_NAME)
         .add_task_named(
