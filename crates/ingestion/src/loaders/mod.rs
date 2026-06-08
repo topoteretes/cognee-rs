@@ -6,6 +6,8 @@
 
 #[cfg(feature = "csv-loader")]
 pub mod csv_loader;
+#[cfg(feature = "image-loader")]
+pub mod image;
 #[cfg(any(feature = "pdf-pdfium", feature = "pdf-pure-rust"))]
 pub mod pdf;
 pub mod text;
