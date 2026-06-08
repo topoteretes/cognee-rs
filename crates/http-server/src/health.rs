@@ -511,6 +511,7 @@ mod tests {
             ontology_manager,
             search_orchestrator: None,
             llm,
+            transcriber: None,
             embedding_engine: embedding,
             graph_db,
             vector_db,

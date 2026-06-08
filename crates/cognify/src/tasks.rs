@@ -3277,6 +3277,26 @@ pub fn make_add_data_points_task(
 // Pipeline builder
 // ---------------------------------------------------------------------------
 
+/// Build a [`LoaderRegistry`] with the default text/pdf/csv loaders plus any
+/// feature-gated media loaders that have the required handles available.
+///
+/// Centralized here so both [`build_cognify_pipeline`] and
+/// [`build_temporal_cognify_pipeline`] stay in sync.
+fn build_loader_registry(llm: &Arc<dyn Llm>, config: &CognifyConfig) -> LoaderRegistry {
+    #[allow(unused_mut)]
+    let mut registry = LoaderRegistry::default_registry();
+    #[cfg(feature = "image-loader")]
+    registry.register("image", Arc::new(ImageLoader::new(Arc::clone(llm))));
+    #[cfg(feature = "audio-loader")]
+    if let Some(ref transcriber_handle) = config.transcriber {
+        registry.register(
+            "audio",
+            Arc::new(AudioLoader::new(Arc::clone(&transcriber_handle.0))),
+        );
+    }
+    registry
+}
+
 /// Build a complete cognify [`Pipeline`]:
 /// [`CognifyInput`] → classify → chunk → extract_graph → summarize → add_data_points → [`CognifyResult`].
 ///
@@ -3296,18 +3316,7 @@ pub fn build_cognify_pipeline(
     ontology_resolver: Arc<dyn OntologyResolver>,
     config: CognifyConfig,
 ) -> Pipeline {
-    #[allow(unused_mut)]
-    let mut registry = LoaderRegistry::default_registry();
-    #[cfg(feature = "image-loader")]
-    registry.register("image", Arc::new(ImageLoader::new(Arc::clone(&llm))));
-    #[cfg(feature = "audio-loader")]
-    if let Some(ref transcriber_handle) = config.transcriber {
-        registry.register(
-            "audio",
-            Arc::new(AudioLoader::new(Arc::clone(&transcriber_handle.0))),
-        );
-    }
-    let loader_registry = Arc::new(registry);
+    let loader_registry = Arc::new(build_loader_registry(&llm, &config));
     PipelineBuilder::new_with_task("cognify", make_classify_documents_task())
         .with_first_task_name(CLASSIFY_DOCUMENTS_TASK_NAME)
         .add_task_named(
@@ -3395,18 +3404,7 @@ pub fn build_temporal_cognify_pipeline(
     db: Option<Arc<DatabaseConnection>>,
     config: CognifyConfig,
 ) -> Pipeline {
-    #[allow(unused_mut)]
-    let mut registry = LoaderRegistry::default_registry();
-    #[cfg(feature = "image-loader")]
-    registry.register("image", Arc::new(ImageLoader::new(Arc::clone(&llm))));
-    #[cfg(feature = "audio-loader")]
-    if let Some(ref transcriber_handle) = config.transcriber {
-        registry.register(
-            "audio",
-            Arc::new(AudioLoader::new(Arc::clone(&transcriber_handle.0))),
-        );
-    }
-    let loader_registry = Arc::new(registry);
+    let loader_registry = Arc::new(build_loader_registry(&llm, &config));
     PipelineBuilder::new_with_task("temporal-cognify", make_classify_documents_task())
         .with_first_task_name(CLASSIFY_DOCUMENTS_TASK_NAME)
         .add_task_named(
@@ -4252,6 +4250,63 @@ mod tests {
         assert!(
             !chunks.chunks.is_empty(),
             "audio document should produce at least one chunk"
+        );
+    }
+
+    // ── build_loader_registry wiring tests ────────────────────────────────────
+
+    /// `build_loader_registry` must always register an image loader when the
+    /// `image-loader` feature is enabled.
+    #[cfg(feature = "image-loader")]
+    #[test]
+    fn test_build_loader_registry_includes_image() {
+        use cognee_test_utils::MockLlm;
+
+        let llm: Arc<dyn Llm> = Arc::new(MockLlm::empty());
+        let config = CognifyConfig::default();
+        let registry = build_loader_registry(&llm, &config);
+        assert!(
+            registry.get("image").is_some(),
+            "build_loader_registry must include \"image\" loader when image-loader feature is on"
+        );
+    }
+
+    /// `build_loader_registry` must register an audio loader when a transcriber
+    /// is set on the config AND the `audio-loader` feature is enabled.
+    #[cfg(feature = "audio-loader")]
+    #[test]
+    fn test_build_loader_registry_includes_audio_when_transcriber_set() {
+        use cognee_llm::TranscriptionOutput;
+        use cognee_test_utils::MockTranscriber;
+
+        let llm: Arc<dyn Llm> = Arc::new(cognee_test_utils::MockLlm::empty());
+        let transcriber: Arc<dyn cognee_llm::Transcriber> = Arc::new(MockTranscriber::new(
+            "mock",
+            vec![TranscriptionOutput {
+                text: "hi".to_string(),
+                language: None,
+                duration: None,
+            }],
+        ));
+        let config = CognifyConfig::default().with_transcriber(transcriber);
+        let registry = build_loader_registry(&llm, &config);
+        assert!(
+            registry.get("audio").is_some(),
+            "build_loader_registry must include \"audio\" loader when transcriber is set"
+        );
+    }
+
+    /// Without a transcriber on the config, no audio loader should be
+    /// registered — audio stays gracefully unsupported (D5).
+    #[cfg(feature = "audio-loader")]
+    #[test]
+    fn test_build_loader_registry_no_audio_without_transcriber() {
+        let llm: Arc<dyn Llm> = Arc::new(cognee_test_utils::MockLlm::empty());
+        let config = CognifyConfig::default(); // no transcriber
+        let registry = build_loader_registry(&llm, &config);
+        assert!(
+            registry.get("audio").is_none(),
+            "build_loader_registry must NOT include \"audio\" loader when transcriber is None"
         );
     }
 }

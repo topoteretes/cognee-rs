@@ -480,6 +480,15 @@ async fn run_remember_cognify_memify(
     // no-op repo so their `DbPipelineWatcher` does not double-write.
     let cognify_repo = NoopPipelineRunRepository::arc();
 
+    // Apply the audio transcriber when available (D3/T8).
+    let owned_config;
+    let cognify_config = if let Some(ref t) = components.transcriber {
+        owned_config = cognify_config.clone().with_transcriber(Arc::clone(t));
+        &owned_config
+    } else {
+        cognify_config
+    };
+
     // ── Cognify leg ───────────────────────────────────────────────────────────
     run_cognify(
         data_items,

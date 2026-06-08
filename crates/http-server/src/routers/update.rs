@@ -305,7 +305,10 @@ async fn run_update_pipeline(
         .flatten()
         .map(|u| u.email);
 
-    let cognify_config = CognifyConfig::default().with_chunk_strategy(ChunkStrategy::Paragraph);
+    let mut cognify_config = CognifyConfig::default().with_chunk_strategy(ChunkStrategy::Paragraph);
+    if let Some(ref t) = components.transcriber {
+        cognify_config = cognify_config.with_transcriber(Arc::clone(t));
+    }
 
     run_cognify(
         data_items,

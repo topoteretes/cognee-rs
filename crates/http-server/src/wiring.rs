@@ -14,7 +14,7 @@ use cognee_database::{
 use cognee_delete::DeleteService;
 use cognee_embedding::{EmbeddingConfig, EmbeddingEngine, EmbeddingProvider};
 use cognee_graph::{GraphDBTrait, LadybugAdapter};
-use cognee_llm::{Llm, OpenAIAdapter, OpenAIResponsesClient, ResponsesClient};
+use cognee_llm::{Llm, OpenAIAdapter, OpenAIResponsesClient, ResponsesClient, Transcriber};
 use cognee_ontology::{OntologyManager, OntologyResolver};
 use cognee_search::{
     SeaOrmSessionStore, SearchBuilder, SearchOrchestrator, SessionManager, SessionStore,
@@ -46,6 +46,7 @@ pub async fn wire_default_backends(
 
     let embedding_engine = wire_embedding_engine(cfg).await;
     let llm = wire_llm(cfg);
+    let transcriber = wire_transcriber(cfg);
 
     let thread_pool: Option<Arc<dyn CpuPool>> = Some(Arc::new(
         RayonThreadPool::with_default_threads()
@@ -101,6 +102,7 @@ pub async fn wire_default_backends(
         ontology_manager,
         search_orchestrator,
         llm,
+        transcriber,
         graph_db: Some(graph_db),
         vector_db: Some(vector_db),
         thread_pool,
@@ -272,6 +274,35 @@ fn wire_llm(cfg: &HttpServerConfig) -> Option<Arc<dyn Llm>> {
         Ok(adapter) => Some(Arc::new(adapter) as Arc<dyn Llm>),
         Err(err) => {
             tracing::warn!("llm wiring failed, wiring as None: {err}");
+            None
+        }
+    }
+}
+
+fn wire_transcriber(cfg: &HttpServerConfig) -> Option<Arc<dyn Transcriber>> {
+    if !cfg.llm_provider.eq_ignore_ascii_case("openai") {
+        return None;
+    }
+
+    let api_key = cfg.llm_api_key.expose_secret().to_string();
+    if api_key.is_empty() {
+        return None;
+    }
+
+    let endpoint = if cfg.llm_endpoint.trim().is_empty() {
+        None
+    } else {
+        Some(cfg.llm_endpoint.clone())
+    };
+
+    match OpenAIAdapter::new(cfg.llm_model.clone(), api_key, endpoint).map(|adapter| {
+        adapter
+            .with_structured_output_retries(cfg.llm_max_retries.max(1))
+            .with_network_retries(cfg.llm_max_retries.max(1))
+    }) {
+        Ok(adapter) => Some(Arc::new(adapter) as Arc<dyn Transcriber>),
+        Err(err) => {
+            tracing::warn!("transcriber wiring failed, wiring as None: {err}");
             None
         }
     }

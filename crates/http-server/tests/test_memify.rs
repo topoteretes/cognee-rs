@@ -279,6 +279,7 @@ async fn post_memify_blocking_indexes_triplets() {
         session_manager: None,
         checkpoint_store: None,
         responses_client: None,
+        transcriber: None,
         notebook_runner: None,
     });
 

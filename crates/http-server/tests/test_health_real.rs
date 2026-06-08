@@ -64,6 +64,7 @@ async fn build_real_handles() -> (Arc<ComponentHandles>, Arc<DatabaseConnection>
         checkpoint_store: None,
         ontology_resolver: None,
         responses_client: None,
+        transcriber: None,
         notebook_runner: None,
     });
 
@@ -168,6 +169,7 @@ async fn real_checker_missing_graph_returns_503_on_detailed() {
         checkpoint_store: None,
         ontology_resolver: None,
         responses_client: None,
+        transcriber: None,
         notebook_runner: None,
     });
 

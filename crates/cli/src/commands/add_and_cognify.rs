@@ -154,12 +154,19 @@ pub fn run(args: AddAndCognifyArgs, cm: Arc<ComponentManager>) -> Result<(), Cli
             _ => ChunkStrategy::Paragraph,
         };
 
-        let cognify_config = CognifyConfig::default()
+        let mut cognify_config = CognifyConfig::default()
             .with_chunk_size(effective_chunk_size as usize)
             .with_chunk_overlap(cm.settings().chunk_overlap as usize)
             .with_chunk_strategy(chunk_strategy)
             .with_max_parallel_extractions(effective_max_parallel)
             .with_summarization(!summarization_model.is_empty());
+        if let Some(transcriber) = cm
+            .transcriber()
+            .await
+            .map_err(|e| CliError::Runtime(format!("{e}")))?
+        {
+            cognify_config = cognify_config.with_transcriber(transcriber);
+        }
 
         info!(
             "Cognifying {} new data item(s) in dataset '{}'",

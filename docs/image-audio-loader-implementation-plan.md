@@ -1,6 +1,6 @@
 # Implementation Plan: Image & Audio Document Loaders
 
-Status: complete (T1–T7 done)
+Status: complete (T1–T11 done)
 Scope: close the only remaining **extraction** gap between the Rust and Python
 cognee SDKs — image and audio documents. Both are already *classified* correctly
 in Rust; they fail only at the extraction step because no loader is wired in.
@@ -317,6 +317,21 @@ the features on carries no cost for text-only workloads.
    already counts the *extracted* text — no change needed; image/audio just pay
    the upstream API call.
 
+7. **Operational note — default-on + fail-fast blast radius.** Both
+   `image-loader` and `audio-loader` are enabled by default. The pipeline is
+   all-or-nothing: if a classified image or audio document cannot be extracted
+   (e.g. the configured model lacks vision, or the audio format is outside the
+   Whisper whitelist), `LoaderError` propagates through the `?` at the dispatch
+   site and aborts the **entire** cognify run — not just that document. For
+   mixed datasets (text + one image) this means the whole dataset fails.
+   Per D6 this is the intended behavior (loud failure over silent content
+   drop), but operators should be aware when:
+   - Using a non-vision model with image documents → configure a vision-capable
+     model or exclude image files from the dataset.
+   - Using audio formats outside the Whisper whitelist (`flac`, `ogg`, `aac`, `mid`,
+     `amr`, `aiff`) → convert to a supported format first, or file a follow-up to
+     widen the whitelist in `cognee-llm/src/transcriber.rs`.
+
 ---
 
 ## 6. Testing plan
@@ -347,6 +362,8 @@ Use the existing mocks so tests stay deterministic and LLM-free.
   and **node-type Jaccard ≥ threshold** (reuse the existing tolerances). Gate the
   cases behind an OpenAI key with **vision + Whisper** access; document the cost
   and expected flakiness so CI can skip them when the key is absent.
+  **Status: deferred** — the cross-SDK Python test harness is out of scope for this
+  branch; tracked as a follow-up task.
 
 ---
 
@@ -396,3 +413,8 @@ already done.
 - [x] Unit + integration tests (mock LLM / `MockTranscriber`)
 - [x] Features added to `cognee-lib` / `cognee-cli` defaults
 - [x] `scripts/check_all.sh` green (fmt, check, clippy -D warnings, binding checks)
+- [x] **T8 (T8a–T8d):** `ComponentManager::transcriber()` + `wire_transcriber` + applied in all CLI and HTTP server cognify entry points — audio is now functional end-to-end for OpenAI provider
+- [x] **T9:** Duplicated registry-build block extracted into `build_loader_registry` helper
+- [x] **T10:** Tests for `ComponentManager::transcriber()` (cache, openai vs non-openai) and `build_loader_registry` (image always, audio only with transcriber)
+- [x] **T11:** Operational risk note added (§5.7), D7 marked deferred in §6
+- [ ] **D7:** Cross-SDK structural tests for image/audio (`e2e-cross-sdk/`) — deferred to a follow-up branch

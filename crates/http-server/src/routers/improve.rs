@@ -284,8 +284,11 @@ async fn run_real_improve(
                     .with_database(database.clone())
                     .with_pipeline_run_repo(NoopPipelineRunRepository::arc());
 
-                let cognify_config =
+                let mut cognify_config =
                     CognifyConfig::default().with_chunk_strategy(ChunkStrategy::Paragraph);
+                if let Some(ref t) = components.transcriber {
+                    cognify_config = cognify_config.with_transcriber(Arc::clone(t));
+                }
 
                 if let Err(e) = persist_sessions_in_knowledge_graph(
                     sids,
