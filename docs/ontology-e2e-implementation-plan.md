@@ -148,6 +148,19 @@ Core assertions:
 
 ## D3 - Persistence verification coverage
 
+Status: completed on 2026-06-08.
+
+Implementation landed:
+
+1. Added explicit persistence assertions to `crates/http-server/tests/test_ontology_cognify_search_e2e.rs`:
+   - persisted graph contains ontology-derived `is_a` edges after cognify,
+   - persisted graph contains ontology-expanded ancestor nodes (`Technology` or `LegalEntity`).
+2. Strengthened retrieval assertions to ensure search payload contains ontology concepts (`algorithm`, `technology`, or `is_a`).
+
+Validation evidence:
+
+1. `cargo test -p cognee-http-server --test test_ontology_cognify_search_e2e -- --nocapture` passed with persistence assertions enabled.
+
 Add explicit assertions (in D1 and/or D2 tests) to validate persistence, not only transient payload:
 
 1. Graph storage contains ontology-expanded nodes after run completion.

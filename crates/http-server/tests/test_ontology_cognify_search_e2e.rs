@@ -81,6 +81,13 @@ fn get_embedding_model_dir() -> String {
     "./target/models".to_string()
 }
 
+fn search_payload_contains_any_markers(payload: &serde_json::Value, markers: &[&str]) -> bool {
+    let haystack = payload.to_string().to_ascii_lowercase();
+    markers
+        .iter()
+        .any(|marker| haystack.contains(&marker.to_ascii_lowercase()))
+}
+
 #[tokio::test]
 async fn upload_cognify_search_with_ontology_key_and_unknown_key_negative() {
     let _ = require_env("OPENAI_URL");
@@ -176,6 +183,8 @@ async fn upload_cognify_search_with_ontology_key_and_unknown_key_negative() {
         database.clone() as Arc<dyn cognee_database::DeleteDb>,
     ));
 
+    let graph_db_for_assertions = Arc::clone(&graph_db);
+
     let handles = Arc::new(ComponentHandles {
         database: Arc::clone(&database),
         storage,
@@ -184,7 +193,7 @@ async fn upload_cognify_search_with_ontology_key_and_unknown_key_negative() {
         ontology_manager,
         search_orchestrator: Some(search_orchestrator),
         llm: Some(llm),
-        graph_db: Some(graph_db),
+        graph_db: Some(Arc::clone(&graph_db)),
         vector_db: Some(vector_db),
         thread_pool: Some(Arc::new(
             cognee_core::RayonThreadPool::with_default_threads().expect("thread pool"),
@@ -302,6 +311,30 @@ async fn upload_cognify_search_with_ontology_key_and_unknown_key_negative() {
         "cognify must complete in blocking mode"
     );
 
+    let (persisted_nodes, persisted_edges) = graph_db_for_assertions
+        .get_graph_data()
+        .await
+        .expect("graph_db.get_graph_data after cognify");
+
+    assert!(
+        persisted_edges.iter().any(|(_, _, rel, _)| rel == "is_a"),
+        "Persisted graph should contain ontology-derived is_a edges"
+    );
+
+    let ancestor_present = persisted_nodes.iter().any(|(_, props)| {
+        props
+            .get("name")
+            .and_then(|v| v.as_str())
+            .map(|name| {
+                name.eq_ignore_ascii_case("Technology") || name.eq_ignore_ascii_case("LegalEntity")
+            })
+            .unwrap_or(false)
+    });
+    assert!(
+        ancestor_present,
+        "Persisted graph should contain ontology-expanded ancestor nodes"
+    );
+
     let search_req = Request::builder()
         .method("POST")
         .uri("/api/v1/search")
@@ -328,5 +361,9 @@ async fn upload_cognify_search_with_ontology_key_and_unknown_key_negative() {
             .as_array()
             .is_some_and(|arr| !arr.is_empty() && !arr[0]["searchResult"].is_null()),
         "search response must contain ontology-enriched result"
+    );
+    assert!(
+        search_payload_contains_any_markers(&search_json, &["algorithm", "technology", "is_a"]),
+        "search response should reference ontology-enriched concepts"
     );
 }
