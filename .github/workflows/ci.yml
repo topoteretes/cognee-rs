@@ -48,7 +48,9 @@ jobs:
           android: true
           dotnet: true
           haskell: true
-          large-packages: true
+          # large-packages removes ^llvm-.* which takes out libclang; clippy runs
+          # --all-features (activating android-litert/bindgen) and needs libclang.
+          large-packages: false
           swap-storage: false
           docker-images: true
 
