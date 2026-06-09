@@ -5,6 +5,7 @@ edition.workspace = true
 
 [features]
 testing = ["cognee-storage/testing", "cognee-graph/testing", "cognee-vector/testing"]
+html-loader = ["cognee-ingestion/html-loader"]
 image-loader = ["cognee-ingestion/image-loader"]
 audio-loader = ["cognee-ingestion/audio-loader"]
 

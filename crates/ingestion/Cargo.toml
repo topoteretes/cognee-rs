@@ -17,16 +17,19 @@ sha2.workspace = true
 uuid.workspace = true
 tokio.workspace = true
 mime_guess.workspace = true
-reqwest.workspace = true
-scraper.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-toml.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
-texting_robots.workspace = true
-url.workspace = true
-futures-util.workspace = true
+# URL/HTML subsystem deps -- optional, gated by the `html-loader` feature.
+# (`scraper` is also pulled in by the `unstructured-eml`/`unstructured-epub`
+# loaders, which declare it directly.)
+reqwest = { workspace = true, optional = true }
+scraper = { workspace = true, optional = true }
+toml = { workspace = true, optional = true }
+texting_robots = { workspace = true, optional = true }
+url = { workspace = true, optional = true }
+futures-util = { workspace = true, optional = true }
 pdfium-render = { workspace = true, optional = true }
 pdfium-auto = { workspace = true, optional = true }
 pdf-extract = { workspace = true, optional = true }
@@ -42,11 +45,13 @@ default = []
 pdf-pdfium = ["dep:pdfium-render", "dep:pdfium-auto"]
 pdf-pure-rust = ["dep:pdf-extract"]
 csv-loader = ["dep:csv"]
+# HTML file loading + URL crawling/ingestion (shared scraper/toml machinery).
+html-loader = ["dep:scraper", "dep:toml", "dep:texting_robots", "dep:reqwest", "dep:url", "dep:futures-util"]
 unstructured-xlsx = ["dep:calamine"]
 unstructured-docx = ["dep:quick-xml", "dep:zip"]
 unstructured-pptx = ["dep:quick-xml", "dep:zip"]
-unstructured-epub = ["dep:quick-xml", "dep:zip"]
-unstructured-eml = ["dep:mail-parser"]
+unstructured-epub = ["dep:quick-xml", "dep:zip", "dep:scraper"]
+unstructured-eml = ["dep:mail-parser", "dep:scraper"]
 unstructured-odt = ["dep:quick-xml", "dep:zip"]
 unstructured-odp = ["dep:quick-xml", "dep:zip"]
 unstructured = ["unstructured-xlsx", "unstructured-docx", "unstructured-pptx", "unstructured-epub", "unstructured-eml", "unstructured-odt", "unstructured-odp"]

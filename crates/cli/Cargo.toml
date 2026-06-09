@@ -21,6 +21,7 @@ default = [
     "tiktoken",
     "pdf-pdfium",
     "csv-loader",
+    "html-loader",
     "image-loader",
     "audio-loader",
     "unstructured",
@@ -47,6 +48,7 @@ visualization = ["cognee-lib/visualization"]
 pdf-pdfium        = ["cognee-lib/pdf-pdfium"]
 pdf-pure-rust     = ["cognee-lib/pdf-pure-rust"]
 csv-loader        = ["cognee-lib/csv-loader"]
+html-loader       = ["cognee-lib/html-loader"]
 image-loader      = ["cognee-lib/image-loader"]
 audio-loader      = ["cognee-lib/audio-loader"]
 unstructured      = ["cognee-lib/unstructured"]

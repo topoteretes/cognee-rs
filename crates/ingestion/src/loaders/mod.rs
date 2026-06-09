@@ -8,6 +8,8 @@
 pub mod audio;
 #[cfg(feature = "csv-loader")]
 pub mod csv_loader;
+#[cfg(feature = "html-loader")]
+pub mod html;
 #[cfg(feature = "image-loader")]
 pub mod image;
 #[cfg(any(feature = "pdf-pdfium", feature = "pdf-pure-rust"))]
@@ -120,7 +122,7 @@ impl LoaderRegistry {
     /// Register a loader for a document type.
     ///
     /// `document_type` values match `Document.document_type`:
-    /// "text", "pdf", "csv", "image", "audio", "unstructured".
+    /// "text", "pdf", "csv", "html", "image", "audio", "unstructured".
     pub fn register(&mut self, document_type: &str, loader: Arc<dyn DocumentLoader>) {
         self.loaders.insert(document_type.to_string(), loader);
     }
@@ -139,6 +141,9 @@ impl LoaderRegistry {
     pub fn default_registry() -> Self {
         let mut registry = Self::new();
         registry.register("text", Arc::new(text::TextLoader));
+
+        #[cfg(feature = "html-loader")]
+        registry.register("html", Arc::new(html::HtmlLoader));
 
         #[cfg(any(feature = "pdf-pdfium", feature = "pdf-pure-rust"))]
         registry.register("pdf", Arc::new(pdf::PdfLoader));
@@ -199,6 +204,21 @@ mod tests {
         registry.register("text", Arc::new(text::TextLoader));
         let loader = registry.get("text");
         assert!(loader.is_some());
+    }
+
+    /// Verify that the default registry exposes an "html" loader with the
+    /// Python-compatible engine name when the `html-loader` feature is on.
+    #[cfg(feature = "html-loader")]
+    #[test]
+    fn default_registry_has_html_loader() {
+        let registry = LoaderRegistry::default_registry();
+        let loader = registry.get("html");
+        assert!(loader.is_some(), "registry must contain an \"html\" loader");
+        assert_eq!(
+            loader.expect("just checked is_some").engine_name(),
+            "beautiful_soup_loader",
+            "HtmlLoader engine_name must be \"beautiful_soup_loader\""
+        );
     }
 
     /// Verify that an `ImageLoader` can be registered under "image" and is

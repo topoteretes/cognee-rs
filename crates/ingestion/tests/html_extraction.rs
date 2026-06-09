@@ -1,3 +1,5 @@
+#![cfg(feature = "html-loader")]
+
 use cognee_ingestion::url_crawler::{HtmlParser, extract_html};
 
 #[test]

@@ -3282,6 +3282,12 @@ pub fn make_add_data_points_task(
 ///
 /// Centralized here so both [`build_cognify_pipeline`] and
 /// [`build_temporal_cognify_pipeline`] stay in sync.
+// `llm` is consumed only by the image loader and `config` only by the audio
+// loader; when neither feature is enabled both are genuinely unused.
+#[cfg_attr(
+    not(any(feature = "image-loader", feature = "audio-loader")),
+    allow(unused_variables)
+)]
 fn build_loader_registry(llm: &Arc<dyn Llm>, config: &CognifyConfig) -> LoaderRegistry {
     #[allow(unused_mut)]
     let mut registry = LoaderRegistry::default_registry();
@@ -4250,6 +4256,191 @@ mod tests {
         assert!(
             !chunks.chunks.is_empty(),
             "audio document should produce at least one chunk"
+        );
+    }
+
+    /// Regression guard: `.html`/`.htm` files must be classified (not silently
+    /// dropped).  Before the `html-loader` feature was added,
+    /// `extension_to_doc_type("html")` returned `None` so `classify_documents`
+    /// produced an empty Vec — this test would have failed then.
+    #[test]
+    fn classify_html_extension_not_dropped() {
+        for ext in ["html", "htm"] {
+            let data = Data::builder(
+                Uuid::new_v4(),
+                format!("page.{ext}"),
+                format!("/storage/page.{ext}"),
+                format!("file:///page.{ext}"),
+                ext,
+                "text/html",
+                "hash_html",
+                Uuid::new_v4(),
+            )
+            .build();
+
+            let input = CognifyInput {
+                data_items: vec![data],
+                dataset_id: Uuid::new_v4(),
+                user_id: None,
+                tenant_id: None,
+            };
+            let result = classify_documents(&input).expect("classify should not error");
+            assert_eq!(
+                result.documents.len(),
+                1,
+                ".{ext} file must not be dropped by classify_documents"
+            );
+            assert_eq!(
+                result.documents[0].document_type, "html",
+                ".{ext} must classify as document_type=\"html\""
+            );
+            // Cross-SDK parity: Python's BeautifulSoupLoader stores TextDocument nodes.
+            assert_eq!(
+                result.documents[0].base.data_type, "TextDocument",
+                ".{ext} must carry data_type=\"TextDocument\" for Python DB parity"
+            );
+        }
+    }
+
+    /// Regression guard: the classify → load → chunk pipeline for an HTML file
+    /// must produce text chunks (not an `UnsupportedDocumentType` error).
+    ///
+    /// Before this feature:
+    ///  1. `classify_documents` would return an empty Vec for `.html` files
+    ///     (extension was not mapped).
+    ///  2. Even if the document type was forced to "html", `extract_chunks_from_documents`
+    ///     would return `CognifyError::UnsupportedDocumentType("html")` because no
+    ///     loader was registered.
+    /// Both regressions are guarded here end-to-end.
+    #[cfg(feature = "html-loader")]
+    #[tokio::test]
+    async fn classify_then_chunk_html_end_to_end() {
+        let storage = Arc::new(MockStorage::new());
+        let html = b"<html><head><title>Guide</title></head><body><p>The quick brown fox.</p></body></html>";
+        let location = storage
+            .store(html, "guide.html")
+            .await
+            .expect("MockStorage store should succeed");
+
+        let data = Data::builder(
+            Uuid::new_v4(),
+            "guide.html",
+            &location, // raw_data_location == storage path so retrieve() can find it
+            "file:///guide.html",
+            "html",
+            "text/html",
+            "hash_guide_html",
+            Uuid::new_v4(),
+        )
+        .build();
+
+        let input = CognifyInput {
+            data_items: vec![data],
+            dataset_id: Uuid::new_v4(),
+            user_id: None,
+            tenant_id: None,
+        };
+
+        // Regression 1: classify must not drop the HTML file.
+        let classified =
+            classify_documents(&input).expect("classify_documents must succeed for html");
+        assert_eq!(
+            classified.documents.len(),
+            1,
+            "classify_documents must not drop the .html file"
+        );
+        assert_eq!(classified.documents[0].document_type, "html");
+
+        // Regression 2: the HtmlLoader must be dispatched and produce chunks.
+        let registry = LoaderRegistry::default();
+        let result = extract_chunks_from_documents(
+            &classified,
+            &*storage,
+            100,
+            TokenCounterKind::Word,
+            None,
+            &registry,
+        )
+        .await;
+
+        assert!(
+            !matches!(result, Err(CognifyError::UnsupportedDocumentType(_))),
+            "html loader must be registered (UnsupportedDocumentType must not occur)"
+        );
+        let chunks = result.expect("extract_chunks_from_documents must succeed for html");
+        assert!(
+            !chunks.chunks.is_empty(),
+            "html file must produce at least one chunk"
+        );
+        assert!(
+            chunks.chunks.iter().any(|c| c.text.contains("quick brown fox")),
+            "extracted text must appear in chunks (HTML tags must be stripped)"
+        );
+    }
+
+    /// Regression guard: an HTML document must produce ≥1 chunk via the
+    /// always-registered `HtmlLoader` and must NOT return
+    /// `CognifyError::UnsupportedDocumentType`.
+    #[cfg(feature = "html-loader")]
+    #[tokio::test]
+    async fn test_html_document_produces_chunks() {
+        let storage = Arc::new(MockStorage::new());
+        let html =
+            b"<html><head><title>T</title></head><body><h1>Heading</h1><p>Body text here.</p></body></html>";
+        let location = storage
+            .store(html, "test.html")
+            .await
+            .expect("MockStorage store should succeed");
+
+        let doc_id = Uuid::new_v4();
+        // Cross-SDK parity: HTML docs carry the TextDocument data_type.
+        let mut base = DataPoint::new("TextDocument", None);
+        base.id = doc_id;
+        base.set_metadata("index_fields", serde_json::json!(["name"]));
+        let doc = Document {
+            base,
+            document_type: "html".to_string(),
+            name: "test.html".to_string(),
+            raw_data_location: location,
+            mime_type: "text/html".to_string(),
+            extension: "html".to_string(),
+            data_id: doc_id,
+            external_metadata: None,
+        };
+
+        let input = ClassifiedDocuments {
+            documents: vec![doc],
+            dataset_id: Uuid::new_v4(),
+            user_id: None,
+            tenant_id: None,
+        };
+
+        // The HtmlLoader is part of the default registry when the feature is on.
+        let registry = LoaderRegistry::default();
+
+        let result = extract_chunks_from_documents(
+            &input,
+            &*storage,
+            100,
+            TokenCounterKind::Word,
+            None,
+            &registry,
+        )
+        .await;
+
+        assert!(
+            !matches!(result, Err(CognifyError::UnsupportedDocumentType(_))),
+            "html document must not produce UnsupportedDocumentType"
+        );
+        let chunks = result.expect("extract_chunks_from_documents should succeed for html docs");
+        assert!(
+            !chunks.chunks.is_empty(),
+            "html document should produce at least one chunk"
+        );
+        // The extracted text (not raw HTML tags) should reach the chunk.
+        assert!(
+            chunks.chunks.iter().any(|c| c.text.contains("Body text")),
+            "extracted HTML text should appear in chunks"
         );
     }
 

@@ -3,6 +3,9 @@ mod id_generation;
 mod loader_registry;
 pub mod loaders;
 pub mod pipeline;
+// URL crawling + HTML extraction. The `extract_html` extractor is shared with
+// the HTML document loader, so both live behind the `html-loader` feature.
+#[cfg(feature = "html-loader")]
 pub mod url_crawler;
 pub mod url_resolver;
 
@@ -15,4 +18,9 @@ pub use pipeline::{
     build_add_pipeline_with_acl, make_persist_data_task, make_persist_data_task_with_acl,
     make_process_input_task, persist_data, persist_data_with_acl, process_input,
 };
-pub use url_resolver::{ResolvedUrlInput, UrlMetadata, resolve_url_input};
+// `UrlMetadata`/`ResolvedUrlInput` are plain data types and stay always-on so
+// `pipeline.rs` signatures compile without the feature; `resolve_url_input`
+// (which drives the URL crawler) is gated behind `html-loader`.
+#[cfg(feature = "html-loader")]
+pub use url_resolver::resolve_url_input;
+pub use url_resolver::{ResolvedUrlInput, UrlMetadata};
