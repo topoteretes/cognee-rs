@@ -65,6 +65,16 @@ jobs:
         with:
           shared-key: workspace-v4
 
+      # ort-sys downloads the ONNX Runtime static library to ORT_CACHE_DIR
+      # (target/ort-cache) during the build script. Swatinem prunes target/
+      # to cargo-tracked files only and drops this directory, so we pin it
+      # with a dedicated actions/cache step keyed by ort-sys version + platform.
+      - name: Cache ORT binary
+        uses: actions/cache@v4
+        with:
+          path: target/ort-cache
+          key: ort-v2.0.0-rc.12-linux-x86_64
+
       - name: rustfmt (check)
         run: cargo fmt --all -- --check
 
@@ -148,6 +158,12 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: workspace-v4
+
+      - name: Cache ORT binary
+        uses: actions/cache@v4
+        with:
+          path: target/ort-cache
+          key: ort-v2.0.0-rc.12-linux-x86_64
 
       - name: Show toolchain
         run: |
@@ -266,6 +282,12 @@ jobs:
         with:
           shared-key: workspace-v4
 
+      - name: Cache ORT binary
+        uses: actions/cache@v4
+        with:
+          path: target/ort-cache
+          key: ort-v2.0.0-rc.12-linux-x86_64
+
       - name: Run pgvector span instrumentation tests
         run: cargo test -p cognee-vector --test pgvector_span_instrumentation -- --nocapture
 
@@ -285,6 +307,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: workspace-v4
+      - uses: actions/cache@v4
+        with:
+          path: target/ort-cache
+          key: ort-v2.0.0-rc.12-linux-x86_64
       - run: bash capi/scripts/check.sh
 
   python-check:
@@ -302,6 +328,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: workspace-v4
+      - uses: actions/cache@v4
+        with:
+          path: target/ort-cache
+          key: ort-v2.0.0-rc.12-linux-x86_64
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -336,6 +366,10 @@ jobs:
             . -> target
             js/cognee-neon -> target
           cache-on-failure: true
+      - uses: actions/cache@v4
+        with:
+          path: target/ort-cache
+          key: ort-v2.0.0-rc.12-linux-x86_64
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
