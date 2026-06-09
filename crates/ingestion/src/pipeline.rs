@@ -30,7 +30,9 @@ use cognee_vector::VectorDB;
 use crate::content_hasher::HashAlgorithm;
 use crate::id_generation::{generate_data_id, generate_dataset_id};
 use crate::loader_registry::get_loader_name;
-use crate::url_resolver::{UrlMetadata, resolve_url_input};
+use crate::url_resolver::UrlMetadata;
+#[cfg(feature = "html-loader")]
+use crate::url_resolver::resolve_url_input;
 
 // ---------------------------------------------------------------------------
 // AddParams
@@ -437,6 +439,7 @@ fn extract_file_metadata(input: &DataInput) -> (String, String, String, Option<S
                 None,
             )
         }
+        // TODO(COG-4456): replace placeholder metadata when S3 ingestion is implemented.
         DataInput::S3Path(_) => (
             "s3_file.bin".to_string(),
             "bin".to_string(),
@@ -495,22 +498,37 @@ async fn resolve_input_for_processing(
 > {
     match input {
         DataInput::Url(url) => {
-            let resolved = resolve_url_input(url).await?;
-            Ok((resolved.input, Some(resolved.metadata), None, None))
+            #[cfg(feature = "html-loader")]
+            {
+                let resolved = resolve_url_input(url).await?;
+                Ok((resolved.input, Some(resolved.metadata), None, None))
+            }
+            #[cfg(not(feature = "html-loader"))]
+            {
+                let _ = url;
+                Err(Box::new(IngestionError::UrlIngestionUnavailable))
+            }
         }
         DataInput::DataItem {
             data,
             label,
             external_metadata,
         } => {
-            if let DataInput::Url(url) = data.as_ref() {
-                let resolved = resolve_url_input(url).await?;
-                Ok((
-                    resolved.input,
-                    Some(resolved.metadata),
-                    Some(label.clone()),
-                    external_metadata.clone(),
-                ))
+            if let DataInput::Url(_url) = data.as_ref() {
+                #[cfg(feature = "html-loader")]
+                {
+                    let resolved = resolve_url_input(_url).await?;
+                    Ok((
+                        resolved.input,
+                        Some(resolved.metadata),
+                        Some(label.clone()),
+                        external_metadata.clone(),
+                    ))
+                }
+                #[cfg(not(feature = "html-loader"))]
+                {
+                    Err(Box::new(IngestionError::UrlIngestionUnavailable))
+                }
             } else {
                 Ok((
                     input.clone(),
@@ -1133,6 +1151,10 @@ pub enum IngestionError {
         expected: &'static str,
         actual: &'static str,
     },
+    /// A `DataInput::Url` was supplied but the `html-loader` feature (which
+    /// provides URL crawling/fetching) is not enabled in this build.
+    #[error("URL ingestion requires the `html-loader` feature to be enabled")]
+    UrlIngestionUnavailable,
 }
 
 // ---------------------------------------------------------------------------
@@ -1144,8 +1166,11 @@ mod tests {
     use super::*;
     use cognee_database::{connect, initialize, ops};
     use cognee_graph::MockGraphDB;
-    use cognee_storage::{LocalStorage, MockStorage};
+    #[cfg(feature = "html-loader")]
+    use cognee_storage::LocalStorage;
+    use cognee_storage::MockStorage;
     use cognee_vector::MockVectorDB;
+    #[cfg(feature = "html-loader")]
     use mockito::{Server, ServerGuard};
     use std::io::Write;
     use tempfile::NamedTempFile;
@@ -1163,6 +1188,7 @@ mod tests {
         (pipeline, db)
     }
 
+    #[cfg(feature = "html-loader")]
     async fn server_with_robots() -> ServerGuard {
         let mut server = Server::new_async().await;
         server
@@ -1173,6 +1199,7 @@ mod tests {
         server
     }
 
+    #[cfg(feature = "html-loader")]
     #[tokio::test]
     async fn test_process_input_url_html_stores_text_with_source_metadata() {
         let mut server = server_with_robots().await;
@@ -1226,6 +1253,7 @@ mod tests {
         assert_eq!(metadata["title"], "Example");
     }
 
+    #[cfg(feature = "html-loader")]
     #[tokio::test]
     async fn test_persist_data_url_html_uses_text_payload_and_raw_html_original_location() {
         let mut server = server_with_robots().await;
@@ -1276,6 +1304,7 @@ mod tests {
         assert_eq!(data.loader_engine.as_deref(), Some("beautiful_soup_loader"));
     }
 
+    #[cfg(feature = "html-loader")]
     #[tokio::test]
     async fn test_data_item_url_merges_metadata_and_preserves_label() {
         let mut server = server_with_robots().await;
@@ -1322,6 +1351,7 @@ mod tests {
         assert_eq!(metadata["title"], "Wrapped");
     }
 
+    #[cfg(feature = "html-loader")]
     #[tokio::test]
     async fn test_data_item_url_invalid_or_non_object_metadata_preserved_under_raw_field() {
         let mut server = server_with_robots().await;
@@ -1364,6 +1394,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "html-loader")]
     #[tokio::test]
     async fn test_non_html_url_inputs_do_not_store_raw_source_copy() {
         let mut server = server_with_robots().await;

@@ -18,6 +18,7 @@ use cognee_embedding::EmbeddingEngine;
 use cognee_graph::GraphDBTrait;
 use cognee_llm::Llm;
 use cognee_llm::ResponsesClient;
+use cognee_llm::Transcriber;
 use cognee_ontology::{OntologyManager, OntologyResolver};
 use cognee_search::{SearchOrchestrator, SessionManager, SessionStore};
 use cognee_storage::StorageTrait;
@@ -57,6 +58,10 @@ pub struct ComponentHandles {
 
     /// Configured LLM adapter for `/api/v1/llm/*` handlers.
     pub llm: Option<Arc<dyn Llm>>,
+
+    /// Transcriber for audio document processing (Whisper). `None` when the
+    /// configured LLM provider does not support audio transcription.
+    pub transcriber: Option<Arc<dyn Transcriber>>,
 
     /// Knowledge-graph DB used by the visualize router.
     pub graph_db: Option<Arc<dyn GraphDBTrait>>,

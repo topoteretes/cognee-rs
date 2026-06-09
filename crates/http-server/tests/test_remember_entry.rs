@@ -100,6 +100,7 @@ fn build_handles_with_session_and_llm(
         session_manager: Some(Arc::clone(&session_manager)),
         checkpoint_store: None,
         responses_client: None,
+        transcriber: None,
         notebook_runner: None,
     });
     (handles, session_manager)
@@ -139,6 +140,7 @@ fn build_handles_without_session(db: Arc<DatabaseConnection>) -> Arc<ComponentHa
         session_manager: None,
         checkpoint_store: None,
         responses_client: None,
+        transcriber: None,
         notebook_runner: None,
     })
 }

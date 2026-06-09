@@ -14,7 +14,7 @@ use cognee_graph::GraphDBTrait;
 use cognee_graph::LadybugAdapter;
 #[cfg(all(feature = "android-litert", target_os = "android"))]
 use cognee_llm::LiteRtAdapter;
-use cognee_llm::{Llm, OpenAIAdapter};
+use cognee_llm::{Llm, OpenAIAdapter, Transcriber};
 use cognee_storage::{LocalStorage, StorageTrait};
 #[cfg(feature = "pgvector")]
 use cognee_vector::PgVectorAdapter;
@@ -45,6 +45,11 @@ pub struct ComponentManager {
     vector_db: TokioRwLock<Option<(u64, Arc<dyn VectorDB>)>>,
     embedding_engine: TokioRwLock<Option<(u64, Arc<dyn EmbeddingEngine>)>>,
     llm: TokioRwLock<Option<(u64, Arc<dyn Llm>)>>,
+    // Stores Option<Arc<dyn Transcriber>>: None when the provider does not
+    // support transcription (e.g. litert). The outer Option<(ver, ...)> is
+    // the version-keyed cache envelope.
+    #[allow(clippy::type_complexity)]
+    transcriber: TokioRwLock<Option<(u64, Option<Arc<dyn Transcriber>>)>>,
 }
 
 impl ComponentManager {
@@ -57,6 +62,7 @@ impl ComponentManager {
             vector_db: TokioRwLock::new(None),
             embedding_engine: TokioRwLock::new(None),
             llm: TokioRwLock::new(None),
+            transcriber: TokioRwLock::new(None),
         }
     }
 
@@ -413,6 +419,75 @@ impl ComponentManager {
             ))),
         }
     }
+
+    async fn init_transcriber(&self) -> Result<Option<Arc<dyn Transcriber>>, ComponentError> {
+        let (provider, llm_model, llm_api_key, llm_endpoint, llm_max_retries) = {
+            let s = self.config.read();
+            (
+                s.llm_provider.to_lowercase(),
+                s.llm_model.clone(),
+                s.llm_api_key.clone(),
+                s.llm_endpoint.clone(),
+                s.llm_max_retries,
+            )
+        };
+
+        match provider.as_str() {
+            "openai" => {
+                if llm_api_key.is_empty() {
+                    return Err(ComponentError::Config(
+                        "llm_api_key must be configured".to_string(),
+                    ));
+                }
+
+                let endpoint = if llm_endpoint.is_empty() {
+                    None
+                } else {
+                    Some(llm_endpoint)
+                };
+
+                let retries = llm_max_retries.max(1);
+
+                let adapter = OpenAIAdapter::new(llm_model, llm_api_key, endpoint)
+                    .map_err(|e| ComponentError::Llm(format!("initialization failed: {e}")))?
+                    .with_structured_output_retries(retries)
+                    .with_network_retries(retries);
+
+                Ok(Some(Arc::new(adapter) as Arc<dyn Transcriber>))
+            }
+            // litert and any future providers that do not implement Transcriber
+            // return None — audio stays gracefully unsupported (D5).
+            _ => Ok(None),
+        }
+    }
+
+    /// Return the [`Transcriber`] for the configured LLM provider, if supported.
+    ///
+    /// Returns `Ok(Some(_))` for OpenAI (Whisper). Returns `Ok(None)` for
+    /// providers that do not support audio transcription (e.g. `litert`), so
+    /// callers can skip registering the `AudioLoader` rather than failing.
+    pub async fn transcriber(&self) -> Result<Option<Arc<dyn Transcriber>>, ComponentError> {
+        let current_ver = self.config.version();
+        // Fast path: read lock
+        {
+            let guard = self.transcriber.read().await;
+            if let Some((ver, ref opt)) = *guard
+                && ver == current_ver
+            {
+                return Ok(opt.clone());
+            }
+        }
+        // Slow path: write lock with double-check
+        let mut guard = self.transcriber.write().await;
+        if let Some((ver, ref opt)) = *guard
+            && ver == current_ver
+        {
+            return Ok(opt.clone());
+        }
+        let new = self.init_transcriber().await?;
+        *guard = Some((current_ver, new.clone()));
+        Ok(new)
+    }
 }
 
 // Versioned accessor helper macro — avoids repeating the double-checked
@@ -467,5 +542,59 @@ impl PipelineContext for ComponentManager {
 
     async fn llm(&self) -> Result<Arc<dyn Llm>, ComponentError> {
         versioned_accessor!(self, llm, init_llm)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{ConfigManager, Settings};
+
+    fn cm_with_provider(provider: &str) -> ComponentManager {
+        let settings = Settings {
+            llm_provider: provider.to_string(),
+            llm_api_key: "sk-test".to_string(),
+            llm_model: "gpt-4o-mini".to_string(),
+            ..Settings::default()
+        };
+        ComponentManager::new(ConfigManager::new(settings))
+    }
+
+    #[tokio::test]
+    async fn transcriber_returns_some_for_openai() {
+        let cm = cm_with_provider("openai");
+        let result = cm
+            .transcriber()
+            .await
+            .expect("transcriber() should not error");
+        assert!(
+            result.is_some(),
+            "openai provider must yield Some(transcriber)"
+        );
+    }
+
+    #[tokio::test]
+    async fn transcriber_returns_none_for_unknown_provider() {
+        // Any non-openai provider (e.g. "mock") returns None — audio gracefully unsupported.
+        let settings = Settings {
+            llm_provider: "mock".to_string(),
+            llm_api_key: String::new(),
+            ..Settings::default()
+        };
+        let cm = ComponentManager::new(ConfigManager::new(settings));
+        let result = cm
+            .transcriber()
+            .await
+            .expect("transcriber() should not error for mock");
+        assert!(result.is_none(), "non-openai provider must yield None");
+    }
+
+    #[tokio::test]
+    async fn transcriber_is_cached_across_calls() {
+        let cm = cm_with_provider("openai");
+        let first = cm.transcriber().await.expect("first call").unwrap();
+        let second = cm.transcriber().await.expect("second call").unwrap();
+        // Both calls return an Arc pointing to the same allocation.
+        assert!(Arc::ptr_eq(&first, &second), "transcriber should be cached");
     }
 }

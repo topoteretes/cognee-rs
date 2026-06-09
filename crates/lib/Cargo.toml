@@ -16,6 +16,9 @@ default = [
     "tiktoken",
     "pdf-pdfium",
     "csv-loader",
+    "html-loader",
+    "image-loader",
+    "audio-loader",
     "unstructured",
     "visualization",
     "cloud",
@@ -60,6 +63,9 @@ telemetry = [
 pdf-pdfium        = ["cognee-ingestion/pdf-pdfium"]
 pdf-pure-rust     = ["cognee-ingestion/pdf-pure-rust"]
 csv-loader        = ["cognee-ingestion/csv-loader"]
+html-loader       = ["cognee-ingestion/html-loader", "cognee-cognify/html-loader"]
+image-loader      = ["cognee-ingestion/image-loader", "cognee-cognify/image-loader"]
+audio-loader      = ["cognee-ingestion/audio-loader", "cognee-cognify/audio-loader"]
 unstructured      = ["cognee-ingestion/unstructured"]
 unstructured-xlsx = ["cognee-ingestion/unstructured-xlsx"]
 unstructured-docx = ["cognee-ingestion/unstructured-docx"]
@@ -78,6 +84,7 @@ android-default = [
     "hf-tokenizer",
     "pdf-pure-rust",
     "csv-loader",
+    "html-loader",
     "unstructured-xlsx",
     "unstructured-docx",
     "unstructured-epub",

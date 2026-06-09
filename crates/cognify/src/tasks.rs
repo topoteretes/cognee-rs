@@ -34,6 +34,10 @@ use cognee_core::{
 use cognee_database::{DatabaseConnection, PipelineRunRepository};
 use cognee_embedding::engine::EmbeddingEngine;
 use cognee_graph::{EdgeData, GraphDBTrait, GraphDBTraitExt};
+#[cfg(feature = "audio-loader")]
+use cognee_ingestion::loaders::audio::AudioLoader;
+#[cfg(feature = "image-loader")]
+use cognee_ingestion::loaders::image::ImageLoader;
 use cognee_ingestion::loaders::{LoaderOutput, LoaderRegistry};
 use cognee_llm::Llm;
 use cognee_models::{
@@ -3273,6 +3277,32 @@ pub fn make_add_data_points_task(
 // Pipeline builder
 // ---------------------------------------------------------------------------
 
+/// Build a [`LoaderRegistry`] with the default text/pdf/csv loaders plus any
+/// feature-gated media loaders that have the required handles available.
+///
+/// Centralized here so both [`build_cognify_pipeline`] and
+/// [`build_temporal_cognify_pipeline`] stay in sync.
+// `llm` is consumed only by the image loader and `config` only by the audio
+// loader; when neither feature is enabled both are genuinely unused.
+#[cfg_attr(
+    not(any(feature = "image-loader", feature = "audio-loader")),
+    allow(unused_variables)
+)]
+fn build_loader_registry(llm: &Arc<dyn Llm>, config: &CognifyConfig) -> LoaderRegistry {
+    #[allow(unused_mut)]
+    let mut registry = LoaderRegistry::default_registry();
+    #[cfg(feature = "image-loader")]
+    registry.register("image", Arc::new(ImageLoader::new(Arc::clone(llm))));
+    #[cfg(feature = "audio-loader")]
+    if let Some(ref transcriber_handle) = config.transcriber {
+        registry.register(
+            "audio",
+            Arc::new(AudioLoader::new(Arc::clone(&transcriber_handle.0))),
+        );
+    }
+    registry
+}
+
 /// Build a complete cognify [`Pipeline`]:
 /// [`CognifyInput`] → classify → chunk → extract_graph → summarize → add_data_points → [`CognifyResult`].
 ///
@@ -3292,7 +3322,7 @@ pub fn build_cognify_pipeline(
     ontology_resolver: Arc<dyn OntologyResolver>,
     config: CognifyConfig,
 ) -> Pipeline {
-    let loader_registry = Arc::new(LoaderRegistry::default());
+    let loader_registry = Arc::new(build_loader_registry(&llm, &config));
     PipelineBuilder::new_with_task("cognify", make_classify_documents_task())
         .with_first_task_name(CLASSIFY_DOCUMENTS_TASK_NAME)
         .add_task_named(
@@ -3380,7 +3410,7 @@ pub fn build_temporal_cognify_pipeline(
     db: Option<Arc<DatabaseConnection>>,
     config: CognifyConfig,
 ) -> Pipeline {
-    let loader_registry = Arc::new(LoaderRegistry::default());
+    let loader_registry = Arc::new(build_loader_registry(&llm, &config));
     PipelineBuilder::new_with_task("temporal-cognify", make_classify_documents_task())
         .with_first_task_name(CLASSIFY_DOCUMENTS_TASK_NAME)
         .add_task_named(
@@ -4087,5 +4117,387 @@ mod tests {
         assert!(result.summaries.is_empty());
         // All chunks (both DLT and non-DLT) are still passed through.
         assert_eq!(result.chunks.len(), 2);
+    }
+
+    /// Regression guard: an image document must produce ≥1 chunk and must NOT
+    /// return `CognifyError::UnsupportedDocumentType`.
+    #[cfg(feature = "image-loader")]
+    #[tokio::test]
+    async fn test_image_document_produces_chunks() {
+        use cognee_ingestion::loaders::image::ImageLoader;
+        use cognee_test_utils::MockLlm;
+
+        let storage = Arc::new(MockStorage::new());
+        // Store fake image bytes so the loader can retrieve them.
+        let location = storage
+            .store(b"fake-image-bytes", "test.jpg")
+            .await
+            .expect("MockStorage store should succeed");
+
+        let doc_id = Uuid::new_v4();
+        let mut base = DataPoint::new("ImageDocument", None);
+        base.id = doc_id;
+        base.set_metadata("index_fields", serde_json::json!(["name"]));
+        let doc = Document {
+            base,
+            document_type: "image".to_string(),
+            name: "test.jpg".to_string(),
+            raw_data_location: location,
+            mime_type: "image/jpeg".to_string(),
+            extension: "jpg".to_string(),
+            data_id: doc_id,
+            external_metadata: None,
+        };
+
+        let input = ClassifiedDocuments {
+            documents: vec![doc],
+            dataset_id: Uuid::new_v4(),
+            user_id: None,
+            tenant_id: None,
+        };
+
+        // Build a registry that contains an ImageLoader backed by a MockLlm
+        // that returns a vision description.
+        let mock_llm = Arc::new(
+            MockLlm::new(vec![])
+                .with_vision_responses(vec!["An image description for testing.".to_string()]),
+        );
+        let mut registry = LoaderRegistry::default();
+        registry.register("image", Arc::new(ImageLoader::new(mock_llm)));
+
+        let result = extract_chunks_from_documents(
+            &input,
+            &*storage,
+            100,
+            TokenCounterKind::Word,
+            None,
+            &registry,
+        )
+        .await;
+
+        // Must not be UnsupportedDocumentType — that is the regression we guard.
+        assert!(
+            !matches!(result, Err(CognifyError::UnsupportedDocumentType(_))),
+            "image document must not produce UnsupportedDocumentType"
+        );
+        let chunks = result.expect("extract_chunks_from_documents should succeed for image docs");
+        assert!(
+            !chunks.chunks.is_empty(),
+            "image document should produce at least one chunk"
+        );
+    }
+
+    /// Regression guard: an audio document must produce ≥1 chunk and must NOT
+    /// return `CognifyError::UnsupportedDocumentType`.
+    #[cfg(feature = "audio-loader")]
+    #[tokio::test]
+    async fn test_audio_document_produces_chunks() {
+        use cognee_ingestion::loaders::audio::AudioLoader;
+        use cognee_llm::TranscriptionOutput;
+        use cognee_test_utils::MockTranscriber;
+
+        let storage = Arc::new(MockStorage::new());
+        // Store fake audio bytes so the loader can retrieve them.
+        let location = storage
+            .store(b"fake-audio-bytes", "test.mp3")
+            .await
+            .expect("MockStorage store should succeed");
+
+        let doc_id = Uuid::new_v4();
+        let mut base = DataPoint::new("AudioDocument", None);
+        base.id = doc_id;
+        base.set_metadata("index_fields", serde_json::json!(["name"]));
+        let doc = Document {
+            base,
+            document_type: "audio".to_string(),
+            name: "test.mp3".to_string(),
+            raw_data_location: location,
+            mime_type: "audio/mpeg".to_string(),
+            extension: "mp3".to_string(),
+            data_id: doc_id,
+            external_metadata: None,
+        };
+
+        let input = ClassifiedDocuments {
+            documents: vec![doc],
+            dataset_id: Uuid::new_v4(),
+            user_id: None,
+            tenant_id: None,
+        };
+
+        // Build a registry that contains an AudioLoader backed by a MockTranscriber.
+        let mock_transcriber = Arc::new(MockTranscriber::new(
+            "mock-whisper",
+            vec![TranscriptionOutput {
+                text: "Test transcript.".to_string(),
+                language: None,
+                duration: None,
+            }],
+        ));
+        let mut registry = LoaderRegistry::default();
+        registry.register("audio", Arc::new(AudioLoader::new(mock_transcriber)));
+
+        let result = extract_chunks_from_documents(
+            &input,
+            &*storage,
+            100,
+            TokenCounterKind::Word,
+            None,
+            &registry,
+        )
+        .await;
+
+        // Must not be UnsupportedDocumentType — that is the regression we guard.
+        assert!(
+            !matches!(result, Err(CognifyError::UnsupportedDocumentType(_))),
+            "audio document must not produce UnsupportedDocumentType"
+        );
+        let chunks = result.expect("extract_chunks_from_documents should succeed for audio docs");
+        assert!(
+            !chunks.chunks.is_empty(),
+            "audio document should produce at least one chunk"
+        );
+    }
+
+    /// Regression guard: `.html`/`.htm` files must be classified (not silently
+    /// dropped).  Before the `html-loader` feature was added,
+    /// `extension_to_doc_type("html")` returned `None` so `classify_documents`
+    /// produced an empty Vec — this test would have failed then.
+    #[test]
+    fn classify_html_extension_not_dropped() {
+        for ext in ["html", "htm"] {
+            let data = Data::builder(
+                Uuid::new_v4(),
+                format!("page.{ext}"),
+                format!("/storage/page.{ext}"),
+                format!("file:///page.{ext}"),
+                ext,
+                "text/html",
+                "hash_html",
+                Uuid::new_v4(),
+            )
+            .build();
+
+            let input = CognifyInput {
+                data_items: vec![data],
+                dataset_id: Uuid::new_v4(),
+                user_id: None,
+                tenant_id: None,
+            };
+            let result = classify_documents(&input).expect("classify should not error");
+            assert_eq!(
+                result.documents.len(),
+                1,
+                ".{ext} file must not be dropped by classify_documents"
+            );
+            assert_eq!(
+                result.documents[0].document_type, "html",
+                ".{ext} must classify as document_type=\"html\""
+            );
+            // Cross-SDK parity: Python's BeautifulSoupLoader stores TextDocument nodes.
+            assert_eq!(
+                result.documents[0].base.data_type, "TextDocument",
+                ".{ext} must carry data_type=\"TextDocument\" for Python DB parity"
+            );
+        }
+    }
+
+    /// Regression guard: the classify → load → chunk pipeline for an HTML file
+    /// must produce text chunks (not an `UnsupportedDocumentType` error).
+    ///
+    /// Before this feature:
+    ///  1. `classify_documents` would return an empty Vec for `.html` files
+    ///     (extension was not mapped).
+    ///  2. Even if the document type was forced to "html", `extract_chunks_from_documents`
+    ///     would return `CognifyError::UnsupportedDocumentType("html")` because no
+    ///     loader was registered.
+    /// Both regressions are guarded here end-to-end.
+    #[cfg(feature = "html-loader")]
+    #[tokio::test]
+    async fn classify_then_chunk_html_end_to_end() {
+        let storage = Arc::new(MockStorage::new());
+        let html = b"<html><head><title>Guide</title></head><body><p>The quick brown fox.</p></body></html>";
+        let location = storage
+            .store(html, "guide.html")
+            .await
+            .expect("MockStorage store should succeed");
+
+        let data = Data::builder(
+            Uuid::new_v4(),
+            "guide.html",
+            &location, // raw_data_location == storage path so retrieve() can find it
+            "file:///guide.html",
+            "html",
+            "text/html",
+            "hash_guide_html",
+            Uuid::new_v4(),
+        )
+        .build();
+
+        let input = CognifyInput {
+            data_items: vec![data],
+            dataset_id: Uuid::new_v4(),
+            user_id: None,
+            tenant_id: None,
+        };
+
+        // Regression 1: classify must not drop the HTML file.
+        let classified =
+            classify_documents(&input).expect("classify_documents must succeed for html");
+        assert_eq!(
+            classified.documents.len(),
+            1,
+            "classify_documents must not drop the .html file"
+        );
+        assert_eq!(classified.documents[0].document_type, "html");
+
+        // Regression 2: the HtmlLoader must be dispatched and produce chunks.
+        let registry = LoaderRegistry::default();
+        let result = extract_chunks_from_documents(
+            &classified,
+            &*storage,
+            100,
+            TokenCounterKind::Word,
+            None,
+            &registry,
+        )
+        .await;
+
+        assert!(
+            !matches!(result, Err(CognifyError::UnsupportedDocumentType(_))),
+            "html loader must be registered (UnsupportedDocumentType must not occur)"
+        );
+        let chunks = result.expect("extract_chunks_from_documents must succeed for html");
+        assert!(
+            !chunks.chunks.is_empty(),
+            "html file must produce at least one chunk"
+        );
+        assert!(
+            chunks.chunks.iter().any(|c| c.text.contains("quick brown fox")),
+            "extracted text must appear in chunks (HTML tags must be stripped)"
+        );
+    }
+
+    /// Regression guard: an HTML document must produce ≥1 chunk via the
+    /// always-registered `HtmlLoader` and must NOT return
+    /// `CognifyError::UnsupportedDocumentType`.
+    #[cfg(feature = "html-loader")]
+    #[tokio::test]
+    async fn test_html_document_produces_chunks() {
+        let storage = Arc::new(MockStorage::new());
+        let html =
+            b"<html><head><title>T</title></head><body><h1>Heading</h1><p>Body text here.</p></body></html>";
+        let location = storage
+            .store(html, "test.html")
+            .await
+            .expect("MockStorage store should succeed");
+
+        let doc_id = Uuid::new_v4();
+        // Cross-SDK parity: HTML docs carry the TextDocument data_type.
+        let mut base = DataPoint::new("TextDocument", None);
+        base.id = doc_id;
+        base.set_metadata("index_fields", serde_json::json!(["name"]));
+        let doc = Document {
+            base,
+            document_type: "html".to_string(),
+            name: "test.html".to_string(),
+            raw_data_location: location,
+            mime_type: "text/html".to_string(),
+            extension: "html".to_string(),
+            data_id: doc_id,
+            external_metadata: None,
+        };
+
+        let input = ClassifiedDocuments {
+            documents: vec![doc],
+            dataset_id: Uuid::new_v4(),
+            user_id: None,
+            tenant_id: None,
+        };
+
+        // The HtmlLoader is part of the default registry when the feature is on.
+        let registry = LoaderRegistry::default();
+
+        let result = extract_chunks_from_documents(
+            &input,
+            &*storage,
+            100,
+            TokenCounterKind::Word,
+            None,
+            &registry,
+        )
+        .await;
+
+        assert!(
+            !matches!(result, Err(CognifyError::UnsupportedDocumentType(_))),
+            "html document must not produce UnsupportedDocumentType"
+        );
+        let chunks = result.expect("extract_chunks_from_documents should succeed for html docs");
+        assert!(
+            !chunks.chunks.is_empty(),
+            "html document should produce at least one chunk"
+        );
+        // The extracted text (not raw HTML tags) should reach the chunk.
+        assert!(
+            chunks.chunks.iter().any(|c| c.text.contains("Body text")),
+            "extracted HTML text should appear in chunks"
+        );
+    }
+
+    // ── build_loader_registry wiring tests ────────────────────────────────────
+
+    /// `build_loader_registry` must always register an image loader when the
+    /// `image-loader` feature is enabled.
+    #[cfg(feature = "image-loader")]
+    #[test]
+    fn test_build_loader_registry_includes_image() {
+        use cognee_test_utils::MockLlm;
+
+        let llm: Arc<dyn Llm> = Arc::new(MockLlm::empty());
+        let config = CognifyConfig::default();
+        let registry = build_loader_registry(&llm, &config);
+        assert!(
+            registry.get("image").is_some(),
+            "build_loader_registry must include \"image\" loader when image-loader feature is on"
+        );
+    }
+
+    /// `build_loader_registry` must register an audio loader when a transcriber
+    /// is set on the config AND the `audio-loader` feature is enabled.
+    #[cfg(feature = "audio-loader")]
+    #[test]
+    fn test_build_loader_registry_includes_audio_when_transcriber_set() {
+        use cognee_llm::TranscriptionOutput;
+        use cognee_test_utils::MockTranscriber;
+
+        let llm: Arc<dyn Llm> = Arc::new(cognee_test_utils::MockLlm::empty());
+        let transcriber: Arc<dyn cognee_llm::Transcriber> = Arc::new(MockTranscriber::new(
+            "mock",
+            vec![TranscriptionOutput {
+                text: "hi".to_string(),
+                language: None,
+                duration: None,
+            }],
+        ));
+        let config = CognifyConfig::default().with_transcriber(transcriber);
+        let registry = build_loader_registry(&llm, &config);
+        assert!(
+            registry.get("audio").is_some(),
+            "build_loader_registry must include \"audio\" loader when transcriber is set"
+        );
+    }
+
+    /// Without a transcriber on the config, no audio loader should be
+    /// registered — audio stays gracefully unsupported (D5).
+    #[cfg(feature = "audio-loader")]
+    #[test]
+    fn test_build_loader_registry_no_audio_without_transcriber() {
+        let llm: Arc<dyn Llm> = Arc::new(cognee_test_utils::MockLlm::empty());
+        let config = CognifyConfig::default(); // no transcriber
+        let registry = build_loader_registry(&llm, &config);
+        assert!(
+            registry.get("audio").is_none(),
+            "build_loader_registry must NOT include \"audio\" loader when transcriber is None"
+        );
     }
 }

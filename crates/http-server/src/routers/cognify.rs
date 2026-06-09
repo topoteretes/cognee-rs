@@ -413,6 +413,16 @@ async fn run_real_cognify(
 
     let storage = components.storage.clone();
     let database = components.database.clone();
+
+    // Apply the audio transcriber when available (D3/T8).
+    let effective_config;
+    let config = if let Some(ref t) = components.transcriber {
+        effective_config = config.clone().with_transcriber(Arc::clone(t));
+        &effective_config
+    } else {
+        config
+    };
+
     // ── Resolve dataset data rows ─────────────────────────────────────────────
     let data_items = db_ops::datasets::get_dataset_data(&database, dataset_id)
         .await

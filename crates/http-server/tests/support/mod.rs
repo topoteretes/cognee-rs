@@ -516,6 +516,7 @@ pub fn build_component_handles(
         session_manager: None,
         checkpoint_store: None,
         responses_client: None,
+        transcriber: None,
         notebook_runner: None,
     })
 }

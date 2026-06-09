@@ -1,6 +1,8 @@
 use cognee_models::DataInput;
 
+#[cfg(feature = "html-loader")]
 use crate::loader_registry::get_loader_name;
+#[cfg(feature = "html-loader")]
 use crate::url_crawler::{HtmlParser, UrlFetcher, UrlFetcherError};
 
 #[derive(Debug, Clone)]
@@ -25,6 +27,7 @@ pub struct UrlMetadata {
 }
 
 /// Resolve a URL into a streamable [`DataInput`] and canonical URL metadata.
+#[cfg(feature = "html-loader")]
 pub async fn resolve_url_input(url: &str) -> Result<ResolvedUrlInput, UrlFetcherError> {
     let fetch_result = UrlFetcher::new()?.fetch_with_metadata(url).await?;
     let raw_essence = mime_essence(&fetch_result.content_type);
@@ -114,6 +117,7 @@ pub async fn resolve_url_input(url: &str) -> Result<ResolvedUrlInput, UrlFetcher
 
 /// Extract the MIME essence (e.g. `"text/html"`) from a full Content-Type
 /// header value like `"text/html; charset=utf-8"`.
+#[cfg(feature = "html-loader")]
 fn mime_essence(content_type: &str) -> &str {
     content_type
         .split(';')
@@ -124,10 +128,12 @@ fn mime_essence(content_type: &str) -> &str {
 
 /// Infer a MIME type from a URL path extension. Returns `"text/plain"` as
 /// fallback when the URL has no recognisable extension.
+#[cfg(feature = "html-loader")]
 fn mime_from_url(url: &str) -> String {
     mime_from_url_path(url).unwrap_or_else(|| "text/plain".to_string())
 }
 
+#[cfg(feature = "html-loader")]
 fn mime_from_url_path(url: &str) -> Option<String> {
     if let Ok(parsed) = url::Url::parse(url) {
         let path = parsed.path();
@@ -140,6 +146,7 @@ fn mime_from_url_path(url: &str) -> Option<String> {
 }
 
 /// Derive `(extension, mime, loader_engine)` from a MIME essence string.
+#[cfg(feature = "html-loader")]
 fn metadata_from_mime(essence: &str) -> (String, String, String) {
     let ext = match essence {
         "text/html" | "application/xhtml+xml" => "html",
@@ -171,7 +178,7 @@ fn metadata_from_mime(essence: &str) -> (String, String, String) {
     (ext.to_string(), mime, loader)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "html-loader"))]
 mod tests {
     use super::*;
     use mockito::{Server, ServerGuard};

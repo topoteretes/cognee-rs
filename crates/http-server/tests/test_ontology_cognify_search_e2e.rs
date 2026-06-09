@@ -199,6 +199,7 @@ async fn upload_cognify_search_with_ontology_key_and_unknown_key_negative() {
         session_manager: None,
         checkpoint_store: None,
         responses_client: None,
+        transcriber: None,
         notebook_runner: None,
     });
 

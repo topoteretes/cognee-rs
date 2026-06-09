@@ -201,6 +201,7 @@ async fn post_remember_blocking_runs_full_pipeline() {
         session_manager: None,
         checkpoint_store: None,
         responses_client: None,
+        transcriber: None,
         notebook_runner: None,
     });
 

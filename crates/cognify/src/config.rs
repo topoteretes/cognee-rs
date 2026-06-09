@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use cognee_chunking::TokenCounterKind;
 use cognee_embedding::engine::EmbeddingEngine;
-use cognee_llm::Llm;
+use cognee_llm::{Llm, Transcriber};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -133,6 +133,14 @@ pub struct CognifyConfig {
     /// Mirrors Python's `chunker` parameter.
     #[serde(skip)]
     pub custom_chunker: Option<CustomChunker>,
+
+    /// Optional transcriber for audio/video document processing.
+    ///
+    /// When `Some`, this transcriber is used to convert audio content into
+    /// text before chunking and graph extraction. Only takes effect when
+    /// processing documents classified as audio type.
+    #[serde(skip)]
+    pub transcriber: Option<TranscriberHandle>,
 }
 
 /// Opaque wrapper around a custom chunker callback.
@@ -146,6 +154,19 @@ pub struct CustomChunker(pub Arc<dyn Fn(&str, usize) -> Vec<String> + Send + Syn
 impl std::fmt::Debug for CustomChunker {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("CustomChunker(…)")
+    }
+}
+
+/// Opaque wrapper around a [`Transcriber`] implementation.
+///
+/// Implements [`Debug`] (prints `"TranscriberHandle(…)"`) and [`Clone`] (cheap
+/// `Arc` clone), keeping [`CognifyConfig`] derivable.
+#[derive(Clone)]
+pub struct TranscriberHandle(pub Arc<dyn Transcriber>);
+
+impl std::fmt::Debug for TranscriberHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("TranscriberHandle(…)")
     }
 }
 
@@ -193,6 +214,7 @@ impl Default for CognifyConfig {
 
             graph_schema: None,
             custom_chunker: None,
+            transcriber: None,
         }
     }
 }
@@ -313,6 +335,12 @@ impl CognifyConfig {
         chunker: Arc<dyn Fn(&str, usize) -> Vec<String> + Send + Sync>,
     ) -> Self {
         self.custom_chunker = Some(CustomChunker(chunker));
+        self
+    }
+
+    /// Set a transcriber for audio document processing.
+    pub fn with_transcriber(mut self, transcriber: Arc<dyn Transcriber>) -> Self {
+        self.transcriber = Some(TranscriberHandle(transcriber));
         self
     }
 

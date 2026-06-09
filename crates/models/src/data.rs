@@ -176,6 +176,8 @@ impl DataBuilder {
             external_metadata: self.external_metadata,
             node_set: self.node_set,
             pipeline_status: None,
+            // TODO(COG-4456): compute token_count at ingestion time using TokenCounterKind::from_env()
+            // so the field is populated on add rather than remaining -1 until cognify runs.
             token_count: -1,
             data_size: self.data_size,
             last_accessed: None,
