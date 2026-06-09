@@ -16,6 +16,9 @@ env:
   # a cache built with a different debug level and triggering a mass
   # rebuild that blows out the runner disk.
   CARGO_PROFILE_DEV_DEBUG: "0"
+  # Incremental state in target/incremental/ is useless on CI (each run
+  # starts from a fresh checkout) and wastes 2-5 GB of runner disk.
+  CARGO_INCREMENTAL: "0"
 
 jobs:
   # ── Stage 1: Quick lints (fast fail) ──────────────────────────────────
@@ -45,7 +48,7 @@ jobs:
           android: true
           dotnet: true
           haskell: true
-          large-packages: false
+          large-packages: true
           swap-storage: false
           docker-images: true
 
@@ -129,7 +132,7 @@ jobs:
           android: true
           dotnet: true
           haskell: true
-          large-packages: false
+          large-packages: true
           swap-storage: true
           docker-images: true
 

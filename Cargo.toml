@@ -81,7 +81,7 @@ opentelemetry = { version = "=0.31", default-features = false, features = ["trac
 opentelemetry-otlp = { version = "=0.31", default-features = false, features = ["trace", "grpc-tonic", "http-proto", "reqwest-client"] }
 opentelemetry-semantic-conventions = "=0.31"
 opentelemetry_sdk = { version = "=0.31", default-features = false, features = ["trace", "rt-tokio"] }
-ort = { version = "2.0.0-rc.11", features = ["ndarray", "cuda", "tensorrt"] }
+ort = { version = "2.0.0-rc.11", features = ["ndarray"] }
 pbkdf2 = { version = "0.12", default-features = false }
 pdf-extract = "0.10"
 quick-xml = "0.39"
@@ -131,6 +131,14 @@ tar = { git = "https://github.com/qdrant/tar-rs", branch = "main" }
 # Required by qdrant v1.17.0 — their forks add http2_max_local_error_reset_streams and related APIs
 tonic = { git = "https://github.com/qdrant/tonic", branch = "v0.11.0-qdrant" }
 hyper = { git = "https://github.com/qdrant/hyper", branch = "v0.14.26-qdrant" }
+
+[profile.dev.package."*"]
+# At opt-level=0 (dev default), LLVM emits very large unoptimized IR for every
+# dependency. Level 1 enables constant-folding and dead-code elimination without
+# full optimization, which typically halves the size of dependency artifacts.
+# This does not affect workspace-member crates (they stay at opt-level=0 so
+# debug builds remain fast), only external dependencies (lbug, qdrant, ort, …).
+opt-level = 1
 
 [profile.release]
 debug = true
