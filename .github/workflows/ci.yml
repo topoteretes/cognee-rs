@@ -63,7 +63,7 @@ jobs:
       - name: Cache cargo/target
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: workspace-v4
+          shared-key: workspace-v5
 
       # ort-sys downloads the ONNX Runtime static library to ORT_CACHE_DIR
       # (target/ort-cache) during the build script. Swatinem prunes target/
@@ -157,7 +157,7 @@ jobs:
       - name: Cache cargo/target
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: workspace-v4
+          shared-key: workspace-v5
 
       - name: Cache ORT binary
         uses: actions/cache@v4
@@ -280,7 +280,7 @@ jobs:
       - name: Cache cargo/target
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: workspace-v4
+          shared-key: workspace-v5
 
       - name: Cache ORT binary
         uses: actions/cache@v4
@@ -306,7 +306,7 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y cmake protobuf-compiler
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: workspace-v4
+          shared-key: workspace-v5
       - uses: actions/cache@v4
         with:
           path: target/ort-cache
@@ -327,7 +327,7 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: workspace-v4
+          shared-key: workspace-v5
       - uses: actions/cache@v4
         with:
           path: target/ort-cache
@@ -361,7 +361,7 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y cmake protobuf-compiler
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: workspace-v4
+          shared-key: workspace-v5
           workspaces: |
             . -> target
             js/cognee-neon -> target
