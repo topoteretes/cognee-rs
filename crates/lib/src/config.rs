@@ -24,6 +24,11 @@ pub struct Settings {
     pub summarization_model: String,
     pub graph_model: String,
 
+    /// Custom JSON schema for summarization output (Python `summarization_model` parity).
+    /// `#[serde(skip)]` keeps config snapshots stable.
+    #[serde(skip)]
+    pub summarization_schema: Option<serde_json::Value>,
+
     pub llm_provider: String,
     pub llm_model: String,
     pub llm_api_key: String,
@@ -42,6 +47,7 @@ pub struct Settings {
     pub graph_database_username: String,
     pub graph_database_password: String,
     pub graph_database_port: u16,
+    pub graph_database_host: String,
     pub graph_database_key: String,
     pub graph_file_path: String,
     pub graph_filename: String,
@@ -261,6 +267,9 @@ impl Settings {
             && let Ok(n) = v.parse::<u16>()
         {
             self.graph_database_port = n;
+        }
+        if let Some(v) = str_var("GRAPH_DATABASE_HOST") {
+            self.graph_database_host = v;
         }
         if let Some(v) = str_var("GRAPH_DATABASE_KEY") {
             self.graph_database_key = v;
@@ -599,6 +608,7 @@ impl Default for Settings {
             classification_model: String::new(),
             summarization_model: String::new(),
             graph_model: "KnowledgeGraph".to_string(),
+            summarization_schema: None,
 
             llm_provider: "openai".to_string(),
             llm_model: "gpt-5-mini".to_string(),
@@ -618,6 +628,7 @@ impl Default for Settings {
             graph_database_username: String::new(),
             graph_database_password: String::new(),
             graph_database_port: 123,
+            graph_database_host: String::new(),
             graph_database_key: String::new(),
             graph_file_path: String::new(),
             graph_filename: String::new(),
@@ -988,6 +999,27 @@ impl ConfigManager {
         s.summarization_model = model.to_string();
         drop(s);
         self.bump_version();
+    }
+
+    /// Set a custom JSON schema for the summarization output stage.
+    ///
+    /// Mirrors Python's `cognee.config.set_summarization_model(CustomSchema)`:
+    /// accepts a JSON Schema `Value` describing the expected LLM output. The
+    /// schema **must** contain a `summary` string field. The stored value is
+    /// intended to be read by callers when constructing a `CognifyConfig` via
+    /// `CognifyConfig::with_summary_schema`.
+    ///
+    /// Returns `Err` if the schema fails validation (missing `summary` field).
+    pub fn set_summarization_schema(
+        &self,
+        schema: serde_json::Value,
+    ) -> Result<(), cognee_cognify::config::ConfigError> {
+        cognee_cognify::config::validate_summary_schema(&schema)?;
+        let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
+        s.summarization_schema = Some(schema);
+        drop(s);
+        self.bump_version();
+        Ok(())
     }
 
     // -- LLM tuning ----------------------------------------------------------

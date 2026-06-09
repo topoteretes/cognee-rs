@@ -124,6 +124,19 @@ pub struct CognifyConfig {
     #[serde(skip)]
     pub graph_schema: Option<serde_json::Value>,
 
+    /// Optional JSON schema for the summarization output.
+    ///
+    /// Mirrors Python's `CognifyConfig.summarization_model` (a Pydantic class,
+    /// default `SummarizedContent`). When `Some`, the summarization stage
+    /// requests this schema from the LLM instead of the built-in
+    /// `SummarizedContent` shape. The schema **must** contain a string
+    /// `summary` field — the pipeline reads `summary` to build each
+    /// `TextSummary` (Python parity).
+    ///
+    /// Validated at setter/builder time via `validate_summary_schema`.
+    #[serde(skip)]
+    pub summary_schema: Option<serde_json::Value>,
+
     /// Pluggable chunker callback.
     ///
     /// When `Some`, this function is called instead of the built-in
@@ -213,6 +226,7 @@ impl Default for CognifyConfig {
             token_counter_kind: TokenCounterKind::from_env(),
 
             graph_schema: None,
+            summary_schema: None,
             custom_chunker: None,
             transcriber: None,
         }
@@ -328,6 +342,18 @@ impl CognifyConfig {
         self
     }
 
+    /// Set a custom JSON schema for summarization output (Python `summarization_model` parity).
+    ///
+    /// The schema must contain a string `summary` field — the pipeline reads
+    /// `summary` to build each `TextSummary`. Returns an error if the schema
+    /// lacks that field so callers catch the misconfiguration early rather than
+    /// mid-pipeline.
+    pub fn with_summary_schema(mut self, schema: serde_json::Value) -> Result<Self, ConfigError> {
+        validate_summary_schema(&schema)?;
+        self.summary_schema = Some(schema);
+        Ok(self)
+    }
+
     /// Set a custom chunker callback.
     #[allow(clippy::type_complexity)]
     pub fn with_custom_chunker(
@@ -426,6 +452,41 @@ impl CognifyConfig {
 pub enum ConfigError {
     #[error("Invalid configuration parameter: {0}")]
     InvalidParameter(String),
+    #[error("Invalid summary schema: {0}")]
+    InvalidSummarySchema(String),
+}
+
+/// Validate that a JSON schema supplied for `summary_schema` has a string
+/// `summary` property, so misconfigurations are caught at builder/setter time
+/// rather than mid-pipeline.
+pub fn validate_summary_schema(schema: &serde_json::Value) -> Result<(), ConfigError> {
+    let obj = schema.as_object().ok_or_else(|| {
+        ConfigError::InvalidSummarySchema("schema must be a JSON object".to_string())
+    })?;
+
+    let props = obj
+        .get("properties")
+        .and_then(|p| p.as_object())
+        .ok_or_else(|| {
+            ConfigError::InvalidSummarySchema("schema must have a 'properties' object".to_string())
+        })?;
+
+    let summary_prop = props.get("summary").ok_or_else(|| {
+        ConfigError::InvalidSummarySchema(
+            "schema 'properties' must include a 'summary' field".to_string(),
+        )
+    })?;
+
+    // Accept either {"type": "string"} or no type constraint at all.
+    if let Some(type_val) = summary_prop.get("type")
+        && type_val.as_str() != Some("string")
+    {
+        return Err(ConfigError::InvalidSummarySchema(
+            "'summary' field must be of type 'string'".to_string(),
+        ));
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]

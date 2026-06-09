@@ -12,6 +12,8 @@ use cognee_embedding::{EmbeddingConfig, EmbeddingEngine, EmbeddingProvider};
 use cognee_graph::GraphDBTrait;
 #[cfg(feature = "ladybug")]
 use cognee_graph::LadybugAdapter;
+#[cfg(feature = "pggraph")]
+use cognee_graph::PgGraphAdapter;
 #[cfg(all(feature = "android-litert", target_os = "android"))]
 use cognee_llm::LiteRtAdapter;
 use cognee_llm::{Llm, OpenAIAdapter, Transcriber};
@@ -25,6 +27,33 @@ use cognee_vector::VectorDB;
 use crate::config::{ConfigManager, Settings};
 use crate::context::PipelineContext;
 use crate::error::ComponentError;
+
+/// Assemble a `postgres://user:pass@host:port/dbname` URL with percent-encoded
+/// credentials. Shared by the vector and graph URL resolvers.
+#[cfg(any(feature = "pgvector", feature = "pggraph"))]
+fn build_postgres_url(
+    host: &str,
+    port: u16,
+    name: &str,
+    user: &str,
+    pass: &str,
+) -> Result<String, String> {
+    let mut parsed = url::Url::parse("postgres://localhost").expect("static URL is always valid");
+    parsed
+        .set_host(Some(host))
+        .map_err(|e| format!("invalid host '{host}': {e}"))?;
+    parsed
+        .set_port(Some(port))
+        .map_err(|_| format!("invalid port {port}"))?;
+    parsed.set_path(&format!("/{name}"));
+    parsed
+        .set_username(user)
+        .map_err(|_| format!("invalid username '{user}'"))?;
+    parsed
+        .set_password(Some(pass))
+        .map_err(|_| "invalid password".to_string())?;
+    Ok(parsed.to_string())
+}
 
 /// Manages shared, lazily-initialized pipeline components.
 ///
@@ -101,24 +130,43 @@ impl ComponentManager {
     }
 
     async fn init_graph_db(&self) -> Result<Arc<dyn GraphDBTrait>, ComponentError> {
-        let (provider, graph_path) = {
-            let s = self.config.read();
-            let provider = s.graph_database_provider.to_lowercase();
-            if provider != "ladybug" && provider != "kuzu" {
-                return Err(ComponentError::Config(format!(
-                    "Unsupported graph_database_provider '{}'. Supported: ladybug, kuzu.",
-                    s.graph_database_provider
-                )));
+        let provider = self.config.read().graph_database_provider.to_lowercase();
+
+        match provider.as_str() {
+            "ladybug" | "kuzu" => self.init_ladybug_graph_db().await,
+
+            #[cfg(feature = "pggraph")]
+            "postgres" | "postgresql" => {
+                let url = {
+                    let s = self.config.read();
+                    self.resolved_graph_db_url(&s)?
+                };
+                let adapter = PgGraphAdapter::new(&url)
+                    .await
+                    .map_err(|e| ComponentError::GraphDb(format!("pggraph init failed: {e}")))?;
+                Ok(Arc::new(adapter))
             }
-            let graph_path = if !s.graph_file_path.is_empty() {
+
+            #[cfg(not(feature = "pggraph"))]
+            "postgres" | "postgresql" => Err(ComponentError::Config(
+                "graph_database_provider=postgres requires the `pggraph` crate feature".into(),
+            )),
+
+            other => Err(ComponentError::Config(format!(
+                "Unsupported graph_database_provider '{other}'. Supported: ladybug, kuzu, postgres.",
+            ))),
+        }
+    }
+
+    async fn init_ladybug_graph_db(&self) -> Result<Arc<dyn GraphDBTrait>, ComponentError> {
+        let graph_path = {
+            let s = self.config.read();
+            if !s.graph_file_path.is_empty() {
                 s.graph_file_path.clone()
             } else {
                 format!("{}/graph", s.system_root_directory)
-            };
-            (provider, graph_path)
+            }
         };
-        // settings guard is now dropped — safe to await.
-        let _ = provider; // suppress unused-variable warning when ladybug is not enabled
 
         if let Some(parent) = Path::new(&graph_path).parent() {
             std::fs::create_dir_all(parent)?;
@@ -139,6 +187,64 @@ impl ComponentManager {
         Err(ComponentError::Config(
             "graph_database_provider=ladybug requires the `ladybug` crate feature".to_string(),
         ))
+    }
+
+    /// Build a Postgres connection URL from the graph_database_* settings,
+    /// falling back to the relational db_* fields when graph-specific creds
+    /// are not fully configured (Python `get_graph_engine.py:332-367` parity).
+    ///
+    /// Precedence:
+    /// 1. `graph_database_url` already looks like a full `postgres://` URL → return as-is.
+    /// 2. All graph-specific fields are set (username, password, host, port, name) → build from those.
+    /// 3. Fall back to the relational `db_*` fields with a warning.
+    /// 4. Neither complete → error.
+    #[cfg(feature = "pggraph")]
+    fn resolved_graph_db_url(&self, s: &Settings) -> Result<String, ComponentError> {
+        if s.graph_database_url.starts_with("postgres://")
+            || s.graph_database_url.starts_with("postgresql://")
+        {
+            return Ok(s.graph_database_url.clone());
+        }
+
+        let graph_host = if s.graph_database_host.is_empty() {
+            None
+        } else {
+            Some(s.graph_database_host.as_str())
+        };
+
+        let graph_creds_complete = graph_host.is_some()
+            && !s.graph_database_username.is_empty()
+            && !s.graph_database_name.is_empty();
+
+        let (host, port, name, user, pass) = if graph_creds_complete {
+            (
+                graph_host.expect("checked above"),
+                s.graph_database_port,
+                s.graph_database_name.as_str(),
+                s.graph_database_username.as_str(),
+                s.graph_database_password.as_str(),
+            )
+        } else {
+            warn!(
+                "Postgres graph credentials not fully configured; falling back to the \
+                 relational database configuration. Set GRAPH_DATABASE_* explicitly to avoid this."
+            );
+            if s.db_host.is_empty() || s.db_name.is_empty() || s.db_username.is_empty() {
+                return Err(ComponentError::Config(
+                    "Missing required Postgres graph credentials".into(),
+                ));
+            }
+            (
+                s.db_host.as_str(),
+                s.db_port,
+                s.db_name.as_str(),
+                s.db_username.as_str(),
+                s.db_password.as_str(),
+            )
+        };
+
+        build_postgres_url(host, port, name, user, pass)
+            .map_err(|e| ComponentError::Config(format!("failed to build graph DB URL: {e}")))
     }
 
     async fn init_vector_db(&self) -> Result<Arc<dyn VectorDB>, ComponentError> {
@@ -231,23 +337,8 @@ impl ComponentManager {
         };
         let pass = &settings.db_password;
 
-        let mut parsed =
-            url::Url::parse("postgres://localhost").expect("static URL is always valid");
-        parsed
-            .set_host(Some(host))
-            .map_err(|e| ComponentError::Config(format!("invalid vector_db host: {e}")))?;
-        parsed
-            .set_port(Some(port))
-            .map_err(|_| ComponentError::Config("invalid vector_db port".into()))?;
-        parsed.set_path(&format!("/{name}"));
-        parsed
-            .set_username(user)
-            .map_err(|_| ComponentError::Config("invalid vector_db username".into()))?;
-        parsed
-            .set_password(Some(pass))
-            .map_err(|_| ComponentError::Config("invalid vector_db password".into()))?;
-
-        Ok(parsed.to_string())
+        build_postgres_url(host, port, name, user, pass)
+            .map_err(|e| ComponentError::Config(format!("failed to build vector DB URL: {e}")))
     }
 
     /// Initialize the embedding engine from Settings fields instead of
@@ -596,5 +687,110 @@ mod tests {
         let second = cm.transcriber().await.expect("second call").unwrap();
         // Both calls return an Arc pointing to the same allocation.
         assert!(Arc::ptr_eq(&first, &second), "transcriber should be cached");
+    }
+
+    // -- resolved_graph_db_url / PgGraph provider dispatch --------------------
+
+    #[cfg(feature = "pggraph")]
+    fn cm_with_graph_settings(settings: Settings) -> ComponentManager {
+        ComponentManager::new(ConfigManager::new(settings))
+    }
+
+    #[cfg(feature = "pggraph")]
+    #[test]
+    fn resolved_graph_db_url_returns_explicit_url_as_is() {
+        let settings = Settings {
+            graph_database_url: "postgres://user:pw@myhost:5432/graphs".to_string(),
+            ..Settings::default()
+        };
+        let cm = cm_with_graph_settings(settings.clone());
+        let url = cm
+            .resolved_graph_db_url(&settings)
+            .expect("should succeed with full URL");
+        assert_eq!(url, "postgres://user:pw@myhost:5432/graphs");
+    }
+
+    #[cfg(feature = "pggraph")]
+    #[test]
+    fn resolved_graph_db_url_builds_from_graph_creds() {
+        let settings = Settings {
+            graph_database_host: "graphhost".to_string(),
+            graph_database_port: 5432,
+            graph_database_name: "mygraph".to_string(),
+            graph_database_username: "guser".to_string(),
+            graph_database_password: "gpass".to_string(),
+            ..Settings::default()
+        };
+        let cm = cm_with_graph_settings(settings.clone());
+        let url = cm
+            .resolved_graph_db_url(&settings)
+            .expect("should build from graph creds");
+        assert!(url.contains("guser"), "URL should contain username");
+        assert!(url.contains("graphhost"), "URL should contain host");
+        assert!(url.contains("mygraph"), "URL should contain db name");
+    }
+
+    #[cfg(feature = "pggraph")]
+    #[test]
+    fn resolved_graph_db_url_falls_back_to_relational_creds() {
+        // Graph creds not set, relational creds are set → fallback.
+        let settings = Settings {
+            db_host: "relhost".to_string(),
+            db_port: 5432,
+            db_name: "reldb".to_string(),
+            db_username: "reluser".to_string(),
+            db_password: "relpass".to_string(),
+            ..Settings::default()
+        };
+        let cm = cm_with_graph_settings(settings.clone());
+        let url = cm
+            .resolved_graph_db_url(&settings)
+            .expect("should fall back to relational creds");
+        assert!(
+            url.contains("reluser"),
+            "URL should contain relational username"
+        );
+        assert!(
+            url.contains("relhost"),
+            "URL should contain relational host"
+        );
+        assert!(
+            url.contains("reldb"),
+            "URL should contain relational db name"
+        );
+    }
+
+    #[cfg(feature = "pggraph")]
+    #[test]
+    fn resolved_graph_db_url_errors_when_no_creds() {
+        // Neither graph nor relational creds → config error.
+        let settings = Settings {
+            db_host: String::new(),
+            db_name: String::new(),
+            db_username: String::new(),
+            ..Settings::default()
+        };
+        let cm = cm_with_graph_settings(settings.clone());
+        let result = cm.resolved_graph_db_url(&settings);
+        assert!(result.is_err(), "should error when no creds available");
+    }
+
+    #[tokio::test]
+    async fn init_graph_db_rejects_unsupported_provider() {
+        let settings = Settings {
+            graph_database_provider: "neo4j".to_string(),
+            ..Settings::default()
+        };
+        let cm = ComponentManager::new(ConfigManager::new(settings));
+        let result = cm.graph_db().await;
+        assert!(result.is_err());
+        let err_msg = match result {
+            Err(e) => e.to_string(),
+            Ok(_) => panic!("expected error"),
+        };
+        assert!(
+            err_msg.contains("postgres"),
+            "error message should list 'postgres' as supported: {err_msg}"
+        );
     }
 }
