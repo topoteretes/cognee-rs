@@ -19,6 +19,12 @@ env:
   # Incremental state in target/incremental/ is useless on CI (each run
   # starts from a fresh checkout) and wastes 2-5 GB of runner disk.
   CARGO_INCREMENTAL: "0"
+  # Redirect the ort-sys ONNX Runtime binary download into target/ so
+  # Swatinem/rust-cache picks it up. Without this the binary lands in
+  # ~/.cache/ort.pyke.io which Swatinem does NOT cache, causing a link
+  # error on any job that gets a cache hit for target/ but a fresh runner
+  # (the cached build script output points to the absent ~/.cache path).
+  ORT_CACHE_DIR: ${{ github.workspace }}/target/ort-cache
 
 jobs:
   # ── Stage 1: Quick lints (fast fail) ──────────────────────────────────
@@ -57,7 +63,7 @@ jobs:
       - name: Cache cargo/target
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: workspace-v3
+          shared-key: workspace-v4
 
       - name: rustfmt (check)
         run: cargo fmt --all -- --check
@@ -141,7 +147,7 @@ jobs:
       - name: Cache cargo/target
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: workspace-v3
+          shared-key: workspace-v4
 
       - name: Show toolchain
         run: |
@@ -258,7 +264,7 @@ jobs:
       - name: Cache cargo/target
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: workspace-v3
+          shared-key: workspace-v4
 
       - name: Run pgvector span instrumentation tests
         run: cargo test -p cognee-vector --test pgvector_span_instrumentation -- --nocapture
@@ -278,7 +284,7 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y cmake protobuf-compiler
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: workspace-v3
+          shared-key: workspace-v4
       - run: bash capi/scripts/check.sh
 
   python-check:
@@ -295,7 +301,7 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: workspace-v3
+          shared-key: workspace-v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -325,7 +331,7 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y cmake protobuf-compiler
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: workspace-v3
+          shared-key: workspace-v4
           workspaces: |
             . -> target
             js/cognee-neon -> target
