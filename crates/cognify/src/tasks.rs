@@ -4373,7 +4373,10 @@ mod tests {
             "html file must produce at least one chunk"
         );
         assert!(
-            chunks.chunks.iter().any(|c| c.text.contains("quick brown fox")),
+            chunks
+                .chunks
+                .iter()
+                .any(|c| c.text.contains("quick brown fox")),
             "extracted text must appear in chunks (HTML tags must be stripped)"
         );
     }

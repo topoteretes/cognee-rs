@@ -302,13 +302,22 @@ async fn impl_add_image_and_audio_together(db_url: &str) {
 
     assert_eq!(results.len(), 2);
 
-    let img = results.iter().find(|d| d.extension == "jpg").expect("jpeg result");
-    let aud = results.iter().find(|d| d.extension == "wav").expect("wav result");
+    let img = results
+        .iter()
+        .find(|d| d.extension == "jpg")
+        .expect("jpeg result");
+    let aud = results
+        .iter()
+        .find(|d| d.extension == "wav")
+        .expect("wav result");
 
     assert_eq!(img.loader_engine.as_deref(), Some("image_loader"));
     assert_eq!(aud.loader_engine.as_deref(), Some("audio_loader"));
 
-    assert_ne!(img.id, aud.id, "different content must produce different data_ids");
+    assert_ne!(
+        img.id, aud.id,
+        "different content must produce different data_ids"
+    );
 }
 
 #[tokio::test]
