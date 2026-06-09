@@ -66,6 +66,9 @@ impl DataInput {
                     "URL inputs must be resolved before streaming. Use cognee_ingestion::resolve_url_input() or AddPipeline::add().",
                 )));
             }
+            // TODO(COG-4456): implement S3 path ingestion — fetch bytes from S3 using
+            // aws-sdk-s3 or object_store, then route through the same MIME-based dispatch
+            // used for URL inputs (text → UTF-8, image/audio/pdf → Binary).
             Self::S3Path(_s3_path) => {
                 return Err(E::from(std::io::Error::new(
                     std::io::ErrorKind::Unsupported,

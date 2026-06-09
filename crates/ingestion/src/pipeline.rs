@@ -439,6 +439,7 @@ fn extract_file_metadata(input: &DataInput) -> (String, String, String, Option<S
                 None,
             )
         }
+        // TODO(COG-4456): replace placeholder metadata when S3 ingestion is implemented.
         DataInput::S3Path(_) => (
             "s3_file.bin".to_string(),
             "bin".to_string(),
