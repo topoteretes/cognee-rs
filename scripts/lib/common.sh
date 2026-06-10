@@ -18,7 +18,9 @@ download_if_missing() {
 
   mkdir -p "$(dirname "$path")"
   echo -e "${YELLOW}⬇ Downloading missing artifact:${NC} $(basename "$path")"
-  curl -fL "$url" -o "$path"
+  # --retry-all-errors retries on HTTP errors (e.g. 429 rate-limit from HuggingFace).
+  # Requires curl >= 7.71 (Ubuntu 22.04 ships 7.81).
+  curl -fL --retry 5 --retry-delay 15 --retry-max-time 600 --retry-all-errors "$url" -o "$path"
 }
 
 # setup_embedding_models <model_dir>
