@@ -19,7 +19,7 @@ use std::sync::Arc;
 use cognee_cognify::memify::{MemifyConfig, memify};
 use cognee_core::{CpuPool, RayonThreadPool};
 use cognee_database::{DatabaseConnection, SearchHistoryDb, connect, initialize};
-use cognee_embedding::{EmbeddingEngine, config::OnnxEmbeddingConfig, onnx::OnnxEmbeddingEngine};
+use cognee_embedding::EmbeddingEngine;
 use cognee_graph::{GraphDBTrait, LadybugAdapter};
 use cognee_llm::Llm;
 use cognee_search::{
@@ -31,20 +31,6 @@ use cognee_vector::{QdrantAdapter, VectorDB};
 use serde_json::json;
 use tempfile::TempDir;
 use uuid::Uuid;
-
-/// Resolve the directory that holds BGE-Small-v1.5 model artifacts.
-///
-/// Mirrors the helper used in `integration_default_backend.rs` /
-/// `integration_search_matrix.rs`: prefers the parent of
-/// `COGNEE_E2E_EMBED_MODEL_PATH`, falls back to `./target/models`.
-fn get_embedding_model_dir() -> String {
-    if let Ok(model_path) = std::env::var("COGNEE_E2E_EMBED_MODEL_PATH")
-        && let Some(parent) = std::path::Path::new(&model_path).parent()
-    {
-        return parent.to_string_lossy().to_string();
-    }
-    "./target/models".to_string()
-}
 
 /// Seed a single node on the Ladybug adapter with `name` + `description`
 /// (and the `type` default of `"Unknown"` — memify's default path uses
@@ -121,45 +107,19 @@ fn response_payload_text(response: &SearchResponse) -> String {
 
 #[tokio::test]
 async fn test_memify_e2e_real_embedding_real_qdrant() {
-    // ── Gate: graceful skip when model artifacts are absent ─────────────────
-    if std::env::var("COGNEE_E2E_EMBED_MODEL_PATH").is_err() {
-        eprintln!(
-            "⚠️  skipping test_memify_e2e_real_embedding_real_qdrant: \
-             COGNEE_E2E_EMBED_MODEL_PATH is not set"
-        );
-        return;
-    }
-    if std::env::var("COGNEE_E2E_TOKENIZER_PATH").is_err() {
-        eprintln!(
-            "⚠️  skipping test_memify_e2e_real_embedding_real_qdrant: \
-             COGNEE_E2E_TOKENIZER_PATH is not set"
-        );
-        return;
-    }
-
     // ── Infrastructure setup (all ephemeral, in a TempDir) ──────────────────
     let temp_dir = TempDir::new().expect("temp dir");
 
-    let model_dir = get_embedding_model_dir();
-    let embedding_engine: Arc<dyn EmbeddingEngine> =
-        match OnnxEmbeddingEngine::new(OnnxEmbeddingConfig::bge_small(&model_dir)) {
-            Ok(engine) => Arc::new(engine),
-            Err(e) => {
-                eprintln!(
-                    "⚠️  skipping test_memify_e2e_real_embedding_real_qdrant: \
-                     failed to load embedding model: {e}"
-                );
-                eprintln!(
-                    "   Ensure model is at {}/BGE-Small-v1.5-model_quantized.onnx",
-                    model_dir
-                );
-                return;
-            }
-        };
+    let Some((embedding_engine, embedding_dims)) =
+        cognee_test_utils::create_test_embedding_engine().await
+    else {
+        return;
+    };
+    let embedding_engine: Arc<dyn EmbeddingEngine> = embedding_engine;
 
-    // Embedded Qdrant (BGE-Small dimension = 384).
+    // Embedded Qdrant.
     let vector_db: Arc<dyn VectorDB> =
-        Arc::new(QdrantAdapter::new(temp_dir.path().join("qdrant"), 384));
+        Arc::new(QdrantAdapter::new(temp_dir.path().join("qdrant"), embedding_dims));
 
     // Embedded Ladybug.
     let graph_path = temp_dir.path().join("graph").to_string_lossy().to_string();

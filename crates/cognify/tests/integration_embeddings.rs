@@ -9,7 +9,6 @@
 
 use cognee_cognify::{CognifyConfig, CognifyResult, cognify};
 use cognee_database::{DatabaseConnection, connect, initialize};
-use cognee_embedding::{config::OnnxEmbeddingConfig, onnx::OnnxEmbeddingEngine};
 use cognee_graph::MockGraphDB;
 use cognee_models::Data;
 use cognee_ontology::NoOpOntologyResolver;
@@ -43,41 +42,22 @@ fn make_thread_pool() -> Arc<dyn cognee_core::CpuPool> {
     Arc::new(cognee_core::RayonThreadPool::with_default_threads().expect("RayonThreadPool init"))
 }
 
-fn get_embedding_model_dir() -> String {
-    if let Ok(model_dir) = std::env::var("COGNEE_TEST_MODEL_DIR") {
-        return model_dir;
-    }
-
-    if let Ok(model_path) = std::env::var("COGNEE_E2E_EMBED_MODEL_PATH")
-        && let Some(parent) = std::path::Path::new(&model_path).parent()
-    {
-        return parent.to_string_lossy().to_string();
-    }
-
-    "./target/models".to_string()
-}
-
 #[tokio::test]
 async fn test_pipeline_with_embeddings() {
     let llm = create_adapter_from_env();
+
+    let Some((embedding_engine, _embedding_dims)) =
+        cognee_test_utils::create_test_embedding_engine().await
+    else {
+        return;
+    };
 
     // 1. Setup storage and graph DB
     let storage = Arc::new(MockStorage::new());
     let graph_db = Arc::new(MockGraphDB::new());
     let vector_db = Arc::new(MockVectorDB::new());
 
-    // 2. Setup embedding engine (BGE-Small)
-    let embedding_config = OnnxEmbeddingConfig::bge_small(get_embedding_model_dir());
-    let embedding_engine = match OnnxEmbeddingEngine::new(embedding_config) {
-        Ok(engine) => Arc::new(engine),
-        Err(e) => {
-            eprintln!("⚠️  Skipping test: Failed to load embedding model: {}", e);
-            eprintln!("   Ensure model is downloaded to ./target/models/");
-            return;
-        }
-    };
-
-    // 3. Create config
+    // 2. Create config
     let config = CognifyConfig::default();
 
     // 4. Create test data
@@ -194,22 +174,18 @@ async fn test_pipeline_with_embeddings() {
 async fn test_pipeline_requires_embeddings() {
     // This test verifies that embeddings are REQUIRED (matches Python behavior)
 
+    let Some((embedding_engine, _embedding_dims)) =
+        cognee_test_utils::create_test_embedding_engine().await
+    else {
+        return;
+    };
+
     // 1. Setup storage and graph DB
     let storage = Arc::new(MockStorage::new());
     let graph_db = Arc::new(MockGraphDB::new());
     let vector_db = Arc::new(MockVectorDB::new());
 
-    // 2. Setup embedding engine
-    let embedding_config = OnnxEmbeddingConfig::bge_small(get_embedding_model_dir());
-    let embedding_engine = match OnnxEmbeddingEngine::new(embedding_config) {
-        Ok(engine) => Arc::new(engine),
-        Err(e) => {
-            eprintln!("⚠️  Skipping test: Failed to load embedding model: {}", e);
-            return;
-        }
-    };
-
-    // 3. Create config (embeddings are REQUIRED)
+    // 2. Create config (embeddings are REQUIRED)
     let config = CognifyConfig::default();
 
     // 4. Create test data
@@ -283,19 +259,16 @@ async fn test_embedding_semantic_similarity() {
 
     let llm = create_adapter_from_env() as Arc<dyn cognee_llm::Llm>;
 
+    let Some((embedding_engine, _embedding_dims)) =
+        cognee_test_utils::create_test_embedding_engine().await
+    else {
+        return;
+    };
+    let embedding_engine: Arc<dyn cognee_embedding::EmbeddingEngine> = embedding_engine;
+
     let storage: Arc<dyn StorageTrait> = Arc::new(MockStorage::new());
     let graph_db: Arc<dyn cognee_graph::GraphDBTrait> = Arc::new(MockGraphDB::new());
     let vector_db: Arc<dyn VectorDB> = Arc::new(MockVectorDB::new());
-
-    let embedding_config = OnnxEmbeddingConfig::bge_small(get_embedding_model_dir());
-    let embedding_engine: Arc<dyn cognee_embedding::EmbeddingEngine> =
-        match OnnxEmbeddingEngine::new(embedding_config) {
-            Ok(engine) => Arc::new(engine),
-            Err(e) => {
-                eprintln!("⚠️  Skipping test: Failed to load embedding model: {}", e);
-                return;
-            }
-        };
 
     let config = CognifyConfig::default();
 
@@ -385,18 +358,15 @@ async fn test_entity_name_indexing() {
 
     let llm = create_adapter_from_env();
 
+    let Some((embedding_engine, _embedding_dims)) =
+        cognee_test_utils::create_test_embedding_engine().await
+    else {
+        return;
+    };
+
     let storage = Arc::new(MockStorage::new());
     let graph_db = Arc::new(MockGraphDB::new());
     let vector_db = Arc::new(MockVectorDB::new());
-
-    let embedding_config = OnnxEmbeddingConfig::bge_small(get_embedding_model_dir());
-    let embedding_engine = match OnnxEmbeddingEngine::new(embedding_config) {
-        Ok(engine) => Arc::new(engine),
-        Err(e) => {
-            eprintln!("⚠️  Skipping test: Failed to load embedding model: {}", e);
-            return;
-        }
-    };
 
     let config = CognifyConfig::default();
 
@@ -517,18 +487,15 @@ async fn test_triplet_embeddings_disabled_by_default() {
 
     let llm = create_adapter_from_env();
 
+    let Some((embedding_engine, _embedding_dims)) =
+        cognee_test_utils::create_test_embedding_engine().await
+    else {
+        return;
+    };
+
     let storage = Arc::new(MockStorage::new());
     let graph_db = Arc::new(MockGraphDB::new());
     let vector_db = Arc::new(MockVectorDB::new());
-
-    let embedding_config = OnnxEmbeddingConfig::bge_small(get_embedding_model_dir());
-    let embedding_engine = match OnnxEmbeddingEngine::new(embedding_config) {
-        Ok(engine) => Arc::new(engine),
-        Err(e) => {
-            eprintln!("⚠️  Skipping test: Failed to load embedding model: {}", e);
-            return;
-        }
-    };
 
     // Create config with DEFAULT settings (triplet embeddings should be disabled)
     let config = CognifyConfig::default();
@@ -607,18 +574,15 @@ async fn test_triplet_embeddings_enabled() {
 
     let llm = create_adapter_from_env();
 
+    let Some((embedding_engine, _embedding_dims)) =
+        cognee_test_utils::create_test_embedding_engine().await
+    else {
+        return;
+    };
+
     let storage = Arc::new(MockStorage::new());
     let graph_db = Arc::new(MockGraphDB::new());
     let vector_db = Arc::new(MockVectorDB::new());
-
-    let embedding_config = OnnxEmbeddingConfig::bge_small(get_embedding_model_dir());
-    let embedding_engine = match OnnxEmbeddingEngine::new(embedding_config) {
-        Ok(engine) => Arc::new(engine),
-        Err(e) => {
-            eprintln!("⚠️  Skipping test: Failed to load embedding model: {}", e);
-            return;
-        }
-    };
 
     // Create config that ENABLES triplet embeddings (Phase 3)
     let config = CognifyConfig::default().with_triplet_embeddings(true);

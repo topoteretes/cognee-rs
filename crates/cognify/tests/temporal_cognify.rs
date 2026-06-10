@@ -317,35 +317,17 @@ async fn temporal_cognify_populates_event_name_vector_collection() {
         .await
         .expect("graph_db.initialize should succeed");
 
-    // Qdrant vector DB (embedded, 384-dim)
-    let qdrant_path = temp_dir.path().join("qdrant");
-    let vector_db = Arc::new(cognee_vector::QdrantAdapter::new(qdrant_path, 384));
-
-    // Embedding engine: try ONNX BGE-Small if available, otherwise skip
-    let model_dir = if let Ok(model_path) = std::env::var("COGNEE_E2E_EMBED_MODEL_PATH")
-        && let Some(parent) = std::path::Path::new(&model_path).parent()
-    {
-        parent.to_string_lossy().to_string()
-    } else if let Ok(dir) = std::env::var("COGNEE_TEST_MODEL_DIR") {
-        dir
-    } else {
-        "./target/models".to_string()
+    // Embedding engine
+    let Some((embedding_engine, embedding_dims)) =
+        cognee_test_utils::create_test_embedding_engine().await
+    else {
+        return;
     };
+    let embedding_engine: Arc<dyn cognee_embedding::engine::EmbeddingEngine> = embedding_engine;
 
-    let embedding_engine: Arc<dyn cognee_embedding::engine::EmbeddingEngine> =
-        match cognee_embedding::onnx::OnnxEmbeddingEngine::new(
-            cognee_embedding::config::OnnxEmbeddingConfig::bge_small(&model_dir),
-        ) {
-            Ok(engine) => Arc::new(engine),
-            Err(e) => {
-                eprintln!(
-                    "Skipping temporal_cognify_populates_event_name_vector_collection: \
-                 failed to load embedding model: {e}"
-                );
-                eprintln!("   Ensure model is at {model_dir}/BGE-Small-v1.5-model_quantized.onnx");
-                return;
-            }
-        };
+    // Qdrant vector DB (embedded)
+    let qdrant_path = temp_dir.path().join("qdrant");
+    let vector_db = Arc::new(cognee_vector::QdrantAdapter::new(qdrant_path, embedding_dims));
 
     let data_item = ingest_text(BIOGRAPHY_TEXT, &storage, owner_id).await;
 

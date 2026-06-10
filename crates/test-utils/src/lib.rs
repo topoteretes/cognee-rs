@@ -19,6 +19,7 @@ use std::{path::PathBuf, sync::Arc};
 
 use cognee_core::{CancellationHandle, RayonThreadPool, TaskContext, TaskContextBuilder};
 use cognee_database::DatabaseConnection;
+use cognee_embedding::{EmbeddingEngine, config::EmbeddingConfig};
 
 pub use cognee_graph::MockGraphDB;
 pub use cognee_storage::MockStorage;
@@ -58,6 +59,31 @@ pub fn e2e_embedding_model_dir() -> PathBuf {
         .and_then(|path| path.parent())
         .expect("crate should live under workspace/crates")
         .join("target/models")
+}
+
+/// Build an embedding engine from environment configuration for use in integration tests.
+///
+/// Calls [`EmbeddingConfig::from_env`] which defaults to OpenAI `text-embedding-3-small`
+/// (reading `EMBEDDING_API_KEY`, falling back to `LLM_API_KEY`) on non-Android platforms.
+/// Returns `(engine, dimensions)` on success, or `None` with a printed skip message on
+/// failure so tests can gracefully skip:
+///
+/// ```rust,ignore
+/// let Some((embedding_engine, embedding_dims)) =
+///     cognee_test_utils::create_test_embedding_engine().await
+/// else { return };
+/// ```
+pub async fn create_test_embedding_engine() -> Option<(Arc<dyn EmbeddingEngine>, usize)> {
+    let _ = dotenv::dotenv();
+    let config = EmbeddingConfig::from_env();
+    let dimensions = config.dimensions;
+    match config.create_engine().await {
+        Ok(engine) => Some((engine, dimensions)),
+        Err(e) => {
+            eprintln!("⚠️  Skipping: could not create embedding engine: {e}");
+            None
+        }
+    }
 }
 
 /// Returns a PostgreSQL connection URL built from environment variables, or `None`

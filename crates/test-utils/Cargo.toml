@@ -7,11 +7,13 @@ edition.workspace = true
 async-trait.workspace = true
 cognee-core = { path = "../core" }
 cognee-database = { path = "../database" }
+cognee-embedding = { path = "../embedding" }
 cognee-models = { path = "../models" }
 cognee-graph = { path = "../graph", features = ["testing"] }
 cognee-llm = { path = "../llm" }
 cognee-storage = { path = "../storage", features = ["testing"] }
 cognee-vector = { path = "../vector", features = ["testing"] }
+dotenv.workspace = true
 serde_json.workspace = true
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["registry"] }

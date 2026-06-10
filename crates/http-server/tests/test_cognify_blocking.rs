@@ -33,7 +33,7 @@ use tower::ServiceExt;
 use uuid::Uuid;
 
 use cognee_database::{IngestDb, connect, initialize};
-use cognee_embedding::{EmbeddingEngine, config::OnnxEmbeddingConfig, onnx::OnnxEmbeddingEngine};
+
 use cognee_graph::{GraphDBTrait, LadybugAdapter};
 use cognee_http_server::components::ComponentHandles;
 use cognee_http_server::{AppState, HttpServerConfig, build_router};
@@ -63,15 +63,6 @@ fn maybe_env(name: &str) -> Option<String> {
         .filter(|v| !v.is_empty())
 }
 
-fn embedding_model_dir() -> String {
-    if let Ok(model_path) = std::env::var("COGNEE_E2E_EMBED_MODEL_PATH")
-        && let Some(parent) = std::path::Path::new(&model_path).parent()
-    {
-        return parent.to_string_lossy().to_string();
-    }
-    "./target/models".to_string()
-}
-
 #[tokio::test]
 async fn post_cognify_blocking_executes_real_pipeline() {
     // ── Env gate ─────────────────────────────────────────────────────────────
@@ -87,6 +78,13 @@ async fn post_cognify_blocking_executes_real_pipeline() {
 
     // ── Build backends ───────────────────────────────────────────────────────
     let temp_dir = TempDir::new().expect("temp dir");
+
+    let Some((embedding_engine, embedding_dims)) =
+        cognee_test_utils::create_test_embedding_engine().await
+    else {
+        eprintln!("test_cognify_blocking: skipping — embedding engine unavailable");
+        return;
+    };
 
     let storage: Arc<dyn StorageTrait> =
         Arc::new(LocalStorage::new(temp_dir.path().join("storage")));
@@ -108,20 +106,7 @@ async fn post_cognify_blocking_executes_real_pipeline() {
     graph_db.initialize().await.expect("graph_db.initialize");
 
     let vector_db: Arc<dyn VectorDB> =
-        Arc::new(QdrantAdapter::new(temp_dir.path().join("qdrant"), 384));
-
-    let model_dir = embedding_model_dir();
-    let embedding_engine: Arc<dyn EmbeddingEngine> =
-        match OnnxEmbeddingEngine::new(OnnxEmbeddingConfig::bge_small(&model_dir)) {
-            Ok(engine) => Arc::new(engine),
-            Err(e) => {
-                eprintln!(
-                    "test_cognify_blocking: skipping — embedding model unavailable at {}: {}",
-                    model_dir, e
-                );
-                return;
-            }
-        };
+        Arc::new(QdrantAdapter::new(temp_dir.path().join("qdrant"), embedding_dims));
 
     let llm: Arc<dyn Llm> = Arc::new(
         OpenAIAdapter::new(openai_model, openai_token, Some(openai_url))

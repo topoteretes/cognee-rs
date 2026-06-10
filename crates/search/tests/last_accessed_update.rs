@@ -14,7 +14,7 @@ use std::sync::Arc;
 use chrono::Utc;
 use cognee_cognify::{CognifyConfig, cognify};
 use cognee_database::{DatabaseConnection, IngestDb, SearchHistoryDb, connect, initialize, ops};
-use cognee_embedding::{EmbeddingEngine, config::OnnxEmbeddingConfig, onnx::OnnxEmbeddingEngine};
+
 use cognee_graph::{GraphDBTrait, LadybugAdapter};
 use cognee_ingestion::AddPipeline;
 use cognee_llm::Llm;
@@ -70,15 +70,6 @@ fn create_adapter_from_env() -> Arc<cognee_llm::OpenAIAdapter> {
     )
 }
 
-fn get_embedding_model_dir() -> String {
-    if let Ok(model_path) = std::env::var("COGNEE_E2E_EMBED_MODEL_PATH")
-        && let Some(parent) = std::path::Path::new(&model_path).parent()
-    {
-        return parent.to_string_lossy().to_string();
-    }
-    "./target/models".to_string()
-}
-
 // ---------------------------------------------------------------------------
 // Test
 // ---------------------------------------------------------------------------
@@ -89,10 +80,15 @@ async fn test_search_updates_last_accessed_timestamp() {
     let _ = require_env("OPENAI_URL");
     let _ = require_env("OPENAI_TOKEN");
     let _ = require_env("OPENAI_MODEL");
-    let _ = require_env("COGNEE_E2E_EMBED_MODEL_PATH");
 
     // ── Infrastructure setup ─────────────────────────────────────────────────
     let temp_dir = TempDir::new().expect("temp dir");
+
+    let Some((embedding_engine, embedding_dims)) =
+        cognee_test_utils::create_test_embedding_engine().await
+    else {
+        return;
+    };
 
     let storage: Arc<dyn StorageTrait> =
         Arc::new(LocalStorage::new(temp_dir.path().join("storage")));
@@ -114,21 +110,7 @@ async fn test_search_updates_last_accessed_timestamp() {
     graph_db.initialize().await.expect("graph_db.initialize");
 
     let vector_db: Arc<dyn VectorDB> =
-        Arc::new(QdrantAdapter::new(temp_dir.path().join("qdrant"), 384));
-
-    let model_dir = get_embedding_model_dir();
-    let embedding_engine: Arc<dyn EmbeddingEngine> =
-        match OnnxEmbeddingEngine::new(OnnxEmbeddingConfig::bge_small(&model_dir)) {
-            Ok(engine) => Arc::new(engine),
-            Err(e) => {
-                eprintln!("Skipping test: failed to load embedding model: {}", e);
-                eprintln!(
-                    "   Ensure model is at {}/BGE-Small-v1.5-model_quantized.onnx",
-                    model_dir
-                );
-                return;
-            }
-        };
+        Arc::new(QdrantAdapter::new(temp_dir.path().join("qdrant"), embedding_dims));
 
     let llm: Arc<dyn Llm> = create_adapter_from_env();
     let owner_id = Uuid::nil();

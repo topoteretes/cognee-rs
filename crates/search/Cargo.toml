@@ -32,17 +32,18 @@ uuid = { workspace = true, features = ["serde", "v4"] }
 [dev-dependencies]
 cognee-core      = { path = "../core" }
 cognee-database  = { path = "../database" }
-cognee-embedding = { path = "../embedding", features = ["onnx"] }
-cognee-graph     = { path = "../graph", features = ["testing", "ladybug"] }
-cognee-vector    = { path = "../vector", features = ["testing", "qdrant"] }
-cognee-models    = { path = "../models" }
-cognee-storage   = { path = "../storage" }
-cognee-ingestion = { path = "../ingestion" }
-cognee-cognify   = { path = "../cognify" }
-cognee-ontology  = { path = "../ontology" }
-cognee-delete    = { path = "../delete" }
-cognee-llm       = { path = "../llm" }
-cognee-session   = { path = "../session", features = ["fs"] }
+cognee-embedding  = { path = "../embedding", features = ["onnx"] }
+cognee-graph      = { path = "../graph", features = ["testing", "ladybug"] }
+cognee-vector     = { path = "../vector", features = ["testing", "qdrant"] }
+cognee-models     = { path = "../models" }
+cognee-storage    = { path = "../storage" }
+cognee-ingestion  = { path = "../ingestion" }
+cognee-cognify    = { path = "../cognify" }
+cognee-ontology   = { path = "../ontology" }
+cognee-delete     = { path = "../delete" }
+cognee-llm        = { path = "../llm" }
+cognee-session    = { path = "../session", features = ["fs"] }
+cognee-test-utils = { path = "../test-utils" }
 dotenv.workspace = true
 serial_test.workspace = true
 tempfile.workspace = true

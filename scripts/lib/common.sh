@@ -7,39 +7,6 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-# download_if_missing <local_path> <url>
-# Creates parent directories and downloads the file only if it is absent.
-download_if_missing() {
-  local path="$1"
-  local url="$2"
-  if [[ -f "$path" ]]; then
-    return 0
-  fi
-
-  mkdir -p "$(dirname "$path")"
-  echo -e "${YELLOW}⬇ Downloading missing artifact:${NC} $(basename "$path")"
-  # --retry-all-errors retries on HTTP errors (e.g. 429 rate-limit from HuggingFace).
-  # Requires curl >= 7.71 (Ubuntu 22.04 ships 7.81).
-  curl -fL --retry 5 --retry-delay 15 --retry-max-time 600 --retry-all-errors "$url" -o "$path"
-}
-
-# setup_embedding_models <model_dir>
-# Sets and exports COGNEE_E2E_EMBED_MODEL_PATH and COGNEE_E2E_TOKENIZER_PATH,
-# then downloads the BGE-Small ONNX model and tokenizer if not already present.
-setup_embedding_models() {
-  local model_dir="$1"
-
-  export COGNEE_E2E_EMBED_MODEL_PATH="${COGNEE_E2E_EMBED_MODEL_PATH:-$model_dir/BGE-Small-v1.5-model_quantized.onnx}"
-  export COGNEE_E2E_TOKENIZER_PATH="${COGNEE_E2E_TOKENIZER_PATH:-$model_dir/bge-small-tokenizer.json}"
-
-  download_if_missing \
-    "$COGNEE_E2E_EMBED_MODEL_PATH" \
-    "https://huggingface.co/Xenova/bge-small-en-v1.5/resolve/main/onnx/model_quantized.onnx"
-
-  download_if_missing \
-    "$COGNEE_E2E_TOKENIZER_PATH" \
-    "https://huggingface.co/Xenova/bge-small-en-v1.5/resolve/main/tokenizer.json"
-}
 
 # print_env — prints the 5 key test environment variables
 print_env() {

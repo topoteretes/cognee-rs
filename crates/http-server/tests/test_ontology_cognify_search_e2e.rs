@@ -10,7 +10,7 @@ use axum::{
 };
 use cognee_database::{DatabaseConnection, IngestDb, SearchHistoryDb, connect, initialize, ops};
 use cognee_delete::DeleteService;
-use cognee_embedding::{EmbeddingEngine, config::OnnxEmbeddingConfig, onnx::OnnxEmbeddingEngine};
+
 use cognee_graph::{GraphDBTrait, LadybugAdapter};
 use cognee_http_server::{AppState, HttpServerConfig, build_router, components::ComponentHandles};
 use cognee_ingestion::AddPipeline;
@@ -19,7 +19,6 @@ use cognee_models::DataInput;
 use cognee_ontology::OntologyManager;
 use cognee_search::{SearchBuilder, SearchOrchestrator};
 use cognee_storage::{LocalStorage, StorageTrait};
-use cognee_test_utils::e2e_embedding_model_dir;
 use cognee_vector::{QdrantAdapter, VectorDB};
 use tempfile::TempDir;
 use tower::ServiceExt;
@@ -107,20 +106,15 @@ async fn upload_cognify_search_with_ontology_key_and_unknown_key_negative() {
     );
     graph_db.initialize().await.expect("graph_db.initialize");
 
-    let vector_db: Arc<dyn VectorDB> =
-        Arc::new(QdrantAdapter::new(temp_dir.path().join("qdrant"), 384));
+    let Some((embedding_engine, embedding_dims)) =
+        cognee_test_utils::create_test_embedding_engine().await
+    else {
+        eprintln!("Skipping test: embedding engine unavailable");
+        return;
+    };
 
-    let model_dir = e2e_embedding_model_dir();
-    let embedding_engine: Arc<dyn EmbeddingEngine> =
-        match OnnxEmbeddingEngine::with_auto_download(OnnxEmbeddingConfig::bge_small(&model_dir))
-            .await
-        {
-            Ok(engine) => Arc::new(engine),
-            Err(e) => {
-                eprintln!("Skipping test: failed to prepare embedding model: {e}");
-                return;
-            }
-        };
+    let vector_db: Arc<dyn VectorDB> =
+        Arc::new(QdrantAdapter::new(temp_dir.path().join("qdrant"), embedding_dims));
 
     let llm: Arc<dyn Llm> = Arc::new(
         OpenAIAdapter::new(

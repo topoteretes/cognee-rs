@@ -17,7 +17,7 @@ use std::sync::Arc;
 use cognee_cognify::{CognifyConfig, cognify};
 use cognee_database::{DatabaseConnection, DeleteDb, IngestDb, connect, initialize, ops};
 use cognee_delete::{DeleteMode, DeleteRequest, DeleteScope, DeleteService};
-use cognee_embedding::{EmbeddingEngine, config::OnnxEmbeddingConfig, onnx::OnnxEmbeddingEngine};
+use cognee_embedding::EmbeddingEngine;
 use cognee_graph::{GraphDBTrait, LadybugAdapter};
 use cognee_ingestion::AddPipeline;
 use cognee_llm::{Llm, OpenAIAdapter};
@@ -55,28 +55,23 @@ fn require_env(var_name: &str) -> String {
     panic!("Required environment variable '{var_name}' is not set")
 }
 
-/// Extract the embedding model directory from `COGNEE_E2E_EMBED_MODEL_PATH`.
-fn get_embedding_model_dir() -> String {
-    if let Ok(model_path) = std::env::var("COGNEE_E2E_EMBED_MODEL_PATH")
-        && let Some(parent) = std::path::Path::new(&model_path).parent()
-    {
-        return parent.to_string_lossy().to_string();
-    }
-    "./target/models".to_string()
-}
-
 /// Build full infrastructure: storage, database, graph, vector, embedding, LLM.
-/// Returns all components needed for add -> cognify -> delete.
+/// Returns `Some` with all components needed for add -> cognify -> delete,
+/// or `None` if the embedding engine could not be initialised (test will skip).
 async fn setup_infrastructure(
     temp_dir: &TempDir,
-) -> (
+) -> Option<(
     Arc<dyn StorageTrait>,
     Arc<DatabaseConnection>,
     Arc<dyn GraphDBTrait>,
     Arc<dyn VectorDB>,
     Arc<dyn EmbeddingEngine>,
     Arc<dyn Llm>,
-) {
+)> {
+    // Embedding engine (may return None when model/API unavailable)
+    let (embedding_engine, embedding_dims) =
+        cognee_test_utils::create_test_embedding_engine().await?;
+
     // Local file storage
     let storage: Arc<dyn StorageTrait> =
         Arc::new(LocalStorage::new(temp_dir.path().join("storage")));
@@ -99,23 +94,9 @@ async fn setup_infrastructure(
     );
     graph_db.initialize().await.expect("graph_db.initialize");
 
-    // Qdrant vector database (BGE-Small dimension = 384)
+    // Qdrant vector database
     let vector_db: Arc<dyn VectorDB> =
-        Arc::new(QdrantAdapter::new(temp_dir.path().join("qdrant"), 384));
-
-    // ONNX embedding engine
-    let model_dir = get_embedding_model_dir();
-    let embedding_engine: Arc<dyn EmbeddingEngine> =
-        match OnnxEmbeddingEngine::new(OnnxEmbeddingConfig::bge_small(&model_dir)) {
-            Ok(engine) => Arc::new(engine),
-            Err(e) => {
-                panic!(
-                    "Failed to load embedding model: {}. \
-                     Ensure model is at {}/BGE-Small-v1.5-model_quantized.onnx",
-                    e, model_dir
-                );
-            }
-        };
+        Arc::new(QdrantAdapter::new(temp_dir.path().join("qdrant"), embedding_dims));
 
     // OpenAI-compatible LLM
     let llm: Arc<dyn Llm> = Arc::new(
@@ -127,14 +108,14 @@ async fn setup_infrastructure(
         .expect("OpenAIAdapter::new"),
     );
 
-    (
+    Some((
         storage,
         database,
         graph_db,
         vector_db,
         embedding_engine,
         llm,
-    )
+    ))
 }
 
 const DOC1_TEXT: &str = "Alice is a researcher at TechCorp. Alice studies machine learning.";
@@ -146,12 +127,14 @@ async fn test_hard_mode_sweeps_orphan_entities() {
     let _ = require_env("OPENAI_URL");
     let _ = require_env("OPENAI_TOKEN");
     let _ = require_env("OPENAI_MODEL");
-    let _ = require_env("COGNEE_E2E_EMBED_MODEL_PATH");
 
     // ── Infrastructure setup ────────────────────────────────────────────────
     let temp_dir = TempDir::new().expect("temp dir");
-    let (storage, database, graph_db, vector_db, embedding_engine, llm) =
-        setup_infrastructure(&temp_dir).await;
+    let Some((storage, database, graph_db, vector_db, embedding_engine, llm)) =
+        setup_infrastructure(&temp_dir).await
+    else {
+        return;
+    };
 
     let owner_id = Uuid::nil();
 
@@ -337,12 +320,14 @@ async fn test_soft_mode_preserves_orphan_entities() {
     let _ = require_env("OPENAI_URL");
     let _ = require_env("OPENAI_TOKEN");
     let _ = require_env("OPENAI_MODEL");
-    let _ = require_env("COGNEE_E2E_EMBED_MODEL_PATH");
 
     // ── Infrastructure setup ────────────────────────────────────────────────
     let temp_dir = TempDir::new().expect("temp dir");
-    let (storage, database, graph_db, vector_db, embedding_engine, llm) =
-        setup_infrastructure(&temp_dir).await;
+    let Some((storage, database, graph_db, vector_db, embedding_engine, llm)) =
+        setup_infrastructure(&temp_dir).await
+    else {
+        return;
+    };
 
     let owner_id = Uuid::nil();
 

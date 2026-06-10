@@ -14,7 +14,7 @@ use cognee_database::{
     DatabaseConnection, DeleteDb, IngestDb, SearchHistoryDb, connect, initialize, ops,
 };
 use cognee_delete::{DeleteMode, DeleteRequest, DeleteScope, DeleteService};
-use cognee_embedding::{EmbeddingEngine, config::OnnxEmbeddingConfig, onnx::OnnxEmbeddingEngine};
+use cognee_embedding::EmbeddingEngine;
 use cognee_graph::{GraphDBTrait, LadybugAdapter};
 use cognee_ingestion::AddPipeline;
 use cognee_llm::{Llm, OpenAIAdapter};
@@ -31,10 +31,6 @@ use uuid::Uuid;
 
 fn require_env(name: &str) -> String {
     std::env::var(name).unwrap_or_else(|_| panic!("{name} must be set"))
-}
-
-fn get_embedding_model_dir() -> String {
-    std::env::var("COGNEE_TEST_MODEL_DIR").unwrap_or_else(|_| "target/models".to_string())
 }
 
 fn is_non_empty(response: &SearchResponse) -> bool {
@@ -114,10 +110,15 @@ async fn test_search_returns_empty_for_deleted_doc_and_non_empty_for_remaining()
     let _ = require_env("OPENAI_URL");
     let _ = require_env("OPENAI_TOKEN");
     let _ = require_env("OPENAI_MODEL");
-    let _ = require_env("COGNEE_E2E_EMBED_MODEL_PATH");
 
     // ── Infrastructure ──────────────────────────────────────────────────
     let temp_dir = TempDir::new().expect("temp dir");
+
+    let Some((embedding_engine, embedding_dims)) =
+        cognee_test_utils::create_test_embedding_engine().await
+    else {
+        return;
+    };
 
     let storage: Arc<dyn StorageTrait> =
         Arc::new(LocalStorage::new(temp_dir.path().join("storage")));
@@ -139,17 +140,7 @@ async fn test_search_returns_empty_for_deleted_doc_and_non_empty_for_remaining()
     graph_db.initialize().await.expect("graph_db.initialize");
 
     let vector_db: Arc<dyn VectorDB> =
-        Arc::new(QdrantAdapter::new(temp_dir.path().join("qdrant"), 384));
-
-    let model_dir = get_embedding_model_dir();
-    let embedding_engine: Arc<dyn EmbeddingEngine> =
-        match OnnxEmbeddingEngine::new(OnnxEmbeddingConfig::bge_small(&model_dir)) {
-            Ok(engine) => Arc::new(engine),
-            Err(e) => {
-                eprintln!("Skipping test: failed to load embedding model: {e}");
-                return;
-            }
-        };
+        Arc::new(QdrantAdapter::new(temp_dir.path().join("qdrant"), embedding_dims));
 
     let llm: Arc<dyn Llm> = Arc::new(
         OpenAIAdapter::new(

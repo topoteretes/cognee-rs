@@ -44,13 +44,3 @@ pub fn create_adapter_from_env() -> Arc<OpenAIAdapter> {
             .unwrap_or_else(|e| panic!("❌ Failed to create OpenAI adapter: {e}")),
     )
 }
-
-/// Extract the embedding model directory from `COGNEE_E2E_EMBED_MODEL_PATH`.
-pub fn get_embedding_model_dir() -> String {
-    if let Ok(model_path) = std::env::var("COGNEE_E2E_EMBED_MODEL_PATH")
-        && let Some(parent) = std::path::Path::new(&model_path).parent()
-    {
-        return parent.to_string_lossy().to_string();
-    }
-    "./target/models".to_string()
-}

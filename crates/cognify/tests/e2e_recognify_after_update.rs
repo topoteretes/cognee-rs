@@ -24,7 +24,7 @@ use cognee_database::{
     DatabaseConnection, DeleteDb, IngestDb, SearchHistoryDb, connect, initialize, ops,
 };
 use cognee_delete::{DeleteMode, DeleteRequest, DeleteScope, DeleteService};
-use cognee_embedding::{EmbeddingEngine, config::OnnxEmbeddingConfig, onnx::OnnxEmbeddingEngine};
+use cognee_embedding::EmbeddingEngine;
 use cognee_graph::{GraphDBTrait, MockGraphDB};
 use cognee_ingestion::AddPipeline;
 use cognee_llm::{GenerationOptions, GenerationResponse, Llm, Message};
@@ -40,7 +40,6 @@ use tempfile::TempDir;
 use uuid::Uuid;
 
 mod test_utils;
-use test_utils::{get_embedding_model_dir, require_env};
 
 const TEXT_V1: &str = "\
 Alice is a senior software engineer at TechCorp, a leading technology \
@@ -210,11 +209,15 @@ fn is_non_empty(response: &SearchResponse) -> bool {
 
 #[tokio::test]
 async fn test_recognify_after_content_update() {
-    // ── Environment gating ──────────────────────────────────────────────────
-    let _ = require_env("COGNEE_E2E_EMBED_MODEL_PATH");
-
     // ── Infrastructure setup ────────────────────────────────────────────────
     let temp_dir = TempDir::new().expect("temp dir");
+
+    let Some((embedding_engine, embedding_dims)) =
+        cognee_test_utils::create_test_embedding_engine().await
+    else {
+        return;
+    };
+    let embedding_engine: Arc<dyn EmbeddingEngine> = embedding_engine;
 
     // Local file storage
     let storage: Arc<dyn StorageTrait> =
@@ -232,20 +235,9 @@ async fn test_recognify_after_content_update() {
     let graph_db: Arc<dyn GraphDBTrait> = Arc::new(MockGraphDB::new());
     graph_db.initialize().await.expect("graph_db.initialize");
 
-    // Qdrant vector database (BGE-Small dimension = 384)
+    // Qdrant vector database
     let vector_db: Arc<dyn VectorDB> =
-        Arc::new(QdrantAdapter::new(temp_dir.path().join("qdrant"), 384));
-
-    // ONNX embedding engine
-    let model_dir = get_embedding_model_dir();
-    let embedding_engine: Arc<dyn EmbeddingEngine> =
-        match OnnxEmbeddingEngine::new(OnnxEmbeddingConfig::bge_small(&model_dir)) {
-            Ok(engine) => Arc::new(engine),
-            Err(e) => {
-                eprintln!("Skipping test: failed to load embedding model: {}", e);
-                return;
-            }
-        };
+        Arc::new(QdrantAdapter::new(temp_dir.path().join("qdrant"), embedding_dims));
 
     let llm: Arc<dyn Llm> = Arc::new(UpdateFixtureLlm);
 

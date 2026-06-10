@@ -23,7 +23,7 @@ use std::sync::Arc;
 
 use cognee_cognify::{CognifyConfig, cognify};
 use cognee_database::{DatabaseConnection, IngestDb, connect, initialize, ops};
-use cognee_embedding::{EmbeddingEngine, config::OnnxEmbeddingConfig, onnx::OnnxEmbeddingEngine};
+use cognee_embedding::EmbeddingEngine;
 use cognee_graph::{GraphDBTrait, LadybugAdapter};
 use cognee_ingestion::AddPipeline;
 use cognee_llm::{Llm, OpenAIAdapter};
@@ -35,7 +35,6 @@ use tempfile::TempDir;
 use uuid::Uuid;
 
 mod test_utils;
-use test_utils::get_embedding_model_dir;
 
 /// Minimal fixture text — one paragraph is enough to exercise all four
 /// task names. Larger inputs would just slow the test down without
@@ -94,19 +93,15 @@ async fn cognify_e2e_stamps_with_expected_task_names() {
     );
     graph_db.initialize().await.expect("graph_db.initialize");
 
-    let vector_db: Arc<dyn VectorDB> =
-        Arc::new(QdrantAdapter::new(temp_dir.path().join("qdrant"), 384));
+    let Some((embedding_engine, embedding_dims)) =
+        cognee_test_utils::create_test_embedding_engine().await
+    else {
+        return;
+    };
+    let embedding_engine: Arc<dyn EmbeddingEngine> = embedding_engine;
 
-    // Embedding engine — silently skip if the model file isn't on disk.
-    let model_dir = get_embedding_model_dir();
-    let embedding_engine: Arc<dyn EmbeddingEngine> =
-        match OnnxEmbeddingEngine::new(OnnxEmbeddingConfig::bge_small(&model_dir)) {
-            Ok(engine) => Arc::new(engine),
-            Err(e) => {
-                eprintln!("skipping: embedding model not available at {model_dir}: {e}");
-                return;
-            }
-        };
+    let vector_db: Arc<dyn VectorDB> =
+        Arc::new(QdrantAdapter::new(temp_dir.path().join("qdrant"), embedding_dims));
 
     let llm: Arc<dyn Llm> =
         Arc::new(OpenAIAdapter::new(model, token, Some(url)).expect("OpenAIAdapter::new"));

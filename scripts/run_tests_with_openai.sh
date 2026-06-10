@@ -9,9 +9,7 @@
 #   LLM_ENDPOINT  — API base URL         (legacy alias: OPENAI_URL)
 #
 # Optional:
-#   LLM_MODEL                 — model to use (default: gpt-4o-mini; alias: OPENAI_MODEL)
-#   COGNEE_TEST_MODEL_DIR     — directory for embedding model cache
-#   COGNEE_E2E_EMBED_MODEL_PATH / COGNEE_E2E_TOKENIZER_PATH — full path overrides
+#   LLM_MODEL  — model to use (default: gpt-4o-mini; alias: OPENAI_MODEL)
 
 set -euo pipefail
 
@@ -46,9 +44,6 @@ if [[ -z "${LLM_ENDPOINT:-}" ]]; then
   echo -e "${RED}❌ LLM_ENDPOINT is not set. Set it in the environment or .env file.${NC}"
   exit 1
 fi
-
-MODEL_DIR="${COGNEE_TEST_MODEL_DIR:-$PROJECT_ROOT/target/models}"
-setup_embedding_models "$MODEL_DIR"
 
 print_env
 
