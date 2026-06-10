@@ -20,6 +20,7 @@ pub mod pipeline;
 pub mod progress;
 pub mod provenance;
 pub mod runtime;
+pub mod sentinels;
 pub mod task;
 pub mod task_context;
 pub mod thread_pool;
@@ -41,6 +42,7 @@ pub use provenance::{
     stamp_tree, stamp_tree_dyn,
 };
 pub use runtime::AsyncRuntime;
+pub use sentinels::{DroppedSentinel, is_dropped};
 pub use task::{
     AsyncBatchFn, AsyncFn, AsyncStreamBatchFn, AsyncStreamFn, SyncBatchFn, SyncFn, SyncIterBatchFn,
     SyncIterFn, Tagged, TaggedMeta, Task, TaskCall, TaskError, TaskInfo, TypedTask, Value,

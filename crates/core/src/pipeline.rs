@@ -1124,7 +1124,13 @@ fn execute_from<'a>(
             .unwrap_or(env.default_batch_size);
 
         match resolved {
-            Resolved::Single(v) => execute_from(rest, v, first_index + 1, env).await,
+            Resolved::Single(v) => {
+                // Drop sentinel: discard this item; nothing flows downstream.
+                if crate::sentinels::is_dropped(v.as_ref()) {
+                    return Ok(vec![]);
+                }
+                execute_from(rest, v, first_index + 1, env).await
+            }
             Resolved::Iter(iter) => {
                 process_iter(iter, rest, batch_size, first_index + 1, &prov_inputs, env).await
             }
@@ -1233,6 +1239,10 @@ async fn process_iter(
     let mut batch: Vec<Box<dyn Value>> = Vec::with_capacity(batch_size);
 
     for mut item in iter {
+        // Drop sentinel: discard this item before stamping or accumulating.
+        if crate::sentinels::is_dropped(item.as_ref()) {
+            continue;
+        }
         stamp_boxed_item(&mut item, prov_inputs, env);
         batch.push(item);
         if batch.len() >= batch_size {
@@ -1269,6 +1279,10 @@ async fn process_stream(
     let mut batch: Vec<Box<dyn Value>> = Vec::with_capacity(batch_size);
 
     while let Some(mut item) = stream.next().await {
+        // Drop sentinel: discard this item before stamping or accumulating.
+        if crate::sentinels::is_dropped(item.as_ref()) {
+            continue;
+        }
         stamp_boxed_item(&mut item, prov_inputs, env);
         batch.push(item);
         if batch.len() >= batch_size {
