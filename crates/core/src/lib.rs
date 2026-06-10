@@ -19,6 +19,7 @@ pub mod exec_status;
 pub mod pipeline;
 pub mod progress;
 pub mod provenance;
+pub mod rate_limiter;
 pub mod runtime;
 pub mod sentinels;
 pub mod task;
@@ -41,6 +42,7 @@ pub use provenance::{
     HasDataPoint, ProvenanceContext, extract_content_hash_from_value, extract_node_set_from_value,
     stamp_tree, stamp_tree_dyn,
 };
+pub use rate_limiter::{RateLimiter, SemaphoreLimiter, TokenBucketLimiter};
 pub use runtime::AsyncRuntime;
 pub use sentinels::{DroppedSentinel, PassthroughSentinel, is_dropped, is_passthrough};
 pub use task::{

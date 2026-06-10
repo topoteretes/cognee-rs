@@ -11,6 +11,7 @@ use tokio::time::sleep;
 use uuid::Uuid;
 
 use crate::progress::ProgressToken;
+use crate::rate_limiter::RateLimiter;
 use crate::task::{
     TaggedMeta, Task, TaskCall, TaskError, TaskInfo, TypedTask, Value, ValueIter, ValueStream,
 };
@@ -117,6 +118,11 @@ pub struct Pipeline {
     /// `Pipeline` struct shape is stable across feature flips. The
     /// snapshot is only consumed when the `telemetry` feature is on.
     pub telemetry_settings: Option<serde_json::Map<String, serde_json::Value>>,
+    /// Pipeline-wide proactive rate limiter applied to every task call (both
+    /// single-value via `call_with_retry` and batch via `dispatch_batch`).
+    /// Individual tasks may override it via [`TaskInfo::rate_limiter`].
+    /// `None` means no throttling.
+    pub rate_limiter: Option<Arc<dyn RateLimiter>>,
 }
 
 impl Pipeline {
@@ -131,6 +137,7 @@ impl Pipeline {
             data_id_fn: None,
             concurrency: 1,
             telemetry_settings: None,
+            rate_limiter: None,
         }
     }
 
@@ -170,6 +177,22 @@ impl Pipeline {
     pub fn with_concurrency(mut self, n: usize) -> Self {
         assert!(n > 0, "concurrency must be > 0");
         self.concurrency = n;
+        self
+    }
+
+    /// Set a pipeline-wide proactive rate limiter. Individual tasks may override
+    /// it via [`TaskInfo::with_rate_limiter`].
+    ///
+    /// The limiter is acquired inside `call_with_retry` once per attempt (so
+    /// each retry is a fresh acquisition) and once per batch call in
+    /// `dispatch_batch`. Use this for LLM API quota throttling or per-host
+    /// crawl-rate control.
+    ///
+    /// See [`crate::rate_limiter`] for the distinction between this,
+    /// [`Pipeline::with_concurrency`] (item parallelism), and [`RetryPolicy`]
+    /// (reactive backoff).
+    pub fn with_rate_limiter(mut self, rl: Arc<dyn RateLimiter>) -> Self {
+        self.rate_limiter = Some(rl);
         self
     }
 
@@ -347,6 +370,7 @@ impl<I: Value, O: Value> PipelineBuilder<I, O> {
             data_id_fn: self.data_id_fn,
             concurrency: self.concurrency,
             telemetry_settings: None,
+            rate_limiter: None,
         }
     }
 }
@@ -783,6 +807,7 @@ pub async fn execute(
         data_id_fn: &pipeline.data_id_fn,
         run_info: &run_info,
         task_subtokens: &task_subtokens,
+        rate_limiter: pipeline.rate_limiter.as_ref(),
     };
 
     let result = if pipeline.concurrency <= 1 {
@@ -998,6 +1023,8 @@ struct ExecEnv<'a> {
     run_info: &'a PipelineRunInfo,
     /// Per-task progress subtokens, split from the context's progress token.
     task_subtokens: &'a [ProgressToken],
+    /// Pipeline-wide rate limiter; per-task limiters override it.
+    rate_limiter: Option<&'a Arc<dyn RateLimiter>>,
 }
 /// Depth-first pipeline executor.
 ///
@@ -1091,6 +1118,8 @@ fn execute_from<'a>(
         // entirely for non-enriching tasks.
         let input_passthrough = info.enriches.then(|| Arc::clone(&input));
 
+        let effective_rl = info.rate_limiter.as_ref().or(env.rate_limiter);
+
         let resolved = call_with_retry(
             &info.task,
             input,
@@ -1099,6 +1128,7 @@ fn execute_from<'a>(
             data_id.as_deref(),
             info.summary_template.as_deref(),
             &prov_inputs,
+            effective_rl,
             env,
         )
         .await?;
@@ -1348,6 +1378,7 @@ async fn call_with_retry(
     data_id: Option<&str>,
     #[allow(unused_variables)] summary_template: Option<&str>,
     prov_inputs: &ProvenanceInputs<'_>,
+    rate_limiter: Option<&Arc<dyn RateLimiter>>,
     env: &ExecEnv<'_>,
 ) -> Result<Resolved, ExecutionError> {
     // ── Telemetry span (only when feature is enabled) ───────────────────
@@ -1379,6 +1410,10 @@ async fn call_with_retry(
     emit_task_event("Started", task, task_name, user_id, tenant_id);
 
     for attempt in 1..=max_attempts {
+        // Proactive throttle: every attempt is a fresh external call.
+        if let Some(rl) = rate_limiter {
+            rl.acquire().await;
+        }
         let call = task.call(input.clone(), Arc::clone(&task_ctx));
         match resolve_call(call).await {
             Ok(mut resolved) => {

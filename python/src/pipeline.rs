@@ -282,5 +282,6 @@ fn clone_pipeline(p: &Pipeline) -> Pipeline {
         data_id_fn: p.data_id_fn.clone(),
         concurrency: p.concurrency,
         telemetry_settings: p.telemetry_settings.clone(),
+        rate_limiter: p.rate_limiter.clone(),
     }
 }

@@ -45,6 +45,7 @@ fn snapshot_pipeline(pipeline: &NeonPipeline) -> Pipeline {
             summary_template: info.summary_template.clone(),
             weight: info.weight,
             enriches: info.enriches,
+            rate_limiter: info.rate_limiter.clone(),
         });
     }
     p

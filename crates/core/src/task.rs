@@ -1,6 +1,8 @@
 use std::any::Any;
 use std::sync::Arc;
 
+use crate::rate_limiter::RateLimiter;
+
 use futures::future::BoxFuture;
 use futures::stream::{BoxStream, Stream, StreamExt};
 
@@ -741,6 +743,10 @@ pub struct TaskInfo {
     /// those paths treat `PassthroughSentinel` as a regular value. Use
     /// `DroppedSentinel` to skip individual items in iterator/stream tasks.
     pub enriches: bool,
+    /// Per-task rate limiter. Overrides the pipeline-level limiter when set.
+    /// `None` inherits the pipeline limiter (or no throttling if that is also
+    /// `None`). See [`RateLimiter`] for details.
+    pub rate_limiter: Option<Arc<dyn RateLimiter>>,
 }
 
 impl TaskInfo {
@@ -752,6 +758,7 @@ impl TaskInfo {
             summary_template: None,
             weight: 1,
             enriches: false,
+            rate_limiter: None,
         }
     }
 
@@ -794,6 +801,16 @@ impl TaskInfo {
         self
     }
 
+    /// Set a per-task rate limiter, overriding the pipeline-level one.
+    ///
+    /// When set, every attempt inside `call_with_retry` (and every batch call
+    /// in `dispatch_batch`) acquires a token from this limiter before calling
+    /// the task. `None` inherits the pipeline-level limiter.
+    pub fn with_rate_limiter(mut self, rl: Arc<dyn RateLimiter>) -> Self {
+        self.rate_limiter = Some(rl);
+        self
+    }
+
     /// Build a parallel task from multiple `TaskInfo`s.
     ///
     /// Extracts the inner [`Task`]s, delegates to [`Task::parallel`], and
@@ -814,6 +831,7 @@ impl TaskInfo {
             summary_template: None,
             weight: 1,
             enriches: false,
+            rate_limiter: None,
         }
     }
 }
