@@ -132,8 +132,10 @@ async fn test_search_type_matrix() {
         return;
     };
 
-    let vector_db: Arc<dyn VectorDB> =
-        Arc::new(QdrantAdapter::new(temp_dir.path().join("qdrant"), embedding_dims));
+    let vector_db: Arc<dyn VectorDB> = Arc::new(QdrantAdapter::new(
+        temp_dir.path().join("qdrant"),
+        embedding_dims,
+    ));
 
     let llm: Arc<dyn Llm> = create_adapter_from_env();
     let owner_id = Uuid::nil();

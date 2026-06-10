@@ -118,8 +118,10 @@ async fn test_memify_e2e_real_embedding_real_qdrant() {
     let embedding_engine: Arc<dyn EmbeddingEngine> = embedding_engine;
 
     // Embedded Qdrant.
-    let vector_db: Arc<dyn VectorDB> =
-        Arc::new(QdrantAdapter::new(temp_dir.path().join("qdrant"), embedding_dims));
+    let vector_db: Arc<dyn VectorDB> = Arc::new(QdrantAdapter::new(
+        temp_dir.path().join("qdrant"),
+        embedding_dims,
+    ));
 
     // Embedded Ladybug.
     let graph_path = temp_dir.path().join("graph").to_string_lossy().to_string();

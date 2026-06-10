@@ -100,8 +100,10 @@ async fn cognify_e2e_stamps_with_expected_task_names() {
     };
     let embedding_engine: Arc<dyn EmbeddingEngine> = embedding_engine;
 
-    let vector_db: Arc<dyn VectorDB> =
-        Arc::new(QdrantAdapter::new(temp_dir.path().join("qdrant"), embedding_dims));
+    let vector_db: Arc<dyn VectorDB> = Arc::new(QdrantAdapter::new(
+        temp_dir.path().join("qdrant"),
+        embedding_dims,
+    ));
 
     let llm: Arc<dyn Llm> =
         Arc::new(OpenAIAdapter::new(model, token, Some(url)).expect("OpenAIAdapter::new"));

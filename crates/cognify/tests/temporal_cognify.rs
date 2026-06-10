@@ -327,7 +327,10 @@ async fn temporal_cognify_populates_event_name_vector_collection() {
 
     // Qdrant vector DB (embedded)
     let qdrant_path = temp_dir.path().join("qdrant");
-    let vector_db = Arc::new(cognee_vector::QdrantAdapter::new(qdrant_path, embedding_dims));
+    let vector_db = Arc::new(cognee_vector::QdrantAdapter::new(
+        qdrant_path,
+        embedding_dims,
+    ));
 
     let data_item = ingest_text(BIOGRAPHY_TEXT, &storage, owner_id).await;
 

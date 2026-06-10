@@ -95,8 +95,10 @@ async fn setup_infrastructure(
     graph_db.initialize().await.expect("graph_db.initialize");
 
     // Qdrant vector database
-    let vector_db: Arc<dyn VectorDB> =
-        Arc::new(QdrantAdapter::new(temp_dir.path().join("qdrant"), embedding_dims));
+    let vector_db: Arc<dyn VectorDB> = Arc::new(QdrantAdapter::new(
+        temp_dir.path().join("qdrant"),
+        embedding_dims,
+    ));
 
     // OpenAI-compatible LLM
     let llm: Arc<dyn Llm> = Arc::new(

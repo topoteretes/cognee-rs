@@ -72,8 +72,10 @@ async fn test_triplet_vector_cleanup_after_data_delete() {
     );
     graph_db.initialize().await.expect("graph_db.initialize");
 
-    let vector_db: Arc<dyn VectorDB> =
-        Arc::new(QdrantAdapter::new(temp_dir.path().join("qdrant"), embedding_dims));
+    let vector_db: Arc<dyn VectorDB> = Arc::new(QdrantAdapter::new(
+        temp_dir.path().join("qdrant"),
+        embedding_dims,
+    ));
 
     let llm: Arc<dyn Llm> = Arc::new(
         OpenAIAdapter::new(

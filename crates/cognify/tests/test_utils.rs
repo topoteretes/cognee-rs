@@ -45,4 +45,3 @@ pub fn create_adapter_from_env() -> Arc<OpenAIAdapter> {
             .unwrap_or_else(|e| panic!("❌ Failed to create OpenAI adapter: {e}")),
     )
 }
-

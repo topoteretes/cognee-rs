@@ -109,8 +109,10 @@ async fn test_search_updates_last_accessed_timestamp() {
     );
     graph_db.initialize().await.expect("graph_db.initialize");
 
-    let vector_db: Arc<dyn VectorDB> =
-        Arc::new(QdrantAdapter::new(temp_dir.path().join("qdrant"), embedding_dims));
+    let vector_db: Arc<dyn VectorDB> = Arc::new(QdrantAdapter::new(
+        temp_dir.path().join("qdrant"),
+        embedding_dims,
+    ));
 
     let llm: Arc<dyn Llm> = create_adapter_from_env();
     let owner_id = Uuid::nil();
