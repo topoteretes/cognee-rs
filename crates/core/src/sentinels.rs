@@ -34,6 +34,24 @@ pub fn is_dropped(value: &dyn Value) -> bool {
     value.as_any().downcast_ref::<DroppedSentinel>().is_some()
 }
 
+/// Returned by an *enriching* task to forward its input unchanged.
+///
+/// Honored only when the task's [`TaskInfo::enriches`](crate::task::TaskInfo)
+/// is `true`; on a non-enriching task it is an error. Mirrors Python's
+/// `enriches` behavior (`cognee/modules/pipelines/tasks/task.py`): an enriching
+/// task that returns `None` passes its input through untouched.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PassthroughSentinel;
+
+/// True if `value` is a [`PassthroughSentinel`]. See [`is_dropped`] for the
+/// `&dyn Value` (dereference-the-pointer) contract.
+pub fn is_passthrough(value: &dyn Value) -> bool {
+    value
+        .as_any()
+        .downcast_ref::<PassthroughSentinel>()
+        .is_some()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -61,5 +79,23 @@ mod tests {
     fn detects_boxed_dropped_sentinel() {
         let v: Box<dyn Value> = Box::new(DroppedSentinel);
         assert!(is_dropped(v.as_ref()));
+    }
+
+    #[test]
+    fn detects_passthrough_sentinel() {
+        let v: Arc<dyn Value> = Arc::new(PassthroughSentinel);
+        assert!(is_passthrough(v.as_ref()));
+    }
+
+    #[test]
+    fn passthrough_ignores_regular_value() {
+        let v: Arc<dyn Value> = Arc::new(42_usize);
+        assert!(!is_passthrough(v.as_ref()));
+    }
+
+    #[test]
+    fn passthrough_ignores_dropped_sentinel() {
+        let v: Arc<dyn Value> = Arc::new(DroppedSentinel);
+        assert!(!is_passthrough(v.as_ref()));
     }
 }

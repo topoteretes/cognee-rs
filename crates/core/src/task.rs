@@ -733,6 +733,14 @@ pub struct TaskInfo {
     /// across all tasks to determine what fraction of overall progress each
     /// task owns. Default: 1.
     pub weight: u32,
+    /// If `true`, a returned `PassthroughSentinel` forwards the task's input
+    /// unchanged to the next task instead of being an error. Default `false`.
+    ///
+    /// Note: pass-through is defined for **single-value** outputs only. For
+    /// iterator/stream tasks there is no single "original input" to forward;
+    /// those paths treat `PassthroughSentinel` as a regular value. Use
+    /// `DroppedSentinel` to skip individual items in iterator/stream tasks.
+    pub enriches: bool,
 }
 
 impl TaskInfo {
@@ -743,6 +751,7 @@ impl TaskInfo {
             batch_size: None,
             summary_template: None,
             weight: 1,
+            enriches: false,
         }
     }
 
@@ -771,6 +780,20 @@ impl TaskInfo {
         self
     }
 
+    /// Mark this task as an enrichment step: returning [`PassthroughSentinel`]
+    /// forwards the input unchanged rather than failing.
+    ///
+    /// Pass-through is defined for **single-value** outputs only — it forwards
+    /// the one input of a 1-in/1-out task. Iterator/stream tasks that want to
+    /// skip individual items should yield [`DroppedSentinel`] instead.
+    ///
+    /// [`PassthroughSentinel`]: crate::sentinels::PassthroughSentinel
+    /// [`DroppedSentinel`]: crate::sentinels::DroppedSentinel
+    pub fn with_enriches(mut self) -> Self {
+        self.enriches = true;
+        self
+    }
+
     /// Build a parallel task from multiple `TaskInfo`s.
     ///
     /// Extracts the inner [`Task`]s, delegates to [`Task::parallel`], and
@@ -790,6 +813,7 @@ impl TaskInfo {
             batch_size: None,
             summary_template: None,
             weight: 1,
+            enriches: false,
         }
     }
 }

@@ -139,5 +139,6 @@ fn clone_task_info(info: &cognee_core::TaskInfo) -> cognee_core::TaskInfo {
         batch_size: info.batch_size,
         summary_template: info.summary_template.clone(),
         weight: info.weight,
+        enriches: info.enriches,
     }
 }

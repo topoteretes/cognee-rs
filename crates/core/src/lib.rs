@@ -42,7 +42,7 @@ pub use provenance::{
     stamp_tree, stamp_tree_dyn,
 };
 pub use runtime::AsyncRuntime;
-pub use sentinels::{DroppedSentinel, is_dropped};
+pub use sentinels::{DroppedSentinel, PassthroughSentinel, is_dropped, is_passthrough};
 pub use task::{
     AsyncBatchFn, AsyncFn, AsyncStreamBatchFn, AsyncStreamFn, SyncBatchFn, SyncFn, SyncIterBatchFn,
     SyncIterFn, Tagged, TaggedMeta, Task, TaskCall, TaskError, TaskInfo, TypedTask, Value,

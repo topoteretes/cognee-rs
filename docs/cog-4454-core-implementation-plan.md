@@ -26,7 +26,7 @@ live in [cog-4454-core/IMPLEMENTATION-PROMPTS.md](./cog-4454-core/IMPLEMENTATION
 | # | Gap | Effort | Detailed doc | Status |
 |---|-----|--------|--------------|--------|
 | 1 | **Drop / filter sentinel** — tasks can signal "discard this item" | Small | [01-drop-sentinel.md](./cog-4454-core/01-drop-sentinel.md) | ☑ Implemented (d1a7967) |
-| 2 | **Enrichment mode (`enriches` flag)** — enriching task returns input unchanged | Small | [02-enrichment-mode.md](./cog-4454-core/02-enrichment-mode.md) | ☐ Not started |
+| 2 | **Enrichment mode (`enriches` flag)** — enriching task returns input unchanged | Small | [02-enrichment-mode.md](./cog-4454-core/02-enrichment-mode.md) | ☑ Implemented (1c87685) |
 | 3 | **Rate limiting** — token-bucket / concurrency limiter for LLM & HTTP tasks | Medium | [03-rate-limiting.md](./cog-4454-core/03-rate-limiting.md) | ☐ Not started |
 
 ### Why this order

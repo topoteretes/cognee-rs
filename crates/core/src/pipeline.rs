@@ -1086,6 +1086,11 @@ fn execute_from<'a>(
             input_content_hash: crate::provenance::extract_content_hash_from_value(input.as_ref()),
         };
 
+        // Keep a handle to the original input only for enrichment tasks, so a
+        // PassthroughSentinel can forward it unchanged. Cheap Arc clone; skipped
+        // entirely for non-enriching tasks.
+        let input_passthrough = info.enriches.then(|| Arc::clone(&input));
+
         let resolved = call_with_retry(
             &info.task,
             input,
@@ -1125,6 +1130,20 @@ fn execute_from<'a>(
 
         match resolved {
             Resolved::Single(v) => {
+                // Enrichment: a PassthroughSentinel forwards the original input.
+                if crate::sentinels::is_passthrough(v.as_ref()) {
+                    match input_passthrough {
+                        Some(orig) => return execute_from(rest, orig, first_index + 1, env).await,
+                        None => {
+                            return Err(ExecutionError::TaskFailed {
+                                task_index: first_index,
+                                attempts: 1,
+                                source: "task returned PassthroughSentinel but enriches=false"
+                                    .into(),
+                            });
+                        }
+                    }
+                }
                 // Drop sentinel: discard this item; nothing flows downstream.
                 if crate::sentinels::is_dropped(v.as_ref()) {
                     return Ok(vec![]);
