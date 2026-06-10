@@ -54,26 +54,33 @@ jobs:
           android: true
           dotnet: true
           haskell: true
-          # large-packages removes ^llvm-.* which takes out libclang; clippy runs
-          # --all-features (activating android-litert/bindgen) and needs libclang.
+          # large-packages removes ^llvm-.* which takes out libclang; android-litert
+          # bindgen needs libclang, so keep it.
           large-packages: false
           swap-storage: false
           docker-images: true
 
-      - name: Cache cargo/target
+      # Lint has its own Swatinem key (workspace-lint-v6) separate from the
+      # test job (workspace-test-v6). The lint job runs only `cargo check` /
+      # `cargo clippy`, which produce .rmeta but NOT .rlib files. Sharing a
+      # key with the test job would cause the test job to inherit a cache full
+      # of .rmeta stubs and have to rebuild everything from scratch on every
+      # run — including re-running the ort-sys build script that fetches the
+      # ONNX Runtime static library.
+      - name: Cache cargo/target (lint)
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: workspace-v5
+          shared-key: workspace-lint-v6
 
       # ort-sys downloads the ONNX Runtime static library to ORT_CACHE_DIR
-      # (target/ort-cache) during the build script. Swatinem prunes target/
-      # to cargo-tracked files only and drops this directory, so we pin it
-      # with a dedicated actions/cache step keyed by ort-sys version + platform.
+      # (target/ort-cache) during its build script. We cache it separately so
+      # the first cold build of any job doesn't need to re-download it.
+      # Key uses "cpu" to distinguish from a potential CUDA-enabled build.
       - name: Cache ORT binary
         uses: actions/cache@v4
         with:
           path: target/ort-cache
-          key: ort-v2.0.0-rc.12-linux-x86_64
+          key: ort-v2.0.0-rc.12-cpu-linux-x86_64
 
       - name: rustfmt (check)
         run: cargo fmt --all -- --check
@@ -81,8 +88,16 @@ jobs:
       - name: Compilation check
         run: cargo check --all-targets
 
+      # Use an explicit feature set instead of --all-features.
+      # --all-features activates ort-cuda / ort-tensorrt, which causes ort-sys
+      # to download a separate ~100 MB CUDA-enabled ONNX Runtime static library
+      # to a different hash path in target/ort-cache. That CUDA binary is never
+      # used in CI (no GPU), but it bloats the cache and can produce a stale
+      # rustc-link-search path that breaks the link step in the test job.
+      # The android-litert feature is the only non-default feature that adds
+      # real workspace code (LiteRT LLM adapter + bindgen).
       - name: clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
+        run: cargo clippy --all-targets --features android-litert,server -- -D warnings
 
       # Telemetry feature is OFF by default per design decision 1, so the
       # default `cargo check --all-targets` above only covers the noop arm.
@@ -154,21 +169,42 @@ jobs:
           swap-storage: true
           docker-images: true
 
-      - name: Cache cargo/target
+      # The test job has its own Swatinem key (workspace-test-v6) separate from
+      # lint (workspace-lint-v6). The test job runs `cargo nextest` which
+      # compiles everything to .rlib for linking. On the first run this is a
+      # cold build (~15 min), but workspace-test-v6 is then populated with
+      # .rlib files and subsequent runs are fast. cache-on-failure=true ensures
+      # even a first-run compile failure seeds the cache so the rerun is warm.
+      - name: Cache cargo/target (test)
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: workspace-v5
+          shared-key: workspace-test-v6
+          cache-on-failure: true
 
       - name: Cache ORT binary
         uses: actions/cache@v4
         with:
           path: target/ort-cache
-          key: ort-v2.0.0-rc.12-linux-x86_64
+          key: ort-v2.0.0-rc.12-cpu-linux-x86_64
 
       - name: Show toolchain
         run: |
           rustc --version
           cargo --version
+
+      # Verify that the ORT binary was correctly restored before compilation.
+      # This step is intentionally non-blocking (|| true) — it only prints
+      # diagnostics so CI logs show exactly what is (or isn't) in the cache.
+      - name: Verify ORT binary cache
+        run: |
+          echo "=== ORT_CACHE_DIR: ${ORT_CACHE_DIR} ==="
+          if [ -d "${ORT_CACHE_DIR}/dfbin" ]; then
+            find "${ORT_CACHE_DIR}/dfbin" -type f | sort
+            echo "=== sizes ==="
+            du -sh "${ORT_CACHE_DIR}/dfbin"/*/*/ 2>/dev/null || true
+          else
+            echo "(dfbin directory not found — ort-sys will download on first build)"
+          fi
 
       - name: Cache embedding models
         uses: actions/cache@v4
@@ -277,16 +313,17 @@ jobs:
       - name: Install protoc
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
 
-      - name: Cache cargo/target
+      - name: Cache cargo/target (test)
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: workspace-v5
+          shared-key: workspace-test-v6
+          cache-on-failure: true
 
       - name: Cache ORT binary
         uses: actions/cache@v4
         with:
           path: target/ort-cache
-          key: ort-v2.0.0-rc.12-linux-x86_64
+          key: ort-v2.0.0-rc.12-cpu-linux-x86_64
 
       - name: Run pgvector span instrumentation tests
         run: cargo test -p cognee-vector --test pgvector_span_instrumentation -- --nocapture
@@ -306,11 +343,12 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y cmake protobuf-compiler
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: workspace-v5
+          shared-key: workspace-test-v6
+          cache-on-failure: true
       - uses: actions/cache@v4
         with:
           path: target/ort-cache
-          key: ort-v2.0.0-rc.12-linux-x86_64
+          key: ort-v2.0.0-rc.12-cpu-linux-x86_64
       - run: bash capi/scripts/check.sh
 
   python-check:
@@ -327,11 +365,12 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: workspace-v5
+          shared-key: workspace-test-v6
+          cache-on-failure: true
       - uses: actions/cache@v4
         with:
           path: target/ort-cache
-          key: ort-v2.0.0-rc.12-linux-x86_64
+          key: ort-v2.0.0-rc.12-cpu-linux-x86_64
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -361,7 +400,7 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y cmake protobuf-compiler
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: workspace-v5
+          shared-key: workspace-test-v6
           workspaces: |
             . -> target
             js/cognee-neon -> target
@@ -369,7 +408,7 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: target/ort-cache
-          key: ort-v2.0.0-rc.12-linux-x86_64
+          key: ort-v2.0.0-rc.12-cpu-linux-x86_64
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
