@@ -17,7 +17,7 @@ Last updated: 2026-06-11 (step 2 done)
 |---|---|---|---|---|---|
 | 0 | [Scaffolding & build](phase-0-scaffolding.md) | ✅ Done | capi-bindings/phase-0-scaffolding | 903e095 | see Phase 0 baselines below |
 | 1 | [Shared facade & SDK handle](phase-1-shared-facade-and-handle.md) | ✅ Done | capi-bindings/phase-1b-sdk-handle | 297d7ca | keystone · PR-1/1a done: facade hoisted, neon green |
-| 2 | [Errors, async & JSON conventions](phase-2-errors-async-json-conventions.md) | ✅ Done | capi-bindings/phase-2-conventions | TBD | |
+| 2 | [Errors, async & JSON conventions](phase-2-errors-async-json-conventions.md) | ✅ Done | capi-bindings/phase-2-conventions | 0e0425c | |
 | 3 | [Config surface](phase-3-config.md) | ⬜ | | | |
 | 4 | [Core ops (add/cognify)](phase-4-core-ops.md) | ⬜ | | | |
 | 5 | [Retrieval (search/recall)](phase-5-retrieval.md) | ⬜ | | | |
