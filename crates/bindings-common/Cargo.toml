@@ -1,0 +1,43 @@
+[package]
+name = "cognee-bindings-common"
+version.workspace = true
+edition.workspace = true
+description = "Shared facade (HandleState, CogneeServices, SdkError, wire helpers) consumed by the Neon JS and C API bindings."
+
+# NOT a default member of the root workspace but IS a workspace member
+# so `cargo check --all-targets` at the root covers it.
+
+[features]
+# Default features mirror cognee-neon (full): visualization, cloud, and all
+# engine features. A slim embedded build can override with
+# --no-default-features --features sqlite,testing.
+default = [
+    "visualization",
+    "cloud",
+    "qdrant",
+    "ladybug",
+    "onnx",
+    "hf-tokenizer",
+    "tiktoken",
+    "sqlite",
+    "testing",
+]
+visualization = ["cognee-lib/visualization"]
+cloud         = ["cognee-lib/cloud"]
+qdrant        = ["cognee-lib/qdrant"]
+ladybug       = ["cognee-lib/ladybug"]
+onnx          = ["cognee-lib/onnx"]
+hf-tokenizer  = ["cognee-lib/hf-tokenizer"]
+tiktoken      = ["cognee-lib/tiktoken"]
+sqlite        = ["cognee-lib/sqlite"]
+testing       = ["cognee-lib/testing"]
+
+[dependencies]
+cognee-lib = { path = "../lib", default-features = false }
+serde      = { workspace = true }
+serde_json = { workspace = true }
+thiserror  = { workspace = true }
+uuid       = { workspace = true }
+tokio      = { workspace = true }
+async-trait = { workspace = true }
+base64      = { workspace = true }

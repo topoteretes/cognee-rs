@@ -39,6 +39,10 @@ members = [
     # helpers; the manifest is kept in this sibling crate dir so it
     # stays out of the production crates/ tree.
     "e2e-cross-sdk/telemetry-emit",
+
+    # Shared SDK facade (HandleState, CogneeServices, SdkError, wire helpers)
+    # consumed by both the Neon JS binding and the C API binding (decision D1).
+    "crates/bindings-common",
 ]
 resolver = "3"
 

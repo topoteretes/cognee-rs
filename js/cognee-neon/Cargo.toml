@@ -25,19 +25,23 @@ default = [
     "sqlite",
     "testing",
 ]
-visualization = ["cognee-lib/visualization"]
-cloud         = ["cognee-lib/cloud"]
-# Engine features forwarded to cognee-lib (already listed in [dependencies]
-# below; declared here so cargo --features / --no-default-features works).
-qdrant        = ["cognee-lib/qdrant"]
-ladybug       = ["cognee-lib/ladybug"]
-onnx          = ["cognee-lib/onnx"]
-hf-tokenizer  = ["cognee-lib/hf-tokenizer"]
-tiktoken      = ["cognee-lib/tiktoken"]
-sqlite        = ["cognee-lib/sqlite"]
-testing       = ["cognee-lib/testing"]
+visualization = ["cognee-lib/visualization", "cognee-bindings-common/visualization"]
+cloud         = ["cognee-lib/cloud",         "cognee-bindings-common/cloud"]
+# Engine features forwarded to cognee-lib and cognee-bindings-common.
+qdrant        = ["cognee-lib/qdrant",        "cognee-bindings-common/qdrant"]
+ladybug       = ["cognee-lib/ladybug",       "cognee-bindings-common/ladybug"]
+onnx          = ["cognee-lib/onnx",          "cognee-bindings-common/onnx"]
+hf-tokenizer  = ["cognee-lib/hf-tokenizer",  "cognee-bindings-common/hf-tokenizer"]
+tiktoken      = ["cognee-lib/tiktoken",      "cognee-bindings-common/tiktoken"]
+sqlite        = ["cognee-lib/sqlite",        "cognee-bindings-common/sqlite"]
+testing       = ["cognee-lib/testing",       "cognee-bindings-common/testing"]
 
 [dependencies]
+# Shared SDK facade (HandleState, CogneeServices, SdkError, wire helpers).
+# Feature forwarding mirrors the neon feature table below so that a
+# `--no-default-features` build of neon produces a matching slim facade.
+cognee-bindings-common = { path = "../../crates/bindings-common", default-features = false }
+
 # Full cognee SDK. Phase 0 links this to prove the foundation compiles and
 # produces a loadable `.node`; later phases expose the SDK functions.
 #

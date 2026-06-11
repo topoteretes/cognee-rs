@@ -342,4 +342,3 @@ async fn run_prune_system(
     serde_json::to_string(&prune_json)
         .map_err(|e| SdkError::Runtime(format!("failed to serialize PruneResult: {e}")))
 }
-

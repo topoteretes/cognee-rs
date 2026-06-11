@@ -28,21 +28,29 @@ depending on `cognee-lib` with forwarded features; consumed by path from both th
 `js/cognee-neon` and `capi` workspaces). The code to move, currently in
 `js/cognee-neon/src/`:
 
-| Source (neon) | Destination (bindings-common) | Notes |
+| Source (neon) | Destination (bindings-common) | What stays in neon |
 |---|---|---|
-| `sdk.rs` → `HandleState` (cm + services cache + owner_id + tenant_id, `services()`, `owner_id()`) | `src/handle.rs` | Drop the Neon-specific `CogneeHandle`/`Finalize` wrapper — that stays in neon |
-| `services.rs` → `CogneeServices` (6 engines + 10 derived services, `build()`) | `src/services.rs` | Pure cognee-lib types already; only the `SdkError` import changes |
-| `errors.rs` → `SdkError` enum + `code()` | `src/error.rs` | The enum is neon-free; `throw_sdk_error` (Neon throw helper) stays in neon |
-| `sdk.rs` → settings-overlay construction (`defaults < env < object`) | `src/handle.rs` (e.g. `HandleState::from_settings_json(Option<&str>)`) | Both bindings parse a JSON string/object; share the overlay logic |
-| `json.rs` → serde-side helpers (`DataInput` parsing, hand-built result builders like `cognify_result_json`, `marshal_inputs`) | `src/wire.rs` | The Neon `JsValue` conversion halves stay in neon. Sharing `wire` is what makes the camelCase TS shapes (D3) automatic for C |
+| `sdk.rs` → `HandleState` struct + `impl HandleState { services(), owner_id() }` + private `CogneeHandle::new_from_settings()` constructor logic | `src/handle.rs` | `CogneeHandle` struct + `impl Finalize` + `cognee_new` / `cognee_warm` / `cognee_owner_id` Neon exports; `stringify_js` call (converts JS object arg to a JSON string before forwarding to `HandleState::from_settings_json`) |
+| `services.rs` → `CogneeServices` struct + `impl CogneeServices { build(), cpu_pool() }` | `src/services.rs` | Nothing from this file; it is already neon-free (only `crate::errors::SdkError` import changes to `cognee_bindings_common::SdkError`) |
+| `errors.rs` → `SdkError` enum (7 variants: `Component`, `ServiceBuild`, `UserBootstrap`, `Runtime`, `Validation`, `Unsupported`, `FeatureNotBuilt`) + `impl SdkError { code() }` | `src/error.rs` | `throw_sdk_error` function (uses `neon::prelude::*`); `throw_config_error` in `config.rs` (maps `cognee_lib::config::ConfigError` → JS error, stays in neon `config.rs`) |
+| `sdk.rs` → settings-overlay construction (`defaults < env < object`) | `src/handle.rs` as `HandleState::from_settings_json(settings_json: Option<&str>) -> Result<Settings, SdkError>` | Neon-side argument parsing in `cognee_new`: JS-object args are stringified via `stringify_js` before being passed as `Option<&str>` to `from_settings_json` |
+| `json.rs` → neon-free serde helpers: `cognify_result_json`, `marshal_one`, `marshal_bytes`, `decode_byte_array`, `marshal_inputs` | `src/wire.rs` | `stringify_js`, `parse_js`, `js_to_serde`, `js_to_value`, `read_opts` — all take neon `Context`/`Handle` params and must stay in neon; they are the JS↔serde bridge halves |
+
+**Cargo plumbing (two places):**
+
+1. Add `crates/bindings-common` to the root `Cargo.toml` `[workspace] members` list.
+2. Add `cognee-bindings-common = { path = "../../crates/bindings-common", default-features = false }` to `js/cognee-neon/Cargo.toml` `[dependencies]`, forwarding the same features the neon crate already forwards to `cognee-lib` (listed in its `[features]` section).
 
 Crate features: forward `cognee-lib`'s relevant flags (`visualization`, `cloud`, `qdrant`,
 `ladybug`, `onnx`, `hf-tokenizer`, `tiktoken`, `sqlite`, `testing`) so each binding picks its
 own set.
 
-**Refactor `cognee-neon`** to `use cognee_bindings_common::…` and delete the moved code. This
-must be behavior-neutral: the full JS check (`js/scripts/check.sh`, 12+ suites) is an exit
-criterion of this phase, in the same PR.
+**Refactor `cognee-neon`** to `use cognee_bindings_common::…` for `HandleState`,
+`CogneeServices`, `SdkError`, and the `wire` helpers, then delete the moved code from the
+neon source tree. Residual neon-specific items (`CogneeHandle`, `Finalize`, `throw_sdk_error`,
+`throw_config_error`, `stringify_js`, `parse_js`, `js_to_serde`, `js_to_value`, `read_opts`)
+stay in neon as before. This must be behavior-neutral: the full JS check
+(`js/scripts/check.sh`, 12+ suites) is an exit criterion of this phase, in the same PR.
 
 ## Part B — `CgSdk` handle in capi
 

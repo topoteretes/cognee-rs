@@ -1,88 +1,27 @@
-//! `CogneeHandle` — the stateful, `JsBox`-boxed handle the TypeScript SDK is
-//! built on. It owns the config (`ComponentManager`) and lazily builds + caches
-//! a [`CogneeServices`] bundle, version-invalidated like `ComponentManager`.
+//! `CogneeHandle` — the `JsBox`-boxed SDK handle the TypeScript SDK is built on.
+//!
+//! The portable inner state ([`HandleState`]) now lives in
+//! `cognee-bindings-common` and is imported here. This module keeps only the
+//! neon-specific parts: the `CogneeHandle` struct, its `Finalize` impl, and the
+//! three Neon export functions (`cogneeNew`, `cogneeWarm`, `cogneeOwnerId`).
 //!
 //! Phase 1 exports: `cogneeNew`, `cogneeWarm`, `cogneeOwnerId`. SDK operations
-//! (add/cognify/search/…) are Phases 3–6 and follow the canonical pattern:
+//! (add/cognify/search/…) are later phases and follow the canonical pattern:
 //! `let svc = handle.services().await?; <cognee-lib api>(…, svc.*); serde_to_js`.
 
 use std::sync::Arc;
 
 use neon::prelude::*;
-use tokio::sync::Mutex as TokioMutex;
-use uuid::Uuid;
 
-use cognee_lib::ComponentManager;
 use cognee_lib::config::{ConfigManager, Settings};
 
-use crate::errors::{SdkError, throw_sdk_error};
+// Re-export HandleState at the crate level so sdk_*.rs modules that reference
+// `crate::sdk::HandleState` continue to resolve.
+pub use cognee_bindings_common::HandleState;
+
+use crate::errors::throw_sdk_error;
 use crate::json::stringify_js;
 use crate::runtime::{ensure_runtime, runtime};
-use crate::services::CogneeServices;
-
-/// The shareable inner state of a handle.
-///
-/// Kept in its own `Arc` (separate from the `JsBox`) so async native functions
-/// can clone a `Send + Sync` reference into a spawned task — a `JsBox` itself is
-/// not `Send` and cannot cross the spawn boundary.
-pub struct HandleState {
-    /// Owns config + the 6 lazy engines.
-    pub cm: Arc<ComponentManager>,
-    /// Cached services + the config version they were built at. `None` until the
-    /// first warm.
-    services: TokioMutex<Option<(u64, Arc<CogneeServices>)>>,
-    /// Resolved on first warm (the id of the default `User` row). `None` until
-    /// then.
-    owner_id: TokioMutex<Option<Uuid>>,
-    /// The default user carries no tenant (see `get_or_create_default_user`).
-    #[allow(dead_code)] // consumed by SDK ops in later phases
-    tenant_id: Option<Uuid>,
-}
-
-impl HandleState {
-    /// Return the cached services, rebuilding if the cache is empty or the config
-    /// version advanced. On the (re)build path the resolved owner id is written
-    /// back into `owner_id`.
-    pub async fn services(&self) -> Result<Arc<CogneeServices>, SdkError> {
-        let current_ver = self.cm.config().version();
-
-        // Fast path: cache hit at the current version.
-        {
-            let guard = self.services.lock().await;
-            if let Some((ver, ref svc)) = *guard
-                && ver == current_ver
-            {
-                return Ok(Arc::clone(svc));
-            }
-        }
-
-        // Slow path: (re)build under the lock. Re-check first — another task may
-        // have rebuilt while we were waiting.
-        let mut guard = self.services.lock().await;
-        if let Some((ver, ref svc)) = *guard
-            && ver == current_ver
-        {
-            return Ok(Arc::clone(svc));
-        }
-
-        let (svc, owner_id) = CogneeServices::build(&self.cm).await?;
-        let svc = Arc::new(svc);
-        *guard = Some((current_ver, Arc::clone(&svc)));
-        // Publish the resolved owner id (idempotent: email-derived UUID5).
-        *self.owner_id.lock().await = Some(owner_id);
-        Ok(svc)
-    }
-
-    /// Resolve the owner id, warming lazily if necessary.
-    pub async fn owner_id(&self) -> Result<Uuid, SdkError> {
-        // `services()` guarantees `owner_id` is populated on its build path.
-        self.services().await?;
-        let guard = self.owner_id.lock().await;
-        guard.ok_or_else(|| {
-            SdkError::Runtime("owner_id unresolved after warm (internal invariant)".to_string())
-        })
-    }
-}
 
 /// The boxed SDK handle. Survives across JS calls (held by a `JsBox`).
 pub struct CogneeHandle {
@@ -95,14 +34,8 @@ impl Finalize for CogneeHandle {}
 impl CogneeHandle {
     /// Build the handle from settings (sync, no I/O).
     fn new_from_settings(settings: Settings) -> Self {
-        let cm = Arc::new(ComponentManager::new(ConfigManager::new(settings)));
         CogneeHandle {
-            state: Arc::new(HandleState {
-                cm,
-                services: TokioMutex::new(None),
-                owner_id: TokioMutex::new(None),
-                tenant_id: None,
-            }),
+            state: Arc::new(HandleState::from_settings(settings)),
         }
     }
 }
@@ -219,4 +152,3 @@ pub fn cognee_owner_id(mut cx: FunctionContext) -> JsResult<JsPromise> {
 fn settings_from_env() -> Settings {
     ConfigManager::from_env().read().clone()
 }
-

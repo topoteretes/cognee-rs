@@ -23,13 +23,13 @@ use crate::errors::{SdkError, throw_sdk_error};
 
 // These are only used in the feature-enabled paths.
 #[cfg(feature = "visualization")]
-use std::sync::Arc;
-#[cfg(feature = "visualization")]
 use crate::json::read_opts;
 #[cfg(feature = "visualization")]
 use crate::runtime::runtime;
 #[cfg(feature = "visualization")]
 use crate::sdk::CogneeHandle;
+#[cfg(feature = "visualization")]
+use std::sync::Arc;
 
 // ---------------------------------------------------------------------------
 // Feature-gated implementations.
@@ -169,4 +169,3 @@ pub fn cognee_visualize_to_file(mut cx: FunctionContext) -> JsResult<JsPromise> 
         Ok(promise)
     }
 }
-

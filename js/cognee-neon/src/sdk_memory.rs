@@ -27,7 +27,6 @@ use crate::json::{js_to_value, marshal_inputs, parse_js, read_opts};
 use crate::runtime::runtime;
 use crate::sdk::CogneeHandle;
 
-
 /// Parse an optional `tenant` UUID string out of an `opts` object.
 fn opts_tenant(opts: &serde_json::Value) -> Result<Option<Uuid>, SdkError> {
     match opts.get("tenant").and_then(|v| v.as_str()) {
@@ -504,4 +503,3 @@ async fn run_improve(
     serde_json::to_string(&improve_json)
         .map_err(|e| SdkError::Runtime(format!("failed to serialize ImproveResult: {e}")))
 }
-

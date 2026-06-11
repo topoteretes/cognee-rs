@@ -199,4 +199,3 @@ pub fn cognee_disconnect(mut cx: FunctionContext) -> JsResult<JsPromise> {
         Ok(promise)
     }
 }
-

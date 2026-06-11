@@ -40,7 +40,6 @@ use crate::runtime::runtime;
 use crate::sdk::CogneeHandle;
 use crate::services::CogneeServices;
 
-
 // ---------------------------------------------------------------------------
 // opts parsing (owner / tenant overrides; cognify config overrides).
 // ---------------------------------------------------------------------------
