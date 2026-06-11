@@ -12,6 +12,22 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tracing::{Span, instrument};
 
+/// Default max database size: 1 GiB.
+///
+/// Kuzu's built-in default is 8 TiB, which it reserves via a sparse mmap on
+/// startup. Many container runtimes (including GitHub Actions runners) cap the
+/// process address space well below 8 TiB, causing initialization to fail.
+/// 1 GiB is sufficient for typical knowledge-graph workloads and works in all
+/// CI environments. Override with `GRAPH_MAX_DB_SIZE` (bytes) for larger graphs.
+const DEFAULT_MAX_DB_SIZE: u64 = 1 * 1024 * 1024 * 1024;
+
+fn read_max_db_size() -> u64 {
+    std::env::var("GRAPH_MAX_DB_SIZE")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(DEFAULT_MAX_DB_SIZE)
+}
+
 use crate::{EdgeData, GraphDBError, GraphDBResult, GraphDBTrait, GraphNode, NodeData};
 
 /// Strip control characters (`\u{0000}`–`\u{001F}`, except `\t`, `\n`, `\r`)
@@ -149,7 +165,8 @@ impl LadybugAdapter {
     /// Returns GraphDBError::InitializationError if database creation fails
     ///
     pub async fn new(db_path: &str) -> GraphDBResult<Self> {
-        let db = Database::new(db_path, SystemConfig::default()).map_err(|e| {
+        let config = SystemConfig::default().max_db_size(read_max_db_size());
+        let db = Database::new(db_path, config).map_err(|e| {
             GraphDBError::InitializationError(format!("Failed to create database: {}", e))
         })?;
 
