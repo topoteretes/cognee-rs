@@ -59,6 +59,17 @@ done
 
 echo ""
 echo "================================================================"
+echo "=== Phase 1b SDK handle smoke test (Tier-A, mock embedding) ==="
+echo "================================================================"
+
+echo ""
+echo "--- Running: sdk_handle_smoke (MOCK_EMBEDDING=true, no network) ---"
+MOCK_EMBEDDING=true \
+    COGNEE_TRACING_ENABLED="" \
+    "$BUILD_DIR/examples/sdk_handle_smoke"
+
+echo ""
+echo "================================================================"
 echo "=== Gap 07 smoke tests (OTLP + analytics init) ==="
 echo "================================================================"
 

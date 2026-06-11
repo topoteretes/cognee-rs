@@ -21,6 +21,7 @@ pub mod pipeline_exec;
 pub mod progress;
 pub mod run_handle;
 pub mod runtime;
+pub mod sdk;
 pub mod task;
 pub mod task_context;
 pub mod task_info;

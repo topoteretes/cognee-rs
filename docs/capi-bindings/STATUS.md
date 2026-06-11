@@ -9,14 +9,14 @@ the 1a completion is recorded in this table's Notes column, the row flips to ✅
 
 **Legend:** ⬜ Not started · 🟡 In progress · 🔵 In review · ⛔ Blocked · ✅ Done
 
-Last updated: 2026-06-11 (step 1a done)
+Last updated: 2026-06-11 (step 1b committed)
 
 ## Status table
 
 | Phase | Task | Status | Branch | Commit | Notes |
 |---|---|---|---|---|---|
 | 0 | [Scaffolding & build](phase-0-scaffolding.md) | ✅ Done | capi-bindings/phase-0-scaffolding | 903e095 | see Phase 0 baselines below |
-| 1 | [Shared facade & SDK handle](phase-1-shared-facade-and-handle.md) | 🔵 In review | capi-bindings/phase-1a-facade-hoist | | keystone · PR-1/1a done: facade hoisted, neon green |
+| 1 | [Shared facade & SDK handle](phase-1-shared-facade-and-handle.md) | ✅ Done | capi-bindings/phase-1b-sdk-handle | 297d7ca | keystone · PR-1/1a done: facade hoisted, neon green |
 | 2 | [Errors, async & JSON conventions](phase-2-errors-async-json-conventions.md) | ⬜ | | | |
 | 3 | [Config surface](phase-3-config.md) | ⬜ | | | |
 | 4 | [Core ops (add/cognify)](phase-4-core-ops.md) | ⬜ | | | |
@@ -59,11 +59,11 @@ above numbers are post-extraction with the full `cognee-lib` dependency.
 ### Phase 1 — Shared facade & SDK handle
 - [x] `crates/bindings-common` (`cognee-bindings-common`) exists with `HandleState`, `CogneeServices`, `SdkError`, shared `wire` helpers (D1)
 - [x] `cognee-neon` consumes it; `js/scripts/check.sh` fully green (no behavior change)
-- [ ] `CgSdk` handle: `cg_sdk_new` / `cg_sdk_warm` (async) / `cg_sdk_owner_id` (async) / `cg_sdk_clone` / `cg_sdk_destroy`
-- [ ] minimal async plumbing: `CgSdkResultCallback` typedef + single-use `CgSdkWaiter` (new/wait/destroy) (D4, R6)
-- [ ] `cognee_sdk.h` generated (second cbindgen config) + `CG_API_VERSION_*` defines + `cg_api_version()` (D8); runtime-ordering footgun documented (R7)
-- [ ] landed as ≥2 PRs (R9): facade hoist + neon refactor, then capi handle + plumbing
-- [ ] C smoke test constructs + warms a handle via the waiter (mock embedding, temp dirs)
+- [x] `CgSdk` handle: `cg_sdk_new` / `cg_sdk_warm` (async) / `cg_sdk_owner_id` (async) / `cg_sdk_clone` / `cg_sdk_destroy`
+- [x] minimal async plumbing: `CgSdkResultCallback` typedef + single-use `CgSdkWaiter` (new/wait/destroy) (D4, R6)
+- [x] `cognee_sdk.h` generated (second cbindgen config) + `CG_API_VERSION_*` defines + `cg_api_version()` (D8); runtime-ordering footgun documented (R7)
+- [x] landed as ≥2 PRs (R9): facade hoist + neon refactor, then capi handle + plumbing
+- [x] C smoke test constructs + warms a handle via the waiter (mock embedding, temp dirs)
 
 ### Phase 2 — Errors, async & JSON conventions
 - [ ] `CgErrorCode` extended with the 8 SDK codes; mapping table + tiering rule (R2) documented
@@ -137,3 +137,4 @@ Record cross-cutting decisions as they're made (one line each), so later phases 
 | 2026-06-11 | **R9 (review):** Phase 1 lands as ≥2 PRs: PR-1 facade hoist + neon refactor (JS-suite gated), PR-2 capi handle + plumbing (C-smoke gated). | 1 |
 | 2026-06-11 | **Phase 0 impl:** panic-hook smoke test and staticlib size baseline deferred to CI (environmental disk-full constraint during implementation); all other exit criteria satisfied locally. | 0 |
 | 2026-06-11 | **1a implementation:** bindings-common created as separate root-workspace crate; neon refactored to thin re-exports; async-trait+serde listed as forward-declarations for phase 1b. | 1 |
+| 2026-06-11 | **1b review:** R1 deferred-callback violation fixed — warm/owner_id "runtime not initialized" path now uses std::thread::spawn to avoid synchronous callback delivery. | 1 |

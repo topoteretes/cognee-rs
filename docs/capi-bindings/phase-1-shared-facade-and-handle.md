@@ -54,7 +54,37 @@ stay in neon as before. This must be behavior-neutral: the full JS check
 
 ## Part B — `CgSdk` handle in capi
 
-New module `capi/cognee-capi/src/sdk.rs`:
+**Cargo plumbing (one place):**
+
+Add `cognee-bindings-common` as a dependency in `capi/cognee-capi/Cargo.toml`
+(the crate's `[dependencies]`, NOT the workspace `members`):
+
+```toml
+cognee-bindings-common = { path = "../../crates/bindings-common", default-features = false }
+```
+
+Forward the same feature flags already present in `cognee-capi`'s `[features]`
+section (the set mirrors `cognee-neon`).  The path `../../crates/bindings-common`
+is relative to `capi/cognee-capi/`, which resolves correctly to the root-workspace
+member at `crates/bindings-common`.
+
+Also add `serde_json` as a direct dep (needed in `sdk.rs` for JSON parsing in
+the settings overlay and for serialising results).  `serde_json` is NOT yet in
+`capi/Cargo.toml`'s `[workspace.dependencies]`, so add it there first:
+
+```toml
+# in capi/Cargo.toml [workspace.dependencies]
+serde_json = "1"
+```
+
+then reference it from `cognee-capi/Cargo.toml`:
+
+```toml
+serde_json = { workspace = true }
+```
+
+New module `capi/cognee-capi/src/sdk.rs` and add `pub mod sdk;` to
+`capi/cognee-capi/src/lib.rs`:
 
 ```rust
 pub struct CgSdk {
@@ -62,11 +92,28 @@ pub struct CgSdk {
 }
 ```
 
-Exported functions (cbindgen → opaque `typedef struct CgSdk CgSdk;` in **`cognee_sdk.h`**):
+**Runtime init in `cg_sdk_new`:** The global tokio runtime lives in
+`crate::runtime::GLOBAL_RUNTIME` (a `OnceLock<AsyncRuntime>`); the helper
+`crate::runtime::global_runtime()` is `pub(crate)`.  `cg_sdk_new` must call
+`cg_init()` (or replicate its idempotent-init logic inline) when the runtime
+has not yet been initialised.  The simplest correct approach is:
+
+```rust
+if crate::runtime::global_runtime().is_none() {
+    let code = crate::runtime::cg_init_impl();  // extract the body of cg_init
+    if code != CgErrorCode::Ok { /* propagate */ }
+}
+```
+
+Alternatively, expose a `pub(crate) fn ensure_runtime() -> CgErrorCode` in
+`runtime.rs` that calls `cg_init()` idempotently.  Either way, keep the
+`OnceLock` as the single source of truth; do not create a second runtime.
+
+Exported functions (hand-written in **`cognee_sdk.h`** — see header note in Part C):
 
 | Function | Signature | Semantics |
 |---|---|---|
-| `cg_sdk_new` | `CgSdk* cg_sdk_new(const char* settings_json)` | `settings_json` NULL → env-only construction (`ConfigManager::from_env()`); otherwise the 3-way overlay `defaults < env < json`. Sync, no I/O. Ensures the global runtime exists (idempotent `cg_init` semantics). Returns NULL + last-error on failure. **Ordering footgun (document in `cognee_sdk.h`):** because the runtime is a process-wide OnceLock, `cg_init_with_threads(n)` called *after* the first `cg_sdk_new` silently no-ops — consumers wanting a custom thread count must call it first. |
+| `cg_sdk_new` | `CgSdk* cg_sdk_new(const char* settings_json)` | `settings_json` NULL → `HandleState::from_env()`; non-NULL → parse the JSON string, merge over env-loaded `Settings`, call `HandleState::from_settings(merged)`. The 3-way overlay logic (`defaults < env < json`) lives entirely in `cg_sdk_new` — `HandleState::from_settings` expects a fully-overlaid `Settings` struct. Note: Part A's plan referenced a `HandleState::from_settings_json` method that was NOT implemented; the actual API is `HandleState::from_settings(Settings)` + `HandleState::from_env()`. Use `cognee_lib::config::ConfigManager::from_env()` to get the env-overlaid Settings, then apply the JSON patch on top. Sync, no I/O. Ensures the global runtime exists (idempotent `cg_init` semantics). Returns NULL + last-error on failure. **Ordering footgun (document in `cognee_sdk.h`):** because the runtime is a process-wide OnceLock, `cg_init_with_threads(n)` called *after* the first `cg_sdk_new` silently no-ops — consumers wanting a custom thread count must call it first. |
 | `cg_sdk_warm` | `void cg_sdk_warm(const CgSdk*, CgSdkResultCallback, void* user_data)` | Async (D4): builds/caches `CogneeServices` (DB connect, user bootstrap, engine init). Callback gets `result_json = "null"` (D9). |
 | `cg_sdk_owner_id` | `void cg_sdk_owner_id(const CgSdk*, CgSdkResultCallback, void* user_data)` | Async; warms lazily; `result_json` is the quoted UUID string (strict JSON, D9). |
 | `cg_sdk_clone` | `CgSdk* cg_sdk_clone(const CgSdk*)` | Arc clone (matches `cg_task_context_clone` convention). Sync. |
@@ -95,11 +142,49 @@ exactly-once callback contract; passing an already-consumed waiter as `user_data
 calling `wait` twice, returns `CG_ERR_VALIDATION`. Resettable waiters invite reuse races for
 no real ergonomic gain (creation is one malloc).
 
+**SDK error codes:** `CgErrorCode` in `capi/cognee-capi/src/error.rs` must be
+extended with 8 SDK variants (values 11–18) per decision D5.  The Rust enum uses
+PascalCase variant names; the C header uses screaming-snake (e.g. Rust
+`CgErrorCode::Component` → C `CG_ERR_COMPONENT`).  Because the header is
+hand-maintained (see Part C), you must add both the Rust variant **and** the C
+`#define` / enum entry by hand.  Append to the existing enum block in
+`error.rs`:
+
+```rust
+// SDK tier (values 11–18, append-only per D5)
+Component = 11,
+ServiceBuild = 12,
+UserBootstrap = 13,
+SdkValidation = 14,
+Unsupported = 15,
+FeatureNotBuilt = 16,
+UnknownConfigKey = 17,
+ConfigTypeMismatch = 18,
+```
+
+Add a `From<&SdkError> for CgErrorCode` impl in `sdk.rs` (or `error.rs`) that
+maps each `SdkError` variant to its code (R2: `cg_sdk_*` functions must only
+emit SDK codes 11–18 + `CG_OK`/`CG_ERR_NULL_POINTER`/`CG_ERR_RUNTIME`/
+`CG_ERR_UTF8`; engine codes 2, 4–9 must never cross tiers).
+
+Note: `SdkValidation` (= 14) is the SDK-tier validation code delivered through
+the callback; it maps to `SdkError::Validation`.  The existing engine-tier
+`CG_ERR_INVALID_ARGUMENT` (= 2) and `CG_ERR_TYPE_MISMATCH` (= 9) are NOT
+reused by the SDK tier per R2.
+
 Header/versioning:
 
-- Second cbindgen configuration emitting `capi/include/cognee_sdk.h` for the SDK tier
-  (`cognee.h` stays engine-only and unchanged); `cognee_sdk.h` includes `cognee.h` for
-  `CgErrorCode`/`cg_string_destroy`.
+- `cognee_sdk.h` is **hand-written and committed** to `capi/include/cognee_sdk.h`,
+  following the same convention as the existing `capi/include/cognee.h`.  The
+  existing `capi/cognee-capi/build.rs` is a no-op (the comment reads: "Header is
+  maintained manually at capi/include/cognee.h / cbindgen was useful for
+  bootstrapping but the manual header gives better control over the C API surface").
+  Do NOT attempt to wire cbindgen into `build.rs` for this phase — write the
+  header by hand.  The `cbindgen.toml` in `capi/cognee-capi/` exists as a
+  bootstrapping artefact; it is not invoked during the build.
+- `cognee_sdk.h` must open with `#include "cognee.h"` (for `CgErrorCode`,
+  `cg_string_destroy`), its own include-guard (`COGNEE_SDK_H`), and an
+  `extern "C"` block.
 - `CG_API_VERSION_MAJOR`/`CG_API_VERSION_MINOR` defines + `uint32_t cg_api_version(void)`
   (`(major << 16) | minor`); MINOR bumps each phase that ships symbols.
 
@@ -116,10 +201,12 @@ Semantics locked by the TS decision log (inherit verbatim):
       mock embedding + temp dirs (Tier-A, no network)
 - [ ] `cognee-neon` consumes the shared facade; `js/scripts/check.sh` fully green
 - [ ] `scripts/check_all.sh` green (fmt, clippy, capi/python/js binding checks)
+- [ ] `CgErrorCode` extended with SDK codes 11–18 in `error.rs`; `From<&SdkError> for CgErrorCode` impl in `sdk.rs`
 - [ ] `CgSdkResultCallback` + `CgSdkWaiter` working; new C smoke test
       (`capi/examples/sdk_handle_smoke.c`): new (env + JSON settings) → warm → owner_id →
       clone → destroy via the waiter, using `MOCK_EMBEDDING=true` + temp dirs
-- [ ] `cognee_sdk.h` generated + committed; `cg_api_version()` returns 1.1 (or chosen scheme)
+- [ ] `capi/examples/CMakeLists.txt` updated to build `sdk_handle_smoke`; `capi/scripts/check.sh` updated to run it
+- [ ] `cognee_sdk.h` hand-written + committed to `capi/include/cognee_sdk.h`; `cg_api_version()` returns `(1 << 16) | 1` (major=1, minor=1)
 
 ## Risks
 

@@ -13,6 +13,11 @@ foreach(example ${EXAMPLES})
     target_link_libraries(${example} cognee_capi ${COGNEE_SYSTEM_LIBS})
 endforeach()
 
+# Phase 1b SDK handle smoke test (Tier-A: mock embedding, no network).
+add_executable(sdk_handle_smoke sdk_handle_smoke.c)
+target_include_directories(sdk_handle_smoke PRIVATE ${COGNEE_INCLUDE_DIR})
+target_link_libraries(sdk_handle_smoke cognee_capi ${COGNEE_SYSTEM_LIBS})
+
 # Gap 07 smoke binaries (driven by capi/scripts/check.sh).
 #
 # `init_otlp_smoke` and `init_telemetry_smoke` exercise the public C

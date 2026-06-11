@@ -73,3 +73,18 @@ pub extern "C" fn cg_shutdown() {
 pub(crate) fn global_runtime() -> Option<&'static AsyncRuntime> {
     GLOBAL_RUNTIME.get()
 }
+
+/// Ensure the global runtime is initialised, initialising it now if needed.
+///
+/// Idempotent: if the runtime is already running this is a no-op that returns
+/// `CgErrorCode::Ok`. Used by `cg_sdk_new` so callers do not need to call
+/// `cg_init` explicitly before constructing a handle (R7 ordering footgun:
+/// `cg_init_with_threads` must still be called **before** `cg_sdk_new` when a
+/// custom thread count is desired, since the OnceLock no-ops on the second
+/// call).
+pub(crate) fn ensure_runtime() -> CgErrorCode {
+    if GLOBAL_RUNTIME.get().is_some() {
+        return CgErrorCode::Ok;
+    }
+    cg_init()
+}

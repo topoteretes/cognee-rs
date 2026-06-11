@@ -21,17 +21,17 @@ default = [
     "sqlite",
     "testing",
 ]
-visualization = ["cognee-lib/visualization"]
-cloud         = ["cognee-lib/cloud"]
-qdrant        = ["cognee-lib/qdrant"]
-ladybug       = ["cognee-lib/ladybug"]
-onnx          = ["cognee-lib/onnx"]
-hf-tokenizer  = ["cognee-lib/hf-tokenizer"]
-tiktoken      = ["cognee-lib/tiktoken"]
-sqlite        = ["cognee-lib/sqlite"]
+visualization = ["cognee-lib/visualization",         "cognee-bindings-common/visualization"]
+cloud         = ["cognee-lib/cloud",                 "cognee-bindings-common/cloud"]
+qdrant        = ["cognee-lib/qdrant",                "cognee-bindings-common/qdrant"]
+ladybug       = ["cognee-lib/ladybug",               "cognee-bindings-common/ladybug"]
+onnx          = ["cognee-lib/onnx",                  "cognee-bindings-common/onnx"]
+hf-tokenizer  = ["cognee-lib/hf-tokenizer",          "cognee-bindings-common/hf-tokenizer"]
+tiktoken      = ["cognee-lib/tiktoken",               "cognee-bindings-common/tiktoken"]
+sqlite        = ["cognee-lib/sqlite",                "cognee-bindings-common/sqlite"]
 # testing is in defaults because cg_task_context_mock requires mock
 # graph/vector backends — same reason cognee-neon keeps it.
-testing       = ["cognee-lib/testing"]
+testing       = ["cognee-lib/testing",               "cognee-bindings-common/testing"]
 # Test-only opt-in: exposes `cg_test_force_panic`, a no-return symbol
 # that always panics. Used by the capi smoke tests under
 # `capi/examples/panic_hook_smoke.c` to verify the gap-07 panic hook
@@ -44,6 +44,11 @@ testing-panic = []
 # Feature set mirrors cognee-neon; default-features = false so only the
 # features listed above are enabled.
 cognee-lib = { path = "../../crates/lib", default-features = false }
+# Shared bindings facade (HandleState, CogneeServices, SdkError, wire helpers).
+# Feature flags are forwarded identically to cognee-lib (the path resolves to
+# the root-workspace member at crates/bindings-common).
+cognee-bindings-common = { path = "../../crates/bindings-common", default-features = false }
+serde_json = { workspace = true }
 # Kept as direct deps so the existing engine modules (task_context.rs etc.)
 # keep their crate-path imports without a rewire. These are path deps that
 # resolve to the same versions cognee-lib pulls in.
