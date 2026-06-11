@@ -8,14 +8,12 @@ BLUE='\033[0;34m'
 NC='\033[0m'
 
 
-# print_env — prints the 5 key test environment variables
+# print_env — prints the key test environment variables
 print_env() {
   echo -e "${BLUE}📝 Environment:${NC}"
   echo -e "   OPENAI_URL=${OPENAI_URL}"
   echo -e "   OPENAI_TOKEN=${OPENAI_TOKEN}"
   echo -e "   OPENAI_MODEL=${OPENAI_MODEL}"
-  echo -e "   COGNEE_E2E_EMBED_MODEL_PATH=${COGNEE_E2E_EMBED_MODEL_PATH}"
-  echo -e "   COGNEE_E2E_TOKENIZER_PATH=${COGNEE_E2E_TOKENIZER_PATH}"
   echo
 }
 
