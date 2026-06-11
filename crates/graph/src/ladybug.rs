@@ -19,7 +19,7 @@ use tracing::{Span, instrument};
 /// process address space well below 8 TiB, causing initialization to fail.
 /// 1 GiB is sufficient for typical knowledge-graph workloads and works in all
 /// CI environments. Override with `GRAPH_MAX_DB_SIZE` (bytes) for larger graphs.
-const DEFAULT_MAX_DB_SIZE: u64 = 1 * 1024 * 1024 * 1024;
+const DEFAULT_MAX_DB_SIZE: u64 = 1024 * 1024 * 1024;
 
 fn read_max_db_size() -> u64 {
     std::env::var("GRAPH_MAX_DB_SIZE")
