@@ -115,6 +115,18 @@ uint32_t cg_api_version(void);
 #define CG_ERR_UNKNOWN_CONFIG_KEY   17
 #define CG_ERR_CONFIG_TYPE_MISMATCH 18
 
+/* Mapping to TypeScript SdkError kind strings (js/src/types.ts):
+ *   CG_ERR_COMPONENT            ↔ "COMPONENT_ERROR"
+ *   CG_ERR_SERVICE_BUILD        ↔ "SERVICE_BUILD_ERROR"
+ *   CG_ERR_USER_BOOTSTRAP       ↔ "USER_BOOTSTRAP_ERROR"
+ *   (CG_ERR_RUNTIME = 3)        ↔ "RUNTIME_ERROR"
+ *   CG_ERR_SDK_VALIDATION       ↔ "VALIDATION_ERROR"
+ *   CG_ERR_UNSUPPORTED          ↔ "UNSUPPORTED"
+ *   CG_ERR_FEATURE_NOT_BUILT    ↔ "FEATURE_NOT_BUILT"
+ *   CG_ERR_UNKNOWN_CONFIG_KEY   ↔ (Phase 3)
+ *   CG_ERR_CONFIG_TYPE_MISMATCH ↔ (Phase 3)
+ */
+
 /* ── CgSdkResultCallback ──────────────────────────────────────────────────── */
 
 /**
@@ -209,6 +221,12 @@ CgErrorCode cg_sdk_waiter_wait(CgSdkWaiter* waiter, char** out_result_json);
  * waiter from another thread.
  */
 void cg_sdk_waiter_destroy(CgSdkWaiter* waiter);
+
+/* NOTE: cg_sdk_waiter_wait_timeout (timed blocking wait) is an explicit
+ * non-goal for v1.  Use cg_sdk_waiter_wait (unbounded) for now; a
+ * timeout variant may be added in a future phase without breaking the
+ * existing ABI.
+ */
 
 /* ── CgSdk handle ─────────────────────────────────────────────────────────── */
 

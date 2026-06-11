@@ -70,6 +70,23 @@ MOCK_EMBEDDING=true \
 
 echo ""
 echo "================================================================"
+echo "=== Phase 2 conventions smoke tests ==="
+echo "================================================================"
+
+echo ""
+echo "--- Running: sdk_conventions_smoke (R1 deferred-delivery, MOCK_EMBEDDING=true) ---"
+MOCK_EMBEDDING=true \
+    COGNEE_TRACING_ENABLED="" \
+    "$BUILD_DIR/examples/sdk_conventions_smoke"
+
+echo ""
+echo "--- Running: sdk_negative_path_smoke (bad-JSON + single-use guard) ---"
+MOCK_EMBEDDING=true \
+    COGNEE_TRACING_ENABLED="" \
+    "$BUILD_DIR/examples/sdk_negative_path_smoke"
+
+echo ""
+echo "================================================================"
 echo "=== Gap 07 smoke tests (OTLP + analytics init) ==="
 echo "================================================================"
 

@@ -30,9 +30,10 @@
 //! Validation errors are also delivered via the spawned task.
 
 use std::ffi::{CStr, CString, c_char};
+use std::future::Future;
 use std::sync::{Arc, Condvar, Mutex};
 
-use cognee_bindings_common::HandleState;
+use cognee_bindings_common::{HandleState, SdkError};
 use cognee_lib::config::ConfigManager;
 
 use crate::error::{CgErrorCode, set_last_error};
@@ -67,8 +68,12 @@ pub type CgSdkResultCallback = unsafe extern "C" fn(
 
 /// Internal state for the single-use sync waiter.
 struct WaiterInner {
-    /// `None` = not yet fired; `Some((code, result_json_owned))`.
-    result: Option<(CgErrorCode, Option<CString>)>,
+    /// `None` = not yet fired; `Some((code, result_json_owned, error_message_owned))`.
+    ///
+    /// The third element stores the error message text so that
+    /// `cg_sdk_waiter_wait` can call `set_last_error` on the *calling* thread
+    /// before returning the non-OK code (classic sync-style error-query pattern).
+    result: Option<(CgErrorCode, Option<CString>, Option<CString>)>,
     /// Set to `true` once `cg_sdk_waiter_wait` has consumed the result.
     consumed: bool,
 }
@@ -87,7 +92,7 @@ struct WaiterInner {
 /// ```
 ///
 /// **Single-use**: calling `cg_sdk_waiter_wait` twice returns
-/// `CG_ERR_VALIDATION`. Do not reuse a waiter after `wait` returns.
+/// `CG_ERR_SDK_VALIDATION`. Do not reuse a waiter after `wait` returns.
 pub struct CgSdkWaiter {
     inner: Mutex<WaiterInner>,
     condvar: Condvar,
@@ -280,12 +285,10 @@ pub unsafe extern "C" fn cg_sdk_warm(
             // when the callback fires.
             let ud_raw = user_data.0 as usize;
             std::thread::spawn(move || {
-                let err_msg =
-                    CString::new("runtime not initialised; call cg_init first")
-                        .unwrap_or_else(|_| {
-                            CString::new("runtime not initialised")
-                                .expect("literal has no null bytes")
-                        });
+                let err_msg = CString::new("runtime not initialised; call cg_init first")
+                    .unwrap_or_else(|_| {
+                        CString::new("runtime not initialised").expect("literal has no null bytes")
+                    });
                 // SAFETY: ud_raw was a valid *mut c_void at time of capture.
                 unsafe {
                     callback(
@@ -360,12 +363,10 @@ pub unsafe extern "C" fn cg_sdk_owner_id(
             // Stash user_data as usize (same pattern as cg_sdk_warm above).
             let ud_raw = user_data.0 as usize;
             std::thread::spawn(move || {
-                let err_msg =
-                    CString::new("runtime not initialised; call cg_init first")
-                        .unwrap_or_else(|_| {
-                            CString::new("runtime not initialised")
-                                .expect("literal has no null bytes")
-                        });
+                let err_msg = CString::new("runtime not initialised; call cg_init first")
+                    .unwrap_or_else(|_| {
+                        CString::new("runtime not initialised").expect("literal has no null bytes")
+                    });
                 // SAFETY: ud_raw was a valid *mut c_void at time of capture.
                 unsafe {
                     callback(
@@ -461,7 +462,7 @@ pub unsafe extern "C" fn cg_sdk_destroy(sdk: *mut CgSdk) {
 ///
 /// **Single-use**: each waiter must only be used with exactly one async op.
 /// Reuse (calling `wait` twice, or passing the waiter to two ops) returns
-/// `CG_ERR_VALIDATION` on the second `wait` call.
+/// `CG_ERR_SDK_VALIDATION` on the second `wait` call.
 #[unsafe(no_mangle)]
 pub extern "C" fn cg_sdk_waiter_new() -> *mut CgSdkWaiter {
     let w = CgSdkWaiter {
@@ -477,6 +478,10 @@ pub extern "C" fn cg_sdk_waiter_new() -> *mut CgSdkWaiter {
 /// Callback suitable for passing to any `cg_sdk_*` async op when using the
 /// waiter pattern.  Pass the `CgSdkWaiter*` as `user_data`.
 ///
+/// This callback copies both `result_json` and `error_message` into owned
+/// storage so that `cg_sdk_waiter_wait` can forward the error message to the
+/// calling thread's last-error slot (sync-style error-query pattern).
+///
 /// # Safety
 /// `user_data` must be a valid `*mut CgSdkWaiter` allocated by
 /// `cg_sdk_waiter_new`.
@@ -484,7 +489,7 @@ pub extern "C" fn cg_sdk_waiter_new() -> *mut CgSdkWaiter {
 pub unsafe extern "C" fn cg_sdk_waiter_callback(
     code: CgErrorCode,
     result_json: *const c_char,
-    _error_message: *const c_char,
+    error_message: *const c_char,
     user_data: *mut std::ffi::c_void,
 ) {
     if user_data.is_null() {
@@ -503,11 +508,21 @@ pub unsafe extern "C" fn cg_sdk_waiter_callback(
         s.to_str().ok().and_then(|s| CString::new(s).ok())
     };
 
+    // Copy the error_message string into owned storage so that
+    // `cg_sdk_waiter_wait` can forward it to the calling thread's last-error
+    // slot after unblocking.
+    let owned_err: Option<CString> = if error_message.is_null() {
+        None
+    } else {
+        let s = unsafe { CStr::from_ptr(error_message) };
+        s.to_str().ok().and_then(|s| CString::new(s).ok())
+    };
+
     let mut guard = waiter.inner.lock().unwrap_or_else(|p| {
         // lock poison is unrecoverable
         p.into_inner()
     });
-    guard.result = Some((code, owned_json));
+    guard.result = Some((code, owned_json, owned_err));
     drop(guard);
     waiter.condvar.notify_one();
 }
@@ -519,7 +534,7 @@ pub unsafe extern "C" fn cg_sdk_waiter_callback(
 /// the caller must free it with `cg_string_destroy`.  On error it is set to
 /// `NULL`.
 ///
-/// Returns `CG_ERR_VALIDATION` if called on an already-consumed waiter
+/// Returns `CG_ERR_SDK_VALIDATION` if called on an already-consumed waiter
 /// (single-use contract, R6).
 ///
 /// Returns `CG_ERR_RUNTIME` if called from a tokio runtime thread (would
@@ -566,12 +581,23 @@ pub unsafe extern "C" fn cg_sdk_waiter_wait(
         });
 
     guard.consumed = true;
-    let (code, owned_json) = guard
+    let (code, owned_json, owned_err) = guard
         .result
         .take()
         .expect("condvar wait_while ensures result is Some before we proceed");
 
     drop(guard);
+
+    // Forward the error message to the calling thread's last-error slot so
+    // that callers using the sync-style `cg_last_error_message()` pattern get
+    // the message even for async ops routed through the waiter.
+    if code != CgErrorCode::Ok {
+        if let Some(ref err_msg) = owned_err {
+            if let Ok(s) = err_msg.to_str() {
+                set_last_error(s);
+            }
+        }
+    }
 
     // Transfer the owned JSON string to the caller.
     if !out_result_json.is_null() {
@@ -609,7 +635,117 @@ pub unsafe extern "C" fn cg_sdk_waiter_destroy(waiter: *mut CgSdkWaiter) {
 /// not accessed from multiple threads simultaneously without synchronisation.
 /// The SDK contract (R1) guarantees the callback fires exactly once, so a
 /// raw pointer passed as `user_data` is safe to move into the spawned task.
-struct SendUserData(*mut std::ffi::c_void);
+pub(crate) struct SendUserData(pub(crate) *mut std::ffi::c_void);
 // SAFETY: C caller guarantees pointer is not concurrently mutated.
 unsafe impl Send for SendUserData {}
 
+// ── spawn_sdk_op ─────────────────────────────────────────────────────────────
+
+/// Spawn an SDK async op on the global runtime.
+///
+/// Fires `cb` exactly once on a tokio worker thread (R1 — always deferred).
+/// Even if `fut` is trivially ready or if validation fails before spawning,
+/// the callback is dispatched via a spawned task, never called synchronously
+/// from the initiating `cg_sdk_*` call.
+///
+/// On `Ok(value)` the callback receives `CG_OK`, a `CString`-serialised JSON
+/// document (per D9), and a null `error_message`.
+///
+/// On `Err(e)` the callback receives the corresponding SDK-tier error code,
+/// a null `result_json`, and the error message string.
+///
+/// `ud` is the `SendUserData`-wrapped `user_data` pointer.
+///
+/// If the global runtime is not yet initialised, the error is delivered
+/// through a spawned OS thread to preserve the deferred-callback guarantee
+/// (R1).
+#[allow(dead_code)] // used by future op phases (3–7)
+pub(crate) fn spawn_sdk_op<F>(cb: CgSdkResultCallback, ud: SendUserData, fut: F)
+where
+    F: Future<Output = Result<serde_json::Value, SdkError>> + Send + 'static,
+{
+    let rt = match global_runtime() {
+        Some(rt) => rt,
+        None => {
+            // Runtime not initialised — deliver error via a spawned OS thread
+            // to honour R1 (callback never fires synchronously).
+            // Stash user_data as usize so the closure is Send (same pattern
+            // as cg_sdk_warm / cg_sdk_owner_id above).
+            let ud_raw = ud.0 as usize;
+            std::thread::spawn(move || {
+                let err_msg = CString::new("runtime not initialised; call cg_init first")
+                    .unwrap_or_else(|_| {
+                        CString::new("runtime not initialised").expect("literal has no null bytes")
+                    });
+                // SAFETY: ud_raw was a valid *mut c_void at time of capture.
+                unsafe {
+                    cb(
+                        CgErrorCode::RuntimeError,
+                        std::ptr::null(),
+                        err_msg.as_ptr(),
+                        ud_raw as *mut std::ffi::c_void,
+                    )
+                };
+            });
+            return;
+        }
+    };
+
+    rt.handle().spawn(async move {
+        let ud = ud; // moved into the async block (SendUserData is Send)
+        match fut.await {
+            Ok(value) => {
+                // Serialise result to a CString JSON document (D9).
+                let json_str = match serde_json::to_string(&value) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        let msg = CString::new(format!("result serialization failed: {e}"))
+                            .unwrap_or_else(|_| {
+                                CString::new("result serialization failed")
+                                    .expect("literal has no null bytes")
+                            });
+                        unsafe {
+                            cb(
+                                CgErrorCode::RuntimeError,
+                                std::ptr::null(),
+                                msg.as_ptr(),
+                                ud.0,
+                            )
+                        };
+                        return;
+                    }
+                };
+                let json_c = match CString::new(json_str) {
+                    Ok(s) => s,
+                    Err(_) => {
+                        let msg = CString::new("result JSON contained a null byte")
+                            .expect("literal has no null bytes");
+                        unsafe {
+                            cb(
+                                CgErrorCode::RuntimeError,
+                                std::ptr::null(),
+                                msg.as_ptr(),
+                                ud.0,
+                            )
+                        };
+                        return;
+                    }
+                };
+                unsafe { cb(CgErrorCode::Ok, json_c.as_ptr(), std::ptr::null(), ud.0) };
+            }
+            Err(e) => {
+                // Derive the code without touching the thread-local: we are on
+                // a tokio worker thread, not the caller's thread.  The error
+                // message is delivered through the callback's `error_message`
+                // parameter (async convention; thread-local is for sync paths
+                // only — see `set_last_error_from` doc comment).
+                let code = CgErrorCode::from(&e);
+                let msg = CString::new(e.to_string()).unwrap_or_else(|_| {
+                    CString::new("(error message contained null byte)")
+                        .expect("literal has no null bytes")
+                });
+                unsafe { cb(code, std::ptr::null(), msg.as_ptr(), ud.0) };
+            }
+        }
+    });
+}

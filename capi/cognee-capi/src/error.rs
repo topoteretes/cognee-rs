@@ -119,6 +119,23 @@ pub extern "C" fn cg_last_error_clear() {
     clear_last_error();
 }
 
+/// Convenience helper: store `err`'s message in the thread-local last-error
+/// slot *and* return the corresponding `CgErrorCode`.
+///
+/// Use this in every `cg_sdk_*` function that handles a `SdkError` so the
+/// two-step pattern (set message + return code) does not repeat at every call
+/// site.
+///
+/// **Thread-local caveat**: for async ops the error is delivered through the
+/// callback's `error_message` parameter, not through this thread-local.  Call
+/// this helper on the *calling* thread only for synchronous paths (e.g. inside
+/// `cg_sdk_waiter_wait` after unblocking, or inside `cg_sdk_new`).
+#[allow(dead_code)] // used in unit test below and future sync SDK paths (phases 3–7)
+pub(crate) fn set_last_error_from(err: &SdkError) -> CgErrorCode {
+    set_last_error(err.to_string());
+    CgErrorCode::from(err)
+}
+
 /// Map a cognee-core `ExecutionError` to an error code.
 pub fn execution_error_to_code(e: &cognee_core::ExecutionError) -> CgErrorCode {
     match e {
@@ -137,5 +154,98 @@ pub fn core_error_to_code(e: &cognee_core::CoreError) -> CgErrorCode {
         cognee_core::CoreError::TaskAborted { .. } => CgErrorCode::TaskFailed,
         cognee_core::CoreError::MissingContextField { .. } => CgErrorCode::MissingField,
         cognee_core::CoreError::InvalidProgressSplit { .. } => CgErrorCode::InvalidArgument,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cognee_bindings_common::SdkError;
+
+    /// Engine codes that must never cross into the SDK tier (R2).
+    const ENGINE_ONLY_CODES: &[u32] = &[2, 4, 5, 6, 7, 8, 9];
+
+    fn is_engine_only_code(code: CgErrorCode) -> bool {
+        ENGINE_ONLY_CODES.contains(&(code as u32))
+    }
+
+    /// Verify every `SdkError` variant maps to the expected SDK-tier code and
+    /// that none maps to an engine-only code (R2 tiering rule enforcement).
+    #[test]
+    fn from_sdk_error_maps_to_sdk_tier_codes() {
+        // Each pair: (SdkError variant, expected CgErrorCode)
+        let cases: &[(SdkError, CgErrorCode)] = &[
+            (
+                SdkError::Component(cognee_lib::ComponentError::GraphDb("test".to_string())),
+                CgErrorCode::Component,
+            ),
+            (
+                SdkError::ServiceBuild("test".to_string()),
+                CgErrorCode::ServiceBuild,
+            ),
+            (
+                SdkError::UserBootstrap("test".to_string()),
+                CgErrorCode::UserBootstrap,
+            ),
+            (
+                SdkError::Runtime("test".to_string()),
+                CgErrorCode::RuntimeError,
+            ),
+            (
+                SdkError::Validation("test".to_string()),
+                CgErrorCode::SdkValidation,
+            ),
+            (
+                SdkError::Unsupported("test".to_string()),
+                CgErrorCode::Unsupported,
+            ),
+            (
+                SdkError::FeatureNotBuilt("test".to_string()),
+                CgErrorCode::FeatureNotBuilt,
+            ),
+        ];
+
+        for (err, expected_code) in cases {
+            let code = CgErrorCode::from(err);
+            assert_eq!(
+                code,
+                *expected_code,
+                "SdkError::{} should map to {:?}",
+                err.code(),
+                expected_code
+            );
+            // R2: no SdkError must ever produce an engine-only code.
+            assert!(
+                !is_engine_only_code(code),
+                "SdkError::{} produced engine-only code {:?} — R2 violation",
+                err.code(),
+                code
+            );
+            // R2: all SDK-tier codes must be >= 11.
+            assert!(
+                (code as u32) >= 11 || code == CgErrorCode::RuntimeError,
+                "SdkError::{} produced code {:?} which is not a valid SDK-tier code",
+                err.code(),
+                code
+            );
+        }
+    }
+
+    /// Verify `set_last_error_from` stores the message and returns the code.
+    #[test]
+    fn set_last_error_from_stores_and_returns() {
+        let err = SdkError::Validation("bad input".to_string());
+        let code = set_last_error_from(&err);
+        assert_eq!(code, CgErrorCode::SdkValidation);
+        // The thread-local should now contain the error message.
+        LAST_ERROR.with(|cell| {
+            let borrow = cell.borrow();
+            let msg = borrow.as_ref().expect("last error should be set");
+            let msg_str = msg.to_str().expect("last error should be valid UTF-8");
+            assert!(
+                msg_str.contains("bad input"),
+                "last error message should contain 'bad input', got: {msg_str}"
+            );
+        });
     }
 }
