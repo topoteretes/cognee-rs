@@ -1,9 +1,7 @@
 //! Integration tests for embedding generation in the cognify pipeline.
 //!
-//! These tests require:
-//! - Environment variables: OPENAI_URL, OPENAI_TOKEN, OPENAI_MODEL
-//! - Model file: ./target/models/BGE-Small-v1.5-model_quantized.onnx
-//! - Tokenizer: ./target/models/bge-small-tokenizer.json
+//! These tests require: OPENAI_URL, OPENAI_TOKEN, OPENAI_MODEL (or any embedding
+//! provider configured via EMBEDDING_PROVIDER / EMBEDDING_API_KEY env vars).
 //!
 //! Run with: cargo test --package cognee-cognify --test integration_embeddings
 
@@ -46,7 +44,7 @@ fn make_thread_pool() -> Arc<dyn cognee_core::CpuPool> {
 async fn test_pipeline_with_embeddings() {
     let llm = create_adapter_from_env();
 
-    let Some((embedding_engine, _embedding_dims)) =
+    let Some((embedding_engine, embedding_dims)) =
         cognee_test_utils::create_test_embedding_engine().await
     else {
         return;
@@ -128,12 +126,12 @@ async fn test_pipeline_with_embeddings() {
         "No chunk embeddings generated"
     );
 
-    // 8. Verify embedding dimensions (BGE-Small = 384)
+    // 8. Verify embedding dimensions match the configured engine
     for embedding in &result.embeddings {
         assert_eq!(
             embedding.dimensions(),
-            384,
-            "Expected 384 dimensions for BGE-Small"
+            embedding_dims,
+            "Expected {embedding_dims} dimensions from embedding engine"
         );
 
         // Verify L2 normalization
