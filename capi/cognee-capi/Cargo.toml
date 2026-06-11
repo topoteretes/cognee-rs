@@ -1,5 +1,6 @@
 [package]
 name = "cognee-capi"
+# Inherit version/edition from the capi workspace root (capi/Cargo.toml).
 version.workspace = true
 edition.workspace = true
 
@@ -7,6 +8,30 @@ edition.workspace = true
 crate-type = ["cdylib", "staticlib"]
 
 [features]
+# Default feature set mirrors cognee-neon (js/cognee-neon/Cargo.toml).
+# A slim embedded build: --no-default-features --features sqlite,testing
+default = [
+    "visualization",
+    "cloud",
+    "qdrant",
+    "ladybug",
+    "onnx",
+    "hf-tokenizer",
+    "tiktoken",
+    "sqlite",
+    "testing",
+]
+visualization = ["cognee-lib/visualization"]
+cloud         = ["cognee-lib/cloud"]
+qdrant        = ["cognee-lib/qdrant"]
+ladybug       = ["cognee-lib/ladybug"]
+onnx          = ["cognee-lib/onnx"]
+hf-tokenizer  = ["cognee-lib/hf-tokenizer"]
+tiktoken      = ["cognee-lib/tiktoken"]
+sqlite        = ["cognee-lib/sqlite"]
+# testing is in defaults because cg_task_context_mock requires mock
+# graph/vector backends — same reason cognee-neon keeps it.
+testing       = ["cognee-lib/testing"]
 # Test-only opt-in: exposes `cg_test_force_panic`, a no-return symbol
 # that always panics. Used by the capi smoke tests under
 # `capi/examples/panic_hook_smoke.c` to verify the gap-07 panic hook
@@ -15,6 +40,13 @@ crate-type = ["cdylib", "staticlib"]
 testing-panic = []
 
 [dependencies]
+# Full cognee SDK.
+# Feature set mirrors cognee-neon; default-features = false so only the
+# features listed above are enabled.
+cognee-lib = { path = "../../crates/lib", default-features = false }
+# Kept as direct deps so the existing engine modules (task_context.rs etc.)
+# keep their crate-path imports without a rewire. These are path deps that
+# resolve to the same versions cognee-lib pulls in.
 cognee-core = { path = "../../crates/core" }
 cognee-database = { path = "../../crates/database", features = ["sqlite"] }
 cognee-graph = { path = "../../crates/graph", features = ["testing"] }
@@ -26,6 +58,7 @@ cognee-observability = { path = "../../crates/observability", features = ["telem
 cognee-telemetry     = { path = "../../crates/telemetry",     features = ["telemetry"] }
 # Required by `cognee_init_otlp` to pass `Registry` as the type
 # parameter to `cognee_observability::init_telemetry::<Registry>`.
+# Explicit pinned version — not inherited from root workspace (separate workspace).
 tracing-subscriber   = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "sync"] }
 futures.workspace = true

@@ -1,0 +1,3 @@
+# Cargo build output for the capi workspace
+target/
+Cargo.lock

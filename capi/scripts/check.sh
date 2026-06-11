@@ -4,6 +4,29 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CAPI_DIR="$(dirname "$SCRIPT_DIR")"
 
+# ── Compile gate (R5) ────────────────────────────────────────────────
+# After workspace extraction (D10), the root `cargo check --all-targets`
+# no longer covers the capi workspace. We run it here (inside the capi
+# workspace) so `scripts/check_all.sh`'s capi stage still catches capi
+# compile breaks. Two configurations are checked:
+#   1. Default features (full build, mirrors cognee-neon)
+#   2. Slim build (--no-default-features --features sqlite,testing) —
+#      the embedded/Android baseline (D6)
+echo "================================================================"
+echo "=== C API: cargo check (default features) ==="
+echo "================================================================"
+cargo check --all-targets --manifest-path "$CAPI_DIR/Cargo.toml"
+
+echo ""
+echo "================================================================"
+echo "=== C API: cargo check (slim: --no-default-features --features sqlite,testing) ==="
+echo "================================================================"
+CARGO_TARGET_DIR="$CAPI_DIR/target/check-slim" \
+    cargo check --all-targets \
+        --manifest-path "$CAPI_DIR/Cargo.toml" \
+        --no-default-features --features sqlite,testing
+
+echo ""
 echo "================================================================"
 echo "=== C API: Building with CMake ==="
 echo "================================================================"

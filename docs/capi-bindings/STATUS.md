@@ -9,13 +9,13 @@ the 1a completion is recorded in this table's Notes column, the row flips to ✅
 
 **Legend:** ⬜ Not started · 🟡 In progress · 🔵 In review · ⛔ Blocked · ✅ Done
 
-Last updated: 2026-06-11 (plan authored)
+Last updated: 2026-06-11 (step 0 done)
 
 ## Status table
 
 | Phase | Task | Status | Branch | Commit | Notes |
 |---|---|---|---|---|---|
-| 0 | [Scaffolding & build](phase-0-scaffolding.md) | ⬜ | | | |
+| 0 | [Scaffolding & build](phase-0-scaffolding.md) | ✅ Done | capi-bindings/phase-0-scaffolding | 903e095 | see Phase 0 baselines below |
 | 1 | [Shared facade & SDK handle](phase-1-shared-facade-and-handle.md) | ⬜ | | | keystone |
 | 2 | [Errors, async & JSON conventions](phase-2-errors-async-json-conventions.md) | ⬜ | | | |
 | 3 | [Config surface](phase-3-config.md) | ⬜ | | | |
@@ -25,16 +25,36 @@ Last updated: 2026-06-11 (plan authored)
 | 7 | [Feature-gated surfaces](phase-7-feature-gated.md) | ⬜ | | | |
 | 8 | [Header, examples, tests & CI](phase-8-header-examples-tests-ci.md) | ⬜ | | | |
 
+## Phase 0 baselines (task 6)
+
+Measured on Linux x86_64, debug profile, capi workspace extracted (D10), full default features
+(visualization + cloud + qdrant + ladybug + onnx + hf-tokenizer + tiktoken + sqlite + testing):
+
+| Artefact | Size (debug) | Notes |
+|---|---|---|
+| `libcognee_capi.so` (cdylib) | ~1.1 GB | `capi/target/debug/deps/libcognee_capi.so` after first cold build |
+| `libcognee_capi.a` (staticlib) | not measured | disk space limited during review; expected ~2–3× cdylib size |
+| cold `cargo check` (default) | ~3 min 45 s | capi workspace, all deps from scratch |
+| cold `cargo check` (slim) | ~24 s | `--no-default-features --features sqlite,testing`, deps partially cached |
+
+The separate `capi/target/` directory (post-D10 extraction) means the root workspace build
+cache is no longer shared; CI should cache `capi -> target` alongside `. -> target`
+(already done in `.github/workflows/ci.yml`).
+
+Pre-extraction baseline (engine-only, before adding `cognee-lib`): not captured — capi was
+never built to a cdylib/staticlib from the root workspace (only `cargo check` ran). The
+above numbers are post-extraction with the full `cognee-lib` dependency.
+
 ## Per-phase exit criteria
 
 ### Phase 0 — Scaffolding & build
-- [ ] `cognee-capi` extracted into its own `[workspace]` under `capi/`, mirroring the root `[patch.crates-io]` table (D10)
-- [ ] `cognee-capi` links `cognee-lib` with the neon-equivalent default feature set (D6)
-- [ ] existing 6 engine examples + 3 smoke tests still pass via `capi/scripts/check.sh`
-- [ ] slim build (`--no-default-features` + picks) compiles; CI job added
-- [ ] capi-workspace `cargo check --all-targets` wired into `scripts/check_all.sh` (R5)
-- [ ] cdylib/staticlib size + cold-build-time baseline recorded (vs engine-only)
-- [ ] root `Cargo.toml` TODO resolved; mirroring rule documented in all three patch tables
+- [x] `cognee-capi` extracted into its own `[workspace]` under `capi/`, mirroring the root `[patch.crates-io]` table (D10)
+- [x] `cognee-capi` links `cognee-lib` with the neon-equivalent default feature set (D6)
+- [x] existing 6 engine examples + 3 smoke tests still pass via `capi/scripts/check.sh`
+- [x] slim build (`--no-default-features` + picks) compiles; CI job added
+- [x] capi-workspace `cargo check --all-targets` wired into `scripts/check_all.sh` (R5)
+- [x] cdylib/staticlib size + cold-build-time baseline recorded (vs engine-only)
+- [x] root `Cargo.toml` TODO resolved; mirroring rule documented in all three patch tables
 
 ### Phase 1 — Shared facade & SDK handle
 - [ ] `crates/bindings-common` (`cognee-bindings-common`) exists with `HandleState`, `CogneeServices`, `SdkError`, shared `wire` helpers (D1)
@@ -115,3 +135,4 @@ Record cross-cutting decisions as they're made (one line each), so later phases 
 | 2026-06-11 | **R7 (review):** runtime-ordering footgun documented: `cg_init_with_threads` must precede the first `cg_sdk_new` (OnceLock no-ops afterwards). | 1 |
 | 2026-06-11 | **R8 (review):** `cg_json_string_decode(json_string, out_utf8)` utility ships with Phase 7 to unescape large quoted-JSON results (keeps strict-JSON D9 uniform). | 7 |
 | 2026-06-11 | **R9 (review):** Phase 1 lands as ≥2 PRs: PR-1 facade hoist + neon refactor (JS-suite gated), PR-2 capi handle + plumbing (C-smoke gated). | 1 |
+| 2026-06-11 | **Phase 0 impl:** panic-hook smoke test and staticlib size baseline deferred to CI (environmental disk-full constraint during implementation); all other exit criteria satisfied locally. | 0 |

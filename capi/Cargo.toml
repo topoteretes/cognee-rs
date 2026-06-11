@@ -1,0 +1,30 @@
+# capi/Cargo.toml — standalone workspace for the C API bindings.
+#
+# Extracted from the root workspace per decision D10 (phase 0).
+# The [patch.crates-io] table below must be kept in sync with the root
+# workspace (Cargo.toml at the repo root) and js/cognee-neon/Cargo.toml.
+# Any qdrant-fork patch added or bumped in one place must be reflected in
+# all three. See docs/capi-bindings/README.md §8 (Patch drift risk).
+[workspace]
+members = ["cognee-capi"]
+resolver = "3"
+
+[workspace.package]
+edition = "2024"
+version = "0.1.0"
+
+[workspace.dependencies]
+# Keep these versions in sync with the root workspace [workspace.dependencies].
+async-trait = "0.1.89"
+futures = "0.3"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "fs", "io-util"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
+uuid = { version = "1.21", features = ["v4", "v5", "serde"] }
+
+[patch.crates-io]
+# Keep in sync with the root workspace and js/cognee-neon/Cargo.toml.
+# Align tar version with qdrant workspace (needed for Archive::set_sync)
+tar = { git = "https://github.com/qdrant/tar-rs", branch = "main" }
+# Required by qdrant v1.17.0 — their forks add http2_max_local_error_reset_streams and related APIs
+tonic = { git = "https://github.com/qdrant/tonic", branch = "v0.11.0-qdrant" }
+hyper = { git = "https://github.com/qdrant/hyper", branch = "v0.14.26-qdrant" }

@@ -332,15 +332,26 @@ jobs:
         with:
           make-default: true
       - run: sudo apt-get update && sudo apt-get install -y cmake protobuf-compiler
+      # The capi workspace has its own target dir (capi/target/) after workspace
+      # extraction (D10). Cache it separately from the root workspace so the
+      # capi cold-build warm-up seeds subsequent runs.
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: workspace-test-v6
+          shared-key: capi-check-v1
+          workspaces: |
+            . -> target
+            capi -> target
           cache-on-failure: true
       - uses: actions/cache@v4
         with:
-          path: target/ort-cache
+          path: capi/target/ort-cache
           key: ort-v2.0.0-rc.12-cpu-linux-x86_64
-      - run: bash capi/scripts/check.sh
+      # ORT_CACHE_DIR is read by ort-sys build script; point it at capi/target/
+      # so the capi workspace build uses the same cached binary.
+      - name: Run C API check (default + slim build + CMake examples)
+        env:
+          ORT_CACHE_DIR: ${{ github.workspace }}/capi/target/ort-cache
+        run: bash capi/scripts/check.sh
 
   python-check:
     name: Python Bindings Check

@@ -1,8 +1,6 @@
-# TODO: Extract capi/cognee-capi into a separate workspace. The C FFI wrapper
-# should not live inside the main cognee-rust workspace long-term — it has
-# different build requirements (cdylib/staticlib, cbindgen, CMake integration)
-# and pulls in testing features unconditionally. Move it to its own workspace
-# under capi/ with its own Cargo.toml [workspace] root.
+# capi/cognee-capi has been extracted into its own workspace under capi/
+# (see capi/Cargo.toml). It is no longer a member of the root workspace
+# per decision D10 in docs/capi-bindings/README.md §4.
 [workspace]
 members = [
     "examples",
@@ -33,9 +31,6 @@ members = [
     "crates/bench",
     "crates/observability",
     "crates/telemetry",
-
-    # TODO: Move this out of the main workspace to avoid pulling in testing features and C FFI dependencies for all members
-    "capi/cognee-capi",
     "python",
 
     # Harness-only binary used by the e2e-cross-sdk telemetry parity
@@ -126,6 +121,9 @@ uuid = { version = "1.21", features = ["v4", "v5", "serde"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
 
 [patch.crates-io]
+# Keep in sync with js/cognee-neon/Cargo.toml and capi/Cargo.toml.
+# Any qdrant-fork patch added or bumped here must be reflected in all three places.
+# See docs/capi-bindings/README.md §8 (Patch drift risk).
 # Align tar version with qdrant workspace (needed for Archive::set_sync)
 tar = { git = "https://github.com/qdrant/tar-rs", branch = "main" }
 # Required by qdrant v1.17.0 — their forks add http2_max_local_error_reset_streams and related APIs

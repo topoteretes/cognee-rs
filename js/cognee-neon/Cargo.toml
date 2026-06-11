@@ -75,6 +75,9 @@ serde_json = "1"
 base64 = "0.22"
 
 [patch.crates-io]
+# Keep in sync with the root workspace (Cargo.toml) and capi/Cargo.toml.
+# Any qdrant-fork patch added or bumped here must be reflected in all three places.
+# See docs/capi-bindings/README.md §8 (Patch drift risk).
 tar = { git = "https://github.com/qdrant/tar-rs", branch = "main" }
 tonic = { git = "https://github.com/qdrant/tonic", branch = "v0.11.0-qdrant" }
 hyper = { git = "https://github.com/qdrant/hyper", branch = "v0.14.26-qdrant" }
