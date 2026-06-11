@@ -87,6 +87,17 @@ MOCK_EMBEDDING=true \
 
 echo ""
 echo "================================================================"
+echo "=== Phase 3 config surface smoke test ==="
+echo "================================================================"
+
+echo ""
+echo "--- Running: sdk_config_smoke (set/get round-trip, error codes, rebuild-on-change) ---"
+MOCK_EMBEDDING=true \
+    COGNEE_TRACING_ENABLED="" \
+    "$BUILD_DIR/examples/sdk_config_smoke"
+
+echo ""
+echo "================================================================"
 echo "=== Gap 07 smoke tests (OTLP + analytics init) ==="
 echo "================================================================"
 

@@ -128,11 +128,11 @@ unsafe impl Sync for CgSdk {}
 
 /// Returns the packed API version as `(major << 16) | minor`.
 ///
-/// Current version: major=1, minor=1 (Phase 1b adds SDK symbols).
+/// Current version: major=1, minor=2 (Phase 3 adds config surface).
 /// MINOR increments each phase that ships new symbols.
 #[unsafe(no_mangle)]
 pub extern "C" fn cg_api_version() -> u32 {
-    (1u32 << 16) | 1u32
+    (1u32 << 16) | 2u32
 }
 
 // ── cg_sdk_new ──────────────────────────────────────────────────────────────
@@ -195,11 +195,18 @@ pub unsafe extern "C" fn cg_sdk_new(settings_json: *const c_char) -> *mut CgSdk 
 
 /// Apply a JSON object patch on top of `base` settings.
 ///
-/// Only a limited set of top-level string/numeric keys are handled.  Unknown
-/// keys are silently ignored (callers should use `cg_sdk_config_set` for
-/// granular overrides once Phase 3 lands).
+/// Delegates every key to `ConfigManager::set(key, value)`, which handles all
+/// known `Settings` fields with type checking. Unknown keys are silently
+/// ignored for forward-compatibility (callers should use `cg_sdk_config_set`
+/// for precise error reporting).
+///
+/// Key names in the JSON object must be the Rust `Settings` field names
+/// (snake_case), e.g. `"llm_model"`, `"embedding_provider"`. The old camelCase
+/// aliases (e.g. `"llmApiKey"`) are no longer supported here — use the
+/// canonical snake_case names or call `cg_sdk_config_set` / `cg_sdk_config_set_str`
+/// after construction.
 fn apply_settings_json_patch(
-    mut base: cognee_lib::config::Settings,
+    base: cognee_lib::config::Settings,
     json: &str,
 ) -> Result<cognee_lib::config::Settings, String> {
     let patch: serde_json::Value =
@@ -209,37 +216,25 @@ fn apply_settings_json_patch(
         .as_object()
         .ok_or_else(|| "settings_json must be a JSON object".to_string())?;
 
-    // Apply known keys.  Phase 3 will replace this with ConfigManager::set.
-    macro_rules! apply_str {
-        ($field:ident, $key:expr) => {
-            if let Some(serde_json::Value::String(v)) = obj.get($key) {
-                base.$field = v.clone();
+    // Wrap the base settings in a temporary ConfigManager so we can use the
+    // generic `set(key, value)` dispatcher for all known keys.
+    let cm = ConfigManager::new(base);
+    for (key, value) in obj {
+        // Unknown keys are silently ignored (forward-compatibility). Type
+        // mismatches are reported as errors since they indicate caller bugs.
+        match cm.set(key, value.clone()) {
+            Ok(()) => {}
+            Err(cognee_lib::config::ConfigError::UnknownKey(_)) => {
+                // Silently skip unrecognised keys — new fields added to Settings
+                // in future versions will not break older JSON overlays.
             }
-        };
-    }
-    macro_rules! apply_u64 {
-        ($field:ident, $key:expr) => {
-            if let Some(v) = obj.get($key).and_then(|v| v.as_u64()) {
-                base.$field = v as _;
+            Err(e) => {
+                return Err(format!("settings_json key '{key}': {e}"));
             }
-        };
+        }
     }
 
-    apply_str!(llm_api_key, "llmApiKey");
-    apply_str!(llm_model, "llmModel");
-    apply_str!(llm_endpoint, "llmEndpoint");
-    apply_str!(embedding_model_name, "embeddingModelName");
-    apply_str!(embedding_endpoint, "embeddingEndpoint");
-    apply_str!(embedding_api_key, "embeddingApiKey");
-    apply_str!(embedding_provider, "embeddingProvider");
-    apply_str!(graph_file_path, "graphFilePath");
-    apply_str!(graph_database_url, "graphDatabaseUrl");
-    apply_str!(data_root_directory, "dataRootDirectory");
-    apply_str!(relational_db_url, "relationalDbUrl");
-    apply_u64!(chunk_size, "chunkSize");
-    apply_u64!(chunk_overlap, "chunkOverlap");
-
-    Ok(base)
+    Ok(cm.read().clone())
 }
 
 // ── cg_sdk_warm ─────────────────────────────────────────────────────────────

@@ -9,7 +9,7 @@ the 1a completion is recorded in this table's Notes column, the row flips to ✅
 
 **Legend:** ⬜ Not started · 🟡 In progress · 🔵 In review · ⛔ Blocked · ✅ Done
 
-Last updated: 2026-06-11 (step 2 done)
+Last updated: 2026-06-11 (step 3 done)
 
 ## Status table
 
@@ -18,7 +18,7 @@ Last updated: 2026-06-11 (step 2 done)
 | 0 | [Scaffolding & build](phase-0-scaffolding.md) | ✅ Done | capi-bindings/phase-0-scaffolding | 903e095 | see Phase 0 baselines below |
 | 1 | [Shared facade & SDK handle](phase-1-shared-facade-and-handle.md) | ✅ Done | capi-bindings/phase-1b-sdk-handle | 297d7ca | keystone · PR-1/1a done: facade hoisted, neon green |
 | 2 | [Errors, async & JSON conventions](phase-2-errors-async-json-conventions.md) | ✅ Done | capi-bindings/phase-2-conventions | 0e0425c | |
-| 3 | [Config surface](phase-3-config.md) | ⬜ | | | |
+| 3 | [Config surface](phase-3-config.md) | ✅ Done | capi-bindings/phase-3-config | pending | |
 | 4 | [Core ops (add/cognify)](phase-4-core-ops.md) | ⬜ | | | |
 | 5 | [Retrieval (search/recall)](phase-5-retrieval.md) | ⬜ | | | |
 | 6 | [Remaining SDK](phase-6-remaining-sdk.md) | ⬜ | | | |
@@ -75,9 +75,11 @@ above numbers are post-extraction with the full `cognee-lib` dependency.
 - [x] negative-path smoke test: bad JSON → `CG_ERR_SDK_VALIDATION` + message via the callback (sdk_negative_path_smoke.c wired in)
 
 ### Phase 3 — Config surface
-- [ ] `cg_sdk_config_set` / `cg_sdk_config_set_llm_config` / `…_embedding_config` / `…_vector_db_config` / `…_graph_db_config` / `cg_sdk_config_get`
-- [ ] unknown key → `CG_ERR_UNKNOWN_CONFIG_KEY`; type mismatch → `CG_ERR_CONFIG_TYPE_MISMATCH`
-- [ ] config change bumps version and triggers services rebuild (asserted in smoke test)
+- [x] `cg_sdk_config_set` / `cg_sdk_config_set_str` / `cg_sdk_config_set_llm_config` / `…_embedding_config` / `…_vector_db_config` / `…_graph_db_config` / `cg_sdk_config_get` (all 7 from the D7 table)
+- [x] `apply_settings_json_patch` stub in `sdk.rs` replaced with `cm.config().set(key, value)` calls
+- [x] unknown key → `CG_ERR_UNKNOWN_CONFIG_KEY`; type mismatch → `CG_ERR_CONFIG_TYPE_MISMATCH`
+- [x] `cg_sdk_config_get` blanks secret fields (hardcoded `SECRET_FIELDS` list, same as `js/cognee-neon/src/config.rs`)
+- [x] config change bumps version and triggers services rebuild (asserted in smoke test)
 
 ### Phase 4 — Core ops
 - [ ] `cg_sdk_add` (async, waiter in examples) with text/file/binary inputs, dedup, dataset creation
@@ -140,3 +142,4 @@ Record cross-cutting decisions as they're made (one line each), so later phases 
 | 2026-06-11 | **1a implementation:** bindings-common created as separate root-workspace crate; neon refactored to thin re-exports; async-trait+serde listed as forward-declarations for phase 1b. | 1 |
 | 2026-06-11 | **1b review:** R1 deferred-callback violation fixed — warm/owner_id "runtime not initialized" path now uses std::thread::spawn to avoid synchronous callback delivery. | 1 |
 | 2026-06-11 | **2 review:** spawn_sdk_op Err branch fixed to avoid set_last_error on worker thread; stale CG_ERR_VALIDATION references corrected to CG_ERR_SDK_VALIDATION. | 2 |
+| 2026-06-11 | **3 review:** cg_sdk_new doc example key names corrected to snake_case after ConfigManager migration; clippy doc-list indentation fixed in sdk_config.rs. | 3 |

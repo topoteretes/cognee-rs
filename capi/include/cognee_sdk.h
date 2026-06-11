@@ -84,9 +84,9 @@ extern "C" {
 
 /**
  * Minor API version.  Incremented each phase that adds new SDK symbols.
- * Phase 1b = 1 (first SDK symbols land here).
+ * Phase 1b = 1 (first SDK symbols); Phase 3 = 2 (config surface).
  */
-#define CG_API_VERSION_MINOR 1
+#define CG_API_VERSION_MINOR 2
 
 /**
  * Return the packed API version as (major << 16) | minor.
@@ -241,10 +241,10 @@ typedef struct CgSdk CgSdk;
  * overlay (defaults < env < json) is applied synchronously, with no I/O.
  * Network / disk access happens on `cg_sdk_warm`.
  *
- * Example with a JSON override:
+ * Example with a JSON override (keys are snake_case Settings field names):
  *
  *   CgSdk* sdk = cg_sdk_new(
- *       "{\"llmApiKey\":\"sk-…\",\"embeddingProvider\":\"mock\"}"
+ *       "{\"llm_api_key\":\"sk-…\",\"embedding_provider\":\"mock\"}"
  *   );
  *
  * **Ordering footgun (R7)**: if you need a custom worker-thread count, call
@@ -306,6 +306,134 @@ CgSdk* cg_sdk_clone(const CgSdk* sdk);
  * No-op if `sdk` is NULL.
  */
 void cg_sdk_destroy(CgSdk* sdk);
+
+/* ── Config surface (Phase 3, D7) ─────────────────────────────────────────── */
+/*
+ * All config functions are SYNCHRONOUS (config mutation is in-memory only).
+ * They do NOT use the CgSdkResultCallback / CgSdkWaiter pattern.
+ *
+ * Every successful call increments the config version.  The next call to
+ * cg_sdk_warm (or any service-requiring op) detects the version advance and
+ * rebuilds the engine bundle — so config changes take effect on the next warm.
+ *
+ * Key names are the Rust Settings field names (snake_case), e.g.:
+ *   LLM:        llm_provider  llm_model  llm_api_key  llm_endpoint
+ *               llm_api_version  llm_temperature  llm_streaming
+ *               llm_max_completion_tokens  llm_max_retries  llm_max_parallel_requests
+ *   Embedding:  embedding_provider  embedding_model  embedding_dimensions
+ *               embedding_endpoint  embedding_api_key  embedding_model_path
+ *               embedding_tokenizer_path
+ *   Vector DB:  vector_db_provider  vector_db_url  vector_db_key
+ *               vector_db_host  vector_db_port  vector_db_name
+ *   Graph DB:   graph_database_provider  graph_model  graph_file_path
+ *   Chunking:   chunk_strategy  chunk_engine  chunk_size  chunk_overlap
+ *   Paths:      system_root_directory  data_root_directory
+ *               cache_root_directory  logs_root_directory
+ *   Ontology:   ontology_file_path  ontology_resolver  ontology_matching_strategy
+ *   Misc:       monitoring_tool  classification_model  summarization_model
+ *
+ * Error codes (R2):
+ *   CG_ERR_UNKNOWN_CONFIG_KEY   (17) — unrecognised key
+ *   CG_ERR_CONFIG_TYPE_MISMATCH (18) — JSON type does not match the field type
+ *   CG_ERR_SDK_VALIDATION       (14) — malformed JSON
+ *   CG_ERR_NULL_POINTER          (1) — null sdk / key / value pointer
+ *   CG_ERR_UTF8                 (10) — non-UTF-8 input string
+ */
+
+/**
+ * Set a single configuration key to a JSON-encoded value.
+ *
+ * `key` is a Settings field name (snake_case).
+ * `value_json` is a valid JSON value:
+ *   - string fields: "\"openai\""  (a JSON string literal, quotes included)
+ *   - numeric fields: "0.7", "4096"
+ *   - boolean fields: "true" or "false"
+ *
+ * @param sdk         A valid CgSdk*.  NULL → CG_ERR_NULL_POINTER.
+ * @param key         Config key (snake_case, null-terminated UTF-8).
+ * @param value_json  JSON-encoded value (null-terminated UTF-8).
+ * @return CG_OK on success; an error code otherwise (see above).
+ */
+CgErrorCode cg_sdk_config_set(const CgSdk* sdk,
+                               const char* key,
+                               const char* value_json);
+
+/**
+ * Set a string-typed configuration key from a plain C string (convenience).
+ *
+ * Equivalent to cg_sdk_config_set with value_json = "\"<value>\"".
+ * Covers ~80% of keys without requiring the caller to JSON-escape the value.
+ *
+ * @param sdk    A valid CgSdk*.  NULL → CG_ERR_NULL_POINTER.
+ * @param key    Config key (snake_case, null-terminated UTF-8).
+ * @param value  Plain string value (null-terminated UTF-8, no JSON escaping).
+ * @return CG_OK on success; an error code otherwise (see above).
+ */
+CgErrorCode cg_sdk_config_set_str(const CgSdk* sdk,
+                                   const char* key,
+                                   const char* value);
+
+/**
+ * Bulk-update LLM configuration from a JSON object.
+ *
+ * `llm_config_json` must be a JSON object with LLM keys as documented above.
+ * Unknown keys return CG_ERR_UNKNOWN_CONFIG_KEY.
+ *
+ * @param sdk             A valid CgSdk*.
+ * @param llm_config_json JSON object string (null-terminated UTF-8).
+ * @return CG_OK on success; an error code otherwise.
+ */
+CgErrorCode cg_sdk_config_set_llm_config(const CgSdk* sdk,
+                                          const char* llm_config_json);
+
+/**
+ * Bulk-update embedding configuration from a JSON object.
+ *
+ * @param sdk                  A valid CgSdk*.
+ * @param embedding_config_json JSON object string (null-terminated UTF-8).
+ * @return CG_OK on success; an error code otherwise.
+ */
+CgErrorCode cg_sdk_config_set_embedding_config(const CgSdk* sdk,
+                                                const char* embedding_config_json);
+
+/**
+ * Bulk-update vector DB configuration from a JSON object.
+ *
+ * @param sdk                  A valid CgSdk*.
+ * @param vector_db_config_json JSON object string (null-terminated UTF-8).
+ * @return CG_OK on success; an error code otherwise.
+ */
+CgErrorCode cg_sdk_config_set_vector_db_config(const CgSdk* sdk,
+                                                const char* vector_db_config_json);
+
+/**
+ * Bulk-update graph DB configuration from a JSON object.
+ *
+ * @param sdk                 A valid CgSdk*.
+ * @param graph_db_config_json JSON object string (null-terminated UTF-8).
+ * @return CG_OK on success; an error code otherwise.
+ */
+CgErrorCode cg_sdk_config_set_graph_db_config(const CgSdk* sdk,
+                                               const char* graph_db_config_json);
+
+/**
+ * Read back the current configuration as a JSON string.
+ *
+ * Secret fields are replaced with "***REDACTED***" before serialization.
+ * The redacted fields are: llm_api_key, embedding_api_key, vector_db_key,
+ * vector_db_password, graph_database_key, graph_database_password,
+ * db_password, cache_password, default_user_password,
+ * otel_exporter_otlp_headers.
+ *
+ * On success `*out_json` is set to a heap-allocated UTF-8 JSON string.
+ * The caller must free it with `cg_string_destroy`.
+ *
+ * @param sdk       A valid CgSdk*.  NULL → CG_ERR_NULL_POINTER.
+ * @param out_json  Output: set to the heap-allocated JSON string on CG_OK,
+ *                  or NULL on error.  Must not be NULL itself.
+ * @return CG_OK on success; CG_ERR_NULL_POINTER, CG_ERR_RUNTIME on failure.
+ */
+CgErrorCode cg_sdk_config_get(const CgSdk* sdk, char** out_json);
 
 #ifdef __cplusplus
 }

@@ -27,6 +27,11 @@ add_executable(sdk_negative_path_smoke sdk_negative_path_smoke.c)
 target_include_directories(sdk_negative_path_smoke PRIVATE ${COGNEE_INCLUDE_DIR})
 target_link_libraries(sdk_negative_path_smoke cognee_capi ${COGNEE_SYSTEM_LIBS})
 
+# Phase 3 config surface smoke test (Tier-A: mock embedding, no network).
+add_executable(sdk_config_smoke sdk_config_smoke.c)
+target_include_directories(sdk_config_smoke PRIVATE ${COGNEE_INCLUDE_DIR})
+target_link_libraries(sdk_config_smoke cognee_capi ${COGNEE_SYSTEM_LIBS})
+
 # Gap 07 smoke binaries (driven by capi/scripts/check.sh).
 #
 # `init_otlp_smoke` and `init_telemetry_smoke` exercise the public C
