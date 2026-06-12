@@ -19,7 +19,7 @@ Last updated: 2026-06-12 (step 4 done)
 | 1 | [Shared facade & SDK handle](phase-1-shared-facade-and-handle.md) | ✅ Done | capi-bindings/phase-1b-sdk-handle | 297d7ca | keystone · PR-1/1a done: facade hoisted, neon green |
 | 2 | [Errors, async & JSON conventions](phase-2-errors-async-json-conventions.md) | ✅ Done | capi-bindings/phase-2-conventions | 0e0425c | |
 | 3 | [Config surface](phase-3-config.md) | ✅ Done | capi-bindings/phase-3-config | 52e3faa | |
-| 4 | [Core ops (add/cognify)](phase-4-core-ops.md) | ✅ Done | capi-bindings/phase-4-core-ops | TBD | |
+| 4 | [Core ops (add/cognify)](phase-4-core-ops.md) | ✅ Done | capi-bindings/phase-4-core-ops | 37531a0 | |
 | 5 | [Retrieval (search/recall)](phase-5-retrieval.md) | ⬜ | | | |
 | 6 | [Remaining SDK](phase-6-remaining-sdk.md) | ⬜ | | | |
 | 7 | [Feature-gated surfaces](phase-7-feature-gated.md) | ⬜ | | | |
