@@ -376,6 +376,20 @@ jobs:
         with:
           make-default: true
       - run: sudo apt-get update && sudo apt-get install -y cmake protobuf-compiler
+      # The capi job runs three CMake builds (default, slim, panic) plus cargo
+      # check × 2 on a runner that starts with ~25 GB free. Freeing the same set
+      # of unused system packages as the other jobs gives back ~10 GB of headroom
+      # and prevents the "Disk full?" linker crash seen when the runner fills up.
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: false
+          swap-storage: false
+          docker-images: true
       # Restore-only: the lint job saves the shared lbug C++ ccache. The capi
       # workspace resolves its own dep graph, but ccache keys on
       # compiler+flags+source content, so it hits the same entries.
