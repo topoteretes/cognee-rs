@@ -7,6 +7,24 @@ linker = "aarch64-linux-android21-clang++"
 ar = "llvm-ar"
 
 [env]
+# Route bundled CMake C/C++ builds (lbug's Ladybug tree) through ccache when it
+# is installed — scripts/ccache-launcher.sh is a transparent pass-through when
+# it is not. CMake (>= 3.17) initializes CMAKE_<LANG>_COMPILER_LAUNCHER from
+# the environment at first configure. Already-set environment variables win
+# over these entries (cargo [env] does not force-override), so this can be
+# disabled per-shell with e.g. CMAKE_CXX_COMPILER_LAUNCHER="".
+# See docs/build/lbug-rebuilds.md for the investigation behind this.
+CMAKE_C_COMPILER_LAUNCHER = { value = "scripts/ccache-launcher.sh", relative = true }
+CMAKE_CXX_COMPILER_LAUNCHER = { value = "scripts/ccache-launcher.sh", relative = true }
+# Normalize absolute paths under the repo root so identical compilations from
+# different OUT_DIRs (lbug-<hash> shifts) and worktrees hit the same entries.
+CCACHE_BASEDIR = { value = ".", relative = true }
+# These are -g builds: without this, ccache hashes the compile cwd (embedded
+# as DW_AT_comp_dir in debug info), and the cwd is exactly the per-unit-hash
+# OUT_DIR that keeps shifting — every entry would miss. Trade-off: a cached
+# object may carry another OUT_DIR's comp_dir in its debug info; source paths
+# themselves stay correct (absolute cargo-registry paths).
+CCACHE_NOHASHDIR = "true"
 CC_aarch64_linux_android = "aarch64-linux-android21-clang"
 CXX_aarch64_linux_android = "aarch64-linux-android21-clang++"
 AR_aarch64_linux_android = "llvm-ar"
