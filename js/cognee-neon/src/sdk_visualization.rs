@@ -23,6 +23,8 @@ use crate::errors::{SdkError, throw_sdk_error};
 
 // These are only used in the feature-enabled paths.
 #[cfg(feature = "visualization")]
+use cognee_bindings_common::ops::visualization;
+#[cfg(feature = "visualization")]
 use crate::json::read_opts;
 #[cfg(feature = "visualization")]
 use crate::runtime::runtime;
@@ -30,54 +32,6 @@ use crate::runtime::runtime;
 use crate::sdk::CogneeHandle;
 #[cfg(feature = "visualization")]
 use std::sync::Arc;
-
-// ---------------------------------------------------------------------------
-// Feature-gated implementations.
-// ---------------------------------------------------------------------------
-
-#[cfg(feature = "visualization")]
-mod inner {
-    use std::path::PathBuf;
-    use std::sync::Arc;
-
-    use cognee_lib::visualization::render;
-    use cognee_lib::visualize;
-
-    use super::*;
-
-    /// Run `render()` and return the HTML string.
-    pub(super) async fn run_visualize(
-        state: &crate::sdk::HandleState,
-        _opts: serde_json::Value,
-    ) -> Result<String, SdkError> {
-        let svc = state.services().await?;
-        let graph_db = Arc::clone(&svc.graph_db);
-        let html = render(&*graph_db)
-            .await
-            .map_err(|e| SdkError::Runtime(format!("visualization render failed: {e}")))?;
-        Ok(html)
-    }
-
-    /// Run `visualize()` and return the written path as a string.
-    pub(super) async fn run_visualize_to_file(
-        state: &crate::sdk::HandleState,
-        opts: serde_json::Value,
-    ) -> Result<String, SdkError> {
-        let dest: Option<PathBuf> = opts
-            .get("destinationPath")
-            .and_then(|v| v.as_str())
-            .map(PathBuf::from);
-
-        let svc = state.services().await?;
-        let graph_db = Arc::clone(&svc.graph_db);
-        let path = visualize(&*graph_db, dest.as_deref())
-            .await
-            .map_err(|e| SdkError::Runtime(format!("visualize to file failed: {e}")))?;
-        path.to_str()
-            .map(|s| s.to_string())
-            .ok_or_else(|| SdkError::Runtime("visualization path is not valid UTF-8".to_string()))
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Exported native functions (always registered in lib.rs; body is cfg-gated).
@@ -99,7 +53,7 @@ pub fn cognee_visualize(mut cx: FunctionContext) -> JsResult<JsPromise> {
         let (deferred, promise) = cx.promise();
 
         runtime().spawn(async move {
-            let result = inner::run_visualize(&state, opts).await;
+            let result = visualization::visualize(&state, Some(&opts)).await;
             deferred.settle_with(&channel, move |mut cx| match result {
                 Ok(html) => Ok(cx.string(html).as_value(&mut cx)),
                 Err(e) => throw_sdk_error(&mut cx, e),
@@ -143,7 +97,7 @@ pub fn cognee_visualize_to_file(mut cx: FunctionContext) -> JsResult<JsPromise> 
         let (deferred, promise) = cx.promise();
 
         runtime().spawn(async move {
-            let result = inner::run_visualize_to_file(&state, opts).await;
+            let result = visualization::visualize_to_file(&state, Some(&opts)).await;
             deferred.settle_with(&channel, move |mut cx| match result {
                 Ok(path_str) => Ok(cx.string(&path_str).as_value(&mut cx)),
                 Err(e) => throw_sdk_error(&mut cx, e),

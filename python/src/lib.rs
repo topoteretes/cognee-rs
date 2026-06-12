@@ -17,6 +17,7 @@ mod sdk_memory;
 mod sdk_ops;
 mod sdk_retrieval;
 mod sdk_sessions;
+mod sdk_visualization;
 mod task;
 mod task_context;
 mod telemetry_analytics;

@@ -12,3 +12,4 @@ pub mod memory;
 pub mod pipeline;
 pub mod retrieval;
 pub mod sessions;
+pub mod visualization;

@@ -33,6 +33,8 @@ use crate::sdk::{CgSdk, CgSdkResultCallback, SendUserData, spawn_sdk_op};
 
 // These are only used in the feature-enabled paths.
 #[cfg(feature = "visualization")]
+use cognee_bindings_common::ops::visualization;
+#[cfg(feature = "visualization")]
 use crate::error::set_last_error;
 #[cfg(feature = "visualization")]
 use serde_json::json;
@@ -40,60 +42,6 @@ use serde_json::json;
 use std::ffi::CStr;
 #[cfg(feature = "visualization")]
 use std::sync::Arc;
-
-// ---------------------------------------------------------------------------
-// Feature-gated implementation (inner async functions).
-// ---------------------------------------------------------------------------
-
-#[cfg(feature = "visualization")]
-mod inner {
-    use std::path::PathBuf;
-    use std::sync::Arc;
-
-    use cognee_lib::visualization::render;
-    use cognee_lib::visualize;
-
-    use super::*;
-
-    /// Call `render()` and return the HTML as a JSON-escaped quoted string.
-    pub(super) async fn run_visualize(
-        state: &cognee_bindings_common::HandleState,
-        _opts: serde_json::Value,
-    ) -> Result<serde_json::Value, SdkError> {
-        let svc = state.services().await?;
-        let graph_db = Arc::clone(&svc.graph_db);
-        let html = render(&*graph_db)
-            .await
-            .map_err(|e| SdkError::Runtime(format!("visualization render failed: {e}")))?;
-        // D9: return as a quoted JSON string (the HTML is large; cg_json_string_decode
-        // can unescape it client-side).
-        Ok(json!(html))
-    }
-
-    /// Call `visualize()` and return the written path as a quoted JSON string.
-    pub(super) async fn run_visualize_to_file(
-        state: &cognee_bindings_common::HandleState,
-        opts: serde_json::Value,
-    ) -> Result<serde_json::Value, SdkError> {
-        let dest: Option<PathBuf> = opts
-            .get("destinationPath")
-            .and_then(|v| v.as_str())
-            .map(PathBuf::from);
-
-        let svc = state.services().await?;
-        let graph_db = Arc::clone(&svc.graph_db);
-        let path = visualize(&*graph_db, dest.as_deref())
-            .await
-            .map_err(|e| SdkError::Runtime(format!("visualize to file failed: {e}")))?;
-
-        let path_str = path.to_str().ok_or_else(|| {
-            SdkError::Runtime("visualization path is not valid UTF-8".to_string())
-        })?;
-
-        // D9: return as a quoted JSON string.
-        Ok(json!(path_str))
-    }
-}
 
 // ---------------------------------------------------------------------------
 // C-exported functions (always present regardless of features — D6).
@@ -158,7 +106,10 @@ pub unsafe extern "C" fn cg_sdk_visualize(
                     .map_err(|e| SdkError::Validation(format!("opts_json parse error: {e}")))?,
                 None => serde_json::Value::Null,
             };
-            inner::run_visualize(&state, opts_val).await
+            let html = visualization::visualize(&state, Some(&opts_val)).await?;
+            // D9: return as a quoted JSON string (the HTML is large; cg_json_string_decode
+            // can unescape it client-side).
+            Ok(json!(html))
         });
     }
 
@@ -231,7 +182,9 @@ pub unsafe extern "C" fn cg_sdk_visualize_to_file(
                     .map_err(|e| SdkError::Validation(format!("opts_json parse error: {e}")))?,
                 None => serde_json::Value::Null,
             };
-            inner::run_visualize_to_file(&state, opts_val).await
+            let path_str = visualization::visualize_to_file(&state, Some(&opts_val)).await?;
+            // D9: return as a quoted JSON string.
+            Ok(json!(path_str))
         });
     }
 
