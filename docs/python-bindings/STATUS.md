@@ -13,7 +13,7 @@ Status values: `pending` | `in-progress` | `done` | `blocked` | `skipped`
 | T3 | Hoist pipeline ops + Python add/cognify/add_and_cognify | [core-pipeline-ops.md](core-pipeline-ops.md) | done | 2026-06-12 | T3a: 2581cdd, T3b: 62ee0bb |
 | T4 | Hoist + Python search/recall | [retrieval-ops.md](retrieval-ops.md) | done | 2026-06-12 | 566d97e |
 | T5 | Hoist + Python forget/update/prune | [data-ops.md](data-ops.md) | done | 2026-06-12 | c9813d4 |
-| T6 | Hoist + Python dataset management | [dataset-management.md](dataset-management.md) | done | 2026-06-12 | — |
+| T6 | Hoist + Python dataset management | [dataset-management.md](dataset-management.md) | done | 2026-06-12 | 2632cc8 |
 | T7 | Hoist + Python remember/memify/improve | [memory-ops.md](memory-ops.md) | pending | — | — |
 | T8 | Hoist + Python sessions/admin/notebooks | [session-admin-ops.md](session-admin-ops.md) | pending | — | — |
 | T9 | Python visualization ops | [visualization-ops.md](visualization-ops.md) | pending | — | — |
