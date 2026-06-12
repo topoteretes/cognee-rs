@@ -74,6 +74,9 @@ from cognee_pipeline._native import (
     setup_logging,
     setup_telemetry,
     setup_telemetry_analytics,
+    # Cloud ops (process-wide singleton)
+    serve,
+    disconnect,
 )
 
 __all__ = [
@@ -113,4 +116,7 @@ __all__ = [
     "setup_logging",
     "setup_telemetry",
     "setup_telemetry_analytics",
+    # Cloud ops
+    "serve",
+    "disconnect",
 ]

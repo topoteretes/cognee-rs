@@ -23,13 +23,13 @@ use crate::errors::{SdkError, throw_sdk_error};
 
 // These are only used in the feature-enabled paths.
 #[cfg(feature = "visualization")]
-use cognee_bindings_common::ops::visualization;
-#[cfg(feature = "visualization")]
 use crate::json::read_opts;
 #[cfg(feature = "visualization")]
 use crate::runtime::runtime;
 #[cfg(feature = "visualization")]
 use crate::sdk::CogneeHandle;
+#[cfg(feature = "visualization")]
+use cognee_bindings_common::ops::visualization;
 #[cfg(feature = "visualization")]
 use std::sync::Arc;
 

@@ -97,8 +97,8 @@ tracked in [STATUS.md](STATUS.md).
 | `delete_notebook()` | ✅ | ✅ | ✅ | [session-admin-ops.md](session-admin-ops.md) |
 | `visualize()` — HTML output | ✅ | ✅ | ✅ | [visualization-ops.md](visualization-ops.md) |
 | `visualize_to_file()` | ✅ | ✅ | ✅ | [visualization-ops.md](visualization-ops.md) |
-| `serve()` — cloud connect | ✅ | ✅ | ❌ | [cloud-ops.md](cloud-ops.md) |
-| `disconnect()` — cloud teardown | ✅ | ✅ | ❌ | [cloud-ops.md](cloud-ops.md) |
+| `serve()` — cloud connect | ✅ | ✅ | ✅ | [cloud-ops.md](cloud-ops.md) |
+| `disconnect()` — cloud teardown | ✅ | ✅ | ✅ | [cloud-ops.md](cloud-ops.md) |
 
 ---
 

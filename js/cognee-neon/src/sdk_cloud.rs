@@ -30,81 +30,10 @@
 
 use neon::prelude::*;
 
-use crate::errors::{SdkError, throw_sdk_error};
-// Only used in the feature-enabled paths.
-#[cfg(feature = "cloud")]
+use crate::errors::throw_sdk_error;
 use crate::json::{parse_js, read_opts};
-#[cfg(feature = "cloud")]
 use crate::runtime::runtime;
-
-// ---------------------------------------------------------------------------
-// Feature-gated implementations.
-// ---------------------------------------------------------------------------
-
-#[cfg(feature = "cloud")]
-mod inner {
-    use cognee_lib::{ServeConfig, disconnect, serve};
-
-    use super::*;
-
-    /// Build a [`ServeConfig`] from a `serde_json::Value` opts object.
-    pub(super) fn build_serve_config(opts: &serde_json::Value) -> ServeConfig {
-        let url = opts
-            .get("url")
-            .and_then(|v| v.as_str())
-            .filter(|s| !s.is_empty());
-
-        let mut cfg = match url {
-            Some(u) => ServeConfig::direct(u),
-            None => ServeConfig::cloud(),
-        };
-
-        if let Some(k) = opts.get("apiKey").and_then(|v| v.as_str()) {
-            cfg = cfg.api_key(k);
-        }
-        if let Some(u) = opts.get("cloudUrl").and_then(|v| v.as_str()) {
-            cfg = cfg.cloud_url(u);
-        }
-        if let Some(d) = opts.get("auth0Domain").and_then(|v| v.as_str()) {
-            cfg = cfg.auth0_domain(d);
-        }
-        if let Some(c) = opts.get("auth0ClientId").and_then(|v| v.as_str()) {
-            cfg = cfg.auth0_client_id(c);
-        }
-        if let Some(a) = opts.get("auth0Audience").and_then(|v| v.as_str()) {
-            cfg = cfg.auth0_audience(a);
-        }
-
-        cfg
-    }
-
-    /// Call `serve(config)` and return `{ connected: true, serviceUrl }`.
-    pub(super) async fn run_serve(opts: serde_json::Value) -> Result<String, SdkError> {
-        let config = build_serve_config(&opts);
-        let client = serve(config)
-            .await
-            .map_err(|e| SdkError::Runtime(format!("serve failed: {e}")))?;
-
-        let result = serde_json::json!({
-            "connected": true,
-            "serviceUrl": client.service_url,
-        });
-        serde_json::to_string(&result)
-            .map_err(|e| SdkError::Runtime(format!("failed to serialize serve result: {e}")))
-    }
-
-    /// Call `disconnect(wipe_credentials)`.
-    pub(super) async fn run_disconnect(opts: serde_json::Value) -> Result<(), SdkError> {
-        let wipe = opts
-            .get("wipeCredentials")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-
-        disconnect(wipe)
-            .await
-            .map_err(|e| SdkError::Runtime(format!("disconnect failed: {e}")))
-    }
-}
+use cognee_bindings_common::ops::cloud;
 
 // ---------------------------------------------------------------------------
 // Exported native functions.
@@ -122,39 +51,25 @@ mod inner {
 /// Optional fields: `apiKey`, `cloudUrl`, `auth0Domain`, `auth0ClientId`,
 /// `auth0Audience`.
 pub fn cognee_serve(mut cx: FunctionContext) -> JsResult<JsPromise> {
-    #[cfg(feature = "cloud")]
-    {
-        let opts = read_opts(&mut cx, 0)?;
+    let opts = read_opts(&mut cx, 0)?;
 
-        let channel = cx.channel();
-        let (deferred, promise) = cx.promise();
+    let channel = cx.channel();
+    let (deferred, promise) = cx.promise();
 
-        runtime().spawn(async move {
-            let result = inner::run_serve(opts).await;
-            deferred.settle_with(&channel, move |mut cx| match result {
-                Ok(json_str) => parse_js(&mut cx, &json_str),
-                Err(e) => throw_sdk_error(&mut cx, e),
-            });
+    runtime().spawn(async move {
+        let result = cloud::run_serve(opts).await;
+        deferred.settle_with(&channel, move |mut cx| match result {
+            Ok(val) => {
+                // Serialising a serde_json::Value cannot fail (no non-string
+                // map keys are possible), so the fallback is unreachable.
+                let json_str = serde_json::to_string(&val).unwrap_or_else(|_| "null".to_string());
+                parse_js(&mut cx, &json_str)
+            }
+            Err(e) => throw_sdk_error(&mut cx, e),
         });
+    });
 
-        Ok(promise)
-    }
-
-    #[cfg(not(feature = "cloud"))]
-    {
-        let _ = cx;
-        let (deferred, promise) = cx.promise();
-        let channel = cx.channel();
-        deferred.settle_with(&channel, |mut cx| -> JsResult<JsValue> {
-            throw_sdk_error(
-                &mut cx,
-                SdkError::FeatureNotBuilt(
-                    "cloud feature not compiled in this build of cognee-neon".to_string(),
-                ),
-            )
-        });
-        Ok(promise)
-    }
+    Ok(promise)
 }
 
 /// `cogneeDisconnect(opts?) -> Promise<void>`
@@ -165,37 +80,18 @@ pub fn cognee_serve(mut cx: FunctionContext) -> JsResult<JsPromise> {
 /// on-disk credential cache (`~/.cognee/cloud_credentials.json`) is deleted
 /// so the next `cogneeServe()` must re-authenticate.
 pub fn cognee_disconnect(mut cx: FunctionContext) -> JsResult<JsPromise> {
-    #[cfg(feature = "cloud")]
-    {
-        let opts = read_opts(&mut cx, 0)?;
+    let opts = read_opts(&mut cx, 0)?;
 
-        let channel = cx.channel();
-        let (deferred, promise) = cx.promise();
+    let channel = cx.channel();
+    let (deferred, promise) = cx.promise();
 
-        runtime().spawn(async move {
-            let result = inner::run_disconnect(opts).await;
-            deferred.settle_with(&channel, move |mut cx| match result {
-                Ok(()) => Ok(cx.undefined()),
-                Err(e) => throw_sdk_error(&mut cx, e),
-            });
+    runtime().spawn(async move {
+        let result = cloud::run_disconnect(opts).await;
+        deferred.settle_with(&channel, move |mut cx| match result {
+            Ok(_) => Ok(cx.undefined()),
+            Err(e) => throw_sdk_error(&mut cx, e),
         });
+    });
 
-        Ok(promise)
-    }
-
-    #[cfg(not(feature = "cloud"))]
-    {
-        let _ = cx;
-        let (deferred, promise) = cx.promise();
-        let channel = cx.channel();
-        deferred.settle_with(&channel, |mut cx| -> JsResult<JsValue> {
-            throw_sdk_error(
-                &mut cx,
-                SdkError::FeatureNotBuilt(
-                    "cloud feature not compiled in this build of cognee-neon".to_string(),
-                ),
-            )
-        });
-        Ok(promise)
-    }
+    Ok(promise)
 }

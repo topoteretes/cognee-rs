@@ -35,84 +35,13 @@
 use std::ffi::c_char;
 
 use cognee_bindings_common::SdkError;
+use cognee_bindings_common::ops::cloud;
 
 use crate::sdk::{CgSdkResultCallback, SendUserData, spawn_sdk_op};
 
 // Only used in the feature-enabled path.
 #[cfg(feature = "cloud")]
 use std::ffi::CStr;
-
-// ---------------------------------------------------------------------------
-// Feature-gated implementation (inner async functions).
-// ---------------------------------------------------------------------------
-
-#[cfg(feature = "cloud")]
-mod inner {
-    use cognee_lib::{ServeConfig, disconnect, serve};
-
-    use super::*;
-
-    /// Build a [`ServeConfig`] from a `serde_json::Value` opts object.
-    pub(super) fn build_serve_config(opts: &serde_json::Value) -> ServeConfig {
-        let url = opts
-            .get("url")
-            .and_then(|v| v.as_str())
-            .filter(|s| !s.is_empty());
-
-        let mut cfg = match url {
-            Some(u) => ServeConfig::direct(u),
-            None => ServeConfig::cloud(),
-        };
-
-        if let Some(k) = opts.get("apiKey").and_then(|v| v.as_str()) {
-            cfg = cfg.api_key(k);
-        }
-        if let Some(u) = opts.get("cloudUrl").and_then(|v| v.as_str()) {
-            cfg = cfg.cloud_url(u);
-        }
-        if let Some(d) = opts.get("auth0Domain").and_then(|v| v.as_str()) {
-            cfg = cfg.auth0_domain(d);
-        }
-        if let Some(c) = opts.get("auth0ClientId").and_then(|v| v.as_str()) {
-            cfg = cfg.auth0_client_id(c);
-        }
-        if let Some(a) = opts.get("auth0Audience").and_then(|v| v.as_str()) {
-            cfg = cfg.auth0_audience(a);
-        }
-
-        cfg
-    }
-
-    /// Call `serve(config)` and return `{"connected":true,"serviceUrl":"…"}`.
-    pub(super) async fn run_serve(opts: serde_json::Value) -> Result<serde_json::Value, SdkError> {
-        let config = build_serve_config(&opts);
-        let client = serve(config)
-            .await
-            .map_err(|e| SdkError::Runtime(format!("serve failed: {e}")))?;
-
-        Ok(serde_json::json!({
-            "connected": true,
-            "serviceUrl": client.service_url,
-        }))
-    }
-
-    /// Call `disconnect(wipe_credentials)`.
-    pub(super) async fn run_disconnect(
-        opts: serde_json::Value,
-    ) -> Result<serde_json::Value, SdkError> {
-        let wipe = opts
-            .get("wipeCredentials")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-
-        disconnect(wipe)
-            .await
-            .map_err(|e| SdkError::Runtime(format!("disconnect failed: {e}")))?;
-
-        // D9: void op → "null"
-        Ok(serde_json::Value::Null)
-    }
-}
 
 // ---------------------------------------------------------------------------
 // C-exported functions (always present regardless of features — D6).
@@ -148,46 +77,35 @@ pub unsafe extern "C" fn cg_sdk_serve(
     callback: CgSdkResultCallback,
     user_data: *mut std::ffi::c_void,
 ) {
-    #[cfg(feature = "cloud")]
-    {
-        let opts_str: Option<String> = if opts_json.is_null() {
-            None
-        } else {
-            match unsafe { CStr::from_ptr(opts_json) }.to_str() {
-                Ok(s) => Some(s.to_owned()),
-                Err(_) => {
-                    let ud = SendUserData(user_data);
-                    spawn_sdk_op(callback, ud, async move {
-                        Err(SdkError::Validation(
-                            "opts_json is not valid UTF-8".to_string(),
-                        ))
-                    });
-                    return;
-                }
+    let opts_str: Option<String> = if opts_json.is_null() {
+        None
+    } else {
+        #[cfg(feature = "cloud")]
+        match unsafe { CStr::from_ptr(opts_json) }.to_str() {
+            Ok(s) => Some(s.to_owned()),
+            Err(_) => {
+                let ud = SendUserData(user_data);
+                spawn_sdk_op(callback, ud, async move {
+                    Err(SdkError::Validation(
+                        "opts_json is not valid UTF-8".to_string(),
+                    ))
+                });
+                return;
             }
+        }
+        #[cfg(not(feature = "cloud"))]
+        None
+    };
+
+    let ud = SendUserData(user_data);
+    spawn_sdk_op(callback, ud, async move {
+        let opts_val: serde_json::Value = match opts_str {
+            Some(ref s) => serde_json::from_str(s)
+                .map_err(|e| SdkError::Validation(format!("opts_json parse error: {e}")))?,
+            None => serde_json::Value::Null,
         };
-
-        let ud = SendUserData(user_data);
-        spawn_sdk_op(callback, ud, async move {
-            let opts_val: serde_json::Value = match opts_str {
-                Some(ref s) => serde_json::from_str(s)
-                    .map_err(|e| SdkError::Validation(format!("opts_json parse error: {e}")))?,
-                None => serde_json::Value::Null,
-            };
-            inner::run_serve(opts_val).await
-        });
-    }
-
-    #[cfg(not(feature = "cloud"))]
-    {
-        let _ = opts_json; // suppress unused warning
-        let ud = SendUserData(user_data);
-        spawn_sdk_op(callback, ud, async move {
-            Err(SdkError::FeatureNotBuilt(
-                "cloud feature not built".to_string(),
-            ))
-        });
-    }
+        cloud::run_serve(opts_val).await
+    });
 }
 
 /// Disconnect from Cognee Cloud and revert to local-execution mode.
@@ -215,44 +133,33 @@ pub unsafe extern "C" fn cg_sdk_disconnect(
     callback: CgSdkResultCallback,
     user_data: *mut std::ffi::c_void,
 ) {
-    #[cfg(feature = "cloud")]
-    {
-        let opts_str: Option<String> = if opts_json.is_null() {
-            None
-        } else {
-            match unsafe { CStr::from_ptr(opts_json) }.to_str() {
-                Ok(s) => Some(s.to_owned()),
-                Err(_) => {
-                    let ud = SendUserData(user_data);
-                    spawn_sdk_op(callback, ud, async move {
-                        Err(SdkError::Validation(
-                            "opts_json is not valid UTF-8".to_string(),
-                        ))
-                    });
-                    return;
-                }
+    let opts_str: Option<String> = if opts_json.is_null() {
+        None
+    } else {
+        #[cfg(feature = "cloud")]
+        match unsafe { CStr::from_ptr(opts_json) }.to_str() {
+            Ok(s) => Some(s.to_owned()),
+            Err(_) => {
+                let ud = SendUserData(user_data);
+                spawn_sdk_op(callback, ud, async move {
+                    Err(SdkError::Validation(
+                        "opts_json is not valid UTF-8".to_string(),
+                    ))
+                });
+                return;
             }
+        }
+        #[cfg(not(feature = "cloud"))]
+        None
+    };
+
+    let ud = SendUserData(user_data);
+    spawn_sdk_op(callback, ud, async move {
+        let opts_val: serde_json::Value = match opts_str {
+            Some(ref s) => serde_json::from_str(s)
+                .map_err(|e| SdkError::Validation(format!("opts_json parse error: {e}")))?,
+            None => serde_json::Value::Null,
         };
-
-        let ud = SendUserData(user_data);
-        spawn_sdk_op(callback, ud, async move {
-            let opts_val: serde_json::Value = match opts_str {
-                Some(ref s) => serde_json::from_str(s)
-                    .map_err(|e| SdkError::Validation(format!("opts_json parse error: {e}")))?,
-                None => serde_json::Value::Null,
-            };
-            inner::run_disconnect(opts_val).await
-        });
-    }
-
-    #[cfg(not(feature = "cloud"))]
-    {
-        let _ = opts_json; // suppress unused warning
-        let ud = SendUserData(user_data);
-        spawn_sdk_op(callback, ud, async move {
-            Err(SdkError::FeatureNotBuilt(
-                "cloud feature not built".to_string(),
-            ))
-        });
-    }
+        cloud::run_disconnect(opts_val).await
+    });
 }

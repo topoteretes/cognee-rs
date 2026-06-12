@@ -6,6 +6,7 @@
 //! crates and call through to these shared functions.
 
 pub mod admin;
+pub mod cloud;
 pub mod data;
 pub mod datasets;
 pub mod memory;

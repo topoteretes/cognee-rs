@@ -88,8 +88,7 @@ pub fn cognee_get_or_create_default_user(mut cx: FunctionContext) -> JsResult<Js
         let result = admin::run_get_or_create_default_user(&state).await;
         deferred.settle_with(&channel, move |mut cx| match result {
             Ok(val) => {
-                let json_str = serde_json::to_string(&val)
-                    .unwrap_or_else(|_| "null".to_string());
+                let json_str = serde_json::to_string(&val).unwrap_or_else(|_| "null".to_string());
                 parse_js(&mut cx, &json_str)
             }
             Err(e) => throw_sdk_error(&mut cx, e),
@@ -118,8 +117,7 @@ pub fn cognee_list_notebooks(mut cx: FunctionContext) -> JsResult<JsPromise> {
         let result = admin::run_list_notebooks(&state).await;
         deferred.settle_with(&channel, move |mut cx| match result {
             Ok(val) => {
-                let json_str = serde_json::to_string(&val)
-                    .unwrap_or_else(|_| "[]".to_string());
+                let json_str = serde_json::to_string(&val).unwrap_or_else(|_| "[]".to_string());
                 parse_js(&mut cx, &json_str)
             }
             Err(e) => throw_sdk_error(&mut cx, e),
@@ -159,8 +157,7 @@ pub fn cognee_create_notebook(mut cx: FunctionContext) -> JsResult<JsPromise> {
         let result = admin::run_create_notebook(&state, name, cells_json, deletable).await;
         deferred.settle_with(&channel, move |mut cx| match result {
             Ok(val) => {
-                let json_str = serde_json::to_string(&val)
-                    .unwrap_or_else(|_| "null".to_string());
+                let json_str = serde_json::to_string(&val).unwrap_or_else(|_| "null".to_string());
                 parse_js(&mut cx, &json_str)
             }
             Err(e) => throw_sdk_error(&mut cx, e),
@@ -188,8 +185,7 @@ pub fn cognee_update_notebook(mut cx: FunctionContext) -> JsResult<JsPromise> {
         let result = admin::run_update_notebook(&state, &id_str, patch_json).await;
         deferred.settle_with(&channel, move |mut cx| match result {
             Ok(val) => {
-                let json_str = serde_json::to_string(&val)
-                    .unwrap_or_else(|_| "null".to_string());
+                let json_str = serde_json::to_string(&val).unwrap_or_else(|_| "null".to_string());
                 parse_js(&mut cx, &json_str)
             }
             Err(e) => throw_sdk_error(&mut cx, e),
@@ -241,8 +237,7 @@ pub fn cognee_get_session(mut cx: FunctionContext) -> JsResult<JsPromise> {
         let result = sessions::run_get_session(&state, &session_id, &opts).await;
         deferred.settle_with(&channel, move |mut cx| match result {
             Ok(val) => {
-                let json_str = serde_json::to_string(&val)
-                    .unwrap_or_else(|_| "[]".to_string());
+                let json_str = serde_json::to_string(&val).unwrap_or_else(|_| "[]".to_string());
                 parse_js(&mut cx, &json_str)
             }
             Err(e) => throw_sdk_error(&mut cx, e),
