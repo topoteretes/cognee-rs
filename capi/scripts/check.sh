@@ -57,6 +57,14 @@ for example in "${EXAMPLES[@]}"; do
     "$BUILD_DIR/examples/$example"
 done
 
+# Redirect SDK runtime artifacts into the build dir so that .cognee_system/,
+# .data_storage/, and cognee.db never appear as untracked files in the repo root.
+RUNTIME_DIR="$BUILD_DIR/cognee-runtime"
+mkdir -p "$RUNTIME_DIR"
+export COGNEE_SYSTEM_ROOT_DIRECTORY="$RUNTIME_DIR/.cognee_system"
+export COGNEE_DATA_ROOT_DIRECTORY="$RUNTIME_DIR/.data_storage"
+export DATABASE_URL="sqlite:$RUNTIME_DIR/cognee.db?mode=rwc"
+
 echo ""
 echo "================================================================"
 echo "=== Phase 1b SDK handle smoke test (Tier-A, mock embedding) ==="
