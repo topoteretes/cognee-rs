@@ -57,9 +57,9 @@ tracked in [STATUS.md](STATUS.md).
 
 | Feature | C API | TS/JS | Python | Plan |
 |---------|-------|-------|--------|------|
-| SDK handle (`Cognee` / `CgSdk`) | ✅ | ✅ | ❌ | [sdk-handle.md](sdk-handle.md) |
-| `warm()` — engine pre-build | ✅ | ✅ | ❌ | [sdk-handle.md](sdk-handle.md) |
-| `owner_id()` | ✅ | ✅ | ❌ | [sdk-handle.md](sdk-handle.md) |
+| SDK handle (`Cognee` / `CgSdk`) | ✅ | ✅ | ✅ | [sdk-handle.md](sdk-handle.md) |
+| `warm()` — engine pre-build | ✅ | ✅ | ✅ | [sdk-handle.md](sdk-handle.md) |
+| `owner_id()` | ✅ | ✅ | ✅ | [sdk-handle.md](sdk-handle.md) |
 | Config surface — granular setters | ✅ | ✅ | ❌ | [config-surface.md](config-surface.md) |
 | Config surface — bulk setters | ✅ | ✅ | ❌ | [config-surface.md](config-surface.md) |
 | Config read-back (`get_config`) | ✅ | ✅ | ❌ | [config-surface.md](config-surface.md) |

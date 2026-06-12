@@ -1,6 +1,6 @@
 # SDK Handle and Lifecycle
 
-## Status: ❌ Not implemented
+## Status: ✅ Implemented
 
 ## What is missing
 
@@ -42,10 +42,18 @@ There is **no** `warm()` method — "warm" in both existing bindings simply mean
 `capi/cognee-capi/src/sdk.rs:267`).
 
 There is **no** `from_settings_json` — each binding implements the **3-way settings overlay**
-(`defaults < env < JSON object`) itself before calling `from_settings`. The C API reference
-implementation is `apply_settings_json_patch` in `capi/cognee-capi/src/sdk.rs:216`: load
-`ConfigManager::from_env().read().clone()` as the base, parse the JSON patch object, and apply
-each key via the `ConfigManager::set` machinery so unknown keys are tolerated consistently.
+(`defaults < env < JSON object`) itself before calling `from_settings`. Two reference
+implementations exist in the repo:
+
+- **C API** (`apply_settings_json_patch` in `capi/cognee-capi/src/sdk.rs:216`): uses
+  `ConfigManager::set(key, value)` per JSON key — unknown keys silently ignored,
+  type mismatches returned as errors.
+- **Neon JS** (`cognee_new` in `js/cognee-neon/src/sdk.rs`): serialises the base
+  `Settings` to JSON, merges provided keys in, then deserialises back via `serde_json`.
+
+The C API approach is recommended for Python because it reuses the existing `ConfigManager::set`
+dispatch (keeps key-handling logic in one place). `apply_settings_json_patch` is **not yet
+hoisted** to `cognee-bindings-common` — Step 2 must either inline the logic or hoist it first.
 
 ## Rationale
 
@@ -78,6 +86,15 @@ default = ["visualization", "cloud", "qdrant", "ladybug", "onnx",
 visualization = ["cognee-lib/visualization", "cognee-bindings-common/visualization"]
 cloud = ["cognee-lib/cloud", "cognee-bindings-common/cloud"]
 # ... forward the remaining features the same way cognee-neon does
+```
+
+**Current state of `python/Cargo.toml`:** the crate has no `[features]` section at all and
+does not depend on `cognee-bindings-common` or `cognee-lib`. Both the `[features]` block and
+the two new `[dependencies]` entries must be added from scratch. Feature forwarding must also
+propagate to `cognee-bindings-common` (same pattern as `cognee-neon`):
+```toml
+qdrant = ["cognee-lib/qdrant", "cognee-bindings-common/qdrant"]
+# … and so on for each engine feature
 ```
 
 **Build-weight warning:** today the Python crate has a deliberately small dependency set
@@ -207,13 +224,18 @@ from cognee_pipeline._native import (
 Add `python/tests/test_sdk_handle.py`:
 - `Cognee()` instantiation with no args
 - `Cognee(settings_json)` with a JSON override string
-- `warm()` is awaitable and returns None
+- `warm()` is awaitable and returns None (requires `MOCK_EMBEDDING=true` **and** a non-empty
+  `LLM_API_KEY`/`OPENAI_TOKEN` in the test environment; set both in `conftest.py` via
+  `os.environ` or pass them via the `settings` override argument)
 - `owner_id()` returns a valid UUID string
 - Instantiation with malformed JSON raises `CogneeValidationError`
 
 ### Acceptance criteria
 
 - `cognee = Cognee(); await cognee.warm()` completes without error in a test environment with
-  `MOCK_EMBEDDING=true`
+  `MOCK_EMBEDDING=true` **and** a non-empty `LLM_API_KEY` (or `OPENAI_TOKEN`) env var — a
+  dummy string like `"sk-test"` is sufficient; `OpenAIAdapter::new` does no network I/O at
+  construction. Both env vars are required: `warm()` calls `cm.llm().await?` which fails if
+  `llm_api_key` is empty (`component_manager.rs:456`).
 - `await cognee.owner_id()` returns a UUID string
 - All `CogneeError` subclasses are importable from `cognee_pipeline`

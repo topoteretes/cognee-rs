@@ -11,6 +11,20 @@ minimal ``tracing_subscriber::Registry`` that forwards every Rust
 ``pyo3-log`` (gap 07 decisions 1 and 5)."""
 
 from cognee_pipeline._native import (
+    # SDK handle
+    Cognee,
+    # SDK-tier exceptions (CogneeError hierarchy)
+    CogneeError,
+    CogneeComponentError,
+    CogneeServiceBuildError,
+    CogneeUserBootstrapError,
+    CogneeRuntimeError,
+    CogneeValidationError,
+    CogneeUnsupportedError,
+    CogneeFeatureNotBuiltError,
+    CogneeUnknownConfigKeyError,
+    CogneeConfigTypeMismatchError,
+    # Pipeline engine
     CancellationHandle,
     CancelledError,
     InvalidConfigError,
@@ -27,6 +41,20 @@ from cognee_pipeline._native import (
 )
 
 __all__ = [
+    # SDK handle
+    "Cognee",
+    # SDK-tier exceptions
+    "CogneeError",
+    "CogneeComponentError",
+    "CogneeServiceBuildError",
+    "CogneeUserBootstrapError",
+    "CogneeRuntimeError",
+    "CogneeValidationError",
+    "CogneeUnsupportedError",
+    "CogneeFeatureNotBuiltError",
+    "CogneeUnknownConfigKeyError",
+    "CogneeConfigTypeMismatchError",
+    # Pipeline engine
     "Pipeline",
     "TaskContext",
     "CancellationHandle",

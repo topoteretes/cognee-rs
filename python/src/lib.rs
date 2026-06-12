@@ -6,6 +6,8 @@ mod error;
 mod logging;
 mod pipeline;
 mod progress;
+mod sdk;
+mod sdk_error;
 mod task;
 mod task_context;
 mod telemetry_analytics;
@@ -22,6 +24,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // `COGNEE_BINDING_SUPPRESS_LOGS`.
     default_subscriber::install(m.py());
 
+    m.add_class::<sdk::PyCognee>()?;
     m.add_class::<pipeline::PyPipeline>()?;
     m.add_class::<pipeline::PyPipelineRunHandle>()?;
     m.add_class::<task_context::PyTaskContext>()?;
@@ -45,8 +48,11 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
         m
     )?)?;
 
-    // Register exception types.
+    // Register engine-tier exception types (PipelineError hierarchy).
     error::register(m)?;
+
+    // Register SDK-tier exception types (CogneeError hierarchy).
+    sdk_error::register(m)?;
 
     Ok(())
 }

@@ -7,7 +7,36 @@ edition.workspace = true
 name = "cognee_pipeline"
 crate-type = ["cdylib"]
 
+[features]
+# Mirror cognee-neon's default feature set (js/cognee-neon/Cargo.toml).
+default = [
+    "visualization",
+    "cloud",
+    "qdrant",
+    "ladybug",
+    "onnx",
+    "hf-tokenizer",
+    "tiktoken",
+    "sqlite",
+    "testing",
+]
+visualization = ["cognee-lib/visualization", "cognee-bindings-common/visualization"]
+cloud         = ["cognee-lib/cloud",         "cognee-bindings-common/cloud"]
+qdrant        = ["cognee-lib/qdrant",        "cognee-bindings-common/qdrant"]
+ladybug       = ["cognee-lib/ladybug",       "cognee-bindings-common/ladybug"]
+onnx          = ["cognee-lib/onnx",          "cognee-bindings-common/onnx"]
+hf-tokenizer  = ["cognee-lib/hf-tokenizer",  "cognee-bindings-common/hf-tokenizer"]
+tiktoken      = ["cognee-lib/tiktoken",      "cognee-bindings-common/tiktoken"]
+sqlite        = ["cognee-lib/sqlite",        "cognee-bindings-common/sqlite"]
+testing       = ["cognee-lib/testing",       "cognee-bindings-common/testing"]
+
 [dependencies]
+# Shared SDK facade (HandleState, CogneeServices, SdkError).
+cognee-bindings-common = { path = "../crates/bindings-common", default-features = false }
+# Full cognee SDK — same feature set as cognee-neon.
+cognee-lib = { path = "../crates/lib", default-features = false }
+serde_json = { workspace = true }
+
 cognee-core = { path = "../crates/core" }
 cognee-database = { path = "../crates/database", features = ["sqlite"] }
 cognee-graph = { path = "../crates/graph", features = ["testing"] }

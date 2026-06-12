@@ -58,6 +58,10 @@ __pycache__/
 # Runtime data storage (created by CLI in cwd)
 .data_storage/
 
+# Runtime artifacts written into cwd by un-isolated test runs (any directory)
+cognee.db
+.cognee_system/
+
 # Generated Locust benchmark artifacts
 e2e-cross-sdk/performance/locust/results/
 results/
