@@ -81,7 +81,6 @@ lettre = { version = "0.11", default-features = false, features = ["tokio1-rustl
 jsonwebtoken = "9"
 argon2 = "0.5"
 bcrypt = "0.16"
-cookie = { version = "0.18", features = ["percent-encode"] }
 secrecy = "0.10"
 email_address = "0.2"
 

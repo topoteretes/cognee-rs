@@ -9,7 +9,6 @@
 //! authenticate after the upgrade).
 
 use axum::http::{HeaderMap, HeaderValue};
-use cookie::{Cookie, SameSite, time::Duration as CookieDuration};
 use uuid::Uuid;
 
 use super::context::AuthContext;
@@ -64,21 +63,21 @@ pub async fn authenticate_from_cookie(
     })
 }
 
-fn build_cookie<'a>(name: &'a str, value: &'a str, max_age_secs: i64, ctx: &AuthContext) -> String {
-    let mut b = Cookie::build((name, value))
-        .http_only(true)
-        .same_site(SameSite::Lax)
-        .path("/")
-        .max_age(CookieDuration::seconds(max_age_secs));
-
+fn build_cookie(name: &str, value: &str, max_age_secs: i64, ctx: &AuthContext) -> String {
+    let mut parts = vec![
+        format!("{name}={value}"),
+        "HttpOnly".to_string(),
+        "SameSite=Lax".to_string(),
+        "Path=/".to_string(),
+        format!("Max-Age={max_age_secs}"),
+    ];
     if ctx.cookie_secure {
-        b = b.secure(true);
+        parts.push("Secure".to_string());
     }
     if let Some(ref domain) = ctx.cookie_domain {
-        b = b.domain(domain.clone());
+        parts.push(format!("Domain={domain}"));
     }
-
-    b.build().to_string()
+    parts.join("; ")
 }
 
 /// Build the `Set-Cookie` header value for a successful login.
