@@ -15,8 +15,10 @@ use cognee_lib::config::ConfigManager;
 use pyo3::prelude::*;
 
 use crate::config::PyCogneeConfig;
+use crate::sdk_admin::PyCogneeNotebooks;
 use crate::sdk_datasets::PyCogneeDatasets;
 use crate::sdk_error::{sdk_error_to_py, validation_err};
+use crate::sdk_sessions::PyCogneeSessions;
 
 // ── Settings overlay helper ───────────────────────────────────────────────────
 
@@ -78,6 +80,10 @@ pub struct PyCognee {
     config: Py<PyCogneeConfig>,
     /// Pre-built datasets handle that shares `inner` — returned by the `datasets` property.
     datasets: Py<PyCogneeDatasets>,
+    /// Pre-built sessions handle that shares `inner` — returned by the `sessions` property.
+    sessions: Py<PyCogneeSessions>,
+    /// Pre-built notebooks handle that shares `inner` — returned by the `notebooks` property.
+    notebooks: Py<PyCogneeNotebooks>,
 }
 
 #[pymethods]
@@ -109,10 +115,24 @@ impl PyCognee {
                 inner: Arc::clone(&inner),
             },
         )?;
+        let sessions = Py::new(
+            py,
+            PyCogneeSessions {
+                inner: Arc::clone(&inner),
+            },
+        )?;
+        let notebooks = Py::new(
+            py,
+            PyCogneeNotebooks {
+                inner: Arc::clone(&inner),
+            },
+        )?;
         Ok(Self {
             inner,
             config,
             datasets,
+            sessions,
+            notebooks,
         })
     }
 
@@ -141,6 +161,34 @@ impl PyCognee {
     #[getter]
     fn datasets(&self, py: Python<'_>) -> Py<PyCogneeDatasets> {
         self.datasets.clone_ref(py)
+    }
+
+    /// The session management surface for this handle.
+    ///
+    /// Use this to read and write QA sessions, feedback, and graph context:
+    ///
+    /// .. code-block:: python
+    ///
+    ///     entries = await cognee.sessions.get("session-id")
+    ///     await cognee.sessions.set_graph_context("session-id", "ctx")
+    ///     ctx = await cognee.sessions.get_graph_context("session-id")
+    #[getter]
+    fn sessions(&self, py: Python<'_>) -> Py<PyCogneeSessions> {
+        self.sessions.clone_ref(py)
+    }
+
+    /// The notebook management surface for this handle.
+    ///
+    /// Use this to create, list, update, and delete notebooks:
+    ///
+    /// .. code-block:: python
+    ///
+    ///     notebooks = await cognee.notebooks.list()
+    ///     nb = await cognee.notebooks.create("My Notebook")
+    ///     await cognee.notebooks.delete(nb["id"])
+    #[getter]
+    fn notebooks(&self, py: Python<'_>) -> Py<PyCogneeNotebooks> {
+        self.notebooks.clone_ref(py)
     }
 
     /// Build engines and resolve the default user.

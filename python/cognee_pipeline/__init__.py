@@ -46,6 +46,9 @@ from cognee_pipeline._native import (
     CogneeConfig,
     # SDK datasets sub-object
     CogneeDatasets,
+    # SDK sessions / notebooks sub-objects
+    CogneeSessions,
+    CogneeNotebooks,
     # SDK-tier exceptions (CogneeError hierarchy)
     CogneeError,
     CogneeComponentError,
@@ -82,6 +85,9 @@ __all__ = [
     "CogneeConfig",
     # SDK datasets sub-object
     "CogneeDatasets",
+    # SDK sessions / notebooks sub-objects
+    "CogneeSessions",
+    "CogneeNotebooks",
     # SDK-tier exceptions
     "CogneeError",
     "CogneeComponentError",

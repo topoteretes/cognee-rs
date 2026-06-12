@@ -1,6 +1,6 @@
 # Session, Admin, and Notebook Operations
 
-## Status: ❌ Not implemented
+## Status: ✅ Implemented
 
 ## What is missing
 
@@ -35,12 +35,12 @@
 
 **`get_session` opts**:
 ```python
-{"last_n": int}   # return only the last N entries
+{"lastN": int}   # return only the last N entries (camelCase — matches wire contract in capi and neon)
 ```
 
 **`add_feedback` opts**:
 ```python
-{"feedback_text": str | None, "feedback_score": int | None}
+{"feedbackText": str | None, "feedbackScore": int | None}  # camelCase — matches capi/neon wire contract
 ```
 
 ### Result shapes
@@ -71,14 +71,29 @@ partial failures.
 
 ## Implementation plan
 
-**Prerequisite:** hoist the session/admin/notebook op bodies from
-`capi/cognee-capi/src/sdk_admin.rs` (and the neon counterpart) into
-`cognee_bindings_common::ops` — see [core-pipeline-ops.md](core-pipeline-ops.md) Step 0. The
-underlying logic is mostly thin calls into `cognee_lib::session` (`get_session`, `add_feedback`,
+**Prerequisite (Step 0 — hoist):** Extract the `run_*` async functions from
+`capi/cognee-capi/src/sdk_admin.rs` (and their counterparts in
+`js/cognee-neon/src/sdk_admin.rs`) into a new shared module
+`crates/bindings-common/src/ops/sessions.rs` (and/or `ops/admin.rs`), then
+declare it in `crates/bindings-common/src/ops/mod.rs` as `pub mod sessions;` (and
+`pub mod admin;`). The Python layer will then call through
+`cognee_bindings_common::ops::sessions` / `cognee_bindings_common::ops::admin`
+exactly as T3–T7 do for `pipeline`, `retrieval`, `data`, `datasets`, and `memory`.
+
+The underlying logic is mostly thin calls into `cognee_lib::session` (`get_session`, `add_feedback`,
 `delete_feedback`, `get_graph_context`, `set_graph_context`) and `cognee_lib::api`
 (`list_notebooks`, `create_notebook`, `update_notebook`, `delete_notebook`,
 `reset_pipeline_run_status`, `get_or_create_default_user`) using services from
 `handle.services().await`.
+
+Key import paths (verified against current codebase):
+- `cognee_lib::session::{get_session, add_feedback, delete_feedback, get_graph_context, set_graph_context}`
+- `cognee_lib::api::notebooks::{create_notebook, delete_notebook, list_notebooks, update_notebook}`
+- `cognee_lib::api::{reset_dataset_pipeline_run_status, reset_pipeline_run_status}`
+- `cognee_lib::api::get_or_create_default_user`
+- `cognee_lib::database::{NotebookDb, NotebookUpdatePatch, UserDb}` (re-exported via `cognee_database::*`)
+- `svc.session_store` (for `get_session` — takes `&dyn SessionStore`)
+- `svc.session_manager` (for `add_feedback`, `delete_feedback`, `get_graph_context`, `set_graph_context` — takes `&SessionManager`)
 
 ### Step 1 — Create `python/src/sdk_sessions.rs`
 

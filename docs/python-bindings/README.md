@@ -83,18 +83,18 @@ tracked in [STATUS.md](STATUS.md).
 | `empty_dataset(id)` | ✅ | ✅ | ✅ | [dataset-management.md](dataset-management.md) |
 | `delete_data(dataset_id, data_id)` | ✅ | ✅ | ✅ | [dataset-management.md](dataset-management.md) |
 | `delete_all_datasets()` | ✅ | ✅ | ✅ | [dataset-management.md](dataset-management.md) |
-| `get_session(id)` | ✅ | ✅ | ❌ | [session-admin-ops.md](session-admin-ops.md) |
-| `add_feedback(session, qa)` | ✅ | ✅ | ❌ | [session-admin-ops.md](session-admin-ops.md) |
-| `delete_feedback(session, qa)` | ✅ | ✅ | ❌ | [session-admin-ops.md](session-admin-ops.md) |
-| `get_graph_context(session)` | ✅ | ✅ | ❌ | [session-admin-ops.md](session-admin-ops.md) |
-| `set_graph_context(session)` | ✅ | ✅ | ❌ | [session-admin-ops.md](session-admin-ops.md) |
-| `reset_pipeline_run_status` | ✅ | ✅ | ❌ | [session-admin-ops.md](session-admin-ops.md) |
-| `reset_dataset_pipeline_run_status` | ✅ | ✅ | ❌ | [session-admin-ops.md](session-admin-ops.md) |
-| `get_or_create_default_user()` | ✅ | ✅ | ❌ | [session-admin-ops.md](session-admin-ops.md) |
-| `list_notebooks()` | ✅ | ✅ | ❌ | [session-admin-ops.md](session-admin-ops.md) |
-| `create_notebook()` | ✅ | ✅ | ❌ | [session-admin-ops.md](session-admin-ops.md) |
-| `update_notebook()` | ✅ | ✅ | ❌ | [session-admin-ops.md](session-admin-ops.md) |
-| `delete_notebook()` | ✅ | ✅ | ❌ | [session-admin-ops.md](session-admin-ops.md) |
+| `get_session(id)` | ✅ | ✅ | ✅ | [session-admin-ops.md](session-admin-ops.md) |
+| `add_feedback(session, qa)` | ✅ | ✅ | ✅ | [session-admin-ops.md](session-admin-ops.md) |
+| `delete_feedback(session, qa)` | ✅ | ✅ | ✅ | [session-admin-ops.md](session-admin-ops.md) |
+| `get_graph_context(session)` | ✅ | ✅ | ✅ | [session-admin-ops.md](session-admin-ops.md) |
+| `set_graph_context(session)` | ✅ | ✅ | ✅ | [session-admin-ops.md](session-admin-ops.md) |
+| `reset_pipeline_run_status` | ✅ | ✅ | ✅ | [session-admin-ops.md](session-admin-ops.md) |
+| `reset_dataset_pipeline_run_status` | ✅ | ✅ | ✅ | [session-admin-ops.md](session-admin-ops.md) |
+| `get_or_create_default_user()` | ✅ | ✅ | ✅ | [session-admin-ops.md](session-admin-ops.md) |
+| `list_notebooks()` | ✅ | ✅ | ✅ | [session-admin-ops.md](session-admin-ops.md) |
+| `create_notebook()` | ✅ | ✅ | ✅ | [session-admin-ops.md](session-admin-ops.md) |
+| `update_notebook()` | ✅ | ✅ | ✅ | [session-admin-ops.md](session-admin-ops.md) |
+| `delete_notebook()` | ✅ | ✅ | ✅ | [session-admin-ops.md](session-admin-ops.md) |
 | `visualize()` — HTML output | ✅ | ✅ | ❌ | [visualization-ops.md](visualization-ops.md) |
 | `visualize_to_file()` | ✅ | ✅ | ❌ | [visualization-ops.md](visualization-ops.md) |
 | `serve()` — cloud connect | ✅ | ✅ | ❌ | [cloud-ops.md](cloud-ops.md) |

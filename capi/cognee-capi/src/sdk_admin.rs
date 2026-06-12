@@ -20,274 +20,12 @@
 use std::ffi::c_char;
 use std::sync::Arc;
 
-use uuid::Uuid;
-
-use cognee_bindings_common::{HandleState, SdkError};
-use cognee_lib::api::get_or_create_default_user;
-use cognee_lib::api::notebooks::{
-    create_notebook, delete_notebook, list_notebooks, update_notebook,
-};
-use cognee_lib::api::{reset_dataset_pipeline_run_status, reset_pipeline_run_status};
-use cognee_lib::database::{NotebookDb, NotebookUpdatePatch, UserDb};
-use cognee_lib::session::get_session;
+use cognee_bindings_common::ops::admin;
+use cognee_bindings_common::ops::sessions;
+use cognee_bindings_common::SdkError;
 
 use crate::sdk::{CgSdk, CgSdkResultCallback, SendUserData, spawn_sdk_op};
 use crate::sdk_ops::parse_c_str_or_fire;
-
-// ---------------------------------------------------------------------------
-// Core async logic.
-// ---------------------------------------------------------------------------
-
-async fn run_get_session(
-    state: &HandleState,
-    session_id: &str,
-    opts: &serde_json::Value,
-) -> Result<serde_json::Value, SdkError> {
-    let last_n = opts
-        .get("lastN")
-        .and_then(|v| v.as_u64())
-        .map(|n| n as usize);
-    let svc = state.services().await?;
-    let owner_id = state.owner_id().await?;
-    let owner_str = owner_id.to_string();
-
-    let entries = get_session(
-        svc.session_store.as_ref(),
-        session_id,
-        Some(&owner_str),
-        last_n,
-    )
-    .await
-    .map_err(|e| SdkError::Runtime(format!("get_session failed: {e}")))?;
-
-    serde_json::to_value(&entries)
-        .map_err(|e| SdkError::Runtime(format!("failed to serialize SessionQAEntry[]: {e}")))
-}
-
-async fn run_add_feedback(
-    state: &HandleState,
-    session_id: &str,
-    qa_id: &str,
-    feedback_text: Option<String>,
-    feedback_score: Option<i32>,
-) -> Result<serde_json::Value, SdkError> {
-    let svc = state.services().await?;
-    let owner_id = state.owner_id().await?;
-    let owner_str = owner_id.to_string();
-
-    let ok = cognee_lib::session::add_feedback(
-        svc.session_manager.as_ref(),
-        session_id,
-        qa_id,
-        Some(&owner_str),
-        feedback_text.as_deref(),
-        feedback_score,
-    )
-    .await
-    .map_err(|e| SdkError::Runtime(format!("add_feedback failed: {e}")))?;
-
-    Ok(serde_json::Value::Bool(ok))
-}
-
-async fn run_delete_feedback(
-    state: &HandleState,
-    session_id: &str,
-    qa_id: &str,
-) -> Result<serde_json::Value, SdkError> {
-    let svc = state.services().await?;
-    let owner_id = state.owner_id().await?;
-    let owner_str = owner_id.to_string();
-
-    let ok = cognee_lib::session::delete_feedback(
-        svc.session_manager.as_ref(),
-        session_id,
-        qa_id,
-        Some(&owner_str),
-    )
-    .await
-    .map_err(|e| SdkError::Runtime(format!("delete_feedback failed: {e}")))?;
-
-    Ok(serde_json::Value::Bool(ok))
-}
-
-async fn run_get_graph_context(
-    state: &HandleState,
-    session_id: &str,
-) -> Result<serde_json::Value, SdkError> {
-    let svc = state.services().await?;
-    let owner_id = state.owner_id().await?;
-    let owner_str = owner_id.to_string();
-
-    let ctx = cognee_lib::session::get_graph_context(
-        svc.session_manager.as_ref(),
-        session_id,
-        Some(&owner_str),
-    )
-    .await
-    .map_err(|e| SdkError::Runtime(format!("get_graph_context failed: {e}")))?;
-
-    // D9: quoted JSON string or null.
-    match ctx {
-        Some(s) => Ok(serde_json::Value::String(s)),
-        None => Ok(serde_json::Value::Null),
-    }
-}
-
-async fn run_set_graph_context(
-    state: &HandleState,
-    session_id: &str,
-    context: &str,
-) -> Result<serde_json::Value, SdkError> {
-    let svc = state.services().await?;
-    let owner_id = state.owner_id().await?;
-    let owner_str = owner_id.to_string();
-
-    cognee_lib::session::set_graph_context(
-        svc.session_manager.as_ref(),
-        session_id,
-        Some(&owner_str),
-        context,
-    )
-    .await
-    .map_err(|e| SdkError::Runtime(format!("set_graph_context failed: {e}")))?;
-
-    // D9: void ops return null.
-    Ok(serde_json::Value::Null)
-}
-
-async fn run_reset_pipeline_run_status(
-    state: &HandleState,
-    dataset_id_str: &str,
-    pipeline_name: &str,
-) -> Result<serde_json::Value, SdkError> {
-    let dataset_id = Uuid::parse_str(dataset_id_str)
-        .map_err(|e| SdkError::Validation(format!("invalid dataset id UUID: {e}")))?;
-    let svc = state.services().await?;
-    let owner_id = state.owner_id().await?;
-
-    reset_pipeline_run_status(
-        Arc::clone(&svc.pipeline_run_repo),
-        owner_id,
-        dataset_id,
-        pipeline_name,
-    )
-    .await
-    .map_err(|e| SdkError::Runtime(format!("reset_pipeline_run_status failed: {e}")))?;
-
-    Ok(serde_json::Value::Null)
-}
-
-async fn run_reset_dataset_pipeline_run_status(
-    state: &HandleState,
-    dataset_id_str: &str,
-) -> Result<serde_json::Value, SdkError> {
-    let dataset_id = Uuid::parse_str(dataset_id_str)
-        .map_err(|e| SdkError::Validation(format!("invalid dataset id UUID: {e}")))?;
-    let svc = state.services().await?;
-    let owner_id = state.owner_id().await?;
-
-    reset_dataset_pipeline_run_status(Arc::clone(&svc.pipeline_run_repo), owner_id, dataset_id)
-        .await
-        .map_err(|e| SdkError::Runtime(format!("reset_dataset_pipeline_run_status failed: {e}")))?;
-
-    Ok(serde_json::Value::Null)
-}
-
-async fn run_get_or_create_default_user(
-    state: &HandleState,
-) -> Result<serde_json::Value, SdkError> {
-    let email = state.cm.settings().default_user_email.clone();
-    let svc = state.services().await?;
-
-    let user =
-        get_or_create_default_user(Arc::clone(&svc.database).as_ref() as &dyn UserDb, &email)
-            .await
-            .map_err(|e| {
-                SdkError::UserBootstrap(format!("get_or_create_default_user failed: {e}"))
-            })?;
-
-    serde_json::to_value(&user)
-        .map_err(|e| SdkError::Runtime(format!("failed to serialize User: {e}")))
-}
-
-async fn run_list_notebooks(state: &HandleState) -> Result<serde_json::Value, SdkError> {
-    let svc = state.services().await?;
-    let owner_id = state.owner_id().await?;
-    let nb_db: Arc<dyn NotebookDb> = Arc::clone(&svc.database) as Arc<dyn NotebookDb>;
-
-    let notebooks = list_notebooks(&nb_db, owner_id)
-        .await
-        .map_err(|e| SdkError::Runtime(format!("list_notebooks failed: {e}")))?;
-
-    serde_json::to_value(&notebooks)
-        .map_err(|e| SdkError::Runtime(format!("failed to serialize notebooks: {e}")))
-}
-
-async fn run_create_notebook(
-    state: &HandleState,
-    name: String,
-    cells: serde_json::Value,
-    deletable: bool,
-) -> Result<serde_json::Value, SdkError> {
-    let svc = state.services().await?;
-    let owner_id = state.owner_id().await?;
-    let nb_db: Arc<dyn NotebookDb> = Arc::clone(&svc.database) as Arc<dyn NotebookDb>;
-
-    let notebook = create_notebook(&nb_db, owner_id, name, cells, deletable)
-        .await
-        .map_err(|e| SdkError::Runtime(format!("create_notebook failed: {e}")))?;
-
-    serde_json::to_value(&notebook)
-        .map_err(|e| SdkError::Runtime(format!("failed to serialize Notebook: {e}")))
-}
-
-async fn run_update_notebook(
-    state: &HandleState,
-    id_str: &str,
-    patch_json: serde_json::Value,
-) -> Result<serde_json::Value, SdkError> {
-    let id = Uuid::parse_str(id_str)
-        .map_err(|e| SdkError::Validation(format!("invalid notebook id UUID: {e}")))?;
-
-    let patch = NotebookUpdatePatch {
-        name: patch_json
-            .get("name")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string()),
-        cells: patch_json.get("cells").cloned(),
-    };
-
-    let svc = state.services().await?;
-    let owner_id = state.owner_id().await?;
-    let nb_db: Arc<dyn NotebookDb> = Arc::clone(&svc.database) as Arc<dyn NotebookDb>;
-
-    let result = update_notebook(&nb_db, id, owner_id, patch)
-        .await
-        .map_err(|e| SdkError::Runtime(format!("update_notebook failed: {e}")))?;
-
-    match result {
-        Some(nb) => serde_json::to_value(&nb)
-            .map_err(|e| SdkError::Runtime(format!("failed to serialize Notebook: {e}"))),
-        None => Ok(serde_json::Value::Null),
-    }
-}
-
-async fn run_delete_notebook(
-    state: &HandleState,
-    id_str: &str,
-) -> Result<serde_json::Value, SdkError> {
-    let id = Uuid::parse_str(id_str)
-        .map_err(|e| SdkError::Validation(format!("invalid notebook id UUID: {e}")))?;
-    let svc = state.services().await?;
-    let owner_id = state.owner_id().await?;
-    let nb_db: Arc<dyn NotebookDb> = Arc::clone(&svc.database) as Arc<dyn NotebookDb>;
-
-    let removed = delete_notebook(&nb_db, id, owner_id)
-        .await
-        .map_err(|e| SdkError::Runtime(format!("delete_notebook failed: {e}")))?;
-
-    Ok(serde_json::Value::Bool(removed))
-}
 
 // ---------------------------------------------------------------------------
 // C-exported functions.
@@ -340,7 +78,7 @@ pub unsafe extern "C" fn cg_sdk_get_session(
                 .map_err(|e| SdkError::Validation(format!("opts_json parse error: {e}")))?,
             None => serde_json::Value::Null,
         };
-        run_get_session(&state, &session_str, &opts_val).await
+        sessions::run_get_session(&state, &session_str, &opts_val).await
     });
 }
 
@@ -398,15 +136,7 @@ pub unsafe extern "C" fn cg_sdk_add_feedback(
             None => serde_json::Value::Null,
         };
         // feedbackText and feedbackScore folded into opts_json (C-ABI uniformity).
-        let feedback_text = opts_val
-            .get("feedbackText")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
-        let feedback_score = opts_val
-            .get("feedbackScore")
-            .and_then(|v| v.as_i64())
-            .map(|n| n as i32);
-        run_add_feedback(&state, &session_str, &qa_str, feedback_text, feedback_score).await
+        sessions::run_add_feedback(&state, &session_str, &qa_str, &opts_val).await
     });
 }
 
@@ -447,7 +177,7 @@ pub unsafe extern "C" fn cg_sdk_delete_feedback(
 
     let ud = SendUserData(user_data);
     spawn_sdk_op(callback, ud, async move {
-        run_delete_feedback(&state, &session_str, &qa_str).await
+        sessions::run_delete_feedback(&state, &session_str, &qa_str).await
     });
 }
 
@@ -484,7 +214,7 @@ pub unsafe extern "C" fn cg_sdk_get_graph_context(
 
     let ud = SendUserData(user_data);
     spawn_sdk_op(callback, ud, async move {
-        run_get_graph_context(&state, &session_str).await
+        sessions::run_get_graph_context(&state, &session_str).await
     });
 }
 
@@ -525,7 +255,7 @@ pub unsafe extern "C" fn cg_sdk_set_graph_context(
 
     let ud = SendUserData(user_data);
     spawn_sdk_op(callback, ud, async move {
-        run_set_graph_context(&state, &session_str, &context_str).await
+        sessions::run_set_graph_context(&state, &session_str, &context_str).await
     });
 }
 
@@ -566,7 +296,7 @@ pub unsafe extern "C" fn cg_sdk_reset_pipeline_run_status(
 
     let ud = SendUserData(user_data);
     spawn_sdk_op(callback, ud, async move {
-        run_reset_pipeline_run_status(&state, &ds_str, &pipe_str).await
+        admin::run_reset_pipeline_run_status(&state, &ds_str, &pipe_str).await
     });
 }
 
@@ -601,7 +331,7 @@ pub unsafe extern "C" fn cg_sdk_reset_dataset_pipeline_run_status(
 
     let ud = SendUserData(user_data);
     spawn_sdk_op(callback, ud, async move {
-        run_reset_dataset_pipeline_run_status(&state, &ds_str).await
+        admin::run_reset_dataset_pipeline_run_status(&state, &ds_str).await
     });
 }
 
@@ -627,7 +357,7 @@ pub unsafe extern "C" fn cg_sdk_get_or_create_default_user(
     let state = Arc::clone(unsafe { &(*sdk).state });
     let ud = SendUserData(user_data);
     spawn_sdk_op(callback, ud, async move {
-        run_get_or_create_default_user(&state).await
+        admin::run_get_or_create_default_user(&state).await
     });
 }
 
@@ -654,7 +384,7 @@ pub unsafe extern "C" fn cg_sdk_list_notebooks(
     spawn_sdk_op(
         callback,
         ud,
-        async move { run_list_notebooks(&state).await },
+        async move { admin::run_list_notebooks(&state).await },
     );
 }
 
@@ -711,7 +441,7 @@ pub unsafe extern "C" fn cg_sdk_create_notebook(
                 .map_err(|e| SdkError::Validation(format!("cells_json parse error: {e}")))?,
             None => serde_json::Value::Array(vec![]),
         };
-        run_create_notebook(&state, name_str, cells_val, is_deletable).await
+        admin::run_create_notebook(&state, name_str, cells_val, is_deletable).await
     });
 }
 
@@ -756,7 +486,7 @@ pub unsafe extern "C" fn cg_sdk_update_notebook(
     spawn_sdk_op(callback, ud, async move {
         let patch_val: serde_json::Value = serde_json::from_str(&patch_str)
             .map_err(|e| SdkError::Validation(format!("patch_json parse error: {e}")))?;
-        run_update_notebook(&state, &id_str, patch_val).await
+        admin::run_update_notebook(&state, &id_str, patch_val).await
     });
 }
 
@@ -792,6 +522,6 @@ pub unsafe extern "C" fn cg_sdk_delete_notebook(
 
     let ud = SendUserData(user_data);
     spawn_sdk_op(callback, ud, async move {
-        run_delete_notebook(&state, &id_str).await
+        admin::run_delete_notebook(&state, &id_str).await
     });
 }
