@@ -43,6 +43,17 @@ add_executable(example_sdk_add_cognify example_sdk_add_cognify.c)
 target_include_directories(example_sdk_add_cognify PRIVATE ${COGNEE_INCLUDE_DIR})
 target_link_libraries(example_sdk_add_cognify cognee_capi ${COGNEE_SYSTEM_LIBS})
 
+# Phase 5 retrieval smoke test (Tier-A: mock embedding, no network).
+add_executable(sdk_retrieval_smoke sdk_retrieval_smoke.c)
+target_include_directories(sdk_retrieval_smoke PRIVATE ${COGNEE_INCLUDE_DIR})
+target_link_libraries(sdk_retrieval_smoke cognee_capi ${COGNEE_SYSTEM_LIBS})
+
+# Phase 5 live add+cognify+search example (Tier-B: requires OPENAI_URL + OPENAI_TOKEN;
+# the binary has a built-in skip guard so it exits 0 when credentials are absent).
+add_executable(example_sdk_add_cognify_search example_sdk_add_cognify_search.c)
+target_include_directories(example_sdk_add_cognify_search PRIVATE ${COGNEE_INCLUDE_DIR})
+target_link_libraries(example_sdk_add_cognify_search cognee_capi ${COGNEE_SYSTEM_LIBS})
+
 # Gap 07 smoke binaries (driven by capi/scripts/check.sh).
 #
 # `init_otlp_smoke` and `init_telemetry_smoke` exercise the public C

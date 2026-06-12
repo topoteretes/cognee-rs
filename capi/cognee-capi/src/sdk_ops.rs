@@ -57,7 +57,7 @@ use crate::sdk::{CgSdk, CgSdkResultCallback, SendUserData, spawn_sdk_op};
 /// spawned thread (R1) and returns `None` — the caller must return immediately.
 ///
 /// `ud_raw` carries `user_data as usize` so the closure is `Send`.
-fn parse_c_str_or_fire(
+pub(crate) fn parse_c_str_or_fire(
     ptr: *const c_char,
     field_name: &'static str,
     callback: CgSdkResultCallback,

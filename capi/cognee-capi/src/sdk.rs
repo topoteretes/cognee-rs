@@ -130,14 +130,15 @@ unsafe impl Sync for CgSdk {}
 ///
 /// Returns the packed API version.
 ///
-/// Current version: major=1, minor=3.
+/// Current version: major=1, minor=4.
 ///   Phase 1b = minor 1 (handle lifecycle).
 ///   Phase 3  = minor 2 (config surface).
 ///   Phase 4  = minor 3 (add / cognify / add_and_cognify).
+///   Phase 5  = minor 4 (search / recall).
 /// MINOR increments each phase that ships new symbols.
 #[unsafe(no_mangle)]
 pub extern "C" fn cg_api_version() -> u32 {
-    (1u32 << 16) | 3u32
+    (1u32 << 16) | 4u32
 }
 
 // ── cg_sdk_new ──────────────────────────────────────────────────────────────

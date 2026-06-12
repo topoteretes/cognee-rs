@@ -127,6 +127,35 @@ fi
 
 echo ""
 echo "================================================================"
+echo "=== Phase 5 retrieval smoke test (Tier-A, mock embedding) ==="
+echo "================================================================"
+
+echo ""
+echo "--- Running: sdk_retrieval_smoke (search/recall, MOCK_EMBEDDING=true) ---"
+MOCK_EMBEDDING=true \
+    COGNEE_TRACING_ENABLED="" \
+    "$BUILD_DIR/examples/sdk_retrieval_smoke"
+
+echo ""
+echo "================================================================"
+echo "=== Phase 5 live add+cognify+search (Tier-B, skips without credentials) ==="
+echo "================================================================"
+
+echo ""
+if [ -n "${OPENAI_URL:-}" ] && [ -n "${OPENAI_TOKEN:-}" ]; then
+    echo "--- Running: example_sdk_add_cognify_search (live, OPENAI_URL set) ---"
+    MOCK_EMBEDDING=true \
+        COGNEE_TRACING_ENABLED="" \
+        "$BUILD_DIR/examples/example_sdk_add_cognify_search"
+else
+    echo "--- Skipping: example_sdk_add_cognify_search (OPENAI_URL/OPENAI_TOKEN not set) ---"
+    MOCK_EMBEDDING=true \
+        COGNEE_TRACING_ENABLED="" \
+        "$BUILD_DIR/examples/example_sdk_add_cognify_search"
+fi
+
+echo ""
+echo "================================================================"
 echo "=== Gap 07 smoke tests (OTLP + analytics init) ==="
 echo "================================================================"
 

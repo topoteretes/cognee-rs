@@ -83,12 +83,17 @@ int main(void)
 
     /* ── 2. API version ──────────────────────────────────────────────────── */
     uint32_t ver = cg_api_version();
-    uint32_t want = (1u << 16) | 1u;
-    ASSERT(ver == want, "cg_api_version() must return (1<<16)|1");
-    if (ver == want) {
-        printf("cg_api_version() = 0x%08x  OK\n", ver);
+    /* Phase 3 bumped minor to 2; accept any minor >= 1 to stay forward-compat. */
+    uint32_t ver_major = ver >> 16;
+    uint32_t ver_minor = ver & 0xffffu;
+    ASSERT(ver_major == 1u && ver_minor >= 1u,
+           "cg_api_version() must return major=1, minor>=1");
+    if (ver_major == 1u && ver_minor >= 1u) {
+        printf("cg_api_version() = 0x%08x (major=%u minor=%u)  OK\n",
+               ver, ver_major, ver_minor);
     } else {
-        fprintf(stderr, "cg_api_version() = 0x%08x, want 0x%08x\n", ver, want);
+        fprintf(stderr, "cg_api_version() = 0x%08x (major=%u minor=%u), want major=1 minor>=1\n",
+                ver, ver_major, ver_minor);
     }
 
     /* ── 3. cg_sdk_new(NULL) ─────────────────────────────────────────────── */

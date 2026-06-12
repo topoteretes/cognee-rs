@@ -85,9 +85,10 @@ extern "C" {
 /**
  * Minor API version.  Incremented each phase that adds new SDK symbols.
  * Phase 1b = 1 (first SDK symbols); Phase 3 = 2 (config surface);
- * Phase 4 = 3 (add / cognify / add_and_cognify).
+ * Phase 4 = 3 (add / cognify / add_and_cognify);
+ * Phase 5 = 4 (search / recall).
  */
-#define CG_API_VERSION_MINOR 3
+#define CG_API_VERSION_MINOR 4
 
 /**
  * Return the packed API version as (major << 16) | minor.
@@ -417,6 +418,103 @@ void cg_sdk_add_and_cognify(const CgSdk*        sdk,
                              const char*         opts_json,
                              CgSdkResultCallback callback,
                              void*               user_data);
+
+/* ── Retrieval ops (Phase 5) ──────────────────────────────────────────────── */
+/*
+ * Both ops are async (D4, R1): the callback fires on a tokio worker thread,
+ * never synchronously from the initiating call.
+ *
+ * Wire shapes (camelCase, D3):
+ *
+ *   SearchResponse — JSON array/object returned by the search orchestrator;
+ *     shape depends on the search type.  Pass through verbatim.
+ *
+ *   CogneeRecallResult — hand-built JSON object:
+ *     {
+ *       "items":          [...],           // array of recall items
+ *       "searchTypeUsed": null | "...",    // SCREAMING_SNAKE_CASE or null
+ *       "autoRouted":     true | false,
+ *       "searchResponse": null | {...}     // SearchResponse or null
+ *     }
+ *
+ * SearchType strings (SCREAMING_SNAKE_CASE — all 15 valid values):
+ *   SUMMARIES, CHUNKS, RAG_COMPLETION, TRIPLET_COMPLETION, GRAPH_COMPLETION,
+ *   GRAPH_SUMMARY_COMPLETION, CYPHER, NATURAL_LANGUAGE, GRAPH_COMPLETION_COT,
+ *   GRAPH_COMPLETION_CONTEXT_EXTENSION, FEELING_LUCKY, FEEDBACK, TEMPORAL,
+ *   CODING_RULES, CHUNKS_LEXICAL
+ *
+ * RecallScope strings (5 valid values):
+ *   "auto" | "graph" | "session" | "trace" | "graph_context"
+ *   Absent/null scope → "auto" default applied internally.
+ */
+
+/**
+ * Search the knowledge graph.
+ *
+ * query must be a non-null null-terminated UTF-8 string.
+ * opts_json may be NULL or a JSON object with optional keys:
+ *   "searchType"            — SCREAMING_SNAKE_CASE (default: GRAPH_COMPLETION)
+ *   "datasets"              — JSON string array of dataset names
+ *   "datasetIds"            — JSON UUID string array
+ *   "topK"                  — integer
+ *   "systemPrompt"          — string
+ *   "sessionId"             — string
+ *   "nodeType"              — string
+ *   "nodeName"              — string array
+ *   "onlyContext"           — boolean
+ *   "useCombinedContext"    — boolean
+ *   "verbose"               — boolean
+ *   "saveInteraction"       — boolean (default true, matching Python SDK)
+ *   "autoFeedbackDetection" — boolean
+ *
+ * Note: "userId" in opts is ignored — user_id in the request is always set
+ * from the handle's owner_id so dataset-name resolution works correctly.
+ *
+ * Invalid "searchType" string → CG_ERR_SDK_VALIDATION (14) via the callback.
+ *
+ * Async (D4, R1): callback fires exactly once on a tokio worker thread.
+ * result_json on success: SearchResponse JSON value (array or object).
+ *
+ * @param sdk       A valid CgSdk*.  NULL → no-op (null-check).
+ * @param query     Non-null null-terminated UTF-8 query string.
+ * @param opts_json NULL or null-terminated UTF-8 JSON options object.
+ * @param callback  Called exactly once with the result.
+ * @param user_data Forwarded to callback unchanged.
+ */
+void cg_sdk_search(const CgSdk*        sdk,
+                   const char*         query,
+                   const char*         opts_json,
+                   CgSdkResultCallback callback,
+                   void*               user_data);
+
+/**
+ * Recall from memory using the unified recall pipeline.
+ *
+ * query must be a non-null null-terminated UTF-8 string.
+ * opts_json may be NULL or a JSON object with optional keys:
+ *   "searchType" — SCREAMING_SNAKE_CASE string (forces a specific search type)
+ *   "datasets"   — JSON string array of dataset names to restrict recall
+ *   "topK"       — integer (default 10)
+ *   "autoRoute"  — boolean (default false)
+ *   "sessionId"  — string
+ *   "scope"      — string or string array of RecallScope values:
+ *                  "auto" | "graph" | "session" | "trace" | "graph_context"
+ *                  Absent or null → "auto" default applied by recall().
+ *
+ * Async (D4, R1): callback fires exactly once on a tokio worker thread.
+ * result_json on success: CogneeRecallResult JSON object (see above).
+ *
+ * @param sdk       A valid CgSdk*.  NULL → no-op (null-check).
+ * @param query     Non-null null-terminated UTF-8 query string.
+ * @param opts_json NULL or null-terminated UTF-8 JSON options object.
+ * @param callback  Called exactly once with the result.
+ * @param user_data Forwarded to callback unchanged.
+ */
+void cg_sdk_recall(const CgSdk*        sdk,
+                   const char*         query,
+                   const char*         opts_json,
+                   CgSdkResultCallback callback,
+                   void*               user_data);
 
 /* ── Config surface (Phase 3, D7) ─────────────────────────────────────────── */
 /*
