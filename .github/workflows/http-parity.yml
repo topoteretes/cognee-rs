@@ -100,7 +100,37 @@ jobs:
             buildx-http-parity-
 
       - name: Set up Docker Buildx
+        id: buildx
         uses: docker/setup-buildx-action@v3
+
+      # ── ccache for lbug's bundled C++ build inside the image ─────────────
+      # The rust-builder stage compiles lbug's Ladybug C++ tree through ccache
+      # into a `--mount=type=cache,target=/ccache` BuildKit mount (see
+      # e2e-cross-sdk/Dockerfile and docs/build/lbug-rebuilds.md). BuildKit
+      # cache mounts live only inside the builder instance and are NOT part
+      # of exported layer caches, so on a fresh runner they start empty.
+      # buildkit-cache-dance injects the actions/cache-restored host dir into
+      # the mount before the build and extracts it back afterwards.
+      #
+      # Declaration order matters: post-steps run in reverse, so actions/cache
+      # (declared first) saves AFTER the dance post-step has extracted the
+      # mount contents back to ccache-mount/.
+      - name: Cache ccache (host side)
+        uses: actions/cache@v4
+        with:
+          path: ccache-mount
+          key: http-parity-ccache-${{ github.run_id }}
+          restore-keys: |
+            http-parity-ccache-
+
+      - name: Inject/extract ccache BuildKit cache mount
+        uses: reproducible-containers/buildkit-cache-dance@v3.4.0
+        with:
+          builder: ${{ steps.buildx.outputs.name }}
+          cache-map: |
+            {
+              "ccache-mount": "/ccache"
+            }
 
       # ── Phase-1: no LLM required ──────────────────────────────────────────
       - name: Phase-1 — health, auth, datasets, add, search, forget, openapi, errors

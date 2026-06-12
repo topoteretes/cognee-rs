@@ -11,13 +11,30 @@ FROM debian:trixie-slim AS rust-builder
 
 # Install Rust toolchain + system deps for qdrant/ort native builds
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl ca-certificates gcc g++ make \
+    curl ca-certificates gcc g++ make ccache \
     cmake clang libssl-dev pkg-config protobuf-compiler libprotobuf-dev \
     && rm -rf /var/lib/apt/lists/*
 
 ENV RUSTUP_HOME=/usr/local/rustup \
     CARGO_HOME=/usr/local/cargo \
     PATH=/usr/local/cargo/bin:$PATH
+
+# ccache for lbug's bundled Ladybug C++ build (~1000 compiler calls per fresh
+# OUT_DIR; cargo relocates the OUT_DIR whenever lbug's build-dep closure
+# shifts in the resolved graph — see docs/build/lbug-rebuilds.md). The repo's
+# .cargo/config.toml + scripts/ccache-launcher.sh are not copied into this
+# image, so wire the CMake launcher directly; ccache is installed above.
+#   CCACHE_NOHASHDIR  — the release profile has debug=true; without it ccache
+#                       hashes the cwd (the shifting OUT_DIR) for -g builds.
+#   CCACHE_BASEDIR    — normalizes -I<OUT_DIR> paths for generated headers.
+#   COMPILERCHECK     — apt layer rebuilds change compiler mtimes; hash
+#                       compiler content instead.
+ENV CCACHE_DIR=/ccache \
+    CCACHE_BASEDIR=/build/cognee-rust \
+    CCACHE_NOHASHDIR=true \
+    CCACHE_COMPILERCHECK=content \
+    CMAKE_C_COMPILER_LAUNCHER=ccache \
+    CMAKE_CXX_COMPILER_LAUNCHER=ccache
 
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
     | sh -s -- -y --default-toolchain 1.93.0 --profile minimal
@@ -42,6 +59,7 @@ COPY cognee-rust/e2e-cross-sdk/bin/telemetry_emit.rs e2e-cross-sdk/bin/telemetry
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/build/cognee-rust/target \
+    --mount=type=cache,target=/ccache \
     cargo build --release --package cognee-cli \
     && cp target/release/cognee-cli /usr/local/bin/cognee-cli-rust
 
@@ -49,6 +67,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/build/cognee-rust/target \
+    --mount=type=cache,target=/ccache \
     cargo build --release --package cognee-http-server --features bin \
     && cp target/release/cognee-http-server /usr/local/bin/cognee-http-server
 
@@ -57,6 +76,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/build/cognee-rust/target \
+    --mount=type=cache,target=/ccache \
     cargo build --release --package cognee-telemetry-emit \
     && cp target/release/cognee-telemetry-emit /usr/local/bin/cognee-telemetry-emit
 
