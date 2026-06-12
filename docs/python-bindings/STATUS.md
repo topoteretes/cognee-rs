@@ -17,7 +17,7 @@ Status values: `pending` | `in-progress` | `done` | `blocked` | `skipped`
 | T7 | Hoist + Python remember/memify/improve | [memory-ops.md](memory-ops.md) | done | 2026-06-12 | 79b7a70 |
 | T8 | Hoist + Python sessions/admin/notebooks | [session-admin-ops.md](session-admin-ops.md) | done | 2026-06-12 | 8c7ab8d |
 | T9 | Python visualization ops | [visualization-ops.md](visualization-ops.md) | done | 2026-06-12 | 4ae2030 |
-| T10 | Python cloud serve/disconnect | [cloud-ops.md](cloud-ops.md) | done | 2026-06-12 | — |
+| T10 | Python cloud serve/disconnect | [cloud-ops.md](cloud-ops.md) | done | 2026-06-12 | 1f7dfe4 |
 | T11 | Minor engine-tier gaps | [minor-engine-gaps.md](minor-engine-gaps.md) | pending | — | — |
 
 ## Log
