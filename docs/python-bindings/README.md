@@ -63,9 +63,9 @@ tracked in [STATUS.md](STATUS.md).
 | Config surface — granular setters | ✅ | ✅ | ✅ | [config-surface.md](config-surface.md) |
 | Config surface — bulk setters | ✅ | ✅ | ✅ | [config-surface.md](config-surface.md) |
 | Config read-back (`get_config`) | ✅ | ✅ | ✅ | [config-surface.md](config-surface.md) |
-| `add()` — ingest data | ✅ | ✅ | ❌ | [core-pipeline-ops.md](core-pipeline-ops.md) |
-| `cognify()` — KG extraction | ✅ | ✅ | ❌ | [core-pipeline-ops.md](core-pipeline-ops.md) |
-| `add_and_cognify()` | ✅ | ✅ | ❌ | [core-pipeline-ops.md](core-pipeline-ops.md) |
+| `add()` — ingest data | ✅ | ✅ | ✅ | [core-pipeline-ops.md](core-pipeline-ops.md) |
+| `cognify()` — KG extraction | ✅ | ✅ | ✅ | [core-pipeline-ops.md](core-pipeline-ops.md) |
+| `add_and_cognify()` | ✅ | ✅ | ✅ | [core-pipeline-ops.md](core-pipeline-ops.md) |
 | `search()` — 15 search types | ✅ | ✅ | ❌ | [retrieval-ops.md](retrieval-ops.md) |
 | `recall()` — session-first routing | ✅ | ✅ | ❌ | [retrieval-ops.md](retrieval-ops.md) |
 | `remember()` — add+cognify+improve | ✅ | ✅ | ❌ | [memory-ops.md](memory-ops.md) |

@@ -1,6 +1,6 @@
 # Core Pipeline Operations: add, cognify, add_and_cognify
 
-## Status: ❌ Not implemented
+## Status: ✅ Implemented
 
 ## What is missing
 

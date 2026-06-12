@@ -884,6 +884,17 @@ impl ConfigManager {
         self.bump_version();
     }
 
+    /// Override the relational database URL (e.g. `"sqlite:///path/to/db?mode=rwc"`).
+    ///
+    /// Primarily used by language-binding tests to redirect each test's DB to an
+    /// isolated tmp directory so tests do not share the default on-disk DB.
+    pub fn set_relational_db_url(&self, url: &str) {
+        let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
+        s.relational_db_url = url.to_string();
+        drop(s);
+        self.bump_version();
+    }
+
     pub fn set_vector_db_key(&self, key: &str) {
         let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
         s.vector_db_key = key.to_string();
@@ -1390,6 +1401,10 @@ impl ConfigManager {
             }
             "ontology_matching_strategy" => {
                 self.set_ontology_matching_strategy(as_string(key, &value)?.as_str());
+            }
+            // Relational DB
+            "relational_db_url" => {
+                self.set_relational_db_url(as_string(key, &value)?.as_str());
             }
             // ML models
             "classification_model" => {

@@ -58,7 +58,7 @@ log                = "0.4"
 # gap 07 decision 3).
 cognee-observability = { path = "../crates/observability", features = ["telemetry"] }
 cognee-telemetry     = { path = "../crates/telemetry",     features = ["telemetry"] }
-pyo3 = { version = "0.23", features = ["extension-module"] }
+pyo3 = { version = "0.23", features = ["extension-module", "multiple-pymethods"] }
 pyo3-async-runtimes = { version = "0.23", features = ["tokio-runtime"] }
 tokio = { workspace = true }
 futures = { workspace = true }

@@ -120,6 +120,53 @@ impl ComponentManager {
 
     async fn init_database(&self) -> Result<Arc<DatabaseConnection>, ComponentError> {
         let url = self.config.read().resolved_relational_db_url();
+
+        // For SQLite file-backed databases, ensure the parent directory exists
+        // before handing the URL to sea-orm.  sea-orm's `?mode=rwc` creates the
+        // *file* but not missing ancestor directories, so without this step any
+        // settings override that redirects the DB to a new path (e.g. per-test
+        // isolation) would fail with "unable to open database file".
+        //
+        // URL shapes we handle:
+        //   sqlite:./rel/path/db       (relative, 1-slash)
+        //   sqlite:///abs/path/db      (absolute, 3-slash)
+        //   sqlite://localhost/abs/db  (host form)
+        // All others (postgres, in-memory `sqlite::memory:`) are left alone.
+        if url.starts_with("sqlite:") && !url.contains(":memory:") {
+            // Strip the sqlite: scheme and any leading host ("//localhost") or
+            // extra slashes to get the raw filesystem path (before '?').
+            let after_scheme = url.trim_start_matches("sqlite:");
+            let path_part = if after_scheme.starts_with("//localhost/") {
+                Some(&after_scheme["//localhost".len()..])
+            } else if after_scheme.starts_with("///") {
+                // sqlite:///abs/path — empty authority, absolute path.
+                Some(&after_scheme[2..])
+            } else if after_scheme.starts_with("//") {
+                // sqlite://somehost/... — genuine host form; leave entirely to
+                // the driver instead of attempting create_dir_all("//somehost").
+                None
+            } else {
+                Some(after_scheme)
+            };
+            // Drop query string (e.g. ?mode=rwc).
+            if let Some(path_part) = path_part {
+                let path_no_query = path_part.split('?').next().unwrap_or(path_part);
+                let db_path = Path::new(path_no_query);
+                if let Some(parent) = db_path.parent()
+                    && !parent.as_os_str().is_empty()
+                {
+                    // Non-fatal: an unusual-but-driver-valid URL must still
+                    // reach sea-orm and surface the driver's own error.
+                    if let Err(e) = std::fs::create_dir_all(parent) {
+                        tracing::warn!(
+                            "could not create SQLite parent directory '{}': {e}",
+                            parent.display()
+                        );
+                    }
+                }
+            }
+        }
+
         let db = connect(&url)
             .await
             .map_err(|e| ComponentError::Database(format!("initialization failed: {e}")))?;

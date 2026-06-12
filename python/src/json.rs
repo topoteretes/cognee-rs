@@ -180,3 +180,26 @@ pub(crate) fn py_to_serde_map(
         )),
     }
 }
+
+/// Normalise an `inputs` argument: if the Python value converts to a JSON
+/// *object*, wrap it in a single-element array so the shared pipeline ops
+/// always receive an array of input descriptors.
+pub(crate) fn normalise_inputs(val: &Bound<'_, PyAny>) -> PyResult<serde_json::Value> {
+    let mut json = py_to_serde(val)?;
+    if json.is_object() {
+        json = serde_json::Value::Array(vec![json]);
+    }
+    Ok(json)
+}
+
+/// Convert an optional Python `opts` argument to a `serde_json::Value`.
+///
+/// `None` or Python `None` both become `serde_json::Value::Null`, which
+/// the shared op helpers treat as "no options" (all fields use defaults).
+pub(crate) fn opts_to_json(opts: Option<Bound<'_, PyAny>>) -> PyResult<serde_json::Value> {
+    match opts {
+        None => Ok(serde_json::Value::Null),
+        Some(o) if o.is_none() => Ok(serde_json::Value::Null),
+        Some(o) => py_to_serde(&o),
+    }
+}

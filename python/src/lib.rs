@@ -10,6 +10,7 @@ mod pipeline;
 mod progress;
 mod sdk;
 mod sdk_error;
+mod sdk_ops;
 mod task;
 mod task_context;
 mod telemetry_analytics;
