@@ -11,6 +11,27 @@ def test_cancellation_handle():
     assert h.is_cancelled
 
 
+def test_cancellation_pair():
+    handle, token = cp.cancellation_pair()
+    assert not token.is_cancelled
+    handle.cancel()
+    assert token.is_cancelled
+
+
+def test_cancellation_token_clone():
+    handle, token = cp.cancellation_pair()
+    token2 = token.clone_token()
+    assert not token2.is_cancelled
+    handle.cancel()
+    assert token2.is_cancelled
+
+
+def test_cancellation_pair_returns_correct_types():
+    handle, token = cp.cancellation_pair()
+    assert isinstance(handle, cp.CancellationHandle)
+    assert isinstance(token, cp.CancellationToken)
+
+
 def test_progress_token():
     pt = cp.ProgressToken()
     assert pt.fraction == 0.0

@@ -1,6 +1,6 @@
 # Minor Engine-Tier Gaps
 
-## Status: ⚠️ Partially implemented
+## Status: ✅ Implemented
 
 These are small gaps in the existing pipeline engine tier. The core functionality is complete;
 these are missing convenience features present in both the C API and TS binding.
@@ -174,16 +174,29 @@ class Watcher:
     def noop(cls) -> "Watcher":
         return cls()
 
-    def on_pipeline_run_started(self, run_id: str, pipeline_name: str) -> None:
-        if cb := self._callbacks.get("on_pipeline_run_started"):
+    # NOTE: method names must match what PyWatcherBridge calls via hasattr/call_method1
+    # in python/src/watcher.rs.  The bridge uses: on_pipeline, on_task,
+    # on_run_started, on_run_completed, on_run_errored, on_task_started,
+    # on_task_completed, on_task_errored.
+
+    def on_pipeline(self, pipeline_id: str, status: str) -> None:
+        if cb := self._callbacks.get("on_pipeline"):
+            cb(pipeline_id, status)
+
+    def on_task(self, pipeline_id: str, task_index: int, name: str, total: int, status: str) -> None:
+        if cb := self._callbacks.get("on_task"):
+            cb(pipeline_id, task_index, name, total, status)
+
+    def on_run_started(self, run_id: str, pipeline_name: str) -> None:
+        if cb := self._callbacks.get("on_run_started"):
             cb(run_id, pipeline_name)
 
-    def on_pipeline_run_completed(self, run_id: str, output_count: int) -> None:
-        if cb := self._callbacks.get("on_pipeline_run_completed"):
+    def on_run_completed(self, run_id: str, output_count: int) -> None:
+        if cb := self._callbacks.get("on_run_completed"):
             cb(run_id, output_count)
 
-    def on_pipeline_run_errored(self, run_id: str, error: str) -> None:
-        if cb := self._callbacks.get("on_pipeline_run_errored"):
+    def on_run_errored(self, run_id: str, error: str) -> None:
+        if cb := self._callbacks.get("on_run_errored"):
             cb(run_id, error)
 
     def on_task_started(self, run_id: str, task_name: str, task_index: int) -> None:
@@ -203,7 +216,7 @@ Usage:
 ```python
 watcher = Watcher(
     on_task_started=lambda run_id, name, idx: print(f"Task {name} started"),
-    on_pipeline_run_completed=lambda run_id, count: print(f"Done: {count} outputs"),
+    on_run_completed=lambda run_id, count: print(f"Done: {count} outputs"),
 )
 result = await pipeline.execute(inputs, ctx, watcher=watcher)
 ```

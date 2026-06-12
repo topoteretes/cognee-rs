@@ -1,4 +1,4 @@
-use pyo3::exceptions::PyRuntimeError;
+use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 
 use cognee_core::ProgressToken;
@@ -39,6 +39,27 @@ impl PyProgressToken {
     #[getter]
     fn is_complete(&self) -> bool {
         self.inner.is_complete()
+    }
+
+    /// This token's width as a fraction of the root [0.0, 1.0] range.
+    #[getter]
+    fn width(&self) -> f64 {
+        self.inner.width()
+    }
+
+    /// Create one child subtoken covering ``frac_width`` of this token's range.
+    ///
+    /// ``frac_width`` must be in ``[0.0, 1.0]``.  This token's width shrinks
+    /// by the amount given to the child.
+    ///
+    /// Raises :exc:`ValueError` if ``frac_width`` is outside ``[0.0, 1.0]``.
+    fn subtoken(&self, frac_width: f64) -> PyResult<Self> {
+        if !(0.0..=1.0).contains(&frac_width) {
+            return Err(PyValueError::new_err("frac_width must be in [0.0, 1.0]"));
+        }
+        Ok(Self {
+            inner: self.inner.subtoken(frac_width),
+        })
     }
 
     /// Split into subtokens by relative weights.

@@ -40,11 +40,11 @@ tracked in [STATUS.md](STATUS.md).
 | RunHandle (is_finished, abort, wait) | ✅ | ✅ | ✅ | `PipelineRunHandle.wait()` |
 | TaskContext — mock | ✅ | ✅ | ✅ | `TaskContext.mock()` |
 | CancellationHandle | ✅ | ✅ | ✅ | via `ctx.cancellation_handle` |
-| CancellationToken (separate object) | ✅ | ✅ | ❌ | Python only exposes the handle, not the token |
-| `cancellation_pair()` factory | ✅ | ✅ | ❌ | No independent pair creation in Python |
+| CancellationToken (separate object) | ✅ | ✅ | ✅ | `PyCancellationToken` + `cancellation_pair()` |
+| `cancellation_pair()` factory | ✅ | ✅ | ✅ | Module-level `cancellation_pair()` function |
 | ProgressToken — set / fraction / split | ✅ | ✅ | ✅ | |
-| ProgressToken — width / subtoken | ✅ | ✅ | ❌ | Two methods missing in Python |
-| PipelineWatcher | ✅ | ✅ | ⚠️ | Python uses duck-typing bridge; no typed `Watcher` class / factory |
+| ProgressToken — width / subtoken | ✅ | ✅ | ✅ | Added in T11 |
+| PipelineWatcher | ✅ | ✅ | ✅ | Typed `Watcher` class with event-dict constructor added in T11 |
 | ExecStatusManager | ✅ | ❌ | ❌ | Noop only in C API; not surfaced in TS or Python |
 | RayonThreadPool (explicit) | ✅ | ❌ | ❌ | Only in C API; others use implicit pool |
 | DataIdFn (custom ID extractor) | ✅ | ❌ | ❌ | Only in C API |

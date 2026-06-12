@@ -90,6 +90,8 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<pipeline::PyPipelineRunHandle>()?;
     m.add_class::<task_context::PyTaskContext>()?;
     m.add_class::<cancellation::PyCancellationHandle>()?;
+    m.add_class::<cancellation::PyCancellationToken>()?;
+    m.add_function(wrap_pyfunction!(cancellation::cancellation_pair, m)?)?;
     m.add_class::<progress::PyProgressToken>()?;
 
     // Logging entrypoint (gap-06): argument-less, idempotent.
