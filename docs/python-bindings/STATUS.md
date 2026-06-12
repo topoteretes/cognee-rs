@@ -9,7 +9,7 @@ Status values: `pending` | `in-progress` | `done` | `blocked` | `skipped`
 | ID | Title | Plan document | Status | Date | Commit |
 |----|-------|---------------|--------|------|--------|
 | T1 | Python SDK handle + error hierarchy | [sdk-handle.md](sdk-handle.md) | done | 2026-06-12 | e69329e |
-| T2 | Config surface | [config-surface.md](config-surface.md) | done | 2026-06-12 | — |
+| T2 | Config surface | [config-surface.md](config-surface.md) | done | 2026-06-12 | b1ba3dd |
 | T3 | Hoist pipeline ops + Python add/cognify/add_and_cognify | [core-pipeline-ops.md](core-pipeline-ops.md) | pending | — | — |
 | T4 | Hoist + Python search/recall | [retrieval-ops.md](retrieval-ops.md) | pending | — | — |
 | T5 | Hoist + Python forget/update/prune | [data-ops.md](data-ops.md) | pending | — | — |
