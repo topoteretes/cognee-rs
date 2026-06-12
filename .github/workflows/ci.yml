@@ -25,6 +25,10 @@ env:
   # error on any job that gets a cache hit for target/ but a fresh runner
   # (the cached build script output points to the absent ~/.cache path).
   ORT_CACHE_DIR: ${{ github.workspace }}/target/ort-cache
+  # ccache keys on the compiler binary by mtime by default; runner-image
+  # updates touch /usr/bin/cc+gcc mtimes and would silently invalidate the
+  # whole cache. Hash the compiler content instead.
+  CCACHE_COMPILERCHECK: content
 
 jobs:
   # ── Stage 1: Quick lints (fast fail) ──────────────────────────────────
@@ -59,6 +63,25 @@ jobs:
           large-packages: false
           swap-storage: false
           docker-images: true
+
+      # ccache for lbug's bundled Ladybug C++ build (~1000 compiler calls).
+      # scripts/ccache-launcher.sh (wired via .cargo/config.toml [env]) picks
+      # ccache up automatically once this action puts it on PATH. Cargo
+      # relocates lbug's OUT_DIR whenever its build-dep closure (cc, cmake,
+      # cxx-build, …) shifts in a fresh resolution — no lockfile is committed —
+      # which otherwise forces a from-scratch C++ rebuild in every job at
+      # once. See docs/build/lbug-rebuilds.md.
+      # Only this job saves the cache: it is the root of the job DAG and
+      # compiles the same objects the downstream jobs need (ccache keys on
+      # compiler+flags+source content, not on cargo's unit hash, so even the
+      # capi/js workspaces' independent resolutions hit the same entries).
+      # Downstream jobs restore-only to avoid pushing six near-identical
+      # caches per run into the 10 GB repo cache quota.
+      - name: ccache (lbug bundled C++)
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: lbug-cxx
+          max-size: 1G
 
       # Lint has its own Swatinem key (workspace-lint-v6) separate from the
       # test job (workspace-test-v6). The lint job runs only `cargo check` /
@@ -167,6 +190,15 @@ jobs:
           large-packages: true
           swap-storage: true
           docker-images: true
+
+      # Restore-only: the lint job saves the shared lbug C++ ccache (see the
+      # comment there).
+      - name: ccache (lbug bundled C++, restore-only)
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: lbug-cxx
+          max-size: 1G
+          save: false
 
       # The test job has its own Swatinem key (workspace-test-v6) separate from
       # lint (workspace-lint-v6). The test job runs `cargo nextest` which
@@ -304,6 +336,13 @@ jobs:
       - name: Install protoc
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
 
+      - name: ccache (lbug bundled C++, restore-only)
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: lbug-cxx
+          max-size: 1G
+          save: false
+
       - name: Cache cargo/target (test)
         uses: Swatinem/rust-cache@v2
         with:
@@ -337,6 +376,15 @@ jobs:
         with:
           make-default: true
       - run: sudo apt-get update && sudo apt-get install -y cmake protobuf-compiler
+      # Restore-only: the lint job saves the shared lbug C++ ccache. The capi
+      # workspace resolves its own dep graph, but ccache keys on
+      # compiler+flags+source content, so it hits the same entries.
+      - name: ccache (lbug bundled C++, restore-only)
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: lbug-cxx
+          max-size: 1G
+          save: false
       # The capi workspace has its own target dir (capi/target/) after workspace
       # extraction (D10). Cache it separately from the root workspace so the
       # capi cold-build warm-up seeds subsequent runs.
@@ -370,6 +418,13 @@ jobs:
         with:
           make-default: true
       - run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      # Restore-only: the lint job saves the shared lbug C++ ccache.
+      - name: ccache (lbug bundled C++, restore-only)
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: lbug-cxx
+          max-size: 1G
+          save: false
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: workspace-test-v6
@@ -405,6 +460,15 @@ jobs:
       # cmake is required by the `lbug` crate (pulled in via cognee-lib's
       # `ladybug` feature), whose build.rs compiles bundled C++ with CMake.
       - run: sudo apt-get update && sudo apt-get install -y cmake protobuf-compiler
+      # Restore-only: the lint job saves the shared lbug C++ ccache. The
+      # js/cognee-neon workspace resolves its own dep graph, but ccache keys
+      # on compiler+flags+source content, so it hits the same entries.
+      - name: ccache (lbug bundled C++, restore-only)
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: lbug-cxx
+          max-size: 1G
+          save: false
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: workspace-test-v6

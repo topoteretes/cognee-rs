@@ -118,13 +118,25 @@ ls -dt target/debug/build/lbug-*/out | tail -n +2 | xargs rm -rf
 Stale agent worktrees each hold a 13–18 GB target dir; remove with
 `git worktree remove <path>`.
 
-### CI and Docker (follow-ups, not wired)
+### CI (wired) and Docker (follow-up)
 
-- GitHub Actions: install ccache and cache `~/Library/Caches/ccache` /
-  `~/.cache/ccache` keyed per OS + toolchain; the committed launcher then
-  makes lbug rebuilds cache-hit in CI too.
-- e2e Docker harness: `RUN --mount=type=cache,target=/root/.cache/ccache`
-  plus `ccache` in the builder stage achieves the same for image rebuilds.
+- GitHub Actions (`ci.yml`): every job runs `hendrikmuhs/ccache-action`,
+  which installs ccache (the committed launcher picks it up automatically)
+  and persists the cache via actions/cache. Only the `lint` job — the root
+  of the job DAG — saves; the five downstream jobs restore-only, so each run
+  pushes one ccache blob instead of six near-identical ones into the 10 GB
+  repo cache quota. This matters more in CI than locally: no lockfile is
+  committed, so a `cc`/`cmake` release on crates.io invalidates the Swatinem
+  target caches of **all** jobs at once, and GitHub runners have only 4
+  vCPUs for the from-scratch C++ build. ccache keys on
+  compiler + flags + source content (not cargo's unit hash), so the
+  capi/js workspaces' independent resolutions hit the same entries.
+  `CCACHE_COMPILERCHECK=content` is set workflow-wide because runner-image
+  updates touch `/usr/bin/cc` mtimes, which would invalidate the default
+  mtime-based compiler check.
+- e2e Docker harness (`http-parity.yml`, not wired):
+  `RUN --mount=type=cache,target=/root/.cache/ccache` plus `ccache` in the
+  builder stage would achieve the same for image rebuilds.
 - Rust-side equivalent: `sccache` as `RUSTC_WRAPPER` would also cache the
   ~700 dependency crates across fresh worktree target dirs. Not wired because
   a hard `RUSTC_WRAPPER` breaks machines without sccache; revisit if worktree
