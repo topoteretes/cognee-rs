@@ -54,6 +54,11 @@ add_executable(example_sdk_add_cognify_search example_sdk_add_cognify_search.c)
 target_include_directories(example_sdk_add_cognify_search PRIVATE ${COGNEE_INCLUDE_DIR})
 target_link_libraries(example_sdk_add_cognify_search cognee_capi ${COGNEE_SYSTEM_LIBS})
 
+# Phase 6 data-ops smoke test (Tier-A: mock embedding, no LLM).
+add_executable(sdk_data_smoke sdk_data_smoke.c)
+target_include_directories(sdk_data_smoke PRIVATE ${COGNEE_INCLUDE_DIR})
+target_link_libraries(sdk_data_smoke cognee_capi ${COGNEE_SYSTEM_LIBS})
+
 # Gap 07 smoke binaries (driven by capi/scripts/check.sh).
 #
 # `init_otlp_smoke` and `init_telemetry_smoke` exercise the public C

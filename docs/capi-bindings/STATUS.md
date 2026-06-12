@@ -9,7 +9,7 @@ the 1a completion is recorded in this table's Notes column, the row flips to ✅
 
 **Legend:** ⬜ Not started · 🟡 In progress · 🔵 In review · ⛔ Blocked · ✅ Done
 
-Last updated: 2026-06-12 (step 5 done)
+Last updated: 2026-06-12 (step 6 done)
 
 ## Status table
 
@@ -21,7 +21,7 @@ Last updated: 2026-06-12 (step 5 done)
 | 3 | [Config surface](phase-3-config.md) | ✅ Done | capi-bindings/phase-3-config | 52e3faa | |
 | 4 | [Core ops (add/cognify)](phase-4-core-ops.md) | ✅ Done | capi-bindings/phase-4-core-ops | 37531a0 | |
 | 5 | [Retrieval (search/recall)](phase-5-retrieval.md) | ✅ Done | capi-bindings/phase-5-retrieval | d67c13e | |
-| 6 | [Remaining SDK](phase-6-remaining-sdk.md) | ⬜ | | | |
+| 6 | [Remaining SDK](phase-6-remaining-sdk.md) | ✅ Done | capi-bindings/phase-6-remaining-sdk | 3df6182 | |
 | 7 | [Feature-gated surfaces](phase-7-feature-gated.md) | ⬜ | | | |
 | 8 | [Header, examples, tests & CI](phase-8-header-examples-tests-ci.md) | ⬜ | | | |
 
@@ -93,11 +93,11 @@ above numbers are post-extraction with the full `cognee-lib` dependency.
 - [x] live `add → cognify → search` round-trip from C (Tier-B)
 
 ### Phase 6 — Remaining SDK
-- [ ] remember / remember_entry / memify / improve
-- [ ] forget / update / prune_data / prune_system
-- [ ] 7 dataset ops · 5 session ops
-- [ ] pipeline-run resets · default user · 4 notebook ops
-- [ ] deterministic smoke coverage (datasets/forget/prune) in check.sh
+- [x] remember / remember_entry / memify / improve
+- [x] forget / update / prune_data / prune_system
+- [x] 7 dataset ops · 5 session ops
+- [x] pipeline-run resets · default user · 4 notebook ops
+- [x] deterministic smoke coverage (datasets/forget/prune) in check.sh
 
 ### Phase 7 — Feature-gated surfaces
 - [ ] `cg_sdk_visualize` / `cg_sdk_visualize_to_file` in a `visualization` build
@@ -145,3 +145,4 @@ Record cross-cutting decisions as they're made (one line each), so later phases 
 | 2026-06-11 | **3 review:** cg_sdk_new doc example key names corrected to snake_case after ConfigManager migration; clippy doc-list indentation fixed in sdk_config.rs. | 3 |
 | 2026-06-12 | **4 review:** parse_c_str_or_fire null-guard added (fires callback via spawned task, R1); nested-if clippy warnings collapsed. | 4 |
 | 2026-06-12 | **5 implementation:** module named sdk_retrieval.rs (not sdk_search.rs); parse_c_str_or_fire shared from sdk_ops via pub(crate); Tier-A smoke covers all 15 SearchType strings and 5 RecallScope variants. | 5 |
+| 2026-06-12 | **6 impl:** 27 functions across 4 modules (sdk_memory/sdk_data/sdk_datasets/sdk_admin); CgMemifyTaskFn post-parity extension reserved in header; API version minor bumped to 5. | 6 |

@@ -307,6 +307,45 @@ int main(void)
         }
     }
 
+    /* ── Test 5: cg_sdk_memify ───────────────────────────────────────────── */
+    printf("=== Test 5: cg_sdk_memify ===\n");
+    {
+        CgSdkWaiter *w = cg_sdk_waiter_new();
+        if (!w) { g_failures++; goto cleanup; }
+        cg_sdk_memify(sdk, NULL, cg_sdk_waiter_callback, (void *)w);
+        char *result = NULL;
+        CgErrorCode mrc = cg_sdk_waiter_wait(w, &result);
+        cg_sdk_waiter_destroy(w);
+        ASSERT_EQ(mrc, CG_OK, "cg_sdk_memify must succeed");
+        if (result) {
+            assert_json_contains(result, "\"tripletCount\"",
+                                 "memify result must contain tripletCount key");
+            printf("  cg_sdk_memify result: %.300s\n", result);
+            cg_string_destroy(result);
+        }
+    }
+
+    /* ── Test 6: cg_sdk_remember ─────────────────────────────────────────── */
+    printf("=== Test 6: cg_sdk_remember ===\n");
+    {
+        const char *inputs =
+            "{\"type\":\"text\","
+            " \"text\":\"Cognee is an AI memory library for knowledge graphs.\"}";
+        CgSdkWaiter *w = cg_sdk_waiter_new();
+        if (!w) { g_failures++; goto cleanup; }
+        cg_sdk_remember(sdk, inputs, "acs-dataset", NULL,
+                        cg_sdk_waiter_callback, (void *)w);
+        char *result = NULL;
+        CgErrorCode rrc = cg_sdk_waiter_wait(w, &result);
+        cg_sdk_waiter_destroy(w);
+        ASSERT_EQ(rrc, CG_OK, "cg_sdk_remember must succeed");
+        if (result) {
+            printf("  cg_sdk_remember result: %.300s\n", result);
+            cg_string_destroy(result);
+        }
+    }
+
+cleanup:
     /* ── Cleanup ──────────────────────────────────────────────────────────── */
     cg_sdk_destroy(sdk);
     cg_shutdown();

@@ -156,6 +156,17 @@ fi
 
 echo ""
 echo "================================================================"
+echo "=== Phase 6 data-ops smoke test (Tier-A) ==="
+echo "================================================================"
+
+echo ""
+echo "--- Running: sdk_data_smoke (forget/prune/datasets, MOCK_EMBEDDING=true) ---"
+MOCK_EMBEDDING=true \
+    COGNEE_TRACING_ENABLED="" \
+    "$BUILD_DIR/examples/sdk_data_smoke"
+
+echo ""
+echo "================================================================"
 echo "=== Gap 07 smoke tests (OTLP + analytics init) ==="
 echo "================================================================"
 

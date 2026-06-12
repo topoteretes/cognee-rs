@@ -86,9 +86,10 @@ extern "C" {
  * Minor API version.  Incremented each phase that adds new SDK symbols.
  * Phase 1b = 1 (first SDK symbols); Phase 3 = 2 (config surface);
  * Phase 4 = 3 (add / cognify / add_and_cognify);
- * Phase 5 = 4 (search / recall).
+ * Phase 5 = 4 (search / recall);
+ * Phase 6 = 5 (memory / data / datasets / admin ops).
  */
-#define CG_API_VERSION_MINOR 4
+#define CG_API_VERSION_MINOR 5
 
 /**
  * Return the packed API version as (major << 16) | minor.
@@ -515,6 +516,496 @@ void cg_sdk_recall(const CgSdk*        sdk,
                    const char*         opts_json,
                    CgSdkResultCallback callback,
                    void*               user_data);
+
+/* ── Memory ops (Phase 6) ─────────────────────────────────────────────────── */
+/*
+ * All four ops are async (D4, R1): the callback fires on a tokio worker
+ * thread, never synchronously from the initiating call.
+ *
+ * Wire shapes (camelCase, D3):
+ *
+ *   CogneeDataInput — same discriminated union as cg_sdk_add (see above).
+ *
+ *   RememberResult — JSON object (fields vary; cognify_result/memify_result
+ *     are skipped in serialisation via #[serde(skip)]).
+ *
+ *   MemifyResult — {"tripletCount":N,"indexedCount":N,"batchCount":N,
+ *                    "alreadyCompleted":bool,"priorPipelineRunId":null|"<uuid>"}
+ *
+ *   ImproveResult — {"stagesRun":[…],"memifyResult":…,
+ *                    "feedbackEntriesProcessed":N,"feedbackEntriesApplied":N,
+ *                    "sessionsPersisted":N,"edgesSynced":N}
+ *
+ * NOTE: MemifyTask callbacks (extraction_tasks / enrichment_tasks) are not
+ * exposed in v1 (TS parity scope).  Reserved post-parity extension:
+ *   CgMemifyTaskFn + cg_sdk_memify_with_tasks(…) — ABI can carry it but it
+ *   exceeds TS parity; record in STATUS decision log when Phase 6 lands.
+ */
+
+/**
+ * Add data to memory (ingest + cognify + session persistence).
+ *
+ * inputs_json   — CogneeDataInput object or array (required).
+ * dataset_name  — target dataset name (required).
+ * opts_json     — NULL or JSON object with optional keys:
+ *                 "sessionId" (string), "selfImprovement" (bool),
+ *                 "tenant" (UUID string).
+ *
+ * result_json on success: RememberResult JSON object.
+ *
+ * @param sdk          A valid CgSdk*.  NULL → no-op.
+ * @param inputs_json  Non-null null-terminated UTF-8 JSON string.
+ * @param dataset_name Non-null null-terminated UTF-8 dataset name.
+ * @param opts_json    NULL or null-terminated UTF-8 JSON options object.
+ * @param callback     Called exactly once with the result.
+ * @param user_data    Forwarded to callback unchanged.
+ */
+void cg_sdk_remember(const CgSdk*        sdk,
+                     const char*         inputs_json,
+                     const char*         dataset_name,
+                     const char*         opts_json,
+                     CgSdkResultCallback callback,
+                     void*               user_data);
+
+/**
+ * Store a single memory entry (QA, trace, or feedback).
+ *
+ * entry_json    — discriminated union on "type":
+ *                 {"type":"qa","question":"…","answer":"…",…}
+ *                 {"type":"trace","originFunction":"…","status":"…",…}
+ *                 {"type":"feedback","qaId":"…",…}
+ * dataset_name  — target dataset name (required).
+ * session_id    — session identifier (required).
+ * opts_json     — NULL or JSON object with optional "tenant" (UUID string).
+ *
+ * result_json on success: RememberResult JSON object.
+ *
+ * @param sdk          A valid CgSdk*.
+ * @param entry_json   Non-null null-terminated UTF-8 JSON string.
+ * @param dataset_name Non-null null-terminated UTF-8 dataset name.
+ * @param session_id   Non-null null-terminated UTF-8 session id.
+ * @param opts_json    NULL or null-terminated UTF-8 JSON options object.
+ * @param callback     Called exactly once with the result.
+ * @param user_data    Forwarded to callback unchanged.
+ */
+void cg_sdk_remember_entry(const CgSdk*        sdk,
+                            const char*         entry_json,
+                            const char*         dataset_name,
+                            const char*         session_id,
+                            const char*         opts_json,
+                            CgSdkResultCallback callback,
+                            void*               user_data);
+
+/**
+ * Run the memify pipeline: create triplet embeddings for all graph edges
+ * and index them in the vector DB.  Idempotent.
+ *
+ * opts_json — NULL or JSON object with optional fields:
+ *   "tripletBatchSize" (integer), "nodeTypeFilter" (string),
+ *   "nodeNameFilter" (string array), "nodeNameFilterOperator" (string).
+ *
+ * result_json on success: MemifyResult JSON object (see wire shape above).
+ *
+ * @param sdk       A valid CgSdk*.
+ * @param opts_json NULL or null-terminated UTF-8 JSON options object.
+ * @param callback  Called exactly once with the result.
+ * @param user_data Forwarded to callback unchanged.
+ */
+void cg_sdk_memify(const CgSdk*        sdk,
+                   const char*         opts_json,
+                   CgSdkResultCallback callback,
+                   void*               user_data);
+
+/**
+ * Apply graph improvement based on session feedback.
+ *
+ * opts_json — required JSON object with:
+ *   "datasetName" (string, required),
+ *   "sessionIds"  (string array, optional),
+ *   "nodeName"    (string array, optional),
+ *   "feedbackAlpha" (float, default 0.1),
+ *   "tenant"      (UUID string, optional).
+ *
+ * result_json on success: ImproveResult JSON object (see wire shape above).
+ *
+ * @param sdk       A valid CgSdk*.
+ * @param opts_json Non-null null-terminated UTF-8 JSON object string.
+ * @param callback  Called exactly once with the result.
+ * @param user_data Forwarded to callback unchanged.
+ */
+void cg_sdk_improve(const CgSdk*        sdk,
+                    const char*         opts_json,
+                    CgSdkResultCallback callback,
+                    void*               user_data);
+
+/* ── Data ops (Phase 6) ───────────────────────────────────────────────────── */
+/*
+ * Wire shapes (camelCase, D3):
+ *
+ *   ForgetTarget — discriminated union on "kind":
+ *     {"kind":"item","dataId":"<uuid>","dataset":{"name":"…"}|{"id":"<uuid>"}}
+ *     {"kind":"dataset","dataset":{"name":"…"}|{"id":"<uuid>"}}
+ *     {"kind":"all"}
+ *
+ *   ForgetResult  — {"target":"…","deleteResult":{…}}
+ *
+ *   UpdateResult  — {"deletedDataId":"<uuid>","deleteResult":{…},
+ *                    "newData":[…],"cognifyResult":{…}|null}
+ *
+ *   PruneResult   — {"dataPruned":bool,"graphPruned":bool,"vectorPruned":bool,
+ *                    "metadataPruned":bool,"cachePruned":bool}
+ *
+ *   prune_data    → "null" (D9, void op)
+ */
+
+/**
+ * Delete data from the knowledge graph.
+ *
+ * target_json  — ForgetTarget discriminated union (required, see above).
+ * opts_json    — NULL or JSON object (reserved for future tenant support).
+ *
+ * result_json on success: ForgetResult JSON object.
+ *
+ * @param sdk         A valid CgSdk*.
+ * @param target_json Non-null null-terminated UTF-8 JSON string.
+ * @param opts_json   NULL or null-terminated UTF-8 JSON options object.
+ * @param callback    Called exactly once with the result.
+ * @param user_data   Forwarded to callback unchanged.
+ */
+void cg_sdk_forget(const CgSdk*        sdk,
+                   const char*         target_json,
+                   const char*         opts_json,
+                   CgSdkResultCallback callback,
+                   void*               user_data);
+
+/**
+ * Replace a data item with new content and re-cognify.
+ *
+ * data_id      — UUID string (C string, not JSON — no quotes).
+ * new_data_json— CogneeDataInput object or array.
+ * dataset_name — dataset name.
+ * opts_json    — NULL or JSON object with optional "tenant" (UUID string).
+ *
+ * result_json on success: UpdateResult JSON object.
+ *
+ * @param sdk          A valid CgSdk*.
+ * @param data_id      Non-null null-terminated UTF-8 UUID string (no quotes).
+ * @param new_data_json Non-null null-terminated UTF-8 JSON string.
+ * @param dataset_name Non-null null-terminated UTF-8 dataset name.
+ * @param opts_json    NULL or null-terminated UTF-8 JSON options object.
+ * @param callback     Called exactly once with the result.
+ * @param user_data    Forwarded to callback unchanged.
+ */
+void cg_sdk_update(const CgSdk*        sdk,
+                   const char*         data_id,
+                   const char*         new_data_json,
+                   const char*         dataset_name,
+                   const char*         opts_json,
+                   CgSdkResultCallback callback,
+                   void*               user_data);
+
+/**
+ * Remove all files from data storage.
+ *
+ * result_json on success: "null" (D9 — void op).
+ *
+ * @param sdk       A valid CgSdk*.
+ * @param callback  Called exactly once with the result.
+ * @param user_data Forwarded to callback unchanged.
+ */
+void cg_sdk_prune_data(const CgSdk*        sdk,
+                       CgSdkResultCallback callback,
+                       void*               user_data);
+
+/**
+ * Selective backend cleanup (graph, vector, session cache).
+ *
+ * opts_json — NULL or JSON object with optional boolean fields:
+ *   "pruneGraph"    (default true), "pruneVector"   (default true),
+ *   "pruneMetadata" (default false), "pruneCache"   (default true).
+ *
+ * result_json on success: PruneResult JSON object.
+ *
+ * @param sdk       A valid CgSdk*.
+ * @param opts_json NULL or null-terminated UTF-8 JSON options object.
+ * @param callback  Called exactly once with the result.
+ * @param user_data Forwarded to callback unchanged.
+ */
+void cg_sdk_prune_system(const CgSdk*        sdk,
+                          const char*         opts_json,
+                          CgSdkResultCallback callback,
+                          void*               user_data);
+
+/* ── Dataset management ops (Phase 6) ────────────────────────────────────── */
+/*
+ * All ops are async (D4, R1).
+ *
+ * Wire shapes (camelCase, D3):
+ *   Dataset       — JSON object with "id", "name", and metadata fields.
+ *   Data          — JSON object with "id", "name", and metadata fields.
+ *   DeleteResult  — JSON object with "deletedCount" and metadata fields.
+ *   DatasetStatus — JSON object {"<uuid-str>": "<status-str>", …}
+ *     where status is one of: "INITIATED", "STARTED", "COMPLETED", "ERRORED".
+ *   has_data      → "true" | "false" (D9 strict JSON bool).
+ */
+
+/**
+ * List all datasets for the current owner.
+ *
+ * result_json on success: JSON array of Dataset objects.
+ */
+void cg_sdk_list_datasets(const CgSdk*        sdk,
+                           CgSdkResultCallback callback,
+                           void*               user_data);
+
+/**
+ * List all data items in a dataset.
+ *
+ * dataset_id — UUID string (C string).
+ *
+ * result_json on success: JSON array of Data objects.
+ */
+void cg_sdk_list_data(const CgSdk*        sdk,
+                      const char*         dataset_id,
+                      CgSdkResultCallback callback,
+                      void*               user_data);
+
+/**
+ * Check whether a dataset has any data items.
+ *
+ * dataset_id — UUID string (C string).
+ *
+ * result_json on success: "true" or "false" (D9 strict JSON bool).
+ */
+void cg_sdk_has_data(const CgSdk*        sdk,
+                     const char*         dataset_id,
+                     CgSdkResultCallback callback,
+                     void*               user_data);
+
+/**
+ * Get the pipeline run status for a list of dataset UUIDs.
+ *
+ * dataset_ids_json — JSON array of UUID strings.
+ *
+ * result_json on success: JSON object {"<uuid>": "<status>", …}.
+ */
+void cg_sdk_dataset_status(const CgSdk*        sdk,
+                            const char*         dataset_ids_json,
+                            CgSdkResultCallback callback,
+                            void*               user_data);
+
+/**
+ * Remove all data items from a dataset (keep the dataset itself).
+ *
+ * dataset_id — UUID string (C string).
+ *
+ * result_json on success: DeleteResult JSON object.
+ */
+void cg_sdk_empty_dataset(const CgSdk*        sdk,
+                           const char*         dataset_id,
+                           CgSdkResultCallback callback,
+                           void*               user_data);
+
+/**
+ * Delete a specific data item from a dataset.
+ *
+ * dataset_id — UUID string (C string).
+ * data_id    — UUID string (C string).
+ * opts_json  — NULL or JSON object with optional boolean fields:
+ *              "softDelete" (default false),
+ *              "deleteDatasetIfEmpty" (default false).
+ *
+ * result_json on success: DeleteResult JSON object.
+ */
+void cg_sdk_delete_data(const CgSdk*        sdk,
+                         const char*         dataset_id,
+                         const char*         data_id,
+                         const char*         opts_json,
+                         CgSdkResultCallback callback,
+                         void*               user_data);
+
+/**
+ * Delete all datasets for the current owner.
+ *
+ * result_json on success: JSON array of DeleteResult objects.
+ */
+void cg_sdk_delete_all_datasets(const CgSdk*        sdk,
+                                 CgSdkResultCallback callback,
+                                 void*               user_data);
+
+/* ── Admin / session / pipeline-run / user / notebook ops (Phase 6) ──────── */
+/*
+ * All ops are async (D4, R1).
+ *
+ * Wire shapes (camelCase, D3):
+ *   SessionQAEntry — JSON object with session QA history fields.
+ *   User           — JSON object with user fields.
+ *   Notebook       — JSON object with notebook fields.
+ *   bool results   → "true" | "false" (D9 strict JSON bool).
+ *   void results   → "null" (D9).
+ *   get_graph_context → quoted JSON string "\"<ctx>\"" (D9) or "null" (D9).
+ */
+
+/**
+ * Get session QA history entries.
+ *
+ * session_id — session identifier (required).
+ * opts_json  — NULL or JSON object with optional "lastN" (integer).
+ *
+ * result_json on success: JSON array of SessionQAEntry objects.
+ */
+void cg_sdk_get_session(const CgSdk*        sdk,
+                         const char*         session_id,
+                         const char*         opts_json,
+                         CgSdkResultCallback callback,
+                         void*               user_data);
+
+/**
+ * Add feedback to a QA interaction.
+ *
+ * session_id — session identifier.
+ * qa_id      — QA entry identifier.
+ * opts_json  — NULL or JSON object with optional fields:
+ *              "feedbackText" (string), "feedbackScore" (integer).
+ *
+ * result_json on success: "true" | "false" (D9 strict JSON bool).
+ */
+void cg_sdk_add_feedback(const CgSdk*        sdk,
+                          const char*         session_id,
+                          const char*         qa_id,
+                          const char*         opts_json,
+                          CgSdkResultCallback callback,
+                          void*               user_data);
+
+/**
+ * Delete feedback from a QA interaction.
+ *
+ * session_id — session identifier.
+ * qa_id      — QA entry identifier.
+ * (No opts_json — mirrors neon which also has no opts for this op.)
+ *
+ * result_json on success: "true" | "false" (D9 strict JSON bool).
+ */
+void cg_sdk_delete_feedback(const CgSdk*        sdk,
+                              const char*         session_id,
+                              const char*         qa_id,
+                              CgSdkResultCallback callback,
+                              void*               user_data);
+
+/**
+ * Get the graph context stored in a session.
+ *
+ * session_id — session identifier.
+ * (No opts_json — mirrors neon which also has no opts for this op.)
+ *
+ * result_json on success: quoted JSON string "\"<ctx>\"" (D9) when present,
+ * or "null" (D9) when absent.
+ */
+void cg_sdk_get_graph_context(const CgSdk*        sdk,
+                               const char*         session_id,
+                               CgSdkResultCallback callback,
+                               void*               user_data);
+
+/**
+ * Set the graph context stored in a session.
+ *
+ * session_id — session identifier.
+ * context    — context string to store.
+ * (No opts_json — mirrors neon.)
+ *
+ * result_json on success: "null" (D9 — void op).
+ */
+void cg_sdk_set_graph_context(const CgSdk*        sdk,
+                               const char*         session_id,
+                               const char*         context,
+                               CgSdkResultCallback callback,
+                               void*               user_data);
+
+/**
+ * Reset the pipeline run status for a specific pipeline within a dataset.
+ *
+ * dataset_id    — UUID string (C string).
+ * pipeline_name — pipeline name (C string).
+ *
+ * result_json on success: "null" (D9 — void op).
+ */
+void cg_sdk_reset_pipeline_run_status(const CgSdk*        sdk,
+                                       const char*         dataset_id,
+                                       const char*         pipeline_name,
+                                       CgSdkResultCallback callback,
+                                       void*               user_data);
+
+/**
+ * Reset all pipeline run statuses for a dataset.
+ *
+ * dataset_id — UUID string (C string).
+ *
+ * result_json on success: "null" (D9 — void op).
+ */
+void cg_sdk_reset_dataset_pipeline_run_status(const CgSdk*        sdk,
+                                               const char*         dataset_id,
+                                               CgSdkResultCallback callback,
+                                               void*               user_data);
+
+/**
+ * Get or create the default user account.
+ *
+ * result_json on success: User JSON object.
+ */
+void cg_sdk_get_or_create_default_user(const CgSdk*        sdk,
+                                        CgSdkResultCallback callback,
+                                        void*               user_data);
+
+/**
+ * List all notebooks for the current owner.
+ *
+ * result_json on success: JSON array of Notebook objects.
+ */
+void cg_sdk_list_notebooks(const CgSdk*        sdk,
+                            CgSdkResultCallback callback,
+                            void*               user_data);
+
+/**
+ * Create a new notebook.
+ *
+ * name       — notebook name (required, non-null).
+ * cells_json — NULL (interpreted as []) or a JSON array of cells.
+ * deletable  — non-zero = true, zero = false.
+ *
+ * result_json on success: Notebook JSON object.
+ */
+void cg_sdk_create_notebook(const CgSdk*        sdk,
+                              const char*         name,
+                              const char*         cells_json,
+                              int                 deletable,
+                              CgSdkResultCallback callback,
+                              void*               user_data);
+
+/**
+ * Update a notebook's name and/or cells.
+ *
+ * id         — UUID string (C string).
+ * patch_json — JSON object with optional "name" (string) and/or "cells" (array).
+ *
+ * result_json on success: Notebook JSON object, or "null" (D9) if not found.
+ */
+void cg_sdk_update_notebook(const CgSdk*        sdk,
+                              const char*         id,
+                              const char*         patch_json,
+                              CgSdkResultCallback callback,
+                              void*               user_data);
+
+/**
+ * Delete a notebook by UUID.
+ *
+ * id — UUID string (C string).
+ *
+ * result_json on success: "true" if deleted, "false" if not found (D9).
+ */
+void cg_sdk_delete_notebook(const CgSdk*        sdk,
+                              const char*         id,
+                              CgSdkResultCallback callback,
+                              void*               user_data);
 
 /* ── Config surface (Phase 3, D7) ─────────────────────────────────────────── */
 /*
