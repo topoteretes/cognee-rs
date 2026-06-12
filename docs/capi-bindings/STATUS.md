@@ -9,7 +9,7 @@ the 1a completion is recorded in this table's Notes column, the row flips to ✅
 
 **Legend:** ⬜ Not started · 🟡 In progress · 🔵 In review · ⛔ Blocked · ✅ Done
 
-Last updated: 2026-06-11 (step 3 done)
+Last updated: 2026-06-12 (step 4 done)
 
 ## Status table
 
@@ -19,7 +19,7 @@ Last updated: 2026-06-11 (step 3 done)
 | 1 | [Shared facade & SDK handle](phase-1-shared-facade-and-handle.md) | ✅ Done | capi-bindings/phase-1b-sdk-handle | 297d7ca | keystone · PR-1/1a done: facade hoisted, neon green |
 | 2 | [Errors, async & JSON conventions](phase-2-errors-async-json-conventions.md) | ✅ Done | capi-bindings/phase-2-conventions | 0e0425c | |
 | 3 | [Config surface](phase-3-config.md) | ✅ Done | capi-bindings/phase-3-config | 52e3faa | |
-| 4 | [Core ops (add/cognify)](phase-4-core-ops.md) | ⬜ | | | |
+| 4 | [Core ops (add/cognify)](phase-4-core-ops.md) | ✅ Done | capi-bindings/phase-4-core-ops | TBD | |
 | 5 | [Retrieval (search/recall)](phase-5-retrieval.md) | ⬜ | | | |
 | 6 | [Remaining SDK](phase-6-remaining-sdk.md) | ⬜ | | | |
 | 7 | [Feature-gated surfaces](phase-7-feature-gated.md) | ⬜ | | | |
@@ -82,10 +82,10 @@ above numbers are post-extraction with the full `cognee-lib` dependency.
 - [x] config change bumps version and triggers services rebuild (asserted in smoke test)
 
 ### Phase 4 — Core ops
-- [ ] `cg_sdk_add` (async, waiter in examples) with text/file/binary inputs, dedup, dataset creation
-- [ ] `cg_sdk_cognify`, `cg_sdk_add_and_cognify`
-- [ ] deterministic add example (no LLM) green in check.sh
-- [ ] live `add → cognify` round-trip verified (Tier-B, gated in capi-check per D12)
+- [x] `cg_sdk_add` (async, waiter in examples) with text/file/binary inputs, dedup, dataset creation
+- [x] `cg_sdk_cognify`, `cg_sdk_add_and_cognify`
+- [x] deterministic add example (no LLM) green in check.sh
+- [x] live `add → cognify` round-trip verified (Tier-B, gated in capi-check per D12)
 
 ### Phase 5 — Retrieval
 - [ ] `cg_sdk_search` over all 15 `SearchType` strings
@@ -143,3 +143,4 @@ Record cross-cutting decisions as they're made (one line each), so later phases 
 | 2026-06-11 | **1b review:** R1 deferred-callback violation fixed — warm/owner_id "runtime not initialized" path now uses std::thread::spawn to avoid synchronous callback delivery. | 1 |
 | 2026-06-11 | **2 review:** spawn_sdk_op Err branch fixed to avoid set_last_error on worker thread; stale CG_ERR_VALIDATION references corrected to CG_ERR_SDK_VALIDATION. | 2 |
 | 2026-06-11 | **3 review:** cg_sdk_new doc example key names corrected to snake_case after ConfigManager migration; clippy doc-list indentation fixed in sdk_config.rs. | 3 |
+| 2026-06-12 | **4 review:** parse_c_str_or_fire null-guard added (fires callback via spawned task, R1); nested-if clippy warnings collapsed. | 4 |

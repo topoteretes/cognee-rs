@@ -131,13 +131,18 @@ int main(void)
         return 1;
     }
 
-    /* ── Test 1: API version bump (MINOR = 2 after Phase 3) ─────────────── */
-    printf("=== Test 1: cg_api_version() == (1 << 16) | 2 ===\n");
+    /* ── Test 1: API version check (major=1, minor>=2 after Phase 3) ───────
+     * Accept any minor >= 2 so later phases (Phase 4+) that bump the minor
+     * do not break this Phase-3 test.                                        */
+    printf("=== Test 1: cg_api_version() major=1 minor>=2 ===\n");
     uint32_t ver = cg_api_version();
-    uint32_t want_ver = (1u << 16) | 2u;
-    ASSERT(ver == want_ver, "cg_api_version must return (1<<16)|2 after Phase 3");
-    printf("  cg_api_version() = 0x%08x  %s\n", ver,
-           (ver == want_ver) ? "OK" : "FAIL");
+    uint32_t ver_major = ver >> 16;
+    uint32_t ver_minor = ver & 0xffffu;
+    ASSERT(ver_major == 1u && ver_minor >= 2u,
+           "cg_api_version must return major=1, minor>=2 after Phase 3");
+    printf("  cg_api_version() = 0x%08x (major=%u minor=%u)  %s\n", ver,
+           ver_major, ver_minor,
+           (ver_major == 1u && ver_minor >= 2u) ? "OK" : "FAIL");
 
     /* ── Test 2: cg_sdk_config_set_str ──────────────────────────────────── */
     printf("=== Test 2: cg_sdk_config_set_str / cg_sdk_config_get round-trip ===\n");

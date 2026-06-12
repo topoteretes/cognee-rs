@@ -128,11 +128,16 @@ unsafe impl Sync for CgSdk {}
 
 /// Returns the packed API version as `(major << 16) | minor`.
 ///
-/// Current version: major=1, minor=2 (Phase 3 adds config surface).
+/// Returns the packed API version.
+///
+/// Current version: major=1, minor=3.
+///   Phase 1b = minor 1 (handle lifecycle).
+///   Phase 3  = minor 2 (config surface).
+///   Phase 4  = minor 3 (add / cognify / add_and_cognify).
 /// MINOR increments each phase that ships new symbols.
 #[unsafe(no_mangle)]
 pub extern "C" fn cg_api_version() -> u32 {
-    (1u32 << 16) | 2u32
+    (1u32 << 16) | 3u32
 }
 
 // ── cg_sdk_new ──────────────────────────────────────────────────────────────
@@ -586,12 +591,11 @@ pub unsafe extern "C" fn cg_sdk_waiter_wait(
     // Forward the error message to the calling thread's last-error slot so
     // that callers using the sync-style `cg_last_error_message()` pattern get
     // the message even for async ops routed through the waiter.
-    if code != CgErrorCode::Ok {
-        if let Some(ref err_msg) = owned_err {
-            if let Ok(s) = err_msg.to_str() {
-                set_last_error(s);
-            }
-        }
+    if code != CgErrorCode::Ok
+        && let Some(ref err_msg) = owned_err
+        && let Ok(s) = err_msg.to_str()
+    {
+        set_last_error(s);
     }
 
     // Transfer the owned JSON string to the caller.
@@ -654,7 +658,6 @@ unsafe impl Send for SendUserData {}
 /// If the global runtime is not yet initialised, the error is delivered
 /// through a spawned OS thread to preserve the deferred-callback guarantee
 /// (R1).
-#[allow(dead_code)] // used by future op phases (3–7)
 pub(crate) fn spawn_sdk_op<F>(cb: CgSdkResultCallback, ud: SendUserData, fut: F)
 where
     F: Future<Output = Result<serde_json::Value, SdkError>> + Send + 'static,

@@ -84,9 +84,10 @@ extern "C" {
 
 /**
  * Minor API version.  Incremented each phase that adds new SDK symbols.
- * Phase 1b = 1 (first SDK symbols); Phase 3 = 2 (config surface).
+ * Phase 1b = 1 (first SDK symbols); Phase 3 = 2 (config surface);
+ * Phase 4 = 3 (add / cognify / add_and_cognify).
  */
-#define CG_API_VERSION_MINOR 2
+#define CG_API_VERSION_MINOR 3
 
 /**
  * Return the packed API version as (major << 16) | minor.
@@ -306,6 +307,116 @@ CgSdk* cg_sdk_clone(const CgSdk* sdk);
  * No-op if `sdk` is NULL.
  */
 void cg_sdk_destroy(CgSdk* sdk);
+
+/* ── Core pipeline ops (Phase 4) ──────────────────────────────────────────── */
+/*
+ * All three ops are async (D4, R1): the callback fires on a tokio worker
+ * thread, never synchronously from the initiating call.
+ *
+ * Wire shapes (camelCase, D3):
+ *
+ *   CogneeDataInput  — discriminated union on the "type" field:
+ *     {"type":"text",   "text":"…"}
+ *     {"type":"file",   "path":"…"}
+ *     {"type":"url",    "url":"…"}
+ *     {"type":"binary", "bytes":"<base64>", "name":"…"}
+ *     "bytes" may also be a JSON number array [0..255].
+ *     "s3" and "dataItem" return CG_ERR_UNSUPPORTED (15).
+ *
+ *   CogneeAddResult — {"datasetName":"…","added":[…],"addedCount":N,
+ *                       "deduplicated":[…],"deduplicatedCount":M}
+ *
+ *   CogneeCognifyResult — {"chunks":N,"entities":N,"edges":N,"summaries":N,
+ *                           "embeddings":N,"alreadyCompleted":false,
+ *                           "priorPipelineRunId":null}
+ *
+ * Relative file paths in "file" inputs resolve against the process CWD.
+ * Use absolute paths from C for portability.
+ *
+ * Long-running note: cg_sdk_waiter_wait holds the calling thread for the
+ * full duration of cognify (potentially minutes for large datasets).
+ * Prefer the async callback directly for UI/event-loop contexts.
+ */
+
+/**
+ * Add data to the named dataset.
+ *
+ * inputs_json must be a JSON object (single CogneeDataInput) or a JSON array
+ * of CogneeDataInput objects.  dataset_name is the target dataset name; it is
+ * auto-created if it does not already exist.  opts_json may be NULL or a JSON
+ * object with an optional "tenant" key (UUID string).
+ *
+ * Deduplication: items that were already present in the dataset are returned
+ * in the "deduplicated" array; newly-added items are in "added".
+ *
+ * Async (D4, R1): callback fires exactly once on a tokio worker thread.
+ * result_json on success: CogneeAddResult JSON object.
+ *
+ * @param sdk          A valid CgSdk*.  NULL → no-op (null-check).
+ * @param inputs_json  Null-terminated UTF-8 JSON string (object or array).
+ * @param dataset_name Null-terminated UTF-8 dataset name.
+ * @param opts_json    NULL or null-terminated UTF-8 JSON options object.
+ * @param callback     Called exactly once with the result.
+ * @param user_data    Forwarded to callback unchanged.
+ */
+void cg_sdk_add(const CgSdk*        sdk,
+                const char*         inputs_json,
+                const char*         dataset_name,
+                const char*         opts_json,
+                CgSdkResultCallback callback,
+                void*               user_data);
+
+/**
+ * Run the cognify pipeline on an existing dataset.
+ *
+ * The dataset must already exist (created by a prior cg_sdk_add call).
+ * opts_json may be NULL or a JSON object with optional keys:
+ *   "tenant"         — UUID string
+ *   "chunkSize"      — integer
+ *   "chunkOverlap"   — integer
+ *   "summarization"  — boolean
+ *   "temporalCognify"— boolean
+ *   "triplet"        — boolean
+ *
+ * Async (D4, R1): callback fires exactly once on a tokio worker thread.
+ * result_json on success: CogneeCognifyResult JSON object.
+ *
+ * @param sdk          A valid CgSdk*.
+ * @param dataset_name Null-terminated UTF-8 dataset name.
+ * @param opts_json    NULL or null-terminated UTF-8 JSON options object.
+ * @param callback     Called exactly once with the result.
+ * @param user_data    Forwarded to callback unchanged.
+ */
+void cg_sdk_cognify(const CgSdk*        sdk,
+                    const char*         dataset_name,
+                    const char*         opts_json,
+                    CgSdkResultCallback callback,
+                    void*               user_data);
+
+/**
+ * Add data and immediately cognify — a single combined op.
+ *
+ * Equivalent to cg_sdk_add + cg_sdk_cognify on the same dataset, but cognify
+ * only processes the **newly-added** items.  If all inputs were duplicates,
+ * cognify is skipped and a zeroed CogneeCognifyResult is returned.
+ *
+ * Async (D4, R1): callback fires exactly once on a tokio worker thread.
+ * result_json on success:
+ *   {"add": CogneeAddResult, "cognify": CogneeCognifyResult}
+ *
+ * @param sdk          A valid CgSdk*.
+ * @param inputs_json  Null-terminated UTF-8 JSON string (object or array).
+ * @param dataset_name Null-terminated UTF-8 dataset name.
+ * @param opts_json    NULL or null-terminated UTF-8 JSON options object.
+ * @param callback     Called exactly once with the result.
+ * @param user_data    Forwarded to callback unchanged.
+ */
+void cg_sdk_add_and_cognify(const CgSdk*        sdk,
+                             const char*         inputs_json,
+                             const char*         dataset_name,
+                             const char*         opts_json,
+                             CgSdkResultCallback callback,
+                             void*               user_data);
 
 /* ── Config surface (Phase 3, D7) ─────────────────────────────────────────── */
 /*

@@ -23,6 +23,7 @@ pub mod run_handle;
 pub mod runtime;
 pub mod sdk;
 pub mod sdk_config;
+pub mod sdk_ops;
 pub mod task;
 pub mod task_context;
 pub mod task_info;

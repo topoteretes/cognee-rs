@@ -98,6 +98,35 @@ MOCK_EMBEDDING=true \
 
 echo ""
 echo "================================================================"
+echo "=== Phase 4 core ops smoke test (Tier-A, mock embedding) ==="
+echo "================================================================"
+
+echo ""
+echo "--- Running: example_sdk_add (add/dedup counts, MOCK_EMBEDDING=true) ---"
+MOCK_EMBEDDING=true \
+    COGNEE_TRACING_ENABLED="" \
+    "$BUILD_DIR/examples/example_sdk_add"
+
+echo ""
+echo "================================================================"
+echo "=== Phase 4 live add+cognify (Tier-B, skips without credentials) ==="
+echo "================================================================"
+
+echo ""
+if [ -n "${OPENAI_URL:-}" ] && [ -n "${OPENAI_TOKEN:-}" ]; then
+    echo "--- Running: example_sdk_add_cognify (live, OPENAI_URL set) ---"
+    MOCK_EMBEDDING=true \
+        COGNEE_TRACING_ENABLED="" \
+        "$BUILD_DIR/examples/example_sdk_add_cognify"
+else
+    echo "--- Skipping: example_sdk_add_cognify (OPENAI_URL/OPENAI_TOKEN not set) ---"
+    MOCK_EMBEDDING=true \
+        COGNEE_TRACING_ENABLED="" \
+        "$BUILD_DIR/examples/example_sdk_add_cognify"
+fi
+
+echo ""
+echo "================================================================"
 echo "=== Gap 07 smoke tests (OTLP + analytics init) ==="
 echo "================================================================"
 
