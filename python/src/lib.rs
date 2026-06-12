@@ -1,8 +1,10 @@
 use pyo3::prelude::*;
 
 mod cancellation;
+mod config;
 mod default_subscriber;
 mod error;
+mod json;
 mod logging;
 mod pipeline;
 mod progress;
@@ -25,6 +27,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     default_subscriber::install(m.py());
 
     m.add_class::<sdk::PyCognee>()?;
+    m.add_class::<config::PyCogneeConfig>()?;
     m.add_class::<pipeline::PyPipeline>()?;
     m.add_class::<pipeline::PyPipelineRunHandle>()?;
     m.add_class::<task_context::PyTaskContext>()?;

@@ -57,9 +57,6 @@ pub fn validation_err(msg: String) -> PyErr {
 }
 
 /// Convert a [`ConfigError`] to a Python exception.
-///
-/// Not yet called — will be wired up by the config-surface task (config-surface.md).
-#[allow(dead_code)]
 pub fn config_error_to_py(e: ConfigError) -> PyErr {
     let msg = e.to_string();
     match e {

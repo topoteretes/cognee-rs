@@ -36,6 +36,8 @@ cognee-bindings-common = { path = "../crates/bindings-common", default-features 
 # Full cognee SDK — same feature set as cognee-neon.
 cognee-lib = { path = "../crates/lib", default-features = false }
 serde_json = { workspace = true }
+# bytes/bytearray → base64 in py_to_serde (wire::marshal_bytes expects base64).
+base64 = { workspace = true }
 
 cognee-core = { path = "../crates/core" }
 cognee-database = { path = "../crates/database", features = ["sqlite"] }

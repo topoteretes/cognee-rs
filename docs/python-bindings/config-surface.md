@@ -1,6 +1,6 @@
 # Configuration Surface
 
-## Status: ❌ Not implemented
+## Status: ✅ Implemented
 
 ## What is missing
 
@@ -46,10 +46,27 @@ the SDK handle) that all other operations depend on.
 ### Step 1 — Create `python/src/config.rs`
 
 The config machinery lives on `ConfigManager` (in `cognee_lib::config`), reached through
-`HandleState.cm` (the `ComponentManager`). This is exactly how the C API does it — see
+`HandleState.cm` (an `Arc<ComponentManager>`). This is exactly how the C API does it — see
 `capi/cognee-capi/src/sdk_config.rs:185`: `state.cm.config().set(key_str, value)`. The setters
 take a `serde_json::Value`, and errors are `cognee_lib::config::ConfigError`
 (`UnknownKey` / `TypeMismatch`) — a separate enum from `SdkError`.
+
+Before defining `PyCogneeConfig`, create `python/src/json.rs` with the Python ↔ `serde_json::Value`
+conversion helpers referenced throughout this module. The JS binding's equivalent lives in
+`js/cognee-neon/src/json.rs`. The Python version must implement at least:
+
+- `py_to_serde(val: &Bound<'_, PyAny>) -> PyResult<serde_json::Value>` — converts any Python
+  primitive (str/int/float/bool/list/dict/None) to `serde_json::Value`. Recurse into
+  `PyList`/`PyDict`; map unsupported types to `PyTypeError`.
+- `serde_to_py(py: Python<'_>, val: &serde_json::Value) -> PyResult<PyObject>` — inverse;
+  maps `Value::Object` to `PyDict`, `Value::Array` to `PyList`, primitives to their Python
+  equivalents, `Value::Null` to `py.None()`.
+- `py_to_serde_map(val: &Bound<'_, PyAny>) -> PyResult<HashMap<String, serde_json::Value>>`
+  — wraps `py_to_serde`, errors if result is not an `Object`.
+
+Register the module as `mod json;` in `lib.rs`. The `pythonize` crate is **not** a dependency
+(no entry in `python/Cargo.toml`) and should not be added; implement the conversion directly
+using `pyo3::types::{PyBool, PyDict, PyFloat, PyInt, PyList, PyString}`.
 
 Define a `PyCogneeConfig` PyO3 class that holds an `Arc<HandleState>` (shared with `PyCognee`):
 
@@ -148,16 +165,20 @@ This step can be deferred — `set()` and `set_str()` cover all cases.
 
 ### Step 4 — Error mapping and secret redaction
 
-`CogneeUnknownConfigKeyError` and `CogneeConfigTypeMismatchError` must be registered before this
-module is usable (they map from `ConfigError::UnknownKey` / `ConfigError::TypeMismatch`, not from
-`SdkError`). Ensure `sdk_error.rs` from [sdk-handle.md](sdk-handle.md) is completed first.
+`CogneeUnknownConfigKeyError` and `CogneeConfigTypeMismatchError` are **already defined and
+registered** in `python/src/sdk_error.rs` (T1 output). `config_error_to_py` is also already
+written there (marked `#[allow(dead_code)]` until wired up here). No new exception types are
+needed; just remove the `#[allow(dead_code)]` when calling it from `config.rs`.
 
-The secret-redaction list for `get()` (replace with `"***REDACTED***"`) currently lives in
-capi's `sdk_config.rs`: `llm_api_key`, `embedding_api_key`, `vector_db_key`,
-`vector_db_password`, `graph_database_key`, `graph_database_password`, `db_password`,
-`cache_password`, `default_user_password`, `otel_exporter_otlp_headers`. Hoist the redaction
-helper into `cognee-bindings-common` so all three bindings share one list (same argument as
-the op-body hoist in [core-pipeline-ops.md](core-pipeline-ops.md) Step 0).
+The secret-redaction list for `get()` (replace with `"***REDACTED***"`) currently lives
+**duplicated** in `capi/cognee-capi/src/sdk_config.rs` and `js/cognee-neon/src/config.rs`:
+`llm_api_key`, `embedding_api_key`, `vector_db_key`, `vector_db_password`,
+`graph_database_key`, `graph_database_password`, `db_password`, `cache_password`,
+`default_user_password`, `otel_exporter_otlp_headers`. The plan proposes hoisting this list
+into `cognee-bindings-common`; however, this hoist is **optional** for T2 — it is acceptable
+to define a third local copy in `python/src/config.rs` for now and track the hoist as a
+follow-up cleanup. The `cognee-bindings-common` lib.rs comment explicitly reserves that crate
+for "neon-free" helpers, so a new `config_helpers.rs` sub-module would be needed there.
 
 ### Step 5 — Tests
 

@@ -60,9 +60,9 @@ tracked in [STATUS.md](STATUS.md).
 | SDK handle (`Cognee` / `CgSdk`) | ✅ | ✅ | ✅ | [sdk-handle.md](sdk-handle.md) |
 | `warm()` — engine pre-build | ✅ | ✅ | ✅ | [sdk-handle.md](sdk-handle.md) |
 | `owner_id()` | ✅ | ✅ | ✅ | [sdk-handle.md](sdk-handle.md) |
-| Config surface — granular setters | ✅ | ✅ | ❌ | [config-surface.md](config-surface.md) |
-| Config surface — bulk setters | ✅ | ✅ | ❌ | [config-surface.md](config-surface.md) |
-| Config read-back (`get_config`) | ✅ | ✅ | ❌ | [config-surface.md](config-surface.md) |
+| Config surface — granular setters | ✅ | ✅ | ✅ | [config-surface.md](config-surface.md) |
+| Config surface — bulk setters | ✅ | ✅ | ✅ | [config-surface.md](config-surface.md) |
+| Config read-back (`get_config`) | ✅ | ✅ | ✅ | [config-surface.md](config-surface.md) |
 | `add()` — ingest data | ✅ | ✅ | ❌ | [core-pipeline-ops.md](core-pipeline-ops.md) |
 | `cognify()` — KG extraction | ✅ | ✅ | ❌ | [core-pipeline-ops.md](core-pipeline-ops.md) |
 | `add_and_cognify()` | ✅ | ✅ | ❌ | [core-pipeline-ops.md](core-pipeline-ops.md) |

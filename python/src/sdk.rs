@@ -14,6 +14,7 @@ use cognee_bindings_common::HandleState;
 use cognee_lib::config::ConfigManager;
 use pyo3::prelude::*;
 
+use crate::config::PyCogneeConfig;
 use crate::sdk_error::{sdk_error_to_py, validation_err};
 
 // ── Settings overlay helper ───────────────────────────────────────────────────
@@ -72,6 +73,8 @@ fn apply_settings_json_patch(
 #[pyclass(name = "Cognee")]
 pub struct PyCognee {
     pub(crate) inner: Arc<HandleState>,
+    /// Pre-built config handle that shares `inner` — returned by the `config` property.
+    config: Py<PyCogneeConfig>,
 }
 
 #[pymethods]
@@ -83,16 +86,34 @@ impl PyCognee {
     /// ``None`` or omit the argument to use environment defaults only.
     #[new]
     #[pyo3(signature = (settings=None))]
-    fn new(settings: Option<&str>) -> PyResult<Self> {
+    fn new(py: Python<'_>, settings: Option<&str>) -> PyResult<Self> {
         // 3-way overlay: defaults < env < JSON object.
         let base = ConfigManager::from_env().read().clone();
         let resolved = match settings {
             None => base,
             Some(json) => apply_settings_json_patch(base, json).map_err(validation_err)?,
         };
-        Ok(Self {
-            inner: Arc::new(HandleState::from_settings(resolved)),
-        })
+        let inner = Arc::new(HandleState::from_settings(resolved));
+        let config = Py::new(
+            py,
+            PyCogneeConfig {
+                inner: Arc::clone(&inner),
+            },
+        )?;
+        Ok(Self { inner, config })
+    }
+
+    /// The configuration surface for this handle.
+    ///
+    /// Use this to set or read back configuration keys:
+    ///
+    /// .. code-block:: python
+    ///
+    ///     cognee.config.set_str("llm_api_key", "sk-...")
+    ///     cfg = cognee.config.get()
+    #[getter]
+    fn config(&self, py: Python<'_>) -> Py<PyCogneeConfig> {
+        self.config.clone_ref(py)
     }
 
     /// Build engines and resolve the default user.

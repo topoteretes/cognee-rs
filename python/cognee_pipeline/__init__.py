@@ -13,6 +13,8 @@ minimal ``tracing_subscriber::Registry`` that forwards every Rust
 from cognee_pipeline._native import (
     # SDK handle
     Cognee,
+    # SDK config surface
+    CogneeConfig,
     # SDK-tier exceptions (CogneeError hierarchy)
     CogneeError,
     CogneeComponentError,
@@ -43,6 +45,8 @@ from cognee_pipeline._native import (
 __all__ = [
     # SDK handle
     "Cognee",
+    # SDK config surface
+    "CogneeConfig",
     # SDK-tier exceptions
     "CogneeError",
     "CogneeComponentError",
