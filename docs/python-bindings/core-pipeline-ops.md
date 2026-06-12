@@ -34,18 +34,18 @@ All three accept a `CogneeDataInput` — a discriminated union on `type`:
 
 ### Result types
 
-**Add result** (maps to `CogneeAddResult`):
+**Add result** (maps to `CogneeAddResult`): all keys are **camelCase** (matches TS/C API parity):
 ```python
 {
-    "dataset_name": str,
+    "datasetName": str,
     "added": [...],           # list of Data objects
-    "added_count": int,
+    "addedCount": int,
     "deduplicated": [...],    # items skipped as duplicates
-    "deduplicated_count": int,
+    "deduplicatedCount": int,
 }
 ```
 
-**Cognify result** (maps to `CogneeCognifyResult`):
+**Cognify result** (maps to `CogneeCognifyResult`): all keys are **camelCase**:
 ```python
 {
     "chunks": int,
@@ -53,17 +53,17 @@ All three accept a `CogneeDataInput` — a discriminated union on `type`:
     "edges": int,
     "summaries": int,
     "embeddings": int,
-    "already_completed": bool,
-    "prior_pipeline_run_id": str | None,
+    "alreadyCompleted": bool,
+    "priorPipelineRunId": str | None,
 }
 ```
 
-**Cognify options** (`opts` dict):
+**Cognify options** (`opts` dict): all keys are **camelCase** (matches C API and TS surface):
 - `tenant` (str UUID) — tenant isolation
-- `chunk_size` (int)
-- `chunk_overlap` (int)
+- `chunkSize` (int)
+- `chunkOverlap` (int)
 - `summarization` (bool)
-- `temporal_cognify` (bool)
+- `temporalCognify` (bool)
 - `triplet` (bool) — index triplet embeddings during cognify
 
 ## Rationale
@@ -114,30 +114,18 @@ If the hoist is deemed too risky as a first step, the fallback is to port the lo
 into `python/src/` — acceptable short-term, but it triples the maintenance surface and is exactly
 the drift the bindings-common crate was created to prevent.
 
-### Step 1 — Define Python-to-JSON helpers
+### Step 1 — Python-to-JSON helpers (already implemented — no action needed)
 
-Create `python/src/marshal.rs` with utilities shared across all SDK ops:
+`python/src/json.rs` already provides `py_to_serde` and `serde_to_py` (and `py_to_serde_map`) as
+`pub(crate)` functions using a direct PyObject tree walk (faster and more correct than a
+`json.dumps` round-trip). These are the helpers to use in `sdk_ops.rs`:
 
 ```rust
-/// Convert a Python dict / list / scalar to a serde_json::Value
-/// (simplest implementation: json.dumps in Python, serde_json::from_str in Rust).
-pub fn py_to_serde(obj: &Bound<'_, PyAny>) -> PyResult<serde_json::Value> {
-    let py = obj.py();
-    let json = py.import("json")?;
-    let s: String = json.call_method1("dumps", (obj,))?.extract()?;
-    serde_json::from_str(&s)
-        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
-}
-
-/// Convert a serde_json::Value into a Python object (dict/list/scalar).
-pub fn serde_to_py(py: Python<'_>, value: &serde_json::Value) -> PyResult<PyObject> {
-    let json_mod = py.import("json")?;
-    let s = value.to_string();
-    json_mod.call_method1("loads", (s,)).map(|o| o.into())
-}
+// In python/src/sdk_ops.rs:
+use crate::json::{py_to_serde, serde_to_py};
 ```
 
-These are used by every SDK-tier operation to avoid repeating the pattern.
+No new file or new functions are needed for this step.
 
 ### Step 2 — Create `python/src/sdk_ops.rs`
 
@@ -145,7 +133,7 @@ These are used by every SDK-tier operation to avoid repeating the pattern.
 use pyo3::prelude::*;
 use std::sync::Arc;
 use cognee_bindings_common::{HandleState, ops};
-use crate::marshal::{py_to_serde, serde_to_py};
+use crate::json::{py_to_serde, serde_to_py};
 use crate::sdk_error::sdk_error_to_py;
 
 /// Called as a method on PyCognee. Signature:
@@ -172,9 +160,9 @@ pub fn py_sdk_add<'py>(
 // Similar structure for py_sdk_cognify and py_sdk_add_and_cognify
 ```
 
-Note the helpers convert between Python objects and `serde_json::Value` (via `json.dumps` /
-`json.loads` round-trips, or a direct visitor) — the shared op functions take serde values, not
-strings, so the Python layer should too.
+Note the helpers convert between Python objects and `serde_json::Value` using the direct tree-walk
+functions in `crate::json` — the shared op functions take serde values, not strings, so the Python
+layer converts at the boundary and passes typed values through.
 
 ### Step 3 — Wire into `PyCognee`
 
@@ -241,25 +229,41 @@ The simplest approach (matching TS): return the dict as-is with camelCase keys a
 
 ### Step 6 — Tests
 
-Add `python/tests/test_core_ops.py` (requires `MOCK_EMBEDDING=true`, no real LLM needed for add):
+Add `python/tests/test_core_ops.py` (requires `MOCK_EMBEDDING=true`, no real LLM needed for add).
+
+Note: `python/tests/conftest.py` currently only has a `ctx` fixture (for PyTaskContext). The test
+file must define its own `cognee` fixture (or add one to `conftest.py`):
 
 ```python
+import os, pytest, cognee_pipeline as cp
+
+@pytest.fixture
+async def cognee(tmp_path):
+    """Fresh Cognee handle per test, using a tmp dir for isolation."""
+    c = cp.Cognee(f'{{"db_path": "{tmp_path}/cognee.db"}}')
+    await c.warm()
+    return c
+
+@pytest.mark.asyncio
 async def test_add_text(cognee):
     result = await cognee.add({"type": "text", "text": "Hello world"}, "test_ds")
     assert result["addedCount"] == 1
 
+@pytest.mark.asyncio
 async def test_add_list(cognee):
     inputs = [{"type": "text", "text": "A"}, {"type": "text", "text": "B"}]
     result = await cognee.add(inputs, "test_ds")
     assert result["addedCount"] == 2
 
+@pytest.mark.asyncio
 async def test_deduplicate(cognee):
     await cognee.add({"type": "text", "text": "Same"}, "ds")
     result = await cognee.add({"type": "text", "text": "Same"}, "ds")
     assert result["deduplicatedCount"] == 1
 
+@pytest.mark.asyncio
 async def test_unsupported_type(cognee):
-    with pytest.raises(CogneeUnsupportedError):
+    with pytest.raises(cp.CogneeUnsupportedError):
         await cognee.add({"type": "s3", "bucket": "foo", "key": "bar"}, "ds")
 ```
 

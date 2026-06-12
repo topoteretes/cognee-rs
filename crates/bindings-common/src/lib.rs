@@ -20,6 +20,7 @@
 
 pub mod error;
 pub mod handle;
+pub mod ops;
 pub mod services;
 pub mod wire;
 
