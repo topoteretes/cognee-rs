@@ -55,6 +55,9 @@ __pycache__/
 # Local scratch workspace files
 .tmp/
 
+# Runtime data storage (created by CLI in cwd)
+.data_storage/
+
 # Generated Locust benchmark artifacts
 e2e-cross-sdk/performance/locust/results/
 results/

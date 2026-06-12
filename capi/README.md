@@ -184,5 +184,4 @@ See the engine examples under `examples/example_sync_task.c`, `example_pipeline.
 ## See also
 
 - Headers: [`include/cognee_sdk.h`](include/cognee_sdk.h), [`include/cognee.h`](include/cognee.h)
-- Phase docs: [`../docs/capi-bindings/`](../docs/capi-bindings/)
 - Observability: [`../docs/observability/opentelemetry.md`](../docs/observability/opentelemetry.md)

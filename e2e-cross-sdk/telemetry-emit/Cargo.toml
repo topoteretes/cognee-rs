@@ -3,7 +3,7 @@ name = "cognee-telemetry-emit"
 version.workspace = true
 edition.workspace = true
 publish = false
-description = "Harness-only binary that drives cognee_lib::telemetry::send_telemetry once with fixed args. Used by the e2e-cross-sdk telemetry parity test (see docs/telemetry/02/10-cross-sdk-parity.md). Not part of the production CLI."
+description = "Harness-only binary that drives cognee_lib::telemetry::send_telemetry once with fixed args. Used by the e2e-cross-sdk telemetry parity tests. Not part of the production CLI."
 
 [[bin]]
 name = "cognee-telemetry-emit"
