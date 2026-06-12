@@ -5,5 +5,6 @@
 //! settling, PyO3 `future_into_py`, etc.) live in the individual binding
 //! crates and call through to these shared functions.
 
+pub mod data;
 pub mod pipeline;
 pub mod retrieval;

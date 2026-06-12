@@ -198,7 +198,7 @@ fn snake_to_camel(s: &str) -> String {
 ///
 /// Only the top-level keys are normalised — nested objects are left as-is.
 /// Non-object values are unchanged.
-fn snake_to_camel_keys(val: &mut serde_json::Value) {
+pub(crate) fn snake_to_camel_keys(val: &mut serde_json::Value) {
     if let serde_json::Value::Object(map) = val {
         let pairs: Vec<(String, serde_json::Value)> = map
             .iter()

@@ -72,10 +72,10 @@ tracked in [STATUS.md](STATUS.md).
 | `remember_entry()` — typed entries | ✅ | ✅ | ❌ | [memory-ops.md](memory-ops.md) |
 | `memify()` — triplet embeddings | ✅ | ✅ | ❌ | [memory-ops.md](memory-ops.md) |
 | `improve()` — session-graph bridge | ✅ | ✅ | ❌ | [memory-ops.md](memory-ops.md) |
-| `forget()` — unified deletion | ✅ | ✅ | ❌ | [data-ops.md](data-ops.md) |
-| `update()` — replace data item | ✅ | ✅ | ❌ | [data-ops.md](data-ops.md) |
-| `prune_data()` — wipe files | ✅ | ✅ | ❌ | [data-ops.md](data-ops.md) |
-| `prune_system()` — selective wipe | ✅ | ✅ | ❌ | [data-ops.md](data-ops.md) |
+| `forget()` — unified deletion | ✅ | ✅ | ✅ | [data-ops.md](data-ops.md) |
+| `update()` — replace data item | ✅ | ✅ | ✅ | [data-ops.md](data-ops.md) |
+| `prune_data()` — wipe files | ✅ | ✅ | ✅ | [data-ops.md](data-ops.md) |
+| `prune_system()` — selective wipe | ✅ | ✅ | ✅ | [data-ops.md](data-ops.md) |
 | `list_datasets()` | ✅ | ✅ | ❌ | [dataset-management.md](dataset-management.md) |
 | `list_data(dataset_id)` | ✅ | ✅ | ❌ | [dataset-management.md](dataset-management.md) |
 | `has_data(dataset_id)` | ✅ | ✅ | ❌ | [dataset-management.md](dataset-management.md) |
