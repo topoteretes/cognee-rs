@@ -6,3 +6,4 @@
 //! crates and call through to these shared functions.
 
 pub mod pipeline;
+pub mod retrieval;

@@ -17,7 +17,7 @@ use cognee_bindings_common::HandleState;
 use cognee_bindings_common::ops::pipeline;
 use pyo3::prelude::*;
 
-use crate::json::{normalise_inputs, opts_to_json, serde_to_py};
+use crate::json::{normalise_inputs, opts_to_camel_json, serde_to_py};
 use crate::sdk::PyCognee;
 use crate::sdk_error::sdk_error_to_py;
 
@@ -34,7 +34,7 @@ pub fn py_sdk_add<'py>(
     opts: Option<Bound<'py, PyAny>>,
 ) -> PyResult<Bound<'py, PyAny>> {
     let inputs_json = normalise_inputs(&inputs)?;
-    let opts_json = opts_to_json(opts)?;
+    let opts_json = opts_to_camel_json(opts)?;
     let dataset = dataset_name.to_owned();
 
     pyo3_async_runtimes::tokio::future_into_py(py, async move {
@@ -52,7 +52,7 @@ pub fn py_sdk_cognify<'py>(
     dataset_name: &str,
     opts: Option<Bound<'py, PyAny>>,
 ) -> PyResult<Bound<'py, PyAny>> {
-    let opts_json = opts_to_json(opts)?;
+    let opts_json = opts_to_camel_json(opts)?;
     let dataset = dataset_name.to_owned();
 
     pyo3_async_runtimes::tokio::future_into_py(py, async move {
@@ -72,7 +72,7 @@ pub fn py_sdk_add_and_cognify<'py>(
     opts: Option<Bound<'py, PyAny>>,
 ) -> PyResult<Bound<'py, PyAny>> {
     let inputs_json = normalise_inputs(&inputs)?;
-    let opts_json = opts_to_json(opts)?;
+    let opts_json = opts_to_camel_json(opts)?;
     let dataset = dataset_name.to_owned();
 
     pyo3_async_runtimes::tokio::future_into_py(py, async move {
@@ -132,9 +132,10 @@ impl PyCognee {
     /// ``summaries``, ``embeddings``, ``alreadyCompleted``, and
     /// ``priorPipelineRunId`` (all camelCase).
     ///
-    /// Supported ``opts`` keys (camelCase):
+    /// Supported ``opts`` keys:
     /// ``tenant``, ``chunkSize``, ``chunkOverlap``, ``summarization``,
-    /// ``temporalCognify``, ``triplet``.
+    /// ``temporalCognify``, ``triplet`` — ``snake_case`` spellings
+    /// (``chunk_size``, …) are accepted too and normalised automatically.
     #[pyo3(signature = (dataset_name, opts=None))]
     fn cognify<'py>(
         &self,

@@ -1,6 +1,6 @@
 # Retrieval Operations: search, recall
 
-## Status: ❌ Not implemented
+## Status: ✅ Implemented
 
 ## What is missing
 
@@ -66,13 +66,13 @@ opts = {
 
 **Search** result: JSON array or object (pass-through from Rust serde, matches TS `CogneeSearchResponse`).
 
-**Recall** result:
+**Recall** result (camelCase keys — matches C API and TS wire shape):
 ```python
 {
     "items": [...],
-    "search_type_used": str | None,
-    "auto_routed": bool,
-    "search_response": dict | None,
+    "searchTypeUsed": str | None,
+    "autoRouted": bool,
+    "searchResponse": dict | None,
 }
 ```
 
@@ -85,28 +85,35 @@ the SDK.
 
 ## Implementation plan
 
-**Prerequisite:** hoist the search/recall op bodies from `capi/cognee-capi/src/sdk_retrieval.rs`
-(SearchType parsing, `ScopeInput` building, `SearchRequest` assembly) into
-`cognee_bindings_common::ops` — see [core-pipeline-ops.md](core-pipeline-ops.md) Step 0.
+**Prerequisite (T3 done):** `crates/bindings-common/src/ops/pipeline.rs` (add/cognify) already
+exists. The analogous hoist for retrieval must be done as part of T4: extract the private
+`run_search` / `run_recall` helpers from `capi/cognee-capi/src/sdk_retrieval.rs` into a new
+`crates/bindings-common/src/ops/retrieval.rs` submodule and expose them as
+`cognee_bindings_common::ops::retrieval::search` / `::recall`. Follow the same Step-0 pattern
+documented in [core-pipeline-ops.md](core-pipeline-ops.md).
 
 Note one behaviour detail from the capi implementation worth preserving: a `userId` key in opts
 is ignored — `SearchRequest.user_id` is always populated from the handle's `owner_id` so that
-dataset-name resolution works (`capi/cognee-capi/src/sdk_retrieval.rs:343`).
+dataset-name resolution works (see `build_search_request` in
+`capi/cognee-capi/src/sdk_retrieval.rs`, and the comment at the `cg_sdk_search` doc block on
+line 343).
 
 ### Step 1 — Create `python/src/sdk_retrieval.rs`
 
 Follow the same pattern as `sdk_ops.rs` from [core-pipeline-ops.md](core-pipeline-ops.md):
 
 ```rust
+// opts follow the same pattern as sdk_ops.rs: None/PyNone → Value::Null (not Option).
+// ops::retrieval::search takes `opts: &serde_json::Value` (Null = no options).
 pub fn py_sdk_search<'py>(
     py: Python<'py>,
     handle: Arc<HandleState>,
     query: String,
     opts: Option<Bound<'py, PyAny>>,
 ) -> PyResult<Bound<'py, PyAny>> {
-    let opts_value = opts.map(|o| py_to_serde(&o)).transpose()?;
+    let opts_json = opts_to_json(opts)?;  // reuse the opts_to_json helper from sdk_ops.rs
     pyo3_async_runtimes::tokio::future_into_py(py, async move {
-        let result = ops::search(&handle, &query, opts_value.as_ref())
+        let result = ops::retrieval::search(&handle, &query, &opts_json)
             .await
             .map_err(sdk_error_to_py)?;
         Python::with_gil(|py| serde_to_py(py, &result))
@@ -118,7 +125,7 @@ pub fn py_sdk_recall<'py>(
     handle: Arc<HandleState>,
     query: String,
     opts: Option<Bound<'py, PyAny>>,
-) -> PyResult<Bound<'py, PyAny>> { /* same pattern, ops::recall */ }
+) -> PyResult<Bound<'py, PyAny>> { /* same pattern, ops::retrieval::recall */ }
 ```
 
 ### Step 2 — Wire into `PyCognee`
@@ -143,10 +150,11 @@ fn recall<'py>(&self, py: Python<'py>, query: String, opts: Option<Bound<'py, Py
 
 Python users will naturally use `snake_case` keys (`search_type`, `top_k`). The Rust layer
 (inherited from C API and TS) expects `camelCase` JSON keys (`searchType`, `topK`). Add a
-normalisation layer in `marshal.rs`:
+normalisation helper in `python/src/json.rs` (the existing conversion module — there is no
+`marshal.rs`):
 
 ```rust
-pub fn snake_opts_to_serde(opts: &Bound<'_, PyAny>) -> PyResult<serde_json::Value> {
+pub(crate) fn snake_opts_to_serde(opts: &Bound<'_, PyAny>) -> PyResult<serde_json::Value> {
     let mut value = py_to_serde(opts)?;
     // convert top-level object keys: snake_case → camelCase
     snake_to_camel_keys(&mut value);
@@ -195,7 +203,7 @@ async def test_search_unknown_type(cognee):
 async def test_recall_basic(cognee_with_data):
     result = await cognee_with_data.recall("What is X?")
     assert "items" in result
-    assert "auto_routed" in result
+    assert "autoRouted" in result
 ```
 
 ### Acceptance criteria
@@ -203,5 +211,5 @@ async def test_recall_basic(cognee_with_data):
 - `await cognee.search("query")` returns a list or dict without raising
 - `search_type` option accepts all 15 string variants (case-sensitive)
 - An unknown `search_type` raises `CogneeValidationError`
-- `await cognee.recall("query")` returns a dict with `items`, `auto_routed`, `search_type_used`
+- `await cognee.recall("query")` returns a dict with `items`, `autoRouted`, `searchTypeUsed`
 - `SearchType.GRAPH_COMPLETION` (or equivalent) is importable as a constant

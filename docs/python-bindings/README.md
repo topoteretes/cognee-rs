@@ -66,8 +66,8 @@ tracked in [STATUS.md](STATUS.md).
 | `add()` — ingest data | ✅ | ✅ | ✅ | [core-pipeline-ops.md](core-pipeline-ops.md) |
 | `cognify()` — KG extraction | ✅ | ✅ | ✅ | [core-pipeline-ops.md](core-pipeline-ops.md) |
 | `add_and_cognify()` | ✅ | ✅ | ✅ | [core-pipeline-ops.md](core-pipeline-ops.md) |
-| `search()` — 15 search types | ✅ | ✅ | ❌ | [retrieval-ops.md](retrieval-ops.md) |
-| `recall()` — session-first routing | ✅ | ✅ | ❌ | [retrieval-ops.md](retrieval-ops.md) |
+| `search()` — 15 search types | ✅ | ✅ | ✅ | [retrieval-ops.md](retrieval-ops.md) |
+| `recall()` — session-first routing | ✅ | ✅ | ✅ | [retrieval-ops.md](retrieval-ops.md) |
 | `remember()` — add+cognify+improve | ✅ | ✅ | ❌ | [memory-ops.md](memory-ops.md) |
 | `remember_entry()` — typed entries | ✅ | ✅ | ❌ | [memory-ops.md](memory-ops.md) |
 | `memify()` — triplet embeddings | ✅ | ✅ | ❌ | [memory-ops.md](memory-ops.md) |
