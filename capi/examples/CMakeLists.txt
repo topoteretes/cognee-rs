@@ -83,3 +83,28 @@ if(COGNEE_BUILD_PANIC_SMOKE)
     target_include_directories(panic_hook_smoke PRIVATE ${COGNEE_INCLUDE_DIR})
     target_link_libraries(panic_hook_smoke cognee_capi ${COGNEE_SYSTEM_LIBS})
 endif()
+
+# Phase 7 feature-gated smoke test.
+#
+# Default build: sdk_feature_smoke links the full feature set and verifies
+#   that cg_sdk_visualize / cg_sdk_serve / cg_sdk_disconnect fire their
+#   callbacks, and that cg_json_string_decode round-trips correctly.
+#
+# Slim build (built in a separate CMake dir by check.sh with
+#   -DCOGNEE_CAPI_NO_DEFAULT_FEATURES=ON -DCOGNEE_CAPI_CARGO_FEATURES=sqlite,testing):
+#   sdk_feature_smoke_slim compiles the same source with
+#   -DEXPECT_FEATURE_NOT_BUILT=1 so that it asserts CG_ERR_FEATURE_NOT_BUILT
+#   from all four feature-gated ops.
+add_executable(sdk_feature_smoke sdk_feature_smoke.c)
+target_include_directories(sdk_feature_smoke PRIVATE ${COGNEE_INCLUDE_DIR})
+target_link_libraries(sdk_feature_smoke cognee_capi ${COGNEE_SYSTEM_LIBS})
+
+# The slim variant is only built in the slim CMake configuration
+# (COGNEE_CAPI_NO_DEFAULT_FEATURES=ON).  We gate it on that flag so the
+# default build does not try to link an incompatible symbol set.
+if(COGNEE_CAPI_NO_DEFAULT_FEATURES)
+    add_executable(sdk_feature_smoke_slim sdk_feature_smoke.c)
+    target_include_directories(sdk_feature_smoke_slim PRIVATE ${COGNEE_INCLUDE_DIR})
+    target_link_libraries(sdk_feature_smoke_slim cognee_capi ${COGNEE_SYSTEM_LIBS})
+    target_compile_definitions(sdk_feature_smoke_slim PRIVATE EXPECT_FEATURE_NOT_BUILT=1)
+endif()

@@ -9,7 +9,7 @@ the 1a completion is recorded in this table's Notes column, the row flips to ✅
 
 **Legend:** ⬜ Not started · 🟡 In progress · 🔵 In review · ⛔ Blocked · ✅ Done
 
-Last updated: 2026-06-12 (step 6 done)
+Last updated: 2026-06-12 (step 7 done)
 
 ## Status table
 
@@ -22,7 +22,7 @@ Last updated: 2026-06-12 (step 6 done)
 | 4 | [Core ops (add/cognify)](phase-4-core-ops.md) | ✅ Done | capi-bindings/phase-4-core-ops | 37531a0 | |
 | 5 | [Retrieval (search/recall)](phase-5-retrieval.md) | ✅ Done | capi-bindings/phase-5-retrieval | d67c13e | |
 | 6 | [Remaining SDK](phase-6-remaining-sdk.md) | ✅ Done | capi-bindings/phase-6-remaining-sdk | cb8a6cd | |
-| 7 | [Feature-gated surfaces](phase-7-feature-gated.md) | ⬜ | | | |
+| 7 | [Feature-gated surfaces](phase-7-feature-gated.md) | ✅ Done | capi-bindings/phase-7-feature-gated | 826a841 | |
 | 8 | [Header, examples, tests & CI](phase-8-header-examples-tests-ci.md) | ⬜ | | | |
 
 ## Phase 0 baselines (task 6)
@@ -100,10 +100,10 @@ above numbers are post-extraction with the full `cognee-lib` dependency.
 - [x] deterministic smoke coverage (datasets/forget/prune) in check.sh
 
 ### Phase 7 — Feature-gated surfaces
-- [ ] `cg_sdk_visualize` / `cg_sdk_visualize_to_file` in a `visualization` build
-- [ ] `cg_sdk_serve` / `cg_sdk_disconnect` in a `cloud` build
-- [ ] `cg_json_string_decode` utility shipped + covered in the smoke test (R8)
-- [ ] non-feature builds return `CG_ERR_FEATURE_NOT_BUILT` (symbol always present)
+- [x] `cg_sdk_visualize` / `cg_sdk_visualize_to_file` in a `visualization` build
+- [x] `cg_sdk_serve` / `cg_sdk_disconnect` in a `cloud` build
+- [x] `cg_json_string_decode` utility shipped + covered in the smoke test (R8)
+- [x] non-feature builds return `CG_ERR_FEATURE_NOT_BUILT` (symbol always present)
 
 ### Phase 8 — Header, examples, tests & CI
 - [ ] `cognee.h` + `cognee_sdk.h` regenerated; CI freshness check covers both
@@ -146,3 +146,4 @@ Record cross-cutting decisions as they're made (one line each), so later phases 
 | 2026-06-12 | **4 review:** parse_c_str_or_fire null-guard added (fires callback via spawned task, R1); nested-if clippy warnings collapsed. | 4 |
 | 2026-06-12 | **5 implementation:** module named sdk_retrieval.rs (not sdk_search.rs); parse_c_str_or_fire shared from sdk_ops via pub(crate); Tier-A smoke covers all 15 SearchType strings and 5 RecallScope variants. | 5 |
 | 2026-06-12 | **6 impl:** 27 functions across 4 modules (sdk_memory/sdk_data/sdk_datasets/sdk_admin); CgMemifyTaskFn post-parity extension reserved in header; API version minor bumped to 5. | 6 |
+| 2026-06-12 | **7 impl:** visualization + cloud feature-gated stubs (CG_ERR_FEATURE_NOT_BUILT=16 via spawned task); cg_json_string_decode utility (R8 delivered); API version minor bumped to 6. | 7 |

@@ -87,9 +87,10 @@ extern "C" {
  * Phase 1b = 1 (first SDK symbols); Phase 3 = 2 (config surface);
  * Phase 4 = 3 (add / cognify / add_and_cognify);
  * Phase 5 = 4 (search / recall);
- * Phase 6 = 5 (memory / data / datasets / admin ops).
+ * Phase 6 = 5 (memory / data / datasets / admin ops);
+ * Phase 7 = 6 (visualize / serve / disconnect / cg_json_string_decode).
  */
-#define CG_API_VERSION_MINOR 5
+#define CG_API_VERSION_MINOR 6
 
 /**
  * Return the packed API version as (major << 16) | minor.
@@ -1134,6 +1135,171 @@ CgErrorCode cg_sdk_config_set_graph_db_config(const CgSdk* sdk,
  * @return CG_OK on success; CG_ERR_NULL_POINTER, CG_ERR_RUNTIME on failure.
  */
 CgErrorCode cg_sdk_config_get(const CgSdk* sdk, char** out_json);
+
+/* ── Visualization ops (Phase 7, `visualization` feature) ─────────────────── */
+/*
+ * Both ops are async (D4, R1): the callback fires on a tokio worker thread,
+ * never synchronously from the initiating call.
+ *
+ * When the `visualization` feature was not compiled in, both functions fire
+ * the callback with CG_ERR_FEATURE_NOT_BUILT (16) and a descriptive message.
+ *
+ * Wire shapes (camelCase, D3, D9):
+ *
+ *   opts_json     — NULL or {"destinationPath?": "<path>"}
+ *
+ *   cg_sdk_visualize result       — quoted JSON string of the full HTML doc:
+ *                                   "\"<!DOCTYPE html>…\""
+ *                                   Use cg_json_string_decode to get raw bytes.
+ *                                   Prefer cg_sdk_visualize_to_file for large graphs.
+ *
+ *   cg_sdk_visualize_to_file result — quoted JSON string of the written path:
+ *                                   "\"/absolute/path/graph_visualization.html\""
+ *
+ * NOTE: MemifyTask callbacks (CgMemifyTaskFn) are not exposed in v1 (TS parity
+ * scope).  Reserved post-parity extension:
+ *   CgMemifyTaskFn + cg_sdk_memify_with_tasks(…) — ABI can carry it but it
+ *   exceeds TS parity; record in STATUS when Phase 6 lands.
+ */
+
+/**
+ * Render the knowledge-graph as a self-contained d3.js HTML document.
+ *
+ * The HTML is delivered via the callback as a **quoted JSON string** (D9).
+ * Use cg_json_string_decode to unescape the HTML to raw UTF-8.
+ * For large graphs, prefer cg_sdk_visualize_to_file to avoid holding the
+ * full HTML in memory inside the callback.
+ *
+ * opts_json — NULL or a JSON object; `"destinationPath"` is parsed but
+ * ignored by this variant (only applies to cg_sdk_visualize_to_file).
+ *
+ * @param sdk       A valid CgSdk*.  NULL → no-op (null-check).
+ * @param opts_json NULL or null-terminated UTF-8 JSON options object.
+ * @param callback  Called exactly once with the quoted HTML string or error.
+ * @param user_data Forwarded to callback unchanged.
+ */
+void cg_sdk_visualize(const CgSdk*        sdk,
+                      const char*         opts_json,
+                      CgSdkResultCallback callback,
+                      void*               user_data);
+
+/**
+ * Render the knowledge-graph to a file and return the written path.
+ *
+ * Writes the d3.js HTML visualization to disk and fires the callback with
+ * the absolute path of the written file as a **quoted JSON string** (D9).
+ *
+ * opts_json — NULL or a JSON object with an optional `"destinationPath"`
+ * string field.  When absent, the default path (~\/graph_visualization.html)
+ * is used.
+ *
+ * @param sdk       A valid CgSdk*.  NULL → no-op (null-check).
+ * @param opts_json NULL or null-terminated UTF-8 JSON options object.
+ * @param callback  Called exactly once with the quoted path or error.
+ * @param user_data Forwarded to callback unchanged.
+ */
+void cg_sdk_visualize_to_file(const CgSdk*        sdk,
+                               const char*         opts_json,
+                               CgSdkResultCallback callback,
+                               void*               user_data);
+
+/* ── Cloud ops (Phase 7, `cloud` feature) ─────────────────────────────────── */
+/*
+ * Both ops are process-wide singletons — they do NOT accept a CgSdk* handle.
+ * They operate on the process-wide CloudClient singleton (matching the
+ * neon reference implementation in js/cognee-neon/src/sdk_cloud.rs).
+ *
+ * Both ops are async (D4, R1).
+ *
+ * When the `cloud` feature was not compiled in, both functions fire the
+ * callback with CG_ERR_FEATURE_NOT_BUILT (16).
+ *
+ * Wire shapes (camelCase, D3, D9):
+ *
+ *   cg_sdk_serve opts_json  — NULL or:
+ *     {"url?":"…","apiKey?":"…","cloudUrl?":"…","auth0Domain?":"…",
+ *      "auth0ClientId?":"…","auth0Audience?":"…"}
+ *
+ *   cg_sdk_serve result     — {"connected":true,"serviceUrl":"https://…"}
+ *
+ *   cg_sdk_disconnect opts  — NULL or {"wipeCredentials?":false}
+ *   cg_sdk_disconnect result— "null" (D9 — void op)
+ */
+
+/**
+ * Connect the SDK to a Cognee Cloud instance (process-wide singleton).
+ *
+ * Does NOT take a CgSdk* handle.
+ *
+ * opts_json controls the connection mode:
+ *   - {"url":"http://…"}  — direct mode (headless, for local servers / CI).
+ *   - {} or NULL           — cloud mode (Auth0 device-code flow; requires TTY).
+ *
+ * Optional keys: "apiKey", "cloudUrl", "auth0Domain", "auth0ClientId",
+ * "auth0Audience".
+ *
+ * Argument-validation paths and CG_ERR_FEATURE_NOT_BUILT are sufficient to
+ * verify the contract in CI (live Auth0 flow not required).
+ *
+ * result_json on success: {"connected":true,"serviceUrl":"…"}
+ *
+ * @param opts_json NULL or null-terminated UTF-8 JSON options object.
+ * @param callback  Called exactly once with the result or error.
+ * @param user_data Forwarded to callback unchanged.
+ */
+void cg_sdk_serve(const char*         opts_json,
+                  CgSdkResultCallback callback,
+                  void*               user_data);
+
+/**
+ * Disconnect from Cognee Cloud (process-wide singleton).
+ *
+ * Does NOT take a CgSdk* handle.
+ *
+ * opts_json — NULL or a JSON object with an optional "wipeCredentials"
+ * boolean (default false).  When true, the on-disk credential cache is
+ * deleted; the next cg_sdk_serve must re-authenticate.
+ *
+ * result_json on success: "null" (D9 — void op).
+ *
+ * @param opts_json NULL or null-terminated UTF-8 JSON options object.
+ * @param callback  Called exactly once with "null" or an error.
+ * @param user_data Forwarded to callback unchanged.
+ */
+void cg_sdk_disconnect(const char*         opts_json,
+                       CgSdkResultCallback callback,
+                       void*               user_data);
+
+/* ── JSON utility (Phase 7, not feature-gated) ────────────────────────────── */
+
+/**
+ * Decode a JSON string literal to raw UTF-8 (synchronous, no callback).
+ *
+ * Parses `json_string` as a JSON string literal (the input must include the
+ * surrounding double-quote characters, e.g. "\"hello\\nworld\"") and writes
+ * the unescaped UTF-8 value to `*out_utf8`.  The caller owns the result and
+ * must free it with `cg_string_destroy`.
+ *
+ * This helper is particularly useful for unescaping the large HTML document
+ * delivered by `cg_sdk_visualize`.
+ *
+ * Example:
+ *
+ *   char* raw = NULL;
+ *   CgErrorCode code = cg_json_string_decode("\"Hello\\nWorld\"", &raw);
+ *   // raw now points to "Hello\nWorld" (newline, not backslash-n)
+ *   cg_string_destroy(raw);
+ *
+ * @param json_string  Non-null null-terminated UTF-8 JSON string literal.
+ * @param out_utf8     Non-null pointer that receives the decoded C string.
+ *
+ * @return CG_OK on success.
+ *         CG_ERR_NULL_POINTER if json_string or out_utf8 is NULL.
+ *         CG_ERR_UTF8 if json_string is not valid UTF-8.
+ *         CG_ERR_SDK_VALIDATION (14) if json_string is not a valid JSON string
+ *         literal (wrong type, malformed escapes, etc.).
+ */
+CgErrorCode cg_json_string_decode(const char* json_string, char** out_utf8);
 
 #ifdef __cplusplus
 }

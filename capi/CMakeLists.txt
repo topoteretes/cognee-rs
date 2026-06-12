@@ -16,6 +16,19 @@ set(CARGO_TARGET_DIR "${CMAKE_SOURCE_DIR}/target" CACHE PATH
 set(COGNEE_CAPI_CARGO_FEATURES "" CACHE STRING
     "Extra cargo features to enable when building cognee-capi (comma-separated)")
 
+# When ON, passes --no-default-features to the cargo invocation.
+# Used for the slim build (--no-default-features --features sqlite,testing)
+# verified in check.sh's build-slim stage (Phase 7, D6).
+option(COGNEE_CAPI_NO_DEFAULT_FEATURES
+    "Pass --no-default-features to cargo when building cognee-capi"
+    OFF)
+
+if(COGNEE_CAPI_NO_DEFAULT_FEATURES)
+    set(CARGO_NO_DEFAULT_ARGS --no-default-features)
+else()
+    set(CARGO_NO_DEFAULT_ARGS "")
+endif()
+
 if(COGNEE_CAPI_CARGO_FEATURES)
     set(CARGO_FEATURE_ARGS --features "${COGNEE_CAPI_CARGO_FEATURES}")
 else()
@@ -31,9 +44,10 @@ add_custom_target(cognee_capi_cargo ALL
     COMMAND ${CMAKE_COMMAND} -E env
         CARGO_TARGET_DIR=${CARGO_TARGET_DIR}
         cargo build --manifest-path "${CMAKE_SOURCE_DIR}/cognee-capi/Cargo.toml"
+        ${CARGO_NO_DEFAULT_ARGS}
         ${CARGO_FEATURE_ARGS}
     WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
-    COMMENT "Building cognee-capi Rust library (features: ${COGNEE_CAPI_CARGO_FEATURES})"
+    COMMENT "Building cognee-capi Rust library (no-default=${COGNEE_CAPI_NO_DEFAULT_FEATURES} features: ${COGNEE_CAPI_CARGO_FEATURES})"
 )
 
 # Import the built static library

@@ -167,6 +167,37 @@ MOCK_EMBEDDING=true \
 
 echo ""
 echo "================================================================"
+echo "=== Phase 7 feature-gated smoke test (default build) ==="
+echo "================================================================"
+
+echo ""
+echo "--- Running: sdk_feature_smoke (MOCK_EMBEDDING=true, default features) ---"
+MOCK_EMBEDDING=true \
+    COGNEE_TRACING_ENABLED="" \
+    "$BUILD_DIR/examples/sdk_feature_smoke"
+
+echo ""
+echo "================================================================"
+echo "=== Phase 7 slim build: CG_ERR_FEATURE_NOT_BUILT verification ==="
+echo "================================================================"
+
+SLIM_BUILD_DIR="$CAPI_DIR/build-slim"
+rm -rf "$SLIM_BUILD_DIR"
+cmake -S "$CAPI_DIR" -B "$SLIM_BUILD_DIR" \
+    -DCMAKE_BUILD_TYPE=Debug \
+    -DCOGNEE_CAPI_NO_DEFAULT_FEATURES=ON \
+    -DCOGNEE_CAPI_CARGO_FEATURES=sqlite,testing \
+    > /dev/null
+cmake --build "$SLIM_BUILD_DIR" --target sdk_feature_smoke_slim
+
+echo ""
+echo "--- Running: sdk_feature_smoke_slim (slim build — all four ops expect CG_ERR_FEATURE_NOT_BUILT) ---"
+MOCK_EMBEDDING=true \
+    COGNEE_TRACING_ENABLED="" \
+    "$SLIM_BUILD_DIR/examples/sdk_feature_smoke_slim"
+
+echo ""
+echo "================================================================"
 echo "=== Gap 07 smoke tests (OTLP + analytics init) ==="
 echo "================================================================"
 
