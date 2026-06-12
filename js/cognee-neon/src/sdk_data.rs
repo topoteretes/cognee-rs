@@ -139,15 +139,13 @@ pub fn cognee_prune_system(mut cx: FunctionContext) -> JsResult<JsPromise> {
     let (deferred, promise) = cx.promise();
 
     runtime().spawn(async move {
-        let result = data::prune_system(&state, &opts)
-            .await
-            .and_then(|v| {
-                serde_json::to_string(&v).map_err(|e| {
-                    cognee_bindings_common::SdkError::Runtime(format!(
-                        "failed to serialize PruneResult: {e}"
-                    ))
-                })
-            });
+        let result = data::prune_system(&state, &opts).await.and_then(|v| {
+            serde_json::to_string(&v).map_err(|e| {
+                cognee_bindings_common::SdkError::Runtime(format!(
+                    "failed to serialize PruneResult: {e}"
+                ))
+            })
+        });
         deferred.settle_with(&channel, move |mut cx| match result {
             Ok(json_str) => parse_js(&mut cx, &json_str),
             Err(e) => throw_sdk_error(&mut cx, e),

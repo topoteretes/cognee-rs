@@ -7,5 +7,6 @@
 
 pub mod data;
 pub mod datasets;
+pub mod memory;
 pub mod pipeline;
 pub mod retrieval;

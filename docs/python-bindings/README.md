@@ -68,10 +68,10 @@ tracked in [STATUS.md](STATUS.md).
 | `add_and_cognify()` | ✅ | ✅ | ✅ | [core-pipeline-ops.md](core-pipeline-ops.md) |
 | `search()` — 15 search types | ✅ | ✅ | ✅ | [retrieval-ops.md](retrieval-ops.md) |
 | `recall()` — session-first routing | ✅ | ✅ | ✅ | [retrieval-ops.md](retrieval-ops.md) |
-| `remember()` — add+cognify+improve | ✅ | ✅ | ❌ | [memory-ops.md](memory-ops.md) |
-| `remember_entry()` — typed entries | ✅ | ✅ | ❌ | [memory-ops.md](memory-ops.md) |
-| `memify()` — triplet embeddings | ✅ | ✅ | ❌ | [memory-ops.md](memory-ops.md) |
-| `improve()` — session-graph bridge | ✅ | ✅ | ❌ | [memory-ops.md](memory-ops.md) |
+| `remember()` — add+cognify+improve | ✅ | ✅ | ✅ | [memory-ops.md](memory-ops.md) |
+| `remember_entry()` — typed entries | ✅ | ✅ | ✅ | [memory-ops.md](memory-ops.md) |
+| `memify()` — triplet embeddings | ✅ | ✅ | ✅ | [memory-ops.md](memory-ops.md) |
+| `improve()` — session-graph bridge | ✅ | ✅ | ✅ | [memory-ops.md](memory-ops.md) |
 | `forget()` — unified deletion | ✅ | ✅ | ✅ | [data-ops.md](data-ops.md) |
 | `update()` — replace data item | ✅ | ✅ | ✅ | [data-ops.md](data-ops.md) |
 | `prune_data()` — wipe files | ✅ | ✅ | ✅ | [data-ops.md](data-ops.md) |

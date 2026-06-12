@@ -12,6 +12,7 @@ mod sdk;
 mod sdk_data;
 mod sdk_datasets;
 mod sdk_error;
+mod sdk_memory;
 mod sdk_ops;
 mod sdk_retrieval;
 mod task;

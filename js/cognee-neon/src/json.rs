@@ -16,14 +16,10 @@
 //!
 //! The neon-free helpers (`cognify_result_json`, `marshal_inputs`, `marshal_one`,
 //! `marshal_bytes`) have moved to `cognee_bindings_common::wire` so they can be
-//! shared with the C API binding. They are re-exported here for backwards
-//! compatibility.
+//! shared with the C API binding; the ops modules call them through the shared
+//! `cognee_bindings_common::ops` layer, so no re-export is needed here.
 
 use neon::prelude::*;
-
-// Re-export neon-free helpers from the shared crate. All existing call-sites
-// in sdk_*.rs / sdk_ops.rs continue to work unchanged.
-pub(crate) use cognee_bindings_common::wire::{cognify_result_json, marshal_inputs};
 
 // ---------------------------------------------------------------------------
 // Core JSON helpers (neon-specific — require Context/Handle params).

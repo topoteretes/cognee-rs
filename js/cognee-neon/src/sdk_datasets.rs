@@ -12,10 +12,10 @@ use std::sync::Arc;
 
 use neon::prelude::*;
 
-use cognee_bindings_common::ops::datasets;
 use cognee_bindings_common::SdkError;
+use cognee_bindings_common::ops::datasets;
 
-use crate::errors::{throw_sdk_error};
+use crate::errors::throw_sdk_error;
 use crate::json::{js_to_value, parse_js, read_opts};
 use crate::runtime::runtime;
 use crate::sdk::CogneeHandle;
@@ -96,9 +96,9 @@ pub fn cognee_has_data(mut cx: FunctionContext) -> JsResult<JsPromise> {
         let result = datasets::has_data(&state, &dataset_id_str).await;
         deferred.settle_with(&channel, move |mut cx| match result {
             Ok(val) => {
-                let b = val.as_bool().ok_or_else(|| {
-                    SdkError::Runtime("has_data returned non-bool".to_string())
-                });
+                let b = val
+                    .as_bool()
+                    .ok_or_else(|| SdkError::Runtime("has_data returned non-bool".to_string()));
                 match b {
                     Ok(b) => Ok(cx.boolean(b)),
                     Err(e) => throw_sdk_error(&mut cx, e),

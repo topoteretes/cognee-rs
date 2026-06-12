@@ -1,6 +1,6 @@
 # Memory Operations: remember, remember_entry, memify, improve
 
-## Status: ❌ Not implemented
+## Status: ✅ Implemented
 
 ## What is missing
 
@@ -17,8 +17,8 @@ Four higher-level memory management operations:
 
 ```python
 opts = {
-    "session_id": str,
-    "self_improvement": bool,
+    "sessionId": str,           # camelCase — matches C API / TS wire shape
+    "selfImprovement": bool,    # camelCase
     "tenant": str,              # UUID
 }
 ```
@@ -47,21 +47,21 @@ Shapes verified against the C API parser (`capi/cognee-capi/src/sdk_memory.rs`) 
 
 ```python
 opts = {
-    "triplet_batch_size": int,
-    "node_type_filter": str,
-    "node_name_filter": str,
-    "node_name_filter_operator": str,    # "AND" | "OR"
+    "tripletBatchSize": int,             # camelCase — matches C API / TS wire shape
+    "nodeTypeFilter": str,               # camelCase
+    "nodeNameFilter": [str],             # camelCase; array of strings (not a single str)
+    "nodeNameFilterOperator": str,       # camelCase; "AND" | "OR"
 }
 ```
 
-### `improve` options (required: `dataset_name`)
+### `improve` options (required: `datasetName`)
 
 ```python
 opts = {
-    "dataset_name": str,                 # required
-    "session_ids": [str],
-    "node_name": [str],
-    "feedback_alpha": float,             # default 0.1
+    "datasetName": str,                  # required; camelCase — matches C API / TS wire shape
+    "sessionIds": [str],                 # camelCase
+    "nodeName": [str],                   # camelCase
+    "feedbackAlpha": float,              # camelCase; default 0.1
     "tenant": str,
 }
 ```
@@ -70,26 +70,26 @@ opts = {
 
 **remember result**: Pass-through JSON dict (complex structure with status, dataset info, session IDs, pipeline run info).
 
-**memify result**:
+**memify result** (all keys camelCase — matches C API / TS / neon wire shape):
 ```python
 {
-    "triplet_count": int,
-    "indexed_count": int,
-    "batch_count": int,
-    "already_completed": bool,
-    "prior_pipeline_run_id": str | None,
+    "tripletCount": int,
+    "indexedCount": int,
+    "batchCount": int,
+    "alreadyCompleted": bool,
+    "priorPipelineRunId": str | None,
 }
 ```
 
-**improve result**:
+**improve result** (all keys camelCase):
 ```python
 {
-    "stages_run": [str],
-    "memify_result": dict | None,
-    "feedback_entries_processed": int,
-    "feedback_entries_applied": int,
-    "sessions_persisted": int,
-    "edges_synced": int,
+    "stagesRun": [str],
+    "memifyResult": dict | None,
+    "feedbackEntriesProcessed": int,
+    "feedbackEntriesApplied": int,
+    "sessionsPersisted": int,
+    "edgesSynced": int,
 }
 ```
 
@@ -104,23 +104,40 @@ previous conversation).
 
 ## Implementation plan
 
-**Prerequisite:** the shared op bodies must first be hoisted from
-`capi/cognee-capi/src/sdk_memory.rs` (and its neon counterpart) into a
-`cognee_bindings_common::ops` module — see [core-pipeline-ops.md](core-pipeline-ops.md) Step 0.
-The sketches below call those hoisted functions (`ops::remember`, `ops::memify`, …).
+**Prerequisite:** T3 (`ops::pipeline`) is done — `crates/bindings-common/src/ops/` already has
+`pipeline.rs`, `data.rs`, `datasets.rs`, and `retrieval.rs`. This task must add a new
+`crates/bindings-common/src/ops/memory.rs` module (and register it in `mod.rs`) containing the
+shared async bodies `run_remember`, `run_remember_entry`, `run_memify_op`, and `run_improve`
+extracted from `capi/cognee-capi/src/sdk_memory.rs` and `js/cognee-neon/src/sdk_memory.rs`.
+The sketches below call those hoisted functions as `ops::memory::run_remember`, etc.
 
-### Step 1 — Create `python/src/sdk_memory.rs`
+> **Note:** The C API's `sdk_memory.rs` uses local `run_*` helpers (not in bindings-common) and
+> the neon `sdk_memory.rs` likewise calls `cognee_lib::api::{remember, remember_entry}` and
+> `cognee_lib::cognify::run_memify` directly. The hoist is the Step 0 for this task.
+
+### Step 1 — Create `crates/bindings-common/src/ops/memory.rs` and `python/src/sdk_memory.rs`
+
+First, add `pub mod memory;` to `crates/bindings-common/src/ops/mod.rs` and create
+`crates/bindings-common/src/ops/memory.rs` by extracting the four `run_*` async helpers from
+`capi/cognee-capi/src/sdk_memory.rs` (they already have the right signature and import set).
+The `marshal_memory_entry` helper and `memify_result_json` helper also move there.
+Export them as `pub async fn run_remember(...)`, `pub async fn run_remember_entry(...)`, etc.
+
+Then create `python/src/sdk_memory.rs` following the same pattern as `sdk_ops.rs`:
 
 ```rust
+use cognee_bindings_common::ops::memory;
+// imports: Arc<HandleState>, py_to_serde, serde_to_py, sdk_error_to_py, opts_to_json (from sdk_ops)
+
 pub fn py_sdk_remember<'py>(
     py: Python<'py>, handle: Arc<HandleState>,
     inputs: Bound<'py, PyAny>, dataset_name: String,
     opts: Option<Bound<'py, PyAny>>,
 ) -> PyResult<Bound<'py, PyAny>> {
-    let inputs_value = normalise_inputs(&inputs)?;          // dict → [dict], then py_to_serde
-    let opts_value = opts.map(|o| py_to_serde(&o)).transpose()?;
+    let inputs_value = normalise_inputs(&inputs)?;   // dict → [dict], same helper as sdk_ops.rs
+    let opts_value = opts_to_json(opts)?;            // opts_to_json is in sdk_ops.rs — move to json.rs or duplicate
     pyo3_async_runtimes::tokio::future_into_py(py, async move {
-        let result = ops::remember(&handle, &inputs_value, &dataset_name, opts_value.as_ref())
+        let result = memory::run_remember(&handle, inputs_value, &dataset_name, &opts_value)
             .await.map_err(sdk_error_to_py)?;
         Python::with_gil(|py| serde_to_py(py, &result))
     })
@@ -130,21 +147,24 @@ pub fn py_sdk_remember_entry<'py>(
     py: Python<'py>, handle: Arc<HandleState>,
     entry: Bound<'py, PyAny>, dataset_name: String, session_id: String,
     opts: Option<Bound<'py, PyAny>>,
-) -> PyResult<Bound<'py, PyAny>> { /* same pattern, ops::remember_entry */ }
+) -> PyResult<Bound<'py, PyAny>> { /* same pattern, memory::run_remember_entry */ }
 
 pub fn py_sdk_memify<'py>(
     py: Python<'py>, handle: Arc<HandleState>,
     opts: Option<Bound<'py, PyAny>>,
-) -> PyResult<Bound<'py, PyAny>> { /* same pattern, ops::memify */ }
+) -> PyResult<Bound<'py, PyAny>> { /* same pattern, memory::run_memify_op */ }
 
 pub fn py_sdk_improve<'py>(
     py: Python<'py>, handle: Arc<HandleState>,
-    opts: Bound<'py, PyAny>,
-) -> PyResult<Bound<'py, PyAny>> { /* opts is required here, not optional; ops::improve */ }
+    opts: Bound<'py, PyAny>,           // required, not Option — validate datasetName is present
+) -> PyResult<Bound<'py, PyAny>> { /* memory::run_improve */ }
 ```
 
-Note: `improve()` takes `opts` as a required argument (must contain `dataset_name`). This mirrors
-the C API and TS binding. Validate that `dataset_name` is present and raise `CogneeValidationError`
+> **Note on helpers**: `normalise_inputs` and `opts_to_json` currently live in `sdk_ops.rs` as
+> `pub(crate)`. Either make them `pub(crate)` in `json.rs` (cleaner) or re-import from `sdk_ops`.
+
+Note: `improve()` takes `opts` as a required argument (must contain `datasetName`). This mirrors
+the C API and TS binding. Validate that `datasetName` is present and raise `CogneeValidationError`
 if missing.
 
 ### Step 2 — Wire into `PyCognee`
@@ -188,7 +208,7 @@ Add `python/tests/test_memory_ops.py`:
 ```python
 async def test_memify(cognee_with_data):
     result = await cognee_with_data.memify()
-    assert "triplet_count" in result or "already_completed" in result
+    assert "tripletCount" in result or "alreadyCompleted" in result   # camelCase keys
 
 async def test_remember(cognee):
     result = await cognee.remember({"type": "text", "text": "Fact A"}, "mem_ds")
@@ -205,13 +225,13 @@ async def test_remember_entry_bad_type(cognee):
 
 async def test_improve_missing_dataset(cognee):
     with pytest.raises(CogneeValidationError):
-        await cognee.improve({})
+        await cognee.improve({})   # missing "datasetName" (camelCase) → CogneeValidationError
 ```
 
 ### Acceptance criteria
 
-- `await cognee.memify()` returns a dict with `triplet_count` (may be 0 on empty graph)
+- `await cognee.memify()` returns a dict with `tripletCount` (may be 0 on empty graph; all keys camelCase)
 - `await cognee.remember({"type": "text", "text": "..."}, "ds")` does not raise
 - `await cognee.remember_entry({"type": "qa", ...}, "ds", "session-id")` does not raise
 - Unknown entry type in `remember_entry` raises `CogneeValidationError`
-- `improve({})` (missing `dataset_name`) raises `CogneeValidationError`
+- `improve({})` (missing `datasetName`) raises `CogneeValidationError`

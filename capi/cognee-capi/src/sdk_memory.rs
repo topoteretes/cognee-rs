@@ -2,386 +2,21 @@
 //! `cg_sdk_memify`, `cg_sdk_improve`.
 //!
 //! All four follow the Phase-4 canonical pattern:
-//!   `Arc::clone(&(*sdk).state)` → `spawn_sdk_op` → `state.services().await?`
-//!   → call cognee-lib API → serialize result → callback.
+//!   `Arc::clone(&(*sdk).state)` → `spawn_sdk_op` → delegate to
+//!   `cognee_bindings_common::ops::memory` shared async bodies.
 //!
-//! ## Serde notes
-//! - `RememberResult` derives `Serialize` → direct `serde_json::to_value`.
-//!   `cognify_result`/`memify_result` fields carry `#[serde(skip)]` so they
-//!   are invisible after serialisation.
-//! - `MemifyResult` and `ImproveResult` do NOT derive `Serialize` → hand-built
-//!   JSON via the local `memify_result_json` helper.
+//! The shared async bodies (run_remember / run_remember_entry / run_memify_op /
+//! run_improve) now live in `cognee-bindings-common` so they can be reused by
+//! the Python and JS bindings without duplication.
 
 use std::ffi::c_char;
 use std::sync::Arc;
 
-use serde_json::json;
-use uuid::Uuid;
-
-use cognee_bindings_common::wire::marshal_inputs;
-use cognee_bindings_common::{HandleState, SdkError};
-use cognee_lib::api::{ImproveParams, remember, remember_entry};
-use cognee_lib::cognify::{MemifyConfig, run_memify};
-use cognee_lib::database::{PipelineRunRepository, SeaOrmPipelineRunRepository};
-use cognee_lib::models::{FeedbackEntry, MemoryEntry, QAEntry, TraceEntry};
+use cognee_bindings_common::ops::memory;
+use cognee_bindings_common::SdkError;
 
 use crate::sdk::{CgSdk, CgSdkResultCallback, SendUserData, spawn_sdk_op};
 use crate::sdk_ops::parse_c_str_or_fire;
-
-// ---------------------------------------------------------------------------
-// opts helpers (local copy, NOT in bindings-common — same decision as neon).
-// ---------------------------------------------------------------------------
-
-fn opts_tenant(opts: &serde_json::Value) -> Result<Option<Uuid>, SdkError> {
-    match opts.get("tenant").and_then(|v| v.as_str()) {
-        Some(s) => Uuid::parse_str(s)
-            .map(Some)
-            .map_err(|e| SdkError::Validation(format!("invalid `tenant` UUID: {e}"))),
-        None => Ok(None),
-    }
-}
-
-// ---------------------------------------------------------------------------
-// MemifyResult JSON helper (not Serialize — hand-built).
-// Local to this module (same as neon's sdk_memory.rs).
-// ---------------------------------------------------------------------------
-
-fn memify_result_json(r: &cognee_lib::cognify::MemifyResult) -> serde_json::Value {
-    json!({
-        "tripletCount": r.triplet_count,
-        "indexedCount": r.index_result.indexed_count,
-        "batchCount": r.index_result.batch_count,
-        "alreadyCompleted": r.already_completed,
-        "priorPipelineRunId": r.prior_pipeline_run_id.map(|id| id.to_string()),
-    })
-}
-
-// ---------------------------------------------------------------------------
-// MemoryEntry marshalling.
-// ---------------------------------------------------------------------------
-
-fn marshal_memory_entry(value: &serde_json::Value) -> Result<MemoryEntry, SdkError> {
-    let obj = value
-        .as_object()
-        .ok_or_else(|| SdkError::Validation("memory entry must be an object".to_string()))?;
-    let ty = obj.get("type").and_then(|v| v.as_str()).ok_or_else(|| {
-        SdkError::Validation("memory entry is missing a string `type`".to_string())
-    })?;
-
-    match ty {
-        "qa" => {
-            let question = obj
-                .get("question")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            let answer = obj
-                .get("answer")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            let context = obj
-                .get("context")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            let feedback_text = obj
-                .get("feedbackText")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string());
-            let feedback_score = obj
-                .get("feedbackScore")
-                .and_then(|v| v.as_i64())
-                .map(|n| n as i32);
-            let used_graph_element_ids = obj.get("usedGraphElementIds").cloned();
-            Ok(MemoryEntry::Qa(QAEntry {
-                question,
-                answer,
-                context,
-                feedback_text,
-                feedback_score,
-                used_graph_element_ids,
-            }))
-        }
-        "trace" => {
-            let origin_function = obj
-                .get("originFunction")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| {
-                    SdkError::Validation("trace entry requires `originFunction`".to_string())
-                })?
-                .to_string();
-            let status = obj
-                .get("status")
-                .and_then(|v| v.as_str())
-                .unwrap_or("success")
-                .to_string();
-            let method_params = obj.get("methodParams").cloned();
-            let method_return_value = obj.get("methodReturnValue").cloned();
-            let memory_query = obj
-                .get("memoryQuery")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            let memory_context = obj
-                .get("memoryContext")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            let error_message = obj
-                .get("errorMessage")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            let generate_feedback_with_llm = obj
-                .get("generateFeedbackWithLlm")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
-            Ok(MemoryEntry::Trace(TraceEntry {
-                origin_function,
-                status,
-                method_params,
-                method_return_value,
-                memory_query,
-                memory_context,
-                error_message,
-                generate_feedback_with_llm,
-            }))
-        }
-        "feedback" => {
-            let qa_id = obj
-                .get("qaId")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| SdkError::Validation("feedback entry requires `qaId`".to_string()))?
-                .to_string();
-            let feedback_text = obj
-                .get("feedbackText")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string());
-            let feedback_score = obj
-                .get("feedbackScore")
-                .and_then(|v| v.as_i64())
-                .map(|n| n as i32);
-            Ok(MemoryEntry::Feedback(FeedbackEntry {
-                qa_id,
-                feedback_text,
-                feedback_score,
-            }))
-        }
-        other => Err(SdkError::Validation(format!(
-            "unknown memory entry type `{other}`. Valid: qa, trace, feedback"
-        ))),
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Core async logic.
-// ---------------------------------------------------------------------------
-
-async fn run_remember(
-    state: &HandleState,
-    inputs_json: serde_json::Value,
-    dataset_name: &str,
-    opts: &serde_json::Value,
-) -> Result<serde_json::Value, SdkError> {
-    let inputs = marshal_inputs(&inputs_json)?;
-    let tenant_id = opts_tenant(opts)?;
-    let session_id_owned = opts
-        .get("sessionId")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
-    let session_id: Option<&str> = session_id_owned.as_deref();
-    let self_improvement = opts
-        .get("selfImprovement")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-
-    let svc = state.services().await?;
-    let owner_id = state.owner_id().await?;
-
-    let cognify_config = Arc::new(svc.cognify_config.clone());
-
-    let result = remember(
-        inputs,
-        dataset_name,
-        session_id,
-        self_improvement,
-        owner_id,
-        tenant_id,
-        svc.add_pipeline.clone(),
-        svc.llm.clone(),
-        svc.storage.clone(),
-        svc.graph_db.clone(),
-        svc.vector_db.clone(),
-        svc.embedding_engine.clone(),
-        Some(svc.database.clone()),
-        Some(svc.session_store.clone()),
-        Some(svc.session_manager.clone()),
-        Some(svc.checkpoint_store.clone()),
-        svc.ontology_resolver.clone(),
-        cognify_config,
-    )
-    .await
-    .map_err(|e| SdkError::Runtime(format!("remember failed: {e}")))?;
-
-    serde_json::to_value(&result)
-        .map_err(|e| SdkError::Runtime(format!("failed to serialize RememberResult: {e}")))
-}
-
-async fn run_remember_entry(
-    state: &HandleState,
-    entry_json: serde_json::Value,
-    dataset_name: &str,
-    session_id: &str,
-    opts: &serde_json::Value,
-) -> Result<serde_json::Value, SdkError> {
-    let tenant_id = opts_tenant(opts)?;
-    let entry = marshal_memory_entry(&entry_json)?;
-
-    let svc = state.services().await?;
-    let owner_id = state.owner_id().await?;
-
-    let result = remember_entry(
-        entry,
-        dataset_name,
-        session_id,
-        owner_id,
-        tenant_id,
-        Some(svc.database.clone()),
-        Some(svc.session_store.clone()),
-        Some(svc.session_manager.clone()),
-        Some(svc.llm.clone()),
-    )
-    .await
-    .map_err(|e| SdkError::Runtime(format!("remember_entry failed: {e}")))?;
-
-    serde_json::to_value(&result)
-        .map_err(|e| SdkError::Runtime(format!("failed to serialize RememberResult: {e}")))
-}
-
-async fn run_memify_op(
-    state: &HandleState,
-    opts: &serde_json::Value,
-) -> Result<serde_json::Value, SdkError> {
-    let svc = state.services().await?;
-    let owner_id = state.owner_id().await?;
-
-    let mut config = MemifyConfig::default();
-    if let Some(n) = opts.get("tripletBatchSize").and_then(|v| v.as_u64()) {
-        config = config.with_triplet_batch_size(n as usize);
-    }
-    if let Some(s) = opts.get("nodeTypeFilter").and_then(|v| v.as_str()) {
-        config = config.with_node_type_filter(s.to_string());
-    }
-    if let Some(arr) = opts.get("nodeNameFilter").and_then(|v| v.as_array()) {
-        let names: Vec<String> = arr
-            .iter()
-            .filter_map(|x| x.as_str().map(|s| s.to_string()))
-            .collect();
-        config = config.with_node_name_filter(names);
-    }
-    if let Some(op) = opts.get("nodeNameFilterOperator").and_then(|v| v.as_str()) {
-        config = config.with_node_name_filter_operator(op.to_string());
-    }
-
-    let pipeline_run_repo: Arc<dyn PipelineRunRepository> =
-        Arc::new(SeaOrmPipelineRunRepository::new(Arc::clone(&svc.database)));
-
-    let result = run_memify(
-        svc.graph_db.clone(),
-        svc.vector_db.clone(),
-        svc.embedding_engine.clone(),
-        svc.cpu_pool(),
-        svc.database.clone(),
-        pipeline_run_repo,
-        None,
-        Some(owner_id),
-        None,
-        &config,
-    )
-    .await
-    .map_err(|e| SdkError::Runtime(format!("memify failed: {e}")))?;
-
-    Ok(memify_result_json(&result))
-}
-
-async fn run_improve(
-    state: &HandleState,
-    opts: &serde_json::Value,
-) -> Result<serde_json::Value, SdkError> {
-    let dataset_name = opts
-        .get("datasetName")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| SdkError::Validation("`datasetName` is required for improve".to_string()))?
-        .to_string();
-
-    let session_ids: Option<Vec<String>> = opts.get("sessionIds").and_then(|v| {
-        v.as_array().map(|arr| {
-            arr.iter()
-                .filter_map(|x| x.as_str().map(|s| s.to_string()))
-                .collect()
-        })
-    });
-
-    let node_name: Option<Vec<String>> = opts.get("nodeName").and_then(|v| {
-        v.as_array().map(|arr| {
-            arr.iter()
-                .filter_map(|x| x.as_str().map(|s| s.to_string()))
-                .collect()
-        })
-    });
-
-    let feedback_alpha = opts
-        .get("feedbackAlpha")
-        .and_then(|v| v.as_f64())
-        .unwrap_or(0.1);
-
-    let tenant_id = opts_tenant(opts)?;
-
-    let svc = state.services().await?;
-    let owner_id = state.owner_id().await?;
-
-    let result = cognee_lib::api::improve(ImproveParams {
-        dataset_name,
-        session_ids,
-        node_name,
-        owner_id,
-        tenant_id,
-        feedback_alpha,
-        extraction_tasks: None,
-        enrichment_tasks: None,
-        data: None,
-        llm: svc.llm.clone(),
-        storage: svc.storage.clone(),
-        graph_db: svc.graph_db.clone(),
-        vector_db: svc.vector_db.clone(),
-        embedding_engine: svc.embedding_engine.clone(),
-        ontology_resolver: svc.ontology_resolver.clone(),
-        db: Some(svc.database.clone()),
-        session_store: Some(svc.session_store.clone()),
-        session_manager: Some(svc.session_manager.clone()),
-        add_pipeline: Some(svc.add_pipeline.as_ref()),
-        checkpoint_store: Some(svc.checkpoint_store.clone()),
-        cognify_config: &svc.cognify_config,
-    })
-    .await
-    .map_err(|e| SdkError::Runtime(format!("improve failed: {e}")))?;
-
-    let memify_json = result
-        .memify_result
-        .as_ref()
-        .map(memify_result_json)
-        .unwrap_or(serde_json::Value::Null);
-
-    Ok(json!({
-        "stagesRun": result.stages_run,
-        "memifyResult": memify_json,
-        "feedbackEntriesProcessed": result.feedback_entries_processed,
-        "feedbackEntriesApplied": result.feedback_entries_applied,
-        "sessionsPersisted": result.sessions_persisted,
-        "edgesSynced": result.edges_synced,
-    }))
-}
 
 // ---------------------------------------------------------------------------
 // C-exported functions.
@@ -445,7 +80,7 @@ pub unsafe extern "C" fn cg_sdk_remember(
                 .map_err(|e| SdkError::Validation(format!("opts_json parse error: {e}")))?,
             None => serde_json::Value::Null,
         };
-        run_remember(&state, inputs_val, &dataset_str, &opts_val).await
+        memory::run_remember(&state, inputs_val, &dataset_str, &opts_val).await
     });
 }
 
@@ -511,7 +146,7 @@ pub unsafe extern "C" fn cg_sdk_remember_entry(
                 .map_err(|e| SdkError::Validation(format!("opts_json parse error: {e}")))?,
             None => serde_json::Value::Null,
         };
-        run_remember_entry(&state, entry_val, &dataset_str, &session_str, &opts_val).await
+        memory::run_remember_entry(&state, entry_val, &dataset_str, &session_str, &opts_val).await
     });
 }
 
@@ -560,7 +195,7 @@ pub unsafe extern "C" fn cg_sdk_memify(
                 .map_err(|e| SdkError::Validation(format!("opts_json parse error: {e}")))?,
             None => serde_json::Value::Null,
         };
-        run_memify_op(&state, &opts_val).await
+        memory::run_memify_op(&state, &opts_val).await
     });
 }
 
@@ -602,6 +237,6 @@ pub unsafe extern "C" fn cg_sdk_improve(
     spawn_sdk_op(callback, ud, async move {
         let opts_val: serde_json::Value = serde_json::from_str(&opts_str)
             .map_err(|e| SdkError::Validation(format!("opts_json parse error: {e}")))?;
-        run_improve(&state, &opts_val).await
+        memory::run_improve(&state, &opts_val).await
     });
 }

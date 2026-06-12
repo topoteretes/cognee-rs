@@ -28,8 +28,8 @@ use std::sync::Arc;
 
 use neon::prelude::*;
 
-use cognee_bindings_common::ops::retrieval;
 use cognee_bindings_common::SdkError;
+use cognee_bindings_common::ops::retrieval;
 
 use crate::errors::throw_sdk_error;
 use crate::json::{js_to_value, parse_js};
@@ -57,12 +57,10 @@ pub fn cognee_search(mut cx: FunctionContext) -> JsResult<JsPromise> {
     let (deferred, promise) = cx.promise();
 
     runtime().spawn(async move {
-        let result = retrieval::search(&state, &query, &opts)
-            .await
-            .map(|v| {
-                serde_json::to_string(&v)
-                    .map_err(|e| SdkError::Runtime(format!("failed to serialize search result: {e}")))
-            });
+        let result = retrieval::search(&state, &query, &opts).await.map(|v| {
+            serde_json::to_string(&v)
+                .map_err(|e| SdkError::Runtime(format!("failed to serialize search result: {e}")))
+        });
         let result = match result {
             Ok(Ok(s)) => Ok(s),
             Ok(Err(e)) => Err(e),
@@ -101,12 +99,10 @@ pub fn cognee_recall(mut cx: FunctionContext) -> JsResult<JsPromise> {
     let (deferred, promise) = cx.promise();
 
     runtime().spawn(async move {
-        let result = retrieval::recall(&state, &query, &opts)
-            .await
-            .map(|v| {
-                serde_json::to_string(&v)
-                    .map_err(|e| SdkError::Runtime(format!("failed to serialize recall result: {e}")))
-            });
+        let result = retrieval::recall(&state, &query, &opts).await.map(|v| {
+            serde_json::to_string(&v)
+                .map_err(|e| SdkError::Runtime(format!("failed to serialize recall result: {e}")))
+        });
         let result = match result {
             Ok(Ok(s)) => Ok(s),
             Ok(Err(e)) => Err(e),
