@@ -127,6 +127,13 @@ void cg_task_info_destroy(CgTaskInfo* info);
 /* Pipeline */
 typedef enum { CG_RETRY_DELAY_CONSTANT = 0, CG_RETRY_DELAY_EXPONENTIAL = 1 } CgRetryDelayKind;
 typedef struct { CgRetryDelayKind kind; uint64_t base_ms; uint32_t factor; } CgRetryDelaySpec;
+
+/* Data-ID extraction function pointer for incremental deduplication.
+ * Returns true if a data ID was written to buf; *written is set to
+ * the number of bytes written (excluding null terminator). */
+typedef bool (*CgDataIdFnPtr)(const CgValue* v, char* buf, size_t buf_len,
+                               size_t* written, void* user_data);
+
 CgPipeline* cg_pipeline_new(const char* description);
 void cg_pipeline_set_name(CgPipeline* p, const char* name);
 void cg_pipeline_add_task(CgPipeline* p, CgTaskInfo* info);
@@ -134,6 +141,8 @@ void cg_pipeline_set_batch_size(CgPipeline* p, size_t size);
 void cg_pipeline_set_concurrency(CgPipeline* p, size_t n);
 void cg_pipeline_set_retry_none(CgPipeline* p);
 void cg_pipeline_set_retry_limited(CgPipeline* p, uint32_t max_attempts, CgRetryDelaySpec delay);
+void cg_pipeline_set_data_id_fn(CgPipeline* p, CgDataIdFnPtr fn_ptr, void* user_data,
+                                 void (*destroy_ud)(void*));
 void cg_pipeline_destroy(CgPipeline* p);
 
 /* Pipeline execution */

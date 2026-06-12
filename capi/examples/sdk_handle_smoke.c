@@ -2,7 +2,7 @@
  * sdk_handle_smoke.c — Phase 1b Tier-A smoke test for CgSdk handle lifecycle.
  *
  * Tests (no network, no LLM required):
- *   1. cg_api_version() returns (1 << 16) | 1 (major=1, minor=1).
+ *   1. cg_api_version() == (CG_API_VERSION_MAJOR<<16)|CG_API_VERSION_MINOR (exact).
  *   2. cg_sdk_new(NULL)          — construct handle from env defaults.
  *   3. cg_sdk_new(settings_json) — construct handle from JSON settings
  *      (sets MOCK_EMBEDDING and tempdirs for isolation).
@@ -82,19 +82,14 @@ int main(void)
     ASSERT_EQ(rc, CG_OK, "cg_init() must succeed");
 
     /* ── 2. API version ──────────────────────────────────────────────────── */
+    /* Assert exact equality against the header macros so that a header/Rust
+     * source version skew is caught at test time (Phase 8 exit criterion). */
     uint32_t ver = cg_api_version();
-    /* Phase 3 bumped minor to 2; accept any minor >= 1 to stay forward-compat. */
-    uint32_t ver_major = ver >> 16;
-    uint32_t ver_minor = ver & 0xffffu;
-    ASSERT(ver_major == 1u && ver_minor >= 1u,
-           "cg_api_version() must return major=1, minor>=1");
-    if (ver_major == 1u && ver_minor >= 1u) {
-        printf("cg_api_version() = 0x%08x (major=%u minor=%u)  OK\n",
-               ver, ver_major, ver_minor);
-    } else {
-        fprintf(stderr, "cg_api_version() = 0x%08x (major=%u minor=%u), want major=1 minor>=1\n",
-                ver, ver_major, ver_minor);
-    }
+    uint32_t expected_ver = ((uint32_t)CG_API_VERSION_MAJOR << 16) | (uint32_t)CG_API_VERSION_MINOR;
+    ASSERT(ver == expected_ver,
+           "cg_api_version() must equal (CG_API_VERSION_MAJOR<<16)|CG_API_VERSION_MINOR");
+    printf("cg_api_version() = 0x%08x (major=%u minor=%u)  OK\n",
+           ver, ver >> 16, ver & 0xffffu);
 
     /* ── 3. cg_sdk_new(NULL) ─────────────────────────────────────────────── */
     CgSdk* sdk_env = cg_sdk_new(NULL);

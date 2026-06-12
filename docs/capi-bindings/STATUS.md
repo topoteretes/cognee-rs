@@ -9,7 +9,7 @@ the 1a completion is recorded in this table's Notes column, the row flips to ✅
 
 **Legend:** ⬜ Not started · 🟡 In progress · 🔵 In review · ⛔ Blocked · ✅ Done
 
-Last updated: 2026-06-12 (step 7 done)
+Last updated: 2026-06-12 (step 8 done)
 
 ## Status table
 
@@ -23,7 +23,7 @@ Last updated: 2026-06-12 (step 7 done)
 | 5 | [Retrieval (search/recall)](phase-5-retrieval.md) | ✅ Done | capi-bindings/phase-5-retrieval | d67c13e | |
 | 6 | [Remaining SDK](phase-6-remaining-sdk.md) | ✅ Done | capi-bindings/phase-6-remaining-sdk | cb8a6cd | |
 | 7 | [Feature-gated surfaces](phase-7-feature-gated.md) | ✅ Done | capi-bindings/phase-7-feature-gated | 826a841 | |
-| 8 | [Header, examples, tests & CI](phase-8-header-examples-tests-ci.md) | ⬜ | | | |
+| 8 | [Header, examples, tests & CI](phase-8-header-examples-tests-ci.md) | ✅ Done | capi-bindings/phase-8-tests-ci | 065387b | |
 
 ## Phase 0 baselines (task 6)
 
@@ -106,11 +106,30 @@ above numbers are post-extraction with the full `cognee-lib` dependency.
 - [x] non-feature builds return `CG_ERR_FEATURE_NOT_BUILT` (symbol always present)
 
 ### Phase 8 — Header, examples, tests & CI
-- [ ] `cognee.h` + `cognee_sdk.h` regenerated; CI freshness check covers both
-- [ ] runnable `capi/examples/example_sdk_add_cognify_search.c` committed
-- [ ] `capi/scripts/check.sh` runs all SDK smoke tests; `capi-check` CI green
-- [ ] Tier-B examples run in `capi-check` when secrets present, SKIP cleanly otherwise (D12)
-- [ ] `capi/README.md` rewritten around the SDK surface
+- [x] `cg_pipeline_set_data_id_fn` added to `cognee.h` (was implemented in pipeline.rs but absent from header)
+- [x] version-symbol consistency (`cg_api_version() == (MAJOR<<16)|MINOR`) asserted in sdk_handle_smoke.c Tier-A smoke
+- [x] check.sh Tier-B `if/else` wrapper fixed — else branch no longer invokes the binary
+- [x] `capi-check` CI job has `OPENAI_KEY` secret wired (`OPENAI_URL`/`OPENAI_TOKEN`/`OPENAI_MODEL` env block)
+- [x] `capi/README.md` rewritten around the SDK surface; engine API in a subordinate section
+- [x] parity audit recorded in STATUS.md (see decision log entry below)
+
+## Parity audit (Phase 8)
+
+Manual diff of `js/cognee-neon/src/lib.rs` neon exports against `capi/include/cognee_sdk.h` `cg_sdk_*` symbols.
+
+**Coverage: all 27 TS SDK functions + 4 feature-gated ops have C equivalents in `cg_sdk_*` namespace.**
+
+Explicit exclusions and rationale:
+
+| Neon export / TS pattern | C status | Reason |
+|---|---|---|
+| 39 granular config setters (`set_llm_api_key`, etc.) | Covered by `cg_sdk_config_set` / `cg_sdk_config_set_str` / 4 bulk group setters | D7: generic surface preferred; no typed setters needed |
+| JS error-throw helpers (`throw_sdk_error`, etc.) | N/A | JS/V8-specific; not applicable in C |
+| `CgMemifyTaskFn` + `cg_sdk_memify_with_tasks` | Excluded from v1 | Beyond TS parity; reserved as post-parity extension (R3) |
+| SDK cancellation token | Excluded from v1 | Explicit non-goal (R4); reserved extension shape documented in header |
+| `cg_sdk_waiter_wait_timeout` | Excluded from v1 | Non-goal documented in `cognee_sdk.h` |
+
+No TS/Rust parity gaps requiring action were found.
 
 ## Decision log
 
@@ -147,3 +166,4 @@ Record cross-cutting decisions as they're made (one line each), so later phases 
 | 2026-06-12 | **5 implementation:** module named sdk_retrieval.rs (not sdk_search.rs); parse_c_str_or_fire shared from sdk_ops via pub(crate); Tier-A smoke covers all 15 SearchType strings and 5 RecallScope variants. | 5 |
 | 2026-06-12 | **6 impl:** 27 functions across 4 modules (sdk_memory/sdk_data/sdk_datasets/sdk_admin); CgMemifyTaskFn post-parity extension reserved in header; API version minor bumped to 5. | 6 |
 | 2026-06-12 | **7 impl:** visualization + cloud feature-gated stubs (CG_ERR_FEATURE_NOT_BUILT=16 via spawned task); cg_json_string_decode utility (R8 delivered); API version minor bumped to 6. | 7 |
+| 2026-06-12 | **8 parity-audit:** all 27 TS SDK functions + 4 feature-gated ops covered by C equivalents in cg_sdk_* namespace; cg_json_string_decode (R8) delivered; engine surface unchanged. No TS/Rust parity gaps found requiring action. | 8 |

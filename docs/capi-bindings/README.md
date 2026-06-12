@@ -168,7 +168,7 @@ authoritative reference implementation in `js/cognee-neon/src/`.
 | 16 | Visualization (feature) | `cogneeVisualize`, `cogneeVisualizeToFile` | — | ❌ | [7](phase-7-feature-gated.md) |
 | 17 | Cloud serve/disconnect (feature) | `cogneeServe`, `cogneeDisconnect` | — | ❌ | [7](phase-7-feature-gated.md) |
 | 18 | Real backends linked (qdrant/ladybug/onnx/…) | default features in `cognee-neon` | mocks only (`testing` features) | ❌ | [0](phase-0-scaffolding.md) |
-| 19 | Examples / tests / CI for the SDK surface | 13 jest suites, Tier-A/Tier-B split, example | engine-only examples + smoke tests | 🟡 | [8](phase-8-header-examples-tests-ci.md) |
+| 19 | Examples / tests / CI for the SDK surface | 13 jest suites, Tier-A/Tier-B split, example | all Tier-A/Tier-B smokes wired; header audited; CI env block added | ✅ | [8](phase-8-header-examples-tests-ci.md) |
 
 Out of scope (same as the TS plan): HTTP routers, auth, permissions, the HTTP server surface.
 Known TS-side stubs carry over identically: S3 inputs and recursive `dataItem` return

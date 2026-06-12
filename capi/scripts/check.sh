@@ -120,9 +120,6 @@ if [ -n "${OPENAI_URL:-}" ] && [ -n "${OPENAI_TOKEN:-}" ]; then
         "$BUILD_DIR/examples/example_sdk_add_cognify"
 else
     echo "--- Skipping: example_sdk_add_cognify (OPENAI_URL/OPENAI_TOKEN not set) ---"
-    MOCK_EMBEDDING=true \
-        COGNEE_TRACING_ENABLED="" \
-        "$BUILD_DIR/examples/example_sdk_add_cognify"
 fi
 
 echo ""
@@ -149,9 +146,6 @@ if [ -n "${OPENAI_URL:-}" ] && [ -n "${OPENAI_TOKEN:-}" ]; then
         "$BUILD_DIR/examples/example_sdk_add_cognify_search"
 else
     echo "--- Skipping: example_sdk_add_cognify_search (OPENAI_URL/OPENAI_TOKEN not set) ---"
-    MOCK_EMBEDDING=true \
-        COGNEE_TRACING_ENABLED="" \
-        "$BUILD_DIR/examples/example_sdk_add_cognify_search"
 fi
 
 echo ""

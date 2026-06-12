@@ -1,10 +1,18 @@
 # cognee-capi
 
-C bindings for the [cognee-rust](https://github.com/topoteretes/cognee-rust)
-pipeline engine. Builds as a static + shared library plus a public
-header (`include/cognee.h`).
+C bindings for the [cognee-rust](https://github.com/topoteretes/cognee-rust) AI-memory library.
+Exposes two tiers:
 
-## Build
+- **SDK tier** (`cognee_sdk.h`, `cg_sdk_*`) — the user-facing surface: handle lifecycle,
+  add/cognify/search, memory ops, dataset management, config.  All ops are async (callback-based).
+- **Engine tier** (`cognee.h`, `cg_*`) — the low-level pipeline-execution primitives.
+  Advanced use only; most embedders only need the SDK tier.
+
+Both tiers build as `libcognee_capi.{a,so,dylib}`.
+
+## Quick start
+
+### Build
 
 ```bash
 cd capi
@@ -13,124 +21,168 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ```
 
-The build emits `libcognee_capi.{a,so,dylib}` and the C examples under
-`build/examples/`.
+Link with `-lcognee_capi` (and `-ldl -lm -lpthread` on Linux).
 
-## Quick start
-
-```c
-#include <cognee.h>
-
-int main(void) {
-    if (cg_init() != CG_OK) return 1;
-
-    /* ... build pipeline, run tasks ... */
-
-    cg_shutdown();
-    return 0;
-}
-```
-
-## Initialisation
-
-cognee's Rust core uses `tracing` for structured diagnostics and
-optionally exports spans via OpenTelemetry (OTLP). Unlike the
-Python/Node bindings, the C binding installs **no default tracing
-subscriber** — embedders must opt in explicitly via
-`cognee_setup_logging()`. This avoids surprising C hosts with stderr
-noise.
-
-What `cg_init()` does install is a one-shot **panic hook**
-(`std::panic::set_hook`) that writes
-`[cognee-capi panic] <message> at <file:line:col>` to stderr when a
-Rust panic crosses the FFI. This makes panics diagnosable even when
-no subscriber is installed. Replace it via `std::panic::set_hook`
-from your own Rust glue if you need chained or routed handling.
-
-### Default subscribers and the suppression env var
-
-| Binding | Default subscriber on import |
-|---|---|
-| Python (`cognee_pipeline`) | `pyo3-log` bridge into Python's `logging` module |
-| Node.js (`cognee-neon`) | `tracing-subscriber::fmt` to stderr |
-| **C (`cognee-capi`)** | **None — install via `cognee_setup_logging()`** |
-
-For symmetry with the other bindings, `COGNEE_BINDING_SUPPRESS_LOGS=1`
-is honoured by `cognee_setup_logging()` itself (and by the other init
-calls) — but since no default subscriber exists, the variable has no
-practical effect on C unless you want belt-and-braces parity scripts.
-
-### Setup functions
-
-Three idempotent init entrypoints are exposed. Each is argument-less
-and reads its configuration from environment variables (matching the
-CLI binary's behaviour). Calling order does not matter; calling any
-of them more than once is a no-op.
-
-| Function | Effect | Returns |
-|---|---|---|
-| `cognee_setup_logging()` | Initialises cognee's logging subsystem from env vars (`COGNEE_LOG_*`, `LOG_FILE_NAME`, `LOG_LEVEL`, `RUST_LOG`). Adds the rotating file appender when configured. | `0` on success / idempotent re-call, non-zero on error. |
-| `cognee_init_otlp()` | Initialises OpenTelemetry export from env vars (`COGNEE_TRACING_ENABLED`, `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_HEADERS`, `OTEL_SERVICE_NAME` and other `OTEL_*`). Defaults `service.name` to `cognee.capi-binding` when unset. No-config = no-op. | `0` = success / no-op, `1` = lock poison, `2` = init failed. |
-| `cognee_init_telemetry()` | Arms product-analytics emission (`https://test.prometh.ai`) subject to the C policy below. | `0` = armed, `1` = not armed (policy suppressed), `2` = lock poison. |
-
-Example with everything on:
+### Three-step pattern: init → warm → ops
 
 ```c
-#include <cognee.h>
+#include "cognee_sdk.h"   /* also pulls in cognee.h */
 #include <stdio.h>
+#include <stdlib.h>
+#include <assert.h>
 
 int main(void) {
-    if (cg_init() != CG_OK) return 1;
+    /* 1. Init the async runtime (must come before cg_sdk_new). */
+    assert(cg_init() == CG_OK);
 
-    if (cognee_setup_logging() != 0) return 2;          /* logging */
-    if (cognee_init_otlp() != 0)     return 3;          /* OTLP    */
-    int armed = cognee_init_telemetry();                /* analytics */
-    fprintf(stderr, "analytics armed=%d\n", armed == 0);
+    /* 2. Create a handle from environment defaults (or a JSON override). */
+    CgSdk* sdk = cg_sdk_new(
+        "{\"llm_api_key\":\"sk-…\","
+        " \"embedding_provider\":\"openai\","
+        " \"embedding_model\":\"text-embedding-3-small\"}"
+    );
+    assert(sdk != NULL);
 
-    /* ... run pipelines ... */
+    /* 3. Warm: build DB connections, bootstrap user, init embedding engine. */
+    CgSdkWaiter* w = cg_sdk_waiter_new();
+    cg_sdk_warm(sdk, cg_sdk_waiter_callback, w);
+    char* result = NULL;
+    assert(cg_sdk_waiter_wait(w, &result) == CG_OK);
+    cg_string_destroy(result);
+    cg_sdk_waiter_destroy(w);
 
+    /* 4. Add text data. */
+    w = cg_sdk_waiter_new();
+    cg_sdk_add(sdk,
+               "{\"type\":\"text\",\"text\":\"The Eiffel Tower is in Paris.\"}",
+               "my-dataset",
+               NULL,          /* opts_json */
+               cg_sdk_waiter_callback, w);
+    assert(cg_sdk_waiter_wait(w, &result) == CG_OK);
+    printf("add result: %s\n", result);
+    cg_string_destroy(result);
+    cg_sdk_waiter_destroy(w);
+
+    /* 5. Search. */
+    w = cg_sdk_waiter_new();
+    cg_sdk_search(sdk, "Where is the Eiffel Tower?", NULL,
+                  cg_sdk_waiter_callback, w);
+    assert(cg_sdk_waiter_wait(w, &result) == CG_OK);
+    printf("search result: %s\n", result);
+    cg_string_destroy(result);
+    cg_sdk_waiter_destroy(w);
+
+    cg_sdk_destroy(sdk);
     cg_shutdown();
     return 0;
 }
 ```
 
-### Analytics defaults
+See `examples/example_sdk_add.c` and `examples/example_sdk_add_cognify_search.c` for complete
+runnable examples.
 
-For the C binding, analytics emission is **explicit-only** — nothing
-is sent unless the embedder calls `cognee_init_telemetry()`. Even
-then, the same suppression rules as the Node.js binding apply:
+## Async model
 
-| Condition | Behaviour |
+All `cg_sdk_*` operations are asynchronous and fire their `CgSdkResultCallback` on a tokio
+worker thread — **never** synchronously from the initiating call (D4, R1).
+
+For single-threaded C programs the `CgSdkWaiter` sync bridge provides a blocking wait:
+
+```c
+CgSdkWaiter* w = cg_sdk_waiter_new();
+cg_sdk_cognify(sdk, "my-dataset", NULL, cg_sdk_waiter_callback, w);
+char* json = NULL;
+CgErrorCode code = cg_sdk_waiter_wait(w, &json);
+/* use json … */
+cg_string_destroy(json);   /* always free with cg_string_destroy */
+cg_sdk_waiter_destroy(w);  /* single-use — destroy after each wait */
+```
+
+Never call `cg_sdk_waiter_wait` from inside a callback — it will deadlock.
+
+## Memory ownership
+
+| Function | Who frees? |
 |---|---|
-| No call to `cognee_init_telemetry()` | Not armed. |
-| `cognee_init_telemetry()` with no suppression vars | Armed. Returns `0`. |
-| `TELEMETRY_DISABLED=1` | Not armed. Returns `1`. |
-| `ENV=test` or `ENV=dev` | Not armed. Returns `1`. |
-| `COGNEE_HOST_SDK=<any non-empty>` | Not armed. Returns `1`. |
+| `cg_sdk_waiter_wait` output (`char**`) | Caller — use `cg_string_destroy` |
+| `result_json` inside a `CgSdkResultCallback` | **Do not free** — valid only for the callback's duration; copy if needed |
+| `error_message` inside a callback | Same: valid only during the callback |
+| `CgSdk*` from `cg_sdk_new` / `cg_sdk_clone` | Caller — use `cg_sdk_destroy` |
+| `CgSdkWaiter*` from `cg_sdk_waiter_new` | Caller — use `cg_sdk_waiter_destroy` |
 
-### v1 limitation: reload-capable subscriber
+## Error handling
 
-The C binding builds the OTLP `Layer` via
-`cognee_observability::init_telemetry`, but does not compose it into a
-`tracing::Subscriber`. The OpenTelemetry SDK's `TracerProvider` still
-works, so spans emitted via the SDK directly reach the collector — but
-events emitted by Rust `tracing::*` calls inside cognee's crates are
-not currently exported through OTLP from the C binding. A
-reload-capable C subscriber is a documented follow-up; see the gap-07
-closure summary for details.
+Async ops deliver errors via the callback's `code` and `error_message` parameters:
 
-## Environment variables
+```c
+void my_cb(CgErrorCode code, const char* result_json,
+           const char* error_message, void* user_data) {
+    if (code != CG_OK) {
+        fprintf(stderr, "error %d: %s\n", code, error_message ? error_message : "");
+        return;
+    }
+    /* use result_json … */
+}
+```
 
-| Variable | Purpose |
+SDK codes (11–18) map to TypeScript `SdkError` kind strings; see `cognee_sdk.h` for the full
+mapping table. Engine codes 2 and 4–9 never appear in SDK-tier results (R2).
+
+Callbacks fire on tokio worker threads.  If your host requires thread affinity, marshal back
+yourself before touching non-thread-safe state.
+
+## Config
+
+Call synchronous `cg_sdk_config_set` / `cg_sdk_config_set_str` at any time.  Changes take
+effect on the next `cg_sdk_warm` (or the next service-requiring op, which warms lazily):
+
+```c
+cg_sdk_config_set_str(sdk, "llm_api_key", "sk-…");
+cg_sdk_config_set_str(sdk, "embedding_provider", "openai");
+cg_sdk_config_set(sdk, "llm_temperature", "0.3");
+```
+
+Read back the current (redacted) config:
+
+```c
+char* cfg = NULL;
+assert(cg_sdk_config_get(sdk, &cfg) == CG_OK);
+printf("%s\n", cfg);
+cg_string_destroy(cfg);
+```
+
+## Feature flags
+
+| CMake flag | Cargo equivalent | Effect |
+|---|---|---|
+| default | all default features | Full build: visualization, cloud, qdrant, ladybug, onnx, hf-tokenizer, tiktoken, sqlite |
+| `-DCOGNEE_CAPI_NO_DEFAULT_FEATURES=ON -DCOGNEE_CAPI_CARGO_FEATURES=sqlite,testing` | `--no-default-features --features sqlite,testing` | Slim/embedded build; `cg_sdk_visualize` and cloud ops return `CG_ERR_FEATURE_NOT_BUILT` |
+
+## Platform support
+
+Tested on Linux x86_64 (CI) and Android aarch64 (slim build, ONNX local embeddings).
+
+## Initialisation helpers
+
+Three optional, idempotent, argument-less init functions extend the base `cg_init()`:
+
+| Function | Effect |
 |---|---|
-| `COGNEE_BINDING_SUPPRESS_LOGS` | Symmetry sentinel — honoured by setup calls; the C binding ships no default subscriber so it has no practical effect unless you use the variable for parity scripts. |
-| `COGNEE_HOST_SDK` | Suppress binding-armed analytics emission when the host is an embedding SDK (decision 10). |
-| `TELEMETRY_DISABLED`, `ENV` | Standard analytics opt-outs honoured by `cognee_init_telemetry()`. |
-| `RUST_LOG`, `LOG_LEVEL` | Standard `tracing-subscriber` env-filter level overrides. |
-| `COGNEE_LOG_*`, `LOG_FILE_NAME` | Consumed by `cognee_setup_logging()` — see the workspace README's "Logging" section. |
-| `COGNEE_TRACING_ENABLED`, `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_HEADERS`, `OTEL_SERVICE_NAME` and other `OTEL_*` vars | Consumed by `cognee_init_otlp()`. |
+| `cognee_setup_logging()` | File + stdout logging from `COGNEE_LOG_*`, `LOG_LEVEL`, `RUST_LOG` |
+| `cognee_init_otlp()` | OpenTelemetry OTLP export from `COGNEE_TRACING_ENABLED` / `OTEL_*` |
+| `cognee_init_telemetry()` | Arms product-analytics (suppressed by `TELEMETRY_DISABLED`, `ENV=test/dev`) |
 
-## References
+None of them are required; the C binding installs no default subscriber so you get no noise
+unless you call them.
 
-- Public header: [`include/cognee.h`](include/cognee.h)
-- Observability docs: [docs/observability/opentelemetry.md](../docs/observability/opentelemetry.md), [docs/observability/send_telemetry.md](../docs/observability/send_telemetry.md)
+## Low-level pipeline engine
+
+`cognee.h` exposes the underlying task/pipeline/value/cancellation primitives that the SDK tier
+is built on.  These are useful for advanced embedders who need custom pipeline orchestration.
+See the engine examples under `examples/example_sync_task.c`, `example_pipeline.c`, etc.
+
+## See also
+
+- Headers: [`include/cognee_sdk.h`](include/cognee_sdk.h), [`include/cognee.h`](include/cognee.h)
+- Phase docs: [`../docs/capi-bindings/`](../docs/capi-bindings/)
+- Observability: [`../docs/observability/opentelemetry.md`](../docs/observability/opentelemetry.md)
