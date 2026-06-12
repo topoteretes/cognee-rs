@@ -90,7 +90,7 @@ predicates = "3.1"
 rand = "0.8"
 rayon = "1.10"
 regex = "1"
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "cookies", "gzip", "json", "stream", "multipart"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "gzip", "json", "stream", "multipart"] }
 scraper = "0.21"
 schemars = "0.8"
 segment = { git = "https://github.com/qdrant/qdrant", package = "segment", default-features = false, tag = "v1.17.0" }
