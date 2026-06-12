@@ -20,7 +20,7 @@ Last updated: 2026-06-12 (step 5 done)
 | 2 | [Errors, async & JSON conventions](phase-2-errors-async-json-conventions.md) | ✅ Done | capi-bindings/phase-2-conventions | 0e0425c | |
 | 3 | [Config surface](phase-3-config.md) | ✅ Done | capi-bindings/phase-3-config | 52e3faa | |
 | 4 | [Core ops (add/cognify)](phase-4-core-ops.md) | ✅ Done | capi-bindings/phase-4-core-ops | 37531a0 | |
-| 5 | [Retrieval (search/recall)](phase-5-retrieval.md) | ✅ Done | capi-bindings/phase-5-retrieval | pending | |
+| 5 | [Retrieval (search/recall)](phase-5-retrieval.md) | ✅ Done | capi-bindings/phase-5-retrieval | d67c13e | |
 | 6 | [Remaining SDK](phase-6-remaining-sdk.md) | ⬜ | | | |
 | 7 | [Feature-gated surfaces](phase-7-feature-gated.md) | ⬜ | | | |
 | 8 | [Header, examples, tests & CI](phase-8-header-examples-tests-ci.md) | ⬜ | | | |
