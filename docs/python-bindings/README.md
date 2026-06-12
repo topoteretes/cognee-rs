@@ -76,13 +76,13 @@ tracked in [STATUS.md](STATUS.md).
 | `update()` — replace data item | ✅ | ✅ | ✅ | [data-ops.md](data-ops.md) |
 | `prune_data()` — wipe files | ✅ | ✅ | ✅ | [data-ops.md](data-ops.md) |
 | `prune_system()` — selective wipe | ✅ | ✅ | ✅ | [data-ops.md](data-ops.md) |
-| `list_datasets()` | ✅ | ✅ | ❌ | [dataset-management.md](dataset-management.md) |
-| `list_data(dataset_id)` | ✅ | ✅ | ❌ | [dataset-management.md](dataset-management.md) |
-| `has_data(dataset_id)` | ✅ | ✅ | ❌ | [dataset-management.md](dataset-management.md) |
-| `dataset_status(ids)` | ✅ | ✅ | ❌ | [dataset-management.md](dataset-management.md) |
-| `empty_dataset(id)` | ✅ | ✅ | ❌ | [dataset-management.md](dataset-management.md) |
-| `delete_data(dataset_id, data_id)` | ✅ | ✅ | ❌ | [dataset-management.md](dataset-management.md) |
-| `delete_all_datasets()` | ✅ | ✅ | ❌ | [dataset-management.md](dataset-management.md) |
+| `list_datasets()` | ✅ | ✅ | ✅ | [dataset-management.md](dataset-management.md) |
+| `list_data(dataset_id)` | ✅ | ✅ | ✅ | [dataset-management.md](dataset-management.md) |
+| `has_data(dataset_id)` | ✅ | ✅ | ✅ | [dataset-management.md](dataset-management.md) |
+| `dataset_status(ids)` | ✅ | ✅ | ✅ | [dataset-management.md](dataset-management.md) |
+| `empty_dataset(id)` | ✅ | ✅ | ✅ | [dataset-management.md](dataset-management.md) |
+| `delete_data(dataset_id, data_id)` | ✅ | ✅ | ✅ | [dataset-management.md](dataset-management.md) |
+| `delete_all_datasets()` | ✅ | ✅ | ✅ | [dataset-management.md](dataset-management.md) |
 | `get_session(id)` | ✅ | ✅ | ❌ | [session-admin-ops.md](session-admin-ops.md) |
 | `add_feedback(session, qa)` | ✅ | ✅ | ❌ | [session-admin-ops.md](session-admin-ops.md) |
 | `delete_feedback(session, qa)` | ✅ | ✅ | ❌ | [session-admin-ops.md](session-admin-ops.md) |

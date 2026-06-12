@@ -15,6 +15,7 @@ use cognee_lib::config::ConfigManager;
 use pyo3::prelude::*;
 
 use crate::config::PyCogneeConfig;
+use crate::sdk_datasets::PyCogneeDatasets;
 use crate::sdk_error::{sdk_error_to_py, validation_err};
 
 // ── Settings overlay helper ───────────────────────────────────────────────────
@@ -75,6 +76,8 @@ pub struct PyCognee {
     pub(crate) inner: Arc<HandleState>,
     /// Pre-built config handle that shares `inner` — returned by the `config` property.
     config: Py<PyCogneeConfig>,
+    /// Pre-built datasets handle that shares `inner` — returned by the `datasets` property.
+    datasets: Py<PyCogneeDatasets>,
 }
 
 #[pymethods]
@@ -100,7 +103,17 @@ impl PyCognee {
                 inner: Arc::clone(&inner),
             },
         )?;
-        Ok(Self { inner, config })
+        let datasets = Py::new(
+            py,
+            PyCogneeDatasets {
+                inner: Arc::clone(&inner),
+            },
+        )?;
+        Ok(Self {
+            inner,
+            config,
+            datasets,
+        })
     }
 
     /// The configuration surface for this handle.
@@ -114,6 +127,20 @@ impl PyCognee {
     #[getter]
     fn config(&self, py: Python<'_>) -> Py<PyCogneeConfig> {
         self.config.clone_ref(py)
+    }
+
+    /// The dataset management surface for this handle.
+    ///
+    /// Use this to list, inspect, and delete datasets and their data:
+    ///
+    /// .. code-block:: python
+    ///
+    ///     datasets = await cognee.datasets.list()
+    ///     has = await cognee.datasets.has(dataset_id)
+    ///     await cognee.datasets.empty(dataset_id)
+    #[getter]
+    fn datasets(&self, py: Python<'_>) -> Py<PyCogneeDatasets> {
+        self.datasets.clone_ref(py)
     }
 
     /// Build engines and resolve the default user.

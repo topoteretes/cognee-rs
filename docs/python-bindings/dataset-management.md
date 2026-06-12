@@ -1,6 +1,6 @@
 # Dataset Management
 
-## Status: ❌ Not implemented
+## Status: ✅ Implemented
 
 ## What is missing
 
@@ -12,7 +12,7 @@ Seven dataset and data CRUD operations:
 | `Cognee.datasets.list_data(dataset_id)` | `cg_sdk_list_data` | `cognee.datasets.listData()` | List data items in a dataset |
 | `Cognee.datasets.has_data(dataset_id)` | `cg_sdk_has_data` | `cognee.datasets.has()` | Check if a dataset has any data |
 | `Cognee.datasets.status(dataset_ids)` | `cg_sdk_dataset_status` | `cognee.datasets.status()` | Get pipeline status for datasets |
-| `Cognee.datasets.empty(dataset_id)` | `cg_sdk_empty_dataset` | `cognee.datasets.empty()` | Remove all data from a dataset (keep the dataset) |
+| `Cognee.datasets.empty(dataset_id)` | `cg_sdk_empty_dataset` | `cognee.datasets.empty()` | Remove all data from a dataset and delete the dataset record |
 | `Cognee.datasets.delete_data(dataset_id, data_id, opts?)` | `cg_sdk_delete_data` | `cognee.datasets.deleteData()` | Delete a single data item |
 | `Cognee.datasets.delete_all()` | `cg_sdk_delete_all_datasets` | `cognee.datasets.deleteAll()` | Delete all datasets |
 
@@ -46,9 +46,12 @@ sub-object pattern for discoverability.
 ## Implementation plan
 
 **Prerequisite:** hoist the dataset op bodies from `capi/cognee-capi/src/sdk_datasets.rs` (and
-the neon counterpart) into `cognee_bindings_common::ops` — see
-[core-pipeline-ops.md](core-pipeline-ops.md) Step 0. The underlying logic is `DatasetManager`
-from `cognee_lib::api`, so these op bodies are thin; per-binding porting is also viable here.
+the neon counterpart `js/cognee-neon/src/sdk_datasets.rs`) into a new
+`crates/bindings-common/src/ops/datasets.rs` module, then add `pub mod datasets;` to
+`crates/bindings-common/src/ops/mod.rs` — see [core-pipeline-ops.md](core-pipeline-ops.md)
+Step 0. The underlying logic is `DatasetManager` from `cognee_lib::api`, so these op bodies are
+thin; per-binding porting (duplicating the async logic directly into `python/src/sdk_datasets.rs`
+without hoisting) is also viable here if the hoist is deferred.
 
 ### Step 1 — Create `python/src/sdk_datasets.rs`
 
@@ -104,22 +107,35 @@ impl PyCogneeDatasets {
 
 ### Step 3 — Attach to `PyCognee` as a property
 
+Add the field to the struct in `python/src/sdk.rs` and initialise it in `PyCognee::new()`:
+
 ```rust
 #[pyclass(name = "Cognee")]
 pub struct PyCognee {
-    inner: Arc<HandleState>,
+    pub(crate) inner: Arc<HandleState>,
     config: Py<PyCogneeConfig>,
     datasets: Py<PyCogneeDatasets>,   // ← new
 }
 
 #[pymethods]
 impl PyCognee {
+    #[new]
+    #[pyo3(signature = (settings=None))]
+    fn new(py: Python<'_>, settings: Option<&str>) -> PyResult<Self> {
+        // ... existing overlay logic ...
+        let datasets = Py::new(py, PyCogneeDatasets { inner: Arc::clone(&inner) })?;
+        Ok(Self { inner, config, datasets })
+    }
+
     #[getter]
     fn datasets(&self, py: Python<'_>) -> Py<PyCogneeDatasets> {
         self.datasets.clone_ref(py)
     }
 }
 ```
+
+Also add `PyCogneeDatasets` to `m.add_class::<...>()` in `python/src/lib.rs` and add
+`mod sdk_datasets;` to the module declarations.
 
 ### Step 4 — UUID validation helper
 

@@ -10,6 +10,7 @@ mod pipeline;
 mod progress;
 mod sdk;
 mod sdk_data;
+mod sdk_datasets;
 mod sdk_error;
 mod sdk_ops;
 mod sdk_retrieval;
@@ -31,6 +32,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     m.add_class::<sdk::PyCognee>()?;
     m.add_class::<config::PyCogneeConfig>()?;
+    m.add_class::<sdk_datasets::PyCogneeDatasets>()?;
     m.add_class::<pipeline::PyPipeline>()?;
     m.add_class::<pipeline::PyPipelineRunHandle>()?;
     m.add_class::<task_context::PyTaskContext>()?;

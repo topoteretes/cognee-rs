@@ -6,5 +6,6 @@
 //! crates and call through to these shared functions.
 
 pub mod data;
+pub mod datasets;
 pub mod pipeline;
 pub mod retrieval;
