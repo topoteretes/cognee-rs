@@ -6,6 +6,17 @@ edition.workspace = true
 [lib]
 name = "cognee_pipeline"
 crate-type = ["cdylib"]
+# This crate is a PyO3 extension module (`pyo3/extension-module`): it is built
+# as a cdylib whose Python symbols are resolved at runtime by the interpreter,
+# so libpython is intentionally not linked. A Rust test harness (`cargo test` /
+# `cargo nextest run --workspace`) would link a standalone binary and fail with
+# "undefined symbol: Py*". The crate's behaviour is covered by pytest via
+# `python/scripts/check.sh` (the `python-check` CI job), so disable the Rust
+# unit-test and doctest harnesses here. Sibling native crates (js/cognee-neon,
+# capi) sidestep this by not being workspace members; this crate is a member
+# (for `cargo check --all-targets` coverage), hence the explicit opt-out.
+test = false
+doctest = false
 
 [features]
 # Mirror cognee-neon's default feature set (js/cognee-neon/Cargo.toml).
