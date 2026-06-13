@@ -2,6 +2,23 @@ use std::ffi::{CStr, CString, c_char};
 
 use crate::error::{CgErrorCode, set_last_error};
 
+/// Build a C string from a Rust string, replacing interior NUL bytes so the
+/// conversion can never fail. Used on FFI callback paths where panicking would
+/// abort the host process.
+///
+/// Interior NUL bytes are silently dropped — the same lossy behaviour that the
+/// JS and Python bindings already accept. This is preferable to a crash.
+pub(crate) fn cstring_lossy(s: &str) -> CString {
+    match CString::new(s) {
+        Ok(c) => c,
+        Err(_) => {
+            let sanitized: String = s.chars().filter(|&c| c != '\0').collect();
+            CString::new(sanitized)
+                .expect("interior NULs stripped, so this cannot fail")
+        }
+    }
+}
+
 /// Convert a C string pointer to a Rust `&str`.
 ///
 /// # Safety
@@ -20,13 +37,7 @@ pub unsafe fn c_str_to_str<'a>(ptr: *const c_char) -> Result<&'a str, CgErrorCod
 
 /// Allocate a C string from a Rust `&str`. Caller must free via `cg_string_destroy`.
 pub fn str_to_c_owned(s: &str) -> *mut c_char {
-    match CString::new(s) {
-        Ok(cs) => cs.into_raw(),
-        Err(_) => {
-            // String contained a null byte — replace with empty
-            CString::new("").unwrap().into_raw()
-        }
-    }
+    cstring_lossy(s).into_raw()
 }
 
 /// Free a string previously returned by this library.

@@ -27,7 +27,7 @@ use std::ffi::c_char;
 use std::sync::Arc;
 
 use cognee_bindings_common::ops::retrieval;
-use cognee_bindings_common::{HandleState, SdkError};
+use cognee_bindings_common::SdkError;
 
 use crate::sdk::{CgSdk, CgSdkResultCallback, SendUserData, spawn_sdk_op};
 use crate::sdk_ops::parse_c_str_or_fire;

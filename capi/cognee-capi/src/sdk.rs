@@ -694,59 +694,90 @@ where
 
     rt.handle().spawn(async move {
         let ud = ud; // moved into the async block (SendUserData is Send)
-        match fut.await {
-            Ok(value) => {
-                // Serialise result to a CString JSON document (D9).
-                let json_str = match serde_json::to_string(&value) {
-                    Ok(s) => s,
-                    Err(e) => {
-                        let msg = CString::new(format!("result serialization failed: {e}"))
-                            .unwrap_or_else(|_| {
-                                CString::new("result serialization failed")
-                                    .expect("literal has no null bytes")
-                            });
-                        unsafe {
-                            cb(
-                                CgErrorCode::RuntimeError,
-                                std::ptr::null(),
-                                msg.as_ptr(),
-                                ud.0,
-                            )
-                        };
-                        return;
-                    }
+
+        // Defensive catch_unwind: convert a panicking op into the
+        // RuntimeError code path rather than relying solely on
+        // panic=abort. This keeps a single panicking op from killing
+        // the host process when a panic=unwind build is statically
+        // linked. With panic=abort this block is a no-op in practice,
+        // but it documents the intended guarantee and provides
+        // graceful degradation in the SDK tier.
+        //
+        // `FutureExt::catch_unwind` wraps the future so any panic
+        // during polling is captured as an `Err` rather than
+        // propagating.  `AssertUnwindSafe` is required because the
+        // future's captured state (Arc<HandleState> etc.) is not
+        // `UnwindSafe`; we assert safety because the only way a caught
+        // panic can leave state inconsistent is through internal Rust
+        // invariants that cannot be observed by the C caller anyway.
+        use futures::FutureExt as _;
+        match std::panic::AssertUnwindSafe(fut).catch_unwind().await {
+            Err(_panic_payload) => {
+                let msg = CString::new("internal panic in SDK operation")
+                    .expect("literal has no null bytes");
+                unsafe {
+                    cb(
+                        CgErrorCode::RuntimeError,
+                        std::ptr::null(),
+                        msg.as_ptr(),
+                        ud.0,
+                    )
                 };
-                let json_c = match CString::new(json_str) {
-                    Ok(s) => s,
-                    Err(_) => {
-                        let msg = CString::new("result JSON contained a null byte")
-                            .expect("literal has no null bytes");
-                        unsafe {
-                            cb(
-                                CgErrorCode::RuntimeError,
-                                std::ptr::null(),
-                                msg.as_ptr(),
-                                ud.0,
-                            )
-                        };
-                        return;
-                    }
-                };
-                unsafe { cb(CgErrorCode::Ok, json_c.as_ptr(), std::ptr::null(), ud.0) };
             }
-            Err(e) => {
-                // Derive the code without touching the thread-local: we are on
-                // a tokio worker thread, not the caller's thread.  The error
-                // message is delivered through the callback's `error_message`
-                // parameter (async convention; thread-local is for sync paths
-                // only — see `set_last_error_from` doc comment).
-                let code = CgErrorCode::from(&e);
-                let msg = CString::new(e.to_string()).unwrap_or_else(|_| {
-                    CString::new("(error message contained null byte)")
-                        .expect("literal has no null bytes")
-                });
-                unsafe { cb(code, std::ptr::null(), msg.as_ptr(), ud.0) };
-            }
+            Ok(inner_result) => match inner_result {
+                Ok(value) => {
+                    // Serialise result to a CString JSON document (D9).
+                    let json_str = match serde_json::to_string(&value) {
+                        Ok(s) => s,
+                        Err(e) => {
+                            let msg = CString::new(format!("result serialization failed: {e}"))
+                                .unwrap_or_else(|_| {
+                                    CString::new("result serialization failed")
+                                        .expect("literal has no null bytes")
+                                });
+                            unsafe {
+                                cb(
+                                    CgErrorCode::RuntimeError,
+                                    std::ptr::null(),
+                                    msg.as_ptr(),
+                                    ud.0,
+                                )
+                            };
+                            return;
+                        }
+                    };
+                    let json_c = match CString::new(json_str) {
+                        Ok(s) => s,
+                        Err(_) => {
+                            let msg = CString::new("result JSON contained a null byte")
+                                .expect("literal has no null bytes");
+                            unsafe {
+                                cb(
+                                    CgErrorCode::RuntimeError,
+                                    std::ptr::null(),
+                                    msg.as_ptr(),
+                                    ud.0,
+                                )
+                            };
+                            return;
+                        }
+                    };
+                    unsafe { cb(CgErrorCode::Ok, json_c.as_ptr(), std::ptr::null(), ud.0) };
+                }
+                Err(e) => {
+                    // Derive the code without touching the thread-local: we are on
+                    // a tokio worker thread, not the caller's thread.  The error
+                    // message is delivered through the callback's `error_message`
+                    // parameter (async convention; thread-local is for sync paths
+                    // only — see `set_last_error_from` doc comment).
+                    let code = CgErrorCode::from(&e);
+                    let msg = CString::new(e.to_string()).unwrap_or_else(|_| {
+                        CString::new("(error message contained null byte)")
+                            .expect("literal has no null bytes")
+                    });
+                    unsafe { cb(code, std::ptr::null(), msg.as_ptr(), ud.0) };
+                }
+            },
         }
     });
 }

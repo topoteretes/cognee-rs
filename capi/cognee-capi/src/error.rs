@@ -86,8 +86,9 @@ thread_local! {
 
 pub fn set_last_error(msg: impl Into<String>) {
     let s = msg.into();
-    let cs =
-        CString::new(s).unwrap_or_else(|_| CString::new("(error contained null byte)").unwrap());
+    // cstring_lossy strips interior NUL bytes rather than panicking — safe on
+    // any error message including attacker-controlled strings.
+    let cs = crate::util::cstring_lossy(&s);
     LAST_ERROR.with(|cell| {
         *cell.borrow_mut() = Some(cs);
     });

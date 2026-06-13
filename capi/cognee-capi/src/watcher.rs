@@ -94,9 +94,11 @@ impl Drop for VtableWatcher {
     }
 }
 
-/// Helper to create a temporary CString for FFI. Returns null ptr for None.
+/// Helper to create a temporary CString for FFI. Interior NUL bytes are
+/// silently dropped via `cstring_lossy` — same lossy behaviour as the JS and
+/// Python bindings. Never panics.
 fn to_c(s: &str) -> std::ffi::CString {
-    std::ffi::CString::new(s).unwrap_or_else(|_| std::ffi::CString::new("").unwrap())
+    crate::util::cstring_lossy(s)
 }
 
 fn uuid_to_c(u: Uuid) -> std::ffi::CString {
