@@ -43,7 +43,7 @@ Status: `Not started` · `In progress` · `Blocked` · `Done`.
 |----|------|---------|-----------|------|--------|------|
 | CR-1 | Eliminate reachable `unwrap()` on FFI paths; enforce panic safety (`catch_unwind` + `panic = "abort"`) | C API | Correctness | P0 | Done | [01-capi-panic-safety.md](01-capi-panic-safety.md) |
 | CR-2 | Fix empty-task pipeline in `execute_async`/`execute_in_background` | C API | Correctness | P0 | Done | [02-capi-pipeline-async-tasks.md](02-capi-pipeline-async-tasks.md) |
-| CL-1 | Generate C header via cbindgen; add CI symbol-diff to stop drift | C API | Cleanliness/Docs | P1 | Not started | [03-capi-header-cbindgen.md](03-capi-header-cbindgen.md) |
+| CL-1 | Generate C header via cbindgen; add CI symbol-diff to stop drift | C API | Cleanliness/Docs | P1 | Done | [03-capi-header-cbindgen.md](03-capi-header-cbindgen.md) |
 | ID-1 | Drop-in `cognee` SDK API parity (module-level functions, package alias, `SearchType`) | Python | Idiomaticity/Functionality | P1 | Not started | [04-python-sdk-parity.md](04-python-sdk-parity.md) |
 | ID-2 | Typed inputs & options (TypedDict + kwargs), result-key convention | Python | Idiomaticity | P1 | Not started | [05-python-typing-stubs.md](05-python-typing-stubs.md) |
 | DOC-1 | Ship `.pyi` type stubs (or remove the misleading `py.typed`) | Python | Documentation | P1 | Not started | [05-python-typing-stubs.md](05-python-typing-stubs.md) |

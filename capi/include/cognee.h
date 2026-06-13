@@ -223,7 +223,77 @@ CgPipelineWatcher* cg_pipeline_watcher_noop(void);
 void cg_pipeline_watcher_destroy(CgPipelineWatcher* w);
 
 /* ExecStatusManager */
+
+/**
+ * C-side vtable for a custom exec status manager.
+ *
+ * All callbacks are synchronous.  UUID pointers are 16-byte raw byte arrays
+ * in network byte order (big-endian); pass NULL to represent a missing UUID.
+ * `state` is forwarded verbatim to every callback and to `destroy`.
+ */
+typedef struct {
+    /** Query whether a data item has already been processed.
+     *  Returns true if completed; false otherwise. */
+    bool (*is_completed)(
+        void*       state,
+        const char* data_id,
+        const char* pipeline_name,
+        const uint8_t* dataset_id   /* 16 bytes or NULL */
+    );
+    /** Mark a data item as successfully completed. */
+    void (*mark_completed)(
+        void*       state,
+        const char* data_id,
+        const char* pipeline_name,
+        const uint8_t* dataset_id   /* 16 bytes or NULL */
+    );
+    /** Mark a data item as failed with an error message. */
+    void (*mark_failed)(
+        void*       state,
+        const char* data_id,
+        const char* pipeline_name,
+        const uint8_t* dataset_id,  /* 16 bytes or NULL */
+        const char* error
+    );
+    /** Record provenance for a task step. */
+    void (*stamp_provenance)(
+        void*       state,
+        const char* data_id,
+        const char* pipeline_name,
+        const char* task_name,
+        const uint8_t* user_id,     /* 16 bytes or NULL */
+        const char* node_set        /* NULL if not set */
+    );
+    /** Release resources held by the custom manager.
+     *  Called exactly once when the manager is destroyed. */
+    void (*destroy)(void* state);
+} CgExecStatusManagerVtable;
+
+/**
+ * Create a custom exec status manager from a C vtable.
+ *
+ * # Safety
+ * `state` must remain valid until `vtable.destroy` is called (i.e. until
+ * `cg_exec_status_destroy` is called on the returned pointer).
+ * Any callback in `vtable` may be NULL (treated as a no-op / false-return).
+ *
+ * @param state   Caller-owned opaque pointer forwarded to every vtable call.
+ * @param vtable  Vtable struct (copied by value; the caller does not need to
+ *                keep it alive after this call returns).
+ * @return        Heap-allocated CgExecStatusManager* owned by the caller;
+ *                must be freed with cg_exec_status_destroy.
+ */
+CgExecStatusManager* cg_exec_status_new(void* state, CgExecStatusManagerVtable vtable);
+
+/** Create a no-op exec status manager (processes everything, no dedup). */
 CgExecStatusManager* cg_exec_status_noop(void);
+
+/**
+ * Destroy an exec status manager.
+ *
+ * # Safety
+ * `mgr` must have been created by this library, or be NULL (no-op).
+ */
 void cg_exec_status_destroy(CgExecStatusManager* mgr);
 
 #ifdef __cplusplus

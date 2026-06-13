@@ -21,9 +21,9 @@ exported symbols:
   exists, yet `capi/cognee-capi/build.rs` is a deliberate no-op
   (`fn main() {}`). The headers are written and edited by hand.
 
-There are ~120 exported functions across two headers (`cognee.h`,
-`cognee_sdk.h`); manual maintenance does not scale and the drift above is the
-predictable result.
+There are ~145 unique exported symbols across the source and two headers
+(`cognee.h`, `cognee_sdk.h`); manual maintenance does not scale and the drift
+above is the predictable result.
 
 ## Goal / definition of done
 
@@ -70,27 +70,40 @@ Create `capi/scripts/check_header_sync.sh` that:
 
 1. Extracts exported symbol names from the source:
    ```bash
-   grep -rhoE 'pub (unsafe )?extern "C" fn [a-z_]+' capi/cognee-capi/src/ \
-     | sed -E 's/.* ([a-z_]+)$/\1/' | sort -u > /tmp/exports.txt
+   grep -rhoE 'pub (unsafe )?extern "C" fn [a-z0-9_]+' capi/cognee-capi/src/ \
+     | sed -E 's/.* ([a-z0-9_]+)$/\1/' | sort -u > /tmp/exports.txt
    ```
+   **Note:** the character class must include digits (`0-9`) — function names like
+   `cg_value_from_i64` contain numerals. A `[a-z_]+` pattern truncates them to
+   `cg_value_from_i`, causing false-positive drift reports.
    (Exclude test-only exports such as `cg_test_force_panic` via an allowlist.)
 2. Extracts declared function names from both headers:
    ```bash
-   grep -hoE '\bcg_[a-z_]+\s*\(' capi/include/cognee.h capi/include/cognee_sdk.h \
+   grep -hoE '\b(cg|cognee)_[a-z0-9_]+\s*\(' capi/include/cognee.h capi/include/cognee_sdk.h \
      | sed -E 's/\s*\($//' | sort -u > /tmp/declared.txt
    ```
+   **Note:** the prefix alternation `(cg|cognee)_` is required — several public
+   entry points use the `cognee_` prefix (`cognee_setup_logging`,
+   `cognee_init_otlp`, `cognee_init_telemetry`) and a `\bcg_` pattern silently
+   misses them.
 3. `comm -23 /tmp/exports.txt /tmp/declared.txt` — any line printed is an
    exported-but-undeclared symbol; exit non-zero if non-empty. Print the offenders.
 
 Keep an explicit allowlist file (`capi/scripts/header_sync_allow.txt`) for
-intentionally-internal exports (trampolines that are `#[no_mangle]` for callback
-ABI but not part of the public surface — verify which, if any, qualify).
+intentionally-internal exports. The one confirmed allowlist entry is
+`cg_test_force_panic` — it is `#[no_mangle]` only for the `testing-panic`
+feature and is intentionally excluded from the public header. Verify whether
+additional trampolines exist before finalising the list.
 
 ### Step 3 — Wire it into the check pipeline
 
 Add the script to [capi/scripts/check.sh](../../capi/scripts/check.sh) so it runs in
-the C API CI job (`.github/workflows/capi-check.yml`) and in
-`scripts/check_all.sh`.
+the C API CI job. The C API job is defined as the `capi-check` job inside
+`.github/workflows/ci.yml` (there is no separate `capi-check.yml` file — the
+workflow was consolidated into the main `ci.yml`). The job already invokes
+`bash capi/scripts/check.sh`, so wiring the new script there is sufficient; no
+changes to `scripts/check_all.sh` are needed since it already delegates to
+`capi/scripts/check.sh`.
 
 ### Step 4 — (Optional, follow-up) keep cbindgen as a generator for review
 

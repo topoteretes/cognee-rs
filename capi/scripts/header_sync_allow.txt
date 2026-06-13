@@ -1,0 +1,17 @@
+# header_sync_allow.txt — allowlist for intentionally-internal #[no_mangle] symbols.
+#
+# Each non-blank, non-comment line is the exact function name of a symbol that
+# is exported by the Rust source but intentionally excluded from the public
+# headers (capi/include/cognee.h, capi/include/cognee_sdk.h).
+#
+# Before adding an entry here, confirm the symbol is truly internal and
+# document WHY it is exempt.
+#
+# Format: one symbol name per line; lines starting with # are comments.
+
+# cg_test_force_panic: test-only helper exported only under the
+# `testing-panic` cargo feature.  It forces a Rust panic to verify that the
+# panic hook installed by cg_init writes "[cognee-capi panic]" to stderr.
+# Intentionally absent from public headers — exposing it would invite
+# misuse in production callers.
+cg_test_force_panic

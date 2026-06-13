@@ -28,6 +28,12 @@ CARGO_TARGET_DIR="$CAPI_DIR/target/check-slim" \
 
 echo ""
 echo "================================================================"
+echo "=== C API: Header sync check (exported vs. declared symbols) ==="
+echo "================================================================"
+bash "$SCRIPT_DIR/check_header_sync.sh"
+
+echo ""
+echo "================================================================"
 echo "=== C API: Building with CMake ==="
 echo "================================================================"
 
