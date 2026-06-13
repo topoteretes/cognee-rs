@@ -31,11 +31,12 @@ fn clone_pipeline(p: &cognee_core::Pipeline) -> cognee_core::Pipeline {
 }
 ```
 
-`cg_pipeline_execute_in_background` (line 209) and the async variant both call
-`clone_pipeline`, so both execute nothing. Only `cg_pipeline_execute_blocking`
-works. The header [capi/include/cognee.h](../../capi/include/cognee.h) lists all three
-without flagging the limitation, so a C caller using the async/background engine
-path gets silently wrong results.
+`cg_pipeline_execute_in_background` (calls `clone_pipeline` at line 209) and
+`cg_pipeline_execute_async` (calls `clone_pipeline` at line 285) both execute
+nothing. Only `cg_pipeline_execute_blocking` works. The header
+[capi/include/cognee.h](../../capi/include/cognee.h) lists all three without flagging
+the limitation, so a C caller using the async/background engine path gets
+silently wrong results.
 
 > Scope: this is an **engine-tier** concern. The high-level `cg_sdk_*` ops do not
 > use `clone_pipeline` (they dispatch through `spawn_sdk_op`), so the SDK surface
@@ -56,39 +57,51 @@ it. The header comment in `pipeline_exec.rs` already notes "task closures are
 Arc-wrapped, so we can reconstruct a Pipeline that shares the same task
 closures" — the cloning just needs to actually copy the `tasks` field.
 
-### Step 1 — Inspect the `Pipeline` task representation
+### Step 1 — Understand the `Pipeline` task representation (already done)
 
-Read `cognee_core::pipeline::Pipeline` (in `crates/core/src/`) to confirm the
-`tasks` field type. Determine whether tasks are stored as `Arc<dyn …>` /
-`Vec<Arc<…>>` (cheaply shareable) or as a non-`Clone` owning type.
+`Pipeline.tasks` is `Vec<TaskInfo>` (`crates/core/src/pipeline.rs:97`).
+`TaskInfo.task` is a `Task` enum whose variants all hold `Arc<dyn Fn(…)>` type
+aliases (`SyncFn`, `AsyncFn`, `SyncIterFn`, etc.) — see
+`crates/core/src/task.rs:170-220`. Although the inner function pointers are
+`Arc`-wrapped and therefore cheap to share, **neither `Task` nor `TaskInfo`
+implements `Clone`**, so `p.tasks.clone()` does not compile as-is.
 
-### Step 2a — Preferred: share the tasks
+Additionally, `Pipeline` has two fields beyond what `clone_pipeline` currently
+copies: `telemetry_settings: Option<serde_json::Map<…>>` (line 120) and
+`rate_limiter: Option<Arc<dyn RateLimiter>>` (line 125). Both must be included
+in any fixed clone.
 
-If tasks are `Arc`-wrapped (the comment claims they are), add:
+### Step 2 — Fix: share the pipeline via `Arc<Pipeline>` at construction
 
-```rust
-new_p.tasks = p.tasks.clone(); // Arc-wrapped closures are cheap to share
-```
+The cleanest fix is to store the pipeline's `inner` as `Arc<Pipeline>` inside
+`CgPipeline` (see `capi/cognee-capi/src/pipeline.rs`) instead of a plain
+`Pipeline`. Then both the blocking and async/background paths can cheaply clone
+the `Arc` — no per-field copy of `tasks` needed.
 
-to `clone_pipeline`, and delete the "tasks are left empty" comment. This makes
-all three execution paths equivalent.
+Concrete steps:
 
-### Step 2b — If tasks are not cheaply clonable
+1. Change `CgPipeline::inner` from `Pipeline` to `Arc<Pipeline>`.
+2. Update `cg_pipeline_new` and `cg_pipeline_add_task` (which currently mutate
+   `inner` directly) to use `Arc::make_mut` for the mutation path (works because
+   no second `Arc` clone exists until an execute call is made).
+3. In `cg_pipeline_execute_in_background`, replace `clone_pipeline(p)` with
+   `Arc::clone(&(*pipeline).inner)` and pass it directly to
+   `execute_in_background`.
+4. In `cg_pipeline_execute_async`, replace `clone_pipeline(p_clone)` with
+   `Arc::clone(&(*pipeline).inner)` and pass the arc to the spawned async block.
+5. Delete `clone_pipeline` entirely.
 
-If `Pipeline` cannot share its task list (e.g. `FnMut` or non-`Clone` closures),
-restructure so the spawned future **takes ownership of the original
-`CgPipeline`** rather than reconstructing one:
+> **Alternative (narrower):** add manual `Clone` impls for `Task` and `TaskInfo`
+> in `cognee-core` (each variant just clones its `Arc`), then call
+> `p.tasks.clone()` and copy all remaining fields (`telemetry_settings`,
+> `rate_limiter`) in `clone_pipeline`. This touches the core crate; the
+> `Arc<Pipeline>` approach keeps the change inside `capi/`.
 
-- Change `cg_pipeline_execute_in_background` / `_async` to consume the
-  `*mut CgPipeline` (matching the ownership-transfer convention used elsewhere,
-  e.g. `cg_pipeline_add_task` consuming `CgTaskInfo`), move its `inner` into the
-  spawned task, and document the consume semantics in the header.
-- Alternatively, wrap the pipeline's `inner` in `Arc<Pipeline>` at construction
-  so both the blocking and async paths clone the `Arc`.
+Whichever path is taken, the `clone_pipeline` comment that says "tasks are left
+empty — this is a known limitation" must be removed.
 
-Prefer 2a if the field is already shareable; fall back to 2b only if the core
-type forbids it. If 2b changes ownership semantics, that is an API change to call
-out in the header and the changelog.
+If 2b changes ownership semantics visible in the C header, document that
+in the header and the changelog.
 
 ### Step 3 — Update the header
 
@@ -103,7 +116,7 @@ Add (or extend) a C example under [capi/examples/](../../capi/examples/) — mod
 
 1. builds a pipeline with one sync task that has an observable side effect
    (e.g. appends to a result value),
-2. runs it via `cg_pipeline_execute_in_background` + `cg_pipeline_run_handle_wait`,
+2. runs it via `cg_pipeline_execute_in_background` + `cg_run_handle_wait`,
 3. asserts the task actually ran (non-empty result).
 
 Wire it into [capi/scripts/check.sh](../../capi/scripts/check.sh) so it builds and runs

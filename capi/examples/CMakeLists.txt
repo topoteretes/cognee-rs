@@ -5,6 +5,7 @@ set(EXAMPLES
     example_batch_task
     example_pipeline
     example_cancellation
+    example_background_task
 )
 
 foreach(example ${EXAMPLES})

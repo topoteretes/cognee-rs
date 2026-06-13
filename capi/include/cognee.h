@@ -145,7 +145,18 @@ void cg_pipeline_set_data_id_fn(CgPipeline* p, CgDataIdFnPtr fn_ptr, void* user_
                                  void (*destroy_ud)(void*));
 void cg_pipeline_destroy(CgPipeline* p);
 
-/* Pipeline execution */
+/* Pipeline execution
+ *
+ * All three entry points execute the full task list:
+ *   cg_pipeline_execute_blocking  — blocks the caller until done.
+ *   cg_pipeline_execute_in_background — returns a CgPipelineRunHandle
+ *       immediately; wait with cg_run_handle_wait (requires cg_init()).
+ *   cg_pipeline_execute_async — invokes callback on completion
+ *       (requires cg_init()).
+ *
+ * The pipeline handle may be destroyed with cg_pipeline_destroy() as
+ * soon as the execute call returns — the Arc-shared task list keeps the
+ * tasks alive for the duration of the background/async run. */
 typedef void (*CgExecutionCallback)(CgErrorCode, CgPipelineRunResult*, void*);
 CgErrorCode cg_pipeline_execute_blocking(const CgPipeline*, const CgValue* const*, size_t, const CgTaskContext*, const CgPipelineWatcher*, CgPipelineRunResult**);
 CgPipelineRunHandle* cg_pipeline_execute_in_background(const CgPipeline*, const CgValue* const*, size_t, const CgTaskContext*, const CgPipelineWatcher*);

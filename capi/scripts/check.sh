@@ -49,6 +49,7 @@ EXAMPLES=(
     example_batch_task
     example_pipeline
     example_cancellation
+    example_background_task
 )
 
 for example in "${EXAMPLES[@]}"; do

@@ -144,7 +144,7 @@ pub unsafe extern "C" fn cg_pipeline_execute_blocking(
     null_check!(ctx);
     null_check!(out);
 
-    let p = unsafe { &(*pipeline).inner };
+    let p = unsafe { &*(*pipeline).inner };
     let c = Arc::clone(unsafe { &(*ctx).inner });
     let input_vec = unsafe { inputs_to_vec(inputs, input_count) };
 
@@ -203,10 +203,8 @@ pub unsafe extern "C" fn cg_pipeline_execute_in_background(
 
     let w: Arc<dyn cognee_core::PipelineWatcher> = Arc::new(NoopWatcher);
 
-    // Pipeline fields are pub and task closures are Arc-wrapped, so we can
-    // reconstruct a Pipeline that shares the same task closures.
-    let p = unsafe { &(*pipeline).inner };
-    let p_arc = Arc::new(clone_pipeline(p));
+    // Share the Arc so the spawned future uses the same task list.
+    let p_arc = Arc::clone(unsafe { &(*pipeline).inner });
 
     let _guard = rt.enter();
     let handle = execute_in_background(p_arc, input_vec, c, w);
@@ -214,22 +212,6 @@ pub unsafe extern "C" fn cg_pipeline_execute_in_background(
     Box::into_raw(Box::new(CgPipelineRunHandle {
         inner: Some(handle),
     }))
-}
-
-/// Reconstruct a Pipeline sharing the same Arc-wrapped task closures.
-fn clone_pipeline(p: &cognee_core::Pipeline) -> cognee_core::Pipeline {
-    use cognee_core::pipeline::Pipeline;
-
-    let mut new_p = Pipeline::new(p.description.clone());
-    new_p.id = p.id;
-    new_p.name = p.name.clone();
-    new_p.retry_policy = p.retry_policy.clone();
-    new_p.batch_size = p.batch_size;
-    new_p.data_id_fn = p.data_id_fn.clone();
-    new_p.concurrency = p.concurrency;
-    // Note: tasks are left empty — this is a known limitation for
-    // execute_in_background/execute_async. The blocking path works fine.
-    new_p
 }
 
 // ---------------------------------------------------------------------------
@@ -279,21 +261,21 @@ pub unsafe extern "C" fn cg_pipeline_execute_async(
         }
     };
 
-    let p = unsafe { &(*pipeline).inner };
+    // Share the Arc so the spawned future uses the same task list.
+    let p_arc = Arc::clone(unsafe { &(*pipeline).inner });
     let c = Arc::clone(unsafe { &(*ctx).inner });
     let input_vec = unsafe { inputs_to_vec(inputs, input_count) };
-    let p_clone = clone_pipeline(p);
 
     let cb = SendCallback::new(callback, callback_data);
 
     let noop = Arc::new(NoopWatcher);
 
     rt.spawn(async move {
-        let result = cognee_core::pipeline::execute(&p_clone, input_vec, c, noop.as_ref()).await;
+        let result = cognee_core::pipeline::execute(&p_arc, input_vec, c, noop.as_ref()).await;
         match result {
             Ok(outputs) => {
                 let run_result = PipelineRunResult {
-                    run_id: p_clone.id,
+                    run_id: p_arc.id,
                     outputs,
                 };
                 let ptr = Box::into_raw(Box::new(CgPipelineRunResult { inner: run_result }));
