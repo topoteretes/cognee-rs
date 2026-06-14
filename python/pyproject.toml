@@ -7,6 +7,22 @@ name = "cognee-pipeline"
 requires-python = ">=3.9"
 version = "0.1.0"
 
+[project.optional-dependencies]
+test = [
+    "pytest>=8",
+    "pytest-asyncio>=0.24",
+]
+dev = [
+    "maturin>=1.5",
+    "mypy>=1.10",
+]
+
+[tool.pytest.ini_options]
+# "strict" matches the existing @pytest.mark.asyncio decorator style on all
+# async tests and does not silently collect bare async def functions as tests.
+asyncio_mode = "strict"
+testpaths = ["tests"]
+
 [tool.maturin]
 features = ["pyo3/extension-module"]
 python-source = "."

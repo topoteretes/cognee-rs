@@ -454,7 +454,8 @@ jobs:
         run: |
           python -m venv .venv
           source .venv/bin/activate
-          pip install maturin pytest pytest-asyncio
+          pip install maturin
+          cd python && pip install -e ".[test]"
       - name: Run Python check
         run: |
           source .venv/bin/activate

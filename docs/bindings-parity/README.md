@@ -47,7 +47,7 @@ Status: `Not started` · `In progress` · `Blocked` · `Done`.
 | ID-1 | Drop-in `cognee` SDK API parity (module-level functions, package alias, `SearchType`) | Python | Idiomaticity/Functionality | P1 | Done | [04-python-sdk-parity.md](04-python-sdk-parity.md) |
 | ID-2 | Typed inputs & options (TypedDict + kwargs), result-key convention | Python | Idiomaticity | P1 | Done | [05-python-typing-stubs.md](05-python-typing-stubs.md) |
 | DOC-1 | Ship `.pyi` type stubs (or remove the misleading `py.typed`) | Python | Documentation | P1 | Done | [05-python-typing-stubs.md](05-python-typing-stubs.md) |
-| PKG-1 | Declare test/dev deps (`pytest-asyncio`) and example deps in `pyproject.toml` | Python | Cleanliness | P2 | Not started | [06-python-packaging-tests.md](06-python-packaging-tests.md) |
+| PKG-1 | Declare test/dev deps (`pytest-asyncio`) and example deps in `pyproject.toml` | Python | Cleanliness | P2 | Done | [06-python-packaging-tests.md](06-python-packaging-tests.md) |
 | PKG-2 | Prebuild matrix / source-build fallback for the native `.node` addon | JS | Distribution | P1 | Not started | [07-js-distribution.md](07-js-distribution.md) |
 | ID-3 | Surface notebooks/users/pipeline-run ops as `Cognee` sub-objects | JS | Idiomaticity/Functionality | P1 | Not started | [08-js-types-and-surface.md](08-js-types-and-surface.md) |
 | ID-4 | Replace `any` result types with typed interfaces | JS | Idiomaticity | P1 | Not started | [08-js-types-and-surface.md](08-js-types-and-surface.md) |

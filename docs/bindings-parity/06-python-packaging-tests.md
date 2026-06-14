@@ -55,10 +55,10 @@ asyncio_mode = "auto"
 testpaths = ["tests"]
 ```
 
-Verify against how the tests are written: if they already decorate with
-`@pytest.mark.asyncio`, `asyncio_mode = "strict"` is the faithful setting;
-if they rely on bare `async def` tests, use `"auto"`. Match the existing style
-rather than changing every test.
+The existing tests all use `@pytest.mark.asyncio` explicitly (confirmed in
+`test_async.py`, `test_data_ops.py`, and all other async test files). Use
+`asyncio_mode = "strict"` — it matches the existing decorator style and does
+not silently collect bare `async def` functions as tests.
 
 ### Step 3 — Install deps in `check.sh`
 
@@ -66,14 +66,21 @@ Update [python/scripts/check.sh](../../python/scripts/check.sh) to install the d
 extras before running pytest, so the script is self-contained:
 
 ```bash
-pip install -e ".[test]"     # or: pip install ".[test]" after maturin develop
 maturin develop
+pip install -e ".[test]"
 pytest tests/ -v
 ```
 
-Confirm ordering: `maturin develop` builds and installs the package; installing
-`.[test]` pulls the test extra. Pin the order that works in the existing CI
-(`.github/workflows/python-check.yml`) and update that workflow to match.
+Confirm ordering: `maturin develop` builds and installs the package first;
+installing `.[test]` then pulls the test extra without rebuilding.
+
+Also update the `python-check` job in [.github/workflows/ci.yml](../../.github/workflows/ci.yml)
+(there is no separate `python-check.yml` — the job lives in `ci.yml` under
+`jobs.python-check`, currently at the step "Create venv and install
+dependencies" which manually does `pip install maturin pytest pytest-asyncio`).
+Replace that hard-coded list with `pip install maturin && pip install -e
+".[test]"` (run from `python/`) so the workflow derives its deps from
+`pyproject.toml` rather than duplicating them.
 
 ### Step 4 — (Coordinated) add example deps
 

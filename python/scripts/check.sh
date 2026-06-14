@@ -19,13 +19,15 @@ maturin develop
 
 echo ""
 echo "================================================================"
-echo "=== Python: Running tests ==="
+echo "=== Python: Installing test dependencies ==="
 echo "================================================================"
 
-if ! command -v pytest &> /dev/null; then
-    echo "ERROR: pytest not found. Install it with: pip install pytest"
-    exit 1
-fi
+pip install -e ".[test]"
+
+echo ""
+echo "================================================================"
+echo "=== Python: Running tests ==="
+echo "================================================================"
 
 pytest tests/ -v
 
