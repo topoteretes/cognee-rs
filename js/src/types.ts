@@ -36,6 +36,37 @@ export interface CogneeCognifyOptions {
 }
 
 /**
+ * A data item row. Mirrors `cognee_models::Data` (Serialize).
+ *
+ * All fields are snake_case (Rust's default `serde` serialization).
+ */
+export interface CogneeDataRecord {
+  id: string;
+  name: string;
+  raw_data_location: string;
+  original_data_location: string;
+  extension: string;
+  mime_type: string;
+  content_hash: string;
+  owner_id: string;
+  created_at: string;
+  updated_at: string | null;
+  label: string | null;
+  original_extension: string | null;
+  original_mime_type: string | null;
+  loader_engine: string | null;
+  raw_content_hash: string | null;
+  tenant_id: string | null;
+  external_metadata: string | null;
+  node_set: string | null;
+  pipeline_status: string | null;
+  token_count: number;
+  data_size: number;
+  last_accessed: string | null;
+  importance_weight: number | null;
+}
+
+/**
  * Result of `cogneeAdd`.
  *
  * `AddPipeline::add` returns one row per input including duplicates (the
@@ -46,11 +77,9 @@ export interface CogneeCognifyOptions {
  */
 export interface CogneeAddResult {
   datasetName: string;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  added: any[];
+  added: CogneeDataRecord[];
   addedCount: number;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  deduplicated: any[];
+  deduplicated: CogneeDataRecord[];
   deduplicatedCount: number;
 }
 
@@ -149,24 +178,98 @@ export interface CogneeRecallOptions {
 }
 
 /**
- * Raw search response from `cogneeSearch`.
- * Mirrors `cognee_search::SearchResponse` (fully Serialize on the Rust side).
+ * A single item in a `SearchResponse.result` when `kind === "Items"`.
+ *
+ * Mirrors `cognee_search::SearchItem` (Serialize). `payload` is a
+ * heterogeneous JSON object whose shape depends on the search type.
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export type CogneeSearchResponse = any;
+export interface CogneeSearchItem {
+  id: string | null;
+  score: number | null;
+  payload: Record<string, unknown>;
+}
+
+/** A knowledge-graph node returned in the `context` / `graphs` maps. */
+export interface CogneeSearchGraphNode {
+  id: string;
+  label: string;
+}
+
+/** A knowledge-graph edge returned in the `context` / `graphs` maps. */
+export interface CogneeSearchGraphEdge {
+  source: string;
+  target: string;
+  relationship: string;
+  weight: number | null;
+}
+
+/** A named graph (nodes + edges) attached to a `CogneeSearchResponse`. */
+export interface CogneeSearchGraph {
+  nodes: CogneeSearchGraphNode[];
+  edges: CogneeSearchGraphEdge[];
+}
+
+/**
+ * The discriminated `result` field of `CogneeSearchResponse`.
+ *
+ * Mirrors the `SearchOutput` enum (`#[serde(tag = "kind", content = "data")]`).
+ * When `kind === "Items"`, `data` is `CogneeSearchItem[]`.
+ * When `kind === "Text"`, `data` is `string`.
+ * When `kind === "Texts"`, `data` is `string[]`.
+ * When `kind === "GraphQueryRows"`, `data` is a two-dimensional JSON array.
+ * When `kind === "Rules"`, `data` is `Array<{ node_set: string; text: string }>`.
+ * When `kind === "Ack"`, `data` is `{ message: string }`.
+ * When `kind === "Structured"`, `data` is an arbitrary JSON value.
+ */
+export type CogneeSearchOutput =
+  | { kind: "Items"; data: CogneeSearchItem[] }
+  | { kind: "Text"; data: string }
+  | { kind: "Texts"; data: string[] }
+  | { kind: "GraphQueryRows"; data: unknown[][] }
+  | { kind: "Rules"; data: Array<{ node_set: string; text: string }> }
+  | { kind: "Ack"; data: { message: string } }
+  | { kind: "Structured"; data: unknown };
+
+/**
+ * Search response from `cogneeSearch`.
+ *
+ * Mirrors `cognee_search::SearchResponse` (Serialize, snake_case fields).
+ */
+export interface CogneeSearchResponse {
+  search_type: SearchTypeString;
+  result: CogneeSearchOutput;
+  context: Record<string, CogneeSearchItem[]> | null;
+  graphs: Record<string, CogneeSearchGraph> | null;
+  diagnostics: Record<string, unknown> | null;
+  datasets: string[] | null;
+  only_context: boolean;
+  use_combined_context: boolean;
+  verbose: boolean;
+}
+
+/**
+ * A single recall result item. Mirrors `cognee_search::RecallItem` (Serialize).
+ *
+ * `source` is one of `"session"`, `"graph"`, `"trace"`, `"graph_context"`
+ * (snake_case, matching the `RecallSource` serde rename).
+ * `content` is a heterogeneous JSON value whose shape depends on the source.
+ */
+export interface CogneeRecallItem {
+  source: "session" | "graph" | "trace" | "graph_context";
+  content: Record<string, unknown>;
+  score: number;
+}
 
 /** Result returned by `cogneeRecall`. */
 export interface CogneeRecallResult {
   /** Source-tagged result items from all contributing sources. */
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  items: any[];
+  items: CogneeRecallItem[];
   /** The search type used for the graph retrieval leg, or null. */
   searchTypeUsed: SearchTypeString | null;
   /** Whether auto-routing was applied. */
   autoRouted: boolean;
   /** The raw graph search response, or null if no graph leg ran. */
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  searchResponse: any | null;
+  searchResponse: CogneeSearchResponse | null;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -183,9 +286,14 @@ export interface CogneeRememberOptions {
   tenant?: string;
 }
 
-/** Result of `cogneeRemember` / `cogneeRememberEntry`. Mirrors `RememberResult` (Serialize). */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export type CogneeRememberResult = any;
+/**
+ * Result of `cogneeRemember` / `cogneeRememberEntry`.
+ *
+ * The Rust `RememberResult` / `RememberSessionResult` types are Serialize.
+ * The exact shape varies by path (graph vs session), so this is intentionally
+ * left as an open record type rather than a closed interface.
+ */
+export type CogneeRememberResult = Record<string, unknown>;
 
 /** A typed memory entry for `cogneeRememberEntry`. */
 export type CogneeMemoryEntry =
@@ -259,11 +367,33 @@ export type CogneeForgetTarget =
   | { kind: "dataset"; dataset: { name: string } | { id: string } }
   | { kind: "all" };
 
+/**
+ * Result of a delete operation. Mirrors `cognee_delete::DeleteResult` (Serialize,
+ * snake_case fields).
+ */
+export interface CogneeDeleteResultDetail {
+  deleted_datasets: number;
+  deleted_dataset_links: number;
+  deleted_data: number;
+  deleted_storage_files: number;
+  deleted_graph_nodes: number;
+  deleted_vector_points: number;
+  deleted_provenance_nodes: number;
+  deleted_provenance_edges: number;
+  deleted_orphan_entities: number;
+  deleted_orphan_entity_types: number;
+  deleted_orphan_edge_types: number;
+  deleted_pipeline_runs: number;
+  cleared_pipeline_statuses: number;
+  deleted_search_queries: number;
+  pruned_sessions: boolean;
+  warnings: string[];
+}
+
 /** Result of `cogneeForget`. Hand-built JSON. */
 export interface CogneeForgetResult {
   target: string;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  deleteResult: any;
+  deleteResult: CogneeDeleteResultDetail;
 }
 
 /** Options accepted by `cogneeUpdate`. */
@@ -274,12 +404,9 @@ export interface CogneeUpdateOptions {
 /** Result of `cogneeUpdate`. Hand-built JSON. */
 export interface CogneeUpdateResult {
   deletedDataId: string;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  deleteResult: any;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  newData: any[];
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  cognifyResult: any | null;
+  deleteResult: CogneeDeleteResultDetail;
+  newData: CogneeDataRecord[];
+  cognifyResult: CogneeCognifyResult | null;
 }
 
 /** Options accepted by `cogneePruneSystem`. */
@@ -299,29 +426,89 @@ export interface CogneePruneResult {
   cachePruned: boolean;
 }
 
-/** A dataset row. Mirrors `cognee_models::Dataset` (Serialize). */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export type CogneeDataset = any;
+/**
+ * A dataset row. Mirrors `cognee_models::Dataset` (Serialize, snake_case fields).
+ */
+export interface CogneeDataset {
+  id: string;
+  name: string;
+  owner_id: string;
+  tenant_id: string | null;
+  created_at: string;
+  updated_at: string | null;
+}
 
-/** A data item row. Mirrors `cognee_models::Data` (Serialize). */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export type CogneeData = any;
+/**
+ * A data item row as returned by the dataset listing APIs.
+ * Alias of `CogneeDataRecord` for backward-compatibility with existing code
+ * that references `CogneeData`.
+ */
+export type CogneeData = CogneeDataRecord;
 
-/** Result of a delete operation. Mirrors `DeleteResult` (Serialize). */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export type CogneeDeleteResult = any;
+/**
+ * Result of a delete operation.
+ * Alias of `CogneeDeleteResultDetail` for backward-compatibility with existing
+ * code that references `CogneeDeleteResult`.
+ */
+export type CogneeDeleteResult = CogneeDeleteResultDetail;
 
-/** A user row. Mirrors `cognee_models::User` (Serialize). */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export type CogneeUser = any;
+/**
+ * A user row. Mirrors `cognee_models::User` (Serialize, snake_case fields).
+ *
+ * `hashed_password` is intentionally omitted — the Rust SDK does not implement
+ * authentication; password handling is delegated to the HTTP/auth layer.
+ */
+export interface CogneeUser {
+  id: string;
+  email: string;
+  is_active: boolean;
+  is_superuser: boolean;
+  tenant_id: string | null;
+  created_at: string;
+  updated_at: string | null;
+}
 
-/** A notebook row. Mirrors `Notebook` (Serialize). */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export type CogneeNotebook = any;
+/**
+ * A notebook row. Mirrors `cognee_database::Notebook` (Serialize, snake_case fields).
+ *
+ * `cells` is a JSON array of notebook cells; its inner shape is opaque and
+ * defined by the application layer.
+ */
+export interface CogneeNotebook {
+  id: string;
+  owner_id: string;
+  name: string;
+  cells: unknown[];
+  deletable: boolean;
+  created_at: string;
+}
 
-/** A session Q&A entry. Mirrors `SessionQAEntry` (Serialize). */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export type CogneeSessionQAEntry = any;
+/**
+ * Graph element IDs used to produce a Q&A answer.
+ * Mirrors `cognee_session::UsedGraphElementIds` (Serialize, snake_case fields).
+ */
+export interface CogneeUsedGraphElementIds {
+  node_ids: string[];
+  edge_ids: string[];
+}
+
+/**
+ * A session Q&A entry. Mirrors `cognee_session::SessionQAEntry` (Serialize,
+ * snake_case fields).
+ */
+export interface CogneeSessionQAEntry {
+  id: string;
+  session_id: string;
+  user_id: string | null;
+  question: string;
+  answer: string;
+  context: string | null;
+  created_at: string;
+  feedback_text: string | null;
+  feedback_score: number | null;
+  used_graph_element_ids: CogneeUsedGraphElementIds | null;
+  memify_metadata: Record<string, boolean> | null;
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Phase 6 types

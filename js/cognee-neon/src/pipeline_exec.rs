@@ -28,7 +28,7 @@ fn extract_inputs(
 
 /// Helper: snapshot the pipeline out of the Mutex.
 fn snapshot_pipeline(pipeline: &NeonPipeline) -> Pipeline {
-    let guard = pipeline.inner.lock().unwrap();
+    let guard = pipeline.inner.lock().unwrap(); // lock poison is unrecoverable
     // We need to clone the Pipeline. Pipeline is not Clone, so we reconstruct.
     let src = &*guard;
     let mut p = Pipeline::new(src.description.clone());

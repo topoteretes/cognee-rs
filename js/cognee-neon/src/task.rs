@@ -78,7 +78,7 @@ fn settle_js_result<'a>(
     let Ok(then_fn) = JsFunction::new(cx, move |mut cx| {
         let resolved = cx.argument::<JsValue>(0)?;
         let val = js_result_to_value(&mut cx, resolved);
-        if let Some(tx) = tx_then.lock().unwrap().take() {
+        if let Some(tx) = tx_then.lock().unwrap().take() { // lock poison is unrecoverable
             let _ = tx.send(val);
         }
         Ok(cx.undefined())
@@ -94,7 +94,7 @@ fn settle_js_result<'a>(
         } else {
             "JS task rejected".to_string()
         };
-        if let Some(tx) = tx_catch.lock().unwrap().take() {
+        if let Some(tx) = tx_catch.lock().unwrap().take() { // lock poison is unrecoverable
             let _ = tx.send(Err(msg.into()));
         }
         Ok(cx.undefined())
@@ -243,7 +243,7 @@ fn settle_array_promise(
     let Ok(then_fn) = JsFunction::new(cx, move |mut cx| {
         let resolved = cx.argument::<JsValue>(0)?;
         let result = convert_array_boxed(&mut cx, resolved);
-        if let Some(tx) = tx_then.lock().unwrap().take() {
+        if let Some(tx) = tx_then.lock().unwrap().take() { // lock poison is unrecoverable
             let _ = tx.send(result);
         }
         Ok(cx.undefined())
@@ -259,7 +259,7 @@ fn settle_array_promise(
         } else {
             "iter task rejected".to_string()
         };
-        if let Some(tx) = tx_catch.lock().unwrap().take() {
+        if let Some(tx) = tx_catch.lock().unwrap().take() { // lock poison is unrecoverable
             let _ = tx.send(Err(msg.into()));
         }
         Ok(cx.undefined())
@@ -352,7 +352,9 @@ impl OwnedValue {
             OwnedValue::Bool(v) => cx.boolean(*v).upcast(),
             OwnedValue::Str(v) => cx.string(v).upcast(),
             OwnedValue::Bytes(v) => {
-                let mut buf = cx.buffer(v.len()).unwrap();
+                let mut buf = cx
+                    .buffer(v.len())
+                    .expect("buffer allocation cannot fail for a known-length byte slice unless the JS engine is OOM, which is unrecoverable");
                 buf.as_mut_slice(cx).copy_from_slice(v);
                 buf.upcast()
             }

@@ -127,7 +127,7 @@ describe("Phase-5 DatasetManager, forget, prune, sessions, notebooks (Tier-A)", 
       );
       expect(ds).toBeDefined();
 
-      const items = await native.cogneeListData(handle, ds.id);
+      const items = await native.cogneeListData(handle, ds!.id);
       expect(Array.isArray(items)).toBe(true);
       expect(items.length).toBeGreaterThanOrEqual(1);
     });
@@ -149,7 +149,7 @@ describe("Phase-5 DatasetManager, forget, prune, sessions, notebooks (Tier-A)", 
         (d: { name: string }) => d.name === "ds_has_data"
       );
       expect(ds).toBeDefined();
-      const has = await native.cogneeHasData(handle, ds.id);
+      const has = await native.cogneeHasData(handle, ds!.id);
       expect(has).toBe(true);
     });
 
@@ -164,7 +164,7 @@ describe("Phase-5 DatasetManager, forget, prune, sessions, notebooks (Tier-A)", 
         (d: { name: string }) => d.name === "ds_status_test"
       );
       expect(ds).toBeDefined();
-      const status = await native.cogneeDatasetStatus(handle, [ds.id]);
+      const status = await native.cogneeDatasetStatus(handle, [ds!.id]);
       expect(typeof status).toBe("object");
       // No cognify run → status map may be empty for this dataset.
     });
@@ -185,7 +185,7 @@ describe("Phase-5 DatasetManager, forget, prune, sessions, notebooks (Tier-A)", 
         );
         expect(ds).toBeDefined();
 
-        const result = await native.cogneeEmptyDataset(h.handle, ds.id);
+        const result = await native.cogneeEmptyDataset(h.handle, ds!.id);
         // DeleteResult is Serialize — must be an object.
         expect(typeof result).toBe("object");
       } finally {
@@ -211,7 +211,7 @@ describe("Phase-5 DatasetManager, forget, prune, sessions, notebooks (Tier-A)", 
         );
         expect(ds).toBeDefined();
 
-        const result = await native.cogneeDeleteData(h.handle, ds.id, dataId);
+        const result = await native.cogneeDeleteData(h.handle, ds!.id, dataId);
         expect(typeof result).toBe("object");
       } finally {
         cleanupTmpDir(h.tmpDir);
@@ -389,7 +389,7 @@ describe("Phase-5 DatasetManager, forget, prune, sessions, notebooks (Tier-A)", 
         await expect(
           native.cogneeResetPipelineRunStatus(
             h.handle,
-            ds.id,
+            ds!.id,
             "cognify_pipeline"
           )
         ).resolves.toBeUndefined();
@@ -415,7 +415,7 @@ describe("Phase-5 DatasetManager, forget, prune, sessions, notebooks (Tier-A)", 
 
         // With no pipeline runs this is a no-op — must not throw.
         await expect(
-          native.cogneeResetDatasetPipelineRunStatus(h.handle, ds.id)
+          native.cogneeResetDatasetPipelineRunStatus(h.handle, ds!.id)
         ).resolves.toBeUndefined();
       } finally {
         cleanupTmpDir(h.tmpDir);

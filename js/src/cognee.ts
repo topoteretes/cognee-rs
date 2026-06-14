@@ -39,6 +39,8 @@ import type {
   CogneeDataset,
   CogneeData,
   CogneeDeleteResult,
+  CogneeUser,
+  CogneeNotebook,
   CogneeSessionQAEntry,
   CogneeVisualizeOptions,
   CogneeServeOptions,
@@ -179,6 +181,75 @@ export interface CogneeSessionObject {
 }
 
 /**
+ * Notebooks sub-object type.
+ *
+ * Mirrors Python's `cognee.notebooks` sub-object (see `python/src/sdk_admin.rs`).
+ * All operations forward to the corresponding `native.cognee*Notebook` functions.
+ */
+export interface CogneeNotebookObject {
+  /**
+   * Return all notebooks owned by this handle's user.
+   */
+  list(): Promise<CogneeNotebook[]>;
+  /**
+   * Create a new notebook.
+   *
+   * @param name      Display name for the notebook.
+   * @param cells     Initial cells array (default empty).
+   * @param deletable Whether the notebook can be deleted (default `true`).
+   */
+  create(name: string, cells?: unknown, deletable?: boolean): Promise<CogneeNotebook>;
+  /**
+   * Apply a partial update to an existing notebook.
+   *
+   * Returns the updated notebook, or `null` if no notebook with the given `id`
+   * exists for this owner.
+   */
+  update(id: string, patch: { name?: string; cells?: unknown }): Promise<CogneeNotebook | null>;
+  /**
+   * Delete a notebook by ID.
+   *
+   * Returns `true` if a row was removed, `false` if not found.
+   */
+  delete(id: string): Promise<boolean>;
+}
+
+/**
+ * Users sub-object type.
+ *
+ * Exposes user- and pipeline-run-management operations that Python surfaces on
+ * the `Cognee` class. These forward to the corresponding `native.cognee*` functions.
+ */
+export interface CogneeUserObject {
+  /**
+   * Resolve (or lazily create) the default user for this handle.
+   *
+   * The default user is determined by `Settings.default_user_email`
+   * (Python default-user semantics). This is the same user whose UUID is
+   * returned by `c.ownerId()`.
+   */
+  getOrCreateDefault(): Promise<CogneeUser>;
+  /**
+   * Reset the pipeline-run status for a single pipeline within a dataset.
+   *
+   * Unblocks a dataset that is stuck in the "running" state so it can be
+   * re-cognified. Equivalent to Python's `reset_pipeline_run_status`.
+   *
+   * @param datasetId    UUID of the dataset.
+   * @param pipelineName Name of the pipeline (e.g. `"cognify_pipeline"`).
+   */
+  resetPipelineRunStatus(datasetId: string, pipelineName: string): Promise<void>;
+  /**
+   * Reset the pipeline-run status for **all** pipelines in a dataset.
+   *
+   * Equivalent to Python's `reset_dataset_pipeline_run_status`.
+   *
+   * @param datasetId UUID of the dataset.
+   */
+  resetDatasetPipelineRunStatus(datasetId: string): Promise<void>;
+}
+
+/**
  * The main Cognee SDK class.
  *
  * Construct with an optional settings object (or JSON string) to override
@@ -207,6 +278,12 @@ export class Cognee {
 
   /** Session management operations. */
   readonly sessions: CogneeSessionObject;
+
+  /** Notebook management operations. */
+  readonly notebooks: CogneeNotebookObject;
+
+  /** User and pipeline-run management operations. */
+  readonly users: CogneeUserObject;
 
   constructor(settings?: object | string) {
     this._handle = native.cogneeNew(settings);
@@ -310,6 +387,21 @@ export class Cognee {
       getGraphContext:  (sessionId, opts) => native.cogneeGetGraphContext(h, sessionId, opts),
       setGraphContext:  (sessionId, context, opts) =>
                           native.cogneeSetGraphContext(h, sessionId, context, opts),
+    };
+
+    // ── notebooks sub-object ─────────────────────────────────────────────────
+    this.notebooks = {
+      list:   ()                  => native.cogneeListNotebooks(h),
+      create: (name, cells, del)  => native.cogneeCreateNotebook(h, name, cells, del),
+      update: (id, patch)         => native.cogneeUpdateNotebook(h, id, patch),
+      delete: (id)                => native.cogneeDeleteNotebook(h, id),
+    };
+
+    // ── users sub-object ─────────────────────────────────────────────────────
+    this.users = {
+      getOrCreateDefault:             ()                           => native.cogneeGetOrCreateDefaultUser(h),
+      resetPipelineRunStatus:         (datasetId, pipelineName)   => native.cogneeResetPipelineRunStatus(h, datasetId, pipelineName),
+      resetDatasetPipelineRunStatus:  (datasetId)                 => native.cogneeResetDatasetPipelineRunStatus(h, datasetId),
     };
   }
 

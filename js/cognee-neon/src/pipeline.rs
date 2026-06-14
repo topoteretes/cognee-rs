@@ -33,7 +33,7 @@ pub fn pipeline_new(mut cx: FunctionContext) -> JsResult<JsBox<NeonPipeline>> {
 pub fn pipeline_set_name(mut cx: FunctionContext) -> JsResult<JsUndefined> {
     let pipeline = cx.argument::<JsBox<NeonPipeline>>(0)?;
     let name = cx.argument::<JsString>(1)?.value(&mut cx);
-    pipeline.inner.lock().unwrap().name = Some(name);
+    pipeline.inner.lock().unwrap().name = Some(name); // lock poison is unrecoverable
     Ok(cx.undefined())
 }
 
@@ -43,7 +43,7 @@ pub fn pipeline_add_task(mut cx: FunctionContext) -> JsResult<JsUndefined> {
 
     // Clone the TaskInfo (Task variants are Arc-based, so cloning is cheap).
     let info = clone_task_info(&task_info_box.inner);
-    pipeline.inner.lock().unwrap().tasks.push(info);
+    pipeline.inner.lock().unwrap().tasks.push(info); // lock poison is unrecoverable
     Ok(cx.undefined())
 }
 
@@ -53,7 +53,7 @@ pub fn pipeline_set_batch_size(mut cx: FunctionContext) -> JsResult<JsUndefined>
     if size == 0 {
         return cx.throw_range_error("batch_size must be > 0");
     }
-    pipeline.inner.lock().unwrap().batch_size = size;
+    pipeline.inner.lock().unwrap().batch_size = size; // lock poison is unrecoverable
     Ok(cx.undefined())
 }
 
@@ -63,7 +63,7 @@ pub fn pipeline_set_concurrency(mut cx: FunctionContext) -> JsResult<JsUndefined
     if n == 0 {
         return cx.throw_range_error("concurrency must be > 0");
     }
-    pipeline.inner.lock().unwrap().concurrency = n;
+    pipeline.inner.lock().unwrap().concurrency = n; // lock poison is unrecoverable
     Ok(cx.undefined())
 }
 
@@ -127,7 +127,7 @@ pub fn pipeline_set_retry(mut cx: FunctionContext) -> JsResult<JsUndefined> {
         }
     };
 
-    pipeline.inner.lock().unwrap().retry_policy = policy;
+    pipeline.inner.lock().unwrap().retry_policy = policy; // lock poison is unrecoverable
     Ok(cx.undefined())
 }
 

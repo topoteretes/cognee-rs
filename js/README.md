@@ -220,6 +220,35 @@ const ctx = await c.sessions.getGraphContext("session-uuid");
 await c.sessions.setGraphContext("session-uuid", "new context");
 ```
 
+## Notebooks
+
+```ts
+// List all notebooks for the current user.
+const notebooks = await c.notebooks.list();
+
+// Create a new notebook with optional cells and deletability flag.
+const nb = await c.notebooks.create("My Notes", [], true);
+
+// Partially update a notebook (name, cells, or both).
+const updated = await c.notebooks.update(nb.id, { name: "Renamed Notes" });
+
+// Delete a notebook — returns true if a row was removed.
+const removed = await c.notebooks.delete(nb.id);
+```
+
+## Users and pipeline-run admin
+
+```ts
+// Resolve (or lazily create) the default user for this handle.
+const user = await c.users.getOrCreateDefault();
+
+// Unblock a dataset stuck in "running" state so it can be re-cognified.
+await c.users.resetPipelineRunStatus(datasetId, "cognify_pipeline");
+
+// Reset all pipeline-run statuses for a dataset at once.
+await c.users.resetDatasetPipelineRunStatus(datasetId);
+```
+
 ## Data lifecycle
 
 ```ts

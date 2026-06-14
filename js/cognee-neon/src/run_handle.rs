@@ -18,7 +18,7 @@ impl Finalize for NeonRunHandle {}
 
 pub fn run_handle_is_finished(mut cx: FunctionContext) -> JsResult<JsBoolean> {
     let handle = cx.argument::<JsBox<NeonRunHandle>>(0)?;
-    let guard = handle.inner.lock().unwrap();
+    let guard = handle.inner.lock().unwrap(); // lock poison is unrecoverable
     let finished = match guard.as_ref() {
         Some(h) => h.is_finished(),
         None => true, // Already consumed = finished.
@@ -28,7 +28,7 @@ pub fn run_handle_is_finished(mut cx: FunctionContext) -> JsResult<JsBoolean> {
 
 pub fn run_handle_abort(mut cx: FunctionContext) -> JsResult<JsUndefined> {
     let handle = cx.argument::<JsBox<NeonRunHandle>>(0)?;
-    let guard = handle.inner.lock().unwrap();
+    let guard = handle.inner.lock().unwrap(); // lock poison is unrecoverable
     if let Some(h) = guard.as_ref() {
         h.abort();
     }
@@ -40,7 +40,7 @@ pub fn run_handle_abort(mut cx: FunctionContext) -> JsResult<JsUndefined> {
 /// Consumes the handle — subsequent calls will reject.
 pub fn run_handle_wait(mut cx: FunctionContext) -> JsResult<JsPromise> {
     let handle_box = cx.argument::<JsBox<NeonRunHandle>>(0)?;
-    let handle = handle_box.inner.lock().unwrap().take();
+    let handle = handle_box.inner.lock().unwrap().take(); // lock poison is unrecoverable
 
     let channel = cx.channel();
     let (deferred, promise) = cx.promise();

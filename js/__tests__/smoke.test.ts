@@ -20,6 +20,7 @@ import {
   createWatcher,
   createNoopWatcher,
 } from "../src";
+import { Cognee } from "../src/cognee";
 
 // Type-level tests — these just verify the API shape at compile time.
 // They will throw at runtime if the native module isn't loaded.
@@ -65,5 +66,37 @@ describe("TypeScript API shape", () => {
   it("watcher API is defined", () => {
     expect(createWatcher).toBeDefined();
     expect(createNoopWatcher).toBeDefined();
+  });
+});
+
+describe("Cognee class API shape", () => {
+  it("Cognee constructor and lifecycle methods are defined", () => {
+    expect(Cognee).toBeDefined();
+    expect(Cognee.prototype.warm).toBeDefined();
+    expect(Cognee.prototype.ownerId).toBeDefined();
+  });
+
+  it("Cognee pipeline methods are defined", () => {
+    expect(Cognee.prototype.add).toBeDefined();
+    expect(Cognee.prototype.cognify).toBeDefined();
+    expect(Cognee.prototype.addAndCognify).toBeDefined();
+    expect(Cognee.prototype.search).toBeDefined();
+    expect(Cognee.prototype.recall).toBeDefined();
+    expect(Cognee.prototype.remember).toBeDefined();
+    expect(Cognee.prototype.rememberEntry).toBeDefined();
+    expect(Cognee.prototype.memify).toBeDefined();
+    expect(Cognee.prototype.improve).toBeDefined();
+  });
+
+  it("Cognee data-lifecycle methods are defined", () => {
+    expect(Cognee.prototype.forget).toBeDefined();
+    expect(Cognee.prototype.update).toBeDefined();
+    expect(Cognee.prototype.pruneData).toBeDefined();
+    expect(Cognee.prototype.pruneSystem).toBeDefined();
+  });
+
+  it("Cognee visualization methods are defined", () => {
+    expect(Cognee.prototype.visualize).toBeDefined();
+    expect(Cognee.prototype.visualizeToFile).toBeDefined();
   });
 });
