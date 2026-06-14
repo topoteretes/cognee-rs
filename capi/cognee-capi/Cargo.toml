@@ -3,6 +3,7 @@ name = "cognee-capi"
 # Inherit version/edition from the capi workspace root (capi/Cargo.toml).
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 
 [lib]
 crate-type = ["cdylib", "staticlib"]

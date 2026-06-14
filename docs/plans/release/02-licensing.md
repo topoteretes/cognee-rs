@@ -60,7 +60,7 @@ git checkout -b task/02-licensing
 |---|---|
 | `LICENSE` (new, repo root) | Apache-2.0 full text |
 | `Cargo.toml` | add `license = "Apache-2.0"` to `[workspace.package]` |
-| `crates/*/Cargo.toml` (×27) | add `license.workspace = true` under `[package]` |
+| `crates/*/Cargo.toml` (×27), `python/Cargo.toml`, `e2e-cross-sdk/telemetry-emit/Cargo.toml`, `examples/Cargo.toml` | add `license.workspace = true` under `[package]` |
 | `capi/Cargo.toml` | add `license = "Apache-2.0"` to its `[workspace.package]` |
 | `capi/cognee-capi/Cargo.toml` | add `license.workspace = true` under `[package]` |
 | `js/cognee-neon/Cargo.toml` | add `license = "Apache-2.0"` under `[package]` (standalone — no workspace) |
@@ -135,13 +135,14 @@ them. The full member list is in `Cargo.toml` lines 5–46. Confirm the count:
 ls crates/*/Cargo.toml | wc -l   # expect 27
 ```
 
-> `python/Cargo.toml` and `e2e-cross-sdk/telemetry-emit/Cargo.toml` are also workspace
-> members (see `Cargo.toml` members list). Add `license.workspace = true` to those too
-> if they have a `[package]` table — check each:
+> `python/Cargo.toml`, `e2e-cross-sdk/telemetry-emit/Cargo.toml`, and `examples/Cargo.toml`
+> are also workspace members (see `Cargo.toml` members list). Add `license.workspace = true`
+> to those too — all three have a `[package]` table (verified). Check:
 > ```bash
-> grep -l '^\[package\]' python/Cargo.toml e2e-cross-sdk/telemetry-emit/Cargo.toml
+> grep -l '^\[package\]' python/Cargo.toml e2e-cross-sdk/telemetry-emit/Cargo.toml examples/Cargo.toml
 > ```
-> (`python/` is the PyO3 crate; `publish = false` is fine but a license is still good hygiene.)
+> (`python/`, `e2e-cross-sdk/telemetry-emit/`, and `examples/` all have `publish = false`;
+> a license is still good hygiene and quiets `cargo metadata` license checks.)
 
 ### Step 4 — The C API workspace (separate workspace)
 
@@ -273,7 +274,7 @@ after `"description"`):
 }
 ```
 
-Add `LICENSE` to the `files` allowlist (currently lines 27–30) so it ships in the package:
+Add `LICENSE` to the `files` allowlist (currently lines 46–50) so it ships in the package:
 
 ```json
   "files": [
@@ -336,8 +337,8 @@ to the `lint` job in [.github/workflows/ci.yml](../../../.github/workflows/ci.ym
 
 - [ ] `LICENSE` (Apache-2.0 full text) exists at repo root with a filled copyright line.
 - [ ] `Cargo.toml` `[workspace.package]` has `license = "Apache-2.0"`.
-- [ ] All 27 `crates/*/Cargo.toml` (plus `python/Cargo.toml` if it has `[package]`)
-      carry `license.workspace = true`.
+- [ ] All 27 `crates/*/Cargo.toml` plus `python/Cargo.toml`, `e2e-cross-sdk/telemetry-emit/Cargo.toml`,
+      and `examples/Cargo.toml` carry `license.workspace = true` (all confirmed to have `[package]`).
 - [ ] `capi/Cargo.toml` workspace has `license`; `capi/cognee-capi/Cargo.toml` inherits.
 - [ ] `js/cognee-neon/Cargo.toml` has a literal `license = "Apache-2.0"`.
 - [ ] `python/pyproject.toml` declares the license; `js/package.json` has `"license"`

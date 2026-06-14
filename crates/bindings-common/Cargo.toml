@@ -2,6 +2,7 @@
 name = "cognee-bindings-common"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 description = "Shared facade (HandleState, CogneeServices, SdkError, wire helpers) consumed by the Neon JS and C API bindings."
 
 # NOT a default member of the root workspace but IS a workspace member

@@ -2,6 +2,7 @@
 name = "cognee-embedding"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 
 [features]
 onnx         = ["dep:ort", "dep:tokenizers"]

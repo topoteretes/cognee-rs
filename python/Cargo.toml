@@ -2,6 +2,7 @@
 name = "cognee-python"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 
 [lib]
 name = "cognee_pipeline"

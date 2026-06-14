@@ -72,7 +72,7 @@ Status: ⬜ todo · 🟡 in-progress · ✅ done · ⏸️ blocked.
 | # | Task | Wave | Pri | Track | Blocking | Effort | Depends on | Status |
 |---|------|------|-----|-------|----------|--------|------------|--------|
 | 01 | [Release decisions (D1–D5)](01-decisions.md) | 0 | P0 | A+B | yes | hours | — | ✅ |
-| 02 | [Licensing & legal](02-licensing.md) | 1 | P0 | A+B | yes | 0.5d | 01(D2) | ⬜ |
+| 02 | [Licensing & legal](02-licensing.md) | 1 | P0 | A+B | yes | 0.5d | 01(D2) | ✅ |
 | 03 | [FFI & Neon panic safety](03-ffi-neon-panic-safety.md) | 1 | P0 | A | yes | 0.5d | — | ⬜ |
 | 04 | [Rust code cleanup](04-rust-code-cleanup.md) | 1 | P1 | A | no | 1d | — | ⬜ |
 | 05 | [Documentation cleanup](05-documentation-cleanup.md) | 1 | P1 | A | no | 1d | — | ⬜ |
