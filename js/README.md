@@ -22,7 +22,7 @@ init();
 
 const c = new Cognee({
   llmModel:   "gpt-4o-mini",
-  llmApiKey:  process.env.OPENAI_API_KEY,
+  llmApiKey:  process.env.OPENAI_TOKEN,
 });
 
 // Warm up engines (builds embedding model, resolves default user).
@@ -71,7 +71,7 @@ and take effect immediately (the engines are lazily rebuilt on the next pipeline
 
 ```ts
 c.config.setLlmModel("gpt-4o");
-c.config.setLlmApiKey(process.env.OPENAI_API_KEY!);
+c.config.setLlmApiKey(process.env.OPENAI_TOKEN!);
 c.config.setEmbeddingProvider("openai");
 c.config.setEmbeddingModel("text-embedding-3-small");
 
@@ -338,6 +338,15 @@ auto-installed stderr subscriber if your host manages the logging pipeline.
 
 | Variable | Purpose |
 |---|---|
+| `OPENAI_URL` | LLM API base URL (OpenAI-compatible endpoint). |
+| `OPENAI_TOKEN` | LLM API key. |
+| `OPENAI_MODEL` | LLM model name (default: `gpt-4o-mini`). |
+| `EMBEDDING_PROVIDER` | Embedding provider: `openai`, `ollama`, `onnx`, `mock`. |
+| `EMBEDDING_MODEL` | Embedding model name. |
+| `EMBEDDING_DIMENSIONS` | Embedding vector dimensions. |
+| `EMBEDDING_ENDPOINT` | Embedding API base URL (falls back to `OPENAI_URL`). |
+| `EMBEDDING_API_KEY` | Embedding API key (falls back to `OPENAI_TOKEN`). |
+| `MOCK_EMBEDDING` | Set `true` to use zero-vector mock embeddings (no model download). |
 | `COGNEE_BINDING_SUPPRESS_LOGS` | Suppress the auto-installed stderr fmt subscriber. |
 | `COGNEE_HOST_SDK` | Suppress binding-armed analytics when the host is an embedding SDK. |
 | `TELEMETRY_DISABLED`, `ENV` | Standard analytics opt-outs for `setupTelemetryAnalytics()`. |
@@ -411,4 +420,7 @@ import { Pipeline } from 'cognee'; // flat legacy export — unchanged
 ## References
 
 - Observability: [docs/observability/opentelemetry.md](../docs/observability/opentelemetry.md), [docs/observability/send_telemetry.md](../docs/observability/send_telemetry.md)
+- Python bindings: [python/README.md](../python/README.md)
+- C API bindings: [capi/README.md](../capi/README.md)
+- cognee-rust workspace: [README.md](../README.md)
 - Source: [cognee-rust](https://github.com/topoteretes/cognee-rust)

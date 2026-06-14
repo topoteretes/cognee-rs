@@ -33,6 +33,20 @@ It’s designed to run efficiently on constrained devices (smartwatch, phone)
 
 See [.claude/CLAUDE.md](.claude/CLAUDE.md) for the full crate-by-crate breakdown of the workspace.
 
+## Language Bindings
+
+Cognee-RS ships three language bindings on top of the Rust core, all sharing the
+same SDK-tier implementation via `crates/bindings-common/`:
+
+| Binding | README | Primary API |
+|---|---|---|
+| **Python** (PyO3) | [python/README.md](python/README.md) | `from cognee_pipeline import Cognee` |
+| **C API** (FFI) | [capi/README.md](capi/README.md) | `#include "cognee_sdk.h"` + `cg_sdk_*` |
+| **JavaScript/TypeScript** (Neon) | [js/README.md](js/README.md) | `import { Cognee } from 'cognee'` |
+
+Each binding exposes the same core flow: `warm()` → `add()` → `cognify()` → `search()`.
+See [docs/bindings-parity/](docs/bindings-parity/) for the parity plan and maturity matrix.
+
 ## Graph Backend Concurrency
 
 For file-backed graph storage, Python's reference implementation documents a

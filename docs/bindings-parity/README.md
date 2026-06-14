@@ -18,21 +18,19 @@ To **implement** these tasks with an automated, sub-agent-driven workflow (a
 4-step validate → implement → review → commit scheme per task, suitable for a
 Sonnet-class model), follow [EXECUTION-PROMPT.md](EXECUTION-PROMPT.md).
 
-## Maturity baseline (review of 2026-06-13)
+## Maturity baseline (review of 2026-06-13, updated post-parity 2026-06-14)
 
 | Dimension | Python (PyO3) | C API (FFI) | JS/TS (Neon) |
 |---|---|---|---|
-| Functionality coverage | Strong vs Rust; **weak as drop-in `cognee`** | Strong (one broken engine path) | Strong |
-| Security & correctness | Strong | **Adequate** (reachable `unwrap`, no `catch_unwind`) | Strong |
-| Idiomaticity | Adequate | Strong | Strong |
-| Examples | **Missing** | Strong | Adequate |
-| Documentation | Adequate | Strong (header drift) | Strong |
+| Functionality coverage | **Strong** (full SDK + drop-in compat) | Strong | Strong |
+| Security & correctness | Strong | **Strong** (panic safety + catch_unwind) | Strong |
+| Idiomaticity | **Strong** (typed stubs, TypedDict options) | Strong | Strong |
+| Examples | **Strong** (6 runnable scripts) | Strong | Strong |
+| Documentation | **Strong** (README rewritten, common skeleton) | Strong | Strong |
 
 All three share `crates/bindings-common` (portable op bodies + `SdkError` →
-stable `code()` mapping), which is why their SDK surfaces line up 1:1. The
-target end-state is: **C API correctness and cleanliness raised to match Python's
-safety engineering; Python idiomaticity, typing, examples, and SDK parity raised
-to match JS; example and documentation coverage uniform across all three.**
+stable `code()` mapping), which is why their SDK surfaces line up 1:1. All
+P0/P1/P2 tasks are now complete; the bindings are at equal maturity.
 
 ## Task list
 
@@ -54,7 +52,7 @@ Status: `Not started` · `In progress` · `Blocked` · `Done`.
 | CR-3 | Remove stray `unwrap()` in Neon `task.rs`; annotate lock poisoning | JS | Correctness/Cleanliness | P2 | Done | [08-js-types-and-surface.md](08-js-types-and-surface.md) |
 | EX-1 | Example parity: Python example scripts + JS example expansion + npm scripts | Python, JS | Examples | P2 | Done | [09-examples-parity.md](09-examples-parity.md) |
 | CL-2 | Hoist `SECRET_FIELDS` redaction into `bindings-common` (dedup ×3) | All | Cleanliness | P2 | Done | [10-shared-cleanliness.md](10-shared-cleanliness.md) |
-| DOC-2 | Documentation parity (README core-flow, docstring/header parity, parity matrix) | All | Documentation | P2 | Not started | [11-documentation-parity.md](11-documentation-parity.md) |
+| DOC-2 | Documentation parity (README core-flow, docstring/header parity, parity matrix) | All | Documentation | P2 | Done | [11-documentation-parity.md](11-documentation-parity.md) |
 
 ## Suggested sequencing
 

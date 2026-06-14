@@ -78,8 +78,35 @@ int main(void) {
 }
 ```
 
-See `examples/example_sdk_add.c` and `examples/example_sdk_add_cognify_search.c` for complete
-runnable examples.
+See [`examples/example_sdk_add.c`](examples/example_sdk_add.c) and
+[`examples/example_sdk_add_cognify_search.c`](examples/example_sdk_add_cognify_search.c)
+for complete runnable examples.
+
+## Examples
+
+Runnable C examples are in the [`examples/`](examples/) directory:
+
+| Example | What it covers |
+|---|---|
+| [`example_sdk_add.c`](examples/example_sdk_add.c) | Add text data to a dataset |
+| [`example_sdk_add_cognify.c`](examples/example_sdk_add_cognify.c) | Add + cognify |
+| [`example_sdk_add_cognify_search.c`](examples/example_sdk_add_cognify_search.c) | Full add → cognify → search pipeline |
+| [`example_pipeline.c`](examples/example_pipeline.c) | Low-level pipeline engine |
+| [`example_sync_task.c`](examples/example_sync_task.c) | Synchronous task |
+| [`example_async_task.c`](examples/example_async_task.c) | Asynchronous task |
+| [`example_batch_task.c`](examples/example_batch_task.c) | Batched task |
+| [`example_cancellation.c`](examples/example_cancellation.c) | Cancellation |
+| [`example_iter_task.c`](examples/example_iter_task.c) | Iterator task |
+| [`example_background_task.c`](examples/example_background_task.c) | Background task |
+
+Build the examples alongside the library:
+
+```bash
+cd capi
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build
+./build/example_sdk_add_cognify_search
+```
 
 ## Async model
 
@@ -162,6 +189,27 @@ cg_string_destroy(cfg);
 
 Tested on Linux x86_64 (CI) and Android aarch64 (slim build, ONNX local embeddings).
 
+## Environment variables
+
+| Variable | Purpose |
+|---|---|
+| `OPENAI_URL` | LLM API base URL (OpenAI-compatible endpoint). |
+| `OPENAI_TOKEN` | LLM API key. |
+| `OPENAI_MODEL` | LLM model name (default: `gpt-4o-mini`). |
+| `EMBEDDING_PROVIDER` | Embedding provider: `openai`, `ollama`, `onnx`, `mock`. |
+| `EMBEDDING_MODEL` | Embedding model name. |
+| `EMBEDDING_DIMENSIONS` | Embedding vector dimensions. |
+| `EMBEDDING_ENDPOINT` | Embedding API base URL (falls back to `OPENAI_URL`). |
+| `EMBEDDING_API_KEY` | Embedding API key (falls back to `OPENAI_TOKEN`). |
+| `MOCK_EMBEDDING` | Set `true` to use zero-vector mock embeddings (no model download). |
+| `RUST_LOG`, `LOG_LEVEL` | `tracing-subscriber` env-filter level overrides. |
+| `COGNEE_LOG_*`, `LOG_FILE_NAME` | Consumed by `cognee_setup_logging()` — see the workspace README's "Logging" section. |
+| `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_SERVICE_NAME`, `OTEL_*` | Consumed by `cognee_init_otlp()`. |
+| `TELEMETRY_DISABLED`, `ENV` | Analytics opt-outs for `cognee_init_telemetry()`. |
+
+All env-var values can also be passed programmatically as JSON to `cg_sdk_new()` or
+via `cg_sdk_config_set_str()`, which take precedence over environment variables.
+
 ## Initialisation helpers
 
 Three optional, idempotent, argument-less init functions extend the base `cg_init()`:
@@ -184,4 +232,8 @@ See the engine examples under `examples/example_sync_task.c`, `example_pipeline.
 ## See also
 
 - Headers: [`include/cognee_sdk.h`](include/cognee_sdk.h), [`include/cognee.h`](include/cognee.h)
-- Observability: [`../docs/observability/opentelemetry.md`](../docs/observability/opentelemetry.md)
+- Examples: [`examples/`](examples/)
+- Observability: [`../docs/observability/opentelemetry.md`](../docs/observability/opentelemetry.md), [`../docs/observability/send_telemetry.md`](../docs/observability/send_telemetry.md)
+- Python bindings: [`../python/README.md`](../python/README.md)
+- JS/TS bindings: [`../js/README.md`](../js/README.md)
+- cognee-rust workspace: [`../README.md`](../README.md)

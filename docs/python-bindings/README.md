@@ -1,16 +1,16 @@
 # Python Bindings — Parity Analysis
 
-The Python bindings (`python/`) expose the **pipeline engine tier** only — the generic task-pipeline
-machinery from `cognee-core`. The **SDK tier** (high-level cognee operations: add, cognify, search,
-delete, memory management, etc.) is fully implemented in both the C API (`capi/`) and the
-TypeScript / Node bindings (`js/`), but has no Python surface yet.
+The Python bindings (`python/`) expose both the **pipeline engine tier** (generic task-pipeline
+machinery from `cognee-core`) and the **SDK tier** (high-level cognee operations: add, cognify,
+search, delete, memory management, etc.). All three bindings — Python (PyO3), C API (FFI), and
+TypeScript/Node (Neon) — are now at full parity across both tiers (T1–T11 complete, June 2026).
 
-This document tracks every feature group, its implementation status across all three binding layers,
-and links to implementation plans for the missing Python pieces.
+This document tracks every feature group and its implementation status across all three binding
+layers.
 
-To execute the plans with a sub-agent-driven workflow (plan-check → implement → review → commit,
-one task at a time), use [IMPLEMENTATION-PROMPT.md](IMPLEMENTATION-PROMPT.md); live progress is
-tracked in [STATUS.md](STATUS.md).
+To execute future plans with a sub-agent-driven workflow (plan-check → implement → review →
+commit, one task at a time), use [IMPLEMENTATION-PROMPT.md](IMPLEMENTATION-PROMPT.md); live
+progress is tracked in [STATUS.md](STATUS.md).
 
 ---
 
@@ -104,68 +104,56 @@ tracked in [STATUS.md](STATUS.md).
 
 ## Summary
 
-### What is implemented
+### What is implemented (as of June 2026, T1–T11 complete)
 
-The Python binding (`cognee_pipeline`) is a **complete, production-quality implementation of the
-pipeline engine tier**. It covers everything in `cognee-core`:
+The Python binding (`cognee_pipeline`) is a **complete, production-quality implementation of both
+the pipeline engine tier and the SDK tier**. It is at full parity with the C API and TypeScript
+bindings across all 40+ operations.
 
+**Pipeline engine tier** (`cognee-core`):
 - Full `Pipeline` builder with retry, batch, concurrency controls
 - All four callable types (sync, async, generator, async generator) auto-detected
 - Three execution modes (sync-blocking, async, background)
-- `CancellationHandle`, `ProgressToken`, `PipelineRunHandle`
-- Duck-typed `PipelineWatcher` bridge
+- `CancellationHandle`, `CancellationToken`, `cancellation_pair()`, `ProgressToken`, `PipelineRunHandle`
+- Typed `Watcher` class with event-dict constructor
 - Logging (`setup_logging`), OTLP tracing (`setup_telemetry`), and product analytics
   (`setup_telemetry_analytics`) with the same idempotency guarantees as C API and TS
-- Structured exception hierarchy (`PipelineError` and five subclasses)
+- Structured exception hierarchy (`CogneeError` and five subclasses)
 
-### What is missing
+**SDK tier** (`cognee-lib` / `cognee-bindings-common`):
+- `Cognee` class with `warm()`, `owner_id()`
+- Full config surface: granular setters, bulk setters, `get_config()` with secret redaction
+- Core pipeline: `add()`, `cognify()`, `add_and_cognify()`
+- Retrieval: `search()` (15 search types), `recall()` (session-first routing)
+- Memory: `remember()`, `remember_entry()`, `memify()`, `improve()`
+- Data lifecycle: `forget()`, `update()`, `prune_data()`, `prune_system()`
+- Dataset management: 7 CRUD ops (`list_datasets`, `list_data`, `has_data`, `dataset_status`,
+  `empty_dataset`, `delete_data`, `delete_all_datasets`)
+- Sessions: `get_session`, `add_feedback`, `delete_feedback`, `get_graph_context`, `set_graph_context`
+- Users / admin: `get_or_create_default_user`, `reset_pipeline_run_status`, `reset_dataset_pipeline_run_status`
+- Notebooks: `list_notebooks`, `create_notebook`, `update_notebook`, `delete_notebook`
+- Visualisation: `visualize()`, `visualize_to_file()`
+- Cloud: `serve()`, `disconnect()`
 
-**The entire SDK tier is absent.** This is the layer that makes `cognee` useful as a
-knowledge-management SDK: ingesting data, building the knowledge graph, searching it, and managing
-memory. All 40+ SDK-tier operations present in both the C API and the TypeScript binding have no
-Python equivalent yet.
+**Drop-in upstream SDK compatibility** (`cognee_pipeline.compat`, `ID-1`):
+- Module-level `add`, `cognify`, `add_and_cognify`, `search`, `prune` matching the upstream
+  Python `cognee` SDK surface, with input coercion for `str`, `Path`, URL, `bytes`, `dict`, `list`
+- `SearchType` as `(str, Enum)` — `SearchType.CHUNKS == "CHUNKS"` is `True`
+- Optional `cognee/` alias package (`pip install "cognee_pipeline[drop-in]"`)
 
-The missing work is grouped into eight implementation plans:
+### Intentional gaps (C-API-only, not surfaced in Python or TS)
 
-| Document | Operations | Complexity |
-|----------|-----------|------------|
-| [sdk-handle.md](sdk-handle.md) | `Cognee` class, `warm`, `owner_id` | Low |
-| [config-surface.md](config-surface.md) | All `config_set_*` / `get_config` | Low |
-| [core-pipeline-ops.md](core-pipeline-ops.md) | `add`, `cognify`, `add_and_cognify` | Medium |
-| [retrieval-ops.md](retrieval-ops.md) | `search`, `recall` | Medium |
-| [memory-ops.md](memory-ops.md) | `remember`, `remember_entry`, `memify`, `improve` | Medium |
-| [data-ops.md](data-ops.md) | `forget`, `update`, `prune_data`, `prune_system` | Medium |
-| [dataset-management.md](dataset-management.md) | 7 dataset/data CRUD ops | Low–Medium |
-| [session-admin-ops.md](session-admin-ops.md) | Sessions, feedback, users, notebooks | Medium |
-| [visualization-ops.md](visualization-ops.md) | `visualize`, `visualize_to_file` | Low |
-| [cloud-ops.md](cloud-ops.md) | `serve`, `disconnect` | Low |
+Three low-level surfaces are present only in the C API:
 
-Additionally there are minor gaps in the engine tier:
-- `CancellationToken` object and `cancellation_pair()` factory
-- `ProgressToken.width` property and `ProgressToken.subtoken()` method
-- Typed `Watcher` class / factory (currently duck-typed only)
+| Feature | Reason omitted from Python / TS |
+|---|---|
+| `ExecStatusManager` | Noop only; not useful at higher language levels |
+| `RayonThreadPool` (explicit) | Others use the implicit pool |
+| `DataIdFn` (custom ID extractor) | C-only embedding use-case |
 
-These are tracked in [minor-engine-gaps.md](minor-engine-gaps.md).
+### Architecture note: shared op bodies
 
-### Architecture note: where the SDK-op logic lives
-
-`cognee-bindings-common` (`crates/bindings-common/`) provides only the *foundation*: `HandleState`
-(config + lazy `CogneeServices`), `SdkError`, and a few wire helpers. The actual op bodies
-(input marshaling, dataset resolution, result-JSON assembly) are currently **duplicated** between
-`capi/cognee-capi/src/sdk_*.rs` and `js/cognee-neon/src/sdk_*.rs`. The Python plans therefore
-start with a shared "Step 0" — hoisting those op bodies into a `cognee_bindings_common::ops`
-module so all three bindings call one implementation — described in detail in
-[core-pipeline-ops.md](core-pipeline-ops.md). Without that hoist, Python would become the third
-copy of ~2,000 lines of op logic.
-
-### Recommended implementation order
-
-0. Hoist shared op bodies into `cognee-bindings-common` ([core-pipeline-ops.md](core-pipeline-ops.md) Step 0)
-1. `sdk-handle.md` + `config-surface.md` — foundation everything else depends on
-2. `core-pipeline-ops.md` — the primary user-facing workflow
-3. `retrieval-ops.md` — completes the add→cognify→search loop
-4. `data-ops.md` + `dataset-management.md` — lifecycle management
-5. `memory-ops.md` — advanced memory features
-6. `session-admin-ops.md` — session and notebook support
-7. `visualization-ops.md` + `cloud-ops.md` — feature-gated extras
-8. `minor-engine-gaps.md` — polish existing engine surface
+All SDK-op logic (input marshaling, dataset resolution, result-JSON assembly) lives in
+`crates/bindings-common/` so all three bindings call one implementation. Per-binding
+shims in `capi/cognee-capi/src/sdk_*.rs`, `js/cognee-neon/src/sdk_*.rs`, and
+`python/src/sdk_*.rs` are thin wrappers around the shared op bodies.

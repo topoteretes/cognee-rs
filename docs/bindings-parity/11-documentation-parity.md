@@ -36,12 +36,17 @@ actual primary flow:
 
 ```python
 import asyncio
+import json
 from cognee_pipeline import Cognee, SearchType
 
 async def main():
-    cognee = Cognee()
-    await cognee.add({"type": "text", "text": "Cognee turns data into a knowledge graph."})
-    await cognee.cognify()
+    cognee = Cognee()          # optionally pass json.dumps(settings) to override defaults
+    await cognee.warm()        # build engines and resolve the default user
+    await cognee.add(
+        {"type": "text", "text": "Cognee turns data into a knowledge graph."},
+        "main_dataset",        # dataset_name is required
+    )
+    await cognee.cognify("main_dataset")   # dataset_name is required
     result = await cognee.search("What does cognee do?", {"search_type": SearchType.GRAPH_COMPLETION})
     print(result)
 
