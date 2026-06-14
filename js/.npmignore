@@ -1,0 +1,25 @@
+# Build artifacts — excluded from npm publish of the main `cognee` package.
+# The platform-specific .node binary is shipped via the optional
+# @cognee/neon-<platform> packages, not bundled here.
+
+# Rust source and build tree
+cognee-neon/
+
+# TypeScript source (compiled output lives in lib/ which IS included)
+src/
+
+# Test files
+__tests__/
+jest.config.js
+tsconfig.json
+
+# Per-platform packages (published separately)
+platform-packages/
+
+# Build artifacts / local dev files
+cognee_neon.node
+cognee.db
+*.db
+
+# Node modules
+node_modules/

@@ -22,9 +22,16 @@ platform) and C API (build-from-source) stories are platform-portable.
 ## Goal / definition of done
 
 `npm install` produces a working addon on the common targets (Linux x64/arm64,
-macOS x64/arm64, Windows x64) — either by downloading a matching prebuilt binary
-or by building from source as a fallback — without the consumer manually
-compiling Rust.
+macOS x64/arm64, Windows x64) by downloading a matching prebuilt binary —
+without the consumer manually compiling Rust.
+
+Source-build fallback is available only from a **git checkout** of the
+repository (the `cognee-neon/` crate and the wider Rust workspace are required
+to build, and bundling those in the npm tarball is impractical). The published
+package therefore ships JS only; on a platform without a matching prebuilt
+binary, `postinstall` reports how to proceed (use a prebuilt target, or build
+from a git checkout) and exits cleanly rather than attempting a build it cannot
+run.
 
 ## Design decision: prebuild tooling
 
@@ -54,7 +61,7 @@ pointing at the build instructions.
 
 ### Step 2 — Build a CI prebuild matrix
 
-Add a GitHub Actions workflow (or extend `.github/workflows/js-check.yml`) that,
+Add a GitHub Actions workflow (or extend `.github/workflows/ci.yml`, which contains the `js-check` job) that,
 on release tags, cross-compiles the Neon addon for the target matrix:
 
 | OS | arch | notes |
@@ -76,14 +83,16 @@ matching the consumer's platform. Document this in
 
 ### Step 4 — Source-build fallback
 
-Ensure that when no prebuilt/optional package matches, install falls back to a
-source build (requires Rust toolchain). Either:
-
-- a `postinstall` that runs `npm run build:rust` when no binary is found, or
-- `node-gyp-build`'s built-in "build if no prebuild" behavior.
+When no prebuilt/optional package matches, the `postinstall` script attempts a
+source build via `npm run build:rust` — but only when the Rust source is present
+(a git checkout). The published npm tarball ships JS only, so on a published
+install without a matching prebuilt binary the script reports how to proceed and
+exits cleanly instead of trying to build from a `cognee-neon/` crate that is not
+there.
 
 Gate the fallback so it only triggers on a missing binary, not on every install
-(building Rust on every `npm install` is unacceptable).
+(building Rust on every `npm install` is unacceptable), and only when the Rust
+source is actually available.
 
 ### Step 5 — Pin Node-API version
 

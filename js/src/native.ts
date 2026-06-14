@@ -476,5 +476,36 @@ export interface NativeBindings {
   watcherNoop(): NativeBox;
 }
 
+// Load the native addon via @neon-rs/load so the correct per-platform binary
+// (published as an optional dependency) is selected automatically at runtime.
+// If no matching prebuilt package is installed, we fall back to a locally-built
+// `cognee_neon.node` in the package root (produced by `npm run build:rust`).
+//
+// The optional dependency package names follow the @neon-rs/load platform key
+// convention: `@cognee/neon-<platform>` (e.g. `@cognee/neon-linux-x64-gnu`).
+// N-API version: napi-6 (Node >= 14.6 / 16.0).  See `engines` in package.json.
+//
 // eslint-disable-next-line @typescript-eslint/no-var-requires
-export const native: NativeBindings = require("../cognee_neon.node");
+const { proxy } = require("@neon-rs/load") as typeof import("@neon-rs/load");
+
+// Mapping from @neon-rs/load platform key → optional dependency package name.
+const platforms: Record<string, () => NativeBindings> = {
+  "linux-x64-gnu": () => require("@cognee/neon-linux-x64-gnu"),
+  "linux-arm64-gnu": () => require("@cognee/neon-linux-arm64-gnu"),
+  "linux-x64-musl": () => require("@cognee/neon-linux-x64-musl"),
+  "linux-arm64-musl": () => require("@cognee/neon-linux-arm64-musl"),
+  "darwin-x64": () => require("@cognee/neon-darwin-x64"),
+  "darwin-arm64": () => require("@cognee/neon-darwin-arm64"),
+  "win32-x64-msvc": () => require("@cognee/neon-win32-x64-msvc"),
+};
+
+// Fallback: try the locally-built artifact (produced by `npm run build:rust`).
+// This is the path for consumers who installed without a matching prebuilt
+// optional dep and ran the source-build postinstall step.
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const localDebug = () => require("../cognee_neon.node") as NativeBindings;
+
+export const native: NativeBindings = proxy({
+  platforms,
+  debug: localDebug,
+}) as NativeBindings;

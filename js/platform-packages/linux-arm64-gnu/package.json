@@ -1,0 +1,18 @@
+{
+  "name": "@cognee/neon-linux-arm64-gnu",
+  "version": "0.1.0",
+  "description": "Prebuilt cognee native addon for linux-arm64-gnu (aarch64-unknown-linux-gnu)",
+  "main": "index.js",
+  "os": ["linux"],
+  "cpu": ["arm64"],
+  "files": [
+    "index.js",
+    "cognee_neon.node"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/topoteretes/cognee-rust.git",
+    "directory": "js/platform-packages/linux-arm64-gnu"
+  }
+}

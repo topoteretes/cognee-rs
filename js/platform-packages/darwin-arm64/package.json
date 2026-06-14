@@ -1,0 +1,18 @@
+{
+  "name": "@cognee/neon-darwin-arm64",
+  "version": "0.1.0",
+  "description": "Prebuilt cognee native addon for darwin-arm64 (aarch64-apple-darwin)",
+  "main": "index.js",
+  "os": ["darwin"],
+  "cpu": ["arm64"],
+  "files": [
+    "index.js",
+    "cognee_neon.node"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/topoteretes/cognee-rust.git",
+    "directory": "js/platform-packages/darwin-arm64"
+  }
+}

@@ -9,13 +9,24 @@
     "build:rust:debug": "cd cognee-neon && cargo build && cd .. && node scripts/copy-artifact.js debug",
     "build:ts": "tsc",
     "build": "npm run build:rust && npm run build:ts",
+    "postinstall": "node scripts/postinstall.js",
     "test": "jest --config jest.config.js"
   },
   "engines": {
     "node": ">=16.0.0"
   },
   "dependencies": {
+    "@neon-rs/load": "^0.2.6",
     "dotenv": "^16.6.1"
+  },
+  "optionalDependencies": {
+    "@cognee/neon-darwin-arm64": "0.1.0",
+    "@cognee/neon-darwin-x64": "0.1.0",
+    "@cognee/neon-linux-arm64-gnu": "0.1.0",
+    "@cognee/neon-linux-arm64-musl": "0.1.0",
+    "@cognee/neon-linux-x64-gnu": "0.1.0",
+    "@cognee/neon-linux-x64-musl": "0.1.0",
+    "@cognee/neon-win32-x64-msvc": "0.1.0"
   },
   "devDependencies": {
     "@types/jest": "^29.5.0",
@@ -26,6 +37,7 @@
   },
   "files": [
     "lib/",
-    "cognee_neon.node"
+    "scripts/postinstall.js",
+    "scripts/copy-artifact.js"
   ]
 }
