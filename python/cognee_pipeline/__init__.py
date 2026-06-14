@@ -221,8 +221,14 @@ __all__ = [
     "Watcher",
     # Drop-in upstream cognee SDK compatibility layer
     "compat",
+    # Public TypedDict types for inputs, options, and results
+    "types",
 ]
 
 # Expose the compat module as an attribute of cognee_pipeline so that
 # ``import cognee_pipeline.compat as cognee`` works without an extra import.
 from . import compat  # noqa: E402
+
+# Expose the types module so callers can do ``from cognee_pipeline import types``
+# or ``import cognee_pipeline.types``.
+from . import types  # noqa: E402

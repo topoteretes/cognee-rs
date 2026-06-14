@@ -228,11 +228,15 @@ async def test_compat_add_plain_string(tmp_path):
 @SKIP_IF_NO_ADD
 @pytest.mark.asyncio
 async def test_compat_add_list_of_strings(tmp_path):
-    """await cognee.add(['a', 'b']) must ingest all items."""
+    """await cognee.add(['a', 'b']) must ingest all items.
+
+    The compat layer returns snake_case keys by default.
+    """
     _patch_default_handle(tmp_path)
     result = await cognee.add(["First item.", "Second item."])
     assert isinstance(result, dict)
-    assert result.get("addedCount", 0) >= 1
+    # Compat layer re-keys camelCase → snake_case by default.
+    assert result.get("added_count", 0) >= 1
 
 
 @SKIP_IF_NO_ADD
@@ -250,11 +254,15 @@ async def test_compat_add_pathlib_path(tmp_path):
 @SKIP_IF_NO_ADD
 @pytest.mark.asyncio
 async def test_compat_add_with_dataset_name(tmp_path):
-    """await cognee.add('text', 'my_dataset') must use the provided dataset name."""
+    """await cognee.add('text', 'my_dataset') must use the provided dataset name.
+
+    The compat layer returns snake_case keys by default.
+    """
     _patch_default_handle(tmp_path)
     result = await cognee.add("Dataset-specific content.", dataset_name="my_dataset")
     assert isinstance(result, dict)
-    assert result.get("datasetName") == "my_dataset"
+    # Compat layer re-keys camelCase → snake_case by default.
+    assert result.get("dataset_name") == "my_dataset"
 
 
 @SKIP_IF_NO_SEARCH
@@ -311,12 +319,16 @@ async def test_compat_prune_data(tmp_path):
 @SKIP_IF_NO_ADD
 @pytest.mark.asyncio
 async def test_compat_prune_system(tmp_path):
-    """await cognee.prune.prune_system() must return a result dict."""
+    """await cognee.prune.prune_system() must return a result dict.
+
+    The compat layer returns snake_case keys by default.
+    """
     _patch_default_handle(tmp_path)
     await cognee.add("Content for system prune test.")
     result = await cognee.prune.prune_system()
     assert isinstance(result, dict)
-    assert "dataPruned" in result or "graphPruned" in result
+    # Compat layer re-keys camelCase → snake_case by default.
+    assert "data_pruned" in result or "graph_pruned" in result
 
 
 # ---------------------------------------------------------------------------

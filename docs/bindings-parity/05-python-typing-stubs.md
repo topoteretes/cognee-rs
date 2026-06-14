@@ -80,7 +80,7 @@ referenced from the stubs), define:
 
 - **Inputs:** `TextInput`, `FileInput`, `UrlInput`, `BinaryInput` as `TypedDict`s
   with a literal `type` discriminator; `DataInput = Union[...]`. Mirrors the JS
-  discriminated unions in [js/src/native.ts](../../js/src/native.ts).
+  discriminated unions in [js/src/types.ts](../../js/src/types.ts) (`CogneeDataInput`).
 - **Options:** `AddOpts`, `CognifyOpts`, `SearchOpts`, `ForgetOpts`, … as
   `TypedDict(total=False)` with every documented key typed (`search_type:
   SearchType`, `top_k: int`, `datasets: list[str]`, …).

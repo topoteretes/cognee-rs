@@ -40,6 +40,18 @@ SearchType
 :data:`SearchType` is re-exported here so ``cognee.SearchType.CHUNKS`` works
 after ``import cognee_pipeline.compat as cognee``.
 
+Result-key casing
+-----------------
+The native ``_native`` module returns result dicts with **camelCase** keys
+(e.g. ``addedCount``, ``priorPipelineRunId``) for cross-binding uniformity
+with the C and JavaScript APIs.  This compat layer re-keys all top-level result
+dict keys to **snake_case** (e.g. ``added_count``, ``prior_pipeline_run_id``)
+so that Python callers receive idiomatic names.
+
+To access the raw camelCase dict, pass ``raw=True`` to the compat functions
+that support it, or call the corresponding method directly on a
+:class:`~cognee_pipeline.Cognee` instance.
+
 Notes on unsupported upstream types
 ------------------------------------
 The upstream ``cognee`` SDK also defines ``SearchType.AGENTIC_COMPLETION``
@@ -55,6 +67,7 @@ from __future__ import annotations
 
 import os
 import pathlib
+import re
 from typing import Any, Union
 
 from . import Cognee, CogneeValidationError, SearchType
@@ -67,6 +80,44 @@ __all__ = [
     "prune",
     "SearchType",
 ]
+
+# ---------------------------------------------------------------------------
+# Result re-keying: camelCase → snake_case
+# ---------------------------------------------------------------------------
+
+_CAMEL_RE = re.compile(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
+
+
+def _camel_to_snake(name: str) -> str:
+    """Convert a camelCase or PascalCase string to snake_case.
+
+    Examples::
+
+        _camel_to_snake("addedCount")       == "added_count"
+        _camel_to_snake("priorPipelineRunId") == "prior_pipeline_run_id"
+        _camel_to_snake("datasetName")      == "dataset_name"
+    """
+    return _CAMEL_RE.sub("_", name).lower()
+
+
+def _rekey(obj: Any) -> Any:
+    """Recursively re-key the top-level keys of a dict from camelCase to snake_case.
+
+    Non-dict values (lists, scalars) are returned unchanged.  Only the
+    *outermost* dict level is re-keyed — nested dicts keep their original
+    keys so the wire format for nested objects (e.g. ``deleteResult``,
+    ``cognifyResult``) is preserved and readable at one layer.
+
+    This is intentionally shallow: deep-re-keying all nested dicts would
+    break field access patterns that callers already use for the raw wire
+    format.  Callers who need snake_case all the way through should apply
+    ``_rekey`` themselves at each nesting level, or use ``raw=True`` and work
+    with the camelCase dict directly.
+    """
+    if not isinstance(obj, dict):
+        return obj
+    return {_camel_to_snake(k): v for k, v in obj.items()}
+
 
 # ---------------------------------------------------------------------------
 # Process-global default handle
@@ -156,6 +207,8 @@ def _coerce_inputs(
 async def add(
     data: Any,
     dataset_name: str = "main_dataset",
+    *,
+    raw: bool = False,
     **kwargs,
 ) -> Any:
     """Ingest one or more data items into *dataset_name*.
@@ -163,18 +216,26 @@ async def add(
     Accepts the same input shapes as the upstream ``cognee.add()``:
     plain strings, file paths, URL strings, bytes, dicts, or lists of these.
 
-    Returns the ``add()`` result dict (camelCase keys: ``datasetName``,
-    ``added``, ``addedCount``, ``deduplicated``, ``deduplicatedCount``).
+    By default returns the result dict with **snake_case** keys:
+    ``dataset_name``, ``added``, ``added_count``, ``deduplicated``,
+    ``deduplicated_count``.
+
+    Pass ``raw=True`` to receive the native camelCase dict (``datasetName``,
+    ``addedCount``, ``deduplicatedCount``) for cross-binding parity tests or
+    when interoperating with the C / JS APIs.
     """
     descriptors = _coerce_inputs(data)
     # Single-element list: pass the dict directly (handle.add normalises it).
     inputs = descriptors if len(descriptors) != 1 else descriptors[0]
     opts = kwargs if kwargs else None
-    return await _handle().add(inputs, dataset_name, opts or None)
+    result = await _handle().add(inputs, dataset_name, opts or None)
+    return result if raw else _rekey(result)
 
 
 async def cognify(
     datasets: Union[str, list, None] = None,
+    *,
+    raw: bool = False,
     **kwargs,
 ) -> Any:
     """Extract a knowledge graph from previously-ingested data.
@@ -182,18 +243,24 @@ async def cognify(
     *datasets* mirrors the upstream argument name.  When ``None`` the default
     dataset (``"main_dataset"``) is processed.
 
-    Returns the ``cognify()`` result dict (camelCase keys: ``chunks``,
+    By default returns the result dict with **snake_case** keys: ``chunks``,
     ``entities``, ``edges``, ``summaries``, ``embeddings``,
-    ``alreadyCompleted``, ``priorPipelineRunId``).
+    ``already_completed``, ``prior_pipeline_run_id``.
+
+    Pass ``raw=True`` to receive the native camelCase dict
+    (``alreadyCompleted``, ``priorPipelineRunId``).
     """
     dataset_name = datasets if isinstance(datasets, str) else "main_dataset"
     opts = kwargs if kwargs else None
-    return await _handle().cognify(dataset_name, opts or None)
+    result = await _handle().cognify(dataset_name, opts or None)
+    return result if raw else _rekey(result)
 
 
 async def add_and_cognify(
     data: Any,
     dataset_name: str = "main_dataset",
+    *,
+    raw: bool = False,
     **kwargs,
 ) -> Any:
     """Ingest *data* and immediately extract the knowledge graph.
@@ -201,12 +268,24 @@ async def add_and_cognify(
     Convenience wrapper combining :func:`add` + :func:`cognify` in a single
     native call, skipping re-cognification of deduplicated items.
 
-    Returns a dict with two top-level keys: ``add`` and ``cognify``.
+    By default returns a dict with **snake_case** top-level keys: ``add``
+    (snake_case sub-dict) and ``cognify`` (snake_case sub-dict).
+
+    Pass ``raw=True`` to receive the native camelCase dict.
     """
     descriptors = _coerce_inputs(data)
     inputs = descriptors if len(descriptors) != 1 else descriptors[0]
     opts = kwargs if kwargs else None
-    return await _handle().add_and_cognify(inputs, dataset_name, opts or None)
+    result = await _handle().add_and_cognify(inputs, dataset_name, opts or None)
+    if raw:
+        return result
+    # Re-key both the outer dict and the nested add/cognify sub-dicts.
+    outer = _rekey(result)
+    if isinstance(outer.get("add"), dict):
+        outer["add"] = _rekey(outer["add"])
+    if isinstance(outer.get("cognify"), dict):
+        outer["cognify"] = _rekey(outer["cognify"])
+    return outer
 
 
 async def search(
@@ -215,6 +294,7 @@ async def search(
     top_k: int = 10,
     *,
     datasets=None,
+    raw: bool = False,
     **kwargs,
 ) -> Any:
     """Search the knowledge graph.
@@ -231,6 +311,11 @@ async def search(
     *top_k* defaults to ``10`` (same as upstream).
 
     Returns a list of result dicts (shape depends on *query_type*).
+    Individual result items are returned as-is (their keys vary by search type
+    and are not re-keyed).
+
+    Pass ``raw=True`` to skip any normalisation and receive the value exactly
+    as returned by the native layer.
     """
     # Use .value to get the raw string when a SearchType enum member is passed.
     # Plain strings (no .value attribute) fall back to str().  This is safe
@@ -265,12 +350,20 @@ class _Prune:
         vector: bool = True,
         metadata: bool = False,
         cache: bool = True,
+        *,
+        raw: bool = False,
     ) -> Any:
         """Wipe knowledge-graph / vector / metadata stores.
 
         Mirrors ``cognee.prune.prune_system()`` in the upstream SDK.
         Keyword arguments map to the ``prune_graph``, ``prune_vector``,
         ``prune_metadata``, and ``prune_cache`` opts keys.
+
+        By default returns the result dict with **snake_case** keys:
+        ``data_pruned``, ``graph_pruned``, ``vector_pruned``,
+        ``metadata_pruned``, ``cache_pruned``.
+
+        Pass ``raw=True`` to receive the native camelCase dict.
         """
         opts = {
             "prune_graph": graph,
@@ -278,7 +371,8 @@ class _Prune:
             "prune_metadata": metadata,
             "prune_cache": cache,
         }
-        return await _handle().prune_system(opts)
+        result = await _handle().prune_system(opts)
+        return result if raw else _rekey(result)
 
 
 #: Namespace providing ``prune.prune_data()`` and ``prune.prune_system()``.
