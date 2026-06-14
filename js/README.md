@@ -39,10 +39,20 @@ const results = await c.search("What does the fox do?");
 console.log(results);
 ```
 
-A fully-annotated runnable example is available at
-[`examples/add-cognify-search.ts`](examples/add-cognify-search.ts). It walks through
-the full `add → cognify → search` pipeline and includes a comment block describing the
-required environment variables and how to run it with `ts-node`.
+Fully-annotated runnable examples are available in the [`examples/`](examples/) directory.
+
+| Example | npm script | What it covers |
+|---|---|---|
+| [`add-cognify-search.ts`](examples/add-cognify-search.ts) | `npm run example` | Core add → cognify → search pipeline |
+| [`memify-recall.ts`](examples/memify-recall.ts) | `npm run example:memify` | Triplet embeddings (memify) + session recall |
+| [`datasets.ts`](examples/datasets.ts) | `npm run example:datasets` | Dataset listing, status, deletion |
+| [`sessions.ts`](examples/sessions.ts) | `npm run example:sessions` | QA history, feedback, graph-context snapshots |
+| [`config.ts`](examples/config.ts) | `npm run example:config` | Programmatic config (LLM / embedding / DBs) |
+| [`visualize.ts`](examples/visualize.ts) | `npm run example:visualize` | Render knowledge graph to HTML |
+| [`pipeline-engine.ts`](examples/pipeline-engine.ts) | `npm run example:pipeline` | Low-level pipeline API (no credentials needed) |
+
+All examples validate required env vars up front and exit 0 with a clear `SKIP`
+message when they are absent, so they can be run in CI without secrets.
 
 ## Constructor
 

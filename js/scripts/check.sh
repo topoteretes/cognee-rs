@@ -42,5 +42,21 @@ npm test
 
 echo ""
 echo "================================================================"
+echo "=== JS: Smoke-testing examples (credential-gated) ==="
+echo "================================================================"
+
+# Run the core example only when LLM credentials are present.
+# Uses MOCK_EMBEDDING=true to skip the ONNX model download (fast, no GPU).
+# When credentials are absent the example script exits 0 with a SKIP message,
+# matching the C API examples' skip-guard pattern.
+if [[ -n "${OPENAI_URL:-}" && -n "${OPENAI_TOKEN:-}" ]]; then
+    echo "Credentials detected — running add-cognify-search.ts with MOCK_EMBEDDING=true"
+    MOCK_EMBEDDING=true npm run example
+else
+    echo "SKIP: OPENAI_URL or OPENAI_TOKEN not set — skipping example smoke test"
+fi
+
+echo ""
+echo "================================================================"
 echo "=== JS check passed ==="
 echo "================================================================"

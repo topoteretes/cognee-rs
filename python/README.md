@@ -25,6 +25,32 @@ pipeline = cognee_pipeline.Pipeline()
 # ... configure tasks, run, etc.
 ```
 
+## Examples
+
+Runnable example scripts are in the [`examples/`](examples/) directory. Each
+script validates required env vars up front and exits 0 with a clear `SKIP`
+message when they are absent, so all examples are safe to run in CI without
+credentials.
+
+| Script | Run command | What it covers |
+|---|---|---|
+| [`add_cognify_search.py`](examples/add_cognify_search.py) | `python examples/add_cognify_search.py` | Core add → cognify → search pipeline |
+| [`memify_recall.py`](examples/memify_recall.py) | `python examples/memify_recall.py` | Triplet embeddings (memify) + session recall |
+| [`datasets.py`](examples/datasets.py) | `python examples/datasets.py` | Dataset listing, status, deletion |
+| [`sessions.py`](examples/sessions.py) | `python examples/sessions.py` | QA history, feedback, graph-context snapshots |
+| [`config.py`](examples/config.py) | `python examples/config.py` | Programmatic config (LLM / embedding / DBs) |
+| [`visualize.py`](examples/visualize.py) | `python examples/visualize.py` | Render knowledge graph to HTML |
+
+All examples read LLM credentials from the environment. Set `MOCK_EMBEDDING=true`
+to skip the ONNX model download and use mock embeddings (fast, no GPU required):
+
+```bash
+export OPENAI_URL=https://api.openai.com/v1
+export OPENAI_TOKEN=sk-...
+export MOCK_EMBEDDING=true
+cd python && python examples/add_cognify_search.py
+```
+
 ## Initialisation
 
 cognee's Rust core uses `tracing` for structured diagnostics and

@@ -11,6 +11,7 @@
  *      OPENAI_MODEL=gpt-4o-mini                # model name (optional, defaults to gpt-4o-mini)
  *      EMBEDDING_PROVIDER=openai               # use "openai" for text-embedding-3-small
  *      EMBEDDING_DIMENSIONS=1536               # must match the model
+ *      MOCK_EMBEDDING=true                     # skip ONNX download in CI / quick tests
  *      COGNEE_BINDING_SUPPRESS_LOGS=1          # suppress Rust tracing on stderr (optional)
  *
  * Running
@@ -47,15 +48,26 @@ async function main(): Promise<void> {
   // Pass only the keys you want to override. Absent keys fall back to the
   // environment (OPENAI_URL / OPENAI_TOKEN / OPENAI_MODEL etc.) and then to
   // built-in defaults. The Settings overlay order is: defaults < env < object.
+  //
+  // Set MOCK_EMBEDDING=true to skip the ONNX model download and use mock
+  // zero-vectors instead (fast, no GPU required; useful for CI smoke tests).
+  const useMock =
+    (process.env.MOCK_EMBEDDING ?? "").toLowerCase() === "true" ||
+    process.env.MOCK_EMBEDDING === "1";
+
   const cognee = new Cognee({
     llmEndpoint,
     llmApiKey,
     llmModel: process.env.OPENAI_MODEL ?? "gpt-4o-mini",
-    embeddingProvider: process.env.EMBEDDING_PROVIDER ?? "openai",
-    embeddingEndpoint: llmEndpoint,
-    embeddingApiKey: llmApiKey,
-    embeddingModel: process.env.EMBEDDING_MODEL ?? "text-embedding-3-small",
-    embeddingDimensions: Number(process.env.EMBEDDING_DIMENSIONS ?? "1536"),
+    ...(useMock
+      ? { embeddingProvider: "mock" }
+      : {
+          embeddingProvider: process.env.EMBEDDING_PROVIDER ?? "openai",
+          embeddingEndpoint: llmEndpoint,
+          embeddingApiKey: llmApiKey,
+          embeddingModel: process.env.EMBEDDING_MODEL ?? "text-embedding-3-small",
+          embeddingDimensions: Number(process.env.EMBEDDING_DIMENSIONS ?? "1536"),
+        }),
   });
 
   // ── Step 2: warm up ────────────────────────────────────────────────────────

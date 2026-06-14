@@ -11,7 +11,7 @@ Example coverage is uneven:
 
 | Binding | Examples | Verdict |
 |---|---|---|
-| C API | 19 `.c` files under [capi/examples/](../../capi/examples/), compiled+run in `check.sh`, exemplary memory management | **Strong — the reference standard** |
+| C API | 20 `.c` files under [capi/examples/](../../capi/examples/), compiled+run in `check.sh`, exemplary memory management | **Strong — the reference standard** |
 | JS/TS | 1 file ([js/examples/add-cognify-search.ts](../../js/examples/add-cognify-search.ts)); not an npm script; covers only add→cognify→search | **Adequate** |
 | Python | **0 example scripts** anywhere; only the test suite + docstrings | **Missing** |
 
