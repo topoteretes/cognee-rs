@@ -11,3 +11,8 @@ version = "0.1.0"
 features = ["pyo3/extension-module"]
 python-source = "."
 module-name = "cognee_pipeline._native"
+# The optional drop-in ``cognee`` shim (python/cognee/) is intentionally NOT
+# bundled into the wheel: a plain ``pip install cognee-pipeline`` must never
+# shadow the real upstream ``cognee`` package.  The shim ships only in the repo
+# for users who want to vendor it explicitly (see python/cognee/__init__.py).
+exclude = ["cognee/**/*"]

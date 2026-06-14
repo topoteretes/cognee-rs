@@ -1,5 +1,7 @@
 """Python bindings for the cognee-core pipeline engine."""
 
+from enum import Enum
+
 COGNEE_BINDING_SUPPRESS_LOGS = "COGNEE_BINDING_SUPPRESS_LOGS"
 """Env-var name that suppresses the auto-installed tracing bridge.
 
@@ -11,16 +13,36 @@ minimal ``tracing_subscriber::Registry`` that forwards every Rust
 ``pyo3-log`` (gap 07 decisions 1 and 5)."""
 
 
-class SearchType:
-    """Constants for the 15 supported search strategy types.
+class SearchType(str, Enum):
+    """Enumeration of the 15 supported search strategy types.
 
-    Pass these as the ``search_type`` option to :meth:`Cognee.search` or
-    :meth:`Cognee.recall`:
+    Inherits from ``str`` so values compare equal to their string forms and
+    can be passed wherever a plain string search-type is accepted.  Matches
+    the ``SearchType`` enum in the upstream ``cognee`` Python SDK.
+
+    Pass these as the ``query_type`` kwarg to the compat-layer
+    :func:`cognee_pipeline.compat.search`, or as the ``search_type`` option
+    in the handle-based :meth:`Cognee.search` / :meth:`Cognee.recall`:
 
     .. code-block:: python
 
+        from cognee_pipeline import SearchType
         result = await cognee.search("query", {"search_type": SearchType.CHUNKS})
+
+    The two upstream types ``AGENTIC_COMPLETION`` and
+    ``GRAPH_COMPLETION_DECOMPOSITION`` are **not yet supported** by the Rust
+    core.  Passing either raises :exc:`CogneeValidationError` at runtime; see
+    ``docs/python-bindings/minor-engine-gaps.md`` for the tracking note.
     """
+
+    # Ensure str() and f-strings return the bare value (e.g. "CHUNKS"), not
+    # "SearchType.CHUNKS".  Python 3.11+ changed (str, Enum) formatting; these
+    # overrides restore the expected behaviour across Python 3.9–3.12+.
+    def __str__(self) -> str:
+        return self.value
+
+    def __format__(self, format_spec: str) -> str:
+        return format(self.value, format_spec)
 
     GRAPH_COMPLETION = "GRAPH_COMPLETION"
     GRAPH_COMPLETION_COT = "GRAPH_COMPLETION_COT"
@@ -197,4 +219,10 @@ __all__ = [
     "disconnect",
     # Watcher factory
     "Watcher",
+    # Drop-in upstream cognee SDK compatibility layer
+    "compat",
 ]
+
+# Expose the compat module as an attribute of cognee_pipeline so that
+# ``import cognee_pipeline.compat as cognee`` works without an extra import.
+from . import compat  # noqa: E402
