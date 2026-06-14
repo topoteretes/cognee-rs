@@ -53,7 +53,7 @@ Status: `Not started` · `In progress` · `Blocked` · `Done`.
 | ID-4 | Replace `any` result types with typed interfaces | JS | Idiomaticity | P1 | Done | [08-js-types-and-surface.md](08-js-types-and-surface.md) |
 | CR-3 | Remove stray `unwrap()` in Neon `task.rs`; annotate lock poisoning | JS | Correctness/Cleanliness | P2 | Done | [08-js-types-and-surface.md](08-js-types-and-surface.md) |
 | EX-1 | Example parity: Python example scripts + JS example expansion + npm scripts | Python, JS | Examples | P2 | Not started | [09-examples-parity.md](09-examples-parity.md) |
-| CL-2 | Hoist `SECRET_FIELDS` redaction into `bindings-common` (dedup ×3) | All | Cleanliness | P2 | Not started | [10-shared-cleanliness.md](10-shared-cleanliness.md) |
+| CL-2 | Hoist `SECRET_FIELDS` redaction into `bindings-common` (dedup ×3) | All | Cleanliness | P2 | Done | [10-shared-cleanliness.md](10-shared-cleanliness.md) |
 | DOC-2 | Documentation parity (README core-flow, docstring/header parity, parity matrix) | All | Documentation | P2 | Not started | [11-documentation-parity.md](11-documentation-parity.md) |
 
 ## Suggested sequencing

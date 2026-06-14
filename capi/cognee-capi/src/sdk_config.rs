@@ -58,29 +58,6 @@ use crate::error::{CgErrorCode, set_last_error};
 use crate::sdk::CgSdk;
 use crate::util::null_check;
 
-// ── Secret-field blanking (matches js/cognee-neon/src/config.rs) ─────────────
-
-/// Fields that must never be echoed back in `cg_sdk_config_get`.
-///
-/// This list mirrors `SECRET_FIELDS` in `js/cognee-neon/src/config.rs`.
-/// `cognee_utils::redact` only catches secret-shaped substrings; a bare value
-/// like `"llm_api_key": "abc123"` is NOT caught by it, so we use an explicit
-/// allow-list instead.
-const SECRET_FIELDS: &[&str] = &[
-    "llm_api_key",
-    "embedding_api_key",
-    "vector_db_key",
-    "vector_db_password",
-    "graph_database_key",
-    "graph_database_password",
-    "db_password",
-    "cache_password",
-    "default_user_password",
-    "otel_exporter_otlp_headers",
-];
-
-const REDACTED: &str = "***REDACTED***";
-
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
 /// Borrow a `&CgSdk` from a raw pointer after a null check, then run `f` on the
@@ -366,11 +343,9 @@ pub unsafe extern "C" fn cg_sdk_config_set_graph_db_config(
 
 /// Read back the current configuration as a JSON string.
 ///
-/// Secret fields (`llm_api_key`, `embedding_api_key`, `vector_db_key`,
-/// `vector_db_password`, `graph_database_key`, `graph_database_password`,
-/// `db_password`, `cache_password`, `default_user_password`,
-/// `otel_exporter_otlp_headers`) are replaced with `"***REDACTED***"` before
-/// the JSON is serialized to the output string.
+/// Fields listed in `cognee_bindings_common::redact::SECRET_FIELDS`
+/// (e.g. `llm_api_key`, `embedding_api_key`, `vector_db_key`) are replaced
+/// with `"***REDACTED***"` before the JSON is serialized to the output string.
 ///
 /// On success `*out_json` is set to a heap-allocated UTF-8 JSON string. The
 /// caller must free it with `cg_string_destroy`.
@@ -406,13 +381,7 @@ pub unsafe extern "C" fn cg_sdk_config_get(
     };
 
     // Blank the secret fields in-place before returning to the C caller.
-    if let serde_json::Value::Object(ref mut map) = value {
-        for field in SECRET_FIELDS {
-            if let Some(slot) = map.get_mut(*field) {
-                *slot = serde_json::Value::String(REDACTED.to_string());
-            }
-        }
-    }
+    cognee_bindings_common::redact_config_json(&mut value);
 
     let json_str = match serde_json::to_string(&value) {
         Ok(s) => s,

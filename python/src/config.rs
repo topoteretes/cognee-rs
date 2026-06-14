@@ -20,37 +20,6 @@ use pyo3::prelude::*;
 use crate::json::{py_to_serde, py_to_serde_map, serde_to_py};
 use crate::sdk_error::config_error_to_py;
 
-// ── Secret-field redaction ────────────────────────────────────────────────────
-//
-// This list mirrors `SECRET_FIELDS` in `capi/cognee-capi/src/sdk_config.rs` and
-// `js/cognee-neon/src/config.rs`.  A third copy lives here for now; hoisting it
-// into `cognee-bindings-common` is tracked as a follow-up cleanup.
-
-const SECRET_FIELDS: &[&str] = &[
-    "llm_api_key",
-    "embedding_api_key",
-    "vector_db_key",
-    "vector_db_password",
-    "graph_database_key",
-    "graph_database_password",
-    "db_password",
-    "cache_password",
-    "default_user_password",
-    "otel_exporter_otlp_headers",
-];
-
-const REDACTED: &str = "***REDACTED***";
-
-fn redact_secrets(value: &mut serde_json::Value) {
-    if let serde_json::Value::Object(map) = value {
-        for field in SECRET_FIELDS {
-            if let Some(slot) = map.get_mut(*field) {
-                *slot = serde_json::Value::String(REDACTED.to_string());
-            }
-        }
-    }
-}
-
 // ── PyCogneeConfig ────────────────────────────────────────────────────────────
 
 /// Configuration surface for a `Cognee` handle.
@@ -111,7 +80,7 @@ impl PyCogneeConfig {
         let settings = self.inner.cm.config().read().clone();
         let mut value = serde_json::to_value(&settings)
             .map_err(|e| PyRuntimeError::new_err(format!("failed to serialize settings: {e}")))?;
-        redact_secrets(&mut value);
+        cognee_bindings_common::redact_config_json(&mut value);
         serde_to_py(py, &value)
     }
 

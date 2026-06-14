@@ -25,28 +25,6 @@ use cognee_lib::config::ConfigError;
 use crate::json::{js_to_value, parse_js};
 use crate::sdk::CogneeHandle;
 
-/// Secret/credential fields that must never be echoed back through
-/// `getConfig`. Blanked to `"***REDACTED***"` before serialization.
-///
-/// `cognee_utils::redact` only matches secret-*shaped* substrings (`sk-…`,
-/// `Bearer …`, `password=…`); a bare value like `"llm_api_key": "abc123"` is
-/// NOT caught by it (and `redact` is not re-exported by `cognee_lib`), so we
-/// use an explicit, deterministic blanklist instead.
-const SECRET_FIELDS: &[&str] = &[
-    "llm_api_key",
-    "embedding_api_key",
-    "vector_db_key",
-    "vector_db_password",
-    "graph_database_key",
-    "graph_database_password",
-    "db_password",
-    "cache_password",
-    "default_user_password",
-    "otel_exporter_otlp_headers",
-];
-
-const REDACTED: &str = "***REDACTED***";
-
 // ---------------------------------------------------------------------------
 // Config-local helpers.
 // ---------------------------------------------------------------------------
@@ -261,7 +239,7 @@ bulk_setter!(config_set_graph_db_config, set_graph_db_config);
 // ---------------------------------------------------------------------------
 
 /// `getConfig(handle) -> object` — a JSON snapshot of the current `Settings`
-/// with the known secret fields blanked (see [`SECRET_FIELDS`]).
+/// with secret fields blanked (see `cognee_bindings_common::redact::SECRET_FIELDS`).
 pub fn get_config(mut cx: FunctionContext) -> JsResult<JsValue> {
     let handle = cx.argument::<JsBox<CogneeHandle>>(0)?;
 
@@ -272,13 +250,7 @@ pub fn get_config(mut cx: FunctionContext) -> JsResult<JsValue> {
     };
 
     // Blank the secret fields in-place before crossing back into JS.
-    if let serde_json::Value::Object(ref mut map) = value {
-        for field in SECRET_FIELDS {
-            if let Some(slot) = map.get_mut(*field) {
-                *slot = serde_json::Value::String(REDACTED.to_string());
-            }
-        }
-    }
+    cognee_bindings_common::redact_config_json(&mut value);
 
     let json = serde_json::to_string(&value)
         .or_else(|e| cx.throw_error(format!("failed to serialize settings: {e}")))?;
