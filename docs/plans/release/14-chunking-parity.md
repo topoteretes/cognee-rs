@@ -46,7 +46,7 @@ default (OpenAI-family) configuration. Two fixes:
 - So the real default gap is **selection**: with no env vars, `from_env()` returns `Word`
   (because provider defaults to `onnx`), not tiktoken.
 
-**Python** (`/tmp/cognee-python/cognee/infrastructure/databases/vector/embeddings/LiteLLMEmbeddingEngine.py:255-298`):
+**Python** (`/tmp/cognee-python/cognee/infrastructure/databases/vector/embeddings/LiteLLMEmbeddingEngine.py:255-301`):
 - The tokenizer is a property of the embedding engine, chosen by provider:
   `"openai" in provider` → `TikTokenTokenizer`; `"gemini"` → TikToken; `"mistral"` →
   Mistral; else → HuggingFace, falling back to `TikTokenTokenizer(model=None)` =
@@ -83,11 +83,11 @@ default (OpenAI-family) configuration. Two fixes:
   gpt-4 → 8192). **There is no `max_completion_tokens` method on either trait** — see the
   implementation note.
 
-**Python** (`/tmp/cognee-python/cognee/api/v1/cognify/cognify.py:320-324`):
+**Python** (`/tmp/cognee-python/cognee/api/v1/cognify/cognify.py:321-322`):
 - `Task(extract_chunks_from_documents, max_chunk_size=chunk_size or get_max_chunk_tokens(), ...)`
   and `chunk_size` defaults to `None` (line 48), so Python **always auto-calculates** when
   the user passes nothing — there is no fixed `1500` at the cognify entry point.
-- `get_max_chunk_tokens` (`/tmp/cognee-python/cognee/infrastructure/llm/utils.py:14-43`):
+- `get_max_chunk_tokens` (`/tmp/cognee-python/cognee/infrastructure/llm/utils.py:17-44`):
   ```python
   llm_cutoff_point = llm_client.max_completion_tokens // 2
   max_chunk_tokens = min(embedding_engine.max_completion_tokens, llm_cutoff_point)
@@ -128,11 +128,11 @@ git checkout -b task/14-chunking-parity
 Read first (re-grep line numbers):
 - `crates/chunking/src/config.rs` (`TokenCounterKind`, `from_env`, `build`)
 - `crates/chunking/Cargo.toml` (features); `crates/lib/Cargo.toml`, `crates/cli/Cargo.toml` (default feature lists)
-- `crates/chunking/src/token_counter.rs:88-101` (`TikTokenCounter::cl100k_base`)
+- `crates/chunking/src/token_counter.rs:88-96` (`TikTokenCounter::cl100k_base`)
 - `crates/cognify/src/config.rs:33,203,382-398` (default + auto-calc)
 - `crates/cognify/src/tasks.rs:2004-2017` (auto-calc trigger)
 - `crates/embedding/src/engine.rs:52`; `crates/llm/src/llm_trait.rs:75`; `crates/llm/src/adapters/openai.rs:641`
-- Python: `cognify.py:48,320-324`; `utils.py:14-43`; `LiteLLMEmbeddingEngine.py:69,255-298`; `infrastructure/llm/config.py:51`
+- Python: `cognify.py:48,321-322`; `utils.py:17-44`; `LiteLLMEmbeddingEngine.py:69,255-301`; `infrastructure/llm/config.py:51`
 
 ## Files to change
 
@@ -144,13 +144,13 @@ Read first (re-grep line numbers):
 
 ## Python reference (exact)
 
-- Auto-calc: `/tmp/cognee-python/cognee/infrastructure/llm/utils.py:14-43`
+- Auto-calc: `/tmp/cognee-python/cognee/infrastructure/llm/utils.py:17-44`
   → `min(embedding_engine.max_completion_tokens, llm_client.max_completion_tokens // 2)`.
-- Default invocation: `/tmp/cognee-python/cognee/api/v1/cognify/cognify.py:320-324`
+- Default invocation: `/tmp/cognee-python/cognee/api/v1/cognify/cognify.py:321-322`
   (`chunk_size or get_max_chunk_tokens()`, `chunk_size` default `None` at line 48).
 - Embedding default `max_completion_tokens = 512`: `LiteLLMEmbeddingEngine.py:69`.
 - LLM default `llm_max_completion_tokens = 16384`: `infrastructure/llm/config.py:51`.
-- Tokenizer selection: `LiteLLMEmbeddingEngine.py:255-298` (openai → TikToken cl100k).
+- Tokenizer selection: `LiteLLMEmbeddingEngine.py:255-301` (openai → TikToken cl100k).
 
 ## Implementation steps
 
@@ -317,6 +317,14 @@ fn auto_chunk_size_matches_python_default() {
 Expected: tiktoken selected with no env; `auto_chunk_size` returns 512 for a 512-token
 embedding engine; existing chunking tests still pass (whitespace counter still selectable
 via `COGNEE_TOKEN_COUNTER=word` / onnx-with-tokenizer-path).
+
+> **Heads-up — existing `auto_chunk_size` tests in `config.rs` will break after Fix 2.**
+> The current tests at lines 680–717 exercise the **wrong** formula (llm context-window ÷ 2).
+> After applying Option 1 (hardcoded Python constant 16384), the LLM arg becomes unused and
+> cases like `test_auto_chunk_size_llm_cutoff_is_smaller` (llm_ctx=256, result=128) will
+> return 512 instead. Update those tests to reflect the corrected semantics: the LLM term
+> is now always 8192 (Python default constant), so the embedding term dominates for any
+> embedding model with `max_sequence_length() ≤ 8192`.
 
 ## Acceptance criteria
 

@@ -74,8 +74,13 @@ impl TokenCounterKind {
         }
 
         // Priority 4–6: based on EMBEDDING_PROVIDER
+        // Python's default embedding provider is `openai`, whose default tokenizer is
+        // tiktoken cl100k_base. Match that when EMBEDDING_PROVIDER is unset so an
+        // out-of-box OpenAI-family setup counts BPE tokens, not whitespace.
+        // Users who explicitly set EMBEDDING_PROVIDER=onnx (or point to a tokenizer
+        // file via EMBEDDING_TOKENIZER_PATH) get the HuggingFaceFile path as before.
         let provider = std::env::var("EMBEDDING_PROVIDER")
-            .unwrap_or_else(|_| "onnx".to_string())
+            .unwrap_or_else(|_| "openai".to_string())
             .to_lowercase();
 
         match provider.as_str() {
@@ -168,6 +173,45 @@ impl TokenCounterKind {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// When no env vars are set the default provider is treated as `openai`, which maps
+    /// to `TikToken` — matching Python's out-of-box cl100k_base tokenizer.
+    ///
+    /// # Safety
+    /// `std::env::remove_var` is marked `unsafe` in edition 2024.  Tests run
+    /// single-threaded under the project harness (`--test-threads=1`), so there
+    /// are no concurrent readers of the modified env vars.
+    #[test]
+    fn from_env_defaults_to_tiktoken_for_openai_family() {
+        unsafe {
+            std::env::remove_var("EMBEDDING_PROVIDER");
+            std::env::remove_var("COGNEE_TOKEN_COUNTER");
+            std::env::remove_var("HUGGINGFACE_TOKENIZER");
+            std::env::remove_var("EMBEDDING_TOKENIZER_PATH");
+        }
+        assert!(matches!(
+            TokenCounterKind::from_env(),
+            TokenCounterKind::TikToken
+        ));
+    }
+
+    /// Explicitly setting EMBEDDING_PROVIDER=onnx still falls back to Word when
+    /// no tokenizer file is available (existing ONNX-user behaviour is unchanged).
+    #[test]
+    fn from_env_onnx_without_tokenizer_falls_back_to_word() {
+        unsafe {
+            std::env::set_var("EMBEDDING_PROVIDER", "onnx");
+            std::env::remove_var("COGNEE_TOKEN_COUNTER");
+            std::env::remove_var("HUGGINGFACE_TOKENIZER");
+            std::env::remove_var("EMBEDDING_TOKENIZER_PATH");
+        }
+        assert!(matches!(
+            TokenCounterKind::from_env(),
+            TokenCounterKind::Word
+        ));
+        // Restore
+        unsafe { std::env::remove_var("EMBEDDING_PROVIDER") };
+    }
 
     #[test]
     fn word_variant_builds() {
