@@ -261,6 +261,7 @@ impl VectorDB for PgVectorAdapter {
         for p in points {
             if p.vector.len() != expected_dim {
                 return Err(VectorDBError::DimensionMismatch {
+                    collection: coll.clone(),
                     expected: expected_dim,
                     actual: p.vector.len(),
                 });

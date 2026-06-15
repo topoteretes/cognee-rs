@@ -185,6 +185,7 @@ impl VectorDB for MockVectorDB {
         for point in points {
             if point.vector.len() != expected_dim {
                 return Err(VectorDBError::DimensionMismatch {
+                    collection: key.clone(),
                     expected: expected_dim,
                     actual: point.vector.len(),
                 });

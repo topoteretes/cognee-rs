@@ -8,8 +8,12 @@ pub enum VectorDBError {
     #[error("Collection already exists: {0}")]
     CollectionExists(String),
 
-    #[error("Dimension mismatch: expected {expected}, got {actual}")]
-    DimensionMismatch { expected: usize, actual: usize },
+    #[error("Dimension mismatch in collection '{collection}': expected {expected}, got {actual}")]
+    DimensionMismatch {
+        collection: String,
+        expected: usize,
+        actual: usize,
+    },
 
     #[error("Storage error: {0}")]
     StorageError(String),

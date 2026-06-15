@@ -655,6 +655,10 @@ impl Default for Settings {
             embedding_model_path: "./target/models/BGE-Small-v1.5-model_quantized.onnx".to_string(),
             embedding_tokenizer_path: "./target/models/bge-small-tokenizer.json".to_string(),
             embedding_model_name: "BGE-Small-v1.5".to_string(),
+            // 384 = BGE-Small output dimension (the default ONNX/edge model).
+            // If you change embedding_model_name, update this value accordingly or
+            // set EMBEDDING_DIMENSIONS so EmbeddingConfig::from_env auto-resolves it
+            // via cognee_embedding::known_model_dimensions.
             embedding_dimensions: 384,
             embedding_max_sequence_length: 512,
             embedding_batch_size: 32,

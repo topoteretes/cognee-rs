@@ -21,27 +21,35 @@ vector collections are created with matching dimensions.
 Python resolves dimensions automatically. `_resolve_embedding_dimensions`
 (`/tmp/cognee-python/cognee/infrastructure/databases/vector/embeddings/config.py:19–59`)
 queries the `fastembed` and `litellm` registries to map a provider+model to its output
-vector size, and `EmbeddingConfig.model_post_init` (lines 62–102) only falls back to a
+vector size, and `EmbeddingConfig.model_post_init` (lines 86–103) only falls back to a
 hard default (`3072`) **with a warning** when the model is unknown. `embedding_dimensions`
 defaults to `None` precisely so it gets auto-derived — the code comment notes the previous
 hard `3072` default "silently broke every non-OpenAI embedder."
 
-Rust does **none of this** (audit B7.2). The default trio is
-`onnx` / `BGE-Small-v1.5` / static **384** (`crates/lib/src/config.rs:662`), and
-`EmbeddingConfig::from_env()` (`crates/embedding/src/config.rs`) reads
-`EMBEDDING_DIMENSIONS` verbatim or uses a provider default with **no model lookup**. There
-is **no known-model dimension table anywhere** in the embedding crate. So if a user sets
-`EMBEDDING_MODEL=text-embedding-3-large` but forgets `EMBEDDING_DIMENSIONS`, Rust keeps the
-old/default dimension; the Qdrant adapter then either creates the collection at the wrong
-size or — because it infers size from the first vector batch — errors later with
-`VectorDBError::DimensionMismatch` (`crates/vector/src/qdrant_adapter.rs:275–286`) when a
-second engine/batch disagrees. Either way it's a confusing, late failure.
+Rust does **none of this** (audit B7.2). There are two default paths to be aware of:
+
+- **`EmbeddingConfig::Default`** (the embedding crate, `crates/embedding/src/config.rs`):
+  On Android (with `onnx` feature), defaults to `Onnx / bge-small-en-v1.5 / 384`.
+  On all other targets, defaults to `OpenAi / text-embedding-3-small / 1536`.
+- **`Settings` struct** (the lib crate, `crates/lib/src/config.rs:658`): Hard-codes
+  `embedding_dimensions: 384` in its `Default`, reflecting the legacy BGE-Small trio used
+  by the CLI's on-disk config. The `ComponentManager::init_vector_db()` reads
+  `settings.embedding_dimensions` to pass to `QdrantAdapter::new(...)`.
+
+`EmbeddingConfig::from_env()` reads `EMBEDDING_DIMENSIONS` verbatim or uses a
+provider/Ollama default with **no model lookup**. There is **no known-model dimension table
+anywhere** in the embedding crate. So if a user sets `EMBEDDING_MODEL=text-embedding-3-large`
+but forgets `EMBEDDING_DIMENSIONS`, Rust keeps the old/default dimension; the Qdrant adapter
+then either creates the collection at the wrong size or — because it infers size from the
+first vector batch — errors later with `VectorDBError::DimensionMismatch`
+(`crates/vector/src/qdrant_adapter.rs:281`) when a second engine/batch disagrees. Either way
+it's a confusing, late failure.
 
 ### Python vs Rust
 
 | Aspect | Python | Rust (current) |
 |---|---|---|
-| dims default | `None` → auto-resolved | static `384` (lib) / `1536` (embedding crate non-onnx default) |
+| dims default | `None` → auto-resolved | `384` (lib Settings) / `1536` (EmbeddingConfig non-Android default) / `384` (EmbeddingConfig Android/ONNX default) |
 | resolution source | `fastembed` + `litellm` registries | **none** |
 | unknown-model behavior | warn + fallback `3072` | silently keep configured/default |
 | explicit override | `EMBEDDING_DIMENSIONS` wins | `EMBEDDING_DIMENSIONS` wins ✓ |
@@ -76,7 +84,7 @@ Read first:
   `crates/embedding/src/{onnx,openai_compatible,ollama}.rs` (`fn dimension`),
   `crates/vector/src/qdrant_adapter.rs:~118–158, ~223–286` (collection size + mismatch).
 - Python: `/tmp/cognee-python/cognee/infrastructure/databases/vector/embeddings/config.py`
-  (lines 19–102), and the dim assertions in
+  (lines 19–103), and the dim assertions in
   `/tmp/cognee-python/cognee/tests/unit/infrastructure/databases/vector/test_embedding_config.py`.
 
 Re-grep current locations:
@@ -97,10 +105,10 @@ grep -n "DimensionMismatch\|VectorDataConfig\|size:" crates/vector/src/qdrant_ad
   keys, then looks up `fastembed.TextEmbedding.list_supported_models()` (`dim`/`embed_dim`)
   and `litellm.model_cost[candidate]["output_vector_size"]`. Returns `None` if unknown.
   Never raises.
-- **`EmbeddingConfig` (lines 62–102):** `embedding_provider="openai"`,
+- **`EmbeddingConfig` (lines 62–103):** `embedding_provider="openai"`,
   `embedding_model="openai/text-embedding-3-large"`, `embedding_dimensions: Optional[int]=None`.
-  `model_post_init` resolves dims when `None`; on failure logs a warning and uses
-  `_FALLBACK_DIMENSIONS = 3072`.
+  `model_post_init` (lines 86–103) resolves dims when `None`; on failure logs a warning and
+  uses `_FALLBACK_DIMENSIONS = 3072`.
 - **Known-model dims (verified via tests):**
 
   | provider/model | dims |
@@ -148,13 +156,20 @@ grep -n "DimensionMismatch\|VectorDataConfig\|size:" crates/vector/src/qdrant_ad
    > The `unwrap_or` is on `rsplit('/').next()`, which is infallible for any `&str`
    > (always yields at least one element); no `unwrap()` rule concern.
 
-2. **Define the fallback constant** matching the chosen edge default (NOT Python's 3072 —
-   Rust's primary model is BGE-Small):
+2. **Define the fallback constant.** 384 is the right fallback constant because:
+   - On Android, `EmbeddingConfig::Default` is BGE-Small/384.
+   - On non-Android, `EmbeddingConfig::Default` is text-embedding-3-small/1536 — but that
+     model IS in the known-model table (see step 1), so the fallback path is never reached
+     for the default model; it is only reached for genuinely unknown models.
+   - The legacy lib-level `Settings::Default` uses 384 (BGE-Small).
+   - 384 is a safer under-sized fallback than 3072: a wrong-dimension collection fails fast
+     at first write rather than silently wasting storage.
 
    ```rust
    /// Fallback dimension when the model is unknown AND EMBEDDING_DIMENSIONS is unset.
-   /// 384 matches the default ONNX BGE-Small edge model. If you switch to a cloud
-   /// model without setting EMBEDDING_DIMENSIONS, you'll get this + a warning.
+   /// 384 matches the ONNX BGE-Small edge model (Android default). On non-Android,
+   /// the default model (text-embedding-3-small → 1536) resolves via the table so
+   /// the fallback is only hit for truly unknown models.
    const FALLBACK_DIMENSIONS: usize = 384;
    ```
 
@@ -201,16 +216,21 @@ grep -n "DimensionMismatch\|VectorDataConfig\|size:" crates/vector/src/qdrant_ad
    dimension comes from `known_model_dimensions` for the default model rather than a magic
    literal. This removes the lone `1536` literal and keeps one source of truth.
 
-5. **Sync the lib-level default** if needed. `crates/lib/src/config.rs:~662` sets
-   `embedding_dimensions: 384` for the ONNX trio — that stays correct. Add a doc comment
-   pointing at `known_model_dimensions` so future model changes don't reintroduce a stale
-   literal.
+5. **Sync the lib-level default** if needed. `crates/lib/src/config.rs:658` sets
+   `embedding_dimensions: 384` in the `Settings::Default` for the legacy BGE-Small trio —
+   that stays correct for CLI-driven ONNX paths. Add a doc comment pointing at
+   `known_model_dimensions` so future model changes don't reintroduce a stale literal.
+   Note: `ComponentManager::init_vector_db()` passes `settings.embedding_dimensions` as
+   `dim` to `QdrantAdapter::new(...)` — confirm this is kept in sync when the user switches
+   models via `set_embedding_dimensions`.
 
 6. **(Optional, recommended) Guard collection creation.** In
-   `crates/vector/src/qdrant_adapter.rs`, the `DimensionMismatch` error already fires at
-   write time. No change required, but verify the error message includes the collection
-   name so the failure points the user at the dims mismatch. If it does not, enrich the
-   error context (still surfacing the same error type).
+   `crates/vector/src/qdrant_adapter.rs`, the `DimensionMismatch` error (line 281) already
+   fires at write time when vectors in a batch have inconsistent lengths. The current error
+   message is `"Dimension mismatch: expected {expected}, got {actual}"` (see `crates/vector/src/error.rs:11`)
+   — it **does not include the collection name**. Consider enriching `VectorDBError::DimensionMismatch`
+   or adding a wrapping context at the call site to include the collection name so the user
+   knows which vector store is mismatched.
 
 ## Verification
 
