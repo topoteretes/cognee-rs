@@ -77,6 +77,7 @@ pub async fn update(
         },
         // Python update() → datasets.delete_data defaults mode="soft" (datasets.py:147).
         mode: DeleteMode::Soft,
+        memory_only: false,
     };
     let delete_result = delete_service.execute(&delete_request).await?;
 
@@ -144,32 +145,4 @@ pub async fn update(
         new_data: data_items,
         cognify_result,
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use cognee_delete::{DeleteMode, DeleteRequest, DeleteScope};
-    use uuid::Uuid;
-
-    #[test]
-    fn update_uses_soft_delete_mode() {
-        // Verify that the delete request constructed in update() uses
-        // DeleteMode::Soft, matching Python update() → datasets.delete_data
-        // default (datasets.py:147).
-        let owner_id = Uuid::nil();
-        let data_id = Uuid::nil();
-        let delete_request = DeleteRequest {
-            scope: DeleteScope::Data {
-                owner_id,
-                data_id,
-                dataset_name: Some("test_ds".to_string()),
-                delete_dataset_if_empty: false,
-            },
-            mode: DeleteMode::Soft,
-        };
-        assert!(
-            matches!(delete_request.mode, DeleteMode::Soft),
-            "update must use DeleteMode::Soft to match Python's default"
-        );
-    }
 }

@@ -12,6 +12,9 @@ pub enum DatasetError {
     #[error("dataset not found")]
     NotFound,
 
+    #[error("ACL not configured: call with_acl() before create_authorized_dataset()")]
+    AclNotConfigured,
+
     #[error("database error: {0}")]
     Database(#[from] DatabaseError),
 

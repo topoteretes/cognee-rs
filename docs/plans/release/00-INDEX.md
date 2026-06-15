@@ -88,7 +88,7 @@ Status: ⬜ todo · 🟡 in-progress · ✅ done · ⏸️ blocked.
 | 15 | [Vector collection parity](15-vector-collection-parity.md) | 3 | P1 | A | no | 0.5d | — | ✅ |
 | 16 | [Graph extraction parity (Edge.description + Documents)](16-graph-extraction-parity.md) | 3 | P1 | A | no | 1d | 15 | ✅ |
 | 17 | [Run loaders at ADD + raw_content_hash](17-loaders-at-add.md) | 4 | P1 | A | no | 1d | — | ✅ |
-| 18 | [forget memory_only + DatasetManager.create_dataset](18-forget-memoryonly-and-create-dataset.md) | 4 | P1 | A | no | 1d | 09 | ⬜ |
+| 18 | [forget memory_only + DatasetManager.create_dataset](18-forget-memoryonly-and-create-dataset.md) | 4 | P1 | A | no | 1d | 09 | ✅ |
 | 19 | [Embedding auto-dimension resolution](19-embedding-dimension-resolution.md) | 4 | P1 | A | no | 0.5d | — | ⬜ |
 | 20 | [improve() stages + session integration](20-improve-and-session-integration.md) | 4 | P2 | A | no | 1.5d | — | ⬜ |
 | 21 | [Parity backlog (config/datasets/cloud/viz/recall)](21-parity-backlog-misc.md) | 4 | P2 | A | no | 2d | — | ⬜ |

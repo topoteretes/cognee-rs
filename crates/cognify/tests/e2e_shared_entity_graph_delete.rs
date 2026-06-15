@@ -265,6 +265,7 @@ async fn test_shared_entity_graph_delete() {
                 dataset_name: "ds_ai".to_string(),
             },
             mode: DeleteMode::Hard,
+            memory_only: false,
         })
         .await
         .expect("delete ds_ai");

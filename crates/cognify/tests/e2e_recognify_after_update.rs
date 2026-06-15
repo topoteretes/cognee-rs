@@ -449,6 +449,7 @@ async fn test_recognify_after_content_update() {
                 delete_dataset_if_empty: false,
             },
             mode: DeleteMode::Hard,
+            memory_only: false,
         })
         .await
         .expect("delete text_v1 data");

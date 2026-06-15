@@ -438,6 +438,7 @@ async fn test_search_type_matrix() {
         .execute(&DeleteRequest {
             scope: DeleteScope::All,
             mode: DeleteMode::Soft,
+            memory_only: false,
         })
         .await
         .expect("delete_svc.execute");

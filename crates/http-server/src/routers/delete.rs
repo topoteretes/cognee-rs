@@ -105,6 +105,7 @@ pub async fn delete_data_deprecated(
             delete_dataset_if_empty: query.delete_dataset_if_empty,
         },
         mode: svc_mode,
+        memory_only: false,
     };
 
     match delete_service.execute(&request).await {

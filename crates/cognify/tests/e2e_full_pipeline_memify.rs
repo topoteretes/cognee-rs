@@ -318,6 +318,7 @@ async fn test_full_pipeline_add_cognify_memify_search_delete() {
         .preview(&DeleteRequest {
             scope: DeleteScope::All,
             mode: DeleteMode::Hard,
+            memory_only: false,
         })
         .await
         .expect("delete preview");
@@ -351,6 +352,7 @@ async fn test_full_pipeline_add_cognify_memify_search_delete() {
         .execute(&DeleteRequest {
             scope: DeleteScope::All,
             mode: DeleteMode::Hard,
+            memory_only: false,
         })
         .await
         .expect("delete execute");

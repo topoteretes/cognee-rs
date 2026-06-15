@@ -255,6 +255,7 @@ async fn test_hard_mode_sweeps_orphan_entities() {
                 delete_dataset_if_empty: false,
             },
             mode: DeleteMode::Hard,
+            memory_only: false,
         })
         .await
         .expect("hard delete should succeed");
@@ -425,6 +426,7 @@ async fn test_soft_mode_preserves_orphan_entities() {
                 delete_dataset_if_empty: false,
             },
             mode: DeleteMode::Soft,
+            memory_only: false,
         })
         .await
         .expect("soft delete should succeed");

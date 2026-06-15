@@ -8,10 +8,13 @@ use std::sync::Arc;
 
 use cognee_database::{AclDb, DeleteDb, IngestDb, PipelineRunStatus};
 use cognee_delete::{DeleteMode, DeleteRequest, DeleteResult, DeleteScope, DeleteService};
+use cognee_ingestion::generate_dataset_id;
 use cognee_models::{Data, Dataset};
 use uuid::Uuid;
 
 use super::error::DatasetError;
+
+const DATASET_PERMISSIONS: [&str; 4] = ["read", "write", "delete", "share"];
 
 /// Combined trait for dataset operations.
 ///
@@ -143,6 +146,7 @@ impl DatasetManager {
                 dataset_name: dataset.name,
             },
             mode: DeleteMode::Hard,
+            memory_only: false,
         };
         Ok(delete_service.execute(&request).await?)
     }
@@ -169,6 +173,7 @@ impl DatasetManager {
                 delete_dataset_if_empty,
             },
             mode,
+            memory_only: false,
         };
         Ok(delete_service.execute(&request).await?)
     }
@@ -190,10 +195,68 @@ impl DatasetManager {
                     dataset_name: ds.name,
                 },
                 mode: DeleteMode::Hard,
+                memory_only: false,
             };
             results.push(delete_service.execute(&request).await?);
         }
         Ok(results)
+    }
+
+    // ------------------------------------------------------------------
+    // Create operations
+    // ------------------------------------------------------------------
+
+    /// Create a dataset with a deterministic ID matching Python's formula:
+    ///   `uuid5(NAMESPACE_OID, f"{name}{user_id}{tenant_id}")`.
+    ///
+    /// Idempotent: if a dataset with the same deterministic ID already exists,
+    /// returns the existing row.
+    pub async fn create_dataset(
+        &self,
+        name: &str,
+        owner_id: Uuid,
+        tenant_id: Option<Uuid>,
+    ) -> Result<Dataset, DatasetError> {
+        let id = generate_dataset_id(name, owner_id, tenant_id);
+        // Try to get existing dataset first (idempotent create).
+        if let Some(existing) = self.db.get_dataset(id).await? {
+            return Ok(existing);
+        }
+        let dataset = Dataset::new(name.to_string(), owner_id, tenant_id, id);
+        Ok(self.db.create_dataset(dataset).await?)
+    }
+
+    /// Create a dataset and grant all four ACL permissions (`read`, `write`,
+    /// `delete`, `share`) to the owner.
+    pub async fn create_authorized_dataset(
+        &self,
+        name: &str,
+        owner_id: Uuid,
+        tenant_id: Option<Uuid>,
+        parent_user_id: Option<Uuid>,
+    ) -> Result<Dataset, DatasetError> {
+        let ds = self.create_dataset(name, owner_id, tenant_id).await?;
+        let acl = self.acl_db.as_ref().ok_or(DatasetError::AclNotConfigured)?;
+
+        // The `acls.principal_id` FK references `principals.id`; ensure the
+        // principal row exists before granting, otherwise the grant fails a
+        // foreign-key constraint. Python's `give_permission_on_dataset` takes
+        // an already-persisted `User`; the Rust facade may be called with a
+        // bare id, so we upsert the principal here. `ensure_principal` is an
+        // idempotent upsert.
+        acl.ensure_principal(owner_id, "user").await?;
+        for perm in DATASET_PERMISSIONS {
+            acl.grant_permission(owner_id, ds.id, perm).await?;
+        }
+        if let Some(parent) = parent_user_id
+            && parent != owner_id
+        {
+            acl.ensure_principal(parent, "user").await?;
+            for perm in DATASET_PERMISSIONS {
+                acl.grant_permission(parent, ds.id, perm).await?;
+            }
+        }
+        Ok(ds)
     }
 
     // ------------------------------------------------------------------
@@ -415,5 +478,109 @@ mod tests {
         let mgr = DatasetManager::new(db as Arc<dyn DatasetDb>);
         let err = mgr.require_dataset(Uuid::new_v4()).await;
         assert!(matches!(err, Err(DatasetError::NotFound)));
+    }
+
+    #[tokio::test]
+    async fn test_create_dataset_deterministic_id() {
+        let db = fresh_db().await;
+        let owner_id = Uuid::new_v4();
+        let tenant_id = Some(Uuid::new_v4());
+        let mgr = DatasetManager::new(db.clone() as Arc<dyn DatasetDb>);
+
+        let ds = mgr
+            .create_dataset("my-ds", owner_id, tenant_id)
+            .await
+            .expect("create_dataset");
+
+        let expected_id = generate_dataset_id("my-ds", owner_id, tenant_id);
+        assert_eq!(ds.id, expected_id, "ID must match generate_dataset_id");
+        assert_eq!(ds.name, "my-ds");
+        assert_eq!(ds.owner_id, owner_id);
+    }
+
+    #[tokio::test]
+    async fn test_create_dataset_idempotent() {
+        let db = fresh_db().await;
+        let owner_id = Uuid::new_v4();
+        let mgr = DatasetManager::new(db.clone() as Arc<dyn DatasetDb>);
+
+        let ds1 = mgr
+            .create_dataset("dup-ds", owner_id, None)
+            .await
+            .expect("first create");
+        let ds2 = mgr
+            .create_dataset("dup-ds", owner_id, None)
+            .await
+            .expect("second create");
+
+        assert_eq!(ds1.id, ds2.id, "Idempotent: same ID returned on duplicate");
+
+        // Ensure only one row exists
+        let list = IngestDb::list_datasets_by_owner(db.as_ref(), owner_id)
+            .await
+            .unwrap();
+        assert_eq!(list.len(), 1, "Only one row should exist");
+    }
+
+    #[tokio::test]
+    async fn test_create_authorized_dataset_without_acl_errors() {
+        let db = fresh_db().await;
+        let owner_id = Uuid::new_v4();
+        let mgr = DatasetManager::new(db as Arc<dyn DatasetDb>);
+
+        let result = mgr
+            .create_authorized_dataset("auth-ds", owner_id, None, None)
+            .await;
+        assert!(
+            matches!(result, Err(DatasetError::AclNotConfigured)),
+            "Should error when ACL not configured"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_create_authorized_dataset_grants_four_permissions() {
+        let db = fresh_db().await;
+        let owner_id = Uuid::new_v4();
+        let parent_id = Uuid::new_v4();
+        let acl: Arc<dyn AclDb> = db.clone() as Arc<dyn AclDb>;
+        let mgr = DatasetManager::new(db.clone() as Arc<dyn DatasetDb>).with_acl(acl.clone());
+
+        let ds = mgr
+            .create_authorized_dataset("auth-ds", owner_id, None, Some(parent_id))
+            .await
+            .expect("create_authorized_dataset");
+
+        // Owner and parent both receive all four permissions on the dataset.
+        for perm in DATASET_PERMISSIONS {
+            assert!(
+                acl.has_permission(owner_id, ds.id, perm).await.unwrap(),
+                "owner must have '{perm}'"
+            );
+            assert!(
+                acl.has_permission(parent_id, ds.id, perm).await.unwrap(),
+                "parent must have '{perm}'"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_create_authorized_dataset_parent_equals_owner_no_duplicate() {
+        let db = fresh_db().await;
+        let owner_id = Uuid::new_v4();
+        let acl: Arc<dyn AclDb> = db.clone() as Arc<dyn AclDb>;
+        let mgr = DatasetManager::new(db.clone() as Arc<dyn DatasetDb>).with_acl(acl.clone());
+
+        // parent_user_id == owner_id: must succeed (idempotent) and grant once.
+        let ds = mgr
+            .create_authorized_dataset("auth-ds-self", owner_id, None, Some(owner_id))
+            .await
+            .expect("create_authorized_dataset with self-parent should succeed");
+
+        for perm in DATASET_PERMISSIONS {
+            assert!(
+                acl.has_permission(owner_id, ds.id, perm).await.unwrap(),
+                "owner must have '{perm}'"
+            );
+        }
     }
 }

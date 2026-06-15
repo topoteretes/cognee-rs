@@ -434,6 +434,7 @@ pub async fn delete_all_datasets(
                 dataset_name: ds.name,
             },
             mode: DeleteMode::Hard,
+            memory_only: false,
         };
         if let Err(e) = delete_service.execute(&request).await {
             tracing::warn!("Failed to delete dataset {}: {e}", ds.id);
@@ -474,6 +475,7 @@ pub async fn delete_dataset(
             dataset_name: dataset.name,
         },
         mode: DeleteMode::Hard,
+        memory_only: false,
     };
     delete_service
         .execute(&request)
@@ -516,6 +518,7 @@ pub async fn delete_data_item(
             delete_dataset_if_empty: false,
         },
         mode: DeleteMode::Soft,
+        memory_only: false,
     };
     delete_service
         .execute(&request)

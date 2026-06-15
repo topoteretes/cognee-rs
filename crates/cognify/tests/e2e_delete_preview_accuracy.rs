@@ -206,6 +206,7 @@ async fn test_delete_preview_counts_match_execution() {
             dataset_name: dataset_name.to_string(),
         },
         mode: DeleteMode::Soft,
+        memory_only: false,
     };
 
     // ── Step 5: Preview ─────────────────────────────────────────────────────

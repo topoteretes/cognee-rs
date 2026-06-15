@@ -242,6 +242,7 @@ async fn run_update_pipeline(
     let delete_request = DeleteRequest {
         scope,
         mode: DeleteMode::Soft,
+        memory_only: false,
     };
     components
         .delete_service

@@ -256,6 +256,7 @@ async fn test_readd_and_recognify_after_delete() {
                 dataset_name: "lifecycle_test".to_string(),
             },
             mode: DeleteMode::Hard,
+            memory_only: false,
         })
         .await
         .expect("delete_svc.execute");

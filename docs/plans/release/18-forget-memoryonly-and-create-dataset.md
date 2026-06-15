@@ -143,8 +143,17 @@ async def create_dataset(dataset_name, user, session):
     return dataset
 ```
 
-`get_unique_dataset_id` = `uuid5(NAMESPACE_OID, f"{dataset_name}{str(user.id)}{str(user.tenant_id)}")`
-— **identical to Rust's `generate_dataset_id`** (`crates/ingestion/src/id_generation.rs:21–32`).
+`get_unique_dataset_id` (lines 39–71) uses:
+- **modern formula** (default): `uuid5(NAMESPACE_OID, f"{dataset_name}{str(user.id)}{str(user.tenant_id)}")`
+- **legacy fallback**: `uuid5(NAMESPACE_OID, f"{dataset_name}{str(user.id)}")` — returned if a
+  legacy row with that ID already exists in the DB (backward-compat for datasets created before
+  tenant IDs were added).
+
+Rust's `generate_dataset_id` (`crates/ingestion/src/id_generation.rs:26–32`) implements only the
+**modern formula**, which is correct for new datasets. The legacy-fallback branch is not needed
+for new `create_dataset` calls in the Rust facade — only for migration scenarios where Python
+datasets were already created without tenant IDs. Document this scope limitation; do not
+implement the legacy fallback unless a migration path specifically requires it.
 
 ### create_authorized_dataset — `/tmp/cognee-python/cognee/modules/data/methods/create_authorized_dataset.py`
 
@@ -164,10 +173,12 @@ all 4 perms to them too (skip with a warning if the parent doesn't resolve).
    grep -n "enum DeleteScope\|enum DeleteMode\|delete_dataset_if_empty\|reset_dataset_pipeline_run_status" crates/delete/src/lib.rs
    ```
 
-   The current `forget()` (`crates/lib/src/api/forget.rs:~133–166`) builds a
-   `DeleteScope::{Data,Dataset,User}` and a `DeleteRequest { scope, mode: DeleteMode::Hard }`.
+   The current `forget()` (`crates/lib/src/api/forget.rs:~126–162`) builds a
+   `DeleteScope::{Data,Dataset,User}` and a `DeleteRequest { scope, mode: DeleteMode::Soft }`
+   (task 09 already changed Hard → Soft; see `build_delete_request` at line 178).
    `reset_dataset_pipeline_run_status` already exists in `crates/delete/src/lib.rs`
-   (currently around lines 629–671) and is invoked in delete phase 0.
+   (lines 629–671) and is invoked in the dataset-deletion phase 0 (line 322), but only
+   during full dataset teardown — not in any memory-only path.
 
 2. **Add a memory-only disposition to the delete request.** Prefer a small, explicit
    field over a new scope variant so the existing cascade code stays one path. In
@@ -195,13 +206,19 @@ all 4 perms to them too (skip with a warning if the parent doesn't resolve).
    - **always** call `reset_dataset_pipeline_run_status` for the affected dataset(s)
      even though we are not removing junction rows.
 
-   For the data-item scope, mirror Python and reset only the `cognify_pipeline` status
-   (Python `_forget_data_memory`, lines 343–348). The existing
-   `reset_dataset_pipeline_run_status` re-initiates **all** non-`Initiated` pipelines for
-   the dataset; that is acceptable for the **dataset** memory-only case (Python resets
-   the dataset-level cognify run + all data records), but for the **data-item** case
-   prefer a narrower reset. If a per-pipeline reset helper does not exist, add one that
-   only re-initiates the `cognify_pipeline` run for the dataset.
+   **Pipeline reset scope — both variants reset only `cognify_pipeline`:**
+   Python's `_forget_dataset_memory` (lines 285–288) calls
+   `reset_dataset_pipeline_run_status(pipeline_names=["cognify_pipeline"])` — it does
+   **not** reset all pipelines, only the cognify one. Python's `_forget_data_memory`
+   (lines 343–348) likewise only clears `cognify_pipeline` on the `Data.pipeline_status`
+   JSON and does NOT call a dataset-level run-status reset at all.
+
+   The existing Rust `reset_dataset_pipeline_run_status` (delete/src/lib.rs:629) resets
+   **all** non-`Initiated` pipelines for the dataset; using it as-is would over-reset
+   (clearing the add pipeline too). Add an optional `pipeline_names: Option<&[&str]>`
+   filter parameter to it, or add a sibling helper `reset_cognify_pipeline_status`, so
+   that both memory-only variants only re-initiate the `cognify_pipeline` run — matching
+   Python exactly.
 
    > Determinism note: Do **not** delete or recreate the `Data`/`Dataset` rows here —
    > their `id`s are content-addressed and re-cognify must reuse them. Removing/recreating
@@ -223,9 +240,9 @@ all 4 perms to them too (skip with a warning if the parent doesn't resolve).
 
 5. **Map the new variants** in `forget()`'s `match`. For each, resolve the dataset name
    exactly as the non-memory variants do, build the matching `DeleteScope::{Dataset,Data}`,
-   and set `memory_only: true`. Keep `mode` as-is from task 09's outcome (09 switches
-   `forget` to `DeleteMode::Soft`). The memory-only path overrides file/relational
-   deletion regardless of `mode`.
+   and set `memory_only: true`. Keep `mode: DeleteMode::Soft` (task 09 already established
+   this in `build_delete_request`; memory-only path overrides file/relational deletion
+   regardless of mode).
 
    ```rust
    ForgetTarget::DatasetMemoryOnly { dataset } => {
@@ -249,10 +266,17 @@ all 4 perms to them too (skip with a warning if the parent doesn't resolve).
    grep -n "fn create_dataset\|fn upsert_dataset\|fn insert_dataset\|fn get_dataset\b\|trait DatasetDb\|trait IngestDb" crates/database/src/**/*.rs
    ```
 
-   If a create/upsert exists, reuse it. If only the ingestion path creates datasets,
-   add a `create_dataset_row(id, name, owner_id, tenant_id)` to the `DatasetDb`/`IngestDb`
-   trait and implement it on `DatabaseConnection` (idempotent: no-op if a row with that id
-   exists — mirror Python's "if dataset is None" guard).
+   Already confirmed: `IngestDb::create_dataset(&self, dataset: Dataset)` exists at
+   `crates/database/src/traits/ingest_db.rs:22`. Since `DatasetManager.db` is
+   `Arc<dyn DatasetDb>` and `DatasetDb: IngestDb`, the method is directly available — no
+   new trait method is needed. The `DatasetManager::create_dataset` facade should construct
+   a `Dataset` using `Dataset::new(name, owner_id, tenant_id, id)` (or the closest
+   constructor) with the id pre-computed by `generate_dataset_id`, then call
+   `self.db.create_dataset(dataset)`. The underlying op is already idempotent at the DB
+   level (unique index on `id`); check whether `DatabaseConnection::create_dataset`
+   returns the existing row or errors on conflict — if it errors, add an explicit
+   "get or create" guard (try get_dataset first, insert only if None) to mirror Python's
+   "if dataset is None" guard.
 
 8. **Add `create_dataset` to `DatasetManager`** (`crates/lib/src/api/datasets.rs`):
 
@@ -374,9 +398,13 @@ Expected: all four pass; existing forget/datasets tests unchanged.
   missing tenant). Any deviation breaks cross-SDK dataset reads.
 - **Memory-only must not touch files or relational rows.** The whole point is re-cognify
   without re-ingest. Verify the file path on disk still exists in the test.
-- **Pipeline-reset scope differs by target.** Dataset memory-only resets the dataset-level
-  cognify run (Python resets all data records + dataset run); data-item memory-only resets
-  **only** `cognify_pipeline`, never the `add` pipeline.
+- **Pipeline-reset scope differs by target AND is narrower than `reset_dataset_pipeline_run_status`.**
+  Both memory-only variants reset **only `cognify_pipeline`**, never the `add` pipeline or any
+  other pipeline. Python's `_forget_dataset_memory` calls
+  `reset_dataset_pipeline_run_status(pipeline_names=["cognify_pipeline"])` — the existing Rust
+  helper resets ALL pipelines. You must either add a `pipeline_names` filter to the Rust helper
+  or introduce a dedicated `reset_cognify_pipeline_status` helper; do not call the unfiltered
+  existing helper or the `add` pipeline status will be incorrectly reset.
 - **`grant_permission` is idempotent** — re-running `create_authorized_dataset` is safe;
   do not add manual existence checks that diverge from the trait contract.
 - **ACL-not-configured behavior:** this plan recommends `create_authorized_dataset`

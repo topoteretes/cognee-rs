@@ -51,6 +51,14 @@ pub trait DeleteDb: Send + Sync {
         dataset_id: Uuid,
     ) -> Result<usize, DatabaseError>;
 
+    /// Clear only the `cognify_pipeline` key from the `pipeline_status` JSON
+    /// of a single Data record, removing only the entry keyed by `dataset_id`.
+    async fn clear_cognify_pipeline_status_for_data(
+        &self,
+        data_id: Uuid,
+        dataset_id: Uuid,
+    ) -> Result<(), DatabaseError>;
+
     // ------------------------------------------------------------------
     // Graph provenance methods
     // ------------------------------------------------------------------
@@ -211,6 +219,14 @@ impl DeleteDb for DatabaseConnection {
         dataset_id: Uuid,
     ) -> Result<usize, DatabaseError> {
         data::clear_pipeline_status_for_dataset(self, dataset_id).await
+    }
+
+    async fn clear_cognify_pipeline_status_for_data(
+        &self,
+        data_id: Uuid,
+        dataset_id: Uuid,
+    ) -> Result<(), DatabaseError> {
+        data::clear_cognify_pipeline_status_for_data(self, data_id, dataset_id).await
     }
 
     // ------------------------------------------------------------------

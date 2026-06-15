@@ -38,6 +38,7 @@ async fn delete_nonexistent_data_returns_error() {
                 delete_dataset_if_empty: false,
             },
             mode: DeleteMode::Soft,
+            memory_only: false,
         })
         .await;
 
@@ -75,6 +76,7 @@ async fn delete_nonexistent_dataset_returns_error() {
                 dataset_name: "no_such_ds".to_string(),
             },
             mode: DeleteMode::Soft,
+            memory_only: false,
         })
         .await;
 
@@ -140,6 +142,7 @@ async fn delete_data_not_in_specified_dataset_returns_error() {
                 delete_dataset_if_empty: false,
             },
             mode: DeleteMode::Soft,
+            memory_only: false,
         })
         .await;
 
@@ -174,6 +177,7 @@ async fn delete_user_with_no_datasets_succeeds_with_zero_deletions() {
         .execute(&DeleteRequest {
             scope: DeleteScope::User { owner_id },
             mode: DeleteMode::Soft,
+            memory_only: false,
         })
         .await
         .expect("deleting a user with no datasets should succeed");

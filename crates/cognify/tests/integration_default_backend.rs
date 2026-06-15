@@ -280,6 +280,7 @@ async fn test_default_backend_add_cognify_search_delete() {
         .execute(&DeleteRequest {
             scope: DeleteScope::All,
             mode: DeleteMode::Soft,
+            memory_only: false,
         })
         .await
         .expect("delete_svc.execute");

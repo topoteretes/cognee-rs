@@ -266,5 +266,9 @@ async fn build_request_async(
         DeleteScope::All
     };
 
-    Ok(DeleteRequest { scope, mode })
+    Ok(DeleteRequest {
+        scope,
+        mode,
+        memory_only: false,
+    })
 }

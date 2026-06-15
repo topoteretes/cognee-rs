@@ -283,6 +283,7 @@ async fn test_triplet_vector_cleanup_after_data_delete() {
                 delete_dataset_if_empty: false,
             },
             mode: DeleteMode::Soft,
+            memory_only: false,
         })
         .await
         .expect("delete ds_ai data");

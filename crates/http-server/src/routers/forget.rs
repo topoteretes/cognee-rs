@@ -101,6 +101,7 @@ pub async fn post_forget(
                     delete_dataset_if_empty: false,
                 },
                 mode: DeleteMode::Soft,
+                memory_only: false,
             };
 
             delete_service.execute(&request).await.map_err(|e| {
@@ -149,6 +150,7 @@ pub async fn post_forget(
                     dataset_name: dataset.name.clone(),
                 },
                 mode: DeleteMode::Soft,
+                memory_only: false,
             };
 
             delete_service.execute(&request).await.map_err(|e| {
@@ -186,6 +188,7 @@ pub async fn post_forget(
                         dataset_name: ds.name.clone(),
                     },
                     mode: DeleteMode::Soft,
+                    memory_only: false,
                 };
                 match delete_service.execute(&request).await {
                     Ok(_) => removed += 1,

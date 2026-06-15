@@ -112,6 +112,7 @@ async fn acl_denied_returns_permission_denied() {
                     delete_dataset_if_empty: false,
                 },
                 mode: DeleteMode::Soft,
+                memory_only: false,
             },
             owner_id,
         )
@@ -167,6 +168,7 @@ async fn acl_granted_allows_deletion() {
                     delete_dataset_if_empty: false,
                 },
                 mode: DeleteMode::Soft,
+                memory_only: false,
             },
             owner_id,
         )
@@ -216,6 +218,7 @@ async fn preview_respects_acl() {
                     delete_dataset_if_empty: false,
                 },
                 mode: DeleteMode::Soft,
+                memory_only: false,
             },
             owner_id,
         )
@@ -262,6 +265,7 @@ async fn cross_user_isolation() {
                     delete_dataset_if_empty: false,
                 },
                 mode: DeleteMode::Soft,
+                memory_only: false,
             },
             owner_a,
         )
@@ -287,6 +291,7 @@ async fn cross_user_isolation() {
                     delete_dataset_if_empty: false,
                 },
                 mode: DeleteMode::Soft,
+                memory_only: false,
             },
             owner_b,
         )

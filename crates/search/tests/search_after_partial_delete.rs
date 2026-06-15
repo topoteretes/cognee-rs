@@ -272,6 +272,7 @@ async fn test_search_returns_empty_for_deleted_doc_and_non_empty_for_remaining()
                 delete_dataset_if_empty: false,
             },
             mode: DeleteMode::Soft,
+            memory_only: false,
         })
         .await
         .expect("delete Germany doc");
