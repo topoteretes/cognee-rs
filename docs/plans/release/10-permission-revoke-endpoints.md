@@ -103,13 +103,20 @@ Removes all user-role memberships and ACL entries for the role, then deletes the
 itself. **Note:** there is **no** Rust repo method for this yet (`revoke_role` only
 removes one user from one role). See step 4.
 
-**Auth to match:** Python uses `has_user_management_permission`/owner-level checks. Use
-the existing Rust helpers `require_tenant_owner` / `require_tenant_admin` for symmetry
-with the corresponding POST handlers:
-- revoke ACL → same per-dataset `share` gate as grant (silent-skip pattern).
-- remove from role → owner-only on the role's tenant (mirror `assign_role`, which is
-  owner-only via `require_tenant_owner` on `role_tenant_id`).
-- delete role → owner-only on the role's tenant (mirror `create_role`).
+**Auth to match:** Verified against Python source (2026-06-15):
+
+- revoke ACL → same per-dataset `share` gate as grant (silent-skip pattern). *(Python:
+  `authorized_revoke_permission_on_datasets` — same gate as grant.)*
+- remove from role → **admin-or-owner** on the role's tenant, i.e. `require_tenant_admin`.
+  *(Python: `remove_user_from_role.py` line 38 calls `has_user_management_permission(requester_id, role.tenant_id)`, which resolves to owner ∨ Admin-role member — NOT owner-only. This differs from `assign_role` / `POST /users/{user_id}/roles`, which is owner-only.)*
+- delete role → **admin-or-owner** on the role's tenant, i.e. `require_tenant_admin`.
+  *(Python: `delete_role.py` line 32 calls `has_user_management_permission(owner_id, role.tenant_id)` — NOT owner-only.)*
+
+> **Correction from original draft:** The draft said "remove from role → owner-only" and
+> "delete role → owner-only". Both are wrong. Python uses the broader
+> `has_user_management_permission` gate for both revoke verbs. Use `require_tenant_admin`
+> (which wraps `has_user_management_permission`) — the same helper used by
+> `remove_user_from_tenant` (§2.12) — not `require_tenant_owner`.
 
 ## Files to change
 
@@ -203,7 +210,9 @@ with the corresponding POST handlers:
    ```
 
 3. **Add `remove_user_from_role`** handler — clone `assign_role` (line 522), swap
-   `assign_role` → `revoke_role`, change the message:
+   `assign_role` → `revoke_role`, change the message. **Do NOT clone `assign_role`'s
+   `require_tenant_owner` call.** Python uses `has_user_management_permission` here
+   (admin-or-owner), so use `require_tenant_admin` instead:
    ```rust
    #[utoipa::path(
        delete,
@@ -216,7 +225,7 @@ with the corresponding POST handlers:
        responses(
            (status = 200, description = "user removed from role", body = MessageResponse),
            (status = 401, description = "unauthorized"),
-           (status = 403, description = "not the tenant owner"),
+           (status = 403, description = "not a tenant admin"),
            (status = 404, description = "role not found"),
        )
    )]
@@ -236,7 +245,8 @@ with the corresponding POST handlers:
        let role_tenant_id = repo.role_tenant_id(query.role_id)
            .await.map_err(map_permissions_error)?
            .ok_or_else(|| ApiError::NotFound(format!("Role '{}' not found", query.role_id)))?;
-       require_tenant_owner(repo, user.id, role_tenant_id).await?;
+       // Python uses has_user_management_permission (admin-or-owner), not owner-only.
+       require_tenant_admin(handles, user.id, role_tenant_id).await?;
        repo.revoke_role(target_user, query.role_id)
            .await.map_err(map_permissions_error)?;
        Ok(Json(MessageResponse { message: "User removed from role".into() }))
@@ -250,12 +260,14 @@ with the corresponding POST handlers:
      deletion is a tracked follow-up (it needs a new repo method, not just wiring) rather
      than the current false "to match Python" claim.
    - **(If implementing now)** add `delete_role(&self, role_id, owner_id)` to
-     `PermissionsRepository` and `SeaOrmPermissionsRepository`: verify the caller is the
-     role's tenant owner (`role_tenant_id` + `tenant_owner`), then in one transaction
-     delete `user_roles` rows for the role, delete `acls` rows whose `principal_id ==
-     role_id` (roles are principals), and delete the `role` row. Mirror the cascade in
-     `remove_user_from_tenant`'s impl. Then add the handler (clone `create_role`'s
-     owner-only gate) and route. Add a repo-level test in
+     `PermissionsRepository` and `SeaOrmPermissionsRepository`: verify the caller has
+     admin-or-owner permission on the role's tenant via `has_user_management_permission`
+     (`role_tenant_id` lookup + admin check — **NOT** owner-only; Python's `delete_role.py`
+     uses `has_user_management_permission`). Then in one transaction: delete `user_roles`
+     rows for the role, delete `acls` rows where `principal_id == role_id` (roles are
+     principals), delete the `role` row, and delete the `principal` row with the same ID.
+     Mirror the cascade in Python's `delete_role.py` lines 35–43. Add the handler (using
+     `require_tenant_admin`, not `require_tenant_owner`) and route. Add a repo-level test in
      `crates/database/tests/` for the cascade.
 
 5. **Register the routes** in `router()` (`permissions.rs:631`). Axum allows the same
@@ -281,9 +293,12 @@ with the corresponding POST handlers:
      ACL and remove-from-role are now exposed (Python parity); role *deletion*
      (`DELETE /roles/{role_id}`) is [implemented | a tracked follow-up needing a new
      repo method].
-   - Add the new endpoints to the endpoint surface table (§2) and the auth table (§2.x)
-     with their gates: revoke ACL → per-dataset `share`; remove-from-role → owner-only;
-     delete-role → owner-only.
+   - Add the new endpoints to the endpoint surface table (§2) and the auth table (§2.13)
+     with their gates: revoke ACL → per-dataset `share`; remove-from-role →
+     **admin-or-owner** (`has_user_management_permission`); delete-role →
+     **admin-or-owner** (`has_user_management_permission`).
+   - Note: auth for the two revoke verbs is NOT owner-only — both Python methods use
+     `has_user_management_permission`. See "Auth to match" above.
 
 ## Verification
 
@@ -322,7 +337,8 @@ Mirror `test_permissions_acl.rs` (`mod support`; helpers `build_permissions_stat
 - `remove_user_from_role_round_trip`: owner creates a role, assigns a user, then
   `DELETE /users/{user}/roles?role_id=...` → 200, body `{"message":"User removed from role"}`,
   and `list_users_in_role` no longer contains the user.
-- `remove_user_from_role_non_owner_403`: a non-owner caller → 403.
+- `remove_user_from_role_non_admin_403`: a caller who is neither tenant owner nor has an
+  admin role in the role's tenant → 403. (An admin-role member CAN remove users per Python parity.)
 - `remove_user_from_role_unknown_role_404`: random `role_id` → 404.
 - (step 4, if implemented) `delete_role_cascade`: create role + assign user + grant
   role-ACL, delete role, assert role gone, memberships gone, role-principal ACLs gone.
@@ -333,7 +349,8 @@ Mirror `test_permissions_acl.rs` (`mod support`; helpers `build_permissions_stat
       returns `{"message":"Permission revoked from principal"}`, mirrors grant's
       validation/silent-skip/empty-body behavior.
 - [ ] `DELETE /api/v1/permissions/users/{user_id}/roles` removes a user from a role via
-      `revoke_role`, owner-only, returns `{"message":"User removed from role"}`.
+      `revoke_role`, **admin-or-owner** (not owner-only — mirrors Python's
+      `has_user_management_permission`), returns `{"message":"User removed from role"}`.
 - [ ] `DELETE /api/v1/permissions/roles/{role_id}` either implemented (with a new
       `delete_role` repo method + cascade) **or** explicitly documented as a tracked
       follow-up (not silently dropped).

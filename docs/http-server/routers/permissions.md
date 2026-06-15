@@ -302,10 +302,13 @@ Quick-reference for the asymmetric authorization in this router. "Owner" = `tena
 | `GET /tenants/{t}/roles/users/{u}` | yes | yes | same gate. |
 | `GET /tenants/{t}/users` | yes | yes | same gate. |
 | `POST /datasets/{p}` | per-dataset `share` | per-dataset `share` | not owner-bound; depends on the caller's `share` ACL. |
+| `DELETE /datasets/{p}` | per-dataset `share` | per-dataset `share` | revoke ACL; same gate as grant; silently skips datasets caller cannot `share`. |
 | `POST /roles` | yes | **no** | owner-only. |
+| `DELETE /roles/{r}` | yes | yes | `has_user_management_permission` (admin-or-owner); cascade deletes user_roles + role ACLs + role + principal rows. |
 | `POST /tenants` | (n/a) | (n/a) | any authenticated user. |
 | `POST /tenants/select` | (n/a — self) | (n/a — self) | membership in `user_tenants` is the gate. |
 | `POST /users/{u}/roles` | yes | **no** | owner-only. |
+| `DELETE /users/{u}/roles` | yes | yes | `has_user_management_permission` (admin-or-owner); Python parity — uses `has_user_management_permission`, not owner-only. |
 | `POST /users/{u}/tenants` | yes | **no** | owner-only. |
 | `DELETE /tenants/{t}/users/{u}` | yes | yes | `has_user_management_permission`; cannot remove owner. |
 
@@ -316,7 +319,7 @@ Quick-reference for the asymmetric authorization in this router. "Owner" = `tena
 - **No request-body schema** for query-param-only endpoints (§2.6 is the exception — body is the dataset list).
 - **Telemetry**: every handler is `#[tracing::instrument(skip(state))]`, span name `cognee.api.permissions.<verb>`, plus the `endpoint` attribute that Python's `send_telemetry` records ([Python source examples in `get_permissions_router.py` L65-L74](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/permissions/routers/get_permissions_router.py#L65-L74)). See [../observability.md §3.3](../observability.md#33-span-instrumentation-conventions).
 - **Idempotency**: `POST /users/{u}/roles`, `POST /users/{u}/tenants`, `POST /datasets/{p}` are not idempotent — duplicates return `400 EntityAlreadyExistsError` (or are silently skipped for `acls` because `give_permission_on_dataset` checks for existing rows). `POST /tenants/select` is idempotent (re-selecting the same tenant is a no-op `UPDATE`).
-- **Bulk deletes are out of scope** — the router does not expose tenant or role deletion. Match Python; see [../tenants.md §10](../tenants.md#10-multi-tenant-isolation-guarantees).
+- **Revoke endpoints**: `DELETE /datasets/{p}` (revoke ACL), `DELETE /users/{u}/roles` (remove user from role), and `DELETE /roles/{r}` (delete role) are now exposed — Python parity. Auth for the two role-mutating DELETEs is **admin-or-owner** (`has_user_management_permission`), not owner-only. The `DELETE /datasets/{p}` revoke uses the same per-dataset `share` silent-skip gate as the grant. Tenant deletion is still not exposed over HTTP.
 
 ## 4. DTO definitions
 

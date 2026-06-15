@@ -967,6 +967,44 @@ impl PermissionsRepository for SeaOrmPermissionsRepository {
             None => Ok(None),
         }
     }
+
+    /// Cascade-delete a role: user_roles → acls (where principal = role) →
+    /// roles → principals. Mirrors Python's `delete_role.py` lines 35–43.
+    /// Idempotent — if the role does not exist all deletes are no-ops.
+    async fn delete_role(&self, role_id: Uuid) -> Result<(), PermissionsError> {
+        let db = self.db();
+        let role_hex = uuid_hex::to_hex(role_id);
+
+        // Step 1: delete all user_roles rows for this role.
+        user_role::Entity::delete_many()
+            .filter(user_role::Column::RoleId.eq(role_hex.clone()))
+            .exec(db)
+            .await
+            .map_err(map_db)?;
+
+        // Step 2: delete all acls where the role is the principal.
+        acl::Entity::delete_many()
+            .filter(acl::Column::PrincipalId.eq(role_hex.clone()))
+            .exec(db)
+            .await
+            .map_err(map_db)?;
+
+        // Step 3: delete the role row.
+        role::Entity::delete_many()
+            .filter(role::Column::Id.eq(role_hex.clone()))
+            .exec(db)
+            .await
+            .map_err(map_db)?;
+
+        // Step 4: delete the principal row (roles are principals; same UUID).
+        principal::Entity::delete_many()
+            .filter(principal::Column::Id.eq(role_hex))
+            .exec(db)
+            .await
+            .map_err(map_db)?;
+
+        Ok(())
+    }
 }
 
 fn model_to_tenant(m: tenant::Model) -> Result<Tenant, PermissionsError> {

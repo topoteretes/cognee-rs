@@ -182,4 +182,14 @@ pub trait PermissionsRepository: Send + Sync {
 
     /// Return the tenant a role belongs to, or `None` if the role does not exist.
     async fn role_tenant_id(&self, role_id: Uuid) -> Result<Option<Uuid>, PermissionsError>;
+
+    /// Cascade-delete a role and all its associated data:
+    /// 1. `user_roles` rows for the role (remove all memberships)
+    /// 2. `acls` rows where `principal_id == role_id` (remove role-held ACLs)
+    /// 3. the `roles` row
+    /// 4. the `principals` row (roles are principals)
+    ///
+    /// Mirrors Python's `delete_role.py` cascade. Idempotent when the role does
+    /// not exist (returns `Ok(())`).
+    async fn delete_role(&self, role_id: Uuid) -> Result<(), PermissionsError>;
 }

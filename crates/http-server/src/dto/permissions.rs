@@ -75,6 +75,21 @@ pub struct AddUserToTenantQuery {
     pub tenant_id: Uuid,
 }
 
+/// Query for `DELETE /datasets/{principal_id}` (revoke ACL).
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub struct RevokeDatasetPermissionQuery {
+    /// one of read|write|delete|share
+    pub permission_name: String,
+}
+
+/// Query for `DELETE /users/{user_id}/roles` (remove user from role).
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub struct RemoveUserFromRoleQuery {
+    pub role_id: Uuid,
+}
+
 // ── Response DTOs ───────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
