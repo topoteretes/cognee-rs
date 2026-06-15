@@ -1,6 +1,6 @@
 # Item 5 — Full PostgreSQL-stack E2E test
 
-Parent: [../cognify-compatibility-implementation-plan.md](../cognify-compatibility-implementation-plan.md)
+Parent: [../.internal/cognify-compatibility-implementation-plan.md](../.internal/cognify-compatibility-implementation-plan.md)
 Effort: **medium** · Validates [Item 1](01-wire-pggraph-component-manager.md) + [Item 2](02-postgres-graph-credential-fallback.md); hybrid variant validates [Item 3](03-pghybrid-full-adapter.md)
 Status: ✅ Implemented
 

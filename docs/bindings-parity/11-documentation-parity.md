@@ -92,7 +92,7 @@ reference rather than re-derive, and note any binding-specific vars.
 
 ### Step 5 — Refresh the parity matrix
 
-Update [docs/python-bindings/STATUS.md](../python-bindings/STATUS.md) (or promote a
+Update [docs/.internal/python-bindings/STATUS.md](../.internal/python-bindings/STATUS.md) (or promote a
 shared matrix into this folder) to reflect the post-parity state, and re-score
 the baseline table in [README.md](README.md) when the P0/P1 tasks land.
 

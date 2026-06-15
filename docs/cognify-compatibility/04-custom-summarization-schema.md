@@ -1,6 +1,6 @@
 # Item 4 — Custom summarization output schema
 
-Parent: [../cognify-compatibility-implementation-plan.md](../cognify-compatibility-implementation-plan.md)
+Parent: [../.internal/cognify-compatibility-implementation-plan.md](../.internal/cognify-compatibility-implementation-plan.md)
 Effort: **small–medium** · Independent of the Postgres work
 Status: ✅ Implemented
 

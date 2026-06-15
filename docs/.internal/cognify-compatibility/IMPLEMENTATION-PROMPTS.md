@@ -118,7 +118,7 @@ After the review sub-agent approves and `scripts/check_all.sh` is green:
 
 ## Task 1 — Wire `PgGraphAdapter` into `ComponentManager`
 
-- `{{TASK_DOC}}` = [01-wire-pggraph-component-manager.md](01-wire-pggraph-component-manager.md)
+- `{{TASK_DOC}}` = [01-wire-pggraph-component-manager.md](../../cognify-compatibility/01-wire-pggraph-component-manager.md)
 - `{{TASK_TITLE}}` = "wire PgGraphAdapter into ComponentManager (enable the postgres graph provider at runtime)"
 - `{{COMMIT_SCOPE}}` = `feat(lib): wire PgGraphAdapter into ComponentManager for postgres graph provider`
 
@@ -127,7 +127,7 @@ prompt) → **Step 3** (status flip + commit). Blocking item — do this first.
 
 ## Task 2 — Graph → relational credential fallback (+ `graph_database_host`)
 
-- `{{TASK_DOC}}` = [02-postgres-graph-credential-fallback.md](02-postgres-graph-credential-fallback.md)
+- `{{TASK_DOC}}` = [02-postgres-graph-credential-fallback.md](../../cognify-compatibility/02-postgres-graph-credential-fallback.md)
 - `{{TASK_TITLE}}` = "add graph_database_host + resolved_graph_db_url() fallback to relational DB creds (Python get_graph_engine parity)"
 - `{{COMMIT_SCOPE}}` = `feat(lib): fall back to relational DB creds for postgres graph; add graph_database_host`
 
@@ -135,7 +135,7 @@ Best landed together with Task 1 (or immediately after). Step 1 → Step 2 → S
 
 ## Task 4 — Custom summarization output schema
 
-- `{{TASK_DOC}}` = [04-custom-summarization-schema.md](04-custom-summarization-schema.md)
+- `{{TASK_DOC}}` = [04-custom-summarization-schema.md](../../cognify-compatibility/04-custom-summarization-schema.md)
 - `{{TASK_TITLE}}` = "add configurable summarization output schema (summary_schema + set_summarization_model), Python summarization_model parity — NOT a per-stage LLM"
 - `{{COMMIT_SCOPE}}` = `feat(cognify): configurable summarization output schema (set_summarization_model parity)`
 
@@ -146,7 +146,7 @@ that `summary_schema` is wired into `SummaryExtractor` (not left dead like
 
 ## Task 5 — Full PostgreSQL-stack E2E test
 
-- `{{TASK_DOC}}` = [05-postgres-full-stack-e2e-test.md](05-postgres-full-stack-e2e-test.md)
+- `{{TASK_DOC}}` = [05-postgres-full-stack-e2e-test.md](../../cognify-compatibility/05-postgres-full-stack-e2e-test.md)
 - `{{TASK_TITLE}}` = "add gated full-Postgres-stack E2E test (relational + PgGraph + PgVector) via ComponentManager with real BGE embeddings"
 - `{{COMMIT_SCOPE}}` = `test(cognify): full PostgreSQL-stack add→cognify E2E gated on TEST_POSTGRES_URL`
 
@@ -156,7 +156,7 @@ against a live Postgres or only compiled + skipped. Step 1 → Step 2 → Step 3
 
 ## Task 3 — Full `PgHybridAdapter` + unified-engine wiring (milestone)
 
-- `{{TASK_DOC}}` = [03-pghybrid-full-adapter.md](03-pghybrid-full-adapter.md)
+- `{{TASK_DOC}}` = [03-pghybrid-full-adapter.md](../../cognify-compatibility/03-pghybrid-full-adapter.md)
 - `{{TASK_TITLE}}` = "implement PgHybridAdapter sharing one Postgres connection for graph+vector, with USE_UNIFIED_PROVIDER=pghybrid wiring"
 - `{{COMMIT_SCOPE}}` = per-PR, e.g. `feat(hybrid): PgHybridAdapter skeleton (PR1)`, `feat(lib): USE_UNIFIED_PROVIDER=pghybrid wiring (PR2)`, …
 

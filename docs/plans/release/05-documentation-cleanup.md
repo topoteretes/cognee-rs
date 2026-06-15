@@ -7,24 +7,27 @@
 
 ## Goal
 
-Bring the user-facing docs to release quality: rewrite the stale `python/README.md` to
-cover the full PyCognee SDK (modeled on `js/README.md`), add the logging env-var section
-to `.env.example`, fix the CI-workflow drift in `.claude/CLAUDE.md`, relocate internal
+Bring the user-facing docs to release quality: complete the `python/README.md` SDK
+coverage by adding the missing Notebooks, Admin, and `remember_entry` sections (the bulk
+of the SDK is already documented as of 2026-06-14), add the logging env-var section to
+`.env.example`, fix the CI-workflow drift in `.claude/CLAUDE.md`, relocate internal
 task-tracking scratchpads out of the shipped `docs/` tree, delete the empty
 `docs/memify-tasks/`, and designate the root `README.md` as the canonical env-var source
-with cross-references from the others.
+with a cross-reference note.
 
 ## Background & why
 
 The engineering reached "full PyCognee SDK" (T1–T11 done — see
-`docs/python-bindings/STATUS.md`), but `python/README.md` still documents only the legacy
-`Pipeline()` engine tier. A user `pip install`-ing the package would have no idea the
-40+ SDK ops exist. Meanwhile `.env.example` omits the 8 logging vars the README already
-documents, and `.claude/CLAUDE.md` references five CI workflows that no longer exist.
+`docs/python-bindings/STATUS.md`), and `python/README.md` was substantially rewritten
+(as of 2026-06-14 it is 463 lines covering the full SDK). Three sections are still
+missing: **Notebooks**, **Admin/pipeline-run admin**, and `remember_entry` in the Memory
+section. A user `pip install`-ing the package would not find those operations documented.
+Meanwhile `.env.example` omits the 8 logging vars the README already documents, and
+`.claude/CLAUDE.md` references five CI workflows that no longer exist.
 Several engineering scratchpads sit in `docs/` and would ship in a release tarball.
 
 None of this is code; all changes are docs/config files. Verify each file's current state
-(commands below) before editing — line numbers were re-checked 2026-06-14.
+(commands below) before editing — line numbers were re-checked 2026-06-15.
 
 ## Prerequisites
 
@@ -33,40 +36,48 @@ git checkout -b task/05-documentation-cleanup main
 ```
 
 Read first:
-- `js/README.md` (the structural model for the Python rewrite — full SDK coverage).
-- `python/README.md` (current; covers only `Pipeline()`).
-- `python/src/sdk*.rs` (the actual exported Python surface — source of truth).
-- `README.md` lines 189-213 (the canonical Logging table) and `.env.example`.
-- `.claude/CLAUDE.md` lines 54, 137, 286.
+- `js/README.md` (structural model — compare sections against `python/README.md`).
+- `python/README.md` (current; 463 lines, largely complete — missing Notebooks, Admin,
+  and `remember_entry`).
+- `python/src/sdk_admin.rs` (Notebooks + Admin ops source of truth).
+- `python/src/sdk_memory.rs:49` (`remember_entry` implementation).
+- `README.md` lines 203-220 (the canonical Logging table) and `.env.example`.
+- `.claude/CLAUDE.md` lines 54 & 286.
 
 ## Files to change
 
 | Path | Change |
 |---|---|
-| `python/README.md` | full rewrite to cover the PyCognee SDK (A2.1) |
+| `python/README.md` | add 3 missing sections: Notebooks, Admin, `remember_entry` (A2.1) |
 | `.env.example` | add a `# Logging` section (A2.2) |
 | `.claude/CLAUDE.md` | fix CI-workflow names at lines 54 & 286 (A2.3) |
 | `docs/python-bindings/{IMPLEMENTATION-PROMPT.md,STATUS.md}` | move out of `docs/` (A2.4) |
 | `docs/cognify-compatibility-implementation-plan.md` | move out of `docs/` (A2.4) |
 | `docs/cognify-compatibility/IMPLEMENTATION-PROMPTS.md` | move out of `docs/` (A2.4) |
 | `docs/memify-tasks/` | delete empty dir (A2.5) |
-| `README.md`, `.env.example`, binding READMEs | designate README canonical + cross-ref (A2.6) |
+| `README.md` | add canonical env-var note to Logging section (A2.6); binding READMEs already cross-reference it |
 
 ## Implementation steps
 
-### Step 1 — A2.1: Rewrite `python/README.md` for the full SDK
+### Step 1 — A2.1: Complete `python/README.md` SDK coverage
 
-**Verified current state:** `python/README.md` Quick start shows only
-`cognee_pipeline.Pipeline()`. The package actually exports (verified in
-`python/src/lib.rs:84-122`):
+**Verified current state (2026-06-15):** `python/README.md` was largely rewritten (463
+lines). It now covers: Quick start, upstream-compat API, Examples table, Programmatic
+config, Environment variables, Pipeline ops (add/cognify/add_and_cognify), Search & recall
+(15 types), Memory ops (remember/memify/improve), Datasets, Sessions, Data lifecycle,
+Visualisation, Cloud: serve/disconnect, Initialisation & observability, Error handling,
+and the legacy pipeline-engine appendix.
 
-- Classes: `Cognee` (`PyCognee`), `CogneeConfig`, `CogneeDatasets`, `CogneeSessions`,
-  `CogneeNotebooks`, plus the legacy `Pipeline`, `PipelineRunHandle`, `TaskContext`,
-  cancellation/progress types.
-- Module functions: `serve`, `disconnect`, `setup_logging`, `setup_telemetry`,
-  `setup_telemetry_analytics`.
+**Three sections are still missing** (verified by grepping the current file):
+- `### Notebooks` — `notebooks.list()`, `.create(...)`, `.update(...)`, `.delete(id)` via
+  `PyCogneeNotebooks` (`sdk_admin.rs`).
+- `### Users and pipeline-run admin` — `reset_pipeline_run_status(...)`,
+  `reset_dataset_pipeline_run_status(...)`, `get_or_create_default_user()` (`sdk_admin.rs`).
+- `remember_entry(...)` is missing from the existing `### Memory operations` section
+  (`sdk_memory.rs` implements it at line 49).
 
-**Verified SDK method surface** (from `python/src/sdk*.rs`):
+The full SDK method surface remains (re-verified in `python/src/lib.rs:84-122` and
+`python/src/sdk*.rs`):
 
 | Group | Methods (snake_case, as exposed to Python) |
 |---|---|
@@ -84,66 +95,38 @@ Read first:
 | cloud (module-level) | `serve(opts=None)`, `disconnect(opts=None)` |
 | observability (module-level) | `setup_logging()`, `setup_telemetry()`, `setup_telemetry_analytics()` |
 
-**Action:** rewrite `python/README.md` following `js/README.md`'s section order. Verify
-each Python signature against the `sdk*.rs` source before writing the snippet — do **not**
-copy JS arg shapes blindly (Python uses snake_case and may differ). Required sections:
+**Action:** add the three missing sections to `python/README.md`. Do **not** rewrite what
+already exists — only add gaps. Follow `js/README.md`'s "Notebooks" and "Users and
+pipeline-run admin" sections as structural models; verify each Python signature against
+`python/src/sdk_admin.rs` and `python/src/sdk_memory.rs` — do **not** copy JS arg shapes
+blindly (Python uses snake_case and may differ).
 
-1. **Title + intro** — name `cognee_pipeline`; one-line description of the add→cognify→search
-   pipeline (mirror JS intro).
-2. **Installation** — `pip install cognee-pipeline` + `maturin develop` for local dev (keep
-   existing).
-3. **Quick start (SDK)** — the headline example. Replace the `Pipeline()` snippet:
+1. **Add `remember_entry` to the existing `### Memory operations` section** — insert it
+   after `improve`. Verify the signature against `sdk_memory.rs:159`.
+2. **Add `### Notebooks` section** — mirror `js/README.md:233-247`. Verify signatures
+   against `python/src/sdk_admin.rs` (the `PyCogneeNotebooks` impl, lines ~44-140).
+3. **Add `### Users and pipeline-run admin` section** — mirror `js/README.md:249-261`.
+   Verify signatures against `python/src/sdk_admin.rs` (lines ~158-210).
 
-   ```python
-   import asyncio
-   import cognee_pipeline as cognee
+Insert Notebooks immediately after the existing Sessions section, and Admin after
+Notebooks — matching the `js/README.md` section order.
 
-   async def main():
-       c = cognee.Cognee({"llm_model": "gpt-4o-mini", "llm_api_key": "..."})
-       await c.warm()
-       await c.add({"type": "text", "text": "The quick brown fox..."}, "demo")
-       await c.cognify("demo")
-       results = await c.search("What does the fox do?")
-       print(results)
-
-   asyncio.run(main())
-   ```
-
-   > Verify the constructor arg form (positional dict vs JSON string vs kwargs) against
-   > `sdk.rs:98` `fn new(py, settings: Option<&str>)` — it takes a **JSON string or
-   > settings object**; confirm how the Python binding marshals a dict before finalizing
-   > the snippet.
-
-4. **Constructor & Config** — `c.config.set(...)`, `.set_str(...)`, the 4 bulk config
-   setters, `.get()` (note: Python has the **generic** setters only, no 40 granular ones —
-   see task [06](06-bindings-and-examples-cleanup.md) §A3.1; do not invent granular setters).
-5. **Pipeline operations** — `add` (text/file/url/binary forms), `cognify`,
-   `add_and_cognify`.
-6. **Search & recall** — list the 15 search types (copy the SCREAMING_SNAKE list from
-   `js/README.md:149-152`, which is binding-agnostic).
-7. **Memory operations** — `remember`, `memify`, `improve`, `remember_entry`.
-8. **Datasets / Sessions / Notebooks** — the sub-accessor methods above.
-9. **Data lifecycle** — `forget`, `update`, `prune_data`, `prune_system`.
-10. **Cloud: serve / disconnect** — module-level functions.
-11. **Visualization** — `visualize`, `visualize_to_file`.
-12. **Initialisation & observability** — keep the existing, well-written
-    `setup_logging`/`setup_telemetry`/`setup_telemetry_analytics` content (lines 28-111 of
-    the current README) — it is accurate. Move it after the SDK sections.
-13. **Appendix: legacy pipeline-engine API** — preserve the original `Pipeline()` content
-    under an appendix (mirror `js/README.md`'s "Appendix: low-level pipeline API"). Do not
-    delete it — the engine tier is still exported.
-14. **References** — keep the observability doc links.
+> **Do not** touch the existing Quick start, Pipeline ops, Search & recall, Memory,
+> Datasets, Sessions, Data lifecycle, Visualisation, Cloud, Observability, Error handling,
+> or low-level pipeline appendix sections — they are already accurate.
 
 ### Step 2 — A2.2: Add logging vars to `.env.example`
 
-**Verified:** `README.md:199-206` documents 8 logging vars; `.env.example` (166 lines)
-has only `RUST_LOG=info` (line 104) and **none** of the `COGNEE_LOG_*` vars. The vars are
-read by `crates/logging/src/config.rs` (not `crates/lib/src/config.rs` as the audit states
+**Verified (2026-06-15):** `README.md:211-220` documents 8 logging vars; `.env.example`
+(167 lines) has `RUST_LOG=info` (line 104) and `TOKENIZERS_PARALLELISM=false` (line 105)
+in the Dev/Debug block, but **none** of the `COGNEE_LOG_*` vars. The vars are read by
+`crates/logging/src/config.rs` (not `crates/lib/src/config.rs` as the audit states
 — that file does not parse `COGNEE_LOG_*`).
 
 **Action:** add a `# Logging` block to `.env.example` in the TIER 3 "Dev / Debug" area
-(after line ~104, next to `RUST_LOG`). Match the existing comment style (`#VAR="default"`
-with an inline comment). Use the **exact defaults from `README.md:199-206`**:
+(after line ~105, next to `RUST_LOG`/`TOKENIZERS_PARALLELISM`). Match the existing comment
+style (`#VAR="default"` with an inline comment). Use the **exact defaults from
+`README.md:211-220`** (the `### Logging` table):
 
 ```bash
 # -- Logging -------------------------------------------------------------------
@@ -163,15 +146,15 @@ with an inline comment). Use the **exact defaults from `README.md:199-206`**:
 
 ### Step 3 — A2.3 / T6.5: Fix `.claude/CLAUDE.md` CI drift
 
-**Verified:** actual workflows are `ci.yml` + `http-parity.yml` (`ls .github/workflows/`).
-Two drift sites:
+**Verified (2026-06-15):** actual workflows are `ci.yml` + `http-parity.yml` +
+`js-prebuild.yml` (`ls .github/workflows/`). Two drift sites:
 
 **3a — line 54** (the tree comment):
 ```
 # before
 └── .github/workflows/          # CI: lib-tests.yml, lint.yml, capi-check.yml, js-check.yml, python-check.yml
 # after
-└── .github/workflows/          # CI: ci.yml (build/lint/test + bindings), http-parity.yml (cross-SDK)
+└── .github/workflows/          # CI: ci.yml (lint/test/docs + C/Python/JS binding checks), http-parity.yml (cross-SDK, workflow_dispatch), js-prebuild.yml (Neon prebuilds)
 ```
 
 **3b — line 286** (the CI section):
@@ -179,11 +162,15 @@ Two drift sites:
 # before
 `lib-tests.yml` runs on push/PR to main: builds, caches embedding models, runs `scripts/run_tests_with_openai.sh` with `OPENAI_KEY` secret. Also runs `cargo doc --no-deps`.
 # after
-`ci.yml` runs on push/PR to main: builds, caches embedding models, runs `scripts/run_tests_with_openai.sh` with the `OPENAI_KEY` secret, and runs the C/Python/JS binding checks + `cargo doc --no-deps`. `http-parity.yml` runs the cross-SDK Rust↔Python parity suite (currently `workflow_dispatch`; see task 12).
+`ci.yml` runs on push/PR to main: lint (fmt + check + clippy), tests (with `OPENAI_KEY` secret via `scripts/run_tests_with_openai.sh`), `cargo doc --no-deps`, and C/Python/JS binding checks. `http-parity.yml` runs the cross-SDK Rust↔Python parity suite (`workflow_dispatch` only; see task 12). `js-prebuild.yml` builds Neon prebuilt binaries for multiple platforms.
 ```
 
-> **Verify before writing** what `ci.yml` actually does (`grep -n "name:\|run:" .github/workflows/ci.yml`)
-> so the "after" text is accurate — adjust the description to match the real job set.
+> **Verify before writing** that `ci.yml` jobs match (the lint/test/binding-check
+> structure was confirmed in the 2026-06-15 re-read; re-verify with
+> `grep -n "^  [a-z].*:" .github/workflows/ci.yml` in case the file has changed).
+> `http-parity.yml` is `workflow_dispatch`-only (re-confirmed).
+> `js-prebuild.yml` is a Neon prebuild workflow — include it in the comment for
+> completeness.
 
 **3c — extraction status (T6.5).** The audit/plan say CLAUDE.md "understates" extraction.
 **Verified false as of 2026-06-14:** line 137 already says *"Extraction implemented for
@@ -240,29 +227,35 @@ rmdir docs/memify-tasks
 
 ### Step 6 — A2.6: Designate root README as canonical env-var source
 
-**Verified:** env vars are tabulated in `README.md`, `.env.example`, `.claude/CLAUDE.md`,
-and the three binding READMEs (`python/`, `js/`, and the C lib). Currently consistent;
+**Verified (2026-06-15):** env vars are tabulated in `README.md`, `.env.example`,
+`.claude/CLAUDE.md`, and the binding READMEs (`python/`, `js/`). Currently consistent;
 the risk is future drift.
 
-**Action — additive, no content removal:**
-1. Add a one-line banner at the top of `.env.example`'s logging block (done in Step 2:
-   *"Full reference… see the root README 'Logging' section"*).
-2. In the root `README.md`, add a short note at the head of the env-var section:
-   *"This README is the canonical reference for cognee environment variables. Binding
-   READMEs and `.env.example` link here; update this table first."*
-3. In each binding README's "Environment variables" section, ensure there's a closing
-   line *"See the root README for the full env-var reference."* — `js/README.md` and the
-   rewritten `python/README.md` already cross-link `COGNEE_LOG_*` to the workspace README;
-   confirm/normalize the wording.
+**Partial progress already in place:** `python/README.md` line 154 already says
+`COGNEE_LOG_*, LOG_FILE_NAME | Consumed by setup_logging() — see the workspace README's
+"Logging" section.` and `js/README.md` line 354 already says a similar cross-reference.
+Neither binding README needs further changes on this front.
+
+**Remaining action — additive, no content removal:**
+1. The `.env.example` logging block cross-reference is done in Step 2 (the `# Full
+   reference…` banner in the new `# Logging` block).
+2. In the root `README.md`, add a short note at the head of the `### Logging` table
+   (currently at line 211):
+   *"This table is the canonical reference for cognee logging environment variables.
+   Binding READMEs and `.env.example` link here; update this table first when adding
+   new logging vars."*
 
 > Keep the per-binding tables (they list binding-specific vars like
-> `COGNEE_BINDING_SUPPRESS_LOGS`) — only add the cross-reference, don't delete tables.
+> `COGNEE_BINDING_SUPPRESS_LOGS`) — only add the cross-reference note to root README,
+> don't delete or rewrite binding tables.
 
 ## Verification
 
 ```bash
-# 1. Python README covers the SDK (not just the engine):
-grep -q "class.*Cognee\|cognee.Cognee\|c.cognify\|c.search" python/README.md && echo OK
+# 1. Python README covers the three previously-missing sections:
+grep -q "notebooks.list\|notebooks.create" python/README.md && echo "Notebooks OK"
+grep -q "reset_pipeline_run_status\|get_or_create_default_user" python/README.md && echo "Admin OK"
+grep -q "remember_entry" python/README.md && echo "remember_entry OK"
 grep -q "Pipeline" python/README.md && echo "legacy appendix retained"
 
 # 2. Logging vars present in .env.example, all 8:
@@ -292,27 +285,41 @@ from code/build scripts.
 
 ## Acceptance criteria
 
-- [ ] `python/README.md` documents the full PyCognee SDK (handle, config, pipeline,
-      retrieval, memory, datasets, sessions, notebooks, lifecycle, cloud, visualization,
-      observability) with the legacy `Pipeline()` content preserved in an appendix.
+- [ ] `python/README.md` documents the full PyCognee SDK — the existing sections cover
+      handle, config, pipeline, retrieval, memory (remember/memify/improve), datasets,
+      sessions, data lifecycle, visualisation, cloud, observability, error handling, and
+      the legacy `Pipeline()` appendix. This criterion requires adding the **three missing
+      sections**: `remember_entry` in Memory, Notebooks (`notebooks.*`), and Admin
+      (`reset_pipeline_run_status`, `reset_dataset_pipeline_run_status`,
+      `get_or_create_default_user`).
 - [ ] All 8 logging vars added to `.env.example` with README-matching defaults; no invented vars.
-- [ ] `.claude/CLAUDE.md` lines 54 & 286 reference `ci.yml` + `http-parity.yml`; extraction-status finding recorded (no change if already accurate).
+- [ ] `.claude/CLAUDE.md` lines 54 & 286 reference `ci.yml`, `http-parity.yml`, and
+      `js-prebuild.yml`; extraction-status finding recorded (no change needed — already
+      accurate as confirmed in 2026-06-15 re-read).
 - [ ] The four internal tracking docs live under `docs/.internal/`; `git mv` preserved history; no dangling links.
 - [ ] `docs/memify-tasks/` removed.
-- [ ] Root README marked canonical for env vars; `.env.example` and binding READMEs cross-reference it.
+- [ ] Root README `### Logging` section has canonical-source note; `.env.example` logging
+      block has cross-reference banner (done in Step 2); binding READMEs already
+      cross-reference the workspace README (no further change needed).
 - [ ] All verification commands pass.
 
 ## Gotchas / do-not
 
-- **Verify Python signatures against `sdk*.rs`, not against the JS README** — arg names and
-  shapes differ (snake_case; constructor takes a JSON-string/settings object).
+- **Verify Python signatures against `sdk_admin.rs` and `sdk_memory.rs`**, not against the
+  JS README — arg names and shapes differ (snake_case; `Cognee()` constructor takes a JSON
+  string, not a dict).
 - **Do not invent env vars** — only the 8 documented logging vars; `COGNEE_LOG_MAX_BYTES`
-  is intentionally unparsed.
+  is intentionally unparsed (`crates/logging/src/config.rs` line 9 documents this).
 - **Do not delete** the legitimate per-op docs in `docs/python-bindings/` — only the two
   tracking files (`IMPLEMENTATION-PROMPT.md`, `STATUS.md`).
 - **Do not claim granular Python config setters** — Python exposes only generic + 4 bulk
   setters (cross-ref task 06).
-- The "extraction understated" claim is **already fixed** — verify before editing line 137.
+- **Do not rewrite** the already-correct sections of `python/README.md` — only add the
+  three missing sections (Notebooks, Admin, `remember_entry`).
+- The "extraction understated" claim is **already fixed as of 2026-06-14** — confirmed in
+  re-read; `.claude/CLAUDE.md` line 137 is correct, no change needed.
+- `js-prebuild.yml` is a third workflow that must appear in the CLAUDE.md fix (Step 3) —
+  the original task only mentioned `ci.yml` + `http-parity.yml`.
 
 ## Rollback
 

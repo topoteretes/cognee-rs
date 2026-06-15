@@ -2,7 +2,7 @@
 
 > **How to use:** start a fresh Claude Code session in the repository root
 > (`cognee-rust/`) and paste this entire document as the prompt, or say:
-> *"Follow docs/python-bindings/IMPLEMENTATION-PROMPT.md"*.
+> *"Follow docs/.internal/python-bindings/IMPLEMENTATION-PROMPT.md"*.
 > The session model orchestrates; sub-agents do all heavy work.
 
 ---
@@ -12,7 +12,7 @@
 Implement the Python SDK-tier bindings according to the plan documents in
 `docs/python-bindings/`. Work through the task list below **one task at a time, in order**,
 using the four-phase sub-agent scheme described in "Per-task workflow". Track progress in
-`docs/python-bindings/STATUS.md`.
+`docs/.internal/python-bindings/STATUS.md`.
 
 You are the **orchestrator**. Your job is to dispatch sub-agents, relay context between them,
 enforce the rules, and keep your own context small. You do **not** read source files, write
@@ -23,7 +23,7 @@ code, or run builds yourself — sub-agents do that.
 1. **One task at a time.** Never start a task before the previous one is committed and marked
    done in STATUS.md. Never implement two tasks in one sub-agent call.
 2. **Keep the main session lean.** In the main session you may only: read
-   `docs/python-bindings/STATUS.md`, read sub-agent reports, and launch sub-agents. Do not
+   `docs/.internal/python-bindings/STATUS.md`, read sub-agent reports, and launch sub-agents. Do not
    `Read` source files, do not run `cargo`/`pytest` yourself, do not browse the codebase.
 3. **All four phases run for every task**, even if a phase seems unnecessary. Phase order is
    fixed: check-plan → implement → review → finalize.
@@ -110,7 +110,7 @@ Read the plan document, then verify EVERY claim in it against the current code:
    (python/scripts/check.sh = maturin develop + pytest tests/ -v).
 
 Make only minimal, surgical edits to the plan document — do not rewrite it.
-Also read docs/python-bindings/STATUS.md for context on completed tasks.
+Also read docs/.internal/python-bindings/STATUS.md for context on completed tasks.
 
 Return a report in EXACTLY this format:
 VERDICT: READY | READY-WITH-EDITS | BLOCKER
@@ -232,7 +232,7 @@ You are finalizing task {ID}: "{TITLE}" in the cognee-rust repository (working d
 root). The reviewer approved the implementation. Reviewer summary: {REVIEW_SUMMARY}
 
 Do exactly this:
-1. Edit docs/python-bindings/STATUS.md: set task {ID}'s Status to "done", fill in today's
+1. Edit docs/.internal/python-bindings/STATUS.md: set task {ID}'s Status to "done", fill in today's
    date, and after committing (step 3) record the commit hash in the table.
 2. Edit docs/python-bindings/{PLAN_DOC}: change the "## Status" line near the top to
    "## Status: ✅ Implemented" and, if a feature-matrix row in
@@ -251,7 +251,7 @@ Return: the final commit hash(es) and one line confirming STATUS.md and the plan
 updated.
 ```
 
-After Phase 4 returns, verify (by reading only `docs/python-bindings/STATUS.md`) that the
+After Phase 4 returns, verify (by reading only `docs/.internal/python-bindings/STATUS.md`) that the
 task row is marked done, then move to the next task.
 
 ---
@@ -262,7 +262,7 @@ After T11 is finalized:
 1. Launch one last general-purpose agent to do a holistic pass: read
    `docs/python-bindings/README.md`, confirm every feature-matrix row in the Python column is
    ✅ (or document why not), run `bash scripts/check_all.sh` one final time, and write a short
-   completion summary into STATUS.md.
+   completion summary into `docs/.internal/python-bindings/STATUS.md`.
 2. Report to the user: tasks completed, commits made, anything skipped or deferred.
 
 ## Quick reference (for sub-agents; orchestrator: do not act on these yourself)

@@ -255,6 +255,51 @@ Enables `TripletCompletion` search. Idempotent.
 await cognee.memify()
 ```
 
+#### remember_entry
+
+Store a single typed memory entry (QA pair, execution trace, or feedback record).
+
+```python
+# QA entry
+await cognee.remember_entry(
+    {"type": "qa", "question": "What?", "answer": "This."},
+    "my-dataset",
+    "session-uuid",
+)
+
+# Trace entry
+await cognee.remember_entry(
+    {
+        "type": "trace",
+        "originFunction": "search",
+        "status": "ok",
+        "memoryQuery": "What?",
+    },
+    "my-dataset",
+    "session-uuid",
+)
+
+# Feedback entry
+await cognee.remember_entry(
+    {"type": "feedback", "qaId": "qa-uuid", "feedbackText": "Accurate.", "feedbackScore": 5},
+    "my-dataset",
+    "session-uuid",
+)
+```
+
+Entry field names are camelCase (the entry dict is passed through verbatim, so
+snake_case keys are not recognised). Supported entry types:
+
+- `qa`: `question`, `answer`, `context`, `feedbackText`, `feedbackScore`,
+  `usedGraphElementIds` (all optional except `type`).
+- `trace`: `originFunction` (required), `status`, `methodParams`,
+  `methodReturnValue`, `memoryQuery`, `memoryContext`,
+  `errorMessage`, `generateFeedbackWithLlm`.
+- `feedback`: `qaId` (required), `feedbackText`, `feedbackScore`.
+
+Unknown `type` values raise `CogneeValidationError`.
+Optional `opts` dict supports a `tenant` key.
+
 #### improve
 
 Run the four-stage session-graph bridge pipeline.
@@ -290,6 +335,46 @@ await cognee.sessions.delete_feedback("session-uuid", "qa-uuid")
 ctx = await cognee.sessions.get_graph_context("session-uuid")
 await cognee.sessions.set_graph_context("session-uuid", "new context")
 ```
+
+### Notebooks
+
+```python
+notebooks = await cognee.notebooks.list()
+for nb in notebooks:
+    print(nb["id"], nb["name"])
+
+# Create a new notebook (cells defaults to empty list; deletable is always True)
+nb = await cognee.notebooks.create("My Notebook")
+nb = await cognee.notebooks.create("My Notebook", cells=[...])
+
+# Update a notebook's name and/or cells
+nb = await cognee.notebooks.update(notebook_id, {"name": "New Name"})
+nb = await cognee.notebooks.update(notebook_id, {"cells": [...]})
+
+# Delete by UUID — returns True if deleted, False if not found
+deleted = await cognee.notebooks.delete(notebook_id)
+```
+
+`cognee.notebooks` is a `CogneeNotebooks` sub-object accessible on every `Cognee`
+instance. `notebook_id` is a UUID string.
+
+### Users and pipeline-run admin
+
+```python
+# Get or create the default user account
+user = await cognee.get_or_create_default_user()
+print(user["id"], user["email"])
+
+# Reset the pipeline run status for a specific pipeline within a dataset
+await cognee.reset_pipeline_run_status(dataset_id, pipeline_name)
+
+# Reset all pipeline run statuses for a dataset
+await cognee.reset_dataset_pipeline_run_status(dataset_id)
+```
+
+`dataset_id` is a UUID string. `pipeline_name` is the pipeline name string.
+Both reset methods return `None` on success and raise `CogneeValidationError` if
+`dataset_id` is not a valid UUID.
 
 ### Data lifecycle
 

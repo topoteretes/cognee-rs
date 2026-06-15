@@ -1,6 +1,6 @@
 # Item 3 — Full `PgHybridAdapter` + unified-engine wiring
 
-Parent: [../cognify-compatibility-implementation-plan.md](../cognify-compatibility-implementation-plan.md)
+Parent: [../.internal/cognify-compatibility-implementation-plan.md](../.internal/cognify-compatibility-implementation-plan.md)
 Effort: **large (multi-PR milestone)** · Depends on [Item 1](01-wire-pggraph-component-manager.md) + [Item 2](02-postgres-graph-credential-fallback.md)
 Status: 📋 Planned
 

@@ -9,8 +9,8 @@ This document tracks every feature group and its implementation status across al
 layers.
 
 To execute future plans with a sub-agent-driven workflow (plan-check → implement → review →
-commit, one task at a time), use [IMPLEMENTATION-PROMPT.md](IMPLEMENTATION-PROMPT.md); live
-progress is tracked in [STATUS.md](STATUS.md).
+commit, one task at a time), use [IMPLEMENTATION-PROMPT.md](../.internal/python-bindings/IMPLEMENTATION-PROMPT.md); live
+progress is tracked in [STATUS.md](../.internal/python-bindings/STATUS.md).
 
 ---
 

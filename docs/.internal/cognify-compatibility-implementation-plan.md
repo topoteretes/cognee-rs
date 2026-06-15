@@ -21,7 +21,7 @@ reflect them.
 
 ### Findings surfaced during planning (not blocking, noted for awareness)
 
-- `CognifyConfig.graph_schema` ([config.rs:125](../crates/cognify/src/config.rs#L125)) is **set but not consumed** by the core cognify graph-extraction task — its only live consumers are dataset-config persistence and the HTTP server. The ticket lists "custom graph schemas" as implemented; in the standalone pipeline path it is effectively a no-op. Item 4 must therefore *actually wire* `summary_schema` rather than copy the `graph_schema` pattern verbatim. A follow-up to wire `graph_schema` into the task may be worth a separate ticket.
+- `CognifyConfig.graph_schema` ([config.rs:125](../../crates/cognify/src/config.rs#L125)) is **set but not consumed** by the core cognify graph-extraction task — its only live consumers are dataset-config persistence and the HTTP server. The ticket lists "custom graph schemas" as implemented; in the standalone pipeline path it is effectively a no-op. Item 4 must therefore *actually wire* `summary_schema` rather than copy the `graph_schema` pattern verbatim. A follow-up to wire `graph_schema` into the task may be worth a separate ticket.
 - `PgGraphAdapter::new()` runs its own migrations internally (no separate `initialize()` call, unlike `LadybugAdapter`) and also exposes `from_connection(db)` to share an existing SeaORM connection — directly useful for the Item 3 hybrid adapter.
 - The `Llm` trait already exposes a dynamic-schema path (`create_structured_output_raw(text, prompt, &Value, opts)` returning a raw `Value`), so Item 4 needs no new LLM API.
 
@@ -39,13 +39,13 @@ ontology integration, and memify are **all implemented and tested**.
 What remains are the gaps that block a **fully PostgreSQL-backed cognify**
 deployment (relational + graph + vector all on Postgres) plus one summarization
 ergonomics gap. The `PgGraphAdapter` itself is already fully written
-([crates/graph/src/pg_graph_adapter.rs](../crates/graph/src/pg_graph_adapter.rs),
+([crates/graph/src/pg_graph_adapter.rs](../../crates/graph/src/pg_graph_adapter.rs),
 1,265 lines, feature `postgres`) and `pggraph` is already in the default feature
 set of both `cognee-lib` and `cognee-cli` — it is simply **never reachable at
 runtime** because `ComponentManager` rejects the `postgres` graph provider.
 
 This document is the index. Each work item has a dedicated sub-document under
-[cognify-compatibility/](cognify-compatibility/) with the step-by-step plan,
+[cognify-compatibility/](../cognify-compatibility/) with the step-by-step plan,
 exact file/line anchors, and acceptance criteria.
 
 ---
@@ -56,10 +56,10 @@ exact file/line anchors, and acceptance criteria.
 |---|---|
 | `PgGraphAdapter` implementation | ✅ Exists, complete, feature `postgres`, `new(database_url: &str)` |
 | `pggraph` in default features (`lib` + `cli`) | ✅ Already on by default |
-| `ComponentManager::init_graph_db()` | ❌ Hard-rejects any provider except `ladybug`/`kuzu` ([component_manager.rs:107-112](../crates/lib/src/component_manager.rs#L107-L112)) |
+| `ComponentManager::init_graph_db()` | ❌ Hard-rejects any provider except `ladybug`/`kuzu` ([component_manager.rs:107-112](../../crates/lib/src/component_manager.rs#L107-L112)) |
 | Graph → relational credential fallback | ❌ No `resolved_graph_db_url()`; no fallback to `db_*` fields |
 | Unified `pghybrid` mode | ❌ No equivalent of Python `USE_UNIFIED_PROVIDER=pghybrid` |
-| Custom summarization **schema** (Python parity, per D2) | ❌ `SummaryExtractor` hardcodes the `SummarizedContent` output type ([extractor.rs:73-95](../crates/cognify/src/summarization/extractor.rs#L73-L95)); no `summary_schema` / `set_summarization_model` |
+| Custom summarization **schema** (Python parity, per D2) | ❌ `SummaryExtractor` hardcodes the `SummarizedContent` output type ([extractor.rs:73-95](../../crates/cognify/src/summarization/extractor.rs#L73-L95)); no `summary_schema` / `set_summarization_model` |
 | Full Postgres-stack E2E test | ❌ Only isolated `pg_graph_integration.rs` / `pgvector_integration.rs` exist; none combine all three |
 
 ---
@@ -72,11 +72,11 @@ The per-item implementation prompts live in
 
 | # | Item | Effort | Blocking? | Status | Sub-document |
 |---|---|---|---|---|---|
-| 1 | Wire `PgGraphAdapter` into `ComponentManager` | Small | **Yes** — Postgres graph is unreachable at runtime without it | ✅ Implemented | [01-wire-pggraph-component-manager.md](cognify-compatibility/01-wire-pggraph-component-manager.md) |
-| 2 | Graph → relational credential fallback (+ `graph_database_host`) | Small | No (quality-of-life parity) | ✅ Implemented | [02-postgres-graph-credential-fallback.md](cognify-compatibility/02-postgres-graph-credential-fallback.md) |
-| 4 | Custom summarization **schema** (`summary_schema` + `set_summarization_model`) | Small–Medium | No | ✅ Implemented | [04-custom-summarization-schema.md](cognify-compatibility/04-custom-summarization-schema.md) |
-| 3 | Full `PgHybridAdapter` + unified-engine wiring | **Large** | No | 📋 Planned | [03-pghybrid-full-adapter.md](cognify-compatibility/03-pghybrid-full-adapter.md) |
-| 5 | Full PostgreSQL-stack E2E test | Medium | No (validates 1–3) | ✅ Implemented | [05-postgres-full-stack-e2e-test.md](cognify-compatibility/05-postgres-full-stack-e2e-test.md) |
+| 1 | Wire `PgGraphAdapter` into `ComponentManager` | Small | **Yes** — Postgres graph is unreachable at runtime without it | ✅ Implemented | [01-wire-pggraph-component-manager.md](../cognify-compatibility/01-wire-pggraph-component-manager.md) |
+| 2 | Graph → relational credential fallback (+ `graph_database_host`) | Small | No (quality-of-life parity) | ✅ Implemented | [02-postgres-graph-credential-fallback.md](../cognify-compatibility/02-postgres-graph-credential-fallback.md) |
+| 4 | Custom summarization **schema** (`summary_schema` + `set_summarization_model`) | Small–Medium | No | ✅ Implemented | [04-custom-summarization-schema.md](../cognify-compatibility/04-custom-summarization-schema.md) |
+| 3 | Full `PgHybridAdapter` + unified-engine wiring | **Large** | No | 📋 Planned | [03-pghybrid-full-adapter.md](../cognify-compatibility/03-pghybrid-full-adapter.md) |
+| 5 | Full PostgreSQL-stack E2E test | Medium | No (validates 1–3) | ✅ Implemented | [05-postgres-full-stack-e2e-test.md](../cognify-compatibility/05-postgres-full-stack-e2e-test.md) |
 
 ---
 

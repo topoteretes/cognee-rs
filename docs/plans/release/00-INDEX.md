@@ -75,7 +75,7 @@ Status: ⬜ todo · 🟡 in-progress · ✅ done · ⏸️ blocked.
 | 02 | [Licensing & legal](02-licensing.md) | 1 | P0 | A+B | yes | 0.5d | 01(D2) | ✅ |
 | 03 | [FFI & Neon panic safety](03-ffi-neon-panic-safety.md) | 1 | P0 | A | yes | 0.5d | — | ⏭️ |
 | 04 | [Rust code cleanup](04-rust-code-cleanup.md) | 1 | P1 | A | no | 1d | — | ✅ |
-| 05 | [Documentation cleanup](05-documentation-cleanup.md) | 1 | P1 | A | no | 1d | — | ⬜ |
+| 05 | [Documentation cleanup](05-documentation-cleanup.md) | 1 | P1 | A | no | 1d | — | ✅ |
 | 06 | [Bindings & examples cleanup](06-bindings-and-examples-cleanup.md) | 1 | P1 | A | no | 1d | — | ⬜ |
 | 07 | [Governance files](07-governance-files.md) | 1 | P1 | A | no | 0.5d | 01(D2) | ⬜ |
 | 08 | [Fix triplet distance penalty default](08-triplet-distance-penalty.md) | 2 | P0 | A | yes | 0.25d | — | ⬜ |

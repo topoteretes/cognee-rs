@@ -8,17 +8,17 @@ Status values: `pending` | `in-progress` | `done` | `blocked` | `skipped`
 
 | ID | Title | Plan document | Status | Date | Commit |
 |----|-------|---------------|--------|------|--------|
-| T1 | Python SDK handle + error hierarchy | [sdk-handle.md](sdk-handle.md) | done | 2026-06-12 | 0593444 |
-| T2 | Config surface | [config-surface.md](config-surface.md) | done | 2026-06-12 | a5de80c |
-| T3 | Hoist pipeline ops + Python add/cognify/add_and_cognify | [core-pipeline-ops.md](core-pipeline-ops.md) | done | 2026-06-12 | T3a: 05dfc36, T3b: ff6400f |
-| T4 | Hoist + Python search/recall | [retrieval-ops.md](retrieval-ops.md) | done | 2026-06-12 | 8cc5c69 |
-| T5 | Hoist + Python forget/update/prune | [data-ops.md](data-ops.md) | done | 2026-06-12 | 7fa0b25 |
-| T6 | Hoist + Python dataset management | [dataset-management.md](dataset-management.md) | done | 2026-06-12 | dcecea0 |
-| T7 | Hoist + Python remember/memify/improve | [memory-ops.md](memory-ops.md) | done | 2026-06-12 | 8887224 |
-| T8 | Hoist + Python sessions/admin/notebooks | [session-admin-ops.md](session-admin-ops.md) | done | 2026-06-12 | 049cc1d |
-| T9 | Python visualization ops | [visualization-ops.md](visualization-ops.md) | done | 2026-06-12 | a86688f |
-| T10 | Python cloud serve/disconnect | [cloud-ops.md](cloud-ops.md) | done | 2026-06-12 | e22a9d9 |
-| T11 | Minor engine-tier gaps | [minor-engine-gaps.md](minor-engine-gaps.md) | done | 2026-06-12 | cd85a46 |
+| T1 | Python SDK handle + error hierarchy | [sdk-handle.md](../../python-bindings/sdk-handle.md) | done | 2026-06-12 | 0593444 |
+| T2 | Config surface | [config-surface.md](../../python-bindings/config-surface.md) | done | 2026-06-12 | a5de80c |
+| T3 | Hoist pipeline ops + Python add/cognify/add_and_cognify | [core-pipeline-ops.md](../../python-bindings/core-pipeline-ops.md) | done | 2026-06-12 | T3a: 05dfc36, T3b: ff6400f |
+| T4 | Hoist + Python search/recall | [retrieval-ops.md](../../python-bindings/retrieval-ops.md) | done | 2026-06-12 | 8cc5c69 |
+| T5 | Hoist + Python forget/update/prune | [data-ops.md](../../python-bindings/data-ops.md) | done | 2026-06-12 | 7fa0b25 |
+| T6 | Hoist + Python dataset management | [dataset-management.md](../../python-bindings/dataset-management.md) | done | 2026-06-12 | dcecea0 |
+| T7 | Hoist + Python remember/memify/improve | [memory-ops.md](../../python-bindings/memory-ops.md) | done | 2026-06-12 | 8887224 |
+| T8 | Hoist + Python sessions/admin/notebooks | [session-admin-ops.md](../../python-bindings/session-admin-ops.md) | done | 2026-06-12 | 049cc1d |
+| T9 | Python visualization ops | [visualization-ops.md](../../python-bindings/visualization-ops.md) | done | 2026-06-12 | a86688f |
+| T10 | Python cloud serve/disconnect | [cloud-ops.md](../../python-bindings/cloud-ops.md) | done | 2026-06-12 | e22a9d9 |
+| T11 | Minor engine-tier gaps | [minor-engine-gaps.md](../../python-bindings/minor-engine-gaps.md) | done | 2026-06-12 | cd85a46 |
 
 ## Upstream `cognee` SDK parity (ID-1)
 

@@ -202,6 +202,10 @@ and in-cluster Collectors).
 
 ### Logging
 
+> **Canonical source:** this table is the authoritative reference for cognee logging
+> environment variables. Binding READMEs and `.env.example` link here; update this
+> table first when adding new logging vars.
+
 Cognee writes structured logs to **stdout** and (when a writable
 directory is available) to a rotating file under
 `~/.cognee/logs/<timestamp>.log`. File logging is owned by the

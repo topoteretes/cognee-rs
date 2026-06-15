@@ -137,7 +137,7 @@ same `MOCK_EMBEDDING` / LLM env vars as the existing tests so it skips gracefull
 
 ### Step 7 — Document the parity matrix
 
-Update [docs/python-bindings/STATUS.md](../python-bindings/STATUS.md) with an
+Update [docs/.internal/python-bindings/STATUS.md](../.internal/python-bindings/STATUS.md) with an
 "upstream `cognee` SDK parity" section: which module-level functions are
 supported, the input-coercion rules, and the two `SearchType` values blocked on
 core.
