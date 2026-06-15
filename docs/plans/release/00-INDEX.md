@@ -81,7 +81,7 @@ Status: ⬜ todo · 🟡 in-progress · ✅ done · ⏸️ blocked.
 | 08 | [Fix triplet distance penalty default](08-triplet-distance-penalty.md) | 2 | P0 | A | yes | 0.25d | — | ✅ |
 | 09 | [Fix destructive/silent lifecycle ops](09-lifecycle-destructive-ops.md) | 2 | P0 | A | yes | 0.5d | — | ✅ |
 | 10 | [Wire permission revoke endpoints](10-permission-revoke-endpoints.md) | 2 | P0 | A | yes | 0.5–1d¹ | — | ✅ |
-| 11 | [Collapse DB migrations to baseline](11-collapse-db-migrations.md) | 3 | P1 | A | no | 0.5d | — | ⬜ |
+| 11 | [Collapse DB migrations to baseline](11-collapse-db-migrations.md) | 3 | P1 | A | no | 0.5d | — | ✅ |
 | 12 | [Re-enable cross-SDK parity CI](12-cross-sdk-parity-ci.md) | 3 | P1 | A | strongly rec. | 1–2d | — | ⬜ |
 | 13 | [Sync LLM prompts to Python + drift guard](13-prompt-parity-sync.md) | 3 | P1 | A | no | 0.5d | — | ⬜ |
 | 14 | [Chunking parity (tiktoken default + chunk size)](14-chunking-parity.md) | 3 | P1 | A | no | 0.5d | — | ⬜ |

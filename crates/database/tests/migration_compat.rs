@@ -7,6 +7,8 @@
 //! The PostgreSQL variant is skipped automatically when the `DB_PROVIDER`
 //! environment variable is not set to `"postgres"`.
 
+use cognee_database::migrator::Migrator;
+
 use cognee_database::{connect, initialize};
 use sea_orm::ConnectionTrait;
 
@@ -181,4 +183,84 @@ async fn migration_preserves_existing_data_pg() {
         return;
     };
     impl_migration_preserves_existing_data(&url).await;
+}
+
+// ---------------------------------------------------------------------------
+// D1.4 — Baseline creates all 30 relational tables + seeds 4 permissions
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn baseline_creates_full_table_set_sqlite() {
+    let db = connect("sqlite::memory:").await.expect("connect");
+    initialize(&db).await.expect("initialize");
+    let tables = table_names(&db).await;
+    for t in [
+        "datasets",
+        "data",
+        "dataset_data",
+        "queries",
+        "results",
+        "nodes",
+        "edges",
+        "pipeline_runs",
+        "task_runs",
+        "graph_metrics",
+        "principals",
+        "permissions",
+        "acls",
+        "tenants",
+        "users",
+        "roles",
+        "user_tenants",
+        "user_roles",
+        "graph_sync_checkpoints",
+        "user_api_key",
+        "role_default_permissions",
+        "user_default_permissions",
+        "tenant_default_permissions",
+        "principal_configuration",
+        "sync_operations",
+        "notebooks",
+        "pipeline_run_payload_fields",
+        "session_records",
+        "session_model_usage",
+        "dataset_configurations",
+    ] {
+        assert!(
+            tables.iter().any(|x| x == t),
+            "missing table {t}: {tables:?}"
+        );
+    }
+    // Seed parity: 4 permissions must exist.
+    let perms = db
+        .query_all(sea_orm::Statement::from_string(
+            db.get_database_backend(),
+            "SELECT name FROM permissions".to_string(),
+        ))
+        .await
+        .expect("query permissions");
+    assert_eq!(perms.len(), 4, "expected 4 seeded permissions");
+    // Default user must exist.
+    let users = db
+        .query_all(sea_orm::Statement::from_string(
+            db.get_database_backend(),
+            "SELECT id FROM users WHERE id = '00000000000000000000000000000000'".to_string(),
+        ))
+        .await
+        .expect("query default user");
+    assert_eq!(users.len(), 1, "default user seed row missing");
+}
+
+// ---------------------------------------------------------------------------
+// D1.5 — Single-migration invariant
+// ---------------------------------------------------------------------------
+
+#[test]
+fn relational_chain_has_one_migration() {
+    use sea_orm_migration::MigratorTrait;
+    assert_eq!(
+        Migrator::migrations().len(),
+        1,
+        "relational chain must have exactly one baseline migration"
+    );
 }

@@ -1,9 +1,7 @@
 //! SeaORM-backed [`PermissionsRepository`] implementation.
 //!
 //! Implements the trait surface from `tenants.md §9` against the schema
-//! created by `m20250201_000001_acl_tables.rs`,
-//! `m20250422_000001_user_tenant_role_tables.rs`, and
-//! `m20260428_000001_tenants_rbac.rs`.
+//! created by `m20260914_000001_baseline.rs`.
 
 use std::collections::HashMap;
 use std::sync::Arc;

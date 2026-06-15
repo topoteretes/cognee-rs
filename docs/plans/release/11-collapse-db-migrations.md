@@ -81,7 +81,7 @@ Files & sources to read first (re-grep to confirm 2026-06-14 line numbers are cu
 - `crates/database/src/migrator/mod.rs` (chain list + `migrations()` vector)
 - All 14 relational migration files in `crates/database/src/migrator/`
 - `crates/session/src/migrator/mod.rs` + its 3 files
-- `crates/database/src/connection.rs:15-17` (`initialize()`)
+- `crates/database/src/connection.rs:15-19` (`initialize()`)
 - `crates/session/src/sea_orm_store.rs:27` (`SessionMigrator::up`)
 - Tests: `crates/database/tests/migration_compat.rs`, `crates/database/tests/sync_operations_migration.rs`, and `crates/database/tests/test_session_lifecycle_schema.rs`
 
@@ -309,8 +309,12 @@ Python-seeded DB. Keep all of them.
     ```bash
     grep -rn "initial_schema\|acl_tables\|migrations().len\|14 migration\|m2025\|m2026" crates/ docs/ | grep -v "docs/plans"
     ```
-    Update any such assertion. (The schema-compat tests assert *table presence*, not
-    migration count — confirm by re-reading them.)
+    Update any such assertions **and** any doc-comment or `//!` header lines that cite
+    old migration filenames (e.g. `crates/database/src/permissions/sea_orm_impl.rs:4-6`
+    references `m20250201_000001_acl_tables.rs`, `m20250422_000001_user_tenant_role_tables.rs`,
+    and `m20260428_000001_tenants_rbac.rs` — update those comments to reference the
+    new baseline instead). The schema-compat tests assert *table presence*, not
+    migration count — confirm by re-reading them.
 
 ### Part 6 — Verify (T9.3, T9.4)
 
