@@ -11,9 +11,10 @@ use crate::types::SearchError;
 const DEFAULT_WIDE_SEARCH_TOP_K: usize = 100;
 
 /// Default cosine distance assigned to graph elements (nodes or edges) that have no
-/// vector match for the current query. Matches Python's `triplet_distance_penalty` default
-/// of 3.5 in `brute_force_triplet_search.py`.
-pub const DEFAULT_TRIPLET_DISTANCE_PENALTY: f32 = 3.5;
+/// vector match for the current query. Matches Python's `triplet_distance_penalty`
+/// default of 6.5 in
+/// `cognee/modules/retrieval/utils/brute_force_triplet_search.py:56,227`.
+pub const DEFAULT_TRIPLET_DISTANCE_PENALTY: f32 = 6.5;
 
 /// Collections searched to find candidate graph nodes and edge-type distances.
 /// Each entry is (data_type, field_name).
@@ -34,7 +35,7 @@ pub struct GraphRetrievalConfig {
     pub top_k: usize,
     pub wide_search_top_k: usize,
     /// Default cosine distance used for nodes/edges not found in vector search.
-    /// Matches Python's `triplet_distance_penalty` semantics (default 3.5).
+    /// Matches Python's `triplet_distance_penalty` semantics (default 6.5).
     pub triplet_distance_penalty: f32,
     /// How much per-node `feedback_weight` values influence triplet ranking.
     /// Must be in [0.0, 1.0]. 0.0 (default) means pure similarity-based ranking.
@@ -336,4 +337,21 @@ pub async fn brute_force_triplet_search(
     let ranked_edges: Vec<_> = ranked_edges.into_iter().take(config.top_k).collect();
     tracing::Span::current().record("cognee.result.count", ranked_edges.len() as u64);
     Ok(ranked_edges)
+}
+
+#[cfg(test)]
+mod penalty_default_tests {
+    use super::*;
+
+    #[test]
+    fn default_triplet_distance_penalty_matches_python() {
+        // Python: cognee/modules/retrieval/utils/brute_force_triplet_search.py:56,227
+        assert_eq!(DEFAULT_TRIPLET_DISTANCE_PENALTY, 6.5);
+    }
+
+    #[test]
+    fn graph_retrieval_config_default_uses_python_penalty() {
+        let cfg = GraphRetrievalConfig::default();
+        assert_eq!(cfg.triplet_distance_penalty, 6.5);
+    }
 }

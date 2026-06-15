@@ -47,9 +47,9 @@ mod tests {
 
     #[test]
     fn unmatched_components_use_penalty() {
-        // When all three components equal the default penalty (3.5), total is 10.5
-        let score = rank_edge_score(3.5, 3.5, 3.5, 0.0, 0.5, 0.5);
-        assert!((score - 10.5).abs() < 1e-6, "expected 10.5, got {score}");
+        // When all three components equal the default penalty (6.5), total is 19.5
+        let score = rank_edge_score(6.5, 6.5, 6.5, 0.0, 0.5, 0.5);
+        assert!((score - 19.5).abs() < 1e-6, "expected 19.5, got {score}");
     }
 
     #[test]
