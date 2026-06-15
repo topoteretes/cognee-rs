@@ -22,9 +22,9 @@ CSV, HTML, image, audio).
 ### Python: loader runs at ingest, stores extracted text — audit B1.1
 
 `ingest_data.py:103` calls `data_item_to_text_file(actual_file_path,
-preferred_loaders)`, which (`data_item_to_text_file.py:36-77`) invokes the loader
+preferred_loaders)`, which (`data_item_to_text_file.py:36-79`) invokes the loader
 engine's `load_file`. For text, `TextLoader.load`
-(`infrastructure/loaders/core/text_loader.py:73-90`):
+(`infrastructure/loaders/core/text_loader.py:53-90`, storage section 73-90):
 
 1. computes the **original** file's `content_hash`,
 2. writes the **extracted content** to `text_<content_hash>.txt` in the data root,
@@ -45,29 +45,34 @@ is `txt`, and `raw_content_hash != content_hash`.
 
 ### Rust: streams raw bytes, runs loaders only at cognify — audit B1.1/B1.2
 
-`process_input` (`crates/ingestion/src/pipeline.rs:163-193`) streams the **raw
+`process_input` (`crates/ingestion/src/pipeline.rs:163-229`) streams the **raw
 bytes** straight to storage and hashes them. The `LoaderRegistry`
 (`crates/ingestion/src/loaders/mod.rs`) is **not used by ADD at all** — cognify
 runs loaders later by reading `raw_data_location` and calling `.extract(...)`
-(`crates/cognify/src/tasks.rs:195,243`). Consequences:
+(`crates/cognify/src/tasks.rs:237-244`). Consequences:
 
 - For non-text inputs the stored artifact is raw bytes (e.g. PDF binary), the
   `extension`/`mime_type` describe the raw file, and `raw_data_location` is a
   `.pdf`, not `text_<hash>.txt`. Cross-SDK file/metadata reads diverge.
 - `raw_content_hash` is hardcoded equal to `content_hash`
   (`pipeline.rs:357`: `.raw_content_hash(processed.content_hash.clone())`), an
-  admitted shortcut (`crates/models/src/data.rs:37`: "same as content_hash when
-  using MD5 mode"). Python's `raw_content_hash` is the hash of the **extracted
-  text**, which differs from `content_hash` for any input the loader transforms.
+  admitted shortcut (`crates/models/src/data.rs:37-38`: "same as content_hash
+  when using MD5 mode"). Python's `raw_content_hash` is the hash of the
+  **extracted text**, which differs from `content_hash` for any input the loader
+  transforms.
+- **`ProcessedInput` has no `raw_content_hash` field** — the struct currently
+  carries only `content_hash: String`. Step 1 must add it.
 
 Text-only tests mask both gaps because for plain text the extracted text equals
 the raw bytes.
 
 > **SACRED — do not change (cross-SDK byte-compat, already matches Python):**
-> - `content_hash` = MD5 of the **raw original bytes** (no owner_id) — `pipeline.rs:182`.
+> - `content_hash` = MD5 of the **raw original bytes** (no owner_id) — `pipeline.rs:182-183`.
 > - `data_id` = `uuid5` derived from `content_hash + owner_id (+tenant)` — `pipeline.rs:188`.
 > - `dataset_id` derivation, `text_<md5>.txt` naming convention, `file://` URIs,
->   the 22-column `Data` schema.
+>   the 22-column `Data` schema (including the existing `raw_content_hash` column
+>   which is already in `m20260914_000001_baseline.rs:82` — no migration needed,
+>   only correct population).
 >
 > This task changes **only** `raw_content_hash`, the **stored-file content**
 > (extracted text instead of raw bytes), and the stored-file
@@ -82,7 +87,24 @@ a `.txt`). Task [14](14-chunking-parity.md) changes chunking; this task changes
 what bytes chunking sees. Coordinate: after this task, the cognify chunk source is
 the stored extracted text, so chunk boundaries/IDs depend on the extracted text —
 which for cross-SDK parity must match Python's extracted text. Re-verify cognify's
-read path (`tasks.rs:186-243`) after landing this.
+read path (`tasks.rs:180-307`, loader dispatch at `tasks.rs:237-244`) after landing this.
+
+**Note on double-loading:** `classify_documents` in `crates/models/src/document.rs`
+derives `document_type` from `data.extension` (the **stored** extension). After
+this task sets `extension = "txt"`, all stored documents classify as `"text"` and
+will pass through `TextLoader` at cognify time — which is correct and idempotent
+(text loader returns the content verbatim). No special cognify changes are needed
+to prevent non-text loaders from running on already-extracted text, **as long as**
+`data.extension` (stored) is set to `"txt"` correctly by this task (not the
+original extension).
+
+### D3 / `DataInput::S3Path` interaction
+
+Per decision D3 (feature-gate `S3Path` + rustdoc note), `DataInput::S3Path` is a
+stub that errors at runtime. This task must not change that behavior: if the
+loader-dispatch path in `process_input` encounters `S3Path`, it must continue to
+surface an error (either `IngestionError` or `UnsupportedDocumentType`). Do not
+silently fall back to storing raw bytes for S3 inputs.
 
 ## Prerequisites
 
@@ -94,14 +116,17 @@ Read first (both sides):
 
 | Side | File | What to look at |
 |---|---|---|
-| Rust | `crates/ingestion/src/pipeline.rs` | `process_input` streaming (102-230), `raw_content_hash` set in `persist_data_with_acl` (~357) |
-| Rust | `crates/ingestion/src/loaders/mod.rs` | `DocumentLoader` trait, `LoaderOutput`, `LoaderRegistry::default_registry` |
+| Rust | `crates/ingestion/src/pipeline.rs` | `process_input` (103-229), `ProcessedInput` struct (70-92), `raw_content_hash` set in `persist_data_with_acl` (357) |
+| Rust | `crates/ingestion/src/loaders/mod.rs` | `DocumentLoader` trait, `LoaderOutput`, `LoaderRegistry::default_registry`, `get()` method (131) |
 | Rust | `crates/ingestion/src/loaders/text.rs` | `TextLoader` |
-| Rust | `crates/cognify/src/tasks.rs` | cognify loader read path (186-243) — must not double-load after this change |
-| Rust | `crates/models/src/data.rs` | `raw_content_hash` doc (37) |
-| Python | `cognee/tasks/ingestion/ingest_data.py` | loader call (103), original vs stored metadata (113-123), Data fields (183-204), `raw_content_hash` (195) |
+| Rust | `crates/ingestion/src/loader_registry.rs` | `get_loader_name(ext)` — extension → loader engine name mapping used by ADD |
+| Rust | `crates/cognify/src/tasks.rs` | cognify loader dispatch path (237-244); `classify_documents` input (157) |
+| Rust | `crates/models/src/document.rs` | `classify_documents` uses `data.extension` (stored, line 112) for `document_type` |
+| Rust | `crates/models/src/data.rs` | `raw_content_hash` doc (37-38) |
+| Rust | `crates/database/src/migrator/m20260914_000001_baseline.rs` | `raw_content_hash` column already in schema (line 82) — no migration needed |
+| Python | `cognee/tasks/ingestion/ingest_data.py` | loader call (103-106), original vs stored metadata (113-123), Data fields (183-204), `raw_content_hash` (195) |
 | Python | `cognee/tasks/ingestion/data_item_to_text_file.py` | `data_item_to_text_file` (36-79) |
-| Python | `cognee/infrastructure/loaders/core/text_loader.py` | `load` → writes `text_<orig_content_hash>.txt` (73-90) |
+| Python | `cognee/infrastructure/loaders/core/text_loader.py` | `load` method (53-90); key storage section (73-90) writes `text_<orig_content_hash>.txt` (line 76) |
 
 ## Files to change
 
@@ -117,14 +142,14 @@ Read first (both sides):
 
 | Behavior | Python file:line |
 |---|---|
-| Run loader at ingest, store text | `cognee/tasks/ingestion/ingest_data.py:102-106` |
+| Run loader at ingest, store text | `cognee/tasks/ingestion/ingest_data.py:103-106` |
 | `data_item_to_text_file` dispatches to loader | `cognee/tasks/ingestion/data_item_to_text_file.py:57-75` |
-| Text loader writes `text_<content_hash>.txt`, returns path | `cognee/infrastructure/loaders/core/text_loader.py:75-90` |
-| `content_hash` from **original** file | `ingest_data.py:117-118, 194` |
-| `raw_content_hash` from **stored extracted-text** file | `ingest_data.py:163, 195` |
-| stored `extension`/`mime_type` from stored file; `original_*` from original | `ingest_data.py:156-159, 188-191` |
-| `raw_data_location = cognee_storage_file_path` (extracted text) | `ingest_data.py:154, 186` |
-| `loader_engine = loader_engine.loader_name` | `ingest_data.py:160, 192` |
+| Text loader writes `text_<content_hash>.txt`, returns path | `cognee/infrastructure/loaders/core/text_loader.py:76` (naming), 88 (store) |
+| `content_hash` from **original** file (`original_file_metadata["content_hash"]`) | `ingest_data.py:118 (get_metadata call), 194 (new Data)` |
+| `raw_content_hash` from **stored extracted-text** file (`storage_file_metadata["content_hash"]`) | `ingest_data.py:163 (update path), 195 (new Data path)` |
+| stored `extension`/`mime_type` from stored file; `original_*` from original | `ingest_data.py:156-159 (update), 188-191 (new)` |
+| `raw_data_location = cognee_storage_file_path` (extracted text) | `ingest_data.py:154 (update), 186 (new)` |
+| `loader_engine = loader_engine.loader_name` | `ingest_data.py:160 (update), 192 (new)` |
 
 ## Implementation steps
 
@@ -146,20 +171,23 @@ Read first (both sides):
      gate the loaders.
 
    Confirm the loader dispatch key: Rust loaders are keyed by `document_type`
-   (`mod.rs:126`), while ingest has only an extension/mime. Map extension → document
-   type the same way classification does (read `crates/cognify` document classifier
-   / `get_loader_name`), or add a `LoaderRegistry::for_extension(ext, mime)` helper.
+   (see `LoaderRegistry::get()` in `mod.rs:131`), while ingest has only an
+   extension/mime. The extension → document type mapping already exists in
+   `crates/models/src/document.rs` (`extension_to_doc_type`, line 36), which is
+   the same mapping `classify_documents` uses. Use it or duplicate the same logic
+   in `process_input`. Alternatively, `LoaderRegistry::get_for_extension(ext)`
+   helper can be added to keep dispatch centralized.
 
 3. **Run the loader and store extracted text** in `process_input`. Today the code
-   streams raw bytes to a writer and hashes them (`pipeline.rs:152-193`). Restructure
+   streams raw bytes to a writer and hashes them (`pipeline.rs:152-229`). Restructure
    so that:
 
    - Raw bytes are still **buffered and hashed** to produce `content_hash` and
-     `data_id` (UNCHANGED — `pipeline.rs:178-188`).
+     `data_id` (UNCHANGED — `pipeline.rs:179-188`).
    - The loader runs on the buffered raw bytes + a `Document`-like descriptor to
      produce extracted text (`LoaderOutput::Text` / `Rows` / `SingleChunk`).
-     Normalize to a single `String` the same way cognify already does (read how
-     `tasks.rs` turns `LoaderOutput` into text around line 243). For `Rows`, join
+     Normalize to a single `String` the same way cognify already does (see
+     `tasks.rs:247-268` for the `match output { ... }` block). For `Rows`, join
      with `"\n\n"` (matches `LoaderOutput::Rows` doc in `mod.rs:86-90`).
    - The **extracted text** is written to storage as `text_<content_hash>.txt`
      (the Python name uses the ORIGINAL file's content hash — see
@@ -238,19 +266,20 @@ Read first (both sides):
    provably does not regress.
 
 6. **Adjust cognify to not double-load.** After ADD stores extracted text,
-   `raw_data_location` points at a `text_<hash>.txt`. Cognify currently classifies
-   and loads `raw_data_location` again (`tasks.rs:186-243`). Since the stored file
-   is now always `.txt`/text, classification will pick the text loader and re-read
-   the already-extracted text — correct and idempotent. **Verify** that the cognify
-   document classifier keys off the **stored** extension (txt) and not a stale
-   `document_type` carried from the original; if it uses the original mime/extension
-   it would try a PDF loader on a `.txt`. Read the classifier and the `Document`
-   construction from `Data` to confirm. If needed, ensure cognify classifies from
-   the stored `extension`/`mime_type` columns.
+   `raw_data_location` points at a `text_<hash>.txt`. Cognify calls
+   `classify_documents` (`tasks.rs:157-158`) which uses `data.extension` (the
+   **stored** extension, `document.rs:112`) to determine `document_type`. Once
+   this task sets the stored `extension = "txt"`, `classify_documents` will always
+   produce `document_type = "text"`, and the text loader will re-read the
+   already-extracted text — correct and idempotent. **Confirm** by verifying the
+   test at `document.rs` line ~260 which already asserts `extension="txt"` → `document_type="text"`.
+   No cognify code changes should be required as long as this task correctly sets
+   `data.extension` (stored) to `"txt"` for all non-text inputs.
 
 7. **Update the `raw_content_hash` doc** in `crates/models/src/data.rs:37` to drop
    the "same as content_hash when using MD5 mode" claim and describe the
-   extracted-text semantics.
+   extracted-text semantics. The field is at line 38 (`pub raw_content_hash: Option<String>`);
+   the doc comment is line 37.
 
 ## Verification
 
@@ -324,6 +353,13 @@ bash scripts/run_tests_with_openai.sh add
   feature off, ADD must fall back gracefully (today cognify errors
   `UnsupportedDocumentType`); preserve equivalent behavior at ADD — do not store
   raw bytes silently for an unsupported type without a clear error path.
+- **D3 / `DataInput::S3Path`:** Per decision D3 (`docs/plans/release/01-decisions.md`),
+  `S3Path` is a stub that must continue to error at ingest time. The new loader-dispatch
+  path must not accidentally store raw S3 bytes silently — ensure the S3 stub arm
+  surfaces a clear `IngestionError` (as it does today via the placeholder metadata path).
+- **`raw_content_hash` column already exists** in the baseline schema
+  (`m20260914_000001_baseline.rs:82`) — do not add a new migration. This task
+  is about correct population only.
 - Avoid `unwrap()` in the new ingest code — propagate via `?`/`map_err` per project rules.
 
 ## Rollback

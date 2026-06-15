@@ -298,7 +298,11 @@ async fn impl_binary_file_deduplication(db_url: &str) {
     let (pipeline, database, _storage) = make_pipeline(&dir, db_url).await;
     let owner = Uuid::new_v4();
 
-    let binary_content: &[u8] = &[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0xFF];
+    // As of task 17 the loader runs at ADD time, so a file with an unknown
+    // extension is processed by the default text loader (UTF-8 decode). Use
+    // decodable content here; dedup is content-hash based and independent of
+    // the loader, so this still exercises content-addressed deduplication.
+    let binary_content: &[u8] = b"binary-like deterministic payload \x01\x02\x03 end";
 
     let mut bin1 = NamedTempFile::new().expect("bin tmp 1");
     bin1.write_all(binary_content).expect("write bin 1");

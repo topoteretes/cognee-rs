@@ -29,6 +29,17 @@ pub struct Document {
     pub external_metadata: Option<String>,
 }
 
+/// Map a file extension to a document type string, returning `None` for
+/// unrecognised extensions.
+///
+/// Public wrapper over the internal [`extension_to_doc_type`] mapping so the
+/// ingestion pipeline can pick the right loader at ADD time using the same
+/// extension → document-type table that [`classify_documents`] uses at cognify
+/// time.
+pub fn doc_type_for_extension(ext: &str) -> Option<&'static str> {
+    extension_to_doc_type(ext)
+}
+
 /// Map a file extension to a document type string.
 ///
 /// Matches the 39-entry `EXTENSION_TO_DOCUMENT_CLASS` mapping in the Python SDK
