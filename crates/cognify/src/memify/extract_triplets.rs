@@ -66,10 +66,11 @@ pub async fn extract_triplets_from_graph_db(
         }
 
         // Format matches Python's canonical triplet text:
-        // "{source_text}-\u{203a}{relationship_text}-\u{203a}{target_text}"
-        // (cognee/tasks/memify/get_triplet_datapoints.py:157).
-        // Cross-SDK embedding vectors are directly comparable only when
-        // both sides build the same embeddable string.
+        // f"{start_node_text}-›{relationship_text}-›{end_node_text}".strip()
+        // (get_triplet_datapoints.py:157).
+        // Each endpoint's text is derived from its type's index_fields
+        // (e.g. Entity → "name" only, not "name: description"), so that
+        // cross-SDK embedding vectors are byte-identical.
         let text = format!("{source_text}-\u{203a}{relationship_text}-\u{203a}{target_text}");
 
         let source_uuid = parse_node_uuid(source_id)?;
@@ -108,23 +109,45 @@ async fn read_graph_data(
     }
 }
 
-/// Build embeddable text from a graph node's properties.
+/// Map a DataPoint type name to its `index_fields`, mirroring Python's
+/// `_build_datapoint_type_index_mapping` (get_triplet_datapoints.py:13-41).
 ///
-/// Uses "name" and "description" fields, matching existing
-/// create_triplets_from_graph() in triplet_creation.rs.
-///
-/// Format: "Name: Description" or just "Name" if description is empty.
-fn build_node_text(node: &NodeData) -> String {
-    let name = extract_string_prop(node, "name");
-    let description = extract_string_prop(node, "description");
-
-    if !description.is_empty() {
-        format!("{name}: {description}")
-    } else {
-        name
+/// Cross-SDK triplet vectors are byte-comparable only when both sides embed
+/// the same text. Python derives node text from `index_fields` (e.g. `Entity`
+/// contributes only `name`; `DocumentChunk` contributes only `text`).
+/// Unknown types return an empty slice, which produces an empty string, and
+/// the caller's all-empty guard skips the triplet (mirroring Python:
+/// get_triplet_datapoints.py:151-155).
+fn index_fields_for_type(node_type: &str) -> &'static [&'static str] {
+    match node_type {
+        "Entity" | "EntityType" | "TextDocument" => &["name"],
+        "DocumentChunk" | "TextSummary" | "Triplet" => &["text"],
+        _ => &[],
     }
-    .trim()
-    .to_string()
+}
+
+/// Build embeddable text from a graph node's properties using `index_fields`.
+///
+/// Mirrors Python's `_extract_embeddable_text` (get_triplet_datapoints.py:44-69):
+/// reads the node's `type` property, looks up its index_fields, extracts and
+/// trims each field value, drops empties, then joins with a single space.
+///
+/// Examples (Python-compatible):
+///   Entity   {name="Alice", description="engineer"} → "Alice"
+///   EntityType {name="Person"} → "Person"
+///   DocumentChunk {text="hello world"} → "hello world"
+///   unknown type → "" (caller skips if all three parts are empty)
+fn build_node_text(node: &NodeData) -> String {
+    let node_type = extract_string_prop(node, "type");
+    let fields = index_fields_for_type(&node_type);
+    let values: Vec<String> = fields
+        .iter()
+        .filter_map(|f| {
+            let v = extract_string_prop(node, f);
+            if v.is_empty() { None } else { Some(v) }
+        })
+        .collect();
+    values.join(" ")
 }
 
 /// Extract relationship text from edge properties.
@@ -247,8 +270,10 @@ mod tests {
         let src_id = Uuid::new_v4();
         let tgt_id = Uuid::new_v4();
 
-        add_node(&db, src_id, "Alice", "Software engineer").await;
-        add_node(&db, tgt_id, "TechCorp", "A tech company").await;
+        // Nodes have type="Entity" so index_fields=["name"] applies.
+        // Description is ignored: Python's _extract_embeddable_text uses only name.
+        add_typed_node(&db, src_id, "Alice", "Entity", "Software engineer").await;
+        add_typed_node(&db, tgt_id, "TechCorp", "Entity", "A tech company").await;
         add_edge(&db, src_id, tgt_id, "works_at").await;
 
         let config = MemifyConfig::default();
@@ -259,10 +284,19 @@ mod tests {
         assert_eq!(t.source_entity_id, src_id);
         assert_eq!(t.target_entity_id, tgt_id);
         assert_eq!(t.relationship_name, "works_at");
-        // Format: "Name: Description-›relationship-›Name: Description"
-        assert!(t.text.contains("Alice: Software engineer"));
+        // New Python-matching format: name only, no description.
+        // Entity index_fields=["name"] → "Alice" not "Alice: Software engineer".
+        assert!(t.text.contains("Alice"));
+        assert!(
+            !t.text.contains("Alice: Software engineer"),
+            "description must NOT appear"
+        );
         assert!(t.text.contains("works_at"));
-        assert!(t.text.contains("TechCorp: A tech company"));
+        assert!(t.text.contains("TechCorp"));
+        assert!(
+            !t.text.contains("TechCorp: A tech company"),
+            "description must NOT appear"
+        );
         assert!(t.text.contains("-\u{203a}"));
     }
 
@@ -272,8 +306,9 @@ mod tests {
         let src_id = Uuid::new_v4();
         let tgt_id = Uuid::new_v4();
 
-        add_node(&db, src_id, "Alice", "").await;
-        add_node(&db, tgt_id, "Bob", "").await;
+        // type="Entity" → index_fields=["name"] → name-only text, no colon.
+        add_typed_node(&db, src_id, "Alice", "Entity", "").await;
+        add_typed_node(&db, tgt_id, "Bob", "Entity", "").await;
         add_edge(&db, src_id, tgt_id, "knows").await;
 
         let config = MemifyConfig::default();
@@ -281,10 +316,13 @@ mod tests {
 
         assert_eq!(triplets.len(), 1);
         let text = &triplets[0].text;
-        // Should be just the name, no colon
+        // Entity index_fields=["name"] → just the name, no colon.
         assert!(text.contains("Alice"));
         assert!(text.contains("Bob"));
-        assert!(!text.contains(": "), "no colon when description is empty");
+        assert!(
+            !text.contains(": "),
+            "no colon when type=Entity (name-only index_fields)"
+        );
     }
 
     #[tokio::test]
@@ -517,28 +555,30 @@ mod tests {
             .unwrap();
     }
 
-    /// Covers two sub-cases for nodes with partial property coverage:
+    /// Covers nodes whose `type` property is absent or unknown.
     ///
-    /// 1. Node A has `description` only (no `name`). Current Rust
-    ///    `build_node_text()` behavior: with an absent `name` but a non-empty
-    ///    `description`, it still enters the `"{name}: {description}"`
-    ///    branch, producing the leading-colon string `": <description>"`.
-    ///    This quirk is pinned here so any refactor (including an intentional
-    ///    fix that makes it return `""`) becomes a visible diff. The edge is
-    ///    NOT skipped because source/relationship/target text are not all
-    ///    empty.
-    /// 2. Node C has `name` only (no `description`). Text is the bare name,
-    ///    with no trailing colon.
+    /// With the index_fields-driven `build_node_text`, a node with no `type`
+    /// gets `index_fields_for_type("") == &[]`, so its embeddable text is `""`.
+    /// Python's `_extract_embeddable_text` returns `""` for unknown types too
+    /// (get_triplet_datapoints.py:126-136: empty index_fields → empty text).
+    ///
+    /// Sub-cases:
+    /// 1. Node A has `description` only, no `name`, no `type` → text = "".
+    ///    Node B has `name`+`description`, no `type` → text = "".
+    ///    relationship_text = "knows" (non-empty), so the triplet is NOT
+    ///    skipped (not all three parts are empty).
+    ///    Resulting text: "-›knows-›" (both node texts are empty).
+    /// 2. Node C has `name`+`type="Entity"`, Node D has `name`+`type="Entity"`.
+    ///    Entity index_fields=["name"] → text = name only (no colon, no description).
     #[tokio::test]
     async fn test_extract_node_missing_name_field() {
-        // --- Sub-case 1: node A has description but no name ---
+        // --- Sub-case 1: nodes with no `type` → unknown type → empty node text ---
         let db1 = MockGraphDB::new();
         let a_id = Uuid::new_v4();
         let b_id = Uuid::new_v4();
 
-        // Node A: description only, no "name" key.
+        // Neither node has a `type` property → index_fields = [] → text = "".
         add_node_with_props(&db1, a_id, json!({ "description": "Some description" })).await;
-        // Node B: fully populated to provide non-empty target text.
         add_node(&db1, b_id, "Bob", "A person").await;
         add_edge(&db1, a_id, b_id, "knows").await;
 
@@ -548,42 +588,40 @@ mod tests {
         assert_eq!(
             triplets.len(),
             1,
-            "edge with missing-name source must NOT be skipped when \
-             relationship + target text are non-empty"
+            "edge must NOT be skipped when relationship text is non-empty \
+             even if both node texts are empty"
         );
         let t = &triplets[0];
         assert_eq!(t.source_entity_id, a_id);
         assert_eq!(t.target_entity_id, b_id);
         assert_eq!(t.relationship_name, "knows");
-        // Current behavior: `name` absent + `description` present yields
-        // `": {description}"` (leading colon), not `""`. Pinned verbatim.
+        // Both node texts are "" (unknown type), relationship_text = "knows".
+        // Python-matching format: "-›knows-›"
         assert_eq!(
-            t.text, ": Some description-\u{203a}knows-\u{203a}Bob: A person",
-            "pinned leading-colon behavior when `name` is absent but \
-             `description` is present"
+            t.text, "-\u{203a}knows-\u{203a}",
+            "unknown-type nodes produce empty text → '-›rel-›' format"
         );
 
-        // --- Sub-case 2: node C has name only, no description ---
+        // --- Sub-case 2: typed Entity nodes → index_fields=["name"] → name only ---
         let db2 = MockGraphDB::new();
         let c_id = Uuid::new_v4();
         let d_id = Uuid::new_v4();
 
-        add_node_with_props(&db2, c_id, json!({ "name": "Carol" })).await;
-        add_node(&db2, d_id, "Dave", "").await;
+        add_typed_node(&db2, c_id, "Carol", "Entity", "").await;
+        add_typed_node(&db2, d_id, "Dave", "Entity", "").await;
         add_edge(&db2, c_id, d_id, "knows").await;
 
         let triplets2 = extract_triplets_from_graph_db(&db2, &config).await.unwrap();
         assert_eq!(triplets2.len(), 1);
         let t2 = &triplets2[0];
-        // Bare name: no trailing colon, no description suffix.
-        assert!(
-            t2.text.starts_with("Carol-\u{203a}knows"),
-            "expected bare name 'Carol' with no colon, got: {text:?}",
-            text = t2.text
+        // Entity index_fields=["name"] → bare name, no colon, no description.
+        assert_eq!(
+            t2.text, "Carol-\u{203a}knows-\u{203a}Dave",
+            "Entity nodes must produce name-only text with no colon"
         );
         assert!(
-            !t2.text.starts_with("Carol: "),
-            "bare name must not have a trailing colon, got: {text:?}",
+            !t2.text.contains(": "),
+            "Entity node text must not contain ': ', got: {text:?}",
             text = t2.text
         );
     }
@@ -615,29 +653,108 @@ mod tests {
     }
 
     /// Pins the exact triplet text format:
-    ///   "{source}: {src_desc}-\u{203a}{rel}-\u{203a}{target}: {tgt_desc}"
+    ///   "{source_name}-\u{203a}{rel}-\u{203a}{target_name}"
     ///
-    /// Matches Python's canonical form at
-    /// cognee/tasks/memify/get_triplet_datapoints.py:157. Any future refactor
-    /// that drifts from this format will change the embedding input string
-    /// and break cross-SDK vector comparability.
+    /// Matches Python's canonical form at get_triplet_datapoints.py:157.
+    /// Entity nodes use index_fields=["name"], so description is excluded.
+    /// Any future refactor that drifts from this format will change the
+    /// embedding input string and break cross-SDK vector comparability.
     #[tokio::test]
     async fn test_extract_triplet_text_format() {
         let db = MockGraphDB::new();
         let src_id = Uuid::new_v4();
         let tgt_id = Uuid::new_v4();
 
-        add_node(&db, src_id, "Alice", "engineer").await;
-        add_node(&db, tgt_id, "TechCorp", "tech").await;
+        // type="Entity" → index_fields=["name"] → only "name" is embedded.
+        add_typed_node(&db, src_id, "Alice", "Entity", "engineer").await;
+        add_typed_node(&db, tgt_id, "TechCorp", "Entity", "tech").await;
         add_edge(&db, src_id, tgt_id, "works_at").await;
 
         let config = MemifyConfig::default();
         let triplets = extract_triplets_from_graph_db(&db, &config).await.unwrap();
 
         assert_eq!(triplets.len(), 1);
-        assert_eq!(
-            triplets[0].text,
-            "Alice: engineer-\u{203a}works_at-\u{203a}TechCorp: tech",
+        // Python: _extract_embeddable_text(entity_node, ["name"]) → "Alice"
+        // Python line 157: f"{start_node_text}-›{relationship_text}-›{end_node_text}".strip()
+        assert_eq!(triplets[0].text, "Alice-\u{203a}works_at-\u{203a}TechCorp",);
+    }
+
+    /// Verifies `index_fields_for_type` returns the correct fields for each
+    /// known type, matching Python's `_build_datapoint_type_index_mapping`
+    /// (get_triplet_datapoints.py:13-41).
+    #[test]
+    fn test_index_fields_for_type() {
+        // Entity and EntityType → ["name"]
+        assert_eq!(index_fields_for_type("Entity"), &["name"]);
+        assert_eq!(index_fields_for_type("EntityType"), &["name"]);
+        assert_eq!(index_fields_for_type("TextDocument"), &["name"]);
+
+        // DocumentChunk, TextSummary, Triplet → ["text"]
+        assert_eq!(index_fields_for_type("DocumentChunk"), &["text"]);
+        assert_eq!(index_fields_for_type("TextSummary"), &["text"]);
+        assert_eq!(index_fields_for_type("Triplet"), &["text"]);
+
+        // Unknown types → []
+        assert_eq!(index_fields_for_type(""), &[] as &[&str]);
+        assert_eq!(index_fields_for_type("UnknownType"), &[] as &[&str]);
+    }
+
+    /// Verifies that Entity node text is name-only (no description),
+    /// and DocumentChunk node text uses the `text` field.
+    /// Required by task 15 step 3 / B4.1 acceptance criterion.
+    #[tokio::test]
+    async fn test_index_fields_entity_name_only_documentchunk_text() {
+        let db = MockGraphDB::new();
+        let entity_id = Uuid::new_v4();
+        let chunk_id = Uuid::new_v4();
+
+        // Entity: name="Alice", description="engineer" → text must be "Alice" only.
+        let mut entity_json = serde_json::Map::new();
+        entity_json.insert("id".to_string(), json!(entity_id.to_string()));
+        entity_json.insert("type".to_string(), json!("Entity"));
+        entity_json.insert("name".to_string(), json!("Alice"));
+        entity_json.insert("description".to_string(), json!("engineer"));
+        db.add_node_raw(serde_json::Value::Object(entity_json))
+            .await
+            .unwrap();
+
+        // DocumentChunk: text="hello world" → text must be "hello world".
+        let mut chunk_json = serde_json::Map::new();
+        chunk_json.insert("id".to_string(), json!(chunk_id.to_string()));
+        chunk_json.insert("type".to_string(), json!("DocumentChunk"));
+        chunk_json.insert("text".to_string(), json!("hello world"));
+        chunk_json.insert("name".to_string(), json!("irrelevant"));
+        db.add_node_raw(serde_json::Value::Object(chunk_json))
+            .await
+            .unwrap();
+
+        db.add_edge(
+            &entity_id.to_string(),
+            &chunk_id.to_string(),
+            "contains",
+            None,
+        )
+        .await
+        .unwrap();
+
+        let config = MemifyConfig::default();
+        let triplets = extract_triplets_from_graph_db(&db, &config).await.unwrap();
+
+        assert_eq!(triplets.len(), 1);
+        let text = &triplets[0].text;
+
+        // Entity → name-only; DocumentChunk → text field only.
+        assert!(
+            text.starts_with("Alice-\u{203a}"),
+            "Entity source must use name only, got: {text:?}"
+        );
+        assert!(
+            !text.contains("Alice: engineer"),
+            "Entity must NOT include description, got: {text:?}"
+        );
+        assert!(
+            text.ends_with("-\u{203a}hello world"),
+            "DocumentChunk target must use text field, got: {text:?}"
         );
     }
 }

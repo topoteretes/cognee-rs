@@ -65,20 +65,22 @@ Read first (both sides):
 
 | Side | File | What to look at |
 |---|---|---|
-| Rust | `crates/search/src/graph_retrieval/brute_force_triplet_search.rs` | `DEFAULT_TRIPLET_DISTANCE_PENALTY` (~16), `SEARCH_COLLECTIONS` (~24-30), the `for (data_type, field_name) in SEARCH_COLLECTIONS` loop (~133) |
-| Rust | `crates/cognify/src/memify/extract_triplets.rs` | `build_node_text` (~117-128), `extract_triplets_from_graph_db` text build (~59-73) |
-| Rust | `crates/vector/src/qdrant_adapter.rs` | `collection_name` (~108-113), `has_collection` (~240) |
-| Python | `cognee/modules/retrieval/graph_completion_retriever.py` | `_get_vector_index_collections` (88-99), `get_retrieved_objects` (101-136), `get_triplets` (154+, line 172 `collections = self._get_vector_index_collections()`) |
+| Rust | `crates/search/src/graph_retrieval/brute_force_triplet_search.rs` | `DEFAULT_TRIPLET_DISTANCE_PENALTY` (line 17), `SEARCH_COLLECTIONS` (lines 25-31), the `for (data_type, field_name) in SEARCH_COLLECTIONS` loop (line 134) |
+| Rust | `crates/cognify/src/memify/extract_triplets.rs` | `build_node_text` (lines 117-128), `extract_triplets_from_graph_db` text build (lines 59-73) |
+| Rust | `crates/vector/src/qdrant_adapter.rs` | `collection_name` (line 111-113), `has_collection` (line 240), `list_collections` (lines 425-460, **already implemented**) |
+| Rust | `crates/vector/src/vector_db_trait.rs` | `list_collections` default no-op (lines 96-98, **already defined in trait**); `MockVectorDB` impl is in `mock_vector_db.rs` (lines 294-305, **already implemented**) |
+| Python | `cognee/modules/retrieval/graph_completion_retriever.py` | `_get_vector_index_collections` (lines 87-99), `get_retrieved_objects` (lines 101-136), `get_triplets` (line 172: `collections = self._get_vector_index_collections()`) |
+| Python | `cognee/modules/retrieval/utils/brute_force_triplet_search.py` | hardcoded fallback list (lines 281-287): `["Entity_name", "TextSummary_text", "EntityType_name", "DocumentChunk_text"]` + `"EdgeType_relationship_name"` always appended (line 289-290) — `Triplet_text` absent from fallback but present via dynamic enumeration |
 | Python | `cognee/modules/engine/models/Triplet.py` | `metadata = {"index_fields": ["text"]}` (line 9) |
-| Python | `cognee/tasks/memify/get_triplet_datapoints.py` | `_build_datapoint_type_index_mapping` (13-41), `_extract_embeddable_text` (44-69), `_process_single_triplet` (99-166) |
+| Python | `cognee/tasks/memify/get_triplet_datapoints.py` | `_build_datapoint_type_index_mapping` (lines 13-41), `_extract_embeddable_text` (lines 44-69), `_process_single_triplet` (lines 99-166) |
 
 ## Files to change
 
 | Path | Change |
 |---|---|
-| `crates/search/src/graph_retrieval/brute_force_triplet_search.rs` | Replace the hardcoded `SEARCH_COLLECTIONS` with a list that includes `("Triplet", "text")` (minimum), and prefer dynamic enumeration of existing collections; fix the stale doc comment |
+| `crates/search/src/graph_retrieval/brute_force_triplet_search.rs` | Replace the hardcoded `SEARCH_COLLECTIONS` with a list that includes `("Triplet", "text")` (minimum), and prefer dynamic enumeration via the existing `list_collections()` call; fix the stale doc comment |
 | `crates/cognify/src/memify/extract_triplets.rs` | Replace `build_node_text` (name+description concat) with `index_fields`-driven text (Entity/EntityType/etc → `name`; DocumentChunk/TextSummary/Triplet → `text`) |
-| `crates/vector/src/lib.rs` (or wherever `VectorDB` trait lives) | (If choosing dynamic enumeration) add a `list_collections()` method to the `VectorDB` trait + impls (`QdrantAdapter`, `MockVectorDB`) |
+| `crates/vector/src/vector_db_trait.rs` + `qdrant_adapter.rs` + `mock_vector_db.rs` | `list_collections()` is **already fully implemented** on all three — trait default at `vector_db_trait.rs:96`, `QdrantAdapter` override at `qdrant_adapter.rs:425`, `MockVectorDB` override at `mock_vector_db.rs:294`. No changes needed here. |
 
 ## Python reference
 
@@ -122,39 +124,29 @@ The type→index_fields map for the node types Rust produces in cognify:
 
 ### Part A — search enumerates `Triplet_text` (B3.2)
 
-1. **Add `list_collections` to the `VectorDB` trait** (preferred, fully dynamic).
-   Open the `VectorDB` trait definition (grep: `rg "trait VectorDB" crates/vector/src`).
-   Add:
+1. **Verify `list_collections` on the `VectorDB` trait** — **already implemented, no code changes needed here.**
 
-   ```rust
-   /// Return all existing collection names as (data_type, field_name) pairs.
-   /// Names follow the `{data_type}_{field_name}` convention. Cross-SDK callers
-   /// must rely on the same split logic Python uses (`ClassName_field`).
-   async fn list_collections(&self) -> VectorDBResult<Vec<(String, String)>>;
+   As of the current codebase, `list_collections()` is fully present on all three layers:
+   - `VectorDB` trait: default no-op at `crates/vector/src/vector_db_trait.rs:96-98`
+   - `QdrantAdapter` override: `crates/vector/src/qdrant_adapter.rs:425-460` — scans both
+     in-memory shard map and the `data_dir` filesystem; splits collection names on the **first**
+     `_` (data_type is always CamelCase with no underscore; field_name may contain underscores,
+     e.g. `relationship_name`). The invariant is commented in that implementation.
+   - `MockVectorDB` override: `crates/vector/src/mock_vector_db.rs:294-305` — returns pairs
+     from the in-memory `collections` map with the same first-`_` split.
+
+   Just confirm both implementations are present before proceeding to step 2. Run:
+
+   ```bash
+   grep -n "list_collections" crates/vector/src/qdrant_adapter.rs crates/vector/src/mock_vector_db.rs crates/vector/src/vector_db_trait.rs
    ```
 
-   - In `QdrantAdapter`: the adapter already discovers shard directories by name
-     (`qdrant_adapter.rs:87` reads `path.file_name()`). Implement `list_collections`
-     by listing the shard map / `data_dir` entries and splitting each name on the
-     **first** `_` is WRONG — types like `relationship_name` contain `_`. Instead,
-     split on the **last** `_`? No — `EdgeType_relationship_name` must split into
-     `("EdgeType","relationship_name")`, and `DocumentChunk_text` into
-     `("DocumentChunk","text")`. The reliable rule: collections are created via
-     `collection_name(data_type, field_name)` and the `data_type` is always a
-     CamelCase class name with **no** underscore, while `field_name` may contain
-     underscores. So split on the **first** `_`. Confirm there is no
-     underscore-containing data_type in the codebase (there is not:
-     `DocumentChunk`, `Entity`, `EntityType`, `TextSummary`, `Triplet`, `EdgeType`,
-     `Event`, `TextDocument`). Document this invariant in a comment.
-   - In `MockVectorDB`: track created collections and return them.
-
-   > If adding a trait method is judged too invasive for a 0.5d task, fall back to
-   > the **minimum fix** in step 2 (static list including `Triplet_text`). The
-   > dynamic approach is the parity-correct end state and is preferred.
+   Expected: all three files show an implementation. If for any reason a file is missing the
+   method, refer to the original design intent above (first-`_` split on `{data_type}_{field_name}`).
 
 2. **Rewrite `SEARCH_COLLECTIONS` usage** in `brute_force_triplet_search.rs`.
 
-   Current (lines ~18-30):
+   Current (lines 19-31):
 
    ```rust
    /// Note: "Entity_description" and "Triplet_text" are intentionally excluded here
@@ -169,6 +161,13 @@ The type→index_fields map for the node types Rust produces in cognify:
    ];
    ```
 
+   Note: Python's `brute_force_triplet_search.py:281-287` also has a nearly identical
+   hardcoded fallback (4 collections + always-appended `EdgeType_relationship_name`) that
+   is used when `_get_vector_index_collections()` returns empty. The dynamic path in
+   `GraphCompletionRetriever._get_vector_index_collections()` (called at line 172) is what
+   adds `Triplet_text` — it reflects over all DataPoint subclasses at runtime. The Rust
+   equivalent is calling `vector_db.list_collections()` to enumerate what actually exists.
+
    Replace the **doc comment** (the "intentionally excluded" claim is false vs
    Python) and the search loop. If you implemented `list_collections` (step 1),
    build the collection set at runtime:
@@ -181,7 +180,7 @@ The type→index_fields map for the node types Rust produces in cognify:
    ```
 
    Then iterate `for (data_type, field_name) in &collections`. The existing branch
-   that special-cases `EdgeType` / `relationship_name` (lines ~152-167) stays as-is
+   that special-cases `EdgeType` / `relationship_name` (line 153 onwards) stays as-is
    — it keys edge distances by `relationship_name`. **All other collections**
    (now including `Triplet` / `text`) flow through the node-distance branch keyed
    by point ID. Confirm that triplet vector point IDs equal the graph node IDs they
@@ -212,7 +211,7 @@ The type→index_fields map for the node types Rust produces in cognify:
    ];
    ```
 
-   The existing per-collection `has_collection` guard (lines ~133-137) already
+   The existing per-collection `has_collection` guard (line 135) already
    skips collections that don't exist, so adding `Triplet_text` is safe when memify
    hasn't run.
 
@@ -220,7 +219,7 @@ The type→index_fields map for the node types Rust produces in cognify:
 
 3. **Replace `build_node_text`** in `crates/cognify/src/memify/extract_triplets.rs`.
 
-   Current (lines ~111-128):
+   Current (lines 111-128):
 
    ```rust
    /// Build embeddable text from a graph node's properties.
@@ -237,6 +236,14 @@ The type→index_fields map for the node types Rust produces in cognify:
        .to_string()
    }
    ```
+
+   Warning: the existing test suite has several tests that pin the current `name: description`
+   behavior (e.g. `test_extract_basic_triplet`, `test_extract_triplet_text_format`,
+   `test_extract_node_missing_name_field`). These tests **must be updated** when `build_node_text`
+   is replaced — they currently assert the old format. The test `test_extract_triplet_text_format`
+   explicitly pins `"Alice: engineer-\u{203a}works_at-\u{203a}TechCorp: tech"` as the expected
+   format, which will change to `"Alice-\u{203a}works_at-\u{203a}TechCorp"` after this fix
+   (Entity → `name` only, no description).
 
    Replace with an `index_fields`-driven version that mirrors Python's
    `_extract_embeddable_text`. Read the node's `type` property and look up its
@@ -279,8 +286,10 @@ The type→index_fields map for the node types Rust produces in cognify:
      guard (`extract_triplets.rs:63-66`) — leave it.
 
 4. **Update the stale comment** above the triplet text build
-   (`extract_triplets.rs:68-72`) to note that node text now comes from
-   `index_fields`, not name+description.
+   (`extract_triplets.rs:68-73`, the `// Format matches Python's canonical triplet text:` block)
+   to note that node text now comes from `index_fields`, not name+description. Also update
+   the `build_node_text` doc comment (lines 111-115) which currently says "Uses 'name' and
+   'description' fields".
 
 ## Verification
 
@@ -334,9 +343,10 @@ scripts/check_all.sh
   collection only matches a Python one if the text is identical. The `index_fields`
   rule is the whole point — do not "improve" it (no extra fields, no different
   join character; Python uses a single ASCII space).
-- **Data-type split rule:** when implementing `list_collections`, split collection
+- **Data-type split rule:** `list_collections` (already implemented) splits collection
   names on the **first** `_` (data_type has no underscore; field may, e.g.
-  `relationship_name`). Add a comment recording this invariant.
+  `relationship_name`). This invariant is already commented in `qdrant_adapter.rs:451` and
+  `mock_vector_db.rs:298`. Do not change this split rule.
 - **Triplet point IDs are not graph node IDs** (`generate_node_id(start+rel+end)`).
   Verify how Python consumes Triplet collection hits before assuming Rust's node-ID
   keyed scoring will use them; if it cannot, document the limitation rather than

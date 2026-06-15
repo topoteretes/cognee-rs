@@ -19,15 +19,31 @@ pub const DEFAULT_TRIPLET_DISTANCE_PENALTY: f32 = 6.5;
 /// Collections searched to find candidate graph nodes and edge-type distances.
 /// Each entry is (data_type, field_name).
 ///
-/// Note: "Entity_description" and "Triplet_text" are intentionally excluded here
-/// because they don't match the default Python collection set used in brute_force_triplet_search.
-/// The "EdgeType_relationship_name" collection provides per-relationship-name distances.
-const SEARCH_COLLECTIONS: [(&str, &str); 5] = [
+/// Mirrors Python's dynamic enumeration of all DataPoint subclass index collections
+/// (graph_completion_retriever.py:88-99). Python reflects over every DataPoint
+/// subclass at query time and includes `Triplet_text` when memify has populated it.
+/// Rust uses a static list that covers the same set; the per-collection
+/// `has_collection` guard below ensures collections absent from the store are skipped.
+///
+/// `Triplet_text` is included so that after `memify` runs, triplet vectors influence
+/// graph search ranking exactly as they do in Python.
+///
+/// Note on Triplet point IDs: Triplet vector points are identified by
+/// `generate_node_id(start_id + relationship_name + end_id)`, which is NOT the same
+/// as any graph node ID. Python's `map_vector_distances_to_graph_nodes` silently skips
+/// hits whose IDs don't match a known graph node (CogneeGraph.py:428-429). Rust does
+/// the same: the candidate_node_ids set collects point IDs from all collections, and
+/// only IDs that match an actual graph node endpoint end up contributing to edge scores.
+/// Triplet hits that don't match a graph node ID are therefore harmless — they add the
+/// point ID to candidate_node_ids but never match any graph edge endpoint, so no
+/// spurious edges are surfaced.
+const SEARCH_COLLECTIONS: [(&str, &str); 6] = [
     ("Entity", "name"),
     ("TextSummary", "text"),
-    ("EntityType", "name"), // matches Python default collection list
+    ("EntityType", "name"),
     ("DocumentChunk", "text"),
     ("EdgeType", "relationship_name"),
+    ("Triplet", "text"),
 ];
 
 #[derive(Debug, Clone)]
@@ -353,5 +369,33 @@ mod penalty_default_tests {
     fn graph_retrieval_config_default_uses_python_penalty() {
         let cfg = GraphRetrievalConfig::default();
         assert_eq!(cfg.triplet_distance_penalty, 6.5);
+    }
+
+    /// Verifies that SEARCH_COLLECTIONS includes ("Triplet", "text"), mirroring
+    /// Python's _get_vector_index_collections() which enumerates all DataPoint
+    /// subclasses including Triplet (graph_completion_retriever.py:88-99).
+    /// Triplet declares metadata = {"index_fields": ["text"]} (Triplet.py:9).
+    #[test]
+    fn search_collections_includes_triplet_text() {
+        let has_triplet_text = SEARCH_COLLECTIONS
+            .iter()
+            .any(|&(dt, fn_)| dt == "Triplet" && fn_ == "text");
+        assert!(
+            has_triplet_text,
+            "SEARCH_COLLECTIONS must include (\"Triplet\", \"text\") to match Python's \
+             dynamic enumeration of DataPoint index collections after memify"
+        );
+    }
+
+    /// Verifies that the false "intentionally excluded" comment is gone.
+    /// Triplet_text is now included, not excluded.
+    #[test]
+    fn search_collections_has_six_entries() {
+        // 5 original + Triplet_text = 6 total
+        assert_eq!(
+            SEARCH_COLLECTIONS.len(),
+            6,
+            "SEARCH_COLLECTIONS should have 6 entries after adding Triplet_text"
+        );
     }
 }
