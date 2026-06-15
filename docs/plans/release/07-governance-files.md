@@ -200,7 +200,7 @@ If your change could affect IDs, schema, chunking, prompts, or vector collection
 ## License
 
 By contributing you agree your contributions are licensed under the project's
-**<Apache-2.0 — confirm D2>** license (see [`LICENSE`](LICENSE)).
+**Apache-2.0** license (see [`LICENSE`](LICENSE)).
 ````
 
 ### Step 2 — `SECURITY.md`
@@ -227,7 +227,7 @@ Report privately via one of:
 
 - GitHub's [private vulnerability reporting](https://github.com/topoteretes/cognee-rust/security/advisories/new)
   ("Report a vulnerability"), or
-- email **<security@topoteretes.com — confirm the right address; fallback dmytro@topoteretes.com>**.
+- email **<security@topoteretes.com — confirm this alias exists; if not, use info@topoteretes.com (Python cognee's security contact) or dmytro@topoteretes.com>**.
 
 Please include a description, reproduction steps, affected version(s), and impact.
 We aim to acknowledge within **3 business days** and to provide a remediation timeline after
@@ -250,7 +250,7 @@ Create `/Users/dmytro/dev/cognee/cognee-rust/CODE_OF_CONDUCT.md`:
 This project adopts the **[Contributor Covenant, version 2.1](https://www.contributor-covenant.org/version/2/1/code_of_conduct/)**.
 
 By participating, you are expected to uphold this code. Report unacceptable behavior to
-**<conduct@topoteretes.com — confirm; fallback dmytro@topoteretes.com>**. All reports are
+**<conduct@topoteretes.com — confirm this alias exists; fallback dmytro@topoteretes.com — note: the Python cognee COC has this contact unfilled>**. All reports are
 reviewed and handled confidentially.
 
 The full text is available at
@@ -289,6 +289,7 @@ How to cut and publish a cognee-rust release. Two tracks (see
    - `python/pyproject.toml`, `js/package.json`.
    - Keep all four in sync.
 4. Update `CHANGELOG.md` (Keep a Changelog format) with the new version section.
+   *(Note: `CHANGELOG.md` does not exist yet — it is created by release task 22. Add a stub entry here or skip until task 22 lands.)*
 5. Confirm `LICENSE` and license metadata are present (see release task 02).
 
 ## Tag
