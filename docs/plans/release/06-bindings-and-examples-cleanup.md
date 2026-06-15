@@ -23,8 +23,11 @@ The three bindings share a `bindings-common::ops` core, so the *operations* are 
   is sugar — but it's a real API-shape inconsistency to either document or unify.
 - **Python** has ~22 test files across all op groups; **JS** has 13 files covering only ~5
   groups, despite exporting every op.
-- Neither binding has runnable examples beyond add/cognify/search (C has ~19; JS has 1;
-  Python has **none**).
+- ~~Neither binding has runnable examples beyond add/cognify/search (C has ~19; JS has 1;
+  Python has **none**).~~ **DONE (commit e9ed51d):** `python/examples/` now has 6 annotated
+  scripts; `js/examples/` now has 7 scripts (including all the originally planned topics).
+  Both READMEs were updated with example discovery tables in commit e80dc2d. Step 3 below is
+  updated accordingly.
 - `python/pyproject.toml` and `js/package.json` both hardcode `0.1.0`, decoupled from the
   Cargo `[workspace.package] version = "0.1.0"`.
 
@@ -38,10 +41,12 @@ git checkout -b task/06-bindings-and-examples-cleanup main
 ```
 
 Read first:
-- `js/cognee-neon/src/config.rs` (40 granular setters via macros).
+- `js/cognee-neon/src/config.rs` (40 granular setters via macros — `string_setter!`,
+  `u32_setter!`, `u16_setter!`, `f64_setter!`, `bool_setter!` invocations; 258 lines total).
 - `capi/cognee-capi/src/sdk_config.rs` (generic `set`/`set_str` + 4 bulk).
 - `python/src/config.rs` (generic `set`/`set_str` + 4 bulk).
-- `js/cognee-neon/src/lib.rs:55-126` (full exported op surface).
+- `js/cognee-neon/src/lib.rs:46-369` (full exported op surface; **note:** the exports
+  block now spans lines 46–369, not the 55–126 originally cited — it grew with Phase 5/6 ops).
 - `js/__tests__/` and `python/tests/` (the coverage gap).
 - `python/pyproject.toml`, `js/package.json`, root `Cargo.toml` (versions).
 
@@ -51,8 +56,8 @@ Read first:
 |---|---|
 | `docs/bindings/config-setters.md` *(new, or a README note)* | document setter-surface decision (A3.1) — **OR** add sugar to C/Python (alternative) |
 | `js/__tests__/{memory,sessions,notebooks,admin,data-ops,cloud,visualization,recall}.test.ts` *(new)* | JS tests for drifted op groups (A3.2) |
-| `python/examples/` *(new dir)* | 3-4 annotated example scripts (A3.3) |
-| `js/examples/` | add memify/viz/sessions/datasets examples (A3.3) |
+| `python/examples/` | ~~new dir~~ **DONE** — 6 annotated scripts added in e9ed51d (A3.3) |
+| `js/examples/` | ~~add memify/viz/sessions/datasets~~ **DONE** — 6 new examples added in e9ed51d (A3.3) |
 | `python/cognee_pipeline/_native.cpython-39-darwin.so` | delete stale artifact (A3.4) |
 | `python/scripts/check.sh` | add a clean step (A3.4, optional) |
 | `python/pyproject.toml`, `js/package.json` | link version to workspace (A3.5) |
@@ -96,10 +101,10 @@ for C). **Prefer the document path for 0.1.0.**
 
 ### Step 2 — A3.2: Add JS tests for drifted op groups
 
-**Verified gap.** JS exports all ops (`js/cognee-neon/src/lib.rs:55-126`:
+**Verified gap.** JS exports all ops (`js/cognee-neon/src/lib.rs:46-369`:
 `cogneeForget`, `cogneeUpdate`, `cogneePruneData`, `cogneePruneSystem`, `cogneeRemember`,
 `cogneeMemify`, `cogneeImprove`, `cogneeRecall`, `cogneeGetSession`, `cogneeAddFeedback`,
-`cogneeListNotebooks`, `cogneeVisualize`, `serve`/`disconnect`, …) but
+`cogneeListNotebooks`, `cogneeVisualize`, `cogneeServe`/`cogneeDisconnect`, …) but
 `js/__tests__/` has only **13** files covering ~5 groups:
 
 ```
@@ -140,69 +145,64 @@ pipeline  sdk_handle  search  setup_telemetry  setup_telemetry_analytics  smoke
 cd js && npm test    # all suites incl. the 8 new files
 ```
 
-### Step 3 — A3.3: Add runnable examples
+### Step 3 — A3.3: Add runnable examples — **DONE (commit e9ed51d / e80dc2d)**
 
-**Verified:** C has ~19 examples (`capi/examples/*.c`), JS has 1
-(`js/examples/add-cognify-search.ts`), Python has **no `examples/` dir**.
+> **Status as of 2026-06-14:** this step is fully complete. No further action needed.
 
-**3a — Create `python/examples/`** with 3-4 annotated scripts. Each must have a header
-comment listing required env vars and the run command (`python examples/<name>.py`). Model
-them on `js/examples/add-cognify-search.ts` (read it for the comment/structure convention):
+**Current state (verified):**
 
-| File | Demonstrates |
-|---|---|
-| `python/examples/add_cognify_search.py` | the full add→cognify→search pipeline (the headline) |
-| `python/examples/memify_triplet_search.py` | `memify()` then a `TRIPLET_COMPLETION` search |
-| `python/examples/sessions_recall.py` | session create + `recall(..., session_id=...)` |
-| `python/examples/datasets_management.py` | `datasets.list/list_data/status/empty/delete_data` |
+- `python/examples/` contains 6 annotated scripts (added in e9ed51d):
+  `add_cognify_search.py`, `memify_recall.py`, `datasets.py`, `sessions.py`, `config.py`,
+  `visualize.py`. Each has a header comment with required env vars and run instructions, uses
+  `async`/`asyncio.run(main())`, and gracefully skips when `OPENAI_*` are absent.
+- `js/examples/` contains 7 scripts (1 pre-existing + 6 added in e9ed51d):
+  `add-cognify-search.ts`, `memify-recall.ts`, `datasets.ts`, `sessions.ts`, `config.ts`,
+  `visualize.ts`, `pipeline-engine.ts`.
+- Both READMEs were updated in e9ed51d/e80dc2d with example discovery tables and
+  credential-gated smoke steps were added to both `check.sh` scripts.
 
-Use the `async`/`asyncio.run(main())` form (the SDK methods are async — verify against
-`python/src/sdk_ops.rs`).
+**Original plan vs delivered names** (for reference — the intent is fully covered):
 
-**3b — Extend `js/examples/`** with the cross-op examples JS lacks:
+| Originally planned | Delivered | Notes |
+|---|---|---|
+| `python/examples/memify_triplet_search.py` | `python/examples/memify_recall.py` | Covers memify + `TRIPLET_COMPLETION` search |
+| `python/examples/sessions_recall.py` | `python/examples/sessions.py` | Covers session create + recall |
+| `python/examples/datasets_management.py` | `python/examples/datasets.py` | Covers list/status/delete |
+| `js/examples/memify-triplet-search.ts` | `js/examples/memify-recall.ts` | Covers memify + TRIPLET_COMPLETION |
+| `js/examples/visualization.ts` | `js/examples/visualize.ts` | Covers visualizeToFile |
 
-| File | Demonstrates |
-|---|---|
-| `js/examples/memify-triplet-search.ts` | `memify()` + `TRIPLET_COMPLETION` |
-| `js/examples/visualization.ts` | `visualizeToFile({ destinationPath })` |
-| `js/examples/sessions.ts` | `sessions.get` / `addFeedback` / graph-context |
-| `js/examples/datasets.ts` | the `datasets.*` accessor methods |
-
-Match `add-cognify-search.ts`'s comment block (env vars + `ts-node` run instructions).
-
-**3c — Link examples from READMEs.** Add an "Examples" line to `python/README.md` (task 05
-rewrite) and `js/README.md` pointing at the new files.
-
-> **Examples must compile/parse but need not be CI-gated.** Do not add them to the
-> default test run unless `OPENAI_*` is guaranteed; they are discoverability artifacts.
-> Optionally add a `cargo`/`tsc`/`python -m py_compile` syntax check to the binding
-> `check.sh` scripts.
+> **Examples must compile/parse but need not be CI-gated.** The credential-gated smoke
+> steps already added to `python/scripts/check.sh` and `js/scripts/check.sh` run the
+> headline example when `OPENAI_*` are present and print `SKIP` otherwise.
 
 ### Step 4 — A3.4: Clean the stale `_native.*.so`
 
-**Verified:** `python/cognee_pipeline/_native.cpython-39-darwin.so` exists (16 MB, Apr 11)
-and is **untracked** (`*.so` is in `python/.gitignore`, and `git ls-files python/` shows no
-`.so`). So it will **not** ship — but importing a stale Python 3.9 binary during local dev
-masks rebuilds.
+**Verified:** `python/cognee_pipeline/_native.cpython-39-darwin.so` still exists (16 MB,
+Apr 11) and is **untracked** (`*.so` is in `python/.gitignore`; `git ls-files python/` shows
+no `.so`). It will not ship, but importing a stale Python 3.9 binary during local dev
+masks rebuilds. The `python/scripts/check.sh` clean step was **not** added in e9ed51d (only
+the example smoke step was added there).
 
 **Action:**
 1. Delete it locally:
    ```bash
    rm -f python/cognee_pipeline/_native.cpython-39-darwin.so
    ```
-2. Add a clean step to `python/scripts/check.sh` (verify the file first) so CI/dev runs
-   start from a clean module — e.g. near the top:
+2. Add a clean step to `python/scripts/check.sh` **before** the `maturin develop` call:
    ```sh
    rm -f cognee_pipeline/_native*.so   # drop any stale prebuilt extension
    ```
-   (Read `python/scripts/check.sh` first to place this correctly relative to its `cd`.)
+   The file currently does `cd "$PYTHON_DIR"` before `maturin develop`, so this line goes
+   between the `cd` and the maturin invocation (around line 10 of the current file).
 3. No `.gitignore` change needed — `*.so` is already ignored.
 
 ### Step 5 — A3.5 / T2.5-T2.6: Link binding versions to the workspace
 
-**Verified hardcodes:** `python/pyproject.toml:8` `version = "0.1.0"`;
+**Verified hardcodes:** `python/pyproject.toml:8` `version = "0.1.0"` (no `dynamic`);
 `js/package.json:3` `"version": "0.1.0"`; root `Cargo.toml:51` `version = "0.1.0"`. All
-three are independent literals → drift hazard at the next bump.
+three are independent literals → drift hazard at the next bump. Neither the `dynamic`
+switch nor the JS version-drift guard was introduced in the recent commits (e9ed51d,
+e80dc2d). `python/Cargo.toml` confirms `version.workspace = true` (ready for 5a).
 
 **5a — Python (maturin supports Cargo-derived version).** Make maturin read the version
 from `python/Cargo.toml` (which inherits `version.workspace = true`):
@@ -251,9 +251,9 @@ ls docs/bindings/config-setters.md 2>/dev/null || grep -qi "granular\|generic se
 ls js/__tests__/{memory,sessions,notebooks,admin,data-ops,cloud,visualization,recall}.test.ts
 cd js && npm test && cd ..
 
-# 3. Examples exist:
-ls python/examples/*.py
-ls js/examples/*.ts
+# 3. Examples exist (ALREADY DONE — verify only):
+ls python/examples/*.py   # should list 6 files
+ls js/examples/*.ts       # should list 7 files
 
 # 4. Stale .so gone:
 test ! -f python/cognee_pipeline/_native.cpython-39-darwin.so && echo "so cleaned"
@@ -267,8 +267,8 @@ grep -q "version drift" js/scripts/check.sh && echo "js version guard"
 scripts/check_all.sh   # runs capi + python + js check.sh
 ```
 
-**Expected:** new JS suites pass; examples present; `.so` gone; version guard present;
-`check_all.sh` green.
+**Expected:** new JS suites pass; examples already present (6 py / 7 ts); `.so` gone;
+version guard present; `check_all.sh` green.
 
 **New tests:** 8 JS test files (Step 2). Examples are not auto-run tests.
 
@@ -278,8 +278,10 @@ scripts/check_all.sh   # runs capi + python + js check.sh
       added to C/Python; decision recorded in the PR.
 - [ ] JS test files added for memory/sessions/notebooks/admin/data-ops/cloud/visualization/recall;
       `npm test` green; deterministic ops run unconditionally, LLM ops skip without `OPENAI_*`.
-- [ ] `python/examples/` created with 3-4 annotated scripts; `js/examples/` extended with
-      memify/viz/sessions/datasets; both linked from their READMEs.
+- [x] ~~`python/examples/` created with 3-4 annotated scripts; `js/examples/` extended with
+      memify/viz/sessions/datasets; both linked from their READMEs.~~ **DONE (e9ed51d,
+      e80dc2d):** 6 Python + 7 JS examples present; both READMEs link them; credential-gated
+      smoke steps added to both `check.sh` scripts.
 - [ ] Stale `_native.cpython-39-darwin.so` deleted; `python/scripts/check.sh` cleans stale `.so`.
 - [ ] Binding versions linked to the workspace version (maturin `dynamic` for Python; CI
       assertion for JS), drift fails the binding check.

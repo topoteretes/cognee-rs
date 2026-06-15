@@ -7,6 +7,21 @@ JS_DIR="$(dirname "$SCRIPT_DIR")"
 cd "$JS_DIR"
 
 echo "================================================================"
+echo "=== JS: Checking version parity with Cargo workspace ==="
+echo "================================================================"
+
+# Fail if js/package.json version has drifted from the root Cargo workspace
+# version.  This catches bumps that update Cargo.toml but forget package.json.
+WS_VERSION=$(grep -m1 '^version' "$JS_DIR/../Cargo.toml" | sed -E 's/.*"(.*)".*/\1/')
+PKG_VERSION=$(node -p "require('$JS_DIR/package.json').version")
+if [ "$WS_VERSION" != "$PKG_VERSION" ]; then
+  echo "error: version drift — workspace Cargo.toml=${WS_VERSION}, js/package.json=${PKG_VERSION}" >&2
+  exit 1
+fi
+echo "version ok (${PKG_VERSION})"
+
+echo ""
+echo "================================================================"
 echo "=== JS: Checking Node version ==="
 echo "================================================================"
 
