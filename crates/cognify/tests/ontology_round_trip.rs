@@ -72,6 +72,7 @@ async fn test_ontology_round_trip_with_real_resolver() {
             source_node_id: "alice_1".to_string(),
             target_node_id: "tc_1".to_string(),
             relationship_name: "works_at".to_string(),
+            description: None,
         }],
     };
 

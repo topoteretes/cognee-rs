@@ -301,11 +301,33 @@ pub async fn expand_with_nodes_and_edges(
             );
 
             if let std::collections::hash_map::Entry::Vacant(e) = edge_map.entry(edge_key) {
-                e.insert(GraphEdgePair::new(
+                // Mirror Python's `_process_graph_edges` edge property map
+                // (expand_with_nodes_and_edges.py:296-309): persist
+                // relationship_name / source_node_id / target_node_id /
+                // ontology_valid / edge_text. `edge_text` is the trimmed
+                // `Edge.description` (Python `_strip_nonblank_text`), feeding
+                // EdgeType + Triplet embeddings; empty string when absent/blank
+                // so downstream readers fall back to relationship_name.
+                let edge_text = edge
+                    .description
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or("")
+                    .to_string();
+
+                let mut edge_pair = GraphEdgePair::new(
                     *source_entity_id,
                     *target_entity_id,
-                    edge.relationship_name,
-                ));
+                    edge.relationship_name.clone(),
+                );
+                edge_pair.add_property("relationship_name", edge.relationship_name);
+                edge_pair.add_property("source_node_id", source_entity_id.to_string());
+                edge_pair.add_property("target_node_id", target_entity_id.to_string());
+                edge_pair.add_property("ontology_valid", "false");
+                edge_pair.add_property("edge_text", edge_text);
+
+                e.insert(edge_pair);
             }
         }
     }
@@ -521,6 +543,7 @@ mod tests {
                 source_node_id: "alice_1".to_string(),
                 target_node_id: "techcorp_1".to_string(),
                 relationship_name: "works_at".to_string(),
+                description: None,
             }],
         }
     }
@@ -660,6 +683,7 @@ mod tests {
                 source_node_id: "alice_1".to_string(),
                 target_node_id: "missing_node".to_string(), // LLM inconsistency
                 relationship_name: "knows".to_string(),
+                description: None,
             }],
         };
 
@@ -713,11 +737,13 @@ mod tests {
                     source_node_id: "alice_1".to_string(),
                     target_node_id: "techcorp_1".to_string(),
                     relationship_name: "works_at".to_string(),
+                    description: None,
                 },
                 Edge {
                     source_node_id: "alice_1".to_string(),
                     target_node_id: "techcorp_1".to_string(),
                     relationship_name: "founded".to_string(),
+                    description: None,
                 },
             ],
         };

@@ -136,6 +136,7 @@ mod tests {
                 source_node_id: "alice".to_string(),
                 target_node_id: "techcorp".to_string(),
                 relationship_name: "works_at".to_string(),
+                description: None,
             }],
         }
     }
@@ -209,6 +210,7 @@ mod tests {
                 source_node_id: "bob".to_string(),
                 target_node_id: "acmecorp".to_string(),
                 relationship_name: "works_at".to_string(),
+                description: None,
             }],
         };
 
@@ -267,11 +269,13 @@ mod tests {
                     source_node_id: "alice".to_string(),
                     target_node_id: "techcorp".to_string(),
                     relationship_name: "works_at".to_string(),
+                    description: None,
                 },
                 Edge {
                     source_node_id: "alice".to_string(),
                     target_node_id: "london".to_string(),
                     relationship_name: "lives_in".to_string(),
+                    description: None,
                 },
             ],
         };

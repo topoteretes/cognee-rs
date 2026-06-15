@@ -85,7 +85,7 @@ Land task [15](15-vector-collection-parity.md) first (dependency). Read both sid
 | Rust | `crates/cognify/src/fact_extraction/models.rs` | `Edge` struct (76-86), tests (165-173) |
 | Rust | `crates/cognify/src/tasks.rs` | `add_data_points` graph-node storage (937-975), edge-prop writer (~1520-1545, `relationship_name`), `index_data_points` 6 hardcoded blocks (2562-2947) |
 | Rust | `crates/cognify/src/graph_extraction/extractable.rs` | `GraphExtractable` impls; `Document` is absent |
-| Rust | `crates/cognify/src/memify/extract_triplets.rs` | `extract_relationship_text` (134-145) already reads `edge_text` |
+| Rust | `crates/cognify/src/memify/extract_triplets.rs` | `extract_relationship_text` (157-168) already reads `edge_text`; call site at line 61 |
 | Python | `cognee/shared/data_models.py` | `Edge.description` (62-71) |
 | Python | `cognee/modules/graph/utils/expand_with_nodes_and_edges.py` | `_process_graph_edges` (281-311): `edge_text = _strip_nonblank_text(edge.description)` (294), stored in props (307) |
 | Python | `cognee/tasks/storage/index_graph_edges.py` | `_get_edge_text` / `create_edge_type_datapoints` (33-53) |
@@ -195,7 +195,17 @@ Land task [15](15-vector-collection-parity.md) first (dependency). Read both sid
 
 4. **Store Document nodes in the graph.** In `add_data_points`
    (`tasks.rs:937-975`), after storing chunks/summaries/entity-types, add the
-   Documents from `input.documents` as graph nodes:
+   Documents from `input.documents` as graph nodes.
+
+   > **How Python stores Document nodes (for context):** Python's
+   > `DocumentChunk.is_part_of` is a full `Document` DataPoint object
+   > (`cognee/modules/chunking/models/DocumentChunk.py:34`). Python's
+   > `get_graph_from_model()` recursively walks all DataPoint fields, which
+   > means it visits each chunk's `is_part_of` Document and stores it as a
+   > graph node automatically. In Rust, `DocumentChunk.is_part_of` is
+   > `Option<Uuid>` (just an ID reference), so Documents are never reached
+   > by the Rust `get_graph_from_model` equivalent. The explicit `add_nodes`
+   > call below is the correct Rust substitute.
 
    ```rust
    // Store Documents as graph nodes (Python stores classified Documents and
@@ -227,6 +237,14 @@ Land task [15](15-vector-collection-parity.md) first (dependency). Read both sid
    document/data_type discriminator (`tasks.rs:157-178` + `document_classifier`).
    The graph node `type` property and the vector collection name **must** be the
    concrete Python class name for cross-SDK reads.
+
+   **Document node ID determinism confirmed:** Both Rust (`crates/models/src/document.rs:117`,
+   `base.id = data.id`) and Python (`cognee/tasks/documents/classify_documents.py:133`,
+   `id=data_item.id`) derive the Document node UUID from the source `Data` item's ID,
+   which is already content-addressed by the ingestion pipeline. Adding Document nodes
+   to the Rust graph will produce Python-identical UUIDs — no new ID derivation is
+   needed. `description` is an edge property only (not an ID input), so adding it is
+   purely additive and cannot change any existing UUID.
 
 5. **Index `*Document_name` collections — prefer the `index_fields`-driven loop.**
    The current `index_data_points` (`tasks.rs:2562-2947`) has 6 copy-pasted blocks.
