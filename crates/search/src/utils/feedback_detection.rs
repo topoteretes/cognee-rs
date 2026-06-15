@@ -2,19 +2,13 @@ use cognee_llm::{Llm, Message, generate_json_schema};
 
 use crate::types::FeedbackDetectionResult;
 
-const FEEDBACK_DETECTION_SYSTEM_PROMPT: &str = "\
-You are an AI assistant that analyzes user messages to determine if they contain \
-feedback about a previous AI response. Your task is to detect explicit or implicit \
-feedback such as corrections, quality evaluations, or expressions of satisfaction/dissatisfaction.
-
-Analyze the user message and determine:
-1. Whether it contains feedback about a previous response
-2. What the feedback text is (if present)
-3. A quality score from 1 (very negative) to 5 (very positive), if inferable
-4. A polite acknowledgment response for the user (if feedback was detected)
-5. Whether the message also contains a follow-up question
-
-Return a JSON object matching the required schema.";
+/// System prompt for conversational feedback detection.
+///
+/// Vendored byte-for-byte from Python's
+/// `cognee/infrastructure/llm/prompts/feedback_detection_system.txt`. Kept in sync
+/// via the prompt-parity drift guard.
+const FEEDBACK_DETECTION_SYSTEM_PROMPT: &str =
+    include_str!("prompts/feedback_detection_system.txt");
 
 /// Detect whether a user message contains feedback about a previous response.
 ///
@@ -53,5 +47,22 @@ mod tests {
         assert!(!result.feedback_detected);
         assert!(!result.contains_followup_question);
         assert!(result.feedback_text.is_none());
+    }
+
+    #[test]
+    fn feedback_prompt_matches_vendored_txt() {
+        let vendored = include_str!("prompts/feedback_detection_system.txt");
+        assert_eq!(
+            FEEDBACK_DETECTION_SYSTEM_PROMPT, vendored,
+            "const drifted from vendored .txt"
+        );
+        assert!(
+            vendored.contains("Set feedback_detected to true ONLY"),
+            "Python specificity marker missing"
+        );
+        assert!(
+            vendored.contains("response_to_user:"),
+            "response_to_user field marker missing"
+        );
     }
 }

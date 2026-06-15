@@ -83,7 +83,7 @@ Status: ⬜ todo · 🟡 in-progress · ✅ done · ⏸️ blocked.
 | 10 | [Wire permission revoke endpoints](10-permission-revoke-endpoints.md) | 2 | P0 | A | yes | 0.5–1d¹ | — | ✅ |
 | 11 | [Collapse DB migrations to baseline](11-collapse-db-migrations.md) | 3 | P1 | A | no | 0.5d | — | ✅ |
 | 12 | [Re-enable cross-SDK parity CI](12-cross-sdk-parity-ci.md) | 3 | P1 | A | strongly rec. | 1–2d | — | ✅ |
-| 13 | [Sync LLM prompts to Python + drift guard](13-prompt-parity-sync.md) | 3 | P1 | A | no | 0.5d | — | ⬜ |
+| 13 | [Sync LLM prompts to Python + drift guard](13-prompt-parity-sync.md) | 3 | P1 | A | no | 0.5d | — | ✅ |
 | 14 | [Chunking parity (tiktoken default + chunk size)](14-chunking-parity.md) | 3 | P1 | A | no | 0.5d | — | ⬜ |
 | 15 | [Vector collection parity](15-vector-collection-parity.md) | 3 | P1 | A | no | 0.5d | — | ⬜ |
 | 16 | [Graph extraction parity (Edge.description + Documents)](16-graph-extraction-parity.md) | 3 | P1 | A | no | 1d | 15 | ⬜ |

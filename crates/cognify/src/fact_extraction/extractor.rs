@@ -13,47 +13,10 @@ use crate::error::CognifyError;
 
 /// Default system prompt for knowledge graph extraction.
 ///
-/// Based on Python's generate_graph_prompt.txt.
-/// Instructs the LLM to extract nodes (entities/concepts) and edges (relationships).
-const DEFAULT_GRAPH_PROMPT: &str = r#"You are a top-tier algorithm designed for extracting information in structured formats to build a knowledge graph.
-**Nodes** represent entities and concepts. They're akin to Wikipedia nodes.
-**Edges** represent relationships between concepts. They're akin to Wikipedia links.
-
-The aim is to achieve simplicity and clarity in the knowledge graph.
-
-# 1. Node Fields
-Each node must have exactly these fields:
-  - **id**: the human-readable entity name as found in the text (e.g., "Alice Johnson", "TechCorp", "San Francisco")
-  - **name**: the same human-readable entity name as `id` (e.g., "Alice Johnson", "TechCorp", "San Francisco")
-  - **type**: the entity type label in uppercase (e.g., "PERSON", "ORGANIZATION", "LOCATION", "DATE", "CONCEPT")
-  - **description**: a brief 1-2 sentence description of the entity
-
-# 2. Labeling Nodes
-**Consistency**: Ensure you use basic or elementary types for the `type` field.
-  - For example, when you identify an entity representing a person, always set `type` to **"PERSON"**.
-  - Avoid using more specific terms like "Mathematician" or "Scientist" in `type`, keep those in `description`.
-  - Don't use too generic terms like "Entity".
-**Node IDs**: Never utilize integers as node IDs.
-  - Both `id` and `name` should be the entity's name or human-readable identifier found in the text.
-
-# 3. Handling Numerical Data and Dates
-  - For example, when you identify an entity representing a date, make sure it has type **"DATE"**.
-  - Extract the date in the format "YYYY-MM-DD"
-  - If not possible to extract the whole date, extract month or year, or both if available.
-  - **Property Format**: Properties must be in a key-value format.
-  - **Quotation Marks**: Never use escaped single or double quotes within property values.
-  - **Naming Convention**: Use snake_case for relationship names, e.g., `works_at`.
-
-# 4. Coreference Resolution
-  - **Maintain Entity Consistency**: When extracting entities, it's vital to ensure consistency.
-  If an entity, such as "John Doe", is mentioned multiple times in the text but is referred to by different names or pronouns (e.g., "Joe", "he"),
-  always use the most complete identifier for that entity throughout the knowledge graph. In this example, use "John Doe" as the node ID.
-Remember, the knowledge graph should be coherent and easily understandable, so maintaining consistency in entity references is crucial.
-
-# 5. Strict Compliance
-Adhere to the rules strictly. Non-compliance will result in termination.
-
-Extract nodes and edges from the provided text."#;
+/// Vendored byte-for-byte from Python's
+/// `cognee/infrastructure/llm/prompts/generate_graph_prompt.txt` (kept in sync via
+/// the prompt-parity drift guard in the inline `#[cfg(test)]` block below).
+const DEFAULT_GRAPH_PROMPT: &str = include_str!("prompts/generate_graph_prompt.txt");
 
 /// Fact extractor for knowledge graph generation.
 ///
@@ -434,5 +397,30 @@ mod tests {
         // Both should get the same node
         assert_eq!(via_extract.node_count(), via_facts.node_count());
         assert_eq!(via_extract.nodes[0].id, via_facts.nodes[0].id);
+    }
+
+    #[test]
+    fn graph_prompt_matches_vendored_txt() {
+        // Drift guard: const must equal the vendored .txt byte-for-byte.
+        // Manual re-sync: cp /tmp/cognee-python/cognee/infrastructure/llm/prompts/generate_graph_prompt.txt \
+        //   crates/cognify/src/fact_extraction/prompts/generate_graph_prompt.txt
+        let vendored = include_str!("prompts/generate_graph_prompt.txt");
+        assert_eq!(
+            DEFAULT_GRAPH_PROMPT, vendored,
+            "const drifted from vendored .txt"
+        );
+        // Python markers the old Rust prompt did NOT have:
+        assert!(
+            vendored.contains("Every edge should include a description"),
+            "edge-description paragraph missing — not the Python prompt"
+        );
+        assert!(
+            vendored.contains(r#"label it as **"Person"**"#),
+            "Title-case 'Person' missing — UPPERCASE Rust prompt regressed"
+        );
+        assert!(
+            !vendored.contains("the entity type label in uppercase"),
+            "old UPPERCASE-forcing line still present"
+        );
     }
 }

@@ -44,10 +44,13 @@ the Rust graph prompt text, so swapping the text fully fixes it.
 
 ### Existing precedent (use this pattern)
 
-The codebase already vendors Python prompts and loads them with `include_str!`:
-`crates/llm/src/prompts/mod.rs:15-19` declares `pub const … = include_str!("…​.txt")` for
-4 files, with a module doc comment: *"Filenames are kept identical for cross-SDK
-diffing."* Follow the same approach for these three.
+The codebase has two existing patterns to follow:
+1. `crates/llm/src/prompts/mod.rs:15-19` — `pub const … = include_str!("…​.txt")` for
+   4 files, with a module doc comment: *"Filenames are kept identical for cross-SDK diffing."*
+2. `crates/cognify/src/temporal_extraction/` — the **closer precedent**: private consts
+   using `include_str!("prompts/temporal_*.txt")` with crate-local `prompts/` subdirs
+   (exactly the same structure as the three changes here).
+Follow pattern 2 (temporal_extraction) for these three, since all three consts are private.
 
 ### Drift guard (B3.5)
 
@@ -85,7 +88,7 @@ Read first:
 | `crates/cognify/src/summarization/extractor.rs` | Replace `DEFAULT_SUMMARY_PROMPT` with `include_str!(...)`; fix stale doc comment; update the `test_default_prompt_not_empty` assertion. |
 | `crates/search/src/utils/prompts/feedback_detection_system.txt` | **New.** Verbatim copy of Python's `feedback_detection_system.txt`. |
 | `crates/search/src/utils/feedback_detection.rs` | Replace `FEEDBACK_DETECTION_SYSTEM_PROMPT` with `include_str!(...)`. |
-| `crates/cognify/tests/prompt_parity.rs` (or inline `#[cfg(test)]`) | **New.** Drift-guard tests (see Verification). |
+| (inline `#[cfg(test)]` blocks in the three source files above) | **Modified.** Drift-guard tests added inline (private consts require this; no new external test file). |
 
 > Use a crate-local `prompts/` subdir next to each consuming source file (mirrors
 > `temporal_extraction/prompts/`). `include_str!` paths are **relative to the source
@@ -234,12 +237,12 @@ Respond with the exact JSON structure: feedback_detected (boolean), feedback_tex
    ///
    /// Vendored byte-for-byte from Python's
    /// `cognee/infrastructure/llm/prompts/generate_graph_prompt.txt` (kept in sync via
-   /// the prompt-parity drift guard in `tests/prompt_parity.rs`).
-   pub const DEFAULT_GRAPH_PROMPT: &str =
+   /// the prompt-parity drift guard in the inline `#[cfg(test)]` block below).
+   const DEFAULT_GRAPH_PROMPT: &str =
        include_str!("prompts/generate_graph_prompt.txt");
    ```
-   (Keep the same visibility — confirm whether the original is `pub`/`pub(crate)` and
-   match it.)
+   (The const is `private` — keep it that way. The `pub fn default_graph_prompt()`
+   method already exposes it to callers and integration tests.)
 
 ### Prompt 2 — summarization (B2.4)
 
@@ -311,44 +314,63 @@ Respond with the exact JSON structure: feedback_detected (boolean), feedback_tex
 
 ### Drift guard (B3.5)
 
-8. Add `crates/cognify/tests/prompt_parity.rs` (and a search-crate equivalent, or fold
-   the search assertion into an inline `#[cfg(test)]` in `feedback_detection.rs`). The
-   guard cannot read `/tmp/cognee-python` in CI, so instead it asserts:
-   (a) the vendored `.txt` is non-empty and contains parity-critical markers that prove
-   it is the *Python* version (not a regression to the old Rust text), and
-   (b) the live const equals the vendored file via `include_str!`.
+8. All three consts are private, so **all drift assertions must live in inline
+   `#[cfg(test)] mod tests` blocks** inside the owning source files (not in an external
+   `tests/` file). The guard asserts: (a) the const equals the vendored file via
+   `include_str!` (so editing just the `.txt` breaks the test), and (b) Python-specific
+   markers that the old divergent Rust text lacked are present.
 
+   In `crates/cognify/src/fact_extraction/extractor.rs`, add to the existing
+   `#[cfg(test)] mod tests` block:
    ```rust
-   //! Prompt drift guard. The Rust prompts are vendored byte-for-byte from the Python
-   //! `.txt` sources. CI has no Python clone, so we assert the vendored copies retain
-   //! Python-specific markers that the old divergent Rust prompts lacked.
-   //!
-   //! Manual re-sync (run when upstream Python prompts change):
-   //!   cp /tmp/cognee-python/cognee/infrastructure/llm/prompts/<name>.txt \
-   //!      crates/<crate>/src/<...>/prompts/<name>.txt
-
-   use cognee_cognify::fact_extraction::DEFAULT_GRAPH_PROMPT; // adjust to actual re-export
-
    #[test]
-   fn graph_prompt_matches_python_source() {
-       let vendored = include_str!(
-           "../src/fact_extraction/prompts/generate_graph_prompt.txt"
-       );
+   fn graph_prompt_matches_vendored_txt() {
+       // Drift guard: const must equal the vendored .txt byte-for-byte.
+       // Manual re-sync: cp /tmp/cognee-python/cognee/infrastructure/llm/prompts/generate_graph_prompt.txt \
+       //   crates/cognify/src/fact_extraction/prompts/generate_graph_prompt.txt
+       let vendored = include_str!("prompts/generate_graph_prompt.txt");
        assert_eq!(DEFAULT_GRAPH_PROMPT, vendored, "const drifted from vendored .txt");
        // Python markers the old Rust prompt did NOT have:
        assert!(vendored.contains("Every edge should include a description"),
            "edge-description paragraph missing — not the Python prompt");
        assert!(vendored.contains(r#"label it as **"Person"**"#),
            "Title-case 'Person' missing — UPPERCASE Rust prompt regressed");
-       assert!(!vendored.contains(r#"the entity type label in uppercase"#),
+       assert!(!vendored.contains("the entity type label in uppercase"),
            "old UPPERCASE-forcing line still present");
    }
    ```
-   Add analogous tests for the summary prompt (`contains("Output two sections only")`,
-   `contains("Max 200 tokens")`) and the feedback prompt
-   (`contains("Set feedback_detected to true ONLY")`,
-   `contains("response_to_user:")`). If a const is private, place its assertion inside an
-   inline `#[cfg(test)] mod tests` in the owning source file instead of an external test.
+
+   In `crates/cognify/src/summarization/extractor.rs`, add to the existing
+   `#[cfg(test)] mod tests` block:
+   ```rust
+   #[test]
+   fn summary_prompt_matches_vendored_txt() {
+       let vendored = include_str!("prompts/summarize_content.txt");
+       assert_eq!(DEFAULT_SUMMARY_PROMPT, vendored, "const drifted from vendored .txt");
+       assert!(vendored.contains("Output two sections only"),
+           "Python two-section structure marker missing");
+       assert!(vendored.contains("Max 200 tokens"),
+           "token-limit marker missing");
+   }
+   ```
+
+   In `crates/search/src/utils/feedback_detection.rs`, add to the existing
+   `#[cfg(test)] mod tests` block:
+   ```rust
+   #[test]
+   fn feedback_prompt_matches_vendored_txt() {
+       let vendored = include_str!("prompts/feedback_detection_system.txt");
+       assert_eq!(FEEDBACK_DETECTION_SYSTEM_PROMPT, vendored,
+           "const drifted from vendored .txt");
+       assert!(vendored.contains("Set feedback_detected to true ONLY"),
+           "Python specificity marker missing");
+       assert!(vendored.contains("response_to_user:"),
+           "response_to_user field marker missing");
+   }
+   ```
+
+   Note: there is no need for an external `crates/cognify/tests/prompt_parity.rs`
+   file — the inline `#[cfg(test)]` approach is both simpler and works with private consts.
 
 ## Verification
 
@@ -357,9 +379,10 @@ Respond with the exact JSON structure: feedback_detected (boolean), feedback_tex
 cargo check -p cognee-cognify -p cognee-search --all-targets
 
 # Drift-guard + the fixed summary test pass.
-cargo test -p cognee-cognify prompt_parity
+cargo test -p cognee-cognify graph_prompt_matches_vendored_txt
+cargo test -p cognee-cognify summary_prompt_matches_vendored_txt
 cargo test -p cognee-cognify test_default_prompt_not_empty
-cargo test -p cognee-search feedback
+cargo test -p cognee-search feedback_prompt_matches_vendored_txt
 
 # Byte-parity sanity vs the live Python clone (developer machine; not a CI step).
 for f in \
@@ -385,7 +408,7 @@ Expected: all three `diff`s report no differences; drift-guard tests pass;
 - [ ] Graph prompt no longer forces UPPERCASE and includes the edge-description paragraph + good/bad examples.
 - [ ] Summary prompt is the structured two-section Python version; stale doc comment fixed; `test_default_prompt_not_empty` updated and passing.
 - [ ] Feedback prompt is the full 31-line Python version.
-- [ ] Drift-guard tests assert const == vendored `.txt` and that Python-specific markers are present (and old Rust markers absent).
+- [ ] Drift-guard tests (inline `#[cfg(test)]`) assert const == vendored `.txt` and that Python-specific markers are present (and old Rust markers absent).
 - [ ] `scripts/check_all.sh` passes.
 
 ## Gotchas / do-not
@@ -393,6 +416,12 @@ Expected: all three `diff`s report no differences; drift-guard tests pass;
 - **Byte-for-byte matters.** Copy with `cp` from the clone; do not retype. Preserve
   trailing newlines and the exact em-dashes (`—`) and curly apostrophes in the feedback
   prompt — they are UTF-8 in the Python source. `include_str!` preserves bytes exactly.
+- **`infer_schema_system.txt` also diverges (out of scope here).** The Rust copy in
+  `crates/llm/src/prompts/infer_schema_system.txt` is missing 4 lines compared to the
+  Python source (the sample-text note, the `description` field line, a more detailed
+  rule 6, and rule 9 about primitive properties). This is a separate drift that does NOT
+  affect the add→cognify→search core pipeline — it only affects schema inference — and
+  is explicitly out of scope for this task. It should be tracked separately.
 - **Node-type casing change is a behavioral/parity change, and intended.** Switching
   from forced UPPERCASE to Python Title-case will change node `type` values emitted by
   the LLM (e.g. `"PERSON"` → `"Person"`). This is the parity goal, but it changes graph
@@ -406,9 +435,11 @@ Expected: all three `diff`s report no differences; drift-guard tests pass;
 - **Do not read `/tmp/cognee-python` from a test/build.** It is not present in CI. The
   drift guard must rely on the vendored `.txt` + markers, plus the documented manual
   re-sync command.
-- **Check the const visibility.** `DEFAULT_GRAPH_PROMPT` is `pub`; `DEFAULT_SUMMARY_PROMPT`
-  and `FEEDBACK_DETECTION_SYSTEM_PROMPT` are private. Keep each const's existing
-  visibility; for private consts, put the drift assertion in an inline test module.
+- **Check the const visibility.** All three consts are **private** (`const`, no `pub`):
+  `DEFAULT_GRAPH_PROMPT` (exposed to callers only via the `pub fn default_graph_prompt()`
+  method), `DEFAULT_SUMMARY_PROMPT`, and `FEEDBACK_DETECTION_SYSTEM_PROMPT`. Keep them
+  private. Drift assertions go in inline `#[cfg(test)] mod tests` blocks in each owning
+  file — an external `tests/` file cannot access private consts.
 - **`include_str!` path is source-relative.** From `fact_extraction/extractor.rs`, the
   path is `prompts/generate_graph_prompt.txt` (not crate-root-relative).
 
@@ -421,7 +452,6 @@ git checkout main -- \
   crates/search/src/utils/feedback_detection.rs
 rm -rf crates/cognify/src/fact_extraction/prompts \
        crates/cognify/src/summarization/prompts \
-       crates/search/src/utils/prompts \
-       crates/cognify/tests/prompt_parity.rs
+       crates/search/src/utils/prompts
 ```
 Reverts to the divergent inline prompts. No data/schema impact.
