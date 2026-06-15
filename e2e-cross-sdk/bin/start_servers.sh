@@ -43,9 +43,53 @@ export SYSTEM_ROOT_DIRECTORY="${SYSTEM_ROOT_DIRECTORY:-$PY_WORKSPACE/.cognee_sys
 export CACHE_ROOT_DIRECTORY="${CACHE_ROOT_DIRECTORY:-$PY_WORKSPACE/.cognee_cache}"
 mkdir -p "$DATA_ROOT_DIRECTORY" "$SYSTEM_ROOT_DIRECTORY/databases" "$CACHE_ROOT_DIRECTORY"
 
-# ── Run Python DB migrations once before booting uvicorn ────────────────────
-echo "[start_servers] Running Python DB migrations..."
-(cd "$PY_WORKSPACE" && python -m cognee.run_migrations 2>&1 || true)
+# ── Bootstrap Python DB schema before booting uvicorn (Option B1) ────────────
+#
+# Background: the initial alembic migration (8057ae7329c2_initial_migration.py)
+# is a no-op `pass`.  On a virgin SQLite DB, alembic's first run in uvicorn's
+# lifespan (cognee/api/client.py:86) finds the DB empty, tries subsequent
+# migrations that assume base tables already exist (e.g.
+# ab7e313804ae_permission_system_rework calls insp.get_columns("acls", ...)),
+# and raises NoSuchTableError → MigrationError.  The lifespan's except block
+# then calls create_database() and retries run_startup_migrations() a second
+# time; that second alembic run finds tables but no alembic_version entry and
+# fails again with "table already exists" → uvicorn crashes → /health never
+# responds → wait_for_health.sh times out.
+#
+# Fix (B1): pre-populate the schema + stamp alembic to head BEFORE uvicorn
+# starts so the lifespan migration is a no-op delta.
+#   1. create_database() — SqlAlchemyAdapter.create_database() at line 548,
+#      calls Base.metadata.create_all (line 572) which creates every ORM table.
+#   2. alembic stamp head — records alembic_version=<head> without running any
+#      migration SQL; on the next alembic upgrade head (inside uvicorn's
+#      lifespan), alembic sees no pending revisions and exits cleanly.
+#
+# The `python -m cognee.run_migrations` call was previously a no-op (the
+# module defines only async functions with no __main__ block) and is replaced
+# by this two-step initialisation.
+
+echo "[start_servers] Bootstrapping Python DB schema (create_database)..."
+python - <<'PY' || { echo "[start_servers] ERROR: create_database() failed — aborting startup" >&2; exit 1; }
+import asyncio
+from cognee.infrastructure.databases.relational import get_relational_engine
+
+async def main():
+    engine = get_relational_engine()
+    await engine.create_database()
+    print("[start_servers] create_database() succeeded", flush=True)
+
+asyncio.run(main())
+PY
+
+echo "[start_servers] Stamping alembic to head..."
+ALEMBIC_INI=/opt/python-venv/lib/python3.12/site-packages/cognee/alembic.ini
+if [ ! -f "$ALEMBIC_INI" ]; then
+    echo "[start_servers] ERROR: alembic.ini not found at $ALEMBIC_INI — aborting startup" >&2
+    exit 1
+fi
+(cd "$PY_WORKSPACE" && python -m alembic -c "$ALEMBIC_INI" stamp head 2>&1) \
+    || { echo "[start_servers] ERROR: alembic stamp head failed — aborting startup" >&2; exit 1; }
+echo "[start_servers] alembic stamp head succeeded."
 
 # ── Start Python uvicorn on :8000 ────────────────────────────────────────────
 echo "[start_servers] Starting Python uvicorn on :8000..."

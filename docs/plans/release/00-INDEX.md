@@ -82,7 +82,7 @@ Status: ⬜ todo · 🟡 in-progress · ✅ done · ⏸️ blocked.
 | 09 | [Fix destructive/silent lifecycle ops](09-lifecycle-destructive-ops.md) | 2 | P0 | A | yes | 0.5d | — | ✅ |
 | 10 | [Wire permission revoke endpoints](10-permission-revoke-endpoints.md) | 2 | P0 | A | yes | 0.5–1d¹ | — | ✅ |
 | 11 | [Collapse DB migrations to baseline](11-collapse-db-migrations.md) | 3 | P1 | A | no | 0.5d | — | ✅ |
-| 12 | [Re-enable cross-SDK parity CI](12-cross-sdk-parity-ci.md) | 3 | P1 | A | strongly rec. | 1–2d | — | ⬜ |
+| 12 | [Re-enable cross-SDK parity CI](12-cross-sdk-parity-ci.md) | 3 | P1 | A | strongly rec. | 1–2d | — | ✅ |
 | 13 | [Sync LLM prompts to Python + drift guard](13-prompt-parity-sync.md) | 3 | P1 | A | no | 0.5d | — | ⬜ |
 | 14 | [Chunking parity (tiktoken default + chunk size)](14-chunking-parity.md) | 3 | P1 | A | no | 0.5d | — | ⬜ |
 | 15 | [Vector collection parity](15-vector-collection-parity.md) | 3 | P1 | A | no | 0.5d | — | ⬜ |
@@ -160,7 +160,7 @@ A 0.1.0 Track-A release may ship once **all P0s and the strongly-recommended par
 - [ ] 01 decisions made
 - [ ] 02 licensing · 03 panic safety
 - [ ] 08 triplet penalty · 09 lifecycle ops · 10 permission revoke
-- [ ] 12 cross-SDK parity CI green (strongly recommended gate)
+- [ ] 12 cross-SDK parity CI green (strongly recommended gate) — suite definitions in [`e2e-cross-sdk/README.md`](../../../e2e-cross-sdk/README.md#ci-gate)
 - [ ] 22 metadata/MSRV/CHANGELOG
 - [ ] `scripts/check_all.sh` passes; PyPI + npm dry-run publishes succeed
 

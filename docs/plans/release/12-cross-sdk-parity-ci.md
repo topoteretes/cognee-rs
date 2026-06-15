@@ -30,9 +30,10 @@ The cross-SDK harness boots **both** servers side by side and runs pytest agains
 - Python uvicorn on `:8000`, Rust `cognee-http-server` on `:8001`
   (`e2e-cross-sdk/bin/start_servers.sh`).
 - Each in an isolated tmpfs workspace (`/py`, `/rs`) — a **true virgin DB every run**.
-- `start_servers.sh` runs `python -m cognee.run_migrations` (i.e. `alembic upgrade head`)
-  **before** booting uvicorn, then waits on both `/health` endpoints
-  (`harness/wait_for_health.sh`, 30 s timeout).
+- `start_servers.sh` calls `python -m cognee.run_migrations` **before** booting uvicorn,
+  then waits on both `/health` endpoints (`harness/wait_for_health.sh`, 30 s timeout).
+  Note: that module call is effectively a no-op (no `__main__` block). The real alembic
+  run happens inside uvicorn's lifespan startup event (`cognee/api/client.py:86`).
 
 The Python image is built from the **sibling `cognee/` checkout** copied into the Docker
 build context (`Dockerfile` stage 2, `COPY cognee/cognee /build/cognee`), pinned in the
@@ -40,25 +41,34 @@ workflow to a specific SHA.
 
 ### Root cause (already diagnosed in the workflow header — re-verify)
 
-`run_migrations` shells out to `alembic upgrade head` (confirmed in
-`/tmp/cognee-python/cognee/run_migrations.py:42`). The initial revision,
-`cognee/alembic/versions/8057ae7329c2_initial_migration.py`, has a **no-op** `upgrade()`:
+The actual failure path (verified 2026-06-15):
 
-```python
-# /tmp/cognee-python/cognee/alembic/versions/8057ae7329c2_initial_migration.py:20-22
-def upgrade() -> None:
-    pass
-```
-
-Later revisions (e.g. `ab7e313804ae_permission_system_rework`) assume base tables like
-`acls` already exist. On a virgin SQLite DB nothing created them, so `upgrade head`
-errors → uvicorn never starts → `wait_for_health.sh` times out → Phase-1 fails.
+1. `start_servers.sh` calls `python -m cognee.run_migrations` — this is a **no-op**; the
+   module only defines async functions and has no `__main__` block.
+2. uvicorn starts and its **lifespan** (`cognee/api/client.py:86`) calls
+   `run_startup_migrations()`, which shells out to `alembic upgrade head`
+   (`/tmp/cognee-python/cognee/run_migrations.py:43`).
+3. The initial revision `8057ae7329c2_initial_migration.py` has a **no-op** `upgrade()`:
+   ```python
+   # /tmp/cognee-python/cognee/alembic/versions/8057ae7329c2_initial_migration.py:20-22
+   def upgrade() -> None:
+       pass
+   ```
+   On a virgin SQLite DB, no base tables are created. The next migration in the chain,
+   `ab7e313804ae_permission_system_rework`, calls `insp.get_columns("acls", ...)` which
+   throws `NoSuchTableError` → alembic exits nonzero → `MigrationError` is raised.
+4. The lifespan's `except` block calls `db_engine.create_database()` (creates all tables
+   from ORM models) then calls `run_startup_migrations()` a **second** time.
+5. The second alembic run fails because the DB now has tables but no `alembic_version`
+   entry → alembic tries to apply all migrations from scratch → "table already exists"
+   → another `MigrationError` propagates out of the lifespan → uvicorn crashes →
+   `wait_for_health.sh` times out → Phase-1 fails.
 
 The workflow header notes the upstream fix lives on `origin/fix/db-migrations`
 (commit `8ab385033`), which replaces the no-op with a comprehensive
-`deadbeef0001_new_initial_schema.py` (~30 `create_table` calls including `acls`). The
-plan is to bump the pinned ref once that lands on `dev` — **or** patch the harness so it
-doesn't depend on an upstream merge.
+`deadbeef0001_new_initial_schema.py` (~30 `create_table` calls). As of 2026-06-15
+that branch has **not** merged to `dev`/`main` — Option A cannot proceed yet; use
+Option B below, or re-check when upstream merges.
 
 > Note: this Python alembic issue is **independent** of the Rust SeaORM migration
 > squash (task 11). Both touch "migrations on a virgin DB" but in different SDKs.
@@ -72,8 +82,9 @@ git checkout -b task/12-cross-sdk-parity-ci
 
 Read first:
 - `.github/workflows/http-parity.yml` (whole file — the header documents the failure).
-- `.github/workflows/ci.yml` lines ~159-170 and ~366-372 — the existing
-  `OPENAI_TOKEN: ${{ secrets.OPENAI_KEY }}` wiring pattern to copy.
+- `.github/workflows/ci.yml` lines ~170 and ~377 — the existing
+  `OPENAI_TOKEN: ${{ secrets.OPENAI_KEY }}` wiring pattern to copy (the `test:` and
+  `capi-check:` job `env:` blocks).
 - `e2e-cross-sdk/bin/start_servers.sh` — migration + dual-server boot.
 - `e2e-cross-sdk/harness/wait_for_health.sh` — health-poll/timeout.
 - `e2e-cross-sdk/Dockerfile` — how Python source is copied (stage 2,
@@ -96,11 +107,11 @@ Read first:
    ```
    Inside the container, run the migration step by hand and read the error:
    ```bash
-   cd /py && python -m cognee.run_migrations
+   # The start_servers.sh module call is a no-op; trigger the real alembic path directly:
    cd /py && python -m alembic -c /opt/python-venv/lib/python3.12/site-packages/cognee/alembic.ini upgrade head
    ```
-   Expect a failure referencing a missing table (e.g. `acls`) from a post-initial
-   revision. Capture the exact revision id and error.
+   Expect a `NoSuchTableError` on the `acls` table thrown by
+   `ab7e313804ae_permission_system_rework`. Capture the exact revision id and error.
 
 2. **Confirm the no-op initial migration** in the pinned ref:
    ```bash
@@ -121,10 +132,9 @@ Read first:
 
 ## Fix options for the alembic failure
 
-> **Recommendation:** try **Option A** (bump the pinned ref) first — it's the least
-> harness-invasive. Fall back to **Option B** (in-harness migration shim) if upstream
-> still ships the no-op initial migration on a stable branch, so our CI does not block on
-> an upstream merge.
+> **Status as of 2026-06-15:** `fix/db-migrations` has **not** merged to `dev`/`main`.
+> Option A is blocked until upstream merges. **Start with Option B** now; switch to A
+> once upstream ships. Option B is the least harness-invasive path available today.
 
 ### Option A — bump the pinned Python ref to one with a real initial migration
 
@@ -145,26 +155,31 @@ Python's real runtime schema):
 - **B1 (preferred): let SQLAlchemy create the base tables, then `alembic stamp head`.**
   Python's ORM models define the full schema; the no-op initial migration exists *because*
   upstream historically created tables via `Base.metadata.create_all` and used alembic
-  only for deltas. In `start_servers.sh`, before booting uvicorn, create the schema from
-  the models and mark alembic as current so later deltas are skipped on a DB that already
-  matches them. Sketch:
+  only for deltas. The alembic failure happens inside uvicorn's lifespan: its try/except
+  calls `create_database()` but then calls `run_startup_migrations()` a second time without
+  stamping, so the second alembic run fails on "table already exists". The fix: pre-stamp
+  the DB in `start_servers.sh` **before** uvicorn starts, so the lifespan's first alembic
+  call finds `alembic_version` at head and applies nothing. Sketch:
   ```bash
-  # In start_servers.sh, replacing the bare `python -m cognee.run_migrations`:
+  # In start_servers.sh, ADD BEFORE the uvicorn start block:
   (cd "$PY_WORKSPACE" && python - <<'PY'
   import asyncio
   from cognee.infrastructure.databases.relational import get_relational_engine
   async def main():
       engine = get_relational_engine()
-      await engine.create_database()   # Base.metadata.create_all equivalent — verify exact API
+      await engine.create_database()   # SqlAlchemyAdapter.create_database() — confirmed at line 548
   asyncio.run(main())
   PY
   ) || true
-  # Then stamp alembic to head so run_migrations is a no-op delta.
-  (cd "$PY_WORKSPACE" && python -m alembic -c <alembic.ini> stamp head 2>&1 || true)
+  # Stamp alembic to head so uvicorn's lifespan migration is a no-op delta.
+  ALEMBIC_INI=/opt/python-venv/lib/python3.12/site-packages/cognee/alembic.ini
+  (cd "$PY_WORKSPACE" && python -m alembic -c "$ALEMBIC_INI" stamp head 2>&1 || true)
   ```
-  Verify the exact relational-engine "create all tables" entry point in the pinned Python
-  version before relying on `create_database()` (re-grep:
-  `grep -rn "def create_database\|create_all\|metadata.create_all" /tmp/cognee-python/cognee/infrastructure/databases/relational/`).
+  `create_database()` is verified at `SqlAlchemyAdapter.py:548`. The alembic.ini path
+  above is correct for the harness container (stage 3 installs cognee into
+  `/opt/python-venv/lib/python3.12/site-packages/`). The stamp ensures uvicorn's
+  lifespan `run_startup_migrations()` finds `alembic_version` at head and applies
+  nothing — uvicorn starts cleanly, health check passes.
 
 - **B2 (last resort): patch the no-op migration at image-build time.** In the Dockerfile
   Python stage, after copying the source, overwrite `8057ae7329c2_initial_migration.py`'s
@@ -172,9 +187,9 @@ Python's real runtime schema):
   `deadbeef0001_new_initial_schema.py` if obtainable). This couples the harness to a
   specific revision graph and is brittle — prefer B1.
 
-Whichever fixes it, the success criterion is identical: inside the container,
-`python -m cognee.run_migrations` exits 0 and `wait_for_health.sh http://127.0.0.1:8000/health`
-returns healthy.
+Whichever fixes it, the success criterion is identical: `wait_for_health.sh http://127.0.0.1:8000/health`
+returns healthy (the `python -m cognee.run_migrations` call in start_servers.sh is a
+no-op and can be removed — the real gating step is the uvicorn health check).
 
 ## Re-enable the workflow
 
@@ -261,17 +276,19 @@ python -c "import yaml,sys; yaml.safe_load(open('.github/workflows/http-parity.y
 ```
 
 Expected outcomes:
-- Inside the container, `python -m cognee.run_migrations` exits 0; `wait_for_health.sh`
-  reports both `:8000` and `:8001` healthy.
+- Inside the container, `wait_for_health.sh` reports both `:8000` and `:8001` healthy
+  (the `python -m cognee.run_migrations` call is a no-op; the alembic path is exercised
+  through uvicorn's lifespan).
 - Phase-1 + telemetry parity pass with no OpenAI secret.
 - The workflow triggers on push/PR (verify on the PR for this task — the `HTTP Parity`
   check should appear and Phase-1 should run/pass).
 
 ## Acceptance criteria
 
-- [ ] Root cause re-confirmed (no-op `8057ae7329c2` initial migration or its successor)
-      and the chosen fix (Option A bump-ref **or** Option B harness shim) makes
-      `python -m cognee.run_migrations` exit 0 on a virgin SQLite DB.
+- [ ] Root cause re-confirmed (no-op `8057ae7329c2` initial migration; alembic fails in
+      uvicorn's lifespan on a virgin SQLite DB) and the chosen fix (Option A bump-ref
+      **or** Option B harness shim) makes `wait_for_health.sh http://127.0.0.1:8000/health`
+      return healthy.
 - [ ] `http-parity.yml` triggers on `push` and `pull_request` (plus retained
       `workflow_dispatch`); the stale `TODO(http-parity)` header block is removed/updated.
 - [ ] Phase-1 deterministic checks + telemetry parity run with **no** OpenAI secret and
