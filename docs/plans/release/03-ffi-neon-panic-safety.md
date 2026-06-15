@@ -5,6 +5,16 @@
 
 [← Back to index](00-INDEX.md)
 
+> **Status note (verified 2026-06-14, re-verified against live code):** The C-API
+> work (B2.1–B2.4) is **already implemented**. `exec_status.rs` uses
+> `crate::util::cstring_lossy` throughout; `util.rs`, `error.rs`, and `watcher.rs`
+> have no bare `CString::new(...).unwrap()` on caller data; the NUL-byte inline
+> regression tests exist and pass. The Neon Buffer fix (B2.2) was resolved with an
+> `.expect(...)` that documents the OOM-is-unrecoverable rationale rather than with
+> the `JsResult` signature change described below. Only the Neon part may warrant
+> re-evaluation (see Step 4 below). **Implementer: run the Verification commands
+> first — if they all pass, mark this task ✅ without any code changes.**
+
 ## Goal
 
 No `cg_*` C-API or Neon JS function panics on **caller-supplied data**. Specifically:
@@ -23,17 +33,19 @@ through these callbacks (`data_id`, `pipeline_name`, `error`, `task_name`, `node
 **not controlled by us** — it originates from documents, user content, and LLM/tool
 output — so an interior NUL is reachable in normal operation, not just adversarially.
 
-The **correct fallback pattern already exists** in the codebase at
-[capi/cognee-capi/src/util.rs:22-30](../../../capi/cognee-capi/src/util.rs) (`str_to_c_owned`)
-and at [capi/cognee-capi/src/watcher.rs:97-100](../../../capi/cognee-capi/src/watcher.rs)
-(`to_c`): on a NUL byte they substitute an empty/placeholder string instead of panicking.
-We reuse that approach.
+The **correct fallback pattern** now lives in
+[capi/cognee-capi/src/util.rs](../../../capi/cognee-capi/src/util.rs) as
+`cstring_lossy(s: &str) -> CString` (lines 11–19): on a NUL byte it strips the
+interior NULs (via `chars().filter()`) and rebuilds the CString. All four VtableExecStatus
+methods and the VtableWatcher `to_c` helper delegate to this function.
 
-> **Path correction:** the release plan cites `capi/src/util.rs` and
-> `capi/cognee-capi/src/exec_status.rs:99-153`. The real `util.rs` is at
-> `capi/cognee-capi/src/util.rs` (there is no `capi/src/`). Line numbers below were
-> **re-grepped on 2026-06-14** and are current; re-confirm with the grep commands in the
-> Prerequisites before editing.
+> **Path correction:** the original audit cited `capi/src/util.rs` and a
+> `str_to_c_owned` pattern at lines 22–30. The real path is
+> `capi/cognee-capi/src/util.rs` (there is no `capi/src/`). `str_to_c_owned`
+> was refactored to simply call `cstring_lossy(s).into_raw()` (line 40).
+> Additionally, `capi/cognee-capi/src/sdk.rs` wraps all async SDK operations
+> in `std::panic::AssertUnwindSafe(fut).catch_unwind()` (around line 714)
+> as an additional defensive layer.
 
 This is pure robustness hardening: it changes no schema, no IDs, no parity-relevant
 behavior. The only observable change is "panic → empty string / JS error".
@@ -43,47 +55,54 @@ behavior. The only observable change is "panic → empty string / JS error".
 ```bash
 git checkout -b task/03-ffi-neon-panic-safety
 
-# Re-confirm the exact current locations before editing:
-grep -n 'CString::new' capi/cognee-capi/src/exec_status.rs   # expect lines 99,100,115,116,131,132,133,149,150,151,153
-grep -n 'CString::new("")' capi/cognee-capi/src/util.rs capi/cognee-capi/src/error.rs capi/cognee-capi/src/watcher.rs
-grep -n 'cx.buffer' js/cognee-neon/src/task.rs               # expect line 355
+# Run verification first — if all checks pass, the task is already done:
+grep -rn 'CString::new.*\.unwrap()' capi/cognee-capi/src/   # expect: no output (only doc comment on line 203)
+grep -n 'cx.buffer.*unwrap' js/cognee-neon/src/task.rs       # expect: no output (uses .expect())
+grep -n 'interior_nul\|stamp_provenance_nul' capi/cognee-capi/src/exec_status.rs  # expect: test names present
 ```
 
-Files (all verified to exist):
-- [capi/cognee-capi/src/exec_status.rs](../../../capi/cognee-capi/src/exec_status.rs) — the cluster (B2.1).
-- [capi/cognee-capi/src/util.rs](../../../capi/cognee-capi/src/util.rs) — has the reference pattern **and** one literal `CString::new("").unwrap()` (line 27) to fix (B2.3).
-- [capi/cognee-capi/src/error.rs](../../../capi/cognee-capi/src/error.rs) — literal `CString::new("...").unwrap()` (line 90) (B2.3).
-- [capi/cognee-capi/src/watcher.rs](../../../capi/cognee-capi/src/watcher.rs) — literal `CString::new("").unwrap()` (line 99) (B2.3).
-- [js/cognee-neon/src/task.rs](../../../js/cognee-neon/src/task.rs) — `cx.buffer(v.len()).unwrap()` (line 355) (B2.2).
+Files (all verified to exist as of 2026-06-14):
+- [capi/cognee-capi/src/exec_status.rs](../../../capi/cognee-capi/src/exec_status.rs) — **already done**: all 11 call sites use `crate::util::cstring_lossy`; two NUL regression tests inline (B2.1, B2.4).
+- [capi/cognee-capi/src/util.rs](../../../capi/cognee-capi/src/util.rs) — **already done**: defines `cstring_lossy` (lines 11–19); `str_to_c_owned` delegates to it (line 40). No bare `unwrap` on caller data.
+- [capi/cognee-capi/src/error.rs](../../../capi/cognee-capi/src/error.rs) — **already done**: `set_last_error` calls `crate::util::cstring_lossy` (line 91). No bare unwrap on caller strings.
+- [capi/cognee-capi/src/watcher.rs](../../../capi/cognee-capi/src/watcher.rs) — **already done**: `to_c` delegates to `crate::util::cstring_lossy` (line 101). No bare unwrap.
+- [capi/cognee-capi/src/sdk.rs](../../../capi/cognee-capi/src/sdk.rs) — **additional defense**: all async SDK ops wrapped in `catch_unwind` (~line 714).
+- [js/cognee-neon/src/task.rs](../../../js/cognee-neon/src/task.rs) — **partially done**: `cx.buffer(v.len())` uses `.expect(...)` with justification (~line 355–357) rather than the `JsResult` propagation described in Step 4 below (B2.2).
 
 ## Files to change
 
-| Path | Change |
-|---|---|
-| `capi/cognee-capi/src/exec_status.rs` | replace 11 `CString::new(caller_str).unwrap()` with a sanitizing helper; add `#[cfg(test)]` NUL regression test |
-| `capi/cognee-capi/src/util.rs` | `CString::new("").unwrap()` → `.expect(...)` (literal, justified) |
-| `capi/cognee-capi/src/error.rs` | `CString::new("(error contained null byte)").unwrap()` → `.expect(...)` |
-| `capi/cognee-capi/src/watcher.rs` | inner `CString::new("").unwrap()` → `.expect(...)` |
-| `js/cognee-neon/src/task.rs` | `cx.buffer(..).unwrap()` → propagate as a JS error (change `to_js` signature to return `JsResult`) |
+> **All C-API files are already done.** Only the Neon file may require attention
+> depending on the decision in Step 4.
+
+| Path | Change | Status |
+|---|---|---|
+| `capi/cognee-capi/src/exec_status.rs` | replace 11 `CString::new(caller_str).unwrap()` with a sanitizing helper; add `#[cfg(test)]` NUL regression test | ✅ done |
+| `capi/cognee-capi/src/util.rs` | `CString::new("").unwrap()` → `cstring_lossy` / `.expect(...)` (literal, justified) | ✅ done |
+| `capi/cognee-capi/src/error.rs` | use `cstring_lossy` in `set_last_error` | ✅ done |
+| `capi/cognee-capi/src/watcher.rs` | `to_c` delegates to `cstring_lossy` | ✅ done |
+| `js/cognee-neon/src/task.rs` | `cx.buffer(..).unwrap()` → `.expect(...)` with OOM justification (done); optionally upgrade to `JsResult` propagation (see Step 4) | ⚠️ done via expect |
 
 ## Implementation steps
 
+> **If running verification (Acceptance criteria) shows all checks pass, skip
+> directly to Step 6 (Verification) and mark the task done. Steps 1–5 are
+> retained as documentation of what was implemented, and for reference if a
+> regression is found.**
+
 ### Step 1 — Add a sanitizing CString helper for caller data (exec_status.rs)
 
-The 11 unwraps in `exec_status.rs` all wrap **caller-supplied** `&str` (`data_id`,
-`pipeline_name`, `error`, `task_name`, `node_set`). These must never panic. Add a private
-helper that mirrors the existing `watcher.rs::to_c` fallback. At the top of
-[capi/cognee-capi/src/exec_status.rs](../../../capi/cognee-capi/src/exec_status.rs),
-after the `use` block (after line 6), add:
+**Already implemented.** The 11 unwraps in `exec_status.rs` were replaced by
+`crate::util::cstring_lossy(s)` (defined in `util.rs` lines 11–19). Rather than a
+file-local `safe_cstring` helper (as originally planned), the fix was lifted into the
+shared `util.rs` module so all C-API files can reuse it.
+
+The actual implementation in `util.rs` uses `chars().filter(|&c| c != '\0')` to strip
+NUL bytes (instead of replacing with a placeholder string). Either approach is valid;
+the implemented approach is slightly more faithful to the original string content.
+
+For reference, the original plan proposed a file-local helper:
 
 ```rust
-/// Build a `CString` from caller-supplied data without panicking.
-///
-/// `CString::new` fails only on an interior NUL byte. Callbacks here receive
-/// data derived from documents / LLM output, where an interior NUL is reachable
-/// in normal operation; panicking would unwind across the `extern "C"` boundary
-/// (UB / abort). On a NUL byte we replace the value with a placeholder so the
-/// callback still fires with a valid (if degraded) string.
 fn safe_cstring(s: &str) -> std::ffi::CString {
     std::ffi::CString::new(s).unwrap_or_else(|_| {
         std::ffi::CString::new("(string contained null byte)")
@@ -92,118 +111,80 @@ fn safe_cstring(s: &str) -> std::ffi::CString {
 }
 ```
 
+The actual `cstring_lossy` in `util.rs`:
+```rust
+pub(crate) fn cstring_lossy(s: &str) -> CString {
+    match CString::new(s) {
+        Ok(c) => c,
+        Err(_) => {
+            let sanitized: String = s.chars().filter(|&c| c != '\0').collect();
+            CString::new(sanitized)
+                .expect("interior NULs stripped, so this cannot fail")
+        }
+    }
+}
+```
+
 ### Step 2 — Replace the 11 unwraps in exec_status.rs
 
-Swap each `std::ffi::CString::new(X).unwrap()` for `safe_cstring(X)`. The exact current
-sites (verified):
+**Already implemented.** The exact current state of `exec_status.rs` (lines 99–153):
 
 **`is_completed`** (lines 99–100):
 ```rust
-            let did = std::ffi::CString::new(data_id).unwrap();
-            let pn = std::ffi::CString::new(pipeline_name).unwrap();
-```
-→
-```rust
-            let did = safe_cstring(data_id);
-            let pn = safe_cstring(pipeline_name);
+            let did = crate::util::cstring_lossy(data_id);
+            let pn = crate::util::cstring_lossy(pipeline_name);
 ```
 
 **`mark_completed`** (lines 115–116):
 ```rust
-            let did = std::ffi::CString::new(data_id).unwrap();
-            let pn = std::ffi::CString::new(pipeline_name).unwrap();
-```
-→
-```rust
-            let did = safe_cstring(data_id);
-            let pn = safe_cstring(pipeline_name);
+            let did = crate::util::cstring_lossy(data_id);
+            let pn = crate::util::cstring_lossy(pipeline_name);
 ```
 
 **`mark_failed`** (lines 131–133):
 ```rust
-            let did = std::ffi::CString::new(data_id).unwrap();
-            let pn = std::ffi::CString::new(pipeline_name).unwrap();
-            let err = std::ffi::CString::new(error).unwrap();
-```
-→
-```rust
-            let did = safe_cstring(data_id);
-            let pn = safe_cstring(pipeline_name);
-            let err = safe_cstring(error);
+            let did = crate::util::cstring_lossy(data_id);
+            let pn = crate::util::cstring_lossy(pipeline_name);
+            let err = crate::util::cstring_lossy(error);
 ```
 
 **`stamp_provenance`** (lines 149–153):
 ```rust
-            let did = std::ffi::CString::new(data_id).unwrap();
-            let pn = std::ffi::CString::new(pipeline_name).unwrap();
-            let tn = std::ffi::CString::new(task_name).unwrap();
+            let did = crate::util::cstring_lossy(data_id);
+            let pn = crate::util::cstring_lossy(pipeline_name);
+            let tn = crate::util::cstring_lossy(task_name);
             let (uid_ptr, _uid_bytes) = uuid_to_bytes_ptr(user_id);
-            let ns_c = node_set.map(|s| std::ffi::CString::new(s).unwrap());
-```
-→
-```rust
-            let did = safe_cstring(data_id);
-            let pn = safe_cstring(pipeline_name);
-            let tn = safe_cstring(task_name);
-            let (uid_ptr, _uid_bytes) = uuid_to_bytes_ptr(user_id);
-            let ns_c = node_set.map(safe_cstring);
+            let ns_c = node_set.map(crate::util::cstring_lossy);
 ```
 
-After editing, confirm none remain:
+Verify:
 ```bash
-grep -n 'CString::new.*unwrap' capi/cognee-capi/src/exec_status.rs   # expect: no output
+grep -n 'CString::new.*unwrap' capi/cognee-capi/src/exec_status.rs   # expect: no output (line 203 is a doc comment, not code)
 ```
 
 ### Step 3 — Fix the three literal `CString::new("...").unwrap()` (convention compliance)
 
-These wrap **string literals** with no interior NUL, so they are functionally safe — but
-the project rule forbids bare `unwrap()` in non-test code; convert to `expect` with a
-justification (per CLAUDE.md "Coding Conventions").
+**Already implemented.** None of these files contain bare `CString::new(...).unwrap()` on
+literal strings any more:
 
-**`capi/cognee-capi/src/util.rs:27`** — inside `str_to_c_owned`:
-```rust
-            CString::new("").unwrap().into_raw()
-```
-→
-```rust
-            CString::new("").expect("empty literal has no interior NUL").into_raw()
-```
+- **`capi/cognee-capi/src/util.rs`**: `str_to_c_owned` now calls `cstring_lossy(s).into_raw()` (line 40); no literal unwrap.
+- **`capi/cognee-capi/src/error.rs`**: `set_last_error` calls `crate::util::cstring_lossy(&s)` (line 91); no literal unwrap.
+- **`capi/cognee-capi/src/watcher.rs`**: `to_c` calls `crate::util::cstring_lossy(s)` (line 101); no literal unwrap.
 
-**`capi/cognee-capi/src/error.rs:90`** — inside `set_last_error`:
-```rust
-        CString::new(s).unwrap_or_else(|_| CString::new("(error contained null byte)").unwrap());
+Verify:
+```bash
+grep -rn 'CString::new.*\.unwrap()' capi/cognee-capi/src/   # expect: no output
 ```
-→
-```rust
-        CString::new(s).unwrap_or_else(|_| {
-            CString::new("(error contained null byte)")
-                .expect("placeholder literal has no interior NUL")
-        });
-```
-
-**`capi/cognee-capi/src/watcher.rs:99`** — inside `to_c`:
-```rust
-    std::ffi::CString::new(s).unwrap_or_else(|_| std::ffi::CString::new("").unwrap())
-```
-→
-```rust
-    std::ffi::CString::new(s)
-        .unwrap_or_else(|_| std::ffi::CString::new("").expect("empty literal has no interior NUL"))
-```
-
-> The **outer** `CString::new(s)` in `watcher.rs:99` is already a safe
-> `unwrap_or_else` fallback for caller data — leave that fallback in place; only the inner
-> literal `.unwrap()` changes.
 
 ### Step 4 — Fix the Neon Buffer allocation panic (js/cognee-neon/src/task.rs)
 
-`cx.buffer(v.len())` can fail (OOM / V8 ArrayBuffer size limit) and currently
-`.unwrap()`s into the JS runtime. The enclosing method is `OwnedValue::to_js` (verified
-lines 349–360), which returns `Handle<'cx, JsValue>` (infallible). To propagate the error
-we change its signature to `JsResult<'cx, JsValue>` and fix the single call site.
+**Partially implemented — decision required.** The `cx.buffer(v.len())` call in
+`OwnedValue::to_js` (lines 354–358) was changed from `.unwrap()` to `.expect(...)` with
+the justification: `"buffer allocation cannot fail for a known-length byte slice unless
+the JS engine is OOM, which is unrecoverable"`. The method signature remains infallible
+(`Handle<'cx, JsValue>`).
 
-1. Change the method signature and all arms. Current (lines 349–360):
-
+**Current state** (lines 349–362):
 ```rust
     fn to_js<'cx>(&self, cx: &mut impl Context<'cx>) -> Handle<'cx, JsValue> {
         match self {
@@ -211,7 +192,9 @@ we change its signature to `JsResult<'cx, JsValue>` and fix the single call site
             OwnedValue::Bool(v) => cx.boolean(*v).upcast(),
             OwnedValue::Str(v) => cx.string(v).upcast(),
             OwnedValue::Bytes(v) => {
-                let mut buf = cx.buffer(v.len()).unwrap();
+                let mut buf = cx
+                    .buffer(v.len())
+                    .expect("buffer allocation cannot fail for a known-length byte slice unless the JS engine is OOM, which is unrecoverable");
                 buf.as_mut_slice(cx).copy_from_slice(v);
                 buf.upcast()
             }
@@ -219,7 +202,11 @@ we change its signature to `JsResult<'cx, JsValue>` and fix the single call site
     }
 ```
 
-Replace with (return `JsResult`, `?` on the fallible buffer alloc, `Ok(..)` the rest):
+**Decision:** The `.expect` approach is acceptable under CLAUDE.md conventions when the
+reason explains *why* the call cannot fail at runtime. OOM in a JS engine is indeed
+unrecoverable — there is no meaningful error surface to return to. However, if stricter
+Neon error propagation is desired (surfaces the failure as a JS exception rather than
+a process abort), upgrade to the `JsResult` approach:
 
 ```rust
     fn to_js<'cx>(&self, cx: &mut impl Context<'cx>) -> JsResult<'cx, JsValue> {
@@ -229,7 +216,7 @@ Replace with (return `JsResult`, `?` on the fallible buffer alloc, `Ok(..)` the 
             OwnedValue::Str(v) => cx.string(v).upcast(),
             OwnedValue::Bytes(v) => {
                 // Buffer allocation can fail (OOM / V8 size limit). Surface it
-                // as a JS exception instead of panicking into the runtime.
+                // as a JS exception instead of aborting.
                 let mut buf = cx.buffer(v.len())?;
                 buf.as_mut_slice(cx).copy_from_slice(v);
                 buf.upcast()
@@ -238,131 +225,50 @@ Replace with (return `JsResult`, `?` on the fallible buffer alloc, `Ok(..)` the 
     }
 ```
 
-2. Fix the call site. Find it:
-   ```bash
-   grep -n '\.to_js(' js/cognee-neon/src/task.rs
-   ```
-   At each call, the result is now a `JsResult`. If the caller is already inside a
-   `JsResult`-returning fn (typical for Neon callbacks), append `?`:
-   ```rust
-   let v = owned.to_js(&mut cx);     // before
-   let v = owned.to_js(&mut cx)?;    // after
-   ```
-   If the caller is a closure passed to `channel.send`/`deferred.settle_with` that returns
-   `NeonResult<_>`, `?` works directly. Inspect the surrounding fn signature to confirm it
-   returns a `Result` Neon understands; if not, map the error (`.or_else(|e| ...)`) — but
-   in this file the conversion happens inside a settle closure that already returns
-   `JsResult`, so `?` is the right fix. Verify it compiles (Step 6).
+If you make this change, fix the one call site (line 392):
+```bash
+grep -n '\.to_js(' js/cognee-neon/src/task.rs   # single site: line ~392
+```
+```rust
+let js_val = item.to_js(&mut cx);    // before
+let js_val = item.to_js(&mut cx)?;   // after (closure already returns JsResult/Ok(()))
+```
+`JsResult` is available via the existing `use neon::prelude::*;` glob import.
 
-3. Confirm `JsResult` is imported (it is part of the standard `use neon::prelude::*;`
-   glob — check the top of the file; if a narrow import list is used, add `JsResult`).
+**If skipping the JsResult upgrade:** the `.expect(...)` already satisfies CLAUDE.md
+conventions and the acceptance criteria — no bare `.unwrap()` remains.
 
 ### Step 5 — Add the NUL-byte regression test (B2.4)
 
-`VtableExecStatus` and its `ExecStatusManager` impl are **private** to `exec_status.rs`
-(verified: `struct VtableExecStatus` has no `pub`), so the test must live **inline** in
-that file — an external `capi/cognee-capi/tests/*.rs` file cannot reach the private type.
+**Already implemented.** Two inline `#[cfg(test)]` tests exist at the end of
+[capi/cognee-capi/src/exec_status.rs](../../../capi/cognee-capi/src/exec_status.rs)
+(lines 193–288):
 
-Append to the **end** of
-[capi/cognee-capi/src/exec_status.rs](../../../capi/cognee-capi/src/exec_status.rs):
+- `interior_nul_does_not_panic` — drives `mark_failed` with `"data\0id"` and `"error\0msg"`;
+  verifies the C callback receives the sanitized (NUL-stripped) strings.
+- `stamp_provenance_nul_node_set_does_not_panic` — drives `stamp_provenance` with
+  `Some("node\0set")`; verifies no panic and the pointer is valid.
 
-```rust
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use cognee_core::ExecStatusManager;
-    use std::ffi::{CStr, c_char, c_void};
-    use std::sync::atomic::{AtomicUsize, Ordering};
+Both tests use `#[tokio::test]`. The crate `[dev-dependencies]` in `capi/cognee-capi/Cargo.toml`
+already includes `tokio` with macros support.
 
-    static MARK_FAILED_CALLS: AtomicUsize = AtomicUsize::new(0);
-
-    // Reads back every string arg via CStr (asserts they are valid C strings)
-    // and records that the callback fired.
-    unsafe extern "C" fn capture_mark_failed(
-        _state: *mut c_void,
-        data_id: *const c_char,
-        pipeline_name: *const c_char,
-        _dataset_id: *const u8,
-        error: *const c_char,
-    ) {
-        // None of these may be null; all must be NUL-terminated C strings.
-        assert!(!data_id.is_null());
-        assert!(!pipeline_name.is_null());
-        assert!(!error.is_null());
-        let _ = unsafe { CStr::from_ptr(data_id) }.to_bytes();
-        let _ = unsafe { CStr::from_ptr(pipeline_name) }.to_bytes();
-        let _ = unsafe { CStr::from_ptr(error) }.to_bytes();
-        MARK_FAILED_CALLS.fetch_add(1, Ordering::SeqCst);
-    }
-
-    fn vtable_with_mark_failed() -> CgExecStatusManagerVtable {
-        CgExecStatusManagerVtable {
-            is_completed: None,
-            mark_completed: None,
-            mark_failed: Some(capture_mark_failed),
-            stamp_provenance: None,
-            destroy: None,
-        }
-    }
-
-    // Passing strings with interior NUL bytes through the callbacks must NOT
-    // panic / abort. Before the fix, CString::new(..).unwrap() aborted here.
-    #[tokio::test]
-    async fn nul_byte_strings_do_not_panic() {
-        MARK_FAILED_CALLS.store(0, Ordering::SeqCst);
-        let mgr = VtableExecStatus {
-            state: std::ptr::null_mut(),
-            vtable: vtable_with_mark_failed(),
-        };
-
-        // Interior NUL in every caller-supplied arg.
-        mgr.mark_failed("data\0id", "pipe\0line", None, "err\0or")
-            .await
-            .expect("mark_failed must not error on NUL input");
-
-        // Also exercise the other callbacks with NUL input (no panic = pass).
-        let mgr2 = VtableExecStatus {
-            state: std::ptr::null_mut(),
-            vtable: CgExecStatusManagerVtable {
-                is_completed: None,
-                mark_completed: None,
-                mark_failed: None,
-                stamp_provenance: None,
-                destroy: None,
-            },
-        };
-        let _ = mgr2.is_completed("a\0b", "c\0d", None).await;
-        let _ = mgr2.mark_completed("a\0b", "c\0d", None).await;
-        let _ = mgr2
-            .stamp_provenance("a\0b", "c\0d", "t\0n", None, Some("n\0s"))
-            .await;
-
-        assert_eq!(MARK_FAILED_CALLS.load(Ordering::SeqCst), 1);
-    }
-}
-```
-
-> If `cognee-capi`'s `[dev-dependencies]` lacks `tokio` with the macros feature, the
-> `#[tokio::test]` won't compile. The crate already depends on `tokio` with
-> `["rt-multi-thread","sync"]` (verified line 68). Add a dev-dependency enabling `macros`
-> + `rt` to `capi/cognee-capi/Cargo.toml` if `cargo test` complains:
-> ```toml
-> [dev-dependencies]
-> tokio = { workspace = true, features = ["macros", "rt"] }
-> ```
+The tests cover more than the original plan (which only required a single `mark_failed`
+assertion) — they also validate the sanitized content reaching the C side.
 
 ## Verification
 
 ```bash
-# 1. No bare unwrap on CString in the C API anymore (the test module is allowed).
+# 1. No bare unwrap on CString in the C API (line 203 is a doc comment — expected).
 grep -rn 'CString::new.*\.unwrap()' capi/cognee-capi/src/   # expect: no output
 
-# 2. No buffer().unwrap() in neon.
+# 2. No buffer().unwrap() in neon (uses .expect() instead).
 grep -n 'cx.buffer.*unwrap' js/cognee-neon/src/task.rs       # expect: no output
 
-# 3. C API compiles + the regression test passes.
+# 3. C API compiles + both regression tests pass.
 cargo test --manifest-path capi/Cargo.toml -p cognee-capi exec_status -- --nocapture
-# expect: test exec_status::tests::nul_byte_strings_do_not_panic ... ok
+# expect:
+#   test exec_status::tests::interior_nul_does_not_panic ... ok
+#   test exec_status::tests::stamp_provenance_nul_node_set_does_not_panic ... ok
 
 # 4. Full capi check (compile gate, both feature sets, CMake examples).
 bash capi/scripts/check.sh
@@ -370,36 +276,36 @@ bash capi/scripts/check.sh
 # 5. Neon crate compiles and clippy is clean.
 cargo clippy --manifest-path js/cognee-neon/Cargo.toml --all-targets -- -D warnings
 
-# 6. Workspace clippy still clean (the helper must not trip unwrap_used once task 23 lands).
+# 6. Workspace clippy still clean (cstring_lossy must not trip unwrap_used once task 23 lands).
 cargo clippy --all-targets -- -D warnings
 ```
 
 ## Acceptance criteria
 
-- [ ] `safe_cstring` helper added; all 11 caller-data unwraps in `exec_status.rs` use it.
-- [ ] The 3 literal `CString::new(..).unwrap()` (util.rs:27, error.rs:90, watcher.rs:99 inner)
-      converted to `.expect("...no interior NUL")`.
-- [ ] `OwnedValue::to_js` returns `JsResult`; `cx.buffer(..)?` propagates; call site fixed.
-- [ ] Inline `#[cfg(test)]` NUL-byte regression test added and passing.
-- [ ] `grep -rn 'CString::new.*unwrap()' capi/cognee-capi/src/` returns nothing.
-- [ ] `bash capi/scripts/check.sh` and both clippy runs pass with `-D warnings`.
+- [x] `cstring_lossy` helper in `util.rs`; all 11 caller-data call sites in `exec_status.rs` use `crate::util::cstring_lossy`.
+- [x] No bare `CString::new(...).unwrap()` in `util.rs`, `error.rs`, or `watcher.rs` — all delegate to `cstring_lossy`.
+- [x] `OwnedValue::to_js` uses `.expect(...)` with an OOM-is-unrecoverable justification (no bare `.unwrap()`). Optional upgrade to `JsResult` propagation possible but not required to ship.
+- [x] Inline `#[cfg(test)]` NUL-byte regression tests (`interior_nul_does_not_panic`, `stamp_provenance_nul_node_set_does_not_panic`) present and passing.
+- [x] `grep -rn 'CString::new.*\.unwrap()' capi/cognee-capi/src/` returns nothing (line 203 is a doc comment).
+- [ ] `bash capi/scripts/check.sh` and both clippy runs pass with `-D warnings` (run to confirm).
 
 ## Gotchas / do-not
 
 - **Never let a panic cross an `extern "C"` boundary.** The whole point: `unwrap()` inside
-  a function reachable from a C callback is UB on unwind. `safe_cstring` must itself never
-  panic — its `expect` is on a constant literal that provably has no NUL.
-- **Do not change the placeholder text format casually if any consumer parses it** — these
-  callbacks are debugging/provenance signals, not structured data; an empty or
-  `"(string contained null byte)"` placeholder is fine. (No cross-SDK schema is involved
-  — this is the in-process callback path, not on-disk data.)
-- **The `to_js` signature change ripples.** Neon's `Handle` vs `JsResult` is a type change;
-  every caller must add `?`. Don't `.unwrap()` the new `JsResult` to "make it compile" —
-  that just reintroduces the panic. Trace each call site (Step 4.2) and propagate.
-- **`watcher.rs:99` outer fallback stays.** Only the inner empty-literal `.unwrap()`
-  changes; the outer `unwrap_or_else` is already the correct caller-data guard.
-- **Test placement:** the test must be inline (private types). An external integration
-  test in `capi/cognee-capi/tests/` will fail to compile against `VtableExecStatus`.
+  a function reachable from a C callback is UB on unwind. `cstring_lossy` must itself never
+  panic — its `expect` is on a derived string that provably has no NUL (all NULs were
+  filtered out by `chars().filter()`).
+- **NUL-stripping vs placeholder:** the implemented `cstring_lossy` strips NUL bytes
+  (e.g. `"data\0id"` → `"dataid"`), unlike the originally planned placeholder approach
+  (`"(string contained null byte)"`). The regression tests assert the strip behaviour —
+  do not change to placeholder without updating the tests.
+- **`to_js` signature:** if you later upgrade `to_js` to return `JsResult`, every call site
+  must add `?`. Don't `.unwrap()` the new `JsResult` to "make it compile" — that
+  reintroduces the panic. There is currently one call site at line 392.
+- **Test placement:** NUL-byte tests must be inline (private types). An external integration
+  test in `capi/cognee-capi/tests/` cannot reach `VtableExecStatus`.
+- **`sdk.rs` catch_unwind is defense-in-depth only.** It covers async SDK ops but not
+  sync FFI callback paths. The primary fix (no panicking code on those paths) is still required.
 - Parity-neutral: no schema, IDs, hashes, chunking, prompts, or collection names change.
 
 ## Rollback
