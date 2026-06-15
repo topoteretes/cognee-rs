@@ -8,8 +8,8 @@ license.workspace = true
 # Async runtime
 tokio.workspace = true
 
-# Logging
-log.workspace = true
+# Structured logging/tracing
+tracing.workspace = true
 
 # Random (for jitter)
 rand.workspace = true

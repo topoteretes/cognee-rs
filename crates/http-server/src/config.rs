@@ -221,21 +221,16 @@ fn default_cache_root() -> PathBuf {
     }
 }
 
-fn parse_env_bool(v: &str) -> bool {
-    matches!(
-        v.trim().to_ascii_lowercase().as_str(),
-        "true" | "1" | "yes" | "on"
-    )
-}
-
 fn parse_env_bool_with_default(v: &str, default: bool) -> bool {
-    let trimmed = v.trim().to_ascii_lowercase();
-    if matches!(trimmed.as_str(), "true" | "1" | "yes" | "on") {
+    if cognee_utils::parse_env_bool(v) {
         true
-    } else if matches!(trimmed.as_str(), "false" | "0" | "no" | "off") {
-        false
     } else {
-        default
+        let trimmed = v.trim().to_ascii_lowercase();
+        if matches!(trimmed.as_str(), "false" | "0" | "no" | "off") {
+            false
+        } else {
+            default
+        }
     }
 }
 
@@ -511,7 +506,7 @@ impl HttpServerConfig {
         }
 
         if let Ok(v) = std::env::var("COGNEE_NOTEBOOK_RUNNER_ENABLED") {
-            cfg.notebook_runner_enabled = parse_env_bool(&v);
+            cfg.notebook_runner_enabled = cognee_utils::parse_env_bool(&v);
         }
 
         if let Ok(v) = std::env::var("COGNEE_RESPONSES_CLIENT_ENABLED") {
@@ -521,7 +516,7 @@ impl HttpServerConfig {
         }
 
         if let Ok(v) = std::env::var("COGNEE_DISABLE_DEFAULT_BACKENDS") {
-            cfg.disable_default_backends = parse_env_bool(&v);
+            cfg.disable_default_backends = cognee_utils::parse_env_bool(&v);
         }
 
         Ok(cfg)

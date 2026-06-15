@@ -26,8 +26,6 @@ use super::types::{
 struct RunSlot {
     event_tx: broadcast::Sender<RunEvent>,
     phase_tx: watch::Sender<RunPhase>,
-    #[allow(dead_code)]
-    started_at: DateTime<Utc>,
     finished_at: Option<DateTime<Utc>>,
     abort_handle: Option<tokio::task::AbortHandle>,
     meta: RunHandle,
@@ -134,7 +132,7 @@ impl DefaultPipelineRunRegistry {
     pub async fn watcher_for(&self, run_id: Uuid) -> Option<Arc<ScopedRunWatcher>> {
         let runs = self.runs.read().await;
         let slot = runs.get(&run_id)?;
-        let sink = PerRunSink::from_parts(run_id, slot.event_tx.clone(), slot.phase_tx.clone());
+        let sink = PerRunSink::from_parts(slot.event_tx.clone(), slot.phase_tx.clone());
         Some(Arc::new(ScopedRunWatcher::new(
             run_id,
             sink,
@@ -242,7 +240,6 @@ impl DefaultPipelineRunRegistry {
             // Placeholder exists — update its metadata but keep the senders so
             // subscribers attached before the producer don't lose events.
             existing.meta = meta.clone();
-            existing.started_at = now;
             existing.data_ids = spec.data_ids.clone();
             // Reset phase to Pending in case the placeholder was never set.
             let _ = existing.phase_tx.send(RunPhase::Pending);
@@ -255,7 +252,6 @@ impl DefaultPipelineRunRegistry {
         let slot = RunSlot {
             event_tx,
             phase_tx,
-            started_at: now,
             finished_at: None,
             abort_handle: None,
             meta: meta.clone(),
@@ -323,6 +319,9 @@ impl DefaultPipelineRunRegistry {
         drop(runs_read);
 
         if let Some((m, data_ids)) = &slot_snapshot {
+            // NOTE (task 04 §5b): uuid5(OID, pipeline_name) only — intentionally NOT the
+            // {user}{name}{dataset} pipeline_id from ids::pipeline_id. Replacing it would
+            // change the stored pipeline_run_log shape. See task 04 §5b.
             let pipeline_id = Uuid::new_v5(&Uuid::NAMESPACE_OID, m.pipeline_name.as_bytes());
             // Python parity: STARTED writes `{"data": data_info(data)}`.
             let run_info = Some(super::run_info_for_running(data_ids));
@@ -352,6 +351,8 @@ impl DefaultPipelineRunRegistry {
 
         // Log the terminal row (best-effort).
         if let Some((m, data_ids)) = &slot_snapshot {
+            // NOTE (task 04 §5b): uuid5(OID, pipeline_name) only — intentionally NOT the
+            // {user}{name}{dataset} pipeline_id from ids::pipeline_id.
             let pipeline_id = Uuid::new_v5(&Uuid::NAMESPACE_OID, m.pipeline_name.as_bytes());
             let (db_status, run_info) = match &phase {
                 RunPhase::Completed => (
@@ -438,6 +439,7 @@ impl PipelineRunRegistry for DefaultPipelineRunRegistry {
             let pipeline_name_clone = pipeline_name.clone();
             async move {
                 // Emit STARTED — Python parity: `{"data": data_info(data)}`.
+                // NOTE (task 04 §5b): uuid5(OID, pipeline_name) only.
                 let pipeline_id =
                     Uuid::new_v5(&Uuid::NAMESPACE_OID, pipeline_name_clone.as_bytes());
                 let started_run_info = Some(super::run_info_for_running(&data_ids));
@@ -623,7 +625,6 @@ impl PipelineRunRegistry for DefaultPipelineRunRegistry {
                     e.insert(RunSlot {
                         event_tx: tx,
                         phase_tx,
-                        started_at: now,
                         finished_at: None,
                         abort_handle: None,
                         meta: placeholder_meta,
@@ -698,6 +699,7 @@ impl PipelineRunRegistry for DefaultPipelineRunRegistry {
                     })
                     .unwrap_or_default()
             };
+            // NOTE (task 04 §5b): uuid5(OID, pipeline_name) only.
             let pipeline_id = Uuid::new_v5(&Uuid::NAMESPACE_OID, pipeline_name.as_bytes());
             // Python parity: ERRORED writes
             // `{"data": data_info(data), "error": str(e)}`. For aborts the

@@ -34,6 +34,10 @@ default = [
 ]
 cloud         = ["cognee-lib/cloud"]
 onnx          = ["cognee-lib/onnx"]
+# Platform-specific GPU acceleration for ONNX Runtime (opt-in, NOT in default).
+# Enable for NVIDIA hardware: --features ort-cuda or --features ort-tensorrt.
+ort-cuda      = ["cognee-lib/ort-cuda"]
+ort-tensorrt  = ["cognee-lib/ort-tensorrt"]
 ladybug       = ["cognee-lib/ladybug"]
 qdrant        = ["cognee-lib/qdrant"]
 pgvector      = ["cognee-lib/pgvector"]
@@ -66,10 +70,8 @@ android-default = ["cognee-lib/android-default"]
 
 [dependencies]
 clap = { workspace = true, features = ["derive"] }
-dotenv.workspace = true
 cognee-lib = { path = "../lib" }
 cognee-logging = { path = "../logging" }
-chrono.workspace = true
 dirs.workspace = true
 serde.workspace = true
 serde_json.workspace = true

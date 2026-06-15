@@ -48,11 +48,11 @@ git checkout -b task/04-rust-code-cleanup main
 | `crates/utils/src/env.rs` *(new)* | add canonical `parse_env_bool` (A1.3) |
 | `crates/utils/src/lib.rs` | export `parse_env_bool` |
 | `crates/utils/Cargo.toml` | drop `log` dep (A1.4/A1.9) |
-| `crates/lib/src/config.rs` (8 sites), `crates/lib/src/component_manager.rs:431`, `crates/embedding/src/config.rs:197`, `crates/observability/src/settings.rs:83`, `crates/llm/src/adapters/openai.rs:155`, `crates/http-server/src/{config.rs,routers/remember.rs:98,auth/context.rs:118}` | replace inline truthy parsing with `parse_env_bool` (A1.3) |
+| `crates/lib/src/config.rs` (8 sites), `crates/lib/src/component_manager.rs:431`, `crates/embedding/src/config.rs:197`, `crates/observability/src/settings.rs:83`, `crates/llm/src/adapters/openai.rs:155`, `crates/http-server/src/{config.rs,routers/remember.rs:98,auth/context.rs:118}` | replace inline truthy parsing with `parse_env_bool` (A1.3); also add `cognee-utils` dep to `cognee-lib`, `cognee-embedding`, `cognee-observability` Cargo.toml |
 | `crates/ontology/src/{loader.rs:6,rdflib.rs:6,builder.rs:8}`, `crates/utils/src/retry.rs:150-175` | `log` → `tracing` (A1.4) |
 | `crates/ontology/Cargo.toml` | drop `log` + dev `env_logger` (A1.4/A1.9) |
-| `crates/core/src/pipeline.rs:457` | route inline uuid5 through `ids::pipeline_id` (A1.6) |
-| `crates/core/src/pipeline_run_registry/scoped_watcher.rs:20` | remove dead `PerRunSink.run_id` (A1.7) |
+| `crates/core/src/pipeline.rs:445` | route inline uuid5 through `ids::pipeline_id` (A1.6) |
+| `crates/core/src/pipeline_run_registry/scoped_watcher.rs:19` | remove dead `PerRunSink.run_id` (A1.7) |
 | `crates/core/src/pipeline_run_registry/default_impl.rs:30` | remove dead `RunSlot.started_at` (A1.7) |
 | `crates/http-server/src/middleware/tracing.rs:76` | remove dead `duration_ms` (A1.7) |
 | `crates/ontology/src/builder.rs:151` | remove dead `extract_local_name` (A1.7) |
@@ -152,13 +152,16 @@ pub use env::parse_env_bool;
 | `crates/http-server/src/auth/context.rs:118` | `.map(\|v\| matches!(v.to_ascii_lowercase().as_str(), "true" \| "1" \| "yes"))` | `.map(\|v\| cognee_utils::parse_env_bool(&v))` |
 | `crates/http-server/src/config.rs:224` | the private `fn parse_env_bool` body | delete the private fn; update its callers to `cognee_utils::parse_env_bool`. **Keep** `parse_env_bool_with_default` (it has extra false-side logic) but have *it* call `cognee_utils::parse_env_bool` for the truthy branch. |
 
-> **Do-not — `auth/context.rs:114`** has a *negated* check
-> `!matches!(v.to_ascii_lowercase().as_str(), "false" \| "0" \| "no")` for
-> `REQUIRE_AUTHENTICATION`. That is **falsy-by-default-true** semantics, **not** the
-> same as `parse_env_bool`. Leave it untouched.
+> **Do-not — `auth/context.rs:107` and `:114`** both have *negated* checks:
+> line 107 (`AUTH_COOKIE_SECURE`) and line 114 (`REQUIRE_AUTHENTICATION`) use
+> `!matches!(v.to_ascii_lowercase().as_str(), "false" \| "0" \| "no")`.
+> That is **falsy-by-default-true** semantics, **not** the same as `parse_env_bool`.
+> Leave both untouched. Only the positive `HASH_API_KEY` check at line 118 is replaceable.
 
-**2d.** Each touched crate must depend on `cognee-utils`. Most already do; verify and add
-`cognee-utils = { path = "../utils" }` where missing (likely `observability`).
+**2d.** Each touched crate must depend on `cognee-utils`. Add
+`cognee-utils = { path = "../utils" }` to the `[dependencies]` of the three that are
+currently missing it: **`cognee-lib`**, **`cognee-embedding`**, and **`cognee-observability`**.
+(`cognee-llm` and `cognee-http-server` already have the dep.)
 
 ```bash
 cargo build -p cognee-lib -p cognee-embedding -p cognee-observability \
@@ -235,7 +238,7 @@ stdlib constant) for new code; this avoids a `cognee-utils` dep just for the con
 
 both re-exported from `mod.rs:14`.
 
-**5a — replaceable.** `crates/core/src/pipeline.rs:457`
+**5a — replaceable.** `crates/core/src/pipeline.rs:445`
 (`deterministic_pipeline_id`) computes exactly the `pipeline_id` formula inline:
 
 ```rust
@@ -289,7 +292,7 @@ sites, or leave as-is. Document the divergence with a comment:
 
 All four are behind `#[allow(dead_code)]` and verified write-only / zero-callers.
 
-**6a — `PerRunSink.run_id`** (`scoped_watcher.rs:19-24`). The field is set in
+**6a — `PerRunSink.run_id`** (`scoped_watcher.rs:19-38`). The field is set in
 `from_parts` but never read (line 165 `run_id: self.run_id` belongs to a *different*
 struct, `ScopedWatcher`). Remove the field, the constructor param, and the assignment:
 
@@ -321,7 +324,7 @@ impl PerRunSink {
 Update the single caller `default_impl.rs:137` to drop the `run_id` arg:
 `PerRunSink::from_parts(slot.event_tx.clone(), slot.phase_tx.clone())`.
 
-**6b — `RunSlot.started_at`** (`default_impl.rs:26-30`, write-only). Remove the field
+**6b — `RunSlot.started_at`** (`default_impl.rs:29-30`, write-only). Remove the field
 (`#[allow(dead_code)] started_at: DateTime<Utc>`) and all four assignment sites
 (lines ~237, 245, 258, 621, 626 — re-grep `started_at` within the file; the constructor
 literals `started_at: now,` and `existing.started_at = now;`). Confirm `now` is still
@@ -362,15 +365,21 @@ self.retrievers.insert(
 
 **7c.** Delete the `JaccardChunksRetriever` struct, its `impl`, and its `impl
 SearchRetriever for JaccardChunksRetriever` block in `lexical_retriever.rs` (~50 lines,
-275 to just before `#[cfg(test)]`). Keep the test module.
+275 to just before `#[cfg(test)]`).
+
+> **Test module update required:** the `#[cfg(test)]` module in `lexical_retriever.rs`
+> uses `JaccardChunksRetriever` in **8 places** (use import + 6 construction sites).
+> After deleting the struct, update those test usages to `LexicalRetriever` (same
+> constructor signature). The tests remain valid — they're testing Jaccard/lexical
+> search behavior, not the wrapper itself.
 
 **7d.** Remove `JaccardChunksRetriever` from the re-exports:
 - `crates/search/src/retrievers/mod.rs:23` → `pub use lexical_retriever::LexicalRetriever;`
 - `crates/search/src/lib.rs:20` → drop `JaccardChunksRetriever,` from the list.
 
 > **Verify `LexicalRetriever::search_type()` returns `SearchType::ChunksLexical`** (grep
-> the impl) — the forwarding wrapper relied on it. It must, since the wrapper just
-> forwarded. Confirm before deleting.
+> the impl) — confirmed: `lexical_retriever.rs:207`. The wrapper just forwarded, so
+> behavior is identical after substitution.
 
 ```bash
 cargo build -p cognee-search
@@ -387,11 +396,11 @@ cargo test -p cognee-search
 | `cognee-llm` | `log` | no `log::` in `crates/llm/src` |
 | `cognee-chunking` | `log` | no `log::` in `crates/chunking/src` |
 | `cognee-graph` | `time` | no `time::` (uses `chrono`) |
-| `cognee-database` | `time`; dedupe `cognee-models` (listed as both dep `:12` and dev-dep `:35`) | no `time::`; models needed at both, but keep only the `[dependencies]` entry and remove the redundant dev-dep |
-| `cognee-http-server` | `regex`, `email_address` (`:85`), `tokio-stream` (`:104`), `http-body-util` (`:121`) | none referenced in `src/` |
-| `cognee-visualization` | `async-trait` (`:7`) | no `async_trait` in `src/` |
-| `cognee-cli` | `dotenv` (`:68`), `chrono` (`:71`) | no `dotenv`/`chrono::` in `src/` |
-| `cognee-ontology` | dev-dep `env_logger` (`:27`) | already covered in Step 3c |
+| `cognee-database` | `time`; dedupe `cognee-models` (listed as both dep `:13` and dev-dep `:36`) | no `time::`; models needed at both, but keep only the `[dependencies]` entry and remove the redundant dev-dep |
+| `cognee-http-server` | `regex` (`:99`), `email_address` (`:86`), `tokio-stream` (`:105`) | none referenced in `src/`; see note on `http-body-util` below |
+| `cognee-visualization` | `async-trait` (`:8`) | no `async_trait` in `src/` |
+| `cognee-cli` | `dotenv` (`:69`), `chrono` (`:72`) | no `dotenv`/`chrono::` in `src/` |
+| `cognee-ontology` | dev-dep `env_logger` (`:28`) | already covered in Step 3c |
 
 For each: remove the line, then:
 
@@ -402,7 +411,11 @@ cargo build -p <crate> --all-targets
 If the build fails, the dep was actually used (transitively or in a feature/cfg path
 the grep missed) — **revert that one line** and note it. `cognee-models` dedupe in
 `database`: remove the `[dev-dependencies] cognee-models = { path = "../models" }` line
-(line 35) since the `[dependencies]` entry (line 12) already makes it available to tests.
+(line 36) since the `[dependencies]` entry (line 13) already makes it available to tests.
+
+> **`http-body-util` note:** this dep is in `[dev-dependencies]` at line 122 (not
+> `[dependencies]`), and is unused even in tests (no `http_body_util::` imports found).
+> Remove it from `[dev-dependencies]`; confirm with `cargo test -p cognee-http-server`.
 
 ### Step 9 — A1.10: Orphaned feature wiring (decide + document)
 
@@ -417,7 +430,7 @@ normal builds. **Action:** add a doc comment in `session/Cargo.toml` next to the
 and add a one-line note to the session crate docs. (Wiring it into `cognee-lib` is a
 larger, optional change — defer.)
 
-**9b — `lib`'s `ort-cuda`/`ort-tensorrt`** (`crates/lib/Cargo.toml:33-34`,
+**9b — `lib`'s `ort-cuda`/`ort-tensorrt`** (`crates/lib/Cargo.toml:34-35`,
 pass-throughs to `cognee-embedding`). Verified: **not forwarded** by `cli`/bindings.
 **Action:** add forwarding features to `crates/cli/Cargo.toml`:
 `ort-cuda = ["cognee-lib/ort-cuda"]`, `ort-tensorrt = ["cognee-lib/ort-tensorrt"]`
@@ -478,10 +491,10 @@ assertions all pass (exit 0). No `cargo test` ID/parity test changes its output.
 ## Acceptance criteria
 
 - [ ] `ladybug_restored{,_clean}.rs` deleted; `cognee-graph` builds.
-- [ ] One `cognee_utils::parse_env_bool`; all ~15 weak copies replaced; `auth/context.rs:114` negated check left intact.
+- [ ] One `cognee_utils::parse_env_bool`; all ~15 weak copies replaced; negated checks at `auth/context.rs:107` (AUTH_COOKIE_SECURE) and `:114` (REQUIRE_AUTHENTICATION) left intact; `cognee-utils` dep added to `cognee-lib`, `cognee-embedding`, `cognee-observability`.
 - [ ] `ontology` + `utils::retry` use `tracing`; `log` dep dropped from both; `env_logger` dev-dep dropped.
 - [ ] `NAMESPACE_OID` standardized per Step 4 with **zero ID changes** (ID tests pass).
-- [ ] `pipeline.rs:457` routed through `ids::pipeline_id` **only if** byte-equivalent (Step 5a guard); `default_impl.rs` sites documented, **not** swapped (Step 5b).
+- [ ] `pipeline.rs` `deterministic_pipeline_id` (fn at line 445) routed through `ids::pipeline_id` **only if** byte-equivalent (Step 5a guard); `default_impl.rs` sites documented, **not** swapped (Step 5b).
 - [ ] Dead `PerRunSink.run_id`, `RunSlot.started_at`, `duration_ms`, `extract_local_name` removed.
 - [ ] `JaccardChunksRetriever` inlined; ~50 lines + 3 re-exports removed; `ChunksLexical` search still resolves.
 - [ ] Unused deps pruned, each confirmed by a per-crate build (reverted if build fails).
@@ -495,7 +508,8 @@ assertions all pass (exit 0). No `cargo test` ID/parity test changes its output.
   passes `None`. Verify callers first; skip 5a if unsure.
 - **Step 5b is NOT a `ids::pipeline_id` replacement** — those four sites hash only the
   pipeline name. Audit A1.6 is imprecise here.
-- **Do not touch** the negated `REQUIRE_AUTHENTICATION` check (`auth/context.rs:114`).
+- **Do not touch** the two negated checks: `AUTH_COOKIE_SECURE` (`auth/context.rs:107`)
+  and `REQUIRE_AUTHENTICATION` (`auth/context.rs:114`). Both use falsy-default-true logic.
 - **`Mutex/RwLock::lock().unwrap()`** stays (lock-poison is unrecoverable — project rule).
 - **Per-crate dep removal must be reverted individually** if its build fails — never bulk-revert.
 - Keep the `chunking` `NAMESPACE_OID` *name* exported (downstream `cognify` imports it).

@@ -426,10 +426,7 @@ impl ComponentManager {
             // Check MOCK_EMBEDDING env var as a fallback (preserves backward compat)
             let mock = std::env::var("MOCK_EMBEDDING")
                 .ok()
-                .map(|v| {
-                    let v = v.trim().to_lowercase();
-                    v == "true" || v == "1" || v == "yes"
-                })
+                .map(|v| cognee_utils::parse_env_bool(&v))
                 .unwrap_or(false);
 
             EmbeddingConfig {

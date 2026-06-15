@@ -152,7 +152,7 @@ impl OpenAIAdapter {
         let url = format!("{}/chat/completions", self.base_url);
         tracing::Span::current().record("url", url.as_str());
         let debug_enabled = std::env::var("COGNEE_DEBUG_LLM_REQUEST")
-            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .map(|v| cognee_utils::parse_env_bool(&v))
             .unwrap_or(false);
 
         if debug_enabled {

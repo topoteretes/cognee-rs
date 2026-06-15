@@ -94,8 +94,7 @@ async fn parse_remember_multipart(
     if let Some(vals) = parsed.fields.get("run_in_background")
         && let Some(v) = vals.first()
     {
-        let v = v.trim().to_ascii_lowercase();
-        form.run_in_background = Some(v == "true" || v == "1");
+        form.run_in_background = Some(cognee_utils::parse_env_bool(v.trim()));
     }
 
     if let Some(vals) = parsed.fields.get("custom_prompt")

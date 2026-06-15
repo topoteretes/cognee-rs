@@ -13,6 +13,7 @@ ort-tensorrt = ["ort/tensorrt"]
 
 [dependencies]
 async-trait = { workspace = true }
+cognee-utils = { path = "../utils" }
 futures     = { workspace = true }
 tokio       = { workspace = true }
 serde       = { workspace = true }

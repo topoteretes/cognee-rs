@@ -83,7 +83,6 @@ jsonwebtoken = "9"
 argon2 = "0.5"
 bcrypt = "0.16"
 secrecy = "0.10"
-email_address = "0.2"
 
 # Hashing
 sha2 = { workspace = true }
@@ -96,13 +95,11 @@ thiserror = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["registry", "std"] }
-regex = { workspace = true }
 async-trait = { workspace = true }
 dashmap = "6"
 bytes = "1"
 futures = { workspace = true }
 tokio = { workspace = true, features = ["rt", "sync", "time", "net", "io-util", "fs", "process"] }
-tokio-stream = { workspace = true }
 tokio-util = { version = "0.7", features = ["io"] }
 mime_guess = "2"
 
@@ -119,7 +116,6 @@ libc = "0.2"
 tower = { version = "0.5", features = ["util"] }
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros"] }
 serde_json = { workspace = true }
-http-body-util = "0.1"
 serial_test = { workspace = true }
 chrono = { workspace = true }
 sea-orm = { version = "1", default-features = false, features = ["sqlx-sqlite", "runtime-tokio-native-tls", "macros"] }

@@ -46,7 +46,7 @@ fn make_watcher(
     let (event_tx, rx) = broadcast::channel::<RunEvent>(64);
     let (phase_tx, _phase_rx) = watch::channel(RunPhase::Pending);
 
-    let sink = PerRunSink::from_parts(run_id, event_tx, phase_tx);
+    let sink = PerRunSink::from_parts(event_tx, phase_tx);
     let watcher = ScopedRunWatcher::new(run_id, sink, repo);
     (watcher, rx)
 }

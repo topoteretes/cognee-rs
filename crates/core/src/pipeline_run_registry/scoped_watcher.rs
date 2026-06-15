@@ -17,8 +17,6 @@ use super::types::{RunEvent, RunEventKind, RunPhase};
 ///
 /// Callers construct one from `DefaultPipelineRunRegistry::watcher_for(run_id)`.
 pub struct PerRunSink {
-    #[allow(dead_code)]
-    pub(crate) run_id: Uuid,
     pub(crate) event_tx: tokio::sync::broadcast::Sender<RunEvent>,
     pub(crate) phase_tx: tokio::sync::watch::Sender<RunPhase>,
 }
@@ -26,15 +24,10 @@ pub struct PerRunSink {
 impl PerRunSink {
     /// Create a new `PerRunSink` with the given channel senders.
     pub fn from_parts(
-        run_id: Uuid,
         event_tx: tokio::sync::broadcast::Sender<RunEvent>,
         phase_tx: tokio::sync::watch::Sender<RunPhase>,
     ) -> Self {
-        Self {
-            run_id,
-            event_tx,
-            phase_tx,
-        }
+        Self { event_tx, phase_tx }
     }
 }
 

@@ -16,7 +16,6 @@ tracing.workspace = true
 # UUID and time
 uuid.workspace = true
 chrono.workspace = true
-time = { workspace = true }
 
 # Ladybug database (feature-gated)
 lbug = { workspace = true, optional = true }

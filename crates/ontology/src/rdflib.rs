@@ -3,13 +3,13 @@
 //! Main implementation of the OntologyResolver trait providing fuzzy
 //! entity matching and BFS-based subgraph extraction.
 
-use log::{debug, info};
 use sophia_api::graph::Graph;
 use sophia_api::ns::{owl, rdf, rdfs};
 use sophia_api::term::Term;
 use sophia_api::triple::Triple;
 use sophia_inmem::graph::FastGraph;
 use std::collections::{HashSet, VecDeque};
+use tracing::{debug, info};
 
 use crate::builder::build_lookup;
 use crate::error::{OntologyError, OntologyResult};

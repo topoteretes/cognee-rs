@@ -10,6 +10,10 @@ use uuid::{Uuid, uuid};
 
 /// Standard OID namespace UUID from RFC 4122.
 /// Used for deterministic UUID v5 generation across the entire codebase.
+///
+/// Byte-identical to [`uuid::Uuid::NAMESPACE_OID`]; re-exported here for
+/// ergonomic use so callers don't need a separate `uuid` dep just for the
+/// constant.
 pub const NAMESPACE_OID: Uuid = uuid!("6ba7b812-9dad-11d1-80b4-00c04fd430c8");
 
 /// Generate a deterministic UUID from a node ID string.

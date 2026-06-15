@@ -442,6 +442,13 @@ impl std::fmt::Display for PipelineRunStatus {
 ///
 /// `uuid5(NAMESPACE_OID, "{user_id}{pipeline_name}{dataset_id}")`.
 /// Returns `fallback` if `name` is empty / not set.
+///
+/// NOTE (task 04 §5a): this function is NOT replaced by
+/// `ids::pipeline_id` because its `None`-arg path uses
+/// `unwrap_or_default()` → `""`, while `ids::pipeline_id` uses
+/// `Uuid::nil()` → `"00000000-…"`. Those produce different hashes;
+/// callers pass `None` for absent user_id/dataset_id, so swapping in
+/// `ids::pipeline_id` would silently change stored pipeline IDs.
 fn deterministic_pipeline_id(
     name: Option<&str>,
     user_id: Option<Uuid>,

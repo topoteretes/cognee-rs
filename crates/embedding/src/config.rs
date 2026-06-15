@@ -192,13 +192,12 @@ impl EmbeddingConfig {
         let mut config = Self::default();
 
         // Parse MOCK_EMBEDDING first — it overrides everything else if set
-        if let Ok(val) = std::env::var("MOCK_EMBEDDING") {
-            let val = val.trim().to_lowercase();
-            if val == "true" || val == "1" || val == "yes" {
-                config.mock = true;
-                config.provider = EmbeddingProvider::Mock;
-                return config;
-            }
+        if let Ok(val) = std::env::var("MOCK_EMBEDDING")
+            && cognee_utils::parse_env_bool(&val)
+        {
+            config.mock = true;
+            config.provider = EmbeddingProvider::Mock;
+            return config;
         }
 
         // Parse EMBEDDING_PROVIDER

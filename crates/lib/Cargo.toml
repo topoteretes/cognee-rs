@@ -102,6 +102,7 @@ testing = [
 
 [dependencies]
 cognee-chunking = { path = "../chunking" }
+cognee-utils = { path = "../utils" }
 cognee-cloud = { path = "../cloud", optional = true }
 cognee-http-server = { path = "../http-server", optional = true }
 cognee-cognify = { path = "../cognify" }

@@ -233,8 +233,7 @@ impl Settings {
             self.llm_max_completion_tokens = n;
         }
         if let Some(v) = str_var("LLM_STREAMING") {
-            let v = v.to_lowercase();
-            self.llm_streaming = v == "true" || v == "1" || v == "yes";
+            self.llm_streaming = cognee_utils::parse_env_bool(&v);
         }
         if let Some(v) = str_var("LLM_MAX_RETRIES")
             && let Ok(n) = v.parse::<u32>()
@@ -419,12 +418,10 @@ impl Settings {
             self.session_ttl_seconds = n;
         }
         if let Some(v) = str_var("CACHING") {
-            let v = v.to_lowercase();
-            self.enable_caching = v == "true" || v == "1" || v == "yes";
+            self.enable_caching = cognee_utils::parse_env_bool(&v);
         }
         if let Some(v) = str_var("AUTO_FEEDBACK") {
-            let v = v.to_lowercase();
-            self.auto_feedback = v == "true" || v == "1" || v == "yes";
+            self.auto_feedback = cognee_utils::parse_env_bool(&v);
         }
 
         // -- Authentication / ACL ------------------------------------------------
@@ -435,8 +432,7 @@ impl Settings {
             self.default_user_password = v;
         }
         if let Some(v) = str_var("ENABLE_BACKEND_ACCESS_CONTROL") {
-            let v = v.to_lowercase();
-            self.enable_access_control = v == "true" || v == "1" || v == "yes";
+            self.enable_access_control = cognee_utils::parse_env_bool(&v);
         }
 
         // -- Logging -------------------------------------------------------------
@@ -454,8 +450,7 @@ impl Settings {
 
         // -- Rate limiting -------------------------------------------------------
         if let Some(v) = str_var("LLM_RATE_LIMIT_ENABLED") {
-            let v = v.to_lowercase();
-            self.llm_rate_limit_enabled = v == "true" || v == "1" || v == "yes";
+            self.llm_rate_limit_enabled = cognee_utils::parse_env_bool(&v);
         }
         if let Some(v) = str_var("LLM_RATE_LIMIT_REQUESTS")
             && let Ok(n) = v.parse::<u32>()
@@ -468,8 +463,7 @@ impl Settings {
             self.llm_rate_limit_interval = n;
         }
         if let Some(v) = str_var("EMBEDDING_RATE_LIMIT_ENABLED") {
-            let v = v.to_lowercase();
-            self.embedding_rate_limit_enabled = v == "true" || v == "1" || v == "yes";
+            self.embedding_rate_limit_enabled = cognee_utils::parse_env_bool(&v);
         }
         if let Some(v) = str_var("EMBEDDING_RATE_LIMIT_REQUESTS")
             && let Ok(n) = v.parse::<u32>()
@@ -492,8 +486,7 @@ impl Settings {
 
         // -- Observability -------------------------------------------------------
         if let Some(v) = str_var("COGNEE_TRACING_ENABLED") {
-            let v = v.to_lowercase();
-            self.cognee_tracing_enabled = v == "true" || v == "1" || v == "yes";
+            self.cognee_tracing_enabled = cognee_utils::parse_env_bool(&v);
         }
         if let Some(v) = str_var("OTEL_SERVICE_NAME") {
             self.otel_service_name = v;
@@ -519,8 +512,7 @@ impl Settings {
 
         // -- Feature flags -------------------------------------------------------
         if let Some(v) = str_var("ENABLE_LAST_ACCESSED") {
-            let v = v.to_lowercase();
-            self.enable_last_accessed = v == "true" || v == "1" || v == "yes";
+            self.enable_last_accessed = cognee_utils::parse_env_bool(&v);
         }
     }
 

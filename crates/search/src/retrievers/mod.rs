@@ -20,7 +20,7 @@ pub use chunks_retriever::ChunksRetriever;
 pub use completion_retriever::CompletionRetriever;
 pub use cypher_nl_retrievers::{CypherSearchRetriever, NaturalLanguageRetriever};
 pub use graph_completion_retriever::GraphCompletionRetriever;
-pub use lexical_retriever::{JaccardChunksRetriever, LexicalRetriever};
+pub use lexical_retriever::LexicalRetriever;
 pub use lucky_feedback_rules_retrievers::{
     CodingRulesRetriever, FeedbackRetriever, FeelingLuckyRetriever,
 };

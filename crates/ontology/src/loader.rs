@@ -3,7 +3,6 @@
 //! Provides format auto-detection and multi-file merging with
 //! permissive error handling (logs warnings, continues with valid files).
 
-use log::{info, warn};
 use sophia_api::graph::{Graph, MutableGraph};
 use sophia_api::parser::TripleParser;
 use sophia_api::prelude::{Quad, QuadParser, QuadSource};
@@ -14,6 +13,7 @@ use sophia_turtle::parser::turtle;
 use sophia_xml::parser::RdfXmlParser;
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use tracing::{info, warn};
 
 use crate::error::{OntologyError, OntologyResult};
 

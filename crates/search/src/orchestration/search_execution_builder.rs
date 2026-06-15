@@ -13,7 +13,7 @@ use crate::retrievers::{
     ChunksRetriever, CodingRulesRetriever, CompletionRetriever, CypherSearchRetriever,
     FeedbackRetriever, FeelingLuckyRetriever, GraphCompletionContextExtensionRetriever,
     GraphCompletionCotRetriever, GraphCompletionRetriever, GraphSummaryCompletionRetriever,
-    JaccardChunksRetriever, NaturalLanguageRetriever, SearchRetrieverRef, SummariesRetriever,
+    LexicalRetriever, NaturalLanguageRetriever, SearchRetrieverRef, SummariesRetriever,
     TemporalRetriever, TripletRetriever,
 };
 use crate::types::SearchType;
@@ -218,7 +218,7 @@ impl SearchBuilder {
 
         self.retrievers.insert(
             SearchType::ChunksLexical,
-            Arc::new(JaccardChunksRetriever::new(
+            Arc::new(LexicalRetriever::new(
                 Arc::clone(&graph_db),
                 None,
                 false,

@@ -6,7 +6,7 @@
 //!
 //! Port of Python `cognee.modules.chunking.TextChunker`.
 
-use uuid::{Uuid, uuid};
+use uuid::Uuid;
 
 use cognee_models::DocumentChunk;
 
@@ -14,7 +14,10 @@ use crate::chunk_by_paragraph::chunk_by_paragraph;
 use crate::token_counter::TokenCounter;
 
 /// NAMESPACE_OID from the uuid spec.
-pub const NAMESPACE_OID: Uuid = uuid!("6ba7b812-9dad-11d1-80b4-00c04fd430c8");
+///
+/// Alias for [`uuid::Uuid::NAMESPACE_OID`]; kept as a named export for
+/// backwards-compatibility with `cognee_chunking::NAMESPACE_OID` consumers.
+pub const NAMESPACE_OID: Uuid = Uuid::NAMESPACE_OID;
 
 /// Chunks text from a document into `DocumentChunk` items.
 ///

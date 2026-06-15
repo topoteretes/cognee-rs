@@ -5,12 +5,12 @@
 
 use std::collections::{HashMap, HashSet};
 
-use log::info;
 use sophia_api::graph::Graph;
 use sophia_api::ns::{owl, rdf};
 use sophia_api::term::Term;
 use sophia_api::triple::Triple;
 use sophia_inmem::graph::FastGraph;
+use tracing::info;
 
 use crate::error::{OntologyError, OntologyResult};
 use crate::models::{OntologyLookup, uri_to_key};
@@ -145,12 +145,6 @@ fn extract_individuals(
     }
 
     Ok(count)
-}
-
-/// Extract local name from IRI (helper for debug/logging).
-#[allow(dead_code)]
-fn extract_local_name(iri: &str) -> &str {
-    iri.rsplit(['#', '/']).next().unwrap_or(iri)
 }
 
 #[cfg(test)]
