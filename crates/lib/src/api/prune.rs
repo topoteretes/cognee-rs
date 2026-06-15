@@ -17,7 +17,12 @@ pub struct PruneTarget {
     pub graph: bool,
     /// Wipe all vector collections.
     pub vector: bool,
-    /// Drop the relational metadata database (not yet implemented).
+    /// Drop the relational metadata database.
+    ///
+    /// NOT IMPLEMENTED (audit B6.1 / task 09 Option A) — setting this has no
+    /// effect and `result.metadata_pruned` stays `false`. Python's
+    /// `prune_system(metadata=True)` physically drops the DB file; that
+    /// capability is deferred to Option A of task 09.
     pub metadata: bool,
     /// Wipe session cache.
     pub cache: bool,
@@ -34,12 +39,17 @@ impl PruneTarget {
         }
     }
 
-    /// All backends.
+    /// All backends Rust currently supports wiping (graph, vector, cache).
+    ///
+    /// `metadata` is intentionally `false`: dropping the relational DB is not
+    /// yet implemented (Python's `prune_system(metadata=True)` drops it; the
+    /// Rust public `prune` default is `metadata=False`, which this matches).
+    /// Tracked as audit B6.1 / task 09 Option A.
     pub fn all() -> Self {
         Self {
             graph: true,
             vector: true,
-            metadata: true,
+            metadata: false,
             cache: true,
         }
     }
@@ -112,11 +122,13 @@ pub async fn prune_system(
     }
 
     if target.metadata {
-        // Deferred -- dropping and recreating the DB is complex and rarely
-        // needed (Python also defaults metadata=False).
+        // NOT IMPLEMENTED: dropping the relational DB is deferred (audit B6.1 /
+        // task 09 Option A). We intentionally do NOT set result.metadata_pruned,
+        // so the returned PruneResult truthfully reports metadata_pruned=false
+        // even when a caller forced target.metadata=true by hand.
         tracing::warn!(
-            "prune_system: metadata pruning is not yet implemented; \
-             the relational database was NOT dropped"
+            "prune_system: metadata pruning is NOT implemented; the relational \
+             database was NOT dropped (result.metadata_pruned stays false)"
         );
     }
 
@@ -147,11 +159,35 @@ mod tests {
     }
 
     #[test]
-    fn prune_target_all_enables_everything() {
+    fn prune_target_all_does_not_advertise_metadata() {
+        // Option B (audit B6.1): all() must not claim metadata will be wiped
+        // because the relational-drop is not yet implemented.
         let target = PruneTarget::all();
         assert!(target.graph);
         assert!(target.vector);
-        assert!(target.metadata);
+        assert!(
+            !target.metadata,
+            "all() must not advertise metadata=true until Option A is implemented"
+        );
         assert!(target.cache);
+    }
+
+    #[tokio::test]
+    async fn prune_system_metadata_pruned_stays_false_when_not_implemented() {
+        // Even when a caller forces target.metadata=true, the returned
+        // PruneResult must report metadata_pruned=false (not yet implemented).
+        let target = PruneTarget {
+            graph: false,
+            vector: false,
+            metadata: true,
+            cache: false,
+        };
+        let result = prune_system(&target, None, None, None)
+            .await
+            .expect("prune_system must not error");
+        assert!(
+            !result.metadata_pruned,
+            "metadata_pruned must be false when metadata drop is not implemented"
+        );
     }
 }

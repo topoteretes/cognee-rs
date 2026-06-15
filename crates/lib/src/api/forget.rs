@@ -161,10 +161,7 @@ pub async fn forget(
         }
     };
 
-    let request = DeleteRequest {
-        scope,
-        mode: DeleteMode::Hard,
-    };
+    let request = build_delete_request(scope);
 
     let delete_result = delete_service.execute(&request).await?;
 
@@ -174,9 +171,36 @@ pub async fn forget(
     })
 }
 
+/// Build the [`DeleteRequest`] for a `forget` operation.
+///
+/// Extracted so the delete mode choice can be unit-tested independently of the
+/// async scope-resolution logic.
+fn build_delete_request(scope: DeleteScope) -> DeleteRequest {
+    DeleteRequest {
+        scope,
+        // Python `datasets.delete_data` defaults mode="soft" and warns hard is
+        // dangerous (datasets.py:147). Match the safer default.
+        mode: DeleteMode::Soft,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn forget_uses_soft_delete_mode() {
+        // Verify that forget() constructs a Soft delete request, matching
+        // Python's datasets.delete_data default (datasets.py:147).
+        let scope = DeleteScope::User {
+            owner_id: Uuid::nil(),
+        };
+        let req = build_delete_request(scope);
+        assert!(
+            matches!(req.mode, DeleteMode::Soft),
+            "forget must use DeleteMode::Soft to match Python's default"
+        );
+    }
 
     #[test]
     fn forget_target_debug_format() {

@@ -187,6 +187,11 @@ Steps:
 
 ### Option B — make `all()` honest (recommended for 0.1.0)
 
+> **Existing test to update:** `prune_target_all_enables_everything` (prune.rs:150)
+> currently asserts `assert!(target.metadata)`. When Option B is implemented, rename this
+> test to `prune_target_all_does_not_advertise_metadata` and flip the assertion to
+> `assert!(!target.metadata)`. This is an in-place update, not a new test.
+
 1. Remove `metadata: true` from `PruneTarget::all()` so it no longer advertises a wipe
    that does not happen, and rename/relabel for clarity.
 
@@ -304,9 +309,19 @@ Steps:
 
 ---
 
-## Part 3 — soft-delete orphan cleanup (B6.4, recommended)
+## Part 3 — soft-delete orphan cleanup (B6.4, deferred for strict parity)
 
-> Flag this even if deferred: after Part 2, Rust soft-delete will leave orphan
+> **Decision (0.1.0): defer, keep the sweep Hard-gated.** The premise below
+> ("run the sweep under Soft for parity") is *incorrect* about Python: Python's
+> degree-one Entity/EntityType sweep is itself `if mode == "hard"`
+> (`legacy_delete.py`) and the production soft path calls `legacy_delete(data,
+> "soft")`, so it never fires. Running the global degree sweep on Soft would make
+> Rust soft-delete *more* destructive than Python. The genuine Python soft-path
+> cleanup is provenance/slug-scoped (`delete_from_graph_and_vector` excludes
+> co-owned slugs), not a global degree heuristic — closing that gap needs a
+> deletion-scoped sweep, tracked via the `TODO(B6.4)` in `delete/src/lib.rs`.
+
+> Original (superseded) flag: after Part 2, Rust soft-delete will leave orphan
 > entities/types that Python removes. To stay parity-correct, run the orphan sweep
 > under Soft as well.
 

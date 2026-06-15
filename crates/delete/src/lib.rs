@@ -516,6 +516,20 @@ impl DeleteService {
         // ------------------------------------------------------------------
         // Phase 3: Hard-mode orphan sweep (degree-one Entity/EntityType nodes)
         // ------------------------------------------------------------------
+        //
+        // The degree-based sweep is gated to Hard mode to match Python, whose
+        // degree-one Entity/EntityType sweep is itself `if mode == "hard"`
+        // (legacy_delete.py) and is never reached by the production soft path
+        // (datasets.delete_data → legacy_delete(data, "soft")). Running it on
+        // Soft as well would make Rust soft-delete *more* destructive than
+        // Python (it would remove degree-one nodes Python preserves).
+        //
+        // TODO(B6.4): Python's main soft path still prunes nodes that become
+        // orphaned by the deletion via a provenance/slug-scoped traversal
+        // (delete_from_graph_and_vector excludes co-owned slugs), not a global
+        // degree sweep. Rust currently leaves those orphans on soft delete.
+        // Closing this gap requires a deletion-scoped cleanup rather than the
+        // global degree heuristic; tracked for a follow-up.
 
         let mut deleted_orphan_entities = 0usize;
         let mut deleted_orphan_entity_types = 0usize;
