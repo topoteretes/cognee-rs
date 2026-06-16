@@ -25,6 +25,30 @@ Implemented") and restated here for one consolidated view:
 - **Default tokenizer features in CI** — `HuggingFaceTokenCounter` and `TikTokenCounter` are behind
   optional feature flags (`hf-tokenizer`, `tiktoken`); CI builds may need to enable them explicitly.
 
+## improve() — deferred stages (partial implementations)
+
+Shipped in task 20 as sanctioned partials for 0.1.0:
+
+- **`build_global_context_index` stage (Stage 3b)** — the `build_global_context_index: bool` flag
+  and the `"global_context_index"` entry in `stages_run` are wired. The current implementation
+  reads all graph edges via `get_graph_data()`, formats them as `"source → relationship → target"`
+  lines, and stores the result in the session's graph-context slot (keyed
+  `"_global_context_index"`). What is **not** yet implemented:
+  - Bucket/root summarization: Python's reference implementation chunks the edge list into buckets
+    and runs an LLM summarization pass to produce a condensed global context rather than a raw edge
+    dump. The Rust version stores the raw edge list, which is token-inefficient for large graphs.
+  - TODO: add `global_context_index_pipeline()` in `cognee-cognify` (mirrors Python
+    `session_manager.py: build_global_context_index`) that does bucket summarization with the LLM
+    before writing to the session store.
+
+- **`persist_trace_steps` stage (Stage 2b)** — trace steps whose `session_feedback` field is
+  non-empty are collected and run through the standard `add → cognify` path (tagged to the
+  `"agent_trace_feedbacks"` node set). This is a scoped-down version of the Python reference:
+  the full per-step provenance metadata (origin function, status, parameters, return values) is not
+  stored as separate graph nodes, only the feedback text is cognified.
+  - TODO: add a dedicated `persist_trace_step_metadata()` in `cognee-cognify` that creates a
+    per-step graph entity preserving the full `SessionTraceStep` fields for audit/replay.
+
 ## HTTP server
 
 All routers ship (see [http-server/routers/README.md](http-server/routers/README.md)). The

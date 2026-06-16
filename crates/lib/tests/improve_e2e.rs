@@ -112,6 +112,8 @@ async fn improve_without_sessions_runs_only_memify() {
         extraction_tasks: None,
         enrichment_tasks: None,
         data: None,
+        build_global_context_index: false,
+        run_in_background: false,
     })
     .await
     .unwrap();
@@ -129,6 +131,9 @@ async fn improve_skips_stage1_when_session_backends_missing() {
 
     // Provide session_ids but no session_store/manager — stages 1, 2, 4
     // should all be skipped (with warnings), Stage 3 still runs.
+    // Stage 2b (persist_trace_steps) is gated on `has_sessions` so its name IS
+    // pushed to stages_run even when it skips/no-ops due to missing backends,
+    // matching Python's convention of recording every attempted stage.
     let r = improve(ImproveParams {
         dataset_name: "ds_nosess".to_string(),
         session_ids: Some(vec!["s1".to_string()]),
@@ -151,9 +156,15 @@ async fn improve_skips_stage1_when_session_backends_missing() {
         extraction_tasks: None,
         enrichment_tasks: None,
         data: None,
+        build_global_context_index: false,
+        run_in_background: false,
     })
     .await
     .unwrap();
 
-    assert_eq!(r.stages_run, vec!["memify".to_string()]);
+    assert_eq!(
+        r.stages_run,
+        vec!["persist_trace_steps".to_string(), "memify".to_string()],
+        "with sessions, persist_trace_steps is always recorded even when backends are missing"
+    );
 }

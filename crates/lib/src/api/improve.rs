@@ -21,10 +21,11 @@ use cognee_database::{
 };
 use cognee_embedding::EmbeddingEngine;
 use cognee_graph::GraphDBTrait;
-use cognee_ingestion::AddPipeline;
+use cognee_ingestion::{AddParams, AddPipeline};
 use cognee_llm::Llm;
+use cognee_models::DataInput;
 use cognee_ontology::OntologyResolver;
-use cognee_session::{SessionManager, SessionStore};
+use cognee_session::{ImproveLockGuard, SessionManager, SessionStore};
 use cognee_storage::StorageTrait;
 use cognee_vector::VectorDB;
 use tracing::{info, warn};
@@ -90,6 +91,21 @@ pub struct ImproveParams<'a> {
     /// Currently informational; reserved for future power-user overrides.
     pub data: Option<String>,
 
+    /// When `true` and not running in background, build the global context
+    /// index (graph summary) after Stage 3.
+    ///
+    /// Mirrors Python's `build_global_context_index` parameter.
+    /// Default `false` (opt-in) — matches Python parity.
+    pub build_global_context_index: bool,
+
+    /// When `true`, treat this as a background run: skips stages that
+    /// require the prior stage to have completed synchronously (e.g. the
+    /// global context index and the sync-graph stage).
+    ///
+    /// Background dispatch is handled by the host (HTTP server or CLI);
+    /// this flag is used only for stage-skipping logic parity with Python.
+    pub run_in_background: bool,
+
     /// LLM handle (used by Stage 2 cognify-of-session-text).
     pub llm: Arc<dyn Llm>,
     /// File storage handle.
@@ -144,6 +160,8 @@ pub async fn improve(params: ImproveParams<'_>) -> Result<ImproveResult, ApiErro
         add_pipeline,
         checkpoint_store,
         cognify_config,
+        build_global_context_index,
+        run_in_background,
         // E-05 v2 power-user fields — currently informational; the orchestrator
         // does not yet branch on them. Accepting them here keeps the struct
         // shape Python-parity-aligned for HTTP plumbing.
@@ -151,6 +169,36 @@ pub async fn improve(params: ImproveParams<'_>) -> Result<ImproveResult, ApiErro
         enrichment_tasks: _enrichment_tasks,
         data: _data,
     } = params;
+
+    // ---- Improve lock (parity with Python session_lock.py:136-150) ----
+    //
+    // When exactly one session is targeted, acquire a per-session lock so
+    // that concurrent `improve()` calls on the same session don't duplicate
+    // work (e.g. auto-improve + idle-watcher + SessionEnd firing at once).
+    // Multi-session improves skip the lock — the pattern is rare and locking
+    // N sessions atomically is messy (matches Python comment verbatim).
+    //
+    // The guard holds a `String`, not a `MutexGuard`, so it is Send-safe
+    // across `.await` points.
+    let _improve_guard = if let Some(ref sids) = session_ids {
+        if sids.len() == 1 {
+            match ImproveLockGuard::acquire(&sids[0]) {
+                Some(g) => Some(g),
+                None => {
+                    info!(
+                        session_id = %sids[0],
+                        "improve: session already being improved, skipping"
+                    );
+                    // Parity with Python `return {}` — return empty result.
+                    return Ok(ImproveResult::default());
+                }
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
 
     let mut result = ImproveResult::default();
     let has_sessions = session_ids.as_ref().is_some_and(|ids| !ids.is_empty());
@@ -291,6 +339,160 @@ pub async fn improve(params: ImproveParams<'_>) -> Result<ImproveResult, ApiErro
         }
     }
 
+    // ---- Stage 2b: Persist Agent Trace Steps ----
+    //
+    // Mirrors Python's `_persist_session_traces` (improve.py:166-176).
+    // Reads `session_feedback` from each trace step and cognifies it into the
+    // permanent graph so that the plugin's tool-call activity reaches permanent
+    // memory — not just QA entries.
+    //
+    // Scoped-down 0.1.0 implementation: collects trace `session_feedback` text
+    // (the per-step LLM-generated feedback string) and runs it through the
+    // add→cognify path with node_set `"agent_trace_feedbacks"`.
+    //
+    // TODO(parity): Python's `persist_agent_trace_feedbacks_in_knowledge_graph_pipeline`
+    // uses per-step metadata (origin_function, status, method_params). The full
+    // parity pass should introduce a dedicated `persist_trace_feedbacks_in_knowledge_graph`
+    // function in cognee-cognify that preserves per-step provenance.
+    if has_sessions {
+        let sids = session_ids
+            .as_ref()
+            .expect("has_sessions guarantees session_ids is Some with non-empty vec");
+
+        // Collect all trace feedback texts across the sessions.
+        let mut trace_texts: Vec<String> = Vec::new();
+        if let Some(mgr) = session_manager.as_ref() {
+            let user_id_str = owner_id.to_string();
+            for sid in sids {
+                match mgr
+                    .get_agent_trace_session(&user_id_str, Some(sid), None)
+                    .await
+                {
+                    Ok(steps) => {
+                        for step in &steps {
+                            if !step.session_feedback.is_empty() {
+                                trace_texts.push(format!(
+                                    "Session: {sid}\nFunction: {}\nStatus: {}\nFeedback: {}",
+                                    step.origin_function, step.status, step.session_feedback,
+                                ));
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        warn!(
+                            session_id = sid,
+                            "improve stage 2b: could not read trace steps (non-fatal): {e}"
+                        );
+                    }
+                }
+            }
+        }
+
+        if !trace_texts.is_empty() {
+            let stage2b_db = db.clone();
+            let combined_text = trace_texts.join("\n\n");
+            match (add_pipeline, stage2b_db) {
+                (Some(pipeline), Some(database)) => {
+                    match cognee_core::RayonThreadPool::with_default_threads() {
+                        Ok(pool) => {
+                            let thread_pool: Arc<dyn cognee_core::CpuPool> = Arc::new(pool);
+                            let pipeline_run_repo: Arc<dyn PipelineRunRepository> =
+                                Arc::new(SeaOrmPipelineRunRepository::new(Arc::clone(&database)));
+                            let add_params = AddParams {
+                                node_set: Some(vec!["agent_trace_feedbacks".to_string()]),
+                                ..Default::default()
+                            };
+                            match pipeline
+                                .add_with_params(
+                                    vec![DataInput::Text(combined_text)],
+                                    &dataset_name,
+                                    owner_id,
+                                    tenant_id,
+                                    &add_params,
+                                )
+                                .await
+                                .map_err(|e| e.to_string())
+                            {
+                                Ok(data_rows) if !data_rows.is_empty() => {
+                                    // Resolve dataset_id the same way persist_sessions does.
+                                    let dataset_id_opt =
+                                        cognee_database::ops::datasets::get_dataset_by_name(
+                                            database.as_ref(),
+                                            &dataset_name,
+                                            owner_id,
+                                            tenant_id,
+                                        )
+                                        .await
+                                        .ok()
+                                        .flatten()
+                                        .map(|ds| ds.id);
+                                    if let Some(dataset_id) = dataset_id_opt {
+                                        match cognee_cognify::tasks::cognify(
+                                            data_rows,
+                                            dataset_id,
+                                            Some(owner_id),
+                                            None,
+                                            tenant_id,
+                                            Arc::clone(&llm),
+                                            Arc::clone(&storage),
+                                            Arc::clone(&graph_db),
+                                            Arc::clone(&vector_db),
+                                            Arc::clone(&embedding_engine),
+                                            Arc::clone(&database),
+                                            pipeline_run_repo,
+                                            thread_pool,
+                                            Arc::clone(&ontology_resolver),
+                                            cognify_config,
+                                        )
+                                        .await
+                                        {
+                                            Ok(_) => {
+                                                info!(
+                                                    trace_items = trace_texts.len(),
+                                                    "improve stage 2b (persist_trace_steps) complete"
+                                                );
+                                            }
+                                            Err(e) => {
+                                                warn!(
+                                                    "improve stage 2b: cognify of trace steps failed (non-fatal): {e}"
+                                                );
+                                            }
+                                        }
+                                    } else {
+                                        warn!(
+                                            "improve stage 2b: dataset lookup returned None; trace steps not cognified"
+                                        );
+                                    }
+                                }
+                                Ok(_) => {
+                                    warn!(
+                                        "improve stage 2b: add returned no rows; trace steps not cognified"
+                                    );
+                                }
+                                Err(e) => {
+                                    warn!(
+                                        "improve stage 2b: add of trace text failed (non-fatal): {e}"
+                                    );
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            warn!("improve stage 2b: rayon pool init failed (non-fatal): {e}");
+                        }
+                    }
+                }
+                _ => {
+                    warn!(
+                        "improve stage 2b: add_pipeline and DatabaseConnection are required; trace steps not cognified"
+                    );
+                }
+            }
+        }
+        // Always push the stage name so stages_run stays consistent with Python,
+        // even when no traces were present or cognification was skipped/failed.
+        result.stages_run.push("persist_trace_steps".to_string());
+    }
+
     // ---- Stage 3: Default Enrichment (always) ----
     let memify_config = if let Some(names) = node_name {
         MemifyConfig::default().with_node_name_filter(names)
@@ -339,6 +541,77 @@ pub async fn improve(params: ImproveParams<'_>) -> Result<ImproveResult, ApiErro
                 "improve stage 3: a relational database connection is required by the LIB-06 \
                  executor-routed memify; skipping memify"
             );
+        }
+    }
+
+    // ---- Stage 3b: Global Context Index (opt-in) ----
+    //
+    // Mirrors Python's `_build_global_context_index` (improve.py:201-213).
+    // When `build_global_context_index` is `true` and not running in background:
+    // build a graph summary and store it in the session graph-context so the
+    // search side can prepend it as background knowledge.
+    //
+    // Partial 0.1.0 implementation: retrieves graph summaries already stored as
+    // TextSummary nodes and concatenates them as the global context. Python's full
+    // implementation (`global_context_index_pipeline`) also builds bucket and root
+    // summaries via an LLM pass.
+    // TODO(parity): implement bucket/root summary indexing via a dedicated
+    // `global_context_index_pipeline` function in cognee-cognify that mirrors
+    // Python's `bucketing_strategy="graph"` / `max_bucket_size=4` pass.
+    if build_global_context_index {
+        if run_in_background {
+            warn!(
+                "improve stage 3b: global context index skipped in background mode \
+                 because ordered background pipeline chaining is not supported"
+            );
+        } else if let Some(sm) = session_manager.as_ref() {
+            // Partial 0.1.0: read all graph edges via `get_graph_data()` and format
+            // as "source_id → relationship → target_id" lines, then store as the
+            // global context so any session can prepend it as background knowledge.
+            // TODO(parity): replace with a full `global_context_index_pipeline` that
+            // uses LLM bucket/root summarisation (`bucketing_strategy="graph"`,
+            // `max_bucket_size=4`) matching Python's `_build_global_context_index`.
+            match graph_db.get_graph_data().await {
+                Ok((_nodes, edges)) if !edges.is_empty() => {
+                    let global_context = edges
+                        .iter()
+                        .map(|(src, tgt, rel, _props)| format!("{src} → {rel} → {tgt}"))
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    let user_id_str = owner_id.to_string();
+                    // Store under a synthetic global-context key so any session can read it.
+                    let global_session_key = "_global_context_index";
+                    match sm
+                        .set_graph_context(
+                            Some(global_session_key),
+                            Some(&user_id_str),
+                            &global_context,
+                        )
+                        .await
+                    {
+                        Ok(()) => {
+                            info!(
+                                edges = edges.len(),
+                                "improve stage 3b (global_context_index) complete"
+                            );
+                            result.stages_run.push("global_context_index".to_string());
+                        }
+                        Err(e) => {
+                            warn!(
+                                "improve stage 3b: failed to store global context (non-fatal): {e}"
+                            );
+                        }
+                    }
+                }
+                Ok(_) => {
+                    info!("improve stage 3b: graph has no edges; skipping global_context_index");
+                }
+                Err(e) => {
+                    warn!("improve stage 3b: failed to load graph data (non-fatal): {e}");
+                }
+            }
+        } else {
+            warn!("improve stage 3b: session_manager is required; skipping global_context_index");
         }
     }
 

@@ -83,6 +83,23 @@ pub trait SessionStore: Send + Sync {
         updates: SessionQAUpdate,
     ) -> Result<bool, SessionError>;
 
+    /// Return the `qa_id` of the most-recent Q&A entry in the session, or
+    /// `None` when the session has no entries yet.
+    ///
+    /// Used by the search orchestrator to route conversationally-detected
+    /// feedback to the previous answer (mirrors Python `session_manager.py:462-469`).
+    ///
+    /// Default impl loads the latest entry via `get_latest_qa_entries(limit=1)`
+    /// and extracts its id. Backends may override with a more efficient query.
+    async fn latest_qa_id(
+        &self,
+        session_id: &str,
+        user_id: Option<&str>,
+    ) -> Result<Option<String>, SessionError> {
+        let entries = self.get_latest_qa_entries(session_id, user_id, 1).await?;
+        Ok(entries.into_iter().next().map(|e| e.id.to_string()))
+    }
+
     /// Retrieve the graph knowledge snapshot for a session, or `None`.
     async fn get_graph_context(
         &self,

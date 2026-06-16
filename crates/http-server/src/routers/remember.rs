@@ -686,6 +686,9 @@ pub async fn post_remember_entry(
                     &question,
                     &answer,
                     Some(context.as_str()),
+                    // used_graph_element_ids handled by the follow-up update below
+                    // when the raw JSON value needs schema-validation first.
+                    None,
                 )
                 .await
                 .map_err(map_session_err)?;

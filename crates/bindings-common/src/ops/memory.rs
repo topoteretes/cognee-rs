@@ -398,6 +398,8 @@ pub async fn run_improve(
         extraction_tasks: None,
         enrichment_tasks: None,
         data: None,
+        build_global_context_index: false,
+        run_in_background: false,
         llm: svc.llm.clone(),
         storage: svc.storage.clone(),
         graph_db: svc.graph_db.clone(),

@@ -2020,6 +2020,7 @@ mod tests {
             session_id: None,
             history: vec![],
             formatted_history: String::new(),
+            graph_context: None,
         }
     }
 
@@ -2292,6 +2293,7 @@ mod tests {
                 Message::assistant("Previous answer.".to_string()),
             ],
             formatted_history: "Q: Previous question?\nA: Previous answer.".to_string(),
+            graph_context: None,
         };
 
         retriever

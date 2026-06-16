@@ -8,7 +8,7 @@ use tracing::debug;
 use crate::error::SessionError;
 use crate::feedback;
 use crate::session_store::{SessionQAUpdate, SessionStore};
-use crate::types::{SessionQAEntry, SessionTraceStep};
+use crate::types::{SessionQAEntry, SessionTraceStep, UsedGraphElementIds};
 
 const DEFAULT_SESSION_ID: &str = "default_session";
 const DEFAULT_HISTORY_LIMIT: usize = 10;
@@ -103,6 +103,11 @@ impl SessionManager {
     }
 
     /// Save a Q&A exchange to the session. Returns the generated `qa_id`.
+    ///
+    /// `used_graph_element_ids` carries the node/edge IDs that were consulted
+    /// during retrieval so the memify pipeline can trace which graph elements
+    /// produced the answer (mirrors Python `session_manager.py:492-525`,
+    /// `add_qa(..., used_graph_element_ids=used_graph_element_ids)`).
     pub async fn save_qa(
         &self,
         session_id: Option<&str>,
@@ -110,12 +115,34 @@ impl SessionManager {
         question: &str,
         answer: &str,
         context: Option<&str>,
+        used_graph_element_ids: Option<UsedGraphElementIds>,
     ) -> Result<String, SessionError> {
         let resolved_id = self.resolve_session_id(session_id);
         let qa_id = self
             .store
             .create_qa_entry(resolved_id, user_id, question, answer, context)
             .await?;
+
+        // Write used_graph_element_ids if provided.
+        if let Some(ids) = used_graph_element_ids
+            && let Err(e) = self
+                .store
+                .update_qa_entry(
+                    resolved_id,
+                    user_id,
+                    &qa_id,
+                    SessionQAUpdate {
+                        used_graph_element_ids: Some(Some(ids)),
+                        ..Default::default()
+                    },
+                )
+                .await
+        {
+            tracing::warn!(
+                qa_id = %qa_id,
+                "save_qa: failed to persist used_graph_element_ids (non-fatal): {e}"
+            );
+        }
 
         // Mirrors Python `send_telemetry("cognee.session.add_qa", ...)` from
         // cognee/memory/session_manager.py:171.
@@ -246,6 +273,20 @@ impl SessionManager {
             },
         )
         .await
+    }
+
+    /// Return the `qa_id` of the most-recent Q&A entry in the session.
+    ///
+    /// Returns `None` when the session has no entries yet. Used to route
+    /// conversationally-detected feedback to the prior QA entry before saving the
+    /// new turn (mirrors Python `session_manager.py:462-469`).
+    pub async fn latest_qa_id(
+        &self,
+        session_id: Option<&str>,
+        user_id: Option<&str>,
+    ) -> Result<Option<String>, SessionError> {
+        let resolved_id = self.resolve_session_id(session_id);
+        self.store.latest_qa_id(resolved_id, user_id).await
     }
 
     /// Retrieve graph knowledge snapshot for a session.

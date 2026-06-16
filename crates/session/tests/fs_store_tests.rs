@@ -217,10 +217,10 @@ async fn session_manager_round_trip() {
     let store = setup_store(dir.path());
     let sm = SessionManager::new(store as Arc<dyn SessionStore>);
 
-    sm.save_qa(Some("s1"), None, "q1", "a1", None)
+    sm.save_qa(Some("s1"), None, "q1", "a1", None, None)
         .await
         .unwrap();
-    sm.save_qa(Some("s1"), None, "q2", "a2", None)
+    sm.save_qa(Some("s1"), None, "q2", "a2", None, None)
         .await
         .unwrap();
 

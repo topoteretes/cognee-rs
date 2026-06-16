@@ -5,7 +5,7 @@ use crate::types::{SearchError, SearchOutput, SearchParams, SearchRequest, Searc
 use crate::utils::detect_feedback;
 use cognee_database::{IngestDb, SearchHistoryDb, SearchHistoryEntry};
 use cognee_llm::Llm;
-use cognee_session::{SessionContext, SessionManager};
+use cognee_session::{SessionContext, SessionManager, UsedGraphElementIds};
 use std::sync::Arc;
 
 /// Fire-and-forget product analytics event for the start of a search.
@@ -52,6 +52,72 @@ fn emit_search_completed(request: &SearchRequest) {
 #[cfg(not(feature = "telemetry"))]
 #[inline]
 fn emit_search_completed(_request: &SearchRequest) {}
+
+/// Apply the graph-context character limit with the Python-parity precedence:
+/// explicit `max_chars` parameter → (config value, if added) → unlimited.
+///
+/// Currently only the explicit-parameter level is implemented.
+/// TODO(parity): read `max_session_context_chars` from `CacheConfig` when a
+/// config accessor is available in this crate.
+fn apply_context_char_limit(gc: &str, max_chars: Option<usize>) -> &str {
+    match max_chars {
+        Some(limit) => {
+            // `char_indices` gives us a byte boundary safe to split at.
+            if gc.len() <= limit {
+                gc
+            } else {
+                // Find the last char boundary at or before `limit` bytes.
+                let boundary = gc
+                    .char_indices()
+                    .take_while(|(byte_pos, _)| *byte_pos < limit)
+                    .last()
+                    .map(|(byte_pos, c)| byte_pos + c.len_utf8())
+                    .unwrap_or(0);
+                &gc[..boundary]
+            }
+        }
+        None => gc,
+    }
+}
+
+/// Extract node/edge IDs from context items produced by graph-traversal retrievers.
+///
+/// Items that came from a graph search carry `source_id` and `target_id` in
+/// their JSON payload. Pure-RAG items carry neither, so they contribute nothing.
+/// The result shape matches Python's `UsedGraphElementIds` dict.
+fn build_used_graph_element_ids(
+    context: Option<&[crate::types::SearchItem]>,
+) -> Option<UsedGraphElementIds> {
+    let items = context?;
+    let mut node_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut edge_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    for item in items {
+        if let Some(src) = item.payload.get("source_id").and_then(|v| v.as_str()) {
+            node_ids.insert(src.to_string());
+        }
+        if let Some(tgt) = item.payload.get("target_id").and_then(|v| v.as_str()) {
+            node_ids.insert(tgt.to_string());
+        }
+        // Items may also carry an explicit edge id.
+        if let Some(eid) = item.payload.get("edge_id").and_then(|v| v.as_str()) {
+            edge_ids.insert(eid.to_string());
+        }
+    }
+
+    if node_ids.is_empty() && edge_ids.is_empty() {
+        None
+    } else {
+        let mut node_ids_vec: Vec<String> = node_ids.into_iter().collect();
+        let mut edge_ids_vec: Vec<String> = edge_ids.into_iter().collect();
+        node_ids_vec.sort();
+        edge_ids_vec.sort();
+        Some(UsedGraphElementIds {
+            node_ids: node_ids_vec,
+            edge_ids: edge_ids_vec,
+        })
+    }
+}
 
 pub struct SearchOrchestrator {
     registry: SearchTypeRegistry,
@@ -343,23 +409,61 @@ impl SearchOrchestrator {
         }
 
         let user_id_str = request.user_id.map(|id| id.to_string());
-        let session_context =
-            if let (Some(session_id), Some(sm)) = (&request.session_id, &self.session_manager) {
-                let (history, formatted_history) = sm
-                    .load_history_both(Some(session_id), user_id_str.as_deref())
-                    .await
-                    .unwrap_or_default();
-                SessionContext {
-                    session_id: Some(session_id.clone()),
-                    history,
-                    formatted_history,
-                }
+        let session_context = if let (Some(session_id), Some(sm)) =
+            (&request.session_id, &self.session_manager)
+        {
+            let (history, formatted_history) = sm
+                .load_history_both(Some(session_id), user_id_str.as_deref())
+                .await
+                .unwrap_or_default();
+
+            // Prepend graph knowledge snapshot (from improve() sync) if available.
+            // Matches Python `session_manager.py:435-450`:
+            //   "Background knowledge from the knowledge graph:\n" + gc + "\n\n" + history
+            let graph_context = sm
+                .get_graph_context(Some(session_id), user_id_str.as_deref())
+                .await
+                .ok()
+                .flatten();
+            let formatted_history = if let Some(gc) =
+                graph_context.as_deref().filter(|s| !s.is_empty())
+            {
+                let gc = apply_context_char_limit(gc, None);
+                format!(
+                    "Background knowledge from the knowledge graph:\n{gc}\n\n{formatted_history}"
+                )
             } else {
-                SessionContext {
-                    session_id: request.session_id.clone(),
-                    ..SessionContext::default()
-                }
+                formatted_history
             };
+
+            SessionContext {
+                session_id: Some(session_id.clone()),
+                history,
+                formatted_history,
+                graph_context,
+            }
+        } else {
+            SessionContext {
+                session_id: request.session_id.clone(),
+                ..SessionContext::default()
+            }
+        };
+
+        // Look up the latest QA id for the session. This is used by both the
+        // auto-feedback path (to write feedback to the prior entry) and by the
+        // session save path (to know which entry precedes the current turn).
+        // Matches Python `session_manager.py:461-469`.
+        let last_qa_id: Option<String> = if let (Some(session_id), Some(sm)) =
+            (&request.session_id, &self.session_manager)
+            && request.auto_feedback_detection.unwrap_or(false)
+            && !session_id.is_empty()
+        {
+            sm.latest_qa_id(Some(session_id), user_id_str.as_deref())
+                .await
+                .unwrap_or(None)
+        } else {
+            None
+        };
 
         // Auto-feedback detection: if session is active and detection is enabled,
         // check if the user message contains feedback before routing to the retriever.
@@ -368,24 +472,63 @@ impl SearchOrchestrator {
             && !session_id.is_empty()
         {
             let detection = detect_feedback(llm.as_ref(), &request.query_text).await;
-            if detection.feedback_detected && !detection.contains_followup_question {
-                // Pure feedback — acknowledge and return early
-                let acknowledgment = detection
-                    .response_to_user
-                    .unwrap_or_else(|| "Thank you for your feedback!".to_string());
-                let response = prepare_search_result(
-                    request.search_type,
-                    SearchOutput::Text(acknowledgment),
-                    None,
-                    request.dataset_ids.clone(),
-                    false,
-                    request.use_combined_context(),
-                    request.verbose(),
-                );
-                emit_search_completed(request);
-                return Ok(response);
+            // Python gates the whole feedback branch on `last_qa_id is not None`
+            // (`session_manager.py:489`): feedback can only attach to a PRIOR
+            // entry, so when there is no prior turn the message is treated as a
+            // normal query (retriever runs, the turn is saved). Mirroring that
+            // here also ensures the first turn in a session is never dropped.
+            if detection.feedback_detected
+                && let (Some(prior_id), Some(sm)) = (&last_qa_id, &self.session_manager)
+            {
+                // Persist feedback to the PRIOR QA entry before anything else.
+                // Matches Python `session_manager.py:492-516`: feedback to the
+                // previous entry first, then save the new turn.
+                let score: Option<i32> = detection.feedback_score.map(|s| {
+                    let s = s.round() as i32;
+                    s.clamp(1, 5)
+                });
+                let feedback_text = detection
+                    .feedback_text
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|t| !t.is_empty())
+                    .map(String::from)
+                    .unwrap_or_else(|| format!("User message: {}", request.query_text.trim()));
+                if let Err(e) = sm
+                    .add_feedback(
+                        Some(session_id),
+                        user_id_str.as_deref(),
+                        prior_id,
+                        Some(&feedback_text),
+                        score,
+                    )
+                    .await
+                {
+                    tracing::warn!(
+                        prior_qa_id = %prior_id,
+                        "auto-feedback persistence failed, proceeding without storing: {e}"
+                    );
+                }
+
+                if !detection.contains_followup_question {
+                    // Pure feedback — acknowledge and return early.
+                    let acknowledgment = detection
+                        .response_to_user
+                        .unwrap_or_else(|| "Thank you for your feedback!".to_string());
+                    let response = prepare_search_result(
+                        request.search_type,
+                        SearchOutput::Text(acknowledgment),
+                        None,
+                        request.dataset_ids.clone(),
+                        false,
+                        request.use_combined_context(),
+                        request.verbose(),
+                    );
+                    emit_search_completed(request);
+                    return Ok(response);
+                }
             }
-            // If feedback with follow-up, or no feedback, proceed normally
+            // If no feedback, or feedback with follow-up, proceed normally.
         }
 
         let output = retriever
@@ -401,6 +544,13 @@ impl SearchOrchestrator {
             && let SearchOutput::Text(ref answer) = output
         {
             let ctx_json = context.as_ref().and_then(|c| serde_json::to_string(c).ok());
+
+            // Collect node/edge IDs from the retrieved context items so the memify
+            // pipeline can trace which graph elements produced the answer.
+            // Items from graph-traversal retrievers carry `source_id`/`target_id`
+            // payload fields; pure-RAG items carry neither.
+            let used_graph_element_ids = build_used_graph_element_ids(context.as_deref());
+
             let _ = sm
                 .save_qa(
                     Some(session_id),
@@ -408,6 +558,7 @@ impl SearchOrchestrator {
                     &request.query_text,
                     answer,
                     ctx_json.as_deref(),
+                    used_graph_element_ids,
                 )
                 .await;
         }

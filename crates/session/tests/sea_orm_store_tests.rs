@@ -258,10 +258,10 @@ async fn session_manager_save_and_load_round_trip() {
     let store = setup_store().await;
     let sm = SessionManager::new(store as Arc<dyn SessionStore>);
 
-    sm.save_qa(Some("s1"), None, "q1", "a1", Some("ctx1"))
+    sm.save_qa(Some("s1"), None, "q1", "a1", Some("ctx1"), None)
         .await
         .unwrap();
-    sm.save_qa(Some("s1"), None, "q2", "a2", None)
+    sm.save_qa(Some("s1"), None, "q2", "a2", None, None)
         .await
         .unwrap();
 
@@ -456,7 +456,7 @@ async fn session_manager_add_and_delete_feedback() {
     let sm = SessionManager::new(store as Arc<dyn SessionStore>);
 
     let qa_id = sm
-        .save_qa(Some("s1"), None, "q1", "a1", None)
+        .save_qa(Some("s1"), None, "q1", "a1", None, None)
         .await
         .unwrap();
 

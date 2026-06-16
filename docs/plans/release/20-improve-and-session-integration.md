@@ -74,8 +74,7 @@ Read first:
     ~400–413 save_qa).
   - `crates/session/src/session_manager.rs` (`save_qa` ~106–139, `add_feedback`
     ~198–229, `get_graph_context`/`set_graph_context` ~252–272).
-  - `crates/session/src/types.rs` (`SessionQAEntry`, `UsedGraphElementIds`, ~19–41).
-  - `crates/search/src/orchestration/types.rs` (`SessionContext`).
+  - `crates/session/src/types.rs` (`SessionQAEntry`, `UsedGraphElementIds` ~12–17, `SessionContext` ~46–50; ~19–41).
 
 Re-grep:
 
@@ -83,7 +82,7 @@ Re-grep:
 grep -n "stages_run\|feedback_alpha\|try_acquire\|persist\|global_context\|MemifyConfig" crates/lib/src/api/improve.rs
 grep -n "load_history_both\|save_qa\|graph_context\|used_graph_element_ids\|SessionContext" crates/search/src/orchestration/search_orchestrator.rs
 grep -n "fn save_qa\|fn add_feedback\|fn get_graph_context\|fn set_graph_context" crates/session/src/session_manager.rs
-grep -n "struct SessionContext\|graph_context" crates/search/src/orchestration/types.rs
+grep -n "struct SessionContext\|graph_context" crates/session/src/types.rs
 ```
 
 ## Python reference
@@ -226,12 +225,14 @@ grep -n "struct SessionContext\|graph_context" crates/search/src/orchestration/t
 ### Part B — session→search integration
 
 5. **Add a `graph_context` field to `SessionContext`** in
-   `crates/search/src/orchestration/types.rs`:
+   `crates/session/src/types.rs` (lines ~46–50; note: there is no
+   `crates/search/src/orchestration/types.rs` — `SessionContext` is defined and re-exported
+   from the session crate):
 
    ```rust
    pub struct SessionContext {
        pub session_id: Option<String>,
-       pub history: Vec<SessionQAEntry>,           // or current type
+       pub history: Vec<Message>,
        pub formatted_history: String,
        /// Stored knowledge-graph snapshot to prepend to history (from improve()).
        pub graph_context: Option<String>,

@@ -14,7 +14,7 @@ use cognee_graph::MockGraphDB;
 use cognee_ingestion::AddPipeline;
 use cognee_lib::api::improve::{ImproveParams, improve};
 use cognee_ontology::{NoOpOntologyResolver, OntologyResolver};
-use cognee_session::{FsSessionStore, SessionManager, SessionStore};
+use cognee_session::{FsSessionStore, ImproveLockGuard, SessionManager, SessionStore};
 use cognee_storage::{LocalStorage, StorageTrait};
 use cognee_test_utils::MockLlm;
 use cognee_vector::MockVectorDB;
@@ -79,11 +79,12 @@ async fn make_harness() -> Harness {
 }
 
 // ---------------------------------------------------------------------------
-// (a) Compile-time: no run_in_background parameter
+// (a) Compile-time check: ImproveParams exhaustive construction
 //
-// If run_in_background were still present, the calls below would fail to
-// compile because `ImproveParams` has exactly 21 fields (18 from LIB-04 plus
-// the three v2 fields added in E-05: extraction_tasks, enrichment_tasks, data).
+// `ImproveParams` now has 23 fields (18 from LIB-04, three v2 fields from E-05:
+// extraction_tasks, enrichment_tasks, data; and two new parity fields:
+// build_global_context_index, run_in_background). The struct literal below must
+// list every field so the compiler catches future additions.
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
@@ -129,6 +130,8 @@ async fn improve_with_sessions_runs_at_least_memify() {
         extraction_tasks: None,
         enrichment_tasks: None,
         data: None,
+        build_global_context_index: false,
+        run_in_background: false,
     })
     .await
     .unwrap();
@@ -174,6 +177,8 @@ async fn improve_without_sessions_runs_only_memify() {
         extraction_tasks: None,
         enrichment_tasks: None,
         data: None,
+        build_global_context_index: false,
+        run_in_background: false,
     })
     .await
     .unwrap();
@@ -184,4 +189,68 @@ async fn improve_without_sessions_runs_only_memify() {
         "without sessions only stage 3 should run"
     );
     assert!(r.memify_result.is_some());
+}
+
+// ---------------------------------------------------------------------------
+// (d) improve() returns an empty/default result when the single target
+//     session is already being improved (lock held by another caller).
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn improve_skips_when_locked() {
+    let h = make_harness().await;
+    let owner = Uuid::new_v4();
+    let llm: Arc<dyn cognee_llm::Llm> = Arc::new(MockLlm::empty());
+    let config = CognifyConfig::default();
+
+    let session_id = "locked-session";
+
+    // Simulate another caller already holding the improve lock for this session.
+    let _held_guard = ImproveLockGuard::acquire(session_id)
+        .expect("should be able to acquire lock when no other holder exists");
+
+    // Now try to improve the same session — it should no-op.
+    let r = improve(ImproveParams {
+        dataset_name: "ds_locked".to_string(),
+        session_ids: Some(vec![session_id.to_string()]),
+        node_name: None,
+        owner_id: owner,
+        tenant_id: None,
+        feedback_alpha: 0.1,
+        llm,
+        storage: Arc::clone(&h.storage),
+        graph_db: h.graph_db.clone() as Arc<_>,
+        vector_db: h.vector_db.clone() as Arc<_>,
+        embedding_engine: h.embedding_engine.clone() as Arc<_>,
+        ontology_resolver: Arc::clone(&h.ontology),
+        db: Some(Arc::clone(&h.db)),
+        session_store: Some(Arc::clone(&h.session_store)),
+        session_manager: Some(Arc::clone(&h.session_manager)),
+        add_pipeline: Some(&h.add_pipeline),
+        checkpoint_store: Some(h.checkpoint_store.clone() as Arc<_>),
+        cognify_config: &config,
+        extraction_tasks: None,
+        enrichment_tasks: None,
+        data: None,
+        build_global_context_index: false,
+        run_in_background: false,
+    })
+    .await
+    .unwrap();
+
+    // When skipped due to lock, improve() returns the default result with no
+    // stages run.
+    assert!(
+        r.stages_run.is_empty(),
+        "improve should run no stages when locked; got {:?}",
+        r.stages_run
+    );
+
+    // After the held guard drops, the same session can be improved again.
+    drop(_held_guard);
+    let guard2 = ImproveLockGuard::acquire(session_id);
+    assert!(
+        guard2.is_some(),
+        "lock should be releaseable and re-acquirable after the held guard drops"
+    );
 }
