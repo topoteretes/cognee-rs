@@ -133,6 +133,40 @@ returns the pre-existing row), so the binding partitions the result into `added`
 `deduplicated` (already existed) by content-addressed id; there is no in-pipeline "drop duplicates
 from the result" behavior to rely on.
 
+## Cloud sync
+
+- **`POST /api/v1/sync` — no-op stub.** `crates/cloud/src/sync.rs::run_background()` marks the
+  operation started, ticks a progress counter from 0 → 100 %, and marks it completed with zero
+  records/bytes transferred. No data is actually moved. The HTTP wire contract accepts the request
+  and returns a well-formed response, but the reported transfer totals are always zero. The full
+  diff/upload/download/cognify orchestration is deferred. This gap is documented in the
+  `run_background` rustdoc.
+
+## Session stores
+
+- **`FsSessionStore` on-disk container differs from Python.** The Rust `FsSessionStore`
+  (`crates/session/src/fs_store.rs`) stores sessions as plain JSON files at
+  `{base_dir}/{user_id}/{session_id}.json` — one JSON array of `QaEntry` objects per file. The
+  Python `FsSessionStore` uses a `diskcache` SQLite database at `.cognee_fs_cache/sessions_db/`
+  with its own key-hashing layout. The *entry shape* is compatible (matching field names and JSON
+  types); the *container format* is not. A Rust FS session store and a Python FS session store
+  cannot read each other's files. For cross-process or cross-SDK session sharing, use the
+  `SeaOrm` or `Redis` session store backends instead.
+
+## Visualization
+
+- **Story / Schema / Inspector multi-view deferred.** The Python `cognee_network_visualization`
+  module renders three HTML tabs (Story, Schema, Inspector) backed by four JS modules
+  (`ui_chrome`, `schema_view`, `story_view`, `inspector`). The Rust `cognee-visualization` crate
+  emits a single self-contained d3.js force-directed graph view. The schema tab is always absent;
+  node-type coloring uses the 9-entry hard-coded map in `colors.rs`. The full multi-view rewrite
+  is a substantial JS-embedding effort and is deferred to a post-0.1.0 release.
+
+  The 8-key schema-node name fallback from Python's `preprocessor.py:223–237` (`database_type`,
+  `primary_key`, `source_table`, `source_column`, `target_table`, `target_column`,
+  `relationship_type`, `row_count_estimate`) is implemented in `serialize.rs` so schema-typed
+  nodes render with meaningful names in the single-view output.
+
 ## Cross-SDK parity harness
 
 The HTTP parity harness ships. Follow-ups noted in its (now-removed) design doc:

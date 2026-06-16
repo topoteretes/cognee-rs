@@ -159,6 +159,7 @@ pub fn build_search_request(
         auto_feedback_detection,
         neighborhood_depth: None,
         neighborhood_seed_top_k: None,
+        summarize_context: None,
     })
 }
 
@@ -295,6 +296,7 @@ pub async fn recall(
         Some(session_store_ref.as_ref()),
         Some(session_manager_ref.as_ref()),
         scope_opt,
+        None,
     )
     .await
     .map_err(|e| SdkError::Runtime(format!("recall failed: {e}")))?;

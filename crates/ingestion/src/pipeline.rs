@@ -57,6 +57,12 @@ pub struct AddParams {
 
     /// Importance weight (0.0 to 1.0) for relevance scoring.
     pub importance_weight: Option<f64>,
+
+    /// When `true`, skip content that is already present in the dataset
+    /// (deduplication by content hash). Matches Python's `incremental_loading`
+    /// parameter. Defaults to `false`; callers that want Python-parity should
+    /// set this to `true`.
+    pub incremental_loading: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -939,7 +945,9 @@ fn build_add_pipeline_internal(
         acl_db,
         add_params,
     ))
-    .with_name("ingestion")
+    // Persisted pipeline-run name; must match Python (add.py:319) and the
+    // canonical "add_pipeline" name DatasetManager::get_status queries.
+    .with_name("add_pipeline")
     .with_data_id(data_id_fn)
     .build()
 }

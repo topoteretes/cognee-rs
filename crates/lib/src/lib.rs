@@ -203,7 +203,7 @@ pub mod prelude {
 }
 
 pub use add::{
-    AddParams, AddPipeline, ContentHasher, ProcessedInput, build_add_pipeline,
+    AddParams, AddPipeline, ContentHasher, ProcessedInput, build_add_pipeline, generate_dataset_id,
     make_persist_data_task, make_process_input_task, persist_data, process_input,
 };
 

@@ -112,6 +112,7 @@ pub fn run(args: SearchArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> 
             auto_feedback_detection: None,
             neighborhood_depth: None,
             neighborhood_seed_top_k: None,
+            summarize_context: None,
         };
 
         let response = orchestrator

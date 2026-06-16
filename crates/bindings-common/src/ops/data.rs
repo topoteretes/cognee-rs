@@ -38,6 +38,7 @@
 use serde_json::json;
 use uuid::Uuid;
 
+use cognee_lib::add::generate_dataset_id;
 use cognee_lib::api::{
     DatasetRef, ForgetTarget, PruneTarget, forget as cognee_forget,
     prune_data as cognee_prune_data, prune_system as cognee_prune_system, update as cognee_update,
@@ -158,6 +159,13 @@ pub async fn forget(
 /// `data_id_str` is a UUID string. `new_data_json` is a `{ type, … }` object
 /// or array. `opts` may be `serde_json::Value::Null`.
 ///
+/// Optional `opts` fields (camelCase):
+/// - `"datasetId"`: explicit dataset UUID string (falls back to name-derived ID)
+/// - `"tenant"`: tenant UUID string
+/// - `"nodeSet"`: JSON array of node identifier strings
+/// - `"preferredLoaders"`: JSON object mapping MIME type / extension → loader name
+/// - `"incrementalLoading"`: bool (default `false`)
+///
 /// Returns `{"deletedDataId":"…","deleteResult":{…},"newData":[…],"cognifyResult":{…}}`.
 pub async fn update(
     state: &HandleState,
@@ -174,12 +182,48 @@ pub async fn update(
     let svc = state.services().await?;
     let owner_id = state.owner_id().await?;
 
+    // Resolve `dataset_id`: prefer an explicit UUID from opts; fall back to
+    // the deterministic name-derived ID used by all other bindings.
+    let dataset_id = opts
+        .get("datasetId")
+        .and_then(|v| v.as_str())
+        .map(|s| {
+            Uuid::parse_str(s)
+                .map_err(|e| SdkError::Validation(format!("invalid `datasetId` UUID: {e}")))
+        })
+        .transpose()?
+        .unwrap_or_else(|| generate_dataset_id(dataset_name, owner_id, tenant_id));
+
+    // Parse optional extra params from opts.
+    let node_set: Option<Vec<String>> = opts.get("nodeSet").and_then(|v| v.as_array()).map(|arr| {
+        arr.iter()
+            .filter_map(|s| s.as_str().map(str::to_owned))
+            .collect()
+    });
+    let preferred_loaders: Option<std::collections::HashMap<String, String>> = opts
+        .get("preferredLoaders")
+        .and_then(|v| v.as_object())
+        .map(|obj| {
+            obj.iter()
+                .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_owned())))
+                .collect()
+        });
+    let incremental_loading = opts
+        .get("incrementalLoading")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
     let result = cognee_update(
         data_id,
         new_data,
+        dataset_id,
         dataset_name,
         owner_id,
         tenant_id,
+        node_set,
+        preferred_loaders,
+        incremental_loading,
+        None, // acl_db: callers that want ACL enforcement should use the HTTP handler
         svc.delete_service.as_ref(),
         svc.add_pipeline.as_ref(),
         svc.llm.clone(),

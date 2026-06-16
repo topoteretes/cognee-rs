@@ -543,7 +543,16 @@ impl SearchOrchestrator {
         if let (Some(session_id), Some(sm)) = (&request.session_id, &self.session_manager)
             && let SearchOutput::Text(ref answer) = output
         {
-            let ctx_json = context.as_ref().and_then(|c| serde_json::to_string(c).ok());
+            // Python parity: only persist the full context payload when the caller
+            // explicitly opts in via `summarize_context = true`.  Storing the full
+            // context unconditionally would silently change the cross-SDK persisted
+            // shape for callers that omit the flag, so we write an empty string when
+            // it is absent or set to false.
+            let ctx_json = if request.summarize_context == Some(true) {
+                context.as_ref().and_then(|c| serde_json::to_string(c).ok())
+            } else {
+                Some(String::new())
+            };
 
             // Collect node/edge IDs from the retrieved context items so the memify
             // pipeline can trace which graph elements produced the answer.
@@ -686,6 +695,7 @@ mod tests {
             auto_feedback_detection: None,
             neighborhood_depth: None,
             neighborhood_seed_top_k: None,
+            summarize_context: None,
         };
 
         let response = orchestrator.search(&request).await.unwrap();
@@ -732,6 +742,7 @@ mod tests {
             auto_feedback_detection: None,
             neighborhood_depth: None,
             neighborhood_seed_top_k: None,
+            summarize_context: None,
         };
 
         let response = orchestrator.search(&request).await.unwrap();
@@ -783,6 +794,7 @@ mod tests {
             auto_feedback_detection: None,
             neighborhood_depth: None,
             neighborhood_seed_top_k: None,
+            summarize_context: None,
         };
 
         let response = orchestrator.search(&request).await.unwrap();
@@ -861,6 +873,7 @@ mod tests {
             auto_feedback_detection: None,
             neighborhood_depth: None,
             neighborhood_seed_top_k: None,
+            summarize_context: None,
         };
 
         let response = orchestrator.search(&request).await.unwrap();
@@ -962,6 +975,7 @@ mod tests {
             auto_feedback_detection: None,
             neighborhood_depth: None,
             neighborhood_seed_top_k: None,
+            summarize_context: None,
         };
 
         let response = orchestrator.search(&request).await.unwrap();
@@ -1057,6 +1071,7 @@ mod tests {
             auto_feedback_detection: None,
             neighborhood_depth: None,
             neighborhood_seed_top_k: None,
+            summarize_context: None,
         };
 
         let response = orchestrator.search(&request).await.unwrap();
@@ -1107,6 +1122,7 @@ mod tests {
             auto_feedback_detection: None,
             neighborhood_depth: None,
             neighborhood_seed_top_k: None,
+            summarize_context: None,
         };
 
         let _ = orchestrator.search(&request).await.unwrap();
@@ -1159,6 +1175,7 @@ mod tests {
                 auto_feedback_detection: None,
                 neighborhood_depth: None,
                 neighborhood_seed_top_k: None,
+                summarize_context: None,
             },
             SearchRequest {
                 query_text: "second".to_string(),
@@ -1186,6 +1203,7 @@ mod tests {
                 auto_feedback_detection: None,
                 neighborhood_depth: None,
                 neighborhood_seed_top_k: None,
+                summarize_context: None,
             },
         ];
 
@@ -1232,6 +1250,7 @@ mod tests {
             auto_feedback_detection: None,
             neighborhood_depth: None,
             neighborhood_seed_top_k: None,
+            summarize_context: None,
         };
 
         let response = orchestrator.search(&request).await.unwrap();
@@ -1326,6 +1345,7 @@ mod tests {
             auto_feedback_detection: None,
             neighborhood_depth: None,
             neighborhood_seed_top_k: None,
+            summarize_context: None,
         }
     }
 
@@ -1646,6 +1666,7 @@ mod tests {
             auto_feedback_detection: None,
             neighborhood_depth: None,
             neighborhood_seed_top_k: None,
+            summarize_context: None,
         };
 
         let result = orchestrator.search(&request).await;

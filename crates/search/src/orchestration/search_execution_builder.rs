@@ -641,6 +641,7 @@ mod tests {
             auto_feedback_detection: None,
             neighborhood_depth: None,
             neighborhood_seed_top_k: None,
+            summarize_context: None,
         };
 
         let response = orchestrator.search(&request).await.unwrap();
@@ -720,6 +721,7 @@ mod tests {
             auto_feedback_detection: None,
             neighborhood_depth: None,
             neighborhood_seed_top_k: None,
+            summarize_context: None,
         };
 
         let response = orchestrator.search(&request).await.unwrap();

@@ -79,6 +79,7 @@ fn make_request(query: &str, search_type: SearchType) -> SearchRequest {
         auto_feedback_detection: None,
         neighborhood_depth: None,
         neighborhood_seed_top_k: None,
+        summarize_context: None,
     }
 }
 

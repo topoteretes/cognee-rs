@@ -134,6 +134,7 @@ async fn test_scope_auto_with_session_id_uses_session_path() {
         Some(&*h.store),
         Some(&h.manager),
         None, // scope = None => "auto"
+        None, // options
     )
     .await
     .expect("recall ok");
@@ -169,6 +170,7 @@ async fn test_scope_auto_without_session_id_uses_graph_path() {
         Some(&*h.store),
         Some(&h.manager),
         None, // scope = None => "auto" => [Graph]
+        None, // options
     )
     .await
     .expect("recall ok");
@@ -207,6 +209,7 @@ async fn test_scope_session_returns_qa_pairs() {
         Some(&*h.store),
         Some(&h.manager),
         Some(vec![RecallScope::Session]),
+        None,
     )
     .await
     .expect("recall ok");
@@ -254,6 +257,7 @@ async fn test_scope_trace_returns_trace_entries() {
         Some(&*h.store),
         Some(&h.manager),
         Some(vec![RecallScope::Trace]),
+        None,
     )
     .await
     .expect("recall ok");
@@ -289,6 +293,7 @@ async fn test_scope_graph_context_returns_subgraph() {
         Some(&*h.store),
         Some(&h.manager),
         Some(vec![RecallScope::GraphContext]),
+        None,
     )
     .await
     .expect("recall ok");
@@ -334,6 +339,7 @@ async fn test_scope_all_merges_four_sources() {
             RecallScope::Trace,
             RecallScope::GraphContext,
         ]),
+        None,
     )
     .await
     .expect("recall ok");
@@ -369,6 +375,7 @@ async fn test_scope_session_without_session_id_returns_empty() {
         Some(&*h.store),
         Some(&h.manager),
         Some(vec![RecallScope::Session]),
+        None,
     )
     .await
     .expect("recall ok");

@@ -44,10 +44,11 @@ grouped (the config items B7.5/B7.6 naturally group).
 
 ## Item 1 — Permission enforcement always-on (B7.3)
 
-- **Rust:** `crates/lib/src/api/datasets.rs`. `acl_db: Option<Arc<dyn AclDb>>` (~line 29);
-  `list_datasets` skips the ACL check entirely when `acl_db` is `None` (~lines 52–64);
-  `has_data` does **no** auth check at all (~lines 80–83): `count_dataset_data` then
-  `Ok(count > 0)`.
+- **Rust:** `crates/lib/src/api/datasets.rs`. `acl_db: Option<Arc<dyn AclDb>>` (~line 32);
+  `list_datasets` skips the ACL check entirely when `acl_db` is `None` (~lines 55–66);
+  `has_data` does **no** auth check at all (~lines 83–85): `count_dataset_data` then
+  `Ok(count > 0)`. Note: `has_data` also takes no `owner_id` parameter, which means
+  even owner-scoping is absent — any caller can query any dataset's existence.
 - **Python:** always enforces the 4-permission model (read/write/delete/share) on every
   dataset op — there is no "ACL off" path.
 - **Gap:** when `acl_db` is unset, reads/deletes silently pass (owner-scoped only) and
@@ -65,7 +66,7 @@ grouped (the config items B7.5/B7.6 naturally group).
 ## Item 2 — `update()` explicit dataset_id + dropped fields + auth (B6.5)
 
 - **Rust:** `crates/lib/src/api/update.rs`. Signature takes `dataset_name: &str` and
-  **re-derives** the id at ~line 91: `let dataset_id =
+  **re-derives** the id at ~line 93: `let dataset_id =
   cognee_ingestion::generate_dataset_id(dataset_name, owner_id, tenant_id);`. Does not accept
   `node_set` / `preferred_loaders` / `incremental_loading`, and has no auth gate.
 - **Python:** `/tmp/cognee-python/cognee/api/v1/update/update.py:12–22` — takes explicit
@@ -84,9 +85,9 @@ grouped (the config items B7.5/B7.6 naturally group).
 
 ## Item 3 — Custom-graph-model delete fallback (B6.6)
 
-- **Rust:** `crates/delete/src/lib.rs` ~lines 1326–1331 — fetches the `Data` row and errors
+- **Rust:** `crates/delete/src/lib.rs` ~lines 1509–1514 — fetches the `Data` row and errors
   if absent: `data.ok_or_else(|| DeleteError::Validation(format!("Data {data_id} was not
-  found")))?`.
+  found")))?`. (The file is ~4,779 lines; the audit figure of 1326 is stale.)
 - **Python:** `/tmp/cognee-python/cognee/api/v1/datasets/datasets.py:165–176` — when the
   Data row is absent ("user is using a custom graph model"), it still calls
   `delete_data_nodes_and_edges(dataset_id, data_id, user.id)` and optionally deletes the
@@ -103,10 +104,10 @@ grouped (the config items B7.5/B7.6 naturally group).
 
 ## Item 4 — `get_status` multi-pipeline + `list_data` ordering (B7.4)
 
-- **Rust:** `crates/lib/src/api/datasets.rs`. `get_status` (~89–104) queries only
+- **Rust:** `crates/lib/src/api/datasets.rs`. `get_status` (~92–107) queries only
   `"cognify_pipeline"` and returns a flat `HashMap<Uuid, PipelineRunStatus>`. `list_data`
-  (~lines around the read-permission check) returns `self.db.get_dataset_data(dataset_id)`
-  in unspecified order.
+  (~71–78, calls `get_dataset_data` after a read-permission check) returns
+  `self.db.get_dataset_data(dataset_id)` in unspecified order.
 - **Python:** returns a **nested** multi-pipeline status per dataset, and orders dataset
   data by `data_size` descending.
 - **Gap:** Rust hides non-cognify pipeline status and emits data in non-deterministic order
@@ -125,7 +126,8 @@ grouped (the config items B7.5/B7.6 naturally group).
 - **Rust:** `crates/lib/src/api/recall.rs:65–77` — `recall()` exposes `query_text`,
   `query_type`, `datasets`, `top_k`, `auto_route`, `session_id`, `user_id`, `scope`. The
   advanced knobs exist on `SearchRequest`
-  (`crates/search/src/types/search_request.rs:16–54`) but are not on the facade.
+  (`crates/search/src/types/search_request.rs:16–54` — confirmed current) but are not on
+  the facade.
 - **Python:** `/tmp/cognee-python/cognee/api/v1/recall/recall.py:314–337` — exposes
   `system_prompt`, `system_prompt_path`, `node_name`, `node_name_filter_operator`,
   `only_context`, `wide_search_top_k` (default 100), `triplet_distance_penalty` (default 6.5),
@@ -144,11 +146,13 @@ grouped (the config items B7.5/B7.6 naturally group).
 
 ## Item 6 — Config setter allowlists + missing keys + introspection (B7.5)
 
-- **Rust:** `crates/lib/src/config.rs` (setters ~806–1073). Narrow allowlists reject valid
-  Python keys; **missing** `set_relational_db_config` / `set_migration_db_config`; no
-  introspection (`get_settings`, masked `save_*_config`); missing knobs for features Rust
-  *has* (`transcription_model`, temporal prompt paths, `embedding_api_version`, LLM
-  `fallback_*`).
+- **Rust:** `crates/lib/src/config.rs` (setters ~802–1298). The setters that DO exist
+  include `set_relational_db_url` (line 887) and `set_llm_api_version` (line 1034) and
+  `set_embedding_api_key`. **Missing:** `set_relational_db_config` (bulk setter) and
+  `set_migration_db_config`; no introspection (`get_settings`, masked `save_*_config`);
+  missing knobs for features Rust *has* (`transcription_model`, temporal prompt paths,
+  LLM `fallback_*`). Note: `embedding_api_version` does NOT have a dedicated setter but
+  can be set via `set_llm_api_version` — verify the field mapping when implementing.
 - **Python:** `/tmp/cognee-python/cognee/api/v1/config/config.py:207–308` — full setter +
   save/load surface across all config sections.
 - **Gap:** SDK config parity is incomplete; users can't set or introspect several supported
@@ -164,11 +168,14 @@ grouped (the config items B7.5/B7.6 naturally group).
 
 ## Item 7 — Default-string mismatches (B7.6)
 
-- **Rust:** `crates/lib/src/config.rs` defaults (~605–625): `logs_root_directory:
-  "./logs"`, `llm_model: "gpt-5-mini"`, `graph_database_provider: "kuzu"`.
-- **Python:** `base_config.py:15` `logs_root_directory` → `~/.cognee/logs`;
-  `infrastructure/llm/config.py:45` `llm_model = "openai/gpt-5-mini"`;
-  `infrastructure/databases/graph/config.py:45` `graph_database_provider = "ladybug"`.
+- **Rust:** `crates/lib/src/config.rs` defaults (~590–620 in `Settings::default()`):
+  `logs_root_directory: "./logs"` (line 597), `llm_model: "gpt-5-mini"` (line 606),
+  `graph_database_provider: "kuzu"` (line 617). All three confirmed present in live code.
+- **Python:** `cognee/base_config.py:15` `logs_root_directory` → `~/.cognee/logs`
+  (via `os.getenv("COGNEE_LOGS_DIR", str(Path.home() / ".cognee" / "logs"))`);
+  `cognee/infrastructure/llm/config.py:45` `llm_model = "openai/gpt-5-mini"`;
+  `cognee/infrastructure/databases/graph/config.py:45` `graph_database_provider = "ladybug"`.
+  All three confirmed in live Python code.
 - **Gap:** three default strings differ. These leak into telemetry/settings output and cause
   confusing config diffs cross-SDK.
 
@@ -189,12 +196,15 @@ grouped (the config items B7.5/B7.6 naturally group).
 
 ## Item 8 — Stored QA `context` payload (B5.2)
 
-- **Rust:** `crates/search/src/orchestration/search_orchestrator.rs:400–412` — always stores
+- **Rust:** `crates/search/src/orchestration/search_orchestrator.rs:546–560` — always stores
   the full retrieved context: `let ctx_json = context.as_ref().and_then(|c|
-  serde_json::to_string(c).ok());` then `save_qa(..., ctx_json.as_deref())`.
-- **Python:** `/tmp/cognee-python/cognee/infrastructure/session/session_manager.py` (~339,
-  ~518–521) — `context_to_store` is `""` by default, or a **summary** only when
-  `summarize_context=True`; never the full context.
+  serde_json::to_string(c).ok());` then `save_qa(..., ctx_json.as_deref())`. (Audit
+  line ~400 is stale; confirmed at ~546 in current code.)
+- **Python:** `cognee/infrastructure/session/session_manager.py` (~339, ~518–521) —
+  `context_to_store` is `""` by default (returned by
+  `generate_session_completion_with_optional_summary` when `summarize_context=False`), or
+  a **summary** only when `summarize_context=True`; never the full context. Confirmed
+  against Python test at `tests/unit/modules/retrieval/test_completion.py:386`.
 - **Gap:** persisted QA entries diverge cross-SDK — Rust bloats entries with full context;
   Python stores empty/summary.
 - **Recommended fix:** add a `summarize_context: bool` (default `false`) to the search/session
@@ -209,9 +219,12 @@ grouped (the config items B7.5/B7.6 naturally group).
 
 ## Item 9 — `CloudClient` proxy add/cognify/search/remember_entry (B8.3)
 
-- **Rust:** `crates/cloud/src/cloud_client.rs:137–262` — proxies `health_check`, `remember`,
-  `recall`, `improve`, `forget`. **Missing** `add`, `cognify`, `search`, `remember_entry`.
-- **Python:** the cloud client / `serve()` path proxies the full operation set.
+- **Rust:** `crates/cloud/src/cloud_client.rs` (~130–280) — proxies `health_check` (~137),
+  `remember` (~149), `recall` (~203), `improve` (~232), `forget` (~262). **Missing** `add`,
+  `cognify`, `search`, `remember_entry`.
+- **Python:** `cognee/api/v1/serve/cloud_client.py` — proxies `remember` (~49), `recall`
+  (~131), `improve` (~166), `remember_entry` (~99), **plus** `add` (~191), `cognify`
+  (~227), `search` (~254). The full operation set is confirmed in live Python code.
 - **Gap:** when connected via `serve()`, `add`/`cognify`/`search`/`remember_entry` can't
   reach the cloud — they fall back to local or error.
 - **Recommended fix:** add the four proxy methods following the existing
@@ -228,7 +241,8 @@ grouped (the config items B7.5/B7.6 naturally group).
 - **Rust:** `crates/cloud/src/sync.rs:57–79` — `run_background` marks started, ticks
   progress `[0,80,90,95,100]`, marks completed with zeros `(0,0,0,0)` for
   records/bytes. **Moves no data.** The HTTP wire contract (`POST /api/v1/sync`) looks
-  complete.
+  complete. The rustdoc at line 53 already labels this a "Stub implementation for P6" —
+  i.e., it is partially self-documented but NOT in `docs/not-implemented.md` yet.
 - **Python:** sync performs an actual diff/upload/download.
 - **Gap:** the wire contract advertises a working sync, but it's a progress-ticker no-op.
   `sync` is not in CLAUDE.md's implemented list.
@@ -245,7 +259,8 @@ grouped (the config items B7.5/B7.6 naturally group).
 
 - **Rust:** `crates/session/src/fs_store.rs` — plain JSON files at
   `{base_dir}/{user_id}/{session_id}.json` (one JSON array of entries per session). The entry
-  **shape** matches Python; the **container** does not.
+  **shape** matches Python (confirmed: the module rustdoc at lines 4–10 already documents the
+  divergence explicitly); the **container** does not.
 - **Python:** diskcache **SQLite** backend at `.cognee_fs_cache/sessions_db/` (a SQLite DB,
   not per-session JSON files). Uses the `diskcache` library.
 - **Gap:** the on-disk container differs, so a Rust FS session store and a Python FS session
@@ -264,9 +279,15 @@ grouped (the config items B7.5/B7.6 naturally group).
 
 ## Item 12 — Visualization multi-view + name fallback (B8.4)
 
-- **Rust:** `crates/visualization/src/lib.rs` `render` (~77–80) passes `None` for schema →
-  the schema tab always shows "No schema configured" (`html.rs` substitutes `"null"`).
-  `colors.rs:19–37` is a stale flat node-color map. Name derivation is name-or-id only.
+- **Rust:** `crates/visualization/src/lib.rs` `render` (~77–80) passes `None` for schema
+  → `html::build_html(&serialized, None)` always yields null schema data. `colors.rs:19–37`
+  has 9 hard-coded node types (Entity, EntityType, DocumentChunk, TextSummary, TableRow,
+  TableType, ColumnValue, SchemaTable, DatabaseSchema, SchemaRelationship) plus default +
+  unknown fallbacks — this is current as of task 15/16, not "stale". Provenance colors are
+  already implemented with golden-angle HSL rotation. Multi-view (Story/Schema/Inspector tabs)
+  is absent: the Python `cognee_network_visualization.py` uses 4 JS modules and 3 HTML tabs;
+  Rust emits a single-tab d3 force-directed view. The schema-node 8-key name fallback from
+  Python's `preprocessor.py:223–237` is not ported.
 - **Python:** `/tmp/cognee-python/cognee/modules/visualization/cognee_network_visualization.py:52–80`
   emits **Story / Schema / Inspector** views (4 JS modules: `ui_chrome`, `schema_view`,
   `story_view`, `inspector`). `preprocessor.py:223–237` derives schema-node display via an
@@ -276,14 +297,16 @@ grouped (the config items B7.5/B7.6 naturally group).
   map and name fallback are narrower. Both still emit a self-contained d3.v7 graph, so the
   core view works.
 - **Recommended fix:** scope to the highest-value sub-gaps for 0.1.0: (a) implement the
-  multi-key schema-node name/field fallback (the 8 keys above) so schema-typed nodes render
-  meaningfully; (b) refresh `colors.rs` to cover the current node-type set; (c) optionally
-  thread schema data through `render` instead of `None`. The full Story/Inspector view rewrite
-  is a large effort — defer to post-release and track as an issue.
+  multi-key schema-node name/field fallback (the 8 keys from Python's `preprocessor.py:223–237`)
+  so schema-typed nodes render meaningfully; (b) `colors.rs` already covers the current
+  node-type set — skip refreshing it; (c) optionally thread schema data through `render`
+  instead of `None` so the schema tab is not always empty. The full Story/Inspector view
+  rewrite is a large effort — defer to post-release and track as an issue.
 - **Severity:** Med.
-- **Acceptance:** schema-typed nodes show derived names/fields via the 8-key fallback; the
-  color map covers all current node types; the Story/Inspector rewrite is tracked as a
-  follow-up issue with the gap documented.
+- **Acceptance:** schema-typed nodes show derived names/fields via the 8-key fallback;
+  `colors.rs` already covers current node types (no change needed); the Story/Inspector
+  rewrite is tracked as a follow-up issue with the gap documented in
+  `docs/not-implemented.md`.
 
 ---
 

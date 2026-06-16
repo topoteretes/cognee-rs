@@ -85,8 +85,19 @@ impl OpenAIAdapter {
         let transcription_model =
             std::env::var("TRANSCRIPTION_MODEL").unwrap_or_else(|_| "whisper-1".to_string());
 
+        // Strip a leading litellm-style "openai/" provider prefix. Python's
+        // litellm accepts provider-qualified names (e.g. "openai/gpt-5-mini")
+        // and strips the provider before calling the OpenAI-native API, which
+        // itself rejects the prefix. Strip it here for parity so a
+        // provider-qualified config value works against real OpenAI.
+        let model: String = model.into();
+        let model = model
+            .strip_prefix("openai/")
+            .map(str::to_string)
+            .unwrap_or(model);
+
         Ok(Self {
-            model: model.into(),
+            model,
             api_key: api_key.into(),
             base_url: base_url.unwrap_or_else(|| Self::DEFAULT_BASE_URL.to_string()),
             client,
@@ -954,6 +965,16 @@ struct OpenAIUsage {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_openai_provider_prefix_is_stripped() {
+        // litellm-style "openai/<model>" must be sent as bare "<model>".
+        let adapter = OpenAIAdapter::new("openai/gpt-5-mini", "test-key", None).unwrap();
+        assert_eq!(adapter.model(), "gpt-5-mini");
+        // Non-openai provider prefixes (custom endpoints) are left intact.
+        let adapter = OpenAIAdapter::new("ollama/llama3", "test-key", None).unwrap();
+        assert_eq!(adapter.model(), "ollama/llama3");
+    }
 
     #[test]
     fn test_openai_adapter_creation() {

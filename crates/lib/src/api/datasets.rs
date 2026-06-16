@@ -68,39 +68,54 @@ impl DatasetManager {
     }
 
     /// List all data items in a dataset, with permission check.
+    ///
+    /// Results are sorted by `data_size` descending (largest first), matching
+    /// Python SDK behaviour.
     pub async fn list_data(
         &self,
         dataset_id: Uuid,
         owner_id: Uuid,
     ) -> Result<Vec<Data>, DatasetError> {
         self.check_read_permission(owner_id, dataset_id).await?;
-        Ok(self.db.get_dataset_data(dataset_id).await?)
+        let mut items = self.db.get_dataset_data(dataset_id).await?;
+        items.sort_by_key(|b| std::cmp::Reverse(b.data_size));
+        Ok(items)
     }
 
     /// Check whether a dataset contains any data items.
     ///
-    /// Uses an efficient COUNT query instead of loading all records.
-    pub async fn has_data(&self, dataset_id: Uuid) -> Result<bool, DatasetError> {
+    /// Enforces read permission when ACL is configured, then uses an efficient
+    /// COUNT query instead of loading all records.
+    pub async fn has_data(&self, dataset_id: Uuid, owner_id: Uuid) -> Result<bool, DatasetError> {
+        self.check_read_permission(owner_id, dataset_id).await?;
         let count = self.db.count_dataset_data(dataset_id).await?;
         Ok(count > 0)
     }
 
-    /// Get the latest cognify pipeline status for each dataset.
+    /// Get the latest pipeline status for each dataset, across all tracked pipelines.
     ///
-    /// Datasets with no pipeline runs are omitted from the result map
-    /// (equivalent to Python's "not started" behavior).
+    /// Returns a nested map `{ dataset_id → { pipeline_name → status } }`.
+    /// Datasets with no pipeline runs for a given pipeline are omitted from the
+    /// inner map (equivalent to Python's "not started" behaviour).
     pub async fn get_status(
         &self,
         dataset_ids: &[Uuid],
-    ) -> Result<HashMap<Uuid, PipelineRunStatus>, DatasetError> {
-        let mut statuses = HashMap::with_capacity(dataset_ids.len());
+    ) -> Result<HashMap<Uuid, HashMap<String, PipelineRunStatus>>, DatasetError> {
+        const PIPELINES: &[&str] = &["add_pipeline", "cognify_pipeline"];
+        let mut statuses: HashMap<Uuid, HashMap<String, PipelineRunStatus>> =
+            HashMap::with_capacity(dataset_ids.len());
         for &id in dataset_ids {
-            if let Some(status) = self
-                .db
-                .get_latest_pipeline_status("cognify_pipeline", id)
-                .await?
-            {
-                statuses.insert(id, status);
+            for pipeline_name in PIPELINES {
+                if let Some(status) = self
+                    .db
+                    .get_latest_pipeline_status(pipeline_name, id)
+                    .await?
+                {
+                    statuses
+                        .entry(id)
+                        .or_default()
+                        .insert(pipeline_name.to_string(), status);
+                }
             }
         }
         Ok(statuses)
@@ -337,6 +352,23 @@ mod tests {
         .build()
     }
 
+    fn make_data_with_size(owner_id: Uuid, size: i64) -> Data {
+        let id = Uuid::new_v4();
+        let loc = format!("file:///tmp/test/{}.txt", id);
+        Data::builder(
+            id,
+            "file.txt",
+            loc.as_str(),
+            loc.as_str(),
+            "txt",
+            "text/plain",
+            format!("{:x}", Uuid::new_v4()),
+            owner_id,
+        )
+        .data_size(size)
+        .build()
+    }
+
     #[tokio::test]
     async fn test_list_datasets_no_acl() {
         let db = fresh_db().await;
@@ -392,7 +424,7 @@ mod tests {
             .expect("create_dataset");
 
         let mgr = DatasetManager::new(db.clone() as Arc<dyn DatasetDb>);
-        assert!(!mgr.has_data(ds.id).await.expect("has_data"));
+        assert!(!mgr.has_data(ds.id, owner_id).await.expect("has_data"));
     }
 
     #[tokio::test]
@@ -414,7 +446,48 @@ mod tests {
             .expect("attach_data");
 
         let mgr = DatasetManager::new(db.clone() as Arc<dyn DatasetDb>);
-        assert!(mgr.has_data(ds.id).await.expect("has_data"));
+        assert!(mgr.has_data(ds.id, owner_id).await.expect("has_data"));
+    }
+
+    #[tokio::test]
+    async fn test_has_data_permission_denied_with_acl() {
+        let db = fresh_db().await;
+        let owner_id = Uuid::new_v4();
+        let other_id = Uuid::new_v4();
+        let ds = make_dataset(owner_id);
+
+        let ingest: &dyn IngestDb = db.as_ref();
+        ingest
+            .create_dataset(ds.clone())
+            .await
+            .expect("create_dataset");
+
+        // Grant read permission to owner only (via ACL).
+        let acl: Arc<dyn AclDb> = db.clone() as Arc<dyn AclDb>;
+        acl.ensure_principal(owner_id, "user")
+            .await
+            .expect("ensure_principal");
+        acl.grant_permission(owner_id, ds.id, "read")
+            .await
+            .expect("grant_permission");
+
+        let mgr = DatasetManager::new(db.clone() as Arc<dyn DatasetDb>).with_acl(acl);
+
+        // Owner can check — should succeed.
+        assert!(
+            mgr.has_data(ds.id, owner_id).await.is_ok(),
+            "owner must be able to call has_data"
+        );
+
+        // Other user gets PermissionDenied.
+        let err = mgr
+            .has_data(ds.id, other_id)
+            .await
+            .expect_err("must fail for unauthorized user");
+        assert!(
+            matches!(err, DatasetError::PermissionDenied),
+            "expected PermissionDenied, got {err:?}"
+        );
     }
 
     #[tokio::test]
@@ -442,6 +515,40 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_list_data_sorted_by_size_descending() {
+        let db = fresh_db().await;
+        let owner_id = Uuid::new_v4();
+        let ds = make_dataset(owner_id);
+
+        let ingest: &dyn IngestDb = db.as_ref();
+        ingest
+            .create_dataset(ds.clone())
+            .await
+            .expect("create_dataset");
+
+        // Create three data items with distinct sizes.
+        let small = make_data_with_size(owner_id, 10);
+        let large = make_data_with_size(owner_id, 1000);
+        let medium = make_data_with_size(owner_id, 500);
+
+        for d in [&small, &large, &medium] {
+            ingest.create_data(d.clone()).await.expect("create_data");
+            ingest
+                .attach_data_to_dataset(ds.id, d.id)
+                .await
+                .expect("attach_data");
+        }
+
+        let mgr = DatasetManager::new(db.clone() as Arc<dyn DatasetDb>);
+        let items = mgr.list_data(ds.id, owner_id).await.expect("list_data");
+        assert_eq!(items.len(), 3);
+        // Must be sorted largest first.
+        assert_eq!(items[0].id, large.id, "largest must come first");
+        assert_eq!(items[1].id, medium.id, "medium second");
+        assert_eq!(items[2].id, small.id, "smallest last");
+    }
+
+    #[tokio::test]
     async fn test_get_status_no_runs() {
         let db = fresh_db().await;
         let owner_id = Uuid::new_v4();
@@ -455,6 +562,7 @@ mod tests {
 
         let mgr = DatasetManager::new(db.clone() as Arc<dyn DatasetDb>);
         let statuses = mgr.get_status(&[ds.id]).await.expect("get_status");
+        // No pipeline runs recorded → the outer map should be empty.
         assert!(statuses.is_empty());
     }
 

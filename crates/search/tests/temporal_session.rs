@@ -143,6 +143,7 @@ fn temporal_request(query: &str, session_id: Option<&str>) -> SearchRequest {
         auto_feedback_detection: None,
         neighborhood_depth: None,
         neighborhood_seed_top_k: None,
+        summarize_context: None,
     }
 }
 

@@ -60,19 +60,38 @@ pub(crate) fn serialize_graph(nodes: Vec<GraphNode>, edges: Vec<EdgeData>) -> Se
         let color = type_color(node_type.as_deref(), ontology_valid);
         map.insert("color".to_string(), Value::String(color.to_string()));
 
-        // Ensure `name` is present — default to the id when missing.
-        if !map.get("name").is_some_and(|v| v.is_string()) {
-            let fallback = map
-                .get("name")
-                .and_then(|v| {
-                    if v.is_null() {
-                        None
-                    } else {
-                        Some(v.to_string())
-                    }
+        // Ensure `name` is present — derive from schema-node fields first, then
+        // fall back to the node id.
+        //
+        // Ports Python's `preprocessor.py:223–237` 8-key fallback for schema-typed
+        // nodes (`DatabaseSchema`, `SchemaTable`, `SchemaRelationship`, etc.).  The
+        // keys are checked in priority order; the first one that yields a non-empty
+        // string wins.
+        if !map
+            .get("name")
+            .is_some_and(|v| matches!(v, Value::String(s) if !s.is_empty()))
+        {
+            const SCHEMA_FALLBACK_KEYS: &[&str] = &[
+                "database_type",
+                "primary_key",
+                "source_table",
+                "source_column",
+                "target_table",
+                "target_column",
+                "relationship_type",
+                "row_count_estimate",
+            ];
+            let derived = SCHEMA_FALLBACK_KEYS
+                .iter()
+                .find_map(|k| {
+                    map.get(*k).and_then(|v| match v {
+                        Value::String(s) if !s.is_empty() => Some(s.clone()),
+                        Value::Number(n) => Some(n.to_string()),
+                        _ => None,
+                    })
                 })
                 .unwrap_or_else(|| node_id.clone());
-            map.insert("name".to_string(), Value::String(fallback));
+            map.insert("name".to_string(), Value::String(derived));
         }
 
         map.remove("created_at");

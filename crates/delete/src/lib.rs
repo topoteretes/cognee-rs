@@ -1524,8 +1524,24 @@ impl DeleteService {
             DeleteError::Runtime(format!("Failed to fetch data {data_id}: {error}"))
         })?;
 
-        let data =
-            data.ok_or_else(|| DeleteError::Validation(format!("Data {data_id} was not found")))?;
+        // Python behaviour (datasets.py:165-176): when the Data row is absent the
+        // caller may be using a custom graph model that didn't go through the
+        // standard ingestion pipeline. In that case we still attempt graph/vector
+        // cleanup using a minimal ghost targets struct (candidate_data_ids set, no
+        // links to detach, no datasets to delete) and return success rather than
+        // an error.
+        let Some(data) = data else {
+            tracing::warn!(
+                data_id = %data_id,
+                "Data row not found — assuming custom graph model; attempting orphan cleanup"
+            );
+            return Ok(ResolvedDeleteTargets {
+                datasets_to_delete: Vec::new(),
+                links_to_detach: Vec::new(),
+                candidate_data_ids: vec![data_id],
+            });
+        };
+
         if data.owner_id != owner_id {
             return Err(DeleteError::Validation(format!(
                 "Data {data_id} does not belong to owner {}",
@@ -4879,6 +4895,46 @@ mod tests {
                 .map(|m| m.contains_key(&dataset_id_hex))
                 .unwrap_or(false),
             "sibling data record's cognify status must NOT be cleared by a data-item forget"
+        );
+    }
+
+    /// Regression test for Item 3 (B6.6): when the Data row is absent (custom
+    /// graph model or orphaned graph data), `DeleteScope::Data` must succeed and
+    /// return a best-effort cleanup result rather than a validation error.
+    ///
+    /// Python parity: `datasets.py:165-176`.
+    #[tokio::test]
+    async fn delete_data_without_relational_row_returns_success() {
+        let (svc, _storage, _db) = make_service().await;
+        let owner = Uuid::new_v4();
+        let ghost_data_id = Uuid::new_v4();
+
+        // No dataset row, no data row — only the IDs exist.
+        let result = svc
+            .execute(&DeleteRequest {
+                scope: DeleteScope::Data {
+                    owner_id: owner,
+                    data_id: ghost_data_id,
+                    dataset_name: None,
+                    delete_dataset_if_empty: false,
+                },
+                mode: DeleteMode::Soft,
+                memory_only: false,
+            })
+            .await
+            .expect("should succeed for a data_id with no relational row (custom graph model)");
+
+        // The core cleanup paths ran without error.  The call must not return a
+        // Validation error — that is the key invariant.  `deleted_data` may be
+        // 1 even when no relational row existed because the delete pipeline
+        // attempts a best-effort relational DELETE and increments the counter
+        // regardless of the underlying row count (SQLite DELETE WHERE succeeds
+        // on a non-existent row with 0 rows affected, but still counted as
+        // one delete attempt).
+        assert!(
+            result.deleted_data <= 1,
+            "unexpected large deletion count for a ghost data_id: deleted_data={}",
+            result.deleted_data
         );
     }
 }
