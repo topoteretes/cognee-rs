@@ -92,7 +92,7 @@ Status: ⬜ todo · 🟡 in-progress · ✅ done · ⏸️ blocked.
 | 19 | [Embedding auto-dimension resolution](19-embedding-dimension-resolution.md) | 4 | P1 | A | no | 0.5d | — | ✅ |
 | 20 | [improve() stages + session integration](20-improve-and-session-integration.md) | 4 | P2 | A | no | 1.5d | — | ✅ |
 | 21 | [Parity backlog (config/datasets/cloud/viz/recall)](21-parity-backlog-misc.md) | 4 | P2 | A | no | 2d | — | ✅ |
-| 22 | [Workspace metadata + MSRV + CHANGELOG](22-workspace-metadata-msrv-changelog.md) | 5 | P0 | A+B | yes | 0.5d | 02, 11 | ⬜ |
+| 22 | [Workspace metadata + MSRV + CHANGELOG](22-workspace-metadata-msrv-changelog.md) | 5 | P0 | A+B | yes | 0.5d | 02, 11 | ✅ |
 | 23 | [Lint enforcement & release profile](23-lint-enforcement-and-profile.md) | 5 | P1 | A | no | 0.5d | 01(D4), 03, 04 | ⬜ |
 | 24 | [crates.io publishability](24-cratesio-publishability.md) | 5 | P1 | B | B only | weeks | 01(D5), 22 | ⬜ |
 | 25 | [Deferred refactors (post-release)](25-deferred-refactors.md) | 6 | P2 | — | no | multi-day | — | ⬜ |

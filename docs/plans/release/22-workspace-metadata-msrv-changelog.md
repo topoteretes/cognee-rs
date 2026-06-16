@@ -10,20 +10,21 @@
 
 Every shippable manifest carries complete publishing metadata (description, repository,
 homepage, readme, keywords, categories, authors), the workspace declares an MSRV
-(`rust-version = "1.85"`), CI verifies that MSRV, a `rust-toolchain.toml` pins a floor,
+(`rust-version = "1.88"`), CI verifies that MSRV, a `rust-toolchain.toml` pins a floor,
 and a root `CHANGELOG.md` (Keep a Changelog format) documents `0.1.0`. The Python and JS
 binding manifests are expanded to match.
 
 ## Background & why
 
-The workspace `[workspace.package]` currently has only `edition` + `version`
-(verified: [Cargo.toml](../../../Cargo.toml) lines 49–51). For a credible release every
-published manifest needs description/repository/etc., an MSRV must be declared (edition
-2024 + `resolver = "3"` require Rust ≥ 1.85 — verified `Cargo.toml` lines 47, 50), and
-there is **no `CHANGELOG.md` and no `rust-toolchain.toml`** at root (verified by `ls`).
+The workspace `[workspace.package]` currently has only `edition` + `version` + `license`
+(verified: [Cargo.toml](../../../Cargo.toml) lines 49–52; `license = "Apache-2.0"` added
+by task 02). For a credible release every published manifest needs
+description/repository/etc., an MSRV must be declared (edition 2024 + `resolver = "3"`
+require Rust ≥ 1.85 — verified `Cargo.toml` lines 47, 50), and there is
+**no `CHANGELOG.md` and no `rust-toolchain.toml`** at root (verified by `ls`).
 CI uses `dtolnay/rust-toolchain@stable` with **no floor** (verified
-[.github/workflows/ci.yml](../../../.github/workflows/ci.yml) lines 43–44, 169, 328…), so
-an accidental use of a newer-than-1.85 API would not be caught.
+[.github/workflows/ci.yml](../../../.github/workflows/ci.yml) lines 44, 178, 337…), so
+an accidental use of a newer-than-1.88 API would not be caught.
 
 This task is **additive metadata + one CI lane + two docs**. It changes no runtime
 behavior and is parity-neutral.
@@ -41,12 +42,12 @@ behavior and is parity-neutral.
 ```bash
 git checkout -b task/22-workspace-metadata-msrv-changelog
 
-# Confirm current state (re-grep — these are the 2026-06-14 positions):
-sed -n '49,51p' Cargo.toml                          # [workspace.package] edition+version (+license after task 02)
+# Confirm current state (re-grep — these are the 2026-06-16 positions):
+sed -n '49,52p' Cargo.toml                          # [workspace.package] edition+version+license (task 02 done)
 ls rust-toolchain.toml CHANGELOG.md 2>&1            # expect: both "No such file"
-grep -n 'rust-toolchain@stable' .github/workflows/ci.yml   # the toolchain pins to update
-sed -n '1,14p' python/pyproject.toml               # python [project]
-sed -n '1,31p' js/package.json                     # js manifest
+grep -n 'rust-toolchain@stable' .github/workflows/ci.yml   # lines 44, 178, 337, 382, 438, 479
+sed -n '1,36p' python/pyproject.toml               # python [project] — uses dynamic = ["version"]
+sed -n '1,53p' js/package.json                     # js manifest — license already present, missing: repository, keywords, homepage
 ```
 
 Decide the canonical repository URL up-front (used in every manifest). The Python project
@@ -58,11 +59,11 @@ below is `https://github.com/topoteretes/cognee-rust`; replace if different.
 
 | Path | Change |
 |---|---|
-| `Cargo.toml` | expand `[workspace.package]`; add `rust-version = "1.85"` |
+| `Cargo.toml` | expand `[workspace.package]`; add `rust-version = "1.88"` |
 | `crates/*/Cargo.toml` (×27) + `python/Cargo.toml` | inherit new fields via `.workspace = true` |
 | `capi/Cargo.toml` + `capi/cognee-capi/Cargo.toml` | mirror metadata (separate workspace) |
 | `js/cognee-neon/Cargo.toml` | add literal metadata (standalone crate) |
-| `rust-toolchain.toml` (new, root) | pin `channel = "1.85"` |
+| `rust-toolchain.toml` (new, root) | pin `channel = "1.88"` |
 | `.github/workflows/ci.yml` | add an MSRV check lane |
 | `CHANGELOG.md` (new, root) | Keep a Changelog; backfill `0.1.0` |
 | `python/pyproject.toml` | description, authors, repository, keywords, classifiers |
@@ -72,14 +73,14 @@ below is `https://github.com/topoteretes/cognee-rust`; replace if different.
 
 ### Step 1 — Expand the workspace `[workspace.package]`
 
-Open [Cargo.toml](../../../Cargo.toml). Current (lines 49–51, plus `license` if task 02
-already merged):
+Open [Cargo.toml](../../../Cargo.toml). Current (lines 49–52; task 02 is done,
+`license = "Apache-2.0"` is already present):
 
 ```toml
 [workspace.package]
 edition = "2024"
 version = "0.1.0"
-license = "Apache-2.0"   # added by task 02
+license = "Apache-2.0"
 ```
 
 Expand to:
@@ -88,7 +89,7 @@ Expand to:
 [workspace.package]
 edition = "2024"
 version = "0.1.0"
-rust-version = "1.85"
+rust-version = "1.88"
 license = "Apache-2.0"
 authors = ["Topoteretes <support@cognee.ai>"]
 description = "Rust port of cognee — an AI memory pipeline that turns raw data into queryable knowledge graphs."
@@ -109,8 +110,9 @@ Notes / constraints (crates.io rules, enforced by `cargo publish`):
 
 ### Step 2 — Inherit the new fields in every workspace crate
 
-For **each** `crates/*/Cargo.toml` (×27) and `python/Cargo.toml`, add the inherited keys
-to `[package]`. Task 02 already added `license.workspace = true`; append the rest:
+For **each** `crates/*/Cargo.toml` (×27), `python/Cargo.toml`, `examples/Cargo.toml`,
+and `e2e-cross-sdk/telemetry-emit/Cargo.toml`, add the inherited keys to `[package]`.
+Task 02 already added `license.workspace = true`; append the rest:
 
 ```toml
 [package]
@@ -132,6 +134,9 @@ Practical guidance:
 - A per-crate generic `description.workspace = true` is acceptable for 0.1.0 (all crates
   share the workspace description). If you want crate-specific descriptions later, set a
   literal `description = "..."` on the crate instead — but that is **not** required now.
+  **Exception:** `e2e-cross-sdk/telemetry-emit` already has a literal `description` field
+  — keep it and do not add `description.workspace = true` to that crate (both would
+  conflict). Do add `rust-version.workspace = true` there.
 - `readme.workspace = true` points every crate at the **root** `README.md`. If a crate has
   its own README and you prefer it, set `readme = "README.md"` (crate-relative) literally
   on that crate instead. For 0.1.0, inheriting the root README is fine.
@@ -139,11 +144,17 @@ Practical guidance:
   `python/Cargo.toml`) still benefit from the metadata but are not validated by
   `cargo publish`; add the inherited fields anyway for consistency. Keep their existing
   `publish = false`.
+- **`examples/Cargo.toml` and `e2e-cross-sdk/telemetry-emit/Cargo.toml`** are workspace
+  members but were not covered in the original step scope. They must also receive
+  `rust-version.workspace = true` (and the other inherited fields where not already
+  set literally) to keep `cargo check --all-targets` passing on the MSRV lane.
 
 Verify all members updated:
 ```bash
 ls crates/*/Cargo.toml | wc -l    # 27
 grep -L 'rust-version.workspace' crates/*/Cargo.toml   # expect: no output (all matched)
+grep -L 'rust-version' python/Cargo.toml examples/Cargo.toml e2e-cross-sdk/telemetry-emit/Cargo.toml
+# expect: no output (all matched)
 ```
 
 ### Step 3 — The C API workspace (separate)
@@ -165,14 +176,14 @@ does **not** inherit root fields.
 ### Step 4 — The Neon crate (standalone)
 
 [js/cognee-neon/Cargo.toml](../../../js/cognee-neon/Cargo.toml) is standalone (empty
-`[workspace]`, lines 5–6). Add **literal** metadata to `[package]`:
+`[workspace]`, lines 7–8). Add **literal** metadata to `[package]`:
 
 ```toml
 [package]
 name = "cognee-neon"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.88"
 license = "Apache-2.0"
 description = "Neon (Node.js) native binding for the cognee Rust SDK."
 repository = "https://github.com/topoteretes/cognee-rust"
@@ -187,18 +198,18 @@ Create `/Users/dmytro/dev/cognee/cognee-rust/rust-toolchain.toml`:
 
 ```toml
 [toolchain]
-channel = "1.85"
+channel = "1.88"
 components = ["rustfmt", "clippy"]
 ```
 
 This pins local + CI builds to the MSRV floor by default. Contributors get a consistent
 toolchain; combined with the MSRV CI lane (Step 6) it makes the declared
-`rust-version = "1.85"` real.
+`rust-version = "1.88"` real.
 
 > **Interaction with CI:** the existing CI jobs use `dtolnay/rust-toolchain@stable`, which
 > **overrides** `rust-toolchain.toml` (it installs and selects stable explicitly). That is
-> fine — keep the main lanes on stable for full coverage, and add a dedicated 1.85 lane
-> (Step 6) for the floor. Do **not** switch the whole CI to 1.85; you want both "MSRV
+> fine — keep the main lanes on stable for full coverage, and add a dedicated 1.88 lane
+> (Step 6) for the floor. Do **not** switch the whole CI to 1.88; you want both "MSRV
 > builds" and "stable builds" signals.
 
 ### Step 6 — Add an MSRV CI lane
@@ -212,16 +223,16 @@ block, before `test`):
 ```yaml
   # ── MSRV floor: build against the declared rust-version (T2.3) ─────────
   # The other lanes use @stable (which overrides rust-toolchain.toml); this
-  # lane pins 1.85 so a newer-than-MSRV API is caught before release.
+  # lane pins 1.88 so a newer-than-MSRV API is caught before release.
   msrv:
-    name: MSRV (1.85)
+    name: MSRV (1.88)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Rust 1.85
-        uses: dtolnay/rust-toolchain@1.85.0
+      - name: Install Rust 1.88
+        uses: dtolnay/rust-toolchain@1.88.0
 
       - name: Install mold linker
         uses: rui314/setup-mold@v1
@@ -262,17 +273,17 @@ block, before `test`):
           key: ort-v2.0.0-rc.12-cpu-linux-x86_64
 
       - name: Check (MSRV)
-        run: cargo +1.85.0 check --all-targets
+        run: cargo +1.88.0 check --all-targets
 ```
 
 Notes:
-- Use the **separate Swatinem key** `workspace-msrv-v1` so the 1.85 artifacts don't poison
+- Use the **separate Swatinem key** `workspace-msrv-v1` so the 1.88 artifacts don't poison
   the stable lanes' caches (mirrors the existing lint/test key separation rationale, ci.yml
   lines 86–96).
 - `cargo check` (not `clippy`/`test`) keeps this lane fast and avoids the OpenAI secret.
-- If the workspace fails to build on 1.85, **bump `rust-version`** (and this lane) to the
+- If the workspace fails to build on 1.88, **bump `rust-version`** (and this lane) to the
   lowest version that builds rather than working around it — the declared MSRV must be the
-  real floor. Edition 2024 + resolver 3 guarantee ≥ 1.85; a dependency may push it higher.
+  real floor. Edition 2024 + resolver 3 guarantee ≥ 1.85; transitive deps raise it to 1.88.
 
 ### Step 7 — Add the root `CHANGELOG.md`
 
@@ -317,7 +328,8 @@ drop-in cross-SDK compatibility.
 - Language bindings: C API, Python (PyO3), JavaScript (Neon), Android runner.
 
 ### Notes
-- MSRV: Rust 1.85 (edition 2024 + resolver 3).
+- MSRV: Rust 1.88 (empirical floor; edition 2024 + resolver 3 require ≥ 1.85, but
+  transitive deps `home@0.5.12` and `icu_collections@2.2.0` raise the bar to 1.88).
 - Known gaps tracked for follow-up: S3 input, full `unstructured` office-format
   extraction, crates.io publishability (Track B).
 
@@ -331,13 +343,20 @@ drop-in cross-SDK compatibility.
 ### Step 8 — Expand `python/pyproject.toml`
 
 Open [python/pyproject.toml](../../../python/pyproject.toml). Current `[project]` (lines
-5–8, plus `license` from task 02). Expand:
+5–10): has `name`, `requires-python`, `dynamic = ["version"]`, `license = "Apache-2.0"`,
+`license-files = ["LICENSE"]` (task 02 is done). The file uses `dynamic = ["version"]` —
+maturin derives the version from `python/Cargo.toml` at build time. **Do NOT add a static
+`version = "0.1.0"` field** — PEP 621 forbids a field from being both static and dynamic,
+and maturin will reject it.
+
+Expand `[project]` to add the missing fields (keep `dynamic = ["version"]`, do not add a
+static `version`):
 
 ```toml
 [project]
 name = "cognee-pipeline"
 requires-python = ">=3.9"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Python bindings for the cognee Rust SDK — AI memory pipeline (add → cognify → search)."
 authors = [{ name = "Topoteretes", email = "support@cognee.ai" }]
 license = "Apache-2.0"
@@ -346,7 +365,6 @@ readme = "README.md"
 keywords = ["ai", "knowledge-graph", "memory", "rag", "embeddings"]
 classifiers = [
     "Development Status :: 4 - Beta",
-    "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
@@ -360,18 +378,16 @@ Homepage = "https://www.cognee.ai"
 Repository = "https://github.com/topoteretes/cognee-rust"
 ```
 
-> `license`/`license-files` are added by task 02 — if 02 is already merged they exist;
-> keep them. Do not duplicate. With PEP 639 SPDX `license = "Apache-2.0"`, do **not** also
-> add the deprecated `License ::` classifier *and* SPDX if your maturin version rejects the
-> combination — pick the form task 02 settled on. If task 02 used the SPDX string, keep the
-> classifier list above but drop the `License :: OSI Approved` line if `maturin`/twine
-> warns about the conflict.
+> `license`/`license-files` are added by task 02 and are already present — keep them,
+> do not duplicate. With PEP 639 SPDX `license = "Apache-2.0"`, the `License :: OSI
+> Approved` classifier is intentionally omitted above to avoid a conflict with the SPDX
+> string (some maturin/twine versions reject having both).
 
 ### Step 9 — Verify/expand `js/package.json`
 
 Open [js/package.json](../../../js/package.json). It already has `name`, `version`,
-`description`, `main`, `types`, `engines`, `dependencies`, `files` (verified). Add the
-missing `license` (task 02), `repository`, and `keywords`:
+`description`, `license` (task 02 done), `main`, `types`, `engines`, `dependencies`,
+`files` (verified). Add the missing `repository`, `homepage`, and `keywords`:
 
 ```json
 {
@@ -390,8 +406,9 @@ missing `license` (task 02), `repository`, and `keywords`:
 }
 ```
 
-Confirm the `files` allowlist (lines 27–30) already lists what ships (`lib/`,
-`cognee_neon.node`, and `LICENSE` from task 02). No build-artifact globs.
+Confirm the `files` allowlist (lines 47–52) already lists what ships (`lib/`,
+`scripts/postinstall.js`, `scripts/copy-artifact.js`, and `LICENSE` from task 02).
+No build-artifact globs.
 
 ## Verification
 
@@ -405,15 +422,15 @@ cargo metadata --no-deps --format-version 1 \
 # expect: incomplete metadata: []  (publish=false crates may be excluded if intentional)
 
 # 2. MSRV is declared.
-grep -n 'rust-version' Cargo.toml                      # expect 1.85
+grep -n 'rust-version' Cargo.toml                      # expect 1.88
 test -f rust-toolchain.toml && echo "toolchain file present"
 
 # 3. Workspace still compiles.
 cargo check --all-targets
 
-# 4. MSRV builds (locally, if 1.85 is installed):
-rustup toolchain install 1.85.0 --profile minimal 2>/dev/null || true
-cargo +1.85.0 check --all-targets    # expect: success; if it fails, raise rust-version
+# 4. MSRV builds (locally, if 1.88 is installed):
+rustup toolchain install 1.88.0 --profile minimal 2>/dev/null || true
+cargo +1.88.0 check --all-targets    # expect: success; if it fails, raise rust-version
 
 # 5. CHANGELOG + manifests valid.
 test -f CHANGELOG.md && echo "CHANGELOG present"
@@ -439,26 +456,28 @@ cargo publish --dry-run -p cognee-models 2>&1 | grep -iE 'description|repository
 ## Acceptance criteria
 
 - [ ] `[workspace.package]` has description, repository, homepage, readme, keywords,
-      categories, authors, **and** `rust-version = "1.85"`.
-- [ ] All 27 workspace crates (+ `python/Cargo.toml`) inherit via `*.workspace = true`.
+      categories, authors, **and** `rust-version = "1.88"`.
+- [ ] All 27 workspace crates (+ `python/Cargo.toml`, `examples/Cargo.toml`,
+      `e2e-cross-sdk/telemetry-emit/Cargo.toml`) inherit via `rust-version.workspace = true`
+      (and other applicable fields).
 - [ ] `capi/` workspace + crate and `js/cognee-neon/` standalone crate carry metadata.
-- [ ] `rust-toolchain.toml` pins `channel = "1.85"`.
-- [ ] CI has a passing `msrv` (1.85) lane that builds with `cargo +1.85.0 check`.
+- [ ] `rust-toolchain.toml` pins `channel = "1.88"`.
+- [ ] CI has a passing `msrv` (1.88) lane that builds with `cargo +1.88.0 check`.
 - [ ] Root `CHANGELOG.md` (Keep a Changelog) documents `0.1.0`, consistent with task 11.
-- [ ] `python/pyproject.toml` has description/authors/repository/keywords/classifiers;
-      `js/package.json` has license/repository/keywords/files.
+- [ ] `python/pyproject.toml` has description/authors/repository/keywords/classifiers and
+      retains `dynamic = ["version"]` (no static `version` field); `js/package.json` has
+      repository/homepage/keywords (license already present from task 02).
 - [ ] `cargo check --all-targets` and the MSRV check pass; `cargo metadata` shows no
       published crate missing description/repository.
 
 ## Gotchas / do-not
 
-- **Order vs task 02:** task 02 adds `license`; this task adds everything else to the same
-  `[workspace.package]`. If 02 isn't merged yet, add `license` here too (don't ship without
-  it), but coordinate so the two edits don't conflict. Likewise the python/js `license`
-  keys.
+- **Order vs task 02:** task 02 is already merged. `license = "Apache-2.0"` is present in
+  `[workspace.package]`, `python/pyproject.toml`, and `js/package.json`. This task adds
+  only the remaining fields; do not duplicate `license`.
 - **Order vs task 11:** write the CHANGELOG's DB notes after the migration squash lands so
   "single baseline migration" is accurate. Don't describe the pre-squash 14+3 chain.
-- **`rust-toolchain.toml` vs CI `@stable`:** the file pins local builds to 1.85, but the
+- **`rust-toolchain.toml` vs CI `@stable`:** the file pins local builds to 1.88, but the
   `dtolnay/rust-toolchain@stable` steps in the existing jobs override it (intentional —
   full coverage on stable). The dedicated `msrv` lane is what enforces the floor. Do not
   delete the file thinking CI ignores it (contributors rely on it locally).
@@ -467,8 +486,10 @@ cargo publish --dry-run -p cognee-models 2>&1 | grep -iE 'description|repository
   `cargo publish --dry-run` — run #7 above before tagging.
 - **Three separate workspaces** (root, `capi/`, `js/cognee-neon/`) — none inherit from each
   other. Metadata must be set in all three (Steps 1, 3, 4). Easy to forget capi/neon.
-- **Bump, don't hack, the MSRV** if 1.85 fails to build: set `rust-version` to the true
+- **Bump, don't hack, the MSRV** if 1.88 fails to build: set `rust-version` to the true
   floor. A declared MSRV that doesn't actually build is worse than none.
+  **Note:** 1.85 was the original target (edition 2024 + resolver 3 minimum), but
+  empirically `home@0.5.12` and `icu_collections@2.2.0` push the real floor to 1.88.
 - **Parity-neutral:** this task touches no `.rs`, schema, IDs, hashes, prompts, or
   collection names. Keep it purely metadata/docs/CI.
 

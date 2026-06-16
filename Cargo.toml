@@ -49,7 +49,15 @@ resolver = "3"
 [workspace.package]
 edition = "2024"
 version = "0.1.0"
+rust-version = "1.88"
 license = "Apache-2.0"
+authors = ["Topoteretes <support@cognee.ai>"]
+description = "Rust port of cognee — an AI memory pipeline that turns raw data into queryable knowledge graphs."
+repository = "https://github.com/topoteretes/cognee-rust"
+homepage = "https://www.cognee.ai"
+readme = "README.md"
+keywords = ["ai", "knowledge-graph", "memory", "rag", "embeddings"]
+categories = ["science", "database", "text-processing"]
 
 [workspace.dependencies]
 anyhow = "1"

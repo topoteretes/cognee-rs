@@ -2,8 +2,15 @@
 name = "cognee-bindings-common"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 description = "Shared facade (HandleState, CogneeServices, SdkError, wire helpers) consumed by the Neon JS and C API bindings."
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+authors.workspace = true
 
 # NOT a default member of the root workspace but IS a workspace member
 # so `cargo check --all-targets` at the root covers it.

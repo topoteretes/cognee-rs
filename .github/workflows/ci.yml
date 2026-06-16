@@ -159,6 +159,63 @@ jobs:
             bad=[x["name"] for x in p if not x.get("license") and not x.get("license_file")];\
             print("missing license:",bad); sys.exit(1 if bad else 0)'
 
+  # ── MSRV floor: build against the declared rust-version (T2.3) ─────────
+  # The other lanes use @stable (which overrides rust-toolchain.toml); this
+  # lane pins 1.88 so a newer-than-MSRV API is caught before release.
+  # Note: 1.88 is the real floor because home@0.5.12, icu_collections@2.2.0
+  # and other transitive deps require rustc 1.88. Edition 2024 + resolver 3
+  # would allow 1.85 in principle, but the dep graph raises the bar to 1.88.
+  msrv:
+    name: MSRV (1.88)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust 1.88
+        uses: dtolnay/rust-toolchain@1.88.0
+
+      - name: Install mold linker
+        uses: rui314/setup-mold@v1
+        with:
+          make-default: true
+
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: false
+          swap-storage: false
+          docker-images: true
+
+      - name: ccache (lbug bundled C++, restore-only)
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: lbug-cxx
+          max-size: 1G
+          save: false
+
+      - name: Cache cargo/target (msrv)
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: workspace-msrv-v1
+          cache-on-failure: true
+
+      - name: Cache ORT binary
+        uses: actions/cache@v4
+        with:
+          path: target/ort-cache
+          key: ort-v2.0.0-rc.12-cpu-linux-x86_64
+
+      - name: Check (MSRV)
+        run: cargo +1.88.0 check --all-targets
+
   # ── Stage 2: Build and run tests (depends on lint) ────────────────────
   test:
     name: Test (stable)
