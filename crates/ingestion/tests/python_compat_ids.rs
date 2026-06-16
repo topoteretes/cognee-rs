@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! Cross-language compatibility tests for ID generation.
 //!
 //! All expected values were computed from the Python cognee SDK:
@@ -89,7 +94,7 @@ fn dataset_id_without_tenant_matches_python() {
 fn text_file_name_matches_python() {
     // Python: f"text_{hashlib.md5(b'hello world').hexdigest()}.txt"
     assert_eq!(
-        format!("text_{}.txt", CONTENT_HASH),
+        format!("text_{CONTENT_HASH}.txt"),
         "text_5eb63bbbe01eeed093cb22bb8f5acdc3.txt"
     );
 }
@@ -101,5 +106,5 @@ fn uuid_display_format_matches_python_str() {
     // Python str(uuid) == Rust format!("{}", uuid) — both hyphenated lowercase.
     // This is the critical property that makes ID generation compatible.
     let uuid = Uuid::parse_str(USER_ID).unwrap();
-    assert_eq!(format!("{}", uuid), USER_ID);
+    assert_eq!(format!("{uuid}"), USER_ID);
 }

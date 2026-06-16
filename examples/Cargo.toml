@@ -14,6 +14,10 @@ categories.workspace = true
 authors.workspace = true
 
 # Define each example
+
+[lints]
+workspace = true
+
 [[example]]
 name = "add_example"
 path = "add_example.rs"

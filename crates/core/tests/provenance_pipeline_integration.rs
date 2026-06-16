@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! Pipeline-integration tests for provenance stamping (gap 05-10 §4.2).
 //!
 //! Builds a small in-memory 3-task pipeline emitting `DocumentChunk`

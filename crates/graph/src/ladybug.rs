@@ -167,7 +167,7 @@ impl LadybugAdapter {
     pub async fn new(db_path: &str) -> GraphDBResult<Self> {
         let config = SystemConfig::default().max_db_size(read_max_db_size());
         let db = Database::new(db_path, config).map_err(|e| {
-            GraphDBError::InitializationError(format!("Failed to create database: {}", e))
+            GraphDBError::InitializationError(format!("Failed to create database: {e}"))
         })?;
 
         Ok(Self {
@@ -216,12 +216,12 @@ impl LadybugAdapter {
         Span::current().record(COGNEE_DB_QUERY, redact(truncated).as_ref());
 
         let conn = Connection::new(&self.db).map_err(|e| {
-            GraphDBError::ConnectionError(format!("Failed to create connection: {}", e))
+            GraphDBError::ConnectionError(format!("Failed to create connection: {e}"))
         })?;
 
         let result = conn
             .query(query)
-            .map_err(|e| GraphDBError::QueryError(format!("Query failed: {}", e)))?;
+            .map_err(|e| GraphDBError::QueryError(format!("Query failed: {e}")))?;
 
         let rows: Vec<Vec<serde_json::Value>> = result
             .map(|row| row.into_iter().map(Self::lbug_value_to_json).collect())
@@ -294,8 +294,8 @@ impl LadybugAdapter {
             Map(_, pairs) => {
                 let mut obj = serde_json::Map::new();
                 for (i, (k, v)) in pairs.iter().enumerate() {
-                    obj.insert(format!("key_{}", i), Self::lbug_value_to_json(k.clone()));
-                    obj.insert(format!("val_{}", i), Self::lbug_value_to_json(v.clone()));
+                    obj.insert(format!("key_{i}"), Self::lbug_value_to_json(k.clone()));
+                    obj.insert(format!("val_{i}"), Self::lbug_value_to_json(v.clone()));
                 }
                 serde_json::Value::Object(obj)
             }
@@ -587,7 +587,7 @@ struct NodeProperties {
 impl GraphDBTrait for LadybugAdapter {
     async fn initialize(&self) -> GraphDBResult<()> {
         let conn = Connection::new(&self.db).map_err(|e| {
-            GraphDBError::ConnectionError(format!("Failed to create connection: {}", e))
+            GraphDBError::ConnectionError(format!("Failed to create connection: {e}"))
         })?;
 
         // Try to install and load JSON extension (optional)
@@ -608,7 +608,7 @@ impl GraphDBTrait for LadybugAdapter {
         "#;
 
         conn.query(create_node_table).map_err(|e| {
-            GraphDBError::InitializationError(format!("Failed to create Node table: {}", e))
+            GraphDBError::InitializationError(format!("Failed to create Node table: {e}"))
         })?;
 
         // Create Edge relationship table
@@ -623,7 +623,7 @@ impl GraphDBTrait for LadybugAdapter {
         "#;
 
         conn.query(create_edge_table).map_err(|e| {
-            GraphDBError::InitializationError(format!("Failed to create EDGE table: {}", e))
+            GraphDBError::InitializationError(format!("Failed to create EDGE table: {e}"))
         })?;
 
         Ok(())
@@ -660,16 +660,16 @@ impl GraphDBTrait for LadybugAdapter {
 
     async fn delete_graph(&self) -> GraphDBResult<()> {
         let conn = Connection::new(&self.db).map_err(|e| {
-            GraphDBError::ConnectionError(format!("Failed to create connection: {}", e))
+            GraphDBError::ConnectionError(format!("Failed to create connection: {e}"))
         })?;
 
         // Delete all edges first
         conn.query("MATCH (a:Node)-[r:EDGE]->(b:Node) DELETE r")
-            .map_err(|e| GraphDBError::QueryError(format!("Failed to delete edges: {}", e)))?;
+            .map_err(|e| GraphDBError::QueryError(format!("Failed to delete edges: {e}")))?;
 
         // Delete all nodes
         conn.query("MATCH (n:Node) DELETE n")
-            .map_err(|e| GraphDBError::QueryError(format!("Failed to delete nodes: {}", e)))?;
+            .map_err(|e| GraphDBError::QueryError(format!("Failed to delete nodes: {e}")))?;
 
         Ok(())
     }
@@ -699,7 +699,7 @@ impl GraphDBTrait for LadybugAdapter {
             GraphDBError::ConnectionError("Ladybug write lock poisoned".to_string())
         })?;
         let conn = Connection::new(&self.db).map_err(|e| {
-            GraphDBError::ConnectionError(format!("Failed to create connection: {}", e))
+            GraphDBError::ConnectionError(format!("Failed to create connection: {e}"))
         })?;
 
         self.upsert_node_with_conn(&conn, &props)
@@ -719,7 +719,7 @@ impl GraphDBTrait for LadybugAdapter {
         })?;
 
         let conn = Connection::new(&self.db).map_err(|e| {
-            GraphDBError::ConnectionError(format!("Failed to create connection: {}", e))
+            GraphDBError::ConnectionError(format!("Failed to create connection: {e}"))
         })?;
 
         // Process in batches
@@ -740,7 +740,7 @@ impl GraphDBTrait for LadybugAdapter {
 
     async fn delete_node(&self, node_id: &str) -> GraphDBResult<()> {
         let conn = Connection::new(&self.db).map_err(|e| {
-            GraphDBError::ConnectionError(format!("Failed to create connection: {}", e))
+            GraphDBError::ConnectionError(format!("Failed to create connection: {e}"))
         })?;
 
         let query = format!(
@@ -749,7 +749,7 @@ impl GraphDBTrait for LadybugAdapter {
         );
 
         conn.query(&query)
-            .map_err(|e| GraphDBError::NodeError(format!("Failed to delete node: {}", e)))?;
+            .map_err(|e| GraphDBError::NodeError(format!("Failed to delete node: {e}")))?;
 
         Ok(())
     }
@@ -849,7 +849,7 @@ impl GraphDBTrait for LadybugAdapter {
             GraphDBError::ConnectionError("Ladybug write lock poisoned".to_string())
         })?;
         let conn = Connection::new(&self.db).map_err(|e| {
-            GraphDBError::ConnectionError(format!("Failed to create connection: {}", e))
+            GraphDBError::ConnectionError(format!("Failed to create connection: {e}"))
         })?;
 
         let now = Utc::now();
@@ -874,7 +874,7 @@ impl GraphDBTrait for LadybugAdapter {
             GraphDBError::ConnectionError("Ladybug write lock poisoned".to_string())
         })?;
         let conn = Connection::new(&self.db).map_err(|e| {
-            GraphDBError::ConnectionError(format!("Failed to create connection: {}", e))
+            GraphDBError::ConnectionError(format!("Failed to create connection: {e}"))
         })?;
 
         for edge in edges {
@@ -1148,7 +1148,7 @@ impl GraphDBTrait for LadybugAdapter {
                                 s.replace('\\', "\\\\").replace('\'', "\\'")
                             )
                         } else {
-                            format!("n.{} = {}", attr, v)
+                            format!("n.{attr} = {v}")
                         }
                     })
                     .collect();
@@ -1171,8 +1171,7 @@ impl GraphDBTrait for LadybugAdapter {
 
         // Get filtered nodes
         let nodes_query = format!(
-            "MATCH (n:Node) {} RETURN n.id AS id, n.name AS name, n.type AS type, n.properties AS properties",
-            where_clause
+            "MATCH (n:Node) {where_clause} RETURN n.id AS id, n.name AS name, n.type AS type, n.properties AS properties"
         );
 
         let node_results = self.execute_query(&nodes_query)?;
@@ -1222,8 +1221,7 @@ impl GraphDBTrait for LadybugAdapter {
             .join(", ");
 
         let edges_query = format!(
-            "MATCH (a:Node)-[r:EDGE]->(b:Node) WHERE a.id IN [{}] AND b.id IN [{}] RETURN a.id, b.id, r.relationship_name, r.properties",
-            id_list, id_list
+            "MATCH (a:Node)-[r:EDGE]->(b:Node) WHERE a.id IN [{id_list}] AND b.id IN [{id_list}] RETURN a.id, b.id, r.relationship_name, r.properties"
         );
 
         let edge_results = self.execute_query(&edges_query)?;
@@ -1298,8 +1296,7 @@ impl GraphDBTrait for LadybugAdapter {
         for primary_id in &primary_node_ids {
             let escaped_id = primary_id.replace('\\', "\\\\").replace('\'', "\\'");
             let neighbor_query = format!(
-                "MATCH (n:Node)-[:EDGE]-(nbr:Node) WHERE n.id = '{}' RETURN DISTINCT nbr.id",
-                escaped_id
+                "MATCH (n:Node)-[:EDGE]-(nbr:Node) WHERE n.id = '{escaped_id}' RETURN DISTINCT nbr.id"
             );
             let nbr_results = self.execute_query(&neighbor_query)?;
             let nbr_ids: HashSet<String> = nbr_results
@@ -1337,8 +1334,7 @@ impl GraphDBTrait for LadybugAdapter {
 
         // Fetch full node data for all IDs
         let all_nodes_query = format!(
-            "MATCH (n:Node) WHERE n.id IN [{}] RETURN n.id AS id, n.name AS name, n.type AS type, n.properties AS properties",
-            id_list
+            "MATCH (n:Node) WHERE n.id IN [{id_list}] RETURN n.id AS id, n.name AS name, n.type AS type, n.properties AS properties"
         );
         let all_node_results = self.execute_query(&all_nodes_query)?;
 
@@ -1368,8 +1364,7 @@ impl GraphDBTrait for LadybugAdapter {
 
         // Get all edges between nodes in the final set
         let edges_query = format!(
-            "MATCH (a:Node)-[r:EDGE]->(b:Node) WHERE a.id IN [{}] AND b.id IN [{}] RETURN a.id, b.id, r.relationship_name, r.properties",
-            id_list, id_list
+            "MATCH (a:Node)-[r:EDGE]->(b:Node) WHERE a.id IN [{id_list}] AND b.id IN [{id_list}] RETURN a.id, b.id, r.relationship_name, r.properties"
         );
 
         let edge_results = self.execute_query(&edges_query)?;
@@ -1605,6 +1600,11 @@ impl GraphDBTrait for LadybugAdapter {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 mod tests {
     use super::*;
     use crate::GraphDBTraitExt;
@@ -1669,7 +1669,7 @@ mod tests {
             .unwrap();
         let result = adapter.initialize().await;
         if let Err(e) = &result {
-            eprintln!("Initialization error: {:?}", e);
+            eprintln!("Initialization error: {e:?}");
         }
         assert!(result.is_ok());
     }
@@ -1710,7 +1710,7 @@ mod tests {
         let (adapter, _temp_dir) = setup_adapter().await;
 
         let nodes: Vec<TestNode> = (0..10)
-            .map(|i| TestNode::new(&format!("test-{}", i), &format!("Node {}", i), i * 10))
+            .map(|i| TestNode::new(&format!("test-{i}"), &format!("Node {i}"), i * 10))
             .collect();
         let node_refs: Vec<&TestNode> = nodes.iter().collect();
 
@@ -1720,9 +1720,8 @@ mod tests {
         // Verify all nodes were added
         for i in 0..10 {
             assert!(
-                adapter.has_node(&format!("test-{}", i)).await.unwrap(),
-                "Node test-{} should exist",
-                i
+                adapter.has_node(&format!("test-{i}")).await.unwrap(),
+                "Node test-{i} should exist"
             );
         }
 
@@ -1737,7 +1736,7 @@ mod tests {
         let (adapter, _temp_dir) = setup_adapter().await;
 
         let nodes: Vec<TestNode> = (0..100)
-            .map(|i| TestNode::new(&format!("test-{}", i), &format!("Node {}", i), i * 10))
+            .map(|i| TestNode::new(&format!("test-{i}"), &format!("Node {i}"), i * 10))
             .collect();
         let node_refs: Vec<&TestNode> = nodes.iter().collect();
 
@@ -1760,7 +1759,7 @@ mod tests {
         let (adapter, _temp_dir) = setup_adapter().await;
 
         let nodes: Vec<TestNode> = (0..1000)
-            .map(|i| TestNode::new(&format!("test-{}", i), &format!("Node {}", i), i * 10))
+            .map(|i| TestNode::new(&format!("test-{i}"), &format!("Node {i}"), i * 10))
             .collect();
         let node_refs: Vec<&TestNode> = nodes.iter().collect();
 
@@ -1834,7 +1833,7 @@ mod tests {
         let (adapter_seq, _temp_dir_seq) = setup_adapter().await;
 
         let nodes: Vec<TestNode> = (0..20)
-            .map(|i| TestNode::new(&format!("test-{}", i), &format!("Node {}", i), i * 10))
+            .map(|i| TestNode::new(&format!("test-{i}"), &format!("Node {i}"), i * 10))
             .collect();
         let node_refs: Vec<&TestNode> = nodes.iter().collect();
 
@@ -1857,7 +1856,7 @@ mod tests {
 
         // Spot check that same nodes exist in both
         for i in 0..20 {
-            let node_id = format!("test-{}", i);
+            let node_id = format!("test-{i}");
             assert!(adapter_batch.has_node(&node_id).await.unwrap());
             assert!(adapter_seq.has_node(&node_id).await.unwrap());
         }

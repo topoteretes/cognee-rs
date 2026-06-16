@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! Integration tests for `AuthorizedDeleteService` ACL enforcement.
 //!
 //! These tests verify that the ACL wrapper around `DeleteService` correctly

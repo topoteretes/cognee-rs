@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! End-to-end tests for `improve()` orchestrator.
 //!
 //! These tests exercise the stage-gate logic (which stages run based on the

@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! Integration tests for `POST /api/v1/remember`.
 //!
 //! Per p3-pipelines-and-websocket.md §5:
@@ -242,9 +247,7 @@ async fn post_remember_blocking_runs_full_pipeline() {
     assert_eq!(
         status,
         StatusCode::OK,
-        "expected 200 OK from /api/v1/remember, got {} with body {}",
-        status,
-        v,
+        "expected 200 OK from /api/v1/remember, got {status} with body {v}",
     );
 
     // ── Assert RememberResultDTO is populated from real output ───────────────

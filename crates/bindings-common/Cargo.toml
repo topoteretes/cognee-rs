@@ -15,6 +15,9 @@ authors.workspace = true
 # NOT a default member of the root workspace but IS a workspace member
 # so `cargo check --all-targets` at the root covers it.
 
+[lints]
+workspace = true
+
 [features]
 # Default features mirror cognee-neon (full): visualization, cloud, and all
 # engine features. A slim embedded build can override with

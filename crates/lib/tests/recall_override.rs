@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! Integration test: `recall()` records router overrides.
 //!
 //! When the caller passes an explicit `query_type` and `auto_route=true`,

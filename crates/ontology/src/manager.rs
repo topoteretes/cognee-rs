@@ -113,7 +113,7 @@ impl OntologyManager {
             .await
             .map_err(|e| OntologyError::Io(e.to_string()))?;
         serde_json::from_str(&content)
-            .map_err(|e| OntologyError::ParseError(format!("metadata.json: {}", e)))
+            .map_err(|e| OntologyError::ParseError(format!("metadata.json: {e}")))
     }
 
     /// Persist the metadata map for a user (atomic: write temp file + rename).
@@ -124,7 +124,7 @@ impl OntologyManager {
     ) -> OntologyResult<()> {
         let path = self.metadata_path(user_id);
         let content = serde_json::to_string_pretty(metadata)
-            .map_err(|e| OntologyError::ParseError(format!("metadata.json: {}", e)))?;
+            .map_err(|e| OntologyError::ParseError(format!("metadata.json: {e}")))?;
         let tmp_path = path.with_extension("json.tmp");
         tokio::fs::write(&tmp_path, content)
             .await
@@ -189,7 +189,7 @@ impl OntologyManager {
             .await
             .map_err(|e| OntologyError::Io(e.to_string()))?;
 
-        let stored_filename = format!("{}.{}", ontology_key, ext_lower);
+        let stored_filename = format!("{ontology_key}.{ext_lower}");
         let file_path = dir.join(&stored_filename);
         tokio::fs::write(&file_path, content)
             .await
@@ -264,7 +264,7 @@ impl OntologyManager {
         validate_ontology_key(ontology_key)?;
         let metadata = self.load_metadata(user_id).await?;
         let meta = metadata.get(ontology_key).ok_or_else(|| {
-            OntologyError::NotFound(format!("Ontology key '{}' not found", ontology_key))
+            OntologyError::NotFound(format!("Ontology key '{ontology_key}' not found"))
         })?;
 
         // Determine stored file extension from original filename
@@ -277,8 +277,7 @@ impl OntologyManager {
 
         if !path.exists() {
             return Err(OntologyError::NotFound(format!(
-                "Ontology file for key '{}' not found on disk",
-                ontology_key
+                "Ontology file for key '{ontology_key}' not found on disk"
             )));
         }
 
@@ -315,7 +314,7 @@ impl OntologyManager {
         validate_ontology_key(ontology_key)?;
         let mut metadata = self.load_metadata(user_id).await?;
         let meta = metadata.remove(ontology_key).ok_or_else(|| {
-            OntologyError::NotFound(format!("Ontology key '{}' not found", ontology_key))
+            OntologyError::NotFound(format!("Ontology key '{ontology_key}' not found"))
         })?;
 
         // Remove the file from disk
@@ -368,6 +367,11 @@ impl OntologyManager {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 mod tests {
     use super::*;
 

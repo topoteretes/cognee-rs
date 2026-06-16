@@ -75,8 +75,7 @@ pub fn run(args: MemifyArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> 
                     })?
                     .ok_or_else(|| {
                         CliError::Validation(format!(
-                            "Dataset '{dataset_name}' was not found for owner {}",
-                            owner_id
+                            "Dataset '{dataset_name}' was not found for owner {owner_id}"
                         ))
                     })?;
 

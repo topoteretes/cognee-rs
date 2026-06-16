@@ -713,7 +713,7 @@ fn merge_external_metadata(
 /// Derive a human-readable name for the stored Data record.
 fn extract_name(input: &DataInput, content_hash: &str) -> String {
     match input {
-        DataInput::Text(_) => format!("text_{}", content_hash),
+        DataInput::Text(_) => format!("text_{content_hash}"),
         DataInput::FilePath(path) => {
             let clean_path = path.strip_prefix("file://").unwrap_or(path);
             Path::new(clean_path)
@@ -722,7 +722,7 @@ fn extract_name(input: &DataInput, content_hash: &str) -> String {
                 .unwrap_or("unknown")
                 .to_string()
         }
-        DataInput::Url(_) => format!("text_{}", content_hash),
+        DataInput::Url(_) => format!("text_{content_hash}"),
         DataInput::S3Path(path) => path
             .split('/')
             .next_back()
@@ -740,12 +740,12 @@ fn extract_original_location(input: &DataInput) -> String {
             if path.starts_with("file://") {
                 path.clone()
             } else {
-                format!("file://{}", path)
+                format!("file://{path}")
             }
         }
         DataInput::Url(url) => url.clone(),
         DataInput::S3Path(path) => path.clone(),
-        DataInput::Binary { name, .. } => format!("binary://{}", name),
+        DataInput::Binary { name, .. } => format!("binary://{name}"),
         DataInput::DataItem { data, .. } => extract_original_location(data),
     }
 }
@@ -1279,6 +1279,11 @@ pub enum IngestionError {
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 mod tests {
     use super::*;
     use cognee_database::{connect, initialize, ops};

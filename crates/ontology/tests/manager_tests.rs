@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "integration test code — panics are acceptable failures"
+)]
 //! Integration tests for OntologyManager CRUD operations.
 
 use cognee_ontology::{OntologyError, OntologyManager};
@@ -99,9 +104,7 @@ async fn format_validation() {
         let result = mgr.upload(user, "bad", bad, b"x", None).await;
         assert!(
             matches!(result, Err(OntologyError::InvalidFormat(_))),
-            "Expected InvalidFormat for '{}', got {:?}",
-            bad,
-            result
+            "Expected InvalidFormat for '{bad}', got {result:?}"
         );
     }
 
@@ -110,7 +113,7 @@ async fn format_validation() {
         .iter()
         .enumerate()
     {
-        let key = format!("k{}", i);
+        let key = format!("k{i}");
         mgr.upload(user, &key, good, b"x", None).await.unwrap();
     }
     assert_eq!(mgr.list(user).await.unwrap().len(), 6);

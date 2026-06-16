@@ -29,6 +29,7 @@ pub fn try_acquire_improve_lock(session_id: &str) -> bool {
         return true;
     }
     // lock poison is unrecoverable
+    #[allow(clippy::unwrap_used, reason = "lock poison is unrecoverable")]
     let mut set = registry().lock().unwrap();
     set.insert(session_id.to_string())
 }
@@ -41,6 +42,7 @@ pub fn release_improve_lock(session_id: &str) {
         return;
     }
     // lock poison is unrecoverable
+    #[allow(clippy::unwrap_used, reason = "lock poison is unrecoverable")]
     registry().lock().unwrap().remove(session_id);
 }
 
@@ -77,6 +79,11 @@ impl Drop for ImproveLockGuard {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 mod tests {
     use super::*;
 

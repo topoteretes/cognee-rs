@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! CLEAN-01 §5.3 OpenAPI schema regression test.
 //!
 //! Walks every component schema in the generated OpenAPI document and asserts

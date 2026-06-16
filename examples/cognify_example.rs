@@ -70,10 +70,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let chunk_pipeline = ExtractTextChunksPipeline::new(storage);
     let max_chunk_size = 10; // 10 words per chunk for demonstration
 
-    println!(
-        "3. Running text chunking (max_chunk_size={} words)...\n",
-        max_chunk_size
-    );
+    println!("3. Running text chunking (max_chunk_size={max_chunk_size} words)...\n");
     let chunks = chunk_pipeline
         .extract_chunks(data_items, max_chunk_size)
         .await?;

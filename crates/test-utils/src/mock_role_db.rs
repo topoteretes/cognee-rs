@@ -1,5 +1,11 @@
 //! In-memory mock implementation of [`RoleDb`] for testing.
 
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "mock infrastructure — panics are acceptable"
+)]
+
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 

@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! End-to-end persistence tests for the LIB-06 payload event channel.
 //!
 //! Wires a `ScopedRunWatcher` against a real in-memory SQLite repo and a

@@ -1,4 +1,9 @@
 //! Provenance payload regression test (gap 05-10).
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "integration test code — panics are acceptable"
+)]
 //!
 //! Verifies that the full DataPoint dump produced by
 //! [`cognee_models::DataPoint::vector_metadata`] (decision 5) lands in

@@ -82,10 +82,7 @@ impl Triplet {
         // Generate deterministic ID matching Python's generate_node_id():
         //   uuid5(NAMESPACE_OID, (src + rel + tgt).lower().replace(" ", "_").replace("'", ""))
         // Python reference: cognee/modules/engine/utils/generate_node_id.py
-        let raw = format!(
-            "{}{}{}",
-            source_entity_id, relationship_name, target_entity_id
-        );
+        let raw = format!("{source_entity_id}{relationship_name}{target_entity_id}");
         let normalized = raw.to_lowercase().replace(' ', "_").replace('\'', "");
         let id = Uuid::new_v5(&Uuid::NAMESPACE_OID, normalized.as_bytes());
 
@@ -118,6 +115,11 @@ impl Triplet {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 mod tests {
     use super::*;
 
@@ -197,7 +199,7 @@ mod tests {
         // Manually compute expected ID using Python's formula:
         // raw = str(source_id) + relationship_name + str(target_id)
         // normalized = raw.lower().replace(" ", "_").replace("'", "")
-        let raw = format!("{}{}{}", source_id, relationship, target_id);
+        let raw = format!("{source_id}{relationship}{target_id}");
         let normalized = raw.to_lowercase().replace(' ', "_").replace('\'', "");
         let expected_id = Uuid::new_v5(&Uuid::NAMESPACE_OID, normalized.as_bytes());
 

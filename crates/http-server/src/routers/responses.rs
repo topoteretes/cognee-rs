@@ -216,6 +216,11 @@ pub(crate) async fn create_response_with(
 // ─── Inline tests ─────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 mod tests {
     use super::*;
     use async_trait::async_trait;
@@ -336,8 +341,7 @@ mod tests {
         let data = out.data.as_ref().expect("data");
         assert!(
             data["result"].as_str().expect("result").contains("Alice"),
-            "expected search dispatch to echo 'Alice', got: {:?}",
-            data
+            "expected search dispatch to echo 'Alice', got: {data:?}"
         );
         let usage = body.usage.expect("usage");
         assert_eq!(usage.prompt_tokens, 5);

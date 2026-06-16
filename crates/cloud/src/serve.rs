@@ -391,6 +391,11 @@ const _: fn() = || {
 };
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 mod tests {
     use super::*;
     use crate::state::{clear_client, get_client, is_connected};

@@ -1,3 +1,9 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "mock infrastructure — panics are acceptable"
+)]
+
 use async_trait::async_trait;
 use std::sync::{Arc, Mutex};
 
@@ -67,8 +73,7 @@ impl EmbeddingEngine for MockEmbeddingEngine {
             && count_after > n
         {
             return Err(EmbeddingError::InferenceError(format!(
-                "MockEmbeddingEngine: injected failure after {} successful call(s)",
-                n
+                "MockEmbeddingEngine: injected failure after {n} successful call(s)"
             )));
         }
         Ok(vec![vec![0.0_f32; self.dimensions]; texts.len()])

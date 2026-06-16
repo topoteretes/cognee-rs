@@ -80,7 +80,7 @@ impl OpenAIAdapter {
         let client = Client::builder()
             .timeout(std::time::Duration::from_secs(600))
             .build()
-            .map_err(|e| LlmError::ConfigError(format!("Failed to create HTTP client: {}", e)))?;
+            .map_err(|e| LlmError::ConfigError(format!("Failed to create HTTP client: {e}")))?;
 
         let transcription_model =
             std::env::var("TRANSCRIPTION_MODEL").unwrap_or_else(|_| "whisper-1".to_string());
@@ -215,8 +215,8 @@ impl OpenAIAdapter {
                 let err = match status.as_u16() {
                     401 => LlmError::AuthenticationError(error_body),
                     429 => LlmError::RateLimitExceeded(error_body),
-                    400 => LlmError::InvalidResponse(format!("Bad request: {}", error_body)),
-                    _ => LlmError::ApiError(format!("HTTP {}: {}", status, error_body)),
+                    400 => LlmError::InvalidResponse(format!("Bad request: {error_body}")),
+                    _ => LlmError::ApiError(format!("HTTP {status}: {error_body}")),
                 };
 
                 // Non-retryable: bad request or authentication failure.
@@ -229,7 +229,7 @@ impl OpenAIAdapter {
             }
 
             let response_body = response.text().await.map_err(|e| {
-                LlmError::DeserializationError(format!("Failed to read response body: {}", e))
+                LlmError::DeserializationError(format!("Failed to read response body: {e}"))
             })?;
 
             if debug_enabled {
@@ -238,8 +238,7 @@ impl OpenAIAdapter {
 
             return serde_json::from_str::<OpenAIResponse>(&response_body).map_err(|e| {
                 LlmError::DeserializationError(format!(
-                    "Failed to parse response: {}. Raw body: {}",
-                    e, response_body
+                    "Failed to parse response: {e}. Raw body: {response_body}"
                 ))
             });
         }
@@ -487,8 +486,7 @@ impl Llm for OpenAIAdapter {
                             }
                             if !is_empty_or_non_json(content) {
                                 return Err(LlmError::DeserializationError(format!(
-                                    "Failed to deserialize strict JSON content: {}. Raw: {}",
-                                    e, content
+                                    "Failed to deserialize strict JSON content: {e}. Raw: {content}"
                                 )));
                             }
                             break;
@@ -625,8 +623,7 @@ impl Llm for OpenAIAdapter {
                         continue;
                     }
                     return Err(LlmError::DeserializationError(format!(
-                        "Failed to deserialize JSON content: {}. Raw: {}",
-                        e, content
+                        "Failed to deserialize JSON content: {e}. Raw: {content}"
                     )));
                 }
             }
@@ -802,19 +799,18 @@ impl OpenAIAdapter {
             return Err(match status.as_u16() {
                 401 => LlmError::AuthenticationError(error_body),
                 429 => LlmError::RateLimitExceeded(error_body),
-                400 => LlmError::InvalidResponse(format!("Bad request: {}", error_body)),
-                _ => LlmError::ApiError(format!("HTTP {}: {}", status, error_body)),
+                400 => LlmError::InvalidResponse(format!("Bad request: {error_body}")),
+                _ => LlmError::ApiError(format!("HTTP {status}: {error_body}")),
             });
         }
 
         let response_body = response.text().await.map_err(|e| {
-            LlmError::DeserializationError(format!("Failed to read response body: {}", e))
+            LlmError::DeserializationError(format!("Failed to read response body: {e}"))
         })?;
 
         serde_json::from_str::<WhisperResponse>(&response_body).map_err(|e| {
             LlmError::DeserializationError(format!(
-                "Failed to parse Whisper response: {}. Raw body: {}",
-                e, response_body
+                "Failed to parse Whisper response: {e}. Raw body: {response_body}"
             ))
         })
     }
@@ -828,13 +824,13 @@ impl OpenAIAdapter {
         prompt_hint: Option<&str>,
     ) -> LlmResult<reqwest::multipart::Form> {
         let mime = audio_mime_type(format);
-        let filename = format!("audio.{}", format);
+        let filename = format!("audio.{format}");
 
         let file_part = reqwest::multipart::Part::bytes(audio.to_vec())
             .file_name(filename)
             .mime_str(mime)
             .map_err(|e| {
-                LlmError::ConfigError(format!("Failed to set MIME type on multipart part: {}", e))
+                LlmError::ConfigError(format!("Failed to set MIME type on multipart part: {e}"))
             })?;
 
         let mut form = reqwest::multipart::Form::new()
@@ -964,6 +960,11 @@ struct OpenAIUsage {
 
 #[cfg(test)]
 mod tests {
+    #![allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        reason = "test code — panics are acceptable"
+    )]
     use super::*;
 
     #[test]

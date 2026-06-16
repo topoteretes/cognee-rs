@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! Integration test: `PipelineRunAlreadyCompleted` path.
 //!
 //! Per p3-pipelines-and-websocket.md §5:

@@ -102,6 +102,11 @@ impl TokenCounter for TikTokenCounter {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 mod tests {
     use super::*;
 
@@ -127,6 +132,11 @@ mod tests {
 }
 
 #[cfg(all(test, feature = "hf-tokenizer"))]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 mod hf_tests {
     use super::*;
 
@@ -138,6 +148,11 @@ mod hf_tests {
 }
 
 #[cfg(all(test, feature = "tiktoken"))]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 mod tiktoken_tests {
     use super::*;
 
@@ -154,11 +169,7 @@ mod tiktoken_tests {
         let count = counter.count_tokens("Hello, world!");
         assert!(count > 0);
         // verify it's in reasonable range (3-6 tokens for this string)
-        assert!(
-            (3..=6).contains(&count),
-            "Expected 3-6 tokens, got {}",
-            count
-        );
+        assert!((3..=6).contains(&count), "Expected 3-6 tokens, got {count}");
     }
 
     #[test]

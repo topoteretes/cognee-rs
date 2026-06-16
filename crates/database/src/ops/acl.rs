@@ -101,7 +101,7 @@ pub async fn grant_permission(
         .await
         .map_err(|e| DatabaseError::QueryError(e.to_string()))?
         .ok_or_else(|| {
-            DatabaseError::NotFound(format!("Permission '{}' not found", permission_name))
+            DatabaseError::NotFound(format!("Permission '{permission_name}' not found"))
         })?;
 
     let principal_hex = uuid_hex::to_hex(principal_id);
@@ -159,7 +159,7 @@ pub async fn revoke_permission(
         .await
         .map_err(|e| DatabaseError::QueryError(e.to_string()))?
         .ok_or_else(|| {
-            DatabaseError::NotFound(format!("Permission '{}' not found", permission_name))
+            DatabaseError::NotFound(format!("Permission '{permission_name}' not found"))
         })?;
 
     acl::Entity::delete_many()

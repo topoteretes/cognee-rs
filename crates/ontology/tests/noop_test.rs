@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "integration test code — panics are acceptable failures"
+)]
 //! Integration tests for NoOpOntologyResolver.
 //!
 //! These tests verify that the no-op resolver correctly implements
@@ -71,7 +76,7 @@ fn test_noop_resolver_clone() {
 #[test]
 fn test_noop_resolver_debug() {
     let resolver = NoOpOntologyResolver::new();
-    let debug_string = format!("{:?}", resolver);
+    let debug_string = format!("{resolver:?}");
 
     assert!(debug_string.contains("NoOpOntologyResolver"));
 }

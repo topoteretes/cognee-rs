@@ -24,12 +24,12 @@ impl ContentHasher {
             HashAlgorithm::Md5 => {
                 use md5::Digest;
                 let result = Md5::digest(content);
-                format!("{:x}", result)
+                format!("{result:x}")
             }
             HashAlgorithm::Sha256 => {
                 use sha2::Digest;
                 let result = Sha256::digest(content);
-                format!("{:x}", result)
+                format!("{result:x}")
             }
         }
     }
@@ -71,6 +71,11 @@ impl ContentHasher {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 mod tests {
     use super::*;
 

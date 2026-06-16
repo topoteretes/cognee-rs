@@ -58,6 +58,10 @@ pub struct CloudCredentials {
 /// not expected on any supported target (Linux / macOS / Windows). This
 /// matches the Python behaviour where `Path.home()` raises `RuntimeError`
 /// in the same cases.
+#[allow(
+    clippy::expect_used,
+    reason = "dirs::home_dir() returning None on a supported platform (Linux/macOS/Windows) is an unrecoverable misconfiguration; matches Python's RuntimeError behaviour"
+)]
 pub fn credentials_path() -> PathBuf {
     let home = dirs::home_dir()
         .expect("dirs::home_dir() returns Some on all supported platforms (Linux/macOS/Windows)");
@@ -143,6 +147,12 @@ pub fn is_token_expired(creds: &CloudCredentials) -> bool {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::uninlined_format_args,
+    reason = "test code — panics are acceptable failures"
+)]
 mod tests {
     use super::*;
     use std::sync::Mutex;

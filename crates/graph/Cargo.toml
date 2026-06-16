@@ -12,6 +12,9 @@ keywords.workspace = true
 categories.workspace = true
 authors.workspace = true
 
+[lints]
+workspace = true
+
 [dependencies]
 # Core async and serialization
 async-trait.workspace = true

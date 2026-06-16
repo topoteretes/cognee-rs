@@ -20,7 +20,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let storage_path = PathBuf::from("./data");
     let storage = Arc::new(LocalStorage::new(storage_path.clone()));
     storage.initialize().await?;
-    println!("   ✓ Storage initialized at {:?}\n", storage_path);
+    println!("   ✓ Storage initialized at {storage_path:?}\n");
 
     // Initialize database
     println!("2. Initializing SQLite database...");
@@ -40,7 +40,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create a test user
     let owner_id = Uuid::new_v4();
-    println!("4. Created owner ID: {}\n", owner_id);
+    println!("4. Created owner ID: {owner_id}\n");
 
     // Example 1: Add text content
     println!("5. Adding text content...");

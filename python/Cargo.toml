@@ -12,6 +12,9 @@ keywords.workspace = true
 categories.workspace = true
 authors.workspace = true
 
+[lints]
+workspace = true
+
 [lib]
 name = "cognee_pipeline"
 crate-type = ["cdylib"]

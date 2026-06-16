@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! End-to-end ontology pipeline test: add -> cognify -> search.
 //!
 //! Uses a real `.ttl` ontology fixture and asserts ontology enrichment
@@ -461,8 +466,7 @@ async fn e2e_ontology_pipeline_multi_ontology_add_cognify_search() {
     let legal_entity_present = persisted_names.iter().any(|name| name == "legalentity");
     assert!(
         zeta_domain_root_present && legal_entity_present,
-        "Expected combined ontology enrichment to include ZetaDomainRoot and LegalEntity ancestors; found names: {:?}",
-        persisted_names
+        "Expected combined ontology enrichment to include ZetaDomainRoot and LegalEntity ancestors; found names: {persisted_names:?}"
     );
 
     let orchestrator = SearchBuilder::new(

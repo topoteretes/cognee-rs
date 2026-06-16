@@ -13,6 +13,9 @@ keywords.workspace = true
 categories.workspace = true
 authors.workspace = true
 
+[lints]
+workspace = true
+
 [[bench]]
 name    = "batch_add_cognify"
 harness = false

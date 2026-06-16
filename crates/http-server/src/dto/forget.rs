@@ -126,6 +126,11 @@ pub enum ForgetMode {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 mod tests {
     use super::*;
 
@@ -182,7 +187,7 @@ mod tests {
     #[test]
     fn dataset_ref_deserialize_uuid() {
         let uuid = Uuid::new_v4();
-        let s = format!("\"{}\"", uuid);
+        let s = format!("\"{uuid}\"");
         let parsed: DatasetRef = serde_json::from_str(&s).unwrap();
         assert!(matches!(parsed, DatasetRef::Id(_)));
     }

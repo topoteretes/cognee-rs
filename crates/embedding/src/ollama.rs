@@ -289,6 +289,11 @@ fn parse_f32_array(value: &Value) -> EmbeddingResult<Vec<f32>> {
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+#[allow(
+    clippy::expect_used,
+    clippy::unwrap_used,
+    reason = "test code — panics are acceptable failures"
+)]
 mod tests {
     use super::*;
     use crate::config::EmbeddingConfig;

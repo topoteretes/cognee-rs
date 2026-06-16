@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! Integration tests for `PATCH /api/v1/update` real-pipeline behaviour.
 //!
 //! These tests intentionally stay env-gated (mirroring `test_cognify_blocking`):

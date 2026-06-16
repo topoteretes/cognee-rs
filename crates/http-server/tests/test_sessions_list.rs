@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! E-09 — `GET /api/v1/sessions` integration tests.
 //!
 //! Six tests covering: ACL-scoped visibility, pagination envelope,

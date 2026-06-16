@@ -154,7 +154,7 @@ impl OpenAIResponsesClient {
         let client = Client::builder()
             .timeout(std::time::Duration::from_secs(600))
             .build()
-            .map_err(|e| LlmError::ConfigError(format!("Failed to create HTTP client: {}", e)))?;
+            .map_err(|e| LlmError::ConfigError(format!("Failed to create HTTP client: {e}")))?;
         Ok(Self {
             api_key: api_key.into(),
             base_url: base_url.unwrap_or_else(|| Self::DEFAULT_BASE_URL.to_string()),
@@ -248,9 +248,9 @@ impl OpenAIResponsesClient {
                 let err = match status.as_u16() {
                     401 => LlmError::AuthenticationError(error_body),
                     429 => LlmError::RateLimitExceeded(error_body),
-                    400 => LlmError::InvalidResponse(format!("Bad request: {}", error_body)),
+                    400 => LlmError::InvalidResponse(format!("Bad request: {error_body}")),
                     404 => LlmError::ModelNotFound(error_body),
-                    _ => LlmError::ApiError(format!("HTTP {}: {}", status, error_body)),
+                    _ => LlmError::ApiError(format!("HTTP {status}: {error_body}")),
                 };
                 if matches!(status.as_u16(), 400 | 401 | 404) {
                     return Err(err);
@@ -260,12 +260,11 @@ impl OpenAIResponsesClient {
             }
 
             let body_text = response.text().await.map_err(|e| {
-                LlmError::DeserializationError(format!("Failed to read response body: {}", e))
+                LlmError::DeserializationError(format!("Failed to read response body: {e}"))
             })?;
             return serde_json::from_str::<Value>(&body_text).map_err(|e| {
                 LlmError::DeserializationError(format!(
-                    "Failed to parse response: {}. Raw body: {}",
-                    e, body_text
+                    "Failed to parse response: {e}. Raw body: {body_text}"
                 ))
             });
         }
@@ -285,7 +284,7 @@ impl ResponsesClient for OpenAIResponsesClient {
     }
 
     async fn retrieve_response(&self, response_id: &str) -> LlmResult<Value> {
-        self.get_json(&format!("/responses/{}", response_id)).await
+        self.get_json(&format!("/responses/{response_id}")).await
     }
 
     async fn submit_tool_outputs(
@@ -294,7 +293,7 @@ impl ResponsesClient for OpenAIResponsesClient {
         tool_outputs: Vec<Value>,
     ) -> LlmResult<Value> {
         self.post_json(
-            &format!("/responses/{}/submit_tool_outputs", response_id),
+            &format!("/responses/{response_id}/submit_tool_outputs"),
             json!({ "tool_outputs": tool_outputs }),
         )
         .await
@@ -303,6 +302,11 @@ impl ResponsesClient for OpenAIResponsesClient {
 
 #[cfg(test)]
 mod tests {
+    #![allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        reason = "test code — panics are acceptable"
+    )]
     use super::*;
 
     #[test]

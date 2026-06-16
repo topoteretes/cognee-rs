@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! Stage-B integration tests for `POST /api/v1/notebooks/{id}/{cell_id}/run`
 //! that actually exercise the `SubprocessRunner` against a real `python3`.
 //!
@@ -98,8 +103,7 @@ async fn run_cell_with_python3_returns_print_output() {
     // `print(1+1)` writes `2` — our wrapper captures it as one entry.
     assert!(
         arr.iter().any(|x| x.as_str() == Some("2")),
-        "expected '2' in result; got {:?}",
-        arr
+        "expected '2' in result; got {arr:?}"
     );
     assert!(
         v["error"].is_null(),

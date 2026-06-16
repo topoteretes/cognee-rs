@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! E2E test: search returns correct results after partial delete.
 //!
 //! Two documents with distinct topics are cognified into the same dataset.
@@ -295,8 +300,7 @@ async fn test_search_returns_empty_for_deleted_doc_and_non_empty_for_remaining()
 
     assert!(
         !is_non_empty(&germany_post) || !has_germany_content,
-        "Germany content should not appear in search results after delete. Got: {}",
-        germany_text,
+        "Germany content should not appear in search results after delete. Got: {germany_text}",
     );
     println!("Step 5a OK: Germany content no longer in search results");
 

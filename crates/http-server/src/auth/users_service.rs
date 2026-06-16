@@ -13,6 +13,7 @@ use crate::error::ApiError;
 pub const DEFAULT_USER_ID: &str = "00000000000000000000000000000000";
 
 pub fn default_user_uuid() -> Uuid {
+    #[allow(clippy::expect_used, reason = "invariant is upheld by construction")]
     Uuid::parse_str("00000000-0000-0000-0000-000000000000")
         .expect("default_user_uuid is a valid UUID v4 nil")
 }

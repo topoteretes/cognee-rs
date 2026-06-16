@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! P5 §5: `POST /api/v1/permissions/tenants/select` with body `{"tenant_id": null}`
 //! must return the literal **JSON string `"None"`** in the response (Python parity
 //! per `routers/permissions.md §2.9` / `§6.4`). Default `Option<Uuid>` would

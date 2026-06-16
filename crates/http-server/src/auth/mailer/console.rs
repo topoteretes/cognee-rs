@@ -51,41 +51,32 @@ impl Default for ConsoleMailer {
 #[async_trait]
 impl Mailer for ConsoleMailer {
     async fn send_register_welcome(&self, user: &AuthUser) -> Result<(), MailerError> {
-        self.events
-            .lock()
-            // lock poison is unrecoverable
-            .unwrap()
-            .push(MailEvent {
-                kind: MailEventKind::RegisterWelcome,
-                user_id: user.id,
-                token: None,
-            });
+        #[allow(clippy::unwrap_used, reason = "lock poison is unrecoverable")]
+        self.events.lock().unwrap().push(MailEvent {
+            kind: MailEventKind::RegisterWelcome,
+            user_id: user.id,
+            token: None,
+        });
         Ok(())
     }
 
     async fn send_password_reset(&self, user: &AuthUser, token: &str) -> Result<(), MailerError> {
-        self.events
-            .lock()
-            // lock poison is unrecoverable
-            .unwrap()
-            .push(MailEvent {
-                kind: MailEventKind::PasswordReset,
-                user_id: user.id,
-                token: Some(token.to_owned()),
-            });
+        #[allow(clippy::unwrap_used, reason = "lock poison is unrecoverable")]
+        self.events.lock().unwrap().push(MailEvent {
+            kind: MailEventKind::PasswordReset,
+            user_id: user.id,
+            token: Some(token.to_owned()),
+        });
         Ok(())
     }
 
     async fn send_email_verify(&self, user: &AuthUser, token: &str) -> Result<(), MailerError> {
-        self.events
-            .lock()
-            // lock poison is unrecoverable
-            .unwrap()
-            .push(MailEvent {
-                kind: MailEventKind::EmailVerify,
-                user_id: user.id,
-                token: Some(token.to_owned()),
-            });
+        #[allow(clippy::unwrap_used, reason = "lock poison is unrecoverable")]
+        self.events.lock().unwrap().push(MailEvent {
+            kind: MailEventKind::EmailVerify,
+            user_id: user.id,
+            token: Some(token.to_owned()),
+        });
         Ok(())
     }
 }

@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! Integration test: ontology round-trip with real RDF resolver.
 //!
 //! Uses a real `RdfLibOntologyResolver` loaded from an inline Turtle ontology

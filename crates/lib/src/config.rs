@@ -1,3 +1,7 @@
+#![allow(
+    clippy::expect_used,
+    reason = "RwLock/Mutex expect calls — lock poison is unrecoverable"
+)]
 //! Shared configuration types for cognee-rust.
 
 use std::collections::HashMap;
@@ -1714,6 +1718,11 @@ impl ConfigManager {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 mod tests {
     use super::*;
 

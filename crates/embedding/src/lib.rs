@@ -1,15 +1,27 @@
+//! Multi-provider text-embedding engine (ONNX, OpenAI-compatible, Ollama, Mock).
+
+/// Embedding engine configuration.
 pub mod config;
+/// `EmbeddingEngine` trait definition.
 pub mod engine;
+/// Error types for embedding operations.
 pub mod error;
+/// Mock embedding engine for tests.
 pub mod mock;
+/// Ollama embedding engine implementation.
 pub mod ollama;
+/// OpenAI-compatible embedding engine implementation.
 pub mod openai_compatible;
+/// Embedding provider selection.
 pub mod provider;
+/// Shared utilities for embedding input sanitization and response handling.
 pub mod utils;
 
 #[cfg(feature = "onnx")]
+/// Lazy model and tokenizer download from HuggingFace Hub.
 pub mod download;
 #[cfg(feature = "onnx")]
+/// ONNX Runtime-based local embedding engine.
 pub mod onnx;
 
 pub use config::EmbeddingConfig;

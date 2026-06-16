@@ -12,6 +12,9 @@ keywords.workspace = true
 categories.workspace = true
 authors.workspace = true
 
+[lints]
+workspace = true
+
 [dependencies]
 cognee-graph = { path = "../graph" }
 dirs = { workspace = true }

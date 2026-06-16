@@ -1,3 +1,8 @@
+#![allow(
+    clippy::expect_used,
+    clippy::unwrap_used,
+    reason = "integration test code — panics are acceptable failures"
+)]
 //! End-to-end integration test: spans emitted through cognee's OTEL bring-up
 //! must reach an OTLP/gRPC collector. We stand up an in-process tonic server
 //! implementing `opentelemetry_proto::collector::trace::v1::TraceService`,

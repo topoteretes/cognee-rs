@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! LIB-05 repository tests for `SessionLifecycleDb`.
 //!
 //! Validates the trait impl on `DatabaseConnection` against the SeaORM

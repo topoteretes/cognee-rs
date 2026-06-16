@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! P5 §5: HTTP-level coverage of `POST /api/v1/permissions/datasets/{principal_id}`.
 //!
 //! Repository-level invariants for the 8-step `user_can` resolver are exercised

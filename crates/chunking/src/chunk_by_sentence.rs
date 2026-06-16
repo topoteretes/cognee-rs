@@ -43,6 +43,10 @@ fn offset_in(base: &str, slice: &str) -> usize {
 /// - `maximum_size`: optional max token count per sentence. If a sentence would
 ///   exceed this, it is yielded early and the overflowing word starts a new one.
 /// - `counter`: token counter implementation
+#[allow(
+    clippy::expect_used,
+    reason = "sentence_start invariants are upheld by the is_some() guard and the explicit set above each emit branch"
+)]
 pub fn chunk_by_sentence<'a, C: TokenCounter>(
     data: &'a str,
     maximum_size: Option<usize>,

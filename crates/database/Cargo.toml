@@ -12,6 +12,8 @@ keywords.workspace = true
 categories.workspace = true
 authors.workspace = true
 
+[lints]
+workspace = true
 
 [features]
 sqlite   = ["sea-orm/sqlx-sqlite"]

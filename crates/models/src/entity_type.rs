@@ -54,7 +54,7 @@ impl EntityType {
             base: DataPoint::with_metadata("EntityType", dataset_id, metadata),
             name: name_str.clone(),
             description: if description_str.is_empty() {
-                format!("Entity type: {}", name_str)
+                format!("Entity type: {name_str}")
             } else {
                 description_str
             },
@@ -70,7 +70,7 @@ impl EntityType {
         let type_str = type_name.into();
         Self::new(
             type_str.clone(),
-            format!("Entity type: {}", type_str),
+            format!("Entity type: {type_str}"),
             dataset_id,
         )
     }

@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! Optional real-backend end-to-end test for the memify pipeline.
 //!
 //! Seeds a small graph directly in Ladybug (no cognify / no LLM), runs

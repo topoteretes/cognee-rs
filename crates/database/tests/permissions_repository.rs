@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! Integration tests for [`SeaOrmPermissionsRepository`].
 //!
 //! Covers the 8-step `user_can` resolution per `tenants.md §5.1` plus the

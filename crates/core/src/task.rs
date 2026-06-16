@@ -1,3 +1,7 @@
+// expect() calls guard construction-time invariants (is::<T>() check, non-empty
+// task guarantee) and are safe by design.
+#![allow(clippy::expect_used, reason = "invariants are upheld by construction")]
+
 use std::any::Any;
 use std::sync::Arc;
 
@@ -1069,6 +1073,11 @@ pub enum TaskCall {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 mod tests {
     use super::*;
     use std::future::Future;

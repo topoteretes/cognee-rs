@@ -575,6 +575,11 @@ fn to_datetime(date: NaiveDate, is_end: bool) -> Option<DateTime<Utc>> {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 mod tests {
     use std::borrow::Cow;
     use std::collections::{HashMap, HashSet};

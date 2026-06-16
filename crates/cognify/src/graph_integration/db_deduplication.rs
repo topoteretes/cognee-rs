@@ -103,7 +103,7 @@ pub async fn retrieve_existing_edges(
     // This matches the format used in expand_with_nodes_and_edges
     let mut existing_edges_set = HashSet::new();
     for (source_id, target_id, relationship_name, _) in existing_edges {
-        let edge_key = format!("{}_{}_{}", source_id, target_id, relationship_name);
+        let edge_key = format!("{source_id}_{target_id}_{relationship_name}");
         existing_edges_set.insert(edge_key);
     }
 
@@ -111,6 +111,11 @@ pub async fn retrieve_existing_edges(
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 mod tests {
     use super::*;
     use crate::fact_extraction::{Edge, Node};
@@ -181,7 +186,7 @@ mod tests {
         let result = retrieve_existing_edges(&graph_db, &[graph]).await.unwrap();
 
         // Should find the edge
-        let expected_key = format!("{}_{}_works_at", alice_uuid, techcorp_uuid);
+        let expected_key = format!("{alice_uuid}_{techcorp_uuid}_works_at");
         assert!(result.contains(&expected_key));
     }
 
@@ -233,7 +238,7 @@ mod tests {
             .unwrap();
 
         // Should only find the first edge
-        let alice_edge_key = format!("{}_{}_works_at", alice_uuid, techcorp_uuid);
+        let alice_edge_key = format!("{alice_uuid}_{techcorp_uuid}_works_at");
         assert!(result.contains(&alice_edge_key));
         assert_eq!(result.len(), 1);
     }

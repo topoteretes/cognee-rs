@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! Integration tests for session→search wiring (Part B of task 20).
 //!
 //! These tests verify:
@@ -293,8 +298,7 @@ async fn save_qa_populates_used_graph_element_ids() {
 
     assert!(
         !ids.node_ids.is_empty(),
-        "node_ids must be non-empty; got: {:?}",
-        ids
+        "node_ids must be non-empty; got: {ids:?}"
     );
     assert!(
         ids.node_ids.contains(&"node-src".to_string()),

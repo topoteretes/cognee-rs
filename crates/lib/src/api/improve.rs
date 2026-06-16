@@ -235,6 +235,7 @@ pub async fn improve(params: ImproveParams<'_>) -> Result<ImproveResult, ApiErro
 
     // ---- Stage 1: Apply Feedback Weights ----
     if has_sessions {
+        #[allow(clippy::expect_used, reason = "invariant is upheld by construction")]
         let sids = session_ids
             .as_ref()
             .expect("has_sessions guarantees session_ids is Some with non-empty vec");
@@ -276,6 +277,7 @@ pub async fn improve(params: ImproveParams<'_>) -> Result<ImproveResult, ApiErro
 
     // ---- Stage 2: Persist Session Q&A to Graph ----
     if has_sessions {
+        #[allow(clippy::expect_used, reason = "invariant is upheld by construction")]
         let sids = session_ids
             .as_ref()
             .expect("has_sessions guarantees session_ids is Some with non-empty vec");
@@ -355,6 +357,7 @@ pub async fn improve(params: ImproveParams<'_>) -> Result<ImproveResult, ApiErro
     // parity pass should introduce a dedicated `persist_trace_feedbacks_in_knowledge_graph`
     // function in cognee-cognify that preserves per-step provenance.
     if has_sessions {
+        #[allow(clippy::expect_used, reason = "invariant is upheld by construction")]
         let sids = session_ids
             .as_ref()
             .expect("has_sessions guarantees session_ids is Some with non-empty vec");
@@ -619,6 +622,7 @@ pub async fn improve(params: ImproveParams<'_>) -> Result<ImproveResult, ApiErro
     //
     // Stage 4 always runs when sessions are present (background dispatch is host-side).
     if has_sessions {
+        #[allow(clippy::expect_used, reason = "invariant is upheld by construction")]
         let sids = session_ids
             .as_ref()
             .expect("has_sessions guarantees session_ids is Some with non-empty vec");

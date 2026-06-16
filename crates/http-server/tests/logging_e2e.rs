@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! Integration test: when `cognee_logging`'s file layer is composed
 //! alongside the HTTP server's `SpanBufferLayer` via the
 //! `extra_layers` seam, both sinks observe the same `tracing` events.

@@ -12,6 +12,9 @@ keywords.workspace = true
 categories.workspace = true
 authors.workspace = true
 
+[lints]
+workspace = true
+
 [features]
 default = []
 android-litert = ["dep:cognee-litert-lm"]

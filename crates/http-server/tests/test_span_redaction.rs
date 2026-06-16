@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! Integration: a bearer token planted in a span attribute is redacted
 //! before reaching `GET /api/v1/activity/spans`.
 

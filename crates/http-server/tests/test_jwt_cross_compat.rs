@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! Cross-SDK JWT compatibility test.
 //!
 //! Verifies that a JWT minted by the Rust encoder can be decoded, and that the

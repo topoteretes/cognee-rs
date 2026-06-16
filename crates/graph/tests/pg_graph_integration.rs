@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! Integration tests for `PgGraphAdapter` using the shared GraphDBTrait test suite.
 //!
 //! These tests require a running PostgreSQL instance. Set `PGGRAPH_TEST_URL` to a

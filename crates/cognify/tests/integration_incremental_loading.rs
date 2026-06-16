@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! Integration tests for incremental loading configuration behavior.
 //!
 //! The data-processing history layer is not wired into the current Rust `cognify()` API.

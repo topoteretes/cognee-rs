@@ -153,7 +153,7 @@ impl SpanBuffer {
     ///   `max_traces`, evict the oldest trace whole and bump `dropped_lru`.
     pub fn record(&self, span: RecordedSpan) {
         let trace_id = span.trace_id.clone();
-        // lock poison is unrecoverable
+        #[allow(clippy::unwrap_used, reason = "lock poison is unrecoverable")]
         let mut inner = self.inner.lock().unwrap();
 
         let is_new_trace = !inner.traces.contains_key(&trace_id);
@@ -185,7 +185,7 @@ impl SpanBuffer {
 
     /// Snapshot every trace, most-recent first.
     pub fn all_traces(&self) -> Vec<TraceSummary> {
-        // lock poison is unrecoverable
+        #[allow(clippy::unwrap_used, reason = "lock poison is unrecoverable")]
         let inner = self.inner.lock().unwrap();
         let mut out = Vec::with_capacity(inner.trace_order.len());
         // Iterate trace_order in reverse so the most recent trace lands first.
@@ -199,7 +199,7 @@ impl SpanBuffer {
 
     /// Most recent trace, if any.
     pub fn last_trace(&self) -> Option<TraceSummary> {
-        // lock poison is unrecoverable
+        #[allow(clippy::unwrap_used, reason = "lock poison is unrecoverable")]
         let inner = self.inner.lock().unwrap();
         let trace_id = inner.trace_order.back()?.clone();
         let spans = inner.traces.get(&trace_id)?.clone();
@@ -208,7 +208,7 @@ impl SpanBuffer {
 
     /// Drop every trace and reset stats.
     pub fn clear(&self) {
-        // lock poison is unrecoverable
+        #[allow(clippy::unwrap_used, reason = "lock poison is unrecoverable")]
         let mut inner = self.inner.lock().unwrap();
         inner.traces.clear();
         inner.trace_order.clear();
@@ -217,7 +217,7 @@ impl SpanBuffer {
 
     /// Cumulative drop counters.
     pub fn stats(&self) -> BufferStats {
-        // lock poison is unrecoverable
+        #[allow(clippy::unwrap_used, reason = "lock poison is unrecoverable")]
         let inner = self.inner.lock().unwrap();
         inner.stats.clone()
     }
@@ -263,6 +263,11 @@ fn build_trace_summary(trace_id: String, spans: Vec<RecordedSpan>) -> TraceSumma
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 mod tests {
     use super::*;
 

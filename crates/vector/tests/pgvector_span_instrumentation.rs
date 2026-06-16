@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! Span attribute integration tests for the PgVector adapter.
 //!
 //! Skipped silently when `cognee_test_utils::pg_test_url()` returns `None`

@@ -232,8 +232,7 @@ impl SearchOrchestrator {
             if let Some(ref custom_type) = request.custom_search_type {
                 self.registry.get_by_name(custom_type).ok_or_else(|| {
                     SearchError::InvalidInput(format!(
-                        "No community retriever registered for '{}'",
-                        custom_type
+                        "No community retriever registered for '{custom_type}'"
                     ))
                 })?
             } else {
@@ -614,6 +613,11 @@ impl SearchOrchestrator {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 mod tests {
     use crate::orchestration::SearchTypeRegistry;
     use crate::orchestration::{CONTEXT_LABEL_COMBINED, CONTEXT_LABEL_DEFAULT};
@@ -1677,8 +1681,7 @@ mod tests {
         let err = result.unwrap_err();
         assert!(
             matches!(err, SearchError::InvalidInput(_)),
-            "expected InvalidInput error, got: {:?}",
-            err
+            "expected InvalidInput error, got: {err:?}"
         );
     }
 }

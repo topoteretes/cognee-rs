@@ -220,10 +220,12 @@ pub async fn brute_force_triplet_search(
             .is_some_and(|names| !names.is_empty());
 
     let (graph_nodes, graph_edges) = if has_node_filter {
+        #[allow(clippy::expect_used, reason = "invariant is upheld by construction")]
         let node_type = config
             .node_type
             .as_deref()
             .expect("node_type is checked non-None in has_node_filter");
+        #[allow(clippy::expect_used, reason = "invariant is upheld by construction")]
         let node_names = config
             .node_name
             .as_deref()
@@ -356,6 +358,11 @@ pub async fn brute_force_triplet_search(
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 mod penalty_default_tests {
     use super::*;
 

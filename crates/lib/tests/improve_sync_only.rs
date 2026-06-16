@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! Tests verifying that `improve()` is sync-only (no `run_in_background`).
 //!
 //! (a) Signature has no `run_in_background`.

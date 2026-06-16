@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! Tests for `SessionManager::add_agent_trace_step` /
 //! `SessionManager::get_agent_trace_session` (LIB-02).
 //!

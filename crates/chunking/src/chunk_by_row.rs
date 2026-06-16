@@ -54,7 +54,7 @@ pub fn chunk_by_row<C: TokenCounter>(
                 let chunk_text = current_chunk_list.join(", ");
                 let chunk_id = Uuid::new_v5(
                     &NAMESPACE_OID,
-                    format!("{}-{}", document_id, chunk_index).as_bytes(),
+                    format!("{document_id}-{chunk_index}").as_bytes(),
                 );
                 let word_count = counter.count_tokens(&chunk_text);
                 result.push(DocumentChunk::new(
@@ -80,7 +80,7 @@ pub fn chunk_by_row<C: TokenCounter>(
             let chunk_text = current_chunk_list.join(", ");
             let chunk_id = Uuid::new_v5(
                 &NAMESPACE_OID,
-                format!("{}-{}", document_id, chunk_index).as_bytes(),
+                format!("{document_id}-{chunk_index}").as_bytes(),
             );
             let word_count = counter.count_tokens(&chunk_text);
             result.push(DocumentChunk::new(
@@ -190,7 +190,7 @@ mod tests {
         let doc_id = Uuid::new_v4();
         let row1 = "col1: val1, col2: val2, col3: val3";
         let row2 = "col1: valA, col2: valB";
-        let data = format!("{}\n\n{}", row1, row2);
+        let data = format!("{row1}\n\n{row2}");
         let chunks = chunk_by_row(doc_id, &data, 100, &WordCounter);
 
         // With large budget, each row is a single chunk

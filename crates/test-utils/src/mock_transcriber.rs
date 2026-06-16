@@ -3,6 +3,12 @@
 //! Returns canned responses from a queue, enabling unit tests for audio
 //! transcription pipeline stages without requiring a real Whisper API endpoint.
 
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "mock infrastructure — panics are acceptable"
+)]
+
 use std::collections::VecDeque;
 use std::sync::Mutex;
 

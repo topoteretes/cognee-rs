@@ -1470,8 +1470,7 @@ impl DeleteService {
                 .await
                 .map_err(|error| {
                     DeleteError::Runtime(format!(
-                        "Failed to count dataset links for data {}: {}",
-                        data_id, error
+                        "Failed to count dataset links for data {data_id}: {error}"
                     ))
                 })?;
             let to_remove = links_to_remove_per_data.get(data_id).copied().unwrap_or(0);
@@ -1544,8 +1543,7 @@ impl DeleteService {
 
         if data.owner_id != owner_id {
             return Err(DeleteError::Validation(format!(
-                "Data {data_id} does not belong to owner {}",
-                owner_id
+                "Data {data_id} does not belong to owner {owner_id}"
             )));
         }
 
@@ -1567,8 +1565,7 @@ impl DeleteService {
                 })?
                 .ok_or_else(|| {
                     DeleteError::Validation(format!(
-                        "Dataset '{}' was not found for owner {}",
-                        dataset_name, owner_id
+                        "Dataset '{dataset_name}' was not found for owner {owner_id}"
                     ))
                 })?;
 
@@ -1624,8 +1621,7 @@ impl DeleteService {
 
             if links_to_detach.is_empty() {
                 return Err(DeleteError::Validation(format!(
-                    "No dataset links found for data {} and owner {}",
-                    data_id, owner_id
+                    "No dataset links found for data {data_id} and owner {owner_id}"
                 )));
             }
         }
@@ -1666,8 +1662,7 @@ impl DeleteService {
             })?
             .ok_or_else(|| {
                 DeleteError::Validation(format!(
-                    "Dataset '{}' was not found for owner {}",
-                    dataset_name, owner_id
+                    "Dataset '{dataset_name}' was not found for owner {owner_id}"
                 ))
             })?;
 
@@ -1752,8 +1747,7 @@ impl DeleteService {
                 .await
                 .map_err(|error| {
                     DeleteError::Runtime(format!(
-                        "Failed to count dataset links for data {}: {}",
-                        data_id, error
+                        "Failed to count dataset links for data {data_id}: {error}"
                     ))
                 })?;
             let to_remove = links_to_remove_per_data.get(data_id).copied().unwrap_or(0);
@@ -1797,6 +1791,11 @@ fn triplet_vector_id(edge: &GraphEdge) -> Uuid {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 mod tests {
     use super::*;
     use cognee_database::{connect, initialize, ops};

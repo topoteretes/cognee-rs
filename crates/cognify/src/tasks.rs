@@ -401,6 +401,7 @@ pub async fn extract_graph_from_data(
 
             chunk_ids.push(chunk.base.id);
             extract_tasks.push(tokio::spawn(async move {
+                #[allow(clippy::expect_used, reason = "invariant is upheld by construction")]
                 let _permit = sem
                     .acquire()
                     .await
@@ -803,6 +804,7 @@ pub async fn extract_custom_graph_from_data<M: crate::fact_extraction::GraphMode
             let prompt = config.custom_extraction_prompt.clone();
 
             extract_tasks.push(tokio::spawn(async move {
+                #[allow(clippy::expect_used, reason = "invariant is upheld by construction")]
                 let _permit = sem
                     .acquire()
                     .await
@@ -1196,6 +1198,7 @@ pub async fn extract_temporal_events(
             let text = chunk.text.clone();
             let sem = Arc::clone(&semaphore);
             extract_tasks.push(tokio::spawn(async move {
+                #[allow(clippy::expect_used, reason = "invariant is upheld by construction")]
                 let _permit = sem
                     .acquire()
                     .await
@@ -1673,10 +1676,7 @@ pub async fn extract_dlt_fk_edges(
     let mut schema_nodes: Vec<serde_json::Value> = Vec::new();
 
     for (table_name, table_meta) in &tables_seen {
-        let id = Uuid::new_v5(
-            &Uuid::NAMESPACE_OID,
-            format!("dlt:{}", table_name).as_bytes(),
-        );
+        let id = Uuid::new_v5(&Uuid::NAMESPACE_OID, format!("dlt:{table_name}").as_bytes());
         table_node_ids.insert(table_name.clone(), id);
 
         let columns_str = table_meta
@@ -1740,8 +1740,8 @@ pub async fn extract_dlt_fk_edges(
             }
             fk_defs_seen.insert(fk_key);
 
-            let rel_name = format!("{}:{}->{}:{}", table_name, fk_col, ref_table, ref_col);
-            let rel_id = Uuid::new_v5(&Uuid::NAMESPACE_OID, format!("dlt:{}", rel_name).as_bytes());
+            let rel_name = format!("{table_name}:{fk_col}->{ref_table}:{ref_col}");
+            let rel_id = Uuid::new_v5(&Uuid::NAMESPACE_OID, format!("dlt:{rel_name}").as_bytes());
 
             // Create SchemaRelationship node for this FK definition
             let rel_node = SchemaRelationshipNode {
@@ -1752,10 +1752,7 @@ pub async fn extract_dlt_fk_edges(
                 relationship_type: "foreign_key".to_string(),
                 source_column: fk_col.clone(),
                 target_column: ref_col.clone(),
-                description: format!(
-                    "Foreign key: {}.{} -> {}.{}",
-                    table_name, fk_col, ref_table, ref_col
-                ),
+                description: format!("Foreign key: {table_name}.{fk_col} -> {ref_table}.{ref_col}"),
                 data_type: "SchemaRelationship".to_string(),
             };
             if let Ok(val) = serde_json::to_value(&rel_node) {
@@ -3582,6 +3579,11 @@ pub fn build_temporal_cognify_pipeline(
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 mod tests {
     use super::*;
     use cognee_models::DataPoint;
@@ -3895,10 +3897,10 @@ mod tests {
         let fk_col = "customer_id";
         let ref_table = "customers";
         let ref_col = "id";
-        let rel_name = format!("{}:{}->{}:{}", table_name, fk_col, ref_table, ref_col);
+        let rel_name = format!("{table_name}:{fk_col}->{ref_table}:{ref_col}");
         assert_eq!(rel_name, "orders:customer_id->customers:id");
 
-        let rel_id = Uuid::new_v5(&Uuid::NAMESPACE_OID, format!("dlt:{}", rel_name).as_bytes());
+        let rel_id = Uuid::new_v5(&Uuid::NAMESPACE_OID, format!("dlt:{rel_name}").as_bytes());
         let expected_id = Uuid::new_v5(
             &Uuid::NAMESPACE_OID,
             b"dlt:orders:customer_id->customers:id",
@@ -3907,7 +3909,7 @@ mod tests {
 
         // Case 2: empty ref_col -- must still include trailing colon
         let ref_col_empty = "";
-        let rel_name_empty = format!("{}:{}->{}:{}", table_name, fk_col, ref_table, ref_col_empty);
+        let rel_name_empty = format!("{table_name}:{fk_col}->{ref_table}:{ref_col_empty}");
         assert_eq!(
             rel_name_empty, "orders:customer_id->customers:",
             "rel_name must include trailing colon even when ref_col is empty"
@@ -3915,7 +3917,7 @@ mod tests {
 
         let rel_id_empty = Uuid::new_v5(
             &Uuid::NAMESPACE_OID,
-            format!("dlt:{}", rel_name_empty).as_bytes(),
+            format!("dlt:{rel_name_empty}").as_bytes(),
         );
         let expected_id_empty =
             Uuid::new_v5(&Uuid::NAMESPACE_OID, b"dlt:orders:customer_id->customers:");

@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! E-12 — `GET /api/v1/sessions/{session_id}` integration tests.
 //!
 //! Seven tests covering:

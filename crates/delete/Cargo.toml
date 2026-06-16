@@ -12,6 +12,9 @@ keywords.workspace = true
 categories.workspace = true
 authors.workspace = true
 
+[lints]
+workspace = true
+
 [dependencies]
 cognee-core = { path = "../core", features = ["pipeline-run-registry"] }
 cognee-database = { path = "../database" }

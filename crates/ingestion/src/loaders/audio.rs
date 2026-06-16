@@ -92,6 +92,11 @@ pub fn audio_format(doc: &Document) -> String {
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 mod tests {
     use std::sync::Arc;
 

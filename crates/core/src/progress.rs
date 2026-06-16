@@ -1,3 +1,6 @@
+// Mutex lock().unwrap() is acceptable here — lock poisoning is unrecoverable.
+#![allow(clippy::unwrap_used, reason = "lock poisoning is unrecoverable")]
+
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicU64, Ordering},

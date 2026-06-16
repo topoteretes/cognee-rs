@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! Integration tests for adding image and audio files via `AddPipeline`.
 //!
 //! As of task 17 ("Run loaders at ADD + correct `raw_content_hash`"), the

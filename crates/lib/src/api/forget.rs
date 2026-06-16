@@ -158,8 +158,7 @@ pub async fn forget(
                     .await
                     .map_err(|e| {
                         ApiError::InvalidArgument(format!(
-                            "Dataset '{}' not found: {}",
-                            dataset_name, e
+                            "Dataset '{dataset_name}' not found: {e}"
                         ))
                     })?;
             }
@@ -218,13 +217,18 @@ fn build_delete_request(scope: DeleteScope, memory_only: bool) -> DeleteRequest 
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 mod tests {
     use super::*;
 
     #[test]
     fn forget_target_debug_format() {
         let target = ForgetTarget::All;
-        let debug_str = format!("{:?}", target);
+        let debug_str = format!("{target:?}");
         assert!(debug_str.contains("All"));
     }
 

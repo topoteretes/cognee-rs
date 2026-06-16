@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! Round-trip tests for `SeaOrmPipelineRunRepository` against an in-memory
 //! SQLite database.
 

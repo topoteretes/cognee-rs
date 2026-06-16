@@ -135,6 +135,11 @@ pub trait VectorDB: Send + Sync {
 
 #[cfg(all(test, feature = "testing"))]
 mod tests {
+    #![allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        reason = "test code — panics are acceptable"
+    )]
     use super::*;
     use crate::mock_vector_db::MockVectorDB;
 

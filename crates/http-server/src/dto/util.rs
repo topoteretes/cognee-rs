@@ -59,13 +59,7 @@ pub mod iso8601_offset {
         let s = String::deserialize(d)?;
         DateTime::parse_from_rfc3339(&s)
             .map(|dt| dt.with_timezone(&Utc))
-            .map_err(|err| {
-                de::Error::custom(format!(
-                    "invalid RFC 3339 timestamp {s:?}: {err}",
-                    s = s,
-                    err = err
-                ))
-            })
+            .map_err(|err| de::Error::custom(format!("invalid RFC 3339 timestamp {s:?}: {err}")))
     }
 }
 
@@ -113,11 +107,7 @@ pub mod iso8601_offset_option {
             Some(s) => DateTime::parse_from_rfc3339(&s)
                 .map(|dt| Some(dt.with_timezone(&Utc)))
                 .map_err(|err| {
-                    de::Error::custom(format!(
-                        "invalid RFC 3339 timestamp {s:?}: {err}",
-                        s = s,
-                        err = err
-                    ))
+                    de::Error::custom(format!("invalid RFC 3339 timestamp {s:?}: {err}"))
                 }),
         }
     }
@@ -215,8 +205,7 @@ impl<'de> Deserialize<'de> for DatasetIdRef {
             Some(s) => {
                 let uuid = Uuid::parse_str(&s).map_err(|_| {
                     de::Error::custom(format!(
-                        "invalid dataset_id: expected a UUID string or empty, got {:?}",
-                        s
+                        "invalid dataset_id: expected a UUID string or empty, got {s:?}"
                     ))
                 })?;
                 Ok(DatasetIdRef(Some(uuid)))
@@ -228,6 +217,11 @@ impl<'de> Deserialize<'de> for DatasetIdRef {
 // ─── Unit tests ───────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 mod tests {
     use super::*;
     use serde::Deserialize;

@@ -1,11 +1,22 @@
+//! Unified search orchestration across 15 retrieval strategies (GraphCompletion, RagCompletion, Chunks, and more).
+
+/// Graph retrieval strategies and helpers.
 pub mod graph_retrieval;
+/// Observability hooks for search pipeline tracing.
 pub mod observability;
+/// Search orchestration and pipeline assembly.
 pub mod orchestration;
+/// Query router that maps natural-language queries to `SearchType`s.
 pub mod query_router;
+/// Query router override-count statistics.
 pub mod query_router_stats;
+/// `RecallScope` and related types for scoping search results.
 pub mod recall_scope;
+/// Individual retriever implementations for each `SearchType`.
 pub mod retrievers;
+/// Core search types: `SearchType`, `SearchParams`, `SearchResult`, etc.
 pub mod types;
+/// Shared search utilities (completion helpers, etc.).
 pub mod utils;
 
 pub use cognee_session::{SeaOrmSessionStore, SessionContext, SessionManager, SessionStore};

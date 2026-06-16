@@ -13,6 +13,9 @@ keywords.workspace = true
 categories.workspace = true
 authors.workspace = true
 
+[lints]
+workspace = true
+
 [[bin]]
 name = "cognee-telemetry-emit"
 # Source lives under e2e-cross-sdk/bin/ alongside the harness shell scripts

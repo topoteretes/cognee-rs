@@ -210,8 +210,7 @@ async fn stream_to_disk(
 
     if data.len() > max_bytes {
         return Err(ApiError::BadRequest(format!(
-            "file part exceeds maximum size of {} bytes",
-            max_bytes
+            "file part exceeds maximum size of {max_bytes} bytes"
         )));
     }
 

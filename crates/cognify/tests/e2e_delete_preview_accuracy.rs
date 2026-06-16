@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! E2E test: delete preview counts must match actual execution counts.
 //!
 //! Runs the full pipeline (add -> cognify -> memify -> delete) using real

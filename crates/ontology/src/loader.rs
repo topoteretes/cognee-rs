@@ -132,7 +132,7 @@ fn load_single_path(path: &Path) -> OntologyResult<Option<FastGraph>> {
 fn parse_turtle_with_path_base(path: &Path, content: &str) -> OntologyResult<FastGraph> {
     let absolute = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     let base_iri = format!("file://{}", absolute.to_string_lossy());
-    let content_with_base = format!("@base <{}> .\n{}", base_iri, content);
+    let content_with_base = format!("@base <{base_iri}> .\n{content}");
 
     parse_rdf(&content_with_base, RdfFormat::Turtle)
 }
@@ -180,7 +180,7 @@ fn load_single_reader(mut reader: Box<dyn Read>) -> OntologyResult<Option<FastGr
     let mut content = String::new();
     reader
         .read_to_string(&mut content)
-        .map_err(|e| OntologyError::FileNotFound(format!("Failed to read from reader: {}", e)))?;
+        .map_err(|e| OntologyError::FileNotFound(format!("Failed to read from reader: {e}")))?;
 
     // Prefer RDF/XML (Python parity), but permissively fall back for other valid RDF payloads.
     let parse_attempts = [
@@ -230,7 +230,7 @@ fn load_multiple_readers(readers: Vec<Box<dyn Read>>) -> OntologyResult<Option<F
     for reader in readers {
         if let Some(graph) = load_single_reader(reader)? {
             merged_graph.insert_all(graph.triples()).map_err(|e| {
-                OntologyError::ParseError(format!("Failed to merge graph from reader: {}", e))
+                OntologyError::ParseError(format!("Failed to merge graph from reader: {e}"))
             })?;
             loaded_count += 1;
         }
@@ -250,21 +250,26 @@ fn parse_rdf(content: &str, format: RdfFormat) -> OntologyResult<FastGraph> {
     match format {
         RdfFormat::Turtle | RdfFormat::NTriples => turtle::parse_str(content)
             .collect_triples()
-            .map_err(|e| OntologyError::ParseError(format!("Turtle/N-Triples parse error: {}", e))),
+            .map_err(|e| OntologyError::ParseError(format!("Turtle/N-Triples parse error: {e}"))),
         RdfFormat::RdfXml => RdfXmlParser::default()
             .parse_str(content)
             .collect_triples()
-            .map_err(|e| OntologyError::ParseError(format!("RDF/XML parse error: {}", e))),
+            .map_err(|e| OntologyError::ParseError(format!("RDF/XML parse error: {e}"))),
         RdfFormat::JsonLd => JsonLdParser::new()
             .parse_str(content)
             .filter_quads(|q| q.g().is_none())
             .map_quads(Quad::into_triple)
             .collect_triples()
-            .map_err(|e| OntologyError::ParseError(format!("JSON-LD parse error: {}", e))),
+            .map_err(|e| OntologyError::ParseError(format!("JSON-LD parse error: {e}"))),
     }
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 mod tests {
     use super::*;
 

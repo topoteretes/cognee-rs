@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! Gap P5: Re-cognify after content update E2E test.
 //!
 //! Verifies that adding new content to an existing dataset, cognifying,

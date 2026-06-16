@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! LIB-01 integration tests for `remember_entry()` typed-entry dispatch.
 //!
 //! Covers the six §5 cases from `docs/http-api-v2/tasks/lib-01-remember-entry-facade.md`:

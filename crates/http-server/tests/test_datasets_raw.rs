@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! Integration tests for `GET /api/v1/datasets/{id}/data/{did}/raw`.
 //!
 //! Full round-trips (add → fetch raw → assert bytes) require wired backends.

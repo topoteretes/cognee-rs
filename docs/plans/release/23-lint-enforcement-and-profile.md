@@ -36,9 +36,16 @@ error. If you enable the deny before the codebase is clean, `cargo clippy -- -D 
 (the CI gate in `scripts/check_all.sh`) goes red across the board.
 
 - **[03 — FFI & Neon panic safety](03-ffi-neon-panic-safety.md)** removes the `unwrap()`s in
-  the FFI/Neon boundary code.
-- **[04 — Rust code cleanup](04-rust-code-cleanup.md)** removes/justifies the remaining
-  non-test `unwrap()`s (converting to `expect("why")` or `?`).
+  the FFI/Neon boundary code. (Status ⏭️ — verified already implemented; see its subdoc.)
+- **[04 — Rust code cleanup](04-rust-code-cleanup.md)** removes dead code, deduplicates
+  the env-var parser, fixes the `log`→`tracing` silent-drop bug, and prunes unused deps.
+  It also formally codifies the lock-poison `unwrap()` exemption. **Note:** task 04 was
+  scoped to dead code and hygiene, not to annotating or removing all `expect()`/`unwrap()`
+  call sites. As of 2026-06-16, there are approximately **156 non-test `expect()` calls**
+  in production crates, all using the sanctioned `expect("DB invariant / why it can't fail")`
+  pattern documented in `.claude/CLAUDE.md`. These are correct and need local
+  `#[allow(clippy::expect_used, reason = "...")]` if `expect_used = "deny"` is chosen,
+  or they are fine as-is under `expect_used = "warn"`. See the Variant A/B decision below.
 
 So land **03 and 04 first**, then flip the lint on here. If sites still remain when you
 start, use the **staged rollout** below (warn → deny) instead of blocking the release.
@@ -58,16 +65,17 @@ From `.claude/CLAUDE.md` → *Coding Conventions* (verbatim policy this lint enc
   `#[allow(clippy::unwrap_used, reason = "lock poison is unrecoverable")]`.
 
 > There is **no** narrower clippy lint that says "unwrap only on a lock guard". The lint is
-> all-or-nothing per call site, so lock-guard unwraps need a local `#[allow]`. The cleanup
-> in task 04 should already have annotated these; this task only makes the annotations
-> load-bearing.
+> all-or-nothing per call site, so lock-guard unwraps need a local `#[allow]`. As of
+> 2026-06-16, most existing lock-guard unwrap sites already carry `// lock poison is
+> unrecoverable` comments; this task adds the formal `#[allow]` annotation alongside them.
 
 ### Current manifest state (verified 2026-06-14)
 
 - The root [Cargo.toml](../../../Cargo.toml) has **no** `[workspace.lints]` table and **no**
   member crate uses `lints.workspace = true` (verified: `grep -rln 'lints.workspace' crates/
   Cargo.toml` → no output).
-- `[profile.release]` is exactly (Cargo.toml lines 149–150):
+- `[profile.release]` is exactly (Cargo.toml lines 158–159 as of 2026-06-14; re-grep
+  with `grep -n 'profile.release' Cargo.toml` before editing):
   ```toml
   [profile.release]
   debug = true
@@ -95,8 +103,8 @@ From `.claude/CLAUDE.md` → *Coding Conventions* (verbatim policy this lint enc
 ```bash
 git checkout -b task/23-lint-enforcement-and-profile
 
-# Re-confirm current state (positions are the 2026-06-14 snapshot — re-grep!):
-sed -n '149,151p' Cargo.toml                       # [profile.release] debug = true
+# Re-confirm current state (line numbers drift as workspace grows — always re-grep!):
+grep -n 'profile.release' Cargo.toml              # locate [profile.release] (was 158 on 2026-06-14)
 grep -n 'workspace.lints\|lints.workspace' Cargo.toml   # expect: no output
 grep -rln 'lints.workspace' crates/                # expect: no output (no crate opts in yet)
 
@@ -121,6 +129,8 @@ recommendation is `line-tables-only`; do not invent a value — use what D4 reco
 | `Cargo.toml` | add `[workspace.lints.clippy]` table; change `[profile.release] debug` per D4 |
 | `crates/*/Cargo.toml` (×27) | add a `[lints]` table with `workspace = true` |
 | `python/Cargo.toml` | add `[lints] workspace = true` (it is a workspace member) |
+| `examples/Cargo.toml` | add `[lints] workspace = true` (workspace member) |
+| `e2e-cross-sdk/telemetry-emit/Cargo.toml` | add `[lints] workspace = true` (workspace member) |
 | `crates/{models,cognify,search,embedding,database}/src/lib.rs` | add `//!` doc + `#![warn(missing_docs)]` |
 | `crates/{lib,core,graph,vector}/src/lib.rs` | add `#![warn(missing_docs)]` (doc already present) |
 
@@ -163,6 +173,15 @@ Run the count commands from Prerequisites. **Decision rule:** if both counts are
 counts remain and you cannot clean them in this PR, ship **Variant B** and open a
 follow-up issue to flip to `deny`. Do **not** ship a `deny` that makes `check_all.sh` red.
 
+> **Expected counts as of 2026-06-16:** non-test `unwrap()` ≈ 0 real production hits
+> (most remaining `unwrap()` are in inline test modules, test files, or sanctioned
+> lock-guard patterns). Non-test `expect()` ≈ 156 — all are sanctioned
+> `expect("DB invariant / why it cannot fail")` usages concentrated in `cognee-lib` (62),
+> `cognee-database` (29), `cognee-http-server` (15), and others. Under `expect_used =
+> "deny"` each would need a local `#[allow(clippy::expect_used, reason = "...")]`.
+> Given this volume, **Variant B (`"warn"`) is the pragmatic choice for this PR**; a
+> follow-up task can bump to `"deny"` once all sites are annotated.
+
 > `priority` note: levels are strings (`"deny"`/`"warn"`/`"allow"`). If you later add a
 > broad group lint (e.g. `[workspace.lints.clippy.all]`) alongside a specific override, use
 > the table form with `level`/`priority`. For just these two specific lints, the simple
@@ -171,9 +190,10 @@ follow-up issue to flip to `deny`. Do **not** ship a `deny` that makes `check_al
 ### Step 2 — Opt every workspace member into the shared lints
 
 Cargo does **not** apply `[workspace.lints]` automatically — each member must declare
-`lints.workspace = true`. For **each** of the 27 `crates/*/Cargo.toml` **and**
-`python/Cargo.toml`, add a `[lints]` table. Place it after `[package]` (top of file is
-conventional). Example for `crates/models/Cargo.toml`:
+`lints.workspace = true`. For **each** of the 27 `crates/*/Cargo.toml`, `python/Cargo.toml`,
+`examples/Cargo.toml`, and `e2e-cross-sdk/telemetry-emit/Cargo.toml` (30 members total),
+add a `[lints]` table. Place it after `[package]` (top of file is conventional). Example
+for `crates/models/Cargo.toml`:
 
 Before:
 ```toml
@@ -200,12 +220,14 @@ workspace = true
 ...
 ```
 
-Apply the identical `[lints]\nworkspace = true` block to all 27 crates and `python/`.
+Apply the identical `[lints]\nworkspace = true` block to all 27 crates, `python/`,
+`examples/`, and `e2e-cross-sdk/telemetry-emit/`.
 
 Verify every member opted in:
 ```bash
 ls crates/*/Cargo.toml | wc -l                       # expect 27
-grep -L 'lints.workspace = true' crates/*/Cargo.toml python/Cargo.toml
+grep -L 'lints.workspace = true' crates/*/Cargo.toml python/Cargo.toml \
+    examples/Cargo.toml e2e-cross-sdk/telemetry-emit/Cargo.toml
 # expect: no output (every manifest matched). If a file is listed, it is missing the block.
 ```
 
@@ -278,7 +300,7 @@ let guard = self.inner.lock().unwrap();
 
 ### Step 5 — Set the release profile per D4
 
-Open [Cargo.toml](../../../Cargo.toml) lines 149–150. Current:
+Open [Cargo.toml](../../../Cargo.toml) (currently lines 158–159; re-grep before editing). Current:
 
 ```toml
 [profile.release]
@@ -357,8 +379,9 @@ factual):
 grep -n 'workspace.lints.clippy' Cargo.toml
 sed -n '/\[workspace.lints.clippy\]/,/^\[/p' Cargo.toml   # shows unwrap_used / expect_used
 
-# 2. Every workspace member opted in.
-grep -L 'lints.workspace = true' crates/*/Cargo.toml python/Cargo.toml   # expect: no output
+# 2. Every workspace member opted in (30 members: 27 crates + python + examples + telemetry-emit).
+grep -L 'lints.workspace = true' crates/*/Cargo.toml python/Cargo.toml \
+    examples/Cargo.toml e2e-cross-sdk/telemetry-emit/Cargo.toml          # expect: no output
 
 # 3. Release profile updated per D4.
 sed -n '/\[profile.release\]/,/^\[/p' Cargo.toml          # shows the D4 value
@@ -391,15 +414,17 @@ Expected outcomes:
 
 ### New checks added
 
-- The `[workspace.lints.clippy]` deny is the new compiler-enforced guard for the no-unwrap
-  rule (replaces reviewer discipline).
+- The `[workspace.lints.clippy]` lint (warn or deny) is the new compiler-enforced guard
+  for the no-unwrap/no-unsanctioned-expect rule (replaces reviewer discipline).
 - `#![warn(missing_docs)]` on nine crates surfaces public-API doc gaps in `cargo doc`.
 
 ## Acceptance criteria
 
 - [ ] Root `Cargo.toml` has `[workspace.lints.clippy]` with `unwrap_used` and `expect_used`
       (`deny` if clean, else `warn` with a TODO to flip).
-- [ ] All 27 `crates/*/Cargo.toml` **and** `python/Cargo.toml` declare `[lints] workspace = true`.
+- [ ] All 30 workspace manifests (`crates/*/Cargo.toml` ×27, `python/Cargo.toml`,
+      `examples/Cargo.toml`, `e2e-cross-sdk/telemetry-emit/Cargo.toml`) declare
+      `[lints] workspace = true`.
 - [ ] Inline `#[cfg(test)]` modules and `tests/*.rs` files carry
       `#[allow(clippy::unwrap_used, clippy::expect_used)]` (or file-level `#![allow(...)]`).
 - [ ] Every sanctioned `Mutex/RwLock::lock().unwrap()` has a local

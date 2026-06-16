@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! Integration tests for `POST /api/v1/memify`.
 //!
 //! Two flavours:
@@ -306,9 +311,7 @@ async fn post_memify_blocking_indexes_triplets() {
     assert_eq!(
         status,
         StatusCode::OK,
-        "expected 200 OK from /api/v1/memify, got {} with body {}",
-        status,
-        v
+        "expected 200 OK from /api/v1/memify, got {status} with body {v}"
     );
 
     assert_eq!(

@@ -61,7 +61,7 @@ mod tests {
     use uuid::Uuid;
 
     fn create_test_node(name: &str, type_name: &str) -> GraphNodePair {
-        let entity = Entity::new(name, None, format!("{} description", name), None);
+        let entity = Entity::new(name, None, format!("{name} description"), None);
         let entity_type = EntityType::from_node_type(type_name, None);
         GraphNodePair {
             entity,

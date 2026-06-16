@@ -1,3 +1,9 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "integration test code — panics are acceptable failures"
+)]
+
 use std::path::PathBuf;
 
 use cognee_ontology::{OntologyFileInput, loader::load_ontology_files};

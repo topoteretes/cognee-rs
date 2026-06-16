@@ -19,6 +19,10 @@ use regex::Regex;
 
 /// Build the four secret patterns. Compilation is wrapped in `OnceLock` so we
 /// pay the cost once.
+#[allow(
+    clippy::expect_used,
+    reason = "regex literals are valid at compile time — failure is impossible"
+)]
 fn patterns() -> &'static [Regex] {
     static SECRET_PATTERNS: OnceLock<Vec<Regex>> = OnceLock::new();
     SECRET_PATTERNS

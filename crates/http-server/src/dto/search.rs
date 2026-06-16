@@ -266,6 +266,11 @@ pub fn flatten_search_response(
 // ─── Unit tests ──────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 mod tests {
     use super::*;
 
@@ -312,7 +317,7 @@ mod tests {
         ];
 
         for (wire, expected) in cases {
-            let json = format!("{{\"search_type\": \"{}\"}}", wire);
+            let json = format!("{{\"search_type\": \"{wire}\"}}");
             let payload: SearchPayloadDTO =
                 serde_json::from_str(&json).unwrap_or_else(|e| panic!("{wire}: {e}"));
             assert_eq!(payload.search_type, expected, "wire {wire}");

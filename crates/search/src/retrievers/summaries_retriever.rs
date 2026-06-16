@@ -89,6 +89,11 @@ impl SearchRetriever for SummariesRetriever {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;

@@ -57,8 +57,10 @@ pub fn create_triplets_from_graph(
             continue;
         }
 
+        #[allow(clippy::expect_used, reason = "invariant is upheld by construction")]
         let source_node = source_node
             .expect("source_node is Some; None case was handled by the is_none() check above");
+        #[allow(clippy::expect_used, reason = "invariant is upheld by construction")]
         let target_node = target_node
             .expect("target_node is Some; None case was handled by the is_none() check above");
 

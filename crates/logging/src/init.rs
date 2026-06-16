@@ -203,6 +203,13 @@ where
 /// [`crate::resolve_logs_dir`]; `file_path` is the
 /// `LOG_FILE_NAME`-propagated path returned from
 /// [`crate::propagate_log_file_name`].
+#[allow(
+    clippy::expect_used,
+    reason = "RollingFileAppender::build can only fail when the directory is not writable; \
+              the caller (init_logging) only calls this function after resolve_logs_dir has \
+              already mkdir-p'd and write-probed the directory, so failure is not possible \
+              in practice"
+)]
 fn build_file_layer(
     dir: &Path,
     file_path: &Path,
@@ -256,6 +263,11 @@ fn build_file_layer(
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 mod tests {
     use super::*;
     use serial_test::serial;

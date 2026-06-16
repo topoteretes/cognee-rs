@@ -4,6 +4,12 @@
 //! extraction, summarisation, and other LLM-dependent pipeline stages
 //! without requiring a real API endpoint.
 
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "mock infrastructure — panics are acceptable"
+)]
+
 use std::collections::VecDeque;
 use std::sync::Mutex;
 

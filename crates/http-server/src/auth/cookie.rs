@@ -88,18 +88,25 @@ pub fn login_cookie(jwt: &str, ctx: &AuthContext) -> HeaderValue {
         ctx.login_lifetime.as_secs() as i64,
         ctx,
     );
+    #[allow(clippy::expect_used, reason = "invariant is upheld by construction")]
     HeaderValue::from_str(&s).expect("login_cookie: cookie string is always valid ASCII")
 }
 
 /// Build the deletion `Set-Cookie` header value for logout (`Max-Age=0`).
 pub fn logout_cookie(ctx: &AuthContext) -> HeaderValue {
     let s = build_cookie(&ctx.cookie_name, "", 0, ctx);
+    #[allow(clippy::expect_used, reason = "invariant is upheld by construction")]
     HeaderValue::from_str(&s).expect("logout_cookie: cookie string is always valid ASCII")
 }
 
 // ─── Unit tests ───────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 mod tests {
     use super::*;
     use crate::auth::context::tests::{NopApiKeyRepo, NopUserRepo};

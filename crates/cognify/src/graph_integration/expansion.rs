@@ -133,7 +133,7 @@ pub async fn expand_with_nodes_and_edges(
                             et.base.id = ontology_name_to_uuid(&canonical_name);
 
                             // Record key mapping if canonical differs
-                            let new_type_key = format!("{}_type", canonical_name);
+                            let new_type_key = format!("{canonical_name}_type");
                             if new_type_key != type_key {
                                 key_mapping.insert(type_key.clone(), new_type_key.clone());
                             }
@@ -188,6 +188,7 @@ pub async fn expand_with_nodes_and_edges(
                 .get(&type_key)
                 .cloned()
                 .unwrap_or_else(|| type_key.clone());
+            #[allow(clippy::expect_used, reason = "invariant is upheld by construction")]
             let entity_type = type_map
                 .get(&resolved_key)
                 .expect("entity type was just inserted or already existed");
@@ -430,7 +431,7 @@ fn process_ontology_nodes(
 
         match node.category {
             NodeCategory::Classes => {
-                let dedup_key = format!("{}_type", node_id);
+                let dedup_key = format!("{node_id}_type");
                 // Skip if the LLM already extracted this type (check by name-based key)
                 let llm_type_key = format!("{}_type", node.name);
                 if type_map.contains_key(&llm_type_key)
@@ -439,7 +440,7 @@ fn process_ontology_nodes(
                     continue;
                 }
                 // Also skip if there is already a node_map entry for this node id
-                let node_entity_key = format!("{}_entity", node_id);
+                let node_entity_key = format!("{node_id}_entity");
                 if node_map.contains_key(&node_entity_key) {
                     continue;
                 }
@@ -451,7 +452,7 @@ fn process_ontology_nodes(
                 ontology_types_map.insert(dedup_key, et);
             }
             NodeCategory::Individuals => {
-                let dedup_key = format!("{}_entity", node_id);
+                let dedup_key = format!("{node_id}_entity");
                 // Skip if already present in either map
                 if node_map.contains_key(&dedup_key)
                     || ontology_entities_map.contains_key(&dedup_key)
@@ -495,7 +496,7 @@ fn process_ontology_edges(
         let source_id = ontology_name_to_uuid(source);
         let target_id = ontology_name_to_uuid(target);
         let rel_name = normalize_edge_name(relation);
-        let edge_key = format!("{}_{}_{}", source_id, target_id, rel_name);
+        let edge_key = format!("{source_id}_{target_id}_{rel_name}");
 
         if existing_edge_keys.contains(&edge_key) || ontology_edge_keys.contains(&edge_key) {
             continue;
@@ -513,6 +514,11 @@ fn process_ontology_edges(
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 mod tests {
     use super::*;
     use crate::fact_extraction::Edge;

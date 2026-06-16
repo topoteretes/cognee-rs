@@ -1,4 +1,9 @@
 //! Tiny helper binary for `tests/multi_process_inheritance.rs`.
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "binary test helper — panics are acceptable failures"
+)]
 //!
 //! Calls [`cognee_logging::init_logging`] with whatever
 //! [`cognee_logging::LoggingConfig::from_env`] produces (the parent

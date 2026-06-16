@@ -145,6 +145,11 @@ pub fn decode_verify_jwt(token: &str, ctx: &AuthContext) -> Result<Claims, JwtEr
 // ─── Unit tests ───────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 mod tests {
     use super::*;
     use crate::auth::context::tests::{NopApiKeyRepo, NopUserRepo};

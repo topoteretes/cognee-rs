@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! P5 §5: HTTP-level end-to-end resolution test for the 8-step `user_can`
 //! algorithm (`tenants.md §5.1`).
 //!

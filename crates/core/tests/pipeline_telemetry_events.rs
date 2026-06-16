@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! Integration tests for the pipeline + task lifecycle analytics
 //! events introduced by gap 03 (tasks 03-04 and 03-05).
 //!

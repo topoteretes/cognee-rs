@@ -168,7 +168,7 @@ impl SummaryExtractor {
         for (chunk_index, result) in results.into_iter().enumerate() {
             let chunk = &chunks[chunk_index];
             let summarized =
-                result.map_err(|e| CognifyError::LlmError(format!("Task join error: {}", e)))??;
+                result.map_err(|e| CognifyError::LlmError(format!("Task join error: {e}")))??;
 
             let text_summary =
                 TextSummary::from_summarized_content(chunk.base.id, summarized, model_name.clone());
@@ -186,6 +186,11 @@ impl SummaryExtractor {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 mod tests {
     use super::*;
     use crate::config::validate_summary_schema;
@@ -194,6 +199,10 @@ mod tests {
     // These are just structural tests
 
     #[test]
+    #[allow(
+        clippy::const_is_empty,
+        reason = "intentional sanity check that the const is non-empty"
+    )]
     fn test_default_prompt_not_empty() {
         assert!(!DEFAULT_SUMMARY_PROMPT.is_empty());
         assert!(DEFAULT_SUMMARY_PROMPT.contains("Summarize the chunk for retrieval"));

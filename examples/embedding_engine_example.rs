@@ -32,14 +32,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let embeddings = engine.embed(&texts).await?;
     let duration = start.elapsed();
 
-    println!("✓ Embeddings generated in {:?}\n", duration);
+    println!("✓ Embeddings generated in {duration:?}\n");
 
     // 4. Display results
     for (text, embedding) in texts.iter().zip(embeddings.iter()) {
         let norm: f32 = embedding.iter().map(|x| x * x).sum::<f32>().sqrt();
-        println!("Text: {}", text);
+        println!("Text: {text}");
         println!("  Dimension: {}", embedding.len());
-        println!("  L2 Norm: {:.6}", norm);
+        println!("  L2 Norm: {norm:.6}");
         println!("  First 5 values: {:?}", &embedding[..5]);
         println!();
     }

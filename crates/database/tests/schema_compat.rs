@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! Schema compatibility tests.
 //!
 //! Verifies that after `initialize()` runs all migrations on a fresh in-memory

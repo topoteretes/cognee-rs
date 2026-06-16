@@ -66,9 +66,11 @@ pub async fn post_forget(
     match mode {
         // ── Mode 1: delete one data item ──────────────────────────────────
         ForgetMode::DataItem => {
+            #[allow(clippy::expect_used, reason = "invariant is upheld by construction")]
             let data_id = payload
                 .data_id
                 .expect("resolve_mode guarantees data_id is Some in DataItem mode");
+            #[allow(clippy::expect_used, reason = "invariant is upheld by construction")]
             let dataset_ref = payload
                 .dataset
                 .as_ref()
@@ -121,6 +123,7 @@ pub async fn post_forget(
 
         // ── Mode 2: delete entire dataset ─────────────────────────────────
         ForgetMode::Dataset => {
+            #[allow(clippy::expect_used, reason = "invariant is upheld by construction")]
             let dataset_ref = payload
                 .dataset
                 .as_ref()

@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! E2E lifecycle loop test: add → cognify → delete → re-add → re-cognify → search.
 //!
 //! Verifies that after a hard delete of a dataset, the same content can be
@@ -173,10 +178,7 @@ async fn test_readd_and_recognify_after_delete() {
         .expect("dataset should exist after first add");
     let original_dataset_id = dataset_1.id;
 
-    println!(
-        "First cycle: data_id={}, dataset_id={}",
-        original_data_id, original_dataset_id
-    );
+    println!("First cycle: data_id={original_data_id}, dataset_id={original_dataset_id}");
 
     // Cognify (first cycle)
     let config = CognifyConfig::default()
@@ -207,7 +209,7 @@ async fn test_readd_and_recognify_after_delete() {
     {
         Ok(r) => r,
         Err(e) => {
-            eprintln!("Skipping test: first cognify failed: {}", e);
+            eprintln!("Skipping test: first cognify failed: {e}");
             return;
         }
     };
@@ -333,8 +335,7 @@ async fn test_readd_and_recognify_after_delete() {
     assert_eq!(
         original_data_id, readded_data_id,
         "Re-added data should have the same deterministic UUID5 ID: \
-         original={}, readded={}",
-        original_data_id, readded_data_id
+         original={original_data_id}, readded={readded_data_id}"
     );
 
     let dataset_2 = ops::datasets::get_dataset_by_name(&database, "lifecycle_test", owner_id, None)
@@ -380,10 +381,7 @@ async fn test_readd_and_recognify_after_delete() {
     {
         Ok(r) => r,
         Err(e) => {
-            panic!(
-                "Second cognify should succeed after delete+re-add, but failed: {}",
-                e
-            );
+            panic!("Second cognify should succeed after delete+re-add, but failed: {e}");
         }
     };
 

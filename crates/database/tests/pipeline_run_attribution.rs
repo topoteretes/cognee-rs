@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! Tests for `PipelineRunRepository::list_recent_with_attribution`.
 //!
 //! Verifies the `pipeline_runs ⨝ datasets ⨝ users` LEFT JOIN behaviour: rows

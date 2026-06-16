@@ -190,6 +190,11 @@ pub fn cleanup_old_logs(dir: &Path, max_files: usize) {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 mod tests {
     use super::*;
     use crate::{LogFormat, LogRotation, LoggingConfig};

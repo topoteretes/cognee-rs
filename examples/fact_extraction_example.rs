@@ -44,7 +44,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let api_token = env::var("OPENAI_TOKEN").unwrap_or_else(|_| "not-needed".to_string());
 
     println!("📡 Connecting to LLM:");
-    println!("   URL: {}", base_url);
+    println!("   URL: {base_url}");
     println!("   Model: llama3.2:3b\n");
 
     // Create LLM adapter

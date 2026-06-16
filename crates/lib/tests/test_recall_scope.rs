@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! Integration tests for `recall()` scope widening (LIB-07).
 //!
 //! Validates Python parity (`cognee/api/v1/recall/recall.py:317-531`,

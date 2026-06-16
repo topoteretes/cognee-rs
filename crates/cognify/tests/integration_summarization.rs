@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! Integration tests for text summarization using the SummaryExtractor.
 //!
 //! These tests require environment variables to be set:
@@ -58,7 +63,7 @@ async fn test_summarization_single_text() {
             );
         }
         Err(e) => {
-            panic!("❌ Summarization failed: {}", e);
+            panic!("❌ Summarization failed: {e}");
         }
     }
 }
@@ -130,7 +135,7 @@ async fn test_summarization_batch() {
             }
         }
         Err(e) => {
-            panic!("❌ Batch summarization failed: {}", e);
+            panic!("❌ Batch summarization failed: {e}");
         }
     }
 }
@@ -213,7 +218,7 @@ async fn test_summarization_empty_chunks() {
             );
         }
         Err(e) => {
-            panic!("❌ Empty chunks test failed: {}", e);
+            panic!("❌ Empty chunks test failed: {e}");
         }
     }
 }
@@ -251,7 +256,7 @@ Both summary and description should be plain text strings, not structured data.
             );
         }
         Err(e) => {
-            panic!("❌ Custom prompt summarization failed: {}", e);
+            panic!("❌ Custom prompt summarization failed: {e}");
         }
     }
 }
@@ -266,11 +271,11 @@ fn print_summarized_content(summarized: &SummarizedContent) {
 fn print_text_summary(summary: &TextSummary) {
     println!("   ID: {}", summary.base.id);
     if let Some(made_from) = summary.made_from {
-        println!("   Made from chunk: {}", made_from);
+        println!("   Made from chunk: {made_from}");
     }
     println!("   Model: {}", summary.model);
     println!("   Text: {}", summary.text);
     if let Some(desc) = &summary.description {
-        println!("   Description: {}", desc);
+        println!("   Description: {desc}");
     }
 }

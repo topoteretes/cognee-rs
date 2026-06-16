@@ -53,33 +53,26 @@ fn format_duration(d: Duration) -> String {
     let seconds = total_secs % 60;
 
     if hours > 0 {
-        format!("{}h {:02}m {:02}.{:03}s", hours, minutes, seconds, millis)
+        format!("{hours}h {minutes:02}m {seconds:02}.{millis:03}s")
     } else if minutes > 0 {
-        format!("{}m {:02}.{:03}s", minutes, seconds, millis)
+        format!("{minutes}m {seconds:02}.{millis:03}s")
     } else {
-        format!("{}.{:03}s", seconds, millis)
+        format!("{seconds}.{millis:03}s")
     }
 }
 
 fn run_single_file(file_path: &str, cm: &Arc<ComponentManager>) -> Result<(), CliError> {
     let content = std::fs::read_to_string(file_path).map_err(|e| {
-        CliError::Validation(format!(
-            "Failed to read sequence file '{}': {}",
-            file_path, e
-        ))
+        CliError::Validation(format!("Failed to read sequence file '{file_path}': {e}"))
     })?;
 
     let steps: Vec<SequenceStep> = serde_json::from_str(&content).map_err(|e| {
-        CliError::Validation(format!(
-            "Failed to parse sequence file '{}': {}",
-            file_path, e
-        ))
+        CliError::Validation(format!("Failed to parse sequence file '{file_path}': {e}"))
     })?;
 
     if steps.is_empty() {
         return Err(CliError::Validation(format!(
-            "Sequence file '{}' contains no commands",
-            file_path
+            "Sequence file '{file_path}' contains no commands"
         )));
     }
 

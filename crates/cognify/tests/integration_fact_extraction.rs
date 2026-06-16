@@ -77,7 +77,7 @@ async fn test_fact_extraction_single_text() {
             println!("\n✅ All assertions passed!");
         }
         Err(e) => {
-            panic!("❌ Fact extraction failed: {}", e);
+            panic!("❌ Fact extraction failed: {e}");
         }
     }
 }
@@ -94,8 +94,8 @@ async fn test_fact_extraction_batch() {
         "\n  Effective Prompt (default):\n{}",
         FactExtractor::default_graph_prompt()
     );
-    println!("\n  Input Text 1 (TechCorp):\n{}", TEST_TEXT_TECHCORP);
-    println!("\n  Input Text 2 (Research):\n{}", TEST_TEXT_RESEARCH);
+    println!("\n  Input Text 1 (TechCorp):\n{TEST_TEXT_TECHCORP}");
+    println!("\n  Input Text 2 (Research):\n{TEST_TEXT_RESEARCH}");
 
     let extractor = FactExtractor::new(adapter);
 
@@ -157,7 +157,7 @@ async fn test_fact_extraction_batch() {
                 .iter()
                 .map(|n| n.name.to_lowercase())
                 .collect();
-            println!("\n  Graph 2 Node Names: {:?}", graph2_nodes);
+            println!("\n  Graph 2 Node Names: {graph2_nodes:?}");
             assert!(
                 graph2_nodes.iter().any(|n| n.contains("maria")
                     || n.contains("rodriguez")
@@ -168,7 +168,7 @@ async fn test_fact_extraction_batch() {
             println!("\n✅ All assertions passed!");
         }
         Err(e) => {
-            panic!("❌ Batch fact extraction failed: {}", e);
+            panic!("❌ Batch fact extraction failed: {e}");
         }
     }
 }
@@ -226,7 +226,7 @@ Pay special attention to extracting all people mentioned and their professional 
             println!("\n✅ Custom prompt test passed!");
         }
         Err(e) => {
-            panic!("❌ Fact extraction with custom prompt failed: {}", e);
+            panic!("❌ Fact extraction with custom prompt failed: {e}");
         }
     }
 }
@@ -250,7 +250,7 @@ fn print_knowledge_graph(graph: &KnowledgeGraph) {
     for (node_type, names) in &nodes_by_type {
         println!("   {} ({}):", node_type, names.len());
         for name in names {
-            println!("     - {}", name);
+            println!("     - {name}");
         }
     }
 
@@ -287,7 +287,7 @@ fn print_knowledge_graph(graph: &KnowledgeGraph) {
             } else {
                 node.description.clone()
             };
-            println!("     Description: {}", desc);
+            println!("     Description: {desc}");
         }
     }
 }

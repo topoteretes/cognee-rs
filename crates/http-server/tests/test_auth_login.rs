@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! Integration tests for `POST /api/v1/auth/login`, `POST /api/v1/auth/logout`,
 //! and `GET /api/v1/auth/me`.
 //!

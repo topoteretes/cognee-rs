@@ -310,6 +310,11 @@ impl DatasetManager {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 mod tests {
     use super::*;
     use cognee_database::{connect, initialize};
@@ -338,7 +343,7 @@ mod tests {
 
     fn make_data(owner_id: Uuid) -> Data {
         let id = Uuid::new_v4();
-        let loc = format!("file:///tmp/test/{}.txt", id);
+        let loc = format!("file:///tmp/test/{id}.txt");
         Data::builder(
             id,
             "test-data.txt",
@@ -354,7 +359,7 @@ mod tests {
 
     fn make_data_with_size(owner_id: Uuid, size: i64) -> Data {
         let id = Uuid::new_v4();
-        let loc = format!("file:///tmp/test/{}.txt", id);
+        let loc = format!("file:///tmp/test/{id}.txt");
         Data::builder(
             id,
             "file.txt",

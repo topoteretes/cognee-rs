@@ -153,6 +153,11 @@ fn transform_context_to_graph(context: &SearchContext) -> Option<SearchGraph> {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 mod tests {
     use serde_json::json;
 

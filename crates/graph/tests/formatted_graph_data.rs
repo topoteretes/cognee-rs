@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "integration test code — panics are acceptable failures"
+)]
 //! Unit tests for `cognee_graph::get_formatted_graph_data`.
 //!
 //! These tests run against the `MockGraphDB` (in-memory) — they validate the

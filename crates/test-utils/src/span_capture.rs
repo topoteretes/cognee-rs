@@ -1,5 +1,10 @@
 //! Capture `tracing` spans during a test for structured attribute
 //! assertions.
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test infrastructure — panics are acceptable"
+)]
 //!
 //! Usage:
 //!
@@ -107,7 +112,7 @@ impl Visit for PendingFields {
         // Mirror `tracing`'s default rendering: `format!("{:?}", value)`.
         self.map.insert(
             field.name().to_string(),
-            Value::String(format!("{:?}", value)),
+            Value::String(format!("{value:?}")),
         );
     }
 }

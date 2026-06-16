@@ -163,12 +163,12 @@ async fn test_entity_extraction() {
                     person
                         .role
                         .as_ref()
-                        .map(|r| format!("({})", r))
+                        .map(|r| format!("({r})"))
                         .unwrap_or_default(),
                     person
                         .organization
                         .as_ref()
-                        .map(|o| format!(" at {}", o))
+                        .map(|o| format!(" at {o}"))
                         .unwrap_or_default()
                 );
             }
@@ -180,7 +180,7 @@ async fn test_entity_extraction() {
                     org.name,
                     org.location
                         .as_ref()
-                        .map(|l| format!("({})", l))
+                        .map(|l| format!("({l})"))
                         .unwrap_or_default()
                 );
             }
@@ -234,7 +234,7 @@ async fn test_entity_extraction() {
             println!("\n✅ All assertions passed!");
         }
         Err(e) => {
-            panic!("❌ Entity extraction failed: {}", e);
+            panic!("❌ Entity extraction failed: {e}");
         }
     }
 }
@@ -301,7 +301,7 @@ async fn test_knowledge_graph_extraction() {
             println!("\n✅ All assertions passed!");
         }
         Err(e) => {
-            panic!("❌ Knowledge graph extraction failed: {}", e);
+            panic!("❌ Knowledge graph extraction failed: {e}");
         }
     }
 }
@@ -346,7 +346,7 @@ async fn test_simple_text_generation() {
             println!("\n✅ Test passed!");
         }
         Err(e) => {
-            panic!("❌ Text generation failed: {}", e);
+            panic!("❌ Text generation failed: {e}");
         }
     }
 }

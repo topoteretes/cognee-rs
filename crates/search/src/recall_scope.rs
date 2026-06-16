@@ -352,7 +352,7 @@ pub async fn search_trace(
             if let Some(ref mrv) = e.method_return_value {
                 match serde_json::to_string(mrv) {
                     Ok(s) => parts.push(s),
-                    Err(_) => parts.push(format!("{:?}", mrv)),
+                    Err(_) => parts.push(format!("{mrv:?}")),
                 }
             }
 
@@ -489,7 +489,7 @@ pub async fn run_graph(
             .map(|(i, item)| RecallItem {
                 source: RecallSource::Graph,
                 content: serde_json::to_value(item)
-                    .unwrap_or_else(|_| serde_json::Value::String(format!("{:?}", item))),
+                    .unwrap_or_else(|_| serde_json::Value::String(format!("{item:?}"))),
                 score: 1.0 - (i as f64 * 0.01),
             })
             .collect(),
@@ -510,7 +510,7 @@ pub async fn run_graph(
         other => vec![RecallItem {
             source: RecallSource::Graph,
             content: serde_json::to_value(other)
-                .unwrap_or_else(|_| serde_json::Value::String(format!("{:?}", other))),
+                .unwrap_or_else(|_| serde_json::Value::String(format!("{other:?}"))),
             score: 1.0,
         }],
     };
@@ -527,6 +527,11 @@ fn tokenize(text: &str) -> HashSet<String> {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 mod tests {
     use super::*;
 

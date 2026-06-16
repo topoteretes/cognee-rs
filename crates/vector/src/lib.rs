@@ -2,11 +2,15 @@
 //!
 //! Provides vector storage and similarity search for embeddings.
 
+/// Error types for vector database operations.
 pub mod error;
+/// Data models for vector points, search results, and collection configuration.
 pub mod models;
+/// Vector database trait definition.
 pub mod vector_db_trait;
 
 #[cfg(feature = "qdrant")]
+/// Qdrant embedded vector database adapter.
 pub mod qdrant_adapter;
 
 #[cfg(feature = "pgvector")]

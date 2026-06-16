@@ -333,7 +333,15 @@ jobs:
           CARGO_TARGET_DIR: target/no-default
         run: cargo test -p cognee-telemetry --no-default-features -- --nocapture
 
+      # RUSTDOCFLAGS=-W missing_docs surfaces undocumented public items as
+      # rustdoc warnings (task 23) without failing the `clippy -- -D warnings`
+      # gate. The lint is scoped to the doc job (not a crate `#![warn]`
+      # attribute) precisely because a crate-level `#![warn(missing_docs)]`
+      # would be promoted to an error by `-D warnings` and break the build,
+      # whereas `cargo doc` runs without `-D warnings` and only warns.
       - name: Build docs
+        env:
+          RUSTDOCFLAGS: -W missing_docs
         run: cargo doc --no-deps
 
       # Optional: rustdoc with the telemetry feature on, to catch
@@ -341,6 +349,7 @@ jobs:
       - name: Build docs (telemetry feature)
         env:
           CARGO_TARGET_DIR: target/telemetry
+          RUSTDOCFLAGS: -W missing_docs
         run: cargo doc --no-deps --features telemetry
 
   # ── Stage 2.5: Postgres-only span tests (depends on lint, runs in parallel with `test`) ──

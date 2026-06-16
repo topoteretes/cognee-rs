@@ -25,7 +25,7 @@ impl LocalStorage {
         let dir1 = &uuid_str[..2];
         let dir2 = &uuid_str[2..4];
 
-        format!("{}/{}/{}", dir1, dir2, file_name)
+        format!("{dir1}/{dir2}/{file_name}")
     }
 
     /// Resolve a location string into a filesystem path.
@@ -57,7 +57,7 @@ impl StorageTrait for LocalStorage {
     async fn initialize(&self) -> Result<(), StorageError> {
         fs::create_dir_all(&self.base_path)
             .await
-            .map_err(|e| StorageError::IoError(format!("Failed to create base directory: {}", e)))
+            .map_err(|e| StorageError::IoError(format!("Failed to create base directory: {e}")))
     }
 
     #[instrument(name = "storage.store", skip(self, data), fields(file_name, bytes = data.len()))]
@@ -69,21 +69,21 @@ impl StorageTrait for LocalStorage {
         if let Some(parent) = full_path.parent() {
             fs::create_dir_all(parent)
                 .await
-                .map_err(|e| StorageError::IoError(format!("Failed to create directory: {}", e)))?;
+                .map_err(|e| StorageError::IoError(format!("Failed to create directory: {e}")))?;
         }
 
         // Write file
         let mut file = fs::File::create(&full_path)
             .await
-            .map_err(|e| StorageError::IoError(format!("Failed to create file: {}", e)))?;
+            .map_err(|e| StorageError::IoError(format!("Failed to create file: {e}")))?;
 
         file.write_all(data)
             .await
-            .map_err(|e| StorageError::IoError(format!("Failed to write file: {}", e)))?;
+            .map_err(|e| StorageError::IoError(format!("Failed to write file: {e}")))?;
 
         file.flush()
             .await
-            .map_err(|e| StorageError::IoError(format!("Failed to flush file: {}", e)))?;
+            .map_err(|e| StorageError::IoError(format!("Failed to flush file: {e}")))?;
 
         Ok(relative_path)
     }
@@ -101,22 +101,22 @@ impl StorageTrait for LocalStorage {
         if let Some(parent) = full_path.parent() {
             fs::create_dir_all(parent)
                 .await
-                .map_err(|e| StorageError::IoError(format!("Failed to create directory: {}", e)))?;
+                .map_err(|e| StorageError::IoError(format!("Failed to create directory: {e}")))?;
         }
 
         // Create file
         let mut file = fs::File::create(&full_path)
             .await
-            .map_err(|e| StorageError::IoError(format!("Failed to create file: {}", e)))?;
+            .map_err(|e| StorageError::IoError(format!("Failed to create file: {e}")))?;
 
         // Stream copy from reader to file
         tokio::io::copy(reader, &mut file)
             .await
-            .map_err(|e| StorageError::IoError(format!("Failed to write file: {}", e)))?;
+            .map_err(|e| StorageError::IoError(format!("Failed to write file: {e}")))?;
 
         file.flush()
             .await
-            .map_err(|e| StorageError::IoError(format!("Failed to flush file: {}", e)))?;
+            .map_err(|e| StorageError::IoError(format!("Failed to flush file: {e}")))?;
 
         Ok(relative_path)
     }
@@ -130,13 +130,13 @@ impl StorageTrait for LocalStorage {
         if let Some(parent) = full_path.parent() {
             fs::create_dir_all(parent)
                 .await
-                .map_err(|e| StorageError::IoError(format!("Failed to create directory: {}", e)))?;
+                .map_err(|e| StorageError::IoError(format!("Failed to create directory: {e}")))?;
         }
 
         // Create file
         let file = fs::File::create(&full_path)
             .await
-            .map_err(|e| StorageError::IoError(format!("Failed to create file: {}", e)))?;
+            .map_err(|e| StorageError::IoError(format!("Failed to create file: {e}")))?;
 
         Ok(StorageWriter::new(file, relative_path))
     }
@@ -147,9 +147,9 @@ impl StorageTrait for LocalStorage {
 
         let bytes = fs::read(&full_path).await.map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
-                StorageError::NotFound(format!("File not found: {}", location))
+                StorageError::NotFound(format!("File not found: {location}"))
             } else {
-                StorageError::IoError(format!("Failed to read file: {}", e))
+                StorageError::IoError(format!("Failed to read file: {e}"))
             }
         })?;
         debug!(bytes = bytes.len(), "file retrieved");
@@ -161,7 +161,7 @@ impl StorageTrait for LocalStorage {
 
         fs::try_exists(&full_path)
             .await
-            .map_err(|e| StorageError::IoError(format!("Failed to check file existence: {}", e)))
+            .map_err(|e| StorageError::IoError(format!("Failed to check file existence: {e}")))
     }
 
     #[instrument(name = "storage.delete", skip(self), fields(location))]
@@ -170,9 +170,9 @@ impl StorageTrait for LocalStorage {
 
         fs::remove_file(&full_path).await.map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
-                StorageError::NotFound(format!("File not found: {}", location))
+                StorageError::NotFound(format!("File not found: {location}"))
             } else {
-                StorageError::IoError(format!("Failed to delete file: {}", e))
+                StorageError::IoError(format!("Failed to delete file: {e}"))
             }
         })
     }
@@ -194,17 +194,19 @@ impl StorageTrait for LocalStorage {
                     self.base_path.display()
                 ));
             }
-            StorageError::IoError(format!("Failed to read directory: {}", e))
+            StorageError::IoError(format!("Failed to read directory: {e}"))
         })?;
 
-        while let Some(entry) = entries.next_entry().await.map_err(|e| {
-            StorageError::IoError(format!("Failed to iterate directory entry: {}", e))
-        })? {
+        while let Some(entry) = entries
+            .next_entry()
+            .await
+            .map_err(|e| StorageError::IoError(format!("Failed to iterate directory entry: {e}")))?
+        {
             let path = entry.path();
             let file_type = entry
                 .file_type()
                 .await
-                .map_err(|e| StorageError::IoError(format!("Failed to get file type: {}", e)))?;
+                .map_err(|e| StorageError::IoError(format!("Failed to get file type: {e}")))?;
             if file_type.is_dir() {
                 fs::remove_dir_all(&path).await.map_err(|e| {
                     StorageError::IoError(format!(
@@ -228,6 +230,10 @@ impl StorageTrait for LocalStorage {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    reason = "test code — panics are acceptable failures"
+)]
 mod tests {
     use super::*;
     use tempfile::TempDir;

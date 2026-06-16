@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! HTTP-level tests for the three new DELETE (revoke) endpoints in
 //! `/api/v1/permissions`:
 //!

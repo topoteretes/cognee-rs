@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! Verify the `sync_operations` migration creates the table and supports the
 //! repository surface against a fresh in-memory SQLite DB.
 

@@ -1,3 +1,12 @@
+// Mutex lock().unwrap() and invariant-guarded expect() are acceptable in this
+// pipeline runtime — lock poisoning is unrecoverable and the invariants are
+// upheld by construction.
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "lock poisoning is unrecoverable; expect() calls guard construction-time invariants"
+)]
+
 use std::marker::PhantomData;
 use std::mem;
 use std::sync::Arc;

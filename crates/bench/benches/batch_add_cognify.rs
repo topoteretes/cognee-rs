@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "benchmark code — panics surface failures clearly during bench runs"
+)]
 //! Criterion benchmark: full pipeline (add → cognify → search) against the live Rust HTTP server.
 //!
 //! Ports `cognee/tests/performance/batch_add_cognify_test.py` and extends it with search.

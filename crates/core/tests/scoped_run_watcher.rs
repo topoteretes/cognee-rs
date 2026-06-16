@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! Tests for `ScopedRunWatcher` — the registry's `PipelineWatcher` proxy.
 //!
 //! Drives a fake pipeline through lifecycle events and asserts:

@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! Integration test: `POST /api/v1/auth/register` fires a welcome email via the
 //! wired `Mailer`.
 //!

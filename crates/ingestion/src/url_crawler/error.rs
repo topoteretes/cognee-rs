@@ -36,6 +36,7 @@ impl From<reqwest::Error> for UrlFetcherError {
         if err.is_timeout() {
             Self::Timeout(err.to_string())
         } else if err.is_status() {
+            #[allow(clippy::expect_used, reason = "invariant is upheld by construction")]
             let status = err
                 .status()
                 .expect("is_status() guarantees status() returns Some");

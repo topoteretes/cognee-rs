@@ -30,6 +30,7 @@ pub fn record_override(routed: SearchType, override_type: SearchType) {
         return;
     }
     // lock poison is unrecoverable
+    #[allow(clippy::unwrap_used, reason = "lock poison is unrecoverable")]
     let mut guard = counts().lock().unwrap();
     let key = (routed, override_type);
     let entry = guard.entry(key).or_insert(0);
@@ -48,6 +49,7 @@ pub fn record_override(routed: SearchType, override_type: SearchType) {
 /// short-lived (process-global, unbounded) so snapshots are cheap to take.
 pub fn override_counts_snapshot() -> HashMap<(SearchType, SearchType), u64> {
     // lock poison is unrecoverable
+    #[allow(clippy::unwrap_used, reason = "lock poison is unrecoverable")]
     counts().lock().unwrap().clone()
 }
 
@@ -55,10 +57,16 @@ pub fn override_counts_snapshot() -> HashMap<(SearchType, SearchType), u64> {
 /// process-global state before asserting specific counts.
 pub fn clear_override_counts() {
     // lock poison is unrecoverable
+    #[allow(clippy::unwrap_used, reason = "lock poison is unrecoverable")]
     counts().lock().unwrap().clear();
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 mod tests {
     use super::*;
 

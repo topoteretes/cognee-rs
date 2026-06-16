@@ -147,7 +147,7 @@ pub async fn post_upload(
     let filename = spooled
         .filename
         .clone()
-        .unwrap_or_else(|| format!("{}.owl", ontology_key));
+        .unwrap_or_else(|| format!("{ontology_key}.owl"));
     if !filename.to_lowercase().ends_with(".owl") {
         return Err(ApiError::OntologyEnvelope(
             "File must be in .owl format".into(),
@@ -183,7 +183,7 @@ pub async fn post_upload(
         .await
         .map_err(|e| match e {
             OntologyError::DuplicateKey(ref key) => ApiError::OntologyEnvelope(
-                format!("Ontology key '{}' already exists", key),
+                format!("Ontology key '{key}' already exists"),
                 StatusCode::BAD_REQUEST,
             ),
             OntologyError::InvalidFormat(ref msg) => {

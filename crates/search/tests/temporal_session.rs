@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! Phase 10: Temporal search session integration tests.
 //!
 //! Verifies that temporal search results are stored in session history and that

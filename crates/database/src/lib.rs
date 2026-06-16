@@ -1,3 +1,5 @@
+//! Relational metadata persistence (SeaORM/SQLite) for ingestion, search history, and deletion.
+
 pub mod auth;
 mod connection;
 mod conversions;

@@ -184,7 +184,7 @@ impl FactExtractor {
         let mut graphs = Vec::new();
         for result in results {
             let graph =
-                result.map_err(|e| CognifyError::LlmError(format!("Task join error: {}", e)))??;
+                result.map_err(|e| CognifyError::LlmError(format!("Task join error: {e}")))??;
             graphs.push(graph);
         }
 
@@ -198,6 +198,11 @@ impl FactExtractor {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 mod tests {
     use super::*;
 

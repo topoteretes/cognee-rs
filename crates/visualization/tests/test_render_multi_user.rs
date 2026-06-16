@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! Tests for `render_multi_user` — the multi-user aggregation entry point used
 //! by the visualize HTTP router's `POST /multi` endpoint.
 

@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! Integration-level assertions for the public behavior of the colors
 //! sub-module. Because the color helpers are module-private, these tests
 //! exercise them indirectly by asserting the shape of the final rendered

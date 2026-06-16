@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 #![cfg(feature = "testing")]
 
 use cognee_cognify::graph_integration::{GraphEdgePair, GraphNodePair};

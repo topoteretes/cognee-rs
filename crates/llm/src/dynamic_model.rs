@@ -285,6 +285,11 @@ fn value_type_name(v: &Value) -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    #![allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        reason = "test code — panics are acceptable"
+    )]
     use super::*;
 
     /// A KnowledgeGraph-like model for testing.

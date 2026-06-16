@@ -348,6 +348,7 @@ impl IntoResponse for ApiError {
                     // {"error":..., "detail":...} envelope.
                     // StatusCode 420 is not a standard IANA code; construct
                     // it from the raw integer.
+                    #[allow(clippy::expect_used, reason = "invariant is upheld by construction")]
                     let status =
                         StatusCode::from_u16(420).expect("420 is a valid HTTP status code");
                     return (status, Json(run_info)).into_response();
@@ -378,6 +379,7 @@ impl IntoResponse for ApiError {
                     serde_json::Value::String(detail.to_string()),
                     serde_json::Value::String(code.to_string()),
                 );
+                #[allow(clippy::expect_used, reason = "invariant is upheld by construction")]
                 return (
                     StatusCode::NOT_IMPLEMENTED,
                     axum::response::Response::builder()
@@ -429,6 +431,11 @@ pub enum ServerError {
 // ─── Unit tests ──────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 mod tests {
     use super::*;
     use axum::body::to_bytes;

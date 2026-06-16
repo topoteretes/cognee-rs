@@ -51,6 +51,11 @@ fn dedup_key(item: &SearchItem) -> String {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 mod tests {
     use serde_json::json;
     use uuid::Uuid;

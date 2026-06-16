@@ -36,7 +36,7 @@ impl StorageWriter {
         self.file
             .write_all(chunk)
             .await
-            .map_err(|e| StorageError::IoError(format!("Failed to write chunk: {}", e)))
+            .map_err(|e| StorageError::IoError(format!("Failed to write chunk: {e}")))
     }
 
     /// Finish writing and return the storage location
@@ -44,7 +44,7 @@ impl StorageWriter {
         self.file
             .flush()
             .await
-            .map_err(|e| StorageError::IoError(format!("Failed to flush file: {}", e)))?;
+            .map_err(|e| StorageError::IoError(format!("Failed to flush file: {e}")))?;
         Ok(self.location)
     }
 }

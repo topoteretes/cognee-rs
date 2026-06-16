@@ -27,6 +27,10 @@ pub const NAMESPACE_OID: Uuid = Uuid::NAMESPACE_OID;
 /// 3. On overflow, emit the accumulated text (joined with space) as a DocumentChunk.
 /// 4. If a single paragraph exceeds `max_chunk_size` on its own (oversized), emit it as-is.
 /// 5. Emit any remaining accumulated text at the end.
+#[allow(
+    clippy::expect_used,
+    reason = "accumulated is guaranteed non-empty by the !accumulated.is_empty() guards preceding each expect call"
+)]
 pub fn chunk_text<C: TokenCounter>(
     document_id: Uuid,
     text: &str,
@@ -63,7 +67,7 @@ pub fn chunk_text<C: TokenCounter>(
             result.push(DocumentChunk::new(
                 Uuid::new_v5(
                     &NAMESPACE_OID,
-                    format!("{}-{}", document_id, chunk_index).as_bytes(),
+                    format!("{document_id}-{chunk_index}").as_bytes(),
                 ),
                 chunk_text,
                 accumulated_size,
@@ -88,7 +92,7 @@ pub fn chunk_text<C: TokenCounter>(
         result.push(DocumentChunk::new(
             Uuid::new_v5(
                 &NAMESPACE_OID,
-                format!("{}-{}", document_id, chunk_index).as_bytes(),
+                format!("{document_id}-{chunk_index}").as_bytes(),
             ),
             chunk_text,
             accumulated_size,
@@ -102,6 +106,11 @@ pub fn chunk_text<C: TokenCounter>(
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 mod tests {
     use super::*;
     use crate::token_counter::WordCounter;
@@ -190,7 +199,7 @@ mod tests {
             .map(|i| format!("word{i}"))
             .collect::<Vec<_>>()
             .join(" ");
-        let input = format!("{}.\nShort text here.", long_para);
+        let input = format!("{long_para}.\nShort text here.");
         let chunks = chunk_text(doc_id, &input, 50, &WordCounter);
         // The 100-word sentence is pre-split by chunk_by_sentence into 2 chunks
         // of 50 words, plus the short paragraph makes 3 total

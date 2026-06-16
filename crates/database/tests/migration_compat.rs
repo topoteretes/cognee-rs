@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! Migration compatibility tests.
 //!
 //! Verifies that `initialize()` (which runs SeaORM migrations) behaves

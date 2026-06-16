@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! P5 §5: `/api/v1/configuration` integration tests.
 //!
 //! Covers the parity invariants from `routers/configuration.md`:

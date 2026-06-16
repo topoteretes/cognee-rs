@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 #![cfg(feature = "html-loader")]
 
 use cognee_ingestion::url_crawler::{HtmlParser, extract_html};
