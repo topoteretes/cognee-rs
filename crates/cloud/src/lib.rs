@@ -46,6 +46,19 @@ pub mod serve;
 pub mod state;
 pub mod sync;
 
+/// Crate-wide lock serializing every test that mutates process-global state
+/// (`$HOME`, `COGNEE_*` env vars, and the `state` client singleton).
+///
+/// All test modules in this crate (`config`, `credentials`, `serve`,
+/// `disconnect`) compile into a single test binary and touch the *same*
+/// globals, so a per-module lock does not mutually exclude across modules and
+/// tests would race under the default multi-threaded test runner. A single
+/// crate-wide lock is the only thing that actually serializes them. Poison is
+/// recovered (`into_inner`) rather than propagated so one panicking test does
+/// not cascade-fail every other env test.
+#[cfg(test)]
+pub(crate) static ENV_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 pub use cloud_client::{CloudClient, ImproveDataset, RememberData};
 pub use credentials::CloudCredentials;
 pub use device_auth::{
