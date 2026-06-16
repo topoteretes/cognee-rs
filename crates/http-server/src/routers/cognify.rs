@@ -73,6 +73,12 @@ pub async fn post_cognify(
         ));
     }
 
+    crate::telemetry::emit(
+        "Cognify API Endpoint Invoked",
+        user.id,
+        serde_json::json!({ "endpoint": "POST /v1/cognify" }),
+    );
+
     // ── Resolve datasets ──────────────────────────────────────────────────────
     // Get the DB handle if available.
     let db = state.components().map(|c| c.database.clone());

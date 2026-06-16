@@ -337,6 +337,16 @@ pub async fn grant_dataset_permission(
     let GrantDatasetPermissionBody(dataset_ids) = body;
     let permission_name = query.permission_name.trim().to_lowercase();
 
+    crate::telemetry::emit(
+        "Permissions API Endpoint Invoked",
+        user.id,
+        serde_json::json!({
+            "endpoint": format!("POST /v1/permissions/datasets/{}", principal_id),
+            "dataset_ids": dataset_ids.iter().map(|d| d.to_string()).collect::<Vec<String>>(),
+            "principal_id": principal_id.to_string(),
+        }),
+    );
+
     if !PERMISSION_NAMES.contains(&permission_name.as_str()) {
         return Err(ApiError::BadRequest(format!(
             "Unknown permission '{permission_name}'; must be one of read|write|delete|share"
@@ -402,6 +412,16 @@ pub async fn create_role(
         return Err(ApiError::BadRequest("Role name is empty".into()));
     }
 
+    crate::telemetry::emit(
+        "Permissions API Endpoint Invoked",
+        user.id,
+        serde_json::json!({
+            "endpoint": "POST /v1/permissions/roles",
+            "role_name": role_name,
+            "tenant_id": user.tenant_id.map(|v| v.to_string()).unwrap_or_default(),
+        }),
+    );
+
     let handles = components(&state)?;
     let repo = permissions_repo(handles)?;
 
@@ -453,6 +473,15 @@ pub async fn create_tenant(
     if tenant_name.is_empty() {
         return Err(ApiError::BadRequest("Tenant name is empty".into()));
     }
+
+    crate::telemetry::emit(
+        "Permissions API Endpoint Invoked",
+        user.id,
+        serde_json::json!({
+            "endpoint": "POST /v1/permissions/tenants",
+            "tenant_name": tenant_name,
+        }),
+    );
 
     let handles = components(&state)?;
     let repo = permissions_repo(handles)?;
@@ -525,6 +554,16 @@ pub async fn assign_role(
     Path(target_user): Path<Uuid>,
     Query(query): Query<AssignRoleQuery>,
 ) -> Result<Json<MessageResponse>, ApiError> {
+    crate::telemetry::emit(
+        "Permissions API Endpoint Invoked",
+        user.id,
+        serde_json::json!({
+            "endpoint": format!("POST /v1/permissions/users/{}/roles", target_user),
+            "user_id": target_user.to_string(),
+            "role_id": query.role_id.to_string(),
+        }),
+    );
+
     let handles = components(&state)?;
     let repo = permissions_repo(handles)?;
 
@@ -573,6 +612,16 @@ pub async fn add_user_to_tenant(
     Path(target_user): Path<Uuid>,
     Query(query): Query<AddUserToTenantQuery>,
 ) -> Result<Json<MessageResponse>, ApiError> {
+    crate::telemetry::emit(
+        "Permissions API Endpoint Invoked",
+        user.id,
+        serde_json::json!({
+            "endpoint": format!("POST /v1/permissions/users/{}/tenants", target_user),
+            "user_id": target_user.to_string(),
+            "tenant_id": query.tenant_id.to_string(),
+        }),
+    );
+
     let handles = components(&state)?;
     let repo = permissions_repo(handles)?;
 
@@ -613,6 +662,16 @@ pub async fn remove_user_from_tenant(
     State(state): State<AppState>,
     Path((tenant_id, target_user)): Path<(Uuid, Uuid)>,
 ) -> Result<Json<MessageResponse>, ApiError> {
+    crate::telemetry::emit(
+        "Permissions API Endpoint Invoked",
+        user.id,
+        serde_json::json!({
+            "endpoint": format!("DELETE /v1/permissions/tenants/{}/users/{}", tenant_id, target_user),
+            "tenant_id": tenant_id.to_string(),
+            "user_id": target_user.to_string(),
+        }),
+    );
+
     let handles = components(&state)?;
     require_tenant_admin(handles, user.id, tenant_id).await?;
 

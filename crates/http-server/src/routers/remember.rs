@@ -165,6 +165,14 @@ pub async fn post_remember(
     let request_id = Uuid::new_v4().to_string();
     let (form, files, _guard) = parse_remember_multipart(multipart, &request_id).await?;
 
+    {
+        let mut props = serde_json::json!({ "endpoint": "POST /v1/remember" });
+        if let Some(ref node_set) = form.node_set {
+            props["node_set"] = serde_json::json!(node_set);
+        }
+        crate::telemetry::emit("Remember API Endpoint Invoked", user.id, props);
+    }
+
     let session_id = form.session_id.clone();
 
     // ── Dataset resolution ────────────────────────────────────────────────────
@@ -632,6 +640,15 @@ pub async fn post_remember_entry(
     // Record the entry_type discriminator on the current span for telemetry.
     let entry_type_str = payload.entry.type_str();
     tracing::Span::current().record("entry_type", entry_type_str);
+
+    crate::telemetry::emit(
+        "Remember Entry API Endpoint Invoked",
+        user.id,
+        serde_json::json!({
+            "endpoint": "POST /v1/remember/entry",
+            "entry_type": entry_type_str,
+        }),
+    );
 
     // ── Resolve required handles from ComponentHandles ───────────────────
     let components = state

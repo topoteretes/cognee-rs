@@ -148,8 +148,7 @@ print(cfg)
 | `EMBEDDING_API_KEY` | Embedding API key (falls back to `OPENAI_TOKEN`). |
 | `MOCK_EMBEDDING` | Set `true` to use zero-vector mock embeddings (no model download). |
 | `COGNEE_BINDING_SUPPRESS_LOGS` | Suppress the auto-installed `pyo3-log` bridge. |
-| `COGNEE_RUST_TELEMETRY` | Opt in to Python-side `send_telemetry` analytics (off by default). |
-| `COGNEE_HOST_SDK` | Set by the upstream Python `cognee` SDK to suppress binding-armed analytics emission. |
+| `COGNEE_HOST_SDK` | Set by an upstream/host `cognee` SDK to suppress this binding's analytics emission (avoids double-counting). |
 | `RUST_LOG`, `LOG_LEVEL` | Standard `tracing-subscriber` env-filter level overrides. |
 | `COGNEE_LOG_*`, `LOG_FILE_NAME` | Consumed by `setup_logging()` — see the workspace README's "Logging" section. |
 | `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_HEADERS`, `OTEL_SERVICE_NAME` and other `OTEL_*` vars | Consumed by `setup_telemetry()`. |
@@ -379,21 +378,20 @@ skip the default subscriber. The host then owns all subscriber setup.
 
 ### Analytics defaults
 
-For the Python binding, analytics emission is **OFF by default** — the upstream
-Python `cognee` SDK is the canonical sender of `send_telemetry` events; the Rust
-binding defers to it.
+Analytics emission is **ON by default** — Python-SDK parity. Analytics are
+armed automatically on import (no explicit `setup_telemetry_analytics()` call
+required); the function is still exposed and returns the effective state.
 
 | Condition | Behaviour |
 |---|---|
-| `COGNEE_RUST_TELEMETRY` unset | `setup_telemetry_analytics()` returns `False` (not armed). |
-| `COGNEE_RUST_TELEMETRY=1` and `COGNEE_HOST_SDK` unset | Armed. Returns `True`. |
-| `COGNEE_HOST_SDK=<any non-empty>` | Not armed regardless of `COGNEE_RUST_TELEMETRY`. |
+| No opt-out env set | Armed. `setup_telemetry_analytics()` returns `True`. |
+| `TELEMETRY_DISABLED=<non-empty>` | Suppressed. Returns `False`. |
+| `ENV` is `test` / `dev` | Suppressed. Returns `False`. |
+| `COGNEE_HOST_SDK=<any non-empty>` | Suppressed (defers to the host SDK). Returns `False`. |
 
-**Important — if you are using the upstream Python `cognee` SDK
-(`pip install cognee`):** do **not** set `COGNEE_RUST_TELEMETRY=1`.
-The upstream SDK is the canonical sender of `send_telemetry` events;
-the Rust binding defers to it via the `COGNEE_HOST_SDK=python`
-sentinel that the upstream package sets automatically.
+**Important — if you run this binding underneath another `cognee` SDK that is
+already the canonical sender of `send_telemetry` events:** set
+`COGNEE_HOST_SDK=<name>` so this binding defers and you avoid double-counting.
 
 ## Error handling
 
@@ -450,7 +448,7 @@ of `cognee_pipeline`.
 - **`ImportError` on `cognee_pipeline`** — run `maturin develop` (or install from PyPI) first.
 - **Embedding model download on first run** — set `MOCK_EMBEDDING=true` to skip it in tests.
 - **`OPENAI_URL` / `OPENAI_TOKEN` not set** — all examples exit 0 with a `SKIP` message when these are absent; export them before running.
-- **Analytics doubly-sent** — if using `pip install cognee` alongside this binding, do not set `COGNEE_RUST_TELEMETRY=1`.
+- **Analytics doubly-sent** — analytics are ON by default; if you run this binding underneath another `cognee` SDK that already emits `send_telemetry`, set `COGNEE_HOST_SDK=<name>` so this binding defers.
 
 ## References
 

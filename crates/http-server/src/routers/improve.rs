@@ -42,6 +42,12 @@ pub async fn post_improve(
     State(state): State<AppState>,
     Json(payload): Json<ImprovePayloadDTO>,
 ) -> Result<impl IntoResponse, ApiError> {
+    crate::telemetry::emit(
+        "Improve API Endpoint Invoked",
+        user.id,
+        serde_json::json!({ "endpoint": "POST /v1/improve" }),
+    );
+
     // ── Resolve dataset ────────────────────────────────────────────────────────
     let dataset_id_opt = payload.dataset_id.as_option();
     let db = state.components().map(|c| c.database.clone());

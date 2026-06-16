@@ -73,6 +73,16 @@ pub async fn delete_data_deprecated(
         }
     };
 
+    crate::telemetry::emit(
+        "Delete API Endpoint Invoked",
+        user.id,
+        json!({
+            "endpoint": "DELETE /v1/delete",
+            "dataset_id": query.dataset_id.to_string(),
+            "data_id": query.data_id.to_string(),
+        }),
+    );
+
     let db = components.database.clone();
     let delete_service = components.delete_service.clone();
 

@@ -98,7 +98,7 @@ fn options_from_safe_params(filtered: &Value) -> Option<GenerationOptions> {
 )]
 #[tracing::instrument(name = "cognee.api.llm.custom_prompt", skip(state, payload))]
 pub async fn post_custom_prompt(
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
     State(state): State<AppState>,
     ValidatedJson(payload): ValidatedJson<CustomPromptGenerationPayloadDTO>,
 ) -> Result<Json<CustomPromptGenerationResponseDTO>, ApiError> {
@@ -108,6 +108,25 @@ pub async fn post_custom_prompt(
             "LLM adapter is not wired".to_string(),
         ));
     };
+
+    let parameter_keys: Vec<String> = {
+        let mut keys: Vec<String> = payload
+            .parameters
+            .as_object()
+            .map(|o| o.keys().cloned().collect())
+            .unwrap_or_default();
+        keys.sort();
+        keys
+    };
+    crate::telemetry::emit(
+        "LLM Custom Prompt Endpoint Invoked",
+        user.id,
+        serde_json::json!({
+            "endpoint": "POST /v1/llm/custom-prompt",
+            "response_model": "str",
+            "parameter_keys": parameter_keys,
+        }),
+    );
 
     // Render prompts.
     let graph_model_json = serde_json::to_string(&payload.graph_model)
@@ -159,7 +178,7 @@ pub async fn post_custom_prompt(
     fields(cognee.llm.input.text_len = payload.text.len())
 )]
 pub async fn post_infer_schema(
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
     State(state): State<AppState>,
     ValidatedJson(payload): ValidatedJson<InferSchemaPayloadDTO>,
 ) -> Result<Json<InferSchemaResponseDTO>, ApiError> {
@@ -169,6 +188,15 @@ pub async fn post_infer_schema(
             "LLM adapter is not wired".to_string(),
         ));
     };
+
+    crate::telemetry::emit(
+        "LLM Infer Schema Endpoint Invoked",
+        user.id,
+        serde_json::json!({
+            "endpoint": "POST /v1/llm/infer-schema",
+            "text_length": payload.text.len(),
+        }),
+    );
 
     let mut user_ctx: HashMap<&str, &str> = HashMap::new();
     user_ctx.insert("SAMPLE_TEXT", payload.text.as_str());
