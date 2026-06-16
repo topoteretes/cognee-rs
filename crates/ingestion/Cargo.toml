@@ -17,7 +17,9 @@ workspace = true
 
 [dependencies]
 async-trait.workspace = true
-cognee-core = { path = "../core" }
+# `pipeline.rs` uses `DbPipelineWatcher` unconditionally, so it needs the
+# `pipeline-run-registry` module which `cognee-core` gates behind this feature.
+cognee-core = { path = "../core", features = ["pipeline-run-registry"] }
 cognee-database = { path = "../database" }
 cognee-graph = { path = "../graph" }
 cognee-models = { path = "../models" }
