@@ -423,14 +423,21 @@ impl ComponentManager {
                 Some(settings.embedding_api_key.clone())
             };
 
-            // Check MOCK_EMBEDDING env var as a fallback (preserves backward compat)
-            let mock = std::env::var("MOCK_EMBEDDING")
+            // Check MOCK_EMBEDDING env var as a fallback (preserves backward compat).
+            // `deterministic`/`hash` selects SHA-256-derived vectors; other truthy
+            // values keep the legacy zero-vector mode.
+            let mock_mode = std::env::var("MOCK_EMBEDDING")
                 .ok()
-                .map(|v| {
-                    let v = v.trim().to_lowercase();
-                    v == "true" || v == "1" || v == "yes"
-                })
-                .unwrap_or(false);
+                .map(|v| v.trim().to_lowercase());
+            let mock_deterministic =
+                matches!(mock_mode.as_deref(), Some("deterministic") | Some("hash"));
+            let mock = mock_deterministic
+                || matches!(mock_mode.as_deref(), Some("true") | Some("1") | Some("yes"));
+            let mock_mode = if mock_deterministic {
+                cognee_embedding::MockVectorMode::Deterministic
+            } else {
+                cognee_embedding::MockVectorMode::Zero
+            };
 
             EmbeddingConfig {
                 provider: if mock {
@@ -446,6 +453,7 @@ impl ComponentManager {
                 max_completion_tokens: 8191,
                 batch_size: settings.embedding_batch_size as usize,
                 mock,
+                mock_mode,
                 #[cfg(feature = "onnx")]
                 onnx: cognee_embedding::OnnxEmbeddingConfig {
                     model_path: PathBuf::from(&settings.embedding_model_path),

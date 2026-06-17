@@ -305,6 +305,7 @@ mod tests {
             max_completion_tokens: 8191,
             batch_size: 10,
             mock: false,
+            mock_mode: Default::default(),
             #[cfg(feature = "onnx")]
             onnx: Default::default(),
             huggingface_tokenizer: None,
