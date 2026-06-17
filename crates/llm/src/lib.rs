@@ -55,6 +55,8 @@ pub mod config;
 pub mod dynamic_model;
 pub mod error;
 pub mod llm_trait;
+#[cfg(feature = "mock")]
+pub mod mock;
 pub mod prompts;
 pub mod responses_client;
 pub mod schema;

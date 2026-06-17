@@ -45,6 +45,14 @@ no per-corpus tuning, and matches the repo's existing UUID5 philosophy.
    via `sha2.workspace = true` by `cognee-ingestion`, `cognee-telemetry`, and
    `cognee-http-server`), so no version addition is needed.
 
+   `cognee-llm` does not currently depend on `tempfile` (not in its
+   `[dev-dependencies]` nor pulled in transitively), so the round-trip test in
+   step 6 needs it added under `[dev-dependencies]`:
+   ```toml
+   tempfile = { workspace = true }
+   ```
+   (`tempfile = "3"` is already in `[workspace.dependencies]`.)
+
 2. **Module skeleton.** Create `crates/llm/src/mock/mod.rs`:
    ```rust
    //! Record/replay LLM support (cassette-based mock). Feature: `mock`.
