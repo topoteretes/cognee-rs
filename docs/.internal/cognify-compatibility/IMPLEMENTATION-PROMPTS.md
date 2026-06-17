@@ -2,6 +2,10 @@
 
 Parent: [../cognify-compatibility-implementation-plan.md](../cognify-compatibility-implementation-plan.md)
 
+> **Status (2026-06-17):** Items 1, 2, 4, and 5 are ✅ implemented and landed. Only
+> **Item 3** (full `PgHybridAdapter`) remains 📋 Planned — its prompt below is the only
+> one still actionable; the others are retained for historical context.
+
 This document holds a ready-to-run prompt per work item. Each prompt drives the
 same **3-step scheme**:
 

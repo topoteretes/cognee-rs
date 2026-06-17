@@ -3,9 +3,8 @@
 # Rust source has a matching declaration in the public C headers.
 #
 # SCOPE: name-level only.  This script detects missing or renamed functions but
-# NOT signature changes (wrong argument types, changed return types).  For
-# full signature-level checking see Option B / Step 4 in
-# docs/bindings-parity/03-capi-header-cbindgen.md.
+# NOT signature changes (wrong argument types, changed return types).  Full
+# signature-level checking would require a cbindgen-based approach (out of scope).
 #
 # EXIT: 0 when fully in sync; non-zero when any export lacks a declaration.
 set -euo pipefail

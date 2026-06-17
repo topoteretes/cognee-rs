@@ -5,7 +5,7 @@ cognee-rust. The big parity tracks (the API-gaps and telemetry gap analyses, and
 P0–P8 port) are all complete and their tracking docs have been removed. What remains below is the
 set of known gaps that a future contributor might pick up.
 
-Sourced from the surviving design docs and verified against the code as of 2026-06-02. Cross-cutting
+Sourced from the surviving design docs and verified against the code as of 2026-06-17. Cross-cutting
 *design decisions* that are still open (as opposed to missing features) live in
 [open-questions.md](open-questions.md).
 
@@ -14,9 +14,10 @@ Sourced from the surviving design docs and verified against the code as of 2026-
 These are tracked in the project guide ([`.claude/CLAUDE.md`](../.claude/CLAUDE.md) → "Not Yet
 Implemented") and restated here for one consolidated view:
 
-- **Non-text document extraction** — classification and the loader registry recognize PDF, CSV,
-  image, and audio, but only `text/*` files are extracted end-to-end. Actual extraction for the
-  other types is not implemented.
+- **`unstructured` office-format extraction** — text, PDF, CSV, HTML, image, and audio files are
+  extracted end-to-end (each behind its own feature flag). The `unstructured` office formats
+  (DOCX/XLSX/PPTX/ODT/etc.) are classified and registered in the loader registry, but full
+  extraction parity for them is not yet implemented.
 - **S3 support** — `DataInput::S3Path` returns an error stub.
 - **Direct URL streaming in `DataInput::process_by_chunks()`** — calling `process_by_chunks()`
   directly on `DataInput::Url` returns an unsupported error because URLs must first be fetched and

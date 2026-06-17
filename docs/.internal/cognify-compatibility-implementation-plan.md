@@ -1,6 +1,8 @@
 # Implementation Plan: Fully Compatible Cognify Operation (COG-4457)
 
-Status: **planning — all decisions resolved** (see Decision log). No code written yet.
+Status: **mostly implemented** — Items 1, 2, 4, 5 are ✅ landed (see §3 work-items
+table); only **Item 3** (full `PgHybridAdapter`, a large standalone milestone) remains
+📋 Planned. All decisions are resolved (see Decision log).
 Ticket: [COG-4457](https://linear.app/cognee/issue/COG-4457/fully-compatible-cognify-operation)
 Branch: `feature/cog-4457-fully-compatible-cognify-operation`
 

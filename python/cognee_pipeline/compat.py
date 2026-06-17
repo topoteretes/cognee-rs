@@ -60,7 +60,6 @@ supported** by the Rust core and therefore absent from :class:`SearchType`.
 Passing the string values ``"AGENTIC_COMPLETION"`` or
 ``"GRAPH_COMPLETION_DECOMPOSITION"`` raises
 :exc:`~cognee_pipeline.CogneeValidationError` with a descriptive message.
-See ``docs/python-bindings/minor-engine-gaps.md``.
 """
 
 from __future__ import annotations

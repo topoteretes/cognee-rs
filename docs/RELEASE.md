@@ -1,12 +1,11 @@
 # Release runbook
 
-How to cut and publish a cognee-rust release. Two tracks (see
-[docs/plans/release/00-INDEX.md](plans/release/00-INDEX.md)):
+How to cut and publish a cognee-rust release. Two tracks:
 
 - **Track A** — bindings + source: PyPI (`cognee`), npm (`cognee`), C-library artifact,
   GitHub source tag. Does **not** require crates.io publishability.
 - **Track B** — crates.io: publish the `cognee-*` library crates (gated on removing
-  git deps / `[patch.crates-io]`; see release task 24).
+  git deps / `[patch.crates-io]` from the dependency graph — a separate, larger effort).
 
 ## Pre-flight (all tracks)
 
@@ -20,8 +19,7 @@ How to cut and publish a cognee-rust release. Two tracks (see
    - `python/pyproject.toml`, `js/package.json`.
    - Keep all four in sync.
 4. Update `CHANGELOG.md` (Keep a Changelog format) with the new version section.
-   *(Note: `CHANGELOG.md` does not exist yet — it is created by release task 22. Add a stub entry here or skip until task 22 lands.)*
-5. Confirm `LICENSE` and license metadata are present (see release task 02).
+5. Confirm `LICENSE` and license metadata are present.
 
 ## Tag
 
@@ -68,7 +66,7 @@ Attach the resulting tarball (lib + headers + `LICENSE`) to the GitHub Release f
 
 ## Publish — crates.io (Track B only)
 
-> Blocked until release task 24 removes git deps / `[patch.crates-io]` from the published
+> Blocked until git deps / `[patch.crates-io]` are removed from the published
 > dependency graph. Until then, `cargo publish` will refuse non-leaf crates.
 
 ```bash
@@ -80,7 +78,6 @@ cargo publish -p cognee-models
 
 ## Post-release
 
-1. Create a GitHub Release from the tag; paste the `CHANGELOG.md` section (added in the
-   release-metadata step, task 22); attach the C artifact.
+1. Create a GitHub Release from the tag; paste the `CHANGELOG.md` section; attach the C artifact.
 2. Verify installs: `pip install cognee==X.Y.Z`, `npm install cognee@X.Y.Z`.
 3. Open the next `-dev` version bump PR if you use one.

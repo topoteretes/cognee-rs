@@ -45,7 +45,8 @@ same SDK-tier implementation via `crates/bindings-common/`:
 | **JavaScript/TypeScript** (Neon) | [js/README.md](js/README.md) | `import { Cognee } from 'cognee'` |
 
 Each binding exposes the same core flow: `warm()` → `add()` → `cognify()` → `search()`.
-See [docs/bindings-parity/](docs/bindings-parity/) for the parity plan and maturity matrix.
+All three share `crates/bindings-common` (portable op bodies + stable error codes), so
+their SDK surfaces line up 1:1.
 
 ## Graph Backend Concurrency
 

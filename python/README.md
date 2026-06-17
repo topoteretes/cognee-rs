@@ -539,7 +539,6 @@ of `cognee_pipeline`.
 
 ## References
 
-- Reference docs: [docs/python-bindings/](../docs/python-bindings/)
 - Examples: [examples/](examples/)
 - Observability: [docs/observability/opentelemetry.md](../docs/observability/opentelemetry.md), [docs/observability/send_telemetry.md](../docs/observability/send_telemetry.md)
 - C API bindings: [capi/README.md](../capi/README.md)
