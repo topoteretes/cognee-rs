@@ -67,8 +67,12 @@ in → same graph out, regardless of batching or call order.
 
 4. **Tests:**
    - **Round-trip (closes the T2 loop):** record a known graph through
-     `RecordingLlm` over a `MockLlm`, flush, load with `ReplayLlm`, and assert the
-     replayed `Value` equals the original.
+     `RecordingLlm` over a **local stub `Llm`** (define one in the test module, as
+     T2's `recording.rs` tests do — do **not** use `cognee_test_utils::MockLlm`:
+     `cognee-test-utils` depends on `cognee-llm` *without* the `mock` feature, so
+     pulling it into a `mock`-feature test target builds two distinct copies of the
+     `Llm` trait that fail to unify — see the note in `recording.rs`), flush, load
+     with `ReplayLlm`, and assert the replayed `Value` equals the original.
    - Hit returns the recorded value.
    - Miss with `EmptyGraph` returns `{"nodes":[],"edges":[]}`.
    - Miss with `Error` returns `Err`.
