@@ -28,7 +28,7 @@ wiring). T5 is independent. T6 → T7 → T8 depend on T4. T9 is last.
 | ID | Task | Short description | Status | Plan |
 |----|------|-------------------|--------|------|
 | T1 | Cassette format & hashing | Serde types for the recorded-response cassette + a stable `sha256(input)` match-key, behind a `mock` feature in `cognee-llm`. | Implemented | [task-01-cassette-format.md](tasks/task-01-cassette-format.md) |
-| T2 | `RecordingLlm` decorator | Wraps the real `Arc<dyn Llm>`, forwards every call, captures `(input → response)` into a cassette; flushes on demand and on drop. | Not implemented | [task-02-recording-llm.md](tasks/task-02-recording-llm.md) |
+| T2 | `RecordingLlm` decorator | Wraps the real `Arc<dyn Llm>`, forwards every call, captures `(input → response)` into a cassette; flushes on demand and on drop. | Implemented | [task-02-recording-llm.md](tasks/task-02-recording-llm.md) |
 | T3 | `ReplayLlm` content-aware mock | Loads a cassette and replays by input hash; configurable miss policy (empty-graph default, Python parity). | Not implemented | [task-03-replay-llm.md](tasks/task-03-replay-llm.md) |
 | T4 | Factory wiring (`MOCK_LLM` / recording) | `LlmProvider::Mock` + `MOCK_LLM`, `MOCK_LLM_CASSETTE`, `COGNEE_RECORD_LLM` env hooks wired through `Settings` and `init_llm`. | Not implemented | [task-04-factory-wiring.md](tasks/task-04-factory-wiring.md) |
 | T5 | Deterministic mock embedding | Port the Python SHA-256 vector scheme into `MockEmbeddingEngine`, selectable via `MOCK_EMBEDDING=deterministic`. | Not implemented | [task-05-deterministic-embedding.md](tasks/task-05-deterministic-embedding.md) |
