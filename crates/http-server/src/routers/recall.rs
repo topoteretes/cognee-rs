@@ -69,6 +69,12 @@ pub async fn get_recall_history(
         });
     };
 
+    crate::telemetry::emit(
+        "Recall API Endpoint Invoked",
+        user.id,
+        serde_json::json!({ "endpoint": "GET /v1/recall" }),
+    );
+
     match orchestrator.get_history(Some(user.id), None).await {
         Ok(entries) => {
             let items = entries
@@ -136,6 +142,15 @@ pub async fn post_recall(
             },
         });
     };
+
+    crate::telemetry::emit(
+        "Recall API Endpoint Invoked",
+        user.id,
+        serde_json::json!({
+            "endpoint": "POST /v1/recall",
+            "search_type": format!("{:?}", payload.search_type),
+        }),
+    );
 
     // Component handles for the optional session-backed sources. Both stay
     // `None` when the embedder did not wire them — the helpers gracefully

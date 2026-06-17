@@ -44,6 +44,12 @@ pub async fn post_forget(
         .resolve_mode()
         .map_err(|msg| ApiError::OntologyEnvelope(msg.into(), StatusCode::UNPROCESSABLE_ENTITY))?;
 
+    crate::telemetry::emit(
+        "Forget API Endpoint Invoked",
+        user.id,
+        serde_json::json!({ "endpoint": "POST /v1/forget" }),
+    );
+
     // ── Resolve components ────────────────────────────────────────────────
     let components = state.components().ok_or_else(|| {
         ApiError::OntologyEnvelope(

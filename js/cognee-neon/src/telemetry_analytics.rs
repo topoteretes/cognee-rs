@@ -27,34 +27,35 @@ static ARMED: OnceLock<Mutex<Option<bool>>> = OnceLock::new();
 
 /// Arm cognee product-analytics emission for this Node.js process.
 ///
-/// Default policy (gap 07 decision 11): ON unless `TELEMETRY_DISABLED`
+/// Default policy (Python-SDK parity): ON unless `TELEMETRY_DISABLED`
 /// is set, `ENV` is `"test"`/`"dev"`, or `COGNEE_HOST_SDK` is set.
 ///
-/// Returns a JS boolean — `true` if analytics were armed by this call
-/// (or a prior call), `false` if the policy suppressed emission.
-/// Idempotent.
+/// Returns a JS boolean — `true` if analytics are effective for this
+/// process, `false` if an opt-out env var suppresses them. Idempotent.
 pub fn setup_telemetry_analytics(mut cx: FunctionContext) -> JsResult<JsBoolean> {
+    Ok(cx.boolean(arm()))
+}
+
+/// Shared arming logic, callable from `#[neon::main]` so analytics are
+/// armed automatically on module load without requiring an explicit
+/// `setupTelemetryAnalytics()` call.
+///
+/// [`cognee_telemetry::env::arm_binding_emission`] is called
+/// unconditionally so the `COGNEE_HOST_SDK` clause inside
+/// [`cognee_telemetry::env::is_disabled`] is authoritative for any
+/// binding-hosted `send_telemetry` call (decision 10). Arming only ever
+/// *adds* suppression — it never enables emission. Actual emission is
+/// re-evaluated per event via `is_disabled()`.
+pub(crate) fn arm() -> bool {
     let slot = ARMED.get_or_init(|| Mutex::new(None));
     // lock poison is unrecoverable
     let mut lock = slot.lock().expect("lock poison is unrecoverable");
     if let Some(armed) = *lock {
-        return Ok(cx.boolean(armed));
+        return armed;
     }
 
-    let telemetry_disabled = std::env::var("TELEMETRY_DISABLED")
-        .map(|v| !v.is_empty())
-        .unwrap_or(false);
-    let env_test_or_dev = std::env::var("ENV")
-        .map(|v| v == "test" || v == "dev")
-        .unwrap_or(false);
-    let host_sdk = std::env::var("COGNEE_HOST_SDK")
-        .map(|v| !v.is_empty())
-        .unwrap_or(false);
-    let armed = !(telemetry_disabled || env_test_or_dev || host_sdk);
-
-    if armed {
-        cognee_telemetry::env::arm_binding_emission();
-    }
+    cognee_telemetry::env::arm_binding_emission();
+    let armed = !cognee_telemetry::env::is_disabled();
     *lock = Some(armed);
-    Ok(cx.boolean(armed))
+    armed
 }

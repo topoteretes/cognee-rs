@@ -7,6 +7,27 @@ use crate::panic_hook;
 
 static GLOBAL_RUNTIME: OnceLock<AsyncRuntime> = OnceLock::new();
 
+/// Arm product-analytics emission so the `COGNEE_HOST_SDK` clause inside
+/// `cognee_telemetry::env::is_disabled` becomes authoritative for any
+/// binding-hosted `send_telemetry` call (decision 10). Idempotent.
+///
+/// Mirrors the auto-arm the PyO3/Neon bindings perform at module load,
+/// so a C embedder gets uniform on-by-default analytics (Python-SDK
+/// parity) with `COGNEE_HOST_SDK` deferral working even without an
+/// explicit `cognee_init_telemetry()` call. Arming only ever *adds*
+/// suppression — emission is still gated per event by `is_disabled()`
+/// (`TELEMETRY_DISABLED` / `ENV` / `COGNEE_HOST_SDK`). No-op when the
+/// `telemetry` feature is disabled.
+#[cfg(feature = "telemetry")]
+#[inline]
+fn arm_telemetry_analytics() {
+    cognee_telemetry::env::arm_binding_emission();
+}
+
+#[cfg(not(feature = "telemetry"))]
+#[inline]
+fn arm_telemetry_analytics() {}
+
 fn init_runtime(rt: AsyncRuntime) -> CgErrorCode {
     match GLOBAL_RUNTIME.set(rt) {
         Ok(()) => CgErrorCode::Ok,
@@ -30,6 +51,7 @@ fn init_runtime(rt: AsyncRuntime) -> CgErrorCode {
 #[unsafe(no_mangle)]
 pub extern "C" fn cg_init() -> CgErrorCode {
     panic_hook::install_once();
+    arm_telemetry_analytics();
     match AsyncRuntime::new() {
         Ok(rt) => init_runtime(rt),
         Err(e) => {
@@ -47,6 +69,7 @@ pub extern "C" fn cg_init() -> CgErrorCode {
 #[unsafe(no_mangle)]
 pub extern "C" fn cg_init_with_threads(n: usize) -> CgErrorCode {
     panic_hook::install_once();
+    arm_telemetry_analytics();
     if n == 0 {
         set_last_error("thread count must be > 0");
         return CgErrorCode::InvalidArgument;

@@ -1,21 +1,20 @@
 //! `cognee_init_telemetry()` C entrypoint (gap 07 task 06).
 //!
-//! Argument-less, idempotent installer that arms cognee
-//! product-analytics emission for this process subject to the
-//! per-binding policy from gap 07 decision 11.
+//! Argument-less, idempotent reporter of cognee product-analytics
+//! emission state for this process (Python-SDK parity — analytics ON by
+//! default).
 //!
-//! Policy (C API is explicit-only — calling the function expresses
-//! intent to opt in):
+//! Note: `cg_init` / `cg_init_with_threads` already auto-arm analytics
+//! (see `runtime.rs::arm_telemetry_analytics`), so emission is ON by
+//! default without calling this function. `cognee_init_telemetry`
+//! re-affirms the arm and reports the effective state:
 //!
 //! * `armed` unless `TELEMETRY_DISABLED` is set, `ENV` is
 //!   `"test"`/`"dev"`, or `COGNEE_HOST_SDK` is set to any non-empty
-//!   value. The C binding has no upstream SDK convention, so it stays
-//!   explicit: callers opt in by invoking `cognee_init_telemetry`;
-//!   the function then defers to the standard env opt-outs.
+//!   value.
 //!
-//! Idempotent via `OnceLock<Mutex<Option<bool>>>` (decision 12). When
-//! the policy arms emission this calls
-//! [`cognee_telemetry::env::arm_binding_emission`] so the
+//! Idempotent via `OnceLock<Mutex<Option<bool>>>` (decision 12). It
+//! calls [`cognee_telemetry::env::arm_binding_emission`] so the
 //! `COGNEE_HOST_SDK` sentinel inside
 //! [`cognee_telemetry::env::is_disabled`] applies to any future
 //! `send_telemetry` calls originating from a binding path (decision
@@ -28,8 +27,9 @@ static ARMED: OnceLock<Mutex<Option<bool>>> = OnceLock::new();
 
 /// Arm cognee product-analytics emission for this process.
 ///
-/// Default policy (gap 07 decision 11): C bindings are explicit-only —
-/// calling this function arms emission unless the same opt-outs
+/// Default policy (Python-SDK parity): analytics are ON by default
+/// (also auto-armed by `cg_init`). This call re-affirms the arm and
+/// reports the effective state, which is armed unless the opt-outs
 /// recognized by [`cognee_telemetry::env::is_disabled`] are set
 /// (`TELEMETRY_DISABLED`, `ENV in {test, dev}`, or `COGNEE_HOST_SDK`
 /// non-empty).
@@ -55,20 +55,13 @@ pub extern "C" fn cognee_init_telemetry() -> c_int {
         return if armed { 0 } else { 1 };
     }
 
-    let telemetry_disabled = std::env::var("TELEMETRY_DISABLED")
-        .map(|v| !v.is_empty())
-        .unwrap_or(false);
-    let env_test_or_dev = std::env::var("ENV")
-        .map(|v| v == "test" || v == "dev")
-        .unwrap_or(false);
-    let host_sdk = std::env::var("COGNEE_HOST_SDK")
-        .map(|v| !v.is_empty())
-        .unwrap_or(false);
-    let armed = !(telemetry_disabled || env_test_or_dev || host_sdk);
-
-    if armed {
-        cognee_telemetry::env::arm_binding_emission();
-    }
+    // Arm unconditionally so is_disabled()'s COGNEE_HOST_SDK clause is
+    // authoritative for binding-hosted emissions (decision 10). Arming
+    // only ever *adds* suppression — it never enables emission — so it is
+    // safe even when telemetry is otherwise disabled. Actual emission is
+    // re-evaluated per event via is_disabled().
+    cognee_telemetry::env::arm_binding_emission();
+    let armed = !cognee_telemetry::env::is_disabled();
     *lock = Some(armed);
     if armed { 0 } else { 1 }
 }

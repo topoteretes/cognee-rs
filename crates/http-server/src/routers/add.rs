@@ -176,6 +176,15 @@ pub async fn post_add(
         )));
     };
 
+    crate::telemetry::emit(
+        "Add API Endpoint Invoked",
+        user.id,
+        json!({
+            "endpoint": "POST /v1/add",
+            "node_set": req.node_set,
+        }),
+    );
+
     let db = components.database.clone();
     let storage = components.storage.clone();
 

@@ -61,6 +61,15 @@ pub async fn get_visualize(
     State(state): State<AppState>,
     Query(query): Query<VisualizeQueryDTO>,
 ) -> Result<Html<String>, ApiError> {
+    crate::telemetry::emit(
+        "Visualize API Endpoint Invoked",
+        user.id,
+        serde_json::json!({
+            "endpoint": "GET /v1/visualize",
+            "dataset_id": query.dataset_id.to_string(),
+        }),
+    );
+
     let components = state.components().ok_or_else(|| {
         ApiError::VisualizeError(StatusCode::CONFLICT, "components not wired".into())
     })?;
@@ -120,10 +129,19 @@ pub async fn get_visualize(
 )]
 #[tracing::instrument(name = "cognee.api.visualize.multi", skip(state, pairs))]
 pub async fn post_visualize_multi(
-    SuperuserOnly(_user): SuperuserOnly,
+    SuperuserOnly(user): SuperuserOnly,
     State(state): State<AppState>,
     ValidatedJson(pairs): ValidatedJson<Vec<UserDatasetPairDTO>>,
 ) -> Result<Html<String>, ApiError> {
+    crate::telemetry::emit(
+        "Visualize Multi API Endpoint Invoked",
+        user.id,
+        serde_json::json!({
+            "endpoint": "POST /v1/visualize/multi",
+            "pair_count": pairs.len(),
+        }),
+    );
+
     let components = state.components().ok_or_else(|| {
         ApiError::VisualizeError(StatusCode::CONFLICT, "components not wired".into())
     })?;

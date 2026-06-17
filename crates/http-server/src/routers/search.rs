@@ -64,6 +64,12 @@ pub async fn get_search_history(
         });
     };
 
+    crate::telemetry::emit(
+        "Search API Endpoint Invoked",
+        user.id,
+        serde_json::json!({ "endpoint": "GET /v1/search" }),
+    );
+
     // Python passes `limit=0` (= no LIMIT clause). Rust's `get_history(_, None)`
     // is the equivalent — see `crates/database/src/ops/search_history.rs`.
     let entries = orchestrator
@@ -127,6 +133,26 @@ pub async fn post_search(
             detail: Some("search orchestrator is not wired".to_string()),
         });
     };
+
+    crate::telemetry::emit(
+        "Search API Endpoint Invoked",
+        user.id,
+        serde_json::json!({
+            "endpoint": "POST /v1/search",
+            "search_type": format!("{:?}", payload.search_type),
+            "datasets": payload.datasets,
+            "dataset_ids": payload
+                .dataset_ids
+                .as_ref()
+                .map(|ids| ids.iter().map(|id| id.to_string()).collect::<Vec<String>>()),
+            "query": payload.query.clone(),
+            "system_prompt": payload.system_prompt,
+            "node_name": payload.node_name,
+            "top_k": payload.top_k,
+            "only_context": payload.only_context,
+            "verbose": payload.verbose,
+        }),
+    );
 
     // top_k <= 0: Python parity per docs/http-server/routers/search.md §6 Q2.
     // Do NOT return 400 — emit a warn and let the orchestrator return [].

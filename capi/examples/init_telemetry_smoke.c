@@ -2,8 +2,9 @@
  * Gap 07 task 06 — `cognee_init_telemetry` smoke test.
  *
  * Verifies that:
- *   1. `cognee_init_telemetry` returns 0 ("armed") under the C-binding
- *      explicit-opt-in policy when no opt-out env var is set.
+ *   1. `cognee_init_telemetry` returns 0 ("armed") under the Python-SDK
+ *      parity policy (analytics ON by default) when no opt-out env var
+ *      is set.
  *   2. The function is idempotent — a second call returns the same
  *      latched decision without re-evaluating the environment.
  *

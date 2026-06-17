@@ -511,6 +511,20 @@ jobs:
         with:
           make-default: true
       - run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      # The release maturin build of the PyO3 extension compiles the whole
+      # workspace (incl. lbug) and fills the runner's ~25 GB. Free the same
+      # unused system packages as the other jobs (~10 GB headroom) to avoid the
+      # "No space left on device" failure when building lbug's rlib.
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: false
+          swap-storage: false
+          docker-images: true
       # Restore-only: the lint job saves the shared lbug C++ ccache.
       - name: ccache (lbug bundled C++, restore-only)
         uses: hendrikmuhs/ccache-action@v1.2

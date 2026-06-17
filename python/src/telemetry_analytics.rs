@@ -1,27 +1,31 @@
 //! `setup_telemetry_analytics()` PyO3 entrypoint (gap 07 task 06).
 //!
 //! Argument-less, idempotent installer that arms cognee
-//! product-analytics emission for this Python process subject to the
-//! per-binding policy from gap 07 decision 11.
+//! product-analytics emission for this Python process.
 //!
-//! Policy (Python defers identity ownership to the upstream `cognee`
-//! Python SDK):
+//! Policy (Python-SDK parity — analytics ON by default):
 //!
-//! * `armed` only if `COGNEE_RUST_TELEMETRY=1` (or `true`, case
-//!   insensitive) is set AND `COGNEE_HOST_SDK` is unset/empty.
-//! * Otherwise stays OFF — the upstream Python SDK owns identity and
-//!   emission.
+//! * `armed` unless `TELEMETRY_DISABLED` is set to any non-empty value,
+//!   OR `ENV` is `"test"` / `"dev"`, OR `COGNEE_HOST_SDK` is set to any
+//!   non-empty value.
+//!
+//! This mirrors the upstream `cognee` Python SDK, which emits telemetry
+//! by default and only honours `TELEMETRY_DISABLED` / `ENV`. The
+//! Rust-specific `COGNEE_HOST_SDK` sentinel additionally lets an
+//! embedding host SDK suppress this binding's emissions to avoid
+//! double-counting.
 //!
 //! Idempotent via the same `OnceLock<Mutex<Option<bool>>>` shape as
 //! `setup_logging` / `setup_telemetry` (decision 12). The first call
-//! latches the decision; subsequent calls return it unchanged.
+//! latches the reported decision; subsequent calls return it unchanged.
 //!
-//! When the policy arms emission this calls
-//! [`cognee_telemetry::env::arm_binding_emission`] so the
-//! `COGNEE_HOST_SDK` sentinel inside
-//! [`cognee_telemetry::env::is_disabled`] applies to any future
-//! `send_telemetry` calls originating from a binding path (decision
-//! 10).
+//! [`cognee_telemetry::env::arm_binding_emission`] is called
+//! unconditionally so the `COGNEE_HOST_SDK` clause inside
+//! [`cognee_telemetry::env::is_disabled`] is authoritative for any
+//! binding-hosted `send_telemetry` call (decision 10). Arming only ever
+//! *adds* suppression — it never enables emission — so it is safe even
+//! when telemetry is otherwise disabled. Actual emission is re-evaluated
+//! per event via `is_disabled()`.
 
 use std::sync::{Mutex, OnceLock};
 
@@ -31,35 +35,35 @@ static ARMED: OnceLock<Mutex<Option<bool>>> = OnceLock::new();
 
 /// Arm cognee product-analytics emission from this Python process.
 ///
-/// Default policy (gap 07 decision 11): analytics stay OFF unless
-/// `COGNEE_RUST_TELEMETRY=1` is set AND `COGNEE_HOST_SDK` is unset.
-/// The upstream `cognee` Python SDK owns identity emission; this
-/// binding defers to it.
+/// Default policy (Python-SDK parity): analytics are ON unless
+/// `TELEMETRY_DISABLED` is set, `ENV` is `"test"`/`"dev"`, or
+/// `COGNEE_HOST_SDK` is set.
 ///
-/// Returns `True` if analytics were armed by this call (or a prior
-/// call). Idempotent — repeated calls return the latched decision
-/// without re-evaluating the environment.
+/// Returns `True` if analytics are effective for this process,
+/// `False` if an opt-out env var suppresses them. Idempotent —
+/// repeated calls return the latched decision without re-evaluating
+/// the environment.
 #[pyfunction]
 pub fn setup_telemetry_analytics() -> PyResult<bool> {
+    Ok(arm())
+}
+
+/// Shared arming logic, callable from the `#[pymodule]` init so
+/// analytics are armed automatically on import (Python-SDK parity)
+/// without requiring the caller to invoke `setup_telemetry_analytics`.
+pub(crate) fn arm() -> bool {
     let slot = ARMED.get_or_init(|| Mutex::new(None));
     // lock poison is unrecoverable
     #[allow(clippy::expect_used, reason = "lock poison is unrecoverable")]
     let mut lock = slot.lock().expect("lock poison is unrecoverable");
     if let Some(armed) = *lock {
-        return Ok(armed);
+        return armed;
     }
 
-    let opt_in = std::env::var("COGNEE_RUST_TELEMETRY")
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false);
-    let host_sdk = std::env::var("COGNEE_HOST_SDK")
-        .map(|v| !v.is_empty())
-        .unwrap_or(false);
-    let armed = opt_in && !host_sdk;
-
-    if armed {
-        cognee_telemetry::env::arm_binding_emission();
-    }
+    // Arm unconditionally so is_disabled()'s COGNEE_HOST_SDK clause is
+    // authoritative for binding-hosted emissions (decision 10).
+    cognee_telemetry::env::arm_binding_emission();
+    let armed = !cognee_telemetry::env::is_disabled();
     *lock = Some(armed);
-    Ok(armed)
+    armed
 }

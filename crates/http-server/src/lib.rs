@@ -27,6 +27,7 @@ pub mod responses_dispatch;
 pub mod routers;
 pub mod state;
 pub mod sync;
+pub mod telemetry;
 pub mod wiring;
 
 pub use config::HttpServerConfig;

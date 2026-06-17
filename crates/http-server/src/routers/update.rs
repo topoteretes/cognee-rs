@@ -93,6 +93,17 @@ pub async fn patch_update(
             "Component handles not initialized"
         )));
     };
+
+    crate::telemetry::emit(
+        "Update API Endpoint Invoked",
+        user.id,
+        serde_json::json!({
+            "endpoint": "PATCH /v1/update",
+            "dataset_id": query.dataset_id.to_string(),
+            "data_id": query.data_id.to_string(),
+        }),
+    );
+
     let components_arc = components.clone();
     let db = components_arc.database.clone();
 

@@ -48,6 +48,12 @@ pub async fn list_datasets(
     user: AuthenticatedUser,
     State(state): State<AppState>,
 ) -> Result<axum::response::Response, ApiError> {
+    crate::telemetry::emit(
+        "Datasets API Endpoint Invoked",
+        user.id,
+        serde_json::json!({ "endpoint": "GET /v1/datasets" }),
+    );
+
     let db = state
         .components()
         .ok_or_else(|| {
@@ -102,6 +108,15 @@ pub async fn get_dataset_status(
         return Ok(Json(HashMap::new()));
     }
 
+    crate::telemetry::emit(
+        "Datasets API Endpoint Invoked",
+        user.id,
+        serde_json::json!({
+            "endpoint": "GET /v1/datasets/status",
+            "datasets": query.dataset.iter().map(|d| d.to_string()).collect::<Vec<String>>(),
+        }),
+    );
+
     let components = state.components().ok_or_else(|| {
         ApiError::WriteEnvelopeError("components not initialized".into(), StatusCode::CONFLICT)
     })?;
@@ -153,6 +168,15 @@ pub async fn get_dataset_data(
     State(state): State<AppState>,
     Path(dataset_id): Path<Uuid>,
 ) -> Result<axum::response::Response, ApiError> {
+    crate::telemetry::emit(
+        "Datasets API Endpoint Invoked",
+        user.id,
+        serde_json::json!({
+            "endpoint": format!("GET /v1/datasets/{}/data", dataset_id),
+            "dataset_id": dataset_id.to_string(),
+        }),
+    );
+
     let components = state.components().ok_or_else(|| {
         ApiError::ErrorMessageError(
             format!("Dataset ({dataset_id}) not found."),
@@ -203,6 +227,16 @@ pub async fn get_raw_data(
     State(state): State<AppState>,
     Path((dataset_id, data_id)): Path<(Uuid, Uuid)>,
 ) -> Result<axum::response::Response, ApiError> {
+    crate::telemetry::emit(
+        "Datasets API Endpoint Invoked",
+        user.id,
+        serde_json::json!({
+            "endpoint": format!("GET /v1/datasets/{}/data/{}/raw", dataset_id, data_id),
+            "dataset_id": dataset_id.to_string(),
+            "data_id": data_id.to_string(),
+        }),
+    );
+
     let components = state
         .components()
         .ok_or_else(|| ApiError::NotFound(format!("Dataset ({dataset_id}) not found.")))?;
@@ -341,6 +375,12 @@ pub async fn create_new_dataset(
     State(state): State<AppState>,
     Json(payload): Json<DatasetCreationPayload>,
 ) -> Result<Json<DatasetDTO>, ApiError> {
+    crate::telemetry::emit(
+        "Datasets API Endpoint Invoked",
+        user.id,
+        serde_json::json!({ "endpoint": "POST /v1/datasets" }),
+    );
+
     let db = state
         .components()
         .ok_or_else(|| {
@@ -452,6 +492,15 @@ pub async fn delete_dataset(
     State(state): State<AppState>,
     Path(dataset_id): Path<Uuid>,
 ) -> Result<Json<Option<()>>, ApiError> {
+    crate::telemetry::emit(
+        "Datasets API Endpoint Invoked",
+        user.id,
+        serde_json::json!({
+            "endpoint": format!("DELETE /v1/datasets/{}", dataset_id),
+            "dataset_id": dataset_id.to_string(),
+        }),
+    );
+
     let components = state
         .components()
         .ok_or_else(|| ApiError::NotFound(format!("Dataset ({dataset_id}) not accessible.")))?;
@@ -493,6 +542,16 @@ pub async fn delete_data_item(
     State(state): State<AppState>,
     Path((dataset_id, data_id)): Path<(Uuid, Uuid)>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
+    crate::telemetry::emit(
+        "Datasets API Endpoint Invoked",
+        user.id,
+        serde_json::json!({
+            "endpoint": format!("DELETE /v1/datasets/{}/data/{}", dataset_id, data_id),
+            "dataset_id": dataset_id.to_string(),
+            "data_id": data_id.to_string(),
+        }),
+    );
+
     let components = state
         .components()
         .ok_or_else(|| ApiError::NotFound(format!("Dataset/Data ({data_id}) not accessible.")))?;

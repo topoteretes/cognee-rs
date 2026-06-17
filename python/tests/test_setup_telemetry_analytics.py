@@ -1,10 +1,11 @@
 """Verify the per-binding analytics policy for the PyO3 binding
-(decision 11): Python defaults analytics OFF; opt-in via
-``COGNEE_RUST_TELEMETRY=1``; ``COGNEE_HOST_SDK`` suppresses the opt-in.
+(Python-SDK parity): Python defaults analytics **ON**; emission is
+suppressed only by ``TELEMETRY_DISABLED``, ``ENV`` in {test, dev}, or
+``COGNEE_HOST_SDK`` (the host-SDK deferral sentinel).
 
-``setup_telemetry_analytics`` installs a process-global latched flag.
-Each scenario therefore runs in its own subprocess so the latch does
-not leak between cases.
+Analytics are armed automatically on import; ``setup_telemetry_analytics``
+reports the latched effective state. Each scenario therefore runs in its
+own subprocess so the latch does not leak between cases.
 """
 import os
 import subprocess
@@ -36,26 +37,32 @@ def _run_in_subprocess(env_extra: dict) -> str:
 
 
 @pytest.mark.serial
-def test_default_is_off():
-    out = _run_in_subprocess({"COGNEE_RUST_TELEMETRY": "", "COGNEE_HOST_SDK": ""})
-    assert out == "armed=False", out
-
-
-@pytest.mark.serial
-def test_opt_in_arms():
-    out = _run_in_subprocess({"COGNEE_RUST_TELEMETRY": "1", "COGNEE_HOST_SDK": ""})
+def test_default_is_on():
+    out = _run_in_subprocess(
+        {"TELEMETRY_DISABLED": "", "ENV": "", "COGNEE_HOST_SDK": ""}
+    )
     assert out == "armed=True", out
 
 
 @pytest.mark.serial
-def test_host_sdk_suppresses_opt_in():
-    out = _run_in_subprocess({"COGNEE_RUST_TELEMETRY": "1", "COGNEE_HOST_SDK": "python"})
+def test_telemetry_disabled_suppresses():
+    out = _run_in_subprocess({"TELEMETRY_DISABLED": "1", "COGNEE_HOST_SDK": ""})
     assert out == "armed=False", out
 
 
 @pytest.mark.serial
-def test_true_value_also_arms():
-    """The implementation also accepts ``true`` (case-insensitive) as
-    an opt-in value — locked in via the policy doc."""
-    out = _run_in_subprocess({"COGNEE_RUST_TELEMETRY": "true", "COGNEE_HOST_SDK": ""})
-    assert out == "armed=True", out
+def test_env_test_suppresses():
+    out = _run_in_subprocess({"ENV": "test", "TELEMETRY_DISABLED": ""})
+    assert out == "armed=False", out
+
+
+@pytest.mark.serial
+def test_env_dev_suppresses():
+    out = _run_in_subprocess({"ENV": "dev", "TELEMETRY_DISABLED": ""})
+    assert out == "armed=False", out
+
+
+@pytest.mark.serial
+def test_host_sdk_suppresses():
+    out = _run_in_subprocess({"COGNEE_HOST_SDK": "python", "TELEMETRY_DISABLED": ""})
+    assert out == "armed=False", out

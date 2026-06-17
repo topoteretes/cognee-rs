@@ -40,6 +40,12 @@ async fn get_list(
         return Ok(Json(vec![]));
     };
 
+    crate::telemetry::emit(
+        "Api Key Management API Endpoint Invoked",
+        user.id,
+        serde_json::json!({ "endpoint": "GET /v1/auth/api-keys" }),
+    );
+
     let keys = api_keys_service::list(auth, user.id).await?;
 
     let items: Vec<ApiKeyListItemDTO> = keys
@@ -74,6 +80,12 @@ async fn post_create(
         )));
     };
 
+    crate::telemetry::emit(
+        "Api Key Management API Endpoint Invoked",
+        user.id,
+        serde_json::json!({ "endpoint": "POST /v1/auth/api-keys" }),
+    );
+
     let new_key = api_keys_service::create(auth, user.id, payload.name).await?;
 
     Ok(Json(ApiKeyCreatedDTO {
@@ -98,6 +110,12 @@ async fn delete_one(
             "Auth context not configured"
         )));
     };
+
+    crate::telemetry::emit(
+        "Api Key Management API Endpoint Invoked",
+        user.id,
+        serde_json::json!({ "endpoint": "DELETE /v1/auth/api-keys" }),
+    );
 
     api_keys_service::delete(auth, user.id, api_key_id).await?;
 

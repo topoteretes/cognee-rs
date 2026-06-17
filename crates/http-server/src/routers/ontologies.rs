@@ -37,6 +37,12 @@ pub async fn get_list(
     user: AuthenticatedUser,
     State(state): State<AppState>,
 ) -> Result<Json<OntologyListResponseDTO>, ApiError> {
+    crate::telemetry::emit(
+        "Ontology List API Endpoint Invoked",
+        user.id,
+        serde_json::json!({ "endpoint": "GET /api/v1/ontologies" }),
+    );
+
     let manager = state
         .components()
         .ok_or_else(|| {
@@ -84,6 +90,12 @@ pub async fn post_upload(
     State(state): State<AppState>,
     multipart: Multipart,
 ) -> Result<Json<OntologyUploadResponseDTO>, ApiError> {
+    crate::telemetry::emit(
+        "Ontology Upload API Endpoint Invoked",
+        user.id,
+        serde_json::json!({ "endpoint": "POST /api/v1/ontologies" }),
+    );
+
     let request_id = uuid::Uuid::new_v4().to_string();
     let opts = MultipartOpts::default();
     let mut parsed = parse_multipart(multipart, &opts, &request_id).await?;

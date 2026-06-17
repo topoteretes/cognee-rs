@@ -45,6 +45,15 @@ pub async fn post_sync(
     user: AuthenticatedUser,
     Json(req): Json<SyncRequestDTO>,
 ) -> Result<Response, ApiError> {
+    {
+        let mut props = serde_json::json!({ "endpoint": "POST /v1/sync" });
+        if let Some(ref ids) = req.dataset_ids {
+            props["dataset_ids"] =
+                serde_json::json!(ids.iter().map(|u| u.to_string()).collect::<Vec<String>>());
+        }
+        crate::telemetry::emit("Cloud Sync API Endpoint Invoked", user.id, props);
+    }
+
     let handles = state
         .components()
         .ok_or_else(|| ApiError::Internal(anyhow::anyhow!("components not initialized")))?;
@@ -230,6 +239,12 @@ pub async fn post_sync(
 
 /// `GET /api/v1/sync/status` — overview of running syncs for the caller.
 pub async fn get_status(State(state): State<AppState>, user: AuthenticatedUser) -> Response {
+    crate::telemetry::emit(
+        "Sync Status Overview API Endpoint Invoked",
+        user.id,
+        serde_json::json!({ "endpoint": "GET /v1/sync/status" }),
+    );
+
     let Some(handles) = state.components() else {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
