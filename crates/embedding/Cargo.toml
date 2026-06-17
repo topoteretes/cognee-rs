@@ -39,3 +39,12 @@ tokenizers  = { workspace = true, optional = true }
 [dev-dependencies]
 serial_test = { workspace = true }
 tempfile = { workspace = true }
+
+# The integration test exercises the ONNX engine (config::OnnxEmbeddingConfig,
+# onnx::OnnxEmbeddingEngine), which only exist under the `onnx` feature. Gate it
+# so `cargo check -p cognee-embedding --all-targets` (no features) does not fail
+# to compile it. At the workspace level `onnx` is unified on (cognee-lib enables
+# it by default), so the test still builds and runs there.
+[[test]]
+name = "integration"
+required-features = ["onnx"]
