@@ -17,8 +17,13 @@ the full check suite (including the language-binding checks) so nothing regresse
 ## Expected output
 
 - `docs/performance/mock-benchmark.md` — a how-to that ties the pieces together.
-- A regeneration entry point (`scripts/perf/README.md` and/or a justfile/Make
-  target `perf-record` / `perf-report`).
+  This is the only **new** doc T9 writes. The regeneration entry point already
+  exists: T8 committed `scripts/perf/README.md` (covers the "run offline
+  benchmark", "regenerate the cassette / `perf-record`" commands and the
+  `RUNS`/`COGNEE_PY`/`BENCH_BIN`/`CASSETTE`/`MEMORIES` env overrides). T9 must
+  **link to** `scripts/perf/README.md` from the how-to, not duplicate it.
+- One genuinely missing test (see step 3): a smoke test that `LlmCassette::load`
+  accepts the committed T8 fixture `scripts/perf/fixtures/cassette.json`.
 - Green: `scripts/check_all.sh`.
 - Project bookkeeping updated (root README "Implemented" list, `CLAUDE.md` if a
   new feature/crate surface was added).
@@ -30,24 +35,43 @@ the full check suite (including the language-binding checks) so nothing regresse
      [python-approach.md](../python-approach.md) §6 for the diagram).
    - Env vars: `MOCK_LLM`, `MOCK_LLM_CASSETTE`, `COGNEE_RECORD_LLM`,
      `MOCK_EMBEDDING=deterministic`.
-   - Commands: how to run a single mock bench (`cognee-cli bench --mock-llm …`),
-     how to run the N-run percentile report (`scripts/perf/run_mock_bench.sh`),
-     and how to **refresh the cassette** when prompts/corpus change (the T8
-     record command).
+   - Commands: how to run a single mock bench (`cognee-cli bench --mock-llm
+     --mock-memories <cassette> --memories <corpus> --output <file>`; the
+     cassette path can also come from `MOCK_LLM_CASSETTE`), how to run the
+     N-run percentile report (`scripts/perf/run_mock_bench.sh`, e.g.
+     `RUNS=3 scripts/perf/run_mock_bench.sh`), and — for refreshing the cassette
+     when prompts/corpus change — **link to** the `## Regenerating the cassette
+     (perf-record)` section in [`scripts/perf/README.md`](../../scripts/perf/README.md)
+     (the `COGNEE_RECORD_LLM=…` record command), rather than re-documenting it.
    - How to read the output (table columns, the HTML report location).
-   - The feature flags (`mock-llm`, `bench`) and when they're on.
+   - The feature flags: `mock` (in `cognee-llm`, surfaced as `mock-llm` in
+     `cognee-lib`/`cognee-cli`) and `bench` (in `cognee-cli`) — both default-on,
+     and how to turn them off.
 
-2. **Cross-link.** Update [README.md](../README.md) statuses to `Implemented` as
-   each task lands, and add a one-line pointer to `docs/performance/` from the
-   root `README.md` "Implemented" section / docs index if one exists.
+2. **Cross-link.** In [README.md](../README.md) (the task index), flip the **T9**
+   row to `Implemented` — T1–T8 are already marked `Implemented`. Add a one-line
+   pointer to `docs/performance/` from the root `README.md` "Implemented" section
+   / docs index if one exists.
 
-3. **Test inventory.** Confirm coverage exists from earlier tasks and fill gaps:
-   - T1 hashing + cassette serde (unit).
-   - T2/T3 record→replay round-trip (unit).
-   - T3 miss-policy branches (unit).
-   - T5 deterministic vectors (unit).
-   - T6 CLI bench smoke test, offline (integration).
-   - A test that `LlmCassette::load` accepts the committed T8 fixture.
+3. **Test inventory.** The following coverage **already exists** from earlier
+   tasks — confirm it still passes, do not re-add it:
+   - T1 hashing + cassette serde — `crates/llm/src/mock/cassette.rs` `mod tests`
+     (`input_hash_*`, `canonicalize_*`, `cassette_round_trips_through_save_load`).
+   - T2/T3 record→replay round-trip — `crates/llm/src/mock/recording.rs` and
+     `replay.rs` `mod tests` (`records_structured_output_entry`,
+     `record_then_replay_round_trip`, …).
+   - T3 miss-policy branches — `crates/llm/src/mock/replay.rs`
+     (`miss_empty_graph_*`, `miss_error_returns_err`, …).
+   - T5 deterministic vectors — `crates/embedding/src/mock.rs`
+     (`test_deterministic_*`) and `config.rs`
+     (`test_from_env_mock_embedding_deterministic`).
+   - T6 CLI bench smoke test, offline — `crates/cli/tests/cli_bench.rs`
+     (`test_bench_mock_offline_smoke`, `test_bench_help`,
+     `test_bench_num_memories_truncates`).
+
+   The **only genuinely missing** test T9 should add:
+   - A test that `LlmCassette::load` accepts the committed T8 fixture
+     `scripts/perf/fixtures/cassette.json` (no existing test references it).
 
 4. **Feature-matrix check.** Verify builds with the mock/bench features both on
    and off:

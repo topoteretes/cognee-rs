@@ -35,7 +35,7 @@ wiring). T5 is independent. T6 → T7 → T8 depend on T4. T9 is last.
 | T6 | `cognee-cli bench` subcommand | Phase-timed `prune → setup → add → cognify → search` driver emitting the exact JSON contract; gated behind a `bench` feature. | Implemented | [task-06-cli-bench-subcommand.md](tasks/task-06-cli-bench-subcommand.md) |
 | T7 | Reuse the Python orchestrator | `BENCH_CMD` override on `../cognee/.../statistics_percentile_report.py` + a wrapper script that drives the Rust CLI through it. | Implemented | [task-07-python-orchestrator.md](tasks/task-07-python-orchestrator.md) |
 | T8 | Cassette fixture & corpus | Record a cassette once against a real LLM and commit it (+ a `memories.json` corpus) so mock benches need no API key. | Implemented | [task-08-cassette-fixture.md](tasks/task-08-cassette-fixture.md) |
-| T9 | Docs & verification | User-facing how-to doc + unit/smoke tests + `scripts/check_all.sh`. | Not implemented | [task-09-docs-verification.md](tasks/task-09-docs-verification.md) |
+| T9 | Docs & verification | User-facing how-to doc + unit/smoke tests + `scripts/check_all.sh`. | Implemented | [task-09-docs-verification.md](tasks/task-09-docs-verification.md) |
 
 ## Conventions
 
