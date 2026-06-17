@@ -29,6 +29,62 @@ pub enum Commands {
     Serve(ServeArgs),
     #[cfg(feature = "cloud")]
     Disconnect(DisconnectArgs),
+    #[cfg(feature = "bench")]
+    Bench(BenchArgs),
+}
+
+/// Arguments for `cognee-cli bench` — the performance orchestrator driver.
+///
+/// Mirrors the Python `bench_cognee.py` flags so the same orchestrator
+/// (`statistics_percentile_report.py`) can drive either SDK and reuse the
+/// reporter unchanged. Runs the full `prune → setup → add → cognify → search`
+/// pipeline once, timing each phase, and writes the result JSON to `--output`.
+#[cfg(feature = "bench")]
+#[derive(Debug, Args)]
+pub struct BenchArgs {
+    /// JSON corpus file: an array of `{title, content, references}` objects.
+    #[arg(long = "memories")]
+    pub memories: String,
+
+    /// Cassette path for the replay mock LLM (used when `--mock-llm` is set).
+    #[arg(long = "mock-memories")]
+    pub mock_memories: Option<String>,
+
+    /// LLM model (default: configured/env value).
+    #[arg(long = "llm-model")]
+    pub llm_model: Option<String>,
+
+    /// LLM provider (default: configured/env value).
+    #[arg(long = "llm-provider")]
+    pub llm_provider: Option<String>,
+
+    /// Embedding model (default: configured/env value).
+    #[arg(long = "embedding-model")]
+    pub embedding_model: Option<String>,
+
+    /// Embedding provider (default: configured/env value).
+    #[arg(long = "embedding-provider")]
+    pub embedding_provider: Option<String>,
+
+    /// Embedding dimensions (default: configured/env value).
+    #[arg(long = "embedding-dims")]
+    pub embedding_dims: Option<u32>,
+
+    /// Limit the number of memories loaded from the corpus (default: all).
+    #[arg(long = "num-memories")]
+    pub num_memories: Option<usize>,
+
+    /// Use the deterministic mock LLM + mock embeddings instead of real APIs.
+    #[arg(long = "mock-llm", default_value_t = false)]
+    pub mock_llm: bool,
+
+    /// Dataset name to add/cognify/search against.
+    #[arg(long = "dataset-name", default_value = "bench_memories")]
+    pub dataset_name: String,
+
+    /// Write the result JSON to this file.
+    #[arg(long = "output", short = 'o')]
+    pub output: Option<String>,
 }
 
 #[cfg(feature = "visualization")]

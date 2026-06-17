@@ -42,6 +42,10 @@ fn dispatch(command: Commands, cm: &Arc<ComponentManager>) -> Result<(), CliErro
         Commands::Serve(args) => serve::run(args, Arc::clone(cm)),
         #[cfg(feature = "cloud")]
         Commands::Disconnect(args) => disconnect::run(args, Arc::clone(cm)),
+        #[cfg(feature = "bench")]
+        Commands::Bench(_) => Err(CliError::Validation(
+            "bench is not allowed inside run-sequence".to_string(),
+        )),
     }
 }
 
