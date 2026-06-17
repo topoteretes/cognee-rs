@@ -1110,6 +1110,7 @@ pub async fn add_data_points(
             &input.entities,
             &input.edges,
             &input.summaries,
+            &input.documents,
             &structural_edges,
         )
         .await?;
@@ -2307,6 +2308,7 @@ async fn upsert_provenance(
     entities: &[GraphNodePair],
     edges: &[GraphEdgePair],
     summaries: &[TextSummary],
+    documents: &[Document],
     structural_edges: &[EdgeData],
 ) -> Result<(), CognifyError> {
     use cognee_database::ops::graph_storage;
@@ -2440,6 +2442,43 @@ async fn upsert_provenance(
                 .cloned()
                 .unwrap_or(json!(["name"])),
             attributes: serde_json::to_value(et).ok(),
+            created_at: Utc::now(),
+        });
+    }
+
+    // Documents. Python reaches the Document node by recursively walking each
+    // DocumentChunk's `is_part_of` (a full Document DataPoint), so the Document
+    // lands in `nodes` and `upsert_nodes(nodes, …)` writes its provenance row
+    // keyed with the ctx `data_item.id`. Rust stores Documents explicitly (see
+    // `add_data_points`), so we must register their provenance here too —
+    // otherwise the Document graph node (slug == its id == the source Data
+    // item's id) is never matched by the delete cleanup and leaks on hard
+    // delete. The Document's id IS the Data item's id, so `data_id` = its id.
+    for document in documents {
+        let data_id = document.base.id;
+
+        let indexed_fields = document
+            .base
+            .get_metadata("index_fields")
+            .cloned()
+            .unwrap_or(json!(["name"]));
+
+        let label = if document.name.is_empty() {
+            document.base.id.to_string()
+        } else {
+            document.name.clone()
+        };
+
+        prov_nodes.push(GraphNode {
+            id: provenance_node_id(tenant_id, user_id, dataset_id, data_id, document.base.id),
+            slug: document.base.id,
+            user_id,
+            data_id,
+            dataset_id,
+            label: Some(label),
+            node_type: document.base.data_type.clone(),
+            indexed_fields,
+            attributes: serde_json::to_value(document).ok(),
             created_at: Utc::now(),
         });
     }
