@@ -87,7 +87,15 @@ if [ ! -f "$ALEMBIC_INI" ]; then
     echo "[start_servers] ERROR: alembic.ini not found at $ALEMBIC_INI — aborting startup" >&2
     exit 1
 fi
-(cd "$PY_WORKSPACE" && python -m alembic -c "$ALEMBIC_INI" stamp head 2>&1) \
+# alembic resolves a relative `script_location` (cognee's alembic.ini uses
+# `script_location = alembic`) against the *current working directory*, not
+# against alembic.ini. Running from $PY_WORKSPACE therefore fails with
+# "Path doesn't exist: alembic". Run the stamp from the directory that holds
+# alembic.ini (and its `alembic/` migrations folder). The target DB comes from
+# cognee's settings (absolute *_ROOT_DIRECTORY env vars), so the working
+# directory does not change which database is stamped.
+ALEMBIC_DIR="$(dirname "$ALEMBIC_INI")"
+(cd "$ALEMBIC_DIR" && python -m alembic -c "$ALEMBIC_INI" stamp head 2>&1) \
     || { echo "[start_servers] ERROR: alembic stamp head failed — aborting startup" >&2; exit 1; }
 echo "[start_servers] alembic stamp head succeeded."
 
