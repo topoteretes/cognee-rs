@@ -14,6 +14,8 @@ pub enum LlmProvider {
     Mistral,
     Bedrock,
     Local,
+    /// Record/replay cassette-based mock LLM (selected via `MOCK_LLM`).
+    Mock,
 }
 
 /// LLM configuration.

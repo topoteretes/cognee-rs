@@ -487,7 +487,16 @@ impl ComponentManager {
 
     async fn init_llm(&self) -> Result<Arc<dyn Llm>, ComponentError> {
         // Clone all needed fields out of the read guard before any await.
-        let (provider, llm_model, llm_api_key, llm_endpoint, llm_max_retries) = {
+        let (
+            provider,
+            llm_model,
+            llm_api_key,
+            llm_endpoint,
+            llm_max_retries,
+            llm_mock,
+            llm_cassette,
+            llm_record_path,
+        ) = {
             let s = self.config.read();
             (
                 s.llm_provider.to_lowercase(),
@@ -495,10 +504,45 @@ impl ComponentManager {
                 s.llm_api_key.clone(),
                 s.llm_endpoint.clone(),
                 s.llm_max_retries,
+                s.llm_mock,
+                s.llm_cassette.clone(),
+                s.llm_record_path.clone(),
             )
         };
 
-        match provider.as_str() {
+        // `llm_cassette` is only consumed on the mock path; silence the
+        // unused-variable lint in builds without the `mock` feature.
+        #[cfg(not(feature = "mock-llm"))]
+        let _ = &llm_cassette;
+
+        // Mock first — like MOCK_EMBEDDING, this overrides the configured
+        // provider. Selected by `MOCK_LLM` (llm_mock) or `llm_provider=mock`.
+        if llm_mock || provider == "mock" {
+            #[cfg(feature = "mock-llm")]
+            {
+                let cassette = llm_cassette.trim();
+                if cassette.is_empty() {
+                    return Err(ComponentError::Config(
+                        "MOCK_LLM is set but MOCK_LLM_CASSETTE is empty; set it to a cassette path"
+                            .to_string(),
+                    ));
+                }
+                let replay = cognee_llm::mock::ReplayLlm::from_path(cassette)
+                    .map_err(|e| ComponentError::Llm(format!("mock cassette load failed: {e}")))?;
+                return Ok(Arc::new(replay));
+            }
+            #[cfg(not(feature = "mock-llm"))]
+            {
+                return Err(ComponentError::Config(
+                    "MOCK_LLM was requested but the mock LLM is unavailable; \
+                     rebuild with the `mock-llm` feature"
+                        .to_string(),
+                ));
+            }
+        }
+
+        // Build the real adapter exactly as before.
+        let adapter: Arc<dyn Llm> = match provider.as_str() {
             "openai" => {
                 if llm_api_key.is_empty() {
                     return Err(ComponentError::Config(
@@ -519,7 +563,7 @@ impl ComponentManager {
                     .with_structured_output_retries(retries)
                     .with_network_retries(retries);
 
-                Ok(Arc::new(adapter))
+                Arc::new(adapter)
             }
             "litert" => {
                 #[cfg(all(feature = "android-litert", target_os = "android"))]
@@ -541,21 +585,46 @@ impl ComponentManager {
                     let adapter = LiteRtAdapter::new(model_path.to_string(), backend)
                         .map_err(|e| ComponentError::Llm(format!("initialization failed: {e}")))?;
 
-                    Ok(Arc::new(adapter))
+                    Arc::new(adapter)
                 }
 
                 #[cfg(not(all(feature = "android-litert", target_os = "android")))]
                 {
-                    Err(ComponentError::Config(
+                    return Err(ComponentError::Config(
                         "llm_provider=litert requires Android target and the `android-litert` crate feature"
                             .to_string(),
-                    ))
+                    ));
                 }
             }
-            _ => Err(ComponentError::Config(format!(
-                "Unsupported llm_provider '{provider}'. Supported: openai, litert.",
-            ))),
+            _ => {
+                return Err(ComponentError::Config(format!(
+                    "Unsupported llm_provider '{provider}'. Supported: openai, litert, mock.",
+                )));
+            }
+        };
+
+        // Optional recording wrap (`COGNEE_RECORD_LLM`). Only the real adapter is
+        // worth recording — replaying a recording of a mock is pointless.
+        if !llm_record_path.trim().is_empty() {
+            #[cfg(feature = "mock-llm")]
+            {
+                let recorder = cognee_llm::mock::RecordingLlm::new(
+                    adapter,
+                    llm_record_path.trim().to_string(),
+                );
+                return Ok(Arc::new(recorder));
+            }
+            #[cfg(not(feature = "mock-llm"))]
+            {
+                return Err(ComponentError::Config(
+                    "COGNEE_RECORD_LLM was set but LLM recording is unavailable; \
+                     rebuild with the `mock-llm` feature"
+                        .to_string(),
+                ));
+            }
         }
+
+        Ok(adapter)
     }
 
     async fn init_transcriber(&self) -> Result<Option<Arc<dyn Transcriber>>, ComponentError> {
@@ -838,6 +907,116 @@ mod tests {
         assert!(
             err_msg.contains("postgres"),
             "error message should list 'postgres' as supported: {err_msg}"
+        );
+    }
+
+    // -- Mock LLM factory wiring (MOCK_LLM / COGNEE_RECORD_LLM) ----------------
+
+    /// Write a minimal valid cassette to a temp file and return (dir, path).
+    #[cfg(feature = "mock-llm")]
+    fn write_cassette() -> (tempfile::TempDir, std::path::PathBuf) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("cassette.json");
+        // A schema-valid, empty cassette: the replay mock falls back to its
+        // default EmptyGraph miss policy, so the pipeline runs with no entries.
+        let body = r#"{"version":1,"model":"mock-model","entries":{}}"#;
+        std::fs::write(&path, body).expect("write cassette");
+        (dir, path)
+    }
+
+    #[cfg(feature = "mock-llm")]
+    #[tokio::test]
+    async fn init_llm_uses_replay_mock_when_llm_mock_set_without_api_key() {
+        let (_dir, cassette) = write_cassette();
+        // No api_key and a non-openai-ready config — the mock must override.
+        let settings = Settings {
+            llm_mock: true,
+            llm_cassette: cassette.to_string_lossy().into_owned(),
+            llm_api_key: String::new(),
+            ..Settings::default()
+        };
+        let cm = ComponentManager::new(ConfigManager::new(settings));
+        let llm = cm.llm().await.expect("mock llm should initialize offline");
+        assert_eq!(
+            llm.model(),
+            "mock-model",
+            "replay mock reports cassette model"
+        );
+        // A generate() call must succeed offline (empty response on cache miss).
+        let resp = llm
+            .generate(
+                vec![cognee_llm::Message {
+                    role: cognee_llm::MessageRole::User,
+                    content: "hello".to_string(),
+                }],
+                None,
+            )
+            .await
+            .expect("offline generate should succeed");
+        assert_eq!(resp.model, "mock-model");
+    }
+
+    #[cfg(feature = "mock-llm")]
+    #[tokio::test]
+    async fn init_llm_selects_mock_when_provider_is_mock() {
+        let (_dir, cassette) = write_cassette();
+        let settings = Settings {
+            llm_provider: "mock".to_string(),
+            llm_cassette: cassette.to_string_lossy().into_owned(),
+            llm_api_key: String::new(),
+            ..Settings::default()
+        };
+        let cm = ComponentManager::new(ConfigManager::new(settings));
+        let llm = cm
+            .llm()
+            .await
+            .expect("provider=mock should initialize offline");
+        assert_eq!(llm.model(), "mock-model");
+    }
+
+    #[cfg(feature = "mock-llm")]
+    #[tokio::test]
+    async fn init_llm_errors_when_mock_set_but_cassette_empty() {
+        let settings = Settings {
+            llm_mock: true,
+            llm_cassette: String::new(),
+            ..Settings::default()
+        };
+        let cm = ComponentManager::new(ConfigManager::new(settings));
+        let err = match cm.llm().await {
+            Err(e) => e,
+            Ok(_) => panic!("empty cassette must error"),
+        };
+        assert!(
+            err.to_string().contains("MOCK_LLM_CASSETTE"),
+            "error should mention the missing cassette env: {err}"
+        );
+    }
+
+    #[cfg(feature = "mock-llm")]
+    #[tokio::test]
+    async fn init_llm_wraps_real_adapter_in_recorder_when_record_path_set() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let record_path = dir.path().join("recorded.json");
+        // Real openai provider + a record path → wrapped in RecordingLlm.
+        let settings = Settings {
+            llm_provider: "openai".to_string(),
+            llm_api_key: "sk-test".to_string(),
+            llm_model: "gpt-4o-mini".to_string(),
+            llm_record_path: record_path.to_string_lossy().into_owned(),
+            ..Settings::default()
+        };
+        let cm = ComponentManager::new(ConfigManager::new(settings));
+        // Construction must succeed (no network call happens at init time);
+        // the recorder model() delegates to the wrapped openai adapter.
+        let llm = cm
+            .llm()
+            .await
+            .expect("recording wrap should initialize without network");
+        assert_eq!(
+            llm.model(),
+            "gpt-4o-mini",
+            "recorder delegates model() to the wrapped adapter"
         );
     }
 }

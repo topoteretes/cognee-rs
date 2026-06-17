@@ -27,11 +27,13 @@ default = [
     "unstructured",
     "visualization",
     "cloud",
+    "mock-llm",
     # decision 1: telemetry is ON by default in cognee-cli. Disable with
     # --no-default-features for compile-time opt-out.
     "telemetry",
 ]
 cloud         = ["cognee-lib/cloud"]
+mock-llm      = ["cognee-lib/mock-llm"]
 onnx          = ["cognee-lib/onnx"]
 ladybug       = ["cognee-lib/ladybug"]
 qdrant        = ["cognee-lib/qdrant"]

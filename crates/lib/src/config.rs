@@ -39,6 +39,17 @@ pub struct Settings {
     pub llm_max_completion_tokens: u32,
     pub llm_max_retries: u32,
     pub llm_max_parallel_requests: u32,
+
+    /// Select the record/replay mock LLM instead of the real provider
+    /// (`MOCK_LLM`). Parallels `MOCK_EMBEDDING`. Requires the `mock-llm` feature.
+    pub llm_mock: bool,
+    /// Cassette path for the replay mock when `llm_mock` is set (`MOCK_LLM_CASSETTE`).
+    /// Empty = unset.
+    pub llm_cassette: String,
+    /// When non-empty, wrap the real adapter in a recording mock that writes a
+    /// cassette to this path (`COGNEE_RECORD_LLM`). Empty = unset.
+    pub llm_record_path: String,
+
     pub graph_prompt_path: String,
 
     pub graph_database_provider: String,
@@ -245,6 +256,17 @@ impl Settings {
             && let Ok(n) = v.parse::<u32>()
         {
             self.llm_max_parallel_requests = n;
+        }
+        // Mirror MOCK_EMBEDDING parsing (accept true/1/yes, case-insensitive).
+        if let Some(v) = str_var("MOCK_LLM") {
+            let v = v.to_lowercase();
+            self.llm_mock = v == "true" || v == "1" || v == "yes";
+        }
+        if let Some(v) = str_var("MOCK_LLM_CASSETTE") {
+            self.llm_cassette = v;
+        }
+        if let Some(v) = str_var("COGNEE_RECORD_LLM") {
+            self.llm_record_path = v;
         }
 
         // -- Graph database ------------------------------------------------------
@@ -574,6 +596,10 @@ impl Settings {
             Value::String(self.llm_provider.clone()),
         );
         m.insert("llm_model".into(), Value::String(self.llm_model.clone()));
+        // NOTE: `llm_mock`/`llm_cassette`/`llm_record_path` are intentionally
+        // NOT emitted here. The cassette/record fields are local filesystem
+        // paths (sensitive), and the telemetry snapshot is an allowlisted,
+        // privacy-filtered payload — see `telemetry_snapshot_only_emits_allowlisted_keys`.
         m.insert(
             "embedding_provider".into(),
             Value::String(self.embedding_provider.clone()),
@@ -620,6 +646,9 @@ impl Default for Settings {
             llm_max_completion_tokens: 16384,
             llm_max_retries: 2,
             llm_max_parallel_requests: 20,
+            llm_mock: false,
+            llm_cassette: String::new(),
+            llm_record_path: String::new(),
             graph_prompt_path: "generate_graph_prompt.txt".to_string(),
 
             graph_database_provider: "kuzu".to_string(),
@@ -1077,6 +1106,30 @@ impl ConfigManager {
         self.bump_version();
     }
 
+    /// Select the record/replay mock LLM (`MOCK_LLM` parity).
+    pub fn set_llm_mock(&self, mock: bool) {
+        let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
+        s.llm_mock = mock;
+        drop(s);
+        self.bump_version();
+    }
+
+    /// Set the cassette path used by the replay mock (`MOCK_LLM_CASSETTE`).
+    pub fn set_llm_cassette(&self, cassette: &str) {
+        let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
+        s.llm_cassette = cassette.to_string();
+        drop(s);
+        self.bump_version();
+    }
+
+    /// Set the recording cassette output path (`COGNEE_RECORD_LLM`); empty = unset.
+    pub fn set_llm_record_path(&self, path: &str) {
+        let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
+        s.llm_record_path = path.to_string();
+        drop(s);
+        self.bump_version();
+    }
+
     // -- Embedding paths -----------------------------------------------------
 
     pub fn set_embedding_model_path(&self, path: &str) {
@@ -1241,6 +1294,9 @@ impl ConfigManager {
                 "llm_max_parallel_requests" => {
                     s.llm_max_parallel_requests = as_u32(key, value)?;
                 }
+                "llm_mock" => s.llm_mock = as_bool(key, value)?,
+                "llm_cassette" => s.llm_cassette = as_string(key, value)?,
+                "llm_record_path" => s.llm_record_path = as_string(key, value)?,
                 other => return Err(ConfigError::UnknownKey(other.to_string())),
             }
         }
@@ -1340,6 +1396,9 @@ impl ConfigManager {
             "llm_max_parallel_requests" => {
                 self.set_llm_max_parallel_requests(as_u32(key, &value)?);
             }
+            "llm_mock" => self.set_llm_mock(as_bool(key, &value)?),
+            "llm_cassette" => self.set_llm_cassette(as_string(key, &value)?.as_str()),
+            "llm_record_path" => self.set_llm_record_path(as_string(key, &value)?.as_str()),
             // Embedding
             "embedding_provider" => {
                 self.set_embedding_provider(as_string(key, &value)?.as_str());

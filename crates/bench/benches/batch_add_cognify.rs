@@ -144,6 +144,8 @@ const LLM_ENV_VARS: &[&str] = &[
     "EMBEDDING_ENDPOINT",
     "EMBEDDING_API_KEY",
     "MOCK_EMBEDDING",
+    "MOCK_LLM",
+    "MOCK_LLM_CASSETTE",
 ];
 
 impl ServerGuard {

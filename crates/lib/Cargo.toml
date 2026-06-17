@@ -22,11 +22,15 @@ default = [
     "unstructured",
     "visualization",
     "cloud",
+    "mock-llm",
     # decision 1: telemetry is ON by default in cognee-lib. Disable with
     # --no-default-features for compile-time opt-out.
     "telemetry",
 ]
 cloud          = ["dep:cognee-cloud"]
+# Record/replay cassette-based mock LLM support (MOCK_LLM / COGNEE_RECORD_LLM).
+# Pulls in no heavy deps, so it is default-on.
+mock-llm       = ["cognee-llm/mock"]
 server         = ["dep:cognee-http-server"]
 visualization  = ["dep:cognee-visualization"]
 onnx           = ["cognee-embedding/onnx"]
