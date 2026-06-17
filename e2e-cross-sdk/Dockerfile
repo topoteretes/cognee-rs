@@ -121,6 +121,15 @@ COPY cognee/distributed /build/distributed
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev --no-editable
 
+# kuzu is an optional cognee backend not pulled in by the default `uv sync`,
+# but cognee's alembic migration `b9274c27a25a_kuzu_11_migration.py` does a
+# top-level `import kuzu`. alembic loads every version module to build the
+# revision graph (even for `stamp head`), so a missing kuzu aborts the harness
+# startup with ModuleNotFoundError. Install it so the module is importable; the
+# migration body never runs under `stamp`, so any importable version suffices.
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv pip install --python /build/.venv kuzu
+
 
 # ─── Stage 3: Test harness ──────────────────────────────────────────────────
 # Must use Trixie to match glibc of the Rust binary (2.41)
