@@ -160,20 +160,25 @@ jobs:
             print("missing license:",bad); sys.exit(1 if bad else 0)'
 
   # ── MSRV floor: build against the declared rust-version (T2.3) ─────────
-  # The other lanes use @stable (which overrides rust-toolchain.toml); this
-  # lane pins 1.88 so a newer-than-MSRV API is caught before release.
-  # Note: 1.88 is the real floor because home@0.5.12, icu_collections@2.2.0
-  # and other transitive deps require rustc 1.88. Edition 2024 + resolver 3
-  # would allow 1.85 in principle, but the dep graph raises the bar to 1.88.
+  # rust-toolchain.toml pins the toolchain repo-wide (it takes precedence over
+  # @stable), so every lane already builds on the floor; this lane additionally
+  # installs 1.89.0 explicitly so a newer-than-MSRV API is caught before release
+  # even if the pin moves.
+  # Note: 1.89 is the real floor on x86_64 — the embedded qdrant `quantization`
+  # crate uses AVX-512 target features/intrinsics (avx512vl, avx512vpopcntdq,
+  # stdarch_x86_avx512) stabilized in Rust 1.89. (home@0.5.12 / icu_collections
+  # already require 1.88; qdrant raises it to 1.89.) Edition 2024 + resolver 3
+  # would allow 1.85 in principle. The aarch64 build never compiles the AVX-512
+  # path, so this only manifests on x86_64.
   msrv:
-    name: MSRV (1.88)
+    name: MSRV (1.89)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Rust 1.88
-        uses: dtolnay/rust-toolchain@1.88.0
+      - name: Install Rust 1.89
+        uses: dtolnay/rust-toolchain@1.89.0
 
       - name: Install mold linker
         uses: rui314/setup-mold@v1
@@ -214,7 +219,7 @@ jobs:
           key: ort-v2.0.0-rc.12-cpu-linux-x86_64
 
       - name: Check (MSRV)
-        run: cargo +1.88.0 check --all-targets
+        run: cargo +1.89.0 check --all-targets
 
   # ── Stage 2: Build and run tests (depends on lint) ────────────────────
   test:

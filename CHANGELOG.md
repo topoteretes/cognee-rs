@@ -63,10 +63,12 @@ drop-in cross-SDK compatibility.
 - Cross-SDK E2E test harness (`e2e-cross-sdk/`) verifying Python ↔ Rust
   interoperability for add parity, schema compatibility, and cognify structural
   comparison.
-- MSRV declared as Rust 1.88 (edition 2024 + `resolver = "3"` require ≥ 1.85;
-  transitive dependencies `home@0.5.12` and `icu_collections@2.2.0` raise the
-  real floor to 1.88). A dedicated CI lane (`msrv` job) verifies the floor on
-  every push.
+- MSRV declared as Rust 1.89 (edition 2024 + `resolver = "3"` require ≥ 1.85;
+  `home@0.5.12` / `icu_collections@2.2.0` raise it to 1.88, and on x86_64 the
+  embedded qdrant `quantization` crate uses AVX-512 target features/intrinsics
+  — `avx512vl`, `avx512vpopcntdq`, `stdarch_x86_avx512` — stabilized in Rust
+  1.89, which is the true floor). A dedicated CI lane (`msrv` job) verifies the
+  floor on every push.
 
 ### Notes
 

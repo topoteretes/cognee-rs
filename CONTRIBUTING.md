@@ -81,19 +81,21 @@ Plain unit tests that don't touch the LLM run with `cargo test`.
 
 ### MSRV & lockfiles
 
-The MSRV is **1.88**, declared via `rust-version` in `[workspace.package]` and pinned for
-local builds by `rust-toolchain.toml`. `Cargo.lock` is intentionally **not committed** (see
-`.gitignore`); the edition-2024 MSRV-aware resolver (`resolver = "3"`) picks dependency
-versions compatible with 1.88 on a fresh resolve.
+The MSRV is **1.89**, declared via `rust-version` in `[workspace.package]` and pinned for
+local builds by `rust-toolchain.toml`. (On x86_64 the embedded qdrant `quantization` crate
+uses AVX-512 intrinsics stabilized in Rust 1.89; the aarch64 build skips that path, so a Mac
+may build on an older toolchain while CI on x86_64 will not.) `Cargo.lock` is intentionally
+**not committed** (see `.gitignore`); the edition-2024 MSRV-aware resolver (`resolver = "3"`)
+picks dependency versions compatible with 1.89 on a fresh resolve.
 
 If `scripts/check_all.sh` fails with an error like
-`roaring@x.y.z requires rustc 1.90.0` (or any other "requires rustc > 1.88"), you have a
+`roaring@x.y.z requires rustc 1.90.0` (or any other "requires rustc > 1.89"), you have a
 **stale local lockfile** that pinned a version published with a higher MSRV — it is not a
-real breakage (a fresh resolve under the pinned toolchain selects a 1.88-compatible version).
+real breakage (a fresh resolve under the pinned toolchain selects a 1.89-compatible version).
 Recover by regenerating the lock or pinning the offending crate down, e.g.:
 
 ```bash
-# Regenerate fresh (uses the 1.88-aware resolver), or pin the specific crate:
+# Regenerate fresh (uses the 1.89-aware resolver), or pin the specific crate:
 cargo update                                            # whole workspace
 cargo update -p roaring@0.11.4 --precise 0.11.3         # one transitive dep
 # capi/ is its own workspace — run the same from inside capi/ if it drifts there.
