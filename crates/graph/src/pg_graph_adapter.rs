@@ -52,6 +52,10 @@ enum GNode {
 }
 
 impl Iden for GNode {
+    #[allow(
+        clippy::expect_used,
+        reason = "writing a static &str into the fmt::Write sink is infallible"
+    )]
     fn unquoted(&self, s: &mut dyn fmt::Write) {
         write!(
             s,
@@ -82,6 +86,10 @@ enum GEdge {
 }
 
 impl Iden for GEdge {
+    #[allow(
+        clippy::expect_used,
+        reason = "writing a static &str into the fmt::Write sink is infallible"
+    )]
     fn unquoted(&self, s: &mut dyn fmt::Write) {
         write!(
             s,

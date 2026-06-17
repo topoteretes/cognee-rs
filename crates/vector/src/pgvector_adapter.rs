@@ -40,6 +40,10 @@ enum VColl {
 }
 
 impl Iden for VColl {
+    #[allow(
+        clippy::expect_used,
+        reason = "writing a static &str into the fmt::Write sink is infallible"
+    )]
     fn unquoted(&self, s: &mut dyn fmt::Write) {
         write!(
             s,
