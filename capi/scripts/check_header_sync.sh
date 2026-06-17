@@ -45,7 +45,11 @@ if [[ -f "$ALLOWLIST" ]]; then
     while IFS= read -r entry; do
         # Skip blank lines and comments.
         [[ -z "$entry" || "$entry" == \#* ]] && continue
-        sed -i "/^${entry}$/d" "$EXPORTS_TMP"
+        # `sed -i.bak` is portable across GNU and BSD/macOS sed (a bare `sed -i`
+        # treats the next argument as the backup suffix on BSD, which breaks the
+        # in-place edit). Remove the backup afterwards. Symbol names are
+        # [a-z0-9_]+, so there are no regex metacharacters to escape.
+        sed -i.bak "/^${entry}$/d" "$EXPORTS_TMP" && rm -f "$EXPORTS_TMP.bak"
     done < "$ALLOWLIST"
 fi
 
