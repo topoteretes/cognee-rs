@@ -992,15 +992,23 @@ pub async fn add_data_points(
         info!("Stored {} documents as graph nodes", doc_refs.len());
     }
 
-    // Create and store EdgeTypes keyed on each edge's retrieval text
+    // Build EdgeTypes keyed on each edge's retrieval text
     // (port of Python's create_edge_type_datapoints + index_graph_edges).
+    //
+    // Parity note: Python's `index_graph_edges` only *vector-indexes* these
+    // EdgeType DataPoints (into `EdgeType_relationship_name`) — it never adds
+    // them to the graph as nodes (see index_graph_edges.py:86-88 →
+    // index_data_points, which touches the vector engine only). We therefore
+    // build + vector-index them below but deliberately do NOT call
+    // `graph_db.add_nodes` on them, so the Rust graph node-set matches Python's
+    // and they don't surface as untyped/uncolored nodes in the visualization.
     //
     // Python keys EdgeType IDs and the embedded relationship_name on the
     // edge's retrieval text — `get_edge_retrieval_text(edge_text,
     // relationship_name)` (index_graph_edges.py:33-53), i.e. the nonblank
     // `edge_text` property, falling back to the nonblank relationship_name,
     // else dropped. `generate_edge_id(edge_id=text)` then derives the ID from
-    // that text. We mirror that here so EdgeType node UUIDs and the
+    // that text. We mirror that here so EdgeType UUIDs and the
     // EdgeType_relationship_name vector inputs match Python (B2.5).
     let mut edge_type_counts: HashMap<String, i32> = HashMap::new();
     for edge_pair in &input.edges {
@@ -1020,12 +1028,15 @@ pub async fn add_data_points(
         })
         .collect();
 
-    // Pre-stamp freshly-built EdgeType DataPoints at construction time,
-    // mirroring the Entity / EntityType pre-stamp inside
-    // `expand_with_nodes_and_edges`. The LLM-derived edge-type names
-    // trace back to the entity-extraction task, so the `source_pipeline`
-    // / `source_task` literals match. The executor's downstream walk
-    // (task 05-06) finds these fields already set and short-circuits.
+    // Pre-stamp freshly-built EdgeType DataPoints at construction time so the
+    // `source_*` provenance keys are populated before they are vector-indexed
+    // (collection `EdgeType_relationship_name`) and before the Triplet payloads
+    // copy those keys from the originating EdgeType (gap-05/08 §4.4, below).
+    // The LLM-derived edge-type names trace back to the entity-extraction task,
+    // so the `source_pipeline` / `source_task` literals match.
+    //
+    // These DataPoints are NOT stored as graph nodes (see parity note above),
+    // so the stamp only affects vector payloads, not the graph/visualization.
     //
     // DLT-derived edges (`extract_dlt_fk_edges`) construct
     // `GraphEdgePair` instances rather than DataPoints; they carry no
@@ -1040,15 +1051,6 @@ pub async fn add_data_points(
                 &mut local_visited,
             );
         }
-    }
-
-    if !edge_types.is_empty() {
-        let edge_type_refs: Vec<&EdgeType> = edge_types.iter().collect();
-        graph_db
-            .add_nodes(&edge_type_refs)
-            .await
-            .map_err(CognifyError::from)?;
-        info!("Stored {} edge types as graph nodes", edge_types.len());
     }
 
     // Discover structural edges via GraphExtractable trait

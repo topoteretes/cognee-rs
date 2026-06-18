@@ -15,16 +15,20 @@ use std::collections::BTreeMap;
 ///
 /// If `ontology_valid` is true, the "ontology" override color is used,
 /// regardless of node type.  Unknown types fall back to `#DBD8D8`; the
-/// literal `"default"` type maps to `#7c3aed`. Matches Python lines 27–47.
+/// literal `"default"` type maps to `#7c3aed`. Kept byte-for-byte in sync with
+/// Python's `_TYPE_COLOR_MAP` in
+/// `cognee/modules/visualization/preprocessor.py`.
 pub(crate) fn type_color(node_type: Option<&str>, ontology_valid: bool) -> &'static str {
     if ontology_valid {
         return "#D8D8D8";
     }
     match node_type.unwrap_or("default") {
-        "Entity" => "#6510F4",
-        "EntityType" => "#A550FF",
+        "TextDocument" => "#A550FF",
         "DocumentChunk" => "#0DFF00",
-        "TextSummary" => "#6510F4",
+        "Entity" => "#6510F4",
+        "EntityType" => "#D5C2FF",
+        "TextSummary" => "#FFB454",
+        "GlobalContextSummary" => "#00C2FF",
         "TableRow" => "#A550FF",
         "TableType" => "#6510F4",
         "ColumnValue" => "#747470",
@@ -126,10 +130,13 @@ mod tests {
 
     #[test]
     fn type_color_known_types() {
-        assert_eq!(type_color(Some("Entity"), false), "#6510F4");
-        assert_eq!(type_color(Some("EntityType"), false), "#A550FF");
+        // Values mirror Python's `_TYPE_COLOR_MAP` (preprocessor.py).
+        assert_eq!(type_color(Some("TextDocument"), false), "#A550FF");
         assert_eq!(type_color(Some("DocumentChunk"), false), "#0DFF00");
-        assert_eq!(type_color(Some("TextSummary"), false), "#6510F4");
+        assert_eq!(type_color(Some("Entity"), false), "#6510F4");
+        assert_eq!(type_color(Some("EntityType"), false), "#D5C2FF");
+        assert_eq!(type_color(Some("TextSummary"), false), "#FFB454");
+        assert_eq!(type_color(Some("GlobalContextSummary"), false), "#00C2FF");
         assert_eq!(type_color(Some("TableRow"), false), "#A550FF");
         assert_eq!(type_color(Some("TableType"), false), "#6510F4");
         assert_eq!(type_color(Some("ColumnValue"), false), "#747470");

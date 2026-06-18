@@ -156,6 +156,22 @@ mkdir -p "$WORK_DIR"
 export COGNEE_SYSTEM_ROOT_DIRECTORY="$WORK_DIR/system"   # graph + vector DB land here
 export COGNEE_DATA_ROOT_DIRECTORY="$WORK_DIR/data"       # ingested file copies
 export DATABASE_URL="sqlite:$WORK_DIR/cognee.db?mode=rwc" # relational metadata
+# Pin the embedded graph + vector store under WORK_DIR too. A persisted
+# ~/.config/cognee-rust/config.json may hardcode absolute vector_db_url /
+# graph_file_path that would otherwise win over the system-root derivation and
+# leak this run's data into a shared store (with possibly mismatched embedding
+# dimensions). Exporting them keeps the demo fully isolated and re-runnable.
+export VECTOR_DB_URL="$WORK_DIR/system/vectors"
+export GRAPH_FILE_PATH="$WORK_DIR/system/graph.ladybug"
+
+# Use remote OpenAI embeddings (text-embedding-3-small, 1536d) — the default
+# provider off-Android. Endpoint/key fall back to the LLM provider's
+# (OPENAI_URL/OPENAI_TOKEN from .env), so no extra config is needed. Setting
+# these explicitly also overrides any stale ~/.config/cognee-rust config that
+# might otherwise pin an edge/ONNX model name (e.g. BGE-Small-v1.5).
+export EMBEDDING_PROVIDER="${EMBEDDING_PROVIDER:-openai}"
+export EMBEDDING_MODEL="${EMBEDDING_MODEL:-text-embedding-3-small}"
+export EMBEDDING_DIMENSIONS="${EMBEDDING_DIMENSIONS:-1536}"
 
 # Run from PROJECT_ROOT so `.env` is loaded and the target/models embedding
 # cache is reused across runs.
@@ -185,18 +201,18 @@ step "3/4  search — querying the knowledge graph"
 run_search() {
   local qtype="$1"; local query="$2" t0
   printf '\n\033[1;32m▸ [%s]\033[0m %s\n' "$qtype" "$query"
-  # The CLI emits search results through the tracing layer (tagged with the
-  # search command's module), interleaved with backend log noise. Keep only
-  # those result lines and strip the timestamp/level/module prefix so the demo
-  # prints clean answers.
+  # The CLI prints the answer/results to stdout (e.g. "Response: ..." for
+  # completion queries, "Found N result(s):" for chunk/summary queries),
+  # interleaved with backend log lines. Every log line starts with an ISO-8601
+  # timestamp, so we drop those and keep the result lines. `|| true` keeps the
+  # pipeline from tripping `set -o pipefail` when grep filters everything.
   t0="$(now)"
   "$BIN" search "$query" \
     --query-type "$qtype" \
     --datasets "$DATASET_NAME" \
     --top-k "$TOP_K" \
     --output-format pretty 2>&1 \
-  | grep -F '[cognee_cli::commands::search]' \
-  | sed -E 's/^[0-9T:.-]+ \[[A-Z ]+\] //; s/ \[cognee_cli::commands::search\]$//'
+  | { grep -vE '^[0-9]{4}-[0-9]{2}-[0-9]{2}T' || true; }
   record "search ($qtype)" "$t0"
 }
 

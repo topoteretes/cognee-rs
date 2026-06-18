@@ -78,7 +78,7 @@ async fn visualize_writes_html_file_to_provided_path() {
     assert!(html.contains("\"id\":\"n3\""));
     assert!(html.contains("\"color\":\"#6510F4\"")); // Entity
     assert!(html.contains("\"color\":\"#0DFF00\"")); // DocumentChunk
-    assert!(html.contains("\"color\":\"#A550FF\"")); // EntityType
+    assert!(html.contains("\"color\":\"#D5C2FF\"")); // EntityType
     // Edge weight appears both as `weight` and under `all_weights.default`.
     assert!(html.contains("\"all_weights\":{\"default\":0.75"));
 }
