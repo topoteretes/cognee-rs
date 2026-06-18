@@ -141,7 +141,7 @@ impl OnnxEmbeddingConfig {
 /// programmatically and pass to [`EmbeddingConfig::create_engine`].
 ///
 /// Environment variables (match Python SDK names):
-/// - `EMBEDDING_PROVIDER` — backend selection (default: `onnx`)
+/// - `EMBEDDING_PROVIDER` — backend selection (default: `openai`; `onnx` on Android)
 /// - `MOCK_EMBEDDING` — set to `true`/`1`/`yes` to force mock mode
 /// - `EMBEDDING_MODEL` — model identifier
 /// - `EMBEDDING_DIMENSIONS` — vector size
@@ -297,8 +297,9 @@ impl EmbeddingConfig {
                     config.provider = EmbeddingProvider::Mock;
                 }
                 _ => {
-                    // Unknown provider — leave default (Onnx) and log nothing;
-                    // the caller will get a clear error from create_engine() if needed.
+                    // Unknown provider — leave the platform default (OpenAI, or
+                    // ONNX on Android) and log nothing; the caller will get a
+                    // clear error from create_engine() if needed.
                 }
             }
         }

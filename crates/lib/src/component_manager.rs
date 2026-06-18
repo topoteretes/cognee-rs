@@ -413,17 +413,21 @@ impl ComponentManager {
                 _ => EmbeddingProvider::Onnx,
             };
 
-            let endpoint = if settings.embedding_endpoint.is_empty() {
-                None
-            } else {
-                Some(settings.embedding_endpoint.clone())
-            };
+            // Endpoint/key fall back to the LLM provider's when no embedding-
+            // specific values are set. The default embedding provider is OpenAI
+            // (off-Android), and cognee typically shares one OpenAI-compatible
+            // account for chat + embeddings, so this makes the default work with
+            // just OPENAI_URL/OPENAI_TOKEN (→ llm_endpoint/llm_api_key) — no
+            // separate EMBEDDING_ENDPOINT/EMBEDDING_API_KEY required.
+            let endpoint = [&settings.embedding_endpoint, &settings.llm_endpoint]
+                .into_iter()
+                .find(|v| !v.is_empty())
+                .cloned();
 
-            let api_key = if settings.embedding_api_key.is_empty() {
-                None
-            } else {
-                Some(settings.embedding_api_key.clone())
-            };
+            let api_key = [&settings.embedding_api_key, &settings.llm_api_key]
+                .into_iter()
+                .find(|v| !v.is_empty())
+                .cloned();
 
             // Check MOCK_EMBEDDING env var as a fallback (preserves backward compat).
             // `deterministic`/`hash` selects SHA-256-derived vectors; other truthy

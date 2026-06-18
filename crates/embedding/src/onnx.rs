@@ -210,9 +210,15 @@ impl OnnxEmbeddingEngine {
     }
 }
 
-#[async_trait]
-impl EmbeddingEngine for OnnxEmbeddingEngine {
-    async fn embed(&self, texts: &[&str]) -> EmbeddingResult<Vec<Vec<f32>>> {
+impl OnnxEmbeddingEngine {
+    /// Run ONNX inference over a SINGLE bounded batch of `texts`.
+    ///
+    /// A transformer's activation memory scales with `batch × seq_len`
+    /// (attention is `batch × heads × seq_len²`), so the batch must stay small.
+    /// The public [`OnnxEmbeddingEngine::embed`] splits large inputs into
+    /// `config.batch_size` chunks before calling this — never pass an unbounded
+    /// slice here.
+    async fn embed_batch(&self, texts: &[&str]) -> EmbeddingResult<Vec<Vec<f32>>> {
         if texts.is_empty() {
             return Ok(Vec::new());
         }
@@ -284,6 +290,30 @@ impl EmbeddingEngine for OnnxEmbeddingEngine {
 
         Ok(embeddings)
     }
+}
+
+#[async_trait]
+impl EmbeddingEngine for OnnxEmbeddingEngine {
+    /// Embed `texts`, splitting into `config.batch_size` sub-batches so the ONNX
+    /// session never receives an unbounded batch. A transformer's activation
+    /// memory scales with `batch × seq_len²`; embedding a whole corpus in one
+    /// call (several thousand chunks) would allocate tens of GB and OOM.
+    /// Sub-batching keeps peak memory flat regardless of how many texts are
+    /// passed.
+    async fn embed(&self, texts: &[&str]) -> EmbeddingResult<Vec<Vec<f32>>> {
+        if texts.is_empty() {
+            return Ok(Vec::new());
+        }
+        let batch = self.config.batch_size.max(1);
+        if texts.len() <= batch {
+            return self.embed_batch(texts).await;
+        }
+        let mut embeddings = Vec::with_capacity(texts.len());
+        for chunk in texts.chunks(batch) {
+            embeddings.extend(self.embed_batch(chunk).await?);
+        }
+        Ok(embeddings)
+    }
 
     fn dimension(&self) -> usize {
         self.config.dimensions
@@ -346,6 +376,47 @@ mod tests {
                 e.to_string().contains("Model file not found")
                     || e.to_string().contains("tokenizer")
             );
+        }
+    }
+
+    /// Regression test for the unbounded-batch OOM: `embed` must split inputs
+    /// larger than `config.batch_size` into sub-batches (so ONNX never sees a
+    /// giant `[N, seq_len]` tensor), while returning one embedding per input
+    /// that matches the single-batch result. Skips when the model artifacts
+    /// have not been downloaded.
+    #[tokio::test]
+    async fn embed_sub_batches_large_inputs() {
+        let model = "../../target/models/BGE-Small-v1.5-model_quantized.onnx";
+        let tok = "../../target/models/bge-small-tokenizer.json";
+        if !std::path::Path::new(model).exists() || !std::path::Path::new(tok).exists() {
+            return; // model not available in this environment — skip
+        }
+
+        let mut config = OnnxEmbeddingConfig::default();
+        config.model_path = model.into();
+        config.tokenizer_path = tok.into();
+        config.batch_size = 4; // force several sub-batches
+
+        let engine = OnnxEmbeddingEngine::new(config).expect("engine creation");
+
+        // 10 inputs with batch_size 4 → 3 sub-batches (4 + 4 + 2).
+        let texts: Vec<String> = (0..10).map(|i| format!("sentence number {i}")).collect();
+        let refs: Vec<&str> = texts.iter().map(String::as_str).collect();
+
+        let chunked = engine.embed(&refs).await.expect("embed");
+        assert_eq!(chunked.len(), 10, "one embedding per input across sub-batches");
+        assert_eq!(chunked[0].len(), engine.dimension());
+
+        // Sub-batching must not change an embedding's meaning. (Exact equality
+        // can't be required: the quantized model selects batch-size-dependent
+        // kernels, so values differ by tiny numerical noise.) The L2-normalized
+        // vectors must stay essentially parallel — cosine similarity ≈ 1.
+        let single = engine.embed_batch(&refs).await.expect("embed_batch");
+        assert_eq!(single.len(), chunked.len());
+        for (a, b) in chunked.iter().zip(single.iter()) {
+            assert_eq!(a.len(), b.len());
+            let cos: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
+            assert!(cos > 0.999, "chunked vs single-batch diverged: cos={cos}");
         }
     }
 }

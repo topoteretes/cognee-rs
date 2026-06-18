@@ -632,6 +632,18 @@ impl Settings {
 
 impl Default for Settings {
     fn default() -> Self {
+        // Embedding default: local ONNX (BGE-Small) on Android for edge/offline
+        // deployment; OpenAI text-embedding-3-small everywhere else — matching
+        // the Python SDK and `cognee_embedding::EmbeddingConfig::default()`.
+        // (ONNX runs all texts in one inference; remote OpenAI embeddings avoid
+        // both the model download and large-batch memory blow-ups.)
+        #[cfg(target_os = "android")]
+        let (embedding_provider, embedding_model_name, embedding_dimensions) =
+            ("onnx", "BGE-Small-v1.5", 384u32);
+        #[cfg(not(target_os = "android"))]
+        let (embedding_provider, embedding_model_name, embedding_dimensions) =
+            ("openai", "text-embedding-3-small", 1536u32);
+
         Self {
             default_user_id: "00000000-0000-0000-0000-000000000000".to_string(),
             default_dataset_name: "main_dataset".to_string(),
@@ -704,15 +716,17 @@ impl Default for Settings {
 
             default_system_prompt_path: DEFAULT_SYSTEM_PROMPT_PATH.to_string(),
 
-            embedding_provider: "onnx".to_string(),
+            embedding_provider: embedding_provider.to_string(),
+            // ONNX model/tokenizer paths are only consulted when the provider is
+            // `onnx`/`fastembed` (the Android/edge default); harmless otherwise.
             embedding_model_path: "./target/models/BGE-Small-v1.5-model_quantized.onnx".to_string(),
             embedding_tokenizer_path: "./target/models/bge-small-tokenizer.json".to_string(),
-            embedding_model_name: "BGE-Small-v1.5".to_string(),
-            // 384 = BGE-Small output dimension (the default ONNX/edge model).
-            // If you change embedding_model_name, update this value accordingly or
-            // set EMBEDDING_DIMENSIONS so EmbeddingConfig::from_env auto-resolves it
-            // via cognee_embedding::known_model_dimensions.
-            embedding_dimensions: 384,
+            embedding_model_name: embedding_model_name.to_string(),
+            // Dimensions match the default model above (text-embedding-3-small =
+            // 1536; BGE-Small = 384). If you change embedding_model_name, update
+            // this or set EMBEDDING_DIMENSIONS so from_env auto-resolves it via
+            // cognee_embedding::known_model_dimensions.
+            embedding_dimensions,
             embedding_max_sequence_length: 512,
             embedding_batch_size: 32,
             embedding_endpoint: String::new(),
@@ -2289,7 +2303,20 @@ mod tests {
     #[test]
     fn config_manager_embedding_fields_default() {
         let s = Settings::default();
-        assert_eq!(s.embedding_provider, "onnx");
+        // Default provider: OpenAI everywhere except Android (local ONNX/edge).
+        #[cfg(not(target_os = "android"))]
+        {
+            assert_eq!(s.embedding_provider, "openai");
+            assert_eq!(s.embedding_model_name, "text-embedding-3-small");
+            assert_eq!(s.embedding_dimensions, 1536);
+        }
+        #[cfg(target_os = "android")]
+        {
+            assert_eq!(s.embedding_provider, "onnx");
+            assert_eq!(s.embedding_dimensions, 384);
+        }
+        // No embedding-specific endpoint/key by default — they fall back to the
+        // LLM provider's at engine-build time.
         assert_eq!(s.embedding_endpoint, "");
         assert_eq!(s.embedding_api_key, "");
     }
@@ -2494,6 +2521,9 @@ mod tests {
         assert_eq!(s.otel_traces_sampler, "");
         assert_eq!(s.otel_traces_sampler_arg, "");
         assert!(!s.enable_last_accessed);
+        #[cfg(not(target_os = "android"))]
+        assert_eq!(s.embedding_provider, "openai");
+        #[cfg(target_os = "android")]
         assert_eq!(s.embedding_provider, "onnx");
     }
 
