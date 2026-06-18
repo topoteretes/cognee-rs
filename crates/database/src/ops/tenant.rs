@@ -225,7 +225,7 @@ impl TenantDb for DatabaseConnection {
             .one(self)
             .await
             .map_err(map_sea_err)?
-            .ok_or_else(|| DatabaseError::NotFound(format!("User '{}' not found", user_id)))?;
+            .ok_or_else(|| DatabaseError::NotFound(format!("User '{user_id}' not found")))?;
 
         if let Some(tid) = tenant_id {
             // Verify membership.
@@ -239,8 +239,7 @@ impl TenantDb for DatabaseConnection {
 
             if membership.is_none() {
                 return Err(DatabaseError::NotFound(format!(
-                    "User '{}' is not a member of tenant '{}'",
-                    user_id, tid
+                    "User '{user_id}' is not a member of tenant '{tid}'"
                 )));
             }
 

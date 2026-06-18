@@ -31,6 +31,7 @@ static GUARDS: OnceLock<Mutex<Option<LogGuards>>> = OnceLock::new();
 pub fn setup_logging() -> PyResult<()> {
     let slot = GUARDS.get_or_init(|| Mutex::new(None));
     // lock poison is unrecoverable
+    #[allow(clippy::expect_used, reason = "lock poison is unrecoverable")]
     let mut lock = slot.lock().expect("lock poison is unrecoverable");
     if lock.is_some() {
         return Ok(()); // idempotent

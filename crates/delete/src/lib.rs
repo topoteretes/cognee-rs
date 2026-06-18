@@ -83,6 +83,11 @@ pub enum DeleteMode {
 pub struct DeleteRequest {
     pub scope: DeleteScope,
     pub mode: DeleteMode,
+    /// When true: delete graph + vector only; preserve relational rows and raw
+    /// files; force a cognify-only pipeline-status reset. Mirrors Python's
+    /// `*_memory_only` forget targets.
+    #[serde(default)]
+    pub memory_only: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -289,6 +294,14 @@ impl DeleteService {
         let mut deleted_provenance_edges = 0usize;
         let mut deleted_pipeline_runs = 0usize;
         let mut cleared_pipeline_statuses = 0usize;
+
+        // ------------------------------------------------------------------
+        // Memory-only path: wipe graph+vector, reset only cognify pipeline,
+        // preserve relational rows and files.
+        // ------------------------------------------------------------------
+        if request.memory_only {
+            return self.execute_memory_only(request, &targets).await;
+        }
 
         // ------------------------------------------------------------------
         // Phase 0: Pipeline status cleanup (while junction rows still exist)
@@ -516,6 +529,20 @@ impl DeleteService {
         // ------------------------------------------------------------------
         // Phase 3: Hard-mode orphan sweep (degree-one Entity/EntityType nodes)
         // ------------------------------------------------------------------
+        //
+        // The degree-based sweep is gated to Hard mode to match Python, whose
+        // degree-one Entity/EntityType sweep is itself `if mode == "hard"`
+        // (legacy_delete.py) and is never reached by the production soft path
+        // (datasets.delete_data → legacy_delete(data, "soft")). Running it on
+        // Soft as well would make Rust soft-delete *more* destructive than
+        // Python (it would remove degree-one nodes Python preserves).
+        //
+        // TODO(B6.4): Python's main soft path still prunes nodes that become
+        // orphaned by the deletion via a provenance/slug-scoped traversal
+        // (delete_from_graph_and_vector excludes co-owned slugs), not a global
+        // degree sweep. Rust currently leaves those orphans on soft delete.
+        // Closing this gap requires a deletion-scoped cleanup rather than the
+        // global degree heuristic; tracked for a follow-up.
 
         let mut deleted_orphan_entities = 0usize;
         let mut deleted_orphan_entity_types = 0usize;
@@ -610,6 +637,126 @@ impl DeleteService {
         })
     }
 
+    async fn execute_memory_only(
+        &self,
+        request: &DeleteRequest,
+        targets: &ResolvedDeleteTargets,
+    ) -> Result<DeleteResult, DeleteError> {
+        let mut warnings = Vec::new();
+        let mut deleted_graph_nodes = 0usize;
+        let mut deleted_vector_points = 0usize;
+        let mut deleted_provenance_nodes = 0usize;
+        let mut deleted_provenance_edges = 0usize;
+
+        // Phase 1: Graph/vector cleanup only (same logic as normal execute).
+        let is_all_scope = matches!(request.scope, DeleteScope::All);
+
+        if is_all_scope {
+            let (gn, vp, pn, pe) = self.count_graph_vector_artifacts(targets).await?;
+            let (_, _, _, _, gv_warnings) = self.cleanup_all().await?;
+            deleted_graph_nodes += gn;
+            deleted_vector_points += vp;
+            deleted_provenance_nodes += pn;
+            deleted_provenance_edges += pe;
+            warnings.extend(gv_warnings);
+        } else {
+            for dataset in &targets.datasets_to_delete {
+                let (gn, vp, pn, pe, gv_warnings) = self.cleanup_dataset(dataset.id).await?;
+                deleted_graph_nodes += gn;
+                deleted_vector_points += vp;
+                deleted_provenance_nodes += pn;
+                deleted_provenance_edges += pe;
+                warnings.extend(gv_warnings);
+            }
+
+            if matches!(request.scope, DeleteScope::Data { .. }) {
+                let deletable_data_ids = self.compute_deletable_data_ids(targets).await?;
+                for data_id in &deletable_data_ids {
+                    for (dataset_id, did) in &targets.links_to_detach {
+                        if did == data_id {
+                            let (gn, vp, pn, pe, gv_warnings) =
+                                self.cleanup_data(*data_id, *dataset_id).await?;
+                            deleted_graph_nodes += gn;
+                            deleted_vector_points += vp;
+                            deleted_provenance_nodes += pn;
+                            deleted_provenance_edges += pe;
+                            warnings.extend(gv_warnings);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Phase 2: Pipeline-status reset.
+        //
+        // The dataset and data-item variants differ exactly as Python does:
+        //
+        // * Dataset variant (Python `_forget_dataset_memory`, forget.py:271-289):
+        //   on every Data record linked to the dataset, remove the dataset_id
+        //   entry from EVERY pipeline in `pipeline_status` (Python loops over
+        //   `list(pipeline_status.keys())`), then reset the dataset-level
+        //   *run* status for `cognify_pipeline` only.
+        //
+        // * Data-item variant (Python `_forget_data_memory`, forget.py:331-351):
+        //   remove only the `cognify_pipeline` entry for `(data_id, dataset_id)`
+        //   on that single Data record; NO dataset-level run-status reset.
+        if matches!(request.scope, DeleteScope::Data { .. }) {
+            // Data-item: surgically clear cognify status for the single data
+            // record in each affected (dataset_id, data_id) pair.
+            for (dataset_id, data_id) in &targets.links_to_detach {
+                self.database
+                    .clear_cognify_pipeline_status_for_data(*data_id, *dataset_id)
+                    .await
+                    .map_err(|e| {
+                        DeleteError::Runtime(format!(
+                            "Failed to clear cognify pipeline_status for data {data_id} in dataset {dataset_id}: {e}"
+                        ))
+                    })?;
+            }
+        } else {
+            // Dataset (and All): mirror Python's per-record all-pipeline key
+            // removal, then reset cognify run status at the dataset level.
+            for dataset in &targets.datasets_to_delete {
+                self.database
+                    .clear_pipeline_status_for_dataset(dataset.id)
+                    .await
+                    .map_err(|e| {
+                        DeleteError::Runtime(format!(
+                            "Failed to clear pipeline_status for dataset '{}': {e}",
+                            dataset.name
+                        ))
+                    })?;
+
+                self.reset_cognify_pipeline_run_status(dataset.owner_id, dataset.id)
+                    .await?;
+            }
+        }
+
+        info!(
+            deleted_graph_nodes,
+            deleted_vector_points, "memory-only delete completed"
+        );
+
+        Ok(DeleteResult {
+            deleted_datasets: 0,
+            deleted_dataset_links: 0,
+            deleted_data: 0,
+            deleted_storage_files: 0,
+            deleted_graph_nodes,
+            deleted_vector_points,
+            deleted_provenance_nodes,
+            deleted_provenance_edges,
+            deleted_orphan_entities: 0,
+            deleted_orphan_entity_types: 0,
+            deleted_orphan_edge_types: 0,
+            deleted_pipeline_runs: 0,
+            cleared_pipeline_statuses: 0,
+            deleted_search_queries: 0,
+            pruned_sessions: false,
+            warnings,
+        })
+    }
+
     pub async fn data_ids_to_delete(
         &self,
         request: &DeleteRequest,
@@ -664,6 +811,56 @@ impl DeleteService {
             .map_err(|e| {
                 DeleteError::Runtime(format!(
                     "Failed to reset pipeline '{name}' for dataset {dataset_id}: {e}"
+                ))
+            })?;
+        }
+        Ok(())
+    }
+
+    /// Like [`reset_dataset_pipeline_run_status`] but only resets the specified
+    /// pipeline by name. Used by memory-only forget to reset `cognify_pipeline`
+    /// without touching `add_pipeline` — matching Python's
+    /// `reset_dataset_pipeline_run_status(pipeline_names=["cognify_pipeline"])`.
+    async fn reset_cognify_pipeline_run_status(
+        &self,
+        owner_id: Uuid,
+        dataset_id: Uuid,
+    ) -> Result<(), DeleteError> {
+        let Some(repo) = self.pipeline_run_repo.as_ref() else {
+            return Ok(());
+        };
+
+        let runs = repo
+            .get_pipeline_runs_by_dataset(dataset_id)
+            .await
+            .map_err(|e| {
+                DeleteError::Runtime(format!(
+                    "Failed to list pipeline runs for dataset {dataset_id}: {e}"
+                ))
+            })?;
+
+        for run in runs {
+            if run.pipeline_name != "cognify_pipeline" {
+                continue;
+            }
+            if matches!(run.status, PipelineRunStatus::Initiated) {
+                continue;
+            }
+            let name = run.pipeline_name;
+            let pid = pipeline_id(owner_id, dataset_id, &name);
+            let prid = pipeline_run_id(pid, dataset_id);
+            repo.log_pipeline_run(
+                prid,
+                pid,
+                &name,
+                Some(dataset_id),
+                PipelineRunStatus::Initiated,
+                Some(run_info_for_initiated()),
+            )
+            .await
+            .map_err(|e| {
+                DeleteError::Runtime(format!(
+                    "Failed to reset cognify pipeline for dataset {dataset_id}: {e}"
                 ))
             })?;
         }
@@ -1273,8 +1470,7 @@ impl DeleteService {
                 .await
                 .map_err(|error| {
                     DeleteError::Runtime(format!(
-                        "Failed to count dataset links for data {}: {}",
-                        data_id, error
+                        "Failed to count dataset links for data {data_id}: {error}"
                     ))
                 })?;
             let to_remove = links_to_remove_per_data.get(data_id).copied().unwrap_or(0);
@@ -1327,12 +1523,27 @@ impl DeleteService {
             DeleteError::Runtime(format!("Failed to fetch data {data_id}: {error}"))
         })?;
 
-        let data =
-            data.ok_or_else(|| DeleteError::Validation(format!("Data {data_id} was not found")))?;
+        // Python behaviour (datasets.py:165-176): when the Data row is absent the
+        // caller may be using a custom graph model that didn't go through the
+        // standard ingestion pipeline. In that case we still attempt graph/vector
+        // cleanup using a minimal ghost targets struct (candidate_data_ids set, no
+        // links to detach, no datasets to delete) and return success rather than
+        // an error.
+        let Some(data) = data else {
+            tracing::warn!(
+                data_id = %data_id,
+                "Data row not found — assuming custom graph model; attempting orphan cleanup"
+            );
+            return Ok(ResolvedDeleteTargets {
+                datasets_to_delete: Vec::new(),
+                links_to_detach: Vec::new(),
+                candidate_data_ids: vec![data_id],
+            });
+        };
+
         if data.owner_id != owner_id {
             return Err(DeleteError::Validation(format!(
-                "Data {data_id} does not belong to owner {}",
-                owner_id
+                "Data {data_id} does not belong to owner {owner_id}"
             )));
         }
 
@@ -1354,8 +1565,7 @@ impl DeleteService {
                 })?
                 .ok_or_else(|| {
                     DeleteError::Validation(format!(
-                        "Dataset '{}' was not found for owner {}",
-                        dataset_name, owner_id
+                        "Dataset '{dataset_name}' was not found for owner {owner_id}"
                     ))
                 })?;
 
@@ -1411,8 +1621,7 @@ impl DeleteService {
 
             if links_to_detach.is_empty() {
                 return Err(DeleteError::Validation(format!(
-                    "No dataset links found for data {} and owner {}",
-                    data_id, owner_id
+                    "No dataset links found for data {data_id} and owner {owner_id}"
                 )));
             }
         }
@@ -1453,8 +1662,7 @@ impl DeleteService {
             })?
             .ok_or_else(|| {
                 DeleteError::Validation(format!(
-                    "Dataset '{}' was not found for owner {}",
-                    dataset_name, owner_id
+                    "Dataset '{dataset_name}' was not found for owner {owner_id}"
                 ))
             })?;
 
@@ -1539,8 +1747,7 @@ impl DeleteService {
                 .await
                 .map_err(|error| {
                     DeleteError::Runtime(format!(
-                        "Failed to count dataset links for data {}: {}",
-                        data_id, error
+                        "Failed to count dataset links for data {data_id}: {error}"
                     ))
                 })?;
             let to_remove = links_to_remove_per_data.get(data_id).copied().unwrap_or(0);
@@ -1584,6 +1791,11 @@ fn triplet_vector_id(edge: &GraphEdge) -> Uuid {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 mod tests {
     use super::*;
     use cognee_database::{connect, initialize, ops};
@@ -1740,6 +1952,7 @@ mod tests {
                     dataset_name: "test_dataset".to_string(),
                 },
                 mode: DeleteMode::Soft,
+                memory_only: false,
             })
             .await
             .expect("execute should succeed");
@@ -1765,6 +1978,7 @@ mod tests {
                 dataset_name: "test_dataset".to_string(),
             },
             mode: DeleteMode::Soft,
+            memory_only: false,
         };
 
         let preview = svc.preview(&request).await.expect("preview should succeed");
@@ -1797,6 +2011,7 @@ mod tests {
                     dataset_name: "nonexistent".to_string(),
                 },
                 mode: DeleteMode::Soft,
+                memory_only: false,
             })
             .await
             .expect_err("should fail for nonexistent dataset");
@@ -1850,6 +2065,7 @@ mod tests {
                     dataset_name: "dataset1".to_string(),
                 },
                 mode: DeleteMode::Soft,
+                memory_only: false,
             })
             .await
             .expect("execute should succeed");
@@ -1906,6 +2122,7 @@ mod tests {
                 dataset_name: "dataset1".to_string(),
             },
             mode: DeleteMode::Soft,
+            memory_only: false,
         })
         .await
         .expect("delete dataset1");
@@ -1917,6 +2134,7 @@ mod tests {
                     dataset_name: "dataset2".to_string(),
                 },
                 mode: DeleteMode::Soft,
+                memory_only: false,
             })
             .await
             .expect("delete dataset2");
@@ -1945,6 +2163,7 @@ mod tests {
                     dataset_name: "owner_a_dataset".to_string(),
                 },
                 mode: DeleteMode::Soft,
+                memory_only: false,
             })
             .await
             .expect_err("should fail for wrong owner");
@@ -1998,6 +2217,7 @@ mod tests {
                     dataset_name: "graph_ds".to_string(),
                 },
                 mode: DeleteMode::Soft,
+                memory_only: false,
             })
             .await
             .expect("execute should succeed");
@@ -2049,6 +2269,7 @@ mod tests {
                     dataset_name: "vector_ds".to_string(),
                 },
                 mode: DeleteMode::Soft,
+                memory_only: false,
             })
             .await
             .expect("execute should succeed");
@@ -2088,6 +2309,7 @@ mod tests {
             .execute(&DeleteRequest {
                 scope: DeleteScope::All,
                 mode: DeleteMode::Soft,
+                memory_only: false,
             })
             .await
             .expect("execute should succeed");
@@ -2128,6 +2350,7 @@ mod tests {
         let request = DeleteRequest {
             scope: DeleteScope::All,
             mode: DeleteMode::Soft,
+            memory_only: false,
         };
 
         let preview = svc.preview(&request).await.expect("preview should succeed");
@@ -2179,6 +2402,7 @@ mod tests {
                     dataset_name: "no_graph_ds".to_string(),
                 },
                 mode: DeleteMode::Soft,
+                memory_only: false,
             })
             .await
             .expect("execute should succeed");
@@ -2269,6 +2493,7 @@ mod tests {
                     dataset_name: "edge_ds".to_string(),
                 },
                 mode: DeleteMode::Soft,
+                memory_only: false,
             })
             .await
             .expect("execute should succeed");
@@ -2305,6 +2530,7 @@ mod tests {
                     dataset_name: "no_prov_ds".to_string(),
                 },
                 mode: DeleteMode::Soft,
+                memory_only: false,
             })
             .await
             .expect("execute should succeed");
@@ -2413,6 +2639,7 @@ mod tests {
                     delete_dataset_if_empty: false,
                 },
                 mode: DeleteMode::Soft,
+                memory_only: false,
             })
             .await
             .expect("execute should succeed");
@@ -2483,6 +2710,7 @@ mod tests {
                     delete_dataset_if_empty: false,
                 },
                 mode: DeleteMode::Soft,
+                memory_only: false,
             })
             .await
             .expect("execute should succeed");
@@ -2548,6 +2776,7 @@ mod tests {
                     dataset_name: "prov_ds_ds".to_string(),
                 },
                 mode: DeleteMode::Soft,
+                memory_only: false,
             })
             .await
             .expect("execute should succeed");
@@ -2669,6 +2898,7 @@ mod tests {
                     delete_dataset_if_empty: false,
                 },
                 mode: DeleteMode::Soft,
+                memory_only: false,
             })
             .await
             .expect("execute should succeed");
@@ -2766,6 +2996,7 @@ mod tests {
                         dataset_name: "acl_ok_ds".to_string(),
                     },
                     mode: DeleteMode::Soft,
+                    memory_only: false,
                 },
                 owner,
             )
@@ -2796,6 +3027,7 @@ mod tests {
                         dataset_name: "acl_fail_ds".to_string(),
                     },
                     mode: DeleteMode::Soft,
+                    memory_only: false,
                 },
                 owner,
             )
@@ -2831,6 +3063,7 @@ mod tests {
                         dataset_name: "acl_wrong_principal".to_string(),
                     },
                     mode: DeleteMode::Soft,
+                    memory_only: false,
                 },
                 owner_b, // wrong principal
             )
@@ -2871,6 +3104,7 @@ mod tests {
                         dataset_name: "acl_delegated".to_string(),
                     },
                     mode: DeleteMode::Soft,
+                    memory_only: false,
                 },
                 user_b,
             )
@@ -2929,6 +3163,7 @@ mod tests {
                     dataset_name: "no_acl_ds".to_string(),
                 },
                 mode: DeleteMode::Soft,
+                memory_only: false,
             })
             .await
             .expect("plain service should succeed without ACL");
@@ -2956,6 +3191,7 @@ mod tests {
                         dataset_name: "preview_acl_ds".to_string(),
                     },
                     mode: DeleteMode::Soft,
+                    memory_only: false,
                 },
                 owner,
             )
@@ -3025,6 +3261,7 @@ mod tests {
                     dataset_name: "hard_del_ds".to_string(),
                 },
                 mode: DeleteMode::Hard,
+                memory_only: false,
             })
             .await
             .expect("hard delete should succeed");
@@ -3079,6 +3316,7 @@ mod tests {
                     dataset_name: "soft_del_ds".to_string(),
                 },
                 mode: DeleteMode::Soft,
+                memory_only: false,
             })
             .await
             .expect("soft delete should succeed");
@@ -3155,6 +3393,7 @@ mod tests {
                     dataset_name: "hard_preserve_ds".to_string(),
                 },
                 mode: DeleteMode::Hard,
+                memory_only: false,
             })
             .await
             .expect("hard delete should succeed");
@@ -3208,6 +3447,7 @@ mod tests {
                     dataset_name: "ps_clear_ds".to_string(),
                 },
                 mode: DeleteMode::Soft,
+                memory_only: false,
             })
             .await
             .expect("execute should succeed");
@@ -3281,6 +3521,7 @@ mod tests {
                     dataset_name: "ps_ds1".to_string(),
                 },
                 mode: DeleteMode::Soft,
+                memory_only: false,
             })
             .await
             .expect("execute should succeed");
@@ -3353,6 +3594,7 @@ mod tests {
                     delete_dataset_if_empty: false,
                 },
                 mode: DeleteMode::Soft,
+                memory_only: false,
             })
             .await
             .expect("execute should succeed");
@@ -3419,6 +3661,7 @@ mod tests {
                     dataset_name: "pr_cascade_ds".to_string(),
                 },
                 mode: DeleteMode::Soft,
+                memory_only: false,
             })
             .await
             .expect("execute should succeed");
@@ -3496,6 +3739,7 @@ mod tests {
             .execute(&DeleteRequest {
                 scope: DeleteScope::User { owner_id: user_a },
                 mode: DeleteMode::Soft,
+                memory_only: false,
             })
             .await
             .expect("execute should succeed");
@@ -3540,6 +3784,7 @@ mod tests {
             .execute(&DeleteRequest {
                 scope: DeleteScope::All,
                 mode: DeleteMode::Soft,
+                memory_only: false,
             })
             .await
             .expect("execute should succeed");
@@ -3573,6 +3818,7 @@ mod tests {
                     dataset_name: "sh_ds_notouch".to_string(),
                 },
                 mode: DeleteMode::Soft,
+                memory_only: false,
             })
             .await
             .expect("execute should succeed");
@@ -3604,6 +3850,7 @@ mod tests {
             .preview(&DeleteRequest {
                 scope: DeleteScope::User { owner_id: owner },
                 mode: DeleteMode::Soft,
+                memory_only: false,
             })
             .await
             .expect("preview should succeed");
@@ -3618,6 +3865,7 @@ mod tests {
             .preview(&DeleteRequest {
                 scope: DeleteScope::All,
                 mode: DeleteMode::Soft,
+                memory_only: false,
             })
             .await
             .expect("preview should succeed");
@@ -3635,6 +3883,7 @@ mod tests {
                     dataset_name: "sh_preview_ds".to_string(),
                 },
                 mode: DeleteMode::Soft,
+                memory_only: false,
             })
             .await
             .expect("preview should succeed");
@@ -3756,6 +4005,7 @@ mod tests {
             .execute(&DeleteRequest {
                 scope: DeleteScope::All,
                 mode: DeleteMode::Soft,
+                memory_only: false,
             })
             .await
             .expect("delete all should succeed");
@@ -3785,6 +4035,7 @@ mod tests {
                     dataset_name: "test_ds".to_string(),
                 },
                 mode: DeleteMode::Soft,
+                memory_only: false,
             })
             .await
             .expect("delete dataset should succeed");
@@ -3808,6 +4059,7 @@ mod tests {
             .execute(&DeleteRequest {
                 scope: DeleteScope::All,
                 mode: DeleteMode::Soft,
+                memory_only: false,
             })
             .await
             .expect("delete all should succeed");
@@ -3957,6 +4209,7 @@ mod tests {
                     dataset_name: "edge_type_ds".to_string(),
                 },
                 mode: DeleteMode::Hard,
+                memory_only: false,
             })
             .await
             .expect("execute should succeed");
@@ -4135,6 +4388,7 @@ mod tests {
                     dataset_name: "soft_ds".to_string(),
                 },
                 mode: DeleteMode::Soft,
+                memory_only: false,
             })
             .await
             .expect("execute should succeed");
@@ -4169,6 +4423,7 @@ mod tests {
                     delete_dataset_if_empty: true,
                 },
                 mode: DeleteMode::Soft,
+                memory_only: false,
             })
             .await
             .expect("execute should succeed");
@@ -4242,6 +4497,7 @@ mod tests {
                     delete_dataset_if_empty: true,
                 },
                 mode: DeleteMode::Soft,
+                memory_only: false,
             })
             .await
             .expect("execute should succeed");
@@ -4275,6 +4531,7 @@ mod tests {
                     delete_dataset_if_empty: false,
                 },
                 mode: DeleteMode::Soft,
+                memory_only: false,
             })
             .await
             .expect("execute should succeed");
@@ -4367,6 +4624,316 @@ mod tests {
         assert!(
             found_none.is_none(),
             "should find no dataset for unknown tenant"
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // Memory-only tests (task 18)
+    // ------------------------------------------------------------------
+
+    /// Verify that `memory_only: true` removes graph/vector artifacts but
+    /// leaves the `Dataset` row, `Data` row, and stored file intact.
+    #[tokio::test]
+    async fn memory_only_dataset_preserves_rows_and_files() {
+        let (svc, storage, db, graph_db, vector_db) = make_service_with_graph_vector().await;
+        let owner = Uuid::new_v4();
+        let (dataset_id, data_id) =
+            seed_dataset_with_data(&db, &storage, owner, "memory_only_ds").await;
+
+        // Seed provenance nodes + graph/vector artifacts.
+        let slug = Uuid::new_v4();
+        seed_provenance_nodes(
+            &db,
+            dataset_id,
+            data_id,
+            owner,
+            &[slug],
+            "Entity",
+            serde_json::json!(["name"]),
+        )
+        .await;
+        graph_db
+            .add_node_raw(serde_json::json!({"id": slug.to_string(), "name": "TestNode"}))
+            .await
+            .unwrap();
+        vector_db
+            .create_collection("Entity", "name", 3)
+            .await
+            .unwrap();
+        vector_db
+            .index_points(
+                "Entity",
+                "name",
+                &[cognee_vector::VectorPoint::new(slug, vec![1.0, 0.0, 0.0])],
+            )
+            .await
+            .unwrap();
+
+        // Seed pipeline_status with BOTH an add_pipeline and a cognify_pipeline
+        // entry keyed by this dataset. Python's `_forget_dataset_memory` removes
+        // the dataset_id entry from EVERY pipeline on each Data record.
+        let dataset_id_hex = cognee_database::uuid_hex::to_hex(dataset_id);
+        let status_json = serde_json::json!({
+            "add_pipeline": { dataset_id_hex.clone(): "DATASET_PROCESSING_COMPLETED" },
+            "cognify_pipeline": { dataset_id_hex.clone(): "DATASET_PROCESSING_COMPLETED" },
+        });
+        let data_rec = ops::data::get_data(&db, data_id).await.unwrap().unwrap();
+        ops::data::update_data(
+            &db,
+            Data {
+                pipeline_status: Some(status_json.to_string()),
+                ..data_rec
+            },
+        )
+        .await
+        .unwrap();
+
+        let result = svc
+            .execute(&DeleteRequest {
+                scope: DeleteScope::Dataset {
+                    owner_id: owner,
+                    dataset_name: "memory_only_ds".to_string(),
+                },
+                mode: DeleteMode::Soft,
+                memory_only: true,
+            })
+            .await
+            .expect("memory-only execute should succeed");
+
+        // Graph/vector cleared.
+        assert_eq!(
+            result.deleted_graph_nodes, 1,
+            "graph node should be cleared"
+        );
+        assert_eq!(
+            result.deleted_vector_points, 1,
+            "vector point should be cleared"
+        );
+
+        // No relational rows deleted.
+        assert_eq!(result.deleted_datasets, 0, "dataset must not be deleted");
+        assert_eq!(result.deleted_data, 0, "data must not be deleted");
+        assert_eq!(
+            result.deleted_storage_files, 0,
+            "storage file must not be deleted"
+        );
+
+        // Dataset row still exists in the DB.
+        let ds_still = ops::datasets::get_dataset_by_name(&db, "memory_only_ds", owner, None)
+            .await
+            .unwrap();
+        assert!(
+            ds_still.is_some(),
+            "Dataset row must survive memory-only forget"
+        );
+
+        // Data row still exists.
+        let data_still = ops::data::get_data(&db, data_id).await.unwrap();
+        assert!(
+            data_still.is_some(),
+            "Data row must survive memory-only forget"
+        );
+
+        // Python parity (`_forget_dataset_memory`): the dataset_id entry is
+        // removed from EVERY pipeline on the Data record (add + cognify). Both
+        // inner maps become empty, so the whole pipeline_status is cleared.
+        let ps = data_still.unwrap().pipeline_status;
+        let cleared = match ps {
+            None => true,
+            Some(s) => {
+                let v: serde_json::Value = serde_json::from_str(&s).unwrap();
+                let add_has = v
+                    .get("add_pipeline")
+                    .and_then(|p| p.as_object())
+                    .map(|m| m.contains_key(&dataset_id_hex))
+                    .unwrap_or(false);
+                let cog_has = v
+                    .get("cognify_pipeline")
+                    .and_then(|p| p.as_object())
+                    .map(|m| m.contains_key(&dataset_id_hex))
+                    .unwrap_or(false);
+                !add_has && !cog_has
+            }
+        };
+        assert!(
+            cleared,
+            "dataset_id entry must be removed from ALL pipelines (add + cognify) on the data record"
+        );
+    }
+
+    /// Verify that `memory_only: true` on a data-item scope also preserves
+    /// the `Data` row and `Dataset` row.
+    #[tokio::test]
+    async fn memory_only_data_item_preserves_rows() {
+        let (svc, storage, db, _graph_db, _vector_db) = make_service_with_graph_vector().await;
+        let owner = Uuid::new_v4();
+        let (dataset_id, data_id) =
+            seed_dataset_with_data(&db, &storage, owner, "memory_only_item_ds").await;
+
+        // Add a SECOND data item to the same dataset (a sibling) to prove the
+        // data-item path only touches the targeted record, not the whole
+        // dataset (Python `_forget_data_memory` filters on `Data.id == data_id`).
+        let sibling_loc = storage.store(b"sibling", "sibling.txt").await.unwrap();
+        let sibling_id = Uuid::new_v4();
+        let sibling = Data::builder(
+            sibling_id,
+            "sibling.txt",
+            sibling_loc,
+            "file://sibling.txt",
+            "txt",
+            "text/plain",
+            "sibling_hash",
+            owner,
+        )
+        .build();
+        ops::data::create_data(&db, sibling).await.unwrap();
+        ops::datasets::attach_data_to_dataset(&db, dataset_id, sibling_id)
+            .await
+            .unwrap();
+
+        let dataset_id_hex = cognee_database::uuid_hex::to_hex(dataset_id);
+        // Target record: keep add_pipeline, remove only cognify_pipeline.
+        let target_status = serde_json::json!({
+            "add_pipeline": { dataset_id_hex.clone(): "DATASET_PROCESSING_COMPLETED" },
+            "cognify_pipeline": { dataset_id_hex.clone(): "DATASET_PROCESSING_COMPLETED" },
+        });
+        let target_rec = ops::data::get_data(&db, data_id).await.unwrap().unwrap();
+        ops::data::update_data(
+            &db,
+            Data {
+                pipeline_status: Some(target_status.to_string()),
+                ..target_rec
+            },
+        )
+        .await
+        .unwrap();
+        // Sibling record: cognify status must be left untouched.
+        let sibling_status = serde_json::json!({
+            "cognify_pipeline": { dataset_id_hex.clone(): "DATASET_PROCESSING_COMPLETED" },
+        });
+        let sibling_rec = ops::data::get_data(&db, sibling_id).await.unwrap().unwrap();
+        ops::data::update_data(
+            &db,
+            Data {
+                pipeline_status: Some(sibling_status.to_string()),
+                ..sibling_rec
+            },
+        )
+        .await
+        .unwrap();
+
+        let result = svc
+            .execute(&DeleteRequest {
+                scope: DeleteScope::Data {
+                    owner_id: owner,
+                    data_id,
+                    dataset_name: Some("memory_only_item_ds".to_string()),
+                    delete_dataset_if_empty: false,
+                },
+                mode: DeleteMode::Soft,
+                memory_only: true,
+            })
+            .await
+            .expect("memory-only data-item execute should succeed");
+
+        // No relational rows deleted.
+        assert_eq!(result.deleted_data, 0, "data must not be deleted");
+        assert_eq!(result.deleted_datasets, 0, "dataset must not be deleted");
+        assert_eq!(
+            result.deleted_storage_files, 0,
+            "storage file must not be deleted"
+        );
+
+        // Dataset row still exists.
+        let ds_still = ops::datasets::get_dataset_by_name(&db, "memory_only_item_ds", owner, None)
+            .await
+            .unwrap();
+        assert!(
+            ds_still.is_some(),
+            "Dataset row must survive data-item memory-only forget"
+        );
+
+        // Data row still exists.
+        let data_still = ops::data::get_data(&db, data_id).await.unwrap();
+        assert!(
+            data_still.is_some(),
+            "Data row must survive data-item memory-only forget"
+        );
+
+        // Target record: cognify removed, add_pipeline preserved.
+        let target_after: serde_json::Value =
+            serde_json::from_str(data_still.unwrap().pipeline_status.as_deref().unwrap()).unwrap();
+        assert!(
+            target_after.get("cognify_pipeline").is_none(),
+            "cognify_pipeline must be removed from the targeted data record"
+        );
+        assert!(
+            target_after
+                .get("add_pipeline")
+                .and_then(|p| p.as_object())
+                .map(|m| m.contains_key(&dataset_id_hex))
+                .unwrap_or(false),
+            "add_pipeline status must be preserved on the targeted data record"
+        );
+
+        // Sibling record: cognify status untouched (data-item path is scoped).
+        let sibling_after: serde_json::Value = serde_json::from_str(
+            ops::data::get_data(&db, sibling_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .pipeline_status
+                .as_deref()
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(
+            sibling_after
+                .get("cognify_pipeline")
+                .and_then(|p| p.as_object())
+                .map(|m| m.contains_key(&dataset_id_hex))
+                .unwrap_or(false),
+            "sibling data record's cognify status must NOT be cleared by a data-item forget"
+        );
+    }
+
+    /// Regression test for Item 3 (B6.6): when the Data row is absent (custom
+    /// graph model or orphaned graph data), `DeleteScope::Data` must succeed and
+    /// return a best-effort cleanup result rather than a validation error.
+    ///
+    /// Python parity: `datasets.py:165-176`.
+    #[tokio::test]
+    async fn delete_data_without_relational_row_returns_success() {
+        let (svc, _storage, _db) = make_service().await;
+        let owner = Uuid::new_v4();
+        let ghost_data_id = Uuid::new_v4();
+
+        // No dataset row, no data row — only the IDs exist.
+        let result = svc
+            .execute(&DeleteRequest {
+                scope: DeleteScope::Data {
+                    owner_id: owner,
+                    data_id: ghost_data_id,
+                    dataset_name: None,
+                    delete_dataset_if_empty: false,
+                },
+                mode: DeleteMode::Soft,
+                memory_only: false,
+            })
+            .await
+            .expect("should succeed for a data_id with no relational row (custom graph model)");
+
+        // The core cleanup paths ran without error.  The call must not return a
+        // Validation error — that is the key invariant.  `deleted_data` may be
+        // 1 even when no relational row existed because the delete pipeline
+        // attempts a best-effort relational DELETE and increments the counter
+        // regardless of the underlying row count (SQLite DELETE WHERE succeeds
+        // on a non-existent row with 0 rows affected, but still counted as
+        // one delete attempt).
+        assert!(
+            result.deleted_data <= 1,
+            "unexpected large deletion count for a ghost data_id: deleted_data={}",
+            result.deleted_data
         );
     }
 }

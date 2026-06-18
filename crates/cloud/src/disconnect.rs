@@ -44,17 +44,22 @@ pub async fn disconnect(wipe_credentials: bool) -> CloudResult<()> {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 mod tests {
     use super::*;
     use crate::cloud_client::CloudClient;
     use crate::credentials::{self as creds_mod, CloudCredentials};
     use crate::state::{is_connected, set_client};
-    use std::sync::Mutex;
 
-    // Same rationale as in `serve::tests` — the process-wide singleton
-    // and `$HOME` env var are shared across all tests in this crate, so
-    // we serialise them via an explicit mutex.
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
+    // The process-wide singleton and `$HOME` env var are shared across ALL
+    // tests in this crate (one test binary), so we serialise via the
+    // crate-wide [`crate::ENV_TEST_LOCK`] — a module-local mutex would not
+    // exclude the env tests in `config`/`credentials`/`serve`.
+    use crate::ENV_TEST_LOCK as ENV_LOCK;
 
     fn with_isolated_env<F, Fut>(tmp: &std::path::Path, body: F)
     where

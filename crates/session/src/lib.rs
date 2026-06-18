@@ -1,5 +1,6 @@
 mod error;
 mod feedback;
+mod improve_lock;
 mod session_manager;
 mod session_store;
 mod types;
@@ -18,6 +19,7 @@ mod sea_orm_backend;
 mod sea_orm_store;
 
 pub use error::SessionError;
+pub use improve_lock::{ImproveLockGuard, release_improve_lock, try_acquire_improve_lock};
 pub use session_manager::SessionManager;
 pub use session_store::{SessionQAUpdate, SessionStore};
 pub use types::{SessionContext, SessionQAEntry, SessionTraceStep, UsedGraphElementIds};

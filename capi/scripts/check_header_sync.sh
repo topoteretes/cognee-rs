@@ -3,9 +3,8 @@
 # Rust source has a matching declaration in the public C headers.
 #
 # SCOPE: name-level only.  This script detects missing or renamed functions but
-# NOT signature changes (wrong argument types, changed return types).  For
-# full signature-level checking see Option B / Step 4 in
-# docs/bindings-parity/03-capi-header-cbindgen.md.
+# NOT signature changes (wrong argument types, changed return types).  Full
+# signature-level checking would require a cbindgen-based approach (out of scope).
 #
 # EXIT: 0 when fully in sync; non-zero when any export lacks a declaration.
 set -euo pipefail
@@ -45,7 +44,11 @@ if [[ -f "$ALLOWLIST" ]]; then
     while IFS= read -r entry; do
         # Skip blank lines and comments.
         [[ -z "$entry" || "$entry" == \#* ]] && continue
-        sed -i "/^${entry}$/d" "$EXPORTS_TMP"
+        # `sed -i.bak` is portable across GNU and BSD/macOS sed (a bare `sed -i`
+        # treats the next argument as the backup suffix on BSD, which breaks the
+        # in-place edit). Remove the backup afterwards. Symbol names are
+        # [a-z0-9_]+, so there are no regex metacharacters to escape.
+        sed -i.bak "/^${entry}$/d" "$EXPORTS_TMP" && rm -f "$EXPORTS_TMP.bak"
     done < "$ALLOWLIST"
 fi
 

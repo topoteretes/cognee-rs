@@ -58,6 +58,10 @@ pub struct CloudCredentials {
 /// not expected on any supported target (Linux / macOS / Windows). This
 /// matches the Python behaviour where `Path.home()` raises `RuntimeError`
 /// in the same cases.
+#[allow(
+    clippy::expect_used,
+    reason = "dirs::home_dir() returning None on a supported platform (Linux/macOS/Windows) is an unrecoverable misconfiguration; matches Python's RuntimeError behaviour"
+)]
 pub fn credentials_path() -> PathBuf {
     let home = dirs::home_dir()
         .expect("dirs::home_dir() returns Some on all supported platforms (Linux/macOS/Windows)");
@@ -143,15 +147,21 @@ pub fn is_token_expired(creds: &CloudCredentials) -> bool {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::uninlined_format_args,
+    reason = "test code — panics are acceptable failures"
+)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
 
     // `dirs::home_dir()` reads `$HOME`, so tests that override it must not
-    // run in parallel. Locking also protects the credential-file singleton.
-    // A plain `std::sync::Mutex` is used here (not tokio's) so it works
-    // from synchronous test bodies without holding an async context.
-    static HOME_LOCK: Mutex<()> = Mutex::new(());
+    // run in parallel. We use the crate-wide [`crate::ENV_TEST_LOCK`] (not a
+    // module-local mutex) so these tests are serialized against the env-var
+    // tests in `config`, `serve`, and `disconnect`, which all share the same
+    // process-global `$HOME`/`COGNEE_*` state in the single test binary.
+    use crate::ENV_TEST_LOCK as HOME_LOCK;
 
     fn sample_creds() -> CloudCredentials {
         CloudCredentials {
@@ -172,9 +182,9 @@ mod tests {
     /// the original `$HOME` value afterwards. We build the runtime under
     /// the lock (no nested runtimes: the outer `#[test]` is synchronous).
     ///
-    /// `poisoning()` would only fire if an earlier test panicked while
-    /// holding the lock; in that case the env-var table is already
-    /// potentially corrupt, so we `expect` rather than try to recover.
+    /// Poisoning would only fire if an earlier test panicked while holding the
+    /// lock; we recover via `into_inner()` rather than propagate so one
+    /// panicking test does not cascade-fail every other env test.
     fn with_home_runtime<R, F>(tmp: &std::path::Path, fut_builder: F) -> R
     where
         F: for<'a> FnOnce(&'a tokio::runtime::Runtime) -> R,

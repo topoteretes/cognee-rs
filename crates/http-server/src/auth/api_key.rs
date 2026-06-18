@@ -80,6 +80,11 @@ pub async fn lookup_api_key(header_value: &str, ctx: &AuthContext) -> Option<Aut
 // ─── Unit tests ───────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 mod tests {
     use super::*;
 

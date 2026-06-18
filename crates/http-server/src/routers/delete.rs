@@ -115,6 +115,7 @@ pub async fn delete_data_deprecated(
             delete_dataset_if_empty: query.delete_dataset_if_empty,
         },
         mode: svc_mode,
+        memory_only: false,
     };
 
     match delete_service.execute(&request).await {
@@ -138,6 +139,7 @@ fn build_success_response(headers: HeaderMap) -> axum::response::Response {
     builder
         .body(axum::body::Body::from(body))
         .unwrap_or_else(|_| {
+            #[allow(clippy::expect_used, reason = "invariant is upheld by construction")]
             axum::response::Response::builder()
                 .status(StatusCode::INTERNAL_SERVER_ERROR)
                 .body(axum::body::Body::empty())
@@ -158,6 +160,7 @@ fn build_conflict_response(error: &str, headers: HeaderMap) -> axum::response::R
     builder
         .body(axum::body::Body::from(body))
         .unwrap_or_else(|_| {
+            #[allow(clippy::expect_used, reason = "invariant is upheld by construction")]
             axum::response::Response::builder()
                 .status(StatusCode::INTERNAL_SERVER_ERROR)
                 .body(axum::body::Body::empty())

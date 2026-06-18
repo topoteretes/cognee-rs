@@ -147,7 +147,7 @@ where
         match operation().await {
             Ok(result) => {
                 if attempt > 0 {
-                    log::info!("Operation succeeded after {} retry attempt(s)", attempt);
+                    tracing::info!("Operation succeeded after {} retry attempt(s)", attempt);
                 }
                 return Ok(result);
             }
@@ -156,7 +156,7 @@ where
 
                 match decision {
                     RetryDecision::Abort => {
-                        log::debug!(
+                        tracing::debug!(
                             "Aborting retry after {} attempt(s) due to non-retryable error",
                             attempt + 1
                         );
@@ -164,7 +164,7 @@ where
                     }
                     RetryDecision::Retry => {
                         if attempt >= config.max_retries {
-                            log::warn!(
+                            tracing::warn!(
                                 "Max retries ({}) exceeded, returning error",
                                 config.max_retries
                             );
@@ -172,7 +172,7 @@ where
                         }
 
                         let delay = config.calculate_delay(attempt);
-                        log::debug!(
+                        tracing::debug!(
                             "Retry attempt {}/{}, waiting {:?} before next attempt",
                             attempt + 1,
                             config.max_retries,

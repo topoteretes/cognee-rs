@@ -15,7 +15,7 @@ pub fn format_pages(pages: &[(usize, Result<String, String>)]) -> String {
     for (page_num, result) in pages {
         match result {
             Ok(text) if !text.trim().is_empty() => {
-                parts.push(format!("Page {}:\n{}\n", page_num, text));
+                parts.push(format!("Page {page_num}:\n{text}\n"));
             }
             Ok(_) => {
                 // Empty page -- skip silently

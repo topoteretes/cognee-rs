@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! Round-trip tests for the new `pipeline_run_payload_fields` table and its
 //! `set_payload_field` / `get_payload` repository methods (LIB-06).
 

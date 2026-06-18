@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! Integration tests for `GET /api/v1/ontologies` and `POST /api/v1/ontologies`.
 //!
 //! Full ontology upload requires wired `OntologyManager` (filesystem + DB).

@@ -1,3 +1,8 @@
+#![allow(
+    clippy::expect_used,
+    clippy::unwrap_used,
+    reason = "integration test code — panics are acceptable failures"
+)]
 //! Integration-style tests for `init_telemetry` activation paths.
 //!
 //! These tests mutate process-global OTEL state via

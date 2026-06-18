@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! P5 §5: HTTP-level coverage of the roles surface in
 //! `/api/v1/permissions`.
 //!

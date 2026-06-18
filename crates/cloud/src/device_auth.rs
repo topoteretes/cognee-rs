@@ -443,6 +443,11 @@ pub fn extract_email_from_id_token(id_token: &str) -> CloudResult<String> {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 mod tests {
     use super::*;
     use base64::Engine;

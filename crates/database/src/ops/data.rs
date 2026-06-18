@@ -270,6 +270,79 @@ pub async fn clear_pipeline_status_for_dataset(
     Ok(updated_count)
 }
 
+/// Clear only the `cognify_pipeline` entry for `dataset_id` from a single
+/// Data record's `pipeline_status` JSON. All other entries are preserved.
+///
+/// Mirrors Python `_forget_data_memory` lines 343-348.
+#[instrument(
+    name = "cognee.db.relational.data.clear_cognify_pipeline_status_for_data",
+    level = "info",
+    skip_all,
+    fields(
+        cognee.db.system = tracing::field::Empty,
+    ),
+    err,
+)]
+pub async fn clear_cognify_pipeline_status_for_data(
+    db: &DatabaseConnection,
+    data_id: Uuid,
+    dataset_id: Uuid,
+) -> Result<(), DatabaseError> {
+    Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
+    let model = data::Entity::find_by_id(uuid_hex::to_hex(data_id))
+        .one(db)
+        .await
+        .map_err(map_sea_err)?;
+
+    let Some(model) = model else {
+        return Ok(());
+    };
+
+    let Some(ref status_json) = model.pipeline_status else {
+        return Ok(());
+    };
+
+    let mut parsed: serde_json::Value =
+        serde_json::from_str(status_json).unwrap_or(serde_json::Value::Object(Default::default()));
+
+    let serde_json::Value::Object(ref mut top_map) = parsed else {
+        return Ok(());
+    };
+
+    let dataset_id_str = uuid_hex::to_hex(dataset_id);
+    let Some(inner) = top_map.get_mut("cognify_pipeline") else {
+        return Ok(());
+    };
+    let modified = if let serde_json::Value::Object(inner_map) = inner {
+        inner_map.remove(&dataset_id_str).is_some()
+    } else {
+        false
+    };
+
+    if !modified {
+        return Ok(());
+    }
+
+    // Remove `cognify_pipeline` if its inner map is now empty.
+    top_map.retain(|k, v| {
+        k != "cognify_pipeline" || !matches!(v, serde_json::Value::Object(m) if m.is_empty())
+    });
+
+    let new_status = if top_map.is_empty() {
+        None
+    } else {
+        Some(serde_json::to_string(&parsed).map_err(|e| {
+            DatabaseError::QueryError(format!("Failed to serialize pipeline_status: {e}"))
+        })?)
+    };
+
+    let mut active = model.into_active_model();
+    active.pipeline_status = Set(new_status);
+    active.updated_at = Set(Some(Utc::now()));
+    active.update(db).await.map_err(map_sea_err)?;
+    Ok(())
+}
+
 #[instrument(
     name = "cognee.db.relational.data.list_datasets_for_data",
     level = "info",

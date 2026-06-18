@@ -28,8 +28,18 @@ use thiserror::Error;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CognifyConfig {
     /// Maximum chunk size in tokens.
-    /// Python default: 1500 (from ChunkConfig.chunk_size)
-    /// Note: In Python, can be auto-calculated from LLM max_completion_tokens if None
+    ///
+    /// The sentinel value `1500` means "auto-calculate at pipeline time" via
+    /// [`CognifyConfig::auto_chunk_size`]. The pipeline in `tasks.rs` replaces the
+    /// sentinel with the computed value before executing — matching Python's
+    /// `get_max_chunk_tokens()` behaviour where `chunk_size=None` at the cognify
+    /// entry point always triggers auto-calculation. The computed value depends on
+    /// the active embedding engine: ≈512 for the local ONNX/BGE default (512-token
+    /// sequence limit) and 8191 for an OpenAI-compatible engine at its default
+    /// `max_completion_tokens` (8191), both clamped by the LLM term (8192).
+    ///
+    /// Pass an explicit value via [`CognifyConfig::with_chunk_size`] to override
+    /// the auto-calculation; any value other than the sentinel is used as-is.
     pub max_chunk_size: usize,
 
     /// Overlap between chunks (in tokens).
@@ -370,17 +380,37 @@ impl CognifyConfig {
         self
     }
 
-    /// Auto-calculate max_chunk_size from embedding and LLM capabilities.
+    /// Auto-calculate `max_chunk_size`, mirroring Python's `get_max_chunk_tokens()`
+    /// from `cognee/infrastructure/llm/utils.py`:
     ///
-    /// Formula: `min(embedding_engine.max_sequence_length(), llm.max_context_length() / 2)`
+    /// ```text
+    /// llm_cutoff_point = llm_max_completion_tokens // 2   # Python default: 16384 → 8192
+    /// max_chunk_tokens = min(embedding_engine.max_completion_tokens, llm_cutoff_point)
+    /// ```
     ///
-    /// Matches Python's `get_max_chunk_tokens()` from
-    /// `cognee/infrastructure/llm/utils.py`:
-    /// - Chunk size must not exceed half of the LLM's max context token size
-    /// - Chunk size must not exceed the embedding engine's max token size
-    /// - Result is at least 1
-    pub fn auto_chunk_size(embedding_engine: &dyn EmbeddingEngine, llm: &dyn Llm) -> usize {
-        let llm_cutoff = (llm.max_context_length() / 2) as usize;
+    /// Python uses **completion-token** budgets (not context windows):
+    /// - `embedding_engine.max_completion_tokens` — the engine's configured token
+    ///   limit. Python's `EmbeddingConfig` default is **8191**
+    ///   (`embeddings/config.py:81`), passed to the engine by the factory; the
+    ///   engine class's own `__init__` default of 512 is overridden in that path.
+    ///   Rust mirrors this: `EmbeddingConfig.max_completion_tokens` defaults to 8191.
+    /// - `llm_max_completion_tokens` = **16384** (infrastructure/llm/config.py:51).
+    /// - So for an OpenAI-compatible engine: `min(8191, 8192) = 8191`. For the local
+    ///   ONNX/BGE engine, `max_sequence_length()` is the model's 512-token limit, so
+    ///   `min(512, 8192) = 512`. The embedding term is the binding one in both cases.
+    ///
+    /// The Rust `Llm` trait exposes only `max_context_length()` (a context window),
+    /// not a completion-token limit. Rather than divide an unrelated quantity, we use
+    /// Python's LLM completion-token constant (16384) directly. The embedding term
+    /// (`max_sequence_length()` — 512 for BGE, the configured `max_completion_tokens`
+    /// for OpenAI-compatible) is binding in all practical configurations, so the LLM
+    /// argument is currently unused (`_llm`).
+    ///
+    /// Result is at least 1.
+    pub fn auto_chunk_size(embedding_engine: &dyn EmbeddingEngine, _llm: &dyn Llm) -> usize {
+        // Python infrastructure/llm/config.py:51 — default LLM completion-token budget.
+        const PY_LLM_MAX_COMPLETION_TOKENS: usize = 16_384;
+        let llm_cutoff = PY_LLM_MAX_COMPLETION_TOKENS / 2; // == 8192
         let embed_max = embedding_engine.max_sequence_length();
         llm_cutoff.min(embed_max).max(1)
     }
@@ -676,25 +706,49 @@ mod tests {
         assert!(config3.validate().is_err());
     }
 
+    /// Local ONNX/BGE default: the model's 512-token sequence limit binds →
+    /// min(512, 8192) = 512. The LLM argument is unused in the new formula
+    /// (Python constant 16384/2=8192). For an OpenAI-compatible engine at its
+    /// default max_completion_tokens (8191), the result would be min(8191, 8192)
+    /// = 8191 — see `test_auto_chunk_size_large_embedding` for the >8192 case.
     #[test]
-    fn test_auto_chunk_size_embed_is_smaller() {
-        // embed_max=512, llm_context=4096 → llm_cutoff=2048 → result=512
+    fn auto_chunk_size_matches_python_default() {
+        // BGE-like embedding: max_seq=512 binds → result=512.
         let embed = MockEmbedding { max_seq: 512 };
         let llm = MockLlm { max_ctx: 4096 };
         assert_eq!(CognifyConfig::auto_chunk_size(&embed, &llm), 512);
     }
 
     #[test]
-    fn test_auto_chunk_size_llm_cutoff_is_smaller() {
-        // embed_max=512, llm_context=256 → llm_cutoff=128 → result=128
+    fn test_auto_chunk_size_embed_is_smaller() {
+        // embed_max=512, LLM cutoff=8192 → result=512 (embedding term dominates).
         let embed = MockEmbedding { max_seq: 512 };
-        let llm = MockLlm { max_ctx: 256 };
-        assert_eq!(CognifyConfig::auto_chunk_size(&embed, &llm), 128);
+        let llm = MockLlm { max_ctx: 4096 };
+        assert_eq!(CognifyConfig::auto_chunk_size(&embed, &llm), 512);
+    }
+
+    #[test]
+    fn test_auto_chunk_size_llm_cutoff_unused() {
+        // LLM context window is NOT used for the cutoff. The Python completion-token
+        // constant (16384 → 8192) is used instead. Even a tiny context window no
+        // longer artificially restricts the chunk size — the embedding term (512)
+        // still dominates.
+        let embed = MockEmbedding { max_seq: 512 };
+        let llm = MockLlm { max_ctx: 256 }; // previously returned 128, now returns 512
+        assert_eq!(CognifyConfig::auto_chunk_size(&embed, &llm), 512);
+    }
+
+    #[test]
+    fn test_auto_chunk_size_large_embedding() {
+        // embed_max=10000 > llm_cutoff (8192) → result=8192 (LLM constant dominates).
+        let embed = MockEmbedding { max_seq: 10_000 };
+        let llm = MockLlm { max_ctx: 4096 };
+        assert_eq!(CognifyConfig::auto_chunk_size(&embed, &llm), 8192);
     }
 
     #[test]
     fn test_auto_chunk_size_equal_values() {
-        // embed_max=1024, llm_context=2048 → llm_cutoff=1024 → result=1024
+        // embed_max=1024 < 8192 → result=1024 (embedding term dominates).
         let embed = MockEmbedding { max_seq: 1024 };
         let llm = MockLlm { max_ctx: 2048 };
         assert_eq!(CognifyConfig::auto_chunk_size(&embed, &llm), 1024);
@@ -702,18 +756,18 @@ mod tests {
 
     #[test]
     fn test_auto_chunk_size_floor_at_one() {
-        // embed_max=0, llm_context=0 → both 0 → result clamped to 1
+        // embed_max=0 → min(0, 8192)=0 → clamped to 1.
         let embed = MockEmbedding { max_seq: 0 };
         let llm = MockLlm { max_ctx: 0 };
         assert_eq!(CognifyConfig::auto_chunk_size(&embed, &llm), 1);
     }
 
     #[test]
-    fn test_auto_chunk_size_odd_llm_context() {
-        // llm_context=4097 → llm_cutoff=2048 (integer division), embed_max=3000 → result=2048
-        let embed = MockEmbedding { max_seq: 3000 };
-        let llm = MockLlm { max_ctx: 4097 };
-        assert_eq!(CognifyConfig::auto_chunk_size(&embed, &llm), 2048);
+    fn test_auto_chunk_size_embed_exactly_at_llm_cutoff() {
+        // embed_max=8192 == llm_cutoff → result=8192.
+        let embed = MockEmbedding { max_seq: 8192 };
+        let llm = MockLlm { max_ctx: 4096 };
+        assert_eq!(CognifyConfig::auto_chunk_size(&embed, &llm), 8192);
     }
 
     #[test]

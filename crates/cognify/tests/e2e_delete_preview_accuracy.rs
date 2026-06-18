@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! E2E test: delete preview counts must match actual execution counts.
 //!
 //! Runs the full pipeline (add -> cognify -> memify -> delete) using real
@@ -206,6 +211,7 @@ async fn test_delete_preview_counts_match_execution() {
             dataset_name: dataset_name.to_string(),
         },
         mode: DeleteMode::Soft,
+        memory_only: false,
     };
 
     // ── Step 5: Preview ─────────────────────────────────────────────────────

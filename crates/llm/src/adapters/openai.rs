@@ -80,13 +80,24 @@ impl OpenAIAdapter {
         let client = Client::builder()
             .timeout(std::time::Duration::from_secs(600))
             .build()
-            .map_err(|e| LlmError::ConfigError(format!("Failed to create HTTP client: {}", e)))?;
+            .map_err(|e| LlmError::ConfigError(format!("Failed to create HTTP client: {e}")))?;
 
         let transcription_model =
             std::env::var("TRANSCRIPTION_MODEL").unwrap_or_else(|_| "whisper-1".to_string());
 
+        // Strip a leading litellm-style "openai/" provider prefix. Python's
+        // litellm accepts provider-qualified names (e.g. "openai/gpt-5-mini")
+        // and strips the provider before calling the OpenAI-native API, which
+        // itself rejects the prefix. Strip it here for parity so a
+        // provider-qualified config value works against real OpenAI.
+        let model: String = model.into();
+        let model = model
+            .strip_prefix("openai/")
+            .map(str::to_string)
+            .unwrap_or(model);
+
         Ok(Self {
-            model: model.into(),
+            model,
             api_key: api_key.into(),
             base_url: base_url.unwrap_or_else(|| Self::DEFAULT_BASE_URL.to_string()),
             client,
@@ -152,7 +163,7 @@ impl OpenAIAdapter {
         let url = format!("{}/chat/completions", self.base_url);
         tracing::Span::current().record("url", url.as_str());
         let debug_enabled = std::env::var("COGNEE_DEBUG_LLM_REQUEST")
-            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .map(|v| cognee_utils::parse_env_bool(&v))
             .unwrap_or(false);
 
         if debug_enabled {
@@ -204,8 +215,8 @@ impl OpenAIAdapter {
                 let err = match status.as_u16() {
                     401 => LlmError::AuthenticationError(error_body),
                     429 => LlmError::RateLimitExceeded(error_body),
-                    400 => LlmError::InvalidResponse(format!("Bad request: {}", error_body)),
-                    _ => LlmError::ApiError(format!("HTTP {}: {}", status, error_body)),
+                    400 => LlmError::InvalidResponse(format!("Bad request: {error_body}")),
+                    _ => LlmError::ApiError(format!("HTTP {status}: {error_body}")),
                 };
 
                 // Non-retryable: bad request or authentication failure.
@@ -218,7 +229,7 @@ impl OpenAIAdapter {
             }
 
             let response_body = response.text().await.map_err(|e| {
-                LlmError::DeserializationError(format!("Failed to read response body: {}", e))
+                LlmError::DeserializationError(format!("Failed to read response body: {e}"))
             })?;
 
             if debug_enabled {
@@ -227,8 +238,7 @@ impl OpenAIAdapter {
 
             return serde_json::from_str::<OpenAIResponse>(&response_body).map_err(|e| {
                 LlmError::DeserializationError(format!(
-                    "Failed to parse response: {}. Raw body: {}",
-                    e, response_body
+                    "Failed to parse response: {e}. Raw body: {response_body}"
                 ))
             });
         }
@@ -476,8 +486,7 @@ impl Llm for OpenAIAdapter {
                             }
                             if !is_empty_or_non_json(content) {
                                 return Err(LlmError::DeserializationError(format!(
-                                    "Failed to deserialize strict JSON content: {}. Raw: {}",
-                                    e, content
+                                    "Failed to deserialize strict JSON content: {e}. Raw: {content}"
                                 )));
                             }
                             break;
@@ -614,8 +623,7 @@ impl Llm for OpenAIAdapter {
                         continue;
                     }
                     return Err(LlmError::DeserializationError(format!(
-                        "Failed to deserialize JSON content: {}. Raw: {}",
-                        e, content
+                        "Failed to deserialize JSON content: {e}. Raw: {content}"
                     )));
                 }
             }
@@ -791,19 +799,18 @@ impl OpenAIAdapter {
             return Err(match status.as_u16() {
                 401 => LlmError::AuthenticationError(error_body),
                 429 => LlmError::RateLimitExceeded(error_body),
-                400 => LlmError::InvalidResponse(format!("Bad request: {}", error_body)),
-                _ => LlmError::ApiError(format!("HTTP {}: {}", status, error_body)),
+                400 => LlmError::InvalidResponse(format!("Bad request: {error_body}")),
+                _ => LlmError::ApiError(format!("HTTP {status}: {error_body}")),
             });
         }
 
         let response_body = response.text().await.map_err(|e| {
-            LlmError::DeserializationError(format!("Failed to read response body: {}", e))
+            LlmError::DeserializationError(format!("Failed to read response body: {e}"))
         })?;
 
         serde_json::from_str::<WhisperResponse>(&response_body).map_err(|e| {
             LlmError::DeserializationError(format!(
-                "Failed to parse Whisper response: {}. Raw body: {}",
-                e, response_body
+                "Failed to parse Whisper response: {e}. Raw body: {response_body}"
             ))
         })
     }
@@ -817,13 +824,13 @@ impl OpenAIAdapter {
         prompt_hint: Option<&str>,
     ) -> LlmResult<reqwest::multipart::Form> {
         let mime = audio_mime_type(format);
-        let filename = format!("audio.{}", format);
+        let filename = format!("audio.{format}");
 
         let file_part = reqwest::multipart::Part::bytes(audio.to_vec())
             .file_name(filename)
             .mime_str(mime)
             .map_err(|e| {
-                LlmError::ConfigError(format!("Failed to set MIME type on multipart part: {}", e))
+                LlmError::ConfigError(format!("Failed to set MIME type on multipart part: {e}"))
             })?;
 
         let mut form = reqwest::multipart::Form::new()
@@ -953,7 +960,22 @@ struct OpenAIUsage {
 
 #[cfg(test)]
 mod tests {
+    #![allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        reason = "test code — panics are acceptable"
+    )]
     use super::*;
+
+    #[test]
+    fn test_openai_provider_prefix_is_stripped() {
+        // litellm-style "openai/<model>" must be sent as bare "<model>".
+        let adapter = OpenAIAdapter::new("openai/gpt-5-mini", "test-key", None).unwrap();
+        assert_eq!(adapter.model(), "gpt-5-mini");
+        // Non-openai provider prefixes (custom endpoints) are left intact.
+        let adapter = OpenAIAdapter::new("ollama/llama3", "test-key", None).unwrap();
+        assert_eq!(adapter.model(), "ollama/llama3");
+    }
 
     #[test]
     fn test_openai_adapter_creation() {

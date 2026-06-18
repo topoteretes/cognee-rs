@@ -129,8 +129,7 @@ pub fn run(args: CognifyArgs, cm: Arc<ComponentManager>) -> Result<(), CliError>
                     })?
                     .ok_or_else(|| {
                         CliError::Validation(format!(
-                            "Dataset '{dataset_name}' was not found for owner {}",
-                            owner_id
+                            "Dataset '{dataset_name}' was not found for owner {owner_id}"
                         ))
                     })?;
 
@@ -247,15 +246,13 @@ pub(crate) async fn resolve_dataset_names(
         .await
         .map_err(|error| {
             CliError::Runtime(format!(
-                "Failed to list datasets for owner {}: {error}",
-                owner_id
+                "Failed to list datasets for owner {owner_id}: {error}"
             ))
         })?;
 
     if datasets.is_empty() {
         return Err(CliError::Validation(format!(
-            "No datasets found for owner {}. Add data first or pass --datasets.",
-            owner_id
+            "No datasets found for owner {owner_id}. Add data first or pass --datasets."
         )));
     }
 

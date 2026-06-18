@@ -1,6 +1,11 @@
 //! Example demonstrating JSON schema generation for structured LLM outputs.
 //!
 //! Run with: cargo run --example schema_example
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "example code — panics are acceptable"
+)]
 
 use cognee_llm::schema::{build_schema_prompt, generate_json_schema, generate_json_schema_string};
 use schemars::JsonSchema;
@@ -68,12 +73,12 @@ fn main() {
     // Example 2: Generate schema as string (compact)
     println!("2. Generate compact schema string for Edge:");
     let edge_schema_compact = generate_json_schema_string::<Edge>(false);
-    println!("{}\n", edge_schema_compact);
+    println!("{edge_schema_compact}\n");
 
     // Example 3: Generate schema as string (pretty)
     println!("3. Generate pretty schema string for KnowledgeGraph:");
     let kg_schema = generate_json_schema_string::<KnowledgeGraph>(true);
-    println!("{}\n", kg_schema);
+    println!("{kg_schema}\n");
 
     // Example 4: Build a complete prompt with embedded schema
     println!("4. Build complete LLM prompt with schema:");
@@ -82,7 +87,7 @@ fn main() {
          Identify all entities (people, organizations, locations) as nodes \
          and their relationships as edges. Include confidence scores where applicable.",
     );
-    println!("{}\n", prompt);
+    println!("{prompt}\n");
 
     // Example 5: Demonstrate what an LLM implementation would do
     println!("5. How an LLM adapter would use this:");
@@ -149,7 +154,7 @@ fn main() {
             }
         }
         Err(e) => {
-            println!("   ✗ Invalid response: {}", e);
+            println!("   ✗ Invalid response: {e}");
         }
     }
 }

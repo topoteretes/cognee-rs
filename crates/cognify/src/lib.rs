@@ -1,17 +1,32 @@
+//! Knowledge-graph extraction pipeline (classify → chunk → extract → summarize → index) and the memify enrichment pipeline.
+
+/// Configuration module for the cognify pipeline.
 pub mod config;
+/// Dataset resolver module.
 pub mod dataset_resolver;
+/// Error types module.
 pub mod error;
+/// Fact extraction module.
 pub mod fact_extraction;
+/// Graph extraction module.
 pub mod graph_extraction;
+/// Graph integration module.
 pub mod graph_integration;
+/// Memify pipeline module.
 pub mod memify;
+/// Pipeline orchestration module.
 pub mod pipeline;
+/// Qualification module.
 pub mod qualification;
+/// Summarization module.
 pub mod summarization;
+/// Pipeline tasks module.
 pub mod tasks;
+/// Temporal extraction module.
 pub mod temporal_extraction;
 
 pub use temporal_extraction::{TemporalEntityEnricher, TemporalEventExtractor};
+/// Triplet creation module.
 pub mod triplet_creation;
 
 pub use config::{ChunkStrategy, CognifyConfig, ConfigError, CustomChunker};

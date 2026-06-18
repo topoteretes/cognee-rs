@@ -119,11 +119,7 @@ mod tests {
         );
 
         let norm = embedding.norm();
-        assert!(
-            (norm - 1.0).abs() < 0.01,
-            "Expected norm ~1.0, got {}",
-            norm
-        );
+        assert!((norm - 1.0).abs() < 0.01, "Expected norm ~1.0, got {norm}");
     }
 
     #[test]

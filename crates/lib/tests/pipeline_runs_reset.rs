@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! Tests for the Python-parity reset helpers (`api::pipeline_runs`).
 //!
 //! Covers (a) `reset_pipeline_run_status` writes a fresh `INITIATED` row,

@@ -137,6 +137,11 @@ impl<'de> Deserialize<'de> for EdgeMetadata {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 mod tests {
     use super::*;
     use serde_json::json;
@@ -337,7 +342,7 @@ mod tests {
     #[test]
     fn test_debug_format() {
         let edge = EdgeMetadata::new(Some("contains".into()), None, None);
-        let debug = format!("{:?}", edge);
+        let debug = format!("{edge:?}");
         assert!(debug.contains("EdgeMetadata"));
         assert!(debug.contains("contains"));
     }

@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! Integration test: verifies that `Data.last_accessed` is updated after search.
 //!
 //! Ingests a document, cognifies it, then performs searches and checks that the
@@ -180,7 +185,7 @@ async fn test_search_updates_last_accessed_timestamp() {
     {
         Ok(_) => {}
         Err(e) => {
-            eprintln!("Skipping test: cognify failed: {}", e);
+            eprintln!("Skipping test: cognify failed: {e}");
             return;
         }
     }
@@ -191,7 +196,7 @@ async fn test_search_updates_last_accessed_timestamp() {
         .expect("get_data")
         .expect("data should exist");
     let initial_last_accessed = initial_data.last_accessed;
-    println!("Initial last_accessed: {:?}", initial_last_accessed);
+    println!("Initial last_accessed: {initial_last_accessed:?}");
 
     // ── Wait 100ms, record before_search time ────────────────────────────────
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -234,6 +239,7 @@ async fn test_search_updates_last_accessed_timestamp() {
         auto_feedback_detection: None,
         neighborhood_depth: None,
         neighborhood_seed_top_k: None,
+        summarize_context: None,
     };
 
     orchestrator
@@ -247,10 +253,7 @@ async fn test_search_updates_last_accessed_timestamp() {
         .expect("get_data after first search")
         .expect("data should exist");
     let first_last_accessed = after_first_search.last_accessed;
-    println!(
-        "After first search last_accessed: {:?}",
-        first_last_accessed
-    );
+    println!("After first search last_accessed: {first_last_accessed:?}");
 
     // Assert it was updated: should be Some and within 30s of now
     let first_ts = first_last_accessed.expect("last_accessed should be set after search");
@@ -265,18 +268,14 @@ async fn test_search_updates_last_accessed_timestamp() {
     // Assert it was updated relative to before_search
     assert!(
         first_ts >= before_search,
-        "last_accessed ({}) should be >= before_search ({})",
-        first_ts,
-        before_search
+        "last_accessed ({first_ts}) should be >= before_search ({before_search})"
     );
 
     // If initial_last_accessed was Some, the new value must be >= the initial
     if let Some(initial_ts) = initial_last_accessed {
         assert!(
             first_ts >= initial_ts,
-            "last_accessed after search ({}) should be >= initial ({})",
-            first_ts,
-            initial_ts
+            "last_accessed after search ({first_ts}) should be >= initial ({initial_ts})"
         );
     }
 
@@ -300,14 +299,9 @@ async fn test_search_updates_last_accessed_timestamp() {
     // Assert monotonic increase
     assert!(
         second_last_accessed >= first_ts,
-        "last_accessed should increase monotonically: second ({}) >= first ({})",
-        second_last_accessed,
-        first_ts
+        "last_accessed should increase monotonically: second ({second_last_accessed}) >= first ({first_ts})"
     );
 
-    println!(
-        "Monotonic check passed: {} >= {}",
-        second_last_accessed, first_ts
-    );
+    println!("Monotonic check passed: {second_last_accessed} >= {first_ts}");
     println!("test_search_updates_last_accessed_timestamp PASSED");
 }

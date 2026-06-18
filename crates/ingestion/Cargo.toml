@@ -2,10 +2,24 @@
 name = "cognee-ingestion"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
 
 [dependencies]
 async-trait.workspace = true
-cognee-core = { path = "../core" }
+# `pipeline.rs` uses `DbPipelineWatcher` unconditionally, so it needs the
+# `pipeline-run-registry` module which `cognee-core` gates behind this feature.
+cognee-core = { path = "../core", features = ["pipeline-run-registry"] }
 cognee-database = { path = "../database" }
 cognee-graph = { path = "../graph" }
 cognee-models = { path = "../models" }

@@ -272,58 +272,12 @@ impl SearchRetriever for LexicalRetriever {
     }
 }
 
-pub struct JaccardChunksRetriever {
-    inner: LexicalRetriever,
-}
-
-impl JaccardChunksRetriever {
-    pub fn new(
-        graph_db: Arc<dyn GraphDBTrait>,
-        top_k: Option<usize>,
-        with_scores: bool,
-        stop_words: Option<Vec<String>>,
-        multiset_jaccard: bool,
-    ) -> Self {
-        Self {
-            inner: LexicalRetriever::new(
-                graph_db,
-                top_k,
-                with_scores,
-                stop_words,
-                multiset_jaccard,
-            ),
-        }
-    }
-}
-
-#[async_trait]
-impl SearchRetriever for JaccardChunksRetriever {
-    fn search_type(&self) -> SearchType {
-        self.inner.search_type()
-    }
-
-    async fn get_context(
-        &self,
-        query: &str,
-        params: &SearchParams,
-    ) -> Result<SearchContext, SearchError> {
-        self.inner.get_context(query, params).await
-    }
-
-    async fn get_completion(
-        &self,
-        query: &str,
-        context: Option<SearchContext>,
-        session: &SessionContext,
-        params: &SearchParams,
-    ) -> Result<SearchOutput, SearchError> {
-        self.inner
-            .get_completion(query, context, session, params)
-            .await
-    }
-}
-
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 mod tests {
     use std::sync::Arc;
 
@@ -333,7 +287,7 @@ mod tests {
 
     use cognee_session::SessionContext;
 
-    use crate::retrievers::{JaccardChunksRetriever, SearchRetriever};
+    use crate::retrievers::{LexicalRetriever, SearchRetriever};
     use crate::types::{SearchOutput, SearchParams};
 
     #[derive(Serialize)]
@@ -362,7 +316,7 @@ mod tests {
         add_chunk(&mock_graph_db, "ownership ownership ownership model").await;
         let graph_db: Arc<dyn GraphDBTrait> = mock_graph_db;
 
-        let retriever = JaccardChunksRetriever::new(
+        let retriever = LexicalRetriever::new(
             Arc::clone(&graph_db),
             Some(2),
             true,
@@ -394,8 +348,7 @@ mod tests {
         add_chunk(&mock_graph_db, "rust memory").await;
         let graph_db: Arc<dyn GraphDBTrait> = mock_graph_db;
 
-        let retriever =
-            JaccardChunksRetriever::new(Arc::clone(&graph_db), Some(2), true, None, true);
+        let retriever = LexicalRetriever::new(Arc::clone(&graph_db), Some(2), true, None, true);
 
         let context = retriever
             .get_context("rust rust memory", &SearchParams::default())
@@ -420,7 +373,7 @@ mod tests {
         add_chunk(&mock_graph_db, "ownership model in rust").await;
         let graph_db: Arc<dyn GraphDBTrait> = mock_graph_db;
 
-        let retriever = JaccardChunksRetriever::new(
+        let retriever = LexicalRetriever::new(
             Arc::clone(&graph_db),
             Some(2),
             false, // scores NOT included in output
@@ -456,16 +409,12 @@ mod tests {
     fn tokenize_lowercases_unicode_characters() {
         let mock_graph_db = Arc::new(MockGraphDB::new());
         let graph_db: Arc<dyn cognee_graph::GraphDBTrait> = mock_graph_db;
-        let retriever =
-            JaccardChunksRetriever::new(Arc::clone(&graph_db), None, false, None, false);
+        let retriever = LexicalRetriever::new(Arc::clone(&graph_db), None, false, None, false);
 
-        assert_eq!(retriever.inner.tokenize("Über"), vec!["über"]);
-        assert_eq!(retriever.inner.tokenize("Ñoño"), vec!["ñoño"]);
-        assert_eq!(retriever.inner.tokenize("ДМИТРО"), vec!["дмитро"]);
-        assert_eq!(
-            retriever.inner.tokenize("Hello World"),
-            vec!["hello", "world"]
-        );
+        assert_eq!(retriever.tokenize("Über"), vec!["über"]);
+        assert_eq!(retriever.tokenize("Ñoño"), vec!["ñoño"]);
+        assert_eq!(retriever.tokenize("ДМИТРО"), vec!["дмитро"]);
+        assert_eq!(retriever.tokenize("Hello World"), vec!["hello", "world"]);
     }
 
     #[tokio::test]
@@ -474,11 +423,10 @@ mod tests {
         add_chunk(&mock_graph_db, "cached chunk example text").await;
         let graph_db: Arc<dyn GraphDBTrait> = mock_graph_db;
 
-        let retriever =
-            JaccardChunksRetriever::new(Arc::clone(&graph_db), Some(5), true, None, false);
+        let retriever = LexicalRetriever::new(Arc::clone(&graph_db), Some(5), true, None, false);
 
         // Cache should be empty before the first call
-        assert!(retriever.inner.cached_chunks.get().is_none());
+        assert!(retriever.cached_chunks.get().is_none());
 
         let _ = retriever
             .get_context("cached chunk", &SearchParams::default())
@@ -486,8 +434,8 @@ mod tests {
             .unwrap();
 
         // Cache should be populated after the first call
-        assert!(retriever.inner.cached_chunks.get().is_some());
-        let cached = retriever.inner.cached_chunks.get().unwrap();
+        assert!(retriever.cached_chunks.get().is_some());
+        let cached = retriever.cached_chunks.get().unwrap();
         assert_eq!(cached.len(), 1);
     }
 
@@ -497,8 +445,7 @@ mod tests {
         add_chunk(&mock_graph_db, "exact term matching with jaccard").await;
         let graph_db: Arc<dyn GraphDBTrait> = mock_graph_db;
 
-        let retriever =
-            JaccardChunksRetriever::new(Arc::clone(&graph_db), Some(5), false, None, false);
+        let retriever = LexicalRetriever::new(Arc::clone(&graph_db), Some(5), false, None, false);
 
         let output = retriever
             .get_completion(

@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! Integration test: invoking `cognee-cli` writes a `*.log` file
 //! under `COGNEE_LOGS_DIR` and the file contains the
 //! `"Logging initialized"` anchor emitted by `cognee_logging::init_logging`.

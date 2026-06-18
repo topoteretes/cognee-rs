@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! Integration tests for `POST /api/v1/improve`.
 //!
 //! Per p3-pipelines-and-websocket.md §5:

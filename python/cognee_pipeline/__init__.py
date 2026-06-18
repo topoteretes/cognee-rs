@@ -31,8 +31,7 @@ class SearchType(str, Enum):
 
     The two upstream types ``AGENTIC_COMPLETION`` and
     ``GRAPH_COMPLETION_DECOMPOSITION`` are **not yet supported** by the Rust
-    core.  Passing either raises :exc:`CogneeValidationError` at runtime; see
-    ``docs/python-bindings/minor-engine-gaps.md`` for the tracking note.
+    core.  Passing either raises :exc:`CogneeValidationError` at runtime.
     """
 
     # Ensure str() and f-strings return the bare value (e.g. "CHUNKS"), not

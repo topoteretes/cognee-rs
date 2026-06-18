@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! Integration test: `recall()` records router overrides.
 //!
 //! When the caller passes an explicit `query_type` and `auto_route=true`,
@@ -73,6 +78,7 @@ async fn recall_records_router_override() {
         None,
         None,
         None,
+        None,
     )
     .await
     .expect("recall should succeed against the stub retriever");
@@ -119,6 +125,7 @@ async fn recall_auto_route_does_not_record_override() {
         None,
         None,
         None,
+        None,
     )
     .await
     .expect("recall should succeed");
@@ -154,6 +161,7 @@ async fn recall_explicit_without_auto_route_skips_router() {
         None,
         None,
         &orchestrator,
+        None,
         None,
         None,
         None,

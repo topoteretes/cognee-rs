@@ -1,21 +1,17 @@
 name: HTTP Parity
 
-# TODO(http-parity): re-enable push/pull_request triggers once cognee Python's
-# `fix/db-migrations` branch merges to dev. Today the Python alembic chain
-# fails on a virgin SQLite DB because its initial migration
-# (cognee/alembic/versions/8057ae7329c2_initial_migration.py) is a no-op and
-# subsequent revisions like ab7e313804ae_permission_system_rework assume the
-# `acls` table already exists. The harness's tmpfs `/py` workspace is a true
-# virgin DB on every run, so Python uvicorn never reaches a healthy /health
-# state, wait_for_health.sh times out, and Phase-1 fails before pytest runs.
-# The upstream fix is on `origin/fix/db-migrations` (commit 8ab385033) which
-# replaces the no-op initial migration with a comprehensive
-# deadbeef0001_new_initial_schema.py covering every base table (~30
-# create_table calls including `acls`). When that lands on dev:
-#   1. Bump the cognee `ref:` SHA in the Checkout step below.
-#   2. Restore the on.push / on.pull_request triggers (see git history).
-# Until then the workflow only runs on workflow_dispatch.
+# Re-enabled on push/PR (task 12): the Python alembic chain on a virgin SQLite
+# DB is fixed via Option B1 in e2e-cross-sdk/bin/start_servers.sh — the
+# harness pre-creates all ORM tables via create_database() and stamps alembic
+# to head before uvicorn starts, so the lifespan migration is a no-op delta.
+# Phase-1 deterministic checks + telemetry parity run without any secrets.
+# LLM-gated phases use secrets.OPENAI_KEY (same as ci.yml) and skip cleanly
+# when absent (fork-safe). Phase-3 specialty tests remain workflow_dispatch-only.
 on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
   workflow_dispatch:
     inputs:
       run_phase3:
@@ -31,6 +27,15 @@ concurrency:
 jobs:
   http-parity:
     runs-on: ubuntu-latest
+
+    # HAS_OPENAI_KEY must be set at job level so step-level `if:` expressions
+    # can read it via `env.HAS_OPENAI_KEY`.  A step's own `env:` block is only
+    # visible to the `run:` script, NOT to the `if:` evaluator — setting it
+    # only at step level means the gate always evaluates against '' (falsy) and
+    # all LLM-gated steps would be permanently skipped even when the secret
+    # is present.  Job-level `env:` supports the `secrets` context.
+    env:
+      HAS_OPENAI_KEY: ${{ secrets.OPENAI_KEY != '' }}
 
     steps:
       # The Dockerfile copies from BOTH cognee-rust/ and cognee/ siblings
@@ -139,7 +144,7 @@ jobs:
           -f cognee-rust/e2e-cross-sdk/docker-compose.yml
           run --rm e2e-http-tests
           pytest -vs /harness/
-          -k "test_http_(health|auth|datasets|add|search|forget|openapi|errors|self)"
+          -k "test_http_health or test_http_auth or test_http_datasets or test_http_add or test_http_search or test_http_forget or test_http_openapi or test_http_errors or test_http_self"
           --tb=short
 
       # ── Telemetry parity: cross-SDK identity-layer comparison ────────────
@@ -157,12 +162,11 @@ jobs:
           run --rm e2e-telemetry
 
       # ── Phase-2: LLM-gated (requires OPENAI_KEY secret) ──────────────────
-      # The `secrets` context is not available in step-level `if:` expressions,
-      # so we route the secret through `env.HAS_OPENAI_KEY` and gate on that.
+      # `env.HAS_OPENAI_KEY` is set at job level (see job env: block above).
+      # Step-level `if:` can read job-level env; it cannot read step-level env.
       - name: Phase-2 — cognify, remember, recall, memify, improve, llm (LLM-gated)
         if: ${{ env.HAS_OPENAI_KEY == 'true' }}
         env:
-          HAS_OPENAI_KEY: ${{ secrets.OPENAI_KEY != '' }}
           OPENAI_TOKEN: ${{ secrets.OPENAI_KEY }}
           OPENAI_URL: https://api.openai.com/v1
           OPENAI_MODEL: gpt-4o-mini
@@ -171,7 +175,7 @@ jobs:
           -f cognee-rust/e2e-cross-sdk/docker-compose.yml
           run --rm e2e-http-tests
           pytest -vs /harness/
-          -k "test_http_(cognify|remember|recall|memify|improve|llm)"
+          -k "test_http_cognify or test_http_remember or test_http_recall or test_http_memify or test_http_improve or test_http_llm"
           --tb=short
 
       # ── Cross-SDK provenance parity (LLM-gated) ─────────────────────────
@@ -181,7 +185,6 @@ jobs:
       - name: Provenance parity (LLM-gated)
         if: ${{ env.HAS_OPENAI_KEY == 'true' }}
         env:
-          HAS_OPENAI_KEY: ${{ secrets.OPENAI_KEY != '' }}
           OPENAI_TOKEN: ${{ secrets.OPENAI_KEY }}
           OPENAI_URL: https://api.openai.com/v1
           OPENAI_MODEL: gpt-4o-mini
@@ -196,15 +199,12 @@ jobs:
       # Asserts gap-06 file-logging parity between Python and Rust SDKs:
       # loose per-filename presence, strict per-message byte equality.
       # See docs/telemetry/06-file-logging-rotation.md. The test itself
-      # does not require OpenAI, but the entire workflow is
-      # workflow_dispatch-only today (see file header about the alembic
-      # migration freeze); we keep the HAS_OPENAI_KEY gate so this step
-      # gracefully skips on forks without the secret. When push/PR
-      # triggers are restored, the gate continues to work unchanged.
+      # does not require OpenAI; we keep the HAS_OPENAI_KEY gate so this
+      # step gracefully skips on forks/keyless pushes without the secret
+      # (the build cost is only justified alongside the LLM-gated phases).
+      # Phase-1 + telemetry parity remain the unconditional release gate.
       - name: Logging parity (no LLM needed)
         if: ${{ env.HAS_OPENAI_KEY == 'true' }}
-        env:
-          HAS_OPENAI_KEY: ${{ secrets.OPENAI_KEY != '' }}
         run: >-
           docker compose
           -f cognee-rust/e2e-cross-sdk/docker-compose.yml
@@ -224,5 +224,5 @@ jobs:
           -f cognee-rust/e2e-cross-sdk/docker-compose.yml
           run --rm e2e-http-tests
           pytest -vs /harness/
-          -k "test_http_(websocket|sync|permissions|visualize)"
+          -k "test_http_websocket or test_http_sync or test_http_permissions or test_http_visualize"
           --tb=short

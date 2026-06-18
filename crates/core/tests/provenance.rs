@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! Unit tests for `cognee_core::provenance::stamp_tree` ported from the
 //! Python parity suite at
 //! `cognee/tests/unit/modules/pipelines/test_provenance_stamping.py`.

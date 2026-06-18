@@ -64,6 +64,7 @@ impl RecordingLlm {
 
     /// Insert a recorded entry, keyed by `hash`. Idempotent: re-recording the same
     /// hash overwrites with the (identical) latest response.
+    #[allow(clippy::unwrap_used, reason = "lock poison is unrecoverable")]
     fn record(&self, hash: String, entry: CassetteEntry) {
         // lock poison is unrecoverable
         self.entries.lock().unwrap().insert(hash, entry);
@@ -71,6 +72,7 @@ impl RecordingLlm {
 
     /// Snapshot the recorded entries and write them to the configured path as a
     /// cassette (`model = inner.model()`, `version = 1`).
+    #[allow(clippy::unwrap_used, reason = "lock poison is unrecoverable")]
     pub fn flush(&self) -> LlmResult<()> {
         // lock poison is unrecoverable
         let entries = self.entries.lock().unwrap().clone();
@@ -210,6 +212,11 @@ impl Drop for RecordingLlm {
 
 #[cfg(test)]
 mod tests {
+    #![allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        reason = "test code — panics are acceptable"
+    )]
     use super::*;
     use serde_json::json;
     use std::collections::VecDeque;

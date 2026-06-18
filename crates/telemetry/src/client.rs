@@ -15,6 +15,10 @@ use std::time::Duration;
 
 use crate::env::request_timeout_secs;
 
+#[allow(
+    clippy::expect_used,
+    reason = "reqwest ClientBuilder with default params cannot fail"
+)]
 static HTTP: Lazy<Client> = Lazy::new(|| {
     Client::builder()
         .timeout(Duration::from_secs(request_timeout_secs()))

@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! Tests for `ScopedRunWatcher` — the registry's `PipelineWatcher` proxy.
 //!
 //! Drives a fake pipeline through lifecycle events and asserts:
@@ -46,7 +51,7 @@ fn make_watcher(
     let (event_tx, rx) = broadcast::channel::<RunEvent>(64);
     let (phase_tx, _phase_rx) = watch::channel(RunPhase::Pending);
 
-    let sink = PerRunSink::from_parts(run_id, event_tx, phase_tx);
+    let sink = PerRunSink::from_parts(event_tx, phase_tx);
     let watcher = ScopedRunWatcher::new(run_id, sink, repo);
     (watcher, rx)
 }

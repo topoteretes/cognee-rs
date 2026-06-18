@@ -52,6 +52,10 @@ pub struct SearchRequest {
     /// Number of initial seed nodes for neighborhood expansion.
     /// Controls starting point density.
     pub neighborhood_seed_top_k: Option<usize>,
+    /// When `true`, store a JSON summary of the retrieved context alongside the Q&A entry.
+    /// When `false` (default), store an empty string — matching the Python SDK behavior
+    /// where `context_to_store = ""` unless `summarize_context=True`.
+    pub summarize_context: Option<bool>,
 }
 
 impl SearchRequest {
@@ -101,6 +105,11 @@ impl SearchRequest {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 mod tests {
     use super::*;
 

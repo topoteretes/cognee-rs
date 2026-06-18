@@ -2,6 +2,11 @@
 //!
 //! This example shows how to use the OpenAI adapter to extract structured data
 //! from text using JSON schema-guided generation.
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "example code — panics are acceptable"
+)]
 //!
 //! Set your OpenAI API key:
 //! ```bash
@@ -81,7 +86,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .await?;
 
-    println!("Input: {}", text);
+    println!("Input: {text}");
     println!("\nExtracted entities:");
     println!("  People: {:?}", entities.people);
     println!("  Organizations: {:?}", entities.organizations);
@@ -107,7 +112,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .await?;
 
-    println!("Input: {}", text);
+    println!("Input: {text}");
     println!("\nKnowledge Graph:");
     println!("  Nodes:");
     for node in &graph.nodes {

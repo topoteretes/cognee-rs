@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! Integration tests for `SmtpMailer` construction and env-var handling.
 //!
 //! These tests do NOT send real emails — they verify:
@@ -61,7 +66,7 @@ fn smtp_valid_env_constructs_ok() {
         std::env::set_var("SMTP_FROM", "noreply@example.com");
     }
     let result = SmtpMailer::from_env();
-    assert!(result.is_ok(), "expected Ok, got {:?}", result);
+    assert!(result.is_ok(), "expected Ok, got {result:?}");
     clear_smtp_env();
 }
 

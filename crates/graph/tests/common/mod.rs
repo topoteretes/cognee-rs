@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! Shared GraphDBTrait contract tests.
 //!
 //! Each function exercises one aspect of the [`GraphDBTrait`] and can be called

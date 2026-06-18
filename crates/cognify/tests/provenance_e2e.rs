@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! Cognify E2E provenance test (gap 05-10 §4.3).
 //!
 //! Runs the convenience `cognify()` pipeline against a one-paragraph

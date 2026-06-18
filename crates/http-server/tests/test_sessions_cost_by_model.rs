@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! E-11 — `GET /api/v1/sessions/cost-by-model` integration tests.
 //!
 //! Nine tests covering:

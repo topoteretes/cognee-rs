@@ -575,6 +575,11 @@ fn to_datetime(date: NaiveDate, is_end: bool) -> Option<DateTime<Utc>> {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 mod tests {
     use std::borrow::Cow;
     use std::collections::{HashMap, HashSet};
@@ -2020,6 +2025,7 @@ mod tests {
             session_id: None,
             history: vec![],
             formatted_history: String::new(),
+            graph_context: None,
         }
     }
 
@@ -2292,6 +2298,7 @@ mod tests {
                 Message::assistant("Previous answer.".to_string()),
             ],
             formatted_history: "Q: Previous question?\nA: Previous answer.".to_string(),
+            graph_context: None,
         };
 
         retriever

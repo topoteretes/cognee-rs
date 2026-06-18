@@ -18,7 +18,7 @@ use uuid::Uuid;
 ///
 /// Matches [Python's `generate_pipeline_id`](https://github.com/topoteretes/cognee/blob/main/cognee/modules/pipelines/utils/generate_pipeline_id.py).
 pub fn pipeline_id(user_id: Uuid, dataset_id: Uuid, pipeline_name: &str) -> Uuid {
-    let s = format!("{}{}{}", user_id, pipeline_name, dataset_id);
+    let s = format!("{user_id}{pipeline_name}{dataset_id}");
     Uuid::new_v5(&Uuid::NAMESPACE_OID, s.as_bytes())
 }
 
@@ -31,11 +31,16 @@ pub fn pipeline_id(user_id: Uuid, dataset_id: Uuid, pipeline_name: &str) -> Uuid
 /// the same `pipeline_run_id`. The `id` column in `pipeline_runs` is the true
 /// PK; multiple rows can share the same `pipeline_run_id`.
 pub fn pipeline_run_id(pipeline_id: Uuid, dataset_id: Uuid) -> Uuid {
-    let s = format!("{}_{}", pipeline_id, dataset_id);
+    let s = format!("{pipeline_id}_{dataset_id}");
     Uuid::new_v5(&Uuid::NAMESPACE_OID, s.as_bytes())
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 mod tests {
     use super::*;
 

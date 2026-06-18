@@ -94,8 +94,7 @@ async fn parse_remember_multipart(
     if let Some(vals) = parsed.fields.get("run_in_background")
         && let Some(v) = vals.first()
     {
-        let v = v.trim().to_ascii_lowercase();
-        form.run_in_background = Some(v == "true" || v == "1");
+        form.run_in_background = Some(cognee_utils::parse_env_bool(v.trim()));
     }
 
     if let Some(vals) = parsed.fields.get("custom_prompt")
@@ -704,6 +703,9 @@ pub async fn post_remember_entry(
                     &question,
                     &answer,
                     Some(context.as_str()),
+                    // used_graph_element_ids handled by the follow-up update below
+                    // when the raw JSON value needs schema-validation first.
+                    None,
                 )
                 .await
                 .map_err(map_session_err)?;
@@ -845,6 +847,11 @@ pub fn router() -> Router<AppState> {
 // ─── Unit tests ───────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 mod tests {
     use super::*;
     use axum::{Router, body::Body, http::Request};

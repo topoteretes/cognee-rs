@@ -160,9 +160,11 @@ pub async fn post_add(
         let resp = axum::response::Response::builder()
             .status(StatusCode::BAD_REQUEST)
             .header("Content-Type", "application/json")
-            .body(axum::body::Body::from(serde_json::to_string(&body).expect(
-                "json serialization cannot fail for static structure",
-            )))
+            .body(axum::body::Body::from(
+                #[allow(clippy::expect_used, reason = "invariant is upheld by construction")]
+                serde_json::to_string(&body)
+                    .expect("json serialization cannot fail for static structure"),
+            ))
             .map_err(|e| ApiError::Internal(anyhow::anyhow!("response build error: {e}")))?;
         return Ok(resp);
     }
@@ -285,6 +287,7 @@ pub async fn post_add(
                 .status(StatusCode::INTERNAL_SERVER_ERROR)
                 .header("Content-Type", "application/json")
                 .body(axum::body::Body::from(
+                    #[allow(clippy::expect_used, reason = "invariant is upheld by construction")]
                     serde_json::to_string(&body).expect("static json"),
                 ))
                 .map_err(|e| ApiError::Internal(anyhow::anyhow!("response build error: {e}")))?;
@@ -325,6 +328,7 @@ pub async fn post_add(
                 .status(StatusCode::OK)
                 .header("Content-Type", "application/json")
                 .body(axum::body::Body::from(
+                    #[allow(clippy::expect_used, reason = "invariant is upheld by construction")]
                     serde_json::to_string(&run_info).expect("static json"),
                 ))
                 .map_err(|e| ApiError::Internal(anyhow::anyhow!("response build error: {e}")))?;

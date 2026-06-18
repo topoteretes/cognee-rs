@@ -2,9 +2,22 @@
 name = "cognee-examples"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
 publish = false
+description.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+authors.workspace = true
 
 # Define each example
+
+[lints]
+workspace = true
+
 [[example]]
 name = "add_example"
 path = "add_example.rs"

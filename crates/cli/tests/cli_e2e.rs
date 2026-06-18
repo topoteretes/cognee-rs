@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 use assert_cmd::Command;
 use md5::{Digest, Md5};
 use predicates::prelude::*;
@@ -230,7 +235,7 @@ fn search_errors_when_dataset_name_does_not_exist() {
         &config_home,
         workdir.path(),
         "default_user_id",
-        &format!("\"{}\"", owner_id),
+        &format!("\"{owner_id}\""),
     );
     config_set(
         &config_home,
@@ -242,7 +247,7 @@ fn search_errors_when_dataset_name_does_not_exist() {
         &config_home,
         workdir.path(),
         "relational_db_url",
-        &format!("\"{}\"", db_url),
+        &format!("\"{db_url}\""),
     );
     config_set(
         &config_home,
@@ -406,7 +411,7 @@ fn add_url_stores_extracted_text_raw_html_and_metadata() {
         &config_home,
         workdir.path(),
         "relational_db_url",
-        &format!("\"{}\"", db_url),
+        &format!("\"{db_url}\""),
     );
 
     make_cmd_in(&config_home, workdir.path())
@@ -548,7 +553,7 @@ fn cognify_live_smoke() {
         &config_home,
         workdir.path(),
         "relational_db_url",
-        &format!("\"{}\"", db_url),
+        &format!("\"{db_url}\""),
     );
     config_set(
         &config_home,
@@ -567,31 +572,31 @@ fn cognify_live_smoke() {
         &config_home,
         workdir.path(),
         "llm_model",
-        &format!("\"{}\"", llm_model),
+        &format!("\"{llm_model}\""),
     );
     config_set(
         &config_home,
         workdir.path(),
         "llm_endpoint",
-        &format!("\"{}\"", api_url),
+        &format!("\"{api_url}\""),
     );
     config_set(
         &config_home,
         workdir.path(),
         "llm_api_key",
-        &format!("\"{}\"", api_key),
+        &format!("\"{api_key}\""),
     );
     config_set(
         &config_home,
         workdir.path(),
         "embedding_model_path",
-        &format!("\"{}\"", embedding_model_path),
+        &format!("\"{embedding_model_path}\""),
     );
     config_set(
         &config_home,
         workdir.path(),
         "embedding_tokenizer_path",
-        &format!("\"{}\"", embedding_tokenizer_path),
+        &format!("\"{embedding_tokenizer_path}\""),
     );
 
     make_cmd_in(&config_home, workdir.path())
@@ -641,7 +646,7 @@ fn search_live_smoke() {
         &config_home,
         workdir.path(),
         "relational_db_url",
-        &format!("\"{}\"", db_url),
+        &format!("\"{db_url}\""),
     );
     config_set(
         &config_home,
@@ -660,31 +665,31 @@ fn search_live_smoke() {
         &config_home,
         workdir.path(),
         "llm_model",
-        &format!("\"{}\"", llm_model),
+        &format!("\"{llm_model}\""),
     );
     config_set(
         &config_home,
         workdir.path(),
         "llm_endpoint",
-        &format!("\"{}\"", api_url),
+        &format!("\"{api_url}\""),
     );
     config_set(
         &config_home,
         workdir.path(),
         "llm_api_key",
-        &format!("\"{}\"", api_key),
+        &format!("\"{api_key}\""),
     );
     config_set(
         &config_home,
         workdir.path(),
         "embedding_model_path",
-        &format!("\"{}\"", embedding_model_path),
+        &format!("\"{embedding_model_path}\""),
     );
     config_set(
         &config_home,
         workdir.path(),
         "embedding_tokenizer_path",
-        &format!("\"{}\"", embedding_tokenizer_path),
+        &format!("\"{embedding_tokenizer_path}\""),
     );
 
     make_cmd_in(&config_home, workdir.path())

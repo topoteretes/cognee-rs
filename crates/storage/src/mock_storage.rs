@@ -1,3 +1,9 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "mock infrastructure — panics are acceptable"
+)]
+
 use super::storage_trait::{StorageError, StorageTrait, StorageWriter};
 use async_trait::async_trait;
 use std::collections::HashMap;
@@ -24,7 +30,7 @@ impl MockStorage {
     fn generate_location(&self) -> String {
         let mut counter = self.counter.lock().unwrap(); // lock poison is unrecoverable
         *counter += 1;
-        format!("mock/{}.bin", counter)
+        format!("mock/{counter}.bin")
     }
 
     pub fn get_stored_data(&self, location: &str) -> Option<Vec<u8>> {
@@ -108,7 +114,7 @@ impl StorageTrait for MockStorage {
             .unwrap() // lock poison is unrecoverable
             .get(location)
             .cloned()
-            .ok_or_else(|| StorageError::NotFound(format!("Location not found: {}", location)))
+            .ok_or_else(|| StorageError::NotFound(format!("Location not found: {location}")))
     }
 
     async fn exists(&self, location: &str) -> Result<bool, StorageError> {
@@ -124,12 +130,12 @@ impl StorageTrait for MockStorage {
             .lock()
             .unwrap() // lock poison is unrecoverable
             .remove(location)
-            .ok_or_else(|| StorageError::NotFound(format!("Location not found: {}", location)))?;
+            .ok_or_else(|| StorageError::NotFound(format!("Location not found: {location}")))?;
         Ok(())
     }
 
     fn get_full_path(&self, location: &str) -> PathBuf {
-        PathBuf::from(format!("/mock/{}", location))
+        PathBuf::from(format!("/mock/{location}"))
     }
 
     fn base_path(&self) -> &str {

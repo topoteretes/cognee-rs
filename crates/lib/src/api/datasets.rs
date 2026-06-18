@@ -8,10 +8,13 @@ use std::sync::Arc;
 
 use cognee_database::{AclDb, DeleteDb, IngestDb, PipelineRunStatus};
 use cognee_delete::{DeleteMode, DeleteRequest, DeleteResult, DeleteScope, DeleteService};
+use cognee_ingestion::generate_dataset_id;
 use cognee_models::{Data, Dataset};
 use uuid::Uuid;
 
 use super::error::DatasetError;
+
+const DATASET_PERMISSIONS: [&str; 4] = ["read", "write", "delete", "share"];
 
 /// Combined trait for dataset operations.
 ///
@@ -65,39 +68,54 @@ impl DatasetManager {
     }
 
     /// List all data items in a dataset, with permission check.
+    ///
+    /// Results are sorted by `data_size` descending (largest first), matching
+    /// Python SDK behaviour.
     pub async fn list_data(
         &self,
         dataset_id: Uuid,
         owner_id: Uuid,
     ) -> Result<Vec<Data>, DatasetError> {
         self.check_read_permission(owner_id, dataset_id).await?;
-        Ok(self.db.get_dataset_data(dataset_id).await?)
+        let mut items = self.db.get_dataset_data(dataset_id).await?;
+        items.sort_by_key(|b| std::cmp::Reverse(b.data_size));
+        Ok(items)
     }
 
     /// Check whether a dataset contains any data items.
     ///
-    /// Uses an efficient COUNT query instead of loading all records.
-    pub async fn has_data(&self, dataset_id: Uuid) -> Result<bool, DatasetError> {
+    /// Enforces read permission when ACL is configured, then uses an efficient
+    /// COUNT query instead of loading all records.
+    pub async fn has_data(&self, dataset_id: Uuid, owner_id: Uuid) -> Result<bool, DatasetError> {
+        self.check_read_permission(owner_id, dataset_id).await?;
         let count = self.db.count_dataset_data(dataset_id).await?;
         Ok(count > 0)
     }
 
-    /// Get the latest cognify pipeline status for each dataset.
+    /// Get the latest pipeline status for each dataset, across all tracked pipelines.
     ///
-    /// Datasets with no pipeline runs are omitted from the result map
-    /// (equivalent to Python's "not started" behavior).
+    /// Returns a nested map `{ dataset_id → { pipeline_name → status } }`.
+    /// Datasets with no pipeline runs for a given pipeline are omitted from the
+    /// inner map (equivalent to Python's "not started" behaviour).
     pub async fn get_status(
         &self,
         dataset_ids: &[Uuid],
-    ) -> Result<HashMap<Uuid, PipelineRunStatus>, DatasetError> {
-        let mut statuses = HashMap::with_capacity(dataset_ids.len());
+    ) -> Result<HashMap<Uuid, HashMap<String, PipelineRunStatus>>, DatasetError> {
+        const PIPELINES: &[&str] = &["add_pipeline", "cognify_pipeline"];
+        let mut statuses: HashMap<Uuid, HashMap<String, PipelineRunStatus>> =
+            HashMap::with_capacity(dataset_ids.len());
         for &id in dataset_ids {
-            if let Some(status) = self
-                .db
-                .get_latest_pipeline_status("cognify_pipeline", id)
-                .await?
-            {
-                statuses.insert(id, status);
+            for pipeline_name in PIPELINES {
+                if let Some(status) = self
+                    .db
+                    .get_latest_pipeline_status(pipeline_name, id)
+                    .await?
+                {
+                    statuses
+                        .entry(id)
+                        .or_default()
+                        .insert(pipeline_name.to_string(), status);
+                }
             }
         }
         Ok(statuses)
@@ -143,6 +161,7 @@ impl DatasetManager {
                 dataset_name: dataset.name,
             },
             mode: DeleteMode::Hard,
+            memory_only: false,
         };
         Ok(delete_service.execute(&request).await?)
     }
@@ -169,6 +188,7 @@ impl DatasetManager {
                 delete_dataset_if_empty,
             },
             mode,
+            memory_only: false,
         };
         Ok(delete_service.execute(&request).await?)
     }
@@ -190,10 +210,68 @@ impl DatasetManager {
                     dataset_name: ds.name,
                 },
                 mode: DeleteMode::Hard,
+                memory_only: false,
             };
             results.push(delete_service.execute(&request).await?);
         }
         Ok(results)
+    }
+
+    // ------------------------------------------------------------------
+    // Create operations
+    // ------------------------------------------------------------------
+
+    /// Create a dataset with a deterministic ID matching Python's formula:
+    ///   `uuid5(NAMESPACE_OID, f"{name}{user_id}{tenant_id}")`.
+    ///
+    /// Idempotent: if a dataset with the same deterministic ID already exists,
+    /// returns the existing row.
+    pub async fn create_dataset(
+        &self,
+        name: &str,
+        owner_id: Uuid,
+        tenant_id: Option<Uuid>,
+    ) -> Result<Dataset, DatasetError> {
+        let id = generate_dataset_id(name, owner_id, tenant_id);
+        // Try to get existing dataset first (idempotent create).
+        if let Some(existing) = self.db.get_dataset(id).await? {
+            return Ok(existing);
+        }
+        let dataset = Dataset::new(name.to_string(), owner_id, tenant_id, id);
+        Ok(self.db.create_dataset(dataset).await?)
+    }
+
+    /// Create a dataset and grant all four ACL permissions (`read`, `write`,
+    /// `delete`, `share`) to the owner.
+    pub async fn create_authorized_dataset(
+        &self,
+        name: &str,
+        owner_id: Uuid,
+        tenant_id: Option<Uuid>,
+        parent_user_id: Option<Uuid>,
+    ) -> Result<Dataset, DatasetError> {
+        let ds = self.create_dataset(name, owner_id, tenant_id).await?;
+        let acl = self.acl_db.as_ref().ok_or(DatasetError::AclNotConfigured)?;
+
+        // The `acls.principal_id` FK references `principals.id`; ensure the
+        // principal row exists before granting, otherwise the grant fails a
+        // foreign-key constraint. Python's `give_permission_on_dataset` takes
+        // an already-persisted `User`; the Rust facade may be called with a
+        // bare id, so we upsert the principal here. `ensure_principal` is an
+        // idempotent upsert.
+        acl.ensure_principal(owner_id, "user").await?;
+        for perm in DATASET_PERMISSIONS {
+            acl.grant_permission(owner_id, ds.id, perm).await?;
+        }
+        if let Some(parent) = parent_user_id
+            && parent != owner_id
+        {
+            acl.ensure_principal(parent, "user").await?;
+            for perm in DATASET_PERMISSIONS {
+                acl.grant_permission(parent, ds.id, perm).await?;
+            }
+        }
+        Ok(ds)
     }
 
     // ------------------------------------------------------------------
@@ -232,6 +310,11 @@ impl DatasetManager {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 mod tests {
     use super::*;
     use cognee_database::{connect, initialize};
@@ -260,7 +343,7 @@ mod tests {
 
     fn make_data(owner_id: Uuid) -> Data {
         let id = Uuid::new_v4();
-        let loc = format!("file:///tmp/test/{}.txt", id);
+        let loc = format!("file:///tmp/test/{id}.txt");
         Data::builder(
             id,
             "test-data.txt",
@@ -271,6 +354,23 @@ mod tests {
             format!("{:x}", Uuid::new_v4()),
             owner_id,
         )
+        .build()
+    }
+
+    fn make_data_with_size(owner_id: Uuid, size: i64) -> Data {
+        let id = Uuid::new_v4();
+        let loc = format!("file:///tmp/test/{id}.txt");
+        Data::builder(
+            id,
+            "file.txt",
+            loc.as_str(),
+            loc.as_str(),
+            "txt",
+            "text/plain",
+            format!("{:x}", Uuid::new_v4()),
+            owner_id,
+        )
+        .data_size(size)
         .build()
     }
 
@@ -329,7 +429,7 @@ mod tests {
             .expect("create_dataset");
 
         let mgr = DatasetManager::new(db.clone() as Arc<dyn DatasetDb>);
-        assert!(!mgr.has_data(ds.id).await.expect("has_data"));
+        assert!(!mgr.has_data(ds.id, owner_id).await.expect("has_data"));
     }
 
     #[tokio::test]
@@ -351,7 +451,48 @@ mod tests {
             .expect("attach_data");
 
         let mgr = DatasetManager::new(db.clone() as Arc<dyn DatasetDb>);
-        assert!(mgr.has_data(ds.id).await.expect("has_data"));
+        assert!(mgr.has_data(ds.id, owner_id).await.expect("has_data"));
+    }
+
+    #[tokio::test]
+    async fn test_has_data_permission_denied_with_acl() {
+        let db = fresh_db().await;
+        let owner_id = Uuid::new_v4();
+        let other_id = Uuid::new_v4();
+        let ds = make_dataset(owner_id);
+
+        let ingest: &dyn IngestDb = db.as_ref();
+        ingest
+            .create_dataset(ds.clone())
+            .await
+            .expect("create_dataset");
+
+        // Grant read permission to owner only (via ACL).
+        let acl: Arc<dyn AclDb> = db.clone() as Arc<dyn AclDb>;
+        acl.ensure_principal(owner_id, "user")
+            .await
+            .expect("ensure_principal");
+        acl.grant_permission(owner_id, ds.id, "read")
+            .await
+            .expect("grant_permission");
+
+        let mgr = DatasetManager::new(db.clone() as Arc<dyn DatasetDb>).with_acl(acl);
+
+        // Owner can check — should succeed.
+        assert!(
+            mgr.has_data(ds.id, owner_id).await.is_ok(),
+            "owner must be able to call has_data"
+        );
+
+        // Other user gets PermissionDenied.
+        let err = mgr
+            .has_data(ds.id, other_id)
+            .await
+            .expect_err("must fail for unauthorized user");
+        assert!(
+            matches!(err, DatasetError::PermissionDenied),
+            "expected PermissionDenied, got {err:?}"
+        );
     }
 
     #[tokio::test]
@@ -379,6 +520,40 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_list_data_sorted_by_size_descending() {
+        let db = fresh_db().await;
+        let owner_id = Uuid::new_v4();
+        let ds = make_dataset(owner_id);
+
+        let ingest: &dyn IngestDb = db.as_ref();
+        ingest
+            .create_dataset(ds.clone())
+            .await
+            .expect("create_dataset");
+
+        // Create three data items with distinct sizes.
+        let small = make_data_with_size(owner_id, 10);
+        let large = make_data_with_size(owner_id, 1000);
+        let medium = make_data_with_size(owner_id, 500);
+
+        for d in [&small, &large, &medium] {
+            ingest.create_data(d.clone()).await.expect("create_data");
+            ingest
+                .attach_data_to_dataset(ds.id, d.id)
+                .await
+                .expect("attach_data");
+        }
+
+        let mgr = DatasetManager::new(db.clone() as Arc<dyn DatasetDb>);
+        let items = mgr.list_data(ds.id, owner_id).await.expect("list_data");
+        assert_eq!(items.len(), 3);
+        // Must be sorted largest first.
+        assert_eq!(items[0].id, large.id, "largest must come first");
+        assert_eq!(items[1].id, medium.id, "medium second");
+        assert_eq!(items[2].id, small.id, "smallest last");
+    }
+
+    #[tokio::test]
     async fn test_get_status_no_runs() {
         let db = fresh_db().await;
         let owner_id = Uuid::new_v4();
@@ -392,6 +567,7 @@ mod tests {
 
         let mgr = DatasetManager::new(db.clone() as Arc<dyn DatasetDb>);
         let statuses = mgr.get_status(&[ds.id]).await.expect("get_status");
+        // No pipeline runs recorded → the outer map should be empty.
         assert!(statuses.is_empty());
     }
 
@@ -415,5 +591,109 @@ mod tests {
         let mgr = DatasetManager::new(db as Arc<dyn DatasetDb>);
         let err = mgr.require_dataset(Uuid::new_v4()).await;
         assert!(matches!(err, Err(DatasetError::NotFound)));
+    }
+
+    #[tokio::test]
+    async fn test_create_dataset_deterministic_id() {
+        let db = fresh_db().await;
+        let owner_id = Uuid::new_v4();
+        let tenant_id = Some(Uuid::new_v4());
+        let mgr = DatasetManager::new(db.clone() as Arc<dyn DatasetDb>);
+
+        let ds = mgr
+            .create_dataset("my-ds", owner_id, tenant_id)
+            .await
+            .expect("create_dataset");
+
+        let expected_id = generate_dataset_id("my-ds", owner_id, tenant_id);
+        assert_eq!(ds.id, expected_id, "ID must match generate_dataset_id");
+        assert_eq!(ds.name, "my-ds");
+        assert_eq!(ds.owner_id, owner_id);
+    }
+
+    #[tokio::test]
+    async fn test_create_dataset_idempotent() {
+        let db = fresh_db().await;
+        let owner_id = Uuid::new_v4();
+        let mgr = DatasetManager::new(db.clone() as Arc<dyn DatasetDb>);
+
+        let ds1 = mgr
+            .create_dataset("dup-ds", owner_id, None)
+            .await
+            .expect("first create");
+        let ds2 = mgr
+            .create_dataset("dup-ds", owner_id, None)
+            .await
+            .expect("second create");
+
+        assert_eq!(ds1.id, ds2.id, "Idempotent: same ID returned on duplicate");
+
+        // Ensure only one row exists
+        let list = IngestDb::list_datasets_by_owner(db.as_ref(), owner_id)
+            .await
+            .unwrap();
+        assert_eq!(list.len(), 1, "Only one row should exist");
+    }
+
+    #[tokio::test]
+    async fn test_create_authorized_dataset_without_acl_errors() {
+        let db = fresh_db().await;
+        let owner_id = Uuid::new_v4();
+        let mgr = DatasetManager::new(db as Arc<dyn DatasetDb>);
+
+        let result = mgr
+            .create_authorized_dataset("auth-ds", owner_id, None, None)
+            .await;
+        assert!(
+            matches!(result, Err(DatasetError::AclNotConfigured)),
+            "Should error when ACL not configured"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_create_authorized_dataset_grants_four_permissions() {
+        let db = fresh_db().await;
+        let owner_id = Uuid::new_v4();
+        let parent_id = Uuid::new_v4();
+        let acl: Arc<dyn AclDb> = db.clone() as Arc<dyn AclDb>;
+        let mgr = DatasetManager::new(db.clone() as Arc<dyn DatasetDb>).with_acl(acl.clone());
+
+        let ds = mgr
+            .create_authorized_dataset("auth-ds", owner_id, None, Some(parent_id))
+            .await
+            .expect("create_authorized_dataset");
+
+        // Owner and parent both receive all four permissions on the dataset.
+        for perm in DATASET_PERMISSIONS {
+            assert!(
+                acl.has_permission(owner_id, ds.id, perm).await.unwrap(),
+                "owner must have '{perm}'"
+            );
+            assert!(
+                acl.has_permission(parent_id, ds.id, perm).await.unwrap(),
+                "parent must have '{perm}'"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_create_authorized_dataset_parent_equals_owner_no_duplicate() {
+        let db = fresh_db().await;
+        let owner_id = Uuid::new_v4();
+        let acl: Arc<dyn AclDb> = db.clone() as Arc<dyn AclDb>;
+        let mgr = DatasetManager::new(db.clone() as Arc<dyn DatasetDb>).with_acl(acl.clone());
+
+        // parent_user_id == owner_id: must succeed (idempotent) and grant once.
+        let ds = mgr
+            .create_authorized_dataset("auth-ds-self", owner_id, None, Some(owner_id))
+            .await
+            .expect("create_authorized_dataset with self-parent should succeed");
+
+        for perm in DATASET_PERMISSIONS {
+            assert!(
+                acl.has_permission(owner_id, ds.id, perm).await.unwrap(),
+                "owner must have '{perm}'"
+            );
+        }
     }
 }

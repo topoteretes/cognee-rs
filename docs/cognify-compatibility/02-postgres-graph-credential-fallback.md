@@ -1,6 +1,6 @@
 # Item 2 — Graph → relational credential fallback
 
-Parent: [../cognify-compatibility-implementation-plan.md](../cognify-compatibility-implementation-plan.md)
+Parent: [../.internal/cognify-compatibility-implementation-plan.md](../.internal/cognify-compatibility-implementation-plan.md)
 Effort: **small** · Depends on / pairs with [Item 1](01-wire-pggraph-component-manager.md)
 Status: ✅ Implemented
 

@@ -51,6 +51,11 @@ pub fn sanitize_nested_properties(value: &mut Value, names: &[&str]) {
 pub fn sanitize_nested_properties(_value: &mut (), _names: &[&str]) {}
 
 #[cfg(all(test, feature = "telemetry"))]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 mod tests {
     use super::*;
     use serde_json::json;

@@ -73,6 +73,7 @@ pub struct Node {
 /// * `source_node_id` - ID of the source node
 /// * `target_node_id` - ID of the target node
 /// * `relationship_name` - Type of relationship (use snake_case, e.g., "works_at")
+/// * `description` - Concrete one-sentence fact expressed by this edge
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct Edge {
     /// ID of the source node
@@ -83,6 +84,13 @@ pub struct Edge {
 
     /// Type of relationship (snake_case, e.g., "works_at", "founded", "located_in")
     pub relationship_name: String,
+
+    /// Concrete one-sentence fact expressed by this edge, using endpoint names.
+    /// Mirrors Python `KnowledgeGraph.Edge.description` (data_models.py:62-71).
+    /// Becomes the `edge_text` graph-edge property, feeding EdgeType + Triplet
+    /// embeddings. Optional because older/custom outputs may omit it.
+    #[serde(default)]
+    pub description: Option<String>,
 }
 
 /// Knowledge graph extracted from text.
@@ -142,6 +150,11 @@ impl GraphModel for KnowledgeGraph {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 mod tests {
     use super::*;
 
@@ -167,9 +180,48 @@ mod tests {
             source_node_id: "alice_johnson".to_string(),
             target_node_id: "techcorp".to_string(),
             relationship_name: "works_at".to_string(),
+            description: None,
         };
 
         assert_eq!(edge.relationship_name, "works_at");
+    }
+
+    #[test]
+    fn test_edge_serializes_description() {
+        let edge = Edge {
+            source_node_id: "alice".to_string(),
+            target_node_id: "acme".to_string(),
+            relationship_name: "founded".to_string(),
+            description: Some("Alice founded Acme".to_string()),
+        };
+
+        let json = serde_json::to_string(&edge).unwrap();
+        assert!(json.contains("\"description\":\"Alice founded Acme\""));
+    }
+
+    #[test]
+    fn test_edge_deserializes_without_description() {
+        // Back-compat: JSON omitting `description` defaults to None.
+        let json = r#"{
+            "source_node_id": "alice",
+            "target_node_id": "acme",
+            "relationship_name": "founded"
+        }"#;
+        let edge: Edge = serde_json::from_str(json).unwrap();
+        assert_eq!(edge.relationship_name, "founded");
+        assert_eq!(edge.description, None);
+    }
+
+    #[test]
+    fn test_edge_deserializes_with_description() {
+        let json = r#"{
+            "source_node_id": "alice",
+            "target_node_id": "acme",
+            "relationship_name": "founded",
+            "description": "Alice founded Acme"
+        }"#;
+        let edge: Edge = serde_json::from_str(json).unwrap();
+        assert_eq!(edge.description.as_deref(), Some("Alice founded Acme"));
     }
 
     #[test]
@@ -190,6 +242,7 @@ mod tests {
             source_node_id: "alice".to_string(),
             target_node_id: "techcorp".to_string(),
             relationship_name: "works_at".to_string(),
+            description: None,
         });
 
         assert!(!graph.is_empty());

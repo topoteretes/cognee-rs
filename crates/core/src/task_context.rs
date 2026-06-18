@@ -1,3 +1,10 @@
+// expect() guards a documented invariant: pipeline() must only be called from
+// tasks running inside a pipeline executor.
+#![allow(
+    clippy::expect_used,
+    reason = "caller is documented to only invoke this within a pipeline executor"
+)]
+
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 

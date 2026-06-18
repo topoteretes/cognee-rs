@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! CLI tests for the `serve` and `disconnect` subcommands.
 //!
 //! The subcommands are only present when the `cloud` feature is enabled,

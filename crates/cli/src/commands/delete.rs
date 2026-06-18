@@ -22,7 +22,7 @@ pub fn run(args: DeleteArgs, cm: Arc<cognee_lib::ComponentManager>) -> Result<()
 
     let owner_id = if let Some(user_id) = &args.user_id {
         Uuid::parse_str(user_id).map_err(|error| {
-            CliError::Validation(format!("Invalid --user-id '{}': {error}", user_id))
+            CliError::Validation(format!("Invalid --user-id '{user_id}': {error}"))
         })?
     } else {
         Uuid::parse_str(&cm.settings().default_user_id).map_err(|error| {
@@ -211,7 +211,7 @@ fn validate_scope_selection(args: &DeleteArgs) -> Result<(), CliError> {
 fn parse_dataset_ref(args: &DeleteArgs) -> Result<Option<DatasetRef>, CliError> {
     if let Some(id) = &args.dataset_id {
         let parsed = Uuid::parse_str(id).map_err(|error| {
-            CliError::Validation(format!("Invalid --dataset-id '{}': {error}", id))
+            CliError::Validation(format!("Invalid --dataset-id '{id}': {error}"))
         })?;
         Ok(Some(DatasetRef::Id(parsed)))
     } else if let Some(name) = &args.dataset_name {
@@ -246,7 +246,7 @@ async fn build_request_async(
 
     let scope = if let Some(data_id) = args.data_id {
         let parsed_data_id = Uuid::parse_str(&data_id).map_err(|error| {
-            CliError::Validation(format!("Invalid --data-id '{}': {error}", data_id))
+            CliError::Validation(format!("Invalid --data-id '{data_id}': {error}"))
         })?;
 
         DeleteScope::Data {
@@ -266,5 +266,9 @@ async fn build_request_async(
         DeleteScope::All
     };
 
-    Ok(DeleteRequest { scope, mode })
+    Ok(DeleteRequest {
+        scope,
+        mode,
+        memory_only: false,
+    })
 }

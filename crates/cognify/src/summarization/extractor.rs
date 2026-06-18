@@ -23,11 +23,11 @@ fn default_summary_options() -> GenerationOptions {
 
 /// Default system prompt for text summarization.
 ///
-/// Based on Python's prompts/summarize_content.txt.
-/// Instructs the LLM to create brief, concise summaries while preserving key information.
-const DEFAULT_SUMMARY_PROMPT: &str = r#"You are a top-tier summarization engine. Your task is to summarize text and make it versatile.
-Be brief and concise, but keep the important information and the subject.
-Use synonym words where possible in order to change the wording but keep the meaning."#;
+/// Vendored byte-for-byte from Python's
+/// `cognee/infrastructure/llm/prompts/summarize_content.txt` (structured
+/// categories + ordered facts, ≤200 tokens). Kept in sync via the prompt-parity
+/// drift guard.
+const DEFAULT_SUMMARY_PROMPT: &str = include_str!("prompts/summarize_content.txt");
 
 /// Summary extractor for text chunks.
 ///
@@ -168,7 +168,7 @@ impl SummaryExtractor {
         for (chunk_index, result) in results.into_iter().enumerate() {
             let chunk = &chunks[chunk_index];
             let summarized =
-                result.map_err(|e| CognifyError::LlmError(format!("Task join error: {}", e)))??;
+                result.map_err(|e| CognifyError::LlmError(format!("Task join error: {e}")))??;
 
             let text_summary =
                 TextSummary::from_summarized_content(chunk.base.id, summarized, model_name.clone());
@@ -186,6 +186,11 @@ impl SummaryExtractor {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 mod tests {
     use super::*;
     use crate::config::validate_summary_schema;
@@ -194,9 +199,30 @@ mod tests {
     // These are just structural tests
 
     #[test]
+    #[allow(
+        clippy::const_is_empty,
+        reason = "intentional sanity check that the const is non-empty"
+    )]
     fn test_default_prompt_not_empty() {
         assert!(!DEFAULT_SUMMARY_PROMPT.is_empty());
-        assert!(DEFAULT_SUMMARY_PROMPT.contains("summarization"));
+        assert!(DEFAULT_SUMMARY_PROMPT.contains("Summarize the chunk for retrieval"));
+    }
+
+    #[test]
+    fn summary_prompt_matches_vendored_txt() {
+        let vendored = include_str!("prompts/summarize_content.txt");
+        assert_eq!(
+            DEFAULT_SUMMARY_PROMPT, vendored,
+            "const drifted from vendored .txt"
+        );
+        assert!(
+            vendored.contains("Output two sections only"),
+            "Python two-section structure marker missing"
+        );
+        assert!(
+            vendored.contains("Max 200 tokens"),
+            "token-limit marker missing"
+        );
     }
 
     #[test]

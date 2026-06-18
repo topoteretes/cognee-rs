@@ -79,8 +79,7 @@ impl EnvSettingsView {
         let mut view = Self::default();
 
         if let Some(v) = read_env("COGNEE_TRACING_ENABLED") {
-            let v = v.to_lowercase();
-            view.tracing_enabled = v == "true" || v == "1" || v == "yes";
+            view.tracing_enabled = cognee_utils::parse_env_bool(&v);
         }
         if let Some(v) = read_env("OTEL_SERVICE_NAME") {
             view.service_name = v;
@@ -145,6 +144,11 @@ impl SettingsView for EnvSettingsView {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::expect_used,
+    clippy::unwrap_used,
+    reason = "test code — panics are acceptable failures"
+)]
 mod tests {
     use super::*;
     use std::sync::Mutex;

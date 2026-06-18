@@ -179,6 +179,11 @@ impl Mailer for SmtpMailer {
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 mod tests {
     use super::*;
     use serial_test::serial;
@@ -226,7 +231,7 @@ mod tests {
         }
         // Construction builds the transport but does not connect.
         let result = SmtpMailer::from_env();
-        assert!(result.is_ok(), "expected Ok, got {:?}", result);
+        assert!(result.is_ok(), "expected Ok, got {result:?}");
         clear_smtp_env();
     }
 }

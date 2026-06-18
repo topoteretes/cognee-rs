@@ -1,4 +1,10 @@
 //! Proactive request-rate throttling for pipeline tasks.
+// The semaphore is never closed (only dropped on teardown) so acquire() cannot
+// fail — expect() is safe here.
+#![allow(
+    clippy::expect_used,
+    reason = "semaphore is never closed; acquire() cannot return Err"
+)]
 //!
 //! See `docs/cog-4454-core/03-rate-limiting.md` for the design rationale and how
 //! this differs from `Pipeline::with_concurrency` (item parallelism) and
@@ -158,8 +164,7 @@ mod tests {
         let burst_elapsed = t0.elapsed();
         assert!(
             burst_elapsed < Duration::from_millis(80),
-            "burst acquires should be fast, took {:?}",
-            burst_elapsed
+            "burst acquires should be fast, took {burst_elapsed:?}"
         );
 
         // Third acquire must wait ~100ms for the next refill tick.
@@ -168,8 +173,7 @@ mod tests {
         let wait_elapsed = t1.elapsed();
         assert!(
             wait_elapsed >= Duration::from_millis(50),
-            "third acquire should wait for refill, took {:?}",
-            wait_elapsed
+            "third acquire should wait for refill, took {wait_elapsed:?}"
         );
     }
 

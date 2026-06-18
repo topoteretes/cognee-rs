@@ -49,6 +49,7 @@ mod tests {
             history: vec![],
             formatted_history: "Previous conversation:\n\nQUESTION: hi\nANSWER: hello\n\n"
                 .to_string(),
+            graph_context: None,
         };
         let messages = build_messages_with_history(
             "You are a helpful assistant.".to_string(),

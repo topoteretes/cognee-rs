@@ -609,6 +609,10 @@ async fn remember_session(
             extraction_tasks: None,
             enrichment_tasks: None,
             data: None,
+            // Global context index and background mode are not used by the
+            // inline remember() improve path.
+            build_global_context_index: false,
+            run_in_background: false,
         })
         .await;
 
@@ -768,6 +772,9 @@ pub async fn remember_entry(
                     &question,
                     &answer,
                     Some(context.as_str()),
+                    // used_graph_element_ids handled by the follow-up update below
+                    // when the raw JSON value needs schema-validation first.
+                    None,
                 )
                 .await?;
 
@@ -891,6 +898,11 @@ pub async fn remember_entry(
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 mod tests {
     use super::*;
 

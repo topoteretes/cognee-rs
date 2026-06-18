@@ -48,7 +48,7 @@ pub fn render_prompt(name: &str, ctx: &HashMap<&str, &str>) -> Result<String, Pr
 
     let mut out = raw.to_string();
     for (key, value) in ctx {
-        let needle = format!("{{{{{}}}}}", key);
+        let needle = format!("{{{{{key}}}}}");
         out = out.replace(&needle, value);
     }
     Ok(out)
@@ -56,6 +56,11 @@ pub fn render_prompt(name: &str, ctx: &HashMap<&str, &str>) -> Result<String, Pr
 
 #[cfg(test)]
 mod tests {
+    #![allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        reason = "test code — panics are acceptable"
+    )]
     use super::*;
 
     #[test]

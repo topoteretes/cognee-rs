@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! Integration tests for `DefaultPipelineRunRegistry`.
 //!
 //! Uses an in-memory SQLite + `SeaOrmPipelineRunRepository` so no external

@@ -2,6 +2,18 @@
 name = "cognee-observability"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
 
 [features]
 default = []
@@ -17,6 +29,7 @@ telemetry = [
 ]
 
 [dependencies]
+cognee-utils = { path = "../utils" }
 thiserror.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true

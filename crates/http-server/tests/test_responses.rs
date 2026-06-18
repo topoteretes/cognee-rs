@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! Integration test for `POST /api/v1/responses` against a real OpenAI
 //! Responses endpoint.
 //!

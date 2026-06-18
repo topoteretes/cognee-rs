@@ -36,7 +36,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::env::var("OPENAI_URL").unwrap_or_else(|_| "http://localhost:11435/v1".to_string());
     let api_token = std::env::var("OPENAI_TOKEN").unwrap_or_else(|_| "not-needed".to_string());
 
-    println!("📡 Connecting to LLM at: {}", base_url);
+    println!("📡 Connecting to LLM at: {base_url}");
     println!("🔧 Model: llama3.2:3b\n");
 
     // Create LLM adapter
@@ -53,7 +53,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Example 1: Single Text Summarization");
     println!("=====================================\n");
     println!("Original text ({} chars):", SAMPLE_TEXT.len());
-    println!("{}\n", SAMPLE_TEXT);
+    println!("{SAMPLE_TEXT}\n");
 
     let summary: SummarizedContent = extractor.extract_summary(SAMPLE_TEXT, None).await?;
 
@@ -94,7 +94,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("Chunk {}: ID={}", idx + 1, summary.base.id);
         println!("  Summary: {}", summary.text);
         if let Some(desc) = &summary.description {
-            println!("  Description: {}\n", desc);
+            println!("  Description: {desc}\n");
         }
     }
 

@@ -1,5 +1,10 @@
 //! Span attribute integration tests for the OpenAI adapter using
 //! `httpmock` (no real API calls).
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "integration test code — panics are acceptable"
+)]
 //!
 //! Verifies that:
 //! - `OpenAIAdapter::generate` emits the `llm.api_call` span with the

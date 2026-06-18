@@ -1,3 +1,9 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "mock infrastructure — panics are acceptable"
+)]
+
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -139,8 +145,7 @@ impl EmbeddingEngine for MockEmbeddingEngine {
             && count_after > n
         {
             return Err(EmbeddingError::InferenceError(format!(
-                "MockEmbeddingEngine: injected failure after {} successful call(s)",
-                n
+                "MockEmbeddingEngine: injected failure after {n} successful call(s)"
             )));
         }
         match self.mode {

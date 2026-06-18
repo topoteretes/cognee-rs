@@ -1,5 +1,11 @@
 //! In-memory mock implementation of [`UserDb`] for testing.
 
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "mock infrastructure — panics are acceptable"
+)]
+
 use std::collections::HashMap;
 use std::sync::Mutex;
 

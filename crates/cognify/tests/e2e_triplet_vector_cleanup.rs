@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! E2E test: triplet vector points are cleaned up after data-scope deletion.
 //!
 //! Two documents in separate datasets are cognified and memified. After
@@ -260,8 +265,7 @@ async fn test_triplet_vector_cleanup_after_data_delete() {
         .expect("collection_size pre-delete");
     let expected_total = memify_ai.triplet_count + memify_q.triplet_count;
     println!(
-        "Step 4: Triplet collection has {} points (expected ~{})",
-        pre_triplet_count, expected_total,
+        "Step 4: Triplet collection has {pre_triplet_count} points (expected ~{expected_total})",
     );
     assert!(
         pre_triplet_count > 0,
@@ -283,6 +287,7 @@ async fn test_triplet_vector_cleanup_after_data_delete() {
                 delete_dataset_if_empty: false,
             },
             mode: DeleteMode::Soft,
+            memory_only: false,
         })
         .await
         .expect("delete ds_ai data");
@@ -303,16 +308,13 @@ async fn test_triplet_vector_cleanup_after_data_delete() {
         .expect("collection_size post-delete");
 
     println!(
-        "Step 6: Triplet collection now has {} points (was {})",
-        post_triplet_count, pre_triplet_count,
+        "Step 6: Triplet collection now has {post_triplet_count} points (was {pre_triplet_count})",
     );
 
     // Triplet count should have decreased (ds_ai triplets removed)
     assert!(
         post_triplet_count < pre_triplet_count,
-        "Triplet count should decrease after data-scope delete: post={}, pre={}",
-        post_triplet_count,
-        pre_triplet_count,
+        "Triplet count should decrease after data-scope delete: post={post_triplet_count}, pre={pre_triplet_count}",
     );
 
     // Triplet collection should still have ds_quantum's points

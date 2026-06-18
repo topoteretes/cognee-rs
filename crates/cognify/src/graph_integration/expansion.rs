@@ -133,7 +133,7 @@ pub async fn expand_with_nodes_and_edges(
                             et.base.id = ontology_name_to_uuid(&canonical_name);
 
                             // Record key mapping if canonical differs
-                            let new_type_key = format!("{}_type", canonical_name);
+                            let new_type_key = format!("{canonical_name}_type");
                             if new_type_key != type_key {
                                 key_mapping.insert(type_key.clone(), new_type_key.clone());
                             }
@@ -188,6 +188,7 @@ pub async fn expand_with_nodes_and_edges(
                 .get(&type_key)
                 .cloned()
                 .unwrap_or_else(|| type_key.clone());
+            #[allow(clippy::expect_used, reason = "invariant is upheld by construction")]
             let entity_type = type_map
                 .get(&resolved_key)
                 .expect("entity type was just inserted or already existed");
@@ -301,11 +302,33 @@ pub async fn expand_with_nodes_and_edges(
             );
 
             if let std::collections::hash_map::Entry::Vacant(e) = edge_map.entry(edge_key) {
-                e.insert(GraphEdgePair::new(
+                // Mirror Python's `_process_graph_edges` edge property map
+                // (expand_with_nodes_and_edges.py:296-309): persist
+                // relationship_name / source_node_id / target_node_id /
+                // ontology_valid / edge_text. `edge_text` is the trimmed
+                // `Edge.description` (Python `_strip_nonblank_text`), feeding
+                // EdgeType + Triplet embeddings; empty string when absent/blank
+                // so downstream readers fall back to relationship_name.
+                let edge_text = edge
+                    .description
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or("")
+                    .to_string();
+
+                let mut edge_pair = GraphEdgePair::new(
                     *source_entity_id,
                     *target_entity_id,
-                    edge.relationship_name,
-                ));
+                    edge.relationship_name.clone(),
+                );
+                edge_pair.add_property("relationship_name", edge.relationship_name);
+                edge_pair.add_property("source_node_id", source_entity_id.to_string());
+                edge_pair.add_property("target_node_id", target_entity_id.to_string());
+                edge_pair.add_property("ontology_valid", "false");
+                edge_pair.add_property("edge_text", edge_text);
+
+                e.insert(edge_pair);
             }
         }
     }
@@ -408,7 +431,7 @@ fn process_ontology_nodes(
 
         match node.category {
             NodeCategory::Classes => {
-                let dedup_key = format!("{}_type", node_id);
+                let dedup_key = format!("{node_id}_type");
                 // Skip if the LLM already extracted this type (check by name-based key)
                 let llm_type_key = format!("{}_type", node.name);
                 if type_map.contains_key(&llm_type_key)
@@ -417,7 +440,7 @@ fn process_ontology_nodes(
                     continue;
                 }
                 // Also skip if there is already a node_map entry for this node id
-                let node_entity_key = format!("{}_entity", node_id);
+                let node_entity_key = format!("{node_id}_entity");
                 if node_map.contains_key(&node_entity_key) {
                     continue;
                 }
@@ -429,7 +452,7 @@ fn process_ontology_nodes(
                 ontology_types_map.insert(dedup_key, et);
             }
             NodeCategory::Individuals => {
-                let dedup_key = format!("{}_entity", node_id);
+                let dedup_key = format!("{node_id}_entity");
                 // Skip if already present in either map
                 if node_map.contains_key(&dedup_key)
                     || ontology_entities_map.contains_key(&dedup_key)
@@ -473,7 +496,7 @@ fn process_ontology_edges(
         let source_id = ontology_name_to_uuid(source);
         let target_id = ontology_name_to_uuid(target);
         let rel_name = normalize_edge_name(relation);
-        let edge_key = format!("{}_{}_{}", source_id, target_id, rel_name);
+        let edge_key = format!("{source_id}_{target_id}_{rel_name}");
 
         if existing_edge_keys.contains(&edge_key) || ontology_edge_keys.contains(&edge_key) {
             continue;
@@ -491,6 +514,11 @@ fn process_ontology_edges(
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 mod tests {
     use super::*;
     use crate::fact_extraction::Edge;
@@ -521,6 +549,7 @@ mod tests {
                 source_node_id: "alice_1".to_string(),
                 target_node_id: "techcorp_1".to_string(),
                 relationship_name: "works_at".to_string(),
+                description: None,
             }],
         }
     }
@@ -660,6 +689,7 @@ mod tests {
                 source_node_id: "alice_1".to_string(),
                 target_node_id: "missing_node".to_string(), // LLM inconsistency
                 relationship_name: "knows".to_string(),
+                description: None,
             }],
         };
 
@@ -713,11 +743,13 @@ mod tests {
                     source_node_id: "alice_1".to_string(),
                     target_node_id: "techcorp_1".to_string(),
                     relationship_name: "works_at".to_string(),
+                    description: None,
                 },
                 Edge {
                     source_node_id: "alice_1".to_string(),
                     target_node_id: "techcorp_1".to_string(),
                     relationship_name: "founded".to_string(),
+                    description: None,
                 },
             ],
         };

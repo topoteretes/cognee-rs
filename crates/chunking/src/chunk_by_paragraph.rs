@@ -35,6 +35,10 @@ pub struct ParagraphChunk<'a> {
 /// - `batch_paragraphs`: if true, accumulates sentences across paragraph
 ///   boundaries until overflow. If false, yields at each paragraph boundary.
 /// - `counter`: token counter implementation
+#[allow(
+    clippy::expect_used,
+    reason = "chunk_start invariants are upheld by the accumulation logic above each emit branch"
+)]
 pub fn chunk_by_paragraph<'a, C: TokenCounter>(
     data: &'a str,
     max_chunk_size: usize,
@@ -126,6 +130,11 @@ pub fn chunk_by_paragraph<'a, C: TokenCounter>(
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 mod tests {
     use super::*;
     use crate::token_counter::WordCounter;

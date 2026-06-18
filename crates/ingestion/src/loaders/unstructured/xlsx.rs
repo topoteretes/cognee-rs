@@ -51,6 +51,11 @@ pub(crate) fn extract(bytes: &[u8]) -> Result<String, LoaderError> {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 mod tests {
     use super::*;
 

@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! Integration test: retriever & search-type matrix (ports `test_search_db.py`).
 //!
 //! Ingests two documents into a shared dataset, cognifies with triplet embeddings
@@ -93,6 +98,7 @@ fn make_request(query: &str, search_type: SearchType, save: Option<bool>) -> Sea
         auto_feedback_detection: None,
         neighborhood_depth: None,
         neighborhood_seed_top_k: None,
+        summarize_context: None,
     }
 }
 
@@ -214,7 +220,7 @@ async fn test_search_type_matrix() {
     {
         Ok(r) => r,
         Err(e) => {
-            eprintln!("⚠️  Skipping test: cognify failed: {}", e);
+            eprintln!("⚠️  Skipping test: cognify failed: {e}");
             return;
         }
     };
@@ -292,12 +298,11 @@ async fn test_search_type_matrix() {
         let response = orchestrator
             .search(&make_request(query, search_type, Some(true)))
             .await
-            .unwrap_or_else(|e| panic!("search {:?} failed: {}", search_type, e));
+            .unwrap_or_else(|e| panic!("search {search_type:?} failed: {e}"));
 
         assert!(
             is_non_empty(&response),
-            "{:?} should return non-empty result",
-            search_type
+            "{search_type:?} should return non-empty result"
         );
 
         let text = response_text(&response);
@@ -308,10 +313,7 @@ async fn test_search_type_matrix() {
             &text[..text.len().min(200)]
         );
 
-        println!(
-            "✓ {:?}: non-empty, mentions germany/netherlands",
-            search_type
-        );
+        println!("✓ {search_type:?}: non-empty, mentions germany/netherlands");
     }
 
     // Execute retrieval-only searches
@@ -319,14 +321,13 @@ async fn test_search_type_matrix() {
         let response = orchestrator
             .search(&make_request(query, search_type, Some(false)))
             .await
-            .unwrap_or_else(|e| panic!("search {:?} failed: {}", search_type, e));
+            .unwrap_or_else(|e| panic!("search {search_type:?} failed: {e}"));
 
         assert!(
             is_non_empty(&response),
-            "{:?} should return non-empty result",
-            search_type
+            "{search_type:?} should return non-empty result"
         );
-        println!("✓ {:?}: non-empty result", search_type);
+        println!("✓ {search_type:?}: non-empty result");
     }
 
     // ── Step 10–11: Context assertion for Chunks ─────────────────────────────
@@ -356,6 +357,7 @@ async fn test_search_type_matrix() {
         auto_feedback_detection: None,
         neighborhood_depth: None,
         neighborhood_seed_top_k: None,
+        summarize_context: None,
     };
     let chunks_resp = orchestrator
         .search(&chunks_ctx)
@@ -399,6 +401,7 @@ async fn test_search_type_matrix() {
         auto_feedback_detection: None,
         neighborhood_depth: None,
         neighborhood_seed_top_k: None,
+        summarize_context: None,
     };
     let graph_ctx_resp = orchestrator
         .search(&graph_ctx)
@@ -438,6 +441,7 @@ async fn test_search_type_matrix() {
         .execute(&DeleteRequest {
             scope: DeleteScope::All,
             mode: DeleteMode::Soft,
+            memory_only: false,
         })
         .await
         .expect("delete_svc.execute");
@@ -453,8 +457,7 @@ async fn test_search_type_matrix() {
         .expect("list_datasets after delete");
     assert!(
         remaining.is_empty(),
-        "All datasets should be deleted; found {:?}",
-        remaining
+        "All datasets should be deleted; found {remaining:?}"
     );
 
     assert!(

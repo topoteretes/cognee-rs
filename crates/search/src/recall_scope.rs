@@ -21,6 +21,25 @@ use crate::{
     SearchOrchestrator, SearchRequest, SearchResponse, SearchType, record_override, route_query,
 };
 
+/// Advanced tuning options forwarded from `cognee_lib::api::recall::RecallOptions`.
+///
+/// Kept as a separate struct so `cognee-search` does not need to depend on
+/// `cognee-lib`. The HTTP server and language bindings that build a
+/// `SearchRequest` directly can use this type too.
+#[derive(Debug, Clone, Default)]
+pub struct RecallOptions {
+    pub system_prompt: Option<String>,
+    pub system_prompt_path: Option<String>,
+    pub node_name: Option<Vec<String>>,
+    pub node_name_filter_operator: Option<String>,
+    pub only_context: Option<bool>,
+    pub wide_search_top_k: Option<usize>,
+    pub triplet_distance_penalty: Option<f32>,
+    pub feedback_influence: Option<f32>,
+    pub neighborhood_depth: Option<usize>,
+    pub neighborhood_seed_top_k: Option<usize>,
+}
+
 /// Source tag for recall results. Mirrors the discriminator strings emitted
 /// by Python's `_search_session`, `_search_trace`, `_fetch_graph_context`,
 /// and `_run_graph` helpers in `cognee/api/v1/recall/recall.py`.
@@ -333,7 +352,7 @@ pub async fn search_trace(
             if let Some(ref mrv) = e.method_return_value {
                 match serde_json::to_string(mrv) {
                     Ok(s) => parts.push(s),
-                    Err(_) => parts.push(format!("{:?}", mrv)),
+                    Err(_) => parts.push(format!("{mrv:?}")),
                 }
             }
 
@@ -407,6 +426,7 @@ pub async fn run_graph(
     session_id: Option<&str>,
     search_orchestrator: &SearchOrchestrator,
     span: &tracing::Span,
+    options: Option<&RecallOptions>,
 ) -> Result<(Vec<RecallItem>, SearchType, bool, SearchResponse), SearchError> {
     // Python recall.py:458-472: still run the router on explicit query_type
     // + auto_route=true so the override gets recorded.
@@ -437,26 +457,27 @@ pub async fn run_graph(
         top_k: Some(top_k),
         datasets,
         dataset_ids: None,
-        system_prompt: None,
-        system_prompt_path: None,
-        only_context: None,
+        system_prompt: options.and_then(|o| o.system_prompt.clone()),
+        system_prompt_path: options.and_then(|o| o.system_prompt_path.clone()),
+        only_context: options.and_then(|o| o.only_context),
         use_combined_context: None,
         session_id: session_id.map(|s| s.to_string()),
         node_type: None,
-        node_name: None,
-        wide_search_top_k: None,
-        triplet_distance_penalty: None,
+        node_name: options.and_then(|o| o.node_name.clone()),
+        wide_search_top_k: options.and_then(|o| o.wide_search_top_k),
+        triplet_distance_penalty: options.and_then(|o| o.triplet_distance_penalty),
         save_interaction: None,
         user_id: None,
         verbose: None,
-        feedback_influence: None,
+        feedback_influence: options.and_then(|o| o.feedback_influence),
         retriever_specific_config: None,
         response_schema: None,
         custom_search_type: None,
         auto_feedback_detection: None,
-        node_name_filter_operator: None,
-        neighborhood_depth: None,
-        neighborhood_seed_top_k: None,
+        node_name_filter_operator: options.and_then(|o| o.node_name_filter_operator.clone()),
+        neighborhood_depth: options.and_then(|o| o.neighborhood_depth),
+        neighborhood_seed_top_k: options.and_then(|o| o.neighborhood_seed_top_k),
+        summarize_context: None,
     };
 
     let response = search_orchestrator.search(&request).await?;
@@ -468,7 +489,7 @@ pub async fn run_graph(
             .map(|(i, item)| RecallItem {
                 source: RecallSource::Graph,
                 content: serde_json::to_value(item)
-                    .unwrap_or_else(|_| serde_json::Value::String(format!("{:?}", item))),
+                    .unwrap_or_else(|_| serde_json::Value::String(format!("{item:?}"))),
                 score: 1.0 - (i as f64 * 0.01),
             })
             .collect(),
@@ -489,7 +510,7 @@ pub async fn run_graph(
         other => vec![RecallItem {
             source: RecallSource::Graph,
             content: serde_json::to_value(other)
-                .unwrap_or_else(|_| serde_json::Value::String(format!("{:?}", other))),
+                .unwrap_or_else(|_| serde_json::Value::String(format!("{other:?}"))),
             score: 1.0,
         }],
     };
@@ -506,6 +527,11 @@ fn tokenize(text: &str) -> HashSet<String> {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 mod tests {
     use super::*;
 

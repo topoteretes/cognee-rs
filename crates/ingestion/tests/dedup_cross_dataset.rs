@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! Cross-dataset deduplication integration tests.
 //!
 //! Verifies that content-addressed deduplication works correctly when the same

@@ -1,3 +1,10 @@
+// UUID hex conversions from database bytes always produce valid UUIDs — any
+// failure here indicates database corruption, not a recoverable condition.
+#![allow(
+    clippy::expect_used,
+    reason = "UUID hex round-trips from DB are guaranteed by schema; failure indicates corruption"
+)]
+
 use crate::entities::{
     data, dataset, dataset_data, edge, graph_metrics, node, pipeline_run, query, result_log,
     task_run,

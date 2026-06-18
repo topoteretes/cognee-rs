@@ -47,6 +47,13 @@ pub struct SessionContext {
     pub session_id: Option<String>,
     pub history: Vec<Message>,
     pub formatted_history: String,
+    /// Stored knowledge-graph snapshot to prepend to history.
+    ///
+    /// Set by `improve()` stage 4 (`sync_graph_to_session`) and loaded by the
+    /// search orchestrator before retrieval, so follow-up questions benefit from
+    /// prior graph knowledge. Matches Python's `get_graph_context` / prepend
+    /// logic in `session_manager.py:435-450`.
+    pub graph_context: Option<String>,
 }
 
 /// One agent-trace step persisted in a session — mirrors Python's

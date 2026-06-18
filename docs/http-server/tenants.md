@@ -76,7 +76,7 @@ Companion docs: [architecture.md](architecture.md), [auth.md](auth.md). Per-rout
 
 ## 3. Tables
 
-All UUID columns are SQL `UUID`. `created_at` / `updated_at` are `TIMESTAMPTZ`. The migration lives in `crates/database/src/migrator/m_<timestamp>_tenants_rbac.rs` and is idempotent against a Python-seeded DB.
+All UUID columns are SQL `UUID`. `created_at` / `updated_at` are `TIMESTAMPTZ`. The schema lives in the single baseline migration `crates/database/src/migrator/m20260914_000001_baseline.rs` and is idempotent against a Python-seeded DB.
 
 ### 3.1 `principals` (super-table)
 

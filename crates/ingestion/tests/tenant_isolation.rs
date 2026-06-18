@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! Tenant isolation integration tests.
 //!
 //! Verifies that multi-tenant boundaries are correctly enforced: datasets,

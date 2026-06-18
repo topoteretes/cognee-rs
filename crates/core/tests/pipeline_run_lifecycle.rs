@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! Executor-level lifecycle tests for `pipeline::execute` (task 08-09).
 //!
 //! Validates that `pipeline::execute` writes the four-state `pipeline_runs`

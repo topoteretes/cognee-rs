@@ -146,8 +146,7 @@ mod tests {
 
         assert!(
             (norm - 1.0).abs() < 0.001,
-            "Expected norm ≈ 1.0, got {}",
-            norm
+            "Expected norm ≈ 1.0, got {norm}"
         );
         assert!((normalized[0] - 0.6).abs() < 0.001);
         assert!((normalized[1] - 0.8).abs() < 0.001);

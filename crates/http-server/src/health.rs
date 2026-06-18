@@ -404,8 +404,7 @@ impl HealthChecker for RealHealthChecker {
         // probe set is identical (the only difference is the response
         // shape rendered by the handler).
         if !self.cache_ttl.is_zero() {
-            // Lock poison is unrecoverable — propagate the panic the same
-            // way Mutex always does.
+            #[allow(clippy::unwrap_used, reason = "lock poison is unrecoverable")]
             let guard = self.cache.lock().unwrap();
             if let Some(cached) = guard.as_ref()
                 && cached.cached_at.elapsed() < self.cache_ttl
@@ -437,6 +436,7 @@ impl HealthChecker for RealHealthChecker {
         };
 
         if !self.cache_ttl.is_zero() {
+            #[allow(clippy::unwrap_used, reason = "lock poison is unrecoverable")]
             let mut guard = self.cache.lock().unwrap();
             *guard = Some(CachedReport {
                 report: report.clone(),
@@ -451,6 +451,11 @@ impl HealthChecker for RealHealthChecker {
 // ─── Unit tests ──────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 mod tests {
     use super::*;
     use cognee_database::{DatabaseConnection, connect, initialize};

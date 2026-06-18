@@ -1,4 +1,9 @@
 //! Live integration test for `transcribe_image` against an OpenAI-compatible API.
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "integration test code — panics are acceptable"
+)]
 //!
 //! Gated behind `#[ignore]` — requires `OPENAI_TOKEN` (and optionally `OPENAI_URL`,
 //! `OPENAI_MODEL`) environment variables pointing at a vision-capable model.

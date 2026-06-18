@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! End-to-end persistence tests for the LIB-06 payload event channel.
 //!
 //! Wires a `ScopedRunWatcher` against a real in-memory SQLite repo and a
@@ -153,7 +158,7 @@ fn make_scoped_watcher(
 ) -> Arc<ScopedRunWatcher> {
     let (event_tx, _rx) = broadcast::channel(64);
     let (phase_tx, _phase_rx) = watch::channel(RunPhase::Pending);
-    let sink = PerRunSink::from_parts(run_id, event_tx, phase_tx);
+    let sink = PerRunSink::from_parts(event_tx, phase_tx);
     Arc::new(ScopedRunWatcher::new(run_id, sink, repo))
 }
 

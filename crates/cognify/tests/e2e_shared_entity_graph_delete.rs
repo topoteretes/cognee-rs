@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! E2E test: multi-document shared entity preservation at graph DB level.
 //!
 //! Two documents in separate datasets share overlapping entities.
@@ -243,8 +248,7 @@ async fn test_shared_entity_graph_delete() {
         pre_names.len(),
     );
     println!(
-        "  AI entities: {:?}\n  ML entities: {:?}\n  Shared: {:?}",
-        ai_entity_names, ml_entity_names, shared_names,
+        "  AI entities: {ai_entity_names:?}\n  ML entities: {ml_entity_names:?}\n  Shared: {shared_names:?}",
     );
 
     assert!(
@@ -265,6 +269,7 @@ async fn test_shared_entity_graph_delete() {
                 dataset_name: "ds_ai".to_string(),
             },
             mode: DeleteMode::Hard,
+            memory_only: false,
         })
         .await
         .expect("delete ds_ai");
@@ -294,17 +299,12 @@ async fn test_shared_entity_graph_delete() {
     let post_node_count = post_nodes.len();
     let post_names = extract_node_names(&post_nodes);
 
-    println!(
-        "Step 5: Post-delete state: {} graph nodes (was {})",
-        post_node_count, pre_node_count,
-    );
+    println!("Step 5: Post-delete state: {post_node_count} graph nodes (was {pre_node_count})",);
 
     // 5b. Node count should have decreased (some exclusive ds_ai nodes removed)
     assert!(
         post_node_count < pre_node_count,
-        "Node count should decrease after deleting ds_ai: post={}, pre={}",
-        post_node_count,
-        pre_node_count,
+        "Node count should decrease after deleting ds_ai: post={post_node_count}, pre={pre_node_count}",
     );
 
     // 5c. Shared entities should still be present in the graph.
@@ -330,8 +330,7 @@ async fn test_shared_entity_graph_delete() {
             eprintln!(
                 "WARNING: No shared entities survived deletion. \
                  This may be due to LLM non-determinism in entity naming. \
-                 Shared names were: {:?}",
-                shared_names
+                 Shared names were: {shared_names:?}"
             );
         }
     }

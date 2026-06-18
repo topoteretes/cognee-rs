@@ -50,10 +50,17 @@ pub type ProgressCallback = Arc<dyn Fn(u32) + Send + Sync>;
 
 /// Run the background sync pipeline.
 ///
-/// Stub implementation for P6: marks the run started, ticks progress
-/// 0% → 100%, and marks it completed. The full diff/upload/download/cognify
-/// orchestration is out of scope for this phase — the wire/handler side is
-/// the contract under test, not the cloud-flow internals.
+/// **This is a no-op stub.** It marks the run started, ticks progress through
+/// `[0, 80, 90, 95, 100]`, and marks it completed with zero records/bytes
+/// transferred. No data is actually moved — the `POST /api/v1/sync` HTTP
+/// route advertises a working sync endpoint but none of the diff/upload/
+/// download/cognify orchestration is implemented yet.
+///
+/// The completion payload honestly reports zero records and zero bytes so
+/// callers cannot conclude from the response body that data was transferred.
+///
+/// Full sync implementation (diff, upload, download, cognify) is deferred to
+/// a future release. Tracked in `docs/not-implemented.md`.
 pub async fn run_background(
     run_id: String,
     _datasets: Vec<DatasetInfo>,

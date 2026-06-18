@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! End-to-end test: add -> cognify -> memify -> search (TripletCompletion) -> delete -> verify.
 //!
 //! Exercises the full 6-stage pipeline with real backends:
@@ -79,6 +84,7 @@ fn make_request(query: &str, search_type: SearchType) -> SearchRequest {
         auto_feedback_detection: None,
         neighborhood_depth: None,
         neighborhood_seed_top_k: None,
+        summarize_context: None,
     }
 }
 
@@ -195,7 +201,7 @@ async fn test_full_pipeline_add_cognify_memify_search_delete() {
     {
         Ok(r) => r,
         Err(e) => {
-            eprintln!("Skipping test: cognify failed: {}", e);
+            eprintln!("Skipping test: cognify failed: {e}");
             return;
         }
     };
@@ -284,7 +290,7 @@ async fn test_full_pipeline_add_cognify_memify_search_delete() {
 
     // Use first extracted entity name as the query term
     let query = cognify_result.entities[0].entity.name.clone();
-    println!("Step 4: Searching for {:?}", query);
+    println!("Step 4: Searching for {query:?}");
 
     let triplet_response = orchestrator
         .search(&make_request(&query, SearchType::TripletCompletion))
@@ -318,6 +324,7 @@ async fn test_full_pipeline_add_cognify_memify_search_delete() {
         .preview(&DeleteRequest {
             scope: DeleteScope::All,
             mode: DeleteMode::Hard,
+            memory_only: false,
         })
         .await
         .expect("delete preview");
@@ -351,6 +358,7 @@ async fn test_full_pipeline_add_cognify_memify_search_delete() {
         .execute(&DeleteRequest {
             scope: DeleteScope::All,
             mode: DeleteMode::Hard,
+            memory_only: false,
         })
         .await
         .expect("delete execute");
@@ -393,8 +401,7 @@ async fn test_full_pipeline_add_cognify_memify_search_delete() {
         .expect("list_datasets after delete");
     assert!(
         remaining_datasets.is_empty(),
-        "All datasets should be deleted; found {:?}",
-        remaining_datasets
+        "All datasets should be deleted; found {remaining_datasets:?}"
     );
 
     // 6b. Graph should be empty

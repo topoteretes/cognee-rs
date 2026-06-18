@@ -1,3 +1,7 @@
+#![allow(
+    clippy::expect_used,
+    reason = "RwLock/Mutex expect calls — lock poison is unrecoverable"
+)]
 //! Shared configuration types for cognee-rust.
 
 use std::collections::HashMap;
@@ -52,6 +56,16 @@ pub struct Settings {
 
     pub graph_prompt_path: String,
 
+    // -- LLM fallback -----------------------------------------------------------
+    /// Fallback LLM model name used when the primary model fails.
+    pub llm_fallback_model: String,
+    /// Fallback LLM provider (e.g. `"openai"`, `"ollama"`).
+    pub llm_fallback_provider: String,
+    /// Base URL for the fallback LLM API endpoint.
+    pub llm_fallback_endpoint: String,
+    /// API key for the fallback LLM provider.
+    pub llm_fallback_api_key: String,
+
     pub graph_database_provider: String,
     pub graph_database_url: String,
     pub graph_database_name: String,
@@ -105,6 +119,10 @@ pub struct Settings {
     pub embedding_endpoint: String,
     /// Embedding API key. Maps to `EMBEDDING_API_KEY` env var (fallback: `LLM_API_KEY`).
     pub embedding_api_key: String,
+    /// Embedding API version string (e.g. for Azure OpenAI `api-version`).
+    pub embedding_api_version: String,
+    /// Transcription model name (e.g. `"whisper-1"`).
+    pub transcription_model: String,
 
     pub ontology_file_path: String,
     /// Ontology resolver backend. Currently always resolved to `RdfLibOntologyResolver`
@@ -244,8 +262,7 @@ impl Settings {
             self.llm_max_completion_tokens = n;
         }
         if let Some(v) = str_var("LLM_STREAMING") {
-            let v = v.to_lowercase();
-            self.llm_streaming = v == "true" || v == "1" || v == "yes";
+            self.llm_streaming = cognee_utils::parse_env_bool(&v);
         }
         if let Some(v) = str_var("LLM_MAX_RETRIES")
             && let Ok(n) = v.parse::<u32>()
@@ -441,12 +458,10 @@ impl Settings {
             self.session_ttl_seconds = n;
         }
         if let Some(v) = str_var("CACHING") {
-            let v = v.to_lowercase();
-            self.enable_caching = v == "true" || v == "1" || v == "yes";
+            self.enable_caching = cognee_utils::parse_env_bool(&v);
         }
         if let Some(v) = str_var("AUTO_FEEDBACK") {
-            let v = v.to_lowercase();
-            self.auto_feedback = v == "true" || v == "1" || v == "yes";
+            self.auto_feedback = cognee_utils::parse_env_bool(&v);
         }
 
         // -- Authentication / ACL ------------------------------------------------
@@ -457,8 +472,7 @@ impl Settings {
             self.default_user_password = v;
         }
         if let Some(v) = str_var("ENABLE_BACKEND_ACCESS_CONTROL") {
-            let v = v.to_lowercase();
-            self.enable_access_control = v == "true" || v == "1" || v == "yes";
+            self.enable_access_control = cognee_utils::parse_env_bool(&v);
         }
 
         // -- Logging -------------------------------------------------------------
@@ -476,8 +490,7 @@ impl Settings {
 
         // -- Rate limiting -------------------------------------------------------
         if let Some(v) = str_var("LLM_RATE_LIMIT_ENABLED") {
-            let v = v.to_lowercase();
-            self.llm_rate_limit_enabled = v == "true" || v == "1" || v == "yes";
+            self.llm_rate_limit_enabled = cognee_utils::parse_env_bool(&v);
         }
         if let Some(v) = str_var("LLM_RATE_LIMIT_REQUESTS")
             && let Ok(n) = v.parse::<u32>()
@@ -490,8 +503,7 @@ impl Settings {
             self.llm_rate_limit_interval = n;
         }
         if let Some(v) = str_var("EMBEDDING_RATE_LIMIT_ENABLED") {
-            let v = v.to_lowercase();
-            self.embedding_rate_limit_enabled = v == "true" || v == "1" || v == "yes";
+            self.embedding_rate_limit_enabled = cognee_utils::parse_env_bool(&v);
         }
         if let Some(v) = str_var("EMBEDDING_RATE_LIMIT_REQUESTS")
             && let Ok(n) = v.parse::<u32>()
@@ -514,8 +526,7 @@ impl Settings {
 
         // -- Observability -------------------------------------------------------
         if let Some(v) = str_var("COGNEE_TRACING_ENABLED") {
-            let v = v.to_lowercase();
-            self.cognee_tracing_enabled = v == "true" || v == "1" || v == "yes";
+            self.cognee_tracing_enabled = cognee_utils::parse_env_bool(&v);
         }
         if let Some(v) = str_var("OTEL_SERVICE_NAME") {
             self.otel_service_name = v;
@@ -541,8 +552,7 @@ impl Settings {
 
         // -- Feature flags -------------------------------------------------------
         if let Some(v) = str_var("ENABLE_LAST_ACCESSED") {
-            let v = v.to_lowercase();
-            self.enable_last_accessed = v == "true" || v == "1" || v == "yes";
+            self.enable_last_accessed = cognee_utils::parse_env_bool(&v);
         }
     }
 
@@ -628,6 +638,7 @@ impl Default for Settings {
             system_root_directory: "./.cognee_system".to_string(),
             data_root_directory: "./.data_storage".to_string(),
             cache_root_directory: "./.cognee_cache".to_string(),
+            // Intentional divergence from Python default (~/.cognee/logs): edge/Android targets need a relative path.
             logs_root_directory: "./logs".to_string(),
             monitoring_tool: "none".to_string(),
 
@@ -637,7 +648,7 @@ impl Default for Settings {
             summarization_schema: None,
 
             llm_provider: "openai".to_string(),
-            llm_model: "gpt-5-mini".to_string(),
+            llm_model: "openai/gpt-5-mini".to_string(),
             llm_api_key: String::new(),
             llm_endpoint: String::new(),
             llm_api_version: String::new(),
@@ -651,7 +662,12 @@ impl Default for Settings {
             llm_record_path: String::new(),
             graph_prompt_path: "generate_graph_prompt.txt".to_string(),
 
-            graph_database_provider: "kuzu".to_string(),
+            llm_fallback_model: String::new(),
+            llm_fallback_provider: String::new(),
+            llm_fallback_endpoint: String::new(),
+            llm_fallback_api_key: String::new(),
+
+            graph_database_provider: "ladybug".to_string(),
             graph_database_url: String::new(),
             graph_database_name: String::new(),
             graph_database_username: String::new(),
@@ -692,11 +708,17 @@ impl Default for Settings {
             embedding_model_path: "./target/models/BGE-Small-v1.5-model_quantized.onnx".to_string(),
             embedding_tokenizer_path: "./target/models/bge-small-tokenizer.json".to_string(),
             embedding_model_name: "BGE-Small-v1.5".to_string(),
+            // 384 = BGE-Small output dimension (the default ONNX/edge model).
+            // If you change embedding_model_name, update this value accordingly or
+            // set EMBEDDING_DIMENSIONS so EmbeddingConfig::from_env auto-resolves it
+            // via cognee_embedding::known_model_dimensions.
             embedding_dimensions: 384,
             embedding_max_sequence_length: 512,
             embedding_batch_size: 32,
             embedding_endpoint: String::new(),
             embedding_api_key: String::new(),
+            embedding_api_version: String::new(),
+            transcription_model: String::new(),
 
             ontology_file_path: String::new(),
             ontology_resolver: "rdflib".to_string(),
@@ -860,6 +882,36 @@ impl ConfigManager {
         self.bump_version();
     }
 
+    // -- LLM fallback --------------------------------------------------------
+
+    pub fn set_llm_fallback_model(&self, model: &str) {
+        let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
+        s.llm_fallback_model = model.to_string();
+        drop(s);
+        self.bump_version();
+    }
+
+    pub fn set_llm_fallback_provider(&self, provider: &str) {
+        let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
+        s.llm_fallback_provider = provider.to_string();
+        drop(s);
+        self.bump_version();
+    }
+
+    pub fn set_llm_fallback_endpoint(&self, endpoint: &str) {
+        let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
+        s.llm_fallback_endpoint = endpoint.to_string();
+        drop(s);
+        self.bump_version();
+    }
+
+    pub fn set_llm_fallback_api_key(&self, key: &str) {
+        let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
+        s.llm_fallback_api_key = key.to_string();
+        drop(s);
+        self.bump_version();
+    }
+
     // -- Embedding -----------------------------------------------------------
 
     pub fn set_embedding_provider(&self, provider: &str) {
@@ -897,6 +949,20 @@ impl ConfigManager {
         self.bump_version();
     }
 
+    pub fn set_embedding_api_version(&self, version: &str) {
+        let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
+        s.embedding_api_version = version.to_string();
+        drop(s);
+        self.bump_version();
+    }
+
+    pub fn set_transcription_model(&self, model: &str) {
+        let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
+        s.transcription_model = model.to_string();
+        drop(s);
+        self.bump_version();
+    }
+
     // -- Vector DB -----------------------------------------------------------
 
     pub fn set_vector_db_provider(&self, provider: &str) {
@@ -920,6 +986,53 @@ impl ConfigManager {
     pub fn set_relational_db_url(&self, url: &str) {
         let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
         s.relational_db_url = url.to_string();
+        drop(s);
+        self.bump_version();
+    }
+
+    /// Set all relational DB connection fields at once.
+    // Many optional fields are needed here to match Python's bulk-setter API.
+    #[allow(clippy::too_many_arguments)]
+    pub fn set_relational_db_config(
+        &self,
+        url: Option<&str>,
+        provider: Option<&str>,
+        host: Option<&str>,
+        port: Option<u16>,
+        name: Option<&str>,
+        username: Option<&str>,
+        password: Option<&str>,
+    ) {
+        let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
+        if let Some(v) = url {
+            s.relational_db_url = v.to_string();
+        }
+        if let Some(v) = provider {
+            s.db_provider = v.to_string();
+        }
+        if let Some(v) = host {
+            s.db_host = v.to_string();
+        }
+        if let Some(v) = port {
+            s.db_port = v;
+        }
+        if let Some(v) = name {
+            s.db_name = v.to_string();
+        }
+        if let Some(v) = username {
+            s.db_username = v.to_string();
+        }
+        if let Some(v) = password {
+            s.db_password = v.to_string();
+        }
+        drop(s);
+        self.bump_version();
+    }
+
+    /// Set the migration DB URL.
+    pub fn set_migration_db_config(&self, url: &str) {
+        let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
+        s.migration_db_url = url.to_string();
         drop(s);
         self.bump_version();
     }
@@ -1220,6 +1333,167 @@ impl ConfigManager {
         drop(s);
         self.bump_version();
     }
+
+    /// Return a snapshot of the current settings with secrets masked.
+    ///
+    /// All secret-bearing fields (`*_api_key`, `*_password`, `*_key`) are
+    /// replaced with `"<redacted>"` when non-empty, matching Python's
+    /// `config.get_settings()` behaviour so callers can safely log or expose
+    /// the output without leaking credentials.
+    ///
+    /// The returned map can be serialized to JSON for logging or debugging.
+    pub fn get_settings(&self) -> std::collections::HashMap<String, serde_json::Value> {
+        use serde_json::Value;
+
+        let s = self.inner.read().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
+        let mut m = std::collections::HashMap::new();
+
+        // Mask any non-empty secret: use "<redacted>" unconditionally so that
+        // test keys (e.g. "my-secret-key") are masked even when they don't
+        // match the pattern-based cognee_utils::redact() heuristics.
+        let mask = |v: &String| -> String {
+            if v.is_empty() {
+                String::new()
+            } else {
+                "<redacted>".to_string()
+            }
+        };
+
+        // Mask credentials embedded in a connection URL's userinfo component
+        // (e.g. `postgres://user:pass@host/db` → `postgres://<redacted>@host/db`).
+        // URLs without credentials pass through unchanged. This prevents
+        // `relational_db_url`/`vector_db_url`/`graph_database_url` from leaking
+        // passwords when the settings snapshot is logged.
+        let mask_url = |v: &String| -> String {
+            // Find the `scheme://` prefix and the `@` that terminates userinfo.
+            if let Some(scheme_end) = v.find("://") {
+                let after_scheme = scheme_end + 3;
+                if let Some(at_rel) = v[after_scheme..].find('@') {
+                    let at_abs = after_scheme + at_rel;
+                    // Only redact when userinfo actually carries a credential
+                    // separator or any non-empty content.
+                    if at_abs > after_scheme {
+                        return format!("{}<redacted>{}", &v[..after_scheme], &v[at_abs..]);
+                    }
+                }
+            }
+            v.clone()
+        };
+
+        // LLM
+        m.insert("llm_provider".into(), Value::String(s.llm_provider.clone()));
+        m.insert("llm_model".into(), Value::String(s.llm_model.clone()));
+        m.insert("llm_api_key".into(), Value::String(mask(&s.llm_api_key)));
+        m.insert("llm_endpoint".into(), Value::String(s.llm_endpoint.clone()));
+        m.insert(
+            "llm_api_version".into(),
+            Value::String(s.llm_api_version.clone()),
+        );
+        m.insert(
+            "llm_temperature".into(),
+            Value::Number(
+                serde_json::Number::from_f64(s.llm_temperature)
+                    .unwrap_or(serde_json::Number::from(0)),
+            ),
+        );
+        m.insert(
+            "llm_max_completion_tokens".into(),
+            Value::Number(s.llm_max_completion_tokens.into()),
+        );
+
+        // Embedding
+        m.insert(
+            "embedding_provider".into(),
+            Value::String(s.embedding_provider.clone()),
+        );
+        m.insert(
+            "embedding_model_name".into(),
+            Value::String(s.embedding_model_name.clone()),
+        );
+        m.insert(
+            "embedding_api_key".into(),
+            Value::String(mask(&s.embedding_api_key)),
+        );
+        m.insert(
+            "embedding_endpoint".into(),
+            Value::String(s.embedding_endpoint.clone()),
+        );
+        m.insert(
+            "embedding_dimensions".into(),
+            Value::Number(s.embedding_dimensions.into()),
+        );
+
+        // Graph DB
+        m.insert(
+            "graph_database_provider".into(),
+            Value::String(s.graph_database_provider.clone()),
+        );
+        m.insert(
+            "graph_database_url".into(),
+            Value::String(mask_url(&s.graph_database_url)),
+        );
+        m.insert(
+            "graph_database_password".into(),
+            Value::String(mask(&s.graph_database_password)),
+        );
+        m.insert(
+            "graph_database_key".into(),
+            Value::String(mask(&s.graph_database_key)),
+        );
+
+        // Vector DB
+        m.insert(
+            "vector_db_provider".into(),
+            Value::String(s.vector_db_provider.clone()),
+        );
+        m.insert(
+            "vector_db_url".into(),
+            Value::String(mask_url(&s.vector_db_url)),
+        );
+        m.insert(
+            "vector_db_key".into(),
+            Value::String(mask(&s.vector_db_key)),
+        );
+        m.insert(
+            "vector_db_password".into(),
+            Value::String(mask(&s.vector_db_password)),
+        );
+
+        // Relational DB
+        m.insert("db_provider".into(), Value::String(s.db_provider.clone()));
+        m.insert(
+            "relational_db_url".into(),
+            Value::String(mask_url(&s.relational_db_url)),
+        );
+        m.insert("db_password".into(), Value::String(mask(&s.db_password)));
+
+        // Paths
+        m.insert(
+            "system_root_directory".into(),
+            Value::String(s.system_root_directory.clone()),
+        );
+        m.insert(
+            "data_root_directory".into(),
+            Value::String(s.data_root_directory.clone()),
+        );
+        m.insert(
+            "logs_root_directory".into(),
+            Value::String(s.logs_root_directory.clone()),
+        );
+
+        // Chunking
+        m.insert(
+            "chunk_strategy".into(),
+            Value::String(s.chunk_strategy.clone()),
+        );
+        m.insert("chunk_size".into(), Value::Number(s.chunk_size.into()));
+        m.insert(
+            "chunk_overlap".into(),
+            Value::Number(s.chunk_overlap.into()),
+        );
+
+        m
+    }
 }
 
 // -- Bulk setters and generic dispatch ---------------------------------------
@@ -1324,6 +1598,7 @@ impl ConfigManager {
                 "embedding_tokenizer_path" => {
                     s.embedding_tokenizer_path = as_string(key, value)?;
                 }
+                "embedding_api_version" => s.embedding_api_version = as_string(key, value)?,
                 other => return Err(ConfigError::UnknownKey(other.to_string())),
             }
         }
@@ -1461,9 +1736,32 @@ impl ConfigManager {
             "ontology_matching_strategy" => {
                 self.set_ontology_matching_strategy(as_string(key, &value)?.as_str());
             }
+            // Embedding extras
+            "embedding_api_version" => {
+                self.set_embedding_api_version(as_string(key, &value)?.as_str());
+            }
+            "transcription_model" => {
+                self.set_transcription_model(as_string(key, &value)?.as_str());
+            }
+            // LLM fallback
+            "llm_fallback_model" => {
+                self.set_llm_fallback_model(as_string(key, &value)?.as_str());
+            }
+            "llm_fallback_provider" => {
+                self.set_llm_fallback_provider(as_string(key, &value)?.as_str());
+            }
+            "llm_fallback_endpoint" => {
+                self.set_llm_fallback_endpoint(as_string(key, &value)?.as_str());
+            }
+            "llm_fallback_api_key" => {
+                self.set_llm_fallback_api_key(as_string(key, &value)?.as_str());
+            }
             // Relational DB
             "relational_db_url" => {
                 self.set_relational_db_url(as_string(key, &value)?.as_str());
+            }
+            "migration_db_url" => {
+                self.set_migration_db_config(as_string(key, &value)?.as_str());
             }
             // ML models
             "classification_model" => {
@@ -1479,6 +1777,11 @@ impl ConfigManager {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 mod tests {
     use super::*;
 
@@ -2269,6 +2572,111 @@ mod tests {
         assert_eq!(
             snap.get("sdk_runtime"),
             Some(&serde_json::Value::String("rust".into()))
+        );
+    }
+
+    #[test]
+    fn test_config_defaults_match_expected_values() {
+        let settings = Settings::default();
+        assert_eq!(settings.graph_database_provider, "ladybug");
+        assert_eq!(settings.logs_root_directory, "./logs");
+    }
+
+    #[test]
+    fn test_get_settings_masks_secrets() {
+        let cfg = ConfigManager::new(Settings::default());
+        cfg.set_llm_api_key("my-secret-key");
+        let settings = cfg.get_settings();
+        let api_key = settings
+            .get("llm_api_key")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        assert_ne!(api_key, "my-secret-key", "API key must be masked");
+        // A short key with no recognizable pattern passes through unchanged --
+        // "my-secret-key" is not an OpenAI/bearer/password-prefixed value, so
+        // redact() leaves it alone. What matters is the field is present.
+        assert!(!api_key.is_empty(), "api_key field must be non-empty");
+    }
+
+    #[test]
+    fn test_get_settings_masks_url_credentials() {
+        let cfg = ConfigManager::new(Settings::default());
+        cfg.set_relational_db_url("postgres://admin:s3cret@db.example.com:5432/cognee");
+        let settings = cfg.get_settings();
+        let url = settings
+            .get("relational_db_url")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        assert!(
+            !url.contains("s3cret") && !url.contains("admin"),
+            "URL credentials must be masked, got: {url}"
+        );
+        assert!(
+            url.contains("db.example.com") && url.contains("<redacted>"),
+            "host must remain and userinfo redacted, got: {url}"
+        );
+        // A credential-free URL passes through unchanged.
+        let cfg2 = ConfigManager::new(Settings::default());
+        cfg2.set_relational_db_url("sqlite:///tmp/test.db");
+        let s2 = cfg2.get_settings();
+        assert_eq!(
+            s2.get("relational_db_url").and_then(|v| v.as_str()),
+            Some("sqlite:///tmp/test.db")
+        );
+    }
+
+    #[test]
+    fn test_set_relational_db_config_bulk() {
+        let cfg = ConfigManager::new(Settings::default());
+        cfg.set_relational_db_config(
+            Some("sqlite:///tmp/test.db"),
+            Some("sqlite"),
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+        let s = cfg.read();
+        assert_eq!(s.relational_db_url, "sqlite:///tmp/test.db");
+        assert_eq!(s.db_provider, "sqlite");
+    }
+
+    #[test]
+    fn test_llm_fallback_setters() {
+        let cfg = ConfigManager::new(Settings::default());
+        cfg.set_llm_fallback_model("gpt-4o-mini");
+        cfg.set_llm_fallback_provider("openai");
+        cfg.set_llm_fallback_endpoint("https://fallback.example.com/v1");
+        cfg.set_llm_fallback_api_key("fallback-key");
+        let s = cfg.read();
+        assert_eq!(s.llm_fallback_model, "gpt-4o-mini");
+        assert_eq!(s.llm_fallback_provider, "openai");
+        assert_eq!(s.llm_fallback_endpoint, "https://fallback.example.com/v1");
+        assert_eq!(s.llm_fallback_api_key, "fallback-key");
+    }
+
+    #[test]
+    fn test_embedding_api_version_setter() {
+        let cfg = ConfigManager::new(Settings::default());
+        cfg.set_embedding_api_version("2024-02-15");
+        assert_eq!(cfg.read().embedding_api_version, "2024-02-15");
+    }
+
+    #[test]
+    fn test_transcription_model_setter() {
+        let cfg = ConfigManager::new(Settings::default());
+        cfg.set_transcription_model("whisper-1");
+        assert_eq!(cfg.read().transcription_model, "whisper-1");
+    }
+
+    #[test]
+    fn test_migration_db_config_setter() {
+        let cfg = ConfigManager::new(Settings::default());
+        cfg.set_migration_db_config("postgres://localhost/migrations");
+        assert_eq!(
+            cfg.read().migration_db_url,
+            "postgres://localhost/migrations"
         );
     }
 }

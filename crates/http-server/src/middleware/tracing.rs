@@ -16,8 +16,6 @@
 //! Authorization, Cookie, X-Api-Key are redacted by default per
 //! [`docs/http-server/observability.md §7`](../../../docs/http-server/observability.md#7-access-logging).
 
-use std::time::Duration;
-
 use tower_http::trace::{DefaultOnResponse, MakeSpan, TraceLayer};
 use tracing::Level;
 
@@ -71,9 +69,3 @@ pub fn is_header_redacted(name: &str) -> bool {
 
 /// Convenience re-export so callers can write `middleware::tracing::trace_layer()`.
 pub use self::trace_layer as make_trace_layer;
-
-/// Format a [`Duration`] as integer milliseconds for the `latency_ms` span field.
-#[allow(dead_code)]
-pub fn duration_ms(d: Duration) -> u64 {
-    d.as_millis() as u64
-}

@@ -12,8 +12,8 @@ use uuid::Uuid;
 /// hyphenated lowercase form, so the inputs are identical.
 pub fn generate_data_id(content_hash: &str, user_id: Uuid, tenant_id: Option<Uuid>) -> Uuid {
     let input = match tenant_id {
-        Some(tid) => format!("{}{}{}", content_hash, user_id, tid),
-        None => format!("{}{}None", content_hash, user_id),
+        Some(tid) => format!("{content_hash}{user_id}{tid}"),
+        None => format!("{content_hash}{user_id}None"),
     };
     Uuid::new_v5(&NAMESPACE_OID, input.as_bytes())
 }
@@ -25,13 +25,18 @@ pub fn generate_data_id(content_hash: &str, user_id: Uuid, tenant_id: Option<Uui
 /// matching Python's `str(None)` behavior.
 pub fn generate_dataset_id(dataset_name: &str, user_id: Uuid, tenant_id: Option<Uuid>) -> Uuid {
     let input = match tenant_id {
-        Some(tid) => format!("{}{}{}", dataset_name, user_id, tid),
-        None => format!("{}{}None", dataset_name, user_id),
+        Some(tid) => format!("{dataset_name}{user_id}{tid}"),
+        None => format!("{dataset_name}{user_id}None"),
     };
     Uuid::new_v5(&NAMESPACE_OID, input.as_bytes())
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 mod tests {
     use super::*;
 
@@ -106,7 +111,7 @@ mod tests {
 
         // Manually compute what Python produces:
         //   uuid5(NAMESPACE_OID, f"{hash}{user_id}None")
-        let expected_input = format!("{}{}None", hash, user_id);
+        let expected_input = format!("{hash}{user_id}None");
         let expected = Uuid::new_v5(&NAMESPACE_OID, expected_input.as_bytes());
         assert_eq!(
             id, expected,
@@ -121,7 +126,7 @@ mod tests {
 
         let id = generate_dataset_id("ds", user_id, None);
 
-        let expected_input = format!("ds{}None", user_id);
+        let expected_input = format!("ds{user_id}None");
         let expected = Uuid::new_v5(&NAMESPACE_OID, expected_input.as_bytes());
         assert_eq!(id, expected);
     }

@@ -401,6 +401,7 @@ pub async fn extract_graph_from_data(
 
             chunk_ids.push(chunk.base.id);
             extract_tasks.push(tokio::spawn(async move {
+                #[allow(clippy::expect_used, reason = "invariant is upheld by construction")]
                 let _permit = sem
                     .acquire()
                     .await
@@ -803,6 +804,7 @@ pub async fn extract_custom_graph_from_data<M: crate::fact_extraction::GraphMode
             let prompt = config.custom_extraction_prompt.clone();
 
             extract_tasks.push(tokio::spawn(async move {
+                #[allow(clippy::expect_used, reason = "invariant is upheld by construction")]
                 let _permit = sem
                     .acquire()
                     .await
@@ -974,19 +976,45 @@ pub async fn add_data_points(
         );
     }
 
-    // Create and store EdgeTypes from unique relationship names
-    // (port of Python's create_edge_type_datapoints + index_graph_edges)
+    // Store Documents as graph nodes. Python reaches Documents by recursively
+    // walking each DocumentChunk's `is_part_of` field (a full Document
+    // DataPoint) in get_graph_from_model(). Rust's `is_part_of` is just a
+    // `Uuid`, so we store Documents explicitly here. The node `id` equals the
+    // source Data item's id (content-addressed, Python-identical) and the node
+    // `type` is the concrete subclass name (TextDocument, PdfDocument, …), so
+    // the `is_part_of` edge target now resolves to a stored Document node.
+    if !input.documents.is_empty() {
+        let doc_refs: Vec<&Document> = input.documents.iter().collect();
+        graph_db
+            .add_nodes(&doc_refs)
+            .await
+            .map_err(CognifyError::from)?;
+        info!("Stored {} documents as graph nodes", doc_refs.len());
+    }
+
+    // Create and store EdgeTypes keyed on each edge's retrieval text
+    // (port of Python's create_edge_type_datapoints + index_graph_edges).
+    //
+    // Python keys EdgeType IDs and the embedded relationship_name on the
+    // edge's retrieval text — `get_edge_retrieval_text(edge_text,
+    // relationship_name)` (index_graph_edges.py:33-53), i.e. the nonblank
+    // `edge_text` property, falling back to the nonblank relationship_name,
+    // else dropped. `generate_edge_id(edge_id=text)` then derives the ID from
+    // that text. We mirror that here so EdgeType node UUIDs and the
+    // EdgeType_relationship_name vector inputs match Python (B2.5).
     let mut edge_type_counts: HashMap<String, i32> = HashMap::new();
     for edge_pair in &input.edges {
-        *edge_type_counts
-            .entry(edge_pair.relationship_name.clone())
-            .or_insert(0) += 1;
+        let edge_text = edge_retrieval_text(edge_pair);
+        if edge_text.is_empty() {
+            continue;
+        }
+        *edge_type_counts.entry(edge_text).or_insert(0) += 1;
     }
 
     let mut edge_types: Vec<EdgeType> = edge_type_counts
         .into_iter()
-        .map(|(name, count)| {
-            let mut et = EdgeType::new_deterministic(&name, Some(input.dataset_id));
+        .map(|(text, count)| {
+            let mut et = EdgeType::new_deterministic(&text, Some(input.dataset_id));
             et.set_count(count);
             et
         })
@@ -1059,6 +1087,7 @@ pub async fn add_data_points(
         &input.chunks,
         &input.entities,
         &input.summaries,
+        &input.documents,
         &input.edges,
         &edge_types,
         input.dataset_id,
@@ -1081,6 +1110,7 @@ pub async fn add_data_points(
             &input.entities,
             &input.edges,
             &input.summaries,
+            &input.documents,
             &structural_edges,
         )
         .await?;
@@ -1169,6 +1199,7 @@ pub async fn extract_temporal_events(
             let text = chunk.text.clone();
             let sem = Arc::clone(&semaphore);
             extract_tasks.push(tokio::spawn(async move {
+                #[allow(clippy::expect_used, reason = "invariant is upheld by construction")]
                 let _permit = sem
                     .acquire()
                     .await
@@ -1516,6 +1547,26 @@ pub async fn add_temporal_data_points(
     })
 }
 
+/// Resolve the retrieval text for an edge, mirroring Python's
+/// `get_edge_retrieval_text(edge_text, relationship_name)`
+/// (prepare_edges_for_storage.py:26-28 via index_graph_edges.py:33-53):
+/// prefer the nonblank `edge_text` property, fall back to the nonblank
+/// `relationship_name`, else return an empty string (caller drops empties).
+fn edge_retrieval_text(edge_pair: &GraphEdgePair) -> String {
+    let from_edge_text = edge_pair
+        .properties
+        .get("edge_text")
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty());
+
+    if let Some(text) = from_edge_text {
+        return text.to_string();
+    }
+
+    let rel = edge_pair.relationship_name.trim();
+    rel.to_string()
+}
+
 /// Build minimal edge properties for graph storage.
 fn build_edge_props(
     source_id: &str,
@@ -1626,10 +1677,7 @@ pub async fn extract_dlt_fk_edges(
     let mut schema_nodes: Vec<serde_json::Value> = Vec::new();
 
     for (table_name, table_meta) in &tables_seen {
-        let id = Uuid::new_v5(
-            &Uuid::NAMESPACE_OID,
-            format!("dlt:{}", table_name).as_bytes(),
-        );
+        let id = Uuid::new_v5(&Uuid::NAMESPACE_OID, format!("dlt:{table_name}").as_bytes());
         table_node_ids.insert(table_name.clone(), id);
 
         let columns_str = table_meta
@@ -1693,8 +1741,8 @@ pub async fn extract_dlt_fk_edges(
             }
             fk_defs_seen.insert(fk_key);
 
-            let rel_name = format!("{}:{}->{}:{}", table_name, fk_col, ref_table, ref_col);
-            let rel_id = Uuid::new_v5(&Uuid::NAMESPACE_OID, format!("dlt:{}", rel_name).as_bytes());
+            let rel_name = format!("{table_name}:{fk_col}->{ref_table}:{ref_col}");
+            let rel_id = Uuid::new_v5(&Uuid::NAMESPACE_OID, format!("dlt:{rel_name}").as_bytes());
 
             // Create SchemaRelationship node for this FK definition
             let rel_node = SchemaRelationshipNode {
@@ -1705,10 +1753,7 @@ pub async fn extract_dlt_fk_edges(
                 relationship_type: "foreign_key".to_string(),
                 source_column: fk_col.clone(),
                 target_column: ref_col.clone(),
-                description: format!(
-                    "Foreign key: {}.{} -> {}.{}",
-                    table_name, fk_col, ref_table, ref_col
-                ),
+                description: format!("Foreign key: {table_name}.{fk_col} -> {ref_table}.{ref_col}"),
                 data_type: "SchemaRelationship".to_string(),
             };
             if let Ok(val) = serde_json::to_value(&rel_node) {
@@ -2263,6 +2308,7 @@ async fn upsert_provenance(
     entities: &[GraphNodePair],
     edges: &[GraphEdgePair],
     summaries: &[TextSummary],
+    documents: &[Document],
     structural_edges: &[EdgeData],
 ) -> Result<(), CognifyError> {
     use cognee_database::ops::graph_storage;
@@ -2396,6 +2442,43 @@ async fn upsert_provenance(
                 .cloned()
                 .unwrap_or(json!(["name"])),
             attributes: serde_json::to_value(et).ok(),
+            created_at: Utc::now(),
+        });
+    }
+
+    // Documents. Python reaches the Document node by recursively walking each
+    // DocumentChunk's `is_part_of` (a full Document DataPoint), so the Document
+    // lands in `nodes` and `upsert_nodes(nodes, …)` writes its provenance row
+    // keyed with the ctx `data_item.id`. Rust stores Documents explicitly (see
+    // `add_data_points`), so we must register their provenance here too —
+    // otherwise the Document graph node (slug == its id == the source Data
+    // item's id) is never matched by the delete cleanup and leaks on hard
+    // delete. The Document's id IS the Data item's id, so `data_id` = its id.
+    for document in documents {
+        let data_id = document.base.id;
+
+        let indexed_fields = document
+            .base
+            .get_metadata("index_fields")
+            .cloned()
+            .unwrap_or(json!(["name"]));
+
+        let label = if document.name.is_empty() {
+            document.base.id.to_string()
+        } else {
+            document.name.clone()
+        };
+
+        prov_nodes.push(GraphNode {
+            id: provenance_node_id(tenant_id, user_id, dataset_id, data_id, document.base.id),
+            slug: document.base.id,
+            user_id,
+            data_id,
+            dataset_id,
+            label: Some(label),
+            node_type: document.base.data_type.clone(),
+            indexed_fields,
+            attributes: serde_json::to_value(document).ok(),
             created_at: Utc::now(),
         });
     }
@@ -2563,6 +2646,7 @@ async fn index_data_points(
     chunks: &[DocumentChunk],
     entities: &[GraphNodePair],
     summaries: &[TextSummary],
+    documents: &[Document],
     edges: &[GraphEdgePair],
     edge_types: &[EdgeType],
     dataset_id: Uuid,
@@ -2832,15 +2916,36 @@ async fn index_data_points(
                 .await
                 .map_err(|e| CognifyError::EmbeddingError(e.to_string()))?;
 
-            // Index the EdgeType DataPoints by relationship name so each
-            // triplet payload can inherit its originating edge's
-            // provenance (`source_*`) keys per gap-05/08 §4.4. Triplet
-            // itself has no embedded `DataPoint`, so we narrow the
-            // dump to just the five `source_*` keys to avoid colliding
-            // with Triplet's own flat fields (id, type, etc.).
-            let edge_type_by_name: std::collections::HashMap<&str, &EdgeType> = edge_types
+            // Index the EdgeType DataPoints so each triplet payload can
+            // inherit its originating edge's provenance (`source_*`) keys per
+            // gap-05/08 §4.4. Triplet itself has no embedded `DataPoint`, so we
+            // narrow the dump to just the five `source_*` keys to avoid
+            // colliding with Triplet's own flat fields (id, type, etc.).
+            //
+            // EdgeTypes are now keyed on each edge's *retrieval text*
+            // (`edge_retrieval_text`: nonblank `edge_text`, else
+            // `relationship_name`) to match Python's `generate_edge_id`, but a
+            // Triplet only carries the bare `relationship_name`. We therefore
+            // map each triplet's (source, target, relationship) tuple to its
+            // edge's retrieval text via the source edges, then look up the
+            // EdgeType by that text — so the provenance copy survives the
+            // Part-3 keying change even when edges carry a description.
+            let edge_type_by_text: std::collections::HashMap<&str, &EdgeType> = edge_types
                 .iter()
                 .map(|et| (et.relationship_name.as_str(), et))
+                .collect();
+            let edge_text_by_triple: std::collections::HashMap<(Uuid, Uuid, &str), String> = edges
+                .iter()
+                .map(|e| {
+                    (
+                        (
+                            e.source_entity_id,
+                            e.target_entity_id,
+                            e.relationship_name.as_str(),
+                        ),
+                        edge_retrieval_text(e),
+                    )
+                })
                 .collect();
 
             let triplet_points: Vec<VectorPoint> = triplets
@@ -2858,9 +2963,14 @@ async fn index_data_points(
                     // five `source_*` keys from the originating EdgeType's
                     // DataPoint, so Triplet's own flat fields are not
                     // overwritten.
-                    if let Some(edge_type) =
-                        edge_type_by_name.get(triplet.relationship_name.as_str())
-                    {
+                    let edge_type = edge_text_by_triple
+                        .get(&(
+                            triplet.source_entity_id,
+                            triplet.target_entity_id,
+                            triplet.relationship_name.as_str(),
+                        ))
+                        .and_then(|text| edge_type_by_text.get(text.as_str()));
+                    if let Some(edge_type) = edge_type {
                         for (k, v) in edge_type.base.vector_metadata() {
                             if matches!(
                                 k.as_str(),
@@ -2946,6 +3056,77 @@ async fn index_data_points(
 
         stats.record("EdgeType", "relationship_name", edge_types.len());
         info!("Indexed {} edge types", edge_types.len());
+    }
+
+    // 6. Index Documents by name into `{ConcreteType}_name` collections
+    //    (e.g. TextDocument_name, PdfDocument_name). Python indexes every
+    //    Document subclass via its `index_fields=["name"]`
+    //    (index_data_points.py:39-52). We group by the concrete subclass
+    //    `data_type` so the collection names match Python's class names.
+    if !documents.is_empty() {
+        // Preserve a stable iteration order so the embed batches are
+        // deterministic; group documents by their concrete type name.
+        let mut by_type: std::collections::BTreeMap<&str, Vec<&Document>> =
+            std::collections::BTreeMap::new();
+        for d in documents {
+            by_type
+                .entry(d.base.data_type.as_str())
+                .or_default()
+                .push(d);
+        }
+
+        for (type_name, docs) in by_type {
+            if !vector_db
+                .has_collection(type_name, "name")
+                .await
+                .map_err(|e| CognifyError::VectorDBError(e.to_string()))?
+            {
+                vector_db
+                    .create_collection(type_name, "name", dimension)
+                    .await
+                    .map_err(|e| CognifyError::VectorDBError(e.to_string()))?;
+            }
+
+            let names: Vec<&str> = docs.iter().map(|d| d.name.as_str()).collect();
+            let vectors = engine
+                .embed(&names)
+                .await
+                .map_err(|e| CognifyError::EmbeddingError(e.to_string()))?;
+
+            let points: Vec<VectorPoint> = docs
+                .iter()
+                .zip(vectors)
+                .map(|(doc, vector)| {
+                    let mut point = VectorPoint::new(doc.base.id, vector);
+
+                    // 1. Full DataPoint dump (Python parity — see gap-05/08).
+                    for (k, v) in doc.base.vector_metadata() {
+                        point = point.with_metadata(k, v);
+                    }
+
+                    // 2. Context-specific keys not present on the DataPoint.
+                    point = point
+                        .with_metadata("field", json!("name"))
+                        .with_metadata("name", json!(doc.name.clone()))
+                        .with_metadata("dataset_id", json!(dataset_id.to_string()));
+                    if let Some(uid) = user_id {
+                        point = point.with_metadata("user_id", json!(uid.to_string()));
+                    }
+                    if let Some(tid) = tenant_id {
+                        point = point.with_metadata("tenant_id", json!(tid.to_string()));
+                    }
+                    point
+                })
+                .collect();
+
+            vector_db
+                .index_points(type_name, "name", &points)
+                .await
+                .map_err(|e| CognifyError::VectorDBError(e.to_string()))?;
+
+            stats.record(type_name, "name", docs.len());
+            info!("Indexed {} {}", docs.len(), type_name);
+        }
     }
 
     Ok(stats)
@@ -3437,6 +3618,11 @@ pub fn build_temporal_cognify_pipeline(
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 mod tests {
     use super::*;
     use cognee_models::DataPoint;
@@ -3750,10 +3936,10 @@ mod tests {
         let fk_col = "customer_id";
         let ref_table = "customers";
         let ref_col = "id";
-        let rel_name = format!("{}:{}->{}:{}", table_name, fk_col, ref_table, ref_col);
+        let rel_name = format!("{table_name}:{fk_col}->{ref_table}:{ref_col}");
         assert_eq!(rel_name, "orders:customer_id->customers:id");
 
-        let rel_id = Uuid::new_v5(&Uuid::NAMESPACE_OID, format!("dlt:{}", rel_name).as_bytes());
+        let rel_id = Uuid::new_v5(&Uuid::NAMESPACE_OID, format!("dlt:{rel_name}").as_bytes());
         let expected_id = Uuid::new_v5(
             &Uuid::NAMESPACE_OID,
             b"dlt:orders:customer_id->customers:id",
@@ -3762,7 +3948,7 @@ mod tests {
 
         // Case 2: empty ref_col -- must still include trailing colon
         let ref_col_empty = "";
-        let rel_name_empty = format!("{}:{}->{}:{}", table_name, fk_col, ref_table, ref_col_empty);
+        let rel_name_empty = format!("{table_name}:{fk_col}->{ref_table}:{ref_col_empty}");
         assert_eq!(
             rel_name_empty, "orders:customer_id->customers:",
             "rel_name must include trailing colon even when ref_col is empty"
@@ -3770,7 +3956,7 @@ mod tests {
 
         let rel_id_empty = Uuid::new_v5(
             &Uuid::NAMESPACE_OID,
-            format!("dlt:{}", rel_name_empty).as_bytes(),
+            format!("dlt:{rel_name_empty}").as_bytes(),
         );
         let expected_id_empty =
             Uuid::new_v5(&Uuid::NAMESPACE_OID, b"dlt:orders:customer_id->customers:");
@@ -3840,6 +4026,117 @@ mod tests {
             "title": title,
         })
         .to_string()
+    }
+
+    #[tokio::test]
+    async fn add_data_points_stores_document_node_and_indexes_document_name() {
+        use cognee_embedding::MockEmbeddingEngine;
+        use cognee_vector::MockVectorDB;
+
+        let graph: Arc<dyn GraphDBTrait> = Arc::new(cognee_graph::MockGraphDB::new());
+        let vector: Arc<dyn VectorDB> = Arc::new(MockVectorDB::new());
+        let engine: Arc<dyn EmbeddingEngine> = Arc::new(MockEmbeddingEngine::new(8));
+
+        let doc_id = Uuid::parse_str("00000000-0000-0000-0000-0000000000a1").unwrap();
+        let chunk_id = Uuid::parse_str("00000000-0000-0000-0000-0000000000b1").unwrap();
+        let document = test_document_with_metadata(doc_id, None);
+        let chunk = test_chunk(chunk_id, doc_id, "Hello world");
+
+        let input = SummarizedData {
+            chunks: vec![chunk],
+            documents: vec![document],
+            entities: vec![],
+            edges: vec![],
+            summaries: vec![],
+            dataset_id: Uuid::new_v4(),
+            user_id: None,
+            tenant_id: None,
+        };
+
+        let config = CognifyConfig::default();
+        add_data_points(
+            &input,
+            Arc::clone(&graph),
+            Arc::clone(&vector),
+            Arc::clone(&engine),
+            None,
+            &config,
+        )
+        .await
+        .unwrap();
+
+        // (a) Document stored as a graph node with id == data id and the
+        //     concrete subclass type.
+        let node = graph
+            .get_node(&doc_id.to_string())
+            .await
+            .unwrap()
+            .expect("document node should exist");
+        assert_eq!(
+            node.get("type").and_then(|v| v.as_str()),
+            Some("TextDocument")
+        );
+
+        // (b) A TextDocument_name collection exists with exactly one point.
+        assert!(vector.has_collection("TextDocument", "name").await.unwrap());
+        assert_eq!(
+            vector
+                .collection_size("TextDocument", "name")
+                .await
+                .unwrap(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn extracted_edge_description_persists_as_edge_text_property() {
+        use crate::fact_extraction::{Edge, KnowledgeGraph, Node};
+        use cognee_ontology::NoOpOntologyResolver;
+
+        let graph = KnowledgeGraph {
+            nodes: vec![
+                Node {
+                    id: "alice".to_string(),
+                    name: "Alice".to_string(),
+                    node_type: "PERSON".to_string(),
+                    description: "A person".to_string(),
+                },
+                Node {
+                    id: "acme".to_string(),
+                    name: "Acme".to_string(),
+                    node_type: "ORGANIZATION".to_string(),
+                    description: "A company".to_string(),
+                },
+            ],
+            edges: vec![Edge {
+                source_node_id: "alice".to_string(),
+                target_node_id: "acme".to_string(),
+                relationship_name: "founded".to_string(),
+                // Leading/trailing whitespace exercises the trim semantics.
+                description: Some("  Alice founded Acme  ".to_string()),
+            }],
+        };
+
+        let chunk_id = Uuid::new_v4();
+        let dataset_id = Uuid::new_v4();
+        let resolver = NoOpOntologyResolver::new();
+
+        let (_nodes, edges) = expand_with_nodes_and_edges(
+            vec![(chunk_id, graph)],
+            dataset_id,
+            &HashSet::new(),
+            &resolver,
+            None,
+        )
+        .await;
+
+        assert_eq!(edges.len(), 1);
+        let edge_text = edges[0]
+            .properties
+            .get("edge_text")
+            .expect("edge_text property should be set");
+        // Trimmed, matching Python _strip_nonblank_text.
+        assert_eq!(edge_text, "Alice founded Acme");
     }
 
     #[test]

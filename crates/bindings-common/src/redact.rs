@@ -60,6 +60,11 @@ pub fn redact_config_json(value: &mut serde_json::Value) {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 mod tests {
     use serde_json::json;
 

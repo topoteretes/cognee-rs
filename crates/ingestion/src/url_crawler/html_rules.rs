@@ -52,6 +52,7 @@ struct ParsedRule {
 /// Embedded TOML rules, parsed once on first access.
 static PARSED_RULES: LazyLock<Vec<ParsedRule>> = LazyLock::new(|| {
     let toml_str = include_str!("html_rules.toml");
+    #[allow(clippy::expect_used, reason = "invariant is upheld by construction")]
     let rules: HtmlRules = toml::from_str(toml_str)
         .expect("html_rules.toml is embedded at compile time and must be valid TOML");
 

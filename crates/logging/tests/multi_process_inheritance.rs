@@ -1,4 +1,9 @@
 //! Multi-process `LOG_FILE_NAME` inheritance test (decision 5).
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "integration test — panics are acceptable failures"
+)]
 //!
 //! When a parent calls `init_logging` and then spawns child processes
 //! with the inherited environment, every child must reuse the same

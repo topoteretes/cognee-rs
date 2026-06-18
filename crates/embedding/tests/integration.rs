@@ -1,3 +1,10 @@
+#![cfg(feature = "onnx")]
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "integration test code — panics are acceptable failures"
+)]
+
 use cognee_embedding::{
     config::OnnxEmbeddingConfig, engine::EmbeddingEngine, onnx::OnnxEmbeddingEngine,
 };
@@ -16,7 +23,7 @@ fn get_model_dir() -> String {
     }
 
     let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
-    format!("{}/../../target/models", manifest_dir)
+    format!("{manifest_dir}/../../target/models")
 }
 
 /// Load the ONNX engine, or return None to skip the test if the model file is absent.
@@ -48,8 +55,7 @@ async fn test_full_embedding_pipeline() {
         let norm: f32 = emb.iter().map(|x| x * x).sum::<f32>().sqrt();
         assert!(
             (norm - 1.0).abs() < 0.01,
-            "Embedding not normalized: {}",
-            norm
+            "Embedding not normalized: {norm}"
         );
     }
 }
@@ -82,9 +88,7 @@ async fn test_semantic_similarity() {
 
     assert!(
         sim_ml_ai > sim_ml_cooking,
-        "Expected ML-AI similarity ({}) > ML-Cooking similarity ({})",
-        sim_ml_ai,
-        sim_ml_cooking
+        "Expected ML-AI similarity ({sim_ml_ai}) > ML-Cooking similarity ({sim_ml_cooking})"
     );
 }
 
@@ -95,7 +99,7 @@ async fn test_batch_processing() {
     };
 
     let texts: Vec<_> = (0..10)
-        .map(|i| format!("This is test sentence number {}", i))
+        .map(|i| format!("This is test sentence number {i}"))
         .collect();
 
     let embeddings = engine

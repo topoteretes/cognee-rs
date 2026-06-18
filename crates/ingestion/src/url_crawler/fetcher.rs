@@ -114,7 +114,7 @@ impl UrlFetcher {
                     if !status.is_success() {
                         return Err(UrlFetcherError::HttpStatus(
                             status.as_u16(),
-                            format!("Failed to fetch URL: {}", url),
+                            format!("Failed to fetch URL: {url}"),
                         ));
                     }
 
@@ -178,7 +178,7 @@ impl UrlFetcher {
         if !status.is_success() {
             return Err(UrlFetcherError::HttpStatus(
                 status.as_u16(),
-                format!("Failed to fetch URL: {}", url),
+                format!("Failed to fetch URL: {url}"),
             ));
         }
 
@@ -264,6 +264,7 @@ impl UrlFetcher {
 
         // `Robot::new` can fail on malformed input; treat as permissive.
         let robot = Robot::new(&self.config.user_agent, &body).unwrap_or_else(|_| {
+            #[allow(clippy::expect_used, reason = "invariant is upheld by construction")]
             Robot::new(&self.config.user_agent, b"").expect("empty robots.txt should always parse")
         });
 
@@ -320,6 +321,7 @@ impl UrlFetcher {
 
 impl Default for UrlFetcher {
     fn default() -> Self {
+        #[allow(clippy::expect_used, reason = "invariant is upheld by construction")]
         Self::new().expect("Failed to create default UrlFetcher")
     }
 }

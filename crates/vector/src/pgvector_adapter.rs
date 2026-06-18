@@ -40,6 +40,10 @@ enum VColl {
 }
 
 impl Iden for VColl {
+    #[allow(
+        clippy::expect_used,
+        reason = "writing a static &str into the fmt::Write sink is infallible"
+    )]
     fn unquoted(&self, s: &mut dyn fmt::Write) {
         write!(
             s,
@@ -261,6 +265,7 @@ impl VectorDB for PgVectorAdapter {
         for p in points {
             if p.vector.len() != expected_dim {
                 return Err(VectorDBError::DimensionMismatch {
+                    collection: coll.clone(),
                     expected: expected_dim,
                     actual: p.vector.len(),
                 });

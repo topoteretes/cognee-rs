@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! Validate HTML placeholder substitution and content.
 
 use cognee_graph::GraphDBTrait;

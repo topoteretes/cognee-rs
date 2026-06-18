@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! Integration tests for content-addressed deduplication in `AddPipeline`.
 //!
 //! These tests exercise the full SQLite + LocalStorage stack (no mocks) to verify
@@ -417,6 +422,7 @@ async fn impl_cascade_deletion_preserves_data_with_remaining_links(db_url: &str)
                 dataset_name: "ds1".to_string(),
             },
             mode: DeleteMode::Soft,
+            memory_only: false,
         })
         .await
         .expect("delete ds1");
@@ -447,6 +453,7 @@ async fn impl_cascade_deletion_preserves_data_with_remaining_links(db_url: &str)
                 dataset_name: "ds2".to_string(),
             },
             mode: DeleteMode::Soft,
+            memory_only: false,
         })
         .await
         .expect("delete ds2");
@@ -461,6 +468,7 @@ async fn impl_cascade_deletion_preserves_data_with_remaining_links(db_url: &str)
                 dataset_name: "ds3".to_string(),
             },
             mode: DeleteMode::Soft,
+            memory_only: false,
         })
         .await
         .expect("delete ds3");

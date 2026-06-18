@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! Integration test: Hard-mode delete sweeps orphan entities from the graph.
 //!
 //! Ingests two documents with a shared entity ("TechCorp"), cognifies both,
@@ -238,7 +243,7 @@ async fn test_hard_mode_sweeps_orphan_entities() {
         pre_delete_node_count > 0,
         "Graph should have nodes after cognify"
     );
-    println!("Pre-delete graph: {} nodes", pre_delete_node_count);
+    println!("Pre-delete graph: {pre_delete_node_count} nodes");
 
     // ── Delete doc1 with Hard mode ──────────────────────────────────────────
     let delete_svc =
@@ -255,6 +260,7 @@ async fn test_hard_mode_sweeps_orphan_entities() {
                 delete_dataset_if_empty: false,
             },
             mode: DeleteMode::Hard,
+            memory_only: false,
         })
         .await
         .expect("hard delete should succeed");
@@ -287,17 +293,12 @@ async fn test_hard_mode_sweeps_orphan_entities() {
         .expect("get_graph_data after delete");
     let post_delete_node_count = post_delete_nodes.len();
 
-    println!(
-        "Post-delete graph: {} nodes (was {})",
-        post_delete_node_count, pre_delete_node_count
-    );
+    println!("Post-delete graph: {post_delete_node_count} nodes (was {pre_delete_node_count})");
 
     assert!(
         post_delete_node_count < pre_delete_node_count,
         "Graph node count should decrease after hard delete; \
-         before={}, after={}",
-        pre_delete_node_count,
-        post_delete_node_count,
+         before={pre_delete_node_count}, after={post_delete_node_count}",
     );
 
     // ── Verify graph is NOT empty (doc2 nodes survive) ──────────────────────
@@ -425,6 +426,7 @@ async fn test_soft_mode_preserves_orphan_entities() {
                 delete_dataset_if_empty: false,
             },
             mode: DeleteMode::Soft,
+            memory_only: false,
         })
         .await
         .expect("soft delete should succeed");
@@ -465,8 +467,7 @@ async fn test_soft_mode_preserves_orphan_entities() {
     );
 
     println!(
-        "Soft delete: graph went from {} to {} nodes (orphan sweep skipped)",
-        pre_delete_node_count, post_delete_node_count
+        "Soft delete: graph went from {pre_delete_node_count} to {post_delete_node_count} nodes (orphan sweep skipped)"
     );
 
     println!("test_soft_mode_preserves_orphan_entities PASSED");

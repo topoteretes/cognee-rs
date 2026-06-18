@@ -223,7 +223,7 @@ pub async fn post_infer_schema(
     let parsed: serde_json::Value = serde_json::from_str(&output_text).map_err(|err| {
         ApiError::LlmError(
             StatusCode::UNPROCESSABLE_ENTITY,
-            format!("LLM output is not valid JSON: {}", err),
+            format!("LLM output is not valid JSON: {err}"),
         )
     })?;
 

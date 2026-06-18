@@ -110,6 +110,11 @@ pub fn verify_password(stored: &str, plain: &str) -> Result<VerifyOutcome, Passw
 // ─── Unit tests ───────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 mod tests {
     use super::*;
 

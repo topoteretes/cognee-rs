@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! Integration test for the default backend: add → cognify → search → delete.
 //!
 //! Ports the core assertions from `test_library.py` using the Rust fixed infrastructure:
@@ -78,6 +83,7 @@ fn make_request(query: &str, search_type: SearchType) -> SearchRequest {
         auto_feedback_detection: None,
         neighborhood_depth: None,
         neighborhood_seed_top_k: None,
+        summarize_context: None,
     }
 }
 
@@ -200,7 +206,7 @@ async fn test_default_backend_add_cognify_search_delete() {
     {
         Ok(r) => r,
         Err(e) => {
-            eprintln!("⚠️  Skipping test: cognify failed: {}", e);
+            eprintln!("⚠️  Skipping test: cognify failed: {e}");
             return;
         }
     };
@@ -238,7 +244,7 @@ async fn test_default_backend_add_cognify_search_delete() {
 
     // Use first extracted entity name as query term
     let query = result.entities[0].entity.name.clone();
-    println!("✓ Search query: {:?}", query);
+    println!("✓ Search query: {query:?}");
 
     // GRAPH_COMPLETION
     let gc_response = orchestrator
@@ -280,6 +286,7 @@ async fn test_default_backend_add_cognify_search_delete() {
         .execute(&DeleteRequest {
             scope: DeleteScope::All,
             mode: DeleteMode::Soft,
+            memory_only: false,
         })
         .await
         .expect("delete_svc.execute");
@@ -294,8 +301,7 @@ async fn test_default_backend_add_cognify_search_delete() {
         .expect("list_datasets after delete");
     assert!(
         remaining.is_empty(),
-        "All datasets should be deleted; found {:?}",
-        remaining
+        "All datasets should be deleted; found {remaining:?}"
     );
 
     assert!(

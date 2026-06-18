@@ -28,7 +28,7 @@ use tracing::{field, info};
 use super::error::ApiError;
 
 pub use cognee_search::recall_scope::{
-    RecallItem, RecallScope, RecallSource, ScopeInput, normalize_scope,
+    RecallItem, RecallOptions, RecallScope, RecallSource, ScopeInput, normalize_scope,
 };
 
 /// Full recall result.
@@ -74,6 +74,7 @@ pub async fn recall(
     session_store: Option<&dyn SessionStore>,
     session_manager: Option<&SessionManager>,
     scope: Option<Vec<RecallScope>>,
+    options: Option<RecallOptions>,
 ) -> Result<RecallResult, ApiError> {
     // -- Resolve scope to a concrete source list (Python recall.py:373-386). --
     let normalized: Vec<RecallScope> = match scope {
@@ -180,6 +181,7 @@ pub async fn recall(
                     session_id,
                     search_orchestrator,
                     &span,
+                    options.as_ref(),
                 )
                 .await
                 .map_err(|e| ApiError::Search(e.to_string()))?;
@@ -249,4 +251,29 @@ pub async fn recall(
         auto_routed: graph_auto_routed,
         search_response: graph_response,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn recall_options_fields_are_set_correctly() {
+        let opts = RecallOptions {
+            triplet_distance_penalty: Some(6.5),
+            node_name: Some(vec!["Alice".to_string()]),
+            ..Default::default()
+        };
+        assert_eq!(opts.triplet_distance_penalty, Some(6.5));
+        assert_eq!(
+            opts.node_name.as_deref(),
+            Some(["Alice".to_string()].as_slice())
+        );
+        // Un-set fields default to None.
+        assert!(opts.system_prompt.is_none());
+        assert!(opts.wide_search_top_k.is_none());
+        assert!(opts.feedback_influence.is_none());
+        assert!(opts.neighborhood_depth.is_none());
+        assert!(opts.neighborhood_seed_top_k.is_none());
+    }
 }

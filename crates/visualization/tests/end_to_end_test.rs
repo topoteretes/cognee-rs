@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! End-to-end test: populate a `MockGraphDB`, call `visualize()`, and assert
 //! that a valid HTML file is written to disk.
 

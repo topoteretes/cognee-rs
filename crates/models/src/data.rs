@@ -34,7 +34,11 @@ pub struct Data {
     pub original_mime_type: Option<String>,
     /// Python loader engine name (e.g. "text_loader", "pypdf_loader")
     pub loader_engine: Option<String>,
-    /// MD5 hash of the raw content (for Python compat; same as content_hash when using MD5 mode)
+    /// MD5 hash of the **extracted-text** file stored by the loader at ADD time
+    /// (Python parity, `ingest_data.py:195`). Equals [`content_hash`](Self::content_hash)
+    /// only when the extracted text is byte-identical to the raw input (plain
+    /// text); for inputs the loader transforms (PDF, CSV, HTML, image, audio)
+    /// the two hashes differ.
     pub raw_content_hash: Option<String>,
     /// Tenant/organisation ID for multi-tenant isolation
     pub tenant_id: Option<Uuid>,

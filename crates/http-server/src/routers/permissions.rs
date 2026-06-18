@@ -20,7 +20,8 @@ use crate::components::ComponentHandles;
 use crate::dto::permissions::{
     AddUserToTenantQuery, AssignRoleQuery, CreateRoleQuery, CreateRoleResponse, CreateTenantQuery,
     CreateTenantResponse, GrantDatasetPermissionBody, GrantDatasetPermissionQuery, MessageResponse,
-    RoleSummary, SelectTenantDTO, SelectTenantResponse, TenantSummary, UserInRole, UserInTenant,
+    RemoveUserFromRoleQuery, RevokeDatasetPermissionQuery, RoleSummary, SelectTenantDTO,
+    SelectTenantResponse, TenantSummary, UserInRole, UserInTenant,
 };
 use crate::error::ApiError;
 use crate::state::AppState;
@@ -685,6 +686,177 @@ pub async fn remove_user_from_tenant(
     }))
 }
 
+// ── §2.13 DELETE /datasets/{principal_id} — revoke ACL ─────────────────────
+
+#[utoipa::path(
+    delete,
+    path = "/api/v1/permissions/datasets/{principal_id}",
+    tag = "permissions",
+    params(
+        ("principal_id" = Uuid, Path, description = "principal whose grant is revoked"),
+        ("permission_name" = String, Query, description = "one of read|write|delete|share"),
+    ),
+    request_body = GrantDatasetPermissionBody,
+    responses(
+        (status = 200, description = "permission revoked", body = MessageResponse),
+        (status = 400, description = "invalid permission name"),
+        (status = 401, description = "unauthorized"),
+    )
+)]
+#[tracing::instrument(
+    skip(state, body),
+    name = "cognee.api.permissions.revoke_dataset_permission",
+    fields(principal_id = %principal_id)
+)]
+pub async fn revoke_dataset_permission(
+    user: AuthenticatedUser,
+    State(state): State<AppState>,
+    Path(principal_id): Path<Uuid>,
+    Query(query): Query<RevokeDatasetPermissionQuery>,
+    Json(body): Json<GrantDatasetPermissionBody>,
+) -> Result<Json<MessageResponse>, ApiError> {
+    let GrantDatasetPermissionBody(dataset_ids) = body;
+    let permission_name = query.permission_name.trim().to_lowercase();
+
+    if !PERMISSION_NAMES.contains(&permission_name.as_str()) {
+        return Err(ApiError::BadRequest(format!(
+            "Unknown permission '{permission_name}'; must be one of read|write|delete|share"
+        )));
+    }
+
+    // Empty list → success (Python parity per spec §6.1).
+    if dataset_ids.is_empty() {
+        return Ok(Json(MessageResponse {
+            message: "Permission revoked from principal".into(),
+        }));
+    }
+
+    let handles = components(&state)?;
+    let repo = permissions_repo(handles)?;
+
+    // Per-dataset share gate — silently skip datasets the caller cannot `share`.
+    for ds_id in &dataset_ids {
+        let allowed = repo
+            .user_can(user.id, *ds_id, "share")
+            .await
+            .map_err(map_permissions_error)?;
+        if !allowed {
+            tracing::debug!(
+                "Caller {} lacks share on dataset {}; skipping revoke",
+                user.id,
+                ds_id
+            );
+            continue;
+        }
+        repo.revoke_acl(principal_id, *ds_id, &permission_name)
+            .await
+            .map_err(map_permissions_error)?;
+    }
+
+    Ok(Json(MessageResponse {
+        message: "Permission revoked from principal".into(),
+    }))
+}
+
+// ── §2.14 DELETE /users/{user_id}/roles — remove user from role ─────────────
+
+#[utoipa::path(
+    delete,
+    path = "/api/v1/permissions/users/{user_id}/roles",
+    tag = "permissions",
+    params(
+        ("user_id" = Uuid, Path, description = "target user"),
+        ("role_id" = Uuid, Query, description = "role to remove"),
+    ),
+    responses(
+        (status = 200, description = "user removed from role", body = MessageResponse),
+        (status = 401, description = "unauthorized"),
+        (status = 403, description = "not a tenant admin"),
+        (status = 404, description = "role not found"),
+    )
+)]
+#[tracing::instrument(
+    skip(state),
+    name = "cognee.api.permissions.remove_user_from_role",
+    fields(target_user_id = %target_user)
+)]
+pub async fn remove_user_from_role(
+    user: AuthenticatedUser,
+    State(state): State<AppState>,
+    Path(target_user): Path<Uuid>,
+    Query(query): Query<RemoveUserFromRoleQuery>,
+) -> Result<Json<MessageResponse>, ApiError> {
+    let handles = components(&state)?;
+    let repo = permissions_repo(handles)?;
+
+    // Resolve the role's tenant so we can gate on it.
+    let role_tenant_id = repo
+        .role_tenant_id(query.role_id)
+        .await
+        .map_err(map_permissions_error)?
+        .ok_or_else(|| ApiError::NotFound(format!("Role '{}' not found", query.role_id)))?;
+
+    // Python uses has_user_management_permission (admin-or-owner), not owner-only.
+    // Mirror: `remove_user_from_role.py` line 38 calls `has_user_management_permission`.
+    require_tenant_admin(handles, user.id, role_tenant_id).await?;
+
+    repo.revoke_role(target_user, query.role_id)
+        .await
+        .map_err(map_permissions_error)?;
+
+    Ok(Json(MessageResponse {
+        message: "User removed from role".into(),
+    }))
+}
+
+// ── §2.15 DELETE /roles/{role_id} — delete role ────────────────────────────
+
+#[utoipa::path(
+    delete,
+    path = "/api/v1/permissions/roles/{role_id}",
+    tag = "permissions",
+    params(
+        ("role_id" = Uuid, Path, description = "role to delete"),
+    ),
+    responses(
+        (status = 200, description = "role deleted", body = MessageResponse),
+        (status = 401, description = "unauthorized"),
+        (status = 403, description = "not a tenant admin"),
+        (status = 404, description = "role not found"),
+    )
+)]
+#[tracing::instrument(
+    skip(state),
+    name = "cognee.api.permissions.delete_role",
+    fields(role_id = %role_id)
+)]
+pub async fn delete_role(
+    user: AuthenticatedUser,
+    State(state): State<AppState>,
+    Path(role_id): Path<Uuid>,
+) -> Result<Json<MessageResponse>, ApiError> {
+    let handles = components(&state)?;
+    let repo = permissions_repo(handles)?;
+
+    // Resolve the role's tenant for the auth gate (404 if role doesn't exist).
+    let role_tenant_id = repo
+        .role_tenant_id(role_id)
+        .await
+        .map_err(map_permissions_error)?
+        .ok_or_else(|| ApiError::NotFound(format!("Role '{role_id}' not found")))?;
+
+    // Python's `delete_role.py` uses `has_user_management_permission` (admin-or-owner).
+    require_tenant_admin(handles, user.id, role_tenant_id).await?;
+
+    repo.delete_role(role_id)
+        .await
+        .map_err(map_permissions_error)?;
+
+    Ok(Json(MessageResponse {
+        message: "Role deleted".into(),
+    }))
+}
+
 // ── Router ─────────────────────────────────────────────────────────────────
 
 pub fn router() -> Router<AppState> {
@@ -705,16 +877,23 @@ pub fn router() -> Router<AppState> {
         )
         // GET /tenants/{tenant_id}/users
         .route("/tenants/{tenant_id}/users", get(list_users_in_tenant))
-        // POST /datasets/{principal_id}
-        .route("/datasets/{principal_id}", post(grant_dataset_permission))
-        // POST /roles
+        // POST + DELETE /datasets/{principal_id}
+        .route(
+            "/datasets/{principal_id}",
+            post(grant_dataset_permission).delete(revoke_dataset_permission),
+        )
+        // POST /roles, DELETE /roles/{role_id}
         .route("/roles", post(create_role))
+        .route("/roles/{role_id}", delete(delete_role))
         // POST /tenants
         .route("/tenants", post(create_tenant))
         // POST /tenants/select
         .route("/tenants/select", post(select_tenant))
-        // POST /users/{user_id}/roles
-        .route("/users/{user_id}/roles", post(assign_role))
+        // POST + DELETE /users/{user_id}/roles
+        .route(
+            "/users/{user_id}/roles",
+            post(assign_role).delete(remove_user_from_role),
+        )
         // POST /users/{user_id}/tenants
         .route("/users/{user_id}/tenants", post(add_user_to_tenant))
         // DELETE /tenants/{tenant_id}/users/{user_id}

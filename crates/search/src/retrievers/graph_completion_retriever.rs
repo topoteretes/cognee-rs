@@ -200,6 +200,11 @@ impl SearchRetriever for GraphCompletionRetriever {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 mod tests {
     use std::borrow::Cow;
     use std::collections::HashMap;
@@ -560,10 +565,10 @@ mod tests {
             }),
             Some(2),
             Some(5),
-            // Use the default penalty (3.5) — unmatched edge types get this distance.
-            // Alice (dist 0.05) + Bob (dist 0.20) + KNOWS (unmatched: 3.5) = 3.75
-            // Bob (dist 0.20) + Charlie (dist 0.60) + WORKS_WITH (unmatched: 3.5) = 4.30
-            // Sort ascending: KNOWS (3.75) first, WORKS_WITH (4.30) second.
+            // Use the default penalty (6.5) — unmatched edge types get this distance.
+            // Alice (dist 0.05) + Bob (dist 0.20) + KNOWS (unmatched: 6.5) = 6.75
+            // Bob (dist 0.20) + Charlie (dist 0.60) + WORKS_WITH (unmatched: 6.5) = 7.30
+            // Sort ascending: KNOWS (6.75) first, WORKS_WITH (7.30) second.
             None,
             None,
             None,
@@ -582,7 +587,7 @@ mod tests {
         assert_eq!(context[0].payload["target_name"], "Bob");
         assert_eq!(context[1].payload["relationship"], "WORKS_WITH");
         // Verify distance-based scores (lower = better):
-        // KNOWS: 0.05 + 0.20 + 3.5 = 3.75; WORKS_WITH: 0.20 + 0.60 + 3.5 = 4.30
+        // KNOWS: 0.05 + 0.20 + 6.5 = 6.75; WORKS_WITH: 0.20 + 0.60 + 6.5 = 7.30
         let score_knows = context[0].score.unwrap();
         let score_works_with = context[1].score.unwrap();
         assert!(
@@ -590,12 +595,12 @@ mod tests {
             "KNOWS distance ({score_knows}) should be less than WORKS_WITH distance ({score_works_with})"
         );
         assert!(
-            (score_knows - 3.75).abs() < 1e-5,
-            "KNOWS expected score 3.75, got {score_knows}"
+            (score_knows - 6.75).abs() < 1e-5,
+            "KNOWS expected score 6.75, got {score_knows}"
         );
         assert!(
-            (score_works_with - 4.30).abs() < 1e-5,
-            "WORKS_WITH expected score 4.30, got {score_works_with}"
+            (score_works_with - 7.30).abs() < 1e-5,
+            "WORKS_WITH expected score 7.30, got {score_works_with}"
         );
     }
 

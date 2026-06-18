@@ -36,6 +36,10 @@ mod inner {
     /// and only intended for the `ids_tests` module — production code
     /// has no reason to drop these caches.
     #[cfg(test)]
+    #[allow(
+        clippy::unwrap_used,
+        reason = "Mutex lock poison is unrecoverable — no meaningful recovery possible"
+    )]
     pub(crate) fn reset_caches_for_test() {
         // lock poison is unrecoverable
         *ANON_ID.lock().unwrap() = None;
@@ -50,6 +54,10 @@ mod inner {
     /// because the `pub(crate)` helper above is not visible to them.
     #[cfg(any(test, debug_assertions))]
     #[doc(hidden)]
+    #[allow(
+        clippy::unwrap_used,
+        reason = "Mutex lock poison is unrecoverable — no meaningful recovery possible"
+    )]
     pub fn __test_only_reset_caches() {
         // lock poison is unrecoverable
         *ANON_ID.lock().unwrap() = None;
@@ -58,6 +66,10 @@ mod inner {
     }
 
     /// Project-local anonymous identifier.
+    #[allow(
+        clippy::unwrap_used,
+        reason = "Mutex lock poison is unrecoverable — no meaningful recovery possible"
+    )]
     pub fn get_anonymous_id() -> String {
         if let Ok(v) = std::env::var("TRACKING_ID")
             && !v.is_empty()
@@ -132,6 +144,10 @@ mod inner {
     }
 
     /// Machine-local persistent identifier.
+    #[allow(
+        clippy::unwrap_used,
+        reason = "Mutex lock poison is unrecoverable — no meaningful recovery possible"
+    )]
     pub fn get_persistent_id() -> String {
         // lock poison is unrecoverable
         let mut cached = PERSISTENT_ID.lock().unwrap();
@@ -190,6 +206,10 @@ mod inner {
     ///
     /// Read at every call (decision 11) — no caching, because tests
     /// and consumers may set `LLM_API_KEY` in-process at runtime.
+    #[allow(
+        clippy::expect_used,
+        reason = "PBKDF2 with dklen=16 ≤ SHA256 output=32 is mathematically guaranteed to succeed"
+    )]
     pub fn get_api_key_tracking_id() -> String {
         let key = std::env::var("LLM_API_KEY").unwrap_or_default();
         if key.is_empty() {
@@ -242,6 +262,11 @@ pub use inner::get_persistent_id;
 pub use inner::__test_only_reset_caches;
 
 #[cfg(all(test, feature = "telemetry"))]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 mod ids_tests {
     use super::*;
     use serial_test::serial;

@@ -244,6 +244,11 @@ pub(crate) fn normalize_base_url(url: &str) -> String {
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+#[allow(
+    clippy::expect_used,
+    clippy::unwrap_used,
+    reason = "test code — panics are acceptable failures"
+)]
 mod tests {
     use super::*;
 

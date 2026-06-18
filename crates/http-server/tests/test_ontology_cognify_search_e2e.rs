@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! HTTP ontology E2E: upload ontology -> cognify with ontologyKey -> search.
 
 mod support;
@@ -208,8 +213,7 @@ async fn upload_cognify_search_with_ontology_key_and_unknown_key_negative() {
 
     let boundary = "ontology_upload_boundary";
     let upload_body = format!(
-        "--{boundary}\r\nContent-Disposition: form-data; name=\"ontology_key\"\r\n\r\ntech\r\n--{boundary}\r\nContent-Disposition: form-data; name=\"ontology_file\"; filename=\"tech.owl\"\r\nContent-Type: application/rdf+xml\r\n\r\n{}\r\n--{boundary}--\r\n",
-        ONTOLOGY_UPLOAD_BODY
+        "--{boundary}\r\nContent-Disposition: form-data; name=\"ontology_key\"\r\n\r\ntech\r\n--{boundary}\r\nContent-Disposition: form-data; name=\"ontology_file\"; filename=\"tech.owl\"\r\nContent-Type: application/rdf+xml\r\n\r\n{ONTOLOGY_UPLOAD_BODY}\r\n--{boundary}--\r\n"
     );
 
     let upload_req = Request::builder()

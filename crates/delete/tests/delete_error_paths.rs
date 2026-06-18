@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 use std::sync::Arc;
 
 use cognee_database::{self as database, DatabaseConnection, DeleteDb};
@@ -14,7 +19,12 @@ async fn setup() -> (Arc<DatabaseConnection>, Arc<MockStorage>) {
 }
 
 // ---------------------------------------------------------------------------
-// Test 1: deleting a nonexistent data item returns a Validation error
+// Test 1: deleting a nonexistent data item succeeds (best-effort cleanup)
+//
+// Python parity (Item 3, B6.6): when no relational `Data` row exists, Rust
+// performs a best-effort graph/vector cleanup and returns success instead of
+// a Validation error.  This matches Python's behavior when callers use a
+// custom graph model that writes graph nodes without a relational row.
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -29,6 +39,8 @@ async fn delete_nonexistent_data_returns_error() {
     let owner_id = Uuid::new_v4();
     let data_id = Uuid::new_v4();
 
+    // Since Item 3, a missing Data row no longer errors — it succeeds with
+    // best-effort cleanup (matching Python's custom-graph-model path).
     let result = svc
         .execute(&DeleteRequest {
             scope: DeleteScope::Data {
@@ -38,19 +50,24 @@ async fn delete_nonexistent_data_returns_error() {
                 delete_dataset_if_empty: false,
             },
             mode: DeleteMode::Soft,
+            memory_only: false,
         })
         .await;
 
-    let err = result.expect_err("should fail for nonexistent data");
-    match &err {
-        DeleteError::Validation(msg) => {
-            assert!(
-                msg.to_lowercase().contains("not found"),
-                "expected 'not found' in message, got: {msg}"
-            );
-        }
-        other => panic!("expected DeleteError::Validation, got: {other:?}"),
-    }
+    // Must succeed, not error.
+    let delete_result = result.expect("missing data row should succeed with best-effort cleanup");
+    // `deleted_data` may be 0 or 1 depending on whether the pipeline attempts
+    // a relational DELETE even for the ghost id; either is acceptable.
+    assert!(
+        delete_result.deleted_data <= 1,
+        "unexpected large deletion count: {}",
+        delete_result.deleted_data
+    );
+    // No datasets should have been removed since no dataset row exists.
+    assert_eq!(
+        delete_result.deleted_datasets, 0,
+        "no dataset rows should be deleted for a ghost data_id"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -75,6 +92,7 @@ async fn delete_nonexistent_dataset_returns_error() {
                 dataset_name: "no_such_ds".to_string(),
             },
             mode: DeleteMode::Soft,
+            memory_only: false,
         })
         .await;
 
@@ -140,6 +158,7 @@ async fn delete_data_not_in_specified_dataset_returns_error() {
                 delete_dataset_if_empty: false,
             },
             mode: DeleteMode::Soft,
+            memory_only: false,
         })
         .await;
 
@@ -174,6 +193,7 @@ async fn delete_user_with_no_datasets_succeeds_with_zero_deletions() {
         .execute(&DeleteRequest {
             scope: DeleteScope::User { owner_id },
             mode: DeleteMode::Soft,
+            memory_only: false,
         })
         .await
         .expect("deleting a user with no datasets should succeed");

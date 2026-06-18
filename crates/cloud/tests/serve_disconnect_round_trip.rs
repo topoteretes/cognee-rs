@@ -10,6 +10,12 @@
 //! with `--test-threads=1` under the project harness, but the mutex keeps
 //! them safe under `cargo test` invoked directly too.
 
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "integration test code — panics are acceptable failures"
+)]
+
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 

@@ -5,12 +5,12 @@
 
 use std::collections::{HashMap, HashSet};
 
-use log::info;
 use sophia_api::graph::Graph;
 use sophia_api::ns::{owl, rdf};
 use sophia_api::term::Term;
 use sophia_api::triple::Triple;
 use sophia_inmem::graph::FastGraph;
+use tracing::info;
 
 use crate::error::{OntologyError, OntologyResult};
 use crate::models::{OntologyLookup, uri_to_key};
@@ -68,6 +68,10 @@ pub fn build_lookup(graph: &FastGraph) -> OntologyResult<OntologyLookup> {
 /// Extract OWL classes from graph.
 ///
 /// Finds all subjects with `rdf:type owl:Class`.
+#[allow(
+    clippy::expect_used,
+    reason = "rdf:type and owl:Class are compile-time constant IRIs guaranteed to have IRI representations"
+)]
 fn extract_classes(graph: &FastGraph, lookup: &mut OntologyLookup) -> OntologyResult<usize> {
     let mut count = 0;
 
@@ -82,9 +86,8 @@ fn extract_classes(graph: &FastGraph, lookup: &mut OntologyLookup) -> OntologyRe
 
     // Query: ?s rdf:type owl:Class
     for triple_result in graph.triples() {
-        let triple = triple_result.map_err(|e| {
-            OntologyError::MatchingError(format!("Failed to extract classes: {}", e))
-        })?;
+        let triple = triple_result
+            .map_err(|e| OntologyError::MatchingError(format!("Failed to extract classes: {e}")))?;
 
         let predicate = triple.p().iri().map(|iri| iri.to_string());
         let object = triple.o().iri().map(|iri| iri.to_string());
@@ -106,6 +109,10 @@ fn extract_classes(graph: &FastGraph, lookup: &mut OntologyLookup) -> OntologyRe
 /// Extract individuals (class instances) from graph.
 ///
 /// For each known class, finds subjects with `rdf:type <class_uri>`.
+#[allow(
+    clippy::expect_used,
+    reason = "rdf:type is a compile-time constant IRI guaranteed to have an IRI representation"
+)]
 fn extract_individuals(
     graph: &FastGraph,
     classes: &HashMap<String, String>,
@@ -122,7 +129,7 @@ fn extract_individuals(
     // Query: ?s rdf:type <class_uri>
     for triple_result in graph.triples() {
         let triple = triple_result.map_err(|e| {
-            OntologyError::MatchingError(format!("Failed to extract individuals: {}", e))
+            OntologyError::MatchingError(format!("Failed to extract individuals: {e}"))
         })?;
 
         let predicate = triple.p().iri().map(|iri| iri.to_string());
@@ -147,13 +154,12 @@ fn extract_individuals(
     Ok(count)
 }
 
-/// Extract local name from IRI (helper for debug/logging).
-#[allow(dead_code)]
-fn extract_local_name(iri: &str) -> &str {
-    iri.rsplit(['#', '/']).next().unwrap_or(iri)
-}
-
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 mod tests {
     use super::*;
     use sophia_api::source::TripleSource;

@@ -391,18 +391,22 @@ const _: fn() = || {
 };
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 mod tests {
     use super::*;
     use crate::state::{clear_client, get_client, is_connected};
-    use std::sync::Mutex;
 
     // `serve_direct` both mutates the process-wide CLOUD_CLIENT singleton
-    // and writes to `$HOME/.cognee/cloud_credentials.json`. All tests in
-    // this module must hold `ENV_LOCK` to serialize env-var + singleton
-    // access. `cargo test -p cognee-cloud` runs with `--test-threads=1`
-    // in CI per the top-level harness, but the explicit lock makes the
-    // tests robust to local runs too.
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
+    // and writes to `$HOME/.cognee/cloud_credentials.json`. All env tests in
+    // this crate must hold the crate-wide [`crate::ENV_TEST_LOCK`] to
+    // serialize env-var + singleton access — a module-local mutex would not
+    // exclude the tests in `config`/`credentials`/`disconnect`, which is why
+    // they raced under multi-threaded runs.
+    use crate::ENV_TEST_LOCK as ENV_LOCK;
 
     /// Test fixture that isolates `$HOME` (so credential writes hit a
     /// temp dir) and clears the singleton before/after the closure.

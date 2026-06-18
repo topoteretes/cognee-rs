@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! Stage 2 integration tests — `persist_sessions_in_knowledge_graph`.
 //!
 //! The pipeline takes Q&A text from sessions, adds it to a dataset with the

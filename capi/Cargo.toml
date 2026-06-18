@@ -12,6 +12,15 @@ resolver = "3"
 [workspace.package]
 edition = "2024"
 version = "0.1.0"
+rust-version = "1.89"
+license = "Apache-2.0"
+authors = ["Topoteretes <support@cognee.ai>"]
+description = "C API bindings for the cognee Rust SDK — AI memory pipeline (add → cognify → search)."
+repository = "https://github.com/topoteretes/cognee-rust"
+homepage = "https://www.cognee.ai"
+readme = "README.md"
+keywords = ["ai", "knowledge-graph", "memory", "rag", "embeddings"]
+categories = ["science", "database", "text-processing"]
 
 [workspace.dependencies]
 # Keep these versions in sync with the root workspace [workspace.dependencies].

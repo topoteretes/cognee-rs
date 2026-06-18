@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! Full PostgreSQL-stack end-to-end test: relational + PgGraphAdapter + PgVectorAdapter.
 //!
 //! Validates the ComponentManager wiring added in COG-4457 (Items 1 + 2):

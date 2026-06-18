@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! Regression test: TextSummary vector payload must include the "text" field.
 //!
 //! Verifies that when the cognify pipeline indexes TextSummary data points into
@@ -59,7 +64,7 @@ async fn text_summary_payload_contains_text_field() {
     let text = "Natural language processing helps computers understand human language.";
     let data_id = Uuid::new_v4();
     let owner_id = Uuid::new_v4();
-    let location = format!("test-summary-{}", data_id);
+    let location = format!("test-summary-{data_id}");
 
     let stored_location = storage
         .store(text.as_bytes(), &location)

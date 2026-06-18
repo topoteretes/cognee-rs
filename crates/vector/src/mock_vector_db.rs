@@ -2,6 +2,12 @@
 //!
 //! Provides an in-memory vector database for unit tests.
 
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "mock infrastructure — panics are acceptable"
+)]
+
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -46,7 +52,7 @@ impl MockVectorDB {
 
     /// Generate collection key from data_type and field_name
     fn collection_key(data_type: &str, field_name: &str) -> String {
-        format!("{}_{}", data_type, field_name)
+        format!("{data_type}_{field_name}")
     }
 
     /// Return the number of times `create_collection` was invoked.
@@ -185,6 +191,7 @@ impl VectorDB for MockVectorDB {
         for point in points {
             if point.vector.len() != expected_dim {
                 return Err(VectorDBError::DimensionMismatch {
+                    collection: key.clone(),
                     expected: expected_dim,
                     actual: point.vector.len(),
                 });
@@ -203,7 +210,7 @@ impl VectorDB for MockVectorDB {
         // Log the successful call for batch-count assertions.
         drop(collections);
         let mut log = self.index_points_calls.lock().unwrap(); // lock poison is unrecoverable
-        log.push(format!("{}/{}", data_type, field_name));
+        log.push(format!("{data_type}/{field_name}"));
 
         Ok(())
     }

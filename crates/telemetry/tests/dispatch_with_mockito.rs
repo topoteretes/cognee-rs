@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! Integration tests exercising the full `send_telemetry` dispatch
 //! path against a mockito server. All HTTP traffic stays on
 //! 127.0.0.1; the live proxy `https://test.prometh.ai` is NEVER

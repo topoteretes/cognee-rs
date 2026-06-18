@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! Integration tests for embedding generation in the cognify pipeline.
 //!
 //! These tests require: OPENAI_URL, OPENAI_TOKEN, OPENAI_MODEL (or any embedding
@@ -63,7 +68,7 @@ async fn test_pipeline_with_embeddings() {
 
     let id = Uuid::new_v4();
     let owner_id = Uuid::new_v4();
-    let location = format!("test-data-{}", id);
+    let location = format!("test-data-{id}");
 
     // Store text in mock storage
     let stored_location = storage
@@ -107,7 +112,7 @@ async fn test_pipeline_with_embeddings() {
     {
         Ok(result) => result,
         Err(e) => {
-            eprintln!("⚠️  Skipping test: Cognify pipeline failed: {}", e);
+            eprintln!("⚠️  Skipping test: Cognify pipeline failed: {e}");
             return;
         }
     };
@@ -138,8 +143,7 @@ async fn test_pipeline_with_embeddings() {
         let norm = embedding.norm();
         assert!(
             (norm - 1.0).abs() < 0.01,
-            "Embedding not normalized: norm = {}",
-            norm
+            "Embedding not normalized: norm = {norm}"
         );
     }
 
@@ -161,8 +165,7 @@ async fn test_pipeline_with_embeddings() {
         .count();
 
     println!(
-        "✓ Embeddings generated: {} chunks, {} entities, {} summaries",
-        chunk_count, entity_count, summary_count
+        "✓ Embeddings generated: {chunk_count} chunks, {entity_count} entities, {summary_count} summaries"
     );
 
     assert!(chunk_count > 0, "No chunk embeddings");
@@ -191,7 +194,7 @@ async fn test_pipeline_requires_embeddings() {
 
     let id = Uuid::new_v4();
     let owner_id = Uuid::new_v4();
-    let location = format!("test-data-{}", id);
+    let location = format!("test-data-{id}");
 
     let stored_location = storage
         .store(text.as_bytes(), &location)
@@ -236,7 +239,7 @@ async fn test_pipeline_requires_embeddings() {
     {
         Ok(result) => result,
         Err(e) => {
-            eprintln!("⚠️  Skipping test: Cognify pipeline failed: {}", e);
+            eprintln!("⚠️  Skipping test: Cognify pipeline failed: {e}");
             return;
         }
     };
@@ -283,7 +286,7 @@ async fn test_embedding_semantic_similarity() {
 
     for (i, text) in texts.iter().enumerate() {
         let id = Uuid::new_v4();
-        let location = format!("test-data-{}", id);
+        let location = format!("test-data-{id}");
 
         let stored_location = storage
             .store(text.as_bytes(), &location)
@@ -292,12 +295,12 @@ async fn test_embedding_semantic_similarity() {
 
         let data_item = Data::builder(
             id,
-            format!("doc-{}.txt", i),
+            format!("doc-{i}.txt"),
             stored_location,
-            format!("doc-{}.txt", i),
+            format!("doc-{i}.txt"),
             "txt",
             "text/plain",
-            format!("hash-{}", i),
+            format!("hash-{i}"),
             owner_id,
         )
         .build();
@@ -324,7 +327,7 @@ async fn test_embedding_semantic_similarity() {
         {
             Ok(result) => result,
             Err(e) => {
-                eprintln!("⚠️  Skipping test: Cognify failed: {}", e);
+                eprintln!("⚠️  Skipping test: Cognify failed: {e}");
                 return;
             }
         };
@@ -339,13 +342,12 @@ async fn test_embedding_semantic_similarity() {
 
         let similarity = emb1.cosine_similarity(emb2).expect("Dimension mismatch");
 
-        println!("✓ Semantic similarity: {:.4}", similarity);
+        println!("✓ Semantic similarity: {similarity:.4}");
 
         // Semantically similar texts should have high cosine similarity
         assert!(
             similarity > 0.5,
-            "Expected high similarity for related ML texts, got {}",
-            similarity
+            "Expected high similarity for related ML texts, got {similarity}"
         );
     }
 }
@@ -373,7 +375,7 @@ async fn test_entity_name_indexing() {
 
     let id = Uuid::new_v4();
     let owner_id = Uuid::new_v4();
-    let location = format!("test-data-{}", id);
+    let location = format!("test-data-{id}");
 
     let stored_location = storage
         .store(text.as_bytes(), &location)
@@ -416,7 +418,7 @@ async fn test_entity_name_indexing() {
     {
         Ok(result) => result,
         Err(e) => {
-            eprintln!("⚠️  Skipping test: Cognify pipeline failed: {}", e);
+            eprintln!("⚠️  Skipping test: Cognify pipeline failed: {e}");
             return;
         }
     };
@@ -503,7 +505,7 @@ async fn test_triplet_embeddings_disabled_by_default() {
 
     let id = Uuid::new_v4();
     let owner_id = Uuid::new_v4();
-    let location = format!("test-data-{}", id);
+    let location = format!("test-data-{id}");
 
     let stored_location = storage
         .store(text.as_bytes(), &location)
@@ -546,7 +548,7 @@ async fn test_triplet_embeddings_disabled_by_default() {
     {
         Ok(result) => result,
         Err(e) => {
-            eprintln!("⚠️  Skipping test: Cognify pipeline failed: {}", e);
+            eprintln!("⚠️  Skipping test: Cognify pipeline failed: {e}");
             return;
         }
     };
@@ -592,7 +594,7 @@ async fn test_triplet_embeddings_enabled() {
 
     let id = Uuid::new_v4();
     let owner_id = Uuid::new_v4();
-    let location = format!("test-data-{}", id);
+    let location = format!("test-data-{id}");
 
     let stored_location = storage
         .store(text.as_bytes(), &location)
@@ -635,7 +637,7 @@ async fn test_triplet_embeddings_enabled() {
     {
         Ok(result) => result,
         Err(e) => {
-            eprintln!("⚠️  Skipping test: Cognify pipeline failed: {}", e);
+            eprintln!("⚠️  Skipping test: Cognify pipeline failed: {e}");
             return;
         }
     };

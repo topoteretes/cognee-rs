@@ -19,6 +19,11 @@
 //! `#[serial]` test with forward-only phases.
 
 #![cfg(feature = "telemetry")]
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};

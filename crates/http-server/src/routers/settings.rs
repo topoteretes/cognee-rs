@@ -231,9 +231,9 @@ pub async fn get_settings(
 ) -> Result<Json<SettingsDTO>, ApiError> {
     let s = store();
     // Read each snapshot under the lock; clone before responding.
-    // lock poison is unrecoverable
+    #[allow(clippy::unwrap_used, reason = "lock poison is unrecoverable")]
     let llm = s.llm.read().unwrap().clone();
-    // lock poison is unrecoverable
+    #[allow(clippy::unwrap_used, reason = "lock poison is unrecoverable")]
     let vector = s.vector.read().unwrap().clone();
 
     let dto = SettingsDTO {
@@ -282,7 +282,7 @@ pub async fn save_settings(
         api_key,
     }) = payload.llm
     {
-        // lock poison is unrecoverable
+        #[allow(clippy::unwrap_used, reason = "lock poison is unrecoverable")]
         let mut current = s.llm.write().unwrap();
         current.provider = match provider {
             crate::dto::settings::LlmProvider::Openai => "openai".into(),
@@ -303,7 +303,7 @@ pub async fn save_settings(
         api_key,
     }) = payload.vector_db
     {
-        // lock poison is unrecoverable
+        #[allow(clippy::unwrap_used, reason = "lock poison is unrecoverable")]
         let mut current = s.vector.write().unwrap();
         current.provider = match provider {
             crate::dto::settings::VectorDbProvider::Lancedb => "lancedb".into(),

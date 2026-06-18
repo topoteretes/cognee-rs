@@ -32,7 +32,8 @@ pub use improve::{ImproveParams, ImproveResult, improve};
 pub use pipeline_runs::{reset_dataset_pipeline_run_status, reset_pipeline_run_status};
 pub use prune::{PruneResult, PruneTarget, prune_data, prune_system};
 pub use recall::{
-    RecallItem, RecallResult, RecallScope, RecallSource, ScopeInput, normalize_scope, recall,
+    RecallItem, RecallOptions, RecallResult, RecallScope, RecallSource, ScopeInput,
+    normalize_scope, recall,
 };
 pub use remember::{RememberItemInfo, RememberResult, RememberStatus, remember, remember_entry};
 pub use update::{UpdateResult, update};

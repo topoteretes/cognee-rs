@@ -279,6 +279,133 @@ impl CloudClient {
             .await
     }
 
+    /// `POST /api/v1/add` — ingest data without cognifying.
+    ///
+    /// Port of `cloud_client.py` `add` method.
+    pub async fn add(&self, data: RememberData, dataset_name: &str) -> CloudResult<Value> {
+        let mut form = Form::new().text("datasetName", dataset_name.to_string());
+        match data {
+            RememberData::Text(s) => {
+                form = form.part(
+                    "data",
+                    Part::bytes(s.into_bytes())
+                        .file_name("data.txt")
+                        .mime_str("text/plain")?,
+                );
+            }
+            RememberData::Texts(items) => {
+                for s in items {
+                    form = form.part(
+                        "data",
+                        Part::bytes(s.into_bytes())
+                            .file_name("data.txt")
+                            .mime_str("text/plain")?,
+                    );
+                }
+            }
+            RememberData::Files(paths) => {
+                for path in paths {
+                    let bytes = tokio::fs::read(&path).await?;
+                    let name = path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("upload")
+                        .to_string();
+                    form = form.part("data", Part::bytes(bytes).file_name(name));
+                }
+            }
+        }
+        self.post_multipart("add", "/api/v1/add", form).await
+    }
+
+    /// `POST /api/v1/cognify` — run the knowledge graph extraction pipeline.
+    ///
+    /// Port of `cloud_client.py` `cognify` method. The server's cognify route
+    /// (`/api/v1/cognify`) takes a `datasets` name list (or `dataset_ids`),
+    /// matching Python's `cognify(datasets=...)`. The single-dataset name is
+    /// wrapped in a one-element list to satisfy that contract.
+    pub async fn cognify(&self, dataset_name: &str, run_in_background: bool) -> CloudResult<Value> {
+        let mut body = Map::new();
+        body.insert(
+            "datasets".into(),
+            Value::Array(vec![Value::String(dataset_name.into())]),
+        );
+        if run_in_background {
+            body.insert("run_in_background".into(), Value::Bool(true));
+        }
+        self.post_json("cognify", "/api/v1/cognify", Value::Object(body))
+            .await
+    }
+
+    /// `POST /api/v1/search` — query the knowledge graph (raw search endpoint).
+    ///
+    /// Port of `cloud_client.py` `search` method.
+    pub async fn search(
+        &self,
+        query_text: &str,
+        search_type: Option<&str>,
+        datasets: Option<Vec<String>>,
+        top_k: Option<usize>,
+    ) -> CloudResult<Value> {
+        // The server search route (`SearchPayloadDTO`) expects `query`
+        // (with `search_type`/`top_k` accepted as snake_case aliases), so we
+        // mirror the existing `recall` method's key spelling here.
+        let mut body = Map::new();
+        body.insert("query".into(), Value::String(query_text.into()));
+        if let Some(t) = search_type {
+            body.insert("search_type".into(), Value::String(t.into()));
+        }
+        if let Some(d) = datasets {
+            body.insert("datasets".into(), json!(d));
+        }
+        if let Some(k) = top_k {
+            body.insert("top_k".into(), json!(k));
+        }
+        self.post_json("search", "/api/v1/search", Value::Object(body))
+            .await
+    }
+
+    /// `POST /api/v1/remember/entry` — store a typed MemoryEntry.
+    ///
+    /// Port of `cloud_client.py` `remember_entry` method. The server route
+    /// (`/api/v1/remember/entry`, `RememberEntryRequestDTO`) expects a typed
+    /// `entry` (a `MemoryEntry` discriminated union), a `session_id`, and a
+    /// `dataset_name`. This convenience helper builds a `"qa"` entry from the
+    /// question/answer pair; callers needing trace/feedback entries can post
+    /// the raw body via [`Self::remember_entry_raw`].
+    pub async fn remember_entry(
+        &self,
+        session_id: &str,
+        dataset_name: &str,
+        question: &str,
+        answer: &str,
+        context: Option<&str>,
+    ) -> CloudResult<Value> {
+        let mut entry = Map::new();
+        entry.insert("type".into(), Value::String("qa".into()));
+        entry.insert("question".into(), Value::String(question.into()));
+        entry.insert("answer".into(), Value::String(answer.into()));
+        if let Some(c) = context {
+            entry.insert("context".into(), Value::String(c.into()));
+        }
+        let mut body = Map::new();
+        body.insert("entry".into(), Value::Object(entry));
+        body.insert("session_id".into(), Value::String(session_id.into()));
+        body.insert("dataset_name".into(), Value::String(dataset_name.into()));
+        self.remember_entry_raw(Value::Object(body)).await
+    }
+
+    /// `POST /api/v1/remember/entry` with a caller-supplied JSON body.
+    ///
+    /// Use this when you need to store a `trace` or `feedback` entry rather
+    /// than the `qa` shape built by [`Self::remember_entry`]. The body must
+    /// conform to the server's `RememberEntryRequestDTO`
+    /// (`{ "entry": <MemoryEntry>, "session_id": ..., "dataset_name"?: ... }`).
+    pub async fn remember_entry_raw(&self, body: Value) -> CloudResult<Value> {
+        self.post_json("remember_entry", "/api/v1/remember/entry", body)
+            .await
+    }
+
     // ---- helpers ----
 
     async fn post_multipart(&self, op: &'static str, path: &str, form: Form) -> CloudResult<Value> {
@@ -316,6 +443,11 @@ impl CloudClient {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 mod tests {
     use super::*;
 
@@ -651,5 +783,110 @@ mod tests {
         let client = CloudClient::new("https://example.com", "k").expect("construct ok");
         // Simply confirm close runs to completion without panicking.
         client.close().await;
+    }
+
+    #[tokio::test]
+    async fn add_sends_multipart_to_add_route() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("POST", "/api/v1/add")
+            .match_header("x-api-key", "key")
+            .match_body(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::Regex("datasetName".into()),
+                mockito::Matcher::Regex("my_dataset".into()),
+                mockito::Matcher::Regex("test content".into()),
+            ]))
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"status":"ok"}"#)
+            .create_async()
+            .await;
+
+        let client = CloudClient::new(server.url(), "key").expect("construct ok");
+        let out = client
+            .add(RememberData::Text("test content".into()), "my_dataset")
+            .await
+            .expect("200 ok");
+        mock.assert_async().await;
+        assert_eq!(out["status"], "ok");
+    }
+
+    #[tokio::test]
+    async fn cognify_sends_dataset_name_to_cognify_route() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("POST", "/api/v1/cognify")
+            .match_body(mockito::Matcher::Json(json!({
+                "datasets": ["my_dataset"],
+            })))
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"status":"queued"}"#)
+            .create_async()
+            .await;
+
+        let client = CloudClient::new(server.url(), "key").expect("construct ok");
+        let out = client.cognify("my_dataset", false).await.expect("200 ok");
+        mock.assert_async().await;
+        assert_eq!(out["status"], "queued");
+    }
+
+    #[tokio::test]
+    async fn search_sends_json_to_search_route() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("POST", "/api/v1/search")
+            .match_body(mockito::Matcher::Json(json!({
+                "query": "what is cognee?",
+                "search_type": "GRAPH_COMPLETION",
+            })))
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"[{"answer":"it is a memory pipeline"}]"#)
+            .create_async()
+            .await;
+
+        let client = CloudClient::new(server.url(), "key").expect("construct ok");
+        let out = client
+            .search("what is cognee?", Some("GRAPH_COMPLETION"), None, None)
+            .await
+            .expect("200 ok");
+        mock.assert_async().await;
+        assert!(out.is_array());
+    }
+
+    #[tokio::test]
+    async fn remember_entry_sends_json_to_remember_entry_route() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("POST", "/api/v1/remember/entry")
+            .match_body(mockito::Matcher::Json(json!({
+                "entry": {
+                    "type": "qa",
+                    "question": "what is rust?",
+                    "answer": "a systems language",
+                },
+                "session_id": "sess-1",
+                "dataset_name": "main_dataset",
+            })))
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"stored":true}"#)
+            .create_async()
+            .await;
+
+        let client = CloudClient::new(server.url(), "key").expect("construct ok");
+        let out = client
+            .remember_entry(
+                "sess-1",
+                "main_dataset",
+                "what is rust?",
+                "a systems language",
+                None,
+            )
+            .await
+            .expect("200 ok");
+        mock.assert_async().await;
+        assert_eq!(out["stored"], true);
     }
 }

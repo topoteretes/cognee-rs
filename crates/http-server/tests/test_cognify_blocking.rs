@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! Integration test: `POST /api/v1/cognify` with `run_in_background=false`.
 //!
 //! Requires an OpenAI-compatible LLM endpoint (`OPENAI_URL` + `OPENAI_TOKEN`)
@@ -222,9 +227,7 @@ async fn post_cognify_blocking_executes_real_pipeline() {
     assert_eq!(
         status,
         StatusCode::OK,
-        "expected 200 OK from /api/v1/cognify, got {} with body {}",
-        status,
-        v
+        "expected 200 OK from /api/v1/cognify, got {status} with body {v}"
     );
 
     let entry = v.get(dataset.id.to_string()).unwrap_or_else(|| {

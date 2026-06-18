@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! Shared test helpers for the cognee-http-server integration tests.
 #![allow(dead_code)]
 

@@ -229,6 +229,11 @@ impl Llm for ReplayLlm {
 
 #[cfg(test)]
 mod tests {
+    #![allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        reason = "test code — panics are acceptable"
+    )]
     use super::*;
     use std::collections::VecDeque;
     use std::sync::Mutex;

@@ -61,6 +61,11 @@ pub trait Transcriber: Send + Sync {
 
 #[cfg(test)]
 mod tests {
+    #![allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        reason = "test code — panics are acceptable"
+    )]
     use super::*;
 
     #[test]

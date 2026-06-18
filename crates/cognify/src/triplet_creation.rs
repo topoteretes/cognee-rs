@@ -57,8 +57,10 @@ pub fn create_triplets_from_graph(
             continue;
         }
 
+        #[allow(clippy::expect_used, reason = "invariant is upheld by construction")]
         let source_node = source_node
             .expect("source_node is Some; None case was handled by the is_none() check above");
+        #[allow(clippy::expect_used, reason = "invariant is upheld by construction")]
         let target_node = target_node
             .expect("target_node is Some; None case was handled by the is_none() check above");
 
@@ -86,11 +88,18 @@ pub fn create_triplets_from_graph(
         .trim()
         .to_string();
 
-        // Get relationship text from edge properties or relationship name
+        // Get relationship text: prefer the nonblank `edge_text` property,
+        // falling back to the relationship name. Mirrors Python's
+        // `_extract_relationship_text` (get_triplet_datapoints.py:87-96),
+        // which treats a blank `edge_text` as absent. The `edge_text` property
+        // is always present on LLM-extracted edges now (empty when the edge
+        // carried no description), so the blank filter — not just `unwrap_or`
+        // — is required to keep the fallback to `relationship_name`.
         let relationship_text = edge
             .properties
             .get("edge_text")
-            .map(|s| s.as_str())
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
             .unwrap_or(&edge.relationship_name)
             .to_string();
 
@@ -209,6 +218,33 @@ mod tests {
         // Should use "works at" from edge_text, not "employed_by"
         assert!(triplets[0].text.contains("works at"));
         assert!(!triplets[0].text.contains("employed_by"));
+    }
+
+    #[test]
+    fn test_triplet_blank_edge_text_falls_back_to_relationship_name() {
+        // A blank `edge_text` property (present but empty/whitespace) must fall
+        // back to `relationship_name`, mirroring Python's
+        // `_extract_relationship_text`. LLM-extracted edges always carry an
+        // `edge_text` property now (empty when no description was emitted), so
+        // the fallback must survive an empty value.
+        let entity1 = create_test_entity("Alice", "Software engineer");
+        let entity2 = create_test_entity("TechCorp", "Tech company");
+
+        let mut properties = HashMap::new();
+        properties.insert("edge_text".to_string(), "   ".to_string());
+
+        let edge = GraphEdgePair {
+            source_entity_id: entity1.entity.base.id,
+            target_entity_id: entity2.entity.base.id,
+            relationship_name: "employed_by".to_string(),
+            properties,
+        };
+
+        let triplets = create_triplets_from_graph(&[entity1, entity2], &[edge]);
+        assert_eq!(triplets.len(), 1);
+        // Relationship segment falls back to relationship_name, not blank.
+        assert!(triplets[0].text.contains("-\u{203a}employed_by-\u{203a}"));
+        assert!(triplets[0].text.starts_with("Alice"));
     }
 
     #[test]

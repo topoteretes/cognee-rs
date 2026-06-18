@@ -49,6 +49,15 @@ resolver = "3"
 [workspace.package]
 edition = "2024"
 version = "0.1.0"
+rust-version = "1.89"
+license = "Apache-2.0"
+authors = ["Topoteretes <support@cognee.ai>"]
+description = "Rust port of cognee — an AI memory pipeline that turns raw data into queryable knowledge graphs."
+repository = "https://github.com/topoteretes/cognee-rust"
+homepage = "https://www.cognee.ai"
+readme = "README.md"
+keywords = ["ai", "knowledge-graph", "memory", "rag", "embeddings"]
+categories = ["science", "database", "text-processing"]
 
 [workspace.dependencies]
 anyhow = "1"
@@ -128,6 +137,15 @@ url = "2.5"
 uuid = { version = "1.21", features = ["v4", "v5", "serde"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
 
+# Project rule made enforceable: "no unwrap()/expect() in non-test code"
+# (.claude/CLAUDE.md → Coding Conventions). Test modules re-allow these.
+# Sanctioned lock-guard unwraps carry a local
+# #[allow(clippy::unwrap_used, reason = "lock poison is unrecoverable")].
+# TODO(task-23): bump both to "deny" once all non-test sites are annotated.
+[workspace.lints.clippy]
+unwrap_used = "warn"
+expect_used = "warn"
+
 [patch.crates-io]
 # Keep in sync with js/cognee-neon/Cargo.toml and capi/Cargo.toml.
 # Any qdrant-fork patch added or bumped here must be reflected in all three places.
@@ -147,4 +165,6 @@ hyper = { git = "https://github.com/qdrant/hyper", branch = "v0.14.26-qdrant" }
 opt-level = 1
 
 [profile.release]
-debug = true
+# "line-tables-only" gives backtraces and profiler source-line info at a
+# fraction of the size of full debug info (debug = true).
+debug = "line-tables-only"

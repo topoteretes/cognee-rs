@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! LIB-03 schema tests for `session_records` and `session_model_usage`.
 //!
 //! Validates the migration creates both tables with all required columns,

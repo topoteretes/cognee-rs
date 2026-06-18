@@ -253,6 +253,7 @@ async fn run_update_pipeline(
     let delete_request = DeleteRequest {
         scope,
         mode: DeleteMode::Soft,
+        memory_only: false,
     };
     components
         .delete_service
@@ -353,6 +354,11 @@ pub fn router() -> Router<AppState> {
 // ─── Inline regression-guard tests ───────────────────────────────────────────
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 mod tests {
     //! These tests live inline so the 501-regression guard cannot drift away
     //! from the handler. The whole purpose of this Tier-3 implementation is

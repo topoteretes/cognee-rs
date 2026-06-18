@@ -2,9 +2,23 @@
 name = "cognee-session"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
 
 [features]
 default = []
+# Opt-in: not enabled by any aggregating crate; build with
+# -p cognee-session --features redis
 redis = ["dep:redis"]
 fs = []
 sea-orm-store = ["dep:sea-orm", "dep:sea-orm-migration"]

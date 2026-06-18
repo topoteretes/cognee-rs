@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! Integration tests for `/api/v1/users` (me, by-id CRUD, get-user-id).
 //!
 //! Covers:

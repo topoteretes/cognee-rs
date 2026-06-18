@@ -13,7 +13,7 @@ use crate::retrievers::{
     ChunksRetriever, CodingRulesRetriever, CompletionRetriever, CypherSearchRetriever,
     FeedbackRetriever, FeelingLuckyRetriever, GraphCompletionContextExtensionRetriever,
     GraphCompletionCotRetriever, GraphCompletionRetriever, GraphSummaryCompletionRetriever,
-    JaccardChunksRetriever, NaturalLanguageRetriever, SearchRetrieverRef, SummariesRetriever,
+    LexicalRetriever, NaturalLanguageRetriever, SearchRetrieverRef, SummariesRetriever,
     TemporalRetriever, TripletRetriever,
 };
 use crate::types::SearchType;
@@ -218,7 +218,7 @@ impl SearchBuilder {
 
         self.retrievers.insert(
             SearchType::ChunksLexical,
-            Arc::new(JaccardChunksRetriever::new(
+            Arc::new(LexicalRetriever::new(
                 Arc::clone(&graph_db),
                 None,
                 false,
@@ -278,6 +278,11 @@ impl SearchBuilder {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
@@ -641,6 +646,7 @@ mod tests {
             auto_feedback_detection: None,
             neighborhood_depth: None,
             neighborhood_seed_top_k: None,
+            summarize_context: None,
         };
 
         let response = orchestrator.search(&request).await.unwrap();
@@ -720,6 +726,7 @@ mod tests {
             auto_feedback_detection: None,
             neighborhood_depth: None,
             neighborhood_seed_top_k: None,
+            summarize_context: None,
         };
 
         let response = orchestrator.search(&request).await.unwrap();

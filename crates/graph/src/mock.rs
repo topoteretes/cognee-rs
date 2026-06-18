@@ -3,6 +3,12 @@
 //! Provides an in-memory HashMap-based implementation of GraphDBTrait
 //! for use in unit tests.
 
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "mock infrastructure — panics are acceptable"
+)]
+
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};

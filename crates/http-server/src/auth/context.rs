@@ -115,7 +115,7 @@ impl AuthContext {
             .unwrap_or(cfg.require_authentication);
 
         let hash_api_key = std::env::var("HASH_API_KEY")
-            .map(|v| matches!(v.to_ascii_lowercase().as_str(), "true" | "1" | "yes"))
+            .map(|v| cognee_utils::parse_env_bool(&v))
             .unwrap_or(false);
 
         Ok(Self {

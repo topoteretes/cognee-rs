@@ -2,6 +2,13 @@
   "name": "cognee",
   "version": "0.1.0",
   "description": "Node.js bindings for the cognee AI-memory SDK",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/topoteretes/cognee-rust.git"
+  },
+  "homepage": "https://www.cognee.ai",
+  "keywords": ["ai", "knowledge-graph", "memory", "rag", "embeddings"],
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
   "scripts": {
@@ -46,6 +53,7 @@
   "files": [
     "lib/",
     "scripts/postinstall.js",
-    "scripts/copy-artifact.js"
+    "scripts/copy-artifact.js",
+    "LICENSE"
   ]
 }

@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! Integration tests for the ACL subsystem (principals, permissions, acls tables).
 
 use cognee_database::{AclDb, connect, initialize, ops};
@@ -37,10 +42,7 @@ async fn test_acl_migration_seeds_permissions() {
         ops::acl::grant_permission(&db, principal_id, dataset_id, perm_name)
             .await
             .unwrap_or_else(|e| {
-                panic!(
-                    "grant_permission should succeed for seeded permission '{}': {e}",
-                    perm_name
-                )
+                panic!("grant_permission should succeed for seeded permission '{perm_name}': {e}")
             });
     }
 }
@@ -216,8 +218,7 @@ async fn test_grant_all_permissions_on_dataset() {
             db.has_permission(principal_id, dataset_id, perm)
                 .await
                 .unwrap(),
-            "should have '{}' permission after grant_all",
-            perm
+            "should have '{perm}' permission after grant_all"
         );
     }
 }

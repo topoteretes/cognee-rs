@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! Integration tests for dataset CRUD endpoints.
 //!
 //! Tests here cover auth guards and routing correctness. Full CRUD round-trips

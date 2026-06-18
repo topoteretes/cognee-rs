@@ -9,7 +9,9 @@ use tokio::io::AsyncWriteExt;
 
 /// HuggingFace Hub URLs for supported models
 pub struct ModelUrls {
+    /// URL to the ONNX model file.
     pub model_url: &'static str,
+    /// URL to the tokenizer JSON file.
     pub tokenizer_url: &'static str,
 }
 
@@ -36,9 +38,9 @@ async fn download_file(url: &str, dest: &Path) -> EmbeddingResult<()> {
         fs::create_dir_all(parent).await?;
     }
 
-    let response = reqwest::get(url).await.map_err(|e| {
-        EmbeddingError::ModelLoadError(format!("Failed to download {}: {}", url, e))
-    })?;
+    let response = reqwest::get(url)
+        .await
+        .map_err(|e| EmbeddingError::ModelLoadError(format!("Failed to download {url}: {e}")))?;
 
     if !response.status().is_success() {
         return Err(EmbeddingError::ModelLoadError(format!(
@@ -51,7 +53,7 @@ async fn download_file(url: &str, dest: &Path) -> EmbeddingResult<()> {
     let bytes = response
         .bytes()
         .await
-        .map_err(|e| EmbeddingError::ModelLoadError(format!("Failed to read response: {}", e)))?;
+        .map_err(|e| EmbeddingError::ModelLoadError(format!("Failed to read response: {e}")))?;
 
     let mut file = fs::File::create(dest).await?;
     file.write_all(&bytes).await?;
@@ -117,8 +119,7 @@ pub async fn download_model(
         "minilm-l6" | "all-minilm-l6-v2" => ModelUrls::MINILM_L6,
         _ => {
             return Err(EmbeddingError::ConfigError(format!(
-                "Unknown model name: {}. Supported: bge-small, minilm-l6",
-                model_name
+                "Unknown model name: {model_name}. Supported: bge-small, minilm-l6"
             )));
         }
     };

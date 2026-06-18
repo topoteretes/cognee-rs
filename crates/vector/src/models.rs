@@ -41,10 +41,14 @@ pub struct CollectionConfig {
     pub distance: DistanceMetric,
 }
 
+/// Distance metric used for vector similarity comparisons.
 #[derive(Debug, Clone, Copy)]
 pub enum DistanceMetric {
+    /// Cosine similarity (angle-based, ignores magnitude).
     Cosine,
+    /// Euclidean (L2) distance.
     Euclidean,
+    /// Dot-product similarity.
     Dot,
 }
 

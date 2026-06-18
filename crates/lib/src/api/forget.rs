@@ -72,6 +72,12 @@ pub enum ForgetTarget {
     Dataset { dataset: DatasetRef },
     /// Delete all data for the given owner.
     All,
+    /// Wipe graph+vector for a dataset, keep files + Data/Dataset rows,
+    /// reset cognify pipeline status only. Mirrors Python's
+    /// `dataset_memory_only` forget target.
+    DatasetMemoryOnly { dataset: DatasetRef },
+    /// Same, for a single data item.
+    DataItemMemoryOnly { data_id: Uuid, dataset: DatasetRef },
 }
 
 /// Summary of a forget operation.
@@ -110,6 +116,14 @@ pub async fn forget(
             }
             ForgetTarget::Dataset { dataset } => ("dataset", format!("{dataset:?}"), String::new()),
             ForgetTarget::All => ("everything", String::new(), String::new()),
+            ForgetTarget::DatasetMemoryOnly { dataset } => {
+                ("dataset_memory_only", format!("{dataset:?}"), String::new())
+            }
+            ForgetTarget::DataItemMemoryOnly { data_id, dataset } => (
+                "data_item_memory_only",
+                format!("{dataset:?}"),
+                data_id.to_string(),
+            ),
         };
         cognee_telemetry::send_telemetry(
             "cognee.forget",
@@ -123,7 +137,7 @@ pub async fn forget(
         );
     }
 
-    let (scope, label) = match target {
+    let (scope, memory_only, label) = match target {
         ForgetTarget::Item { data_id, dataset } => {
             let dataset_name = dataset.to_name(owner_id, db).await?;
             let scope = DeleteScope::Data {
@@ -132,7 +146,7 @@ pub async fn forget(
                 dataset_name: Some(dataset_name),
                 delete_dataset_if_empty: false,
             };
-            (scope, format!("item:{data_id}"))
+            (scope, false, format!("item:{data_id}"))
         }
         ForgetTarget::Dataset { dataset } => {
             let dataset_name = dataset.to_name(owner_id, db).await?;
@@ -144,8 +158,7 @@ pub async fn forget(
                     .await
                     .map_err(|e| {
                         ApiError::InvalidArgument(format!(
-                            "Dataset '{}' not found: {}",
-                            dataset_name, e
+                            "Dataset '{dataset_name}' not found: {e}"
                         ))
                     })?;
             }
@@ -153,18 +166,33 @@ pub async fn forget(
                 owner_id,
                 dataset_name: dataset_name.clone(),
             };
-            (scope, format!("dataset:{dataset_name}"))
+            (scope, false, format!("dataset:{dataset_name}"))
         }
         ForgetTarget::All => {
             let scope = DeleteScope::User { owner_id };
-            (scope, "all".to_string())
+            (scope, false, "all".to_string())
+        }
+        ForgetTarget::DatasetMemoryOnly { dataset } => {
+            let dataset_name = dataset.to_name(owner_id, db).await?;
+            let scope = DeleteScope::Dataset {
+                owner_id,
+                dataset_name: dataset_name.clone(),
+            };
+            (scope, true, format!("dataset_memory_only:{dataset_name}"))
+        }
+        ForgetTarget::DataItemMemoryOnly { data_id, dataset } => {
+            let dataset_name = dataset.to_name(owner_id, db).await?;
+            let scope = DeleteScope::Data {
+                owner_id,
+                data_id,
+                dataset_name: Some(dataset_name),
+                delete_dataset_if_empty: false,
+            };
+            (scope, true, format!("data_item_memory_only:{data_id}"))
         }
     };
 
-    let request = DeleteRequest {
-        scope,
-        mode: DeleteMode::Hard,
-    };
+    let request = build_delete_request(scope, memory_only);
 
     let delete_result = delete_service.execute(&request).await?;
 
@@ -174,14 +202,33 @@ pub async fn forget(
     })
 }
 
+/// Build the [`DeleteRequest`] for a `forget` operation.
+///
+/// Extracted so the delete mode choice can be unit-tested independently of the
+/// async scope-resolution logic.
+fn build_delete_request(scope: DeleteScope, memory_only: bool) -> DeleteRequest {
+    DeleteRequest {
+        scope,
+        // Python `datasets.delete_data` defaults mode="soft" and warns hard is
+        // dangerous (datasets.py:147). Match the safer default.
+        mode: DeleteMode::Soft,
+        memory_only,
+    }
+}
+
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 mod tests {
     use super::*;
 
     #[test]
     fn forget_target_debug_format() {
         let target = ForgetTarget::All;
-        let debug_str = format!("{:?}", target);
+        let debug_str = format!("{target:?}");
         assert!(debug_str.contains("All"));
     }
 

@@ -142,6 +142,7 @@ impl OnnxEmbeddingEngine {
     /// # Returns
     /// * Tuple of (input_ids, attention_mask) tensors, both with shape [batch_size, max_seq_len]
     fn tokenize_batch(&self, texts: &[&str]) -> EmbeddingResult<TokenizationBatch> {
+        #[allow(clippy::unwrap_used, reason = "lock poison is unrecoverable")]
         let tokenizer = self.tokenizer.lock().unwrap(); // lock poison is unrecoverable
         let max_len = self.config.max_sequence_length;
 
@@ -203,8 +204,7 @@ impl OnnxEmbeddingEngine {
             Ok(l2_normalize(&embedding))
         } else {
             Err(EmbeddingError::InferenceError(format!(
-                "Unexpected output shape: {:?}",
-                output_shape
+                "Unexpected output shape: {output_shape:?}"
             )))
         }
     }
@@ -239,6 +239,7 @@ impl EmbeddingEngine for OnnxEmbeddingEngine {
         let attention_masks = attention_mask_batch.clone();
 
         let (output_shape, output_data) = tokio::task::spawn_blocking(move || {
+            #[allow(clippy::unwrap_used, reason = "lock poison is unrecoverable")]
             let mut session = session.lock().unwrap(); // lock poison is unrecoverable
             let outputs = session.run(ort::inputs! {
                 "input_ids" => input_ids_tensor,
@@ -277,8 +278,7 @@ impl EmbeddingEngine for OnnxEmbeddingEngine {
             embeddings.push(embedding);
         } else {
             return Err(EmbeddingError::InferenceError(format!(
-                "Unexpected output shape: {:?} for batch_size {}",
-                output_shape, batch_size
+                "Unexpected output shape: {output_shape:?} for batch_size {batch_size}"
             )));
         }
 
@@ -299,6 +299,11 @@ impl EmbeddingEngine for OnnxEmbeddingEngine {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 mod tests {
     use super::*;
 

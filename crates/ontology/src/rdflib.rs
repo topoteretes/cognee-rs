@@ -3,13 +3,13 @@
 //! Main implementation of the OntologyResolver trait providing fuzzy
 //! entity matching and BFS-based subgraph extraction.
 
-use log::{debug, info};
 use sophia_api::graph::Graph;
 use sophia_api::ns::{owl, rdf, rdfs};
 use sophia_api::term::Term;
 use sophia_api::triple::Triple;
 use sophia_inmem::graph::FastGraph;
 use std::collections::{HashSet, VecDeque};
+use tracing::{debug, info};
 
 use crate::builder::build_lookup;
 use crate::error::{OntologyError, OntologyResult};
@@ -110,8 +110,7 @@ impl OntologyResolver for RdfLibOntologyResolver {
 
         let node_category = category.parse::<NodeCategory>().map_err(|_| {
             OntologyError::MatchingError(format!(
-                "Invalid category '{}'. Must be 'classes' or 'individuals'",
-                category
+                "Invalid category '{category}'. Must be 'classes' or 'individuals'"
             ))
         })?;
 
@@ -144,14 +143,14 @@ impl OntologyResolver for RdfLibOntologyResolver {
 
         // Get category and lookup URI
         let category = node_type.parse::<NodeCategory>().map_err(|_| {
-            OntologyError::MatchingError(format!("Invalid node type '{}'", node_type))
+            OntologyError::MatchingError(format!("Invalid node type '{node_type}'"))
         })?;
 
         let start_uri = self
             .lookup
             .get_uri(&matched_name, category)
             .ok_or_else(|| {
-                OntologyError::MatchingError(format!("URI not found for '{}'", matched_name))
+                OntologyError::MatchingError(format!("URI not found for '{matched_name}'"))
             })?;
 
         info!(
@@ -176,6 +175,10 @@ impl OntologyResolver for RdfLibOntologyResolver {
 ///
 /// Extracts all reachable nodes and edges from starting URI.
 /// Handles RDF.type, RDFS.subClassOf, and OWL object properties.
+#[allow(
+    clippy::expect_used,
+    reason = "rdf:type and rdfs:subClassOf are compile-time constant IRIs guaranteed to have IRI representations"
+)]
 fn bfs_extract_subgraph(
     graph: &FastGraph,
     start_uri: &str,
@@ -202,7 +205,7 @@ fn bfs_extract_subgraph(
         // Extract outgoing edges: current --predicate--> target
         for triple_result in graph.triples() {
             let triple = triple_result
-                .map_err(|e| OntologyError::MatchingError(format!("BFS traversal error: {}", e)))?;
+                .map_err(|e| OntologyError::MatchingError(format!("BFS traversal error: {e}")))?;
 
             let Some(source_iri) = triple.s().iri() else {
                 continue;
@@ -255,7 +258,7 @@ fn bfs_extract_subgraph(
         if !directed {
             for triple_result in graph.triples() {
                 let triple = triple_result.map_err(|e| {
-                    OntologyError::MatchingError(format!("BFS inverse traversal error: {}", e))
+                    OntologyError::MatchingError(format!("BFS inverse traversal error: {e}"))
                 })?;
 
                 let Some(src_iri) = triple.s().iri() else {
@@ -299,6 +302,10 @@ fn bfs_extract_subgraph(
 }
 
 /// Check if a predicate is an OWL ObjectProperty.
+#[allow(
+    clippy::expect_used,
+    reason = "rdf:type and owl:ObjectProperty are compile-time constant IRIs guaranteed to have IRI representations"
+)]
 fn is_object_property(graph: &FastGraph, predicate_uri: &str) -> OntologyResult<bool> {
     let rdf_type = rdf::type_
         .iri()
@@ -312,7 +319,7 @@ fn is_object_property(graph: &FastGraph, predicate_uri: &str) -> OntologyResult<
     // Query: <predicate> rdf:type owl:ObjectProperty
     for triple_result in graph.triples() {
         let triple = triple_result.map_err(|e| {
-            OntologyError::MatchingError(format!("ObjectProperty check error: {}", e))
+            OntologyError::MatchingError(format!("ObjectProperty check error: {e}"))
         })?;
 
         let subject = triple.s().iri().map(|iri| iri.to_string());
@@ -331,6 +338,11 @@ fn is_object_property(graph: &FastGraph, predicate_uri: &str) -> OntologyResult<
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 mod tests {
     use super::*;
 

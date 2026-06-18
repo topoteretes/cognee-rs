@@ -9,7 +9,7 @@ use std::collections::{HashMap, HashSet};
 
 use chrono::Utc;
 use cognee_graph::EdgeData;
-use cognee_models::{DocumentChunk, Entity, EntityType};
+use cognee_models::{Document, DocumentChunk, Entity, EntityType};
 use serde_json::json;
 use uuid::Uuid;
 
@@ -83,6 +83,26 @@ impl GraphExtractable for DocumentChunk {
         }
 
         rels
+    }
+}
+
+impl GraphExtractable for Document {
+    fn data_point_id(&self) -> Uuid {
+        // Document node ID = source Data item's id (content-addressed,
+        // Python-identical via classify_documents). See document.rs:117.
+        self.base.id
+    }
+
+    fn data_point_type(&self) -> &str {
+        // Concrete Python subclass name (e.g. "TextDocument", "PdfDocument").
+        &self.base.data_type
+    }
+
+    fn relationships(&self) -> Vec<Relationship> {
+        // Document has no outgoing DataPoint relationships of its own — the
+        // `is_part_of` edge originates from the DocumentChunk (see
+        // DocumentChunk::relationships) and points back at this Document.
+        Vec::new()
     }
 }
 
@@ -231,6 +251,34 @@ mod tests {
         assert_eq!(rels[0].field_name, "is_part_of");
         assert_eq!(rels[1].field_name, "contains");
         assert_eq!(rels[1].target_id, entity_id);
+    }
+
+    #[test]
+    fn test_document_has_no_relationships_and_id_matches_data() {
+        use cognee_models::{Data, classify_documents};
+
+        let data = Data::builder(
+            Uuid::new_v4(),
+            "test.txt",
+            "/storage/test",
+            "file:///storage/test.txt",
+            "txt",
+            "text/plain",
+            "hash123",
+            Uuid::new_v4(),
+        )
+        .build();
+        let data_id = data.id;
+        let docs = classify_documents(std::slice::from_ref(&data));
+        assert_eq!(docs.len(), 1);
+        let doc = &docs[0];
+
+        // Document node ID equals the source Data item's id (content-addressed).
+        assert_eq!(doc.data_point_id(), data_id);
+        // Concrete Python subclass name carried through.
+        assert_eq!(doc.data_point_type(), "TextDocument");
+        // No outgoing DataPoint relationships.
+        assert!(doc.relationships().is_empty());
     }
 
     #[test]

@@ -25,9 +25,8 @@ use crate::sdk_error::{CogneeValidationError, sdk_error_to_py};
 
 /// Parse and validate a UUID string, raising `CogneeValidationError` on failure.
 fn validate_uuid(s: &str, field: &str) -> PyResult<Uuid> {
-    Uuid::parse_str(s).map_err(|_| {
-        CogneeValidationError::new_err(format!("'{}' is not a valid UUID: {}", field, s))
-    })
+    Uuid::parse_str(s)
+        .map_err(|_| CogneeValidationError::new_err(format!("'{field}' is not a valid UUID: {s}")))
 }
 
 // ---------------------------------------------------------------------------

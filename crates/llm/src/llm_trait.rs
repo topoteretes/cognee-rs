@@ -135,10 +135,7 @@ pub trait LlmExt: Llm {
             .create_structured_output_raw(text_input, system_prompt, &schema, options)
             .await?;
         serde_json::from_value(value).map_err(|e| {
-            LlmError::DeserializationError(format!(
-                "Failed to deserialize structured output: {}",
-                e
-            ))
+            LlmError::DeserializationError(format!("Failed to deserialize structured output: {e}"))
         })
     }
 
@@ -159,10 +156,7 @@ pub trait LlmExt: Llm {
             .create_structured_output_with_messages_raw(messages, &schema, options)
             .await?;
         serde_json::from_value(value).map_err(|e| {
-            LlmError::DeserializationError(format!(
-                "Failed to deserialize structured output: {}",
-                e
-            ))
+            LlmError::DeserializationError(format!("Failed to deserialize structured output: {e}"))
         })
     }
 }
@@ -171,6 +165,11 @@ impl<T: Llm + ?Sized> LlmExt for T {}
 
 #[cfg(test)]
 mod tests {
+    #![allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        reason = "test code — panics are acceptable"
+    )]
     use super::*;
 
     struct DummyLlm;

@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! Smoke tests for span emission across `crates/database/src/ops/*`.
 //!
 //! Each test drives one representative operation per ops file and

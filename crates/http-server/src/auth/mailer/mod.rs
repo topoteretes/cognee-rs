@@ -78,6 +78,11 @@ pub fn build_default() -> Result<Arc<dyn Mailer>, MailerError> {
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 mod tests {
     use super::*;
     use serial_test::serial;

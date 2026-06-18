@@ -76,15 +76,21 @@ pub fn cloud_url() -> String {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
 
-    // Env-var state is global; serialize these tests so they don't race.
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
+    // Env-var state is process-global; serialize against every other env test
+    // in the crate via the shared [`crate::ENV_TEST_LOCK`] (a module-local lock
+    // would not exclude the tests in `credentials`/`serve`/`disconnect`).
+    use crate::ENV_TEST_LOCK as ENV_LOCK;
 
     fn with_env<F: FnOnce()>(keys: &[(&str, Option<&str>)], f: F) {
-        let _guard = ENV_LOCK.lock().expect("env lock poison is unrecoverable");
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
         let previous: Vec<(String, Option<String>)> = keys
             .iter()
             .map(|(k, _)| (k.to_string(), env::var(k).ok()))

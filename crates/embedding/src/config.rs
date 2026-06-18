@@ -14,6 +14,60 @@ use crate::onnx::OnnxEmbeddingEngine;
 #[cfg(feature = "onnx")]
 use std::path::PathBuf;
 
+/// Fallback dimension when the model is unknown AND `EMBEDDING_DIMENSIONS` is unset.
+///
+/// 384 matches the ONNX BGE-Small edge model (Android default). On non-Android,
+/// the default model (`text-embedding-3-small` → 1536) resolves via the
+/// [`known_model_dimensions`] table, so this fallback is only hit for truly
+/// unknown models.
+///
+/// **Note:** Python uses 3072 as its fallback (matching the OpenAI default).
+/// Rust deliberately uses 384 because the Rust edge default is BGE-Small, not
+/// `text-embedding-3-large`.
+const FALLBACK_DIMENSIONS: usize = 384;
+
+/// Best-effort lookup of the output vector dimension for a known embedding model.
+///
+/// Mirrors the dimension table that Python resolves dynamically via the
+/// `litellm` and `fastembed` registries (`_resolve_embedding_dimensions` in
+/// `cognee/infrastructure/databases/vector/embeddings/config.py`). Rust
+/// hardcodes a small, curated table instead of depending on those Python
+/// packages.
+///
+/// Resolution rules (matches Python semantics):
+/// - Strips a leading provider segment: `"openai/text-embedding-3-large"` →
+///   `"text-embedding-3-large"` (uses the last `/`-separated component).
+/// - Matching is **case-insensitive**.
+/// - Returns `None` for unknown models so the caller can fall back with a
+///   warning rather than silently using a wrong dimension.
+///
+/// The `provider` argument is accepted for forward-compatibility (future
+/// provider-scoped overrides) but is not used in the current table.
+pub fn known_model_dimensions(provider: EmbeddingProvider, model: &str) -> Option<usize> {
+    // Strip a provider prefix: "openai/text-embedding-3-large" -> "text-embedding-3-large"
+    // rsplit('/').next() is infallible for any &str (always yields ≥ 1 element).
+    let bare = model.rsplit('/').next().unwrap_or(model);
+    let key = bare.to_ascii_lowercase();
+    let dim = match key.as_str() {
+        // --- OpenAI models (verified via litellm registry) ---
+        "text-embedding-3-large" => 3072,
+        "text-embedding-3-small" => 1536,
+        "text-embedding-ada-002" => 1536,
+        // --- BGE family (fastembed registry + ONNX defaults) ---
+        "bge-small-v1.5" | "bge-small-en-v1.5" => 384,
+        "bge-base-en-v1.5" => 768,
+        "bge-large-en-v1.5" => 1024,
+        // --- MiniLM ---
+        "all-minilm-l6-v2" => 384,
+        // --- Common Ollama models ---
+        "nomic-embed-text" => 768,
+        "mxbai-embed-large" => 1024,
+        _ => return None,
+    };
+    let _ = provider; // provider currently unused; kept for future provider-scoped dims
+    Some(dim)
+}
+
 /// ONNX-specific configuration.
 ///
 /// Only used when `EmbeddingConfig::provider` is `Onnx` or `Fastembed`.
@@ -158,19 +212,31 @@ impl Default for EmbeddingConfig {
             )
         };
         #[cfg(all(feature = "onnx", not(target_os = "android")))]
-        let (provider, model, dimensions, endpoint) = (
-            EmbeddingProvider::OpenAi,
-            "text-embedding-3-small".to_string(),
-            1536usize,
-            Some("https://api.openai.com/v1".to_string()),
-        );
+        let (provider, model, dimensions, endpoint) = {
+            let m = "text-embedding-3-small".to_string();
+            // Resolve via the known-model table so there is one source of truth.
+            let d = known_model_dimensions(EmbeddingProvider::OpenAi, &m)
+                .unwrap_or(FALLBACK_DIMENSIONS);
+            (
+                EmbeddingProvider::OpenAi,
+                m,
+                d,
+                Some("https://api.openai.com/v1".to_string()),
+            )
+        };
         #[cfg(not(feature = "onnx"))]
-        let (provider, model, dimensions, endpoint) = (
-            EmbeddingProvider::OpenAi,
-            "text-embedding-3-small".to_string(),
-            1536usize,
-            Some("https://api.openai.com/v1".to_string()),
-        );
+        let (provider, model, dimensions, endpoint) = {
+            let m = "text-embedding-3-small".to_string();
+            // Resolve via the known-model table so there is one source of truth.
+            let d = known_model_dimensions(EmbeddingProvider::OpenAi, &m)
+                .unwrap_or(FALLBACK_DIMENSIONS);
+            (
+                EmbeddingProvider::OpenAi,
+                m,
+                d,
+                Some("https://api.openai.com/v1".to_string()),
+            )
+        };
 
         Self {
             provider,
@@ -237,13 +303,13 @@ impl EmbeddingConfig {
             }
         }
 
-        // Apply provider-specific defaults before checking env var overrides.
+        // Apply provider-specific model defaults before checking env var overrides.
         // This ensures that when a user switches to EMBEDDING_PROVIDER=ollama
-        // without setting EMBEDDING_MODEL/EMBEDDING_DIMENSIONS explicitly, they
-        // get sensible Ollama defaults rather than the ONNX defaults.
+        // without setting EMBEDDING_MODEL explicitly, they get a sensible Ollama
+        // default model name rather than the ONNX model name.
+        // (Dimension is resolved below via the known-model table, not hardcoded here.)
         if config.provider == EmbeddingProvider::Ollama {
             config.model = "avr/sfr-embedding-mistral:latest".to_string();
-            config.dimensions = 1024;
         }
 
         // EMBEDDING_MODEL
@@ -254,12 +320,66 @@ impl EmbeddingConfig {
             }
         }
 
-        // EMBEDDING_DIMENSIONS
-        if let Ok(val) = std::env::var("EMBEDDING_DIMENSIONS")
-            && let Ok(n) = val.trim().parse::<usize>()
-        {
-            config.dimensions = n;
-        }
+        // EMBEDDING_DIMENSIONS — resolution order (mirrors Python model_post_init):
+        //   1. Explicit EMBEDDING_DIMENSIONS env var — always wins.
+        //   2. known_model_dimensions(provider, model) — table lookup.
+        //   3. Fallback FALLBACK_DIMENSIONS (384) with a tracing::warn! so the user
+        //      knows to set EMBEDDING_DIMENSIONS explicitly for unknown models.
+        // For ONNX the model file dictates the true dimension, so we prefer the
+        // onnx_cfg.dimensions unless the user set EMBEDDING_DIMENSIONS explicitly.
+        let explicit_dims = std::env::var("EMBEDDING_DIMENSIONS")
+            .ok()
+            .and_then(|v| v.trim().parse::<usize>().ok());
+
+        // Resolve via the known-model table, falling back to FALLBACK_DIMENSIONS
+        // with a warning when the model is unknown (parity with Python
+        // model_post_init). Used for every provider except ONNX/Fastembed, whose
+        // dimension is dictated by the model file (handled below).
+        let resolve_from_table = |config: &EmbeddingConfig| match known_model_dimensions(
+            config.provider.clone(),
+            &config.model,
+        ) {
+            // 2. Known model — derived dimension.
+            Some(d) => d,
+            // 3. Unknown model — fallback with warning.
+            None => {
+                tracing::warn!(
+                    provider = ?config.provider,
+                    model = %config.model,
+                    fallback = FALLBACK_DIMENSIONS,
+                    "Could not auto-derive embedding dimensions; set \
+                     EMBEDDING_DIMENSIONS explicitly if your embedder produces \
+                     a different vector size, otherwise the first vector write \
+                     will fail with a shape mismatch."
+                );
+                FALLBACK_DIMENSIONS
+            }
+        };
+
+        config.dimensions = match explicit_dims {
+            // 1. Explicit override always wins.
+            Some(d) => d,
+            None => {
+                // For ONNX/Fastembed the model file carries the authoritative
+                // dimension, so use onnx.dimensions rather than the text table —
+                // this keeps custom ONNX models working.
+                #[cfg(feature = "onnx")]
+                {
+                    if matches!(
+                        config.provider,
+                        EmbeddingProvider::Onnx | EmbeddingProvider::Fastembed
+                    ) {
+                        config.onnx.dimensions
+                    } else {
+                        resolve_from_table(&config)
+                    }
+                }
+                #[cfg(not(feature = "onnx"))]
+                {
+                    resolve_from_table(&config)
+                }
+            }
+        };
 
         // EMBEDDING_ENDPOINT
         if let Ok(val) = std::env::var("EMBEDDING_ENDPOINT") {
@@ -360,6 +480,7 @@ impl EmbeddingConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
 
     #[test]
     #[cfg(all(feature = "onnx", target_os = "android"))]
@@ -409,15 +530,16 @@ mod tests {
         assert_eq!(config.effective_provider(), EmbeddingProvider::OpenAi);
     }
 
-    // env-var tests mutate global process state and must not run in parallel.
-    // Run with: cargo test -p cognee-embedding -- --test-threads=1 --ignored
-    // or simply: cargo test -p cognee-embedding -- --include-ignored --test-threads=1
+    // env-var tests mutate global process state, so they are serialized with
+    // #[serial] to prevent races with each other. All env-mutating tests in this
+    // crate live in this single test binary, so serial_test (which serializes
+    // within a process) is sufficient; each test also cleans up its own vars.
 
     #[test]
-    #[ignore = "mutates global env vars; run with --test-threads=1 --ignored"]
+    #[serial]
     fn test_from_env_mock_embedding_true() {
-        // SAFETY: env var mutation is safe when no other threads read env vars concurrently.
-        // Gated behind #[ignore] to prevent races in the default parallel test runner.
+        // SAFETY: env var mutation is safe because #[serial] guarantees no other
+        // env-mutating test in this binary runs concurrently.
         unsafe { std::env::set_var("MOCK_EMBEDDING", "true") };
         let config = EmbeddingConfig::from_env();
         unsafe { std::env::remove_var("MOCK_EMBEDDING") };
@@ -426,7 +548,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "mutates global env vars; run with --test-threads=1 --ignored"]
+    #[serial]
     fn test_from_env_mock_embedding_numeric() {
         // SAFETY: see test_from_env_mock_embedding_true
         unsafe { std::env::set_var("MOCK_EMBEDDING", "1") };
@@ -450,7 +572,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "mutates global env vars; run with --test-threads=1 --ignored"]
+    #[serial]
     fn test_from_env_provider() {
         // SAFETY: see test_from_env_mock_embedding_true
         unsafe { std::env::set_var("EMBEDDING_PROVIDER", "openai") };
@@ -460,7 +582,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "mutates global env vars; run with --test-threads=1 --ignored"]
+    #[serial]
     fn test_from_env_fastembed_alias() {
         // SAFETY: see test_from_env_mock_embedding_true
         unsafe { std::env::set_var("EMBEDDING_PROVIDER", "fastembed") };
@@ -470,7 +592,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "mutates global env vars; run with --test-threads=1 --ignored"]
+    #[serial]
     fn test_from_env_dimensions() {
         // SAFETY: see test_from_env_mock_embedding_true
         unsafe { std::env::set_var("EMBEDDING_DIMENSIONS", "1536") };
@@ -480,7 +602,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "mutates global env vars; run with --test-threads=1 --ignored"]
+    #[serial]
     fn test_from_env_api_key_fallback() {
         // SAFETY: see test_from_env_mock_embedding_true
         unsafe { std::env::remove_var("EMBEDDING_API_KEY") };
@@ -491,7 +613,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "mutates global env vars; run with --test-threads=1 --ignored"]
+    #[serial]
     fn test_from_env_api_key_prefers_embedding() {
         // SAFETY: see test_from_env_mock_embedding_true
         unsafe { std::env::set_var("EMBEDDING_API_KEY", "embed-key") };
@@ -518,5 +640,147 @@ mod tests {
         assert_eq!(cfg.dimensions, 384);
         assert_eq!(cfg.max_sequence_length, 256);
         assert_eq!(cfg.model_name, "all-MiniLM-L6-v2");
+    }
+
+    // ── known_model_dimensions unit tests ──────────────────────────────────
+    // These are pure lookup tests — no env vars, no network, no model files.
+
+    #[test]
+    fn known_dims_openai_large() {
+        assert_eq!(
+            known_model_dimensions(EmbeddingProvider::OpenAi, "text-embedding-3-large"),
+            Some(3072),
+        );
+    }
+
+    #[test]
+    fn known_dims_openai_small() {
+        assert_eq!(
+            known_model_dimensions(EmbeddingProvider::OpenAi, "text-embedding-3-small"),
+            Some(1536),
+        );
+    }
+
+    #[test]
+    fn known_dims_ada_002() {
+        assert_eq!(
+            known_model_dimensions(EmbeddingProvider::OpenAi, "text-embedding-ada-002"),
+            Some(1536),
+        );
+    }
+
+    /// Verify that a provider-prefixed model name is normalized before lookup.
+    /// Python uses `model.split("/")[-1]`; Rust uses `rsplit('/').next()`.
+    #[test]
+    fn known_dims_prefix_stripped() {
+        assert_eq!(
+            known_model_dimensions(EmbeddingProvider::OpenAi, "openai/text-embedding-3-small"),
+            Some(1536),
+        );
+        // Azure-prefixed variant
+        assert_eq!(
+            known_model_dimensions(
+                EmbeddingProvider::OpenAiCompatible,
+                "azure/text-embedding-3-large"
+            ),
+            Some(3072),
+        );
+    }
+
+    /// BGE-Small variants: bare name (both v1.5 spellings) and BAAI-prefixed.
+    #[test]
+    fn known_dims_bge_small() {
+        assert_eq!(
+            known_model_dimensions(EmbeddingProvider::Onnx, "bge-small-en-v1.5"),
+            Some(384),
+        );
+        assert_eq!(
+            known_model_dimensions(EmbeddingProvider::Onnx, "BGE-Small-v1.5"),
+            Some(384),
+        );
+        // fastembed-style prefix stripped correctly
+        assert_eq!(
+            known_model_dimensions(EmbeddingProvider::Fastembed, "BAAI/bge-small-en-v1.5"),
+            Some(384),
+        );
+    }
+
+    #[test]
+    fn known_dims_bge_large() {
+        assert_eq!(
+            known_model_dimensions(EmbeddingProvider::Fastembed, "bge-large-en-v1.5"),
+            Some(1024),
+        );
+    }
+
+    #[test]
+    fn known_dims_unknown_returns_none() {
+        assert_eq!(
+            known_model_dimensions(EmbeddingProvider::OpenAi, "some-unknown-model"),
+            None,
+        );
+    }
+
+    // ── from_env dimension-resolution tests ────────────────────────────────
+    // These mutate process env vars and must not run in parallel.
+
+    /// Explicit EMBEDDING_DIMENSIONS always overrides the table lookup.
+    #[test]
+    #[serial]
+    fn from_env_explicit_override_wins() {
+        // SAFETY: #[serial] guarantees no concurrent env readers in this binary.
+        unsafe {
+            std::env::set_var("EMBEDDING_PROVIDER", "openai");
+            std::env::set_var("EMBEDDING_MODEL", "text-embedding-3-large");
+            std::env::set_var("EMBEDDING_DIMENSIONS", "999");
+        }
+        let config = EmbeddingConfig::from_env();
+        unsafe {
+            std::env::remove_var("EMBEDDING_PROVIDER");
+            std::env::remove_var("EMBEDDING_MODEL");
+            std::env::remove_var("EMBEDDING_DIMENSIONS");
+        }
+        // Explicit env var must win over the table value (3072).
+        assert_eq!(config.dimensions, 999);
+    }
+
+    /// Changing EMBEDDING_MODEL to a known model (without EMBEDDING_DIMENSIONS) must
+    /// resolve the correct dimension — not silently keep the default 384.
+    /// This is the regression this task fixes (audit B7.2).
+    #[test]
+    #[serial]
+    fn from_env_model_change_resolves() {
+        // SAFETY: see from_env_explicit_override_wins
+        unsafe {
+            std::env::set_var("EMBEDDING_PROVIDER", "openai");
+            std::env::set_var("EMBEDDING_MODEL", "text-embedding-3-large");
+            std::env::remove_var("EMBEDDING_DIMENSIONS");
+        }
+        let config = EmbeddingConfig::from_env();
+        unsafe {
+            std::env::remove_var("EMBEDDING_PROVIDER");
+            std::env::remove_var("EMBEDDING_MODEL");
+        }
+        // Previously returned 384 (the ONNX default); now must return 3072.
+        assert_eq!(config.dimensions, 3072);
+    }
+
+    /// An unknown model with no explicit EMBEDDING_DIMENSIONS must fall back to
+    /// FALLBACK_DIMENSIONS (384) and log a warning (we only assert the dimension here).
+    #[test]
+    #[serial]
+    fn from_env_unknown_falls_back() {
+        // SAFETY: see from_env_explicit_override_wins
+        unsafe {
+            std::env::set_var("EMBEDDING_PROVIDER", "openai");
+            std::env::set_var("EMBEDDING_MODEL", "some-unknown-model-xyz");
+            std::env::remove_var("EMBEDDING_DIMENSIONS");
+        }
+        let config = EmbeddingConfig::from_env();
+        unsafe {
+            std::env::remove_var("EMBEDDING_PROVIDER");
+            std::env::remove_var("EMBEDDING_MODEL");
+        }
+        assert_eq!(config.dimensions, FALLBACK_DIMENSIONS);
     }
 }

@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! Integration test for `GET /api/v1/activity/spans`.
 //!
 //! The handler reads `state.spans` (an `Arc<SpanBuffer>`); we directly poke a

@@ -151,6 +151,76 @@ jobs:
           CARGO_TARGET_DIR: target/no-default
         run: cargo check -p cognee-lib --no-default-features
 
+      - name: License presence (every published crate)
+        run: |
+          cargo metadata --no-deps --format-version 1 \
+          | python3 -c 'import sys,json;\
+            p=json.load(sys.stdin)["packages"];\
+            bad=[x["name"] for x in p if not x.get("license") and not x.get("license_file")];\
+            print("missing license:",bad); sys.exit(1 if bad else 0)'
+
+  # ── MSRV floor: build against the declared rust-version (T2.3) ─────────
+  # rust-toolchain.toml pins the toolchain repo-wide (it takes precedence over
+  # @stable), so every lane already builds on the floor; this lane additionally
+  # installs 1.89.0 explicitly so a newer-than-MSRV API is caught before release
+  # even if the pin moves.
+  # Note: 1.89 is the real floor on x86_64 — the embedded qdrant `quantization`
+  # crate uses AVX-512 target features/intrinsics (avx512vl, avx512vpopcntdq,
+  # stdarch_x86_avx512) stabilized in Rust 1.89. (home@0.5.12 / icu_collections
+  # already require 1.88; qdrant raises it to 1.89.) Edition 2024 + resolver 3
+  # would allow 1.85 in principle. The aarch64 build never compiles the AVX-512
+  # path, so this only manifests on x86_64.
+  msrv:
+    name: MSRV (1.89)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust 1.89
+        uses: dtolnay/rust-toolchain@1.89.0
+
+      - name: Install mold linker
+        uses: rui314/setup-mold@v1
+        with:
+          make-default: true
+
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: false
+          swap-storage: false
+          docker-images: true
+
+      - name: ccache (lbug bundled C++, restore-only)
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: lbug-cxx
+          max-size: 1G
+          save: false
+
+      - name: Cache cargo/target (msrv)
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: workspace-msrv-v1
+          cache-on-failure: true
+
+      - name: Cache ORT binary
+        uses: actions/cache@v4
+        with:
+          path: target/ort-cache
+          key: ort-v2.0.0-rc.12-cpu-linux-x86_64
+
+      - name: Check (MSRV)
+        run: cargo +1.89.0 check --all-targets
+
   # ── Stage 2: Build and run tests (depends on lint) ────────────────────
   test:
     name: Test (stable)
@@ -268,7 +338,15 @@ jobs:
           CARGO_TARGET_DIR: target/no-default
         run: cargo test -p cognee-telemetry --no-default-features -- --nocapture
 
+      # RUSTDOCFLAGS=-W missing_docs surfaces undocumented public items as
+      # rustdoc warnings (task 23) without failing the `clippy -- -D warnings`
+      # gate. The lint is scoped to the doc job (not a crate `#![warn]`
+      # attribute) precisely because a crate-level `#![warn(missing_docs)]`
+      # would be promoted to an error by `-D warnings` and break the build,
+      # whereas `cargo doc` runs without `-D warnings` and only warns.
       - name: Build docs
+        env:
+          RUSTDOCFLAGS: -W missing_docs
         run: cargo doc --no-deps
 
       # Optional: rustdoc with the telemetry feature on, to catch
@@ -276,6 +354,7 @@ jobs:
       - name: Build docs (telemetry feature)
         env:
           CARGO_TARGET_DIR: target/telemetry
+          RUSTDOCFLAGS: -W missing_docs
         run: cargo doc --no-deps --features telemetry
 
   # ── Stage 2.5: Postgres-only span tests (depends on lint, runs in parallel with `test`) ──

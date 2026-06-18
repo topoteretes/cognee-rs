@@ -79,10 +79,11 @@ pub async fn has_data(
     let dataset_id = Uuid::parse_str(dataset_id_str)
         .map_err(|e| SdkError::Validation(format!("invalid dataset id UUID: {e}")))?;
     let svc = state.services().await?;
+    let owner_id = state.owner_id().await?;
 
     let mgr = DatasetManager::new(Arc::clone(&svc.database) as Arc<dyn DatasetDb>);
     let has = mgr
-        .has_data(dataset_id)
+        .has_data(dataset_id, owner_id)
         .await
         .map_err(|e| SdkError::Runtime(format!("has_data failed: {e}")))?;
 
@@ -118,8 +119,8 @@ pub async fn dataset_status(
         .await
         .map_err(|e| SdkError::Runtime(format!("get_status failed: {e}")))?;
 
-    // Convert HashMap<Uuid, PipelineRunStatus> → HashMap<String, _> so JSON
-    // keys are valid strings.
+    // Convert HashMap<Uuid, HashMap<String, PipelineRunStatus>> →
+    // HashMap<String, HashMap<String, _>> so outer JSON keys are valid strings.
     let string_keyed: HashMap<String, _> = statuses
         .into_iter()
         .map(|(k, v)| (k.to_string(), v))

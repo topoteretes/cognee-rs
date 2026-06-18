@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! CLEAN-01 §5.2 — wire-shape regression tests.
 //!
 //! Per affected endpoint, this file asserts:

@@ -23,13 +23,14 @@ use cognee_core::task::Value;
 use cognee_core::{Pipeline, PipelineBuilder, PipelineContext, TaskContextBuilder, TypedTask};
 use cognee_database::{AclDb, DatabaseConnection, IngestDb, PipelineRunRepository};
 use cognee_graph::GraphDBTrait;
-use cognee_models::{Data, DataInput, Dataset};
+use cognee_models::{Data, DataInput, DataPoint, Dataset, Document};
 use cognee_storage::StorageTrait;
 use cognee_vector::VectorDB;
 
 use crate::content_hasher::HashAlgorithm;
 use crate::id_generation::{generate_data_id, generate_dataset_id};
 use crate::loader_registry::get_loader_name;
+use crate::loaders::{LoaderOutput, LoaderRegistry};
 use crate::url_resolver::UrlMetadata;
 #[cfg(feature = "html-loader")]
 use crate::url_resolver::resolve_url_input;
@@ -56,6 +57,12 @@ pub struct AddParams {
 
     /// Importance weight (0.0 to 1.0) for relevance scoring.
     pub importance_weight: Option<f64>,
+
+    /// When `true`, skip content that is already present in the dataset
+    /// (deduplication by content hash). Matches Python's `incremental_loading`
+    /// parameter. Defaults to `false`; callers that want Python-parity should
+    /// set this to `true`.
+    pub incremental_loading: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -69,6 +76,9 @@ pub struct AddParams {
 #[derive(Debug, Clone)]
 pub struct ProcessedInput {
     pub content_hash: String,
+    /// MD5 of the EXTRACTED-text file (Python parity, `ingest_data.py:195`).
+    /// Equals `content_hash` only when extracted text == raw bytes (plain text).
+    pub raw_content_hash: String,
     pub data_id: Uuid,
     pub storage_location: String,
     pub label: Option<String>,
@@ -139,6 +149,13 @@ pub async fn process_input(
         (fname, ext.clone(), mime.clone(), ext, mime, lbl, loader)
     };
 
+    // S3 ingestion is not yet implemented (decision D3): the loader-dispatch
+    // path below must NOT silently store raw S3 bytes. Surface a clear error
+    // instead. The `original_*` metadata above still carries the placeholder.
+    if matches!(unwrap_data_item(input), DataInput::S3Path(_)) {
+        return Err(Box::new(IngestionError::S3IngestionUnavailable));
+    }
+
     let raw_source_uri = if let Some(metadata) = resolved_url_metadata.as_ref()
         && is_html_url_metadata(metadata)
     {
@@ -149,33 +166,38 @@ pub async fn process_input(
         None
     };
 
-    // Use Arc<Mutex<>> so closures can share the hasher and writer
-    let size_counter: Arc<Mutex<i64>> = Arc::new(Mutex::new(0i64));
-    let writer = Arc::new(Mutex::new(storage.create_writer(&file_name).await?));
+    // Rebindable stored-file metadata. For non-URL inputs the loader runs at
+    // ADD time (Python parity, ingest_data.py:103) and the stored artifact
+    // becomes extracted text, so these are overridden to txt/text/plain below.
+    let mut stored_extension = stored_extension;
+    let mut stored_mime_type = stored_mime_type;
+    let mut loader_engine = loader_engine;
 
-    // Accumulate raw bytes for hashing (streaming, but buffered for hash computation)
+    // Buffer the (effective) input bytes. For URL inputs `effective_input` is
+    // the already-extracted text; for everything else it is the raw original
+    // bytes, which we hash (UNCHANGED — sacred) and then feed to the loader.
+    let size_counter: Arc<Mutex<i64>> = Arc::new(Mutex::new(0i64));
     let raw_bytes: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
 
     let size_clone = size_counter.clone();
-    let writer_clone = writer.clone();
     let raw_bytes_clone = raw_bytes.clone();
 
     effective_input
         .process_by_chunks(move |chunk| {
             let size = size_clone.clone();
-            let writer = writer_clone.clone();
             let bytes = raw_bytes_clone.clone();
             let chunk_owned = chunk.to_vec();
             async move {
                 *size.lock().await += chunk_owned.len() as i64;
-                writer.lock().await.write_chunk(&chunk_owned).await?;
                 bytes.lock().await.extend_from_slice(&chunk_owned);
                 Ok::<(), Box<dyn std::error::Error>>(())
             }
         })
         .await?;
 
-    // Finalise hash — content-only, no owner_id (Python compatible)
+    // Finalise hash — content-only, no owner_id (Python compatible). For
+    // non-URL inputs this is the MD5 of the RAW original bytes; `data_id` is
+    // derived from it. Both are SACRED and must not change.
     let collected = Arc::try_unwrap(raw_bytes)
         .map_err(|_| "Failed to unwrap bytes")?
         .into_inner();
@@ -187,10 +209,84 @@ pub async fn process_input(
 
     let data_id = generate_data_id(&content_hash, owner_id, tenant_id);
 
-    let writer = Arc::try_unwrap(writer)
-        .map_err(|_| "Failed to unwrap writer")?
-        .into_inner();
-    let storage_location = writer.finish().await?;
+    // Store the artifact + compute `raw_content_hash` (MD5 of the stored
+    // extracted-text file — Python parity, ingest_data.py:195).
+    let (storage_location, raw_content_hash) = if resolved_url_metadata.is_some() {
+        // URL path: the loader already ran at fetch time, so `collected` IS the
+        // extracted text. Store it verbatim under the metadata-derived name and
+        // extension (preserving the existing URL behaviour, incl. non-HTML
+        // URLs that keep their source extension). `raw_content_hash` is the MD5
+        // of that stored file, which equals `content_hash` here.
+        let location = storage.store(&collected, &file_name).await?;
+        (location, content_hash.clone())
+    } else {
+        // Non-URL path: run the document loader at ADD time and store the
+        // EXTRACTED text as `text_<content_hash>.txt` (Python text_loader.py:76
+        // names the file with the ORIGINAL file's content hash).
+        let registry = LoaderRegistry::default_registry();
+        let doc_type = cognee_models::doc_type_for_extension(&original_extension)
+            .unwrap_or("text")
+            .to_string();
+
+        // Binary/non-text blob fallback (pre-task-17 raw-storage parity).
+        //
+        // Rust classifies by extension only, so a file with no (or an unknown)
+        // extension falls back to `doc_type = "text"` and the text loader. The
+        // text loader rejects non-UTF-8 bytes, which would make `add` fail for
+        // generic binary blobs that have no specific loader — a regression
+        // introduced by running loaders at ADD time (task 17).
+        //
+        // Match the pre-task-17 behaviour: when the would-be loader is the
+        // *text* loader but the bytes are not valid UTF-8 text, store the RAW
+        // bytes verbatim instead of running text extraction. This only affects
+        // the generic-text fallback path: files routed to a real loader by
+        // their extension (text/csv/html/pdf — actually-text content; or
+        // image/audio — `UnsupportedDocumentType`) are unchanged.
+        let is_text_doc_type = doc_type == "text";
+        if is_text_doc_type && std::str::from_utf8(&collected).is_err() {
+            let stored_name = format!("text_{content_hash}.bin");
+            let location = storage.store(&collected, &stored_name).await?;
+            // Raw bytes are stored verbatim, so `raw_content_hash` equals the
+            // (content-only) `content_hash` of those same bytes.
+            (location, content_hash.clone())
+        } else {
+            let loader = registry.get(&doc_type).ok_or_else(|| {
+                Box::new(IngestionError::UnsupportedDocumentType {
+                    document_type: doc_type.clone(),
+                }) as Box<dyn std::error::Error>
+            })?;
+
+            // Minimal Document descriptor for the loader (only metadata fields
+            // the loaders read; the bytes are passed separately).
+            let descriptor = build_loader_descriptor(
+                data_id,
+                &extract_name(input, &content_hash),
+                &original_extension,
+                &original_mime_type,
+            );
+
+            let extracted_text = match loader.extract(&collected, &descriptor).await? {
+                LoaderOutput::Text(t) => t,
+                LoaderOutput::Rows(rows) => rows.join("\n\n"),
+                LoaderOutput::SingleChunk { text, .. } => text,
+            };
+            let extracted_bytes = extracted_text.into_bytes();
+
+            let stored_name = format!("text_{content_hash}.txt");
+            let location = storage.store(&extracted_bytes, &stored_name).await?;
+
+            // Stored-file metadata now describes the extracted text.
+            stored_extension = "txt".to_string();
+            stored_mime_type = "text/plain".to_string();
+            loader_engine = loader.engine_name().to_string();
+
+            let raw_content_hash = crate::content_hasher::ContentHasher::hash_content(
+                &extracted_bytes,
+                hash_algorithm,
+            );
+            (location, raw_content_hash)
+        }
+    };
 
     // Compute derived fields that previously lived in add()
     let raw_data_uri = storage_location_to_uri(storage.base_path(), &storage_location);
@@ -208,6 +304,7 @@ pub async fn process_input(
 
     Ok(ProcessedInput {
         content_hash,
+        raw_content_hash,
         data_id,
         storage_location,
         label,
@@ -354,7 +451,7 @@ pub async fn persist_data_with_acl(
     .original_extension(processed.original_extension.clone())
     .original_mime_type(processed.original_mime_type.clone())
     .loader_engine(processed.loader_engine.clone())
-    .raw_content_hash(processed.content_hash.clone())
+    .raw_content_hash(processed.raw_content_hash.clone())
     .data_size(processed.data_size);
     if let Some(tid) = processed.tenant_id {
         data_builder = data_builder.tenant_id(tid);
@@ -398,6 +495,42 @@ fn resolve_mime(extension: &str, path_for_guess: &str) -> String {
         mime_guess::from_path(path_for_guess)
             .first_or_octet_stream()
             .to_string()
+    }
+}
+
+/// Unwrap a [`DataInput::DataItem`] to its underlying input, returning other
+/// variants unchanged. Used to detect the underlying variant (e.g. `S3Path`)
+/// regardless of `DataItem` wrapping.
+fn unwrap_data_item(input: &DataInput) -> &DataInput {
+    match input {
+        DataInput::DataItem { data, .. } => unwrap_data_item(data),
+        other => other,
+    }
+}
+
+/// Build a minimal [`Document`] descriptor passed to a [`DocumentLoader`] at
+/// ADD time. Only the metadata fields loaders read are populated; the content
+/// bytes are passed separately to `extract`.
+fn build_loader_descriptor(
+    data_id: Uuid,
+    name: &str,
+    extension: &str,
+    mime_type: &str,
+) -> Document {
+    let doc_type = cognee_models::doc_type_for_extension(extension)
+        .unwrap_or("text")
+        .to_string();
+    let mut base = DataPoint::new("Document", None);
+    base.id = data_id;
+    Document {
+        base,
+        document_type: doc_type,
+        name: name.to_string(),
+        raw_data_location: String::new(),
+        mime_type: mime_type.to_string(),
+        extension: extension.to_string(),
+        data_id,
+        external_metadata: None,
     }
 }
 
@@ -606,7 +739,7 @@ fn merge_external_metadata(
 /// Derive a human-readable name for the stored Data record.
 fn extract_name(input: &DataInput, content_hash: &str) -> String {
     match input {
-        DataInput::Text(_) => format!("text_{}", content_hash),
+        DataInput::Text(_) => format!("text_{content_hash}"),
         DataInput::FilePath(path) => {
             let clean_path = path.strip_prefix("file://").unwrap_or(path);
             Path::new(clean_path)
@@ -615,7 +748,7 @@ fn extract_name(input: &DataInput, content_hash: &str) -> String {
                 .unwrap_or("unknown")
                 .to_string()
         }
-        DataInput::Url(_) => format!("text_{}", content_hash),
+        DataInput::Url(_) => format!("text_{content_hash}"),
         DataInput::S3Path(path) => path
             .split('/')
             .next_back()
@@ -633,12 +766,12 @@ fn extract_original_location(input: &DataInput) -> String {
             if path.starts_with("file://") {
                 path.clone()
             } else {
-                format!("file://{}", path)
+                format!("file://{path}")
             }
         }
         DataInput::Url(url) => url.clone(),
         DataInput::S3Path(path) => path.clone(),
-        DataInput::Binary { name, .. } => format!("binary://{}", name),
+        DataInput::Binary { name, .. } => format!("binary://{name}"),
         DataInput::DataItem { data, .. } => extract_original_location(data),
     }
 }
@@ -838,7 +971,9 @@ fn build_add_pipeline_internal(
         acl_db,
         add_params,
     ))
-    .with_name("ingestion")
+    // Persisted pipeline-run name; must match Python (add.py:319) and the
+    // canonical "add_pipeline" name DatasetManager::get_status queries.
+    .with_name("add_pipeline")
     .with_data_id(data_id_fn)
     .build()
 }
@@ -1155,6 +1290,14 @@ pub enum IngestionError {
     /// provides URL crawling/fetching) is not enabled in this build.
     #[error("URL ingestion requires the `html-loader` feature to be enabled")]
     UrlIngestionUnavailable,
+    /// A `DataInput::S3Path` was supplied. S3 ingestion is not yet implemented
+    /// (decision D3); the loader-dispatch path must not store raw S3 bytes.
+    #[error("S3 ingestion is not yet implemented")]
+    S3IngestionUnavailable,
+    /// No loader is registered for the document type derived from the input's
+    /// extension (the relevant loader feature is disabled in this build).
+    #[error("Unsupported document type at ingest: {document_type}")]
+    UnsupportedDocumentType { document_type: String },
 }
 
 // ---------------------------------------------------------------------------
@@ -1162,6 +1305,11 @@ pub enum IngestionError {
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 mod tests {
     use super::*;
     use cognee_database::{connect, initialize, ops};
@@ -1823,12 +1971,43 @@ mod tests {
 
     #[tokio::test]
     async fn test_loader_engine_populated() {
+        // After running the loader at ADD time, the stored artifact is the
+        // extracted text and `loader_engine` reflects the loader that ran.
+        // A `.txt` file runs the always-available text loader.
         let (pipeline, _db) = make_pipeline().await;
         let owner_id = Uuid::new_v4();
 
         let mut temp_file = NamedTempFile::new().unwrap();
         writeln!(temp_file, "content").unwrap();
-        // Rename to .pdf to check loader_engine mapping
+        let txt_path = temp_file.path().with_extension("txt");
+        std::fs::copy(temp_file.path(), &txt_path).unwrap();
+
+        let result = pipeline
+            .add(
+                vec![DataInput::FilePath(txt_path.to_str().unwrap().to_string())],
+                "ds",
+                owner_id,
+                None,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result[0].loader_engine.as_deref(), Some("text_loader"));
+        assert_eq!(result[0].extension, "txt");
+        let _ = std::fs::remove_file(&txt_path);
+    }
+
+    /// With a loader feature disabled, ADD must surface a clear error rather
+    /// than silently store raw bytes. Under default features no `pdf` loader is
+    /// registered, so a `.pdf` input errors at ingest (Python parity gotcha).
+    #[cfg(not(any(feature = "pdf-pdfium", feature = "pdf-pure-rust")))]
+    #[tokio::test]
+    async fn test_unsupported_loader_type_errors_at_add() {
+        let (pipeline, _db) = make_pipeline().await;
+        let owner_id = Uuid::new_v4();
+
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "%PDF-1.7").unwrap();
         let pdf_path = temp_file.path().with_extension("pdf");
         std::fs::copy(temp_file.path(), &pdf_path).unwrap();
 
@@ -1839,11 +2018,141 @@ mod tests {
                 owner_id,
                 None,
             )
-            .await
-            .unwrap();
+            .await;
 
-        assert_eq!(result[0].loader_engine.as_deref(), Some("pypdf_loader"));
+        assert!(
+            result.is_err(),
+            "pdf input must error when the pdf loader feature is off"
+        );
         let _ = std::fs::remove_file(&pdf_path);
+    }
+
+    /// Text-path no-regression: the stored artifact is byte-identical to the
+    /// input, `raw_content_hash == content_hash`, `extension == "txt"`, and the
+    /// content hash / data_id match the pinned Python-compatible values.
+    #[tokio::test]
+    async fn test_text_path_no_regression_hashes_and_stored_bytes() {
+        use cognee_storage::LocalStorage;
+
+        // Pinned values for the fixed string (MD5 of the bytes, verified by the
+        // content_hasher unit tests: md5("hello world") == HELLO_WORLD_MD5).
+        const HELLO_WORLD: &str = "hello world";
+        const HELLO_WORLD_MD5: &str = "5eb63bbbe01eeed093cb22bb8f5acdc3";
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let storage = LocalStorage::new(temp_dir.path().to_path_buf());
+        let owner_id = Uuid::new_v4();
+
+        let processed = process_input(
+            &DataInput::Text(HELLO_WORLD.to_string()),
+            &storage,
+            HashAlgorithm::Md5,
+            owner_id,
+            None,
+        )
+        .await
+        .unwrap();
+
+        // content_hash + data_id derived from RAW bytes — SACRED, must not change.
+        assert_eq!(processed.content_hash, HELLO_WORLD_MD5);
+        assert_eq!(
+            processed.data_id,
+            generate_data_id(HELLO_WORLD_MD5, owner_id, None),
+            "data_id must remain uuid5(content_hash + owner + tenant)"
+        );
+
+        // For plain text the extracted text equals the raw bytes.
+        assert_eq!(
+            processed.raw_content_hash, processed.content_hash,
+            "plain-text raw_content_hash must equal content_hash"
+        );
+        assert_eq!(processed.stored_extension, "txt");
+        assert_eq!(processed.stored_mime_type, "text/plain");
+        assert_eq!(processed.loader_engine, "text_loader");
+
+        // Stored file content is byte-identical to the input.
+        let stored = storage.retrieve(&processed.raw_data_uri).await.unwrap();
+        assert_eq!(stored, HELLO_WORLD.as_bytes());
+    }
+
+    /// CSV path (feature-gated): the stored artifact is the EXTRACTED text
+    /// (rows formatted as Python does), `extension == "txt"`, the stored file
+    /// name ends in `text_<content_hash>.txt`, `original_extension == "csv"`,
+    /// and `raw_content_hash != content_hash`.
+    #[cfg(feature = "csv-loader")]
+    #[tokio::test]
+    async fn test_csv_path_stores_extracted_text() {
+        use cognee_storage::LocalStorage;
+
+        let csv = "name,age\nAlice,30\nBob,25\n";
+        let temp_dir = tempfile::tempdir().unwrap();
+        let storage = LocalStorage::new(temp_dir.path().to_path_buf());
+        let owner_id = Uuid::new_v4();
+
+        let mut temp_file = NamedTempFile::new().unwrap();
+        write!(temp_file, "{csv}").unwrap();
+        let csv_path = temp_file.path().with_extension("csv");
+        std::fs::copy(temp_file.path(), &csv_path).unwrap();
+
+        let processed = process_input(
+            &DataInput::FilePath(csv_path.to_str().unwrap().to_string()),
+            &storage,
+            HashAlgorithm::Md5,
+            owner_id,
+            None,
+        )
+        .await
+        .unwrap();
+
+        // content_hash is the MD5 of the RAW csv bytes (unchanged).
+        assert_eq!(
+            processed.content_hash,
+            crate::content_hasher::ContentHasher::hash_content(csv.as_bytes(), HashAlgorithm::Md5)
+        );
+        // Stored artifact is extracted text, not raw csv.
+        assert_eq!(processed.stored_extension, "txt");
+        assert_eq!(processed.stored_mime_type, "text/plain");
+        assert_eq!(processed.original_extension, "csv");
+        assert_eq!(processed.loader_engine, "csv_loader");
+        assert_ne!(
+            processed.raw_content_hash, processed.content_hash,
+            "extracted csv text differs from raw bytes"
+        );
+
+        let stored = storage.retrieve(&processed.raw_data_uri).await.unwrap();
+        let stored_text = String::from_utf8(stored).unwrap();
+        assert!(stored_text.contains("name: Alice, age: 30"));
+        assert!(!stored_text.contains("name,age"));
+
+        // raw_content_hash is the MD5 of the stored extracted text.
+        assert_eq!(
+            processed.raw_content_hash,
+            crate::content_hasher::ContentHasher::hash_content(
+                stored_text.as_bytes(),
+                HashAlgorithm::Md5
+            )
+        );
+        let _ = std::fs::remove_file(&csv_path);
+    }
+
+    /// S3 ingestion (decision D3) must error at ingest, never store raw bytes.
+    #[tokio::test]
+    async fn test_s3_input_errors_at_add() {
+        use cognee_storage::LocalStorage;
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let storage = LocalStorage::new(temp_dir.path().to_path_buf());
+
+        let result = process_input(
+            &DataInput::S3Path("s3://bucket/key.txt".to_string()),
+            &storage,
+            HashAlgorithm::Md5,
+            Uuid::new_v4(),
+            None,
+        )
+        .await;
+
+        assert!(result.is_err(), "S3 input must error at ingest");
     }
 
     #[tokio::test]

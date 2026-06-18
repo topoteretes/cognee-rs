@@ -113,6 +113,11 @@ impl DatasetConfigDb for DatabaseConnection {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 mod tests {
     use super::*;
     use crate::entities::{dataset, dataset_configuration};

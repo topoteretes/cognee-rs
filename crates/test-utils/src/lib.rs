@@ -7,6 +7,12 @@
 //! the `DB_*` environment variables (mirroring the Python `DB_PROVIDER` /
 //! `DB_HOST` / … convention).
 
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test infrastructure — panics are acceptable"
+)]
+
 pub mod mock_acl_db;
 pub mod mock_llm;
 pub mod mock_role_db;

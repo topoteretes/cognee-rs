@@ -144,19 +144,20 @@ where
         event.record(&mut visitor);
         let body = visitor.finish();
 
-        // `log::Record::args` borrows the `format_args!` temporary,
-        // so the builder must live in a `let` binding that outlives
-        // the call to `logger.log()`.
-        let args = format_args!("{body}");
-        let record = log::Record::builder()
-            .args(args)
-            .level(log_level)
-            .target(metadata.target())
-            .module_path(metadata.module_path())
-            .file(metadata.file())
-            .line(metadata.line())
-            .build();
-        logger.log(&record);
+        // `log::Record::args` borrows the `format_args!` temporary, which
+        // only lives to the end of the enclosing statement. Build the record
+        // and log it within a single statement so the temporary outlives the
+        // borrow.
+        logger.log(
+            &log::Record::builder()
+                .args(format_args!("{body}"))
+                .level(log_level)
+                .target(metadata.target())
+                .module_path(metadata.module_path())
+                .file(metadata.file())
+                .line(metadata.line())
+                .build(),
+        );
     }
 }
 

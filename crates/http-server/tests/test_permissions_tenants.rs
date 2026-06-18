@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! P5 §5: HTTP-level tenant-lifecycle coverage for `/api/v1/permissions`.
 //!
 //! Repository-level invariants (e.g. `create_tenant` membership, owner-removal

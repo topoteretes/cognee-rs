@@ -141,6 +141,11 @@ pub fn format_time_field(now: chrono::DateTime<chrono::Utc>) -> String {
 }
 
 #[cfg(all(test, feature = "telemetry"))]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 mod tests {
     use super::*;
     use serde_json::json;

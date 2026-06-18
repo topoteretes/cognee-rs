@@ -109,7 +109,7 @@ impl QdrantAdapter {
     ///
     /// Example: ("DocumentChunk", "text") -> "DocumentChunk_text"
     fn collection_name(data_type: &str, field_name: &str) -> String {
-        format!("{}_{}", data_type, field_name)
+        format!("{data_type}_{field_name}")
     }
 
     /// Get or create EdgeShard for a collection
@@ -121,6 +121,7 @@ impl QdrantAdapter {
         dimension: usize,
     ) -> VectorDBResult<Arc<EdgeShard>> {
         {
+            #[allow(clippy::unwrap_used, reason = "lock poison is unrecoverable")]
             let shards = self.shards.read().unwrap(); // lock poison is unrecoverable
             if let Some(shard) = shards.get(collection) {
                 return Ok(shard.clone());
@@ -152,6 +153,7 @@ impl QdrantAdapter {
                 .map_err(|e| VectorDBError::StorageError(e.to_string()))?,
         );
 
+        #[allow(clippy::unwrap_used, reason = "lock poison is unrecoverable")]
         let mut shards = self.shards.write().unwrap(); // lock poison is unrecoverable
         shards.insert(collection.to_string(), shard.clone());
 
@@ -241,6 +243,7 @@ impl VectorDB for QdrantAdapter {
         let collection = Self::collection_name(data_type, field_name);
 
         {
+            #[allow(clippy::unwrap_used, reason = "lock poison is unrecoverable")]
             let shards = self.shards.read().unwrap(); // lock poison is unrecoverable
             if shards.contains_key(&collection) {
                 return Ok(true);
@@ -279,6 +282,7 @@ impl VectorDB for QdrantAdapter {
         for point in points {
             if point.vector.len() != expected_dim {
                 return Err(VectorDBError::DimensionMismatch {
+                    collection: collection.clone(),
                     expected: expected_dim,
                     actual: point.vector.len(),
                 });
@@ -357,6 +361,7 @@ impl VectorDB for QdrantAdapter {
         let collection = Self::collection_name(data_type, field_name);
         Span::current().record(COGNEE_VECTOR_COLLECTION, collection.as_str());
 
+        #[allow(clippy::unwrap_used, reason = "lock poison is unrecoverable")]
         let mut shards = self.shards.write().unwrap(); // lock poison is unrecoverable
 
         shards.remove(&collection);
@@ -426,6 +431,7 @@ impl VectorDB for QdrantAdapter {
         // Prefer the in-memory shard map (already loaded), then fall back to
         // the filesystem for any shards that were not preloaded.
         let collection_names: Vec<String> = {
+            #[allow(clippy::unwrap_used, reason = "lock poison is unrecoverable")]
             let shards = self.shards.read().unwrap(); // lock poison is unrecoverable
             shards.keys().cloned().collect()
         };
@@ -461,6 +467,11 @@ impl VectorDB for QdrantAdapter {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 mod tests {
     use super::*;
     use crate::models::VectorPoint;

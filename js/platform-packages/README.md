@@ -39,8 +39,7 @@ platform package.
 
 ## Release process
 
-See [../../docs/bindings-parity/07-js-distribution.md] for the full release
-runbook.  The short version:
+The short version:
 
 1. CI builds a matrix of (`os` × `arch`) Rust releases via
    `.github/workflows/js-prebuild.yml`.

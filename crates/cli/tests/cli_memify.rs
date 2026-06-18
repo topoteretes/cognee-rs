@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 use assert_cmd::Command;
 use predicates::prelude::*;
 use std::path::Path;
@@ -128,7 +133,7 @@ fn setup_workspace(llm: Option<&LlmEnv>) -> Workspace {
         &config_home,
         workdir.path(),
         "relational_db_url",
-        &format!("\"{}\"", db_url),
+        &format!("\"{db_url}\""),
     );
     config_set(
         &config_home,

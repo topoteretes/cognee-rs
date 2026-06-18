@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 use std::sync::Arc;
 
 use cognee_lib::add::HashAlgorithm;
@@ -118,6 +123,7 @@ async fn dataset_deletion_removes_data_records() {
                 dataset_name: "del_ds".to_string(),
             },
             mode: DeleteMode::Soft,
+            memory_only: false,
         })
         .await
         .expect("delete should succeed");
@@ -161,6 +167,7 @@ async fn dataset_deletion_removes_storage_files() {
                 dataset_name: "storage_ds".to_string(),
             },
             mode: DeleteMode::Soft,
+            memory_only: false,
         })
         .await
         .expect("delete should succeed");
@@ -234,6 +241,7 @@ async fn shared_data_preserved_on_partial_delete() {
                 dataset_name: "dataset_A".to_string(),
             },
             mode: DeleteMode::Soft,
+            memory_only: false,
         })
         .await
         .expect("delete should succeed");
@@ -285,6 +293,7 @@ async fn delete_data_with_dataset_if_empty_false_preserves_dataset() {
                 delete_dataset_if_empty: false,
             },
             mode: DeleteMode::Soft,
+            memory_only: false,
         })
         .await
         .expect("delete should succeed");
@@ -347,6 +356,7 @@ async fn delete_data_with_dataset_if_empty_true_removes_dataset() {
                 delete_dataset_if_empty: true,
             },
             mode: DeleteMode::Soft,
+            memory_only: false,
         })
         .await
         .expect("delete should succeed");
@@ -432,6 +442,7 @@ async fn delete_data_with_dataset_if_empty_true_preserves_non_empty_dataset() {
                 delete_dataset_if_empty: true,
             },
             mode: DeleteMode::Soft,
+            memory_only: false,
         })
         .await
         .expect("delete should succeed");

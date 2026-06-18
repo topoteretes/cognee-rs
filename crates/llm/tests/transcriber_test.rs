@@ -1,4 +1,9 @@
 //! Integration tests for the `Transcriber` trait and `OpenAIAdapter` implementation.
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "integration test code — panics are acceptable"
+)]
 
 use cognee_llm::LlmError;
 use cognee_llm::adapters::OpenAIAdapter;
@@ -115,7 +120,7 @@ async fn test_live_openai_transcription() {
     // the request succeeded and returned a TranscriptionOutput.
     match result {
         Ok(output) => {
-            eprintln!("Transcription output: {:?}", output);
+            eprintln!("Transcription output: {output:?}");
             // Duration should be approximately 1 second
             if let Some(dur) = output.duration {
                 assert!(dur > 0.5 && dur < 2.0, "Unexpected duration: {dur}");

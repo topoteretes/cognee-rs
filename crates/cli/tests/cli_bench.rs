@@ -7,6 +7,11 @@
 //! path local — so the full prune → setup → add → cognify → search pipeline
 //! completes offline.
 #![cfg(feature = "bench")]
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 
 use assert_cmd::Command;
 use std::fs;

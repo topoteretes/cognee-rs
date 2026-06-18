@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! Gap P5: Re-cognify after content update E2E test.
 //!
 //! Verifies that adding new content to an existing dataset, cognifying,
@@ -175,6 +180,7 @@ fn make_chunks_request(query: &str) -> SearchRequest {
         auto_feedback_detection: None,
         neighborhood_depth: None,
         neighborhood_seed_top_k: None,
+        summarize_context: None,
     }
 }
 
@@ -449,6 +455,7 @@ async fn test_recognify_after_content_update() {
                 delete_dataset_if_empty: false,
             },
             mode: DeleteMode::Hard,
+            memory_only: false,
         })
         .await
         .expect("delete text_v1 data");

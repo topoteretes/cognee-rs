@@ -38,6 +38,7 @@ fn build_postgres_url(
     user: &str,
     pass: &str,
 ) -> Result<String, String> {
+    #[allow(clippy::expect_used, reason = "invariant is upheld by construction")]
     let mut parsed = url::Url::parse("postgres://localhost").expect("static URL is always valid");
     parsed
         .set_host(Some(host))
@@ -265,6 +266,7 @@ impl ComponentManager {
 
         let (host, port, name, user, pass) = if graph_creds_complete {
             (
+                #[allow(clippy::expect_used, reason = "invariant is upheld by construction")]
                 graph_host.expect("checked above"),
                 s.graph_database_port,
                 s.graph_database_name.as_str(),
@@ -761,6 +763,11 @@ impl PipelineContext for ComponentManager {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 mod tests {
     use super::*;
     use crate::config::{ConfigManager, Settings};

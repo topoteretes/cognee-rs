@@ -1,6 +1,6 @@
 # Item 1 — Wire `PgGraphAdapter` into `ComponentManager`
 
-Parent: [../cognify-compatibility-implementation-plan.md](../cognify-compatibility-implementation-plan.md)
+Parent: [../.internal/cognify-compatibility-implementation-plan.md](../.internal/cognify-compatibility-implementation-plan.md)
 Effort: **small** · Impact: **highest (blocking)**
 Status: ✅ Implemented
 

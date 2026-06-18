@@ -54,6 +54,7 @@ pub fn setup_telemetry_analytics() -> PyResult<bool> {
 pub(crate) fn arm() -> bool {
     let slot = ARMED.get_or_init(|| Mutex::new(None));
     // lock poison is unrecoverable
+    #[allow(clippy::expect_used, reason = "lock poison is unrecoverable")]
     let mut lock = slot.lock().expect("lock poison is unrecoverable");
     if let Some(armed) = *lock {
         return armed;

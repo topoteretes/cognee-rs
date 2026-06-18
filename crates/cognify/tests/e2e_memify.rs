@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! Optional real-backend end-to-end test for the memify pipeline.
 //!
 //! Seeds a small graph directly in Ladybug (no cognify / no LLM), runs
@@ -86,6 +91,7 @@ fn make_request(query: &str, search_type: SearchType) -> SearchRequest {
         auto_feedback_detection: None,
         neighborhood_depth: None,
         neighborhood_seed_top_k: None,
+        summarize_context: None,
     }
 }
 

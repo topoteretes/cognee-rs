@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! Integration test: ontology round-trip with real RDF resolver.
 //!
 //! Uses a real `RdfLibOntologyResolver` loaded from an inline Turtle ontology
@@ -72,6 +77,7 @@ async fn test_ontology_round_trip_with_real_resolver() {
             source_node_id: "alice_1".to_string(),
             target_node_id: "tc_1".to_string(),
             relationship_name: "works_at".to_string(),
+            description: None,
         }],
     };
 

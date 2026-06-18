@@ -51,7 +51,7 @@ cognee-rust/
 ├── scripts/                    # Build, check, and deployment scripts
 ├── docs/                       # Documentation
 ├── e2e-cross-sdk/              # Cross-SDK E2E tests (Rust ↔ Python interop)
-└── .github/workflows/          # CI: lib-tests.yml, lint.yml, capi-check.yml, js-check.yml, python-check.yml
+└── .github/workflows/          # CI: ci.yml (lint/test/docs + C/Python/JS binding checks), http-parity.yml (cross-SDK, workflow_dispatch), js-prebuild.yml (Neon prebuilds)
 ```
 
 ### Crate Details
@@ -283,7 +283,7 @@ Runs in order: `cargo fmt --check` → `cargo check --all-targets` → `cargo cl
 
 ### CI (GitHub Actions)
 
-`lib-tests.yml` runs on push/PR to main: builds, caches embedding models, runs `scripts/run_tests_with_openai.sh` with `OPENAI_KEY` secret. Also runs `cargo doc --no-deps`.
+`ci.yml` runs on push/PR to main: lint (fmt + check + clippy), tests (with `OPENAI_KEY` secret via `scripts/run_tests_with_openai.sh`), `cargo doc --no-deps`, and C/Python/JS binding checks. `http-parity.yml` runs the cross-SDK Rust↔Python parity suite (`workflow_dispatch` only; see task 12). `js-prebuild.yml` builds Neon prebuilt binaries for multiple platforms.
 
 ## Coding Conventions
 

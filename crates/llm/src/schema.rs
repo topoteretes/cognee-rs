@@ -35,6 +35,10 @@ use serde_json::Value;
 /// let schema = generate_json_schema::<Person>();
 /// println!("{}", serde_json::to_string_pretty(&schema).unwrap());
 /// ```
+#[allow(
+    clippy::expect_used,
+    reason = "schemars-generated schema always serializes to valid JSON"
+)]
 pub fn generate_json_schema<T: JsonSchema>() -> Value {
     let schema = schema_for!(T);
     serde_json::to_value(schema).expect("Failed to serialize schema")
@@ -69,6 +73,10 @@ pub fn generate_json_schema<T: JsonSchema>() -> Value {
 /// let schema_str = generate_json_schema_string::<Task>(true);
 /// println!("Schema:\n{}", schema_str);
 /// ```
+#[allow(
+    clippy::expect_used,
+    reason = "schemars-generated schema always serializes to valid JSON"
+)]
 pub fn generate_json_schema_string<T: JsonSchema>(pretty: bool) -> String {
     let schema = generate_json_schema::<T>();
     if pretty {
@@ -175,6 +183,11 @@ IMPORTANT: Return ONLY the JSON object. No additional text before or after."#
 
 #[cfg(test)]
 mod tests {
+    #![allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        reason = "test code — panics are acceptable"
+    )]
     use super::*;
     use serde::{Deserialize, Serialize};
 

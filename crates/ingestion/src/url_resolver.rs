@@ -179,6 +179,11 @@ fn metadata_from_mime(essence: &str) -> (String, String, String) {
 }
 
 #[cfg(all(test, feature = "html-loader"))]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 mod tests {
     use super::*;
     use mockito::{Server, ServerGuard};

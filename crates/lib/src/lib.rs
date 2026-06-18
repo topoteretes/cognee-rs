@@ -27,10 +27,12 @@
 //! See [`docs/observability/opentelemetry.md`](https://github.com/topoteretes/cognee-rust/blob/main/docs/observability/opentelemetry.md)
 //! for the full operator guide, env-var reference, and deployment recipes.
 
+/// Core pipeline orchestration primitives.
 pub mod core {
     pub use cognee_core::*;
 }
 
+/// Data ingestion (add) pipeline.
 pub mod add {
     pub use cognee_ingestion::{
         AddParams, AddPipeline, ContentHasher, HashAlgorithm, IngestionError, ProcessedInput,
@@ -40,6 +42,7 @@ pub mod add {
     };
 }
 
+/// Knowledge-graph extraction (cognify) pipeline.
 pub mod cognify {
     #[cfg(feature = "hf-tokenizer")]
     pub use cognee_chunking::HuggingFaceTokenCounter;
@@ -51,26 +54,32 @@ pub mod cognify {
     pub use cognee_cognify::*;
 }
 
+/// Search pipeline and retrieval strategies.
 pub mod search {
     pub use cognee_search::*;
 }
 
+/// Data and dataset deletion pipeline.
 pub mod delete {
     pub use cognee_delete::*;
 }
 
+/// Core data models.
 pub mod models {
     pub use cognee_models::*;
 }
 
+/// File storage abstraction.
 pub mod storage {
     pub use cognee_storage::*;
 }
 
+/// Metadata database abstraction.
 pub mod database {
     pub use cognee_database::*;
 }
 
+/// Graph database abstraction.
 pub mod graph {
     #[cfg(feature = "ladybug")]
     pub use cognee_graph::LadybugAdapter;
@@ -82,6 +91,7 @@ pub mod graph {
     };
 }
 
+/// Vector database abstraction.
 pub mod vector {
     #[cfg(feature = "testing")]
     pub use cognee_vector::MockVectorDB;
@@ -95,6 +105,7 @@ pub mod vector {
     };
 }
 
+/// Embedding engine abstraction and providers.
 pub mod embedding {
     pub use cognee_embedding::utils::{
         handle_embedding_response, is_embeddable, sanitize_embedding_inputs,
@@ -110,14 +121,17 @@ pub mod embedding {
     };
 }
 
+/// LLM provider abstraction.
 pub mod llm {
     pub use cognee_llm::*;
 }
 
+/// Ontology resolution.
 pub mod ontology {
     pub use cognee_ontology::*;
 }
 
+/// Knowledge-graph visualization (requires `visualization` feature).
 #[cfg(feature = "visualization")]
 pub mod visualization {
     pub use cognee_visualization::*;
@@ -149,14 +163,21 @@ pub mod http {
     pub use cognee_http_server::*;
 }
 
+/// Session management.
 pub mod session;
 
+/// Top-level API functions mirroring the Python SDK.
 pub mod api;
+/// Component lifecycle management.
 pub mod component_manager;
+/// Runtime configuration management.
 pub mod config;
+/// Pipeline execution context.
 pub mod context;
+/// Component error types.
 pub mod error;
 
+/// Product-analytics telemetry.
 pub mod telemetry;
 
 pub use api::notebooks::{
@@ -168,6 +189,7 @@ pub use config::{ConfigError, ConfigManager, Settings};
 pub use context::PipelineContext;
 pub use error::ComponentError;
 
+/// Convenience re-exports for common usage.
 pub mod prelude {
     pub use crate::add::AddPipeline;
     pub use crate::api::DatasetManager;
@@ -203,12 +225,9 @@ pub mod prelude {
 }
 
 pub use add::{
-    AddParams, AddPipeline, ContentHasher, ProcessedInput, build_add_pipeline,
+    AddParams, AddPipeline, ContentHasher, ProcessedInput, build_add_pipeline, generate_dataset_id,
     make_persist_data_task, make_process_input_task, persist_data, process_input,
 };
-pub use cognee_cognify::*;
-pub use cognee_delete::*;
-pub use cognee_search::*;
 
 pub use cognee_core;
 pub use cognee_database;

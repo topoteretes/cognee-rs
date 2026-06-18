@@ -171,12 +171,11 @@ impl AuthorizedDeleteService {
             .get_dataset_by_name(dataset_name, owner_id, None)
             .await
             .map_err(|e| {
-                DeleteError::Runtime(format!("Failed to resolve dataset '{}': {e}", dataset_name))
+                DeleteError::Runtime(format!("Failed to resolve dataset '{dataset_name}': {e}"))
             })?
             .ok_or_else(|| {
                 DeleteError::Validation(format!(
-                    "Dataset '{}' was not found for owner {}",
-                    dataset_name, owner_id
+                    "Dataset '{dataset_name}' was not found for owner {owner_id}"
                 ))
             })?;
 
@@ -197,8 +196,7 @@ impl AuthorizedDeleteService {
 
         if !has_perm {
             return Err(DeleteError::PermissionDenied(format!(
-                "Principal {} does not have 'delete' permission on dataset {}",
-                principal_id, dataset_id
+                "Principal {principal_id} does not have 'delete' permission on dataset {dataset_id}"
             )));
         }
 

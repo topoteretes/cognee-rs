@@ -239,6 +239,7 @@ pub async fn post_recall(
                     session_id_opt,
                     orchestrator.as_ref(),
                     &span,
+                    None,
                 )
                 .await
                 .map_err(map_recall_error)?;

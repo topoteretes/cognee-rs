@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! Phase 10: Temporal search session integration tests.
 //!
 //! Verifies that temporal search results are stored in session history and that
@@ -143,6 +148,7 @@ fn temporal_request(query: &str, session_id: Option<&str>) -> SearchRequest {
         auto_feedback_detection: None,
         neighborhood_depth: None,
         neighborhood_seed_top_k: None,
+        summarize_context: None,
     }
 }
 

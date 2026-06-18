@@ -39,6 +39,11 @@ pub fn from_hex_opt(s: Option<&str>) -> Result<Option<Uuid>, uuid::Error> {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 mod tests {
     use super::*;
 

@@ -38,7 +38,7 @@ pub async fn serve_local_file(
     let stream = ReaderStream::new(file);
     let body = Body::from_stream(stream);
 
-    let content_disposition = format!("attachment; filename=\"{}\"", download_name);
+    let content_disposition = format!("attachment; filename=\"{download_name}\"");
 
     let response = Response::builder()
         .status(StatusCode::OK)
@@ -65,7 +65,7 @@ pub async fn serve_local_file(
 /// axum will set it automatically via its body chunking.
 #[allow(clippy::result_large_err)] // ApiError is inherently large; boxing at this level adds noise
 pub fn serve_bytes(data: Vec<u8>, download_name: &str, mime: &str) -> Result<Response, ApiError> {
-    let content_disposition = format!("attachment; filename=\"{}\"", download_name);
+    let content_disposition = format!("attachment; filename=\"{download_name}\"");
 
     let response = Response::builder()
         .status(StatusCode::OK)

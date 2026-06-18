@@ -328,6 +328,11 @@ pub fn router() -> Router<AppState> {
 // ─── Unit tests ──────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 mod tests {
     use super::*;
     use axum::{

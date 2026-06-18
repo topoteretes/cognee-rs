@@ -109,13 +109,13 @@ pub struct IndexedFieldsStats {
 impl IndexedFieldsStats {
     /// Record that `count` items were indexed for `collection`.
     pub fn record(&mut self, data_type: &str, field_name: &str, count: usize) {
-        let key = format!("{}_{}", data_type, field_name);
+        let key = format!("{data_type}_{field_name}");
         *self.field_counts.entry(key).or_insert(0) += count;
     }
 
     /// Get count for a specific `{type}_{field}` collection, or 0 if absent.
     pub fn get(&self, data_type: &str, field_name: &str) -> usize {
-        let key = format!("{}_{}", data_type, field_name);
+        let key = format!("{data_type}_{field_name}");
         self.field_counts.get(&key).copied().unwrap_or(0)
     }
 

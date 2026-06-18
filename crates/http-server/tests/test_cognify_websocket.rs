@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! Integration test: WebSocket subscribe at
 //! `GET /api/v1/cognify/subscribe/{pipeline_run_id}`.
 //!
