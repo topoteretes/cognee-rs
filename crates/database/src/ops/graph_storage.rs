@@ -14,6 +14,15 @@ use crate::entities::{edge, node};
 use crate::types::{DatabaseError, GraphEdge, GraphNode};
 use crate::uuid_hex;
 
+/// Max rows per provenance INSERT. A multi-row `insert_many` binds
+/// `rows × columns` parameters in one statement, and SQLite caps that at
+/// `SQLITE_MAX_VARIABLE_NUMBER` (999 on very old builds, 32766 since 3.32).
+/// The node/edge tables have ~10 columns, so 500 rows ≈ 5 000 bound values —
+/// comfortably under SQLite's cap and Postgres' 65 535. Without batching, a
+/// large graph (e.g. a full-length book) overflows the cap and the upsert
+/// fails with "too many SQL variables".
+const PROVENANCE_INSERT_BATCH: usize = 500;
+
 #[instrument(
     name = "cognee.db.relational.graph_storage.upsert_nodes",
     level = "info",
@@ -29,25 +38,28 @@ pub async fn upsert_nodes(
     if nodes.is_empty() {
         return Ok(());
     }
-    let models: Vec<node::ActiveModel> = nodes.iter().map(node::ActiveModel::from).collect();
-    node::Entity::insert_many(models)
-        .on_conflict(
-            OnConflict::column(node::Column::Id)
-                .update_columns([
-                    node::Column::Slug,
-                    node::Column::UserId,
-                    node::Column::DataId,
-                    node::Column::DatasetId,
-                    node::Column::Label,
-                    node::Column::NodeType,
-                    node::Column::IndexedFields,
-                    node::Column::Attributes,
-                ])
-                .to_owned(),
-        )
-        .exec(db)
-        .await
-        .map_err(map_sea_err)?;
+    // Chunk so a single statement never exceeds the DB's bound-variable cap.
+    for batch in nodes.chunks(PROVENANCE_INSERT_BATCH) {
+        let models: Vec<node::ActiveModel> = batch.iter().map(node::ActiveModel::from).collect();
+        node::Entity::insert_many(models)
+            .on_conflict(
+                OnConflict::column(node::Column::Id)
+                    .update_columns([
+                        node::Column::Slug,
+                        node::Column::UserId,
+                        node::Column::DataId,
+                        node::Column::DatasetId,
+                        node::Column::Label,
+                        node::Column::NodeType,
+                        node::Column::IndexedFields,
+                        node::Column::Attributes,
+                    ])
+                    .to_owned(),
+            )
+            .exec(db)
+            .await
+            .map_err(map_sea_err)?;
+    }
     Ok(())
 }
 
@@ -114,26 +126,29 @@ pub async fn upsert_edges(
     if edges.is_empty() {
         return Ok(());
     }
-    let models: Vec<edge::ActiveModel> = edges.iter().map(edge::ActiveModel::from).collect();
-    edge::Entity::insert_many(models)
-        .on_conflict(
-            OnConflict::column(edge::Column::Id)
-                .update_columns([
-                    edge::Column::Slug,
-                    edge::Column::UserId,
-                    edge::Column::DataId,
-                    edge::Column::DatasetId,
-                    edge::Column::SourceNodeId,
-                    edge::Column::DestinationNodeId,
-                    edge::Column::RelationshipName,
-                    edge::Column::Label,
-                    edge::Column::Attributes,
-                ])
-                .to_owned(),
-        )
-        .exec(db)
-        .await
-        .map_err(map_sea_err)?;
+    // Chunk so a single statement never exceeds the DB's bound-variable cap.
+    for batch in edges.chunks(PROVENANCE_INSERT_BATCH) {
+        let models: Vec<edge::ActiveModel> = batch.iter().map(edge::ActiveModel::from).collect();
+        edge::Entity::insert_many(models)
+            .on_conflict(
+                OnConflict::column(edge::Column::Id)
+                    .update_columns([
+                        edge::Column::Slug,
+                        edge::Column::UserId,
+                        edge::Column::DataId,
+                        edge::Column::DatasetId,
+                        edge::Column::SourceNodeId,
+                        edge::Column::DestinationNodeId,
+                        edge::Column::RelationshipName,
+                        edge::Column::Label,
+                        edge::Column::Attributes,
+                    ])
+                    .to_owned(),
+            )
+            .exec(db)
+            .await
+            .map_err(map_sea_err)?;
+    }
     Ok(())
 }
 
