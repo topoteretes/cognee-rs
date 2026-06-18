@@ -275,8 +275,14 @@ pub struct SearchArgs {
     #[arg(long = "top-k", short = 'k', default_value_t = 10)]
     pub top_k: usize,
 
+    /// Inline system prompt text. Takes precedence over --system-prompt-path.
     #[arg(long = "system-prompt")]
     pub system_prompt: Option<String>,
+
+    /// Path to a file containing the system prompt. Defaults to the configured
+    /// `default_system_prompt_path` when neither this nor --system-prompt is set.
+    #[arg(long = "system-prompt-path")]
+    pub system_prompt_path: Option<String>,
 
     #[arg(long = "session-id")]
     pub session_id: Option<String>,

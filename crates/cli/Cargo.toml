@@ -40,6 +40,7 @@ mock-llm      = ["cognee-lib/mock-llm"]
 # default.
 bench         = ["dep:tempfile"]
 onnx          = ["cognee-lib/onnx"]
+onnx-dynamic  = ["cognee-lib/onnx-dynamic"]
 ladybug       = ["cognee-lib/ladybug"]
 qdrant        = ["cognee-lib/qdrant"]
 pgvector      = ["cognee-lib/pgvector"]

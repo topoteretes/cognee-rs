@@ -5,6 +5,10 @@ edition.workspace = true
 
 [features]
 onnx         = ["dep:ort", "dep:tokenizers"]
+# Load ONNX Runtime as a shared library (dlopen at runtime via ORT_DYLIB_PATH)
+# instead of static-linking it. Required for Android, where static-linking the
+# bundled onnxruntime archive fails to link (undefined C++ symbols).
+onnx-dynamic = ["onnx", "ort/load-dynamic"]
 # GPU execution providers for ONNX Runtime — not needed in CPU-only / CI builds.
 # Enable ort-cuda or ort-tensorrt when building for a machine with NVIDIA hardware.
 ort-cuda     = ["ort/cuda"]

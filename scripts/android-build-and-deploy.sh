@@ -191,13 +191,13 @@ fi
 echo ">>> Step 1: Building workspace for ${TARGET} (${PROFILE})..."
 echo ""
 
-FEATURES="onnx_dynamic_library,cognee-cli/android-default"
+FEATURES="cognee-cli/android-default"
 if [[ "${ENABLE_LITERT}" == "true" ]]; then
     FEATURES="${FEATURES},cognee-lib/android-litert"
 fi
 
 cargo build \
-    --workspace \
+    -p cognee-cli \
     --target "${TARGET}" \
     --no-default-features \
     --features "${FEATURES}" \
