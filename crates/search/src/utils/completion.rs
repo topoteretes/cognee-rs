@@ -18,10 +18,25 @@ pub fn resolve_system_prompt(
     }
 
     if let Some(path) = system_prompt_path {
-        let prompt = fs::read_to_string(path).map_err(|error| {
-            SearchError::InvalidInput(format!("failed to read system prompt path: {error}"))
-        })?;
-        return Ok(prompt);
+        // The default config points `default_system_prompt_path` at the
+        // conventional Python filename (e.g. `answer_simple_question.txt`),
+        // but the Rust SDK ships its prompts compiled-in rather than as
+        // on-disk files. Reading a bare filename therefore fails for every
+        // entry point (CLI/HTTP/library) under the default config. Fall back
+        // to the built-in default prompt — whose text matches Python's
+        // `answer_simple_question.txt` — instead of failing the search, while
+        // logging so a genuinely mistyped custom path is still visible.
+        match fs::read_to_string(path) {
+            Ok(prompt) => return Ok(prompt),
+            Err(error) => {
+                tracing::warn!(
+                    system_prompt_path = path,
+                    %error,
+                    "system prompt path not readable; using built-in default prompt"
+                );
+                return Ok(DEFAULT_RAG_SYSTEM_PROMPT.to_string());
+            }
+        }
     }
 
     Ok(DEFAULT_RAG_SYSTEM_PROMPT.to_string())
@@ -124,6 +139,15 @@ mod tests {
     #[test]
     fn resolve_system_prompt_uses_default_when_both_are_none() {
         let result = resolve_system_prompt(None, None).unwrap();
+
+        assert_eq!(result, DEFAULT_RAG_SYSTEM_PROMPT);
+    }
+
+    #[test]
+    fn resolve_system_prompt_falls_back_to_default_for_missing_path() {
+        // The default config points at the bundled-but-not-on-disk
+        // `answer_simple_question.txt`; a missing path must not fail search.
+        let result = resolve_system_prompt(None, Some("answer_simple_question.txt")).unwrap();
 
         assert_eq!(result, DEFAULT_RAG_SYSTEM_PROMPT);
     }

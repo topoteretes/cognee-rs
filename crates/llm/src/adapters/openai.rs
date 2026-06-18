@@ -346,6 +346,52 @@ impl OpenAIAdapter {
     }
 }
 
+/// Rewrite a `schemars`-generated JSON schema so it satisfies OpenAI's
+/// **strict** structured-output requirements.
+///
+/// OpenAI's `response_format: {type: "json_schema", strict: true}` rejects any
+/// schema where an object lacks `"additionalProperties": false` or whose
+/// `"required"` array does not list *every* declared property. `schemars`
+/// (0.8, draft-07) emits neither guarantee — optional (`Option<T>`) fields are
+/// omitted from `required` and `additionalProperties` is left unset. When the
+/// strict request 400s, [`OpenAIAdapter::create_structured_output_with_messages_raw`]
+/// silently falls back to lenient JSON mode, where the model is free to drop
+/// required fields (e.g. a `Node` without its `type`), causing downstream
+/// deserialization failures.
+///
+/// This walks the schema (including `definitions`/`$defs`, `properties`,
+/// `items`, and the `anyOf`/`allOf`/`oneOf` combinators) and, for every object
+/// that declares `properties`, forces `additionalProperties: false` and sets
+/// `required` to the full set of property keys. The `Value` is cloned and
+/// returned unchanged for non-object schemas.
+fn to_strict_schema(schema: &Value) -> Value {
+    fn walk(value: &mut Value) {
+        match value {
+            Value::Object(obj) => {
+                if let Some(Value::Object(props)) = obj.get("properties") {
+                    // Every declared property must be required under strict mode.
+                    let keys: Vec<Value> = props.keys().map(|k| Value::String(k.clone())).collect();
+                    obj.insert("required".to_string(), Value::Array(keys));
+                    obj.insert("additionalProperties".to_string(), Value::Bool(false));
+                }
+                for (_k, v) in obj.iter_mut() {
+                    walk(v);
+                }
+            }
+            Value::Array(items) => {
+                for v in items.iter_mut() {
+                    walk(v);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let mut out = schema.clone();
+    walk(&mut out);
+    out
+}
+
 #[async_trait]
 impl Llm for OpenAIAdapter {
     async fn generate(
@@ -424,6 +470,12 @@ impl Llm for OpenAIAdapter {
         let opts = options.unwrap_or_default();
         let schema = json_schema;
 
+        // OpenAI strict mode requires `additionalProperties: false` and that
+        // every property appear in `required` on every object; the raw
+        // schemars schema satisfies neither, which would 400 and silently
+        // drop us into lenient mode (where required fields can go missing).
+        let strict_schema = to_strict_schema(schema);
+
         // Try strict JSON schema mode first (new OpenAI API behavior).
         let mut strict_schema_request = json!({
             "model": self.model,
@@ -432,7 +484,7 @@ impl Llm for OpenAIAdapter {
                 "type": "json_schema",
                 "json_schema": {
                     "name": "extract_structured_data",
-                    "schema": schema.clone(),
+                    "schema": strict_schema,
                     "strict": true
                 }
             }
@@ -450,51 +502,62 @@ impl Llm for OpenAIAdapter {
         }
 
         for attempt in 0..self.structured_output_retries {
-            if let Ok(strict_response) = self.call_api(strict_schema_request.clone()).await {
-                let strict_choice = strict_response.choices.first().ok_or_else(|| {
-                    LlmError::InvalidResponse("No choices in strict schema response".to_string())
-                })?;
+            match self.call_api(strict_schema_request.clone()).await {
+                Ok(strict_response) => {
+                    let strict_choice = strict_response.choices.first().ok_or_else(|| {
+                        LlmError::InvalidResponse(
+                            "No choices in strict schema response".to_string(),
+                        )
+                    })?;
 
-                if let Some(function_call) = &strict_choice.message.function_call {
-                    match parse_json(&function_call.arguments) {
-                        Ok(parsed) => return Ok(parsed),
-                        Err(e) => {
-                            if attempt + 1 < self.structured_output_retries
-                                && is_empty_or_non_json(&function_call.arguments)
-                            {
-                                continue;
+                    if let Some(function_call) = &strict_choice.message.function_call {
+                        match parse_json(&function_call.arguments) {
+                            Ok(parsed) => return Ok(parsed),
+                            Err(e) => {
+                                if attempt + 1 < self.structured_output_retries
+                                    && is_empty_or_non_json(&function_call.arguments)
+                                {
+                                    continue;
+                                }
+                                if !is_empty_or_non_json(&function_call.arguments) {
+                                    return Err(LlmError::DeserializationError(format!(
+                                        "Failed to deserialize strict function call arguments: {}. Raw: {}",
+                                        e, function_call.arguments
+                                    )));
+                                }
+                                break;
                             }
-                            if !is_empty_or_non_json(&function_call.arguments) {
-                                return Err(LlmError::DeserializationError(format!(
-                                    "Failed to deserialize strict function call arguments: {}. Raw: {}",
-                                    e, function_call.arguments
-                                )));
+                        }
+                    }
+
+                    if let Some(content) = strict_choice.message.content.as_ref() {
+                        match parse_json(content) {
+                            Ok(parsed) => return Ok(parsed),
+                            Err(e) => {
+                                if attempt + 1 < self.structured_output_retries
+                                    && is_empty_or_non_json(content)
+                                {
+                                    continue;
+                                }
+                                if !is_empty_or_non_json(content) {
+                                    return Err(LlmError::DeserializationError(format!(
+                                        "Failed to deserialize strict JSON content: {e}. Raw: {content}"
+                                    )));
+                                }
+                                break;
                             }
-                            break;
                         }
                     }
                 }
-
-                if let Some(content) = strict_choice.message.content.as_ref() {
-                    match parse_json(content) {
-                        Ok(parsed) => return Ok(parsed),
-                        Err(e) => {
-                            if attempt + 1 < self.structured_output_retries
-                                && is_empty_or_non_json(content)
-                            {
-                                continue;
-                            }
-                            if !is_empty_or_non_json(content) {
-                                return Err(LlmError::DeserializationError(format!(
-                                    "Failed to deserialize strict JSON content: {e}. Raw: {content}"
-                                )));
-                            }
-                            break;
-                        }
-                    }
+                Err(e) => {
+                    // Strict json_schema mode is unsupported by this
+                    // model/endpoint (or the schema was rejected). Fall back to
+                    // function calling / JSON mode below, but make the reason
+                    // visible — a silent fallback is how required fields end up
+                    // missing from the model's output.
+                    warn!(error = %e, "strict json_schema request failed; falling back to function/JSON mode");
+                    break;
                 }
-            } else {
-                break;
             }
         }
 
@@ -1132,5 +1195,49 @@ mod tests {
         assert_eq!(audio_mime_type("m4a"), "audio/mp4");
         assert_eq!(audio_mime_type("wav"), "audio/wav");
         assert_eq!(audio_mime_type("webm"), "audio/webm");
+    }
+
+    #[test]
+    fn test_to_strict_schema_marks_all_required_and_closes_objects() {
+        // Mirrors the schemars-0.8 shape: an optional field omitted from
+        // `required`, nested object behind `definitions`/`$ref`, and no
+        // `additionalProperties` set anywhere.
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "nodes": { "type": "array", "items": { "$ref": "#/definitions/Node" } }
+            },
+            "required": ["nodes"],
+            "definitions": {
+                "Node": {
+                    "type": "object",
+                    "properties": {
+                        "name": { "type": "string" },
+                        "type": { "type": "string" },
+                        "description": { "type": ["string", "null"] }
+                    },
+                    "required": ["name", "type"]
+                }
+            }
+        });
+
+        let strict = to_strict_schema(&schema);
+
+        // Root object closed + all props required.
+        assert_eq!(strict["additionalProperties"], json!(false));
+        assert_eq!(strict["required"], json!(["nodes"]));
+
+        // Nested object inside definitions: every property now required
+        // (including the previously-optional `description`) and closed.
+        let node = &strict["definitions"]["Node"];
+        assert_eq!(node["additionalProperties"], json!(false));
+        let mut req: Vec<String> = node["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap().to_string())
+            .collect();
+        req.sort();
+        assert_eq!(req, vec!["description", "name", "type"]);
     }
 }
