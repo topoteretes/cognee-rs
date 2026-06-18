@@ -144,7 +144,7 @@ jobs:
           -f cognee-rust/e2e-cross-sdk/docker-compose.yml
           run --rm e2e-http-tests
           pytest -vs /harness/
-          -k "test_http_(health|auth|datasets|add|search|forget|openapi|errors|self)"
+          -k "test_http_health or test_http_auth or test_http_datasets or test_http_add or test_http_search or test_http_forget or test_http_openapi or test_http_errors or test_http_self"
           --tb=short
 
       # ── Telemetry parity: cross-SDK identity-layer comparison ────────────
@@ -175,7 +175,7 @@ jobs:
           -f cognee-rust/e2e-cross-sdk/docker-compose.yml
           run --rm e2e-http-tests
           pytest -vs /harness/
-          -k "test_http_(cognify|remember|recall|memify|improve|llm)"
+          -k "test_http_cognify or test_http_remember or test_http_recall or test_http_memify or test_http_improve or test_http_llm"
           --tb=short
 
       # ── Cross-SDK provenance parity (LLM-gated) ─────────────────────────
@@ -224,5 +224,5 @@ jobs:
           -f cognee-rust/e2e-cross-sdk/docker-compose.yml
           run --rm e2e-http-tests
           pytest -vs /harness/
-          -k "test_http_(websocket|sync|permissions|visualize)"
+          -k "test_http_websocket or test_http_sync or test_http_permissions or test_http_visualize"
           --tb=short
