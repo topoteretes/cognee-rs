@@ -495,11 +495,13 @@ def read_stored_file(data_root: Path, raw_data_location: str) -> bytes:
 
 # ── Search helpers ───────────────────────────────────────────────────────────
 
-# The Rust CLI emits output through `tracing::info!`; the default
-# `tracing_subscriber::fmt` formatter (a) wraps the timestamp and level in ANSI
-# color escapes and (b) prefixes a line like:
-#   ``\x1b[2m2026-04-13T12:34:56.789Z\x1b[0m \x1b[32m INFO\x1b[0m Response: hello``
-# We strip the ANSI escapes first, then the timestamp+level prefix.
+# The Rust CLI prints search results to stdout via `println!` (plain, no log
+# prefix). Dependency-crate logging may still reach stdout through the tracing
+# subscriber, whose default `fmt` formatter (a) wraps the timestamp and level in
+# ANSI color escapes and (b) prefixes a line like:
+#   ``\x1b[2m2026-04-13T12:34:56.789Z\x1b[0m \x1b[32m INFO\x1b[0m some log line``
+# We strip the ANSI escapes first, then the timestamp+level prefix, so any
+# stray log lines collapse to empty/noise and the plain result lines survive.
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*m")
 _LOG_PREFIX_RE = re.compile(
     r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z?\s+(?:TRACE|DEBUG|INFO|WARN|ERROR)\s+"
@@ -514,9 +516,10 @@ _RUST_NOISE_LINES = (
 
 # To quieten the Rust CLI so we can isolate the actual search payload from the
 # dependency-crate logging (sqlx migrations, qdrant segment WALs, ort model
-# loading, etc.) we restrict tracing to errors globally and keep the CLI's own
-# info output (which is where `render_output` emits results).
-RUST_SEARCH_LOG_FILTER = "error,cognee_cli=info"
+# loading, etc.) we restrict tracing to errors globally. Search results reach
+# stdout via `println!` regardless of log level, so no info-level filter is
+# needed to capture them.
+RUST_SEARCH_LOG_FILTER = "error"
 
 
 def _strip_log_prefix(line: str) -> str:
@@ -612,7 +615,7 @@ def _ensure_rust_system_prompt(workdir: Path) -> Path:
     The Rust CLI defaults to the filename ``answer_simple_question.txt`` and
     tries to read it literally as a path — it is not bundled with prompt
     templates the way the Python SDK is.  Completion searches (GRAPH_COMPLETION,
-    RAG_COMPLETION) therefore need a real file at ``--system-prompt``.
+    RAG_COMPLETION) therefore need a real file passed via ``--system-prompt-path``.
     """
     prompt_path = workdir / "answer_simple_question.txt"
     if not prompt_path.exists():
@@ -643,7 +646,7 @@ def run_rust_search(
         str(top_k),
         "-f",
         "simple",
-        "--system-prompt",
+        "--system-prompt-path",
         str(prompt_path),
     ]
     if dataset:

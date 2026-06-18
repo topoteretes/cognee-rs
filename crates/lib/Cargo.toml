@@ -46,6 +46,7 @@ mock-llm       = ["cognee-llm/mock"]
 server         = ["dep:cognee-http-server"]
 visualization  = ["dep:cognee-visualization"]
 onnx           = ["cognee-embedding/onnx"]
+onnx-dynamic   = ["cognee-embedding/onnx-dynamic"]
 ort-cuda       = ["cognee-embedding/ort-cuda"]
 ort-tensorrt   = ["cognee-embedding/ort-tensorrt"]
 ladybug        = ["cognee-graph/ladybug"]
@@ -93,7 +94,7 @@ unstructured-odp  = ["cognee-ingestion/unstructured-odp"]
 
 # Composite feature for Android builds (no pdfium, no PostgreSQL, no tiktoken)
 android-default = [
-    "onnx",
+    "onnx-dynamic",
     "ladybug",
     "qdrant",
     "sqlite",

@@ -6,7 +6,7 @@ use cognee_lib::search::{
     SessionManager,
 };
 use cognee_lib::{ComponentManager, PipelineContext};
-use tracing::{info, warn};
+use tracing::warn;
 use uuid::Uuid;
 
 use crate::cli::{OutputFormatArg, QueryTypeArg, SearchArgs};
@@ -35,13 +35,21 @@ pub fn run(args: SearchArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> 
         ))
     })?;
 
-    let system_prompt = args.system_prompt.unwrap_or_else(|| {
-        if settings.default_system_prompt_path.is_empty() {
-            DEFAULT_SYSTEM_PROMPT_PATH.to_string()
-        } else {
-            settings.default_system_prompt_path.clone()
-        }
-    });
+    // `--system-prompt` is inline prompt text and takes precedence. Otherwise
+    // fall back to a prompt file path (`--system-prompt-path`, then the
+    // configured default, then the built-in default filename).
+    let (inline_system_prompt, system_prompt_path) = if let Some(inline) = args.system_prompt {
+        (Some(inline), None)
+    } else {
+        let path = args.system_prompt_path.unwrap_or_else(|| {
+            if settings.default_system_prompt_path.is_empty() {
+                DEFAULT_SYSTEM_PROMPT_PATH.to_string()
+            } else {
+                settings.default_system_prompt_path.clone()
+            }
+        });
+        (None, Some(path))
+    };
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -92,8 +100,8 @@ pub fn run(args: SearchArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> 
             top_k: Some(args.top_k),
             datasets,
             dataset_ids: None,
-            system_prompt: None,
-            system_prompt_path: Some(system_prompt),
+            system_prompt: inline_system_prompt,
+            system_prompt_path,
             only_context: Some(false),
             use_combined_context: Some(false),
             session_id: args.session_id,
@@ -161,9 +169,12 @@ fn render_output(
     response: &SearchResponse,
     output_format: OutputFormatArg,
 ) -> Result<(), CliError> {
+    // Search results are the command's primary output and must reach stdout
+    // regardless of the active log level (RUST_LOG), so they use `println!`
+    // rather than the tracing logger.
     match output_format {
         OutputFormatArg::Json => {
-            info!(
+            println!(
                 "{}",
                 serde_json::to_string_pretty(response).map_err(|error| {
                     CliError::Runtime(format!("Failed to render JSON output: {error}"))
@@ -171,52 +182,52 @@ fn render_output(
             );
         }
         OutputFormatArg::Simple => match &response.result {
-            SearchOutput::Text(text) => info!("{text}"),
+            SearchOutput::Text(text) => println!("{text}"),
             SearchOutput::Texts(items) => {
                 for item in items {
-                    info!("{item}");
+                    println!("{item}");
                 }
             }
             SearchOutput::Items(items) => {
                 for item in items {
-                    info!("{}", item.payload);
+                    println!("{}", item.payload);
                 }
             }
-            other => info!("{:?}", other),
+            other => println!("{:?}", other),
         },
         OutputFormatArg::Pretty => match &response.result {
             SearchOutput::Text(text) => {
-                info!("Response: {text}");
+                println!("Response: {text}");
             }
             SearchOutput::Texts(items) => {
                 if items.is_empty() {
-                    info!("No results found for your query.");
+                    println!("No results found for your query.");
                 } else {
-                    info!("Found {} result(s):", items.len());
+                    println!("Found {} result(s):", items.len());
                     for (index, item) in items.iter().enumerate() {
-                        info!("{}. {}", index + 1, item);
+                        println!("{}. {}", index + 1, item);
                     }
                 }
             }
             SearchOutput::Items(items) => {
                 if items.is_empty() {
-                    info!("No results found for your query.");
+                    println!("No results found for your query.");
                 } else {
-                    info!("Found {} result(s):", items.len());
+                    println!("Found {} result(s):", items.len());
                     for (index, item) in items.iter().enumerate() {
-                        info!("Result {}:", index + 1);
-                        info!("  Score: {:?}", item.score);
-                        info!("  Payload: {}", item.payload);
+                        println!("Result {}:", index + 1);
+                        println!("  Score: {:?}", item.score);
+                        println!("  Payload: {}", item.payload);
                     }
                 }
             }
             SearchOutput::GraphQueryRows(rows) => {
                 if rows.is_empty() {
-                    info!("No rows returned.");
+                    println!("No rows returned.");
                 } else {
-                    info!("Returned {} row(s):", rows.len());
+                    println!("Returned {} row(s):", rows.len());
                     for (index, row) in rows.iter().enumerate() {
-                        info!(
+                        println!(
                             "Row {}: {}",
                             index + 1,
                             serde_json::Value::Array(row.clone())
@@ -226,16 +237,16 @@ fn render_output(
             }
             SearchOutput::Rules(rules) => {
                 if rules.is_empty() {
-                    info!("No rules returned.");
+                    println!("No rules returned.");
                 } else {
-                    info!("Found {} rule(s):", rules.len());
+                    println!("Found {} rule(s):", rules.len());
                     for (index, rule) in rules.iter().enumerate() {
-                        info!("{}. [{}] {}", index + 1, rule.node_set, rule.text);
+                        println!("{}. [{}] {}", index + 1, rule.node_set, rule.text);
                     }
                 }
             }
-            SearchOutput::Ack { message } => info!("{message}"),
-            SearchOutput::Structured(value) => info!("{}", value),
+            SearchOutput::Ack { message } => println!("{message}"),
+            SearchOutput::Structured(value) => println!("{}", value),
         },
     }
 
