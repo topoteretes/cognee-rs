@@ -227,39 +227,65 @@ pub async fn process_input(
         let doc_type = cognee_models::doc_type_for_extension(&original_extension)
             .unwrap_or("text")
             .to_string();
-        let loader = registry.get(&doc_type).ok_or_else(|| {
-            Box::new(IngestionError::UnsupportedDocumentType {
-                document_type: doc_type.clone(),
-            }) as Box<dyn std::error::Error>
-        })?;
 
-        // Minimal Document descriptor for the loader (only metadata fields the
-        // loaders read; the bytes are passed separately).
-        let descriptor = build_loader_descriptor(
-            data_id,
-            &extract_name(input, &content_hash),
-            &original_extension,
-            &original_mime_type,
-        );
+        // Binary/non-text blob fallback (pre-task-17 raw-storage parity).
+        //
+        // Rust classifies by extension only, so a file with no (or an unknown)
+        // extension falls back to `doc_type = "text"` and the text loader. The
+        // text loader rejects non-UTF-8 bytes, which would make `add` fail for
+        // generic binary blobs that have no specific loader — a regression
+        // introduced by running loaders at ADD time (task 17).
+        //
+        // Match the pre-task-17 behaviour: when the would-be loader is the
+        // *text* loader but the bytes are not valid UTF-8 text, store the RAW
+        // bytes verbatim instead of running text extraction. This only affects
+        // the generic-text fallback path: files routed to a real loader by
+        // their extension (text/csv/html/pdf — actually-text content; or
+        // image/audio — `UnsupportedDocumentType`) are unchanged.
+        let is_text_doc_type = doc_type == "text";
+        if is_text_doc_type && std::str::from_utf8(&collected).is_err() {
+            let stored_name = format!("text_{content_hash}.bin");
+            let location = storage.store(&collected, &stored_name).await?;
+            // Raw bytes are stored verbatim, so `raw_content_hash` equals the
+            // (content-only) `content_hash` of those same bytes.
+            (location, content_hash.clone())
+        } else {
+            let loader = registry.get(&doc_type).ok_or_else(|| {
+                Box::new(IngestionError::UnsupportedDocumentType {
+                    document_type: doc_type.clone(),
+                }) as Box<dyn std::error::Error>
+            })?;
 
-        let extracted_text = match loader.extract(&collected, &descriptor).await? {
-            LoaderOutput::Text(t) => t,
-            LoaderOutput::Rows(rows) => rows.join("\n\n"),
-            LoaderOutput::SingleChunk { text, .. } => text,
-        };
-        let extracted_bytes = extracted_text.into_bytes();
+            // Minimal Document descriptor for the loader (only metadata fields
+            // the loaders read; the bytes are passed separately).
+            let descriptor = build_loader_descriptor(
+                data_id,
+                &extract_name(input, &content_hash),
+                &original_extension,
+                &original_mime_type,
+            );
 
-        let stored_name = format!("text_{content_hash}.txt");
-        let location = storage.store(&extracted_bytes, &stored_name).await?;
+            let extracted_text = match loader.extract(&collected, &descriptor).await? {
+                LoaderOutput::Text(t) => t,
+                LoaderOutput::Rows(rows) => rows.join("\n\n"),
+                LoaderOutput::SingleChunk { text, .. } => text,
+            };
+            let extracted_bytes = extracted_text.into_bytes();
 
-        // Stored-file metadata now describes the extracted text.
-        stored_extension = "txt".to_string();
-        stored_mime_type = "text/plain".to_string();
-        loader_engine = loader.engine_name().to_string();
+            let stored_name = format!("text_{content_hash}.txt");
+            let location = storage.store(&extracted_bytes, &stored_name).await?;
 
-        let raw_content_hash =
-            crate::content_hasher::ContentHasher::hash_content(&extracted_bytes, hash_algorithm);
-        (location, raw_content_hash)
+            // Stored-file metadata now describes the extracted text.
+            stored_extension = "txt".to_string();
+            stored_mime_type = "text/plain".to_string();
+            loader_engine = loader.engine_name().to_string();
+
+            let raw_content_hash = crate::content_hasher::ContentHasher::hash_content(
+                &extracted_bytes,
+                hash_algorithm,
+            );
+            (location, raw_content_hash)
+        }
     };
 
     // Compute derived fields that previously lived in add()
