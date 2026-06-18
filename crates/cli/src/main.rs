@@ -9,6 +9,8 @@ use std::sync::Arc;
 use clap::Parser;
 use cli::{Cli, Commands};
 use cognee_lib::{ComponentManager, ConfigManager};
+#[cfg(feature = "bench")]
+use commands::bench;
 #[cfg(feature = "cloud")]
 use commands::disconnect;
 #[cfg(feature = "cloud")]
@@ -42,6 +44,8 @@ fn run(settings: Settings) -> Result<(), CliError> {
         Commands::Serve(args) => serve::run(args, Arc::clone(&cm)),
         #[cfg(feature = "cloud")]
         Commands::Disconnect(args) => disconnect::run(args, Arc::clone(&cm)),
+        #[cfg(feature = "bench")]
+        Commands::Bench(args) => bench::run(args, Arc::clone(&cm)),
     }
 }
 

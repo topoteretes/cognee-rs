@@ -39,11 +39,18 @@ default = [
     "unstructured",
     "visualization",
     "cloud",
+    "mock-llm",
+    "bench",
     # decision 1: telemetry is ON by default in cognee-cli. Disable with
     # --no-default-features for compile-time opt-out.
     "telemetry",
 ]
 cloud         = ["cognee-lib/cloud"]
+mock-llm      = ["cognee-lib/mock-llm"]
+# `bench` adds the `bench` subcommand (perf orchestrator driver). Pulls no heavy
+# deps — just reuses the existing pipeline wiring + tempfile — so it is on by
+# default.
+bench         = ["dep:tempfile"]
 onnx          = ["cognee-lib/onnx"]
 # Platform-specific GPU acceleration for ONNX Runtime (opt-in, NOT in default).
 # Enable for NVIDIA hardware: --features ort-cuda or --features ort-tensorrt.
@@ -91,6 +98,8 @@ tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 uuid.workspace = true
+# Optional: only pulled in by the `bench` feature (per-run temp isolation).
+tempfile = { workspace = true, optional = true }
 
 [dev-dependencies]
 assert_cmd.workspace = true

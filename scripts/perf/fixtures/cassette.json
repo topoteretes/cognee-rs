@@ -1,0 +1,3484 @@
+{
+  "version": 1,
+  "model": "gpt-4o-mini",
+  "entries": {
+    "05fb6278db240d295d2fe7f69d2ef9c42ce457583b06800f6cde3f2bf6404458": {
+      "method": "structured_output",
+      "user_input_preview": "Title: First Day at University\n\nI remember my first day at the University of Belgrade. The campus was bustling with new ",
+      "schema_name": "SummarizedContent",
+      "response": {
+        "summary": "The author's initial experience at the University of Belgrade was filled with excitement and anxiety as they began their Computer Science studies.",
+        "description": "On the first day at the University of Belgrade, the campus was lively with incoming students, evoking feelings of both anticipation and nervousness. The author started their journey in the Computer Science program, which would influence their next four years, highlighted by an inspiring introductory lecture from a professor about the future of computing."
+      }
+    },
+    "0603c47a0609b2d6e4f8e5ae9ed2aaf5d30633e4ca85e02e97f29493ca530577": {
+      "method": "structured_output",
+      "user_input_preview": "Title: The Importance of Backups\n\nI learned the importance of backups when my laptop's hard drive failed in 2016, taking",
+      "schema_name": "SummarizedContent",
+      "response": {
+        "summary": "The significance of backups became clear to me after losing six months of personal projects due to a hard drive failure in 2016. Since then, I have implemented automated backups to both an external drive and cloud storage.",
+        "description": "In 2016, I experienced a hard drive failure on my laptop that resulted in the loss of six months' worth of personal projects, highlighting the critical need for backups. Following this incident, I established a system for automated backups to an external drive and cloud storage, adhering to the principle that data must be stored in multiple locations to ensure its existence."
+      }
+    },
+    "061e4e2a435270d0487a57ff3ffcbb25f560454e383d38652e27e70c66d6f3f6": {
+      "method": "structured_output",
+      "user_input_preview": "Title: Setting Up My First Server\n\nI set up my first Linux server in 2011 — a Debian box running Apache and MySQL. I spe",
+      "schema_name": "KnowledgeGraph",
+      "response": {
+        "nodes": [
+          {
+            "id": "Linux",
+            "name": "Linux",
+            "type": "CONCEPT",
+            "description": "Linux is a family of open-source Unix-like operating systems based on the Linux kernel."
+          },
+          {
+            "id": "Debian",
+            "name": "Debian",
+            "type": "CONCEPT",
+            "description": "Debian is a popular Linux distribution known for its stability and extensive software repositories."
+          },
+          {
+            "id": "Apache",
+            "name": "Apache",
+            "type": "CONCEPT",
+            "description": "Apache is a widely-used open-source web server software."
+          },
+          {
+            "id": "MySQL",
+            "name": "MySQL",
+            "type": "CONCEPT",
+            "description": "MySQL is an open-source relational database management system."
+          },
+          {
+            "id": "2011",
+            "name": "2011",
+            "type": "DATE",
+            "description": "The year when the first Linux server was set up."
+          },
+          {
+            "id": "iptables",
+            "name": "iptables",
+            "type": "CONCEPT",
+            "description": "iptables is a user-space utility program that allows a system administrator to configure the IP packet filter rules of the Linux kernel."
+          },
+          {
+            "id": "SSH keys",
+            "name": "SSH keys",
+            "type": "CONCEPT",
+            "description": "SSH keys are a pair of cryptographic keys used for secure access to servers."
+          },
+          {
+            "id": "port 22",
+            "name": "port 22",
+            "type": "CONCEPT",
+            "description": "Port 22 is the default port used for SSH connections."
+          },
+          {
+            "id": "website",
+            "name": "website",
+            "type": "CONCEPT",
+            "description": "A website is a collection of related web pages located under a single domain name."
+          },
+          {
+            "id": "sysadmin",
+            "name": "sysadmin",
+            "type": "CONCEPT",
+            "description": "A sysadmin, or system administrator, is responsible for managing and maintaining computer systems."
+          }
+        ],
+        "edges": [
+          {
+            "source_node_id": "2011",
+            "target_node_id": "Linux",
+            "relationship_name": "set_up"
+          },
+          {
+            "source_node_id": "Linux",
+            "target_node_id": "Debian",
+            "relationship_name": "uses"
+          },
+          {
+            "source_node_id": "Linux",
+            "target_node_id": "Apache",
+            "relationship_name": "runs"
+          },
+          {
+            "source_node_id": "Linux",
+            "target_node_id": "MySQL",
+            "relationship_name": "runs"
+          },
+          {
+            "source_node_id": "Linux",
+            "target_node_id": "iptables",
+            "relationship_name": "configures"
+          },
+          {
+            "source_node_id": "Linux",
+            "target_node_id": "SSH keys",
+            "relationship_name": "configures"
+          },
+          {
+            "source_node_id": "Linux",
+            "target_node_id": "port 22",
+            "relationship_name": "uses"
+          },
+          {
+            "source_node_id": "Linux",
+            "target_node_id": "website",
+            "relationship_name": "hosts"
+          },
+          {
+            "source_node_id": "Linux",
+            "target_node_id": "sysadmin",
+            "relationship_name": "managed_by"
+          }
+        ]
+      }
+    },
+    "0949e1abc0ce108c6eacfb2469953d3bcbeb790b2ea00b0447bfedf897f518b2": {
+      "method": "structured_output",
+      "user_input_preview": "Title: Learning to Ride a Bicycle\n\nMy grandfather taught me to ride a bicycle in the park near our house when I was six ",
+      "schema_name": "SummarizedContent",
+      "response": {
+        "summary": "My grandfather taught me to ride a bike when I was six, supporting me until I balanced on my own, leading to a joyful moment despite a subsequent crash into a bush.",
+        "description": "At the age of six, my grandfather guided me in learning to ride a bicycle in a nearby park. He initially held the back of the seat while running beside me until I achieved balance. The exhilarating moment he released me was filled with happiness, even though I soon crashed into a bush."
+      }
+    },
+    "0ae128d23c37c0a5fa49463f1e86ffaec6735e9ea1a037b4a73b6b18d996ec8c": {
+      "method": "structured_output",
+      "user_input_preview": "Title: Visiting a Museum in Florence\n\nSeeing Michelangelo's David at the Galleria dell'Accademia in Florence was overwhe",
+      "schema_name": "KnowledgeGraph",
+      "response": {
+        "nodes": [
+          {
+            "id": "Michelangelo",
+            "name": "Michelangelo",
+            "type": "PERSON",
+            "description": "Michelangelo was an Italian sculptor, painter, and architect, renowned for his masterpieces including the statue of David."
+          },
+          {
+            "id": "Florence",
+            "name": "Florence",
+            "type": "LOCATION",
+            "description": "Florence is a city in Italy known for its rich history, art, and architecture, and is home to many famous museums."
+          },
+          {
+            "id": "Galleria dell'Accademia",
+            "name": "Galleria dell'Accademia",
+            "type": "ORGANIZATION",
+            "description": "Galleria dell'Accademia is a prominent art museum in Florence, famous for housing Michelangelo's David."
+          },
+          {
+            "id": "David",
+            "name": "David",
+            "type": "CONCEPT",
+            "description": "David is a renowned marble sculpture created by Michelangelo, representing the biblical hero."
+          }
+        ],
+        "edges": [
+          {
+            "source_node_id": "Michelangelo",
+            "target_node_id": "David",
+            "relationship_name": "created"
+          },
+          {
+            "source_node_id": "Galleria dell'Accademia",
+            "target_node_id": "David",
+            "relationship_name": "houses"
+          },
+          {
+            "source_node_id": "Galleria dell'Accademia",
+            "target_node_id": "Florence",
+            "relationship_name": "located_in"
+          }
+        ]
+      }
+    },
+    "0db24cab16935df50334b663536403e8e39d77e73f3b41851eef7cc72e4eda01": {
+      "method": "structured_output",
+      "user_input_preview": "Title: First Programming Language\n\nI wrote my first program in BASIC on a Commodore 64 when I was twelve. It was a simpl",
+      "schema_name": "KnowledgeGraph",
+      "response": {
+        "nodes": [
+          {
+            "id": "BASIC",
+            "name": "BASIC",
+            "type": "CONCEPT",
+            "description": "BASIC is a high-level programming language designed for ease of use, often used for teaching programming."
+          },
+          {
+            "id": "Commodore 64",
+            "name": "Commodore 64",
+            "type": "CONCEPT",
+            "description": "The Commodore 64 is an 8-bit home computer introduced in 1982, known for its popularity in the 1980s."
+          },
+          {
+            "id": "programming",
+            "name": "programming",
+            "type": "CONCEPT",
+            "description": "Programming is the process of designing and building executable computer software to accomplish a specific task."
+          }
+        ],
+        "edges": [
+          {
+            "source_node_id": "BASIC",
+            "target_node_id": "Commodore 64",
+            "relationship_name": "used_on"
+          },
+          {
+            "source_node_id": "programming",
+            "target_node_id": "BASIC",
+            "relationship_name": "involves"
+          }
+        ]
+      }
+    },
+    "148fafc3c329c58b8dba7dcd2d8a20a893cbab3b42167c967ab0bee62f3c8b1a": {
+      "method": "structured_output",
+      "user_input_preview": "Title: Building a Treehouse\n\nMy father and I built a treehouse in the oak tree in our backyard when I was ten. We spent ",
+      "schema_name": "KnowledgeGraph",
+      "response": {
+        "nodes": [
+          {
+            "id": "father",
+            "name": "father",
+            "type": "PERSON",
+            "description": "The narrator's father who helped build a treehouse."
+          },
+          {
+            "id": "oak_tree",
+            "name": "oak tree",
+            "type": "LOCATION",
+            "description": "The type of tree where the treehouse was built."
+          },
+          {
+            "id": "backyard",
+            "name": "backyard",
+            "type": "LOCATION",
+            "description": "The area behind the house where the treehouse was constructed."
+          },
+          {
+            "id": "treehouse",
+            "name": "treehouse",
+            "type": "CONCEPT",
+            "description": "A structure built in a tree, used by the narrator as a reading nook."
+          },
+          {
+            "id": "childhood",
+            "name": "childhood",
+            "type": "CONCEPT",
+            "description": "The period of life when the narrator was ten years old and built the treehouse."
+          },
+          {
+            "id": "DIY",
+            "name": "DIY",
+            "type": "CONCEPT",
+            "description": "Do-it-yourself activities, such as building a treehouse."
+          }
+        ],
+        "edges": [
+          {
+            "source_node_id": "father",
+            "target_node_id": "treehouse",
+            "relationship_name": "helped_build"
+          },
+          {
+            "source_node_id": "treehouse",
+            "target_node_id": "oak_tree",
+            "relationship_name": "built_in"
+          },
+          {
+            "source_node_id": "treehouse",
+            "target_node_id": "backyard",
+            "relationship_name": "located_in"
+          },
+          {
+            "source_node_id": "treehouse",
+            "target_node_id": "childhood",
+            "relationship_name": "associated_with"
+          },
+          {
+            "source_node_id": "treehouse",
+            "target_node_id": "DIY",
+            "relationship_name": "related_to"
+          }
+        ]
+      }
+    },
+    "176f04038710b016afc91908ecd171813ac8a5c166960eb17fa29eff8f4d10f9": {
+      "method": "structured_output",
+      "user_input_preview": "Title: First Open Source Contribution\n\nMy first open source contribution was a bug fix to a Python logging library in 20",
+      "schema_name": "KnowledgeGraph",
+      "response": {
+        "nodes": [
+          {
+            "id": "First Open Source Contribution",
+            "name": "First Open Source Contribution",
+            "type": "CONCEPT",
+            "description": "The initial contribution made to an open source project, specifically a bug fix in this context."
+          },
+          {
+            "id": "Python",
+            "name": "Python",
+            "type": "CONCEPT",
+            "description": "A high-level programming language known for its readability and versatility."
+          },
+          {
+            "id": "2014",
+            "name": "2014",
+            "type": "DATE",
+            "description": "The year when the first open source contribution was made."
+          },
+          {
+            "id": "bug fix",
+            "name": "bug fix",
+            "type": "CONCEPT",
+            "description": "A correction made to a software program to resolve an error or issue."
+          },
+          {
+            "id": "race condition",
+            "name": "race condition",
+            "type": "CONCEPT",
+            "description": "A situation in computing where the behavior of software depends on the sequence or timing of uncontrollable events."
+          },
+          {
+            "id": "file rotation handler",
+            "name": "file rotation handler",
+            "type": "CONCEPT",
+            "description": "A component in logging systems that manages the creation and deletion of log files."
+          },
+          {
+            "id": "pull request",
+            "name": "pull request",
+            "type": "CONCEPT",
+            "description": "A method of submitting contributions to a software project, where changes are proposed for review."
+          },
+          {
+            "id": "changelog",
+            "name": "changelog",
+            "type": "CONCEPT",
+            "description": "A log or record of changes made to a project, often including contributions and bug fixes."
+          }
+        ],
+        "edges": [
+          {
+            "source_node_id": "First Open Source Contribution",
+            "target_node_id": "Python",
+            "relationship_name": "involves"
+          },
+          {
+            "source_node_id": "First Open Source Contribution",
+            "target_node_id": "2014",
+            "relationship_name": "occurred_in"
+          },
+          {
+            "source_node_id": "First Open Source Contribution",
+            "target_node_id": "bug fix",
+            "relationship_name": "is_a"
+          },
+          {
+            "source_node_id": "bug fix",
+            "target_node_id": "race condition",
+            "relationship_name": "addresses"
+          },
+          {
+            "source_node_id": "bug fix",
+            "target_node_id": "file rotation handler",
+            "relationship_name": "related_to"
+          },
+          {
+            "source_node_id": "First Open Source Contribution",
+            "target_node_id": "pull request",
+            "relationship_name": "involves"
+          },
+          {
+            "source_node_id": "pull request",
+            "target_node_id": "changelog",
+            "relationship_name": "updates"
+          }
+        ]
+      }
+    },
+    "17f3f229483cf5775cc08fda9567e2d5944b3b51c07735617ffa1468d35bf669": {
+      "method": "structured_output",
+      "user_input_preview": "Title: Moving to a New City\n\nWhen I moved to Berlin in 2018, I knew nobody in the city. The first month was lonely — I s",
+      "schema_name": "KnowledgeGraph",
+      "response": {
+        "nodes": [
+          {
+            "id": "Berlin",
+            "name": "Berlin",
+            "type": "LOCATION",
+            "description": "Berlin is the capital city of Germany, known for its rich history and vibrant culture."
+          },
+          {
+            "id": "Kreuzberg",
+            "name": "Kreuzberg",
+            "type": "LOCATION",
+            "description": "Kreuzberg is a district in Berlin, famous for its diverse community and artistic scene."
+          },
+          {
+            "id": "2018",
+            "name": "2018",
+            "type": "DATE",
+            "description": "The year when the author moved to Berlin."
+          }
+        ],
+        "edges": [
+          {
+            "source_node_id": "Berlin",
+            "target_node_id": "Kreuzberg",
+            "relationship_name": "located_in"
+          }
+        ]
+      }
+    },
+    "1c2f3af45b34be6f0616b41d7f83af99ce61308d00b676b834e068be6c4c18af": {
+      "method": "structured_output",
+      "user_input_preview": "Title: First Day at University\n\nI remember my first day at the University of Belgrade. The campus was bustling with new ",
+      "schema_name": "KnowledgeGraph",
+      "response": {
+        "nodes": [
+          {
+            "id": "University of Belgrade",
+            "name": "University of Belgrade",
+            "type": "ORGANIZATION",
+            "description": "A prominent university located in Belgrade, Serbia, known for its diverse academic programs."
+          },
+          {
+            "id": "Computer Science",
+            "name": "Computer Science",
+            "type": "CONCEPT",
+            "description": "An academic discipline that studies the principles and use of computers and computational systems."
+          }
+        ],
+        "edges": [
+          {
+            "source_node_id": "University of Belgrade",
+            "target_node_id": "Computer Science",
+            "relationship_name": "offers"
+          }
+        ]
+      }
+    },
+    "1ce155dbf6159d25bcd20cbed85ad8f880303a2091e28a75c76b277b1b656bf0": {
+      "method": "structured_output",
+      "user_input_preview": "Title: A Sunrise Over the Mountains\n\nI woke up at 4 AM to hike to a summit in the Dolomites to watch the sunrise. The tr",
+      "schema_name": "SummarizedContent",
+      "response": {
+        "summary": "An early morning hike in the Dolomites led to a breathtaking sunrise at the summit.",
+        "description": "At 4 AM, I embarked on a hike to a peak in the Dolomites, navigating a dark and chilly trail illuminated only by my headlamp. As the sun rose, the mountain faces transformed into hues of orange and pink, and I lingered in solitude for thirty minutes, captivated by the view."
+      }
+    },
+    "22a28a10e4123b4b3230ce531293d43a7217d8deac6b9fc485503914cd7113a5": {
+      "method": "structured_output",
+      "user_input_preview": "Title: A Broken Deployment Pipeline\n\nOur CI/CD pipeline broke silently for two weeks in 2021 — tests were passing but no",
+      "schema_name": "SummarizedContent",
+      "response": {
+        "summary": "A CI/CD pipeline malfunctioned for two weeks in 2021 due to a misconfiguration in GitHub Actions, leading to passing tests that weren't executed. This issue was identified when a faulty PR was merged, prompting the addition of a failing canary test to verify the execution of the test suite.",
+        "description": "In 2021, a CI/CD pipeline experienced a silent failure for two weeks because of a misconfigured GitHub Actions workflow, resulting in tests that appeared to pass without running. The problem was uncovered when a clearly defective pull request was merged into the main branch. To prevent future occurrences, a canary test that is designed to fail was implemented to confirm that the testing suite is functioning properly."
+      }
+    },
+    "25cb68b3877d213a49e42b34587d9954bbefed3030ad14aae24ace13cb2c1626": {
+      "method": "structured_output",
+      "user_input_preview": "Title: Learning to Ride a Bicycle\n\nMy grandfather taught me to ride a bicycle in the park near our house when I was six ",
+      "schema_name": "KnowledgeGraph",
+      "response": {
+        "nodes": [
+          {
+            "id": "grandfather",
+            "name": "grandfather",
+            "type": "PERSON",
+            "description": "The narrator's grandfather who taught them to ride a bicycle."
+          },
+          {
+            "id": "bicycle",
+            "name": "bicycle",
+            "type": "CONCEPT",
+            "description": "A two-wheeled vehicle that the narrator learned to ride."
+          },
+          {
+            "id": "park",
+            "name": "park",
+            "type": "LOCATION",
+            "description": "The location where the narrator learned to ride a bicycle."
+          },
+          {
+            "id": "house",
+            "name": "house",
+            "type": "LOCATION",
+            "description": "The narrator's home near the park."
+          },
+          {
+            "id": "childhood",
+            "name": "childhood",
+            "type": "CONCEPT",
+            "description": "The period of life when the narrator learned to ride a bicycle."
+          },
+          {
+            "id": "family",
+            "name": "family",
+            "type": "CONCEPT",
+            "description": "The narrator's family, including the grandfather."
+          },
+          {
+            "id": "joy",
+            "name": "joy",
+            "type": "CONCEPT",
+            "description": "The feeling experienced by the narrator when they successfully rode the bicycle."
+          }
+        ],
+        "edges": [
+          {
+            "source_node_id": "grandfather",
+            "target_node_id": "bicycle",
+            "relationship_name": "taught"
+          },
+          {
+            "source_node_id": "grandfather",
+            "target_node_id": "park",
+            "relationship_name": "located_near"
+          },
+          {
+            "source_node_id": "bicycle",
+            "target_node_id": "joy",
+            "relationship_name": "caused"
+          },
+          {
+            "source_node_id": "house",
+            "target_node_id": "park",
+            "relationship_name": "located_near"
+          },
+          {
+            "source_node_id": "childhood",
+            "target_node_id": "bicycle",
+            "relationship_name": "involves"
+          },
+          {
+            "source_node_id": "family",
+            "target_node_id": "grandfather",
+            "relationship_name": "includes"
+          }
+        ]
+      }
+    },
+    "26a7d8374dc4078db0aa35662d042eda845d621d051a281c79f62c025b0b809a": {
+      "method": "structured_output",
+      "user_input_preview": "Title: Winning a Hackathon\n\nOur team won a 48-hour hackathon in 2017 by building a real-time translator for sign languag",
+      "schema_name": "KnowledgeGraph",
+      "response": {
+        "nodes": [
+          {
+            "id": "Winning a Hackathon",
+            "name": "Winning a Hackathon",
+            "type": "CONCEPT",
+            "description": "A concept related to achieving success in a competitive programming event."
+          },
+          {
+            "id": "2017",
+            "name": "2017",
+            "type": "DATE",
+            "description": "The year when the hackathon took place."
+          },
+          {
+            "id": "real-time translator for sign language",
+            "name": "real-time translator for sign language",
+            "type": "CONCEPT",
+            "description": "A project developed to translate sign language in real-time using technology."
+          },
+          {
+            "id": "computer vision",
+            "name": "computer vision",
+            "type": "CONCEPT",
+            "description": "A field of computer science that enables computers to interpret and process visual information."
+          },
+          {
+            "id": "CNN model",
+            "name": "CNN model",
+            "type": "CONCEPT",
+            "description": "A type of deep learning model known as Convolutional Neural Network, commonly used in image processing."
+          },
+          {
+            "id": "ASL datasets",
+            "name": "ASL datasets",
+            "type": "CONCEPT",
+            "description": "Datasets containing American Sign Language data used for training models."
+          },
+          {
+            "id": "judges",
+            "name": "judges",
+            "type": "PERSON",
+            "description": "Individuals who evaluated the hackathon projects."
+          },
+          {
+            "id": "prize",
+            "name": "prize",
+            "type": "CONCEPT",
+            "description": "The reward given to the winning team of the hackathon."
+          }
+        ],
+        "edges": [
+          {
+            "source_node_id": "2017",
+            "target_node_id": "Winning a Hackathon",
+            "relationship_name": "took_place_in"
+          },
+          {
+            "source_node_id": "real-time translator for sign language",
+            "target_node_id": "computer vision",
+            "relationship_name": "utilizes"
+          },
+          {
+            "source_node_id": "real-time translator for sign language",
+            "target_node_id": "CNN model",
+            "relationship_name": "built_with"
+          },
+          {
+            "source_node_id": "CNN model",
+            "target_node_id": "ASL datasets",
+            "relationship_name": "trained_on"
+          },
+          {
+            "source_node_id": "judges",
+            "target_node_id": "real-time translator for sign language",
+            "relationship_name": "evaluated"
+          },
+          {
+            "source_node_id": "Winning a Hackathon",
+            "target_node_id": "prize",
+            "relationship_name": "awarded"
+          }
+        ]
+      }
+    },
+    "27bf7f0dd4b4b5cfd64681b89a57a8f137ea9074dc9899fc6949b9ea3db9a94e": {
+      "method": "structured_output",
+      "user_input_preview": "Title: Discovering Podcasts\n\nI discovered podcasts during my daily commute in 2016. The first one I binged was a technol",
+      "schema_name": "KnowledgeGraph",
+      "response": {
+        "nodes": [
+          {
+            "id": "podcasts",
+            "name": "podcasts",
+            "type": "CONCEPT",
+            "description": "Podcasts are digital audio files available for streaming or download, often focusing on various topics."
+          },
+          {
+            "id": "commute",
+            "name": "commute",
+            "type": "CONCEPT",
+            "description": "Commute refers to the travel between one's home and place of work or study."
+          },
+          {
+            "id": "2016",
+            "name": "2016",
+            "type": "DATE",
+            "description": "The year when the author discovered podcasts during their daily commute."
+          },
+          {
+            "id": "technology_history_series",
+            "name": "technology history series",
+            "type": "CONCEPT",
+            "description": "A podcast series that covers the history of technology, including significant inventions like the transistor."
+          },
+          {
+            "id": "transistor",
+            "name": "transistor",
+            "type": "CONCEPT",
+            "description": "A semiconductor device used to amplify or switch electronic signals, pivotal in modern electronics."
+          }
+        ],
+        "edges": [
+          {
+            "source_node_id": "2016",
+            "target_node_id": "podcasts",
+            "relationship_name": "discovered"
+          },
+          {
+            "source_node_id": "podcasts",
+            "target_node_id": "technology_history_series",
+            "relationship_name": "includes"
+          },
+          {
+            "source_node_id": "technology_history_series",
+            "target_node_id": "transistor",
+            "relationship_name": "covers"
+          },
+          {
+            "source_node_id": "commute",
+            "target_node_id": "podcasts",
+            "relationship_name": "transformed_into"
+          }
+        ]
+      }
+    },
+    "2b5a020dfa47059b70bea01a6ed35c846e8fc91593766718d68357fba6950244": {
+      "method": "structured_output",
+      "user_input_preview": "Title: Learning a New Language\n\nI started learning Japanese in 2019 using a combination of apps and textbooks. Hiragana ",
+      "schema_name": "KnowledgeGraph",
+      "response": {
+        "nodes": [
+          {
+            "id": "Japanese",
+            "name": "Japanese",
+            "type": "CONCEPT",
+            "description": "Japanese is a language spoken primarily in Japan, known for its unique writing systems including hiragana, katakana, and kanji."
+          },
+          {
+            "id": "Tokyo",
+            "name": "Tokyo",
+            "type": "LOCATION",
+            "description": "Tokyo is the capital city of Japan, known for its vibrant culture, modern architecture, and historical landmarks."
+          },
+          {
+            "id": "2019",
+            "name": "2019",
+            "type": "DATE",
+            "description": "The year when the author started learning Japanese."
+          }
+        ],
+        "edges": [
+          {
+            "source_node_id": "2019",
+            "target_node_id": "Japanese",
+            "relationship_name": "started_learning"
+          },
+          {
+            "source_node_id": "Tokyo",
+            "target_node_id": "Japanese",
+            "relationship_name": "related_to"
+          }
+        ]
+      }
+    },
+    "2c7bfa2b72fad4d22f8bf6d3a47a8440d1e6eb2aa34908b2cd5a92fdfb53f613": {
+      "method": "structured_output",
+      "user_input_preview": "Title: A Conversation with a Stranger\n\nOn a delayed train from Prague to Vienna, I sat next to a retired physicist who t",
+      "schema_name": "KnowledgeGraph",
+      "response": {
+        "nodes": [
+          {
+            "id": "Prague",
+            "name": "Prague",
+            "type": "LOCATION",
+            "description": "The capital city of the Czech Republic, known for its historic architecture and vibrant culture."
+          },
+          {
+            "id": "Vienna",
+            "name": "Vienna",
+            "type": "LOCATION",
+            "description": "The capital city of Austria, famous for its artistic and intellectual legacy."
+          },
+          {
+            "id": "retired physicist",
+            "name": "retired physicist",
+            "type": "PERSON",
+            "description": "An individual who has retired from a career in physics, specifically known for work on particle accelerators."
+          },
+          {
+            "id": "1980s",
+            "name": "1980s",
+            "type": "DATE",
+            "description": "The decade from 1980 to 1989, notable for significant advancements in various fields including physics."
+          },
+          {
+            "id": "quantum tunneling",
+            "name": "quantum tunneling",
+            "type": "CONCEPT",
+            "description": "A quantum mechanical phenomenon where a particle passes through a potential barrier that it classically could not surmount."
+          },
+          {
+            "id": "coffee cup metaphor",
+            "name": "coffee cup metaphor",
+            "type": "CONCEPT",
+            "description": "A metaphor used to explain complex concepts in a relatable way, in this case, quantum tunneling."
+          },
+          {
+            "id": "three-hour conversation",
+            "name": "three-hour conversation",
+            "type": "CONCEPT",
+            "description": "A lengthy discussion that led to a reconsideration of assumptions about time and randomness."
+          }
+        ],
+        "edges": [
+          {
+            "source_node_id": "retired physicist",
+            "target_node_id": "quantum tunneling",
+            "relationship_name": "explained"
+          },
+          {
+            "source_node_id": "retired physicist",
+            "target_node_id": "1980s",
+            "relationship_name": "worked_in"
+          },
+          {
+            "source_node_id": "three-hour conversation",
+            "target_node_id": "quantum tunneling",
+            "relationship_name": "influenced_by"
+          },
+          {
+            "source_node_id": "three-hour conversation",
+            "target_node_id": "time",
+            "relationship_name": "reconsidered_assumptions_about"
+          },
+          {
+            "source_node_id": "three-hour conversation",
+            "target_node_id": "randomness",
+            "relationship_name": "reconsidered_assumptions_about"
+          },
+          {
+            "source_node_id": "Prague",
+            "target_node_id": "Vienna",
+            "relationship_name": "connected_by_train"
+          }
+        ]
+      }
+    },
+    "30651735d1777e90ccc7ecbbffd4a4501f57fbd53cdeba75623ec7618124ba34": {
+      "method": "structured_output",
+      "user_input_preview": "Title: Cooking Grandmother's Stew\n\nMy grandmother's beef stew recipe has been in the family for three generations. The s",
+      "schema_name": "KnowledgeGraph",
+      "response": {
+        "nodes": [
+          {
+            "id": "grandmother's beef stew recipe",
+            "name": "grandmother's beef stew recipe",
+            "type": "CONCEPT",
+            "description": "A family recipe for beef stew that has been passed down for three generations."
+          },
+          {
+            "id": "red wine vinegar",
+            "name": "red wine vinegar",
+            "type": "CONCEPT",
+            "description": "A type of vinegar made from red wine, used as a secret ingredient in the stew."
+          },
+          {
+            "id": "cast-iron pot",
+            "name": "cast-iron pot",
+            "type": "CONCEPT",
+            "description": "A heavy pot made of cast iron, used for cooking the stew over low heat."
+          },
+          {
+            "id": "four hours",
+            "name": "four hours",
+            "type": "DATE",
+            "description": "The minimum cooking time for the beef stew."
+          },
+          {
+            "id": "winter",
+            "name": "winter",
+            "type": "DATE",
+            "description": "The season when the grandmother's beef stew recipe is typically used."
+          },
+          {
+            "id": "family",
+            "name": "family",
+            "type": "CONCEPT",
+            "description": "The group of relatives who have passed down the beef stew recipe."
+          }
+        ],
+        "edges": [
+          {
+            "source_node_id": "grandmother's beef stew recipe",
+            "target_node_id": "family",
+            "relationship_name": "passed_down"
+          },
+          {
+            "source_node_id": "grandmother's beef stew recipe",
+            "target_node_id": "red wine vinegar",
+            "relationship_name": "contains"
+          },
+          {
+            "source_node_id": "grandmother's beef stew recipe",
+            "target_node_id": "cast-iron pot",
+            "relationship_name": "cooked_in"
+          },
+          {
+            "source_node_id": "grandmother's beef stew recipe",
+            "target_node_id": "four hours",
+            "relationship_name": "requires_cooking_time"
+          },
+          {
+            "source_node_id": "grandmother's beef stew recipe",
+            "target_node_id": "winter",
+            "relationship_name": "used_in_season"
+          }
+        ]
+      }
+    },
+    "3b3883d4b601624d7f37331a71c2d4e1f659c21d3cf7e62a6dcdac7d8339f6ac": {
+      "method": "structured_output",
+      "user_input_preview": "Title: A Conversation with a Stranger\n\nOn a delayed train from Prague to Vienna, I sat next to a retired physicist who t",
+      "schema_name": "SummarizedContent",
+      "response": {
+        "summary": "A chance encounter on a delayed train led to an enlightening discussion with a retired physicist about his experiences with particle accelerators and quantum tunneling.",
+        "description": "While traveling from Prague to Vienna, I met a retired physicist who shared insights from his work in the 1980s on particle accelerators. He used a coffee cup analogy to clarify quantum tunneling, prompting me to rethink my views on time and randomness during our three-hour dialogue."
+      }
+    },
+    "3e74354941f112acb28efc0a4b37b90f3096c3b91afeddae2f8bc24adc5f9218": {
+      "method": "structured_output",
+      "user_input_preview": "Title: Attending a Live Concert\n\nThe first live concert I attended was Radiohead at a festival in 2006. The band opened ",
+      "schema_name": "KnowledgeGraph",
+      "response": {
+        "nodes": [
+          {
+            "id": "Radiohead",
+            "name": "Radiohead",
+            "type": "ORGANIZATION",
+            "description": "Radiohead is a British rock band known for their experimental approach to music and thought-provoking lyrics."
+          },
+          {
+            "id": "2006",
+            "name": "2006",
+            "type": "DATE",
+            "description": "The year when the first live concert attended by the author took place."
+          },
+          {
+            "id": "Karma Police",
+            "name": "Karma Police",
+            "type": "CONCEPT",
+            "description": "A song by Radiohead that became popular and is known for its haunting melody and lyrics."
+          },
+          {
+            "id": "There There",
+            "name": "There There",
+            "type": "CONCEPT",
+            "description": "A song by Radiohead that was performed at the concert."
+          },
+          {
+            "id": "live concert",
+            "name": "live concert",
+            "type": "CONCEPT",
+            "description": "A live performance of music in front of an audience."
+          },
+          {
+            "id": "festival",
+            "name": "festival",
+            "type": "CONCEPT",
+            "description": "A large event featuring performances, often including multiple artists and activities."
+          }
+        ],
+        "edges": [
+          {
+            "source_node_id": "Radiohead",
+            "target_node_id": "live concert",
+            "relationship_name": "performed_at"
+          },
+          {
+            "source_node_id": "2006",
+            "target_node_id": "live concert",
+            "relationship_name": "took_place_in"
+          },
+          {
+            "source_node_id": "Karma Police",
+            "target_node_id": "live concert",
+            "relationship_name": "performed_in"
+          },
+          {
+            "source_node_id": "There There",
+            "target_node_id": "live concert",
+            "relationship_name": "performed_in"
+          },
+          {
+            "source_node_id": "festival",
+            "target_node_id": "live concert",
+            "relationship_name": "part_of"
+          }
+        ]
+      }
+    },
+    "40a297191c21e2b66aa5125a7c57f1e36a87dcac908968719c6ed359a5f7d5d3": {
+      "method": "structured_output",
+      "user_input_preview": "Title: Learning to Play Chess\n\nMy uncle taught me chess when I was seven. He never let me win, which frustrated me at fi",
+      "schema_name": "KnowledgeGraph",
+      "response": {
+        "nodes": [
+          {
+            "id": "uncle",
+            "name": "uncle",
+            "type": "PERSON",
+            "description": "The narrator's uncle who taught them how to play chess."
+          },
+          {
+            "id": "chess",
+            "name": "chess",
+            "type": "CONCEPT",
+            "description": "A strategic board game played between two players."
+          },
+          {
+            "id": "school_chess_club",
+            "name": "school chess club",
+            "type": "ORGANIZATION",
+            "description": "A club at the narrator's school where students gather to play chess."
+          },
+          {
+            "id": "regional_tournament",
+            "name": "regional tournament",
+            "type": "CONCEPT",
+            "description": "A competitive event where chess players compete at a regional level."
+          }
+        ],
+        "edges": [
+          {
+            "source_node_id": "uncle",
+            "target_node_id": "chess",
+            "relationship_name": "taught"
+          },
+          {
+            "source_node_id": "school_chess_club",
+            "target_node_id": "chess",
+            "relationship_name": "involved_with"
+          },
+          {
+            "source_node_id": "regional_tournament",
+            "target_node_id": "school_chess_club",
+            "relationship_name": "associated_with"
+          }
+        ]
+      }
+    },
+    "427faa59ce3349c51d2efa1bead7458e905ea10b21d25b5b74fc47728f36e63b": {
+      "method": "structured_output",
+      "user_input_preview": "Title: Adopting a Cat\n\nWe adopted our cat Luna from a local shelter in 2020. She was shy at first and hid under the couc",
+      "schema_name": "KnowledgeGraph",
+      "response": {
+        "nodes": [
+          {
+            "id": "Luna",
+            "name": "Luna",
+            "type": "PERSON",
+            "description": "A cat adopted from a local shelter in 2020, known for her distinctive orange patch on her left ear."
+          },
+          {
+            "id": "2020",
+            "name": "2020",
+            "type": "DATE",
+            "description": "The year when Luna was adopted from the local shelter."
+          },
+          {
+            "id": "local shelter",
+            "name": "local shelter",
+            "type": "ORGANIZATION",
+            "description": "The shelter from which Luna was adopted."
+          }
+        ],
+        "edges": [
+          {
+            "source_node_id": "Luna",
+            "target_node_id": "local shelter",
+            "relationship_name": "adopted_from"
+          },
+          {
+            "source_node_id": "Luna",
+            "target_node_id": "2020",
+            "relationship_name": "adopted_in"
+          }
+        ]
+      }
+    },
+    "42898f4e1536c8178a338f8aba3fd6775ab9088eb77a6217d63fb8a11fab0376": {
+      "method": "structured_output",
+      "user_input_preview": "Title: First Job Interview\n\nMy first real job interview was at a small software consultancy in 2010. I was so nervous th",
+      "schema_name": "KnowledgeGraph",
+      "response": {
+        "nodes": [
+          {
+            "id": "First Job Interview",
+            "name": "First Job Interview",
+            "type": "CONCEPT",
+            "description": "A significant event marking the author's initial experience with a job interview."
+          },
+          {
+            "id": "small software consultancy",
+            "name": "small software consultancy",
+            "type": "ORGANIZATION",
+            "description": "A small company that provides software consulting services."
+          },
+          {
+            "id": "2010",
+            "name": "2010",
+            "type": "DATE",
+            "description": "The year when the author's first job interview took place."
+          },
+          {
+            "id": "sorting algorithm",
+            "name": "sorting algorithm",
+            "type": "CONCEPT",
+            "description": "A method for arranging elements in a specific order."
+          },
+          {
+            "id": "quicksort",
+            "name": "quicksort",
+            "type": "CONCEPT",
+            "description": "A popular sorting algorithm that uses a divide-and-conquer approach."
+          },
+          {
+            "id": "merge sort",
+            "name": "merge sort",
+            "type": "CONCEPT",
+            "description": "A sorting algorithm that divides the input array into two halves, sorts them, and then merges them."
+          }
+        ],
+        "edges": [
+          {
+            "source_node_id": "First Job Interview",
+            "target_node_id": "small software consultancy",
+            "relationship_name": "took_place_at"
+          },
+          {
+            "source_node_id": "First Job Interview",
+            "target_node_id": "2010",
+            "relationship_name": "occurred_in"
+          },
+          {
+            "source_node_id": "First Job Interview",
+            "target_node_id": "sorting algorithm",
+            "relationship_name": "involves"
+          },
+          {
+            "source_node_id": "sorting algorithm",
+            "target_node_id": "quicksort",
+            "relationship_name": "is_a"
+          },
+          {
+            "source_node_id": "sorting algorithm",
+            "target_node_id": "merge sort",
+            "relationship_name": "is_a"
+          }
+        ]
+      }
+    },
+    "4317ee66e2b06d607fbed93f57beb80e676b3dc3087e61926bd1ba3233fabdbb": {
+      "method": "structured_output",
+      "user_input_preview": "Title: Stargazing in the Countryside\n\nOn a camping trip far from city lights, I saw the Milky Way clearly for the first ",
+      "schema_name": "SummarizedContent",
+      "response": {
+        "summary": "During a camping excursion away from urban light pollution, I experienced the Milky Way and numerous stars for the first time, while identifying constellations with a friend.",
+        "description": "On a camping adventure in a remote area, I witnessed the Milky Way in all its glory, along with countless stars. A companion helped me recognize constellations such as Orion, Cassiopeia, and the Big Dipper. We remained awake until 3 AM, observing satellites and even spotted two shooting stars."
+      }
+    },
+    "444204d25a324925d0d0eb3ad59ccdcbe6cb20905c676272bfc05d453b83b764": {
+      "method": "structured_output",
+      "user_input_preview": "Title: Hiking in the Alps\n\nIn the summer of 2015, I hiked the Tour du Mont Blanc with two friends. The 170-kilometer tra",
+      "schema_name": "KnowledgeGraph",
+      "response": {
+        "nodes": [
+          {
+            "id": "Tour du Mont Blanc",
+            "name": "Tour du Mont Blanc",
+            "type": "CONCEPT",
+            "description": "A popular long-distance hiking trail in the Alps, covering approximately 170 kilometers."
+          },
+          {
+            "id": "Alps",
+            "name": "Alps",
+            "type": "LOCATION",
+            "description": "A major mountain range in Europe, stretching across several countries including France, Italy, and Switzerland."
+          },
+          {
+            "id": "2015-01-01",
+            "name": "2015",
+            "type": "DATE",
+            "description": "The year when the hiking trip took place."
+          },
+          {
+            "id": "France",
+            "name": "France",
+            "type": "LOCATION",
+            "description": "A country in Western Europe, known for its rich history and culture."
+          },
+          {
+            "id": "Italy",
+            "name": "Italy",
+            "type": "LOCATION",
+            "description": "A country in Southern Europe, famous for its art, architecture, and cuisine."
+          },
+          {
+            "id": "Switzerland",
+            "name": "Switzerland",
+            "type": "LOCATION",
+            "description": "A landlocked country in Central Europe, known for its mountains and neutrality."
+          }
+        ],
+        "edges": [
+          {
+            "source_node_id": "Tour du Mont Blanc",
+            "target_node_id": "Alps",
+            "relationship_name": "located_in"
+          },
+          {
+            "source_node_id": "2015-01-01",
+            "target_node_id": "Tour du Mont Blanc",
+            "relationship_name": "hiked"
+          },
+          {
+            "source_node_id": "Tour du Mont Blanc",
+            "target_node_id": "France",
+            "relationship_name": "passes_through"
+          },
+          {
+            "source_node_id": "Tour du Mont Blanc",
+            "target_node_id": "Italy",
+            "relationship_name": "passes_through"
+          },
+          {
+            "source_node_id": "Tour du Mont Blanc",
+            "target_node_id": "Switzerland",
+            "relationship_name": "passes_through"
+          }
+        ]
+      }
+    },
+    "4d4e548047b28d2af22d2f5e992fd4bc1cfb1b92e34f3b1df60913eeed098a63": {
+      "method": "structured_output",
+      "user_input_preview": "Title: Teaching Someone to Code\n\nI taught my younger cousin the basics of Python over a summer. We started with variable",
+      "schema_name": "SummarizedContent",
+      "response": {
+        "summary": "I introduced my younger cousin to Python programming during the summer, covering fundamentals like variables and loops, and we created a text adventure game together.",
+        "description": "Over the summer, I mentored my younger cousin in the essentials of Python, starting with concepts such as variables and loops. Together, we developed a simple text adventure game, and her excitement when her code executed successfully rekindled my passion for programming. She is currently pursuing computer science at university."
+      }
+    },
+    "5310de2a9913001019d3e7b312dfefcc47c3874745fe30b87fee6f621d8c513e": {
+      "method": "structured_output",
+      "user_input_preview": "Title: Power of a Mentor\n\nMy first real mentor was a senior engineer named David who took the time to review my code lin",
+      "schema_name": "KnowledgeGraph",
+      "response": {
+        "nodes": [
+          {
+            "id": "David",
+            "name": "David",
+            "type": "PERSON",
+            "description": "A senior engineer who served as a mentor, helping to develop critical thinking skills in his mentee."
+          },
+          {
+            "id": "mentorship",
+            "name": "mentorship",
+            "type": "CONCEPT",
+            "description": "The practice of guiding and supporting someone in their personal or professional development."
+          },
+          {
+            "id": "career",
+            "name": "career",
+            "type": "CONCEPT",
+            "description": "The progression of professional life and work experiences over time."
+          },
+          {
+            "id": "engineering",
+            "name": "engineering",
+            "type": "CONCEPT",
+            "description": "The application of scientific and mathematical principles to design and build structures, machines, and systems."
+          }
+        ],
+        "edges": [
+          {
+            "source_node_id": "David",
+            "target_node_id": "mentorship",
+            "relationship_name": "is_a_mentor_for"
+          },
+          {
+            "source_node_id": "mentorship",
+            "target_node_id": "career",
+            "relationship_name": "supports"
+          },
+          {
+            "source_node_id": "mentorship",
+            "target_node_id": "engineering",
+            "relationship_name": "applies_to"
+          }
+        ]
+      }
+    },
+    "56a8bc412eaf3dbf756e3295a17f0d4daac67ee9732e440ff70e89df5a1ca105": {
+      "method": "structured_output",
+      "user_input_preview": "Title: A Broken Deployment Pipeline\n\nOur CI/CD pipeline broke silently for two weeks in 2021 — tests were passing but no",
+      "schema_name": "KnowledgeGraph",
+      "response": {
+        "nodes": [
+          {
+            "id": "CI/CD",
+            "name": "CI/CD",
+            "type": "CONCEPT",
+            "description": "Continuous Integration and Continuous Deployment (CI/CD) is a software development practice that allows for frequent code changes and automated testing."
+          },
+          {
+            "id": "GitHub Actions",
+            "name": "GitHub Actions",
+            "type": "CONCEPT",
+            "description": "GitHub Actions is a CI/CD feature that allows developers to automate workflows directly in their GitHub repositories."
+          },
+          {
+            "id": "2021",
+            "name": "2021",
+            "type": "DATE",
+            "description": "The year when the CI/CD pipeline issue occurred."
+          },
+          {
+            "id": "canary test",
+            "name": "canary test",
+            "type": "CONCEPT",
+            "description": "A canary test is a type of software testing that intentionally fails to verify that the testing suite is executed."
+          }
+        ],
+        "edges": [
+          {
+            "source_node_id": "CI/CD",
+            "target_node_id": "GitHub Actions",
+            "relationship_name": "uses"
+          },
+          {
+            "source_node_id": "2021",
+            "target_node_id": "CI/CD",
+            "relationship_name": "occurred_in"
+          },
+          {
+            "source_node_id": "canary test",
+            "target_node_id": "CI/CD",
+            "relationship_name": "improves"
+          }
+        ]
+      }
+    },
+    "5822a4c82ed1755e736d078f5d12926f338d87ec77cb9d940b5b4a486c37c4bf": {
+      "method": "structured_output",
+      "user_input_preview": "Title: Childhood Pet Dog\n\nOur family dog Rex was a German Shepherd who lived with us for thirteen years. He waited at th",
+      "schema_name": "KnowledgeGraph",
+      "response": {
+        "nodes": [
+          {
+            "id": "Rex",
+            "name": "Rex",
+            "type": "PERSON",
+            "description": "Rex was a German Shepherd who lived with the family for thirteen years."
+          },
+          {
+            "id": "German Shepherd",
+            "name": "German Shepherd",
+            "type": "CONCEPT",
+            "description": "A breed of dog known for its intelligence and versatility."
+          }
+        ],
+        "edges": [
+          {
+            "source_node_id": "Rex",
+            "target_node_id": "German Shepherd",
+            "relationship_name": "is_a"
+          }
+        ]
+      }
+    },
+    "59d16f8cd3e467c0b1c4b96186bb1de5ae6ebe21abc98ce5e3f8eef6261532ce": {
+      "method": "structured_output",
+      "user_input_preview": "Title: The Solar Eclipse of 1999\n\nOn August 11, 1999, a total solar eclipse was visible from parts of Europe. I watched ",
+      "schema_name": "SummarizedContent",
+      "response": {
+        "summary": "The total solar eclipse on August 11, 1999, was observable in parts of Europe, creating a memorable experience for viewers.",
+        "description": "On August 11, 1999, a total solar eclipse occurred, visible from various locations in Europe. I experienced it from my rooftop using special glasses purchased by my father. The daytime sky turned dark, and the birds ceased chirping. Although the event lasted just a few minutes, it made a significant impact on me."
+      }
+    },
+    "5ce1eda63ff19943fe8ee02fccf94af7b831295a2cffca422afe7069a3bad542": {
+      "method": "structured_output",
+      "user_input_preview": "Title: First Flight Experience\n\nMy first time on an airplane was a flight from Belgrade to London when I was sixteen. I ",
+      "schema_name": "KnowledgeGraph",
+      "response": {
+        "nodes": [
+          {
+            "id": "Belgrade",
+            "name": "Belgrade",
+            "type": "LOCATION",
+            "description": "The capital city of Serbia, known for its historical significance and vibrant culture."
+          },
+          {
+            "id": "London",
+            "name": "London",
+            "type": "LOCATION",
+            "description": "The capital city of England and the United Kingdom, famous for its history, architecture, and cultural landmarks."
+          },
+          {
+            "id": "sixteen",
+            "name": "sixteen",
+            "type": "DATE",
+            "description": "Refers to the age of the narrator during their first flight experience."
+          },
+          {
+            "id": "first_flight_experience",
+            "name": "First Flight Experience",
+            "type": "CONCEPT",
+            "description": "The initial experience of traveling by airplane, often filled with excitement and nervousness."
+          }
+        ],
+        "edges": [
+          {
+            "source_node_id": "sixteen",
+            "target_node_id": "first_flight_experience",
+            "relationship_name": "at_age"
+          },
+          {
+            "source_node_id": "Belgrade",
+            "target_node_id": "London",
+            "relationship_name": "flight_route"
+          }
+        ]
+      }
+    },
+    "5e9715fff9606101224457a3808f07ae762c7fc5c7b770ec3a648f5273eae03d": {
+      "method": "structured_output",
+      "user_input_preview": "Title: A Flat Tire on a Road Trip\n\nHalfway through a road trip to the coast, we got a flat tire on a deserted stretch of",
+      "schema_name": "SummarizedContent",
+      "response": {
+        "summary": "During a coastal road trip, we experienced a flat tire on an isolated highway but managed to change it with the help of a truck driver, arriving at the beach two hours behind schedule.",
+        "description": "While traveling to the coast, we encountered a flat tire on a remote highway. Despite having no prior experience with tire changes, we consulted the car manual and attempted the repair. A passing truck driver assisted us by correcting our use of the jack. Ultimately, we reached the beach two hours later than planned."
+      }
+    },
+    "5fc58ffa3eb6f85e8067250809b6fe1b18dfabe3fcfd85f713882ad98ded5615": {
+      "method": "structured_output",
+      "user_input_preview": "Title: Coffee Culture Discovery\n\nI discovered specialty coffee when a friend took me to a third-wave coffee shop in 2017",
+      "schema_name": "KnowledgeGraph",
+      "response": {
+        "nodes": [
+          {
+            "id": "specialty coffee",
+            "name": "specialty coffee",
+            "type": "CONCEPT",
+            "description": "A high-quality coffee that is often sourced from specific regions and prepared with care."
+          },
+          {
+            "id": "third-wave coffee shop",
+            "name": "third-wave coffee shop",
+            "type": "CONCEPT",
+            "description": "A type of coffee shop that focuses on high-quality coffee and the artisanal aspects of coffee preparation."
+          },
+          {
+            "id": "Ethiopian Yirgacheffe",
+            "name": "Ethiopian Yirgacheffe",
+            "type": "CONCEPT",
+            "description": "A renowned coffee variety from the Yirgacheffe region of Ethiopia, known for its fruity and floral flavors."
+          },
+          {
+            "id": "2017",
+            "name": "2017",
+            "type": "DATE",
+            "description": "The year when the author discovered specialty coffee."
+          },
+          {
+            "id": "coffee",
+            "name": "coffee",
+            "type": "CONCEPT",
+            "description": "A popular beverage made from roasted coffee beans."
+          }
+        ],
+        "edges": [
+          {
+            "source_node_id": "2017",
+            "target_node_id": "specialty coffee",
+            "relationship_name": "discovered_in"
+          },
+          {
+            "source_node_id": "specialty coffee",
+            "target_node_id": "third-wave coffee shop",
+            "relationship_name": "associated_with"
+          },
+          {
+            "source_node_id": "specialty coffee",
+            "target_node_id": "Ethiopian Yirgacheffe",
+            "relationship_name": "includes"
+          },
+          {
+            "source_node_id": "coffee",
+            "target_node_id": "specialty coffee",
+            "relationship_name": "is_a_type_of"
+          }
+        ]
+      }
+    },
+    "641b7c209bbe8a32cd6ade9d929d8bceac41d4cc845a6166bd14d0401b117741": {
+      "method": "structured_output",
+      "user_input_preview": "Title: Setting Up a Home Network\n\nWhen I set up a mesh Wi-Fi network in my apartment, I learned more about networking th",
+      "schema_name": "SummarizedContent",
+      "response": {
+        "summary": "I gained practical networking knowledge while establishing a mesh Wi-Fi network in my apartment, including VLAN configuration and DNS ad blocking.",
+        "description": "While setting up a mesh Wi-Fi network in my apartment, I acquired more networking skills than in any formal education. I implemented VLANs to isolate IoT devices from my work computers, configured Pi-hole for DNS ad blocking, and installed Ethernet cabling within the walls. Although my partner believed I was making it too complex, the network has proven to be extremely reliable."
+      }
+    },
+    "680c5b1a53575da44a8ed92e80f75ccfbd29c9b5a9958deb0453041c08287ef7": {
+      "method": "structured_output",
+      "user_input_preview": "Title: First Programming Language\n\nI wrote my first program in BASIC on a Commodore 64 when I was twelve. It was a simpl",
+      "schema_name": "SummarizedContent",
+      "response": {
+        "summary": "At twelve, I created my initial program in BASIC on a Commodore 64, a basic number guessing game that provided feedback on user guesses. The thrill of it running flawlessly ignited my enduring enthusiasm for coding.",
+        "description": "At the age of twelve, I wrote my first program using BASIC on a Commodore 64, which was a straightforward number guessing game that responded with 'Too high' or 'Too low' depending on the user's input. The exhilarating feeling of seeing it execute without any errors was captivating and led to a lasting passion for programming."
+      }
+    },
+    "68ebeba68e784f7fd40cb84b626a5993b69a66d8d408647835110082bc5042d6": {
+      "method": "structured_output",
+      "user_input_preview": "Title: The Blackout of 2003\n\nDuring the Northeast blackout of August 2003, the power went out for nearly two days. Neigh",
+      "schema_name": "SummarizedContent",
+      "response": {
+        "summary": "The 2003 Northeast blackout fostered a sense of community as neighbors connected during the prolonged power outage.",
+        "description": "In August 2003, a blackout affected the Northeast for almost two days, prompting residents to come together on the streets, share food from their refrigerators, and enjoy music by candlelight, creating a unique communal experience in a typically isolated urban environment."
+      }
+    },
+    "6dd4b18dc47aec707e943ef424be71fc6d918278ae52b46f620a14ba840c1d70": {
+      "method": "structured_output",
+      "user_input_preview": "Title: Learning to Cook Pasta\n\nAn Italian roommate in college taught me that you must salt the pasta water generously — ",
+      "schema_name": "SummarizedContent",
+      "response": {
+        "summary": "An Italian college roommate imparted essential pasta cooking tips, emphasizing the importance of salting the water and not breaking spaghetti.",
+        "description": "During college, an Italian roommate educated me on key pasta cooking techniques, such as generously salting the water to make it taste like the sea, avoiding the breaking of spaghetti, and reserving some pasta water for the sauce. These fundamental guidelines significantly enhanced my culinary skills."
+      }
+    },
+    "6fb04e68b04d9554b591e8da5c16a0e313615955553b1dda847fff1935e7a56a": {
+      "method": "structured_output",
+      "user_input_preview": "Title: Planting a Garden\n\nIn spring 2021, I started a small vegetable garden on my balcony. I planted tomatoes, basil, a",
+      "schema_name": "SummarizedContent",
+      "response": {
+        "summary": "In 2021, I initiated a small vegetable garden on my balcony, growing tomatoes, basil, and peppers.",
+        "description": "I planted tomatoes, basil, and peppers in sizable pots during spring 2021. The tomatoes flourished, while the peppers faced challenges due to limited sunlight. By August, I was able to harvest sufficient basil for weekly pesto, turning the gardening experience into a calming morning routine."
+      }
+    },
+    "7422d701ff93a82677b9d98c029380cad33d1c57e655af1f737127e386324d70": {
+      "method": "structured_output",
+      "user_input_preview": "Title: Learning Git the Hard Way\n\nI learned git by accidentally deleting a week's worth of work with git reset --hard in",
+      "schema_name": "KnowledgeGraph",
+      "response": {
+        "nodes": [
+          {
+            "id": "git",
+            "name": "git",
+            "type": "CONCEPT",
+            "description": "Git is a distributed version control system used for tracking changes in source code during software development."
+          },
+          {
+            "id": "Pro Git book",
+            "name": "Pro Git book",
+            "type": "CONCEPT",
+            "description": "Pro Git is a comprehensive book that covers the Git version control system, providing insights and best practices."
+          },
+          {
+            "id": "2013",
+            "name": "2013",
+            "type": "DATE",
+            "description": "The year when the author accidentally deleted a week's worth of work using git reset --hard."
+          },
+          {
+            "id": "junior developers",
+            "name": "junior developers",
+            "type": "PERSON",
+            "description": "Junior developers are individuals who are new to the field of software development and are typically in the early stages of their careers."
+          }
+        ],
+        "edges": [
+          {
+            "source_node_id": "git",
+            "target_node_id": "Pro Git book",
+            "relationship_name": "related_to"
+          },
+          {
+            "source_node_id": "2013",
+            "target_node_id": "git",
+            "relationship_name": "experienced_in"
+          },
+          {
+            "source_node_id": "junior developers",
+            "target_node_id": "git",
+            "relationship_name": "taught_workshops"
+          }
+        ]
+      }
+    },
+    "7a00c4133bb0b0805b5548c26086b6283c42672a18265055bb8e5c9ab42174e2": {
+      "method": "structured_output",
+      "user_input_preview": "Title: Running My First Marathon\n\nI ran my first marathon in 2016 in Vienna. Training took five months with a gradual bu",
+      "schema_name": "SummarizedContent",
+      "response": {
+        "summary": "I completed my inaugural marathon in Vienna in 2016, finishing in 4 hours and 12 minutes after five months of training.",
+        "description": "In 2016, I participated in my first marathon in Vienna, where I trained for five months, progressively increasing my distance from 5K to the full 42 kilometers. At kilometer 35, I faced a challenging moment but was motivated by the enthusiastic crowd along the Ringstrasse, enabling me to finish the race in 4 hours and 12 minutes."
+      }
+    },
+    "7c33e44e4cc22ed89458b42c7159d899292f9af7e5b9055452c0dea0e429a428": {
+      "method": "structured_output",
+      "user_input_preview": "Title: A Thunderstorm at the Beach\n\nWe were at the beach when a sudden thunderstorm rolled in from the sea. The sky turn",
+      "schema_name": "SummarizedContent",
+      "response": {
+        "summary": "A sudden thunderstorm unexpectedly hit the beach, transforming the sky and prompting a hurried retreat to the car.",
+        "description": "While at the beach, a fierce thunderstorm approached rapidly, darkening the sky and increasing the wind. As lightning illuminated the sea, we sought refuge in the car, where the intense rain created a mix of fear and awe."
+      }
+    },
+    "7c6316fb28631db4aa52e6a024f283bc2909a2126889488a4546606bba0e6ece": {
+      "method": "structured_output",
+      "user_input_preview": "Title: Setting Up a Home Network\n\nWhen I set up a mesh Wi-Fi network in my apartment, I learned more about networking th",
+      "schema_name": "KnowledgeGraph",
+      "response": {
+        "nodes": [
+          {
+            "id": "mesh Wi-Fi network",
+            "name": "mesh Wi-Fi network",
+            "type": "CONCEPT",
+            "description": "A type of wireless network that uses multiple devices to provide seamless coverage throughout an area."
+          },
+          {
+            "id": "apartment",
+            "name": "apartment",
+            "type": "LOCATION",
+            "description": "A self-contained housing unit that occupies part of a building."
+          },
+          {
+            "id": "VLANs",
+            "name": "VLANs",
+            "type": "CONCEPT",
+            "description": "Virtual Local Area Networks that segment network traffic for improved performance and security."
+          },
+          {
+            "id": "IoT devices",
+            "name": "IoT devices",
+            "type": "CONCEPT",
+            "description": "Devices connected to the internet that can collect and exchange data."
+          },
+          {
+            "id": "work machines",
+            "name": "work machines",
+            "type": "CONCEPT",
+            "description": "Computers and devices used for professional tasks."
+          },
+          {
+            "id": "Pi-hole",
+            "name": "Pi-hole",
+            "type": "CONCEPT",
+            "description": "A network-wide ad blocker that operates at the DNS level."
+          },
+          {
+            "id": "Ethernet",
+            "name": "Ethernet",
+            "type": "CONCEPT",
+            "description": "A system for connecting computers within a local area network."
+          },
+          {
+            "id": "partner",
+            "name": "partner",
+            "type": "PERSON",
+            "description": "The individual who shares a living space with the narrator."
+          },
+          {
+            "id": "networking",
+            "name": "networking",
+            "type": "CONCEPT",
+            "description": "The practice of connecting computers and other devices to share resources."
+          },
+          {
+            "id": "home lab",
+            "name": "home lab",
+            "type": "CONCEPT",
+            "description": "A personal workspace set up for experimentation and learning in technology."
+          },
+          {
+            "id": "Wi-Fi",
+            "name": "Wi-Fi",
+            "type": "CONCEPT",
+            "description": "A technology that allows electronic devices to connect to a wireless local area network."
+          }
+        ],
+        "edges": [
+          {
+            "source_node_id": "mesh Wi-Fi network",
+            "target_node_id": "apartment",
+            "relationship_name": "located_in"
+          },
+          {
+            "source_node_id": "VLANs",
+            "target_node_id": "IoT devices",
+            "relationship_name": "separate_from"
+          },
+          {
+            "source_node_id": "VLANs",
+            "target_node_id": "work machines",
+            "relationship_name": "separate_from"
+          },
+          {
+            "source_node_id": "Pi-hole",
+            "target_node_id": "networking",
+            "relationship_name": "used_in"
+          },
+          {
+            "source_node_id": "Ethernet",
+            "target_node_id": "apartment",
+            "relationship_name": "installed_in"
+          },
+          {
+            "source_node_id": "partner",
+            "target_node_id": "mesh Wi-Fi network",
+            "relationship_name": "opinion_on"
+          },
+          {
+            "source_node_id": "networking",
+            "target_node_id": "home lab",
+            "relationship_name": "related_to"
+          },
+          {
+            "source_node_id": "Wi-Fi",
+            "target_node_id": "mesh Wi-Fi network",
+            "relationship_name": "type_of"
+          }
+        ]
+      }
+    },
+    "7f82ff293807083f2eb912bb4f1f90db4f36f93e10d9ce2dfbed9c2f88d931dc": {
+      "method": "structured_output",
+      "user_input_preview": "Title: The Solar Eclipse of 1999\n\nOn August 11, 1999, a total solar eclipse was visible from parts of Europe. I watched ",
+      "schema_name": "KnowledgeGraph",
+      "response": {
+        "nodes": [
+          {
+            "id": "The Solar Eclipse of 1999",
+            "name": "The Solar Eclipse of 1999",
+            "type": "CONCEPT",
+            "description": "A total solar eclipse that occurred on August 11, 1999, visible from parts of Europe."
+          },
+          {
+            "id": "August 11, 1999",
+            "name": "August 11, 1999",
+            "type": "DATE",
+            "description": "The date when the total solar eclipse occurred."
+          },
+          {
+            "id": "Europe",
+            "name": "Europe",
+            "type": "LOCATION",
+            "description": "A continent where the total solar eclipse was visible."
+          },
+          {
+            "id": "astronomy",
+            "name": "astronomy",
+            "type": "CONCEPT",
+            "description": "The scientific study of celestial bodies, space, and the universe."
+          }
+        ],
+        "edges": [
+          {
+            "source_node_id": "The Solar Eclipse of 1999",
+            "target_node_id": "August 11, 1999",
+            "relationship_name": "occurred_on"
+          },
+          {
+            "source_node_id": "The Solar Eclipse of 1999",
+            "target_node_id": "Europe",
+            "relationship_name": "visible_from"
+          },
+          {
+            "source_node_id": "The Solar Eclipse of 1999",
+            "target_node_id": "astronomy",
+            "relationship_name": "related_to"
+          }
+        ]
+      }
+    },
+    "8146fe0d20eafaa406e2b1c8a17e6a3f745924479d8a46318571813fab99fb66": {
+      "method": "structured_output",
+      "user_input_preview": "Title: Cooking Grandmother's Stew\n\nMy grandmother's beef stew recipe has been in the family for three generations. The s",
+      "schema_name": "SummarizedContent",
+      "response": {
+        "summary": "My grandmother's beef stew recipe, cherished for three generations, features red wine vinegar as a secret ingredient and is traditionally cooked in a cast-iron pot for four hours.",
+        "description": "The beef stew recipe passed down through three generations in my family includes a unique touch of red wine vinegar added at the end. It is prepared in a cast-iron pot on low heat for a minimum of four hours, and I continue to follow her original recipe each winter."
+      }
+    },
+    "8208bd0b247e370999e3a878ddfe7ce0e31f123853d8cd96f5d1cb018495e502": {
+      "method": "structured_output",
+      "user_input_preview": "Title: Moving to a New City\n\nWhen I moved to Berlin in 2018, I knew nobody in the city. The first month was lonely — I s",
+      "schema_name": "SummarizedContent",
+      "response": {
+        "summary": "Relocating to Berlin in 2018 was initially isolating, but discovering a co-working space led to friendships and a sense of belonging in the Kreuzberg area.",
+        "description": "Upon moving to Berlin in 2018, I felt lonely as I had no acquaintances in the city. My weekends were spent wandering various neighborhoods. However, I eventually joined a co-working space where I connected with individuals who became good friends, and within six months, the Kreuzberg district began to feel like home."
+      }
+    },
+    "823d7993aec0cdd0c5f94f5a77cff68ff9e237465073f859de2c967a48ce8ea4": {
+      "method": "structured_output",
+      "user_input_preview": "Title: Coffee Culture Discovery\n\nI discovered specialty coffee when a friend took me to a third-wave coffee shop in 2017",
+      "schema_name": "SummarizedContent",
+      "response": {
+        "summary": "In 2017, I was introduced to specialty coffee at a third-wave café, where I learned about processing methods and experienced the unique flavors of an Ethiopian Yirgacheffe pour-over.",
+        "description": "My journey into coffee culture began in 2017 when a friend brought me to a third-wave coffee shop. There, a barista detailed the distinctions between washed and natural coffee processing. I sampled a pour-over of Ethiopian Yirgacheffe and was delighted by the blueberry notes, igniting my passion for coffee."
+      }
+    },
+    "8813d06c65537f2e32671564b724dea5cced3cc964e89f6c7192f4e624120164": {
+      "method": "structured_output",
+      "user_input_preview": "Title: First Job Interview\n\nMy first real job interview was at a small software consultancy in 2010. I was so nervous th",
+      "schema_name": "SummarizedContent",
+      "response": {
+        "summary": "The author's initial job interview occurred in 2010 at a small software consultancy, where they forgot their portfolio but successfully explained merge sort after struggling with quicksort. They received a job offer two days later.",
+        "description": "In 2010, the author experienced their first significant job interview at a small software consultancy. Overwhelmed with anxiety, they left their portfolio at home. During the interview, they were asked to demonstrate a sorting algorithm on a whiteboard; although they couldn't recall quicksort, they articulated merge sort effectively. Subsequently, they were offered the position two days after the interview."
+      }
+    },
+    "8aa735ef70198f87c9bd0dbb2f2a21e7c653d5287204b51ea88370825af4c5b1": {
+      "method": "structured_output",
+      "user_input_preview": "Title: Understanding Recursion\n\nThe moment recursion clicked for me was during a lecture on the Tower of Hanoi. The prof",
+      "schema_name": "SummarizedContent",
+      "response": {
+        "summary": "Recursion became clear to me through a Tower of Hanoi lecture, leading to my first implementation and a recursive maze solver.",
+        "description": "During a lecture on the Tower of Hanoi, the professor illustrated how recursion works by solving the same problem on a reduced scale. This understanding prompted me to implement the concept at home, resulting in the creation of a recursive maze solver, marking the first time I found an abstract idea to be intuitively graspable."
+      }
+    },
+    "8b5563e381c10cc4a67e1714b14d3f6bb829772d5d6461ac507f641b97288f70": {
+      "method": "structured_output",
+      "user_input_preview": "Title: Adopting a Cat\n\nWe adopted our cat Luna from a local shelter in 2020. She was shy at first and hid under the couc",
+      "schema_name": "SummarizedContent",
+      "response": {
+        "summary": "In 2020, we adopted Luna, a shy cat from a shelter who initially hid for three days but eventually became affectionate, often sleeping on my keyboard.",
+        "description": "Luna, our cat adopted from a local shelter in 2020, was initially timid and spent three days hiding under the couch. Over time, she became more comfortable and now enjoys sleeping on my keyboard while I work. She is identifiable by a unique orange patch on her left ear."
+      }
+    },
+    "8d0a88bcbb42e67724344adf55e26301ca9f48275ef190e9cc059a182aed873b": {
+      "method": "structured_output",
+      "user_input_preview": "Title: Debugging a Production Outage\n\nIn 2019, our production database went down at 3 AM due to a misconfigured connecti",
+      "schema_name": "KnowledgeGraph",
+      "response": {
+        "nodes": [
+          {
+            "id": "2019",
+            "name": "2019",
+            "type": "DATE",
+            "description": "The year when the production database outage occurred."
+          },
+          {
+            "id": "production_database",
+            "name": "Production Database",
+            "type": "CONCEPT",
+            "description": "The database that experienced an outage due to a misconfigured connection pool."
+          },
+          {
+            "id": "misconfigured_connection_pool",
+            "name": "Misconfigured Connection Pool",
+            "type": "CONCEPT",
+            "description": "The issue that caused the production database to go down."
+          },
+          {
+            "id": "max_connections",
+            "name": "Max Connections",
+            "type": "CONCEPT",
+            "description": "The configuration setting that was changed from 100 to 10, leading to the database outage."
+          },
+          {
+            "id": "config_change",
+            "name": "Config Change",
+            "type": "CONCEPT",
+            "description": "The one-line change made to fix the database connection issue."
+          },
+          {
+            "id": "logs",
+            "name": "Logs",
+            "type": "CONCEPT",
+            "description": "The records that were traced to investigate the database outage."
+          }
+        ],
+        "edges": [
+          {
+            "source_node_id": "production_database",
+            "target_node_id": "misconfigured_connection_pool",
+            "relationship_name": "experienced"
+          },
+          {
+            "source_node_id": "misconfigured_connection_pool",
+            "target_node_id": "max_connections",
+            "relationship_name": "caused"
+          },
+          {
+            "source_node_id": "max_connections",
+            "target_node_id": "config_change",
+            "relationship_name": "fixed_by"
+          },
+          {
+            "source_node_id": "production_database",
+            "target_node_id": "logs",
+            "relationship_name": "traced_through"
+          }
+        ]
+      }
+    },
+    "8eaadd392dd2937f81045a71643933563252d759afd2a886f54400db1190e4bc": {
+      "method": "structured_output",
+      "user_input_preview": "Title: A Rainy Day in Kyoto\n\nIt rained the entire day I visited Kyoto's bamboo grove. Most tourists left, but I stayed a",
+      "schema_name": "SummarizedContent",
+      "response": {
+        "summary": "A rainy day in Kyoto's bamboo grove provided a unique experience, as fewer tourists remained, allowing for a serene atmosphere.",
+        "description": "During my visit to Kyoto, it rained all day while I explored the bamboo grove. With most visitors gone, I enjoyed a tranquil walk, accompanied by the soothing sound of rain on the bamboo leaves. The rain enhanced the vibrant greenery, proving that inclement weather can create unforgettable moments."
+      }
+    },
+    "8eb64adba248a10bdc21f8508fe416c5e39827758bdb721452e2d6154d7aa09e": {
+      "method": "structured_output",
+      "user_input_preview": "Title: Learning to Play Chess\n\nMy uncle taught me chess when I was seven. He never let me win, which frustrated me at fi",
+      "schema_name": "SummarizedContent",
+      "response": {
+        "summary": "I learned chess from my uncle at the age of seven, which helped me enhance my skills despite initial frustration. I later joined the school chess club and secured third place in a regional competition, and I continue to play online regularly to unwind.",
+        "description": "At seven, my uncle introduced me to chess, never allowing me to win, which initially frustrated me but ultimately led to my improvement. I became a member of the school chess club and achieved third place in a regional tournament. Nowadays, I frequently play online in the evenings as a way to relax."
+      }
+    },
+    "989310c9f12dbb66a2fd7570d687f1c389a463c5e2414311467695a2605cc48c": {
+      "method": "structured_output",
+      "user_input_preview": "Title: Baking Bread During Lockdown\n\nLike many people, I started baking sourdough bread during the 2020 lockdown. My fir",
+      "schema_name": "SummarizedContent",
+      "response": {
+        "summary": "During the 2020 lockdown, I began baking sourdough bread, initially struggling but eventually mastering the technique.",
+        "description": "I started making sourdough bread in 2020, with my first starter taking two weeks to activate. My initial loaf was heavy and tangy, but by my fifth try, I achieved a loaf with a nice texture and a crunchy crust. I affectionately named my starter 'Clint Yeastwood'."
+      }
+    },
+    "9bba44b978f80466c1e27f7cb7d2b19863ae97e9879b2a5dbf6058cbd065de80": {
+      "method": "structured_output",
+      "user_input_preview": "Title: Understanding Recursion\n\nThe moment recursion clicked for me was during a lecture on the Tower of Hanoi. The prof",
+      "schema_name": "KnowledgeGraph",
+      "response": {
+        "nodes": [
+          {
+            "id": "Recursion",
+            "name": "Recursion",
+            "type": "CONCEPT",
+            "description": "Recursion is a method of solving problems where the solution depends on solutions to smaller instances of the same problem."
+          },
+          {
+            "id": "Tower of Hanoi",
+            "name": "Tower of Hanoi",
+            "type": "CONCEPT",
+            "description": "The Tower of Hanoi is a mathematical puzzle that involves moving a stack of disks from one peg to another, following specific rules."
+          },
+          {
+            "id": "Computer Science",
+            "name": "Computer Science",
+            "type": "CONCEPT",
+            "description": "Computer Science is the study of computers and computational systems, encompassing both theoretical and practical aspects."
+          },
+          {
+            "id": "Learning",
+            "name": "Learning",
+            "type": "CONCEPT",
+            "description": "Learning is the process of acquiring knowledge or skills through experience, study, or teaching."
+          }
+        ],
+        "edges": [
+          {
+            "source_node_id": "Recursion",
+            "target_node_id": "Tower of Hanoi",
+            "relationship_name": "illustrated_by"
+          },
+          {
+            "source_node_id": "Recursion",
+            "target_node_id": "Computer Science",
+            "relationship_name": "related_to"
+          },
+          {
+            "source_node_id": "Recursion",
+            "target_node_id": "Learning",
+            "relationship_name": "enhances"
+          }
+        ]
+      }
+    },
+    "9c75eeef454da05040d5ff2083fc95f38f036afb43c611185148946cf5ce1c66": {
+      "method": "structured_output",
+      "user_input_preview": "Title: Reading Lord of the Rings\n\nI read the entire Lord of the Rings trilogy in one week during summer break when I was",
+      "schema_name": "SummarizedContent",
+      "response": {
+        "summary": "At fourteen, I devoured the entire Lord of the Rings trilogy in a week, losing track of time in Middle-earth. The chapter 'The Bridge of Khazad-dûm' was particularly haunting, and the conclusion at the Grey Havens moved me to tears.",
+        "description": "During my summer break at the age of fourteen, I immersed myself in the Lord of the Rings trilogy, finishing all three books in just one week. I was so engrossed that I neglected sleep and meals. The chapter titled 'The Bridge of Khazad-dûm' sent chills down my spine, and the emotional farewell at the Grey Havens was the first moment in literature that brought me to tears."
+      }
+    },
+    "9dbcef5a4f14efefe76bf46d4fed517f50dd52ec9c53a24112cacf7128152d10": {
+      "method": "structured_output",
+      "user_input_preview": "Title: Attending a Live Concert\n\nThe first live concert I attended was Radiohead at a festival in 2006. The band opened ",
+      "schema_name": "SummarizedContent",
+      "response": {
+        "summary": "My inaugural live concert experience was Radiohead at a festival in 2006, where the audience passionately sang along to their hits.",
+        "description": "I attended my first live concert featuring Radiohead at a festival in 2006. The band started with 'There There', igniting excitement among the crowd. Being in a field filled with thousands, all joining in on 'Karma Police', created a euphoric atmosphere. I still possess the wristband from that memorable day."
+      }
+    },
+    "9e3ace982ee0ba2606c11e875d1beb7c8b869ba584749c76abf41504960a5442": {
+      "method": "structured_output",
+      "user_input_preview": "Title: A Sunrise Over the Mountains\n\nI woke up at 4 AM to hike to a summit in the Dolomites to watch the sunrise. The tr",
+      "schema_name": "KnowledgeGraph",
+      "response": {
+        "nodes": [
+          {
+            "id": "Dolomites",
+            "name": "Dolomites",
+            "type": "LOCATION",
+            "description": "The Dolomites are a mountain range located in northeastern Italy, known for their stunning peaks and natural beauty."
+          },
+          {
+            "id": "sunrise",
+            "name": "sunrise",
+            "type": "CONCEPT",
+            "description": "Sunrise is the time in the morning when the sun appears above the horizon, marking the beginning of the day."
+          },
+          {
+            "id": "hiking",
+            "name": "hiking",
+            "type": "CONCEPT",
+            "description": "Hiking is an outdoor activity that involves walking in natural environments, often on trails or paths."
+          }
+        ],
+        "edges": [
+          {
+            "source_node_id": "hiking",
+            "target_node_id": "Dolomites",
+            "relationship_name": "takes_place_in"
+          },
+          {
+            "source_node_id": "sunrise",
+            "target_node_id": "Dolomites",
+            "relationship_name": "observed_in"
+          }
+        ]
+      }
+    },
+    "9ed15b0318a696ba68fbf2308119e626a6b11147474b4ffb5d706e62ef7cf1c0": {
+      "method": "structured_output",
+      "user_input_preview": "Title: A Flat Tire on a Road Trip\n\nHalfway through a road trip to the coast, we got a flat tire on a deserted stretch of",
+      "schema_name": "KnowledgeGraph",
+      "response": {
+        "nodes": [
+          {
+            "id": "road trip",
+            "name": "road trip",
+            "type": "CONCEPT",
+            "description": "A journey taken by car, often for leisure or vacation purposes."
+          },
+          {
+            "id": "car trouble",
+            "name": "car trouble",
+            "type": "CONCEPT",
+            "description": "Issues or problems that occur with a vehicle, such as a flat tire."
+          },
+          {
+            "id": "beach",
+            "name": "beach",
+            "type": "LOCATION",
+            "description": "A sandy or pebbly shore by a body of water, often a destination for relaxation and recreation."
+          }
+        ],
+        "edges": [
+          {
+            "source_node_id": "road trip",
+            "target_node_id": "car trouble",
+            "relationship_name": "involves"
+          },
+          {
+            "source_node_id": "road trip",
+            "target_node_id": "beach",
+            "relationship_name": "leads_to"
+          }
+        ]
+      }
+    },
+    "9f362cbb6cf3092661bbfab0e92808608b9b50c226c35f36dec697b540e0a0c8": {
+      "method": "structured_output",
+      "user_input_preview": "Title: First Time Using Docker\n\nThe first time I used Docker in 2015, it felt like magic. I went from 'it works on my ma",
+      "schema_name": "KnowledgeGraph",
+      "response": {
+        "nodes": [
+          {
+            "id": "Docker",
+            "name": "Docker",
+            "type": "CONCEPT",
+            "description": "Docker is a platform that enables developers to automate the deployment of applications inside lightweight containers."
+          },
+          {
+            "id": "2015",
+            "name": "2015",
+            "type": "DATE",
+            "description": "The year when the author first used Docker."
+          },
+          {
+            "id": "Python app",
+            "name": "Python app",
+            "type": "CONCEPT",
+            "description": "A software application developed using the Python programming language."
+          },
+          {
+            "id": "DevOps",
+            "name": "DevOps",
+            "type": "CONCEPT",
+            "description": "A set of practices that combines software development (Dev) and IT operations (Ops) to shorten the systems development life cycle."
+          }
+        ],
+        "edges": [
+          {
+            "source_node_id": "2015",
+            "target_node_id": "Docker",
+            "relationship_name": "first_used"
+          },
+          {
+            "source_node_id": "Docker",
+            "target_node_id": "Python app",
+            "relationship_name": "used_for"
+          },
+          {
+            "source_node_id": "Docker",
+            "target_node_id": "DevOps",
+            "relationship_name": "related_to"
+          }
+        ]
+      }
+    },
+    "9f4931264ac0431a84b18fa6552d060d442e25d0360cb626500c04a64b63b933": {
+      "method": "structured_output",
+      "user_input_preview": "Title: Watching the World Cup Final\n\nThe 2014 World Cup final between Germany and Argentina was one of the most tense ma",
+      "schema_name": "SummarizedContent",
+      "response": {
+        "summary": "The 2014 World Cup final was a thrilling match between Germany and Argentina, experienced in a lively gathering with friends.",
+        "description": "During the intense 2014 World Cup final, held between Germany and Argentina, we convened at a friend's place with refreshments. The atmosphere was charged, especially when Götze netted the winning goal in extra time, causing a split reaction among the attendees."
+      }
+    },
+    "a10e0fd60fce7375ece6b1ab391229a8be6493d871bd882724d595b6be326ff1": {
+      "method": "structured_output",
+      "user_input_preview": "Title: Learning to Swim\n\nI learned to swim at the municipal pool when I was eight. The instructor, Mrs. Petrovic, was pa",
+      "schema_name": "SummarizedContent",
+      "response": {
+        "summary": "At eight years old, I learned to swim at a local pool under the guidance of a strict yet understanding instructor, Mrs. Petrovic, who emphasized back floating before other techniques. Overcoming my fear of the deep end, I eventually took a leap of faith and dove in spontaneously.",
+        "description": "I began my swimming journey at the municipal pool when I was eight years old, taught by Mrs. Petrovic, who was both patient and authoritative. She prioritized back floating practice, which helped build our confidence. Initially, I was fearful of the deep end, but one day, I unexpectedly took the plunge."
+      }
+    },
+    "a1c77d9f0a933522fb5cd07e8dd36f039e6fd4ac8c40ec9e09d514d9e03140ee": {
+      "method": "structured_output",
+      "user_input_preview": "Title: Childhood Pet Dog\n\nOur family dog Rex was a German Shepherd who lived with us for thirteen years. He waited at th",
+      "schema_name": "SummarizedContent",
+      "response": {
+        "summary": "Rex, our family German Shepherd, was a loyal companion for thirteen years, eagerly greeting me after school and having adventurous escapades, like chasing a deer. His passing left a significant void in our home for months.",
+        "description": "Rex, a German Shepherd, was part of our family for thirteen years, always waiting at the door when I returned from school. He had a memorable adventure where he chased a deer and returned three hours later muddy. After his death, the house felt desolate for several months."
+      }
+    },
+    "a1dc499a20fa5f97eaf5c410887ca2297ef658c5a292dfb9ed90fed542936178": {
+      "method": "structured_output",
+      "user_input_preview": "Title: Stargazing in the Countryside\n\nOn a camping trip far from city lights, I saw the Milky Way clearly for the first ",
+      "schema_name": "KnowledgeGraph",
+      "response": {
+        "nodes": [
+          {
+            "id": "Milky Way",
+            "name": "Milky Way",
+            "type": "CONCEPT",
+            "description": "The Milky Way is the galaxy that contains our Solar System, characterized by its spiral shape and numerous stars."
+          },
+          {
+            "id": "Orion",
+            "name": "Orion",
+            "type": "CONCEPT",
+            "description": "Orion is a prominent constellation located on the celestial equator, known for its bright stars and distinctive shape."
+          },
+          {
+            "id": "Cassiopeia",
+            "name": "Cassiopeia",
+            "type": "CONCEPT",
+            "description": "Cassiopeia is a recognizable constellation in the northern sky, easily identified by its W shape formed by five bright stars."
+          },
+          {
+            "id": "Big Dipper",
+            "name": "Big Dipper",
+            "type": "CONCEPT",
+            "description": "The Big Dipper is an asterism in the constellation Ursa Major, consisting of seven bright stars that form a distinctive shape."
+          },
+          {
+            "id": "3 AM",
+            "name": "3 AM",
+            "type": "DATE",
+            "description": "3 AM refers to the time in the early morning when the stargazing activity took place."
+          },
+          {
+            "id": "stargazing",
+            "name": "stargazing",
+            "type": "CONCEPT",
+            "description": "Stargazing is the activity of observing stars and celestial objects in the night sky."
+          },
+          {
+            "id": "astronomy",
+            "name": "astronomy",
+            "type": "CONCEPT",
+            "description": "Astronomy is the scientific study of celestial bodies, space, and the universe as a whole."
+          },
+          {
+            "id": "camping",
+            "name": "camping",
+            "type": "CONCEPT",
+            "description": "Camping is an outdoor activity involving overnight stays away from home in a shelter, such as a tent."
+          }
+        ],
+        "edges": [
+          {
+            "source_node_id": "stargazing",
+            "target_node_id": "Milky Way",
+            "relationship_name": "involves"
+          },
+          {
+            "source_node_id": "stargazing",
+            "target_node_id": "Orion",
+            "relationship_name": "involves"
+          },
+          {
+            "source_node_id": "stargazing",
+            "target_node_id": "Cassiopeia",
+            "relationship_name": "involves"
+          },
+          {
+            "source_node_id": "stargazing",
+            "target_node_id": "Big Dipper",
+            "relationship_name": "involves"
+          },
+          {
+            "source_node_id": "camping",
+            "target_node_id": "stargazing",
+            "relationship_name": "facilitates"
+          },
+          {
+            "source_node_id": "camping",
+            "target_node_id": "3 AM",
+            "relationship_name": "occurs_at"
+          }
+        ]
+      }
+    },
+    "a70941627ac37e06b583f393274540a75acc792b29f08a987ce9d2b525f96ad9": {
+      "method": "structured_output",
+      "user_input_preview": "Title: Volunteering at a Food Bank\n\nI volunteered at a local food bank every Saturday for six months in 2019. We sorted ",
+      "schema_name": "SummarizedContent",
+      "response": {
+        "summary": "I volunteered at a food bank weekly for six months, gaining insights into supply chain management while assisting families in need.",
+        "description": "During my six-month volunteering stint at a local food bank in 2019, I dedicated my Saturdays to sorting donations and preparing boxes for families requiring assistance. This experience provided me with practical knowledge about managing perishable goods, surpassing what I learned in business classes. The appreciation expressed by those we helped made the early mornings rewarding."
+      }
+    },
+    "a778679e24a25c3ac54fa46a708338b0d305fe39c632dec3baed1fc2f6bd37aa": {
+      "method": "structured_output",
+      "user_input_preview": "Title: First Open Source Contribution\n\nMy first open source contribution was a bug fix to a Python logging library in 20",
+      "schema_name": "SummarizedContent",
+      "response": {
+        "summary": "In 2014, I made my initial open source contribution by fixing a bug in a Python logging library related to file rotation.",
+        "description": "My first contribution to open source involved addressing a race condition in a Python logging library's file rotation handler, which resulted in log file truncation. After three rounds of review, my pull request was successfully merged, and I felt immense satisfaction seeing my name in the changelog."
+      }
+    },
+    "a7b6356d8a0526d89bde26c73bca6d04bae7ed6eb48c77d5ad574300b8205232": {
+      "method": "structured_output",
+      "user_input_preview": "Title: Planting a Garden\n\nIn spring 2021, I started a small vegetable garden on my balcony. I planted tomatoes, basil, a",
+      "schema_name": "KnowledgeGraph",
+      "response": {
+        "nodes": [
+          {
+            "id": "spring 2021",
+            "name": "spring 2021",
+            "type": "DATE",
+            "description": "The season in which the vegetable garden was started."
+          },
+          {
+            "id": "vegetable garden",
+            "name": "vegetable garden",
+            "type": "CONCEPT",
+            "description": "A small garden where various vegetables are grown."
+          },
+          {
+            "id": "balcony",
+            "name": "balcony",
+            "type": "LOCATION",
+            "description": "The location where the vegetable garden was planted."
+          },
+          {
+            "id": "tomatoes",
+            "name": "tomatoes",
+            "type": "CONCEPT",
+            "description": "A type of vegetable that thrived in the garden."
+          },
+          {
+            "id": "basil",
+            "name": "basil",
+            "type": "CONCEPT",
+            "description": "An herb that was harvested weekly to make pesto."
+          },
+          {
+            "id": "peppers",
+            "name": "peppers",
+            "type": "CONCEPT",
+            "description": "A type of vegetable that struggled to grow due to insufficient sunlight."
+          },
+          {
+            "id": "pesto",
+            "name": "pesto",
+            "type": "CONCEPT",
+            "description": "A sauce made from basil, commonly prepared in the garden."
+          },
+          {
+            "id": "August",
+            "name": "August",
+            "type": "DATE",
+            "description": "The month when harvesting of basil was sufficient for weekly preparation."
+          },
+          {
+            "id": "gardening",
+            "name": "gardening",
+            "type": "CONCEPT",
+            "description": "The practice of growing and cultivating plants."
+          },
+          {
+            "id": "vegetables",
+            "name": "vegetables",
+            "type": "CONCEPT",
+            "description": "Plants cultivated for food, including tomatoes, basil, and peppers."
+          }
+        ],
+        "edges": [
+          {
+            "source_node_id": "spring 2021",
+            "target_node_id": "vegetable garden",
+            "relationship_name": "started"
+          },
+          {
+            "source_node_id": "vegetable garden",
+            "target_node_id": "balcony",
+            "relationship_name": "located_in"
+          },
+          {
+            "source_node_id": "vegetable garden",
+            "target_node_id": "tomatoes",
+            "relationship_name": "contains"
+          },
+          {
+            "source_node_id": "vegetable garden",
+            "target_node_id": "basil",
+            "relationship_name": "contains"
+          },
+          {
+            "source_node_id": "vegetable garden",
+            "target_node_id": "peppers",
+            "relationship_name": "contains"
+          },
+          {
+            "source_node_id": "basil",
+            "target_node_id": "pesto",
+            "relationship_name": "used_to_make"
+          },
+          {
+            "source_node_id": "August",
+            "target_node_id": "basil",
+            "relationship_name": "harvested_in"
+          },
+          {
+            "source_node_id": "gardening",
+            "target_node_id": "vegetables",
+            "relationship_name": "involves"
+          }
+        ]
+      }
+    },
+    "ab85970d6cd24b1a4c4566f512a545e22bd952caf4cc3cde366a9001bc52372b": {
+      "method": "structured_output",
+      "user_input_preview": "Title: Learning a New Language\n\nI started learning Japanese in 2019 using a combination of apps and textbooks. Hiragana ",
+      "schema_name": "SummarizedContent",
+      "response": {
+        "summary": "The author began learning Japanese in 2019, mastering hiragana and katakana quickly, but found kanji challenging. After two years, they achieved conversational skills, culminating in a rewarding experience of ordering food in Tokyo.",
+        "description": "In 2019, the author embarked on the journey of learning Japanese, utilizing various apps and textbooks. They quickly learned hiragana and katakana within a week each, but struggled with kanji, which seemed never-ending. After two years of dedication, they were able to engage in basic conversations. A significant highlight was visiting Tokyo and successfully ordering food in Japanese, validating their efforts."
+      }
+    },
+    "ad65d2a20c8b4535206f80e26551edafc845261a2874b4b4c7e8c6d060ea2ca6": {
+      "method": "structured_output",
+      "user_input_preview": "Title: Snow Day in School\n\nThe heaviest snowfall I remember was in January 1998 when school was canceled for three days.",
+      "schema_name": "SummarizedContent",
+      "response": {
+        "summary": "In January 1998, a significant snowfall led to a three-day school closure, allowing for the construction of a large snow fort in the park that lasted until February.",
+        "description": "The most memorable snowfall occurred in January 1998, resulting in a three-day school cancellation. During this time, an impressive snow fort was built in the park, complete with tunnels and a watchtower. Despite freezing hands, I stayed outside to enjoy the fort, which ultimately collapsed in February."
+      }
+    },
+    "b23d20911992aa8542464468fc167fdfa0cbb7e7feafd1184f84a4a8cbaeff66": {
+      "method": "structured_output",
+      "user_input_preview": "Title: Learning to Swim\n\nI learned to swim at the municipal pool when I was eight. The instructor, Mrs. Petrovic, was pa",
+      "schema_name": "KnowledgeGraph",
+      "response": {
+        "nodes": [
+          {
+            "id": "Mrs. Petrovic",
+            "name": "Mrs. Petrovic",
+            "type": "PERSON",
+            "description": "The swimming instructor who taught the author to swim, known for being patient but firm."
+          },
+          {
+            "id": "municipal pool",
+            "name": "municipal pool",
+            "type": "LOCATION",
+            "description": "The location where the author learned to swim."
+          },
+          {
+            "id": "swimming",
+            "name": "swimming",
+            "type": "CONCEPT",
+            "description": "The activity of moving through water by using the limbs."
+          },
+          {
+            "id": "childhood",
+            "name": "childhood",
+            "type": "CONCEPT",
+            "description": "The period of life when the author learned to swim, specifically at the age of eight."
+          }
+        ],
+        "edges": [
+          {
+            "source_node_id": "municipal pool",
+            "target_node_id": "Mrs. Petrovic",
+            "relationship_name": "taught_at"
+          },
+          {
+            "source_node_id": "childhood",
+            "target_node_id": "swimming",
+            "relationship_name": "involves"
+          }
+        ]
+      }
+    },
+    "b68450f01644097773b33f503ae1ab87b4042a68e73e056da0762dca22e13723": {
+      "method": "structured_output",
+      "user_input_preview": "Title: A Power Outage During a Demo\n\nDuring a client demo in 2018, the office power went out just as I was showing the n",
+      "schema_name": "SummarizedContent",
+      "response": {
+        "summary": "A power outage occurred during a client demonstration in 2018, but the presenter quickly adapted by using a phone hotspot and laptop battery, impressing the client.",
+        "description": "During a client demo in 2018, the office experienced a power failure while showcasing a new dashboard. The presenter swiftly switched to a mobile hotspot and continued the presentation using the laptop's battery, which left a positive impression on the client. It was later discovered that a construction crew had accidentally severed a cable outside the building."
+      }
+    },
+    "b9c5729e0c35ca7323ea7b67329030933a8cf2c7447093c17265064203d11616": {
+      "method": "structured_output",
+      "user_input_preview": "Title: Reading Lord of the Rings\n\nI read the entire Lord of the Rings trilogy in one week during summer break when I was",
+      "schema_name": "KnowledgeGraph",
+      "response": {
+        "nodes": [
+          {
+            "id": "Lord of the Rings",
+            "name": "Lord of the Rings",
+            "type": "CONCEPT",
+            "description": "A high-fantasy novel series written by J.R.R. Tolkien, set in the fictional world of Middle-earth."
+          },
+          {
+            "id": "J.R.R. Tolkien",
+            "name": "J.R.R. Tolkien",
+            "type": "PERSON",
+            "description": "An English writer, best known for his high-fantasy works including The Hobbit and The Lord of the Rings."
+          },
+          {
+            "id": "Middle-earth",
+            "name": "Middle-earth",
+            "type": "CONCEPT",
+            "description": "The fictional setting for many of J.R.R. Tolkien's works, including The Lord of the Rings."
+          },
+          {
+            "id": "The Bridge of Khazad-dûm",
+            "name": "The Bridge of Khazad-dûm",
+            "type": "CONCEPT",
+            "description": "A significant chapter in The Lord of the Rings, known for its dramatic events and emotional impact."
+          },
+          {
+            "id": "Grey Havens",
+            "name": "Grey Havens",
+            "type": "CONCEPT",
+            "description": "A location in Middle-earth, known for its role in the ending of The Lord of the Rings."
+          },
+          {
+            "id": "summer break",
+            "name": "summer break",
+            "type": "DATE",
+            "description": "A period during the summer when students are typically on vacation from school."
+          }
+        ],
+        "edges": [
+          {
+            "source_node_id": "J.R.R. Tolkien",
+            "target_node_id": "Lord of the Rings",
+            "relationship_name": "wrote"
+          },
+          {
+            "source_node_id": "Lord of the Rings",
+            "target_node_id": "Middle-earth",
+            "relationship_name": "set_in"
+          },
+          {
+            "source_node_id": "Lord of the Rings",
+            "target_node_id": "The Bridge of Khazad-dûm",
+            "relationship_name": "contains_chapter"
+          },
+          {
+            "source_node_id": "Lord of the Rings",
+            "target_node_id": "Grey Havens",
+            "relationship_name": "features_location"
+          },
+          {
+            "source_node_id": "summer break",
+            "target_node_id": "Lord of the Rings",
+            "relationship_name": "read_during"
+          }
+        ]
+      }
+    },
+    "bcdffc7e641ecbfd181fa0289817450686741878c8d3ec8c661645cfafe56482": {
+      "method": "structured_output",
+      "user_input_preview": "Title: A Power Outage During a Demo\n\nDuring a client demo in 2018, the office power went out just as I was showing the n",
+      "schema_name": "KnowledgeGraph",
+      "response": {
+        "nodes": [
+          {
+            "id": "client",
+            "name": "client",
+            "type": "CONCEPT",
+            "description": "A person or organization that purchases goods or services from a business."
+          },
+          {
+            "id": "power outage",
+            "name": "power outage",
+            "type": "CONCEPT",
+            "description": "A temporary loss of electrical power."
+          },
+          {
+            "id": "2018",
+            "name": "2018",
+            "type": "DATE",
+            "description": "The year when the power outage occurred during a client demo."
+          }
+        ],
+        "edges": [
+          {
+            "source_node_id": "client",
+            "target_node_id": "power outage",
+            "relationship_name": "experienced"
+          },
+          {
+            "source_node_id": "power outage",
+            "target_node_id": "2018",
+            "relationship_name": "occurred_in"
+          }
+        ]
+      }
+    },
+    "bf103490feb048f7b81a3a30688bda7d265e5c5d4b8f12f8227c0bade99f101f": {
+      "method": "structured_output",
+      "user_input_preview": "Title: Refactoring Legacy Code\n\nI spent three months refactoring a 10,000-line PHP file that had been accumulating featu",
+      "schema_name": "KnowledgeGraph",
+      "response": {
+        "nodes": [
+          {
+            "id": "Refactoring Legacy Code",
+            "name": "Refactoring Legacy Code",
+            "type": "CONCEPT",
+            "description": "A process of restructuring existing computer code without changing its external behavior."
+          },
+          {
+            "id": "PHP",
+            "name": "PHP",
+            "type": "CONCEPT",
+            "description": "A popular general-purpose scripting language that is especially suited to web development."
+          },
+          {
+            "id": "characterization tests",
+            "name": "characterization tests",
+            "type": "CONCEPT",
+            "description": "Tests that capture the existing behavior of a system to ensure that refactoring does not change its functionality."
+          },
+          {
+            "id": "legacy code",
+            "name": "legacy code",
+            "type": "CONCEPT",
+            "description": "Old code that is still in use but may be difficult to maintain or extend."
+          }
+        ],
+        "edges": [
+          {
+            "source_node_id": "Refactoring Legacy Code",
+            "target_node_id": "legacy code",
+            "relationship_name": "related_to"
+          },
+          {
+            "source_node_id": "Refactoring Legacy Code",
+            "target_node_id": "PHP",
+            "relationship_name": "uses"
+          },
+          {
+            "source_node_id": "Refactoring Legacy Code",
+            "target_node_id": "characterization tests",
+            "relationship_name": "involves"
+          }
+        ]
+      }
+    },
+    "bfb6af8dc3a4b20112482a7b05c6e71b333472d28862a898d9f4696795a46da2": {
+      "method": "structured_output",
+      "user_input_preview": "Title: The Neighborhood Bookstore\n\nThere was a tiny bookstore on my street run by an elderly couple. They knew every boo",
+      "schema_name": "KnowledgeGraph",
+      "response": {
+        "nodes": [
+          {
+            "id": "The Neighborhood Bookstore",
+            "name": "The Neighborhood Bookstore",
+            "type": "CONCEPT",
+            "description": "A tiny bookstore run by an elderly couple, known for their extensive knowledge of books."
+          },
+          {
+            "id": "2019",
+            "name": "2019",
+            "type": "DATE",
+            "description": "The year when the elderly couple retired and closed the bookstore."
+          },
+          {
+            "id": "neighborhood",
+            "name": "neighborhood",
+            "type": "CONCEPT",
+            "description": "The local community that felt the loss of the bookstore when it closed."
+          },
+          {
+            "id": "community",
+            "name": "community",
+            "type": "CONCEPT",
+            "description": "A group of people living in the same area, in this case, the neighborhood around the bookstore."
+          }
+        ],
+        "edges": [
+          {
+            "source_node_id": "The Neighborhood Bookstore",
+            "target_node_id": "2019",
+            "relationship_name": "closed_in"
+          },
+          {
+            "source_node_id": "neighborhood",
+            "target_node_id": "The Neighborhood Bookstore",
+            "relationship_name": "felt_loss_for"
+          },
+          {
+            "source_node_id": "community",
+            "target_node_id": "neighborhood",
+            "relationship_name": "comprises"
+          }
+        ]
+      }
+    },
+    "bfc656cd74568aff7a45977a5349a2563fe6a254d87115fc075a700a1a6ed89d": {
+      "method": "structured_output",
+      "user_input_preview": "Title: Setting Up My First Server\n\nI set up my first Linux server in 2011 — a Debian box running Apache and MySQL. I spe",
+      "schema_name": "SummarizedContent",
+      "response": {
+        "summary": "In 2011, I configured my initial Linux server, a Debian system with Apache and MySQL, and experienced the excitement of launching my website online, only to have it compromised shortly after due to default port settings.",
+        "description": "In 2011, I established my first Linux server, specifically a Debian machine that operated with Apache and MySQL. I dedicated an entire weekend to setting up iptables rules and SSH keys. The exhilaration of making my website available on the internet was unparalleled, but it was hacked within a week because I neglected to change the default configuration of port 22."
+      }
+    },
+    "c1fcf08ef8505bbfb2e9c98f9d062deafc0b7028c8ffca40ad6da1255a4e65d7": {
+      "method": "structured_output",
+      "user_input_preview": "Title: Baking Bread During Lockdown\n\nLike many people, I started baking sourdough bread during the 2020 lockdown. My fir",
+      "schema_name": "KnowledgeGraph",
+      "response": {
+        "nodes": [
+          {
+            "id": "Clint Yeastwood",
+            "name": "Clint Yeastwood",
+            "type": "CONCEPT",
+            "description": "A sourdough starter named during the baking process."
+          },
+          {
+            "id": "sourdough bread",
+            "name": "sourdough bread",
+            "type": "CONCEPT",
+            "description": "A type of bread made using a sourdough starter."
+          },
+          {
+            "id": "lockdown",
+            "name": "lockdown",
+            "type": "CONCEPT",
+            "description": "A period during which people were restricted to their homes due to health concerns."
+          },
+          {
+            "id": "2020",
+            "name": "2020",
+            "type": "DATE",
+            "description": "The year during which the lockdown occurred."
+          }
+        ],
+        "edges": [
+          {
+            "source_node_id": "Clint Yeastwood",
+            "target_node_id": "sourdough bread",
+            "relationship_name": "used_to_make"
+          },
+          {
+            "source_node_id": "lockdown",
+            "target_node_id": "2020",
+            "relationship_name": "occurred_in"
+          }
+        ]
+      }
+    },
+    "c2e2a7dc5554b9d1b225e58db9bf91eadfc4cbf9e776c02cedb354cc747c9d3f": {
+      "method": "structured_output",
+      "user_input_preview": "Title: Running My First Marathon\n\nI ran my first marathon in 2016 in Vienna. Training took five months with a gradual bu",
+      "schema_name": "KnowledgeGraph",
+      "response": {
+        "nodes": [
+          {
+            "id": "2016",
+            "name": "2016",
+            "type": "DATE",
+            "description": "The year when the first marathon was run."
+          },
+          {
+            "id": "Vienna",
+            "name": "Vienna",
+            "type": "LOCATION",
+            "description": "The capital city of Austria, where the marathon took place."
+          },
+          {
+            "id": "marathon",
+            "name": "marathon",
+            "type": "CONCEPT",
+            "description": "A long-distance running race with an official distance of 42.195 kilometers."
+          },
+          {
+            "id": "running",
+            "name": "running",
+            "type": "CONCEPT",
+            "description": "A method of terrestrial locomotion allowing humans and other animals to move rapidly on foot."
+          }
+        ],
+        "edges": [
+          {
+            "source_node_id": "2016",
+            "target_node_id": "Vienna",
+            "relationship_name": "took_place_in"
+          },
+          {
+            "source_node_id": "marathon",
+            "target_node_id": "running",
+            "relationship_name": "is_a"
+          }
+        ]
+      }
+    },
+    "c3a80231b71489309e272da143289c5097940b1be2f1ef5a71114b8a87bd7c25": {
+      "method": "structured_output",
+      "user_input_preview": "Title: The Blackout of 2003\n\nDuring the Northeast blackout of August 2003, the power went out for nearly two days. Neigh",
+      "schema_name": "KnowledgeGraph",
+      "response": {
+        "nodes": [
+          {
+            "id": "Northeast blackout",
+            "name": "Northeast blackout",
+            "type": "CONCEPT",
+            "description": "The Northeast blackout of August 2003 was a major power outage that affected several states in the northeastern United States."
+          },
+          {
+            "id": "August 2003",
+            "name": "August 2003",
+            "type": "DATE",
+            "description": "The month and year when the Northeast blackout occurred."
+          },
+          {
+            "id": "community",
+            "name": "community",
+            "type": "CONCEPT",
+            "description": "A group of people living in the same place or having a particular characteristic in common."
+          }
+        ],
+        "edges": [
+          {
+            "source_node_id": "Northeast blackout",
+            "target_node_id": "August 2003",
+            "relationship_name": "occurred_in"
+          },
+          {
+            "source_node_id": "Northeast blackout",
+            "target_node_id": "community",
+            "relationship_name": "influenced"
+          }
+        ]
+      }
+    },
+    "c57864bb285a23ad5a3a9c6b4004f83cecf67482f974d08a87bd84638b5f3e9e": {
+      "method": "structured_output",
+      "user_input_preview": "Title: Visiting a Museum in Florence\n\nSeeing Michelangelo's David at the Galleria dell'Accademia in Florence was overwhe",
+      "schema_name": "SummarizedContent",
+      "response": {
+        "summary": "Experiencing Michelangelo's David at the Galleria dell'Accademia in Florence is a breathtaking encounter that surpasses any photograph.",
+        "description": "The visit to the Galleria dell'Accademia in Florence, where Michelangelo's David is housed, was profoundly impactful. The sheer size and intricate details of the sculpture are unmatched by images, leading to a moment of deep appreciation as I focused on its hands for twenty minutes, despite the crowded museum."
+      }
+    },
+    "c7a38b7cbc90b0ce0331fe184dbd4861bc05c40494147784b3b730eea9bd3731": {
+      "method": "structured_output",
+      "user_input_preview": "Title: Building a Treehouse\n\nMy father and I built a treehouse in the oak tree in our backyard when I was ten. We spent ",
+      "schema_name": "SummarizedContent",
+      "response": {
+        "summary": "At the age of ten, I collaborated with my father to construct a treehouse in our backyard's oak tree, which served as my summer reading spot until we relocated.",
+        "description": "When I was ten years old, my father and I dedicated three weekends to building a treehouse in the oak tree in our backyard. We measured, cut, and nailed boards together, creating a structure that featured a rope ladder and a small west-facing window. This treehouse became my favorite reading nook during the summers until we moved away."
+      }
+    },
+    "c8e792af0b7b079728611d7e679691f215282adaacb9f4ecf985d10b50548c4e": {
+      "method": "structured_output",
+      "user_input_preview": "Title: The Importance of Backups\n\nI learned the importance of backups when my laptop's hard drive failed in 2016, taking",
+      "schema_name": "KnowledgeGraph",
+      "response": {
+        "nodes": [
+          {
+            "id": "backups",
+            "name": "backups",
+            "type": "CONCEPT",
+            "description": "Backups refer to copies of data stored separately to prevent loss in case of hardware failure or other issues."
+          },
+          {
+            "id": "data_loss",
+            "name": "data_loss",
+            "type": "CONCEPT",
+            "description": "Data loss is the loss of data due to various reasons, including hardware failure, accidental deletion, or corruption."
+          },
+          {
+            "id": "hard_drive_failure",
+            "name": "hard drive failure",
+            "type": "CONCEPT",
+            "description": "Hard drive failure occurs when a hard drive malfunctions, leading to the loss of data stored on it."
+          },
+          {
+            "id": "2016",
+            "name": "2016",
+            "type": "DATE",
+            "description": "The year when the author experienced a hard drive failure, resulting in the loss of personal projects."
+          },
+          {
+            "id": "automated_backups",
+            "name": "automated backups",
+            "type": "CONCEPT",
+            "description": "Automated backups are scheduled processes that create copies of data without manual intervention."
+          },
+          {
+            "id": "external_drive",
+            "name": "external drive",
+            "type": "CONCEPT",
+            "description": "An external drive is a storage device that connects to a computer externally, used for backup and data storage."
+          },
+          {
+            "id": "cloud_storage",
+            "name": "cloud storage",
+            "type": "CONCEPT",
+            "description": "Cloud storage is a service that allows users to store data on remote servers accessed via the internet."
+          }
+        ],
+        "edges": [
+          {
+            "source_node_id": "2016",
+            "target_node_id": "hard_drive_failure",
+            "relationship_name": "experienced"
+          },
+          {
+            "source_node_id": "hard_drive_failure",
+            "target_node_id": "data_loss",
+            "relationship_name": "caused"
+          },
+          {
+            "source_node_id": "data_loss",
+            "target_node_id": "backups",
+            "relationship_name": "highlighted_importance_of"
+          },
+          {
+            "source_node_id": "backups",
+            "target_node_id": "automated_backups",
+            "relationship_name": "led_to"
+          },
+          {
+            "source_node_id": "automated_backups",
+            "target_node_id": "external_drive",
+            "relationship_name": "utilized_for"
+          },
+          {
+            "source_node_id": "automated_backups",
+            "target_node_id": "cloud_storage",
+            "relationship_name": "utilized_for"
+          }
+        ]
+      }
+    },
+    "cd20e0f478ebc69fe4e627a563a366dccaf7aa015a7972795e16c25e0e3fef48": {
+      "method": "structured_output",
+      "user_input_preview": "Title: Volunteering at a Food Bank\n\nI volunteered at a local food bank every Saturday for six months in 2019. We sorted ",
+      "schema_name": "KnowledgeGraph",
+      "response": {
+        "nodes": [
+          {
+            "id": "local food bank",
+            "name": "local food bank",
+            "type": "ORGANIZATION",
+            "description": "A community organization that provides food assistance to families in need."
+          },
+          {
+            "id": "2019",
+            "name": "2019",
+            "type": "DATE",
+            "description": "The year during which the volunteering took place."
+          },
+          {
+            "id": "volunteering",
+            "name": "volunteering",
+            "type": "CONCEPT",
+            "description": "The act of offering services or time to help others without financial gain."
+          },
+          {
+            "id": "supply chain management",
+            "name": "supply chain management",
+            "type": "CONCEPT",
+            "description": "The management of the flow of goods and services, including all processes that transform raw materials into final products."
+          },
+          {
+            "id": "community",
+            "name": "community",
+            "type": "CONCEPT",
+            "description": "A group of people living in the same place or having a particular characteristic in common."
+          }
+        ],
+        "edges": [
+          {
+            "source_node_id": "local food bank",
+            "target_node_id": "volunteering",
+            "relationship_name": "involves"
+          },
+          {
+            "source_node_id": "2019",
+            "target_node_id": "volunteering",
+            "relationship_name": "took_place_in"
+          },
+          {
+            "source_node_id": "volunteering",
+            "target_node_id": "supply chain management",
+            "relationship_name": "related_to"
+          },
+          {
+            "source_node_id": "local food bank",
+            "target_node_id": "community",
+            "relationship_name": "serves"
+          }
+        ]
+      }
+    },
+    "cebdf3c5a7f610c84fdc0d0aaa76d2b7db5af50fd8278e0b9fc4f3fe8ab6d2b1": {
+      "method": "structured_output",
+      "user_input_preview": "Title: First Time Using Docker\n\nThe first time I used Docker in 2015, it felt like magic. I went from 'it works on my ma",
+      "schema_name": "SummarizedContent",
+      "response": {
+        "summary": "My initial experience with Docker in 2015 was transformative, enabling quick creation of reproducible environments and simplifying deployment for our Python app.",
+        "description": "In 2015, my first encounter with Docker felt revolutionary, as it transitioned me from the common issue of 'it works on my machine' to establishing reproducible environments within a single afternoon. The Dockerfile for our Python application was just fifteen lines long, effectively addressing months of deployment challenges. Consequently, I became the team's Docker advocate for the following year."
+      }
+    },
+    "d3d3c4be2475b5d2f4bb70171302dc1abe81c5afb0bb1eacc3c8199b10ae70ca": {
+      "method": "structured_output",
+      "user_input_preview": "Title: Power of a Mentor\n\nMy first real mentor was a senior engineer named David who took the time to review my code lin",
+      "schema_name": "SummarizedContent",
+      "response": {
+        "summary": "David, a senior engineer, exemplified effective mentorship by guiding me through my code, encouraging self-discovery rather than simply providing solutions.",
+        "description": "My initial significant mentor, David, a senior engineer, dedicated time to meticulously examine my code. Instead of merely pointing out errors, he posed questions that prompted me to identify the problems independently. This experience highlighted that effective mentorship focuses on fostering critical thinking rather than just giving answers."
+      }
+    },
+    "d493d4576c0bcc0c5d9973801fbe3081b949ca900271a9852ba0dc83b7602472": {
+      "method": "structured_output",
+      "user_input_preview": "Title: Refactoring Legacy Code\n\nI spent three months refactoring a 10,000-line PHP file that had been accumulating featu",
+      "schema_name": "SummarizedContent",
+      "response": {
+        "summary": "Over three months, I refactored a 10,000-line PHP file that had grown over eight years, starting with characterization tests to ensure existing functionality.",
+        "description": "The process involved extracting classes individually and executing the test suite after each modification. Ultimately, the code was reorganized into twenty clearly named files, allowing the team to make changes safely."
+      }
+    },
+    "d6e803b66ff13b036eda3230fe2fe951aac30ba6c476fd1bbac0d3ef707f094d": {
+      "method": "structured_output",
+      "user_input_preview": "Title: Watching the World Cup Final\n\nThe 2014 World Cup final between Germany and Argentina was one of the most tense ma",
+      "schema_name": "KnowledgeGraph",
+      "response": {
+        "nodes": [
+          {
+            "id": "2014 World Cup",
+            "name": "2014 World Cup",
+            "type": "CONCEPT",
+            "description": "The 2014 World Cup was an international football tournament held in Brazil, featuring teams from around the world."
+          },
+          {
+            "id": "Germany",
+            "name": "Germany",
+            "type": "LOCATION",
+            "description": "Germany is a country in Central Europe known for its rich history and strong football tradition."
+          },
+          {
+            "id": "Argentina",
+            "name": "Argentina",
+            "type": "LOCATION",
+            "description": "Argentina is a country in South America known for its passionate football culture and history of success in international tournaments."
+          },
+          {
+            "id": "Götze",
+            "name": "Götze",
+            "type": "PERSON",
+            "description": "Mario Götze is a German professional footballer who scored the winning goal in the 2014 World Cup final."
+          },
+          {
+            "id": "friend's apartment",
+            "name": "friend's apartment",
+            "type": "LOCATION",
+            "description": "A private residence where friends gathered to watch the World Cup final."
+          },
+          {
+            "id": "snacks and drinks",
+            "name": "snacks and drinks",
+            "type": "CONCEPT",
+            "description": "Food and beverages typically enjoyed during social gatherings, such as watching sports."
+          }
+        ],
+        "edges": [
+          {
+            "source_node_id": "2014 World Cup",
+            "target_node_id": "Germany",
+            "relationship_name": "featured_team"
+          },
+          {
+            "source_node_id": "2014 World Cup",
+            "target_node_id": "Argentina",
+            "relationship_name": "featured_team"
+          },
+          {
+            "source_node_id": "Götze",
+            "target_node_id": "2014 World Cup",
+            "relationship_name": "scored_goal"
+          },
+          {
+            "source_node_id": "friend's apartment",
+            "target_node_id": "2014 World Cup",
+            "relationship_name": "location_of_event"
+          },
+          {
+            "source_node_id": "snacks and drinks",
+            "target_node_id": "friend's apartment",
+            "relationship_name": "served_at"
+          }
+        ]
+      }
+    },
+    "d8edf14621c8e51de9aa53ca66e4cfdf92468952db9ffe311bbba0d5b0e23d3d": {
+      "method": "structured_output",
+      "user_input_preview": "Title: Snow Day in School\n\nThe heaviest snowfall I remember was in January 1998 when school was canceled for three days.",
+      "schema_name": "KnowledgeGraph",
+      "response": {
+        "nodes": [
+          {
+            "id": "January 1998",
+            "name": "January 1998",
+            "type": "DATE",
+            "description": "The month and year when the heaviest snowfall occurred, leading to school cancellation."
+          },
+          {
+            "id": "February",
+            "name": "February",
+            "type": "DATE",
+            "description": "The month when the snow fort collapsed."
+          },
+          {
+            "id": "snow_fort",
+            "name": "snow fort",
+            "type": "CONCEPT",
+            "description": "An enormous snow fort built in the park during the heavy snowfall."
+          },
+          {
+            "id": "school",
+            "name": "school",
+            "type": "CONCEPT",
+            "description": "The educational institution that was closed for three days due to heavy snowfall."
+          },
+          {
+            "id": "park",
+            "name": "park",
+            "type": "LOCATION",
+            "description": "The location where the snow fort was built."
+          }
+        ],
+        "edges": [
+          {
+            "source_node_id": "January 1998",
+            "target_node_id": "school",
+            "relationship_name": "canceled"
+          },
+          {
+            "source_node_id": "January 1998",
+            "target_node_id": "snow_fort",
+            "relationship_name": "built"
+          },
+          {
+            "source_node_id": "snow_fort",
+            "target_node_id": "park",
+            "relationship_name": "located_in"
+          },
+          {
+            "source_node_id": "snow_fort",
+            "target_node_id": "February",
+            "relationship_name": "collapsed"
+          }
+        ]
+      }
+    },
+    "deef9b0e83eb8d734f820282626e99ccd863a5aeab90cfc17baceea38f23a147": {
+      "method": "structured_output",
+      "user_input_preview": "Title: Learning Git the Hard Way\n\nI learned git by accidentally deleting a week's worth of work with git reset --hard in",
+      "schema_name": "SummarizedContent",
+      "response": {
+        "summary": "The author learned Git through a painful experience of losing work, which led to a comprehensive study of the Pro Git book and subsequent teaching of Git workshops.",
+        "description": "In 2013, the author accidentally deleted a week's worth of work using 'git reset --hard', prompting a weekend of thorough reading of the Pro Git book. Mastering the reflog proved invaluable in recovering from mistakes, and the author now conducts Git workshops for junior developers."
+      }
+    },
+    "df952b27a7553ce983d03b969dc958b7fee58ff4ead3e124ff8024ab66661c74": {
+      "method": "structured_output",
+      "user_input_preview": "Title: Migrating a Monolith to Microservices\n\nOur team spent eight months in 2020 migrating a monolithic Python applicat",
+      "schema_name": "SummarizedContent",
+      "response": {
+        "summary": "In 2020, our team transitioned a monolithic Python application to microservices over eight months, utilizing the strangler fig pattern for gradual traffic rerouting.",
+        "description": "The migration involved significant challenges, particularly in separating the shared database. Ultimately, the process resulted in a 40% reduction in latency, although it also led to a threefold increase in operational complexity."
+      }
+    },
+    "e18a5789466807d8951fa8243d33a6fedb013f3cb804257ee6c9b653fc194f68": {
+      "method": "structured_output",
+      "user_input_preview": "Title: Winning a Hackathon\n\nOur team won a 48-hour hackathon in 2017 by building a real-time translator for sign languag",
+      "schema_name": "SummarizedContent",
+      "response": {
+        "summary": "In 2017, our team triumphed in a 48-hour hackathon by developing a real-time sign language translator utilizing computer vision, achieving 85% accuracy.",
+        "description": "Our team secured victory at a 48-hour hackathon in 2017 by creating a real-time translator for sign language through computer vision techniques. We employed a pre-trained CNN model, which we refined using ASL datasets. The judges were impressed with our demonstration, which successfully translated basic signs with an accuracy of 85%. The prize was divided among the four team members."
+      }
+    },
+    "e33846d5333f429b649858bd1f16d35bf1c20e64acb4cf252bd8da1145161864": {
+      "method": "structured_output",
+      "user_input_preview": "Title: A Rainy Day in Kyoto\n\nIt rained the entire day I visited Kyoto's bamboo grove. Most tourists left, but I stayed a",
+      "schema_name": "KnowledgeGraph",
+      "response": {
+        "nodes": [
+          {
+            "id": "Kyoto",
+            "name": "Kyoto",
+            "type": "LOCATION",
+            "description": "Kyoto is a city in Japan known for its classical Buddhist temples, as well as gardens, imperial palaces, Shinto shrines, and traditional wooden houses."
+          },
+          {
+            "id": "Japan",
+            "name": "Japan",
+            "type": "LOCATION",
+            "description": "Japan is an island country in East Asia, located in the Pacific Ocean, known for its rich culture, history, and technological advancements."
+          },
+          {
+            "id": "bamboo",
+            "name": "bamboo",
+            "type": "CONCEPT",
+            "description": "Bamboo is a group of woody perennial grasses known for their fast growth and versatility, often found in various ecosystems."
+          },
+          {
+            "id": "travel",
+            "name": "travel",
+            "type": "CONCEPT",
+            "description": "Travel refers to the movement of people between distant geographical locations, often for leisure or exploration."
+          }
+        ],
+        "edges": [
+          {
+            "source_node_id": "Kyoto",
+            "target_node_id": "Japan",
+            "relationship_name": "located_in"
+          },
+          {
+            "source_node_id": "Kyoto",
+            "target_node_id": "bamboo",
+            "relationship_name": "features"
+          },
+          {
+            "source_node_id": "Kyoto",
+            "target_node_id": "travel",
+            "relationship_name": "associated_with"
+          }
+        ]
+      }
+    },
+    "e3cd6843af76ad615a9af626225e63a5fdc59a52c19abddc9e0ff79445ca6215": {
+      "method": "structured_output",
+      "user_input_preview": "Title: Learning to Cook Pasta\n\nAn Italian roommate in college taught me that you must salt the pasta water generously — ",
+      "schema_name": "KnowledgeGraph",
+      "response": {
+        "nodes": [
+          {
+            "id": "Italian roommate",
+            "name": "Italian roommate",
+            "type": "PERSON",
+            "description": "A college roommate who taught the author how to cook pasta."
+          },
+          {
+            "id": "pasta",
+            "name": "pasta",
+            "type": "CONCEPT",
+            "description": "A staple Italian dish made from wheat and water, often served with various sauces."
+          },
+          {
+            "id": "cooking",
+            "name": "cooking",
+            "type": "CONCEPT",
+            "description": "The practice of preparing food for consumption."
+          },
+          {
+            "id": "college",
+            "name": "college",
+            "type": "CONCEPT",
+            "description": "An educational institution where students pursue higher education."
+          }
+        ],
+        "edges": [
+          {
+            "source_node_id": "Italian roommate",
+            "target_node_id": "cooking",
+            "relationship_name": "teaches"
+          },
+          {
+            "source_node_id": "pasta",
+            "target_node_id": "cooking",
+            "relationship_name": "is_prepared_in"
+          },
+          {
+            "source_node_id": "college",
+            "target_node_id": "Italian roommate",
+            "relationship_name": "shares_room_with"
+          }
+        ]
+      }
+    },
+    "e62f0911a661bc353da8d4a530741118d31e27d02c305c7808839437083f6991": {
+      "method": "structured_output",
+      "user_input_preview": "Title: Discovering Podcasts\n\nI discovered podcasts during my daily commute in 2016. The first one I binged was a technol",
+      "schema_name": "SummarizedContent",
+      "response": {
+        "summary": "I found podcasts in 2016 during my daily travel, which turned my commute into a productive learning experience.",
+        "description": "In 2016, I stumbled upon podcasts while commuting, starting with a technology history series about the transistor's invention. This shift allowed me to utilize my time in traffic for educational purposes, and I now dedicate approximately ten hours weekly to listening to various podcasts."
+      }
+    },
+    "e8c9beb40082e851e96d12c26219e97285ae19eefc8bc0d9b98a13bb30d45f57": {
+      "method": "structured_output",
+      "user_input_preview": "Title: Teaching Someone to Code\n\nI taught my younger cousin the basics of Python over a summer. We started with variable",
+      "schema_name": "KnowledgeGraph",
+      "response": {
+        "nodes": [
+          {
+            "id": "younger cousin",
+            "name": "younger cousin",
+            "type": "PERSON",
+            "description": "The speaker's younger cousin who learned the basics of Python programming."
+          },
+          {
+            "id": "Python",
+            "name": "Python",
+            "type": "CONCEPT",
+            "description": "A high-level programming language known for its readability and versatility."
+          },
+          {
+            "id": "computer science",
+            "name": "computer science",
+            "type": "CONCEPT",
+            "description": "The study of computers and computational systems, encompassing both theoretical and practical aspects."
+          },
+          {
+            "id": "university",
+            "name": "university",
+            "type": "LOCATION",
+            "description": "An institution of higher education where students study various subjects, including computer science."
+          }
+        ],
+        "edges": [
+          {
+            "source_node_id": "younger cousin",
+            "target_node_id": "Python",
+            "relationship_name": "learned"
+          },
+          {
+            "source_node_id": "younger cousin",
+            "target_node_id": "computer science",
+            "relationship_name": "studying"
+          },
+          {
+            "source_node_id": "younger cousin",
+            "target_node_id": "university",
+            "relationship_name": "attending"
+          }
+        ]
+      }
+    },
+    "e92cf54f52267440ca214876ce4f2502f420e2ff8a230e8193bf3c04b74366b3": {
+      "method": "structured_output",
+      "user_input_preview": "Title: Migrating a Monolith to Microservices\n\nOur team spent eight months in 2020 migrating a monolithic Python applicat",
+      "schema_name": "KnowledgeGraph",
+      "response": {
+        "nodes": [
+          {
+            "id": "Migrating a Monolith to Microservices",
+            "name": "Migrating a Monolith to Microservices",
+            "type": "CONCEPT",
+            "description": "A process of transitioning from a monolithic application architecture to a microservices architecture."
+          },
+          {
+            "id": "Python",
+            "name": "Python",
+            "type": "CONCEPT",
+            "description": "A high-level programming language known for its readability and versatility."
+          },
+          {
+            "id": "2020",
+            "name": "2020",
+            "type": "DATE",
+            "description": "The year during which the migration of the application took place."
+          },
+          {
+            "id": "strangler fig pattern",
+            "name": "strangler fig pattern",
+            "type": "CONCEPT",
+            "description": "A pattern used in software development to gradually replace a monolithic application with microservices."
+          },
+          {
+            "id": "shared database",
+            "name": "shared database",
+            "type": "CONCEPT",
+            "description": "A database that is used by multiple services or applications."
+          },
+          {
+            "id": "latency",
+            "name": "latency",
+            "type": "CONCEPT",
+            "description": "The time delay experienced in a system, often measured in milliseconds."
+          },
+          {
+            "id": "operational complexity",
+            "name": "operational complexity",
+            "type": "CONCEPT",
+            "description": "The level of difficulty in managing and operating a system or application."
+          },
+          {
+            "id": "microservices",
+            "name": "microservices",
+            "type": "CONCEPT",
+            "description": "An architectural style that structures an application as a collection of loosely coupled services."
+          },
+          {
+            "id": "architecture",
+            "name": "architecture",
+            "type": "CONCEPT",
+            "description": "The conceptual model that defines the structure, behavior, and more views of a system."
+          },
+          {
+            "id": "migration",
+            "name": "migration",
+            "type": "CONCEPT",
+            "description": "The process of moving from one system or architecture to another."
+          }
+        ],
+        "edges": [
+          {
+            "source_node_id": "Migrating a Monolith to Microservices",
+            "target_node_id": "Python",
+            "relationship_name": "uses"
+          },
+          {
+            "source_node_id": "Migrating a Monolith to Microservices",
+            "target_node_id": "2020",
+            "relationship_name": "took_place_in"
+          },
+          {
+            "source_node_id": "Migrating a Monolith to Microservices",
+            "target_node_id": "strangler fig pattern",
+            "relationship_name": "employs"
+          },
+          {
+            "source_node_id": "Migrating a Monolith to Microservices",
+            "target_node_id": "shared database",
+            "relationship_name": "involves"
+          },
+          {
+            "source_node_id": "Migrating a Monolith to Microservices",
+            "target_node_id": "latency",
+            "relationship_name": "improves"
+          },
+          {
+            "source_node_id": "Migrating a Monolith to Microservices",
+            "target_node_id": "operational complexity",
+            "relationship_name": "increases"
+          },
+          {
+            "source_node_id": "Migrating a Monolith to Microservices",
+            "target_node_id": "microservices",
+            "relationship_name": "transitions_to"
+          },
+          {
+            "source_node_id": "Migrating a Monolith to Microservices",
+            "target_node_id": "architecture",
+            "relationship_name": "relates_to"
+          },
+          {
+            "source_node_id": "Migrating a Monolith to Microservices",
+            "target_node_id": "migration",
+            "relationship_name": "is_a"
+          }
+        ]
+      }
+    },
+    "ed9369f34f3b968836d641ef85773fe0705fcce5e292d648f8b0ec78ae7b266e": {
+      "method": "structured_output",
+      "user_input_preview": "Title: A Thunderstorm at the Beach\n\nWe were at the beach when a sudden thunderstorm rolled in from the sea. The sky turn",
+      "schema_name": "KnowledgeGraph",
+      "response": {
+        "nodes": [
+          {
+            "id": "beach",
+            "name": "beach",
+            "type": "LOCATION",
+            "description": "A sandy area by the sea, often used for recreation and leisure activities."
+          },
+          {
+            "id": "thunderstorm",
+            "name": "thunderstorm",
+            "type": "CONCEPT",
+            "description": "A weather phenomenon characterized by the presence of thunder and lightning, often accompanied by heavy rain."
+          },
+          {
+            "id": "weather",
+            "name": "weather",
+            "type": "CONCEPT",
+            "description": "The state of the atmosphere at a specific place and time, including factors like temperature, humidity, and precipitation."
+          }
+        ],
+        "edges": [
+          {
+            "source_node_id": "thunderstorm",
+            "target_node_id": "weather",
+            "relationship_name": "is_a_type_of"
+          },
+          {
+            "source_node_id": "beach",
+            "target_node_id": "thunderstorm",
+            "relationship_name": "located_near"
+          }
+        ]
+      }
+    },
+    "ee17227cc6320a02be44049e406202075a598e4c57b6dc3cc5c6cce605eb6f6c": {
+      "method": "structured_output",
+      "user_input_preview": "Title: Debugging a Production Outage\n\nIn 2019, our production database went down at 3 AM due to a misconfigured connecti",
+      "schema_name": "SummarizedContent",
+      "response": {
+        "summary": "In 2019, a production database outage occurred at 3 AM due to a misconfigured connection pool, which took four hours to diagnose.",
+        "description": "The issue was traced through logs, revealing that a recent deployment had reduced the maximum connections from 100 to 10. Although the resolution required only a simple one-line configuration adjustment, the investigation process was arduous."
+      }
+    },
+    "f5c90a74b27d026250a8e83c0c19a6de0cdd08ec16f07d42d4892df99548a34a": {
+      "method": "structured_output",
+      "user_input_preview": "Title: Hiking in the Alps\n\nIn the summer of 2015, I hiked the Tour du Mont Blanc with two friends. The 170-kilometer tra",
+      "schema_name": "SummarizedContent",
+      "response": {
+        "summary": "In 2015, I trekked the Tour du Mont Blanc with friends, covering 170 kilometers across France, Italy, and Switzerland in eleven days.",
+        "description": "During the summer of 2015, I embarked on the Tour du Mont Blanc hike with two companions. This 170-kilometer route spanned France, Italy, and Switzerland over the course of eleven days. The scenery from Col de la Seigne was stunning, and we transported all our equipment while camping throughout the journey."
+      }
+    },
+    "f730a2ab4127fd5466909d0b078fbc834488f078e866b6eb6a847895a7297089": {
+      "method": "structured_output",
+      "user_input_preview": "Title: First Flight Experience\n\nMy first time on an airplane was a flight from Belgrade to London when I was sixteen. I ",
+      "schema_name": "SummarizedContent",
+      "response": {
+        "summary": "My inaugural airplane journey was at sixteen from Belgrade to London, where I enjoyed a window seat and breathtaking views.",
+        "description": "At the age of sixteen, I embarked on my first flight from Belgrade to London. Seated by the window, I marveled at the clouds from above. The initial takeoff caused a stomach drop, but once we stabilized, the scenery was tranquil. I remained glued to the window throughout the two-hour trip."
+      }
+    },
+    "fa78bd7efe66c8b2a3c5f2266fd769254282b2400768ad3971f87b815dd37cb9": {
+      "method": "structured_output",
+      "user_input_preview": "Title: The Neighborhood Bookstore\n\nThere was a tiny bookstore on my street run by an elderly couple. They knew every boo",
+      "schema_name": "SummarizedContent",
+      "response": {
+        "summary": "A small neighborhood bookstore, managed by a knowledgeable elderly couple, closed in 2019, leaving the community mourning its loss.",
+        "description": "The quaint bookstore on my street, operated by an elderly pair who had an intimate knowledge of their inventory, could suggest books based on minimal descriptions. Its closure in 2019 due to their retirement left a significant void in the local community."
+      }
+    }
+  }
+}

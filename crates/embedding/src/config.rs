@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::engine::EmbeddingEngine;
 use crate::error::EmbeddingResult;
-use crate::mock::MockEmbeddingEngine;
+use crate::mock::{MockEmbeddingEngine, MockVectorMode};
 use crate::ollama::OllamaEmbeddingEngine;
 use crate::openai_compatible::OpenAICompatibleEmbeddingEngine;
 use crate::provider::EmbeddingProvider;
@@ -178,9 +178,15 @@ pub struct EmbeddingConfig {
     /// Number of texts to send in a single embedding request (default: 36).
     pub batch_size: usize,
 
-    /// If true, use mock zero-vector embeddings regardless of `provider`.
+    /// If true, use mock embeddings regardless of `provider`.
     /// Overrides `provider` to `Mock`. Set via `MOCK_EMBEDDING=true`.
     pub mock: bool,
+
+    /// How the mock engine generates vectors when `provider` is `Mock`.
+    /// Defaults to [`MockVectorMode::Zero`]. Set via `MOCK_EMBEDDING=deterministic`
+    /// to derive content-stable vectors from `sha256(text)`.
+    #[serde(default)]
+    pub mock_mode: MockVectorMode,
 
     /// ONNX-specific configuration. Only consulted when provider is `Onnx` or `Fastembed`.
     #[cfg(feature = "onnx")]
@@ -242,6 +248,7 @@ impl Default for EmbeddingConfig {
             max_completion_tokens: 8191,
             batch_size: 36,
             mock: false,
+            mock_mode: MockVectorMode::Zero,
             #[cfg(feature = "onnx")]
             onnx: OnnxEmbeddingConfig::default(),
             huggingface_tokenizer: None,
@@ -257,13 +264,23 @@ impl EmbeddingConfig {
     pub fn from_env() -> Self {
         let mut config = Self::default();
 
-        // Parse MOCK_EMBEDDING first — it overrides everything else if set
-        if let Ok(val) = std::env::var("MOCK_EMBEDDING")
-            && cognee_utils::parse_env_bool(&val)
-        {
-            config.mock = true;
-            config.provider = EmbeddingProvider::Mock;
-            return config;
+        // Parse MOCK_EMBEDDING first — it overrides everything else if set.
+        // `deterministic` (or `hash`) selects the SHA-256-derived deterministic
+        // mode; other truthy values keep the legacy zero-vector mode.
+        if let Ok(val) = std::env::var("MOCK_EMBEDDING") {
+            let val = val.trim().to_lowercase();
+            if val == "deterministic" || val == "hash" {
+                config.mock = true;
+                config.provider = EmbeddingProvider::Mock;
+                config.mock_mode = MockVectorMode::Deterministic;
+                return config;
+            }
+            if val == "true" || val == "1" || val == "yes" {
+                config.mock = true;
+                config.provider = EmbeddingProvider::Mock;
+                config.mock_mode = MockVectorMode::Zero;
+                return config;
+            }
         }
 
         // Parse EMBEDDING_PROVIDER
@@ -453,7 +470,9 @@ impl EmbeddingConfig {
                 let engine = OllamaEmbeddingEngine::new(self)?;
                 Ok(Arc::new(engine))
             }
-            EmbeddingProvider::Mock => Ok(Arc::new(MockEmbeddingEngine::new(self.dimensions))),
+            EmbeddingProvider::Mock => Ok(Arc::new(
+                MockEmbeddingEngine::new(self.dimensions).with_mode(self.mock_mode),
+            )),
         }
     }
 }
@@ -536,6 +555,20 @@ mod tests {
         let config = EmbeddingConfig::from_env();
         unsafe { std::env::remove_var("MOCK_EMBEDDING") };
         assert!(config.mock);
+        // Legacy truthy values keep the zero-vector mode.
+        assert_eq!(config.mock_mode, MockVectorMode::Zero);
+    }
+
+    #[test]
+    #[ignore = "mutates global env vars; run with --test-threads=1 --ignored"]
+    fn test_from_env_mock_embedding_deterministic() {
+        // SAFETY: see test_from_env_mock_embedding_true
+        unsafe { std::env::set_var("MOCK_EMBEDDING", "deterministic") };
+        let config = EmbeddingConfig::from_env();
+        unsafe { std::env::remove_var("MOCK_EMBEDDING") };
+        assert!(config.mock);
+        assert_eq!(config.effective_provider(), EmbeddingProvider::Mock);
+        assert_eq!(config.mock_mode, MockVectorMode::Deterministic);
     }
 
     #[test]

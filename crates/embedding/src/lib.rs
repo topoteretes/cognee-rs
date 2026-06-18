@@ -27,7 +27,7 @@ pub mod onnx;
 pub use config::EmbeddingConfig;
 pub use engine::EmbeddingEngine;
 pub use error::{EmbeddingError, EmbeddingResult};
-pub use mock::MockEmbeddingEngine;
+pub use mock::{MockEmbeddingEngine, MockVectorMode};
 pub use ollama::OllamaEmbeddingEngine;
 pub use openai_compatible::OpenAICompatibleEmbeddingEngine;
 pub use provider::EmbeddingProvider;
