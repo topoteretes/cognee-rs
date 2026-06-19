@@ -12,8 +12,8 @@ use cognee_observability::TelemetryGuard;
 use cognee_core::PipelineRunRegistry;
 use cognee_core::pipeline_run_registry::DefaultPipelineRunRegistry;
 use cognee_database::{
-    DatabaseConnection, NoopPipelineRunRepository, PipelineRunRepository,
-    SeaOrmPipelineRunRepository,
+    DatabaseConnection, NoopPipelineRunRepository, PipelineRunRepository, SeaOrmApiKeyRepository,
+    SeaOrmPipelineRunRepository, SeaOrmUserAuthRepository,
 };
 
 use crate::{
@@ -178,11 +178,37 @@ impl AppState {
                 }
             };
 
+        // Wire the authentication context against the server's own relational
+        // DB.  The baseline migration creates the `users` / `principals` /
+        // `user_api_key` tables (and seeds the default user), so the auth
+        // repositories operate on the same connection the rest of the server
+        // uses.  Without this the extractor would fall back to the anonymous
+        // default user and register/login would 500 (auth context missing).
+        //
+        // `from_env` only errors in production with the insecure default JWT
+        // secret.  Rather than refuse to build the whole server in that case,
+        // degrade to the prior behaviour (no auth context → anonymous default
+        // user) with a loud warning, so misconfigured deployments stay running
+        // exactly as they did before auth was wired here.
+        let user_repo = Arc::new(SeaOrmUserAuthRepository { db: (*db).clone() });
+        let api_key_repo = Arc::new(SeaOrmApiKeyRepository { db: (*db).clone() });
+        let auth = match AuthContext::from_env(&config, user_repo, api_key_repo) {
+            Ok(ctx) => Some(Arc::new(ctx)),
+            Err(e) => {
+                tracing::warn!(
+                    "authentication context not wired: {e} — \
+                     falling back to anonymous default user. Set strong \
+                     FASTAPI_USERS_* secrets (or ENV=dev/test) to enable auth."
+                );
+                None
+            }
+        };
+
         Ok(Self {
             config: Arc::new(config),
             pipelines,
             lib: None,
-            auth: None,
+            auth,
             mailer: Arc::new(crate::auth::LoggingMailer),
             health: None,
             spans: Arc::new(SpanBuffer::new(BufferConfig::from_env())),

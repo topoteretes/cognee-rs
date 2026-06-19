@@ -8,12 +8,12 @@ use async_trait::async_trait;
 use chrono::Utc;
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, DatabaseConnection, EntityTrait,
-    PaginatorTrait, QueryFilter, sea_query::OnConflict,
+    PaginatorTrait, QueryFilter, TransactionTrait, sea_query::OnConflict,
 };
 use uuid::Uuid;
 
 use crate::{
-    entities::{user, user_api_key},
+    entities::{principal, user, user_api_key},
     types::DatabaseError,
 };
 
@@ -229,6 +229,32 @@ impl UserAuthRepository for SeaOrmUserAuthRepository {
     async fn create(&self, payload: CreateUserPayload) -> Result<AuthUser, DatabaseError> {
         let id_str = payload.id.to_string().replace('-', "");
         let now = Utc::now();
+
+        // `users.id` carries a FK to `principals.id` (Python models a User as a
+        // Principal subtype), so the parent principal row must exist first.
+        // Insert both in one transaction to keep the FK satisfied atomically.
+        let txn = self
+            .db
+            .begin()
+            .await
+            .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
+
+        let principal_am = principal::ActiveModel {
+            id: Set(id_str.clone()),
+            principal_type: Set("user".to_owned()),
+            created_at: Set(now),
+            updated_at: Set(None),
+        };
+        principal::Entity::insert(principal_am)
+            .on_conflict(
+                OnConflict::column(principal::Column::Id)
+                    .do_nothing()
+                    .to_owned(),
+            )
+            .exec_without_returning(&txn)
+            .await
+            .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
+
         let am = user::ActiveModel {
             id: Set(id_str.clone()),
             email: Set(payload.email),
@@ -245,9 +271,14 @@ impl UserAuthRepository for SeaOrmUserAuthRepository {
         };
         let row = user::Entity::insert(am)
             .on_conflict(OnConflict::column(user::Column::Id).do_nothing().to_owned())
-            .exec_with_returning(&self.db)
+            .exec_with_returning(&txn)
             .await
             .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
+
+        txn.commit()
+            .await
+            .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
+
         row_to_auth_user(row)
     }
 
