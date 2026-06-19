@@ -4,16 +4,34 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-OLLAMA_DIR="$PROJECT_ROOT/docker/ollama"
+
+# Load project-root .env (OPENAI_URL / OPENAI_TOKEN / OPENAI_MODEL) if present,
+# without clobbering anything already set in the environment.
+if [[ -f "$PROJECT_ROOT/.env" ]]; then
+  set -a
+  # shellcheck source=/dev/null
+  source "$PROJECT_ROOT/.env"
+  set +a
+fi
 
 # ── Config ─────────────────────────────────────────────────────────────────────
+DATASET_NAME="${DATASET_NAME:-manhattan_project_demo}"
+# Default to OpenAI (works on any host with an OPENAI_URL/OPENAI_TOKEN in .env).
+# `ollama` and `litert` remain available via --llm-backend.
+LLM_BACKEND="${LLM_BACKEND:-openai}"
+
+# OpenAI backend config (read from .env / environment).
+OPENAI_MODEL="${OPENAI_MODEL:-gpt-4o-mini}"
+
+# Ollama backend config (only used with --llm-backend ollama; requires an
+# externally-running Ollama, see start_ollama in lib/demo_common.sh).
+OLLAMA_DIR="${OLLAMA_DIR:-$PROJECT_ROOT/docker/ollama}"
 OLLAMA_PORT="${OLLAMA_PORT:-11439}"
 OLLAMA_CONTAINER_NAME="${OLLAMA_CONTAINER_NAME:-ollama-cognee-demo}"
 OLLAMA_VOLUME_NAME="${OLLAMA_VOLUME_NAME:-ollama_cognee_demo_data}"
 MODEL_NAME="${MODEL_NAME:-qwen3:4b}"
-DATASET_NAME="${DATASET_NAME:-manhattan_project_demo}"
-LLM_BACKEND="${LLM_BACKEND:-litert}"
-# Default to LiteRT, with benchmark-aligned model defaults.
+
+# LiteRT backend config, with benchmark-aligned model defaults.
 LITERT_MODEL_PATH="${LITERT_MODEL_PATH:-$HOME/.litert-lm/models/gemma3-1b-it-int4.litertlm}"
 LITERT_BACKEND="${LITERT_BACKEND:-cpu}"
 
@@ -59,7 +77,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     *)
       echo "ERROR: Unknown argument: $1" >&2
-      echo "Usage: $0 [--llm-backend ollama|litert] [--litert-model-path <path>] [--litert-backend cpu|gpu|<custom>] [--video-ids <id>...] [--sequence-files <path>...]" >&2
+      echo "Usage: $0 [--llm-backend openai|ollama|litert] [--litert-model-path <path>] [--litert-backend cpu|gpu|<custom>] [--video-ids <id>...] [--sequence-files <path>...]" >&2
       exit 1
       ;;
   esac
@@ -114,6 +132,14 @@ configure_cli() {
   run_cli config set vector_db_url "$vector_path"
 
   case "$LLM_BACKEND" in
+    openai)
+      run_cli config set llm_provider "openai"
+      run_cli config set llm_model "$OPENAI_MODEL"
+      run_cli config set llm_api_key "$OPENAI_TOKEN"
+      run_cli config set llm_endpoint "$OPENAI_URL"
+      run_cli config set llm_max_retries 3
+      run_cli config set llm_max_parallel_requests 4
+      ;;
     ollama)
       run_cli config set llm_provider "openai"
       run_cli config set llm_model "$MODEL_NAME"
@@ -173,6 +199,12 @@ prepare_env_and_configure_cli() {
 
 validate_llm_mode() {
   case "$LLM_BACKEND" in
+    openai)
+      if [[ -z "${OPENAI_URL:-}" || -z "${OPENAI_TOKEN:-}" ]]; then
+        fail "❌ OpenAI backend needs OPENAI_URL and OPENAI_TOKEN (set them in $PROJECT_ROOT/.env or the environment)."
+      fi
+      return 0
+      ;;
     ollama)
       return 0
       ;;
@@ -183,16 +215,17 @@ validate_llm_mode() {
 
       # The host demo runs the Linux CLI binary; LiteRT provider is currently
       # compiled for Android-target execution flow. Keep default behavior usable
-      # by auto-falling back to Ollama unless user explicitly requested litert.
+      # by auto-falling back to OpenAI unless user explicitly requested litert.
       if [[ "$(uname -s)" != "Android" && "${LLM_BACKEND_EXPLICIT:-0}" != "1" ]]; then
-        warn "⚠ LiteRT backend is not available in this host demo binary; falling back to Ollama."
-        LLM_BACKEND="ollama"
+        warn "⚠ LiteRT backend is not available in this host demo binary; falling back to OpenAI."
+        LLM_BACKEND="openai"
+        validate_llm_mode
       fi
 
       return 0
       ;;
     *)
-      fail "❌ Unsupported --llm-backend '$LLM_BACKEND'. Supported: ollama, litert"
+      fail "❌ Unsupported --llm-backend '$LLM_BACKEND'. Supported: openai, ollama, litert"
       ;;
   esac
 }
@@ -225,13 +258,20 @@ main() {
   ok "✅ Demo completed successfully"
   ok "   Dataset: $DATASET_NAME"
   ok "   LLM backend: $LLM_BACKEND"
-  if [[ "$LLM_BACKEND" == "ollama" ]]; then
-    ok "   Ollama endpoint: $OLLAMA_OPENAI_BASE_URL"
-    ok "   To stop Ollama: docker stop $OLLAMA_CONTAINER_NAME"
-  else
-    ok "   LiteRT model: $LITERT_MODEL_PATH"
-    ok "   LiteRT backend: $LITERT_BACKEND"
-  fi
+  case "$LLM_BACKEND" in
+    openai)
+      ok "   OpenAI endpoint: $OPENAI_URL"
+      ok "   OpenAI model: $OPENAI_MODEL"
+      ;;
+    ollama)
+      ok "   Ollama endpoint: $OLLAMA_OPENAI_BASE_URL"
+      ok "   To stop Ollama: docker stop $OLLAMA_CONTAINER_NAME"
+      ;;
+    litert)
+      ok "   LiteRT model: $LITERT_MODEL_PATH"
+      ok "   LiteRT backend: $LITERT_BACKEND"
+      ;;
+  esac
 }
 
 main

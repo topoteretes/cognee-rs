@@ -1,6 +1,6 @@
 # T3 — `ReplayLlm` content-aware mock
 
-**Status:** Not implemented
+**Status:** Implemented
 **Crate:** `cognee-llm` (`mock` feature)
 **Depends on:** T1 (T2 for the round-trip test)
 **Unblocks:** T4

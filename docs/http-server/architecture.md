@@ -85,7 +85,7 @@ crates/http-server/
 │   ├── dto/                # Pydantic-parity request/response structs
 │   ├── routers/            # One file per FastAPI router
 │   ├── middleware/         # CORS, tracing, validation, auth extractor
-│   ├── websocket/          # Long-lived subscriptions (cognify subscribe)
+│   ├── observability/      # Span buffer feeding /api/v1/activity/spans
 │   ├── openapi.rs          # utoipa::OpenApi assembly
 │   └── lifecycle.rs        # Startup migrations, default user, shutdown
 └── tests/                  # End-to-end tests via axum Router
@@ -213,7 +213,7 @@ FastAPI uses `Depends(...)` chains. Axum's idiomatic equivalent is a single `App
 ```rust
 #[derive(Clone)]
 pub struct AppState {
-    pub lib: Arc<CogneeLib>,                    // composition of ComponentManager
+    pub lib: Option<Arc<ComponentHandles>>,     // composition of ComponentManager
     pub auth: Arc<AuthContext>,                 // JWT secret, cookie config, user repo
     pub pipelines: Arc<dyn cognee_core::PipelineRunRegistry>, // background-job lifecycle (cognee-core component)
     pub spans: Arc<SpanBuffer>,                 // in-memory OTEL-style buffer
@@ -223,7 +223,7 @@ pub struct AppState {
 ```
 
 - All fields are `Arc<…>` so `AppState: Clone` is cheap; axum clones per request.
-- `CogneeLib` is a thin wrapper around the existing `ComponentManager` + `ConfigManager` so routers can call `state.lib.add().execute(...)` etc. without reconstructing components per request.
+- `ComponentHandles` is a thin wrapper around the existing `ComponentManager` + `ConfigManager` so routers can call `state.lib.add().execute(...)` etc. without reconstructing components per request. It is `Option<…>` because tests and library embedders may construct an `AppState` before the backends are wired.
 - New HTTP-specific types live beside the server (`SpanBuffer`, `SyncRegistry`) and are *not* pushed into `cognee-lib`. The pipeline-run lifecycle is handled by `cognee_core::PipelineRunRegistry` (a reusable component shared with the CLI / MCP / embedders, see [pipelines.md](pipelines.md)) — `AppState` holds an `Arc<dyn PipelineRunRegistry>` rather than an HTTP-local registry struct.
 
 **Python parity note**: in Python, `get_authenticated_user` is a `Depends(...)`. In Rust, we implement it as an axum extractor (`FromRequestParts`) that reads the JWT/cookie/API key, looks up the user in the relational DB via `AppState::auth`, and returns an `AuthenticatedUser` value. Handlers that need the user simply add it as a parameter:
@@ -615,7 +615,7 @@ No runtime GIL, no dynamic dispatch on handlers, no global mutable state — all
 
 ## 22. Open questions
 
-1. **Shared `CogneeLib` instance vs per-request**: current decision is one shared `Arc<CogneeLib>` in `AppState`. Validate under load once routers exist.
+1. **Shared `ComponentHandles` instance vs per-request**: current decision is one shared `Option<Arc<ComponentHandles>>` in `AppState`. Validate under load once routers exist.
 2. **DB pool sizing**: the existing `ComponentManager` holds the DB pool; we need to check its default size is sensible for a multi-connection HTTP server.
 3. **Multipart temp storage**: `axum::extract::Multipart` streams into memory by default. For large uploads (`/add`), we may need to spool to disk — decide once we benchmark.
 4. **JWT secret generation**: we default to per-boot random if `AUTH_JWT_SECRET` is unset. That means restarts invalidate all tokens. Accept for self-hosted dev; document loudly for prod.

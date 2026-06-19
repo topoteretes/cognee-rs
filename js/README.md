@@ -75,8 +75,11 @@ c.config.setLlmApiKey(process.env.OPENAI_TOKEN!);
 c.config.setEmbeddingProvider("openai");
 c.config.setEmbeddingModel("text-embedding-3-small");
 
-// Bulk setter (throws on unknown key or type mismatch):
+// Bulk setters (throw on unknown key or type mismatch) — one per subsystem:
 c.config.setLlmConfig({ model: "gpt-4o", temperature: 0.2 });
+c.config.setEmbeddingConfig({ provider: "openai", model: "text-embedding-3-small" });
+c.config.setVectorDbConfig({ provider: "qdrant" });
+c.config.setGraphDbConfig({ provider: "kuzu" });
 
 // Generic key-value setter:
 c.config.set("llmModel", "gpt-4o-mini");
@@ -205,6 +208,19 @@ await c.improve({
 });
 ```
 
+### rememberEntry
+
+Store a typed memory entry (`"qa"`, `"trace"`, or `"feedback"`) in a session.
+
+```ts
+const result = await c.rememberEntry(
+  { type: "qa", question: "…", answer: "…" },
+  "my-dataset",
+  "session-uuid",
+  { tenant: "tenant-id" }, // optional
+);
+```
+
 ## Datasets
 
 ```ts
@@ -316,10 +332,20 @@ Requires the `visualization` feature compiled into the native addon.
 ## Initialisation and observability
 
 ```ts
-import { init, setupLogging, setupTelemetry, setupTelemetryAnalytics } from 'cognee';
+import {
+  init,
+  initWithThreads,
+  shutdown,
+  setupLogging,
+  setupTelemetry,
+  setupTelemetryAnalytics,
+} from 'cognee';
 
 // Boot the Rust tokio runtime (required before any async op).
 init();
+
+// Alternatively boot with a fixed worker-thread count.
+initWithThreads(4);
 
 // Optional: add file logging (reads COGNEE_LOG_*, LOG_FILE_NAME, LOG_LEVEL).
 setupLogging();
@@ -329,7 +355,13 @@ setupTelemetry();
 
 // Optional: enable product-analytics emission (returns true if armed).
 const armed = setupTelemetryAnalytics();
+
+// Tear the runtime down (e.g. before process exit).
+shutdown();
 ```
+
+Each handle also exposes `await c.ownerId()`, returning the owner UUID used for
+deterministic, per-tenant ID generation.
 
 Set `COGNEE_BINDING_SUPPRESS_LOGS=1` before `require`ing the module to skip the
 auto-installed stderr subscriber if your host manages the logging pipeline.

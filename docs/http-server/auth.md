@@ -63,7 +63,7 @@ Resolution order in `from_request_parts`:
 1. Try `X-Api-Key` (calls `state.auth.lookup_api_key(...)`).
 2. Try `Authorization: Bearer …` (calls `state.auth.verify_jwt(...)`).
 3. Try cookie `auth_token` (same JWT verifier).
-4. If `REQUIRE_AUTHENTICATION=false`, fall back to `state.lib.default_user()` (matches [`get_authenticated_user.py`](https://github.com/topoteretes/cognee/blob/main/cognee/modules/users/methods/get_authenticated_user.py)).
+4. If `REQUIRE_AUTHENTICATION=false`, fall back to `default_user_from_state(state)` (matches [`get_authenticated_user.py`](https://github.com/topoteretes/cognee/blob/main/cognee/modules/users/methods/get_authenticated_user.py)).
 5. Otherwise return `ApiError::Unauthorized` (401, `{"detail": "Unauthorized"}`).
 
 A second extractor `OptionalAuthenticatedUser` performs the same lookup but never errors — used by handlers that want auth-aware behavior without forcing a login (e.g. `/health/detailed` could include the requester's email when present).
@@ -348,7 +348,7 @@ pub struct ConsoleMailer;          // tests; writes to a Mutex<Vec<…>> buffer
 
 Python: when `REQUIRE_AUTHENTICATION=false`, [`get_authenticated_user`](https://github.com/topoteretes/cognee/blob/main/cognee/modules/users/methods/get_authenticated_user.py) falls back to a default user.
 
-Rust: same. The `AuthenticatedUser` extractor calls `state.lib.default_user()` (already implemented in `cognee-lib`) when no credential is present and `auth.require_authentication == false`.
+Rust: same. The `AuthenticatedUser` extractor calls the free function `default_user_from_state(state)` (in `src/auth/extractor.rs`) when no credential is present and `auth.require_authentication == false`.
 
 OpenAPI emission: when `require_authentication == true`, every operation gets `security = [{BearerAuth: []}, {ApiKeyAuth: []}]`. Otherwise `security` is empty (matches Python's [`custom_openapi`](https://github.com/topoteretes/cognee/blob/main/cognee/api/client.py#L126-L162) behavior).
 

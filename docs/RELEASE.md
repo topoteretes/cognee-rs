@@ -2,7 +2,7 @@
 
 How to cut and publish a cognee-rust release. Two tracks:
 
-- **Track A** — bindings + source: PyPI (`cognee`), npm (`cognee`), C-library artifact,
+- **Track A** — bindings + source: PyPI (`cognee-pipeline`), npm (`cognee`), C-library artifact,
   GitHub source tag. Does **not** require crates.io publishability.
 - **Track B** — crates.io: publish the `cognee-*` library crates (gated on removing
   git deps / `[patch.crates-io]` from the dependency graph — a separate, larger effort).
@@ -79,5 +79,5 @@ cargo publish -p cognee-models
 ## Post-release
 
 1. Create a GitHub Release from the tag; paste the `CHANGELOG.md` section; attach the C artifact.
-2. Verify installs: `pip install cognee==X.Y.Z`, `npm install cognee@X.Y.Z`.
+2. Verify installs: `pip install cognee-pipeline==X.Y.Z`, `npm install cognee@X.Y.Z`.
 3. Open the next `-dev` version bump PR if you use one.

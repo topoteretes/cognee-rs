@@ -22,7 +22,7 @@ Companion docs: [../architecture.md](../architecture.md), [../auth.md](../auth.m
 - **Auth**: `required` (`AuthenticatedUser`). Python uses `Depends(get_authenticated_user)` at [line 36](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/improve/routers/get_improve_router.py#L36).
 - **Path params**: none.
 - **Query params**: none.
-- **Request body**: `application/json`, DTO `ImprovePayloadDTO`. Fields are identical to `MemifyPayloadDTO` minus the (Python) absent-from-router-but-present-in-lib `session_ids` field. Field-by-field mapping:
+- **Request body**: `application/json`, DTO `ImprovePayloadDTO`. The wire is camelCase (`#[serde(rename_all = "camelCase")]`) with snake_case accepted as an inbound alias per field. Field-by-field mapping:
 
   | Python field | Python type | Rust field | Rust type | Default | Notes |
   |---|---|---|---|---|---|
@@ -30,11 +30,10 @@ Companion docs: [../architecture.md](../architecture.md), [../auth.md](../auth.m
   | `enrichment_tasks` | `Optional[List[str]]` | `enrichment_tasks` | `Option<Vec<String>>` | `None` | Same as memify. |
   | `data` | `Optional[str]` | `data` | `Option<String>` | `Some("")` | Same as memify. |
   | `dataset_name` | `Optional[str]` | `dataset_name` | `Option<String>` | `None` | One of `dataset_name` / `dataset_id` is required. |
-  | `dataset_id` | `Union[UUID, Literal[""], None]` | `dataset_id` | `Option<DatasetIdRef>` | `None` | Same Python `Union` quirk as memify; reuse `DatasetIdRef`. |
+  | `dataset_id` | `Union[UUID, Literal[""], None]` | `dataset_id` | `DatasetIdRef` | `DatasetIdRef(None)` | Same Python `Union` quirk as memify; reuse `DatasetIdRef`. |
   | `node_name` | `Optional[List[str]]` | `node_name` | `Option<Vec<String>>` | `None` | Filter graph to specific named entities; only used when `data` is empty. |
-  | `run_in_background` | `Optional[bool]` | `run_in_background` | `Option<bool>` | `Some(false)` | See [pipelines.md §9](../pipelines.md#9-sync-vs-background-dispatch-http-wire-shapes). |
-
-  **Not exposed** (Phase 3): `session_ids: Option<Vec<String>>`. The Rust port keeps the field absent for parity. Track as open question §6.
+  | `run_in_background` | `Optional[bool]` | `run_in_background` | `Option<bool>` | `None` | See [pipelines.md §9](../pipelines.md#9-sync-vs-background-dispatch-http-wire-shapes). |
+  | `session_ids` | `Optional[List[str]]` | `session_ids` | `Option<Vec<String>>` | `None` | When present and non-empty, triggers the four-stage session-bridge path (feedback weights, session persistence, memify, graph-to-session sync). |
 
 - **Response body**:
 
@@ -109,12 +108,12 @@ Companion docs: [../architecture.md](../architecture.md), [../auth.md](../auth.m
 
 ## 3. Cross-cutting behavior
 
-- **Pipeline name**: `"memify_pipeline"` (improve delegates to memify under the hood; the registry sees the memify name unless session bridging adds dedicated sub-pipelines). The deterministic `pipeline_run_id` collides intentionally with `/memify` — calling `/api/v1/memify` then `/api/v1/improve` on the same dataset returns `PipelineRunAlreadyCompleted` for the second call (Python parity, since `cognee_improve` reduces to `cognee_memify` when no `session_ids` are present).
+- **Pipeline name**: `"improve_pipeline"` (the string literal passed to `dispatch_pipeline` in the handler). Improve delegates to memify enrichment under the hood, but it registers under its own pipeline name distinct from `/memify`'s `"memify_pipeline"`.
 
 - **`cognee_core::PipelineRunRegistry` methods called**:
   - `register_inline(spec, work)` for blocking.
   - `register_background(spec, work)` for background.
-  - `RunSpec { run_id: Some(prid), pipeline_name: "memify_pipeline", user_id: Some(user.id), dataset_id }`.
+  - `RunSpec { run_id: Some(prid), pipeline_name: "improve_pipeline", user_id: Some(user.id), dataset_id }`.
   - When `session_ids` ships in a later phase, additional `pipeline_id`s for `"improve_feedback"`, `"improve_persist_session"`, and `"improve_sync_to_cache"` will be created. Out of scope for Phase 3.
 
 - **Library API note**: `cognee_lib::api::improve::improve()` no longer accepts a `run_in_background` parameter. The current library implementation has a `run_in_background: bool` flag at [crates/lib/src/api/improve.rs:59](../../../crates/lib/src/api/improve.rs#L59) and a `has_sessions && !run_in_background` branch at [:197-198](../../../crates/lib/src/api/improve.rs#L197-L198) — that flag is being removed as a prerequisite of this router landing. After the refactor, `improve()` always runs the full session-bridging path when sessions are present; the HTTP layer wraps it via the registry. See [pipelines.md §2](../pipelines.md#2-library-refactor-prerequisite).
@@ -160,40 +159,39 @@ use crate::dto::util::DatasetIdRef;
 /// Mirrors Python's `ImprovePayloadDTO`.
 /// Source: cognee/api/v1/improve/routers/get_improve_router.py:21-28
 #[derive(Debug, Clone, Default, Deserialize, Serialize, ToSchema)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "camelCase")]
 pub struct ImprovePayloadDTO {
     /// Names of registered Cognee tasks for the extraction phase.
-    /// `None` selects `get_default_memify_extraction_tasks()`.
-    #[serde(default)]
+    #[serde(default, alias = "extraction_tasks")]
     pub extraction_tasks: Option<Vec<String>>,
 
     /// Names of registered Cognee tasks for the enrichment phase.
-    /// `None` selects `get_default_memify_enrichment_tasks()`.
-    #[serde(default)]
+    #[serde(default, alias = "enrichment_tasks")]
     pub enrichment_tasks: Option<Vec<String>>,
 
-    /// Optional caller-supplied input. `Some("")` means "no data — use the existing graph".
+    /// Optional inline text payload (Python parity: `data: Optional[str]`).
     #[serde(default)]
     pub data: Option<String>,
 
     /// Dataset name — resolved within the user's tenant.
-    #[serde(default)]
+    #[serde(default, alias = "dataset_name")]
     pub dataset_name: Option<String>,
 
-    /// Dataset UUID. Accepts `""` as "no value" for Python-parity.
-    #[serde(default)]
-    pub dataset_id: Option<DatasetIdRef>,
+    /// Dataset UUID. Empty string is treated as absent.
+    #[serde(default, alias = "dataset_id")]
+    pub dataset_id: DatasetIdRef,
 
-    /// Filter graph to specific named entities (only when `data` is empty).
-    #[serde(default)]
+    /// Filter graph to specific named entities.
+    #[serde(default, alias = "node_name")]
     pub node_name: Option<Vec<String>>,
 
     /// When true, dispatch to the background and return immediately.
-    #[serde(default)]
+    #[serde(default, alias = "run_in_background")]
     pub run_in_background: Option<bool>,
 
-    // NOTE: `session_ids` exists in the Python *library* function but NOT in the
-    // Python *HTTP* DTO. We preserve that gap for Phase 3 parity. Track in §6.
+    /// When present and non-empty, triggers the four-stage session-bridge path.
+    #[serde(default, alias = "session_ids")]
+    pub session_ids: Option<Vec<String>>,
 }
 
 /// Response body. Single `PipelineRunInfoDTO` (mirrors Python's behavior for the no-session-bridging path).
@@ -210,7 +208,7 @@ pub type ImproveResponseDTO = PipelineRunInfoDTO;
 3. Add the handler `post_improve` in `crates/http-server/src/routers/improve.rs`:
    - Validate at least one of `dataset_id` / `dataset_name`.
    - Resolve the dataset.
-   - Call the HTTP-side dispatcher (`crates/http-server/src/pipelines/dispatch.rs`) which builds a `RunSpec { pipeline_name: "memify_pipeline", .. }` and invokes `state.pipelines.register_inline` or `register_background` against the `cognee_core::PipelineRunRegistry`. The `work` future is `cognee_lib::api::improve::improve(...)` (sync — no `run_in_background` parameter; see library refactor note above).
+   - Call the HTTP-side dispatcher (`crates/http-server/src/pipelines/dispatch.rs`) which builds a `RunSpec { pipeline_name: "improve_pipeline", .. }` and invokes `state.pipelines.register_inline` or `register_background` against the `cognee_core::PipelineRunRegistry`. The `work` future is `cognee_lib::api::improve::improve(...)` (sync — no `run_in_background` parameter; see library refactor note above).
    - On `PipelineRunErrored`, return `ApiError::PipelineErrored { source: Improve, run_info: serde_json::to_value(...)? }`.
    - On any other exception, return `ApiError::Conflict("An error occurred during graph improvement.")` (mapping to 409 with the literal Python message).
 4. Wire the router into `build_router`:

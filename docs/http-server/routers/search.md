@@ -73,7 +73,7 @@ Companion docs: [../architecture.md](../architecture.md), [../auth.md](../auth.m
 - **Validation rules**:
   - `top_k`: when supplied, must be a positive integer (`> 0`). Python's underlying `search()` accepts any int but yields an empty list for `top_k <= 0`; Rust returns `400 BadRequest` with `detail="top_k must be positive"`. Cross-SDK note: this is a Rust strictness add — flag in §6.
   - `dataset_ids`: when supplied alongside `datasets`, the Python search function logs a warning and prefers `dataset_ids`. Rust matches: if both are non-empty, `dataset_ids` wins and `datasets` is silently ignored ([orchestrator §141-160](../../../crates/search/src/orchestration/search_orchestrator.rs)).
-  - `search_type`: must be one of the 15 enum variants below. Unknown values produce `422 ValidationError` from the custom `Json` extractor (matches Python's `RequestValidationError` handler).
+  - `search_type`: must be one of the 14 wire variants below. Unknown values (including `"FEEDBACK"`) produce `422 ValidationError` from the custom `Json` extractor (matches Python's `RequestValidationError` handler).
   - `query`: max length 100,000 chars (Rust safety cap — Python has no explicit limit). If exceeded, return `400`. Document in §6.
 - **Rate / size limits**: default body limit 100 MiB (architecture default). Per-handler request rate not enforced — see §6.
 - **Permission gate**: `state.lib.permissions().visible_datasets(user.id, "read")` is computed inside the orchestrator's `dataset_resolver` when `datasets` / `dataset_ids` are supplied. Datasets the user cannot read are silently dropped (Python: `get_authorized_existing_datasets("read", user)`). When the resulting set is empty, the orchestrator returns `Err(PermissionDenied)` which the handler maps to `403`.
@@ -109,26 +109,29 @@ use serde_json::Value;
 use utoipa::ToSchema;
 use uuid::Uuid;
 
-use cognee_search::types::SearchType;
+// `WireSearchType` is defined locally in dto/search.rs (see "WireSearchType"
+// below); the core `cognee_search::types::SearchType` is only referenced by the
+// `From<WireSearchType>` conversion, not by the DTO field.
 
 /// Mirrors Python `SearchPayloadDTO` in `get_search_router.py:25-36`.
 ///
-/// Field order matches Python intentionally so utoipa-generated OpenAPI
-/// renders identically to the Pydantic schema. Defaults must round-trip
-/// through `serde(default = "...")` to preserve "POST {} works" behavior.
+/// `SearchPayloadDTO` inherits `InDTO`, so the wire is camelCase (Decision 10)
+/// with snake_case accepted as an inbound alias per field. Defaults round-trip
+/// through `serde(default = "...")` to preserve "POST {} works" behavior. There
+/// is **no** `deny_unknown_fields` — unknown keys are ignored, matching Python.
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
-#[serde(deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct SearchPayloadDTO {
-    /// Python: `search_type: SearchType = Field(default=SearchType.GRAPH_COMPLETION)`
-    #[serde(default = "default_search_type")]
-    pub search_type: SearchType,
+    /// Python: `search_type: SearchType = SearchType.GRAPH_COMPLETION`
+    #[serde(default = "default_search_type", alias = "search_type")]
+    pub search_type: WireSearchType,
 
     /// Python: `datasets: Optional[list[str]] = None`
     #[serde(default)]
     pub datasets: Option<Vec<String>>,
 
     /// Python: `dataset_ids: Optional[list[UUID]] = None`
-    #[serde(default)]
+    #[serde(default, alias = "dataset_ids")]
     pub dataset_ids: Option<Vec<Uuid>>,
 
     /// Python: `query: str = "What is in the document?"`
@@ -136,21 +139,19 @@ pub struct SearchPayloadDTO {
     pub query: String,
 
     /// Python: `system_prompt: Optional[str] = "Answer the question..."`.
-    /// Note this is `Option<String>` to allow explicit `null`, but defaults
-    /// to a non-null string when the field is absent.
-    #[serde(default = "default_system_prompt")]
+    #[serde(default = "default_system_prompt", alias = "system_prompt")]
     pub system_prompt: Option<String>,
 
     /// Python: `node_name: Optional[list[str]] = None`
-    #[serde(default)]
+    #[serde(default, alias = "node_name")]
     pub node_name: Option<Vec<String>>,
 
     /// Python: `top_k: Optional[int] = 10`
-    #[serde(default = "default_top_k")]
+    #[serde(default = "default_top_k", alias = "top_k")]
     pub top_k: Option<i32>,
 
     /// Python: `only_context: bool = False`
-    #[serde(default)]
+    #[serde(default, alias = "only_context")]
     pub only_context: bool,
 
     /// Python: `verbose: bool = False`
@@ -158,7 +159,7 @@ pub struct SearchPayloadDTO {
     pub verbose: bool,
 }
 
-fn default_search_type() -> SearchType { SearchType::GraphCompletion }
+fn default_search_type() -> WireSearchType { WireSearchType::GraphCompletion }
 fn default_query() -> String { "What is in the document?".into() }
 fn default_system_prompt() -> Option<String> {
     Some("Answer the question using the provided context. Be as brief as possible.".into())
@@ -166,17 +167,23 @@ fn default_system_prompt() -> Option<String> {
 fn default_top_k() -> Option<i32> { Some(10) }
 
 /// Mirrors Python `SearchHistoryItem` (defined inline in `get_search_router.py:42-46`).
+/// Inherits `OutDTO`, so the wire is camelCase (e.g. `createdAt`).
 #[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct SearchHistoryItemDTO {
     pub id: Uuid,
     pub text: String,
     /// `"user"` for query rows, `"system"` for result rows.
     pub user: String,
+    /// RFC 3339 with explicit `+00:00` offset and microsecond precision.
+    #[serde(with = "crate::dto::util::iso8601_offset")]
     pub created_at: DateTime<Utc>,
 }
 
 /// Mirrors Python `SearchResult` (`cognee/modules/search/types/SearchResult.py`).
+/// Inherits `OutDTO`, so the wire is camelCase (`searchResult`, `datasetId`, `datasetName`).
 #[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct SearchResultDTO {
     /// Polymorphic — see "Wire shape per SearchType" below.
     pub search_result: Value,
@@ -195,7 +202,7 @@ pub struct ErrorResponseDTO {
 
 ### `SearchType` wire shapes
 
-The `SearchType` enum is defined in [`crates/search/src/types/search_type.rs`](../../../crates/search/src/types/search_type.rs) with `#[serde(rename_all = "SCREAMING_SNAKE_CASE")]`. Wire values match Python's [`SearchType`](https://github.com/topoteretes/cognee/blob/main/cognee/modules/search/types/SearchType.py) byte-for-byte. All 15 variants:
+The wire-facing `WireSearchType` enum is defined locally in [`crates/http-server/src/dto/search.rs`](../../../crates/http-server/src/dto/search.rs) with `#[serde(rename_all = "SCREAMING_SNAKE_CASE")]` and converts into the core [`cognee_search::types::SearchType`](../../../crates/search/src/types/search_type.rs) via `From`. Wire values match Python's [`SearchType`](https://github.com/topoteretes/cognee/blob/main/cognee/modules/search/types/SearchType.py) byte-for-byte. The wire DTO exposes **14** variants — the core Rust enum's extra `Feedback` variant is intentionally dropped from the wire (see the `FEEDBACK` row below):
 
 | Wire value (string) | Rust enum variant | Python `SearchType` | Rust status | Notes |
 |---|---|---|---|---|
@@ -211,11 +218,11 @@ The `SearchType` enum is defined in [`crates/search/src/types/search_type.rs`](.
 | `"CYPHER"` | `Cypher` | `CYPHER` | Implemented | Raw Cypher pass-through to Ladybug. `search_result` is a `Vec<Vec<Value>>` (rows × columns). 422 if `query` does not parse. |
 | `"NATURAL_LANGUAGE"` | `NaturalLanguage` | `NATURAL_LANGUAGE` | Implemented | NL → Cypher → execute. Returns the same `Vec<Vec<Value>>` shape as `CYPHER`. |
 | `"FEELING_LUCKY"` | `FeelingLucky` | `FEELING_LUCKY` | Implemented | Combines several retrievers and lets the LLM pick. Returns `String`. |
-| `"FEEDBACK"` | `Feedback` | (Python equivalent: see note) | Implemented (Rust-only label) | Rust enum variant `Feedback` exists but the wire string is **not** in the Python `SearchType` enum. The Python type set has `FEELING_LUCKY` instead — confirm whether `Feedback` should be removed from the wire DTO or kept Rust-only behind an experimental flag. **Open question §6.** |
+| `"FEEDBACK"` | `Feedback` (core enum only) | (no Python equivalent) | Not on the wire | The core `cognee_search::types::SearchType` has a `Feedback` variant, but `WireSearchType` **does not** include it: posting `"FEEDBACK"` deserializes as a validation error (`test_feedback_variant_is_dropped_from_wire`). Library callers reach `SearchType::Feedback` via the core enum directly. **See §6 Q1.** |
 | `"CODING_RULES"` | `CodingRules` | `CODING_RULES` | Implemented | Returns a `Vec<RulePayload>` matching the `Rule {node_set, text}` schema. Used by IDE plugins. |
 | `"CHUNKS_LEXICAL"` | `ChunksLexical` | `CHUNKS_LEXICAL` | Implemented | BM25 / lexical chunk retrieval (no embedding). Returns `Vec<ChunkPayload>`. |
 
-Per the project guide, **9 of the 15** are covered by the E2E search-matrix test. The remaining 6 (`Cypher`, `NaturalLanguage`, `FeelingLucky`, `Feedback`, `CodingRules`, `ChunksLexical`) have unit-level coverage but no cross-SDK comparison yet. Cross-SDK parity tests for the missing 6 should land in the same PR as the HTTP server (see §5 task list).
+Per the project guide, **9 of the 14** wire variants are covered by the E2E search-matrix test. The remaining 5 (`Cypher`, `NaturalLanguage`, `FeelingLucky`, `CodingRules`, `ChunksLexical`) have unit-level coverage but no cross-SDK comparison yet. Cross-SDK parity tests for the missing 5 should land in the same PR as the HTTP server (see §5 task list).
 
 ### Wire shape of `search_result` (per retriever)
 
@@ -264,7 +271,7 @@ This flattening is the responsibility of `crates/http-server/src/dto/search.rs::
 
 ## 6. Open questions
 
-1. **`Feedback` variant**: present in the Rust `SearchType` enum but absent from Python's. Drop it from the wire DTO; keep an internal-only `SearchTypeInternal` superset for library callers. The HTTP DTO mirrors Python's set verbatim.
+1. **`Feedback` variant**: present in the core Rust `SearchType` enum but absent from Python's. Resolved: the wire-facing `WireSearchType` drops it entirely, so the HTTP DTO mirrors Python's set verbatim. Library callers reach `SearchType::Feedback` via the core enum directly.
 2. **`top_k <= 0` strictness**: Python silently returns `[]`. Rust matches — return `[]` (no `400`) and emit a `tracing::warn!` for diagnostics.
 3. **`query` length cap**: Python has none. Rust matches — no application-level cap. The HTTP body-size limit ([../architecture.md §8](../architecture.md#8-middleware-stack)) provides the only effective bound.
 4. **`response_schema` parameter**: the orchestrator supports `SearchParams.response_schema` for `SearchOutput::Structured`, but Python's HTTP DTO does not expose it. Strict mirror — the field is not on the HTTP DTO. Library callers can still access it via `cognee_lib::search` directly.

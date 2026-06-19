@@ -275,11 +275,10 @@ Env vars consumed by the binary's tracing setup:
 
 | Var | Default | Purpose |
 |---|---|---|
-| `RUST_LOG` | `info,ort=warn` | `tracing-subscriber` env filter |
+| `RUST_LOG` | `info,ort=warn,reqwest=warn,hyper=warn,h2=warn,rustls=warn,sqlx=warn,sea_orm=warn,sea_orm_migration=warn,tower_http=warn,qdrant_segment=warn,qdrant_shard=warn` (see `cognee_logging::default_filter()`) | `tracing-subscriber` env filter |
 | `ENV` | `prod` | `prod` → JSON logs; `dev` → pretty |
 | `COGNEE_SPAN_BUFFER_MAX_TRACES` | `50` | LRU cap on the in-memory buffer |
 | `COGNEE_SPAN_BUFFER_MAX_SPANS_PER_TRACE` | `1024` | Safety cap |
-| `COGNEE_LOG_REDACT_FMT` | `false` | If `true`, redact stdout logs as well as the buffer |
 
 Library consumers do not see these — they construct a `BufferConfig` directly.
 

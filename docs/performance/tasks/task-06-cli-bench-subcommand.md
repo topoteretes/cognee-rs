@@ -1,6 +1,6 @@
 # T6 — `cognee-cli bench` subcommand
 
-**Status:** Not implemented
+**Status:** Implemented
 **Crate:** `cognee-cli` (new `bench` feature)
 **Depends on:** T4 (and T5 for a meaningful search phase)
 **Unblocks:** T7, T8

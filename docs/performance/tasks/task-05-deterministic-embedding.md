@@ -1,6 +1,6 @@
 # T5 — Deterministic mock embedding
 
-**Status:** Not implemented
+**Status:** Implemented
 **Crate:** `cognee-embedding`
 **Depends on:** nothing (independent of T1–T4)
 **Unblocks:** stable search results in T6 mock runs

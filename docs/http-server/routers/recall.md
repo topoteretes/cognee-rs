@@ -35,23 +35,25 @@ Companion docs: [../architecture.md](../architecture.md), [../auth.md](../auth.m
 - **Telemetry**: span name `cognee.api.recall.history`. Same attributes as `cognee.api.search.history`.
 - **Python parity notes**: the response model in Python is declared as `list[RecallHistoryItem]` whereas search uses `Union[List[SearchResult], List]`. Functionally identical; the divergence is a Python class-naming quirk we replicate at the DTO level for OpenAPI clarity.
 
-### 2.2 `POST /api/v1/recall` — semantic search (wire-level alias for `/search`)
+### 2.2 `POST /api/v1/recall` — multi-source semantic recall
 
-**Behavior parity note**: Python's HTTP recall handler imports `from cognee.api.v1.search import search as cognee_search` ([`get_recall_router.py:100`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/recall/routers/get_recall_router.py#L100)) and delegates directly to it. The library-level `recall()` function (with auto-routing + session-first dispatch) is **not** reachable through this HTTP endpoint — it exists only in the Python SDK. The Rust port matches Python exactly: HTTP recall invokes `cognee_lib::search` (the search delegate), not `cognee_lib::api::recall::recall`. The two endpoints `/search` and `/recall` are wire-equivalent, differing only in their error envelopes (see below) and tags.
+**Behavior note**: the Rust handler (`post_recall` in `crates/http-server/src/routers/recall.rs`) does **not** delegate to the search orchestrator as a thin alias. It performs **scope resolution** and **session-first dispatch** in the handler itself by calling the `cognee_search::recall_scope::*` helpers (`search_session`, `search_trace`, `fetch_graph_context`, `run_graph`). This mirrors the library-level `cognee_lib::api::recall::recall()` (which the handler cannot import directly due to the http-server → lib cycle constraint), so the fan-out logic lives in the four `pub` `recall_scope` helpers instead. The orchestrator is still required (it backs the `Graph` source and the GET-history path), but the request flow is driven by the resolved scope, not a single search call.
 
 - **Auth**: `required` (`AuthenticatedUser`).
 - **Path params**: none.
 - **Query params**: none.
-- **Request body** (`application/json`): `RecallPayloadDTO`. Field-for-field copy of `SearchPayloadDTO` (see [search.md §4](search.md#4-dto-definitions)) and identical to Python's [`RecallPayloadDTO`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/recall/routers/get_recall_router.py#L23-L34). Defaults:
+- **Request body** (`application/json`): `RecallPayloadDTO`. Wire is camelCase per Decision 10 with snake_case accepted as an inbound alias. In addition to the `SearchPayloadDTO` fields it carries `session_id` and `scope`. Defaults:
   - `search_type` defaults to `"GRAPH_COMPLETION"`.
   - `query` defaults to `"What is in the document?"`.
   - `system_prompt` defaults to `"Answer the question using the provided context. Be as brief as possible."`.
   - `top_k` defaults to `10`.
   - `only_context`, `verbose` default to `false`.
   - `datasets`, `dataset_ids`, `node_name` default to `null`.
+  - `session_id` defaults to `null`.
+  - `scope` defaults to `null` (normalized to `["auto"]`).
 
-  **No `session_id` / `auto_route` fields**. Python's HTTP DTO doesn't expose them and Rust matches exactly. The library-level recall capability remains available to embedders via `cognee_lib::api::recall::recall(...)` but is not surfaced through this endpoint.
-- **Response body** (`200 OK`, `application/json`): `Vec<RecallResultDTO>`. Same shape as `SearchResultDTO`. Python returns the search results unmodified ([`get_recall_router.py:114`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/recall/routers/get_recall_router.py#L114) calls `jsonable_encoder(results)` directly); Rust does the same.
+  **Scope / session dispatch**: `scope` accepts `null | string | list<string>` and is normalized via `cognee_search::recall_scope::normalize_scope` into a list of `RecallScope` values (`auto` / `graph` / `session` / `trace` / `graph_context`; `"all"` expands to all four concrete sources). When `scope` resolves to `[Auto]`, the handler picks sources from the request shape: a `session_id` with no `datasets`/`query_type` yields `[Session, Graph]` with a session-first short-circuit (a session hit skips the graph runner); a `session_id` with datasets/query_type yields `[Session, Graph]` without the short-circuit; no `session_id` yields `[Graph]` only. The `session_id` field also feeds `search_session` / `search_trace` directly.
+- **Response body** (`200 OK`, `application/json`): `Vec<serde_json::Value>` — a flat list of dicts, each tagged with a `_source` field (`session` / `trace` / `graph_context` / `graph`) identifying which scope produced it. Items from the different sources are merged in resolved-scope order. Python returns the same flat, `_source`-tagged shape ([`recall.py`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/recall/recall.py)).
 - **Error responses**:
 
   | Status | Body | Condition |
@@ -65,7 +67,7 @@ Companion docs: [../architecture.md](../architecture.md), [../auth.md](../auth.m
 - **Side effects**:
   1. **Search-history write** (every POST). Same two rows as `/api/v1/search`: one `Query` row, one `Result` row. Persisted via `SearchHistoryDb::log_query` + `log_result` from inside `SearchOrchestrator::search`. The history is **shared** between the two endpoints — `GET /api/v1/recall` and `GET /api/v1/search` return the same set.
   2. **Vector / graph reads** as in search.
-- **Delegation target**: `state.lib.search()` — the same delegate `POST /api/v1/search` calls. Verbatim with Python's [`get_recall_router.py:100-114`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/recall/routers/get_recall_router.py#L100-L114).
+- **Delegation target**: the `cognee_search::recall_scope::*` helpers (`search_session`, `search_trace`, `fetch_graph_context`, `run_graph`), iterated per the resolved scope list. The `Graph` source calls `run_graph` against the `SearchOrchestrator`; the session-backed sources use the optional `session_store` / `session_manager` component handles (which gracefully return `Ok(vec![])` when unwired). The handler does **not** call `cognee_lib::api::recall::recall` (cycle constraint); the `recall_scope` helpers were lifted into `cognee-search` so the fan-out is reachable without a cycle.
 - **Validation rules**: same as search.
 - **Rate / size limits**: default body limit (100 MiB).
 - **Permission gate**: `read` permission on each requested dataset (same as search). When permission resolution drops the entire scope, the orchestrator returns a `PermissionDenied` error which the recall handler maps to **`200 []`** (not 403, unlike search).
@@ -80,19 +82,19 @@ Companion docs: [../architecture.md](../architecture.md), [../auth.md](../auth.m
 
 ## 3. Cross-cutting behavior
 
-### 3.1 Library-only capabilities (NOT reachable from HTTP)
+### 3.1 Capabilities reachable from HTTP
 
-The Python SDK's library-level `recall()` function exposes scope detection, auto-routing, override tracking, and result tagging — none of which are surfaced through the Python HTTP `/api/v1/recall` endpoint. The Rust port follows the same boundary:
+The HTTP recall handler reproduces the library-level recall fan-out by calling the `cognee_search::recall_scope::*` helpers directly (it cannot import `cognee_lib::api::recall::recall` due to the http-server → lib cycle constraint). The behaviors below are surfaced through the wire DTO's `scope` / `session_id` fields:
 
-| Capability | Library API (`cognee_lib::api::recall::recall`) | HTTP `/api/v1/recall` |
+| Capability | Reachable from HTTP `/api/v1/recall`? | Notes |
 |---|---|---|
-| Scope detection (`session` / `auto` / `graph`) | Yes | No (call site is `cognee_lib::search`, identical to `/search`) |
-| Auto-routing via `query_router::route_query()` | Yes | No |
-| Override tracking via `query_router_stats` | Yes | No |
-| Session-first dispatch | Yes | No |
-| Result `_source` tagging | Yes | No |
+| Scope resolution (`auto` / `graph` / `session` / `trace` / `graph_context`) | Yes | Via the `scope` field, normalized by `recall_scope::normalize_scope`. |
+| Session-first dispatch | Yes | Auto mode with a `session_id` and no datasets/query_type short-circuits the graph runner on a session hit. |
+| Result `_source` tagging | Yes | Each returned dict carries its `_source`. |
+| Auto-routing via `query_router::route_query()` | No | `run_graph` is called with `auto_route = false`; the caller's `search_type` is honored verbatim. |
+| Override tracking via `query_router_stats` | No | Not invoked from the HTTP handler. |
 
-These capabilities live in the library-level recall API (`cognee_lib::api::recall`). They are intentionally not in scope for this HTTP router doc — adding them to the wire DTO would diverge from Python.
+Auto-routing and override tracking remain library-only. Scope resolution, session-first dispatch, and `_source` tagging are reproduced at the HTTP layer.
 
 ### 3.2 Error envelope inconsistency
 
@@ -112,57 +114,58 @@ use serde_json::Value;
 use utoipa::ToSchema;
 use uuid::Uuid;
 
-use cognee_search::types::SearchType;
+use cognee_search::recall_scope::RecallScope;
+use crate::dto::search::WireSearchType;
 
-/// Mirrors Python `RecallPayloadDTO` (`get_recall_router.py:23-34`).
-/// Field-for-field identical to `SearchPayloadDTO`; no Rust additions —
-/// matches Python's HTTP contract exactly.
+/// Mirrors Python `RecallPayloadDTO` (`get_recall_router.py:23-48`).
+/// Carries the `SearchPayloadDTO` fields plus `session_id` and `scope`.
+/// Wire is camelCase per Decision 10; snake_case accepted as an inbound alias.
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
-#[serde(deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct RecallPayloadDTO {
-    /// Python: `search_type: SearchType = SearchType.GRAPH_COMPLETION`
-    #[serde(default = "default_search_type")]
-    pub search_type: SearchType,
+    #[serde(default = "default_search_type", alias = "search_type")]
+    pub search_type: WireSearchType,
 
-    /// Python: `datasets: Optional[list[str]] = None`
     #[serde(default)]
     pub datasets: Option<Vec<String>>,
 
-    /// Python: `dataset_ids: Optional[list[UUID]] = None`
-    #[serde(default)]
+    #[serde(default, alias = "dataset_ids")]
     pub dataset_ids: Option<Vec<Uuid>>,
 
-    /// Python: `query: str = "What is in the document?"`
     #[serde(default = "default_query")]
     pub query: String,
 
-    /// Python: `system_prompt: Optional[str] = "Answer the question..."`.
-    #[serde(default = "default_system_prompt")]
+    #[serde(default = "default_system_prompt", alias = "system_prompt")]
     pub system_prompt: Option<String>,
 
-    /// Python: `node_name: Optional[list[str]] = None`
-    #[serde(default)]
+    #[serde(default, alias = "node_name")]
     pub node_name: Option<Vec<String>>,
 
-    /// Python: `top_k: Optional[int] = 10`
-    #[serde(default = "default_top_k")]
+    #[serde(default = "default_top_k", alias = "top_k")]
     pub top_k: Option<i32>,
 
-    /// Python: `only_context: bool = False`
-    #[serde(default)]
+    #[serde(default, alias = "only_context")]
     pub only_context: bool,
 
-    /// Python: `verbose: bool = False`
     #[serde(default)]
     pub verbose: bool,
+
+    /// Optional session id (`sessionId`; snake_case accepted as alias). Drives
+    /// `search_session` / `search_trace` and the auto-mode session-first
+    /// short-circuit.
+    #[serde(default, alias = "session_id")]
+    pub session_id: Option<String>,
+
+    /// Optional source scope — `null | string | list<string>`. Normalized via
+    /// `cognee_search::recall_scope::normalize_scope`; unknown values surface a
+    /// `serde::de::Error::custom`. Defaults / null → `Some(vec![RecallScope::Auto])`.
+    #[serde(default, deserialize_with = "deserialize_scope")]
+    pub scope: Option<Vec<RecallScope>>,
 }
 
-fn default_search_type() -> SearchType { SearchType::GraphCompletion }
-fn default_query() -> String { "What is in the document?".into() }
-fn default_system_prompt() -> Option<String> {
-    Some("Answer the question using the provided context. Be as brief as possible.".into())
-}
-fn default_top_k() -> Option<i32> { Some(10) }
+// `default_search_type`, `default_query`, `default_system_prompt`, `default_top_k`
+// are re-used from `crate::dto::search`. `deserialize_scope` builds a
+// `ScopeInput` and dispatches into `normalize_scope`.
 
 /// Same shape as `SearchHistoryItemDTO`. Aliased for OpenAPI clarity.
 pub type RecallHistoryItemDTO = crate::dto::search::SearchHistoryItemDTO;
@@ -191,7 +194,7 @@ Same as in [search.md §4](search.md#searchtype-wire-shapes) — all 15 `SearchT
 2. Add `crates/http-server/src/routers/recall.rs` with `get_recall_history` + `post_recall` handlers and `pub fn router()`.
 3. Wire `nest("/recall", recall::router())` in `build_router()`.
 4. Extend `crates/http-server/src/error.rs` with `ApiError::RecallError(StatusCode, RecallErrorBody)` so the three envelope shapes serialize correctly.
-5. The handler delegates to `cognee_lib::search` (the same delegate `/api/v1/search` calls) — matching Python's [`get_recall_router.py:100`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/recall/routers/get_recall_router.py#L100) verbatim. Do **not** call `cognee_lib::api::recall::recall` from this handler; that would diverge from Python.
+5. The handler resolves `scope` (via `recall_scope::normalize_scope`) and iterates the resolved sources, calling the `cognee_search::recall_scope::*` helpers (`search_session`, `search_trace`, `fetch_graph_context`, `run_graph`). Do **not** call `cognee_lib::api::recall::recall` from this handler — the http-server → lib cycle constraint forbids it; the `recall_scope` helpers are the cycle-free reachable surface.
 6. OpenAPI: tag `["v1", "recall"]`; declare the three response shapes for `200`, `409`, `422`.
 7. Unit tests: DTO defaults; `RecallErrorBody` serialization for both arms.
 8. Integration tests in `crates/http-server/tests/test_recall.rs`:

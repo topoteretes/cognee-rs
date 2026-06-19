@@ -87,6 +87,3 @@ futures.workspace = true
 tokio-stream = "0.1"
 uuid.workspace = true
 async-trait.workspace = true
-
-[build-dependencies]
-cbindgen = "0.27"

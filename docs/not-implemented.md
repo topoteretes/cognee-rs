@@ -160,7 +160,7 @@ from the result" behavior to rely on.
   module renders three HTML tabs (Story, Schema, Inspector) backed by four JS modules
   (`ui_chrome`, `schema_view`, `story_view`, `inspector`). The Rust `cognee-visualization` crate
   emits a single self-contained d3.js force-directed graph view. The schema tab is always absent;
-  node-type coloring uses the 9-entry hard-coded map in `colors.rs`. The full multi-view rewrite
+  node-type coloring uses the 12-entry hard-coded map in `colors.rs`. The full multi-view rewrite
   is a substantial JS-embedding effort and is deferred to a post-0.1.0 release.
 
   The 8-key schema-node name fallback from Python's `preprocessor.py:223–237` (`database_type`,

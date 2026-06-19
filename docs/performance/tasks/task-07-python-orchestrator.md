@@ -1,6 +1,6 @@
 # T7 — Reuse the Python orchestrator
 
-**Status:** Not implemented
+**Status:** Implemented
 **Location:** `../cognee` (Python repo) + `scripts/perf/` (Rust repo wrapper)
 **Depends on:** T6
 **Unblocks:** T8 (running multi-iteration reports)
