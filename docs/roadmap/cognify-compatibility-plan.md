@@ -46,9 +46,9 @@ ergonomics gap. The `PgGraphAdapter` itself is already fully written
 set of both `cognee-lib` and `cognee-cli` — it is simply **never reachable at
 runtime** because `ComponentManager` rejects the `postgres` graph provider.
 
-This document is the index. Each work item has a dedicated sub-document under
-[cognify-compatibility/](../cognify-compatibility/) with the step-by-step plan,
-exact file/line anchors, and acceptance criteria.
+This document is the index. The one remaining work item (Item 3) has a dedicated
+sub-document — [pghybrid-full-adapter.md](pghybrid-full-adapter.md) — with the
+step-by-step plan, exact file/line anchors, and acceptance criteria.
 
 ---
 
@@ -69,16 +69,19 @@ exact file/line anchors, and acceptance criteria.
 ## 3. Work items
 
 Status legend: 📋 Planned · 🔨 In progress · ✅ Implemented.
-The per-item implementation prompts live in
-[IMPLEMENTATION-PROMPTS.md](cognify-compatibility/IMPLEMENTATION-PROMPTS.md).
+
+Only **Item 3** remains; its plan is the lone surviving sub-document
+([pghybrid-full-adapter.md](pghybrid-full-adapter.md)).
+The per-item plans and implementation prompts for the landed items (1, 2, 4, 5)
+have been removed now that the work is complete — see git history for them.
 
 | # | Item | Effort | Blocking? | Status | Sub-document |
 |---|---|---|---|---|---|
-| 1 | Wire `PgGraphAdapter` into `ComponentManager` | Small | **Yes** — Postgres graph is unreachable at runtime without it | ✅ Implemented | [01-wire-pggraph-component-manager.md](../cognify-compatibility/01-wire-pggraph-component-manager.md) |
-| 2 | Graph → relational credential fallback (+ `graph_database_host`) | Small | No (quality-of-life parity) | ✅ Implemented | [02-postgres-graph-credential-fallback.md](../cognify-compatibility/02-postgres-graph-credential-fallback.md) |
-| 4 | Custom summarization **schema** (`summary_schema` + `set_summarization_model`) | Small–Medium | No | ✅ Implemented | [04-custom-summarization-schema.md](../cognify-compatibility/04-custom-summarization-schema.md) |
-| 3 | Full `PgHybridAdapter` + unified-engine wiring | **Large** | No | 📋 Planned | [03-pghybrid-full-adapter.md](../cognify-compatibility/03-pghybrid-full-adapter.md) |
-| 5 | Full PostgreSQL-stack E2E test | Medium | No (validates 1–3) | ✅ Implemented | [05-postgres-full-stack-e2e-test.md](../cognify-compatibility/05-postgres-full-stack-e2e-test.md) |
+| 1 | Wire `PgGraphAdapter` into `ComponentManager` | Small | **Yes** — Postgres graph is unreachable at runtime without it | ✅ Implemented | _(landed; doc removed)_ |
+| 2 | Graph → relational credential fallback (+ `graph_database_host`) | Small | No (quality-of-life parity) | ✅ Implemented | _(landed; doc removed)_ |
+| 4 | Custom summarization **schema** (`summary_schema` + `set_summarization_model`) | Small–Medium | No | ✅ Implemented | _(landed; doc removed)_ |
+| 3 | Full `PgHybridAdapter` + unified-engine wiring | **Large** | No | 📋 Planned | [pghybrid-full-adapter.md](pghybrid-full-adapter.md) |
+| 5 | Full PostgreSQL-stack E2E test | Medium | No (validates 1–3) | ✅ Implemented | _(landed; doc removed)_ |
 
 ---
 

@@ -60,7 +60,7 @@ pub type ProgressCallback = Arc<dyn Fn(u32) + Send + Sync>;
 /// callers cannot conclude from the response body that data was transferred.
 ///
 /// Full sync implementation (diff, upload, download, cognify) is deferred to
-/// a future release. Tracked in `docs/not-implemented.md`.
+/// a future release. Tracked in `docs/roadmap/not-implemented.md`.
 pub async fn run_background(
     run_id: String,
     _datasets: Vec<DatasetInfo>,

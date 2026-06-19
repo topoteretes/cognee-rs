@@ -1,7 +1,7 @@
 # Item 3 — Full `PgHybridAdapter` + unified-engine wiring
 
-Parent: [../.internal/cognify-compatibility-implementation-plan.md](../.internal/cognify-compatibility-implementation-plan.md)
-Effort: **large (multi-PR milestone)** · Depends on [Item 1](01-wire-pggraph-component-manager.md) + [Item 2](02-postgres-graph-credential-fallback.md)
+Parent: [cognify-compatibility-plan.md](cognify-compatibility-plan.md)
+Effort: **large (multi-PR milestone)** · Depends on Item 1 (`PgGraphAdapter` wired into `ComponentManager`) + Item 2 (graph→relational credential fallback) — both ✅ landed
 Status: 📋 Planned
 
 > **Decision D3 (resolved):** implement a real hybrid adapter, not just a config
@@ -48,7 +48,7 @@ adapter and no capability flag. Achieving D3 means introducing the hybrid adapte
 Two enablers already exist:
 - `PgGraphAdapter::from_connection(db: DatabaseConnection)`
   ([pg_graph_adapter.rs:150](../../crates/graph/src/pg_graph_adapter.rs#L150)) — wrap a shared SeaORM connection.
-- `PgVectorAdapter` ([crates/vector/src/pg_vector_adapter.rs](../../crates/vector/src/pg_vector_adapter.rs)) — confirm it has (or add)
+- `PgVectorAdapter` ([crates/vector/src/pgvector_adapter.rs](../../crates/vector/src/pgvector_adapter.rs)) — confirm it has (or add)
   an analogous `from_connection`/shared-pool constructor so both adapters reuse
   one `DatabaseConnection`/pool.
 
@@ -105,7 +105,7 @@ separate-`Arc` architecture, the lightest design is:
 - Add `Settings` handling for `USE_UNIFIED_PROVIDER` (read in config
   construction). `pghybrid` ⇒ force `graph_database_provider=postgres` +
   `vector_db_provider=pgvector` and route both through the hybrid adapter, using
-  the relational `db_*` creds via [Item 2](02-postgres-graph-credential-fallback.md)'s resolver.
+  the relational `db_*` creds via Item 2's (landed) graph→relational credential resolver.
 - Decide precedence: Python lets `USE_UNIFIED_PROVIDER` **override** explicit
   providers — match that.
 
@@ -141,7 +141,7 @@ parity; PR 4 is a read-latency optimization.
 
 ### PR 5 — Tests
 
-Extend the Item 5 E2E ([05-postgres-full-stack-e2e-test.md](05-postgres-full-stack-e2e-test.md)) with a hybrid
+Extend the landed Item 5 full-Postgres-stack E2E test with a hybrid
 variant (`USE_UNIFIED_PROVIDER=pghybrid`) and add adapter-level tests for the
 combined write path (graph + vector consistency after `add_nodes_with_vectors`).
 
@@ -150,7 +150,7 @@ combined write path (graph + vector consistency after `add_nodes_with_vectors`).
 ## Files touched (across PRs)
 
 - New: `crates/hybrid/` (or `crates/vector/src/pg_hybrid_adapter.rs`) — `PgHybridAdapter`
-- [crates/vector/src/pg_vector_adapter.rs](../../crates/vector/src/pg_vector_adapter.rs) — `from_connection` constructor (if missing)
+- [crates/vector/src/pgvector_adapter.rs](../../crates/vector/src/pgvector_adapter.rs) — `from_connection` constructor (if missing)
 - [crates/lib/src/component_manager.rs](../../crates/lib/src/component_manager.rs) — pghybrid construction + same-`Arc` wiring
 - [crates/lib/src/config.rs](../../crates/lib/src/config.rs) — `USE_UNIFIED_PROVIDER` handling
 - [crates/graph/src/lib.rs](../../crates/graph/src/lib.rs) / [crates/cognify/src/tasks.rs](../../crates/cognify/src/tasks.rs) — capability hook + combined-write path (PR 3)

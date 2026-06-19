@@ -4,9 +4,9 @@ This document explains, in detail, how the Python `cognee` repository benchmarks
 the `add → cognify → search` pipeline with **mocked LLM and embedding backends**,
 why that design is valuable, and how we intend to port it to `cognee-rust`.
 
-It is the background/rationale document for the work tracked in
-[README.md](README.md) (the task index). Read this first; then follow the
-per-task plans under [tasks/](tasks/).
+It is the design-rationale document behind the offline mock benchmark. The
+implementation has landed; for the user-facing workflow see
+[mock-benchmark.md](mock-benchmark.md).
 
 ---
 
@@ -235,4 +235,4 @@ stays as-is for its HTTP / real-LLM scenario.)
                 └─────────────────────────────────────────────────────────┘
 ```
 
-See [README.md](README.md) for the task breakdown and status.
+See [mock-benchmark.md](mock-benchmark.md) for how to run the offline benchmark.
