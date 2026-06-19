@@ -3,13 +3,20 @@
 Covers: list-empty, create, list-after-create, get-by-id, status-by-name,
 delete, get-deleted (must 404).
 
-Ignore extension: ``{"$..tenant_id", "$..owner_id"}`` — independent default
-tenants per server.
+Ignore extension: owner/tenant ids — independent default tenants and
+independently-registered users per server (random uuid4 ids on both SDKs).
+The DTOs serialize these as camelCase (``ownerId`` / ``tenantId``); the
+snake_case variants are kept too for any endpoint that emits them.
 """
 
 from http_helpers import DEFAULT_IGNORE, assert_responses_match
 
-_DS_IGNORE = DEFAULT_IGNORE | {"$..tenant_id", "$..owner_id"}
+_DS_IGNORE = DEFAULT_IGNORE | {
+    "$..tenant_id",
+    "$..owner_id",
+    "$..tenantId",
+    "$..ownerId",
+}
 
 
 def test_datasets_list_empty(authed_clients, unique_dataset_name):

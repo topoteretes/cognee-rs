@@ -167,15 +167,28 @@ pub async fn build_auth_test_state() -> (AppState, Arc<std::sync::Mutex<Vec<Mail
     (state, events)
 }
 
-/// Seed a user into the state's user repo.
-/// Returns the created `AuthUser`.
+/// Seed a user into the state's user repo. Returns the created `AuthUser`.
+///
+/// The user is marked `is_verified=true` — registration itself produces an
+/// unverified user (fastapi-users safe default), but seeded test users
+/// represent already-onboarded accounts, so we verify them here.
 pub async fn seed_user(state: &AppState, email: &str, password: &str) -> AuthUser {
     use cognee_http_server::auth::register::create_user;
     let auth = state.auth.as_ref().expect("auth ctx");
     let mailer = state.mailer.as_ref();
-    create_user(email, password, mailer, auth)
+    let user = create_user(email, password, mailer, auth)
         .await
-        .expect("seed_user")
+        .expect("seed_user");
+    auth.user_repo
+        .update(
+            user.id,
+            UpdateUserPayload {
+                is_verified: Some(true),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("seed_user: mark verified")
 }
 
 /// Seed a superuser.

@@ -63,6 +63,7 @@ async fn post_verify(
         is_superuser: user.is_superuser,
         is_verified: user.is_verified,
         tenant_id: user.tenant_id,
+        parent_user_id: user.parent_user_id,
     }))
 }
 

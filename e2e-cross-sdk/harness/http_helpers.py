@@ -30,6 +30,10 @@ DEFAULT_IGNORE: frozenset[str] = frozenset(
     {
         "$..created_at",
         "$..updated_at",
+        # camelCase variants — several DTOs (datasets, etc.) serialize
+        # timestamps as camelCase, and these are always wall-clock volatile.
+        "$..createdAt",
+        "$..updatedAt",
         "$..pipeline_run_id",
         "$..run_info.duration_ms",
         "$..access_token",

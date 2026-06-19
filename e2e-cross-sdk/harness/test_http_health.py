@@ -10,7 +10,19 @@ import pytest
 
 from http_helpers import DEFAULT_IGNORE, assert_responses_match
 
-_HEALTH_IGNORE = DEFAULT_IGNORE | {"$..version"}
+# The detailed report's per-component breakdown is intrinsically
+# backend-specific: Python runs lancedb/ladybug, Rust runs qdrant/ladybug, the
+# `provider`/`details` strings and `response_time_ms` differ, and local ONNX
+# embeddings can be healthy on one SDK while the other reports the provider
+# unavailable. The meaningful cross-SDK contract is the *overall* verdict
+# (status code + top-level `status`), so we ignore the volatile/backend-specific
+# fields (`components`, `timestamp`, `uptime`, `version`).
+_HEALTH_IGNORE = DEFAULT_IGNORE | {
+    "$..version",
+    "$.components",
+    "$..timestamp",
+    "$..uptime",
+}
 
 
 # ── Happy-path health checks ──────────────────────────────────────────────────

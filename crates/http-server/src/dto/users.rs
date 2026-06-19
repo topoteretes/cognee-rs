@@ -16,6 +16,7 @@ pub struct UserReadDTO {
     pub is_superuser: bool,
     pub is_verified: bool,
     pub tenant_id: Option<Uuid>,
+    pub parent_user_id: Option<Uuid>,
 }
 
 /// PATCH body for `/me` and `/{id}`. All fields optional.

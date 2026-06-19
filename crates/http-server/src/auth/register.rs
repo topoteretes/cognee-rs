@@ -13,7 +13,9 @@ use crate::error::ApiError;
 /// Create a new user with the given email and password.
 ///
 /// Applies `safe=True` semantics: `is_active=true`, `is_superuser=false`,
-/// `is_verified=true` regardless of what the caller sends.
+/// `is_verified=false` regardless of what the caller sends (fastapi-users
+/// forces these defaults during safe registration — the client cannot
+/// self-verify or self-promote at register time).
 pub async fn create_user(
     email: &str,
     password: &str,
@@ -46,7 +48,7 @@ pub async fn create_user(
             hashed_password: hashed,
             is_active: true,
             is_superuser: false,
-            is_verified: true, // cognee default
+            is_verified: false, // fastapi-users safe-registration default
             tenant_id: None,
             parent_user_id: None,
         })

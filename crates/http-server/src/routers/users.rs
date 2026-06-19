@@ -29,6 +29,7 @@ fn to_dto(user: cognee_database::AuthUser) -> UserReadDTO {
         is_superuser: user.is_superuser,
         is_verified: user.is_verified,
         tenant_id: user.tenant_id,
+        parent_user_id: user.parent_user_id,
     }
 }
 
@@ -45,6 +46,10 @@ async fn get_me(user: AuthenticatedUser) -> Json<UserReadDTO> {
         is_superuser: user.is_superuser,
         is_verified: user.is_verified,
         tenant_id: user.tenant_id,
+        // `AuthenticatedUser` (the request extractor) does not carry the
+        // parent-user link; it is only meaningful for sub-accounts created via
+        // the users API, which echo it through `to_dto`.
+        parent_user_id: None,
     })
 }
 

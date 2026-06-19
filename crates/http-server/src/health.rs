@@ -52,6 +52,11 @@ const COMPONENT_EMBEDDING: &str = "embedding_service";
 struct CachedReport {
     report: HealthCheckReport,
     cached_at: Instant,
+    /// Whether this entry was produced by a detailed probe run. A shallow
+    /// request must not be served a detailed entry (or vice versa) because the
+    /// detailed run additionally probes the non-critical LLM/embedding
+    /// components, which can escalate the aggregate status to DEGRADED.
+    detailed: bool,
 }
 
 // ─── RealHealthChecker ───────────────────────────────────────────────────────
@@ -85,7 +90,11 @@ impl RealHealthChecker {
     }
 
     /// Run all probes concurrently and assemble the report.
-    async fn run_probes(&self) -> HealthCheckReport {
+    ///
+    /// `detailed` requests additionally probe the non-critical LLM and
+    /// embedding providers (matching Python's `/health/detailed`, which reports
+    /// DEGRADED when those providers are unavailable).
+    async fn run_probes(&self, detailed: bool) -> HealthCheckReport {
         // Build futures for every probe up-front; tokio::join! schedules
         // them concurrently on the current task.
         let db_fut = self.probe_database();
@@ -101,12 +110,13 @@ impl RealHealthChecker {
         components.insert(COMPONENT_VECTOR_DB.to_string(), vector);
         components.insert(COMPONENT_FILE_STORAGE.to_string(), storage);
 
-        // Non-critical probes run only when the operator opts in. When the
-        // flag is off, the keys are omitted from the report entirely — this
-        // mirrors Python's "is_available" short-circuit, which prevents the
-        // /health endpoint from echoing back the absence of a remote
-        // provider for every liveness probe.
-        if self.probe_llm {
+        // Non-critical probes (LLM / embedding) run for detailed requests, or
+        // whenever the operator opts every probe in via `health_probe_llm`.
+        // Shallow `/health` liveness probes skip them so they neither echo back
+        // the absence of a remote provider nor pay the per-call latency.
+        // `/health/detailed` includes them — matching Python, which reports
+        // DEGRADED (HTTP 503) when the LLM/embedding provider is unavailable.
+        if detailed || self.probe_llm {
             let llm = self.probe_llm_provider().await;
             let embedding = self.probe_embedding_engine().await;
             components.insert(COMPONENT_LLM.to_string(), llm);
@@ -397,16 +407,17 @@ impl RealHealthChecker {
 impl HealthChecker for RealHealthChecker {
     async fn get_health_status(
         &self,
-        _detailed: bool,
+        detailed: bool,
     ) -> Result<HealthCheckReport, HealthCheckError> {
         // Fast path: serve a fresh cache entry without touching backends.
-        // We deliberately ignore the `detailed` flag for cache lookup — the
-        // probe set is identical (the only difference is the response
-        // shape rendered by the handler).
+        // The entry must have been produced for the same `detailed` mode — a
+        // detailed run probes extra (LLM/embedding) components that can change
+        // the aggregate status, so the two reports are not interchangeable.
         if !self.cache_ttl.is_zero() {
             #[allow(clippy::unwrap_used, reason = "lock poison is unrecoverable")]
             let guard = self.cache.lock().unwrap();
             if let Some(cached) = guard.as_ref()
+                && cached.detailed == detailed
                 && cached.cached_at.elapsed() < self.cache_ttl
             {
                 return Ok(cached.report.clone());
@@ -421,7 +432,7 @@ impl HealthChecker for RealHealthChecker {
         // produce their structured `ComponentHealth` entries before the
         // outer deadline fires.
         let deadline = self.probe_timeout + Duration::from_millis(50);
-        let report = match tokio_timeout(deadline, self.run_probes()).await {
+        let report = match tokio_timeout(deadline, self.run_probes(detailed)).await {
             Ok(r) => r,
             Err(_elapsed) => {
                 // All probes blew past the deadline. Surface this as a
@@ -441,6 +452,7 @@ impl HealthChecker for RealHealthChecker {
             *guard = Some(CachedReport {
                 report: report.clone(),
                 cached_at: Instant::now(),
+                detailed,
             });
         }
 
@@ -545,8 +557,10 @@ mod tests {
         let handles = build_handles(None, true, true, None, None).await;
         let checker = RealHealthChecker::new(handles, &fast_config());
 
+        // Shallow probe (`detailed = false`): non-critical LLM/embedding are
+        // not probed, so the 4 critical components alone determine the verdict.
         let report = checker
-            .get_health_status(true)
+            .get_health_status(false)
             .await
             .expect("checker should succeed");
 
@@ -563,9 +577,34 @@ mod tests {
                 .unwrap_or_else(|| panic!("missing {key}"));
             assert_eq!(comp.status, HealthStatus::Healthy, "{key} status");
         }
-        // LLM/embedding are opt-in; default config = false → omitted.
+        // LLM/embedding are not probed on a shallow request → omitted.
         assert!(!report.components.contains_key(COMPONENT_LLM));
         assert!(!report.components.contains_key(COMPONENT_EMBEDDING));
+    }
+
+    #[tokio::test]
+    async fn detailed_probes_llm_and_degrades_when_unavailable() {
+        // No LLM wired: a detailed request probes it anyway (Python parity) and
+        // reports the non-critical provider as DEGRADED, escalating the overall
+        // verdict to DEGRADED even though every critical component is healthy.
+        let handles = build_handles(None, true, true, None, None).await;
+        let checker = RealHealthChecker::new(handles, &fast_config());
+
+        let report = checker
+            .get_health_status(true)
+            .await
+            .expect("checker should succeed");
+
+        assert_eq!(report.status, HealthStatus::Degraded);
+        assert!(report.components.contains_key(COMPONENT_LLM));
+        assert_eq!(
+            report
+                .components
+                .get(COMPONENT_LLM)
+                .expect("llm entry")
+                .status,
+            HealthStatus::Degraded,
+        );
     }
 
     #[tokio::test]
@@ -627,9 +666,10 @@ mod tests {
         // Default config: health_probe_llm = false.
         let checker = RealHealthChecker::new(handles, &fast_config());
 
-        let report = checker.get_health_status(true).await.expect("report");
-        // Even though both broken backends are wired, the report should
-        // omit them entirely → overall stays HEALTHY.
+        // Shallow request (`detailed = false`) with the opt-in off: even though
+        // both broken backends are wired, the report omits them entirely →
+        // overall stays HEALTHY.
+        let report = checker.get_health_status(false).await.expect("report");
         assert_eq!(report.status, HealthStatus::Healthy);
         assert!(!report.components.contains_key(COMPONENT_LLM));
         assert!(!report.components.contains_key(COMPONENT_EMBEDDING));
