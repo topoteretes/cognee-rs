@@ -392,10 +392,12 @@ mod tests {
             return; // model not available in this environment — skip
         }
 
-        let mut config = OnnxEmbeddingConfig::default();
-        config.model_path = model.into();
-        config.tokenizer_path = tok.into();
-        config.batch_size = 4; // force several sub-batches
+        let config = OnnxEmbeddingConfig {
+            model_path: model.into(),
+            tokenizer_path: tok.into(),
+            batch_size: 4, // force several sub-batches
+            ..Default::default()
+        };
 
         let engine = OnnxEmbeddingEngine::new(config).expect("engine creation");
 
@@ -404,7 +406,11 @@ mod tests {
         let refs: Vec<&str> = texts.iter().map(String::as_str).collect();
 
         let chunked = engine.embed(&refs).await.expect("embed");
-        assert_eq!(chunked.len(), 10, "one embedding per input across sub-batches");
+        assert_eq!(
+            chunked.len(),
+            10,
+            "one embedding per input across sub-batches"
+        );
         assert_eq!(chunked[0].len(), engine.dimension());
 
         // Sub-batching must not change an embedding's meaning. (Exact equality

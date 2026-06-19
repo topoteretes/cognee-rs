@@ -43,9 +43,12 @@ impl TemporalEventExtractor {
         &self,
         chunk_text: &str,
     ) -> Result<Vec<TemporalEvent>, CognifyError> {
+        // Python parity: `acreate_structured_output` passes no output cap on
+        // extraction, so responses use the model's full default budget. A small
+        // max_tokens truncates large event lists mid-JSON. Leave it None.
         let options = GenerationOptions {
             temperature: Some(0.1),
-            max_tokens: Some(4000),
+            max_tokens: None,
             ..Default::default()
         };
 

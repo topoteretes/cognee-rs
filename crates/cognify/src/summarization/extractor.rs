@@ -14,9 +14,13 @@ use crate::error::CognifyError;
 
 /// Default summarization options shared by both the typed and dynamic paths.
 fn default_summary_options() -> GenerationOptions {
+    // Python parity: `acreate_structured_output` passes no output cap on the
+    // summarization call (the ≤200-token limit is enforced via the prompt, not
+    // an API max_tokens). A hard cap here can truncate the structured JSON
+    // response mid-object. Leave max_tokens as None to match Python.
     GenerationOptions {
         temperature: Some(0.3),
-        max_tokens: Some(500),
+        max_tokens: None,
         ..Default::default()
     }
 }

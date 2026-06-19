@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 //! Regression: provenance upserts must chunk their inserts so a large graph
 //! does not exceed SQLite's bound-variable cap (`SQLITE_MAX_VARIABLE_NUMBER`).
 //!

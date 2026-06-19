@@ -91,9 +91,15 @@ impl FactExtractor {
             .create_structured_output(
                 text,
                 system_prompt,
+                // Python parity: `acreate_structured_output` passes NO
+                // max_tokens/max_completion_tokens to the extraction call, so
+                // the response uses the model's full default output budget. A
+                // small cap here truncates large graphs mid-JSON on dense
+                // chunks, aborting cognify with a deserialization error. Leave
+                // max_tokens as None to match Python (no artificial cap).
                 Some(GenerationOptions {
                     temperature: Some(0.1),
-                    max_tokens: Some(2000),
+                    max_tokens: None,
                     ..Default::default()
                 }),
             )

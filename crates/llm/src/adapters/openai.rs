@@ -59,7 +59,12 @@ impl OpenAIAdapter {
     /// Default OpenAI API base URL
     pub const DEFAULT_BASE_URL: &'static str = "https://api.openai.com/v1";
     /// Default retry attempts for structured output parsing paths.
-    pub const DEFAULT_STRUCTURED_OUTPUT_RETRIES: usize = 2;
+    ///
+    /// Python parity: instructor's `acreate_structured_output` retries up to
+    /// `MAX_RETRIES = 5` times on a parse/validation failure. We match that
+    /// count so transient malformed responses get the same number of repair
+    /// chances before the cognify pipeline gives up.
+    pub const DEFAULT_STRUCTURED_OUTPUT_RETRIES: usize = 5;
     /// Default retry attempts for transient network/server errors.
     pub const DEFAULT_NETWORK_RETRIES: usize = 3;
 

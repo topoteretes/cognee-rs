@@ -67,9 +67,12 @@ impl TemporalEntityEnricher {
         let user_prompt = serde_json::to_string(&input)
             .map_err(|e| CognifyError::SerializationError(e.to_string()))?;
 
+        // Python parity: `acreate_structured_output` passes no output cap on
+        // extraction, so responses use the model's full default budget. A small
+        // max_tokens truncates large enriched-event lists mid-JSON. Leave None.
         let options = GenerationOptions {
             temperature: Some(0.1),
-            max_tokens: Some(8000),
+            max_tokens: None,
             ..Default::default()
         };
 
