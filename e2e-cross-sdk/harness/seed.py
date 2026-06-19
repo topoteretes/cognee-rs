@@ -53,7 +53,7 @@ def seed_dataset_with_text(
     r = client.post(
         "/api/v1/add",
         files={"data": ("content.txt", text.encode(), "text/plain")},
-        data={"dataset_name": name},
+        data={"datasetName": name},
     )
     assert r.status_code == 200, (
         f"seed_dataset_with_text failed for dataset={name!r}: "
@@ -160,7 +160,7 @@ def test_seed_dataset_posts_multipart():
     assert result == {"content_hash": "abc123"}
     assert transport.last_request is not None
     assert transport.last_request.url.path == "/api/v1/add"
-    # Verify multipart body contains dataset_name
+    # Verify multipart body contains the datasetName value
     body_bytes = transport.last_request.content
     assert b"my_dataset" in body_bytes
     assert b"hello world" in body_bytes

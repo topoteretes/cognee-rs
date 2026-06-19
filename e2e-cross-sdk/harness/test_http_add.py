@@ -76,12 +76,12 @@ def test_add_text_upload(authed_clients, unique_dataset_name):
     py = authed_clients["py"].post(
         "/api/v1/add",
         files={"data": ("test.txt", _SAMPLE_TEXT.encode(), "text/plain")},
-        data={"dataset_name": unique_dataset_name},
+        data={"datasetName": unique_dataset_name},
     )
     rs = authed_clients["rs"].post(
         "/api/v1/add",
         files={"data": ("test.txt", _SAMPLE_TEXT.encode(), "text/plain")},
-        data={"dataset_name": unique_dataset_name},
+        data={"datasetName": unique_dataset_name},
     )
     assert_responses_match(py, rs, ignore=_ADD_IGNORE)
 
@@ -95,12 +95,12 @@ def test_add_multi_file_upload(authed_clients, unique_dataset_name):
     py = authed_clients["py"].post(
         "/api/v1/add",
         files=files,
-        data={"dataset_name": unique_dataset_name},
+        data={"datasetName": unique_dataset_name},
     )
     rs = authed_clients["rs"].post(
         "/api/v1/add",
         files=files,
-        data={"dataset_name": unique_dataset_name},
+        data={"datasetName": unique_dataset_name},
     )
     assert_responses_match(py, rs, ignore=_ADD_IGNORE)
 
@@ -109,10 +109,7 @@ def test_add_url_ingestion(authed_clients, unique_dataset_name):
     """POST /api/v1/add with a URL source ingests the page on both servers."""
     with local_url_fixture() as url:
         files = {"data": ("url.txt", url.encode(), "text/plain")}
-        data = {
-            "dataset_name": unique_dataset_name,
-            "datasetName": unique_dataset_name,
-        }
+        data = {"datasetName": unique_dataset_name}
         py = authed_clients["py"].post("/api/v1/add", files=files, data=data)
         rs = authed_clients["rs"].post("/api/v1/add", files=files, data=data)
     # Status codes must agree (both may error or both succeed)
@@ -125,7 +122,7 @@ def test_add_url_ingestion(authed_clients, unique_dataset_name):
 def test_add_deduplication(authed_clients, unique_dataset_name):
     """Posting the same file twice should produce the same response (dedup)."""
     files = [("data", ("dup.txt", _SAMPLE_TEXT.encode(), "text/plain"))]
-    kw = {"files": files, "data": {"dataset_name": unique_dataset_name}}
+    kw = {"files": files, "data": {"datasetName": unique_dataset_name}}
 
     # First upload
     py1 = authed_clients["py"].post("/api/v1/add", **kw)
@@ -146,11 +143,11 @@ def test_add_validation_error_on_missing_file(authed_clients, unique_dataset_nam
     """POST /api/v1/add with no file and no URL returns a 4xx error on both."""
     py = authed_clients["py"].post(
         "/api/v1/add",
-        data={"dataset_name": unique_dataset_name},
+        data={"datasetName": unique_dataset_name},
     )
     rs = authed_clients["rs"].post(
         "/api/v1/add",
-        data={"dataset_name": unique_dataset_name},
+        data={"datasetName": unique_dataset_name},
     )
     assert py.status_code == rs.status_code, (
         f"Validation-error status mismatch: py={py.status_code} rs={rs.status_code}"

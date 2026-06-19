@@ -45,30 +45,27 @@ async fn parse_add_multipart(
     let mut node_set_values: Vec<String> = Vec::new();
 
     // ── form fields ──────────────────────────────────────────────────────────
-    // Accept both camelCase (`datasetName`/`datasetId`) and the snake_case
-    // names FastAPI exposes on the Python server (`dataset_name`/`dataset_id`),
-    // so clients written against either SDK interoperate.
-    let first_field = |keys: &[&str]| -> Option<String> {
-        for k in keys {
-            if let Some(vals) = parsed.fields.get(*k)
-                && let Some(v) = vals.first()
-            {
-                let trimmed = v.trim();
-                if !trimmed.is_empty() {
-                    return Some(trimmed.to_owned());
-                }
-            }
+    // The HTTP form fields are camelCase (`datasetName` / `datasetId`), matching
+    // the Python `get_add_router` surface. (The snake_case `dataset_name` is only
+    // the SDK-internal parameter name, not the HTTP field.)
+    if let Some(vals) = parsed.fields.get("datasetName")
+        && let Some(v) = vals.first()
+    {
+        let trimmed = v.trim();
+        if !trimmed.is_empty() {
+            dataset_name = Some(trimmed.to_owned());
         }
-        None
-    };
-    if let Some(v) = first_field(&["datasetName", "dataset_name"]) {
-        dataset_name = Some(v);
     }
-    if let Some(v) = first_field(&["datasetId", "dataset_id"]) {
-        dataset_id = Some(
-            Uuid::parse_str(&v)
-                .map_err(|_| ApiError::BadRequest("Invalid datasetId UUID".into()))?,
-        );
+    if let Some(vals) = parsed.fields.get("datasetId")
+        && let Some(v) = vals.first()
+    {
+        let trimmed = v.trim();
+        if !trimmed.is_empty() {
+            dataset_id = Some(
+                Uuid::parse_str(trimmed)
+                    .map_err(|_| ApiError::BadRequest("Invalid datasetId UUID".into()))?,
+            );
+        }
     }
     if let Some(vals) = parsed.fields.get("node_set") {
         node_set_values = vals.clone();

@@ -49,6 +49,13 @@ async fn build_real_handles() -> (Arc<ComponentHandles>, Arc<DatabaseConnection>
 
     let graph_db: Arc<dyn GraphDBTrait> = Arc::new(MockGraphDB::new());
     let vector_db: Arc<dyn VectorDB> = Arc::new(MockVectorDB::new());
+    // A detailed health probe also checks the (non-critical) LLM and embedding
+    // providers, so wire healthy mocks here to keep this "all healthy" fixture
+    // truly all-healthy. MockLlm.generate and MockEmbeddingEngine.embed both
+    // succeed, yielding HealthStatus::Healthy for those components.
+    let llm: Arc<dyn cognee_llm::Llm> = Arc::new(cognee_test_utils::MockLlm::new(vec![]));
+    let embedding_engine: Arc<dyn cognee_embedding::EmbeddingEngine> =
+        Arc::new(cognee_embedding::MockEmbeddingEngine::new(8));
 
     let handles = Arc::new(ComponentHandles {
         database: Arc::clone(&db),
@@ -57,8 +64,8 @@ async fn build_real_handles() -> (Arc<ComponentHandles>, Arc<DatabaseConnection>
         cloud_client: None,
         ontology_manager,
         search_orchestrator: None,
-        llm: None,
-        embedding_engine: None,
+        llm: Some(llm),
+        embedding_engine: Some(embedding_engine),
         graph_db: Some(graph_db),
         vector_db: Some(vector_db),
         thread_pool: None,
