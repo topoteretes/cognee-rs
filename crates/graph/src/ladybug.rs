@@ -722,17 +722,40 @@ impl GraphDBTrait for LadybugAdapter {
             GraphDBError::ConnectionError(format!("Failed to create connection: {e}"))
         })?;
 
-        // Process in batches
+        // Process in batches. Each batch is a single `UNWIND … MERGE` query
+        // (mirrors the Python Ladybug adapter) instead of a per-node
+        // exists-check + CREATE/SET — one round-trip per batch, and MERGE makes
+        // it idempotent without the extra COUNT query.
         for chunk in nodes.chunks(BATCH_SIZE) {
-            // Serialize all nodes in this chunk first to catch any serialization errors early
-            let mut node_props = Vec::with_capacity(chunk.len());
+            let mut items = Vec::with_capacity(chunk.len());
             for node in chunk {
-                node_props.push(self.serialize_to_node_props(node)?);
+                let p = self.serialize_to_node_props(node)?;
+                items.push(format!(
+                    "{{id:'{}', name:'{}', type:'{}', properties:'{}', created_at:'{}', updated_at:'{}'}}",
+                    Self::escape_cypher_string(&p.id),
+                    Self::escape_cypher_string(&p.name),
+                    Self::escape_cypher_string(&p.node_type),
+                    Self::escape_cypher_string(&p.properties),
+                    p.created_at.format("%Y-%m-%d %H:%M:%S%.6f"),
+                    p.updated_at.format("%Y-%m-%d %H:%M:%S%.6f"),
+                ));
             }
-
-            for props in &node_props {
-                self.upsert_node_with_conn(&conn, props)?;
-            }
+            let query = format!(
+                "UNWIND [{}] AS node \
+                 MERGE (n:Node {{id: node.id}}) \
+                 ON CREATE SET n.name = node.name, n.type = node.type, \
+                     n.created_at = timestamp(node.created_at), \
+                     n.updated_at = timestamp(node.updated_at), n.properties = node.properties \
+                 ON MATCH SET n.name = node.name, n.type = node.type, \
+                     n.updated_at = timestamp(node.updated_at), n.properties = node.properties",
+                items.join(", ")
+            );
+            conn.query(&query).map_err(|e| {
+                GraphDBError::NodeError(format!(
+                    "Failed to batch-upsert {} nodes: {e}",
+                    chunk.len()
+                ))
+            })?;
         }
 
         Ok(())
@@ -877,9 +900,37 @@ impl GraphDBTrait for LadybugAdapter {
             GraphDBError::ConnectionError(format!("Failed to create connection: {e}"))
         })?;
 
-        for edge in edges {
-            let props_json = self.serialize_edge_properties(Some(edge.3.clone()))?;
-            self.upsert_edge_with_conn(&conn, &edge.0, &edge.1, &edge.2, &props_json, Utc::now())?;
+        // One `UNWIND … MATCH … MERGE` query per batch (mirrors the Python
+        // Ladybug adapter), replacing the per-edge exists-check + CREATE/SET.
+        const BATCH_SIZE: usize = 500;
+        let now = Utc::now().format("%Y-%m-%d %H:%M:%S%.6f").to_string();
+        for chunk in edges.chunks(BATCH_SIZE) {
+            let mut items = Vec::with_capacity(chunk.len());
+            for edge in chunk {
+                let props_json = self.serialize_edge_properties(Some(edge.3.clone()))?;
+                items.push(format!(
+                    "{{from_id:'{}', to_id:'{}', relationship_name:'{}', properties:'{}', created_at:'{now}', updated_at:'{now}'}}",
+                    Self::escape_cypher_string(&edge.0),
+                    Self::escape_cypher_string(&edge.1),
+                    Self::escape_cypher_string(&edge.2),
+                    Self::escape_cypher_string(&props_json),
+                ));
+            }
+            let query = format!(
+                "UNWIND [{}] AS edge \
+                 MATCH (a:Node), (b:Node) WHERE a.id = edge.from_id AND b.id = edge.to_id \
+                 MERGE (a)-[r:EDGE {{relationship_name: edge.relationship_name}}]->(b) \
+                 ON CREATE SET r.created_at = timestamp(edge.created_at), \
+                     r.updated_at = timestamp(edge.updated_at), r.properties = edge.properties \
+                 ON MATCH SET r.updated_at = timestamp(edge.updated_at), r.properties = edge.properties",
+                items.join(", ")
+            );
+            conn.query(&query).map_err(|e| {
+                GraphDBError::EdgeError(format!(
+                    "Failed to batch-upsert {} edges: {e}",
+                    chunk.len()
+                ))
+            })?;
         }
         Ok(())
     }
@@ -1646,6 +1697,58 @@ mod tests {
             .unwrap();
         adapter.initialize().await.unwrap();
         (adapter, temp_dir)
+    }
+
+    /// Regression: lbug supports a single batched `UNWIND … MERGE` (inline
+    /// struct list) and it is idempotent — the basis for the batched
+    /// `add_nodes_raw`/`add_edges` upserts that replaced per-item exists-check
+    /// + CREATE/SET.
+    #[tokio::test]
+    #[serial]
+    async fn ladybug_supports_idempotent_unwind_merge_batch() {
+        let temp_dir = TempDir::new().unwrap();
+        let db_path = temp_dir.path().join("merge.db");
+        let config = SystemConfig::default().max_db_size(read_max_db_size());
+        let db = Database::new(db_path.to_str().unwrap(), config).unwrap();
+        let conn = Connection::new(&db).unwrap();
+        conn.query(
+            "CREATE NODE TABLE IF NOT EXISTS Node(id STRING PRIMARY KEY, name STRING, \
+             type STRING, created_at TIMESTAMP, updated_at TIMESTAMP, properties STRING)",
+        )
+        .unwrap();
+
+        let batch = r#"
+            UNWIND [
+              {id:'a', name:'Alice', type:'P', properties:'{}', created_at:'2026-01-01 00:00:00.000000', updated_at:'2026-01-01 00:00:00.000000'},
+              {id:'b', name:'Bob',   type:'P', properties:'{}', created_at:'2026-01-01 00:00:00.000000', updated_at:'2026-01-01 00:00:00.000000'}
+            ] AS node
+            MERGE (n:Node {id: node.id})
+            ON CREATE SET n.name = node.name, n.type = node.type,
+                n.created_at = timestamp(node.created_at), n.updated_at = timestamp(node.updated_at),
+                n.properties = node.properties
+            ON MATCH SET n.name = node.name, n.type = node.type,
+                n.updated_at = timestamp(node.updated_at), n.properties = node.properties
+        "#;
+
+        conn.query(batch)
+            .expect("UNWIND+MERGE batch should be supported by lbug");
+        // Run again — MERGE must be idempotent (no duplicate-PK error, still 2 nodes).
+        conn.query(batch)
+            .expect("re-running MERGE batch must not error");
+
+        let count = conn
+            .query("MATCH (n:Node) RETURN COUNT(n) AS c")
+            .unwrap()
+            .next()
+            .and_then(|row| row.into_iter().next())
+            .and_then(|v| match v {
+                LbugValue::Int64(c) => Some(c),
+                LbugValue::Int32(c) => Some(c as i64),
+                LbugValue::UInt64(c) => Some(c as i64),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(count, 2, "MERGE must upsert, not duplicate");
     }
 
     #[tokio::test]
