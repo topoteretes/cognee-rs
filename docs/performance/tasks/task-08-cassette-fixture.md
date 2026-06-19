@@ -1,6 +1,6 @@
 # T8 — Cassette fixture & corpus
 
-**Status:** Not implemented
+**Status:** Implemented
 **Location:** `scripts/perf/fixtures/`
 **Depends on:** T2, T4, T6
 **Unblocks:** zero-API CI benchmarking

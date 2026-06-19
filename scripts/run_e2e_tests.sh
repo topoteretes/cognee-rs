@@ -7,8 +7,6 @@
 #
 # Optional (from environment or .env):
 #   OPENAI_MODEL              — model to use (default: gpt-4o-mini)
-#   COGNEE_TEST_MODEL_DIR     — directory for embedding model cache
-#   COGNEE_E2E_EMBED_MODEL_PATH / COGNEE_E2E_TOKENIZER_PATH — full path overrides
 
 set -euo pipefail
 
@@ -39,9 +37,6 @@ fi
 export OPENAI_URL
 export OPENAI_TOKEN
 export OPENAI_MODEL="${OPENAI_MODEL:-gpt-4o-mini}"
-
-MODEL_DIR="${COGNEE_TEST_MODEL_DIR:-$PROJECT_ROOT/target/models}"
-setup_embedding_models "$MODEL_DIR"
 
 print_env
 

@@ -1,6 +1,6 @@
 # T4 — Factory wiring (`MOCK_LLM` / recording)
 
-**Status:** Not implemented
+**Status:** Implemented
 **Crates:** `cognee-llm` (config), `cognee-lib` (`Settings` + `ComponentManager`)
 **Depends on:** T2, T3
 **Unblocks:** T6 (and makes the existing Criterion bench mock-capable)

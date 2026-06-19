@@ -160,10 +160,9 @@ pub struct UpdateQuery {
 #[derive(Debug, ToSchema)]
 #[allow(dead_code)]
 pub struct UpdateMultipart {
-    /// One or more replacement files. Zero parts is a degenerate but legal
-    /// case (no new content; cognify still re-runs).
+    /// The replacement file.
     #[schema(format = "binary")]
-    pub data: Vec<Vec<u8>>,
+    pub data: Vec<u8>,
 
     /// Repeated form field; each entry is one node-set tag. `[""]` and `[]`
     /// both normalize to absent.

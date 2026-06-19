@@ -1,6 +1,6 @@
 # T2 — `RecordingLlm` decorator
 
-**Status:** Not implemented
+**Status:** Implemented
 **Crate:** `cognee-llm` (`mock` feature)
 **Depends on:** T1
 **Unblocks:** T4, T8

@@ -1,6 +1,6 @@
 # T9 — Docs & verification
 
-**Status:** Not implemented
+**Status:** Implemented
 **Location:** `docs/performance/`, `scripts/perf/`, workspace-wide
 **Depends on:** T1–T8
 **Unblocks:** —

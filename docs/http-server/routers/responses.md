@@ -38,9 +38,8 @@ One endpoint.
   |---|---|---|
   | `400` | `{"detail": [...], "body": ...}` | Validation error on `ResponseRequestDTO` (e.g. missing `input`, malformed tool definition). |
   | `401` | `{"detail": "Unauthorized"}` | No credential; `REQUIRE_AUTHENTICATION=true`. |
-  | `429` | `{"detail": "Upstream OpenAI rate limit exceeded"}` | OpenAI returned 429; we forward as a structured `ApiError::TooManyRequests`. |
-  | `502` | `{"detail": "Upstream OpenAI error: <message>"}` | OpenAI returned a non-2xx other than 429, or the upstream connection failed. |
-  | `500` | `{"detail": "<message>"}` | Function-dispatch error after the upstream call succeeded. **Note**: per Python's current behavior, dispatch errors are folded *into the response body* (`tool_calls[i].output.status = "error"`) and the HTTP status remains `200`. We replicate that — `500` is reserved for *router-level* failures (DB, panics, framework). |
+  | `500` | `{"detail": "responses upstream call failed"}` | The upstream OpenAI call failed (rate limit, non-2xx, or connection error). The handler maps **all** upstream failures to `ApiError::Internal` via `map_err(|e| ApiError::Internal(...))`; the verbose error is logged with `tracing::error!` and a generic message is surfaced so OpenAI response bodies (which may contain secrets) never leak. There is no separate 429/502 mapping. |
+  | `500` | `{"detail": "<message>"}` | Server components / responses client not wired (`ApiError::Internal`). Function-dispatch errors, by contrast, are folded *into the response body* (`tool_calls[i].output.status = "error"`) and the HTTP status remains `200`. |
 
 - **Side effects**:
   - One outgoing HTTP request to `https://api.openai.com/v1/responses` (or the configured base URL).
@@ -287,7 +286,7 @@ The router is fully implemented. The pieces, as built:
 - The `POST /` handler in `crates/http-server/src/routers/responses.rs` — validates `ResponseRequestDTO`, calls the configured `ResponsesClient`, dispatches tool calls, and assembles `ResponseBodyDTO`. No `501` path remains (guarded by `responses_no_longer_returns_501`).
 - `DEFAULT_TOOLS` (`crate::responses_dispatch::default_tools()`), snapshot-aligned with Python's router-local serialized form.
 - Function-call dispatch in `crates/http-server/src/responses_dispatch.rs` — matches function names per §3.4 and folds outcomes into `ResponseToolCallDTO`; resolves `user` via the default user for parity (see §6).
-- Upstream error mapping: 429 → `TooManyRequests`; other non-2xx and connect/timeout errors → `BadGateway`. Function-dispatch errors fold into `tool_calls[i].output.status = "error"`; HTTP stays `200`.
+- Upstream error mapping: all upstream failures (rate limit, non-2xx, connect/timeout) map to `ApiError::Internal` → HTTP `500` with a generic `{"detail": "responses upstream call failed"}` body (verbose error logged via `tracing::error!`, not surfaced). Function-dispatch errors fold into `tool_calls[i].output.status = "error"`; HTTP stays `200`.
 - Tests in `crates/http-server/src/routers/responses.rs` (inline) and `crates/http-server/tests/`: DTO round-trip, search/cognify dispatch, empty-tool-call case, id synthesis, and the 501-regression guard.
 
 ## 6. Open questions

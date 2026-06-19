@@ -114,7 +114,8 @@ Indexes: `email` UNIQUE, `tenant_id`. See [auth.md §11](auth.md#11-database-sch
 `owner_id` is *not* a hard FK — Python's column has no `ForeignKey(...)` constraint. Match this so cascades behave identically. Application logic enforces the integrity.
 
 > **Implementation divergence (landed in P5, commits aefb105 + 2652aea):** the
-> existing migration `m20250422_000001_user_tenant_role_tables.rs` declared
+> user/tenant/role tables (since consolidated into the single baseline migration
+> `crates/database/src/migrator/m20260914_000001_baseline.rs`) declared
 > `owner_id` as `TEXT NOT NULL` rather than the `NULL` shape this section
 > specifies. We did **not** re-issue the column at P5 (would have required a
 > destructive `ALTER` or a churn migration). Instead, the `bootstrap_default_principals`
@@ -284,7 +285,7 @@ Returns one row → ALLOW; zero rows → DENY. Indexes on `acls(principal_id, da
 
 ### 5.3 Bulk variant
 
-For endpoints that need to filter "datasets visible to me" (e.g. `GET /api/v1/datasets`), we run a similar query but without the `dataset_id` constraint, returning the set of dataset IDs. Implementation in `crates/database/src/permissions/visible_datasets.rs`. Bounded by `LIMIT` to avoid full-table scans.
+For endpoints that need to filter "datasets visible to me" (e.g. `GET /api/v1/datasets`), we run a similar query but without the `dataset_id` constraint, returning the set of dataset IDs. Implemented as the `visible_datasets` method on the `PermissionsRepository` trait (`crates/database/src/permissions/mod.rs`), with the SeaORM implementation in `crates/database/src/permissions/sea_orm_impl.rs`. Bounded by `LIMIT` to avoid full-table scans.
 
 ### 5.4 Caching
 
@@ -358,28 +359,28 @@ Both checks are implemented in `crates/database/src/permissions/tenant_admin.rs`
 // crates/database/src/permissions/mod.rs
 #[async_trait]
 pub trait PermissionsRepository: Send + Sync {
-    async fn user_can(&self, user_id: Uuid, dataset_id: Uuid, perm: &str) -> Result<bool, DbError>;
-    async fn visible_datasets(&self, user_id: Uuid, perm: &str) -> Result<Vec<Uuid>, DbError>;
+    async fn user_can(&self, user_id: Uuid, dataset_id: Uuid, perm: &str) -> Result<bool, PermissionsError>;
+    async fn visible_datasets(&self, user_id: Uuid, perm: &str) -> Result<Vec<Uuid>, PermissionsError>;
 
-    async fn grant_acl(&self, principal_id: Uuid, dataset_id: Uuid, perm: &str) -> Result<(), DbError>;
-    async fn revoke_acl(&self, principal_id: Uuid, dataset_id: Uuid, perm: &str) -> Result<(), DbError>;
+    async fn grant_acl(&self, principal_id: Uuid, dataset_id: Uuid, perm: &str) -> Result<(), PermissionsError>;
+    async fn revoke_acl(&self, principal_id: Uuid, dataset_id: Uuid, perm: &str) -> Result<(), PermissionsError>;
 
-    async fn create_role(&self, tenant_id: Uuid, name: &str) -> Result<Uuid, DbError>;
-    async fn assign_role(&self, user_id: Uuid, role_id: Uuid) -> Result<(), DbError>;
-    async fn revoke_role(&self, user_id: Uuid, role_id: Uuid) -> Result<(), DbError>;
+    async fn create_role(&self, tenant_id: Uuid, name: &str) -> Result<Uuid, PermissionsError>;
+    async fn assign_role(&self, user_id: Uuid, role_id: Uuid) -> Result<(), PermissionsError>;
+    async fn revoke_role(&self, user_id: Uuid, role_id: Uuid) -> Result<(), PermissionsError>;
 
-    async fn create_tenant(&self, name: &str, owner_id: Uuid) -> Result<Uuid, DbError>;
-    async fn add_user_to_tenant(&self, user_id: Uuid, tenant_id: Uuid) -> Result<(), DbError>;
-    async fn remove_user_from_tenant(&self, user_id: Uuid, tenant_id: Uuid) -> Result<(), DbError>;
-    async fn select_current_tenant(&self, user_id: Uuid, tenant_id: Option<Uuid>) -> Result<(), DbError>;
+    async fn create_tenant(&self, name: &str, owner_id: Uuid) -> Result<Uuid, PermissionsError>;
+    async fn add_user_to_tenant(&self, user_id: Uuid, tenant_id: Uuid) -> Result<(), PermissionsError>;
+    async fn remove_user_from_tenant(&self, user_id: Uuid, tenant_id: Uuid) -> Result<(), PermissionsError>;
+    async fn select_current_tenant(&self, user_id: Uuid, tenant_id: Option<Uuid>) -> Result<(), PermissionsError>;
 
-    async fn list_tenant_roles(&self, tenant_id: Uuid) -> Result<Vec<Role>, DbError>;
-    async fn list_users_in_tenant(&self, tenant_id: Uuid) -> Result<Vec<User>, DbError>;
-    async fn list_users_in_role(&self, tenant_id: Uuid, role_id: Uuid) -> Result<Vec<User>, DbError>;
-    async fn list_user_roles(&self, tenant_id: Uuid, user_id: Uuid) -> Result<Vec<Role>, DbError>;
-    async fn list_my_tenants(&self, user_id: Uuid) -> Result<Vec<Tenant>, DbError>;
+    async fn list_tenant_roles(&self, tenant_id: Uuid) -> Result<Vec<Role>, PermissionsError>;
+    async fn list_users_in_tenant(&self, tenant_id: Uuid) -> Result<Vec<User>, PermissionsError>;
+    async fn list_users_in_role(&self, tenant_id: Uuid, role_id: Uuid) -> Result<Vec<User>, PermissionsError>;
+    async fn list_user_roles(&self, tenant_id: Uuid, user_id: Uuid) -> Result<Vec<Role>, PermissionsError>;
+    async fn list_my_tenants(&self, user_id: Uuid) -> Result<Vec<Tenant>, PermissionsError>;
 
-    async fn is_tenant_admin(&self, user_id: Uuid, tenant_id: Uuid) -> Result<bool, DbError>;
+    async fn is_tenant_admin(&self, user_id: Uuid, tenant_id: Uuid) -> Result<bool, PermissionsError>;
 }
 ```
 

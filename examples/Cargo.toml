@@ -48,7 +48,9 @@ cognee-core = { path = "../crates/core", features = ["pipeline-run-registry"] }
 cognee-storage = { path = "../crates/storage" }
 cognee-database = { path = "../crates/database" }
 cognee-graph = { path = "../crates/graph", features = ["testing"] }
-cognee-ingestion = { path = "../crates/ingestion" }
+# html-loader enables DataInput::Url ingestion used by the url_ingestion example;
+# without it, URL ingestion returns IngestionError::UrlIngestionUnavailable.
+cognee-ingestion = { path = "../crates/ingestion", features = ["html-loader"] }
 cognee-models = { path = "../crates/models" }
 cognee-chunking = { path = "../crates/chunking" }
 cognee-cognify = { path = "../crates/cognify" }

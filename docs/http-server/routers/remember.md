@@ -25,11 +25,12 @@ Companion docs: [../architecture.md](../architecture.md), [../auth.md](../auth.m
   |---|---|---|---|---|---|
   | `data` | `List[UploadFile]` | `data` | `Vec<UploadedFilePart>` | empty | One or more files. Streamed to disk via `axum::extract::Multipart`. |
   | `datasetName` | `Form[Optional[str]]` | `dataset_name` | `Option<String>` | `None` | Note Python's camelCase part name — kept verbatim for wire compat. |
-  | `datasetId` | `Form[Union[UUID, Literal[""], None]]` | `dataset_id` | `Option<DatasetIdRef>` | `None` | Same Python `Union` quirk as memify; reuse `DatasetIdRef` deserializer. |
+  | `datasetId` | `Form[Union[UUID, Literal[""], None]]` | `dataset_id` | `DatasetIdRef` | `DatasetIdRef(None)` | Same Python `Union` quirk as memify; reuse `DatasetIdRef` deserializer. Empty string → `None`. |
   | `node_set` | `Form[Optional[List[str]]]` | `node_set` | `Option<Vec<String>>` | `Some(vec![""])` | Python defaults to `[""]` and the handler treats `[""]` as `None` ([line 84](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/remember/routers/get_remember_router.py#L84)). Rust must mirror. |
   | `run_in_background` | `Form[Optional[bool]]` | `run_in_background` | `Option<bool>` | `Some(false)` | See [pipelines.md §9](../pipelines.md#9-sync-vs-background-dispatch-http-wire-shapes). |
   | `custom_prompt` | `Form[Optional[str]]` | `custom_prompt` | `Option<String>` | `Some("")` | Forwarded to the cognify step. |
   | `chunks_per_batch` | `Form[Optional[int]]` | `chunks_per_batch` | `Option<u32>` | `Some(10)` | Note: Python defaults to `10` here (not `None` like cognify). Match. |
+  | `session_id` | `Form[Optional[str]]` | `session_id` | `Option<String>` | `None` | Forwarded to `cognee.remember(session_id=...)`. Empty string is treated as `None`. |
 
 - **Response body**:
 
@@ -37,21 +38,21 @@ Companion docs: [../architecture.md](../architecture.md), [../auth.md](../auth.m
 
     ```json
     {
-      "dataset_id":      "<uuid>",
-      "dataset_name":    "<str>",
-      "data_ids":        ["<uuid>", ...],
-      "pipeline_run_id": "<uuid>",
-      "status":          "PipelineRunCompleted",
-      "duration_ms":     1234,
-      "session_id":      "<uuid|null>",
-      "data_size_bytes": 12345,
-      "data_item_count": 3
+      "status":           "completed",
+      "pipeline_run_id":  "<uuid|null>",
+      "dataset_id":       "<uuid|null>",
+      "dataset_name":     "<str>",
+      "items_processed":  3,
+      "elapsed_seconds":  1.25,
+      "session_ids":      ["<str>", ...],
+      "content_hash":     "<str>",
+      "items":            [{"name": "...", "content_hash": "...", "token_count": 42}]
     }
     ```
 
-    The shape is whatever `RememberResult.to_dict()` produces; the handler returns `jsonable_encoder(result.to_dict())` ([line 90](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/remember/routers/get_remember_router.py#L90)). The Rust port mirrors the keys verbatim.
+    The shape is whatever `RememberResult.to_dict()` produces; the handler returns `jsonable_encoder(result.to_dict())` ([line 90](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/remember/routers/get_remember_router.py#L90)). The Rust `RememberResultDTO` mirrors the keys verbatim. `status` is the lowercase `WireRememberStatus` (`"running"` / `"completed"` / `"errored"` / `"session_stored"`); `pipeline_run_id`, `dataset_id`, and `elapsed_seconds` are always emitted (may be `null`); `session_ids`, `content_hash`, `items`, and `error` are skipped when `None`.
 
-  - **Success — background (`run_in_background=true`)** — `200 OK`. Same `RememberResult.to_dict()` shape, but with `status="PipelineRunStarted"` and `duration_ms` measuring only the *add* portion plus the kickoff. The cognify portion runs in the background; subscribers can attach to `/api/v1/cognify/subscribe/{pipeline_run_id}` to follow it (the deterministic `pipeline_run_id` is the cognify run's id, since memify is not invoked here).
+  - **Success — background (`run_in_background=true`)** — `200 OK`. Same `RememberResult.to_dict()` shape, but with `status="running"` and `elapsed_seconds` measuring only the *add* portion plus the kickoff. The cognify portion runs in the background; subscribers can attach to `/api/v1/cognify/subscribe/{pipeline_run_id}` to follow it (the deterministic `pipeline_run_id` is the cognify run's id, since memify is not invoked here).
 
 - **Error responses**:
 
@@ -175,19 +176,18 @@ A JSON (not multipart) sibling endpoint that writes a single typed memory entry 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 use uuid::Uuid;
-use chrono::{DateTime, Utc};
 
 use crate::dto::util::DatasetIdRef;
 
 /// Multipart form fields. Files are extracted separately as a `Vec<UploadedFilePart>`.
 /// Source: cognee/api/v1/remember/routers/get_remember_router.py:29-38
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Default)]
 pub struct RememberFormDTO {
     /// Python: `datasetName` — note camelCase wire name.
     pub dataset_name: Option<String>,
 
     /// Python: `datasetId` — accepts `""` as "no value".
-    pub dataset_id: Option<DatasetIdRef>,
+    pub dataset_id: DatasetIdRef,
 
     /// Python default `[""]`; the handler treats `[""]` as `None`.
     pub node_set: Option<Vec<String>>,
@@ -200,15 +200,43 @@ pub struct RememberFormDTO {
 
     /// Python default `10`. Forwarded to cognify as-is.
     pub chunks_per_batch: Option<u32>,
+
+    /// Optional session id forwarded to `cognee.remember(session_id=...)`.
+    /// Empty string is treated as `None`.
+    pub session_id: Option<String>,
 }
 
 /// One uploaded file from the `data` parts.
-#[derive(Debug, Clone)]
 pub struct UploadedFilePart {
-    pub filename: String,
+    pub file_name: Option<String>,
     pub content_type: Option<String>,
     pub temp_path: std::path::PathBuf,
     pub byte_count: u64,
+}
+
+/// Wire-format status — Python's lowercase strings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub enum WireRememberStatus {
+    #[serde(rename = "running")]
+    Running,
+    #[serde(rename = "completed")]
+    Completed,
+    #[serde(rename = "errored")]
+    Errored,
+    #[serde(rename = "session_stored")]
+    SessionStored,
+}
+
+/// Per-item result info attached to `RememberResultDTO.items`.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub struct RememberItemDTO {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content_hash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token_count: Option<i64>,
 }
 
 /// Mirrors Python's `RememberResult.to_dict()` output.
@@ -216,22 +244,31 @@ pub struct UploadedFilePart {
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub struct RememberResultDTO {
-    pub dataset_id: Uuid,
+    pub status: WireRememberStatus,
+    /// Always emitted (may be `null`).
+    pub pipeline_run_id: Option<Uuid>,
+    /// Always emitted (may be `null`).
+    pub dataset_id: Option<Uuid>,
     pub dataset_name: String,
-    pub data_ids: Vec<Uuid>,
-    pub pipeline_run_id: Uuid,
-    /// "PipelineRunStarted" | "PipelineRunCompleted" | "PipelineRunErrored"
-    pub status: String,
-    pub duration_ms: u64,
-    pub session_id: Option<Uuid>,
-    pub data_size_bytes: u64,
-    pub data_item_count: u64,
-    /// Present only on `PipelineRunErrored`.
+    /// Always emitted (default 0).
+    pub items_processed: u32,
+    /// Always emitted (`null` when absent).
+    pub elapsed_seconds: Option<f64>,
+    /// Conditional — only emitted when set.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_ids: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content_hash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub items: Option<Vec<RememberItemDTO>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
-    /// Optional ISO-8601 timestamp; only emitted by Python on background runs.
+    /// Discriminator for the typed-entry path (`"qa"` / `"trace"` / `"feedback"`).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub started_at: Option<DateTime<Utc>>,
+    pub entry_type: Option<String>,
+    /// Cache-returned entry id (`qa_id` / `trace_id`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub entry_id: Option<String>,
 }
 ```
 
@@ -270,7 +307,7 @@ The `DatasetIdRef` helper is shared with `/memify` and `/improve`; see [memify.m
    - Background dispatch attaches a WS to the returned `pipeline_run_id` and observes the cognify run completing.
    - 413 path: deliberately exceed the body limit.
 9. Add cross-SDK parity tests in `e2e-cross-sdk/harness/test_http_remember.py`:
-   - Same multipart payload, same response keys (`dataset_id`, `dataset_name`, `data_ids`, `pipeline_run_id`, `status`, ...).
+   - Same multipart payload, same response keys (`status`, `pipeline_run_id`, `dataset_id`, `dataset_name`, `items_processed`, `elapsed_seconds`, ...).
    - Same deterministic `pipeline_run_id` for the same `(user, dataset)` pair across both SDKs.
 
 ## 6. Open questions

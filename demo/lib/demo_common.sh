@@ -70,9 +70,19 @@ download_if_missing() {
 }
 
 # start_ollama
-# Starts the Ollama Docker container via docker/ollama/start.sh.
+# Starts the Ollama Docker container via OLLAMA_DIR/start.sh when that launcher
+# is present. The in-repo docker/ollama/ launcher was removed (commit 338bd58,
+# "remove tests with local ollama"); when it is absent this falls back to
+# assuming an externally-running Ollama at OLLAMA_PORT and only warns.
+# The default demo backend is now OpenAI — Ollama is opt-in via --llm-backend.
 # Reads: OLLAMA_DIR, OLLAMA_PORT, OLLAMA_CONTAINER_NAME, OLLAMA_VOLUME_NAME, MODEL_NAME
 start_ollama() {
+  if [[ ! -x "${OLLAMA_DIR}/start.sh" ]]; then
+    warn "⚠ No Ollama launcher at ${OLLAMA_DIR}/start.sh — assuming an Ollama instance is already running on port ${OLLAMA_PORT}."
+    warn "   Start one yourself, e.g.: docker run -d --name ${OLLAMA_CONTAINER_NAME} -p ${OLLAMA_PORT}:11434 -v ${OLLAMA_VOLUME_NAME}:/root/.ollama ollama/ollama && docker exec ${OLLAMA_CONTAINER_NAME} ollama pull ${MODEL_NAME}"
+    return 0
+  fi
+
   log "🐳 Starting Ollama on port ${OLLAMA_PORT} with model ${MODEL_NAME}"
   (
     cd "${OLLAMA_DIR}"

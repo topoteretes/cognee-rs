@@ -69,11 +69,11 @@ async def main():
 asyncio.run(main())
 ```
 
-Install the optional `cognee` alias to use `import cognee` directly:
-
-```bash
-pip install "cognee_pipeline[drop-in]"
-```
+The `compat` module above is the supported drop-in alias. A plain
+`pip install cognee-pipeline` intentionally does **not** install a top-level
+`cognee` package, so it never shadows the upstream Python `cognee` package. If
+you want `import cognee` to work directly, vendor the shim shipped in the repo
+([`python/cognee/`](cognee/)) into your project.
 
 ## Examples
 
@@ -514,19 +514,19 @@ for advanced orchestration use-cases that do not need the high-level SDK:
 ```python
 import cognee_pipeline
 
-task = cognee_pipeline.create_task(lambda val, ctx: val)
-
 p = cognee_pipeline.Pipeline("my pipeline")
-p.add_task(cognee_pipeline.TaskInfo(task))
+# add_task accepts a plain callable directly (sync, async, generator, or async
+# generator — auto-detected). The callable receives each input value.
+p.add_task(lambda val: val, name="echo")
 
 ctx = cognee_pipeline.TaskContext.mock()
-[result] = await p.execute([cognee_pipeline.CogneeValue.from_string("hello")], ctx)
+# execute() takes plain Python values and returns the last task's outputs.
+[result] = await p.execute(["hello"], ctx)
 ```
 
-All pipeline-engine symbols (`Pipeline`, `TaskInfo`, `createTask`, `CogneeValue`,
-`TaskContext`, `RunHandle`, `CancellationHandle`, `CancellationToken`,
-`cancellation_pair`, `ProgressToken`, `Watcher`) are available at the top level
-of `cognee_pipeline`.
+All pipeline-engine symbols (`Pipeline`, `TaskContext`, `PipelineRunHandle`,
+`CancellationHandle`, `CancellationToken`, `cancellation_pair`, `ProgressToken`,
+`Watcher`) are available at the top level of `cognee_pipeline`.
 
 ## Troubleshooting
 

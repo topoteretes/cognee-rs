@@ -1,6 +1,6 @@
 # T1 — Cassette format & hashing
 
-**Status:** Not implemented
+**Status:** Implemented
 **Crate:** `cognee-llm` (new `mock` feature)
 **Depends on:** nothing
 **Unblocks:** T2, T3
