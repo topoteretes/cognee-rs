@@ -138,34 +138,42 @@ jobs:
             }
 
       # ── Phase-1a: no LLM required (unconditional release gate) ─────────────
-      # Excludes add/forget: the Python `/add` endpoint instantiates an LLM
-      # client and raises LLMAPIKeyNotSetError without a key, so add (and the
-      # forget tests that seed via add) need a key — they run in Phase-1b.
-      # Running datasets without add in the same session also keeps the
-      # dataset-list assertions free of add-created pollution.
-      - name: Phase-1a — health, auth, datasets, search, openapi, errors (no LLM)
+      # Excludes add/forget/search: the Python `/add` endpoint instantiates an
+      # LLM client and raises LLMAPIKeyNotSetError without a key, so add (and
+      # the forget/search tests that seed via add) need a key — they run in
+      # Phase-1b. Running datasets without add in the same session also keeps
+      # the dataset-list assertions free of add-created pollution.
+      - name: Phase-1a — health, auth, datasets, openapi, errors (no LLM)
         run: >-
           docker compose
           -f cognee-rust/e2e-cross-sdk/docker-compose.yml
           run --rm e2e-http-tests
           pytest -vs /harness/
-          -k "test_http_health or test_http_auth or test_http_datasets or test_http_search or test_http_openapi or test_http_errors or test_http_self"
+          -k "test_http_health or test_http_auth or test_http_datasets or test_http_openapi or test_http_errors or test_http_self"
           --tb=short
 
-      # ── Phase-1b: add + forget (LLM-gated — Python /add needs a key) ───────
-      - name: Phase-1b — add, forget (LLM-gated)
-        if: ${{ env.HAS_OPENAI_KEY == 'true' }}
+      # ── Phase-1b: add + forget + search (needs a key — Python /add does) ───
+      # The `secrets` context does NOT populate job-level `env:` here (despite
+      # the OPENAI_KEY secret existing, the HAS_OPENAI_KEY gate evaluated false
+      # and this step always skipped). Secrets ARE available in a step's own
+      # `env:`, so read the key there and gate inside the script instead of via
+      # an `if:` expression (which cannot see step-level env).
+      - name: Phase-1b — add, forget, search (LLM-gated)
         env:
           OPENAI_TOKEN: ${{ secrets.OPENAI_KEY }}
           OPENAI_URL: https://api.openai.com/v1
           OPENAI_MODEL: gpt-4o-mini
-        run: >-
-          docker compose
-          -f cognee-rust/e2e-cross-sdk/docker-compose.yml
-          run --rm e2e-http-tests
-          pytest -vs /harness/
-          -k "test_http_add or test_http_forget"
-          --tb=short
+        run: |
+          if [ -z "${OPENAI_TOKEN}" ]; then
+            echo "OPENAI_KEY not available — skipping LLM-gated add/forget/search parity."
+            exit 0
+          fi
+          docker compose \
+            -f cognee-rust/e2e-cross-sdk/docker-compose.yml \
+            run --rm e2e-http-tests \
+            pytest -vs /harness/ \
+            -k "test_http_add or test_http_forget or test_http_search" \
+            --tb=short
 
       # ── Telemetry parity: cross-SDK identity-layer comparison ────────────
       # Asserts api_key_tracking_id and persistent_id parity between the

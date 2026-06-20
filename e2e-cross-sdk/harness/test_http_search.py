@@ -32,9 +32,14 @@ _SEED_TEXT = (
 )
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture
 def seeded_dataset(authed_clients, unique_dataset_name):
-    """Seed both servers with text and return the dataset IDs."""
+    """Seed both servers with text and return the dataset IDs.
+
+    Function-scoped: it depends on the function-scoped ``authed_clients`` and
+    ``unique_dataset_name`` fixtures, so it cannot be module-scoped (pytest
+    raises ScopeMismatch otherwise).
+    """
     dataset_ids: dict[str, str | None] = {}
     for side, client in authed_clients.items():
         resp = seed_dataset_with_text(client, name=unique_dataset_name, text=_SEED_TEXT)
