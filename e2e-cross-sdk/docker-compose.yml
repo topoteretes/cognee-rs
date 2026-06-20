@@ -19,6 +19,22 @@ services:
       - ../.env                                   # cognee-rust/.env (OPENAI_TOKEN, OPENAI_MODEL, etc.)
     environment:
       - LLM_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
+      # Forward LLM/embedding config from the host (CI step env / local shell)
+      # into the container so start_servers.sh can configure BOTH servers.
+      # Bare names pass the host value through when set, and fall back to the
+      # env_file (../.env) for local dev when the host var is unset. Python's
+      # /add needs a working LLM/embedding provider (it raises
+      # LLMAPIKeyNotSetError otherwise), so the key-gated phases set these.
+      - OPENAI_TOKEN
+      - OPENAI_URL
+      - OPENAI_MODEL
+      - LLM_API_KEY
+      - LLM_API_ENDPOINT
+      - EMBEDDING_PROVIDER
+      - EMBEDDING_MODEL
+      - EMBEDDING_ENDPOINT
+      - EMBEDDING_API_KEY
+      - MOCK_EMBEDDING
     tmpfs:
       - /py                                       # ephemeral Python server workspace
       - /rs                                       # ephemeral Rust server workspace

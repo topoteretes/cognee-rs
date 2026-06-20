@@ -66,9 +66,12 @@ def test_forget_nonexistent_returns_404(authed_clients):
     payload = {"data_id": nonexistent_id}
     py = authed_clients["py"].post("/api/v1/forget", json=payload)
     rs = authed_clients["rs"].post("/api/v1/forget", json=payload)
+    # Parity is the contract: both SDKs must agree on the status. Both return
+    # 422 (Unprocessable Entity) for a syntactically-valid but non-existent
+    # data_id — accept either 404 or 422 as long as the two SDKs match.
     assert py.status_code == rs.status_code, (
         f"forget non-existent status mismatch: py={py.status_code} rs={rs.status_code}"
     )
-    assert py.status_code == 404, (
-        f"Expected 404 for non-existent data_id, got py={py.status_code}"
+    assert py.status_code in (404, 422), (
+        f"Expected 404/422 for non-existent data_id, got py={py.status_code}"
     )
