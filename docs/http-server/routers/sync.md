@@ -339,7 +339,7 @@ pub struct SyncErrorDTO {
 
 ## 6. Open questions
 
-1. **Where does the cloud-side flow live?** Options: (a) extend `cognee-cloud` (fits the existing serve/disconnect work), (b) new `cognee-sync` crate, (c) inline in `crates/http-server/src/sync/`. Lean: **(a) extend `cognee-cloud`** — it already owns the cloud HTTP client (`CloudClient`, [`crates/cloud/src/cloud_client.rs`](../../crates/cloud/src/cloud_client.rs)) and the auth/credentials story. Adding `cognee_cloud::sync::run_background` keeps the cloud-facing surface contiguous.
+1. **Where does the cloud-side flow live?** Options: (a) extend `cognee-cloud` (fits the existing serve/disconnect work), (b) new `cognee-sync` crate, (c) inline in `crates/http-server/src/sync/`. Lean: **(a) extend `cognee-cloud`** — it already owns the cloud HTTP client (`CloudClient`, [`crates/cloud/src/cloud_client.rs`](../../../crates/cloud/src/cloud_client.rs)) and the auth/credentials story. Adding `cognee_cloud::sync::run_background` keeps the cloud-facing surface contiguous.
 2. **PostHog telemetry**: Python emits `send_telemetry(...)` events in both endpoints. Rust phase 1 does not port these (out of scope per [../observability.md §1](../observability.md#1-goals--non-goals)). Should we add a feature-gated `posthog` shim later? Defer to a follow-up doc.
 3. **`run_id: str` vs `Uuid`**: Python types `run_id` as `str`, not `UUID`, even though it is always a uuid4 string. Should Rust DTOs use `Uuid` (better type) or `String` (parity)? Lean: **String** for parity; convert internally to `Uuid` for indexing if needed.
 4. **OpenAPI schema accuracy**: Python advertises `dict[str, SyncResponse]` in its `response_model` annotation but actually returns a single `SyncResponse` object on the wire. Rust's utoipa schema mirrors the **actual wire body** (`SyncResponse`), not Python's broken annotation — this is parity with Python's *observable* behavior. The OpenAPI annotation in Python is the deviation; the wire is the source of truth.
@@ -354,5 +354,5 @@ pub struct SyncErrorDTO {
 - Python sync repository methods: [`cognee/modules/sync/methods/`](https://github.com/topoteretes/cognee/tree/main/cognee/modules/sync/methods).
 - AppState `SyncRegistry` declaration: [../architecture.md §6](../architecture.md#6-application-state--dependency-injection).
 - Pipeline registry analogue (different table, different lifecycle): [../pipelines.md](../pipelines.md).
-- Cloud HTTP client: [`crates/cloud/src/cloud_client.rs`](../../crates/cloud/src/cloud_client.rs).
+- Cloud HTTP client: [`crates/cloud/src/cloud_client.rs`](../../../crates/cloud/src/cloud_client.rs).
 - Per-router README and template: [README.md](README.md).

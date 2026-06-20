@@ -46,7 +46,7 @@ Companion docs: [../architecture.md](../architecture.md), [../auth.md](../auth.m
 
     Match Python: [`memify.py`](https://github.com/topoteretes/cognee/blob/main/cognee/modules/memify/memify.py) returns the single run info. The router does **not** wrap it in a dict.
 
-  - **Success — background (`run_in_background=true`)** — `200 OK`, single `PipelineRunInfoDTO` with `status="PipelineRunStarted"` and `payload=null`. Per [pipelines.md §9.2](../pipelines.md#92-background-runinbackgroundtrue).
+  - **Success — background (`run_in_background=true`)** — `200 OK`, single `PipelineRunInfoDTO` with `status="PipelineRunStarted"` and `payload=null`. Per [pipelines.md §9.2](../pipelines.md#92-background-run_in_backgroundtrue).
 
 - **Error responses**:
 

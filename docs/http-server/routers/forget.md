@@ -9,7 +9,7 @@ Companion docs: [../architecture.md](../architecture.md), [../auth.md](../auth.m
 - Router file: `crates/http-server/src/routers/forget.rs`
 - Python source: [`cognee/api/v1/forget/routers/get_forget_router.py`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/forget/routers/get_forget_router.py)
 - Underlying SDK function: [`cognee/api/v1/forget/forget.py`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/forget/forget.py)
-- Rust delegation target: `cognee_lib::api::forget::forget(data_id, dataset, everything, user) -> Result<ForgetResultDTO, _>`. The SDK already exists (see [project guide](../../.claude/CLAUDE.md), Memory API v2 section).
+- Rust delegation target: `cognee_lib::api::forget::forget(data_id, dataset, everything, user) -> Result<ForgetResultDTO, _>`. The SDK already exists (see [project guide](../../../.claude/CLAUDE.md), Memory API v2 section).
 
 ## 2. Endpoints
 

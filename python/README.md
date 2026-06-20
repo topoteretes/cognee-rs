@@ -150,7 +150,7 @@ print(cfg)
 | `COGNEE_BINDING_SUPPRESS_LOGS` | Suppress the auto-installed `pyo3-log` bridge. |
 | `COGNEE_HOST_SDK` | Set by an upstream/host `cognee` SDK to suppress this binding's analytics emission (avoids double-counting). |
 | `RUST_LOG`, `LOG_LEVEL` | Standard `tracing-subscriber` env-filter level overrides. |
-| `COGNEE_LOG_*`, `LOG_FILE_NAME` | Consumed by `setup_logging()` — see the workspace README's "Logging" section. |
+| `COGNEE_LOG_*`, `LOG_FILE_NAME` | Consumed by `setup_logging()` — see docs/configuration.md (Logging section). |
 | `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_HEADERS`, `OTEL_SERVICE_NAME` and other `OTEL_*` vars | Consumed by `setup_telemetry()`. |
 | `TELEMETRY_DISABLED`, `ENV` | Honoured by `setup_telemetry_analytics()` via `cognee_telemetry::env::is_disabled`. |
 

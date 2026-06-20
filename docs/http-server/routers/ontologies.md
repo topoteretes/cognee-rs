@@ -1,6 +1,6 @@
 # Router: ontologies
 
-Multipart endpoint for uploading and listing OWL/RDF ontology files. Ontologies are user-scoped and stored under a per-user directory; the upload validates the `.owl` extension and the user-provided `ontology_key` for shape, then writes the file plus a JSON metadata index. Cognify pipelines can later reference these files by key (the ontology integration is described in [`cognee-ontology`](../../crates/ontology/) and is out of scope for this doc).
+Multipart endpoint for uploading and listing OWL/RDF ontology files. Ontologies are user-scoped and stored under a per-user directory; the upload validates the `.owl` extension and the user-provided `ontology_key` for shape, then writes the file plus a JSON metadata index. Cognify pipelines can later reference these files by key (the ontology integration is described in [`cognee-ontology`](../../../crates/ontology/) and is out of scope for this doc).
 
 Companion docs: [../architecture.md](../architecture.md), [../auth.md](../auth.md), [../tenants.md](../tenants.md), [../observability.md](../observability.md).
 
@@ -9,7 +9,7 @@ Companion docs: [../architecture.md](../architecture.md), [../auth.md](../auth.m
 - Router file: `crates/http-server/src/routers/ontologies.rs`
 - Python source: [`cognee/api/v1/ontologies/routers/get_ontology_router.py`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/ontologies/routers/get_ontology_router.py)
 - Underlying SDK class: [`cognee/api/v1/ontologies/ontologies.py`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/ontologies/ontologies.py) (`OntologyService`)
-- Rust delegation target: the existing [`cognee_ontology::OntologyManager`](../../crates/ontology/src/manager.rs) (re-exported as `cognee_lib::ontology::OntologyManager`). Methods: `OntologyManager::list`, `::upload`, `::get_contents` ([manager.rs:152, :249, :263](../../crates/ontology/src/manager.rs)). The Python class is `OntologyService`; the Rust port reuses the existing `OntologyManager` rather than mirroring the Python class name.
+- Rust delegation target: the existing [`cognee_ontology::OntologyManager`](../../../crates/ontology/src/manager.rs) (re-exported as `cognee_lib::ontology::OntologyManager`). Methods: `OntologyManager::list`, `::upload`, `::get_contents` ([manager.rs:152, :249, :263](../../../crates/ontology/src/manager.rs)). The Python class is `OntologyService`; the Rust port reuses the existing `OntologyManager` rather than mirroring the Python class name.
 
 ## 2. Endpoints
 
@@ -232,7 +232,7 @@ Field-level mapping vs Python:
 ## 5. Implementation tasks
 
 1. Add DTOs in `crates/http-server/src/dto/ontologies.rs` (all of §4).
-2. The existing [`cognee_ontology::OntologyManager`](../../crates/ontology/src/manager.rs) (`list` / `upload` / `get_contents`) is the delegation target — re-export it under `cognee_lib::ontology::OntologyManager` if not already exposed. The on-disk format (`<base>/<user_id>/<key>.owl` + `metadata.json`) is handled by the manager.
+2. The existing [`cognee_ontology::OntologyManager`](../../../crates/ontology/src/manager.rs) (`list` / `upload` / `get_contents`) is the delegation target — re-export it under `cognee_lib::ontology::OntologyManager` if not already exposed. The on-disk format (`<base>/<user_id>/<key>.owl` + `metadata.json`) is handled by the manager.
 3. Add the `get_list` and `post_upload` handlers in `crates/http-server/src/routers/ontologies.rs`:
    - `get_list`: simple delegation; map service result to `OntologyListResponseDTO`.
    - `post_upload`: parse multipart, validate (5 rules), stream to disk, update metadata, return `OntologyUploadResponseDTO`.
@@ -263,7 +263,7 @@ Field-level mapping vs Python:
 
 - Python router: [`cognee/api/v1/ontologies/routers/get_ontology_router.py`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/ontologies/routers/get_ontology_router.py) (lines 1-109).
 - Python SDK service: [`cognee/api/v1/ontologies/ontologies.py`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/ontologies/ontologies.py) (lines 1-159).
-- Rust ontology crate: [`crates/ontology/`](../../crates/ontology/) — RDF/JSON-LD/Turtle loader, ontology resolver trait.
+- Rust ontology crate: [`crates/ontology/`](../../../crates/ontology/) — RDF/JSON-LD/Turtle loader, ontology resolver trait.
 - Cognify integration (where ontology keys are consumed): `routers/cognify.md` (TBD in P3).
 - Architecture: [../architecture.md §8 multipart](../architecture.md#8-middleware-stack).
 - Cross-router conventions: [README.md §3](README.md#3-cross-router-conventions).

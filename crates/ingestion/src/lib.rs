@@ -1,3 +1,14 @@
+//! Data ingestion pipeline for Cognee (the `add` stage).
+//!
+//! Streams input content, computes content hashes, deduplicates, and persists
+//! data plus metadata. Mirrors the Python `cognee.add()` behaviour:
+//! MD5/SHA-256 content hashing, deterministic UUID5 IDs, multi-tenant
+//! isolation, a loader-engine registry, and (behind the `html-loader` feature)
+//! URL crawling.
+//!
+//! Main entry point: [`pipeline::AddPipeline`]. No trait abstraction — it builds
+//! on `StorageTrait` and `IngestDb` from the sibling crates.
+
 mod content_hasher;
 mod id_generation;
 mod loader_registry;

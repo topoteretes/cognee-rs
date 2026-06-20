@@ -31,7 +31,21 @@ It’s designed to run efficiently on constrained devices (smartwatch, phone)
 - **Embeddings** — multi-provider engine: local ONNX Runtime (BGE-Small-v1.5), OpenAI-compatible HTTP, Ollama, and a mock provider for tests.
 - **Relational metadata** — SQLite/Postgres via SeaORM.
 
-See [.claude/CLAUDE.md](.claude/CLAUDE.md) for the full crate-by-crate breakdown of the workspace.
+See [docs/architecture.md](docs/architecture.md) for the full crate-by-crate breakdown of the workspace.
+
+## Documentation
+
+Full documentation lives in **[docs/](docs/README.md)**. Quick links:
+
+| Topic | Doc |
+|---|---|
+| Project parts & crate map | [docs/architecture.md](docs/architecture.md) |
+| What each operation does | [docs/operations.md](docs/operations.md) |
+| Configuration (env vars, settings) | [docs/configuration.md](docs/configuration.md) |
+| Tools — CLI / bindings / HTTP / backends | [docs/tools/](docs/tools/README.md) |
+| HTTP server reference | [docs/http-server/](docs/http-server/README.md) |
+| Roadmap — gaps, open questions, plans | [docs/roadmap/](docs/roadmap/README.md) |
+| API reference (rustdoc) | `cargo doc --no-deps --open` |
 
 ## Language Bindings
 
@@ -118,7 +132,8 @@ add/cognify/search sequence), and — when built with their feature flags —
 `visualize` (render the graph to HTML), `serve`, and `disconnect` (cloud).
 
 Run `cognee-cli <command> --help` for the full flag list. See
-[docs/cli/](docs/cli/) for logging and LLM-retry configuration.
+[docs/tools/cli.md](docs/tools/cli.md) for the subcommand reference, logging, and
+LLM-retry configuration.
 
 ### Android Local LLM (LiteRT-LM)
 
@@ -203,29 +218,9 @@ and in-cluster Collectors).
 
 ### Logging
 
-> **Canonical source:** this table is the authoritative reference for cognee logging
-> environment variables. Binding READMEs and `.env.example` link here; update this
-> table first when adding new logging vars.
-
-Cognee writes structured logs to **stdout** and (when a writable
-directory is available) to a rotating file under
-`~/.cognee/logs/<timestamp>.log`. File logging is owned by the
-[`cognee-logging`](crates/logging/) workspace crate, which both the
-CLI and HTTP server initialise via `cognee_logging::init_logging`.
-
-| Variable | Default | Purpose |
-|---|---|---|
-| `COGNEE_LOG_FILE` | `true` | Master toggle (`false`/`0`/`no` disables file logging). |
-| `COGNEE_LOGS_DIR` | `~/.cognee/logs` | Log directory. Falls back to `/tmp/cognee_logs` if the primary is unwritable. |
-| `COGNEE_LOG_FORMAT` | `plain` | `plain` (Python-compatible text) or `json` (JSON lines). Applies to both stdout and file. |
-| `COGNEE_LOG_ROTATION` | `daily` | One of `daily` / `hourly` / `minutely` / `never`. Time-based only; size-based rotation is a future enhancement. |
-| `COGNEE_LOG_BACKUP_COUNT` | `5` | Files kept by the active rotation policy. |
-| `COGNEE_LOG_MAX_FILES` | `10` | Startup-time cap; older files past this count are removed. |
-| `LOG_LEVEL` | `info` | Fallback level when `RUST_LOG` is unset. `RUST_LOG` wins when both are set. |
-| `LOG_FILE_NAME` | _(generated)_ | Set automatically by the parent process and inherited by children, so all processes append to one file. |
-
-> **Multi-process warning** — when several cognee processes share a
-> log file via `LOG_FILE_NAME`, rotation is not coordinated.
-> Concurrent rotation events from multiple processes can corrupt
-> the log. If you run sharded workers, give each shard a different
-> `COGNEE_LOGS_DIR` (or unset `LOG_FILE_NAME` per shard).
+Cognee writes structured logs to **stdout** and (when a writable directory is
+available) to a rotating file, owned by the [`cognee-logging`](crates/logging/)
+crate (`cognee_logging::init_logging`, called by the CLI and HTTP server). The
+full env-var table (`COGNEE_LOG_*`, `RUST_LOG`/`LOG_LEVEL`, `LOG_FILE_NAME`) and
+the multi-process rotation warning are documented canonically in
+[`docs/configuration.md` → Logging](docs/configuration.md#logging).

@@ -1,3 +1,11 @@
+//! Cascading deletion of data and datasets across all Cognee backends.
+//!
+//! Removes content in dependency order — relational DB → graph DB → vector DB →
+//! file storage — so no orphaned references remain. Supports dry-run previews.
+//!
+//! Main types: [`DeleteService`] and [`AuthorizedDeleteService`] (the
+//! permission-checked wrapper).
+
 mod authorized;
 
 pub use authorized::AuthorizedDeleteService;

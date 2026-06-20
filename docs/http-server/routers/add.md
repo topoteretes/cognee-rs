@@ -92,7 +92,7 @@ Companion docs: [../architecture.md](../architecture.md), [../auth.md](../auth.m
   - Non-HTML URL inputs store one object; `raw_data_location` and `original_data_location` are the same stored payload unless another conversion path is added later.
 
 - **Side effects**:
-  - **File storage**: each spooled file is hashed (MD5 by default, matching Python — see [`cognee-ingestion`'s `ContentHasher`](../../crates/ingestion/src/)) and stored at `LocalStorage::store_stream(...)` under `text_<md5>.<ext>` (text content) or `<filename>` (binary). Streaming, no buffer.
+  - **File storage**: each spooled file is hashed (MD5 by default, matching Python — see [`cognee-ingestion`'s `ContentHasher`](../../../crates/ingestion/src/)) and stored at `LocalStorage::store_stream(...)` under `text_<md5>.<ext>` (text content) or `<filename>` (binary). Streaming, no buffer.
     - For HTTP(S) URL inputs, `AddPipeline::add()` resolves the URL before streaming. HTML responses store extracted text as the primary payload and store the raw HTML source separately; other supported MIME types store the fetched response body directly.
   - **Relational DB**: inserts/updates one `data` row per file with `(id, name, extension, mime_type, content_hash, raw_data_location, owner_id, tenant_id, dataset_id)`; updates `pipeline_runs` (`add_pipeline` start + completion); resets prior `add_pipeline` and `cognify_pipeline` runs for this dataset (`reset_dataset_pipeline_run_status`, `add.py:221-223`).
     - URL-derived rows also persist `original_data_location`, `original_extension`, `original_mime_type`, `loader_engine`, and `external_metadata` so later document conversion and cognify can recover web provenance.
@@ -290,7 +290,7 @@ Field-level mapping vs Python:
    - Caller lacks `write` on existing `datasetId` → 403.
    - 257-part request → 400.
 8. Cross-SDK parity tests in `e2e-cross-sdk/harness/test_http_add.py`:
-   - POST identical multipart to Python uvicorn and Rust binary; assert same `data_id`, `content_hash`, `dataset_id` (UUID5 deterministic over content+owner — see [project guide "Deterministic IDs"](../../.claude/CLAUDE.md)).
+   - POST identical multipart to Python uvicorn and Rust binary; assert same `data_id`, `content_hash`, `dataset_id` (UUID5 deterministic over content+owner — see [project guide "Deterministic IDs"](../../../.claude/CLAUDE.md)).
    - Assert response JSON shape equality modulo `pipeline_run_id` (random per run).
 
 ## 6. Open questions

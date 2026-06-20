@@ -10,193 +10,21 @@ Cognee-Rust is a Rust port of the Python [cognee](https://github.com/topoteretes
 
 The Python implementation in the [cognee repository](https://github.com/topoteretes/cognee) (under the `cognee/` directory) serves as the reference for all Rust ports. If you need the Python sources for reference, clone with `git clone --depth 1 https://github.com/topoteretes/cognee.git /tmp/cognee-python`. If the task requires understanding of the Python codebase, read the documentation in that repository (e.g. `/tmp/cognee-python/README.md`, docs, and inline docstrings) before proceeding.
 
-## Rust Workspace Structure
+## Workspace structure, crates, patterns & dependencies
 
-```
-cognee-rust/
-├── Cargo.toml                  # Workspace root (edition 2024, resolver 3)
-├── crates/
-│   ├── models/                 # Core data types: Data, Dataset, DataInput, Document, DocumentChunk
-│   ├── storage/                # File storage abstraction (StorageTrait, LocalStorage)
-│   ├── database/               # Metadata DB abstraction (DatabaseTrait, SqliteDatabase)
-│   ├── ingestion/              # Ingest pipeline + content hashing + URL crawler
-│   ├── chunking/               # Text chunking (word→sentence→paragraph→TextChunker)
-│   ├── cognify/                # Full cognify pipeline + memify enrichment pipeline
-│   ├── search/                 # Search pipeline with multiple retrieval strategies
-│   ├── session/                # Session management and session store
-│   ├── embedding/              # Multi-provider embedding engine (ONNX, OpenAI, Ollama, Mock)
-│   ├── llm/                    # LLM provider abstraction (OpenAI-compatible API adapter)
-│   ├── graph/                  # Graph DB abstraction (Ladybug embedded graph)
-│   ├── vector/                 # Vector DB abstraction (Qdrant embedded)
-│   ├── ontology/               # Ontology resolution (RDF/JSON-LD loader, NoOp resolver)
-│   ├── delete/                 # Dataset/data deletion across all backends
-│   ├── core/                   # Task pipeline orchestration framework
-│   ├── cloud/                  # Cloud integration: serve()/disconnect() + CloudClient (ports Python serve/)
-│   ├── http-server/            # axum HTTP server (library + cognee-http-server binary)
-│   ├── visualization/          # Interactive self-contained HTML knowledge-graph visualization (d3.js)
-│   ├── observability/          # OpenTelemetry tracing pipeline (OTLP exporter, telemetry feature)
-│   ├── telemetry/              # Product-analytics client (send_telemetry → prometh.ai, opt-out)
-│   ├── logging/                # Shared file logging (rotation, Python-compatible plain formatter)
-│   ├── lib/                    # Top-level library aggregating all crates
-│   ├── bindings-common/        # Shared SDK facade for the JS (Neon) + C-API bindings
-│   ├── cli/                    # CLI binary (add, cognify, memify, search, delete, config, run-sequence, visualize, serve, bench)
-│   ├── bench/                  # Criterion benchmarks (add + cognify + search pipeline)
-│   ├── utils/                  # Shared utilities
-│   └── test-utils/             # Mock implementations (MockStorage, MockGraphDB, MockVectorDB)
-├── capi/                       # C API bindings (FFI)
-├── js/                         # JavaScript/Node bindings (Neon)
-├── python/                     # Python bindings (PyO3)
-├── android/                    # Untracked Android Studio scaffold (the on-device runner is cognee-cli, built by scripts/android-build-and-deploy.sh)
-├── examples/                   # Usage examples using the cognee crates (add, cognify, fact extraction, summarization, embedding engine)
-├── demo/                       # Demo scripts (host and Android)
-├── scripts/                    # Build, check, and deployment scripts
-├── docs/                       # Documentation
-├── e2e-cross-sdk/              # Cross-SDK E2E tests (Rust ↔ Python interop)
-└── .github/workflows/          # CI: ci.yml (lint/test/docs + C/Python/JS binding checks), http-parity.yml (cross-SDK, workflow_dispatch), js-prebuild.yml (Neon prebuilds)
-```
+The workspace layout, the crate-by-crate breakdown, the cross-cutting
+architecture patterns, the key-dependency table, and the rustdoc guide live in
+the public docs — single source of truth:
 
-### Crate Details
+- **[docs/architecture.md](../docs/architecture.md)** — workspace tree, crate
+  breakdown, architecture patterns, key dependencies, `cargo doc` guide.
+- **[docs/operations.md](../docs/operations.md)** — what `add`/`cognify`/`memify`/`search` and the lifecycle ops do.
+- **[docs/configuration.md](../docs/configuration.md)** — full env-var / `Settings` / `ConfigManager` reference.
+- **[docs/tools/](../docs/tools/README.md)** — CLI, bindings, HTTP server, pluggable backends.
+- **[docs/README.md](../docs/README.md)** — documentation hub / index.
 
-**cognee-models** — Core data types shared across crates: `Data`, `Dataset`, `DataInput`, `Document`, `DocumentChunk`, `Entity`, `KnowledgeGraph`, etc. Pure data structures, no traits.
-
-**cognee-storage** — Abstract file storage layer. Trait: `StorageTrait` (+ `StorageExt`, `StorageWriter`). Impls: `LocalStorage`, `MockStorage`.
-
-**cognee-database** — Database abstraction for metadata persistence. Traits: `IngestDb`, `SearchHistoryDb`, `DeleteDb`. Impl: `DatabaseConnection` (SQLite via SeaORM, implements all three traits).
-
-**cognee-ingestion** — Pipeline for ingesting data: streams content, computes hashes, deduplicates, and stores. Main type: `AddPipeline`. No trait abstraction — uses `StorageTrait` and `IngestDb` from sibling crates.
-
-**cognee-chunking** — Text chunking strategies ported from the Python chunking hierarchy (word → sentence → paragraph). Main entry point: `ExtractTextChunksPipeline`. Trait: `TokenCounter`. Impls: `WordCounter` (whitespace fallback), `HuggingFaceTokenCounter` (BPE/WordPiece via `tokenizers` crate, behind `hf-tokenizer` feature), `TikTokenCounter` (cl100k_base BPE for OpenAI models, behind `tiktoken` feature). `TokenCounterKind` enum with `from_env()` auto-selects the best counter based on `EMBEDDING_PROVIDER` and `COGNEE_TOKEN_COUNTER` env vars.
-
-**cognee-cognify** — Knowledge graph extraction pipeline: classify documents, chunk text, extract entities/relationships via LLM, summarize, store to graph and vector DBs. Entry points: `cognify()` / `cognify_datasets()`; main types: `CognifyConfig`, `CognifyInput`, `CognifyResult`, `FactExtractor`, `SummaryExtractor`. Also includes the **memify** sub-module for graph enrichment: `MemifyConfig`, `MemifyResult`, `memify()`. Reads existing knowledge graph, creates triplet embeddings, indexes in vector DB for `SearchType::TripletCompletion`.
-
-**cognee-search** — Unified search orchestration across multiple retrieval strategies. Main types: `SearchBuilder`, `SearchOrchestrator`. `SearchType` enum defines 15 search modes (GraphCompletion, RagCompletion, Chunks, Summaries, Temporal, Cypher, etc.) with corresponding retriever implementations.
-
-**cognee-session** — Session management and QA history storage. Trait: `SessionStore`. Impls: `FsSessionStore`, `RedisSessionStore`, `SeaOrmSessionStore`.
-
-**cognee-embedding** — Text vectorization engine. Trait: `EmbeddingEngine`. Impls: `OnnxEmbeddingEngine` (local ONNX Runtime, BGE-Small-v1.5), `OpenAICompatibleEmbeddingEngine` (OpenAI/Azure/vLLM/llama.cpp/TEI via HTTP), `OllamaEmbeddingEngine` (Ollama `/api/embed`), `MockEmbeddingEngine` (zero vectors for testing). `EmbeddingConfig::from_env()` reads `EMBEDDING_PROVIDER`, `EMBEDDING_MODEL`, `EMBEDDING_ENDPOINT`, `EMBEDDING_API_KEY`, `MOCK_EMBEDDING` etc. and `create_engine()` factory returns the appropriate provider. Input sanitization via `sanitize_embedding_inputs()` / `handle_embedding_response()`.
-
-**cognee-llm** — Async LLM abstraction with structured JSON output. Trait: `Llm` (+ auto-implemented `LlmExt`). Impls: `OpenAIAdapter` (OpenAI-compatible APIs, works with Ollama/vLLM), `LiteRtAdapter`.
-
-**cognee-graph** — Graph database abstraction for knowledge graph storage and traversal. Trait: `GraphDBTrait` (+ `GraphDBTraitExt`). Impls: `LadybugAdapter` (embedded Ladybug), `MockGraphDB`.
-
-For Ladybug-backed graph storage, keep the Python parity nuance in mind: Python
-documents a default single-owning-process model for file-backed DB access and
-adds opt-in Redis-backed coordination for multi-process Ladybug deployments.
-Rust currently matches the default model: graph writes are idempotent and
-serialized in-process, and cross-process locking is intentionally out of scope.
-
-**cognee-vector** — Vector database abstraction for similarity search. Trait: `VectorDB`. Impls: `QdrantAdapter` (embedded Qdrant), `MockVectorDB`.
-
-**cognee-ontology** — RDF/OWL ontology integration for entity validation. Trait: `OntologyResolver`. Impls: `RdfLibOntologyResolver`, `NoOpOntologyResolver` (pass-through).
-
-**cognee-delete** — Cascading deletion of data/datasets across all backends (relational DB → graph → vector → file storage). Main type: `DeleteService`.
-
-**cognee-core** — Async runtime, task scheduling, and pipeline execution primitives. Traits: `PipelineWatcher`, `ExecStatusManager`. Impls: `NoopWatcher`, `RayonThreadPool`, `NoopExecStatusManager`.
-
-**cognee-cloud** — Cloud integration. Ports Python's `cognee/api/v1/serve/` so the Rust `serve()` / `disconnect()` stay behavior- and on-disk-format-compatible with the Python reference. Main types: `CloudClient`, plus `serve()`/`disconnect()` entry points. Surfaces via the CLI `serve`/`disconnect` subcommands (feature-gated).
-
-**cognee-http-server** — `axum`-based HTTP server. Library exposes `build_router` (assembles the router with all middleware and sub-routers), `run` (binds a TCP listener and drives `axum::serve`), and `AppState`. Also builds the `cognee-http-server` binary. Routers mirror the Python FastAPI surface under `/api/v1/*` (add, cognify, memify, search, datasets, delete, users, permissions, auth, sessions, notebooks, remember, etc.). Documented in `docs/http-server/` (per-router docs under `routers/`).
-
-**cognee-visualization** — Interactive HTML knowledge-graph visualization. Ports the Python `cognee_network_visualization` module: renders all nodes + edges of a `GraphDBTrait` into a single self-contained HTML file using d3.js v7 (force-directed layout, Canvas rendering). Entry points: `visualize`/`render`/`render_multi_user`. Surfaces via the CLI `visualize` subcommand.
-
-**cognee-observability** — OpenTelemetry tracing pipeline. Bridges the workspace's `#[tracing::instrument]` sites into an OTLP exporter. Entry point: `init_telemetry` (returns a tracing layer + RAII `TelemetryGuard` that flushes on drop). Activated by `COGNEE_TRACING_ENABLED=true` or a non-empty `OTEL_EXPORTER_OTLP_ENDPOINT`; the real exporter is gated behind the `telemetry` feature (no-op layer otherwise). See `docs/observability/opentelemetry.md`.
-
-**cognee-telemetry** — Product-analytics client (`send_telemetry`). Mirrors Python's `send_telemetry`: a fire-and-forget POST to `https://test.prometh.ai` per public API call. Enabled by default (Python parity); opt out with `TELEMETRY_DISABLED`, `ENV=test|dev`, or `--no-default-features`. See `docs/observability/send_telemetry.md`.
-
-**cognee-logging** — Shared file-based logging: rotation, the Python-compatible plain-text formatter, and a default library-noise-suppressing `EnvFilter`. Entry point: `init_logging`, called by the CLI and HTTP server. Internal infrastructure — library crates must not depend on it. Env-var surface (`COGNEE_LOG_*`, `LOG_LEVEL`, `LOG_FILE_NAME`) documented in the root README's "Logging" section.
-
-**cognee-bench** — Criterion benchmark crate (`batch_add_cognify` bench) exercising the add + cognify + search pipeline.
-
-**cognee-bindings-common** — Shared SDK facade for the Neon JS (`cognee-neon`) and C API (`cognee-capi`) bindings. Houses the binding-neutral pieces: `SdkError` (+ `SdkError::code()`), `HandleState` (shareable SDK handle state), `CogneeServices` (fully-wired engine + service bundle), and neon-free JSON wire helpers (`cognify_result_json`, `marshal_inputs`, etc.). Not a new user-facing Rust API — that remains `cognee_lib::api`.
-
-**cognee-lib** — Unified public API facade. Re-exports all crates and adds an `api/` module with top-level functions mirroring the Python SDK: `forget`, `update`, `prune`, `recall`, `remember`, `improve`, plus `DatasetManager`. Houses the shared `Settings`/`config` (with runtime setters like `set_llm_*`, `set_embedding_*`, `set_vector_db_*`).
-
-**cognee-cli** — Command-line binary (`cognee-cli`): `add`, `cognify`, `add-and-cognify`, `memify`, `search`, `delete`, `config`, `run-sequence`, plus feature-gated `visualize`, `serve`, `disconnect`, `bench`.
-
-**cognee-utils** — Shared utilities: retry logic, deterministic ID generation (`generate_node_id`, `generate_edge_name`, `generate_node_name`, `NAMESPACE_OID`), secret redaction (`redact`), and tracing attribute keys (`tracing_keys`).
-
-**cognee-test-utils** — Test helpers and mock implementations for integration tests.
-
-## Architecture Patterns
-
-- **Feature strategy** — Individual crates define optional features with no defaults (`default = []`). The umbrella library (`cognee-lib`) and the CLI (`cognee-cli`) enable all non-platform-specific features by default so that a plain `cargo build` gives a fully-featured binary. Platform-specific features (e.g. `android-litert`) and the `testing` feature remain opt-in. When adding a new feature-gated capability to a crate, propagate it up through `cognee-lib` and `cognee-cli` and add it to their `default` lists unless it is platform-specific or test-only.
-- **Trait-based abstractions** — `StorageTrait`, `IngestDb`, `GraphDBTrait`, `VectorDB`, `EmbeddingEngine`, `Llm`, `SessionStore`, etc. enable backend swapping and mock testing
-- **Prefer `dyn Trait`** — Use object-safe traits with `&dyn Trait` or `Arc<dyn Trait>` at call sites. Only use monomorphized generics when performance-critical or unavoidable.
-- **Zero-copy where possible** — e.g. `WordChunk<'a>`, `SentenceChunk<'a>`, `ParagraphChunk<'a>` borrow `&str` slices via byte offset tracking, avoiding intermediate `String` allocations
-- **`Arc` for shared ownership** — `Arc<dyn Trait>` in pipelines; `Arc<Mutex<T>>` in mocks
-- **Async-first** — All I/O via tokio. Prefer `async` in trait methods since most components may have both local and remote implementations.
-- **Streaming-first** — `DataInput::process_by_chunks()`, `StorageTrait::store_stream()`, `ContentHasher::hash_content_stream()` to avoid loading full files into memory
-- **Deterministic IDs** — Same content + same owner = same UUID via `uuid5(NAMESPACE_OID, ...)` (content-addressed deduplication). Chunk IDs use `uuid5(NAMESPACE_OID, "{document_id}-{chunk_index}")`.
-- **Error types per crate** — Each crate defines its own error enum via `thiserror` (e.g. `StorageError`, `ChunkingError`, `IngestionError`)
-
-## Current State & Roadmap
-
-### Implemented — full add → cognify → search pipeline
-- **Data models** — `Data` (22-column Python-compat schema), `Dataset`, `DataInput` (Text, FilePath, Url, S3Path stub, Binary, DataItem), `Document`, `DocumentChunk`, `Entity`, `EntityType`, `EdgeType`, `Triplet`, `DataPoint`
-- **File storage** — `LocalStorage` with `file://` absolute URIs matching Python format
-- **SQLite metadata database** — SeaORM with migrations including Python-compat columns and tenant_id indexes
-- **Ingestion pipeline** — Python-compatible `add()`: MD5 content hashing (configurable SHA256), deterministic UUID5 IDs, multi-tenant support, `text_<md5>.txt` naming, loader engine registry, URL crawling (`UrlFetcher` + `HtmlParser`), deduplication by content hash
-- **Text chunking** — 3-level hierarchy (word → sentence → paragraph → `chunk_text`), ported from Python. `TokenCounter` trait with `WordCounter`, `HuggingFaceTokenCounter` (feature-gated), and `TikTokenCounter` (feature-gated) impls. `TokenCounterKind::from_env()` auto-selects counter based on embedding provider. `CognifyConfig.token_counter_kind` drives the selection in the pipeline.
-- **Document classification** — mime_type/extension-based (text, pdf, csv, html, image, audio, dlt_row types recognized). HTML classifies to `document_type = "html"` with the `TextDocument` discriminator for Python DB parity. Extraction implemented for text, pdf (feature-gated), csv (feature-gated), html (feature-gated `html-loader`), image (feature-gated), audio (feature-gated), and `unstructured` office formats — docx/xlsx/pptx/epub/eml/odt/odp (feature-gated via `unstructured-*`, registered as the `unstructured` loader)
-- **Cognify pipeline** — 6 stages: classify → chunk → extract graph (LLM, batched, custom prompts) → summarize (conditional) → add data points (6 vector collections: DocumentChunk:text, Entity:name, EntityType:name, TextSummary:text, EdgeType:relationship_name, Triplet:text; provenance to relational DB) → extract DLT FK edges. Configurable via `CognifyConfig` builder with `ChunkStrategy::Paragraph` (default) and `ChunkStrategy::Recursive`.
-- **Triplet embedding** — optional `"source → relationship → target"` indexing in vector DB
-- **LLM integration** — `OpenAIAdapter` (OpenAI-compatible, works with Ollama/vLLM), `LiteRtAdapter` (Android local inference via LiteRT, feature-gated)
-- **Embedding engine** — Multi-provider via `EmbeddingConfig::from_env()` + `create_engine()` factory. Providers: `OnnxEmbeddingEngine` (local ONNX Runtime, BGE-Small-v1.5 default), `OpenAICompatibleEmbeddingEngine` (OpenAI/Azure/vLLM/llama.cpp/TEI with retry and input sanitization), `OllamaEmbeddingEngine` (concurrent per-text requests, char-based truncation), `MockEmbeddingEngine` (zero vectors via `MOCK_EMBEDDING=true`). Env vars match Python SDK: `EMBEDDING_PROVIDER`, `EMBEDDING_MODEL`, `EMBEDDING_DIMENSIONS`, `EMBEDDING_ENDPOINT`, `EMBEDDING_API_KEY` (with `LLM_API_KEY` fallback)
-- **Graph storage** — Ladybug embedded graph DB
-- **Graph storage concurrency** — Rust Ladybug matches Python's default
-  single-process file-backed model. Python also has an opt-in Redis-backed
-  shared Ladybug lock for multi-process coordination; Rust does not currently
-  implement cross-process locking.
-- **Vector storage** — Embedded Qdrant with metadata filtering
-- **Search pipeline** — 15 search types: GraphCompletion (default), GraphCompletionCot, GraphCompletionContextExtension, GraphSummaryCompletion, TripletCompletion, RagCompletion, Chunks, Summaries, Temporal, Cypher, NaturalLanguage, FeelingLucky, Feedback, CodingRules, ChunksLexical
-- **Session management** — `SessionStore` trait with `FsSessionStore`, `RedisSessionStore`, `SeaOrmSessionStore` backends; integrated in search pipeline for QA history
-- **Ontology resolution** — RDF/JSON-LD/Turtle ontology loading with entity type matching
-- **Deletion** — scoped cascading across relational DB, graph DB, vector DB, and file storage (with dry-run via `preview()`)
-- **CLI** — `add`, `cognify`, `add-and-cognify`, `memify`, `search`, `delete`, `config`, `run-sequence`, plus feature-gated `visualize`, `serve`, `disconnect`, `bench`
-- **Memify pipeline** — Standalone graph enrichment: reads existing knowledge graph via `GraphDBTrait`, creates `Triplet` objects from all edges, embeds triplet text, indexes into `"Triplet"/"text"` vector collection. Idempotent (re-runnable). Configurable via `MemifyConfig` with optional node type/name filtering. CLI: `memify` subcommand.
-- **HTTP server** — `cognee-http-server` (axum) exposing the Python FastAPI surface under `/api/v1/*` (add, cognify, memify, search, datasets, delete, users, permissions, auth, sessions, notebooks, remember, etc.). Documented in `docs/http-server/`.
-- **Cloud serve/disconnect** — `cognee-cloud` ports Python's `serve()`/`disconnect()` (on-disk-format-compatible); surfaced via CLI `serve`/`disconnect`.
-- **Top-level API parity** — `cognee-lib`'s `api/` module adds `forget`, `update`, `prune`, `recall`, `remember`, `improve`, and `DatasetManager`, plus runtime config setters, matching the Python SDK surface.
-- **Knowledge-graph visualization** — `cognee-visualization` renders a self-contained d3.js HTML view of the graph (`visualize`/`render`/`render_multi_user`); CLI `visualize`.
-- **Observability & analytics** — `cognee-observability` (OpenTelemetry/OTLP tracing, `telemetry` feature) and `cognee-telemetry` (opt-out product analytics). See `docs/observability/`.
-- **Logging** — `cognee-logging` (`init_logging`): stdout + rotating file logs, Python-compatible plain formatter, JSON option. Used by CLI and HTTP server.
-- **Language bindings** — C API (`capi/`), Python via PyO3 (`python/`), JavaScript via Neon (`js/`); Android runs the regular `cognee-cli` (built/deployed via `scripts/android-build-and-deploy.sh`; `android/` is only an untracked Android Studio scaffold)
-- **Cross-SDK E2E tests** — `e2e-cross-sdk/` with Docker harness: add parity, cross-read, cognify structural comparison (Python ↔ Rust)
-- **Test suite** — Python-compat ID tests, schema compatibility tests, E2E search matrix (9 search types), CLI E2E tests, deletion tests, embedding tests, fact extraction tests
-
-### Not Yet Implemented (next steps)
-- **`html-loader` feature scope** — The `html-loader` feature gates the entire HTML/URL subsystem: the HTML document loader (`document_type = "html"`, engine `beautiful_soup_loader`, reusing `url_crawler::extract_html`) **and** URL ingestion (`url_crawler`/`url_resolver`, `DataInput::Url`). It makes `scraper`/`toml`/`texting_robots`/`reqwest`/`url`/`futures-util` optional. Default-ON in `cognee-lib`/`cognee-cli`. With it off, `DataInput::Url` ingestion returns `IngestionError::UrlIngestionUnavailable` and HTML files error with `UnsupportedDocumentType` at cognify dispatch.
-- **S3 support** — `DataInput::S3Path` returns an error stub
-- **URL processing in DataInput** — `DataInput::Url` in `process_by_chunks()` returns unsupported error (URL crawling works in ingestion pipeline but not in the streaming `DataInput` path)
-- **Default tokenizer features in CI** — `HuggingFaceTokenCounter` and `TikTokenCounter` are behind optional feature flags (`hf-tokenizer`, `tiktoken`); CI builds may need to enable them explicitly
-
-## Key Dependencies
-
-| Crate | Purpose |
-|---|---|
-| `tokio` | Async runtime |
-| `sea-orm` (SQLite, Postgres) | ORM for relational database (metadata, sessions, provenance) |
-| `ort` (ONNX Runtime) | Local model inference (embeddings) |
-| `qdrant` (segment, shard, common, edge — git deps) | Embedded vector storage |
-| `lbug` | Embedded graph database (Ladybug) |
-| `reqwest` (rustls-tls) | HTTP client (URL crawling, LLM/embedding APIs) |
-| `scraper` | HTML parsing for URL ingestion |
-| `sophia` / `sophia_turtle` / `sophia_jsonld` | RDF/OWL ontology parsing |
-| `sha2` | Content hashing |
-| `uuid` (v4, v5) | ID generation |
-| `serde` / `serde_json` / `schemars` | Serialization and JSON schema generation |
-| `chrono` | Timestamps |
-| `tokenizers` | HuggingFace tokenization (embedding engine + chunking token counter) |
-| `tiktoken-rs` | OpenAI cl100k_base BPE tokenization (chunking token counter, optional) |
-| `tracing` / `tracing-subscriber` | Structured logging and instrumentation |
-| `opentelemetry` / `opentelemetry-otlp` / `tracing-opentelemetry` | OTLP trace export (behind `telemetry` feature) |
-| `axum` / `tower` / `tower-http` | HTTP server (`cognee-http-server`) |
-| `async-trait` | Async trait support |
-| `thiserror` | Error type derivation |
-| `clap` | CLI argument parsing |
-| `criterion` | Benchmarking (`cognee-bench`) |
-| `pyo3` | Python bindings |
-| `neon` | Node.js/JavaScript bindings |
+Keep `docs/architecture.md` updated when crates are added or change — do not
+re-introduce a duplicate crate list here.
 
 ## Build & Development
 

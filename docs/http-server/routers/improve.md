@@ -51,7 +51,7 @@ Companion docs: [../architecture.md](../architecture.md), [../auth.md](../auth.m
 
     When `session_ids` is provided (future), the response carries an aggregated multi-stage shape — out of scope for Phase 3.
 
-  - **Success — background (`run_in_background=true`)** — `200 OK`. Single `PipelineRunInfoDTO` with `status="PipelineRunStarted"` and `payload=[]`. Per [pipelines.md §9.2](../pipelines.md#92-background-runinbackgroundtrue).
+  - **Success — background (`run_in_background=true`)** — `200 OK`. Single `PipelineRunInfoDTO` with `status="PipelineRunStarted"` and `payload=[]`. Per [pipelines.md §9.2](../pipelines.md#92-background-run_in_backgroundtrue).
 
 - **Error responses**:
 

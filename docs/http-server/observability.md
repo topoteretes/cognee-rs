@@ -163,7 +163,7 @@ A safety cap on `max_spans_per_trace` prevents pathological producers from blowi
 ## 4.5. File logging
 
 The HTTP server inherits the same file-logging behaviour as the CLI
-(see the project README's "Logging" section). When deploying behind
+(see [../configuration.md → Logging](../configuration.md#logging)). When deploying behind
 a process supervisor (systemd, supervisord, Docker), prefer setting
 `COGNEE_LOGS_DIR` to a host-mounted volume so logs persist across
 restarts.

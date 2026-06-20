@@ -64,7 +64,7 @@ Companion docs: [../architecture.md](../architecture.md), [../auth.md](../auth.m
     }
     ```
 
-    Per [pipelines.md §9.2](../pipelines.md#92-background-runinbackgroundtrue), `payload` is **always** an empty list in the background dispatch; the formatted-graph data is exposed only via the WebSocket subscription.
+    Per [pipelines.md §9.2](../pipelines.md#92-background-run_in_backgroundtrue), `payload` is **always** an empty list in the background dispatch; the formatted-graph data is exposed only via the WebSocket subscription.
 
 - **Error responses**:
 
@@ -339,7 +339,7 @@ Notes:
 
 1. Add DTOs in `crates/http-server/src/dto/cognify.rs` and `crates/http-server/src/dto/pipeline_run.rs` (shared `PipelineRunInfoDTO`, `CognifyWsFrameDTO`).
 2. Add the POST handler in `crates/http-server/src/routers/cognify.rs::post_cognify` — should be ≤ 80 lines, delegating to:
-   - `cognee_lib::ontology::OntologyManager::get_contents` (existing crate: [crates/ontology/src/manager.rs:263](../../crates/ontology/src/manager.rs)) to resolve `ontology_key`.
+   - `cognee_lib::ontology::OntologyManager::get_contents` (existing crate: [crates/ontology/src/manager.rs:263](../../../crates/ontology/src/manager.rs)) to resolve `ontology_key`.
    - `cognee_lib::cognify::cognify` for the pipeline run.
    - `crates/http-server/src/state::AppState::pipelines.dispatch_pipeline(...)` for the registry plumbing.
    - A new `DatasetConfigurationRepository::{find_by_dataset_id, upsert}` (to-be-added in P3 — the existing `crates/database/src/ops/` does not yet expose this; SeaORM entity for `dataset_configuration` will be added with this router) for the schema/prompt persistence (best-effort, never fail the request).
@@ -379,7 +379,7 @@ Notes:
 
 ## 6. Open questions
 
-1. **`graph_model` schema → Rust graph model**: Python uses `graph_schema_to_graph_model` to convert a Pydantic-flavoured JSON Schema into a runtime `BaseModel`. The Rust equivalent already exists in [`crates/llm/src/dynamic_model.rs`](../../crates/llm/src/dynamic_model.rs) (not in `cognee_cognify` despite the name implying so). The HTTP port stores the raw schema in `CognifyConfig::graph_schema: Option<serde_json::Value>` and feeds it through `cognee_llm::dynamic_model` for runtime compilation; revisit if customers require structured pre-validation at the router boundary.
+1. **`graph_model` schema → Rust graph model**: Python uses `graph_schema_to_graph_model` to convert a Pydantic-flavoured JSON Schema into a runtime `BaseModel`. The Rust equivalent already exists in [`crates/llm/src/dynamic_model.rs`](../../../crates/llm/src/dynamic_model.rs) (not in `cognee_cognify` despite the name implying so). The HTTP port stores the raw schema in `CognifyConfig::graph_schema: Option<serde_json::Value>` and feeds it through `cognee_llm::dynamic_model` for runtime compilation; revisit if customers require structured pre-validation at the router boundary.
 
 2. **`chunks_per_batch=0` handling**: Python silently passes `0` through to `cognify` (where it acts as a "no batching" sentinel). Rust matches: pass through verbatim, no application-level rejection. Strict wire parity.
 

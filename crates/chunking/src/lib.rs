@@ -1,3 +1,14 @@
+//! Text chunking for Cognee, ported from the Python chunking hierarchy.
+//!
+//! Splits text through a word → sentence → paragraph hierarchy into
+//! token-bounded chunks. Zero-copy where possible (chunks borrow `&str` slices
+//! via byte-offset tracking).
+//!
+//! - [`text_chunker`] / [`cognify_pipeline`] — the chunking entry points
+//! - [`token_counter`] — the [`token_counter::TokenCounter`] trait and its
+//!   `WordCounter` / `HuggingFaceTokenCounter` / `TikTokenCounter` impls,
+//!   selected by [`config`] (`TokenCounterKind::from_env`)
+
 pub mod chunk_by_paragraph;
 pub mod chunk_by_row;
 pub mod chunk_by_sentence;

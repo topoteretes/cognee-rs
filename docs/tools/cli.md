@@ -1,0 +1,74 @@
+# CLI — `cognee-cli`
+
+The command-line binary, built from the [`cognee-cli`](../../crates/cli/) crate.
+It drives the full pipeline and is also the on-device (Android) runner. Run
+`cognee-cli <command> --help` for the authoritative flag list; the clap
+definitions are in [`crates/cli/src/cli.rs`](../../crates/cli/src/cli.rs).
+
+```bash
+cargo build --release          # produces target/release/cognee-cli
+```
+
+## Subcommands
+
+| Command | Purpose | Notable flags | Feature gate |
+|---|---|---|---|
+| `add <inputs…>` | Ingest text / file paths / HTTP(S) URLs into a dataset | `-d/--dataset-name` (`main_dataset`), `--tenant-id` | — |
+| `cognify` | Build the knowledge graph from one or more datasets | `-d/--datasets`, `--chunk-size`, `--chunker` (`TextChunker`/`LangchainChunker`/`CsvChunker`), `--ontology-file`, `-b/--background`, `--llm-max-retries`, `--llm-max-parallel-requests`, `--temporal-cognify` | — |
+| `add-and-cognify <inputs…>` | `add` then `cognify` in one step | union of the above | — |
+| `memify` | Enrich an existing graph with triplet embeddings | `-d/--datasets`, `--node-type`, `--node-name`, `--batch-size` (100) | — |
+| `search <query>` | Query the graph/vectors | `-t/--query-type` (`GRAPH_COMPLETION`), `-d/--datasets`, `-k/--top-k` (10), `--system-prompt` / `--system-prompt-path`, `--session-id`, `-f/--output-format` (`pretty`/`json`), `--llm-max-retries` | — |
+| `delete` | Remove data/datasets across all backends | `-d/--dataset-name` \| `--dataset-id`, `--data-id`, `--all`, `--mode` (`soft`/`hard`), `--dry-run`, `-f/--force` | — |
+| `config get\|set\|unset <key>` | Read/write the persisted JSON config | — | — |
+| `run-sequence` | Run a scripted add/cognify/search sequence | — | — |
+| `visualize` | Render the graph to a self-contained HTML file | `-o/--output` (`~/graph_visualization.html`) | `visualization` |
+| `serve` | Connect the SDK to a Cognee instance (direct or cloud/Auth0) | `--url`, `--api-key`, `--auth0-*`, `--cloud-url` | `cloud` |
+| `disconnect` | Tear down the remote client | `--wipe-credentials` | `cloud` |
+| `bench` | Phase-timed benchmark driver | `--memories`, `--mock-llm`, `--output` | `bench` |
+
+The feature-gated commands are enabled in the default build of `cognee-cli`
+(except platform-specific ones). See [architecture.md §feature strategy](../architecture.md#architecture-patterns).
+
+## Example pipeline
+
+```bash
+cognee-cli add ./notes.txt "some inline text" -d my_dataset
+cognee-cli cognify -d my_dataset
+cognee-cli search "what did we learn about X?" -t GRAPH_COMPLETION -d my_dataset -k 10
+```
+
+## `config` subcommand
+
+Reads/writes `~/.config/cognee-rust/config.json`. Keys are the snake_case
+`Settings` field names. See [configuration.md §CLI config](../configuration.md#cli-config-subcommand).
+
+```bash
+cognee-cli config set llm_max_retries 4
+cognee-cli config get llm_model
+cognee-cli config unset embedding_endpoint
+```
+
+## LLM retries
+
+`--llm-max-retries N` (accepted by `cognify`, `add-and-cognify`, `search`)
+overrides the retry count for structured-output LLM calls for that run; the
+persistent default is the `llm_max_retries` config key (default `2`, minimum `1`).
+The CLI flag wins over the config value. It is passed to `OpenAIAdapter` and
+governs the strict-schema, function-call, and JSON-fallback parsing paths.
+
+```bash
+cognee-cli cognify --llm-max-retries 4
+cognee-cli search "What is TechCorp?" --llm-max-retries 4
+```
+
+## Logging
+
+The CLI calls `cognee_logging::init_logging` at startup. The env-var surface
+(`COGNEE_LOG_*`, `RUST_LOG`/`LOG_LEVEL`, `LOG_FILE_NAME`) is shared with the HTTP
+server and bindings and documented canonically in
+[configuration.md §logging](../configuration.md#logging). Example — JSON logs to
+a custom directory:
+
+```bash
+COGNEE_LOG_FORMAT=json COGNEE_LOGS_DIR=/var/log/cognee cognee-cli cognify -d main_dataset
+```

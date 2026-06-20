@@ -124,8 +124,7 @@ Indexes: `email` UNIQUE, `tenant_id`. See [auth.md §11](auth.md#11-database-sch
 > `owner_id` being meaningful for the default tenant, and the shape stays
 > compatible with Python writers (Python always populates `owner_id` because
 > every tenant it creates has a creator). Re-aligning the column with Python's
-> nullability is tracked as a future migration. Cross-reference:
-> [implementation/p5-admin.md §1.1](implementation/p5-admin.md#11-implementation-divergences-recorded-post-landing).
+> nullability is tracked as a future migration.
 
 ### 3.4 `roles`
 

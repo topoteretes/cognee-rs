@@ -11,7 +11,7 @@ Companion docs: [../architecture.md](../architecture.md), [../auth.md](../auth.m
 - Router file: `crates/http-server/src/routers/checks.rs`
 - Python source: [`cognee/api/v1/cloud/routers/get_checks_router.py`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/cloud/routers/get_checks_router.py).
 - Underlying cloud probe (Python): [`cognee/modules/cloud/operations/check_api_key.py`](https://github.com/topoteretes/cognee/blob/main/cognee/modules/cloud/operations/check_api_key.py).
-- Underlying cloud client (Rust): [`crates/cloud/`](../../crates/cloud/) — extended for this router.
+- Underlying cloud client (Rust): [`crates/cloud/`](../../../crates/cloud/) — extended for this router.
 
 ## 2. Endpoints
 
@@ -45,7 +45,7 @@ Pings the cloud control-plane with the API key supplied in the `X-Api-Key` reque
 
 - **Side effects**: **none on local state**. The handler:
   1. Reads `X-Api-Key` from the request.
-  2. Issues an outbound `POST <COGNEE_CLOUD_URL>/api/api-keys/check` with the same `X-Api-Key` header. Python hardcodes the URL to `http://localhost:8001` ([check_api_key.py L8](https://github.com/topoteretes/cognee/blob/main/cognee/modules/cloud/operations/check_api_key.py#L8)) — we read it from the existing `COGNEE_CLOUD_URL` env (see [`crates/cloud/src/config.rs`](../../crates/cloud/src/config.rs) and [`cognee_cloud::config::cloud_url`](../../crates/cloud/src/lib.rs)).
+  2. Issues an outbound `POST <COGNEE_CLOUD_URL>/api/api-keys/check` with the same `X-Api-Key` header. Python hardcodes the URL to `http://localhost:8001` ([check_api_key.py L8](https://github.com/topoteretes/cognee/blob/main/cognee/modules/cloud/operations/check_api_key.py#L8)) — we read it from the existing `COGNEE_CLOUD_URL` env (see [`crates/cloud/src/config.rs`](../../../crates/cloud/src/config.rs) and [`cognee_cloud::config::cloud_url`](../../../crates/cloud/src/lib.rs)).
   3. Returns success or `CloudConnectionError`. No DB writes, no file writes, no graph writes.
 - **Delegation target**: `cognee_cloud::operations::check_api_key(api_key: &str) -> CloudResult<()>` — a new free function inside the existing `cognee-cloud` crate. Mirrors Python's [`cognee/modules/cloud/operations/check_api_key.py`](https://github.com/topoteretes/cognee/blob/main/cognee/modules/cloud/operations/check_api_key.py). Reuses the existing TLS context (`reqwest::Client::builder().use_rustls_tls()`) already set up for `cognee_cloud::management_api`. The handler is a one-liner over this function plus header parsing.
 - **Validation rules**: `X-Api-Key` non-empty; otherwise `CloudApiKeyMissingError`. Python does **not** validate the *format* of the key (no regex, no length check) — neither do we. The cloud side decides whether the key is valid.
@@ -145,7 +145,7 @@ There is no request DTO (the body is empty). There is no success DTO (the body i
 - Python router: [`cognee/api/v1/cloud/routers/get_checks_router.py`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/cloud/routers/get_checks_router.py).
 - Python cloud probe: [`cognee/modules/cloud/operations/check_api_key.py`](https://github.com/topoteretes/cognee/blob/main/cognee/modules/cloud/operations/check_api_key.py).
 - Python exceptions: [`cognee/modules/cloud/exceptions/CloudConnectionError.py`](https://github.com/topoteretes/cognee/blob/main/cognee/modules/cloud/exceptions/CloudConnectionError.py), [`CloudApiKeyMissingError.py`](https://github.com/topoteretes/cognee/blob/main/cognee/modules/cloud/exceptions/CloudApiKeyMissingError.py).
-- Existing Rust cloud crate: [`crates/cloud/src/lib.rs`](../../crates/cloud/src/lib.rs).
-- Cloud URL resolver: [`crates/cloud/src/config.rs`](../../crates/cloud/src/config.rs).
+- Existing Rust cloud crate: [`crates/cloud/src/lib.rs`](../../../crates/cloud/src/lib.rs).
+- Cloud URL resolver: [`crates/cloud/src/config.rs`](../../../crates/cloud/src/config.rs).
 - Auth extractor (the local-side gate): [../auth.md §2](../auth.md#2-three-auth-mechanisms--precedence-and-resolution).
 - Per-router README and template: [README.md](README.md).

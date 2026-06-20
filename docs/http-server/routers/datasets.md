@@ -215,7 +215,7 @@ This is the most operationally-loaded endpoint: it returns `FileResponse` (local
   | `401` | `{"detail": "Unauthorized"}` | — |
   | `404` | `{"error": "Dataset not found"}` | Caller lacks `write`. Source: [`get_datasets_router.py:555-556`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/datasets/routers/get_datasets_router.py#L555-L556). |
   | `422` | `{"detail": [...], "body": ...}` | Body shape invalid. |
-- **Side effects**: upsert one row in the `dataset_configurations` table (or whatever the Rust equivalent is — see [project guide](../../.claude/CLAUDE.md) for migration status).
+- **Side effects**: upsert one row in the `dataset_configurations` table (or whatever the Rust equivalent is — see [project guide](../../../.claude/CLAUDE.md) for migration status).
 - **Delegation target**: a new `cognee_lib::modules::data::methods::upsert_dataset_configuration(dataset_id, graph_schema, custom_prompt)` helper.
 - **Validation rules**: valid UUID; `graph_schema` if present must be a JSON object (not a primitive); `custom_prompt` if present must be a string.
 - **Permission gate**: `write` on `dataset_id`. Source: [`get_datasets_router.py:554`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/datasets/routers/get_datasets_router.py#L554).

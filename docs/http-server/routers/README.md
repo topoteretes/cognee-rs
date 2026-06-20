@@ -1,119 +1,50 @@
-# HTTP Server — Per-Router Specs
+# HTTP server — router reference
 
-Each FastAPI router in [`cognee/api/v1/`](https://github.com/topoteretes/cognee/tree/main/cognee/api/v1) gets its own design document under this directory. This README is the **index, status table, and per-doc template** — write a new file per router as you take it on; do not lump multiple routers into one file.
+One reference doc per router, each covering its mount, endpoints, DTOs,
+cross-cutting behavior, and Python-parity notes. All 31 routers are implemented
+and shipped (cross-SDK parity verified by the `e2e-cross-sdk/harness/test_http_*.py`
+suites). Section overview: [../README.md](../README.md).
 
-Companion docs: [../architecture.md](../architecture.md), [../auth.md](../auth.md), [../pipelines.md](../pipelines.md), [../websocket.md](../websocket.md), [../observability.md](../observability.md), [../tenants.md](../tenants.md).
+Companion docs: [../architecture.md](../architecture.md) ·
+[../auth.md](../auth.md) · [../pipelines.md](../pipelines.md) ·
+[../websocket.md](../websocket.md) · [../observability.md](../observability.md) ·
+[../tenants.md](../tenants.md).
 
-## 1. Status table
+## Routers
 
-One row per router. Update the row in the same PR that lands or changes the underlying spec.
-
-### Legend
-
-- **Draft** — written but not yet validated against code.
-- **Approved** — reviewed; ready to implement against.
-- **In Progress** — implementation underway.
-- **Done** — implementation landed; cross-SDK parity tests pass.
-
-| # | Router | Mount prefix | Doc | Status |
-|---|---|---|---|---|
-| 1 | health | `/health` | [health.md](health.md) | **Done** — P8 Wave-A parity: [`test_http_health.py`](../../../e2e-cross-sdk/harness/test_http_health.py) |
-| 2 | auth (login/logout/me) | `/api/v1/auth` | [auth.md](auth.md) | **Done** — P8 Wave-A parity: [`test_http_auth.py`](../../../e2e-cross-sdk/harness/test_http_auth.py) |
-| 3 | auth — register | `/api/v1/auth` | [auth-register.md](auth-register.md) | **Done** — P8 Wave-A parity: [`test_http_auth.py`](../../../e2e-cross-sdk/harness/test_http_auth.py) |
-| 4 | auth — reset-password | `/api/v1/auth` | [auth-reset-password.md](auth-reset-password.md) | **Done** |
-| 5 | auth — verify | `/api/v1/auth` | [auth-verify.md](auth-verify.md) | **Done** |
-| 6 | api_keys | `/api/v1/auth/api-keys` | [api-keys.md](api-keys.md) | **Done** |
-| 7 | users | `/api/v1/users` | [users.md](users.md) | **Done** |
-| 8 | users — user_id_by_email | `/api/v1/users/get-user-id` | [users-by-email.md](users-by-email.md) | **Done** |
-| 9 | add | `/api/v1/add` | [add.md](add.md) | **Done** — P8 Wave-A parity: [`test_http_add.py`](../../../e2e-cross-sdk/harness/test_http_add.py) |
-| 10 | update | `/api/v1/update` | [update.md](update.md) | **Done** |
-| 11 | datasets | `/api/v1/datasets` | [datasets.md](datasets.md) | **Done** — P8 Wave-A parity: [`test_http_datasets.py`](../../../e2e-cross-sdk/harness/test_http_datasets.py) |
-| 12 | ontologies | `/api/v1/ontologies` | [ontologies.md](ontologies.md) | **Done** |
-| 13 | cognify | `/api/v1/cognify` | [cognify.md](cognify.md) | **Done** — P8 Wave-B parity: [`test_http_cognify.py`](../../../e2e-cross-sdk/harness/test_http_cognify.py); Wave-C WS: [`test_http_websocket.py`](../../../e2e-cross-sdk/harness/test_http_websocket.py) |
-| 14 | memify | `/api/v1/memify` | [memify.md](memify.md) | **Done** — P8 Wave-B parity: [`test_http_memify.py`](../../../e2e-cross-sdk/harness/test_http_memify.py) |
-| 15 | remember | `/api/v1/remember` | [remember.md](remember.md) | **Done** — P8 Wave-B parity: [`test_http_remember.py`](../../../e2e-cross-sdk/harness/test_http_remember.py) |
-| 16 | improve | `/api/v1/improve` | [improve.md](improve.md) | **Done** — P8 Wave-B parity: [`test_http_improve.py`](../../../e2e-cross-sdk/harness/test_http_improve.py) |
-| 17 | search | `/api/v1/search` | [search.md](search.md) | **Done** — P8 Wave-A parity (Chunks/Summaries/ChunksLexical): [`test_http_search.py`](../../../e2e-cross-sdk/harness/test_http_search.py) |
-| 18 | recall | `/api/v1/recall` | [recall.md](recall.md) | **Done** — P8 Wave-B parity: [`test_http_recall.py`](../../../e2e-cross-sdk/harness/test_http_recall.py) |
-| 19 | sessions | `/api/v1/sessions` | [sessions.md](sessions.md) | **Done** |
-| 20 | forget | `/api/v1/forget` | [forget.md](forget.md) | **Done** — P8 Wave-A parity: [`test_http_forget.py`](../../../e2e-cross-sdk/harness/test_http_forget.py) |
-| 21 | delete (deprecated) | `/api/v1/delete` | [delete.md](delete.md) | **Done** |
-| 22 | settings | `/api/v1/settings` | [settings.md](settings.md) | **Done** |
-| 23 | configuration | `/api/v1/configuration` | [configuration.md](configuration.md) | **Done** |
-| 24 | permissions | `/api/v1/permissions` | [permissions.md](permissions.md) | **Done** — P8 Wave-C parity: [`test_http_permissions.py`](../../../e2e-cross-sdk/harness/test_http_permissions.py) |
-| 25 | visualize | `/api/v1/visualize` | [visualize.md](visualize.md) | **Done** — P8 Wave-C parity: [`test_http_visualize.py`](../../../e2e-cross-sdk/harness/test_http_visualize.py) |
-| 26 | activity | `/api/v1/activity` | [activity.md](activity.md) | **Done** |
-| 27 | sync | `/api/v1/sync` | [sync.md](sync.md) | **Done** — P8 Wave-C parity: [`test_http_sync.py`](../../../e2e-cross-sdk/harness/test_http_sync.py) |
-| 28 | llm | `/api/v1/llm` | [llm.md](llm.md) | **Done** — P8 Wave-B parity: [`test_http_llm.py`](../../../e2e-cross-sdk/harness/test_http_llm.py) |
-| 29 | responses | `/api/v1/responses` | [responses.md](responses.md) | **Done** |
-| 30 | notebooks | `/api/v1/notebooks` | [notebooks.md](notebooks.md) | **Done** |
-| 31 | checks (cloud) | `/api/v1/checks` | [checks.md](checks.md) | **Done** |
-
-All 31 routers above are implemented and shipped; this table tracks each router's spec and cross-SDK parity status.
-
-## 2. Per-doc template
-
-Every per-router doc must use the structure below. Fill all sections; if a section legitimately doesn't apply, write "Not applicable" and one sentence why. Don't drop sections silently.
-
-```markdown
-# Router: <name>
-
-Brief one-paragraph summary: what the router does, who calls it, and the one or two sentences that
-distinguish it from related routers (e.g. `/api/v1/recall` vs `/api/v1/search`).
-
-Companion docs: [../architecture.md](../architecture.md), [../auth.md](../auth.md),
-and any sub-doc relevant to this router (e.g. [../pipelines.md](../pipelines.md) for routers that dispatch jobs).
-
-## 1. Mount & file
-- Mount prefix: `/api/v1/<name>`
-- Router file: `crates/http-server/src/routers/<name>.rs`
-- Python source: `cognee/api/v1/<name>/routers/get_<name>_router.py`
-
-## 2. Endpoints
-
-For each endpoint, one sub-section. Order by HTTP method (GET → POST → PATCH → PUT → DELETE) then path.
-
-### 2.x `<METHOD> <path>` — short verb-phrase summary
-
-- **Auth**: `required` | `optional` | `none`. (Cite the extractor used: `AuthenticatedUser`, `OptionalAuthenticatedUser`, etc.)
-- **Path params**: list with types.
-- **Query params**: list with types and defaults.
-- **Request body**: media type + DTO struct name + field-level breakdown (Rust types, Python types, optional/default).
-- **Response body**: media type + DTO struct name + field-level breakdown. Note the `200`/`201`/`202`/`204` choice.
-- **Error responses**: a table of `status` × `body shape` × `condition`. Use the canonical `ApiError` variants from [../architecture.md §9](../architecture.md#9-error-handling).
-- **Side effects**: writes to relational DB, graph DB, vector DB, file storage, broadcast channels, etc.
-- **Delegation target**: which `cognee_lib::*` function the handler calls. The handler itself should be thin.
-- **Validation rules**: cross-field rules that go beyond serde defaults (Pydantic `model_validator` analogs).
-- **Rate / size limits**: body size, request rate, etc.
-- **OpenAPI**: any non-default tags, security overrides, response schemas.
-- **Telemetry**: span name (e.g. `cognee.api.<name>.<verb>`), important attributes from [../observability.md §3.3](../observability.md#33-span-instrumentation-conventions).
-- **Python parity notes**: behaviors that look quirky but match Python on purpose, with a citation.
-
-## 3. Cross-cutting behavior
-Anything that applies to all endpoints in this router: shared input validation, shared error
-mapping, shared authorization rule (e.g. "all routes require permission `X` on the target dataset").
-
-## 4. DTO definitions
-The DTO structs in full, in Rust, with `#[derive]` attributes and field comments where the type is
-non-obvious. Map each Pydantic field name to the Rust field name. Note `serde(rename_all =
-"snake_case")` if needed for compat.
-
-## 5. Implementation tasks
-Numbered list of subtasks for the implementor:
-1. Add DTO structs in `crates/http-server/src/dto/<name>.rs`.
-2. Add handler functions in `crates/http-server/src/routers/<name>.rs`.
-3. Add OpenAPI annotations.
-4. Add unit tests in the same file.
-5. Add integration tests in `crates/http-server/tests/test_<name>.rs`.
-6. Add cross-SDK parity tests in `e2e-cross-sdk/harness/test_http_<name>.py`.
-
-## 6. Open questions
-Items the implementor should resolve before merging, with proposed answers when possible.
-
-## 7. References
-- Python source path(s).
-- Any other doc that constrains this router (auth, pipelines, websocket, observability, tenants).
-```
+| Router | Mount prefix | Purpose |
+|---|---|---|
+| [health](health.md) | `/health` | Liveness/readiness probe. |
+| [auth](auth.md) | `/api/v1/auth` | Login / logout / current-user (`/me`). |
+| [auth-register](auth-register.md) | `/api/v1/auth` | User registration. |
+| [auth-reset-password](auth-reset-password.md) | `/api/v1/auth` | Password reset flow. |
+| [auth-verify](auth-verify.md) | `/api/v1/auth` | Email/token verification. |
+| [api-keys](api-keys.md) | `/api/v1/auth/api-keys` | API-key issuance/management. |
+| [users](users.md) | `/api/v1/users` | User CRUD. |
+| [users-by-email](users-by-email.md) | `/api/v1/users/get-user-id` | Resolve a user id by email. |
+| [add](add.md) | `/api/v1/add` | Ingest files/text into a dataset. |
+| [update](update.md) | `/api/v1/update` | Re-ingest and re-cognify changed data. |
+| [datasets](datasets.md) | `/api/v1/datasets` | Dataset listing/status/data. |
+| [ontologies](ontologies.md) | `/api/v1/ontologies` | Ontology upload/management. |
+| [cognify](cognify.md) | `/api/v1/cognify` | Build the knowledge graph (async job). |
+| [memify](memify.md) | `/api/v1/memify` | Enrich the graph with triplet embeddings. |
+| [remember](remember.md) | `/api/v1/remember` | Persist a memory/QA turn. |
+| [improve](improve.md) | `/api/v1/improve` | Feedback-driven graph improvement. |
+| [search](search.md) | `/api/v1/search` | Query across the 15 search types. |
+| [recall](recall.md) | `/api/v1/recall` | Retrieve stored memories for a query. |
+| [sessions](sessions.md) | `/api/v1/sessions` | Session listing / QA history. |
+| [forget](forget.md) | `/api/v1/forget` | Remove specific memories/nodes. |
+| [delete](delete.md) | `/api/v1/delete` | Delete data/datasets (deprecated alias). |
+| [settings](settings.md) | `/api/v1/settings` | Read/update runtime settings. |
+| [configuration](configuration.md) | `/api/v1/configuration` | Bulk configuration surface. |
+| [permissions](permissions.md) | `/api/v1/permissions` | ACL / role / permission management. |
+| [visualize](visualize.md) | `/api/v1/visualize` | Render the graph to HTML. |
+| [activity](activity.md) | `/api/v1/activity` | Span/activity debug feed. |
+| [sync](sync.md) | `/api/v1/sync` | Cloud sync (background job). |
+| [llm](llm.md) | `/api/v1/llm` | Direct custom-prompt LLM calls. |
+| [responses](responses.md) | `/api/v1/responses` | OpenAI Responses-API-shaped dispatch. |
+| [notebooks](notebooks.md) | `/api/v1/notebooks` | Notebook CRUD + cell execution. |
+| [checks](checks.md) | `/api/v1/checks` | Cloud connectivity checks. |
 
 ## 3. Cross-router conventions
 
@@ -184,23 +115,3 @@ Every handler is wrapped in `#[tracing::instrument]` with a span name `cognee.ap
 ### 3.10 OpenAPI
 
 Each endpoint gets a `#[utoipa::path(...)]` annotation declaring tags, parameters, request body, responses, and security. Tags match the Python `tags=[...]` lists in [`client.py`](https://github.com/topoteretes/cognee/blob/main/cognee/api/client.py).
-
-## 4. Suggested writing order
-
-The routers were originally written in the implementation-phase order below (retained as orientation for how the surface is grouped):
-
-1. **P0** (foundation): `health`.
-2. **P1** (auth): `auth`, `auth-register`, `auth-reset-password`, `auth-verify`, `api-keys`, `users`, `users-by-email`.
-3. **P2** (write path): `add`, `datasets`, `ontologies`, `update`, `delete`, `forget`.
-4. **P3** (pipelines + WS): `cognify`, `memify`, `remember`, `improve`.
-5. **P4** (read path): `search`, `recall`, `sessions`, `llm`, `visualize`.
-6. **P5** (admin): `permissions`, `settings`, `configuration`.
-7. **P6** (observability): `activity`, `sync`, `checks`.
-8. **P7** (advanced): `notebooks`, `responses`.
-
-Each per-router doc lands as part of the PR that implements that router. The doc's status flips through `Draft → Approved → In Progress → Done` in step with the code.
-
-## 5. References
-
-- Python router files: [`cognee/api/v1/<name>/routers/`](https://github.com/topoteretes/cognee/tree/main/cognee/api/v1).
-- Cross-SDK parity test files: `e2e-cross-sdk/harness/test_http_<name>.py`.

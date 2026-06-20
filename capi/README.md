@@ -203,7 +203,7 @@ Tested on Linux x86_64 (CI) and Android aarch64 (slim build, ONNX local embeddin
 | `EMBEDDING_API_KEY` | Embedding API key (falls back to `OPENAI_TOKEN`). |
 | `MOCK_EMBEDDING` | Set `true` to use zero-vector mock embeddings (no model download). |
 | `RUST_LOG`, `LOG_LEVEL` | `tracing-subscriber` env-filter level overrides. |
-| `COGNEE_LOG_*`, `LOG_FILE_NAME` | Consumed by `cognee_setup_logging()` — see the workspace README's "Logging" section. |
+| `COGNEE_LOG_*`, `LOG_FILE_NAME` | Consumed by `cognee_setup_logging()` — see docs/configuration.md (Logging section). |
 | `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_SERVICE_NAME`, `OTEL_*` | Consumed by `cognee_init_otlp()`. |
 | `TELEMETRY_DISABLED`, `ENV` | Analytics opt-outs for `cognee_init_telemetry()`. |
 

@@ -47,7 +47,7 @@ back to the doc and section where it is discussed in full.
 3. **`ENABLE_BACKEND_ACCESS_CONTROL` semantics** — Python toggles permission enforcement via this env
    var. Whether the Rust port honors the same toggle (vs. always enforcing) needs confirmation.
 
-## Responses router — [http-server/routers/responses.md §6](../http-server/routers/responses.md)
+## Responses router — [http-server/routers/responses.md](../http-server/routers/responses.md)
 
 1. **`ChatUsage` field renaming** — Python renames OpenAI's `input_tokens` / `output_tokens` to
    `prompt_tokens` / `completion_tokens`. We keep the rename for client-compat; documented divergence
@@ -58,7 +58,7 @@ back to the doc and section where it is discussed in full.
    The redaction layer handles span attributes, but `reqwest` trace logs (`RUST_LOG=trace`) bypass it.
    Disable `reqwest` trace logging unconditionally, or rely on operator discipline?
 
-## Notebooks router — [http-server/routers/notebooks.md §6](../http-server/routers/notebooks.md)
+## Notebooks router — [http-server/routers/notebooks.md](../http-server/routers/notebooks.md)
 
 1. **Empty `cells` overwrite** — Python's `PUT` ignores `"cells": []` (you can't delete all cells via
    the endpoint). We keep the quirk for parity; documented.

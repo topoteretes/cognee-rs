@@ -1,3 +1,12 @@
+//! Abstract file-storage layer for Cognee.
+//!
+//! Provides a trait-based interface for blob/file persistence so storage
+//! backends can be swapped without touching the ingestion pipeline.
+//!
+//! - [`StorageTrait`] (+ [`StorageExt`], [`StorageWriter`]) — async storage operations
+//! - [`LocalStorage`] — local-filesystem implementation using `file://` URIs
+//! - `MockStorage` (feature `testing`) — in-memory implementation for tests
+
 mod local_storage;
 mod storage_trait;
 

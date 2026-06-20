@@ -1,3 +1,12 @@
+//! Session management and QA-history storage for Cognee.
+//!
+//! Tracks search/answer history and feedback per session so retrieval can use
+//! prior context. Trait-based so the store backend is pluggable.
+//!
+//! - `SessionStore` — async trait for session persistence
+//! - `FsSessionStore` (feature `fs`), `RedisSessionStore`, `SeaOrmSessionStore`
+//!   — the backing implementations
+
 mod error;
 mod feedback;
 mod improve_lock;

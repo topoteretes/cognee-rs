@@ -231,6 +231,6 @@ The Rust DTO declares it as `serde_json::Value` to keep the HTTP layer permissiv
 - Python prompt templates: [`cognee/infrastructure/llm/prompts/`](https://github.com/topoteretes/cognee/tree/main/cognee/infrastructure/llm/prompts).
 - Python `graph_schema_to_graph_model`: [`cognee/shared/graph_model_utils.py`](https://github.com/topoteretes/cognee/blob/main/cognee/shared/graph_model_utils.py).
 - Rust LLM adapter trait: [`crates/llm/src/lib.rs`](../../../crates/llm/src/lib.rs).
-- Rust `OpenAIAdapter`: [`crates/llm/src/openai.rs`](../../../crates/llm/src/openai.rs).
+- Rust `OpenAIAdapter`: [`crates/llm/src/adapters/openai.rs`](../../../crates/llm/src/adapters/openai.rs).
 - [../auth.md §2](../auth.md#2-three-auth-mechanisms--precedence-and-resolution) for authentication resolution.
 - [../observability.md §3.3](../observability.md#33-span-instrumentation-conventions) for the `cognee.llm.*` tracing-attribute keys.
