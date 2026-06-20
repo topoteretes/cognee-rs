@@ -30,11 +30,14 @@ services:
       - OPENAI_MODEL
       - LLM_API_KEY
       - LLM_API_ENDPOINT
+      - LLM_PROVIDER
       - EMBEDDING_PROVIDER
       - EMBEDDING_MODEL
       - EMBEDDING_ENDPOINT
       - EMBEDDING_API_KEY
+      - EMBEDDING_DIMENSIONS
       - MOCK_EMBEDDING
+      - COGNEE_SKIP_CONNECTION_TEST
     tmpfs:
       - /py                                       # ephemeral Python server workspace
       - /rs                                       # ephemeral Rust server workspace

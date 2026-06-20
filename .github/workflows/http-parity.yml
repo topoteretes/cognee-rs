@@ -163,6 +163,17 @@ jobs:
           OPENAI_TOKEN: ${{ secrets.OPENAI_KEY }}
           OPENAI_URL: https://api.openai.com/v1
           OPENAI_MODEL: gpt-4o-mini
+          LLM_PROVIDER: openai
+          # Embedding config mirrors e2e-cross-sdk/harness/helpers.py (the proven
+          # CLI cross-SDK setup). COGNEE_SKIP_CONNECTION_TEST bypasses Python's
+          # 30s embedding-endpoint pre-check at /add time — ingestion does not
+          # embed (that happens in cognify), so the check is unnecessary here.
+          EMBEDDING_PROVIDER: openai
+          EMBEDDING_MODEL: openai/text-embedding-3-small
+          EMBEDDING_DIMENSIONS: "1536"
+          EMBEDDING_API_KEY: ${{ secrets.OPENAI_KEY }}
+          EMBEDDING_ENDPOINT: https://api.openai.com/v1
+          COGNEE_SKIP_CONNECTION_TEST: "true"
         run: |
           if [ -z "${OPENAI_TOKEN}" ]; then
             echo "OPENAI_KEY not available — skipping LLM-gated add/forget/search parity."
