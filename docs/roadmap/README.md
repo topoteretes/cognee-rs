@@ -10,7 +10,7 @@ etc.) — this folder is only for things still to be done.
 
 | Doc | What it tracks |
 |-----|----------------|
-| [not-implemented.md](not-implemented.md) | Capabilities intentionally deferred, out of scope, or stubbed (S3, office-format extraction, partial `improve()` stages, multi-replica WS fan-out, …). Verified against the code. |
+| [not-implemented.md](not-implemented.md) | Capabilities intentionally deferred, out of scope, or stubbed (S3, legacy binary office formats, partial `improve()` stages, multi-replica WS fan-out, …). Verified against the code. |
 | [open-questions.md](open-questions.md) | Cross-cutting design *decisions* that are still open (auth params, tenancy/RBAC scope, sampling, …) — choices to be made, not missing features. |
 
 ## Implementation plans

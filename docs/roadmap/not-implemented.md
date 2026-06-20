@@ -14,17 +14,26 @@ Sourced from the surviving design docs and verified against the code as of 2026-
 These are tracked in the project guide ([`.claude/CLAUDE.md`](../../.claude/CLAUDE.md) → "Not Yet
 Implemented") and restated here for one consolidated view:
 
-- **`unstructured` office-format extraction** — text, PDF, CSV, HTML, image, and audio files are
-  extracted end-to-end (each behind its own feature flag). The `unstructured` office formats
-  (DOCX/XLSX/PPTX/ODT/etc.) are classified and registered in the loader registry, but full
-  extraction parity for them is not yet implemented.
+- **Legacy binary office formats** — text, PDF, CSV, HTML, image, audio, and the modern XML-based
+  office formats (DOCX, XLSX/XLS/ODS, PPTX, EPUB, EML, ODT, ODP) are all extracted end-to-end (each
+  behind its own feature flag; the umbrella `unstructured` feature is on by default in `cognee-lib`).
+  The extractors live in [`crates/ingestion/src/loaders/unstructured/`](../../crates/ingestion/src/loaders/unstructured/)
+  and dispatch by extension in
+  [`mod.rs`](../../crates/ingestion/src/loaders/unstructured/mod.rs). What is **not** supported is the
+  set of legacy binary container formats — `.doc`, `.ppt`, `.rtf`, `.msg` — which are rejected with an
+  error pointing the user at the Python SDK or a format conversion. Porting these would mean
+  reimplementing OLE/CFB binary parsers; deferred.
 - **S3 support** — `DataInput::S3Path` returns an error stub.
 - **Direct URL streaming in `DataInput::process_by_chunks()`** — calling `process_by_chunks()`
   directly on `DataInput::Url` returns an unsupported error because URLs must first be fetched and
   canonicalized. Core ingestion is wired: `AddPipeline::add()` resolves HTTP(S) URL inputs, stores
   content and URL metadata, and leaves graph provenance to cognify.
-- **Default tokenizer features in CI** — `HuggingFaceTokenCounter` and `TikTokenCounter` are behind
-  optional feature flags (`hf-tokenizer`, `tiktoken`); CI builds may need to enable them explicitly.
+- **Tokenizer features under `--no-default-features`** — `HuggingFaceTokenCounter` and
+  `TikTokenCounter` are behind optional feature flags (`hf-tokenizer`, `tiktoken`). Both are in
+  `cognee-lib`'s **default** feature set, so a standard build (and CI) includes them; they are only
+  absent in `--no-default-features` builds or when the `cognee-chunking` crate is used directly
+  without enabling them. Not a gap for default builds — noted only for downstream crates that strip
+  defaults.
 
 ## Python SDK parity gaps (capabilities not ported)
 
@@ -70,11 +79,14 @@ Shipped in task 20 as sanctioned partials for 0.1.0:
 
 - **`persist_trace_steps` stage (Stage 2b)** — trace steps whose `session_feedback` field is
   non-empty are collected and run through the standard `add → cognify` path (tagged to the
-  `"agent_trace_feedbacks"` node set). This is a scoped-down version of the Python reference:
-  the full per-step provenance metadata (origin function, status, parameters, return values) is not
-  stored as separate graph nodes, only the feedback text is cognified.
-  - TODO: add a dedicated `persist_trace_step_metadata()` in `cognee-cognify` that creates a
-    per-step graph entity preserving the full `SessionTraceStep` fields for audit/replay.
+  `"agent_trace_feedbacks"` node set). This **matches the current Python reference**, not a
+  scoped-down version of it: Python's `persist_agent_trace_feedbacks_in_knowledge_graph` pipeline
+  also cognifies only the feedback text, so the per-step provenance metadata (origin function,
+  status, parameters, return values) is stored as separate graph nodes in *neither* SDK. This entry
+  is therefore a shared future enhancement rather than a Rust↔Python parity gap.
+  - Future enhancement (both SDKs): persist a per-step graph entity preserving the full
+    `SessionTraceStep` fields for audit/replay. In Rust this would be a dedicated
+    `persist_trace_step_metadata()` in `cognee-cognify`.
 
 ## HTTP server
 
