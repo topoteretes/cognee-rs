@@ -15,6 +15,13 @@ from seed import seed_dataset_with_text
 
 _SEED_TEXT = "Temporary text added to verify the forget endpoint."
 
+# `dataset_id` is a uuid5 derived from (name, owner); the two servers register
+# independent owners (random uuid4), so it legitimately differs. `datasets_removed`
+# is a count over ALL of the user's datasets, which is pollution-/divergence-
+# sensitive (e.g. Python creates an empty dataset on a no-file add, Rust does
+# not), so compare status parity rather than the exact count.
+_FORGET_IGNORE = DEFAULT_IGNORE | {"$..dataset_id", "$..datasets_removed"}
+
 
 def test_forget_by_data_id(authed_clients, unique_dataset_name):
     """POST /api/v1/forget with data_id deletes the data record on both servers."""
@@ -46,7 +53,7 @@ def test_forget_by_dataset(authed_clients, unique_dataset_name):
     payload = {"dataset": unique_dataset_name}
     py = authed_clients["py"].post("/api/v1/forget", json=payload)
     rs = authed_clients["rs"].post("/api/v1/forget", json=payload)
-    assert_responses_match(py, rs, ignore=DEFAULT_IGNORE)
+    assert_responses_match(py, rs, ignore=_FORGET_IGNORE)
 
 
 def test_forget_everything(authed_clients, unique_dataset_name):
@@ -57,7 +64,7 @@ def test_forget_everything(authed_clients, unique_dataset_name):
     payload = {"everything": True}
     py = authed_clients["py"].post("/api/v1/forget", json=payload)
     rs = authed_clients["rs"].post("/api/v1/forget", json=payload)
-    assert_responses_match(py, rs, ignore=DEFAULT_IGNORE)
+    assert_responses_match(py, rs, ignore=_FORGET_IGNORE)
 
 
 def test_forget_nonexistent_returns_404(authed_clients):

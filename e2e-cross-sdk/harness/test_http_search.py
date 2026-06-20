@@ -19,10 +19,12 @@ _SEARCH_IGNORE = DEFAULT_IGNORE | {
     "$..results[*].score",
 }
 
+# Wire values are SCREAMING_SNAKE_CASE on both SDKs (Rust serde
+# rename_all="SCREAMING_SNAKE_CASE"; Python's SearchType enum uses the same).
 _PHASE1_SEARCH_TYPES = [
-    "Chunks",
-    "Summaries",
-    "ChunksLexical",
+    "CHUNKS",
+    "SUMMARIES",
+    "CHUNKS_LEXICAL",
 ]
 
 _SEED_TEXT = (

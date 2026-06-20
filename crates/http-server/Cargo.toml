@@ -27,7 +27,9 @@ required-features = ["bin"]
 [features]
 # decision 1: telemetry is ON by default in cognee-http-server. Disable with
 # --no-default-features for compile-time opt-out.
-default = ["telemetry"]
+# html-loader is on by default so the server binary supports URL ingestion and
+# HTML documents out of the box (parity with the Python `/add` URL path).
+default = ["telemetry", "html-loader"]
 # Enables the standalone-binary entry point and its arg-parsing deps.
 bin = [
     "dep:clap",
@@ -35,6 +37,13 @@ bin = [
     "tokio/macros",
     "tokio/rt-multi-thread",
     "tokio/signal",
+]
+# Gates URL ingestion + the HTML document loader (propagates to the ingestion
+# and cognify crates). Without it, `DataInput::Url` returns
+# UnsupportedDocumentType / UrlIngestionUnavailable at runtime.
+html-loader = [
+    "cognee-ingestion/html-loader",
+    "cognee-cognify/html-loader",
 ]
 telemetry = [
     "dep:cognee-observability",
