@@ -15,7 +15,10 @@ use super::disconnect;
 use super::serve;
 #[cfg(feature = "visualization")]
 use super::visualize;
-use super::{add, add_and_cognify, cognify, config, delete, memify, search};
+use super::{
+    add, add_and_cognify, cognify, config, delete, forget, improve, memify, recall, remember,
+    search,
+};
 
 #[derive(Debug, Deserialize, Serialize)]
 struct SequenceStep {
@@ -31,6 +34,10 @@ fn dispatch(command: Commands, cm: &Arc<ComponentManager>) -> Result<(), CliErro
         Commands::AddAndCognify(args) => add_and_cognify::run(args, Arc::clone(cm)),
         Commands::Memify(args) => memify::run(args, Arc::clone(cm)),
         Commands::Search(args) => search::run(args, Arc::clone(cm)),
+        Commands::Remember(args) => remember::run(args, Arc::clone(cm)),
+        Commands::Recall(args) => recall::run(args, Arc::clone(cm)),
+        Commands::Forget(args) => forget::run(args, Arc::clone(cm)),
+        Commands::Improve(args) => improve::run(args, Arc::clone(cm)),
         Commands::Delete(args) => delete::run(args, Arc::clone(cm)),
         Commands::Config(args) => config::run(args),
         Commands::RunSequence(_) => Err(CliError::Validation(

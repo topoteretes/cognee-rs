@@ -19,6 +19,10 @@ pub enum Commands {
     AddAndCognify(AddAndCognifyArgs),
     Memify(MemifyArgs),
     Search(SearchArgs),
+    Remember(RememberArgs),
+    Recall(RecallArgs),
+    Forget(ForgetArgs),
+    Improve(ImproveArgs),
     Delete(DeleteArgs),
     Config(ConfigArgs),
     #[command(name = "run-sequence")]
@@ -292,6 +296,112 @@ pub struct SearchArgs {
 
     #[arg(long = "llm-max-retries", value_parser = clap::value_parser!(u32).range(1..))]
     pub llm_max_retries: Option<u32>,
+}
+
+/// Arguments for `cognee-cli remember` — one-call store (add + cognify + improve).
+///
+/// Mirrors the Python `cognee.remember()` SDK function. Accepts inline text
+/// and/or file paths (same input handling as `add`). When `--session-id` is
+/// supplied the data is stored in the session cache (session memory mode)
+/// instead of the permanent knowledge graph.
+#[derive(Debug, Args)]
+pub struct RememberArgs {
+    /// Inline text and/or file paths to remember.
+    #[arg(required = true)]
+    pub data: Vec<String>,
+
+    #[arg(long = "dataset-name", short = 'd', default_value = "main_dataset")]
+    pub dataset_name: String,
+
+    /// Store in the given session cache instead of the permanent graph.
+    #[arg(long = "session-id")]
+    pub session_id: Option<String>,
+
+    /// Skip the self-improvement (memify) pass that normally runs after
+    /// cognify. By default self-improvement is ON (Python parity:
+    /// `self_improvement=True`).
+    #[arg(long = "no-improve", default_value_t = false)]
+    pub no_improve: bool,
+
+    #[arg(long = "tenant-id")]
+    pub tenant_id: Option<String>,
+}
+
+/// Arguments for `cognee-cli recall` — smart memory query with auto-routing.
+///
+/// Mirrors the Python `cognee.recall()` SDK function. When `--query-type` is
+/// omitted the search type is auto-routed based on the query text.
+#[derive(Debug, Args)]
+pub struct RecallArgs {
+    pub query: String,
+
+    /// Search type to use. When omitted, recall auto-routes the search type.
+    #[arg(long = "query-type", short = 't')]
+    pub query_type: Option<QueryTypeArg>,
+
+    #[arg(long = "datasets", short = 'd')]
+    pub datasets: Vec<String>,
+
+    #[arg(long = "top-k", short = 'k', default_value_t = 10)]
+    pub top_k: usize,
+
+    #[arg(long = "session-id")]
+    pub session_id: Option<String>,
+
+    #[arg(long = "output-format", short = 'f', default_value = "pretty")]
+    pub output_format: OutputFormatArg,
+}
+
+/// Arguments for `cognee-cli forget` — remove memory.
+///
+/// Mirrors the Python `cognee.forget()` SDK function. Exactly one target must
+/// be selected:
+///   * `--all` — delete everything the user owns.
+///   * `--data-id` (+ `--dataset-name`) — delete one data item from a dataset.
+///   * `--dataset-name` — delete an entire dataset.
+#[derive(Debug, Args)]
+pub struct ForgetArgs {
+    /// Dataset to forget (or to scope a `--data-id` deletion).
+    #[arg(long = "dataset-name", short = 'd')]
+    pub dataset_name: Option<String>,
+
+    /// Forget a single data item (UUID). Requires `--dataset-name`.
+    #[arg(long = "data-id", conflicts_with = "all")]
+    pub data_id: Option<String>,
+
+    /// Forget everything the current owner owns.
+    #[arg(long = "all", default_value_t = false)]
+    pub all: bool,
+
+    #[arg(long = "tenant-id")]
+    pub tenant_id: Option<String>,
+}
+
+/// Arguments for `cognee-cli improve` — enrich existing memory / bridge sessions.
+///
+/// Mirrors the Python `cognee.improve()` SDK function. Runs the four-stage
+/// session-graph bridge: apply feedback weights, persist session Q&A to the
+/// graph, default enrichment (memify), and sync graph edges back into sessions.
+#[derive(Debug, Args)]
+pub struct ImproveArgs {
+    #[arg(long = "dataset-name", short = 'd', default_value = "main_dataset")]
+    pub dataset_name: String,
+
+    /// Session id(s) to bridge into the permanent graph. Repeatable.
+    #[arg(long = "session-id")]
+    pub session_id: Vec<String>,
+
+    /// Restrict the enrichment (memify) pass to these graph node names.
+    /// Repeatable.
+    #[arg(long = "node-name")]
+    pub node_name: Vec<String>,
+
+    /// Mixing factor for feedback weight propagation (Stage 1).
+    #[arg(long = "feedback-alpha", default_value_t = 0.1)]
+    pub feedback_alpha: f64,
+
+    #[arg(long = "tenant-id")]
+    pub tenant_id: Option<String>,
 }
 
 #[derive(Debug, Clone, ValueEnum)]

@@ -39,6 +39,9 @@ Full documentation lives in **[docs/](docs/README.md)**. Quick links:
 
 | Topic | Doc |
 |---|---|
+| Getting started (first run) | [docs/getting-started.md](docs/getting-started.md) |
+| Core concepts & terminology | [docs/concepts.md](docs/concepts.md) |
+| How-to guides | [docs/guides/](docs/guides/README.md) |
 | Project parts & crate map | [docs/architecture.md](docs/architecture.md) |
 | What each operation does | [docs/operations.md](docs/operations.md) |
 | Configuration (env vars, settings) | [docs/configuration.md](docs/configuration.md) |
@@ -106,7 +109,32 @@ The CLI binary is `cognee-cli` (built from the `cognee-cli` crate).
 
 ### CLI Usage
 
-The core pipeline is `add` → `cognify` → `search`:
+The primary surface is the **memory API**: `remember`, `recall`, `improve`,
+`forget`. These four high-level operations compose the lower-level
+`add → cognify → memify → search` pipeline (`remember ≈ add + cognify + improve`;
+`recall ≈ auto-routed search`).
+
+```bash
+# Store memory (add + cognify + improve). Inline text and/or file paths.
+cognee-cli remember "Cognee turns data into a knowledge graph" ./notes.txt -d my_dataset
+
+# Query memory — omit -t to let recall auto-route the retrieval strategy
+cognee-cli recall "what did we learn about X?" -d my_dataset -k 10
+
+# Enrich memory / bridge sessions
+cognee-cli improve -d my_dataset
+
+# Remove memory (a dataset, a single data item, or everything)
+cognee-cli forget --all
+```
+
+`remember` with a `--session-id` records session memory; without one it persists
+permanent, graph-backed memory. `recall` is session-aware and graph-backed.
+
+#### Lower-level pipeline
+
+The same work can be driven through the building blocks directly when you need
+fine-grained control over each stage:
 
 ```bash
 # 1. Ingest data into a dataset (defaults to "main_dataset")

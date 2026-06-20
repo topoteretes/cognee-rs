@@ -26,6 +26,32 @@ Implemented") and restated here for one consolidated view:
 - **Default tokenizer features in CI** — `HuggingFaceTokenCounter` and `TikTokenCounter` are behind
   optional feature flags (`hf-tokenizer`, `tiktoken`); CI builds may need to enable them explicitly.
 
+## Python SDK parity gaps (capabilities not ported)
+
+Surfaced by comparing against the Python cognee documentation (docs.cognee.ai) as of 2026-06-20.
+These are features the Python SDK ships that the Rust port does not yet implement (so their absence
+from the docs is correct). The four memory-API CLI verbs (`remember` / `recall` / `forget` /
+`improve`) were a gap here and are **now implemented** — see [../tools/cli.md](../tools/cli.md).
+
+- **MCP server** — Python ships `cognee-mcp` (usable from Cursor, Claude Code, and other MCP
+  clients). There is no MCP crate in the Rust workspace.
+- **Local UI** — Python offers a web UI (`cognee-cli -ui` + the `cognee-frontend` app). Rust has only
+  the static, self-contained d3.js graph export (`cognee-cli visualize`), not an interactive app.
+- **LLM / embedding / backend provider breadth** — Python documents many more backends than Rust
+  implements:
+  - LLM: Python adds Anthropic, Google Gemini, Mistral, Bedrock; Rust covers OpenAI-compatible
+    (OpenAI/Ollama/vLLM/llama.cpp) + `LiteRtAdapter` (Android).
+  - Embeddings: Python adds Gemini, Mistral, Bedrock, Fastembed; Rust covers ONNX, OpenAI-compatible,
+    Ollama, mock.
+  - Vector stores: Python adds ChromaDB, Neptune Analytics, Redis, FalkorDB; Rust covers Qdrant
+    (embedded; `lancedb` aliased to it) and pgvector.
+  - Graph stores: Python adds Neo4j, Neptune, Memgraph; Rust covers Ladybug/Kuzu (embedded) and
+    Postgres (`pggraph`).
+- **Structured-output backends** — Python lets you choose LiteLLM + Instructor or BAML for structured
+  extraction; Rust uses its own structured-output path in [`cognee-llm`](../../crates/llm/).
+- **Entity disambiguation / canonicalization** — Python documents entity disambiguation,
+  post-extraction canonicalization, and entity-description consolidation (guides/POCs). Not ported.
+
 ## improve() — deferred stages (partial implementations)
 
 Shipped in task 20 as sanctioned partials for 0.1.0:
