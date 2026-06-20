@@ -1,5 +1,11 @@
 services:
   e2e-tests:
+    # Shared image tag: e2e-tests / e2e-http-tests / e2e-telemetry all build the
+    # SAME image from the same Dockerfile+context. Naming it makes Compose build
+    # it once and reuse it across services — otherwise each `docker compose run`
+    # triggers a fresh per-service build, and the duplicate Rust release build
+    # (lbug's heavy C++) can OOM the runner.
+    image: cognee-e2e-cross-sdk:latest
     build:
       context: ../..                              # /home/dmytro/dev/cognee/ (monorepo root)
       dockerfile: cognee-rust/e2e-cross-sdk/Dockerfile
@@ -12,6 +18,7 @@ services:
     command: ["pytest", "-vs", "/harness/"]
 
   e2e-http-tests:
+    image: cognee-e2e-cross-sdk:latest           # shared build — see e2e-tests
     build:
       context: ../..                              # /home/dmytro/dev/cognee/ (monorepo root)
       dockerfile: cognee-rust/e2e-cross-sdk/Dockerfile
@@ -69,6 +76,7 @@ services:
   # cognee-home volume mounts at /root/.cognee on both sides so the
   # persistent_id file is the same on disk for both SDKs.
   e2e-telemetry:
+    image: cognee-e2e-cross-sdk:latest           # shared build — see e2e-tests
     build:
       context: ../..                              # /home/dmytro/dev/cognee/ (monorepo root)
       dockerfile: cognee-rust/e2e-cross-sdk/Dockerfile
