@@ -182,11 +182,27 @@ def _abbrev(v: Any, max_len: int = 120) -> str:
 # ── Main assertion ────────────────────────────────────────────────────────────
 
 
+def _sort_json_lists(value):
+    """Recursively sort every list by a canonical JSON key of its elements.
+
+    Used for collection endpoints (e.g. GET /datasets) where the *set* of items
+    is the contract but the order is not — two SDKs may return the same items in
+    a different order when sort keys tie (e.g. equal created_at timestamps).
+    """
+    if isinstance(value, dict):
+        return {k: _sort_json_lists(v) for k, v in value.items()}
+    if isinstance(value, list):
+        sorted_items = [_sort_json_lists(v) for v in value]
+        return sorted(sorted_items, key=lambda v: json.dumps(v, sort_keys=True, default=str))
+    return value
+
+
 def assert_responses_match(
     py,
     rs,
     *,
     ignore: frozenset[str] | set[str] | tuple[str, ...] = DEFAULT_IGNORE,
+    sort_lists: bool = False,
 ) -> None:
     """Assert that *py* and *rs* (``httpx.Response`` objects) are equivalent.
 
@@ -224,7 +240,7 @@ def assert_responses_match(
     if "html" in py_ct:
         _assert_html_match(py, rs)
     elif "json" in py_ct:
-        _assert_json_match(py, rs, ignore=ignore)
+        _assert_json_match(py, rs, ignore=ignore, sort_lists=sort_lists)
     else:
         _assert_binary_match(py, rs)
 
@@ -234,7 +250,7 @@ def _norm_content_type(ct: str) -> str:
     return ct.split(";")[0].strip().lower()
 
 
-def _assert_json_match(py, rs, *, ignore) -> None:
+def _assert_json_match(py, rs, *, ignore, sort_lists: bool = False) -> None:
     try:
         py_json = py.json()
     except Exception as exc:
@@ -246,6 +262,10 @@ def _assert_json_match(py, rs, *, ignore) -> None:
 
     py_stripped = strip_paths(py_json, ignore)
     rs_stripped = strip_paths(rs_json, ignore)
+
+    if sort_lists:
+        py_stripped = _sort_json_lists(py_stripped)
+        rs_stripped = _sort_json_lists(rs_stripped)
 
     diffs = _diff_json(py_stripped, rs_stripped)
     if diffs:

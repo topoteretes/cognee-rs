@@ -25,7 +25,7 @@ def test_datasets_list_empty(authed_clients, unique_dataset_name):
     """GET /api/v1/datasets returns an empty list when no datasets exist."""
     py = authed_clients["py"].get("/api/v1/datasets")
     rs = authed_clients["rs"].get("/api/v1/datasets")
-    assert_responses_match(py, rs, ignore=_DS_IGNORE)
+    assert_responses_match(py, rs, ignore=_DS_IGNORE, sort_lists=True)
 
 
 def test_datasets_create(authed_clients, unique_dataset_name):
@@ -44,7 +44,9 @@ def test_datasets_list_after_create(authed_clients, unique_dataset_name):
 
     py = authed_clients["py"].get("/api/v1/datasets")
     rs = authed_clients["rs"].get("/api/v1/datasets")
-    assert_responses_match(py, rs, ignore=_DS_IGNORE)
+    # Dataset-list order is not a contract: created_at ties make it
+    # backend-dependent. Compare as a set (order-insensitive).
+    assert_responses_match(py, rs, ignore=_DS_IGNORE, sort_lists=True)
 
 
 def test_datasets_get_by_id(authed_clients, unique_dataset_name):
