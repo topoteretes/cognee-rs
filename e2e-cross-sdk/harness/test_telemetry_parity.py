@@ -47,17 +47,23 @@ def _python_emit():
     preferred over the CLI because no production subcommand is
     guaranteed to route to ``send_telemetry``.
     """
+    # Python's ``send_telemetry`` schedules the HTTP POST as a fire-and-forget
+    # task via ``loop.create_task`` and therefore requires a *running* event
+    # loop — calling it from a bare synchronous ``python -c`` raises
+    # ``RuntimeError: no running event loop``. Run it inside ``asyncio.run`` and
+    # briefly keep the loop alive so the scheduled POST reaches the proxy.
+    src = (
+        "import asyncio\n"
+        "from cognee.shared.utils import send_telemetry\n"
+        "async def _emit():\n"
+        "    send_telemetry('cognee.forget', user_id='cross-sdk-user',\n"
+        "                   additional_properties={'target': 'everything',\n"
+        "                                          'cognee_version': 'cross-sdk-test'})\n"
+        "    await asyncio.sleep(3)\n"
+        "asyncio.run(_emit())\n"
+    )
     subprocess.check_call(
-        [
-            "/opt/python-venv/bin/python",
-            "-c",
-            (
-                "from cognee.shared.utils import send_telemetry;"
-                "send_telemetry('cognee.forget', user_id='cross-sdk-user',"
-                " additional_properties={'target':'everything',"
-                " 'cognee_version':'cross-sdk-test'})"
-            ),
-        ],
+        ["/opt/python-venv/bin/python", "-c", src],
         env={**os.environ},
         timeout=30,
     )
