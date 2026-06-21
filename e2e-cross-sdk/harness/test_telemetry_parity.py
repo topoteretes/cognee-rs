@@ -34,8 +34,10 @@ def _wait_for_n_captures(n, timeout=15.0):
         if len(records) >= n:
             return records
         time.sleep(0.2)
+    got = _read_captures()
     raise AssertionError(
-        f"timed out waiting for {n} captures; got {len(_read_captures())}"
+        f"timed out waiting for {n} captures; got {len(got)}. "
+        f"records={[{'sdk_runtime': r.get('properties', {}).get('sdk_runtime'), 'event_name': r.get('event_name')} for r in got]!r}"
     )
 
 
@@ -47,24 +49,33 @@ def _python_emit():
     preferred over the CLI because no production subcommand is
     guaranteed to route to ``send_telemetry``.
     """
-    # Python's ``send_telemetry`` schedules the HTTP POST as a fire-and-forget
-    # task via ``loop.create_task`` and therefore requires a *running* event
-    # loop — calling it from a bare synchronous ``python -c`` raises
-    # ``RuntimeError: no running event loop``. Run it inside ``asyncio.run`` and
-    # briefly keep the loop alive so the scheduled POST reaches the proxy.
+    # Three things the pinned Python ``send_telemetry`` (cognee/shared/utils.py)
+    # needs in order to actually reach the capture proxy:
+    #  1. It posts to a *hardcoded* module global ``proxy_url =
+    #     "https://test.prometh.ai"`` (no env override) — monkeypatch that global
+    #     to the test proxy URL before emitting.
+    #  2. It no-ops when ``ENV in ("test", "dev")`` — scrub ENV from the
+    #     subprocess so the event actually fires.
+    #  3. It schedules the POST via ``loop.create_task`` (needs a *running* event
+    #     loop), so run inside ``asyncio.run`` and AWAIT the scheduled task — a
+    #     plain ``sleep`` races the fire-and-forget POST and drops it.
     src = (
-        "import asyncio\n"
-        "from cognee.shared.utils import send_telemetry\n"
+        "import os, asyncio\n"
+        "import cognee.shared.utils as u\n"
+        "u.proxy_url = os.environ['COGNEE_TELEMETRY_PROXY_URL_FOR_TESTS']\n"
         "async def _emit():\n"
-        "    send_telemetry('cognee.forget', user_id='cross-sdk-user',\n"
-        "                   additional_properties={'target': 'everything',\n"
-        "                                          'cognee_version': 'cross-sdk-test'})\n"
-        "    await asyncio.sleep(3)\n"
+        "    u.send_telemetry('cognee.forget', user_id='cross-sdk-user',\n"
+        "                     additional_properties={'target': 'everything',\n"
+        "                                            'cognee_version': 'cross-sdk-test'})\n"
+        "    pending = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]\n"
+        "    if pending:\n"
+        "        await asyncio.wait(pending, timeout=10)\n"
         "asyncio.run(_emit())\n"
     )
+    env = {k: v for k, v in os.environ.items() if k != "ENV"}
     subprocess.check_call(
         ["/opt/python-venv/bin/python", "-c", src],
-        env={**os.environ},
+        env=env,
         timeout=30,
     )
 
