@@ -207,9 +207,7 @@ pub mod prelude {
         RetryPolicy, Task, TaskContext, TaskContextBuilder, TaskInfo, Value, execute,
         execute_blocking, execute_in_background,
     };
-    pub use crate::database::{
-        AclDb, DatabaseConnection, DeleteDb, IngestDb, RoleDb, SearchHistoryDb, TenantDb, UserDb,
-    };
+    pub use crate::database::{AclDb, DatabaseConnection, DeleteDb, IngestDb, SearchHistoryDb};
     pub use crate::graph::GraphDBTrait;
     pub use crate::llm::Llm;
     pub use crate::models::{Data, DataInput, Dataset};

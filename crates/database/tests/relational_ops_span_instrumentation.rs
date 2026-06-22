@@ -11,9 +11,15 @@
 //! used for the test backend).
 #![cfg(feature = "sqlite")]
 
+// `RoleDb`/`TenantDb`/`UserDb` moved to the closed `cognee-access-control`
+// crate as part of T2-move (oss-split-plan §4 S2). The smoke tests that
+// asserted spans for their direct-DB impls (`role_list_roles_in_tenant_*`,
+// `tenant_list_tenants_for_user_*`, `user_list_users_*`,
+// `acl_authorized_dataset_ids_*`) moved with them. The OSS surface here
+// retains spans for the remaining ops modules only.
 use cognee_database::{
-    AclDb, CostByModelRow, DatabaseConnection, NotebookDb, RoleDb, SearchHistoryDb,
-    SessionLifecycleDb, TenantDb, UserDb, connect, initialize, ops, seed_tutorials_if_first_call,
+    CostByModelRow, DatabaseConnection, NotebookDb, SearchHistoryDb, SessionLifecycleDb, connect,
+    initialize, ops, seed_tutorials_if_first_call,
 };
 use cognee_test_utils::{CapturedSpan, SpanCapture};
 use uuid::Uuid;
@@ -35,23 +41,11 @@ fn assert_relational_span(spans: &[CapturedSpan], expected: &str) {
     );
 }
 
-// ─── ops/acl.rs ──────────────────────────────────────────────────────────────
-
-#[tokio::test]
-async fn acl_authorized_dataset_ids_emits_span() {
-    let capture = SpanCapture::install();
-    let db = make_db().await;
-    let principal = Uuid::new_v4();
-
-    // Read path: empty result is fine and does not require seeding
-    // permissions.
-    let _ = ops::acl::authorized_dataset_ids(&db, principal, "read").await;
-
-    assert_relational_span(
-        &capture.spans(),
-        "cognee.db.relational.acl.authorized_dataset_ids",
-    );
-}
+// ─── ops/acl.rs: direct-DB span coverage moved to the closed
+//     cognee-access-control crate's tests (T2-move). The trait-only
+//     helper `grant_all_permissions_on_dataset_via_trait` retains no
+//     own span (it wraps trait methods whose spans are emitted by the
+//     concrete impl).
 
 // ─── ops/checkpoint.rs ───────────────────────────────────────────────────────
 
@@ -140,20 +134,7 @@ async fn pipeline_runs_get_pipeline_run_emits_span() {
     );
 }
 
-// ─── ops/role.rs (RoleDb trait impl) ─────────────────────────────────────────
-
-#[tokio::test]
-async fn role_list_roles_in_tenant_emits_span() {
-    let capture = SpanCapture::install();
-    let db = make_db().await;
-
-    let _ = RoleDb::list_roles_in_tenant(&db, Uuid::new_v4()).await;
-
-    assert_relational_span(
-        &capture.spans(),
-        "cognee.db.relational.role.list_roles_in_tenant",
-    );
-}
+// ─── ops/role.rs: moved to cognee-access-control (T2-move).
 
 // ─── ops/search_history.rs ───────────────────────────────────────────────────
 
@@ -207,20 +188,7 @@ async fn task_runs_update_task_run_status_emits_span() {
     );
 }
 
-// ─── ops/tenant.rs (TenantDb trait impl) ─────────────────────────────────────
-
-#[tokio::test]
-async fn tenant_list_tenants_for_user_emits_span() {
-    let capture = SpanCapture::install();
-    let db = make_db().await;
-
-    let _ = TenantDb::list_tenants_for_user(&db, Uuid::new_v4()).await;
-
-    assert_relational_span(
-        &capture.spans(),
-        "cognee.db.relational.tenant.list_tenants_for_user",
-    );
-}
+// ─── ops/tenant.rs: moved to cognee-access-control (T2-move).
 
 // ─── ops/tutorial_seeder.rs ──────────────────────────────────────────────────
 
@@ -247,22 +215,12 @@ async fn tutorial_seeder_emits_span() {
     );
 }
 
-// ─── ops/user.rs (UserDb trait impl) ─────────────────────────────────────────
-
-#[tokio::test]
-async fn user_list_users_emits_span() {
-    let capture = SpanCapture::install();
-    let db = make_db().await;
-
-    let _ = UserDb::list_users(&db, None).await;
-
-    assert_relational_span(&capture.spans(), "cognee.db.relational.user.list_users");
-}
+// ─── ops/user.rs: moved to cognee-access-control (T2-move).
 
 // ─── compile-time export sanity ──────────────────────────────────────────────
 
 #[allow(dead_code)]
 fn _exports_compile(_db: &DatabaseConnection, _user: Uuid, _ds: Uuid, _perm: &str) {
-    // Touch the `AclDb` trait so the import is recognised as used.
-    let _: &dyn AclDb = _db;
+    // Touch a remaining OSS trait so the import is recognised as used.
+    let _: &dyn NotebookDb = _db;
 }

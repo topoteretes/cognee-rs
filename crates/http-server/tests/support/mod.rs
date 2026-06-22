@@ -1,3 +1,9 @@
+// cognee-http-server is temporarily gated to an empty crate on the
+// oss-split branch (T2-move §4 S2 — see `src/lib.rs`). Every
+// integration test file in this directory imports from
+// `cognee_http_server` so they all gate together. T3 re-homes the
+// affected routers + DB-backed wiring inside `cognee-cloud-rust`.
+#![cfg(any())]
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,

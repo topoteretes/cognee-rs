@@ -1,5 +1,26 @@
 //! Cognee HTTP server library.
 //!
+//! TEMPORARILY DISABLED for the OSS-side `oss-split` branch.
+//!
+//! T2-move pulled the auth-table-backed repositories (`UserDb`,
+//! `RoleDb`, `TenantDb`, `SeaOrmUserAuthRepository`,
+//! `SeaOrmApiKeyRepository`, `SeaOrmPermissionsRepository`), the
+//! `cognee_database::auth::*` types, and the auth entity definitions
+//! into the closed `cognee-access-control` crate. The OSS HTTP server
+//! consumed all of those across `state`, `wiring`, `components`,
+//! `permissions`, `auth/*`, and most routers — gating each file
+//! individually would change ~40+ source files. Instead the entire
+//! crate is gated off with `#![cfg(any())]` (an always-false cfg —
+//! identical to the orchestration recipe in
+//! oss-split-plan §4 S2 step 14) until T3 re-homes the auth router
+//! family + DB-backed wiring inside `cognee-cloud-rust`'s own HTTP
+//! server crate.
+//!
+//! While disabled, the crate compiles to an empty library; any external
+//! consumer that glob-re-exports it (currently only
+//! `cognee-lib::http`) sees no public items but still compiles.
+#![cfg(any())]
+//!
 //! Provides `build_router` (assembles the `axum::Router` with all middleware and
 //! sub-routers) and `run` (binds a TCP listener and drives `axum::serve`).
 //!

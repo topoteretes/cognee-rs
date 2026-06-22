@@ -1,12 +1,10 @@
 //! Relational metadata persistence (SeaORM/SQLite) for ingestion, search history, and deletion.
 
-pub mod auth;
 mod connection;
 mod conversions;
 pub mod entities;
 pub mod migrator;
 pub mod ops;
-pub mod permissions;
 pub mod pipelines;
 pub mod sync;
 mod traits;
@@ -18,10 +16,6 @@ pub use ops::tutorial_seeder::{
     TUTORIAL_BASICS_ID, TUTORIAL_PYTHON_DEV_ID, seed_tutorials_if_first_call,
 };
 
-pub use auth::{
-    ActiveUserWithApiKeyCount, ApiKey, ApiKeyRepository, AuthUser, CreateUserPayload,
-    SeaOrmApiKeyRepository, SeaOrmUserAuthRepository, UpdateUserPayload, UserAuthRepository,
-};
 pub use connection::{connect, initialize};
 
 /// Map the active SeaORM backend to a `cognee.db.system` string
@@ -49,11 +43,17 @@ pub use sync::{
 };
 pub use traits::{
     AclDb, CostByModelRow, DatasetConfigDb, DatasetConfiguration, DatasetConfigurationPatch,
-    DeleteDb, IngestDb, Notebook, NotebookDb, NotebookUpdatePatch, RoleDb, SearchHistoryDb,
+    DeleteDb, IngestDb, Notebook, NotebookDb, NotebookUpdatePatch, SearchHistoryDb,
     SessionLifecycleDb, SessionListFilters, SessionListPage, SessionRowWithStatus, SessionStats,
-    TenantDb, UserDb,
 };
 pub use types::{
     DatabaseError, GraphEdge, GraphMetrics, GraphNode, PipelineRun, PipelineRunStatus,
     SearchHistoryEntry, SearchHistoryEntryType, TaskRun,
 };
+
+// The `auth`, `permissions`, `UserDb`/`RoleDb`/`TenantDb`,
+// `SeaOrmUserAuthRepository`, `SeaOrmApiKeyRepository`, `ApiKey`, `AuthUser`,
+// `CreateUserPayload`, `UpdateUserPayload`, `ActiveUserWithApiKeyCount` items
+// moved to the closed `cognee-access-control` crate as part of T2-move
+// (oss-split-plan §4 S2). The `types` module deliberately remains private —
+// closed callers reach `DatabaseError` via the top-level re-export above.

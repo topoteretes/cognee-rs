@@ -196,6 +196,13 @@ async fn migration_preserves_existing_data_pg() {
 
 #[tokio::test]
 async fn baseline_creates_full_table_set_sqlite() {
+    // Auth tables (principals, permissions, acls, tenants, users, roles,
+    // user_tenants, user_roles, user_api_key, role/user/tenant_default_permissions,
+    // principal_configuration) moved to the closed `cognee-access-control`
+    // migration as part of T2-move (oss-split-plan §4 S2). The OSS baseline
+    // now creates only the 17 non-auth tables. The closed Migrator composes
+    // OSS core + auth migrations and is exercised in
+    // `cognee-cloud-rust::cognee-access-control` integration tests.
     let db = connect("sqlite::memory:").await.expect("connect");
     initialize(&db).await.expect("initialize");
     let tables = table_names(&db).await;
@@ -210,20 +217,7 @@ async fn baseline_creates_full_table_set_sqlite() {
         "pipeline_runs",
         "task_runs",
         "graph_metrics",
-        "principals",
-        "permissions",
-        "acls",
-        "tenants",
-        "users",
-        "roles",
-        "user_tenants",
-        "user_roles",
         "graph_sync_checkpoints",
-        "user_api_key",
-        "role_default_permissions",
-        "user_default_permissions",
-        "tenant_default_permissions",
-        "principal_configuration",
         "sync_operations",
         "notebooks",
         "pipeline_run_payload_fields",
@@ -236,24 +230,27 @@ async fn baseline_creates_full_table_set_sqlite() {
             "missing table {t}: {tables:?}"
         );
     }
-    // Seed parity: 4 permissions must exist.
-    let perms = db
-        .query_all(sea_orm::Statement::from_string(
-            db.get_database_backend(),
-            "SELECT name FROM permissions".to_string(),
-        ))
-        .await
-        .expect("query permissions");
-    assert_eq!(perms.len(), 4, "expected 4 seeded permissions");
-    // Default user must exist.
-    let users = db
-        .query_all(sea_orm::Statement::from_string(
-            db.get_database_backend(),
-            "SELECT id FROM users WHERE id = '00000000000000000000000000000000'".to_string(),
-        ))
-        .await
-        .expect("query default user");
-    assert_eq!(users.len(), 1, "default user seed row missing");
+    // The OSS migrator must NOT create any of the moved auth tables.
+    for t in [
+        "principals",
+        "permissions",
+        "acls",
+        "tenants",
+        "users",
+        "roles",
+        "user_tenants",
+        "user_roles",
+        "user_api_key",
+        "role_default_permissions",
+        "user_default_permissions",
+        "tenant_default_permissions",
+        "principal_configuration",
+    ] {
+        assert!(
+            !tables.iter().any(|x| x == t),
+            "OSS migrator unexpectedly created moved auth table {t}: {tables:?}"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------

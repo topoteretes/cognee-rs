@@ -11,7 +11,7 @@ use serde_json::json;
 use uuid::Uuid;
 
 use crate::conversions::{domain_status_to_entity, entity_status_to_domain};
-use crate::entities::{dataset, pipeline_run, pipeline_run_payload_field, user};
+use crate::entities::{dataset, pipeline_run, pipeline_run_payload_field};
 use crate::types::{DatabaseError, PipelineRun, PipelineRunStatus};
 use crate::uuid_hex;
 
@@ -134,9 +134,13 @@ impl PipelineRunRepository for SeaOrmPipelineRunRepository {
         use sea_orm::JoinType;
 
         // SeaORM JOIN — uses the relationships defined on the entities. We
-        // perform a single LEFT JOIN to `datasets` and a second LEFT JOIN to
-        // `users` keyed on `datasets.owner_id`. Orphaned runs (dataset deleted)
-        // surface with NULL columns.
+        // perform a single LEFT JOIN to `datasets`. Owner-email attribution
+        // requires the `users` table which now lives in the closed
+        // `cognee-access-control` crate; OSS callers receive `owner_email =
+        // None` and are expected to resolve emails out-of-band (or via the
+        // closed `cognee-access-control::auth::UserAuthRepository`). The
+        // dataset/owner_id columns continue to flow through this query so
+        // downstream UIs can render attribution without the email.
         let mut query = pipeline_run::Entity::find()
             .select_only()
             .column(pipeline_run::Column::Id)
@@ -148,15 +152,7 @@ impl PipelineRunRepository for SeaOrmPipelineRunRepository {
             .column(pipeline_run::Column::DatasetId)
             .column_as(dataset::Column::Name, "dataset_name")
             .column_as(dataset::Column::OwnerId, "dataset_owner_id")
-            .column_as(user::Column::Email, "owner_email")
             .join(JoinType::LeftJoin, pipeline_run::Relation::Dataset.def())
-            .join(
-                JoinType::LeftJoin,
-                dataset::Entity::belongs_to(user::Entity)
-                    .from(dataset::Column::OwnerId)
-                    .to(user::Column::Id)
-                    .into(),
-            )
             .order_by_desc(pipeline_run::Column::CreatedAt)
             .limit(u64::from(limit));
 
@@ -164,9 +160,6 @@ impl PipelineRunRepository for SeaOrmPipelineRunRepository {
             query = query.filter(pipeline_run::Column::DatasetId.eq(uuid_hex::to_hex(did)));
         }
 
-        // Build the row tuple manually — SeaORM's JOIN needs `into_tuple` /
-        // `into_model` to surface the joined columns. We use `into_tuple`
-        // mapped to a positional vector of optional strings/types.
         let raw = query
             .into_tuple::<(
                 String,
@@ -175,7 +168,6 @@ impl PipelineRunRepository for SeaOrmPipelineRunRepository {
                 String,
                 String,
                 String,
-                Option<String>,
                 Option<String>,
                 Option<String>,
                 Option<String>,
@@ -197,7 +189,6 @@ impl PipelineRunRepository for SeaOrmPipelineRunRepository {
             dataset_id_hex,
             dataset_name,
             owner_id_hex,
-            owner_email,
         ) in raw
         {
             // `dataset_id` is nullable post-08-01 — the column may genuinely
@@ -233,7 +224,7 @@ impl PipelineRunRepository for SeaOrmPipelineRunRepository {
                 dataset_id: dataset_id_field,
                 dataset_name: dataset_name_field,
                 owner_id: owner_uuid,
-                owner_email,
+                owner_email: None,
             });
         }
         Ok(rows)

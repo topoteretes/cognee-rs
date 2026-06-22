@@ -1,3 +1,11 @@
+// The `acls`, `principals`, and `permissions` tables moved to the closed
+// `cognee-access-control` crate's `Migrator` as part of T2-move
+// (oss-split-plan §4 S2). These integration tests still exercise the
+// public `ops::acl::*` standalone functions, but they require the auth
+// schema to exist — which OSS migrations no longer provide. The whole
+// file is gated off until T3 re-homes it under
+// `cognee-cloud-rust::cognee-access-control` tests.
+#![cfg(any())]
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,

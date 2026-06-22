@@ -1,8 +1,6 @@
 use async_trait::async_trait;
-use sea_orm::DatabaseConnection;
 use uuid::Uuid;
 
-use crate::ops::acl;
 use crate::types::DatabaseError;
 
 /// Access control list database trait.
@@ -10,6 +8,11 @@ use crate::types::DatabaseError;
 /// Provides methods to check, grant, and revoke permissions on datasets
 /// for principals (users, roles, tenants). All implementations must be
 /// thread-safe for async multi-threaded usage.
+///
+/// The blanket `impl AclDb for DatabaseConnection` moved to the closed
+/// `cognee-access-control` crate as part of T2-move (oss-split-plan §4
+/// S2). OSS callers wire ACL through `MockAclDb` (tests) or through the
+/// closed `AccessControl` newtype (production cloud builds).
 #[async_trait]
 pub trait AclDb: Send + Sync {
     /// Check if a principal has a specific permission on a dataset.
@@ -74,67 +77,4 @@ pub trait AclDb: Send + Sync {
         user_id: Uuid,
         permission_name: &str,
     ) -> Result<Vec<Uuid>, DatabaseError>;
-}
-
-#[async_trait]
-impl AclDb for DatabaseConnection {
-    async fn has_permission(
-        &self,
-        principal_id: Uuid,
-        dataset_id: Uuid,
-        permission_name: &str,
-    ) -> Result<bool, DatabaseError> {
-        acl::has_permission(self, principal_id, dataset_id, permission_name).await
-    }
-
-    async fn authorized_dataset_ids(
-        &self,
-        principal_id: Uuid,
-        permission_name: &str,
-    ) -> Result<Vec<Uuid>, DatabaseError> {
-        acl::authorized_dataset_ids(self, principal_id, permission_name).await
-    }
-
-    async fn grant_permission(
-        &self,
-        principal_id: Uuid,
-        dataset_id: Uuid,
-        permission_name: &str,
-    ) -> Result<(), DatabaseError> {
-        acl::grant_permission(self, principal_id, dataset_id, permission_name).await
-    }
-
-    async fn revoke_permission(
-        &self,
-        principal_id: Uuid,
-        dataset_id: Uuid,
-        permission_name: &str,
-    ) -> Result<(), DatabaseError> {
-        acl::revoke_permission(self, principal_id, dataset_id, permission_name).await
-    }
-
-    async fn ensure_principal(
-        &self,
-        principal_id: Uuid,
-        principal_type: &str,
-    ) -> Result<(), DatabaseError> {
-        acl::ensure_principal(self, principal_id, principal_type).await
-    }
-
-    async fn has_permission_with_roles(
-        &self,
-        user_id: Uuid,
-        dataset_id: Uuid,
-        permission_name: &str,
-    ) -> Result<bool, DatabaseError> {
-        acl::has_permission_with_roles(self, user_id, dataset_id, permission_name).await
-    }
-
-    async fn authorized_dataset_ids_with_roles(
-        &self,
-        user_id: Uuid,
-        permission_name: &str,
-    ) -> Result<Vec<Uuid>, DatabaseError> {
-        acl::authorized_dataset_ids_with_roles(self, user_id, permission_name).await
-    }
 }

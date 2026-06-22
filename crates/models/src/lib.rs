@@ -17,10 +17,8 @@ pub mod has_datapoint;
 pub mod memory;
 /// Permission helpers.
 pub mod permission;
-mod role;
 /// Temporal event and timestamp types for the cognify pipeline.
 pub mod temporal_event;
-mod tenant;
 mod triplet;
 mod user;
 
@@ -39,8 +37,9 @@ pub use entity_type::EntityType;
 pub use has_datapoint::HasDataPoint;
 pub use memory::{FeedbackEntry, MemoryEntry, QAEntry, TraceEntry};
 pub use permission::permissions;
-pub use role::Role;
 pub use temporal_event::*;
-pub use tenant::Tenant;
 pub use triplet::Triplet;
 pub use user::User;
+
+// `Role` and `Tenant` moved to the closed `cognee-access-control::models`
+// module as part of T2-move (oss-split-plan §4 S2).

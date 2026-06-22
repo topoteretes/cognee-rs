@@ -1,3 +1,11 @@
+// The auth tables (`users`, `principals`, `user_api_key`) plus the
+// `cognee_database::auth::*` repositories moved to the closed
+// `cognee-access-control` crate (T2-move §4 S2). The OSS
+// `list_recent_with_attribution` projection no longer joins `users`, so
+// `owner_email` is always `None` on the OSS side. These tests verified
+// the now-removed join; T3 will re-home an updated version that
+// exercises the closed-side repository.
+#![cfg(any())]
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,

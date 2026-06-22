@@ -1,3 +1,8 @@
+// `cognee_database::permissions::SeaOrmPermissionsRepository` moved to
+// the closed `cognee-access-control` crate as part of T2-move
+// (oss-split-plan §4 S2). These integration tests followed it. T3 will
+// re-home them under `cognee-cloud-rust::cognee-access-control` tests.
+#![cfg(any())]
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -7,8 +12,6 @@
 //!
 //! Covers the 8-step `user_can` resolution per `tenants.md §5.1` plus the
 //! repository CRUD surface from `tenants.md §9`.
-
-#![cfg(feature = "sqlite")]
 
 use std::sync::Arc;
 
