@@ -19,7 +19,7 @@ use cognee_lib::cognify::{ChunkStrategy, CognifyConfig};
 use cognee_lib::core::{CpuPool, RayonThreadPool};
 use cognee_lib::database::{
     CheckpointStore, DatabaseConnection, DeleteDb, IngestDb, PipelineRunRepository,
-    SeaOrmCheckpointStore, SeaOrmPipelineRunRepository, SearchHistoryDb, UserDb,
+    SeaOrmCheckpointStore, SeaOrmPipelineRunRepository, SearchHistoryDb,
 };
 use cognee_lib::delete::DeleteService;
 use cognee_lib::embedding::EmbeddingEngine;
@@ -70,10 +70,11 @@ impl CogneeServices {
     /// Build the full bundle from a `ComponentManager`, returning the bundle and
     /// the resolved owner id.
     ///
-    /// Owner id uses **Python default-user semantics**: it is the id of the
-    /// `User` row returned by `get_or_create_default_user(db, default_user_email)`,
-    /// i.e. `uuid5(NAMESPACE_OID, default_user_email)`. The call is idempotent, so
-    /// repeated warms return the same id and the same row.
+    /// Owner id is the OSS default user materialised by
+    /// `get_or_create_default_user(&settings)`: it is the parsed
+    /// `settings.default_user_id` UUID. The closed cloud build replaces this
+    /// helper with a DB-backed equivalent that upserts a row in the `users`
+    /// table; the call shape is identical, so this assembly path is unchanged.
     ///
     /// The LLM is resolved **strictly** here (the simplest correct v1 per the
     /// plan): callers that need keyless warm must set a non-empty dummy
@@ -89,13 +90,19 @@ impl CogneeServices {
         let llm = cm.llm().await?;
 
         // --- 2. Resolve owner id (Python default-user semantics). ---
-        let default_user_email = cm.settings().default_user_email.clone();
-        let user = get_or_create_default_user(
-            Arc::clone(&database).as_ref() as &dyn UserDb,
-            &default_user_email,
-        )
-        .await
-        .map_err(|e| SdkError::UserBootstrap(e.to_string()))?;
+        // Snapshot the email under the read guard, then drop the guard
+        // before the `.await` — `RwLockReadGuard` from `std::sync` is
+        // `!Send`, and `CogneeServices::build` is awaited from PyO3
+        // bindings that require `Send` futures.
+        //
+        // owner_id = uuid5(NAMESPACE_OID, email) — must match Python.
+        let default_user_email = {
+            let settings = cm.settings();
+            settings.default_user_email.clone()
+        };
+        let user = get_or_create_default_user(&default_user_email)
+            .await
+            .map_err(|e| SdkError::UserBootstrap(e.to_string()))?;
         let owner_id = user.id;
 
         // --- 3. Derived services (mirrors the CLI command builders). ---

@@ -467,8 +467,10 @@ mod tests {
             .await
             .expect("create_dataset");
 
-        // Grant read permission to owner only (via ACL).
-        let acl: Arc<dyn AclDb> = db.clone() as Arc<dyn AclDb>;
+        // Grant read permission to owner only (via ACL). The OSS test path
+        // uses `MockAclDb` because the closed `cognee-access-control` crate
+        // (which provides `AclDb for DatabaseConnection`) is not present.
+        let acl: Arc<dyn AclDb> = Arc::new(cognee_test_utils::MockAclDb::new());
         acl.ensure_principal(owner_id, "user")
             .await
             .expect("ensure_principal");
@@ -655,7 +657,7 @@ mod tests {
         let db = fresh_db().await;
         let owner_id = Uuid::new_v4();
         let parent_id = Uuid::new_v4();
-        let acl: Arc<dyn AclDb> = db.clone() as Arc<dyn AclDb>;
+        let acl: Arc<dyn AclDb> = Arc::new(cognee_test_utils::MockAclDb::new());
         let mgr = DatasetManager::new(db.clone() as Arc<dyn DatasetDb>).with_acl(acl.clone());
 
         let ds = mgr
@@ -680,7 +682,7 @@ mod tests {
     async fn test_create_authorized_dataset_parent_equals_owner_no_duplicate() {
         let db = fresh_db().await;
         let owner_id = Uuid::new_v4();
-        let acl: Arc<dyn AclDb> = db.clone() as Arc<dyn AclDb>;
+        let acl: Arc<dyn AclDb> = Arc::new(cognee_test_utils::MockAclDb::new());
         let mgr = DatasetManager::new(db.clone() as Arc<dyn DatasetDb>).with_acl(acl.clone());
 
         // parent_user_id == owner_id: must succeed (idempotent) and grant once.

@@ -522,6 +522,7 @@ mod tests {
 
         Arc::new(ComponentHandles {
             database: db,
+            acl_db: None,
             storage: storage_handle,
             delete_service,
             cloud_client: None,

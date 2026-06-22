@@ -16,7 +16,7 @@ use axum::{
 use cognee_cognify::{
     ChunkStrategy, CognifyConfig, MemifyConfig, cognify as run_cognify, run_memify,
 };
-use cognee_database::{IngestDb, NoopPipelineRunRepository, SessionLifecycleDb, UserDb};
+use cognee_database::{IngestDb, NoopPipelineRunRepository, SessionLifecycleDb};
 use cognee_ingestion::{AddParams, AddPipeline, generate_dataset_id};
 use cognee_models::memory::{FeedbackEntry, MemoryEntry, QAEntry, TraceEntry};
 use cognee_models::{Data, DataInput};
@@ -272,16 +272,18 @@ pub async fn post_remember(
     // four-state `pipeline_runs` trail through `ScopedRunWatcher`.
     // Pass a no-op repo so `AddPipeline`'s inner `DbPipelineWatcher`
     // does not double-write.
-    let pipeline = AddPipeline::new(
+    let mut pipeline = AddPipeline::new(
         Arc::clone(&storage_arc),
         db_arc.clone() as Arc<dyn cognee_database::IngestDb>,
     )
-    .with_acl_db(db_arc.clone() as Arc<dyn cognee_database::AclDb>)
     .with_thread_pool(Arc::clone(&thread_pool))
     .with_graph_db(Arc::clone(&graph_db))
     .with_vector_db(Arc::clone(&vector_db))
     .with_database(Arc::clone(&db_arc))
     .with_pipeline_run_repo(NoopPipelineRunRepository::arc());
+    if let Some(acl) = components.acl_db.clone() {
+        pipeline = pipeline.with_acl_db(acl);
+    }
 
     // Run add synchronously — errors map to 409 {"error": "An error occurred
     // during remember."} per Python parity (not {"detail": "..."}).
@@ -474,13 +476,9 @@ async fn run_remember_cognify_memify(
         .clone()
         .unwrap_or_else(|| Arc::new(NoOpOntologyResolver::new()));
 
-    // Best-effort user_email lookup for provenance stamping (matches CLI).
-    let user_email = database
-        .get_user(user.id)
-        .await
-        .ok()
-        .flatten()
-        .map(|u| u.email);
+    // OSS build has no DB-backed user lookup (the `users` table is owned by
+    // the closed cloud build), so `user_email` always falls back to `None`.
+    let user_email: Option<String> = None;
 
     // Gap 08-07: the outer `dispatch_pipeline` already wires the
     // four-state `pipeline_runs` trail. Hand the inner cognify/memify a
@@ -1060,7 +1058,7 @@ mod tests {
             Arc::clone(&storage) as Arc<dyn StorageTrait>,
             Arc::clone(&database) as Arc<dyn IngestDb>,
         )
-        .with_acl_db(Arc::clone(&database) as Arc<dyn AclDb>)
+        .with_acl_db(Arc::new(cognee_test_utils::MockAclDb::new()) as Arc<dyn AclDb>)
         .with_thread_pool(Arc::clone(&thread_pool) as Arc<dyn cognee_core::CpuPool>)
         .with_graph_db(Arc::clone(&graph_db) as Arc<dyn cognee_graph::GraphDBTrait>)
         .with_vector_db(Arc::clone(&vector_db) as Arc<dyn cognee_vector::VectorDB>)

@@ -15,7 +15,7 @@ use axum::{
     routing::{get, post},
 };
 use cognee_cognify::{ChunkStrategy, CognifyConfig, cognify as run_cognify};
-use cognee_database::{IngestDb, NoopPipelineRunRepository, UserDb, ops as db_ops};
+use cognee_database::{IngestDb, NoopPipelineRunRepository, ops as db_ops};
 use cognee_ontology::{
     NoOpOntologyResolver, OntologyFileInput, OntologyResolver, RdfLibOntologyResolver,
 };
@@ -436,13 +436,10 @@ async fn run_real_cognify(
             CognifyDispatchError(format!("failed to load data for dataset {dataset_id}: {e}"))
         })?;
 
-    // Best-effort user_email lookup for provenance stamping (matches CLI).
-    let user_email = database
-        .get_user(user.id)
-        .await
-        .ok()
-        .flatten()
-        .map(|u| u.email);
+    // OSS build has no DB-backed user lookup (the `users` table is owned by
+    // the closed cloud build), so `user_email` always falls back to `None`.
+    // `cognify()` then uses `user_id.to_string()` as the provenance stamp.
+    let user_email: Option<String> = None;
 
     // Gap 08-07: the outer `dispatch_pipeline` already wires
     // `DefaultPipelineRunRegistry` (backed by `SeaOrmPipelineRunRepository`)

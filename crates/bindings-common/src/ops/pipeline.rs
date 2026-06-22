@@ -25,13 +25,12 @@
 //! hand-built via the shared [`crate::wire::cognify_result_json`] helper.
 
 use std::collections::HashSet;
-use std::sync::Arc;
 
 use serde_json::json;
 use uuid::Uuid;
 
 use cognee_lib::cognify::cognify as cognee_lib_cognify;
-use cognee_lib::database::{UserDb, ops};
+use cognee_lib::database::ops;
 use cognee_lib::models::{Data, Dataset};
 
 use crate::wire::{cognify_result_json, marshal_inputs};
@@ -159,15 +158,14 @@ pub async fn resolve_dataset(
 }
 
 /// Best-effort `User.email` lookup for cognify provenance stamping.
-pub async fn best_effort_user_email(svc: &CogneeServices, owner_id: Uuid) -> Option<String> {
-    let db = Arc::clone(&svc.database);
-    let user_db = db.as_ref() as &dyn UserDb;
-    user_db
-        .get_user(owner_id)
-        .await
-        .ok()
-        .flatten()
-        .map(|u| u.email)
+///
+/// OSS build: the `users` table is owned by the closed cloud build, so this
+/// always returns `None`. `cognify()` then uses `user_id.to_string()` as the
+/// provenance stamp. The signature is preserved so call sites remain stable
+/// when the closed build is swapped in (which will re-introduce the
+/// DB-backed lookup).
+pub async fn best_effort_user_email(_svc: &CogneeServices, _owner_id: Uuid) -> Option<String> {
+    None
 }
 
 /// Shared cognify call: build the per-call config and invoke the 15-arg

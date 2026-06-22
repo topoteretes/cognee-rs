@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use cognee_cognify::{CognifyConfig, CognifyResult, cognify};
 use cognee_database::{
-    AclDb, DatabaseConnection, PipelineRunRepository, SeaOrmPipelineRunRepository, UserDb,
+    AclDb, DatabaseConnection, PipelineRunRepository, SeaOrmPipelineRunRepository,
 };
 use cognee_delete::{DeleteMode, DeleteRequest, DeleteResult, DeleteScope, DeleteService};
 use cognee_embedding::EmbeddingEngine;
@@ -123,17 +123,11 @@ pub async fn update(
 
     // ── Step 3: Re-cognify (if data was added) ───────────────────────────────
     let cognify_result = if !data_items.is_empty() {
-        // Best-effort lookup of `User.email` for provenance stamping; falls
-        // back to `user_id.to_string()` inside `cognify()` when missing.
-        let user_email = match db.as_ref() {
-            Some(database) => database
-                .get_user(owner_id)
-                .await
-                .ok()
-                .flatten()
-                .map(|u| u.email),
-            None => None,
-        };
+        // OSS build has no DB-backed user lookup (the `users` table is owned
+        // by the closed cloud build), so we always fall back to `None`.
+        // `cognify()` then uses `user_id.to_string()` as the provenance
+        // stamp.
+        let user_email: Option<String> = None;
 
         let database = db.clone().ok_or_else(|| {
             ApiError::Cognify("cognify requires a DatabaseConnection".to_string())

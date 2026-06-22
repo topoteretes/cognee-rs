@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use cognee_lib::cognify::{ChunkStrategy, CognifyConfig, cognify};
 use cognee_lib::database::{
-    DatabaseConnection, PipelineRunRepository, SeaOrmPipelineRunRepository, UserDb, ops,
+    DatabaseConnection, PipelineRunRepository, SeaOrmPipelineRunRepository, ops,
 };
 use cognee_lib::ontology::{NoOpOntologyResolver, OntologyResolver, RdfLibOntologyResolver};
 use cognee_lib::{ComponentManager, PipelineContext};
@@ -151,14 +151,11 @@ pub fn run(args: CognifyArgs, cm: Arc<ComponentManager>) -> Result<(), CliError>
                 data_items.len()
             );
 
-            // Best-effort lookup of `User.email` for provenance stamping;
-            // falls back to `user_id.to_string()` inside `cognify()`.
-            let user_email = database
-                .get_user(owner_id)
-                .await
-                .ok()
-                .flatten()
-                .map(|u| u.email);
+            // OSS build has no DB-backed user lookup (the `users` table is
+            // owned by the closed cloud build), so `user_email` always falls
+            // back to `None`. `cognify()` then uses `user_id.to_string()` as
+            // the provenance stamp.
+            let user_email: Option<String> = None;
 
             let thread_pool: Arc<dyn cognee_lib::core::CpuPool> = Arc::new(
                 cognee_lib::core::RayonThreadPool::with_default_threads().map_err(|e| {

@@ -176,6 +176,7 @@ async fn post_remember_blocking_runs_full_pipeline() {
 
     let handles = Arc::new(ComponentHandles {
         database: Arc::clone(&database),
+        acl_db: None,
         storage: Arc::clone(&storage),
         delete_service,
         cloud_client: None,

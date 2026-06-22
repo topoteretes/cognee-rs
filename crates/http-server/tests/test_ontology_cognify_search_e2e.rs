@@ -181,6 +181,7 @@ async fn upload_cognify_search_with_ontology_key_and_unknown_key_negative() {
 
     let handles = Arc::new(ComponentHandles {
         database: Arc::clone(&database),
+        acl_db: None,
         storage,
         delete_service,
         cloud_client: None,

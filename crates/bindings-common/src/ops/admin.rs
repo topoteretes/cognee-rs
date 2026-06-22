@@ -22,7 +22,7 @@ use cognee_lib::api::notebooks::{
     create_notebook, delete_notebook, list_notebooks, update_notebook,
 };
 use cognee_lib::api::{reset_dataset_pipeline_run_status, reset_pipeline_run_status};
-use cognee_lib::database::{NotebookDb, NotebookUpdatePatch, UserDb};
+use cognee_lib::database::{NotebookDb, NotebookUpdatePatch};
 
 use crate::{HandleState, SdkError};
 
@@ -85,15 +85,16 @@ pub async fn run_reset_dataset_pipeline_run_status(
 pub async fn run_get_or_create_default_user(
     state: &HandleState,
 ) -> Result<serde_json::Value, SdkError> {
-    let email = state.cm.settings().default_user_email.clone();
-    let svc = state.services().await?;
-
-    let user =
-        get_or_create_default_user(Arc::clone(&svc.database).as_ref() as &dyn UserDb, &email)
-            .await
-            .map_err(|e| {
-                SdkError::UserBootstrap(format!("get_or_create_default_user failed: {e}"))
-            })?;
+    // Snapshot the email under the guard, drop the guard, then await.
+    // `RwLockReadGuard` from `std::sync` is `!Send` and would poison the
+    // `Send`-bounded futures the PyO3 / Neon bindings build on top of us.
+    let default_user_email = {
+        let settings = state.cm.settings();
+        settings.default_user_email.clone()
+    };
+    let user = get_or_create_default_user(&default_user_email)
+        .await
+        .map_err(|e| SdkError::UserBootstrap(format!("get_or_create_default_user failed: {e}")))?;
 
     serde_json::to_value(&user)
         .map_err(|e| SdkError::Runtime(format!("failed to serialize User: {e}")))

@@ -16,7 +16,7 @@ use axum::{
     routing::patch,
 };
 use cognee_cognify::{ChunkStrategy, CognifyConfig, cognify as run_cognify};
-use cognee_database::{AclDb, IngestDb, NoopPipelineRunRepository, UserDb, ops as db_ops};
+use cognee_database::{IngestDb, NoopPipelineRunRepository, ops as db_ops};
 use cognee_delete::{DeleteMode, DeleteRequest, DeleteScope};
 use cognee_ingestion::{AddParams, AddPipeline};
 use cognee_models::DataInput;
@@ -278,13 +278,15 @@ async fn run_update_pipeline(
     let storage = components.storage.clone();
     let database = components.database.clone();
 
-    let pipeline = AddPipeline::new(storage.clone(), database.clone() as Arc<dyn IngestDb>)
-        .with_acl_db(database.clone() as Arc<dyn AclDb>)
+    let mut pipeline = AddPipeline::new(storage.clone(), database.clone() as Arc<dyn IngestDb>)
         .with_thread_pool(thread_pool.clone())
         .with_graph_db(graph_db.clone())
         .with_vector_db(vector_db.clone())
         .with_database(database.clone())
         .with_pipeline_run_repo(NoopPipelineRunRepository::arc());
+    if let Some(acl) = components.acl_db.clone() {
+        pipeline = pipeline.with_acl_db(acl);
+    }
 
     let params = AddParams::default();
     pipeline
@@ -310,12 +312,9 @@ async fn run_update_pipeline(
         .await
         .map_err(|e| UpdateDispatchError(format!("get_dataset_data failed: {e}")))?;
 
-    let user_email = database
-        .get_user(user.id)
-        .await
-        .ok()
-        .flatten()
-        .map(|u| u.email);
+    // OSS build has no DB-backed user lookup (the `users` table is owned by
+    // the closed cloud build), so `user_email` always falls back to `None`.
+    let user_email: Option<String> = None;
 
     let mut cognify_config = CognifyConfig::default().with_chunk_strategy(ChunkStrategy::Paragraph);
     if let Some(ref t) = components.transcriber {

@@ -10,6 +10,7 @@
 use std::sync::Arc;
 
 use cognee_core::CpuPool;
+use cognee_database::AclDb;
 use cognee_database::SyncOperationRepository;
 use cognee_database::permissions::PermissionsRepository;
 use cognee_database::{CheckpointStore, DatabaseConnection};
@@ -32,8 +33,15 @@ use crate::notebook_runner::NotebookRunner;
 /// Obtained from `state.components()`.
 #[derive(Clone)]
 pub struct ComponentHandles {
-    /// SeaORM database connection (implements `IngestDb`, `DeleteDb`, `AclDb`).
+    /// SeaORM database connection (implements `IngestDb`, `DeleteDb`).
+    /// The `AclDb` implementation is provided by the closed
+    /// `cognee-access-control` crate and wired through [`Self::acl_db`].
     pub database: Arc<DatabaseConnection>,
+
+    /// Optional ACL backend. `None` in pure-OSS builds (which do not enforce
+    /// permissions). Wired by the closed cloud assembly to a newtype that
+    /// implements `AclDb` over the shared `DatabaseConnection`.
+    pub acl_db: Option<Arc<dyn AclDb>>,
 
     /// File storage backend.
     pub storage: Arc<dyn StorageTrait>,

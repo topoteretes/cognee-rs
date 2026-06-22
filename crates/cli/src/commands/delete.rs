@@ -3,10 +3,8 @@ use std::sync::Arc;
 
 use cognee_lib::PipelineContext;
 use cognee_lib::api::DatasetRef;
-use cognee_lib::database::{AclDb, IngestDb, PipelineRunRepository, SeaOrmPipelineRunRepository};
-use cognee_lib::delete::{
-    AuthorizedDeleteService, DeleteMode, DeleteRequest, DeleteScope, DeleteService,
-};
+use cognee_lib::database::{IngestDb, PipelineRunRepository, SeaOrmPipelineRunRepository};
+use cognee_lib::delete::{DeleteMode, DeleteRequest, DeleteScope, DeleteService};
 use tracing::{info, warn};
 use uuid::Uuid;
 
@@ -75,48 +73,29 @@ pub fn run(args: DeleteArgs, cm: Arc<cognee_lib::ComponentManager>) -> Result<()
         .with_pipeline_run_repo(pipeline_run_repo);
 
         if enforce_acl {
-            let acl_db: Arc<dyn AclDb> = database.clone();
-            let delete_db: Arc<dyn cognee_lib::database::DeleteDb> = database;
-            let auth_service = AuthorizedDeleteService::new(service, acl_db, delete_db);
-
-            let preview = auth_service
-                .preview(&request, owner_id)
-                .await
-                .map_err(|error| CliError::Runtime(format!("Delete preview failed: {error}")))?;
-            print_preview(&preview);
-
-            if dry_run {
-                return Ok(());
-            }
-            if !force {
-                confirm_deletion()?;
-            }
-
-            let result = auth_service
-                .execute(&request, owner_id)
-                .await
-                .map_err(|error| CliError::Runtime(format!("Delete execution failed: {error}")))?;
-            print_result(&result);
-        } else {
-            let preview = service
-                .preview(&request)
-                .await
-                .map_err(|error| CliError::Runtime(format!("Delete preview failed: {error}")))?;
-            print_preview(&preview);
-
-            if dry_run {
-                return Ok(());
-            }
-            if !force {
-                confirm_deletion()?;
-            }
-
-            let result = service
-                .execute(&request)
-                .await
-                .map_err(|error| CliError::Runtime(format!("Delete execution failed: {error}")))?;
-            print_result(&result);
+            return Err(CliError::Validation(
+                "--enforce-acl requires the closed cognee-cloud build".to_string(),
+            ));
         }
+
+        let preview = service
+            .preview(&request)
+            .await
+            .map_err(|error| CliError::Runtime(format!("Delete preview failed: {error}")))?;
+        print_preview(&preview);
+
+        if dry_run {
+            return Ok(());
+        }
+        if !force {
+            confirm_deletion()?;
+        }
+
+        let result = service
+            .execute(&request)
+            .await
+            .map_err(|error| CliError::Runtime(format!("Delete execution failed: {error}")))?;
+        print_result(&result);
 
         Ok(())
     })

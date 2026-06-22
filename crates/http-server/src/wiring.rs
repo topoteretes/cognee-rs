@@ -96,6 +96,7 @@ pub async fn wire_default_backends(
 
     Ok(ComponentHandles {
         database,
+        acl_db: None,
         storage,
         delete_service,
         cloud_client: None,

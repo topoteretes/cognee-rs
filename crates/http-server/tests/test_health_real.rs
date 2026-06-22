@@ -59,6 +59,7 @@ async fn build_real_handles() -> (Arc<ComponentHandles>, Arc<DatabaseConnection>
 
     let handles = Arc::new(ComponentHandles {
         database: Arc::clone(&db),
+        acl_db: None,
         storage,
         delete_service,
         cloud_client: None,
@@ -164,6 +165,7 @@ async fn real_checker_missing_graph_returns_503_on_detailed() {
 
     let handles = Arc::new(ComponentHandles {
         database: Arc::clone(&db),
+        acl_db: None,
         storage,
         delete_service,
         cloud_client: None,

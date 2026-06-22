@@ -254,6 +254,7 @@ async fn post_memify_blocking_indexes_triplets() {
 
     let handles = Arc::new(ComponentHandles {
         database: Arc::clone(&database),
+        acl_db: None,
         storage,
         delete_service,
         cloud_client: None,

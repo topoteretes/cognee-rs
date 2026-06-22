@@ -17,9 +17,7 @@ use cognee_lib::add::AddPipeline;
 use cognee_lib::api::prune::{PruneTarget, prune_data, prune_system};
 use cognee_lib::cognify::{ChunkStrategy, CognifyConfig, cognify};
 use cognee_lib::core::RayonThreadPool;
-use cognee_lib::database::{
-    IngestDb, PipelineRunRepository, SeaOrmPipelineRunRepository, UserDb, ops,
-};
+use cognee_lib::database::{IngestDb, PipelineRunRepository, SeaOrmPipelineRunRepository, ops};
 use cognee_lib::models::DataInput;
 use cognee_lib::ontology::{NoOpOntologyResolver, OntologyResolver};
 use cognee_lib::search::{
@@ -442,12 +440,9 @@ async fn phase_cognify(
         .await
         .map_err(|e| e.to_string())?;
 
-    let user_email = database
-        .get_user(owner_id)
-        .await
-        .ok()
-        .flatten()
-        .map(|u| u.email);
+    // OSS build has no DB-backed user lookup (the `users` table is owned by
+    // the closed cloud build), so `user_email` always falls back to `None`.
+    let user_email: Option<String> = None;
 
     let thread_pool: Arc<dyn cognee_lib::core::CpuPool> =
         Arc::new(RayonThreadPool::with_default_threads().map_err(|e| format!("thread pool: {e}"))?);

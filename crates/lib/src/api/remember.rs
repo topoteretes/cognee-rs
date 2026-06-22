@@ -13,7 +13,7 @@ use cognee_cognify::cognify;
 use cognee_cognify::{CognifyConfig, CognifyResult, MemifyConfig, MemifyResult, run_memify};
 use cognee_database::{
     CheckpointStore, DatabaseConnection, PipelineRunRepository, SeaOrmPipelineRunRepository,
-    SessionLifecycleDb, UserDb,
+    SessionLifecycleDb,
 };
 use cognee_embedding::EmbeddingEngine;
 use cognee_graph::GraphDBTrait;
@@ -353,18 +353,11 @@ async fn run_permanent_inner(
     // synthesize one per-call to preserve Python API parity.
     let pipeline_run_id = Uuid::new_v4();
 
-    // Look up the user's email for provenance stamping. Best-effort:
-    // failures degrade silently to `None` and `cognify()` falls back to
-    // `user_id.to_string()` (matches Python's unauthenticated-run behaviour).
-    let user_email = match db.as_ref() {
-        Some(database) => database
-            .get_user(owner_id)
-            .await
-            .ok()
-            .flatten()
-            .map(|u| u.email),
-        None => None,
-    };
+    // OSS build has no DB-backed user lookup (the `users` table is owned by
+    // the closed cloud build), so we always fall back to `None`. `cognify()`
+    // then uses `user_id.to_string()` as the provenance stamp, matching
+    // Python's unauthenticated-run behaviour.
+    let user_email: Option<String> = None;
 
     // Clone the optional DB handle so memify (which now requires it per
     // LIB-06 Decision 1) can still reach the relational connection after

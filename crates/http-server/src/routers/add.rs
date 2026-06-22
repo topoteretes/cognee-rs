@@ -11,7 +11,7 @@ use axum::{
     http::StatusCode,
     routing::post,
 };
-use cognee_database::{AclDb, IngestDb, NoopPipelineRunRepository};
+use cognee_database::{IngestDb, NoopPipelineRunRepository};
 use cognee_ingestion::{AddParams, AddPipeline};
 use cognee_models::DataInput;
 use serde_json::json;
@@ -261,13 +261,15 @@ pub async fn post_add(
     // `ScopedRunWatcher` via `DefaultPipelineRunRegistry` for the four-state
     // `pipeline_runs` trail. Hand `AddPipeline` a no-op repo so the inner
     // `DbPipelineWatcher` does not produce a second row-set.
-    let pipeline = AddPipeline::new(storage, db.clone() as Arc<dyn IngestDb>)
-        .with_acl_db(db.clone() as Arc<dyn AclDb>)
+    let mut pipeline = AddPipeline::new(storage, db.clone() as Arc<dyn IngestDb>)
         .with_thread_pool(thread_pool)
         .with_graph_db(graph_db)
         .with_vector_db(vector_db)
         .with_database(db.clone())
         .with_pipeline_run_repo(NoopPipelineRunRepository::arc());
+    if let Some(acl) = components.acl_db.clone() {
+        pipeline = pipeline.with_acl_db(acl);
+    }
 
     let params = AddParams {
         node_set: req.node_set.clone(),

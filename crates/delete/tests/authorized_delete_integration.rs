@@ -16,6 +16,7 @@ use cognee_delete::{
 };
 use cognee_models::{Data, Dataset};
 use cognee_storage::{MockStorage, StorageTrait};
+use cognee_test_utils::MockAclDb;
 use uuid::Uuid;
 
 // ---------------------------------------------------------------------------
@@ -23,12 +24,14 @@ use uuid::Uuid;
 // ---------------------------------------------------------------------------
 
 /// Create an in-memory SQLite database, run migrations, and return it
-/// alongside a `MockStorage`.
-async fn setup() -> (Arc<DatabaseConnection>, Arc<MockStorage>) {
+/// alongside a `MockStorage` and a fresh `MockAclDb` (the OSS test ACL
+/// backend that replaces the closed `cognee-access-control::AccessControl`).
+async fn setup() -> (Arc<DatabaseConnection>, Arc<MockStorage>, Arc<MockAclDb>) {
     let db = database::connect("sqlite::memory:").await.unwrap();
     database::initialize(&db).await.unwrap();
     let storage = Arc::new(MockStorage::new());
-    (Arc::new(db), storage)
+    let acl = Arc::new(MockAclDb::new());
+    (Arc::new(db), storage, acl)
 }
 
 /// Seed one dataset + one data item into the database, attach them together,
@@ -67,19 +70,28 @@ async fn seed_dataset_with_data(
     (dataset_id, data_id)
 }
 
-/// Grant `"delete"` permission on `dataset_id` to `principal_id`.
-async fn grant_delete_permission(db: &DatabaseConnection, principal_id: Uuid, dataset_id: Uuid) {
-    let acl: &dyn AclDb = db;
-    acl.ensure_principal(principal_id, "user").await.unwrap();
-    acl.grant_permission(principal_id, dataset_id, "delete")
+/// Grant `"delete"` permission on `dataset_id` to `principal_id` against the
+/// supplied ACL store. The store is shared with the `AuthorizedDeleteService`
+/// so grants persisted here are visible to the service's permission checks.
+async fn grant_delete_permission(acl: &Arc<MockAclDb>, principal_id: Uuid, dataset_id: Uuid) {
+    let acl_dyn: &dyn AclDb = acl.as_ref();
+    acl_dyn
+        .ensure_principal(principal_id, "user")
+        .await
+        .unwrap();
+    acl_dyn
+        .grant_permission(principal_id, dataset_id, "delete")
         .await
         .unwrap();
 }
 
-/// Build an `AuthorizedDeleteService` from the shared database and storage.
+/// Build an `AuthorizedDeleteService` from the shared database, storage, and
+/// ACL store. The same `acl` `Arc` must be reused by `grant_delete_permission`
+/// so that grants made before service construction are visible.
 fn build_authorized_service(
     db: &Arc<DatabaseConnection>,
     storage: &Arc<MockStorage>,
+    acl: &Arc<MockAclDb>,
 ) -> AuthorizedDeleteService {
     let inner = DeleteService::new(
         storage.clone() as Arc<dyn cognee_storage::StorageTrait>,
@@ -87,7 +99,7 @@ fn build_authorized_service(
     );
     AuthorizedDeleteService::new(
         inner,
-        db.clone() as Arc<dyn AclDb>,
+        acl.clone() as Arc<dyn AclDb>,
         db.clone() as Arc<dyn DeleteDb>,
     )
 }
@@ -98,13 +110,13 @@ fn build_authorized_service(
 
 #[tokio::test]
 async fn acl_denied_returns_permission_denied() {
-    let (db, storage) = setup().await;
+    let (db, storage, acl) = setup().await;
     let owner_id = Uuid::new_v4();
 
     let (dataset_id, data_id) =
         seed_dataset_with_data(&db, &storage, owner_id, "acl_denied_ds").await;
 
-    let svc = build_authorized_service(&db, &storage);
+    let svc = build_authorized_service(&db, &storage, &acl);
 
     // The principal (owner_id) has NOT been granted "delete" permission.
     let result = svc
@@ -152,16 +164,16 @@ async fn acl_denied_returns_permission_denied() {
 
 #[tokio::test]
 async fn acl_granted_allows_deletion() {
-    let (db, storage) = setup().await;
+    let (db, storage, acl) = setup().await;
     let owner_id = Uuid::new_v4();
 
     let (dataset_id, data_id) =
         seed_dataset_with_data(&db, &storage, owner_id, "acl_granted_ds").await;
 
     // Grant delete permission.
-    grant_delete_permission(&db, owner_id, dataset_id).await;
+    grant_delete_permission(&acl, owner_id, dataset_id).await;
 
-    let svc = build_authorized_service(&db, &storage);
+    let svc = build_authorized_service(&db, &storage, &acl);
 
     let result = svc
         .execute(
@@ -204,13 +216,13 @@ async fn acl_granted_allows_deletion() {
 
 #[tokio::test]
 async fn preview_respects_acl() {
-    let (db, storage) = setup().await;
+    let (db, storage, acl) = setup().await;
     let owner_id = Uuid::new_v4();
 
     let (_dataset_id, data_id) =
         seed_dataset_with_data(&db, &storage, owner_id, "preview_acl_ds").await;
 
-    let svc = build_authorized_service(&db, &storage);
+    let svc = build_authorized_service(&db, &storage, &acl);
 
     // No permission granted — preview should be denied.
     let result = svc
@@ -243,7 +255,7 @@ async fn preview_respects_acl() {
 
 #[tokio::test]
 async fn cross_user_isolation() {
-    let (db, storage) = setup().await;
+    let (db, storage, acl) = setup().await;
     let owner_a = Uuid::new_v4();
     let owner_b = Uuid::new_v4();
 
@@ -254,10 +266,10 @@ async fn cross_user_isolation() {
         seed_dataset_with_data(&db, &storage, owner_b, "user_b_ds").await;
 
     // Grant delete permission to owner_a only.
-    grant_delete_permission(&db, owner_a, dataset_a_id).await;
+    grant_delete_permission(&acl, owner_a, dataset_a_id).await;
     // owner_b gets NO permission.
 
-    let svc = build_authorized_service(&db, &storage);
+    let svc = build_authorized_service(&db, &storage, &acl);
 
     // owner_a deletes their own data — should succeed.
     let result_a = svc

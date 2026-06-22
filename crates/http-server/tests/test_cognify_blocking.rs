@@ -170,6 +170,7 @@ async fn post_cognify_blocking_executes_real_pipeline() {
 
     let handles = Arc::new(ComponentHandles {
         database: Arc::clone(&database),
+        acl_db: None,
         storage,
         delete_service,
         cloud_client: None,

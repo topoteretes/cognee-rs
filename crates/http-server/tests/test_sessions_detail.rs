@@ -127,6 +127,7 @@ fn build_handles_with_session(db: Arc<DatabaseConnection>) -> Arc<ComponentHandl
 
     Arc::new(ComponentHandles {
         database: db,
+        acl_db: None,
         storage,
         delete_service,
         cloud_client: None,

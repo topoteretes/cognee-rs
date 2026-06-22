@@ -517,6 +517,7 @@ pub fn build_component_handles(
     ));
     Arc::new(ComponentHandles {
         database: db,
+        acl_db: None,
         storage,
         delete_service,
         cloud_client: None,

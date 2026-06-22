@@ -88,6 +88,7 @@ fn build_handles_with_session_and_llm(
 
     let handles = Arc::new(ComponentHandles {
         database: db,
+        acl_db: None,
         storage,
         delete_service,
         cloud_client: None,
@@ -128,6 +129,7 @@ fn build_handles_without_session(db: Arc<DatabaseConnection>) -> Arc<ComponentHa
 
     Arc::new(ComponentHandles {
         database: db,
+        acl_db: None,
         storage,
         delete_service,
         cloud_client: None,
