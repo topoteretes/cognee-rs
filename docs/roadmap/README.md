@@ -17,6 +17,12 @@ etc.) — this folder is only for things still to be done.
 
 Each plan has an index doc plus one sub-document per remaining work item.
 
+### OSS / closed-source repository split
+
+| Doc | Role |
+|-----|------|
+| [oss-split-plan.md](oss-split-plan.md) | Rationale, locked decisions, target topology, the trait/registration seams, and the phased step-by-step plan for splitting cognee-rust into a crates.io-publishable OSS SDK (with C/Python/TS bindings) and a private closed-source cloud product. |
+
 ### Fully-compatible cognify (COG-4457)
 
 | Doc | Role |
