@@ -92,7 +92,10 @@ pub mod graph {
 }
 
 /// Vector database abstraction.
+///
+/// `BruteForceVectorDB` — pure-Rust in-memory edge/Android backend.
 pub mod vector {
+    pub use cognee_vector::BruteForceVectorDB;
     #[cfg(feature = "testing")]
     pub use cognee_vector::MockVectorDB;
     #[cfg(feature = "pgvector")]
