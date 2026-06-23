@@ -240,13 +240,54 @@ def both_clients(py_client, rs_client):
     return {"py": py_client, "rs": rs_client}
 
 
+@pytest.fixture(scope="session")
+def auth_endpoints_available() -> dict:
+    """Probe each server for the closed-cloud ``/api/v1/auth/*`` surface.
+
+    The auth routes (``/register``, ``/login``, ``/me``, ``/logout``) live in
+    the closed ``cognee-cloud-rust/crates/cognee-http-cloud`` crate and are NOT
+    exposed by the OSS ``cognee-http-server`` (plan §6.1). The probe is a
+    cheap unauthenticated ``GET /api/v1/auth/me`` per server:
+
+    * Closed-cloud build → 401 (route present, just unauthenticated).
+    * OSS build         → 404 (route absent entirely).
+    * Network/timeout   → treated as missing so we skip rather than hang.
+
+    Returns a ``{"py": bool, "rs": bool}`` dict so callers can distinguish
+    asymmetric deployments (e.g. closed Python server vs OSS Rust server)
+    and produce targeted skip messages.
+    """
+    out: dict = {}
+    for name, base in (("py", PY_BASE), ("rs", RS_BASE)):
+        try:
+            r = httpx.get(f"{base}/api/v1/auth/me", timeout=2.0)
+            out[name] = r.status_code != 404
+        except (httpx.RequestError, httpx.TimeoutException):
+            out[name] = False
+    return out
+
+
 @pytest.fixture
-def authed_clients(both_clients):
+def authed_clients(both_clients, auth_endpoints_available):
     """Register + login on both servers; return clients with auth cookies/headers set.
 
     Register uses JSON with ``email``; login uses OAuth2 form with ``username``
     (matching e2e-parity.md §4 and FastAPI-users behaviour).
+
+    Skipped against the OSS ``cognee-http-server`` build: the
+    ``/api/v1/auth/*`` routes were moved to the closed
+    ``cognee-cloud-rust/crates/cognee-http-cloud`` crate in T3-move (plan
+    §6.1) and are absent from the OSS server. The session-scoped
+    ``auth_endpoints_available`` probe distinguishes the two builds.
     """
+    missing = [name for name, ok in auth_endpoints_available.items() if not ok]
+    if missing:
+        pytest.skip(
+            "Cognee server(s) do not expose /api/v1/auth/* "
+            f"(missing on: {', '.join(missing)}) — likely an OSS build. "
+            "These tests cover the closed cognee-http-cloud auth surface; run them "
+            "against a closed cognee-cloud-rust deployment (plan §6.1)."
+        )
     creds = {"username": "test@example.com", "password": "test_password_123"}
     for name, c in both_clients.items():
         # Bootstrap user — ignore 409 / 422 "already exists" on re-runs.

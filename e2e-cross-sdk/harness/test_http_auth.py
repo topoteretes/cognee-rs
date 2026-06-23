@@ -7,6 +7,16 @@ reverse direction too).
 Per e2e-parity.md §7: the JWT cross-server canary is the fail-fast sentinel —
 if it fails, every auth-using test is suspect.  It is not a structural diff
 (``assert_responses_match``) — it asserts a 200 and checks the ``email`` field.
+
+Skip behaviour (plan §6.1 / Phase-0 follow-up F3): every test in this module
+is skipped against the OSS ``cognee-http-server`` build because the
+``/api/v1/auth/*`` routes were moved to the closed
+``cognee-cloud-rust/crates/cognee-http-cloud`` crate. The session-scoped
+``auth_endpoints_available`` fixture (see ``conftest.py``) probes each server
+once and the autouse ``_skip_when_auth_endpoints_missing`` fixture below
+applies the skip uniformly to module-level tests, including the ones that
+hit the auth endpoints directly via ``py_client``/``rs_client`` rather than
+via the ``authed_clients`` fixture.
 """
 
 import uuid
@@ -14,6 +24,24 @@ import uuid
 import pytest
 
 from http_helpers import DEFAULT_IGNORE, assert_responses_match
+
+
+@pytest.fixture(autouse=True)
+def _skip_when_auth_endpoints_missing(auth_endpoints_available):
+    """Skip every test in this module when either server lacks /api/v1/auth/*.
+
+    The probe is session-scoped, so the per-test overhead is just a dict
+    lookup. See ``conftest.py::auth_endpoints_available`` for the probe
+    logic.
+    """
+    missing = [name for name, ok in auth_endpoints_available.items() if not ok]
+    if missing:
+        pytest.skip(
+            "Cognee server(s) do not expose /api/v1/auth/* "
+            f"(missing on: {', '.join(missing)}) — likely an OSS build. "
+            "These tests cover the closed cognee-http-cloud auth surface; run them "
+            "against a closed cognee-cloud-rust deployment (plan §6.1)."
+        )
 
 
 def _unique_email() -> str:

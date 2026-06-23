@@ -48,8 +48,18 @@ def test_missing_required_body_field(authed_clients):
     )
 
 
-def test_bad_jwt_returns_401(py_client, rs_client):
-    """A malformed JWT in Authorization: Bearer returns 401 on both servers."""
+def test_bad_jwt_returns_401(py_client, rs_client, auth_endpoints_available):
+    """A malformed JWT in Authorization: Bearer returns 401 on both servers.
+
+    Skipped against the OSS ``cognee-http-server`` build — ``/api/v1/auth/*``
+    routes live in the closed ``cognee-http-cloud`` crate (plan §6.1).
+    """
+    missing = [n for n, ok in auth_endpoints_available.items() if not ok]
+    if missing:
+        pytest.skip(
+            f"/api/v1/auth/* missing on: {', '.join(missing)} — OSS build, "
+            "closed-cloud auth surface not deployed (plan §6.1)."
+        )
     bad_token = "eyJhbGciOiJIUzI1NiJ9.BOGUS.SIGNATURE"
     py = py_client.get(
         "/api/v1/auth/me",
@@ -63,16 +73,34 @@ def test_bad_jwt_returns_401(py_client, rs_client):
     assert rs.status_code == 401, f"rs: expected 401 for bad JWT, got {rs.status_code}"
 
 
-def test_missing_auth_returns_401(py_client, rs_client):
-    """GET /api/v1/auth/me without any auth token returns 401 on both servers."""
+def test_missing_auth_returns_401(py_client, rs_client, auth_endpoints_available):
+    """GET /api/v1/auth/me without any auth token returns 401 on both servers.
+
+    Skipped against the OSS ``cognee-http-server`` build (plan §6.1).
+    """
+    missing = [n for n, ok in auth_endpoints_available.items() if not ok]
+    if missing:
+        pytest.skip(
+            f"/api/v1/auth/* missing on: {', '.join(missing)} — OSS build, "
+            "closed-cloud auth surface not deployed (plan §6.1)."
+        )
     py = py_client.get("/api/v1/auth/me")
     rs = rs_client.get("/api/v1/auth/me")
     assert py.status_code == 401, f"py: expected 401 for missing auth, got {py.status_code}"
     assert rs.status_code == 401, f"rs: expected 401 for missing auth, got {rs.status_code}"
 
 
-def test_unsupported_method_returns_405(py_client, rs_client):
-    """DELETE /api/v1/auth/register (unsupported method) returns 405 on both servers."""
+def test_unsupported_method_returns_405(py_client, rs_client, auth_endpoints_available):
+    """DELETE /api/v1/auth/register (unsupported method) returns 405 on both servers.
+
+    Skipped against the OSS ``cognee-http-server`` build (plan §6.1).
+    """
+    missing = [n for n, ok in auth_endpoints_available.items() if not ok]
+    if missing:
+        pytest.skip(
+            f"/api/v1/auth/* missing on: {', '.join(missing)} — OSS build, "
+            "closed-cloud auth surface not deployed (plan §6.1)."
+        )
     py = py_client.delete("/api/v1/auth/register")
     rs = rs_client.delete("/api/v1/auth/register")
     assert py.status_code == rs.status_code, (
