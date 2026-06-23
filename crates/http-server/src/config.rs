@@ -135,11 +135,15 @@ pub struct HttpServerConfig {
     pub graph_file_path: PathBuf,
 
     /// Vector provider name.
-    /// Env: `VECTOR_DB_PROVIDER`. Default: `qdrant`.
+    /// Env: `VECTOR_DB_PROVIDER`. Default: `pgvector`.
+    /// Note: the qdrant adapter has been extracted to the closed
+    /// `cognee-vector-qdrant` crate as part of the OSS/closed split. The OSS
+    /// http-server now defaults to pgvector and supports `mock` only when
+    /// built with the `dev-mock` cargo feature.
     pub vector_provider: String,
 
-    /// Vector DB URL/path (embedded qdrant dir by default).
-    /// Env: `VECTOR_DB_URL`.
+    /// Vector DB URL/path.
+    /// Env: `VECTOR_DB_URL`. For pgvector this is a Postgres connection string.
     pub vector_db_url: String,
 
     /// Embedding provider name.
@@ -293,7 +297,7 @@ impl Default for HttpServerConfig {
             relational_db_url: default_relational_db_url(&system_root),
             graph_provider: "ladybug".to_string(),
             graph_file_path: default_graph_file_path(&system_root),
-            vector_provider: "qdrant".to_string(),
+            vector_provider: "pgvector".to_string(),
             vector_db_url: default_vector_db_url(&system_root),
             embedding_provider: "onnx".to_string(),
             embedding_dimensions: 384,

@@ -29,7 +29,8 @@ use cognee_llm::{Llm, OpenAIAdapter};
 use cognee_models::DataInput;
 use cognee_ontology::NoOpOntologyResolver;
 use cognee_storage::{LocalStorage, StorageTrait};
-use cognee_vector::{QdrantAdapter, VectorDB};
+use cognee_test_utils::MockVectorDB;
+use cognee_vector::VectorDB;
 use tempfile::TempDir;
 use uuid::Uuid;
 
@@ -74,7 +75,7 @@ async fn setup_infrastructure(
     Arc<dyn Llm>,
 )> {
     // Embedding engine (may return None when model/API unavailable)
-    let (embedding_engine, embedding_dims) =
+    let (embedding_engine, _embedding_dims) =
         cognee_test_utils::create_test_embedding_engine().await?;
 
     // Local file storage
@@ -100,10 +101,8 @@ async fn setup_infrastructure(
     graph_db.initialize().await.expect("graph_db.initialize");
 
     // Qdrant vector database
-    let vector_db: Arc<dyn VectorDB> = Arc::new(QdrantAdapter::new(
-        temp_dir.path().join("qdrant"),
-        embedding_dims,
-    ));
+    // In-memory mock vector DB (qdrant extracted to closed cognee-vector-qdrant).
+    let vector_db: Arc<dyn VectorDB> = Arc::new(MockVectorDB::new());
 
     // OpenAI-compatible LLM
     let llm: Arc<dyn Llm> = Arc::new(

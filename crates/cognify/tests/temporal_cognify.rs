@@ -323,19 +323,15 @@ async fn temporal_cognify_populates_event_name_vector_collection() {
         .expect("graph_db.initialize should succeed");
 
     // Embedding engine
-    let Some((embedding_engine, embedding_dims)) =
+    let Some((embedding_engine, _embedding_dims)) =
         cognee_test_utils::create_test_embedding_engine().await
     else {
         return;
     };
     let embedding_engine: Arc<dyn cognee_embedding::engine::EmbeddingEngine> = embedding_engine;
 
-    // Qdrant vector DB (embedded)
-    let qdrant_path = temp_dir.path().join("qdrant");
-    let vector_db = Arc::new(cognee_vector::QdrantAdapter::new(
-        qdrant_path,
-        embedding_dims,
-    ));
+    // In-memory mock vector DB (qdrant extracted to closed cognee-vector-qdrant).
+    let vector_db = Arc::new(MockVectorDB::new());
 
     let data_item = ingest_text(BIOGRAPHY_TEXT, &storage, owner_id).await;
 

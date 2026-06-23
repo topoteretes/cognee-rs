@@ -35,7 +35,8 @@ use cognee_llm::{Llm, OpenAIAdapter};
 use cognee_models::DataInput;
 use cognee_ontology::NoOpOntologyResolver;
 use cognee_storage::{LocalStorage, StorageTrait};
-use cognee_vector::{QdrantAdapter, VectorDB};
+use cognee_test_utils::MockVectorDB;
+use cognee_vector::VectorDB;
 use tempfile::TempDir;
 use uuid::Uuid;
 
@@ -98,17 +99,15 @@ async fn cognify_e2e_stamps_with_expected_task_names() {
     );
     graph_db.initialize().await.expect("graph_db.initialize");
 
-    let Some((embedding_engine, embedding_dims)) =
+    let Some((embedding_engine, _embedding_dims)) =
         cognee_test_utils::create_test_embedding_engine().await
     else {
         return;
     };
     let embedding_engine: Arc<dyn EmbeddingEngine> = embedding_engine;
 
-    let vector_db: Arc<dyn VectorDB> = Arc::new(QdrantAdapter::new(
-        temp_dir.path().join("qdrant"),
-        embedding_dims,
-    ));
+    // In-memory mock vector DB (qdrant extracted to closed cognee-vector-qdrant).
+    let vector_db: Arc<dyn VectorDB> = Arc::new(MockVectorDB::new());
 
     let llm: Arc<dyn Llm> =
         Arc::new(OpenAIAdapter::new(model, token, Some(url)).expect("OpenAIAdapter::new"));

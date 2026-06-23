@@ -18,7 +18,7 @@ use cognee_search::{
     SeaOrmSessionStore, SearchBuilder, SearchOrchestrator, SessionManager, SessionStore,
 };
 use cognee_storage::{LocalStorage, StorageTrait};
-use cognee_vector::{QdrantAdapter, VectorDB};
+use cognee_vector::{PgVectorAdapter, VectorDB};
 use secrecy::ExposeSecret;
 
 use crate::components::ComponentHandles;
@@ -168,21 +168,38 @@ async fn wire_graph_db(cfg: &HttpServerConfig) -> Result<Arc<dyn GraphDBTrait>, 
 }
 
 async fn wire_vector_db(cfg: &HttpServerConfig) -> Result<Arc<dyn VectorDB>, ServerError> {
-    if !cfg.vector_provider.eq_ignore_ascii_case("qdrant") {
-        return Err(ServerError::Other(anyhow!(
-            "unsupported vector provider '{}'; only 'qdrant' is supported",
-            cfg.vector_provider
-        )));
+    // The qdrant adapter has been extracted to the closed `cognee-vector-qdrant`
+    // crate; the OSS http-server wires pgvector as the production default and
+    // exposes an opt-in in-memory mock behind the `dev-mock` feature so local
+    // dev / `cargo test` work without a Postgres instance.
+    let provider = cfg.vector_provider.to_ascii_lowercase();
+    match provider.as_str() {
+        "pgvector" => {
+            let url = cfg.vector_db_url.trim();
+            if url.is_empty() {
+                return Err(ServerError::Other(anyhow!(
+                    "VECTOR_DB_URL (postgres connection string) is required when \
+                     VECTOR_DB_PROVIDER=pgvector"
+                )));
+            }
+            let adapter = PgVectorAdapter::new(url, cfg.embedding_dimensions as usize)
+                .await
+                .map_err(|e| ServerError::Other(anyhow!("pgvector adapter init: {e}")))?;
+            Ok(Arc::new(adapter) as Arc<dyn VectorDB>)
+        }
+        #[cfg(feature = "dev-mock")]
+        "mock" => {
+            // OSS single-user dev path — keeps `cargo test` + local dev working
+            // without a Postgres instance. Off in production builds.
+            Ok(Arc::new(cognee_test_utils::MockVectorDB::new()) as Arc<dyn VectorDB>)
+        }
+        other => Err(ServerError::Other(anyhow!(
+            "vector_db_provider='{other}' not supported in the OSS http-server. \
+             Supported: 'pgvector' (and 'mock' when built with the `dev-mock` \
+             feature). The Qdrant adapter has been extracted to the closed \
+             cognee-vector-qdrant crate."
+        ))),
     }
-
-    let dir = if cfg.vector_db_url.trim().is_empty() {
-        cfg.system_root_directory.join("vectors")
-    } else {
-        PathBuf::from(&cfg.vector_db_url)
-    };
-    ensure_dir(&dir)?;
-
-    Ok(Arc::new(QdrantAdapter::new(dir, cfg.embedding_dimensions as usize)) as Arc<dyn VectorDB>)
 }
 
 fn build_embedding_config(cfg: &HttpServerConfig) -> Option<EmbeddingConfig> {

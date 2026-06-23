@@ -54,6 +54,13 @@ telemetry = [
     "cognee-search/telemetry",
     "cognee-session/telemetry",
 ]
+# OSS-only dev/test escape hatch: enables a `vector_provider="mock"` wiring
+# that constructs an in-memory `MockVectorDB`. Lets `cargo run` / `cargo test`
+# work without provisioning a Postgres instance. Off by default — production
+# builds drop `cognee-test-utils` entirely. The "qdrant" provider was removed
+# from this wiring as part of the OSS/closed split; qdrant lives in the
+# closed `cognee-vector-qdrant` crate.
+dev-mock = ["dep:cognee-test-utils"]
 
 [dependencies]
 # Web framework and HTTP stack — do NOT use workspace hyper; the workspace
@@ -87,7 +94,10 @@ cognee-search = { path = "../search" }
 cognee-session = { path = "../session" }
 cognee-llm = { path = "../llm" }
 cognee-graph = { path = "../graph", features = ["ladybug"] }
-cognee-vector = { path = "../vector", features = ["qdrant"] }
+cognee-vector = { path = "../vector", features = ["qdrant", "pgvector"] }
+# Optional: pulled in only by the `dev-mock` feature so MockVectorDB stays out
+# of production builds. See the feature comment above.
+cognee-test-utils = { path = "../test-utils", optional = true }
 cognee-logging = { path = "../logging" }
 cognee-visualization = { path = "../visualization" }
 cognee-utils = { path = "../utils" }

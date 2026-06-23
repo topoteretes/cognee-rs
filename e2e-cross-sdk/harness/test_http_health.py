@@ -11,7 +11,7 @@ import pytest
 from http_helpers import DEFAULT_IGNORE, assert_responses_match
 
 # The detailed report's per-component breakdown is intrinsically
-# backend-specific: Python runs lancedb/ladybug, Rust runs qdrant/ladybug, the
+# backend-specific: Python runs lancedb/ladybug, Rust runs pgvector/ladybug, the
 # `provider`/`details` strings and `response_time_ms` differ, and local ONNX
 # embeddings can be healthy on one SDK while the other reports the provider
 # unavailable. The meaningful cross-SDK contract is the *overall* verdict

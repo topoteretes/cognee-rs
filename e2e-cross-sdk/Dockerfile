@@ -9,7 +9,7 @@
 # Use Debian Trixie for glibc 2.41 (ort-sys/ONNX Runtime requires glibc ≥ 2.38)
 FROM debian:trixie-slim AS rust-builder
 
-# Install Rust toolchain + system deps for qdrant/ort native builds
+# Install Rust toolchain + system deps for pgvector/ort native builds
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl ca-certificates gcc g++ make ccache \
     cmake clang libssl-dev pkg-config protobuf-compiler libprotobuf-dev \

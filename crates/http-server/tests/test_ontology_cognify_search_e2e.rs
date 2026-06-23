@@ -24,7 +24,8 @@ use cognee_models::DataInput;
 use cognee_ontology::OntologyManager;
 use cognee_search::{SearchBuilder, SearchOrchestrator};
 use cognee_storage::{LocalStorage, StorageTrait};
-use cognee_vector::{QdrantAdapter, VectorDB};
+use cognee_test_utils::MockVectorDB;
+use cognee_vector::VectorDB;
 use tempfile::TempDir;
 use tower::ServiceExt;
 use uuid::Uuid;
@@ -111,17 +112,15 @@ async fn upload_cognify_search_with_ontology_key_and_unknown_key_negative() {
     );
     graph_db.initialize().await.expect("graph_db.initialize");
 
-    let Some((embedding_engine, embedding_dims)) =
+    let Some((embedding_engine, _embedding_dims)) =
         cognee_test_utils::create_test_embedding_engine().await
     else {
         eprintln!("Skipping test: embedding engine unavailable");
         return;
     };
 
-    let vector_db: Arc<dyn VectorDB> = Arc::new(QdrantAdapter::new(
-        temp_dir.path().join("qdrant"),
-        embedding_dims,
-    ));
+    // In-memory mock vector DB (qdrant extracted to closed cognee-vector-qdrant).
+    let vector_db: Arc<dyn VectorDB> = Arc::new(MockVectorDB::new());
 
     let llm: Arc<dyn Llm> = Arc::new(
         OpenAIAdapter::new(

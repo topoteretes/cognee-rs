@@ -515,7 +515,7 @@ _RUST_NOISE_LINES = (
 )
 
 # To quieten the Rust CLI so we can isolate the actual search payload from the
-# dependency-crate logging (sqlx migrations, qdrant segment WALs, ort model
+# dependency-crate logging (sqlx migrations, pgvector setup, ort model
 # loading, etc.) we restrict tracing to errors globally. Search results reach
 # stdout via `println!` regardless of log level, so no info-level filter is
 # needed to capture them.

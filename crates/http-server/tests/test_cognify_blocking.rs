@@ -12,7 +12,7 @@
 //!
 //! What this exercises end-to-end:
 //! 1. Build a real `ComponentHandles` with `LocalStorage`, an in-memory
-//!    SQLite DB, `LadybugAdapter`, `QdrantAdapter`, `OnnxEmbeddingEngine`,
+//!    SQLite DB, `LadybugAdapter`, `MockVectorDB`, `OnnxEmbeddingEngine`,
 //!    `OpenAIAdapter`, and `RayonThreadPool`.
 //! 2. Seed the dataset via `AddPipeline` (so the cognify dataset lookup
 //!    finds matching rows).
@@ -46,7 +46,8 @@ use cognee_ingestion::AddPipeline;
 use cognee_llm::{Llm, OpenAIAdapter};
 use cognee_models::DataInput;
 use cognee_storage::{LocalStorage, StorageTrait};
-use cognee_vector::{QdrantAdapter, VectorDB};
+use cognee_test_utils::MockVectorDB;
+use cognee_vector::VectorDB;
 
 /// Read an env var, loading `.env` first.  Matches the convention used by the
 /// `cognee-cognify` integration tests so a single `.env` works for both.
@@ -84,7 +85,7 @@ async fn post_cognify_blocking_executes_real_pipeline() {
     // ── Build backends ───────────────────────────────────────────────────────
     let temp_dir = TempDir::new().expect("temp dir");
 
-    let Some((embedding_engine, embedding_dims)) =
+    let Some((embedding_engine, _embedding_dims)) =
         cognee_test_utils::create_test_embedding_engine().await
     else {
         eprintln!("test_cognify_blocking: skipping — embedding engine unavailable");
@@ -110,10 +111,8 @@ async fn post_cognify_blocking_executes_real_pipeline() {
     );
     graph_db.initialize().await.expect("graph_db.initialize");
 
-    let vector_db: Arc<dyn VectorDB> = Arc::new(QdrantAdapter::new(
-        temp_dir.path().join("qdrant"),
-        embedding_dims,
-    ));
+    // In-memory mock vector DB (qdrant extracted to closed cognee-vector-qdrant).
+    let vector_db: Arc<dyn VectorDB> = Arc::new(MockVectorDB::new());
 
     let llm: Arc<dyn Llm> = Arc::new(
         OpenAIAdapter::new(openai_model, openai_token, Some(openai_url))

@@ -6,8 +6,8 @@
 //! Optional real-backend end-to-end test for the memify pipeline.
 //!
 //! Seeds a small graph directly in Ladybug (no cognify / no LLM), runs
-//! `memify(...)` with a real `OnnxEmbeddingEngine` and an embedded
-//! `QdrantAdapter`, then issues a `TripletCompletion` search via
+//! `memify(...)` with a real `OnnxEmbeddingEngine` and a `MockVectorDB`,
+//! then issues a `TripletCompletion` search via
 //! `SearchOrchestrator` using `only_context=true` (to avoid the LLM
 //! completion step in the retriever).
 //!
@@ -31,8 +31,8 @@ use cognee_search::{
     SearchBuilder, SearchRequest, SearchType,
     types::{SearchOutput, SearchResponse},
 };
-use cognee_test_utils::MockLlm;
-use cognee_vector::{QdrantAdapter, VectorDB};
+use cognee_test_utils::{MockLlm, MockVectorDB};
+use cognee_vector::VectorDB;
 use serde_json::json;
 use tempfile::TempDir;
 use uuid::Uuid;
@@ -116,18 +116,15 @@ async fn test_memify_e2e_real_embedding_real_qdrant() {
     // ── Infrastructure setup (all ephemeral, in a TempDir) ──────────────────
     let temp_dir = TempDir::new().expect("temp dir");
 
-    let Some((embedding_engine, embedding_dims)) =
+    let Some((embedding_engine, _embedding_dims)) =
         cognee_test_utils::create_test_embedding_engine().await
     else {
         return;
     };
     let embedding_engine: Arc<dyn EmbeddingEngine> = embedding_engine;
 
-    // Embedded Qdrant.
-    let vector_db: Arc<dyn VectorDB> = Arc::new(QdrantAdapter::new(
-        temp_dir.path().join("qdrant"),
-        embedding_dims,
-    ));
+    // In-memory mock vector DB (qdrant extracted to closed cognee-vector-qdrant).
+    let vector_db: Arc<dyn VectorDB> = Arc::new(MockVectorDB::new());
 
     // Embedded Ladybug.
     let graph_path = temp_dir.path().join("graph").to_string_lossy().to_string();
