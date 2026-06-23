@@ -126,5 +126,6 @@ If your change could affect IDs, schema, chunking, prompts, or vector collection
 
 ## License
 
-By contributing you agree your contributions are licensed under the project's
-**Apache-2.0** license (see [`LICENSE`](LICENSE)).
+By contributing you agree your contributions are dual-licensed under the project's
+**MIT OR Apache-2.0** license (see [`LICENSE-MIT`](LICENSE-MIT) and
+[`LICENSE-APACHE`](LICENSE-APACHE)).

@@ -8,8 +8,8 @@ requires-python = ">=3.9"
 dynamic = ["version"]
 description = "Python bindings for the cognee Rust SDK — AI memory pipeline (add → cognify → search)."
 authors = [{ name = "Topoteretes", email = "support@cognee.ai" }]
-license = "Apache-2.0"
-license-files = ["LICENSE"]
+license = "MIT OR Apache-2.0"
+license-files = ["LICENSE-MIT", "LICENSE-APACHE"]
 readme = "README.md"
 keywords = ["ai", "knowledge-graph", "memory", "rag", "embeddings"]
 classifiers = [

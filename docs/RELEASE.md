@@ -19,7 +19,7 @@ How to cut and publish a cognee-rust release. Two tracks:
    - `python/pyproject.toml`, `js/package.json`.
    - Keep all four in sync.
 4. Update `CHANGELOG.md` (Keep a Changelog format) with the new version section.
-5. Confirm `LICENSE` and license metadata are present.
+5. Confirm `LICENSE-MIT`, `LICENSE-APACHE`, and license metadata are present.
 
 ## Tag
 
@@ -50,7 +50,8 @@ npm publish                         # needs npm auth (npm login / NPM_TOKEN)
 ```
 
 Confirm `package.json` `files` allowlist includes `lib/`, the install scripts
-(`scripts/postinstall.js`, `scripts/copy-artifact.js`), and `LICENSE`. The native
+(`scripts/postinstall.js`, `scripts/copy-artifact.js`), and `LICENSE-MIT` +
+`LICENSE-APACHE`. The native
 `cognee_neon.node` is not shipped in the allowlist — `scripts/postinstall.js` builds it
 from source (or fetches a prebuild) on install.
 
@@ -58,11 +59,11 @@ from source (or fetches a prebuild) on install.
 
 ```bash
 bash capi/scripts/check.sh          # gate
-# Build the release library + assemble headers + LICENSE into a dist dir/tarball.
+# Build the release library + assemble headers + LICENSE-MIT + LICENSE-APACHE into a dist dir/tarball.
 # (capi/ is its own workspace; build from there.)
 ```
 
-Attach the resulting tarball (lib + headers + `LICENSE`) to the GitHub Release for the tag.
+Attach the resulting tarball (lib + headers + `LICENSE-MIT` + `LICENSE-APACHE`) to the GitHub Release for the tag.
 
 ## Publish — crates.io (Track B only)
 

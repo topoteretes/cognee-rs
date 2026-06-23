@@ -2,7 +2,7 @@
   "name": "cognee",
   "version": "0.1.0",
   "description": "Node.js bindings for the cognee AI-memory SDK",
-  "license": "Apache-2.0",
+  "license": "MIT OR Apache-2.0",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/topoteretes/cognee-rust.git"
@@ -54,6 +54,7 @@
     "lib/",
     "scripts/postinstall.js",
     "scripts/copy-artifact.js",
-    "LICENSE"
+    "LICENSE-MIT",
+    "LICENSE-APACHE"
   ]
 }

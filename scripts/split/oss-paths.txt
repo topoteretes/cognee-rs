@@ -58,7 +58,8 @@ capi/examples/sdk_retrieval_smoke.c
 capi/.gitignore
 capi/include/cognee.h
 capi/include/cognee_sdk.h
-capi/LICENSE
+capi/LICENSE-APACHE
+capi/LICENSE-MIT
 capi/README.md
 capi/scripts/check_header_sync.sh
 capi/scripts/check.sh
@@ -970,7 +971,8 @@ js/examples/pipeline-engine.ts
 js/examples/sessions.ts
 js/examples/visualize.ts
 js/jest.config.js
-js/LICENSE
+js/LICENSE-APACHE
+js/LICENSE-MIT
 js/.npmignore
 js/package.json
 js/platform-packages/darwin-arm64/.gitignore
@@ -1036,7 +1038,8 @@ js/__tests__/setup_telemetry.test.ts
 js/__tests__/smoke.test.ts
 js/__tests__/visualization.test.ts
 js/tsconfig.json
-LICENSE
+LICENSE-APACHE
+LICENSE-MIT
 python/Cargo.toml
 python/cognee/__init__.py
 python/cognee_pipeline/compat.py
@@ -1052,7 +1055,8 @@ python/examples/memify_recall.py
 python/examples/sessions.py
 python/examples/visualize.py
 python/.gitignore
-python/LICENSE
+python/LICENSE-APACHE
+python/LICENSE-MIT
 python/pyproject.toml
 python/README.md
 python/scripts/check.sh
