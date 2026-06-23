@@ -56,8 +56,16 @@ pub struct HttpServerConfig {
     pub ui_app_url: String,
     /// Deployment environment. Env: `ENV`. Default: `Prod`.
     pub env: Environment,
-    /// Whether to require authentication on API routes.
-    /// Env: `REQUIRE_AUTHENTICATION`. Default: `true`.
+    /// Enforce authentication on every request.
+    ///
+    /// OSS default: `false` — the slim auth/extractor.rs falls back
+    /// to `default_user_from_state` (the `uuid5(NAMESPACE_OID, email)`
+    /// default user) when no `AuthResolver` is wired and the request
+    /// carries no credential. Closed cloud builds inject an
+    /// `AuthResolver` via `RouterBuilder::with_auth_resolver(...)` and
+    /// set this to `true` to require credentials.
+    ///
+    /// Override at runtime with `REQUIRE_AUTHENTICATION=true`.
     pub require_authentication: bool,
     /// JWT signing secret. Env: `AUTH_JWT_SECRET`.
     /// Randomly generated at boot when unset (tokens are invalidated on restart).
@@ -295,7 +303,7 @@ impl Default for HttpServerConfig {
             cors_allowed_origins: Vec::new(),
             ui_app_url: "http://localhost:3000".into(),
             env: Environment::Prod,
-            require_authentication: true,
+            require_authentication: false,
             jwt_secret: SecretString::new(uuid::Uuid::new_v4().to_string().into()),
             jwt_lifetime: Duration::from_secs(3600),
             body_limit: 100 * 1024 * 1024,
@@ -583,7 +591,10 @@ mod tests {
         assert_eq!(cfg.ui_app_url, "http://localhost:3000");
         assert_eq!(cfg.body_limit, 100 * 1024 * 1024);
         assert_eq!(cfg.jwt_lifetime, Duration::from_secs(3600));
-        assert!(cfg.require_authentication);
+        // OSS default is `false`: without an `AuthResolver`, requests fall
+        // back to the synthetic default user (see auth/extractor.rs). Closed
+        // cloud builds inject an `AuthResolver` and flip this to `true`.
+        assert!(!cfg.require_authentication);
         assert!(cfg.cors_allowed_origins.is_empty());
         assert_eq!(cfg.env, Environment::Prod);
     }
