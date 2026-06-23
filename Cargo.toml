@@ -63,7 +63,6 @@ anyhow = "1"
 base64 = "0.22"
 assert_cmd = "2.0"
 async-trait = "0.1.89"
-cognee-litert-lm = { git = "https://github.com/topoteretes/cognee-litert-lm.git" }
 calamine = "0.34"
 csv = "1.3"
 clap = "4.5"
@@ -72,10 +71,8 @@ chrono = { version = "0.4.41", default-features = false, features = ["serde", "c
 # conflicting From impls). Exact pin forces the whole dep graph to 0.3.46 until
 # upstream crates release fixes.
 time = "=0.3.46"
-common = { git = "https://github.com/qdrant/qdrant", package = "common", tag = "v1.17.0" }
 dirs = "6"
 dotenv = "0.15"
-edge = { git = "https://github.com/qdrant/qdrant", package = "edge", default-features = false, tag = "v1.17.0" }
 env_logger = "0.11"
 futures = "0.3"
 futures-util = "0.3"
@@ -105,7 +102,6 @@ regex = "1"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "gzip", "json", "stream", "multipart"] }
 scraper = "0.21"
 schemars = "0.8"
-segment = { git = "https://github.com/qdrant/qdrant", package = "segment", default-features = false, tag = "v1.17.0" }
 serde = { version = "1", features = ["derive"] }
 serial_test = "3.2"
 md-5 = "0.10"
@@ -121,7 +117,6 @@ strsim = "0.11"
 thiserror = "2.0"
 tiktoken-rs = "0.6"
 serde_json = "1"
-shard = { git = "https://github.com/qdrant/qdrant", package = "shard", tag = "v1.17.0" }
 tempfile = "3"
 texting_robots = "0.2"
 tokenizers = "0.21"
@@ -144,16 +139,6 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 [workspace.lints.clippy]
 unwrap_used = "warn"
 expect_used = "warn"
-
-[patch.crates-io]
-# Keep in sync with js/cognee-neon/Cargo.toml and capi/Cargo.toml.
-# Any qdrant-fork patch added or bumped here must be reflected in all three places.
-# See docs/capi-bindings/README.md §8 (Patch drift risk).
-# Align tar version with qdrant workspace (needed for Archive::set_sync)
-tar = { git = "https://github.com/qdrant/tar-rs", branch = "main" }
-# Required by qdrant v1.17.0 — their forks add http2_max_local_error_reset_streams and related APIs
-tonic = { git = "https://github.com/qdrant/tonic", branch = "v0.11.0-qdrant" }
-hyper = { git = "https://github.com/qdrant/hyper", branch = "v0.14.26-qdrant" }
 
 [profile.dev.package."*"]
 # At opt-level=0 (dev default), LLVM emits very large unoptimized IR for every

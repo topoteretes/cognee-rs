@@ -25,7 +25,6 @@ workspace = true
 default = [
     "visualization",
     # `cloud` is opt-in — see crates/lib/Cargo.toml.
-    "qdrant",
     "ladybug",
     "onnx",
     "hf-tokenizer",
@@ -35,7 +34,6 @@ default = [
 ]
 visualization = ["cognee-lib/visualization"]
 cloud         = ["cognee-lib/cloud"]
-qdrant        = ["cognee-lib/qdrant"]
 ladybug       = ["cognee-lib/ladybug"]
 onnx          = ["cognee-lib/onnx"]
 hf-tokenizer  = ["cognee-lib/hf-tokenizer"]

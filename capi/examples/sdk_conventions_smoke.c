@@ -169,10 +169,15 @@ int main(void)
     if (rc != CG_OK) return 1;
 
     /* ── Create SDK handle (mock embedding, no network) ──────────────────── */
+    /* snake_case to match cognee-lib ConfigManager dispatch keys.
+     * vector_db_provider=mock selects MockVectorDB (testing feature)
+     * since T4 moved the Qdrant adapter to the closed cognee-vector-qdrant
+     * crate. T5 will introduce a brute-force default. */
     const char* settings_json =
         "{"
-        "  \"embeddingProvider\": \"mock\","
-        "  \"llmApiKey\": \"dummy-key-for-smoke-test\""
+        "  \"embedding_provider\": \"mock\","
+        "  \"llm_api_key\": \"dummy-key-for-smoke-test\","
+        "  \"vector_db_provider\": \"mock\""
         "}";
 
     CgSdk* sdk = cg_sdk_new(settings_json);

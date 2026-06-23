@@ -14,14 +14,10 @@ use cognee_graph::GraphDBTrait;
 use cognee_graph::LadybugAdapter;
 #[cfg(feature = "pggraph")]
 use cognee_graph::PgGraphAdapter;
-#[cfg(all(feature = "android-litert", target_os = "android"))]
-use cognee_llm::LiteRtAdapter;
 use cognee_llm::{Llm, OpenAIAdapter, Transcriber};
 use cognee_storage::{LocalStorage, StorageTrait};
 #[cfg(feature = "pgvector")]
 use cognee_vector::PgVectorAdapter;
-#[cfg(feature = "qdrant")]
-use cognee_vector::QdrantAdapter;
 use cognee_vector::VectorDB;
 
 use crate::config::{ConfigManager, Settings};
@@ -298,13 +294,11 @@ impl ComponentManager {
 
     async fn init_vector_db(&self) -> Result<Arc<dyn VectorDB>, ComponentError> {
         // Clone all needed fields out of the read guard before any await.
-        let (provider, dim, vector_db_url, system_root_dir) = {
+        let (provider, _dim) = {
             let s = self.config.read();
             (
                 s.vector_db_provider.to_lowercase(),
                 s.embedding_dimensions as usize,
-                s.vector_db_url.clone(),
-                s.system_root_directory.clone(),
             )
         };
 
@@ -316,7 +310,7 @@ impl ComponentManager {
                         let s = self.config.read();
                         self.resolved_vector_db_url(&s)?
                     };
-                    let adapter = PgVectorAdapter::new(&url, dim).await.map_err(|e| {
+                    let adapter = PgVectorAdapter::new(&url, _dim).await.map_err(|e| {
                         ComponentError::VectorDb(format!("pgvector init failed: {e}"))
                     })?;
                     Ok(Arc::new(adapter))
@@ -327,29 +321,24 @@ impl ComponentManager {
                     "vector_db_provider=pgvector requires the `pgvector` crate feature".to_string(),
                 ))
             }
-            "qdrant" | "lancedb" => {
-                if provider == "lancedb" {
-                    warn!("vector_db_provider=lancedb is mapped to embedded qdrant adapter.");
-                }
-
-                let vector_data_dir = if !vector_db_url.is_empty() {
-                    PathBuf::from(&vector_db_url)
-                } else {
-                    Path::new(&system_root_dir).join("vectors")
-                };
-
-                std::fs::create_dir_all(&vector_data_dir)?;
-
-                #[cfg(feature = "qdrant")]
-                return Ok(Arc::new(QdrantAdapter::new(vector_data_dir, dim)));
-
-                #[cfg(not(feature = "qdrant"))]
-                Err(ComponentError::Config(
-                    "vector_db_provider=qdrant requires the `qdrant` crate feature".to_string(),
-                ))
-            }
+            // T4-move removed the Qdrant adapter from OSS. With the `testing`
+            // feature on we silently substitute the in-memory `MockVectorDB`
+            // for `qdrant`/`lancedb` so existing smoke tests and the
+            // legacy default `vector_db_provider="lancedb"` config still
+            // work without each call site setting `vector_db_provider="mock"`.
+            // Without `testing`, we surface the explicit closed-required
+            // error so production deployments don't silently fall back to
+            // a non-persistent backend.
+            #[cfg(feature = "testing")]
+            "qdrant" | "lancedb" | "mock" => Ok(Arc::new(cognee_vector::MockVectorDB::new())),
+            #[cfg(not(feature = "testing"))]
+            "qdrant" | "lancedb" => Err(ComponentError::Config(format!(
+                "vector_db_provider='{provider}' is not available in this build. \
+                 The Qdrant adapter has been extracted to the closed cognee-vector-qdrant crate; \
+                 use vector_db_provider='pgvector' in OSS builds.",
+            ))),
             other => Err(ComponentError::Config(format!(
-                "Unsupported vector_db_provider '{other}'. Supported: qdrant, lancedb, pgvector.",
+                "Unsupported vector_db_provider '{other}'. Supported: pgvector.",
             ))),
         }
     }
@@ -580,39 +569,15 @@ impl ComponentManager {
                 Arc::new(adapter)
             }
             "litert" => {
-                #[cfg(all(feature = "android-litert", target_os = "android"))]
-                {
-                    let model_path = llm_model.trim();
-                    if model_path.is_empty() {
-                        return Err(ComponentError::Config(
-                            "llm_model must point to a local LiteRT model path when llm_provider=litert"
-                                .to_string(),
-                        ));
-                    }
-
-                    let backend = if llm_endpoint.trim().is_empty() {
-                        None
-                    } else {
-                        Some(llm_endpoint)
-                    };
-
-                    let adapter = LiteRtAdapter::new(model_path.to_string(), backend)
-                        .map_err(|e| ComponentError::Llm(format!("initialization failed: {e}")))?;
-
-                    Arc::new(adapter)
-                }
-
-                #[cfg(not(all(feature = "android-litert", target_os = "android")))]
-                {
-                    return Err(ComponentError::Config(
-                        "llm_provider=litert requires Android target and the `android-litert` crate feature"
-                            .to_string(),
-                    ));
-                }
+                return Err(ComponentError::Config(
+                    "llm_provider=litert is not available in this build. \
+                     The LiteRT adapter has been extracted to the closed cognee-llm-litert crate."
+                        .to_string(),
+                ));
             }
             _ => {
                 return Err(ComponentError::Config(format!(
-                    "Unsupported llm_provider '{provider}'. Supported: openai, litert, mock.",
+                    "Unsupported llm_provider '{provider}'. Supported: openai, mock.",
                 )));
             }
         };

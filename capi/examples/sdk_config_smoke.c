@@ -116,11 +116,15 @@ int main(void)
     ASSERT_EQ(rc, CG_OK, "cg_init() must succeed");
     if (rc != CG_OK) return 1;
 
-    /* Build a handle with mock embedding so no network/models are needed. */
+    /* Build a handle with mock embedding so no network/models are needed.
+     * vector_db_provider=mock selects MockVectorDB (testing feature)
+     * since T4 moved the Qdrant adapter to the closed
+     * cognee-vector-qdrant crate. T5 will introduce a brute-force default. */
     const char* base_settings =
         "{"
         "  \"embedding_provider\": \"mock\","
-        "  \"llm_api_key\": \"dummy-key-smoke-test\""
+        "  \"llm_api_key\": \"dummy-key-smoke-test\","
+        "  \"vector_db_provider\": \"mock\""
         "}";
     CgSdk* sdk = cg_sdk_new(base_settings);
     ASSERT(sdk != NULL, "cg_sdk_new must return non-NULL");
@@ -217,9 +221,12 @@ int main(void)
     /* ── Test 6: cg_sdk_config_set_vector_db_config bulk setter ──────────── */
     printf("=== Test 6: cg_sdk_config_set_vector_db_config bulk setter ===\n");
 
+    /* Use `mock` instead of `qdrant` post-T4 (Qdrant moved closed).
+     * The bulk-set + get round-trip is what's under test here, not the
+     * provider value itself. */
     const char* vec_cfg =
         "{"
-        "  \"vector_db_provider\": \"qdrant\","
+        "  \"vector_db_provider\": \"mock\","
         "  \"vector_db_host\": \"127.0.0.1\""
         "}";
     rc = cg_sdk_config_set_vector_db_config(sdk, vec_cfg);
@@ -227,7 +234,7 @@ int main(void)
 
     rc = cg_sdk_config_get(sdk, &cfg_json);
     ASSERT_EQ(rc, CG_OK, "cg_sdk_config_get must return CG_OK after bulk vector set");
-    assert_json_contains(cfg_json, "qdrant",
+    assert_json_contains(cfg_json, "mock",
                          "config JSON must reflect bulk-set vector_db_provider");
     printf("  bulk vector DB config set + get  OK\n");
     cg_string_destroy(cfg_json);

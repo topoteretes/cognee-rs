@@ -52,7 +52,7 @@ url.workspace = true
 cognee-storage    = { path = "../storage", features = ["testing"] }
 cognee-embedding  = { path = "../embedding", features = ["onnx"] }
 cognee-graph      = { path = "../graph", features = ["testing", "ladybug"] }
-cognee-vector     = { path = "../vector", features = ["testing", "qdrant"] }
+cognee-vector     = { path = "../vector", features = ["testing"] }
 cognee-database   = { path = "../database", features = ["sqlite"] }
 cognee-search     = { path = "../search" }
 cognee-delete     = { path = "../delete" }

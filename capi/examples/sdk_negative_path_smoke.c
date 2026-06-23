@@ -124,10 +124,13 @@ int main(void)
     /* ── Test 3: waiter single-use guard → CG_ERR_SDK_VALIDATION ─────────── */
     printf("=== Test 3: waiter single-use guard (CG_ERR_SDK_VALIDATION) ===\n");
 
+    /* snake_case keys + vector_db_provider=mock (testing feature) —
+     * see sdk_handle_smoke.c for context. */
     const char* settings_json =
         "{"
-        "  \"embeddingProvider\": \"mock\","
-        "  \"llmApiKey\": \"dummy-key-for-smoke-test\""
+        "  \"embedding_provider\": \"mock\","
+        "  \"llm_api_key\": \"dummy-key-for-smoke-test\","
+        "  \"vector_db_provider\": \"mock\""
         "}";
 
     CgSdk* sdk = cg_sdk_new(settings_json);

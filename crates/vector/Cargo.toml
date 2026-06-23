@@ -16,7 +16,6 @@ authors.workspace = true
 workspace = true
 
 [features]
-qdrant   = ["dep:edge", "dep:segment", "dep:shard", "dep:common"]
 pgvector = ["dep:sea-orm", "dep:sea-orm-migration"]
 testing  = []
 
@@ -24,12 +23,6 @@ testing  = []
 # Async
 tokio       = { workspace = true }
 async-trait = { workspace = true }
-
-# Qdrant internals (feature-gated)
-edge    = { workspace = true, optional = true }
-segment = { workspace = true, optional = true }
-shard   = { workspace = true, optional = true }
-common  = { workspace = true, optional = true }
 
 # PGVector / SeaORM (feature-gated)
 sea-orm = { version = "1.1", features = [

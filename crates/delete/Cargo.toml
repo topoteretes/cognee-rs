@@ -41,7 +41,7 @@ cognee-llm        = { path = "../llm" }
 cognee-ontology   = { path = "../ontology" }
 cognee-storage    = { path = "../storage", features = ["testing"] }
 cognee-test-utils = { path = "../test-utils" }
-cognee-vector     = { path = "../vector", features = ["testing", "qdrant"] }
+cognee-vector     = { path = "../vector", features = ["testing"] }
 dotenv.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

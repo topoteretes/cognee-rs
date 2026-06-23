@@ -9,10 +9,6 @@ pub mod models;
 /// Vector database trait definition.
 pub mod vector_db_trait;
 
-#[cfg(feature = "qdrant")]
-/// Qdrant embedded vector database adapter.
-pub mod qdrant_adapter;
-
 #[cfg(feature = "pgvector")]
 pub mod pgvector_adapter;
 
@@ -22,9 +18,6 @@ pub mod mock_vector_db;
 pub use error::{VectorDBError, VectorDBResult};
 pub use models::{CollectionConfig, DistanceMetric, SearchResult, VectorPoint};
 pub use vector_db_trait::VectorDB;
-
-#[cfg(feature = "qdrant")]
-pub use qdrant_adapter::QdrantAdapter;
 
 #[cfg(feature = "pgvector")]
 pub use pgvector_adapter::PgVectorAdapter;

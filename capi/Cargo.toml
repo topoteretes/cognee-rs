@@ -31,14 +31,6 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
 uuid = { version = "1.21", features = ["v4", "v5", "serde"] }
 
-[patch.crates-io]
-# Keep in sync with the root workspace and js/cognee-neon/Cargo.toml.
-# Align tar version with qdrant workspace (needed for Archive::set_sync)
-tar = { git = "https://github.com/qdrant/tar-rs", branch = "main" }
-# Required by qdrant v1.17.0 — their forks add http2_max_local_error_reset_streams and related APIs
-tonic = { git = "https://github.com/qdrant/tonic", branch = "v0.11.0-qdrant" }
-hyper = { git = "https://github.com/qdrant/hyper", branch = "v0.14.26-qdrant" }
-
 # Panic-across-FFI safety: abort on panic so an unwinding panic can never
 # cross the `extern "C"` boundary. This is the primary safety floor for the
 # C API; `catch_unwind` in spawn_sdk_op provides graceful degradation on top.

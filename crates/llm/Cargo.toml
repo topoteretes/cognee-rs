@@ -17,7 +17,6 @@ workspace = true
 
 [features]
 default = []
-android-litert = ["dep:cognee-litert-lm"]
 # Record/replay cassette-based mock LLM support.
 mock = ["dep:sha2"]
 
@@ -49,9 +48,6 @@ cognee-utils = { path = "../utils" }
 
 # Content hashing (cassette mock, feature-gated)
 sha2 = { workspace = true, optional = true }
-
-# Android local LLM backend (feature-gated)
-cognee-litert-lm = { workspace = true, optional = true }
 
 [dev-dependencies]
 cognee-test-utils = { path = "../test-utils" }

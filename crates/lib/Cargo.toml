@@ -19,7 +19,6 @@ workspace = true
 default = [
     "onnx",
     "ladybug",
-    "qdrant",
     "pgvector",
     "pggraph",
     "sqlite",
@@ -52,14 +51,12 @@ onnx-dynamic   = ["cognee-embedding/onnx-dynamic"]
 ort-cuda       = ["cognee-embedding/ort-cuda"]
 ort-tensorrt   = ["cognee-embedding/ort-tensorrt"]
 ladybug        = ["cognee-graph/ladybug"]
-qdrant         = ["cognee-vector/qdrant"]
 pgvector       = ["cognee-vector/pgvector", "dep:url"]
 pggraph        = ["cognee-graph/postgres", "dep:url"]
 sqlite         = ["cognee-database/sqlite"]
 postgres       = ["cognee-database/postgres"]
 hf-tokenizer   = ["cognee-chunking/hf-tokenizer"]
 tiktoken       = ["cognee-chunking/tiktoken"]
-android-litert = ["cognee-llm/android-litert"]
 
 # External telemetry event export (opt-in). When enabled, the high-level API
 # functions emit `tracing` events on the `cognee.telemetry` target so
@@ -98,7 +95,6 @@ unstructured-odp  = ["cognee-ingestion/unstructured-odp"]
 android-default = [
     "onnx-dynamic",
     "ladybug",
-    "qdrant",
     "sqlite",
     "hf-tokenizer",
     "pdf-pure-rust",

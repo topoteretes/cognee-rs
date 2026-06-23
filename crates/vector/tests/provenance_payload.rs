@@ -10,10 +10,10 @@
 //! the metadata payload of every indexed point, end-to-end, via the
 //! vector-DB trait.
 //!
-//! Uses `MockVectorDB` so the assertion does not depend on Qdrant
+//! Uses `MockVectorDB` so the assertion does not depend on a real backend
 //! initialization. The mock retains the `metadata: HashMap<String,
-//! serde_json::Value>` byte-for-byte (no key remapping), which matches
-//! the `QdrantAdapter` shape in production.
+//! serde_json::Value>` byte-for-byte (no key remapping), which matches the
+//! production adapter shape.
 //!
 //! `MockVectorDB` is only compiled when the `testing` feature is on;
 //! `cognee-test-utils` enables that feature for us, so we route the

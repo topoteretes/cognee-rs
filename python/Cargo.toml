@@ -35,7 +35,6 @@ doctest = false
 default = [
     "visualization",
     # `cloud` is opt-in — see crates/lib/Cargo.toml.
-    "qdrant",
     "ladybug",
     "onnx",
     "hf-tokenizer",
@@ -53,7 +52,6 @@ default = [
 telemetry     = ["cognee-lib/telemetry"]
 visualization = ["cognee-lib/visualization", "cognee-bindings-common/visualization"]
 cloud         = ["cognee-lib/cloud",         "cognee-bindings-common/cloud"]
-qdrant        = ["cognee-lib/qdrant",        "cognee-bindings-common/qdrant"]
 ladybug       = ["cognee-lib/ladybug",       "cognee-bindings-common/ladybug"]
 onnx          = ["cognee-lib/onnx",          "cognee-bindings-common/onnx"]
 hf-tokenizer  = ["cognee-lib/hf-tokenizer",  "cognee-bindings-common/hf-tokenizer"]

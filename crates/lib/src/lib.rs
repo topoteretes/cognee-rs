@@ -97,8 +97,6 @@ pub mod vector {
     pub use cognee_vector::MockVectorDB;
     #[cfg(feature = "pgvector")]
     pub use cognee_vector::PgVectorAdapter;
-    #[cfg(feature = "qdrant")]
-    pub use cognee_vector::QdrantAdapter;
     pub use cognee_vector::{
         CollectionConfig, DistanceMetric, SearchResult, VectorDB, VectorDBError, VectorDBResult,
         VectorPoint,

@@ -103,10 +103,19 @@ int main(void)
      * The test relies on MOCK_EMBEDDING=true being read from the env OR set
      * here.  We set it in the JSON overlay for hermetic testing.
      */
+    /* Keys are snake_case to match the cognee-lib ConfigManager
+     * dispatcher. `vector_db_provider="mock"` selects the
+     * `cognee_vector::MockVectorDB` adapter (registered behind the
+     * `testing` Cargo feature, enabled by the C-API default features).
+     * This keeps the smoke test hermetic post-T4 (Qdrant adapter moved
+     * to the closed cognee-vector-qdrant crate; pgvector requires a
+     * real Postgres). T5 introduces a brute-force adapter and flips
+     * the default to it so this overlay becomes optional. */
     const char* settings_json =
         "{"
-        "  \"embeddingProvider\": \"mock\","
-        "  \"llmApiKey\": \"dummy-key-for-smoke-test\""
+        "  \"embedding_provider\": \"mock\","
+        "  \"llm_api_key\": \"dummy-key-for-smoke-test\","
+        "  \"vector_db_provider\": \"mock\""
         "}";
 
     CgSdk* sdk = cg_sdk_new(settings_json);

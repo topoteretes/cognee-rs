@@ -94,7 +94,7 @@ cognee-search = { path = "../search" }
 cognee-session = { path = "../session" }
 cognee-llm = { path = "../llm" }
 cognee-graph = { path = "../graph", features = ["ladybug"] }
-cognee-vector = { path = "../vector", features = ["qdrant", "pgvector"] }
+cognee-vector = { path = "../vector", features = ["pgvector"] }
 # Optional: pulled in only by the `dev-mock` feature so MockVectorDB stays out
 # of production builds. See the feature comment above.
 cognee-test-utils = { path = "../test-utils", optional = true }
@@ -155,7 +155,7 @@ chrono = { workspace = true }
 sea-orm = { version = "1", default-features = false, features = ["sqlx-sqlite", "runtime-tokio-native-tls", "macros"] }
 cognee-database = { path = "../database", features = ["sqlite"] }
 cognee-graph = { path = "../graph", features = ["testing", "ladybug"] }
-cognee-vector = { path = "../vector", features = ["testing", "qdrant"] }
+cognee-vector = { path = "../vector", features = ["testing"] }
 cognee-embedding = { path = "../embedding", features = ["onnx"] }
 cognee-session = { path = "../session", features = ["fs"] }
 dotenv = { workspace = true }

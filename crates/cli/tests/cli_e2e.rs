@@ -219,7 +219,7 @@ fn search_rejects_invalid_top_k() {
 /// because resolution fails before the retriever runs. A real dataset is
 /// added first to make the bogus-name lookup the only possible failure.
 #[test]
-#[cfg(all(feature = "ladybug", feature = "qdrant"))]
+#[cfg(feature = "ladybug")]
 fn search_errors_when_dataset_name_does_not_exist() {
     let config_home = TempDir::new().expect("temp dir should be created");
     let workdir = TempDir::new().expect("temp dir should be created");

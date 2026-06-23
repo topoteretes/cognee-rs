@@ -24,7 +24,6 @@ path = "src/main.rs"
 default = [
     "onnx",
     "ladybug",
-    "qdrant",
     "pgvector",
     "pggraph",
     "sqlite",
@@ -59,7 +58,6 @@ ort-cuda      = ["cognee-lib/ort-cuda"]
 ort-tensorrt  = ["cognee-lib/ort-tensorrt"]
 onnx-dynamic  = ["cognee-lib/onnx-dynamic"]
 ladybug       = ["cognee-lib/ladybug"]
-qdrant        = ["cognee-lib/qdrant"]
 pgvector      = ["cognee-lib/pgvector"]
 pggraph       = ["cognee-lib/pggraph"]
 sqlite        = ["cognee-lib/sqlite"]
