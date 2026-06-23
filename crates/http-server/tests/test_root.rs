@@ -1,4 +1,3 @@
-#![cfg(any())] // cognee-http-server gated on oss-split branch (T2-move §4 S2).
 //! Integration tests for `GET /`.
 
 mod support;

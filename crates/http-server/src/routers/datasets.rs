@@ -13,7 +13,7 @@ use axum::{
     routing::{delete, get, post, put},
 };
 use cognee_database::{
-    AclDb, DatasetConfigDb, DeleteDb, IngestDb, PipelineRunStatus as DbPipelineRunStatus,
+    DatasetConfigDb, DeleteDb, IngestDb, PipelineRunStatus as DbPipelineRunStatus,
 };
 use cognee_delete::{DeleteMode, DeleteRequest, DeleteScope};
 use cognee_models::Dataset;
@@ -54,19 +54,22 @@ pub async fn list_datasets(
         serde_json::json!({ "endpoint": "GET /v1/datasets" }),
     );
 
-    let db = state
-        .components()
-        .ok_or_else(|| {
-            ApiError::Teapot("Error retrieving datasets: components not initialized".into())
-        })?
-        .database
-        .clone();
+    let components = state.components().ok_or_else(|| {
+        ApiError::Teapot("Error retrieving datasets: components not initialized".into())
+    })?;
+    let db = components.database.clone();
 
-    // Use AclDb to get authorized dataset IDs, then load each one.
-    let dataset_ids = db
-        .authorized_dataset_ids_with_roles(user.id, "read")
-        .await
-        .map_err(|e| ApiError::Teapot(format!("Error retrieving datasets: {e}")))?;
+    // OSS deployments without an `acl_db` injected (single-user mode)
+    // skip the ACL query entirely and fall through to "all datasets
+    // owned by the caller" — matching Python's
+    // ENABLE_BACKEND_ACCESS_CONTROL=false default.
+    let dataset_ids: Vec<Uuid> = if let Some(acl) = components.acl_db.as_ref() {
+        acl.authorized_dataset_ids_with_roles(user.id, "read")
+            .await
+            .map_err(|e| ApiError::Teapot(format!("Error retrieving datasets: {e}")))?
+    } else {
+        Vec::new()
+    };
 
     let mut datasets = Vec::new();
     for id in dataset_ids {
@@ -79,7 +82,8 @@ pub async fn list_datasets(
         }
     }
 
-    // If no ACL rows exist (fresh DB), fall back to listing by owner.
+    // If no ACL rows exist (fresh DB, or OSS single-user with no
+    // acl_db wired), fall back to listing by owner.
     if datasets.is_empty() {
         let owned = IngestDb::list_datasets_by_owner(&*db, user.id)
             .await
@@ -381,13 +385,10 @@ pub async fn create_new_dataset(
         serde_json::json!({ "endpoint": "POST /v1/datasets" }),
     );
 
-    let db = state
-        .components()
-        .ok_or_else(|| {
-            ApiError::Teapot("Error creating dataset: components not initialized".into())
-        })?
-        .database
-        .clone();
+    let components = state.components().ok_or_else(|| {
+        ApiError::Teapot("Error creating dataset: components not initialized".into())
+    })?;
+    let db = components.database.clone();
 
     // Check if a dataset with this name already exists for the user.
     let existing = IngestDb::get_dataset_by_name(&*db, &payload.name, user.id, user.tenant_id)
@@ -406,12 +407,15 @@ pub async fn create_new_dataset(
         .await
         .map_err(|e| ApiError::Teapot(format!("Error creating dataset: {e}")))?;
 
-    // Grant read+write+share+delete ACLs to the owner.
-    for perm in &["read", "write", "share", "delete"] {
-        // Ensure principal exists first.
-        let _ = db.ensure_principal(user.id, "user").await;
-        if let Err(e) = db.grant_permission(user.id, created.id, perm).await {
-            tracing::warn!("Failed to grant {perm} on dataset {}: {e}", created.id);
+    // Grant read+write+share+delete ACLs to the owner — only when an
+    // `acl_db` impl is wired. OSS single-user mode skips this entirely.
+    if let Some(acl) = components.acl_db.as_ref() {
+        for perm in &["read", "write", "share", "delete"] {
+            // Ensure principal exists first.
+            let _ = acl.ensure_principal(user.id, "user").await;
+            if let Err(e) = acl.grant_permission(user.id, created.id, perm).await {
+                tracing::warn!("Failed to grant {perm} on dataset {}: {e}", created.id);
+            }
         }
     }
 

@@ -11,8 +11,6 @@ use std::sync::Arc;
 
 use cognee_core::CpuPool;
 use cognee_database::AclDb;
-use cognee_database::SyncOperationRepository;
-use cognee_database::permissions::PermissionsRepository;
 use cognee_database::{CheckpointStore, DatabaseConnection};
 use cognee_delete::DeleteService;
 use cognee_embedding::EmbeddingEngine;
@@ -94,20 +92,6 @@ pub struct ComponentHandles {
     /// `NoOpOntologyResolver`, matching the CLI default when no
     /// `ontology_file_path` is configured.
     pub ontology_resolver: Option<Arc<dyn OntologyResolver>>,
-
-    /// SeaORM-backed `PermissionsRepository` for the 8-step `user_can`
-    /// resolution per `tenants.md §5.1`.
-    ///
-    /// Kept optional so test fixtures that build a bare `ComponentHandles`
-    /// without the new repo continue to compile; the
-    /// [`crate::permissions::check_permission`] helper falls back to
-    /// `AclDb::has_permission_with_roles` when this slot is `None`.
-    pub permissions: Option<Arc<dyn PermissionsRepository>>,
-
-    /// `sync_operations` repository — wires `POST /api/v1/sync` and
-    /// `GET /api/v1/sync/status`. Optional so test fixtures that don't
-    /// exercise the cloud sync flow can leave it unset.
-    pub sync_ops: Option<Arc<dyn SyncOperationRepository>>,
 
     /// Backing store for session Q&A history — wires the `session` source
     /// of `POST /api/v1/recall` (Python `_search_session`,

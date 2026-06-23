@@ -5,11 +5,9 @@ use std::sync::Arc;
 
 use anyhow::anyhow;
 use cognee_core::{CpuPool, RayonThreadPool};
-use cognee_database::permissions::{PermissionsRepository, SeaOrmPermissionsRepository};
-use cognee_database::sync::SyncOperationRepository;
 use cognee_database::{
     CheckpointStore, DatabaseConnection, DeleteDb, IngestDb, SeaOrmCheckpointStore,
-    SeaOrmSyncOperationRepository, SearchHistoryDb, connect, initialize,
+    SearchHistoryDb, connect, initialize,
 };
 use cognee_delete::DeleteService;
 use cognee_embedding::{EmbeddingConfig, EmbeddingEngine, EmbeddingProvider};
@@ -63,14 +61,6 @@ pub async fn wire_default_backends(
         Arc::clone(&database) as Arc<dyn DeleteDb>,
     ));
 
-    let permissions = Some(
-        Arc::new(SeaOrmPermissionsRepository::new(Arc::clone(&database)))
-            as Arc<dyn PermissionsRepository>,
-    );
-    let sync_ops = Some(
-        Arc::new(SeaOrmSyncOperationRepository::new(Arc::clone(&database)))
-            as Arc<dyn SyncOperationRepository>,
-    );
     let checkpoint_store = Some(
         Arc::new(SeaOrmCheckpointStore::new(Arc::clone(&database))) as Arc<dyn CheckpointStore>
     );
@@ -109,8 +99,6 @@ pub async fn wire_default_backends(
         thread_pool,
         embedding_engine,
         ontology_resolver,
-        permissions,
-        sync_ops,
         session_store,
         session_manager,
         checkpoint_store,

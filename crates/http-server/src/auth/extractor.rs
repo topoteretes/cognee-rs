@@ -1,21 +1,21 @@
-//! `AuthenticatedUser` + `OptionalAuthenticatedUser` + `RequireSuperuser`
-//! extractors for axum handlers.
+//! `AuthenticatedUser` + `OptionalAuthenticatedUser` extractors for axum
+//! handlers — OSS slim variant.
 //!
 //! Resolution order:
-//! 0. `ExtraAuthValidator` (if configured) — e.g. Auth0 RS256 JWT
-//! 1. `X-Api-Key` header → lookup_api_key
-//! 2. `Authorization: Bearer <jwt>` → decode_login_jwt
-//! 3. Cookie `<cookie_name>=<jwt>` → decode_login_jwt
-//! 4. If `require_authentication == false` → default user (id=all-zeros)
-//! 5. Else → 401 Unauthorized
+//! 1. `AuthResolver` on `AppState` (closed-injected — JWT/cookie/API key
+//!    chain or external validator) when present and it returns `Some`.
+//! 2. If `require_authentication == false` → synthetic default user (id
+//!    = all-zeros).
+//! 3. Else → 401 Unauthorized.
+//!
+//! The OSS build keeps no JWT/cookie/API-key parsing state — those moved
+//! into the closed `cognee-http-cloud` crate. Closed embedders install
+//! an `AuthResolver` via `RouterBuilder::with_auth_resolver(...)` or an
+//! `ExtraAuthValidator` via `RouterBuilder::with_extra_validator(...)`.
 
-use axum::{
-    extract::FromRequestParts,
-    http::{HeaderMap, request::Parts},
-};
+use axum::{extract::FromRequestParts, http::request::Parts};
 use uuid::Uuid;
 
-use super::{api_key::lookup_api_key, jwt::decode_login_jwt};
 use crate::error::ApiError;
 use crate::state::AppState;
 
@@ -49,131 +49,41 @@ impl FromRequestParts<AppState> for AuthenticatedUser {
         parts: &mut Parts,
         state: &AppState,
     ) -> Result<Self, Self::Rejection> {
-        let Some(auth) = state.auth.as_ref() else {
-            // No auth context wired — use default-user behaviour
-            return default_user_from_state(state).await;
-        };
-
-        // ── 0. External validator (SaaS Auth0, etc.) ────────────────────────
-        if let Some(ref extra) = auth.extra_validator
-            && let Some(user) = extra
-                .validate(&parts.headers, auth.user_repo.as_ref())
-                .await
+        if let Some(resolver) = state.auth_resolver.as_ref()
+            && let Some(user) = resolver.resolve(parts).await
         {
             if !user.is_active {
                 return Err(ApiError::LoginBadCredentials);
             }
-            return Ok(Self {
-                id: user.id,
-                email: user.email,
-                is_superuser: user.is_superuser,
-                is_verified: user.is_verified,
-                is_active: user.is_active,
-                tenant_id: user.tenant_id,
-                auth_method: AuthMethod::BearerJwt,
-            });
+            return Ok(user);
         }
-
-        // ── 1. X-Api-Key header ──────────────────────────────────────────────
-        if let Some(api_key_val) = parts.headers.get("X-Api-Key").and_then(|v| v.to_str().ok())
-            && let Some(user) = lookup_api_key(api_key_val, auth).await
-        {
-            if !user.is_active {
-                return Err(ApiError::LoginBadCredentials);
-            }
-            return Ok(Self {
-                id: user.id,
-                email: user.email,
-                is_superuser: user.is_superuser,
-                is_verified: user.is_verified,
-                is_active: user.is_active,
-                tenant_id: user.tenant_id,
-                auth_method: AuthMethod::ApiKey,
-            });
+        if state.config.require_authentication {
+            Err(ApiError::Unauthorized)
+        } else {
+            Ok(default_user_from_state(state))
         }
-
-        // ── 2. Authorization: Bearer <jwt> ───────────────────────────────────
-        if let Some(bearer_jwt) = extract_bearer(&parts.headers)
-            && let Ok(claims) = decode_login_jwt(bearer_jwt, auth)
-            && let Ok(uid) = Uuid::parse_str(&claims.sub)
-            && let Ok(Some(user)) = auth.user_repo.find_by_id(uid).await
-        {
-            if !user.is_active {
-                return Err(ApiError::Unauthorized);
-            }
-            return Ok(Self {
-                id: user.id,
-                email: user.email,
-                is_superuser: user.is_superuser,
-                is_verified: user.is_verified,
-                is_active: user.is_active,
-                tenant_id: user.tenant_id,
-                auth_method: AuthMethod::BearerJwt,
-            });
-        }
-
-        // ── 3. Cookie <cookie_name>=<jwt> ────────────────────────────────────
-        if let Some(cookie_jwt) = extract_cookie(&parts.headers, &auth.cookie_name)
-            && let Ok(claims) = decode_login_jwt(cookie_jwt, auth)
-            && let Ok(uid) = Uuid::parse_str(&claims.sub)
-            && let Ok(Some(user)) = auth.user_repo.find_by_id(uid).await
-        {
-            if !user.is_active {
-                return Err(ApiError::Unauthorized);
-            }
-            return Ok(Self {
-                id: user.id,
-                email: user.email,
-                is_superuser: user.is_superuser,
-                is_verified: user.is_verified,
-                is_active: user.is_active,
-                tenant_id: user.tenant_id,
-                auth_method: AuthMethod::CookieJwt,
-            });
-        }
-
-        // ── 4. Default user (require_authentication=false) ───────────────────
-        if !auth.require_authentication {
-            return default_user_from_state(state).await;
-        }
-
-        // ── 5. Reject ────────────────────────────────────────────────────────
-        Err(ApiError::Unauthorized)
     }
 }
 
-async fn default_user_from_state(state: &AppState) -> Result<AuthenticatedUser, ApiError> {
-    // Well-known default user (seeded in the migration)
-    let default_id = Uuid::nil();
-    // Try to look up via auth context repo if available
-    if let Some(auth) = state.auth.as_ref()
-        && let Ok(Some(user)) = auth.user_repo.find_by_id(default_id).await
-    {
-        return Ok(AuthenticatedUser {
-            id: user.id,
-            email: user.email,
-            is_superuser: user.is_superuser,
-            is_verified: user.is_verified,
-            is_active: user.is_active,
-            tenant_id: user.tenant_id,
-            auth_method: AuthMethod::DefaultUser,
-        });
-    }
-    // Fall back to a synthetic default user struct
-    Ok(AuthenticatedUser {
-        id: default_id,
+/// Synthetic default user used when no auth resolver is wired and
+/// `require_authentication=false`. Matches the previous OSS behaviour
+/// where the well-known nil-UUID user is returned without a DB lookup.
+pub fn default_user_from_state(_state: &AppState) -> AuthenticatedUser {
+    AuthenticatedUser {
+        id: Uuid::nil(),
         email: "default_user@example.com".to_owned(),
         is_superuser: true,
         is_verified: true,
         is_active: true,
         tenant_id: None,
         auth_method: AuthMethod::DefaultUser,
-    })
+    }
 }
 
 // ─── OptionalAuthenticatedUser ────────────────────────────────────────────────
 
-/// Same resolution as `AuthenticatedUser` but returns `None` instead of 401.
+/// Same resolution as `AuthenticatedUser` but never errors — returns
+/// `None` when authentication fails (instead of 401).
 #[derive(Debug, Clone)]
 pub struct OptionalAuthenticatedUser(pub Option<AuthenticatedUser>);
 
@@ -184,52 +94,18 @@ impl FromRequestParts<AppState> for OptionalAuthenticatedUser {
         parts: &mut Parts,
         state: &AppState,
     ) -> Result<Self, Self::Rejection> {
-        match AuthenticatedUser::from_request_parts(parts, state).await {
-            Ok(u) => Ok(Self(Some(u))),
-            Err(_) => Ok(Self(None)),
+        if let Some(resolver) = state.auth_resolver.as_ref()
+            && let Some(user) = resolver.resolve(parts).await
+        {
+            if user.is_active {
+                return Ok(Self(Some(user)));
+            }
+            return Ok(Self(None));
+        }
+        if state.config.require_authentication {
+            Ok(Self(None))
+        } else {
+            Ok(Self(Some(default_user_from_state(state))))
         }
     }
-}
-
-// ─── RequireSuperuser ─────────────────────────────────────────────────────────
-
-/// Wraps `AuthenticatedUser` and returns 403 if the user is not a superuser.
-#[derive(Debug, Clone)]
-pub struct RequireSuperuser(pub AuthenticatedUser);
-
-impl FromRequestParts<AppState> for RequireSuperuser {
-    type Rejection = ApiError;
-
-    async fn from_request_parts(
-        parts: &mut Parts,
-        state: &AppState,
-    ) -> Result<Self, Self::Rejection> {
-        let user = AuthenticatedUser::from_request_parts(parts, state).await?;
-        if !user.is_superuser {
-            return Err(ApiError::Forbidden("Forbidden".to_owned()));
-        }
-        Ok(Self(user))
-    }
-}
-
-// ─── Header helpers ───────────────────────────────────────────────────────────
-
-fn extract_bearer(headers: &HeaderMap) -> Option<&str> {
-    headers
-        .get(axum::http::header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.strip_prefix("Bearer "))
-}
-
-fn extract_cookie<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
-    let cookie_header = headers
-        .get(axum::http::header::COOKIE)
-        .and_then(|v| v.to_str().ok())?;
-    for part in cookie_header.split(';') {
-        let part = part.trim();
-        if let Some(val) = part.strip_prefix(&format!("{name}=")) {
-            return Some(val);
-        }
-    }
-    None
 }

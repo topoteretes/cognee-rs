@@ -499,26 +499,11 @@ pub async fn ws_subscribe(
     ws.on_upgrade(move |mut socket| async move {
         use axum::extract::ws::Message;
 
-        // ── Post-upgrade authentication (Python parity) ────────────────────────
-        // The auth cookie was present in the original HTTP upgrade headers.
-        // Authenticate now that the WebSocket is established, matching Python's
-        // `websocket.accept()` → cookie read → close on failure flow.
-        if let Some(ref auth) = state.auth {
-            use crate::auth::cookie::authenticate_from_cookie;
-            if authenticate_from_cookie(&headers, auth).await.is_none() {
-                // Any auth failure → close 1008 with reason "Unauthorized"
-                // (literal UTF-8, not JSON per websocket.md §7).
-                let _ = socket
-                    .send(Message::Close(Some(axum::extract::ws::CloseFrame {
-                        code: 1008,
-                        reason: "Unauthorized".into(),
-                    })))
-                    .await;
-                return;
-            }
-        }
-        // Note: when state.auth is None (e.g. in unit tests), no auth is
-        // performed — the handler behaves as if auth is disabled.
+        // Post-upgrade WS authentication moved closed alongside the
+        // cookie/JWT auth state in T3-pre. The closed
+        // `cognee-http-cloud` crate may wrap this router with its own
+        // post-upgrade gate; OSS treats the WS as unauthenticated.
+        let _ = &headers;
 
         // ── Subscribe to the registry ──────────────────────────────────────────
         // `subscribe` is infallible — returns a stream (possibly empty for

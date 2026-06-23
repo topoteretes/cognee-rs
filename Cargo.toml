@@ -25,7 +25,6 @@ members = [
     "crates/delete",
     "crates/test-utils",
     "crates/visualization",
-    "crates/cloud",
     "crates/http-server",
     # Criterion benchmarks for the Rust HTTP server and pipelines
     "crates/bench",

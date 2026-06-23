@@ -1,4 +1,3 @@
-#![cfg(any())] // cognee-http-server gated on oss-split branch (T2-move §4 S2).
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -183,8 +182,6 @@ async fn post_cognify_blocking_executes_real_pipeline() {
         thread_pool: Some(thread_pool),
         embedding_engine: Some(embedding_engine),
         ontology_resolver: None,
-        permissions: None,
-        sync_ops: None,
         session_store: None,
         session_manager: None,
         checkpoint_store: None,

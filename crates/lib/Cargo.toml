@@ -33,7 +33,9 @@ default = [
     "audio-loader",
     "unstructured",
     "visualization",
-    "cloud",
+    # `cloud` is opt-in only — it pulls in the closed `cognee-cloud`
+    # crate from the cognee-cloud-rust sibling repo, which is not
+    # available in pure-OSS builds. Re-enable with --features cloud.
     "mock-llm",
     # decision 1: telemetry is ON by default in cognee-lib. Disable with
     # --no-default-features for compile-time opt-out.
@@ -119,7 +121,7 @@ testing = [
 [dependencies]
 cognee-chunking = { path = "../chunking" }
 cognee-utils = { path = "../utils" }
-cognee-cloud = { path = "../cloud", optional = true }
+cognee-cloud = { path = "../../../cognee-cloud-rust/crates/cognee-cloud", optional = true }
 cognee-http-server = { path = "../http-server", optional = true }
 cognee-cognify = { path = "../cognify" }
 cognee-core = { path = "../core", features = ["pipeline-run-registry"] }

@@ -21,9 +21,9 @@ use axum::{
     routing::{get, post},
 };
 
-use cognee_database::{AclDb, IngestDb};
+use cognee_database::IngestDb;
 
-use crate::auth::{AuthenticatedUser, SuperuserOnly};
+use crate::auth::AuthenticatedUser;
 use crate::dto::visualize::{UserDatasetPairDTO, VisualizeQueryDTO};
 use crate::error::ApiError;
 use crate::middleware::validation::Json as ValidatedJson;
@@ -86,10 +86,15 @@ pub async fn get_visualize(
                 format!("dataset {} not found", query.dataset_id),
             )
         })?;
-    if !AclDb::has_permission(db.as_ref(), user.id, dataset.id, "read")
-        .await
-        .map_err(|err| ApiError::VisualizeError(StatusCode::CONFLICT, err.to_string()))?
-    {
+    let allowed = if let Some(ref acl) = components.acl_db {
+        acl.has_permission(user.id, dataset.id, "read")
+            .await
+            .map_err(|err| ApiError::VisualizeError(StatusCode::CONFLICT, err.to_string()))?
+    } else {
+        // No ACL backend wired (pure-OSS); allow.
+        true
+    };
+    if !allowed {
         return Err(ApiError::VisualizeError(
             StatusCode::CONFLICT,
             "permission denied".to_string(),
@@ -129,10 +134,18 @@ pub async fn get_visualize(
 )]
 #[tracing::instrument(name = "cognee.api.visualize.multi", skip(state, pairs))]
 pub async fn post_visualize_multi(
-    SuperuserOnly(user): SuperuserOnly,
+    user: AuthenticatedUser,
     State(state): State<AppState>,
     ValidatedJson(pairs): ValidatedJson<Vec<UserDatasetPairDTO>>,
 ) -> Result<Html<String>, ApiError> {
+    if !user.is_superuser {
+        // Python parity: superuser gate is a 403 with the
+        // `VisualizeError` envelope, not the canonical 403 detail body.
+        return Err(ApiError::VisualizeError(
+            StatusCode::FORBIDDEN,
+            "Superuser privileges required for multi-user visualization".to_string(),
+        ));
+    }
     crate::telemetry::emit(
         "Visualize Multi API Endpoint Invoked",
         user.id,
@@ -160,9 +173,16 @@ pub async fn post_visualize_multi(
                     format!("dataset {} not found", pair.dataset_id),
                 )
             })?;
-        let allowed = AclDb::has_permission(db.as_ref(), pair.user_id, dataset.id, "read")
-            .await
-            .map_err(|err| ApiError::VisualizeError(StatusCode::CONFLICT, err.to_string()))?;
+        // OSS does not bundle an ACL backend — when no `acl_db` is wired
+        // (the pure-OSS case), allow the read. Closed embedders install
+        // a real `AclDb` impl via `ComponentHandles::acl_db`.
+        let allowed = if let Some(ref acl) = components.acl_db {
+            acl.has_permission(pair.user_id, dataset.id, "read")
+                .await
+                .map_err(|err| ApiError::VisualizeError(StatusCode::CONFLICT, err.to_string()))?
+        } else {
+            true
+        };
         if !allowed {
             return Err(ApiError::VisualizeError(
                 StatusCode::CONFLICT,
@@ -176,24 +196,11 @@ pub async fn post_visualize_multi(
             ));
         };
 
-        // Resolve the target user to a human-readable label so the
-        // `userColors` palette key matches Python's
-        // `getattr(user, "email", None) or str(user.id)` at
-        // `cognee_network_visualization.py:138`. Lookup failure (or a missing
-        // auth context) collapses into the existing 409 catch-all.
-        let user_label = if let Some(auth) = state.auth.as_ref() {
-            match auth
-                .user_repo
-                .find_by_id(pair.user_id)
-                .await
-                .map_err(|err| ApiError::VisualizeError(StatusCode::CONFLICT, err.to_string()))?
-            {
-                Some(u) if !u.email.is_empty() => u.email,
-                _ => pair.user_id.to_string(),
-            }
-        } else {
-            pair.user_id.to_string()
-        };
+        // The closed-side `users` table moved out of OSS in T3-pre, so
+        // OSS falls back to the user id as the palette key. Closed
+        // embedders that want the email-keyed palette wrap this router
+        // and substitute their own email lookup.
+        let user_label = pair.user_id.to_string();
 
         user_pairs.push((user_label, graph_db));
     }

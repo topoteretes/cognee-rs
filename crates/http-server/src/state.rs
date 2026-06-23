@@ -12,12 +12,12 @@ use cognee_observability::TelemetryGuard;
 use cognee_core::PipelineRunRegistry;
 use cognee_core::pipeline_run_registry::DefaultPipelineRunRegistry;
 use cognee_database::{
-    DatabaseConnection, NoopPipelineRunRepository, PipelineRunRepository, SeaOrmApiKeyRepository,
-    SeaOrmPipelineRunRepository, SeaOrmUserAuthRepository,
+    DatabaseConnection, NoopPipelineRunRepository, PipelineRunRepository,
+    SeaOrmPipelineRunRepository,
 };
 
 use crate::{
-    auth::{AuthContext, Mailer},
+    auth_resolver::AuthResolver,
     components::ComponentHandles,
     config::{HttpServerConfig, RegistryConfig},
     error::ServerError,
@@ -29,17 +29,15 @@ use crate::{
 
 /// Per-server dependency container shared across all handlers.
 ///
-/// Fields that depend on phases beyond P0 are either `Option<Arc<…>>` (landed
-/// later) or `()` placeholders annotated with the landing phase.
+/// Fields that depend on closed-side features (auth chain, mailer, etc.)
+/// are kept as injection seams (`Option<Arc<dyn ...>>`) so the closed
+/// `cognee-http-cloud` crate can populate them via the `RouterBuilder`.
 #[derive(Clone)]
 pub struct AppState {
     /// HTTP server config (host, port, CORS, JWT, …).
     pub config: Arc<HttpServerConfig>,
 
     /// Background pipeline-run lifecycle registry.
-    ///
-    /// Wired to `DefaultPipelineRunRegistry` in P3.  After P3, callers may
-    /// rely on this being set — it is no longer optional.
     ///
     /// The inner `Arc<dyn PipelineRunRegistry>` is `Clone`-able cheaply.
     pub pipelines: Arc<dyn PipelineRunRegistry>,
@@ -48,16 +46,15 @@ pub struct AppState {
     /// ontology_manager). `None` until `AppState::build` fully initialises
     /// the backends — most tests leave this `None` and stub out the
     /// relevant functionality directly.
-    // P2: wired by AppState::build when storage/DB env vars are available.
     pub lib: Option<Arc<ComponentHandles>>,
 
-    /// JWT + cookie config and user repository.
-    /// Wired in P1 step 2.
-    pub auth: Option<Arc<AuthContext>>,
-
-    /// Email delivery abstraction. Defaults to `LoggingMailer` (P1).
-    /// SMTP impl deferred to P7.
-    pub mailer: Arc<dyn Mailer>,
+    /// Closed-side authentication chain. `None` in pure-OSS builds; closed
+    /// embedders install one via `RouterBuilder::with_auth_resolver(...)`
+    /// or `RouterBuilder::with_extra_validator(...)`. When `None`, the
+    /// `AuthenticatedUser` extractor falls through to either a synthetic
+    /// default user (`require_authentication=false`) or a 401
+    /// (`require_authentication=true`).
+    pub auth_resolver: Option<Arc<dyn AuthResolver>>,
 
     /// Health checker for /health endpoints. `None` falls back to a
     /// synthetic `MockHealthChecker`. Embedders populate by calling
@@ -113,8 +110,7 @@ impl AppState {
             config: Arc::new(config),
             pipelines,
             lib: None,
-            auth: None,
-            mailer: Arc::new(crate::auth::LoggingMailer),
+            auth_resolver: None,
             health: None,
             spans: Arc::new(SpanBuffer::new(BufferConfig::from_env())),
             sync: Arc::new(SyncRegistry::new()),
@@ -133,12 +129,6 @@ impl AppState {
 
     /// Replace the `health` field with a `RealHealthChecker` built from the
     /// currently-wired `ComponentHandles`. No-op when `lib` is `None`.
-    ///
-    /// Embedders that wire `state.lib` themselves should call this after
-    /// populating the handles to upgrade from the default `MockHealthChecker`
-    /// fallback used by `get_checker` at request time. Without this call the
-    /// `/health` endpoints answer from the placeholder mock — a regression
-    /// guard test in `tests/test_health_real.rs` enforces the real path.
     pub fn install_real_health_checker(&mut self) {
         if let Some(handles) = &self.lib {
             let checker = crate::health::RealHealthChecker::new(Arc::clone(handles), &self.config);
@@ -178,38 +168,11 @@ impl AppState {
                 }
             };
 
-        // Wire the authentication context against the server's own relational
-        // DB.  The baseline migration creates the `users` / `principals` /
-        // `user_api_key` tables (and seeds the default user), so the auth
-        // repositories operate on the same connection the rest of the server
-        // uses.  Without this the extractor would fall back to the anonymous
-        // default user and register/login would 500 (auth context missing).
-        //
-        // `from_env` only errors in production with the insecure default JWT
-        // secret.  Rather than refuse to build the whole server in that case,
-        // degrade to the prior behaviour (no auth context → anonymous default
-        // user) with a loud warning, so misconfigured deployments stay running
-        // exactly as they did before auth was wired here.
-        let user_repo = Arc::new(SeaOrmUserAuthRepository { db: (*db).clone() });
-        let api_key_repo = Arc::new(SeaOrmApiKeyRepository { db: (*db).clone() });
-        let auth = match AuthContext::from_env(&config, user_repo, api_key_repo) {
-            Ok(ctx) => Some(Arc::new(ctx)),
-            Err(e) => {
-                tracing::warn!(
-                    "authentication context not wired: {e} — \
-                     falling back to anonymous default user. Set strong \
-                     FASTAPI_USERS_* secrets (or ENV=dev/test) to enable auth."
-                );
-                None
-            }
-        };
-
         Ok(Self {
             config: Arc::new(config),
             pipelines,
             lib: None,
-            auth,
-            mailer: Arc::new(crate::auth::LoggingMailer),
+            auth_resolver: None,
             health: None,
             spans: Arc::new(SpanBuffer::new(BufferConfig::from_env())),
             sync: Arc::new(SyncRegistry::new()),

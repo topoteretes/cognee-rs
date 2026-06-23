@@ -38,7 +38,8 @@ default = [
     "audio-loader",
     "unstructured",
     "visualization",
-    "cloud",
+    # `cloud` is opt-in — the closed `cognee-cloud` crate lives in the
+    # cognee-cloud-rust sibling repo. Re-enable with --features cloud.
     "mock-llm",
     "bench",
     # decision 1: telemetry is ON by default in cognee-cli. Disable with

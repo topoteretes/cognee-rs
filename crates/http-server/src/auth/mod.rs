@@ -1,32 +1,11 @@
-//! Authentication subsystem for the cognee HTTP server.
-//!
-//! Provides JWT encoding/decoding, cookie helpers, API-key generation and
-//! lookup, password hashing (argon2id new / bcrypt legacy), the `AuthContext`
-//! configuration struct, `AuthenticatedUser` / `RequireSuperuser` extractors,
-//! the `Mailer` trait, and thin service modules for each auth endpoint group.
-//!
-//! The `context` module exposes `AuthContext` which is wired into `AppState::auth`
-//! as `Option<Arc<AuthContext>>` by the server startup path.
+//! Slim OSS auth module. The full closed `auth/` subtree (JWT, cookie,
+//! API key, register/reset/verify, password hashing, mailer,
+//! superuser-only extractor, AuthContext, etc.) lives in the closed
+//! `cognee-http-cloud` crate alongside the auth router family. OSS
+//! keeps only the in-extractor types and the default-user fallback.
 
-pub mod api_key;
-pub mod api_keys_service;
-pub mod context;
-pub mod cookie;
-pub mod extractor;
-pub mod jwt;
-pub mod login;
-pub mod mailer;
-pub mod password;
-pub mod register;
-pub mod reset;
-pub mod superuser;
-pub mod users_service;
-pub mod verify;
+mod extractor;
 
-pub use context::{AuthContext, ExtraAuthValidator};
-pub use extractor::{AuthMethod, AuthenticatedUser, OptionalAuthenticatedUser, RequireSuperuser};
-pub use mailer::{
-    ConsoleMailer, LoggingMailer, MailEvent, MailEventKind, Mailer, MailerError, SmtpMailer,
-    build_default as build_default_mailer,
+pub use extractor::{
+    AuthMethod, AuthenticatedUser, OptionalAuthenticatedUser, default_user_from_state,
 };
-pub use superuser::SuperuserOnly;

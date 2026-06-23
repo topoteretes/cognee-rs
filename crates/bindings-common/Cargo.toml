@@ -24,7 +24,7 @@ workspace = true
 # --no-default-features --features sqlite,testing.
 default = [
     "visualization",
-    "cloud",
+    # `cloud` is opt-in — see crates/lib/Cargo.toml.
     "qdrant",
     "ladybug",
     "onnx",

@@ -1,4 +1,3 @@
-#![cfg(any())] // cognee-http-server gated on oss-split branch (T2-move §4 S2).
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -196,8 +195,6 @@ async fn upload_cognify_search_with_ontology_key_and_unknown_key_negative() {
         )),
         embedding_engine: Some(embedding_engine),
         ontology_resolver: None,
-        permissions: None,
-        sync_ops: None,
         session_store: None,
         session_manager: None,
         checkpoint_store: None,

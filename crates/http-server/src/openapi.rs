@@ -47,27 +47,12 @@ use utoipa::{
         crate::routers::llm::post_infer_schema,
         crate::routers::visualize::get_visualize,
         crate::routers::visualize::post_visualize_multi,
-        // P5 admin + RBAC handlers
-        crate::routers::permissions::list_my_tenants,
-        crate::routers::permissions::list_tenant_roles,
-        crate::routers::permissions::list_users_in_role,
-        crate::routers::permissions::list_user_roles,
-        crate::routers::permissions::list_users_in_tenant,
-        crate::routers::permissions::grant_dataset_permission,
-        crate::routers::permissions::revoke_dataset_permission,
-        crate::routers::permissions::create_role,
-        crate::routers::permissions::delete_role,
-        crate::routers::permissions::create_tenant,
-        crate::routers::permissions::select_tenant,
-        crate::routers::permissions::assign_role,
-        crate::routers::permissions::remove_user_from_role,
-        crate::routers::permissions::add_user_to_tenant,
-        crate::routers::permissions::remove_user_from_tenant,
+        // P5 admin handlers (settings stays OSS; configuration +
+        // the permissions/users/auth/api-keys families moved to the
+        // closed `cognee-http-cloud` crate, which publishes its own
+        // OpenAPI overlay).
         crate::routers::settings::get_settings,
         crate::routers::settings::save_settings,
-        crate::routers::configuration::list_user_configurations,
-        crate::routers::configuration::get_user_configuration,
-        crate::routers::configuration::store_user_configuration,
         // P7 notebooks + responses
         crate::routers::notebooks::list_notebooks,
         crate::routers::notebooks::create_notebook,
@@ -93,17 +78,6 @@ use utoipa::{
         crate::dto::sessions::CostByModelDTO,
         // E-12 — sessions detail DTO (snake_case wire — Python parity carve-out)
         crate::dto::sessions::SessionDetailDTO,
-        // P5 permissions DTOs
-        crate::dto::permissions::SelectTenantDTO,
-        crate::dto::permissions::GrantDatasetPermissionBody,
-        crate::dto::permissions::MessageResponse,
-        crate::dto::permissions::CreateRoleResponse,
-        crate::dto::permissions::CreateTenantResponse,
-        crate::dto::permissions::SelectTenantResponse,
-        crate::dto::permissions::TenantSummary,
-        crate::dto::permissions::RoleSummary,
-        crate::dto::permissions::UserInRole,
-        crate::dto::permissions::UserInTenant,
         // P5 settings DTOs
         crate::dto::settings::SettingsDTO,
         crate::dto::settings::SettingsPayloadDTO,
@@ -114,9 +88,6 @@ use utoipa::{
         crate::dto::settings::ConfigChoice,
         crate::dto::settings::LlmProvider,
         crate::dto::settings::VectorDbProvider,
-        // P5 configuration DTOs
-        crate::dto::configuration::PrincipalConfigurationDTO,
-        crate::dto::configuration::StorePrincipalConfigurationPayloadDTO,
         // P7 notebook + responses DTOs
         crate::dto::notebooks::NotebookDTO,
         crate::dto::notebooks::NotebookCellDTO,

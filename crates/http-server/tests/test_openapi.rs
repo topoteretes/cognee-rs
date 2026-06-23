@@ -1,4 +1,3 @@
-#![cfg(any())] // cognee-http-server gated on oss-split branch (T2-move §4 S2).
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -53,11 +52,11 @@ async fn test_openapi_info() {
     assert_eq!(body["info"]["version"], "1.0.0");
 }
 
-/// P5 acceptance criterion (`docs/http-server/implementation/p5-admin.md §6`):
-/// `GET /openapi.json` advertises paths for `/api/v1/permissions`,
-/// `/api/v1/settings`, and `/api/v1/configuration`. Python's FastAPI
-/// auto-includes registered routes; utoipa requires explicit enumeration in
-/// the `paths(...)` macro — this test guards against future drift.
+/// P5 acceptance criterion: `GET /openapi.json` advertises the OSS-staying
+/// `/api/v1/settings` and `/api/v1/configuration` paths. The
+/// `/api/v1/permissions/...` paths moved to the closed
+/// `cognee-http-cloud` crate (T3-pre) and are asserted in its own
+/// OpenAPI overlay test.
 #[tokio::test]
 async fn test_openapi_advertises_p5_paths() {
     let state = support::build_test_state().await;
@@ -70,18 +69,6 @@ async fn test_openapi_advertises_p5_paths() {
         .expect("openapi document must have a `paths` object");
 
     for required in [
-        "/api/v1/permissions/tenants/me",
-        "/api/v1/permissions/tenants/{tenant_id}/roles",
-        "/api/v1/permissions/tenants/{tenant_id}/roles/{role_id}/users",
-        "/api/v1/permissions/tenants/{tenant_id}/roles/users/{user_id}",
-        "/api/v1/permissions/tenants/{tenant_id}/users",
-        "/api/v1/permissions/datasets/{principal_id}",
-        "/api/v1/permissions/roles",
-        "/api/v1/permissions/tenants",
-        "/api/v1/permissions/tenants/select",
-        "/api/v1/permissions/users/{user_id}/roles",
-        "/api/v1/permissions/users/{user_id}/tenants",
-        "/api/v1/permissions/tenants/{tenant_id}/users/{user_id}",
         "/api/v1/settings",
         "/api/v1/configuration/get_user_configuration/",
         "/api/v1/configuration/get_user_configuration/{config_id}",

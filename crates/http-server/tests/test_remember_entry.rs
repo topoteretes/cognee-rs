@@ -1,4 +1,3 @@
-#![cfg(any())] // cognee-http-server gated on oss-split branch (T2-move §4 S2).
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -101,8 +100,6 @@ fn build_handles_with_session_and_llm(
         thread_pool: None,
         embedding_engine: None,
         ontology_resolver: None,
-        permissions: None,
-        sync_ops: None,
         session_store: Some(store),
         session_manager: Some(Arc::clone(&session_manager)),
         checkpoint_store: None,
@@ -142,8 +139,6 @@ fn build_handles_without_session(db: Arc<DatabaseConnection>) -> Arc<ComponentHa
         thread_pool: None,
         embedding_engine: None,
         ontology_resolver: None,
-        permissions: None,
-        sync_ops: None,
         session_store: None,
         session_manager: None,
         checkpoint_store: None,

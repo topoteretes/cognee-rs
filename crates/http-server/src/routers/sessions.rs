@@ -24,7 +24,7 @@ use axum::{
 use chrono::{DateTime, Duration, Utc};
 use serde_json::json;
 
-use cognee_database::{AclDb, SessionLifecycleDb, SessionListFilters, SessionStats};
+use cognee_database::{SessionLifecycleDb, SessionListFilters, SessionStats};
 
 use crate::auth::AuthenticatedUser;
 use crate::dto::sessions::{
@@ -116,16 +116,18 @@ pub async fn list_sessions(
     // Resolve permitted dataset ids — Python's
     // `_permitted_dataset_ids_for` swallows every exception and returns
     // empty (`get_sessions_router.py:55-58`).
-    let permitted_dataset_ids = match components
-        .database
-        .authorized_dataset_ids_with_roles(user.id, "read")
-        .await
-    {
-        Ok(ids) => ids,
-        Err(err) => {
-            tracing::warn!(error = %err, "authorized_dataset_ids_with_roles failed; proceeding with empty set");
-            Vec::new()
+    // OSS single-user mode (no `acl_db` wired) → empty permitted set,
+    // matching Python's `_permitted_dataset_ids_for` fallback behaviour.
+    let permitted_dataset_ids = if let Some(acl) = components.acl_db.as_ref() {
+        match acl.authorized_dataset_ids_with_roles(user.id, "read").await {
+            Ok(ids) => ids,
+            Err(err) => {
+                tracing::warn!(error = %err, "authorized_dataset_ids_with_roles failed; proceeding with empty set");
+                Vec::new()
+            }
         }
+    } else {
+        Vec::new()
     };
 
     let since = range_since(query.range);
@@ -223,16 +225,18 @@ pub async fn get_stats(
     // Resolve permitted dataset ids — Python's `_permitted_dataset_ids_for`
     // swallows every exception and returns empty
     // (`get_sessions_router.py:55-58`).
-    let permitted_dataset_ids = match components
-        .database
-        .authorized_dataset_ids_with_roles(user.id, "read")
-        .await
-    {
-        Ok(ids) => ids,
-        Err(err) => {
-            tracing::warn!(error = %err, "authorized_dataset_ids_with_roles failed; proceeding with empty set");
-            Vec::new()
+    // OSS single-user mode (no `acl_db` wired) → empty permitted set,
+    // matching Python's `_permitted_dataset_ids_for` fallback behaviour.
+    let permitted_dataset_ids = if let Some(acl) = components.acl_db.as_ref() {
+        match acl.authorized_dataset_ids_with_roles(user.id, "read").await {
+            Ok(ids) => ids,
+            Err(err) => {
+                tracing::warn!(error = %err, "authorized_dataset_ids_with_roles failed; proceeding with empty set");
+                Vec::new()
+            }
         }
+    } else {
+        Vec::new()
     };
 
     let since = range_since(query.range);
@@ -348,16 +352,18 @@ pub async fn cost_by_model(
     // Resolve permitted dataset ids — Python's `_permitted_dataset_ids_for`
     // swallows every exception and returns empty
     // (`get_sessions_router.py:55-58`).
-    let permitted_dataset_ids = match components
-        .database
-        .authorized_dataset_ids_with_roles(user.id, "read")
-        .await
-    {
-        Ok(ids) => ids,
-        Err(err) => {
-            tracing::warn!(error = %err, "authorized_dataset_ids_with_roles failed; proceeding with empty set");
-            Vec::new()
+    // OSS single-user mode (no `acl_db` wired) → empty permitted set,
+    // matching Python's `_permitted_dataset_ids_for` fallback behaviour.
+    let permitted_dataset_ids = if let Some(acl) = components.acl_db.as_ref() {
+        match acl.authorized_dataset_ids_with_roles(user.id, "read").await {
+            Ok(ids) => ids,
+            Err(err) => {
+                tracing::warn!(error = %err, "authorized_dataset_ids_with_roles failed; proceeding with empty set");
+                Vec::new()
+            }
         }
+    } else {
+        Vec::new()
     };
 
     let since = range_since(query.range);
@@ -459,20 +465,21 @@ pub async fn get_session_detail(
 
     // Resolve permitted dataset ids — Python's `_permitted_dataset_ids_for`
     // swallows every exception and returns empty
-    // (`get_sessions_router.py:55-58`).
-    let permitted_dataset_ids = match components
-        .database
-        .authorized_dataset_ids_with_roles(user.id, "read")
-        .await
-    {
-        Ok(ids) => ids,
-        Err(err) => {
-            tracing::warn!(
-                error = %err,
-                "authorized_dataset_ids_with_roles failed; proceeding with empty set"
-            );
-            Vec::new()
+    // (`get_sessions_router.py:55-58`). OSS single-user mode (no
+    // `acl_db` wired) → empty permitted set, identical behaviour.
+    let permitted_dataset_ids = if let Some(acl) = components.acl_db.as_ref() {
+        match acl.authorized_dataset_ids_with_roles(user.id, "read").await {
+            Ok(ids) => ids,
+            Err(err) => {
+                tracing::warn!(
+                    error = %err,
+                    "authorized_dataset_ids_with_roles failed; proceeding with empty set"
+                );
+                Vec::new()
+            }
         }
+    } else {
+        Vec::new()
     };
 
     // Visibility-checked single-row read.

@@ -1,4 +1,3 @@
-#![cfg(any())] // cognee-http-server gated on oss-split branch (T2-move §4 S2).
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -62,7 +61,6 @@ async fn unknown_dataset_id_collapses_to_409() {
 
 #[tokio::test]
 async fn happy_path_returns_html_content_type() {
-    use cognee_database::AclDb;
     use cognee_models::Dataset;
     use uuid::Uuid;
 
@@ -90,14 +88,10 @@ async fn happy_path_returns_html_content_type() {
     IngestDb::create_dataset(components.database.as_ref(), dataset)
         .await
         .expect("create dataset");
-    AclDb::grant_permission(
-        components.database.as_ref(),
-        default_user_id,
-        dataset_id,
-        "read",
-    )
-    .await
-    .expect("grant read");
+    // No explicit ACL grant: OSS test state wires no `acl_db`, so the
+    // visualize router's `if let Some(acl) = components.acl_db` check
+    // skips ACL enforcement entirely (single-user mode parity with
+    // `ENABLE_BACKEND_ACCESS_CONTROL=false`).
 
     let app = cognee_http_server::build_router(state)
         .await

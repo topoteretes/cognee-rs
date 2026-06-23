@@ -1,4 +1,3 @@
-#![cfg(any())] // cognee-http-server gated on oss-split branch (T2-move §4 S2).
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -71,8 +70,6 @@ async fn build_real_handles() -> (Arc<ComponentHandles>, Arc<DatabaseConnection>
         graph_db: Some(graph_db),
         vector_db: Some(vector_db),
         thread_pool: None,
-        permissions: None,
-        sync_ops: None,
         session_store: None,
         session_manager: None,
         checkpoint_store: None,
@@ -177,8 +174,6 @@ async fn real_checker_missing_graph_returns_503_on_detailed() {
         graph_db: None, // <- missing critical backend
         vector_db: Some(vector_db),
         thread_pool: None,
-        permissions: None,
-        sync_ops: None,
         session_store: None,
         session_manager: None,
         checkpoint_store: None,

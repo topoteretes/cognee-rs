@@ -1,17 +1,14 @@
-"""Tests for module-level serve / disconnect cloud operations (T10).
+"""Tests for module-level serve / disconnect cloud operations.
 
-Environment requirements:
-- No special env vars are needed for ``test_disconnect`` — it is always run.
-- ``test_serve_direct_mode`` requires ``COGNEE_TEST_SERVER_URL`` to be set to
-  a running Cognee HTTP server URL; it is skipped otherwise.
+Since T3-pre the ``cloud`` Cargo feature is **opt-in** rather than a
+default for the OSS Python binding (closed `cognee-http-cloud` will
+restore it via the closed bindings crate in T6). The standard
+``python/scripts/check.sh`` build therefore omits the feature, so the
+success-path tests assert the feature-not-built error envelope and the
+``_feature_not_built`` companion tests un-skip and pass.
 
-Note on the Auth0 interactive flow: it cannot be tested in CI. Only the
-direct mode (``url`` option) is testable in automated environments.
-
-Note on the feature-not-built test: it requires a build compiled *without*
-the ``cloud`` Cargo feature, which is not possible in the standard
-``python/scripts/check.sh`` run (which builds with defaults). That test is
-unconditionally skipped in CI.
+Closed binding builds (which re-enable ``cloud``) will exercise the
+success paths in their own test suite.
 """
 
 import os
@@ -39,27 +36,23 @@ def isolated_home(tmp_path, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_disconnect(isolated_home):
-    """disconnect() returns None without raising even if not connected."""
-    result = await cp.disconnect()
-    assert result is None
+    """OSS build (cloud feature off): disconnect() raises feature-not-built."""
+    with pytest.raises(cp.CogneeFeatureNotBuiltError):
+        await cp.disconnect()
 
 
 @pytest.mark.asyncio
 async def test_disconnect_with_wipe_credentials(isolated_home):
-    """disconnect({"wipe_credentials": True}) also returns None without raising."""
-    creds = isolated_home / ".cognee" / "cloud_credentials.json"
-    creds.parent.mkdir(parents=True)
-    creds.write_text("{}")
-    result = await cp.disconnect({"wipe_credentials": True})
-    assert result is None
-    assert not creds.exists()  # wiped the isolated file, not the real one
+    """OSS build (cloud off): disconnect({wipe_credentials: True}) raises feature-not-built."""
+    with pytest.raises(cp.CogneeFeatureNotBuiltError):
+        await cp.disconnect({"wipe_credentials": True})  # wiped the isolated file, not the real one
 
 
 @pytest.mark.asyncio
 async def test_disconnect_camel_case_opts(isolated_home):
-    """disconnect() accepts camelCase opts keys."""
-    result = await cp.disconnect({"wipeCredentials": False})
-    assert result is None
+    """OSS build (cloud off): camelCase opts also surface feature-not-built."""
+    with pytest.raises(cp.CogneeFeatureNotBuiltError):
+        await cp.disconnect({"wipeCredentials": False})
 
 
 # ---------------------------------------------------------------------------
@@ -85,9 +78,6 @@ async def test_serve_direct_mode():
 # without the cloud feature, which check.sh cannot provide).
 # ---------------------------------------------------------------------------
 
-@pytest.mark.skip(
-    reason="requires a build compiled without the cloud feature; skip in standard CI"
-)
 @pytest.mark.asyncio
 async def test_serve_feature_not_built():
     """When cloud is not compiled in, serve() raises CogneeFeatureNotBuiltError."""
@@ -95,9 +85,6 @@ async def test_serve_feature_not_built():
         await cp.serve()
 
 
-@pytest.mark.skip(
-    reason="requires a build compiled without the cloud feature; skip in standard CI"
-)
 @pytest.mark.asyncio
 async def test_disconnect_feature_not_built():
     """When cloud is not compiled in, disconnect() raises CogneeFeatureNotBuiltError."""

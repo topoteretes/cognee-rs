@@ -90,7 +90,6 @@ cognee-graph = { path = "../graph", features = ["ladybug"] }
 cognee-vector = { path = "../vector", features = ["qdrant"] }
 cognee-logging = { path = "../logging" }
 cognee-visualization = { path = "../visualization" }
-cognee-cloud = { path = "../cloud" }
 cognee-utils = { path = "../utils" }
 
 # Serialization
@@ -103,13 +102,10 @@ form_urlencoded = "1"
 # OpenAPI
 utoipa = { version = "5", features = ["axum_extras", "uuid", "chrono"] }
 
-# SMTP mailer (lettre — pure Rust TLS, no OpenSSL dep)
-lettre = { version = "0.11", default-features = false, features = ["tokio1-rustls-tls", "smtp-transport", "builder"] }
-
-# Auth
-jsonwebtoken = "9"
-argon2 = "0.5"
-bcrypt = "0.16"
+# Secret-handling for API-key fields in `HttpServerConfig` /
+# `wire_default_backends` (LLM + embedding providers). The JWT / cookie /
+# password / SMTP auth deps moved to the closed `cognee-http-cloud`
+# crate alongside the auth router family (T3-pre).
 secrecy = "0.10"
 
 # Hashing

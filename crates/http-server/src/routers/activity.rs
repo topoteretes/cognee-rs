@@ -169,77 +169,28 @@ fn span_status_to_string(status: SpanStatus) -> String {
 
 /// `GET /api/v1/activity/users` — list users in the *default user's* tenant.
 ///
-/// Python parity quirk: uses `default_user.tenant_id`, not the authenticated
-/// user's. See [`docs/http-server/routers/activity.md §2.3`](../../../../docs/http-server/routers/activity.md#23-get-apiv1activityusers--list-users-in-the-callers-tenant).
+/// OSS stub: the auth tables (`users`, `tenants`, `user_tenants`) moved
+/// closed alongside `PermissionsRepository`, so the OSS surface returns
+/// an empty list. The closed `cognee-http-cloud` crate re-introduces the
+/// real handler via its own router.
 pub async fn get_users(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     _user: AuthenticatedUser,
 ) -> Json<Vec<TenantUserDTO>> {
-    let users = match list_users_for_default_tenant(&state).await {
-        Ok(rows) => rows,
-        Err(e) => {
-            tracing::warn!(error = %e, "/activity/users swallowing error (Python parity)");
-            Vec::new()
-        }
-    };
-    Json(users)
-}
-
-async fn list_users_for_default_tenant(state: &AppState) -> Result<Vec<TenantUserDTO>, String> {
-    let handles = state
-        .components()
-        .ok_or_else(|| "components not initialized".to_string())?;
-    let permissions = handles
-        .permissions
-        .as_ref()
-        .ok_or_else(|| "permissions repo not wired".to_string())?;
-
-    // Python L109–L113 reads default_user.tenant_id, not the caller's. We do
-    // the same — quirk replicated for parity.
-    let default_user_id = crate::lifecycle::default_user_id();
-    let tenant_id = permissions
-        .current_tenant(default_user_id)
-        .await
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| "default user has no tenant".to_string())?;
-
-    let users = permissions
-        .list_users_in_tenant(tenant_id)
-        .await
-        .map_err(|e| e.to_string())?;
-
-    // We don't have `created_at` / `is_superuser` on the lightweight `User`
-    // projection; fetch them per-user from the `users` table.
-    let mut out = Vec::with_capacity(users.len());
-    for u in users {
-        // The `User` projection returned here does not carry `created_at`
-        // or `is_superuser`. Pull the underlying row.
-        use cognee_database::entities::user;
-        use cognee_database::uuid_hex;
-        use sea_orm::EntityTrait;
-        let hex = uuid_hex::to_hex(u.id);
-        let row = user::Entity::find_by_id(hex)
-            .one(handles.database.as_ref())
-            .await
-            .map_err(|e| e.to_string())?;
-        let (is_superuser, created_at) = match row {
-            Some(m) => (m.is_superuser, Some(format_iso8601(m.created_at))),
-            None => (false, None),
-        };
-        out.push(TenantUserDTO {
-            id: u.id,
-            email: u.email,
-            is_superuser,
-            created_at,
-        });
-    }
-    Ok(out)
+    Json(Vec::new())
 }
 
 // ─── 2.4  GET /agents ────────────────────────────────────────────────────────
+//
+// `classify_agent` + `AgentClassification` were the email-suffix heuristics
+// that powered the `/agents` endpoint before T3-move stubbed it to return
+// an empty list (the `users` / `user_api_key` tables moved to
+// `cognee-access-control`). They're kept dead-code-allowed for the closed
+// `cognee-http-cloud` crate to lift unchanged when it re-homes the route.
 
 /// Classification of one user's email into "agent metadata".
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(dead_code, reason = "lifted by closed cognee-http-cloud in T3-move")]
 struct AgentClassification {
     is_agent: bool,
     is_default: bool,
@@ -252,6 +203,7 @@ struct AgentClassification {
 ///   replace `-`/`_` with spaces in the prefix.
 /// - email is the seed default → `("Human User", "")`.
 /// - else → local part of email as `agent_type`, empty `agent_short_id`.
+#[allow(dead_code, reason = "lifted by closed cognee-http-cloud in T3-move")]
 fn classify_agent(email: &str) -> AgentClassification {
     let is_agent = email.ends_with("@cognee.agent");
     let is_default = email == "default_user@example.com";
@@ -278,69 +230,15 @@ fn classify_agent(email: &str) -> AgentClassification {
 }
 
 /// `GET /api/v1/activity/agents` — list every active user with agent metadata.
+///
+/// OSS stub: the `users` / `user_api_key` tables moved closed
+/// alongside `SeaOrmUserAuthRepository`. OSS returns an empty list; the
+/// closed `cognee-http-cloud` crate provides the real handler.
 pub async fn get_agents(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     _user: AuthenticatedUser,
 ) -> Result<Json<Vec<AgentDTO>>, ApiError> {
-    let handles = state
-        .components()
-        .ok_or_else(|| ApiError::Internal(anyhow::anyhow!("components not initialized")))?;
-
-    // Active users + their API-key counts.
-    let auth_repo = cognee_database::SeaOrmUserAuthRepository {
-        db: (*handles.database).clone(),
-    };
-    use cognee_database::UserAuthRepository;
-    let active_users = auth_repo
-        .list_active_with_api_key_counts()
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e)))?;
-
-    // sic — Python L153-L159 computes this and never reads it; replicated for
-    // parity (same DB-side cost, same observable behavior).
-    let _recent_q = recent_dataset_activity_unused(handles.database.as_ref()).await;
-
-    let dtos: Vec<AgentDTO> = active_users
-        .into_iter()
-        .map(|row| {
-            let cls = classify_agent(&row.email);
-            let status = if row.api_key_count > 0 {
-                "LIVE".to_string()
-            } else {
-                "INACTIVE".to_string()
-            };
-            AgentDTO {
-                id: row.id,
-                email: row.email,
-                agent_type: cls.agent_type,
-                agent_short_id: cls.agent_short_id,
-                is_agent: cls.is_agent,
-                is_default: cls.is_default,
-                status,
-                api_key_count: row.api_key_count,
-                created_at: Some(format_iso8601(row.created_at)),
-            }
-        })
-        .collect();
-    Ok(Json(dtos))
-}
-
-/// Run the `pipeline_runs` 24h aggregation Python computes-but-discards.
-///
-/// We do the same — issue the query and drop the result. Errors are
-/// swallowed (the value is unused either way).
-async fn recent_dataset_activity_unused(
-    db: &cognee_database::DatabaseConnection,
-) -> Result<(), String> {
-    use cognee_database::entities::pipeline_run;
-    use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
-    let cutoff = Utc::now() - chrono::Duration::hours(24);
-    let _ = pipeline_run::Entity::find()
-        .filter(pipeline_run::Column::CreatedAt.gt(cutoff))
-        .all(db)
-        .await
-        .map_err(|e| e.to_string())?;
-    Ok(())
+    Ok(Json(Vec::new()))
 }
 
 // ─── 2.5  GET /export/{dataset_id} ───────────────────────────────────────────

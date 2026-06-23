@@ -1,34 +1,20 @@
-//! Cognee HTTP server library.
+//! Cognee HTTP server library — OSS surface.
 //!
-//! TEMPORARILY DISABLED for the OSS-side `oss-split` branch.
+//! Provides `RouterBuilder` (the embedder-facing injection seam) and a
+//! free-function `build_router` shorthand. Closed embedders use
+//! `RouterBuilder` to splice the moved auth / api-keys / users / sync /
+//! checks / permissions routers back onto the OSS surface and to install
+//! an `AuthResolver` / `ExtraAuthValidator` against the
+//! `AuthenticatedUser` extractor.
 //!
-//! T2-move pulled the auth-table-backed repositories (`UserDb`,
-//! `RoleDb`, `TenantDb`, `SeaOrmUserAuthRepository`,
-//! `SeaOrmApiKeyRepository`, `SeaOrmPermissionsRepository`), the
-//! `cognee_database::auth::*` types, and the auth entity definitions
-//! into the closed `cognee-access-control` crate. The OSS HTTP server
-//! consumed all of those across `state`, `wiring`, `components`,
-//! `permissions`, `auth/*`, and most routers — gating each file
-//! individually would change ~40+ source files. Instead the entire
-//! crate is gated off with `#![cfg(any())]` (an always-false cfg —
-//! identical to the orchestration recipe in
-//! oss-split-plan §4 S2 step 14) until T3 re-homes the auth router
-//! family + DB-backed wiring inside `cognee-cloud-rust`'s own HTTP
-//! server crate.
+//! Pure-OSS callers (and tests) use `build_router(state)` which is
+//! equivalent to `RouterBuilder::new(state).build()`.
 //!
-//! While disabled, the crate compiles to an empty library; any external
-//! consumer that glob-re-exports it (currently only
-//! `cognee-lib::http`) sees no public items but still compiles.
-#![cfg(any())]
-//!
-//! Provides `build_router` (assembles the `axum::Router` with all middleware and
-//! sub-routers) and `run` (binds a TCP listener and drives `axum::serve`).
-//!
-//! The standalone `cognee-http-server` binary is a thin shell over these two
-//! functions.  Library embedders can call `build_router` directly and host the
-//! returned `Router` in their own runtime.
+//! The standalone `cognee-http-server` binary is a thin shell over
+//! `build_router` + `axum::serve`.
 
 pub mod auth;
+pub mod auth_resolver;
 pub mod cloud_client;
 pub mod components;
 pub mod config;
@@ -45,6 +31,7 @@ pub mod permissions;
 pub mod pipelines;
 pub mod responses;
 pub mod responses_dispatch;
+mod router_builder;
 pub mod routers;
 pub mod state;
 pub mod sync;
@@ -53,98 +40,10 @@ pub mod wiring;
 
 pub use config::HttpServerConfig;
 pub use error::{ApiError, ServerError};
+pub use router_builder::{RouterBuilder, build_router};
 pub use state::AppState;
 
 use std::net::SocketAddr;
-
-use axum::{Json, Router, http::StatusCode, response::IntoResponse, routing::get};
-use serde_json::json;
-use tower_http::limit::RequestBodyLimitLayer;
-
-// ─── Root handler ─────────────────────────────────────────────────────────────
-
-/// `GET /` — lightweight root endpoint used as a k8s liveness probe.
-///
-/// Python equivalent: the `root` handler in `client.py`.
-async fn root() -> impl IntoResponse {
-    (
-        StatusCode::OK,
-        Json(json!({"message": "Hello, World, I am alive!"})),
-    )
-}
-
-// ─── build_router ─────────────────────────────────────────────────────────────
-
-/// Assemble the full `axum::Router`, apply middleware, and call `on_startup`.
-///
-/// Called by `run()` and by tests that need the router without a bound socket.
-pub async fn build_router(state: AppState) -> Result<Router, ServerError> {
-    lifecycle::on_startup(&state).await?;
-
-    let body_limit = state.config.body_limit;
-
-    let app = Router::new()
-        // Root endpoint
-        .route("/", get(root))
-        // Health router (mounted at /health, not /api/v1/health)
-        .nest("/health", routers::health::router())
-        // OpenAPI document
-        .route("/openapi.json", get(openapi::openapi_json))
-        // Auth router family (login / logout / auth-me / register / reset / verify)
-        .nest(
-            "/api/v1/auth",
-            Router::new()
-                .merge(routers::auth::router())
-                .merge(routers::auth_register::router())
-                .merge(routers::auth_reset_password::router())
-                .merge(routers::auth_verify::router()),
-        )
-        // API keys router (mounted at /api/v1/auth/api-keys)
-        .nest("/api/v1/auth/api-keys", routers::api_keys::router())
-        // Users router (me / by-id CRUD + get-user-id)
-        .nest(
-            "/api/v1/users",
-            Router::new()
-                .merge(routers::users::router())
-                .merge(routers::users_by_email::router()),
-        )
-        // P2 write-path routers
-        .nest("/api/v1/add", routers::add::router())
-        .nest("/api/v1/datasets", routers::datasets::router())
-        .nest("/api/v1/ontologies", routers::ontologies::router())
-        .nest("/api/v1/delete", routers::delete::router())
-        .nest("/api/v1/update", routers::update::router())
-        .nest("/api/v1/forget", routers::forget::router())
-        // P3 pipeline routers
-        .nest("/api/v1/cognify", routers::cognify::router())
-        .nest("/api/v1/memify", routers::memify::router())
-        .nest("/api/v1/remember", routers::remember::router())
-        .nest("/api/v1/improve", routers::improve::router())
-        // P4 read-path routers
-        .nest("/api/v1/search", routers::search::router())
-        .nest("/api/v1/recall", routers::recall::router())
-        .nest("/api/v1/sessions", routers::sessions::router())
-        .nest("/api/v1/llm", routers::llm::router())
-        .nest("/api/v1/visualize", routers::visualize::router())
-        // P5 admin routers
-        .nest("/api/v1/permissions", routers::permissions::router())
-        .nest("/api/v1/settings", routers::settings::router())
-        .nest("/api/v1/configuration", routers::configuration::router())
-        // P6 observability + cloud-sync + cloud-checks
-        .nest("/api/v1/activity", routers::activity::router())
-        .nest("/api/v1/sync", routers::sync::router())
-        .nest("/api/v1/checks", routers::checks::router())
-        // P7 notebooks + responses (responses is a 501 stub in Stage A)
-        .nest("/api/v1/notebooks", routers::notebooks::router())
-        .nest("/api/v1/responses", routers::responses::router())
-        // Middleware stack (outer → inner): trace → CORS → body limit
-        .layer(RequestBodyLimitLayer::new(body_limit))
-        .layer(middleware::cors::cors_layer(&state.config))
-        .layer(middleware::tracing::trace_layer())
-        .with_state(state);
-
-    Ok(app)
-}
 
 // ─── Graceful shutdown signal ─────────────────────────────────────────────────
 

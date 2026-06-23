@@ -21,7 +21,7 @@ crate-type = ["cdylib"]
 # the standard prebuild.
 default = [
     "visualization",
-    "cloud",
+    # `cloud` is opt-in — see crates/lib/Cargo.toml.
     # engine features — unchanged from Phase 0–5
     "qdrant",
     "ladybug",

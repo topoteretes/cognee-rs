@@ -534,8 +534,6 @@ mod tests {
             graph_db,
             vector_db,
             thread_pool: None,
-            permissions: None,
-            sync_ops: None,
             session_store: None,
             session_manager: None,
             checkpoint_store: None,
