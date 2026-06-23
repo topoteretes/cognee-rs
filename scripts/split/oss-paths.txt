@@ -90,6 +90,7 @@ crates/bindings-common/src/redact.rs
 crates/bindings-common/src/services.rs
 crates/bindings-common/src/wire.rs
 crates/chunking/Cargo.toml
+crates/chunking/README.md
 crates/chunking/src/chunk_by_paragraph.rs
 crates/chunking/src/chunk_by_row.rs
 crates/chunking/src/chunk_by_sentence.rs
@@ -134,6 +135,7 @@ crates/cli/tests/cli_memify.rs
 crates/cli/tests/cli_serve_subcommand.rs
 crates/cli/tests/logging_e2e.rs
 crates/cognify/Cargo.toml
+crates/cognify/README.md
 crates/cognify/src/config.rs
 crates/cognify/src/dataset_resolver.rs
 crates/cognify/src/error.rs
@@ -201,6 +203,7 @@ crates/cognify/tests/test_data.rs
 crates/cognify/tests/test_utils.rs
 crates/cognify/tests/url_provenance.rs
 crates/core/Cargo.toml
+crates/core/README.md
 crates/core/src/cancellation.rs
 crates/core/src/error.rs
 crates/core/src/exec_status.rs
@@ -260,6 +263,7 @@ crates/database/assets/notebooks/tutorials/python-development-with-cognee/cell-8
 crates/database/assets/notebooks/tutorials/python-development-with-cognee/cell-9.py
 crates/database/assets/notebooks/tutorials/python-development-with-cognee/config.json
 crates/database/Cargo.toml
+crates/database/README.md
 crates/database/src/connection.rs
 crates/database/src/conversions.rs
 crates/database/src/entities/data.rs
@@ -326,6 +330,7 @@ crates/database/tests/sync_operations_migration.rs
 crates/database/tests/test_session_lifecycle_repo.rs
 crates/database/tests/test_session_lifecycle_schema.rs
 crates/delete/Cargo.toml
+crates/delete/README.md
 crates/delete/src/authorized.rs
 crates/delete/src/lib.rs
 crates/delete/tests/authorized_delete_integration.rs
@@ -347,6 +352,7 @@ crates/embedding/src/provider.rs
 crates/embedding/src/utils.rs
 crates/embedding/tests/integration.rs
 crates/graph/Cargo.toml
+crates/graph/README.md
 crates/graph/src/error.rs
 crates/graph/src/formatted.rs
 crates/graph/src/ladybug.rs
@@ -473,6 +479,7 @@ crates/http-server/tests/test_search_post.rs
 crates/http-server/tests/test_span_redaction.rs
 crates/http-server/tests/test_visualize_single.rs
 crates/ingestion/Cargo.toml
+crates/ingestion/README.md
 crates/ingestion/src/content_hasher.rs
 crates/ingestion/src/id_generation.rs
 crates/ingestion/src/lib.rs
@@ -515,6 +522,7 @@ crates/ingestion/tests/tenant_isolation.rs
 crates/ingestion/tests/test_data/natural_language_processing.txt
 crates/ingestion/tests/test_data/quantum_computers.txt
 crates/lib/Cargo.toml
+crates/lib/README.md
 crates/lib/src/api/datasets.rs
 crates/lib/src/api/error.rs
 crates/lib/src/api/forget.rs
@@ -577,6 +585,7 @@ crates/llm/tests/openai_span_instrumentation.rs
 crates/llm/tests/transcribe_image_live.rs
 crates/llm/tests/transcriber_test.rs
 crates/logging/Cargo.toml
+crates/logging/README.md
 crates/logging/src/config.rs
 crates/logging/src/formatter.rs
 crates/logging/src/init.rs
@@ -586,6 +595,7 @@ crates/logging/tests/bin/child_smoke.rs
 crates/logging/tests/multi_process_inheritance.rs
 crates/models/Cargo.toml
 crates/models/.gitignore
+crates/models/README.md
 crates/models/src/backend_overrides.rs
 crates/models/src/data_input.rs
 crates/models/src/data_point.rs
@@ -606,6 +616,7 @@ crates/models/src/temporal_event.rs
 crates/models/src/triplet.rs
 crates/models/src/user.rs
 crates/observability/Cargo.toml
+crates/observability/README.md
 crates/observability/src/error.rs
 crates/observability/src/guard.rs
 crates/observability/src/headers.rs
@@ -615,6 +626,7 @@ crates/observability/src/settings.rs
 crates/observability/tests/init.rs
 crates/observability/tests/otel_export.rs
 crates/ontology/Cargo.toml
+crates/ontology/README.md
 crates/ontology/src/builder.rs
 crates/ontology/src/error.rs
 crates/ontology/src/lib.rs
@@ -633,6 +645,7 @@ crates/ontology/tests/loader_fixtures_test.rs
 crates/ontology/tests/manager_tests.rs
 crates/ontology/tests/noop_test.rs
 crates/search/Cargo.toml
+crates/search/README.md
 crates/search/src/graph_retrieval/brute_force_triplet_search.rs
 crates/search/src/graph_retrieval/mod.rs
 crates/search/src/graph_retrieval/triplet_ranking.rs
@@ -684,6 +697,7 @@ crates/search/tests/test_data/germany_netherlands.txt
 crates/search/tests/test_data/quantum_computers.txt
 crates/search/tests/test_utils.rs
 crates/session/Cargo.toml
+crates/session/README.md
 crates/session/src/error.rs
 crates/session/src/feedback.rs
 crates/session/src/fs_store.rs
@@ -703,11 +717,13 @@ crates/session/tests/fs_store_tests.rs
 crates/session/tests/sea_orm_store_tests.rs
 crates/session/tests/test_session_manager_trace.rs
 crates/storage/Cargo.toml
+crates/storage/README.md
 crates/storage/src/lib.rs
 crates/storage/src/local_storage.rs
 crates/storage/src/mock_storage.rs
 crates/storage/src/storage_trait.rs
 crates/telemetry/Cargo.toml
+crates/telemetry/README.md
 crates/telemetry/src/client.rs
 crates/telemetry/src/env.rs
 crates/telemetry/src/ids.rs
@@ -737,6 +753,7 @@ crates/utils/src/redact.rs
 crates/utils/src/retry.rs
 crates/utils/src/tracing_keys.rs
 crates/vector/Cargo.toml
+crates/vector/README.md
 crates/vector/src/brute_force_vector_db.rs
 crates/vector/src/error.rs
 crates/vector/src/lib.rs
