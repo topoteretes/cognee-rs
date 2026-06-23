@@ -132,7 +132,8 @@ int main(void)
     const char *settings =
         "{"
         "  \"embedding_provider\": \"mock\","
-        "  \"llm_api_key\": \"test-key\""
+        "  \"llm_api_key\": \"test-key\","
+        "  \"vector_db_provider\": \"brute-force\""
         "}";
 
     CgSdk *sdk = cg_sdk_new(settings);

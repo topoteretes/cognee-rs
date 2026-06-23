@@ -38,8 +38,8 @@ use crate::SdkError;
 /// Optional keys: `apiKey`, `cloudUrl`, `auth0Domain`, `auth0ClientId`,
 /// `auth0Audience`.
 #[cfg(feature = "cloud")]
-pub fn build_serve_config(opts: &serde_json::Value) -> cognee_lib::ServeConfig {
-    use cognee_lib::ServeConfig;
+pub fn build_serve_config(opts: &serde_json::Value) -> cognee_cloud::ServeConfig {
+    use cognee_cloud::ServeConfig;
 
     let url = opts
         .get("url")
@@ -82,7 +82,7 @@ pub fn build_serve_config(opts: &serde_json::Value) -> cognee_lib::ServeConfig {
 pub async fn run_serve(opts: serde_json::Value) -> Result<serde_json::Value, SdkError> {
     #[cfg(feature = "cloud")]
     {
-        use cognee_lib::serve;
+        use cognee_cloud::serve;
 
         let config = build_serve_config(&opts);
         let client = serve(config)
@@ -116,7 +116,7 @@ pub async fn run_serve(opts: serde_json::Value) -> Result<serde_json::Value, Sdk
 pub async fn run_disconnect(opts: serde_json::Value) -> Result<serde_json::Value, SdkError> {
     #[cfg(feature = "cloud")]
     {
-        use cognee_lib::disconnect;
+        use cognee_cloud::disconnect;
 
         let wipe = opts
             .get("wipeCredentials")

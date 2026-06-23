@@ -45,7 +45,7 @@ default = [
     # --no-default-features for compile-time opt-out.
     "telemetry",
 ]
-cloud         = ["cognee-lib/cloud"]
+cloud         = ["dep:cognee-cloud"]
 mock-llm      = ["cognee-lib/mock-llm"]
 # `bench` adds the `bench` subcommand (perf orchestrator driver). Pulls no heavy
 # deps — just reuses the existing pipeline wiring + tempfile — so it is on by
@@ -88,6 +88,7 @@ android-default = ["cognee-lib/android-default"]
 
 [dependencies]
 clap = { workspace = true, features = ["derive"] }
+cognee-cloud = { path = "../../../cognee-cloud-rust/crates/cognee-cloud", optional = true }
 cognee-lib = { path = "../lib" }
 cognee-logging = { path = "../logging" }
 dirs.workspace = true

@@ -15,14 +15,14 @@
 //! ## Function shapes
 //!
 //! - `cg_sdk_serve(opts_json, cb, user_data)` — deserialises `opts_json` into
-//!   `ServeConfig` fields and calls `cognee_lib::serve(config)`. On success
+//!   `ServeConfig` fields and calls `cognee_cloud::serve(config)`. On success
 //!   `result_json` is `{"connected":true,"serviceUrl":"…"}`.
 //!   `opts.url` → direct mode; absent → cloud (device-code) mode.
 //!   Optional keys: `url`, `apiKey`, `cloudUrl`, `auth0Domain`,
 //!   `auth0ClientId`, `auth0Audience`.
 //!
 //! - `cg_sdk_disconnect(opts_json, cb, user_data)` — calls
-//!   `cognee_lib::disconnect(wipe_credentials)`.  `opts.wipeCredentials`
+//!   `cognee_cloud::disconnect(wipe_credentials)`.  `opts.wipeCredentials`
 //!   (boolean, default false) controls whether the on-disk credential cache
 //!   is erased.  On success `result_json` is `"null"` (D9).
 //!

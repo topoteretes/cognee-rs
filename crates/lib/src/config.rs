@@ -690,7 +690,17 @@ impl Default for Settings {
             graph_file_path: String::new(),
             graph_filename: String::new(),
 
-            vector_db_provider: "pgvector".to_string(),
+            // OSS default: legacy `"lancedb"` is kept as the literal value so
+            // existing configs continue to boot without edits. Post-T4/T5,
+            // `ComponentManager::init_vector_db` redirects `"lancedb"`/`"qdrant"`
+            // to the in-memory `BruteForceVectorDB` with a `tracing::warn!`.
+            // Production deployments should explicitly set
+            // `vector_db_provider="pgvector"` (and supply `vector_db_url`) for
+            // durable storage. T5's earlier flip to `"pgvector"` broke OSS
+            // bindings (Neon/C-API/python defaults don't enable the `pgvector`
+            // Cargo feature) — keeping `"lancedb"` here is the lowest-friction
+            // OSS default that works in every OSS build out of the box.
+            vector_db_provider: "lancedb".to_string(),
             vector_db_url: String::new(),
             vector_db_port: 1234,
             vector_db_name: String::new(),

@@ -8,14 +8,14 @@
 //!
 //! - `cogneeServe(opts?) -> Promise<{ connected: true, serviceUrl: string }>`
 //!   — deserialises JSON opts into `ServeConfig` fields and calls
-//!   `cognee_lib::serve(config)`. Returns a minimal status object so callers
+//!   `cognee_cloud::serve(config)`. Returns a minimal status object so callers
 //!   can log the connection URL without depending on the opaque `CloudClient`.
 //!   `opts.url` → direct mode; absent → cloud (device-code) mode.
 //!   `opts.apiKey`, `opts.cloudUrl`, `opts.auth0Domain`, `opts.auth0ClientId`,
 //!   `opts.auth0Audience` map to the corresponding `ServeConfig` builder methods.
 //!
 //! - `cogneeDisconnect(opts?) -> Promise<void>` — calls
-//!   `cognee_lib::disconnect(wipe_credentials)`.  `opts.wipeCredentials`
+//!   `cognee_cloud::disconnect(wipe_credentials)`.  `opts.wipeCredentials`
 //!   (boolean, default `false`) controls whether the on-disk credential cache
 //!   is erased.
 //!

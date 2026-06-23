@@ -131,6 +131,7 @@ int main(void)
              "{"
              "  \"embedding_provider\": \"mock\","
              "  \"llm_api_key\": \"dummy-key-sdk-add-smoke\","
+             "  \"vector_db_provider\": \"brute-force\","
              "  \"system_root_directory\": \"%s\","
              "  \"data_root_directory\": \"%s\","
              "  \"relational_db_url\": \"%s\""

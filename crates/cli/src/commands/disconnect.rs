@@ -1,12 +1,13 @@
 //! `cognee-cli disconnect` — tear down the remote cloud client.
 //!
-//! Thin wrapper around [`cognee_lib::disconnect`]. If `--wipe-credentials`
+//! Thin wrapper around [`cognee_cloud::disconnect`]. If `--wipe-credentials`
 //! is passed, the cached credentials file at
 //! `~/.cognee/cloud_credentials.json` is deleted as well.
 
 use std::sync::Arc;
 
-use cognee_lib::{ComponentManager, disconnect};
+use cognee_cloud::disconnect;
+use cognee_lib::ComponentManager;
 use tracing::info;
 
 use crate::cli::DisconnectArgs;

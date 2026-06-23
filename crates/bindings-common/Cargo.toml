@@ -33,7 +33,7 @@ default = [
     "testing",
 ]
 visualization = ["cognee-lib/visualization"]
-cloud         = ["cognee-lib/cloud"]
+cloud         = ["dep:cognee-cloud"]
 ladybug       = ["cognee-lib/ladybug"]
 onnx          = ["cognee-lib/onnx"]
 hf-tokenizer  = ["cognee-lib/hf-tokenizer"]
@@ -43,6 +43,7 @@ testing       = ["cognee-lib/testing"]
 
 [dependencies]
 cognee-lib = { path = "../lib", default-features = false }
+cognee-cloud = { path = "../../../cognee-cloud-rust/crates/cognee-cloud", optional = true }
 serde      = { workspace = true }
 serde_json = { workspace = true }
 thiserror  = { workspace = true }

@@ -156,6 +156,7 @@ int main(void)
     snprintf(settings, sizeof(settings),
              "{"
              "  \"embedding_provider\": \"mock\","
+             "  \"vector_db_provider\": \"brute-force\","
              "  \"llm_endpoint\": \"%s\","
              "  \"llm_api_key\": \"%s\","
              "  \"llm_model\": \"gpt-4o-mini\""

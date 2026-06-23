@@ -1,12 +1,13 @@
 //! `cognee-cli serve` — connect the SDK to a Cognee instance.
 //!
-//! Dispatches to [`cognee_lib::serve`] with a [`ServeConfig`] built from the
+//! Dispatches to [`cognee_cloud::serve`] with a [`ServeConfig`] built from the
 //! CLI arguments. Direct mode is selected when `--url` is present; cloud
 //! mode runs the full Auth0 device-code flow otherwise.
 
 use std::sync::Arc;
 
-use cognee_lib::{ComponentManager, ServeConfig, serve};
+use cognee_cloud::{ServeConfig, serve};
+use cognee_lib::ComponentManager;
 use tracing::info;
 
 use crate::cli::ServeArgs;

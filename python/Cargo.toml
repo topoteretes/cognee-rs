@@ -51,7 +51,7 @@ default = [
 # (TELEMETRY_DISABLED / ENV / COGNEE_HOST_SDK) — see telemetry_analytics.rs.
 telemetry     = ["cognee-lib/telemetry"]
 visualization = ["cognee-lib/visualization", "cognee-bindings-common/visualization"]
-cloud         = ["cognee-lib/cloud",         "cognee-bindings-common/cloud"]
+cloud         = ["cognee-bindings-common/cloud"]
 ladybug       = ["cognee-lib/ladybug",       "cognee-bindings-common/ladybug"]
 onnx          = ["cognee-lib/onnx",          "cognee-bindings-common/onnx"]
 hf-tokenizer  = ["cognee-lib/hf-tokenizer",  "cognee-bindings-common/hf-tokenizer"]

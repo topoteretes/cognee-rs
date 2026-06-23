@@ -138,20 +138,6 @@ pub mod visualization {
 #[cfg(feature = "visualization")]
 pub use cognee_visualization::{VisualizationError, visualize};
 
-#[cfg(feature = "cloud")]
-pub mod cloud {
-    //! Re-export of [`cognee_cloud`] for callers that want the full
-    //! surface (state helpers, credential types, management API
-    //! client, etc.) under `cognee::cloud::…`.
-    pub use cognee_cloud::*;
-}
-
-#[cfg(feature = "cloud")]
-pub use cognee_cloud::{
-    CloudClient, CloudCredentials, CloudError, CloudResult, ServeConfig, disconnect, serve,
-    serve_cloud, serve_url,
-};
-
 #[cfg(feature = "server")]
 pub mod http {
     //! HTTP server surface. Available only when the `server` feature is enabled.
@@ -212,11 +198,6 @@ pub mod prelude {
     pub use crate::search::{SearchBuilder, SearchOrchestrator, SearchRequest, SearchType};
     pub use crate::storage::{LocalStorage, StorageTrait};
     pub use crate::vector::VectorDB;
-    #[cfg(feature = "cloud")]
-    pub use crate::{
-        CloudClient, CloudCredentials, CloudError, ServeConfig, disconnect, serve, serve_cloud,
-        serve_url,
-    };
     pub use uuid::Uuid;
 }
 
