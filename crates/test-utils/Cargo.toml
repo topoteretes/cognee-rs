@@ -11,6 +11,8 @@ readme.workspace = true
 keywords.workspace = true
 categories.workspace = true
 authors.workspace = true
+# In-repo test harness; not for crates.io.
+publish = false
 
 [lints]
 workspace = true

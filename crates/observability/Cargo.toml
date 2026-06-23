@@ -29,7 +29,7 @@ telemetry = [
 ]
 
 [dependencies]
-cognee-utils = { path = "../utils" }
+cognee-utils = { path = "../utils", version = "0.1.0" }
 thiserror.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true

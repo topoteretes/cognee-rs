@@ -11,6 +11,8 @@ readme.workspace = true
 keywords.workspace = true
 categories.workspace = true
 authors.workspace = true
+# Distributed as a maturin-built PyPI wheel, not a registry crate.
+publish = false
 
 [lints]
 workspace = true

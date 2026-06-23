@@ -16,13 +16,13 @@ authors.workspace = true
 workspace = true
 
 [dependencies]
-cognee-core = { path = "../core", features = ["pipeline-run-registry"] }
-cognee-database = { path = "../database" }
-cognee-graph = { path = "../graph" }
-cognee-models = { path = "../models" }
-cognee-session = { path = "../session" }
-cognee-storage = { path = "../storage" }
-cognee-vector = { path = "../vector" }
+cognee-core = { path = "../core", version = "0.1.0", features = ["pipeline-run-registry"] }
+cognee-database = { path = "../database", version = "0.1.0" }
+cognee-graph = { path = "../graph", version = "0.1.0" }
+cognee-models = { path = "../models", version = "0.1.0" }
+cognee-session = { path = "../session", version = "0.1.0" }
+cognee-storage = { path = "../storage", version = "0.1.0" }
+cognee-vector = { path = "../vector", version = "0.1.0" }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

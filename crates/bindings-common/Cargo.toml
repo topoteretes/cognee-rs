@@ -11,6 +11,10 @@ readme.workspace = true
 keywords.workspace = true
 categories.workspace = true
 authors.workspace = true
+# Distributed via the JS/Python/C bindings as a prebuilt cdylib; the closed
+# cognee-cloud optional path-dep blocks crates.io publish until T15 lifts the
+# glue to a closed crate.
+publish = false
 
 # NOT a default member of the root workspace but IS a workspace member
 # so `cargo check --all-targets` at the root covers it.

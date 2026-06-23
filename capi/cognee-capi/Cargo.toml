@@ -12,6 +12,8 @@ readme.workspace = true
 keywords.workspace = true
 categories.workspace = true
 authors.workspace = true
+# Distributed as release-artifact tarballs (headers + libs), not a registry crate.
+publish = false
 
 [lib]
 crate-type = ["cdylib", "staticlib"]

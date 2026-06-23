@@ -111,26 +111,26 @@ testing = [
 ]
 
 [dependencies]
-cognee-chunking = { path = "../chunking" }
-cognee-utils = { path = "../utils" }
-cognee-http-server = { path = "../http-server", optional = true }
-cognee-cognify = { path = "../cognify" }
-cognee-core = { path = "../core", features = ["pipeline-run-registry"] }
-cognee-delete = { path = "../delete" }
-cognee-database = { path = "../database" }
-cognee-embedding = { path = "../embedding" }
-cognee-graph = { path = "../graph" }
-cognee-ingestion = { path = "../ingestion" }
-cognee-llm = { path = "../llm" }
-cognee-models = { path = "../models" }
-cognee-observability = { path = "../observability", optional = true }
-cognee-ontology = { path = "../ontology" }
-cognee-search = { path = "../search" }
-cognee-session = { path = "../session" }
-cognee-storage = { path = "../storage" }
-cognee-telemetry = { path = "../telemetry" }
-cognee-vector = { path = "../vector" }
-cognee-visualization = { path = "../visualization", optional = true }
+cognee-chunking = { path = "../chunking", version = "0.1.0" }
+cognee-utils = { path = "../utils", version = "0.1.0" }
+cognee-http-server = { path = "../http-server", version = "0.1.0", optional = true }
+cognee-cognify = { path = "../cognify", version = "0.1.0" }
+cognee-core = { path = "../core", version = "0.1.0", features = ["pipeline-run-registry"] }
+cognee-delete = { path = "../delete", version = "0.1.0" }
+cognee-database = { path = "../database", version = "0.1.0" }
+cognee-embedding = { path = "../embedding", version = "0.1.0" }
+cognee-graph = { path = "../graph", version = "0.1.0" }
+cognee-ingestion = { path = "../ingestion", version = "0.1.0" }
+cognee-llm = { path = "../llm", version = "0.1.0" }
+cognee-models = { path = "../models", version = "0.1.0" }
+cognee-observability = { path = "../observability", version = "0.1.0", optional = true }
+cognee-ontology = { path = "../ontology", version = "0.1.0" }
+cognee-search = { path = "../search", version = "0.1.0" }
+cognee-session = { path = "../session", version = "0.1.0" }
+cognee-storage = { path = "../storage", version = "0.1.0" }
+cognee-telemetry = { path = "../telemetry", version = "0.1.0" }
+cognee-vector = { path = "../vector", version = "0.1.0" }
+cognee-visualization = { path = "../visualization", version = "0.1.0", optional = true }
 async-trait.workspace = true
 chrono.workspace = true
 dotenv.workspace = true

@@ -83,7 +83,11 @@ OSS REPO  (cognee-rust, MIT OR Apache-2.0, public, crates.io)
 ├── bindings: capi/ (C headers + artifacts), python/ (PyPI `cognee-pipeline`,
 │   module `cognee_pipeline`), js/ (npm `cognee`)  — core surface
 └── .github/workflows: lint, test, doc, publish-dry-run, bindings build
+```
 
+> Errata: T10a marks `bindings-common` as `publish = false` per Option C; it ships compiled-in inside the wheel/npm/tarball alongside `python`, `js/cognee-neon`, and `capi/cognee-capi`. The Option A move-to-closed (relocating the cloud glue so `bindings-common` can publish to crates.io) is scheduled for T15.
+
+```
 CLOSED REPO  (cognee-cloud-rust, private)  — depends on OSS via git rev
 ├── cognee-cloud            (serve/disconnect/CloudClient, Auth0)
 ├── cognee-access-control   (users/roles/tenants/ACL impl of AclDb)
