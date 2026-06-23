@@ -213,6 +213,21 @@ pub struct HttpServerConfig {
     /// Disable standalone default backend wiring in `main`.
     /// Env: `COGNEE_DISABLE_DEFAULT_BACKENDS`.
     pub disable_default_backends: bool,
+
+    /// Email address used to derive the synthetic default user when
+    /// `require_authentication=false` and no `AuthResolver` is wired.
+    ///
+    /// The resulting owner id is
+    /// `Uuid::new_v5(&Uuid::NAMESPACE_OID, default_user_email.as_bytes())`
+    /// — the same derivation used by
+    /// [`cognee_lib::api::user::get_or_create_default_user`] and the
+    /// Python reference SDK (`uuid5(NAMESPACE_OID, email)`).
+    ///
+    /// Mirrors `Settings::default_user_email` in `cognee-lib` so the HTTP
+    /// server and the bindings/CLI agree on owner ids for the same
+    /// configured email. Env: `DEFAULT_USER_EMAIL`. Default:
+    /// `"default_user@example.com"`.
+    pub default_user_email: String,
 }
 
 fn default_cache_root() -> PathBuf {
@@ -316,6 +331,7 @@ impl Default for HttpServerConfig {
             notebook_runner_enabled: false,
             responses_client_enabled: false,
             disable_default_backends: false,
+            default_user_email: "default_user@example.com".to_string(),
         }
     }
 }
@@ -521,6 +537,13 @@ impl HttpServerConfig {
 
         if let Ok(v) = std::env::var("COGNEE_DISABLE_DEFAULT_BACKENDS") {
             cfg.disable_default_backends = cognee_utils::parse_env_bool(&v);
+        }
+
+        if let Ok(v) = std::env::var("DEFAULT_USER_EMAIL") {
+            let trimmed = v.trim();
+            if !trimmed.is_empty() {
+                cfg.default_user_email = trimmed.to_string();
+            }
         }
 
         Ok(cfg)

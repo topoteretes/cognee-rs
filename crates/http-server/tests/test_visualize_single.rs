@@ -65,8 +65,9 @@ async fn happy_path_returns_html_content_type() {
     use uuid::Uuid;
 
     // Default authenticated user (when require_authentication=false) — match
-    // the value `AuthenticatedUser::default_user_from_state` produces.
-    let default_user_id = Uuid::nil();
+    // the value `AuthenticatedUser::default_user_from_state` produces:
+    // `uuid5(NAMESPACE_OID, default_user_email)` for Python parity.
+    let default_user_id = Uuid::new_v5(&Uuid::NAMESPACE_OID, "default_user@example.com".as_bytes());
     let dataset_id = Uuid::new_v4();
 
     let graph_db = MockGraphDB::new();

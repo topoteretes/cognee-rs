@@ -66,12 +66,26 @@ impl FromRequestParts<AppState> for AuthenticatedUser {
 }
 
 /// Synthetic default user used when no auth resolver is wired and
-/// `require_authentication=false`. Matches the previous OSS behaviour
-/// where the well-known nil-UUID user is returned without a DB lookup.
-pub fn default_user_from_state(_state: &AppState) -> AuthenticatedUser {
+/// `require_authentication=false`.
+///
+/// **UUID5 content-addressing invariant** (Python parity): the returned
+/// `id` MUST equal `Uuid::new_v5(&Uuid::NAMESPACE_OID, email.as_bytes())`
+/// for the configured `default_user_email`. This matches
+/// [`cognee_lib::api::user::get_or_create_default_user`] and the Python
+/// reference SDK (`uuid5(NAMESPACE_OID, email)`), so the HTTP server
+/// produces the same owner id as the bindings/CLI for the same email.
+/// Without this, data added via bindings (uuid5-derived owner) would
+/// not be visible to queries via the HTTP server (previously hardcoded
+/// `Uuid::nil()`), breaking the cross-SDK content-addressed UUID5
+/// invariants asserted by `e2e-cross-sdk`.
+pub fn default_user_from_state(state: &AppState) -> AuthenticatedUser {
+    // `state.config` is a plain `Arc<HttpServerConfig>` — no lock guard
+    // to drop. The clone is cheap and keeps this function synchronous.
+    let email = state.config.default_user_email.clone();
+    let id = Uuid::new_v5(&Uuid::NAMESPACE_OID, email.as_bytes());
     AuthenticatedUser {
-        id: Uuid::nil(),
-        email: "default_user@example.com".to_owned(),
+        id,
+        email,
         is_superuser: true,
         is_verified: true,
         is_active: true,
@@ -107,5 +121,63 @@ impl FromRequestParts<AppState> for OptionalAuthenticatedUser {
         } else {
             Ok(Self(Some(default_user_from_state(state))))
         }
+    }
+}
+
+// ─── Tests ────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
+mod tests {
+    use super::*;
+    use crate::config::HttpServerConfig;
+
+    /// `default_user_from_state` MUST derive the owner id as
+    /// `uuid5(NAMESPACE_OID, default_user_email)` so it matches
+    /// `cognee_lib::api::user::get_or_create_default_user` and the
+    /// Python reference SDK. Locks down the Python parity invariant
+    /// referenced in Plan §7.
+    #[tokio::test]
+    async fn default_user_id_matches_uuid5_of_configured_email() {
+        let cfg = HttpServerConfig {
+            default_user_email: "alice@example.com".to_string(),
+            ..HttpServerConfig::default()
+        };
+        let state = AppState::build(cfg)
+            .await
+            .expect("AppState::build with default config must succeed");
+
+        let user = default_user_from_state(&state);
+
+        let expected_id = Uuid::new_v5(&Uuid::NAMESPACE_OID, "alice@example.com".as_bytes());
+        assert_eq!(
+            user.id, expected_id,
+            "owner id must be uuid5(NAMESPACE_OID, email)"
+        );
+        assert_eq!(user.email, "alice@example.com");
+        assert!(user.is_active);
+        assert!(user.is_superuser);
+        assert_eq!(user.auth_method, AuthMethod::DefaultUser);
+        assert!(user.tenant_id.is_none());
+    }
+
+    /// The default-config email derivation must also match what the
+    /// bindings/CLI compute via `get_or_create_default_user` for the
+    /// out-of-the-box `default_user@example.com`.
+    #[tokio::test]
+    async fn default_user_id_for_default_email_is_stable() {
+        let state = AppState::build(HttpServerConfig::default())
+            .await
+            .expect("AppState::build with default config must succeed");
+
+        let user = default_user_from_state(&state);
+
+        let expected_id = Uuid::new_v5(&Uuid::NAMESPACE_OID, "default_user@example.com".as_bytes());
+        assert_eq!(user.id, expected_id);
+        assert_ne!(user.id, Uuid::nil(), "must not regress to the old nil-UUID");
     }
 }

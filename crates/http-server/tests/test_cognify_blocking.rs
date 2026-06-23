@@ -124,7 +124,12 @@ async fn post_cognify_blocking_executes_real_pipeline() {
     );
 
     // ── Seed the dataset via the add pipeline ────────────────────────────────
-    let owner_id = Uuid::nil();
+    // The HTTP extractor falls back to the synthetic default user when
+    // `require_authentication=false`, deriving owner id as
+    // `uuid5(NAMESPACE_OID, default_user_email)` to match Python parity
+    // (see `auth/extractor.rs:default_user_from_state`). Seed with that
+    // same derived id so the cognify request finds the dataset.
+    let owner_id = Uuid::new_v5(&Uuid::NAMESPACE_OID, "default_user@example.com".as_bytes());
     let dataset_name = "http_cognify_blocking";
 
     let add_pipeline =
@@ -190,8 +195,9 @@ async fn post_cognify_blocking_executes_real_pipeline() {
     });
 
     // No auth context is wired, so the extractor falls back to the synthetic
-    // default user at `Uuid::nil()` (see `auth/extractor.rs:default_user_from_state`),
-    // which intentionally matches the `owner_id` used to seed the dataset.
+    // default user whose id is `uuid5(NAMESPACE_OID, default_user_email)`
+    // (see `auth/extractor.rs:default_user_from_state`), which intentionally
+    // matches the `owner_id` used to seed the dataset above.
     let cfg = HttpServerConfig {
         require_authentication: false,
         ..HttpServerConfig::default()
