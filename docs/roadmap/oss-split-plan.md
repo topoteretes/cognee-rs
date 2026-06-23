@@ -86,6 +86,8 @@ OSS REPO  (cognee-rust, MIT OR Apache-2.0, public, crates.io)
 ```
 
 > Errata: T10a marks `bindings-common` as `publish = false` per Option C; it ships compiled-in inside the wheel/npm/tarball alongside `python`, `js/cognee-neon`, and `capi/cognee-capi`. The Option A move-to-closed (relocating the cloud glue so `bindings-common` can publish to crates.io) is scheduled for T15.
+>
+> Errata: T10c removes `cognee-http-server`'s runtime dependency on `cognee-test-utils` (the unpublishable in-repo harness). The `dev-mock` feature now enables `cognee-vector/testing` directly — `MockVectorDB` already lives in `cognee-vector` behind that feature, and `cognee-test-utils` only re-exported it. No new `cognee-vector-mock` crate was needed; the publishable surface stays the same.
 
 ```
 CLOSED REPO  (cognee-cloud-rust, private)  — depends on OSS via git rev

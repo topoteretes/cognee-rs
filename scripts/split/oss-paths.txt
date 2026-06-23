@@ -1112,6 +1112,7 @@ python/tests/test_visualization_ops.py
 python/tests/test_watcher_factory.py
 python/tests/test_watcher.py
 README.md
+release-plz.toml
 rust-toolchain.toml
 scripts/android-build-and-deploy.sh
 scripts/android-run.sh
@@ -1131,4 +1132,5 @@ scripts/split/check-no-default-features.sh
 scripts/split/check-partition.sh
 scripts/split/closed-paths.txt
 scripts/split/oss-paths.txt
+scripts/split/publish-order.sh
 SECURITY.md

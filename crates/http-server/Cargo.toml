@@ -66,10 +66,15 @@ telemetry = [
 # OSS-only dev/test escape hatch: enables a `vector_provider="mock"` wiring
 # that constructs an in-memory `MockVectorDB`. Lets `cargo run` / `cargo test`
 # work without provisioning a Postgres instance. Off by default — production
-# builds drop `cognee-test-utils` entirely. The "qdrant" provider was removed
+# builds drop the testing surface entirely. The "qdrant" provider was removed
 # from this wiring as part of the OSS/closed split; qdrant lives in the
 # closed `cognee-vector-qdrant` crate.
-dev-mock = ["dep:cognee-test-utils"]
+#
+# T10c: this feature used to depend on `cognee-test-utils`, but that crate
+# is `publish = false` (in-repo harness). To keep `cognee-http-server`
+# publishable on crates.io, we now enable `cognee-vector/testing` directly —
+# `MockVectorDB` is defined there and `cognee-test-utils` only re-exports it.
+dev-mock = ["cognee-vector/testing"]
 
 [dependencies]
 # Web framework and HTTP stack. axum 0.8 requires hyper 1.x, declared
@@ -108,9 +113,6 @@ cognee-session = { path = "../session", version = "0.1.0" }
 cognee-llm = { path = "../llm", version = "0.1.0" }
 cognee-graph = { path = "../graph", version = "0.1.0", features = ["ladybug"] }
 cognee-vector = { path = "../vector", version = "0.1.0", features = ["pgvector"] }
-# Optional: pulled in only by the `dev-mock` feature so MockVectorDB stays out
-# of production builds. See the feature comment above.
-cognee-test-utils = { path = "../test-utils", version = "0.1.0", optional = true }
 cognee-logging = { path = "../logging", version = "0.1.0" }
 cognee-visualization = { path = "../visualization", version = "0.1.0" }
 cognee-utils = { path = "../utils", version = "0.1.0" }

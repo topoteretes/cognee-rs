@@ -191,7 +191,9 @@ async fn wire_vector_db(cfg: &HttpServerConfig) -> Result<Arc<dyn VectorDB>, Ser
         "mock" => {
             // OSS single-user dev path — keeps `cargo test` + local dev working
             // without a Postgres instance. Off in production builds.
-            Ok(Arc::new(cognee_test_utils::MockVectorDB::new()) as Arc<dyn VectorDB>)
+            // The `dev-mock` feature enables `cognee-vector/testing`, which
+            // is where `MockVectorDB` actually lives.
+            Ok(Arc::new(cognee_vector::MockVectorDB::new()) as Arc<dyn VectorDB>)
         }
         other => Err(ServerError::Other(anyhow!(
             "vector_db_provider='{other}' not supported in the OSS http-server. \
