@@ -9,9 +9,6 @@
  * Asserts:
  *   - `cogneeOwnerId(handle)` resolves to uuid5(NAMESPACE_OID, default_user_email)
  *     (Python default-user semantics).
- *   - a row for that email exists in the `users` table after warm (verified via
- *     the built-in `node:sqlite` module when available; skipped otherwise so the
- *     test stays portable across Node versions).
  *
  * Runs WITHOUT any LLM/network: warming touches the relational DB and builds the
  * mock embedding engine; the LLM engine is constructed but never exercised.
@@ -94,43 +91,19 @@ describe("Phase-1 SDK handle & facade", () => {
     expect(ownerId).toBe(uuid5Oid(email));
   });
 
+  // Note: a former test asserted that a `users` row was created after warm by
+  // directly inspecting the SQLite `users` table. T2-move relocated the
+  // `users` table to the closed cognee-access-control crate
+  // (cognee-cloud-rust/crates/access-control/src/migrator/m20260914_000002_auth.rs);
+  // the OSS baseline migration no longer creates a `users` table at all
+  // (crates/database/src/migrator/m20260914_000001_baseline.rs). The uuid5
+  // parity test above ("resolves owner id lazily without an explicit warm")
+  // is the load-bearing default-user assertion in OSS. Closed bindings (T15)
+  // will restore the users-row test on the closed side.
   it("resolves owner id lazily without an explicit warm (idempotent)", async () => {
     const handle = native.cogneeNew(makeSettings());
     // No cogneeWarm() — cogneeOwnerId warms on demand.
     const ownerId = await native.cogneeOwnerId(handle);
     expect(ownerId).toBe(uuid5Oid(email));
-  });
-
-  it("created a users row for the default email after warm", async () => {
-    const handle = native.cogneeNew(makeSettings());
-    await native.cogneeWarm(handle);
-
-    // `node:sqlite` is a built-in but only on newer Node versions; skip the
-    // direct DB inspection where it is unavailable so the test stays portable
-    // across the Node 16+ matrix CI runs on.
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let sqlite: any;
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
-      sqlite = require("node:sqlite");
-    } catch {
-      sqlite = undefined;
-    }
-    if (!sqlite || typeof sqlite.DatabaseSync !== "function") {
-      console.warn("node:sqlite unavailable — skipping direct users-row check");
-      return;
-    }
-
-    expect(fs.existsSync(dbPath)).toBe(true);
-    const db = new sqlite.DatabaseSync(dbPath);
-    try {
-      const row = db
-        .prepare("SELECT id, email FROM users WHERE email = ?")
-        .get(email) as { id: string; email: string } | undefined;
-      expect(row).toBeDefined();
-      expect(row?.email).toBe(email);
-    } finally {
-      db.close();
-    }
   });
 });
