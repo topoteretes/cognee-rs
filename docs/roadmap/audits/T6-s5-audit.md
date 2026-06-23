@@ -28,13 +28,19 @@ dispatch.
 
 ## bindings-common cloud surface inventory
 
+> **Post-T7:** imports went from `cognee_lib::*` re-exports to direct
+> `cognee_cloud::*`; `bindings-common` gained an optional `cognee-cloud`
+> path-dep (and the `cloud` feature flipped from forwarding through
+> `cognee-lib` to enabling that optional dep directly).
+
 | Aspect | Location | Finding |
 |---|---|---|
 | `cloud` removed from `default` in T3-pre | `crates/bindings-common/Cargo.toml:25-34` | `default` lists `visualization, ladybug, onnx, hf-tokenizer, tiktoken, sqlite, testing`; no `cloud` |
-| `cloud` feature is a thin forward | `crates/bindings-common/Cargo.toml:36` | `cloud = ["cognee-lib/cloud"]` — no direct `cognee-cloud` dep in this crate |
+| `cloud` feature gates an optional path-dep | `crates/bindings-common/Cargo.toml:36` | `cloud = ["dep:cognee-cloud"]` — direct optional dep on the closed `cognee-cloud` crate, no longer forwarded through `cognee-lib` |
 | `cognee-lib` is `default-features = false` | `crates/bindings-common/Cargo.toml:45` | Forwards strictly through the OSS umbrella; no closed-side leakage via transitive defaults |
+| Optional path-dep on closed `cognee-cloud` | `crates/bindings-common/Cargo.toml:46` | `cognee-cloud = { path = "../../../cognee-cloud-rust/crates/cognee-cloud", optional = true }` — only compiled when `cloud` is enabled |
 | `pub mod cloud;` is unconditional | `crates/bindings-common/src/ops/mod.rs:9` | Intentional — see §"Design rationale" below |
-| `ops/cloud.rs` imports | `crates/bindings-common/src/ops/cloud.rs:25, 42, 85, 119` | Only `crate::SdkError` + `cognee_lib::{ServeConfig, serve, disconnect}` re-exports (the latter are `#[cfg(feature = "cloud")]`-gated in `crates/lib/src/lib.rs:149-153`) |
+| `ops/cloud.rs` imports | `crates/bindings-common/src/ops/cloud.rs:25, 41-42, 85, 119` | `crate::SdkError` + direct `cognee_cloud::{ServeConfig, serve, disconnect}` imports under `#[cfg(feature = "cloud")]`; the OSS `cognee-lib` cloud re-export block was removed in T7 |
 | No `pub use ops::cloud::*` leak | `crates/bindings-common/src/lib.rs:21-32` | Cloud surface accessed only via the canonical `cognee_bindings_common::ops::cloud::*` path |
 
 ## Binding callsites — three-row table
@@ -52,13 +58,14 @@ no duplicated logic".
 
 ## ops/cloud.rs liftability verdict
 
-- **Zero direct `cognee_cloud::*` imports.** All closed-side references go
-  through the OSS `cognee_lib::*` re-exports at `crates/lib/src/lib.rs:149-153`
-  (which are `#[cfg(feature = "cloud")]`-gated and forward to
-  `cognee_cloud::*`). When the cloud re-exports move out wholesale in S6/T7,
-  `ops/cloud.rs` follows trivially — its imports rewrite from `cognee_lib::…`
-  to `cognee_cloud::…` (or stay on `cognee_lib::…` if the closed bindings
-  re-add the umbrella re-export).
+- **Direct `cognee_cloud::*` imports under `#[cfg(feature = "cloud")]`.**
+  Post-T7, `ops/cloud.rs` references `cognee_cloud::ServeConfig` (line 41-42),
+  `cognee_cloud::serve` (line 85), and `cognee_cloud::disconnect` (line 119)
+  directly via the optional path-dep declared at
+  `crates/bindings-common/Cargo.toml:46`. The OSS `cognee-lib` umbrella
+  re-export block was removed in T7, so there is no longer an umbrella seam
+  to traverse — bindings-common reaches into the closed `cognee-cloud` crate
+  itself when (and only when) the `cloud` feature is on.
 - **No `pub(crate)` items in `bindings-common/src/`.** Verified by grep — no
   privacy promotions are needed for closed-side reuse.
 - **Only OSS-staying types referenced:** `crate::SdkError`
@@ -106,10 +113,11 @@ time.
 
 ## Surviving closed-named selections — out of scope for S5
 
-The removal of the `cognee-lib::cloud::*` re-exports at
-`crates/lib/src/lib.rs:141-153` and the `cloud` opt-in feature itself
-(plus the `cloud`-named arms in every `default` set across the
-workspace) is **§4 S6 / S7 (T7) scope**. T6 ratifies the seam; T7 finishes
-the feature-default hygiene. Cross-reference
+The removal of the `cognee-lib::cloud::*` re-exports and the `cloud`-named
+arms in workspace `default` sets was **§4 S6 / S7 (T7) scope** and has
+since landed: `crates/lib/src/lib.rs` no longer contains a cloud re-export
+block, and `bindings-common`'s `cloud` feature now gates an optional
+`cognee-cloud` path-dep directly (see Cargo.toml:36, 46). T6 ratified the
+seam; T7 finished the feature-default hygiene. Cross-reference
 [`T1-s1-audit.md:63-69`](./T1-s1-audit.md) which already lists this deferral
 under "T7 (S6 / S7 — cloud re-exports + default-feature hygiene)".

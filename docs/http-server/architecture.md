@@ -445,7 +445,7 @@ axum                 = "0.8"
 tokio                = { workspace = true, features = ["full"] }
 tower                = "0.5"
 tower-http           = { version = "0.6", features = ["cors", "trace", "limit"] }
-hyper                = { version = "1", features = ["server", "http1", "http2"] }  # Do NOT use workspace = true — the workspace [patch] pins hyper to a v0.14 qdrant fork; axum 0.8 needs hyper 1.x. Cargo resolves both versions side-by-side.
+hyper                = { version = "1", features = ["server", "http1", "http2"] }  # axum 0.8 needs hyper 1.x. After T4-move the workspace [patch.crates-io] block was removed (the qdrant v0.14 hyper fork moved to cognee-cloud-rust), so hyper 1.x is the only version in the OSS graph.
 cognee-lib           = { path = "../lib" }       # no `server` feature on cognee-lib here — that would be a cycle
 cognee-models        = { path = "../models" }
 serde                = { workspace = true, features = ["derive"] }

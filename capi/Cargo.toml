@@ -1,10 +1,11 @@
 # capi/Cargo.toml — standalone workspace for the C API bindings.
 #
 # Extracted from the root workspace per decision D10 (phase 0).
-# The [patch.crates-io] table below must be kept in sync with the root
-# workspace (Cargo.toml at the repo root) and js/cognee-neon/Cargo.toml.
-# Any qdrant-fork patch added or bumped in one place must be reflected in
-# all three. See docs/capi-bindings/README.md §8 (Patch drift risk).
+# After T4-move the capi workspace no longer carries a `[patch.crates-io]`
+# block (the qdrant fork chain moved to the closed `cognee-cloud-rust`
+# workspace alongside the qdrant adapter), and the OSS root workspace
+# dropped its patch block as well — no cross-workspace patch sync is
+# required for OSS builds.
 [workspace]
 members = ["cognee-capi"]
 resolver = "3"
