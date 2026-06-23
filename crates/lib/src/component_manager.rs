@@ -5,7 +5,6 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use tokio::sync::RwLock as TokioRwLock;
-use tracing::warn;
 
 use cognee_database::{DatabaseConnection, connect, initialize};
 use cognee_embedding::{EmbeddingConfig, EmbeddingEngine, EmbeddingProvider};
@@ -270,7 +269,7 @@ impl ComponentManager {
                 s.graph_database_password.as_str(),
             )
         } else {
-            warn!(
+            tracing::warn!(
                 "Postgres graph credentials not fully configured; falling back to the \
                  relational database configuration. Set GRAPH_DATABASE_* explicitly to avoid this."
             );
