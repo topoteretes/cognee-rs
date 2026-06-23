@@ -18,7 +18,7 @@ use cognee_llm::{Llm, OpenAIAdapter, Transcriber};
 use cognee_storage::{LocalStorage, StorageTrait};
 #[cfg(feature = "pgvector")]
 use cognee_vector::PgVectorAdapter;
-use cognee_vector::VectorDB;
+use cognee_vector::{BruteForceVectorDB, VectorDB};
 
 use crate::config::{ConfigManager, Settings};
 use crate::context::PipelineContext;
@@ -321,24 +321,26 @@ impl ComponentManager {
                     "vector_db_provider=pgvector requires the `pgvector` crate feature".to_string(),
                 ))
             }
-            // T4-move removed the Qdrant adapter from OSS. With the `testing`
-            // feature on we silently substitute the in-memory `MockVectorDB`
-            // for `qdrant`/`lancedb` so existing smoke tests and the
-            // legacy default `vector_db_provider="lancedb"` config still
-            // work without each call site setting `vector_db_provider="mock"`.
-            // Without `testing`, we surface the explicit closed-required
-            // error so production deployments don't silently fall back to
-            // a non-persistent backend.
+            // Pure-Rust in-memory brute-force backend (OSS edge/Android default).
+            "brute-force" | "brute_force" | "bruteforce" => Ok(Arc::new(BruteForceVectorDB::new())),
+            // T4-move removed the Qdrant + LanceDB adapters from OSS. Rather
+            // than hard-error, fall back to the in-memory brute-force backend
+            // so existing configs keep booting. Operators get a `warn!` line
+            // telling them what happened and how to silence it.
+            "qdrant" | "lancedb" => {
+                tracing::warn!(
+                    provider = %provider,
+                    "vector_db_provider='{provider}' is no longer available in OSS; \
+                     falling back to in-memory brute-force. Set vector_db_provider='pgvector' \
+                     for production, or 'brute-force' to silence this warning.",
+                );
+                Ok(Arc::new(BruteForceVectorDB::new()))
+            }
             #[cfg(feature = "testing")]
-            "qdrant" | "lancedb" | "mock" => Ok(Arc::new(cognee_vector::MockVectorDB::new())),
-            #[cfg(not(feature = "testing"))]
-            "qdrant" | "lancedb" => Err(ComponentError::Config(format!(
-                "vector_db_provider='{provider}' is not available in this build. \
-                 The Qdrant adapter has been extracted to the closed cognee-vector-qdrant crate; \
-                 use vector_db_provider='pgvector' in OSS builds.",
-            ))),
+            "mock" => Ok(Arc::new(cognee_vector::MockVectorDB::new())),
             other => Err(ComponentError::Config(format!(
-                "Unsupported vector_db_provider '{other}'. Supported: pgvector.",
+                "Unsupported vector_db_provider '{other}'. \
+                 Supported: pgvector, brute-force, mock (testing feature only).",
             ))),
         }
     }

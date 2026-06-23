@@ -72,6 +72,10 @@ fn vector_db_providers() -> Vec<ConfigChoice> {
             value: "pgvector".into(),
             label: "pgvector".into(),
         },
+        ConfigChoice {
+            value: "brute-force".into(),
+            label: "Brute-force (in-memory)".into(),
+        },
     ]
 }
 
@@ -309,6 +313,7 @@ pub async fn save_settings(
             crate::dto::settings::VectorDbProvider::Lancedb => "lancedb".into(),
             crate::dto::settings::VectorDbProvider::Chromadb => "chromadb".into(),
             crate::dto::settings::VectorDbProvider::Pgvector => "pgvector".into(),
+            crate::dto::settings::VectorDbProvider::BruteForce => "brute-force".into(),
         };
         current.url = url;
         if should_persist_api_key(&api_key) {

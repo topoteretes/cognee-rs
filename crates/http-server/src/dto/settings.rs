@@ -82,6 +82,8 @@ pub enum VectorDbProvider {
     Lancedb,
     Chromadb,
     Pgvector,
+    #[serde(rename = "brute-force", alias = "brute_force", alias = "bruteforce")]
+    BruteForce,
 }
 
 #[derive(Debug, Clone, Deserialize, ToSchema)]

@@ -2,6 +2,8 @@
 //!
 //! Provides vector storage and similarity search for embeddings.
 
+/// Pure-Rust in-memory brute-force vector database (OSS default fallback).
+pub mod brute_force_vector_db;
 /// Error types for vector database operations.
 pub mod error;
 /// Data models for vector points, search results, and collection configuration.
@@ -15,6 +17,7 @@ pub mod pgvector_adapter;
 #[cfg(feature = "testing")]
 pub mod mock_vector_db;
 
+pub use brute_force_vector_db::BruteForceVectorDB;
 pub use error::{VectorDBError, VectorDBResult};
 pub use models::{CollectionConfig, DistanceMetric, SearchResult, VectorPoint};
 pub use vector_db_trait::VectorDB;

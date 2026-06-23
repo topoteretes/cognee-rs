@@ -690,7 +690,7 @@ impl Default for Settings {
             graph_file_path: String::new(),
             graph_filename: String::new(),
 
-            vector_db_provider: "lancedb".to_string(),
+            vector_db_provider: "pgvector".to_string(),
             vector_db_url: String::new(),
             vector_db_port: 1234,
             vector_db_name: String::new(),
