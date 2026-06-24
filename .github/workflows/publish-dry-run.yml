@@ -1,0 +1,94 @@
+name: publish-dry-run
+
+# Plan §5 Phase 3 (oss-split-plan.md:341-345): walk every publishable workspace
+# member through `cargo publish --dry-run` in the same topological order that
+# `release-plz` will use, catching packaging issues (missing readme/license,
+# excluded files, version-bump mistakes) before they hit crates.io.
+#
+# Sourcing the crate list from scripts/split/publish-order.sh (T10c) keeps the
+# CI gate and the local sweep in lock-step.
+on:
+  push:
+    branches: [main, master, oss-split]
+  pull_request:
+  schedule:
+    # 04:17 UTC daily — off-peak slot to catch upstream-crates breakage
+    # (e.g. a transitive dep yanked overnight) without competing with the
+    # main CI lane.
+    - cron: '17 4 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: publish-dry-run-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_INCREMENTAL: "0"
+  CARGO_PROFILE_DEV_DEBUG: "0"
+
+jobs:
+  dry-run:
+    name: cargo publish --dry-run (every publishable crate)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      # Mirror oss-isolation.yml's disk-reclaim step. Packaging 22 crates plus
+      # their .crate tarballs in target/package/ can exceed the default 14 GB
+      # runner disk; android/dotnet/haskell tool-caches and docker images are
+      # the cheapest wins.
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: false
+          swap-storage: false
+          docker-images: true
+
+      - name: Install Rust (from rust-toolchain.toml)
+        run: rustup show
+
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: publish-dry-run-v1
+          cache-on-failure: true
+
+      - name: Generate lockfile if missing
+        run: |
+          if [ ! -f Cargo.lock ]; then
+            cargo generate-lockfile
+          fi
+
+      - name: Dry-run publish each crate in topological order
+        run: |
+          set -euo pipefail
+          : > /tmp/dry-run.log
+          fails=0
+          while IFS= read -r c; do
+            [ -z "$c" ] && continue
+            printf '── %-32s ' "$c"
+            if cargo publish --dry-run --no-verify --allow-dirty -p "$c" \
+                  >> /tmp/dry-run.log 2>&1; then
+              echo OK
+            else
+              echo FAIL
+              fails=$((fails + 1))
+            fi
+          done < <(scripts/split/publish-order.sh)
+          echo
+          echo "=== summary: ${fails} failure(s) ==="
+          if [ "$fails" -gt 0 ]; then
+            echo "=== full log ==="
+            cat /tmp/dry-run.log
+            exit 1
+          fi

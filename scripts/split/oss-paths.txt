@@ -948,6 +948,8 @@ examples/url_ingestion.rs
 .github/workflows/http-parity.yml
 .github/workflows/js-prebuild.yml
 .github/workflows/oss-isolation.yml
+.github/workflows/publish-dry-run.yml
+.github/workflows/release-plz.yml
 .gitignore
 js/cognee-neon/Cargo.toml
 js/cognee-neon/src/cancellation.rs
