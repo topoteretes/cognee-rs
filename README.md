@@ -252,3 +252,11 @@ crate (`cognee_logging::init_logging`, called by the CLI and HTTP server). The
 full env-var table (`COGNEE_LOG_*`, `RUST_LOG`/`LOG_LEVEL`, `LOG_FILE_NAME`) and
 the multi-process rotation warning are documented canonically in
 [`docs/configuration.md` → Logging](docs/configuration.md#logging).
+
+## License
+
+Dual-licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option.
+
+Unless you explicitly state otherwise, any contribution intentionally submitted
+for inclusion in the work by you, as defined in the Apache-2.0 license, shall be
+dual licensed as above, without any additional terms or conditions.

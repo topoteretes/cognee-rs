@@ -259,4 +259,4 @@ files manually, the tokenizer must be at:
 
 ## License
 
-Same as cognee-rust (check root LICENSE file)
+Dual-licensed under [MIT](../../LICENSE-MIT) or [Apache-2.0](../../LICENSE-APACHE), at your option.
