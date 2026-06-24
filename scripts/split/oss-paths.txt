@@ -60,6 +60,7 @@ capi/include/cognee_sdk.h
 capi/LICENSE-APACHE
 capi/LICENSE-MIT
 capi/README.md
+capi/scripts/build-release-tarball.sh
 capi/scripts/check_header_sync.sh
 capi/scripts/check.sh
 capi/scripts/header_sync_allow.txt
@@ -942,6 +943,7 @@ examples/embedding_engine_example.rs
 examples/fact_extraction_example.rs
 examples/summarization_example.rs
 examples/url_ingestion.rs
+.github/workflows/capi-release.yml
 .github/workflows/ci.yml
 .github/workflows/http-parity.yml
 .github/workflows/oss-isolation.yml

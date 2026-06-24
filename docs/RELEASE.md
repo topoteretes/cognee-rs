@@ -57,10 +57,26 @@ from source (or fetches a prebuild) on install.
 
 ## Publish — C-library artifact
 
+### Automated path
+
+The `.github/workflows/capi-release.yml` GitHub Actions workflow runs on every
+`v*` tag push and produces per-platform tarballs (linux-x86_64, linux-aarch64,
+macos-x86_64, macos-aarch64, windows-x86_64) attached to the GitHub Release for
+the tag. The manual instructions below remain valid for local validation or
+custom builds. Both code paths share `capi/scripts/build-release-tarball.sh`.
+
+### Manual path
+
 ```bash
 bash capi/scripts/check.sh          # gate
-# Build the release library + assemble headers + LICENSE-MIT + LICENSE-APACHE into a dist dir/tarball.
-# (capi/ is its own workspace; build from there.)
+
+# Build the release library (capi/ is its own workspace; build from there).
+cargo build --release --manifest-path capi/Cargo.toml
+
+# Assemble headers + LICENSE-MIT + LICENSE-APACHE + README into a dist tarball.
+# Args: <tag> <cargo-target-or-empty> <archive-suffix>
+bash capi/scripts/build-release-tarball.sh vX.Y.Z "" linux-x86_64
+# → dist/cognee-capi-vX.Y.Z-linux-x86_64.tar.gz
 ```
 
 Attach the resulting tarball (lib + headers + `LICENSE-MIT` + `LICENSE-APACHE`) to the GitHub Release for the tag.
