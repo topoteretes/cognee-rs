@@ -53,10 +53,9 @@ async fn test_openapi_info() {
 }
 
 /// P5 acceptance criterion: `GET /openapi.json` advertises the OSS-staying
-/// `/api/v1/settings` and `/api/v1/configuration` paths. The
-/// `/api/v1/permissions/...` paths moved to the closed
-/// `cognee-http-cloud` crate (T3-pre) and are asserted in its own
-/// OpenAPI overlay test.
+/// `/api/v1/settings` path. The `/api/v1/configuration/...` and
+/// `/api/v1/permissions/...` paths moved to the closed `cognee-http-cloud`
+/// crate (T3-move) and are asserted in its own OpenAPI overlay test.
 #[tokio::test]
 async fn test_openapi_advertises_p5_paths() {
     let state = support::build_test_state().await;
@@ -68,12 +67,7 @@ async fn test_openapi_advertises_p5_paths() {
         .as_object()
         .expect("openapi document must have a `paths` object");
 
-    for required in [
-        "/api/v1/settings",
-        "/api/v1/configuration/get_user_configuration/",
-        "/api/v1/configuration/get_user_configuration/{config_id}",
-        "/api/v1/configuration/store_user_configuration",
-    ] {
+    for required in ["/api/v1/settings"] {
         assert!(
             paths.contains_key(required),
             "openapi `paths` must advertise `{required}`; only saw: {:?}",
