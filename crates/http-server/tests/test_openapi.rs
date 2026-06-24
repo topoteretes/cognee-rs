@@ -67,11 +67,10 @@ async fn test_openapi_advertises_p5_paths() {
         .as_object()
         .expect("openapi document must have a `paths` object");
 
-    for required in ["/api/v1/settings"] {
-        assert!(
-            paths.contains_key(required),
-            "openapi `paths` must advertise `{required}`; only saw: {:?}",
-            paths.keys().collect::<Vec<_>>()
-        );
-    }
+    let required = "/api/v1/settings";
+    assert!(
+        paths.contains_key(required),
+        "openapi `paths` must advertise `{required}`; only saw: {:?}",
+        paths.keys().collect::<Vec<_>>()
+    );
 }
