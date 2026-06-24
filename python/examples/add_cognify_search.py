@@ -34,7 +34,7 @@ import json
 import os
 import sys
 
-from cognee_pipeline import Cognee
+from cognee_py import Cognee
 
 
 def _check_env() -> tuple[str, str]:

@@ -15,22 +15,22 @@ use pyo3::prelude::*;
 
 // ── Base exception ────────────────────────────────────────────────────────────
 
-create_exception!(cognee_pipeline, CogneeError, PyException);
+create_exception!(cognee_py, CogneeError, PyException);
 
 // ── SdkError variants ─────────────────────────────────────────────────────────
 
-create_exception!(cognee_pipeline, CogneeComponentError, CogneeError);
-create_exception!(cognee_pipeline, CogneeServiceBuildError, CogneeError);
-create_exception!(cognee_pipeline, CogneeUserBootstrapError, CogneeError);
-create_exception!(cognee_pipeline, CogneeRuntimeError, CogneeError);
-create_exception!(cognee_pipeline, CogneeValidationError, CogneeError);
-create_exception!(cognee_pipeline, CogneeUnsupportedError, CogneeError);
-create_exception!(cognee_pipeline, CogneeFeatureNotBuiltError, CogneeError);
+create_exception!(cognee_py, CogneeComponentError, CogneeError);
+create_exception!(cognee_py, CogneeServiceBuildError, CogneeError);
+create_exception!(cognee_py, CogneeUserBootstrapError, CogneeError);
+create_exception!(cognee_py, CogneeRuntimeError, CogneeError);
+create_exception!(cognee_py, CogneeValidationError, CogneeError);
+create_exception!(cognee_py, CogneeUnsupportedError, CogneeError);
+create_exception!(cognee_py, CogneeFeatureNotBuiltError, CogneeError);
 
 // ── ConfigError variants ──────────────────────────────────────────────────────
 
-create_exception!(cognee_pipeline, CogneeUnknownConfigKeyError, CogneeError);
-create_exception!(cognee_pipeline, CogneeConfigTypeMismatchError, CogneeError);
+create_exception!(cognee_py, CogneeUnknownConfigKeyError, CogneeError);
+create_exception!(cognee_py, CogneeConfigTypeMismatchError, CogneeError);
 
 // ── Conversion helpers ────────────────────────────────────────────────────────
 

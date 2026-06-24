@@ -6,7 +6,7 @@ alias change):
 
 .. code-block:: python
 
-    import cognee_pipeline.compat as cognee
+    import cognee_py.compat as cognee
 
     await cognee.add("Hello world")
     await cognee.cognify()
@@ -15,9 +15,9 @@ alias change):
     await cognee.prune.prune_data()
 
 The compat layer maintains a lazily-initialised, process-global
-:class:`~cognee_pipeline.Cognee` handle that is shared across all
+:class:`~cognee_py.Cognee` handle that is shared across all
 module-level calls, mirroring the implicit global state of the upstream SDK.
-The handle-based API (:class:`~cognee_pipeline.Cognee`) remains fully
+The handle-based API (:class:`~cognee_py.Cognee`) remains fully
 available for applications that need per-tenant isolation or explicit
 lifecycle control.
 
@@ -33,12 +33,12 @@ Input coercion
                                  (must already have ``"type"`` key)
 - ``list`` / ``tuple``         — each element is coerced independently
 
-Unsupported types raise :exc:`~cognee_pipeline.CogneeValidationError`.
+Unsupported types raise :exc:`~cognee_py.CogneeValidationError`.
 
 SearchType
 ----------
 :data:`SearchType` is re-exported here so ``cognee.SearchType.CHUNKS`` works
-after ``import cognee_pipeline.compat as cognee``.
+after ``import cognee_py.compat as cognee``.
 
 Result-key casing
 -----------------
@@ -50,7 +50,7 @@ so that Python callers receive idiomatic names.
 
 To access the raw camelCase dict, pass ``raw=True`` to the compat functions
 that support it, or call the corresponding method directly on a
-:class:`~cognee_pipeline.Cognee` instance.
+:class:`~cognee_py.Cognee` instance.
 
 Notes on unsupported upstream types
 ------------------------------------
@@ -59,7 +59,7 @@ and ``SearchType.GRAPH_COMPLETION_DECOMPOSITION``.  These are **not yet
 supported** by the Rust core and therefore absent from :class:`SearchType`.
 Passing the string values ``"AGENTIC_COMPLETION"`` or
 ``"GRAPH_COMPLETION_DECOMPOSITION"`` raises
-:exc:`~cognee_pipeline.CogneeValidationError` with a descriptive message.
+:exc:`~cognee_py.CogneeValidationError` with a descriptive message.
 """
 
 from __future__ import annotations

@@ -7,7 +7,7 @@ with await, etc.
 
 import asyncio
 import pytest
-import cognee_pipeline as cp
+import cognee_py as cp
 
 
 def test_detects_sync_function(ctx):

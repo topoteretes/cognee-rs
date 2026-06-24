@@ -1,6 +1,6 @@
 """Tests for pipeline construction and synchronous execution."""
 
-import cognee_pipeline as cp
+import cognee_py as cp
 
 
 def test_pipeline_creation():

@@ -13,7 +13,7 @@ import os
 import uuid as _uuid_mod
 
 import pytest
-import cognee_pipeline as cp
+import cognee_py as cp
 
 
 # ---------------------------------------------------------------------------
@@ -96,7 +96,7 @@ def test_cognee_non_object_json_raises_validation_error():
 
 
 def test_cognee_error_base_importable():
-    """All SDK exception classes must be importable from cognee_pipeline."""
+    """All SDK exception classes must be importable from cognee_py."""
     assert issubclass(cp.CogneeError, Exception)
     assert issubclass(cp.CogneeComponentError, cp.CogneeError)
     assert issubclass(cp.CogneeServiceBuildError, cp.CogneeError)

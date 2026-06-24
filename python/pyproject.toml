@@ -3,7 +3,7 @@ requires = ["maturin>=1.0,<2.0"]
 build-backend = "maturin"
 
 [project]
-name = "cognee-pipeline"
+name = "cognee-py"
 requires-python = ">=3.9"
 dynamic = ["version"]
 description = "Python bindings for the cognee Rust SDK — AI memory pipeline (add → cognify → search)."
@@ -45,9 +45,9 @@ testpaths = ["tests"]
 [tool.maturin]
 features = ["pyo3/extension-module"]
 python-source = "."
-module-name = "cognee_pipeline._native"
+module-name = "cognee_py._native"
 # The optional drop-in ``cognee`` shim (python/cognee/) is intentionally NOT
-# bundled into the wheel: a plain ``pip install cognee-pipeline`` must never
+# bundled into the wheel: a plain ``pip install cognee-py`` must never
 # shadow the real upstream ``cognee`` package.  The shim ships only in the repo
 # for users who want to vendor it explicitly (see python/cognee/__init__.py).
 exclude = ["cognee/**/*"]

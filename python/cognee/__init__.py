@@ -1,10 +1,10 @@
 """Optional drop-in ``cognee`` namespace shim.
 
 This shim lets upstream scripts that ``import cognee`` keep working unchanged
-by re-exporting the public surface of :mod:`cognee_pipeline.compat`.
+by re-exporting the public surface of :mod:`cognee_py.compat`.
 
 **It is deliberately NOT packaged into the wheel.** ``pip install
-cognee-pipeline`` ships only the ``cognee_pipeline`` package, so it never
+cognee-py`` ships only the ``cognee_py`` package, so it never
 shadows the real upstream ``cognee`` package (the wheel excludes this
 directory — see ``python/pyproject.toml``). The shim is provided in the repo
 for users who explicitly want a drop-in replacement and are *not* using the
@@ -25,7 +25,7 @@ Example usage once this shim is on the import path::
 
 # Re-export the entire public surface of the compat module so that
 # ``from cognee import add, cognify, search, prune, SearchType`` works.
-from cognee_pipeline.compat import (  # noqa: F401
+from cognee_py.compat import (  # noqa: F401
     add,
     cognify,
     add_and_cognify,
@@ -34,7 +34,7 @@ from cognee_pipeline.compat import (  # noqa: F401
     SearchType,
     reset_default_handle,
 )
-from cognee_pipeline.compat import _handle  # noqa: F401  (advanced use)
+from cognee_py.compat import _handle  # noqa: F401  (advanced use)
 
 __all__ = [
     "add",

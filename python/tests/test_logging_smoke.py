@@ -1,4 +1,4 @@
-"""Smoke tests for the cognee_pipeline.setup_logging() entrypoint.
+"""Smoke tests for the cognee_py.setup_logging() entrypoint.
 
 These tests verify that:
 
@@ -23,7 +23,7 @@ import os
 
 import pytest
 
-from cognee_pipeline import setup_logging
+from cognee_py import setup_logging
 
 
 @pytest.mark.serial

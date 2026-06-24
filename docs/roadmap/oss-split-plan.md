@@ -80,8 +80,8 @@ OSS REPO  (cognee-rust, MIT OR Apache-2.0, public, crates.io)
 ├── internal (in-repo, publish = false): examples, bench, test-utils,
 │   e2e-cross-sdk/telemetry-emit  (test/bench harnesses, not on crates.io)
 ├── tools: cognee-cli (single-user), cognee-http-server (no-auth)
-├── bindings: capi/ (C headers + artifacts), python/ (PyPI `cognee-pipeline`,
-│   module `cognee_pipeline`), ts/ (npm `cognee-ts`)  — core surface
+├── bindings: capi/ (C headers + artifacts), python/ (PyPI `cognee-py`,
+│   module `cognee_py`), ts/ (npm `cognee-ts`)  — core surface
 └── .github/workflows: lint, test, doc, publish-dry-run, bindings build
 ```
 
@@ -235,7 +235,7 @@ These land in the **current** repo first (mergeable to `main`, no split yet):
   no reference to cloud.
 - **S7 — Feature-default hygiene (`cloud` is currently ON by default).** Verified:
   `cloud` sits in the `default = [...]` set of **five** crates — `cognee-lib`,
-  `cognee-cli`, `cognee-bindings-common`, `python` (`cognee-pipeline`), and
+  `cognee-cli`, `cognee-bindings-common`, `python` (`cognee-py`), and
   `ts/cognee-ts-neon` — all forwarding to `cognee-lib/cloud → dep:cognee-cloud`. The
   OSS repo has no `cloud` feature at all, so before/at the split `cloud` must be
   removed from every `default` set (and the closed builds re-add it). Note this is
@@ -298,7 +298,7 @@ These land in the **current** repo first (mergeable to `main`, no split yet):
    `[package.metadata.docs.rs] features = ["load-dynamic"]` +
    `rustdoc-args = ["--cfg","docsrs"]`, else docs.rs (no network) fails to build.
 4. Reserve the names **now** (placeholders) — marquee names get squatted. This
-   spans **three registries**: crates.io (`cognee-*`), PyPI (`cognee-pipeline` —
+   spans **three registries**: crates.io (`cognee-*`), PyPI (`cognee-py` —
    verified *not* colliding with the Python SDK's `cognee`), and npm (`cognee` —
    confirm the topoteretes org actually owns this name before relying on it).
 5. **Mark internal crates `publish = false`.** `test-utils`, `bench`, `examples`,
@@ -348,7 +348,7 @@ These land in the **current** repo first (mergeable to `main`, no split yet):
   scheduled job that bumps the pinned OSS `rev` and runs the suite.
 
 ### Phase 4 — Bindings distribution
-- OSS: publish `cognee` (npm), `cognee` / `cognee-pipeline` (PyPI), C headers +
+- OSS: publish `cognee` (npm), `cognee` / `cognee-py` (PyPI), C headers +
   release artifacts on GitHub.
 - Closed: publish `cognee-cloud` equivalents to private registries; depend on the
   OSS `bindings-common` crate and add only a cloud-ops module (see S5 / §6.1).
@@ -433,7 +433,7 @@ separate-private-repo model is more conservative and is justified only because
 | Auth sea-orm *entities* + `Role`/`Tenant` models left behind in OSS database (dead code or compile break) | Move the 13 auth entity files + auth domain models with the ops; keep `AclDb`/`User`/permission-constants in OSS; verify OSS database compiles without the moved entities (S2e). |
 | Unpinned `cognee-litert-lm` git dep — non-reproducible + crates.io blocker | Pin to a commit rev now (Phase 1, step 6); it moves to closed with S4 regardless. |
 | Cross-SDK harness builds the Python SDK from the monorepo context — breaks in a standalone OSS repo | Pin a published PyPI `cognee` or vendor it; reclassify `test_http_auth` + the unbucketed parity tests OSS-vs-closed (§6.1). |
-| Binding name squatting across registries (npm `cognee`, PyPI `cognee-pipeline`) | Reserve all three registries in Phase 1, step 4; confirm npm `cognee` org ownership before depending on it. |
+| Binding name squatting across registries (npm `cognee`, PyPI `cognee-py`) | Reserve all three registries in Phase 1, step 4; confirm npm `cognee` org ownership before depending on it. |
 | Permissive core lets competitors host cognee | Accepted (license decision: MIT/Apache for adoption). Only AGPL/BSL would deter it; revisit only if competitive hosting becomes a real threat. |
 | Hidden git/path dep slips into a published crate | CI `publish --dry-run` gate on every OSS crate. |
 | Python parity regression from touching IDs | Never alter `owner_id`/`tenant_id` in ID derivation; run `e2e-cross-sdk` after Phase 0. |

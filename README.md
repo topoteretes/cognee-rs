@@ -57,7 +57,7 @@ same SDK-tier implementation via `crates/bindings-common/`:
 
 | Binding | README | Primary API |
 |---|---|---|
-| **Python** (PyO3) | [python/README.md](python/README.md) | `from cognee_pipeline import Cognee` |
+| **Python** (PyO3) | [python/README.md](python/README.md) | `from cognee_py import Cognee` |
 | **C API** (FFI) | [capi/README.md](capi/README.md) | `#include "cognee_sdk.h"` + `cg_sdk_*` |
 | **JavaScript/TypeScript** (Neon) | [ts/README.md](ts/README.md) | `import { Cognee } from 'cognee-ts'` |
 

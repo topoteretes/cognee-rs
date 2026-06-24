@@ -1,4 +1,4 @@
-"""Stub file for the ``cognee_pipeline`` package.
+"""Stub file for the ``cognee_py`` package.
 
 Covers every public symbol re-exported from ``__init__.py``: the
 ``SearchType`` enum, all ``_native`` re-exports, and the ``Watcher`` class
@@ -14,8 +14,8 @@ from enum import Enum
 from typing import Any, Callable, Optional
 
 # Re-export all types from _native so callers can do:
-#   from cognee_pipeline import Cognee, CogneeError, ...
-from cognee_pipeline._native import (
+#   from cognee_py import Cognee, CogneeError, ...
+from cognee_py._native import (
     # SDK handle
     Cognee as Cognee,
     # SDK config surface
@@ -56,7 +56,7 @@ from cognee_pipeline._native import (
     setup_telemetry_analytics as setup_telemetry_analytics,
 )
 # Cloud ops (`serve` / `disconnect`) are exposed by the closed Python cdylib
-# `cognee-py-cloud` (T15e), not by the OSS `cognee-pipeline` package.
+# `cognee-py-cloud` (T15e), not by the OSS `cognee-py` package.
 
 COGNEE_BINDING_SUPPRESS_LOGS: str
 

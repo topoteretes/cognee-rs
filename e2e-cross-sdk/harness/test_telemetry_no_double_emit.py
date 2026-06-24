@@ -3,7 +3,7 @@
 This test cannot fail meaningfully until a binding starts emitting
 ``send_telemetry`` events from the Rust side. Today the Python ``cognee``
 SDK fires analytics from its own Python code; the Rust
-``cognee_pipeline`` binding exposes only the pipeline surface and
+``cognee_py`` binding exposes only the pipeline surface and
 never reaches the ``cognee_lib::api::*`` call sites that emit. The
 harness wiring lives here so the test runs automatically the moment a
 future gap surfaces those APIs through PyO3.
@@ -14,7 +14,7 @@ When that gap lands:
 2. Implement the body of ``test_no_double_emit_when_host_sdk_set`` so it:
 
    * Starts the cross-SDK harness Python container with both ``cognee``
-     (the upstream SDK) and ``cognee_pipeline`` (the Rust binding)
+     (the upstream SDK) and ``cognee_py`` (the Rust binding)
      installed.
    * Points ``COGNEE_TELEMETRY_PROXY_URL`` at the mock proxy provided
      by ``e2e-cross-sdk/telemetry-emit``.

@@ -34,7 +34,7 @@ import os
 import sys
 import tempfile
 
-from cognee_pipeline import Cognee, CogneeFeatureNotBuiltError
+from cognee_py import Cognee, CogneeFeatureNotBuiltError
 
 
 def _check_env() -> tuple[str, str]:

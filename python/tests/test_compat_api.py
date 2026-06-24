@@ -1,6 +1,6 @@
 """Tests for the upstream-compatible cognee SDK compat layer (ID-1).
 
-Exercises ``cognee_pipeline.compat`` as a drop-in for upstream ``cognee``
+Exercises ``cognee_py.compat`` as a drop-in for upstream ``cognee``
 module-level scripts.
 
 Environment requirements (same gating as the other integration tests):
@@ -16,8 +16,8 @@ Tests skip gracefully when the required env vars are absent.
 
 import os
 import pytest
-import cognee_pipeline as cp
-import cognee_pipeline.compat as cognee
+import cognee_py as cp
+import cognee_py.compat as cognee
 
 
 # ---------------------------------------------------------------------------
@@ -63,7 +63,7 @@ def _patch_default_handle(tmp_path):
     )
     cognee.reset_default_handle()
     # Directly set the module-level _default_handle to the isolated instance.
-    import cognee_pipeline.compat as _compat
+    import cognee_py.compat as _compat
     _compat._default_handle = cp.Cognee(settings)
 
 
@@ -94,7 +94,7 @@ def test_search_type_usable_in_f_string():
 
 
 def test_search_type_reexported_from_compat():
-    """cognee_pipeline.compat.SearchType must be the same object."""
+    """cognee_py.compat.SearchType must be the same object."""
     assert cognee.SearchType is cp.SearchType
 
 
@@ -124,14 +124,14 @@ def test_unsupported_types_absent():
 
 def test_coerce_str_to_text():
     """Plain strings must be coerced to {type: text} descriptors."""
-    from cognee_pipeline.compat import _coerce_inputs
+    from cognee_py.compat import _coerce_inputs
     result = _coerce_inputs("Hello world")
     assert result == [{"type": "text", "text": "Hello world"}]
 
 
 def test_coerce_url_string():
     """URL strings must be coerced to {type: url} descriptors."""
-    from cognee_pipeline.compat import _coerce_inputs
+    from cognee_py.compat import _coerce_inputs
     result = _coerce_inputs("https://example.com")
     assert result == [{"type": "url", "url": "https://example.com"}]
 
@@ -139,7 +139,7 @@ def test_coerce_url_string():
 def test_coerce_path():
     """pathlib.Path must be coerced to {type: file} descriptors."""
     import pathlib
-    from cognee_pipeline.compat import _coerce_inputs
+    from cognee_py.compat import _coerce_inputs
     p = pathlib.Path("/tmp/test.txt")
     result = _coerce_inputs(p)
     assert result == [{"type": "file", "path": "/tmp/test.txt"}]
@@ -147,7 +147,7 @@ def test_coerce_path():
 
 def test_coerce_bytes():
     """bytes must be coerced to {type: binary} descriptors."""
-    from cognee_pipeline.compat import _coerce_inputs
+    from cognee_py.compat import _coerce_inputs
     result = _coerce_inputs(b"raw bytes")
     assert result[0]["type"] == "binary"
     assert result[0]["bytes"] == b"raw bytes"
@@ -155,7 +155,7 @@ def test_coerce_bytes():
 
 def test_coerce_dict_passthrough():
     """dicts with a 'type' key must pass through unchanged."""
-    from cognee_pipeline.compat import _coerce_inputs
+    from cognee_py.compat import _coerce_inputs
     d = {"type": "text", "text": "already a descriptor"}
     result = _coerce_inputs(d)
     assert result == [d]
@@ -163,14 +163,14 @@ def test_coerce_dict_passthrough():
 
 def test_coerce_dict_missing_type_raises():
     """dicts without a 'type' key must raise CogneeValidationError."""
-    from cognee_pipeline.compat import _coerce_inputs
+    from cognee_py.compat import _coerce_inputs
     with pytest.raises(cp.CogneeValidationError):
         _coerce_inputs({"no_type": "here"})
 
 
 def test_coerce_list():
     """Lists are fan-out — each element is coerced independently."""
-    from cognee_pipeline.compat import _coerce_inputs
+    from cognee_py.compat import _coerce_inputs
     result = _coerce_inputs(["hello", "https://example.com"])
     assert result[0] == {"type": "text", "text": "hello"}
     assert result[1] == {"type": "url", "url": "https://example.com"}
@@ -178,7 +178,7 @@ def test_coerce_list():
 
 def test_coerce_unsupported_type_raises():
     """Unknown input types must raise CogneeValidationError."""
-    from cognee_pipeline.compat import _coerce_inputs
+    from cognee_py.compat import _coerce_inputs
     with pytest.raises(cp.CogneeValidationError):
         _coerce_inputs(12345)
 
@@ -190,7 +190,7 @@ def test_coerce_unsupported_type_raises():
 
 def test_default_handle_lazily_created():
     """The default handle must be None before the first module-level call."""
-    import cognee_pipeline.compat as _compat
+    import cognee_py.compat as _compat
     _compat.reset_default_handle()
     assert _compat._default_handle is None
     # Calling _handle() must create it.
@@ -202,7 +202,7 @@ def test_default_handle_lazily_created():
 
 def test_default_handle_singleton():
     """_handle() must return the same object on repeated calls."""
-    import cognee_pipeline.compat as _compat
+    import cognee_py.compat as _compat
     _compat.reset_default_handle()
     h1 = _compat._handle()
     h2 = _compat._handle()
@@ -349,7 +349,7 @@ def test_cognee_alias_package_importable():
 def test_cognee_alias_same_functions():
     """cognee.add / cognee.search must be the same objects as compat equivalents."""
     import cognee as _cognee
-    import cognee_pipeline.compat as _compat
+    import cognee_py.compat as _compat
     assert _cognee.add is _compat.add
     assert _cognee.search is _compat.search
     assert _cognee.SearchType is cp.SearchType

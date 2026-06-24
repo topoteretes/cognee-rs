@@ -17,7 +17,7 @@ fi
 
 # Drop any stale prebuilt extension module from a previous Python version or
 # architecture so it cannot shadow the freshly-built one.
-rm -f cognee_pipeline/_native*.so
+rm -f cognee_py/_native*.so
 
 maturin develop
 

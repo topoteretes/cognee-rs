@@ -37,7 +37,7 @@ import json
 import os
 import sys
 
-from cognee_pipeline import Cognee, CogneeUnknownConfigKeyError
+from cognee_py import Cognee, CogneeUnknownConfigKeyError
 
 
 def _check_env() -> tuple[str, str]:

@@ -13,7 +13,7 @@ Tests skip gracefully when the required env vars are absent.
 import os
 import uuid
 import pytest
-import cognee_pipeline as cp
+import cognee_py as cp
 
 
 # ---------------------------------------------------------------------------

@@ -1,6 +1,6 @@
 """Tests for the Watcher factory class."""
 
-import cognee_pipeline as cp
+import cognee_py as cp
 
 
 def test_watcher_noop_does_not_raise():

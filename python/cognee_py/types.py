@@ -1,7 +1,7 @@
-"""Public TypedDict types for the cognee-pipeline Python binding.
+"""Public TypedDict types for the cognee-py Python binding.
 
 These types document the shapes of inputs, option dicts, and result dicts
-used throughout the :class:`~cognee_pipeline.Cognee` API.  They are importable
+used throughout the :class:`~cognee_py.Cognee` API.  They are importable
 at runtime and referenced from the companion ``.pyi`` stubs.
 
 Input types
@@ -21,12 +21,12 @@ accepted by the native layer at runtime; the types here document the
 Result types (snake_case view)
 -------------------------------
 The native module returns results with **camelCase** keys (matching the C / JS
-wire contract for cross-binding uniformity).  The :mod:`cognee_pipeline.compat`
+wire contract for cross-binding uniformity).  The :mod:`cognee_py.compat`
 module re-keys these to **snake_case** before returning them to Python callers;
 the ``*Result`` types here describe the snake_case view.
 
 To access the raw camelCase dict (e.g. for cross-binding parity tests), call
-the native method directly on a :class:`~cognee_pipeline.Cognee` instance
+the native method directly on a :class:`~cognee_py.Cognee` instance
 instead of using the compat-layer functions.
 """
 
@@ -80,14 +80,14 @@ DataInput = Union[TextInput, FileInput, UrlInput, BinaryInput]
 
 
 class AddOpts(TypedDict, total=False):
-    """Options accepted by :meth:`Cognee.add` / :func:`cognee_pipeline.compat.add`."""
+    """Options accepted by :meth:`Cognee.add` / :func:`cognee_py.compat.add`."""
 
     #: Tenant UUID string (multi-tenant scoping).
     tenant: str
 
 
 class CognifyOpts(TypedDict, total=False):
-    """Options accepted by :meth:`Cognee.cognify` / :func:`cognee_pipeline.compat.cognify`."""
+    """Options accepted by :meth:`Cognee.cognify` / :func:`cognee_py.compat.cognify`."""
 
     tenant: str
     chunk_size: int
@@ -99,9 +99,9 @@ class CognifyOpts(TypedDict, total=False):
 
 
 class SearchOpts(TypedDict, total=False):
-    """Options accepted by :meth:`Cognee.search` / :func:`cognee_pipeline.compat.search`."""
+    """Options accepted by :meth:`Cognee.search` / :func:`cognee_py.compat.search`."""
 
-    #: One of the 15 :class:`~cognee_pipeline.SearchType` strings.
+    #: One of the 15 :class:`~cognee_py.SearchType` strings.
     #: Defaults to ``"GRAPH_COMPLETION"``.
     search_type: str
     datasets: list[str]
@@ -206,7 +206,7 @@ class VisualizeOpts(TypedDict, total=False):
 
 
 class ServeOpts(TypedDict, total=False):
-    """Options accepted by :func:`cognee_pipeline.serve`."""
+    """Options accepted by :func:`cognee_py.serve`."""
 
     url: str
     api_key: str
@@ -217,7 +217,7 @@ class ServeOpts(TypedDict, total=False):
 
 
 class DisconnectOpts(TypedDict, total=False):
-    """Options accepted by :func:`cognee_pipeline.disconnect`."""
+    """Options accepted by :func:`cognee_py.disconnect`."""
 
     #: Delete on-disk credential cache when ``True`` (default ``False``).
     wipe_credentials: bool
@@ -229,7 +229,7 @@ class DisconnectOpts(TypedDict, total=False):
 
 
 class AddResult(TypedDict):
-    """Result of :func:`cognee_pipeline.compat.add` (snake_case view).
+    """Result of :func:`cognee_py.compat.add` (snake_case view).
 
     The native :meth:`Cognee.add` returns the same data with camelCase keys
     (``datasetName``, ``addedCount``, ``deduplicatedCount``).
@@ -243,7 +243,7 @@ class AddResult(TypedDict):
 
 
 class CognifyResult(TypedDict):
-    """Result of :func:`cognee_pipeline.compat.cognify` (snake_case view).
+    """Result of :func:`cognee_py.compat.cognify` (snake_case view).
 
     The native :meth:`Cognee.cognify` returns the same data with camelCase
     keys (``alreadyCompleted``, ``priorPipelineRunId``).
@@ -259,7 +259,7 @@ class CognifyResult(TypedDict):
 
 
 class SearchResult(TypedDict):
-    """A single item in the list returned by :func:`cognee_pipeline.compat.search`.
+    """A single item in the list returned by :func:`cognee_py.compat.search`.
 
     The exact fields depend on the ``search_type`` used.  Common keys are
     ``text`` / ``score`` for chunk-based types and ``answer`` for completion
@@ -350,7 +350,7 @@ class ImproveResult(TypedDict):
 
 
 class ServeResult(TypedDict):
-    """Result of :func:`cognee_pipeline.serve`."""
+    """Result of :func:`cognee_py.serve`."""
 
     connected: bool
     service_url: str

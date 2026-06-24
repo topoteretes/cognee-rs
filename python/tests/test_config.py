@@ -6,7 +6,7 @@ environment — including CI with ``MOCK_EMBEDDING=true`` and no real API keys.
 """
 
 import pytest
-import cognee_pipeline as cp
+import cognee_py as cp
 
 
 # ---------------------------------------------------------------------------
@@ -37,7 +37,7 @@ def test_config_is_cognee_config_type():
 
 
 def test_config_attribute_importable():
-    """``CogneeConfig`` class must be importable directly from ``cognee_pipeline``."""
+    """``CogneeConfig`` class must be importable directly from ``cognee_py``."""
     assert cp.CogneeConfig is not None
 
 

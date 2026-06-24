@@ -15,7 +15,7 @@ Tests skip gracefully when the required env vars are absent.
 
 import os
 import pytest
-import cognee_pipeline as cp
+import cognee_py as cp
 
 
 # ---------------------------------------------------------------------------
@@ -78,7 +78,7 @@ async def _cognee_with_data(tmp_path) -> cp.Cognee:
 # ---------------------------------------------------------------------------
 
 def test_search_type_importable():
-    """SearchType must be importable from cognee_pipeline."""
+    """SearchType must be importable from cognee_py."""
     assert hasattr(cp, "SearchType")
     st = cp.SearchType
     assert st.GRAPH_COMPLETION == "GRAPH_COMPLETION"

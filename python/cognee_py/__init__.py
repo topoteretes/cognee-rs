@@ -5,9 +5,9 @@ from enum import Enum
 COGNEE_BINDING_SUPPRESS_LOGS = "COGNEE_BINDING_SUPPRESS_LOGS"
 """Env-var name that suppresses the auto-installed tracing bridge.
 
-Set this to any non-empty value *before* importing ``cognee_pipeline``
+Set this to any non-empty value *before* importing ``cognee_py``
 if the host application already owns its ``logging``/``tracing``
-configuration. When unset, importing ``cognee_pipeline`` installs a
+configuration. When unset, importing ``cognee_py`` installs a
 minimal ``tracing_subscriber::Registry`` that forwards every Rust
 ``tracing::*`` event into Python's standard ``logging`` module via
 ``pyo3-log`` (gap 07 decisions 1 and 5)."""
@@ -21,12 +21,12 @@ class SearchType(str, Enum):
     the ``SearchType`` enum in the upstream ``cognee`` Python SDK.
 
     Pass these as the ``query_type`` kwarg to the compat-layer
-    :func:`cognee_pipeline.compat.search`, or as the ``search_type`` option
+    :func:`cognee_py.compat.search`, or as the ``search_type`` option
     in the handle-based :meth:`Cognee.search` / :meth:`Cognee.recall`:
 
     .. code-block:: python
 
-        from cognee_pipeline import SearchType
+        from cognee_py import SearchType
         result = await cognee.search("query", {"search_type": SearchType.CHUNKS})
 
     The two upstream types ``AGENTIC_COMPLETION`` and
@@ -60,7 +60,7 @@ class SearchType(str, Enum):
     CHUNKS_LEXICAL = "CHUNKS_LEXICAL"
 
 
-from cognee_pipeline._native import (
+from cognee_py._native import (
     # SDK handle
     Cognee,
     # SDK config surface
@@ -99,7 +99,7 @@ from cognee_pipeline._native import (
     setup_telemetry_analytics,
 )
 # Cloud ops (`serve` / `disconnect`) live in the closed Python cdylib
-# (`cognee-py-cloud`, T15e). The OSS `cognee-pipeline` package does not
+# (`cognee-py-cloud`, T15e). The OSS `cognee-py` package does not
 # expose them; importers needing cloud should install `cognee-py-cloud`.
 
 class Watcher:
@@ -221,10 +221,10 @@ __all__ = [
     "types",
 ]
 
-# Expose the compat module as an attribute of cognee_pipeline so that
-# ``import cognee_pipeline.compat as cognee`` works without an extra import.
+# Expose the compat module as an attribute of cognee_py so that
+# ``import cognee_py.compat as cognee`` works without an extra import.
 from . import compat  # noqa: E402
 
-# Expose the types module so callers can do ``from cognee_pipeline import types``
-# or ``import cognee_pipeline.types``.
+# Expose the types module so callers can do ``from cognee_py import types``
+# or ``import cognee_py.types``.
 from . import types  # noqa: E402

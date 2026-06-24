@@ -7,7 +7,7 @@ exposes the same flow: `warm()` → `add()` → `cognify()` → `search()`.
 
 | Binding | README | Entry type | Async model |
 |---|---|---|---|
-| **Python** (PyO3) | [python/README.md](../../python/README.md) | `Cognee` (`from cognee_pipeline import Cognee`) | native `async` |
+| **Python** (PyO3) | [python/README.md](../../python/README.md) | `Cognee` (`from cognee_py import Cognee`) | native `async` |
 | **C** (FFI) | [capi/README.md](../../capi/README.md) | `cg_sdk_*` over an opaque handle | callback-based (+ optional `CgSdkWaiter` sync bridge) |
 | **JavaScript/TS** (Neon) | [ts/README.md](../../ts/README.md) | `Cognee` (`import { Cognee } from 'cognee-ts'`) | Promise-based |
 

@@ -16,7 +16,7 @@ import os
 
 import pytest
 
-import cognee_pipeline
+import cognee_py
 
 
 @pytest.mark.serial
@@ -24,9 +24,9 @@ def test_no_config_is_silent(monkeypatch, capsys):
     monkeypatch.delenv("OTEL_EXPORTER_OTLP_ENDPOINT", raising=False)
     monkeypatch.delenv("COGNEE_TRACING_ENABLED", raising=False)
     # Must not raise.
-    cognee_pipeline.setup_telemetry()
+    cognee_py.setup_telemetry()
     # Idempotent — second call must also not raise.
-    cognee_pipeline.setup_telemetry()
+    cognee_py.setup_telemetry()
     captured = capsys.readouterr()
     # We tolerate any informational/banner output but reject panic
     # markers from a misbehaving install.
@@ -48,7 +48,7 @@ def test_service_name_default_applied(monkeypatch):
     monkeypatch.setenv("COGNEE_TRACING_ENABLED", "true")
     # Endpoint is unreachable but the exporter is lazy — init must
     # succeed at setup time.
-    cognee_pipeline.setup_telemetry()
+    cognee_py.setup_telemetry()
     value = os.environ.get("OTEL_SERVICE_NAME")
     # If the singleton was already populated by a prior test, the env
     # default is not re-seeded. Both states are acceptable.
@@ -65,7 +65,7 @@ def test_setup_telemetry_analytics_is_idempotent(monkeypatch):
     # same value.
     monkeypatch.delenv("COGNEE_RUST_TELEMETRY", raising=False)
     monkeypatch.delenv("COGNEE_HOST_SDK", raising=False)
-    first = cognee_pipeline.setup_telemetry_analytics()
-    second = cognee_pipeline.setup_telemetry_analytics()
+    first = cognee_py.setup_telemetry_analytics()
+    second = cognee_py.setup_telemetry_analytics()
     assert first == second
     assert isinstance(first, bool)

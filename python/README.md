@@ -1,4 +1,4 @@
-# cognee_pipeline
+# cognee_py
 
 Python bindings for the [cognee-rust](https://github.com/topoteretes/cognee-rust)
 pipeline engine, built with [PyO3](https://pyo3.rs/).
@@ -9,7 +9,7 @@ via a three-stage pipeline: **add** (ingest) → **cognify** (extract) → **sea
 ## Installation
 
 ```bash
-pip install cognee_pipeline
+pip install cognee_py
 ```
 
 For local development from this repository:
@@ -24,7 +24,7 @@ maturin develop
 ```python
 import asyncio
 import json
-from cognee_pipeline import Cognee, SearchType
+from cognee_py import Cognee, SearchType
 
 async def main():
     cognee = Cognee()           # optionally pass json.dumps(settings) to override defaults
@@ -53,12 +53,12 @@ export MOCK_EMBEDDING=true   # skip ONNX model download for quick tests
 
 ### Upstream-compatible module-level API
 
-An upstream-compatible API is available via `cognee_pipeline.compat` for
+An upstream-compatible API is available via `cognee_py.compat` for
 drop-in replacement of the Python `cognee` SDK:
 
 ```python
 import asyncio
-from cognee_pipeline import compat as cognee, SearchType
+from cognee_py import compat as cognee, SearchType
 
 async def main():
     await cognee.add("Cognee turns data into a knowledge graph.", "main_dataset")
@@ -70,7 +70,7 @@ asyncio.run(main())
 ```
 
 The `compat` module above is the supported drop-in alias. A plain
-`pip install cognee-pipeline` intentionally does **not** install a top-level
+`pip install cognee-py` intentionally does **not** install a top-level
 `cognee` package, so it never shadows the upstream Python `cognee` package. If
 you want `import cognee` to work directly, vendor the shim shipped in the repo
 ([`python/cognee/`](cognee/)) into your project.
@@ -110,7 +110,7 @@ defaults. The overlay order is: compiled-in defaults < env vars < constructor ar
 
 ```python
 import json
-from cognee_pipeline import Cognee
+from cognee_py import Cognee
 
 cognee = Cognee(json.dumps({
     "llm_endpoint": "https://api.openai.com/v1",
@@ -415,7 +415,7 @@ Requires the `visualization` feature compiled into the native extension.
 cloud state.
 
 ```python
-from cognee_pipeline import serve, disconnect
+from cognee_py import serve, disconnect
 
 # Direct mode (no Auth0 flow; headless-friendly)
 result = await serve({"url": "http://localhost:8000", "api_key": "key"})
@@ -432,20 +432,20 @@ await disconnect({"wipe_credentials": True})   # also removes the local credenti
 ## Initialisation and observability
 
 ```python
-import cognee_pipeline
+import cognee_py
 
 # Optional: file logging (reads COGNEE_LOG_*, LOG_FILE_NAME, LOG_LEVEL).
-cognee_pipeline.setup_logging()
+cognee_py.setup_logging()
 
 # Optional: OTLP trace export (reads OTEL_* env vars).
-cognee_pipeline.setup_telemetry()
+cognee_py.setup_telemetry()
 
 # Optional: product-analytics emission (returns True if armed).
-armed = cognee_pipeline.setup_telemetry_analytics()
+armed = cognee_py.setup_telemetry_analytics()
 print(f"analytics armed: {armed}")
 ```
 
-When `cognee_pipeline` is imported, a minimal default subscriber is installed:
+When `cognee_py` is imported, a minimal default subscriber is installed:
 a `pyo3-log` bridge that forwards every Rust `tracing::*` event into Python's
 standard `logging` module under the `cognee.*` logger tree. The host's
 `logging.basicConfig` / `logging.dictConfig` controls level, format, and handlers.
@@ -455,10 +455,10 @@ import logging
 logging.basicConfig(level=logging.INFO)
 logging.getLogger("cognee").setLevel(logging.DEBUG)
 
-import cognee_pipeline  # Rust spans now flow into Python logging
+import cognee_py  # Rust spans now flow into Python logging
 ```
 
-Set `COGNEE_BINDING_SUPPRESS_LOGS=1` **before** importing `cognee_pipeline` to
+Set `COGNEE_BINDING_SUPPRESS_LOGS=1` **before** importing `cognee_py` to
 skip the default subscriber. The host then owns all subscriber setup.
 
 ### Analytics defaults
@@ -496,7 +496,7 @@ All async ops raise subclasses of `CogneeError`:
 | `CogneeError` | Base class — catch this to handle any cognee error. |
 
 ```python
-from cognee_pipeline import Cognee, CogneeError, CogneeValidationError
+from cognee_py import Cognee, CogneeError, CogneeValidationError
 
 try:
     result = await cognee.search("query", {"search_type": "INVALID_TYPE"})
@@ -508,29 +508,29 @@ except CogneeError as e:
 
 ## Advanced: low-level pipeline engine
 
-The original pipeline engine API is available directly from `cognee_pipeline`
+The original pipeline engine API is available directly from `cognee_py`
 for advanced orchestration use-cases that do not need the high-level SDK:
 
 ```python
-import cognee_pipeline
+import cognee_py
 
-p = cognee_pipeline.Pipeline("my pipeline")
+p = cognee_py.Pipeline("my pipeline")
 # add_task accepts a plain callable directly (sync, async, generator, or async
 # generator — auto-detected). The callable receives each input value.
 p.add_task(lambda val: val, name="echo")
 
-ctx = cognee_pipeline.TaskContext.mock()
+ctx = cognee_py.TaskContext.mock()
 # execute() takes plain Python values and returns the last task's outputs.
 [result] = await p.execute(["hello"], ctx)
 ```
 
 All pipeline-engine symbols (`Pipeline`, `TaskContext`, `PipelineRunHandle`,
 `CancellationHandle`, `CancellationToken`, `cancellation_pair`, `ProgressToken`,
-`Watcher`) are available at the top level of `cognee_pipeline`.
+`Watcher`) are available at the top level of `cognee_py`.
 
 ## Troubleshooting
 
-- **`ImportError` on `cognee_pipeline`** — run `maturin develop` (or install from PyPI) first.
+- **`ImportError` on `cognee_py`** — run `maturin develop` (or install from PyPI) first.
 - **Embedding model download on first run** — set `MOCK_EMBEDDING=true` to skip it in tests.
 - **`OPENAI_URL` / `OPENAI_TOKEN` not set** — all examples exit 0 with a `SKIP` message when these are absent; export them before running.
 - **Analytics doubly-sent** — analytics are ON by default; if you run this binding underneath another `cognee` SDK that already emits `send_telemetry`, set `COGNEE_HOST_SDK=<name>` so this binding defers.

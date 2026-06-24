@@ -1,6 +1,6 @@
 """Tests for cancellation and progress tracking."""
 
-import cognee_pipeline as cp
+import cognee_py as cp
 
 
 def test_cancellation_handle():

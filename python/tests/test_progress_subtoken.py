@@ -2,7 +2,7 @@
 
 import pytest
 
-import cognee_pipeline as cp
+import cognee_py as cp
 
 
 def test_progress_width_root():

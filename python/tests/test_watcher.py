@@ -1,6 +1,6 @@
 """Tests for pipeline watcher callbacks."""
 
-import cognee_pipeline as cp
+import cognee_py as cp
 
 
 def test_watcher_on_pipeline(ctx):

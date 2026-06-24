@@ -17,20 +17,20 @@ import re
 
 
 def test_types_module_importable():
-    """cognee_pipeline.types must import without errors."""
-    import cognee_pipeline.types as t  # noqa: F401
+    """cognee_py.types must import without errors."""
+    import cognee_py.types as t  # noqa: F401
 
 
 def test_all_input_typeddicts_present():
     """TextInput, FileInput, UrlInput, BinaryInput, DataInput must all be exported."""
-    from cognee_pipeline import types as t
+    from cognee_py import types as t
     for name in ("TextInput", "FileInput", "UrlInput", "BinaryInput", "DataInput"):
         assert hasattr(t, name), f"missing: {name}"
 
 
 def test_all_opts_typeddicts_present():
     """All Opts TypedDicts must be exported."""
-    from cognee_pipeline import types as t
+    from cognee_py import types as t
     expected = [
         "AddOpts", "CognifyOpts", "SearchOpts", "RecallOpts", "RememberOpts",
         "MemifyOpts", "ImproveOpts", "ForgetTarget", "UpdateOpts",
@@ -43,7 +43,7 @@ def test_all_opts_typeddicts_present():
 
 def test_all_result_typeddicts_present():
     """All Result TypedDicts must be exported."""
-    from cognee_pipeline import types as t
+    from cognee_py import types as t
     expected = [
         "AddResult", "CognifyResult", "SearchResult", "RecallResult",
         "ForgetResult", "UpdateResult", "PruneResult", "MemifyResult",
@@ -55,7 +55,7 @@ def test_all_result_typeddicts_present():
 
 def test_text_input_has_correct_annotations():
     """TextInput must have 'type' (Literal['text']) and 'text' (str) annotations."""
-    from cognee_pipeline.types import TextInput
+    from cognee_py.types import TextInput
     import typing
     hints = typing.get_type_hints(TextInput)
     assert "type" in hints
@@ -64,7 +64,7 @@ def test_text_input_has_correct_annotations():
 
 def test_add_result_snake_case_fields():
     """AddResult TypedDict must use snake_case field names."""
-    from cognee_pipeline.types import AddResult
+    from cognee_py.types import AddResult
     import typing
     hints = typing.get_type_hints(AddResult)
     assert "dataset_name" in hints
@@ -78,7 +78,7 @@ def test_add_result_snake_case_fields():
 
 def test_cognify_result_snake_case_fields():
     """CognifyResult TypedDict must use snake_case field names."""
-    from cognee_pipeline.types import CognifyResult
+    from cognee_py.types import CognifyResult
     import typing
     hints = typing.get_type_hints(CognifyResult)
     assert "already_completed" in hints
@@ -89,7 +89,7 @@ def test_cognify_result_snake_case_fields():
 
 def test_prune_result_snake_case_fields():
     """PruneResult TypedDict must use snake_case field names."""
-    from cognee_pipeline.types import PruneResult
+    from cognee_py.types import PruneResult
     import typing
     hints = typing.get_type_hints(PruneResult)
     for field in ("data_pruned", "graph_pruned", "vector_pruned",
@@ -106,7 +106,7 @@ def test_prune_result_snake_case_fields():
 
 def test_camel_to_snake_conversions():
     """_camel_to_snake must correctly convert well-known camelCase keys."""
-    from cognee_pipeline.compat import _camel_to_snake
+    from cognee_py.compat import _camel_to_snake
     cases = {
         "addedCount": "added_count",
         "datasetName": "dataset_name",
@@ -129,7 +129,7 @@ def test_camel_to_snake_conversions():
 
 def test_camel_to_snake_already_snake():
     """Keys that are already snake_case must pass through unchanged."""
-    from cognee_pipeline.compat import _camel_to_snake
+    from cognee_py.compat import _camel_to_snake
     for key in ("chunks", "entities", "edges", "summaries", "embeddings",
                 "items", "target", "added", "deduplicated"):
         assert _camel_to_snake(key) == key, f"altered: {key!r}"
@@ -142,7 +142,7 @@ def test_camel_to_snake_already_snake():
 
 def test_rekey_dict():
     """_rekey must convert a flat camelCase dict to snake_case."""
-    from cognee_pipeline.compat import _rekey
+    from cognee_py.compat import _rekey
     result = _rekey({
         "datasetName": "ds",
         "addedCount": 2,
@@ -161,7 +161,7 @@ def test_rekey_dict():
 
 def test_rekey_non_dict_passthrough():
     """_rekey must return non-dict values unchanged."""
-    from cognee_pipeline.compat import _rekey
+    from cognee_py.compat import _rekey
     assert _rekey([1, 2, 3]) == [1, 2, 3]
     assert _rekey("hello") == "hello"
     assert _rekey(42) == 42
@@ -170,7 +170,7 @@ def test_rekey_non_dict_passthrough():
 
 def test_rekey_shallow_only():
     """_rekey re-keys only the top level; nested dicts are preserved as-is."""
-    from cognee_pipeline.compat import _rekey
+    from cognee_py.compat import _rekey
     inner = {"nestedKey": "value", "anotherKey": 1}
     result = _rekey({"outerCamel": inner})
     assert "outer_camel" in result
@@ -187,7 +187,7 @@ def test_rekey_shallow_only():
 def test_init_pyi_parseable():
     """__init__.pyi must be valid Python syntax."""
     import ast, pathlib
-    stub_path = pathlib.Path(__file__).parent.parent / "cognee_pipeline" / "__init__.pyi"
+    stub_path = pathlib.Path(__file__).parent.parent / "cognee_py" / "__init__.pyi"
     assert stub_path.exists(), f"stub not found: {stub_path}"
     ast.parse(stub_path.read_text())
 
@@ -195,7 +195,7 @@ def test_init_pyi_parseable():
 def test_native_pyi_parseable():
     """_native.pyi must be valid Python syntax."""
     import ast, pathlib
-    stub_path = pathlib.Path(__file__).parent.parent / "cognee_pipeline" / "_native.pyi"
+    stub_path = pathlib.Path(__file__).parent.parent / "cognee_py" / "_native.pyi"
     assert stub_path.exists(), f"stub not found: {stub_path}"
     ast.parse(stub_path.read_text())
 
@@ -208,7 +208,7 @@ def test_native_pyi_parseable():
 def test_py_typed_exists():
     """py.typed marker must exist in the package directory."""
     import pathlib
-    marker = pathlib.Path(__file__).parent.parent / "cognee_pipeline" / "py.typed"
+    marker = pathlib.Path(__file__).parent.parent / "cognee_py" / "py.typed"
     assert marker.exists(), "py.typed marker file not found"
 
 
@@ -220,7 +220,7 @@ def test_py_typed_exists():
 def test_search_accepts_raw_kwarg():
     """compat.search must accept a 'raw' keyword argument without error."""
     import inspect
-    from cognee_pipeline.compat import search
+    from cognee_py.compat import search
     sig = inspect.signature(search)
     assert "raw" in sig.parameters, "'raw' kwarg not in search() signature"
 
@@ -228,7 +228,7 @@ def test_search_accepts_raw_kwarg():
 def test_add_accepts_raw_kwarg():
     """compat.add must accept a 'raw' keyword argument without error."""
     import inspect
-    from cognee_pipeline.compat import add
+    from cognee_py.compat import add
     sig = inspect.signature(add)
     assert "raw" in sig.parameters, "'raw' kwarg not in add() signature"
 
@@ -236,7 +236,7 @@ def test_add_accepts_raw_kwarg():
 def test_cognify_accepts_raw_kwarg():
     """compat.cognify must accept a 'raw' keyword argument without error."""
     import inspect
-    from cognee_pipeline.compat import cognify
+    from cognee_py.compat import cognify
     sig = inspect.signature(cognify)
     assert "raw" in sig.parameters, "'raw' kwarg not in cognify() signature"
 
@@ -244,6 +244,6 @@ def test_cognify_accepts_raw_kwarg():
 def test_prune_system_accepts_raw_kwarg():
     """compat.prune.prune_system must accept a 'raw' keyword argument."""
     import inspect
-    from cognee_pipeline.compat import prune
+    from cognee_py.compat import prune
     sig = inspect.signature(prune.prune_system)
     assert "raw" in sig.parameters, "'raw' kwarg not in prune_system() signature"

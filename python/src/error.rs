@@ -3,11 +3,11 @@ use pyo3::create_exception;
 use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
 
-create_exception!(cognee_pipeline, PipelineError, PyException);
-create_exception!(cognee_pipeline, TaskFailedError, PipelineError);
-create_exception!(cognee_pipeline, CancelledError, PipelineError);
-create_exception!(cognee_pipeline, NoTasksError, PipelineError);
-create_exception!(cognee_pipeline, InvalidConfigError, PipelineError);
+create_exception!(cognee_py, PipelineError, PyException);
+create_exception!(cognee_py, TaskFailedError, PipelineError);
+create_exception!(cognee_py, CancelledError, PipelineError);
+create_exception!(cognee_py, NoTasksError, PipelineError);
+create_exception!(cognee_py, InvalidConfigError, PipelineError);
 
 pub fn execution_error_to_pyerr(e: ExecutionError) -> PyErr {
     match e {

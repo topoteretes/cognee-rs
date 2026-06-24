@@ -24,8 +24,8 @@ def _run_in_subprocess(env_extra: dict) -> str:
         [
             sys.executable,
             "-c",
-            "import cognee_pipeline;"
-            "print('armed=' + str(cognee_pipeline.setup_telemetry_analytics()))",
+            "import cognee_py;"
+            "print('armed=' + str(cognee_py.setup_telemetry_analytics()))",
         ],
         env=env,
         capture_output=True,

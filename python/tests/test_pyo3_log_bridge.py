@@ -20,13 +20,13 @@ Implementation notes
 is seeded from the Python root logger's effective level *at install
 time*, so a Python handler attached later in the same process may
 not start receiving Rust events without an explicit cache reset.
-The conftest in this directory imports ``cognee_pipeline`` eagerly,
+The conftest in this directory imports ``cognee_py`` eagerly,
 which races us — every assertion here therefore runs in a fresh
 subprocess where we control the order:
 
   1. ``logging.basicConfig(level=DEBUG)`` BEFORE the import so the
      default Python root level lets INFO/DEBUG through from the start.
-  2. ``import cognee_pipeline`` installs the bridge (or skips it when
+  2. ``import cognee_py`` installs the bridge (or skips it when
      suppressed).
   3. Execute a pipeline to fire ``tracing::info_span!``/``warn!`` etc.
   4. Print a summary of captured records back to the parent.
@@ -58,16 +58,16 @@ def _run(env_extra: dict, expect_zero: bool = True) -> subprocess.CompletedProce
                 captured.append((record.name, record.levelname))
 
         # Order matters: configure the root logger BEFORE importing
-        # cognee_pipeline so the pyo3-log cache sees a permissive
+        # cognee_py so the pyo3-log cache sees a permissive
         # effective level at install time.
         root = logging.getLogger()
         root.setLevel(logging.DEBUG)
         root.addHandler(Capture(level=logging.DEBUG))
 
-        import cognee_pipeline
+        import cognee_py
 
-        ctx = cognee_pipeline.TaskContext.mock()
-        pipeline = cognee_pipeline.Pipeline("bridge-smoke")
+        ctx = cognee_py.TaskContext.mock()
+        pipeline = cognee_py.Pipeline("bridge-smoke")
         pipeline.add_task(lambda x: x + 1, name="inc")
         pipeline.execute_sync([1], ctx)
 
@@ -122,7 +122,7 @@ def test_rust_event_arrives_in_python_logging():
 @pytest.mark.serial
 def test_suppression_env_var_is_observed_in_subprocess():
     """``COGNEE_BINDING_SUPPRESS_LOGS=1`` set BEFORE the first
-    ``cognee_pipeline`` import keeps the bridge silent — zero records
+    ``cognee_py`` import keeps the bridge silent — zero records
     must be forwarded."""
     res = _run({
         "RUST_LOG": "info,sqlx=warn",

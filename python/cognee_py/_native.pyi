@@ -1,4 +1,4 @@
-"""Stub file for the ``cognee_pipeline._native`` PyO3 extension module.
+"""Stub file for the ``cognee_py._native`` PyO3 extension module.
 
 This file documents the public Python API exposed by the compiled Rust
 extension.  Type checkers (mypy, pyright) use it to provide accurate
@@ -256,7 +256,7 @@ class Pipeline:
         """Execute the pipeline asynchronously.
 
         Returns the list of output values produced by the last task.
-        *watcher* is an optional :class:`~cognee_pipeline.Watcher`-like
+        *watcher* is an optional :class:`~cognee_py.Watcher`-like
         object with event callbacks.
         """
         ...
@@ -905,4 +905,4 @@ def setup_telemetry_analytics() -> None:
 
 # Cloud ops (`serve` / `disconnect`) are exposed by the closed Python cdylib
 # `cognee-py-cloud` (T15e) which wraps `cognee-bindings-cloud`. The OSS
-# `cognee-pipeline` _native module does not export them.
+# `cognee-py` _native module does not export them.

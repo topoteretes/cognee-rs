@@ -1,5 +1,5 @@
 import pytest
-import cognee_pipeline as cp
+import cognee_py as cp
 
 
 @pytest.fixture
