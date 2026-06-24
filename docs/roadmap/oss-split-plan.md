@@ -67,7 +67,7 @@ required Phase-2 item, not optional.
 ## 3. Target topology
 
 ```
-OSS REPO  (cognee-rust, MIT OR Apache-2.0, public, crates.io)
+OSS REPO  (cognee-rs, MIT OR Apache-2.0, public, crates.io)
 ├── crates (publishable, ZERO git deps):
 │   models, utils, storage, logging, telemetry, observability,
 │   chunking, core, ingestion, cognify, search, delete,
@@ -90,7 +90,7 @@ OSS REPO  (cognee-rust, MIT OR Apache-2.0, public, crates.io)
 > Errata: T10c removes `cognee-http-server`'s runtime dependency on `cognee-test-utils` (the unpublishable in-repo harness). The `dev-mock` feature now enables `cognee-vector/testing` directly — `MockVectorDB` already lives in `cognee-vector` behind that feature, and `cognee-test-utils` only re-exported it. No new `cognee-vector-mock` crate was needed; the publishable surface stays the same.
 
 ```
-CLOSED REPO  (cognee-cloud-rust, private)  — depends on OSS via git rev
+CLOSED REPO  (cognee-cloud-rs, private)  — depends on OSS via git rev
 ├── cognee-cloud            (serve/disconnect/CloudClient, Auth0)
 ├── cognee-access-control   (users/roles/tenants/ACL impl of AclDb)
 ├── cognee-vector-qdrant    (git dep, scale vector)
@@ -317,15 +317,15 @@ These land in the **current** repo first (mergeable to `main`, no split yet):
    document the order (foundation → middle → pipelines → lib → bindings).
 
 ### Phase 2 — Physical split
-1. Create the private `cognee-cloud-rust` repo.
+1. Create the private `cognee-cloud-rs` repo.
 2. Move into it: `cognee-cloud`, `cognee-access-control`, `cognee-vector-qdrant`,
    `cognee-llm-litert`, the http auth module + auth/users/api-key routers,
    `cognee-cloud-lib` (umbrella), the cloud bindings crates, and the full
    CLI/server binaries.
 3. Delete those paths from the OSS repo; remove the `cloud`/`server` cloud
    features and cloud re-exports.
-4. Wire closed `Cargo.toml`: `cognee-lib = { git = "…cognee-rust", rev = "…" }`
-   for releases, with `[patch."https://github.com/topoteretes/cognee-rust"]`
+4. Wire closed `Cargo.toml`: `cognee-lib = { git = "…cognee-rs", rev = "…" }`
+   for releases, with `[patch."https://github.com/topoteretes/cognee-rs"]`
    pointing to a local path for development.
 5. **Concretize inherited deps.** Crates moved to the closed repo lose the OSS
    `[workspace.dependencies]` table — every `{ workspace = true }` (e.g.
@@ -364,7 +364,7 @@ These land in the **current** repo first (mergeable to `main`, no split yet):
 - Redis session store and the Postgres relational/graph (`pggraph`) adapters
   stay **OSS** (pure-Rust, publishable); the closed "more adapters" set starts as
   {Qdrant, LiteRT} and grows with future proprietary adapters (e.g. S3 storage).
-- Closed repo name `cognee-cloud-rust`, closed umbrella crate `cognee-cloud-lib`.
+- Closed repo name `cognee-cloud-rs`, closed umbrella crate `cognee-cloud-lib`.
 - **Telemetry defaults to OFF (opt-in) in OSS.** `cognee-telemetry` currently
   POSTs to prometh.ai by default (opt-out); an OSS crate that beacons by default
   is a trust liability. Cloud/closed builds may default it on.
@@ -440,20 +440,39 @@ separate-private-repo model is more conservative and is justified only because
 | OSS edge profile left with no vector store | Brute-force adapter is a required Phase-2 item. |
 | Closed/OSS version drift | Closed pins OSS by `rev`; scheduled CI bumps + tests. |
 
-## 8. Repository creation algorithm (clean history, no closed source in OSS)
+## 8. Repository creation algorithm (push-as-is, clean-public deferred)
 
-**Goal:** the public OSS repo must be *born clean* — closed source must never
-exist in any commit, tag, or reachable object. A `git rm` in the current repo is
-**not** sufficient: the blobs remain recoverable from history. Therefore we
-create **two brand-new repos from scratch**; the current mixed repo is retired to
-a private archive and never becomes the public one.
+> **T16 / T17 split.** This section describes the end-to-end algorithm. The
+> per-substep ledger lives in [`oss-split-tasks.md`](oss-split-tasks.md). **T16
+> ships everything reversible** — push the two already-detached working trees to
+> their new GitHub repos as `main`, stand up CI, leak-audit the pushed history,
+> tag, and flip the closed manifests to the rev pin. Every T16 step is undoable
+> via repo delete / tag delete / `flip-oss-source.sh dev` / `git revert`.
+> **T17 ships the registry publish (irreversible)** — `cargo publish` and
+> `npm publish` burn names forever (npm has a 24h unpublish window only). T17
+> requires an explicit human "go" and depends on F8 (name reservations).
 
-**Prerequisite:** Phase 0 seams are merged, so OSS and closed code live in
-disjoint crates/directories and the OSS subset builds in isolation.
+**Goal at T16:** stand up two private GitHub repos that mirror the disjoint OSS
+and closed working trees as their first commit on `main`, with CI green and the
+closed repo building against a pinned OSS rev. The OSS tree pushed here is
+structurally clean (phases 0-4 / T2–T15 have moved every closed-source path out
+of `cognee-rust-oss`), but the **mixed-DAG ancestry from the original
+`cognee-rust` mono-repo remains in history** — closed blobs are still reachable
+via `git log --all -p` on the pushed branch. Both repos therefore stay **PRIVATE**
+until a separate history-cleanup pass (filter-repo or fresh-init) precedes
+public release. T16 is not the going-public step.
 
-**Guiding rule — allowlist, never denylist.** The OSS repo is populated by
-*copying only explicitly-classified OSS paths*. Anything unclassified is excluded
-by default, so newly-added or forgotten closed files cannot leak.
+**Prerequisite:** Phase 0 seams are merged (T2–T8), Phases 1–4 are done
+(T9–T15), and the OSS subset builds in isolation with zero git deps. The closed
+repo at `/home/dmytro/dev/cognee/cognee-cloud-rust` already exists locally with
+its own `main` branch and `[patch]→path` dev override pointing at the sibling
+OSS checkout.
+
+**Guiding rule — partition manifest is the source of truth.** Every tracked path
+in `cognee-rust-oss` is classified by `scripts/split/{oss,closed}-paths.txt`
+(landed at T8) and verified by `scripts/split/check-partition.sh`. The push-as-is
+flow doesn't re-copy files; the manifest is the safety rail that catches any
+closed path that drifted into the OSS tree since T8.
 
 ### Step 0 — Author the partition manifest
 Two literal path lists, checked into the **current** repo under `scripts/split/`:
@@ -476,84 +495,126 @@ grep -rIl 'cognee-cloud\|cognee-access-control\|cognee-vector-qdrant\|cognee-llm
 ```
 Do not proceed until this is clean.
 
-### Step 2 — Create the OSS repo (fresh history)
+### Step 2 — Push the detached OSS branch to `cognee-rs` (private)
+The `cognee-rust-oss` working tree is already on the detached `oss-split` branch
+(forked at T0 off the original `cognee-rust` mono-repo `main`). Phases 0-4
+(T2–T15) have moved every closed-source crate/file out of this tree, so the tip
+commit is structurally clean by the partition manifest.
+
 ```bash
-SRC=$(pwd)                       # current mixed repo
-mkdir ../cognee-rust && cd ../cognee-rust && git init -b main
-# Allowlist copy — only classified OSS paths:
-rsync -a --files-from="$SRC/scripts/split/oss-paths.txt" "$SRC"/ .
-# Write OSS-only root Cargo.toml (workspace members = OSS crates only),
-# scrub README/docs/CLAUDE.md of closed references, drop qdrant [patch] blocks
-# from the capi/ and ts/ binding workspaces.
-git add -A && git commit -m "chore: initial open-source release"
+cd ../cognee-rs                                       # already a standalone clone
+git remote set-url origin git@github.com:topoteretes/cognee-rs.git  # already done
+git push -u origin oss-split:main                     # push as-is to private repo
 ```
-*History-preserving variant (optional):* instead of a squash init, run
-`git filter-repo --paths-from-file scripts/split/oss-paths.txt` on a fresh clone.
-This keeps OSS commit history while dropping closed paths from **every** commit.
-Only use it if Step 7's leak audit passes — file moves across the OSS/closed line
-over time can leave stray blobs, which the squash init cannot.
+
+The push preserves the mixed-DAG ancestry — closed blobs are reachable from
+`git log --all -p` because the branch shares history with the original mono-repo.
+**This is acceptable while the repo is private.** A separate cleanup pass
+(filter-repo or fresh-init from the manifest) will run before the repo goes
+public; see "Why fresh-init…" at the end of this section for the variants
+considered for that future step.
 
 ### Step 3 — Verify the OSS repo builds & publishes in isolation
 ```bash
-cd ../cognee-rust
+cd ../cognee-rs
 bash scripts/check_all.sh
 bash scripts/run_tests_with_openai.sh
 # dry-run every crate in topological order; fail on any git/path dep:
 for c in $(scripts/split/publish-order.sh); do cargo publish -p "$c" --dry-run || exit 1; done
 ```
 
-### Step 4 — Leak audit of the OSS repo (the whole point)
+### Step 4 — Leak audit of the pushed OSS history (surface inventory)
 ```bash
-cd ../cognee-rust
-# 1. No closed paths anywhere in history:
-git log --all --oneline -- $(cat "$SRC/scripts/split/closed-paths.txt") | grep . && echo LEAK
-# 2. No closed object names in any reachable blob:
-git rev-list --objects --all | grep -E 'cloud|access-control|qdrant|litert|auth/' && echo LEAK
-# 3. Sentinel content grep across all history:
+cd ../cognee-rs
+# 1. Closed paths in history (expected non-empty under push-as-is):
+git log --all --oneline -- $(cat scripts/split/closed-paths.txt) | head
+# 2. Closed object names in any reachable blob (expected non-empty):
+git rev-list --objects --all | grep -E 'cloud|access-control|qdrant|litert|auth/' | head
+# 3. Sentinel content grep across all history (expected non-empty):
 git grep -I -l -e 'CloudClient' -e 'ExtraAuthValidator' -e 'hashed_password' \
-  -e 'AUTH0' -e 'device_code' $(git rev-list --all) && echo LEAK
+  -e 'AUTH0' -e 'device_code' $(git rev-list --all) | head
 ```
-Any hit ⇒ discard the repo and rebuild from Step 2 (do not patch in place).
+**Expected at T16:** all three commands return hits. The mixed-DAG ancestry from
+the original mono-repo preserves closed blobs that are reachable via
+`git log --all -p`. This is **acceptable while the repo is private** — the T16
+audit's job is to **inventory the surface area** for the future history-cleanup
+pass, not to gate the private push.
 
-### Step 5 — Publish OSS & capture the pin
+**Hard gate before going public (later, not T16/T17):** the same three commands
+must return zero hits. That gate is enforced by the cleanup pass (filter-repo or
+fresh-init from the partition manifest) that runs before flipping the repo from
+private to public.
+
+### Step 5 — Tag OSS & capture the pin (T16); registry publish (T17, gated)
+The `cognee-rs` repo already exists (created out-of-band) and now hosts the
+`main` branch pushed in Step 2. T16 tags the commit and captures the rev:
+
 ```bash
-gh repo create topoteretes/cognee-rust --public --source=. --push
-git tag v0.1.0 && git push --tags
-OSS_REV=$(git rev-parse HEAD)            # closed repo pins this
-# (crates.io publish can happen here or after closed is verified)
+cd ../cognee-rs
+git tag v0.1.0 && git push origin v0.1.0
+OSS_REV=$(git rev-parse v0.1.0)          # closed repo pins this in Step 6
 ```
 
-### Step 6 — Create the closed repo (fresh history, pinned to OSS)
+**T17 (separate task — requires explicit human "go" and F8 done) — registry
+publish.** Irreversible:
 ```bash
-mkdir ../cognee-cloud-rust && cd ../cognee-cloud-rust && git init -b main
-rsync -a --files-from="$SRC/scripts/split/closed-paths.txt" "$SRC"/ .
-# Cargo.toml of every closed crate:
-#   cognee-lib = { git = "https://github.com/topoteretes/cognee-rust", rev = "$OSS_REV" }
-# Dev ergonomics: a [patch] block (in a dev-only include or documented) ->
-#   [patch."https://github.com/topoteretes/cognee-rust"]
-#   cognee-lib = { path = "../cognee-rust/crates/lib" }
-git add -A && git commit -m "chore: initial closed-source cloud product"
-gh repo create topoteretes/cognee-cloud-rust --private --source=. --push
+# crates.io — 24 OSS crates, topological order, names burn forever:
+for c in $(scripts/split/publish-order.sh); do cargo publish -p "$c"; done
+# npm — cognee-ts umbrella + 7 prebuilt platform packages, 24h unpublish window only:
+npm publish cognee-ts && npm publish cognee-ts-<platform>...
+# PyPI + C-API GH-release tarballs intentionally NOT published — users build from sources.
 ```
+The repo stays private during T17 — publishing to public registries is
+orthogonal to the GitHub repo's visibility, and history cleanup is still
+pending. The "going public on GitHub" step (with leak-audit gate from Step 4)
+happens later still.
 
-### Step 7 — Verify the closed repo
+### Step 6 — Push the closed repo & flip to the OSS rev pin
+The `cognee-cloud-rs` GitHub repo already exists (created out-of-band) and the
+local `cognee-cloud-rust` working tree is on `main` with all closed crates
+present. T11 set up the `[patch]→path` dev override pointing at the sibling OSS
+checkout; T16 pushes and then flips the manifests from path to git+rev:
+
 ```bash
 cd ../cognee-cloud-rust
-cargo build --workspace                  # builds against pinned OSS rev
+git remote set-url origin git@github.com:topoteretes/cognee-cloud-rs.git
+git push -u origin main
+
+# Flip closed manifests from path-dev to git+rev release pin:
+scripts/flip-oss-source.sh release "$OSS_REV"
+# Equivalent of switching every `cognee-* = { path = "../cognee-rust-oss/..." }`
+# to `cognee-* = { git = "https://github.com/topoteretes/cognee-rs", rev = "$OSS_REV" }`,
+# preserving the documented `[patch."https://github.com/topoteretes/cognee-rs"]`
+# block for `flip-oss-source.sh dev`.
+git add -A && git commit -m "split(T16): pin OSS to $OSS_REV"
+git push
+```
+
+### Step 7 — Verify the closed repo against the pinned OSS rev
+```bash
+cd ../cognee-cloud-rust
+cargo build --workspace                  # builds against pinned OSS rev (git+rev resolution)
 bash scripts/check_all.sh
 bash scripts/run_tests_with_openai.sh    # incl. multi-tenant + auth + cloud
 # reproduce today's full-feature CLI/server/bindings; run e2e-cross-sdk parity
 ```
 
-### Step 8 — Retire the old repo & bring up CI
-- Make the current mixed repo **private/archived**; it is never published. The
-  public repo is the new `cognee-rust` from Step 2.
-- Stand up Phase 3 CI in both new repos.
+The original `cognee-rust` mono-repo on GitHub stays available as a reference
+safety net — it is not archived as part of T16/T17. The two new private repos
+are the live trees from this point on.
 
-### Why fresh-init over filtering the existing repo
-`git filter-repo` *can* meet the no-closed-history bar, but it is error-prone
-(missed paths, dangling blobs from renames, ref/reflog/tag residue) and the
-result still has to pass the Step 4 audit. A fresh allowlist-copy is *provably*
-clean by construction — the OSS repo's object database only ever receives files
-named in `oss-paths.txt`. Prefer it unless preserving OSS commit history is worth
-the extra audit burden.
+### Why fresh-init over filtering for the *future public flip*
+The cleanup pass that must precede going public (deferred — not T16/T17) has two
+options:
+
+- `git filter-repo --paths-from-file scripts/split/oss-paths.txt` on a fresh
+  clone — keeps OSS commit history while dropping closed paths from **every**
+  commit. Error-prone (missed paths, dangling blobs from renames, ref/reflog/tag
+  residue) and the result still has to pass the Step 4 audit at zero hits.
+- Fresh `git init` + allowlist-rsync from the manifest — provably clean by
+  construction (the object database only ever receives files in `oss-paths.txt`)
+  but loses commit history.
+
+Prefer fresh-init unless preserving OSS commit history is worth the extra audit
+burden. Either way, the Step 4 audit at zero hits is the gate for flipping the
+private `cognee-rs` repo to public.

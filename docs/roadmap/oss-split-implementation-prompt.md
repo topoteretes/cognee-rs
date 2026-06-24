@@ -27,9 +27,12 @@ The work happens in **two trees**, never in the original checkout:
   tree via a local `[patch]` during development.
 
 **The original `cognee-rust` checkout on `main` is the safety net: never touch
-it, never check out another branch in it, never commit to it.** Until the very
-last task (T16, gated on explicit human approval), every action is reversible by
-deleting the two new trees.
+it, never check out another branch in it, never commit to it.** Until **T17**
+(registry publish, gated on explicit human approval), every action is reversible
+by deleting the two new GitHub repos / force-pushing / `flip-oss-source.sh dev`.
+T16 ships the reversible push-and-pin groundwork (private repos, tag, CI, leak
+audit, closed flip to rev pin); T17 is the irreversible `cargo publish` /
+`npm publish` step that burns names on public registries.
 
 ---
 
@@ -61,8 +64,10 @@ share state on purpose).
 4. **Tests run in debug** (no `--release`) unless the plan/README says otherwise.
 5. **`.unwrap()` is forbidden in non-test code** — `expect("why-it-can't-fail")`
    or proper `?`/`map_err` propagation (see `cognee-rust/.claude/CLAUDE.md`).
-6. **Reversibility.** Nothing irreversible to public state happens before T16.
-   T16 requires an explicit human "go".
+6. **Reversibility.** Nothing is published to a public registry before T17. T17
+   requires an explicit human "go" (and F8 — name reservations — must be done).
+   T16's GitHub-push + tag + closed rev-pin are reversible by repo delete /
+   tag delete / `flip-oss-source.sh dev`.
 
 ---
 
@@ -154,7 +159,8 @@ checklist. Process tasks top-to-bottom. The references point into
 | T13 | Phase-3 OSS CI workflows (lint/test/doc/publish-dry-run/bindings + tagged publish). | Phase 3 | OSS |
 | T14 | Phase-3 closed CI workflows (lint/test/build-vs-pinned-rev/private-registry publish/scheduled rev bump). | Phase 3 | closed |
 | T15 | Phase-4 bindings distribution config (OSS npm/PyPI/C; closed private registries reusing the OSS op wrappers). | Phase 4 | both |
-| **T16** | **Clean birth (point of no return — requires explicit human "go").** Pre-flight + manifest allowlist-copy to a fresh public OSS repo, leak audit, publish, capture rev; flip closed to the rev pin; archive the old mixed repo private. | §8 Steps 1–8 | both |
+| **T16** | **Clean-birth groundwork (reversible).** Refresh §8 prose for push-as-is + new repo names (`cognee-rs`, `cognee-cloud-rs`); push OSS `oss-split` → `cognee-rs`; push closed `main` → `cognee-cloud-rs`; stand up Phase-3 CI on both remotes (green); leak audit on the pushed OSS history; tag OSS `v0.1.0` + push tag (capture `OSS_REV`); flip closed manifests path → `git+rev = $OSS_REV`; closed-against-pinned-rev smoke; final `cargo publish --dry-run` topological sweep. Every step undoable via repo delete / tag delete / `flip-oss-source.sh dev` / `git revert`. Repos stay PRIVATE; history cleanup happens later before going public. | §8 (push-as-is rewrite), Steps 1–4, 5 (partial), 6–7 | both |
+| **T17** | **Registry publish (irreversible — requires explicit human "go" + F8 done).** `cargo publish` 24 OSS crates to crates.io in topological order; `npm publish cognee-ts` + 7 prebuilt platform packages. Names burn forever; npm has 24h unpublish window only. PyPI + C-API GH-release tarballs explicitly removed — users build from sources. | §8 Step 5 (publish portion) | OSS |
 
 Notes for Step 1 to resolve per task: the plan does seams "in one repo" then physically splits (Phase 2); in *this* execution, crates destined for closed (access-control in T2, qdrant/litert in T4, cloud routers in T3) are created **directly in the closed sibling** and wired via the dev `[patch]`, so the "physical split" is incremental and Phase 2 reduces to wiring + contract tests. If a task is cleaner done OSS-first-then-moved, Step 1 may say so — defer to the plan + code reality.
 
@@ -164,7 +170,8 @@ Notes for Step 1 to resolve per task: the plan does seams "in one repo" then phy
 
 - **Stop and ask the human** when: a repo is unexpectedly dirty; the plan and code
   contradict in a way Step 1 can't safely resolve; a validation failure is
-  structural (not a quick fix); or you reach **T16** (always pause for go/no-go).
+  structural (not a quick fix); or you reach **T17** (always pause for go/no-go —
+  registry publish is irreversible).
 - **Never** force-push, rewrite history of `main`, or run destructive git on the
   original checkout.
 - **Cross-SDK parity** (`e2e-cross-sdk`) must be considered after T2/T3/T7 since
