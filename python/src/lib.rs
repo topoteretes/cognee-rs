@@ -10,7 +10,6 @@ mod pipeline;
 mod progress;
 mod sdk;
 mod sdk_admin;
-mod sdk_cloud;
 mod sdk_data;
 mod sdk_datasets;
 mod sdk_error;
@@ -26,51 +25,9 @@ mod telemetry_otlp;
 mod value;
 mod watcher;
 
-/// Connect the SDK to a Cognee Cloud instance (process-wide singleton).
-///
-/// When ``opts["url"]`` is set, **direct mode** is used — no Auth0 flow,
-/// suitable for CI / testing with a local Cognee HTTP server.  When absent,
-/// the Auth0 device-code flow is run (requires a TTY).
-///
-/// Optional opts keys (both ``snake_case`` and ``camelCase`` accepted):
-///
-/// - ``url`` — direct server URL
-/// - ``api_key`` / ``apiKey``
-/// - ``cloud_url`` / ``cloudUrl``
-/// - ``auth0_domain`` / ``auth0Domain``
-/// - ``auth0_client_id`` / ``auth0ClientId``
-/// - ``auth0_audience`` / ``auth0Audience``
-///
-/// Returns ``{"connected": True, "serviceUrl": "…"}`` on success.
-///
-/// Raises ``CogneeFeatureNotBuiltError`` when the ``cloud`` Cargo feature was
-/// not compiled in.
-#[pyfunction]
-#[pyo3(signature = (opts=None))]
-fn serve<'py>(py: Python<'py>, opts: Option<Bound<'py, PyAny>>) -> PyResult<Bound<'py, PyAny>> {
-    sdk_cloud::py_serve(py, opts)
-}
-
-/// Disconnect from Cognee Cloud and revert to local-execution mode.
-///
-/// Optional opts keys (both ``snake_case`` and ``camelCase`` accepted):
-///
-/// - ``wipe_credentials`` / ``wipeCredentials`` — when ``True``, the on-disk
-///   credential cache is deleted so the next :func:`serve` must
-///   re-authenticate (default ``False``).
-///
-/// Returns ``None`` on success.
-///
-/// Raises ``CogneeFeatureNotBuiltError`` when the ``cloud`` Cargo feature was
-/// not compiled in.
-#[pyfunction]
-#[pyo3(signature = (opts=None))]
-fn disconnect<'py>(
-    py: Python<'py>,
-    opts: Option<Bound<'py, PyAny>>,
-) -> PyResult<Bound<'py, PyAny>> {
-    sdk_cloud::py_disconnect(py, opts)
-}
+// Cloud ops (`serve` / `disconnect`) live in the closed Python cdylib
+// `cognee-py-cloud` (T15e) which wraps `cognee-bindings-cloud`. The OSS
+// `cognee-pipeline` package does not expose them.
 
 /// Python bindings for the cognee-core pipeline engine.
 #[pymodule]
@@ -122,9 +79,8 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Register SDK-tier exception types (CogneeError hierarchy).
     sdk_error::register(m)?;
 
-    // Cloud ops: module-level serve / disconnect (process-wide singleton).
-    m.add_function(wrap_pyfunction!(serve, m)?)?;
-    m.add_function(wrap_pyfunction!(disconnect, m)?)?;
+    // Cloud ops (`serve` / `disconnect`) are registered by the closed
+    // `cognee-py-cloud` cdylib (T15e), not by the OSS `cognee-pipeline`.
 
     Ok(())
 }

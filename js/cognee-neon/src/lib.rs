@@ -24,7 +24,6 @@ mod run_handle;
 mod runtime;
 mod sdk;
 mod sdk_admin;
-mod sdk_cloud;
 mod sdk_data;
 mod sdk_datasets;
 mod sdk_memory;
@@ -125,10 +124,9 @@ fn main(mut cx: ModuleContext) -> NeonResult<()> {
         sdk_visualization::cognee_visualize_to_file,
     )?;
 
-    // Cloud ops (Phase 6): serve / disconnect.
-    // Always registered; throws FEATURE_NOT_BUILT when the feature is absent.
-    cx.export_function("cogneeServe", sdk_cloud::cognee_serve)?;
-    cx.export_function("cogneeDisconnect", sdk_cloud::cognee_disconnect)?;
+    // Cloud ops (`cogneeServe` / `cogneeDisconnect`) are exposed by the
+    // closed `cognee-ts-cloud` cdylib (T15e), not by this OSS `cognee-neon`
+    // binding. The closed cdylib depends on `cognee-bindings-cloud`.
 
     // Config surface (Phase 2): granular + bulk + generic setters, read-back.
     // LLM

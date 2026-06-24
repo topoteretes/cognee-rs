@@ -33,9 +33,6 @@ import type {
   CogneeNotebook,
   CogneeSessionQAEntry,
   CogneeVisualizeOptions,
-  CogneeServeResult,
-  CogneeServeOptions,
-  CogneeDisconnectOptions,
 } from "./types";
 
 export type {
@@ -70,9 +67,6 @@ export type {
   CogneeNotebook,
   CogneeSessionQAEntry,
   CogneeVisualizeOptions,
-  CogneeServeResult,
-  CogneeServeOptions,
-  CogneeDisconnectOptions,
 } from "./types";
 
 /** Opaque native handle types returned by the Neon addon. */
@@ -310,21 +304,9 @@ export interface NativeBindings {
     opts?: CogneeVisualizeOptions
   ): Promise<string>;
 
-  // Cloud ops (Phase 6): serve / disconnect.
-  //
-  // `cogneeServe` connects the SDK to a Cognee Cloud instance.  When
-  // `opts.url` is provided, **direct mode** is used (no Auth0 flow; works
-  // headlessly).  Otherwise **cloud mode** runs the Auth0 device-code flow,
-  // which requires a TTY.  Returns `{ connected: true, serviceUrl }`.
-  //
-  // `cogneeDisconnect` tears down the cloud-routed mode and reverts to local
-  // execution.  `opts.wipeCredentials` (default false) additionally removes
-  // the on-disk credential cache.
-  //
-  // Both functions throw a typed error with `code = "FEATURE_NOT_BUILT"` when
-  // the `cloud` feature was not compiled into this build of cognee-neon.
-  cogneeServe(opts?: CogneeServeOptions): Promise<CogneeServeResult>;
-  cogneeDisconnect(opts?: CogneeDisconnectOptions): Promise<void>;
+  // Cloud ops (`cogneeServe` / `cogneeDisconnect`) live in the closed
+  // `cognee-ts-cloud` cdylib (T15e). The OSS `cognee-neon` native module
+  // does not export them.
 
   // Config surface (Phase 2). Granular setters are synchronous and return
   // `void`; each bumps the config version, which version-invalidates the

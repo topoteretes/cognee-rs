@@ -133,11 +133,11 @@ export {
 // SDK-level exports (Phase 7)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** The main Cognee SDK class, module-level cloud functions, and sub-object types. */
+/** The main Cognee SDK class and sub-object types. Cloud module-level
+ * functions (`serve` / `disconnect`) live in the closed `cognee-ts-cloud`
+ * package (T15e). */
 export {
   Cognee,
-  serve,
-  disconnect,
   type CogneeConfigObject,
   type CogneeDatasetObject,
   type CogneeSessionObject,

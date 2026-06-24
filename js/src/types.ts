@@ -524,41 +524,6 @@ export interface CogneeVisualizeOptions {
   destinationPath?: string;
 }
 
-/**
- * Result of `cogneeServe`.  The `CloudClient` handle is not exposed to JS;
- * use `serviceUrl` to log / verify the connection.
- */
-export interface CogneeServeResult {
-  connected: true;
-  serviceUrl: string;
-}
-
-/** Options accepted by `cogneeServe`. */
-export interface CogneeServeOptions {
-  /**
-   * Direct service URL.  When set, selects **direct mode** — no Auth0
-   * device-code flow; requires a running Cognee HTTP server at this URL.
-   * When absent, **cloud mode** is used (device-code flow, requires a TTY).
-   */
-  url?: string;
-  /** API key for authenticating against the service URL. */
-  apiKey?: string;
-  /** Override for the management API base URL (cloud mode only). */
-  cloudUrl?: string;
-  /** Override for the Auth0 tenant domain (cloud mode only). */
-  auth0Domain?: string;
-  /** Override for the Auth0 native-app client ID (cloud mode only). */
-  auth0ClientId?: string;
-  /** Override for the Auth0 API audience (cloud mode only). */
-  auth0Audience?: string;
-}
-
-/** Options accepted by `cogneeDisconnect`. */
-export interface CogneeDisconnectOptions {
-  /**
-   * When `true`, the on-disk credential cache
-   * (`~/.cognee/cloud_credentials.json`) is deleted so the next
-   * `cogneeServe()` must re-authenticate.  Defaults to `false`.
-   */
-  wipeCredentials?: boolean;
-}
+// Cloud-related types (`CogneeServeOptions`, `CogneeServeResult`,
+// `CogneeDisconnectOptions`) live in the closed `cognee-ts-cloud` package
+// (T15e) alongside the `serve` / `disconnect` functions that consume them.

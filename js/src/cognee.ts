@@ -43,48 +43,12 @@ import type {
   CogneeNotebook,
   CogneeSessionQAEntry,
   CogneeVisualizeOptions,
-  CogneeServeOptions,
-  CogneeServeResult,
-  CogneeDisconnectOptions,
 } from "./types";
 import { wrapNativeError } from "./errors";
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Module-level functions (no handle — operate on global cloud state)
-// ─────────────────────────────────────────────────────────────────────────────
-
-/**
- * Connect the SDK to a Cognee Cloud instance.
- *
- * When `opts.url` is provided, **direct mode** is used (no Auth0 flow; works
- * headlessly). Otherwise **cloud mode** runs the Auth0 device-code flow, which
- * requires a TTY.
- *
- * Throws `FeatureNotBuiltError` when the `cloud` feature was not compiled in.
- */
-export async function serve(opts?: CogneeServeOptions): Promise<CogneeServeResult> {
-  try {
-    return await native.cogneeServe(opts);
-  } catch (e) {
-    throw wrapNativeError(e);
-  }
-}
-
-/**
- * Tear down cloud-routed mode and revert to local execution.
- *
- * `opts.wipeCredentials` (default `false`) additionally removes the on-disk
- * credential cache so the next `serve()` must re-authenticate.
- *
- * Throws `FeatureNotBuiltError` when the `cloud` feature was not compiled in.
- */
-export async function disconnect(opts?: CogneeDisconnectOptions): Promise<void> {
-  try {
-    await native.cogneeDisconnect(opts);
-  } catch (e) {
-    throw wrapNativeError(e);
-  }
-}
+// Cloud module-level functions (`serve` / `disconnect`) live in the closed
+// `cognee-ts-cloud` package (T15e). The OSS `cognee` package does not
+// expose them.
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Cognee class

@@ -1203,72 +1203,12 @@ void cg_sdk_visualize_to_file(const CgSdk*        sdk,
                                CgSdkResultCallback callback,
                                void*               user_data);
 
-/* ── Cloud ops (Phase 7, `cloud` feature) ─────────────────────────────────── */
+/* ── Cloud ops ─────────────────────────────────────────────────────────────── */
 /*
- * Both ops are process-wide singletons — they do NOT accept a CgSdk* handle.
- * They operate on the process-wide CloudClient singleton (matching the
- * neon reference implementation in js/cognee-neon/src/sdk_cloud.rs).
- *
- * Both ops are async (D4, R1).
- *
- * When the `cloud` feature was not compiled in, both functions fire the
- * callback with CG_ERR_FEATURE_NOT_BUILT (16).
- *
- * Wire shapes (camelCase, D3, D9):
- *
- *   cg_sdk_serve opts_json  — NULL or:
- *     {"url?":"…","apiKey?":"…","cloudUrl?":"…","auth0Domain?":"…",
- *      "auth0ClientId?":"…","auth0Audience?":"…"}
- *
- *   cg_sdk_serve result     — {"connected":true,"serviceUrl":"https://…"}
- *
- *   cg_sdk_disconnect opts  — NULL or {"wipeCredentials?":false}
- *   cg_sdk_disconnect result— "null" (D9 — void op)
+ * Cloud ops (cg_sdk_serve / cg_sdk_disconnect) live in the closed
+ * `cognee-c-cloud` cdylib (T15e), which ships a sibling header alongside
+ * this one. This OSS `cognee-capi` build intentionally does not expose them.
  */
-
-/**
- * Connect the SDK to a Cognee Cloud instance (process-wide singleton).
- *
- * Does NOT take a CgSdk* handle.
- *
- * opts_json controls the connection mode:
- *   - {"url":"http://…"}  — direct mode (headless, for local servers / CI).
- *   - {} or NULL           — cloud mode (Auth0 device-code flow; requires TTY).
- *
- * Optional keys: "apiKey", "cloudUrl", "auth0Domain", "auth0ClientId",
- * "auth0Audience".
- *
- * Argument-validation paths and CG_ERR_FEATURE_NOT_BUILT are sufficient to
- * verify the contract in CI (live Auth0 flow not required).
- *
- * result_json on success: {"connected":true,"serviceUrl":"…"}
- *
- * @param opts_json NULL or null-terminated UTF-8 JSON options object.
- * @param callback  Called exactly once with the result or error.
- * @param user_data Forwarded to callback unchanged.
- */
-void cg_sdk_serve(const char*         opts_json,
-                  CgSdkResultCallback callback,
-                  void*               user_data);
-
-/**
- * Disconnect from Cognee Cloud (process-wide singleton).
- *
- * Does NOT take a CgSdk* handle.
- *
- * opts_json — NULL or a JSON object with an optional "wipeCredentials"
- * boolean (default false).  When true, the on-disk credential cache is
- * deleted; the next cg_sdk_serve must re-authenticate.
- *
- * result_json on success: "null" (D9 — void op).
- *
- * @param opts_json NULL or null-terminated UTF-8 JSON options object.
- * @param callback  Called exactly once with "null" or an error.
- * @param user_data Forwarded to callback unchanged.
- */
-void cg_sdk_disconnect(const char*         opts_json,
-                       CgSdkResultCallback callback,
-                       void*               user_data);
 
 /* ── JSON utility (Phase 7, not feature-gated) ────────────────────────────── */
 

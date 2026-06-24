@@ -4,17 +4,17 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "Shared facade (HandleState, CogneeServices, SdkError, wire helpers) consumed by the Neon JS and C API bindings."
+description = "Shared facade (HandleState, CogneeServices, SdkError, wire helpers) consumed by the Python / JS / C API cognee bindings."
 repository.workspace = true
 homepage.workspace = true
 readme.workspace = true
 keywords.workspace = true
 categories.workspace = true
 authors.workspace = true
-# Distributed via the JS/Python/C bindings as a prebuilt cdylib; the closed
-# cognee-cloud optional path-dep blocks crates.io publish until T15 lifts the
-# glue to a closed crate.
-publish = false
+# Publishable: the T10a-era closed `cognee-cloud` optional path-dep has been
+# lifted to the closed `cognee-bindings-cloud` glue crate (T15a, plan §6.1).
+# No closed deps remain, so the OSS facade can ship to crates.io.
+publish = true
 
 # NOT a default member of the root workspace but IS a workspace member
 # so `cargo check --all-targets` at the root covers it.
@@ -23,12 +23,12 @@ publish = false
 workspace = true
 
 [features]
-# Default features mirror cognee-neon (full): visualization, cloud, and all
+# Default features mirror the cognee bindings (full): visualization plus all
 # engine features. A slim embedded build can override with
-# --no-default-features --features sqlite,testing.
+# --no-default-features --features sqlite,testing. The former `cloud` feature
+# was lifted to closed `cognee-bindings-cloud` per T15a / plan §6.1.
 default = [
     "visualization",
-    # `cloud` is opt-in — see crates/lib/Cargo.toml.
     "ladybug",
     "onnx",
     "hf-tokenizer",
@@ -37,7 +37,6 @@ default = [
     "testing",
 ]
 visualization = ["cognee-lib/visualization"]
-cloud         = ["dep:cognee-cloud"]
 ladybug       = ["cognee-lib/ladybug"]
 onnx          = ["cognee-lib/onnx"]
 hf-tokenizer  = ["cognee-lib/hf-tokenizer"]
@@ -47,7 +46,6 @@ testing       = ["cognee-lib/testing"]
 
 [dependencies]
 cognee-lib = { path = "../lib", default-features = false }
-cognee-cloud = { path = "../../../cognee-cloud-rust/crates/cognee-cloud", optional = true }
 serde      = { workspace = true }
 serde_json = { workspace = true }
 thiserror  = { workspace = true }

@@ -16,12 +16,11 @@ publish = false
 crate-type = ["cdylib"]
 
 [features]
-# visualization and cloud mirror cognee-lib and cognee-cli defaults.
-# A --no-default-features build strips both; they are always present in
-# the standard prebuild.
+# visualization mirrors cognee-lib defaults. The former `cloud` feature was
+# lifted to the closed `cognee-ts-cloud` cdylib (T15e) which depends on
+# `cognee-bindings-cloud`; this OSS cdylib intentionally omits it.
 default = [
     "visualization",
-    # `cloud` is opt-in — see crates/lib/Cargo.toml.
     # engine features — unchanged from Phase 0–5
     "ladybug",
     "onnx",
@@ -39,7 +38,6 @@ default = [
 # (TELEMETRY_DISABLED / ENV / COGNEE_HOST_SDK) — see telemetry_analytics.rs.
 telemetry     = ["cognee-lib/telemetry"]
 visualization = ["cognee-lib/visualization", "cognee-bindings-common/visualization"]
-cloud         = ["cognee-bindings-common/cloud"]
 # Engine features forwarded to cognee-lib and cognee-bindings-common.
 ladybug       = ["cognee-lib/ladybug",       "cognee-bindings-common/ladybug"]
 onnx          = ["cognee-lib/onnx",          "cognee-bindings-common/onnx"]

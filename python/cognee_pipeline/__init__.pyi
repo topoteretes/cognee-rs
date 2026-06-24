@@ -54,10 +54,9 @@ from cognee_pipeline._native import (
     setup_logging as setup_logging,
     setup_telemetry as setup_telemetry,
     setup_telemetry_analytics as setup_telemetry_analytics,
-    # Cloud ops (module-level)
-    serve as serve,
-    disconnect as disconnect,
 )
+# Cloud ops (`serve` / `disconnect`) are exposed by the closed Python cdylib
+# `cognee-py-cloud` (T15e), not by the OSS `cognee-pipeline` package.
 
 COGNEE_BINDING_SUPPRESS_LOGS: str
 

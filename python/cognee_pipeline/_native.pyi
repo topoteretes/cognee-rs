@@ -903,30 +903,6 @@ def setup_telemetry_analytics() -> None:
     """
     ...
 
-async def serve(opts: Optional[dict[str, Any]] = None) -> dict[str, Any]:
-    """Connect to a Cognee Cloud instance (process-wide singleton).
-
-    When ``opts["url"]`` is set, **direct mode** is used — no Auth0 flow.
-    Otherwise the Auth0 device-code flow runs (requires a TTY).
-
-    Accepted *opts* keys (``snake_case`` and ``camelCase`` both accepted):
-    ``url``, ``api_key`` / ``apiKey``, ``cloud_url`` / ``cloudUrl``,
-    ``auth0_domain`` / ``auth0Domain``, ``auth0_client_id`` /
-    ``auth0ClientId``, ``auth0_audience`` / ``auth0Audience``.
-
-    Returns ``{"connected": True, "serviceUrl": "…"}`` on success.
-    Raises :exc:`CogneeFeatureNotBuiltError` when the ``cloud`` Cargo feature
-    was not compiled in.
-    """
-    ...
-
-async def disconnect(opts: Optional[dict[str, Any]] = None) -> None:
-    """Disconnect from Cognee Cloud and revert to local-execution mode.
-
-    Accepted *opts* keys: ``wipe_credentials`` / ``wipeCredentials`` — when
-    ``True``, the on-disk credential cache is deleted (default ``False``).
-
-    Raises :exc:`CogneeFeatureNotBuiltError` when the ``cloud`` Cargo feature
-    was not compiled in.
-    """
-    ...
+# Cloud ops (`serve` / `disconnect`) are exposed by the closed Python cdylib
+# `cognee-py-cloud` (T15e) which wraps `cognee-bindings-cloud`. The OSS
+# `cognee-pipeline` _native module does not export them.

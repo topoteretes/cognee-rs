@@ -88,14 +88,16 @@ endif()
 # Phase 7 feature-gated smoke test.
 #
 # Default build: sdk_feature_smoke links the full feature set and verifies
-#   that cg_sdk_visualize / cg_sdk_serve / cg_sdk_disconnect fire their
-#   callbacks, and that cg_json_string_decode round-trips correctly.
+#   that cg_sdk_visualize / cg_sdk_visualize_to_file fire their callbacks,
+#   and that cg_json_string_decode round-trips correctly. Cloud ops
+#   (cg_sdk_serve / cg_sdk_disconnect) moved to closed `cognee-c-cloud` in
+#   T15a and have their own smoke coverage in the closed repo.
 #
 # Slim build (built in a separate CMake dir by check.sh with
 #   -DCOGNEE_CAPI_NO_DEFAULT_FEATURES=ON -DCOGNEE_CAPI_CARGO_FEATURES=sqlite,testing):
 #   sdk_feature_smoke_slim compiles the same source with
 #   -DEXPECT_FEATURE_NOT_BUILT=1 so that it asserts CG_ERR_FEATURE_NOT_BUILT
-#   from all four feature-gated ops.
+#   from the remaining feature-gated ops (visualization).
 add_executable(sdk_feature_smoke sdk_feature_smoke.c)
 target_include_directories(sdk_feature_smoke PRIVATE ${COGNEE_INCLUDE_DIR})
 target_link_libraries(sdk_feature_smoke cognee_capi ${COGNEE_SYSTEM_LIBS})

@@ -15,7 +15,6 @@ capi/cognee-capi/src/progress.rs
 capi/cognee-capi/src/run_handle.rs
 capi/cognee-capi/src/runtime.rs
 capi/cognee-capi/src/sdk_admin.rs
-capi/cognee-capi/src/sdk_cloud.rs
 capi/cognee-capi/src/sdk_config.rs
 capi/cognee-capi/src/sdk_data.rs
 capi/cognee-capi/src/sdk_datasets.rs
@@ -77,7 +76,6 @@ crates/bindings-common/src/error.rs
 crates/bindings-common/src/handle.rs
 crates/bindings-common/src/lib.rs
 crates/bindings-common/src/ops/admin.rs
-crates/bindings-common/src/ops/cloud.rs
 crates/bindings-common/src/ops/data.rs
 crates/bindings-common/src/ops/datasets.rs
 crates/bindings-common/src/ops/memory.rs
@@ -966,7 +964,6 @@ js/cognee-neon/src/progress.rs
 js/cognee-neon/src/run_handle.rs
 js/cognee-neon/src/runtime.rs
 js/cognee-neon/src/sdk_admin.rs
-js/cognee-neon/src/sdk_cloud.rs
 js/cognee-neon/src/sdk_data.rs
 js/cognee-neon/src/sdk_datasets.rs
 js/cognee-neon/src/sdk_memory.rs
@@ -1037,7 +1034,6 @@ js/src/value.ts
 js/src/watcher.ts
 js/__tests__/add.test.ts
 js/__tests__/admin.test.ts
-js/__tests__/cloud.test.ts
 js/__tests__/cognify.test.ts
 js/__tests__/config.test.ts
 js/__tests__/data-ops.test.ts
@@ -1089,7 +1085,6 @@ python/src/logging.rs
 python/src/pipeline.rs
 python/src/progress.rs
 python/src/sdk_admin.rs
-python/src/sdk_cloud.rs
 python/src/sdk_data.rs
 python/src/sdk_datasets.rs
 python/src/sdk_error.rs
@@ -1108,7 +1103,6 @@ python/src/watcher.rs
 python/tests/conftest.py
 python/tests/test_async.py
 python/tests/test_cancellation.py
-python/tests/test_cloud_ops.py
 python/tests/test_compat_api.py
 python/tests/test_config.py
 python/tests/test_core_ops.py

@@ -97,10 +97,10 @@ from cognee_pipeline._native import (
     setup_logging,
     setup_telemetry,
     setup_telemetry_analytics,
-    # Cloud ops (process-wide singleton)
-    serve,
-    disconnect,
 )
+# Cloud ops (`serve` / `disconnect`) live in the closed Python cdylib
+# (`cognee-py-cloud`, T15e). The OSS `cognee-pipeline` package does not
+# expose them; importers needing cloud should install `cognee-py-cloud`.
 
 class Watcher:
     """A pipeline watcher that forwards events to Python callbacks.
@@ -213,9 +213,6 @@ __all__ = [
     "setup_logging",
     "setup_telemetry",
     "setup_telemetry_analytics",
-    # Cloud ops
-    "serve",
-    "disconnect",
     # Watcher factory
     "Watcher",
     # Drop-in upstream cognee SDK compatibility layer

@@ -1,17 +1,20 @@
 /*
  * sdk_feature_smoke.c — Phase 7 Tier-A deterministic smoke tests for feature-
- * gated ops (visualization, cloud) and the cg_json_string_decode utility.
+ * gated visualization ops and the cg_json_string_decode utility.
+ *
+ * Cloud ops (cg_sdk_serve / cg_sdk_disconnect) moved to closed
+ * `cognee-c-cloud` in T15a; this OSS smoke binary no longer exercises them.
  *
  * This test is intentionally designed to pass whether or not the visualization
- * and cloud features are compiled in:
+ * feature is compiled in:
  *
  *   - Default build (features ON): the ops succeed or return expected errors
  *     depending on backend state.  For this Tier-A test we focus on calling
  *     the functions and verifying the callback fires (even if with a runtime
- *     error due to empty graph/cloud state).
+ *     error due to empty graph state).
  *
- *   - Slim build (--no-default-features --features sqlite,testing): all four
- *     feature-gated ops must fire the callback with CG_ERR_FEATURE_NOT_BUILT
+ *   - Slim build (--no-default-features --features sqlite,testing): the
+ *     visualization op must fire the callback with CG_ERR_FEATURE_NOT_BUILT
  *     (16).  Verified by the `build-slim` CMake dir in check.sh.
  *
  * Both build configurations run this same binary; the expected_code parameter
@@ -36,10 +39,9 @@
 /*
  * EXPECT_FEATURE_NOT_BUILT is defined by CMake (-DEXPECT_FEATURE_NOT_BUILT=1)
  * when building the slim target (sdk_feature_smoke_slim).  When defined, we
- * assert CG_ERR_FEATURE_NOT_BUILT (16) from cg_sdk_visualize and
- * cg_sdk_serve / cg_sdk_disconnect.  In the default build we accept any
- * non-null callback invocation (the ops may fail for other reasons such as
- * empty graph state, but they must not be missing).
+ * assert CG_ERR_FEATURE_NOT_BUILT (16) from cg_sdk_visualize.  In the
+ * default build we accept any non-null callback invocation (the ops may fail
+ * for other reasons such as empty graph state, but they must not be missing).
  */
 #ifndef EXPECT_FEATURE_NOT_BUILT
 #define EXPECT_FEATURE_NOT_BUILT 0
@@ -90,26 +92,8 @@ static CgErrorCode run_handle_op(const CgSdk *sdk, SdkHandleOp op,
     return code;
 }
 
-/*
- * run_global_op: fire a cg_sdk_* op that takes (opts_json, cb, ud)
- * (process-wide singleton, no handle) and return its result code.
- */
-typedef void (*SdkGlobalOp)(const char *, CgSdkResultCallback, void *);
-
-static CgErrorCode run_global_op(SdkGlobalOp op, const char *opts_json,
-                                  char **out)
-{
-    CgSdkWaiter *w = cg_sdk_waiter_new();
-    if (!w) {
-        fprintf(stderr, "FAIL: cg_sdk_waiter_new returned NULL\n");
-        g_failures++;
-        return (CgErrorCode)-1;
-    }
-    op(opts_json, cg_sdk_waiter_callback, (void *)w);
-    CgErrorCode code = cg_sdk_waiter_wait(w, out);
-    cg_sdk_waiter_destroy(w);
-    return code;
-}
+/* run_global_op (process-wide singleton ops) removed in T15a — the only
+ * callers were the now-removed cg_sdk_serve / cg_sdk_disconnect smoke tests. */
 
 /* ── Test: cg_json_string_decode ──────────────────────────────────────────── */
 
@@ -250,53 +234,12 @@ static void test_visualize(const CgSdk *sdk)
     (void)out; /* suppress any remaining unused warning */
 }
 
-/* ── Test: cg_sdk_serve / cg_sdk_disconnect ──────────────────────────────── */
-
-static void test_cloud(void)
-{
-    char *out = NULL;
-    CgErrorCode code;
-
-#if EXPECT_FEATURE_NOT_BUILT
-    printf("  [cg_sdk_serve] slim build — expecting CG_ERR_FEATURE_NOT_BUILT ...\n");
-    code = run_global_op(cg_sdk_serve, NULL, &out);
-    ASSERT_EQ(code, CG_ERR_FEATURE_NOT_BUILT,
-              "cg_sdk_serve slim: expected CG_ERR_FEATURE_NOT_BUILT (16)");
-    ASSERT(out == NULL, "cg_sdk_serve slim: result must be NULL on feature error");
-    printf("  [cg_sdk_serve] slim: CG_ERR_FEATURE_NOT_BUILT confirmed.\n");
-
-    printf("  [cg_sdk_disconnect] slim build — expecting CG_ERR_FEATURE_NOT_BUILT ...\n");
-    code = run_global_op(cg_sdk_disconnect, NULL, &out);
-    ASSERT_EQ(code, CG_ERR_FEATURE_NOT_BUILT,
-              "cg_sdk_disconnect slim: expected CG_ERR_FEATURE_NOT_BUILT (16)");
-    ASSERT(out == NULL, "cg_sdk_disconnect slim: result must be NULL on feature error");
-    printf("  [cg_sdk_disconnect] slim: CG_ERR_FEATURE_NOT_BUILT confirmed.\n");
-#else
-    /*
-     * Default build: cloud feature is compiled in.  We verify argument-
-     * validation paths and that the callback fires.  A live Auth0 device-code
-     * flow is NOT required — the Tier-A contract allows any error response as
-     * long as the callback fires (matching the TS test tier for cloud ops).
-     */
-    printf("  [cg_sdk_serve] default build — validation path / callback must fire ...\n");
-    /* Invalid opts (malformed JSON) — must return a validation or runtime error */
-    code = run_global_op(cg_sdk_serve, "not-json", &out);
-    ASSERT((int)code != -1, "cg_sdk_serve bad JSON: callback must fire");
-    ASSERT(code != CG_OK,
-           "cg_sdk_serve bad JSON: must not return CG_OK for malformed input");
-    if (out) { cg_string_destroy(out); out = NULL; }
-    printf("  [cg_sdk_serve] bad-JSON validation path: code=%d (non-zero as expected).\n",
-           (int)code);
-
-    printf("  [cg_sdk_disconnect] default build — callback must fire ...\n");
-    code = run_global_op(cg_sdk_disconnect, NULL, &out);
-    /* disconnect on an unconnected client may succeed ("null") or fail — both OK */
-    ASSERT((int)code != -1, "cg_sdk_disconnect: callback must fire");
-    if (out) { cg_string_destroy(out); out = NULL; }
-    printf("  [cg_sdk_disconnect] callback fired (code=%d).\n", (int)code);
-#endif
-    (void)out;
-}
+/* ── Cloud ops smoke removed in T15a ──────────────────────────────────────── */
+/*
+ * cg_sdk_serve / cg_sdk_disconnect live in the closed `cognee-c-cloud` cdylib
+ * (T15e), so the OSS `cognee-capi` smoke binary no longer exercises them.
+ * The closed cdylib carries its own equivalent smoke test.
+ */
 
 /* ── main ─────────────────────────────────────────────────────────────────── */
 
@@ -349,8 +292,7 @@ int main(void)
     printf("\n--- Testing visualization ops ---\n");
     test_visualize(sdk);
 
-    printf("\n--- Testing cloud ops ---\n");
-    test_cloud();
+    /* Cloud ops moved to closed `cognee-c-cloud` in T15a. */
 
     cg_sdk_destroy(sdk);
 
