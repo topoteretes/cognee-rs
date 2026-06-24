@@ -34,18 +34,18 @@ Desktop.ini
 capi/build/
 capi/build-*/
 
-# JS/Neon build artifacts
-js/cognee-neon/target/
-js/node_modules/
-js/lib/
-js/cognee_neon.node
-js/.cognee_system/
-js/.data_storage/
-js/cognee.db
+# TS/Neon build artifacts
+ts/cognee-ts-neon/target/
+ts/node_modules/
+ts/lib/
+ts/cognee_ts_neon.node
+ts/.cognee_system/
+ts/.data_storage/
+ts/cognee.db
 
-# JS lockfile — only pins dev-deps (jest, ts-jest, typescript); regeneration
+# TS lockfile — only pins dev-deps (jest, ts-jest, typescript); regeneration
 # under older Node versions produces churn (lockfileVersion 1 vs 3).
-js/package-lock.json
+ts/package-lock.json
 
 # Python cache
 __pycache__/

@@ -81,11 +81,11 @@ OSS REPO  (cognee-rust, MIT OR Apache-2.0, public, crates.io)
 │   e2e-cross-sdk/telemetry-emit  (test/bench harnesses, not on crates.io)
 ├── tools: cognee-cli (single-user), cognee-http-server (no-auth)
 ├── bindings: capi/ (C headers + artifacts), python/ (PyPI `cognee-pipeline`,
-│   module `cognee_pipeline`), js/ (npm `cognee`)  — core surface
+│   module `cognee_pipeline`), ts/ (npm `cognee-ts`)  — core surface
 └── .github/workflows: lint, test, doc, publish-dry-run, bindings build
 ```
 
-> Errata: T10a marks `bindings-common` as `publish = false` per Option C; it ships compiled-in inside the wheel/npm/tarball alongside `python`, `js/cognee-neon`, and `capi/cognee-capi`. The Option A move-to-closed (relocating the cloud glue so `bindings-common` can publish to crates.io) is scheduled for T15.
+> Errata: T10a marks `bindings-common` as `publish = false` per Option C; it ships compiled-in inside the wheel/npm/tarball alongside `python`, `ts/cognee-ts-neon`, and `capi/cognee-capi`. The Option A move-to-closed (relocating the cloud glue so `bindings-common` can publish to crates.io) is scheduled for T15.
 >
 > Errata: T10c removes `cognee-http-server`'s runtime dependency on `cognee-test-utils` (the unpublishable in-repo harness). The `dev-mock` feature now enables `cognee-vector/testing` directly — `MockVectorDB` already lives in `cognee-vector` behind that feature, and `cognee-test-utils` only re-exported it. No new `cognee-vector-mock` crate was needed; the publishable surface stays the same.
 
@@ -236,7 +236,7 @@ These land in the **current** repo first (mergeable to `main`, no split yet):
 - **S7 — Feature-default hygiene (`cloud` is currently ON by default).** Verified:
   `cloud` sits in the `default = [...]` set of **five** crates — `cognee-lib`,
   `cognee-cli`, `cognee-bindings-common`, `python` (`cognee-pipeline`), and
-  `js/cognee-neon` — all forwarding to `cognee-lib/cloud → dep:cognee-cloud`. The
+  `ts/cognee-ts-neon` — all forwarding to `cognee-lib/cloud → dep:cognee-cloud`. The
   OSS repo has no `cloud` feature at all, so before/at the split `cloud` must be
   removed from every `default` set (and the closed builds re-add it). Note this is
   a **behaviour change for today's users**: a default `cargo build` / default wheel
@@ -484,7 +484,7 @@ mkdir ../cognee-rust && cd ../cognee-rust && git init -b main
 rsync -a --files-from="$SRC/scripts/split/oss-paths.txt" "$SRC"/ .
 # Write OSS-only root Cargo.toml (workspace members = OSS crates only),
 # scrub README/docs/CLAUDE.md of closed references, drop qdrant [patch] blocks
-# from the capi/ and js/ binding workspaces.
+# from the capi/ and ts/ binding workspaces.
 git add -A && git commit -m "chore: initial open-source release"
 ```
 *History-preserving variant (optional):* instead of a squash init, run

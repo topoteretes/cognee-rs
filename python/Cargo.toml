@@ -26,14 +26,14 @@ crate-type = ["cdylib"]
 # `cargo nextest run --workspace`) would link a standalone binary and fail with
 # "undefined symbol: Py*". The crate's behaviour is covered by pytest via
 # `python/scripts/check.sh` (the `python-check` CI job), so disable the Rust
-# unit-test and doctest harnesses here. Sibling native crates (js/cognee-neon,
+# unit-test and doctest harnesses here. Sibling native crates (ts/cognee-ts-neon,
 # capi) sidestep this by not being workspace members; this crate is a member
 # (for `cargo check --all-targets` coverage), hence the explicit opt-out.
 test = false
 doctest = false
 
 [features]
-# Mirror cognee-neon's default feature set (js/cognee-neon/Cargo.toml).
+# Mirror cognee-ts-neon's default feature set (ts/cognee-ts-neon/Cargo.toml).
 default = [
     "visualization",
     # The closed Python cdylib (T15e — `cognee-py-cloud`) re-adds cloud via
@@ -64,7 +64,7 @@ testing       = ["cognee-lib/testing",       "cognee-bindings-common/testing"]
 [dependencies]
 # Shared SDK facade (HandleState, CogneeServices, SdkError).
 cognee-bindings-common = { path = "../crates/bindings-common", default-features = false }
-# Full cognee SDK — same feature set as cognee-neon.
+# Full cognee SDK — same feature set as cognee-ts-neon.
 cognee-lib = { path = "../crates/lib", default-features = false }
 serde_json = { workspace = true }
 # bytes/bytearray → base64 in py_to_serde (wire::marshal_bytes expects base64).

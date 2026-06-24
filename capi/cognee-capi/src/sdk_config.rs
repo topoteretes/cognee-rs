@@ -18,7 +18,7 @@
 //! ## Key names
 //!
 //! Key names match the Rust `Settings` field names exactly (snake_case), the
-//! same names the TypeScript `configSet` uses (see `js/cognee-neon/src/config.rs`).
+//! same names the TypeScript `configSet` uses (see `ts/cognee-ts-neon/src/config.rs`).
 //! Common keys per group:
 //!   - LLM: `llm_provider`, `llm_model`, `llm_api_key`, `llm_endpoint`,
 //!     `llm_api_version`, `llm_temperature`, `llm_streaming`,

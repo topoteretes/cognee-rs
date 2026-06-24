@@ -1,0 +1,60 @@
+{
+  "name": "cognee-ts",
+  "version": "0.1.0",
+  "description": "Node.js bindings for the cognee AI-memory SDK",
+  "license": "MIT OR Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/topoteretes/cognee-rust.git"
+  },
+  "homepage": "https://www.cognee.ai",
+  "keywords": ["ai", "knowledge-graph", "memory", "rag", "embeddings"],
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "scripts": {
+    "build:rust": "cd cognee-ts-neon && cargo build --release && cd .. && node scripts/copy-artifact.js release",
+    "build:rust:debug": "cd cognee-ts-neon && cargo build && cd .. && node scripts/copy-artifact.js debug",
+    "build:ts": "tsc",
+    "build": "npm run build:rust && npm run build:ts",
+    "postinstall": "node scripts/postinstall.js",
+    "test": "jest --config jest.config.js",
+    "example": "ts-node examples/add-cognify-search.ts",
+    "example:memify": "ts-node examples/memify-recall.ts",
+    "example:datasets": "ts-node examples/datasets.ts",
+    "example:sessions": "ts-node examples/sessions.ts",
+    "example:config": "ts-node examples/config.ts",
+    "example:visualize": "ts-node examples/visualize.ts",
+    "example:pipeline": "ts-node examples/pipeline-engine.ts"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  },
+  "dependencies": {
+    "@neon-rs/load": "^0.2.6",
+    "dotenv": "^16.6.1"
+  },
+  "optionalDependencies": {
+    "@cognee-ts/neon-darwin-arm64": "0.1.0",
+    "@cognee-ts/neon-darwin-x64": "0.1.0",
+    "@cognee-ts/neon-linux-arm64-gnu": "0.1.0",
+    "@cognee-ts/neon-linux-arm64-musl": "0.1.0",
+    "@cognee-ts/neon-linux-x64-gnu": "0.1.0",
+    "@cognee-ts/neon-linux-x64-musl": "0.1.0",
+    "@cognee-ts/neon-win32-x64-msvc": "0.1.0"
+  },
+  "devDependencies": {
+    "@types/jest": "^29.5.0",
+    "@types/node": "^20.0.0",
+    "jest": "^29.0.0",
+    "ts-jest": "^29.0.0",
+    "ts-node": "^10.9.0",
+    "typescript": "^5.4.0"
+  },
+  "files": [
+    "lib/",
+    "scripts/postinstall.js",
+    "scripts/copy-artifact.js",
+    "LICENSE-MIT",
+    "LICENSE-APACHE"
+  ]
+}

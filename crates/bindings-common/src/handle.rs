@@ -6,7 +6,7 @@
 //! changes.
 //!
 //! Neon-specific wrappers (`CogneeHandle`, `Finalize` impl, `cognee_new` /
-//! `cognee_warm` / `cognee_owner_id` exports) stay in `cognee-neon` because
+//! `cognee_warm` / `cognee_owner_id` exports) stay in `cognee-ts-neon` because
 //! they depend on `neon::prelude::*`.
 //!
 //! C-specific wrappers (`CgSdk`) stay in `cognee-capi` (Phase 1 Part B).

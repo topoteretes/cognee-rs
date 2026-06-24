@@ -1,9 +1,9 @@
 //! Shared JSON marshalling helpers for the bindings facade.
 //!
 //! This module contains the **neon-free** subset of what was previously in
-//! `js/cognee-neon/src/json.rs`. Helpers that require `neon::Context` /
+//! `ts/cognee-ts-neon/src/json.rs`. Helpers that require `neon::Context` /
 //! `neon::Handle` (`stringify_js`, `parse_js`, `js_to_serde`, `js_to_value`,
-//! `read_opts`) stay in `cognee-neon`; they are the JS↔serde bridge halves.
+//! `read_opts`) stay in `cognee-ts-neon`; they are the JS↔serde bridge halves.
 //!
 //! ## Shared result-building helpers
 //!

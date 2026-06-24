@@ -9,7 +9,7 @@ CAPI_DIR="$(dirname "$SCRIPT_DIR")"
 # no longer covers the capi workspace. We run it here (inside the capi
 # workspace) so `scripts/check_all.sh`'s capi stage still catches capi
 # compile breaks. Two configurations are checked:
-#   1. Default features (full build, mirrors cognee-neon)
+#   1. Default features (full build, mirrors cognee-ts-neon)
 #   2. Slim build (--no-default-features --features sqlite,testing) —
 #      the embedded/Android baseline (D6)
 echo "================================================================"

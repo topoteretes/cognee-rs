@@ -37,7 +37,7 @@ toolchain matter.
 |---|---|
 | Main workspace | `target/` |
 | Each Claude agent worktree | `.claude/worktrees/*/target` |
-| `js/cognee-neon` workspace | `js/cognee-neon/target` |
+| `ts/cognee-ts-neon` workspace | `ts/cognee-ts-neon/target` |
 | `capi` workspace (default-features check) | `capi/target` |
 | e2e Docker harness | inside the image |
 

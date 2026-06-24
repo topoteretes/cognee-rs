@@ -557,7 +557,7 @@ jobs:
           source .venv/bin/activate
           bash python/scripts/check.sh
 
-  js-check:
+  ts-check:
     name: JS/TS Bindings Check
     needs: test
     runs-on: ubuntu-latest
@@ -572,7 +572,7 @@ jobs:
       # `ladybug` feature), whose build.rs compiles bundled C++ with CMake.
       - run: sudo apt-get update && sudo apt-get install -y cmake protobuf-compiler
       # Restore-only: the lint job saves the shared lbug C++ ccache. The
-      # js/cognee-neon workspace resolves its own dep graph, but ccache keys
+      # ts/cognee-ts-neon workspace resolves its own dep graph, but ccache keys
       # on compiler+flags+source content, so it hits the same entries.
       - name: ccache (lbug bundled C++, restore-only)
         uses: hendrikmuhs/ccache-action@v1.2
@@ -585,7 +585,7 @@ jobs:
           shared-key: workspace-test-v6
           workspaces: |
             . -> target
-            js/cognee-neon -> target
+            ts/cognee-ts-neon -> target
           cache-on-failure: true
       - uses: actions/cache@v4
         with:
@@ -595,5 +595,5 @@ jobs:
         with:
           node-version: "20"
           cache: "npm"
-          cache-dependency-path: "js/package.json"
-      - run: bash js/scripts/check.sh
+          cache-dependency-path: "ts/package.json"
+      - run: bash ts/scripts/check.sh

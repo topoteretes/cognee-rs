@@ -9,7 +9,7 @@ exposes the same flow: `warm()` → `add()` → `cognify()` → `search()`.
 |---|---|---|---|
 | **Python** (PyO3) | [python/README.md](../../python/README.md) | `Cognee` (`from cognee_pipeline import Cognee`) | native `async` |
 | **C** (FFI) | [capi/README.md](../../capi/README.md) | `cg_sdk_*` over an opaque handle | callback-based (+ optional `CgSdkWaiter` sync bridge) |
-| **JavaScript/TS** (Neon) | [js/README.md](../../js/README.md) | `Cognee` (`import { Cognee } from 'cognee'`) | Promise-based |
+| **JavaScript/TS** (Neon) | [ts/README.md](../../ts/README.md) | `Cognee` (`import { Cognee } from 'cognee-ts'`) | Promise-based |
 
 Module-level helpers exist in each binding for `serve()` / `disconnect()` (cloud)
 and logging/telemetry setup. The full per-language method list lives in each

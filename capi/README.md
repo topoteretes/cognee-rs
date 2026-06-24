@@ -235,5 +235,5 @@ See the engine examples under `examples/example_sync_task.c`, `example_pipeline.
 - Examples: [`examples/`](examples/)
 - Observability: [`../docs/observability/opentelemetry.md`](../docs/observability/opentelemetry.md), [`../docs/observability/send_telemetry.md`](../docs/observability/send_telemetry.md)
 - Python bindings: [`../python/README.md`](../python/README.md)
-- JS/TS bindings: [`../js/README.md`](../js/README.md)
+- JS/TS bindings: [`../ts/README.md`](../ts/README.md)
 - cognee-rust workspace: [`../README.md`](../README.md)

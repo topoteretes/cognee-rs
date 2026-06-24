@@ -1,7 +1,7 @@
 //! Minimal SDK error type for the bindings facade.
 //!
 //! Neon-specific helpers (`throw_sdk_error`, `throw_config_error`) stay in the
-//! `cognee-neon` crate because they require `neon::prelude::*`. This module
+//! `cognee-ts-neon` crate because they require `neon::prelude::*`. This module
 //! contains only the portable error enum that both JS and C bindings share.
 
 use thiserror::Error;

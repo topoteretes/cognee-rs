@@ -19,7 +19,7 @@ publish = false
 crate-type = ["cdylib", "staticlib"]
 
 [features]
-# Default feature set mirrors cognee-neon (js/cognee-neon/Cargo.toml).
+# Default feature set mirrors cognee-ts-neon (ts/cognee-ts-neon/Cargo.toml).
 # A slim embedded build: --no-default-features --features sqlite,testing
 default = [
     "visualization",
@@ -47,7 +47,7 @@ hf-tokenizer  = ["cognee-lib/hf-tokenizer",          "cognee-bindings-common/hf-
 tiktoken      = ["cognee-lib/tiktoken",               "cognee-bindings-common/tiktoken"]
 sqlite        = ["cognee-lib/sqlite",                "cognee-bindings-common/sqlite"]
 # testing is in defaults because cg_task_context_mock requires mock
-# graph/vector backends — same reason cognee-neon keeps it.
+# graph/vector backends — same reason cognee-ts-neon keeps it.
 testing       = ["cognee-lib/testing",               "cognee-bindings-common/testing"]
 # Test-only opt-in: exposes `cg_test_force_panic`, a no-return symbol
 # that always panics. Used by the capi smoke tests under
@@ -58,7 +58,7 @@ testing-panic = []
 
 [dependencies]
 # Full cognee SDK.
-# Feature set mirrors cognee-neon; default-features = false so only the
+# Feature set mirrors cognee-ts-neon; default-features = false so only the
 # features listed above are enabled.
 cognee-lib = { path = "../../crates/lib", default-features = false }
 # Shared bindings facade (HandleState, CogneeServices, SdkError, wire helpers).

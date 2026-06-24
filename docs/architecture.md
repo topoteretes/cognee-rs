@@ -47,14 +47,14 @@ cognee-rust/
 │   ├── utils/                  # Shared utilities
 │   └── test-utils/             # Mock implementations (MockStorage, MockGraphDB, MockVectorDB)
 ├── capi/                       # C API bindings (FFI)
-├── js/                         # JavaScript/Node bindings (Neon)
+├── ts/                         # JavaScript/TypeScript/Node bindings (Neon)
 ├── python/                     # Python bindings (PyO3)
 ├── examples/                   # Usage examples using the cognee crates
 ├── demo/                       # Demo scripts (host and Android)
 ├── scripts/                    # Build, check, and deployment scripts
 ├── docs/                       # Documentation (this folder)
 ├── e2e-cross-sdk/              # Cross-SDK E2E tests (Rust ↔ Python interop)
-└── .github/workflows/          # CI (ci.yml, http-parity.yml, js-prebuild.yml)
+└── .github/workflows/          # CI (ci.yml, http-parity.yml, ts-prebuild.yml)
 ```
 
 ## Crate breakdown

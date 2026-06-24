@@ -152,7 +152,7 @@ From [observability/](../observability/) and the logging crate:
 - **Size-based log rotation** — only daily time-based rotation is implemented
   (`tracing-appender::RollingFileAppender`); Python's 50 MB size-based rotation is not matched.
 
-## Language bindings — TypeScript / Node (`js/`)
+## Language bindings — TypeScript / Node (`ts/`)
 
 The Phase-3 pipeline ops (`cogneeAdd` / `cogneeCognify` / `cogneeAddAndCognify`) accept a
 discriminated-union `dataInput` (`{ type, … }`). The supported variants track what

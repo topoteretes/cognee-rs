@@ -15,8 +15,8 @@ How to cut and publish a cognee-rust release. Two tracks:
    checks).
 3. Bump versions:
    - `[workspace.package] version` in `Cargo.toml` (crates inherit via `version.workspace`).
-   - `capi/Cargo.toml`, `js/cognee-neon/Cargo.toml` (separate/standalone — bump manually).
-   - `python/pyproject.toml`, `js/package.json`.
+   - `capi/Cargo.toml`, `ts/cognee-ts-neon/Cargo.toml` (separate/standalone — bump manually).
+   - `python/pyproject.toml`, `ts/package.json`.
    - Keep all four in sync.
 4. Update `CHANGELOG.md` (Keep a Changelog format) with the new version section.
 5. Confirm `LICENSE-MIT`, `LICENSE-APACHE`, and license metadata are present.
@@ -40,11 +40,11 @@ maturin publish --dry-run
 maturin publish                     # needs PyPI token (MATURIN_PYPI_TOKEN / ~/.pypirc)
 ```
 
-## Publish — npm (JS binding)
+## Publish — npm (TS binding)
 
 ```bash
-bash js/scripts/check.sh            # gate (builds the .node artifact)
-cd js
+bash ts/scripts/check.sh            # gate (builds the .node artifact)
+cd ts
 npm publish --dry-run
 npm publish                         # needs npm auth (npm login / NPM_TOKEN)
 ```
@@ -52,7 +52,7 @@ npm publish                         # needs npm auth (npm login / NPM_TOKEN)
 Confirm `package.json` `files` allowlist includes `lib/`, the install scripts
 (`scripts/postinstall.js`, `scripts/copy-artifact.js`), and `LICENSE-MIT` +
 `LICENSE-APACHE`. The native
-`cognee_neon.node` is not shipped in the allowlist — `scripts/postinstall.js` builds it
+`cognee_ts_neon.node` is not shipped in the allowlist — `scripts/postinstall.js` builds it
 from source (or fetches a prebuild) on install.
 
 ## Publish — C-library artifact

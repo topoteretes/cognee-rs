@@ -1,7 +1,7 @@
 //! Wire-level proof of the binding-arm / `COGNEE_HOST_SDK` interaction
 //! that the language bindings (PyO3, Neon, C-API) rely on.
 //!
-//! The per-binding policy tests (`python/tests`, `js/__tests__`,
+//! The per-binding policy tests (`python/tests`, `ts/__tests__`,
 //! `capi/examples/init_telemetry_smoke.c`) only assert the *returned*
 //! armed/not-armed bool. This test proves the actual behaviour on the
 //! HTTP wire against a mockito server:

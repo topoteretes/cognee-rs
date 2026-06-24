@@ -59,7 +59,7 @@ same SDK-tier implementation via `crates/bindings-common/`:
 |---|---|---|
 | **Python** (PyO3) | [python/README.md](python/README.md) | `from cognee_pipeline import Cognee` |
 | **C API** (FFI) | [capi/README.md](capi/README.md) | `#include "cognee_sdk.h"` + `cg_sdk_*` |
-| **JavaScript/TypeScript** (Neon) | [js/README.md](js/README.md) | `import { Cognee } from 'cognee'` |
+| **JavaScript/TypeScript** (Neon) | [ts/README.md](ts/README.md) | `import { Cognee } from 'cognee-ts'` |
 
 Each binding exposes the same core flow: `warm()` → `add()` → `cognify()` → `search()`.
 All three share `crates/bindings-common` (portable op bodies + stable error codes), so

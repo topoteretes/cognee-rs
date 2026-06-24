@@ -1,0 +1,281 @@
+name: TS Prebuild
+
+# Build per-platform prebuilt .node binaries and publish per-platform npm
+# packages (@cognee-ts/neon-<platform>) on release tags, then publish the main
+# `cognee-ts` npm package once all platform packages are live.
+#
+# The matrix matches the entries in:
+#   ts/package.json           (optionalDependencies)
+#   ts/src/native.ts          (platforms map)
+#   ts/scripts/postinstall.js (PLATFORM_PACKAGES map)
+#   ts/platform-packages/     (one sub-directory per platform)
+#
+# N-API version: napi-6 (Node >= 14.6 / 16.0), matching the neon crate
+# configuration in ts/cognee-ts-neon/Cargo.toml (`napi-6` feature).
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+
+concurrency:
+  group: ts-prebuild-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_PROFILE_RELEASE_DEBUG: "0"
+  CARGO_INCREMENTAL: "0"
+  ORT_CACHE_DIR: ${{ github.workspace }}/target/ort-cache
+  CCACHE_COMPILERCHECK: content
+
+jobs:
+  # ── Build per-platform .node artifacts ───────────────────────────────
+  build-platform:
+    name: Build ${{ matrix.platform }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux x64 glibc — native runner
+          - platform: linux-x64-gnu
+            runner: ubuntu-latest
+            rust-target: x86_64-unknown-linux-gnu
+            cross: false
+
+          # Linux arm64 glibc — cross via `cross`
+          - platform: linux-arm64-gnu
+            runner: ubuntu-latest
+            rust-target: aarch64-unknown-linux-gnu
+            cross: true
+
+          # Linux x64 musl — cross via `cross`
+          - platform: linux-x64-musl
+            runner: ubuntu-latest
+            rust-target: x86_64-unknown-linux-musl
+            cross: true
+
+          # Linux arm64 musl — cross via `cross`
+          - platform: linux-arm64-musl
+            runner: ubuntu-latest
+            rust-target: aarch64-unknown-linux-musl
+            cross: true
+
+          # macOS x64
+          - platform: darwin-x64
+            runner: macos-13
+            rust-target: x86_64-apple-darwin
+            cross: false
+
+          # macOS arm64 (Apple Silicon)
+          - platform: darwin-arm64
+            runner: macos-14
+            rust-target: aarch64-apple-darwin
+            cross: false
+
+          # Windows x64
+          - platform: win32-x64-msvc
+            runner: windows-latest
+            rust-target: x86_64-pc-windows-msvc
+            cross: false
+
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust-target }}
+
+      # Install cross for cross-compilation jobs.
+      - name: Install cross
+        if: matrix.cross
+        run: cargo install cross --git https://github.com/cross-rs/cross
+
+      # mold linker (Linux only, native builds only).
+      - name: Install mold linker
+        if: runner.os == 'Linux' && !matrix.cross
+        uses: rui314/setup-mold@v1
+        with:
+          make-default: true
+
+      # cmake + protoc needed by lbug and qdrant on Linux.
+      - name: Install native build deps (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y cmake protobuf-compiler
+
+      # cmake + protoc on macOS.
+      - name: Install native build deps (macOS)
+        if: runner.os == 'macOS'
+        run: brew install cmake protobuf
+
+      # cmake + protoc on Windows.
+      - name: Install native build deps (Windows)
+        if: runner.os == 'Windows'
+        run: choco install cmake protoc --no-progress
+
+      - name: ccache (lbug bundled C++, restore-only)
+        if: runner.os != 'Windows'
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: lbug-cxx-${{ matrix.platform }}
+          max-size: 1G
+          save: true
+
+      - name: Cache cargo (Neon workspace)
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ts-neon-${{ matrix.platform }}-v1
+          workspaces: ts/cognee-ts-neon -> target
+          cache-on-failure: true
+
+      - name: Cache ORT binary
+        uses: actions/cache@v4
+        with:
+          path: ts/cognee-ts-neon/target/ort-cache
+          key: ort-v2.0.0-rc.12-cpu-${{ matrix.platform }}
+        env:
+          # Point ort-sys at the neon workspace's target dir.
+          ORT_CACHE_DIR: ${{ github.workspace }}/ts/cognee-ts-neon/target/ort-cache
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install JS dependencies (no scripts to avoid recursive postinstall)
+        working-directory: ts
+        run: npm install --ignore-scripts
+
+      # Build the Neon cdylib for the target platform.
+      - name: Build Neon addon (native)
+        if: "!matrix.cross"
+        working-directory: ts/cognee-ts-neon
+        env:
+          ORT_CACHE_DIR: ${{ github.workspace }}/ts/cognee-ts-neon/target/ort-cache
+        run: cargo build --release --target ${{ matrix.rust-target }}
+
+      - name: Build Neon addon (cross)
+        if: matrix.cross
+        working-directory: ts/cognee-ts-neon
+        env:
+          ORT_CACHE_DIR: ${{ github.workspace }}/ts/cognee-ts-neon/target/ort-cache
+        run: cross build --release --target ${{ matrix.rust-target }}
+
+      # Copy the built artifact into the platform package directory.
+      - name: Copy artifact (Linux / macOS)
+        if: runner.os != 'Windows'
+        run: |
+          TARGET_DIR="ts/cognee-ts-neon/target/${{ matrix.rust-target }}/release"
+          DEST="ts/platform-packages/${{ matrix.platform }}/cognee_ts_neon.node"
+          # Prefer .so (Linux), then .dylib (macOS).
+          for candidate in \
+            "${TARGET_DIR}/libcognee_ts_neon.so" \
+            "${TARGET_DIR}/libcognee_ts_neon.dylib"; do
+            if [ -f "$candidate" ]; then
+              cp "$candidate" "$DEST"
+              echo "Copied $candidate -> $DEST"
+              break
+            fi
+          done
+          if [ ! -f "$DEST" ]; then
+            echo "error: could not find Neon cdylib in $TARGET_DIR" >&2
+            exit 1
+          fi
+
+      - name: Copy artifact (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $src = "ts/cognee-ts-neon/target/${{ matrix.rust-target }}/release/cognee_ts_neon.dll"
+          $dst = "ts/platform-packages/${{ matrix.platform }}/cognee_ts_neon.node"
+          Copy-Item $src $dst -Force
+          Write-Host "Copied $src -> $dst"
+
+      # Upload the .node file as a workflow artifact so the publish job can
+      # download all of them atomically.
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: neon-${{ matrix.platform }}
+          path: ts/platform-packages/${{ matrix.platform }}/cognee_ts_neon.node
+          retention-days: 7
+
+  # ── Publish per-platform packages, then the main package ─────────────
+  publish:
+    name: Publish npm packages
+    needs: build-platform
+    runs-on: ubuntu-latest
+
+    env:
+      NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js (with npm auth)
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+
+      # Download all platform .node artifacts into their package directories.
+      - name: Download all platform artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: neon-*
+          path: /tmp/neon-artifacts
+          merge-multiple: false
+
+      - name: Place artifacts into platform package directories
+        run: |
+          for PLATFORM in \
+            linux-x64-gnu linux-arm64-gnu \
+            linux-x64-musl linux-arm64-musl \
+            darwin-x64 darwin-arm64 \
+            win32-x64-msvc; do
+            SRC="/tmp/neon-artifacts/neon-${PLATFORM}/cognee_ts_neon.node"
+            DEST="ts/platform-packages/${PLATFORM}/cognee_ts_neon.node"
+            if [ -f "$SRC" ]; then
+              cp "$SRC" "$DEST"
+              echo "Placed $DEST"
+            else
+              echo "WARNING: artifact missing for $PLATFORM" >&2
+            fi
+          done
+
+      # Publish each platform package.
+      - name: Publish platform packages
+        working-directory: ts/platform-packages
+        run: |
+          for PLATFORM in \
+            linux-x64-gnu linux-arm64-gnu \
+            linux-x64-musl linux-arm64-musl \
+            darwin-x64 darwin-arm64 \
+            win32-x64-msvc; do
+            if [ -f "${PLATFORM}/cognee_ts_neon.node" ]; then
+              echo "--- Publishing @cognee-ts/neon-${PLATFORM} ---"
+              npm publish "${PLATFORM}" --access public
+            else
+              echo "SKIP: no .node for ${PLATFORM}" >&2
+            fi
+          done
+
+      # Build JS (TypeScript) for the main package.
+      - name: Install JS deps (no scripts)
+        working-directory: ts
+        run: npm install --ignore-scripts
+
+      - name: Build TypeScript
+        working-directory: ts
+        env:
+          COGNEE_SKIP_POSTINSTALL: "1"
+        run: npm run build:ts
+
+      # Publish the main cognee-ts package.
+      - name: Publish cognee-ts
+        working-directory: ts
+        run: npm publish --access public

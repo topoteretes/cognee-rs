@@ -108,7 +108,7 @@ Each binding has its own check script (also invoked by `scripts/check_all.sh`):
 | Binding | Source | Check | Notes |
 |---|---|---|---|
 | **C API** (`capi/`) | separate Cargo workspace | `bash capi/scripts/check.sh` | FFI must never panic across the boundary — sanitize/propagate, never `unwrap()` caller data. Headers + built lib are the artifact. |
-| **JavaScript** (`js/`) | Neon (`js/cognee-neon/`, standalone crate) | `bash js/scripts/check.sh` | Return JS errors instead of panicking into the V8 runtime. |
+| **JavaScript/TypeScript** (`ts/`) | Neon (`ts/cognee-ts-neon/`, standalone crate) | `bash ts/scripts/check.sh` | Return JS errors instead of panicking into the V8 runtime. |
 | **Python** (`python/`) | PyO3 (`cognee-python`, workspace member) | `bash python/scripts/check.sh` | Exercised by pytest (the Rust test harness is disabled for the extension module — it has no libpython at link time). |
 
 When you change core crate behavior, check whether the bindings expose it and update them

@@ -540,5 +540,5 @@ All pipeline-engine symbols (`Pipeline`, `TaskContext`, `PipelineRunHandle`,
 - Examples: [examples/](examples/)
 - Observability: [docs/observability/opentelemetry.md](../docs/observability/opentelemetry.md), [docs/observability/send_telemetry.md](../docs/observability/send_telemetry.md)
 - C API bindings: [capi/README.md](../capi/README.md)
-- JS/TS bindings: [js/README.md](../js/README.md)
+- JS/TS bindings: [ts/README.md](../ts/README.md)
 - cognee-rust workspace: [README.md](../README.md)
