@@ -111,16 +111,18 @@ jobs:
       - name: Compilation check
         run: cargo check --all-targets
 
-      # Use an explicit feature set instead of --all-features.
+      # Use default features instead of --all-features.
       # --all-features activates ort-cuda / ort-tensorrt, which causes ort-sys
       # to download a separate ~100 MB CUDA-enabled ONNX Runtime static library
       # to a different hash path in target/ort-cache. That CUDA binary is never
       # used in CI (no GPU), but it bloats the cache and can produce a stale
       # rustc-link-search path that breaks the link step in the test job.
-      # The android-litert feature is the only non-default feature that adds
-      # real workspace code (LiteRT LLM adapter + bindgen).
+      # The former `--features android-litert,server` invocation was dropped
+      # in T16: the `android-litert` LiteRT adapter moved to closed in T4 and
+      # the `server` feature moved with the cloud commands in T15f, so OSS
+      # no longer defines either feature.
       - name: clippy
-        run: cargo clippy --all-targets --features android-litert,server -- -D warnings
+        run: cargo clippy --all-targets -- -D warnings
 
       # Telemetry feature is OFF by default per design decision 1, so the
       # default `cargo check --all-targets` above only covers the noop arm.
@@ -132,10 +134,9 @@ jobs:
         run: cargo check --all-targets --features telemetry
 
       # Mirror of the above for clippy. Catches cfg-gated lints that the
-      # noop-arm clippy run cannot see. We do NOT pass `--all-features`
-      # because the workspace also ships android-* features that change
-      # link targets; we want the precise (default + telemetry) combo a
-      # downstream user would enable via `cargo build --features telemetry`.
+      # noop-arm clippy run cannot see. We pass the precise (default +
+      # telemetry) combo a downstream user would enable via
+      # `cargo build --features telemetry`.
       - name: clippy (telemetry feature)
         env:
           CARGO_TARGET_DIR: target/telemetry
