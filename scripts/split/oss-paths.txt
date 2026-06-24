@@ -114,7 +114,6 @@ crates/cli/src/commands/bench.rs
 crates/cli/src/commands/cognify.rs
 crates/cli/src/commands/config.rs
 crates/cli/src/commands/delete.rs
-crates/cli/src/commands/disconnect.rs
 crates/cli/src/commands/forget.rs
 crates/cli/src/commands/improve.rs
 crates/cli/src/commands/memify.rs
@@ -123,7 +122,6 @@ crates/cli/src/commands/recall.rs
 crates/cli/src/commands/remember.rs
 crates/cli/src/commands/run_sequence.rs
 crates/cli/src/commands/search.rs
-crates/cli/src/commands/serve.rs
 crates/cli/src/commands/visualize.rs
 crates/cli/src/config_store.rs
 crates/cli/src/error.rs
@@ -131,7 +129,6 @@ crates/cli/src/main.rs
 crates/cli/tests/cli_bench.rs
 crates/cli/tests/cli_e2e.rs
 crates/cli/tests/cli_memify.rs
-crates/cli/tests/cli_serve_subcommand.rs
 crates/cli/tests/logging_e2e.rs
 crates/cognify/Cargo.toml
 crates/cognify/README.md

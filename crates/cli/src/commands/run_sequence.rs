@@ -9,10 +9,6 @@ use tracing::info;
 use crate::cli::{Cli, Commands, RunSequenceArgs};
 use crate::error::CliError;
 
-#[cfg(feature = "cloud")]
-use super::disconnect;
-#[cfg(feature = "cloud")]
-use super::serve;
 #[cfg(feature = "visualization")]
 use super::visualize;
 use super::{
@@ -45,10 +41,6 @@ fn dispatch(command: Commands, cm: &Arc<ComponentManager>) -> Result<(), CliErro
         )),
         #[cfg(feature = "visualization")]
         Commands::Visualize(args) => visualize::run(args, Arc::clone(cm)),
-        #[cfg(feature = "cloud")]
-        Commands::Serve(args) => serve::run(args, Arc::clone(cm)),
-        #[cfg(feature = "cloud")]
-        Commands::Disconnect(args) => disconnect::run(args, Arc::clone(cm)),
         #[cfg(feature = "bench")]
         Commands::Bench(_) => Err(CliError::Validation(
             "bench is not allowed inside run-sequence".to_string(),

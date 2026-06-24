@@ -5,8 +5,6 @@ pub mod bench;
 pub mod cognify;
 pub mod config;
 pub mod delete;
-#[cfg(feature = "cloud")]
-pub mod disconnect;
 pub mod forget;
 pub mod improve;
 pub mod memify;
@@ -14,7 +12,5 @@ pub mod recall;
 pub mod remember;
 pub mod run_sequence;
 pub mod search;
-#[cfg(feature = "cloud")]
-pub mod serve;
 #[cfg(feature = "visualization")]
 pub mod visualize;

@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-publish = false
+publish = true
 description.workspace = true
 repository.workspace = true
 homepage.workspace = true
@@ -37,15 +37,12 @@ default = [
     "audio-loader",
     "unstructured",
     "visualization",
-    # `cloud` is opt-in — the closed `cognee-cloud` crate lives in the
-    # cognee-cloud-rust sibling repo. Re-enable with --features cloud.
     "mock-llm",
     "bench",
     # decision 1: telemetry is ON by default in cognee-cli. Disable with
     # --no-default-features for compile-time opt-out.
     "telemetry",
 ]
-cloud         = ["dep:cognee-cloud"]
 mock-llm      = ["cognee-lib/mock-llm"]
 # `bench` adds the `bench` subcommand (perf orchestrator driver). Pulls no heavy
 # deps — just reuses the existing pipeline wiring + tempfile — so it is on by
@@ -88,7 +85,6 @@ android-default = ["cognee-lib/android-default"]
 
 [dependencies]
 clap = { workspace = true, features = ["derive"] }
-cognee-cloud = { path = "../../../cognee-cloud-rust/crates/cognee-cloud", optional = true }
 cognee-lib = { path = "../lib" }
 cognee-logging = { path = "../logging" }
 dirs.workspace = true

@@ -31,12 +31,16 @@ feature-gated).
 | `config get\|set\|unset <key>` | Read/write the persisted JSON config | — | — |
 | `run-sequence` | Run a scripted add/cognify/search sequence | — | — |
 | `visualize` | Render the graph to a self-contained HTML file | `-o/--output` (`~/graph_visualization.html`) | `visualization` |
-| `serve` | Connect the SDK to a Cognee instance (direct or cloud/Auth0) | `--url`, `--api-key`, `--auth0-*`, `--cloud-url` | `cloud` |
-| `disconnect` | Tear down the remote client | `--wipe-credentials` | `cloud` |
 | `bench` | Phase-timed benchmark driver | `--memories`, `--mock-llm`, `--output` | `bench` |
 
 The feature-gated commands are enabled in the default build of `cognee-cli`
 (except platform-specific ones). See [architecture.md §feature strategy](../architecture.md#architecture-patterns).
+
+Cloud `serve` / `disconnect` no longer live in `cognee-cli`. They have moved
+to the closed-source `cognee-cli-cloud` binary in the `cognee-cloud-rust`
+sibling workspace (T15f). Build it with
+`cargo build -p cognee-cli-cloud` from `cognee-cloud-rust/` and invoke as
+`cognee-cli-cloud serve --url …` / `cognee-cli-cloud disconnect`.
 
 ## Memory API
 

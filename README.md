@@ -156,8 +156,9 @@ routes it by MIME type, stores URL metadata, and, after `cognify`, can create
 
 Other subcommands: `memify` (enrich an existing graph with triplet embeddings),
 `delete`, `config` (`get`/`set`/`unset`), `run-sequence` (run a scripted
-add/cognify/search sequence), and — when built with their feature flags —
-`visualize` (render the graph to HTML), `serve`, and `disconnect` (cloud).
+add/cognify/search sequence), and — when built with its feature flag —
+`visualize` (render the graph to HTML). Cloud `serve` / `disconnect` live in
+the closed `cognee-cli-cloud` binary in the `cognee-cloud-rust` sibling repo.
 
 Run `cognee-cli <command> --help` for the full flag list. See
 [docs/tools/cli.md](docs/tools/cli.md) for the subcommand reference, logging, and

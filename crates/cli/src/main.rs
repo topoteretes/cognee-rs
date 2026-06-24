@@ -11,10 +11,6 @@ use cli::{Cli, Commands};
 use cognee_lib::{ComponentManager, ConfigManager};
 #[cfg(feature = "bench")]
 use commands::bench;
-#[cfg(feature = "cloud")]
-use commands::disconnect;
-#[cfg(feature = "cloud")]
-use commands::serve;
 #[cfg(feature = "visualization")]
 use commands::visualize;
 use commands::{
@@ -47,10 +43,6 @@ fn run(settings: Settings) -> Result<(), CliError> {
         Commands::RunSequence(args) => run_sequence::run(args, Arc::clone(&cm)),
         #[cfg(feature = "visualization")]
         Commands::Visualize(args) => visualize::run(args, Arc::clone(&cm)),
-        #[cfg(feature = "cloud")]
-        Commands::Serve(args) => serve::run(args, Arc::clone(&cm)),
-        #[cfg(feature = "cloud")]
-        Commands::Disconnect(args) => disconnect::run(args, Arc::clone(&cm)),
         #[cfg(feature = "bench")]
         Commands::Bench(args) => bench::run(args, Arc::clone(&cm)),
     }

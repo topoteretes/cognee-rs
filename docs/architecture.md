@@ -34,7 +34,6 @@ cognee-rust/
 │   ├── ontology/               # Ontology resolution (RDF/JSON-LD loader, NoOp resolver)
 │   ├── delete/                 # Dataset/data deletion across all backends
 │   ├── core/                   # Task pipeline orchestration framework
-│   ├── cloud/                  # Cloud integration: serve()/disconnect() + CloudClient
 │   ├── http-server/            # axum HTTP server (library + cognee-http-server binary)
 │   ├── visualization/          # Self-contained HTML knowledge-graph visualization (d3.js)
 │   ├── observability/          # OpenTelemetry tracing pipeline (OTLP exporter, telemetry feature)
@@ -88,8 +87,6 @@ cognee-rust/
 **cognee-delete** — Cascading deletion of data/datasets across all backends (relational → graph → vector → file storage). Main types: `DeleteService`, `AuthorizedDeleteService`.
 
 **cognee-core** — Async runtime, task scheduling, and pipeline-execution primitives. Traits: `PipelineWatcher`, `ExecStatusManager`. Impls: `NoopWatcher`, `RayonThreadPool`, `NoopExecStatusManager`.
-
-**cognee-cloud** — Cloud integration. Ports Python's `cognee/api/v1/serve/` so the Rust `serve()` / `disconnect()` stay behavior- and on-disk-format-compatible. Main types: `CloudClient`, plus `serve()`/`disconnect()`. Surfaces via the CLI `serve`/`disconnect` subcommands (feature-gated).
 
 **cognee-http-server** — `axum`-based HTTP server. Library exposes `build_router`, `run`, and `AppState`; also builds the `cognee-http-server` binary. Routers mirror the Python FastAPI surface under `/api/v1/*`. See [http-server/](http-server/README.md).
 
@@ -176,4 +173,3 @@ from `cognee-lib` (the facade) and follow the re-exports.
 | Vector | `cognee-vector` | `VectorDB`, `QdrantAdapter` |
 | Delete | `cognee-delete` | `DeleteService` |
 | HTTP server | `cognee-http-server` | `build_router`, `run`, `AppState` |
-| Cloud | `cognee-cloud` | `serve`, `disconnect`, `CloudClient` |
