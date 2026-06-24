@@ -581,7 +581,7 @@ git remote set-url origin git@github.com:topoteretes/cognee-cloud-rs.git
 git push -u origin main
 
 # Flip closed manifests from path-dev to git+rev release pin:
-scripts/flip-oss-source.sh release "$OSS_REV"
+scripts/flip-oss-source.sh rev "$OSS_REV"
 # Equivalent of switching every `cognee-* = { path = "../cognee-rust-oss/..." }`
 # to `cognee-* = { git = "https://github.com/topoteretes/cognee-rs", rev = "$OSS_REV" }`,
 # preserving the documented `[patch."https://github.com/topoteretes/cognee-rs"]`
