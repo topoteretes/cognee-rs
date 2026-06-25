@@ -208,6 +208,12 @@ jobs:
     name: Publish npm packages
     needs: build-platform
     runs-on: ubuntu-latest
+    # Env-guarded per T13 release-plz pattern. NPM_TOKEN is T17 scope
+    # (registry publish — irreversible, gated on F8 + explicit human "go").
+    # Pre-T17 the secret is intentionally absent on cognee-rs so this job
+    # silently skips and the tag-trigger only exercises the build-platform
+    # matrix above (which still warms the cache + verifies cross-compile).
+    if: ${{ secrets.NPM_TOKEN != '' }}
 
     env:
       NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
