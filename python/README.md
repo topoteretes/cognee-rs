@@ -1,6 +1,6 @@
 # cognee_py
 
-Python bindings for the [cognee-rust](https://github.com/topoteretes/cognee-rust)
+Python bindings for the [cognee-rs](https://github.com/topoteretes/cognee-rs)
 pipeline engine, built with [PyO3](https://pyo3.rs/).
 
 Cognee transforms raw text, files, and URLs into a persistent, queryable knowledge graph
@@ -541,4 +541,4 @@ All pipeline-engine symbols (`Pipeline`, `TaskContext`, `PipelineRunHandle`,
 - Observability: [docs/observability/opentelemetry.md](../docs/observability/opentelemetry.md), [docs/observability/send_telemetry.md](../docs/observability/send_telemetry.md)
 - C API bindings: [capi/README.md](../capi/README.md)
 - JS/TS bindings: [ts/README.md](../ts/README.md)
-- cognee-rust workspace: [README.md](../README.md)
+- cognee-rs workspace: [README.md](../README.md)

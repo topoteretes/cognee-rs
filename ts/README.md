@@ -1,6 +1,6 @@
 # cognee-ts
 
-Node.js bindings for the [cognee-rust](https://github.com/topoteretes/cognee-rust)
+Node.js bindings for the [cognee-rs](https://github.com/topoteretes/cognee-rs)
 AI-memory SDK, built with [Neon](https://neon-bindings.com/).
 
 Cognee transforms raw text, files, and URLs into a persistent, queryable knowledge graph
@@ -454,5 +454,5 @@ import { Pipeline } from 'cognee-ts'; // flat legacy export — unchanged
 - Observability: [docs/observability/opentelemetry.md](../docs/observability/opentelemetry.md), [docs/observability/send_telemetry.md](../docs/observability/send_telemetry.md)
 - Python bindings: [python/README.md](../python/README.md)
 - C API bindings: [capi/README.md](../capi/README.md)
-- cognee-rust workspace: [README.md](../README.md)
-- Source: [cognee-rust](https://github.com/topoteretes/cognee-rust)
+- cognee-rs workspace: [README.md](../README.md)
+- Source: [cognee-rs](https://github.com/topoteretes/cognee-rs)

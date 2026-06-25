@@ -13,7 +13,7 @@
 
 Report privately via one of:
 
-- GitHub's [private vulnerability reporting](https://github.com/topoteretes/cognee-rust/security/advisories/new)
+- GitHub's [private vulnerability reporting](https://github.com/topoteretes/cognee-rs/security/advisories/new)
   ("Report a vulnerability"), or
 - email **info@topoteretes.com** (include "SECURITY" in the subject line).
 

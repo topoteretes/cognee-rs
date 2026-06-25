@@ -5,7 +5,7 @@ edition = "2024"
 rust-version = "1.89"
 license = "MIT OR Apache-2.0"
 description = "Neon (Node.js) native binding for the cognee Rust SDK."
-repository = "https://github.com/topoteretes/cognee-rust"
+repository = "https://github.com/topoteretes/cognee-rs"
 homepage = "https://www.cognee.ai"
 publish = false
 

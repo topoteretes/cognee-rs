@@ -13,7 +13,7 @@
 //! operator-facing reference (payload schema, salt rotation, privacy
 //! notes, troubleshooting).
 //!
-//! [user-doc]: https://github.com/topoteretes/cognee-rust/blob/main/docs/observability/send_telemetry.md
+//! [user-doc]: https://github.com/topoteretes/cognee-rs/blob/main/docs/observability/send_telemetry.md
 //!
 //! # Quick start
 //!
@@ -219,7 +219,7 @@ pub fn cognee_version() -> &'static str {
 /// | `TELEMETRY_REQUEST_TIMEOUT` | `5` | Total HTTP timeout (seconds), clamped `[1, 60]`. |
 ///
 /// See the [user-facing
-/// guide](https://github.com/topoteretes/cognee-rust/blob/main/docs/observability/send_telemetry.md)
+/// guide](https://github.com/topoteretes/cognee-rs/blob/main/docs/observability/send_telemetry.md)
 /// for the full reference.
 pub fn send_telemetry<'a>(
     event_name: &str,

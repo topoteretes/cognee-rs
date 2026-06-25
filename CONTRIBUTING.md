@@ -8,8 +8,8 @@ mind when changing pipeline output, IDs, schema, or ranking.
 ## Getting started
 
 ```bash
-git clone https://github.com/topoteretes/cognee-rust
-cd cognee-rust
+git clone https://github.com/topoteretes/cognee-rs
+cd cognee-rs
 cargo build
 ```
 

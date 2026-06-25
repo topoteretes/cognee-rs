@@ -1,6 +1,6 @@
 # cognee-capi
 
-C bindings for the [cognee-rust](https://github.com/topoteretes/cognee-rust) AI-memory library.
+C bindings for the [cognee-rs](https://github.com/topoteretes/cognee-rs) AI-memory library.
 Exposes two tiers:
 
 - **SDK tier** (`cognee_sdk.h`, `cg_sdk_*`) — the user-facing surface: handle lifecycle,
@@ -236,4 +236,4 @@ See the engine examples under `examples/example_sync_task.c`, `example_pipeline.
 - Observability: [`../docs/observability/opentelemetry.md`](../docs/observability/opentelemetry.md), [`../docs/observability/send_telemetry.md`](../docs/observability/send_telemetry.md)
 - Python bindings: [`../python/README.md`](../python/README.md)
 - JS/TS bindings: [`../ts/README.md`](../ts/README.md)
-- cognee-rust workspace: [`../README.md`](../README.md)
+- cognee-rs workspace: [`../README.md`](../README.md)

@@ -5,7 +5,7 @@
   "license": "MIT OR Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/topoteretes/cognee-rust.git"
+    "url": "git+https://github.com/topoteretes/cognee-rs.git"
   },
   "homepage": "https://www.cognee.ai",
   "keywords": ["ai", "knowledge-graph", "memory", "rag", "embeddings"],

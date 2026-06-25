@@ -579,7 +579,7 @@ impl Settings {
     /// **Allowlist-only.** Mirrors Python's `get_current_settings()`
     /// shape but covers only provider/model identifiers and a few
     /// dimension/strategy fields — see
-    /// [`docs/telemetry/03/03-settings-snapshot.md`](https://github.com/topoteretes/cognee-rust/blob/main/docs/telemetry/03/03-settings-snapshot.md)
+    /// [`docs/telemetry/03/03-settings-snapshot.md`](https://github.com/topoteretes/cognee-rs/blob/main/docs/telemetry/03/03-settings-snapshot.md)
     /// for the rationale on what is omitted (URLs, credentials,
     /// file paths).
     ///

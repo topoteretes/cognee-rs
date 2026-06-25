@@ -24,7 +24,7 @@
 //! // `_guard` is dropped.
 //! ```
 //!
-//! See [`docs/observability/opentelemetry.md`](https://github.com/topoteretes/cognee-rust/blob/main/docs/observability/opentelemetry.md)
+//! See [`docs/observability/opentelemetry.md`](https://github.com/topoteretes/cognee-rs/blob/main/docs/observability/opentelemetry.md)
 //! for the full operator guide, env-var reference, and deployment recipes.
 
 /// Core pipeline orchestration primitives.

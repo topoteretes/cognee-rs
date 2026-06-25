@@ -24,7 +24,7 @@ classifiers = [
 
 [project.urls]
 Homepage = "https://www.cognee.ai"
-Repository = "https://github.com/topoteretes/cognee-rust"
+Repository = "https://github.com/topoteretes/cognee-rs"
 
 [project.optional-dependencies]
 test = [
