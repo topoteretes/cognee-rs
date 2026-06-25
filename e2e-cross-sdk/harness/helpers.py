@@ -90,7 +90,7 @@ def run_python_cli(
         "DB_PROVIDER": "sqlite",
         "DB_NAME": "cognee_db",
         "GRAPH_DATABASE_PROVIDER": "kuzu",
-        "VECTOR_DB_PROVIDER": "lancedb",
+        "VECTOR_DB_PROVIDER": "brute-force",
         "LLM_API_KEY": openai_key,
         "LLM_MODEL": llm_model,
         "LLM_PROVIDER": "openai",
