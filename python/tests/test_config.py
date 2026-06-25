@@ -195,7 +195,7 @@ def test_set_embedding_config_succeeds():
 def test_set_vector_db_config_succeeds():
     """``set_vector_db_config`` with a valid dict must not raise."""
     cognee = make_cognee()
-    cognee.config.set_vector_db_config({"vector_db_provider": "qdrant"})
+    cognee.config.set_vector_db_config({"vector_db_provider": "brute-force"})
 
 
 # ---------------------------------------------------------------------------
