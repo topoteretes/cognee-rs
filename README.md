@@ -53,10 +53,13 @@ feedback, **`forget`** what's stale.
 
 ### Prerequisites
 
-- **Rust toolchain** (edition 2024 workspace, resolver 3) — install via [rustup](https://rustup.rs).
-- An **LLM API key** (OpenAI-compatible). `cognee-cli` hard-fails at startup if no
-  LLM key is configured. A local endpoint (e.g. Ollama) works too, but you still
-  pass a dummy key — see below.
+- **Rust toolchain** — install [rustup](https://rustup.rs); the repo's pinned
+  toolchain (Rust 1.90, declared in `rust-toolchain.toml`) is selected
+  automatically. The workspace is edition 2024 / resolver 3; MSRV is 1.89.
+- An **LLM API key** (OpenAI-compatible). `cognee-cli` fails the first time a
+  command needs the LLM (e.g. `remember`/`recall`/`cognify`) if no key is
+  configured; key-free commands like `config` still work. A local endpoint (e.g.
+  Ollama) works too, but you still pass a dummy key — see below.
 
 > Differs from Python: there is no `pip install cognee`. You build the CLI from
 > source with Cargo. There is no Cognee Cloud / hosted `serve` step in this repo.
@@ -102,7 +105,7 @@ ollama serve &
 ollama pull llama3.2:3b
 
 export OPENAI_URL=http://localhost:11434/v1
-export OPENAI_TOKEN=not-needed      # dummy value still required — startup checks for a non-empty key
+export OPENAI_TOKEN=not-needed      # dummy value still required — the LLM client checks for a non-empty key
 export OPENAI_MODEL=llama3.2:3b
 export EMBEDDING_PROVIDER=ollama    # or onnx — otherwise embeddings still call OpenAI
 ```
@@ -186,8 +189,9 @@ type, stores URL metadata, and — after `cognify` — can create `WebPage` /
 
 Other subcommands: `memify` (enrich an existing graph with triplet embeddings),
 `delete`, `config` (`get`/`set`/`unset`), `run-sequence`, and — when built with
-their feature flags — `visualize`, `serve`, and `disconnect` (cloud). Run
-`cognee-cli <command> --help` for the full flag list, or see
+their feature flags — `visualize` (`visualization`) and `bench` (`bench`). The
+HTTP server is a separate binary (`crates/http-server/`), not a CLI subcommand.
+Run `cognee-cli <command> --help` for the full flag list, or see
 [docs/tools/cli.md](docs/tools/cli.md).
 
 ### Using it from Rust
@@ -195,9 +199,10 @@ their feature flags — `visualize`, `serve`, and `disconnect` (cloud). Run
 There is a high-level one-call API — `cognee_lib::prelude::remember()` /
 `recall()` / `forget()` / `improve()` — that mirrors the Python functions.
 **Be aware:** these are not self-contained. Each takes a set of pre-built
-`Arc<dyn …>` components (pipelines, LLM, storage, graph DB, vector DB, embedding
-engine, session manager, …), so you must wire the component graph first. They
-are "one call" only after the wiring.
+components (pipelines, LLM, storage, graph DB, vector DB, embedding engine,
+session manager, …) — as `Arc<dyn …>` handles (`remember`/`improve`) or borrowed
+references to already-wired orchestrators (`recall`/`forget`), so you must wire
+the component graph first. They are "one call" only after the wiring.
 
 The lowest-friction wiring root is `ComponentManager`, which lazily builds the
 engines from env/`Settings`:
