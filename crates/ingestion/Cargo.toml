@@ -1,0 +1,84 @@
+[package]
+name = "cognee-ingestion"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+async-trait.workspace = true
+# `pipeline.rs` uses `DbPipelineWatcher` unconditionally, so it needs the
+# `pipeline-run-registry` module which `cognee-core` gates behind this feature.
+cognee-core = { path = "../core", version = "0.1.0", features = ["pipeline-run-registry"] }
+cognee-database = { path = "../database", version = "0.1.0" }
+cognee-graph = { path = "../graph", version = "0.1.0" }
+cognee-models = { path = "../models", version = "0.1.0" }
+cognee-storage = { path = "../storage", version = "0.1.0" }
+cognee-vector = { path = "../vector", version = "0.1.0" }
+cognee-utils = { path = "../utils", version = "0.1.0" }
+md-5.workspace = true
+sha2.workspace = true
+uuid.workspace = true
+tokio.workspace = true
+mime_guess.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+# URL/HTML subsystem deps -- optional, gated by the `html-loader` feature.
+# (`scraper` is also pulled in by the `unstructured-eml`/`unstructured-epub`
+# loaders, which declare it directly.)
+reqwest = { workspace = true, optional = true }
+scraper = { workspace = true, optional = true }
+toml = { workspace = true, optional = true }
+texting_robots = { workspace = true, optional = true }
+url = { workspace = true, optional = true }
+futures-util = { workspace = true, optional = true }
+pdfium-render = { workspace = true, optional = true }
+pdfium-auto = { workspace = true, optional = true }
+pdf-extract = { workspace = true, optional = true }
+csv = { workspace = true, optional = true }
+calamine = { workspace = true, optional = true }
+mail-parser = { workspace = true, optional = true }
+quick-xml = { workspace = true, optional = true }
+zip = { workspace = true, optional = true }
+cognee-llm = { path = "../llm", version = "0.1.0", optional = true }
+
+[features]
+default = []
+pdf-pdfium = ["dep:pdfium-render", "dep:pdfium-auto"]
+pdf-pure-rust = ["dep:pdf-extract"]
+csv-loader = ["dep:csv"]
+# HTML file loading + URL crawling/ingestion (shared scraper/toml machinery).
+html-loader = ["dep:scraper", "dep:toml", "dep:texting_robots", "dep:reqwest", "dep:url", "dep:futures-util"]
+unstructured-xlsx = ["dep:calamine"]
+unstructured-docx = ["dep:quick-xml", "dep:zip"]
+unstructured-pptx = ["dep:quick-xml", "dep:zip"]
+unstructured-epub = ["dep:quick-xml", "dep:zip", "dep:scraper"]
+unstructured-eml = ["dep:mail-parser", "dep:scraper"]
+unstructured-odt = ["dep:quick-xml", "dep:zip"]
+unstructured-odp = ["dep:quick-xml", "dep:zip"]
+unstructured = ["unstructured-xlsx", "unstructured-docx", "unstructured-pptx", "unstructured-epub", "unstructured-eml", "unstructured-odt", "unstructured-odp"]
+image-loader = ["dep:cognee-llm"]
+audio-loader = ["dep:cognee-llm"]
+
+[dev-dependencies]
+cognee-database = { path = "../database", features = ["sqlite"] }
+cognee-delete = { path = "../delete" }
+cognee-graph = { path = "../graph", features = ["testing"] }
+cognee-storage = { path = "../storage", features = ["testing"] }
+cognee-test-utils = { path = "../test-utils" }
+cognee-vector = { path = "../vector", features = ["testing"] }
+mockito = "1"
+tempfile.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

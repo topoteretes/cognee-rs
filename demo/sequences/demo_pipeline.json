@@ -1,0 +1,49 @@
+[
+  {
+    "command": ["add",
+      "${DEMO_DATA_DIR}/oppenheimer.txt",
+      "${DEMO_DATA_DIR}/groves.txt",
+      "${DEMO_DATA_DIR}/laboratories.txt",
+      "${DEMO_DATA_DIR}/organizations.txt",
+      "--dataset-name", "${DATASET_NAME}"]
+  },
+  {
+    "command": ["cognify",
+      "--datasets", "${DATASET_NAME}",
+      "--chunk-size", "700",
+      "--llm-max-retries", "3",
+      "--llm-max-parallel-requests", "4"]
+  },
+  {
+    "command": ["search",
+      "Who directed the scientific work at Los Alamos?",
+      "--datasets", "${DATASET_NAME}",
+      "--query-type", "GRAPH_COMPLETION",
+      "--top-k", "5",
+      "--output-format", "pretty"]
+  },
+  {
+    "command": ["search",
+      "Which organizations were involved in the Manhattan Project?",
+      "--datasets", "${DATASET_NAME}",
+      "--query-type", "GRAPH_COMPLETION",
+      "--top-k", "5",
+      "--output-format", "pretty"]
+  },
+  {
+    "command": ["search",
+      "What were Oak Ridge and Hanford responsible for?",
+      "--datasets", "${DATASET_NAME}",
+      "--query-type", "RAG_COMPLETION",
+      "--top-k", "5",
+      "--output-format", "pretty"]
+  },
+  {
+    "command": ["search",
+      "Leslie Groves responsibilities",
+      "--datasets", "${DATASET_NAME}",
+      "--query-type", "CHUNKS",
+      "--top-k", "5",
+      "--output-format", "pretty"]
+  }
+]

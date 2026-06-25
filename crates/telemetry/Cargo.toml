@@ -1,0 +1,76 @@
+[package]
+name = "cognee-telemetry"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = []
+
+# Pulls in the HTTP client, PBKDF2 / HMAC / hex stack, and the home-dir
+# resolver. When disabled, the public API still compiles but
+# `send_telemetry` becomes a noop and the identity helpers return
+# empty strings. See task 02-06 for the noop body.
+telemetry = [
+    "dep:reqwest",
+    "dep:serde",
+    "dep:serde_json",
+    "dep:sha2",
+    "dep:hmac",
+    "dep:pbkdf2",
+    "dep:hex",
+    "dep:once_cell",
+    "dep:dirs",
+    "dep:chrono",
+]
+
+[dependencies]
+# Always-on. The crate exposes a public function and an error type
+# regardless of feature state, so these unconditional deps cover the
+# noop path.
+thiserror.workspace = true
+tracing.workspace = true
+tokio = { workspace = true }
+uuid = { workspace = true }
+
+# Feature-gated. All four feature-gated stacks are introduced here so
+# downstream tasks (03-05) only need to write code, not edit Cargo.toml.
+reqwest      = { workspace = true, optional = true }
+serde        = { workspace = true, optional = true }
+serde_json   = { workspace = true, optional = true }
+sha2         = { workspace = true, optional = true }
+hmac         = { workspace = true, optional = true }
+pbkdf2       = { workspace = true, optional = true }
+hex          = { workspace = true, optional = true }
+once_cell    = { workspace = true, optional = true }
+dirs         = { workspace = true, optional = true }
+chrono       = { workspace = true, optional = true }
+
+[dev-dependencies]
+mockito = "1"
+regex = "1"
+tempfile.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }
+serial_test = { workspace = true }
+# Used by the byte-parity integration test under tests/byte_parity.rs to
+# mirror the same PBKDF2 stack as the implementation, plus serde_json /
+# hex for fixture decoding. Workspace versions are pinned in the root
+# Cargo.toml.
+pbkdf2 = { workspace = true }
+hmac = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }

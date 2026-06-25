@@ -1,0 +1,267 @@
+name: HTTP Parity
+
+# Re-enabled on push/PR (task 12): the Python alembic chain on a virgin SQLite
+# DB is fixed via Option B1 in e2e-cross-sdk/bin/start_servers.sh — the
+# harness pre-creates all ORM tables via create_database() and stamps alembic
+# to head before uvicorn starts, so the lifespan migration is a no-op delta.
+# Phase-1 deterministic checks + telemetry parity run without any secrets.
+# LLM-gated phases use secrets.OPENAI_KEY (same as ci.yml) and skip cleanly
+# when absent (fork-safe). Phase-3 specialty tests remain workflow_dispatch-only.
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+    inputs:
+      run_phase3:
+        description: "Run phase-3 specialty tests (websocket, sync, permissions, visualize)"
+        required: false
+        default: "false"
+        type: boolean
+
+concurrency:
+  group: http-parity-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  http-parity:
+    runs-on: ubuntu-latest
+
+    # HAS_OPENAI_KEY must be set at job level so step-level `if:` expressions
+    # can read it via `env.HAS_OPENAI_KEY`.  A step's own `env:` block is only
+    # visible to the `run:` script, NOT to the `if:` evaluator — setting it
+    # only at step level means the gate always evaluates against '' (falsy) and
+    # all LLM-gated steps would be permanently skipped even when the secret
+    # is present.  Job-level `env:` supports the `secrets` context.
+    env:
+      HAS_OPENAI_KEY: ${{ secrets.OPENAI_KEY != '' }}
+
+    steps:
+      # The Dockerfile copies from BOTH cognee-rust/ and cognee/ siblings
+      # (multi-stage build: Rust binaries from this repo + Python venv from
+      # the cognee Python repo), and docker-compose.yml uses `context: ../..`.
+      # We replicate the local monorepo layout (`~/dev/cognee/{cognee-rust,cognee}`)
+      # by checking both repos out as siblings under $GITHUB_WORKSPACE.
+      - name: Checkout cognee-rust
+        uses: actions/checkout@v4
+        with:
+          path: cognee-rust
+          submodules: recursive
+
+      # Pinned to a `dev`-branch SHA that ships the Ladybug shim (kuzu/ has
+      # been re-exported from `ladybug` since 1.0.5). On `main` kuzu is still
+      # a hard pip dep that's not installed in the harness venv, causing
+      # `ModuleNotFoundError: No module named 'kuzu'` during alembic migrations.
+      # Bump this SHA periodically; pinning beats `ref: dev` so upstream
+      # churn can't silently break our CI.
+      - name: Checkout cognee (Python sibling repo)
+        uses: actions/checkout@v4
+        with:
+          repository: topoteretes/cognee
+          ref: b9014c1661bff1d1d8bc831f3d31bc5a965bcaa3
+          path: cognee
+
+      # docker-compose.yml declares `env_file: ../.env`; missing files abort
+      # `docker compose run`, so create an empty stub. Real env vars are
+      # passed through process env in each phase.
+      - name: Stub cognee-rust/.env (required by docker-compose env_file)
+        run: touch cognee-rust/.env
+
+      # Cargo.lock is gitignored (workspace policy: see .gitignore:6) but the
+      # rust-builder stage does `COPY cognee-rust/Cargo.lock ./`, so we
+      # materialize it on the host before docker build. `generate-lockfile`
+      # only resolves the dependency graph; it does not compile anything.
+      - name: Generate Cargo.lock (gitignored, required by Dockerfile COPY)
+        run: cargo generate-lockfile --manifest-path cognee-rust/Cargo.toml
+
+      # ubuntu-latest ships with ~14 GB free; lbug's C++ link step needs more
+      # headroom than that once cargo registry, target cache, and Docker
+      # layers are factored in. Mirror ci.yml's Test job cleanup.
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: false
+          swap-storage: true
+          docker-images: true
+
+      # ── Docker layer cache ────────────────────────────────────────────────
+      - name: Cache Docker layers
+        uses: actions/cache@v4
+        with:
+          path: /tmp/.buildx-cache
+          key: >-
+            buildx-http-parity-${{
+              hashFiles(
+                'cognee-rust/e2e-cross-sdk/Dockerfile',
+                'cognee-rust/Cargo.lock'
+              )
+            }}
+          restore-keys: |
+            buildx-http-parity-
+
+      - name: Set up Docker Buildx
+        id: buildx
+        uses: docker/setup-buildx-action@v3
+
+      # ── ccache for lbug's bundled C++ build inside the image ─────────────
+      # The rust-builder stage compiles lbug's Ladybug C++ tree through ccache
+      # into a `--mount=type=cache,target=/ccache` BuildKit mount (see
+      # e2e-cross-sdk/Dockerfile and docs/build/lbug-rebuilds.md). BuildKit
+      # cache mounts live only inside the builder instance and are NOT part
+      # of exported layer caches, so on a fresh runner they start empty.
+      # buildkit-cache-dance injects the actions/cache-restored host dir into
+      # the mount before the build and extracts it back afterwards.
+      #
+      # Declaration order matters: post-steps run in reverse, so actions/cache
+      # (declared first) saves AFTER the dance post-step has extracted the
+      # mount contents back to ccache-mount/.
+      - name: Cache ccache (host side)
+        uses: actions/cache@v4
+        with:
+          path: ccache-mount
+          key: http-parity-ccache-${{ github.run_id }}
+          restore-keys: |
+            http-parity-ccache-
+
+      - name: Inject/extract ccache BuildKit cache mount
+        uses: reproducible-containers/buildkit-cache-dance@v3.4.0
+        with:
+          builder: ${{ steps.buildx.outputs.name }}
+          cache-map: |
+            {
+              "ccache-mount": "/ccache"
+            }
+
+      # ── Phase-1a: no LLM required (unconditional release gate) ─────────────
+      # Excludes add/forget/search: the Python `/add` endpoint instantiates an
+      # LLM client and raises LLMAPIKeyNotSetError without a key, so add (and
+      # the forget/search tests that seed via add) need a key — they run in
+      # Phase-1b. Running datasets without add in the same session also keeps
+      # the dataset-list assertions free of add-created pollution.
+      - name: Phase-1a — health, auth, datasets, openapi, errors (no LLM)
+        run: >-
+          docker compose
+          -f cognee-rust/e2e-cross-sdk/docker-compose.yml
+          run --rm e2e-http-tests
+          pytest -vs /harness/
+          -k "test_http_health or test_http_auth or test_http_datasets or test_http_openapi or test_http_errors or test_http_self"
+          --tb=short
+
+      # ── Phase-1b: add + forget + search (needs a key — Python /add does) ───
+      # The `secrets` context does NOT populate job-level `env:` here (despite
+      # the OPENAI_KEY secret existing, the HAS_OPENAI_KEY gate evaluated false
+      # and this step always skipped). Secrets ARE available in a step's own
+      # `env:`, so read the key there and gate inside the script instead of via
+      # an `if:` expression (which cannot see step-level env).
+      - name: Phase-1b — add, forget, search (LLM-gated)
+        env:
+          OPENAI_TOKEN: ${{ secrets.OPENAI_KEY }}
+          OPENAI_URL: https://api.openai.com/v1
+          OPENAI_MODEL: gpt-4o-mini
+          LLM_PROVIDER: openai
+          # Embedding config mirrors e2e-cross-sdk/harness/helpers.py (the proven
+          # CLI cross-SDK setup). COGNEE_SKIP_CONNECTION_TEST bypasses Python's
+          # 30s embedding-endpoint pre-check at /add time — ingestion does not
+          # embed (that happens in cognify), so the check is unnecessary here.
+          EMBEDDING_PROVIDER: openai
+          EMBEDDING_MODEL: openai/text-embedding-3-small
+          EMBEDDING_DIMENSIONS: "1536"
+          EMBEDDING_API_KEY: ${{ secrets.OPENAI_KEY }}
+          EMBEDDING_ENDPOINT: https://api.openai.com/v1
+          COGNEE_SKIP_CONNECTION_TEST: "true"
+        run: |
+          if [ -z "${OPENAI_TOKEN}" ]; then
+            echo "OPENAI_KEY not available — skipping LLM-gated add/forget/search parity."
+            exit 0
+          fi
+          docker compose \
+            -f cognee-rust/e2e-cross-sdk/docker-compose.yml \
+            run --rm e2e-http-tests \
+            pytest -vs /harness/ \
+            -k "test_http_add or test_http_forget or test_http_search" \
+            --tb=short
+
+      # ── Telemetry parity: cross-SDK identity-layer comparison ────────────
+      # Asserts api_key_tracking_id and persistent_id parity between the
+      # Python and Rust SDKs. Uses the local `telemetry-proxy` service
+      # (mock for test.prometh.ai) declared in docker-compose.yml — no
+      # OPENAI_KEY required, no live network egress. The `e2e-telemetry`
+      # service runs `pytest -vs /harness/test_telemetry_parity.py` against
+      # both the Rust `cognee-telemetry-emit` binary and the Python SDK,
+      # then diffs the captured payloads.
+      - name: Telemetry parity (cross-SDK identity layers)
+        run: >-
+          docker compose
+          -f cognee-rust/e2e-cross-sdk/docker-compose.yml
+          run --rm e2e-telemetry
+
+      # ── Phase-2: LLM-gated (requires OPENAI_KEY secret) ──────────────────
+      # `env.HAS_OPENAI_KEY` is set at job level (see job env: block above).
+      # Step-level `if:` can read job-level env; it cannot read step-level env.
+      - name: Phase-2 — cognify, remember, recall, memify, improve, llm (LLM-gated)
+        if: ${{ env.HAS_OPENAI_KEY == 'true' }}
+        env:
+          OPENAI_TOKEN: ${{ secrets.OPENAI_KEY }}
+          OPENAI_URL: https://api.openai.com/v1
+          OPENAI_MODEL: gpt-4o-mini
+        run: >-
+          docker compose
+          -f cognee-rust/e2e-cross-sdk/docker-compose.yml
+          run --rm e2e-http-tests
+          pytest -vs /harness/
+          -k "test_http_cognify or test_http_remember or test_http_recall or test_http_memify or test_http_improve or test_http_llm"
+          --tb=short
+
+      # ── Cross-SDK provenance parity (LLM-gated) ─────────────────────────
+      # Asserts gap-05 DataPoint provenance parity between Python and
+      # Rust SDKs (source_pipeline / source_task / source_user). See
+      # docs/telemetry/05-datapoint-provenance.md.
+      - name: Provenance parity (LLM-gated)
+        if: ${{ env.HAS_OPENAI_KEY == 'true' }}
+        env:
+          OPENAI_TOKEN: ${{ secrets.OPENAI_KEY }}
+          OPENAI_URL: https://api.openai.com/v1
+          OPENAI_MODEL: gpt-4o-mini
+        run: >-
+          docker compose
+          -f cognee-rust/e2e-cross-sdk/docker-compose.yml
+          run --rm e2e-tests
+          pytest -vs /harness/test_provenance_parity.py
+          --tb=short
+
+      # ── Cross-SDK logging parity (no LLM needed) ────────────────────────
+      # Asserts gap-06 file-logging parity between Python and Rust SDKs:
+      # loose per-filename presence, strict per-message byte equality.
+      # See docs/telemetry/06-file-logging-rotation.md. The test itself
+      # does not require OpenAI; we keep the HAS_OPENAI_KEY gate so this
+      # step gracefully skips on forks/keyless pushes without the secret
+      # (the build cost is only justified alongside the LLM-gated phases).
+      # Phase-1 + telemetry parity remain the unconditional release gate.
+      - name: Logging parity (no LLM needed)
+        if: ${{ env.HAS_OPENAI_KEY == 'true' }}
+        run: >-
+          docker compose
+          -f cognee-rust/e2e-cross-sdk/docker-compose.yml
+          run --rm e2e-tests
+          pytest -vs /harness/test_logging_parity.py
+          --tb=short
+
+      # ── Phase-3: specialty (manual via workflow_dispatch only) ────────────
+      - name: Phase-3 — websocket, sync, permissions, visualize (manual only)
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_phase3 == 'true' }}
+        env:
+          OPENAI_TOKEN: ${{ secrets.OPENAI_KEY }}
+          OPENAI_URL: https://api.openai.com/v1
+          OPENAI_MODEL: gpt-4o-mini
+        run: >-
+          docker compose
+          -f cognee-rust/e2e-cross-sdk/docker-compose.yml
+          run --rm e2e-http-tests
+          pytest -vs /harness/
+          -k "test_http_websocket or test_http_sync or test_http_permissions or test_http_visualize"
+          --tb=short

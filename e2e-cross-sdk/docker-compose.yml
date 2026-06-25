@@ -1,0 +1,103 @@
+services:
+  e2e-tests:
+    # Shared image tag: e2e-tests / e2e-http-tests / e2e-telemetry all build the
+    # SAME image from the same Dockerfile+context. Naming it makes Compose build
+    # it once and reuse it across services — otherwise each `docker compose run`
+    # triggers a fresh per-service build, and the duplicate Rust release build
+    # (lbug's heavy C++) can OOM the runner.
+    image: cognee-e2e-cross-sdk:latest
+    build:
+      context: ../..                              # /home/dmytro/dev/cognee/ (monorepo root)
+      dockerfile: cognee-rust/e2e-cross-sdk/Dockerfile
+    env_file:
+      - ../.env                                   # cognee-rust/.env (OPENAI_TOKEN, OPENAI_MODEL, etc.)
+    environment:
+      - LLM_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
+    tmpfs:
+      - /workspace                                # ephemeral workspace per run
+    command: ["pytest", "-vs", "/harness/"]
+
+  e2e-http-tests:
+    image: cognee-e2e-cross-sdk:latest           # shared build — see e2e-tests
+    build:
+      context: ../..                              # /home/dmytro/dev/cognee/ (monorepo root)
+      dockerfile: cognee-rust/e2e-cross-sdk/Dockerfile
+    env_file:
+      - ../.env                                   # cognee-rust/.env (OPENAI_TOKEN, OPENAI_MODEL, etc.)
+    environment:
+      - LLM_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
+      # Forward LLM/embedding config from the host (CI step env / local shell)
+      # into the container so start_servers.sh can configure BOTH servers.
+      # Bare names pass the host value through when set, and fall back to the
+      # env_file (../.env) for local dev when the host var is unset. Python's
+      # /add needs a working LLM/embedding provider (it raises
+      # LLMAPIKeyNotSetError otherwise), so the key-gated phases set these.
+      - OPENAI_TOKEN
+      - OPENAI_URL
+      - OPENAI_MODEL
+      - LLM_API_KEY
+      - LLM_API_ENDPOINT
+      - LLM_PROVIDER
+      - EMBEDDING_PROVIDER
+      - EMBEDDING_MODEL
+      - EMBEDDING_ENDPOINT
+      - EMBEDDING_API_KEY
+      - EMBEDDING_DIMENSIONS
+      - MOCK_EMBEDDING
+      - COGNEE_SKIP_CONNECTION_TEST
+    tmpfs:
+      - /py                                       # ephemeral Python server workspace
+      - /rs                                       # ephemeral Rust server workspace
+    entrypoint: ["/usr/local/bin/start_servers.sh"]
+    command: ["pytest", "-vs", "/harness/", "-k", "test_http_"]
+
+  # Mock proxy for the cross-SDK telemetry parity test. Captures every
+  # POST body to a shared volume so the pytest can read both the Python
+  # and Rust send_telemetry payloads. See
+  # docs/telemetry/02/10-cross-sdk-parity.md for the full design.
+  telemetry-proxy:
+    image: python:3.11-slim
+    working_dir: /app
+    command: ["python", "/app/telemetry_proxy.py"]
+    volumes:
+      - ./bin/telemetry_proxy.py:/app/telemetry_proxy.py:ro
+      - telemetry-captures:/captures
+    expose:
+      - "9090"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9090/_health').read()"]
+      interval: 1s
+      timeout: 1s
+      retries: 30
+
+  # Cross-SDK telemetry parity test runner. Drives Python and Rust
+  # send_telemetry once each against the mock proxy and asserts
+  # identity parity (api_key_tracking_id, persistent_id). The shared
+  # cognee-home volume mounts at /root/.cognee on both sides so the
+  # persistent_id file is the same on disk for both SDKs.
+  e2e-telemetry:
+    image: cognee-e2e-cross-sdk:latest           # shared build — see e2e-tests
+    build:
+      context: ../..                              # /home/dmytro/dev/cognee/ (monorepo root)
+      dockerfile: cognee-rust/e2e-cross-sdk/Dockerfile
+    env_file:
+      - ../.env                                   # cognee-rust/.env (OPENAI_TOKEN, OPENAI_MODEL, etc.)
+    environment:
+      - LLM_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
+      - COGNEE_TELEMETRY_PROXY_URL_FOR_TESTS=http://telemetry-proxy:9090
+      - COGNEE_TELEMETRY_INTEGRATION_TEST=1
+      - LLM_API_KEY=sk-test-fixture-cross-sdk
+      - TRACKING_ID=fixed-anon-cross-sdk
+    tmpfs:
+      - /workspace
+    depends_on:
+      telemetry-proxy:
+        condition: service_healthy
+    volumes:
+      - cognee-home:/root/.cognee
+      - telemetry-captures:/captures:ro
+    command: ["pytest", "-vs", "/harness/test_telemetry_parity.py"]
+
+volumes:
+  telemetry-captures:
+  cognee-home:

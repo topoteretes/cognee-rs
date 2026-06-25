@@ -1,0 +1,58 @@
+[package]
+name = "cognee-graph"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+# Core async and serialization
+async-trait.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+# UUID and time
+uuid.workspace = true
+chrono.workspace = true
+
+# Ladybug database (feature-gated)
+lbug = { workspace = true, optional = true }
+
+# PostgreSQL graph (feature-gated)
+sea-orm = { version = "1.1", features = [
+    "runtime-tokio-rustls",
+    "sqlx-postgres",
+    "with-chrono",
+    "with-json",
+], optional = true }
+sea-orm-migration = { version = "1.1", features = [
+    "runtime-tokio-rustls",
+], optional = true }
+
+# Internal dependencies
+cognee-models = { path = "../models", version = "0.1.0" }
+cognee-utils = { path = "../utils", version = "0.1.0" }
+
+[features]
+ladybug = ["dep:lbug"]
+postgres = ["dep:sea-orm", "dep:sea-orm-migration"]
+testing = []
+
+[dev-dependencies]
+tempfile.workspace = true
+serial_test.workspace = true
+cognee-test-utils = { path = "../test-utils" }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

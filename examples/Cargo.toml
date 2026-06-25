@@ -1,0 +1,65 @@
+[package]
+name = "cognee-examples"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+authors.workspace = true
+
+# Define each example
+
+[lints]
+workspace = true
+
+[[example]]
+name = "add_example"
+path = "add_example.rs"
+
+[[example]]
+name = "cognify_example"
+path = "cognify_example.rs"
+
+[[example]]
+name = "fact_extraction_example"
+path = "fact_extraction_example.rs"
+
+[[example]]
+name = "summarization_example"
+path = "summarization_example.rs"
+
+[[example]]
+name = "embedding_engine_example"
+path = "embedding_engine_example.rs"
+
+[[example]]
+name = "url_ingestion"
+path = "url_ingestion.rs"
+
+[dependencies]
+# Workspace crates
+cognee-core = { path = "../crates/core", features = ["pipeline-run-registry"] }
+cognee-storage = { path = "../crates/storage" }
+cognee-database = { path = "../crates/database" }
+cognee-graph = { path = "../crates/graph", features = ["testing"] }
+# html-loader enables DataInput::Url ingestion used by the url_ingestion example;
+# without it, URL ingestion returns IngestionError::UrlIngestionUnavailable.
+cognee-ingestion = { path = "../crates/ingestion", features = ["html-loader"] }
+cognee-models = { path = "../crates/models" }
+cognee-chunking = { path = "../crates/chunking" }
+cognee-cognify = { path = "../crates/cognify" }
+cognee-llm = { path = "../crates/llm" }
+cognee-embedding = { path = "../crates/embedding", features = ["onnx"] }
+cognee-vector = { path = "../crates/vector", features = ["testing"] }
+
+tokio.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+env_logger.workspace = true

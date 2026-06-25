@@ -1,0 +1,53 @@
+[package]
+name = "cognee-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+telemetry = ["cognee-telemetry/telemetry"]
+pipeline-run-registry = []
+
+[dependencies]
+cognee-database = { path = "../database", version = "0.1.0" }
+cognee-graph = { path = "../graph", version = "0.1.0" }
+cognee-models = { path = "../models", version = "0.1.0" }
+cognee-telemetry = { path = "../telemetry", version = "0.1.0" }
+cognee-vector = { path = "../vector", version = "0.1.0" }
+
+async-trait.workspace = true
+chrono.workspace = true
+futures.workspace = true
+rayon.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-stream.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+cognee-database = { path = "../database", features = ["sqlite"] }
+cognee-graph = { path = "../graph", features = ["testing"] }
+cognee-models = { path = "../models" }
+cognee-vector = { path = "../vector", features = ["testing"] }
+chrono.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+# Added by gap 03-08 (telemetry pipeline + task lifecycle integration tests).
+# Workspace declares `serial_test` and `tempfile`; `mockito` is consumed as
+# a direct version spec, mirroring the existing pattern in
+# `crates/telemetry/Cargo.toml`.
+mockito = "1"
+serial_test = { workspace = true }
+tempfile = { workspace = true }

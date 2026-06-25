@@ -1,0 +1,64 @@
+[package]
+name = "cognee-cognify"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+testing = ["cognee-storage/testing", "cognee-graph/testing", "cognee-vector/testing"]
+html-loader = ["cognee-ingestion/html-loader"]
+image-loader = ["cognee-ingestion/image-loader"]
+audio-loader = ["cognee-ingestion/audio-loader"]
+
+[dependencies]
+cognee-models = { path = "../models", version = "0.1.0" }
+cognee-storage = { path = "../storage", version = "0.1.0" }
+cognee-chunking = { path = "../chunking", version = "0.1.0" }
+cognee-core = { path = "../core", version = "0.1.0" }
+cognee-ingestion = { path = "../ingestion", version = "0.1.0" }
+cognee-llm = { path = "../llm", version = "0.1.0" }
+cognee-graph = { path = "../graph", version = "0.1.0" }
+cognee-utils = { path = "../utils", version = "0.1.0" }
+cognee-embedding = { path = "../embedding", version = "0.1.0" }
+cognee-vector = { path = "../vector", version = "0.1.0" }
+cognee-ontology = { path = "../ontology", version = "0.1.0" }
+cognee-database = { path = "../database", version = "0.1.0" }
+cognee-session = { path = "../session", version = "0.1.0" }
+
+chrono.workspace = true
+uuid = { workspace = true, features = ["v4"] }
+tokio = { workspace = true, features = ["rt-multi-thread"] }
+async-trait.workspace = true
+thiserror.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+schemars.workspace = true
+futures.workspace = true
+tracing.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+cognee-storage    = { path = "../storage", features = ["testing"] }
+cognee-embedding  = { path = "../embedding", features = ["onnx"] }
+cognee-graph      = { path = "../graph", features = ["testing", "ladybug"] }
+cognee-vector     = { path = "../vector", features = ["testing"] }
+cognee-database   = { path = "../database", features = ["sqlite"] }
+cognee-search     = { path = "../search" }
+cognee-delete     = { path = "../delete" }
+cognee-test-utils = { path = "../test-utils" }
+cognee-llm        = { path = "../llm" }
+cognee-session    = { path = "../session", features = ["fs"] }
+dotenv.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

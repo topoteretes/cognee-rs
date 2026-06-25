@@ -1,0 +1,47 @@
+[package]
+name = "cognee-delete"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+cognee-core = { path = "../core", version = "0.1.0", features = ["pipeline-run-registry"] }
+cognee-database = { path = "../database", version = "0.1.0" }
+cognee-graph = { path = "../graph", version = "0.1.0" }
+cognee-models = { path = "../models", version = "0.1.0" }
+cognee-session = { path = "../session", version = "0.1.0" }
+cognee-storage = { path = "../storage", version = "0.1.0" }
+cognee-vector = { path = "../vector", version = "0.1.0" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+async-trait.workspace = true
+chrono.workspace = true
+cognee-cognify = { path = "../cognify" }
+cognee-database = { path = "../database", features = ["sqlite"] }
+cognee-embedding  = { path = "../embedding", features = ["onnx"] }
+cognee-graph      = { path = "../graph", features = ["testing", "ladybug"] }
+cognee-ingestion  = { path = "../ingestion" }
+cognee-llm        = { path = "../llm" }
+cognee-ontology   = { path = "../ontology" }
+cognee-storage    = { path = "../storage", features = ["testing"] }
+cognee-test-utils = { path = "../test-utils" }
+cognee-vector     = { path = "../vector", features = ["testing"] }
+dotenv.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

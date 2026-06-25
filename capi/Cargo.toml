@@ -1,0 +1,44 @@
+# capi/Cargo.toml — standalone workspace for the C API bindings.
+#
+# Extracted from the root workspace per decision D10 (phase 0).
+# After T4-move the capi workspace no longer carries a `[patch.crates-io]`
+# block (the qdrant fork chain moved to the closed `cognee-cloud-rust`
+# workspace alongside the qdrant adapter), and the OSS root workspace
+# dropped its patch block as well — no cross-workspace patch sync is
+# required for OSS builds.
+[workspace]
+members = ["cognee-capi"]
+resolver = "3"
+
+[workspace.package]
+edition = "2024"
+version = "0.1.0"
+rust-version = "1.89"
+license = "MIT OR Apache-2.0"
+authors = ["Topoteretes <support@cognee.ai>"]
+description = "C API bindings for the cognee Rust SDK — AI memory pipeline (add → cognify → search)."
+repository = "https://github.com/topoteretes/cognee-rs"
+homepage = "https://www.cognee.ai"
+readme = "README.md"
+keywords = ["ai", "knowledge-graph", "memory", "rag", "embeddings"]
+categories = ["science", "database", "text-processing"]
+
+[workspace.dependencies]
+# Keep these versions in sync with the root workspace [workspace.dependencies].
+async-trait = "0.1.89"
+futures = "0.3"
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "fs", "io-util"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
+uuid = { version = "1.21", features = ["v4", "v5", "serde"] }
+
+# Panic-across-FFI safety: abort on panic so an unwinding panic can never
+# cross the `extern "C"` boundary. This is the primary safety floor for the
+# C API; `catch_unwind` in spawn_sdk_op provides graceful degradation on top.
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+# Keep the existing debug-info setting for release builds and add panic=abort.
+debug = true
+panic = "abort"

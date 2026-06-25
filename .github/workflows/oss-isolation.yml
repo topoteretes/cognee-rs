@@ -1,0 +1,79 @@
+name: OSS Isolation
+
+# Plan §5 Phase 0 steps 8-9: continuously prove the OSS subset of
+# cognee-rust compiles in isolation (no closed leakage, no git deps)
+# and that every tracked path is classified OSS-or-closed.
+on:
+  push:
+    branches: [main, master, oss-split]
+  pull_request:
+
+concurrency:
+  group: oss-isolation-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_INCREMENTAL: "0"
+  CARGO_PROFILE_DEV_DEBUG: "0"
+
+jobs:
+  # Generalises ci.yml's lone `cargo check -p cognee-lib --no-default-features`
+  # to every OSS workspace member. Fails on any closed-crate `use` in
+  # non-feature-gated code (e.g. an OSS file accidentally importing
+  # `cognee_cloud::*` outside a `#[cfg(feature = "cloud")]` block).
+  no-default-features:
+    name: cargo check --no-default-features (per crate)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust (from rust-toolchain.toml)
+        run: rustup show
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: false
+          swap-storage: false
+          docker-images: true
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: oss-isolation-v1
+          cache-on-failure: true
+      - name: Per-crate --no-default-features
+        run: bash scripts/split/check-no-default-features.sh
+
+  # Hard gate from plan §5 Phase 0 step 8: zero `git+` deps anywhere in
+  # the OSS workspace's resolved tree (excluding dev-deps). This is the
+  # crates.io-publishability precondition; T4 made it true and this
+  # gate prevents regression.
+  no-git-deps:
+    name: cargo tree -e no-dev shows zero git deps
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup show
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - name: Generate lockfile (gitignored, see .gitignore:6)
+        run: cargo generate-lockfile
+      - name: cargo tree -e no-dev | grep -i 'git+' must be empty
+        run: |
+          if cargo tree -e no-dev --prefix none 2>/dev/null | grep -i 'git+'; then
+            echo "::error::OSS workspace pulled a git dependency"
+            exit 1
+          fi
+
+  # Plan §5 Phase 0 step 9 + §8 Step 0. Forces every newly-added path
+  # to be classified OSS-or-closed at PR review time.
+  partition-manifest:
+    name: scripts/split partition manifest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: union(oss, closed) == git ls-files && intersection == empty
+        run: bash scripts/split/check-partition.sh

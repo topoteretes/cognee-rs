@@ -1,0 +1,44 @@
+[
+  {
+    "command": [
+      "search",
+      "What are the installation steps for trailer hitch receiver on 2016 Kia Soul?",
+      "--datasets",
+      "howto100m__vvCaZE3g5c",
+      "--query-type",
+      "RAG_COMPLETION",
+      "--top-k",
+      "5",
+      "--output-format",
+      "pretty"
+    ]
+  },
+  {
+    "command": [
+      "search",
+      "What accessories and safety equipment are compatible with 1.25 inch receiver tube hitch?",
+      "--datasets",
+      "howto100m__vvCaZE3g5c",
+      "--query-type",
+      "GRAPH_COMPLETION",
+      "--top-k",
+      "5",
+      "--output-format",
+      "pretty"
+    ]
+  },
+  {
+    "command": [
+      "search",
+      "What are the weight ratings and towing capacity specifications for trailer hitch?",
+      "--datasets",
+      "howto100m__vvCaZE3g5c",
+      "--query-type",
+      "CHUNKS",
+      "--top-k",
+      "5",
+      "--output-format",
+      "pretty"
+    ]
+  }
+]

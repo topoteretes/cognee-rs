@@ -1,0 +1,57 @@
+[package]
+name = "cognee-llm"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = []
+# Record/replay cassette-based mock LLM support.
+mock = ["dep:sha2"]
+
+[dependencies]
+# Async runtime
+tokio.workspace = true
+async-trait.workspace = true
+
+# Serialization
+serde.workspace = true
+serde_json.workspace = true
+
+# JSON Schema generation
+schemars.workspace = true
+
+# Base64 encoding (for vision API image data URIs)
+base64.workspace = true
+
+# Error handling
+thiserror.workspace = true
+
+# HTTP client (for API-based implementations)
+reqwest = { workspace = true, features = ["multipart"] }
+
+tracing.workspace = true
+
+# Shared tracing-key constants
+cognee-utils = { path = "../utils", version = "0.1.0" }
+
+# Content hashing (cassette mock, feature-gated)
+sha2 = { workspace = true, optional = true }
+
+[dev-dependencies]
+cognee-test-utils = { path = "../test-utils" }
+dotenv.workspace = true
+httpmock = "0.8"
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

@@ -1,0 +1,600 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+concurrency:
+  group: ci-${{ github.ref }}-${{ github.sha }}
+  cancel-in-progress: true
+
+env:
+  # Applied to all jobs so the shared rust-cache has consistent rustc
+  # fingerprints. Keeping this workflow-wide prevents one job restoring
+  # a cache built with a different debug level and triggering a mass
+  # rebuild that blows out the runner disk.
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  # Incremental state in target/incremental/ is useless on CI (each run
+  # starts from a fresh checkout) and wastes 2-5 GB of runner disk.
+  CARGO_INCREMENTAL: "0"
+  # Redirect the ort-sys ONNX Runtime binary download into target/ so
+  # Swatinem/rust-cache picks it up. Without this the binary lands in
+  # ~/.cache/ort.pyke.io which Swatinem does NOT cache, causing a link
+  # error on any job that gets a cache hit for target/ but a fresh runner
+  # (the cached build script output points to the absent ~/.cache path).
+  ORT_CACHE_DIR: ${{ github.workspace }}/target/ort-cache
+  # ccache keys on the compiler binary by mtime by default; runner-image
+  # updates touch /usr/bin/cc+gcc mtimes and would silently invalidate the
+  # whole cache. Hash the compiler content instead.
+  CCACHE_COMPILERCHECK: content
+
+jobs:
+  # ── Stage 1: Quick lints (fast fail) ──────────────────────────────────
+  lint:
+    name: Lint (fmt + check + clippy)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install mold linker
+        uses: rui314/setup-mold@v1
+        with:
+          make-default: true
+
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          # large-packages removes ^llvm-.* which takes out libclang; android-litert
+          # bindgen needs libclang, so keep it.
+          large-packages: false
+          swap-storage: false
+          docker-images: true
+
+      # ccache for lbug's bundled Ladybug C++ build (~1000 compiler calls).
+      # scripts/ccache-launcher.sh (wired via .cargo/config.toml [env]) picks
+      # ccache up automatically once this action puts it on PATH. Cargo
+      # relocates lbug's OUT_DIR whenever its build-dep closure (cc, cmake,
+      # cxx-build, …) shifts in a fresh resolution — no lockfile is committed —
+      # which otherwise forces a from-scratch C++ rebuild in every job at
+      # once. See docs/build/lbug-rebuilds.md.
+      # Only this job saves the cache: it is the root of the job DAG and
+      # compiles the same objects the downstream jobs need (ccache keys on
+      # compiler+flags+source content, not on cargo's unit hash, so even the
+      # capi/js workspaces' independent resolutions hit the same entries).
+      # Downstream jobs restore-only to avoid pushing six near-identical
+      # caches per run into the 10 GB repo cache quota.
+      - name: ccache (lbug bundled C++)
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: lbug-cxx
+          max-size: 1G
+
+      # Lint has its own Swatinem key (workspace-lint-v6) separate from the
+      # test job (workspace-test-v6). The lint job runs only `cargo check` /
+      # `cargo clippy`, which produce .rmeta but NOT .rlib files. Sharing a
+      # key with the test job would cause the test job to inherit a cache full
+      # of .rmeta stubs and have to rebuild everything from scratch on every
+      # run — including re-running the ort-sys build script that fetches the
+      # ONNX Runtime static library.
+      - name: Cache cargo/target (lint)
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: workspace-lint-v6
+
+      # ort-sys downloads the ONNX Runtime static library to ORT_CACHE_DIR
+      # (target/ort-cache) during its build script. We cache it separately so
+      # the first cold build of any job doesn't need to re-download it.
+      # Key uses "cpu" to distinguish from a potential CUDA-enabled build.
+      - name: Cache ORT binary
+        uses: actions/cache@v4
+        with:
+          path: target/ort-cache
+          key: ort-v2.0.0-rc.12-cpu-linux-x86_64
+
+      - name: rustfmt (check)
+        run: cargo fmt --all -- --check
+
+      - name: Compilation check
+        run: cargo check --all-targets
+
+      # Use default features instead of --all-features.
+      # --all-features activates ort-cuda / ort-tensorrt, which causes ort-sys
+      # to download a separate ~100 MB CUDA-enabled ONNX Runtime static library
+      # to a different hash path in target/ort-cache. That CUDA binary is never
+      # used in CI (no GPU), but it bloats the cache and can produce a stale
+      # rustc-link-search path that breaks the link step in the test job.
+      # The former `--features android-litert,server` invocation was dropped
+      # in T16: the `android-litert` LiteRT adapter moved to closed in T4 and
+      # the `server` feature moved with the cloud commands in T15f, so OSS
+      # no longer defines either feature.
+      - name: clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      # Telemetry feature is OFF by default per design decision 1, so the
+      # default `cargo check --all-targets` above only covers the noop arm.
+      # This step exercises the OTEL-on code path (init_telemetry, OTLP
+      # exporter, tracing-opentelemetry bridge) at compile time.
+      - name: Compilation check (telemetry feature)
+        env:
+          CARGO_TARGET_DIR: target/telemetry
+        run: cargo check --all-targets --features telemetry
+
+      # Mirror of the above for clippy. Catches cfg-gated lints that the
+      # noop-arm clippy run cannot see. We pass the precise (default +
+      # telemetry) combo a downstream user would enable via
+      # `cargo build --features telemetry`.
+      - name: clippy (telemetry feature)
+        env:
+          CARGO_TARGET_DIR: target/telemetry
+        run: cargo clippy --all-targets --features telemetry -- -D warnings
+
+      # Canary for cfg(not(feature = "telemetry")) drift: ensures the noop
+      # path in cognee-observability compiles cleanly even if `default`
+      # ever grows a transitive dep that accidentally enables telemetry.
+      # Scoped to `-p cognee-lib` to keep the build small (no rebuild of
+      # the full workspace's binaries).
+      - name: Compilation check (no default features)
+        env:
+          CARGO_TARGET_DIR: target/no-default
+        run: cargo check -p cognee-lib --no-default-features
+
+      - name: License presence (every published crate)
+        run: |
+          cargo metadata --no-deps --format-version 1 \
+          | python3 -c 'import sys,json;\
+            p=json.load(sys.stdin)["packages"];\
+            bad=[x["name"] for x in p if not x.get("license") and not x.get("license_file")];\
+            print("missing license:",bad); sys.exit(1 if bad else 0)'
+
+  # ── MSRV floor: build against the declared rust-version (T2.3) ─────────
+  # rust-toolchain.toml pins the toolchain repo-wide (it takes precedence over
+  # @stable), so every lane already builds on the floor; this lane additionally
+  # installs 1.91.0 explicitly so a newer-than-MSRV API is caught before release
+  # even if the pin moves.
+  # Note: 1.89 is the real floor on x86_64 — the embedded qdrant `quantization`
+  # crate uses AVX-512 target features/intrinsics (avx512vl, avx512vpopcntdq,
+  # stdarch_x86_avx512) stabilized in Rust 1.89. (home@0.5.12 / icu_collections
+  # already require 1.88; qdrant raises it to 1.89.) Edition 2024 + resolver 3
+  # would allow 1.85 in principle. The aarch64 build never compiles the AVX-512
+  # path, so this only manifests on x86_64.
+  msrv:
+    name: MSRV (1.91)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust 1.89
+        uses: dtolnay/rust-toolchain@1.91.0
+
+      - name: Install mold linker
+        uses: rui314/setup-mold@v1
+        with:
+          make-default: true
+
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: false
+          swap-storage: false
+          docker-images: true
+
+      - name: ccache (lbug bundled C++, restore-only)
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: lbug-cxx
+          max-size: 1G
+          save: false
+
+      - name: Cache cargo/target (msrv)
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: workspace-msrv-v1
+          cache-on-failure: true
+
+      - name: Cache ORT binary
+        uses: actions/cache@v4
+        with:
+          path: target/ort-cache
+          key: ort-v2.0.0-rc.12-cpu-linux-x86_64
+
+      - name: Check (MSRV)
+        run: cargo +1.91.0 check --all-targets
+
+  # ── Stage 2: Build and run tests (depends on lint) ────────────────────
+  test:
+    name: Test (stable)
+    needs: lint
+    runs-on: ubuntu-latest
+
+    env:
+      OPENAI_URL: https://api.openai.com/v1
+      OPENAI_TOKEN: ${{ secrets.OPENAI_KEY }}
+      OPENAI_MODEL: gpt-4o-mini
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install mold linker
+        uses: rui314/setup-mold@v1
+        with:
+          make-default: true
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          swap-storage: true
+          docker-images: true
+
+      # Restore-only: the lint job saves the shared lbug C++ ccache (see the
+      # comment there).
+      - name: ccache (lbug bundled C++, restore-only)
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: lbug-cxx
+          max-size: 1G
+          save: false
+
+      # The test job has its own Swatinem key (workspace-test-v6) separate from
+      # lint (workspace-lint-v6). The test job runs `cargo nextest` which
+      # compiles everything to .rlib for linking. On the first run this is a
+      # cold build (~15 min), but workspace-test-v6 is then populated with
+      # .rlib files and subsequent runs are fast. cache-on-failure=true ensures
+      # even a first-run compile failure seeds the cache so the rerun is warm.
+      - name: Cache cargo/target (test)
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: workspace-test-v6
+          cache-on-failure: true
+
+      - name: Cache ORT binary
+        uses: actions/cache@v4
+        with:
+          path: target/ort-cache
+          key: ort-v2.0.0-rc.12-cpu-linux-x86_64
+
+      - name: Show toolchain
+        run: |
+          rustc --version
+          cargo --version
+
+      # Verify that the ORT binary was correctly restored before compilation.
+      # This step is intentionally non-blocking (|| true) — it only prints
+      # diagnostics so CI logs show exactly what is (or isn't) in the cache.
+      - name: Verify ORT binary cache
+        run: |
+          echo "=== ORT_CACHE_DIR: ${ORT_CACHE_DIR} ==="
+          if [ -d "${ORT_CACHE_DIR}/dfbin" ]; then
+            find "${ORT_CACHE_DIR}/dfbin" -type f | sort
+            echo "=== sizes ==="
+            du -sh "${ORT_CACHE_DIR}/dfbin"/*/*/ 2>/dev/null || true
+          else
+            echo "(dfbin directory not found — ort-sys will download on first build)"
+          fi
+
+      - name: Test
+        run: bash scripts/run_tests_with_openai.sh
+
+      # Telemetry-feature test lane. The integration test from task 01-10
+      # spawns an in-process tonic gRPC server on 127.0.0.1:0; no external
+      # OTLP collector is needed. Covers both the OTEL crate
+      # (cognee-observability) and the product-analytics crate
+      # (cognee-telemetry, gap 02). TELEMETRY_DISABLED=1 is set globally
+      # for belt-and-braces network isolation: the mockito-driven
+      # integration tests (byte_parity, dispatch_with_mockito) explicitly
+      # opt back in via COGNEE_TELEMETRY_INTEGRATION_TEST and inject the
+      # mockito URL, while every other code path stays disabled so no
+      # accidental egress to the live test.prometh.ai proxy can occur.
+      - name: Test (telemetry feature, observability + telemetry crates)
+        env:
+          CARGO_TARGET_DIR: target/telemetry
+          TELEMETRY_DISABLED: "1"
+        run: |
+          cargo test -p cognee-observability --features telemetry -- --nocapture
+          cargo test -p cognee-telemetry --features telemetry -- --nocapture
+
+      # Noop-fallback test lane for the cognee-telemetry crate. Exercises
+      # crates/telemetry/tests/noop_fallback.rs (task 02-08) so we catch
+      # cfg(not(feature = "telemetry")) drift at *runtime*, not just at
+      # compile time. Reuses target/no-default for cache locality with the
+      # sibling lint-job step.
+      - name: Test (no default features, telemetry crate noop fallback)
+        env:
+          CARGO_TARGET_DIR: target/no-default
+        run: cargo test -p cognee-telemetry --no-default-features -- --nocapture
+
+      # RUSTDOCFLAGS=-W missing_docs surfaces undocumented public items as
+      # rustdoc warnings (task 23) without failing the `clippy -- -D warnings`
+      # gate. The lint is scoped to the doc job (not a crate `#![warn]`
+      # attribute) precisely because a crate-level `#![warn(missing_docs)]`
+      # would be promoted to an error by `-D warnings` and break the build,
+      # whereas `cargo doc` runs without `-D warnings` and only warns.
+      - name: Build docs
+        env:
+          # `--cfg docsrs` activates the `#[cfg(docsrs)]` doc-attribute paths
+          # added in T10b (e.g. `#[doc(cfg(feature = "..."))]` feature labels)
+          # so CI exercises the same rustdoc rendering crates.io will use.
+          RUSTDOCFLAGS: -W missing_docs --cfg docsrs
+        run: cargo doc --no-deps
+
+      # Optional: rustdoc with the telemetry feature on, to catch
+      # cfg(feature = "telemetry") doc-link breakage from task 01-11.
+      - name: Build docs (telemetry feature)
+        env:
+          CARGO_TARGET_DIR: target/telemetry
+          RUSTDOCFLAGS: -W missing_docs --cfg docsrs
+        run: cargo doc --no-deps --features telemetry
+
+  # ── Stage 2.5: Postgres-only span tests (depends on lint, runs in parallel with `test`) ──
+  # The pgvector adapter span tests in
+  # `crates/vector/tests/pgvector_span_instrumentation.rs` skip silently
+  # when `cognee_test_utils::pg_test_url()` returns `None`, so the host
+  # `test` lane's `cargo test --workspace` invocation never actually
+  # exercises them. This dedicated lane spins up a Postgres service
+  # container with the pgvector extension so the spans land on a real
+  # backend in CI. Added in gap 04 (task 04-11) once
+  # `PgvectorAdapter` started emitting `cognee.db.vector.*` spans with
+  # `cognee.db.system="pgvector"`.
+  #
+  # `pg_graph_adapter` is intentionally not exercised here — per-method
+  # span instrumentation was deferred in 04-08 pending a fan-in
+  # refactor (the public `query` is a stub returning
+  # `QueryError("not supported")`).
+  pgvector-spans:
+    name: Test (Postgres span lane)
+    needs: lint
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: cognee_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DB_PROVIDER: postgres
+      DB_HOST: localhost
+      DB_PORT: "5432"
+      DB_NAME: cognee_test
+      DB_USERNAME: postgres
+      DB_PASSWORD: postgres
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install mold linker
+        uses: rui314/setup-mold@v1
+        with:
+          make-default: true
+
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - name: ccache (lbug bundled C++, restore-only)
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: lbug-cxx
+          max-size: 1G
+          save: false
+
+      - name: Cache cargo/target (test)
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: workspace-test-v6
+          cache-on-failure: true
+
+      - name: Cache ORT binary
+        uses: actions/cache@v4
+        with:
+          path: target/ort-cache
+          key: ort-v2.0.0-rc.12-cpu-linux-x86_64
+
+      - name: Run pgvector span instrumentation tests
+        run: cargo test -p cognee-vector --test pgvector_span_instrumentation -- --nocapture
+
+  # ── Stage 3: Language binding checks (depends on test, parallel with each other) ──
+  capi-check:
+    name: C API Check
+    needs: test
+    runs-on: ubuntu-latest
+
+    env:
+      OPENAI_URL: https://api.openai.com/v1
+      OPENAI_TOKEN: ${{ secrets.OPENAI_KEY }}
+      OPENAI_MODEL: gpt-4o-mini
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: rui314/setup-mold@v1
+        with:
+          make-default: true
+      - run: sudo apt-get update && sudo apt-get install -y cmake protobuf-compiler
+      # The capi job runs three CMake builds (default, slim, panic) plus cargo
+      # check × 2 on a runner that starts with ~25 GB free. Freeing the same set
+      # of unused system packages as the other jobs gives back ~10 GB of headroom
+      # and prevents the "Disk full?" linker crash seen when the runner fills up.
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: false
+          swap-storage: false
+          docker-images: true
+      # Restore-only: the lint job saves the shared lbug C++ ccache. The capi
+      # workspace resolves its own dep graph, but ccache keys on
+      # compiler+flags+source content, so it hits the same entries.
+      - name: ccache (lbug bundled C++, restore-only)
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: lbug-cxx
+          max-size: 1G
+          save: false
+      # The capi workspace has its own target dir (capi/target/) after workspace
+      # extraction (D10). Cache it separately from the root workspace so the
+      # capi cold-build warm-up seeds subsequent runs.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: capi-check-v1
+          workspaces: |
+            . -> target
+            capi -> target
+          cache-on-failure: true
+      - uses: actions/cache@v4
+        with:
+          path: capi/target/ort-cache
+          key: ort-v2.0.0-rc.12-cpu-linux-x86_64
+      # ORT_CACHE_DIR is read by ort-sys build script; point it at capi/target/
+      # so the capi workspace build uses the same cached binary.
+      - name: Run C API check (default + slim build + CMake examples)
+        env:
+          ORT_CACHE_DIR: ${{ github.workspace }}/capi/target/ort-cache
+        run: bash capi/scripts/check.sh
+
+  python-check:
+    name: Python Bindings Check
+    needs: test
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: rui314/setup-mold@v1
+        with:
+          make-default: true
+      - run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      # The release maturin build of the PyO3 extension compiles the whole
+      # workspace (incl. lbug) and fills the runner's ~25 GB. Free the same
+      # unused system packages as the other jobs (~10 GB headroom) to avoid the
+      # "No space left on device" failure when building lbug's rlib.
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: false
+          swap-storage: false
+          docker-images: true
+      # Restore-only: the lint job saves the shared lbug C++ ccache.
+      - name: ccache (lbug bundled C++, restore-only)
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: lbug-cxx
+          max-size: 1G
+          save: false
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: workspace-test-v6
+          cache-on-failure: true
+      - uses: actions/cache@v4
+        with:
+          path: target/ort-cache
+          key: ort-v2.0.0-rc.12-cpu-linux-x86_64
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Create venv and install dependencies
+        run: |
+          python -m venv .venv
+          source .venv/bin/activate
+          pip install maturin
+          cd python && pip install -e ".[test]"
+      - name: Run Python check
+        run: |
+          source .venv/bin/activate
+          bash python/scripts/check.sh
+
+  ts-check:
+    name: JS/TS Bindings Check
+    needs: test
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: rui314/setup-mold@v1
+        with:
+          make-default: true
+      # cmake is required by the `lbug` crate (pulled in via cognee-lib's
+      # `ladybug` feature), whose build.rs compiles bundled C++ with CMake.
+      - run: sudo apt-get update && sudo apt-get install -y cmake protobuf-compiler
+      # Restore-only: the lint job saves the shared lbug C++ ccache. The
+      # ts/cognee-ts-neon workspace resolves its own dep graph, but ccache keys
+      # on compiler+flags+source content, so it hits the same entries.
+      - name: ccache (lbug bundled C++, restore-only)
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: lbug-cxx
+          max-size: 1G
+          save: false
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: workspace-test-v6
+          workspaces: |
+            . -> target
+            ts/cognee-ts-neon -> target
+          cache-on-failure: true
+      - uses: actions/cache@v4
+        with:
+          path: target/ort-cache
+          key: ort-v2.0.0-rc.12-cpu-linux-x86_64
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: "ts/package.json"
+      - run: bash ts/scripts/check.sh

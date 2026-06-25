@@ -1,0 +1,524 @@
+//! Graph database trait interface.
+//!
+//! Defines the complete async API for graph database operations.
+
+use async_trait::async_trait;
+use serde::Serialize;
+use serde_json::Value;
+use std::borrow::Cow;
+use std::collections::{HashMap, HashSet};
+
+use crate::{EdgeData, GraphDBResult, GraphNode, NodeData};
+
+/// Composite key uniquely identifying an edge in the graph:
+/// `(source_id, target_id, relationship_name)`.
+pub type EdgeKey = (String, String, String);
+
+/// Graph database interface trait.
+///
+/// This trait defines the complete set of operations for graph database interaction,
+/// providing a consistent API for any graph database backend.
+///
+/// # Methods
+///
+/// ## Core Operations
+/// - `initialize()` - Set up database schema
+/// - `is_empty()` - Check if database is empty
+/// - `query()` - Execute raw query
+/// - `delete_graph()` - Remove all data
+///
+/// ## Node Operations
+/// - `add_node()` - Add single node
+/// - `add_nodes()` - Add multiple nodes
+/// - `delete_node()` - Delete single node
+/// - `delete_nodes()` - Delete multiple nodes
+/// - `get_node()` - Get single node
+/// - `get_nodes()` - Get multiple nodes
+/// - `has_node()` - Check node existence
+///
+/// ## Edge Operations
+/// - `add_edge()` - Add single edge
+/// - `add_edges()` - Add multiple edges
+/// - `has_edge()` - Check edge existence
+/// - `has_edges()` - Check multiple edges existence
+/// - `get_edges()` - Get all edges for a node
+///
+/// ## Graph Queries
+/// - `get_neighbors()` - Get neighboring nodes
+/// - `get_connections()` - Get all connections (nodes + edges)
+/// - `get_graph_data()` - Get all nodes and edges
+/// - `get_graph_metrics()` - Get graph statistics
+/// - `get_filtered_graph_data()` - Get filtered subgraph
+/// - `get_nodeset_subgraph()` - Get subgraph for specific nodes
+#[async_trait]
+pub trait GraphDBTrait: Send + Sync {
+    /// Initialize the database schema.
+    ///
+    /// Creates necessary tables, indexes, and constraints.
+    ///
+    async fn initialize(&self) -> GraphDBResult<()>;
+
+    /// Check if the database is empty (no nodes).
+    ///
+    async fn is_empty(&self) -> GraphDBResult<bool>;
+
+    /// Execute a raw database query.
+    ///
+    /// # Arguments
+    /// * `query` - Query string (Cypher-like for Ladybug)
+    /// * `params` - Query parameters
+    ///
+    async fn query(
+        &self,
+        query: &str,
+        params: Option<HashMap<Cow<'static, str>, serde_json::Value>>,
+    ) -> GraphDBResult<Vec<Vec<serde_json::Value>>>;
+
+    /// Delete the entire graph (all nodes and edges).
+    ///
+    async fn delete_graph(&self) -> GraphDBResult<()>;
+
+    /// Check if a node exists by ID.
+    ///
+    async fn has_node(&self, node_id: &str) -> GraphDBResult<bool>;
+
+    /// Add a single node (type-erased). Takes a pre-serialized JSON value.
+    /// Prefer [`GraphDBTraitExt::add_node`] for typed access.
+    async fn add_node_raw(&self, node: Value) -> GraphDBResult<()>;
+
+    /// Add multiple nodes (type-erased). Takes pre-serialized JSON values.
+    /// Prefer [`GraphDBTraitExt::add_nodes`] for typed access.
+    async fn add_nodes_raw(&self, nodes: Vec<Value>) -> GraphDBResult<()>;
+
+    /// Delete a node by ID.
+    ///
+    async fn delete_node(&self, node_id: &str) -> GraphDBResult<()>;
+
+    /// Delete multiple nodes by IDs.
+    ///
+    async fn delete_nodes(&self, node_ids: &[String]) -> GraphDBResult<()>;
+
+    /// Get a single node by ID.
+    ///
+    /// Returns None if node doesn't exist.
+    ///
+    async fn get_node(&self, node_id: &str) -> GraphDBResult<Option<NodeData>>;
+
+    /// Get multiple nodes by IDs.
+    ///
+    async fn get_nodes(&self, node_ids: &[String]) -> GraphDBResult<Vec<NodeData>>;
+
+    /// Check if an edge exists between two nodes.
+    ///
+    /// # Arguments
+    /// * `source_id` - Source node ID
+    /// * `target_id` - Target node ID
+    /// * `relationship_name` - Edge label/relationship type
+    ///
+    async fn has_edge(
+        &self,
+        source_id: &str,
+        target_id: &str,
+        relationship_name: &str,
+    ) -> GraphDBResult<bool>;
+
+    /// Check which edges exist from a list.
+    ///
+    /// Returns only edges that exist in the database.
+    ///
+    async fn has_edges(&self, edges: &[EdgeData]) -> GraphDBResult<Vec<EdgeData>>;
+
+    /// Add a single edge between two nodes.
+    ///
+    /// # Arguments
+    /// * `source_id` - Source node ID
+    /// * `target_id` - Target node ID
+    /// * `relationship_name` - Edge label/relationship type
+    /// * `properties` - Optional edge properties
+    ///
+    async fn add_edge(
+        &self,
+        source_id: &str,
+        target_id: &str,
+        relationship_name: &str,
+        properties: Option<HashMap<Cow<'static, str>, serde_json::Value>>,
+    ) -> GraphDBResult<()>;
+
+    /// Add multiple edges in a batch operation.
+    ///
+    /// # Arguments
+    /// * `edges` - Vector of EdgeData tuples
+    ///
+    async fn add_edges(&self, edges: &[EdgeData]) -> GraphDBResult<()>;
+
+    /// Get all edges connected to a node.
+    ///
+    /// Returns edges in format: (source_id, target_id, relationship_name, properties)
+    ///
+    async fn get_edges(&self, node_id: &str) -> GraphDBResult<Vec<EdgeData>>;
+
+    /// Get all neighboring nodes (directly connected).
+    ///
+    async fn get_neighbors(&self, node_id: &str) -> GraphDBResult<Vec<NodeData>>;
+
+    /// Get all connections (nodes + edges) for a node.
+    ///
+    /// Returns: Vec<(source_node, edge_properties, target_node)>
+    ///
+    async fn get_connections(
+        &self,
+        node_id: &str,
+    ) -> GraphDBResult<
+        Vec<(
+            NodeData,
+            HashMap<Cow<'static, str>, serde_json::Value>,
+            NodeData,
+        )>,
+    >;
+
+    /// Get all nodes and edges in the graph.
+    ///
+    /// Returns: (nodes, edges) where:
+    /// - nodes: Vec<(node_id, properties)>
+    /// - edges: Vec<(source_id, target_id, relationship_name, properties)>
+    ///
+    async fn get_graph_data(&self) -> GraphDBResult<(Vec<GraphNode>, Vec<EdgeData>)>;
+
+    /// Get graph metrics and statistics.
+    ///
+    /// Returns metrics like node count, edge count, density, etc.
+    ///
+    async fn get_graph_metrics(
+        &self,
+        include_optional: bool,
+    ) -> GraphDBResult<HashMap<Cow<'static, str>, serde_json::Value>>;
+
+    /// Get a filtered subgraph based on attribute filters.
+    ///
+    /// # Arguments
+    /// * `attribute_filters` - Filters as key-value pairs
+    ///
+    async fn get_filtered_graph_data(
+        &self,
+        attribute_filters: &HashMap<Cow<'static, str>, Vec<serde_json::Value>>,
+    ) -> GraphDBResult<(Vec<GraphNode>, Vec<EdgeData>)>;
+
+    /// Get subgraph for a specific set of nodes.
+    ///
+    /// # Arguments
+    /// * `node_type` - Type name of nodes to retrieve
+    /// * `node_names` - Names of specific nodes
+    /// * `node_name_filter_operator` - "OR" to include neighbors of ANY named node,
+    ///   "AND" to include only neighbors connected to ALL named nodes
+    ///
+    /// Returns nodes and edges connecting them.
+    ///
+    async fn get_nodeset_subgraph(
+        &self,
+        node_type: &str,
+        node_names: &[String],
+        node_name_filter_operator: &str,
+    ) -> GraphDBResult<(Vec<GraphNode>, Vec<EdgeData>)>;
+
+    /// Find nodes of the given type that have exactly one edge (any direction).
+    ///
+    /// Used by hard-delete mode to locate orphaned Entity/EntityType nodes that
+    /// are no longer meaningfully connected after a soft deletion.
+    ///
+    /// Default implementation fetches the full graph and computes degree in
+    /// memory (O(N+E)).  Backends may override with an efficient Cypher/SQL query.
+    async fn get_degree_one_nodes(&self, node_type: &str) -> GraphDBResult<Vec<crate::GraphNode>> {
+        let (nodes, edges) = self.get_graph_data().await?;
+
+        // Build a degree map from edges (count both endpoints)
+        let mut degree: HashMap<String, usize> = HashMap::new();
+        for (src, tgt, _, _) in &edges {
+            *degree.entry(src.clone()).or_default() += 1;
+            *degree.entry(tgt.clone()).or_default() += 1;
+        }
+
+        Ok(nodes
+            .into_iter()
+            .filter(|(id, props)| {
+                let type_matches = props
+                    .get("type")
+                    .and_then(|v| v.as_str())
+                    .is_some_and(|t| t == node_type);
+                let deg = degree.get(id).copied().unwrap_or(0);
+                type_matches && deg == 1
+            })
+            .collect())
+    }
+
+    /// Return the set of all unique relationship names from edges in the graph.
+    ///
+    /// Used by orphan cleanup to determine which EdgeType nodes still have
+    /// corresponding edges. Default implementation fetches the full graph via
+    /// `get_graph_data()` and collects distinct relationship names.
+    /// Backends may override with a more efficient query.
+    async fn get_all_relationship_names(&self) -> GraphDBResult<HashSet<String>> {
+        let (_, edges) = self.get_graph_data().await?;
+        Ok(edges.into_iter().map(|(_, _, rel, _)| rel).collect())
+    }
+
+    /// Find EdgeType nodes in the graph that have zero edges (degree 0).
+    ///
+    /// Used by hard-delete orphan sweep to find EdgeType nodes whose
+    /// relationship name no longer appears in any edge.
+    ///
+    /// Default implementation fetches the full graph and filters in memory.
+    /// Backends may override with a more efficient query.
+    async fn get_zero_degree_edge_type_nodes(&self) -> GraphDBResult<Vec<crate::GraphNode>> {
+        let (nodes, edges) = self.get_graph_data().await?;
+
+        // Collect all relationship names still in use
+        let active_rel_names: HashSet<&str> =
+            edges.iter().map(|(_, _, rel, _)| rel.as_str()).collect();
+
+        // Build a degree map from edges
+        let mut degree: HashMap<String, usize> = HashMap::new();
+        for (src, tgt, _, _) in &edges {
+            *degree.entry(src.clone()).or_default() += 1;
+            *degree.entry(tgt.clone()).or_default() += 1;
+        }
+
+        Ok(nodes
+            .into_iter()
+            .filter(|(id, props)| {
+                let is_edge_type = props
+                    .get("type")
+                    .and_then(|v| v.as_str())
+                    .is_some_and(|t| t == "EdgeType");
+                if !is_edge_type {
+                    return false;
+                }
+                // Check degree is 0 (no edges at all)
+                let deg = degree.get(id).copied().unwrap_or(0);
+                if deg > 0 {
+                    return false;
+                }
+                // Also check that the relationship_name is not in any edge
+                let rel_name = props
+                    .get("relationship_name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                !active_rel_names.contains(rel_name)
+            })
+            .collect())
+    }
+
+    /// Update a single property on a node.
+    ///
+    /// # Arguments
+    /// * `node_id` - The node identifier
+    /// * `key` - Property name
+    /// * `value` - New property value
+    ///
+    /// Default implementation fetches the node and its edges, modifies the
+    /// property, removes the old node (which may cascade-delete edges), re-adds
+    /// the node, and restores the edges. Backends should override with an
+    /// in-place `SET` operation for better performance and atomicity.
+    async fn update_node_property(
+        &self,
+        node_id: &str,
+        key: &str,
+        value: serde_json::Value,
+    ) -> GraphDBResult<()> {
+        let node = self
+            .get_node(node_id)
+            .await?
+            .ok_or_else(|| crate::GraphDBError::NodeError(format!("Node not found: {node_id}")))?;
+
+        // Save edges before deleting the node, since delete_node may cascade.
+        let edges = self.get_edges(node_id).await.unwrap_or_default();
+
+        let mut props = serde_json::Map::new();
+        for (k, v) in node {
+            props.insert(k.into_owned(), v);
+        }
+        props.insert(key.to_string(), value);
+
+        self.delete_node(node_id).await?;
+        self.add_node_raw(Value::Object(props)).await?;
+
+        // Restore edges that were removed by the cascade delete.
+        if !edges.is_empty() {
+            self.add_edges(&edges).await?;
+        }
+
+        Ok(())
+    }
+
+    /// Update a single property on an edge.
+    ///
+    /// # Arguments
+    /// * `source_id` - Source node ID
+    /// * `target_id` - Target node ID
+    /// * `relationship_name` - Edge label/relationship type
+    /// * `key` - Property name
+    /// * `value` - New property value
+    ///
+    /// Default implementation is a no-op that logs a warning. Backends that
+    /// support in-place edge property updates should override this method.
+    async fn update_edge_property(
+        &self,
+        source_id: &str,
+        target_id: &str,
+        relationship_name: &str,
+        key: &str,
+        value: serde_json::Value,
+    ) -> GraphDBResult<()> {
+        let _ = (source_id, target_id, relationship_name, key, value);
+        tracing::warn!(
+            "update_edge_property not implemented for this backend; \
+             edge {source_id} -> {target_id} ({relationship_name}) property {key} not updated"
+        );
+        Ok(())
+    }
+
+    /// Batch-fetch `feedback_weight` values for the given node IDs.
+    ///
+    /// Returns only IDs that exist and have a numeric `feedback_weight`
+    /// property. IDs missing from the graph or missing the property are
+    /// omitted from the result map.
+    ///
+    /// Default implementation calls [`get_node`] per id; backends should
+    /// override with a single batch query for efficiency.
+    async fn get_node_feedback_weights(
+        &self,
+        node_ids: &[String],
+    ) -> GraphDBResult<HashMap<String, f64>> {
+        let mut out = HashMap::with_capacity(node_ids.len());
+        for id in node_ids {
+            if let Some(node) = self.get_node(id).await?
+                && let Some(v) = node.get("feedback_weight").and_then(|v| v.as_f64())
+            {
+                out.insert(id.clone(), v);
+            }
+        }
+        Ok(out)
+    }
+
+    /// Batch-write `feedback_weight` values on the given nodes.
+    ///
+    /// Returns a map `node_id -> success` indicating whether each update
+    /// succeeded. Default implementation delegates to `update_node_property`
+    /// for each id; backends should override with a single batch query.
+    async fn set_node_feedback_weights(
+        &self,
+        updates: &HashMap<String, f64>,
+    ) -> GraphDBResult<HashMap<String, bool>> {
+        let mut out = HashMap::with_capacity(updates.len());
+        for (id, w) in updates {
+            let ok = self
+                .update_node_property(id, "feedback_weight", serde_json::json!(w))
+                .await
+                .is_ok();
+            out.insert(id.clone(), ok);
+        }
+        Ok(out)
+    }
+
+    /// Batch-fetch `feedback_weight` values for the given edges.
+    ///
+    /// Default implementation returns an empty map and logs a warning,
+    /// because the generic `GraphDBTrait` does not expose a per-edge
+    /// property read. Backends that support edge-property queries should
+    /// override this method.
+    async fn get_edge_feedback_weights(
+        &self,
+        edge_keys: &[EdgeKey],
+    ) -> GraphDBResult<HashMap<EdgeKey, f64>> {
+        if !edge_keys.is_empty() {
+            tracing::warn!(
+                "get_edge_feedback_weights not implemented for this backend; \
+                 returning empty map for {} edge(s)",
+                edge_keys.len()
+            );
+        }
+        Ok(HashMap::new())
+    }
+
+    /// Batch-write `feedback_weight` values on the given edges.
+    ///
+    /// Default implementation delegates to [`update_edge_property`] per
+    /// edge. Backends with no edge-update support will silently succeed
+    /// (because the default `update_edge_property` returns `Ok(())` with
+    /// a warning).
+    async fn set_edge_feedback_weights(
+        &self,
+        updates: &HashMap<EdgeKey, f64>,
+    ) -> GraphDBResult<HashMap<EdgeKey, bool>> {
+        let mut out = HashMap::with_capacity(updates.len());
+        for (key, w) in updates {
+            let ok = self
+                .update_edge_property(
+                    &key.0,
+                    &key.1,
+                    &key.2,
+                    "feedback_weight",
+                    serde_json::json!(w),
+                )
+                .await
+                .is_ok();
+            out.insert(key.clone(), ok);
+        }
+        Ok(out)
+    }
+
+    /// Retrieve a subgraph containing only the specified nodes and edges between them.
+    ///
+    /// Default implementation fetches the full graph and filters in memory.
+    /// Backends may override this with a more efficient query.
+    async fn get_id_filtered_graph_data(
+        &self,
+        node_ids: &[String],
+    ) -> GraphDBResult<(Vec<GraphNode>, Vec<EdgeData>)> {
+        if node_ids.is_empty() {
+            return Ok((vec![], vec![]));
+        }
+        let (all_nodes, all_edges) = self.get_graph_data().await?;
+        let id_set: std::collections::HashSet<&str> = node_ids.iter().map(String::as_str).collect();
+
+        let filtered_nodes: Vec<GraphNode> = all_nodes
+            .into_iter()
+            .filter(|(id, _)| id_set.contains(id.as_str()))
+            .collect();
+
+        let filtered_edges: Vec<EdgeData> = all_edges
+            .into_iter()
+            .filter(|(src, tgt, _, _)| {
+                id_set.contains(src.as_str()) && id_set.contains(tgt.as_str())
+            })
+            .collect();
+
+        Ok((filtered_nodes, filtered_edges))
+    }
+}
+
+/// Extension trait providing generic convenience methods on top of [`GraphDBTrait`].
+/// Auto-implemented for all types that implement `GraphDBTrait`.
+#[async_trait]
+pub trait GraphDBTraitExt: GraphDBTrait {
+    /// Add a single node to the graph.
+    async fn add_node<T: Serialize + Sync>(&self, node: &T) -> GraphDBResult<()> {
+        let value = serde_json::to_value(node).map_err(|e| {
+            crate::GraphDBError::QueryError(format!("Failed to serialize node: {e}"))
+        })?;
+        self.add_node_raw(value).await
+    }
+
+    /// Add multiple nodes in a batch operation.
+    async fn add_nodes<T: Serialize + Sync>(&self, nodes: &[&T]) -> GraphDBResult<()> {
+        let values: Vec<Value> = nodes
+            .iter()
+            .map(serde_json::to_value)
+            .collect::<Result<_, _>>()
+            .map_err(|e| {
+                crate::GraphDBError::QueryError(format!("Failed to serialize nodes: {e}"))
+            })?;
+        self.add_nodes_raw(values).await
+    }
+}
+
+impl<T: GraphDBTrait + ?Sized> GraphDBTraitExt for T {}

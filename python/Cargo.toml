@@ -1,0 +1,97 @@
+[package]
+name = "cognee-python"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+authors.workspace = true
+# Distributed as a maturin-built PyPI wheel, not a registry crate.
+publish = false
+
+[lints]
+workspace = true
+
+[lib]
+name = "cognee_py"
+crate-type = ["cdylib"]
+# This crate is a PyO3 extension module (`pyo3/extension-module`): it is built
+# as a cdylib whose Python symbols are resolved at runtime by the interpreter,
+# so libpython is intentionally not linked. A Rust test harness (`cargo test` /
+# `cargo nextest run --workspace`) would link a standalone binary and fail with
+# "undefined symbol: Py*". The crate's behaviour is covered by pytest via
+# `python/scripts/check.sh` (the `python-check` CI job), so disable the Rust
+# unit-test and doctest harnesses here. Sibling native crates (ts/cognee-ts-neon,
+# capi) sidestep this by not being workspace members; this crate is a member
+# (for `cargo check --all-targets` coverage), hence the explicit opt-out.
+test = false
+doctest = false
+
+[features]
+# Mirror cognee-ts-neon's default feature set (ts/cognee-ts-neon/Cargo.toml).
+default = [
+    "visualization",
+    # The closed Python cdylib (T15e — `cognee-py-cloud`) re-adds cloud via
+    # `cognee-bindings-cloud`; this OSS cdylib intentionally omits it.
+    "ladybug",
+    "onnx",
+    "hf-tokenizer",
+    "tiktoken",
+    "sqlite",
+    "testing",
+    # Product-analytics emission ON by default — Python-SDK parity. The
+    # cognee-lib `send_telemetry` call sites are otherwise compiled out
+    # because cognee-lib is pulled with `default-features = false`.
+    "telemetry",
+]
+# Compiles in the cognee-lib/search/session/core `send_telemetry` call
+# sites. Runtime emission is still gated by `is_disabled()`
+# (TELEMETRY_DISABLED / ENV / COGNEE_HOST_SDK) — see telemetry_analytics.rs.
+telemetry     = ["cognee-lib/telemetry"]
+visualization = ["cognee-lib/visualization", "cognee-bindings-common/visualization"]
+ladybug       = ["cognee-lib/ladybug",       "cognee-bindings-common/ladybug"]
+onnx          = ["cognee-lib/onnx",          "cognee-bindings-common/onnx"]
+hf-tokenizer  = ["cognee-lib/hf-tokenizer",  "cognee-bindings-common/hf-tokenizer"]
+tiktoken      = ["cognee-lib/tiktoken",      "cognee-bindings-common/tiktoken"]
+sqlite        = ["cognee-lib/sqlite",        "cognee-bindings-common/sqlite"]
+testing       = ["cognee-lib/testing",       "cognee-bindings-common/testing"]
+
+[dependencies]
+# Shared SDK facade (HandleState, CogneeServices, SdkError).
+cognee-bindings-common = { path = "../crates/bindings-common", default-features = false }
+# Full cognee SDK — same feature set as cognee-ts-neon.
+cognee-lib = { path = "../crates/lib", default-features = false }
+serde_json = { workspace = true }
+# bytes/bytearray → base64 in py_to_serde (wire::marshal_bytes expects base64).
+base64 = { workspace = true }
+
+cognee-core = { path = "../crates/core" }
+cognee-database = { path = "../crates/database", features = ["sqlite"] }
+cognee-graph = { path = "../crates/graph", features = ["testing"] }
+cognee-vector = { path = "../crates/vector", features = ["testing"] }
+cognee-logging = { path = "../crates/logging" }
+# Bridge Rust `tracing` events into Python `logging` (gap 07 decision 5).
+tracing            = { workspace = true }
+tracing-subscriber = { workspace = true }
+tracing-log        = "0.2"
+pyo3-log           = "0.12"
+log                = "0.4"
+
+# Optional opentelemetry / send_telemetry surfaces. Both have noop
+# bodies when the `telemetry` feature is off, so the binding can
+# still build under `--no-default-features` once feature wiring is
+# in place (out of scope for v1 — feature is on by default here per
+# gap 07 decision 3).
+cognee-observability = { path = "../crates/observability", features = ["telemetry"] }
+cognee-telemetry     = { path = "../crates/telemetry",     features = ["telemetry"] }
+pyo3 = { version = "0.23", features = ["extension-module", "multiple-pymethods"] }
+pyo3-async-runtimes = { version = "0.23", features = ["tokio-runtime"] }
+tokio = { workspace = true }
+futures = { workspace = true }
+uuid = { workspace = true }
+async-trait = { workspace = true }

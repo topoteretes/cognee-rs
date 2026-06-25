@@ -1,0 +1,276 @@
+# HTML extraction rules ported from Python's BeautifulSoupLoader._get_default_extraction_rules()
+# Source: cognee/infrastructure/loaders/external/beautiful_soup_loader.py, lines 69-151
+#
+# Each [[rule]] maps to one Python dict entry. Order matches Python dict insertion order
+# because rule evaluation order affects the final output.
+
+# Meta information
+
+[[rule]]
+name = "title"
+selector = "title"
+all = false
+join_with = " "
+
+[[rule]]
+name = "meta_description"
+selector = "meta[name='description']"
+attr = "content"
+all = false
+join_with = " "
+
+[[rule]]
+name = "meta_keywords"
+selector = "meta[name='keywords']"
+attr = "content"
+all = false
+join_with = " "
+
+# Open Graph meta tags
+
+[[rule]]
+name = "og_title"
+selector = "meta[property='og:title']"
+attr = "content"
+all = false
+join_with = " "
+
+[[rule]]
+name = "og_description"
+selector = "meta[property='og:description']"
+attr = "content"
+all = false
+join_with = " "
+
+# Main content areas (prioritized selectors)
+
+[[rule]]
+name = "article"
+selector = "article"
+all = true
+join_with = "\n\n"
+
+[[rule]]
+name = "main"
+selector = "main"
+all = true
+join_with = "\n\n"
+
+# Semantic content sections
+
+[[rule]]
+name = "headers_h1"
+selector = "h1"
+all = true
+join_with = "\n"
+
+[[rule]]
+name = "headers_h2"
+selector = "h2"
+all = true
+join_with = "\n"
+
+[[rule]]
+name = "headers_h3"
+selector = "h3"
+all = true
+join_with = "\n"
+
+[[rule]]
+name = "headers_h4"
+selector = "h4"
+all = true
+join_with = "\n"
+
+[[rule]]
+name = "headers_h5"
+selector = "h5"
+all = true
+join_with = "\n"
+
+[[rule]]
+name = "headers_h6"
+selector = "h6"
+all = true
+join_with = "\n"
+
+# Text content
+
+[[rule]]
+name = "paragraphs"
+selector = "p"
+all = true
+join_with = "\n\n"
+
+[[rule]]
+name = "blockquotes"
+selector = "blockquote"
+all = true
+join_with = "\n\n"
+
+[[rule]]
+name = "preformatted"
+selector = "pre"
+all = true
+join_with = "\n\n"
+
+# Lists
+
+[[rule]]
+name = "ordered_lists"
+selector = "ol"
+all = true
+join_with = "\n"
+
+[[rule]]
+name = "unordered_lists"
+selector = "ul"
+all = true
+join_with = "\n"
+
+[[rule]]
+name = "list_items"
+selector = "li"
+all = true
+join_with = "\n"
+
+[[rule]]
+name = "definition_lists"
+selector = "dl"
+all = true
+join_with = "\n"
+
+# Tables
+
+[[rule]]
+name = "tables"
+selector = "table"
+all = true
+join_with = "\n\n"
+
+[[rule]]
+name = "table_captions"
+selector = "caption"
+all = true
+join_with = "\n"
+
+# Code blocks
+
+[[rule]]
+name = "code_blocks"
+selector = "code"
+all = true
+join_with = "\n"
+
+# Figures and media descriptions
+
+[[rule]]
+name = "figures"
+selector = "figure"
+all = true
+join_with = "\n\n"
+
+[[rule]]
+name = "figcaptions"
+selector = "figcaption"
+all = true
+join_with = "\n"
+
+[[rule]]
+name = "image_alts"
+selector = "img"
+attr = "alt"
+all = true
+join_with = " "
+
+# Links (text content, not URLs to avoid clutter)
+
+[[rule]]
+name = "link_text"
+selector = "a"
+all = true
+join_with = " "
+
+# Emphasized text
+
+[[rule]]
+name = "strong"
+selector = "strong"
+all = true
+join_with = " "
+
+[[rule]]
+name = "emphasis"
+selector = "em"
+all = true
+join_with = " "
+
+[[rule]]
+name = "marked"
+selector = "mark"
+all = true
+join_with = " "
+
+# Time and data elements
+
+[[rule]]
+name = "time"
+selector = "time"
+all = true
+join_with = " "
+
+[[rule]]
+name = "data"
+selector = "data"
+all = true
+join_with = " "
+
+# Sections and semantic structure
+
+[[rule]]
+name = "sections"
+selector = "section"
+all = true
+join_with = "\n\n"
+
+[[rule]]
+name = "asides"
+selector = "aside"
+all = true
+join_with = "\n\n"
+
+[[rule]]
+name = "details"
+selector = "details"
+all = true
+join_with = "\n"
+
+[[rule]]
+name = "summary"
+selector = "summary"
+all = true
+join_with = "\n"
+
+# Navigation (may contain important links/structure)
+
+[[rule]]
+name = "nav"
+selector = "nav"
+all = true
+join_with = "\n"
+
+# Footer information
+
+[[rule]]
+name = "footer"
+selector = "footer"
+all = true
+join_with = "\n"
+
+# Divs with specific content roles
+
+[[rule]]
+name = "content_divs"
+selector = "div[role='main'], div[role='article'], div.content, div#content"
+all = true
+join_with = "\n\n"

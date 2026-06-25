@@ -1,0 +1,55 @@
+[package]
+name = "cognee-bindings-common"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Shared facade (HandleState, CogneeServices, SdkError, wire helpers) consumed by the Python / JS / C API cognee bindings."
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+authors.workspace = true
+# Publishable: the T10a-era closed `cognee-cloud` optional path-dep has been
+# lifted to the closed `cognee-bindings-cloud` glue crate (T15a, plan §6.1).
+# No closed deps remain, so the OSS facade can ship to crates.io.
+publish = true
+
+# NOT a default member of the root workspace but IS a workspace member
+# so `cargo check --all-targets` at the root covers it.
+
+[lints]
+workspace = true
+
+[features]
+# Default features mirror the cognee bindings (full): visualization plus all
+# engine features. A slim embedded build can override with
+# --no-default-features --features sqlite,testing. The former `cloud` feature
+# was lifted to closed `cognee-bindings-cloud` per T15a / plan §6.1.
+default = [
+    "visualization",
+    "ladybug",
+    "onnx",
+    "hf-tokenizer",
+    "tiktoken",
+    "sqlite",
+    "testing",
+]
+visualization = ["cognee-lib/visualization"]
+ladybug       = ["cognee-lib/ladybug"]
+onnx          = ["cognee-lib/onnx"]
+hf-tokenizer  = ["cognee-lib/hf-tokenizer"]
+tiktoken      = ["cognee-lib/tiktoken"]
+sqlite        = ["cognee-lib/sqlite"]
+testing       = ["cognee-lib/testing"]
+
+[dependencies]
+cognee-lib = { path = "../lib", default-features = false }
+serde      = { workspace = true }
+serde_json = { workspace = true }
+thiserror  = { workspace = true }
+uuid       = { workspace = true }
+tokio      = { workspace = true }
+async-trait = { workspace = true }
+base64      = { workspace = true }

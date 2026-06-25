@@ -1,0 +1,179 @@
+[package]
+name = "cognee-http-server"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+authors.workspace = true
+
+# docs.rs cannot build `ort`'s default static-link mode (the build script needs
+# to download the ONNX Runtime binary archive, which the docs.rs sandbox blocks).
+# This crate carries an unconditional `cognee-embedding/onnx` dep, so we enable
+# `cognee-embedding/onnx-dynamic` here to flip ort into dlopen mode for the docs
+# build only. Runtime / production builds are unaffected.
+[package.metadata.docs.rs]
+features = ["cognee-embedding/onnx-dynamic"]
+rustdoc-args = ["--cfg", "docsrs"]
+
+[lints]
+workspace = true
+
+[lib]
+name = "cognee_http_server"
+path = "src/lib.rs"
+
+[[bin]]
+name = "cognee-http-server"
+path = "src/main.rs"
+required-features = ["bin"]
+
+[features]
+# decision 1: telemetry is ON by default in cognee-http-server. Disable with
+# --no-default-features for compile-time opt-out.
+# html-loader is on by default so the server binary supports URL ingestion and
+# HTML documents out of the box (parity with the Python `/add` URL path).
+default = ["telemetry", "html-loader"]
+# Enables the standalone-binary entry point and its arg-parsing deps.
+bin = [
+    "dep:clap",
+    "dep:dotenv",
+    "tokio/macros",
+    "tokio/rt-multi-thread",
+    "tokio/signal",
+]
+# Gates URL ingestion + the HTML document loader (propagates to the ingestion
+# and cognify crates). Without it, `DataInput::Url` returns
+# UnsupportedDocumentType / UrlIngestionUnavailable at runtime.
+html-loader = [
+    "cognee-ingestion/html-loader",
+    "cognee-cognify/html-loader",
+]
+telemetry = [
+    "dep:cognee-observability",
+    "dep:cognee-telemetry",
+    "cognee-observability/telemetry",
+    "cognee-core/telemetry",
+    "cognee-telemetry/telemetry",
+    "cognee-search/telemetry",
+    "cognee-session/telemetry",
+]
+# OSS-only dev/test escape hatch: enables a `vector_provider="mock"` wiring
+# that constructs an in-memory `MockVectorDB`. Lets `cargo run` / `cargo test`
+# work without provisioning a Postgres instance. Off by default — production
+# builds drop the testing surface entirely. The "qdrant" provider was removed
+# from this wiring as part of the OSS/closed split; qdrant lives in the
+# closed `cognee-vector-qdrant` crate.
+#
+# T10c: this feature used to depend on `cognee-test-utils`, but that crate
+# is `publish = false` (in-repo harness). To keep `cognee-http-server`
+# publishable on crates.io, we now enable `cognee-vector/testing` directly —
+# `MockVectorDB` is defined there and `cognee-test-utils` only re-exports it.
+dev-mock = ["cognee-vector/testing"]
+
+[dependencies]
+# Web framework and HTTP stack. axum 0.8 requires hyper 1.x, declared
+# explicitly here so the http-server can call hyper APIs directly
+# (server/http1/http2) without depending on a re-export. The OSS workspace
+# no longer carries a `[patch.crates-io]` block (the qdrant v0.14 hyper
+# fork moved to the closed `cognee-cloud-rust` workspace in T4-move
+# alongside the qdrant adapter), so the version pinned below is the only
+# hyper in the OSS dependency graph.
+axum = { version = "0.8", features = ["multipart", "ws"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors", "trace", "limit"] }
+hyper = { version = "1", features = ["server", "http1", "http2"] }
+
+# cognee crates
+# NOTE: cognee-lib is intentionally NOT a direct dep here — adding it would
+# create a cycle when cognee-lib's `server` feature pulls in cognee-http-server.
+# Concrete cognee-lib types are wired via AppState in P1+.
+cognee-models = { path = "../models", version = "0.1.0" }
+cognee-observability = { path = "../observability", version = "0.1.0", optional = true }
+# Product-analytics client. Gated by the `telemetry` feature so a
+# `--no-default-features` build drops the dep entirely; the `emit` helper
+# in `telemetry.rs` compiles to a noop when absent.
+cognee-telemetry = { path = "../telemetry", version = "0.1.0", optional = true, features = ["telemetry"] }
+cognee-core = { path = "../core", version = "0.1.0", features = ["pipeline-run-registry"] }
+cognee-database = { path = "../database", version = "0.1.0", features = ["sqlite"] }
+sea-orm = { version = "1", default-features = false, features = ["runtime-tokio-rustls", "with-chrono", "with-uuid", "with-json"] }
+cognee-storage = { path = "../storage", version = "0.1.0" }
+cognee-ingestion = { path = "../ingestion", version = "0.1.0" }
+cognee-cognify = { path = "../cognify", version = "0.1.0" }
+cognee-embedding = { path = "../embedding", version = "0.1.0", features = ["onnx"] }
+cognee-delete = { path = "../delete", version = "0.1.0" }
+cognee-ontology = { path = "../ontology", version = "0.1.0" }
+cognee-search = { path = "../search", version = "0.1.0" }
+cognee-session = { path = "../session", version = "0.1.0" }
+cognee-llm = { path = "../llm", version = "0.1.0" }
+cognee-graph = { path = "../graph", version = "0.1.0", features = ["ladybug"] }
+cognee-vector = { path = "../vector", version = "0.1.0", features = ["pgvector"] }
+cognee-logging = { path = "../logging", version = "0.1.0" }
+cognee-visualization = { path = "../visualization", version = "0.1.0" }
+cognee-utils = { path = "../utils", version = "0.1.0" }
+
+# Serialization
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+serde_urlencoded = "0.7"
+serde_path_to_error = "0.1"
+form_urlencoded = "1"
+
+# OpenAPI
+utoipa = { version = "5", features = ["axum_extras", "uuid", "chrono"] }
+
+# Secret-handling for API-key fields in `HttpServerConfig` /
+# `wire_default_backends` (LLM + embedding providers). The JWT / cookie /
+# password / SMTP auth deps moved to the closed `cognee-http-cloud`
+# crate alongside the auth router family (T3-pre).
+secrecy = "0.10"
+
+# Hashing
+sha2 = { workspace = true }
+rand = { workspace = true }
+
+# Utilities
+uuid = { workspace = true, features = ["v4", "v5", "serde"] }
+chrono = { workspace = true, features = ["serde"] }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["registry", "std"] }
+async-trait = { workspace = true }
+dashmap = "6"
+bytes = "1"
+futures = { workspace = true }
+tokio = { workspace = true, features = ["rt", "sync", "time", "net", "io-util", "fs", "process"] }
+tokio-util = { version = "0.7", features = ["io"] }
+mime_guess = "2"
+
+# Binary-only deps (optional; pulled in by the `bin` feature only)
+clap = { workspace = true, features = ["derive", "env"], optional = true }
+dotenv = { workspace = true, optional = true }
+
+# Unix-only: setrlimit() for the notebook subprocess runner's memory/CPU
+# caps. Falls back to wall-clock-timeout-only on non-Unix.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros"] }
+serde_json = { workspace = true }
+serial_test = { workspace = true }
+chrono = { workspace = true }
+sea-orm = { version = "1", default-features = false, features = ["sqlx-sqlite", "runtime-tokio-native-tls", "macros"] }
+cognee-database = { path = "../database", features = ["sqlite"] }
+cognee-graph = { path = "../graph", features = ["testing", "ladybug"] }
+cognee-vector = { path = "../vector", features = ["testing"] }
+cognee-embedding = { path = "../embedding", features = ["onnx"] }
+cognee-session = { path = "../session", features = ["fs"] }
+dotenv = { workspace = true }
+async-trait = { workspace = true }
+tempfile = { workspace = true }
+cognee-test-utils = { path = "../test-utils" }

@@ -1,0 +1,188 @@
+[package]
+name = "cognee-lib"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+authors.workspace = true
+
+# docs.rs cannot build `ort`'s default static-link mode (the build script needs
+# to download the ONNX Runtime binary archive, which the docs.rs sandbox blocks).
+# Default features cascade-enable `cognee-embedding/onnx`, so for docs.rs we
+# disable defaults and re-enable the same set with `onnx-dynamic` swapped in for
+# `onnx` — flipping ort into dlopen mode. Runtime / production builds are
+# unaffected; this block is consulted only by the docs.rs build environment.
+[package.metadata.docs.rs]
+no-default-features = true
+features = [
+    # Both `onnx` (gates this crate's onnx-feature-cfg'd code) and
+    # `onnx-dynamic` (flips the underlying `ort` dep into dlopen mode).
+    "onnx",
+    "onnx-dynamic",
+    "ladybug",
+    "pgvector",
+    "pggraph",
+    "sqlite",
+    "postgres",
+    "hf-tokenizer",
+    "tiktoken",
+    "pdf-pdfium",
+    "csv-loader",
+    "html-loader",
+    "image-loader",
+    "audio-loader",
+    "unstructured",
+    "visualization",
+    "mock-llm",
+    "telemetry",
+]
+rustdoc-args = ["--cfg", "docsrs"]
+
+[lints]
+workspace = true
+
+[features]
+default = [
+    "onnx",
+    "ladybug",
+    "pgvector",
+    "pggraph",
+    "sqlite",
+    "postgres",
+    "hf-tokenizer",
+    "tiktoken",
+    "pdf-pdfium",
+    "csv-loader",
+    "html-loader",
+    "image-loader",
+    "audio-loader",
+    "unstructured",
+    "visualization",
+    "mock-llm",
+    # decision 1: telemetry is ON by default in cognee-lib. Disable with
+    # --no-default-features for compile-time opt-out.
+    "telemetry",
+]
+# Record/replay cassette-based mock LLM support (MOCK_LLM / COGNEE_RECORD_LLM).
+# Pulls in no heavy deps, so it is default-on.
+mock-llm       = ["cognee-llm/mock"]
+server         = ["dep:cognee-http-server"]
+visualization  = ["dep:cognee-visualization"]
+onnx           = ["cognee-embedding/onnx"]
+onnx-dynamic   = ["cognee-embedding/onnx-dynamic"]
+ort-cuda       = ["cognee-embedding/ort-cuda"]
+ort-tensorrt   = ["cognee-embedding/ort-tensorrt"]
+ladybug        = ["cognee-graph/ladybug"]
+pgvector       = ["cognee-vector/pgvector", "dep:url"]
+pggraph        = ["cognee-graph/postgres", "dep:url"]
+sqlite         = ["cognee-database/sqlite"]
+postgres       = ["cognee-database/postgres"]
+hf-tokenizer   = ["cognee-chunking/hf-tokenizer"]
+tiktoken       = ["cognee-chunking/tiktoken"]
+
+# External telemetry event export (opt-in). When enabled, the high-level API
+# functions emit `tracing` events on the `cognee.telemetry` target so
+# downstream subscribers (OTEL log exporter, tracing_subscriber::Layer, etc.)
+# can capture them. Mirrors Python's `send_telemetry()` calls. This feature
+# also pulls in the `cognee-observability` crate which installs the
+# OpenTelemetry SDK + OTLP exporter (see docs/telemetry/01-otel-otlp-export.md)
+# and forwards to `cognee-core/telemetry` so pipeline-runner event emission
+# is enabled in lockstep.
+telemetry = [
+    "dep:cognee-observability",
+    "cognee-observability/telemetry",
+    "cognee-core/telemetry",
+    "cognee-telemetry/telemetry",
+    "cognee-search/telemetry",
+    "cognee-session/telemetry",
+]
+
+# Document format loaders (forwarded from cognee-ingestion)
+pdf-pdfium        = ["cognee-ingestion/pdf-pdfium"]
+pdf-pure-rust     = ["cognee-ingestion/pdf-pure-rust"]
+csv-loader        = ["cognee-ingestion/csv-loader"]
+html-loader       = ["cognee-ingestion/html-loader", "cognee-cognify/html-loader"]
+image-loader      = ["cognee-ingestion/image-loader", "cognee-cognify/image-loader"]
+audio-loader      = ["cognee-ingestion/audio-loader", "cognee-cognify/audio-loader"]
+unstructured      = ["cognee-ingestion/unstructured"]
+unstructured-xlsx = ["cognee-ingestion/unstructured-xlsx"]
+unstructured-docx = ["cognee-ingestion/unstructured-docx"]
+unstructured-pptx = ["cognee-ingestion/unstructured-pptx"]
+unstructured-epub = ["cognee-ingestion/unstructured-epub"]
+unstructured-eml  = ["cognee-ingestion/unstructured-eml"]
+unstructured-odt  = ["cognee-ingestion/unstructured-odt"]
+unstructured-odp  = ["cognee-ingestion/unstructured-odp"]
+
+# Composite feature for Android builds (no pdfium, no PostgreSQL, no tiktoken)
+android-default = [
+    "onnx-dynamic",
+    "ladybug",
+    "sqlite",
+    "hf-tokenizer",
+    "pdf-pure-rust",
+    "csv-loader",
+    "html-loader",
+    "unstructured-xlsx",
+    "unstructured-docx",
+    "unstructured-epub",
+    "unstructured-eml",
+    "unstructured-odt",
+]
+
+testing = [
+    "cognee-cognify/testing",
+    "cognee-graph/testing",
+    "cognee-storage/testing",
+    "cognee-vector/testing",
+]
+
+[dependencies]
+cognee-chunking = { path = "../chunking", version = "0.1.0" }
+cognee-utils = { path = "../utils", version = "0.1.0" }
+cognee-http-server = { path = "../http-server", version = "0.1.0", optional = true }
+cognee-cognify = { path = "../cognify", version = "0.1.0" }
+cognee-core = { path = "../core", version = "0.1.0", features = ["pipeline-run-registry"] }
+cognee-delete = { path = "../delete", version = "0.1.0" }
+cognee-database = { path = "../database", version = "0.1.0" }
+cognee-embedding = { path = "../embedding", version = "0.1.0" }
+cognee-graph = { path = "../graph", version = "0.1.0" }
+cognee-ingestion = { path = "../ingestion", version = "0.1.0" }
+cognee-llm = { path = "../llm", version = "0.1.0" }
+cognee-models = { path = "../models", version = "0.1.0" }
+cognee-observability = { path = "../observability", version = "0.1.0", optional = true }
+cognee-ontology = { path = "../ontology", version = "0.1.0" }
+cognee-search = { path = "../search", version = "0.1.0" }
+cognee-session = { path = "../session", version = "0.1.0" }
+cognee-storage = { path = "../storage", version = "0.1.0" }
+cognee-telemetry = { path = "../telemetry", version = "0.1.0" }
+cognee-vector = { path = "../vector", version = "0.1.0" }
+cognee-visualization = { path = "../visualization", version = "0.1.0", optional = true }
+async-trait.workspace = true
+chrono.workspace = true
+dotenv.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+url = { workspace = true, optional = true }
+uuid.workspace = true
+
+[dev-dependencies]
+cognee-test-utils = { path = "../test-utils" }
+cognee-storage = { path = "../storage", features = ["testing"] }
+cognee-graph = { path = "../graph", features = ["testing"] }
+cognee-vector = { path = "../vector", features = ["testing"] }
+cognee-session = { path = "../session", features = ["fs"] }
+cognee-database = { path = "../database", features = ["sqlite"] }
+mockito = "1"
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+serial_test = { workspace = true }
+chrono = { workspace = true }

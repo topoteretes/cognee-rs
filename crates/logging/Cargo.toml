@@ -1,0 +1,43 @@
+[package]
+name = "cognee-logging"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+tracing.workspace = true
+tracing-subscriber = { workspace = true, features = ["env-filter", "fmt", "json"] }
+tracing-appender.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+chrono.workspace = true
+dirs.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+serial_test.workspace = true
+regex.workspace = true
+
+# Helper binary exercised by `tests/multi_process_inheritance.rs`.
+# The parent test spawns this child via `std::process::Command` and
+# the child inherits `LOG_FILE_NAME` so all processes append to one
+# file (decision 5 of docs/telemetry/06-file-logging-rotation.md).
+[[bin]]
+name = "logging_child_smoke"
+path = "tests/bin/child_smoke.rs"
+test = false
+doctest = false
+bench = false
+required-features = []
+

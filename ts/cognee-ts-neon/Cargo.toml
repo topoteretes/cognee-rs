@@ -1,0 +1,89 @@
+[package]
+name = "cognee-ts-neon"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.89"
+license = "MIT OR Apache-2.0"
+description = "Neon (Node.js) native binding for the cognee Rust SDK."
+repository = "https://github.com/topoteretes/cognee-rs"
+homepage = "https://www.cognee.ai"
+publish = false
+
+# Standalone crate — not part of the parent workspace.
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[features]
+# visualization mirrors cognee-lib defaults. The former `cloud` feature was
+# lifted to the closed `cognee-ts-cloud` cdylib (T15e) which depends on
+# `cognee-bindings-cloud`; this OSS cdylib intentionally omits it.
+default = [
+    "visualization",
+    # engine features — unchanged from Phase 0–5
+    "ladybug",
+    "onnx",
+    "hf-tokenizer",
+    "tiktoken",
+    "sqlite",
+    "testing",
+    # Product-analytics emission ON by default — Python-SDK parity. The
+    # cognee-lib `send_telemetry` call sites are otherwise compiled out
+    # because cognee-lib is pulled with `default-features = false`.
+    "telemetry",
+]
+# Compiles in the cognee-lib/search/session/core `send_telemetry` call
+# sites. Runtime emission is still gated by `is_disabled()`
+# (TELEMETRY_DISABLED / ENV / COGNEE_HOST_SDK) — see telemetry_analytics.rs.
+telemetry     = ["cognee-lib/telemetry"]
+visualization = ["cognee-lib/visualization", "cognee-bindings-common/visualization"]
+# Engine features forwarded to cognee-lib and cognee-bindings-common.
+ladybug       = ["cognee-lib/ladybug",       "cognee-bindings-common/ladybug"]
+onnx          = ["cognee-lib/onnx",          "cognee-bindings-common/onnx"]
+hf-tokenizer  = ["cognee-lib/hf-tokenizer",  "cognee-bindings-common/hf-tokenizer"]
+tiktoken      = ["cognee-lib/tiktoken",      "cognee-bindings-common/tiktoken"]
+sqlite        = ["cognee-lib/sqlite",        "cognee-bindings-common/sqlite"]
+testing       = ["cognee-lib/testing",       "cognee-bindings-common/testing"]
+
+[dependencies]
+# Shared SDK facade (HandleState, CogneeServices, SdkError, wire helpers).
+# Feature forwarding mirrors the neon feature table below so that a
+# `--no-default-features` build of neon produces a matching slim facade.
+cognee-bindings-common = { path = "../../crates/bindings-common", default-features = false }
+
+# Full cognee SDK. Phase 0 links this to prove the foundation compiles and
+# produces a loadable `.node`; later phases expose the SDK functions.
+#
+# Feature set: the engine features the SDK needs (qdrant, ladybug, onnx,
+# hf-tokenizer, tiktoken) plus `sqlite` (used by the legacy `task_context.rs`
+# mock, which connects to `sqlite::memory:`) and `testing` (re-exports the
+# mock graph/vector backends through `cognee_lib`, and keeps the legacy mock
+# `TaskContext` working). Phase 6 adds visualization and cloud.
+cognee-lib = { path = "../../crates/lib", default-features = false }
+# Kept as direct deps so the legacy engine modules (task_context.rs etc.) keep
+# their existing crate-path imports without a rewire. These are path deps, so
+# they resolve to the same versions `cognee-lib` pulls in.
+cognee-core = { path = "../../crates/core" }
+cognee-database = { path = "../../crates/database", features = ["sqlite"] }
+cognee-graph = { path = "../../crates/graph", features = ["testing"] }
+cognee-vector = { path = "../../crates/vector", features = ["testing"] }
+cognee-logging = { path = "../../crates/logging" }
+# Bridge Rust `tracing` events to stderr for Node hosts (gap 07
+# decision 1 / Option A). Pinned to the version `cognee-logging`
+# consumes transitively.
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+# Optional opentelemetry / send_telemetry surfaces. Feature enabled
+# by default per gap 07 decision 3.
+cognee-observability = { path = "../../crates/observability", features = ["telemetry"] }
+cognee-telemetry     = { path = "../../crates/telemetry",     features = ["telemetry"] }
+neon = { version = "1", default-features = false, features = ["napi-6"] }
+async-trait = "0.1.89"
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time"] }
+futures = "0.3"
+uuid = { version = "1.21", features = ["v4", "v5", "serde"] }
+thiserror = "2.0"
+serde_json = "1"
+# Decode base64 `bytes` for binary `DataInput` inputs over the JSON bridge.
+base64 = "0.22"

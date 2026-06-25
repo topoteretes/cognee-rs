@@ -1,0 +1,37 @@
+[
+  {
+    "key": "sk-test-key-12345",
+    "salt": "cognee.telemetry.api-key-tracking.v1",
+    "iter": 100000,
+    "dklen": 16,
+    "expected_hex": "6b52153bc9586e2ca1c14aa34511cb9c"
+  },
+  {
+    "key": "sk-proj-abcdefghijklmnopqrstuvwxyz0123456789",
+    "salt": "cognee.telemetry.api-key-tracking.v1",
+    "iter": 100000,
+    "dklen": 16,
+    "expected_hex": "b0fc80ad70d8158d26198a36661947f6"
+  },
+  {
+    "key": "sk-test-key-12345",
+    "salt": "deployment-private-namespace-2026",
+    "iter": 100000,
+    "dklen": 16,
+    "expected_hex": "8c780cd90fcb4403cf3708bd44342499"
+  },
+  {
+    "key": "sk-aaaaaaaaaaaaaa1234",
+    "salt": "cognee.telemetry.api-key-tracking.v1",
+    "iter": 100000,
+    "dklen": 16,
+    "expected_hex": "bcffb34fc6edf885b2ed6a224e8fe9a8"
+  },
+  {
+    "key": "sk-bbbbbbbbbbbbbb1234",
+    "salt": "cognee.telemetry.api-key-tracking.v1",
+    "iter": 100000,
+    "dklen": 16,
+    "expected_hex": "8aa0374eb07161bdbe67c2f6fc5777f5"
+  }
+]

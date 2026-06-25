@@ -1,0 +1,63 @@
+[package]
+name = "cognee-embedding"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+authors.workspace = true
+
+# docs.rs cannot build `ort`'s default static-link mode (the build script needs
+# to download the ONNX Runtime binary archive, which the docs.rs sandbox blocks).
+# Use the load-dynamic feature so the docs build links against ort's dlopen path
+# instead, which has no network or system-library requirement.
+[package.metadata.docs.rs]
+features = ["onnx-dynamic"]
+rustdoc-args = ["--cfg", "docsrs"]
+
+[lints]
+workspace = true
+
+[features]
+onnx         = ["dep:ort", "dep:tokenizers"]
+# Load ONNX Runtime as a shared library (dlopen at runtime via ORT_DYLIB_PATH)
+# instead of static-linking it. Required for Android, where static-linking the
+# bundled onnxruntime archive fails to link (undefined C++ symbols).
+onnx-dynamic = ["onnx", "ort/load-dynamic"]
+# GPU execution providers for ONNX Runtime — not needed in CPU-only / CI builds.
+# Enable ort-cuda or ort-tensorrt when building for a machine with NVIDIA hardware.
+ort-cuda     = ["ort/cuda"]
+ort-tensorrt = ["ort/tensorrt"]
+
+[dependencies]
+async-trait = { workspace = true }
+cognee-utils = { path = "../utils", version = "0.1.0" }
+futures     = { workspace = true }
+tokio       = { workspace = true }
+serde       = { workspace = true }
+serde_json  = { workspace = true }
+thiserror   = { workspace = true }
+reqwest     = { workspace = true }
+tracing     = { workspace = true }
+rand        = { workspace = true }
+sha2        = { workspace = true }
+ort         = { workspace = true, optional = true }
+tokenizers  = { workspace = true, optional = true }
+
+[dev-dependencies]
+serial_test = { workspace = true }
+tempfile = { workspace = true }
+
+# The integration test exercises the ONNX engine (config::OnnxEmbeddingConfig,
+# onnx::OnnxEmbeddingEngine), which only exist under the `onnx` feature. Gate it
+# so `cargo check -p cognee-embedding --all-targets` (no features) does not fail
+# to compile it. At the workspace level `onnx` is unified on (cognee-lib enables
+# it by default), so the test still builds and runs there.
+[[test]]
+name = "integration"
+required-features = ["onnx"]

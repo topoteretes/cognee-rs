@@ -1,0 +1,44 @@
+[
+  {
+    "command": [
+      "search",
+      "What was the Natufian culture and where did they live during the Paleolithic era?",
+      "--datasets",
+      "howto100m_LMR7xw8xIiM",
+      "--query-type",
+      "RAG_COMPLETION",
+      "--top-k",
+      "5",
+      "--output-format",
+      "pretty"
+    ]
+  },
+  {
+    "command": [
+      "search",
+      "How do archaeologists identify ancient bread remains using microscopic analysis techniques?",
+      "--datasets",
+      "howto100m_LMR7xw8xIiM",
+      "--query-type",
+      "CHUNKS",
+      "--top-k",
+      "5",
+      "--output-format",
+      "pretty"
+    ]
+  },
+  {
+    "command": [
+      "search",
+      "What role did bread making play in the development of agriculture and grain domestication?",
+      "--datasets",
+      "howto100m_LMR7xw8xIiM",
+      "--query-type",
+      "GRAPH_COMPLETION",
+      "--top-k",
+      "5",
+      "--output-format",
+      "pretty"
+    ]
+  }
+]

@@ -1,0 +1,44 @@
+[
+  {
+    "command": [
+      "search",
+      "What are the key ingredients for pate sucree sweet tart dough recipe?",
+      "--datasets",
+      "howto100m_GIxObShU_UE",
+      "--query-type",
+      "CHUNKS",
+      "--top-k",
+      "5",
+      "--output-format",
+      "pretty"
+    ]
+  },
+  {
+    "command": [
+      "search",
+      "Why is it important not to overmix dough and how to prevent shrinking when baking pastry?",
+      "--datasets",
+      "howto100m_GIxObShU_UE",
+      "--query-type",
+      "RAG_COMPLETION",
+      "--top-k",
+      "5",
+      "--output-format",
+      "pretty"
+    ]
+  },
+  {
+    "command": [
+      "search",
+      "What temperature and baking time are recommended for tart shells until golden brown?",
+      "--datasets",
+      "howto100m_GIxObShU_UE",
+      "--query-type",
+      "GRAPH_COMPLETION",
+      "--top-k",
+      "5",
+      "--output-format",
+      "pretty"
+    ]
+  }
+]

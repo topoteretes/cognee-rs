@@ -1,0 +1,7 @@
+# Closed-bound paths. Currently empty: T2/T3/T4 already physically moved
+# closed sources to /home/dmytro/dev/cognee/cognee-cloud-rust/. This file is
+# part of the T8 partition-manifest gate: it forces every newly-added path
+# to be classified OSS-or-closed at PR review time. If a future PR adds a
+# path that belongs on the closed side, add it here AND remove the source
+# from this OSS repo (the union-equals-`git ls-files` assertion fails if
+# the source stays on disk).

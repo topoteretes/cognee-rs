@@ -1,0 +1,53 @@
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "cognee-py"
+requires-python = ">=3.9"
+dynamic = ["version"]
+description = "Python bindings for the cognee Rust SDK — AI memory pipeline (add → cognify → search)."
+authors = [{ name = "Topoteretes", email = "support@cognee.ai" }]
+license = "MIT OR Apache-2.0"
+license-files = ["LICENSE-MIT", "LICENSE-APACHE"]
+readme = "README.md"
+keywords = ["ai", "knowledge-graph", "memory", "rag", "embeddings"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Rust",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+[project.urls]
+Homepage = "https://www.cognee.ai"
+Repository = "https://github.com/topoteretes/cognee-rs"
+
+[project.optional-dependencies]
+test = [
+    "pytest>=8",
+    "pytest-asyncio>=0.24",
+]
+dev = [
+    "maturin>=1.5",
+    "mypy>=1.10",
+]
+
+[tool.pytest.ini_options]
+# "strict" matches the existing @pytest.mark.asyncio decorator style on all
+# async tests and does not silently collect bare async def functions as tests.
+asyncio_mode = "strict"
+testpaths = ["tests"]
+
+[tool.maturin]
+features = ["pyo3/extension-module"]
+python-source = "."
+module-name = "cognee_py._native"
+# The optional drop-in ``cognee`` shim (python/cognee/) is intentionally NOT
+# bundled into the wheel: a plain ``pip install cognee-py`` must never
+# shadow the real upstream ``cognee`` package.  The shim ships only in the repo
+# for users who want to vendor it explicitly (see python/cognee/__init__.py).
+exclude = ["cognee/**/*"]

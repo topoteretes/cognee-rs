@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>Sample Page Title</title>
+    <meta name="description" content="A sample page for testing HTML extraction rules.">
+    <meta name="keywords" content="test, html, extraction">
+    <meta property="og:title" content="OG Sample Title">
+    <meta property="og:description" content="OG sample description for social sharing.">
+    <style>body { color: red; font-size: 16px; }</style>
+    <script>var secret = "should not appear";</script>
+</head>
+<body>
+    <!-- This comment should not appear in output -->
+
+    <header>
+        <nav><a href="/">Home</a> <a href="/about">About</a></nav>
+    </header>
+
+    <main>
+        <article>
+            <h1>Main Article Heading</h1>
+            <h2>Article Subtitle</h2>
+            <h3>Section Three</h3>
+            <h4>Section Four</h4>
+            <h5>Section Five</h5>
+            <h6>Section Six</h6>
+
+            <p>This is the first paragraph of the article.</p>
+            <p>This is the second paragraph with <strong>bold text</strong> and <em>italic text</em> and <mark>highlighted text</mark>.</p>
+
+            <blockquote>A notable quotation from a famous person.</blockquote>
+
+            <pre>Preformatted text block here.</pre>
+
+            <ol>
+                <li>First ordered item</li>
+                <li>Second ordered item</li>
+            </ol>
+
+            <ul>
+                <li>Unordered item alpha</li>
+                <li>Unordered item beta</li>
+            </ul>
+
+            <dl>
+                <dt>Term</dt>
+                <dd>Definition of the term</dd>
+            </dl>
+
+            <table>
+                <caption>Sample Data Table</caption>
+                <tr><th>Name</th><th>Value</th></tr>
+                <tr><td>Cell A</td><td>Cell B</td></tr>
+            </table>
+
+            <code>let x = 42;</code>
+
+            <figure>
+                <img alt="A descriptive alt text" src="image.jpg">
+                <figcaption>Figure caption text</figcaption>
+            </figure>
+
+            <a href="https://example.com">Example link text</a>
+
+            <time datetime="2025-01-15">January 15, 2025</time>
+            <data value="42">The answer</data>
+        </article>
+    </main>
+
+    <section>
+        <h2>Additional Section</h2>
+        <p>Content in a section element.</p>
+    </section>
+
+    <aside>
+        <p>Sidebar content here.</p>
+    </aside>
+
+    <details>
+        <summary>Click to expand</summary>
+        <p>Hidden detail content.</p>
+    </details>
+
+    <div role="main">
+        <p>Content in a role-main div.</p>
+    </div>
+
+    <div class="content">
+        <p>Content in a div.content element.</p>
+    </div>
+
+    <div id="content">
+        <p>Content in a div#content element.</p>
+    </div>
+
+    <noscript>This noscript text should not appear.</noscript>
+
+    <footer>
+        <p>Footer information here.</p>
+    </footer>
+
+    <script>
+        // Another script block that should be stripped
+        console.log("invisible");
+    </script>
+</body>
+</html>

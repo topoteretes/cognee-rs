@@ -1,0 +1,177 @@
+name: capi-release
+
+# Build per-platform C-API release tarballs on a `v*` tag push and attach
+# them to the GitHub Release for that tag. Mirrors `ts-prebuild.yml`'s
+# tag-triggered multi-platform pattern but ships native libs + headers
+# instead of Neon `.node` binaries.
+#
+# Track A in `docs/RELEASE.md` describes the manual equivalent; this
+# workflow is the automated path. Both code paths share
+# `capi/scripts/build-release-tarball.sh`.
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Manual tag (e.g. v0.1.0) for dry-run / re-upload."
+        required: true
+        type: string
+
+permissions:
+  contents: write   # required by softprops/action-gh-release
+
+concurrency:
+  group: capi-release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_INCREMENTAL: "0"
+  CARGO_PROFILE_RELEASE_DEBUG: "0"
+
+jobs:
+  # ── Build per-platform release tarballs ──────────────────────────────
+  build:
+    name: Build ${{ matrix.archive_suffix }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux x86_64 — native runner
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            cross: false
+            archive_suffix: linux-x86_64
+
+          # Linux aarch64 — cross via `cross`
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            cross: true
+            archive_suffix: linux-aarch64
+
+          # macOS x86_64
+          - os: macos-13
+            target: x86_64-apple-darwin
+            cross: false
+            archive_suffix: macos-x86_64
+
+          # macOS aarch64 (Apple Silicon)
+          - os: macos-14
+            target: aarch64-apple-darwin
+            cross: false
+            archive_suffix: macos-aarch64
+
+          # Windows x86_64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            cross: false
+            archive_suffix: windows-x86_64
+
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      # Install cross for cross-compilation jobs (Linux aarch64).
+      - name: Install cross
+        if: matrix.cross
+        run: cargo install cross --git https://github.com/cross-rs/cross
+
+      # Native build deps — mirror ts-prebuild.yml.
+      - name: Install native build deps (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y cmake protobuf-compiler
+
+      - name: Install native build deps (macOS)
+        if: runner.os == 'macOS'
+        run: brew install cmake protobuf
+
+      - name: Install native build deps (Windows)
+        if: runner.os == 'Windows'
+        run: choco install cmake protoc --no-progress
+
+      - name: Cache cargo (capi workspace)
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: capi-release-${{ matrix.archive_suffix }}-v1
+          workspaces: capi -> target
+          cache-on-failure: true
+
+      - name: Resolve tag
+        id: tag
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            TAG="${GITHUB_REF_NAME}"
+          else
+            TAG="${{ inputs.tag }}"
+          fi
+          if [ -z "$TAG" ]; then
+            echo "::error::Could not resolve a tag for this run"
+            exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Resolved tag: $TAG"
+
+      - name: Header sync gate
+        shell: bash
+        run: bash capi/scripts/check_header_sync.sh
+
+      - name: Build release library (native)
+        if: "!matrix.cross"
+        shell: bash
+        run: cargo build --release --manifest-path capi/Cargo.toml --target ${{ matrix.target }}
+
+      - name: Build release library (cross)
+        if: matrix.cross
+        shell: bash
+        run: cross build --release --manifest-path capi/Cargo.toml --target ${{ matrix.target }}
+
+      - name: Assemble release tarball
+        shell: bash
+        run: bash capi/scripts/build-release-tarball.sh "${{ steps.tag.outputs.tag }}" "${{ matrix.target }}" "${{ matrix.archive_suffix }}"
+
+      - name: Upload tarball artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cognee-capi-${{ steps.tag.outputs.tag }}-${{ matrix.archive_suffix }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14
+
+  # ── Attach all tarballs to the GitHub Release ────────────────────────
+  release:
+    name: Attach to GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    # Only auto-attach for real tag pushes; workflow_dispatch is dry-run only.
+    if: github.event_name == 'push'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download all platform artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: List downloaded artifacts
+        run: ls -la artifacts/
+
+      - name: Attach tarballs to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

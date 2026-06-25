@@ -1,0 +1,53 @@
+[package]
+name = "cognee-observability"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = []
+
+telemetry = [
+    "dep:opentelemetry",
+    "dep:opentelemetry_sdk",
+    "dep:opentelemetry-otlp",
+    "dep:opentelemetry-semantic-conventions",
+    "dep:tracing-opentelemetry",
+    "dep:tonic",
+    "dep:http",
+]
+
+[dependencies]
+cognee-utils = { path = "../utils", version = "0.1.0" }
+thiserror.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+opentelemetry = { workspace = true, optional = true }
+opentelemetry_sdk = { workspace = true, optional = true }
+opentelemetry-otlp = { workspace = true, optional = true }
+opentelemetry-semantic-conventions = { workspace = true, optional = true }
+tracing-opentelemetry = { workspace = true, optional = true }
+# Required for building gRPC `MetadataMap` headers when the `telemetry`
+# feature is enabled. Pinned to the version `opentelemetry-otlp 0.31`
+# uses transitively, so a single tonic 0.14 graph is reused.
+tonic = { version = "=0.14", default-features = false, optional = true }
+http = { version = "1", optional = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time", "sync", "net"] }
+tokio-stream = { version = "0.1", features = ["net"] }
+opentelemetry-proto = { version = "=0.31", default-features = false, features = ["gen-tonic", "trace"] }
+tonic = { version = "=0.14", default-features = false, features = ["server", "transport", "router"] }
+serial_test = { workspace = true }

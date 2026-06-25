@@ -1,0 +1,44 @@
+[
+  {
+    "command": [
+      "search",
+      "What are the different types of concrete admixtures and their specific functions?",
+      "--datasets",
+      "howto100m_JRo71AhOWK8",
+      "--query-type",
+      "GRAPH_COMPLETION",
+      "--top-k",
+      "5",
+      "--output-format",
+      "pretty"
+    ]
+  },
+  {
+    "command": [
+      "search",
+      "How do concrete pump primers prevent pipeline plugs and blockages during pumping?",
+      "--datasets",
+      "howto100m_JRo71AhOWK8",
+      "--query-type",
+      "RAG_COMPLETION",
+      "--top-k",
+      "5",
+      "--output-format",
+      "pretty"
+    ]
+  },
+  {
+    "command": [
+      "search",
+      "What is the function of viscosity modifiers in concrete pumping operations?",
+      "--datasets",
+      "howto100m_JRo71AhOWK8",
+      "--query-type",
+      "CHUNKS",
+      "--top-k",
+      "5",
+      "--output-format",
+      "pretty"
+    ]
+  }
+]

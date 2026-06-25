@@ -1,0 +1,223 @@
+//! Unified public API for Cognee-Rust.
+//!
+//! This crate provides a single entry point by re-exporting the core operations:
+//! - add (`AddPipeline`)
+//! - cognify (`cognify()` free function and related types)
+//! - search (`SearchBuilder`/`SearchOrchestrator` and related types)
+//!
+//! ## OpenTelemetry support
+//!
+//! Cognee emits structured spans for every pipeline stage, search retriever,
+//! and HTTP route. To export them to an OTLP collector (Grafana Tempo,
+//! Honeycomb, Dash0, in-cluster `otel-collector`, ...), enable the
+//! `telemetry` cargo feature and set `OTEL_EXPORTER_OTLP_ENDPOINT`:
+//!
+//! ```ignore
+//! use cognee_lib::telemetry::{init_telemetry, TelemetryGuard};
+//! use cognee_lib::config::{ConfigManager, Settings};
+//! use tracing_subscriber::Registry;
+//!
+//! let settings: Settings = ConfigManager::from_env().settings().clone();
+//! let (_layer, _guard) = init_telemetry::<Registry>(&settings)
+//!     .expect("telemetry init");
+//! // ... compose `_layer` onto your subscriber; spans are flushed when
+//! // `_guard` is dropped.
+//! ```
+//!
+//! See [`docs/observability/opentelemetry.md`](https://github.com/topoteretes/cognee-rs/blob/main/docs/observability/opentelemetry.md)
+//! for the full operator guide, env-var reference, and deployment recipes.
+
+/// Core pipeline orchestration primitives.
+pub mod core {
+    pub use cognee_core::*;
+}
+
+/// Data ingestion (add) pipeline.
+pub mod add {
+    pub use cognee_ingestion::{
+        AddParams, AddPipeline, ContentHasher, HashAlgorithm, IngestionError, ProcessedInput,
+        build_add_pipeline, build_add_pipeline_with_acl, generate_data_id, generate_dataset_id,
+        make_persist_data_task, make_persist_data_task_with_acl, make_process_input_task,
+        persist_data, persist_data_with_acl, process_input,
+    };
+}
+
+/// Knowledge-graph extraction (cognify) pipeline.
+pub mod cognify {
+    #[cfg(feature = "hf-tokenizer")]
+    pub use cognee_chunking::HuggingFaceTokenCounter;
+    #[cfg(feature = "tiktoken")]
+    pub use cognee_chunking::TikTokenCounter;
+    pub use cognee_chunking::{
+        ChunkingError, CutType, TokenCounter, TokenCounterKind, WordCounter,
+    };
+    pub use cognee_cognify::*;
+}
+
+/// Search pipeline and retrieval strategies.
+pub mod search {
+    pub use cognee_search::*;
+}
+
+/// Data and dataset deletion pipeline.
+pub mod delete {
+    pub use cognee_delete::*;
+}
+
+/// Core data models.
+pub mod models {
+    pub use cognee_models::*;
+}
+
+/// File storage abstraction.
+pub mod storage {
+    pub use cognee_storage::*;
+}
+
+/// Metadata database abstraction.
+pub mod database {
+    pub use cognee_database::*;
+}
+
+/// Graph database abstraction.
+pub mod graph {
+    #[cfg(feature = "ladybug")]
+    pub use cognee_graph::LadybugAdapter;
+    #[cfg(any(test, feature = "testing"))]
+    pub use cognee_graph::MockGraphDB;
+    pub use cognee_graph::{
+        EdgeData, GraphDBError, GraphDBResult, GraphDBTrait, GraphDBTraitExt, GraphEdge, GraphNode,
+        NodeData,
+    };
+}
+
+/// Vector database abstraction.
+///
+/// `BruteForceVectorDB` — pure-Rust in-memory edge/Android backend.
+pub mod vector {
+    pub use cognee_vector::BruteForceVectorDB;
+    #[cfg(feature = "testing")]
+    pub use cognee_vector::MockVectorDB;
+    #[cfg(feature = "pgvector")]
+    pub use cognee_vector::PgVectorAdapter;
+    pub use cognee_vector::{
+        CollectionConfig, DistanceMetric, SearchResult, VectorDB, VectorDBError, VectorDBResult,
+        VectorPoint,
+    };
+}
+
+/// Embedding engine abstraction and providers.
+pub mod embedding {
+    pub use cognee_embedding::utils::{
+        handle_embedding_response, is_embeddable, sanitize_embedding_inputs,
+    };
+    pub use cognee_embedding::{
+        EmbeddingConfig, EmbeddingEngine, EmbeddingError, EmbeddingProvider, EmbeddingResult,
+        MockEmbeddingEngine, OllamaEmbeddingEngine, OpenAICompatibleEmbeddingEngine,
+    };
+    #[cfg(feature = "onnx")]
+    pub use cognee_embedding::{
+        ModelUrls, OnnxEmbeddingConfig, OnnxEmbeddingEngine, download_model, ensure_model_exists,
+        ensure_tokenizer_exists,
+    };
+}
+
+/// LLM provider abstraction.
+pub mod llm {
+    pub use cognee_llm::*;
+}
+
+/// Ontology resolution.
+pub mod ontology {
+    pub use cognee_ontology::*;
+}
+
+/// Knowledge-graph visualization (requires `visualization` feature).
+#[cfg(feature = "visualization")]
+pub mod visualization {
+    pub use cognee_visualization::*;
+}
+
+#[cfg(feature = "visualization")]
+pub use cognee_visualization::{VisualizationError, visualize};
+
+#[cfg(feature = "server")]
+pub mod http {
+    //! HTTP server surface. Available only when the `server` feature is enabled.
+    //! Consumers who only need the embedded server inside their own binary should
+    //! prefer this re-export over taking a direct dependency on `cognee-http-server`,
+    //! to keep their dependency closure aligned with the rest of the cognee crates.
+    pub use cognee_http_server::*;
+}
+
+/// Session management.
+pub mod session;
+
+/// Top-level API functions mirroring the Python SDK.
+pub mod api;
+/// Component lifecycle management.
+pub mod component_manager;
+/// Runtime configuration management.
+pub mod config;
+/// Pipeline execution context.
+pub mod context;
+/// Component error types.
+pub mod error;
+
+/// Product-analytics telemetry.
+pub mod telemetry;
+
+pub use api::notebooks::{
+    NotebookError, create_notebook, delete_notebook, list_notebooks, update_notebook,
+};
+pub use api::{DatasetDb, DatasetError, DatasetManager};
+pub use component_manager::ComponentManager;
+pub use config::{ConfigError, ConfigManager, Settings};
+pub use context::PipelineContext;
+pub use error::ComponentError;
+
+/// Convenience re-exports for common usage.
+pub mod prelude {
+    pub use crate::add::AddPipeline;
+    pub use crate::api::DatasetManager;
+    pub use crate::api::{
+        ApiError, DatasetRef, ForgetResult, ForgetTarget, ImproveParams, ImproveResult,
+        PruneResult, PruneTarget, RecallItem, RecallResult, RecallSource, RememberItemInfo,
+        RememberResult, RememberStatus, UpdateResult, forget, improve, prune_data, prune_system,
+        recall, remember, update,
+    };
+    pub use crate::cognify::{CognifyConfig, cognify};
+    pub use crate::cognify::{MemifyConfig, MemifyResult, run_memify};
+    pub use crate::core::{
+        AsyncRuntime, CancellationHandle, CancellationToken, CpuPool, CpuPoolExt, ExecutionError,
+        NoopWatcher, Pipeline, PipelineWatcher, ProgressToken, RayonThreadPool, RetryDelay,
+        RetryPolicy, Task, TaskContext, TaskContextBuilder, TaskInfo, Value, execute,
+        execute_blocking, execute_in_background,
+    };
+    pub use crate::database::{AclDb, DatabaseConnection, DeleteDb, IngestDb, SearchHistoryDb};
+    pub use crate::graph::GraphDBTrait;
+    pub use crate::llm::Llm;
+    pub use crate::models::{Data, DataInput, Dataset};
+    pub use crate::search::{SearchBuilder, SearchOrchestrator, SearchRequest, SearchType};
+    pub use crate::storage::{LocalStorage, StorageTrait};
+    pub use crate::vector::VectorDB;
+    pub use uuid::Uuid;
+}
+
+pub use add::{
+    AddParams, AddPipeline, ContentHasher, ProcessedInput, build_add_pipeline, generate_dataset_id,
+    make_persist_data_task, make_process_input_task, persist_data, process_input,
+};
+
+pub use cognee_core;
+pub use cognee_database;
+pub use cognee_delete;
+pub use cognee_embedding;
+pub use cognee_graph;
+pub use cognee_llm;
+pub use cognee_models;
+pub use cognee_ontology;
+pub use cognee_session;
+pub use cognee_storage;
+pub use cognee_vector;
+pub use uuid;
