@@ -606,12 +606,12 @@ No runtime GIL, no dynamic dispatch on handlers, no global mutable state — all
 
 | Topic | Doc | Reason for deferral |
 |---|---|---|
-| Auth internals (JWT format, cookie layout, API key storage, password hash migration from bcrypt) | `auth.md` | Non-trivial; fastapi-users compatibility requires a careful spec. |
+| Auth internals (JWT format, cookie layout, API key storage, password hash migration from bcrypt) | `auth.md` (stub — moved to closed `cognee-http-cloud` in T3; see [`cognee-cloud-rs`](https://github.com/topoteretes/cognee-cloud-rs)) | Non-trivial; fastapi-users compatibility requires a careful spec. |
 | Per-router endpoint contracts (request/response DTO field names, status codes, validation rules) | `routers/*.md` | Each router gets its own doc so it can be implemented + reviewed in isolation. |
 | Background pipeline registry (schema, eviction policy, restart recovery) | `pipelines.md` | Needs a decision on persistence (in-memory only vs DB-backed). |
 | WebSocket protocol | `websocket.md` | Needs exact message shape parity with the Python WS handler. |
 | OTEL span buffer | `observability.md` | Needs a decision on `tracing-opentelemetry` vs custom layer. |
-| Multi-tenant + RBAC schema | `tenants.md` | Requires SeaORM migrations matching the Python Alembic schema. |
+| Multi-tenant + RBAC schema | `tenants.md` (stub — moved to closed `cognee-http-cloud` in T3; see [`cognee-cloud-rs`](https://github.com/topoteretes/cognee-cloud-rs)) | Requires SeaORM migrations matching the Python Alembic schema. |
 
 ## 22. Open questions
 

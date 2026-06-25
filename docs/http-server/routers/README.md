@@ -1,27 +1,32 @@
 # HTTP server — router reference
 
 One reference doc per router, each covering its mount, endpoints, DTOs,
-cross-cutting behavior, and Python-parity notes. All 31 routers are implemented
-and shipped (cross-SDK parity verified by the `e2e-cross-sdk/harness/test_http_*.py`
-suites). Section overview: [../README.md](../README.md).
+cross-cutting behavior, and Python-parity notes. **20 routers live in OSS**
+(documented in full below) and **11 routers live in the closed
+`cognee-http-cloud` crate** (auth, auth-register, auth-reset-password,
+auth-verify, api-keys, users, users-by-email, permissions, configuration,
+sync, checks — entries below are stubs that point at the
+[`cognee-cloud-rs`](https://github.com/topoteretes/cognee-cloud-rs) repo).
+Cross-SDK parity is verified by the `e2e-cross-sdk/harness/test_http_*.py`
+suites. Section overview: [../README.md](../README.md).
 
 Companion docs: [../architecture.md](../architecture.md) ·
-[../auth.md](../auth.md) · [../pipelines.md](../pipelines.md) ·
+[../auth.md](../auth.md) (stub) · [../pipelines.md](../pipelines.md) ·
 [../websocket.md](../websocket.md) · [../observability.md](../observability.md) ·
-[../tenants.md](../tenants.md).
+[../tenants.md](../tenants.md) (stub).
 
 ## Routers
 
 | Router | Mount prefix | Purpose |
 |---|---|---|
 | [health](health.md) | `/health` | Liveness/readiness probe. |
-| [auth](auth.md) | `/api/v1/auth` | Login / logout / current-user (`/me`). |
-| [auth-register](auth-register.md) | `/api/v1/auth` | User registration. |
-| [auth-reset-password](auth-reset-password.md) | `/api/v1/auth` | Password reset flow. |
-| [auth-verify](auth-verify.md) | `/api/v1/auth` | Email/token verification. |
-| [api-keys](api-keys.md) | `/api/v1/auth/api-keys` | API-key issuance/management. |
-| [users](users.md) | `/api/v1/users` | User CRUD. |
-| [users-by-email](users-by-email.md) | `/api/v1/users/get-user-id` | Resolve a user id by email. |
+| [auth](auth.md) | `/api/v1/auth` | Login / logout / current-user (`/me`). **Closed (`cognee-http-cloud`).** |
+| [auth-register](auth-register.md) | `/api/v1/auth` | User registration. **Closed.** |
+| [auth-reset-password](auth-reset-password.md) | `/api/v1/auth` | Password reset flow. **Closed.** |
+| [auth-verify](auth-verify.md) | `/api/v1/auth` | Email/token verification. **Closed.** |
+| [api-keys](api-keys.md) | `/api/v1/auth/api-keys` | API-key issuance/management. **Closed.** |
+| [users](users.md) | `/api/v1/users` | User CRUD. **Closed.** |
+| [users-by-email](users-by-email.md) | `/api/v1/users/get-user-id` | Resolve a user id by email. **Closed.** |
 | [add](add.md) | `/api/v1/add` | Ingest files/text into a dataset. |
 | [update](update.md) | `/api/v1/update` | Re-ingest and re-cognify changed data. |
 | [datasets](datasets.md) | `/api/v1/datasets` | Dataset listing/status/data. |
@@ -36,15 +41,15 @@ Companion docs: [../architecture.md](../architecture.md) ·
 | [forget](forget.md) | `/api/v1/forget` | Remove specific memories/nodes. |
 | [delete](delete.md) | `/api/v1/delete` | Delete data/datasets (deprecated alias). |
 | [settings](settings.md) | `/api/v1/settings` | Read/update runtime settings. |
-| [configuration](configuration.md) | `/api/v1/configuration` | Bulk configuration surface. |
-| [permissions](permissions.md) | `/api/v1/permissions` | ACL / role / permission management. |
+| [configuration](configuration.md) | `/api/v1/configuration` | Bulk configuration surface. **Closed.** |
+| [permissions](permissions.md) | `/api/v1/permissions` | ACL / role / permission management. **Closed.** |
 | [visualize](visualize.md) | `/api/v1/visualize` | Render the graph to HTML. |
 | [activity](activity.md) | `/api/v1/activity` | Span/activity debug feed. |
-| [sync](sync.md) | `/api/v1/sync` | Cloud sync (background job). |
+| [sync](sync.md) | `/api/v1/sync` | Cloud sync (background job). **Closed.** |
 | [llm](llm.md) | `/api/v1/llm` | Direct custom-prompt LLM calls. |
 | [responses](responses.md) | `/api/v1/responses` | OpenAI Responses-API-shaped dispatch. |
 | [notebooks](notebooks.md) | `/api/v1/notebooks` | Notebook CRUD + cell execution. |
-| [checks](checks.md) | `/api/v1/checks` | Cloud connectivity checks. |
+| [checks](checks.md) | `/api/v1/checks` | Cloud connectivity checks. **Closed.** |
 
 ## 3. Cross-router conventions
 
