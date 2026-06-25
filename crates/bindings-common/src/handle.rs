@@ -18,9 +18,29 @@ use uuid::Uuid;
 
 use cognee_lib::ComponentManager;
 use cognee_lib::config::{ConfigManager, Settings};
+use cognee_lib::database::DatabaseConnection;
+use cognee_lib::models::User;
 
 use crate::SdkError;
 use crate::services::CogneeServices;
+
+/// Optional bootstrap seam for resolving (and persisting) the default user.
+///
+/// OSS has no `users`-table writer, so the default binding behaviour is
+/// **DB-free** (`HandleState`'s hook is `None` → the in-memory
+/// `cognee_lib::api::get_or_create_default_user` UUID5 derivation is used,
+/// with no DB write). The closed cloud build attaches an implementation that
+/// upserts a real `users` row through `cognee-access-control`, so warm/admin
+/// paths persist the default user for downstream ACL / API-key FK integrity.
+///
+/// This is the OSS-local analogue of the `with_*` builder convention used
+/// elsewhere (e.g. `DatasetManager::with_acl`): the trait lives in OSS so the
+/// closed crate can implement it, but OSS itself never provides an impl.
+#[async_trait::async_trait]
+pub trait DefaultUserBootstrap: Send + Sync {
+    /// Resolve (and optionally persist) the default user, returning the row.
+    async fn bootstrap(&self, db: &Arc<DatabaseConnection>, email: &str) -> Result<User, SdkError>;
+}
 
 /// The shareable inner state of a binding handle.
 ///
@@ -38,6 +58,10 @@ pub struct HandleState {
     /// The default user carries no tenant (see `get_or_create_default_user`).
     #[allow(dead_code)] // consumed by SDK ops in later phases
     tenant_id: Option<Uuid>,
+    /// Optional DB-backed default-user bootstrap hook. `None` (the OSS default)
+    /// keeps the DB-free in-memory derivation; the closed cloud build attaches
+    /// an impl that persists the `users` row.
+    bootstrap: Option<Arc<dyn DefaultUserBootstrap>>,
 }
 
 impl HandleState {
@@ -56,12 +80,29 @@ impl HandleState {
             services: TokioMutex::new(None),
             owner_id: TokioMutex::new(None),
             tenant_id: None,
+            bootstrap: None,
         }
     }
 
     /// Construct from the environment (defaults overlaid by env vars).
     pub fn from_env() -> Self {
         Self::from_settings(ConfigManager::from_env().read().clone())
+    }
+
+    /// Attach a DB-backed default-user bootstrap hook (builder).
+    ///
+    /// With a hook set, the warm path and the admin op resolve the owner via
+    /// `hook.bootstrap(db, email)` — persisting the `users` row — instead of
+    /// the DB-free in-memory derivation. The closed cloud build uses this to
+    /// restore the original monorepo's persisted default-user behaviour.
+    pub fn with_default_user_bootstrap(mut self, hook: Arc<dyn DefaultUserBootstrap>) -> Self {
+        self.bootstrap = Some(hook);
+        self
+    }
+
+    /// The configured default-user bootstrap hook, if any.
+    pub(crate) fn default_user_bootstrap(&self) -> Option<&Arc<dyn DefaultUserBootstrap>> {
+        self.bootstrap.as_ref()
     }
 
     /// Return the cached services, rebuilding if the cache is empty or the
@@ -91,6 +132,22 @@ impl HandleState {
 
         let (svc, owner_id) = CogneeServices::build(&self.cm).await?;
         let svc = Arc::new(svc);
+
+        // When a DB-backed bootstrap hook is attached (closed cloud build),
+        // resolve the owner through it so the `users` row is persisted. The
+        // hook is keyed on the same email and yields the same UUID5 id, but
+        // additionally writes the row. With no hook (OSS default), keep the
+        // DB-free `owner_id` returned by `build` — byte-for-byte unchanged.
+        let owner_id = if let Some(hook) = self.default_user_bootstrap() {
+            let email = {
+                let settings = self.cm.settings();
+                settings.default_user_email.clone()
+            };
+            hook.bootstrap(&svc.database, &email).await?.id
+        } else {
+            owner_id
+        };
+
         *guard = Some((current_ver, Arc::clone(&svc)));
         // Publish the resolved owner id (idempotent: email-derived UUID5).
         *self.owner_id.lock().await = Some(owner_id);

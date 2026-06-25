@@ -27,6 +27,6 @@ pub mod wire;
 
 // Top-level re-exports for ergonomic `use cognee_bindings_common::SdkError` etc.
 pub use error::SdkError;
-pub use handle::HandleState;
+pub use handle::{DefaultUserBootstrap, HandleState};
 pub use redact::redact_config_json;
 pub use services::CogneeServices;

@@ -92,9 +92,22 @@ pub async fn run_get_or_create_default_user(
         let settings = state.cm.settings();
         settings.default_user_email.clone()
     };
-    let user = get_or_create_default_user(&default_user_email)
-        .await
-        .map_err(|e| SdkError::UserBootstrap(format!("get_or_create_default_user failed: {e}")))?;
+    // When a DB-backed bootstrap hook is attached (closed cloud build), resolve
+    // (and persist) the user through it; otherwise use the DB-free OSS path.
+    let user = if let Some(hook) = state.default_user_bootstrap() {
+        let svc = state.services().await?;
+        hook.bootstrap(&svc.database, &default_user_email)
+            .await
+            .map_err(|e| {
+                SdkError::UserBootstrap(format!("get_or_create_default_user failed: {e}"))
+            })?
+    } else {
+        get_or_create_default_user(&default_user_email)
+            .await
+            .map_err(|e| {
+                SdkError::UserBootstrap(format!("get_or_create_default_user failed: {e}"))
+            })?
+    };
 
     serde_json::to_value(&user)
         .map_err(|e| SdkError::Runtime(format!("failed to serialize User: {e}")))
