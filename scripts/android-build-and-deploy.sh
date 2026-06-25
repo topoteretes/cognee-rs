@@ -12,13 +12,12 @@
 #   - NDK toolchain bin on PATH (for the linker)
 #
 # Usage:
-#   ./scripts/android-build-and-deploy.sh [--debug] [--deploy] [--litert]
+#   ./scripts/android-build-and-deploy.sh [--debug] [--deploy]
 #
 # Flags:
 #   --debug    Build in debug mode (default: release)
 #   --deploy   Push built artifacts to the connected Android device via adb
 #              (default: build only, no device interaction)
-#   --litert   Enable LiteRT LLM feature in cognee-lib/cognee-cli builds.
 
 set -euo pipefail
 
@@ -51,7 +50,6 @@ ANDROID_API_LEVEL="${ANDROID_API_LEVEL:-27}"
 PROFILE="release"
 CARGO_PROFILE_FLAG="--release"
 DEPLOY=false
-ENABLE_LITERT=false
 
 for arg in "$@"; do
     case "${arg}" in
@@ -62,12 +60,9 @@ for arg in "$@"; do
         --deploy)
             DEPLOY=true
             ;;
-        --litert)
-            ENABLE_LITERT=true
-            ;;
         *)
             echo "ERROR: Unknown argument: ${arg}" >&2
-            echo "Usage: $0 [--debug] [--deploy] [--litert]" >&2
+            echo "Usage: $0 [--debug] [--deploy]" >&2
             exit 1
             ;;
     esac
@@ -77,17 +72,11 @@ TARGET_DIR="${PROJECT_DIR}/target"
 BINARY_DIR="${TARGET_DIR}/${TARGET}/${PROFILE}"
 MODEL_DIR="${TARGET_DIR}/models"
 
-# LiteRT wrapper defaults (used only when --litert is enabled)
-# Prefer explicit override via LITERT_WRAPPER_DIR, fall back to a sibling checkout.
-LITERT_WRAPPER_DIR="${LITERT_WRAPPER_DIR:-${PROJECT_DIR}/../cognee-litert-lm}"
-LITERT_PREBUILT_ANDROID_DIR="${LITERT_WRAPPER_DIR}/vendor/LiteRT-LM/prebuilt/android_arm64"
-
 # ── Validation ─────────────────────────────────────────────────────────────────
 echo "=== Android Build & Deploy: workspace ==="
 echo "  Target:   ${TARGET}"
 echo "  Profile:  ${PROFILE}"
 echo "  Deploy:   ${DEPLOY}"
-echo "  LiteRT:   ${ENABLE_LITERT}"
 echo "  NDK:      ${ANDROID_NDK_HOME}"
 echo "  SDK:      ${ANDROID_SDK_ROOT}"
 echo ""
@@ -113,38 +102,6 @@ fi
 if [[ ! -d "${NDK_TOOLCHAIN}/bin" ]]; then
     echo "ERROR: NDK toolchain not found at ${NDK_TOOLCHAIN}" >&2
     exit 1
-fi
-
-if [[ "${ENABLE_LITERT}" == "true" ]]; then
-    # Resolve directory that contains liblitert_lm_c.so for link-time.
-    # Precedence:
-    # 1) Caller-provided LITERT_LM_LIB_DIR with exact filename
-    # 2) /tmp/liblitert_lm_c_sync.so produced by benchmark_android.sh
-    # 3) /tmp/liblitert_lm_c_spec.so produced by benchmark_android.sh
-    if [[ -n "${LITERT_LM_LIB_DIR:-}" && -f "${LITERT_LM_LIB_DIR}/liblitert_lm_c.so" ]]; then
-        :
-    else
-        RESOLVED_LITERT_LIB_DIR="${TARGET_DIR}/android-litert-lib"
-        mkdir -p "${RESOLVED_LITERT_LIB_DIR}"
-
-        if [[ -f "/tmp/liblitert_lm_c_sync.so" ]]; then
-            cp -f "/tmp/liblitert_lm_c_sync.so" "${RESOLVED_LITERT_LIB_DIR}/liblitert_lm_c.so"
-        elif [[ -f "/tmp/liblitert_lm_c_spec.so" ]]; then
-            cp -f "/tmp/liblitert_lm_c_spec.so" "${RESOLVED_LITERT_LIB_DIR}/liblitert_lm_c.so"
-        else
-            echo "ERROR: LiteRT C library not found." >&2
-            echo "Expected one of:" >&2
-            echo "  - \\$LITERT_LM_LIB_DIR/liblitert_lm_c.so" >&2
-            echo "  - /tmp/liblitert_lm_c_sync.so" >&2
-            echo "  - /tmp/liblitert_lm_c_spec.so" >&2
-            echo "Hint: run benchmark_android.sh from your cognee-litert-lm checkout, or set LITERT_LM_LIB_DIR." >&2
-            exit 1
-        fi
-
-        export LITERT_LM_LIB_DIR="${RESOLVED_LITERT_LIB_DIR}"
-    fi
-
-    echo "  LiteRT lib dir: ${LITERT_LM_LIB_DIR}"
 fi
 
 # Ensure the Rust target is installed
@@ -191,10 +148,8 @@ fi
 echo ">>> Step 1: Building workspace for ${TARGET} (${PROFILE})..."
 echo ""
 
+# On-device LLM (LiteRT) is a closed feature in the cognee-cloud distribution.
 FEATURES="cognee-cli/android-default"
-if [[ "${ENABLE_LITERT}" == "true" ]]; then
-    FEATURES="${FEATURES},cognee-lib/android-litert"
-fi
 
 cargo build \
     -p cognee-cli \
@@ -279,24 +234,6 @@ if [[ -f "${LIBCXX}" ]]; then
     echo "  Found libc++_shared.so"
 else
     echo "WARNING: libc++_shared.so not found at ${LIBCXX}" >&2
-fi
-
-if [[ "${ENABLE_LITERT}" == "true" ]]; then
-    if [[ -f "${LITERT_LM_LIB_DIR}/liblitert_lm_c.so" ]]; then
-        cp "${LITERT_LM_LIB_DIR}/liblitert_lm_c.so" "${STAGING_DIR}/lib/"
-        echo "  Found liblitert_lm_c.so"
-    else
-        echo "WARNING: liblitert_lm_c.so not found in ${LITERT_LM_LIB_DIR}" >&2
-    fi
-
-    if [[ -d "${LITERT_PREBUILT_ANDROID_DIR}" ]]; then
-        while IFS= read -r -d '' lib; do
-            cp "${lib}" "${STAGING_DIR}/lib/"
-        done < <(find "${LITERT_PREBUILT_ANDROID_DIR}" -maxdepth 1 -type f -name '*.so' -print0)
-        echo "  Copied LiteRT Android prebuilt shared libraries"
-    else
-        echo "WARNING: LiteRT prebuilt dir not found: ${LITERT_PREBUILT_ANDROID_DIR}" >&2
-    fi
 fi
 
 # Scan all collected binaries for additional NDK shared library dependencies

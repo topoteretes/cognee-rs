@@ -16,15 +16,12 @@
 #   - Android binary already deployed, or omit --skip-build to build+deploy automatically
 #
 # Usage:
-#   ./demo/run_cognee_rust_demo_android.sh [--skip-build] [--llm-backend ollama|litert]
+#   ./demo/run_cognee_rust_demo_android.sh [--skip-build] [--llm-backend ollama]
 #
 # Flags:
 #   --skip-build   Skip building and deploying the Android binary.
 #                  Use when artifacts are already on the device to save time.
-#   --llm-backend  Select LLM backend: ollama or litert.
-#   --litert-model-local   Host path to LiteRT model to push when needed.
-#   --litert-model-device  Device path used by cognee as llm_model.
-#   --litert-backend       LiteRT backend value (cpu, gpu, custom).
+#   --llm-backend  Select LLM backend: ollama.
 #
 # Environment overrides (all optional):
 #   OLLAMA_PORT, OLLAMA_CONTAINER_NAME, OLLAMA_VOLUME_NAME,
@@ -56,13 +53,7 @@ OLLAMA_CONTAINER_NAME="${OLLAMA_CONTAINER_NAME:-ollama-cognee-demo}"
 OLLAMA_VOLUME_NAME="${OLLAMA_VOLUME_NAME:-ollama_cognee_demo_data}"
 MODEL_NAME="${MODEL_NAME:-qwen3:4b}"
 DATASET_NAME="${DATASET_NAME:-manhattan_project_demo}"
-LLM_BACKEND="${LLM_BACKEND:-litert}"
-
-# Defaults aligned with cognee-litert-lm benchmark_android.sh
-LITERT_MODEL_LOCAL="${LITERT_MODEL_LOCAL:-$HOME/.litert-lm/models/gemma3-1b-it-int4.litertlm}"
-LITERT_MODEL_DEVICE="${LITERT_MODEL_DEVICE:-${DEVICE_MODEL_DIR}/gemma3-1b-it-int4.litertlm}"
-LITERT_BACKEND="${LITERT_BACKEND:-cpu}"
-LITERT_MODEL_DEVICE_EXPLICIT=0
+LLM_BACKEND="${LLM_BACKEND:-ollama}"
 
 OLLAMA_OPENAI_BASE_URL="http://127.0.0.1:${OLLAMA_PORT}/v1"
 
@@ -88,25 +79,6 @@ while [[ $# -gt 0 ]]; do
       LLM_BACKEND="$1"
       shift
       ;;
-    --litert-model-local)
-      shift
-      [[ $# -gt 0 ]] || { echo "ERROR: --litert-model-local requires a value" >&2; exit 1; }
-      LITERT_MODEL_LOCAL="$1"
-      shift
-      ;;
-    --litert-model-device)
-      shift
-      [[ $# -gt 0 ]] || { echo "ERROR: --litert-model-device requires a value" >&2; exit 1; }
-      LITERT_MODEL_DEVICE="$1"
-      LITERT_MODEL_DEVICE_EXPLICIT=1
-      shift
-      ;;
-    --litert-backend)
-      shift
-      [[ $# -gt 0 ]] || { echo "ERROR: --litert-backend requires a value" >&2; exit 1; }
-      LITERT_BACKEND="$1"
-      shift
-      ;;
     --video-ids)
       shift
       while [[ $# -gt 0 && "$1" != --* ]]; do
@@ -123,7 +95,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     *)
       echo "ERROR: Unknown argument: $1" >&2
-      echo "Usage: $0 [--skip-build] [--llm-backend ollama|litert] [--litert-model-local <path>] [--litert-model-device <device-path>] [--litert-backend cpu|gpu|<custom>] [--video-ids <id>...] [--sequence-files <path>...]" >&2
+      echo "Usage: $0 [--skip-build] [--llm-backend ollama] [--video-ids <id>...] [--sequence-files <path>...]" >&2
       exit 1
       ;;
   esac
@@ -246,8 +218,6 @@ install_device_demo_runner() {
   local vector_path="${DEVICE_RUNTIME_DIR}/vectors"
   local device_embed_model="${DEVICE_MODEL_DIR}/BGE-Small-v1.5-model_quantized.onnx"
   local device_tokenizer="${DEVICE_MODEL_DIR}/bge-small-tokenizer.json"
-  local litert_model_basename
-  litert_model_basename="$(basename "${LITERT_MODEL_DEVICE}")"
 
   log "🧩 Installing device self-run demo script: ${device_runner}"
 
@@ -274,8 +244,6 @@ EMBED_MODEL="./models/BGE-Small-v1.5-model_quantized.onnx"
 TOKENIZER_PATH="./models/bge-small-tokenizer.json"
 DATASET_NAME="${DATASET_NAME}"
 LLM_BACKEND="${LLM_BACKEND}"
-LITERT_MODEL_DEVICE="./models/${litert_model_basename}"
-LITERT_BACKEND="${LITERT_BACKEND}"
 OLLAMA_OPENAI_BASE_URL="http://127.0.0.1:${OLLAMA_PORT}/v1"
 MODEL_NAME="${MODEL_NAME}"
 DEVICE_SEQUENCE="./sequences/demo_pipeline_device.json"
@@ -330,24 +298,15 @@ cognee-cli config set logs_root_directory "\${DEVICE_RUNTIME_DIR}/logs"
 cognee-cli config set relational_db_url "\${DB_URL}"
 cognee-cli config set graph_database_provider "kuzu"
 cognee-cli config set graph_file_path "\${GRAPH_PATH}"
-cognee-cli config set vector_db_provider "qdrant"
+cognee-cli config set vector_db_provider "brute-force"
 cognee-cli config set vector_db_url "\${VECTOR_PATH}"
 
-if [ "\${LLM_BACKEND}" = "litert" ]; then
-  cognee-cli config set llm_provider "litert"
-  cognee-cli config set llm_model "\${LITERT_MODEL_DEVICE}"
-  cognee-cli config set llm_api_key ""
-  cognee-cli config set llm_endpoint "\${LITERT_BACKEND}"
-  cognee-cli config set llm_max_retries 1
-  cognee-cli config set llm_max_parallel_requests 1
-else
-  cognee-cli config set llm_provider "openai"
-  cognee-cli config set llm_model "\${MODEL_NAME}"
-  cognee-cli config set llm_api_key "ollama"
-  cognee-cli config set llm_endpoint "\${OLLAMA_OPENAI_BASE_URL}"
-  cognee-cli config set llm_max_retries 3
-  cognee-cli config set llm_max_parallel_requests 4
-fi
+cognee-cli config set llm_provider "openai"
+cognee-cli config set llm_model "\${MODEL_NAME}"
+cognee-cli config set llm_api_key "ollama"
+cognee-cli config set llm_endpoint "\${OLLAMA_OPENAI_BASE_URL}"
+cognee-cli config set llm_max_retries 3
+cognee-cli config set llm_max_parallel_requests 4
 
 cognee-cli config set embedding_model_path "\${EMBED_MODEL}"
 cognee-cli config set embedding_tokenizer_path "\${TOKENIZER_PATH}"
@@ -387,7 +346,7 @@ configure_cli() {
   run_cli config set graph_database_provider "kuzu"
   run_cli config set graph_file_path "${graph_path}"
 
-  run_cli config set vector_db_provider "qdrant"
+  run_cli config set vector_db_provider "brute-force"
   run_cli config set vector_db_url "${vector_path}"
 
   case "${LLM_BACKEND}" in
@@ -399,16 +358,8 @@ configure_cli() {
       run_cli config set llm_max_retries 3
       run_cli config set llm_max_parallel_requests 4
       ;;
-    litert)
-      run_cli config set llm_provider "litert"
-      run_cli config set llm_model "${LITERT_MODEL_DEVICE}"
-      run_cli config set llm_api_key ""
-      run_cli config set llm_endpoint "${LITERT_BACKEND}"
-      run_cli config set llm_max_retries 1
-      run_cli config set llm_max_parallel_requests 1
-      ;;
     *)
-      fail "❌ Unsupported --llm-backend '${LLM_BACKEND}'. Supported: ollama, litert"
+      fail "❌ Unsupported --llm-backend '${LLM_BACKEND}'. Supported: ollama"
       ;;
   esac
 
@@ -432,17 +383,6 @@ prepare_env_and_configure_cli() {
 
   if [[ "${LLM_BACKEND}" == "ollama" ]]; then
     start_ollama
-  else
-    # In LiteRT mode, ensure model exists on device (push only if missing).
-    if [[ ! -f "${LITERT_MODEL_LOCAL}" ]]; then
-      fail "❌ LiteRT model not found on host: ${LITERT_MODEL_LOCAL}"
-    fi
-    if ! "${ADB}" shell "test -f ${LITERT_MODEL_DEVICE}" 2>/dev/null; then
-      log "📤 Pushing LiteRT model to device: ${LITERT_MODEL_DEVICE}"
-      "${ADB}" push "${LITERT_MODEL_LOCAL}" "${LITERT_MODEL_DEVICE}" > /dev/null
-    else
-      log "✓ LiteRT model already present on device: ${LITERT_MODEL_DEVICE}"
-    fi
   fi
 
   log "⬇ Ensuring embedding model artifacts are present on host"
@@ -475,11 +415,8 @@ validate_llm_mode() {
     ollama)
       return 0
       ;;
-    litert)
-      return 0
-      ;;
     *)
-      fail "❌ Unsupported --llm-backend '${LLM_BACKEND}'. Supported: ollama, litert"
+      fail "❌ Unsupported --llm-backend '${LLM_BACKEND}'. Supported: ollama"
       ;;
   esac
 }
@@ -498,11 +435,7 @@ main() {
 
   if [[ "${SKIP_BUILD}" == "false" ]]; then
     log "🔨 Building and deploying Android binary"
-    local build_args=(--deploy)
-    if [[ "${LLM_BACKEND}" == "litert" ]]; then
-      build_args+=(--litert)
-    fi
-    "${PROJECT_ROOT}/scripts/android-build-and-deploy.sh" "${build_args[@]}"
+    "${PROJECT_ROOT}/scripts/android-build-and-deploy.sh" --deploy
   else
     warn "⚠ Skipping build (--skip-build). Assuming artifacts are already on device."
   fi
@@ -539,9 +472,6 @@ main() {
   if [[ "${LLM_BACKEND}" == "ollama" ]]; then
     ok "   Ollama (host):    ${OLLAMA_OPENAI_BASE_URL}"
     ok "   To stop Ollama:   docker stop ${OLLAMA_CONTAINER_NAME}"
-  else
-    ok "   LiteRT model:     ${LITERT_MODEL_DEVICE}"
-    ok "   LiteRT backend:   ${LITERT_BACKEND}"
   fi
 }
 

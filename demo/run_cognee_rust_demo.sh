@@ -17,7 +17,7 @@ fi
 # ── Config ─────────────────────────────────────────────────────────────────────
 DATASET_NAME="${DATASET_NAME:-manhattan_project_demo}"
 # Default to OpenAI (works on any host with an OPENAI_URL/OPENAI_TOKEN in .env).
-# `ollama` and `litert` remain available via --llm-backend.
+# `ollama` remains available via --llm-backend.
 LLM_BACKEND="${LLM_BACKEND:-openai}"
 
 # OpenAI backend config (read from .env / environment).
@@ -31,10 +31,6 @@ OLLAMA_CONTAINER_NAME="${OLLAMA_CONTAINER_NAME:-ollama-cognee-demo}"
 OLLAMA_VOLUME_NAME="${OLLAMA_VOLUME_NAME:-ollama_cognee_demo_data}"
 MODEL_NAME="${MODEL_NAME:-qwen3:4b}"
 
-# LiteRT backend config, with benchmark-aligned model defaults.
-LITERT_MODEL_PATH="${LITERT_MODEL_PATH:-$HOME/.litert-lm/models/gemma3-1b-it-int4.litertlm}"
-LITERT_BACKEND="${LITERT_BACKEND:-cpu}"
-
 # ── Parse flags ──────────────────────────────────────────────────────────────────
 VIDEO_IDS=()
 SEQUENCE_FILES=()
@@ -47,18 +43,6 @@ while [[ $# -gt 0 ]]; do
       [[ $# -gt 0 ]] || { echo "ERROR: --llm-backend requires a value" >&2; exit 1; }
       LLM_BACKEND="$1"
       LLM_BACKEND_EXPLICIT=1
-      shift
-      ;;
-    --litert-model-path)
-      shift
-      [[ $# -gt 0 ]] || { echo "ERROR: --litert-model-path requires a value" >&2; exit 1; }
-      LITERT_MODEL_PATH="$1"
-      shift
-      ;;
-    --litert-backend)
-      shift
-      [[ $# -gt 0 ]] || { echo "ERROR: --litert-backend requires a value" >&2; exit 1; }
-      LITERT_BACKEND="$1"
       shift
       ;;
     --video-ids)
@@ -77,7 +61,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     *)
       echo "ERROR: Unknown argument: $1" >&2
-      echo "Usage: $0 [--llm-backend openai|ollama|litert] [--litert-model-path <path>] [--litert-backend cpu|gpu|<custom>] [--video-ids <id>...] [--sequence-files <path>...]" >&2
+      echo "Usage: $0 [--llm-backend openai|ollama] [--video-ids <id>...] [--sequence-files <path>...]" >&2
       exit 1
       ;;
   esac
@@ -128,7 +112,7 @@ configure_cli() {
   run_cli config set graph_database_provider "kuzu"
   run_cli config set graph_file_path "$graph_path"
 
-  run_cli config set vector_db_provider "qdrant"
+  run_cli config set vector_db_provider "brute-force"
   run_cli config set vector_db_url "$vector_path"
 
   case "$LLM_BACKEND" in
@@ -148,16 +132,8 @@ configure_cli() {
       run_cli config set llm_max_retries 3
       run_cli config set llm_max_parallel_requests 4
       ;;
-    litert)
-      run_cli config set llm_provider "litert"
-      run_cli config set llm_model "$LITERT_MODEL_PATH"
-      run_cli config set llm_api_key ""
-      run_cli config set llm_endpoint "$LITERT_BACKEND"
-      run_cli config set llm_max_retries 1
-      run_cli config set llm_max_parallel_requests 1
-      ;;
     *)
-      fail "❌ Unsupported --llm-backend '$LLM_BACKEND'. Supported: ollama, litert"
+      fail "❌ Unsupported --llm-backend '$LLM_BACKEND'. Supported: openai, ollama"
       ;;
   esac
 
@@ -208,24 +184,8 @@ validate_llm_mode() {
     ollama)
       return 0
       ;;
-    litert)
-      if [[ ! -f "$LITERT_MODEL_PATH" ]]; then
-        fail "❌ LiteRT model not found: $LITERT_MODEL_PATH (override with --litert-model-path <path> or LITERT_MODEL_PATH)"
-      fi
-
-      # The host demo runs the Linux CLI binary; LiteRT provider is currently
-      # compiled for Android-target execution flow. Keep default behavior usable
-      # by auto-falling back to OpenAI unless user explicitly requested litert.
-      if [[ "$(uname -s)" != "Android" && "${LLM_BACKEND_EXPLICIT:-0}" != "1" ]]; then
-        warn "⚠ LiteRT backend is not available in this host demo binary; falling back to OpenAI."
-        LLM_BACKEND="openai"
-        validate_llm_mode
-      fi
-
-      return 0
-      ;;
     *)
-      fail "❌ Unsupported --llm-backend '$LLM_BACKEND'. Supported: openai, ollama, litert"
+      fail "❌ Unsupported --llm-backend '$LLM_BACKEND'. Supported: openai, ollama"
       ;;
   esac
 }
@@ -266,10 +226,6 @@ main() {
     ollama)
       ok "   Ollama endpoint: $OLLAMA_OPENAI_BASE_URL"
       ok "   To stop Ollama: docker stop $OLLAMA_CONTAINER_NAME"
-      ;;
-    litert)
-      ok "   LiteRT model: $LITERT_MODEL_PATH"
-      ok "   LiteRT backend: $LITERT_BACKEND"
       ;;
   esac
 }
