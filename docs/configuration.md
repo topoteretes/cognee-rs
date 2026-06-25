@@ -213,9 +213,9 @@ host/port, auth, body limits, pipeline registry, notebooks, health probes. See
 
 ## Cloud
 
-`COGNEE_CLOUD_URL`, `COGNEE_AUTH0_DOMAIN`, `COGNEE_AUTH0_AUDIENCE`,
-`COGNEE_AUTH0_DEVICE_CLIENT_ID` configure `serve()`/`disconnect()`
-([`crates/cloud/src/config.rs`](../crates/cloud/src/config.rs)).
+Cloud/Auth0 configuration (`COGNEE_CLOUD_URL`, `COGNEE_AUTH0_*`) and the
+`serve()`/`disconnect()` flow live in the closed `cognee-cloud-rs` product
+(the `cognee-cloud` crate) and are not part of OSS.
 
 ## Runtime configuration API
 
