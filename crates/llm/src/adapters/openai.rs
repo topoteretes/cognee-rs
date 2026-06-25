@@ -145,6 +145,34 @@ impl OpenAIAdapter {
         self.model.to_lowercase().starts_with("qwen") && !self.base_url.contains("api.openai.com")
     }
 
+    /// True for OpenAI reasoning-model families (`gpt-5*`, `o1*`, `o3*`, `o4*`)
+    /// that reject `temperature`/`top_p`/`frequency_penalty`/`presence_penalty`
+    /// overrides and require `max_completion_tokens` in place of `max_tokens`.
+    ///
+    /// Gated on the official `api.openai.com` base URL so custom OpenAI-compatible
+    /// proxies (Ollama, vLLM, …) keep accepting legacy parameters even when the
+    /// configured model name happens to match a reasoning-family prefix.
+    fn is_reasoning_model(&self) -> bool {
+        if !self.base_url.contains("api.openai.com") {
+            return false;
+        }
+        let m = self.model.to_lowercase();
+        m.starts_with("gpt-5") || m.starts_with("o1") || m.starts_with("o3") || m.starts_with("o4")
+    }
+
+    /// Insert `max_tokens` (or `max_completion_tokens` on reasoning models) into a
+    /// request body if `value` is `Some`.
+    fn write_max_tokens(&self, body: &mut Value, value: Option<u32>) {
+        if let Some(v) = value {
+            let key = if self.is_reasoning_model() {
+                "max_completion_tokens"
+            } else {
+                "max_tokens"
+            };
+            body[key] = json!(v);
+        }
+    }
+
     /// Call the OpenAI chat completions API, retrying on transient network/server errors.
     ///
     /// Retries up to `self.network_retries` times with exponential backoff (1 s, 2 s, 4 s …
@@ -411,22 +439,23 @@ impl Llm for OpenAIAdapter {
             "messages": Self::convert_messages(&messages),
         });
 
-        // Add optional parameters
-        if let Some(temp) = opts.temperature {
-            request_body["temperature"] = json!(temp);
+        // Add optional parameters. Reasoning models (gpt-5*/o1*/o3*/o4*)
+        // reject sampling overrides and only accept `max_completion_tokens`.
+        if !self.is_reasoning_model() {
+            if let Some(temp) = opts.temperature {
+                request_body["temperature"] = json!(temp);
+            }
+            if let Some(top_p) = opts.top_p {
+                request_body["top_p"] = json!(top_p);
+            }
+            if let Some(freq_penalty) = opts.frequency_penalty {
+                request_body["frequency_penalty"] = json!(freq_penalty);
+            }
+            if let Some(pres_penalty) = opts.presence_penalty {
+                request_body["presence_penalty"] = json!(pres_penalty);
+            }
         }
-        if let Some(max_tokens) = opts.max_tokens {
-            request_body["max_tokens"] = json!(max_tokens);
-        }
-        if let Some(top_p) = opts.top_p {
-            request_body["top_p"] = json!(top_p);
-        }
-        if let Some(freq_penalty) = opts.frequency_penalty {
-            request_body["frequency_penalty"] = json!(freq_penalty);
-        }
-        if let Some(pres_penalty) = opts.presence_penalty {
-            request_body["presence_penalty"] = json!(pres_penalty);
-        }
+        self.write_max_tokens(&mut request_body, opts.max_tokens);
         if let Some(stop) = opts.stop
             && !stop.is_empty()
         {
@@ -495,12 +524,12 @@ impl Llm for OpenAIAdapter {
             }
         });
 
-        if let Some(temp) = opts.temperature {
+        if !self.is_reasoning_model()
+            && let Some(temp) = opts.temperature
+        {
             strict_schema_request["temperature"] = json!(temp);
         }
-        if let Some(max_tokens) = opts.max_tokens {
-            strict_schema_request["max_tokens"] = json!(max_tokens);
-        }
+        self.write_max_tokens(&mut strict_schema_request, opts.max_tokens);
         if self.should_disable_thinking() {
             strict_schema_request["think"] = json!(false);
             strict_schema_request["reasoning"] = json!({"effort": "none"});
@@ -578,12 +607,12 @@ impl Llm for OpenAIAdapter {
             "function_call": {"name": "extract_structured_data"}
         });
 
-        if let Some(temp) = opts.temperature {
+        if !self.is_reasoning_model()
+            && let Some(temp) = opts.temperature
+        {
             request_body["temperature"] = json!(temp);
         }
-        if let Some(max_tokens) = opts.max_tokens {
-            request_body["max_tokens"] = json!(max_tokens);
-        }
+        self.write_max_tokens(&mut request_body, opts.max_tokens);
         if self.should_disable_thinking() {
             request_body["think"] = json!(false);
             request_body["reasoning"] = json!({"effort": "none"});
@@ -644,12 +673,12 @@ impl Llm for OpenAIAdapter {
             "response_format": {"type": "json_object"}
         });
 
-        if let Some(temp) = opts.temperature {
+        if !self.is_reasoning_model()
+            && let Some(temp) = opts.temperature
+        {
             json_request["temperature"] = json!(temp);
         }
-        if let Some(max_tokens) = opts.max_tokens {
-            json_request["max_tokens"] = json!(max_tokens);
-        }
+        self.write_max_tokens(&mut json_request, opts.max_tokens);
         if self.should_disable_thinking() {
             json_request["think"] = json!(false);
             json_request["reasoning"] = json!({"effort": "none"});
@@ -670,7 +699,9 @@ impl Llm for OpenAIAdapter {
                     ));
                 }
 
-                request_for_attempt["temperature"] = json!(0.0);
+                if !self.is_reasoning_model() {
+                    request_for_attempt["temperature"] = json!(0.0);
+                }
             }
 
             let json_response = self.call_api(request_for_attempt).await?;
@@ -750,7 +781,7 @@ impl Llm for OpenAIAdapter {
 
         let max_tokens = options.as_ref().and_then(|o| o.max_tokens).unwrap_or(300);
 
-        let request_body = json!({
+        let mut request_body = json!({
             "model": vision_model,
             "messages": [{
                 "role": "user",
@@ -759,8 +790,8 @@ impl Llm for OpenAIAdapter {
                     { "type": "image_url", "image_url": { "url": data_uri } }
                 ]
             }],
-            "max_tokens": max_tokens
         });
+        self.write_max_tokens(&mut request_body, Some(max_tokens));
 
         let response = self.call_api(request_body).await?;
 
@@ -1083,6 +1114,68 @@ mod tests {
 
         let adapter = adapter.unwrap();
         assert_eq!(adapter.base_url, "https://custom.api.com/v1");
+    }
+
+    #[test]
+    fn test_is_reasoning_model_matches_openai_families() {
+        let cases = [
+            ("gpt-5", true),
+            ("gpt-5-mini", true),
+            ("gpt-5-2025-06-01", true),
+            ("o1", true),
+            ("o1-mini", true),
+            ("o3", true),
+            ("o3-mini", true),
+            ("o4-mini", true),
+            ("GPT-5-Mini", true),
+            ("gpt-4o-mini", false),
+            ("gpt-4-turbo", false),
+            ("gpt-3.5-turbo", false),
+            ("o-foo", false),
+        ];
+        for (model, expected) in cases {
+            let adapter = OpenAIAdapter::new(model, "test-key", None).unwrap();
+            assert_eq!(
+                adapter.is_reasoning_model(),
+                expected,
+                "is_reasoning_model({model})"
+            );
+        }
+    }
+
+    #[test]
+    fn test_is_reasoning_model_skipped_for_custom_base_url() {
+        // Custom OpenAI-compatible endpoints (Ollama, vLLM, …) may have
+        // model names that look like reasoning families but still accept
+        // legacy sampling parameters — the gate is conservative.
+        let adapter = OpenAIAdapter::new(
+            "gpt-5-mini",
+            "test-key",
+            Some("http://localhost:11434/v1".to_string()),
+        )
+        .unwrap();
+        assert!(!adapter.is_reasoning_model());
+    }
+
+    #[test]
+    fn test_write_max_tokens_renames_key_for_reasoning_models() {
+        let mut body = json!({"model": "gpt-5-mini"});
+        let reasoning = OpenAIAdapter::new("gpt-5-mini", "test-key", None).unwrap();
+        reasoning.write_max_tokens(&mut body, Some(2048));
+        assert!(body.get("max_tokens").is_none());
+        assert_eq!(body["max_completion_tokens"], 2048);
+
+        let mut body = json!({"model": "gpt-4o-mini"});
+        let classic = OpenAIAdapter::new("gpt-4o-mini", "test-key", None).unwrap();
+        classic.write_max_tokens(&mut body, Some(2048));
+        assert_eq!(body["max_tokens"], 2048);
+        assert!(body.get("max_completion_tokens").is_none());
+
+        // None leaves body untouched.
+        let mut body = json!({"model": "gpt-5-mini"});
+        reasoning.write_max_tokens(&mut body, None);
+        assert!(body.get("max_tokens").is_none());
+        assert!(body.get("max_completion_tokens").is_none());
     }
 
     #[test]
