@@ -121,7 +121,7 @@ Companion docs: [../architecture.md](../architecture.md), [../auth.md](../auth.m
   - **Cache prune side-effect**: silently swallows errors from `cache_engine.prune()` and logs a warning. The Rust port should do the same with `tracing::warn!` and not propagate the error.
   - **Span name**: Python uses `new_span("cognee.api.forget")` ([`forget.py:71`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/forget/forget.py#L71)), so our `cognee.api.forget` span name matches exactly — important for cross-SDK trace correlation.
   - **Telemetry-event name parity**: Python sends `"cognee.forget"` (lowercase, dot) ([`forget.py:61`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/forget/forget.py#L61)), distinct from the API-endpoint event `"Forget API Endpoint Invoked"` ([`get_forget_router.py:37`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/forget/routers/get_forget_router.py#L37)). The Rust handler emits both.
-  - **Remote client passthrough**: Python's `forget()` checks `get_remote_client()` and proxies to the cloud ([`forget.py:76-85`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/forget/forget.py#L76-L85)). The Rust port preserves this for parity — when `state.lib.cloud_client.is_some()`, the handler proxies the request via `cognee-cloud` instead of executing locally. Cite the cloud crate (`cognee-cloud`).
+  - **Remote client passthrough**: Python's `forget()` checks `get_remote_client()` and proxies to the cloud ([`forget.py:76-85`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/forget/forget.py#L76-L85)). The Rust port preserves this for parity via an injectable seam: `Components` carries an `Option<Arc<dyn CloudDeleteClient>>` field (`components.cloud_client`, defined in `src/cloud_client.rs`), defaulting to `None` in the OSS wiring. When it is `Some`, the handler proxies the request by calling `forward_forget(&payload, &user) -> Result<ForgetResponseDTO, CloudClientError>` instead of executing locally; the closed cloud build supplies the concrete implementation.
 
 ## 3. Cross-cutting behavior
 
@@ -151,7 +151,7 @@ When `everything=true`, the `data_id` and `dataset` fields are **ignored**. We d
 
 ### 3.4 Remote-client proxying
 
-When the server is configured with a cloud client (per `cognee-cloud`), `/forget` proxies upstream rather than executing locally. The handler must check `state.lib.cloud_client()` first and call its `forget(...)` method if present. Telemetry attribute `cognee.forget.proxied = true` should be set on this branch.
+When the server is configured with a cloud client, `/forget` proxies upstream rather than executing locally. The handler checks `components.cloud_client` (an `Option<Arc<dyn CloudDeleteClient>>`) first and, when it is `Some`, calls `forward_forget(&payload, &user)` — returning `Result<ForgetResponseDTO, CloudClientError>` — instead of running the local delete path. The trait lives in `src/cloud_client.rs`; OSS wiring leaves the field `None`, and the closed cloud build injects the concrete client. Telemetry attribute `cognee.forget.proxied = true` should be set on this branch.
 
 ## 4. DTO definitions
 
@@ -279,8 +279,8 @@ Field-level mapping vs Python:
    - Inject `AuthenticatedUser`, `State<AppState>`, `Json<ForgetPayloadDTO>`.
    - Call `payload.resolve_mode()`; on `Err`, return 422 with `{"error": <msg>}`.
    - Permission check (depends on mode).
-   - If `state.lib.cloud_client.is_some()` and the deployment proxies, dispatch to it.
-   - Otherwise call `state.lib.forget(...)` (delegation target).
+   - If `components.cloud_client.is_some()`, dispatch to it via `forward_forget(&payload, &user)` and return its `ForgetResponseDTO`.
+   - Otherwise call the local delegation target.
    - Map result to `ForgetResponseDTO` variant.
    - Map `DatasetNotFoundError` to **422** with the canonical `{"error": "Invalid request parameters. Specify dataset, data_id+dataset, or everything=True."}` body — Python collapses missing-dataset and cross-field-validation cases into one 422; we match.
    - Map all other errors to 500 with `{"error": "An error occurred during deletion."}` (terse for parity).

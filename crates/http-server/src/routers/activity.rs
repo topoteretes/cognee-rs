@@ -181,53 +181,6 @@ pub async fn get_users(
 }
 
 // ─── 2.4  GET /agents ────────────────────────────────────────────────────────
-//
-// `classify_agent` + `AgentClassification` were the email-suffix heuristics
-// that powered the `/agents` endpoint before T3-move stubbed it to return
-// an empty list (the `users` / `user_api_key` tables moved to
-// `cognee-access-control`). They're kept dead-code-allowed for the closed
-// `cognee-http-cloud` crate to lift unchanged when it re-homes the route.
-
-/// Classification of one user's email into "agent metadata".
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[allow(dead_code, reason = "lifted by closed cognee-http-cloud in T3-move")]
-struct AgentClassification {
-    is_agent: bool,
-    is_default: bool,
-    agent_type: String,
-    agent_short_id: String,
-}
-
-/// Reproduce Python's L162–L194 byte-for-byte:
-/// - email ends with `@cognee.agent` → split local part on the *last* `-`,
-///   replace `-`/`_` with spaces in the prefix.
-/// - email is the seed default → `("Human User", "")`.
-/// - else → local part of email as `agent_type`, empty `agent_short_id`.
-#[allow(dead_code, reason = "lifted by closed cognee-http-cloud in T3-move")]
-fn classify_agent(email: &str) -> AgentClassification {
-    let is_agent = email.ends_with("@cognee.agent");
-    let is_default = email == "default_user@example.com";
-
-    let (agent_type, agent_short_id) = if is_agent {
-        let local = email.split('@').next().unwrap_or(email);
-        match local.rsplit_once('-') {
-            Some((prefix, suffix)) => (prefix.replace(['-', '_'], " "), suffix.to_string()),
-            None => (local.replace(['-', '_'], " "), String::new()),
-        }
-    } else if is_default {
-        ("Human User".to_string(), String::new())
-    } else {
-        let local = email.split('@').next().unwrap_or(email);
-        (local.to_string(), String::new())
-    };
-
-    AgentClassification {
-        is_agent,
-        is_default,
-        agent_type,
-        agent_short_id,
-    }
-}
 
 /// `GET /api/v1/activity/agents` — list every active user with agent metadata.
 ///
@@ -511,31 +464,6 @@ fn escape_pipes(s: &str) -> String {
 )]
 mod tests {
     use super::*;
-
-    #[test]
-    fn classify_agent_truth_table() {
-        let c = classify_agent("researcher-bot-abc123@cognee.agent");
-        assert!(c.is_agent);
-        assert_eq!(c.agent_type, "researcher bot");
-        assert_eq!(c.agent_short_id, "abc123");
-
-        let c = classify_agent("myagent@cognee.agent");
-        assert!(c.is_agent);
-        assert_eq!(c.agent_type, "myagent");
-        assert_eq!(c.agent_short_id, "");
-
-        let c = classify_agent("default_user@example.com");
-        assert!(!c.is_agent);
-        assert!(c.is_default);
-        assert_eq!(c.agent_type, "Human User");
-        assert_eq!(c.agent_short_id, "");
-
-        let c = classify_agent("alice@corp.io");
-        assert!(!c.is_agent);
-        assert!(!c.is_default);
-        assert_eq!(c.agent_type, "alice");
-        assert_eq!(c.agent_short_id, "");
-    }
 
     #[test]
     fn render_markdown_pipe_escape() {
