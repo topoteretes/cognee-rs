@@ -25,9 +25,9 @@ It’s designed to run efficiently on constrained devices (smartwatch, phone)
 ## Technology Stack
 
 - **Rust** — edition 2024 workspace (resolver 3).
-- **Vector store** — embedded [Qdrant](https://qdrant.tech/) (`segment`/`shard` engine) with metadata filtering.
+- **Vector store** — in-memory brute-force (default); [pgvector](https://github.com/pgvector/pgvector) (Postgres, feature-gated). Optional Qdrant adapter lives in the closed `cognee-cloud-rs` companion.
 - **Graph store** — embedded [Ladybug](https://crates.io/crates/lbug) graph database for knowledge-graph storage and traversal.
-- **LLM** — OpenAI-compatible HTTP adapter (`OpenAIAdapter`, works with OpenAI/Ollama/vLLM/llama.cpp) plus an on-device `LiteRtAdapter` (Android, feature-gated).
+- **LLM** — OpenAI-compatible HTTP adapter (`OpenAIAdapter`, works with OpenAI/Ollama/vLLM/llama.cpp). On-device adapters (Android LiteRT) live in `cognee-cloud-rs`.
 - **Embeddings** — multi-provider engine: local ONNX Runtime (BGE-Small-v1.5), OpenAI-compatible HTTP, Ollama, and a mock provider for tests.
 - **Relational metadata** — SQLite/Postgres via SeaORM.
 
@@ -164,34 +164,12 @@ Run `cognee-cli <command> --help` for the full flag list. See
 [docs/tools/cli.md](docs/tools/cli.md) for the subcommand reference, logging, and
 LLM-retry configuration.
 
-### Android Local LLM (LiteRT-LM)
+### Android Local LLM
 
-An Android-only local LLM backend is available through the `litert` provider.
-
-Requirements:
-- LiteRT wrapper crate fetched from `https://github.com/topoteretes/cognee-litert-lm.git`
-- Android NDK toolchain configured (for example `aarch64-linux-android21-clang` in `PATH`)
-
-Enable feature:
-
-```bash
-cargo check -p cognee-lib --features android-litert
-```
-
-Android compile check:
-
-```bash
-cargo check -p cognee-lib --features android-litert --target aarch64-linux-android
-```
-
-Configuration values:
-- `llm_provider = "litert"`
-- `llm_model = "/absolute/path/to/model.litertlm"` (local model path)
-- `llm_endpoint = "cpu"` or `"gpu"` (optional backend hint)
-
-Structured output behavior for LiteRT:
-- The JSON schema is injected into the user prompt in compact JSON form.
-- The model is instructed to return only one valid JSON object matching that schema.
+The on-device Android LiteRT-LM adapter is not part of this OSS workspace. It
+lives in the closed `cognee-cloud-rs` companion repo as the `cognee-llm-litert`
+crate, alongside the Android NDK toolchain glue and the LiteRT wrapper. If you
+need the on-device path, refer to that companion repo.
 
 ### Running Tests
 
