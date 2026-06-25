@@ -73,6 +73,7 @@ CONTRIBUTING.md
 crates/bench/benches/batch_add_cognify.rs
 crates/bench/Cargo.toml
 crates/bindings-common/Cargo.toml
+crates/bindings-common/README.md
 crates/bindings-common/src/error.rs
 crates/bindings-common/src/handle.rs
 crates/bindings-common/src/lib.rs
@@ -107,6 +108,7 @@ crates/chunking/src/test_inputs.rs
 crates/chunking/src/text_chunker.rs
 crates/chunking/src/token_counter.rs
 crates/cli/Cargo.toml
+crates/cli/README.md
 crates/cli/src/cli.rs
 crates/cli/src/commands/add_and_cognify.rs
 crates/cli/src/commands/add.rs
@@ -125,6 +127,7 @@ crates/cli/src/commands/search.rs
 crates/cli/src/commands/visualize.rs
 crates/cli/src/config_store.rs
 crates/cli/src/error.rs
+crates/cli/src/lib.rs
 crates/cli/src/main.rs
 crates/cli/tests/cli_bench.rs
 crates/cli/tests/cli_e2e.rs
@@ -313,9 +316,7 @@ crates/database/src/traits/search_db.rs
 crates/database/src/traits/session_lifecycle_db.rs
 crates/database/src/types.rs
 crates/database/src/uuid_hex.rs
-crates/database/tests/acl_tests.rs
 crates/database/tests/migration_compat.rs
-crates/database/tests/permissions_repository.rs
 crates/database/tests/pipeline_run_attribution.rs
 crates/database/tests/pipeline_run_payload_fields.rs
 crates/database/tests/pipeline_run_repository.rs
@@ -751,6 +752,7 @@ crates/vector/Cargo.toml
 crates/vector/README.md
 crates/vector/src/brute_force_vector_db.rs
 crates/vector/src/error.rs
+crates/vector/src/lancedb_adapter.rs
 crates/vector/src/lib.rs
 crates/vector/src/mock_vector_db.rs
 crates/vector/src/models.rs
