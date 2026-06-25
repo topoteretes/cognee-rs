@@ -6,7 +6,8 @@
 //! - `GET /spans` — live observability tier (in-memory ring buffer).
 //! - `GET /users` — list of users in the *default user's* tenant (Python
 //!   parity: not the authenticated user's tenant).
-//! - `GET /agents` — every active user, classified by `@cognee.agent` suffix.
+//! - `GET /agents` — active users with agent metadata (OSS returns an empty
+//!   list; the closed `cognee-http-cloud` crate provides the real handler).
 //! - `GET /export/{dataset_id}` — Markdown report for one dataset.
 //!
 //! See [`docs/http-server/routers/activity.md`](../../../../docs/http-server/routers/activity.md).
