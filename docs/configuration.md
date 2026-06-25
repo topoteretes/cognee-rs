@@ -92,6 +92,8 @@ Supported providers:
 
 Qdrant lives in closed `cognee-cloud-rs` as the `cognee-vector-qdrant` crate
 and is not part of OSS. See [tools/backends.md](tools/backends.md).
+Setting `vector_db_provider` to `qdrant` is rejected at component
+initialization in OSS (it returns a config error rather than falling back).
 
 ## Graph database
 

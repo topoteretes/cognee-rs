@@ -354,18 +354,17 @@ impl ComponentManager {
                     Ok(Arc::new(BruteForceVectorDB::new()))
                 }
             }
-            // T4-move removed the Qdrant adapter from OSS. Rather than
-            // hard-error, fall back to the in-memory brute-force backend so
-            // existing configs keep booting.
-            "qdrant" => {
-                tracing::warn!(
-                    provider = %provider,
-                    "vector_db_provider='qdrant' is no longer available in OSS; \
-                     falling back to in-memory brute-force. Set vector_db_provider='pgvector' \
-                     for production, or 'brute-force' to silence this warning.",
-                );
-                Ok(Arc::new(BruteForceVectorDB::new()))
-            }
+            // T4-move extracted the Qdrant adapter out of OSS into the closed
+            // `cognee-vector-qdrant` crate. OSS hard-errors rather than silently
+            // substituting a different backend, mirroring the closed-adapter
+            // handling elsewhere in this file (e.g. LiteRT). LanceDB stays OSS
+            // (handled above); only Qdrant is closed.
+            "qdrant" => Err(ComponentError::Config(format!(
+                "vector_db_provider='{provider}' is not available in this build. \
+                 The Qdrant adapter has been extracted to the closed \
+                 cognee-vector-qdrant crate. Use vector_db_provider='pgvector', \
+                 'lancedb', or 'brute-force' in OSS."
+            ))),
             #[cfg(feature = "testing")]
             "mock" => Ok(Arc::new(cognee_vector::MockVectorDB::new())),
             other => Err(ComponentError::Config(format!(
