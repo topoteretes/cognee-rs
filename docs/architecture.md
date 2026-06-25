@@ -171,6 +171,6 @@ from `cognee-lib` (the facade) and follow the re-exports.
 | Embedding | `cognee-embedding` | `EmbeddingEngine`, `EmbeddingConfig` |
 | LLM | `cognee-llm` | `Llm`, `OpenAIAdapter` |
 | Graph | `cognee-graph` | `GraphDBTrait`, `LadybugAdapter` |
-| Vector | `cognee-vector` | `VectorDB`, `QdrantAdapter` |
+| Vector | `cognee-vector` | `VectorDB`, `BruteForceVectorDB`, `PgVectorAdapter` |
 | Delete | `cognee-delete` | `DeleteService` |
 | HTTP server | `cognee-http-server` | `build_router`, `run`, `AppState` |

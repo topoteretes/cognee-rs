@@ -11,8 +11,9 @@ exposes the same flow: `warm()` → `add()` → `cognify()` → `search()`.
 | **C** (FFI) | [capi/README.md](../../capi/README.md) | `cg_sdk_*` over an opaque handle | callback-based (+ optional `CgSdkWaiter` sync bridge) |
 | **JavaScript/TS** (Neon) | [ts/README.md](../../ts/README.md) | `Cognee` (`import { Cognee } from 'cognee-ts'`) | Promise-based |
 
-Module-level helpers exist in each binding for `serve()` / `disconnect()` (cloud)
-and logging/telemetry setup. The full per-language method list lives in each
+Module-level helpers exist in each binding for logging/telemetry setup. The
+`serve()` / `disconnect()` cloud helpers live in the closed companion packages,
+not in the OSS bindings. The full per-language method list lives in each
 binding's README and its generated docs.
 
 ## Configuration

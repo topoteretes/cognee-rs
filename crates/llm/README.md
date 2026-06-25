@@ -211,8 +211,9 @@ Tests will automatically skip if environment variables are not set.
 
 Implemented:
 - **`OpenAIAdapter`** — OpenAI-compatible APIs (also works with Ollama/vLLM/LocalAI)
-- **`LiteRtAdapter`** — Android on-device inference via LiteRT (behind the
-  `android-litert` feature, `target_os = "android"`)
+
+On-device LiteRT inference (Android) ships in the closed companion crate
+`cognee-llm-litert`.
 
 Planned:
 - Anthropic adapter (Claude with tool use)

@@ -190,7 +190,7 @@ The HTTP DTOs are produced by `From<&HealthCheckReport>` / `From<&ComponentHealt
    - DEGRADED state on detailed → **503** + full body (parity guard).
    - Panicking checker → 503 + `{status: "not ready", reason: "..."}` (shallow) or `{status: "unhealthy", error: "..."}` (detailed). The two key names differ on purpose; assert exact JSON.
 8. Add integration tests in `crates/http-server/tests/test_health.rs`:
-   - Boot real `AppState` with in-memory SQLite, embedded Qdrant, Ladybug, and a `tempfile::tempdir()` data root. Probe `/health` → 200. Probe `/health/detailed` → 200 with all four critical components present.
+   - Boot real `AppState` with in-memory SQLite, in-memory brute-force vector DB, Ladybug, and a `tempfile::tempdir()` data root. Probe `/health` → 200. Probe `/health/detailed` → 200 with all four critical components present.
    - Boot with a deliberately broken graph DB (e.g. no Ladybug binary) and assert `/health` returns 503 + `health: "unhealthy"`.
    - Probe is hit 100 times concurrently — assert no `health_check_test` artifact is left behind in the temp dir at end (probe-file leak check).
 9. Add cross-SDK parity tests in `e2e-cross-sdk/harness/test_http_health.py`: spin up Python uvicorn and Rust binary with identical config, hit `/health` and `/health/detailed` on both, assert response body shapes match (modulo `version`, `timestamp`, `uptime`, `response_time_ms`). Keys, status codes, and `status`/`health` enum values must match exactly.
