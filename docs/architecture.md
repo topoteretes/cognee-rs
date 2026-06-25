@@ -16,7 +16,7 @@ root `README.md` link here rather than duplicating it.
 ## Workspace structure
 
 ```
-cognee-rust/
+cognee-rust-oss/
 ├── Cargo.toml                  # Workspace root (edition 2024, resolver 3)
 ├── crates/
 │   ├── models/                 # Core data types: Data, Dataset, DataInput, Document, DocumentChunk
@@ -30,7 +30,7 @@ cognee-rust/
 │   ├── embedding/              # Multi-provider embedding engine (ONNX, OpenAI, Ollama, Mock)
 │   ├── llm/                    # LLM provider abstraction (OpenAI-compatible API adapter)
 │   ├── graph/                  # Graph DB abstraction (Ladybug embedded graph)
-│   ├── vector/                 # Vector DB abstraction (Qdrant embedded)
+│   ├── vector/                 # Vector DB abstraction (brute-force default; pgvector feature-gated)
 │   ├── ontology/               # Ontology resolution (RDF/JSON-LD loader, NoOp resolver)
 │   ├── delete/                 # Dataset/data deletion across all backends
 │   ├── core/                   # Task pipeline orchestration framework
@@ -53,7 +53,9 @@ cognee-rust/
 ├── scripts/                    # Build, check, and deployment scripts
 ├── docs/                       # Documentation (this folder)
 ├── e2e-cross-sdk/              # Cross-SDK E2E tests (Rust ↔ Python interop)
-└── .github/workflows/          # CI (ci.yml, http-parity.yml, ts-prebuild.yml)
+└── .github/workflows/          # CI (ci.yml, oss-isolation.yml, publish-dry-run.yml,
+                                #      release-plz.yml, capi-release.yml, ts-prebuild.yml,
+                                #      http-parity.yml)
 ```
 
 ## Crate breakdown
@@ -76,11 +78,11 @@ cognee-rust/
 
 **cognee-embedding** — Text vectorization engine. Trait: `EmbeddingEngine`. Impls: `OnnxEmbeddingEngine` (local ONNX Runtime, BGE-Small-v1.5), `OpenAICompatibleEmbeddingEngine` (OpenAI/Azure/vLLM/llama.cpp/TEI via HTTP), `OllamaEmbeddingEngine`, `MockEmbeddingEngine`. `EmbeddingConfig::from_env()` + `create_engine()` factory select the provider. See [configuration.md](configuration.md#embedding).
 
-**cognee-llm** — Async LLM abstraction with structured JSON output. Trait: `Llm` (+ auto-implemented `LlmExt`). Impls: `OpenAIAdapter` (OpenAI-compatible APIs, works with Ollama/vLLM), `LiteRtAdapter` (Android local inference, feature-gated).
+**cognee-llm** — Async LLM abstraction with structured JSON output. Trait: `Llm` (+ auto-implemented `LlmExt`). Impls: `OpenAIAdapter` (OpenAI-compatible APIs, works with Ollama/vLLM), `MockLlm` (cassette-backed, `testing` feature). The on-device LiteRT adapter lives in the closed `cognee-llm-litert` crate shipped as part of `cognee-cloud-rs` and is not part of OSS.
 
 **cognee-graph** — Graph database abstraction for knowledge-graph storage and traversal. Trait: `GraphDBTrait` (+ `GraphDBTraitExt`). Impls: `LadybugAdapter` (embedded Ladybug), `PgGraphAdapter` (feature `postgres`), `MockGraphDB`. Concurrency: Rust matches Python's default single-owning-process model for file-backed Ladybug; cross-process locking is intentionally out of scope (see [roadmap/](roadmap/README.md)).
 
-**cognee-vector** — Vector database abstraction for similarity search. Trait: `VectorDB`. Impls: `QdrantAdapter` (embedded Qdrant), `MockVectorDB`.
+**cognee-vector** — Vector database abstraction for similarity search. Trait: `VectorDB`. Impls: `BruteForceVectorDB` (pure-Rust in-memory default), `PgVectorAdapter` (Postgres + pgvector extension, feature `pgvector`), `MockVectorDB`. The embedded Qdrant adapter lives in the closed `cognee-vector-qdrant` crate shipped as part of `cognee-cloud-rs` and is not part of OSS.
 
 **cognee-ontology** — RDF/OWL ontology integration for entity validation. Trait: `OntologyResolver`. Impls: `RdfLibOntologyResolver`, `NoOpOntologyResolver` (pass-through).
 
@@ -112,7 +114,7 @@ cognee-rust/
 
 ## Architecture patterns
 
-- **Feature strategy** — Individual crates define optional features with no defaults (`default = []`). The umbrella library (`cognee-lib`) and the CLI (`cognee-cli`) enable all non-platform-specific features by default, so a plain `cargo build` gives a fully-featured binary. Platform-specific features (e.g. `android-litert`) and `testing` stay opt-in. New feature-gated capabilities should be propagated up through `cognee-lib`/`cognee-cli` defaults unless platform- or test-only.
+- **Feature strategy** — Individual crates define optional features with no defaults (`default = []`). The umbrella library (`cognee-lib`) and the CLI (`cognee-cli`) enable all non-platform-specific features by default, so a plain `cargo build` gives a fully-featured binary. Platform- and deployment-specific extras (e.g. on-device LiteRT inference, embedded Qdrant) ship in the closed `cognee-cloud-rs` companion repo; the `testing` feature stays opt-in. New feature-gated capabilities should be propagated up through `cognee-lib`/`cognee-cli` defaults unless platform- or test-only.
 - **Trait-based abstractions** — `StorageTrait`, `IngestDb`, `GraphDBTrait`, `VectorDB`, `EmbeddingEngine`, `Llm`, `SessionStore`, etc. enable backend swapping and mock testing.
 - **Prefer `dyn Trait`** — object-safe traits via `&dyn Trait` / `Arc<dyn Trait>` at call sites; monomorphized generics only when performance-critical.
 - **Zero-copy where possible** — `WordChunk<'a>`, `SentenceChunk<'a>`, `ParagraphChunk<'a>` borrow `&str` slices via byte-offset tracking.
@@ -129,7 +131,6 @@ cognee-rust/
 | `tokio` | Async runtime |
 | `sea-orm` (SQLite, Postgres) | Relational DB ORM (metadata, sessions, provenance) |
 | `ort` (ONNX Runtime) | Local model inference (embeddings) |
-| `qdrant` (segment/shard/common/edge — git deps) | Embedded vector storage |
 | `lbug` | Embedded graph database (Ladybug) |
 | `reqwest` (rustls-tls) | HTTP client (URL crawling, LLM/embedding APIs) |
 | `scraper` | HTML parsing for URL ingestion |

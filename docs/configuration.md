@@ -73,14 +73,15 @@ Provider values: `onnx`, `fastembed`, `openai`, `openai_compatible`, `ollama`, `
 
 | Env var | `Settings` field | Default |
 |---|---|---|
-| `VECTOR_DB_PROVIDER` | `vector_db_provider` | `lancedb` → **maps to embedded Qdrant** |
+| `VECTOR_DB_PROVIDER` | `vector_db_provider` | `brute-force` (in-memory, no native deps) |
 | `VECTOR_DB_URL` | `vector_db_url` | _(empty; defaults under the system root)_ |
 | `VECTOR_DB_HOST` / `VECTOR_DB_PORT` | `vector_db_host` / `vector_db_port` | _(empty)_ / `1234` |
 | `VECTOR_DB_NAME` / `VECTOR_DB_KEY` | `vector_db_name` / `vector_db_key` | _(empty)_ |
 | `VECTOR_DB_USERNAME` / `VECTOR_DB_PASSWORD` | … | _(empty)_ |
 
-Supported providers: `qdrant`, `lancedb` (aliased to embedded Qdrant), `pgvector`
-(feature `pgvector`). See [tools/backends.md](tools/backends.md).
+Supported providers: `brute-force` (default), `pgvector` (feature `pgvector`).
+Qdrant lives in closed `cognee-cloud-rs` as the `cognee-vector-qdrant` crate
+and is not part of OSS. See [tools/backends.md](tools/backends.md).
 
 ## Graph database
 
