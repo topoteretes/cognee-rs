@@ -34,7 +34,6 @@ MODEL_NAME="${MODEL_NAME:-qwen3:4b}"
 # ── Parse flags ──────────────────────────────────────────────────────────────────
 VIDEO_IDS=()
 SEQUENCE_FILES=()
-LLM_BACKEND_EXPLICIT=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -42,7 +41,6 @@ while [[ $# -gt 0 ]]; do
       shift
       [[ $# -gt 0 ]] || { echo "ERROR: --llm-backend requires a value" >&2; exit 1; }
       LLM_BACKEND="$1"
-      LLM_BACKEND_EXPLICIT=1
       shift
       ;;
     --video-ids)
