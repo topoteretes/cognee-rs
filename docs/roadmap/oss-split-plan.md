@@ -502,7 +502,7 @@ The `cognee-rust-oss` working tree is already on the detached `oss-split` branch
 commit is structurally clean by the partition manifest.
 
 ```bash
-cd ../cognee-rs                                       # already a standalone clone
+cd ../cognee-rust-oss                                 # already a standalone clone
 git remote set-url origin git@github.com:topoteretes/cognee-rs.git  # already done
 git push -u origin oss-split:main                     # push as-is to private repo
 ```
@@ -516,7 +516,7 @@ considered for that future step.
 
 ### Step 3 — Verify the OSS repo builds & publishes in isolation
 ```bash
-cd ../cognee-rs
+cd ../cognee-rust-oss
 bash scripts/check_all.sh
 bash scripts/run_tests_with_openai.sh
 # dry-run every crate in topological order; fail on any git/path dep:
@@ -525,7 +525,7 @@ for c in $(scripts/split/publish-order.sh); do cargo publish -p "$c" --dry-run |
 
 ### Step 4 — Leak audit of the pushed OSS history (surface inventory)
 ```bash
-cd ../cognee-rs
+cd ../cognee-rust-oss
 # 1. Closed paths in history (expected non-empty under push-as-is):
 git log --all --oneline -- $(cat scripts/split/closed-paths.txt) | head
 # 2. Closed object names in any reachable blob (expected non-empty):
@@ -550,7 +550,7 @@ The `cognee-rs` repo already exists (created out-of-band) and now hosts the
 `main` branch pushed in Step 2. T16 tags the commit and captures the rev:
 
 ```bash
-cd ../cognee-rs
+cd ../cognee-rust-oss
 git tag v0.1.0 && git push origin v0.1.0
 OSS_REV=$(git rev-parse v0.1.0)          # closed repo pins this in Step 6
 ```
