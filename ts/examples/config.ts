@@ -94,7 +94,7 @@ function main(): void {
   });
 
   cognee.config.setVectorDbConfig({
-    vector_db_provider: "qdrant",
+    vector_db_provider: "brute-force",
   });
 
   cognee.config.setGraphDbConfig({

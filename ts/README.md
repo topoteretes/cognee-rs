@@ -78,7 +78,7 @@ c.config.setEmbeddingModel("text-embedding-3-small");
 // Bulk setters (throw on unknown key or type mismatch) — one per subsystem:
 c.config.setLlmConfig({ model: "gpt-4o", temperature: 0.2 });
 c.config.setEmbeddingConfig({ provider: "openai", model: "text-embedding-3-small" });
-c.config.setVectorDbConfig({ provider: "qdrant" });
+c.config.setVectorDbConfig({ provider: "brute-force" });
 c.config.setGraphDbConfig({ provider: "kuzu" });
 
 // Generic key-value setter:

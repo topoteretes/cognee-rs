@@ -136,13 +136,13 @@ describe("Phase-2 config surface", () => {
     it("applies a bulk vector-db config (incl. Option B host/port/name)", () => {
       const handle = native.cogneeNew({});
       native.configSetVectorDbConfig(handle, {
-        vector_db_provider: "qdrant",
+        vector_db_provider: "brute-force",
         vector_db_host: "bulk-host",
         vector_db_port: 6334,
         vector_db_name: "bulk_coll",
       });
       const cfg = native.getConfig(handle) as Record<string, unknown>;
-      expect(cfg.vector_db_provider).toBe("qdrant");
+      expect(cfg.vector_db_provider).toBe("brute-force");
       expect(cfg.vector_db_host).toBe("bulk-host");
       expect(cfg.vector_db_port).toBe(6334);
       expect(cfg.vector_db_name).toBe("bulk_coll");

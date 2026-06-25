@@ -110,7 +110,7 @@ def main() -> None:
     })
 
     cognee.config.set_vector_db_config({
-        "vector_db_provider": "qdrant",
+        "vector_db_provider": "brute-force",
     })
 
     cognee.config.set_graph_db_config({
