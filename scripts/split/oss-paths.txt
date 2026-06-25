@@ -458,7 +458,6 @@ crates/http-server/tests/support/mod.rs
 crates/http-server/tests/test_activity_spans.rs
 crates/http-server/tests/test_cognify_blocking.rs
 crates/http-server/tests/test_cognify_websocket.rs
-crates/http-server/tests/test_configuration.rs
 crates/http-server/tests/test_cors.rs
 crates/http-server/tests/test_dto_wire_shape.rs
 crates/http-server/tests/test_health_real.rs
