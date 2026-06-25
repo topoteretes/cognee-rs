@@ -27,12 +27,31 @@ permissions:
   pull-requests: write
 
 jobs:
+  # The `secrets` context is NOT available in a job-level `if:` (GitHub rejects
+  # the whole workflow file as invalid). Read the token in a step instead and
+  # surface a boolean output the publish job can gate on.
+  check-token:
+    name: Check release token
+    runs-on: ubuntu-latest
+    outputs:
+      has_token: ${{ steps.check.outputs.has_token }}
+    steps:
+      - id: check
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          if [ -n "$CARGO_REGISTRY_TOKEN" ]; then
+            echo "has_token=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_token=false" >> "$GITHUB_OUTPUT"
+          fi
+
   release-plz-release:
     name: release-plz release
     runs-on: ubuntu-latest
-    # `if: ${{ secrets.X != '' }}` is evaluated before `env:` is built, so the
-    # secret has to be read at the job-level guard rather than via env.
-    if: ${{ secrets.CARGO_REGISTRY_TOKEN != '' }}
+    needs: check-token
+    # Gate on the precheck output — `secrets` cannot be used in a job `if:`.
+    if: ${{ needs.check-token.outputs.has_token == 'true' }}
     steps:
       - uses: actions/checkout@v4
         with:

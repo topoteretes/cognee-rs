@@ -203,17 +203,38 @@ jobs:
           path: ts/platform-packages/${{ matrix.platform }}/cognee_ts_neon.node
           retention-days: 7
 
+  # The `secrets` context is NOT available in a job-level `if:` (GitHub rejects
+  # the whole workflow file as invalid). Read the token in a step instead and
+  # surface a boolean output the publish job can gate on.
+  check-token:
+    name: Check npm token
+    runs-on: ubuntu-latest
+    outputs:
+      has_token: ${{ steps.check.outputs.has_token }}
+    steps:
+      - id: check
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -n "$NPM_TOKEN" ]; then
+            echo "has_token=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_token=false" >> "$GITHUB_OUTPUT"
+          fi
+
   # ── Publish per-platform packages, then the main package ─────────────
   publish:
     name: Publish npm packages
-    needs: build-platform
+    needs: [build-platform, check-token]
     runs-on: ubuntu-latest
     # Env-guarded per T13 release-plz pattern. NPM_TOKEN is T17 scope
     # (registry publish — irreversible, gated on F8 + explicit human "go").
     # Pre-T17 the secret is intentionally absent on cognee-rs so this job
-    # silently skips and the tag-trigger only exercises the build-platform
-    # matrix above (which still warms the cache + verifies cross-compile).
-    if: ${{ secrets.NPM_TOKEN != '' }}
+    # silently skips (gated on the check-token precheck output, since `secrets`
+    # cannot be used in a job `if:`) and the tag-trigger only exercises the
+    # build-platform matrix above (which still warms the cache + verifies
+    # cross-compile).
+    if: ${{ needs.check-token.outputs.has_token == 'true' }}
 
     env:
       NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
