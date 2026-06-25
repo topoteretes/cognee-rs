@@ -409,25 +409,7 @@ path = await cognee.visualize_to_file({"destination_path": "/tmp/graph.html"})
 
 Requires the `visualization` feature compiled into the native extension.
 
-### Cloud: serve / disconnect
-
-`serve` and `disconnect` are module-level functions because they operate on global
-cloud state.
-
-```python
-from cognee_py import serve, disconnect
-
-# Direct mode (no Auth0 flow; headless-friendly)
-result = await serve({"url": "http://localhost:8000", "api_key": "key"})
-print(f"Connected to {result['service_url']}")
-
-# Cloud mode (Auth0 device-code flow — requires a TTY)
-await serve()
-
-# Tear down
-await disconnect()
-await disconnect({"wipe_credentials": True})   # also removes the local credential cache
-```
+Cloud `serve` / `disconnect` are provided by the closed `cognee-py-cloud` package, not the OSS `cognee_py` package.
 
 ## Initialisation and observability
 

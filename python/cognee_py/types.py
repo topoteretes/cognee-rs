@@ -205,24 +205,6 @@ class VisualizeOpts(TypedDict, total=False):
     destination_path: str
 
 
-class ServeOpts(TypedDict, total=False):
-    """Options accepted by :func:`cognee_py.serve`."""
-
-    url: str
-    api_key: str
-    cloud_url: str
-    auth0_domain: str
-    auth0_client_id: str
-    auth0_audience: str
-
-
-class DisconnectOpts(TypedDict, total=False):
-    """Options accepted by :func:`cognee_py.disconnect`."""
-
-    #: Delete on-disk credential cache when ``True`` (default ``False``).
-    wipe_credentials: bool
-
-
 # ---------------------------------------------------------------------------
 # Result TypedDicts  — snake_case view (as returned by the compat layer)
 # ---------------------------------------------------------------------------
@@ -349,13 +331,6 @@ class ImproveResult(TypedDict):
     edges_synced: int
 
 
-class ServeResult(TypedDict):
-    """Result of :func:`cognee_py.serve`."""
-
-    connected: bool
-    service_url: str
-
-
 __all__ = [
     # Input types
     "TextInput",
@@ -376,8 +351,6 @@ __all__ = [
     "PruneSystemOpts",
     "DeleteDataOpts",
     "VisualizeOpts",
-    "ServeOpts",
-    "DisconnectOpts",
     # Result types
     "AddResult",
     "CognifyResult",
@@ -388,5 +361,4 @@ __all__ = [
     "PruneResult",
     "MemifyResult",
     "ImproveResult",
-    "ServeResult",
 ]

@@ -34,8 +34,7 @@ def test_all_opts_typeddicts_present():
     expected = [
         "AddOpts", "CognifyOpts", "SearchOpts", "RecallOpts", "RememberOpts",
         "MemifyOpts", "ImproveOpts", "ForgetTarget", "UpdateOpts",
-        "PruneSystemOpts", "DeleteDataOpts", "VisualizeOpts", "ServeOpts",
-        "DisconnectOpts",
+        "PruneSystemOpts", "DeleteDataOpts", "VisualizeOpts",
     ]
     for name in expected:
         assert hasattr(t, name), f"missing: {name}"
@@ -47,7 +46,7 @@ def test_all_result_typeddicts_present():
     expected = [
         "AddResult", "CognifyResult", "SearchResult", "RecallResult",
         "ForgetResult", "UpdateResult", "PruneResult", "MemifyResult",
-        "ImproveResult", "ServeResult",
+        "ImproveResult",
     ]
     for name in expected:
         assert hasattr(t, name), f"missing: {name}"
