@@ -30,7 +30,7 @@ cognee-rust-oss/
 │   ├── embedding/              # Multi-provider embedding engine (ONNX, OpenAI, Ollama, Mock)
 │   ├── llm/                    # LLM provider abstraction (OpenAI-compatible API adapter)
 │   ├── graph/                  # Graph DB abstraction (Ladybug embedded graph)
-│   ├── vector/                 # Vector DB abstraction (brute-force default; pgvector feature-gated)
+│   ├── vector/                 # Vector DB abstraction (LanceDB default; brute-force on Android; pgvector feature-gated)
 │   ├── ontology/               # Ontology resolution (RDF/JSON-LD loader, NoOp resolver)
 │   ├── delete/                 # Dataset/data deletion across all backends
 │   ├── core/                   # Task pipeline orchestration framework
@@ -82,7 +82,7 @@ cognee-rust-oss/
 
 **cognee-graph** — Graph database abstraction for knowledge-graph storage and traversal. Trait: `GraphDBTrait` (+ `GraphDBTraitExt`). Impls: `LadybugAdapter` (embedded Ladybug), `PgGraphAdapter` (feature `postgres`), `MockGraphDB`. Concurrency: Rust matches Python's default single-owning-process model for file-backed Ladybug; cross-process locking is intentionally out of scope (see [roadmap/](roadmap/README.md)).
 
-**cognee-vector** — Vector database abstraction for similarity search. Trait: `VectorDB`. Impls: `BruteForceVectorDB` (pure-Rust in-memory default), `PgVectorAdapter` (Postgres + pgvector extension, feature `pgvector`), `MockVectorDB`. The embedded Qdrant adapter lives in the closed `cognee-vector-qdrant` crate shipped as part of `cognee-cloud-rs` and is not part of OSS.
+**cognee-vector** — Vector database abstraction for similarity search. Trait: `VectorDB`. Impls: `LanceDbAdapter` (embedded Apache-Arrow / Lance, on-disk; default on non-Android targets), `BruteForceVectorDB` (pure-Rust in-memory; default on Android and via `vector_db_url = ":memory:"`), `PgVectorAdapter` (Postgres + pgvector extension, feature `pgvector`), `MockVectorDB`. The embedded Qdrant adapter lives in the closed `cognee-vector-qdrant` crate shipped as part of `cognee-cloud-rs` and is not part of OSS.
 
 **cognee-ontology** — RDF/OWL ontology integration for entity validation. Trait: `OntologyResolver`. Impls: `RdfLibOntologyResolver`, `NoOpOntologyResolver` (pass-through).
 

@@ -15,7 +15,7 @@ all three; search reads across them.
 | Store | Role | Crate | Default backend |
 |---|---|---|---|
 | **Relational** | Document tracking, deduplication, provenance/lineage, sessions | [`cognee-database`](../crates/database/) | SQLite via SeaORM (Postgres supported) |
-| **Vector** | Semantic similarity over embeddings (chunks, entities, summaries, triplets) | [`cognee-vector`](../crates/vector/) | Brute-force in-memory (pgvector via feature) |
+| **Vector** | Semantic similarity over embeddings (chunks, entities, summaries, triplets) | [`cognee-vector`](../crates/vector/) | LanceDB embedded (brute-force on Android / `:memory:`; pgvector via feature) |
 | **Graph** | Entity relationships — the knowledge graph itself | [`cognee-graph`](../crates/graph/) | Embedded Ladybug |
 
 Backend selection and connection settings are covered in
