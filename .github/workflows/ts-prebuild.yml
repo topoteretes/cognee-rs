@@ -17,6 +17,10 @@ on:
   push:
     tags:
       - "v[0-9]+.[0-9]+.[0-9]+"
+  # Manual trigger: build all platforms and publish whichever are missing,
+  # without needing a version bump / new tag. The publish steps are
+  # idempotent (skip-if-already-on-registry), so re-running is safe.
+  workflow_dispatch:
 
 concurrency:
   group: ts-prebuild-${{ github.ref }}
@@ -283,11 +287,15 @@ jobs:
             linux-x64-musl linux-arm64-musl \
             darwin-x64 darwin-arm64 \
             win32-x64-msvc; do
-            if [ -f "${PLATFORM}/cognee_ts_neon.node" ]; then
-              echo "--- Publishing @cognee-ts/neon-${PLATFORM} ---"
-              npm publish "${PLATFORM}" --access public
+            PKG="@cognee/neon-${PLATFORM}"
+            VER=$(node -p "require('./${PLATFORM}/package.json').version")
+            if [ ! -f "${PLATFORM}/cognee_ts_neon.node" ]; then
+              echo "SKIP ${PLATFORM}: no .node built" >&2
+            elif npm view "${PKG}@${VER}" version >/dev/null 2>&1; then
+              echo "SKIP ${PKG}@${VER}: already on registry"
             else
-              echo "SKIP: no .node for ${PLATFORM}" >&2
+              echo "--- Publishing ${PKG}@${VER} ---"
+              npm publish "${PLATFORM}" --access public
             fi
           done
 
@@ -302,7 +310,14 @@ jobs:
           COGNEE_SKIP_POSTINSTALL: "1"
         run: npm run build:ts
 
-      # Publish the main cognee-ts package.
+      # Publish the main cognee-ts package (idempotent: skip if already on registry).
       - name: Publish cognee-ts
         working-directory: ts
-        run: npm publish --access public
+        run: |
+          VER=$(node -p "require('./package.json').version")
+          if npm view "@cognee/cognee-ts@${VER}" version >/dev/null 2>&1; then
+            echo "SKIP @cognee/cognee-ts@${VER}: already on registry"
+          else
+            echo "--- Publishing @cognee/cognee-ts@${VER} ---"
+            npm publish --access public
+          fi
