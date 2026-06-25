@@ -2,10 +2,14 @@
 
 How to cut and publish a cognee-rust release. Two tracks:
 
-- **Track A** — bindings + source: PyPI (`cognee-py`), npm (`cognee`), C-library artifact,
-  GitHub source tag. Does **not** require crates.io publishability.
-- **Track B** — crates.io: publish the `cognee-*` library crates (gated on removing
-  git deps / `[patch.crates-io]` from the dependency graph — a separate, larger effort).
+- **Track A** — bindings + C artifact: npm (`cognee-ts` + 7 prebuilt platform
+  packages), C-library tarballs attached to the GitHub Release, GitHub source
+  tag. The Python binding is **not** published to PyPI — users build it from
+  source via `cd python && maturin develop` (or `maturin build --release` for a
+  local wheel).
+- **Track B** — crates.io: publish the 24 OSS `cognee-*` library crates in
+  topological order (release-plz drives this). OSS git deps were removed in
+  T4, so non-leaf crates are now publishable.
 
 ## Pre-flight (all tracks)
 
@@ -29,15 +33,16 @@ git tag -a vX.Y.Z -m "cognee-rust vX.Y.Z"
 git push origin vX.Y.Z
 ```
 
-## Publish — PyPI (Python binding)
+## Python binding — build from source (no PyPI publish)
+
+The Python binding is not published to PyPI. Users build it locally:
 
 ```bash
 bash python/scripts/check.sh        # gate
 cd python
-maturin build --release             # build wheel(s) + sdist
-# Dry run first, then publish:
-maturin publish --dry-run
-maturin publish                     # needs PyPI token (MATURIN_PYPI_TOKEN / ~/.pypirc)
+maturin develop                     # install into the active venv
+# or, for a redistributable wheel/sdist:
+maturin build --release
 ```
 
 ## Publish — npm (TS binding)
@@ -81,10 +86,11 @@ bash capi/scripts/build-release-tarball.sh vX.Y.Z "" linux-x86_64
 
 Attach the resulting tarball (lib + headers + `LICENSE-MIT` + `LICENSE-APACHE`) to the GitHub Release for the tag.
 
-## Publish — crates.io (Track B only)
+## Publish — crates.io (Track B)
 
-> Blocked until git deps / `[patch.crates-io]` are removed from the published
-> dependency graph. Until then, `cargo publish` will refuse non-leaf crates.
+OSS git deps were removed in T4, so `cargo publish` works for non-leaf crates.
+Publishing is driven by release-plz (see `.github/workflows/release-plz.yml`)
+which walks the 24 OSS crates in topological order. For a manual fallback:
 
 ```bash
 # Dry-run each crate in dependency order (leaves first):
@@ -95,6 +101,9 @@ cargo publish -p cognee-models
 
 ## Post-release
 
-1. Create a GitHub Release from the tag; paste the `CHANGELOG.md` section; attach the C artifact.
-2. Verify installs: `pip install cognee-py==X.Y.Z`, `npm install cognee@X.Y.Z`.
+1. Create a GitHub Release from the tag (the `capi-release.yml` workflow
+   auto-attaches per-platform C-API tarballs when triggered by the `v*` tag).
+   Paste the `CHANGELOG.md` section into the release body.
+2. Verify installs: `npm install cognee-ts@X.Y.Z` and a `maturin develop` smoke
+   build for the Python binding.
 3. Open the next `-dev` version bump PR if you use one.
