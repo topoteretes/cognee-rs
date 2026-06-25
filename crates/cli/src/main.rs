@@ -1,13 +1,11 @@
-mod cli;
-mod commands;
-mod config_store;
-mod error;
-
 use std::process::ExitCode as StdExitCode;
 use std::sync::Arc;
 
 use clap::Parser;
-use cli::{Cli, Commands};
+use cognee_cli::cli::{Cli, Commands};
+use cognee_cli::commands;
+use cognee_cli::config_store::{Settings, load_settings};
+use cognee_cli::error::{CliError, ExitCode};
 use cognee_lib::{ComponentManager, ConfigManager};
 #[cfg(feature = "bench")]
 use commands::bench;
@@ -17,8 +15,6 @@ use commands::{
     add, add_and_cognify, cognify, config, delete, forget, improve, memify, recall, remember,
     run_sequence, search,
 };
-use config_store::{Settings, load_settings};
-use error::{CliError, ExitCode};
 use tracing::error;
 
 fn run(settings: Settings) -> Result<(), CliError> {

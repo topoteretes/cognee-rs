@@ -74,7 +74,8 @@ pub fn run(args: DeleteArgs, cm: Arc<cognee_lib::ComponentManager>) -> Result<()
 
         if enforce_acl {
             return Err(CliError::Validation(
-                "--enforce-acl requires the closed cognee-cloud build".to_string(),
+                "--enforce-acl requires the closed cognee-cloud-rs build (cognee-cli-cloud)"
+                    .to_string(),
             ));
         }
 
@@ -101,7 +102,7 @@ pub fn run(args: DeleteArgs, cm: Arc<cognee_lib::ComponentManager>) -> Result<()
     })
 }
 
-fn print_preview(preview: &cognee_lib::delete::DeletePreview) {
+pub fn print_preview(preview: &cognee_lib::delete::DeletePreview) {
     info!(
         datasets = preview.datasets_to_delete,
         links = preview.dataset_links_to_delete,
@@ -113,7 +114,7 @@ fn print_preview(preview: &cognee_lib::delete::DeletePreview) {
     );
 }
 
-fn print_result(result: &cognee_lib::delete::DeleteResult) {
+pub fn print_result(result: &cognee_lib::delete::DeleteResult) {
     info!(
         deleted_datasets = result.deleted_datasets,
         deleted_links = result.deleted_dataset_links,
@@ -133,7 +134,7 @@ fn print_result(result: &cognee_lib::delete::DeleteResult) {
     }
 }
 
-fn confirm_deletion() -> Result<(), CliError> {
+pub fn confirm_deletion() -> Result<(), CliError> {
     info!("This operation is irreversible. Continue? [y/N]: ");
 
     let mut confirmation = String::new();
@@ -152,7 +153,7 @@ fn confirm_deletion() -> Result<(), CliError> {
     Ok(())
 }
 
-fn validate_scope_selection(args: &DeleteArgs) -> Result<(), CliError> {
+pub fn validate_scope_selection(args: &DeleteArgs) -> Result<(), CliError> {
     let mut selected = 0usize;
     if args.data_id.is_some() {
         selected += 1;
@@ -200,7 +201,7 @@ fn parse_dataset_ref(args: &DeleteArgs) -> Result<Option<DatasetRef>, CliError> 
     }
 }
 
-async fn build_request_async(
+pub async fn build_request_async(
     args: DeleteArgs,
     owner_id: Uuid,
     db: Arc<dyn IngestDb>,
