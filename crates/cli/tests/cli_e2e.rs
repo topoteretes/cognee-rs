@@ -271,7 +271,7 @@ fn search_errors_when_dataset_name_does_not_exist() {
         &config_home,
         workdir.path(),
         "vector_db_provider",
-        "\"qdrant\"",
+        "\"brute-force\"",
     );
     config_set(&config_home, workdir.path(), "embedding_dimensions", "2");
     // Dummy key so init_llm() succeeds — the search will never call the
