@@ -1,12 +1,14 @@
 //! Pure-Rust in-memory brute-force `VectorDB` implementation.
 //!
-//! Linear-scan O(n) similarity search over all stored vectors. Suitable
-//! for the OSS edge / Android profile where pgvector's Postgres
-//! requirement is impractical — and as a test fixture in lieu of the
-//! testing-feature-gated `MockVectorDB`.
+//! Linear-scan O(n) similarity search over all stored vectors. Used as:
+//! - the Android default (LanceDB + Arrow do not cross-compile cleanly there);
+//! - the `vector_db_url = ":memory:"` escape hatch on every target (handy
+//!   for tests and ephemeral cognify runs);
+//! - a test fixture in lieu of the testing-feature-gated `MockVectorDB`.
 //!
-//! **No persistence.** Data is lost on process restart. Production
-//! deployments should set `vector_db_provider="pgvector"`.
+//! **No persistence.** Data is lost on process restart. For durable storage
+//! prefer the default `LanceDbAdapter` (on non-Android targets) or
+//! `vector_db_provider="pgvector"`.
 //!
 //! **Memory:** O(n × dim). At ~6 GB for 1M × 1536-dim, this is a
 //! soft cap — beyond that, pgvector (or the closed `cognee-vector-qdrant`)

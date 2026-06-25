@@ -52,8 +52,10 @@ from the docs is correct). The four memory-API CLI verbs (`remember` / `recall` 
     (OpenAI/Ollama/vLLM/llama.cpp) + `LiteRtAdapter` (Android).
   - Embeddings: Python adds Gemini, Mistral, Bedrock, Fastembed; Rust covers ONNX, OpenAI-compatible,
     Ollama, mock.
-  - Vector stores: Python adds ChromaDB, Neptune Analytics, Redis, FalkorDB; Rust covers Qdrant
-    (embedded; `lancedb` aliased to it) and pgvector.
+  - Vector stores: Python adds ChromaDB, Neptune Analytics, Redis, FalkorDB; Rust covers
+    LanceDB (embedded, default on non-Android), pgvector, and an in-memory brute-force store
+    (Android default + `vector_db_url = ":memory:"` escape hatch). The embedded Qdrant adapter
+    lives in the closed `cognee-vector-qdrant` crate.
   - Graph stores: Python adds Neo4j, Neptune, Memgraph; Rust covers Ladybug/Kuzu (embedded) and
     Postgres (`pggraph`).
 - **Structured-output backends** — Python lets you choose LiteLLM + Instructor or BAML for structured

@@ -320,16 +320,47 @@ impl ComponentManager {
                     "vector_db_provider=pgvector requires the `pgvector` crate feature".to_string(),
                 ))
             }
-            // Pure-Rust in-memory brute-force backend (OSS edge/Android default).
+            // Pure-Rust in-memory brute-force backend (Android default + ":memory:" escape hatch).
             "brute-force" | "brute_force" | "bruteforce" => Ok(Arc::new(BruteForceVectorDB::new())),
-            // T4-move removed the Qdrant + LanceDB adapters from OSS. Rather
-            // than hard-error, fall back to the in-memory brute-force backend
-            // so existing configs keep booting. Operators get a `warn!` line
-            // telling them what happened and how to silence it.
-            "qdrant" | "lancedb" => {
+            // Embedded LanceDB on non-Android targets; falls back to brute-force
+            // on Android (LanceDB + Arrow native stack does not cross-compile
+            // there). Honours `vector_db_url = ":memory:"` as an explicit
+            // brute-force opt-in for ephemeral / test workloads.
+            "lancedb" => {
+                let url = {
+                    let s = self.config.read();
+                    s.vector_db_url.clone()
+                };
+                if url == ":memory:" {
+                    return Ok(Arc::new(BruteForceVectorDB::new()));
+                }
+                #[cfg(not(target_os = "android"))]
+                {
+                    let path = self.resolved_lancedb_path(&url);
+                    let adapter = cognee_vector::LanceDbAdapter::new(path)
+                        .await
+                        .map_err(|e| {
+                            ComponentError::VectorDb(format!("lancedb init failed: {e}"))
+                        })?;
+                    Ok(Arc::new(adapter))
+                }
+                #[cfg(target_os = "android")]
+                {
+                    tracing::warn!(
+                        "vector_db_provider='lancedb' is not available on Android; \
+                         falling back to in-memory brute-force. Set \
+                         vector_db_provider='pgvector' for production durable storage."
+                    );
+                    Ok(Arc::new(BruteForceVectorDB::new()))
+                }
+            }
+            // T4-move removed the Qdrant adapter from OSS. Rather than
+            // hard-error, fall back to the in-memory brute-force backend so
+            // existing configs keep booting.
+            "qdrant" => {
                 tracing::warn!(
                     provider = %provider,
-                    "vector_db_provider='{provider}' is no longer available in OSS; \
+                    "vector_db_provider='qdrant' is no longer available in OSS; \
                      falling back to in-memory brute-force. Set vector_db_provider='pgvector' \
                      for production, or 'brute-force' to silence this warning.",
                 );
@@ -339,9 +370,28 @@ impl ComponentManager {
             "mock" => Ok(Arc::new(cognee_vector::MockVectorDB::new())),
             other => Err(ComponentError::Config(format!(
                 "Unsupported vector_db_provider '{other}'. \
-                 Supported: pgvector, brute-force, mock (testing feature only).",
+                 Supported: pgvector, lancedb (non-Android), brute-force, mock (testing feature only).",
             ))),
         }
+    }
+
+    /// Resolve the on-disk path for the LanceDB store.
+    ///
+    /// Honours an explicit `vector_db_url` when set; otherwise defaults to
+    /// `{system_root_directory}/databases/cognee.lancedb` — matching the
+    /// Python SDK file layout so a Rust deployment can be opened from
+    /// Python and vice versa.
+    #[cfg(not(target_os = "android"))]
+    fn resolved_lancedb_path(&self, vector_db_url: &str) -> std::path::PathBuf {
+        use std::path::PathBuf;
+        if !vector_db_url.is_empty() {
+            return PathBuf::from(vector_db_url);
+        }
+        let root = {
+            let s = self.config.read();
+            s.system_root_directory.clone()
+        };
+        PathBuf::from(root).join("databases").join("cognee.lancedb")
     }
 
     /// Build a Postgres connection URL from the vector_db_* settings.

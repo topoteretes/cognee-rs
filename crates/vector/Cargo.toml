@@ -53,3 +53,12 @@ serial_test.workspace = true
 cognee-test-utils = { path = "../test-utils" }
 cognee-models = { path = "../models" }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+# LanceDB adapter (durable embedded vector store) — pulled in only on
+# targets where the Arrow / lance native stack builds cleanly. Android
+# cross-compiles fall back to BruteForceVectorDB; see lancedb_adapter.rs.
+[target.'cfg(not(target_os = "android"))'.dependencies]
+lancedb      = "=0.29"
+arrow-array  = "58"
+arrow-schema = "58"
+futures      = "0.3"

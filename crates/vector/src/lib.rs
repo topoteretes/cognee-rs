@@ -14,6 +14,14 @@ pub mod vector_db_trait;
 #[cfg(feature = "pgvector")]
 pub mod pgvector_adapter;
 
+/// Embedded file-backed vector store via the LanceDB crate.
+///
+/// Disabled on Android — the LanceDB + Arrow native stack does not
+/// cross-compile cleanly to mobile targets, so `BruteForceVectorDB`
+/// remains the Android default.
+#[cfg(not(target_os = "android"))]
+pub mod lancedb_adapter;
+
 #[cfg(feature = "testing")]
 pub mod mock_vector_db;
 
@@ -24,6 +32,9 @@ pub use vector_db_trait::VectorDB;
 
 #[cfg(feature = "pgvector")]
 pub use pgvector_adapter::PgVectorAdapter;
+
+#[cfg(not(target_os = "android"))]
+pub use lancedb_adapter::LanceDbAdapter;
 
 #[cfg(feature = "testing")]
 pub use mock_vector_db::MockVectorDB;

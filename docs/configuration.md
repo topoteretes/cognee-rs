@@ -73,13 +73,23 @@ Provider values: `onnx`, `fastembed`, `openai`, `openai_compatible`, `ollama`, `
 
 | Env var | `Settings` field | Default |
 |---|---|---|
-| `VECTOR_DB_PROVIDER` | `vector_db_provider` | `brute-force` (in-memory, no native deps) |
-| `VECTOR_DB_URL` | `vector_db_url` | _(empty; defaults under the system root)_ |
+| `VECTOR_DB_PROVIDER` | `vector_db_provider` | `lancedb` (embedded, persistent) on non-Android; falls back to `brute-force` (in-memory) on Android |
+| `VECTOR_DB_URL` | `vector_db_url` | _(empty — defaults to `{system_root_directory}/databases/cognee.lancedb`; set to `:memory:` to force the in-memory brute-force store)_ |
 | `VECTOR_DB_HOST` / `VECTOR_DB_PORT` | `vector_db_host` / `vector_db_port` | _(empty)_ / `1234` |
 | `VECTOR_DB_NAME` / `VECTOR_DB_KEY` | `vector_db_name` / `vector_db_key` | _(empty)_ |
 | `VECTOR_DB_USERNAME` / `VECTOR_DB_PASSWORD` | … | _(empty)_ |
 
-Supported providers: `brute-force` (default), `pgvector` (feature `pgvector`).
+Supported providers:
+- `lancedb` — embedded Apache-Arrow / Lance vector store, on disk. Default on
+  every target except Android. The on-disk layout matches the Python SDK's
+  default LanceDB store, so a Rust deployment can be opened from Python and
+  vice versa.
+- `brute-force` — pure-Rust in-memory linear scan. Default on Android (where
+  LanceDB's native stack does not cross-compile). Selected on any target by
+  setting `vector_db_url = ":memory:"`.
+- `pgvector` — Postgres + the `pgvector` extension; requires the `pgvector`
+  Cargo feature on the binary build.
+
 Qdrant lives in closed `cognee-cloud-rs` as the `cognee-vector-qdrant` crate
 and is not part of OSS. See [tools/backends.md](tools/backends.md).
 
