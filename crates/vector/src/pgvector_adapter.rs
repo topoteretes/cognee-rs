@@ -146,6 +146,48 @@ impl PgVectorAdapter {
             .join(",");
         format!("[{inner}]")
     }
+
+    /// Fetch the current `metadata` JSONB for the given points (by id) from
+    /// `coll`, keyed by id. Used to union dataset membership before an upsert so
+    /// re-indexing a content-addressed point under a new dataset does not drop
+    /// the datasets it already belonged to.
+    async fn fetch_metadata(
+        &self,
+        coll: &str,
+        points: &[VectorPoint],
+    ) -> VectorDBResult<HashMap<Uuid, HashMap<String, serde_json::Value>>> {
+        let mut out: HashMap<Uuid, HashMap<String, serde_json::Value>> = HashMap::new();
+        if points.is_empty() {
+            return Ok(out);
+        }
+        let placeholders: Vec<String> = (1..=points.len()).map(|i| format!("${i}::uuid")).collect();
+        let sql = format!(
+            r#"SELECT id, metadata FROM "{coll}" WHERE id IN ({})"#,
+            placeholders.join(", ")
+        );
+        let values: Vec<sea_orm::Value> = points.iter().map(|p| p.id.into()).collect();
+        let rows = self
+            .db
+            .query_all(Statement::from_sql_and_values(
+                DatabaseBackend::Postgres,
+                &sql,
+                values,
+            ))
+            .await
+            .map_err(|e| VectorDBError::StorageError(e.to_string()))?;
+        for row in &rows {
+            let id: Uuid = row
+                .try_get("", "id")
+                .map_err(|e| VectorDBError::StorageError(e.to_string()))?;
+            let metadata_val: serde_json::Value = row
+                .try_get("", "metadata")
+                .map_err(|e| VectorDBError::StorageError(e.to_string()))?;
+            if let serde_json::Value::Object(map) = metadata_val {
+                out.insert(id, map.into_iter().collect());
+            }
+        }
+        Ok(out)
+    }
 }
 
 #[async_trait]
@@ -274,6 +316,14 @@ impl VectorDB for PgVectorAdapter {
 
         // Batch upsert in chunks to stay within parameter limits.
         for chunk in points.chunks(BATCH_SIZE) {
+            // Point IDs are content-addressed, so the same point is re-indexed
+            // once per dataset. A plain `metadata = EXCLUDED.metadata` overwrite
+            // would drop earlier datasets' `dataset_id` (cross-dataset dedup
+            // bug). Read the existing rows' membership and union it into the
+            // incoming points before upserting, mirroring the in-memory /
+            // lancedb adapters and Python's union semantics.
+            let existing = self.fetch_metadata(&coll, chunk).await?;
+
             let mut sql = format!(r#"INSERT INTO "{coll}" (id, vector, metadata) VALUES "#);
             let mut values: Vec<sea_orm::Value> = Vec::with_capacity(chunk.len() * 3);
             let mut idx = 1u32;
@@ -290,10 +340,21 @@ impl VectorDB for PgVectorAdapter {
                 ));
                 idx += 3;
 
+                let mut merged = pt.clone();
+                if let Some(prev_meta) = existing.get(&pt.id) {
+                    let prev = VectorPoint {
+                        id: pt.id,
+                        vector: Vec::new(),
+                        metadata: prev_meta.clone(),
+                    };
+                    merged.merge_dataset_membership(&prev);
+                }
+
                 values.push(pt.id.into());
                 values.push(Self::format_vector(&pt.vector).into());
                 let metadata_obj: serde_json::Value = serde_json::Value::Object(
-                    pt.metadata
+                    merged
+                        .metadata
                         .iter()
                         .map(|(k, v)| (k.clone(), v.clone()))
                         .collect(),

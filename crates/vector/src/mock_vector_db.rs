@@ -198,10 +198,15 @@ impl VectorDB for MockVectorDB {
             }
         }
 
-        // Upsert points (replace if ID exists, otherwise append)
+        // Upsert points (replace if ID exists, otherwise append). On replace,
+        // union dataset membership so a content-addressed point indexed under
+        // several datasets stays retrievable for all of them (cross-dataset
+        // dedup parity with the brute-force / production adapters).
         for new_point in points {
             if let Some(existing) = collection.points.iter_mut().find(|p| p.id == new_point.id) {
-                *existing = new_point.clone();
+                let mut merged = new_point.clone();
+                merged.merge_dataset_membership(existing);
+                *existing = merged;
             } else {
                 collection.points.push(new_point.clone());
             }

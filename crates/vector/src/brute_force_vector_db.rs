@@ -133,10 +133,14 @@ impl VectorDB for BruteForceVectorDB {
             }
         }
 
-        // Upsert by id: replace existing, otherwise append.
+        // Upsert by id: replace existing, otherwise append. On replace, union
+        // dataset membership so a content-addressed point indexed under several
+        // datasets stays retrievable for all of them (cross-dataset dedup).
         for p in points {
             if let Some(existing) = coll.points.iter_mut().find(|x| x.id == p.id) {
-                *existing = p.clone();
+                let mut merged = p.clone();
+                merged.merge_dataset_membership(existing);
+                *existing = merged;
             } else {
                 coll.points.push(p.clone());
             }

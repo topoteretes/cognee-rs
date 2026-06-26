@@ -76,8 +76,13 @@ pub async fn has_data(
     state: &HandleState,
     dataset_id_str: &str,
 ) -> Result<serde_json::Value, SdkError> {
-    let dataset_id = Uuid::parse_str(dataset_id_str)
-        .map_err(|e| SdkError::Validation(format!("invalid dataset id UUID: {e}")))?;
+    let dataset_id = match Uuid::parse_str(dataset_id_str) {
+        Ok(id) => id,
+        // An unparseable id can never match a real dataset (all dataset ids are
+        // UUIDs), so it is simply "not present" → false. This matches the
+        // documented contract above and parity with an unknown-but-valid UUID.
+        Err(_) => return Ok(serde_json::Value::Bool(false)),
+    };
     let svc = state.services().await?;
     let owner_id = state.owner_id().await?;
 
