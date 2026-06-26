@@ -1,6 +1,6 @@
 {
   "name": "@cognee/cognee-ts",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Node.js bindings for the cognee AI-memory SDK",
   "license": "MIT OR Apache-2.0",
   "publishConfig": {
@@ -27,7 +27,8 @@
     "build": "npm run build:rust && npm run build:ts",
     "postinstall": "node scripts/postinstall.js",
     "test": "jest --config jest.config.js",
-    "example": "ts-node examples/add-cognify-search.ts",
+    "example": "ts-node examples/remember-recall.ts",
+    "example:add-cognify-search": "ts-node examples/add-cognify-search.ts",
     "example:memify": "ts-node examples/memify-recall.ts",
     "example:datasets": "ts-node examples/datasets.ts",
     "example:sessions": "ts-node examples/sessions.ts",
