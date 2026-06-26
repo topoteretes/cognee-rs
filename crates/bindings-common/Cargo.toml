@@ -11,10 +11,10 @@ readme.workspace = true
 keywords.workspace = true
 categories.workspace = true
 authors.workspace = true
-# Publishable: the T10a-era closed `cognee-cloud` optional path-dep has been
-# lifted to the closed `cognee-bindings-cloud` glue crate (T15a, plan §6.1).
-# No closed deps remain, so the OSS facade can ship to crates.io.
-publish = true
+# Not published to crates.io: this is an internal facade consumed only by the
+# Python / JS / C API binding crates (none of which are crates.io crates), so
+# it does not need to ship independently. release-plz skips publish=false.
+publish = false
 
 # NOT a default member of the root workspace but IS a workspace member
 # so `cargo check --all-targets` at the root covers it.
