@@ -12,11 +12,11 @@ to be a drop-in companion to the Python [`cognee`](https://github.com/topoterete
 
 
 <p align="center">
-  <a href="docs/getting-started.md">Getting Started</a>
+  <a href="https://docs.cognee.ai/rust/getting-started">Getting Started</a>
   ·
-  <a href="docs/README.md">Docs</a>
+  <a href="https://docs.cognee.ai">Docs</a>
   ·
-  <a href="docs/architecture.md">Architecture</a>
+  <a href="https://docs.cognee.ai/rust/architecture">Architecture</a>
   ·
   <a href="https://github.com/topoteretes/cognee">Python cognee</a>
 </p>
@@ -256,4 +256,4 @@ Cognee writes structured logs to **stdout** and (when a writable directory is
 available) to a rotating file, owned by the [`cognee-logging`](crates/logging/)
 crate (`cognee_logging::init_logging`, called by the CLI and HTTP server). The
 full env-var table (`COGNEE_LOG_*`, `RUST_LOG`/`LOG_LEVEL`, `LOG_FILE_NAME`) is
-documented in [`docs/configuration.md` → Logging](docs/configuration.md#logging).
+documented in [Configuration → Logging](https://docs.cognee.ai/rust/configuration#logging).
