@@ -26,6 +26,15 @@ dependencies_update = true
 # only open the release PR without publishing — useful for dry-run setups.)
 publish = true
 
+# Disable cargo-semver-checks. To detect API breaks it builds rustdoc for every
+# crate against its published baseline, which compiles the full native stack
+# (lbug's bundled C++ via cmake, ONNX runtime, protobuf) twice with no cache —
+# that made the `release-pr` job hang for 40-65+ min and stall the workflow
+# (see git history / the post-0.1.0 release-plz incident). It adds little value
+# pre-1.0 (any change can be breaking), so we skip it. Re-enable per-crate once
+# the API stabilizes and the heavy build is cached.
+semver_check = false
+
 # Single, top-level CHANGELOG.md. release-plz appends a section per release.
 # Switch to per-crate changelogs (`changelog_path` inside a `[[package]]`
 # block) only if a crate's history starts to drown out the others.
