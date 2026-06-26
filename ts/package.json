@@ -1,6 +1,6 @@
 {
   "name": "@cognee/cognee-ts",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Node.js bindings for the cognee AI-memory SDK",
   "license": "MIT OR Apache-2.0",
   "publishConfig": {
@@ -44,13 +44,13 @@
     "dotenv": "^16.6.1"
   },
   "optionalDependencies": {
-    "@cognee/neon-darwin-arm64": "0.1.0",
-    "@cognee/neon-darwin-x64": "0.1.0",
-    "@cognee/neon-linux-arm64-gnu": "0.1.0",
-    "@cognee/neon-linux-arm64-musl": "0.1.0",
-    "@cognee/neon-linux-x64-gnu": "0.1.0",
-    "@cognee/neon-linux-x64-musl": "0.1.0",
-    "@cognee/neon-win32-x64-msvc": "0.1.0"
+    "@cognee/neon-darwin-arm64": "0.1.2",
+    "@cognee/neon-darwin-x64": "0.1.2",
+    "@cognee/neon-linux-arm64-gnu": "0.1.2",
+    "@cognee/neon-linux-arm64-musl": "0.1.2",
+    "@cognee/neon-linux-x64-gnu": "0.1.2",
+    "@cognee/neon-linux-x64-musl": "0.1.2",
+    "@cognee/neon-win32-x64-msvc": "0.1.2"
   },
   "devDependencies": {
     "@types/jest": "^29.5.0",

@@ -1,6 +1,6 @@
 {
   "name": "@cognee/neon-darwin-arm64",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "description": "Prebuilt cognee native addon for darwin-arm64 (aarch64-apple-darwin)",
   "main": "index.js",
   "os": [

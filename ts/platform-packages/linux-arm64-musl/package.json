@@ -1,6 +1,6 @@
 {
   "name": "@cognee/neon-linux-arm64-musl",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "description": "Prebuilt cognee native addon for linux-arm64-musl (aarch64-unknown-linux-musl)",
   "main": "index.js",
   "os": [

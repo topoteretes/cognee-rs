@@ -1,6 +1,6 @@
 {
   "name": "@cognee/neon-win32-x64-msvc",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "description": "Prebuilt cognee native addon for win32-x64-msvc (x86_64-pc-windows-msvc)",
   "main": "index.js",
   "os": [
