@@ -11,13 +11,13 @@ available when you need finer control.
 ## Installation
 
 ```bash
-npm install cognee-ts
+npm install @cognee/cognee-ts
 ```
 
 ## Quick start
 
 ```ts
-import { init, Cognee } from 'cognee-ts';
+import { init, Cognee } from '@cognee/cognee-ts';
 
 // Boot the Rust async runtime (call once at process start).
 init();
@@ -303,7 +303,7 @@ await c.pruneSystem({ pruneGraph: true, pruneVector: true });
 they operate on global cloud state.
 
 ```ts
-import { serve, disconnect } from 'cognee-ts';
+import { serve, disconnect } from '@cognee/cognee-ts';
 
 // Direct mode (no Auth0 flow; headless-friendly)
 const { serviceUrl } = await serve({ url: "http://localhost:8000", apiKey: "key" });
@@ -339,7 +339,7 @@ import {
   setupLogging,
   setupTelemetry,
   setupTelemetryAnalytics,
-} from 'cognee-ts';
+} from '@cognee/cognee-ts';
 
 // Boot the Rust tokio runtime (required before any async op).
 init();
@@ -393,7 +393,7 @@ auto-installed stderr subscriber if your host manages the logging pipeline.
 The original pipeline engine API is available under the `pipeline` namespace:
 
 ```ts
-import { pipeline, init } from 'cognee-ts';
+import { pipeline, init } from '@cognee/cognee-ts';
 
 init();
 
@@ -409,7 +409,7 @@ const [result] = await p.execute([pipeline.CogneeValue.fromString("hello")], ctx
 ```
 
 All symbols previously exported from `@cognee/pipeline` are available at the top
-level of `cognee-ts` for backward compatibility, and also under `pipeline.*`:
+level of `@cognee/cognee-ts` for backward compatibility, and also under `pipeline.*`:
 
 ```ts
 import {
@@ -426,7 +426,7 @@ import {
   Watcher,
   createWatcher,
   createNoopWatcher,
-} from 'cognee-ts';
+} from '@cognee/cognee-ts';
 ```
 
 ---
@@ -437,14 +437,14 @@ Rename the package and update imports:
 
 ```diff
 - import { Pipeline } from '@cognee/pipeline';
-+ import { pipeline } from 'cognee-ts';
++ import { pipeline } from '@cognee/cognee-ts';
 + const { Pipeline } = pipeline;
 ```
 
 Or use the flat re-exports (still supported):
 
 ```ts
-import { Pipeline } from 'cognee-ts'; // flat legacy export — unchanged
+import { Pipeline } from '@cognee/cognee-ts'; // flat legacy export — unchanged
 ```
 
 ---
