@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1](https://github.com/topoteretes/cognee-rs/compare/cognee-models-v0.1.0...cognee-models-v0.1.1) - 2026-06-26
+
+### Other
+
+- reflect published registries (crates.io / npm); fix cognee-cli publish flag ([#8](https://github.com/topoteretes/cognee-rs/pull/8))
+- Merge pull request #3 from topoteretes/docs/readme-point-to-site
+
 ## [0.1.0](https://github.com/topoteretes/cognee-rs/releases/tag/cognee-models-v0.1.0) - 2026-06-25
 
 ### Other

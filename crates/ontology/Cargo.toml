@@ -16,7 +16,7 @@ authors.workspace = true
 workspace = true
 
 [dependencies]
-cognee-models = { path = "../models", version = "0.1.0" }
+cognee-models = { path = "../models", version = "0.1.1" }
 
 uuid = { workspace = true }
 thiserror = { workspace = true }

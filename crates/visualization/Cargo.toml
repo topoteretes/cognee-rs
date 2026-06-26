@@ -16,7 +16,7 @@ authors.workspace = true
 workspace = true
 
 [dependencies]
-cognee-graph = { path = "../graph", version = "0.1.0" }
+cognee-graph = { path = "../graph", version = "0.1.1" }
 dirs = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

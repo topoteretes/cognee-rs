@@ -22,19 +22,19 @@ image-loader = ["cognee-ingestion/image-loader"]
 audio-loader = ["cognee-ingestion/audio-loader"]
 
 [dependencies]
-cognee-models = { path = "../models", version = "0.1.0" }
-cognee-storage = { path = "../storage", version = "0.1.0" }
-cognee-chunking = { path = "../chunking", version = "0.1.0" }
-cognee-core = { path = "../core", version = "0.1.0" }
-cognee-ingestion = { path = "../ingestion", version = "0.1.0" }
-cognee-llm = { path = "../llm", version = "0.1.0" }
-cognee-graph = { path = "../graph", version = "0.1.0" }
-cognee-utils = { path = "../utils", version = "0.1.0" }
-cognee-embedding = { path = "../embedding", version = "0.1.0" }
-cognee-vector = { path = "../vector", version = "0.1.0" }
-cognee-ontology = { path = "../ontology", version = "0.1.0" }
-cognee-database = { path = "../database", version = "0.1.0" }
-cognee-session = { path = "../session", version = "0.1.0" }
+cognee-models = { path = "../models", version = "0.1.1" }
+cognee-storage = { path = "../storage", version = "0.1.1" }
+cognee-chunking = { path = "../chunking", version = "0.1.1" }
+cognee-core = { path = "../core", version = "0.1.1" }
+cognee-ingestion = { path = "../ingestion", version = "0.1.1" }
+cognee-llm = { path = "../llm", version = "0.1.1" }
+cognee-graph = { path = "../graph", version = "0.1.1" }
+cognee-utils = { path = "../utils", version = "0.1.1" }
+cognee-embedding = { path = "../embedding", version = "0.1.1" }
+cognee-vector = { path = "../vector", version = "0.1.1" }
+cognee-ontology = { path = "../ontology", version = "0.1.1" }
+cognee-database = { path = "../database", version = "0.1.1" }
+cognee-session = { path = "../session", version = "0.1.1" }
 
 chrono.workspace = true
 uuid = { workspace = true, features = ["v4"] }

@@ -20,14 +20,14 @@ default = []
 telemetry = ["cognee-telemetry/telemetry"]
 
 [dependencies]
-cognee-embedding = { path = "../embedding", version = "0.1.0" }
-cognee-database = { path = "../database", version = "0.1.0" }
-cognee-graph = { path = "../graph", version = "0.1.0" }
-cognee-llm = { path = "../llm", version = "0.1.0" }
-cognee-session = { path = "../session", version = "0.1.0", features = ["sea-orm-store"] }
-cognee-telemetry = { path = "../telemetry", version = "0.1.0" }
-cognee-utils = { path = "../utils", version = "0.1.0" }
-cognee-vector = { path = "../vector", version = "0.1.0" }
+cognee-embedding = { path = "../embedding", version = "0.1.1" }
+cognee-database = { path = "../database", version = "0.1.1" }
+cognee-graph = { path = "../graph", version = "0.1.1" }
+cognee-llm = { path = "../llm", version = "0.1.1" }
+cognee-session = { path = "../session", version = "0.1.1", features = ["sea-orm-store"] }
+cognee-telemetry = { path = "../telemetry", version = "0.1.1" }
+cognee-utils = { path = "../utils", version = "0.1.1" }
+cognee-vector = { path = "../vector", version = "0.1.1" }
 
 async-trait.workspace = true
 indexmap = "2"

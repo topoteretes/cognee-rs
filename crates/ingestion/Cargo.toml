@@ -19,13 +19,13 @@ workspace = true
 async-trait.workspace = true
 # `pipeline.rs` uses `DbPipelineWatcher` unconditionally, so it needs the
 # `pipeline-run-registry` module which `cognee-core` gates behind this feature.
-cognee-core = { path = "../core", version = "0.1.0", features = ["pipeline-run-registry"] }
-cognee-database = { path = "../database", version = "0.1.0" }
-cognee-graph = { path = "../graph", version = "0.1.0" }
-cognee-models = { path = "../models", version = "0.1.0" }
-cognee-storage = { path = "../storage", version = "0.1.0" }
-cognee-vector = { path = "../vector", version = "0.1.0" }
-cognee-utils = { path = "../utils", version = "0.1.0" }
+cognee-core = { path = "../core", version = "0.1.1", features = ["pipeline-run-registry"] }
+cognee-database = { path = "../database", version = "0.1.1" }
+cognee-graph = { path = "../graph", version = "0.1.1" }
+cognee-models = { path = "../models", version = "0.1.1" }
+cognee-storage = { path = "../storage", version = "0.1.1" }
+cognee-vector = { path = "../vector", version = "0.1.1" }
+cognee-utils = { path = "../utils", version = "0.1.1" }
 md-5.workspace = true
 sha2.workspace = true
 uuid.workspace = true
@@ -52,7 +52,7 @@ calamine = { workspace = true, optional = true }
 mail-parser = { workspace = true, optional = true }
 quick-xml = { workspace = true, optional = true }
 zip = { workspace = true, optional = true }
-cognee-llm = { path = "../llm", version = "0.1.0", optional = true }
+cognee-llm = { path = "../llm", version = "0.1.1", optional = true }
 
 [features]
 default = []

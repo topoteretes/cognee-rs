@@ -25,8 +25,8 @@ sea-orm-store = ["dep:sea-orm", "dep:sea-orm-migration"]
 telemetry = ["cognee-telemetry/telemetry"]
 
 [dependencies]
-cognee-llm = { path = "../llm", version = "0.1.0" }
-cognee-telemetry = { path = "../telemetry", version = "0.1.0" }
+cognee-llm = { path = "../llm", version = "0.1.1" }
+cognee-telemetry = { path = "../telemetry", version = "0.1.1" }
 async-trait.workspace = true
 chrono.workspace = true
 thiserror.workspace = true

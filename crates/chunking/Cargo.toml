@@ -17,9 +17,9 @@ workspace = true
 
 [dependencies]
 async-trait.workspace = true
-cognee-models = { path = "../models", version = "0.1.0" }
-cognee-storage = { path = "../storage", version = "0.1.0" }
-cognee-utils = { path = "../utils", version = "0.1.0" }
+cognee-models = { path = "../models", version = "0.1.1" }
+cognee-storage = { path = "../storage", version = "0.1.1" }
+cognee-utils = { path = "../utils", version = "0.1.1" }
 serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true

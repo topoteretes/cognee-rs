@@ -20,11 +20,11 @@ telemetry = ["cognee-telemetry/telemetry"]
 pipeline-run-registry = []
 
 [dependencies]
-cognee-database = { path = "../database", version = "0.1.0" }
-cognee-graph = { path = "../graph", version = "0.1.0" }
-cognee-models = { path = "../models", version = "0.1.0" }
-cognee-telemetry = { path = "../telemetry", version = "0.1.0" }
-cognee-vector = { path = "../vector", version = "0.1.0" }
+cognee-database = { path = "../database", version = "0.1.1" }
+cognee-graph = { path = "../graph", version = "0.1.1" }
+cognee-models = { path = "../models", version = "0.1.1" }
+cognee-telemetry = { path = "../telemetry", version = "0.1.1" }
+cognee-vector = { path = "../vector", version = "0.1.1" }
 
 async-trait.workspace = true
 chrono.workspace = true

@@ -45,7 +45,7 @@ sqlite        = ["cognee-lib/sqlite"]
 testing       = ["cognee-lib/testing"]
 
 [dependencies]
-cognee-lib = { path = "../lib", version = "0.1.0", default-features = false }
+cognee-lib = { path = "../lib", version = "0.1.1", default-features = false }
 serde      = { workspace = true }
 serde_json = { workspace = true }
 thiserror  = { workspace = true }

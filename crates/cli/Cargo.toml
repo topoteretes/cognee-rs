@@ -87,8 +87,8 @@ android-default = ["cognee-lib/android-default"]
 
 [dependencies]
 clap = { workspace = true, features = ["derive"] }
-cognee-lib = { path = "../lib", version = "0.1.0" }
-cognee-logging = { path = "../logging", version = "0.1.0" }
+cognee-lib = { path = "../lib", version = "0.1.1" }
+cognee-logging = { path = "../logging", version = "0.1.1" }
 dirs.workspace = true
 serde.workspace = true
 serde_json.workspace = true
