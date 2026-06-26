@@ -164,9 +164,20 @@ jobs:
       - name: Build Neon addon (cross)
         if: matrix.cross
         working-directory: ts/cognee-ts-neon
+        # cognee-ts-neon stays a standalone workspace; ts/cognee-ts-neon/Cross.toml
+        # mounts the whole repo (volumes=COGNEE_REPO_ROOT) so its ../../crates
+        # path-deps resolve in the container, and selects a gcc-11 image for the
+        # arm64 target (lbug needs C++20 / libstdc++ 11). cross mounts the crate
+        # target at /target. Disable simsimd's advanced ARM SIMD kernels (SVE /
+        # NEON-bf16) the cross toolchain can't assemble.
         env:
-          ORT_CACHE_DIR: ${{ github.workspace }}/ts/cognee-ts-neon/target/ort-cache
-        run: cross build --release --target ${{ matrix.rust-target }}
+          ORT_CACHE_DIR: /target/ort-cache
+          COGNEE_REPO_ROOT: ${{ github.workspace }}
+        run: |
+          SVE="-DSIMSIMD_TARGET_NEON_I8=0 -DSIMSIMD_TARGET_NEON_F16=0 -DSIMSIMD_TARGET_NEON_BF16=0 -DSIMSIMD_TARGET_SVE=0 -DSIMSIMD_TARGET_SVE_I8=0 -DSIMSIMD_TARGET_SVE_F16=0 -DSIMSIMD_TARGET_SVE_BF16=0 -DSIMSIMD_TARGET_SVE2=0"
+          TGT_US=$(echo "${{ matrix.rust-target }}" | tr '-' '_')
+          export CFLAGS_${TGT_US}="$SVE" CXXFLAGS_${TGT_US}="$SVE"
+          cross build --release --target ${{ matrix.rust-target }}
 
       # Copy the built artifact into the platform package directory.
       - name: Copy artifact (Linux / macOS)
@@ -238,7 +249,10 @@ jobs:
     # cannot be used in a job `if:`) and the tag-trigger only exercises the
     # build-platform matrix above (which still warms the cache + verifies
     # cross-compile).
-    if: ${{ needs.check-token.outputs.has_token == 'true' }}
+    # always(): publish whatever platforms built, even if some matrix legs fail
+    # (not every platform's cross toolchain is solved yet). Publishing is
+    # idempotent and skips platforms whose artifact is absent.
+    if: ${{ always() && needs.check-token.outputs.has_token == 'true' }}
 
     env:
       NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
