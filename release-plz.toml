@@ -7,9 +7,10 @@
 # same policy. Per-crate overrides live in `[[package]]` blocks below if and
 # when we need to diverge.
 #
-# Crates with `publish = false` in their `Cargo.toml` (e.g. cognee-cli,
-# cognee-test-utils, the examples/python/bench/bindings-common harnesses)
-# are skipped automatically by release-plz, so we do not list them here.
+# Crates with `publish = false` in their `Cargo.toml` (cognee-cli,
+# cognee-bindings-common plus the cognee-test-utils / cognee-examples /
+# cognee-http-server / python / bench harnesses) are skipped automatically by
+# release-plz, so we do not list them here.
 #
 # Publish ordering: release-plz walks the workspace dependency graph and
 # publishes deps before dependents. The exact same ordering is emitted by

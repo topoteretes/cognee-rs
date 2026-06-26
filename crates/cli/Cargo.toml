@@ -4,7 +4,9 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-publish = true
+# Not published to crates.io — the CLI binary is built from source (see the
+# root README Quick Start). release-plz skips publish=false crates.
+publish = false
 description.workspace = true
 repository.workspace = true
 homepage.workspace = true

@@ -11,6 +11,10 @@ readme.workspace = true
 keywords.workspace = true
 categories.workspace = true
 authors.workspace = true
+# Not auto-published by release-plz. (0.1.0 shipped to crates.io before this
+# flag was added; publish = false stops future release-plz publishes — the
+# server is run from source / consumed as a workspace member.)
+publish = false
 
 # docs.rs cannot build `ort`'s default static-link mode (the build script needs
 # to download the ONNX Runtime binary archive, which the docs.rs sandbox blocks).
@@ -71,9 +75,9 @@ telemetry = [
 # closed `cognee-vector-qdrant` crate.
 #
 # T10c: this feature used to depend on `cognee-test-utils`, but that crate
-# is `publish = false` (in-repo harness). To keep `cognee-http-server`
-# publishable on crates.io, we now enable `cognee-vector/testing` directly —
-# `MockVectorDB` is defined there and `cognee-test-utils` only re-exports it.
+# is `publish = false` (in-repo harness), so we enable `cognee-vector/testing`
+# directly — `MockVectorDB` is defined there and `cognee-test-utils` only
+# re-exports it.
 dev-mock = ["cognee-vector/testing"]
 
 [dependencies]

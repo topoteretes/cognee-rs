@@ -145,6 +145,17 @@ cognee-cli improve -d main_dataset --node-name "Cognee" --feedback-alpha 0.1
 
 ### Using it from Rust
 
+The library crates are published on
+[crates.io](https://crates.io/crates/cognee-lib). Depend on the top-level
+`cognee-lib` crate:
+
+```bash
+cargo add cognee-lib          # or add `cognee-lib = "0.1"` under [dependencies]
+```
+
+For local development against the in-repo sources, point the dependency at a
+path instead: `cognee-lib = { path = "crates/lib" }`.
+
 There is a high-level one-call API — `cognee_lib::prelude::remember()` /
 `recall()` / `forget()` / `improve()` — that mirrors the Python functions.
 **Be aware:** these are not self-contained. Each takes a set of pre-built
@@ -179,18 +190,18 @@ canonical wiring.
 
 ## Language Bindings
 
-The convenient `Cognee` class — `new(settings)` → `warm()` → `add()` /
-`cognify()` / `addAndCognify()` / `search()` / `remember()` — is exposed by the
-bindings, not the raw Rust crate. `warm()` resolves `owner_id` and builds +
+The convenient `Cognee` class — `new(settings)` → `warm()` → `remember()` /
+`recall()` (or the lower-level `add()` / `cognify()` / `search()`) — is exposed
+by the bindings, not the raw Rust crate. `warm()` resolves `owner_id` and builds +
 caches the component graph once, giving you the wiring-free experience the
 pure-Rust path lacks. All three bindings share the same SDK-tier implementation
 via `crates/bindings-common/`, so their surfaces line up 1:1.
 
-| Binding | README | Primary API |
-|---|---|---|
-| **Python** (PyO3) | [python/README.md](python/README.md) | `from cognee_py import Cognee` |
-| **C API** (FFI) | [capi/README.md](capi/README.md) | `#include "cognee_sdk.h"` + `cg_sdk_*` |
-| **JavaScript/TypeScript** (Neon) | [ts/README.md](ts/README.md) | `import { Cognee } from 'cognee-ts'` |
+| Binding | Install | README | Primary API |
+|---|---|---|---|
+| **JavaScript/TypeScript** (Neon) | `npm install @cognee/cognee-ts` ([npm](https://www.npmjs.com/package/@cognee/cognee-ts)) | [ts/README.md](ts/README.md) | `import { Cognee } from '@cognee/cognee-ts'` |
+| **Python** (PyO3) | build from source (`maturin develop`) — not yet on PyPI | [python/README.md](python/README.md) | `from cognee_py import Cognee` |
+| **C API** (FFI) | build from source — see README | [capi/README.md](capi/README.md) | `#include "cognee_sdk.h"` + `cg_sdk_*` |
 
 
 ### Objectives

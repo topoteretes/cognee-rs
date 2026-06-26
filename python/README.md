@@ -8,16 +8,16 @@ via a three-stage pipeline: **add** (ingest) → **cognify** (extract) → **sea
 
 ## Installation
 
-```bash
-pip install cognee_py
-```
-
-For local development from this repository:
+`cognee-py` is **not yet published to PyPI** — build it from this repository
+with [maturin](https://www.maturin.rs):
 
 ```bash
 cd python
-maturin develop
+maturin develop          # builds the native extension into the active venv
 ```
+
+> A `pip install cognee-py` step will be documented here once the wheel is
+> published.
 
 ## Quick start
 
@@ -69,8 +69,8 @@ async def main():
 asyncio.run(main())
 ```
 
-The `compat` module above is the supported drop-in alias. A plain
-`pip install cognee-py` intentionally does **not** install a top-level
+The `compat` module above is the supported drop-in alias. The
+`cognee-py` distribution intentionally does **not** install a top-level
 `cognee` package, so it never shadows the upstream Python `cognee` package. If
 you want `import cognee` to work directly, vendor the shim shipped in the repo
 ([`python/cognee/`](cognee/)) into your project.
