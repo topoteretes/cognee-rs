@@ -30,7 +30,17 @@ export class Pipeline {
   }
 
   addTask(task: TaskInfo): this {
-    native.pipelineAddTask(this._box, task._box);
+    // `createTask`/`createIterTask`/`createBatchTask` already return a
+    // `TaskInfo`. The README also documents wrapping that result again with
+    // `new TaskInfo(task)`, which nests one TaskInfo inside another so that
+    // `_box` points at a JS `TaskInfo` instead of the native `NeonTaskInfo`
+    // JsBox. Unwrap any such nesting so both usages reach the native box and
+    // do not trigger a Neon downcast error.
+    let box: NativeBox = task._box;
+    while (box instanceof TaskInfo) {
+      box = box._box;
+    }
+    native.pipelineAddTask(this._box, box);
     return this;
   }
 

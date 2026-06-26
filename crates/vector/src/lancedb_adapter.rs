@@ -115,6 +115,40 @@ fn points_to_batch(
     .map_err(|e| VectorDBError::StorageError(format!("record batch build: {e}")))
 }
 
+/// Decode `id` + `metadata` columns from plain (non-vector-search) query
+/// batches into a map. Unlike [`search_results_from_batches`] this does not
+/// expect a `_distance` column, so it works for `query().only_if(..)` reads.
+/// Used to recover existing dataset membership before an upsert.
+fn id_metadata_from_batches(
+    batches: Vec<RecordBatch>,
+) -> VectorDBResult<HashMap<Uuid, HashMap<String, serde_json::Value>>> {
+    let mut out = HashMap::new();
+    for batch in batches {
+        let id_col = batch
+            .column_by_name("id")
+            .ok_or_else(|| VectorDBError::StorageError("missing id column".to_string()))?
+            .as_any()
+            .downcast_ref::<FixedSizeBinaryArray>()
+            .ok_or_else(|| VectorDBError::StorageError("id column type mismatch".to_string()))?;
+        let metadata_col = batch
+            .column_by_name("metadata")
+            .ok_or_else(|| VectorDBError::StorageError("missing metadata column".to_string()))?
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .ok_or_else(|| {
+                VectorDBError::StorageError("metadata column type mismatch".to_string())
+            })?;
+        for row in 0..batch.num_rows() {
+            let id = Uuid::from_slice(id_col.value(row))
+                .map_err(|e| VectorDBError::StorageError(format!("id is not a valid UUID: {e}")))?;
+            let metadata: HashMap<String, serde_json::Value> =
+                serde_json::from_str(metadata_col.value(row))?;
+            out.insert(id, metadata);
+        }
+    }
+    Ok(out)
+}
+
 fn search_results_from_batches(batches: Vec<RecordBatch>) -> VectorDBResult<Vec<SearchResult>> {
     let mut out = Vec::new();
     for batch in batches {
@@ -273,7 +307,6 @@ impl VectorDB for LanceDbAdapter {
         let name = collection_name(data_type, field_name);
         let dimension = self.resolved_dimension(&name).await?;
         let schema = build_schema(dimension);
-        let batch = points_to_batch(schema.clone(), dimension, &name, points)?;
         let table = self
             .connection
             .open_table(&name)
@@ -290,8 +323,43 @@ impl VectorDB for LanceDbAdapter {
                 format!("X'{hex}'")
             })
             .collect();
+        let predicate = format!("id IN ({})", id_values.join(", "));
+
+        // Read the membership of any existing rows we're about to replace, then
+        // union it into the incoming points. Point IDs are content-addressed, so
+        // the same point is re-indexed once per dataset; a plain delete+add
+        // would otherwise drop earlier datasets' `dataset_id` (cross-dataset
+        // dedup bug). Mirrors the in-memory adapters and Python's union upsert.
+        let existing = if id_values.is_empty() {
+            HashMap::new()
+        } else {
+            let stream = table
+                .query()
+                .only_if(predicate.clone())
+                .execute()
+                .await
+                .map_err(map_lance_err)?;
+            let batches: Vec<RecordBatch> = stream.try_collect().await.map_err(map_lance_err)?;
+            id_metadata_from_batches(batches)?
+        };
+        let merged_points: Vec<VectorPoint> = points
+            .iter()
+            .map(|p| {
+                let mut np = p.clone();
+                if let Some(prev_meta) = existing.get(&p.id) {
+                    let prev = VectorPoint {
+                        id: p.id,
+                        vector: Vec::new(),
+                        metadata: prev_meta.clone(),
+                    };
+                    np.merge_dataset_membership(&prev);
+                }
+                np
+            })
+            .collect();
+        let batch = points_to_batch(schema.clone(), dimension, &name, &merged_points)?;
+
         if !id_values.is_empty() {
-            let predicate = format!("id IN ({})", id_values.join(", "));
             table
                 .delete(predicate.as_str())
                 .await
@@ -476,6 +544,65 @@ mod tests {
         assert_eq!(results[0].metadata.get("kind").unwrap(), &json!("target"));
         // Cosine distance from target to itself ~= 0 → score ~= 1.
         assert!(results[0].score > 0.99);
+    }
+
+    #[tokio::test]
+    async fn upsert_unions_dataset_membership_across_datasets() {
+        // Regression for the cross-dataset dedup bug: re-indexing the same
+        // content-addressed id under a second dataset must not drop the first
+        // dataset's membership. After A then B, `dataset_ids` must hold both.
+        let (adapter, _dir) = fresh_adapter().await;
+        adapter
+            .create_collection("DocumentChunk", "text", 3)
+            .await
+            .unwrap();
+
+        let content_id = Uuid::new_v5(&Uuid::NAMESPACE_OID, b"shared content");
+        let dataset_a = Uuid::new_v4();
+        let dataset_b = Uuid::new_v4();
+        let vector = vec![1.0, 0.0, 0.0];
+
+        let p_a = VectorPoint::new(content_id, vector.clone())
+            .with_metadata("dataset_id", json!(dataset_a.to_string()));
+        let p_b = VectorPoint::new(content_id, vector.clone())
+            .with_metadata("dataset_id", json!(dataset_b.to_string()));
+
+        adapter
+            .index_points("DocumentChunk", "text", &[p_a])
+            .await
+            .unwrap();
+        adapter
+            .index_points("DocumentChunk", "text", &[p_b])
+            .await
+            .unwrap();
+
+        // One physical row (content-addressed dedup) ...
+        assert_eq!(
+            adapter
+                .collection_size("DocumentChunk", "text")
+                .await
+                .unwrap(),
+            1
+        );
+        // ... carrying membership in BOTH datasets.
+        let results = adapter
+            .search_similar("DocumentChunk", "text", &vector, 5)
+            .await
+            .unwrap();
+        let members: Vec<String> = results[0]
+            .metadata
+            .get(crate::DATASET_IDS_KEY)
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default();
+        assert!(
+            members.contains(&dataset_a.to_string()) && members.contains(&dataset_b.to_string()),
+            "expected both datasets in membership, got {members:?}"
+        );
     }
 
     #[tokio::test]

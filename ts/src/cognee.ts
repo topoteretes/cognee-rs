@@ -50,6 +50,63 @@ import { wrapNativeError } from "./errors";
 // `cognee-ts-cloud` package (T15e). The OSS `cognee` package does not
 // expose them.
 
+/** Convert a single `snake_case` key to `camelCase`. */
+function snakeToCamel(key: string): string {
+  return key.replace(/_([a-z0-9])/g, (_m, c: string) => c.toUpperCase());
+}
+
+/**
+ * Rewrite the top-level keys of a config snapshot from `snake_case` (the wire
+ * shape returned by the native `getConfig`) to the documented `camelCase` API
+ * keys (`llm_model` -> `llmModel`, `chunk_size` -> `chunkSize`, ...), so the
+ * object returned by `config.get()` matches `CogneeConfigObject` / the setters.
+ */
+function configToCamel(obj: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(obj)) {
+    out[snakeToCamel(k)] = v;
+  }
+  // The `setEmbeddingModel` setter writes the Rust `embedding_model_name`
+  // field, so the snapshot surfaces it as `embeddingModelName`. Expose an
+  // `embeddingModel` alias too so the read-back key matches the setter name.
+  if ("embeddingModelName" in out && !("embeddingModel" in out)) {
+    out.embeddingModel = out.embeddingModelName;
+  }
+  return out;
+}
+
+/** Convert a single `camelCase` key to `snake_case`. */
+function camelToSnake(key: string): string {
+  return key.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`);
+}
+
+/**
+ * Public camelCase setting names whose `snake_case` form does NOT match the
+ * native `Settings` field. Keyed by the camelCase name the SDK documents
+ * (matching the `config.set*` setters and `config.get()` read-back); the value
+ * is the actual `Settings` field. Only `embeddingModel` differs (the field is
+ * `embedding_model_name`, mirroring `setEmbeddingModel`).
+ */
+const SETTINGS_KEY_ALIASES: Record<string, string> = {
+  embeddingModel: "embedding_model_name",
+};
+
+/**
+ * Normalize a constructor settings object so the documented camelCase keys
+ * (`llmModel`, `embeddingProvider`, `chunkSize`, ...) reach the native
+ * snake_case `Settings` deserializer. snake_case keys pass through unchanged
+ * (camel→snake is idempotent on them), so both spellings are accepted — fixing
+ * silently-ignored camelCase constructor args.
+ */
+function normalizeSettings(settings: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(settings)) {
+    const key = SETTINGS_KEY_ALIASES[k] ?? camelToSnake(k);
+    out[key] = v;
+  }
+  return out;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Cognee class
 // ─────────────────────────────────────────────────────────────────────────────
@@ -250,7 +307,16 @@ export class Cognee {
   readonly users: CogneeUserObject;
 
   constructor(settings?: object | string) {
-    this._handle = native.cogneeNew(settings);
+    // Accept the documented camelCase setting keys (e.g. `{ llmModel: ... }`)
+    // as well as raw snake_case. The native `cogneeNew` deserializes a
+    // snake_case `Settings`, so camelCase keys would otherwise be silently
+    // ignored. A JSON string is parsed, normalized, and forwarded as an object.
+    let normalized: object | string | undefined = settings;
+    if (settings != null) {
+      const obj = typeof settings === "string" ? JSON.parse(settings) : settings;
+      normalized = normalizeSettings(obj as Record<string, unknown>);
+    }
+    this._handle = native.cogneeNew(normalized);
 
     // ── config sub-object ────────────────────────────────────────────────────
     // Granular setters are sync and do not need try/catch.
@@ -327,7 +393,7 @@ export class Cognee {
         catch (e) { throw wrapNativeError(e); }
       },
       // Read-back
-      get: () => native.getConfig(h),
+      get: () => configToCamel(native.getConfig(h) as Record<string, unknown>),
     };
 
     // ── datasets sub-object ──────────────────────────────────────────────────

@@ -27,7 +27,9 @@ pub mod mock_vector_db;
 
 pub use brute_force_vector_db::BruteForceVectorDB;
 pub use error::{VectorDBError, VectorDBResult};
-pub use models::{CollectionConfig, DistanceMetric, SearchResult, VectorPoint};
+pub use models::{
+    CollectionConfig, DATASET_ID_KEY, DATASET_IDS_KEY, DistanceMetric, SearchResult, VectorPoint,
+};
 pub use vector_db_trait::VectorDB;
 
 #[cfg(feature = "pgvector")]
