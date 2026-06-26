@@ -3,8 +3,10 @@
 Node.js bindings for the [cognee-rs](https://github.com/topoteretes/cognee-rs)
 AI-memory SDK, built with [Neon](https://neon-bindings.com/).
 
-Cognee transforms raw text, files, and URLs into a persistent, queryable knowledge graph
-via a three-stage pipeline: **add** (ingest) → **cognify** (extract) → **search** (retrieve).
+Cognee transforms raw text, files, and URLs into a persistent, queryable knowledge graph.
+The high-level API is **remember** (ingest + extract in one call) → **recall** (source-aware
+retrieval). These wrap the lower-level **add** → **cognify** → **search** stages, which remain
+available when you need finer control.
 
 ## Installation
 
@@ -28,22 +30,20 @@ const c = new Cognee({
 // Warm up engines (builds embedding model, resolves default user).
 await c.warm();
 
-// Ingest content into a named dataset.
-await c.add({ type: "text", text: "The quick brown fox jumps over the lazy dog." }, "demo");
+// Ingest content and extract a knowledge graph in one call.
+await c.remember({ type: "text", text: "The quick brown fox jumps over the lazy dog." }, "demo");
 
-// Extract entities and relationships into the knowledge graph.
-await c.cognify("demo");
-
-// Query the graph.
-const results = await c.search("What does the fox do?");
-console.log(results);
+// Recall an answer with source-aware routing.
+const recall = await c.recall("What does the fox do?");
+console.log(recall.searchResponse?.result?.data);
 ```
 
 Fully-annotated runnable examples are available in the [`examples/`](examples/) directory.
 
 | Example | npm script | What it covers |
 |---|---|---|
-| [`add-cognify-search.ts`](examples/add-cognify-search.ts) | `npm run example` | Core add → cognify → search pipeline |
+| [`remember-recall.ts`](examples/remember-recall.ts) | `npm run example` | High-level remember → recall pipeline |
+| [`add-cognify-search.ts`](examples/add-cognify-search.ts) | `npm run example:add-cognify-search` | Lower-level add → cognify → search pipeline |
 | [`memify-recall.ts`](examples/memify-recall.ts) | `npm run example:memify` | Triplet embeddings (memify) + session recall |
 | [`datasets.ts`](examples/datasets.ts) | `npm run example:datasets` | Dataset listing, status, deletion |
 | [`sessions.ts`](examples/sessions.ts) | `npm run example:sessions` | QA history, feedback, graph-context snapshots |
