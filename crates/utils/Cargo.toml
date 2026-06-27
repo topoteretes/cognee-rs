@@ -15,9 +15,6 @@ authors.workspace = true
 workspace = true
 
 [dependencies]
-# Async runtime
-tokio.workspace = true
-
 # Structured logging/tracing
 tracing.workspace = true
 
@@ -29,6 +26,28 @@ uuid = { workspace = true, features = ["v4", "v5"] }
 
 # Secret redaction (cognee_utils::redact)
 regex = { workspace = true }
+
+# tokio: see crates/models/Cargo.toml — the workspace dep's rt-multi-thread + fs
+# features don't compile on wasm32, and inheritance can't drop them, so wasm gets
+# a direct tokio spec limited to the wasm-supported feature set.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+tokio.workspace = true
+
+# WebAssembly (browser) spike — Config 1. On wasm32-unknown-unknown the default
+# getrandom backends are unavailable, so route both versions in our tree through
+# the JS crypto API. These are feature-only shims (the crates are already pulled
+# transitively — getrandom 0.2 via rand 0.8, getrandom 0.4 via uuid); declaring
+# them here lets Cargo's feature unification turn the JS backends on. getrandom
+# 0.4 additionally needs the getrandom_backend="wasm_js" cfg, set in
+# .cargo/config.toml. See docs/spike-wasm-config1.md.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { version = "0.2", features = ["js"] }
+getrandom_v04 = { package = "getrandom", version = "0.4", features = ["wasm_js"] }
+# uuid 1.23 refuses to build on wasm32 without an explicit randomness source.
+# `js` routes v4 generation through the browser crypto API; feature unification
+# applies this to every crate sharing this uuid in the wasm build.
+uuid = { workspace = true, features = ["v4", "v5", "js"] }
+tokio = { version = "1", default-features = false, features = ["sync", "macros", "io-util", "rt", "time"] }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

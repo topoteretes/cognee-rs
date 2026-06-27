@@ -6,6 +6,19 @@
 linker = "aarch64-linux-android21-clang++"
 ar = "llvm-ar"
 
+[target.wasm32-unknown-unknown]
+# WebAssembly (browser) spike — Config 1. getrandom 0.4 (pulled via uuid) uses
+# the post-0.3 backend-cfg system: it needs both the `wasm_js` cargo feature
+# (enabled in crates/utils/Cargo.toml under a wasm32 target block) AND this cfg
+# to select the JS-crypto backend. getrandom 0.2 (via rand 0.8) is handled
+# purely by its `js` feature and is unaffected by this flag.
+# See docs/spike-wasm-config1.md.
+rustflags = ['--cfg', 'getrandom_backend="wasm_js"']
+# `cargo test --target wasm32-unknown-unknown` runs the built wasm under this
+# runner (from `cargo install wasm-bindgen-cli`; executes via Node by default).
+# Only consulted by `cargo test`/`cargo run` — plain `cargo build` is unaffected.
+runner = "wasm-bindgen-test-runner"
+
 [env]
 # Route bundled CMake C/C++ builds (lbug's Ladybug tree) through ccache when it
 # is installed — scripts/ccache-launcher.sh is a transparent pass-through when

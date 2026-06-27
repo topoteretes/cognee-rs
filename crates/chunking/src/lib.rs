@@ -13,6 +13,9 @@ pub mod chunk_by_paragraph;
 pub mod chunk_by_row;
 pub mod chunk_by_sentence;
 pub mod chunk_by_word;
+// cognify_pipeline pulls in cognee-storage (filesystem-coupled) + tokio; excluded
+// on wasm32, where only the pure chunking primitives are available.
+#[cfg(not(target_arch = "wasm32"))]
 pub mod cognify_pipeline;
 pub mod config;
 pub mod cut_type;
@@ -24,6 +27,7 @@ pub mod token_counter;
 pub(crate) mod test_inputs;
 
 pub use chunk_by_row::chunk_by_row;
+#[cfg(not(target_arch = "wasm32"))]
 pub use cognify_pipeline::ExtractTextChunksPipeline;
 pub use config::TokenCounterKind;
 pub use cut_type::CutType;

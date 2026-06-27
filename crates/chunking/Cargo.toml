@@ -17,22 +17,36 @@ workspace = true
 [dependencies]
 async-trait.workspace = true
 cognee-models = { path = "../models", version = "0.1.1" }
-cognee-storage = { path = "../storage", version = "0.1.1" }
 cognee-utils = { path = "../utils", version = "0.1.1" }
 serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
 thiserror.workspace = true
-tokio.workspace = true
 uuid.workspace = true
 tokenizers = { workspace = true, optional = true }
 tiktoken-rs = { workspace = true, optional = true }
+
+# The storage-backed `cognify_pipeline` module (and the tokio it needs) is the
+# only part of chunking that touches the filesystem-coupled cognee-storage crate.
+# It is cfg'd out on wasm32 (see lib.rs), so neither dep is pulled there. The
+# pure chunking primitives (chunk_text, TokenCounter, …) stay wasm-clean.
+# See docs/spike-wasm-config1.md.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+cognee-storage = { path = "../storage", version = "0.1.1" }
+tokio.workspace = true
 
 [features]
 default      = []
 hf-tokenizer = ["dep:tokenizers", "tokenizers/http"]
 tiktoken     = ["dep:tiktoken-rs"]
 
-[dev-dependencies]
+# Native test deps: the inline unit tests use MockStorage + a multi-thread tokio.
+# Both are filesystem/native-only, so they are gated off wasm — the wasm test
+# target (tests/wasm.rs) needs neither.
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 cognee-storage = { path = "../storage", features = ["testing"] }
 tokio.workspace = true
+
+# wasm smoke test (tests/wasm.rs) runs under wasm-bindgen-test-runner.
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen-test = "0.3"
