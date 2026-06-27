@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.2](https://github.com/topoteretes/cognee-rs/compare/cognee-models-v0.1.1...cognee-models-v0.1.2) - 2026-06-27
+
+### Fixed
+
+- *(crates)* drop readme.workspace so crates use the default local README
+
 ## [0.1.1](https://github.com/topoteretes/cognee-rs/compare/cognee-models-v0.1.0...cognee-models-v0.1.1) - 2026-06-26
 
 ### Other
