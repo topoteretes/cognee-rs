@@ -1,8 +1,10 @@
-//! WebAssembly smoke test for the Config-1 spike.
+//! WebAssembly smoke test for the Config-1 spike — **Node** runner.
 //!
 //! Proves the pure chunking primitives (`chunk_text` + a `TokenCounter`)
 //! actually **run** inside a wasm host — not merely that they compile. This
 //! closes the last Config-1 acceptance item (see `docs/spike-wasm-config1.md`).
+//! The same assertions also run in a real headless browser via
+//! `wasm_browser.rs`; both share the bodies in `wasm_smoke/mod.rs`.
 //!
 //! The whole file is gated to `wasm32`; on native targets it compiles to an
 //! empty crate, so it never interferes with the normal test suite.
@@ -25,44 +27,22 @@
 
 #![cfg(target_arch = "wasm32")]
 
-use cognee_chunking::{NAMESPACE_OID, TokenCounter, WordCounter, chunk_text};
+mod wasm_smoke;
+
 use wasm_bindgen_test::wasm_bindgen_test;
 
 #[wasm_bindgen_test]
 fn word_counter_runs_in_wasm() {
-    assert_eq!(WordCounter.count_tokens("hello wasm world"), 3);
-    assert_eq!(WordCounter.count_tokens(""), 0);
+    wasm_smoke::word_counter();
 }
 
 #[wasm_bindgen_test]
 fn chunk_text_runs_in_wasm() {
-    let counter = WordCounter;
-    // NAMESPACE_OID is a valid Uuid; reuse it as the document id so the test
-    // needs no direct uuid dependency.
-    let doc = NAMESPACE_OID;
-    let text = "First paragraph of the spike.\n\n\
-                Second paragraph has a few more words than the first one does.";
-
-    let chunks = chunk_text(doc, text, 8, &counter);
-
-    assert!(!chunks.is_empty(), "expected at least one chunk");
-    for (i, c) in chunks.iter().enumerate() {
-        assert_eq!(c.chunk_index, i, "chunks must be indexed sequentially from 0");
-        assert!(!c.text.is_empty(), "chunk text should be non-empty");
-        assert!(c.chunk_size > 0, "chunk size should be counted");
-        assert_eq!(c.document_id, doc, "chunk should carry its document id");
-    }
+    wasm_smoke::chunk_text_smoke();
 }
 
 #[cfg(feature = "tiktoken")]
 #[wasm_bindgen_test]
 fn tiktoken_counter_runs_in_wasm() {
-    use cognee_chunking::TikTokenCounter;
-
-    // The cl100k_base BPE tables are bundled in the binary (pure Rust) — this
-    // exercises that they load and encode under wasm with no filesystem/network.
-    let counter = TikTokenCounter::cl100k_base().expect("cl100k_base BPE loads in wasm");
-    let n = counter.count_tokens("Hello, world!");
-    assert!((3..=6).contains(&n), "expected 3-6 cl100k tokens, got {n}");
-    assert_eq!(counter.count_tokens(""), 0);
+    wasm_smoke::tiktoken_counter();
 }
