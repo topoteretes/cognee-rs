@@ -52,18 +52,6 @@ jobs:
             rust-target: aarch64-unknown-linux-gnu
             cross: true
 
-          # Linux x64 musl — cross via `cross`
-          - platform: linux-x64-musl
-            runner: ubuntu-latest
-            rust-target: x86_64-unknown-linux-musl
-            cross: true
-
-          # Linux arm64 musl — cross via `cross`
-          - platform: linux-arm64-musl
-            runner: ubuntu-latest
-            rust-target: aarch64-unknown-linux-musl
-            cross: true
-
           # macOS x64
           - platform: darwin-x64
             runner: macos-13
@@ -279,7 +267,6 @@ jobs:
         run: |
           for PLATFORM in \
             linux-x64-gnu linux-arm64-gnu \
-            linux-x64-musl linux-arm64-musl \
             darwin-x64 darwin-arm64 \
             win32-x64-msvc; do
             SRC="/tmp/neon-artifacts/neon-${PLATFORM}/cognee_ts_neon.node"
@@ -298,7 +285,6 @@ jobs:
         run: |
           for PLATFORM in \
             linux-x64-gnu linux-arm64-gnu \
-            linux-x64-musl linux-arm64-musl \
             darwin-x64 darwin-arm64 \
             win32-x64-msvc; do
             PKG="@cognee/neon-${PLATFORM}"

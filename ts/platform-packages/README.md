@@ -17,8 +17,6 @@ helper (e.g. `linux-x64-gnu`, `darwin-arm64`, `win32-x64-msvc`).
 |---|---|---|
 | `@cognee-ts/neon-linux-x64-gnu` | `x86_64-unknown-linux-gnu` | |
 | `@cognee-ts/neon-linux-arm64-gnu` | `aarch64-unknown-linux-gnu` | |
-| `@cognee-ts/neon-linux-x64-musl` | `x86_64-unknown-linux-musl` | Alpine / static |
-| `@cognee-ts/neon-linux-arm64-musl` | `aarch64-unknown-linux-musl` | Alpine / static |
 | `@cognee-ts/neon-darwin-x64` | `x86_64-apple-darwin` | |
 | `@cognee-ts/neon-darwin-arm64` | `aarch64-apple-darwin` | Apple Silicon |
 | `@cognee-ts/neon-win32-x64-msvc` | `x86_64-pc-windows-msvc` | |

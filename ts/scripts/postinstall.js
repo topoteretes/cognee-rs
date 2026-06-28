@@ -39,8 +39,6 @@ if (process.env.COGNEE_SKIP_POSTINSTALL) {
 const PLATFORM_PACKAGES = {
   "linux-x64-gnu":    "@cognee/neon-linux-x64-gnu",
   "linux-arm64-gnu":  "@cognee/neon-linux-arm64-gnu",
-  "linux-x64-musl":   "@cognee/neon-linux-x64-musl",
-  "linux-arm64-musl": "@cognee/neon-linux-arm64-musl",
   "darwin-x64":       "@cognee/neon-darwin-x64",
   "darwin-arm64":     "@cognee/neon-darwin-arm64",
   "win32-x64-msvc":   "@cognee/neon-win32-x64-msvc",

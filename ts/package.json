@@ -47,9 +47,7 @@
     "@cognee/neon-darwin-arm64": "0.1.2",
     "@cognee/neon-darwin-x64": "0.1.2",
     "@cognee/neon-linux-arm64-gnu": "0.1.2",
-    "@cognee/neon-linux-arm64-musl": "0.1.2",
     "@cognee/neon-linux-x64-gnu": "0.1.2",
-    "@cognee/neon-linux-x64-musl": "0.1.2",
     "@cognee/neon-win32-x64-msvc": "0.1.2"
   },
   "devDependencies": {
