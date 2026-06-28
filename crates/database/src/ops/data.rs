@@ -160,7 +160,7 @@ pub async fn update_last_accessed(
     }
 
     // Single UPDATE ... WHERE id IN (...) instead of N×(find + update) round-trips.
-    let hex_ids: Vec<String> = data_ids.iter().map(|id| uuid_hex::to_hex(*id)).collect();
+    let hex_ids: Vec<_> = data_ids.iter().map(|id| uuid_hex::to_hex(*id)).collect();
     data::Entity::update_many()
         .col_expr(data::Column::LastAccessed, Expr::value(Some(timestamp)))
         .filter(data::Column::Id.is_in(hex_ids))

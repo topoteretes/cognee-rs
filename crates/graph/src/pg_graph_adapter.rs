@@ -546,9 +546,9 @@ impl GraphDBTrait for PgGraphAdapter {
         // (source, target, relationship) triples as three `text[]` arrays and let
         // Postgres check existence for all of them at once via `unnest(...)` + `EXISTS`.
         // This replaces the previous one-round-trip-per-edge loop.
-        let sources: Vec<String> = edges.iter().map(|e| e.0.clone()).collect();
-        let targets: Vec<String> = edges.iter().map(|e| e.1.clone()).collect();
-        let rels: Vec<String> = edges.iter().map(|e| e.2.clone()).collect();
+        let sources: Vec<_> = edges.iter().map(|e| e.0.clone()).collect();
+        let targets: Vec<_> = edges.iter().map(|e| e.1.clone()).collect();
+        let rels: Vec<_> = edges.iter().map(|e| e.2.clone()).collect();
 
         let rows = self
             .db
@@ -569,7 +569,7 @@ impl GraphDBTrait for PgGraphAdapter {
 
         // Collect the triples that exist, then filter the original input so each
         // returned edge keeps its properties (which aren't part of the lookup key).
-        let existing: HashSet<(String, String, String)> = rows
+        let existing: HashSet<_> = rows
             .into_iter()
             .filter_map(|row| {
                 let s: String = row.try_get("", "s").ok()?;
