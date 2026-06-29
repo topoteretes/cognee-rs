@@ -253,4 +253,58 @@ public final class Cognee: @unchecked Sendable {
                 }, ptr)
         }
     }
+
+    // MARK: – Configuration
+
+    /// Set a configuration key with a JSON-encoded value.
+    ///
+    /// Use this for non-string types (booleans, numbers).
+    /// Example: `try cognee.configure("llm_mock", jsonValue: "true")`
+    ///
+    /// This call is synchronous — it does **not** require `warm()` first.
+    ///
+    /// - Throws: `CogneeError` if the key is unknown or the value is invalid.
+    public func configure(_ key: String, jsonValue: String) throws {
+        let code = cg_sdk_config_set(handle, key, jsonValue)
+        guard code.rawValue == 0 else {
+            let msg = cg_last_error_message().map { String(cString: $0) }
+                ?? "configure(jsonValue:) failed for key '\(key)'"
+            throw CogneeError(code: code, message: msg)
+        }
+    }
+
+    /// Set a string-typed configuration key.
+    ///
+    /// Example: `try cognee.configure("llm_cassette", value: "/path/to/cassette.json")`
+    ///
+    /// This call is synchronous — it does **not** require `warm()` first.
+    ///
+    /// - Throws: `CogneeError` if the key is unknown or the value is invalid.
+    public func configure(_ key: String, value: String) throws {
+        let code = cg_sdk_config_set_str(handle, key, value)
+        guard code.rawValue == 0 else {
+            let msg = cg_last_error_message().map { String(cString: $0) }
+                ?? "configure(value:) failed for key '\(key)'"
+            throw CogneeError(code: code, message: msg)
+        }
+    }
+
+    /// Configure the SDK for fully-offline operation using a pre-recorded LLM cassette.
+    ///
+    /// Enables:
+    /// - Mock LLM that replays responses from `cassettePath`
+    /// - Deterministic mock embeddings (no embedding model needed)
+    /// - In-memory graph store (no database required)
+    /// - In-memory brute-force vector store (no vector database required)
+    ///
+    /// Call this **before** `warm()`.
+    ///
+    /// - Parameter cassettePath: Filesystem path to a `LlmCassette` JSON file.
+    public func configureMockMode(cassettePath: String) throws {
+        try configure("llm_mock",                jsonValue: "true")
+        try configure("llm_cassette",            value: cassettePath)
+        try configure("embedding_provider",      value: "mock")
+        try configure("vector_db_provider",      value: "brute-force")
+        try configure("graph_database_provider", value: "mock")
+    }
 }

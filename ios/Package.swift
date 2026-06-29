@@ -22,5 +22,15 @@ let package = Package(
             dependencies: ["CogneeSDKCore"],
             path: "Sources/CogneeSDK"
         ),
+        // XCTest suite: full add → cognify → search pipeline using a
+        // pre-recorded LLM cassette so the test runs fully offline.
+        .testTarget(
+            name: "CogneeSDKTests",
+            dependencies: ["CogneeSDK"],
+            path: "Tests/CogneeSDKTests",
+            resources: [
+                .copy("Fixtures/demo_cassette.json"),
+            ]
+        ),
     ]
 )
