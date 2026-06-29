@@ -17,8 +17,8 @@ The following crates now compile to `wasm32-unknown-unknown`:
 
 | Crate | wasm32 | Notes |
 |---|---|---|
-| `cognee-models` | ✅ | local-filesystem streaming arm cfg'd out |
-| `cognee-utils` | ✅ | getrandom + uuid + tokio shims |
+| `cognee-models` | ✅ | local-filesystem streaming arm cfg'd out; no tokio on wasm |
+| `cognee-utils` | ✅ | getrandom 0.2 `js`; uuid `js` (workspace); `futures-timer` for retry (no tokio) |
 | `cognee-chunking` (`--features tiktoken`) | ✅ | storage-coupled `cognify_pipeline` cfg'd out |
 | `cognee-storage` | ❌ (excluded) | fundamentally filesystem-coupled — see Config 2 |
 
@@ -56,7 +56,14 @@ cargo build -p cognee-chunking \
 Every wall was in a **transitive dependency or a single filesystem code path** —
 none in the core logic. Each was fixed minimally and target-gated.
 
-### Wall 1 — `getrandom` has no default wasm backend
+> **Note on Walls 1–3.** The spike's first pass over-shimmed the dependency
+> layer — an extra getrandom 0.4 crate, a rustflag read by nobody, and reduced
+> per-crate tokio specs. PR review (checked against the actual manifests and
+> `cargo tree --target wasm32-unknown-unknown`) pruned these. The walls below are
+> written as **resolved**, with a "Review correction" note where the first
+> approach was wrong.
+
+### Wall 1 — `getrandom` (via `rand`) has no default wasm backend
 
 ```
 error: the wasm*-unknown-unknown targets are not supported by default, you may
@@ -64,34 +71,27 @@ error: the wasm*-unknown-unknown targets are not supported by default, you may
   --> getrandom-0.2.17/src/lib.rs
 ```
 
-`getrandom` appears in **two** major versions, both via `cognee-utils`:
+`cognee-utils` pulls `getrandom 0.2.17` transitively through the retry jitter:
+`rand 0.8.6` → `rand_core 0.6.4` → `getrandom 0.2.17`. On wasm it has no default
+entropy source.
 
-- `getrandom 0.2.17` ← `rand_core 0.6.4` ← `rand 0.8.6` ← `cognee-utils`
-- `getrandom 0.4.3`  ← `uuid 1.23.4` ← `cognee-utils`
-
-The two versions use different opt-in mechanisms:
-
-- **0.2** — enable the `js` cargo feature.
-- **0.4** (post-0.3 backend system) — enable the `wasm_js` cargo feature **and**
-  set `--cfg getrandom_backend="wasm_js"` in `RUSTFLAGS`.
-
-**Fix** (`crates/utils/Cargo.toml`, wasm32 target block + `.cargo/config.toml`):
+**Fix** (`crates/utils/Cargo.toml`, wasm32 target block) — enable getrandom 0.2's
+`js` feature (browser crypto API). A feature-only shim: `rand` already pulls the
+crate; this just turns the backend on.
 
 ```toml
-# crates/utils/Cargo.toml
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { version = "0.2", features = ["js"] }
-getrandom_v04 = { package = "getrandom", version = "0.4", features = ["wasm_js"] }
 ```
 
-```toml
-# .cargo/config.toml
-[target.wasm32-unknown-unknown]
-rustflags = ['--cfg', 'getrandom_backend="wasm_js"']
-```
-
-These are feature-only shims: both crates are already in the tree transitively,
-so declaring them just lets Cargo's feature unification turn on the JS backends.
+> **Review correction.** The first pass also added a getrandom **0.4** shim
+> (`getrandom_v04`) plus `--cfg getrandom_backend="wasm_js"` in
+> `.cargo/config.toml`, assuming `uuid` pulled getrandom 0.4 on wasm. It does
+> not: uuid 1.23 gates its `getrandom`/`rand` deps to **non-wasm** targets and
+> uses `wasm-bindgen`/`js-sys` on wasm32 (Wall 2). `cargo tree --target
+> wasm32-unknown-unknown` shows no getrandom 0.4 in the graph, and the rustflag
+> was read by nobody. Both were removed — getrandom 0.2 + `js` is the only
+> randomness shim actually needed.
 
 ### Wall 2 — `uuid` refuses to build on wasm without a randomness source
 
@@ -101,39 +101,62 @@ error: to use `uuid` on `wasm32-unknown-unknown`, specify a source of
   --> uuid-1.23.4/src/rng.rs
 ```
 
-**Fix** — enable uuid's `js` feature on wasm (same target block):
+uuid 1.23's `js` feature pulls `wasm-bindgen` + `js-sys` (both target-gated to
+wasm inside uuid) and routes `Uuid::new_v4()` through the browser crypto API —
+no getrandom involved on wasm.
+
+**Fix** — enable `js` on the **workspace** uuid dependency, not per-crate:
 
 ```toml
-uuid = { workspace = true, features = ["v4", "v5", "js"] }
+# Cargo.toml (workspace)
+uuid = { version = "1.21", features = ["v4", "v5", "serde", "js"] }
 ```
 
-### Wall 3 — `tokio` rejects `rt-multi-thread` / `fs` on wasm
+`js` is a no-op on native (the wasm-bindgen/js-sys deps don't exist there), so
+enabling it workspace-wide leaves native builds byte-identical while every
+crate's uuid works on wasm. This also fixes a latent gap: `cognee-models` calls
+`Uuid::new_v4()` but does not depend on `cognee-utils`, so a per-crate `js` in
+utils only reached models by feature-unification leak when both were compiled
+together — a standalone `cargo build -p cognee-models --target wasm32` would have
+missed it.
+
+### Wall 3 — `tokio`'s `rt-multi-thread` / `fs` don't compile on wasm
 
 ```
 error: Only features sync,macros,io-util,rt,time are supported on wasm.
   --> tokio-1.52.3/src/lib.rs
 ```
 
-The workspace tokio (`Cargo.toml`) carries
-`["rt-multi-thread", "macros", "sync", "time", "fs", "io-util"]`. **Workspace
-dependency inheritance can only *add* features, never drop them**, so a wasm
-crate cannot inherit the workspace tokio and subtract `rt-multi-thread`/`fs`.
+The workspace tokio carries `rt-multi-thread` + `fs`, and workspace inheritance
+can only *add* features, never drop them — so a wasm crate can't inherit it. The
+resolution is not a reduced-feature tokio but **no tokio on wasm at all**:
 
-**Fix** — split the tokio dependency by target in each logic crate: non-wasm
-inherits the workspace tokio unchanged; wasm gets a direct, reduced spec.
+- **`cognee-models`** — its only tokio use is local-file streaming in the
+  `FilePath` arm, already cfg'd off wasm (Wall 4). tokio is gated to non-wasm; the
+  wasm build pulls none.
+- **`cognee-utils`** — its only non-test tokio use was `tokio::time::sleep` in
+  `retry.rs`. tokio's timer doesn't actually fire on wasm32 (no clock, no thread
+  parking), so it is replaced with `futures_timer::Delay` — a runtime-agnostic
+  timer whose `wasm-bindgen` feature is a native no-op. tokio becomes a
+  native-only **dev-dependency** (the `#[tokio::test]` module is gated off wasm).
+- **`cognee-chunking`** — only uses tokio in its storage-coupled pipeline, gated
+  off wasm (Wall 5).
 
 ```toml
+# crates/models/Cargo.toml — tokio is non-wasm-only
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tokio.workspace = true
 
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-tokio = { version = "1", default-features = false,
-          features = ["sync", "macros", "io-util", "rt", "time"] }
+# crates/utils/Cargo.toml — retry uses a cross-platform timer; no lib tokio
+[dependencies]
+futures-timer.workspace = true
 ```
 
-Applied to `crates/models/Cargo.toml` and `crates/utils/Cargo.toml`.
-(`cognee-chunking` only uses tokio in its storage-coupled pipeline, so on wasm it
-drops tokio entirely — see Wall 5.)
+> **Review correction.** The first pass instead gave each crate a reduced wasm
+> tokio spec (`["sync","macros","io-util","rt","time"]`). Most features were
+> unused and tokio's timer is inert on wasm anyway, so the blocks were removed in
+> favour of `futures-timer` + native-only tokio — fewer cfgs, and retry's backoff
+> now actually works on wasm.
 
 ### Wall 4 — `cognee-models` streams local files via `tokio::fs`
 
@@ -228,17 +251,25 @@ Config 1 (achieved) and Config 2.
 ## Files changed
 
 ```
-.cargo/config.toml                    wasm32 rustflags (getrandom_backend) + wasm test runner
-crates/models/Cargo.toml              tokio target split + chrono `wasmbind` on wasm (Wall 6)
-crates/models/src/data_input.rs       cfg-gate FilePath fs streaming off wasm
-crates/utils/Cargo.toml               getrandom/uuid/tokio wasm shims + tokio split
+Cargo.toml                            workspace: uuid `js` (no-op on native); add futures-timer
+.cargo/config.toml                    wasm test runner (getrandom_backend rustflag removed in review)
+crates/models/Cargo.toml              tokio gated non-wasm-only; chrono `wasmbind` on wasm (Wall 6)
+crates/models/src/data_input.rs       cfg-gate FilePath fs streaming + async test off wasm
+crates/utils/Cargo.toml               getrandom 0.2 `js`; futures-timer; tokio dev-dep split off wasm
+crates/utils/src/retry.rs             tokio::time::sleep -> futures_timer::Delay; test module off wasm
 crates/chunking/Cargo.toml            gate cognee-storage + tokio off wasm; wasm test dev-dep
 crates/chunking/src/lib.rs            gate cognify_pipeline off wasm
-crates/chunking/tests/wasm.rs         NEW — wasm smoke test, Node runner
-crates/chunking/tests/wasm_browser.rs NEW — same assertions, headless-browser runner
-crates/chunking/tests/wasm_smoke/mod.rs NEW — shared assertion bodies for both runners
+crates/chunking/tests/wasm.rs         wasm smoke test, Node runner
+crates/chunking/tests/wasm_browser.rs same assertions, headless-browser runner
+crates/chunking/tests/wasm_smoke/mod.rs shared assertion bodies for both runners
+.github/workflows/ci.yml              NEW `wasm` job: build + --no-run drift guard + Node run
+scripts/check_all.sh                  build-only wasm drift guard (no runner)
 docs/spike-wasm-config1.md            this report
 ```
+
+> Committed in two steps then revised: `8fa4dde` (build+run), `4f1bff0` (browser
+> runner), and a review-response round (dependency pruning + wasm CI). See the
+> "Review correction" notes in Walls 1–3.
 
 ## Acceptance: running in a wasm host (Node + headless browser)
 
@@ -286,6 +317,28 @@ cargo test -p cognee-chunking --features tiktoken \
 > - The Node runner has worked on Node 18 and 20; Node 20+ is recommended (an
 >   earlier wasm-bindgen/Node-18 combination crashed V8 on the externref glue).
 
+### CI coverage (drift guard)
+
+Because the wasm test files are `#![cfg(target_arch = "wasm32")]`, the native
+lanes compile them to empty crates and never type-check them — a renamed
+`DocumentChunk` field or a changed `chunk_text` signature would stay green on
+native CI and only surface on a manual wasm run. Two guards close this:
+
+- **`ci.yml` `wasm` job** — builds the logic crates for
+  `wasm32-unknown-unknown`, then type-checks the wasm **test** build of every
+  crate whose wasm test layer this work gates (`cargo test … --no-run`, no runner
+  needed): `cognee-utils` + `cognee-models` (so the tokio dev-dep split and the
+  `cfg(not(wasm32))` gates on the retry/data_input test modules can't silently
+  regress — `cargo build` only covers the lib), and `cognee-chunking` under
+  **both** the default and `--features tiktoken` configs (the shared `wasm_smoke`
+  module has a `#[cfg(feature = "tiktoken")]` arm, and the default build of
+  `tests/wasm.rs` is otherwise only exercised by the live Node step). It then
+  installs a version-matched `wasm-bindgen-cli` (read from the gitignored
+  Cargo.lock) and runs the **Node** smoke tests. The headless-browser runner
+  stays manual (needs a WebDriver).
+- **`scripts/check_all.sh`** — the same build-only `--no-run` drift guards
+  locally, with no Node/wasm-bindgen-cli requirement.
+
 ## Config 2 — what's left (sized for its own issue)
 
 To run the **full** pipeline (`add → cognify → search`) in-browser, the two
@@ -299,10 +352,12 @@ genuine blockers from the audit remain, plus the storage finding above:
 3. **wasm-clean storage** — an in-memory `StorageTrait` backend **and**
    decoupling `StorageWriter` from `tokio::fs::File` (e.g. an enum/`Box<dyn>`
    writer, or a `Vec<u8>` buffer on wasm), so `cognify_pipeline` can run on wasm.
-4. **Runtime shims already proven viable here** — single-thread tokio rt
-   (`rt` + `time`, no `rt-multi-thread`/`fs`), `getrandom` JS backend, uuid `js`.
-   Still needed: `reqwest` Fetch/`wasm-bindgen` transport for the
-   OpenAI-compatible embedding + remote-HTTP backends.
+4. **Runtime shims already proven viable here** — `getrandom 0.2` `js` backend,
+   uuid `js` (workspace), `futures-timer` for delays (tokio's timer is inert on
+   wasm). Still needed: `reqwest` Fetch/`wasm-bindgen` transport for the
+   OpenAI-compatible embedding + remote-HTTP backends, and — if any async code on
+   the wasm path needs an executor — a wasm-compatible runtime
+   (e.g. `wasm-bindgen-futures`) rather than tokio's `rt`.
 5. **Not blockers** (already pure Rust / HTTP): `BruteForceVectorDB`,
    `OpenAICompatibleEmbeddingEngine`, `TikTokenCounter` / `WordCounter`.
 

@@ -213,6 +213,11 @@ mod tests {
         assert_eq!(item.classify(), "text");
     }
 
+    // tokio is a non-wasm-only dependency here (see Cargo.toml), so this async
+    // test is gated off wasm to keep `cargo test --target wasm32` compiling. The
+    // sibling sync #[test]s above stay compiled on wasm as a lightweight API
+    // drift check; this one runs on native, where process_by_chunks is async.
+    #[cfg(not(target_arch = "wasm32"))]
     #[tokio::test]
     async fn test_url_process_by_chunks_error_message() {
         let input = DataInput::Url("https://example.com".to_string());

@@ -43,15 +43,21 @@ echo "=== Rust: wasm32 Config-1 (logic crates + wasm test drift guard) ==="
 echo "================================================================"
 # The wasm smoke-test files are #![cfg(target_arch = "wasm32")], so the native
 # `cargo check --all-targets` above compiles them to empty crates and never
-# type-checks them. Build the logic crates for the real target and type-check
-# every wasm test (incl. the shared wasm_smoke module) so a DocumentChunk-field
-# or chunk_text-signature drift is caught here. Build-only: running the tests
-# needs Node + wasm-bindgen-cli (see ci.yml's wasm job and
+# type-checks them. Type-check the wasm *test* build of every crate whose wasm
+# test layer this repo gates: utils/models (the tokio dev-dep split + the
+# cfg(not(wasm32)) gates on their retry/data_input test modules) and chunking's
+# smoke tests (DocumentChunk/chunk_text drift, incl. the shared wasm_smoke
+# module). Run chunking under both feature configs so the default build of
+# tests/wasm.rs is covered, not just the tiktoken one. Build-only (--no-run):
+# running the tests needs Node + wasm-bindgen-cli (see ci.yml's wasm job and
 # docs/spike-wasm-config1.md). The target install is a no-op once present.
 rustup target add wasm32-unknown-unknown >/dev/null 2>&1 || true
-cargo build -p cognee-models -p cognee-utils --target wasm32-unknown-unknown
-cargo test -p cognee-chunking --no-default-features --features tiktoken \
-    --target wasm32-unknown-unknown --no-run
+cargo test -p cognee-utils -p cognee-models --target wasm32-unknown-unknown --no-run
+# Spell chunking's wasm feature set explicitly (--no-default-features
+# [--features tiktoken]) — identical to ci.yml's wasm job — so local and CI
+# checks compile the same set even if cognee-chunking's `default` ever grows.
+cargo test -p cognee-chunking --no-default-features --target wasm32-unknown-unknown --no-run
+cargo test -p cognee-chunking --no-default-features --features tiktoken --target wasm32-unknown-unknown --no-run
 
 echo ""
 echo "================================================================"

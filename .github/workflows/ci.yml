@@ -259,12 +259,27 @@ jobs:
           cargo build -p cognee-models -p cognee-utils --target wasm32-unknown-unknown
           cargo build -p cognee-chunking --no-default-features --features tiktoken --target wasm32-unknown-unknown
 
-      # Drift guard: type-check every wasm test target (wasm.rs, wasm_browser.rs
-      # and the shared wasm_smoke module). --no-run needs no runner, so it works
-      # before wasm-bindgen-cli is installed. A renamed DocumentChunk field or a
-      # changed chunk_text signature breaks here instead of slipping through.
+      # Drift guard: type-check every wasm test target. --no-run needs no runner,
+      # so it works before wasm-bindgen-cli is installed.
       - name: Type-check wasm test targets (drift guard)
-        run: cargo test -p cognee-chunking --features tiktoken --target wasm32-unknown-unknown --no-run
+        run: |
+          # utils/models have no wasm-specific tests, but this compiles their wasm
+          # *test* build — which is what this PR's tokio dev-dep split (utils) and
+          # the cfg(not(wasm32)) gates on the retry (utils) and data_input (models)
+          # test modules exist to keep green. `cargo build` only covers the lib, so
+          # without this a regression to those gates stays invisible until someone
+          # runs the wasm tests by hand.
+          cargo test -p cognee-utils -p cognee-models --target wasm32-unknown-unknown --no-run
+          # chunking under BOTH feature configs: the shared wasm_smoke module has a
+          # #[cfg(feature = "tiktoken")] arm, and the no-feature build of
+          # tests/wasm.rs is otherwise only ever exercised by the live Node step
+          # below (which depends on the wasm-bindgen-cli install). A renamed
+          # DocumentChunk field or a changed chunk_text signature breaks here.
+          # Always spell chunking's wasm feature set explicitly with
+          # --no-default-features [--features tiktoken] — identical to the build
+          # step and check_all.sh — so the checks can't diverge if `default` grows.
+          cargo test -p cognee-chunking --no-default-features --target wasm32-unknown-unknown --no-run
+          cargo test -p cognee-chunking --no-default-features --features tiktoken --target wasm32-unknown-unknown --no-run
 
       # wasm-bindgen-test-runner must match the resolved wasm-bindgen crate
       # exactly or it refuses to run; read the version from the just-generated lock.
@@ -274,10 +289,10 @@ jobs:
           echo "Installing wasm-bindgen-cli $WB_VER"
           cargo install wasm-bindgen-cli --version "$WB_VER" --locked
 
-      - name: Run Node smoke tests (default + tiktoken)
+      - name: Run Node smoke tests (no-features + tiktoken)
         run: |
-          cargo test -p cognee-chunking --target wasm32-unknown-unknown --test wasm
-          cargo test -p cognee-chunking --features tiktoken --target wasm32-unknown-unknown --test wasm
+          cargo test -p cognee-chunking --no-default-features --target wasm32-unknown-unknown --test wasm
+          cargo test -p cognee-chunking --no-default-features --features tiktoken --target wasm32-unknown-unknown --test wasm
 
   # ── Stage 2: Build and run tests (depends on lint) ────────────────────
   test:
