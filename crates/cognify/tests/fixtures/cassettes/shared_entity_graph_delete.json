@@ -1,0 +1,292 @@
+{
+  "version": 1,
+  "model": "gpt-4o-mini",
+  "entries": {
+    "298278a343caf204d4ccceac9689ecf1f471ff1a29dcdcb561f2aa70ace9a89a": {
+      "method": "structured_output",
+      "user_input_preview": "Artificial intelligence (AI) is the intelligence of machines or software, as opposed to the intelligence of living being",
+      "schema_name": "KnowledgeGraph",
+      "response": {
+        "edges": [
+          {
+            "description": "Artificial intelligence is a field of research in computer science that develops and studies methods and software.",
+            "relationship_name": "is_a_field_of",
+            "source_node_id": "Artificial Intelligence",
+            "target_node_id": "Computer Science"
+          },
+          {
+            "description": "Artificial intelligence enables machines to perceive their environment and use learning and intelligence to take actions.",
+            "relationship_name": "enables",
+            "source_node_id": "Artificial Intelligence",
+            "target_node_id": "Machines"
+          },
+          {
+            "description": "Large language models are a type of artificial intelligence trained on enormous amounts of text data.",
+            "relationship_name": "is_a_type_of",
+            "source_node_id": "Large Language Models",
+            "target_node_id": "Artificial Intelligence"
+          },
+          {
+            "description": "GPT-4 is one of the most capable large language models developed by OpenAI.",
+            "relationship_name": "is_developed_by",
+            "source_node_id": "GPT-4",
+            "target_node_id": "OpenAI"
+          },
+          {
+            "description": "PaLM is a large language model developed by Google that demonstrates strong reasoning and multilingual capabilities.",
+            "relationship_name": "is_developed_by",
+            "source_node_id": "PaLM",
+            "target_node_id": "Google"
+          },
+          {
+            "description": "LLaMA is an open-weights model released by Meta that has enabled widespread research and experimentation.",
+            "relationship_name": "is_released_by",
+            "source_node_id": "LLaMA",
+            "target_node_id": "Meta"
+          },
+          {
+            "description": "Claude is a large language model developed by Anthropic that emphasizes safety and helpfulness.",
+            "relationship_name": "is_developed_by",
+            "source_node_id": "Claude",
+            "target_node_id": "Anthropic"
+          },
+          {
+            "description": "AI safety and alignment research focuses on ensuring that AI systems behave as intended and do not cause unintended harm.",
+            "relationship_name": "focuses_on",
+            "source_node_id": "AI Safety and Alignment Research",
+            "target_node_id": "AI Systems"
+          },
+          {
+            "description": "Researchers at organizations like Anthropic, DeepMind, and OpenAI are working on AI safety and alignment.",
+            "relationship_name": "are_working_on",
+            "source_node_id": "Researchers",
+            "target_node_id": "AI Safety and Alignment Research"
+          },
+          {
+            "description": "The economic and social impacts of AI are profound, affecting job displacement and creation.",
+            "relationship_name": "affects",
+            "source_node_id": "AI",
+            "target_node_id": "Economic and Social Impacts"
+          }
+        ],
+        "nodes": [
+          {
+            "description": "Artificial intelligence refers to the intelligence exhibited by machines or software, as opposed to the intelligence of living beings.",
+            "id": "Artificial Intelligence",
+            "name": "Artificial Intelligence",
+            "type": "CONCEPT"
+          },
+          {
+            "description": "Computer science is the study of computers and computational systems, encompassing both theoretical and practical aspects.",
+            "id": "Computer Science",
+            "name": "Computer Science",
+            "type": "CONCEPT"
+          },
+          {
+            "description": "Machines are devices that use power to perform tasks, often associated with automation and artificial intelligence.",
+            "id": "Machines",
+            "name": "Machines",
+            "type": "CONCEPT"
+          },
+          {
+            "description": "Large language models are a type of artificial intelligence that are trained on vast amounts of text data to understand and generate human-like text.",
+            "id": "Large Language Models",
+            "name": "Large Language Models",
+            "type": "CONCEPT"
+          },
+          {
+            "description": "GPT-4 is a large language model developed by OpenAI, known for its ability to generate coherent text and answer complex questions.",
+            "id": "GPT-4",
+            "name": "GPT-4",
+            "type": "CONCEPT"
+          },
+          {
+            "description": "PaLM is a large language model developed by Google, recognized for its reasoning and multilingual capabilities.",
+            "id": "PaLM",
+            "name": "PaLM",
+            "type": "CONCEPT"
+          },
+          {
+            "description": "LLaMA is an open-weights large language model released by Meta, facilitating research and experimentation in AI.",
+            "id": "LLaMA",
+            "name": "LLaMA",
+            "type": "CONCEPT"
+          },
+          {
+            "description": "Claude is a large language model developed by Anthropic, focusing on safety and helpfulness in AI applications.",
+            "id": "Claude",
+            "name": "Claude",
+            "type": "CONCEPT"
+          },
+          {
+            "description": "AI safety and alignment research aims to ensure that AI systems operate safely and align with human values and intentions.",
+            "id": "AI Safety and Alignment Research",
+            "name": "AI Safety and Alignment Research",
+            "type": "CONCEPT"
+          },
+          {
+            "description": "Researchers are individuals or groups engaged in scientific or academic study, often working on specific projects or fields.",
+            "id": "Researchers",
+            "name": "Researchers",
+            "type": "CONCEPT"
+          },
+          {
+            "description": "The economic and social impacts of AI refer to the significant changes and effects that AI technologies have on society and the economy.",
+            "id": "Economic and Social Impacts",
+            "name": "Economic and Social Impacts",
+            "type": "CONCEPT"
+          },
+          {
+            "description": "DeepMind is an artificial intelligence company known for its research and development in AI technologies.",
+            "id": "DeepMind",
+            "name": "DeepMind",
+            "type": "ORGANIZATION"
+          },
+          {
+            "description": "OpenAI is an artificial intelligence research organization that aims to promote and develop friendly AI for the benefit of humanity.",
+            "id": "OpenAI",
+            "name": "OpenAI",
+            "type": "ORGANIZATION"
+          },
+          {
+            "description": "Google is a multinational technology company specializing in Internet-related services and products, including AI research.",
+            "id": "Google",
+            "name": "Google",
+            "type": "ORGANIZATION"
+          },
+          {
+            "description": "Meta is a technology company that focuses on social media and AI research, previously known as Facebook.",
+            "id": "Meta",
+            "name": "Meta",
+            "type": "ORGANIZATION"
+          },
+          {
+            "description": "Anthropic is an AI safety and research company focused on developing AI systems that are safe and aligned with human values.",
+            "id": "Anthropic",
+            "name": "Anthropic",
+            "type": "ORGANIZATION"
+          }
+        ]
+      }
+    },
+    "d53ccfffff3904ed5adaa98fc791267e608eb00ded43c8049a5f80e8d7d2dba6": {
+      "method": "structured_output",
+      "user_input_preview": "Machine learning is a core subfield of artificial intelligence that enables computers to learn from data without being e",
+      "schema_name": "KnowledgeGraph",
+      "response": {
+        "edges": [
+          {
+            "description": "Machine learning is a core subfield of artificial intelligence.",
+            "relationship_name": "is_a_subfield_of",
+            "source_node_id": "Machine Learning",
+            "target_node_id": "Artificial Intelligence"
+          },
+          {
+            "description": "Deep learning is a type of machine learning that uses neural networks with many layers.",
+            "relationship_name": "is_a_type_of",
+            "source_node_id": "Deep Learning",
+            "target_node_id": "Machine Learning"
+          },
+          {
+            "description": "Deep learning has driven breakthroughs in natural language processing and computer vision.",
+            "relationship_name": "drives_breakthroughs_in",
+            "source_node_id": "Deep Learning",
+            "target_node_id": "Natural Language Processing"
+          },
+          {
+            "description": "Deep learning has driven breakthroughs in natural language processing and computer vision.",
+            "relationship_name": "drives_breakthroughs_in",
+            "source_node_id": "Deep Learning",
+            "target_node_id": "Computer Vision"
+          },
+          {
+            "description": "GPT-4 is a large language model from OpenAI that demonstrates the power of transformer architectures.",
+            "relationship_name": "is_a_large_language_model_of",
+            "source_node_id": "GPT-4",
+            "target_node_id": "OpenAI"
+          },
+          {
+            "description": "LLaMA is a large language model from Meta that demonstrates the power of transformer architectures.",
+            "relationship_name": "is_a_large_language_model_of",
+            "source_node_id": "LLaMA",
+            "target_node_id": "Meta"
+          },
+          {
+            "description": "Large language models like GPT-4 and LLaMA are trained on massive datasets.",
+            "relationship_name": "are_trained_on",
+            "source_node_id": "GPT-4",
+            "target_node_id": "Massive Datasets"
+          },
+          {
+            "description": "Large language models like GPT-4 and LLaMA are trained on massive datasets.",
+            "relationship_name": "are_trained_on",
+            "source_node_id": "LLaMA",
+            "target_node_id": "Massive Datasets"
+          },
+          {
+            "description": "Reinforcement learning is another branch of machine learning that trains agents through trial and error.",
+            "relationship_name": "is_a_branch_of",
+            "source_node_id": "Reinforcement Learning",
+            "target_node_id": "Machine Learning"
+          }
+        ],
+        "nodes": [
+          {
+            "description": "Machine learning is a core subfield of artificial intelligence that enables computers to learn from data without being explicitly programmed.",
+            "id": "Machine Learning",
+            "name": "Machine Learning",
+            "type": "CONCEPT"
+          },
+          {
+            "description": "Artificial intelligence is the simulation of human intelligence processes by machines, especially computer systems.",
+            "id": "Artificial Intelligence",
+            "name": "Artificial Intelligence",
+            "type": "CONCEPT"
+          },
+          {
+            "description": "Deep learning is a type of machine learning that uses neural networks with many layers.",
+            "id": "Deep Learning",
+            "name": "Deep Learning",
+            "type": "CONCEPT"
+          },
+          {
+            "description": "Natural language processing is a subfield of artificial intelligence that focuses on the interaction between computers and humans through natural language.",
+            "id": "Natural Language Processing",
+            "name": "Natural Language Processing",
+            "type": "CONCEPT"
+          },
+          {
+            "description": "Computer vision is a field of artificial intelligence that trains computers to interpret and understand the visual world.",
+            "id": "Computer Vision",
+            "name": "Computer Vision",
+            "type": "CONCEPT"
+          },
+          {
+            "description": "GPT-4 is a large language model developed by OpenAI, known for its advanced natural language understanding capabilities.",
+            "id": "GPT-4",
+            "name": "GPT-4",
+            "type": "CONCEPT"
+          },
+          {
+            "description": "LLaMA is a large language model developed by Meta, designed for various natural language processing tasks.",
+            "id": "LLaMA",
+            "name": "LLaMA",
+            "type": "CONCEPT"
+          },
+          {
+            "description": "Massive datasets are large collections of data used to train machine learning models, particularly in deep learning.",
+            "id": "Massive Datasets",
+            "name": "Massive Datasets",
+            "type": "CONCEPT"
+          },
+          {
+            "description": "Reinforcement learning is a type of machine learning that trains agents to make decisions by rewarding desired behaviors and punishing undesired ones.",
+            "id": "Reinforcement Learning",
+            "name": "Reinforcement Learning",
+            "type": "CONCEPT"
+          }
+        ]
+      }
+    }
+  }
+}
