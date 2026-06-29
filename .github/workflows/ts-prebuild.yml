@@ -126,6 +126,19 @@ jobs:
         with:
           arch: x64
 
+      # .cargo/config.toml routes the bundled CMake C/C++ build through
+      # scripts/ccache-launcher.sh, a POSIX sh script. Ninja can't CreateProcess
+      # a .sh on Windows (`%1 is not a valid Win32 application`). Clear the
+      # launcher here so CMake invokes cl.exe directly — a set env var overrides
+      # the non-forced [env] in config.toml, and ccache isn't installed on the
+      # Windows runner anyway (the ccache-action step is skipped there).
+      - name: Disable POSIX ccache launcher (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          echo "CMAKE_C_COMPILER_LAUNCHER=" >> "$GITHUB_ENV"
+          echo "CMAKE_CXX_COMPILER_LAUNCHER=" >> "$GITHUB_ENV"
+
       - name: ccache (lbug bundled C++, restore-only)
         if: runner.os != 'Windows'
         uses: hendrikmuhs/ccache-action@v1.2
