@@ -55,11 +55,11 @@ jobs:
             rust-target: aarch64-unknown-linux-gnu
             cross: true
 
-          # macOS x64
-          - platform: darwin-x64
-            runner: macos-13
-            rust-target: x86_64-apple-darwin
-            cross: false
+          # NOTE: no darwin-x64 (x86_64-apple-darwin) leg. Intel macOS is EOL
+          # (GitHub retires its last x86_64 runner in 2027) and `ort` ships no
+          # prebuilt ONNX Runtime for x86_64-apple-darwin, so the addon can't
+          # link without building ONNX Runtime from source. The package was
+          # never published; dropped rather than carry a permanently-red leg.
 
           # macOS arm64 (Apple Silicon). Use macos-15 (default Xcode 16.4):
           # the older macos-14 default (Xcode 15.4) ships a libc++ whose
@@ -273,7 +273,7 @@ jobs:
         run: |
           for PLATFORM in \
             linux-x64-gnu linux-arm64-gnu \
-            darwin-x64 darwin-arm64 \
+            darwin-arm64 \
             win32-x64-msvc; do
             SRC="/tmp/neon-artifacts/neon-${PLATFORM}/cognee_ts_neon.node"
             DEST="ts/platform-packages/${PLATFORM}/cognee_ts_neon.node"
@@ -291,7 +291,7 @@ jobs:
         run: |
           for PLATFORM in \
             linux-x64-gnu linux-arm64-gnu \
-            darwin-x64 darwin-arm64 \
+            darwin-arm64 \
             win32-x64-msvc; do
             PKG="@cognee/neon-${PLATFORM}"
             VER=$(node -p "require('./${PLATFORM}/package.json').version")
