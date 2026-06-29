@@ -114,6 +114,18 @@ jobs:
         if: runner.os == 'Windows'
         run: choco install cmake protoc --no-progress
 
+      # lbug (a Kùzu fork) forces the CMake "Ninja" generator, and Ninja+MSVC
+      # does NOT search for the compiler — cl.exe/link.exe must already be on
+      # PATH via the MSVC developer environment. Without it the build fails with
+      # `ninja: CreateProcess: %1 is not a valid Win32 application`. This is the
+      # GitHub-hosted equivalent of the `vcvars64.bat` call Kùzu's own Windows
+      # CI uses; it exports the MSVC env to all subsequent steps.
+      - name: Set up MSVC developer environment (Windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
       - name: ccache (lbug bundled C++, restore-only)
         if: runner.os != 'Windows'
         uses: hendrikmuhs/ccache-action@v1.2
