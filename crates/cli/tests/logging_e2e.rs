@@ -11,9 +11,41 @@
 //! resolved logs directory), plus the default-filter behaviour that
 //! keeps the anchor line visible at the default level (decision 6).
 
+use std::path::Path;
 use std::process::Command;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tempfile::tempdir;
+
+/// Concatenate the contents of every `*.log` file under `dir`, polling until
+/// `pred` is satisfied or `timeout` elapses.
+///
+/// `cognee-cli --help` exits via `std::process::exit`, which skips
+/// `LogGuards::drop`. `tracing-appender`'s background worker still flushes
+/// pending lines as the process tears down, but that flush races with the
+/// test reading the file. A single fixed sleep is unreliable under the CPU
+/// saturation that parallel test execution creates (the flush thread may not
+/// be scheduled within the window), so we poll: fast in the common case,
+/// tolerant of a loaded CI runner. The directory is a per-test tempdir, so
+/// this only ever observes this invocation's own output.
+fn read_logs_until(dir: &Path, timeout: Duration, pred: impl Fn(&str) -> bool) -> String {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let mut combined = String::new();
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                if entry.path().extension().and_then(|s| s.to_str()) == Some("log")
+                    && let Ok(body) = std::fs::read_to_string(entry.path())
+                {
+                    combined.push_str(&body);
+                }
+            }
+        }
+        if pred(&combined) || Instant::now() >= deadline {
+            return combined;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
 
 /// `--help` is the cheapest invocation that drives the full
 /// `main()` path including `init_logging`. Clap's auto-generated help
@@ -47,40 +79,18 @@ fn cli_creates_log_file_in_cognee_logs_dir() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    // Wait for the non-blocking writer to flush. The CLI exits via
-    // `std::process::exit` on `--help`, so the WorkerGuard's Drop is
-    // skipped. The background thread still flushes pending lines as
-    // the process tears down, but the assertion below needs the file
-    // visible to this process. 200ms is the conservative bound
-    // recommended in the sub-doc.
-    std::thread::sleep(Duration::from_millis(200));
-
-    let log_files: Vec<_> = std::fs::read_dir(dir.path())
-        .expect("read tempdir")
-        .filter_map(Result::ok)
-        .filter(|e| e.path().extension().and_then(|s| s.to_str()) == Some("log"))
-        .collect();
-    assert!(
-        !log_files.is_empty(),
-        "expected at least one *.log file in {}",
-        dir.path().display()
-    );
-
-    // Read every log file; at least one must contain the anchor. With
+    // Poll for the non-blocking writer to flush the anchor line. With
     // `Rotation::Daily` (the default) the file name is
-    // `<timestamp>.<YYYY-MM-DD>` — `tracing-appender` appends a
-    // date stem to the prefix, but we wrote the prefix via the file
-    // stem of the propagated `LOG_FILE_NAME` so the `.log` extension
-    // ends up as the suffix.
-    let mut combined = String::new();
-    for entry in &log_files {
-        if let Ok(body) = std::fs::read_to_string(entry.path()) {
-            combined.push_str(&body);
-        }
-    }
+    // `<timestamp>.<YYYY-MM-DD>` — `tracing-appender` appends a date stem to
+    // the prefix, but we wrote the prefix via the file stem of the propagated
+    // `LOG_FILE_NAME` so the `.log` extension ends up as the suffix.
+    let combined = read_logs_until(dir.path(), Duration::from_secs(10), |s| {
+        s.contains("Logging initialized")
+    });
     assert!(
         combined.contains("Logging initialized"),
-        "expected 'Logging initialized' anchor line in log files; got:\n{combined}"
+        "expected 'Logging initialized' anchor line in a *.log file under {}; got:\n{combined}",
+        dir.path().display()
     );
 }
 
@@ -105,19 +115,12 @@ fn cli_default_filter_suppresses_library_noise_in_log_file() {
         .expect("spawn cognee-cli");
     assert!(output.status.success());
 
-    std::thread::sleep(Duration::from_millis(200));
-
-    let mut combined = String::new();
-    for entry in std::fs::read_dir(dir.path())
-        .expect("read tempdir")
-        .flatten()
-    {
-        if entry.path().extension().and_then(|s| s.to_str()) == Some("log")
-            && let Ok(body) = std::fs::read_to_string(entry.path())
-        {
-            combined.push_str(&body);
-        }
-    }
+    // Poll until logging has flushed (anchor present), then assert the
+    // suppressed targets are absent. Anchoring the wait on the anchor line
+    // avoids reading a half-flushed file under parallel CI load.
+    let combined = read_logs_until(dir.path(), Duration::from_secs(10), |s| {
+        s.contains("Logging initialized")
+    });
 
     // `--help` should not produce any HTTP/hyper traffic, so the test
     // only checks that the *target* prefixes for the suppressed crates
