@@ -1,10 +1,21 @@
 name: CI
 
+# Keyed test suite — requires repository secrets (OPENAI_KEY) for the LLM
+# integration tests. GitHub does not pass secrets to `pull_request` runs from
+# forks, so every job here is gated to in-repo refs (push / workflow_dispatch /
+# same-repo PRs) via the `head.repo.full_name == github.repository` check on the
+# entry jobs (`lint`, `msrv`); the rest cascade through `needs`. Fork PRs skip
+# this workflow entirely and are covered by the fork-safe `Community Checks
+# (No Secrets)` workflow instead. Mirrors the upstream Python cognee
+# `test_suites.yml` / `community_tests.yml` split.
+
 on:
   push:
     branches: [ main, master ]
   pull_request:
     branches: [ main, master ]
+    types: [ opened, synchronize, reopened ]
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.ref }}-${{ github.sha }}
@@ -35,6 +46,12 @@ jobs:
   lint:
     name: Lint (fmt + check + clippy)
     runs-on: ubuntu-latest
+    # In-repo only: fork PRs get no secrets and are covered by the
+    # `Community Checks (No Secrets)` workflow. `test`, `pgvector-spans` and the
+    # binding-check jobs cascade off this gate via `needs`.
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository
 
     steps:
       - name: Checkout
@@ -174,6 +191,10 @@ jobs:
   msrv:
     name: MSRV (1.91)
     runs-on: ubuntu-latest
+    # In-repo only (no `needs`, so it carries its own gate). See `lint`.
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -233,6 +254,12 @@ jobs:
   wasm:
     name: wasm32 (Config-1 logic crates)
     runs-on: ubuntu-latest
+    # In-repo only (no `needs`, so it carries its own gate). See `lint`. Needs no
+    # secrets itself, but it belongs to the keyed workflow that fork PRs skip
+    # wholesale — the fork-safe `Community Checks` workflow covers forks instead.
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -776,3 +803,35 @@ jobs:
           cache: "npm"
           cache-dependency-path: "ts/package.json"
       - run: bash ts/scripts/check.sh
+
+  # ── Aggregate status (single required check for branch protection) ────
+  # Gated to in-repo like the rest of the suite, so it does not run — and does
+  # not report failure — on fork PRs (those are covered by the community
+  # workflow's own aggregator). On in-repo refs every job above runs, so any
+  # non-success here means the keyed suite failed. Mirrors the upstream Python
+  # cognee `notify` aggregator.
+  notify:
+    name: Test Suite Status
+    needs: [ lint, msrv, wasm, test, docs-and-extras, pgvector-spans, capi-check, python-check, ts-check ]
+    runs-on: ubuntu-latest
+    if: >-
+      !cancelled() &&
+      (github.event_name != 'pull_request' ||
+       github.event.pull_request.head.repo.full_name == github.repository)
+    steps:
+      - name: Check status
+        run: |
+          if [[ "${{ needs.lint.result }}" == "success" &&
+                "${{ needs.msrv.result }}" == "success" &&
+                "${{ needs.wasm.result }}" == "success" &&
+                "${{ needs.test.result }}" == "success" &&
+                "${{ needs.docs-and-extras.result }}" == "success" &&
+                "${{ needs.pgvector-spans.result }}" == "success" &&
+                "${{ needs.capi-check.result }}" == "success" &&
+                "${{ needs.python-check.result }}" == "success" &&
+                "${{ needs.ts-check.result }}" == "success" ]]; then
+            echo "All keyed test-suite jobs passed!"
+          else
+            echo "One or more keyed test-suite jobs failed."
+            exit 1
+          fi
