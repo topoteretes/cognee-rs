@@ -22,9 +22,10 @@ use std::sync::Arc;
 use cognee_cognify::{CognifyConfig, cognify};
 use cognee_database::{DatabaseConnection, DeleteDb, IngestDb, connect, initialize, ops};
 use cognee_delete::{DeleteMode, DeleteRequest, DeleteScope, DeleteService};
-use cognee_embedding::EmbeddingEngine;
+use cognee_embedding::{EmbeddingEngine, MockEmbeddingEngine};
 use cognee_graph::{GraphDBTrait, LadybugAdapter};
 use cognee_ingestion::AddPipeline;
+use cognee_llm::mock::{MissPolicy, RecordingLlm, ReplayLlm};
 use cognee_llm::{Llm, OpenAIAdapter};
 use cognee_models::DataInput;
 use cognee_ontology::NoOpOntologyResolver;
@@ -61,6 +62,36 @@ fn require_env(var_name: &str) -> String {
     panic!("Required environment variable '{var_name}' is not set")
 }
 
+/// LLM for this test: offline replay when `COGNEE_TEST_REPLAY=1` (MissPolicy::Error
+/// so a stale cassette fails loudly), recording when `COGNEE_RECORD_LLM=1`, else
+/// the real adapter. Mirrors crates/cognify/tests/test_utils.rs (Approach E); the
+/// delete crate has no shared test_utils module, so it is inlined here.
+fn create_llm_from_env(cassette_name: &str) -> Arc<dyn Llm> {
+    let cassette = format!(
+        "{}/tests/fixtures/cassettes/{cassette_name}.json",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    if std::env::var("COGNEE_TEST_REPLAY").is_ok_and(|v| !v.is_empty()) {
+        return Arc::new(
+            ReplayLlm::from_path(&cassette)
+                .unwrap_or_else(|e| panic!("❌ Failed to load cassette {cassette}: {e}"))
+                .with_miss_policy(MissPolicy::Error),
+        );
+    }
+    let adapter: Arc<dyn Llm> = Arc::new(
+        OpenAIAdapter::new(
+            require_env("OPENAI_MODEL"),
+            require_env("OPENAI_TOKEN"),
+            Some(require_env("OPENAI_URL")),
+        )
+        .expect("OpenAIAdapter::new"),
+    );
+    if std::env::var("COGNEE_RECORD_LLM").is_ok_and(|v| !v.is_empty()) {
+        return Arc::new(RecordingLlm::new(adapter, cassette));
+    }
+    adapter
+}
+
 /// Build full infrastructure: storage, database, graph, vector, embedding, LLM.
 /// Returns `Some` with all components needed for add -> cognify -> delete,
 /// or `None` if the embedding engine could not be initialised (test will skip).
@@ -74,9 +105,10 @@ async fn setup_infrastructure(
     Arc<dyn EmbeddingEngine>,
     Arc<dyn Llm>,
 )> {
-    // Embedding engine (may return None when model/API unavailable)
-    let (embedding_engine, _embedding_dims) =
-        cognee_test_utils::create_test_embedding_engine().await?;
+    // Deterministic in-process embeddings (no model/API needed); the delete
+    // assertions are structural (node counts), not semantic.
+    let embedding_engine: Arc<dyn EmbeddingEngine> =
+        Arc::new(MockEmbeddingEngine::deterministic(384));
 
     // Local file storage
     let storage: Arc<dyn StorageTrait> =
@@ -104,15 +136,8 @@ async fn setup_infrastructure(
     // In-memory mock vector DB (qdrant extracted to closed cognee-vector-qdrant).
     let vector_db: Arc<dyn VectorDB> = Arc::new(MockVectorDB::new());
 
-    // OpenAI-compatible LLM
-    let llm: Arc<dyn Llm> = Arc::new(
-        OpenAIAdapter::new(
-            require_env("OPENAI_MODEL"),
-            require_env("OPENAI_TOKEN"),
-            Some(require_env("OPENAI_URL")),
-        )
-        .expect("OpenAIAdapter::new"),
-    );
+    // LLM via cassette (replay/record/real) — see create_llm_from_env above.
+    let llm: Arc<dyn Llm> = create_llm_from_env("hard_mode_orphan_sweep");
 
     Some((
         storage,
@@ -129,11 +154,6 @@ const DOC2_TEXT: &str = "Bob is an engineer at TechCorp. Bob develops cloud infr
 
 #[tokio::test]
 async fn test_hard_mode_sweeps_orphan_entities() {
-    // ── Environment gating ──────────────────────────────────────────────────
-    let _ = require_env("OPENAI_URL");
-    let _ = require_env("OPENAI_TOKEN");
-    let _ = require_env("OPENAI_MODEL");
-
     // ── Infrastructure setup ────────────────────────────────────────────────
     let temp_dir = TempDir::new().expect("temp dir");
     let Some((storage, database, graph_db, vector_db, embedding_engine, llm)) =
@@ -318,11 +338,6 @@ async fn test_hard_mode_sweeps_orphan_entities() {
 
 #[tokio::test]
 async fn test_soft_mode_preserves_orphan_entities() {
-    // ── Environment gating ──────────────────────────────────────────────────
-    let _ = require_env("OPENAI_URL");
-    let _ = require_env("OPENAI_TOKEN");
-    let _ = require_env("OPENAI_MODEL");
-
     // ── Infrastructure setup ────────────────────────────────────────────────
     let temp_dir = TempDir::new().expect("temp dir");
     let Some((storage, database, graph_db, vector_db, embedding_engine, llm)) =

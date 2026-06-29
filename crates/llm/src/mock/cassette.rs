@@ -81,6 +81,17 @@ impl LlmCassette {
         let contents = serde_json::to_string_pretty(self).map_err(|e| {
             LlmError::SerializationError(format!("failed to serialize cassette: {e}"))
         })?;
+        // Create the parent directory if it does not exist yet, so recording to a
+        // fresh `tests/fixtures/cassettes/<name>.json` path succeeds on the first
+        // run instead of silently failing in `RecordingLlm`'s Drop flush.
+        if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                LlmError::ConfigError(format!(
+                    "failed to create cassette directory {}: {e}",
+                    parent.display()
+                ))
+            })?;
+        }
         std::fs::write(path, contents).map_err(|e| {
             LlmError::ConfigError(format!("failed to write cassette {}: {e}", path.display()))
         })

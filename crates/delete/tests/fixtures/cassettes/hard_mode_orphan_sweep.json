@@ -1,0 +1,88 @@
+{
+  "version": 1,
+  "model": "gpt-4o-mini",
+  "entries": {
+    "0ef8612635ab552cc5fea67fcedd63b7b29a1041e7b434e7dffaa40ca10c1d0f": {
+      "method": "structured_output",
+      "user_input_preview": "Bob is an engineer at TechCorp. Bob develops cloud infrastructure.",
+      "schema_name": "KnowledgeGraph",
+      "response": {
+        "edges": [
+          {
+            "description": "Bob works at TechCorp as an engineer.",
+            "relationship_name": "works_at",
+            "source_node_id": "Bob",
+            "target_node_id": "TechCorp"
+          },
+          {
+            "description": "Bob develops cloud infrastructure.",
+            "relationship_name": "develops",
+            "source_node_id": "Bob",
+            "target_node_id": "cloud_infrastructure"
+          }
+        ],
+        "nodes": [
+          {
+            "description": "Bob is an engineer who works at TechCorp and develops cloud infrastructure.",
+            "id": "Bob",
+            "name": "Bob",
+            "type": "PERSON"
+          },
+          {
+            "description": "TechCorp is an organization where Bob works as an engineer.",
+            "id": "TechCorp",
+            "name": "TechCorp",
+            "type": "ORGANIZATION"
+          },
+          {
+            "description": "Cloud infrastructure refers to the hardware and software components that enable cloud computing.",
+            "id": "cloud_infrastructure",
+            "name": "cloud infrastructure",
+            "type": "CONCEPT"
+          }
+        ]
+      }
+    },
+    "6f6c5ffaf1cda50d3fabbebe25861044c54b0346f6f5d28f2708741b0d6f3c53": {
+      "method": "structured_output",
+      "user_input_preview": "Alice is a researcher at TechCorp. Alice studies machine learning.",
+      "schema_name": "KnowledgeGraph",
+      "response": {
+        "edges": [
+          {
+            "description": "Alice works at TechCorp as a researcher.",
+            "relationship_name": "works_at",
+            "source_node_id": "Alice",
+            "target_node_id": "TechCorp"
+          },
+          {
+            "description": "Alice studies machine learning.",
+            "relationship_name": "studies",
+            "source_node_id": "Alice",
+            "target_node_id": "Machine Learning"
+          }
+        ],
+        "nodes": [
+          {
+            "description": "Alice is a researcher.",
+            "id": "Alice",
+            "name": "Alice",
+            "type": "PERSON"
+          },
+          {
+            "description": "TechCorp is an organization.",
+            "id": "TechCorp",
+            "name": "TechCorp",
+            "type": "ORGANIZATION"
+          },
+          {
+            "description": "Machine Learning is a field of study.",
+            "id": "Machine Learning",
+            "name": "Machine Learning",
+            "type": "CONCEPT"
+          }
+        ]
+      }
+    }
+  }
+}

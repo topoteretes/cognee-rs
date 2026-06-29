@@ -32,49 +32,8 @@ use cognee_vector::VectorDB;
 use tempfile::TempDir;
 use uuid::Uuid;
 
-// ---------------------------------------------------------------------------
-// Helpers inlined (the search crate has no shared test_utils module for
-// integration tests in separate files; the matrix test uses `mod test_utils`
-// which is a sibling file).
-// ---------------------------------------------------------------------------
-
-/// Read a required environment variable, loading `.env` first (idempotent).
-fn require_env(var_name: &str) -> String {
-    let _ = dotenv::dotenv();
-
-    let canonical_fallback = match var_name {
-        "OPENAI_TOKEN" => Some("LLM_API_KEY"),
-        "OPENAI_URL" => Some("LLM_ENDPOINT"),
-        "OPENAI_MODEL" => Some("LLM_MODEL"),
-        _ => None,
-    };
-
-    if let Ok(v) = std::env::var(var_name)
-        && !v.is_empty()
-    {
-        return v;
-    }
-    if let Some(canonical) = canonical_fallback
-        && let Ok(v) = std::env::var(canonical)
-        && !v.is_empty()
-    {
-        return v;
-    }
-    panic!("Required environment variable '{var_name}' is not set")
-}
-
-fn create_adapter_from_env() -> Arc<cognee_llm::OpenAIAdapter> {
-    let base_url = require_env("OPENAI_URL");
-    let api_token = require_env("OPENAI_TOKEN");
-    let model = std::env::var("LLM_MODEL")
-        .or_else(|_| std::env::var("OPENAI_MODEL"))
-        .unwrap_or_else(|_| "gpt-4o-mini".to_string());
-
-    Arc::new(
-        cognee_llm::OpenAIAdapter::new(model, api_token, Some(base_url))
-            .unwrap_or_else(|e| panic!("Failed to create OpenAI adapter: {e}")),
-    )
-}
+mod test_utils;
+use test_utils::{create_deterministic_embedding_engine, create_llm_from_env};
 
 // ---------------------------------------------------------------------------
 // Test
@@ -82,19 +41,10 @@ fn create_adapter_from_env() -> Arc<cognee_llm::OpenAIAdapter> {
 
 #[tokio::test]
 async fn test_search_updates_last_accessed_timestamp() {
-    // ── Environment ──────────────────────────────────────────────────────────
-    let _ = require_env("OPENAI_URL");
-    let _ = require_env("OPENAI_TOKEN");
-    let _ = require_env("OPENAI_MODEL");
-
     // ── Infrastructure setup ─────────────────────────────────────────────────
     let temp_dir = TempDir::new().expect("temp dir");
 
-    let Some((embedding_engine, _embedding_dims)) =
-        cognee_test_utils::create_test_embedding_engine().await
-    else {
-        return;
-    };
+    let embedding_engine = create_deterministic_embedding_engine();
 
     let storage: Arc<dyn StorageTrait> =
         Arc::new(LocalStorage::new(temp_dir.path().join("storage")));
@@ -118,7 +68,7 @@ async fn test_search_updates_last_accessed_timestamp() {
     // In-memory mock vector DB (qdrant extracted to closed cognee-vector-qdrant).
     let vector_db: Arc<dyn VectorDB> = Arc::new(MockVectorDB::new());
 
-    let llm: Arc<dyn Llm> = create_adapter_from_env();
+    let llm: Arc<dyn Llm> = create_llm_from_env("last_accessed_update");
     let owner_id = Uuid::nil();
 
     // ── Ingest text ──────────────────────────────────────────────────────────
