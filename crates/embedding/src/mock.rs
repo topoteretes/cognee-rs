@@ -41,6 +41,8 @@ pub struct MockEmbeddingEngine {
     failure_after: Arc<Mutex<Option<usize>>>,
     /// Number of `embed` invocations observed.
     call_count: Arc<Mutex<usize>>,
+    /// Total number of texts passed across all `embed` invocations.
+    text_count: Arc<Mutex<usize>>,
 }
 
 impl MockEmbeddingEngine {
@@ -54,6 +56,7 @@ impl MockEmbeddingEngine {
             mode: MockVectorMode::Zero,
             failure_after: Arc::new(Mutex::new(None)),
             call_count: Arc::new(Mutex::new(0)),
+            text_count: Arc::new(Mutex::new(0)),
         }
     }
 
@@ -67,6 +70,7 @@ impl MockEmbeddingEngine {
             mode: MockVectorMode::Zero,
             failure_after: Arc::new(Mutex::new(None)),
             call_count: Arc::new(Mutex::new(0)),
+            text_count: Arc::new(Mutex::new(0)),
         }
     }
 
@@ -79,6 +83,7 @@ impl MockEmbeddingEngine {
             mode: MockVectorMode::Deterministic,
             failure_after: Arc::new(Mutex::new(None)),
             call_count: Arc::new(Mutex::new(0)),
+            text_count: Arc::new(Mutex::new(0)),
         }
     }
 
@@ -126,6 +131,16 @@ impl MockEmbeddingEngine {
         let mut slot = self.failure_after.lock().unwrap(); // lock poison is unrecoverable
         *slot = Some(n);
     }
+
+    /// Number of `embed` invocations observed so far (one per batched call).
+    pub fn call_count(&self) -> usize {
+        *self.call_count.lock().unwrap() // lock poison is unrecoverable
+    }
+
+    /// Total number of texts embedded across all `embed` invocations.
+    pub fn embedded_text_count(&self) -> usize {
+        *self.text_count.lock().unwrap() // lock poison is unrecoverable
+    }
 }
 
 #[async_trait]
@@ -137,6 +152,10 @@ impl EmbeddingEngine for MockEmbeddingEngine {
             *count += 1;
             *count
         };
+        {
+            let mut texts_seen = self.text_count.lock().unwrap(); // lock poison is unrecoverable
+            *texts_seen += texts.len();
+        }
         let failure_threshold = {
             let slot = self.failure_after.lock().unwrap(); // lock poison is unrecoverable
             *slot

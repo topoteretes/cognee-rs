@@ -1,7 +1,9 @@
 //! Ollama embedding engine.
 //!
-//! Calls the Ollama `/api/embed` endpoint for each input text concurrently.
-//! Supports all three response shapes that Ollama can return:
+//! Calls the Ollama `/api/embed` endpoint with a batched array `input`,
+//! sub-batched by `batch_size`, falling back to one concurrent request per text
+//! on servers that do not accept array input. Supports all three response
+//! shapes that Ollama can return:
 //! - `{"embeddings": [[...]]}` — standard Ollama `/api/embed`
 //! - `{"embedding": [...]}` — legacy Ollama `/api/embeddings`
 //! - `{"data": [{"embedding": [...]}]}` — OpenAI-compatible fallback shape
@@ -26,11 +28,23 @@ struct OllamaEmbedRequest<'a> {
     dimensions: Option<usize>,
 }
 
+/// Batched request body: recent Ollama `/api/embed` accepts an array `input`
+/// and returns one embedding per element under the `embeddings` key.
+#[derive(Serialize)]
+struct OllamaBatchEmbedRequest<'a> {
+    model: &'a str,
+    input: Vec<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    dimensions: Option<usize>,
+}
+
 // ─── Engine ───────────────────────────────────────────────────────────────────
 
 /// Embedding engine that calls the Ollama `/api/embed` HTTP endpoint.
 ///
-/// Sends one request per input text concurrently using `futures::future::join_all`.
+/// Sends a batched array `input` per request, sub-batched by `batch_size`, and
+/// falls back to one concurrent request per text (via
+/// `futures::future::join_all`) for servers that do not accept array input.
 /// Transient HTTP errors (network failures, 429, 5xx) are retried with
 /// exponential back-off starting at 8 s (doubling to 128 s) for up to 128 s total.
 ///
@@ -176,23 +190,113 @@ impl OllamaEmbeddingEngine {
         }
     }
 
-    /// Embed all texts concurrently, one request per text.
+    /// Call the endpoint once with an array `input` (no retry).
+    ///
+    /// Returns [`EmbeddingError::ApiError`] if the server returns a number of
+    /// embeddings that does not match the number of inputs — which is also how
+    /// servers that ignore array `input` surface, letting [`embed_all`] fall
+    /// back to one request per text.
+    async fn embed_batch_once(&self, texts: &[&str]) -> EmbeddingResult<Vec<Vec<f32>>> {
+        let truncated: Vec<&str> = texts.iter().map(|t| self.truncate_text(t)).collect();
+
+        let request_body = OllamaBatchEmbedRequest {
+            model: &self.model,
+            input: truncated,
+            dimensions: if self.dimensions > 0 {
+                Some(self.dimensions)
+            } else {
+                None
+            },
+        };
+
+        let response = self
+            .client
+            .post(&self.endpoint)
+            .json(&request_body)
+            .send()
+            .await
+            .map_err(|e| EmbeddingError::HttpError(format!("Request failed: {e}")))?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let body = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "<failed to read body>".to_string());
+            return Err(if status.as_u16() == 429 || status.is_server_error() {
+                EmbeddingError::HttpError(format!("HTTP {status}: {body}"))
+            } else {
+                EmbeddingError::ApiError(format!("HTTP {status}: {body}"))
+            });
+        }
+
+        let value: Value = response
+            .json()
+            .await
+            .map_err(|e| EmbeddingError::ApiError(format!("Failed to parse response: {e}")))?;
+
+        let embeddings = extract_all_embeddings_from_value(&value)?;
+        if embeddings.len() != texts.len() {
+            return Err(EmbeddingError::ApiError(format!(
+                "Expected {} embeddings for batch, got {}",
+                texts.len(),
+                embeddings.len()
+            )));
+        }
+        Ok(embeddings)
+    }
+
+    /// Batch variant of [`embed_single_with_retry`], retrying transient errors.
+    async fn embed_batch_with_retry(&self, texts: &[&str]) -> EmbeddingResult<Vec<Vec<f32>>> {
+        let max_duration = std::time::Duration::from_secs(128);
+        let start = std::time::Instant::now();
+        let mut wait_secs = 8u64;
+        loop {
+            match self.embed_batch_once(texts).await {
+                Ok(v) => return Ok(v),
+                Err(e)
+                    if matches!(e, EmbeddingError::HttpError(_))
+                        && start.elapsed() < max_duration =>
+                {
+                    let jitter = rand::random::<u64>() % wait_secs;
+                    tokio::time::sleep(std::time::Duration::from_secs(wait_secs + jitter)).await;
+                    wait_secs = (wait_secs * 2).min(128);
+                }
+                Err(e) => return Err(e),
+            }
+        }
+    }
+
+    /// Embed all texts, sub-batched by `batch_size` using array `input`.
+    ///
+    /// If a batch fails with a non-transient [`EmbeddingError::ApiError`] (e.g.
+    /// an older Ollama that does not accept array `input`), that batch falls
+    /// back to the legacy path of one concurrent request per text, so behavior
+    /// is preserved on every server version.
     async fn embed_all(&self, texts: &[&str]) -> EmbeddingResult<Vec<Vec<f32>>> {
         let sanitized = sanitize_embedding_inputs(texts);
         let sanitized_refs: Vec<&str> = sanitized.iter().map(|s| s.as_ref()).collect();
 
-        let futures: Vec<_> = sanitized_refs
-            .iter()
-            .map(|&text| self.embed_single_with_retry(text))
-            .collect();
-
-        let results = future::join_all(futures).await;
-
-        let embeddings: EmbeddingResult<Vec<Vec<f32>>> = results.into_iter().collect();
+        let mut embeddings: Vec<Vec<f32>> = Vec::with_capacity(texts.len());
+        for batch in sanitized_refs.chunks(self.batch_size) {
+            match self.embed_batch_with_retry(batch).await {
+                Ok(batch_embeddings) => embeddings.extend(batch_embeddings),
+                Err(EmbeddingError::ApiError(_)) => {
+                    let futures: Vec<_> = batch
+                        .iter()
+                        .map(|&text| self.embed_single_with_retry(text))
+                        .collect();
+                    for result in future::join_all(futures).await {
+                        embeddings.push(result?);
+                    }
+                }
+                Err(e) => return Err(e),
+            }
+        }
 
         Ok(handle_embedding_response(
             texts,
-            embeddings?,
+            embeddings,
             self.dimensions,
         ))
     }
@@ -264,6 +368,39 @@ fn extract_embedding_from_value(value: &Value) -> EmbeddingResult<Vec<f32>> {
         return Err(EmbeddingError::ApiError(
             "Response 'data' array is empty or missing 'embedding' field".to_string(),
         ));
+    }
+
+    Err(EmbeddingError::ApiError(format!(
+        "Unrecognised response shape; expected 'embeddings', 'embedding', or 'data' key. Got: {value}"
+    )))
+}
+
+/// Extract every embedding from a batched response (array `input`).
+///
+/// Handles the same shapes as [`extract_embedding_from_value`] but returns all
+/// embeddings rather than just the first:
+/// - `{"embeddings": [[...], [...]]}` — standard `/api/embed`
+/// - `{"data": [{"embedding": [...]}, ...]}` — OpenAI-compatible
+/// - `{"embedding": [...]}` — single embedding, returned as a one-element vec
+fn extract_all_embeddings_from_value(value: &Value) -> EmbeddingResult<Vec<Vec<f32>>> {
+    if let Some(embeddings) = value.get("embeddings").and_then(|v| v.as_array()) {
+        return embeddings.iter().map(parse_f32_array).collect();
+    }
+
+    if let Some(data) = value.get("data").and_then(|v| v.as_array()) {
+        return data
+            .iter()
+            .map(|item| {
+                item.get("embedding").ok_or_else(|| {
+                    EmbeddingError::ApiError("Response 'data' item missing 'embedding'".to_string())
+                })
+            })
+            .map(|embedding| embedding.and_then(parse_f32_array))
+            .collect();
+    }
+
+    if let Some(embedding) = value.get("embedding") {
+        return Ok(vec![parse_f32_array(embedding)?]);
     }
 
     Err(EmbeddingError::ApiError(format!(
@@ -464,5 +601,111 @@ mod tests {
         let result = extract_embedding_from_value(&json);
         assert!(result.is_err());
         assert!(matches!(result, Err(EmbeddingError::ApiError(_))));
+    }
+
+    // ── Batched response parsing (array input) ───────────────────────────────
+
+    #[test]
+    fn test_parse_all_embeddings_shape1() {
+        let json = serde_json::json!({
+            "embeddings": [[0.1_f64, 0.2_f64], [0.3_f64, 0.4_f64]]
+        });
+        let result = extract_all_embeddings_from_value(&json).expect("should parse batch");
+        assert_eq!(result.len(), 2);
+        assert!((result[0][0] - 0.1_f32).abs() < 1e-6);
+        assert!((result[1][1] - 0.4_f32).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_parse_all_embeddings_data_shape() {
+        let json = serde_json::json!({
+            "data": [{"embedding": [0.1_f64]}, {"embedding": [0.2_f64]}]
+        });
+        let result = extract_all_embeddings_from_value(&json).expect("should parse batch");
+        assert_eq!(result.len(), 2);
+        assert!((result[0][0] - 0.1_f32).abs() < 1e-6);
+        assert!((result[1][0] - 0.2_f32).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_parse_all_embeddings_single_shape() {
+        let json = serde_json::json!({ "embedding": [0.5_f64, 0.6_f64] });
+        let result = extract_all_embeddings_from_value(&json).expect("should parse single");
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].len(), 2);
+    }
+
+    #[test]
+    fn test_parse_all_embeddings_unrecognised() {
+        let json = serde_json::json!({ "nope": 1 });
+        assert!(matches!(
+            extract_all_embeddings_from_value(&json),
+            Err(EmbeddingError::ApiError(_))
+        ));
+    }
+
+    // ── End-to-end batching / fallback (mock HTTP server) ────────────────────
+
+    fn config_for(server_url: &str) -> EmbeddingConfig {
+        EmbeddingConfig {
+            dimensions: 2,
+            endpoint: Some(format!("{server_url}/api/embed")),
+            ..make_config()
+        }
+    }
+
+    #[tokio::test]
+    async fn embed_batches_array_input() {
+        let mut server = mockito::Server::new_async().await;
+        let batch = server
+            .mock("POST", "/api/embed")
+            .match_body(mockito::Matcher::Regex(r#""input":\["#.to_string()))
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"embeddings":[[1.0,0.0],[0.0,1.0]]}"#)
+            .create_async()
+            .await;
+
+        let engine = OllamaEmbeddingEngine::new(&config_for(&server.url())).unwrap();
+        let out = engine.embed(&["alpha", "beta"]).await.unwrap();
+
+        assert_eq!(out, vec![vec![1.0, 0.0], vec![0.0, 1.0]]);
+        batch.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn embed_falls_back_to_per_text_when_array_rejected() {
+        let mut server = mockito::Server::new_async().await;
+        // Array request rejected with a non-retryable 4xx (older Ollama).
+        let batch = server
+            .mock("POST", "/api/embed")
+            .match_body(mockito::Matcher::Regex(r#""input":\["#.to_string()))
+            .with_status(400)
+            .with_body("array input not supported")
+            .create_async()
+            .await;
+        // Per-text requests succeed; distinct vectors verify ordering is kept.
+        let single_a = server
+            .mock("POST", "/api/embed")
+            .match_body(mockito::Matcher::Regex(r#""input":"alpha""#.to_string()))
+            .with_status(200)
+            .with_body(r#"{"embedding":[1.0,0.0]}"#)
+            .create_async()
+            .await;
+        let single_b = server
+            .mock("POST", "/api/embed")
+            .match_body(mockito::Matcher::Regex(r#""input":"beta""#.to_string()))
+            .with_status(200)
+            .with_body(r#"{"embedding":[0.0,1.0]}"#)
+            .create_async()
+            .await;
+
+        let engine = OllamaEmbeddingEngine::new(&config_for(&server.url())).unwrap();
+        let out = engine.embed(&["alpha", "beta"]).await.unwrap();
+
+        assert_eq!(out, vec![vec![1.0, 0.0], vec![0.0, 1.0]]);
+        batch.assert_async().await;
+        single_a.assert_async().await;
+        single_b.assert_async().await;
     }
 }

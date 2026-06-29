@@ -738,7 +738,7 @@ impl Default for Settings {
             // cognee_embedding::known_model_dimensions.
             embedding_dimensions,
             embedding_max_sequence_length: 512,
-            embedding_batch_size: 32,
+            embedding_batch_size: 36,
             embedding_endpoint: String::new(),
             embedding_api_key: String::new(),
             embedding_api_version: String::new(),

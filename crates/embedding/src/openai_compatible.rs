@@ -4,12 +4,18 @@
 //! `/v1/embeddings` endpoint (vLLM, llama.cpp, TEI, LocalAI, etc.).
 
 use async_trait::async_trait;
+use futures::stream::{self, StreamExt};
 use serde::{Deserialize, Serialize};
 
 use crate::config::EmbeddingConfig;
 use crate::engine::EmbeddingEngine;
 use crate::error::{EmbeddingError, EmbeddingResult};
 use crate::utils::{handle_embedding_response, sanitize_embedding_inputs};
+
+/// Maximum number of sub-batch HTTP requests issued concurrently from a single
+/// `embed` call. Bounds in-flight work against provider rate limits while still
+/// overlapping network latency across sub-batches.
+const MAX_CONCURRENT_BATCHES: usize = 8;
 
 // ─── Response types ───────────────────────────────────────────────────────────
 
@@ -189,11 +195,21 @@ impl EmbeddingEngine for OpenAICompatibleEmbeddingEngine {
             return Ok(Vec::new());
         }
 
-        let mut results: Vec<Vec<f32>> = Vec::with_capacity(texts.len());
+        // Dispatch sub-batches concurrently (bounded by MAX_CONCURRENT_BATCHES).
+        // `buffered` preserves input order, so the flattened result still lines
+        // up one-to-one with `texts`.
+        let batch_futures: Vec<_> = texts
+            .chunks(self.batch_size)
+            .map(|batch| self.embed_batch_with_retry(batch))
+            .collect();
+        let batch_results: Vec<EmbeddingResult<Vec<Vec<f32>>>> = stream::iter(batch_futures)
+            .buffered(MAX_CONCURRENT_BATCHES)
+            .collect()
+            .await;
 
-        for batch in texts.chunks(self.batch_size) {
-            let batch_results = self.embed_batch_with_retry(batch).await?;
-            results.extend(batch_results);
+        let mut results: Vec<Vec<f32>> = Vec::with_capacity(texts.len());
+        for batch in batch_results {
+            results.extend(batch?);
         }
 
         Ok(results)
