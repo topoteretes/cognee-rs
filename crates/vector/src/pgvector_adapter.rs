@@ -453,6 +453,96 @@ impl VectorDB for PgVectorAdapter {
     }
 
     #[instrument(
+        name = "cognee.db.vector.batch_search_similar",
+        level = "info",
+        skip_all,
+        fields(
+            cognee.db.system = "pgvector",
+            cognee.vector.collection = tracing::field::Empty,
+            cognee.vector.result_count = tracing::field::Empty,
+        ),
+        err,
+    )]
+    async fn batch_search_similar(
+        &self,
+        data_type: &str,
+        field_name: &str,
+        query_vectors: &[Vec<f32>],
+        top_k: usize,
+    ) -> VectorDBResult<Vec<Vec<SearchResult>>> {
+        if query_vectors.is_empty() {
+            return Ok(vec![]);
+        }
+        let coll = Self::collection_name(data_type, field_name)?;
+        Span::current().record(COGNEE_VECTOR_COLLECTION, coll.as_str());
+
+        // One round-trip for the whole batch instead of the default's one query
+        // per vector: unnest the query vectors with ordinality and run the ANN
+        // search for each via a LATERAL join. Vector literals and `top_k` are
+        // numeric-only, so inlining them carries no injection risk (same approach
+        // as `search_similar`; `coll` is a validated identifier).
+        let array_literal = query_vectors
+            .iter()
+            .map(|v| format!("'{}'::vector", Self::format_vector(v)))
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        let sql = format!(
+            r#"SELECT q.idx AS idx, t.id AS id, t.score AS score, t.metadata AS metadata
+               FROM unnest(ARRAY[{array_literal}]) WITH ORDINALITY AS q(vec, idx)
+               CROSS JOIN LATERAL (
+                   SELECT id, 1 - (vector <=> q.vec) AS score, metadata
+                   FROM "{coll}"
+                   ORDER BY vector <=> q.vec
+                   LIMIT {top_k}
+               ) t
+               ORDER BY q.idx"#
+        );
+
+        let rows = self
+            .db
+            .query_all(Statement::from_string(DatabaseBackend::Postgres, sql))
+            .await
+            .map_err(|e| VectorDBError::StorageError(e.to_string()))?;
+
+        // Pre-size one bucket per query; `idx` (1-based ordinality) routes each row
+        // back to its query, and queries with no hits keep their empty bucket.
+        let mut results: Vec<Vec<SearchResult>> =
+            (0..query_vectors.len()).map(|_| Vec::new()).collect();
+        let mut total = 0usize;
+        for row in &rows {
+            let idx: i64 = row
+                .try_get("", "idx")
+                .map_err(|e| VectorDBError::StorageError(e.to_string()))?;
+            let id: Uuid = row
+                .try_get("", "id")
+                .map_err(|e| VectorDBError::StorageError(e.to_string()))?;
+            let score: f64 = row
+                .try_get("", "score")
+                .map_err(|e| VectorDBError::StorageError(e.to_string()))?;
+            let metadata_val: serde_json::Value = row
+                .try_get("", "metadata")
+                .map_err(|e| VectorDBError::StorageError(e.to_string()))?;
+            let metadata = match metadata_val {
+                serde_json::Value::Object(map) => map
+                    .into_iter()
+                    .collect::<HashMap<String, serde_json::Value>>(),
+                _ => HashMap::new(),
+            };
+            if let Some(bucket) = results.get_mut((idx as usize).saturating_sub(1)) {
+                bucket.push(SearchResult {
+                    id,
+                    score: score as f32,
+                    metadata,
+                });
+                total += 1;
+            }
+        }
+        Span::current().record(COGNEE_VECTOR_RESULT_COUNT, total as i64);
+        Ok(results)
+    }
+
+    #[instrument(
         name = "cognee.db.vector.delete_collection",
         level = "info",
         skip_all,

@@ -3,7 +3,7 @@ use cognee_models::{Data, Dataset};
 use cognee_utils::tracing_keys::{COGNEE_DB_ROW_COUNT, COGNEE_DB_SYSTEM};
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, DatabaseConnection, EntityTrait,
-    IntoActiveModel, PaginatorTrait, QueryFilter,
+    IntoActiveModel, PaginatorTrait, QueryFilter, sea_query::Expr,
 };
 use tracing::{Span, instrument};
 use uuid::Uuid;
@@ -126,16 +126,19 @@ pub async fn update_data_token_count(
     token_count: i64,
 ) -> Result<(), DatabaseError> {
     Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
-    let model = data::Entity::find_by_id(uuid_hex::to_hex(data_id))
-        .one(db)
+    // Single UPDATE instead of find-then-update (2 round-trips -> 1). The
+    // rows-affected count preserves the previous NotFound behaviour.
+    let result = data::Entity::update_many()
+        .col_expr(data::Column::TokenCount, Expr::value(token_count))
+        .col_expr(data::Column::UpdatedAt, Expr::value(Some(Utc::now())))
+        .filter(data::Column::Id.eq(uuid_hex::to_hex(data_id)))
+        .exec(db)
         .await
-        .map_err(map_sea_err)?
-        .ok_or_else(|| DatabaseError::NotFound(format!("Data {data_id} not found")))?;
+        .map_err(map_sea_err)?;
 
-    let mut active = model.into_active_model();
-    active.token_count = Set(token_count);
-    active.updated_at = Set(Some(Utc::now()));
-    active.update(db).await.map_err(map_sea_err)?;
+    if result.rows_affected == 0 {
+        return Err(DatabaseError::NotFound(format!("Data {data_id} not found")));
+    }
     Ok(())
 }
 
@@ -216,14 +219,16 @@ pub async fn clear_pipeline_status_for_dataset(
     let dataset_id_str = uuid_hex::to_hex(dataset_id);
     let mut updated_count = 0usize;
 
-    for data_hex_id in &data_ids {
-        let model = data::Entity::find_by_id(data_hex_id.clone())
-            .one(db)
-            .await
-            .map_err(map_sea_err)?;
+    // Single read for all linked Data rows instead of one find per id (N -> 1).
+    // The updates stay per-row because each row's pipeline_status JSON is mutated
+    // independently, and only rows that actually change are written back.
+    let models = data::Entity::find()
+        .filter(data::Column::Id.is_in(data_ids))
+        .all(db)
+        .await
+        .map_err(map_sea_err)?;
 
-        let Some(model) = model else { continue };
-
+    for model in models {
         let Some(ref status_json) = model.pipeline_status else {
             continue;
         };
