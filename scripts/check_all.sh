@@ -39,6 +39,22 @@ cargo check -p cognee-lib --no-default-features
 
 echo ""
 echo "================================================================"
+echo "=== Rust: wasm32 Config-1 (logic crates + wasm test drift guard) ==="
+echo "================================================================"
+# The wasm smoke-test files are #![cfg(target_arch = "wasm32")], so the native
+# `cargo check --all-targets` above compiles them to empty crates and never
+# type-checks them. Build the logic crates for the real target and type-check
+# every wasm test (incl. the shared wasm_smoke module) so a DocumentChunk-field
+# or chunk_text-signature drift is caught here. Build-only: running the tests
+# needs Node + wasm-bindgen-cli (see ci.yml's wasm job and
+# docs/spike-wasm-config1.md). The target install is a no-op once present.
+rustup target add wasm32-unknown-unknown >/dev/null 2>&1 || true
+cargo build -p cognee-models -p cognee-utils --target wasm32-unknown-unknown
+cargo test -p cognee-chunking --no-default-features --features tiktoken \
+    --target wasm32-unknown-unknown --no-run
+
+echo ""
+echo "================================================================"
 echo "=== Rust: Test (telemetry crate noop fallback) ==="
 echo "================================================================"
 # Mirrors the no-default-features test lane in .github/workflows/ci.yml.

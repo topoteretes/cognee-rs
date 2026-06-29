@@ -222,6 +222,63 @@ jobs:
       - name: Check (MSRV)
         run: cargo +1.91.0 check --all-targets
 
+  # ── wasm32 Config-1 lane: logic crates compile + run on wasm32 ────────
+  # The wasm smoke-test files are #![cfg(target_arch = "wasm32")], so the native
+  # lint/check lanes compile them to empty crates and never type-check them.
+  # This lane builds the logic crates for wasm32-unknown-unknown, type-checks
+  # every wasm test target (so a DocumentChunk-field or chunk_text-signature
+  # drift fails CI), and runs the Node smoke test. The headless-browser runner
+  # stays manual — it needs a WebDriver + browser; see docs/spike-wasm-config1.md.
+  # No protoc/cmake/lbug here: the three logic crates pull none of them.
+  wasm:
+    name: wasm32 (Config-1 logic crates)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust (stable) + wasm32 target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install Node (for the wasm-bindgen test runner)
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Cache cargo/target (wasm)
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: wasm-v1
+
+      # Build first so Cargo.lock exists (it is gitignored) before we pin the
+      # runner to the resolved wasm-bindgen version below.
+      - name: Build logic crates (wasm32)
+        run: |
+          cargo build -p cognee-models -p cognee-utils --target wasm32-unknown-unknown
+          cargo build -p cognee-chunking --no-default-features --features tiktoken --target wasm32-unknown-unknown
+
+      # Drift guard: type-check every wasm test target (wasm.rs, wasm_browser.rs
+      # and the shared wasm_smoke module). --no-run needs no runner, so it works
+      # before wasm-bindgen-cli is installed. A renamed DocumentChunk field or a
+      # changed chunk_text signature breaks here instead of slipping through.
+      - name: Type-check wasm test targets (drift guard)
+        run: cargo test -p cognee-chunking --features tiktoken --target wasm32-unknown-unknown --no-run
+
+      # wasm-bindgen-test-runner must match the resolved wasm-bindgen crate
+      # exactly or it refuses to run; read the version from the just-generated lock.
+      - name: Install wasm-bindgen-test-runner (matching the locked version)
+        run: |
+          WB_VER=$(sed -n '/^name = "wasm-bindgen"$/{n;s/^version = "\(.*\)"$/\1/p}' Cargo.lock)
+          echo "Installing wasm-bindgen-cli $WB_VER"
+          cargo install wasm-bindgen-cli --version "$WB_VER" --locked
+
+      - name: Run Node smoke tests (default + tiktoken)
+        run: |
+          cargo test -p cognee-chunking --target wasm32-unknown-unknown --test wasm
+          cargo test -p cognee-chunking --features tiktoken --target wasm32-unknown-unknown --test wasm
+
   # ── Stage 2: Build and run tests (depends on lint) ────────────────────
   test:
     name: Test (stable)

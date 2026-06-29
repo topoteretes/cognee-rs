@@ -75,6 +75,7 @@ dirs = "6"
 dotenv = "0.15"
 env_logger = "0.11"
 futures = "0.3"
+futures-timer = { version = "3", features = ["wasm-bindgen"] }
 futures-util = "0.3"
 hex = "0.4"
 hmac = "0.12"
@@ -128,7 +129,12 @@ tracing-appender = "0.2"
 tracing-opentelemetry = { version = "=0.32", default-features = false, features = ["tracing-log"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
 url = "2.5"
-uuid = { version = "1.21", features = ["v4", "v5", "serde"] }
+# `js` makes uuid's v4 randomness work on wasm32-unknown (routing through
+# wasm-bindgen/js-sys). It is a no-op on native targets — uuid gates its
+# wasm-bindgen/js-sys deps to wasm internally — so enabling it workspace-wide
+# leaves native builds unchanged while every crate's uuid works on wasm.
+# See docs/spike-wasm-config1.md.
+uuid = { version = "1.21", features = ["v4", "v5", "serde", "js"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
 
 # Project rule made enforceable: "no unwrap()/expect() in non-test code"
