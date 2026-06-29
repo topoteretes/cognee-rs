@@ -84,6 +84,13 @@ crate; this just turns the backend on.
 getrandom = { version = "0.2", features = ["js"] }
 ```
 
+This is the **only** randomness shim needed. `uuid` does *not* pull getrandom on
+wasm32-unknown — it sources its own wasm randomness through its `js` feature,
+enabled once on the **workspace** `uuid` dependency (Wall 2). There is no
+getrandom 0.4 dependency and no `getrandom_backend` rustflag (`.cargo/config.toml`
+carries only `runner = "wasm-bindgen-test-runner"`); the plain `cargo build` path
+needs neither.
+
 > **Review correction.** The first pass also added a getrandom **0.4** shim
 > (`getrandom_v04`) plus `--cfg getrandom_backend="wasm_js"` in
 > `.cargo/config.toml`, assuming `uuid` pulled getrandom 0.4 on wasm. It does
