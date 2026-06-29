@@ -36,6 +36,9 @@ jobs:
   # ── Build per-platform .node artifacts ───────────────────────────────
   build-platform:
     name: Build ${{ matrix.platform }}
+    # Cap each leg so a stuck build (e.g. a hung native compile) fails fast
+    # instead of running to the 6h/24h default and burning runner time.
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
@@ -70,9 +73,12 @@ jobs:
             rust-target: x86_64-apple-darwin
             cross: false
 
-          # macOS arm64 (Apple Silicon)
+          # macOS arm64 (Apple Silicon). Use macos-15 (default Xcode 16.4):
+          # the older macos-14 default (Xcode 15.4) ships a libc++ whose
+          # std::construct_at trips a C++20 aggregate-init bug while compiling
+          # lbug's bundled C++ (needs Clang 16+ / P0960 support).
           - platform: darwin-arm64
-            runner: macos-14
+            runner: macos-15
             rust-target: aarch64-apple-darwin
             cross: false
 
