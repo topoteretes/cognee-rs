@@ -1,0 +1,119 @@
+name: Record LLM cassettes
+
+# Manually-triggered job that re-records the committed LLM cassettes used by the
+# cassette-replay integration tests (Approach E — see
+# docs/build/ci-test-parallelism.md). The normal CI test job runs these tests
+# offline from the committed cassettes (COGNEE_TEST_REPLAY=1); when a prompt,
+# schema, or model changes, the cassettes drift and replay fails with
+# MissPolicy::Error. Run this workflow to regenerate them against the live API,
+# then it commits the refreshed cassettes back to the branch.
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch to record on and commit the refreshed cassettes to"
+        required: true
+        default: main
+
+concurrency:
+  group: record-cassettes-${{ github.event.inputs.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_INCREMENTAL: "0"
+  ORT_CACHE_DIR: ${{ github.workspace }}/target/ort-cache
+  CCACHE_COMPILERCHECK: content
+  # Record mode: wrap the real adapter and write/merge each cassette on drop.
+  COGNEE_RECORD_LLM: "1"
+  OPENAI_URL: https://api.openai.com/v1
+  OPENAI_TOKEN: ${{ secrets.OPENAI_KEY }}
+  OPENAI_MODEL: gpt-4o-mini
+
+jobs:
+  record:
+    name: Record cassettes
+    runs-on: ubuntu-latest
+    # contents:write lets the default GITHUB_TOKEN commit the refreshed cassettes
+    # (they are not workflow files, so no `workflow` scope is needed).
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref }}
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install mold linker
+        uses: rui314/setup-mold@v1
+        with:
+          make-default: true
+
+      - name: Install build deps
+        run: sudo apt-get update && sudo apt-get install -y cmake protobuf-compiler
+
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          swap-storage: true
+          docker-images: true
+
+      - name: ccache (lbug bundled C++, restore-only)
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: lbug-cxx
+          max-size: 1G
+          save: false
+
+      - name: Cache cargo/target (test)
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: workspace-test-v6
+
+      - name: Cache ORT binary
+        uses: actions/cache@v4
+        with:
+          path: target/ort-cache
+          key: ort-v2.0.0-rc.12-cpu-linux-x86_64
+
+      # Record each cassette-backed test against the live API. --test-threads=1
+      # so tests in the same file merge into one cassette without racing the
+      # final atomic write. The deterministic embedding engine is chosen in-code
+      # (no MOCK_EMBEDDING env needed), so embeddings match replay exactly.
+      - name: Record cognify cassettes
+        run: |
+          cargo test -p cognee-cognify \
+            --test integration_fact_extraction \
+            --test integration_summarization \
+            --test e2e_triplet_vector_cleanup \
+            --test e2e_delete_preview_accuracy \
+            --test e2e_shared_entity_graph_delete \
+            --test e2e_lifecycle_loop \
+            -- --test-threads=1
+
+      - name: Record search cassettes
+        run: cargo test -p cognee-search --test last_accessed_update -- --test-threads=1
+
+      - name: Record delete cassettes
+        run: cargo test -p cognee-delete --test hard_mode_orphan_sweep -- --test-threads=1
+
+      - name: Commit refreshed cassettes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet -- '**/tests/fixtures/cassettes/*.json'; then
+            echo "Cassettes unchanged — nothing to commit."
+            exit 0
+          fi
+          git add '**/tests/fixtures/cassettes/*.json'
+          git commit -m "chore(test): re-record LLM cassettes [skip ci]"
+          git push origin HEAD:${{ github.event.inputs.ref }}

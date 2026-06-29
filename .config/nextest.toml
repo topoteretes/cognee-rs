@@ -33,20 +33,8 @@ slow-timeout = { period = "120s", terminate-after = 5 }
 # masking deterministic failures, which fail on the retry too.
 retries = 1
 
-# ── Heavy real-API test cap ───────────────────────────────────────────────────
-# The integration/e2e tests below still hit the live OpenAI API and/or a real
-# embedding engine and drive the full pipeline (Ladybug graph, vector store).
-# They can't use cassette replay because they assert on semantic retrieval
-# quality (search ranking, keyword presence) or derive queries from
-# non-deterministically-ordered extraction output — both need real embeddings.
-# Left uncapped, several run concurrently on a 4-core runner and saturate it,
-# which inflates the wall time of the hundreds of otherwise-millisecond tests
-# (a 12ms test can stretch to 17s under that contention). Bounding how many run
-# at once keeps cores free for the cheap tests. max-threads is a starting point
-# to tune by measurement — see docs/build/ci-test-parallelism.md (Approach E).
-[test-groups]
-heavy-real-api = { max-threads = 3 }
-
-[[profile.ci.overrides]]
-filter = 'binary(/^integration_search_matrix$|^search_after_partial_delete$|^integration_embeddings$|^integration_default_backend$|^e2e_full_pipeline_memify$|^e2e_ontology_pipeline$|^provenance_e2e$|^e2e_recognify_after_update$|^e2e_memify$|^test_cognify_blocking$|^test_ontology_cognify_search_e2e$/)'
-test-group = 'heavy-real-api'
+# A `heavy-real-api` test-group cap (max-threads) was trialled here to keep the
+# uncassettable real-API tests from co-saturating the 4-core runner, but a CI
+# measurement showed no meaningful effect (3 vs 4 concurrent on 4 cores is
+# marginal, and the heavy tests are largely network-bound), so it was removed.
+# See docs/build/ci-test-parallelism.md (Approach E) for the analysis.
