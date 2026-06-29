@@ -2,8 +2,8 @@ use chrono::{DateTime, Utc};
 use cognee_utils::tracing_keys::{COGNEE_DB_ROW_COUNT, COGNEE_DB_SYSTEM};
 use sea_orm::sea_query::OnConflict;
 use sea_orm::{
-    ColumnTrait, Condition, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter,
-    QueryOrder, QuerySelect,
+    ColumnTrait, Condition, ConnectionTrait, DatabaseConnection, EntityTrait, PaginatorTrait,
+    QueryFilter, QueryOrder, QuerySelect,
 };
 use tracing::{Span, instrument};
 use uuid::Uuid;
@@ -30,8 +30,8 @@ const PROVENANCE_INSERT_BATCH: usize = 500;
     fields(cognee.db.system = tracing::field::Empty),
     err,
 )]
-pub async fn upsert_nodes(
-    db: &DatabaseConnection,
+pub async fn upsert_nodes<C: ConnectionTrait>(
+    db: &C,
     nodes: &[GraphNode],
 ) -> Result<(), DatabaseError> {
     Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
@@ -118,8 +118,8 @@ pub async fn delete_nodes_by_data(
     fields(cognee.db.system = tracing::field::Empty),
     err,
 )]
-pub async fn upsert_edges(
-    db: &DatabaseConnection,
+pub async fn upsert_edges<C: ConnectionTrait>(
+    db: &C,
     edges: &[GraphEdge],
 ) -> Result<(), DatabaseError> {
     Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
