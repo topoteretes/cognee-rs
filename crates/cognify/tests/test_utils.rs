@@ -1,3 +1,4 @@
+use cognee_embedding::{EmbeddingEngine, MockEmbeddingEngine};
 use cognee_llm::Llm;
 use cognee_llm::OpenAIAdapter;
 use cognee_llm::mock::{MissPolicy, RecordingLlm, ReplayLlm};
@@ -87,4 +88,20 @@ pub fn create_llm_from_env(cassette_name: &str) -> Arc<dyn Llm> {
         return Arc::new(RecordingLlm::new(adapter, cassette));
     }
     adapter
+}
+
+/// A deterministic in-process embedding engine for cassette-replay tests.
+///
+/// Vectors are derived from `sha256(text)` at the workspace-default 384
+/// dimensions, so they are byte-identical across record and replay without any
+/// real embedding backend or network. Use this in place of
+/// `cognee_test_utils::create_test_embedding_engine()` for tests that only need
+/// embeddings to *exist* and be reproducible (graph structure, deletion,
+/// cleanup). Do NOT use it for tests that assert on real semantic similarity or
+/// vector ranking — those must keep a real embedding engine. Choosing it
+/// explicitly (rather than a global `MOCK_EMBEDDING` env var) keeps mock and
+/// real-embedding tests cleanly separated in the same CI run.
+#[allow(dead_code)]
+pub fn create_deterministic_embedding_engine() -> Arc<dyn EmbeddingEngine> {
+    Arc::new(MockEmbeddingEngine::deterministic(384))
 }
