@@ -126,18 +126,29 @@ jobs:
         with:
           arch: x64
 
-      # .cargo/config.toml routes the bundled CMake C/C++ build through
-      # scripts/ccache-launcher.sh, a POSIX sh script. Ninja can't CreateProcess
-      # a .sh on Windows (`%1 is not a valid Win32 application`). Clear the
-      # launcher here so CMake invokes cl.exe directly — a set env var overrides
-      # the non-forced [env] in config.toml, and ccache isn't installed on the
-      # Windows runner anyway (the ccache-action step is skipped there).
-      - name: Disable POSIX ccache launcher (Windows)
+      # Two Windows-only build-env fixes:
+      #
+      # 1. .cargo/config.toml routes the bundled CMake C/C++ build through
+      #    scripts/ccache-launcher.sh, a POSIX sh script. Ninja can't
+      #    CreateProcess a .sh on Windows (`%1 is not a valid Win32
+      #    application`). Clear the launcher so CMake invokes cl.exe directly —
+      #    a set env var overrides the non-forced [env] in config.toml, and
+      #    ccache isn't installed on the Windows runner anyway.
+      #
+      # 2. CRT mismatch: lbug compiles its C++ with /MD (dynamic CRT, matching
+      #    Rust's msvc default), but esaxx-rs hardcodes `.static_crt(true)` ->
+      #    /MT, so linking the addon fails with LNK2038/LNK1319. Force /MD for
+      #    cc-built C++ deps via target-scoped CXXFLAGS/CFLAGS (cc appends env
+      #    flags last, so /MD wins over esaxx's /MT at cl.exe). Target-scoped so
+      #    host build-script compiles are untouched.
+      - name: Configure Windows C/C++ build env
         if: runner.os == 'Windows'
         shell: bash
         run: |
           echo "CMAKE_C_COMPILER_LAUNCHER=" >> "$GITHUB_ENV"
           echo "CMAKE_CXX_COMPILER_LAUNCHER=" >> "$GITHUB_ENV"
+          echo "CFLAGS_x86_64_pc_windows_msvc=/MD" >> "$GITHUB_ENV"
+          echo "CXXFLAGS_x86_64_pc_windows_msvc=/MD" >> "$GITHUB_ENV"
 
       - name: ccache (lbug bundled C++, restore-only)
         if: runner.os != 'Windows'
