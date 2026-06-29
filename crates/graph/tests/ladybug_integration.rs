@@ -52,6 +52,7 @@ ladybug_test!(test_add_and_has_edge);
 ladybug_test!(test_add_edges_batch);
 ladybug_test!(test_edge_upsert_same_key);
 ladybug_test!(test_has_edges);
+ladybug_test!(test_has_edges_batch_equivalence);
 ladybug_test!(test_get_edges);
 ladybug_test!(test_get_neighbors);
 ladybug_test!(test_get_connections);
