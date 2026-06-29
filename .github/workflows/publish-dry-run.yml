@@ -37,7 +37,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Mirror oss-isolation.yml's disk-reclaim step. Packaging 22 crates plus
+      # Reclaim runner disk before packaging. Packaging 22 crates plus
       # their .crate tarballs in target/package/ can exceed the default 14 GB
       # runner disk; android/dotnet/haskell tool-caches and docker images are
       # the cheapest wins.
