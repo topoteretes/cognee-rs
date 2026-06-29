@@ -569,15 +569,21 @@ impl GraphDBTrait for PgGraphAdapter {
 
         // Collect the triples that exist, then filter the original input so each
         // returned edge keeps its properties (which aren't part of the lookup key).
-        let existing: HashSet<_> = rows
-            .into_iter()
-            .filter_map(|row| {
-                let s: String = row.try_get("", "s").ok()?;
-                let t: String = row.try_get("", "t").ok()?;
-                let r: String = row.try_get("", "r").ok()?;
-                Some((s, t, r))
-            })
-            .collect();
+        // A decode failure is a real error, so propagate it rather than silently
+        // dropping the row.
+        let mut existing: HashSet<_> = HashSet::with_capacity(rows.len());
+        for row in &rows {
+            let s: String = row
+                .try_get("", "s")
+                .map_err(|e| GraphDBError::QueryError(e.to_string()))?;
+            let t: String = row
+                .try_get("", "t")
+                .map_err(|e| GraphDBError::QueryError(e.to_string()))?;
+            let r: String = row
+                .try_get("", "r")
+                .map_err(|e| GraphDBError::QueryError(e.to_string()))?;
+            existing.insert((s, t, r));
+        }
 
         let found = edges
             .iter()
