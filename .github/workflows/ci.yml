@@ -232,6 +232,11 @@ jobs:
       OPENAI_URL: https://api.openai.com/v1
       OPENAI_TOKEN: ${{ secrets.OPENAI_KEY }}
       OPENAI_MODEL: gpt-4o-mini
+      # Select the tuned nextest CI profile (.config/nextest.toml): parallel
+      # execution, fail-fast off, one retry for transient external flakiness.
+      # nextest reads NEXTEST_PROFILE natively, so scripts/run_tests_with_openai.sh
+      # needs no extra flags.
+      NEXTEST_PROFILE: ci
 
     steps:
       - name: Checkout

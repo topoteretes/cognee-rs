@@ -1,0 +1,34 @@
+# cargo-nextest configuration.
+#
+# Historically the workspace test suite was run via `cargo nextest run
+# --no-capture`, which forces `--test-threads=1` (fully serial). That serial
+# requirement was a holdover from the `cargo test` era, where every test shared
+# one process and threads — so `set_var`, global `once_cell` singletons, etc.
+# raced. nextest runs each test in its OWN process, so that shared-process state
+# is already isolated per test and the global serialization is unnecessary.
+#
+# Empirically, the full suite passes under aggressive parallelism with no races,
+# leaks, port conflicts, or timeouts. Removing the serial constraint takes the
+# run phase from ~20 min to a few minutes. See docs/build/ci-test-parallelism.md.
+
+[profile.default]
+# Don't stop at the first failure: surface every failing test in one run so a
+# single flaky/broken test doesn't mask the rest.
+fail-fast = false
+
+# Slow-test diagnostics: warn after 60s, treat as hung after 5 min. The LLM
+# integration tests make real network round-trips, so the bar is generous.
+slow-timeout = { period = "60s", terminate-after = 5 }
+
+[profile.ci]
+# CI inherits the parallel defaults above. Concurrency is left at the nextest
+# default (= number of CPU cores) per the team decision: 4 concurrent
+# gpt-4o-mini calls on a 4-core runner is trivial for OpenAI's rate limits, and
+# the OpenAI adapter already retries 429/5xx with exponential backoff.
+fail-fast = false
+slow-timeout = { period = "120s", terminate-after = 5 }
+
+# Retry a failed test once on CI before declaring it failed. Guards against
+# genuinely transient external flakiness (network blip, momentary 5xx) without
+# masking deterministic failures, which fail on the retry too.
+retries = 1

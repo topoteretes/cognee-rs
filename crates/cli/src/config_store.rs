@@ -28,9 +28,20 @@ impl Default for ConfigDocument {
 }
 
 pub fn config_file_path() -> Result<PathBuf, CliError> {
-    let base_dir = dirs::config_dir().ok_or_else(|| {
-        CliError::Runtime("Could not resolve user config directory for cognee-cli".to_string())
-    })?;
+    // Honor `XDG_CONFIG_HOME` on every platform when it is set. `dirs::config_dir()`
+    // only consults it on Linux — on macOS it unconditionally returns
+    // `~/Library/Application Support`, ignoring the override. That platform gap let
+    // concurrent CLI invocations (e.g. parallel integration tests, each setting its
+    // own `XDG_CONFIG_HOME` to an isolated temp dir) collide on the single shared
+    // macOS config file and race on the atomic `config.json[.tmp]` replace. Checking
+    // the variable first makes config isolation work identically across platforms;
+    // it is a no-op on Linux where `dirs` already resolves it.
+    let base_dir = match std::env::var_os("XDG_CONFIG_HOME") {
+        Some(xdg) if !xdg.is_empty() => PathBuf::from(xdg),
+        _ => dirs::config_dir().ok_or_else(|| {
+            CliError::Runtime("Could not resolve user config directory for cognee-cli".to_string())
+        })?,
+    };
 
     Ok(base_dir.join("cognee-rust").join("config.json"))
 }
