@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "model": "gpt-4o-mini",
+  "entries": {
+    "387b736045e82244049e1078a34201d94c067a03f44d957791fac5135ebe61ae": {
+      "method": "structured_output",
+      "user_input_preview": "\nQuantum computing represents a paradigm shift in computation. Unlike classical computers \nthat use bits, quantum comput",
+      "schema_name": "SummarizedContent",
+      "response": {
+        "description": "Quantum computing is a new approach to computation that utilizes qubits instead of bits, enabling faster problem-solving capabilities compared to classical computers.",
+        "summary": "Quantum computing introduces qubits that can exist in superposition, allowing for exponential speed improvements over classical computing."
+      }
+    },
+    "66d8e212656178a5e475902bd6a7be383fd927b85ddd586457fce61f88796985": {
+      "method": "structured_output",
+      "user_input_preview": "\nQuantum computing represents a paradigm shift in computation. Unlike classical computers \nthat use bits, quantum comput",
+      "schema_name": "SummarizedContent",
+      "response": {
+        "description": "Quantum computing fundamentally changes how computations are performed by utilizing qubits, which can exist in multiple states simultaneously (superposition). This unique property enables quantum computers to solve specific problems at an exponentially faster rate compared to classical computers that rely on bits.",
+        "summary": "Quantum computing introduces a new way of computation using qubits, allowing for exponentially faster problem-solving compared to classical computers."
+      }
+    },
+    "faa749dbc29a9858f82f2591975f3bf77552007a75523af1c64b5ab951316eb9": {
+      "method": "structured_output",
+      "user_input_preview": "\nArtificial intelligence has made remarkable progress over the past decade, transforming \nindustries ranging from health",
+      "schema_name": "SummarizedContent",
+      "response": {
+        "description": "This chunk discusses the advancements in artificial intelligence, particularly in machine learning, natural language processing, and the ethical considerations surrounding these technologies. It highlights the role of large language models and anticipates future developments in AI integration into daily life.",
+        "summary": "The chunk covers the significant progress in artificial intelligence over the past decade, including advancements in machine learning and natural language processing, while also addressing ethical concerns and future trends."
+      }
+    }
+  }
+}

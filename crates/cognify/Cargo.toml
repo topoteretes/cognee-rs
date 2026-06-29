@@ -56,7 +56,12 @@ cognee-database   = { path = "../database", features = ["sqlite"] }
 cognee-search     = { path = "../search" }
 cognee-delete     = { path = "../delete" }
 cognee-test-utils = { path = "../test-utils" }
-cognee-llm        = { path = "../llm" }
+# `mock` enables the cassette record/replay clients (ReplayLlm/RecordingLlm) the
+# integration tests use to run offline against committed cassettes. Cargo unifies
+# this dev-dep with the mock-less [dependencies] entry into one test build, so
+# there is no double-trait-copy issue (that caveat is specific to cognee-llm's
+# own test target — see crates/llm/src/mock/recording.rs).
+cognee-llm        = { path = "../llm", features = ["mock"] }
 cognee-session    = { path = "../session", features = ["fs"] }
 dotenv.workspace = true
 tempfile.workspace = true

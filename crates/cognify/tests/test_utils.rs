@@ -1,4 +1,6 @@
+use cognee_llm::Llm;
 use cognee_llm::OpenAIAdapter;
+use cognee_llm::mock::{MissPolicy, RecordingLlm, ReplayLlm};
 use std::sync::Arc;
 
 /// Read a required environment variable, loading `.env` first (idempotent).
@@ -44,4 +46,45 @@ pub fn create_adapter_from_env() -> Arc<OpenAIAdapter> {
         OpenAIAdapter::new(model, api_token, Some(base_url))
             .unwrap_or_else(|e| panic!("❌ Failed to create OpenAI adapter: {e}")),
     )
+}
+
+/// Resolve the on-disk path of a named cassette under this crate's
+/// `tests/fixtures/cassettes/` directory.
+#[allow(dead_code)]
+pub fn cassette_path(name: &str) -> String {
+    format!(
+        "{}/tests/fixtures/cassettes/{name}.json",
+        env!("CARGO_MANIFEST_DIR")
+    )
+}
+
+/// Build the `Llm` an integration test should use, choosing one of three modes
+/// from the environment so the same test runs offline in CI and records locally:
+///
+/// - `COGNEE_TEST_REPLAY=1` → offline replay from the committed cassette
+///   `tests/fixtures/cassettes/<name>.json`. Uses [`MissPolicy::Error`] so a
+///   missing/stale entry fails loudly instead of silently returning an empty
+///   graph (the `ReplayLlm` default). Needs no API credentials.
+/// - `COGNEE_RECORD_LLM=1` → the real `OpenAIAdapter`, wrapped so every call is
+///   recorded (and merged) into that cassette on drop. Needs credentials.
+/// - neither → the plain real `OpenAIAdapter` (legacy behaviour).
+///
+/// Pair this with `MOCK_EMBEDDING=deterministic` for any test that also touches
+/// the vector store, so embeddings are identical across record and replay.
+#[allow(dead_code)]
+pub fn create_llm_from_env(cassette_name: &str) -> Arc<dyn Llm> {
+    let cassette = cassette_path(cassette_name);
+
+    if std::env::var("COGNEE_TEST_REPLAY").is_ok_and(|v| !v.is_empty()) {
+        let replay = ReplayLlm::from_path(&cassette)
+            .unwrap_or_else(|e| panic!("❌ Failed to load cassette {cassette}: {e}"))
+            .with_miss_policy(MissPolicy::Error);
+        return Arc::new(replay);
+    }
+
+    let adapter = create_adapter_from_env();
+    if std::env::var("COGNEE_RECORD_LLM").is_ok_and(|v| !v.is_empty()) {
+        return Arc::new(RecordingLlm::new(adapter, cassette));
+    }
+    adapter
 }

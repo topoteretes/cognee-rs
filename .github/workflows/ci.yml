@@ -237,6 +237,12 @@ jobs:
       # nextest reads NEXTEST_PROFILE natively, so scripts/run_tests_with_openai.sh
       # needs no extra flags.
       NEXTEST_PROFILE: ci
+      # Run cassette-converted integration tests offline from committed cassettes
+      # (crates/*/tests/fixtures/cassettes/) instead of calling the live OpenAI
+      # API. Tests still on the real API ignore this var and use OPENAI_TOKEN.
+      # Cassettes are re-recorded on demand via the record-cassettes workflow.
+      # See docs/build/ci-test-parallelism.md / Approach E.
+      COGNEE_TEST_REPLAY: "1"
 
     steps:
       - name: Checkout
