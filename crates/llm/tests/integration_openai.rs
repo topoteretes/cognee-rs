@@ -7,47 +7,15 @@
 //!
 //! Run with: cargo test --package cognee-llm --test integration_openai
 
-use cognee_llm::{GenerationOptions, Llm, LlmExt, OpenAIAdapter};
+use cognee_llm::{GenerationOptions, Llm, LlmExt};
+// Shared LLM env helpers (single source of truth in cognee-test-utils). The
+// adapter is returned as `Arc<OpenAIAdapter>`; method calls below resolve
+// through `Deref`.
+use cognee_test_utils::{
+    create_openai_adapter_from_env as create_adapter_from_env, llm_env_available,
+};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-
-/// Read a required env var, loading `.env` first (idempotent).
-/// Accepts canonical LLM_* names as fallbacks for legacy OPENAI_* aliases.
-fn require_env(var_name: &str) -> String {
-    let _ = dotenv::dotenv();
-
-    let canonical_fallback = match var_name {
-        "OPENAI_TOKEN" => Some("LLM_API_KEY"),
-        "OPENAI_URL" => Some("LLM_ENDPOINT"),
-        "OPENAI_MODEL" => Some("LLM_MODEL"),
-        _ => None,
-    };
-
-    if let Ok(v) = std::env::var(var_name)
-        && !v.is_empty()
-    {
-        return v;
-    }
-    if let Some(canonical) = canonical_fallback
-        && let Ok(v) = std::env::var(canonical)
-        && !v.is_empty()
-    {
-        return v;
-    }
-    panic!("❌ Required environment variable '{var_name}' is not set")
-}
-
-/// Create an OpenAI adapter from environment variables.
-fn create_adapter_from_env() -> OpenAIAdapter {
-    let base_url = require_env("OPENAI_URL");
-    let api_token = require_env("OPENAI_TOKEN");
-    let model = std::env::var("LLM_MODEL")
-        .or_else(|_| std::env::var("OPENAI_MODEL"))
-        .unwrap_or_else(|_| "gpt-4o-mini".to_string());
-
-    OpenAIAdapter::new(model, api_token, Some(base_url))
-        .unwrap_or_else(|e| panic!("❌ Failed to create OpenAI adapter: {e}"))
-}
 
 /// Test data: Multi-paragraph text for fact extraction
 const TEST_TEXT: &str = r#"
@@ -127,6 +95,10 @@ struct Edge {
 
 #[tokio::test]
 async fn test_entity_extraction() {
+    if !llm_env_available() {
+        eprintln!("skipping: live LLM credentials (OPENAI_URL/OPENAI_TOKEN) not set");
+        return;
+    }
     let adapter = create_adapter_from_env();
 
     println!("\n🧪 Testing entity extraction with OpenAI-compatible API");
@@ -241,6 +213,10 @@ async fn test_entity_extraction() {
 
 #[tokio::test]
 async fn test_knowledge_graph_extraction() {
+    if !llm_env_available() {
+        eprintln!("skipping: live LLM credentials (OPENAI_URL/OPENAI_TOKEN) not set");
+        return;
+    }
     let adapter = create_adapter_from_env();
 
     println!("\n🧪 Testing knowledge graph extraction with OpenAI-compatible API");
@@ -308,6 +284,10 @@ async fn test_knowledge_graph_extraction() {
 
 #[tokio::test]
 async fn test_simple_text_generation() {
+    if !llm_env_available() {
+        eprintln!("skipping: live LLM credentials (OPENAI_URL/OPENAI_TOKEN) not set");
+        return;
+    }
     let adapter = create_adapter_from_env();
 
     println!("\n🧪 Testing simple text generation");

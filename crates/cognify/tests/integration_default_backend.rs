@@ -25,7 +25,7 @@ use cognee_delete::{DeleteMode, DeleteRequest, DeleteScope, DeleteService};
 use cognee_embedding::EmbeddingEngine;
 use cognee_graph::{GraphDBTrait, LadybugAdapter};
 use cognee_ingestion::AddPipeline;
-use cognee_llm::{Llm, OpenAIAdapter};
+use cognee_llm::Llm;
 use cognee_models::DataInput;
 use cognee_ontology::NoOpOntologyResolver;
 use cognee_search::{
@@ -39,7 +39,6 @@ use tempfile::TempDir;
 use uuid::Uuid;
 
 mod test_utils;
-use test_utils::require_env;
 
 const AI_TEXT: &str = include_str!("test_data/artificial_intelligence.txt");
 
@@ -91,9 +90,10 @@ fn make_request(query: &str, search_type: SearchType) -> SearchRequest {
 #[tokio::test]
 async fn test_default_backend_add_cognify_search_delete() {
     // ── Environment ──────────────────────────────────────────────────────────
-    let _ = require_env("OPENAI_URL");
-    let _ = require_env("OPENAI_TOKEN");
-    let _ = require_env("OPENAI_MODEL");
+    if !test_utils::llm_env_available() {
+        eprintln!("skipping: live LLM credentials (OPENAI_URL/OPENAI_TOKEN) not set");
+        return;
+    }
 
     // ── Infrastructure setup ─────────────────────────────────────────────────
     let temp_dir = TempDir::new().expect("temp dir");
@@ -131,14 +131,9 @@ async fn test_default_backend_add_cognify_search_delete() {
     let vector_db: Arc<dyn VectorDB> = Arc::new(MockVectorDB::new());
 
     // OpenAI-compatible LLM
-    let llm: Arc<dyn Llm> = Arc::new(
-        OpenAIAdapter::new(
-            require_env("OPENAI_MODEL"),
-            require_env("OPENAI_TOKEN"),
-            Some(require_env("OPENAI_URL")),
-        )
-        .expect("OpenAIAdapter::new"),
-    );
+    // Real OpenAI-compatible adapter (endpoint/key/model from env). Guarded
+    // above by `llm_env_available()`, so this never panics on the keyless lane.
+    let llm: Arc<dyn Llm> = test_utils::create_adapter_from_env();
 
     let owner_id = Uuid::nil();
 

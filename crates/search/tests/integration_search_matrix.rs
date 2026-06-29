@@ -39,7 +39,7 @@ use tempfile::TempDir;
 use uuid::Uuid;
 
 mod test_utils;
-use test_utils::{create_adapter_from_env, require_env};
+use test_utils::create_adapter_from_env;
 
 const GERMANY_TEXT: &str = include_str!("test_data/germany_netherlands.txt");
 const QUANTUM_TEXT: &str = include_str!("test_data/quantum_computers.txt");
@@ -106,9 +106,10 @@ fn make_request(query: &str, search_type: SearchType, save: Option<bool>) -> Sea
 #[tokio::test]
 async fn test_search_type_matrix() {
     // ── Environment ──────────────────────────────────────────────────────────
-    let _ = require_env("OPENAI_URL");
-    let _ = require_env("OPENAI_TOKEN");
-    let _ = require_env("OPENAI_MODEL");
+    if !test_utils::llm_env_available() {
+        eprintln!("skipping: live LLM credentials (OPENAI_URL/OPENAI_TOKEN) not set");
+        return;
+    }
 
     // ── Infrastructure setup ─────────────────────────────────────────────────
     let temp_dir = TempDir::new().expect("temp dir");
