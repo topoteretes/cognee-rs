@@ -4,7 +4,9 @@
 //! token-bounded chunks. Zero-copy where possible (chunks borrow `&str` slices
 //! via byte-offset tracking).
 //!
-//! - [`text_chunker`] / [`cognify_pipeline`] — the chunking entry points
+//! - [`text_chunker`] / `cognify_pipeline` — the chunking entry points (the
+//!   latter is a plain code span, not an intra-doc link: it is gated off wasm32,
+//!   where the link would be unresolved on a `--target wasm32` doc build)
 //! - [`token_counter`] — the [`token_counter::TokenCounter`] trait and its
 //!   `WordCounter` / `HuggingFaceTokenCounter` / `TikTokenCounter` impls,
 //!   selected by [`config`] (`TokenCounterKind::from_env`)

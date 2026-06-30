@@ -237,10 +237,18 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Rust (stable) + wasm32 target
+      - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: wasm32-unknown-unknown
+
+      # rust-toolchain.toml pins the repo to 1.91, and that pin takes precedence
+      # over @stable — so `cargo build --target wasm32-unknown-unknown` runs under
+      # 1.91, not stable. The wasm32 std component must be on the *pinned*
+      # toolchain. `rustup target add` honors the rust-toolchain.toml override
+      # (exactly as scripts/check_all.sh does locally); the action's `targets:`
+      # input adds it to @stable instead, which is why CI hit
+      # `error[E0463]: can't find crate for std`.
+      - name: Add wasm32 target to the pinned toolchain
+        run: rustup target add wasm32-unknown-unknown
 
       - name: Install Node (for the wasm-bindgen test runner)
         uses: actions/setup-node@v4
