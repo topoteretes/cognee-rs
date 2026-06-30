@@ -92,6 +92,8 @@ impl ComponentRegistry {
         }
         // Native Anthropic Messages API adapter (not OpenAI-compatible).
         reg.register_llm(Arc::new(llm::AnthropicLlmFactory));
+        // Azure OpenAI: OpenAI-compatible wire, but api-key auth + api-version.
+        reg.register_llm(Arc::new(llm::AzureLlmFactory));
 
         reg
     }
@@ -409,6 +411,7 @@ mod tests {
                 max_retries: 3,
                 max_completion_tokens: cognee_llm::OpenAIAdapter::DEFAULT_MAX_COMPLETION_TOKENS,
                 llm_args: serde_json::Map::new(),
+                api_version: String::new(),
                 mock: false,
                 cassette: String::new(),
                 record_path: String::new(),

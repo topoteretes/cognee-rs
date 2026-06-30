@@ -847,6 +847,7 @@ impl Settings {
                 max_retries: self.llm_max_retries,
                 max_completion_tokens: self.llm_max_completion_tokens,
                 llm_args: self.llm_args.clone(),
+                api_version: self.llm_api_version.clone(),
                 mock: self.llm_mock,
                 cassette: self.llm_cassette.clone(),
                 record_path: self.llm_record_path.clone(),
