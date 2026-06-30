@@ -882,7 +882,8 @@ pub async fn summarize_text(
 
     let summaries = if config.enable_summarization && !non_dlt_chunks.is_empty() {
         let summary_extractor =
-            SummaryExtractor::new_with_schema(llm, config.summary_schema.clone());
+            SummaryExtractor::new_with_schema(llm, config.summary_schema.clone())
+                .with_max_parallel(config.max_parallel_extractions);
         let mut all_summaries = Vec::new();
 
         for batch in non_dlt_chunks.chunks(config.summarization_batch_size) {
