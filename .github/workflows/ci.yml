@@ -562,16 +562,24 @@ jobs:
           key: lbug-cxx
           max-size: 1G
           save: false
-      # The capi workspace has its own target dir (capi/target/) after workspace
-      # extraction (D10). Cache it separately from the root workspace so the
-      # capi cold-build warm-up seeds subsequent runs.
+      # Restore-only (save-if:false): the capi workspace's cache is the single
+      # largest in the repo (~3 GB, covering both the root and capi/ target
+      # dirs). Saving it kept the repo over GitHub's 10 GB cache quota, so the
+      # LRU eviction rotated through the smaller working caches (lint, test,
+      # python) and left them cold (~37-min lint, ~61-min python). Dropping the
+      # save frees that ~3 GB so those stay warm; capi-check then runs cold
+      # (~37 min) every run (no job writes this key anymore), but it runs in
+      # parallel off `lint` and is no longer the binding constraint. Net: a
+      # stable critical path of ~lint(warm) + capi(~37 min cold) ≈ 42 min, vs a
+      # budget that otherwise bounces 70–98 min as eviction rotates. Re-enable
+      # the save (and bump the key) if the repo's cache quota is ever raised.
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: capi-check-v1
           workspaces: |
             . -> target
             capi -> target
-          cache-on-failure: true
+          save-if: "false"
       - uses: actions/cache@v4
         with:
           path: capi/target/ort-cache
