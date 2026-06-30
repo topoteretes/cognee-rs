@@ -496,11 +496,15 @@ jobs:
           max-size: 1G
           save: false
 
-      - name: Cache cargo/target (test)
+      # Restore-only: this lane runs one small `cargo test -p cognee-vector`,
+      # fully covered by the `test` job's debug build of the same key. Saving
+      # here only added a divergent version of workspace-test-v6 (cache churn),
+      # so it restores but does not save.
+      - name: Cache cargo/target (test, restore-only)
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: workspace-test-v6
-          cache-on-failure: true
+          save-if: "false"
 
       - name: Cache ORT binary
         uses: actions/cache@v4
@@ -612,9 +616,13 @@ jobs:
           key: lbug-cxx
           max-size: 1G
           save: false
+      # Dedicated key, NOT the shared workspace-test-v6. maturin builds the PyO3
+      # extension in RELEASE, whose artifacts differ from that debug cache — so
+      # sharing it never hit (cold 60-min builds) and polluted the debug cache
+      # with release objects. Its own key caches the release build across runs.
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: workspace-test-v6
+          shared-key: workspace-python-v1
           cache-on-failure: true
       - uses: actions/cache@v4
         with:
@@ -657,9 +665,12 @@ jobs:
           key: lbug-cxx
           max-size: 1G
           save: false
+      # Dedicated key, NOT shared workspace-test-v6: the Neon module build
+      # differs from the debug test cache, so sharing churned/polluted it. Its
+      # own key caches the binding build across runs.
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: workspace-test-v6
+          shared-key: workspace-ts-v1
           workspaces: |
             . -> target
             ts/cognee-ts-neon -> target
