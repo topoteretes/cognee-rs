@@ -196,6 +196,83 @@ pub async fn test_has_edges(db: &dyn GraphDBTrait) {
     assert_eq!(found[0].2, "rel");
 }
 
+/// Equivalence + property-preservation check for the batched `has_edges`.
+///
+/// Asserts the set-based `has_edges` returns exactly the same subset as calling
+/// `has_edge` per candidate (the old per-edge behaviour) on a mixed present/absent
+/// batch, and that each returned edge keeps the *input* candidate's properties
+/// (not the differing properties stored in the DB) — proving the result is mapped
+/// back onto the input rather than reconstructed from the query.
+pub async fn test_has_edges_batch_equivalence(db: &dyn GraphDBTrait) {
+    db.delete_graph().await.unwrap();
+
+    let a = TestNode::new("ea", "A", "T", 0);
+    let b = TestNode::new("eb", "B", "T", 0);
+    db.add_nodes(&[&a, &b]).await.unwrap();
+
+    // Store edges with specific properties in the DB.
+    let mut stored_rel = HashMap::new();
+    stored_rel.insert(Cow::Borrowed("weight"), json!(99));
+    db.add_edge("ea", "eb", "rel", Some(stored_rel))
+        .await
+        .unwrap();
+
+    let mut stored_rel2 = HashMap::new();
+    stored_rel2.insert(Cow::Borrowed("since"), json!(1999));
+    db.add_edge("eb", "ea", "rel2", Some(stored_rel2))
+        .await
+        .unwrap();
+
+    // Candidates: two present (with *different* props than what's stored) and one absent.
+    let mut cand_a_props = HashMap::new();
+    cand_a_props.insert(Cow::Borrowed("weight"), json!(5));
+    let mut cand_c_props = HashMap::new();
+    cand_c_props.insert(Cow::Borrowed("since"), json!(2020));
+
+    let candidates: Vec<EdgeData> = vec![
+        ("ea".into(), "eb".into(), "rel".into(), cand_a_props.clone()), // present
+        ("ea".into(), "eb".into(), "nope".into(), HashMap::new()),      // absent
+        (
+            "eb".into(),
+            "ea".into(),
+            "rel2".into(),
+            cand_c_props.clone(),
+        ), // present
+    ];
+
+    let found = db.has_edges(&candidates).await.unwrap();
+
+    // Reference: the old per-edge behaviour.
+    let mut expected = Vec::new();
+    for c in &candidates {
+        if db.has_edge(&c.0, &c.1, &c.2).await.unwrap() {
+            expected.push((c.0.clone(), c.1.clone(), c.2.clone()));
+        }
+    }
+    let found_keys: Vec<(String, String, String)> = found
+        .iter()
+        .map(|e| (e.0.clone(), e.1.clone(), e.2.clone()))
+        .collect();
+    assert_eq!(
+        found_keys, expected,
+        "batched has_edges must match per-edge has_edge results"
+    );
+    assert_eq!(found.len(), 2);
+
+    // Properties must be the *input* candidate's, not the DB-stored ones.
+    let a_found = found
+        .iter()
+        .find(|e| e.2 == "rel")
+        .expect("present edge 'rel' should be returned");
+    assert_eq!(a_found.3.get("weight").unwrap().as_i64().unwrap(), 5);
+
+    let c_found = found
+        .iter()
+        .find(|e| e.2 == "rel2")
+        .expect("present edge 'rel2' should be returned");
+    assert_eq!(c_found.3.get("since").unwrap().as_i64().unwrap(), 2020);
+}
+
 pub async fn test_get_edges(db: &dyn GraphDBTrait) {
     db.delete_graph().await.unwrap();
 

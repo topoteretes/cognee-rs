@@ -3,7 +3,7 @@ use cognee_models::{Data, Dataset};
 use cognee_utils::tracing_keys::{COGNEE_DB_ROW_COUNT, COGNEE_DB_SYSTEM};
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, DatabaseConnection, EntityTrait,
-    IntoActiveModel, PaginatorTrait, QueryFilter,
+    IntoActiveModel, PaginatorTrait, QueryFilter, sea_query::Expr,
 };
 use tracing::{Span, instrument};
 use uuid::Uuid;
@@ -159,18 +159,14 @@ pub async fn update_last_accessed(
         return Ok(());
     }
 
-    for id in data_ids {
-        let model = data::Entity::find_by_id(uuid_hex::to_hex(*id))
-            .one(db)
-            .await
-            .map_err(map_sea_err)?;
-
-        if let Some(m) = model {
-            let mut active = m.into_active_model();
-            active.last_accessed = Set(Some(timestamp));
-            active.update(db).await.map_err(map_sea_err)?;
-        }
-    }
+    // Single UPDATE ... WHERE id IN (...) instead of N×(find + update) round-trips.
+    let hex_ids: Vec<_> = data_ids.iter().map(|id| uuid_hex::to_hex(*id)).collect();
+    data::Entity::update_many()
+        .col_expr(data::Column::LastAccessed, Expr::value(Some(timestamp)))
+        .filter(data::Column::Id.is_in(hex_ids))
+        .exec(db)
+        .await
+        .map_err(map_sea_err)?;
 
     Ok(())
 }

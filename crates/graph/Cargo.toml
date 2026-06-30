@@ -36,6 +36,9 @@ sea-orm = { version = "1.1", features = [
     "sqlx-postgres",
     "with-chrono",
     "with-json",
+    # `postgres-array` lets us bind `Vec<String>` as Postgres `text[]` params,
+    # used by `has_edges` to batch-check edges in a single `unnest(...)` query.
+    "postgres-array",
 ], optional = true }
 sea-orm-migration = { version = "1.1", features = [
     "runtime-tokio-rustls",
