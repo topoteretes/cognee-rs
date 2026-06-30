@@ -19,14 +19,13 @@ use tempfile::tempdir;
 /// Concatenate the contents of every `*.log` file under `dir`, polling until
 /// `pred` is satisfied or `timeout` elapses.
 ///
-/// `cognee-cli --help` exits via `std::process::exit`, which skips
-/// `LogGuards::drop`. `tracing-appender`'s background worker still flushes
-/// pending lines as the process tears down, but that flush races with the
-/// test reading the file. A single fixed sleep is unreliable under the CPU
-/// saturation that parallel test execution creates (the flush thread may not
-/// be scheduled within the window), so we poll: fast in the common case,
-/// tolerant of a loaded CI runner. The directory is a per-test tempdir, so
-/// this only ever observes this invocation's own output.
+/// The callers invoke `cognee-cli config get …`, which returns through `main`'s
+/// `ExitCode` path and drops `LogGuards`, flushing the log deterministically —
+/// so the anchor is already on disk when `.output()` returns. The short poll
+/// here just absorbs filesystem-visibility latency on a loaded runner; it is no
+/// longer covering a flush race (the earlier `--help` invocation skipped the
+/// guard drop via `std::process::exit`, which made the flush unreliable). The
+/// directory is a per-test tempdir, so this only observes this run's output.
 fn read_logs_until(dir: &Path, timeout: Duration, pred: impl Fn(&str) -> bool) -> String {
     let deadline = Instant::now() + timeout;
     loop {
@@ -47,12 +46,10 @@ fn read_logs_until(dir: &Path, timeout: Duration, pred: impl Fn(&str) -> bool) -
     }
 }
 
-/// `--help` is the cheapest invocation that drives the full
-/// `main()` path including `init_logging`. Clap's auto-generated help
-/// handler calls `std::process::exit`, which means `LogGuards::drop` is
-/// skipped — but `tracing-appender`'s background worker flushes the
-/// pending lines as the worker thread is terminated, and a short sleep
-/// covers the OS-level write race.
+/// `config get` is a cheap real subcommand that drives the full `main()` path
+/// (including `init_logging`) and returns via `ExitCode`, so `LogGuards` drop
+/// and flush the log deterministically before the process exits — unlike
+/// `--help`, whose clap handler calls `std::process::exit` and skips the flush.
 #[test]
 fn cli_creates_log_file_in_cognee_logs_dir() {
     let dir = tempdir().expect("tempdir");
@@ -60,6 +57,9 @@ fn cli_creates_log_file_in_cognee_logs_dir() {
 
     let output = Command::new(bin)
         .env("COGNEE_LOGS_DIR", dir.path())
+        // Isolate the config dir too (absolute temp path) so `config get` reads
+        // a clean default config and never touches a real user config.
+        .env("COGNEE_CONFIG_HOME", dir.path())
         // Defensive: ensure the parent shell's env does not steer the
         // child CLI into appending to a pre-existing log file owned by
         // a different process.
@@ -69,13 +69,20 @@ fn cli_creates_log_file_in_cognee_logs_dir() {
         // Disable telemetry so the test does not attempt to contact an
         // OTEL collector — see decision 13 in 06-file-logging-rotation.md.
         .env_remove("OTEL_EXPORTER_OTLP_ENDPOINT")
-        .arg("--help")
+        // Use a real subcommand (not `--help`): clap's `--help` calls
+        // `std::process::exit` internally, which skips `main`'s `ExitCode`
+        // return and therefore the `LogGuards` drop that flushes the log — so
+        // the anchor only ever landed via an unreliable teardown race. `config
+        // get` returns through `main()`, dropping the guards and flushing
+        // deterministically, so the log is fully written by the time `.output()`
+        // returns. `config get` is read-only and exits 0 on a valid key.
+        .args(["config", "get", "default_user_id"])
         .output()
         .expect("spawn cognee-cli");
 
     assert!(
         output.status.success(),
-        "cognee-cli --help should succeed; stderr=\n{}",
+        "cognee-cli config get should succeed; stderr=\n{}",
         String::from_utf8_lossy(&output.stderr)
     );
 
@@ -106,11 +113,21 @@ fn cli_default_filter_suppresses_library_noise_in_log_file() {
 
     let output = Command::new(bin)
         .env("COGNEE_LOGS_DIR", dir.path())
+        // Isolate the config dir too (absolute temp path) so `config get` reads
+        // a clean default config and never touches a real user config.
+        .env("COGNEE_CONFIG_HOME", dir.path())
         .env_remove("LOG_FILE_NAME")
         .env_remove("RUST_LOG")
         .env_remove("LOG_LEVEL")
         .env_remove("OTEL_EXPORTER_OTLP_ENDPOINT")
-        .arg("--help")
+        // Use a real subcommand (not `--help`): clap's `--help` calls
+        // `std::process::exit` internally, which skips `main`'s `ExitCode`
+        // return and therefore the `LogGuards` drop that flushes the log — so
+        // the anchor only ever landed via an unreliable teardown race. `config
+        // get` returns through `main()`, dropping the guards and flushing
+        // deterministically, so the log is fully written by the time `.output()`
+        // returns. `config get` is read-only and exits 0 on a valid key.
+        .args(["config", "get", "default_user_id"])
         .output()
         .expect("spawn cognee-cli");
     assert!(output.status.success());
