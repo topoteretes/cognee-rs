@@ -13,7 +13,7 @@ use cognee_graph::GraphDBTrait;
 use cognee_graph::LadybugAdapter;
 #[cfg(feature = "pggraph")]
 use cognee_graph::PgGraphAdapter;
-use cognee_llm::{Llm, Transcriber, build_openai_compatible_adapter};
+use cognee_llm::{AnthropicAdapter, Llm, Transcriber, build_openai_compatible_adapter};
 use cognee_storage::{LocalStorage, StorageTrait};
 #[cfg(feature = "pgvector")]
 use cognee_vector::PgVectorAdapter;
@@ -609,6 +609,27 @@ impl ComponentManager {
 
                 Arc::new(adapter)
             }
+            // Native Anthropic Messages API adapter (issue #17, Tier 2).
+            "anthropic" => {
+                if llm_api_key.is_empty() {
+                    return Err(ComponentError::Config(
+                        "llm_api_key must be configured".to_string(),
+                    ));
+                }
+                let endpoint = if llm_endpoint.trim().is_empty() {
+                    None
+                } else {
+                    Some(llm_endpoint.clone())
+                };
+                let retries = llm_max_retries.max(1);
+                let adapter =
+                    AnthropicAdapter::new(llm_model.clone(), llm_api_key.clone(), endpoint)
+                        .map_err(|e| ComponentError::Llm(e.to_string()))?
+                        .with_structured_output_retries(retries)
+                        .with_network_retries(retries);
+
+                Arc::new(adapter)
+            }
             "litert" => {
                 return Err(ComponentError::Config(
                     "llm_provider=litert is not available in this build. \
@@ -619,7 +640,7 @@ impl ComponentManager {
             _ => {
                 return Err(ComponentError::Config(format!(
                     "Unsupported llm_provider '{provider}'. \
-                     Supported: openai, ollama, mistral, gemini, custom, mock.",
+                     Supported: openai, ollama, mistral, gemini, custom, anthropic, mock.",
                 )));
             }
         };

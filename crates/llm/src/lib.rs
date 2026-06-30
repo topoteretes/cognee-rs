@@ -64,7 +64,7 @@ pub mod schema;
 pub mod transcriber;
 pub mod types;
 
-pub use adapters::OpenAIAdapter;
+pub use adapters::{AnthropicAdapter, OpenAIAdapter};
 pub use config::{LlmConfig, LlmProvider};
 pub use dynamic_model::{DynamicGraphModel, GraphModelError, graph_schema_to_graph_model};
 pub use error::{LlmError, LlmResult};
