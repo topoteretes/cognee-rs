@@ -322,6 +322,66 @@ jobs:
       - name: Test
         run: bash scripts/run_tests_with_openai.sh
 
+  # ── Stage 2.5: Docs + feature-variant lanes (depends on lint, parallel with `test`) ──
+  # Moved out of the `test` job so they run concurrently with it instead of
+  # serially after the workspace test run. Together these were ~14 min of the
+  # test job's wall time (the two `cargo doc` builds ≈ 11 min, the telemetry /
+  # no-default test lanes ≈ 3 min); off the test critical path they no longer
+  # gate the downstream binding jobs. None of these need OpenAI credentials.
+  docs-and-extras:
+    name: Docs + feature lanes
+    needs: lint
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install mold linker
+        uses: rui314/setup-mold@v1
+        with:
+          make-default: true
+
+      # cmake + protoc are needed by lbug's bundled C++ build (via cognee-lib).
+      - name: Install build deps
+        run: sudo apt-get update && sudo apt-get install -y cmake protobuf-compiler
+
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: false
+          swap-storage: false
+          docker-images: true
+
+      - name: ccache (lbug bundled C++, restore-only)
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: lbug-cxx
+          max-size: 1G
+          save: false
+
+      # Restore the test job's cache read-only (it has the compiled rlibs the
+      # doc/feature builds reuse). save-if:false so this parallel job never races
+      # the `test` job's save of the same key.
+      - name: Cache cargo/target (test, restore-only)
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: workspace-test-v6
+          save-if: "false"
+
+      - name: Cache ORT binary
+        uses: actions/cache@v4
+        with:
+          path: target/ort-cache
+          key: ort-v2.0.0-rc.12-cpu-linux-x86_64
+
       # Telemetry-feature test lane. The integration test from task 01-10
       # spawns an in-process tonic gRPC server on 127.0.0.1:0; no external
       # OTLP collector is needed. Covers both the OTEL crate
@@ -343,8 +403,7 @@ jobs:
       # Noop-fallback test lane for the cognee-telemetry crate. Exercises
       # crates/telemetry/tests/noop_fallback.rs (task 02-08) so we catch
       # cfg(not(feature = "telemetry")) drift at *runtime*, not just at
-      # compile time. Reuses target/no-default for cache locality with the
-      # sibling lint-job step.
+      # compile time.
       - name: Test (no default features, telemetry crate noop fallback)
         env:
           CARGO_TARGET_DIR: target/no-default
