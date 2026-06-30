@@ -47,6 +47,10 @@ pub struct OpenAIAdapter {
     model: String,
     api_key: String,
     base_url: String,
+    /// When `Some`, the adapter targets Azure OpenAI: requests authenticate with
+    /// the `api-key` header (not `Authorization: Bearer`) and carry an
+    /// `?api-version=<v>` query parameter. `None` is the standard OpenAI path.
+    api_version: Option<String>,
     client: Client,
     structured_output_retries: usize,
     /// Number of times to retry the HTTP request on transient network/server errors.
@@ -104,7 +108,14 @@ impl OpenAIAdapter {
         Ok(Self {
             model,
             api_key: api_key.into(),
-            base_url: base_url.unwrap_or_else(|| Self::DEFAULT_BASE_URL.to_string()),
+            // Normalise a trailing slash so request URLs built as
+            // `{base_url}/chat/completions` never produce a double slash. The
+            // Gemini OpenAI-compat base ends in `/v1beta/openai/`, and a
+            // user-supplied endpoint may too; both would otherwise 404.
+            base_url: base_url
+                .map(|u| u.trim_end_matches('/').to_string())
+                .unwrap_or_else(|| Self::DEFAULT_BASE_URL.to_string()),
+            api_version: None,
             client,
             structured_output_retries: Self::DEFAULT_STRUCTURED_OUTPUT_RETRIES,
             network_retries: Self::DEFAULT_NETWORK_RETRIES,
@@ -138,6 +149,34 @@ impl OpenAIAdapter {
     /// Build the authorization header value
     fn auth_header(&self) -> String {
         format!("Bearer {}", self.api_key)
+    }
+
+    /// Enable Azure OpenAI mode by setting the API version. An empty/whitespace
+    /// value is treated as unset (stays on the standard OpenAI path). In Azure
+    /// mode the `base_url` is expected to be the deployment endpoint
+    /// (`https://<resource>.openai.azure.com/openai/deployments/<deployment>`),
+    /// so `{base_url}/chat/completions?api-version=<v>` is the Azure request URL.
+    pub fn with_api_version(mut self, api_version: impl Into<String>) -> Self {
+        let v = api_version.into();
+        self.api_version = if v.trim().is_empty() { None } else { Some(v) };
+        self
+    }
+
+    /// Build a request URL for `path`, appending `?api-version=<v>` in Azure mode.
+    fn endpoint_url(&self, path: &str) -> String {
+        match &self.api_version {
+            Some(v) => format!("{}/{path}?api-version={v}", self.base_url),
+            None => format!("{}/{path}", self.base_url),
+        }
+    }
+
+    /// Apply the provider's auth header: `api-key` for Azure, `Authorization:
+    /// Bearer` for standard OpenAI / OpenAI-compatible endpoints.
+    fn apply_auth(&self, req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        match &self.api_version {
+            Some(_) => req.header("api-key", &self.api_key),
+            None => req.header("Authorization", self.auth_header()),
+        }
     }
 
     /// Whether to request non-thinking mode for local Qwen OpenAI-compatible endpoints.
@@ -193,7 +232,7 @@ impl OpenAIAdapter {
         ),
     )]
     async fn call_api(&self, request_body: Value) -> LlmResult<OpenAIResponse> {
-        let url = format!("{}/chat/completions", self.base_url);
+        let url = self.endpoint_url("chat/completions");
         tracing::Span::current().record("url", url.as_str());
         let debug_enabled = std::env::var("COGNEE_DEBUG_LLM_REQUEST")
             .map(|v| cognee_utils::parse_env_bool(&v))
@@ -222,9 +261,7 @@ impl OpenAIAdapter {
             }
 
             let response = match self
-                .client
-                .post(&url)
-                .header("Authorization", self.auth_header())
+                .apply_auth(self.client.post(&url))
                 .header("Content-Type", "application/json")
                 .json(&request_body)
                 .send()
@@ -859,7 +896,7 @@ impl OpenAIAdapter {
         &self,
         form: reqwest::multipart::Form,
     ) -> LlmResult<WhisperResponse> {
-        let url = format!("{}/audio/transcriptions", self.base_url);
+        let url = self.endpoint_url("audio/transcriptions");
         tracing::Span::current().record("url", url.as_str());
 
         // We cannot clone a multipart Form, so the first attempt uses the
@@ -879,9 +916,7 @@ impl OpenAIAdapter {
         // the form on each attempt.
 
         let response = self
-            .client
-            .post(&url)
-            .header("Authorization", self.auth_header())
+            .apply_auth(self.client.post(&url))
             .multipart(form)
             .send()
             .await
@@ -1114,6 +1149,57 @@ mod tests {
 
         let adapter = adapter.unwrap();
         assert_eq!(adapter.base_url, "https://custom.api.com/v1");
+    }
+
+    #[test]
+    fn test_base_url_trailing_slash_is_normalized() {
+        // The Gemini OpenAI-compat base ends in `/`; without normalisation the
+        // request URL would be `.../openai//chat/completions` and 404.
+        let adapter = OpenAIAdapter::new(
+            "gemini-2.0-flash",
+            "test-key",
+            Some("https://generativelanguage.googleapis.com/v1beta/openai/".to_string()),
+        )
+        .unwrap();
+        assert_eq!(
+            adapter.base_url,
+            "https://generativelanguage.googleapis.com/v1beta/openai"
+        );
+    }
+
+    #[test]
+    fn openai_mode_has_no_api_version_and_bearer_url() {
+        let adapter = OpenAIAdapter::new("gpt-4o-mini", "sk-test", None).unwrap();
+        assert!(adapter.api_version.is_none());
+        // No api-version query on the standard OpenAI path.
+        assert_eq!(
+            adapter.endpoint_url("chat/completions"),
+            "https://api.openai.com/v1/chat/completions"
+        );
+    }
+
+    #[test]
+    fn with_api_version_enables_azure_mode_and_query() {
+        let adapter = OpenAIAdapter::new(
+            "gpt-4o-mini",
+            "sk-test",
+            Some("https://res.openai.azure.com/openai/deployments/gpt-4o-mini".to_string()),
+        )
+        .unwrap()
+        .with_api_version("2024-12-01-preview");
+        assert_eq!(adapter.api_version.as_deref(), Some("2024-12-01-preview"));
+        assert_eq!(
+            adapter.endpoint_url("chat/completions"),
+            "https://res.openai.azure.com/openai/deployments/gpt-4o-mini/chat/completions?api-version=2024-12-01-preview"
+        );
+    }
+
+    #[test]
+    fn with_api_version_empty_stays_openai_mode() {
+        let adapter = OpenAIAdapter::new("gpt-4o-mini", "sk-test", None)
+            .unwrap()
+            .with_api_version("   ");
+        assert!(adapter.api_version.is_none());
     }
 
     #[test]
