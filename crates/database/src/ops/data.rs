@@ -219,14 +219,23 @@ pub async fn clear_pipeline_status_for_dataset(
     let dataset_id_str = uuid_hex::to_hex(dataset_id);
     let mut updated_count = 0usize;
 
-    // Single read for all linked Data rows instead of one find per id (N -> 1).
-    // The updates stay per-row because each row's pipeline_status JSON is mutated
+    // Read the linked Data rows in chunks instead of one find per id (N reads).
+    // Chunking keeps each `IN (...)` under the driver's bound-variable cap
+    // (SQLite ~32766, Postgres 65535) — mirroring `PROVENANCE_INSERT_BATCH` in
+    // graph_storage — so a dataset with more items than the cap can't overflow.
+    // Updates stay per-row because each row's pipeline_status JSON is mutated
     // independently, and only rows that actually change are written back.
-    let models = data::Entity::find()
-        .filter(data::Column::Id.is_in(data_ids))
-        .all(db)
-        .await
-        .map_err(map_sea_err)?;
+    const READ_CHUNK: usize = 500;
+    let mut models = Vec::with_capacity(data_ids.len());
+    for chunk in data_ids.chunks(READ_CHUNK) {
+        models.extend(
+            data::Entity::find()
+                .filter(data::Column::Id.is_in(chunk.to_vec()))
+                .all(db)
+                .await
+                .map_err(map_sea_err)?,
+        );
+    }
 
     for model in models {
         let Some(ref status_json) = model.pipeline_status else {

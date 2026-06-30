@@ -188,6 +188,32 @@ impl PgVectorAdapter {
         }
         Ok(out)
     }
+
+    /// Decode one `(id, score, metadata)` query row into a [`SearchResult`].
+    /// Shared by `search_similar` and `batch_search_similar` so the metadata
+    /// decode and `score as f32` cast live in one place.
+    fn row_to_search_result(row: &sea_orm::QueryResult) -> VectorDBResult<SearchResult> {
+        let id: Uuid = row
+            .try_get("", "id")
+            .map_err(|e| VectorDBError::StorageError(e.to_string()))?;
+        let score: f64 = row
+            .try_get("", "score")
+            .map_err(|e| VectorDBError::StorageError(e.to_string()))?;
+        let metadata_val: serde_json::Value = row
+            .try_get("", "metadata")
+            .map_err(|e| VectorDBError::StorageError(e.to_string()))?;
+        let metadata = match metadata_val {
+            serde_json::Value::Object(map) => map
+                .into_iter()
+                .collect::<HashMap<String, serde_json::Value>>(),
+            _ => HashMap::new(),
+        };
+        Ok(SearchResult {
+            id,
+            score: score as f32,
+            metadata,
+        })
+    }
 }
 
 #[async_trait]
@@ -424,28 +450,7 @@ impl VectorDB for PgVectorAdapter {
 
         let mut results = Vec::with_capacity(rows.len());
         for row in &rows {
-            let id: Uuid = row
-                .try_get("", "id")
-                .map_err(|e| VectorDBError::StorageError(e.to_string()))?;
-            let score: f64 = row
-                .try_get("", "score")
-                .map_err(|e| VectorDBError::StorageError(e.to_string()))?;
-            let metadata_val: serde_json::Value = row
-                .try_get("", "metadata")
-                .map_err(|e| VectorDBError::StorageError(e.to_string()))?;
-
-            let metadata = match metadata_val {
-                serde_json::Value::Object(map) => map
-                    .into_iter()
-                    .collect::<HashMap<String, serde_json::Value>>(),
-                _ => HashMap::new(),
-            };
-
-            results.push(SearchResult {
-                id,
-                score: score as f32,
-                metadata,
-            });
+            results.push(Self::row_to_search_result(row)?);
         }
 
         Span::current().record(COGNEE_VECTOR_RESULT_COUNT, results.len() as i64);
@@ -496,7 +501,7 @@ impl VectorDB for PgVectorAdapter {
                    ORDER BY vector <=> q.vec
                    LIMIT {top_k}
                ) t
-               ORDER BY q.idx"#
+               ORDER BY q.idx, t.score DESC"#
         );
 
         let rows = self
@@ -514,27 +519,9 @@ impl VectorDB for PgVectorAdapter {
             let idx: i64 = row
                 .try_get("", "idx")
                 .map_err(|e| VectorDBError::StorageError(e.to_string()))?;
-            let id: Uuid = row
-                .try_get("", "id")
-                .map_err(|e| VectorDBError::StorageError(e.to_string()))?;
-            let score: f64 = row
-                .try_get("", "score")
-                .map_err(|e| VectorDBError::StorageError(e.to_string()))?;
-            let metadata_val: serde_json::Value = row
-                .try_get("", "metadata")
-                .map_err(|e| VectorDBError::StorageError(e.to_string()))?;
-            let metadata = match metadata_val {
-                serde_json::Value::Object(map) => map
-                    .into_iter()
-                    .collect::<HashMap<String, serde_json::Value>>(),
-                _ => HashMap::new(),
-            };
+            let result = Self::row_to_search_result(row)?;
             if let Some(bucket) = results.get_mut((idx as usize).saturating_sub(1)) {
-                bucket.push(SearchResult {
-                    id,
-                    score: score as f32,
-                    metadata,
-                });
+                bucket.push(result);
                 total += 1;
             }
         }
