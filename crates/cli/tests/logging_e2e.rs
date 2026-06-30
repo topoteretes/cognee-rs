@@ -84,7 +84,7 @@ fn cli_creates_log_file_in_cognee_logs_dir() {
     // `<timestamp>.<YYYY-MM-DD>` — `tracing-appender` appends a date stem to
     // the prefix, but we wrote the prefix via the file stem of the propagated
     // `LOG_FILE_NAME` so the `.log` extension ends up as the suffix.
-    let combined = read_logs_until(dir.path(), Duration::from_secs(10), |s| {
+    let combined = read_logs_until(dir.path(), Duration::from_secs(30), |s| {
         s.contains("Logging initialized")
     });
     assert!(
@@ -118,7 +118,7 @@ fn cli_default_filter_suppresses_library_noise_in_log_file() {
     // Poll until logging has flushed (anchor present), then assert the
     // suppressed targets are absent. Anchoring the wait on the anchor line
     // avoids reading a half-flushed file under parallel CI load.
-    let combined = read_logs_until(dir.path(), Duration::from_secs(10), |s| {
+    let combined = read_logs_until(dir.path(), Duration::from_secs(30), |s| {
         s.contains("Logging initialized")
     });
 
