@@ -16,7 +16,7 @@ pub use ops::tutorial_seeder::{
     TUTORIAL_BASICS_ID, TUTORIAL_PYTHON_DEV_ID, seed_tutorials_if_first_call,
 };
 
-pub use connection::{connect, initialize};
+pub use connection::{PoolConfig, connect, connect_with_pool, initialize};
 
 /// Map the active SeaORM backend to a `cognee.db.system` string
 /// matching the values used by the vector / graph adapters.
