@@ -121,10 +121,17 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          if git diff --quiet -- '**/tests/fixtures/cassettes/*.json'; then
+          # Stage first, then gate on the *staged* diff. `git diff --quiet`
+          # (working tree vs HEAD) ignores untracked files, so the very first
+          # recording of a NEW cassette — an untracked <name>.json — would read
+          # as "no changes" and be silently dropped, leaving the next CI run to
+          # fail replay with MissPolicy::Error. `git add` picks up new + modified
+          # files; `git diff --cached --quiet` then reflects exactly what would
+          # be committed.
+          git add '**/tests/fixtures/cassettes/*.json'
+          if git diff --cached --quiet; then
             echo "Cassettes unchanged — nothing to commit."
             exit 0
           fi
-          git add '**/tests/fixtures/cassettes/*.json'
           git commit -m "chore(test): re-record LLM cassettes [skip ci]"
           git push origin "HEAD:$REF"
