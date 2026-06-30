@@ -56,7 +56,9 @@ async fn provenance_group_rolls_back_on_midway_failure() {
     let nodes = make_nodes(user, dataset, data, 3);
 
     let txn = db.begin().await.expect("begin");
-    upsert_nodes(&txn, &nodes).await.expect("nodes upsert in txn");
+    upsert_nodes(&txn, &nodes)
+        .await
+        .expect("nodes upsert in txn");
     // Simulate a failure between the node and edge writes: bail out before
     // commit. Dropping/rolling back the transaction must discard the nodes too.
     txn.rollback().await.expect("rollback");
