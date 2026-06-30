@@ -129,6 +129,36 @@ or trigger the **Record LLM cassettes** workflow
 (`.github/workflows/record-cassettes.yml`, `workflow_dispatch`), which records
 against the live API and commits the refreshed cassettes back to the branch.
 
+## Actions cache budget (why Lint sometimes goes cold)
+
+GitHub allows **10 GB of Actions cache per repo** and evicts least-recently-used
+entries past that. The steady-state working set here is healthy — roughly
+`capi-check` 3 GB + `workspace-test-v6` ~1 GB + `workspace-lint-v6` ~1 GB +
+`workspace-msrv-v1` 0.5 GB + small (ort, ccache, node) ≈ 6–7 GB.
+
+It blows past 10 GB during **bursts of rapid pushes**: each change to a
+`Cargo.toml` (or the lockfile) shifts the dependency resolution, so
+`Swatinem/rust-cache` writes a *new* cache version and keeps the old ones until
+they age out (7 days) or are evicted. A dozen pushes in a day can leave 3–5
+stale versions of each key (≈ 11 GB), and the LRU eviction then drops whichever
+working cache ran longest ago — usually `workspace-lint-v6` — so the next Lint
+job rebuilds cold (observed climbing 3 → 36 min over one afternoon). Caches from
+other branches count toward the same 10 GB, so this is partly repo-wide.
+
+**If Lint (or any job) is unexpectedly cold:** check usage and prune stale
+duplicate versions (keep the newest per key — that one matches the current dep
+state and will be restored):
+
+```bash
+gh api repos/<owner>/<repo>/actions/cache/usage
+gh api "repos/<owner>/<repo>/actions/caches?per_page=100"   # find stale ids
+gh api -X DELETE repos/<owner>/<repo>/actions/caches/<id>   # delete stale ones
+```
+
+Avoid "fixing" this by dropping a job's cache save — every cache here is
+load-bearing (a cold `capi-check` is ~40 min, a cold `msrv`/`lint` ~20–36 min).
+The accumulation is self-correcting once a churn of Cargo.toml edits settles.
+
 ### What E delivered
 
 Removing the live-API dependency from 8 tests makes them deterministic, free,

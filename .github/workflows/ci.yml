@@ -511,10 +511,16 @@ jobs:
       - name: Run pgvector span instrumentation tests
         run: cargo test -p cognee-vector --test pgvector_span_instrumentation -- --nocapture
 
-  # ── Stage 3: Language binding checks (depends on test, parallel with each other) ──
+  # ── Stage 3: Language binding checks (depend on lint, parallel with `test`) ──
+  # Gated on `lint` (not `test`) so the binding builds run concurrently with the
+  # workspace test run instead of serially after it — the C API job in particular
+  # is a long pole (~13–40 min) that previously started only once `test` finished.
+  # `lint` already proves the workspace compiles; these jobs validate the binding
+  # layers, a separate concern from the test result. Trade-off: they still run if
+  # a test later fails, but on green runs the wall-clock saving is large.
   capi-check:
     name: C API Check
-    needs: test
+    needs: lint
     runs-on: ubuntu-latest
 
     env:
@@ -575,7 +581,7 @@ jobs:
 
   python-check:
     name: Python Bindings Check
-    needs: test
+    needs: lint
     runs-on: ubuntu-latest
 
     steps:
@@ -630,7 +636,7 @@ jobs:
 
   ts-check:
     name: JS/TS Bindings Check
-    needs: test
+    needs: lint
     runs-on: ubuntu-latest
 
     steps:
