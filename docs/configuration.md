@@ -76,8 +76,15 @@ factory): it authenticates with `x-api-key`, hoists the system prompt into the
 top-level `system` field, and produces structured output via a forced `tool_use`.
 It requires `LLM_API_KEY`, takes an optional `LLM_ENDPOINT` override (default
 `https://api.anthropic.com/v1`), strips an `anthropic/` model prefix, and does not
-support audio transcription. Native Azure and Bedrock adapters are tracked
-separately in issue #17.
+support audio transcription.
+
+`azure` reuses the OpenAI request path with Azure's auth and URL conventions: it
+authenticates with the `api-key` header and appends an `?api-version=<v>` query.
+Set `LLM_PROVIDER=azure`, `LLM_API_KEY`, `LLM_API_VERSION` (e.g.
+`2024-12-01-preview`), and `LLM_ENDPOINT` to the **deployment** URL
+(`https://<resource>.openai.azure.com/openai/deployments/<deployment>`); the model
+in the request body is ignored by Azure since the deployment is in the URL. A native
+Bedrock adapter is tracked separately in issue #17.
 
 > **Ollama embeddings:** set `EMBEDDING_ENDPOINT` explicitly when using
 > `EMBEDDING_PROVIDER=ollama`. The Ollama embedder needs the `/api/embed` route, and

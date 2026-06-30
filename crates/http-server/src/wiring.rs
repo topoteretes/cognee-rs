@@ -13,7 +13,7 @@ use cognee_delete::DeleteService;
 use cognee_embedding::{EmbeddingConfig, EmbeddingEngine, EmbeddingProvider};
 use cognee_graph::{GraphDBTrait, LadybugAdapter};
 use cognee_llm::{
-    AnthropicAdapter, Llm, OpenAIResponsesClient, ResponsesClient, Transcriber,
+    AnthropicAdapter, Llm, OpenAIAdapter, OpenAIResponsesClient, ResponsesClient, Transcriber,
     build_openai_compatible_adapter,
 };
 use cognee_ontology::{OntologyManager, OntologyResolver};
@@ -279,6 +279,39 @@ fn wire_llm(cfg: &HttpServerConfig) -> Option<Arc<dyn Llm>> {
             ) as Arc<dyn Llm>),
             Err(err) => {
                 tracing::warn!("anthropic llm not wired: {err}");
+                None
+            }
+        };
+    }
+
+    // Azure OpenAI reuses the OpenAI request path with api-key auth and an
+    // api-version query (issue #17, Tier 3); LLM_ENDPOINT must be the deployment
+    // URL and LLM_API_VERSION must be set.
+    if cfg.llm_provider.eq_ignore_ascii_case("azure") {
+        let api_key = cfg.llm_api_key.expose_secret();
+        if api_key.is_empty()
+            || cfg.llm_endpoint.trim().is_empty()
+            || cfg.llm_api_version.trim().is_empty()
+        {
+            tracing::warn!(
+                "azure llm not wired: requires LLM_API_KEY, LLM_ENDPOINT (deployment URL), and LLM_API_VERSION"
+            );
+            return None;
+        }
+        let retries = cfg.llm_max_retries.max(1);
+        return match OpenAIAdapter::new(
+            cfg.llm_model.clone(),
+            api_key,
+            Some(cfg.llm_endpoint.clone()),
+        ) {
+            Ok(adapter) => Some(Arc::new(
+                adapter
+                    .with_api_version(cfg.llm_api_version.clone())
+                    .with_structured_output_retries(retries)
+                    .with_network_retries(retries),
+            ) as Arc<dyn Llm>),
+            Err(err) => {
+                tracing::warn!("azure llm not wired: {err}");
                 None
             }
         };

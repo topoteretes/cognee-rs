@@ -13,7 +13,9 @@ use cognee_graph::GraphDBTrait;
 use cognee_graph::LadybugAdapter;
 #[cfg(feature = "pggraph")]
 use cognee_graph::PgGraphAdapter;
-use cognee_llm::{AnthropicAdapter, Llm, Transcriber, build_openai_compatible_adapter};
+use cognee_llm::{
+    AnthropicAdapter, Llm, OpenAIAdapter, Transcriber, build_openai_compatible_adapter,
+};
 use cognee_storage::{LocalStorage, StorageTrait};
 #[cfg(feature = "pgvector")]
 use cognee_vector::PgVectorAdapter;
@@ -545,6 +547,7 @@ impl ComponentManager {
             llm_model,
             llm_api_key,
             llm_endpoint,
+            llm_api_version,
             llm_max_retries,
             llm_mock,
             llm_cassette,
@@ -556,6 +559,7 @@ impl ComponentManager {
                 s.llm_model.clone(),
                 s.llm_api_key.clone(),
                 s.llm_endpoint.clone(),
+                s.llm_api_version.clone(),
                 s.llm_max_retries,
                 s.llm_mock,
                 s.llm_cassette.clone(),
@@ -630,6 +634,39 @@ impl ComponentManager {
 
                 Arc::new(adapter)
             }
+            // Azure OpenAI: the OpenAI request path with api-key auth and an
+            // api-version query (issue #17, Tier 3). LLM_ENDPOINT must be the
+            // deployment URL and LLM_API_VERSION must be set.
+            "azure" => {
+                if llm_api_key.is_empty() {
+                    return Err(ComponentError::Config(
+                        "llm_api_key must be configured".to_string(),
+                    ));
+                }
+                if llm_endpoint.trim().is_empty() {
+                    return Err(ComponentError::Config(
+                        "llm_endpoint (the Azure deployment URL) must be configured for provider 'azure'"
+                            .to_string(),
+                    ));
+                }
+                if llm_api_version.trim().is_empty() {
+                    return Err(ComponentError::Config(
+                        "llm_api_version must be configured for provider 'azure'".to_string(),
+                    ));
+                }
+                let retries = llm_max_retries.max(1);
+                let adapter = OpenAIAdapter::new(
+                    llm_model.clone(),
+                    llm_api_key.clone(),
+                    Some(llm_endpoint.clone()),
+                )
+                .map_err(|e| ComponentError::Llm(e.to_string()))?
+                .with_api_version(llm_api_version.clone())
+                .with_structured_output_retries(retries)
+                .with_network_retries(retries);
+
+                Arc::new(adapter)
+            }
             "litert" => {
                 return Err(ComponentError::Config(
                     "llm_provider=litert is not available in this build. \
@@ -640,7 +677,7 @@ impl ComponentManager {
             _ => {
                 return Err(ComponentError::Config(format!(
                     "Unsupported llm_provider '{provider}'. \
-                     Supported: openai, ollama, mistral, gemini, custom, anthropic, mock.",
+                     Supported: openai, ollama, mistral, gemini, custom, anthropic, azure, mock.",
                 )));
             }
         };
