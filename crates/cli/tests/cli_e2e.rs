@@ -13,7 +13,7 @@ use uuid::Uuid;
 
 fn make_cmd(config_home: &TempDir) -> Command {
     let mut command = Command::new(assert_cmd::cargo::cargo_bin!("cognee-cli"));
-    command.env("XDG_CONFIG_HOME", config_home.path());
+    command.env("COGNEE_CONFIG_HOME", config_home.path());
     command.env("HOME", config_home.path());
     command
 }

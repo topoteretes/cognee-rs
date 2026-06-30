@@ -149,6 +149,7 @@ async fn test_triplet_vector_cleanup_after_data_delete() {
     {
         Ok(r) => r,
         Err(e) => {
+            test_utils::fail_loudly_on_replay_miss("cognify ds_ai", &e);
             eprintln!("Skipping: cognify ds_ai failed: {e}");
             return;
         }
@@ -178,6 +179,7 @@ async fn test_triplet_vector_cleanup_after_data_delete() {
     {
         Ok(r) => r,
         Err(e) => {
+            test_utils::fail_loudly_on_replay_miss("cognify ds_quantum", &e);
             eprintln!("Skipping: cognify ds_quantum failed: {e}");
             return;
         }

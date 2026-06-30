@@ -49,6 +49,23 @@ pub fn create_adapter_from_env() -> Arc<OpenAIAdapter> {
     )
 }
 
+/// In cassette-replay mode (`COGNEE_TEST_REPLAY` set), a pipeline error means a
+/// cassette miss — a stale/edited prompt or schema whose input hash no longer
+/// matches a recorded entry (`ReplayLlm` returns `LlmError::InvalidResponse`).
+/// The `Err(e) => { eprintln!("Skipping…"); return }` blocks the e2e tests use
+/// to tolerate a missing real LLM would otherwise swallow that miss and pass
+/// with zero assertions. Call this in those blocks so replay misses fail loudly
+/// (re-record via the record-cassettes workflow); outside replay mode it is a
+/// no-op and the legitimate skip proceeds.
+#[allow(dead_code)]
+pub fn fail_loudly_on_replay_miss(what: &str, err: &impl std::fmt::Display) {
+    if std::env::var("COGNEE_TEST_REPLAY").is_ok_and(|v| !v.is_empty()) {
+        panic!(
+            "{what} failed in replay mode — likely a stale/missing cassette entry; re-record cassettes. Error: {err}"
+        );
+    }
+}
+
 /// Resolve the on-disk path of a named cassette under this crate's
 /// `tests/fixtures/cassettes/` directory.
 #[allow(dead_code)]

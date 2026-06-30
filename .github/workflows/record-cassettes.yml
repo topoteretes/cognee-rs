@@ -74,10 +74,15 @@ jobs:
           max-size: 1G
           save: false
 
-      - name: Cache cargo/target (test)
+      # Restore-only: this manual job builds with the `mock` feature (a divergent
+      # target dir) and must NOT write back to workspace-test-v6 — that key has a
+      # single intended writer (the `test` job). Saving here would re-introduce
+      # the multi-writer cache collisions this PR's ci.yml change removed.
+      - name: Cache cargo/target (test, restore-only)
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: workspace-test-v6
+          save-if: "false"
 
       - name: Cache ORT binary
         uses: actions/cache@v4
@@ -107,6 +112,12 @@ jobs:
         run: cargo test -p cognee-delete --test hard_mode_orphan_sweep -- --test-threads=1
 
       - name: Commit refreshed cassettes
+        # Pass the user-controlled ref through an env var, never interpolated
+        # directly into the shell — `${{ … }}` is substituted as raw text before
+        # bash parses it, so a crafted ref would be a script-injection sink on a
+        # runner holding contents:write + OPENAI_KEY.
+        env:
+          REF: ${{ github.event.inputs.ref }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -116,4 +127,4 @@ jobs:
           fi
           git add '**/tests/fixtures/cassettes/*.json'
           git commit -m "chore(test): re-record LLM cassettes [skip ci]"
-          git push origin HEAD:${{ github.event.inputs.ref }}
+          git push origin "HEAD:$REF"

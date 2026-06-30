@@ -48,6 +48,19 @@ pub fn create_adapter_from_env() -> Arc<OpenAIAdapter> {
     )
 }
 
+/// In cassette-replay mode a pipeline error means a stale/missing cassette
+/// entry; the `Err => eprintln + return` skip blocks would otherwise swallow it
+/// and pass with zero assertions. Call this in those blocks so a replay miss
+/// fails loudly (re-record cassettes); no-op outside replay mode.
+#[allow(dead_code)]
+pub fn fail_loudly_on_replay_miss(what: &str, err: &impl std::fmt::Display) {
+    if std::env::var("COGNEE_TEST_REPLAY").is_ok_and(|v| !v.is_empty()) {
+        panic!(
+            "{what} failed in replay mode — likely a stale/missing cassette entry; re-record cassettes. Error: {err}"
+        );
+    }
+}
+
 /// Resolve a named cassette under this crate's `tests/fixtures/cassettes/`.
 #[allow(dead_code)]
 pub fn cassette_path(name: &str) -> String {

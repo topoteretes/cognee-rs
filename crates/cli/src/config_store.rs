@@ -5,7 +5,7 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 const CURRENT_VERSION: u32 = 1;
 
@@ -28,16 +28,19 @@ impl Default for ConfigDocument {
 }
 
 pub fn config_file_path() -> Result<PathBuf, CliError> {
-    // Honor `XDG_CONFIG_HOME` on every platform when it is set. `dirs::config_dir()`
-    // only consults it on Linux — on macOS it unconditionally returns
-    // `~/Library/Application Support`, ignoring the override. That platform gap let
-    // concurrent CLI invocations (e.g. parallel integration tests, each setting its
-    // own `XDG_CONFIG_HOME` to an isolated temp dir) collide on the single shared
-    // macOS config file and race on the atomic `config.json[.tmp]` replace. Checking
-    // the variable first makes config isolation work identically across platforms;
-    // it is a no-op on Linux where `dirs` already resolves it.
-    let base_dir = match std::env::var_os("XDG_CONFIG_HOME") {
-        Some(xdg) if !xdg.is_empty() => PathBuf::from(xdg),
+    // Production always resolves the config dir via `dirs::config_dir()` —
+    // unchanged on every platform. Tests set `COGNEE_CONFIG_HOME` to an isolated
+    // absolute temp dir so parallel CLI test processes don't collide on one
+    // shared config file (and race the atomic `config.json[.tmp]` replace).
+    //
+    // We deliberately do NOT key off `XDG_CONFIG_HOME`: honoring it on macOS
+    // would relocate a real user's existing config (which holds durable
+    // credentials with no regeneration path) the moment they have XDG set, and
+    // `dirs` already consults XDG on Linux. Only an *absolute* override is
+    // accepted — a relative one would resolve against the CWD, making config
+    // silently per-directory.
+    let base_dir = match std::env::var_os("COGNEE_CONFIG_HOME") {
+        Some(dir) if !dir.is_empty() && Path::new(&dir).is_absolute() => PathBuf::from(dir),
         _ => dirs::config_dir().ok_or_else(|| {
             CliError::Runtime("Could not resolve user config directory for cognee-cli".to_string())
         })?,

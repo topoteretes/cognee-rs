@@ -158,6 +158,7 @@ async fn test_shared_entity_graph_delete() {
     {
         Ok(r) => r,
         Err(e) => {
+            test_utils::fail_loudly_on_replay_miss("cognify ds_ai", &e);
             eprintln!("Skipping: cognify ds_ai failed: {e}");
             return;
         }
@@ -187,6 +188,7 @@ async fn test_shared_entity_graph_delete() {
     {
         Ok(r) => r,
         Err(e) => {
+            test_utils::fail_loudly_on_replay_miss("cognify ds_ml", &e);
             eprintln!("Skipping: cognify ds_ml failed: {e}");
             return;
         }

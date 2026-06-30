@@ -190,6 +190,7 @@ async fn test_readd_and_recognify_after_delete() {
     {
         Ok(r) => r,
         Err(e) => {
+            test_utils::fail_loudly_on_replay_miss("first cognify", &e);
             eprintln!("Skipping test: first cognify failed: {e}");
             return;
         }

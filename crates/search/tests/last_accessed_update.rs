@@ -8,9 +8,17 @@
 //! Ingests a document, cognifies it, then performs searches and checks that the
 //! `last_accessed` timestamp on the source `Data` record advances monotonically.
 //!
-//! Required environment variables (set by `scripts/run_tests_with_local_env.sh`):
-//!   OPENAI_URL, OPENAI_TOKEN, OPENAI_MODEL,
-//!   COGNEE_E2E_EMBED_MODEL_PATH, COGNEE_E2E_TOKENIZER_PATH
+//! Scope note: this test exercises the last-accessed *plumbing* only. It uses a
+//! deterministic mock embedding engine and `MockVectorDB` (no similarity
+//! threshold, single chunk), so the `Chunks` search always returns the one
+//! chunk regardless of relevance — semantic retrieval/ranking is NOT tested
+//! here (see crates/search/tests/integration_search_matrix.rs for that, which
+//! stays on a real embedding engine).
+//!
+//! Cassette-backed (Approach E): the LLM is replayed from
+//! `tests/fixtures/cassettes/last_accessed_update.json` when `COGNEE_TEST_REPLAY`
+//! is set; otherwise it uses the real OpenAI-compatible endpoint (OPENAI_URL /
+//! OPENAI_TOKEN / OPENAI_MODEL). No local embedding model is required.
 //!
 //! Run with: cargo test --package cognee-search --test last_accessed_update
 
@@ -134,6 +142,7 @@ async fn test_search_updates_last_accessed_timestamp() {
     {
         Ok(_) => {}
         Err(e) => {
+            test_utils::fail_loudly_on_replay_miss("cognify", &e);
             eprintln!("Skipping test: cognify failed: {e}");
             return;
         }

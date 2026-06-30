@@ -133,6 +133,7 @@ async fn test_delete_preview_counts_match_execution() {
     {
         Ok(r) => r,
         Err(e) => {
+            test_utils::fail_loudly_on_replay_miss("cognify", &e);
             eprintln!("Cognify failed (LLM may be unavailable): {e}");
             return;
         }
