@@ -616,14 +616,17 @@ jobs:
           key: lbug-cxx
           max-size: 1G
           save: false
-      # Dedicated key, NOT the shared workspace-test-v6. maturin builds the PyO3
-      # extension in RELEASE, whose artifacts differ from that debug cache — so
-      # sharing it never hit (cold 60-min builds) and polluted the debug cache
-      # with release objects. Its own key caches the release build across runs.
+      # Restore-only share of workspace-test-v6: `maturin develop` (python/scripts/
+      # check.sh) builds in DEBUG, so it reuses the test job's debug dep rlibs —
+      # maturin then only compiles the PyO3 extension + workspace crates. A
+      # dedicated key was tried (assuming a release build) but it just added a
+      # ~3 GB cache that pushed the repo over GitHub's 10 GB quota and got evicted.
+      # restore-only (save:false) so it benefits from the cache without writing a
+      # divergent copy (the `test` job is the sole writer).
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: workspace-python-v1
-          cache-on-failure: true
+          shared-key: workspace-test-v6
+          save-if: "false"
       - uses: actions/cache@v4
         with:
           path: target/ort-cache
