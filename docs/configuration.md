@@ -49,6 +49,41 @@ A fallback LLM (`llm_fallback_provider/_model/_endpoint/_api_key`) is configurab
 programmatically (no env binding). `MOCK_LLM` + cassettes power the offline
 benchmark — see [performance/mock-benchmark.md](performance/mock-benchmark.md).
 
+### Supported `LLM_PROVIDER` values
+
+Several providers are OpenAI-compatible HTTP endpoints, so they route through the
+same adapter — differing only in base URL and litellm-style model-prefix stripping.
+`LLM_API_KEY` is required for every provider (matching the Python SDK's
+`_API_KEY_REQUIRED_PROVIDERS`; for a local Ollama any non-empty value works). The
+OpenAI-only request quirks are gated on the `api.openai.com` host, so they never
+fire against another endpoint.
+
+| `LLM_PROVIDER` | `LLM_API_KEY` | `LLM_ENDPOINT` default | Model prefix stripped |
+|---|---|---|---|
+| `openai` | required | `https://api.openai.com/v1` | `openai/` |
+| `ollama` | required (any value for local) | `http://localhost:11434/v1` | `ollama/` |
+| `mistral` | required | `https://api.mistral.ai/v1` | `mistral/` |
+| `gemini` | required | `https://generativelanguage.googleapis.com/v1beta/openai/` | `gemini/` |
+| `custom` / `openai_compatible` | required | **required** (no default) | _(none)_ |
+| `mock` | — | — | — (see `MOCK_LLM`) |
+
+`LLM_ENDPOINT` always overrides the default when set. Audio transcription
+(Whisper) is wired only for `openai` and `custom`/`openai_compatible` (which may
+expose `/audio/transcriptions`); `ollama`/`mistral`/`gemini` get graceful no-audio.
+
+`anthropic` uses a **native Messages-API adapter** (not the OpenAI-compatible
+factory): it authenticates with `x-api-key`, hoists the system prompt into the
+top-level `system` field, and produces structured output via a forced `tool_use`.
+It requires `LLM_API_KEY`, takes an optional `LLM_ENDPOINT` override (default
+`https://api.anthropic.com/v1`), strips an `anthropic/` model prefix, and does not
+support audio transcription. Native Azure and Bedrock adapters are tracked
+separately in issue #17.
+
+> **Ollama embeddings:** set `EMBEDDING_ENDPOINT` explicitly when using
+> `EMBEDDING_PROVIDER=ollama`. The Ollama embedder needs the `/api/embed` route, and
+> the embedding endpoint does not inherit `LLM_ENDPOINT` (which points at the `/v1`
+> chat base), so leaving it unset would target the wrong path.
+
 ## Embedding
 
 Read by `EmbeddingConfig::from_env()` ([`crates/embedding/src/config.rs`](../crates/embedding/src/config.rs)).

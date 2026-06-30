@@ -13,7 +13,7 @@ use cognee_graph::GraphDBTrait;
 use cognee_graph::LadybugAdapter;
 #[cfg(feature = "pggraph")]
 use cognee_graph::PgGraphAdapter;
-use cognee_llm::{Llm, Transcriber, build_openai_compatible_adapter};
+use cognee_llm::{AnthropicAdapter, Llm, Transcriber, build_openai_compatible_adapter};
 use cognee_storage::{LocalStorage, StorageTrait};
 #[cfg(feature = "pgvector")]
 use cognee_vector::PgVectorAdapter;
@@ -594,17 +594,39 @@ impl ComponentManager {
             }
         }
 
-        // Build the real adapter exactly as before.
+        // Build the real adapter. OpenAI and the OpenAI-compatible providers all
+        // route through the shared factory (issue #17, Tier 1).
         let adapter: Arc<dyn Llm> = match provider.as_str() {
-            "openai" => {
+            "openai" | "ollama" | "mistral" | "gemini" | "custom" | "openai_compatible" => {
                 let adapter = build_openai_compatible_adapter(
-                    "openai",
+                    &provider,
                     &llm_model,
                     &llm_api_key,
                     &llm_endpoint,
                     llm_max_retries,
                 )
                 .map_err(|e| ComponentError::Llm(e.to_string()))?;
+
+                Arc::new(adapter)
+            }
+            // Native Anthropic Messages API adapter (issue #17, Tier 2).
+            "anthropic" => {
+                if llm_api_key.is_empty() {
+                    return Err(ComponentError::Config(
+                        "llm_api_key must be configured".to_string(),
+                    ));
+                }
+                let endpoint = if llm_endpoint.trim().is_empty() {
+                    None
+                } else {
+                    Some(llm_endpoint.clone())
+                };
+                let retries = llm_max_retries.max(1);
+                let adapter =
+                    AnthropicAdapter::new(llm_model.clone(), llm_api_key.clone(), endpoint)
+                        .map_err(|e| ComponentError::Llm(e.to_string()))?
+                        .with_structured_output_retries(retries)
+                        .with_network_retries(retries);
 
                 Arc::new(adapter)
             }
@@ -617,7 +639,8 @@ impl ComponentManager {
             }
             _ => {
                 return Err(ComponentError::Config(format!(
-                    "Unsupported llm_provider '{provider}'. Supported: openai, mock.",
+                    "Unsupported llm_provider '{provider}'. \
+                     Supported: openai, ollama, mistral, gemini, custom, anthropic, mock.",
                 )));
             }
         };
@@ -659,9 +682,14 @@ impl ComponentManager {
         };
 
         match provider.as_str() {
-            "openai" => {
+            // Whisper-style transcription works against OpenAI and any user-pointed
+            // OpenAI-compatible server that exposes /audio/transcriptions
+            // (Groq, vLLM, a LiteLLM proxy). Ollama/Mistral/Gemini do not expose
+            // that route via the chat path, so they return None (graceful no-audio)
+            // rather than building an adapter that 404s at runtime.
+            "openai" | "custom" | "openai_compatible" => {
                 let adapter = build_openai_compatible_adapter(
-                    "openai",
+                    &provider,
                     &llm_model,
                     &llm_api_key,
                     &llm_endpoint,
@@ -671,7 +699,7 @@ impl ComponentManager {
 
                 Ok(Some(Arc::new(adapter) as Arc<dyn Transcriber>))
             }
-            // litert and any future providers that do not implement Transcriber
+            // litert and providers that do not expose OpenAI-compatible audio
             // return None — audio stays gracefully unsupported (D5).
             _ => Ok(None),
         }

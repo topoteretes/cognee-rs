@@ -13,7 +13,8 @@ use cognee_delete::DeleteService;
 use cognee_embedding::{EmbeddingConfig, EmbeddingEngine, EmbeddingProvider};
 use cognee_graph::{GraphDBTrait, LadybugAdapter};
 use cognee_llm::{
-    Llm, OpenAIResponsesClient, ResponsesClient, Transcriber, build_openai_compatible_adapter,
+    AnthropicAdapter, Llm, OpenAIResponsesClient, ResponsesClient, Transcriber,
+    build_openai_compatible_adapter,
 };
 use cognee_ontology::{OntologyManager, OntologyResolver};
 use cognee_search::{
@@ -256,55 +257,70 @@ async fn wire_embedding_engine(cfg: &HttpServerConfig) -> Option<Arc<dyn Embeddi
 }
 
 fn wire_llm(cfg: &HttpServerConfig) -> Option<Arc<dyn Llm>> {
-    if !cfg.llm_provider.eq_ignore_ascii_case("openai") {
-        tracing::warn!(
-            "LLM provider '{}' is not supported by standalone wiring yet; llm not wired",
-            cfg.llm_provider
-        );
-        return None;
+    // Native Anthropic uses its own Messages-API adapter (issue #17, Tier 2),
+    // not the OpenAI-compatible factory.
+    if cfg.llm_provider.eq_ignore_ascii_case("anthropic") {
+        let api_key = cfg.llm_api_key.expose_secret();
+        if api_key.is_empty() {
+            tracing::warn!("anthropic llm not wired: api key missing");
+            return None;
+        }
+        let endpoint = if cfg.llm_endpoint.trim().is_empty() {
+            None
+        } else {
+            Some(cfg.llm_endpoint.clone())
+        };
+        let retries = cfg.llm_max_retries.max(1);
+        return match AnthropicAdapter::new(cfg.llm_model.clone(), api_key, endpoint) {
+            Ok(adapter) => Some(Arc::new(
+                adapter
+                    .with_structured_output_retries(retries)
+                    .with_network_retries(retries),
+            ) as Arc<dyn Llm>),
+            Err(err) => {
+                tracing::warn!("anthropic llm not wired: {err}");
+                None
+            }
+        };
     }
 
-    let api_key = cfg.llm_api_key.expose_secret();
-    if api_key.is_empty() {
-        tracing::warn!("LLM API key missing; llm not wired");
-        return None;
-    }
-
+    // Provider routing (and the required-key / required-endpoint validation) lives
+    // in the shared factory; an unsupported provider or missing credential errors
+    // there and we wire None.
     match build_openai_compatible_adapter(
         &cfg.llm_provider,
         &cfg.llm_model,
-        api_key,
+        cfg.llm_api_key.expose_secret(),
         &cfg.llm_endpoint,
         cfg.llm_max_retries,
     ) {
         Ok(adapter) => Some(Arc::new(adapter) as Arc<dyn Llm>),
         Err(err) => {
-            tracing::warn!("llm wiring failed, wiring as None: {err}");
+            tracing::warn!("llm not wired: {err}");
             None
         }
     }
 }
 
 fn wire_transcriber(cfg: &HttpServerConfig) -> Option<Arc<dyn Transcriber>> {
-    if !cfg.llm_provider.eq_ignore_ascii_case("openai") {
-        return None;
-    }
-
-    let api_key = cfg.llm_api_key.expose_secret();
-    if api_key.is_empty() {
+    // Whisper-style transcription only works against OpenAI and user-pointed
+    // OpenAI-compatible servers that expose /audio/transcriptions; other providers
+    // get graceful no-audio (None).
+    let provider = cfg.llm_provider.to_ascii_lowercase();
+    if !matches!(provider.as_str(), "openai" | "custom" | "openai_compatible") {
         return None;
     }
 
     match build_openai_compatible_adapter(
         &cfg.llm_provider,
         &cfg.llm_model,
-        api_key,
+        cfg.llm_api_key.expose_secret(),
         &cfg.llm_endpoint,
         cfg.llm_max_retries,
     ) {
         Ok(adapter) => Some(Arc::new(adapter) as Arc<dyn Transcriber>),
         Err(err) => {
-            tracing::warn!("transcriber wiring failed, wiring as None: {err}");
+            tracing::warn!("transcriber not wired: {err}");
             None
         }
     }
