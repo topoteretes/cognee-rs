@@ -63,12 +63,16 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     cargo build --release --package cognee-cli \
     && cp target/release/cognee-cli /usr/local/bin/cognee-cli-rust
 
-# Build the HTTP server binary in release mode (feature-gated `bin`)
+# Build the HTTP server binary in release mode.
+# `dev-mock` enables the in-memory `VECTOR_DB_PROVIDER=mock` wiring: the harness
+# is single-node with no Postgres, so the server uses the mock vector store
+# (mirroring Python cognee's `brute-force` default). Without it the only vector
+# option is pgvector, which the server cannot connect to and fails to start.
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/build/cognee-rust/target \
     --mount=type=cache,target=/ccache \
-    cargo build --release --package cognee-http-server --features bin \
+    cargo build --release --package cognee-http-server --features bin,dev-mock \
     && cp target/release/cognee-http-server /usr/local/bin/cognee-http-server
 
 # Build the harness-only telemetry emit binary used by the cross-SDK
