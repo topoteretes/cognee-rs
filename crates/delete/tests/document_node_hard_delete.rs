@@ -152,7 +152,7 @@ async fn hard_delete_removes_document_graph_node() {
             json!(["name"]),
         ),
     ];
-    graph_storage::upsert_nodes(&database, &prov_nodes)
+    graph_storage::upsert_nodes(database.as_ref(), &prov_nodes)
         .await
         .unwrap();
 

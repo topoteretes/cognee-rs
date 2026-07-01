@@ -96,7 +96,7 @@ async fn sync_first_run_merges_all_edges() {
     // Seed 3 edges with 2 nodes.
     let alice = make_node(dataset_id, owner, "Alice", "Person");
     let bob = make_node(dataset_id, owner, "Bob", "Person");
-    graph_storage::upsert_nodes(&db, &[alice.clone(), bob.clone()])
+    graph_storage::upsert_nodes(db.as_ref(), &[alice.clone(), bob.clone()])
         .await
         .unwrap();
 
@@ -127,7 +127,9 @@ async fn sync_first_run_merges_all_edges() {
             now - Duration::minutes(1),
         ),
     ];
-    graph_storage::upsert_edges(&db, &edges).await.unwrap();
+    graph_storage::upsert_edges(db.as_ref(), &edges)
+        .await
+        .unwrap();
 
     let ckstore = SeaOrmCheckpointStore::new(Arc::clone(&db));
     let result = sync_graph_to_session(
@@ -177,7 +179,7 @@ async fn sync_second_run_picks_up_new_edges_only() {
 
     let alice = make_node(dataset_id, owner, "Alice", "Person");
     let bob = make_node(dataset_id, owner, "Bob", "Person");
-    graph_storage::upsert_nodes(&db, &[alice.clone(), bob.clone()])
+    graph_storage::upsert_nodes(db.as_ref(), &[alice.clone(), bob.clone()])
         .await
         .unwrap();
 
@@ -194,7 +196,9 @@ async fn sync_second_run_picks_up_new_edges_only() {
             base + Duration::minutes(1),
         ),
     ];
-    graph_storage::upsert_edges(&db, &edges).await.unwrap();
+    graph_storage::upsert_edges(db.as_ref(), &edges)
+        .await
+        .unwrap();
 
     let ckstore = SeaOrmCheckpointStore::new(Arc::clone(&db));
     let r1 = sync_graph_to_session(
@@ -237,7 +241,9 @@ async fn sync_second_run_picks_up_new_edges_only() {
             base + Duration::minutes(12),
         ),
     ];
-    graph_storage::upsert_edges(&db, &more).await.unwrap();
+    graph_storage::upsert_edges(db.as_ref(), &more)
+        .await
+        .unwrap();
 
     let r2 = sync_graph_to_session(
         &user_id,
@@ -280,7 +286,7 @@ async fn sync_caps_at_max_lines() {
 
     let alice = make_node(dataset_id, owner, "Alice", "Person");
     let bob = make_node(dataset_id, owner, "Bob", "Person");
-    graph_storage::upsert_nodes(&db, &[alice.clone(), bob.clone()])
+    graph_storage::upsert_nodes(db.as_ref(), &[alice.clone(), bob.clone()])
         .await
         .unwrap();
 
@@ -298,7 +304,9 @@ async fn sync_caps_at_max_lines() {
             base + Duration::seconds(i as i64),
         ));
     }
-    graph_storage::upsert_edges(&db, &edges).await.unwrap();
+    graph_storage::upsert_edges(db.as_ref(), &edges)
+        .await
+        .unwrap();
 
     let ckstore = SeaOrmCheckpointStore::new(Arc::clone(&db));
     let res = sync_graph_to_session(
