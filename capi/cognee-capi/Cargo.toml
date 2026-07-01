@@ -18,6 +18,11 @@ publish = false
 [lib]
 crate-type = ["cdylib", "staticlib"]
 
+# iOS forbids dynamic libraries in App Store submissions.
+# Override to staticlib-only when cross-compiling for iOS.
+[target.'cfg(target_os = "ios")'.lib]
+crate-type = ["staticlib"]
+
 [features]
 # Default feature set mirrors cognee-ts-neon (ts/cognee-ts-neon/Cargo.toml).
 # A slim embedded build: --no-default-features --features sqlite,testing
@@ -49,6 +54,9 @@ sqlite        = ["cognee-lib/sqlite",                "cognee-bindings-common/sql
 # testing is in defaults because cg_task_context_mock requires mock
 # graph/vector backends — same reason cognee-ts-neon keeps it.
 testing       = ["cognee-lib/testing",               "cognee-bindings-common/testing"]
+# Record/replay cassette-based mock LLM. Required for the iOS demo and offline
+# testing. Enables `llm_mock` / `llm_mock_cassette` settings keys at runtime.
+mock-llm      = ["cognee-lib/mock-llm"]
 # Test-only opt-in: exposes `cg_test_force_panic`, a no-return symbol
 # that always panics. Used by the capi smoke tests under
 # `capi/examples/panic_hook_smoke.c` to verify the gap-07 panic hook

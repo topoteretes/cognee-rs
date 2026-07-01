@@ -195,6 +195,9 @@ impl ComponentManager {
                 "graph_database_provider=postgres requires the `pggraph` crate feature".into(),
             )),
 
+            #[cfg(feature = "testing")]
+            "mock" => Ok(Arc::new(cognee_graph::MockGraphDB::new())),
+
             other => Err(ComponentError::Config(format!(
                 "Unsupported graph_database_provider '{other}'. Supported: ladybug, kuzu, postgres.",
             ))),
