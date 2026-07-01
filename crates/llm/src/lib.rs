@@ -60,6 +60,7 @@ pub mod llm_trait;
 pub mod mock;
 pub mod prompts;
 pub mod responses_client;
+mod retry;
 pub mod schema;
 pub mod transcriber;
 pub mod types;
