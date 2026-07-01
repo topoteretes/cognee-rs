@@ -184,6 +184,21 @@ async fn wire_vector_db(cfg: &HttpServerConfig) -> Result<Arc<dyn VectorDB>, Ser
                      VECTOR_DB_PROVIDER=pgvector"
                 )));
             }
+            // Guard against the incoherent default (VECTOR_DB_PROVIDER unset →
+            // pgvector, VECTOR_DB_URL unset → derived from SYSTEM_ROOT_DIRECTORY,
+            // i.e. a filesystem path). Without this, pgvector reports a cryptic
+            // "connection string '…/vectors' cannot be parsed". Point the
+            // operator at the actual misconfiguration instead.
+            if !(url.starts_with("postgres://") || url.starts_with("postgresql://")) {
+                return Err(ServerError::Other(anyhow!(
+                    "VECTOR_DB_PROVIDER=pgvector requires a postgres connection \
+                     string in VECTOR_DB_URL (postgres://… or postgresql://…), but \
+                     got '{url}'. If you did not intend to use pgvector, set \
+                     VECTOR_DB_PROVIDER explicitly (e.g. 'mock' in a dev-mock \
+                     build); the default derives this value from \
+                     SYSTEM_ROOT_DIRECTORY, which is not a valid Postgres URL."
+                )));
+            }
             let adapter = PgVectorAdapter::new(url, cfg.embedding_dimensions as usize)
                 .await
                 .map_err(|e| ServerError::Other(anyhow!("pgvector adapter init: {e}")))?;
@@ -439,5 +454,27 @@ mod tests {
             Err(err) => err.to_string(),
         };
         assert!(msg.contains("database connect failed"));
+    }
+
+    #[tokio::test]
+    async fn wire_vector_db_pgvector_rejects_non_postgres_url() {
+        // The incoherent default (VECTOR_DB_PROVIDER unset → pgvector, plus a
+        // VECTOR_DB_URL derived from SYSTEM_ROOT_DIRECTORY → a filesystem path)
+        // must fail with an actionable message, not the cryptic connection-
+        // string parse error the pgvector driver would otherwise emit.
+        let cfg = HttpServerConfig {
+            vector_provider: "pgvector".to_string(),
+            vector_db_url: "/srv/.cognee_system/vectors".to_string(),
+            ..Default::default()
+        };
+
+        let msg = match wire_vector_db(&cfg).await {
+            Ok(_) => String::new(),
+            Err(err) => err.to_string(),
+        };
+        assert!(
+            msg.contains("postgres connection string") && msg.contains("VECTOR_DB_PROVIDER"),
+            "expected actionable pgvector error, got: {msg}"
+        );
     }
 }

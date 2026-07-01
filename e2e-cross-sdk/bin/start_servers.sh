@@ -108,11 +108,27 @@ echo "[start_servers] Starting Python uvicorn on :8000..."
 PY_PID=$!
 
 # ── Start Rust HTTP server on :8001 ──────────────────────────────────────────
+# The Rust server gets its OWN roots under $RS_WORKSPACE (/rs) — otherwise it
+# inherits the Python SYSTEM_ROOT_DIRECTORY (/py/...) exported above and both
+# servers would share one workspace, defeating the isolation the harness relies
+# on. VECTOR_DB_PROVIDER=mock selects the in-memory vector store (the binary is
+# built with --features dev-mock): the harness has no Postgres, and the OSS
+# server's only other option is pgvector. Without this the server derives the
+# pgvector connection string from SYSTEM_ROOT_DIRECTORY (a filesystem path),
+# fails to parse it, and never reaches /health. Mirrors Python's brute-force
+# default vector backend for this single-node parity run.
+mkdir -p "$RS_WORKSPACE/.cognee_system/databases" \
+         "$RS_WORKSPACE/.data_storage" \
+         "$RS_WORKSPACE/.cognee_cache"
 echo "[start_servers] Starting Rust cognee-http-server on :8001..."
 (cd "$RS_WORKSPACE" && \
  HTTP_API_HOST=127.0.0.1 \
  HTTP_API_PORT=8001 \
  ENV=test \
+ SYSTEM_ROOT_DIRECTORY="$RS_WORKSPACE/.cognee_system" \
+ DATA_ROOT_DIRECTORY="$RS_WORKSPACE/.data_storage" \
+ CACHE_ROOT_DIRECTORY="$RS_WORKSPACE/.cognee_cache" \
+ VECTOR_DB_PROVIDER=mock \
  exec cognee-http-server) &
 RS_PID=$!
 
