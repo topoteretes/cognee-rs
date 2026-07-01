@@ -22,7 +22,7 @@ use cognee_delete::{DeleteMode, DeleteRequest, DeleteScope, DeleteService};
 use cognee_embedding::EmbeddingEngine;
 use cognee_graph::{GraphDBTrait, LadybugAdapter};
 use cognee_ingestion::AddPipeline;
-use cognee_llm::{Llm, OpenAIAdapter};
+use cognee_llm::Llm;
 use cognee_models::DataInput;
 use cognee_ontology::NoOpOntologyResolver;
 use cognee_search::{
@@ -34,10 +34,6 @@ use cognee_test_utils::MockVectorDB;
 use cognee_vector::VectorDB;
 use tempfile::TempDir;
 use uuid::Uuid;
-
-fn require_env(name: &str) -> String {
-    std::env::var(name).unwrap_or_else(|_| panic!("{name} must be set"))
-}
 
 fn is_non_empty(response: &SearchResponse) -> bool {
     match &response.result {
@@ -114,9 +110,10 @@ const QUANTUM_TEXT: &str = "Quantum computers use qubits instead of classical bi
 #[tokio::test]
 async fn test_search_returns_empty_for_deleted_doc_and_non_empty_for_remaining() {
     // ── Environment gating ──────────────────────────────────────────────
-    let _ = require_env("OPENAI_URL");
-    let _ = require_env("OPENAI_TOKEN");
-    let _ = require_env("OPENAI_MODEL");
+    if !cognee_test_utils::llm_env_available() {
+        eprintln!("skipping: live LLM credentials (OPENAI_URL/OPENAI_TOKEN) not set");
+        return;
+    }
 
     // ── Infrastructure ──────────────────────────────────────────────────
     let temp_dir = TempDir::new().expect("temp dir");
@@ -149,14 +146,7 @@ async fn test_search_returns_empty_for_deleted_doc_and_non_empty_for_remaining()
     // In-memory mock vector DB (qdrant extracted to closed cognee-vector-qdrant).
     let vector_db: Arc<dyn VectorDB> = Arc::new(MockVectorDB::new());
 
-    let llm: Arc<dyn Llm> = Arc::new(
-        OpenAIAdapter::new(
-            require_env("OPENAI_MODEL"),
-            require_env("OPENAI_TOKEN"),
-            Some(require_env("OPENAI_URL")),
-        )
-        .expect("OpenAIAdapter::new"),
-    );
+    let llm: Arc<dyn Llm> = cognee_test_utils::create_openai_adapter_from_env();
 
     let owner_id = Uuid::nil();
 
