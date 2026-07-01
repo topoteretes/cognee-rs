@@ -884,12 +884,14 @@ pub async fn summarize_text(
         let summary_extractor =
             SummaryExtractor::new_with_schema(llm, config.summary_schema.clone())
                 .with_max_parallel(config.max_parallel_extractions);
-        let mut all_summaries = Vec::new();
 
-        for batch in non_dlt_chunks.chunks(config.summarization_batch_size) {
-            let batch_summaries = summary_extractor.summarize_chunks(batch, None).await?;
-            all_summaries.extend(batch_summaries);
-        }
+        // Stream every chunk through one bounded pipeline. `summarize_chunks`
+        // already caps in-flight requests at `max_parallel_extractions` internally
+        // (issue #19), so an outer batch loop would only insert a sequential
+        // barrier between batches without lowering peak concurrency.
+        let all_summaries = summary_extractor
+            .summarize_chunks(&non_dlt_chunks, None)
+            .await?;
 
         info!("Generated {} summaries", all_summaries.len());
         all_summaries

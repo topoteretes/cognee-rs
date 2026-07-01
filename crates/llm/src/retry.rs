@@ -5,17 +5,24 @@
 //! batch of requests that all hit a rate limit at the same instant also retry at
 //! the same instants — a thundering herd that keeps tripping the limit. Adding
 //! jitter spreads those retries out. See issue #19.
+//!
+//! The capped-exponential base is computed by [`cognee_utils::retry::RetryConfig`]
+//! so the backoff math has a single source of truth shared with the rest of the
+//! workspace; this module only layers **equal jitter** on top.
 
 use std::time::Duration;
 
-/// Capped exponential backoff base for a 1-indexed `attempt`: 1s, 2s, 4s, …
-/// capped at 30s.
+use cognee_utils::retry::RetryConfig;
+
+/// Capped exponential base (1s, 2s, 4s, … capped at 30s) for a 1-indexed
+/// `attempt`, delegated to the shared `cognee_utils` implementation.
 fn base_backoff_ms(attempt: u32) -> u64 {
-    // Saturating arithmetic so a very large `attempt` can't overflow before the
-    // `.min(30_000)` cap clamps it.
-    1_000u64
-        .saturating_mul(2u64.saturating_pow(attempt.saturating_sub(1)))
-        .min(30_000)
+    // `RetryConfig::calculate_delay` is 0-indexed and, with no jitter factor,
+    // returns `initial_delay_ms * multiplier^attempt` capped at `max_delay_ms`.
+    // 1000ms initial, 2x multiplier, 30s cap matches the previous local math.
+    RetryConfig::new(0, 1_000, 30_000)
+        .calculate_delay(attempt.saturating_sub(1))
+        .as_millis() as u64
 }
 
 /// Exponential backoff with **equal jitter** for retry `attempt` (1-indexed).
@@ -24,7 +31,14 @@ fn base_backoff_ms(attempt: u32) -> u64 {
 /// exponential backoff. Keeping at least half the backoff preserves the growing
 /// delay, while the random half spreads simultaneous retries to avoid a
 /// thundering herd (e.g. a batch that all hit HTTP 429 at once).
+///
+/// `attempt` is 1-indexed (the first retry is attempt 1); callers guard on
+/// `attempt > 0`.
 pub(crate) fn retry_backoff(attempt: u32) -> Duration {
+    debug_assert!(
+        attempt >= 1,
+        "retry_backoff expects a 1-indexed attempt >= 1"
+    );
     let base = base_backoff_ms(attempt);
     let half = base / 2;
     let jitter = if half == 0 {
@@ -52,12 +66,17 @@ mod tests {
     }
 
     #[test]
-    fn backoff_grows_then_caps_at_30s() {
-        // The base doubles each attempt and caps at 30s, so the jittered value
-        // never exceeds 30s.
+    fn base_matches_capped_exponential_schedule() {
+        // Delegated to cognee_utils but must still produce the 1s/2s/4s… schedule
+        // capped at 30s.
         assert_eq!(base_backoff_ms(1), 1_000);
         assert_eq!(base_backoff_ms(2), 2_000);
+        assert_eq!(base_backoff_ms(3), 4_000);
         assert_eq!(base_backoff_ms(6), 30_000); // 32s would exceed the cap
+    }
+
+    #[test]
+    fn backoff_never_exceeds_30s_cap() {
         for _ in 0..200 {
             assert!(retry_backoff(100).as_millis() as u64 <= 30_000);
         }

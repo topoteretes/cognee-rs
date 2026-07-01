@@ -59,8 +59,12 @@ impl RetryConfig {
         self
     }
 
-    /// Calculate the delay for a given attempt number.
-    fn calculate_delay(&self, attempt: u32) -> Duration {
+    /// Calculate the delay for a given attempt number (0-indexed).
+    ///
+    /// Public so other crates can reuse this single capped-exponential-backoff
+    /// implementation rather than re-deriving the math (see `cognee-llm`'s
+    /// `retry_backoff`).
+    pub fn calculate_delay(&self, attempt: u32) -> Duration {
         let base_delay =
             self.initial_delay_ms as f64 * self.backoff_multiplier.powi(attempt as i32);
 

@@ -212,14 +212,14 @@ impl OpenAIResponsesClient {
         for attempt in 0..=self.network_retries {
             debug!(attempt, "Responses API attempt");
             if attempt > 0 {
-                let delay_ms = (1_000u64 * 2u64.saturating_pow(attempt as u32 - 1)).min(30_000);
+                let delay = crate::retry::retry_backoff(attempt as u32);
                 warn!(
                     attempt,
-                    delay_ms,
+                    delay_ms = delay.as_millis() as u64,
                     error = %last_error,
                     "Responses API request failed, retrying",
                 );
-                tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+                tokio::time::sleep(delay).await;
             }
 
             let mut builder = self

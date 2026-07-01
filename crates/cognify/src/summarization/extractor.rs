@@ -33,6 +33,41 @@ fn default_summary_options() -> GenerationOptions {
 /// drift guard.
 const DEFAULT_SUMMARY_PROMPT: &str = include_str!("prompts/summarize_content.txt");
 
+/// Summarize a single chunk of text. Shared by [`SummaryExtractor::extract_summary`]
+/// and the bounded [`SummaryExtractor::summarize_chunks`] pipeline so neither has
+/// to fabricate a throwaway extractor per call.
+async fn summarize_one(
+    llm: &Arc<dyn Llm>,
+    summary_schema: &Option<serde_json::Value>,
+    text: &str,
+    custom_prompt: Option<&str>,
+) -> Result<SummarizedContent, CognifyError> {
+    let system_prompt = custom_prompt.unwrap_or(DEFAULT_SUMMARY_PROMPT);
+    let options = Some(default_summary_options());
+
+    match summary_schema {
+        None => llm
+            .create_structured_output(text, system_prompt, options)
+            .await
+            .map_err(|e| CognifyError::LlmError(e.to_string())),
+        Some(schema) => {
+            let raw: serde_json::Value = llm
+                .create_structured_output_raw(text, system_prompt, schema, options)
+                .await
+                .map_err(|e| CognifyError::LlmError(e.to_string()))?;
+            let summary = raw.get("summary").and_then(|v| v.as_str()).ok_or_else(|| {
+                CognifyError::LlmError(
+                    "summary_schema output missing string `summary` field".to_string(),
+                )
+            })?;
+            Ok(SummarizedContent {
+                summary: summary.to_string(),
+                description: String::new(),
+            })
+        }
+    }
+}
+
 /// Summary extractor for text chunks.
 ///
 /// Uses an LLM (via the Llm trait) to generate hierarchical summaries from text chunks.
@@ -108,35 +143,7 @@ impl SummaryExtractor {
         text: &str,
         custom_prompt: Option<&str>,
     ) -> Result<SummarizedContent, CognifyError> {
-        let system_prompt = custom_prompt.unwrap_or(DEFAULT_SUMMARY_PROMPT);
-        let options = Some(default_summary_options());
-
-        match &self.summary_schema {
-            None => {
-                let summarized: SummarizedContent = self
-                    .llm
-                    .create_structured_output(text, system_prompt, options)
-                    .await
-                    .map_err(|e| CognifyError::LlmError(e.to_string()))?;
-                Ok(summarized)
-            }
-            Some(schema) => {
-                let raw: serde_json::Value = self
-                    .llm
-                    .create_structured_output_raw(text, system_prompt, schema, options)
-                    .await
-                    .map_err(|e| CognifyError::LlmError(e.to_string()))?;
-                let summary = raw.get("summary").and_then(|v| v.as_str()).ok_or_else(|| {
-                    CognifyError::LlmError(
-                        "summary_schema output missing string `summary` field".to_string(),
-                    )
-                })?;
-                Ok(SummarizedContent {
-                    summary: summary.to_string(),
-                    description: String::new(),
-                })
-            }
-        }
+        summarize_one(&self.llm, &self.summary_schema, text, custom_prompt).await
     }
 
     /// Summarize multiple text chunks in parallel.
@@ -187,12 +194,8 @@ impl SummaryExtractor {
                 let model_name = model_name.clone();
                 let prompt = custom_prompt.clone();
                 async move {
-                    let extractor = SummaryExtractor {
-                        llm,
-                        summary_schema,
-                        max_parallel: 1,
-                    };
-                    let summarized = extractor.extract_summary(&text, prompt.as_deref()).await?;
+                    let summarized =
+                        summarize_one(&llm, &summary_schema, &text, prompt.as_deref()).await?;
                     let summary =
                         TextSummary::from_summarized_content(chunk_id, summarized, model_name);
                     Ok::<(usize, TextSummary), CognifyError>((index, summary))
