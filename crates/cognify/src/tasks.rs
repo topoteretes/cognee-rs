@@ -2572,6 +2572,12 @@ async fn upsert_provenance(
     // Write the node and edge provenance batches atomically. Wrapping both
     // upserts in one transaction means a failure partway through rolls the
     // whole group back, so the provenance graph never ends up half-written.
+    //
+    // `begin()` issues a deferred `BEGIN`, but this transaction is write-first:
+    // the first statement is an upsert, which takes SQLite's write lock
+    // immediately, so there is no read→write lock upgrade to deadlock on. With
+    // WAL + `busy_timeout` (see `connect_sqlite`), concurrent writers serialize
+    // rather than failing with `SQLITE_BUSY`.
     if !prov_nodes.is_empty() || !prov_edges.is_empty() {
         let txn = db
             .begin()
