@@ -29,7 +29,7 @@
 //! The guard returned from `install()` restores the previous tracing
 //! dispatcher on drop, so parallel tests do not leak subscribers.
 
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use serde_json::{Map, Value};
 use tracing::field::{Field, Visit};
@@ -72,6 +72,21 @@ impl CapturedSpan {
 
 /// Shared state between the layer and the guard.
 type SpanStore = Arc<Mutex<Vec<CapturedSpan>>>;
+
+/// Registry of currently-active capture stores. The single process-global
+/// subscriber (installed once by [`SpanCapture::install`]) fans every closed
+/// span out to each store here.
+///
+/// Why global rather than the old thread-local `set_default`: the earlier
+/// implementation only saw spans emitted on the *installing* thread, so a span
+/// opened on a tokio worker thread or on `sqlx`'s dedicated blocking SQLite
+/// connection thread escaped capture — an intermittent "missing span" flake
+/// under load. A process-global subscriber captures every thread. The suite
+/// runs under `cargo nextest` (one test per process), so at any moment there is
+/// exactly one active store and capture is exact. Under a `cargo test` fallback
+/// (many tests per process) concurrent captures would share spans; that is the
+/// only degradation and it never drops a span the assertions look for.
+static ACTIVE_STORES: Mutex<Vec<SpanStore>> = Mutex::new(Vec::new());
 
 #[derive(Default, Clone)]
 struct PendingFields {
@@ -117,9 +132,7 @@ impl Visit for PendingFields {
     }
 }
 
-struct CaptureLayer {
-    store: SpanStore,
-}
+struct CaptureLayer;
 
 impl<S> Layer<S> for CaptureLayer
 where
@@ -159,21 +172,25 @@ where
                 .cloned()
                 .unwrap_or_default()
                 .map;
-            // lock poison is unrecoverable
-            if let Ok(mut store) = self.store.lock() {
-                store.push(CapturedSpan { name, fields });
+            let captured = CapturedSpan { name, fields };
+            // Fan the closed span out to every active capture. lock poison is
+            // unrecoverable.
+            if let Ok(stores) = ACTIVE_STORES.lock() {
+                for store in stores.iter() {
+                    if let Ok(mut store) = store.lock() {
+                        store.push(captured.clone());
+                    }
+                }
             }
         }
     }
 }
 
-/// Install a span-capturing subscriber as the default for the
-/// current thread *and* for any tasks spawned on the current
-/// `tokio` runtime. The previous default is restored when the
-/// returned guard is dropped.
+/// Guard tying a capture store's lifetime to a test. Registered in
+/// [`ACTIVE_STORES`] on [`SpanCapture::install`] and removed on drop, so a
+/// test's spans stop being collected once its guard goes out of scope.
 pub struct SpanCaptureGuard {
     store: SpanStore,
-    _dispatch: tracing::dispatcher::DefaultGuard,
 }
 
 impl SpanCaptureGuard {
@@ -184,25 +201,45 @@ impl SpanCaptureGuard {
     }
 }
 
+impl Drop for SpanCaptureGuard {
+    fn drop(&mut self) {
+        // Deregister this store (by pointer identity) so later spans in the
+        // process are not appended to it. lock poison is unrecoverable.
+        if let Ok(mut stores) = ACTIVE_STORES.lock() {
+            stores.retain(|s| !Arc::ptr_eq(s, &self.store));
+        }
+    }
+}
+
 /// Stateless installer.
 pub struct SpanCapture;
 
 impl SpanCapture {
-    /// Install the capture layer as the **thread-local** default
-    /// dispatcher (via `set_default`). The returned guard restores
-    /// the previous dispatcher on drop. Safe to call concurrently
-    /// from multiple `#[tokio::test]` functions.
+    /// Register a fresh capture store and ensure the process-global capture
+    /// subscriber is installed. The returned guard collects every span that
+    /// closes while it is alive — from **any** thread the test touches (tokio
+    /// workers, `sqlx`'s blocking SQLite thread) — and deregisters on drop.
+    ///
+    /// The subscriber is installed exactly once per process via
+    /// [`set_global_default`](tracing::subscriber::set_global_default); under
+    /// `cargo nextest` (one test per process) that means one active store at a
+    /// time and exact capture.
     pub fn install() -> SpanCaptureGuard {
+        static INIT: OnceLock<()> = OnceLock::new();
+        INIT.get_or_init(|| {
+            let subscriber = Registry::default().with(CaptureLayer);
+            // If a global default is somehow already set we cannot replace it;
+            // capture then sees nothing rather than panicking. No code in these
+            // test binaries installs a competing global subscriber.
+            let _ = tracing::subscriber::set_global_default(subscriber);
+        });
+
         let store: SpanStore = Arc::new(Mutex::new(Vec::new()));
-        let layer = CaptureLayer {
-            store: Arc::clone(&store),
-        };
-        let subscriber = Registry::default().with(layer);
-        let dispatch = tracing::dispatcher::set_default(&subscriber.into());
-        SpanCaptureGuard {
-            store,
-            _dispatch: dispatch,
+        // lock poison is unrecoverable
+        if let Ok(mut stores) = ACTIVE_STORES.lock() {
+            stores.push(Arc::clone(&store));
         }
+        SpanCaptureGuard { store }
     }
 }
 
