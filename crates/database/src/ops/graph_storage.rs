@@ -1,6 +1,6 @@
 use chrono::{DateTime, Utc};
 use cognee_utils::tracing_keys::{COGNEE_DB_ROW_COUNT, COGNEE_DB_SYSTEM};
-use sea_orm::sea_query::OnConflict;
+use sea_orm::sea_query::{Alias, Expr, OnConflict, Query};
 use sea_orm::{
     ColumnTrait, Condition, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter,
     QueryOrder, QuerySelect,
@@ -538,43 +538,30 @@ pub async fn get_unique_nodes_for_data(
     let data_hex = uuid_hex::to_hex(data_id);
     let dataset_hex = uuid_hex::to_hex(dataset_id);
 
-    // First, get all nodes for this (data_id, dataset_id)
-    let all_nodes = node::Entity::find()
-        .filter(
-            Condition::all()
-                .add(node::Column::DataId.eq(&data_hex))
-                .add(node::Column::DatasetId.eq(&dataset_hex)),
+    // One query instead of two: select the (data_id, dataset_id) nodes whose slug
+    // is NOT shared by any other data_id in the same dataset. The correlated
+    // NOT EXISTS replaces the previous fetch-all + fetch-shared-slugs + in-memory
+    // filter.
+    let n2 = Alias::new("n2");
+    let shared = Query::select()
+        .expr(Expr::val(1))
+        .from_as(Alias::new("nodes"), n2.clone())
+        .and_where(Expr::col((n2.clone(), node::Column::DatasetId)).eq(dataset_hex.clone()))
+        .and_where(Expr::col((n2.clone(), node::Column::DataId)).ne(data_hex.clone()))
+        .and_where(
+            Expr::col((n2.clone(), node::Column::Slug))
+                .equals((Alias::new("nodes"), node::Column::Slug)),
         )
-        .all(db)
-        .await
-        .map_err(map_sea_err)?;
+        .to_owned();
 
-    if all_nodes.is_empty() {
-        Span::current().record(COGNEE_DB_ROW_COUNT, 0i64);
-        return Ok(vec![]);
-    }
-
-    // Get slugs that are shared with other data_ids in the same dataset
-    let shared_slugs: Vec<String> = node::Entity::find()
-        .filter(
-            Condition::all()
-                .add(node::Column::DatasetId.eq(&dataset_hex))
-                .add(node::Column::DataId.ne(&data_hex)),
-        )
-        .column(node::Column::Slug)
+    let rows: Vec<GraphNode> = node::Entity::find()
+        .filter(node::Column::DataId.eq(&data_hex))
+        .filter(node::Column::DatasetId.eq(&dataset_hex))
+        .filter(Expr::exists(shared).not())
         .all(db)
         .await
         .map_err(map_sea_err)?
         .into_iter()
-        .map(|m| m.slug)
-        .collect();
-
-    let shared_set: std::collections::HashSet<&str> =
-        shared_slugs.iter().map(|s| s.as_str()).collect();
-
-    let rows: Vec<GraphNode> = all_nodes
-        .into_iter()
-        .filter(|n| !shared_set.contains(n.slug.as_str()))
         .map(GraphNode::from)
         .collect();
     Span::current().record(COGNEE_DB_ROW_COUNT, rows.len() as i64);
@@ -602,43 +589,29 @@ pub async fn get_unique_edges_for_data(
     let data_hex = uuid_hex::to_hex(data_id);
     let dataset_hex = uuid_hex::to_hex(dataset_id);
 
-    // First, get all edges for this (data_id, dataset_id)
-    let all_edges = edge::Entity::find()
-        .filter(
-            Condition::all()
-                .add(edge::Column::DataId.eq(&data_hex))
-                .add(edge::Column::DatasetId.eq(&dataset_hex)),
+    // One query instead of two (see `get_unique_nodes_for_data`): edges for
+    // (data_id, dataset_id) whose slug is not shared by another data_id in the
+    // same dataset, via a correlated NOT EXISTS.
+    let e2 = Alias::new("e2");
+    let shared = Query::select()
+        .expr(Expr::val(1))
+        .from_as(Alias::new("edges"), e2.clone())
+        .and_where(Expr::col((e2.clone(), edge::Column::DatasetId)).eq(dataset_hex.clone()))
+        .and_where(Expr::col((e2.clone(), edge::Column::DataId)).ne(data_hex.clone()))
+        .and_where(
+            Expr::col((e2.clone(), edge::Column::Slug))
+                .equals((Alias::new("edges"), edge::Column::Slug)),
         )
-        .all(db)
-        .await
-        .map_err(map_sea_err)?;
+        .to_owned();
 
-    if all_edges.is_empty() {
-        Span::current().record(COGNEE_DB_ROW_COUNT, 0i64);
-        return Ok(vec![]);
-    }
-
-    // Get slugs that are shared with other data_ids in the same dataset
-    let shared_slugs: Vec<String> = edge::Entity::find()
-        .filter(
-            Condition::all()
-                .add(edge::Column::DatasetId.eq(&dataset_hex))
-                .add(edge::Column::DataId.ne(&data_hex)),
-        )
-        .column(edge::Column::Slug)
+    let rows: Vec<GraphEdge> = edge::Entity::find()
+        .filter(edge::Column::DataId.eq(&data_hex))
+        .filter(edge::Column::DatasetId.eq(&dataset_hex))
+        .filter(Expr::exists(shared).not())
         .all(db)
         .await
         .map_err(map_sea_err)?
         .into_iter()
-        .map(|m| m.slug)
-        .collect();
-
-    let shared_set: std::collections::HashSet<&str> =
-        shared_slugs.iter().map(|s| s.as_str()).collect();
-
-    let rows: Vec<GraphEdge> = all_edges
-        .into_iter()
-        .filter(|e| !shared_set.contains(e.slug.as_str()))
         .map(GraphEdge::from)
         .collect();
     Span::current().record(COGNEE_DB_ROW_COUNT, rows.len() as i64);

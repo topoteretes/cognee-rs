@@ -246,4 +246,14 @@ pub async fn test_batch_search(db: &dyn VectorDB) {
     assert_eq!(results.len(), 2, "one result set per query");
     assert!(!results[0].is_empty());
     assert!(!results[1].is_empty());
+    // Each query's results must map back to that query (ordinality routing) and be
+    // ranked, so the nearest hit is that query's exactly-matching point.
+    assert_eq!(
+        results[0][0].id, points[0].id,
+        "query 0 should rank its exact-match point first"
+    );
+    assert_eq!(
+        results[1][0].id, points[1].id,
+        "query 1 should rank its exact-match point first"
+    );
 }
