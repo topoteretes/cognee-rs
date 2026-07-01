@@ -141,6 +141,7 @@ pub fn known_keys() -> Vec<&'static str> {
         "embedding_dimensions",
         "embedding_max_sequence_length",
         "embedding_batch_size",
+        "embedding_onnx_batch_size",
         "embedding_provider",
         "embedding_endpoint",
         "embedding_api_key",
@@ -312,6 +313,10 @@ pub fn as_flat_map(settings: &Settings) -> BTreeMap<&'static str, Value> {
             Value::from(settings.embedding_batch_size),
         ),
         (
+            "embedding_onnx_batch_size",
+            Value::from(settings.embedding_onnx_batch_size),
+        ),
+        (
             "embedding_provider",
             Value::String(settings.embedding_provider.clone()),
         ),
@@ -388,6 +393,7 @@ pub fn set_value(settings: &mut Settings, key: &str, value: Value) -> Result<(),
             settings.embedding_max_sequence_length = expect_u32(key, value)?
         }
         "embedding_batch_size" => settings.embedding_batch_size = expect_u32(key, value)?,
+        "embedding_onnx_batch_size" => settings.embedding_onnx_batch_size = expect_u32(key, value)?,
         "embedding_provider" => settings.embedding_provider = expect_string(key, value)?,
         "embedding_endpoint" => settings.embedding_endpoint = expect_string(key, value)?,
         "embedding_api_key" => settings.embedding_api_key = expect_string(key, value)?,
@@ -475,6 +481,9 @@ pub fn unset_key(settings: &mut Settings, key: &str) -> Result<(), CliError> {
             settings.embedding_max_sequence_length = defaults.embedding_max_sequence_length
         }
         "embedding_batch_size" => settings.embedding_batch_size = defaults.embedding_batch_size,
+        "embedding_onnx_batch_size" => {
+            settings.embedding_onnx_batch_size = defaults.embedding_onnx_batch_size
+        }
         "embedding_provider" => settings.embedding_provider = defaults.embedding_provider,
         "embedding_endpoint" => settings.embedding_endpoint = defaults.embedding_endpoint,
         "embedding_api_key" => settings.embedding_api_key = defaults.embedding_api_key,

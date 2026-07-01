@@ -38,6 +38,20 @@ struct OllamaBatchEmbedRequest<'a> {
     dimensions: Option<usize>,
 }
 
+/// Outcome of a failed batched (`array input`) request.
+///
+/// Only [`BatchError::ArrayUnsupported`] triggers the per-text fallback in
+/// [`OllamaEmbeddingEngine::embed_all`]; a [`BatchError::Fatal`] (real HTTP or
+/// parse error such as 404 model-not-found) propagates instead of fanning out
+/// `1 + N` doomed requests.
+enum BatchError {
+    /// The server likely ignores/does not support array `input`: it returned a
+    /// count that does not match the inputs or an unrecognised response shape.
+    ArrayUnsupported,
+    /// A genuine error that per-text requests would hit too.
+    Fatal(EmbeddingError),
+}
+
 // ─── Engine ───────────────────────────────────────────────────────────────────
 
 /// Embedding engine that calls the Ollama `/api/embed` HTTP endpoint.
@@ -191,12 +205,7 @@ impl OllamaEmbeddingEngine {
     }
 
     /// Call the endpoint once with an array `input` (no retry).
-    ///
-    /// Returns [`EmbeddingError::ApiError`] if the server returns a number of
-    /// embeddings that does not match the number of inputs — which is also how
-    /// servers that ignore array `input` surface, letting [`embed_all`] fall
-    /// back to one request per text.
-    async fn embed_batch_once(&self, texts: &[&str]) -> EmbeddingResult<Vec<Vec<f32>>> {
+    async fn embed_batch_once(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, BatchError> {
         let truncated: Vec<&str> = texts.iter().map(|t| self.truncate_text(t)).collect();
 
         let request_body = OllamaBatchEmbedRequest {
@@ -215,7 +224,9 @@ impl OllamaEmbeddingEngine {
             .json(&request_body)
             .send()
             .await
-            .map_err(|e| EmbeddingError::HttpError(format!("Request failed: {e}")))?;
+            .map_err(|e| {
+                BatchError::Fatal(EmbeddingError::HttpError(format!("Request failed: {e}")))
+            })?;
 
         let status = response.status();
         if !status.is_success() {
@@ -223,65 +234,69 @@ impl OllamaEmbeddingEngine {
                 .text()
                 .await
                 .unwrap_or_else(|_| "<failed to read body>".to_string());
-            return Err(if status.as_u16() == 429 || status.is_server_error() {
-                EmbeddingError::HttpError(format!("HTTP {status}: {body}"))
-            } else {
-                EmbeddingError::ApiError(format!("HTTP {status}: {body}"))
-            });
+            return Err(BatchError::Fatal(
+                if status.as_u16() == 429 || status.is_server_error() {
+                    EmbeddingError::HttpError(format!("HTTP {status}: {body}"))
+                } else {
+                    EmbeddingError::ApiError(format!("HTTP {status}: {body}"))
+                },
+            ));
         }
 
-        let value: Value = response
-            .json()
-            .await
-            .map_err(|e| EmbeddingError::ApiError(format!("Failed to parse response: {e}")))?;
+        let value: Value = response.json().await.map_err(|e| {
+            BatchError::Fatal(EmbeddingError::ApiError(format!(
+                "Failed to parse response: {e}"
+            )))
+        })?;
 
-        let embeddings = extract_all_embeddings_from_value(&value)?;
+        // An unrecognised shape or a count that doesn't match the inputs means the
+        // server ignored/rejected array `input`; treat it as "array unsupported"
+        // so the caller can fall back to per-text requests.
+        let embeddings =
+            extract_all_embeddings_from_value(&value).map_err(|_| BatchError::ArrayUnsupported)?;
         if embeddings.len() != texts.len() {
-            return Err(EmbeddingError::ApiError(format!(
-                "Expected {} embeddings for batch, got {}",
-                texts.len(),
-                embeddings.len()
-            )));
+            return Err(BatchError::ArrayUnsupported);
         }
         Ok(embeddings)
     }
 
     /// Batch variant of [`embed_single_with_retry`], retrying transient errors.
-    async fn embed_batch_with_retry(&self, texts: &[&str]) -> EmbeddingResult<Vec<Vec<f32>>> {
+    async fn embed_batch_with_retry(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, BatchError> {
         let max_duration = std::time::Duration::from_secs(128);
         let start = std::time::Instant::now();
         let mut wait_secs = 8u64;
         loop {
             match self.embed_batch_once(texts).await {
                 Ok(v) => return Ok(v),
-                Err(e)
-                    if matches!(e, EmbeddingError::HttpError(_))
-                        && start.elapsed() < max_duration =>
-                {
-                    let jitter = rand::random::<u64>() % wait_secs;
-                    tokio::time::sleep(std::time::Duration::from_secs(wait_secs + jitter)).await;
-                    wait_secs = (wait_secs * 2).min(128);
+                Err(err) => {
+                    let transient = matches!(&err, BatchError::Fatal(EmbeddingError::HttpError(_)));
+                    if transient && start.elapsed() < max_duration {
+                        let jitter = rand::random::<u64>() % wait_secs;
+                        tokio::time::sleep(std::time::Duration::from_secs(wait_secs + jitter))
+                            .await;
+                        wait_secs = (wait_secs * 2).min(128);
+                    } else {
+                        return Err(err);
+                    }
                 }
-                Err(e) => return Err(e),
             }
         }
     }
 
     /// Embed all texts, sub-batched by `batch_size` using array `input`.
     ///
-    /// If a batch fails with a non-transient [`EmbeddingError::ApiError`] (e.g.
-    /// an older Ollama that does not accept array `input`), that batch falls
-    /// back to the legacy path of one concurrent request per text, so behavior
-    /// is preserved on every server version.
+    /// Only falls back to one request per text when the server signals it does
+    /// not support array `input` ([`BatchError::ArrayUnsupported`]); genuine
+    /// errors propagate rather than fanning out `1 + N` doomed requests.
     async fn embed_all(&self, texts: &[&str]) -> EmbeddingResult<Vec<Vec<f32>>> {
         let sanitized = sanitize_embedding_inputs(texts);
         let sanitized_refs: Vec<&str> = sanitized.iter().map(|s| s.as_ref()).collect();
 
         let mut embeddings: Vec<Vec<f32>> = Vec::with_capacity(texts.len());
-        for batch in sanitized_refs.chunks(self.batch_size) {
+        for batch in sanitized_refs.chunks(self.batch_size.max(1)) {
             match self.embed_batch_with_retry(batch).await {
                 Ok(batch_embeddings) => embeddings.extend(batch_embeddings),
-                Err(EmbeddingError::ApiError(_)) => {
+                Err(BatchError::ArrayUnsupported) => {
                     let futures: Vec<_> = batch
                         .iter()
                         .map(|&text| self.embed_single_with_retry(text))
@@ -290,7 +305,7 @@ impl OllamaEmbeddingEngine {
                         embeddings.push(result?);
                     }
                 }
-                Err(e) => return Err(e),
+                Err(BatchError::Fatal(e)) => return Err(e),
             }
         }
 
@@ -676,12 +691,14 @@ mod tests {
     #[tokio::test]
     async fn embed_falls_back_to_per_text_when_array_rejected() {
         let mut server = mockito::Server::new_async().await;
-        // Array request rejected with a non-retryable 4xx (older Ollama).
+        // Legacy server ignores the array and returns a single embedding →
+        // count mismatch → treated as "array unsupported" → per-text fallback.
         let batch = server
             .mock("POST", "/api/embed")
             .match_body(mockito::Matcher::Regex(r#""input":\["#.to_string()))
-            .with_status(400)
-            .with_body("array input not supported")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"embedding":[9.9,9.9]}"#)
             .create_async()
             .await;
         // Per-text requests succeed; distinct vectors verify ordering is kept.
@@ -707,5 +724,60 @@ mod tests {
         batch.assert_async().await;
         single_a.assert_async().await;
         single_b.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn embed_does_not_panic_on_zero_batch_size() {
+        let mut server = mockito::Server::new_async().await;
+        // Each element becomes its own single-item batch (chunks(1)).
+        let batch = server
+            .mock("POST", "/api/embed")
+            .match_body(mockito::Matcher::Regex(r#""input":\["#.to_string()))
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"embeddings":[[1.0,0.0]]}"#)
+            .expect(2)
+            .create_async()
+            .await;
+
+        let config = EmbeddingConfig {
+            batch_size: 0,
+            ..config_for(&server.url())
+        };
+        let engine = OllamaEmbeddingEngine::new(&config).unwrap();
+        let out = engine.embed(&["alpha", "beta"]).await.unwrap();
+
+        assert_eq!(out.len(), 2);
+        batch.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn embed_propagates_http_error_without_falling_back() {
+        let mut server = mockito::Server::new_async().await;
+        // A genuine 404 (e.g. model not found) must propagate, not fan out.
+        let batch = server
+            .mock("POST", "/api/embed")
+            .match_body(mockito::Matcher::Regex(r#""input":\["#.to_string()))
+            .with_status(404)
+            .with_body("model not found")
+            .expect(1)
+            .create_async()
+            .await;
+        // Per-text (string input) requests must never be issued.
+        let per_text = server
+            .mock("POST", "/api/embed")
+            .match_body(mockito::Matcher::Regex(r#""input":"[a-z]"#.to_string()))
+            .with_status(200)
+            .with_body(r#"{"embedding":[0.0,0.0]}"#)
+            .expect(0)
+            .create_async()
+            .await;
+
+        let engine = OllamaEmbeddingEngine::new(&config_for(&server.url())).unwrap();
+        let result = engine.embed(&["alpha", "beta"]).await;
+
+        assert!(result.is_err());
+        batch.assert_async().await;
+        per_text.assert_async().await;
     }
 }

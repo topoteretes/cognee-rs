@@ -150,6 +150,7 @@ impl OnnxEmbeddingConfig {
 /// - `EMBEDDING_API_VERSION` — API version string
 /// - `EMBEDDING_MAX_COMPLETION_TOKENS` — maximum tokens (default: 8191)
 /// - `EMBEDDING_BATCH_SIZE` — texts per embedding request (default: 36)
+/// - `EMBEDDING_ONNX_BATCH_SIZE` — ONNX inference batch size (default: 32; `onnx` feature only)
 /// - `HUGGINGFACE_TOKENIZER` — HuggingFace tokenizer identifier
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EmbeddingConfig {
@@ -431,6 +432,14 @@ impl EmbeddingConfig {
             config.batch_size = n;
         }
 
+        #[cfg(feature = "onnx")]
+        if let Ok(val) = std::env::var("EMBEDDING_ONNX_BATCH_SIZE")
+            && let Ok(n) = val.trim().parse::<usize>()
+            && n > 0
+        {
+            config.onnx.batch_size = n;
+        }
+
         // HUGGINGFACE_TOKENIZER
         if let Ok(val) = std::env::var("HUGGINGFACE_TOKENIZER") {
             let val = val.trim().to_string();
@@ -629,6 +638,17 @@ mod tests {
         unsafe { std::env::remove_var("EMBEDDING_API_KEY") };
         unsafe { std::env::remove_var("LLM_API_KEY") };
         assert_eq!(config.api_key, Some("embed-key".to_string()));
+    }
+
+    #[test]
+    #[cfg(feature = "onnx")]
+    #[serial]
+    fn from_env_onnx_batch_size_override() {
+        // SAFETY: see test_from_env_mock_embedding_true
+        unsafe { std::env::set_var("EMBEDDING_ONNX_BATCH_SIZE", "8") };
+        let config = EmbeddingConfig::from_env();
+        unsafe { std::env::remove_var("EMBEDDING_ONNX_BATCH_SIZE") };
+        assert_eq!(config.onnx.batch_size, 8);
     }
 
     #[test]

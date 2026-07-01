@@ -4,7 +4,7 @@
 //! `/v1/embeddings` endpoint (vLLM, llama.cpp, TEI, LocalAI, etc.).
 
 use async_trait::async_trait;
-use futures::stream::{self, StreamExt};
+use futures::stream::{self, StreamExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
 
 use crate::config::EmbeddingConfig;
@@ -196,23 +196,24 @@ impl EmbeddingEngine for OpenAICompatibleEmbeddingEngine {
         }
 
         // Dispatch sub-batches concurrently (bounded by MAX_CONCURRENT_BATCHES).
-        // `buffered` preserves input order, so the flattened result still lines
-        // up one-to-one with `texts`.
+        // `try_collect` over `buffer_unordered` aborts on the first failure —
+        // cancelling in-flight retries instead of waiting them out — and the
+        // batch index restores input order afterwards.
         let batch_futures: Vec<_> = texts
-            .chunks(self.batch_size)
-            .map(|batch| self.embed_batch_with_retry(batch))
+            .chunks(self.batch_size.max(1))
+            .enumerate()
+            .map(|(index, batch)| async move {
+                self.embed_batch_with_retry(batch).await.map(|v| (index, v))
+            })
             .collect();
-        let batch_results: Vec<EmbeddingResult<Vec<Vec<f32>>>> = stream::iter(batch_futures)
-            .buffered(MAX_CONCURRENT_BATCHES)
-            .collect()
-            .await;
 
-        let mut results: Vec<Vec<f32>> = Vec::with_capacity(texts.len());
-        for batch in batch_results {
-            results.extend(batch?);
-        }
+        let mut indexed: Vec<(usize, Vec<Vec<f32>>)> = stream::iter(batch_futures)
+            .buffer_unordered(MAX_CONCURRENT_BATCHES)
+            .try_collect()
+            .await?;
 
-        Ok(results)
+        indexed.sort_by_key(|(index, _)| *index);
+        Ok(indexed.into_iter().flat_map(|(_, batch)| batch).collect())
     }
 
     fn dimension(&self) -> usize {

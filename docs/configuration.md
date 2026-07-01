@@ -65,6 +65,7 @@ Read by `EmbeddingConfig::from_env()` ([`crates/embedding/src/config.rs`](../cra
 | `EMBEDDING_TOKENIZER_PATH` / `COGNEE_E2E_TOKENIZER_PATH` | `embedding_tokenizer_path` | `./target/models/bge-small-tokenizer.json` |
 | `EMBEDDING_MAX_SEQUENCE_LENGTH` | `embedding_max_sequence_length` | `512` |
 | `EMBEDDING_BATCH_SIZE` | `embedding_batch_size` | `36` (texts per embedding request; raise for providers that allow larger batches. The OpenAI-compatible engine also dispatches up to 8 sub-batches concurrently) |
+| `EMBEDDING_ONNX_BATCH_SIZE` | `embedding_onnx_batch_size` | `32` (ONNX inference batch size; independent of `EMBEDDING_BATCH_SIZE`. Lower it under memory pressure on edge devices) |
 | `MOCK_EMBEDDING` | _(provider override)_ | `false` (also accepts `deterministic`) |
 
 Provider values: `onnx`, `fastembed`, `openai`, `openai_compatible`, `ollama`, `mock`.

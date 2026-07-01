@@ -2652,6 +2652,7 @@ async fn reuse_or_embed(
     ids: &[Uuid],
     texts: &[&str],
 ) -> Result<Vec<Vec<f32>>, CognifyError> {
+    debug_assert_eq!(ids.len(), texts.len(), "ids and texts must be parallel");
     let missing_texts: Vec<&str> = ids
         .iter()
         .zip(texts)

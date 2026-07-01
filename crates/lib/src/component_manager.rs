@@ -506,11 +506,7 @@ impl ComponentManager {
                     model_name: settings.embedding_model_name.clone(),
                     dimensions: settings.embedding_dimensions as usize,
                     max_sequence_length: settings.embedding_max_sequence_length as usize,
-                    // ONNX inference batch is the leading tensor dimension, not an
-                    // HTTP request size, so it keeps its own (memory-tuned) default
-                    // rather than inheriting embedding_batch_size, which can OOM on
-                    // constrained edge/Android devices.
-                    batch_size: cognee_embedding::OnnxEmbeddingConfig::default().batch_size,
+                    batch_size: settings.embedding_onnx_batch_size as usize,
                 },
                 huggingface_tokenizer: None,
             }
