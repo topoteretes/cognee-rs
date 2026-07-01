@@ -44,7 +44,7 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 
 # Telemetry constants
-cognee-utils = { path = "../utils", version = "0.1.1" }
+cognee-utils = { path = "../utils", version = "0.1.2" }
 
 [dev-dependencies]
 tempfile.workspace = true
