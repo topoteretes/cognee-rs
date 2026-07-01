@@ -6,8 +6,8 @@ use std::sync::Arc;
 use anyhow::anyhow;
 use cognee_core::{CpuPool, RayonThreadPool};
 use cognee_database::{
-    CheckpointStore, DatabaseConnection, DeleteDb, IngestDb, SeaOrmCheckpointStore,
-    SearchHistoryDb, connect, initialize,
+    CheckpointStore, DatabaseConnection, DeleteDb, IngestDb, PoolConfig, SeaOrmCheckpointStore,
+    SearchHistoryDb, connect_with_pool, initialize,
 };
 use cognee_delete::DeleteService;
 use cognee_embedding::{EmbeddingConfig, EmbeddingEngine, EmbeddingProvider};
@@ -136,7 +136,9 @@ async fn wire_database(cfg: &HttpServerConfig) -> Result<Arc<DatabaseConnection>
         }
     }
 
-    let db = connect(&url)
+    // Pool sizing is chosen here, in the layer that selects the URL; tune via
+    // `PoolConfig` rather than pushing backend guesses into `connect`.
+    let db = connect_with_pool(&url, PoolConfig::default())
         .await
         .map_err(|e| ServerError::Other(anyhow!("database connect failed: {e}")))?;
     initialize(&db)

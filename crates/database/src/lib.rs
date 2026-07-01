@@ -16,7 +16,7 @@ pub use ops::tutorial_seeder::{
     TUTORIAL_BASICS_ID, TUTORIAL_PYTHON_DEV_ID, seed_tutorials_if_first_call,
 };
 
-pub use connection::{connect, initialize};
+pub use connection::{PoolConfig, connect, connect_with_pool, initialize};
 
 /// Map the active SeaORM backend to a `cognee.db.system` string
 /// matching the values used by the vector / graph adapters.
@@ -24,8 +24,8 @@ pub use connection::{connect, initialize};
 /// The tag values mirror Python's observability layer
 /// (`cognee/modules/observability/tracing.py`) and the
 /// `cognee.db.system` attribute exposed by every relational op span.
-pub fn database_system_label(db: &sea_orm::DatabaseConnection) -> &'static str {
-    use sea_orm::{ConnectionTrait, DatabaseBackend};
+pub fn database_system_label<C: sea_orm::ConnectionTrait>(db: &C) -> &'static str {
+    use sea_orm::DatabaseBackend;
     match db.get_database_backend() {
         DatabaseBackend::Sqlite => "sqlite",
         DatabaseBackend::Postgres => "postgres",
@@ -37,7 +37,7 @@ pub use pipelines::sea_orm_impl::SeaOrmPipelineRunRepository;
 pub use pipelines::{
     NoopPipelineRunRepository, PipelineRunRepository, PipelineRunWithAttributionRow,
 };
-pub use sea_orm::DatabaseConnection;
+pub use sea_orm::{DatabaseConnection, TransactionTrait};
 pub use sync::{
     SeaOrmSyncOperationRepository, SyncOperationRepository, SyncOperationRow, SyncOperationStatus,
 };

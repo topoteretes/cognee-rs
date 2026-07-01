@@ -6,7 +6,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use tokio::sync::RwLock as TokioRwLock;
 
-use cognee_database::{DatabaseConnection, connect, initialize};
+use cognee_database::{DatabaseConnection, PoolConfig, connect_with_pool, initialize};
 use cognee_embedding::{EmbeddingConfig, EmbeddingEngine, EmbeddingProvider};
 use cognee_graph::GraphDBTrait;
 #[cfg(feature = "ladybug")]
@@ -163,7 +163,9 @@ impl ComponentManager {
             }
         }
 
-        let db = connect(&url)
+        // Pool sizing is chosen here, in the layer that selects the URL; tune via
+        // `PoolConfig` rather than pushing backend guesses into `connect`.
+        let db = connect_with_pool(&url, PoolConfig::default())
             .await
             .map_err(|e| ComponentError::Database(format!("initialization failed: {e}")))?;
         initialize(&db)

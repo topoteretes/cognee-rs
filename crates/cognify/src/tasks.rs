@@ -2314,7 +2314,7 @@ async fn upsert_provenance(
     structural_edges: &[EdgeData],
 ) -> Result<(), CognifyError> {
     use cognee_database::ops::graph_storage;
-    use cognee_database::{GraphEdge, GraphNode};
+    use cognee_database::{GraphEdge, GraphNode, TransactionTrait};
 
     // Build chunk_id → document_id map for tracing entity provenance back
     // to the originating Data item.
@@ -2485,10 +2485,8 @@ async fn upsert_provenance(
         });
     }
 
-    if !prov_nodes.is_empty() {
-        graph_storage::upsert_nodes(db, &prov_nodes).await?;
-        info!("Upserted {} provenance node records", prov_nodes.len());
-    }
+    // Node provenance is written together with the edges below, in a single
+    // transaction, so a mid-way failure cannot leave nodes without their edges.
 
     // ── Provenance edges ────────────────────────────────────────────────
     let mut prov_edges: Vec<GraphEdge> = Vec::new();
@@ -2571,9 +2569,33 @@ async fn upsert_provenance(
         });
     }
 
-    if !prov_edges.is_empty() {
-        graph_storage::upsert_edges(db, &prov_edges).await?;
-        info!("Upserted {} provenance edge records", prov_edges.len());
+    // Write the node and edge provenance batches atomically. Wrapping both
+    // upserts in one transaction means a failure partway through rolls the
+    // whole group back, so the provenance graph never ends up half-written.
+    //
+    // `begin()` issues a deferred `BEGIN`, but this transaction is write-first:
+    // the first statement is an upsert, which takes SQLite's write lock
+    // immediately, so there is no read→write lock upgrade to deadlock on. With
+    // WAL + `busy_timeout` (see `connect_sqlite`), concurrent writers serialize
+    // rather than failing with `SQLITE_BUSY`.
+    if !prov_nodes.is_empty() || !prov_edges.is_empty() {
+        let txn = db
+            .begin()
+            .await
+            .map_err(|e| CognifyError::DatabaseError(e.to_string()))?;
+
+        if !prov_nodes.is_empty() {
+            graph_storage::upsert_nodes(&txn, &prov_nodes).await?;
+            info!("Upserted {} provenance node records", prov_nodes.len());
+        }
+        if !prov_edges.is_empty() {
+            graph_storage::upsert_edges(&txn, &prov_edges).await?;
+            info!("Upserted {} provenance edge records", prov_edges.len());
+        }
+
+        txn.commit()
+            .await
+            .map_err(|e| CognifyError::DatabaseError(e.to_string()))?;
     }
 
     Ok(())
