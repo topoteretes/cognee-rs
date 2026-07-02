@@ -28,6 +28,12 @@ default = [
     "tiktoken",
     "sqlite",
     "testing",
+    # URL / HTML ingestion — parity with the CLI and HTTP server, which enable
+    # this by default. Without it `remember`/`add` with a `url` input fail at
+    # runtime with `IngestionError::UrlIngestionUnavailable`. reqwest (rustls)
+    # is already linked via cognee-llm/cognee-embedding, so this only adds the
+    # scraper/robots parsing deps — no new native/TLS dependency.
+    "html-loader",
     # Product-analytics emission ON by default — Python-SDK parity. The
     # cognee-lib `send_telemetry` call sites are otherwise compiled out
     # because cognee-lib is pulled with `default-features = false`.
@@ -45,6 +51,9 @@ hf-tokenizer  = ["cognee-lib/hf-tokenizer",  "cognee-bindings-common/hf-tokenize
 tiktoken      = ["cognee-lib/tiktoken",      "cognee-bindings-common/tiktoken"]
 sqlite        = ["cognee-lib/sqlite",        "cognee-bindings-common/sqlite"]
 testing       = ["cognee-lib/testing",       "cognee-bindings-common/testing"]
+# URL/HTML ingestion. Only cognee-lib gates this (ingestion/cognify); the
+# bindings-common facade always accepts `url` inputs, so nothing to forward there.
+html-loader   = ["cognee-lib/html-loader"]
 
 [dependencies]
 # Shared SDK facade (HandleState, CogneeServices, SdkError, wire helpers).
