@@ -1,0 +1,70 @@
+name: release-verify
+
+# PHASE 1 verification specific to a release PR. The heavy build verification
+# already runs on every same-repo PR (ci.yml builds the workspace + C-API +
+# Neon + Python; publish-dry-run.yml runs `cargo publish --dry-run`), so this
+# workflow only adds the two release-specific checks:
+#   1. version consistency — every manifest / package.json is at the branch's
+#      version (guards against a set-version.sh miss that the publish loop would
+#      otherwise silently SKIP as "already uploaded").
+#   2. npm token authenticates — an early `npm whoami` so a bad NPM_TOKEN is
+#      caught on the PR, not at publish time. (The crates.io token is an
+#      environment secret and is authoritatively preflighted in release-publish.yml.)
+#
+# Gated to `release/*` head branches so it is a no-op on ordinary PRs.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+concurrency:
+  group: release-verify-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verify release PR
+    if: startsWith(github.head_ref, 'release/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve version from branch
+        id: v
+        run: |
+          set -euo pipefail
+          version="${{ github.head_ref }}"
+          version="${version#release/}"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::release branch '${{ github.head_ref }}' does not encode a bare X.Y.Z version"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Install Rust (from rust-toolchain.toml)
+        run: rustup show
+
+      - name: Set up Node.js (npm registry auth)
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Assert every version location is consistent
+        run: bash scripts/release/assert-version.sh "${{ steps.v.outputs.version }}"
+
+      - name: Verify npm token authenticates
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
+            echo "::warning::NPM_TOKEN is not set — skipping npm auth check"
+            exit 0
+          fi
+          who=$(npm whoami --registry https://registry.npmjs.org)
+          echo "npm authenticated as: ${who}"

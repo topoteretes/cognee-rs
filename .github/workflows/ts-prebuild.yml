@@ -272,7 +272,7 @@ jobs:
     name: Publish npm packages
     needs: [build-platform, check-token]
     runs-on: ubuntu-latest
-    # Env-guarded per T13 release-plz pattern. NPM_TOKEN is T17 scope
+    # Env-guarded per the token-gate pattern. NPM_TOKEN is T17 scope
     # (registry publish — irreversible, gated on F8 + explicit human "go").
     # Pre-T17 the secret is intentionally absent on cognee-rs so this job
     # silently skips (gated on the check-token precheck output, since `secrets`

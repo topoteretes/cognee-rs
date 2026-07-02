@@ -6,7 +6,8 @@
 #
 # Consumers:
 #   * T10c local dry-run sweep (this directory)
-#   * release-plz config (release-plz.toml `dependencies_update = true`)
+#   * the release publish workflow (.github/workflows/release-publish.yml),
+#     whose crates.io job publishes crates in this exact order
 #   * T13 CI publish-dry-run job
 #
 # Scope: ROOT workspace only. The `capi/` sub-workspace has its own
