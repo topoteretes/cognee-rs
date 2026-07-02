@@ -143,9 +143,13 @@ git push origin main v0.1.3
 The publish order is: crates.io → tag push → (cascade) npm + C-API → GitHub
 Release. If it fails partway:
 
-- **crates.io loop failed midway** — fix the cause and **re-run the failed
-  `release-publish` job** ("Re-run failed jobs"). Already-published crates are
-  skipped; the tag is only pushed after all crates succeed.
+- **crates.io loop failed midway** — for a transient failure, use **"Re-run
+  failed jobs"** (reuses the same workflow; already-published crates are skipped
+  and the tag is only pushed after all crates succeed). If the fix was a change
+  to `release-publish.yml` itself, "Re-run" would reuse the *old* file — instead
+  land the fix on `main` and re-trigger with
+  `gh workflow run release-publish.yml -f version=X.Y.Z` (the `workflow_dispatch`
+  path publishes from `main`, still behind the `release` approval gate).
 - **Tag pushed but the npm / C-API cascade failed** (e.g. `ts-prebuild.yml` hit a
   transient npm error) — re-running `release-publish` will **not** re-fire the
   cascade (it skips the already-pushed tag). Instead re-run the failed workflow
