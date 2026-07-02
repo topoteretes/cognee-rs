@@ -273,6 +273,18 @@ fn first_non_empty_env(keys: &[&str]) -> Option<String> {
     None
 }
 
+/// Append `?mode=rwc` to a file-backed SQLite URL that has no query string, so
+/// the sea-orm/sqlx driver creates the database file when it does not yet
+/// exist. Leaves in-memory URLs, URLs that already carry a query, and non-SQLite
+/// URLs untouched.
+fn ensure_sqlite_rwc(url: &str) -> String {
+    if url.starts_with("sqlite:") && !url.contains(":memory:") && !url.contains('?') {
+        format!("{url}?mode=rwc")
+    } else {
+        url.to_string()
+    }
+}
+
 fn default_relational_db_url(system_root_directory: &std::path::Path) -> String {
     format!(
         "sqlite://{}",
@@ -570,9 +582,11 @@ impl HttpServerConfig {
         let vector_provider = self.vector_provider.to_ascii_lowercase();
         // The pgvector coherence guard runs in `wire_vector_db` before build;
         // by the time the factory runs, `vector_db_url` is a validated
-        // `postgres://…` string.
+        // `postgres://…` string. Trim it here so a copy-pasted value with
+        // surrounding whitespace reaches PgVectorAdapter::new cleanly (the
+        // validator checks the trimmed form).
         let vector_postgres_url = if vector_provider == "pgvector" {
-            Some(self.vector_db_url.clone())
+            Some(self.vector_db_url.trim().to_string())
         } else {
             None
         };
@@ -591,7 +605,12 @@ impl HttpServerConfig {
         cognee_components::BackendBuildContext {
             data_root_directory: self.data_root_directory.clone(),
             system_root_directory: self.system_root_directory.clone(),
-            relational_db_url: self.relational_db_url.clone(),
+            // Ensure a file-backed SQLite URL carries `?mode=rwc` so the driver
+            // creates the DB file when missing. The standalone server's default
+            // URL (and operator-provided ones) have no query, and the shared
+            // `build_database` no longer creates the file itself — this restores
+            // the old wire_database "create on boot" behavior via the driver.
+            relational_db_url: ensure_sqlite_rwc(&self.relational_db_url),
             graph_provider: self.graph_provider.to_ascii_lowercase(),
             graph_file_path: self.graph_file_path.to_string_lossy().into_owned(),
             // The standalone server supports only the embedded ladybug graph;

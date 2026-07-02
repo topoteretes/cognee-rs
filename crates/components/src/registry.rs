@@ -233,8 +233,18 @@ impl Default for ComponentRegistry {
 }
 
 fn unsupported_msg(field: &str, provider: &str, supported: &[String]) -> String {
+    // Feature-gated built-ins are simply absent from the registry when their
+    // cargo feature is off; point the operator at the feature rather than
+    // letting it read as an unknown-backend problem.
+    let hint = match provider.to_lowercase().as_str() {
+        "postgres" | "postgresql" => {
+            " If you intended the Postgres graph backend, rebuild with the `pggraph` crate feature."
+        }
+        "pgvector" => " If you intended pgvector, rebuild with the `pgvector` crate feature.",
+        _ => "",
+    };
     format!(
-        "Unsupported {field} '{provider}'. Registered providers: [{}]. \
+        "Unsupported {field} '{provider}'. Registered providers: [{}].{hint} \
          Closed adapters (e.g. qdrant, litert) must be registered via \
          ComponentRegistry::register_* at the binary entry point.",
         supported.join(", ")

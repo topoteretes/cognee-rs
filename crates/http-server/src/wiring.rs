@@ -187,23 +187,10 @@ async fn wire_vector_db(
     Ok(registry.build_vector(ctx).await?)
 }
 
-async fn wire_embedding_engine(
-    registry: &ComponentRegistry,
-    ctx: &cognee_components::BackendBuildContext,
-) -> Option<Arc<dyn EmbeddingEngine>> {
-    match registry.build_embedding(ctx).await {
-        Ok(engine) => Some(engine),
-        Err(err) => {
-            tracing::warn!("embedding engine unavailable, wiring as None: {err}");
-            None
-        }
-    }
-}
-
-fn wire_llm_downgrade<T>(
-    result: Result<T, cognee_components::ComponentError>,
-    what: &str,
-) -> Option<T> {
+/// Downgrade a required-backend build error to `None` with a warning — the
+/// standalone server's policy for the optional (search/llm/audio) backends,
+/// which surface a 500-level envelope at runtime when unwired.
+fn downgrade<T>(result: Result<T, cognee_components::ComponentError>, what: &str) -> Option<T> {
     match result {
         Ok(v) => Some(v),
         Err(err) => {
@@ -213,11 +200,18 @@ fn wire_llm_downgrade<T>(
     }
 }
 
+async fn wire_embedding_engine(
+    registry: &ComponentRegistry,
+    ctx: &cognee_components::BackendBuildContext,
+) -> Option<Arc<dyn EmbeddingEngine>> {
+    downgrade(registry.build_embedding(ctx).await, "embedding engine")
+}
+
 async fn wire_llm(
     registry: &ComponentRegistry,
     ctx: &cognee_components::BackendBuildContext,
 ) -> Option<Arc<dyn Llm>> {
-    wire_llm_downgrade(registry.build_llm(ctx).await, "llm")
+    downgrade(registry.build_llm(ctx).await, "llm")
 }
 
 async fn wire_transcriber(
@@ -226,13 +220,7 @@ async fn wire_transcriber(
 ) -> Option<Arc<dyn Transcriber>> {
     // `build_transcriber` already yields `Ok(None)` for providers without audio
     // support; a hard error (bad credentials) downgrades to None as before.
-    match registry.build_transcriber(ctx).await {
-        Ok(opt) => opt,
-        Err(err) => {
-            tracing::warn!("transcriber not wired: {err}");
-            None
-        }
-    }
+    downgrade(registry.build_transcriber(ctx).await, "transcriber").flatten()
 }
 
 async fn wire_session(

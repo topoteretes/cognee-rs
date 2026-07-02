@@ -42,7 +42,9 @@ impl GraphDbFactory for LadybugGraphFactory {
         };
 
         if let Some(parent) = Path::new(&graph_path).parent() {
-            std::fs::create_dir_all(parent)?;
+            std::fs::create_dir_all(parent).map_err(|e| {
+                ComponentError::GraphDb(format!("create_dir_all({}): {e}", parent.display()))
+            })?;
         }
 
         let graph_db = cognee_graph::LadybugAdapter::new(&graph_path)

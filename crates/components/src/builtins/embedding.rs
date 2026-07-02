@@ -13,11 +13,22 @@ use crate::context::{BackendBuildContext, EmbeddingInputs};
 use crate::error::ComponentError;
 use crate::traits::EmbeddingFactory;
 
+/// Whether `provider` is a recognized embedding backend id (case-insensitive).
+/// An empty string is *not* recognized here; callers treat empty as "use the
+/// onnx default", while a non-empty unrecognized value is a misconfiguration.
+fn is_known_embedding_provider(provider: &str) -> bool {
+    matches!(
+        provider.trim().to_lowercase().as_str(),
+        "onnx" | "fastembed" | "openai" | "openai_compatible" | "ollama" | "mock"
+    )
+}
+
 /// Map resolved [`EmbeddingInputs`] to a `cognee_embedding::EmbeddingConfig`.
 ///
-/// Unknown provider strings fall back to `onnx`, matching the historical
-/// `ComponentManager::init_embedding_engine` behavior. `MOCK_EMBEDDING`
-/// handling is expressed through [`EmbeddingInputs::mock`] /
+/// Empty and unrecognized provider strings map to `onnx`; the factory validates
+/// non-empty unrecognized values separately (see [`DefaultEmbeddingFactory`]) so
+/// a typo surfaces as an error rather than a silent ONNX fallback.
+/// `MOCK_EMBEDDING` handling is expressed through [`EmbeddingInputs::mock`] /
 /// [`EmbeddingInputs::mock_deterministic`], which the caller populates.
 pub fn build_embedding_config(inputs: &EmbeddingInputs) -> EmbeddingConfig {
     let provider = match inputs.provider.trim().to_lowercase().as_str() {
@@ -74,6 +85,17 @@ impl EmbeddingFactory for DefaultEmbeddingFactory {
         &self,
         ctx: &BackendBuildContext,
     ) -> Result<Arc<dyn EmbeddingEngine>, ComponentError> {
+        // A non-empty but unrecognized provider is a misconfiguration (typo /
+        // unsupported backend): surface it instead of silently falling back to
+        // ONNX. Empty means "use the default" and is allowed. `mock` short-
+        // circuits provider selection, so skip the check when mocking.
+        let provider = ctx.embedding.provider.trim();
+        if !ctx.embedding.mock && !provider.is_empty() && !is_known_embedding_provider(provider) {
+            return Err(ComponentError::EmbeddingEngine(format!(
+                "unknown embedding provider '{provider}'. Supported: onnx, fastembed, \
+                 openai, openai_compatible, ollama, mock."
+            )));
+        }
         let config = build_embedding_config(&ctx.embedding);
         config.create_engine().await.map_err(|e| {
             ComponentError::EmbeddingEngine(format!("embedding engine init failed: {e}"))

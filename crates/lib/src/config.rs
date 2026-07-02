@@ -624,7 +624,16 @@ impl Settings {
             #[cfg(feature = "pggraph")]
             {
                 if matches!(graph_provider.as_str(), "postgres" | "postgresql") {
-                    self.resolved_graph_postgres_url().ok()
+                    // Log the specific resolution failure (e.g. "Missing required
+                    // Postgres graph credentials") rather than swallowing it — the
+                    // factory only sees `None` and can't restate the cause.
+                    match self.resolved_graph_postgres_url() {
+                        Ok(u) => Some(u),
+                        Err(e) => {
+                            tracing::warn!("graph Postgres URL could not be resolved: {e}");
+                            None
+                        }
+                    }
                 } else {
                     None
                 }
@@ -640,7 +649,13 @@ impl Settings {
             #[cfg(feature = "pgvector")]
             {
                 if vector_provider == "pgvector" {
-                    self.resolved_vector_postgres_url().ok()
+                    match self.resolved_vector_postgres_url() {
+                        Ok(u) => Some(u),
+                        Err(e) => {
+                            tracing::warn!("vector Postgres URL could not be resolved: {e}");
+                            None
+                        }
+                    }
                 } else {
                     None
                 }
