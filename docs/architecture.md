@@ -90,6 +90,8 @@ cognee-rust-oss/
 
 **cognee-core** — Async runtime, task scheduling, and pipeline-execution primitives. Traits: `PipelineWatcher`, `ExecStatusManager`. Impls: `NoopWatcher`, `RayonThreadPool`, `NoopExecStatusManager`.
 
+**cognee-components** — Shared backend construction. Owns `ComponentError`, the `BackendBuildContext` (the resolved, env-free input both callers lower their config into), the adapter factory traits (`VectorDbFactory`, `GraphDbFactory`, `LlmFactory`, `EmbeddingFactory`), and the `ComponentRegistry` (provider-id → factory) with `with_builtins()`. Sits below `cognee-lib` and `cognee-http-server`; both delegate their backend construction here, so the two paths can't drift. The registry is the explicit-DI extension seam — external adapters (closed `cognee-vector-qdrant` / `cognee-llm-litert`) implement a factory trait and `register_*` it at their binary entry point. See [operations.md](operations.md).
+
 **cognee-http-server** — `axum`-based HTTP server. Library exposes `build_router`, `run`, and `AppState`; also builds the `cognee-http-server` binary. Routers mirror the Python FastAPI surface under `/api/v1/*`. See [http-server/](http-server/README.md).
 
 **cognee-visualization** — Self-contained HTML knowledge-graph visualization (d3.js v7, force-directed, Canvas). Entry points: `visualize`/`render`/`render_multi_user`. Surfaces via the CLI `visualize` subcommand.
@@ -104,7 +106,7 @@ cognee-rust-oss/
 
 **cognee-bindings-common** — Shared SDK facade for the Neon JS and C-API bindings: `SdkError` (+ `code()`), `HandleState`, `CogneeServices`, and neon-free JSON wire helpers. Not a new user-facing Rust API — that remains `cognee_lib::api`.
 
-**cognee-lib** — Unified public API facade. Re-exports all crates and adds an `api/` module mirroring the Python SDK: `forget`, `update`, `prune`, `recall`, `remember`, `improve`, plus `DatasetManager`. Houses the shared `Settings`/`ConfigManager` and runtime setters.
+**cognee-lib** — Unified public API facade. Re-exports all crates and adds an `api/` module mirroring the Python SDK: `forget`, `update`, `prune`, `recall`, `remember`, `improve`, plus `DatasetManager`. Houses the shared `Settings`/`ConfigManager` and runtime setters. `ComponentManager` (lazy, version-cached) delegates backend construction to a `cognee-components` `ComponentRegistry`; use `ComponentManager::with_registry` (or `HandleState::from_settings_with_registry` in the bindings) to inject external adapter factories. The registry API is re-exported here so closed entry points use `cognee_lib::` paths.
 
 **cognee-cli** — Command-line binary (`cognee-cli`). See [tools/cli.md](tools/cli.md).
 

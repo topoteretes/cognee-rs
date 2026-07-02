@@ -70,15 +70,15 @@ default = [
 ]
 # Record/replay cassette-based mock LLM support (MOCK_LLM / COGNEE_RECORD_LLM).
 # Pulls in no heavy deps, so it is default-on.
-mock-llm       = ["cognee-llm/mock"]
+mock-llm       = ["cognee-llm/mock", "cognee-components/mock-llm"]
 visualization  = ["dep:cognee-visualization"]
-onnx           = ["cognee-embedding/onnx"]
-onnx-dynamic   = ["cognee-embedding/onnx-dynamic"]
-ort-cuda       = ["cognee-embedding/ort-cuda"]
-ort-tensorrt   = ["cognee-embedding/ort-tensorrt"]
-ladybug        = ["cognee-graph/ladybug"]
-pgvector       = ["cognee-vector/pgvector", "dep:url"]
-pggraph        = ["cognee-graph/postgres", "dep:url"]
+onnx           = ["cognee-embedding/onnx", "cognee-components/onnx"]
+onnx-dynamic   = ["cognee-embedding/onnx-dynamic", "cognee-components/onnx-dynamic"]
+ort-cuda       = ["cognee-embedding/ort-cuda", "cognee-components/ort-cuda"]
+ort-tensorrt   = ["cognee-embedding/ort-tensorrt", "cognee-components/ort-tensorrt"]
+ladybug        = ["cognee-graph/ladybug", "cognee-components/ladybug"]
+pgvector       = ["cognee-vector/pgvector", "cognee-components/pgvector", "dep:url"]
+pggraph        = ["cognee-graph/postgres", "cognee-components/pggraph", "dep:url"]
 sqlite         = ["cognee-database/sqlite"]
 postgres       = ["cognee-database/postgres"]
 hf-tokenizer   = ["cognee-chunking/hf-tokenizer"]
@@ -138,12 +138,14 @@ testing = [
     "cognee-graph/testing",
     "cognee-storage/testing",
     "cognee-vector/testing",
+    "cognee-components/testing",
 ]
 
 [dependencies]
 cognee-chunking = { path = "../chunking", version = "0.1.3" }
 cognee-utils = { path = "../utils", version = "0.1.3" }
 cognee-cognify = { path = "../cognify", version = "0.1.3" }
+cognee-components = { path = "../components", version = "0.1.3", default-features = false }
 cognee-core = { path = "../core", version = "0.1.3", features = ["pipeline-run-registry"] }
 cognee-delete = { path = "../delete", version = "0.1.3" }
 cognee-database = { path = "../database", version = "0.1.3" }

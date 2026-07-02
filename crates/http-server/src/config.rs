@@ -559,6 +559,88 @@ impl HttpServerConfig {
 }
 
 impl HttpServerConfig {
+    /// Lower these settings into a [`cognee_components::BackendBuildContext`].
+    ///
+    /// Unlike `cognee-lib`'s `Settings::backend_context`, the standalone server
+    /// deliberately does **not** read `MOCK_LLM` / `MOCK_EMBEDDING` or wire the
+    /// recording path: a production server must never silently honor those.
+    /// Mock backends are opt-in through the `dev-mock` feature + an explicit
+    /// `vector_provider="mock"`.
+    pub fn backend_context(&self) -> cognee_components::BackendBuildContext {
+        let vector_provider = self.vector_provider.to_ascii_lowercase();
+        // The pgvector coherence guard runs in `wire_vector_db` before build;
+        // by the time the factory runs, `vector_db_url` is a validated
+        // `postgres://…` string.
+        let vector_postgres_url = if vector_provider == "pgvector" {
+            Some(self.vector_db_url.clone())
+        } else {
+            None
+        };
+
+        let endpoint = if self.embedding_endpoint.trim().is_empty() {
+            None
+        } else {
+            Some(self.embedding_endpoint.clone())
+        };
+        let api_key = if self.embedding_api_key.expose_secret().is_empty() {
+            None
+        } else {
+            Some(self.embedding_api_key.expose_secret().to_string())
+        };
+
+        cognee_components::BackendBuildContext {
+            data_root_directory: self.data_root_directory.clone(),
+            system_root_directory: self.system_root_directory.clone(),
+            relational_db_url: self.relational_db_url.clone(),
+            graph_provider: self.graph_provider.to_ascii_lowercase(),
+            graph_file_path: self.graph_file_path.to_string_lossy().into_owned(),
+            // The standalone server supports only the embedded ladybug graph;
+            // Postgres graph is not wired here.
+            graph_postgres_url: None,
+            vector_provider,
+            vector_db_url: self.vector_db_url.clone(),
+            vector_postgres_url,
+            embedding_dimensions: self.embedding_dimensions as usize,
+            embedding: cognee_components::EmbeddingInputs {
+                provider: self.embedding_provider.trim().to_ascii_lowercase(),
+                model: self.embedding_model_name.clone(),
+                dimensions: self.embedding_dimensions as usize,
+                endpoint,
+                api_key,
+                batch_size: 36,
+                mock: false,
+                mock_deterministic: false,
+                api_version: None,
+                huggingface_tokenizer: None,
+                max_completion_tokens: 8191,
+                // Preserve the historical fallback: when no explicit ONNX asset
+                // path is configured, use the BGE-Small default paths under
+                // `./target/models` (matches `OnnxEmbeddingConfig::default()`).
+                onnx_model_path: self.embedding_model_path.clone().unwrap_or_else(|| {
+                    PathBuf::from("./target/models/BGE-Small-v1.5-model_quantized.onnx")
+                }),
+                onnx_tokenizer_path: self
+                    .embedding_tokenizer_path
+                    .clone()
+                    .unwrap_or_else(|| PathBuf::from("./target/models/bge-small-tokenizer.json")),
+                onnx_model_name: self.embedding_model_name.clone(),
+                onnx_dimensions: self.embedding_dimensions as usize,
+                onnx_max_sequence_length: 512,
+                onnx_batch_size: 32,
+            },
+            llm: cognee_components::LlmInputs {
+                provider: self.llm_provider.to_ascii_lowercase(),
+                model: self.llm_model.clone(),
+                api_key: self.llm_api_key.expose_secret().to_string(),
+                endpoint: self.llm_endpoint.clone(),
+                max_retries: self.llm_max_retries,
+                mock: false,
+                cassette: String::new(),
+                record_path: String::new(),
+            },
+        }
+    }
+
     /// Build a `RegistryConfig` from the matching `HttpServerConfig` fields.
     pub fn to_registry_config(&self) -> RegistryConfig {
         RegistryConfig {

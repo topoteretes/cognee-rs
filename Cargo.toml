@@ -11,6 +11,7 @@ members = [
     "crates/chunking",
     "crates/cognify",
     "crates/core",
+    "crates/components",
     "crates/lib",
     "crates/logging",
     "crates/cli",
