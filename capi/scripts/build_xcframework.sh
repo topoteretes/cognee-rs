@@ -25,9 +25,11 @@ CARGO_FLAGS="--manifest-path $MANIFEST --no-default-features --features sqlite,t
 # 1. Compile release static libraries for both iOS targets
 # ---------------------------------------------------------------------------
 echo "==> Building for aarch64-apple-ios (device) ..."
+export SDKROOT="$(xcrun --sdk iphoneos --show-sdk-path)"
 cargo build --target aarch64-apple-ios $CARGO_FLAGS
 
 echo "==> Building for aarch64-apple-ios-sim (simulator) ..."
+export SDKROOT="$(xcrun --sdk iphonesimulator --show-sdk-path)"
 cargo build --target aarch64-apple-ios-sim $CARGO_FLAGS
 
 # ---------------------------------------------------------------------------

@@ -102,9 +102,10 @@ The `ios` workflow (`.github/workflows/ios.yml`) runs on every push and PR on a 
 - `cargo check --target aarch64-apple-ios` — type-checks the Rust C API for the device target
 - `cargo check --target aarch64-apple-ios-sim` — type-checks for the simulator target
 - `swift package dump-package` — validates `Package.swift`
-- `swiftc -parse` — syntax-checks the Swift sources
+- `swiftc -typecheck` — type-checks the Swift wrapper against the real C API header via a synthesised Clang module, catching renamed `cg_sdk_*` functions, changed argument counts, and changed `CgErrorCode` values — no xcframework needed
+- `swiftc -parse` — syntax-checks the Swift test sources (`@testable import CogneeSDK` requires a built module, so only parse-checking is possible in CI)
 
-This catches Rust type errors, broken C API signatures, and Swift syntax mistakes without needing the ~6.6 GB xcframework on the runner.
+This catches Rust type errors, C API signature drift, and Swift syntax mistakes without needing the ~6.6 GB xcframework on the runner. XCTest behavioral tests run manually via `xcodebuild test` before each push.
 
 ## Architecture
 
@@ -137,8 +138,8 @@ cargo run -p cognee-cli --no-default-features \
   --llm-base-url http://localhost:11434/v1 \
   --llm-model llama3.2:3b \
   --llm-api-key ollama \
-  --cassette-out ios/Resources/demo_cassette.json \
-  bench add ios/Resources/memories.json
+  --cassette-out ios/Tests/CogneeSDKTests/Fixtures/demo_cassette.json \
+  bench add ios/Tests/CogneeSDKTests/Fixtures/memories.json
 ```
 
 The cassette keys on `sha256(user_input + schema)` so the same text always produces the same key — replay is deterministic regardless of model temperature settings.
