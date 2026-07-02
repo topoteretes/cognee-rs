@@ -53,9 +53,9 @@ cognee-rust-oss/
 ├── scripts/                    # Build, check, and deployment scripts
 ├── docs/                       # Documentation (this folder)
 ├── e2e-cross-sdk/              # Cross-SDK E2E tests (Rust ↔ Python interop)
-└── .github/workflows/          # CI (ci.yml, publish-dry-run.yml,
-                                #      release-plz.yml, capi-release.yml, ts-prebuild.yml,
-                                #      http-parity.yml)
+└── .github/workflows/          # CI (ci.yml, publish-dry-run.yml, release-open.yml,
+                                #      release-verify.yml, release-publish.yml,
+                                #      capi-release.yml, ts-prebuild.yml, http-parity.yml)
 ```
 
 ## Crate breakdown

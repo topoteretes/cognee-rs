@@ -1,0 +1,171 @@
+name: release-open
+
+# PHASE 1 of the two-phase release. Add a label named `release:X.Y.Z`
+# (e.g. `release:0.1.3`) to an ISSUE and this workflow opens a *release PR*:
+# it bumps every version, regenerates the changelog, and opens a PR from a
+# `release/X.Y.Z` branch labelled `autorelease:pending`.
+#
+# Nothing is published here. The PR is verified by the normal PR CI
+# (ci.yml builds the workspace + C-API + Neon + Python; publish-dry-run.yml
+# runs `cargo publish --dry-run`; release-verify.yml asserts the bump and
+# checks the npm token). A human reviews the changelog diff + green checks and
+# merges — that merge triggers release-publish.yml (PHASE 2).
+#
+# We release from `main`, so the label lives on an ISSUE (not a PR): labelling a
+# PR would be ambiguous about what actually ships. Only users with write access
+# can add a label, so the label is the authorization gate.
+#
+# The PR is opened with RELEASE_PAT (not GITHUB_TOKEN) because PRs created with
+# the default token do NOT trigger the PR CI that forms the verification barrier.
+
+on:
+  issues:
+    types: [labeled]
+
+concurrency:
+  group: release-open
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+jobs:
+  open-release-pr:
+    name: Open release PR
+    if: startsWith(github.event.label.name, 'release:')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Parse & validate version from label
+        id: parse
+        env:
+          # Via env (not inline ${{ }}) so a crafted label name cannot inject
+          # shell — the value is data, never part of the script source.
+          LABEL: ${{ github.event.label.name }}
+        run: |
+          set -euo pipefail
+          version="${LABEL#release:}"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::label '$LABEL' does not encode a bare X.Y.Z version"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+          echo "branch=release/$version" >> "$GITHUB_OUTPUT"
+          echo "Preparing release v$version"
+
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          # PAT so the pushed release branch + opened PR trigger the PR CI that
+          # forms the verification barrier (GITHUB_TOKEN-created PRs do not).
+          token: ${{ secrets.RELEASE_PAT }}
+
+      - name: Guards — tag and release branch must not already exist
+        env:
+          TAG: ${{ steps.parse.outputs.tag }}
+          BRANCH: ${{ steps.parse.outputs.branch }}
+        run: |
+          set -euo pipefail
+          if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null; then
+            echo "::error::tag ${TAG} already exists"
+            exit 1
+          fi
+          if git ls-remote --exit-code --heads origin "${BRANCH}" >/dev/null 2>&1; then
+            echo "::error::branch ${BRANCH} already exists — a release PR may be open already"
+            exit 1
+          fi
+
+      - name: Install Rust (from rust-toolchain.toml)
+        run: rustup show
+
+      - name: Install cargo-edit + git-cliff
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-edit,git-cliff
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Bump all version locations
+        run: bash scripts/release/set-version.sh "${{ steps.parse.outputs.version }}"
+
+      - name: Assert every version location is consistent
+        run: bash scripts/release/assert-version.sh "${{ steps.parse.outputs.version }}"
+
+      - name: Refresh lockfiles
+        run: |
+          set -euo pipefail
+          cargo update --workspace --manifest-path Cargo.toml
+          cargo update --workspace --manifest-path capi/Cargo.toml
+          cargo update --workspace --manifest-path ts/cognee-ts-neon/Cargo.toml
+
+      - name: Generate changelog section
+        run: |
+          set -euo pipefail
+          git-cliff --unreleased --tag "${{ steps.parse.outputs.tag }}" --strip all > /tmp/release-notes.md
+          echo "----- release notes -----"; cat /tmp/release-notes.md
+          # Guard against an empty section (no conventional commits since the last
+          # tag) — an empty changelog body would otherwise flow into the PR and
+          # the GitHub Release. Every real section has at least one `- ` bullet.
+          if ! grep -q '^- ' /tmp/release-notes.md; then
+            echo "::error::git-cliff produced no changelog entries for ${{ steps.parse.outputs.tag }} — nothing to release?"
+            exit 1
+          fi
+          node -e '
+            const fs = require("fs");
+            const section = fs.readFileSync("/tmp/release-notes.md", "utf8").trim();
+            let cl = fs.readFileSync("CHANGELOG.md", "utf8");
+            const marker = "## [Unreleased]";
+            const i = cl.indexOf(marker);
+            if (i < 0) throw new Error("CHANGELOG.md: missing \"## [Unreleased]\" marker");
+            const at = i + marker.length;
+            fs.writeFileSync("CHANGELOG.md", cl.slice(0, at) + "\n\n" + section + "\n" + cl.slice(at));
+          '
+
+      - name: Commit and push release branch
+        env:
+          BRANCH: ${{ steps.parse.outputs.branch }}
+          TAG: ${{ steps.parse.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "${BRANCH}"
+          git add -A
+          git commit -m "chore: release ${TAG}"
+          git push origin "${BRANCH}"
+
+      - name: Open release PR
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PAT }}
+          BRANCH: ${{ steps.parse.outputs.branch }}
+          TAG: ${{ steps.parse.outputs.tag }}
+          ISSUE: ${{ github.event.issue.number }}
+        run: |
+          set -euo pipefail
+          # Ensure the trigger label exists as a normal label too (idempotent).
+          gh label create autorelease:pending --color FBCA04 \
+            --description "Release PR — merging publishes this version" 2>/dev/null || true
+          {
+            echo "Automated release PR for **${TAG}**, opened from issue #${ISSUE}."
+            echo
+            echo "Merging this PR publishes to crates.io, npm, and the C-API GitHub Release."
+            echo "Review the \`CHANGELOG.md\` diff below and the green PR checks first."
+            echo
+            echo "## Changelog"
+            echo
+            cat /tmp/release-notes.md
+          } > /tmp/pr-body.md
+          gh pr create \
+            --base main \
+            --head "${BRANCH}" \
+            --title "chore: release ${TAG}" \
+            --label autorelease:pending \
+            --body-file /tmp/pr-body.md
