@@ -242,6 +242,11 @@ impl NaturalLanguageRetriever {
     async fn execute_nl_query(&self, query: &str) -> Result<Vec<Vec<Value>>, SearchError> {
         let (_node_schemas, edge_schemas) = self.get_graph_schema().await?;
         let mut previous_attempts = String::from("No attempts yet.");
+        // Track whether any generated query actually executed against the graph
+        // (Ok, even with zero rows) versus every one being rejected. See the
+        // fail-loudly branch after the loop.
+        let mut any_query_executed = false;
+        let mut last_query_error: Option<String> = None;
 
         for _ in 0..self.max_attempts {
             let cypher_query = match self
@@ -265,15 +270,42 @@ impl NaturalLanguageRetriever {
             match self.graph_db.query(&cypher_query, None).await {
                 Ok(context) if !context.is_empty() => return Ok(context),
                 Ok(_) => {
+                    any_query_executed = true;
                     previous_attempts
                         .push_str(&format!("Query: {cypher_query} -> Result: None\\n"));
                 }
                 Err(error) => {
+                    last_query_error = Some(error.to_string());
                     previous_attempts.push_str(&format!(
                         "Query: {cypher_query} -> Executed with error: {error}\\n"
                     ));
                 }
             }
+        }
+
+        // Fail loudly when every generated query that reached the graph was
+        // rejected by the backend and none ever executed. The dominant cause is
+        // a schema-model mismatch: NATURAL_LANGUAGE emits Neo4j-style Cypher
+        // against typed node labels (`:Entity`, `:TextDocument`, …; see
+        // NL_SYSTEM_PROMPT_TEMPLATE), whereas the default local ladybug/kuzu
+        // store keeps every node under a single generic `:Node` label (the real
+        // kind lives in a `type` property). Returning an empty result here would
+        // masquerade as "no results found" on a populated graph, which is what
+        // the Python SDK does today — we surface a clear error instead.
+        //
+        // A pure LLM failure (no query ever reached the graph) still returns an
+        // empty result, matching the historical contract.
+        if !any_query_executed && let Some(err) = last_query_error {
+            return Err(SearchError::InvalidInput(format!(
+                "NATURAL_LANGUAGE search generated Cypher that this graph backend \
+                 rejected on all {} attempt(s). This search type emits Neo4j-style \
+                 Cypher against typed node labels (e.g. `:Entity`), which the local \
+                 ladybug/kuzu backend does not use — it stores every node under a \
+                 single generic `:Node` label. Use a Neo4j graph backend for \
+                 NATURAL_LANGUAGE search, or a different search type such as \
+                 GRAPH_COMPLETION with the local backend. Last backend error: {err}",
+                self.max_attempts
+            )));
         }
 
         Ok(vec![])
@@ -331,7 +363,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use async_trait::async_trait;
-    use cognee_graph::{EdgeData, GraphDBResult, GraphDBTrait, GraphNode, NodeData};
+    use cognee_graph::{EdgeData, GraphDBError, GraphDBResult, GraphDBTrait, GraphNode, NodeData};
     use cognee_llm::{
         GenerationOptions, GenerationResponse, Llm, LlmError, LlmResult, Message, TokenUsage,
     };
@@ -342,11 +374,15 @@ mod tests {
 
     use super::{CypherSearchRetriever, NaturalLanguageRetriever};
     use crate::retrievers::SearchRetriever;
-    use crate::types::{SearchOutput, SearchParams};
+    use crate::types::{SearchError, SearchOutput, SearchParams};
 
     struct TestGraphDb {
         empty: bool,
         rows_by_query: std::collections::HashMap<String, Vec<Vec<Value>>>,
+        /// When true, any query not present in `rows_by_query` returns a
+        /// backend error (simulating a ladybug/kuzu binder rejecting a
+        /// generated query that references a label the store doesn't have).
+        reject_unseeded: bool,
     }
 
     use serde_json::Value;
@@ -366,7 +402,13 @@ mod tests {
             query: &str,
             _params: Option<std::collections::HashMap<Cow<'static, str>, Value>>,
         ) -> GraphDBResult<Vec<Vec<Value>>> {
-            Ok(self.rows_by_query.get(query).cloned().unwrap_or_default())
+            match self.rows_by_query.get(query) {
+                Some(rows) => Ok(rows.clone()),
+                None if self.reject_unseeded => Err(GraphDBError::QueryError(
+                    "Binder exception: Table Entity does not exist.".to_string(),
+                )),
+                None => Ok(vec![]),
+            }
         }
 
         async fn delete_graph(&self) -> GraphDBResult<()> {
@@ -536,6 +578,7 @@ mod tests {
     async fn cypher_retriever_returns_query_rows() {
         let graph_db = Arc::new(TestGraphDb {
             empty: false,
+            reject_unseeded: false,
             rows_by_query: std::collections::HashMap::from([(
                 "MATCH (n) RETURN n".to_string(),
                 vec![vec![json!({"name": "Alice"})]],
@@ -563,6 +606,7 @@ mod tests {
     async fn natural_language_retriever_retries_until_results() {
         let graph_db = Arc::new(TestGraphDb {
             empty: false,
+            reject_unseeded: false,
             rows_by_query: std::collections::HashMap::from([
                 (
                     "\n            MATCH (n)\n            UNWIND keys(n) AS prop\n            RETURN DISTINCT labels(n) AS NodeLabels, collect(DISTINCT prop) AS Properties;\n            "
@@ -660,6 +704,7 @@ mod tests {
     async fn natural_language_retriever_retries_on_llm_error() {
         let graph_db = Arc::new(TestGraphDb {
             empty: false,
+            reject_unseeded: false,
             rows_by_query: std::collections::HashMap::from([
                 (
                     "\n            MATCH (n)\n            UNWIND keys(n) AS prop\n            RETURN DISTINCT labels(n) AS NodeLabels, collect(DISTINCT prop) AS Properties;\n            "
@@ -711,6 +756,7 @@ mod tests {
     async fn natural_language_retriever_returns_empty_when_all_llm_attempts_fail() {
         let graph_db = Arc::new(TestGraphDb {
             empty: false,
+            reject_unseeded: false,
             rows_by_query: std::collections::HashMap::from([
                 (
                     "\n            MATCH (n)\n            UNWIND keys(n) AS prop\n            RETURN DISTINCT labels(n) AS NodeLabels, collect(DISTINCT prop) AS Properties;\n            "
@@ -747,6 +793,56 @@ mod tests {
                 );
             }
             _ => panic!("expected graph query rows"),
+        }
+    }
+
+    #[tokio::test]
+    async fn natural_language_retriever_errors_when_backend_rejects_all_queries() {
+        // Simulates the default local ladybug/kuzu backend: schema
+        // introspection succeeds (reporting the generic `:Node` label), but the
+        // Neo4j-style Cypher the retriever generates references a typed label
+        // (`:Entity`) the store has no table for, so every attempt is rejected.
+        // The retriever must surface a clear error, not a misleading empty
+        // result on a populated graph.
+        let graph_db = Arc::new(TestGraphDb {
+            empty: false,
+            reject_unseeded: true,
+            rows_by_query: std::collections::HashMap::from([
+                (
+                    "\n            MATCH (n)\n            UNWIND keys(n) AS prop\n            RETURN DISTINCT labels(n) AS NodeLabels, collect(DISTINCT prop) AS Properties;\n            "
+                        .to_string(),
+                    // kuzu-style: labels(n) is the scalar table name "Node".
+                    vec![vec![json!("Node"), json!(["id", "name", "type"])]],
+                ),
+                (
+                    "\n            MATCH ()-[r]->()\n            UNWIND keys(r) AS key\n            RETURN DISTINCT key;\n            "
+                        .to_string(),
+                    vec![vec![json!("relationship_name")]],
+                ),
+            ]),
+        });
+
+        // The LLM emits Neo4j-style typed-label Cypher on every attempt.
+        let llm = Arc::new(TestLlm::new(vec![
+            "MATCH (n:Entity {name: 'John'}) RETURN n",
+            "MATCH (n:Entity {name: 'John'}) RETURN n",
+            "MATCH (n:Entity {name: 'John'}) RETURN n",
+        ]));
+
+        let retriever = NaturalLanguageRetriever::new(graph_db, llm, Some(3), None);
+        let err = retriever
+            .get_context("Where does John work?", &SearchParams::default())
+            .await
+            .expect_err("must fail loudly when the backend rejects every generated query");
+
+        match err {
+            SearchError::InvalidInput(msg) => {
+                assert!(
+                    msg.contains("NATURAL_LANGUAGE") && msg.contains(":Node"),
+                    "error should explain the label-model mismatch, got: {msg}"
+                );
+            }
+            other => panic!("expected SearchError::InvalidInput, got {other:?}"),
         }
     }
 
