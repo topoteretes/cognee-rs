@@ -41,9 +41,16 @@ _RECALL_CASES = [
 ]
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture
 def recalled_seeded(authed_clients, unique_dataset_name):
-    """Seed + cognify on both servers once per module."""
+    """Seed + cognify on both servers before a recall case.
+
+    Function-scoped (not module): it depends on the function-scoped
+    ``authed_clients`` / ``unique_dataset_name`` fixtures, and a module-scoped
+    fixture may not depend on function-scoped ones (pytest ScopeMismatch). Each
+    parametrized case seeds the same text into its own fresh dataset on *both*
+    servers, so py/rs stay in lockstep and the parity assertion holds.
+    """
     for side, client in authed_clients.items():
         r = seed_dataset_with_text(client, name=unique_dataset_name, text=_SEED_TEXT)
         ds_id = r.get("dataset_id") or r.get("id")
