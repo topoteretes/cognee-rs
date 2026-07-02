@@ -1,13 +1,25 @@
 //! Built-in graph database factories: ladybug/kuzu (embedded) and Postgres.
+//!
+//! Every item here lives behind a graph-backend feature, so the imports are
+//! gated too — otherwise a build with neither `ladybug` nor `pggraph` (e.g. a
+//! consumer depending on this crate with `default-features = false`) would warn
+//! on unused imports and fail under `-D warnings`.
 
+#[cfg(any(feature = "ladybug", feature = "pggraph"))]
 use std::path::Path;
+#[cfg(any(feature = "ladybug", feature = "pggraph"))]
 use std::sync::Arc;
 
+#[cfg(any(feature = "ladybug", feature = "pggraph"))]
 use async_trait::async_trait;
+#[cfg(any(feature = "ladybug", feature = "pggraph"))]
 use cognee_graph::GraphDBTrait;
 
+#[cfg(any(feature = "ladybug", feature = "pggraph"))]
 use crate::context::BackendBuildContext;
+#[cfg(any(feature = "ladybug", feature = "pggraph"))]
 use crate::error::ComponentError;
+#[cfg(any(feature = "ladybug", feature = "pggraph"))]
 use crate::traits::GraphDbFactory;
 
 /// Embedded ladybug/kuzu graph backend, stored at a local file path.
