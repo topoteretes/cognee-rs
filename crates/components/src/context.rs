@@ -58,8 +58,9 @@ pub struct BackendBuildContext {
 /// by [`crate::build_embedding_config`].
 #[derive(Clone)]
 pub struct EmbeddingInputs {
-    /// Lowercase provider string. Unknown values fall back to `onnx`, matching
-    /// the historical `ComponentManager` behavior.
+    /// Lowercase provider string. An empty value defaults to `onnx`; a
+    /// non-empty *unrecognized* value is rejected as a misconfiguration by the
+    /// default embedding factory (rather than silently falling back to `onnx`).
     pub provider: String,
     pub model: String,
     pub dimensions: usize,

@@ -51,12 +51,11 @@ impl ComponentRegistry {
         let mut reg = Self::empty();
 
         // ── vector ────────────────────────────────────────────────────────
-        // brute-force is always available; register it under its spelling
-        // variants so any configured form resolves.
-        let brute: Arc<dyn VectorDbFactory> = Arc::new(crate::builtins::vector::BruteForceFactory);
-        for id in ["brute-force", "brute_force", "bruteforce"] {
-            reg.vector.insert(id.to_string(), Arc::clone(&brute));
-        }
+        // brute-force is always available. Its spelling variants (brute_force,
+        // bruteforce) are canonicalized at lookup time (see `build_vector`), so
+        // it registers under the single canonical key — this keeps a
+        // `register_vector` override consistent across all spellings.
+        reg.register_vector(Arc::new(crate::builtins::vector::BruteForceFactory));
         // lancedb is registered unconditionally; the Android fallback lives
         // inside its build(), keeping the provider id target-invariant.
         reg.register_vector(Arc::new(crate::builtins::vector::LanceDbFactory));
@@ -145,7 +144,7 @@ impl ComponentRegistry {
         &self,
         ctx: &BackendBuildContext,
     ) -> Result<Arc<dyn VectorDB>, ComponentError> {
-        let key = ctx.vector_provider.to_lowercase();
+        let key = canonical_vector_provider(&ctx.vector_provider);
         let factory = self.vector.get(&key).ok_or_else(|| {
             ComponentError::Config(unsupported_msg(
                 "vector_db_provider",
@@ -232,6 +231,16 @@ impl Default for ComponentRegistry {
     }
 }
 
+/// Canonicalize a vector-provider string, collapsing the historical
+/// brute-force spelling variants (`brute_force`, `bruteforce`) onto the single
+/// registered key `brute-force`. All other providers pass through lowercased.
+fn canonical_vector_provider(provider: &str) -> String {
+    match provider.to_lowercase().as_str() {
+        "brute-force" | "brute_force" | "bruteforce" => "brute-force".to_string(),
+        other => other.to_string(),
+    }
+}
+
 fn unsupported_msg(field: &str, provider: &str, supported: &[String]) -> String {
     // Feature-gated built-ins are simply absent from the registry when their
     // cargo feature is off; point the operator at the feature rather than
@@ -264,14 +273,17 @@ mod tests {
     fn builtins_register_documented_providers() {
         let reg = ComponentRegistry::with_builtins();
 
-        // Vector: brute-force (+ spelling variants) and lancedb are always present.
-        for id in ["brute-force", "brute_force", "bruteforce", "lancedb"] {
+        // Vector: brute-force (canonical) and lancedb are always present.
+        for id in ["brute-force", "lancedb"] {
             assert!(
                 reg.vector_providers().iter().any(|p| p == id),
                 "vector provider '{id}' must be registered; have {:?}",
                 reg.vector_providers()
             );
         }
+        // The brute-force spelling variants canonicalize to the same key.
+        assert_eq!(canonical_vector_provider("brute_force"), "brute-force");
+        assert_eq!(canonical_vector_provider("bruteforce"), "brute-force");
         #[cfg(feature = "pgvector")]
         assert!(reg.vector_providers().iter().any(|p| p == "pgvector"));
         #[cfg(feature = "testing")]
