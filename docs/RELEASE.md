@@ -75,7 +75,7 @@ The Python binding is **not published to PyPI**; users build from source
 
 | Secret | Scope | Used by |
 |---|---|---|
-| `RELEASE_PAT` | Repo secret. Admin PAT, `contents: write` (+ `issues`/`pull-requests: write`). Prefer a fine-grained PAT scoped to this repo. | `release-open.yml` (open PR, push branch), `release-publish.yml` (push tag, create Release) |
+| `RELEASE_PAT` | Repo secret. Fine-grained PAT scoped to this repo with **Contents: Read and write**, **Pull requests: Read and write**, **Issues: Read and write** (or a classic PAT with the `repo` scope). The owner only needs **write** access, not admin — the flow never pushes to `main` (it pushes a `release/*` branch and a tag; `main` advances via the PR merge). It must be a PAT rather than `GITHUB_TOKEN` so the opened PR triggers CI and the pushed tag cascades. | `release-open.yml` (open PR, push branch), `release-publish.yml` (push tag, create Release) |
 | `CARGO_REGISTRY_TOKEN` | **Environment** secret on `release`. crates.io token with publish rights for all `cognee-*` crates. | `release-publish.yml` preflight + publish |
 | `NPM_TOKEN` | Repo secret. npm token with publish rights to the `@cognee` org. | `release-verify.yml`, `ts-prebuild.yml`, `release-publish.yml` preflight |
 
