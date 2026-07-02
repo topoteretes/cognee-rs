@@ -71,7 +71,6 @@ default = [
 # Record/replay cassette-based mock LLM support (MOCK_LLM / COGNEE_RECORD_LLM).
 # Pulls in no heavy deps, so it is default-on.
 mock-llm       = ["cognee-llm/mock"]
-server         = ["dep:cognee-http-server"]
 visualization  = ["dep:cognee-visualization"]
 onnx           = ["cognee-embedding/onnx"]
 onnx-dynamic   = ["cognee-embedding/onnx-dynamic"]
@@ -144,7 +143,6 @@ testing = [
 [dependencies]
 cognee-chunking = { path = "../chunking", version = "0.1.3" }
 cognee-utils = { path = "../utils", version = "0.1.3" }
-cognee-http-server = { path = "../http-server", version = "0.1.3", optional = true }
 cognee-cognify = { path = "../cognify", version = "0.1.3" }
 cognee-core = { path = "../core", version = "0.1.3", features = ["pipeline-run-registry"] }
 cognee-delete = { path = "../delete", version = "0.1.3" }
