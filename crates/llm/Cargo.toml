@@ -43,7 +43,7 @@ reqwest = { workspace = true, features = ["multipart"] }
 tracing.workspace = true
 
 # Shared tracing-key constants
-cognee-utils = { path = "../utils", version = "0.1.1" }
+cognee-utils = { path = "../utils", version = "0.1.3" }
 
 # Content hashing (cassette mock, feature-gated)
 sha2 = { workspace = true, optional = true }

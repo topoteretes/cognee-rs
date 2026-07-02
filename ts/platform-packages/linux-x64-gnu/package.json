@@ -1,6 +1,6 @@
 {
   "name": "@cognee/neon-linux-x64-gnu",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Prebuilt cognee native addon for linux-x64-gnu (x86_64-unknown-linux-gnu)",
   "main": "index.js",
   "os": [
