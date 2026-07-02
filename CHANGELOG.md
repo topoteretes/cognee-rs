@@ -15,32 +15,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Consolidate redundant queries (audit) + native pgvector batch search (#36)
+- Optimize embeddings generation and engines (#34)
+- Consolidate redundant queries and add native pgvector batch search (#36)
 - Eliminate two N+1 query loops (has_edges, update_last_accessed) (#24)
-- Extract shared OpenAI-compatible adapter builder (#29)
 
 ### Fixed
 
-- Enable html-loader feature in Neon binding for URL ingestion (#50)
+- Enable the HTML loader in the Neon (Node.js) binding for URL ingestion (#50)
 - Fail loudly when NATURAL_LANGUAGE search is unsupported by the backend (#51)
-- Boot the cross-SDK Rust http-server with the mock vector backend (#48)
-- Drop readme.workspace so crates use the default local README
-- Four reported v0.1.1 bugs + cross-dataset dedup (#11)
-
-### Other
-
-- Label-driven two-phase release (crates.io + npm + C-API) (#53)
-- Optimize embeddings generation & engines (#34)
-- Split secret-free community checks from the keyed test suite (#32)
-- Fix cache-budget eviction (python shares debug cache) + logging flake (#44)
-- Config 1 logic-only crates run on wasm32 (browser-verified) (#25)
-- Run workspace tests in parallel under nextest (#31)
-- Fix the win32-x64-msvc prebuild (MSVC env + launcher + CRT) (#42)
-- Drop the darwin-x64 (Intel macOS) prebuild leg (#37)
-- Build darwin-arm64 on macos-15 (Xcode 16.4) (#33)
-- Drop unsupported linux-musl platform packages (#28)
-- Bump cognee-ts and platform packages to 0.1.2 (#13)
-- Cross-compile linux-arm64-gnu prebuilt (#12)
+- Fix reported TypeScript SDK bugs and cross-dataset deduplication (#11)
 
 
 ## [0.1.1](https://github.com/topoteretes/cognee-rs/compare/cognee-models-v0.1.0...cognee-models-v0.1.1) - 2026-06-26
