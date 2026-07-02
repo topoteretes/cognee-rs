@@ -33,6 +33,16 @@ env:
 jobs:
   dry-run:
     name: cargo publish --dry-run (every publishable crate)
+    # Skip on release/* PRs: they bump every internal `cognee-* = "^X.Y.Z"` dep
+    # requirement to a version that is not on crates.io yet, so a per-crate
+    # `cargo publish --dry-run` cannot resolve those deps against the index
+    # (candidate versions found which didn't match). Only the ordered real
+    # publish in release-publish.yml — leaves first — can satisfy them. Packaging
+    # (readme/license/excluded files) is already validated on every non-release
+    # PR at the published baseline, so nothing is lost by skipping here.
+    if: >-
+      github.event_name != 'pull_request' ||
+      !startsWith(github.head_ref, 'release/')
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
