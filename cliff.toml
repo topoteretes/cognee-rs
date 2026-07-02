@@ -1,7 +1,7 @@
 # git-cliff configuration for cognee-rust.
 #
-# Replaces release-plz's built-in changelog generation. The label-driven release
-# workflow (.github/workflows/release.yml) runs:
+# Replaces release-plz's built-in changelog generation. The release-open
+# workflow (.github/workflows/release-open.yml) runs:
 #
 #   git-cliff --unreleased --tag vX.Y.Z --strip all
 #

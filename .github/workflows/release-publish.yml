@@ -58,16 +58,20 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "tag=v$version" >> "$GITHUB_OUTPUT"
 
-      - name: Checkout merged main
+      - name: Checkout the merged release commit
         uses: actions/checkout@v4
         with:
-          ref: main
+          # Pin to THIS PR's merge commit, not main's HEAD — otherwise a PR that
+          # merges immediately after would make us publish/tag the wrong tree.
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
           fetch-depth: 0
           # PAT so the tag push cascades into capi-release.yml / ts-prebuild.yml.
           token: ${{ secrets.RELEASE_PAT }}
 
       - name: Free disk space
-        uses: jlumbroso/free-disk-space@main
+        # Pinned to a full commit SHA (v1.3.1) rather than @main for supply-chain
+        # safety on this token-bearing publish workflow.
+        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be
         with:
           tool-cache: false
           android: true
@@ -106,18 +110,12 @@ jobs:
           fi
           # `cargo owner --list` performs an authenticated crates.io API call
           # (unlike `cargo publish --dry-run`, which never validates the token).
-          # Use the topological leaf (already published in a prior release) rather
-          # than a hardcoded name so a crate rename does not break the preflight.
-          # Capture the full list first (piping into `head` would SIGPIPE the
-          # generator and trip pipefail).
-          order=$(scripts/split/publish-order.sh)
-          leaf=$(printf '%s\n' "$order" | head -n1)
-          if [ -z "$leaf" ]; then
-            echo "::error::could not determine a crate to preflight the token against"
-            exit 1
-          fi
-          echo "Validating crates.io token against '${leaf}'"
-          cargo owner --list -p "$leaf"
+          # Probe against cognee-models: the foundational crate every other member
+          # depends on, published since v0.1.0 and therefore guaranteed to exist
+          # on crates.io. Do NOT derive this from publish-order.sh — its first
+          # entry is a dependency-free leaf that could be a brand-new,
+          # not-yet-published crate, which would make a valid token look invalid.
+          cargo owner --list -p cognee-models
 
       - name: Preflight — npm token
         env:
