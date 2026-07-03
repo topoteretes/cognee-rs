@@ -1,0 +1,146 @@
+name: ORT Runtime Mirror
+
+# Maintenance tool (manual only). Populates the cognee-hosted ONNX Runtime
+# mirror consumed by ci/ort/prefetch.sh across the build workflows.
+#
+# `ort-sys` downloads prebuilt ONNX Runtime from cdn.pyke.io at build time; that
+# CDN (Cloudflare) intermittently 403s GitHub Actions runner IPs, breaking every
+# build on an ort-cache miss. This workflow does a real per-platform build so
+# ort-sys downloads + decodes its `.tar.lzma2` archive (the archive is a raw
+# LZMA2 stream only ort-sys can decode), then repackages the extracted cache
+# directory as a plain `ort-<target>.tar.gz` and uploads it to the release tag
+# named in ci/ort/runtime.lock. prefetch.sh later extracts that back into
+# ort-sys's cache so the build skips the pyke download.
+#
+# Run this when the `ort` dependency is bumped (update ci/ort/runtime.lock
+# first) or when the mirror assets are missing. See docs/ci/ort-mirror.md.
+
+on:
+  workflow_dispatch:
+
+# Needed to create the release and upload assets via `gh`.
+permissions:
+  contents: write
+
+env:
+  CARGO_INCREMENTAL: "0"
+  ORT_CACHE_DIR: ${{ github.workspace }}/ts/cognee-ts-neon/target/ort-cache
+
+jobs:
+  mirror:
+    name: Mirror ${{ matrix.platform }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x64-gnu
+            runner: ubuntu-latest
+            rust-target: x86_64-unknown-linux-gnu
+            cross: false
+          - platform: linux-arm64-gnu
+            runner: ubuntu-latest
+            rust-target: aarch64-unknown-linux-gnu
+            cross: true
+          - platform: darwin-arm64
+            runner: macos-15
+            rust-target: aarch64-apple-darwin
+            cross: false
+          - platform: win32-x64-msvc
+            runner: windows-latest
+            rust-target: x86_64-pc-windows-msvc
+            cross: false
+
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust-target }}
+
+      - name: Install cross
+        if: matrix.cross
+        run: cargo install cross --git https://github.com/cross-rs/cross
+
+      - name: Install mold linker
+        if: runner.os == 'Linux' && !matrix.cross
+        uses: rui314/setup-mold@v1
+        with:
+          make-default: true
+
+      - name: Install native build deps (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y cmake protobuf-compiler
+
+      - name: Install native build deps (macOS)
+        if: runner.os == 'macOS'
+        run: brew install cmake protobuf
+
+      - name: Install native build deps (Windows)
+        if: runner.os == 'Windows'
+        run: choco install cmake protoc --no-progress
+
+      - name: Set up MSVC developer environment (Windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Configure Windows C/C++ build env
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          echo "CMAKE_C_COMPILER_LAUNCHER=" >> "$GITHUB_ENV"
+          echo "CMAKE_CXX_COMPILER_LAUNCHER=" >> "$GITHUB_ENV"
+          echo "CFLAGS_x86_64_pc_windows_msvc=/MD" >> "$GITHUB_ENV"
+          echo "CXXFLAGS_x86_64_pc_windows_msvc=/MD" >> "$GITHUB_ENV"
+
+      # Real build so ort-sys downloads + decodes the ONNX Runtime archive into
+      # ORT_CACHE_DIR/dfbin/<target>/<hash>/. (This step is the one that needs
+      # the pyke CDN reachable — run the workflow when it is not blocking.)
+      - name: Build Neon addon (native)
+        if: "!matrix.cross"
+        working-directory: ts/cognee-ts-neon
+        run: cargo build --release --target ${{ matrix.rust-target }}
+
+      - name: Build Neon addon (cross)
+        if: matrix.cross
+        working-directory: ts/cognee-ts-neon
+        env:
+          ORT_CACHE_DIR: /target/ort-cache
+          COGNEE_REPO_ROOT: ${{ github.workspace }}
+        run: |
+          SVE="-DSIMSIMD_TARGET_NEON_I8=0 -DSIMSIMD_TARGET_NEON_F16=0 -DSIMSIMD_TARGET_NEON_BF16=0 -DSIMSIMD_TARGET_SVE=0 -DSIMSIMD_TARGET_SVE_I8=0 -DSIMSIMD_TARGET_SVE_F16=0 -DSIMSIMD_TARGET_SVE_BF16=0 -DSIMSIMD_TARGET_SVE2=0"
+          TGT_US=$(echo "${{ matrix.rust-target }}" | tr '-' '_')
+          export CFLAGS_${TGT_US}="$SVE" CXXFLAGS_${TGT_US}="$SVE"
+          cross build --release --target ${{ matrix.rust-target }}
+
+      # Repackage the extracted cache dir (flat: libonnxruntime.a + provider
+      # libs) as a plain gzip tarball and publish it to the mirror release.
+      - name: Package and upload mirror asset
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TARGET="${{ matrix.rust-target }}"
+          TAG=$(awk '/^VERSION/ {print $4}' ci/ort/runtime.lock)
+          HASH=$(awk -v t="$TARGET" '$1==t {print $2}' ci/ort/runtime.lock)
+          SRC="ts/cognee-ts-neon/target/ort-cache/dfbin/$TARGET/$HASH"
+          if [ ! -d "$SRC" ]; then
+            echo "::error::expected ort cache dir not found: $SRC (did ort-sys change its layout or hash?)"
+            ls -la "ts/cognee-ts-neon/target/ort-cache/dfbin/$TARGET" || true
+            exit 1
+          fi
+          ASSET="ort-$TARGET.tar.gz"
+          tar -czf "$ASSET" -C "$SRC" .
+          echo "Packaged $ASSET ($(du -h "$ASSET" | cut -f1)) from $SRC"
+          # Idempotent: create the release once, then (re)upload this platform's asset.
+          gh release view "$TAG" >/dev/null 2>&1 || \
+            gh release create "$TAG" --title "ONNX Runtime mirror ($TAG)" \
+              --notes "Prebuilt ONNX Runtime binaries mirrored for CI. See ci/ort/runtime.lock and docs/ci/ort-mirror.md." || true
+          gh release upload "$TAG" "$ASSET" --clobber
