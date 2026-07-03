@@ -2,8 +2,9 @@ name: publish-dry-run
 
 # Plan §5 Phase 3 (oss-split-plan.md:341-345): walk every publishable workspace
 # member through `cargo publish --dry-run` in the same topological order that
-# `release-plz` will use, catching packaging issues (missing readme/license,
-# excluded files, version-bump mistakes) before they hit crates.io.
+# the release workflow (release-publish.yml) publishes, catching packaging issues
+# (missing readme/license, excluded files, version-bump mistakes) before they
+# hit crates.io.
 #
 # Sourcing the crate list from scripts/split/publish-order.sh (T10c) keeps the
 # CI gate and the local sweep in lock-step.
@@ -32,6 +33,16 @@ env:
 jobs:
   dry-run:
     name: cargo publish --dry-run (every publishable crate)
+    # Skip on release/* PRs: they bump every internal `cognee-* = "^X.Y.Z"` dep
+    # requirement to a version that is not on crates.io yet, so a per-crate
+    # `cargo publish --dry-run` cannot resolve those deps against the index
+    # (candidate versions found which didn't match). Only the ordered real
+    # publish in release-publish.yml — leaves first — can satisfy them. Packaging
+    # (readme/license/excluded files) is already validated on every non-release
+    # PR at the published baseline, so nothing is lost by skipping here.
+    if: >-
+      github.event_name != 'pull_request' ||
+      !startsWith(github.head_ref, 'release/')
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:

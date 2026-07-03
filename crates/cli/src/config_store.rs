@@ -5,7 +5,7 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 const CURRENT_VERSION: u32 = 1;
 
@@ -28,9 +28,23 @@ impl Default for ConfigDocument {
 }
 
 pub fn config_file_path() -> Result<PathBuf, CliError> {
-    let base_dir = dirs::config_dir().ok_or_else(|| {
-        CliError::Runtime("Could not resolve user config directory for cognee-cli".to_string())
-    })?;
+    // Production always resolves the config dir via `dirs::config_dir()` —
+    // unchanged on every platform. Tests set `COGNEE_CONFIG_HOME` to an isolated
+    // absolute temp dir so parallel CLI test processes don't collide on one
+    // shared config file (and race the atomic `config.json[.tmp]` replace).
+    //
+    // We deliberately do NOT key off `XDG_CONFIG_HOME`: honoring it on macOS
+    // would relocate a real user's existing config (which holds durable
+    // credentials with no regeneration path) the moment they have XDG set, and
+    // `dirs` already consults XDG on Linux. Only an *absolute* override is
+    // accepted — a relative one would resolve against the CWD, making config
+    // silently per-directory.
+    let base_dir = match std::env::var_os("COGNEE_CONFIG_HOME") {
+        Some(dir) if !dir.is_empty() && Path::new(&dir).is_absolute() => PathBuf::from(dir),
+        _ => dirs::config_dir().ok_or_else(|| {
+            CliError::Runtime("Could not resolve user config directory for cognee-cli".to_string())
+        })?,
+    };
 
     Ok(base_dir.join("cognee-rust").join("config.json"))
 }
@@ -141,6 +155,7 @@ pub fn known_keys() -> Vec<&'static str> {
         "embedding_dimensions",
         "embedding_max_sequence_length",
         "embedding_batch_size",
+        "embedding_onnx_batch_size",
         "embedding_provider",
         "embedding_endpoint",
         "embedding_api_key",
@@ -312,6 +327,10 @@ pub fn as_flat_map(settings: &Settings) -> BTreeMap<&'static str, Value> {
             Value::from(settings.embedding_batch_size),
         ),
         (
+            "embedding_onnx_batch_size",
+            Value::from(settings.embedding_onnx_batch_size),
+        ),
+        (
             "embedding_provider",
             Value::String(settings.embedding_provider.clone()),
         ),
@@ -388,6 +407,7 @@ pub fn set_value(settings: &mut Settings, key: &str, value: Value) -> Result<(),
             settings.embedding_max_sequence_length = expect_u32(key, value)?
         }
         "embedding_batch_size" => settings.embedding_batch_size = expect_u32(key, value)?,
+        "embedding_onnx_batch_size" => settings.embedding_onnx_batch_size = expect_u32(key, value)?,
         "embedding_provider" => settings.embedding_provider = expect_string(key, value)?,
         "embedding_endpoint" => settings.embedding_endpoint = expect_string(key, value)?,
         "embedding_api_key" => settings.embedding_api_key = expect_string(key, value)?,
@@ -475,6 +495,9 @@ pub fn unset_key(settings: &mut Settings, key: &str) -> Result<(), CliError> {
             settings.embedding_max_sequence_length = defaults.embedding_max_sequence_length
         }
         "embedding_batch_size" => settings.embedding_batch_size = defaults.embedding_batch_size,
+        "embedding_onnx_batch_size" => {
+            settings.embedding_onnx_batch_size = defaults.embedding_onnx_batch_size
+        }
         "embedding_provider" => settings.embedding_provider = defaults.embedding_provider,
         "embedding_endpoint" => settings.embedding_endpoint = defaults.embedding_endpoint,
         "embedding_api_key" => settings.embedding_api_key = defaults.embedding_api_key,

@@ -179,7 +179,11 @@ where
                             delay
                         );
 
-                        tokio::time::sleep(delay).await;
+                        // futures-timer's Delay is runtime-agnostic and works on
+                        // both native and wasm32 (its wasm-bindgen feature routes
+                        // through setTimeout). tokio::time would not fire on
+                        // wasm32-unknown — no clock, no thread parking.
+                        futures_timer::Delay::new(delay).await;
                         attempt += 1;
                     }
                 }
@@ -188,7 +192,11 @@ where
     }
 }
 
-#[cfg(test)]
+// These are #[tokio::test] async tests on the native libtest harness; tokio is a
+// native-only dev-dependency, so the module is gated off wasm (matching how the
+// dev-deps are target-split in Cargo.toml). This keeps `cargo test --target
+// wasm32` compiling — the tests run on native, where retry actually executes.
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
     use std::sync::Arc;

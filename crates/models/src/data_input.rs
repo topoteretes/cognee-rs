@@ -1,6 +1,10 @@
 use serde::{Deserialize, Serialize};
 use std::future::Future;
+// Local-filesystem streaming is unavailable on wasm32 (no OS filesystem); the
+// FilePath arm below is cfg'd out there, so these imports are too.
+#[cfg(not(target_arch = "wasm32"))]
 use tokio::fs::File;
+#[cfg(not(target_arch = "wasm32"))]
 use tokio::io::AsyncReadExt;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -47,17 +51,30 @@ impl DataInput {
                 callback(text.as_bytes()).await?;
             }
             Self::FilePath(path) => {
-                let clean_path = path.strip_prefix("file://").unwrap_or(path);
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    let clean_path = path.strip_prefix("file://").unwrap_or(path);
 
-                let mut file = File::open(clean_path).await.map_err(E::from)?;
-                let mut buffer = vec![0u8; BUFFER_SIZE];
+                    let mut file = File::open(clean_path).await.map_err(E::from)?;
+                    let mut buffer = vec![0u8; BUFFER_SIZE];
 
-                loop {
-                    let bytes_read = file.read(&mut buffer).await.map_err(E::from)?;
-                    if bytes_read == 0 {
-                        break;
+                    loop {
+                        let bytes_read = file.read(&mut buffer).await.map_err(E::from)?;
+                        if bytes_read == 0 {
+                            break;
+                        }
+                        callback(&buffer[..bytes_read]).await?;
                     }
-                    callback(&buffer[..bytes_read]).await?;
+                }
+                // wasm32 has no local filesystem; callers must resolve a FilePath to
+                // Text/Binary before streaming (mirrors the Url/S3Path arms).
+                #[cfg(target_arch = "wasm32")]
+                {
+                    let _ = path;
+                    return Err(E::from(std::io::Error::new(
+                        std::io::ErrorKind::Unsupported,
+                        "Local file paths are not supported on wasm32; resolve inputs to Text or Binary before streaming.",
+                    )));
                 }
             }
             Self::Url(_url) => {
@@ -196,6 +213,11 @@ mod tests {
         assert_eq!(item.classify(), "text");
     }
 
+    // tokio is a non-wasm-only dependency here (see Cargo.toml), so this async
+    // test is gated off wasm to keep `cargo test --target wasm32` compiling. The
+    // sibling sync #[test]s above stay compiled on wasm as a lightweight API
+    // drift check; this one runs on native, where process_by_chunks is async.
+    #[cfg(not(target_arch = "wasm32"))]
     #[tokio::test]
     async fn test_url_process_by_chunks_error_message() {
         let input = DataInput::Url("https://example.com".to_string());

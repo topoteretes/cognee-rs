@@ -1,0 +1,6 @@
+# Keep shell scripts and plain-text data files LF on every platform, so Windows
+# CI (default core.autocrlf=true) doesn't check them out as CRLF and break tools
+# that parse them line-by-line — e.g. capi/scripts/check_header_sync.sh reading
+# capi/scripts/header_sync_allow.txt.
+*.sh  text eol=lf
+*.txt text eol=lf

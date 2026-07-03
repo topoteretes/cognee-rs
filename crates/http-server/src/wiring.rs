@@ -12,7 +12,9 @@ use cognee_database::{
 use cognee_delete::DeleteService;
 use cognee_embedding::{EmbeddingConfig, EmbeddingEngine, EmbeddingProvider};
 use cognee_graph::{GraphDBTrait, LadybugAdapter};
-use cognee_llm::{Llm, OpenAIAdapter, OpenAIResponsesClient, ResponsesClient, Transcriber};
+use cognee_llm::{
+    Llm, OpenAIResponsesClient, ResponsesClient, Transcriber, build_openai_compatible_adapter,
+};
 use cognee_ontology::{OntologyManager, OntologyResolver};
 use cognee_search::{
     SeaOrmSessionStore, SearchBuilder, SearchOrchestrator, SessionManager, SessionStore,
@@ -184,6 +186,21 @@ async fn wire_vector_db(cfg: &HttpServerConfig) -> Result<Arc<dyn VectorDB>, Ser
                      VECTOR_DB_PROVIDER=pgvector"
                 )));
             }
+            // Guard against the incoherent default (VECTOR_DB_PROVIDER unset →
+            // pgvector, VECTOR_DB_URL unset → derived from SYSTEM_ROOT_DIRECTORY,
+            // i.e. a filesystem path). Without this, pgvector reports a cryptic
+            // "connection string '…/vectors' cannot be parsed". Point the
+            // operator at the actual misconfiguration instead.
+            if !(url.starts_with("postgres://") || url.starts_with("postgresql://")) {
+                return Err(ServerError::Other(anyhow!(
+                    "VECTOR_DB_PROVIDER=pgvector requires a postgres connection \
+                     string in VECTOR_DB_URL (postgres://… or postgresql://…), but \
+                     got '{url}'. If you did not intend to use pgvector, set \
+                     VECTOR_DB_PROVIDER explicitly (e.g. 'mock' in a dev-mock \
+                     build); the default derives this value from \
+                     SYSTEM_ROOT_DIRECTORY, which is not a valid Postgres URL."
+                )));
+            }
             let adapter = PgVectorAdapter::new(url, cfg.embedding_dimensions as usize)
                 .await
                 .map_err(|e| ServerError::Other(anyhow!("pgvector adapter init: {e}")))?;
@@ -256,63 +273,43 @@ async fn wire_embedding_engine(cfg: &HttpServerConfig) -> Option<Arc<dyn Embeddi
 }
 
 fn wire_llm(cfg: &HttpServerConfig) -> Option<Arc<dyn Llm>> {
-    if !cfg.llm_provider.eq_ignore_ascii_case("openai") {
-        tracing::warn!(
-            "LLM provider '{}' is not supported by standalone wiring yet; llm not wired",
-            cfg.llm_provider
-        );
-        return None;
-    }
-
-    let api_key = cfg.llm_api_key.expose_secret().to_string();
-    if api_key.is_empty() {
-        tracing::warn!("LLM API key missing; llm not wired");
-        return None;
-    }
-
-    let endpoint = if cfg.llm_endpoint.trim().is_empty() {
-        None
-    } else {
-        Some(cfg.llm_endpoint.clone())
-    };
-
-    match OpenAIAdapter::new(cfg.llm_model.clone(), api_key, endpoint).map(|adapter| {
-        adapter
-            .with_structured_output_retries(cfg.llm_max_retries.max(1))
-            .with_network_retries(cfg.llm_max_retries.max(1))
-    }) {
+    // Provider routing (and the required-key / required-endpoint validation) lives
+    // in the shared factory; an unsupported provider or missing credential errors
+    // there and we wire None.
+    match build_openai_compatible_adapter(
+        &cfg.llm_provider,
+        &cfg.llm_model,
+        cfg.llm_api_key.expose_secret(),
+        &cfg.llm_endpoint,
+        cfg.llm_max_retries,
+    ) {
         Ok(adapter) => Some(Arc::new(adapter) as Arc<dyn Llm>),
         Err(err) => {
-            tracing::warn!("llm wiring failed, wiring as None: {err}");
+            tracing::warn!("llm not wired: {err}");
             None
         }
     }
 }
 
 fn wire_transcriber(cfg: &HttpServerConfig) -> Option<Arc<dyn Transcriber>> {
-    if !cfg.llm_provider.eq_ignore_ascii_case("openai") {
+    // Whisper-style transcription only works against OpenAI and user-pointed
+    // OpenAI-compatible servers that expose /audio/transcriptions; other providers
+    // get graceful no-audio (None).
+    let provider = cfg.llm_provider.to_ascii_lowercase();
+    if !matches!(provider.as_str(), "openai" | "custom" | "openai_compatible") {
         return None;
     }
 
-    let api_key = cfg.llm_api_key.expose_secret().to_string();
-    if api_key.is_empty() {
-        return None;
-    }
-
-    let endpoint = if cfg.llm_endpoint.trim().is_empty() {
-        None
-    } else {
-        Some(cfg.llm_endpoint.clone())
-    };
-
-    match OpenAIAdapter::new(cfg.llm_model.clone(), api_key, endpoint).map(|adapter| {
-        adapter
-            .with_structured_output_retries(cfg.llm_max_retries.max(1))
-            .with_network_retries(cfg.llm_max_retries.max(1))
-    }) {
+    match build_openai_compatible_adapter(
+        &cfg.llm_provider,
+        &cfg.llm_model,
+        cfg.llm_api_key.expose_secret(),
+        &cfg.llm_endpoint,
+        cfg.llm_max_retries,
+    ) {
         Ok(adapter) => Some(Arc::new(adapter) as Arc<dyn Transcriber>),
         Err(err) => {
-            tracing::warn!("transcriber wiring failed, wiring as None: {err}");
+            tracing::warn!("transcriber not wired: {err}");
             None
         }
     }
@@ -459,5 +456,27 @@ mod tests {
             Err(err) => err.to_string(),
         };
         assert!(msg.contains("database connect failed"));
+    }
+
+    #[tokio::test]
+    async fn wire_vector_db_pgvector_rejects_non_postgres_url() {
+        // The incoherent default (VECTOR_DB_PROVIDER unset → pgvector, plus a
+        // VECTOR_DB_URL derived from SYSTEM_ROOT_DIRECTORY → a filesystem path)
+        // must fail with an actionable message, not the cryptic connection-
+        // string parse error the pgvector driver would otherwise emit.
+        let cfg = HttpServerConfig {
+            vector_provider: "pgvector".to_string(),
+            vector_db_url: "/srv/.cognee_system/vectors".to_string(),
+            ..Default::default()
+        };
+
+        let msg = match wire_vector_db(&cfg).await {
+            Ok(_) => String::new(),
+            Err(err) => err.to_string(),
+        };
+        assert!(
+            msg.contains("postgres connection string") && msg.contains("VECTOR_DB_PROVIDER"),
+            "expected actionable pgvector error, got: {msg}"
+        );
     }
 }

@@ -4,12 +4,18 @@
 //! `/v1/embeddings` endpoint (vLLM, llama.cpp, TEI, LocalAI, etc.).
 
 use async_trait::async_trait;
+use futures::stream::{self, StreamExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
 
 use crate::config::EmbeddingConfig;
 use crate::engine::EmbeddingEngine;
 use crate::error::{EmbeddingError, EmbeddingResult};
 use crate::utils::{handle_embedding_response, sanitize_embedding_inputs};
+
+/// Maximum number of sub-batch HTTP requests issued concurrently from a single
+/// `embed` call. Bounds in-flight work against provider rate limits while still
+/// overlapping network latency across sub-batches.
+const MAX_CONCURRENT_BATCHES: usize = 8;
 
 // ─── Response types ───────────────────────────────────────────────────────────
 
@@ -189,14 +195,25 @@ impl EmbeddingEngine for OpenAICompatibleEmbeddingEngine {
             return Ok(Vec::new());
         }
 
-        let mut results: Vec<Vec<f32>> = Vec::with_capacity(texts.len());
+        // Dispatch sub-batches concurrently (bounded by MAX_CONCURRENT_BATCHES).
+        // `try_collect` over `buffer_unordered` aborts on the first failure —
+        // cancelling in-flight retries instead of waiting them out — and the
+        // batch index restores input order afterwards.
+        let batch_futures: Vec<_> = texts
+            .chunks(self.batch_size.max(1))
+            .enumerate()
+            .map(|(index, batch)| async move {
+                self.embed_batch_with_retry(batch).await.map(|v| (index, v))
+            })
+            .collect();
 
-        for batch in texts.chunks(self.batch_size) {
-            let batch_results = self.embed_batch_with_retry(batch).await?;
-            results.extend(batch_results);
-        }
+        let mut indexed: Vec<(usize, Vec<Vec<f32>>)> = stream::iter(batch_futures)
+            .buffer_unordered(MAX_CONCURRENT_BATCHES)
+            .try_collect()
+            .await?;
 
-        Ok(results)
+        indexed.sort_by_key(|(index, _)| *index);
+        Ok(indexed.into_iter().flat_map(|(_, batch)| batch).collect())
     }
 
     fn dimension(&self) -> usize {

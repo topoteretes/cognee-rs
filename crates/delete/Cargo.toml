@@ -15,13 +15,13 @@ authors.workspace = true
 workspace = true
 
 [dependencies]
-cognee-core = { path = "../core", version = "0.1.1", features = ["pipeline-run-registry"] }
-cognee-database = { path = "../database", version = "0.1.1" }
-cognee-graph = { path = "../graph", version = "0.1.1" }
-cognee-models = { path = "../models", version = "0.1.1" }
-cognee-session = { path = "../session", version = "0.1.1" }
-cognee-storage = { path = "../storage", version = "0.1.1" }
-cognee-vector = { path = "../vector", version = "0.1.1" }
+cognee-core = { path = "../core", version = "0.1.3", features = ["pipeline-run-registry"] }
+cognee-database = { path = "../database", version = "0.1.3" }
+cognee-graph = { path = "../graph", version = "0.1.3" }
+cognee-models = { path = "../models", version = "0.1.3" }
+cognee-session = { path = "../session", version = "0.1.3" }
+cognee-storage = { path = "../storage", version = "0.1.3" }
+cognee-vector = { path = "../vector", version = "0.1.3" }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
@@ -36,7 +36,9 @@ cognee-database = { path = "../database", features = ["sqlite"] }
 cognee-embedding  = { path = "../embedding", features = ["onnx"] }
 cognee-graph      = { path = "../graph", features = ["testing", "ladybug"] }
 cognee-ingestion  = { path = "../ingestion" }
-cognee-llm        = { path = "../llm" }
+# `mock` enables cassette record/replay for the hard_mode_orphan_sweep test
+# (see crates/cognify/Cargo.toml for the feature-unification note).
+cognee-llm        = { path = "../llm", features = ["mock"] }
 cognee-ontology   = { path = "../ontology" }
 cognee-storage    = { path = "../storage", features = ["testing"] }
 cognee-test-utils = { path = "../test-utils" }

@@ -10,7 +10,7 @@ use tempfile::TempDir;
 
 fn make_cmd(config_home: &TempDir) -> Command {
     let mut command = Command::new(assert_cmd::cargo::cargo_bin!("cognee-cli"));
-    command.env("XDG_CONFIG_HOME", config_home.path());
+    command.env("COGNEE_CONFIG_HOME", config_home.path());
     command
 }
 
@@ -29,7 +29,7 @@ fn test_memify_help() {
 // Functional CLI E2E tests below
 //
 // These follow the `cognify_live_smoke` pattern from cli_e2e.rs:
-// - Isolated TempDir per test with its own XDG_CONFIG_HOME and workdir.
+// - Isolated TempDir per test with its own COGNEE_CONFIG_HOME and workdir.
 // - `config_set` writes settings via the `cognee-cli config set` subcommand.
 // - `MOCK_EMBEDDING=true` forces zero-vector embeddings (no network for the
 //   embedding path). Memify itself never calls the LLM.
@@ -74,7 +74,7 @@ fn skip_if_no_llm(test_name: &str) -> Option<LlmEnv> {
 
 fn config_set(config_home: &TempDir, workdir: &Path, key: &str, json_value: &str) {
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("cognee-cli"));
-    cmd.env("XDG_CONFIG_HOME", config_home.path())
+    cmd.env("COGNEE_CONFIG_HOME", config_home.path())
         .current_dir(workdir)
         .args(["config", "set", key, json_value])
         .assert()
@@ -89,13 +89,13 @@ struct Workspace {
 }
 
 impl Workspace {
-    /// Returns a `Command` with `XDG_CONFIG_HOME`, `current_dir`, and
+    /// Returns a `Command` with `COGNEE_CONFIG_HOME`, `current_dir`, and
     /// `MOCK_EMBEDDING=true` already applied. The binary never talks to a
     /// real embedding backend in these tests.
     fn cognee_cli_cmd(&self) -> Command {
         let mut command = Command::new(assert_cmd::cargo::cargo_bin!("cognee-cli"));
         command
-            .env("XDG_CONFIG_HOME", self.config_home.path())
+            .env("COGNEE_CONFIG_HOME", self.config_home.path())
             .env("MOCK_EMBEDDING", "true")
             .current_dir(self.workdir.path());
         command

@@ -1,10 +1,21 @@
 name: CI
 
+# Keyed test suite — requires repository secrets (OPENAI_KEY) for the LLM
+# integration tests. GitHub does not pass secrets to `pull_request` runs from
+# forks, so every job here is gated to in-repo refs (push / workflow_dispatch /
+# same-repo PRs) via the `head.repo.full_name == github.repository` check on the
+# entry jobs (`lint`, `msrv`); the rest cascade through `needs`. Fork PRs skip
+# this workflow entirely and are covered by the fork-safe `Community Checks
+# (No Secrets)` workflow instead. Mirrors the upstream Python cognee
+# `test_suites.yml` / `community_tests.yml` split.
+
 on:
   push:
     branches: [ main, master ]
   pull_request:
     branches: [ main, master ]
+    types: [ opened, synchronize, reopened ]
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.ref }}-${{ github.sha }}
@@ -35,6 +46,12 @@ jobs:
   lint:
     name: Lint (fmt + check + clippy)
     runs-on: ubuntu-latest
+    # In-repo only: fork PRs get no secrets and are covered by the
+    # `Community Checks (No Secrets)` workflow. `test`, `pgvector-spans` and the
+    # binding-check jobs cascade off this gate via `needs`.
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository
 
     steps:
       - name: Checkout
@@ -174,6 +191,10 @@ jobs:
   msrv:
     name: MSRV (1.91)
     runs-on: ubuntu-latest
+    # In-repo only (no `needs`, so it carries its own gate). See `lint`.
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -222,6 +243,92 @@ jobs:
       - name: Check (MSRV)
         run: cargo +1.91.0 check --all-targets
 
+  # ── wasm32 Config-1 lane: logic crates compile + run on wasm32 ────────
+  # The wasm smoke-test files are #![cfg(target_arch = "wasm32")], so the native
+  # lint/check lanes compile them to empty crates and never type-check them.
+  # This lane builds the logic crates for wasm32-unknown-unknown, type-checks
+  # every wasm test target (so a DocumentChunk-field or chunk_text-signature
+  # drift fails CI), and runs the Node smoke test. The headless-browser runner
+  # stays manual — it needs a WebDriver + browser; see docs/spike-wasm-config1.md.
+  # No protoc/cmake/lbug here: the three logic crates pull none of them.
+  wasm:
+    name: wasm32 (Config-1 logic crates)
+    runs-on: ubuntu-latest
+    # In-repo only (no `needs`, so it carries its own gate). See `lint`. Needs no
+    # secrets itself, but it belongs to the keyed workflow that fork PRs skip
+    # wholesale — the fork-safe `Community Checks` workflow covers forks instead.
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      # rust-toolchain.toml pins the repo to 1.91, and that pin takes precedence
+      # over @stable — so `cargo build --target wasm32-unknown-unknown` runs under
+      # 1.91, not stable. The wasm32 std component must be on the *pinned*
+      # toolchain. `rustup target add` honors the rust-toolchain.toml override
+      # (exactly as scripts/check_all.sh does locally); the action's `targets:`
+      # input adds it to @stable instead, which is why CI hit
+      # `error[E0463]: can't find crate for std`.
+      - name: Add wasm32 target to the pinned toolchain
+        run: rustup target add wasm32-unknown-unknown
+
+      - name: Install Node (for the wasm-bindgen test runner)
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Cache cargo/target (wasm)
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: wasm-v1
+
+      # Build first so Cargo.lock exists (it is gitignored) before we pin the
+      # runner to the resolved wasm-bindgen version below.
+      - name: Build logic crates (wasm32)
+        run: |
+          cargo build -p cognee-models -p cognee-utils --target wasm32-unknown-unknown
+          cargo build -p cognee-chunking --no-default-features --features tiktoken --target wasm32-unknown-unknown
+
+      # Drift guard: type-check every wasm test target. --no-run needs no runner,
+      # so it works before wasm-bindgen-cli is installed.
+      - name: Type-check wasm test targets (drift guard)
+        run: |
+          # utils/models have no wasm-specific tests, but this compiles their wasm
+          # *test* build — which is what this PR's tokio dev-dep split (utils) and
+          # the cfg(not(wasm32)) gates on the retry (utils) and data_input (models)
+          # test modules exist to keep green. `cargo build` only covers the lib, so
+          # without this a regression to those gates stays invisible until someone
+          # runs the wasm tests by hand.
+          cargo test -p cognee-utils -p cognee-models --target wasm32-unknown-unknown --no-run
+          # chunking under BOTH feature configs: the shared wasm_smoke module has a
+          # #[cfg(feature = "tiktoken")] arm, and the no-feature build of
+          # tests/wasm.rs is otherwise only ever exercised by the live Node step
+          # below (which depends on the wasm-bindgen-cli install). A renamed
+          # DocumentChunk field or a changed chunk_text signature breaks here.
+          # Always spell chunking's wasm feature set explicitly with
+          # --no-default-features [--features tiktoken] — identical to the build
+          # step and check_all.sh — so the checks can't diverge if `default` grows.
+          cargo test -p cognee-chunking --no-default-features --target wasm32-unknown-unknown --no-run
+          cargo test -p cognee-chunking --no-default-features --features tiktoken --target wasm32-unknown-unknown --no-run
+
+      # wasm-bindgen-test-runner must match the resolved wasm-bindgen crate
+      # exactly or it refuses to run; read the version from the just-generated lock.
+      - name: Install wasm-bindgen-test-runner (matching the locked version)
+        run: |
+          WB_VER=$(sed -n '/^name = "wasm-bindgen"$/{n;s/^version = "\(.*\)"$/\1/p}' Cargo.lock)
+          echo "Installing wasm-bindgen-cli $WB_VER"
+          cargo install wasm-bindgen-cli --version "$WB_VER" --locked
+
+      - name: Run Node smoke tests (no-features + tiktoken)
+        run: |
+          cargo test -p cognee-chunking --no-default-features --target wasm32-unknown-unknown --test wasm
+          cargo test -p cognee-chunking --no-default-features --features tiktoken --target wasm32-unknown-unknown --test wasm
+
   # ── Stage 2: Build and run tests (depends on lint) ────────────────────
   test:
     name: Test (stable)
@@ -232,6 +339,17 @@ jobs:
       OPENAI_URL: https://api.openai.com/v1
       OPENAI_TOKEN: ${{ secrets.OPENAI_KEY }}
       OPENAI_MODEL: gpt-4o-mini
+      # Select the tuned nextest CI profile (.config/nextest.toml): parallel
+      # execution, fail-fast off, one retry for transient external flakiness.
+      # nextest reads NEXTEST_PROFILE natively, so scripts/run_tests_with_openai.sh
+      # needs no extra flags.
+      NEXTEST_PROFILE: ci
+      # Run cassette-converted integration tests offline from committed cassettes
+      # (crates/*/tests/fixtures/cassettes/) instead of calling the live OpenAI
+      # API. Tests still on the real API ignore this var and use OPENAI_TOKEN.
+      # Cassettes are re-recorded on demand via the record-cassettes workflow.
+      # See docs/build/ci-test-parallelism.md / Approach E.
+      COGNEE_TEST_REPLAY: "1"
 
     steps:
       - name: Checkout
@@ -311,6 +429,66 @@ jobs:
       - name: Test
         run: bash scripts/run_tests_with_openai.sh
 
+  # ── Stage 2.5: Docs + feature-variant lanes (depends on lint, parallel with `test`) ──
+  # Moved out of the `test` job so they run concurrently with it instead of
+  # serially after the workspace test run. Together these were ~14 min of the
+  # test job's wall time (the two `cargo doc` builds ≈ 11 min, the telemetry /
+  # no-default test lanes ≈ 3 min); off the test critical path they no longer
+  # gate the downstream binding jobs. None of these need OpenAI credentials.
+  docs-and-extras:
+    name: Docs + feature lanes
+    needs: lint
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install mold linker
+        uses: rui314/setup-mold@v1
+        with:
+          make-default: true
+
+      # cmake + protoc are needed by lbug's bundled C++ build (via cognee-lib).
+      - name: Install build deps
+        run: sudo apt-get update && sudo apt-get install -y cmake protobuf-compiler
+
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: false
+          swap-storage: false
+          docker-images: true
+
+      - name: ccache (lbug bundled C++, restore-only)
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: lbug-cxx
+          max-size: 1G
+          save: false
+
+      # Restore the test job's cache read-only (it has the compiled rlibs the
+      # doc/feature builds reuse). save-if:false so this parallel job never races
+      # the `test` job's save of the same key.
+      - name: Cache cargo/target (test, restore-only)
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: workspace-test-v6
+          save-if: "false"
+
+      - name: Cache ORT binary
+        uses: actions/cache@v4
+        with:
+          path: target/ort-cache
+          key: ort-v2.0.0-rc.12-cpu-linux-x86_64
+
       # Telemetry-feature test lane. The integration test from task 01-10
       # spawns an in-process tonic gRPC server on 127.0.0.1:0; no external
       # OTLP collector is needed. Covers both the OTEL crate
@@ -332,8 +510,7 @@ jobs:
       # Noop-fallback test lane for the cognee-telemetry crate. Exercises
       # crates/telemetry/tests/noop_fallback.rs (task 02-08) so we catch
       # cfg(not(feature = "telemetry")) drift at *runtime*, not just at
-      # compile time. Reuses target/no-default for cache locality with the
-      # sibling lint-job step.
+      # compile time.
       - name: Test (no default features, telemetry crate noop fallback)
         env:
           CARGO_TARGET_DIR: target/no-default
@@ -426,11 +603,15 @@ jobs:
           max-size: 1G
           save: false
 
-      - name: Cache cargo/target (test)
+      # Restore-only: this lane runs one small `cargo test -p cognee-vector`,
+      # fully covered by the `test` job's debug build of the same key. Saving
+      # here only added a divergent version of workspace-test-v6 (cache churn),
+      # so it restores but does not save.
+      - name: Cache cargo/target (test, restore-only)
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: workspace-test-v6
-          cache-on-failure: true
+          save-if: "false"
 
       - name: Cache ORT binary
         uses: actions/cache@v4
@@ -441,10 +622,16 @@ jobs:
       - name: Run pgvector span instrumentation tests
         run: cargo test -p cognee-vector --test pgvector_span_instrumentation -- --nocapture
 
-  # ── Stage 3: Language binding checks (depends on test, parallel with each other) ──
+  # ── Stage 3: Language binding checks (depend on lint, parallel with `test`) ──
+  # Gated on `lint` (not `test`) so the binding builds run concurrently with the
+  # workspace test run instead of serially after it — the C API job in particular
+  # is a long pole (~13–40 min) that previously started only once `test` finished.
+  # `lint` already proves the workspace compiles; these jobs validate the binding
+  # layers, a separate concern from the test result. Trade-off: they still run if
+  # a test later fails, but on green runs the wall-clock saving is large.
   capi-check:
     name: C API Check
-    needs: test
+    needs: lint
     runs-on: ubuntu-latest
 
     env:
@@ -482,16 +669,24 @@ jobs:
           key: lbug-cxx
           max-size: 1G
           save: false
-      # The capi workspace has its own target dir (capi/target/) after workspace
-      # extraction (D10). Cache it separately from the root workspace so the
-      # capi cold-build warm-up seeds subsequent runs.
+      # Restore-only (save-if:false): the capi workspace's cache is the single
+      # largest in the repo (~3 GB, covering both the root and capi/ target
+      # dirs). Saving it kept the repo over GitHub's 10 GB cache quota, so the
+      # LRU eviction rotated through the smaller working caches (lint, test,
+      # python) and left them cold (~37-min lint, ~61-min python). Dropping the
+      # save frees that ~3 GB so those stay warm; capi-check then runs cold
+      # (~37 min) every run (no job writes this key anymore), but it runs in
+      # parallel off `lint` and is no longer the binding constraint. Net: a
+      # stable critical path of ~lint(warm) + capi(~37 min cold) ≈ 42 min, vs a
+      # budget that otherwise bounces 70–98 min as eviction rotates. Re-enable
+      # the save (and bump the key) if the repo's cache quota is ever raised.
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: capi-check-v1
           workspaces: |
             . -> target
             capi -> target
-          cache-on-failure: true
+          save-if: "false"
       - uses: actions/cache@v4
         with:
           path: capi/target/ort-cache
@@ -505,7 +700,7 @@ jobs:
 
   python-check:
     name: Python Bindings Check
-    needs: test
+    needs: lint
     runs-on: ubuntu-latest
 
     steps:
@@ -536,10 +731,17 @@ jobs:
           key: lbug-cxx
           max-size: 1G
           save: false
+      # Restore-only share of workspace-test-v6: `maturin develop` (python/scripts/
+      # check.sh) builds in DEBUG, so it reuses the test job's debug dep rlibs —
+      # maturin then only compiles the PyO3 extension + workspace crates. A
+      # dedicated key was tried (assuming a release build) but it just added a
+      # ~3 GB cache that pushed the repo over GitHub's 10 GB quota and got evicted.
+      # restore-only (save:false) so it benefits from the cache without writing a
+      # divergent copy (the `test` job is the sole writer).
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: workspace-test-v6
-          cache-on-failure: true
+          save-if: "false"
       - uses: actions/cache@v4
         with:
           path: target/ort-cache
@@ -560,7 +762,7 @@ jobs:
 
   ts-check:
     name: JS/TS Bindings Check
-    needs: test
+    needs: lint
     runs-on: ubuntu-latest
 
     steps:
@@ -581,9 +783,12 @@ jobs:
           key: lbug-cxx
           max-size: 1G
           save: false
+      # Dedicated key, NOT shared workspace-test-v6: the Neon module build
+      # differs from the debug test cache, so sharing churned/polluted it. Its
+      # own key caches the binding build across runs.
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: workspace-test-v6
+          shared-key: workspace-ts-v1
           workspaces: |
             . -> target
             ts/cognee-ts-neon -> target
@@ -598,3 +803,35 @@ jobs:
           cache: "npm"
           cache-dependency-path: "ts/package.json"
       - run: bash ts/scripts/check.sh
+
+  # ── Aggregate status (single required check for branch protection) ────
+  # Gated to in-repo like the rest of the suite, so it does not run — and does
+  # not report failure — on fork PRs (those are covered by the community
+  # workflow's own aggregator). On in-repo refs every job above runs, so any
+  # non-success here means the keyed suite failed. Mirrors the upstream Python
+  # cognee `notify` aggregator.
+  notify:
+    name: Test Suite Status
+    needs: [ lint, msrv, wasm, test, docs-and-extras, pgvector-spans, capi-check, python-check, ts-check ]
+    runs-on: ubuntu-latest
+    if: >-
+      !cancelled() &&
+      (github.event_name != 'pull_request' ||
+       github.event.pull_request.head.repo.full_name == github.repository)
+    steps:
+      - name: Check status
+        run: |
+          if [[ "${{ needs.lint.result }}" == "success" &&
+                "${{ needs.msrv.result }}" == "success" &&
+                "${{ needs.wasm.result }}" == "success" &&
+                "${{ needs.test.result }}" == "success" &&
+                "${{ needs.docs-and-extras.result }}" == "success" &&
+                "${{ needs.pgvector-spans.result }}" == "success" &&
+                "${{ needs.capi-check.result }}" == "success" &&
+                "${{ needs.python-check.result }}" == "success" &&
+                "${{ needs.ts-check.result }}" == "success" ]]; then
+            echo "All keyed test-suite jobs passed!"
+          else
+            echo "One or more keyed test-suite jobs failed."
+            exit 1
+          fi

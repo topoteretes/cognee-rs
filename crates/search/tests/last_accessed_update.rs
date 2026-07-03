@@ -8,9 +8,17 @@
 //! Ingests a document, cognifies it, then performs searches and checks that the
 //! `last_accessed` timestamp on the source `Data` record advances monotonically.
 //!
-//! Required environment variables (set by `scripts/run_tests_with_local_env.sh`):
-//!   OPENAI_URL, OPENAI_TOKEN, OPENAI_MODEL,
-//!   COGNEE_E2E_EMBED_MODEL_PATH, COGNEE_E2E_TOKENIZER_PATH
+//! Scope note: this test exercises the last-accessed *plumbing* only. It uses a
+//! deterministic mock embedding engine and `MockVectorDB` (no similarity
+//! threshold, single chunk), so the `Chunks` search always returns the one
+//! chunk regardless of relevance — semantic retrieval/ranking is NOT tested
+//! here (see crates/search/tests/integration_search_matrix.rs for that, which
+//! stays on a real embedding engine).
+//!
+//! Cassette-backed (Approach E): the LLM is replayed from
+//! `tests/fixtures/cassettes/last_accessed_update.json` when `COGNEE_TEST_REPLAY`
+//! is set; otherwise it uses the real OpenAI-compatible endpoint (OPENAI_URL /
+//! OPENAI_TOKEN / OPENAI_MODEL). No local embedding model is required.
 //!
 //! Run with: cargo test --package cognee-search --test last_accessed_update
 
@@ -32,49 +40,8 @@ use cognee_vector::VectorDB;
 use tempfile::TempDir;
 use uuid::Uuid;
 
-// ---------------------------------------------------------------------------
-// Helpers inlined (the search crate has no shared test_utils module for
-// integration tests in separate files; the matrix test uses `mod test_utils`
-// which is a sibling file).
-// ---------------------------------------------------------------------------
-
-/// Read a required environment variable, loading `.env` first (idempotent).
-fn require_env(var_name: &str) -> String {
-    let _ = dotenv::dotenv();
-
-    let canonical_fallback = match var_name {
-        "OPENAI_TOKEN" => Some("LLM_API_KEY"),
-        "OPENAI_URL" => Some("LLM_ENDPOINT"),
-        "OPENAI_MODEL" => Some("LLM_MODEL"),
-        _ => None,
-    };
-
-    if let Ok(v) = std::env::var(var_name)
-        && !v.is_empty()
-    {
-        return v;
-    }
-    if let Some(canonical) = canonical_fallback
-        && let Ok(v) = std::env::var(canonical)
-        && !v.is_empty()
-    {
-        return v;
-    }
-    panic!("Required environment variable '{var_name}' is not set")
-}
-
-fn create_adapter_from_env() -> Arc<cognee_llm::OpenAIAdapter> {
-    let base_url = require_env("OPENAI_URL");
-    let api_token = require_env("OPENAI_TOKEN");
-    let model = std::env::var("LLM_MODEL")
-        .or_else(|_| std::env::var("OPENAI_MODEL"))
-        .unwrap_or_else(|_| "gpt-4o-mini".to_string());
-
-    Arc::new(
-        cognee_llm::OpenAIAdapter::new(model, api_token, Some(base_url))
-            .unwrap_or_else(|e| panic!("Failed to create OpenAI adapter: {e}")),
-    )
-}
+mod test_utils;
+use test_utils::{create_deterministic_embedding_engine, create_llm_from_env};
 
 // ---------------------------------------------------------------------------
 // Test
@@ -82,19 +49,10 @@ fn create_adapter_from_env() -> Arc<cognee_llm::OpenAIAdapter> {
 
 #[tokio::test]
 async fn test_search_updates_last_accessed_timestamp() {
-    // ── Environment ──────────────────────────────────────────────────────────
-    let _ = require_env("OPENAI_URL");
-    let _ = require_env("OPENAI_TOKEN");
-    let _ = require_env("OPENAI_MODEL");
-
     // ── Infrastructure setup ─────────────────────────────────────────────────
     let temp_dir = TempDir::new().expect("temp dir");
 
-    let Some((embedding_engine, _embedding_dims)) =
-        cognee_test_utils::create_test_embedding_engine().await
-    else {
-        return;
-    };
+    let embedding_engine = create_deterministic_embedding_engine();
 
     let storage: Arc<dyn StorageTrait> =
         Arc::new(LocalStorage::new(temp_dir.path().join("storage")));
@@ -118,7 +76,7 @@ async fn test_search_updates_last_accessed_timestamp() {
     // In-memory mock vector DB (qdrant extracted to closed cognee-vector-qdrant).
     let vector_db: Arc<dyn VectorDB> = Arc::new(MockVectorDB::new());
 
-    let llm: Arc<dyn Llm> = create_adapter_from_env();
+    let llm: Arc<dyn Llm> = create_llm_from_env("last_accessed_update");
     let owner_id = Uuid::nil();
 
     // ── Ingest text ──────────────────────────────────────────────────────────
@@ -184,6 +142,7 @@ async fn test_search_updates_last_accessed_timestamp() {
     {
         Ok(_) => {}
         Err(e) => {
+            test_utils::fail_loudly_on_replay_miss("cognify", &e);
             eprintln!("Skipping test: cognify failed: {e}");
             return;
         }

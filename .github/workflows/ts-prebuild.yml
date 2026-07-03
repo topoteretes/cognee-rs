@@ -1,7 +1,7 @@
 name: TS Prebuild
 
 # Build per-platform prebuilt .node binaries and publish per-platform npm
-# packages (@cognee-ts/neon-<platform>) on release tags, then publish the main
+# packages (@cognee/neon-<platform>) on release tags, then publish the main
 # `cognee-ts` npm package once all platform packages are live.
 #
 # The matrix matches the entries in:
@@ -36,6 +36,9 @@ jobs:
   # ── Build per-platform .node artifacts ───────────────────────────────
   build-platform:
     name: Build ${{ matrix.platform }}
+    # Cap each leg so a stuck build (e.g. a hung native compile) fails fast
+    # instead of running to the 6h/24h default and burning runner time.
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
@@ -52,15 +55,18 @@ jobs:
             rust-target: aarch64-unknown-linux-gnu
             cross: true
 
-          # macOS x64
-          - platform: darwin-x64
-            runner: macos-13
-            rust-target: x86_64-apple-darwin
-            cross: false
+          # NOTE: no darwin-x64 (x86_64-apple-darwin) leg. Intel macOS is EOL
+          # (GitHub retires its last x86_64 runner in 2027) and `ort` ships no
+          # prebuilt ONNX Runtime for x86_64-apple-darwin, so the addon can't
+          # link without building ONNX Runtime from source. The package was
+          # never published; dropped rather than carry a permanently-red leg.
 
-          # macOS arm64 (Apple Silicon)
+          # macOS arm64 (Apple Silicon). Use macos-15 (default Xcode 16.4):
+          # the older macos-14 default (Xcode 15.4) ships a libc++ whose
+          # std::construct_at trips a C++20 aggregate-init bug while compiling
+          # lbug's bundled C++ (needs Clang 16+ / P0960 support).
           - platform: darwin-arm64
-            runner: macos-14
+            runner: macos-15
             rust-target: aarch64-apple-darwin
             cross: false
 
@@ -107,6 +113,42 @@ jobs:
       - name: Install native build deps (Windows)
         if: runner.os == 'Windows'
         run: choco install cmake protoc --no-progress
+
+      # lbug (a Kùzu fork) forces the CMake "Ninja" generator, and Ninja+MSVC
+      # does NOT search for the compiler — cl.exe/link.exe must already be on
+      # PATH via the MSVC developer environment. Without it the build fails with
+      # `ninja: CreateProcess: %1 is not a valid Win32 application`. This is the
+      # GitHub-hosted equivalent of the `vcvars64.bat` call Kùzu's own Windows
+      # CI uses; it exports the MSVC env to all subsequent steps.
+      - name: Set up MSVC developer environment (Windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      # Two Windows-only build-env fixes:
+      #
+      # 1. .cargo/config.toml routes the bundled CMake C/C++ build through
+      #    scripts/ccache-launcher.sh, a POSIX sh script. Ninja can't
+      #    CreateProcess a .sh on Windows (`%1 is not a valid Win32
+      #    application`). Clear the launcher so CMake invokes cl.exe directly —
+      #    a set env var overrides the non-forced [env] in config.toml, and
+      #    ccache isn't installed on the Windows runner anyway.
+      #
+      # 2. CRT mismatch: lbug compiles its C++ with /MD (dynamic CRT, matching
+      #    Rust's msvc default), but esaxx-rs hardcodes `.static_crt(true)` ->
+      #    /MT, so linking the addon fails with LNK2038/LNK1319. Force /MD for
+      #    cc-built C++ deps via target-scoped CXXFLAGS/CFLAGS (cc appends env
+      #    flags last, so /MD wins over esaxx's /MT at cl.exe). Target-scoped so
+      #    host build-script compiles are untouched.
+      - name: Configure Windows C/C++ build env
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          echo "CMAKE_C_COMPILER_LAUNCHER=" >> "$GITHUB_ENV"
+          echo "CMAKE_CXX_COMPILER_LAUNCHER=" >> "$GITHUB_ENV"
+          echo "CFLAGS_x86_64_pc_windows_msvc=/MD" >> "$GITHUB_ENV"
+          echo "CXXFLAGS_x86_64_pc_windows_msvc=/MD" >> "$GITHUB_ENV"
 
       - name: ccache (lbug bundled C++, restore-only)
         if: runner.os != 'Windows'
@@ -230,7 +272,7 @@ jobs:
     name: Publish npm packages
     needs: [build-platform, check-token]
     runs-on: ubuntu-latest
-    # Env-guarded per T13 release-plz pattern. NPM_TOKEN is T17 scope
+    # Env-guarded per the token-gate pattern. NPM_TOKEN is T17 scope
     # (registry publish — irreversible, gated on F8 + explicit human "go").
     # Pre-T17 the secret is intentionally absent on cognee-rs so this job
     # silently skips (gated on the check-token precheck output, since `secrets`
@@ -267,7 +309,7 @@ jobs:
         run: |
           for PLATFORM in \
             linux-x64-gnu linux-arm64-gnu \
-            darwin-x64 darwin-arm64 \
+            darwin-arm64 \
             win32-x64-msvc; do
             SRC="/tmp/neon-artifacts/neon-${PLATFORM}/cognee_ts_neon.node"
             DEST="ts/platform-packages/${PLATFORM}/cognee_ts_neon.node"
@@ -285,7 +327,7 @@ jobs:
         run: |
           for PLATFORM in \
             linux-x64-gnu linux-arm64-gnu \
-            darwin-x64 darwin-arm64 \
+            darwin-arm64 \
             win32-x64-msvc; do
             PKG="@cognee/neon-${PLATFORM}"
             VER=$(node -p "require('./${PLATFORM}/package.json').version")
@@ -295,7 +337,9 @@ jobs:
               echo "SKIP ${PKG}@${VER}: already on registry"
             else
               echo "--- Publishing ${PKG}@${VER} ---"
-              npm publish "${PLATFORM}" --access public
+              # `./` prefix so npm treats the arg as a directory to pack, not a
+              # package spec to fetch (a bare `linux-x64-gnu` → E404 GET /linux-x64-gnu).
+              npm publish "./${PLATFORM}" --access public
             fi
           done
 

@@ -19,14 +19,14 @@ default = []
 telemetry = ["cognee-telemetry/telemetry"]
 
 [dependencies]
-cognee-embedding = { path = "../embedding", version = "0.1.1" }
-cognee-database = { path = "../database", version = "0.1.1" }
-cognee-graph = { path = "../graph", version = "0.1.1" }
-cognee-llm = { path = "../llm", version = "0.1.1" }
-cognee-session = { path = "../session", version = "0.1.1", features = ["sea-orm-store"] }
-cognee-telemetry = { path = "../telemetry", version = "0.1.1" }
-cognee-utils = { path = "../utils", version = "0.1.1" }
-cognee-vector = { path = "../vector", version = "0.1.1" }
+cognee-embedding = { path = "../embedding", version = "0.1.3" }
+cognee-database = { path = "../database", version = "0.1.3" }
+cognee-graph = { path = "../graph", version = "0.1.3" }
+cognee-llm = { path = "../llm", version = "0.1.3" }
+cognee-session = { path = "../session", version = "0.1.3", features = ["sea-orm-store"] }
+cognee-telemetry = { path = "../telemetry", version = "0.1.3" }
+cognee-utils = { path = "../utils", version = "0.1.3" }
+cognee-vector = { path = "../vector", version = "0.1.3" }
 
 async-trait.workspace = true
 indexmap = "2"
@@ -52,7 +52,9 @@ cognee-ingestion  = { path = "../ingestion" }
 cognee-cognify    = { path = "../cognify" }
 cognee-ontology   = { path = "../ontology" }
 cognee-delete     = { path = "../delete" }
-cognee-llm        = { path = "../llm" }
+# `mock` enables cassette record/replay (ReplayLlm/RecordingLlm) for the
+# integration tests — see crates/cognify/Cargo.toml for the unification note.
+cognee-llm        = { path = "../llm", features = ["mock"] }
 cognee-session    = { path = "../session", features = ["fs"] }
 cognee-test-utils = { path = "../test-utils" }
 dotenv.workspace = true

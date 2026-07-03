@@ -1098,6 +1098,7 @@ pub async fn add_data_points(
         embedding_engine,
         vector_db,
         config,
+        &embeddings,
     )
     .await?;
 
@@ -2664,6 +2665,43 @@ async fn generate_embeddings(
     Ok(embeddings)
 }
 
+/// Return one vector per `texts[i]`, reusing `precomputed[ids[i]]` when present
+/// and embedding only the texts whose id is missing. `ids` and `texts` must be
+/// parallel slices.
+async fn reuse_or_embed(
+    engine: &Arc<dyn EmbeddingEngine>,
+    precomputed: &std::collections::HashMap<Uuid, Vec<f32>>,
+    ids: &[Uuid],
+    texts: &[&str],
+) -> Result<Vec<Vec<f32>>, CognifyError> {
+    debug_assert_eq!(ids.len(), texts.len(), "ids and texts must be parallel");
+    let missing_texts: Vec<&str> = ids
+        .iter()
+        .zip(texts)
+        .filter(|(id, _)| !precomputed.contains_key(*id))
+        .map(|(_, text)| *text)
+        .collect();
+
+    let fresh = if missing_texts.is_empty() {
+        Vec::new()
+    } else {
+        engine
+            .embed(&missing_texts)
+            .await
+            .map_err(|e| CognifyError::EmbeddingError(e.to_string()))?
+    };
+
+    let mut fresh = fresh.into_iter();
+    ids.iter()
+        .map(|id| match precomputed.get(id) {
+            Some(vector) => Ok(vector.clone()),
+            None => fresh
+                .next()
+                .ok_or_else(|| CognifyError::EmbeddingError("missing fresh embedding".into())),
+        })
+        .collect()
+}
+
 /// Index data points in vector database.
 #[allow(clippy::too_many_arguments)]
 async fn index_data_points(
@@ -2679,9 +2717,18 @@ async fn index_data_points(
     engine: Arc<dyn EmbeddingEngine>,
     vector_db: Arc<dyn VectorDB>,
     config: &CognifyConfig,
+    precomputed_embeddings: &[Embedding],
 ) -> Result<IndexedFieldsStats, CognifyError> {
     let mut stats = IndexedFieldsStats::default();
     let dimension = engine.dimension();
+
+    // Vectors already produced by `generate_embeddings`, keyed by data point id,
+    // so the chunk/entity/summary collections below reuse them rather than
+    // re-embedding the same text.
+    let precomputed: std::collections::HashMap<Uuid, Vec<f32>> = precomputed_embeddings
+        .iter()
+        .map(|e| (e.data_point_id, e.vector.clone()))
+        .collect();
 
     // 1. Index DocumentChunk.text field
     if !chunks.is_empty() {
@@ -2696,11 +2743,9 @@ async fn index_data_points(
                 .map_err(|e| CognifyError::VectorDBError(e.to_string()))?;
         }
 
+        let ids: Vec<Uuid> = chunks.iter().map(|c| c.base.id).collect();
         let texts: Vec<_> = chunks.iter().map(|c| c.text.as_str()).collect();
-        let vectors = engine
-            .embed(&texts)
-            .await
-            .map_err(|e| CognifyError::EmbeddingError(e.to_string()))?;
+        let vectors = reuse_or_embed(&engine, &precomputed, &ids, &texts).await?;
 
         let points: Vec<VectorPoint> = chunks
             .iter()
@@ -2753,11 +2798,9 @@ async fn index_data_points(
                 .map_err(|e| CognifyError::VectorDBError(e.to_string()))?;
         }
 
+        let ids: Vec<Uuid> = entities.iter().map(|e| e.entity.base.id).collect();
         let names: Vec<_> = entities.iter().map(|e| e.entity.name.as_str()).collect();
-        let vectors = engine
-            .embed(&names)
-            .await
-            .map_err(|e| CognifyError::EmbeddingError(e.to_string()))?;
+        let vectors = reuse_or_embed(&engine, &precomputed, &ids, &names).await?;
 
         let points: Vec<VectorPoint> = entities
             .iter()
@@ -2872,11 +2915,9 @@ async fn index_data_points(
                 .map_err(|e| CognifyError::VectorDBError(e.to_string()))?;
         }
 
+        let ids: Vec<Uuid> = summaries.iter().map(|s| s.base.id).collect();
         let texts: Vec<_> = summaries.iter().map(|s| s.text.as_str()).collect();
-        let vectors = engine
-            .embed(&texts)
-            .await
-            .map_err(|e| CognifyError::EmbeddingError(e.to_string()))?;
+        let vectors = reuse_or_embed(&engine, &precomputed, &ids, &texts).await?;
 
         let points: Vec<VectorPoint> = summaries
             .iter()
@@ -4039,6 +4080,191 @@ mod tests {
             "paragraph_end".to_string(),
             doc_id,
         )
+    }
+
+    fn test_entity(name: &str, entity_type_id: Uuid) -> GraphNodePair {
+        let mut entity_base = DataPoint::new("Entity", None);
+        entity_base.id = Uuid::new_v4();
+        let entity = cognee_models::Entity {
+            base: entity_base,
+            name: name.to_string(),
+            is_a: None,
+            description: format!("description of {name}"),
+        };
+
+        let mut type_base = DataPoint::new("EntityType", None);
+        type_base.id = entity_type_id;
+        let entity_type = cognee_models::EntityType {
+            base: type_base,
+            name: "Generic".to_string(),
+            description: "Generic type".to_string(),
+        };
+
+        GraphNodePair {
+            entity,
+            entity_type,
+        }
+    }
+
+    // index_data_points reuses the vectors produced by generate_embeddings, so
+    // chunks/entities/summaries are embedded once. Only the entity-type name is
+    // embedded inside index_data_points, for 6 embedded texts in total.
+    #[tokio::test]
+    async fn embedding_reuse_avoids_double_pass() {
+        use cognee_embedding::MockEmbeddingEngine;
+        use cognee_vector::MockVectorDB;
+
+        let engine = Arc::new(MockEmbeddingEngine::new(8));
+        let engine_dyn: Arc<dyn EmbeddingEngine> = engine.clone();
+        let vector: Arc<dyn VectorDB> = Arc::new(MockVectorDB::new());
+
+        let doc_id = Uuid::new_v4();
+        let chunks = vec![
+            test_chunk(Uuid::new_v4(), doc_id, "first chunk text"),
+            test_chunk(Uuid::new_v4(), doc_id, "second chunk text"),
+        ];
+
+        // Both entities share one EntityType id, so dedup embeds a single type.
+        let shared_type_id = Uuid::new_v4();
+        let entities = vec![
+            test_entity("Alice", shared_type_id),
+            test_entity("Bob", shared_type_id),
+        ];
+
+        let summaries = vec![TextSummary::new(
+            chunks[0].base.id,
+            "a summary".to_string(),
+            None,
+            "mock-model".to_string(),
+        )];
+
+        let dataset_id = Uuid::new_v4();
+        let config = CognifyConfig::default(); // embed_triplets = false
+
+        // 2 chunks + 2 entities + 1 summary = 5 texts.
+        let embeddings = generate_embeddings(&chunks, &entities, &summaries, engine_dyn.clone())
+            .await
+            .unwrap();
+        assert_eq!(embeddings.len(), 5);
+        assert_eq!(engine.embedded_text_count(), 5);
+
+        index_data_points(
+            &chunks,
+            &entities,
+            &summaries,
+            &[],
+            &[],
+            &[],
+            dataset_id,
+            None,
+            None,
+            engine_dyn,
+            vector,
+            &config,
+            &embeddings,
+        )
+        .await
+        .unwrap();
+
+        // 5 from generate_embeddings + 1 entity-type (not precomputed) = 6.
+        assert_eq!(engine.embedded_text_count(), 6);
+    }
+
+    // Prints a before/after embedding-work comparison for a realistic fixture.
+    // The "before" run passes an empty precomputed slice, which reproduces the
+    // pre-fix double pass (index_data_points re-embeds everything); the "after"
+    // run passes the precomputed vectors so chunks/entities/summaries are
+    // embedded once. Run with:
+    //   cargo test -p cognee-cognify --lib report_embedding_reuse_savings -- --nocapture
+    #[tokio::test]
+    async fn report_embedding_reuse_savings() {
+        use cognee_embedding::MockEmbeddingEngine;
+        use cognee_vector::MockVectorDB;
+
+        let doc_id = Uuid::new_v4();
+        let chunks: Vec<DocumentChunk> = (0..24)
+            .map(|i| test_chunk(Uuid::new_v4(), doc_id, &format!("chunk text number {i}")))
+            .collect();
+        let type_ids: Vec<Uuid> = (0..4).map(|_| Uuid::new_v4()).collect();
+        let entities: Vec<GraphNodePair> = (0..16)
+            .map(|i| test_entity(&format!("Entity {i}"), type_ids[i % 4]))
+            .collect();
+        let summaries: Vec<TextSummary> = (0..10)
+            .map(|i| {
+                TextSummary::new(
+                    Uuid::new_v4(),
+                    format!("summary number {i}"),
+                    None,
+                    "mock-model".to_string(),
+                )
+            })
+            .collect();
+
+        let overlap = chunks.len() + entities.len() + summaries.len();
+        let dataset_id = Uuid::new_v4();
+        let config = CognifyConfig::default();
+
+        // Runs generate_embeddings + index_data_points on one counting engine
+        // and returns (embed calls, texts embedded). `reuse = false` passes an
+        // empty precomputed slice to reproduce the pre-fix behavior.
+        async fn measure(
+            reuse: bool,
+            chunks: &[DocumentChunk],
+            entities: &[GraphNodePair],
+            summaries: &[TextSummary],
+            dataset_id: Uuid,
+            config: &CognifyConfig,
+        ) -> (usize, usize) {
+            let engine = Arc::new(MockEmbeddingEngine::new(8));
+            let engine_dyn: Arc<dyn EmbeddingEngine> = engine.clone();
+            let vector: Arc<dyn VectorDB> = Arc::new(MockVectorDB::new());
+
+            let embeddings = generate_embeddings(chunks, entities, summaries, engine_dyn.clone())
+                .await
+                .unwrap();
+            let precomputed: &[Embedding] = if reuse { &embeddings } else { &[] };
+            index_data_points(
+                chunks,
+                entities,
+                summaries,
+                &[],
+                &[],
+                &[],
+                dataset_id,
+                None,
+                None,
+                engine_dyn,
+                vector,
+                config,
+                precomputed,
+            )
+            .await
+            .unwrap();
+            (engine.call_count(), engine.embedded_text_count())
+        }
+
+        let (before_calls, before_texts) =
+            measure(false, &chunks, &entities, &summaries, dataset_id, &config).await;
+        let (after_calls, after_texts) =
+            measure(true, &chunks, &entities, &summaries, dataset_id, &config).await;
+
+        println!(
+            "\n  Embedding work per cognify ({} chunks / {} entities / {} summaries):",
+            chunks.len(),
+            entities.len(),
+            summaries.len()
+        );
+        println!("    BEFORE (double pass): {before_calls} embed() calls, {before_texts} texts");
+        println!("    AFTER  (reuse)      : {after_calls} embed() calls, {after_texts} texts");
+        println!(
+            "    Saved: {} texts ({:.0}% fewer)\n",
+            before_texts - after_texts,
+            100.0 * (before_texts - after_texts) as f64 / before_texts as f64,
+        );
+
+        // The fix removes exactly one redundant embedding of every
+        // chunk/entity/summary text.
+        assert_eq!(before_texts - after_texts, overlap);
     }
 
     fn url_metadata(url: &str, final_url: &str, title: &str) -> String {

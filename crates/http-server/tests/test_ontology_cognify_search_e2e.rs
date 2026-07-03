@@ -19,7 +19,7 @@ use cognee_delete::DeleteService;
 use cognee_graph::{GraphDBTrait, LadybugAdapter};
 use cognee_http_server::{AppState, HttpServerConfig, build_router, components::ComponentHandles};
 use cognee_ingestion::AddPipeline;
-use cognee_llm::{Llm, OpenAIAdapter};
+use cognee_llm::Llm;
 use cognee_models::DataInput;
 use cognee_ontology::OntologyManager;
 use cognee_search::{SearchBuilder, SearchOrchestrator};
@@ -54,30 +54,6 @@ const ONTOLOGY_UPLOAD_BODY: &str = r#"@prefix owl: <http://www.w3.org/2002/07/ow
     rdfs:label "Algorithm" .
 "#;
 
-fn require_env(var_name: &str) -> String {
-    let _ = dotenv::dotenv();
-
-    let canonical_fallback = match var_name {
-        "OPENAI_TOKEN" => Some("LLM_API_KEY"),
-        "OPENAI_URL" => Some("LLM_ENDPOINT"),
-        "OPENAI_MODEL" => Some("LLM_MODEL"),
-        _ => None,
-    };
-
-    if let Ok(v) = std::env::var(var_name)
-        && !v.is_empty()
-    {
-        return v;
-    }
-    if let Some(canonical) = canonical_fallback
-        && let Ok(v) = std::env::var(canonical)
-        && !v.is_empty()
-    {
-        return v;
-    }
-    panic!("Required environment variable '{var_name}' is not set");
-}
-
 fn search_payload_contains_any_markers(payload: &serde_json::Value, markers: &[&str]) -> bool {
     let haystack = payload.to_string().to_ascii_lowercase();
     markers
@@ -87,9 +63,10 @@ fn search_payload_contains_any_markers(payload: &serde_json::Value, markers: &[&
 
 #[tokio::test]
 async fn upload_cognify_search_with_ontology_key_and_unknown_key_negative() {
-    let _ = require_env("OPENAI_URL");
-    let _ = require_env("OPENAI_TOKEN");
-    let _ = require_env("OPENAI_MODEL");
+    if !cognee_test_utils::llm_env_available() {
+        eprintln!("skipping: live LLM credentials (OPENAI_URL/OPENAI_TOKEN) not set");
+        return;
+    }
 
     let temp_dir = TempDir::new().expect("temp dir");
 
@@ -122,14 +99,7 @@ async fn upload_cognify_search_with_ontology_key_and_unknown_key_negative() {
     // In-memory mock vector DB (qdrant extracted to closed cognee-vector-qdrant).
     let vector_db: Arc<dyn VectorDB> = Arc::new(MockVectorDB::new());
 
-    let llm: Arc<dyn Llm> = Arc::new(
-        OpenAIAdapter::new(
-            require_env("OPENAI_MODEL"),
-            require_env("OPENAI_TOKEN"),
-            Some(require_env("OPENAI_URL")),
-        )
-        .expect("OpenAIAdapter::new"),
-    );
+    let llm: Arc<dyn Llm> = cognee_test_utils::create_openai_adapter_from_env();
 
     let owner_id = Uuid::nil();
     let dataset_name = "http_ontology_e2e";

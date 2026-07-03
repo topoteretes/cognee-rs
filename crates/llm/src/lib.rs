@@ -54,6 +54,7 @@ pub mod adapters;
 pub mod config;
 pub mod dynamic_model;
 pub mod error;
+pub mod factory;
 pub mod llm_trait;
 #[cfg(feature = "mock")]
 pub mod mock;
@@ -67,6 +68,7 @@ pub use adapters::OpenAIAdapter;
 pub use config::{LlmConfig, LlmProvider};
 pub use dynamic_model::{DynamicGraphModel, GraphModelError, graph_schema_to_graph_model};
 pub use error::{LlmError, LlmResult};
+pub use factory::build_openai_compatible_adapter;
 pub use llm_trait::{Llm, LlmExt};
 pub use responses_client::{OpenAIResponsesClient, ResponsesClient, ResponsesRequest};
 pub use schema::{

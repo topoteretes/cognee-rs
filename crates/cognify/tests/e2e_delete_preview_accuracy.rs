@@ -23,7 +23,7 @@ use cognee_delete::{DeleteMode, DeleteRequest, DeleteScope, DeleteService};
 use cognee_embedding::EmbeddingEngine;
 use cognee_graph::{GraphDBTrait, LadybugAdapter};
 use cognee_ingestion::AddPipeline;
-use cognee_llm::{Llm, OpenAIAdapter};
+use cognee_llm::Llm;
 use cognee_models::DataInput;
 use cognee_ontology::NoOpOntologyResolver;
 use cognee_storage::{LocalStorage, StorageTrait};
@@ -35,24 +35,14 @@ use uuid::Uuid;
 mod test_data;
 mod test_utils;
 
-use test_utils::require_env;
+use test_utils::{create_deterministic_embedding_engine, create_llm_from_env};
 
 #[tokio::test]
 async fn test_delete_preview_counts_match_execution() {
-    // ── Environment ─────────────────────────────────────────────────────────
-    let _ = require_env("OPENAI_URL");
-    let _ = require_env("OPENAI_TOKEN");
-    let _ = require_env("OPENAI_MODEL");
-
     // ── Infrastructure setup ────────────────────────────────────────────────
     let temp_dir = TempDir::new().expect("temp dir");
 
-    let Some((embedding_engine, _embedding_dims)) =
-        cognee_test_utils::create_test_embedding_engine().await
-    else {
-        return;
-    };
-    let embedding_engine: Arc<dyn EmbeddingEngine> = embedding_engine;
+    let embedding_engine: Arc<dyn EmbeddingEngine> = create_deterministic_embedding_engine();
 
     // Local file storage
     let storage: Arc<dyn StorageTrait> =
@@ -79,15 +69,8 @@ async fn test_delete_preview_counts_match_execution() {
     // In-memory mock vector DB (qdrant extracted to closed cognee-vector-qdrant).
     let vector_db: Arc<dyn VectorDB> = Arc::new(MockVectorDB::new());
 
-    // OpenAI-compatible LLM
-    let llm: Arc<dyn Llm> = Arc::new(
-        OpenAIAdapter::new(
-            require_env("OPENAI_MODEL"),
-            require_env("OPENAI_TOKEN"),
-            Some(require_env("OPENAI_URL")),
-        )
-        .expect("OpenAIAdapter::new"),
-    );
+    // LLM via cassette (replay/record/real) — see test_utils::create_llm_from_env.
+    let llm: Arc<dyn Llm> = create_llm_from_env("delete_preview_accuracy");
 
     let owner_id = Uuid::nil();
     let dataset_name = "preview_test";
@@ -150,6 +133,7 @@ async fn test_delete_preview_counts_match_execution() {
     {
         Ok(r) => r,
         Err(e) => {
+            test_utils::fail_loudly_on_replay_miss("cognify", &e);
             eprintln!("Cognify failed (LLM may be unavailable): {e}");
             return;
         }

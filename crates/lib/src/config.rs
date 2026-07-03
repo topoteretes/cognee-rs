@@ -114,6 +114,10 @@ pub struct Settings {
     pub embedding_dimensions: u32,
     pub embedding_max_sequence_length: u32,
     pub embedding_batch_size: u32,
+    /// ONNX inference batch size (the leading tensor dimension), independent of
+    /// `embedding_batch_size` which sizes HTTP requests. Maps to
+    /// `EMBEDDING_ONNX_BATCH_SIZE`; only the ONNX/Fastembed provider reads it.
+    pub embedding_onnx_batch_size: u32,
     /// Embedding API endpoint URL (e.g. `https://api.openai.com/v1/embeddings`).
     /// Maps to `EMBEDDING_ENDPOINT` env var.
     pub embedding_endpoint: String,
@@ -392,6 +396,11 @@ impl Settings {
             && let Ok(n) = v.parse::<u32>()
         {
             self.embedding_batch_size = n;
+        }
+        if let Some(v) = str_var("EMBEDDING_ONNX_BATCH_SIZE")
+            && let Ok(n) = v.parse::<u32>()
+        {
+            self.embedding_onnx_batch_size = n;
         }
         if let Some(v) = str_var("EMBEDDING_MAX_SEQUENCE_LENGTH")
             && let Ok(n) = v.parse::<u32>()
@@ -738,7 +747,8 @@ impl Default for Settings {
             // cognee_embedding::known_model_dimensions.
             embedding_dimensions,
             embedding_max_sequence_length: 512,
-            embedding_batch_size: 32,
+            embedding_batch_size: 36,
+            embedding_onnx_batch_size: 32,
             embedding_endpoint: String::new(),
             embedding_api_key: String::new(),
             embedding_api_version: String::new(),
@@ -1825,6 +1835,23 @@ mod tests {
         // resolver / strategy should stay at defaults when not set
         assert_eq!(s.ontology_resolver, "rdflib");
         assert_eq!(s.ontology_matching_strategy, "fuzzy");
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn overlay_onnx_batch_size_is_independent_of_request_batch() {
+        // SAFETY: test is serial — no other thread reads/writes env concurrently.
+        unsafe { std::env::set_var("EMBEDDING_ONNX_BATCH_SIZE", "8") };
+        let mut s = Settings::default();
+        s.overlay_from_env();
+        unsafe { std::env::remove_var("EMBEDDING_ONNX_BATCH_SIZE") };
+
+        assert_eq!(s.embedding_onnx_batch_size, 8);
+        // The HTTP request batch is untouched by the ONNX override.
+        assert_eq!(
+            s.embedding_batch_size,
+            Settings::default().embedding_batch_size
+        );
     }
 
     #[test]

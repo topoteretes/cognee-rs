@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 # Not published to crates.io — the CLI binary is built from source (see the
-# root README Quick Start). release-plz skips publish=false crates.
+# root README Quick Start). The release workflow skips publish=false crates.
 publish = false
 description.workspace = true
 repository.workspace = true
@@ -86,8 +86,8 @@ android-default = ["cognee-lib/android-default"]
 
 [dependencies]
 clap = { workspace = true, features = ["derive"] }
-cognee-lib = { path = "../lib", version = "0.1.1" }
-cognee-logging = { path = "../logging", version = "0.1.1" }
+cognee-lib = { path = "../lib", version = "0.1.3" }
+cognee-logging = { path = "../logging", version = "0.1.3" }
 dirs.workspace = true
 serde.workspace = true
 serde_json.workspace = true

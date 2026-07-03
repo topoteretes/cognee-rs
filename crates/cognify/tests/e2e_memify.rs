@@ -113,6 +113,13 @@ fn response_payload_text(response: &SearchResponse) -> String {
 
 #[tokio::test]
 async fn test_memify_e2e_real_embedding_real_qdrant() {
+    // The OpenAI embedding engine constructs lazily, so an absent key would only
+    // surface as an HTTP 401 at embed time — guard up front so the keyless lane
+    // skips cleanly instead.
+    if !cognee_test_utils::llm_env_available() {
+        eprintln!("skipping: live LLM credentials (OPENAI_URL/OPENAI_TOKEN) not set");
+        return;
+    }
     // ── Infrastructure setup (all ephemeral, in a TempDir) ──────────────────
     let temp_dir = TempDir::new().expect("temp dir");
 

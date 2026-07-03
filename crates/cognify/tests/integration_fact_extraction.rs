@@ -8,18 +8,17 @@
 //! Run with: cargo test --package cognee-cognify --test integration_fact_extraction
 
 use cognee_cognify::{FactExtractor, KnowledgeGraph};
-use cognee_llm::Llm;
 use std::collections::HashMap;
 
 mod test_data;
 mod test_utils;
 
 use test_data::{TEST_TEXT_RESEARCH, TEST_TEXT_TECHCORP};
-use test_utils::create_adapter_from_env;
+use test_utils::create_llm_from_env;
 
 #[tokio::test]
 async fn test_fact_extraction_single_text() {
-    let adapter = create_adapter_from_env();
+    let adapter = create_llm_from_env("fact_extraction");
 
     println!("\n🧪 Testing fact extraction with single text");
     println!("   Model: {}", adapter.model());
@@ -84,7 +83,7 @@ async fn test_fact_extraction_single_text() {
 
 #[tokio::test]
 async fn test_fact_extraction_batch() {
-    let adapter = create_adapter_from_env();
+    let adapter = create_llm_from_env("fact_extraction");
 
     println!("\n  Testing batch fact extraction with multiple texts");
     println!("   Model: {}", adapter.model());
@@ -175,7 +174,7 @@ async fn test_fact_extraction_batch() {
 
 #[tokio::test]
 async fn test_fact_extraction_with_custom_prompt() {
-    let adapter = create_adapter_from_env();
+    let adapter = create_llm_from_env("fact_extraction");
 
     println!("\n  Testing fact extraction with custom prompt");
     println!("   Model: {}", adapter.model());

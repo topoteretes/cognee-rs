@@ -20,7 +20,7 @@ use cognee_delete::{DeleteMode, DeleteRequest, DeleteScope, DeleteService};
 use cognee_embedding::EmbeddingEngine;
 use cognee_graph::{GraphDBTrait, LadybugAdapter};
 use cognee_ingestion::AddPipeline;
-use cognee_llm::{Llm, OpenAIAdapter};
+use cognee_llm::Llm;
 use cognee_models::DataInput;
 use cognee_ontology::NoOpOntologyResolver;
 use cognee_storage::{LocalStorage, StorageTrait};
@@ -30,7 +30,7 @@ use tempfile::TempDir;
 use uuid::Uuid;
 
 mod test_utils;
-use test_utils::require_env;
+use test_utils::{create_deterministic_embedding_engine, create_llm_from_env};
 
 const AI_TEXT: &str = include_str!("test_data/artificial_intelligence.txt");
 
@@ -55,20 +55,10 @@ fn extract_node_names(nodes: &[(String, cognee_graph::NodeData)]) -> HashSet<Str
 
 #[tokio::test]
 async fn test_shared_entity_graph_delete() {
-    // ── Environment gating ──────────────────────────────────────────────
-    let _ = require_env("OPENAI_URL");
-    let _ = require_env("OPENAI_TOKEN");
-    let _ = require_env("OPENAI_MODEL");
-
     // ── Infrastructure ──────────────────────────────────────────────────
     let temp_dir = TempDir::new().expect("temp dir");
 
-    let Some((embedding_engine, _embedding_dims)) =
-        cognee_test_utils::create_test_embedding_engine().await
-    else {
-        return;
-    };
-    let embedding_engine: Arc<dyn EmbeddingEngine> = embedding_engine;
+    let embedding_engine: Arc<dyn EmbeddingEngine> = create_deterministic_embedding_engine();
 
     let storage: Arc<dyn StorageTrait> =
         Arc::new(LocalStorage::new(temp_dir.path().join("storage")));
@@ -92,14 +82,7 @@ async fn test_shared_entity_graph_delete() {
     // In-memory mock vector DB (qdrant extracted to closed cognee-vector-qdrant).
     let vector_db: Arc<dyn VectorDB> = Arc::new(MockVectorDB::new());
 
-    let llm: Arc<dyn Llm> = Arc::new(
-        OpenAIAdapter::new(
-            require_env("OPENAI_MODEL"),
-            require_env("OPENAI_TOKEN"),
-            Some(require_env("OPENAI_URL")),
-        )
-        .expect("OpenAIAdapter::new"),
-    );
+    let llm: Arc<dyn Llm> = create_llm_from_env("shared_entity_graph_delete");
 
     let owner_id = Uuid::nil();
     let ontology = Arc::new(NoOpOntologyResolver::new());
@@ -175,6 +158,7 @@ async fn test_shared_entity_graph_delete() {
     {
         Ok(r) => r,
         Err(e) => {
+            test_utils::fail_loudly_on_replay_miss("cognify ds_ai", &e);
             eprintln!("Skipping: cognify ds_ai failed: {e}");
             return;
         }
@@ -204,6 +188,7 @@ async fn test_shared_entity_graph_delete() {
     {
         Ok(r) => r,
         Err(e) => {
+            test_utils::fail_loudly_on_replay_miss("cognify ds_ml", &e);
             eprintln!("Skipping: cognify ds_ml failed: {e}");
             return;
         }

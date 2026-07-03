@@ -104,7 +104,13 @@ impl OpenAIAdapter {
         Ok(Self {
             model,
             api_key: api_key.into(),
-            base_url: base_url.unwrap_or_else(|| Self::DEFAULT_BASE_URL.to_string()),
+            // Normalise a trailing slash so request URLs built as
+            // `{base_url}/chat/completions` never produce a double slash. The
+            // Gemini OpenAI-compat base ends in `/v1beta/openai/`, and a
+            // user-supplied endpoint may too; both would otherwise 404.
+            base_url: base_url
+                .map(|u| u.trim_end_matches('/').to_string())
+                .unwrap_or_else(|| Self::DEFAULT_BASE_URL.to_string()),
             client,
             structured_output_retries: Self::DEFAULT_STRUCTURED_OUTPUT_RETRIES,
             network_retries: Self::DEFAULT_NETWORK_RETRIES,
@@ -1114,6 +1120,22 @@ mod tests {
 
         let adapter = adapter.unwrap();
         assert_eq!(adapter.base_url, "https://custom.api.com/v1");
+    }
+
+    #[test]
+    fn test_base_url_trailing_slash_is_normalized() {
+        // The Gemini OpenAI-compat base ends in `/`; without normalisation the
+        // request URL would be `.../openai//chat/completions` and 404.
+        let adapter = OpenAIAdapter::new(
+            "gemini-2.0-flash",
+            "test-key",
+            Some("https://generativelanguage.googleapis.com/v1beta/openai/".to_string()),
+        )
+        .unwrap();
+        assert_eq!(
+            adapter.base_url,
+            "https://generativelanguage.googleapis.com/v1beta/openai"
+        );
     }
 
     #[test]

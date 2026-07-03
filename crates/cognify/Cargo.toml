@@ -21,19 +21,19 @@ image-loader = ["cognee-ingestion/image-loader"]
 audio-loader = ["cognee-ingestion/audio-loader"]
 
 [dependencies]
-cognee-models = { path = "../models", version = "0.1.1" }
-cognee-storage = { path = "../storage", version = "0.1.1" }
-cognee-chunking = { path = "../chunking", version = "0.1.1" }
-cognee-core = { path = "../core", version = "0.1.1" }
-cognee-ingestion = { path = "../ingestion", version = "0.1.1" }
-cognee-llm = { path = "../llm", version = "0.1.1" }
-cognee-graph = { path = "../graph", version = "0.1.1" }
-cognee-utils = { path = "../utils", version = "0.1.1" }
-cognee-embedding = { path = "../embedding", version = "0.1.1" }
-cognee-vector = { path = "../vector", version = "0.1.1" }
-cognee-ontology = { path = "../ontology", version = "0.1.1" }
-cognee-database = { path = "../database", version = "0.1.1" }
-cognee-session = { path = "../session", version = "0.1.1" }
+cognee-models = { path = "../models", version = "0.1.3" }
+cognee-storage = { path = "../storage", version = "0.1.3" }
+cognee-chunking = { path = "../chunking", version = "0.1.3" }
+cognee-core = { path = "../core", version = "0.1.3" }
+cognee-ingestion = { path = "../ingestion", version = "0.1.3" }
+cognee-llm = { path = "../llm", version = "0.1.3" }
+cognee-graph = { path = "../graph", version = "0.1.3" }
+cognee-utils = { path = "../utils", version = "0.1.3" }
+cognee-embedding = { path = "../embedding", version = "0.1.3" }
+cognee-vector = { path = "../vector", version = "0.1.3" }
+cognee-ontology = { path = "../ontology", version = "0.1.3" }
+cognee-database = { path = "../database", version = "0.1.3" }
+cognee-session = { path = "../session", version = "0.1.3" }
 
 chrono.workspace = true
 uuid = { workspace = true, features = ["v4"] }
@@ -56,7 +56,12 @@ cognee-database   = { path = "../database", features = ["sqlite"] }
 cognee-search     = { path = "../search" }
 cognee-delete     = { path = "../delete" }
 cognee-test-utils = { path = "../test-utils" }
-cognee-llm        = { path = "../llm" }
+# `mock` enables the cassette record/replay clients (ReplayLlm/RecordingLlm) the
+# integration tests use to run offline against committed cassettes. Cargo unifies
+# this dev-dep with the mock-less [dependencies] entry into one test build, so
+# there is no double-trait-copy issue (that caveat is specific to cognee-llm's
+# own test target — see crates/llm/src/mock/recording.rs).
+cognee-llm        = { path = "../llm", features = ["mock"] }
 cognee-session    = { path = "../session", features = ["fs"] }
 dotenv.workspace = true
 tempfile.workspace = true

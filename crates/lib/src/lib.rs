@@ -141,15 +141,6 @@ pub mod visualization {
 #[cfg(feature = "visualization")]
 pub use cognee_visualization::{VisualizationError, visualize};
 
-#[cfg(feature = "server")]
-pub mod http {
-    //! HTTP server surface. Available only when the `server` feature is enabled.
-    //! Consumers who only need the embedded server inside their own binary should
-    //! prefer this re-export over taking a direct dependency on `cognee-http-server`,
-    //! to keep their dependency closure aligned with the rest of the cognee crates.
-    pub use cognee_http_server::*;
-}
-
 /// Session management.
 pub mod session;
 

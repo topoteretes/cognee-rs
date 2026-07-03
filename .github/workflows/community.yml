@@ -1,0 +1,189 @@
+name: Community Checks (No Secrets)
+
+# Runs on ALL pull requests, including those from forks.
+#
+# Fork pull requests never receive repository secrets (GitHub withholds them
+# from `pull_request` runs on forks, even after maintainer approval), so the
+# keyed `Test Suite` workflow is gated to in-repo branches and skips on forks.
+# This workflow fills that gap: no secrets are required — the LLM/integration
+# tests detect the absent OPENAI_* / LLM_* env vars and skip themselves — so
+# community contributors still get fast lint + secret-free test feedback.
+#
+# Mirrors the upstream Python cognee `community_tests.yml` split.
+
+on:
+  pull_request:
+    branches: [ main, master ]
+    types: [ opened, synchronize, reopened ]
+
+# Minimal token: this lane handles untrusted fork code and must never need
+# write access or secrets.
+permissions:
+  contents: read
+
+concurrency:
+  group: community-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Mirror the keyed CI env so the shared rust-cache fingerprints line up and
+  # fork runs can restore the warm caches the main-branch CI populated.
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_INCREMENTAL: "0"
+  ORT_CACHE_DIR: ${{ github.workspace }}/target/ort-cache
+  CCACHE_COMPILERCHECK: content
+
+jobs:
+  # ── Lint: fmt + check + clippy (no secrets) ───────────────────────────
+  lint:
+    name: Lint (fmt + check + clippy)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install mold linker
+        uses: rui314/setup-mold@v1
+        with:
+          make-default: true
+
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: false
+          swap-storage: false
+          docker-images: true
+
+      # Restore-only: the keyed CI `lint` job owns the lbug C++ ccache save.
+      - name: ccache (lbug bundled C++, restore-only)
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: lbug-cxx
+          max-size: 1G
+          save: false
+
+      # Share the keyed CI lint cache key so fork runs restore the warm
+      # main-branch cache (forks can read base-repo caches, write to their own).
+      - name: Cache cargo/target (lint)
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: workspace-lint-v6
+
+      - name: Cache ORT binary
+        uses: actions/cache@v4
+        with:
+          path: target/ort-cache
+          key: ort-v2.0.0-rc.12-cpu-linux-x86_64
+
+      - name: rustfmt (check)
+        run: cargo fmt --all -- --check
+
+      - name: Compilation check
+        run: cargo check --all-targets
+
+      - name: clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+  # ── Secret-free workspace tests ───────────────────────────────────────
+  test-no-secrets:
+    name: Test (no secrets)
+    runs-on: ubuntu-latest
+    env:
+      # Select the tuned nextest CI profile (.config/nextest.toml): parallel
+      # execution, fail-fast off, and one retry for transient flakiness. The
+      # keyed `test` job sets this too; without it a genuinely flaky test (e.g.
+      # a span-capture race) that a single retry absorbs on the keyed lane would
+      # fail this lane outright.
+      NEXTEST_PROFILE: ci
+      # Replay the cassette-converted integration tests offline from the
+      # committed cassettes (crates/*/tests/fixtures/cassettes/) instead of
+      # calling the live API — replay needs NO credentials, so these run on
+      # this keyless lane exactly as they do on the keyed `test` job. The
+      # remaining real-API tests detect the absent OPENAI_*/LLM_* env and skip
+      # themselves. See docs/build/ci-test-parallelism.md / Approach E.
+      COGNEE_TEST_REPLAY: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install mold linker
+        uses: rui314/setup-mold@v1
+        with:
+          make-default: true
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          swap-storage: true
+          docker-images: true
+
+      - name: ccache (lbug bundled C++, restore-only)
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: lbug-cxx
+          max-size: 1G
+          save: false
+
+      - name: Cache cargo/target (test)
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: workspace-test-v6
+          cache-on-failure: true
+
+      - name: Cache ORT binary
+        uses: actions/cache@v4
+        with:
+          path: target/ort-cache
+          key: ort-v2.0.0-rc.12-cpu-linux-x86_64
+
+      - name: Show toolchain
+        run: |
+          rustc --version
+          cargo --version
+
+      # No OPENAI_* / LLM_* env is provided: the cassette-converted tests replay
+      # offline (COGNEE_TEST_REPLAY=1 above), the remaining real-API tests skip
+      # gracefully, and everything else runs.
+      - name: Test (keyless)
+        run: bash scripts/run_tests_no_secrets.sh
+
+  # ── Aggregate status (single required check for branch protection) ────
+  notify:
+    name: Community Checks Status
+    needs: [ lint, test-no-secrets ]
+    runs-on: ubuntu-latest
+    if: ${{ !cancelled() }}
+    steps:
+      - name: Check status
+        run: |
+          if [[ "${{ needs.lint.result }}" == "success" &&
+                "${{ needs.test-no-secrets.result }}" == "success" ]]; then
+            echo "All community checks passed!"
+          else
+            echo "One or more community checks failed."
+            exit 1
+          fi

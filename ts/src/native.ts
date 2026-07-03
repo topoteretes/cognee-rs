@@ -474,7 +474,6 @@ const { proxy } = require("@neon-rs/load") as typeof import("@neon-rs/load");
 const platforms: Record<string, () => NativeBindings> = {
   "linux-x64-gnu": () => require("@cognee/neon-linux-x64-gnu"),
   "linux-arm64-gnu": () => require("@cognee/neon-linux-arm64-gnu"),
-  "darwin-x64": () => require("@cognee/neon-darwin-x64"),
   "darwin-arm64": () => require("@cognee/neon-darwin-arm64"),
   "win32-x64-msvc": () => require("@cognee/neon-win32-x64-msvc"),
 };

@@ -6,6 +6,16 @@
 linker = "aarch64-linux-android21-clang++"
 ar = "llvm-ar"
 
+[target.wasm32-unknown-unknown]
+# WebAssembly (browser) spike — Config 1. The only getrandom in the wasm tree is
+# 0.2 (via rand 0.8), which is handled entirely by its `js` cargo feature
+# (crates/utils/Cargo.toml) and needs no rustflags. (uuid 1.23 does not pull
+# getrandom on wasm32-unknown, so the getrandom 0.4 backend-cfg is unnecessary.)
+# `cargo test --target wasm32-unknown-unknown` runs the built wasm under this
+# runner (from `cargo install wasm-bindgen-cli`; executes via Node by default).
+# Only consulted by `cargo test`/`cargo run` — plain `cargo build` is unaffected.
+runner = "wasm-bindgen-test-runner"
+
 [env]
 # Route bundled CMake C/C++ builds (lbug's Ladybug tree) through ccache when it
 # is installed — scripts/ccache-launcher.sh is a transparent pass-through when

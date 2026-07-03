@@ -27,6 +27,7 @@ use std::{path::PathBuf, sync::Arc};
 use cognee_core::{CancellationHandle, RayonThreadPool, TaskContext, TaskContextBuilder};
 use cognee_database::DatabaseConnection;
 use cognee_embedding::{EmbeddingEngine, config::EmbeddingConfig};
+use cognee_llm::OpenAIAdapter;
 
 pub use cognee_graph::MockGraphDB;
 pub use cognee_storage::MockStorage;
@@ -88,6 +89,85 @@ pub async fn create_test_embedding_engine() -> Option<(Arc<dyn EmbeddingEngine>,
             None
         }
     }
+}
+
+/// Read a required LLM environment variable, loading `.env` first (idempotent).
+///
+/// Accepts the Python-compatible canonical names (`LLM_API_KEY`, `LLM_ENDPOINT`,
+/// `LLM_MODEL`) as fallbacks for the legacy Rust test aliases (`OPENAI_TOKEN`,
+/// `OPENAI_URL`, `OPENAI_MODEL`), so a single `.env` with the canonical names
+/// works for both the CLI and the integration tests. This is the single source
+/// of truth the per-crate `tests/test_utils.rs` shims re-export — keeping the
+/// alias fallback consistent everywhere is what makes [`llm_env_available`] a
+/// reliable guard (a guard that passes on `LLM_*`-only creds must not then panic
+/// in here).
+///
+/// Panics if neither the requested variable nor its canonical fallback is set.
+pub fn require_env(var_name: &str) -> String {
+    let _ = dotenv::dotenv();
+
+    let canonical_fallback = match var_name {
+        "OPENAI_TOKEN" => Some("LLM_API_KEY"),
+        "OPENAI_URL" => Some("LLM_ENDPOINT"),
+        "OPENAI_MODEL" => Some("LLM_MODEL"),
+        _ => None,
+    };
+
+    if let Ok(v) = std::env::var(var_name)
+        && !v.is_empty()
+    {
+        return v;
+    }
+    if let Some(canonical) = canonical_fallback
+        && let Ok(v) = std::env::var(canonical)
+        && !v.is_empty()
+    {
+        return v;
+    }
+    panic!("❌ Required environment variable '{var_name}' is not set")
+}
+
+/// Returns `true` when live LLM credentials are configured — `OPENAI_URL`/
+/// `OPENAI_TOKEN` or the canonical `LLM_ENDPOINT`/`LLM_API_KEY`. Integration/E2E
+/// tests call this to skip gracefully (per the repo convention) instead of
+/// panicking in [`require_env`] when run without secrets, e.g. on the
+/// secret-free community CI lane.
+///
+/// It intentionally does **not** check the model: the model is optional (see
+/// [`llm_model_from_env`]), so requiring it here would wrongly skip a runnable
+/// test. Every adapter builder must therefore default the model rather than
+/// `require_env` it, so that "guard passed" always implies "adapter builds".
+pub fn llm_env_available() -> bool {
+    let _ = dotenv::dotenv();
+    let present = |names: &[&str]| {
+        names
+            .iter()
+            .any(|n| std::env::var(n).map(|v| !v.is_empty()).unwrap_or(false))
+    };
+    present(&["OPENAI_URL", "LLM_ENDPOINT"]) && present(&["OPENAI_TOKEN", "LLM_API_KEY"])
+}
+
+/// The LLM model name to use in tests: `LLM_MODEL`, then `OPENAI_MODEL`, then
+/// the `gpt-4o-mini` default. The model always has a sensible default, so it is
+/// never a hard requirement — see [`llm_env_available`].
+pub fn llm_model_from_env() -> String {
+    std::env::var("LLM_MODEL")
+        .or_else(|_| std::env::var("OPENAI_MODEL"))
+        .unwrap_or_else(|_| "gpt-4o-mini".to_string())
+}
+
+/// Build a real [`OpenAIAdapter`] from the environment (endpoint + key via
+/// [`require_env`], model via [`llm_model_from_env`]). Guard the caller with
+/// [`llm_env_available`] so this never panics on the keyless lane. Returned as
+/// `Arc` so it coerces directly to `Arc<dyn Llm>`.
+pub fn create_openai_adapter_from_env() -> Arc<OpenAIAdapter> {
+    let base_url = require_env("OPENAI_URL");
+    let api_token = require_env("OPENAI_TOKEN");
+    let model = llm_model_from_env();
+    Arc::new(
+        OpenAIAdapter::new(model, api_token, Some(base_url))
+            .unwrap_or_else(|e| panic!("❌ Failed to create OpenAI adapter: {e}")),
+    )
 }
 
 /// Returns a PostgreSQL connection URL built from environment variables, or `None`

@@ -12,7 +12,7 @@ categories.workspace = true
 authors.workspace = true
 # Not published to crates.io: this is an internal facade consumed only by the
 # Python / JS / C API binding crates (none of which are crates.io crates), so
-# it does not need to ship independently. release-plz skips publish=false.
+# it does not need to ship independently. The release workflow skips publish=false.
 publish = false
 
 # NOT a default member of the root workspace but IS a workspace member
@@ -44,7 +44,7 @@ sqlite        = ["cognee-lib/sqlite"]
 testing       = ["cognee-lib/testing"]
 
 [dependencies]
-cognee-lib = { path = "../lib", version = "0.1.1", default-features = false }
+cognee-lib = { path = "../lib", version = "0.1.3", default-features = false }
 serde      = { workspace = true }
 serde_json = { workspace = true }
 thiserror  = { workspace = true }

@@ -35,7 +35,7 @@ ort-tensorrt = ["ort/tensorrt"]
 
 [dependencies]
 async-trait = { workspace = true }
-cognee-utils = { path = "../utils", version = "0.1.1" }
+cognee-utils = { path = "../utils", version = "0.1.3" }
 futures     = { workspace = true }
 tokio       = { workspace = true }
 serde       = { workspace = true }
@@ -51,6 +51,7 @@ tokenizers  = { workspace = true, optional = true }
 [dev-dependencies]
 serial_test = { workspace = true }
 tempfile = { workspace = true }
+mockito = "1"
 
 # The integration test exercises the ONNX engine (config::OnnxEmbeddingConfig,
 # onnx::OnnxEmbeddingEngine), which only exist under the `onnx` feature. Gate it

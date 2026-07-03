@@ -1,0 +1,262 @@
+{
+  "version": 1,
+  "model": "gpt-4o-mini",
+  "entries": {
+    "298278a343caf204d4ccceac9689ecf1f471ff1a29dcdcb561f2aa70ace9a89a": {
+      "method": "structured_output",
+      "user_input_preview": "Artificial intelligence (AI) is the intelligence of machines or software, as opposed to the intelligence of living being",
+      "schema_name": "KnowledgeGraph",
+      "response": {
+        "edges": [
+          {
+            "description": "Artificial intelligence is a field of research in computer science that develops and studies methods and software.",
+            "relationship_name": "is_a_field_of",
+            "source_node_id": "Artificial Intelligence",
+            "target_node_id": "Computer Science"
+          },
+          {
+            "description": "Artificial intelligence enables machines to perceive their environment and use learning and intelligence to take actions.",
+            "relationship_name": "enables",
+            "source_node_id": "Artificial Intelligence",
+            "target_node_id": "Machines"
+          },
+          {
+            "description": "GPT-4 is one of the most capable large language models developed by OpenAI.",
+            "relationship_name": "is_a_type_of",
+            "source_node_id": "GPT-4",
+            "target_node_id": "Large Language Models"
+          },
+          {
+            "description": "PaLM is a large language model developed by Google that demonstrates strong reasoning and multilingual capabilities.",
+            "relationship_name": "is_a_type_of",
+            "source_node_id": "PaLM",
+            "target_node_id": "Large Language Models"
+          },
+          {
+            "description": "LLaMA is an open-weights model released by Meta that has enabled widespread research and experimentation.",
+            "relationship_name": "is_a_type_of",
+            "source_node_id": "LLaMA",
+            "target_node_id": "Large Language Models"
+          },
+          {
+            "description": "Claude is a large language model developed by Anthropic that emphasizes safety and helpfulness.",
+            "relationship_name": "is_a_type_of",
+            "source_node_id": "Claude",
+            "target_node_id": "Large Language Models"
+          },
+          {
+            "description": "Large language models use transformer architectures with self-attention mechanisms to learn relationships between tokens in text.",
+            "relationship_name": "uses",
+            "source_node_id": "Large Language Models",
+            "target_node_id": "Transformer Architectures"
+          },
+          {
+            "description": "AI safety and alignment research focuses on ensuring that AI systems behave as intended and do not cause unintended harm.",
+            "relationship_name": "focuses_on",
+            "source_node_id": "AI Safety and Alignment Research",
+            "target_node_id": "AI Systems"
+          },
+          {
+            "description": "Researchers at organizations like Anthropic, DeepMind, and OpenAI are working on interpretability, robustness, and value alignment.",
+            "relationship_name": "conducts_research_at",
+            "source_node_id": "Researchers",
+            "target_node_id": "Organizations"
+          },
+          {
+            "description": "The economic and social impacts of AI are profound, affecting job displacement and creating new categories of work.",
+            "relationship_name": "affects",
+            "source_node_id": "Artificial Intelligence",
+            "target_node_id": "Economic and Social Impacts"
+          }
+        ],
+        "nodes": [
+          {
+            "description": "Artificial intelligence (AI) is the intelligence of machines or software, as opposed to the intelligence of living beings, primarily of humans.",
+            "id": "Artificial Intelligence",
+            "name": "Artificial Intelligence",
+            "type": "CONCEPT"
+          },
+          {
+            "description": "Computer science is a field that studies computers and computational systems.",
+            "id": "Computer Science",
+            "name": "Computer Science",
+            "type": "CONCEPT"
+          },
+          {
+            "description": "Machines are devices that use power to perform specific tasks.",
+            "id": "Machines",
+            "name": "Machines",
+            "type": "CONCEPT"
+          },
+          {
+            "description": "GPT-4 is a large language model developed by OpenAI, capable of generating coherent text and answering complex questions.",
+            "id": "GPT-4",
+            "name": "GPT-4",
+            "type": "CONCEPT"
+          },
+          {
+            "description": "PaLM is a large language model developed by Google that demonstrates strong reasoning and multilingual capabilities.",
+            "id": "PaLM",
+            "name": "PaLM",
+            "type": "CONCEPT"
+          },
+          {
+            "description": "LLaMA is an open-weights model released by Meta that has enabled widespread research and experimentation.",
+            "id": "LLaMA",
+            "name": "LLaMA",
+            "type": "CONCEPT"
+          },
+          {
+            "description": "Claude is a large language model developed by Anthropic that emphasizes safety and helpfulness.",
+            "id": "Claude",
+            "name": "Claude",
+            "type": "CONCEPT"
+          },
+          {
+            "description": "Transformer architectures are a type of neural network architecture that uses self-attention mechanisms to process data.",
+            "id": "Transformer Architectures",
+            "name": "Transformer Architectures",
+            "type": "CONCEPT"
+          },
+          {
+            "description": "AI safety and alignment research focuses on ensuring that AI systems behave as intended and do not cause unintended harm.",
+            "id": "AI Safety and Alignment Research",
+            "name": "AI Safety and Alignment Research",
+            "type": "CONCEPT"
+          },
+          {
+            "description": "Organizations like Anthropic, DeepMind, and OpenAI are involved in AI research and development.",
+            "id": "Organizations",
+            "name": "Organizations",
+            "type": "CONCEPT"
+          },
+          {
+            "description": "The economic and social impacts of AI include job displacement and the creation of new work categories.",
+            "id": "Economic and Social Impacts",
+            "name": "Economic and Social Impacts",
+            "type": "CONCEPT"
+          },
+          {
+            "description": "Researchers are individuals who conduct studies and experiments to advance knowledge in various fields.",
+            "id": "Researchers",
+            "name": "Researchers",
+            "type": "PERSON"
+          }
+        ]
+      }
+    },
+    "39e478e4138848adf870b89712a8a18c34b5e70c245b667624603a543efcc0d4": {
+      "method": "structured_output",
+      "user_input_preview": "Quantum computing leverages quantum mechanical phenomena like superposition and entanglement to perform computations. Qu",
+      "schema_name": "KnowledgeGraph",
+      "response": {
+        "edges": [
+          {
+            "description": "Quantum computing leverages quantum mechanical phenomena like superposition and entanglement to perform computations.",
+            "relationship_name": "leverages",
+            "source_node_id": "Quantum Computing",
+            "target_node_id": "Quantum Mechanical Phenomena"
+          },
+          {
+            "description": "Quantum bits (qubits) can exist in multiple states simultaneously, enabling quantum computers to solve certain problems exponentially faster than classical computers.",
+            "relationship_name": "enables",
+            "source_node_id": "Quantum Bits",
+            "target_node_id": "Quantum Computers"
+          },
+          {
+            "description": "Companies like IBM, Google, and Microsoft are investing heavily in quantum hardware and quantum error correction research.",
+            "relationship_name": "invests_in",
+            "source_node_id": "IBM",
+            "target_node_id": "Quantum Hardware"
+          },
+          {
+            "description": "Companies like IBM, Google, and Microsoft are investing heavily in quantum hardware and quantum error correction research.",
+            "relationship_name": "invests_in",
+            "source_node_id": "Google",
+            "target_node_id": "Quantum Hardware"
+          },
+          {
+            "description": "Companies like IBM, Google, and Microsoft are investing heavily in quantum hardware and quantum error correction research.",
+            "relationship_name": "invests_in",
+            "source_node_id": "Microsoft",
+            "target_node_id": "Quantum Hardware"
+          },
+          {
+            "description": "Companies like IBM, Google, and Microsoft are investing heavily in quantum hardware and quantum error correction research.",
+            "relationship_name": "invests_in",
+            "source_node_id": "IBM",
+            "target_node_id": "Quantum Error Correction Research"
+          },
+          {
+            "description": "Companies like IBM, Google, and Microsoft are investing heavily in quantum hardware and quantum error correction research.",
+            "relationship_name": "invests_in",
+            "source_node_id": "Google",
+            "target_node_id": "Quantum Error Correction Research"
+          },
+          {
+            "description": "Companies like IBM, Google, and Microsoft are investing heavily in quantum hardware and quantum error correction research.",
+            "relationship_name": "invests_in",
+            "source_node_id": "Microsoft",
+            "target_node_id": "Quantum Error Correction Research"
+          }
+        ],
+        "nodes": [
+          {
+            "description": "Quantum computing is a field of study focused on the development of computers that use quantum mechanics to perform calculations.",
+            "id": "Quantum Computing",
+            "name": "Quantum Computing",
+            "type": "CONCEPT"
+          },
+          {
+            "description": "Quantum mechanical phenomena include principles such as superposition and entanglement that are fundamental to quantum computing.",
+            "id": "Quantum Mechanical Phenomena",
+            "name": "Quantum Mechanical Phenomena",
+            "type": "CONCEPT"
+          },
+          {
+            "description": "Quantum bits (qubits) are the basic unit of quantum information, capable of representing multiple states simultaneously.",
+            "id": "Quantum Bits",
+            "name": "Quantum Bits",
+            "type": "CONCEPT"
+          },
+          {
+            "description": "Quantum computers are advanced computing systems that utilize quantum bits to perform calculations at speeds unattainable by classical computers.",
+            "id": "Quantum Computers",
+            "name": "Quantum Computers",
+            "type": "CONCEPT"
+          },
+          {
+            "description": "IBM is a multinational technology company known for its contributions to quantum computing and hardware development.",
+            "id": "IBM",
+            "name": "IBM",
+            "type": "ORGANIZATION"
+          },
+          {
+            "description": "Google is a multinational technology company that invests in quantum computing and related research.",
+            "id": "Google",
+            "name": "Google",
+            "type": "ORGANIZATION"
+          },
+          {
+            "description": "Microsoft is a multinational technology company that is heavily involved in quantum computing research and development.",
+            "id": "Microsoft",
+            "name": "Microsoft",
+            "type": "ORGANIZATION"
+          },
+          {
+            "description": "Quantum hardware refers to the physical devices and systems used to implement quantum computing.",
+            "id": "Quantum Hardware",
+            "name": "Quantum Hardware",
+            "type": "CONCEPT"
+          },
+          {
+            "description": "Quantum error correction research focuses on developing methods to protect quantum information from errors due to decoherence and other quantum noise.",
+            "id": "Quantum Error Correction Research",
+            "name": "Quantum Error Correction Research",
+            "type": "CONCEPT"
+          }
+        ]
+      }
+    }
+  }
+}

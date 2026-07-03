@@ -21,7 +21,7 @@ use sea_orm::{ConnectionTrait, Database, DatabaseBackend, DatabaseConnection, St
 use sea_orm_migration::MigratorTrait;
 use serde_json::{Value, json};
 use std::borrow::Cow;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use tracing::debug;
 
@@ -542,15 +542,55 @@ impl GraphDBTrait for PgGraphAdapter {
             return Ok(vec![]);
         }
 
-        // TODO: This is an N+1 query pattern (one round-trip per edge). For large
-        // edge lists, consider a single query using `unnest($1::text[], $2::text[],
-        // $3::text[])` to check all candidates in one statement.
-        let mut found = Vec::new();
-        for edge in edges {
-            if self.has_edge(&edge.0, &edge.1, &edge.2).await? {
-                found.push(edge.clone());
-            }
+        // Single round-trip regardless of batch size: pass the candidate
+        // (source, target, relationship) triples as three `text[]` arrays and let
+        // Postgres check existence for all of them at once via `unnest(...)` + `EXISTS`.
+        // This replaces the previous one-round-trip-per-edge loop.
+        let sources: Vec<_> = edges.iter().map(|e| e.0.clone()).collect();
+        let targets: Vec<_> = edges.iter().map(|e| e.1.clone()).collect();
+        let rels: Vec<_> = edges.iter().map(|e| e.2.clone()).collect();
+
+        let rows = self
+            .db
+            .query_all(Statement::from_sql_and_values(
+                DatabaseBackend::Postgres,
+                "SELECT v.s, v.t, v.r \
+                 FROM unnest($1::text[], $2::text[], $3::text[]) AS v(s, t, r) \
+                 WHERE EXISTS ( \
+                     SELECT 1 FROM graph_edge e \
+                     WHERE e.source_id = v.s \
+                       AND e.target_id = v.t \
+                       AND e.relationship_name = v.r \
+                 )",
+                [sources.into(), targets.into(), rels.into()],
+            ))
+            .await
+            .map_err(|e| GraphDBError::QueryError(e.to_string()))?;
+
+        // Collect the triples that exist, then filter the original input so each
+        // returned edge keeps its properties (which aren't part of the lookup key).
+        // A decode failure is a real error, so propagate it rather than silently
+        // dropping the row.
+        let mut existing: HashSet<_> = HashSet::with_capacity(rows.len());
+        for row in &rows {
+            let s: String = row
+                .try_get("", "s")
+                .map_err(|e| GraphDBError::QueryError(e.to_string()))?;
+            let t: String = row
+                .try_get("", "t")
+                .map_err(|e| GraphDBError::QueryError(e.to_string()))?;
+            let r: String = row
+                .try_get("", "r")
+                .map_err(|e| GraphDBError::QueryError(e.to_string()))?;
+            existing.insert((s, t, r));
         }
+
+        let found = edges
+            .iter()
+            .filter(|e| existing.contains(&(e.0.clone(), e.1.clone(), e.2.clone())))
+            .cloned()
+            .collect();
+
         Ok(found)
     }
 

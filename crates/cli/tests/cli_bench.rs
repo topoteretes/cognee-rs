@@ -21,7 +21,7 @@ use tempfile::TempDir;
 fn test_bench_help() {
     let config_home = TempDir::new().expect("temp dir");
     Command::new(assert_cmd::cargo::cargo_bin!("cognee-cli"))
-        .env("XDG_CONFIG_HOME", config_home.path())
+        .env("COGNEE_CONFIG_HOME", config_home.path())
         .arg("bench")
         .arg("--help")
         .assert()
@@ -55,7 +55,7 @@ fn test_bench_mock_offline_smoke() {
     let output = dir.path().join("result.json");
 
     Command::new(assert_cmd::cargo::cargo_bin!("cognee-cli"))
-        .env("XDG_CONFIG_HOME", config_home.path())
+        .env("COGNEE_CONFIG_HOME", config_home.path())
         // Belt-and-suspenders: the subcommand sets this itself, but keep the
         // env explicit so a future refactor can't silently break offline runs.
         .env("MOCK_EMBEDDING", "deterministic")
@@ -145,7 +145,7 @@ fn test_bench_num_memories_truncates() {
     let output = dir.path().join("result.json");
 
     Command::new(assert_cmd::cargo::cargo_bin!("cognee-cli"))
-        .env("XDG_CONFIG_HOME", config_home.path())
+        .env("COGNEE_CONFIG_HOME", config_home.path())
         .env("MOCK_EMBEDDING", "deterministic")
         .arg("bench")
         .arg("--mock-llm")

@@ -81,6 +81,17 @@ impl LlmCassette {
         let contents = serde_json::to_string_pretty(self).map_err(|e| {
             LlmError::SerializationError(format!("failed to serialize cassette: {e}"))
         })?;
+        // Create the parent directory if it does not exist yet, so recording to a
+        // fresh `tests/fixtures/cassettes/<name>.json` path succeeds on the first
+        // run instead of silently failing in `RecordingLlm`'s Drop flush.
+        if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                LlmError::ConfigError(format!(
+                    "failed to create cassette directory {}: {e}",
+                    parent.display()
+                ))
+            })?;
+        }
         std::fs::write(path, contents).map_err(|e| {
             LlmError::ConfigError(format!("failed to write cassette {}: {e}", path.display()))
         })
@@ -128,6 +139,16 @@ fn role_str(role: &crate::types::MessageRole) -> &'static str {
 
 /// Recursively serialize a JSON value with object keys sorted, so two logically
 /// equal values with different insertion order produce identical strings.
+///
+/// Note: object *keys* are order-insensitive, but JSON *array* order is
+/// significant and part of the hash. The hashed structured-output schema
+/// contains arrays (e.g. `"required": [...]`, property lists), so a schemars
+/// version bump or a field reorder in a schema type (`KnowledgeGraph`,
+/// `SummarizedContent`, …) changes the hash and misses every recorded entry.
+/// That surfaces loudly — replay tests use `MissPolicy::Error` and the e2e
+/// skip-blocks call `fail_loudly_on_replay_miss` — so the remedy is simply to
+/// re-record the cassettes (see docs/build/ci-test-parallelism.md), not a
+/// silent test-coverage loss.
 fn canonicalize(value: &Value) -> String {
     match value {
         Value::Object(map) => {

@@ -14,7 +14,6 @@
 
 use cognee_chunking::CutType;
 use cognee_cognify::{SummarizedContent, SummaryExtractor, TextSummary};
-use cognee_llm::Llm;
 use cognee_models::DocumentChunk;
 use uuid::Uuid;
 
@@ -22,11 +21,11 @@ mod test_data;
 mod test_utils;
 
 use test_data::{TEST_TEXT_ARTICLE, TEST_TEXT_SHORT};
-use test_utils::create_adapter_from_env;
+use test_utils::create_llm_from_env;
 
 #[tokio::test]
 async fn test_summarization_single_text() {
-    let adapter = create_adapter_from_env();
+    let adapter = create_llm_from_env("summarization");
 
     println!("\n🧪 Testing summarization with single text");
     println!("   Model: {}", adapter.model());
@@ -70,7 +69,7 @@ async fn test_summarization_single_text() {
 
 #[tokio::test]
 async fn test_summarization_batch() {
-    let adapter = create_adapter_from_env();
+    let adapter = create_llm_from_env("summarization");
 
     println!("\n🧪 Testing batch summarization");
     println!("   Model: {}", adapter.model());
@@ -142,7 +141,7 @@ async fn test_summarization_batch() {
 
 #[tokio::test]
 async fn test_summarization_deterministic_ids() {
-    let adapter = create_adapter_from_env();
+    let adapter = create_llm_from_env("summarization");
 
     println!("\n🧪 Testing deterministic summary IDs");
 
@@ -201,7 +200,7 @@ async fn test_summarization_deterministic_ids() {
 
 #[tokio::test]
 async fn test_summarization_empty_chunks() {
-    let adapter = create_adapter_from_env();
+    let adapter = create_llm_from_env("summarization");
 
     println!("\n🧪 Testing summarization with empty chunks");
 
@@ -225,7 +224,7 @@ async fn test_summarization_empty_chunks() {
 
 #[tokio::test]
 async fn test_summarization_custom_prompt() {
-    let adapter = create_adapter_from_env();
+    let adapter = create_llm_from_env("summarization");
 
     println!("\n🧪 Testing summarization with custom prompt");
 

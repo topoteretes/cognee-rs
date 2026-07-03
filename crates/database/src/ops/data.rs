@@ -3,7 +3,7 @@ use cognee_models::{Data, Dataset};
 use cognee_utils::tracing_keys::{COGNEE_DB_ROW_COUNT, COGNEE_DB_SYSTEM};
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, DatabaseConnection, EntityTrait,
-    IntoActiveModel, PaginatorTrait, QueryFilter,
+    IntoActiveModel, PaginatorTrait, QueryFilter, sea_query::Expr,
 };
 use tracing::{Span, instrument};
 use uuid::Uuid;
@@ -126,16 +126,19 @@ pub async fn update_data_token_count(
     token_count: i64,
 ) -> Result<(), DatabaseError> {
     Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
-    let model = data::Entity::find_by_id(uuid_hex::to_hex(data_id))
-        .one(db)
+    // Single UPDATE instead of find-then-update (2 round-trips -> 1). The
+    // rows-affected count preserves the previous NotFound behaviour.
+    let result = data::Entity::update_many()
+        .col_expr(data::Column::TokenCount, Expr::value(token_count))
+        .col_expr(data::Column::UpdatedAt, Expr::value(Some(Utc::now())))
+        .filter(data::Column::Id.eq(uuid_hex::to_hex(data_id)))
+        .exec(db)
         .await
-        .map_err(map_sea_err)?
-        .ok_or_else(|| DatabaseError::NotFound(format!("Data {data_id} not found")))?;
+        .map_err(map_sea_err)?;
 
-    let mut active = model.into_active_model();
-    active.token_count = Set(token_count);
-    active.updated_at = Set(Some(Utc::now()));
-    active.update(db).await.map_err(map_sea_err)?;
+    if result.rows_affected == 0 {
+        return Err(DatabaseError::NotFound(format!("Data {data_id} not found")));
+    }
     Ok(())
 }
 
@@ -159,18 +162,14 @@ pub async fn update_last_accessed(
         return Ok(());
     }
 
-    for id in data_ids {
-        let model = data::Entity::find_by_id(uuid_hex::to_hex(*id))
-            .one(db)
-            .await
-            .map_err(map_sea_err)?;
-
-        if let Some(m) = model {
-            let mut active = m.into_active_model();
-            active.last_accessed = Set(Some(timestamp));
-            active.update(db).await.map_err(map_sea_err)?;
-        }
-    }
+    // Single UPDATE ... WHERE id IN (...) instead of N×(find + update) round-trips.
+    let hex_ids: Vec<_> = data_ids.iter().map(|id| uuid_hex::to_hex(*id)).collect();
+    data::Entity::update_many()
+        .col_expr(data::Column::LastAccessed, Expr::value(Some(timestamp)))
+        .filter(data::Column::Id.is_in(hex_ids))
+        .exec(db)
+        .await
+        .map_err(map_sea_err)?;
 
     Ok(())
 }
@@ -216,14 +215,25 @@ pub async fn clear_pipeline_status_for_dataset(
     let dataset_id_str = uuid_hex::to_hex(dataset_id);
     let mut updated_count = 0usize;
 
-    for data_hex_id in &data_ids {
-        let model = data::Entity::find_by_id(data_hex_id.clone())
-            .one(db)
-            .await
-            .map_err(map_sea_err)?;
+    // Read the linked Data rows in chunks instead of one find per id (N reads).
+    // Chunking keeps each `IN (...)` under the driver's bound-variable cap
+    // (SQLite ~32766, Postgres 65535) — mirroring `PROVENANCE_INSERT_BATCH` in
+    // graph_storage — so a dataset with more items than the cap can't overflow.
+    // Updates stay per-row because each row's pipeline_status JSON is mutated
+    // independently, and only rows that actually change are written back.
+    const READ_CHUNK: usize = 500;
+    let mut models = Vec::with_capacity(data_ids.len());
+    for chunk in data_ids.chunks(READ_CHUNK) {
+        models.extend(
+            data::Entity::find()
+                .filter(data::Column::Id.is_in(chunk.to_vec()))
+                .all(db)
+                .await
+                .map_err(map_sea_err)?,
+        );
+    }
 
-        let Some(model) = model else { continue };
-
+    for model in models {
         let Some(ref status_json) = model.pipeline_status else {
             continue;
         };

@@ -15,20 +15,39 @@ authors.workspace = true
 workspace = true
 
 [dependencies]
-# Async runtime
-tokio.workspace = true
-
 # Structured logging/tracing
 tracing.workspace = true
 
 # Random (for jitter)
 rand.workspace = true
 
-# UUID generation
+# Cross-platform async timer for retry backoff (retry.rs). Works on both native
+# and wasm32: its `wasm-bindgen` feature routes through setTimeout on wasm and is
+# a no-op on native (which uses a timer thread). This is why retry needs no tokio
+# and no in-code cfg — tokio's timer would never fire on wasm32-unknown.
+futures-timer.workspace = true
+
+# UUID generation. The `js` wasm randomness source is enabled on the workspace
+# uuid dep (a no-op on native), so v4 works on wasm with no per-crate override.
 uuid = { workspace = true, features = ["v4", "v5"] }
 
 # Secret redaction (cognee_utils::redact)
 regex = { workspace = true }
 
-[dev-dependencies]
+# WebAssembly (browser) spike — Config 1. The only getrandom in our wasm tree is
+# 0.2, pulled transitively by rand 0.8 (the jitter in retry.rs). On wasm32 it has
+# no default backend, so the `js` feature routes it through the browser crypto
+# API. This is a feature-only shim: rand already pulls getrandom 0.2; declaring
+# it here just lets Cargo's feature unification turn the JS backend on.
+# (uuid does NOT use getrandom on wasm32-unknown, and tokio is no longer a library
+# dependency at all — retry uses futures-timer — so no other wasm shim is needed.
+# See docs/spike-wasm-config1.md.)
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { version = "0.2", features = ["js"] }
+
+# tokio is only used by the #[tokio::test] async tests, which run on the native
+# libtest harness (not wasm-bindgen-test). Gate the dev-dep — and the retry test
+# module that needs it (see retry.rs) — off wasm so `cargo test --target wasm32`
+# compiles, mirroring how crates/chunking/Cargo.toml splits its dev-deps.
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

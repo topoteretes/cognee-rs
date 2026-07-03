@@ -20,4 +20,18 @@ schemars.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 uuid.workspace = true
+
+# tokio is only used here for local-filesystem streaming (data_input.rs), which is
+# cfg'd out on wasm32 — so wasm needs no tokio at all. Gate the dep to non-wasm:
+# the workspace tokio carries rt-multi-thread + fs, neither of which compiles on
+# wasm32-unknown-unknown, and a plain (ungated) dep would try to build them there.
+# See docs/spike-wasm-config1.md.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tokio.workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# chrono's `Utc::now()` (used by DataPoint::new) calls the system clock, which
+# traps as `unreachable` on wasm32. The `wasmbind` feature routes it through
+# `js_sys::Date` instead. The feature is additive, so the base `chrono.workspace`
+# dep just gains it via unification on wasm. See docs/spike-wasm-config1.md.
+chrono = { workspace = true, features = ["wasmbind"] }

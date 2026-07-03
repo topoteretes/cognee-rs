@@ -47,6 +47,10 @@ fn make_thread_pool() -> Arc<dyn cognee_core::CpuPool> {
 
 #[tokio::test]
 async fn test_pipeline_with_embeddings() {
+    if !test_utils::llm_env_available() {
+        eprintln!("skipping: live LLM credentials (OPENAI_URL/OPENAI_TOKEN) not set");
+        return;
+    }
     let llm = create_adapter_from_env();
 
     let Some((embedding_engine, embedding_dims)) =
@@ -173,6 +177,10 @@ async fn test_pipeline_with_embeddings() {
 
 #[tokio::test]
 async fn test_pipeline_requires_embeddings() {
+    if !test_utils::llm_env_available() {
+        eprintln!("skipping: live LLM credentials (OPENAI_URL/OPENAI_TOKEN) not set");
+        return;
+    }
     // This test verifies that embeddings are REQUIRED (matches Python behavior)
 
     let Some((embedding_engine, _embedding_dims)) =
@@ -256,6 +264,10 @@ async fn test_pipeline_requires_embeddings() {
 
 #[tokio::test]
 async fn test_embedding_semantic_similarity() {
+    if !test_utils::llm_env_available() {
+        eprintln!("skipping: live LLM credentials (OPENAI_URL/OPENAI_TOKEN) not set");
+        return;
+    }
     // Test that embeddings capture semantic similarity
 
     let llm = create_adapter_from_env() as Arc<dyn cognee_llm::Llm>;
@@ -354,6 +366,10 @@ async fn test_embedding_semantic_similarity() {
 
 #[tokio::test]
 async fn test_entity_name_indexing() {
+    if !test_utils::llm_env_available() {
+        eprintln!("skipping: live LLM credentials (OPENAI_URL/OPENAI_TOKEN) not set");
+        return;
+    }
     // Test that Entity.name is indexed (matching Python's index_fields=["name"])
 
     let llm = create_adapter_from_env();
@@ -483,6 +499,10 @@ async fn test_entity_name_indexing() {
 }
 #[tokio::test]
 async fn test_triplet_embeddings_disabled_by_default() {
+    if !test_utils::llm_env_available() {
+        eprintln!("skipping: live LLM credentials (OPENAI_URL/OPENAI_TOKEN) not set");
+        return;
+    }
     // Test that triplet embeddings are disabled by default (Phase 3 feature)
 
     let llm = create_adapter_from_env();
@@ -570,6 +590,10 @@ async fn test_triplet_embeddings_disabled_by_default() {
 
 #[tokio::test]
 async fn test_triplet_embeddings_enabled() {
+    if !test_utils::llm_env_available() {
+        eprintln!("skipping: live LLM credentials (OPENAI_URL/OPENAI_TOKEN) not set");
+        return;
+    }
     // Test that triplet embeddings work when explicitly enabled (Phase 3 feature)
 
     let llm = create_adapter_from_env();

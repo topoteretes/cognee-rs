@@ -41,7 +41,13 @@ grep -hoE '\b(cg|cognee)_[a-z0-9_]+[[:space:]]*\(' \
 # Each non-blank, non-comment line in the allowlist is removed from EXPORTS_TMP
 # so it is not flagged as undeclared.
 if [[ -f "$ALLOWLIST" ]]; then
-    while IFS= read -r entry; do
+    while IFS= read -r entry || [[ -n "$entry" ]]; do
+        # Strip a trailing CR: on Windows CI (core.autocrlf=true, no .gitattributes
+        # override) the allowlist checks out as CRLF, leaving "\r" on each entry,
+        # which would defeat the `^${entry}$` sed match below and wrongly flag an
+        # allowlisted symbol. The `|| [[ -n "$entry" ]]` also handles a final line
+        # with no trailing newline.
+        entry="${entry%$'\r'}"
         # Skip blank lines and comments.
         [[ -z "$entry" || "$entry" == \#* ]] && continue
         # `sed -i.bak` is portable across GNU and BSD/macOS sed (a bare `sed -i`

@@ -1,0 +1,224 @@
+name: release-publish
+
+# PHASE 2 of the two-phase release. Fires when a release PR
+# (branch release/X.Y.Z, label autorelease:pending) is MERGED into main.
+# By then the version bump + changelog are already on main and the PR CI has
+# built the workspace + C-API + Neon + Python and dry-run-packaged the crates.
+#
+# This job publishes, in order, behind the `release` environment (required
+# reviewers approve before its secrets decrypt):
+#   0. PREFLIGHT — validate BOTH registry tokens with real authenticated calls
+#      (`cargo owner --list`, `npm whoami`); dry-runs do NOT validate tokens, so
+#      this is the only way to fail before anything irreversible.
+#   1. crates.io — `cargo publish` each crate in publish-order.sh (cargo waits
+#      for the index between dependents; already-published versions are skipped
+#      so re-runs are safe).
+#   2. push tag vX.Y.Z (RELEASE_PAT) — cascades into capi-release.yml (C-API
+#      tarballs) and ts-prebuild.yml (npm), which publish on the tag push.
+#   3. create the GitHub Release with the changelog section.
+#
+# Ordering (crates.io -> tag -> cascade) means a crates.io failure aborts before
+# npm / C-API artifacts ship, keeping the multi-registry release consistent.
+
+on:
+  pull_request:
+    types: [closed]
+  # Manual re-trigger for recovery — e.g. the merge-triggered run failed and the
+  # `pull_request: closed` event can't be re-fired, or a partial publish needs
+  # to be resumed. The version must already be bumped + committed on main; the
+  # `release` environment approval still gates the publish.
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to publish, e.g. 0.1.3 (must already be on main)"
+        required: true
+        type: string
+
+concurrency:
+  group: release-publish
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    name: Publish release
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.pull_request.merged == true &&
+      github.event.pull_request.base.ref == 'main' &&
+      startsWith(github.event.pull_request.head.ref, 'release/') &&
+      contains(github.event.pull_request.labels.*.name, 'autorelease:pending'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    # Required-reviewer gate: CARGO_REGISTRY_TOKEN lives as an environment secret
+    # and is not decrypted onto the runner until a reviewer approves this job.
+    environment: release
+    steps:
+      - name: Resolve version
+        id: v
+        env:
+          # Via env (not inline ${{ }}) so the branch/input can't inject shell.
+          EVENT: ${{ github.event_name }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            version="$INPUT_VERSION"
+          else
+            version="${HEAD_REF#release/}"
+          fi
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::could not resolve a bare X.Y.Z version (event=$EVENT)"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout the merged release commit
+        uses: actions/checkout@v4
+        with:
+          # PR-merge path: pin to THIS PR's merge commit, not main's HEAD, so a
+          # PR that merges immediately after can't shift what we publish/tag.
+          # workflow_dispatch path: no merge commit, so use main (already bumped).
+          ref: ${{ github.event.pull_request.merge_commit_sha || 'main' }}
+          fetch-depth: 0
+          # PAT so the tag push cascades into capi-release.yml / ts-prebuild.yml.
+          token: ${{ secrets.RELEASE_PAT }}
+
+      - name: Free disk space
+        # Pinned to a full commit SHA (v1.3.1) rather than @main for supply-chain
+        # safety on this token-bearing publish workflow.
+        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: false
+          swap-storage: false
+          docker-images: true
+
+      - name: Install Rust (from rust-toolchain.toml)
+        run: rustup show
+
+      - name: Install native build deps
+        run: sudo apt-get update && sudo apt-get install -y cmake protobuf-compiler
+
+      - name: Set up Node.js (npm registry auth)
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: release-publish-v1
+          cache-on-failure: true
+
+      # ── 0. Credential preflight — fail before ANY irreversible action ──────
+      - name: Preflight — crates.io token
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CARGO_REGISTRY_TOKEN:-}" ]; then
+            echo "::error::CARGO_REGISTRY_TOKEN is not set on the 'release' environment"
+            exit 1
+          fi
+          # `cargo owner --list` performs an authenticated crates.io API call
+          # (unlike `cargo publish --dry-run`, which never validates the token).
+          # Probe against cognee-models: the foundational crate every other member
+          # depends on, published since v0.1.0 and therefore guaranteed to exist
+          # on crates.io. Do NOT derive this from publish-order.sh — its first
+          # entry is a dependency-free leaf that could be a brand-new,
+          # not-yet-published crate, which would make a valid token look invalid.
+          cargo owner --list cognee-models
+
+      - name: Preflight — npm token
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
+            echo "::error::NPM_TOKEN is not set"
+            exit 1
+          fi
+          who=$(npm whoami --registry https://registry.npmjs.org)
+          echo "npm authenticated as: ${who}"
+
+      # ── 1. crates.io ───────────────────────────────────────────────────────
+      - name: Publish each crate in topological order
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          set -euo pipefail
+          # Materialise the publish order FIRST. Under `set -e` a failure of the
+          # generator (cargo metadata error, missing python3, or its cyclic-dep
+          # `exit 2`) aborts here — rather than the old `done < <(...)` process
+          # substitution, whose non-zero exit was invisible and would let the job
+          # publish zero crates yet still push the tag and cascade npm/C-API.
+          crates=$(scripts/split/publish-order.sh)
+          if [ -z "$crates" ]; then
+            echo "::error::publish-order.sh produced no crates to publish"; exit 1
+          fi
+          echo "Publishing $(printf '%s\n' "$crates" | wc -l) crate(s):"
+          printf '  %s\n' $crates
+          fails=0
+          while IFS= read -r c; do
+            [ -z "$c" ] && continue
+            echo "── publishing ${c}"
+            # `2>&1 | tee` streams cargo's progress + index-propagation wait live
+            # AND captures it for the skip/fail classifier. Under pipefail the
+            # pipeline reflects cargo's exit status (tee exits 0), and the pipe
+            # waits for tee — so the log is complete before the grep below (no
+            # process-substitution flush race).
+            if cargo publish -p "$c" 2>&1 | tee /tmp/pub.log; then
+              echo "   OK ${c}"
+            elif grep -qiE 'already (uploaded|exists)' /tmp/pub.log; then
+              echo "   SKIP ${c}: already on crates.io at this version"
+            else
+              echo "   FAIL ${c}"
+              fails=$((fails + 1)); break
+            fi
+          done <<< "$crates"
+          if [ "$fails" -gt 0 ]; then
+            echo "=== crates.io publish failed ==="; exit 1
+          fi
+
+      # ── 2. tag push → cascades to capi-release.yml + ts-prebuild.yml ────────
+      - name: Push release tag
+        env:
+          TAG: ${{ steps.v.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
+            echo "tag ${TAG} already on origin — skipping (re-run)"
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag -a "${TAG}" -m "cognee-rust ${TAG}"
+            git push origin "${TAG}"
+          fi
+
+      # ── 3. GitHub Release with the changelog section ────────────────────────
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PAT }}
+          TAG: ${{ steps.v.outputs.tag }}
+          VERSION: ${{ steps.v.outputs.version }}
+        run: |
+          set -euo pipefail
+          # Extract this version's section from CHANGELOG.md for the release body.
+          awk -v ver="$VERSION" '
+            $0 ~ "^## \\[" ver "\\]" { p = 1; print; next }
+            p && /^## \[/ { exit }
+            p { print }
+          ' CHANGELOG.md > /tmp/notes.md
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            gh release edit "${TAG}" --notes-file /tmp/notes.md
+          else
+            gh release create "${TAG}" --title "${TAG}" --notes-file /tmp/notes.md
+          fi
