@@ -66,6 +66,10 @@ for lib in \
     "$BUILT_DIR"/cognee_capi.dll.lib \
     "$BUILT_DIR"/cognee_capi.lib \
     "$BUILT_DIR"/cognee_capi.pdb; do
+    # `nullglob` drops non-matching *globs*, but the literal Windows filenames
+    # above (no glob metachars) are NOT dropped — on Linux/macOS they'd reach
+    # `cp` as a missing path and abort under `set -e`. Skip anything absent.
+    [ -e "$lib" ] || continue
     cp "$lib" "$STAGE_DIR/lib/"
     echo "    copied $(basename "$lib")"
     COPIED_ANY=1
