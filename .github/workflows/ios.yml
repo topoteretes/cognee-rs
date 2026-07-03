@@ -7,7 +7,7 @@ on:
     branches: [ main, master ]
 
 concurrency:
-  group: ios-${{ github.ref }}-${{ github.sha }}
+  group: ios-${{ github.ref }}
   cancel-in-progress: true
 
 env:
@@ -76,14 +76,9 @@ jobs:
       # `import CogneeSDKCore` via a synthesised Clang module so that renamed
       # or removed `cg_sdk_*` symbols, changed argument counts, and changed
       # `CgErrorCode` values are caught without the xcframework binary.
+      # capi/include/module.modulemap is a committed file; no cat/heredoc needed.
       - name: Type-check Swift wrapper against the C header
         run: |
-          cat > capi/include/module.modulemap <<'MODULE'
-          module CogneeSDKCore {
-              umbrella header "cognee_sdk.h"
-              export *
-          }
-          MODULE
           swiftc -typecheck \
             -sdk "$(xcrun --sdk iphonesimulator --show-sdk-path)" \
             -target arm64-apple-ios13.0-simulator \

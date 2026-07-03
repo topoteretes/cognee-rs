@@ -17,11 +17,12 @@ publish = false
 
 [lib]
 crate-type = ["cdylib", "staticlib"]
-
-# iOS forbids dynamic libraries in App Store submissions.
-# Override to staticlib-only when cross-compiling for iOS.
-[target.'cfg(target_os = "ios")'.lib]
-crate-type = ["staticlib"]
+# Note: [target.'cfg(...)'.lib] is NOT a valid Cargo manifest table — only
+# [target.'cfg(...)'.dependencies] is supported.  Cargo silently ignores any
+# other per-target lib section with a "unused manifest key" warning.  To emit
+# only a staticlib for iOS, build_xcframework.sh uses
+#   cargo rustc --crate-type staticlib
+# which overrides the crate-type for that one invocation only.
 
 [features]
 # Default feature set mirrors cognee-ts-neon (ts/cognee-ts-neon/Cargo.toml).
@@ -55,7 +56,7 @@ sqlite        = ["cognee-lib/sqlite",                "cognee-bindings-common/sql
 # graph/vector backends — same reason cognee-ts-neon keeps it.
 testing       = ["cognee-lib/testing",               "cognee-bindings-common/testing"]
 # Record/replay cassette-based mock LLM. Required for the iOS demo and offline
-# testing. Enables `llm_mock` / `llm_mock_cassette` settings keys at runtime.
+# testing. Enables `llm_mock` / `llm_cassette` settings keys at runtime.
 mock-llm      = ["cognee-lib/mock-llm"]
 # Test-only opt-in: exposes `cg_test_force_panic`, a no-return symbol
 # that always panics. Used by the capi smoke tests under

@@ -131,15 +131,22 @@ The committed cassette was recorded against `llama3.2:3b` via Ollama. To record 
 ollama serve &
 ollama pull llama3.2:3b
 
-# Record (from repo root)
-cargo run -p cognee-cli --no-default-features \
-  --features sqlite,testing,mock-llm -- \
-  --llm-provider openai \
-  --llm-base-url http://localhost:11434/v1 \
-  --llm-model llama3.2:3b \
-  --llm-api-key ollama \
-  --cassette-out ios/Tests/CogneeSDKTests/Fixtures/demo_cassette.json \
-  bench add ios/Tests/CogneeSDKTests/Fixtures/memories.json
+# Record (from repo root).
+#
+# COGNEE_RECORD_LLM   – cassette output path (wraps the real LLM adapter;
+#                        writes the file on Drop).
+# MOCK_EMBEDDING      – use deterministic mock embeddings so only LLM
+#                        responses are recorded (no embedding API calls).
+# LLM_API_BASE / LLM_API_KEY – Ollama's OpenAI-compatible endpoint.
+COGNEE_RECORD_LLM="$(pwd)/ios/Tests/CogneeSDKTests/Fixtures/demo_cassette.json" \
+MOCK_EMBEDDING=deterministic \
+LLM_API_BASE=http://localhost:11434/v1 \
+LLM_API_KEY=ollama \
+  cargo run --release -p cognee-cli -- bench \
+    --memories ios/Tests/CogneeSDKTests/Fixtures/memories.json \
+    --llm-provider openai \
+    --llm-model llama3.2:3b \
+    --output /dev/null
 ```
 
 The cassette keys on `sha256(user_input + schema)` so the same text always produces the same key — replay is deterministic regardless of model temperature settings.

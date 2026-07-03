@@ -53,7 +53,7 @@ public final class Cognee: @unchecked Sendable {
     /// - Throws: `CogneeError` with code 3 (CG_ERR_RUNTIME) if `cg_sdk_new`
     ///   returns `nil`.
     public init(settingsJSON: String? = nil) throws {
-        let raw: OpaquePointer? = settingsJSON.map { cg_sdk_new($0) } ?? cg_sdk_new(nil)
+        let raw: OpaquePointer? = cg_sdk_new(settingsJSON)
         guard let p = raw else {
             let msg = cg_last_error_message().map { String(cString: $0) }
                 ?? "cg_sdk_new returned nil"
@@ -68,35 +68,20 @@ public final class Cognee: @unchecked Sendable {
         cg_sdk_destroy(handle)
     }
 
-    // MARK: – SDK ops
+    // MARK: – Async bridge
 
-    /// Warm the SDK handle: build DB connections, LLM/embedding engine, etc.
+    /// Shared helper that bridges any `cg_sdk_*` call to Swift async/await.
     ///
-    /// Must be called once before `add`, `cognify`, or `search`.
-    /// Calling it again is a no-op (idempotent in the Rust layer).
-    public func warm() async throws {
-        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
-            let ptr = Unmanaged.passRetained(ContinuationBox<Void>(cont)).toOpaque()
-            cg_sdk_warm(handle, { code, _, message, userData in
-                let box = Unmanaged<ContinuationBox<Void>>
-                    .fromOpaque(userData!).takeRetainedValue()
-                guard code.rawValue == 0 else {
-                    box.continuation.resume(
-                        throwing: CogneeError(code: code, message: message))
-                    return
-                }
-                box.continuation.resume(returning: ())
-            }, ptr)
-        }
-    }
-
-    /// Return the owner UUID as a quoted JSON string (e.g. `"\"abc-…\""`).
-    ///
-    /// Warms the handle lazily if services have not yet been built.
-    public func ownerId() async throws -> String {
+    /// `start` is a capturing Swift closure that receives the non-capturing
+    /// `@convention(c)` callback and the opaque user-data pointer, and passes
+    /// them to the C function.  All six result-returning SDK methods collapse
+    /// to a single `try await invoke { cb, ud in cg_sdk_FOO(…, cb, ud) }`.
+    private func invoke(
+        _ start: @escaping (CgSdkResultCallback?, UnsafeMutableRawPointer) -> Void
+    ) async throws -> String {
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<String, Error>) in
             let ptr = Unmanaged.passRetained(ContinuationBox<String>(cont)).toOpaque()
-            cg_sdk_owner_id(handle, { code, result, message, userData in
+            start({ code, result, message, userData in
                 let box = Unmanaged<ContinuationBox<String>>
                     .fromOpaque(userData!).takeRetainedValue()
                 guard code.rawValue == 0 else {
@@ -108,6 +93,23 @@ public final class Cognee: @unchecked Sendable {
                     returning: result.map { String(cString: $0) } ?? "null")
             }, ptr)
         }
+    }
+
+    // MARK: – SDK ops
+
+    /// Warm the SDK handle: build DB connections, LLM/embedding engine, etc.
+    ///
+    /// Must be called once before `add`, `cognify`, or `search`.
+    /// Calling it again is a no-op (idempotent in the Rust layer).
+    public func warm() async throws {
+        _ = try await invoke { cb, ud in cg_sdk_warm(self.handle, cb, ud) }
+    }
+
+    /// Return the owner UUID as a quoted JSON string (e.g. `"\"abc-…\""`).
+    ///
+    /// Warms the handle lazily if services have not yet been built.
+    public func ownerId() async throws -> String {
+        try await invoke { cb, ud in cg_sdk_owner_id(self.handle, cb, ud) }
     }
 
     /// Add data to a named dataset.
@@ -124,21 +126,7 @@ public final class Cognee: @unchecked Sendable {
         dataset: String,
         optsJSON: String? = nil
     ) async throws -> String {
-        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<String, Error>) in
-            let ptr = Unmanaged.passRetained(ContinuationBox<String>(cont)).toOpaque()
-            cg_sdk_add(handle, inputsJSON, dataset, optsJSON,
-                { code, result, message, userData in
-                    let box = Unmanaged<ContinuationBox<String>>
-                        .fromOpaque(userData!).takeRetainedValue()
-                    guard code.rawValue == 0 else {
-                        box.continuation.resume(
-                            throwing: CogneeError(code: code, message: message))
-                        return
-                    }
-                    box.continuation.resume(
-                        returning: result.map { String(cString: $0) } ?? "null")
-                }, ptr)
-        }
+        try await invoke { cb, ud in cg_sdk_add(self.handle, inputsJSON, dataset, optsJSON, cb, ud) }
     }
 
     /// Run the cognify pipeline on an existing dataset.
@@ -154,21 +142,7 @@ public final class Cognee: @unchecked Sendable {
         dataset: String,
         optsJSON: String? = nil
     ) async throws -> String {
-        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<String, Error>) in
-            let ptr = Unmanaged.passRetained(ContinuationBox<String>(cont)).toOpaque()
-            cg_sdk_cognify(handle, dataset, optsJSON,
-                { code, result, message, userData in
-                    let box = Unmanaged<ContinuationBox<String>>
-                        .fromOpaque(userData!).takeRetainedValue()
-                    guard code.rawValue == 0 else {
-                        box.continuation.resume(
-                            throwing: CogneeError(code: code, message: message))
-                        return
-                    }
-                    box.continuation.resume(
-                        returning: result.map { String(cString: $0) } ?? "null")
-                }, ptr)
-        }
+        try await invoke { cb, ud in cg_sdk_cognify(self.handle, dataset, optsJSON, cb, ud) }
     }
 
     /// Add data and immediately cognify in one combined operation.
@@ -182,21 +156,7 @@ public final class Cognee: @unchecked Sendable {
         dataset: String,
         optsJSON: String? = nil
     ) async throws -> String {
-        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<String, Error>) in
-            let ptr = Unmanaged.passRetained(ContinuationBox<String>(cont)).toOpaque()
-            cg_sdk_add_and_cognify(handle, inputsJSON, dataset, optsJSON,
-                { code, result, message, userData in
-                    let box = Unmanaged<ContinuationBox<String>>
-                        .fromOpaque(userData!).takeRetainedValue()
-                    guard code.rawValue == 0 else {
-                        box.continuation.resume(
-                            throwing: CogneeError(code: code, message: message))
-                        return
-                    }
-                    box.continuation.resume(
-                        returning: result.map { String(cString: $0) } ?? "null")
-                }, ptr)
-        }
+        try await invoke { cb, ud in cg_sdk_add_and_cognify(self.handle, inputsJSON, dataset, optsJSON, cb, ud) }
     }
 
     /// Search the knowledge graph.
@@ -210,21 +170,7 @@ public final class Cognee: @unchecked Sendable {
         query: String,
         optsJSON: String? = nil
     ) async throws -> String {
-        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<String, Error>) in
-            let ptr = Unmanaged.passRetained(ContinuationBox<String>(cont)).toOpaque()
-            cg_sdk_search(handle, query, optsJSON,
-                { code, result, message, userData in
-                    let box = Unmanaged<ContinuationBox<String>>
-                        .fromOpaque(userData!).takeRetainedValue()
-                    guard code.rawValue == 0 else {
-                        box.continuation.resume(
-                            throwing: CogneeError(code: code, message: message))
-                        return
-                    }
-                    box.continuation.resume(
-                        returning: result.map { String(cString: $0) } ?? "null")
-                }, ptr)
-        }
+        try await invoke { cb, ud in cg_sdk_search(self.handle, query, optsJSON, cb, ud) }
     }
 
     /// Recall from memory using the unified recall pipeline.
@@ -237,21 +183,7 @@ public final class Cognee: @unchecked Sendable {
         query: String,
         optsJSON: String? = nil
     ) async throws -> String {
-        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<String, Error>) in
-            let ptr = Unmanaged.passRetained(ContinuationBox<String>(cont)).toOpaque()
-            cg_sdk_recall(handle, query, optsJSON,
-                { code, result, message, userData in
-                    let box = Unmanaged<ContinuationBox<String>>
-                        .fromOpaque(userData!).takeRetainedValue()
-                    guard code.rawValue == 0 else {
-                        box.continuation.resume(
-                            throwing: CogneeError(code: code, message: message))
-                        return
-                    }
-                    box.continuation.resume(
-                        returning: result.map { String(cString: $0) } ?? "null")
-                }, ptr)
-        }
+        try await invoke { cb, ud in cg_sdk_recall(self.handle, query, optsJSON, cb, ud) }
     }
 
     // MARK: – Configuration

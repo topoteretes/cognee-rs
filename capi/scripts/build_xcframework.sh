@@ -23,14 +23,17 @@ CARGO_FLAGS="--manifest-path $MANIFEST --no-default-features --features sqlite,t
 
 # ---------------------------------------------------------------------------
 # 1. Compile release static libraries for both iOS targets
+#    `cargo rustc --crate-type staticlib` overrides the crate-type for this
+#    invocation only, so we emit only the staticlib slice (no multi-GB cdylib)
+#    regardless of the [lib] crate-type list in Cargo.toml.
 # ---------------------------------------------------------------------------
 echo "==> Building for aarch64-apple-ios (device) ..."
 export SDKROOT="$(xcrun --sdk iphoneos --show-sdk-path)"
-cargo build --target aarch64-apple-ios $CARGO_FLAGS
+cargo rustc --target aarch64-apple-ios $CARGO_FLAGS -- --crate-type staticlib
 
 echo "==> Building for aarch64-apple-ios-sim (simulator) ..."
 export SDKROOT="$(xcrun --sdk iphonesimulator --show-sdk-path)"
-cargo build --target aarch64-apple-ios-sim $CARGO_FLAGS
+cargo rustc --target aarch64-apple-ios-sim $CARGO_FLAGS -- --crate-type staticlib
 
 # ---------------------------------------------------------------------------
 # 2. Stage headers + module map
@@ -39,15 +42,11 @@ cargo build --target aarch64-apple-ios-sim $CARGO_FLAGS
 # ---------------------------------------------------------------------------
 for SLICE in ios ios-sim; do
   mkdir -p "$STAGING/$SLICE/Headers"
-  cp "$INCLUDE_DIR/cognee.h"     "$STAGING/$SLICE/Headers/"
-  cp "$INCLUDE_DIR/cognee_sdk.h" "$STAGING/$SLICE/Headers/"
-  # module.modulemap lets Swift import this as `import CogneeSDK`
-  cat > "$STAGING/$SLICE/Headers/module.modulemap" <<'MODULE'
-module CogneeSDKCore {
-    umbrella header "cognee_sdk.h"
-    export *
-}
-MODULE
+  cp "$INCLUDE_DIR/cognee.h"          "$STAGING/$SLICE/Headers/"
+  cp "$INCLUDE_DIR/cognee_sdk.h"      "$STAGING/$SLICE/Headers/"
+  # Use the committed module.modulemap so CI type-checks and the xcframework
+  # headers are always in sync (single source of truth).
+  cp "$INCLUDE_DIR/module.modulemap"  "$STAGING/$SLICE/Headers/"
 done
 
 # ---------------------------------------------------------------------------

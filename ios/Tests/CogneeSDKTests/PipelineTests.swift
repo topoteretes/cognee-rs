@@ -37,6 +37,34 @@ final class PipelineTests: XCTestCase {
         return String(data: data, encoding: .utf8)!
     }
 
+    /// Load the first entry from the bundled memories.json and apply the same
+    /// `memory_to_text` shaping used by the Rust bench command:
+    ///   "Title: {title}\n\n{content}\n\nReferences: {refs}"
+    ///
+    /// This guarantees the text passed to `add()` produces the same
+    /// sha256(user_input + schema) keys that were written into the cassette
+    /// during recording — without duplicating the text in the test source.
+    private func memoryTextFromFixture() throws -> String {
+        guard let url = Bundle.module.url(forResource: "memories", withExtension: "json") else {
+            throw XCTSkip("memories.json not found in test bundle")
+        }
+        let data = try Data(contentsOf: url)
+        guard let memories = try JSONSerialization.jsonObject(with: data) as? [[String: Any]],
+              let first = memories.first else {
+            throw XCTSkip("memories.json is empty or not an array of objects")
+        }
+        let title   = first["title"]   as? String ?? "Untitled"
+        let content = first["content"] as? String ?? ""
+        // Mirror Rust: empty array → "none", non-empty string array → joined
+        let refs: String
+        if let arr = first["references"] as? [String], !arr.isEmpty {
+            refs = arr.joined(separator: ", ")
+        } else {
+            refs = "none"
+        }
+        return "Title: \(title)\n\n\(content)\n\nReferences: \(refs)"
+    }
+
     // MARK: – Tests
 
     /// Full offline pipeline: warm → add → cognify → search.
@@ -57,22 +85,10 @@ final class PipelineTests: XCTestCase {
         // ── 2. Warm (builds in-memory stores using mock config) ────────────
         try await cognee.warm()
 
-        // ── 3. Add — text must match what was used during cassette recording
-        //     (memory_to_text format: "Title: …\n\n<content>\n\nReferences: none")
-        let memoryText = """
-            Title: Alan Turing
-
-            Alan Turing was a British mathematician and computer scientist born \
-            in London in 1912. He is widely considered the father of theoretical \
-            computer science and artificial intelligence. During World War II, \
-            Turing worked at Bletchley Park where he led the team that cracked \
-            the Enigma cipher used by Nazi Germany, significantly shortening the \
-            war. After the war, he worked at the University of Manchester and \
-            developed the Turing test to evaluate machine intelligence. Turing \
-            was awarded the OBE in 1946 for his wartime services.
-
-            References: none
-            """
+        // ── 3. Add — load text from memories.json and apply memory_to_text
+        //     shaping so the cassette's sha256(user_input + schema) keys are
+        //     matched byte-for-byte without duplicating the prose in the test.
+        let memoryText = try memoryTextFromFixture()
 
         let inputsJSON = try textInputsJSON(memoryText)
         let addResult = try await cognee.add(inputsJSON: inputsJSON, dataset: "demo")

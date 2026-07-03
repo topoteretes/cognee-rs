@@ -1,0 +1,4 @@
+module CogneeSDKCore {
+    umbrella header "cognee_sdk.h"
+    export *
+}
