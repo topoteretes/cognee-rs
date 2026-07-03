@@ -1,7 +1,7 @@
 name: TS Prebuild
 
 # Build per-platform prebuilt .node binaries and publish per-platform npm
-# packages (@cognee-ts/neon-<platform>) on release tags, then publish the main
+# packages (@cognee/neon-<platform>) on release tags, then publish the main
 # `cognee-ts` npm package once all platform packages are live.
 #
 # The matrix matches the entries in:
@@ -337,7 +337,9 @@ jobs:
               echo "SKIP ${PKG}@${VER}: already on registry"
             else
               echo "--- Publishing ${PKG}@${VER} ---"
-              npm publish "${PLATFORM}" --access public
+              # `./` prefix so npm treats the arg as a directory to pack, not a
+              # package spec to fetch (a bare `linux-x64-gnu` → E404 GET /linux-x64-gnu).
+              npm publish "./${PLATFORM}" --access public
             fi
           done
 

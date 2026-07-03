@@ -1,0 +1,25 @@
+# Cross-compilation config for the C-API (cross-rs), mirroring the proven
+# ts/cognee-ts-neon/Cross.toml setup that already builds the aarch64 Neon addon.
+#
+# capi/ is a standalone (nested) workspace, so cross-rs by default mounts only
+# this directory — leaving its path-deps (../crates/*) and the root Cargo.toml
+# outside the container ("failed to find a workspace root"). `volumes` mounts the
+# whole repo (COGNEE_REPO_ROOT) at its host path so those resolve.
+#
+# The stock cross image is a minimal Ubuntu that lacks what the build needs:
+#   - gcc-11 / libstdc++ 11 for the bundled lbug C++ engine (C++20),
+#   - libssl-dev, so ort-sys's ureq/native-tls -> openssl-sys build script links
+#     (the default cross image has no openssl -> the previous capi run failed here).
+# ci/cross/aarch64-gnu.Dockerfile (shared with ts-prebuild) bakes in gcc-11 +
+# cmake + protoc + libssl.
+
+[build.env]
+volumes = ["COGNEE_REPO_ROOT"]
+passthrough = [
+    "CFLAGS_aarch64_unknown_linux_gnu",
+    "CXXFLAGS_aarch64_unknown_linux_gnu",
+    "ORT_CACHE_DIR",
+]
+
+[target.aarch64-unknown-linux-gnu]
+dockerfile = "../ci/cross/aarch64-gnu.Dockerfile"

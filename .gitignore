@@ -65,3 +65,4 @@ cognee.db
 # Generated Locust benchmark artifacts
 e2e-cross-sdk/performance/locust/results/
 results/
+ghlogs/
