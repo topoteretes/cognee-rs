@@ -6,7 +6,9 @@
 use std::sync::Arc;
 
 use cognee_llm::{GenerationOptions, Llm, LlmExt};
-use tracing::debug;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+use tracing::{debug, warn};
 
 use super::models::{GraphModel, KnowledgeGraph};
 use crate::error::CognifyError;
@@ -17,6 +19,25 @@ use crate::error::CognifyError;
 /// `cognee/infrastructure/llm/prompts/generate_graph_prompt.txt` (kept in sync via
 /// the prompt-parity drift guard in the inline `#[cfg(test)]` block below).
 const DEFAULT_GRAPH_PROMPT: &str = include_str!("prompts/generate_graph_prompt.txt");
+
+/// Appended to the system prompt when extracting a group of chunks in one call.
+/// It turns the single-graph task into a per-chunk one so results map back by
+/// index (issue #19, multi-chunk batching).
+const BATCH_GRAPH_INSTRUCTIONS: &str = "\n\n# Batch mode\n\
+You are given a JSON array of text chunks, each an object with an \"index\" and \
+a \"text\". Apply all the rules above to EACH chunk independently and extract a \
+separate knowledge graph for each. Do not merge entities across chunks. Return a \
+JSON object of the form {\"graphs\": [ ... ]} whose \"graphs\" array has exactly \
+one entry per input chunk, in the SAME order as the input (graphs[i] is the graph \
+for the chunk with index i).";
+
+/// Structured-output wrapper: one [`KnowledgeGraph`] per chunk in a batched call.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+struct BatchedGraphs {
+    /// One graph per input chunk, in input order.
+    #[serde(default)]
+    graphs: Vec<KnowledgeGraph>,
+}
 
 /// Fact extractor for knowledge graph generation.
 ///
@@ -194,6 +215,112 @@ impl FactExtractor {
             graphs.push(graph);
         }
 
+        Ok(graphs)
+    }
+
+    /// Extract facts from many chunks, sending `group_size` chunks per LLM call.
+    ///
+    /// This cuts the number of extraction requests from `texts.len()` to
+    /// `ceil(texts.len() / group_size)`: each call asks the model for one graph
+    /// per chunk in the group, and the graphs are mapped back to their chunks by
+    /// input order (issue #19, multi-chunk batching).
+    ///
+    /// Failure isolation: if a group's batched response fails to parse or does
+    /// not return exactly one graph per chunk, that group alone falls back to
+    /// per-chunk extraction, so one bad group can never drop the others. Output
+    /// order always matches input order, so callers that pair graphs with chunk
+    /// ids by position stay correct.
+    ///
+    /// `group_size <= 1` is exactly per-chunk extraction (one request per chunk).
+    ///
+    /// Note: this trades requests for weaker per-chunk isolation and a larger
+    /// per-call prompt. Whether it preserves extraction quality depends on the
+    /// model and is a data-driven decision (see the parity harness in the tests);
+    /// keep it opt-in until a calibration run on your corpus supports the chosen
+    /// `group_size`.
+    pub async fn extract_facts_grouped(
+        &self,
+        texts: Vec<String>,
+        custom_prompt: Option<String>,
+        group_size: usize,
+    ) -> Result<Vec<KnowledgeGraph>, CognifyError> {
+        let group_size = group_size.max(1);
+        let mut out: Vec<KnowledgeGraph> = Vec::with_capacity(texts.len());
+
+        for group in texts.chunks(group_size) {
+            if group_size == 1 {
+                out.push(
+                    self.extract_facts(&group[0], custom_prompt.as_deref())
+                        .await?,
+                );
+                continue;
+            }
+
+            match self.extract_group(group, custom_prompt.as_deref()).await {
+                Ok(graphs) if graphs.len() == group.len() => out.extend(graphs),
+                other => {
+                    if let Err(e) = other {
+                        warn!("Batched extraction failed ({e}); falling back to per-chunk.");
+                    } else {
+                        warn!(
+                            "Batched extraction returned the wrong graph count; \
+                             falling back to per-chunk for this group."
+                        );
+                    }
+                    for text in group {
+                        out.push(self.extract_facts(text, custom_prompt.as_deref()).await?);
+                    }
+                }
+            }
+        }
+
+        Ok(out)
+    }
+
+    /// One batched LLM call for a group of chunks. Returns one graph per chunk,
+    /// in input order. Caller is responsible for the per-chunk fallback when the
+    /// returned count does not match the group size.
+    async fn extract_group(
+        &self,
+        group: &[String],
+        custom_prompt: Option<&str>,
+    ) -> Result<Vec<KnowledgeGraph>, CognifyError> {
+        let base = custom_prompt.unwrap_or(DEFAULT_GRAPH_PROMPT);
+        let system_prompt = format!("{base}{BATCH_GRAPH_INSTRUCTIONS}");
+
+        let input: Vec<serde_json::Value> = group
+            .iter()
+            .enumerate()
+            .map(|(index, text)| serde_json::json!({ "index": index, "text": text }))
+            .collect();
+        let user_prompt = serde_json::to_string(&input)
+            .map_err(|e| CognifyError::SerializationError(e.to_string()))?;
+
+        let batched: BatchedGraphs = self
+            .llm
+            .create_structured_output(
+                &user_prompt,
+                &system_prompt,
+                // Same as per-chunk extraction: no output cap, so a dense batch
+                // is not truncated mid-JSON (Python parity).
+                Some(GenerationOptions {
+                    temperature: Some(0.1),
+                    max_tokens: None,
+                    ..Default::default()
+                }),
+            )
+            .await
+            .map_err(|e| CognifyError::LlmError(e.to_string()))?;
+
+        let mut graphs = batched.graphs;
+        // Same post-processing as extract_facts: empty name defaults to id.
+        for graph in &mut graphs {
+            for node in &mut graph.nodes {
+                if node.name.is_empty() {
+                    node.name = node.id.clone();
+                }
+            }
+        }
         Ok(graphs)
     }
 
@@ -432,6 +559,167 @@ mod tests {
         assert!(
             !vendored.contains("the entity type label in uppercase"),
             "old UPPERCASE-forcing line still present"
+        );
+    }
+
+    // ----- Multi-chunk batching (issue #19) -----
+
+    /// Mock that answers both extraction shapes. A batched call sends the last
+    /// message as a JSON array of `{index, text}` chunks; the mock returns one
+    /// graph per chunk (with an empty node name, to exercise post-processing). A
+    /// per-chunk call sends raw text; the mock returns a single graph. With
+    /// `bad_batch`, batched calls return the wrong graph count to drive the
+    /// per-chunk fallback.
+    struct AdaptiveMock {
+        bad_batch: bool,
+    }
+
+    #[async_trait::async_trait]
+    impl Llm for AdaptiveMock {
+        async fn generate(
+            &self,
+            _messages: Vec<cognee_llm::Message>,
+            _options: Option<GenerationOptions>,
+        ) -> cognee_llm::LlmResult<cognee_llm::GenerationResponse> {
+            unreachable!("extraction uses structured output, not generate")
+        }
+
+        async fn create_structured_output_with_messages_raw(
+            &self,
+            messages: Vec<cognee_llm::Message>,
+            _json_schema: &serde_json::Value,
+            _options: Option<GenerationOptions>,
+        ) -> cognee_llm::LlmResult<serde_json::Value> {
+            let last = messages.last().map(|m| m.content.as_str()).unwrap_or("");
+            // A batched call serialises the chunks as a JSON array.
+            if let Ok(chunks) = serde_json::from_str::<Vec<serde_json::Value>>(last) {
+                let count = if self.bad_batch { 0 } else { chunks.len() };
+                let graphs: Vec<serde_json::Value> = (0..count)
+                    .map(|_| {
+                        serde_json::json!({
+                            "nodes": [{"id": "n", "name": "", "type": "T", "description": ""}],
+                            "edges": []
+                        })
+                    })
+                    .collect();
+                return Ok(serde_json::json!({ "graphs": graphs }));
+            }
+            // Per-chunk call: one graph.
+            Ok(serde_json::json!({ "nodes": [], "edges": [] }))
+        }
+
+        fn model(&self) -> &str {
+            "adaptive-mock"
+        }
+    }
+
+    /// The headline number for #19: batching cuts the request count from N to
+    /// ceil(N / group_size), counted through the ThrottleLlm instrument.
+    #[tokio::test]
+    async fn grouped_extraction_reduces_request_count() {
+        use cognee_llm::mock::{ThrottleConfig, ThrottleLlm};
+
+        let n = 12usize;
+        let k = 4usize;
+        let texts: Vec<String> = (0..n).map(|i| format!("chunk number {i}")).collect();
+
+        let per_chunk_throttle = Arc::new(ThrottleLlm::new(
+            Arc::new(AdaptiveMock { bad_batch: false }) as Arc<dyn Llm>,
+            ThrottleConfig::default(),
+        ));
+        let per_chunk = FactExtractor::new(per_chunk_throttle.clone() as Arc<dyn Llm>)
+            .extract_facts_batch(texts.clone(), None)
+            .await
+            .unwrap();
+        let per_chunk_calls = per_chunk_throttle.metrics().allowed;
+
+        let grouped_throttle = Arc::new(ThrottleLlm::new(
+            Arc::new(AdaptiveMock { bad_batch: false }) as Arc<dyn Llm>,
+            ThrottleConfig::default(),
+        ));
+        let grouped = FactExtractor::new(grouped_throttle.clone() as Arc<dyn Llm>)
+            .extract_facts_grouped(texts.clone(), None, k)
+            .await
+            .unwrap();
+        let grouped_calls = grouped_throttle.metrics().allowed;
+
+        println!("\ngraph extraction, {n}-chunk document, group_size={k}:");
+        println!("{:<24} {:>10}", "scenario", "requests");
+        println!("{:<24} {:>10}", "per-chunk (pre-#19)", per_chunk_calls);
+        println!("{:<24} {:>10}", "batched", grouped_calls);
+
+        assert_eq!(per_chunk.len(), n);
+        assert_eq!(grouped.len(), n);
+        assert_eq!(
+            per_chunk_calls, n as u64,
+            "per-chunk = one request per chunk"
+        );
+        assert_eq!(
+            grouped_calls,
+            n.div_ceil(k) as u64,
+            "batched = ceil(n / group_size) requests"
+        );
+    }
+
+    /// Batching returns exactly one graph per chunk in input order, and applies
+    /// the same empty-name to id post-processing as the per-chunk path.
+    #[tokio::test]
+    async fn grouped_extraction_returns_one_graph_per_chunk() {
+        let texts: Vec<String> = (0..7).map(|i| format!("chunk {i}")).collect();
+        let graphs = FactExtractor::new(Arc::new(AdaptiveMock { bad_batch: false }))
+            .extract_facts_grouped(texts.clone(), None, 3)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            graphs.len(),
+            texts.len(),
+            "one graph per chunk, order preserved"
+        );
+        for graph in &graphs {
+            for node in &graph.nodes {
+                assert!(
+                    !node.name.is_empty(),
+                    "empty node name should default to id"
+                );
+                assert_eq!(
+                    node.name, node.id,
+                    "post-processing must run on the batched path"
+                );
+            }
+        }
+    }
+
+    /// Failure isolation: when every batched response has the wrong graph count,
+    /// each group falls back to per-chunk extraction, so all chunks still produce
+    /// a graph. Requests = one failed batched attempt per group + N fallbacks.
+    #[tokio::test]
+    async fn grouped_extraction_falls_back_on_bad_batch() {
+        use cognee_llm::mock::{ThrottleConfig, ThrottleLlm};
+
+        let n = 6usize;
+        let k = 3usize;
+        let texts: Vec<String> = (0..n).map(|i| format!("chunk {i}")).collect();
+
+        let throttle = Arc::new(ThrottleLlm::new(
+            Arc::new(AdaptiveMock { bad_batch: true }) as Arc<dyn Llm>,
+            ThrottleConfig::default(),
+        ));
+        let graphs = FactExtractor::new(throttle.clone() as Arc<dyn Llm>)
+            .extract_facts_grouped(texts.clone(), None, k)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            graphs.len(),
+            n,
+            "fallback must still produce one graph per chunk"
+        );
+        let groups = n.div_ceil(k) as u64;
+        assert_eq!(
+            throttle.metrics().allowed,
+            groups + n as u64,
+            "expected {groups} batched attempts + {n} per-chunk fallbacks"
         );
     }
 }
