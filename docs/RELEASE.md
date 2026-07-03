@@ -50,7 +50,10 @@ Runs behind the **`release` environment** (required reviewers). Order:
    the index between dependents; already-published versions are skipped, so
    re-runs are safe).
 2. **Tag** — push `vX.Y.Z` with `RELEASE_PAT`, which cascades into:
-   - `capi-release.yml` → 5 per-platform C-API tarballs attached to the Release.
+   - `capi-release.yml` → 4 per-platform C-API tarballs (linux-x86_64,
+     linux-aarch64, macos-aarch64, windows-x86_64) attached to the Release.
+     x86_64-apple-darwin is intentionally not built — `ort` ships no prebuilt
+     ONNX Runtime for it (mirrors ts-prebuild dropping darwin-x64).
    - `ts-prebuild.yml` → prebuilt `.node` binaries + `@cognee/neon-*` and
      `@cognee/cognee-ts` npm packages (gated on `NPM_TOKEN`).
 3. **GitHub Release** — created/updated with the changelog section.

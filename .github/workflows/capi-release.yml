@@ -51,14 +51,18 @@ jobs:
             cross: true
             archive_suffix: linux-aarch64
 
-          # macOS x86_64
-          - os: macos-13
-            target: x86_64-apple-darwin
-            cross: false
-            archive_suffix: macos-x86_64
+          # NOTE: no macos-x86_64 (x86_64-apple-darwin). ort 2.0.0-rc.12 ships no
+          # prebuilt ONNX Runtime for that target (its dist manifest bundles ORT
+          # 1.24.2, which Microsoft no longer builds for x86_64 macOS as of ORT
+          # 1.24.1), so ort-sys errors "does not provide prebuilt binaries for the
+          # target x86_64-apple-darwin". Intel macOS is also EOL and GitHub is
+          # retiring its x86_64 runners. Dropped rather than carry a red leg —
+          # matches ts-prebuild.yml, which dropped darwin-x64 for the same reason.
 
-          # macOS aarch64 (Apple Silicon)
-          - os: macos-14
+          # macOS aarch64 (Apple Silicon). macos-15 (Xcode 16.4): the older
+          # macos-14 default (Xcode 15.4) ships a libc++ whose std::construct_at
+          # trips a C++20 aggregate-init bug compiling lbug's bundled C++.
+          - os: macos-15
             target: aarch64-apple-darwin
             cross: false
             archive_suffix: macos-aarch64
@@ -106,6 +110,16 @@ jobs:
           workspaces: capi -> target
           cache-on-failure: true
 
+      # ort-sys downloads the ONNX Runtime binary into ORT_CACHE_DIR. For the
+      # cross build that dir is /target/ort-cache in-container == capi/target/
+      # ort-cache on the host (cross mounts capi/target at /target).
+      - name: Cache ORT binary (cross)
+        if: matrix.cross
+        uses: actions/cache@v4
+        with:
+          path: capi/target/ort-cache
+          key: capi-ort-${{ matrix.archive_suffix }}-v1
+
       - name: Resolve tag
         id: tag
         shell: bash
@@ -133,8 +147,20 @@ jobs:
 
       - name: Build release library (cross)
         if: matrix.cross
+        working-directory: capi
         shell: bash
-        run: cross build --release --manifest-path capi/Cargo.toml --target ${{ matrix.target }}
+        # Run from capi/ so cross picks up capi/Cross.toml (repo mount via
+        # COGNEE_REPO_ROOT so ../crates path-deps resolve; gcc-11 + libssl image).
+        # cross mounts capi/target at /target. Disable simsimd's advanced ARM SIMD
+        # kernels the cross toolchain can't assemble (basic NEON + serial remain).
+        env:
+          ORT_CACHE_DIR: /target/ort-cache
+          COGNEE_REPO_ROOT: ${{ github.workspace }}
+        run: |
+          SVE="-DSIMSIMD_TARGET_NEON_I8=0 -DSIMSIMD_TARGET_NEON_F16=0 -DSIMSIMD_TARGET_NEON_BF16=0 -DSIMSIMD_TARGET_SVE=0 -DSIMSIMD_TARGET_SVE_I8=0 -DSIMSIMD_TARGET_SVE_F16=0 -DSIMSIMD_TARGET_SVE_BF16=0 -DSIMSIMD_TARGET_SVE2=0"
+          TGT_US=$(echo "${{ matrix.target }}" | tr '-' '_')
+          export CFLAGS_${TGT_US}="$SVE" CXXFLAGS_${TGT_US}="$SVE"
+          cross build --release --target ${{ matrix.target }}
 
       - name: Assemble release tarball
         shell: bash
@@ -153,11 +179,28 @@ jobs:
     name: Attach to GitHub Release
     needs: build
     runs-on: ubuntu-latest
-    # Only auto-attach for real tag pushes; workflow_dispatch is dry-run only.
-    if: github.event_name == 'push'
+    # Attach on a real tag push, or on a manual workflow_dispatch (so a failed
+    # release can be re-cut without force-moving the tag — the dispatch input
+    # supplies the tag to attach to).
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Resolve tag
+        id: tag
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            TAG="${GITHUB_REF_NAME}"
+          else
+            TAG="${{ inputs.tag }}"
+          fi
+          if [ -z "$TAG" ]; then
+            echo "::error::Could not resolve a tag to attach to"
+            exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
       - name: Download all platform artifacts
         uses: actions/download-artifact@v4
@@ -171,6 +214,9 @@ jobs:
       - name: Attach tarballs to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          # Explicit tag_name: on workflow_dispatch github.ref is a branch, so
+          # the action can't infer the tag from the ref like it does on push.
+          tag_name: ${{ steps.tag.outputs.tag }}
           files: artifacts/*
           fail_on_unmatched_files: true
         env:
