@@ -30,12 +30,18 @@ fn sqlite_fs_path(url: &str) -> Option<String> {
         return None;
     }
     let after = url.trim_start_matches("sqlite:");
+    // Collapse any run of leading slashes on the absolute forms to a single
+    // one, so an extra slash (e.g. `sqlite:////abs`) can't yield a
+    // double-leading-slash path that some platforms read as a UNC/network path.
     let path = if let Some(rest) = after.strip_prefix("//localhost/") {
-        format!("/{rest}")
-    } else if let Some(rest) = after.strip_prefix("///") {
-        format!("/{rest}")
+        format!("/{}", rest.trim_start_matches('/'))
     } else if let Some(rest) = after.strip_prefix("//") {
-        rest.to_string()
+        // `//<rest>`: absolute when `rest` starts with `/` (i.e. `sqlite:///…`),
+        // otherwise a relative path (`sqlite://data/…`).
+        match rest.strip_prefix('/') {
+            Some(abs) => format!("/{}", abs.trim_start_matches('/')),
+            None => rest.to_string(),
+        }
     } else {
         after.to_string()
     };
@@ -152,6 +158,9 @@ mod tests {
             sqlite_fs_path("sqlite://localhost/abs/db"),
             Some("/abs/db".into())
         );
+        // Extra leading slashes collapse to one (no double-leading-slash /
+        // accidental UNC path).
+        assert_eq!(sqlite_fs_path("sqlite:////abs/db"), Some("/abs/db".into()));
         // Query strings are stripped.
         assert_eq!(
             sqlite_fs_path("sqlite://data/db?mode=rwc"),

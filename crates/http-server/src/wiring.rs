@@ -347,12 +347,16 @@ mod tests {
             ..Default::default()
         };
         let ctx = cfg.backend_context();
+        // Normalize separators so the assertion holds on Windows too (PathBuf
+        // stringifies with `\`).
+        let model_path = ctx
+            .embedding
+            .onnx_model_path
+            .to_string_lossy()
+            .replace('\\', "/");
         assert!(
-            ctx.embedding
-                .onnx_model_path
-                .to_string_lossy()
-                .contains("target/models"),
-            "unset ONNX model path must fall back to the ./target/models default"
+            model_path.contains("target/models"),
+            "unset ONNX model path must fall back to the ./target/models default, got {model_path}"
         );
     }
 
