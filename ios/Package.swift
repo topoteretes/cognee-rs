@@ -30,6 +30,7 @@ let package = Package(
             path: "Tests/CogneeSDKTests",
             resources: [
                 .copy("Fixtures/demo_cassette.json"),
+                .copy("Fixtures/memories.json"),
             ]
         ),
     ]
