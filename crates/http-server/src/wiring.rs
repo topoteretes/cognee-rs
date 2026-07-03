@@ -59,7 +59,7 @@ pub async fn wire_default_backends_with(
     // Required backends — a failure here aborts startup.
     let storage = build_storage(&ctx).await?;
     let database = build_database(&ctx).await?;
-    let graph_db = wire_graph_db(cfg, registry, &ctx).await?;
+    let graph_db = wire_graph_db(registry, &ctx).await?;
     let vector_db = wire_vector_db(cfg, registry, &ctx).await?;
 
     // Optional backends — a failure downgrades to `None` (handlers surface a
@@ -130,19 +130,14 @@ pub async fn wire_default_backends_with(
 }
 
 async fn wire_graph_db(
-    cfg: &HttpServerConfig,
     registry: &ComponentRegistry,
     ctx: &cognee_components::BackendBuildContext,
 ) -> Result<Arc<dyn GraphDBTrait>, ServerError> {
-    // The standalone server ships only the embedded ladybug graph; guard early
-    // with an actionable message rather than the registry's generic
-    // "unregistered provider" error.
-    if !cfg.graph_provider.eq_ignore_ascii_case("ladybug") {
-        return Err(ServerError::Other(anyhow!(
-            "unsupported graph provider '{}'; only 'ladybug' is supported",
-            cfg.graph_provider
-        )));
-    }
+    // Delegate to the registry (like wire_vector_db): it already errors with an
+    // actionable "registered providers: [...]" message for anything it doesn't
+    // know, and — crucially — this keeps the extension seam intact so a
+    // caller-registered graph factory (and the built-in `kuzu` alias) is
+    // reachable, instead of a hardcoded ladybug-only guard rejecting them.
     Ok(registry.build_graph(ctx).await?)
 }
 

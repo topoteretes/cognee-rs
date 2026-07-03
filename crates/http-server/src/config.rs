@@ -586,7 +586,11 @@ impl HttpServerConfig {
         // surrounding whitespace reaches PgVectorAdapter::new cleanly (the
         // validator checks the trimmed form).
         let vector_postgres_url = if vector_provider == "pgvector" {
-            Some(self.vector_db_url.trim().to_string())
+            // Already validated as a postgres URL by wire_vector_db; trim so a
+            // copy-pasted value with surrounding whitespace reaches the adapter
+            // cleanly. Wrapped in `Ok` — the standalone server assembles this URL
+            // directly, so resolution never fails here.
+            Some(Ok(self.vector_db_url.trim().to_string()))
         } else {
             None
         };
@@ -601,6 +605,13 @@ impl HttpServerConfig {
         } else {
             Some(self.embedding_api_key.expose_secret().to_string())
         };
+
+        // Source embedding scalar + ONNX-asset defaults from the embedding
+        // crate's own constructors rather than duplicating magic literals here
+        // (this crate always enables `cognee-embedding/onnx`, so both are
+        // available). Keeps these in lockstep with the embedding crate.
+        let emb_defaults = cognee_embedding::EmbeddingConfig::default();
+        let onnx_defaults = cognee_embedding::OnnxEmbeddingConfig::default();
 
         cognee_components::BackendBuildContext {
             data_root_directory: self.data_root_directory.clone(),
@@ -626,26 +637,26 @@ impl HttpServerConfig {
                 dimensions: self.embedding_dimensions as usize,
                 endpoint,
                 api_key,
-                batch_size: 36,
+                batch_size: emb_defaults.batch_size,
                 mock: false,
                 mock_deterministic: false,
                 api_version: None,
                 huggingface_tokenizer: None,
-                max_completion_tokens: 8191,
-                // Preserve the historical fallback: when no explicit ONNX asset
-                // path is configured, use the BGE-Small default paths under
-                // `./target/models` (matches `OnnxEmbeddingConfig::default()`).
-                onnx_model_path: self.embedding_model_path.clone().unwrap_or_else(|| {
-                    PathBuf::from("./target/models/BGE-Small-v1.5-model_quantized.onnx")
-                }),
+                max_completion_tokens: emb_defaults.max_completion_tokens,
+                // When no explicit ONNX asset path is configured, fall back to
+                // the embedding crate's own BGE-Small defaults.
+                onnx_model_path: self
+                    .embedding_model_path
+                    .clone()
+                    .unwrap_or(onnx_defaults.model_path),
                 onnx_tokenizer_path: self
                     .embedding_tokenizer_path
                     .clone()
-                    .unwrap_or_else(|| PathBuf::from("./target/models/bge-small-tokenizer.json")),
+                    .unwrap_or(onnx_defaults.tokenizer_path),
                 onnx_model_name: self.embedding_model_name.clone(),
                 onnx_dimensions: self.embedding_dimensions as usize,
-                onnx_max_sequence_length: 512,
-                onnx_batch_size: 32,
+                onnx_max_sequence_length: onnx_defaults.max_sequence_length,
+                onnx_batch_size: onnx_defaults.batch_size,
             },
             llm: cognee_components::LlmInputs {
                 provider: self.llm_provider.to_ascii_lowercase(),

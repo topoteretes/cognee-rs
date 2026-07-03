@@ -48,6 +48,10 @@ pub struct ComponentManager {
     // the version-keyed cache envelope.
     #[allow(clippy::type_complexity)]
     transcriber: TokioRwLock<Option<(u64, Option<Arc<dyn Transcriber>>)>>,
+    // Version-keyed cache of the lowered build context, so `Settings::backend_context`
+    // (env reads + the Postgres credential-fallback warning) runs once per config
+    // version instead of once per component (7×).
+    context: TokioRwLock<Option<(u64, cognee_components::BackendBuildContext)>>,
 }
 
 impl ComponentManager {
@@ -70,6 +74,7 @@ impl ComponentManager {
             embedding_engine: TokioRwLock::new(None),
             llm: TokioRwLock::new(None),
             transcriber: TokioRwLock::new(None),
+            context: TokioRwLock::new(None),
         }
     }
 
@@ -91,41 +96,63 @@ impl ComponentManager {
         &self.registry
     }
 
-    /// Snapshot the current settings into an owned, `Send` build context.
+    /// Return the lowered build context for the current config version.
     ///
-    /// Binding the context to a local drops the (non-`Send`) config read guard
-    /// before any `.await`, keeping the delegating futures `Send`.
-    fn build_context(&self) -> cognee_components::BackendBuildContext {
-        self.config.read().backend_context()
+    /// Cached per config version: `Settings::backend_context` reads several env
+    /// vars and may emit the Postgres credential-fallback warning, so building it
+    /// once per version (rather than once per component) avoids duplicated work
+    /// and duplicated warnings. The returned owned context is `Send`, so binding
+    /// it to a local before an `.await` keeps the delegating futures `Send`.
+    async fn build_context(&self) -> cognee_components::BackendBuildContext {
+        let current_ver = self.config.version();
+        {
+            let guard = self.context.read().await;
+            if let Some((ver, ctx)) = &*guard
+                && *ver == current_ver
+            {
+                return ctx.clone();
+            }
+        }
+        let mut guard = self.context.write().await;
+        if let Some((ver, ctx)) = &*guard
+            && *ver == current_ver
+        {
+            return ctx.clone();
+        }
+        // No `.await` between the config read and storing the result, so the
+        // (non-`Send`) settings guard never crosses an await point.
+        let ctx = self.config.read().backend_context();
+        *guard = Some((current_ver, ctx.clone()));
+        ctx
     }
 
     async fn init_storage(&self) -> Result<Arc<dyn StorageTrait>, ComponentError> {
-        let ctx = self.build_context();
+        let ctx = self.build_context().await;
         cognee_components::build_storage(&ctx).await
     }
 
     async fn init_database(&self) -> Result<Arc<DatabaseConnection>, ComponentError> {
-        let ctx = self.build_context();
+        let ctx = self.build_context().await;
         cognee_components::build_database(&ctx).await
     }
 
     async fn init_graph_db(&self) -> Result<Arc<dyn GraphDBTrait>, ComponentError> {
-        let ctx = self.build_context();
+        let ctx = self.build_context().await;
         self.registry.build_graph(&ctx).await
     }
 
     async fn init_vector_db(&self) -> Result<Arc<dyn VectorDB>, ComponentError> {
-        let ctx = self.build_context();
+        let ctx = self.build_context().await;
         self.registry.build_vector(&ctx).await
     }
 
     async fn init_embedding_engine(&self) -> Result<Arc<dyn EmbeddingEngine>, ComponentError> {
-        let ctx = self.build_context();
+        let ctx = self.build_context().await;
         self.registry.build_embedding(&ctx).await
     }
 
     async fn init_llm(&self) -> Result<Arc<dyn Llm>, ComponentError> {
-        let ctx = self.build_context();
+        let ctx = self.build_context().await;
         self.registry.build_llm(&ctx).await
     }
 
@@ -152,7 +179,7 @@ impl ComponentManager {
         {
             return Ok(opt.clone());
         }
-        let ctx = self.build_context();
+        let ctx = self.build_context().await;
         let new = self.registry.build_transcriber(&ctx).await?;
         *guard = Some((current_ver, new.clone()));
         Ok(new)

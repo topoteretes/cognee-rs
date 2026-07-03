@@ -22,11 +22,15 @@ impl VectorDbFactory for PgVectorFactory {
     }
 
     async fn build(&self, ctx: &BackendBuildContext) -> Result<Arc<dyn VectorDB>, ComponentError> {
-        let url = ctx.vector_postgres_url.as_ref().ok_or_else(|| {
-            ComponentError::Config(
-                "vector_db_provider=pgvector requires a resolved Postgres URL".into(),
-            )
-        })?;
+        let url = match ctx.vector_postgres_url.as_ref() {
+            Some(Ok(url)) => url,
+            Some(Err(cause)) => return Err(ComponentError::Config(cause.clone())),
+            None => {
+                return Err(ComponentError::Config(
+                    "vector_db_provider=pgvector requires a resolved Postgres URL".into(),
+                ));
+            }
+        };
         let adapter = cognee_vector::PgVectorAdapter::new(url, ctx.embedding_dimensions)
             .await
             .map_err(|e| ComponentError::VectorDb(format!("pgvector init failed: {e}")))?;

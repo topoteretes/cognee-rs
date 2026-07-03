@@ -244,12 +244,21 @@ fn canonical_vector_provider(provider: &str) -> String {
 fn unsupported_msg(field: &str, provider: &str, supported: &[String]) -> String {
     // Feature-gated built-ins are simply absent from the registry when their
     // cargo feature is off; point the operator at the feature rather than
-    // letting it read as an unknown-backend problem.
-    let hint = match provider.to_lowercase().as_str() {
-        "postgres" | "postgresql" => {
-            " If you intended the Postgres graph backend, rebuild with the `pggraph` crate feature."
-        }
-        "pgvector" => " If you intended pgvector, rebuild with the `pgvector` crate feature.",
+    // letting it read as an unknown-backend problem. The hint is keyed on BOTH
+    // the component kind (`field`) and the provider, so a graph feature is never
+    // suggested for a vector error (or vice versa), and the ladybug/pggraph
+    // built-ins each map to the feature that gates them.
+    let p = provider.to_lowercase();
+    let hint = match field {
+        "graph_database_provider" => match p.as_str() {
+            "ladybug" | "kuzu" => " Rebuild with the `ladybug` crate feature to enable it.",
+            "postgres" | "postgresql" => " Rebuild with the `pggraph` crate feature to enable it.",
+            _ => "",
+        },
+        "vector_db_provider" => match p.as_str() {
+            "pgvector" => " Rebuild with the `pgvector` crate feature to enable it.",
+            _ => "",
+        },
         _ => "",
     };
     format!(
@@ -263,6 +272,25 @@ fn unsupported_msg(field: &str, provider: &str, supported: &[String]) -> String 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // The unsupported-provider feature hint must be keyed on BOTH the component
+    // kind and the provider: a graph feature must never be suggested for a
+    // vector error, and the ladybug/pggraph/pgvector built-ins each map to the
+    // cargo feature that gates them.
+    #[test]
+    fn unsupported_msg_hint_is_field_aware() {
+        let g = |p: &str| unsupported_msg("graph_database_provider", p, &[]);
+        let v = |p: &str| unsupported_msg("vector_db_provider", p, &[]);
+        // The message always echoes the provider name, so assert on the *hint*
+        // phrase ("`<feature>` crate feature") rather than the provider substring.
+        assert!(g("postgres").contains("`pggraph` crate feature"));
+        assert!(g("ladybug").contains("`ladybug` crate feature"));
+        assert!(v("pgvector").contains("`pgvector` crate feature"));
+        // No cross-kind hint: a graph provider in a vector error (and vice-versa)
+        // gets no feature hint at all.
+        assert!(!v("postgres").contains("crate feature"));
+        assert!(!g("pgvector").contains("crate feature"));
+    }
 
     // Drift-guard: `with_builtins()` must register the documented provider set
     // for the enabled feature-set. Run with `--features testing` (and pgvector/

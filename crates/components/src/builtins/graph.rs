@@ -97,11 +97,18 @@ impl GraphDbFactory for PgGraphFactory {
         &self,
         ctx: &BackendBuildContext,
     ) -> Result<Arc<dyn GraphDBTrait>, ComponentError> {
-        let url = ctx.graph_postgres_url.as_ref().ok_or_else(|| {
-            ComponentError::Config(
-                "graph_database_provider=postgres requires a resolved Postgres URL".into(),
-            )
-        })?;
+        let url = match ctx.graph_postgres_url.as_ref() {
+            Some(Ok(url)) => url,
+            // Resolution failed — restate the specific cause (e.g. "Missing
+            // required Postgres graph credentials") in the returned error, so
+            // SDK users without a tracing subscriber still see it.
+            Some(Err(cause)) => return Err(ComponentError::Config(cause.clone())),
+            None => {
+                return Err(ComponentError::Config(
+                    "graph_database_provider=postgres requires a resolved Postgres URL".into(),
+                ));
+            }
+        };
         let adapter = cognee_graph::PgGraphAdapter::new(url)
             .await
             .map_err(|e| ComponentError::GraphDb(format!("pggraph init failed: {e}")))?;

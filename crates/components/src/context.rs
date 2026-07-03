@@ -30,9 +30,12 @@ pub struct BackendBuildContext {
     /// Explicit ladybug/kuzu graph file path. Empty → the factory derives
     /// `{system_root_directory}/graph`.
     pub graph_file_path: String,
-    /// Resolved `postgres://` URL for the Postgres graph backend. `None` when
-    /// the provider is not Postgres or credentials are incomplete.
-    pub graph_postgres_url: Option<String>,
+    /// Resolution outcome for the Postgres graph backend: `None` when the
+    /// provider is not Postgres, `Some(Ok(url))` on success, `Some(Err(msg))`
+    /// when the provider *is* Postgres but URL resolution failed — carrying the
+    /// specific cause (e.g. missing credentials) so the factory can restate it
+    /// in the returned error rather than only logging it.
+    pub graph_postgres_url: Option<Result<String, String>>,
 
     // ── vector ────────────────────────────────────────────────────────────
     /// Lowercase vector provider id (`pgvector` | `lancedb` | `brute-force` |
@@ -41,9 +44,10 @@ pub struct BackendBuildContext {
     /// Raw vector DB URL/path as configured. Consulted for the `:memory:`
     /// escape hatch and for the LanceDB on-disk path.
     pub vector_db_url: String,
-    /// Resolved `postgres://` URL for the pgvector backend. `None` when the
-    /// provider is not pgvector.
-    pub vector_postgres_url: Option<String>,
+    /// Resolution outcome for the pgvector backend: `None` when the provider is
+    /// not pgvector, `Some(Ok(url))` on success, `Some(Err(msg))` when the
+    /// provider *is* pgvector but URL resolution failed (carries the cause).
+    pub vector_postgres_url: Option<Result<String, String>>,
     /// Embedding vector dimensionality (needed by pgvector table creation).
     pub embedding_dimensions: usize,
 

@@ -620,20 +620,14 @@ impl Settings {
         use std::path::PathBuf;
 
         let graph_provider = self.graph_database_provider.to_lowercase();
+        // Carry the resolution `Result` through to the factory so it can restate
+        // the specific cause (e.g. "Missing required Postgres graph credentials")
+        // in the returned error, not just in a log line an SDK user may not see.
         let graph_postgres_url = {
             #[cfg(feature = "pggraph")]
             {
                 if matches!(graph_provider.as_str(), "postgres" | "postgresql") {
-                    // Log the specific resolution failure (e.g. "Missing required
-                    // Postgres graph credentials") rather than swallowing it — the
-                    // factory only sees `None` and can't restate the cause.
-                    match self.resolved_graph_postgres_url() {
-                        Ok(u) => Some(u),
-                        Err(e) => {
-                            tracing::warn!("graph Postgres URL could not be resolved: {e}");
-                            None
-                        }
-                    }
+                    Some(self.resolved_graph_postgres_url())
                 } else {
                     None
                 }
@@ -649,13 +643,7 @@ impl Settings {
             #[cfg(feature = "pgvector")]
             {
                 if vector_provider == "pgvector" {
-                    match self.resolved_vector_postgres_url() {
-                        Ok(u) => Some(u),
-                        Err(e) => {
-                            tracing::warn!("vector Postgres URL could not be resolved: {e}");
-                            None
-                        }
-                    }
+                    Some(self.resolved_vector_postgres_url())
                 } else {
                     None
                 }

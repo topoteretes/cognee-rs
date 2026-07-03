@@ -74,8 +74,11 @@ pub trait LlmFactory: Send + Sync {
 /// Unlike the other kinds, embedding provider selection happens *inside*
 /// `EmbeddingConfig::create_engine`, so the registry holds a single replaceable
 /// embedding factory rather than a per-provider map. The default factory maps
-/// [`crate::EmbeddingInputs`] to a config and preserves the historical
-/// unknown-provider → `onnx` fallback.
+/// [`crate::EmbeddingInputs`] to a config. An empty provider defaults to `onnx`;
+/// a non-empty *unrecognized* provider is rejected with an error (rather than
+/// the pre-refactor silent `onnx` fallback), so a typo / unsupported backend
+/// fails loudly instead of embedding with the wrong model. This is an
+/// intentional behavior change — see the PR notes.
 #[async_trait]
 pub trait EmbeddingFactory: Send + Sync {
     /// Construct the embedding engine from the resolved context.
