@@ -554,7 +554,51 @@ async fn phase_cognify(
     Ok(())
 }
 
-/// One `search("What is in the document", only_context=true)` query.
+/// Build a bench `SearchRequest` for one query type over the bench dataset.
+fn bench_search_request(
+    query_text: &str,
+    search_type: SearchType,
+    dataset_name: &str,
+    owner_id: Uuid,
+) -> SearchRequest {
+    SearchRequest {
+        query_text: query_text.to_string(),
+        search_type,
+        top_k: Some(10),
+        datasets: Some(vec![dataset_name.to_string()]),
+        dataset_ids: None,
+        system_prompt: None,
+        system_prompt_path: None,
+        only_context: Some(true),
+        use_combined_context: Some(false),
+        session_id: None,
+        node_type: None,
+        node_name: None,
+        node_name_filter_operator: None,
+        wide_search_top_k: None,
+        triplet_distance_penalty: None,
+        summarize_context: None,
+        save_interaction: Some(false),
+        user_id: Some(owner_id),
+        verbose: None,
+        feedback_influence: None,
+        retriever_specific_config: None,
+        response_schema: None,
+        custom_search_type: None,
+        auto_feedback_detection: None,
+        neighborhood_depth: None,
+        neighborhood_seed_top_k: None,
+    }
+}
+
+/// Exercise retrieval across representative query types so the search phase is
+/// actually profiled, not just the one graph-completion path.
+///
+/// Runs both a no-LLM retriever (`Chunks`, `Summaries` — pure vector fetch) and
+/// the LLM one (`GraphCompletion`). Under the mocked LLM the completion call is
+/// near-free, so the no-LLM retrievers are what surface the real retrieval cost
+/// (vector KNN + chunk/summary materialization) in `search.svg`. Per-query wall
+/// times are logged; the phase's aggregate time is what `search_time` reports.
 async fn phase_search(
     cm: &Arc<ComponentManager>,
     owner_id: Uuid,
@@ -582,39 +626,24 @@ async fn phase_search(
     .with_dataset_resolver(Arc::clone(&database) as Arc<dyn IngestDb>)
     .build();
 
-    let request = SearchRequest {
-        query_text: "What is in the document".to_string(),
-        search_type: SearchType::GraphCompletion,
-        top_k: Some(10),
-        datasets: Some(vec![dataset_name.to_string()]),
-        dataset_ids: None,
-        system_prompt: None,
-        system_prompt_path: None,
-        only_context: Some(true),
-        use_combined_context: Some(false),
-        session_id: None,
-        node_type: None,
-        node_name: None,
-        node_name_filter_operator: None,
-        wide_search_top_k: None,
-        triplet_distance_penalty: None,
-        summarize_context: None,
-        save_interaction: Some(false),
-        user_id: Some(owner_id),
-        verbose: None,
-        feedback_influence: None,
-        retriever_specific_config: None,
-        response_schema: None,
-        custom_search_type: None,
-        auto_feedback_detection: None,
-        neighborhood_depth: None,
-        neighborhood_seed_top_k: None,
-    };
+    let query_text = "What is in the document";
+    // No-LLM retrievers first (Chunks/Summaries) so retrieval cost is visible,
+    // then the LLM path (GraphCompletion). Labels feed the per-query log lines.
+    let queries = [
+        ("chunks", SearchType::Chunks),
+        ("summaries", SearchType::Summaries),
+        ("graph_completion", SearchType::GraphCompletion),
+    ];
 
-    orchestrator
-        .search(&request)
-        .await
-        .map_err(|e| e.to_string())?;
+    for (label, search_type) in queries {
+        let request = bench_search_request(query_text, search_type, dataset_name, owner_id);
+        let t = Instant::now();
+        orchestrator
+            .search(&request)
+            .await
+            .map_err(|e| format!("{label}: {e}"))?;
+        info!("search[{label}] took {:.3}s", t.elapsed().as_secs_f64());
+    }
     Ok(())
 }
 
