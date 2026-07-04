@@ -423,6 +423,10 @@ pub enum ServerError {
     #[error("lifecycle error: {0}")]
     Lifecycle(#[from] crate::lifecycle::LifecycleError),
 
+    /// Component construction failed (shared `cognee-components` factories).
+    #[error("component error: {0}")]
+    Component(#[from] cognee_components::ComponentError),
+
     /// Catch-all for other startup failures.
     #[error("server error: {0}")]
     Other(#[from] anyhow::Error),

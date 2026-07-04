@@ -166,6 +166,13 @@ pub use component_manager::ComponentManager;
 pub use config::{ConfigError, ConfigManager, Settings};
 pub use context::PipelineContext;
 pub use error::ComponentError;
+// Adapter-registry surface — so external (closed) entry points can build and
+// register factories via `cognee_lib::` paths without a direct dependency edge
+// beyond where they define the impls.
+pub use cognee_components::{
+    BackendBuildContext, ComponentRegistry, DefaultEmbeddingFactory, EmbeddingFactory,
+    EmbeddingInputs, GraphDbFactory, LlmFactory, LlmInputs, VectorDbFactory,
+};
 
 /// Convenience re-exports for common usage.
 pub mod prelude {

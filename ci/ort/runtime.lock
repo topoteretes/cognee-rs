@@ -1,0 +1,26 @@
+# ONNX Runtime prebuilt-binary mirror lock.
+#
+# `ort-sys` downloads a prebuilt ONNX Runtime archive from cdn.pyke.io at build
+# time. That CDN is fronted by Cloudflare, which intermittently returns HTTP 403
+# to GitHub Actions (Azure) runner IPs, breaking the build on any ort-cache
+# miss. We mirror the same binaries to a cognee-controlled GitHub release and
+# pre-seed ort-sys's download cache from there (see ci/ort/prefetch.sh), so the
+# build never depends on pyke's CDN being reachable.
+#
+# The `<sha256>` column is the hash of the pyke `.tar.lzma2` archive, taken
+# verbatim from the ort-sys build manifest (`ort-sys/build/download/dist.txt`,
+# the `none` / CPU feature-set row for each target). ort-sys extracts each
+# archive into `<ort-cache>/dfbin/<target>/<sha256>/` and skips the download
+# when that directory already exists — so this hash IS the cache directory name
+# the mirror must populate. It is NOT the hash of our repackaged .tar.gz asset.
+#
+# Refresh procedure when the `ort` dependency is bumped: docs/ci/ort-mirror.md.
+#
+# Format:
+#   VERSION <ort-crate-version> <onnxruntime-version> <mirror-release-tag>
+#   <rust-target> <sha256>
+VERSION 2.0.0-rc.12 1.24.2 ort-runtime-1.24.2
+x86_64-unknown-linux-gnu   acc1cba79c337594ead1d88ca72516147aa60054c84217b53399a31caa5ba671
+aarch64-unknown-linux-gnu  7e4f5fec4494cbf578c4e28082b0229c42f735523f584259028dde96acf3b092
+aarch64-apple-darwin       612739f75438dc0a075461e1fb454226b4a1eb175e60a7271ba966bbbb972cd4
+x86_64-pc-windows-msvc     b685bfc8d336e0ba95c066a7a982c03aa6dedd528a492eb99ca4ccb7f3af9e7a

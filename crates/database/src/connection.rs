@@ -8,12 +8,10 @@ use crate::types::DatabaseError;
 
 /// Connection-pool sizing policy.
 ///
-/// This is tunable performance policy, owned by the layer that selects the
-/// database URL: `lib` and `http-server` build it from the `DB_POOL_*`
-/// environment variables (see `docs/configuration.md`) and pass it to
-/// [`connect_with_pool`]; plain [`connect`] applies [`PoolConfig::default`].
-/// In-memory SQLite URLs override parts of this sizing at connect time because
-/// correctness requires it (see `connect_sqlite`).
+/// Passed to [`connect_with_pool`] by callers that want to size the pool
+/// explicitly; plain [`connect`] applies [`PoolConfig::default`], which every
+/// current caller uses. In-memory SQLite URLs override parts of this sizing at
+/// connect time because correctness requires it (see `connect_sqlite`).
 #[derive(Clone, Copy, Debug)]
 pub struct PoolConfig {
     pub max_connections: u32,

@@ -134,22 +134,6 @@ pub struct HttpServerConfig {
     /// Env: `RELATIONAL_DB_URL` (fallback `DATABASE_URL`).
     pub relational_db_url: String,
 
-    /// Relational connection-pool max size.
-    /// Env: `DB_POOL_MAX_CONNECTIONS`. Default: 10 (mirrors `PoolConfig::default()`).
-    pub db_pool_max_connections: u32,
-
-    /// Relational connection-pool min (warm) size.
-    /// Env: `DB_POOL_MIN_CONNECTIONS`. Default: 1 (mirrors `PoolConfig::default()`).
-    pub db_pool_min_connections: u32,
-
-    /// Seconds to wait for a pooled connection before erroring.
-    /// Env: `DB_POOL_ACQUIRE_TIMEOUT_SECS`. Default: 30 (mirrors `PoolConfig::default()`).
-    pub db_pool_acquire_timeout_secs: u64,
-
-    /// Seconds an idle pooled connection lives before being reaped.
-    /// Env: `DB_POOL_IDLE_TIMEOUT_SECS`. Default: 600 (mirrors `PoolConfig::default()`).
-    pub db_pool_idle_timeout_secs: u64,
-
     /// Graph provider name.
     /// Env: `GRAPH_DATABASE_PROVIDER`. Default: `ladybug`.
     pub graph_provider: String,
@@ -289,6 +273,18 @@ fn first_non_empty_env(keys: &[&str]) -> Option<String> {
     None
 }
 
+/// Append `?mode=rwc` to a file-backed SQLite URL that has no query string, so
+/// the sea-orm/sqlx driver creates the database file when it does not yet
+/// exist. Leaves in-memory URLs, URLs that already carry a query, and non-SQLite
+/// URLs untouched.
+fn ensure_sqlite_rwc(url: &str) -> String {
+    if url.starts_with("sqlite:") && !url.contains(":memory:") && !url.contains('?') {
+        format!("{url}?mode=rwc")
+    } else {
+        url.to_string()
+    }
+}
+
 fn default_relational_db_url(system_root_directory: &std::path::Path) -> String {
     format!(
         "sqlite://{}",
@@ -334,10 +330,6 @@ impl Default for HttpServerConfig {
             data_root_directory: data_root,
             system_root_directory: system_root.clone(),
             relational_db_url: default_relational_db_url(&system_root),
-            db_pool_max_connections: 10,
-            db_pool_min_connections: 1,
-            db_pool_acquire_timeout_secs: 30,
-            db_pool_idle_timeout_secs: 600,
             graph_provider: "ladybug".to_string(),
             graph_file_path: default_graph_file_path(&system_root),
             vector_provider: "pgvector".to_string(),
@@ -489,27 +481,6 @@ impl HttpServerConfig {
             cfg.relational_db_url = v;
         }
 
-        if let Ok(v) = std::env::var("DB_POOL_MAX_CONNECTIONS") {
-            cfg.db_pool_max_connections = v
-                .parse::<u32>()
-                .map_err(|e| ServerError::Other(anyhow::anyhow!("DB_POOL_MAX_CONNECTIONS: {e}")))?;
-        }
-        if let Ok(v) = std::env::var("DB_POOL_MIN_CONNECTIONS") {
-            cfg.db_pool_min_connections = v
-                .parse::<u32>()
-                .map_err(|e| ServerError::Other(anyhow::anyhow!("DB_POOL_MIN_CONNECTIONS: {e}")))?;
-        }
-        if let Ok(v) = std::env::var("DB_POOL_ACQUIRE_TIMEOUT_SECS") {
-            cfg.db_pool_acquire_timeout_secs = v.parse::<u64>().map_err(|e| {
-                ServerError::Other(anyhow::anyhow!("DB_POOL_ACQUIRE_TIMEOUT_SECS: {e}"))
-            })?;
-        }
-        if let Ok(v) = std::env::var("DB_POOL_IDLE_TIMEOUT_SECS") {
-            cfg.db_pool_idle_timeout_secs = v.parse::<u64>().map_err(|e| {
-                ServerError::Other(anyhow::anyhow!("DB_POOL_IDLE_TIMEOUT_SECS: {e}"))
-            })?;
-        }
-
         if let Ok(v) = std::env::var("GRAPH_DATABASE_PROVIDER") {
             cfg.graph_provider = v;
         }
@@ -600,6 +571,106 @@ impl HttpServerConfig {
 }
 
 impl HttpServerConfig {
+    /// Lower these settings into a [`cognee_components::BackendBuildContext`].
+    ///
+    /// Unlike `cognee-lib`'s `Settings::backend_context`, the standalone server
+    /// deliberately does **not** read `MOCK_LLM` / `MOCK_EMBEDDING` or wire the
+    /// recording path: a production server must never silently honor those.
+    /// Mock backends are opt-in through the `dev-mock` feature + an explicit
+    /// `vector_provider="mock"`.
+    pub fn backend_context(&self) -> cognee_components::BackendBuildContext {
+        let vector_provider = self.vector_provider.to_ascii_lowercase();
+        // The pgvector coherence guard runs in `wire_vector_db` before build;
+        // by the time the factory runs, `vector_db_url` is a validated
+        // `postgres://…` string. Trim it here so a copy-pasted value with
+        // surrounding whitespace reaches PgVectorAdapter::new cleanly (the
+        // validator checks the trimmed form).
+        let vector_postgres_url = if vector_provider == "pgvector" {
+            // Already validated as a postgres URL by wire_vector_db; trim so a
+            // copy-pasted value with surrounding whitespace reaches the adapter
+            // cleanly. Wrapped in `Ok` — the standalone server assembles this URL
+            // directly, so resolution never fails here.
+            Some(Ok(self.vector_db_url.trim().to_string()))
+        } else {
+            None
+        };
+
+        let endpoint = if self.embedding_endpoint.trim().is_empty() {
+            None
+        } else {
+            Some(self.embedding_endpoint.clone())
+        };
+        let api_key = if self.embedding_api_key.expose_secret().is_empty() {
+            None
+        } else {
+            Some(self.embedding_api_key.expose_secret().to_string())
+        };
+
+        // Source embedding scalar + ONNX-asset defaults from the embedding
+        // crate's own constructors rather than duplicating magic literals here
+        // (this crate always enables `cognee-embedding/onnx`, so both are
+        // available). Keeps these in lockstep with the embedding crate.
+        let emb_defaults = cognee_embedding::EmbeddingConfig::default();
+        let onnx_defaults = cognee_embedding::OnnxEmbeddingConfig::default();
+
+        cognee_components::BackendBuildContext {
+            data_root_directory: self.data_root_directory.clone(),
+            system_root_directory: self.system_root_directory.clone(),
+            // Ensure a file-backed SQLite URL carries `?mode=rwc` so the driver
+            // creates the DB file when missing. The standalone server's default
+            // URL (and operator-provided ones) have no query, and the shared
+            // `build_database` no longer creates the file itself — this restores
+            // the old wire_database "create on boot" behavior via the driver.
+            relational_db_url: ensure_sqlite_rwc(&self.relational_db_url),
+            graph_provider: self.graph_provider.to_ascii_lowercase(),
+            graph_file_path: self.graph_file_path.to_string_lossy().into_owned(),
+            // The standalone server supports only the embedded ladybug graph;
+            // Postgres graph is not wired here.
+            graph_postgres_url: None,
+            vector_provider,
+            vector_db_url: self.vector_db_url.clone(),
+            vector_postgres_url,
+            embedding_dimensions: self.embedding_dimensions as usize,
+            embedding: cognee_components::EmbeddingInputs {
+                provider: self.embedding_provider.trim().to_ascii_lowercase(),
+                model: self.embedding_model_name.clone(),
+                dimensions: self.embedding_dimensions as usize,
+                endpoint,
+                api_key,
+                batch_size: emb_defaults.batch_size,
+                mock: false,
+                mock_deterministic: false,
+                api_version: None,
+                huggingface_tokenizer: None,
+                max_completion_tokens: emb_defaults.max_completion_tokens,
+                // When no explicit ONNX asset path is configured, fall back to
+                // the embedding crate's own BGE-Small defaults.
+                onnx_model_path: self
+                    .embedding_model_path
+                    .clone()
+                    .unwrap_or(onnx_defaults.model_path),
+                onnx_tokenizer_path: self
+                    .embedding_tokenizer_path
+                    .clone()
+                    .unwrap_or(onnx_defaults.tokenizer_path),
+                onnx_model_name: self.embedding_model_name.clone(),
+                onnx_dimensions: self.embedding_dimensions as usize,
+                onnx_max_sequence_length: onnx_defaults.max_sequence_length,
+                onnx_batch_size: onnx_defaults.batch_size,
+            },
+            llm: cognee_components::LlmInputs {
+                provider: self.llm_provider.to_ascii_lowercase(),
+                model: self.llm_model.clone(),
+                api_key: self.llm_api_key.expose_secret().to_string(),
+                endpoint: self.llm_endpoint.clone(),
+                max_retries: self.llm_max_retries,
+                mock: false,
+                cassette: String::new(),
+                record_path: String::new(),
+            },
+        }
+    }
+
     /// Build a `RegistryConfig` from the matching `HttpServerConfig` fields.
     pub fn to_registry_config(&self) -> RegistryConfig {
         RegistryConfig {

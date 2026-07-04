@@ -17,6 +17,7 @@ use tokio::sync::Mutex as TokioMutex;
 use uuid::Uuid;
 
 use cognee_lib::ComponentManager;
+use cognee_lib::ComponentRegistry;
 use cognee_lib::config::{ConfigManager, Settings};
 use cognee_lib::database::DatabaseConnection;
 use cognee_lib::models::User;
@@ -74,7 +75,22 @@ impl HandleState {
     ///
     /// For env-only construction use [`HandleState::from_env`].
     pub fn from_settings(settings: Settings) -> Self {
-        let cm = Arc::new(ComponentManager::new(ConfigManager::new(settings)));
+        Self::from_settings_with_registry(settings, ComponentRegistry::with_builtins())
+    }
+
+    /// Construct from `Settings` with an explicit component registry.
+    ///
+    /// This is the injection seam for external adapters: a closed cloud build
+    /// registers its qdrant / litert factories on a `ComponentRegistry` and
+    /// passes it here so a configured `vector_provider="qdrant"` (etc.)
+    /// resolves through the same construction path the py/ts/c SDKs use. With
+    /// the OSS built-in registry this is byte-for-byte equivalent to
+    /// [`from_settings`](Self::from_settings).
+    pub fn from_settings_with_registry(settings: Settings, registry: ComponentRegistry) -> Self {
+        let cm = Arc::new(ComponentManager::with_registry(
+            ConfigManager::new(settings),
+            registry,
+        ));
         HandleState {
             cm,
             services: TokioMutex::new(None),

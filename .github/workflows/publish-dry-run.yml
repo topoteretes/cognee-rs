@@ -8,6 +8,12 @@ name: publish-dry-run
 #
 # Sourcing the crate list from scripts/split/publish-order.sh (T10c) keeps the
 # CI gate and the local sweep in lock-step.
+#
+# New-crate handling: a crate that depends on a brand-new sibling not yet on
+# crates.io cannot be dry-run-published until that sibling's first real publish
+# (cargo resolves deps against the index even in --dry-run). The dry-run step
+# downgrades exactly that case to a SKIP so introducing a new workspace crate
+# does not red the gate; every other packaging error still fails.
 on:
   push:
     branches: [main, master, oss-split]
@@ -83,21 +89,46 @@ jobs:
       - name: Dry-run publish each crate in topological order
         run: |
           set -euo pipefail
+          # Workspace member names, used to tell a "new crate not yet on the
+          # index" failure apart from a genuine packaging/dependency error.
+          ws_members="$(cargo metadata --no-deps --format-version 1 --manifest-path Cargo.toml \
+            | python3 -c 'import json,sys; print("\n".join(p["name"] for p in json.load(sys.stdin)["packages"]))')"
+          is_ws_member() { printf '%s\n' "$ws_members" | grep -qxF "$1"; }
+
           : > /tmp/dry-run.log
           fails=0
+          skips=0
           while IFS= read -r c; do
             [ -z "$c" ] && continue
             printf '── %-32s ' "$c"
+            crate_log="$(mktemp)"
             if cargo publish --dry-run --no-verify --allow-dirty -p "$c" \
-                  >> /tmp/dry-run.log 2>&1; then
+                  > "$crate_log" 2>&1; then
               echo OK
             else
-              echo FAIL
-              fails=$((fails + 1))
+              # `cargo publish` resolves deps against the crates.io index even in
+              # --dry-run, so a crate that depends on a brand-new sibling (one not
+              # yet published) cannot dry-run until that sibling's first real
+              # publish — which release-publish.yml does leaves-first. Downgrade
+              # exactly that case ("no matching package named `<workspace crate>`
+              # found") to a SKIP; every other failure (missing readme/license,
+              # excluded files, version-bump mistakes, a genuinely missing
+              # external dep) is still a hard failure.
+              missing="$(grep -oE 'no matching package named `[^`]+` found' "$crate_log" \
+                | head -1 | sed -E 's/^no matching package named `([^`]+)` found$/\1/' || true)"
+              if [ -n "$missing" ] && is_ws_member "$missing"; then
+                echo "SKIP (depends on not-yet-published workspace crate '$missing')"
+                skips=$((skips + 1))
+              else
+                echo FAIL
+                fails=$((fails + 1))
+              fi
             fi
+            cat "$crate_log" >> /tmp/dry-run.log
+            rm -f "$crate_log"
           done < <(scripts/split/publish-order.sh)
           echo
-          echo "=== summary: ${fails} failure(s) ==="
+          echo "=== summary: ${fails} failure(s), ${skips} skip(s) ==="
           if [ "$fails" -gt 0 ]; then
             echo "=== full log ==="
             cat /tmp/dry-run.log

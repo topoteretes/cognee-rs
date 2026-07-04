@@ -183,6 +183,19 @@ jobs:
         working-directory: ts
         run: npm install --ignore-scripts
 
+      # Seed ort-sys's download cache from the cognee-hosted ONNX Runtime mirror
+      # so the build does not depend on cdn.pyke.io, which (via Cloudflare) 403s
+      # GitHub Actions runner IPs on ort-cache misses. Best-effort: on any
+      # failure the script exits 0 and the build falls back to the normal pyke
+      # download. Runs on the host and seeds the same dir both build steps use —
+      # the cross container sees it via its /target mount (ORT_CACHE_DIR maps to
+      # /target/ort-cache). Windows path handling differs, and the Windows leg
+      # was unaffected; wire it in if that changes. See docs/ci/ort-mirror.md.
+      - name: Prefetch ONNX Runtime from mirror
+        if: runner.os != 'Windows'
+        shell: bash
+        run: ci/ort/prefetch.sh "${{ matrix.rust-target }}" "${{ github.workspace }}/ts/cognee-ts-neon/target/ort-cache"
+
       # Build the Neon cdylib for the target platform.
       - name: Build Neon addon (native)
         if: "!matrix.cross"
