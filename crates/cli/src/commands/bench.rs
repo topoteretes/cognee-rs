@@ -68,6 +68,9 @@ struct BenchResult {
     status: BenchStatus,
     success: bool,
     config: BenchConfig,
+    /// Graph size after cognify — also drives the stale-cassette guard.
+    node_count: i64,
+    edge_count: i64,
 }
 
 /// Per-phase status: `"success"` or `"failed: <msg>"` (Python parity).
@@ -171,6 +174,28 @@ fn finish_phase_telemetry(_profile_dir: Option<&str>, _phase: &str) {}
 /// Round to 3 decimals to match Python's `round(x, 3)` output.
 fn round3(value: f64) -> f64 {
     (value * 1000.0).round() / 1000.0
+}
+
+/// Read `(node_count, edge_count)` from the graph after cognify. Returns
+/// `(0, 0)` (which trips the sanity guard) if the metrics can't be read.
+async fn graph_counts(cm: &Arc<ComponentManager>) -> (i64, i64) {
+    let graph_db = match cm.graph_db().await {
+        Ok(db) => db,
+        Err(error) => {
+            warn!("graph metrics unavailable: {error}");
+            return (0, 0);
+        }
+    };
+    match graph_db.get_graph_metrics(false).await {
+        Ok(metrics) => {
+            let get = |k: &str| metrics.get(k).and_then(|v| v.as_i64()).unwrap_or(0);
+            (get("node_count"), get("edge_count"))
+        }
+        Err(error) => {
+            warn!("graph metrics query failed: {error}");
+            (0, 0)
+        }
+    }
 }
 
 /// Shape a memory into the document text — mirrors Python `memory_to_text`:
@@ -325,6 +350,7 @@ pub fn run(args: BenchArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> {
         &args.dataset_name,
         &memories,
         args.profile_dir.as_deref(),
+        args.min_graph_nodes,
         BenchConfig {
             llm_model,
             embedding_model,
@@ -358,6 +384,7 @@ async fn run_phases(
     dataset_name: &str,
     memories: &[Memory],
     profile_dir: Option<&str>,
+    min_graph_nodes: u64,
     config: BenchConfig,
 ) -> BenchResult {
     let n = memories.len();
@@ -415,6 +442,24 @@ async fn run_phases(
 
     let t_total = t_add + t_cognify;
 
+    // ── Graph sanity guard ─────────────────────────────────────────────────
+    // Cognify over a non-empty corpus must produce a non-empty graph. An empty
+    // (or below-floor) graph means the replay cassette fell through to the
+    // empty-graph fallback (stale cassette) — fail the phase loudly instead of
+    // reporting a silent "success" over nothing.
+    let (node_count, edge_count) = graph_counts(cm).await;
+    eprintln!("Graph after cognify: {node_count} nodes, {edge_count} edges");
+    if status.cognify == PHASE_OK && !memories.is_empty() {
+        let floor = min_graph_nodes.max(1);
+        if (node_count as u64) < floor {
+            let msg = format!(
+                "graph sanity: {node_count} nodes < floor {floor} (stale cassette / empty-graph fallback?)"
+            );
+            warn!("{msg}");
+            status.cognify = format!("failed: {msg}");
+        }
+    }
+
     // ── Search ───────────────────────────────────────────────────────────
     eprintln!("Phase 3: Running search query...");
     let t_search_start = Instant::now();
@@ -445,6 +490,8 @@ async fn run_phases(
         status,
         success,
         config,
+        node_count,
+        edge_count,
     }
 }
 

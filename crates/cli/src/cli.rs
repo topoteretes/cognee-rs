@@ -90,6 +90,12 @@ pub struct BenchArgs {
     /// Only honoured when built with `--features profiling`; ignored otherwise.
     #[arg(long = "profile-dir")]
     pub profile_dir: Option<String>,
+
+    /// Minimum node count cognify must produce (stale-cassette guard). A run
+    /// over a non-empty corpus always requires a non-empty graph; pass a higher
+    /// value to assert the recorded baseline. Default 0 = just the empty check.
+    #[arg(long = "min-graph-nodes", default_value_t = 0)]
+    pub min_graph_nodes: u64,
 }
 
 #[cfg(feature = "visualization")]
