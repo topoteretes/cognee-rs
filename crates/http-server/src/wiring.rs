@@ -1,26 +1,28 @@
 //! Construct default standalone backend handles for the HTTP server binary.
+//!
+//! Backend construction is delegated to the shared `cognee-components`
+//! registry; this module owns the eager `ComponentHandles` assembly and the
+//! server-specific policies (required-vs-optional downgrade, the pgvector
+//! coherence guard, session / search / responses wiring).
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::anyhow;
+use cognee_components::{ComponentRegistry, build_database, build_storage};
 use cognee_core::{CpuPool, RayonThreadPool};
 use cognee_database::{
-    CheckpointStore, DatabaseConnection, DeleteDb, IngestDb, SeaOrmCheckpointStore,
-    SearchHistoryDb, connect, initialize,
+    CheckpointStore, DatabaseConnection, DeleteDb, IngestDb, SeaOrmCheckpointStore, SearchHistoryDb,
 };
 use cognee_delete::DeleteService;
-use cognee_embedding::{EmbeddingConfig, EmbeddingEngine, EmbeddingProvider};
-use cognee_graph::{GraphDBTrait, LadybugAdapter};
-use cognee_llm::{
-    Llm, OpenAIResponsesClient, ResponsesClient, Transcriber, build_openai_compatible_adapter,
-};
+use cognee_embedding::EmbeddingEngine;
+use cognee_graph::GraphDBTrait;
+use cognee_llm::{Llm, OpenAIResponsesClient, ResponsesClient, Transcriber};
 use cognee_ontology::{OntologyManager, OntologyResolver};
 use cognee_search::{
     SeaOrmSessionStore, SearchBuilder, SearchOrchestrator, SessionManager, SessionStore,
 };
-use cognee_storage::{LocalStorage, StorageTrait};
-use cognee_vector::{PgVectorAdapter, VectorDB};
+use cognee_vector::VectorDB;
 use secrecy::ExposeSecret;
 
 use crate::components::ComponentHandles;
@@ -33,20 +35,38 @@ fn ensure_dir(path: &Path) -> Result<(), ServerError> {
         .map_err(|e| ServerError::Other(anyhow!("create_dir_all({}): {e}", path.display())))
 }
 
+/// Wire the default standalone backends using the OSS built-in registry.
 pub async fn wire_default_backends(
     cfg: &HttpServerConfig,
+) -> Result<ComponentHandles, ServerError> {
+    wire_default_backends_with(cfg, &ComponentRegistry::with_builtins()).await
+}
+
+/// Wire the default standalone backends using a caller-supplied registry.
+///
+/// Closed/embedding entry points call this with a registry that has external
+/// adapter factories registered (e.g. qdrant / litert) so a configured
+/// `vector_provider="qdrant"` resolves without editing OSS.
+pub async fn wire_default_backends_with(
+    cfg: &HttpServerConfig,
+    registry: &ComponentRegistry,
 ) -> Result<ComponentHandles, ServerError> {
     ensure_dir(&cfg.data_root_directory)?;
     ensure_dir(&cfg.system_root_directory)?;
 
-    let storage = wire_storage(cfg).await?;
-    let database = wire_database(cfg).await?;
-    let graph_db = wire_graph_db(cfg).await?;
-    let vector_db = wire_vector_db(cfg).await?;
+    let ctx = cfg.backend_context();
 
-    let embedding_engine = wire_embedding_engine(cfg).await;
-    let llm = wire_llm(cfg);
-    let transcriber = wire_transcriber(cfg);
+    // Required backends — a failure here aborts startup.
+    let storage = build_storage(&ctx).await?;
+    let database = build_database(&ctx).await?;
+    let graph_db = wire_graph_db(registry, &ctx).await?;
+    let vector_db = wire_vector_db(cfg, registry, &ctx).await?;
+
+    // Optional backends — a failure downgrades to `None` (handlers surface a
+    // 500-level envelope at runtime), preserving the historical behavior.
+    let embedding_engine = wire_embedding_engine(registry, &ctx).await;
+    let llm = wire_llm(registry, &ctx).await;
+    let transcriber = wire_transcriber(registry, &ctx).await;
 
     let thread_pool: Option<Arc<dyn CpuPool>> = Some(Arc::new(
         RayonThreadPool::with_default_threads()
@@ -109,208 +129,93 @@ pub async fn wire_default_backends(
     })
 }
 
-async fn wire_storage(cfg: &HttpServerConfig) -> Result<Arc<dyn StorageTrait>, ServerError> {
-    let storage =
-        Arc::new(LocalStorage::new(cfg.data_root_directory.clone())) as Arc<dyn StorageTrait>;
-    storage
-        .initialize()
-        .await
-        .map_err(|e| ServerError::Other(anyhow!("storage init failed: {e}")))?;
-    Ok(storage)
+async fn wire_graph_db(
+    registry: &ComponentRegistry,
+    ctx: &cognee_components::BackendBuildContext,
+) -> Result<Arc<dyn GraphDBTrait>, ServerError> {
+    // Delegate to the registry (like wire_vector_db): it already errors with an
+    // actionable "registered providers: [...]" message for anything it doesn't
+    // know, and — crucially — this keeps the extension seam intact so a
+    // caller-registered graph factory (and the built-in `kuzu` alias) is
+    // reachable, instead of a hardcoded ladybug-only guard rejecting them.
+    Ok(registry.build_graph(ctx).await?)
 }
 
-async fn wire_database(cfg: &HttpServerConfig) -> Result<Arc<DatabaseConnection>, ServerError> {
-    let url = cfg.relational_db_url.clone();
-
-    if let Some(path) = url.strip_prefix("sqlite://")
-        && !path.starts_with(':')
-    {
-        let db_path = PathBuf::from(path);
-        if let Some(parent) = db_path.parent() {
-            ensure_dir(parent)?;
-        }
-        if !db_path.exists() {
-            std::fs::File::create(&db_path).map_err(|e| {
-                ServerError::Other(anyhow!("create sqlite file {}: {e}", db_path.display()))
-            })?;
-        }
+/// Validate the pgvector configuration. Kept in the server wrapper (not the
+/// shared factory) so `cognee-lib`'s empty-URL→localhost synthesis is
+/// unaffected.
+fn validate_vector_config(cfg: &HttpServerConfig) -> Result<(), ServerError> {
+    let provider = cfg.vector_provider.to_ascii_lowercase();
+    if provider != "pgvector" {
+        return Ok(());
     }
-
-    let db = connect(&url)
-        .await
-        .map_err(|e| ServerError::Other(anyhow!("database connect failed: {e}")))?;
-    initialize(&db)
-        .await
-        .map_err(|e| ServerError::Other(anyhow!("database migrate failed: {e}")))?;
-
-    Ok(Arc::new(db))
-}
-
-async fn wire_graph_db(cfg: &HttpServerConfig) -> Result<Arc<dyn GraphDBTrait>, ServerError> {
-    if !cfg.graph_provider.eq_ignore_ascii_case("ladybug") {
+    let url = cfg.vector_db_url.trim();
+    if url.is_empty() {
         return Err(ServerError::Other(anyhow!(
-            "unsupported graph provider '{}'; only 'ladybug' is supported",
-            cfg.graph_provider
+            "VECTOR_DB_URL (postgres connection string) is required when \
+             VECTOR_DB_PROVIDER=pgvector"
         )));
     }
-
-    if let Some(parent) = cfg.graph_file_path.parent() {
-        ensure_dir(parent)?;
+    // Guard against the incoherent default (VECTOR_DB_PROVIDER unset → pgvector,
+    // VECTOR_DB_URL unset → derived from SYSTEM_ROOT_DIRECTORY, i.e. a
+    // filesystem path). Without this, pgvector reports a cryptic "connection
+    // string '…/vectors' cannot be parsed". Point the operator at the actual
+    // misconfiguration instead.
+    if !(url.starts_with("postgres://") || url.starts_with("postgresql://")) {
+        return Err(ServerError::Other(anyhow!(
+            "VECTOR_DB_PROVIDER=pgvector requires a postgres connection string in \
+             VECTOR_DB_URL (postgres://… or postgresql://…), but got '{url}'. If you \
+             did not intend to use pgvector, set VECTOR_DB_PROVIDER explicitly (e.g. \
+             'mock' in a dev-mock build); the default derives this value from \
+             SYSTEM_ROOT_DIRECTORY, which is not a valid Postgres URL."
+        )));
     }
-
-    let path = cfg.graph_file_path.to_string_lossy().to_string();
-    let graph = LadybugAdapter::new(&path)
-        .await
-        .map_err(|e| ServerError::Other(anyhow!("graph init failed: {e}")))?;
-    graph
-        .initialize()
-        .await
-        .map_err(|e| ServerError::Other(anyhow!("graph schema init failed: {e}")))?;
-    Ok(Arc::new(graph) as Arc<dyn GraphDBTrait>)
+    Ok(())
 }
 
-async fn wire_vector_db(cfg: &HttpServerConfig) -> Result<Arc<dyn VectorDB>, ServerError> {
-    // The qdrant adapter has been extracted to the closed `cognee-vector-qdrant`
-    // crate; the OSS http-server wires pgvector as the production default and
-    // exposes an opt-in in-memory mock behind the `dev-mock` feature so local
-    // dev / `cargo test` work without a Postgres instance.
-    let provider = cfg.vector_provider.to_ascii_lowercase();
-    match provider.as_str() {
-        "pgvector" => {
-            let url = cfg.vector_db_url.trim();
-            if url.is_empty() {
-                return Err(ServerError::Other(anyhow!(
-                    "VECTOR_DB_URL (postgres connection string) is required when \
-                     VECTOR_DB_PROVIDER=pgvector"
-                )));
-            }
-            // Guard against the incoherent default (VECTOR_DB_PROVIDER unset →
-            // pgvector, VECTOR_DB_URL unset → derived from SYSTEM_ROOT_DIRECTORY,
-            // i.e. a filesystem path). Without this, pgvector reports a cryptic
-            // "connection string '…/vectors' cannot be parsed". Point the
-            // operator at the actual misconfiguration instead.
-            if !(url.starts_with("postgres://") || url.starts_with("postgresql://")) {
-                return Err(ServerError::Other(anyhow!(
-                    "VECTOR_DB_PROVIDER=pgvector requires a postgres connection \
-                     string in VECTOR_DB_URL (postgres://… or postgresql://…), but \
-                     got '{url}'. If you did not intend to use pgvector, set \
-                     VECTOR_DB_PROVIDER explicitly (e.g. 'mock' in a dev-mock \
-                     build); the default derives this value from \
-                     SYSTEM_ROOT_DIRECTORY, which is not a valid Postgres URL."
-                )));
-            }
-            let adapter = PgVectorAdapter::new(url, cfg.embedding_dimensions as usize)
-                .await
-                .map_err(|e| ServerError::Other(anyhow!("pgvector adapter init: {e}")))?;
-            Ok(Arc::new(adapter) as Arc<dyn VectorDB>)
-        }
-        #[cfg(feature = "dev-mock")]
-        "mock" => {
-            // OSS single-user dev path — keeps `cargo test` + local dev working
-            // without a Postgres instance. Off in production builds.
-            // The `dev-mock` feature enables `cognee-vector/testing`, which
-            // is where `MockVectorDB` actually lives.
-            Ok(Arc::new(cognee_vector::MockVectorDB::new()) as Arc<dyn VectorDB>)
-        }
-        other => Err(ServerError::Other(anyhow!(
-            "vector_db_provider='{other}' not supported in the OSS http-server. \
-             Supported: 'pgvector' (and 'mock' when built with the `dev-mock` \
-             feature). The Qdrant adapter has been extracted to the closed \
-             cognee-vector-qdrant crate."
-        ))),
-    }
+async fn wire_vector_db(
+    cfg: &HttpServerConfig,
+    registry: &ComponentRegistry,
+    ctx: &cognee_components::BackendBuildContext,
+) -> Result<Arc<dyn VectorDB>, ServerError> {
+    validate_vector_config(cfg)?;
+    Ok(registry.build_vector(ctx).await?)
 }
 
-fn build_embedding_config(cfg: &HttpServerConfig) -> Option<EmbeddingConfig> {
-    let provider = match cfg.embedding_provider.trim().to_ascii_lowercase().as_str() {
-        "onnx" => EmbeddingProvider::Onnx,
-        "fastembed" => EmbeddingProvider::Fastembed,
-        "openai" => EmbeddingProvider::OpenAi,
-        "openai_compatible" => EmbeddingProvider::OpenAiCompatible,
-        "ollama" => EmbeddingProvider::Ollama,
-        "mock" => EmbeddingProvider::Mock,
-        other => {
-            tracing::warn!("unknown embedding provider '{other}', embedding engine not wired");
-            return None;
-        }
-    };
-    let mut embedding_cfg = EmbeddingConfig {
-        provider,
-        model: cfg.embedding_model_name.clone(),
-        dimensions: cfg.embedding_dimensions as usize,
-        ..Default::default()
-    };
-    if !cfg.embedding_endpoint.trim().is_empty() {
-        embedding_cfg.endpoint = Some(cfg.embedding_endpoint.clone());
-    }
-    if !cfg.embedding_api_key.expose_secret().is_empty() {
-        embedding_cfg.api_key = Some(cfg.embedding_api_key.expose_secret().to_string());
-    }
-    embedding_cfg.onnx.model_name = cfg.embedding_model_name.clone();
-    embedding_cfg.onnx.dimensions = cfg.embedding_dimensions as usize;
-    if let Some(model_path) = &cfg.embedding_model_path {
-        embedding_cfg.onnx.model_path = model_path.clone();
-    }
-    if let Some(tokenizer_path) = &cfg.embedding_tokenizer_path {
-        embedding_cfg.onnx.tokenizer_path = tokenizer_path.clone();
-    }
-
-    Some(embedding_cfg)
-}
-
-async fn wire_embedding_engine(cfg: &HttpServerConfig) -> Option<Arc<dyn EmbeddingEngine>> {
-    let embedding_cfg = build_embedding_config(cfg)?;
-
-    match embedding_cfg.create_engine().await {
-        Ok(engine) => Some(engine),
+/// Downgrade a required-backend build error to `None` with a warning — the
+/// standalone server's policy for the optional (search/llm/audio) backends,
+/// which surface a 500-level envelope at runtime when unwired.
+fn downgrade<T>(result: Result<T, cognee_components::ComponentError>, what: &str) -> Option<T> {
+    match result {
+        Ok(v) => Some(v),
         Err(err) => {
-            tracing::warn!("embedding engine unavailable, wiring as None: {err}");
+            tracing::warn!("{what} not wired: {err}");
             None
         }
     }
 }
 
-fn wire_llm(cfg: &HttpServerConfig) -> Option<Arc<dyn Llm>> {
-    // Provider routing (and the required-key / required-endpoint validation) lives
-    // in the shared factory; an unsupported provider or missing credential errors
-    // there and we wire None.
-    match build_openai_compatible_adapter(
-        &cfg.llm_provider,
-        &cfg.llm_model,
-        cfg.llm_api_key.expose_secret(),
-        &cfg.llm_endpoint,
-        cfg.llm_max_retries,
-    ) {
-        Ok(adapter) => Some(Arc::new(adapter) as Arc<dyn Llm>),
-        Err(err) => {
-            tracing::warn!("llm not wired: {err}");
-            None
-        }
-    }
+async fn wire_embedding_engine(
+    registry: &ComponentRegistry,
+    ctx: &cognee_components::BackendBuildContext,
+) -> Option<Arc<dyn EmbeddingEngine>> {
+    downgrade(registry.build_embedding(ctx).await, "embedding engine")
 }
 
-fn wire_transcriber(cfg: &HttpServerConfig) -> Option<Arc<dyn Transcriber>> {
-    // Whisper-style transcription only works against OpenAI and user-pointed
-    // OpenAI-compatible servers that expose /audio/transcriptions; other providers
-    // get graceful no-audio (None).
-    let provider = cfg.llm_provider.to_ascii_lowercase();
-    if !matches!(provider.as_str(), "openai" | "custom" | "openai_compatible") {
-        return None;
-    }
+async fn wire_llm(
+    registry: &ComponentRegistry,
+    ctx: &cognee_components::BackendBuildContext,
+) -> Option<Arc<dyn Llm>> {
+    downgrade(registry.build_llm(ctx).await, "llm")
+}
 
-    match build_openai_compatible_adapter(
-        &cfg.llm_provider,
-        &cfg.llm_model,
-        cfg.llm_api_key.expose_secret(),
-        &cfg.llm_endpoint,
-        cfg.llm_max_retries,
-    ) {
-        Ok(adapter) => Some(Arc::new(adapter) as Arc<dyn Transcriber>),
-        Err(err) => {
-            tracing::warn!("transcriber not wired: {err}");
-            None
-        }
-    }
+async fn wire_transcriber(
+    registry: &ComponentRegistry,
+    ctx: &cognee_components::BackendBuildContext,
+) -> Option<Arc<dyn Transcriber>> {
+    // `build_transcriber` already yields `Ok(None)` for providers without audio
+    // support; a hard error (bad credentials) downgrades to None as before.
+    downgrade(registry.build_transcriber(ctx).await, "transcriber").flatten()
 }
 
 async fn wire_session(
@@ -403,9 +308,10 @@ fn wire_responses_client(cfg: &HttpServerConfig) -> Option<Arc<dyn ResponsesClie
 )]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     #[test]
-    fn build_embedding_config_applies_explicit_onnx_asset_paths() {
+    fn backend_context_applies_explicit_onnx_asset_paths() {
         let cfg = HttpServerConfig {
             embedding_provider: "onnx".to_string(),
             embedding_model_name: "custom-bge".to_string(),
@@ -415,20 +321,42 @@ mod tests {
             ..Default::default()
         };
 
-        let embedding_cfg = build_embedding_config(&cfg).expect("embedding config");
+        let ctx = cfg.backend_context();
 
-        assert_eq!(embedding_cfg.provider, EmbeddingProvider::Onnx);
-        assert_eq!(embedding_cfg.model, "custom-bge");
-        assert_eq!(embedding_cfg.dimensions, 768);
-        assert_eq!(embedding_cfg.onnx.model_name, "custom-bge");
-        assert_eq!(embedding_cfg.onnx.dimensions, 768);
+        assert_eq!(ctx.embedding.provider, "onnx");
+        assert_eq!(ctx.embedding.model, "custom-bge");
+        assert_eq!(ctx.embedding.dimensions, 768);
+        assert_eq!(ctx.embedding.onnx_model_name, "custom-bge");
+        assert_eq!(ctx.embedding.onnx_dimensions, 768);
         assert_eq!(
-            embedding_cfg.onnx.model_path,
+            ctx.embedding.onnx_model_path,
             PathBuf::from("/tmp/model.onnx")
         );
         assert_eq!(
-            embedding_cfg.onnx.tokenizer_path,
+            ctx.embedding.onnx_tokenizer_path,
             PathBuf::from("/tmp/tokenizer.json")
+        );
+    }
+
+    #[test]
+    fn backend_context_defaults_onnx_paths_when_unset() {
+        let cfg = HttpServerConfig {
+            embedding_provider: "onnx".to_string(),
+            embedding_model_path: None,
+            embedding_tokenizer_path: None,
+            ..Default::default()
+        };
+        let ctx = cfg.backend_context();
+        // Normalize separators so the assertion holds on Windows too (PathBuf
+        // stringifies with `\`).
+        let model_path = ctx
+            .embedding
+            .onnx_model_path
+            .to_string_lossy()
+            .replace('\\', "/");
+        assert!(
+            model_path.contains("target/models"),
+            "unset ONNX model path must fall back to the ./target/models default, got {model_path}"
         );
     }
 
@@ -453,11 +381,14 @@ mod tests {
             Ok(_) => String::new(),
             Err(err) => err.to_string(),
         };
-        assert!(msg.contains("database connect failed"));
+        assert!(
+            msg.contains("initialization failed") || msg.contains("component error"),
+            "expected a database init failure, got: {msg}"
+        );
     }
 
-    #[tokio::test]
-    async fn wire_vector_db_pgvector_rejects_non_postgres_url() {
+    #[test]
+    fn validate_vector_config_pgvector_rejects_non_postgres_url() {
         // The incoherent default (VECTOR_DB_PROVIDER unset → pgvector, plus a
         // VECTOR_DB_URL derived from SYSTEM_ROOT_DIRECTORY → a filesystem path)
         // must fail with an actionable message, not the cryptic connection-
@@ -468,8 +399,8 @@ mod tests {
             ..Default::default()
         };
 
-        let msg = match wire_vector_db(&cfg).await {
-            Ok(_) => String::new(),
+        let msg = match validate_vector_config(&cfg) {
+            Ok(()) => String::new(),
             Err(err) => err.to_string(),
         };
         assert!(

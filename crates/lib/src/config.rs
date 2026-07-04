@@ -12,6 +12,34 @@ use serde::{Deserialize, Serialize};
 
 pub const DEFAULT_SYSTEM_PROMPT_PATH: &str = "answer_simple_question.txt";
 
+/// Assemble a `postgres://user:pass@host:port/dbname` URL with percent-encoded
+/// credentials. Shared by the vector and graph URL resolvers.
+#[cfg(any(feature = "pgvector", feature = "pggraph"))]
+fn build_postgres_url(
+    host: &str,
+    port: u16,
+    name: &str,
+    user: &str,
+    pass: &str,
+) -> Result<String, String> {
+    let mut parsed =
+        url::Url::parse("postgres://localhost").map_err(|e| format!("static URL invalid: {e}"))?;
+    parsed
+        .set_host(Some(host))
+        .map_err(|e| format!("invalid host '{host}': {e}"))?;
+    parsed
+        .set_port(Some(port))
+        .map_err(|_| format!("invalid port {port}"))?;
+    parsed.set_path(&format!("/{name}"));
+    parsed
+        .set_username(user)
+        .map_err(|_| format!("invalid username '{user}'"))?;
+    parsed
+        .set_password(Some(pass))
+        .map_err(|_| "invalid password".to_string())?;
+    Ok(parsed.to_string())
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -580,6 +608,206 @@ impl Settings {
         } else {
             self.relational_db_url.clone()
         }
+    }
+
+    /// Lower these settings into a [`BackendBuildContext`] for
+    /// `cognee-components`. All config-specific URL resolution and the
+    /// component-relevant environment reads (`MOCK_EMBEDDING`,
+    /// `EMBEDDING_API_VERSION`, `HUGGINGFACE_TOKENIZER`,
+    /// `EMBEDDING_MAX_COMPLETION_TOKENS`) happen here so the registry stays
+    /// env-free.
+    pub fn backend_context(&self) -> cognee_components::BackendBuildContext {
+        use std::path::PathBuf;
+
+        let graph_provider = self.graph_database_provider.to_lowercase();
+        // Carry the resolution `Result` through to the factory so it can restate
+        // the specific cause (e.g. "Missing required Postgres graph credentials")
+        // in the returned error, not just in a log line an SDK user may not see.
+        let graph_postgres_url = {
+            #[cfg(feature = "pggraph")]
+            {
+                if matches!(graph_provider.as_str(), "postgres" | "postgresql") {
+                    Some(self.resolved_graph_postgres_url())
+                } else {
+                    None
+                }
+            }
+            #[cfg(not(feature = "pggraph"))]
+            {
+                None
+            }
+        };
+
+        let vector_provider = self.vector_db_provider.to_lowercase();
+        let vector_postgres_url = {
+            #[cfg(feature = "pgvector")]
+            {
+                if vector_provider == "pgvector" {
+                    Some(self.resolved_vector_postgres_url())
+                } else {
+                    None
+                }
+            }
+            #[cfg(not(feature = "pgvector"))]
+            {
+                None
+            }
+        };
+
+        // Embedding endpoint/key fall back to the LLM provider's when no
+        // embedding-specific values are set (shared OpenAI-compatible account).
+        let endpoint = [&self.embedding_endpoint, &self.llm_endpoint]
+            .into_iter()
+            .find(|v| !v.is_empty())
+            .cloned();
+        let api_key = [&self.embedding_api_key, &self.llm_api_key]
+            .into_iter()
+            .find(|v| !v.is_empty())
+            .cloned();
+
+        // MOCK_EMBEDDING: `deterministic`/`hash` selects SHA-256-derived
+        // vectors; other truthy values keep the legacy zero-vector mode.
+        let mock_mode = std::env::var("MOCK_EMBEDDING")
+            .ok()
+            .map(|v| v.trim().to_lowercase());
+        let mock_deterministic =
+            matches!(mock_mode.as_deref(), Some("deterministic") | Some("hash"));
+        let mock = mock_deterministic
+            || matches!(mock_mode.as_deref(), Some("true") | Some("1") | Some("yes"));
+
+        // Forward-compat env fields not yet on Settings.
+        let api_version = std::env::var("EMBEDDING_API_VERSION")
+            .ok()
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty());
+        let huggingface_tokenizer = std::env::var("HUGGINGFACE_TOKENIZER")
+            .ok()
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty());
+        let max_completion_tokens = std::env::var("EMBEDDING_MAX_COMPLETION_TOKENS")
+            .ok()
+            .and_then(|v| v.trim().parse::<usize>().ok())
+            .unwrap_or(8191);
+
+        cognee_components::BackendBuildContext {
+            data_root_directory: PathBuf::from(&self.data_root_directory),
+            system_root_directory: PathBuf::from(&self.system_root_directory),
+            relational_db_url: self.resolved_relational_db_url(),
+            graph_provider,
+            graph_file_path: self.graph_file_path.clone(),
+            graph_postgres_url,
+            vector_provider,
+            vector_db_url: self.vector_db_url.clone(),
+            vector_postgres_url,
+            embedding_dimensions: self.embedding_dimensions as usize,
+            embedding: cognee_components::EmbeddingInputs {
+                provider: self.embedding_provider.trim().to_lowercase(),
+                model: self.embedding_model_name.clone(),
+                dimensions: self.embedding_dimensions as usize,
+                endpoint,
+                api_key,
+                batch_size: self.embedding_batch_size as usize,
+                mock,
+                mock_deterministic,
+                api_version,
+                huggingface_tokenizer,
+                max_completion_tokens,
+                onnx_model_path: PathBuf::from(&self.embedding_model_path),
+                onnx_tokenizer_path: PathBuf::from(&self.embedding_tokenizer_path),
+                onnx_model_name: self.embedding_model_name.clone(),
+                onnx_dimensions: self.embedding_dimensions as usize,
+                onnx_max_sequence_length: self.embedding_max_sequence_length as usize,
+                onnx_batch_size: self.embedding_onnx_batch_size as usize,
+            },
+            llm: cognee_components::LlmInputs {
+                provider: self.llm_provider.to_lowercase(),
+                model: self.llm_model.clone(),
+                api_key: self.llm_api_key.clone(),
+                endpoint: self.llm_endpoint.clone(),
+                max_retries: self.llm_max_retries,
+                mock: self.llm_mock,
+                cassette: self.llm_cassette.clone(),
+                record_path: self.llm_record_path.clone(),
+            },
+        }
+    }
+
+    /// Build a Postgres connection URL from the `graph_database_*` settings,
+    /// falling back to the relational `db_*` fields when graph-specific creds
+    /// are not fully configured (Python `get_graph_engine.py:332-367` parity).
+    #[cfg(feature = "pggraph")]
+    pub(crate) fn resolved_graph_postgres_url(&self) -> Result<String, String> {
+        if self.graph_database_url.starts_with("postgres://")
+            || self.graph_database_url.starts_with("postgresql://")
+        {
+            return Ok(self.graph_database_url.clone());
+        }
+
+        let graph_host = if self.graph_database_host.is_empty() {
+            None
+        } else {
+            Some(self.graph_database_host.as_str())
+        };
+        let graph_creds_complete = graph_host.is_some()
+            && !self.graph_database_username.is_empty()
+            && !self.graph_database_name.is_empty();
+
+        let (host, port, name, user, pass) = if graph_creds_complete {
+            (
+                graph_host.unwrap_or_default(),
+                self.graph_database_port,
+                self.graph_database_name.as_str(),
+                self.graph_database_username.as_str(),
+                self.graph_database_password.as_str(),
+            )
+        } else {
+            tracing::warn!(
+                "Postgres graph credentials not fully configured; falling back to the \
+                 relational database configuration. Set GRAPH_DATABASE_* explicitly to avoid this."
+            );
+            if self.db_host.is_empty() || self.db_name.is_empty() || self.db_username.is_empty() {
+                return Err("Missing required Postgres graph credentials".into());
+            }
+            (
+                self.db_host.as_str(),
+                self.db_port,
+                self.db_name.as_str(),
+                self.db_username.as_str(),
+                self.db_password.as_str(),
+            )
+        };
+
+        build_postgres_url(host, port, name, user, pass)
+    }
+
+    /// Build a Postgres connection URL from the `vector_db_*` settings.
+    #[cfg(feature = "pgvector")]
+    pub(crate) fn resolved_vector_postgres_url(&self) -> Result<String, String> {
+        if self.vector_db_url.starts_with("postgres://")
+            || self.vector_db_url.starts_with("postgresql://")
+        {
+            return Ok(self.vector_db_url.clone());
+        }
+
+        let host = if self.vector_db_url.is_empty() {
+            "localhost"
+        } else {
+            &self.vector_db_url
+        };
+        let port = self.vector_db_port;
+        let name = if self.vector_db_name.is_empty() {
+            "cognee_vectors"
+        } else {
+            &self.vector_db_name
+        };
+        let user = if self.db_username.is_empty() {
+            "postgres"
+        } else {
+            &self.db_username
+        };
+        let pass = &self.db_password;
+
+        build_postgres_url(host, port, name, user, pass)
     }
 
     /// Returns the redacted property dict merged into `Pipeline Run *`

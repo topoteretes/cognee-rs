@@ -77,7 +77,10 @@ telemetry = [
 # is `publish = false` (in-repo harness), so we enable `cognee-vector/testing`
 # directly — `MockVectorDB` is defined there and `cognee-test-utils` only
 # re-exports it.
-dev-mock = ["cognee-vector/testing"]
+# Enabling `cognee-components/testing` is what registers the `mock` vector
+# provider in `ComponentRegistry::with_builtins()` — without this remap the
+# provider would silently vanish from the server's registry-driven wiring.
+dev-mock = ["cognee-vector/testing", "cognee-components/testing"]
 
 [dependencies]
 # Web framework and HTTP stack. axum 0.8 requires hyper 1.x, declared
@@ -102,6 +105,11 @@ cognee-observability = { path = "../observability", version = "0.1.3", optional 
 # in `telemetry.rs` compiles to a noop when absent.
 cognee-telemetry = { path = "../telemetry", version = "0.1.3", optional = true, features = ["telemetry"] }
 cognee-core = { path = "../core", version = "0.1.3", features = ["pipeline-run-registry"] }
+# Shared backend construction + adapter registry. Standalone wiring builds a
+# `ComponentRegistry::with_builtins()`; the enabled features here determine
+# which providers `with_builtins()` registers (onnx/ladybug/pgvector; mock-llm
+# is intentionally NOT enabled so a production server never honors MOCK_LLM).
+cognee-components = { path = "../components", version = "0.1.3", default-features = false, features = ["onnx", "ladybug", "pgvector"] }
 cognee-database = { path = "../database", version = "0.1.3", features = ["sqlite"] }
 sea-orm = { version = "1", default-features = false, features = ["runtime-tokio-rustls", "with-chrono", "with-uuid", "with-json"] }
 cognee-storage = { path = "../storage", version = "0.1.3" }
