@@ -134,6 +134,22 @@ pub struct HttpServerConfig {
     /// Env: `RELATIONAL_DB_URL` (fallback `DATABASE_URL`).
     pub relational_db_url: String,
 
+    /// Relational connection-pool max size.
+    /// Env: `DB_POOL_MAX_CONNECTIONS`. Default: 10 (mirrors `PoolConfig::default()`).
+    pub db_pool_max_connections: u32,
+
+    /// Relational connection-pool min (warm) size.
+    /// Env: `DB_POOL_MIN_CONNECTIONS`. Default: 1 (mirrors `PoolConfig::default()`).
+    pub db_pool_min_connections: u32,
+
+    /// Seconds to wait for a pooled connection before erroring.
+    /// Env: `DB_POOL_ACQUIRE_TIMEOUT_SECS`. Default: 30 (mirrors `PoolConfig::default()`).
+    pub db_pool_acquire_timeout_secs: u64,
+
+    /// Seconds an idle pooled connection lives before being reaped.
+    /// Env: `DB_POOL_IDLE_TIMEOUT_SECS`. Default: 600 (mirrors `PoolConfig::default()`).
+    pub db_pool_idle_timeout_secs: u64,
+
     /// Graph provider name.
     /// Env: `GRAPH_DATABASE_PROVIDER`. Default: `ladybug`.
     pub graph_provider: String,
@@ -318,6 +334,10 @@ impl Default for HttpServerConfig {
             data_root_directory: data_root,
             system_root_directory: system_root.clone(),
             relational_db_url: default_relational_db_url(&system_root),
+            db_pool_max_connections: 10,
+            db_pool_min_connections: 1,
+            db_pool_acquire_timeout_secs: 30,
+            db_pool_idle_timeout_secs: 600,
             graph_provider: "ladybug".to_string(),
             graph_file_path: default_graph_file_path(&system_root),
             vector_provider: "pgvector".to_string(),
@@ -467,6 +487,27 @@ impl HttpServerConfig {
 
         if let Some(v) = first_non_empty_env(&["RELATIONAL_DB_URL", "DATABASE_URL"]) {
             cfg.relational_db_url = v;
+        }
+
+        if let Ok(v) = std::env::var("DB_POOL_MAX_CONNECTIONS") {
+            cfg.db_pool_max_connections = v
+                .parse::<u32>()
+                .map_err(|e| ServerError::Other(anyhow::anyhow!("DB_POOL_MAX_CONNECTIONS: {e}")))?;
+        }
+        if let Ok(v) = std::env::var("DB_POOL_MIN_CONNECTIONS") {
+            cfg.db_pool_min_connections = v
+                .parse::<u32>()
+                .map_err(|e| ServerError::Other(anyhow::anyhow!("DB_POOL_MIN_CONNECTIONS: {e}")))?;
+        }
+        if let Ok(v) = std::env::var("DB_POOL_ACQUIRE_TIMEOUT_SECS") {
+            cfg.db_pool_acquire_timeout_secs = v.parse::<u64>().map_err(|e| {
+                ServerError::Other(anyhow::anyhow!("DB_POOL_ACQUIRE_TIMEOUT_SECS: {e}"))
+            })?;
+        }
+        if let Ok(v) = std::env::var("DB_POOL_IDLE_TIMEOUT_SECS") {
+            cfg.db_pool_idle_timeout_secs = v.parse::<u64>().map_err(|e| {
+                ServerError::Other(anyhow::anyhow!("DB_POOL_IDLE_TIMEOUT_SECS: {e}"))
+            })?;
         }
 
         if let Ok(v) = std::env::var("GRAPH_DATABASE_PROVIDER") {

@@ -149,6 +149,23 @@ config (see [roadmap/cognify-compatibility-plan.md](roadmap/cognify-compatibilit
 | `DB_NAME` | `db_name` | `cognee_db` |
 | `DB_USERNAME` / `DB_PASSWORD` | … | _(empty)_ |
 
+### Connection pooling
+
+Pool sizing for the relational connection, passed to
+`cognee_database::connect_with_pool`. The defaults mirror
+`cognee_database::PoolConfig::default()`. The HTTP server reads the same env
+vars via `HttpServerConfig`. In-memory SQLite URLs override parts of this
+sizing at connect time for correctness (a non-shared in-memory database is
+pinned to a single never-reaped connection; shared-cache in-memory keeps the
+pool but disables connection reaping).
+
+| Env var | `Settings` field | Default |
+|---|---|---|
+| `DB_POOL_MAX_CONNECTIONS` | `db_pool_max_connections` | `10` |
+| `DB_POOL_MIN_CONNECTIONS` | `db_pool_min_connections` | `1` |
+| `DB_POOL_ACQUIRE_TIMEOUT_SECS` | `db_pool_acquire_timeout_secs` | `30` |
+| `DB_POOL_IDLE_TIMEOUT_SECS` | `db_pool_idle_timeout_secs` | `600` |
+
 ## Chunking & tokenizer
 
 Read by [`crates/chunking/src/config.rs`](../crates/chunking/src/config.rs). Most

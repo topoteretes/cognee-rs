@@ -2451,7 +2451,7 @@ mod tests {
         )
         .id;
         ops::graph_storage::upsert_edges(
-            db.as_ref(),
+            &db,
             &[GraphEdge {
                 id: Uuid::new_v4(),
                 slug: triplet_id,

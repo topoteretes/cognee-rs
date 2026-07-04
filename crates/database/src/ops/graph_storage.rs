@@ -3,7 +3,7 @@ use cognee_utils::tracing_keys::{COGNEE_DB_ROW_COUNT, COGNEE_DB_SYSTEM};
 use sea_orm::sea_query::{Alias, Expr, OnConflict, Query};
 use sea_orm::{
     ColumnTrait, Condition, ConnectionTrait, DatabaseConnection, EntityTrait, PaginatorTrait,
-    QueryFilter, QueryOrder, QuerySelect,
+    QueryFilter, QueryOrder, QuerySelect, TransactionTrait,
 };
 use tracing::{Span, instrument};
 use uuid::Uuid;
@@ -23,6 +23,19 @@ use crate::uuid_hex;
 /// fails with "too many SQL variables".
 const PROVENANCE_INSERT_BATCH: usize = 500;
 
+/// Upsert node provenance rows on the given connection.
+///
+/// Delegates to the connection-generic impl; this concrete signature is the
+/// published API (cognee-database is on crates.io, and generalizing the
+/// parameter would break `&Arc<DatabaseConnection>` callers via lost deref
+/// coercion). Transactional callers go through [`upsert_provenance_graph`].
+pub async fn upsert_nodes(
+    db: &DatabaseConnection,
+    nodes: &[GraphNode],
+) -> Result<(), DatabaseError> {
+    upsert_nodes_on(db, nodes).await
+}
+
 #[instrument(
     name = "cognee.db.relational.graph_storage.upsert_nodes",
     level = "info",
@@ -30,11 +43,11 @@ const PROVENANCE_INSERT_BATCH: usize = 500;
     fields(cognee.db.system = tracing::field::Empty),
     err,
 )]
-pub async fn upsert_nodes<C: ConnectionTrait>(
+async fn upsert_nodes_on<C: ConnectionTrait>(
     db: &C,
     nodes: &[GraphNode],
 ) -> Result<(), DatabaseError> {
-    Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
+    Span::current().record(COGNEE_DB_SYSTEM, crate::connection_system_label(db));
     if nodes.is_empty() {
         return Ok(());
     }
@@ -111,6 +124,18 @@ pub async fn delete_nodes_by_data(
     Ok(())
 }
 
+/// Upsert edge provenance rows on the given connection.
+///
+/// Delegates to the connection-generic impl; this concrete signature is the
+/// published API (see [`upsert_nodes`]). Transactional callers go through
+/// [`upsert_provenance_graph`].
+pub async fn upsert_edges(
+    db: &DatabaseConnection,
+    edges: &[GraphEdge],
+) -> Result<(), DatabaseError> {
+    upsert_edges_on(db, edges).await
+}
+
 #[instrument(
     name = "cognee.db.relational.graph_storage.upsert_edges",
     level = "info",
@@ -118,11 +143,11 @@ pub async fn delete_nodes_by_data(
     fields(cognee.db.system = tracing::field::Empty),
     err,
 )]
-pub async fn upsert_edges<C: ConnectionTrait>(
+async fn upsert_edges_on<C: ConnectionTrait>(
     db: &C,
     edges: &[GraphEdge],
 ) -> Result<(), DatabaseError> {
-    Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
+    Span::current().record(COGNEE_DB_SYSTEM, crate::connection_system_label(db));
     if edges.is_empty() {
         return Ok(());
     }
@@ -149,6 +174,38 @@ pub async fn upsert_edges<C: ConnectionTrait>(
             .await
             .map_err(map_sea_err)?;
     }
+    Ok(())
+}
+
+/// Upsert a provenance node+edge group atomically in one transaction.
+///
+/// A failure partway through rolls the whole group back (the transaction is
+/// dropped uncommitted, which sea-orm turns into a rollback), so the
+/// provenance graph never ends up half-written.
+///
+/// `begin()` issues a deferred `BEGIN`, but this transaction is write-first:
+/// the first statement is an upsert, which takes SQLite's write lock
+/// immediately, so there is no read-to-write lock upgrade to deadlock on.
+#[instrument(
+    name = "cognee.db.relational.graph_storage.upsert_provenance_graph",
+    level = "info",
+    skip_all,
+    fields(cognee.db.system = tracing::field::Empty),
+    err,
+)]
+pub async fn upsert_provenance_graph(
+    db: &DatabaseConnection,
+    nodes: &[GraphNode],
+    edges: &[GraphEdge],
+) -> Result<(), DatabaseError> {
+    Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
+    if nodes.is_empty() && edges.is_empty() {
+        return Ok(());
+    }
+    let txn = db.begin().await.map_err(map_sea_err)?;
+    upsert_nodes_on(&txn, nodes).await?;
+    upsert_edges_on(&txn, edges).await?;
+    txn.commit().await.map_err(map_sea_err)?;
     Ok(())
 }
 

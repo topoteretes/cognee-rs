@@ -3,19 +3,35 @@
     clippy::expect_used,
     reason = "test code — panics are acceptable failures"
 )]
-//! Regression tests for relational connection-pool sizing and SQLite journaling.
+//! Regression tests for relational connection-pool sizing and SQLite
+//! journaling.
 //!
-//! The exclusive-in-memory-SQLite invariant must pin the pool to a single
-//! connection that is never reaped (the whole database lives inside it), while
-//! file-backed SQLite must NOT be pinned (that would needlessly serialize
-//! concurrent reads) and must run in WAL mode (the only journal mode where a
-//! multi-connection pool actually buys reader/writer concurrency). sea-orm 1.1
-//! exposes the underlying sqlx pool, so the configured options are directly
-//! assertable.
+//! In-memory SQLite (shared-cache or not) must never lose its last pool
+//! connection — the database lives only as long as its connections — so both
+//! sqlx reapers must be disabled. File-backed SQLite must NOT be pinned to a
+//! single connection (that would needlessly serialize concurrent reads) and
+//! runs in WAL mode, the only journal mode where a multi-connection pool
+//! actually buys reader/writer concurrency. Read-only opens must not receive
+//! journal-mode pragmas at all. sea-orm 1.1 exposes the underlying sqlx pool,
+//! so the configured options are directly assertable.
 #![cfg(feature = "sqlite")]
 
 use cognee_database::connect;
 use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
+
+async fn journal_mode(db: &cognee_database::DatabaseConnection) -> String {
+    let mode: String = db
+        .query_one(Statement::from_string(
+            DatabaseBackend::Sqlite,
+            "PRAGMA journal_mode;",
+        ))
+        .await
+        .unwrap()
+        .expect("PRAGMA journal_mode returns a row")
+        .try_get_by_index(0)
+        .unwrap();
+    mode.to_lowercase()
+}
 
 #[tokio::test]
 async fn in_memory_sqlite_is_single_connection() {
@@ -24,10 +40,10 @@ async fn in_memory_sqlite_is_single_connection() {
     assert_eq!(
         opts.get_max_connections(),
         1,
-        "in-memory SQLite must be pinned to one connection",
+        "non-shared in-memory SQLite must be pinned to one connection",
     );
-    // The entire database lives in this one connection, so reaping it would
-    // discard all data and reconnect to a fresh empty DB. Both reapers off.
+    // The database only lives as long as its connections, so reaping the last
+    // one would silently swap in a fresh empty DB. Both reapers off.
     assert_eq!(
         opts.get_idle_timeout(),
         None,
@@ -37,6 +53,37 @@ async fn in_memory_sqlite_is_single_connection() {
         opts.get_max_lifetime(),
         None,
         "in-memory connection must not be expired by max-lifetime",
+    );
+}
+
+#[tokio::test]
+async fn shared_cache_in_memory_disables_reapers() {
+    let db = connect("sqlite:file:pool_shared_reaper_test?mode=memory&cache=shared")
+        .await
+        .expect("connect");
+    let opts = db.get_sqlite_connection_pool().options();
+    // Shared-cache in-memory may pool (the DB is genuinely shared across
+    // connections), but the reapers must still be off: sqlx closes an expiring
+    // connection before opening its replacement, so `min_connections >= 1`
+    // alone cannot prevent the count from touching zero, at which point SQLite
+    // frees the shared in-memory database.
+    assert!(
+        opts.get_max_connections() > 1,
+        "shared-cache in-memory SQLite should not be pinned to one connection",
+    );
+    assert!(
+        opts.get_min_connections() >= 1,
+        "shared-cache in-memory SQLite must keep at least one connection",
+    );
+    assert_eq!(
+        opts.get_idle_timeout(),
+        None,
+        "shared-cache in-memory connections must not be idle-reaped",
+    );
+    assert_eq!(
+        opts.get_max_lifetime(),
+        None,
+        "shared-cache in-memory connections must not be expired by max-lifetime",
     );
 }
 
@@ -54,21 +101,66 @@ async fn file_sqlite_allows_a_pool_in_wal_mode() {
         "file-backed SQLite should not be pinned to a single connection",
     );
 
-    // A multi-connection pool only pays off with WAL's reader/writer concurrency;
-    // in rollback-journal mode the extra connections just contend for one lock.
-    let journal_mode: String = db
+    // A multi-connection pool only pays off with WAL's reader/writer
+    // concurrency; in rollback-journal mode the extra connections just contend
+    // for one lock.
+    assert_eq!(
+        journal_mode(&db).await,
+        "wal",
+        "file-backed read-write SQLite should run in WAL mode",
+    );
+}
+
+#[tokio::test]
+async fn read_only_file_sqlite_connects_and_keeps_journal_mode() {
+    use sea_orm::sqlx::ConnectOptions as _;
+    use sea_orm::sqlx::sqlite::SqliteConnectOptions;
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("ro.db");
+
+    // Seed the file with raw sqlx so it stays in the default DELETE journal.
+    // (Seeding through `connect` would already convert it to WAL, and
+    // `PRAGMA journal_mode=WAL` on an already-WAL database succeeds even on a
+    // read-only connection — the regression would go undetected.)
+    {
+        use sea_orm::sqlx::Connection;
+        let mut conn = SqliteConnectOptions::new()
+            .filename(&path)
+            .create_if_missing(true)
+            .connect()
+            .await
+            .expect("seed connect");
+        sea_orm::sqlx::query("CREATE TABLE t (x INTEGER)")
+            .execute(&mut conn)
+            .await
+            .expect("seed schema");
+        sea_orm::sqlx::query("INSERT INTO t VALUES (1)")
+            .execute(&mut conn)
+            .await
+            .expect("seed row");
+        conn.close().await.expect("close seed connection");
+    }
+
+    // Pre-fix, this connect failed: the unconditional `PRAGMA journal_mode=WAL`
+    // attempts to write to a read-only database.
+    let url = format!("sqlite://{}?mode=ro", path.display());
+    let db = connect(&url).await.expect("read-only connect must succeed");
+
+    let row = db
         .query_one(Statement::from_string(
             DatabaseBackend::Sqlite,
-            "PRAGMA journal_mode;",
+            "SELECT COUNT(*) FROM t;",
         ))
         .await
-        .unwrap()
-        .expect("PRAGMA journal_mode returns a row")
-        .try_get_by_index(0)
-        .unwrap();
+        .expect("read query")
+        .expect("count row");
+    let count: i64 = row.try_get_by_index(0).unwrap();
+    assert_eq!(count, 1, "read-only connection must be able to read");
+
     assert_eq!(
-        journal_mode.to_lowercase(),
-        "wal",
-        "file-backed SQLite should run in WAL mode",
+        journal_mode(&db).await,
+        "delete",
+        "read-only open must not switch the journal mode",
     );
 }

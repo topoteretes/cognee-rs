@@ -2,6 +2,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::anyhow;
 use cognee_core::{CpuPool, RayonThreadPool};
@@ -136,9 +137,15 @@ async fn wire_database(cfg: &HttpServerConfig) -> Result<Arc<DatabaseConnection>
         }
     }
 
-    // Pool sizing is chosen here, in the layer that selects the URL; tune via
-    // `PoolConfig` rather than pushing backend guesses into `connect`.
-    let db = connect_with_pool(&url, PoolConfig::default())
+    // Pool sizing is chosen here, in the layer that selects the URL, from the
+    // `DB_POOL_*` config rather than backend guesses inside `connect`.
+    let pool = PoolConfig {
+        max_connections: cfg.db_pool_max_connections,
+        min_connections: cfg.db_pool_min_connections,
+        acquire_timeout: Duration::from_secs(cfg.db_pool_acquire_timeout_secs),
+        idle_timeout: Duration::from_secs(cfg.db_pool_idle_timeout_secs),
+    };
+    let db = connect_with_pool(&url, pool)
         .await
         .map_err(|e| ServerError::Other(anyhow!("database connect failed: {e}")))?;
     initialize(&db)

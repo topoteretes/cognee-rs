@@ -6,7 +6,9 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use tokio::sync::RwLock as TokioRwLock;
 
-use cognee_database::{DatabaseConnection, PoolConfig, connect_with_pool, initialize};
+use cognee_database::{
+    DatabaseConnection, PoolConfig, connect_with_pool, initialize, sqlite_url_is_in_memory,
+};
 use cognee_embedding::{EmbeddingConfig, EmbeddingEngine, EmbeddingProvider};
 use cognee_graph::GraphDBTrait;
 #[cfg(feature = "ladybug")]
@@ -127,8 +129,9 @@ impl ComponentManager {
         //   sqlite:./rel/path/db       (relative, 1-slash)
         //   sqlite:///abs/path/db      (absolute, 3-slash)
         //   sqlite://localhost/abs/db  (host form)
-        // All others (postgres, in-memory `sqlite::memory:`) are left alone.
-        if url.starts_with("sqlite:") && !url.contains(":memory:") {
+        // All others (postgres, and in-memory URLs in either the `:memory:` or
+        // `mode=memory` spelling, detected by the shared predicate) are left alone.
+        if url.starts_with("sqlite:") && !sqlite_url_is_in_memory(&url) {
             // Strip the sqlite: scheme and any leading host ("//localhost") or
             // extra slashes to get the raw filesystem path (before '?').
             let after_scheme = url.trim_start_matches("sqlite:");
@@ -163,9 +166,18 @@ impl ComponentManager {
             }
         }
 
-        // Pool sizing is chosen here, in the layer that selects the URL; tune via
-        // `PoolConfig` rather than pushing backend guesses into `connect`.
-        let db = connect_with_pool(&url, PoolConfig::default())
+        // Pool sizing is chosen here, in the layer that selects the URL, from
+        // the `DB_POOL_*` settings rather than backend guesses inside `connect`.
+        let pool = {
+            let s = self.config.read();
+            PoolConfig {
+                max_connections: s.db_pool_max_connections,
+                min_connections: s.db_pool_min_connections,
+                acquire_timeout: std::time::Duration::from_secs(s.db_pool_acquire_timeout_secs),
+                idle_timeout: std::time::Duration::from_secs(s.db_pool_idle_timeout_secs),
+            }
+        };
+        let db = connect_with_pool(&url, pool)
             .await
             .map_err(|e| ComponentError::Database(format!("initialization failed: {e}")))?;
         initialize(&db)

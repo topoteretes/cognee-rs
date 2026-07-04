@@ -187,7 +187,7 @@ impl RealHealthChecker {
 
     async fn probe_database(&self) -> ComponentHealth {
         let db = Arc::clone(&self.components.database);
-        let provider = cognee_database::database_system_label(db.as_ref()).to_string();
+        let provider = cognee_database::database_system_label(&db).to_string();
         self.with_timeout(&provider, true, async move {
             let started = Instant::now();
             let backend = db.get_database_backend();
@@ -195,13 +195,13 @@ impl RealHealthChecker {
             match db.execute(stmt).await {
                 Ok(_) => ComponentHealth {
                     status: HealthStatus::Healthy,
-                    provider: cognee_database::database_system_label(db.as_ref()).to_string(),
+                    provider: cognee_database::database_system_label(&db).to_string(),
                     response_time: started.elapsed(),
                     details: "SELECT 1 ok".into(),
                 },
                 Err(e) => ComponentHealth {
                     status: HealthStatus::Unhealthy,
-                    provider: cognee_database::database_system_label(db.as_ref()).to_string(),
+                    provider: cognee_database::database_system_label(&db).to_string(),
                     response_time: started.elapsed(),
                     // Avoid echoing connection strings; SeaORM's Display
                     // typically contains the driver class + short message.

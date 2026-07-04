@@ -105,6 +105,15 @@ pub struct Settings {
     pub db_username: String,
     pub db_password: String,
 
+    /// Relational connection-pool sizing, passed to
+    /// `cognee_database::connect_with_pool`. Defaults mirror
+    /// `cognee_database::PoolConfig::default()`. In-memory SQLite URLs
+    /// override parts of this sizing at connect time for correctness.
+    pub db_pool_max_connections: u32,
+    pub db_pool_min_connections: u32,
+    pub db_pool_acquire_timeout_secs: u64,
+    pub db_pool_idle_timeout_secs: u64,
+
     pub default_system_prompt_path: String,
 
     pub embedding_provider: String,
@@ -372,6 +381,26 @@ impl Settings {
         }
         if let Some(v) = str_var("DATABASE_URL") {
             self.relational_db_url = v;
+        }
+        if let Some(v) = str_var("DB_POOL_MAX_CONNECTIONS")
+            && let Ok(n) = v.parse::<u32>()
+        {
+            self.db_pool_max_connections = n;
+        }
+        if let Some(v) = str_var("DB_POOL_MIN_CONNECTIONS")
+            && let Ok(n) = v.parse::<u32>()
+        {
+            self.db_pool_min_connections = n;
+        }
+        if let Some(v) = str_var("DB_POOL_ACQUIRE_TIMEOUT_SECS")
+            && let Ok(n) = v.parse::<u64>()
+        {
+            self.db_pool_acquire_timeout_secs = n;
+        }
+        if let Some(v) = str_var("DB_POOL_IDLE_TIMEOUT_SECS")
+            && let Ok(n) = v.parse::<u64>()
+        {
+            self.db_pool_idle_timeout_secs = n;
         }
 
         // -- Embedding -----------------------------------------------------------
@@ -732,6 +761,12 @@ impl Default for Settings {
             db_name: "cognee_db".to_string(),
             db_username: String::new(),
             db_password: String::new(),
+
+            // Mirror cognee_database::PoolConfig::default().
+            db_pool_max_connections: 10,
+            db_pool_min_connections: 1,
+            db_pool_acquire_timeout_secs: 30,
+            db_pool_idle_timeout_secs: 600,
 
             default_system_prompt_path: DEFAULT_SYSTEM_PROMPT_PATH.to_string(),
 
