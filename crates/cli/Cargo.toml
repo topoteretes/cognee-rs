@@ -49,6 +49,11 @@ mock-llm      = ["cognee-lib/mock-llm"]
 # deps — just reuses the existing pipeline wiring + tempfile — so it is on by
 # default.
 bench         = ["dep:tempfile"]
+# `profiling` wires a SIGPROF sampling profiler (pprof-rs) into the bench
+# subcommand, emitting a per-phase flamegraph SVG with no `perf` permissions and
+# no root. Opt-in (NOT in default) so normal bench runs stay lean and CI can
+# still emit flamegraphs offline via `--features bench,profiling`.
+profiling     = ["dep:pprof"]
 onnx          = ["cognee-lib/onnx"]
 # Platform-specific GPU acceleration for ONNX Runtime (opt-in, NOT in default).
 # Enable for NVIDIA hardware: --features ort-cuda or --features ort-tensorrt.
@@ -98,6 +103,9 @@ tracing-subscriber.workspace = true
 uuid.workspace = true
 # Optional: only pulled in by the `bench` feature (per-run temp isolation).
 tempfile = { workspace = true, optional = true }
+# Optional: only pulled in by the `profiling` feature. Pure-Rust SIGPROF
+# sampling profiler — emits flamegraph SVG + pprof protobuf, no `perf`/root.
+pprof = { version = "0.14", default-features = false, features = ["flamegraph"], optional = true }
 
 [dev-dependencies]
 assert_cmd.workspace = true

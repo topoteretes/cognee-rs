@@ -85,6 +85,11 @@ pub struct BenchArgs {
     /// Write the result JSON to this file.
     #[arg(long = "output", short = 'o')]
     pub output: Option<String>,
+
+    /// Directory to write per-phase profiles into (flamegraph SVG + pprof .pb).
+    /// Only honoured when built with `--features profiling`; ignored otherwise.
+    #[arg(long = "profile-dir")]
+    pub profile_dir: Option<String>,
 }
 
 #[cfg(feature = "visualization")]

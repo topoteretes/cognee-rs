@@ -82,6 +82,67 @@ struct BenchStatus {
 
 const PHASE_OK: &str = "success";
 
+/// Start a SIGPROF sampling profiler for one phase, if profiling is enabled and
+/// `--profile-dir` was given. Returns `None` (a no-op) otherwise. pprof-rs uses
+/// signal-based sampling, so it needs no `perf` permissions and no root, and it
+/// captures every thread in the process (both the tokio workers and the Rayon
+/// pool) — exactly what we need under the mocked, CPU-bound replay.
+#[cfg(feature = "profiling")]
+fn start_phase_profiler(profile_dir: Option<&str>) -> Option<pprof::ProfilerGuard<'static>> {
+    profile_dir?;
+    match pprof::ProfilerGuardBuilder::default()
+        .frequency(997)
+        .blocklist(&["libc", "libgcc", "pthread", "vdso"])
+        .build()
+    {
+        Ok(guard) => Some(guard),
+        Err(error) => {
+            warn!("profiler: failed to start: {error}");
+            None
+        }
+    }
+}
+
+/// Stop a phase profiler and write `<profile_dir>/<phase>.svg`.
+#[cfg(feature = "profiling")]
+fn finish_phase_profiler(
+    guard: Option<pprof::ProfilerGuard<'static>>,
+    profile_dir: Option<&str>,
+    phase: &str,
+) {
+    let (Some(guard), Some(dir)) = (guard, profile_dir) else {
+        return;
+    };
+    let report = match guard.report().build() {
+        Ok(report) => report,
+        Err(error) => {
+            warn!("profiler: failed to build report for {phase}: {error}");
+            return;
+        }
+    };
+    if let Err(error) = std::fs::create_dir_all(dir) {
+        warn!("profiler: cannot create dir '{dir}': {error}");
+        return;
+    }
+    let svg_path = format!("{dir}/{phase}.svg");
+    match std::fs::File::create(&svg_path) {
+        Ok(file) => match report.flamegraph(file) {
+            Ok(()) => info!("profiler: wrote {svg_path}"),
+            Err(error) => warn!("profiler: flamegraph write failed for {phase}: {error}"),
+        },
+        Err(error) => warn!("profiler: cannot create '{svg_path}': {error}"),
+    }
+}
+
+// No-op shims so the call sites stay identical when the feature is off.
+#[cfg(not(feature = "profiling"))]
+fn start_phase_profiler(_profile_dir: Option<&str>) -> Option<()> {
+    None
+}
+
+#[cfg(not(feature = "profiling"))]
+fn finish_phase_profiler(_guard: Option<()>, _profile_dir: Option<&str>, _phase: &str) {}
+
 /// Round to 3 decimals to match Python's `round(x, 3)` output.
 fn round3(value: f64) -> f64 {
     (value * 1000.0).round() / 1000.0
@@ -238,6 +299,7 @@ pub fn run(args: BenchArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> {
         owner_id,
         &args.dataset_name,
         &memories,
+        args.profile_dir.as_deref(),
         BenchConfig {
             llm_model,
             embedding_model,
@@ -270,6 +332,7 @@ async fn run_phases(
     owner_id: Uuid,
     dataset_name: &str,
     memories: &[Memory],
+    profile_dir: Option<&str>,
     config: BenchConfig,
 ) -> BenchResult {
     let n = memories.len();
@@ -302,19 +365,23 @@ async fn run_phases(
     // ── Add ────────────────────────────────────────────────────────────────
     eprintln!("Phase 1: Adding {n} memories...");
     let t_add_start = Instant::now();
+    let add_prof = start_phase_profiler(profile_dir);
     if let Err(msg) = phase_add(cm, owner_id, dataset_name, memories).await {
         warn!("Add FAILED: {msg}");
         status.add = format!("failed: {msg}");
     }
+    finish_phase_profiler(add_prof, profile_dir, "add");
     let t_add = t_add_start.elapsed().as_secs_f64();
 
     // ── Cognify ──────────────────────────────────────────────────────────
     eprintln!("Phase 2: Running cognify (knowledge graph build)...");
     let t_cognify_start = Instant::now();
+    let cognify_prof = start_phase_profiler(profile_dir);
     if let Err(msg) = phase_cognify(cm, owner_id, dataset_name).await {
         warn!("Cognify FAILED: {msg}");
         status.cognify = format!("failed: {msg}");
     }
+    finish_phase_profiler(cognify_prof, profile_dir, "cognify");
     let t_cognify = t_cognify_start.elapsed().as_secs_f64();
 
     let t_total = t_add + t_cognify;
@@ -322,10 +389,12 @@ async fn run_phases(
     // ── Search ───────────────────────────────────────────────────────────
     eprintln!("Phase 3: Running search query...");
     let t_search_start = Instant::now();
+    let search_prof = start_phase_profiler(profile_dir);
     if let Err(msg) = phase_search(cm, owner_id, dataset_name).await {
         warn!("Search FAILED: {msg}");
         status.search = format!("failed: {msg}");
     }
+    finish_phase_profiler(search_prof, profile_dir, "search");
     let t_search = t_search_start.elapsed().as_secs_f64();
 
     let success = status.prune == PHASE_OK
