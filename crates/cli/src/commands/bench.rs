@@ -143,6 +143,31 @@ fn start_phase_profiler(_profile_dir: Option<&str>) -> Option<()> {
 #[cfg(not(feature = "profiling"))]
 fn finish_phase_profiler(_guard: Option<()>, _profile_dir: Option<&str>, _phase: &str) {}
 
+/// Arm the per-stage span-timing telemetry for one phase (see
+/// `bench_telemetry`). Complements the flamegraph: attributes the off-CPU
+/// await/IO time the sampling profiler cannot see. No-op unless profiling is
+/// enabled and `--profile-dir` was given.
+#[cfg(feature = "profiling")]
+fn start_phase_telemetry(profile_dir: Option<&str>) {
+    if profile_dir.is_some() {
+        super::bench_telemetry::arm();
+    }
+}
+
+/// Disarm the telemetry and write `<profile_dir>/<phase>.telemetry.json`.
+#[cfg(feature = "profiling")]
+fn finish_phase_telemetry(profile_dir: Option<&str>, phase: &str) {
+    if let Some(dir) = profile_dir {
+        super::bench_telemetry::finish_phase(dir, phase);
+    }
+}
+
+#[cfg(not(feature = "profiling"))]
+fn start_phase_telemetry(_profile_dir: Option<&str>) {}
+
+#[cfg(not(feature = "profiling"))]
+fn finish_phase_telemetry(_profile_dir: Option<&str>, _phase: &str) {}
+
 /// Round to 3 decimals to match Python's `round(x, 3)` output.
 fn round3(value: f64) -> f64 {
     (value * 1000.0).round() / 1000.0
@@ -365,23 +390,27 @@ async fn run_phases(
     // ── Add ────────────────────────────────────────────────────────────────
     eprintln!("Phase 1: Adding {n} memories...");
     let t_add_start = Instant::now();
+    start_phase_telemetry(profile_dir);
     let add_prof = start_phase_profiler(profile_dir);
     if let Err(msg) = phase_add(cm, owner_id, dataset_name, memories).await {
         warn!("Add FAILED: {msg}");
         status.add = format!("failed: {msg}");
     }
     finish_phase_profiler(add_prof, profile_dir, "add");
+    finish_phase_telemetry(profile_dir, "add");
     let t_add = t_add_start.elapsed().as_secs_f64();
 
     // ── Cognify ──────────────────────────────────────────────────────────
     eprintln!("Phase 2: Running cognify (knowledge graph build)...");
     let t_cognify_start = Instant::now();
+    start_phase_telemetry(profile_dir);
     let cognify_prof = start_phase_profiler(profile_dir);
     if let Err(msg) = phase_cognify(cm, owner_id, dataset_name).await {
         warn!("Cognify FAILED: {msg}");
         status.cognify = format!("failed: {msg}");
     }
     finish_phase_profiler(cognify_prof, profile_dir, "cognify");
+    finish_phase_telemetry(profile_dir, "cognify");
     let t_cognify = t_cognify_start.elapsed().as_secs_f64();
 
     let t_total = t_add + t_cognify;
@@ -389,12 +418,14 @@ async fn run_phases(
     // ── Search ───────────────────────────────────────────────────────────
     eprintln!("Phase 3: Running search query...");
     let t_search_start = Instant::now();
+    start_phase_telemetry(profile_dir);
     let search_prof = start_phase_profiler(profile_dir);
     if let Err(msg) = phase_search(cm, owner_id, dataset_name).await {
         warn!("Search FAILED: {msg}");
         status.search = format!("failed: {msg}");
     }
     finish_phase_profiler(search_prof, profile_dir, "search");
+    finish_phase_telemetry(profile_dir, "search");
     let t_search = t_search_start.elapsed().as_secs_f64();
 
     let success = status.prune == PHASE_OK
