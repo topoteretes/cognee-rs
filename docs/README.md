@@ -51,6 +51,7 @@ signatures.
 - **[observability/opentelemetry.md](observability/opentelemetry.md)** — OTLP tracing.
 - **[observability/send_telemetry.md](observability/send_telemetry.md)** — opt-out product analytics.
 - **[performance/mock-benchmark.md](performance/mock-benchmark.md)** — offline mock-LLM benchmark (+ [rationale](performance/python-approach.md)).
+- **[performance/cpu-profiling.md](performance/cpu-profiling.md)** — CPU profiling findings: where the pipeline spends CPU + prioritised optimisations.
 
 ### Build & release
 - **[build/lbug-rebuilds.md](build/lbug-rebuilds.md)** — Ladybug rebuild troubleshooting.

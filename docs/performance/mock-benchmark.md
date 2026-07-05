@@ -126,7 +126,9 @@ the shared orchestrator can drive either SDK unchanged:
     "embedding_dimensions": 0,
     "dataset_name": "bench_memories",
     "mock_llm": true
-  }
+  },
+  "node_count": 0,          // graph size after cognify (stale-cassette guard)
+  "edge_count": 0
 }
 ```
 
