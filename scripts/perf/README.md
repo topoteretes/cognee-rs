@@ -65,3 +65,50 @@ embeddings free and offline — only the LLM responses are recorded.
 After recording, verify the cassette replays with a full hit rate by running the
 offline mock command above with the API credentials cleared and confirming
 `success: true` plus graph node/edge counts identical to the recording run.
+
+## Large-document scenario (Moby-Dick)
+
+The 50-memory fixture is too small to be CPU-bound — most of cognify's wall time
+is await/IO, not compute (see `--profile-dir` below). For a profile that
+actually surfaces CPU hot paths, use a large book. `build_large_corpus.py`
+turns Project Gutenberg's Moby-Dick (~1.2 MB) into a 135-chapter corpus in the
+same `{title, content, references}` shape:
+
+```sh
+# writes scripts/perf/fixtures/large/memories.json (committed, deterministic)
+python3 scripts/perf/build_large_corpus.py
+```
+
+Record its cassette once (the only step needing credentials — ~$0.40 on
+`gpt-4o-mini`). Start small to prove the loop before spending on the full book:
+
+```sh
+set -a; . ./.env; set +a   # LLM_API_KEY / LLM_ENDPOINT (or OPENAI_* aliases)
+
+# Cheap dry-run: first 3 chapters only (~$0.05).
+COGNEE_RECORD_LLM="$(pwd)/scripts/perf/fixtures/large/cassette.json" \
+MOCK_EMBEDDING=deterministic \
+  cargo run --release -p cognee-cli --features bench -- bench \
+    --memories scripts/perf/fixtures/large/memories.json \
+    --num-memories 3 --llm-model gpt-4o-mini --output /tmp/record_large.json
+
+# Full book: drop --num-memories.
+```
+
+Then replay + profile fully offline (no key). `--profile-dir` emits a per-phase
+flamegraph SVG plus a `<phase>.telemetry.json` wall-clock breakdown;
+`--min-graph-nodes` asserts the recorded baseline so a stale cassette fails
+loudly instead of silently degrading to an empty graph:
+
+```sh
+MOCK_LLM=true MOCK_EMBEDDING=deterministic \
+  taskset -c 0 cargo run --release -p cognee-cli --features bench,profiling -- bench \
+    --mock-llm --mock-memories scripts/perf/fixtures/large/cassette.json \
+    --memories scripts/perf/fixtures/large/memories.json \
+    --profile-dir target/perf-profiles/large \
+    --min-graph-nodes <recorded_node_count> \
+    --output /tmp/mock_large.json
+```
+
+The profiler feature is signal-based (SIGPROF) — no `perf`, no root. Pin a core
+with `taskset` and use `--release` for stable samples.
