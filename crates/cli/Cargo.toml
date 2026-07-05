@@ -104,7 +104,7 @@ uuid.workspace = true
 # Optional: only pulled in by the `bench` feature (per-run temp isolation).
 tempfile = { workspace = true, optional = true }
 # Optional: only pulled in by the `profiling` feature. Pure-Rust SIGPROF
-# sampling profiler — emits flamegraph SVG + pprof protobuf, no `perf`/root.
+# sampling profiler. Emits a per-phase flamegraph SVG, no `perf` or root needed.
 pprof = { version = "0.14", default-features = false, features = ["flamegraph"], optional = true }
 
 [dev-dependencies]

@@ -5,7 +5,7 @@ Turns a Project Gutenberg plain-text book into the `{title, content,
 references}` corpus shape the `cognee-cli bench` subcommand expects (same shape
 as `fixtures/memories.json`), one memory per chapter.
 
-Default book: Moby-Dick (Gutenberg ebook 2701, ~1.2 MB) — large enough to push
+Default book: Moby-Dick (Gutenberg ebook 2701, ~1.2 MB). Large enough to push
 cognify past the point where it is CPU-bound, unlike the 50-memory fixture.
 
 The output is deterministic (no random content), so the replay cassette lookup
@@ -54,7 +54,7 @@ def split_chapters(body: str) -> list[dict]:
     """
     matches = list(CHAPTER_RE.finditer(body))
     if not matches:
-        sys.exit("error: no chapter headings found — is this the expected book?")
+        sys.exit("error: no chapter headings found. Is this the expected book?")
 
     # Find the restart of chapter 1 (end of the table of contents).
     first_one = int(matches[0].group(1))

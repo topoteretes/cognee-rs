@@ -68,7 +68,7 @@ offline mock command above with the API credentials cleared and confirming
 
 ## Large-document scenario (Moby-Dick)
 
-The 50-memory fixture is too small to be CPU-bound — most of cognify's wall time
+The 50-memory fixture is too small to be CPU-bound. Most of cognify's wall time
 is await/IO, not compute (see `--profile-dir` below). For a profile that
 actually surfaces CPU hot paths, use a large book. `build_large_corpus.py`
 turns Project Gutenberg's Moby-Dick (~1.2 MB) into a 135-chapter corpus in the
@@ -79,24 +79,30 @@ same `{title, content, references}` shape:
 python3 scripts/perf/build_large_corpus.py
 ```
 
-Record its cassette once (the only step needing credentials — ~$0.40 on
-`gpt-4o-mini`). Start small to prove the loop before spending on the full book:
+Record its cassette once. This is the only step that needs credentials (about
+$0.40 on `gpt-4o-mini`). Start small to prove the loop before spending on the
+full book.
+
+`LLM_MAX_PARALLEL_REQUESTS=1` keeps the recording under a rate-limited key's
+tokens-per-minute cap; the default of 20 concurrent requests will trip a 429 on
+a large book. `LLM_MAX_RETRIES=8` absorbs any remaining spikes.
 
 ```sh
 set -a; . ./.env; set +a   # LLM_API_KEY / LLM_ENDPOINT (or OPENAI_* aliases)
 
-# Cheap dry-run: first 3 chapters only (~$0.05).
+# Cheap dry-run: first 3 chapters only (about $0.05).
+LLM_MAX_PARALLEL_REQUESTS=1 LLM_MAX_RETRIES=8 \
 COGNEE_RECORD_LLM="$(pwd)/scripts/perf/fixtures/large/cassette.json" \
 MOCK_EMBEDDING=deterministic \
   cargo run --release -p cognee-cli --features bench -- bench \
     --memories scripts/perf/fixtures/large/memories.json \
     --num-memories 3 --llm-model gpt-4o-mini --output /tmp/record_large.json
 
-# Full book: drop --num-memories.
+# Full book: drop --num-memories. The committed cassette records 1232 nodes.
 ```
 
-Then replay + profile fully offline (no key). `--profile-dir` emits a per-phase
-flamegraph SVG plus a `<phase>.telemetry.json` wall-clock breakdown;
+Then replay and profile fully offline (no key). `--profile-dir` emits a per-phase
+flamegraph SVG plus a `<phase>.telemetry.json` wall-clock breakdown.
 `--min-graph-nodes` asserts the recorded baseline so a stale cassette fails
 loudly instead of silently degrading to an empty graph:
 
@@ -106,9 +112,9 @@ MOCK_LLM=true MOCK_EMBEDDING=deterministic \
     --mock-llm --mock-memories scripts/perf/fixtures/large/cassette.json \
     --memories scripts/perf/fixtures/large/memories.json \
     --profile-dir target/perf-profiles/large \
-    --min-graph-nodes <recorded_node_count> \
+    --min-graph-nodes 1232 \
     --output /tmp/mock_large.json
 ```
 
-The profiler feature is signal-based (SIGPROF) — no `perf`, no root. Pin a core
-with `taskset` and use `--release` for stable samples.
+The profiler feature is signal-based (SIGPROF), so it needs no `perf` and no
+root. Pin a core with `taskset` and use `--release` for stable samples.

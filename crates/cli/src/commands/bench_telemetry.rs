@@ -1,20 +1,20 @@
 //! Offline per-stage wall-clock telemetry for the `bench` subcommand.
 //!
-//! The pipeline is already blanketed with `#[tracing::instrument]` spans (60+
-//! sites). This layer *harvests* them rather than adding new instrumentation:
-//! it installs into the CLI's global subscriber and, while armed, accumulates
-//! per-span-name **busy** (actively executing) and **idle** (alive but awaiting)
-//! time. The bench driver arms it around each phase and dumps a breakdown.
+//! The pipeline is already covered with `#[tracing::instrument]` spans. This
+//! layer reuses them instead of adding new instrumentation. It installs into
+//! the CLI's global subscriber and, while armed, accumulates per-span busy time
+//! (actively executing) and idle time (alive but awaiting). The bench driver
+//! arms it around each phase and writes a breakdown.
 //!
-//! This is the complement to the pprof flamegraphs. A sampling profiler only
-//! sees threads that are *on-CPU*, so it is blind to the await/IO time that
-//! dominates the pipeline at small corpus sizes. `busy` mirrors what the
-//! flamegraph measures; `idle` is exactly the off-CPU time it cannot see —
-//! together they attribute the full wall-clock of each stage to concrete spans.
+//! It complements the pprof flamegraphs. A sampling profiler only sees threads
+//! that are on-CPU, so it cannot account for the await/IO time that dominates
+//! the pipeline at small corpus sizes. The busy figure mirrors what the
+//! flamegraph measures. The idle figure is the off-CPU time it misses. Together
+//! they cover the full wall-clock of each stage.
 //!
-//! Aggregation is by span **name** across all instances, so for parallel stages
-//! (e.g. concurrent chunk extractions) the summed `total` can exceed real
-//! wall-clock time — it is a relative attribution of work per stage, not an
+//! Aggregation is by span name across all instances. For parallel stages such
+//! as concurrent chunk extractions the summed total can exceed real wall-clock
+//! time, so treat it as a relative attribution of work per stage rather than an
 //! exclusive timeline.
 #![allow(clippy::unwrap_used, reason = "lock poison is unrecoverable")]
 
@@ -35,7 +35,7 @@ use tracing_subscriber::registry::LookupSpan;
 struct SpanAgg {
     /// Number of spans of this name closed while armed.
     count: u64,
-    /// Total time spans of this name were actively executing (on-CPU-ish).
+    /// Total time spans of this name were actively executing (on CPU).
     busy_ns: u128,
     /// Total time spans of this name were alive but awaiting (off-CPU).
     idle_ns: u128,
@@ -109,8 +109,8 @@ where
         let Some(span) = ctx.span(&id) else {
             return;
         };
-        // Read the accumulated timings (plus the final idle tail) then drop the
-        // extensions borrow before touching the span's metadata / the store.
+        // Read the accumulated timings and the final idle interval, then drop
+        // the extensions borrow before reading the span name and the store.
         let (busy_ns, idle_ns) = {
             let mut ext = span.extensions_mut();
             let Some(t) = ext.get_mut::<Timings>() else {

@@ -68,7 +68,7 @@ struct BenchResult {
     status: BenchStatus,
     success: bool,
     config: BenchConfig,
-    /// Graph size after cognify — also drives the stale-cassette guard.
+    /// Graph size after cognify. Also drives the stale-cassette guard.
     node_count: i64,
     edge_count: i64,
 }
@@ -87,9 +87,9 @@ const PHASE_OK: &str = "success";
 
 /// Start a SIGPROF sampling profiler for one phase, if profiling is enabled and
 /// `--profile-dir` was given. Returns `None` (a no-op) otherwise. pprof-rs uses
-/// signal-based sampling, so it needs no `perf` permissions and no root, and it
-/// captures every thread in the process (both the tokio workers and the Rayon
-/// pool) — exactly what we need under the mocked, CPU-bound replay.
+/// signal-based sampling, so it needs no `perf` permissions and no root. It
+/// captures every thread in the process, both the tokio workers and the Rayon
+/// pool, which is what the mocked replay needs.
 #[cfg(feature = "profiling")]
 fn start_phase_profiler(profile_dir: Option<&str>) -> Option<pprof::ProfilerGuard<'static>> {
     profile_dir?;
@@ -445,8 +445,8 @@ async fn run_phases(
     // ── Graph sanity guard ─────────────────────────────────────────────────
     // Cognify over a non-empty corpus must produce a non-empty graph. An empty
     // (or below-floor) graph means the replay cassette fell through to the
-    // empty-graph fallback (stale cassette) — fail the phase loudly instead of
-    // reporting a silent "success" over nothing.
+    // empty-graph fallback, which happens with a stale cassette. Fail the phase
+    // loudly instead of reporting a silent "success" over nothing.
     let (node_count, edge_count) = graph_counts(cm).await;
     eprintln!("Graph after cognify: {node_count} nodes, {edge_count} edges");
     if status.cognify == PHASE_OK && !memories.is_empty() {
@@ -672,11 +672,11 @@ fn bench_search_request(
 /// Exercise retrieval across representative query types so the search phase is
 /// actually profiled, not just the one graph-completion path.
 ///
-/// Runs both a no-LLM retriever (`Chunks`, `Summaries` — pure vector fetch) and
-/// the LLM one (`GraphCompletion`). Under the mocked LLM the completion call is
+/// Runs the no-LLM retrievers (`Chunks`, `Summaries`, pure vector fetch) and the
+/// LLM one (`GraphCompletion`). Under the mocked LLM the completion call is
 /// near-free, so the no-LLM retrievers are what surface the real retrieval cost
-/// (vector KNN + chunk/summary materialization) in `search.svg`. Per-query wall
-/// times are logged; the phase's aggregate time is what `search_time` reports.
+/// (vector KNN plus chunk/summary materialization) in `search.svg`. Per-query
+/// wall times are logged. The phase aggregate is what `search_time` reports.
 async fn phase_search(
     cm: &Arc<ComponentManager>,
     owner_id: Uuid,
