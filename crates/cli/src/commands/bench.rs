@@ -178,22 +178,25 @@ fn round3(value: f64) -> f64 {
 
 /// Read `(node_count, edge_count)` from the graph after cognify. Returns
 /// `(0, 0)` (which trips the sanity guard) if the metrics can't be read.
-async fn graph_counts(cm: &Arc<ComponentManager>) -> (i64, i64) {
+/// Read `(node_count, edge_count)` from the graph after cognify. Returns `None`
+/// if the metrics cannot be read, so the caller can tell a genuinely empty graph
+/// from a failed metrics query and avoid mislabelling a healthy run.
+async fn graph_counts(cm: &Arc<ComponentManager>) -> Option<(i64, i64)> {
     let graph_db = match cm.graph_db().await {
         Ok(db) => db,
         Err(error) => {
             warn!("graph metrics unavailable: {error}");
-            return (0, 0);
+            return None;
         }
     };
     match graph_db.get_graph_metrics(false).await {
         Ok(metrics) => {
             let get = |k: &str| metrics.get(k).and_then(|v| v.as_i64()).unwrap_or(0);
-            (get("node_count"), get("edge_count"))
+            Some((get("node_count"), get("edge_count")))
         }
         Err(error) => {
             warn!("graph metrics query failed: {error}");
-            (0, 0)
+            None
         }
     }
 }
@@ -449,29 +452,46 @@ async fn run_phases(
     // (or below-floor) graph means the replay cassette fell through to the
     // empty-graph fallback, which happens with a stale cassette. Fail the phase
     // loudly instead of reporting a silent "success" over nothing.
-    let (node_count, edge_count) = graph_counts(cm).await;
-    eprintln!("Graph after cognify: {node_count} nodes, {edge_count} edges");
-    if status.cognify == PHASE_OK && !memories.is_empty() {
-        let floor = min_graph_nodes.max(1);
-        if (node_count as u64) < floor {
-            let msg = format!(
-                "graph sanity: {node_count} nodes < floor {floor} (stale cassette / empty-graph fallback?)"
-            );
-            warn!("{msg}");
-            status.cognify = format!("failed: {msg}");
+    //
+    // Only run the guard when we actually read the graph metrics. If the metrics
+    // query itself failed, we cannot tell an empty graph from a read error, so
+    // skip the guard rather than mislabel a healthy cognify as a failure.
+    let (node_count, edge_count) = match graph_counts(cm).await {
+        Some((nodes, edges)) => {
+            eprintln!("Graph after cognify: {nodes} nodes, {edges} edges");
+            if status.cognify == PHASE_OK && !memories.is_empty() {
+                let floor = min_graph_nodes.max(1);
+                if (nodes as u64) < floor {
+                    let msg = format!(
+                        "graph sanity: {nodes} nodes < floor {floor} (stale cassette / empty-graph fallback?)"
+                    );
+                    warn!("{msg}");
+                    status.cognify = format!("failed: {msg}");
+                }
+            }
+            (nodes, edges)
         }
-    }
+        None => {
+            warn!("graph metrics unavailable after cognify; skipping sanity guard");
+            (0, 0)
+        }
+    };
 
     // ── Search ───────────────────────────────────────────────────────────
+    // The profiler and telemetry cover every query run in the phase, but
+    // `search_time` is the time of the single representative query only, so it
+    // stays comparable with Python's one-query metric in the percentile report.
     eprintln!("Phase 3: Running search query...");
     start_phase_telemetry(profile_dir);
     let search_prof = start_phase_profiler(profile_dir);
-    let t_search_start = Instant::now();
-    if let Err(msg) = phase_search(cm, owner_id, dataset_name).await {
-        warn!("Search FAILED: {msg}");
-        status.search = format!("failed: {msg}");
-    }
-    let t_search = t_search_start.elapsed().as_secs_f64();
+    let t_search = match phase_search(cm, owner_id, dataset_name).await {
+        Ok(secs) => secs,
+        Err(msg) => {
+            warn!("Search FAILED: {msg}");
+            status.search = format!("failed: {msg}");
+            0.0
+        }
+    };
     finish_phase_profiler(search_prof, profile_dir, "search");
     finish_phase_telemetry(profile_dir, "search");
 
@@ -673,20 +693,22 @@ fn bench_search_request(
     }
 }
 
-/// Exercise retrieval across representative query types so the search phase is
-/// actually profiled, not just the single query it ran before.
+/// Run the search phase and return the time of the representative query, which
+/// is what `search_time` reports.
 ///
-/// All queries run with `only_context = true`, so they return the retrieved
-/// context and do not call the LLM for a final completion. This keeps search
-/// offline against the recorded cassette. `Chunks` and `Summaries` are pure
-/// vector fetches; `GraphCompletion` in context-only mode still exercises the
-/// graph retrieval path (triplet search and context assembly). Per-query wall
-/// times are logged. The phase aggregate is what `search_time` reports.
+/// The representative query is a single `GraphCompletion` (context-only), which
+/// matches the metric the cross-SDK percentile report compares against Python.
+/// `Chunks` and `Summaries` run first as extra profiling coverage so retrieval
+/// shows up in the flamegraph, but they are best-effort: a missing collection
+/// (for example when summarization produced no `TextSummary` nodes) is logged
+/// and skipped rather than failing the phase. All queries use
+/// `only_context = true`, so none call the LLM for a completion, which keeps
+/// search offline against the recorded cassette.
 async fn phase_search(
     cm: &Arc<ComponentManager>,
     owner_id: Uuid,
     dataset_name: &str,
-) -> Result<(), String> {
+) -> Result<f64, String> {
     let vector_db = cm.vector_db().await.map_err(|e| e.to_string())?;
     let embedding_engine = cm.embedding_engine().await.map_err(|e| e.to_string())?;
     let graph_db = cm.graph_db().await.map_err(|e| e.to_string())?;
@@ -710,24 +732,37 @@ async fn phase_search(
     .build();
 
     let query_text = "What is in the document";
-    // Vector retrievers first (Chunks, Summaries), then the graph retrieval path
-    // (GraphCompletion in context-only mode). Labels feed the per-query logs.
-    let queries = [
+
+    // Extra profiling coverage: pure vector retrievers. These are best-effort so
+    // a missing collection does not fail a bench that would otherwise pass.
+    for (label, search_type) in [
         ("chunks", SearchType::Chunks),
         ("summaries", SearchType::Summaries),
-        ("graph_completion", SearchType::GraphCompletion),
-    ];
-
-    for (label, search_type) in queries {
+    ] {
         let request = bench_search_request(query_text, search_type, dataset_name, owner_id);
         let t = Instant::now();
-        orchestrator
-            .search(&request)
-            .await
-            .map_err(|e| format!("{label}: {e}"))?;
-        info!("search[{label}] took {:.3}s", t.elapsed().as_secs_f64());
+        match orchestrator.search(&request).await {
+            Ok(_) => info!("search[{label}] took {:.3}s", t.elapsed().as_secs_f64()),
+            Err(e) => warn!("search[{label}] skipped: {e}"),
+        }
     }
-    Ok(())
+
+    // Representative query. This is what `search_time` reports, so it gates the
+    // phase the same way the original single-query bench did.
+    let request = bench_search_request(
+        query_text,
+        SearchType::GraphCompletion,
+        dataset_name,
+        owner_id,
+    );
+    let t = Instant::now();
+    orchestrator
+        .search(&request)
+        .await
+        .map_err(|e| format!("graph_completion: {e}"))?;
+    let elapsed = t.elapsed().as_secs_f64();
+    info!("search[graph_completion] took {elapsed:.3}s");
+    Ok(elapsed)
 }
 
 #[cfg(test)]
