@@ -45,6 +45,11 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-ios-
 
+      # lance-encoding v6.0.0 has a build script that calls `protoc`;
+      # it is not pre-installed on macos-14 runners.
+      - name: Install protoc (required by lance-encoding build script)
+        run: brew install protobuf
+
       # `cargo check` type-checks the crate for iOS without linking —
       # avoids the 6–7 GB .a files that a full `cargo build --release` produces
       # and keeps peak disk usage well under the runner's ~14 GB limit.

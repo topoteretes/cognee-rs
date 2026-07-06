@@ -137,10 +137,10 @@ ollama pull llama3.2:3b
 #                        writes the file on Drop).
 # MOCK_EMBEDDING      – use deterministic mock embeddings so only LLM
 #                        responses are recorded (no embedding API calls).
-# LLM_API_BASE / LLM_API_KEY – Ollama's OpenAI-compatible endpoint.
+# LLM_ENDPOINT / LLM_API_KEY – Ollama's OpenAI-compatible endpoint.
 COGNEE_RECORD_LLM="$(pwd)/ios/Tests/CogneeSDKTests/Fixtures/demo_cassette.json" \
 MOCK_EMBEDDING=deterministic \
-LLM_API_BASE=http://localhost:11434/v1 \
+LLM_ENDPOINT=http://localhost:11434/v1 \
 LLM_API_KEY=ollama \
   cargo run --release -p cognee-cli -- bench \
     --memories ios/Tests/CogneeSDKTests/Fixtures/memories.json \
