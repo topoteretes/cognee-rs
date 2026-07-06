@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use cognee_llm::{GenerationOptions, Llm, LlmExt};
+use cognee_llm::{GenerationOptions, Llm, LlmError, LlmExt};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
@@ -37,6 +37,29 @@ struct BatchedGraphs {
     /// One graph per input chunk, in input order.
     #[serde(default)]
     graphs: Vec<KnowledgeGraph>,
+}
+
+/// Ensure every node has a non-empty name (Python `Node.__init__` compat: name
+/// defaults to id when empty). Shared by the per-chunk and batched paths so the
+/// rule can only ever live in one place.
+fn normalize_node_names(graph: &mut KnowledgeGraph) {
+    for node in &mut graph.nodes {
+        if node.name.is_empty() {
+            node.name = node.id.clone();
+        }
+    }
+}
+
+/// Why a batched group call could not be used as-is, so the caller can react to
+/// each cause differently.
+enum GroupError {
+    /// The provider rate-limited the batched call. Falling back to per-chunk
+    /// would issue `group_size` more requests and amplify the 429, so the caller
+    /// propagates this instead of fanning out.
+    RateLimited(CognifyError),
+    /// A parse / serialization / other failure. Safe to fall back to per-chunk
+    /// extraction, since that is a different (smaller) request shape.
+    Other(CognifyError),
 }
 
 /// Fact extractor for knowledge graph generation.
@@ -161,12 +184,7 @@ impl FactExtractor {
         );
 
         // Post-processing: ensure every node has a non-empty name (Python compat).
-        // In Python's Node.__init__, name defaults to id when empty.
-        for node in &mut graph.nodes {
-            if node.name.is_empty() {
-                node.name = node.id.clone();
-            }
-        }
+        normalize_node_names(&mut graph);
 
         Ok(graph)
     }
@@ -231,7 +249,13 @@ impl FactExtractor {
     /// order always matches input order, so callers that pair graphs with chunk
     /// ids by position stay correct.
     ///
-    /// `group_size <= 1` is exactly per-chunk extraction (one request per chunk).
+    /// `group_size <= 1` reduces to per-chunk extraction (one request per chunk).
+    /// That equivalence is on request count only: groups here are dispatched
+    /// serially, whereas [`extract_facts_batch`](Self::extract_facts_batch) runs
+    /// chunks concurrently, so the two are not latency-equivalent. Callers that
+    /// wire this into a concurrent stage should group chunks and push each group
+    /// through their existing parallelism bound rather than hand a whole document
+    /// to this serial loop.
     ///
     /// Note: this trades requests for weaker per-chunk isolation and a larger
     /// per-call prompt. Whether it preserves extraction quality depends on the
@@ -256,20 +280,32 @@ impl FactExtractor {
                 continue;
             }
 
-            match self.extract_group(group, custom_prompt.as_deref()).await {
-                Ok(graphs) if graphs.len() == group.len() => out.extend(graphs),
-                other => {
-                    if let Err(e) = other {
-                        warn!("Batched extraction failed ({e}); falling back to per-chunk.");
-                    } else {
-                        warn!(
-                            "Batched extraction returned the wrong graph count; \
-                             falling back to per-chunk for this group."
-                        );
-                    }
-                    for text in group {
-                        out.push(self.extract_facts(text, custom_prompt.as_deref()).await?);
-                    }
+            // A batched group either succeeds with the right count, or we decide
+            // whether to fall back to per-chunk. We never fall back on a provider
+            // rate limit: that would issue `group_size` more requests and amplify
+            // the 429 the batched call already hit, so it propagates instead.
+            let fall_back = match self.extract_group(group, custom_prompt.as_deref()).await {
+                Ok(graphs) if graphs.len() == group.len() => {
+                    out.extend(graphs);
+                    false
+                }
+                Ok(_) => {
+                    warn!(
+                        "Batched extraction returned the wrong graph count; \
+                         falling back to per-chunk for this group."
+                    );
+                    true
+                }
+                Err(GroupError::RateLimited(e)) => return Err(e),
+                Err(GroupError::Other(e)) => {
+                    warn!("Batched extraction failed ({e}); falling back to per-chunk.");
+                    true
+                }
+            };
+
+            if fall_back {
+                for text in group {
+                    out.push(self.extract_facts(text, custom_prompt.as_deref()).await?);
                 }
             }
         }
@@ -279,12 +315,13 @@ impl FactExtractor {
 
     /// One batched LLM call for a group of chunks. Returns one graph per chunk,
     /// in input order. Caller is responsible for the per-chunk fallback when the
-    /// returned count does not match the group size.
+    /// returned count does not match the group size. A provider rate limit is
+    /// surfaced as [`GroupError::RateLimited`] so the caller does not fan out.
     async fn extract_group(
         &self,
         group: &[String],
         custom_prompt: Option<&str>,
-    ) -> Result<Vec<KnowledgeGraph>, CognifyError> {
+    ) -> Result<Vec<KnowledgeGraph>, GroupError> {
         let base = custom_prompt.unwrap_or(DEFAULT_GRAPH_PROMPT);
         let system_prompt = format!("{base}{BATCH_GRAPH_INSTRUCTIONS}");
 
@@ -294,7 +331,7 @@ impl FactExtractor {
             .map(|(index, text)| serde_json::json!({ "index": index, "text": text }))
             .collect();
         let user_prompt = serde_json::to_string(&input)
-            .map_err(|e| CognifyError::SerializationError(e.to_string()))?;
+            .map_err(|e| GroupError::Other(CognifyError::SerializationError(e.to_string())))?;
 
         let batched: BatchedGraphs = self
             .llm
@@ -310,16 +347,19 @@ impl FactExtractor {
                 }),
             )
             .await
-            .map_err(|e| CognifyError::LlmError(e.to_string()))?;
+            .map_err(|e| {
+                let ce = CognifyError::LlmError(e.to_string());
+                if matches!(e, LlmError::RateLimitExceeded(_)) {
+                    GroupError::RateLimited(ce)
+                } else {
+                    GroupError::Other(ce)
+                }
+            })?;
 
         let mut graphs = batched.graphs;
-        // Same post-processing as extract_facts: empty name defaults to id.
+        // Same post-processing as extract_facts (shared helper keeps them in lockstep).
         for graph in &mut graphs {
-            for node in &mut graph.nodes {
-                if node.name.is_empty() {
-                    node.name = node.id.clone();
-                }
-            }
+            normalize_node_names(graph);
         }
         Ok(graphs)
     }
@@ -720,6 +760,59 @@ mod tests {
             throttle.metrics().allowed,
             groups + n as u64,
             "expected {groups} batched attempts + {n} per-chunk fallbacks"
+        );
+    }
+
+    /// Rate-limits a batched call but would succeed on a per-chunk call, so an
+    /// `Ok` result would mean the fallback fired.
+    struct RateLimitBatchMock;
+
+    #[async_trait::async_trait]
+    impl Llm for RateLimitBatchMock {
+        async fn generate(
+            &self,
+            _messages: Vec<cognee_llm::Message>,
+            _options: Option<GenerationOptions>,
+        ) -> cognee_llm::LlmResult<cognee_llm::GenerationResponse> {
+            unreachable!("extraction uses structured output, not generate")
+        }
+
+        async fn create_structured_output_with_messages_raw(
+            &self,
+            messages: Vec<cognee_llm::Message>,
+            _json_schema: &serde_json::Value,
+            _options: Option<GenerationOptions>,
+        ) -> cognee_llm::LlmResult<serde_json::Value> {
+            let last = messages.last().map(|m| m.content.as_str()).unwrap_or("");
+            // A batched call serialises the chunks as a JSON array: simulate a 429.
+            if serde_json::from_str::<Vec<serde_json::Value>>(last).is_ok() {
+                return Err(LlmError::RateLimitExceeded("simulated 429".to_string()));
+            }
+            // A per-chunk fallback call would succeed, so reaching here means we
+            // fell back — which this test asserts must NOT happen.
+            Ok(serde_json::json!({ "nodes": [], "edges": [] }))
+        }
+
+        fn model(&self) -> &str {
+            "rate-limit-batch-mock"
+        }
+    }
+
+    /// A provider rate limit on a batched call must propagate, not fan out to
+    /// per-chunk extraction (which would issue `group_size` more requests and
+    /// amplify the 429). The per-chunk path here would succeed, so an `Err`
+    /// proves the fallback did not fire.
+    #[tokio::test]
+    async fn grouped_extraction_propagates_rate_limit_without_fallback() {
+        let texts: Vec<String> = (0..4).map(|i| format!("chunk {i}")).collect();
+        let result = FactExtractor::new(Arc::new(RateLimitBatchMock))
+            .extract_facts_grouped(texts, None, 2)
+            .await;
+
+        let err = result.expect_err("rate limit must propagate instead of falling back");
+        assert!(
+            err.to_string().contains("simulated 429"),
+            "expected the propagated rate-limit error, got: {err}"
         );
     }
 }
