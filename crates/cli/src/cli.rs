@@ -85,6 +85,19 @@ pub struct BenchArgs {
     /// Write the result JSON to this file.
     #[arg(long = "output", short = 'o')]
     pub output: Option<String>,
+
+    /// Directory to write per-phase profiles into (a flamegraph SVG plus a
+    /// span-timing JSON per phase). Only honoured when built with
+    /// `--features profiling`. Ignored otherwise.
+    #[arg(long = "profile-dir")]
+    pub profile_dir: Option<String>,
+
+    /// Minimum node count cognify must produce (stale-cassette guard). A run
+    /// over a non-empty corpus always requires a non-empty graph. Pass a higher
+    /// value to assert the recorded baseline. The default of 0 only checks that
+    /// the graph is non-empty.
+    #[arg(long = "min-graph-nodes", default_value_t = 0)]
+    pub min_graph_nodes: u64,
 }
 
 #[cfg(feature = "visualization")]

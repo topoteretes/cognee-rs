@@ -68,6 +68,9 @@ struct BenchResult {
     status: BenchStatus,
     success: bool,
     config: BenchConfig,
+    /// Graph size after cognify. Also drives the stale-cassette guard.
+    node_count: i64,
+    edge_count: i64,
 }
 
 /// Per-phase status: `"success"` or `"failed: <msg>"` (Python parity).
@@ -82,9 +85,120 @@ struct BenchStatus {
 
 const PHASE_OK: &str = "success";
 
+/// Start a SIGPROF sampling profiler for one phase, if profiling is enabled and
+/// `--profile-dir` was given. Returns `None` (a no-op) otherwise. pprof-rs uses
+/// signal-based sampling, so it needs no `perf` permissions and no root. It
+/// captures every thread in the process, both the tokio workers and the Rayon
+/// pool, which is what the mocked replay needs.
+#[cfg(feature = "profiling")]
+fn start_phase_profiler(profile_dir: Option<&str>) -> Option<pprof::ProfilerGuard<'static>> {
+    profile_dir?;
+    match pprof::ProfilerGuardBuilder::default()
+        .frequency(997)
+        .blocklist(&["libc", "libgcc", "pthread", "vdso"])
+        .build()
+    {
+        Ok(guard) => Some(guard),
+        Err(error) => {
+            warn!("profiler: failed to start: {error}");
+            None
+        }
+    }
+}
+
+/// Stop a phase profiler and write `<profile_dir>/<phase>.svg`.
+#[cfg(feature = "profiling")]
+fn finish_phase_profiler(
+    guard: Option<pprof::ProfilerGuard<'static>>,
+    profile_dir: Option<&str>,
+    phase: &str,
+) {
+    let (Some(guard), Some(dir)) = (guard, profile_dir) else {
+        return;
+    };
+    let report = match guard.report().build() {
+        Ok(report) => report,
+        Err(error) => {
+            warn!("profiler: failed to build report for {phase}: {error}");
+            return;
+        }
+    };
+    if let Err(error) = std::fs::create_dir_all(dir) {
+        warn!("profiler: cannot create dir '{dir}': {error}");
+        return;
+    }
+    let svg_path = format!("{dir}/{phase}.svg");
+    match std::fs::File::create(&svg_path) {
+        Ok(file) => match report.flamegraph(file) {
+            Ok(()) => info!("profiler: wrote {svg_path}"),
+            Err(error) => warn!("profiler: flamegraph write failed for {phase}: {error}"),
+        },
+        Err(error) => warn!("profiler: cannot create '{svg_path}': {error}"),
+    }
+}
+
+// No-op shims so the call sites stay identical when the feature is off.
+#[cfg(not(feature = "profiling"))]
+fn start_phase_profiler(_profile_dir: Option<&str>) -> Option<()> {
+    None
+}
+
+#[cfg(not(feature = "profiling"))]
+fn finish_phase_profiler(_guard: Option<()>, _profile_dir: Option<&str>, _phase: &str) {}
+
+/// Arm the per-stage span-timing telemetry for one phase (see
+/// `bench_telemetry`). Complements the flamegraph: attributes the off-CPU
+/// await/IO time the sampling profiler cannot see. No-op unless profiling is
+/// enabled and `--profile-dir` was given.
+#[cfg(feature = "profiling")]
+fn start_phase_telemetry(profile_dir: Option<&str>) {
+    if profile_dir.is_some() {
+        super::bench_telemetry::arm();
+    }
+}
+
+/// Disarm the telemetry and write `<profile_dir>/<phase>.telemetry.json`.
+#[cfg(feature = "profiling")]
+fn finish_phase_telemetry(profile_dir: Option<&str>, phase: &str) {
+    if let Some(dir) = profile_dir {
+        super::bench_telemetry::finish_phase(dir, phase);
+    }
+}
+
+#[cfg(not(feature = "profiling"))]
+fn start_phase_telemetry(_profile_dir: Option<&str>) {}
+
+#[cfg(not(feature = "profiling"))]
+fn finish_phase_telemetry(_profile_dir: Option<&str>, _phase: &str) {}
+
 /// Round to 3 decimals to match Python's `round(x, 3)` output.
 fn round3(value: f64) -> f64 {
     (value * 1000.0).round() / 1000.0
+}
+
+/// Read `(node_count, edge_count)` from the graph after cognify. Returns
+/// `(0, 0)` (which trips the sanity guard) if the metrics can't be read.
+/// Read `(node_count, edge_count)` from the graph after cognify. Returns `None`
+/// if the metrics cannot be read, so the caller can tell a genuinely empty graph
+/// from a failed metrics query and avoid mislabelling a healthy run.
+async fn graph_counts(cm: &Arc<ComponentManager>) -> Option<(i64, i64)> {
+    let graph_db = match cm.graph_db().await {
+        Ok(db) => db,
+        Err(error) => {
+            warn!("graph metrics unavailable: {error}");
+            return None;
+        }
+    };
+    match graph_db.get_graph_metrics(false).await {
+        Ok(metrics) => {
+            let get = |k: &str| metrics.get(k).and_then(|v| v.as_i64()).unwrap_or(0);
+            Some((get("node_count"), get("edge_count")))
+        }
+        Err(error) => {
+            warn!("graph metrics query failed: {error}");
+            None
+        }
+    }
 }
 
 /// Shape a memory into the document text — mirrors Python `memory_to_text`:
@@ -238,6 +352,8 @@ pub fn run(args: BenchArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> {
         owner_id,
         &args.dataset_name,
         &memories,
+        args.profile_dir.as_deref(),
+        args.min_graph_nodes,
         BenchConfig {
             llm_model,
             embedding_model,
@@ -270,6 +386,8 @@ async fn run_phases(
     owner_id: Uuid,
     dataset_name: &str,
     memories: &[Memory],
+    profile_dir: Option<&str>,
+    min_graph_nodes: u64,
     config: BenchConfig,
 ) -> BenchResult {
     let n = memories.len();
@@ -301,32 +419,81 @@ async fn run_phases(
 
     // ── Add ────────────────────────────────────────────────────────────────
     eprintln!("Phase 1: Adding {n} memories...");
+    start_phase_telemetry(profile_dir);
+    let add_prof = start_phase_profiler(profile_dir);
     let t_add_start = Instant::now();
     if let Err(msg) = phase_add(cm, owner_id, dataset_name, memories).await {
         warn!("Add FAILED: {msg}");
         status.add = format!("failed: {msg}");
     }
+    // Stop the phase timer before writing the flamegraph and telemetry JSON so
+    // the reported time is the workload only, not the artifact generation.
     let t_add = t_add_start.elapsed().as_secs_f64();
+    finish_phase_profiler(add_prof, profile_dir, "add");
+    finish_phase_telemetry(profile_dir, "add");
 
     // ── Cognify ──────────────────────────────────────────────────────────
     eprintln!("Phase 2: Running cognify (knowledge graph build)...");
+    start_phase_telemetry(profile_dir);
+    let cognify_prof = start_phase_profiler(profile_dir);
     let t_cognify_start = Instant::now();
     if let Err(msg) = phase_cognify(cm, owner_id, dataset_name).await {
         warn!("Cognify FAILED: {msg}");
         status.cognify = format!("failed: {msg}");
     }
     let t_cognify = t_cognify_start.elapsed().as_secs_f64();
+    finish_phase_profiler(cognify_prof, profile_dir, "cognify");
+    finish_phase_telemetry(profile_dir, "cognify");
 
     let t_total = t_add + t_cognify;
 
+    // ── Graph sanity guard ─────────────────────────────────────────────────
+    // Cognify over a non-empty corpus must produce a non-empty graph. An empty
+    // (or below-floor) graph means the replay cassette fell through to the
+    // empty-graph fallback, which happens with a stale cassette. Fail the phase
+    // loudly instead of reporting a silent "success" over nothing.
+    //
+    // Only run the guard when we actually read the graph metrics. If the metrics
+    // query itself failed, we cannot tell an empty graph from a read error, so
+    // skip the guard rather than mislabel a healthy cognify as a failure.
+    let (node_count, edge_count) = match graph_counts(cm).await {
+        Some((nodes, edges)) => {
+            eprintln!("Graph after cognify: {nodes} nodes, {edges} edges");
+            if status.cognify == PHASE_OK && !memories.is_empty() {
+                let floor = min_graph_nodes.max(1);
+                if (nodes as u64) < floor {
+                    let msg = format!(
+                        "graph sanity: {nodes} nodes < floor {floor} (stale cassette / empty-graph fallback?)"
+                    );
+                    warn!("{msg}");
+                    status.cognify = format!("failed: {msg}");
+                }
+            }
+            (nodes, edges)
+        }
+        None => {
+            warn!("graph metrics unavailable after cognify; skipping sanity guard");
+            (0, 0)
+        }
+    };
+
     // ── Search ───────────────────────────────────────────────────────────
+    // The profiler and telemetry cover every query run in the phase, but
+    // `search_time` is the time of the single representative query only, so it
+    // stays comparable with Python's one-query metric in the percentile report.
     eprintln!("Phase 3: Running search query...");
-    let t_search_start = Instant::now();
-    if let Err(msg) = phase_search(cm, owner_id, dataset_name).await {
-        warn!("Search FAILED: {msg}");
-        status.search = format!("failed: {msg}");
-    }
-    let t_search = t_search_start.elapsed().as_secs_f64();
+    start_phase_telemetry(profile_dir);
+    let search_prof = start_phase_profiler(profile_dir);
+    let t_search = match phase_search(cm, owner_id, dataset_name).await {
+        Ok(secs) => secs,
+        Err(msg) => {
+            warn!("Search FAILED: {msg}");
+            status.search = format!("failed: {msg}");
+            0.0
+        }
+    };
+    finish_phase_profiler(search_prof, profile_dir, "search");
+    finish_phase_telemetry(profile_dir, "search");
 
     let success = status.prune == PHASE_OK
         && status.db_setup == PHASE_OK
@@ -345,6 +512,8 @@ async fn run_phases(
         status,
         success,
         config,
+        node_count,
+        edge_count,
     }
 }
 
@@ -485,12 +654,61 @@ async fn phase_cognify(
     Ok(())
 }
 
-/// One `search("What is in the document", only_context=true)` query.
+/// Build a bench `SearchRequest` for one query type over the bench dataset.
+fn bench_search_request(
+    query_text: &str,
+    search_type: SearchType,
+    dataset_name: &str,
+    owner_id: Uuid,
+) -> SearchRequest {
+    SearchRequest {
+        query_text: query_text.to_string(),
+        search_type,
+        top_k: Some(10),
+        datasets: Some(vec![dataset_name.to_string()]),
+        dataset_ids: None,
+        system_prompt: None,
+        system_prompt_path: None,
+        // Context-only: return the retrieved context without an LLM completion,
+        // so search stays offline against the recorded cassette.
+        only_context: Some(true),
+        use_combined_context: Some(false),
+        session_id: None,
+        node_type: None,
+        node_name: None,
+        node_name_filter_operator: None,
+        wide_search_top_k: None,
+        triplet_distance_penalty: None,
+        summarize_context: None,
+        save_interaction: Some(false),
+        user_id: Some(owner_id),
+        verbose: None,
+        feedback_influence: None,
+        retriever_specific_config: None,
+        response_schema: None,
+        custom_search_type: None,
+        auto_feedback_detection: None,
+        neighborhood_depth: None,
+        neighborhood_seed_top_k: None,
+    }
+}
+
+/// Run the search phase and return the time of the representative query, which
+/// is what `search_time` reports.
+///
+/// The representative query is a single `GraphCompletion` (context-only), which
+/// matches the metric the cross-SDK percentile report compares against Python.
+/// `Chunks` and `Summaries` run first as extra profiling coverage so retrieval
+/// shows up in the flamegraph, but they are best-effort: a missing collection
+/// (for example when summarization produced no `TextSummary` nodes) is logged
+/// and skipped rather than failing the phase. All queries use
+/// `only_context = true`, so none call the LLM for a completion, which keeps
+/// search offline against the recorded cassette.
 async fn phase_search(
     cm: &Arc<ComponentManager>,
     owner_id: Uuid,
     dataset_name: &str,
-) -> Result<(), String> {
+) -> Result<f64, String> {
     let vector_db = cm.vector_db().await.map_err(|e| e.to_string())?;
     let embedding_engine = cm.embedding_engine().await.map_err(|e| e.to_string())?;
     let graph_db = cm.graph_db().await.map_err(|e| e.to_string())?;
@@ -513,40 +731,38 @@ async fn phase_search(
     .with_dataset_resolver(Arc::clone(&database) as Arc<dyn IngestDb>)
     .build();
 
-    let request = SearchRequest {
-        query_text: "What is in the document".to_string(),
-        search_type: SearchType::GraphCompletion,
-        top_k: Some(10),
-        datasets: Some(vec![dataset_name.to_string()]),
-        dataset_ids: None,
-        system_prompt: None,
-        system_prompt_path: None,
-        only_context: Some(true),
-        use_combined_context: Some(false),
-        session_id: None,
-        node_type: None,
-        node_name: None,
-        node_name_filter_operator: None,
-        wide_search_top_k: None,
-        triplet_distance_penalty: None,
-        summarize_context: None,
-        save_interaction: Some(false),
-        user_id: Some(owner_id),
-        verbose: None,
-        feedback_influence: None,
-        retriever_specific_config: None,
-        response_schema: None,
-        custom_search_type: None,
-        auto_feedback_detection: None,
-        neighborhood_depth: None,
-        neighborhood_seed_top_k: None,
-    };
+    let query_text = "What is in the document";
 
+    // Extra profiling coverage: pure vector retrievers. These are best-effort so
+    // a missing collection does not fail a bench that would otherwise pass.
+    for (label, search_type) in [
+        ("chunks", SearchType::Chunks),
+        ("summaries", SearchType::Summaries),
+    ] {
+        let request = bench_search_request(query_text, search_type, dataset_name, owner_id);
+        let t = Instant::now();
+        match orchestrator.search(&request).await {
+            Ok(_) => info!("search[{label}] took {:.3}s", t.elapsed().as_secs_f64()),
+            Err(e) => warn!("search[{label}] skipped: {e}"),
+        }
+    }
+
+    // Representative query. This is what `search_time` reports, so it gates the
+    // phase the same way the original single-query bench did.
+    let request = bench_search_request(
+        query_text,
+        SearchType::GraphCompletion,
+        dataset_name,
+        owner_id,
+    );
+    let t = Instant::now();
     orchestrator
         .search(&request)
         .await
-        .map_err(|e| e.to_string())?;
-    Ok(())
+        .map_err(|e| format!("graph_completion: {e}"))?;
+    let elapsed = t.elapsed().as_secs_f64();
+    info!("search[graph_completion] took {elapsed:.3}s");
+    Ok(elapsed)
 }
 
 #[cfg(test)]
