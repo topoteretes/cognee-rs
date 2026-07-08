@@ -14,12 +14,14 @@
 //! [`MissPolicy::Error`] surfaces the missing hash for debugging.
 
 use std::path::Path;
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use serde_json::{Value, json};
+use thiserror::Error;
 
 use super::cassette::{LlmCassette, input_hash, vision_hash};
-use crate::error::{LlmError, LlmResult};
+use crate::error::{LlmError as CoreLlmError, LlmResult};
 use crate::llm_trait::Llm;
 use crate::types::{GenerationOptions, GenerationResponse, Message};
 
@@ -31,7 +33,7 @@ pub enum MissPolicy {
     /// aborting the run.
     #[default]
     EmptyGraph,
-    /// Return an [`LlmError`] describing the missing hash and input preview.
+    /// Return a [`CoreLlmError`] describing the missing hash and input preview.
     Error,
 }
 
@@ -136,9 +138,9 @@ fn schema_has_property(schema: &Value, name: &str) -> bool {
         .is_some_and(|props| props.contains_key(name))
 }
 
-/// Build a descriptive [`LlmError`] for a [`MissPolicy::Error`] miss.
-fn miss_error(method: &str, hash: &str, messages: &[Message]) -> LlmError {
-    LlmError::InvalidResponse(format!(
+/// Build a descriptive [`CoreLlmError`] for a [`MissPolicy::Error`] miss.
+fn miss_error(method: &str, hash: &str, messages: &[Message]) -> CoreLlmError {
+    CoreLlmError::InvalidResponse(format!(
         "ReplayLlm: no recorded {method} response for hash {hash} (input: {})",
         input_preview(messages)
     ))
@@ -215,7 +217,7 @@ impl Llm for ReplayLlm {
             }),
             None => match self.miss {
                 MissPolicy::EmptyGraph => Ok(String::new()),
-                MissPolicy::Error => Err(LlmError::InvalidResponse(format!(
+                MissPolicy::Error => Err(CoreLlmError::InvalidResponse(format!(
                     "ReplayLlm: no recorded transcription for hash {hash} ([{mime_type}])"
                 ))),
             },
@@ -224,6 +226,46 @@ impl Llm for ReplayLlm {
 
     fn model(&self) -> &str {
         &self.model
+    }
+}
+
+#[derive(Debug, Error)]
+pub enum LlmError {
+    #[error("Rate limit exceeded: {0}")]
+    RateLimitExceeded(String),
+}
+
+pub struct MockRateLimiter {
+    pub rpm_limit: u32,
+    pub tpm_limit: u32,
+    pub current_requests: Vec<Instant>,
+    pub current_tokens: Vec<(Instant, u32)>,
+}
+
+impl MockRateLimiter {
+    pub fn check_and_consume(&mut self, tokens: u32) -> Result<(), LlmError> {
+        let now = Instant::now();
+        
+        self.current_requests.retain(|&t| now.duration_since(t).as_secs() < 60);
+        self.current_tokens.retain(|&(t, _)| now.duration_since(t).as_secs() < 60);
+
+        if self.current_requests.len() as u32 >= self.rpm_limit {
+            return Err(LlmError::RateLimitExceeded(
+                "Simulated 429: RPM Limit reached".to_string(),
+            ));
+        }
+
+        let active_tokens: u32 = self.current_tokens.iter().map(|&(_, count)| count).sum();
+        if active_tokens + tokens > self.tpm_limit {
+            return Err(LlmError::RateLimitExceeded(
+                "Simulated 429: TPM Limit reached".to_string(),
+            ));
+        }
+
+        self.current_requests.push(now);
+        self.current_tokens.push((now, tokens));
+
+        Ok(())
     }
 }
 
@@ -293,7 +335,7 @@ mod tests {
         ) -> LlmResult<Value> {
             let raw = self.pop();
             serde_json::from_str(&raw)
-                .map_err(|e| LlmError::DeserializationError(format!("StubLlm: invalid JSON: {e}")))
+                .map_err(|e| CoreLlmError::DeserializationError(format!("StubLlm: invalid JSON: {e}")))
         }
 
         fn model(&self) -> &str {
@@ -436,7 +478,7 @@ mod tests {
         let result = replay
             .create_structured_output_with_messages_raw(graph_msgs(), &graph_schema(), None)
             .await;
-        assert!(matches!(result, Err(LlmError::InvalidResponse(_))));
+        assert!(matches!(result, Err(CoreLlmError::InvalidResponse(_))));
     }
 
     #[tokio::test]
@@ -523,5 +565,62 @@ mod tests {
     fn preview_picks_last_user_message() {
         let msgs = vec![Message::system("sys"), Message::user("hello")];
         assert_eq!(input_preview(&msgs), "hello");
+    }
+
+    #[test]
+    fn test_successful_consumption() {
+        let mut limiter = MockRateLimiter {
+            rpm_limit: 10,
+            tpm_limit: 100,
+            current_requests: Vec::new(),
+            current_tokens: Vec::new(),
+        };
+
+        assert!(limiter.check_and_consume(50).is_ok());
+        assert_eq!(limiter.current_requests.len(), 1);
+        assert_eq!(limiter.current_tokens.len(), 1);
+    }
+
+    #[test]
+    fn test_rpm_limit_exceeded() {
+        let mut limiter = MockRateLimiter {
+            rpm_limit: 2,
+            tpm_limit: 100,
+            current_requests: Vec::new(),
+            current_tokens: Vec::new(),
+        };
+
+        assert!(limiter.check_and_consume(10).is_ok());
+        assert!(limiter.check_and_consume(10).is_ok());
+
+        let result = limiter.check_and_consume(10);
+        assert!(result.is_err());
+        match result {
+            Err(LlmError::RateLimitExceeded(msg)) => {
+                assert_eq!(msg, "Simulated 429: RPM Limit reached");
+            }
+            _ => panic!("Expected RateLimitExceeded error"),
+        }
+    }
+
+    #[test]
+    fn test_tpm_limit_exceeded() {
+        let mut limiter = MockRateLimiter {
+            rpm_limit: 10,
+            tpm_limit: 100,
+            current_requests: Vec::new(),
+            current_tokens: Vec::new(),
+        };
+
+        assert!(limiter.check_and_consume(60).is_ok());
+
+        let result = limiter.check_and_consume(50);
+        assert!(result.is_err());
+        match result {
+            Err(LlmError::RateLimitExceeded(msg)) => {
+                assert_eq!(msg, "Simulated 429: TPM Limit reached");
+            }
+            _ => panic!("Expected RateLimitExceeded error"),
+        }
     }
 }
