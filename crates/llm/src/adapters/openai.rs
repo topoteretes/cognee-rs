@@ -4,9 +4,11 @@
 //! structured outputs based on JSON schemas derived from Rust types.
 
 use async_trait::async_trait;
+use rand::Rng;
 use reqwest::Client;
 use serde::Deserialize;
 use serde_json::{Value, json};
+use std::time::Duration;
 use tracing::{debug, instrument, warn};
 
 #[allow(unused_imports)]
@@ -179,6 +181,13 @@ impl OpenAIAdapter {
         }
     }
 
+pub fn calculate_jittered_backoff(attempt: u32, base_ms: u64, max_ms: u64) -> Duration {
+    let exponent_ceiling = base_ms.saturating_mul(2u64.pow(attempt));
+    let current_max = std::cmp::min(max_ms, exponent_ceiling);
+    let jittered_time = rand::thread_rng().gen_range(0..current_max);
+    Duration::from_millis(jittered_time)
+}
+
     /// Call the OpenAI chat completions API, retrying on transient network/server errors.
     ///
     /// Retries up to `self.network_retries` times with exponential backoff (1 s, 2 s, 4 s …
@@ -212,10 +221,11 @@ impl OpenAIAdapter {
         }
 
         let mut last_error = LlmError::NetworkError("No attempt made".to_string());
+        let mut rate_limit_attempt = 0;
 
         for attempt in 0..=self.network_retries {
             debug!(attempt, "LLM API attempt");
-            if attempt > 0 {
+            if attempt > 0 && !matches!(last_error, LlmError::RateLimitExceeded(_)) {
                 let delay = crate::retry::retry_backoff(attempt as u32);
                 warn!(
                     attempt,
@@ -253,7 +263,13 @@ impl OpenAIAdapter {
 
                 let err = match status.as_u16() {
                     401 => LlmError::AuthenticationError(error_body),
-                    429 => LlmError::RateLimitExceeded(error_body),
+                    429 => {
+                        rate_limit_attempt += 1;
+                        let delay = Self::calculate_jittered_backoff(rate_limit_attempt, 1000, 30_000);
+                        warn!("Rate limit exceeded. Sleeping for {}ms before retrying.", delay.as_millis());
+                        tokio::time::sleep(delay).await;
+                        LlmError::RateLimitExceeded(error_body)
+                    }
                     400 => LlmError::InvalidResponse(format!("Bad request: {error_body}")),
                     _ => LlmError::ApiError(format!("HTTP {status}: {error_body}")),
                 };
@@ -665,11 +681,11 @@ impl Llm for OpenAIAdapter {
         {
             let original_content = last_msg["content"].as_str().unwrap_or("");
             last_msg["content"] = json!(format!(
-                "{}\n\n\
-                    Extract the information from the text above and return it as JSON.\n\
-                    Use this structure as your template (but with actual data from the text):\n\
-                    {}",
-                original_content, example
+                "Extract the information from the text below and return it as JSON.\n\
+                 Use this structure as your template (but with actual data from the text):\n\
+                 {}\n\n\
+                 {}",
+                 example, original_content
             ));
         }
 
@@ -700,7 +716,7 @@ impl Llm for OpenAIAdapter {
                 {
                     let original_content = last_msg["content"].as_str().unwrap_or("");
                     last_msg["content"] = json!(format!(
-                        "{}\n\n/no_think\nReturn ONLY one valid JSON object matching the required schema. No reasoning, no markdown, no extra text.",
+                        "/no_think\nReturn ONLY one valid JSON object matching the required schema. No reasoning, no markdown, no extra text.\n\n{}",
                         original_content
                     ));
                 }
