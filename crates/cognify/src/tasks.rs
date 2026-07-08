@@ -21,6 +21,7 @@
 //! - [`TypedTask`] factories: [`make_classify_documents_task`], etc.
 //! - Pipeline builders: [`build_cognify_pipeline`], [`build_temporal_cognify_pipeline`]
 
+use futures::stream::{self, StreamExt};
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -332,6 +333,8 @@ pub async fn extract_graph_from_data(
     // provenance E2E test expects (locked decision 4 of
     // `docs/telemetry/05-datapoint-provenance.md`).
     user_label_override: Option<&str>,
+    global_semaphore: Arc<Semaphore>,
+    max_concurrency: usize,
 ) -> Result<ExtractedGraphData, CognifyError> {
     if input.chunks.is_empty() {
         return Ok(ExtractedGraphData {
@@ -384,44 +387,37 @@ pub async fn extract_graph_from_data(
     // Collect non-DLT chunks for LLM processing
     let chunks_for_extraction: Vec<DocumentChunk> = non_dlt_chunks.into_iter().cloned().collect();
 
-    let batch_size = config.chunks_per_batch;
     let mut all_graphs: Vec<(Uuid, KnowledgeGraph)> = Vec::new();
-    let semaphore = Arc::new(Semaphore::new(config.max_parallel_extractions));
+    let total_chunks = chunks_for_extraction.len();
 
-    for (batch_idx, batch) in chunks_for_extraction.chunks(batch_size).enumerate() {
-        let fact_extractor = FactExtractor::new(Arc::clone(&llm));
-        let mut extract_tasks = Vec::new();
-        let mut chunk_ids = Vec::new();
+    let tasks = stream::iter(chunks_for_extraction.into_iter()).map(|chunk| {
+        let extractor = FactExtractor::new(Arc::clone(&llm));
+        let text = chunk.text.clone();
+        let chunk_id = chunk.base.id;
+        let sem = Arc::clone(&global_semaphore);
+        let prompt = config.custom_extraction_prompt.clone();
 
-        for chunk in batch {
-            let extractor = fact_extractor.clone();
-            let text = chunk.text.clone();
-            let sem = Arc::clone(&semaphore);
-            let prompt = config.custom_extraction_prompt.clone();
-
-            chunk_ids.push(chunk.base.id);
-            extract_tasks.push(tokio::spawn(async move {
-                #[allow(clippy::expect_used, reason = "invariant is upheld by construction")]
-                let _permit = sem
-                    .acquire()
-                    .await
-                    .expect("semaphore is never closed; created locally in this function");
-                extractor.extract_facts(&text, prompt.as_deref()).await
-            }));
+        async move {
+            #[allow(clippy::expect_used, reason = "invariant is upheld by construction")]
+            let _permit = sem
+                .acquire()
+                .await
+                .expect("semaphore is never closed; created locally or injected");
+            let result = extractor.extract_facts(&text, prompt.as_deref()).await;
+            (chunk_id, result)
         }
+    });
 
-        let batch_results = futures::future::join_all(extract_tasks).await;
-        for (result, chunk_id) in batch_results.into_iter().zip(chunk_ids) {
-            let graph = result.map_err(|e| CognifyError::FactExtractionError(e.to_string()))??;
-            all_graphs.push((chunk_id, graph));
+    let mut stream = tasks.buffer_unordered(max_concurrency);
+
+    let mut processed_count = 0;
+    while let Some((chunk_id, result)) = stream.next().await {
+        let graph = result?;
+        all_graphs.push((chunk_id, graph));
+        processed_count += 1;
+        if processed_count % 10 == 0 || processed_count == total_chunks {
+            info!("Processed graph extraction stream {}/{} chunks", processed_count, total_chunks);
         }
-
-        info!(
-            "Processed graph extraction batch {}/{} ({} chunks)",
-            batch_idx + 1,
-            chunks_for_extraction.len().div_ceil(batch_size),
-            batch.len()
-        );
     }
 
     // Database deduplication — query for existing edges
@@ -746,6 +742,8 @@ pub async fn extract_custom_graph_from_data<M: crate::fact_extraction::GraphMode
     input: &ExtractedChunks,
     llm: Arc<dyn Llm>,
     config: &CognifyConfig,
+    global_semaphore: Arc<Semaphore>,
+    max_concurrency: usize,
 ) -> Result<ExtractedGraphData, CognifyError> {
     if input.chunks.is_empty() {
         return Ok(ExtractedGraphData {
@@ -766,9 +764,6 @@ pub async fn extract_custom_graph_from_data<M: crate::fact_extraction::GraphMode
         .filter(|d| d.document_type == "dlt_row")
         .map(|d| d.base.id)
         .collect();
-
-    let batch_size = config.chunks_per_batch;
-    let semaphore = Arc::new(Semaphore::new(config.max_parallel_extractions));
 
     let mut updated_chunks = input.chunks.clone();
 
@@ -792,44 +787,42 @@ pub async fn extract_custom_graph_from_data<M: crate::fact_extraction::GraphMode
         });
     }
 
-    let total_batches = non_dlt_indices.len().div_ceil(batch_size);
+    let total_chunks = non_dlt_indices.len();
 
-    for (batch_idx, batch_indices) in non_dlt_indices.chunks(batch_size).enumerate() {
-        let mut extract_tasks = Vec::new();
+    let non_dlt_tasks: Vec<(usize, String)> = non_dlt_indices
+        .into_iter()
+        .map(|idx| (idx, updated_chunks[idx].text.clone()))
+        .collect();
 
-        for &idx in batch_indices {
-            let extractor = FactExtractor::new(Arc::clone(&llm));
-            let text = updated_chunks[idx].text.clone();
-            let sem = Arc::clone(&semaphore);
-            let prompt = config.custom_extraction_prompt.clone();
+    let tasks = stream::iter(non_dlt_tasks.into_iter()).map(|(idx, text)| {
+        let extractor = FactExtractor::new(Arc::clone(&llm));
+        let sem = Arc::clone(&global_semaphore);
+        let prompt = config.custom_extraction_prompt.clone();
 
-            extract_tasks.push(tokio::spawn(async move {
-                #[allow(clippy::expect_used, reason = "invariant is upheld by construction")]
-                let _permit = sem
-                    .acquire()
-                    .await
-                    .expect("semaphore is never closed; created locally in this function");
-                extractor.extract::<M>(&text, prompt.as_deref()).await
-            }));
+        async move {
+            #[allow(clippy::expect_used, reason = "invariant is upheld by construction")]
+            let _permit = sem
+                .acquire()
+                .await
+                .expect("semaphore is never closed; created locally or injected");
+            let result = extractor.extract::<M>(&text, prompt.as_deref()).await;
+            (idx, result)
         }
+    });
 
-        let batch_results = futures::future::join_all(extract_tasks).await;
-        let batch_len = batch_indices.len();
+    let mut stream = tasks.buffer_unordered(max_concurrency);
 
-        for (i, result) in batch_results.into_iter().enumerate() {
-            let model: M =
-                result.map_err(|e| CognifyError::FactExtractionError(e.to_string()))??;
-            let value = serde_json::to_value(&model)
-                .map_err(|e| CognifyError::SerializationError(e.to_string()))?;
-            updated_chunks[batch_indices[i]].contains = vec![value];
+    let mut processed_count = 0;
+    while let Some((idx, result)) = stream.next().await {
+        let model: M = result?;
+        let value = serde_json::to_value(&model)
+            .map_err(|e| CognifyError::SerializationError(e.to_string()))?;
+        updated_chunks[idx].contains = vec![value];
+
+        processed_count += 1;
+        if processed_count % 10 == 0 || processed_count == total_chunks {
+            info!("Processed custom graph extraction stream {}/{} chunks", processed_count, total_chunks);
         }
-
-        info!(
-            "Processed custom graph extraction batch {}/{} ({} chunks)",
-            batch_idx + 1,
-            total_batches,
-            batch_len
-        );
     }
 
     Ok(ExtractedGraphData {
@@ -3307,6 +3300,7 @@ pub fn make_extract_graph_task(
         let config = config.clone();
         let user_label = user_label_from_ctx(&ctx);
         Box::pin(async move {
+            let global_semaphore = Arc::new(Semaphore::new(config.max_parallel_extractions));
             let mut graph_data = extract_graph_from_data(
                 &input,
                 llm,
@@ -3314,6 +3308,8 @@ pub fn make_extract_graph_task(
                 ontology_resolver,
                 &config,
                 user_label.as_deref(),
+                global_semaphore,
+                config.max_parallel_extractions,
             )
             .await
             .map_err(|e| format!("{e}"))?;
