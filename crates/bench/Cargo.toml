@@ -27,3 +27,6 @@ rand       = { workspace = true }
 uuid       = { workspace = true }
 tempfile   = { workspace = true }
 serde_json = { workspace = true }
+
+[dependencies]
+tokio = { workspace = true, features = ["sync"] }

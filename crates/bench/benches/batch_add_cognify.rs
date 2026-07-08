@@ -36,6 +36,7 @@
 use std::net::TcpListener;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use criterion::{BenchmarkId, Criterion, SamplingMode, criterion_group, criterion_main};
@@ -43,6 +44,7 @@ use rand::Rng;
 use rand::seq::SliceRandom;
 use reqwest::blocking::{Client, multipart};
 use tempfile::TempDir;
+use tokio::sync::Semaphore;
 use uuid::Uuid;
 
 // ── Document-generation constants (verbatim from batch_add_cognify_test.py) ──
@@ -292,7 +294,7 @@ fn add_documents(client: &Client, base_url: &str, dataset_name: &str, docs: &[St
 
 /// POST `/api/v1/cognify` for a dataset.
 /// Returns the wall-clock duration of the HTTP call only.
-fn cognify(client: &Client, base_url: &str, dataset_name: &str) -> Duration {
+fn cognify(client: &Client, base_url: &str, dataset_name: &str, _semaphore: Arc<Semaphore>, _max_concurrency: usize) -> Duration {
     // camelCase field names per CognifyPayloadDTO (#[serde(rename_all = "camelCase")])
     let payload = serde_json::json!({
         "datasets": [dataset_name],
@@ -381,6 +383,9 @@ fn bench_pipeline(c: &mut Criterion) {
             .build()
             .expect("reqwest client");
 
+        let max_concurrency = 50;
+        let global_semaphore = Arc::new(Semaphore::new(100));
+
         b.iter_custom(|iters| {
             let mut total = Duration::ZERO;
             for _ in 0..iters {
@@ -389,7 +394,7 @@ fn bench_pipeline(c: &mut Criterion) {
                 let docs: Vec<String> = (0..n).map(|_| generate_document(&mut rng)).collect();
 
                 let t_add = add_documents(&client, &server.base_url, &dataset, &docs);
-                let t_cognify = cognify(&client, &server.base_url, &dataset);
+                let t_cognify = cognify(&client, &server.base_url, &dataset, Arc::clone(&global_semaphore), max_concurrency);
                 let t_search = search_documents(
                     &client,
                     &server.base_url,
@@ -410,5 +415,5 @@ fn bench_pipeline(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_pipeline);
+criterion_group!(name = benches; config = Criterion::default().sample_size(100); targets = bench_pipeline);
 criterion_main!(benches);
