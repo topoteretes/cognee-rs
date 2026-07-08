@@ -69,11 +69,16 @@ fn main() -> StdExitCode {
         }
     };
 
+    // Extra tracing layers installed alongside the stdout logger. The
+    // `profiling` build adds an offline per-stage span-timing layer that the
+    // `bench` subcommand arms per phase (see `commands::bench_telemetry`).
+    #[cfg(feature = "profiling")]
+    let profiling_layers = std::iter::once(commands::bench_telemetry::layer());
+    #[cfg(not(feature = "profiling"))]
+    let profiling_layers = std::iter::empty::<cognee_logging::BoxedLayer>();
+
     #[cfg(not(feature = "telemetry"))]
-    let _log_guards = cognee_logging::init_logging(
-        logging_cfg,
-        std::iter::empty::<cognee_logging::BoxedLayer>(),
-    );
+    let _log_guards = cognee_logging::init_logging(logging_cfg, profiling_layers);
 
     #[cfg(feature = "telemetry")]
     let (_log_guards, _telemetry_guard) = {
@@ -93,7 +98,8 @@ fn main() -> StdExitCode {
             }
         };
 
-        let guards = cognee_logging::init_logging(logging_cfg, std::iter::once(telemetry_layer));
+        let extra = std::iter::once(telemetry_layer).chain(profiling_layers);
+        let guards = cognee_logging::init_logging(logging_cfg, extra);
         (guards, telemetry_guard)
     };
 

@@ -10,7 +10,15 @@
 //! Python `future_into_py`, etc.) live in the individual binding crates and
 //! call through to these shared functions.
 //!
-//! ## Wire shapes (all keys camelCase)
+//! ## Input wire shapes (opts / entry keys are camelCase)
+//!
+//! The argument objects below use camelCase keys. Result shapes differ by op:
+//! `memify` / `improve` are hand-built as camelCase (see [`memify_result_json`]),
+//! but `remember` / `remember_entry` pass the `RememberResult` struct straight
+//! through `serde_json::to_value`, so their result keys are **snake_case** —
+//! deliberately, to preserve Python-SDK wire parity (Python's
+//! `RememberResult.to_dict()` emits snake_case; the HTTP v2 remember DTO makes
+//! the same carve-out). See issue #46.
 //!
 //! ### `remember` opts
 //! ```json
