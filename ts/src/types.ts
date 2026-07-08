@@ -287,13 +287,71 @@ export interface CogneeRememberOptions {
 }
 
 /**
+ * Terminal status of a `remember` operation. Mirrors the Rust `RememberStatus`
+ * enum wire names (`crates/lib/src/api/remember.rs`).
+ *
+ * The synchronous SDK only ever returns a terminal state; `PipelineRunStarted`
+ * exists for symmetry with the async/HTTP background path and is not emitted
+ * here.
+ */
+export type CogneeRememberStatus =
+  | "PipelineRunStarted"
+  | "PipelineRunCompleted"
+  | "PipelineRunErrored"
+  | "SessionStored";
+
+/**
+ * Per-item information in a `CogneeRememberResult`.
+ *
+ * Mirrors the Rust `RememberItemInfo` struct (Serialize, snake_case fields).
+ */
+export interface CogneeRememberItemInfo {
+  id: string | null;
+  name: string | null;
+  content_hash: string | null;
+  /** Token count (`null` when not yet computed). */
+  token_count: number | null;
+  /** Size of the raw data in bytes (`null` when unknown). */
+  data_size: number | null;
+  mime_type: string | null;
+}
+
+/**
  * Result of `cogneeRemember` / `cogneeRememberEntry`.
  *
- * The Rust `RememberResult` / `RememberSessionResult` types are Serialize.
- * The exact shape varies by path (graph vs session), so this is intentionally
- * left as an open record type rather than a closed interface.
+ * Mirrors the Rust `RememberResult` struct (Serialize). **Fields are
+ * snake_case** — unlike the camelCase surface of `config.get()`, `add`, and
+ * `cognify` — because `remember` deliberately preserves Python-SDK wire parity:
+ * Python's `RememberResult.to_dict()` is a plain-class dict, not a pydantic
+ * alias-converted model, so it emits snake_case keys. The HTTP v2 `remember`
+ * DTO makes the same carve-out (`crates/http-server/src/dto/remember.rs`), and
+ * this binding matches it. See issue #46.
+ *
+ * Both the file/text path (`remember`) and the typed-entry path
+ * (`rememberEntry`) return this same shape; every key is always present
+ * (`null` when not applicable), so which path ran is read off the populated
+ * fields — the graph path fills `dataset_id` / `pipeline_run_id` /
+ * `content_hash` / `items`, the session path fills `session_ids` / `entry_type`
+ * / `entry_id`.
  */
-export type CogneeRememberResult = Record<string, unknown>;
+export interface CogneeRememberResult {
+  status: CogneeRememberStatus;
+  dataset_name: string;
+  dataset_id: string | null;
+  session_ids: string[] | null;
+  pipeline_run_id: string | null;
+  /** Wall-clock seconds the operation took (`null` when not measured). */
+  elapsed_seconds: number | null;
+  /** Content hash of the first item (`null` on the session path). */
+  content_hash: string | null;
+  items_processed: number;
+  items: CogneeRememberItemInfo[];
+  error: string | null;
+  /** `"qa"` / `"trace"` / `"feedback"` on the typed-entry path; `null` otherwise. */
+  entry_type: string | null;
+  /** Typed-entry id from the session manager; `null` on the file/text path. */
+  entry_id: string | null;
+}
 
 /** A typed memory entry for `cogneeRememberEntry`. */
 export type CogneeMemoryEntry =

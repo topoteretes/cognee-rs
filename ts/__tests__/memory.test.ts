@@ -228,7 +228,8 @@ describeMaybe("memory ops (Tier-B — live LLM)", () => {
       );
       expect(result).toBeDefined();
       expect(result.status).toBe("PipelineRunCompleted");
-      expect(result.datasetName).toBe("mem_b_ds");
+      // `remember` results are snake_case (Python-parity wire shape); see #46.
+      expect(result.dataset_name).toBe("mem_b_ds");
     },
     300_000
   );
