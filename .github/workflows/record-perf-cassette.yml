@@ -1,0 +1,173 @@
+name: Record perf cassette
+
+# Manually-triggered job that (re-)records the offline performance-benchmark
+# cassette(s) under scripts/perf/fixtures/ against the live API, then commits
+# them back to the target branch.
+#
+# WHY THIS EXISTS (and is separate from record-cassettes.yml):
+#   * record-cassettes.yml re-records the *integration-test* cassettes
+#     (crates/**/tests/fixtures/cassettes/) and only commits that glob — the
+#     perf cassette was never covered, so it silently rotted.
+#   * The perf cassette is content-addressed by sha256(prompt + schema). That
+#     hash is NOT identical across OS/arch, so a cassette recorded on a dev's
+#     macOS box only partially replays on the Linux CI runner (empty-graph
+#     fallbacks → unrepresentative timings). Recording it HERE, on the same
+#     ubuntu-latest image the perf job replays on, keeps record and replay on
+#     the same platform.
+#
+# Run this whenever the corpus, cognify prompts/schemas, chunking, or the model
+# change (the perf job's freshness guard warns when the committed cassette has
+# drifted to empty-graph fallbacks).
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch to record on and commit the refreshed cassette to"
+        required: true
+        default: main
+      include_large:
+        description: "Also record the large-corpus cassette (many more API calls)"
+        type: boolean
+        default: false
+
+concurrency:
+  group: record-perf-cassette-${{ github.event.inputs.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_INCREMENTAL: "0"
+  ORT_CACHE_DIR: ${{ github.workspace }}/target/ort-cache
+  # Real LLM for recording (cheap model). Embeddings are forced to the
+  # deterministic mock in-step so no embedding API is hit and replay matches.
+  OPENAI_URL: https://api.openai.com/v1
+  OPENAI_TOKEN: ${{ secrets.OPENAI_KEY }}
+  OPENAI_MODEL: gpt-4o-mini
+
+jobs:
+  record:
+    name: Record perf cassette
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    # contents:write lets the default GITHUB_TOKEN commit the refreshed cassette.
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref }}
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install mold linker
+        uses: rui314/setup-mold@v1
+        with:
+          make-default: true
+
+      - name: Install build deps
+        run: sudo apt-get update && sudo apt-get install -y cmake protobuf-compiler
+
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          swap-storage: true
+          docker-images: true
+
+      - name: Cache cargo + target
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: perf-record
+
+      - name: Cache ORT binary
+        uses: actions/cache@v4
+        with:
+          path: target/ort-cache
+          key: ort-v2.0.0-rc.12-cpu-linux-x86_64
+
+      - name: Build cognee-cli (release, bench)
+        run: cargo build --release -p cognee-cli --features bench
+
+      # Record = run the real pipeline once with COGNEE_RECORD_LLM pointing at the
+      # cassette path. Delete first so the recording is clean (RecordingLlm merges
+      # into an existing file, which would keep now-orphaned entries). Embeddings
+      # are the deterministic mock so recording hits no embedding API and the
+      # captured LLM responses match what replay will look up.
+      - name: Record small perf cassette
+        env:
+          LOG_LEVEL: info
+          MOCK_EMBEDDING: deterministic
+          EMBEDDING_PROVIDER: mock
+        run: |
+          set -euo pipefail
+          rm -f scripts/perf/fixtures/cassette.json
+          COGNEE_RECORD_LLM="$PWD/scripts/perf/fixtures/cassette.json" \
+            ./target/release/cognee-cli bench \
+              --memories scripts/perf/fixtures/memories.json \
+              --llm-model gpt-4o-mini \
+              --output /tmp/rec_small.json
+
+      - name: Record large perf cassette
+        if: ${{ github.event.inputs.include_large == 'true' }}
+        env:
+          LOG_LEVEL: info
+          MOCK_EMBEDDING: deterministic
+          EMBEDDING_PROVIDER: mock
+        run: |
+          set -euo pipefail
+          rm -f scripts/perf/fixtures/large/cassette.json
+          COGNEE_RECORD_LLM="$PWD/scripts/perf/fixtures/large/cassette.json" \
+            ./target/release/cognee-cli bench \
+              --memories scripts/perf/fixtures/large/memories.json \
+              --llm-model gpt-4o-mini \
+              --output /tmp/rec_large.json
+
+      # Prove the freshly-recorded cassette actually replays offline: a HIT
+      # reconstructs the graph and logs "Stored N entity types as graph nodes".
+      # Fail the job if recording produced a cassette that replays empty.
+      - name: Verify replay (small)
+        env:
+          LOG_LEVEL: info
+          MOCK_EMBEDDING: deterministic
+        run: |
+          set -euo pipefail
+          log="$(mktemp)"
+          ./target/release/cognee-cli bench \
+            --mock-llm \
+            --mock-memories scripts/perf/fixtures/cassette.json \
+            --memories scripts/perf/fixtures/memories.json \
+            --num-memories 8 \
+            --output /tmp/verify_small.json 2>"$log" || { cat "$log"; exit 1; }
+          n="$(grep -oE 'Stored [0-9]+ entity types as graph nodes' "$log" | grep -oE '[0-9]+' | head -1 || true)"
+          echo "entity-type nodes on replay (8 docs): ${n:-0}"
+          if [ -z "${n:-}" ] || [ "${n:-0}" -lt 1 ]; then
+            echo "::error::recorded cassette replays empty — recording failed." >&2
+            cat "$log" >&2
+            exit 1
+          fi
+
+      - name: Commit refreshed cassette
+        # Pass the user-controlled ref through an env var, never interpolated
+        # directly into the shell (script-injection sink on a contents:write +
+        # OPENAI_KEY runner). Mirrors record-cassettes.yml.
+        env:
+          REF: ${{ github.event.inputs.ref }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add scripts/perf/fixtures/cassette.json scripts/perf/fixtures/large/cassette.json 2>/dev/null || \
+            git add scripts/perf/fixtures/cassette.json
+          if git diff --cached --quiet; then
+            echo "Perf cassette unchanged — nothing to commit."
+            exit 0
+          fi
+          git commit -m "chore(perf): re-record perf benchmark cassette [skip ci]"
+          git push origin "HEAD:$REF"
