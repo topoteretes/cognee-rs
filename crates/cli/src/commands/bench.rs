@@ -15,7 +15,7 @@ use std::time::Instant;
 
 use cognee_lib::add::AddPipeline;
 use cognee_lib::api::prune::{PruneTarget, prune_data, prune_system};
-use cognee_lib::cognify::{ChunkStrategy, CognifyConfig, cognify};
+use cognee_lib::cognify::{ChunkStrategy, CognifyConfig, TokenCounterKind, cognify};
 use cognee_lib::core::RayonThreadPool;
 use cognee_lib::database::{IngestDb, PipelineRunRepository, SeaOrmPipelineRunRepository, ops};
 use cognee_lib::models::DataInput;
@@ -608,6 +608,15 @@ async fn phase_cognify(
             .with_chunk_overlap(s.chunk_overlap as usize)
             .with_chunk_strategy(chunk_strategy)
             .with_max_parallel_extractions(s.llm_max_parallel_requests.max(1) as usize)
+            // Pin the token counter so chunk boundaries are deterministic and
+            // independent of ambient env. CognifyConfig::default() derives the
+            // counter from TokenCounterKind::from_env() (reads EMBEDDING_PROVIDER
+            // / COGNEE_TOKEN_COUNTER / a discovered .env, with a silent WordCounter
+            // fallback). That made the record/replay cassette hash depend on the
+            // host environment, not the commit — a cassette recorded in one env
+            // replayed to empty-graph fallbacks in another. gpt-4o-mini uses
+            // cl100k, so TikToken is the correct, portable choice for the bench.
+            .with_token_counter(TokenCounterKind::TikToken)
     };
 
     cognify(
