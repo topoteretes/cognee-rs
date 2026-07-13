@@ -164,8 +164,18 @@ pub fn create_openai_adapter_from_env() -> Arc<OpenAIAdapter> {
     let base_url = require_env("OPENAI_URL");
     let api_token = require_env("OPENAI_TOKEN");
     let model = llm_model_from_env();
+    // Route through the production factory so litellm-style provider prefixes
+    // (`openai/`, `baseten/`, …) are stripped exactly as in a real run — e.g.
+    // `baseten/openai/gpt-oss-120b` → `openai/gpt-oss-120b`. Building the adapter
+    // directly would send the prefixed slug verbatim and 404.
+    //
+    // NOTE: the default provider here is `openai`, which strips a leading
+    // `openai/` segment. A custom endpoint whose *real* model slug legitimately
+    // begins with `openai/` (org "openai") must therefore set `LLM_PROVIDER=custom`
+    // (or `openai_compatible`) so the slug is passed through verbatim.
+    let provider = std::env::var("LLM_PROVIDER").unwrap_or_else(|_| "openai".to_string());
     Arc::new(
-        OpenAIAdapter::new(model, api_token, Some(base_url))
+        cognee_llm::build_openai_compatible_adapter(&provider, &model, &api_token, &base_url, 3)
             .unwrap_or_else(|e| panic!("❌ Failed to create OpenAI adapter: {e}")),
     )
 }

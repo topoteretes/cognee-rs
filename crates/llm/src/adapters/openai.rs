@@ -1,7 +1,9 @@
-//! OpenAI API adapter with JSON schema support for structured outputs.
+//! OpenAI API adapter with structured-output support.
 //!
-//! This adapter uses OpenAI's function calling or JSON mode to generate
-//! structured outputs based on JSON schemas derived from Rust types.
+//! This adapter uses OpenAI's tool calling (`tools` + `tool_choice`) — the same
+//! shape Python cognee sends via instructor/litellm — to generate structured
+//! outputs based on JSON schemas derived from Rust types, falling back to legacy
+//! function calling and JSON mode for older OpenAI-compatible servers.
 
 use async_trait::async_trait;
 use reqwest::Client;
@@ -19,11 +21,11 @@ use crate::types::{GenerationOptions, GenerationResponse, Message, MessageRole, 
 
 /// OpenAI API adapter.
 ///
-/// Supports structured output generation via:
-/// - Strict JSON schema mode (response_format with type: "json_schema")
-/// - Function calling (for GPT-4 and GPT-3.5-turbo)
+/// Supports structured output generation via (in fallback order):
+/// - Tool calling (`tools` + forced `tool_choice`) — the primary path, matching
+///   Python cognee's instructor/litellm `Mode.TOOLS`
+/// - Legacy function calling (`functions` + `function_call`)
 /// - JSON mode (response_format with type: "json_object")
-/// - JSON schema validation (via function parameters)
 ///
 /// # Example
 /// ```ignore
@@ -90,16 +92,13 @@ impl OpenAIAdapter {
         let transcription_model =
             std::env::var("TRANSCRIPTION_MODEL").unwrap_or_else(|_| "whisper-1".to_string());
 
-        // Strip a leading litellm-style "openai/" provider prefix. Python's
-        // litellm accepts provider-qualified names (e.g. "openai/gpt-5-mini")
-        // and strips the provider before calling the OpenAI-native API, which
-        // itself rejects the prefix. Strip it here for parity so a
-        // provider-qualified config value works against real OpenAI.
+        // The model is used verbatim on the wire. litellm-style provider prefix
+        // stripping (`openai/`, `baseten/`, …) is owned by
+        // `build_openai_compatible_adapter`, which has the provider/endpoint
+        // context needed to strip correctly (and to leave `custom` slugs
+        // untouched). Stripping here as well would wrongly mangle real slugs
+        // that legitimately contain a slash (e.g. Baseten's `openai/gpt-oss-120b`).
         let model: String = model.into();
-        let model = model
-            .strip_prefix("openai/")
-            .map(str::to_string)
-            .unwrap_or(model);
 
         Ok(Self {
             model,
@@ -383,52 +382,23 @@ impl OpenAIAdapter {
 
         serde_json::to_string_pretty(&example).unwrap_or_else(|_| "{}".to_string())
     }
-}
 
-/// Rewrite a `schemars`-generated JSON schema so it satisfies OpenAI's
-/// **strict** structured-output requirements.
-///
-/// OpenAI's `response_format: {type: "json_schema", strict: true}` rejects any
-/// schema where an object lacks `"additionalProperties": false` or whose
-/// `"required"` array does not list *every* declared property. `schemars`
-/// (0.8, draft-07) emits neither guarantee — optional (`Option<T>`) fields are
-/// omitted from `required` and `additionalProperties` is left unset. When the
-/// strict request 400s, [`OpenAIAdapter::create_structured_output_with_messages_raw`]
-/// silently falls back to lenient JSON mode, where the model is free to drop
-/// required fields (e.g. a `Node` without its `type`), causing downstream
-/// deserialization failures.
-///
-/// This walks the schema (including `definitions`/`$defs`, `properties`,
-/// `items`, and the `anyOf`/`allOf`/`oneOf` combinators) and, for every object
-/// that declares `properties`, forces `additionalProperties: false` and sets
-/// `required` to the full set of property keys. The `Value` is cloned and
-/// returned unchanged for non-object schemas.
-fn to_strict_schema(schema: &Value) -> Value {
-    fn walk(value: &mut Value) {
-        match value {
-            Value::Object(obj) => {
-                if let Some(Value::Object(props)) = obj.get("properties") {
-                    // Every declared property must be required under strict mode.
-                    let keys: Vec<Value> = props.keys().map(|k| Value::String(k.clone())).collect();
-                    obj.insert("required".to_string(), Value::Array(keys));
-                    obj.insert("additionalProperties".to_string(), Value::Bool(false));
-                }
-                for (_k, v) in obj.iter_mut() {
-                    walk(v);
-                }
-            }
-            Value::Array(items) => {
-                for v in items.iter_mut() {
-                    walk(v);
-                }
-            }
-            _ => {}
+    /// Append a corrective instruction to the last user message of `request`,
+    /// nudging the model to return a single valid object on a retry attempt.
+    /// Mirrors instructor's repair prompt on a validation/parse failure.
+    fn append_corrective_instruction(request: &mut Value) {
+        if let Some(messages) = request["messages"].as_array_mut()
+            && let Some(last_msg) = messages.last_mut()
+            && last_msg["role"] == "user"
+        {
+            let original = last_msg["content"].as_str().unwrap_or("");
+            last_msg["content"] = json!(format!(
+                "{original}\n\nYour previous response could not be parsed into the required \
+                 structure. Call the `extract_structured_data` function again and return ONE \
+                 valid object that fills in every required field. No extra text."
+            ));
         }
     }
-
-    let mut out = schema.clone();
-    walk(&mut out);
-    out
 }
 
 #[async_trait]
@@ -499,10 +469,11 @@ impl Llm for OpenAIAdapter {
         json_schema: &Value,
         options: Option<GenerationOptions>,
     ) -> LlmResult<Value> {
-        let is_empty_or_non_json = |raw: &str| {
-            let trimmed = raw.trim();
-            trimmed.is_empty() || serde_json::from_str::<Value>(trimmed).is_err()
-        };
+        // Blank = empty or whitespace-only. Kept separate from JSON *validity*
+        // so a non-empty-but-invalid payload can surface a clear error instead
+        // of being lumped together with "no output" (which should retry / fall
+        // back to a different mode).
+        let is_blank = |raw: &str| raw.trim().is_empty();
 
         let parse_json =
             |raw: &str| -> Result<Value, serde_json::Error> { serde_json::from_str(raw) };
@@ -510,98 +481,131 @@ impl Llm for OpenAIAdapter {
         let opts = options.unwrap_or_default();
         let schema = json_schema;
 
-        // OpenAI strict mode requires `additionalProperties: false` and that
-        // every property appear in `required` on every object; the raw
-        // schemars schema satisfies neither, which would 400 and silently
-        // drop us into lenient mode (where required fields can go missing).
-        let strict_schema = to_strict_schema(schema);
-
-        // Try strict JSON schema mode first (new OpenAI API behavior).
-        let mut strict_schema_request = json!({
+        // Primary path: OpenAI tool calling (`tools` + forced `tool_choice`).
+        //
+        // This mirrors Python cognee's request: instructor's default `Mode.TOOLS`
+        // (used by `LLMGateway.acreate_structured_output`) sends the response
+        // model as a single function tool and forces the model to call it,
+        // passing the schema *as-is*.
+        //
+        // We deliberately do NOT use `response_format: {type: json_schema,
+        // strict: true}` here, and we do NOT rewrite the schema to be
+        // all-required / `additionalProperties:false`. Both drive
+        // grammar-constrained decoding on OpenAI-compatible backends; Baseten's
+        // gpt-oss-120b returns HTTP 501 "Error making prediction" on such
+        // requests (verified: even the all-required rewrite *without*
+        // `strict:true` reproduces the 501). Passing the schema unmodified — the
+        // exact shape litellm sends — is what keeps Baseten working. The
+        // required-field guarantee is instead approximated by retrying on a
+        // malformed/incomplete response with a corrective instruction below.
+        let mut tools_request = json!({
             "model": self.model,
             "messages": Self::convert_messages(&messages),
-            "response_format": {
-                "type": "json_schema",
-                "json_schema": {
+            "tools": [{
+                "type": "function",
+                "function": {
                     "name": "extract_structured_data",
-                    "schema": strict_schema,
-                    "strict": true
+                    "description": "Extract structured data from the input",
+                    "parameters": schema
                 }
+            }],
+            "tool_choice": {
+                "type": "function",
+                "function": {"name": "extract_structured_data"}
             }
         });
 
         if !self.is_reasoning_model()
             && let Some(temp) = opts.temperature
         {
-            strict_schema_request["temperature"] = json!(temp);
+            tools_request["temperature"] = json!(temp);
         }
-        self.write_max_tokens(&mut strict_schema_request, opts.max_tokens);
+        self.write_max_tokens(&mut tools_request, opts.max_tokens);
         if self.should_disable_thinking() {
-            strict_schema_request["think"] = json!(false);
-            strict_schema_request["reasoning"] = json!({"effort": "none"});
+            tools_request["think"] = json!(false);
+            tools_request["reasoning"] = json!({"effort": "none"});
         }
 
+        // Retry loop. A parseable object returns immediately. A non-empty but
+        // invalid payload retries with a corrective instruction (instructor
+        // parity) and, once retries are exhausted, surfaces a `DeserializationError`
+        // carrying the raw payload. An empty / missing tool call retries and, once
+        // exhausted, falls through to the legacy function-calling / JSON-mode
+        // paths below (so servers that do not support tool calling still work).
+        let mut last_invalid: Option<(String, String)> = None;
         for attempt in 0..self.structured_output_retries {
-            match self.call_api(strict_schema_request.clone()).await {
-                Ok(strict_response) => {
-                    let strict_choice = strict_response.choices.first().ok_or_else(|| {
-                        LlmError::InvalidResponse(
-                            "No choices in strict schema response".to_string(),
-                        )
+            let mut request_for_attempt = tools_request.clone();
+            if attempt > 0 {
+                Self::append_corrective_instruction(&mut request_for_attempt);
+                if !self.is_reasoning_model() {
+                    request_for_attempt["temperature"] = json!(0.0);
+                }
+            }
+
+            match self.call_api(request_for_attempt).await {
+                Ok(tools_response) => {
+                    let choice = tools_response.choices.first().ok_or_else(|| {
+                        LlmError::InvalidResponse("No choices in tool-call response".to_string())
                     })?;
 
-                    if let Some(function_call) = &strict_choice.message.function_call {
-                        match parse_json(&function_call.arguments) {
-                            Ok(parsed) => return Ok(parsed),
-                            Err(e) => {
-                                if attempt + 1 < self.structured_output_retries
-                                    && is_empty_or_non_json(&function_call.arguments)
-                                {
-                                    continue;
-                                }
-                                if !is_empty_or_non_json(&function_call.arguments) {
-                                    return Err(LlmError::DeserializationError(format!(
-                                        "Failed to deserialize strict function call arguments: {}. Raw: {}",
-                                        e, function_call.arguments
-                                    )));
-                                }
-                                break;
-                            }
-                        }
+                    // Prefer a modern `tool_calls[0]`, then a legacy
+                    // `function_call`, then raw `content` (some servers echo the
+                    // JSON directly).
+                    let arguments = choice
+                        .message
+                        .tool_calls
+                        .as_ref()
+                        .and_then(|calls| calls.first())
+                        .map(|c| c.function.arguments.as_str())
+                        .or_else(|| {
+                            choice
+                                .message
+                                .function_call
+                                .as_ref()
+                                .map(|f| f.arguments.as_str())
+                        })
+                        .or(choice.message.content.as_deref())
+                        .unwrap_or("");
+
+                    if is_blank(arguments) {
+                        // No usable output this attempt: retry until exhausted,
+                        // then fall through to the legacy paths.
+                        continue;
                     }
 
-                    if let Some(content) = strict_choice.message.content.as_ref() {
-                        match parse_json(content) {
-                            Ok(parsed) => return Ok(parsed),
-                            Err(e) => {
-                                if attempt + 1 < self.structured_output_retries
-                                    && is_empty_or_non_json(content)
-                                {
-                                    continue;
-                                }
-                                if !is_empty_or_non_json(content) {
-                                    return Err(LlmError::DeserializationError(format!(
-                                        "Failed to deserialize strict JSON content: {e}. Raw: {content}"
-                                    )));
-                                }
-                                break;
-                            }
+                    match parse_json(arguments) {
+                        Ok(parsed) => return Ok(parsed),
+                        Err(e) => {
+                            // Non-empty but invalid: remember it so we can surface
+                            // a clear error if every attempt fails, then retry.
+                            last_invalid = Some((e.to_string(), arguments.to_string()));
+                            continue;
                         }
                     }
                 }
                 Err(e) => {
-                    // Strict json_schema mode is unsupported by this
-                    // model/endpoint (or the schema was rejected). Fall back to
-                    // function calling / JSON mode below, but make the reason
-                    // visible — a silent fallback is how required fields end up
-                    // missing from the model's output.
-                    warn!(error = %e, "strict json_schema request failed; falling back to function/JSON mode");
+                    // Tool calling is unsupported by this model/endpoint (or the
+                    // schema was rejected). Fall back to legacy function calling
+                    // / JSON mode below, but make the reason visible — a silent
+                    // fallback is how required fields end up missing.
+                    warn!(error = %e, "tool-call request failed; falling back to legacy function/JSON mode");
                     break;
                 }
             }
         }
 
-        // Try function calling first (works with OpenAI)
+        // Every tool-calling attempt returned a non-empty but unparseable
+        // payload: surface it rather than silently swallowing it (the legacy
+        // fallbacks would only re-ask a server that clearly *does* speak tool
+        // calling).
+        if let Some((err, raw)) = last_invalid {
+            return Err(LlmError::DeserializationError(format!(
+                "Failed to deserialize tool-call arguments after {} attempt(s): {err}. Raw: {raw}",
+                self.structured_output_retries
+            )));
+        }
+
+        // Try legacy function calling next (older OpenAI-compatible servers)
         let mut request_body = json!({
             "model": self.model,
             "messages": Self::convert_messages(&messages),
@@ -636,18 +640,24 @@ impl Llm for OpenAIAdapter {
                 match parse_json(&function_call.arguments) {
                     Ok(parsed) => return Ok(parsed),
                     Err(e) => {
-                        if attempt + 1 < self.structured_output_retries
-                            && is_empty_or_non_json(&function_call.arguments)
-                        {
+                        let last_attempt = attempt + 1 >= self.structured_output_retries;
+                        if is_blank(&function_call.arguments) {
+                            // Empty output: retry until exhausted, then fall
+                            // through to JSON mode.
+                            if last_attempt {
+                                break;
+                            }
                             continue;
                         }
-                        if !is_empty_or_non_json(&function_call.arguments) {
+                        // Non-empty but invalid: surface it on the last attempt,
+                        // otherwise retry.
+                        if last_attempt {
                             return Err(LlmError::DeserializationError(format!(
                                 "Failed to deserialize function call arguments: {}. Raw: {}",
                                 e, function_call.arguments
                             )));
                         }
-                        break;
+                        continue;
                     }
                 }
             }
@@ -723,8 +733,7 @@ impl Llm for OpenAIAdapter {
             match parse_json(content) {
                 Ok(parsed) => return Ok(parsed),
                 Err(e) => {
-                    if attempt + 1 < self.structured_output_retries && is_empty_or_non_json(content)
-                    {
+                    if attempt + 1 < self.structured_output_retries && is_blank(content) {
                         continue;
                     }
                     return Err(LlmError::DeserializationError(format!(
@@ -1046,13 +1055,36 @@ struct OpenAIMessage {
     role: String,
     content: Option<String>,
     reasoning: Option<String>,
+    /// Modern tool-calling response (`tool_choice`/`tools`); the structured
+    /// output is the first call's `function.arguments` JSON string.
+    tool_calls: Option<Vec<OpenAIToolCall>>,
+    /// Legacy `function_call` response (older OpenAI-compatible servers).
     function_call: Option<OpenAIFunctionCall>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Default)]
+#[allow(dead_code)]
+struct OpenAIToolCall {
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default, rename = "type")]
+    call_type: Option<String>,
+    /// Defaulted so a `tool_calls` entry missing its `function` object (seen on
+    /// some OpenAI-compatible servers) does not fail deserialization of the whole
+    /// response — the fallback chain then engages instead of erroring out.
+    #[serde(default)]
+    function: OpenAIFunctionCall,
+}
+
+#[derive(Debug, Deserialize, Default)]
 #[allow(dead_code)]
 struct OpenAIFunctionCall {
+    #[serde(default)]
     name: String,
+    /// Defaulted to `""` so a `function` object without `arguments` deserializes
+    /// (treated as empty → drives a retry / fallback) rather than erroring the
+    /// entire `ApiResponse`.
+    #[serde(default)]
     arguments: String,
 }
 
@@ -1073,13 +1105,49 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_openai_provider_prefix_is_stripped() {
-        // litellm-style "openai/<model>" must be sent as bare "<model>".
-        let adapter = OpenAIAdapter::new("openai/gpt-5-mini", "test-key", None).unwrap();
+    fn test_model_is_used_verbatim() {
+        // The adapter no longer strips provider prefixes — that is owned by
+        // `build_openai_compatible_adapter`. The model must reach the wire
+        // exactly as constructed so real slugs containing a slash (e.g.
+        // Baseten's `openai/gpt-oss-120b`) are preserved.
+        let adapter = OpenAIAdapter::new("openai/gpt-oss-120b", "test-key", None).unwrap();
+        assert_eq!(adapter.model(), "openai/gpt-oss-120b");
+        let adapter = OpenAIAdapter::new("gpt-5-mini", "test-key", None).unwrap();
         assert_eq!(adapter.model(), "gpt-5-mini");
-        // Non-openai provider prefixes (custom endpoints) are left intact.
-        let adapter = OpenAIAdapter::new("ollama/llama3", "test-key", None).unwrap();
-        assert_eq!(adapter.model(), "ollama/llama3");
+    }
+
+    #[test]
+    fn test_tool_call_missing_arguments_deserializes_to_empty() {
+        // #7: a `tool_calls` entry whose `function` lacks `arguments` must not
+        // fail deserialization of the whole response — it defaults to "" so the
+        // fallback chain engages.
+        let raw = r#"{
+            "id":"x","object":"chat.completion","created":1,"model":"m",
+            "choices":[{"index":0,"message":{"role":"assistant","tool_calls":[
+                {"id":"c1","type":"function","function":{"name":"extract_structured_data"}}
+            ]},"finish_reason":"tool_calls"}]
+        }"#;
+        let resp: OpenAIResponse =
+            serde_json::from_str(raw).expect("missing arguments should default, not error");
+        let call = &resp.choices[0].message.tool_calls.as_ref().unwrap()[0];
+        assert_eq!(call.function.arguments, "");
+    }
+
+    #[test]
+    fn test_tool_call_missing_function_deserializes() {
+        // #7: a `tool_calls` entry with no `function` object at all must also
+        // deserialize (defaulted) rather than erroring the whole `ApiResponse`.
+        let raw = r#"{
+            "id":"x","object":"chat.completion","created":1,"model":"m",
+            "choices":[{"index":0,"message":{"role":"assistant","tool_calls":[
+                {"id":"c1","type":"function"}
+            ]},"finish_reason":"tool_calls"}]
+        }"#;
+        let resp: OpenAIResponse =
+            serde_json::from_str(raw).expect("missing function should default, not error");
+        let call = &resp.choices[0].message.tool_calls.as_ref().unwrap()[0];
+        assert_eq!(call.function.name, "");
+        assert_eq!(call.function.arguments, "");
     }
 
     #[test]
@@ -1315,49 +1383,5 @@ mod tests {
         assert_eq!(audio_mime_type("m4a"), "audio/mp4");
         assert_eq!(audio_mime_type("wav"), "audio/wav");
         assert_eq!(audio_mime_type("webm"), "audio/webm");
-    }
-
-    #[test]
-    fn test_to_strict_schema_marks_all_required_and_closes_objects() {
-        // Mirrors the schemars-0.8 shape: an optional field omitted from
-        // `required`, nested object behind `definitions`/`$ref`, and no
-        // `additionalProperties` set anywhere.
-        let schema = json!({
-            "type": "object",
-            "properties": {
-                "nodes": { "type": "array", "items": { "$ref": "#/definitions/Node" } }
-            },
-            "required": ["nodes"],
-            "definitions": {
-                "Node": {
-                    "type": "object",
-                    "properties": {
-                        "name": { "type": "string" },
-                        "type": { "type": "string" },
-                        "description": { "type": ["string", "null"] }
-                    },
-                    "required": ["name", "type"]
-                }
-            }
-        });
-
-        let strict = to_strict_schema(&schema);
-
-        // Root object closed + all props required.
-        assert_eq!(strict["additionalProperties"], json!(false));
-        assert_eq!(strict["required"], json!(["nodes"]));
-
-        // Nested object inside definitions: every property now required
-        // (including the previously-optional `description`) and closed.
-        let node = &strict["definitions"]["Node"];
-        assert_eq!(node["additionalProperties"], json!(false));
-        let mut req: Vec<String> = node["required"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|v| v.as_str().unwrap().to_string())
-            .collect();
-        req.sort();
-        assert_eq!(req, vec!["description", "name", "type"]);
     }
 }

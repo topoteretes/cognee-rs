@@ -31,7 +31,7 @@ use cognee_database::{DatabaseConnection, IngestDb, connect, initialize, ops};
 use cognee_embedding::EmbeddingEngine;
 use cognee_graph::{GraphDBTrait, LadybugAdapter};
 use cognee_ingestion::AddPipeline;
-use cognee_llm::{Llm, OpenAIAdapter};
+use cognee_llm::{Llm, build_openai_compatible_adapter};
 use cognee_models::DataInput;
 use cognee_ontology::NoOpOntologyResolver;
 use cognee_storage::{LocalStorage, StorageTrait};
@@ -109,8 +109,13 @@ async fn cognify_e2e_stamps_with_expected_task_names() {
     // In-memory mock vector DB (qdrant extracted to closed cognee-vector-qdrant).
     let vector_db: Arc<dyn VectorDB> = Arc::new(MockVectorDB::new());
 
-    let llm: Arc<dyn Llm> =
-        Arc::new(OpenAIAdapter::new(model, token, Some(url)).expect("OpenAIAdapter::new"));
+    // Route through the production factory (provider from env, default `openai`)
+    // so litellm-style model prefixes are stripped exactly as in a real run.
+    let provider = std::env::var("LLM_PROVIDER").unwrap_or_else(|_| "openai".to_string());
+    let llm: Arc<dyn Llm> = Arc::new(
+        build_openai_compatible_adapter(&provider, &model, &token, &url, 3)
+            .expect("build_openai_compatible_adapter"),
+    );
 
     let owner_id = Uuid::new_v4();
 

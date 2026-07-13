@@ -26,7 +26,7 @@ use cognee_embedding::{EmbeddingEngine, MockEmbeddingEngine};
 use cognee_graph::{GraphDBTrait, LadybugAdapter};
 use cognee_ingestion::AddPipeline;
 use cognee_llm::mock::{MissPolicy, RecordingLlm, ReplayLlm};
-use cognee_llm::{Llm, OpenAIAdapter};
+use cognee_llm::{Llm, build_openai_compatible_adapter};
 use cognee_models::DataInput;
 use cognee_ontology::NoOpOntologyResolver;
 use cognee_storage::{LocalStorage, StorageTrait};
@@ -90,13 +90,18 @@ fn create_llm_from_env(cassette_name: &str) -> Arc<dyn Llm> {
                 .with_miss_policy(MissPolicy::Error),
         );
     }
+    // Route through the production factory (provider from env, default `openai`)
+    // so litellm-style model prefixes are stripped exactly as in a real run.
+    let provider = std::env::var("LLM_PROVIDER").unwrap_or_else(|_| "openai".to_string());
     let adapter: Arc<dyn Llm> = Arc::new(
-        OpenAIAdapter::new(
-            require_env("OPENAI_MODEL"),
-            require_env("OPENAI_TOKEN"),
-            Some(require_env("OPENAI_URL")),
+        build_openai_compatible_adapter(
+            &provider,
+            &require_env("OPENAI_MODEL"),
+            &require_env("OPENAI_TOKEN"),
+            &require_env("OPENAI_URL"),
+            3,
         )
-        .expect("OpenAIAdapter::new"),
+        .expect("build_openai_compatible_adapter"),
     );
     if std::env::var("COGNEE_RECORD_LLM").is_ok_and(|v| !v.is_empty()) {
         return Arc::new(RecordingLlm::new(adapter, cassette));

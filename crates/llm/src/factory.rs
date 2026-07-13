@@ -15,6 +15,8 @@
 //! `api.openai.com` host, so pointing it at another compatible endpoint does not
 //! trigger any OpenAI-specific behaviour.
 
+use tracing::warn;
+
 use crate::{LlmError, LlmResult, OpenAIAdapter};
 
 /// Default OpenAI-compatible base URL for a local Ollama server.
@@ -23,6 +25,71 @@ const OLLAMA_DEFAULT_ENDPOINT: &str = "http://localhost:11434/v1";
 const MISTRAL_DEFAULT_ENDPOINT: &str = "https://api.mistral.ai/v1";
 /// Default Gemini OpenAI-compatible base URL.
 const GEMINI_DEFAULT_ENDPOINT: &str = "https://generativelanguage.googleapis.com/v1beta/openai/";
+
+/// Known litellm *provider* prefixes that may appear as the leading
+/// `<provider>/` segment of a configured model name.
+///
+/// Python cognee routes every LLM call through litellm, whose model strings are
+/// provider-qualified (e.g. `openai/gpt-4o-mini`, `baseten/openai/gpt-oss-120b`).
+/// litellm strips the leading provider segment and sends the remainder to that
+/// provider's endpoint. We mirror that: [`strip_litellm_provider_prefix`] removes
+/// exactly one leading provider segment so the slug sent on the wire matches what
+/// litellm would send. Crucially only the *first* segment is stripped — for
+/// `baseten/openai/gpt-oss-120b` we strip `baseten/` and keep `openai/gpt-oss-120b`,
+/// because `openai/` is part of Baseten's real model slug (org "openai"), exactly
+/// as litellm does.
+///
+/// This is a hand-maintained *subset* of litellm's full provider registry —
+/// enough to cover the providers users actually configure here. An unrecognised
+/// prefix is simply left in place (the model is sent verbatim), so the worst case
+/// for a missing entry is a provider-qualified slug reaching the wire unchanged,
+/// not a wrong strip. Add entries as needed.
+const LITELLM_PROVIDER_PREFIXES: &[&str] = &[
+    "openai",
+    "azure",
+    "azure_ai",
+    "anthropic",
+    "baseten",
+    "ollama",
+    "mistral",
+    "gemini",
+    "vertex_ai",
+    "bedrock",
+    "cohere",
+    "groq",
+    "together_ai",
+    "fireworks_ai",
+    "deepinfra",
+    "deepseek",
+    "anyscale",
+    "perplexity",
+    "xai",
+    "openrouter",
+    "cerebras",
+    "sambanova",
+    "nvidia_nim",
+    "watsonx",
+    "replicate",
+    "huggingface",
+];
+
+/// Strip a single leading litellm provider segment (`<provider>/`) from `model`
+/// when `<provider>` is a recognised litellm provider (see
+/// [`LITELLM_PROVIDER_PREFIXES`]). Only the first segment is removed, matching
+/// litellm's routing: `baseten/openai/gpt-oss-120b` → `openai/gpt-oss-120b`,
+/// `openai/gpt-4o-mini` → `gpt-4o-mini`, `gpt-4o-mini` (no prefix) → unchanged.
+///
+/// Returns the remaining slug and, when a prefix was removed, the recognised
+/// prefix itself so the caller can flag a provider mismatch.
+fn strip_litellm_provider_prefix(model: &str) -> (&str, Option<&str>) {
+    if let Some((head, rest)) = model.split_once('/')
+        && !rest.is_empty()
+        && LITELLM_PROVIDER_PREFIXES.contains(&head)
+    {
+        return (rest, Some(head));
+    }
+    (model, None)
+}
 
 /// Providers this factory routes onto [`OpenAIAdapter`]. Single source of truth so
 /// the "unsupported provider" message can never drift from the match arms below.
@@ -48,9 +115,13 @@ const SUPPORTED_PROVIDERS: &[&str] = &[
 /// `max_retries` is floored at 1 and applied to both the structured-output and
 /// network retry loops, matching the previous inline wiring.
 ///
-/// litellm-style provider prefixes on the model (`ollama/`, `mistral/`,
-/// `gemini/`) are stripped so provider-qualified config values keep working
-/// (the adapter itself only strips `openai/`).
+/// litellm-style provider prefixes on the model (`openai/`, `baseten/`,
+/// `ollama/`, `mistral/`, `gemini/`, `groq/`, …) are stripped so
+/// provider-qualified config values work exactly as they do under Python's
+/// litellm. Only the first `<provider>/` segment is removed, so a real slug that
+/// itself contains a slash survives — e.g. `baseten/openai/gpt-oss-120b` becomes
+/// `openai/gpt-oss-120b` (Baseten's org is literally "openai"). `custom` /
+/// `openai_compatible` pass the model verbatim.
 ///
 /// Returns [`LlmError::ConfigError`] when a required API key or endpoint is
 /// missing, or the provider is unsupported, so each caller can decide whether to
@@ -66,29 +137,24 @@ pub fn build_openai_compatible_adapter(
     let provider = provider.to_ascii_lowercase();
     let endpoint = endpoint.trim();
 
-    // Per provider: resolved base URL and the litellm-style model prefix to strip.
-    let (base_url, strip_prefix): (Option<String>, Option<&str>) = match provider.as_str() {
+    // Per provider: resolved base URL and whether to strip a leading litellm
+    // provider prefix from the model. `custom` / `openai_compatible` pass the
+    // model verbatim (the user supplied the exact slug their endpoint expects);
+    // every other provider strips one litellm provider segment for parity with
+    // Python's litellm routing.
+    let (base_url, strip): (Option<String>, bool) = match provider.as_str() {
         // Empty endpoint → None so the adapter uses its OpenAI default.
-        "openai" => (non_empty(endpoint), None),
-        "ollama" => (
-            Some(endpoint_or(endpoint, OLLAMA_DEFAULT_ENDPOINT)),
-            Some("ollama/"),
-        ),
-        "mistral" => (
-            Some(endpoint_or(endpoint, MISTRAL_DEFAULT_ENDPOINT)),
-            Some("mistral/"),
-        ),
-        "gemini" => (
-            Some(endpoint_or(endpoint, GEMINI_DEFAULT_ENDPOINT)),
-            Some("gemini/"),
-        ),
+        "openai" => (non_empty(endpoint), true),
+        "ollama" => (Some(endpoint_or(endpoint, OLLAMA_DEFAULT_ENDPOINT)), true),
+        "mistral" => (Some(endpoint_or(endpoint, MISTRAL_DEFAULT_ENDPOINT)), true),
+        "gemini" => (Some(endpoint_or(endpoint, GEMINI_DEFAULT_ENDPOINT)), true),
         "custom" | "openai_compatible" => {
             if endpoint.is_empty() {
                 return Err(LlmError::ConfigError(format!(
                     "llm_endpoint must be configured for provider '{provider}'"
                 )));
             }
-            (Some(endpoint.to_string()), None)
+            (Some(endpoint.to_string()), false)
         }
         other => {
             return Err(LlmError::ConfigError(format!(
@@ -106,9 +172,31 @@ pub fn build_openai_compatible_adapter(
         ));
     }
 
-    let model = match strip_prefix {
-        Some(prefix) => model.strip_prefix(prefix).unwrap_or(model),
-        None => model,
+    let model = if strip {
+        let (stripped, prefix) = strip_litellm_provider_prefix(model);
+        // A stripped prefix that differs from the configured provider is a
+        // configuration smell: e.g. `provider=openai` + `model=anthropic/claude-3`
+        // would send `claude-3` to the OpenAI endpoint and 404. We still strip
+        // (this is exactly how the legitimate Baseten config
+        // `provider=openai` + `model=baseten/openai/gpt-oss-120b` works — the
+        // `baseten/` prefix is litellm routing metadata, not the OpenAI provider),
+        // but warn so a genuine mismatch is visible rather than silently mangled.
+        if let Some(prefix) = prefix
+            && prefix != provider
+        {
+            warn!(
+                configured_provider = %provider,
+                stripped_prefix = %prefix,
+                original_model = %model,
+                wire_model = %stripped,
+                "litellm model prefix does not match configured llm_provider; stripping it \
+                 and sending the remainder to the configured endpoint. If this is a real \
+                 mismatch, drop the prefix from llm_model or set llm_provider=custom.",
+            );
+        }
+        stripped
+    } else {
+        model
     };
 
     let adapter = OpenAIAdapter::new(model.to_string(), api_key.to_string(), base_url)?
@@ -152,6 +240,78 @@ mod tests {
                 .expect("adapter should build");
         // OpenAIAdapter strips the leading `openai/` litellm-style prefix.
         assert_eq!(adapter.model(), "gpt-4o-mini");
+    }
+
+    #[test]
+    fn openai_strips_only_first_litellm_provider_segment() {
+        // litellm-style Baseten config: provider=openai, model carries the
+        // litellm provider prefix `baseten/`. We must strip only `baseten/` and
+        // keep `openai/gpt-oss-120b` (Baseten's real slug — org "openai").
+        let adapter = build_openai_compatible_adapter(
+            "openai",
+            "baseten/openai/gpt-oss-120b",
+            "sk-test",
+            "https://inference.baseten.co/v1",
+            3,
+        )
+        .expect("adapter should build");
+        assert_eq!(adapter.model(), "openai/gpt-oss-120b");
+
+        // A bare `openai/` prefix against real OpenAI is stripped to the slug.
+        let adapter =
+            build_openai_compatible_adapter("openai", "openai/gpt-4o-mini", "sk-test", "", 3)
+                .expect("adapter should build");
+        assert_eq!(adapter.model(), "gpt-4o-mini");
+    }
+
+    #[test]
+    fn strip_reports_the_removed_prefix_for_mismatch_detection() {
+        // #3: the stripper surfaces which recognised prefix it removed so the
+        // builder can warn on a provider mismatch.
+        assert_eq!(
+            strip_litellm_provider_prefix("anthropic/claude-3"),
+            ("claude-3", Some("anthropic"))
+        );
+        assert_eq!(
+            strip_litellm_provider_prefix("baseten/openai/gpt-oss-120b"),
+            ("openai/gpt-oss-120b", Some("baseten"))
+        );
+        assert_eq!(
+            strip_litellm_provider_prefix("gpt-4o-mini"),
+            ("gpt-4o-mini", None)
+        );
+        // An unrecognised prefix is left in place (sent verbatim).
+        assert_eq!(
+            strip_litellm_provider_prefix("acme/model"),
+            ("acme/model", None)
+        );
+    }
+
+    #[test]
+    fn provider_mismatch_still_strips_and_builds() {
+        // #3: `provider=openai` + a non-openai litellm prefix still strips (the
+        // legitimate Baseten config relies on this) and builds; the mismatch is
+        // surfaced via a `warn!`, not by mangling silently or failing.
+        let adapter =
+            build_openai_compatible_adapter("openai", "anthropic/claude-3", "sk-test", "", 3)
+                .expect("adapter should build");
+        assert_eq!(adapter.model(), "claude-3");
+    }
+
+    #[test]
+    fn custom_provider_never_strips_prefix() {
+        // A `custom`/`openai_compatible` endpoint gets the model verbatim, even
+        // when it looks like a litellm provider prefix — the user gave the exact
+        // slug their endpoint expects.
+        let adapter = build_openai_compatible_adapter(
+            "custom",
+            "openai/gpt-oss-120b",
+            "sk-test",
+            "https://inference.baseten.co/v1",
+            3,
+        )
+        .expect("adapter should build");
+        assert_eq!(adapter.model(), "openai/gpt-oss-120b");
     }
 
     #[test]
