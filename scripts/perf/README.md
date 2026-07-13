@@ -98,7 +98,7 @@ MOCK_EMBEDDING=deterministic \
     --memories scripts/perf/fixtures/large/memories.json \
     --num-memories 3 --llm-model gpt-4o-mini --output /tmp/record_large.json
 
-# Full book: drop --num-memories. The committed cassette records 1232 nodes.
+# Full book: drop --num-memories. The committed cassette records 1189 nodes.
 ```
 
 Then replay and profile fully offline (no key). `--profile-dir` emits a per-phase
@@ -112,7 +112,7 @@ MOCK_LLM=true MOCK_EMBEDDING=deterministic \
     --mock-llm --mock-memories scripts/perf/fixtures/large/cassette.json \
     --memories scripts/perf/fixtures/large/memories.json \
     --profile-dir target/perf-profiles/large \
-    --min-graph-nodes 1232 \
+    --min-graph-nodes 1189 \
     --output /tmp/mock_large.json
 ```
 

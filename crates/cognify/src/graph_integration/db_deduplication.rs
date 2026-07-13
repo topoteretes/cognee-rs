@@ -6,7 +6,7 @@
 use std::collections::{HashMap, HashSet};
 
 use cognee_graph::{EdgeData, GraphDBTrait};
-use cognee_utils::generate_node_id;
+use cognee_models::Entity;
 
 use crate::error::CognifyError;
 use crate::fact_extraction::KnowledgeGraph;
@@ -15,7 +15,7 @@ use crate::fact_extraction::KnowledgeGraph;
 ///
 /// This function:
 /// 1. Collects all edges from the knowledge graphs
-/// 2. Generates deterministic UUIDs for entity nodes using `generate_node_id()`
+/// 2. Generates deterministic UUIDs for entity nodes using `Entity::id_for()`
 /// 3. Batch queries the graph database to check which edges already exist
 /// 4. Returns a set of existing edge keys
 ///
@@ -59,9 +59,14 @@ pub async fn retrieve_existing_edges(
 
     for graph in graphs {
         for edge in &graph.edges {
-            // Generate deterministic UUIDs for source and target nodes
-            let source_uuid = generate_node_id(&edge.source_node_id);
-            let target_uuid = generate_node_id(&edge.target_node_id);
+            // Generate deterministic UUIDs for source and target nodes. Must use
+            // the SAME scheme entities are actually persisted with
+            // (`Entity::id_for`) — using the old bare `generate_node_id` here made
+            // these keys never match the stored (deterministic) entity ids, so
+            // edge dedup was a silent no-op (issue #57 corollary). Matches
+            // Python `retrieve_existing_edges.py:75-76` (`Entity.id_for`).
+            let source_uuid = Entity::id_for(&edge.source_node_id);
+            let target_uuid = Entity::id_for(&edge.target_node_id);
 
             // Only process if we haven't seen both nodes before
             let source_str = edge.source_node_id.as_str();
@@ -170,8 +175,8 @@ mod tests {
         let graph = create_test_graph();
 
         // Add the edge to the database first
-        let alice_uuid = generate_node_id("alice");
-        let techcorp_uuid = generate_node_id("techcorp");
+        let alice_uuid = Entity::id_for("alice");
+        let techcorp_uuid = Entity::id_for("techcorp");
 
         let _ = graph_db
             .add_edge(
@@ -220,8 +225,8 @@ mod tests {
         };
 
         // Add only the first edge to the database
-        let alice_uuid = generate_node_id("alice");
-        let techcorp_uuid = generate_node_id("techcorp");
+        let alice_uuid = Entity::id_for("alice");
+        let techcorp_uuid = Entity::id_for("techcorp");
 
         let _ = graph_db
             .add_edge(

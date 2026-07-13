@@ -30,6 +30,16 @@ impl EntityType {
     /// Index fields to embed for vector search.
     pub const INDEX_FIELDS: &'static [&'static str] = &["name"];
 
+    /// Deterministic, class-namespaced id for an EntityType identity value.
+    ///
+    /// Mirrors Python's `EntityType.id_for(value)` (`identity_fields=["name"]`):
+    /// `uuid5(NAMESPACE_OID, "EntityType:<normalized_value>")`. The distinct
+    /// class prefix is what prevents an `Entity` and an `EntityType` with the
+    /// same name from colliding on one id (topoteretes/cognee#2510/#2515).
+    pub fn id_for(value: &str) -> Uuid {
+        cognee_utils::data_point_id_for("EntityType", &[value])
+    }
+
     /// Create a new EntityType.
     ///
     /// # Arguments
@@ -50,8 +60,13 @@ impl EntityType {
         let name_str = name.into();
         let description_str = description.into();
 
+        // Deterministic, class-namespaced id derived from `name`, mirroring
+        // Python's `identity_fields=["name"]` derivation.
+        let mut base = DataPoint::with_metadata("EntityType", dataset_id, metadata);
+        base.id = Self::id_for(&name_str);
+
         Self {
-            base: DataPoint::with_metadata("EntityType", dataset_id, metadata),
+            base,
             name: name_str.clone(),
             description: if description_str.is_empty() {
                 format!("Entity type: {name_str}")
@@ -146,6 +161,27 @@ mod tests {
 
         assert_eq!(et.name, "Location");
         assert_eq!(et.description, "Entity type: Location");
+    }
+
+    #[test]
+    fn test_id_for_matches_python() {
+        // Python: EntityType.id_for("Organization") = uuid5(OID, "EntityType:organization")
+        assert_eq!(
+            EntityType::id_for("Organization"),
+            Uuid::new_v5(&Uuid::NAMESPACE_OID, b"EntityType:organization"),
+        );
+    }
+
+    #[test]
+    fn test_new_id_is_deterministic_from_name() {
+        let a = EntityType::from_node_type("Organization", None);
+        let b = EntityType::new(
+            "Organization",
+            "different description",
+            Some(Uuid::new_v4()),
+        );
+        assert_eq!(a.base.id, b.base.id);
+        assert_eq!(a.base.id, EntityType::id_for("Organization"));
     }
 
     #[test]

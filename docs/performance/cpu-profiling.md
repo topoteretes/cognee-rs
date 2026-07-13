@@ -12,8 +12,14 @@ At the 50-memory fixture the pipeline is await/IO-bound, not CPU-bound. Cognify
 is only about 11% on-CPU, so a sampling profiler sees almost nothing worth
 optimising. The CPU hot paths only appear at document scale.
 
-On the large corpus (Moby-Dick, 135 chapters, about 1.2 MB, producing 1232 nodes
-and 2744 edges) the picture is clear:
+On the large corpus (Moby-Dick, 135 chapters, about 1.2 MB, producing 1189 nodes
+and 2667 edges) the picture is clear:
+
+> Node/edge counts reflect the deterministic, class-namespaced entity-id scheme
+> (issue #57). The earlier random-id scheme recorded 1232 nodes / 2744 edges;
+> deterministic ids now merge case/spacing-variant entities that previously
+> stayed distinct. The timing figures below are from the pre-#57 profiling run
+> and remain representative of the hotspot structure.
 
 - `add` is the biggest CPU cost: 8.5 s wall, about 57% on-CPU, dominated by
   ingestion and chunking.
@@ -35,7 +41,7 @@ once the graph is large. That is the reason for the committed Moby-Dick fixture.
 | | 50 memories | Moby-Dick (135 ch) |
 |---|---|---|
 | corpus text | 21 KB | 1.2 MB |
-| graph size | 150 nodes / 100 edges | 1232 nodes / 2744 edges |
+| graph size | 150 nodes / 100 edges | 1189 nodes / 2667 edges |
 | add (wall) | 3.0 s | 8.5 s |
 | cognify (wall) | 0.86 s | 5.76 s |
 | search (wall) | 0.25 s | 0.35 s |
@@ -142,11 +148,11 @@ MOCK_LLM=true MOCK_EMBEDDING=deterministic \
     --mock-llm --mock-memories scripts/perf/fixtures/large/cassette.json \
     --memories scripts/perf/fixtures/large/memories.json \
     --profile-dir target/perf-profiles/large \
-    --min-graph-nodes 1232 \
+    --min-graph-nodes 1189 \
     --output /tmp/mock_large.json
 ```
 
 Artifacts land in `target/perf-profiles/large/`: `<phase>.svg` (flamegraph) and
-`<phase>.telemetry.json` (wall-clock breakdown). `--min-graph-nodes 1232` asserts
+`<phase>.telemetry.json` (wall-clock breakdown). `--min-graph-nodes 1189` asserts
 the recorded baseline so a stale cassette fails loudly instead of profiling an
 empty graph.

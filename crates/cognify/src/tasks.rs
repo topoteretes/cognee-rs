@@ -41,7 +41,7 @@ use cognee_ingestion::loaders::image::ImageLoader;
 use cognee_ingestion::loaders::{LoaderOutput, LoaderRegistry};
 use cognee_llm::Llm;
 use cognee_models::{
-    Data, Document, DocumentChunk, EdgeType, Embedding, TemporalEvent,
+    Data, Document, DocumentChunk, EdgeType, Embedding, Entity, TemporalEvent,
     classify_documents as model_classify_documents,
 };
 use cognee_ontology::OntologyResolver;
@@ -1435,10 +1435,10 @@ pub async fn add_temporal_data_points(
 
         // ── Entity attribute nodes and edges ────────────────────────────────
         for attr in &event.attributes {
-            let entity_id = Uuid::new_v5(
-                &Uuid::NAMESPACE_OID,
-                format!("entity:{}", attr.entity).as_bytes(),
-            );
+            // Python temporal path: `Entity.id_for(attribute.entity)`
+            // (add_entities_to_event.py:39). Was a bare `entity:{name}` hash with
+            // no normalization and no class prefix.
+            let entity_id = Entity::id_for(&attr.entity);
 
             if seen_entity_ids.insert(entity_id) {
                 graph_nodes.push(json!({

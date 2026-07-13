@@ -34,6 +34,17 @@ impl Entity {
     /// Index fields to embed for vector search.
     pub const INDEX_FIELDS: &'static [&'static str] = &["name"];
 
+    /// Deterministic, class-namespaced id for an Entity identity value.
+    ///
+    /// Mirrors Python's `Entity.id_for(value)` (`identity_fields=["name"]`):
+    /// `uuid5(NAMESPACE_OID, "Entity:<normalized_value>")`. This is the single
+    /// source of truth for "what id does the entity with this identity have",
+    /// used both when constructing entities and when looking them up from a raw
+    /// string before an instance exists.
+    pub fn id_for(value: &str) -> Uuid {
+        cognee_utils::data_point_id_for("Entity", &[value])
+    }
+
     /// Create a new Entity.
     ///
     /// # Arguments
@@ -47,15 +58,23 @@ impl Entity {
         description: impl Into<String>,
         dataset_id: Option<Uuid>,
     ) -> Self {
+        let name = name.into();
         let mut metadata = std::collections::HashMap::new();
         metadata.insert(
             "index_fields".to_string(),
             serde_json::json!(Self::INDEX_FIELDS),
         );
 
+        // Deterministic, class-namespaced id derived from the identity value
+        // (`name`), mirroring Python's `identity_fields=["name"]` derivation in
+        // `DataPoint.__init__`. Prevents the random-uuid4 footgun that made the
+        // same entity duplicate across cognify runs.
+        let mut base = DataPoint::with_metadata("Entity", dataset_id, metadata);
+        base.id = Self::id_for(&name);
+
         Self {
-            base: DataPoint::with_metadata("Entity", dataset_id, metadata),
-            name: name.into(),
+            base,
+            name,
             is_a: entity_type_id,
             description: description.into(),
         }
@@ -76,6 +95,7 @@ impl Entity {
         entity_type_id: Uuid,
         dataset_id: Option<Uuid>,
     ) -> Self {
+        let node_id = node_id.into();
         let mut entity = Self::new(
             node_name,
             Some(entity_type_id),
@@ -83,9 +103,15 @@ impl Entity {
             dataset_id,
         );
 
+        // Python `_create_entity_node` hashes the LLM-supplied node id (not the
+        // display name) into the id — `Entity(id=Entity.id_for(node_id), …)`
+        // (expand_with_nodes_and_edges.py:183,209). Override the name-derived id
+        // from `new` with the node-id-derived one for faithful parity.
+        entity.base.id = Self::id_for(&node_id);
+
         entity
             .base
-            .set_metadata("original_node_id", serde_json::json!(node_id.into()));
+            .set_metadata("original_node_id", serde_json::json!(node_id));
 
         entity
     }
@@ -158,6 +184,49 @@ mod tests {
         assert_eq!(
             entity.base.get_metadata("original_node_id"),
             Some(&serde_json::json!("techcorp_1"))
+        );
+    }
+
+    #[test]
+    fn test_id_for_matches_python() {
+        // Python: Entity.id_for("Alice") = uuid5(OID, "Entity:alice")
+        assert_eq!(
+            Entity::id_for("Alice"),
+            Uuid::new_v5(&Uuid::NAMESPACE_OID, b"Entity:alice"),
+        );
+    }
+
+    #[test]
+    fn test_new_id_is_deterministic_from_name() {
+        // Two entities with the same name resolve to the same id — this is what
+        // lets the same entity merge across cognify runs (regresses issue #57's
+        // inverse: random ids caused silent duplication).
+        let a = Entity::new("Acme Corp", None, "desc a", None);
+        let b = Entity::new(
+            "Acme Corp",
+            Some(Uuid::new_v4()),
+            "desc b",
+            Some(Uuid::new_v4()),
+        );
+        assert_eq!(a.base.id, b.base.id);
+        assert_eq!(a.base.id, Entity::id_for("Acme Corp"));
+    }
+
+    #[test]
+    fn test_from_node_hashes_node_id_not_name() {
+        // Python hashes the LLM node id, not the display name.
+        let e = Entity::from_node("node-42", "Alice", "desc", Uuid::new_v4(), None);
+        assert_eq!(e.base.id, Entity::id_for("node-42"));
+        assert_ne!(e.base.id, Entity::id_for("Alice"));
+    }
+
+    #[test]
+    fn test_entity_and_entity_type_ids_do_not_collide() {
+        // The class prefix keeps a Person "institution" and a type "institution"
+        // on distinct ids (topoteretes/cognee#2510/#2515).
+        assert_ne!(
+            Entity::id_for("institution"),
+            crate::EntityType::id_for("institution"),
         );
     }
 

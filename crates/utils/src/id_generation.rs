@@ -48,6 +48,45 @@ pub fn generate_node_id(node_id: &str) -> Uuid {
     Uuid::new_v5(&NAMESPACE_OID, normalized.as_bytes())
 }
 
+/// Generate a deterministic, class-namespaced UUID for a `DataPoint` subclass.
+///
+/// Mirrors Python cognee's `DataPoint.id_for` — the single source of truth for
+/// identity-bearing node ids:
+///
+/// ```text
+/// uuid5(NAMESPACE_OID, f"{class_name}:{normalized_values.join('|')}")
+/// ```
+///
+/// The class name is baked into the hash input so two different node kinds can
+/// never collide on the same identity string (e.g. `Entity("institution")` vs
+/// `EntityType("institution")` — the pre-namespacing collision fixed in
+/// topoteretes/cognee#2510/#2515). Each value is normalized with
+/// [`normalize_identifier`] (lowercase, spaces → `_`, apostrophes stripped),
+/// byte-for-byte matching Python's `_normalize_identity_value`.
+///
+/// # Arguments
+/// * `class_name` - The `DataPoint` subclass name (e.g. `"Entity"`, `"EntityType"`, `"EdgeType"`)
+/// * `values` - The identity values (usually a single element; joined with `|`)
+///
+/// # Examples
+/// ```
+/// use cognee_utils::id_generation::data_point_id_for;
+/// use uuid::Uuid;
+///
+/// assert_eq!(
+///     data_point_id_for("Entity", &["Alice"]),
+///     Uuid::new_v5(&uuid::Uuid::NAMESPACE_OID, b"Entity:alice"),
+/// );
+/// ```
+pub fn data_point_id_for(class_name: &str, values: &[&str]) -> Uuid {
+    let joined = values
+        .iter()
+        .map(|v| normalize_identifier(v))
+        .collect::<Vec<_>>()
+        .join("|");
+    Uuid::new_v5(&NAMESPACE_OID, format!("{class_name}:{joined}").as_bytes())
+}
+
 /// Generate a normalized edge name string.
 ///
 /// Unlike `generate_node_id()`, this returns a normalized string rather than a UUID,
@@ -103,10 +142,11 @@ pub fn generate_node_name(name: &str) -> String {
     name.to_lowercase().replace('\'', "")
 }
 
-/// Internal normalization helper for IDs and edge names.
+/// Normalization helper for IDs and edge names.
 ///
 /// Applies full normalization: lowercase, spaces → underscores, remove apostrophes.
-fn normalize_identifier(input: &str) -> String {
+/// Byte-for-byte matches Python cognee's `DataPoint._normalize_identity_value`.
+pub fn normalize_identifier(input: &str) -> String {
     input.to_lowercase().replace(' ', "_").replace('\'', "")
 }
 
@@ -181,5 +221,39 @@ mod tests {
         assert_eq!(normalize_identifier("Hello World"), "hello_world");
         assert_eq!(normalize_identifier("It's Great"), "its_great");
         assert_eq!(normalize_identifier("UPPER_CASE"), "upper_case");
+    }
+
+    #[test]
+    fn test_data_point_id_for_matches_python() {
+        // Python: uuid5(NAMESPACE_OID, f"{cls.__name__}:{normalized}")
+        assert_eq!(
+            data_point_id_for("Entity", &["Alice"]),
+            Uuid::new_v5(&NAMESPACE_OID, b"Entity:alice"),
+        );
+        assert_eq!(
+            data_point_id_for("EntityType", &["Organization"]),
+            Uuid::new_v5(&NAMESPACE_OID, b"EntityType:organization"),
+        );
+        assert_eq!(
+            data_point_id_for("EdgeType", &["works at"]),
+            Uuid::new_v5(&NAMESPACE_OID, b"EdgeType:works_at"),
+        );
+    }
+
+    #[test]
+    fn test_data_point_id_for_class_namespaced() {
+        // Same identity string, different class → different id (no collision).
+        assert_ne!(
+            data_point_id_for("Entity", &["institution"]),
+            data_point_id_for("EntityType", &["institution"]),
+        );
+    }
+
+    #[test]
+    fn test_data_point_id_for_joins_multiple_values() {
+        assert_eq!(
+            data_point_id_for("Entity", &["Alice", "Bob"]),
+            Uuid::new_v5(&NAMESPACE_OID, b"Entity:alice|bob"),
+        );
     }
 }
