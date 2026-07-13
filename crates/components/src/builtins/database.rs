@@ -4,13 +4,14 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use cognee_database::{DatabaseConnection, connect, initialize};
+use cognee_database::{DatabaseConnection, connect, initialize, sqlite_url_is_in_memory};
 
 use crate::context::BackendBuildContext;
 use crate::error::ComponentError;
 
 /// Extract the on-disk filesystem path from a SQLite URL, or `None` for
-/// non-file URLs (`postgres://…`, in-memory `sqlite::memory:`).
+/// non-file URLs (`postgres://…`, in-memory `sqlite::memory:` or
+/// `?mode=memory`).
 ///
 /// SQLite has no meaningful remote "host", so any `//<authority>` is treated as
 /// part of the path — matching the HTTP server's historical
@@ -26,7 +27,7 @@ use crate::error::ComponentError;
 ///
 /// Any `?query` (e.g. `?mode=rwc`) is stripped.
 fn sqlite_fs_path(url: &str) -> Option<String> {
-    if !url.starts_with("sqlite:") || url.contains(":memory:") {
+    if !url.starts_with("sqlite:") || sqlite_url_is_in_memory(url) {
         return None;
     }
     let after = url.trim_start_matches("sqlite:");

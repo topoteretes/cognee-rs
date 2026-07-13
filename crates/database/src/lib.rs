@@ -16,7 +16,7 @@ pub use ops::tutorial_seeder::{
     TUTORIAL_BASICS_ID, TUTORIAL_PYTHON_DEV_ID, seed_tutorials_if_first_call,
 };
 
-pub use connection::{PoolConfig, connect, connect_with_pool, initialize, sqlite_url_is_in_memory};
+pub use connection::{connect, initialize, sqlite_url_is_in_memory};
 
 /// Generic backend-label helper shared by the concrete public fn below and the
 /// transaction-scoped internals in `ops::graph_storage` (a `DatabaseTransaction`

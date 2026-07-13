@@ -115,20 +115,29 @@ async fn provenance_graph_rolls_back_when_edge_upsert_fails() {
     let data = Uuid::new_v4();
     let nodes = make_nodes(user, dataset, data, 3);
 
+    // A valid edge ahead of the poison edge: if the group were not atomic, this
+    // edge could persist even though a later edge in the same group fails.
+    let valid_edge = make_edge(user, dataset, data, nodes[1].id, nodes[2].id);
     // dataset_id with no `datasets` row -> FK violation midway through the group.
     let missing_dataset = Uuid::new_v4();
     let poison_edge = make_edge(user, missing_dataset, data, nodes[0].id, nodes[1].id);
 
-    let result = upsert_provenance_graph(&db, &nodes, &[poison_edge]).await;
+    let result = upsert_provenance_graph(&db, &nodes, &[valid_edge, poison_edge]).await;
     assert!(
         result.is_err(),
         "edge upsert against a missing dataset must fail"
     );
 
-    let persisted = get_nodes_by_dataset(&db, dataset).await.expect("query");
+    let persisted_nodes = get_nodes_by_dataset(&db, dataset).await.expect("query");
     assert!(
-        persisted.is_empty(),
+        persisted_nodes.is_empty(),
         "rolled-back node provenance must not persist, found {}",
-        persisted.len()
+        persisted_nodes.len()
+    );
+    let persisted_edges = get_edges_by_dataset(&db, dataset).await.expect("query");
+    assert!(
+        persisted_edges.is_empty(),
+        "rolled-back edge provenance must not persist, found {}",
+        persisted_edges.len()
     );
 }

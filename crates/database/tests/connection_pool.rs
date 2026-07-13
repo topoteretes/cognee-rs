@@ -1,7 +1,8 @@
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
-    reason = "test code — panics are acceptable failures"
+    clippy::permissions_set_readonly_false,
+    reason = "test code — panics are acceptable failures; readonly is cleared only to let tempdir remove a deliberately read-only fixture file"
 )]
 //! Regression tests for relational connection-pool sizing and SQLite
 //! journaling.
@@ -163,4 +164,77 @@ async fn read_only_file_sqlite_connects_and_keeps_journal_mode() {
         "delete",
         "read-only open must not switch the journal mode",
     );
+}
+
+/// The read-only *mount / file-permission* case (no `mode=ro` in the URL):
+/// WAL is gated on real filesystem writability, so a plain URL on a read-only
+/// file opens read-only and serves reads instead of failing at connect.
+#[tokio::test]
+async fn read_only_file_permission_connects_without_wal() {
+    use sea_orm::sqlx::ConnectOptions as _;
+    use sea_orm::sqlx::sqlite::SqliteConnectOptions;
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("ro_perm.db");
+
+    // Seed with raw sqlx so the file stays in the default DELETE journal.
+    {
+        use sea_orm::sqlx::Connection;
+        let mut conn = SqliteConnectOptions::new()
+            .filename(&path)
+            .create_if_missing(true)
+            .connect()
+            .await
+            .expect("seed connect");
+        sea_orm::sqlx::query("CREATE TABLE t (x INTEGER)")
+            .execute(&mut conn)
+            .await
+            .expect("seed schema");
+        conn.close().await.expect("close seed connection");
+    }
+
+    // Make the file itself read-only, without `mode=ro` in the URL. Pre-fix,
+    // `connect` issued `PRAGMA journal_mode=WAL` unconditionally, which writes
+    // to the file and fails with "attempt to write a readonly database".
+    let mut perms = std::fs::metadata(&path).unwrap().permissions();
+    perms.set_readonly(true);
+    std::fs::set_permissions(&path, perms).unwrap();
+
+    // Where DAC can't make the file unwritable (e.g. running as root on Unix),
+    // the regression can't be exercised — restore and skip rather than fail
+    // spuriously.
+    if std::fs::OpenOptions::new().write(true).open(&path).is_ok() {
+        let mut perms = std::fs::metadata(&path).unwrap().permissions();
+        perms.set_readonly(false);
+        std::fs::set_permissions(&path, perms).unwrap();
+        return;
+    }
+
+    let url = format!("sqlite://{}", path.display());
+    let db = connect(&url)
+        .await
+        .expect("plain URL on a read-only file must still connect");
+
+    let row = db
+        .query_one(Statement::from_string(
+            DatabaseBackend::Sqlite,
+            "SELECT COUNT(*) FROM t;",
+        ))
+        .await
+        .expect("read query")
+        .expect("count row");
+    let count: i64 = row.try_get_by_index(0).unwrap();
+    assert_eq!(count, 0, "read-only connection must be able to read");
+
+    assert_eq!(
+        journal_mode(&db).await,
+        "delete",
+        "read-only file must not be switched to WAL",
+    );
+
+    // Restore writability so tempdir cleanup can remove the file (Windows keeps
+    // a read-only attribute that blocks deletion otherwise).
+    let mut perms = std::fs::metadata(&path).unwrap().permissions();
+    perms.set_readonly(false);
+    std::fs::set_permissions(&path, perms).unwrap();
 }
