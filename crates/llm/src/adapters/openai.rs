@@ -15,7 +15,7 @@ use tracing::{debug, instrument, warn};
 use cognee_utils::tracing_keys::{COGNEE_LLM_MODEL, COGNEE_LLM_PROVIDER};
 
 use crate::error::{LlmError, LlmResult};
-use crate::llm_trait::Llm;
+use crate::llm_trait::{Llm, StructuredOutputValidator};
 use crate::transcriber::{Transcriber, TranscriptionOutput, validate_audio_format};
 use crate::types::{GenerationOptions, GenerationResponse, Message, MessageRole, TokenUsage};
 
@@ -386,16 +386,27 @@ impl OpenAIAdapter {
     /// Append a corrective instruction to the last user message of `request`,
     /// nudging the model to return a single valid object on a retry attempt.
     /// Mirrors instructor's repair prompt on a validation/parse failure.
-    fn append_corrective_instruction(request: &mut Value) {
+    ///
+    /// When `reason` is `Some`, it is surfaced verbatim (e.g. a serde
+    /// `missing field \`type\`` message) so the model knows precisely which
+    /// required field or structural constraint the previous response violated —
+    /// this threads `T`'s typed validation into the repair prompt, matching how
+    /// instructor feeds the validation error back to the model.
+    fn append_corrective_instruction(request: &mut Value, reason: Option<&str>) {
         if let Some(messages) = request["messages"].as_array_mut()
             && let Some(last_msg) = messages.last_mut()
             && last_msg["role"] == "user"
         {
             let original = last_msg["content"].as_str().unwrap_or("");
+            let detail = match reason {
+                Some(r) => format!("Your previous response failed validation: {r}. "),
+                None => "Your previous response could not be parsed into the required structure. "
+                    .to_string(),
+            };
             last_msg["content"] = json!(format!(
-                "{original}\n\nYour previous response could not be parsed into the required \
-                 structure. Call the `extract_structured_data` function again and return ONE \
-                 valid object that fills in every required field. No extra text."
+                "{original}\n\n{detail}Call the `extract_structured_data` function again and \
+                 return ONE valid object that fills in every required field, strictly matching \
+                 the schema. No extra text."
             ));
         }
     }
@@ -469,6 +480,126 @@ impl Llm for OpenAIAdapter {
         json_schema: &Value,
         options: Option<GenerationOptions>,
     ) -> LlmResult<Value> {
+        self.structured_output_impl(messages, json_schema, options, None)
+            .await
+    }
+
+    async fn create_structured_output_with_messages_raw_validated(
+        &self,
+        messages: Vec<Message>,
+        json_schema: &Value,
+        options: Option<GenerationOptions>,
+        validator: StructuredOutputValidator<'_>,
+    ) -> LlmResult<Value> {
+        self.structured_output_impl(messages, json_schema, options, Some(validator))
+            .await
+    }
+
+    fn model(&self) -> &str {
+        &self.model
+    }
+
+    fn supports_streaming(&self) -> bool {
+        true
+    }
+
+    fn supports_function_calling(&self) -> bool {
+        true
+    }
+
+    fn max_context_length(&self) -> u32 {
+        // Context lengths for common OpenAI models
+        match self.model.as_str() {
+            m if m.starts_with("gpt-4-turbo") => 128_000,
+            m if m.starts_with("gpt-4-32k") => 32_768,
+            m if m.starts_with("gpt-4") => 8_192,
+            m if m.starts_with("gpt-3.5-turbo-16k") => 16_384,
+            m if m.starts_with("gpt-3.5-turbo") => 4_096,
+            _ => 4_096, // Conservative default
+        }
+    }
+
+    async fn transcribe_image(
+        &self,
+        image_bytes: &[u8],
+        mime_type: &str,
+        options: Option<GenerationOptions>,
+    ) -> LlmResult<String> {
+        use base64::Engine as _;
+
+        if !mime_type.starts_with("image/") {
+            return Err(LlmError::InvalidResponse(format!(
+                "Expected image/* MIME type, got: {mime_type}"
+            )));
+        }
+
+        let b64 = base64::engine::general_purpose::STANDARD.encode(image_bytes);
+        let data_uri = format!("data:{mime_type};base64,{b64}");
+
+        let vision_model = std::env::var("LLM_VISION_MODEL")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| self.model.clone());
+
+        let max_tokens = options.as_ref().and_then(|o| o.max_tokens).unwrap_or(300);
+
+        let mut request_body = json!({
+            "model": vision_model,
+            "messages": [{
+                "role": "user",
+                "content": [
+                    { "type": "text", "text": "What's in this image?" },
+                    { "type": "image_url", "image_url": { "url": data_uri } }
+                ]
+            }],
+        });
+        self.write_max_tokens(&mut request_body, Some(max_tokens));
+
+        let response = self.call_api(request_body).await?;
+
+        let choice = response.choices.first().ok_or_else(|| {
+            LlmError::InvalidResponse("No choices in vision response".to_string())
+        })?;
+
+        choice.message.content.clone().ok_or_else(|| {
+            LlmError::InvalidResponse("Vision response contained no content".to_string())
+        })
+    }
+
+    fn supports_vision(&self) -> bool {
+        let m = self.model.to_lowercase();
+        m.contains("gpt-4")
+            || m.contains("gpt-5")
+            || m.contains("vision")
+            || m.contains("o1")
+            || m.contains("o3")
+            || m.contains("o4")
+            || m.contains("llava")
+            || m.contains("moondream")
+            || m.contains("llama-3.2-vision")
+            || m.contains("gemma3")
+    }
+}
+
+impl OpenAIAdapter {
+    /// Shared implementation backing both the plain and the validated
+    /// structured-output trait methods.
+    ///
+    /// When `validator` is `Some`, a response that parses as JSON but fails it
+    /// (e.g. the model returned a well-formed object that omits a required
+    /// field) is treated as a *retryable miss* — exactly like a malformed or
+    /// empty payload — and re-asked with a corrective instruction carrying the
+    /// validation error. This threads the caller's typed validation into the
+    /// existing repair loop (the mechanism instructor uses for parity) without
+    /// introducing a second, multiplying retry loop: total attempts stay bounded
+    /// by `structured_output_retries` because validation reuses the same loop.
+    async fn structured_output_impl(
+        &self,
+        messages: Vec<Message>,
+        json_schema: &Value,
+        options: Option<GenerationOptions>,
+        validator: Option<StructuredOutputValidator<'_>>,
+    ) -> LlmResult<Value> {
         // Blank = empty or whitespace-only. Kept separate from JSON *validity*
         // so a non-empty-but-invalid payload can surface a clear error instead
         // of being lumped together with "no output" (which should retry / fall
@@ -477,6 +608,12 @@ impl Llm for OpenAIAdapter {
 
         let parse_json =
             |raw: &str| -> Result<Value, serde_json::Error> { serde_json::from_str(raw) };
+
+        // Returns `Some(reason)` when a parsed value fails the caller's typed
+        // validation (missing required field, wrong type, …), `None` otherwise
+        // (including when no validator was supplied).
+        let validation_error =
+            |parsed: &Value| -> Option<String> { validator.and_then(|v| v(parsed).err()) };
 
         let opts = options.unwrap_or_default();
         let schema = json_schema;
@@ -496,8 +633,9 @@ impl Llm for OpenAIAdapter {
         // requests (verified: even the all-required rewrite *without*
         // `strict:true` reproduces the 501). Passing the schema unmodified — the
         // exact shape litellm sends — is what keeps Baseten working. The
-        // required-field guarantee is instead approximated by retrying on a
-        // malformed/incomplete response with a corrective instruction below.
+        // required-field guarantee is instead enforced by retrying on a
+        // malformed/incomplete/validation-failing response with a corrective
+        // instruction below.
         let mut tools_request = json!({
             "model": self.model,
             "messages": Self::convert_messages(&messages),
@@ -526,17 +664,20 @@ impl Llm for OpenAIAdapter {
             tools_request["reasoning"] = json!({"effort": "none"});
         }
 
-        // Retry loop. A parseable object returns immediately. A non-empty but
-        // invalid payload retries with a corrective instruction (instructor
-        // parity) and, once retries are exhausted, surfaces a `DeserializationError`
-        // carrying the raw payload. An empty / missing tool call retries and, once
-        // exhausted, falls through to the legacy function-calling / JSON-mode
-        // paths below (so servers that do not support tool calling still work).
+        // Retry loop. A parseable object that also satisfies the validator
+        // returns immediately. A non-empty but invalid *or* validation-failing
+        // payload retries with a corrective instruction carrying the failure
+        // reason (instructor parity) and, once retries are exhausted, surfaces a
+        // `DeserializationError` carrying the raw payload. An empty / missing
+        // tool call retries and, once exhausted, falls through to the legacy
+        // function-calling / JSON-mode paths below (so servers that do not
+        // support tool calling still work).
         let mut last_invalid: Option<(String, String)> = None;
         for attempt in 0..self.structured_output_retries {
             let mut request_for_attempt = tools_request.clone();
             if attempt > 0 {
-                Self::append_corrective_instruction(&mut request_for_attempt);
+                let reason = last_invalid.as_ref().map(|(r, _)| r.as_str());
+                Self::append_corrective_instruction(&mut request_for_attempt, reason);
                 if !self.is_reasoning_model() {
                     request_for_attempt["temperature"] = json!(0.0);
                 }
@@ -574,7 +715,24 @@ impl Llm for OpenAIAdapter {
                     }
 
                     match parse_json(arguments) {
-                        Ok(parsed) => return Ok(parsed),
+                        Ok(parsed) => {
+                            // Valid JSON — but does it satisfy the caller's type?
+                            // A missing required field is caught here and fed
+                            // into the next corrective retry (instructor parity),
+                            // rather than surfacing as an un-retried failure.
+                            if let Some(reason) = validation_error(&parsed) {
+                                debug!(
+                                    attempt,
+                                    structured_output_retries = self.structured_output_retries,
+                                    %reason,
+                                    "tool-call response parsed but failed typed validation; \
+                                     retrying with corrective instruction",
+                                );
+                                last_invalid = Some((reason, arguments.to_string()));
+                                continue;
+                            }
+                            return Ok(parsed);
+                        }
                         Err(e) => {
                             // Non-empty but invalid: remember it so we can surface
                             // a clear error if every attempt fails, then retry.
@@ -594,10 +752,10 @@ impl Llm for OpenAIAdapter {
             }
         }
 
-        // Every tool-calling attempt returned a non-empty but unparseable
-        // payload: surface it rather than silently swallowing it (the legacy
-        // fallbacks would only re-ask a server that clearly *does* speak tool
-        // calling).
+        // Every tool-calling attempt returned a non-empty payload that was
+        // either unparseable or failed validation: surface it rather than
+        // silently swallowing it (the legacy fallbacks would only re-ask a
+        // server that clearly *does* speak tool calling).
         if let Some((err, raw)) = last_invalid {
             return Err(LlmError::DeserializationError(format!(
                 "Failed to deserialize tool-call arguments after {} attempt(s): {err}. Raw: {raw}",
@@ -637,10 +795,24 @@ impl Llm for OpenAIAdapter {
                 .ok_or_else(|| LlmError::InvalidResponse("No choices in response".to_string()))?;
 
             if let Some(function_call) = &choice.message.function_call {
+                let last_attempt = attempt + 1 >= self.structured_output_retries;
                 match parse_json(&function_call.arguments) {
-                    Ok(parsed) => return Ok(parsed),
+                    Ok(parsed) => {
+                        if let Some(reason) = validation_error(&parsed) {
+                            // Valid JSON but fails the caller's type: retry, and
+                            // surface the validation error once exhausted.
+                            if last_attempt {
+                                return Err(LlmError::DeserializationError(format!(
+                                    "Function call arguments failed schema validation: {reason}. \
+                                     Raw: {}",
+                                    function_call.arguments
+                                )));
+                            }
+                            continue;
+                        }
+                        return Ok(parsed);
+                    }
                     Err(e) => {
-                        let last_attempt = attempt + 1 >= self.structured_output_retries;
                         if is_blank(&function_call.arguments) {
                             // Empty output: retry until exhausted, then fall
                             // through to JSON mode.
@@ -730,10 +902,23 @@ impl Llm for OpenAIAdapter {
                 LlmError::InvalidResponse("No content in JSON mode response".to_string())
             })?;
 
+            let last_attempt = attempt + 1 >= self.structured_output_retries;
             match parse_json(content) {
-                Ok(parsed) => return Ok(parsed),
+                Ok(parsed) => {
+                    if let Some(reason) = validation_error(&parsed) {
+                        // Valid JSON but fails the caller's type: retry, and
+                        // surface the validation error once exhausted.
+                        if last_attempt {
+                            return Err(LlmError::DeserializationError(format!(
+                                "JSON content failed schema validation: {reason}. Raw: {content}"
+                            )));
+                        }
+                        continue;
+                    }
+                    return Ok(parsed);
+                }
                 Err(e) => {
-                    if attempt + 1 < self.structured_output_retries && is_blank(content) {
+                    if !last_attempt && is_blank(content) {
                         continue;
                     }
                     return Err(LlmError::DeserializationError(format!(
@@ -746,91 +931,6 @@ impl Llm for OpenAIAdapter {
         Err(LlmError::InvalidResponse(
             "Structured output retries exhausted without a parseable response".to_string(),
         ))
-    }
-
-    fn model(&self) -> &str {
-        &self.model
-    }
-
-    fn supports_streaming(&self) -> bool {
-        true
-    }
-
-    fn supports_function_calling(&self) -> bool {
-        true
-    }
-
-    fn max_context_length(&self) -> u32 {
-        // Context lengths for common OpenAI models
-        match self.model.as_str() {
-            m if m.starts_with("gpt-4-turbo") => 128_000,
-            m if m.starts_with("gpt-4-32k") => 32_768,
-            m if m.starts_with("gpt-4") => 8_192,
-            m if m.starts_with("gpt-3.5-turbo-16k") => 16_384,
-            m if m.starts_with("gpt-3.5-turbo") => 4_096,
-            _ => 4_096, // Conservative default
-        }
-    }
-
-    async fn transcribe_image(
-        &self,
-        image_bytes: &[u8],
-        mime_type: &str,
-        options: Option<GenerationOptions>,
-    ) -> LlmResult<String> {
-        use base64::Engine as _;
-
-        if !mime_type.starts_with("image/") {
-            return Err(LlmError::InvalidResponse(format!(
-                "Expected image/* MIME type, got: {mime_type}"
-            )));
-        }
-
-        let b64 = base64::engine::general_purpose::STANDARD.encode(image_bytes);
-        let data_uri = format!("data:{mime_type};base64,{b64}");
-
-        let vision_model = std::env::var("LLM_VISION_MODEL")
-            .ok()
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| self.model.clone());
-
-        let max_tokens = options.as_ref().and_then(|o| o.max_tokens).unwrap_or(300);
-
-        let mut request_body = json!({
-            "model": vision_model,
-            "messages": [{
-                "role": "user",
-                "content": [
-                    { "type": "text", "text": "What's in this image?" },
-                    { "type": "image_url", "image_url": { "url": data_uri } }
-                ]
-            }],
-        });
-        self.write_max_tokens(&mut request_body, Some(max_tokens));
-
-        let response = self.call_api(request_body).await?;
-
-        let choice = response.choices.first().ok_or_else(|| {
-            LlmError::InvalidResponse("No choices in vision response".to_string())
-        })?;
-
-        choice.message.content.clone().ok_or_else(|| {
-            LlmError::InvalidResponse("Vision response contained no content".to_string())
-        })
-    }
-
-    fn supports_vision(&self) -> bool {
-        let m = self.model.to_lowercase();
-        m.contains("gpt-4")
-            || m.contains("gpt-5")
-            || m.contains("vision")
-            || m.contains("o1")
-            || m.contains("o3")
-            || m.contains("o4")
-            || m.contains("llava")
-            || m.contains("moondream")
-            || m.contains("llama-3.2-vision")
-            || m.contains("gemma3")
     }
 }
 

@@ -9,6 +9,17 @@ use crate::error::{LlmError, LlmResult};
 use crate::schema::generate_json_schema;
 use crate::types::{GenerationOptions, GenerationResponse, Message, MessageRole};
 
+/// A borrowed validator closure that checks whether a parsed structured-output
+/// [`Value`] satisfies the caller's target type.
+///
+/// Returns `Err(reason)` describing *why* validation failed (e.g. a serde
+/// `missing field \`type\`` message). Adapters that own a repair loop (the
+/// OpenAI adapter) feed that reason into a corrective retry, so a well-formed
+/// JSON response that omits a required field is repaired within the existing
+/// retry budget instead of aborting the pipeline. This is the Rust analogue of
+/// instructor threading the response model's validation into its retry loop.
+pub type StructuredOutputValidator<'a> = &'a (dyn Fn(&Value) -> Result<(), String> + Send + Sync);
+
 /// Object-safe base trait for LLM implementations.
 ///
 /// Provides type-erased methods that work with `serde_json::Value` for JSON schemas
@@ -57,6 +68,34 @@ pub trait Llm: Send + Sync {
         json_schema: &Value,
         options: Option<GenerationOptions>,
     ) -> LlmResult<Value>;
+
+    /// Generate structured output from messages, threading a typed `validator`
+    /// into the adapter's retry loop (type-erased).
+    ///
+    /// Behaves like [`Llm::create_structured_output_with_messages_raw`], but
+    /// `validator` reports whether a parsed [`Value`] satisfies the caller's
+    /// target type. Adapters with a repair loop (OpenAI) treat a response that
+    /// parses as JSON but fails the validator (e.g. omits a required field) as a
+    /// retryable miss and re-ask with a corrective instruction carrying the
+    /// validation error — bounded by the same `structured_output_retries`
+    /// budget as malformed/empty responses.
+    ///
+    /// The default implementation ignores `validator` and delegates to
+    /// [`Llm::create_structured_output_with_messages_raw`]; the caller's typed
+    /// wrapper ([`LlmExt::create_structured_output_with_messages`]) still
+    /// deserializes the result and surfaces any validation error. Adapters that
+    /// can benefit from validation-retry override this method.
+    async fn create_structured_output_with_messages_raw_validated(
+        &self,
+        messages: Vec<Message>,
+        json_schema: &Value,
+        options: Option<GenerationOptions>,
+        validator: StructuredOutputValidator<'_>,
+    ) -> LlmResult<Value> {
+        let _ = validator;
+        self.create_structured_output_with_messages_raw(messages, json_schema, options)
+            .await
+    }
 
     /// Get the model identifier.
     fn model(&self) -> &str;
@@ -130,13 +169,20 @@ pub trait LlmExt: Llm {
     where
         T: Serialize + DeserializeOwned + JsonSchema + Send,
     {
-        let schema = generate_json_schema::<T>();
-        let value = self
-            .create_structured_output_raw(text_input, system_prompt, &schema, options)
-            .await?;
-        serde_json::from_value(value).map_err(|e| {
-            LlmError::DeserializationError(format!("Failed to deserialize structured output: {e}"))
-        })
+        // Route through the messages path so `T`'s validation is threaded into
+        // the adapter's retry loop (instructor parity).
+        let messages = vec![
+            Message {
+                role: MessageRole::System,
+                content: system_prompt.to_string(),
+            },
+            Message {
+                role: MessageRole::User,
+                content: text_input.to_string(),
+            },
+        ];
+        self.create_structured_output_with_messages::<T>(messages, options)
+            .await
     }
 
     /// Generate structured output from custom messages.
@@ -152,8 +198,18 @@ pub trait LlmExt: Llm {
         T: Serialize + DeserializeOwned + JsonSchema + Send,
     {
         let schema = generate_json_schema::<T>();
+        // Trial-deserialize into `T` so the adapter can retry a well-formed but
+        // incomplete response (e.g. one missing a required field) with a
+        // corrective instruction, rather than failing the whole pipeline.
+        let validator = |value: &Value| -> Result<(), String> {
+            serde_json::from_value::<T>(value.clone())
+                .map(|_| ())
+                .map_err(|e| e.to_string())
+        };
         let value = self
-            .create_structured_output_with_messages_raw(messages, &schema, options)
+            .create_structured_output_with_messages_raw_validated(
+                messages, &schema, options, &validator,
+            )
             .await?;
         serde_json::from_value(value).map_err(|e| {
             LlmError::DeserializationError(format!("Failed to deserialize structured output: {e}"))
