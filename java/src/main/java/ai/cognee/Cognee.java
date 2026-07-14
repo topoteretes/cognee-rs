@@ -34,6 +34,15 @@ public final class Cognee implements AutoCloseable {
     private final Handle handleHolder;
     private final Cleaner.Cleanable cleanable;
     private volatile boolean closed = false;
+    private CogneeConfig config;
+
+    /** The synchronous configuration surface. */
+    public synchronized CogneeConfig config() {
+        if (config == null) {
+            config = new CogneeConfig(this);
+        }
+        return config;
+    }
 
     /** Construct from environment/default settings. */
     public Cognee() {

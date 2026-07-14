@@ -26,4 +26,16 @@ public final class Native {
 
     /** Free a native handle. Safe with 0; called at most once per handle. */
     public static native void destroy(long handle);
+
+    public static native void configSet(long handle, String key, String valueJson);
+
+    public static native void configSetLlmConfig(long handle, String mapJson);
+
+    public static native void configSetEmbeddingConfig(long handle, String mapJson);
+
+    public static native void configSetVectorDbConfig(long handle, String mapJson);
+
+    public static native void configSetGraphDbConfig(long handle, String mapJson);
+
+    public static native String getConfig(long handle);
 }
