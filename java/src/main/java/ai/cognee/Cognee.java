@@ -37,6 +37,9 @@ public final class Cognee implements AutoCloseable {
     private volatile boolean closed = false;
     private CogneeConfig config;
     private CogneeDatasets datasets;
+    private CogneeSessions sessions;
+    private CogneeUsers users;
+    private CogneeNotebooks notebooks;
 
     /** The synchronous configuration surface. */
     public synchronized CogneeConfig config() {
@@ -52,6 +55,24 @@ public final class Cognee implements AutoCloseable {
             datasets = new CogneeDatasets(this);
         }
         return datasets;
+    }
+
+    /** The session-management surface. */
+    public synchronized CogneeSessions sessions() {
+        if (sessions == null) sessions = new CogneeSessions(this);
+        return sessions;
+    }
+
+    /** The user/admin surface (default user + pipeline-run resets). */
+    public synchronized CogneeUsers users() {
+        if (users == null) users = new CogneeUsers(this);
+        return users;
+    }
+
+    /** The notebook-management surface. */
+    public synchronized CogneeNotebooks notebooks() {
+        if (notebooks == null) notebooks = new CogneeNotebooks(this);
+        return notebooks;
     }
 
     /** Construct from environment/default settings. */

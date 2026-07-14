@@ -16,12 +16,14 @@ mod errors;
 mod future;
 mod handle;
 mod runtime;
+mod sdk_admin;
 mod sdk_data;
 mod sdk_datasets;
 mod sdk_lifecycle;
 mod sdk_memory;
 mod sdk_ops;
 mod sdk_retrieval;
+mod sdk_sessions;
 
 use std::ffi::c_void;
 use std::sync::OnceLock;

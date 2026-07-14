@@ -90,4 +90,30 @@ public final class Native {
     public static native void deleteData(long handle, String datasetId, String dataId,
             String optsJson, CompletableFuture<String> future);
     public static native void deleteAllDatasets(long handle, CompletableFuture<String> future);
+
+    // sessions
+    public static native void getSession(long handle, String sessionId, String optsJson,
+            CompletableFuture<String> future);
+    public static native void addFeedback(long handle, String sessionId, String qaId,
+            String optsJson, CompletableFuture<String> future);
+    public static native void deleteFeedback(long handle, String sessionId, String qaId,
+            CompletableFuture<String> future);
+    public static native void getGraphContext(long handle, String sessionId,
+            CompletableFuture<String> future);
+    public static native void setGraphContext(long handle, String sessionId, String context,
+            CompletableFuture<String> future);
+    // users / admin
+    public static native void getOrCreateDefaultUser(long handle, CompletableFuture<String> future);
+    public static native void resetPipelineRunStatus(long handle, String datasetId,
+            String pipelineName, CompletableFuture<String> future);
+    public static native void resetDatasetPipelineRunStatus(long handle, String datasetId,
+            CompletableFuture<String> future);
+    // notebooks
+    public static native void listNotebooks(long handle, CompletableFuture<String> future);
+    public static native void createNotebook(long handle, String name, String cellsJson,
+            boolean deletable, CompletableFuture<String> future);
+    public static native void updateNotebook(long handle, String id, String patchJson,
+            CompletableFuture<String> future);
+    public static native void deleteNotebook(long handle, String id,
+            CompletableFuture<String> future);
 }

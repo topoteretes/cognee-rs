@@ -127,7 +127,7 @@ Additional resolved decisions:
 | T07 | Retrieval ops: `search`, `recall` + `SearchType` enum + result types | done | T05 | `SearchType` maps to exact wire strings; `search`/`recall` compile and deserialize canned JSON; JUnit green. |
 | T08 | Memory ops: `remember`, `rememberEntry`, `memify`, `improve` | done | T05 | All four wired with builders matching the camelCase opts; JUnit green (deserialization + arg-marshalling unit tests). |
 | T09 | Data + dataset ops: `forget`, `update`, `pruneData`, `pruneSystem`, `datasets().*` | done | T05 | `datasets().list()`/`listData()`/`has()`/`status()`/`empty()`/`deleteData()`/`deleteAll()` + `forget`/`update`/prune wired; `add` + `datasets().list()` deterministic test passes; JUnit green. |
-| T10 | Session + admin/user + notebook ops | not-started | T05 | `sessions().*`, `users().*` (incl. resets + `getOrCreateDefault`), `notebooks().*` wired; JUnit green. |
+| T10 | Session + admin/user + notebook ops | done | T05 | `sessions().*`, `users().*` (incl. resets + `getOrCreateDefault`), `notebooks().*` wired; JUnit green. |
 | T11 | Visualization ops (feature-gated) + static setup methods + LLM-gated E2E | not-started | T06, T07 | `visualize`/`visualizeToFile` feature-gated; `setupLogging`/`initOtlp`/`initTelemetry`/`version` statics; `warm→add→cognify→search` integration test skips without `OPENAI_URL`/`OPENAI_TOKEN`; JUnit green. |
 | T12 | Docs + examples + Javadoc + README | not-started | T06, T07, T08, T09, T10, T11 | `docs/architecture.md`, `docs/tools/bindings.md`, `docs/tools/README.md`, root `README.md`, `.claude/CLAUDE.md` updated; `java/README.md` + runnable example added; `mvn -q -f java/pom.xml javadoc:javadoc` succeeds. |
 | T13 | `java-prebuild.yml` classifier-jar workflow (4-target matrix) | not-started | T11 | Workflow builds the cdylib on the 4-target matrix and produces per-classifier jars; validated locally by building one classifier jar. |
@@ -195,4 +195,4 @@ last before packaging.
 
 | Date | Task | Deviation | Reason |
 |---|---|---|---|
-| | | | |
+| 2026-07-14 | T10 | `SessionsAdminTest` not executed locally (Maven not installed on the dev machine); Rust shim + Java sources verified via `cargo check`/`clippy`/`fmt` and `java/scripts/check.sh` (which no-ops the `mvn verify` stage when Maven is absent). CI's `java-check` job runs the JUnit tests. | Local environment lacks `mvn`; the check script is designed to skip gracefully (see T02). |
