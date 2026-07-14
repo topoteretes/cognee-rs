@@ -8,6 +8,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 
+/** Session-management operations (QA history, feedback, graph context). */
 public final class CogneeSessions {
     private final Cognee cognee;
 

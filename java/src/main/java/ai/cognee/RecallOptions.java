@@ -2,6 +2,7 @@ package ai.cognee;
 
 import java.util.List;
 
+/** Per-call options for {@link Cognee#recall}. */
 public final class RecallOptions extends Options {
     public RecallOptions searchType(SearchType t) { put("searchType", t.wire()); return this; }
     public RecallOptions datasets(List<String> d) { put("datasets", d); return this; }

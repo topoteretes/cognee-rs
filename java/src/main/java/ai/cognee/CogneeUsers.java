@@ -4,6 +4,7 @@ import ai.cognee.internal.Json;
 import ai.cognee.internal.Native;
 import java.util.concurrent.CompletableFuture;
 
+/** User/admin operations (default user + pipeline-run resets). */
 public final class CogneeUsers {
     private final Cognee cognee;
 

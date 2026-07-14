@@ -3,6 +3,7 @@ package ai.cognee;
 import ai.cognee.internal.Json;
 import com.fasterxml.jackson.databind.JsonNode;
 
+/** Result of {@link Cognee#update}: the deleted item, the new data, and any re-cognify result. */
 public final class UpdateResult {
     private final JsonNode root;
 

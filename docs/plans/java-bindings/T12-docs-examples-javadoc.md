@@ -95,7 +95,7 @@ import java.util.List;
 import java.util.Map;
 
 try (Cognee cognee = new Cognee(Map.of("data_root_directory", "./data"))) {
-    cognee.config().setLlmConfig(Map.of("provider", "openai", "api_key", System.getenv("OPENAI_TOKEN")));
+    cognee.config().setLlmConfig(Map.of("llm_provider", "openai", "llm_api_key", System.getenv("OPENAI_TOKEN"), "llm_endpoint", System.getenv("OPENAI_URL")));
     cognee.warm().join();
     cognee.add(List.of(DataInput.text("Ada Lovelace wrote the first algorithm.")), "history").join();
     cognee.cognify("history").join();

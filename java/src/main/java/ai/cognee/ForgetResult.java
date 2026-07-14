@@ -2,6 +2,7 @@ package ai.cognee;
 
 import com.fasterxml.jackson.databind.JsonNode;
 
+/** Result of {@link Cognee#forget}: the resolved target and the underlying delete result. */
 public final class ForgetResult {
     private final JsonNode root;
 

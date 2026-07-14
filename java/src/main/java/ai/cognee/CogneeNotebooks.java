@@ -9,6 +9,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 
+/** Notebook-management operations. */
 public final class CogneeNotebooks {
     private final Cognee cognee;
 

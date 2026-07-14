@@ -48,6 +48,7 @@ cognee-rust-oss/
 ├── capi/                       # C API bindings (FFI)
 ├── ts/                         # JavaScript/TypeScript/Node bindings (Neon)
 ├── python/                     # Python bindings (PyO3)
+├── java/                       # Java/JVM bindings (JNI via the jni crate)
 ├── examples/                   # Usage examples using the cognee crates
 ├── demo/                       # Demo scripts (host and Android)
 ├── scripts/                    # Build, check, and deployment scripts
@@ -104,7 +105,7 @@ cognee-rust-oss/
 
 **cognee-bench** — Criterion benchmark crate (`batch_add_cognify`) exercising the add + cognify + search pipeline.
 
-**cognee-bindings-common** — Shared SDK facade for the Neon JS and C-API bindings: `SdkError` (+ `code()`), `HandleState`, `CogneeServices`, and neon-free JSON wire helpers. Not a new user-facing Rust API — that remains `cognee_lib::api`.
+**cognee-bindings-common** — Shared SDK facade for the Neon JS, C-API, and Java (JNI) bindings: `SdkError` (+ `code()`), `HandleState`, `CogneeServices`, and neon-free JSON wire helpers. Not a new user-facing Rust API — that remains `cognee_lib::api`.
 
 **cognee-lib** — Unified public API facade. Re-exports all crates and adds an `api/` module mirroring the Python SDK: `forget`, `update`, `prune`, `recall`, `remember`, `improve`, plus `DatasetManager`. Houses the shared `Settings`/`ConfigManager` and runtime setters. `ComponentManager` (lazy, version-cached) delegates backend construction to a `cognee-components` `ComponentRegistry`; use `ComponentManager::with_registry` (or `HandleState::from_settings_with_registry` in the bindings) to inject external adapter factories. The registry API is re-exported here so closed entry points use `cognee_lib::` paths.
 
@@ -144,7 +145,7 @@ cognee-rust-oss/
 | `opentelemetry` / `opentelemetry-otlp` / `tracing-opentelemetry` | OTLP trace export (`telemetry` feature) |
 | `axum` / `tower` / `tower-http` | HTTP server |
 | `async-trait` / `thiserror` / `clap` / `criterion` | Trait async / errors / CLI / benchmarks |
-| `pyo3` / `neon` | Python / JavaScript bindings |
+| `pyo3` / `neon` / `jni` | Python / JavaScript / Java bindings |
 
 ## Browsing the API docs (rustdoc)
 

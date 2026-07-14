@@ -1,5 +1,6 @@
 package ai.cognee;
 
+/** Per-call options for {@link Cognee#cognify} / {@link Cognee#addAndCognify}. */
 public final class CognifyOptions extends Options {
     public CognifyOptions tenant(String tenant) { put("tenant", tenant); return this; }
     public CognifyOptions chunkSize(int n) { put("chunkSize", n); return this; }

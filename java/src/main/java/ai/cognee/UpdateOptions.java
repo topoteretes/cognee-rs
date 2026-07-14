@@ -3,6 +3,7 @@ package ai.cognee;
 import java.util.List;
 import java.util.Map;
 
+/** Per-call options for {@link Cognee#update}. */
 public final class UpdateOptions extends Options {
     public UpdateOptions datasetId(String id) { put("datasetId", id); return this; }
     public UpdateOptions tenant(String t) { put("tenant", t); return this; }
