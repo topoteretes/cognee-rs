@@ -53,4 +53,10 @@ public final class Native {
 
     public static native void addAndCognify(long handle, String inputsJson, String datasetName,
             String optsJson, CompletableFuture<String> future);
+
+    public static native void search(long handle, String query, String optsJson,
+            CompletableFuture<String> future);
+
+    public static native void recall(long handle, String query, String optsJson,
+            CompletableFuture<String> future);
 }

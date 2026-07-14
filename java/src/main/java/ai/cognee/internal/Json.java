@@ -33,4 +33,12 @@ public final class Json {
             throw new IllegalStateException("failed to deserialize JSON: " + json, e);
         }
     }
+
+    public static com.fasterxml.jackson.databind.JsonNode tree(String json) {
+        try {
+            return MAPPER.readTree(json);
+        } catch (Exception e) {
+            throw new IllegalStateException("failed to parse JSON tree: " + json, e);
+        }
+    }
 }

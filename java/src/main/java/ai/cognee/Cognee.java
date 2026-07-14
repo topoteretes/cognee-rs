@@ -126,6 +126,28 @@ public final class Cognee implements AutoCloseable {
                 json -> ai.cognee.internal.Json.fromJson(json, AddAndCognifyResult.class));
     }
 
+    // --- search ---
+    public CompletableFuture<SearchResponse> search(String query) {
+        return search(query, null);
+    }
+
+    public CompletableFuture<SearchResponse> search(String query, SearchOptions opts) {
+        CompletableFuture<String> f = new CompletableFuture<>();
+        Native.search(handle(), query, Options.jsonOf(opts), f);
+        return f.thenApply(json -> new SearchResponse(ai.cognee.internal.Json.tree(json)));
+    }
+
+    // --- recall ---
+    public CompletableFuture<RecallResult> recall(String query) {
+        return recall(query, null);
+    }
+
+    public CompletableFuture<RecallResult> recall(String query, RecallOptions opts) {
+        CompletableFuture<String> f = new CompletableFuture<>();
+        Native.recall(handle(), query, Options.jsonOf(opts), f);
+        return f.thenApply(json -> new RecallResult(ai.cognee.internal.Json.tree(json)));
+    }
+
     @Override
     public void close() {
         if (closed) {

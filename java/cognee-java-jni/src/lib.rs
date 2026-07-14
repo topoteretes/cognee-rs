@@ -18,6 +18,7 @@ mod handle;
 mod runtime;
 mod sdk_lifecycle;
 mod sdk_ops;
+mod sdk_retrieval;
 
 use std::ffi::c_void;
 use std::sync::OnceLock;
