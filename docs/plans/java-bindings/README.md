@@ -119,7 +119,7 @@ Additional resolved decisions:
 | ID | Title | Status | Depends on | Exit criterion |
 |---|---|---|---|---|
 | T01 | Rust shim crate + Maven project skeleton, `NativeLibLoader`, version handshake | done | — | `cargo build` in `java/cognee-java-jni` emits `libcognee_java`; `mvn -q -f java/pom.xml compile` succeeds; a JUnit test loads the lib and asserts `Native.version()` equals the Maven project version. |
-| T02 | `java/scripts/check.sh` + wire into `check_all.sh` + `ci.yml` `java-check` job | not-started | T01 | `scripts/check_all.sh` runs the Java stage and passes; `check.sh` no-ops with a clear message when no JDK/Maven present; `ci.yml` has a `java-check` job wired into `notify`. |
+| T02 | `java/scripts/check.sh` + wire into `check_all.sh` + `ci.yml` `java-check` job | done | T01 | `scripts/check_all.sh` runs the Java stage and passes; `check.sh` no-ops with a clear message when no JDK/Maven present; `ci.yml` has a `java-check` job wired into `notify`. |
 | T03 | Handle lifecycle: `nativeNew`/`nativeDestroy`, `Cognee` (`AutoCloseable` + `Cleaner`) | not-started | T01 | `new Cognee(Map.of(...))` + `close()` round-trips; use-after-close throws `IllegalStateException`; double-close is a no-op. Verified by JUnit. |
 | T04 | Config surface (`set`/`setStr`/4 bulk/`get`) + `ConfigError` mapping | not-started | T03 | `config().set`/bulk/`get` round-trip against a temp-dir handle; a type error surfaces as `CogneeException` with `code()=="CONFIG_TYPE_MISMATCH"`; JUnit green. |
 | T05 | **Async up-call machinery** + `warm()` + `ownerId()` | not-started | T04 | `warm().join()` completes; a forced-error path completes the future exceptionally with a `CogneeException`; `-Xcheck:jni` test run produces no warnings; JUnit green. |

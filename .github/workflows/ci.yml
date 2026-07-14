@@ -804,6 +804,45 @@ jobs:
           cache-dependency-path: "ts/package.json"
       - run: bash ts/scripts/check.sh
 
+  java-check:
+    name: Java Bindings Check
+    needs: lint
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: rui314/setup-mold@v1
+        with:
+          make-default: true
+      # cmake is required by the lbug crate (via cognee-lib's ladybug feature).
+      - run: sudo apt-get update && sudo apt-get install -y cmake protobuf-compiler
+      - name: Set up JDK (Temurin 17)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: maven
+      - name: ccache (lbug bundled C++, restore-only)
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: lbug-cxx
+          max-size: 1G
+          save: false
+      # Dedicated cache key for the standalone JNI workspace (mirrors ts-check).
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: workspace-java-v1
+          workspaces: |
+            . -> target
+            java/cognee-java-jni -> target
+          cache-on-failure: true
+      - uses: actions/cache@v4
+        with:
+          path: target/ort-cache
+          key: ort-v2.0.0-rc.12-cpu-linux-x86_64
+      - run: bash java/scripts/check.sh
+
   # ── Aggregate status (single required check for branch protection) ────
   # Gated to in-repo like the rest of the suite, so it does not run — and does
   # not report failure — on fork PRs (those are covered by the community
@@ -812,7 +851,7 @@ jobs:
   # cognee `notify` aggregator.
   notify:
     name: Test Suite Status
-    needs: [ lint, msrv, wasm, test, docs-and-extras, pgvector-spans, capi-check, python-check, ts-check ]
+    needs: [ lint, msrv, wasm, test, docs-and-extras, pgvector-spans, capi-check, python-check, ts-check, java-check ]
     runs-on: ubuntu-latest
     if: >-
       !cancelled() &&
@@ -829,7 +868,8 @@ jobs:
                 "${{ needs.pgvector-spans.result }}" == "success" &&
                 "${{ needs.capi-check.result }}" == "success" &&
                 "${{ needs.python-check.result }}" == "success" &&
-                "${{ needs.ts-check.result }}" == "success" ]]; then
+                "${{ needs.ts-check.result }}" == "success" &&
+                "${{ needs.java-check.result }}" == "success" ]]; then
             echo "All keyed test-suite jobs passed!"
           else
             echo "One or more keyed test-suite jobs failed."
