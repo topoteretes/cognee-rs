@@ -84,6 +84,48 @@ public final class Cognee implements AutoCloseable {
         return f.thenApply(json -> ai.cognee.internal.Json.fromJson(json, String.class));
     }
 
+    // --- add ---
+    public CompletableFuture<AddResult> add(java.util.List<DataInput> inputs, String datasetName) {
+        return add(inputs, datasetName, null);
+    }
+
+    public CompletableFuture<AddResult> add(
+            java.util.List<DataInput> inputs, String datasetName, AddOptions opts) {
+        CompletableFuture<String> f = new CompletableFuture<>();
+        Native.add(handle(), ai.cognee.internal.Json.toJson(inputs), datasetName,
+                Options.jsonOf(opts), f);
+        return f.thenApply(json -> ai.cognee.internal.Json.fromJson(json, AddResult.class));
+    }
+
+    public CompletableFuture<AddResult> add(DataInput input, String datasetName, AddOptions opts) {
+        return add(java.util.List.of(input), datasetName, opts);
+    }
+
+    public CompletableFuture<AddResult> add(String text, String datasetName) {
+        return add(DataInput.text(text), datasetName, null);
+    }
+
+    // --- cognify ---
+    public CompletableFuture<CognifyResult> cognify(String datasetName) {
+        return cognify(datasetName, null);
+    }
+
+    public CompletableFuture<CognifyResult> cognify(String datasetName, CognifyOptions opts) {
+        CompletableFuture<String> f = new CompletableFuture<>();
+        Native.cognify(handle(), datasetName, Options.jsonOf(opts), f);
+        return f.thenApply(json -> ai.cognee.internal.Json.fromJson(json, CognifyResult.class));
+    }
+
+    // --- addAndCognify ---
+    public CompletableFuture<AddAndCognifyResult> addAndCognify(
+            java.util.List<DataInput> inputs, String datasetName, CognifyOptions opts) {
+        CompletableFuture<String> f = new CompletableFuture<>();
+        Native.addAndCognify(handle(), ai.cognee.internal.Json.toJson(inputs), datasetName,
+                Options.jsonOf(opts), f);
+        return f.thenApply(
+                json -> ai.cognee.internal.Json.fromJson(json, AddAndCognifyResult.class));
+    }
+
     @Override
     public void close() {
         if (closed) {

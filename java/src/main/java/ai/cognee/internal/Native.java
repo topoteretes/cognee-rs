@@ -44,4 +44,13 @@ public final class Native {
     public static native void warm(long handle, CompletableFuture<String> future);
 
     public static native void ownerId(long handle, CompletableFuture<String> future);
+
+    public static native void add(long handle, String inputsJson, String datasetName,
+            String optsJson, CompletableFuture<String> future);
+
+    public static native void cognify(long handle, String datasetName, String optsJson,
+            CompletableFuture<String> future);
+
+    public static native void addAndCognify(long handle, String inputsJson, String datasetName,
+            String optsJson, CompletableFuture<String> future);
 }

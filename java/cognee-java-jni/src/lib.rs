@@ -10,13 +10,14 @@
 // stays green under `clippy -D warnings` while the surface is still growing.
 #![allow(dead_code)]
 
+mod args;
 mod config;
 mod errors;
 mod future;
 mod handle;
 mod runtime;
 mod sdk_lifecycle;
-// Added in later tasks: mod sdk_ops; ...
+mod sdk_ops;
 
 use std::ffi::c_void;
 use std::sync::OnceLock;
