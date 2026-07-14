@@ -82,7 +82,7 @@ binding enumeration in that file.
 
 ### 6. Create `java/README.md`
 
-Cover: what it is (JNI over `cognee-bindings-common`), requirements (JDK 11+,
+Cover: what it is (JNI over `cognee-bindings-common`), requirements (JDK 17+,
 Maven), install/build (`mvn -f java/pom.xml install`, or dev via
 `COGNEE_JAVA_LIB_PATH`), a quickstart, the op surface (link the Javadoc), the
 error model (`CogneeException.code()`), the config surface (A3.1), telemetry

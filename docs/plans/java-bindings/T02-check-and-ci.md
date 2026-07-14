@@ -68,7 +68,7 @@ if ! command -v mvn >/dev/null 2>&1 || ! command -v java >/dev/null 2>&1; then
   echo ""
   echo "SKIP: 'mvn' or 'java' not found — skipping Java binding check."
   echo "      (CI installs a JDK via actions/setup-java; local devs without a"
-  echo "       JDK are not blocked. Install a JDK 11+ and Maven to run it.)"
+  echo "       JDK are not blocked. Install a JDK 17+ and Maven to run it.)"
   exit 0
 fi
 
@@ -177,8 +177,9 @@ Add a job modeled on `ts-check` (which `needs: lint`). Insert it in the
       - run: bash java/scripts/check.sh
 ```
 
-> Temurin 17 on CI is fine even though the source floor is 11 (design §7);
-> `maven.compiler.release=11` guarantees 11-compatible bytecode.
+> Temurin 17 on CI matches the source floor of 17 (the public API uses `record`
+> types, which require Java 16+); `maven.compiler.release=17` guarantees
+> 17-compatible bytecode.
 
 ### 4. Wire `java-check` into the `notify` aggregator
 

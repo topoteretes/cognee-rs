@@ -18,15 +18,9 @@ if [ "$WS_VERSION" != "$POM_VERSION" ]; then
 fi
 echo "version ok (${POM_VERSION})"
 
-# ── Graceful no-op when no JDK/Maven toolchain is present ────────────
-if ! command -v mvn >/dev/null 2>&1 || ! command -v java >/dev/null 2>&1; then
-  echo ""
-  echo "SKIP: 'mvn' or 'java' not found — skipping Java binding check."
-  echo "      (CI installs a JDK via actions/setup-java; local devs without a"
-  echo "       JDK are not blocked. Install a JDK 11+ and Maven to run it.)"
-  exit 0
-fi
-
+# ── Cargo shim checks run unconditionally (no JDK/Maven required) ────
+# These must run BEFORE the JDK/Maven skip gate below so a machine
+# without a JVM toolchain still fails on real Rust breakage.
 echo ""
 echo "================================================================"
 echo "=== Java: cargo fmt / clippy (shim crate) ==="
@@ -39,6 +33,15 @@ echo "================================================================"
 echo "=== Java: Building native cdylib (debug) ==="
 echo "================================================================"
 cargo build --manifest-path "$JAVA_DIR/cognee-java-jni/Cargo.toml"
+
+# ── Graceful no-op when no JDK/Maven toolchain is present ────────────
+if ! command -v mvn >/dev/null 2>&1 || ! command -v java >/dev/null 2>&1; then
+  echo ""
+  echo "SKIP: 'mvn' or 'java' not found — skipping Java binding check."
+  echo "      (CI installs a JDK via actions/setup-java; local devs without a"
+  echo "       JDK are not blocked. Install a JDK 17+ and Maven to run it.)"
+  exit 0
+fi
 
 # Resolve the built library path across platforms.
 LIBDIR="$JAVA_DIR/cognee-java-jni/target/debug"

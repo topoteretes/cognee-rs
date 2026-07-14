@@ -274,8 +274,9 @@ pub extern "system" fn Java_ai_cognee_internal_Native_version<'l>(
 
 ### 4. Create `java/pom.xml`
 
-Single-module Maven project. Java 11 release, Jackson runtime dep, JUnit 5 test
-dep, resource filtering for `version.properties`.
+Single-module Maven project. Java 17 release (the public API uses `record`
+types, which require Java 16+), Jackson runtime dep, JUnit 5 test dep, resource
+filtering for `version.properties`.
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
@@ -294,7 +295,7 @@ dep, resource filtering for `version.properties`.
   <url>https://www.cognee.ai</url>
 
   <properties>
-    <maven.compiler.release>11</maven.compiler.release>
+    <maven.compiler.release>17</maven.compiler.release>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     <jackson.version>2.17.2</jackson.version>
     <junit.version>5.10.2</junit.version>

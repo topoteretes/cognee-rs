@@ -14,7 +14,7 @@ control.
 
 ## Requirements
 
-- JDK 11+ (the artifact is compiled for release 17; a JDK 17+ is recommended).
+- JDK 17+ (the artifact is compiled for release 17).
 - Maven 3.8+.
 - A Rust toolchain **only if you build the native library from source** (the
   published jar bundles a prebuilt classifier native library per platform).
