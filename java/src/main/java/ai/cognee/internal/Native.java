@@ -69,4 +69,25 @@ public final class Native {
     public static native void memify(long handle, String optsJson, CompletableFuture<String> future);
 
     public static native void improve(long handle, String optsJson, CompletableFuture<String> future);
+
+    // data ops
+    public static native void forget(long handle, String targetJson, String optsJson,
+            CompletableFuture<String> future);
+    public static native void update(long handle, String dataId, String newDataJson,
+            String datasetName, String optsJson, CompletableFuture<String> future);
+    public static native void pruneData(long handle, CompletableFuture<String> future);
+    public static native void pruneSystem(long handle, String optsJson,
+            CompletableFuture<String> future);
+
+    // dataset ops
+    public static native void listDatasets(long handle, CompletableFuture<String> future);
+    public static native void listData(long handle, String datasetId, CompletableFuture<String> future);
+    public static native void hasData(long handle, String datasetId, CompletableFuture<String> future);
+    public static native void datasetStatus(long handle, String datasetIdsJson,
+            CompletableFuture<String> future);
+    public static native void emptyDataset(long handle, String datasetId,
+            CompletableFuture<String> future);
+    public static native void deleteData(long handle, String datasetId, String dataId,
+            String optsJson, CompletableFuture<String> future);
+    public static native void deleteAllDatasets(long handle, CompletableFuture<String> future);
 }

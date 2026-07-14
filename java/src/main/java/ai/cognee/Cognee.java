@@ -36,6 +36,7 @@ public final class Cognee implements AutoCloseable {
     private final Cleaner.Cleanable cleanable;
     private volatile boolean closed = false;
     private CogneeConfig config;
+    private CogneeDatasets datasets;
 
     /** The synchronous configuration surface. */
     public synchronized CogneeConfig config() {
@@ -43,6 +44,14 @@ public final class Cognee implements AutoCloseable {
             config = new CogneeConfig(this);
         }
         return config;
+    }
+
+    /** The dataset-management surface. */
+    public synchronized CogneeDatasets datasets() {
+        if (datasets == null) {
+            datasets = new CogneeDatasets(this);
+        }
+        return datasets;
     }
 
     /** Construct from environment/default settings. */
@@ -184,6 +193,46 @@ public final class Cognee implements AutoCloseable {
         CompletableFuture<String> f = new CompletableFuture<>();
         Native.improve(handle(), opts.toJson(), f); // opts required (datasetName)
         return f.thenApply(json -> ai.cognee.internal.Json.fromJson(json, ImproveResult.class));
+    }
+
+    // --- forget ---
+    public CompletableFuture<ForgetResult> forget(ForgetTarget target) {
+        return forget(target, null);
+    }
+
+    public CompletableFuture<ForgetResult> forget(ForgetTarget target, String tenant) {
+        String optsJson = tenant == null ? "null"
+                : ai.cognee.internal.Json.toJson(java.util.Map.of("tenant", tenant));
+        CompletableFuture<String> f = new CompletableFuture<>();
+        Native.forget(handle(), ai.cognee.internal.Json.toJson(target), optsJson, f);
+        return f.thenApply(json -> new ForgetResult(ai.cognee.internal.Json.tree(json)));
+    }
+
+    // --- update ---
+    public CompletableFuture<UpdateResult> update(
+            String dataId, java.util.List<DataInput> newData, String datasetName, UpdateOptions opts) {
+        CompletableFuture<String> f = new CompletableFuture<>();
+        Native.update(handle(), dataId, ai.cognee.internal.Json.toJson(newData), datasetName,
+                Options.jsonOf(opts), f);
+        return f.thenApply(json -> new UpdateResult(ai.cognee.internal.Json.tree(json)));
+    }
+
+    // --- pruneData ---
+    public CompletableFuture<Void> pruneData() {
+        CompletableFuture<String> f = new CompletableFuture<>();
+        Native.pruneData(handle(), f);
+        return f.thenApply(s -> null);
+    }
+
+    // --- pruneSystem ---
+    public CompletableFuture<PruneResult> pruneSystem(PruneSystemOptions opts) {
+        CompletableFuture<String> f = new CompletableFuture<>();
+        Native.pruneSystem(handle(), Options.jsonOf(opts), f);
+        return f.thenApply(json -> ai.cognee.internal.Json.fromJson(json, PruneResult.class));
+    }
+
+    public CompletableFuture<PruneResult> pruneSystem() {
+        return pruneSystem(null);
     }
 
     @Override

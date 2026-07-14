@@ -16,6 +16,8 @@ mod errors;
 mod future;
 mod handle;
 mod runtime;
+mod sdk_data;
+mod sdk_datasets;
 mod sdk_lifecycle;
 mod sdk_memory;
 mod sdk_ops;

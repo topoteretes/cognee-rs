@@ -34,6 +34,14 @@ public final class Json {
         }
     }
 
+    public static <T> T fromNode(com.fasterxml.jackson.databind.JsonNode node, Class<T> type) {
+        try {
+            return MAPPER.treeToValue(node, type);
+        } catch (Exception e) {
+            throw new IllegalStateException("failed to convert JSON node to " + type, e);
+        }
+    }
+
     public static com.fasterxml.jackson.databind.JsonNode tree(String json) {
         try {
             return MAPPER.readTree(json);
