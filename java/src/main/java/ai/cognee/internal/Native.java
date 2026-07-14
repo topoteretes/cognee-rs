@@ -59,4 +59,14 @@ public final class Native {
 
     public static native void recall(long handle, String query, String optsJson,
             CompletableFuture<String> future);
+
+    public static native void remember(long handle, String inputsJson, String datasetName,
+            String optsJson, CompletableFuture<String> future);
+
+    public static native void rememberEntry(long handle, String entryJson, String datasetName,
+            String sessionId, String optsJson, CompletableFuture<String> future);
+
+    public static native void memify(long handle, String optsJson, CompletableFuture<String> future);
+
+    public static native void improve(long handle, String optsJson, CompletableFuture<String> future);
 }

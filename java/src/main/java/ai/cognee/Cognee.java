@@ -148,6 +148,44 @@ public final class Cognee implements AutoCloseable {
         return f.thenApply(json -> new RecallResult(ai.cognee.internal.Json.tree(json)));
     }
 
+    // --- remember ---
+    public CompletableFuture<RememberResult> remember(
+            java.util.List<DataInput> inputs, String datasetName, RememberOptions opts) {
+        CompletableFuture<String> f = new CompletableFuture<>();
+        Native.remember(handle(), ai.cognee.internal.Json.toJson(inputs), datasetName,
+                Options.jsonOf(opts), f);
+        return f.thenApply(json -> new RememberResult(ai.cognee.internal.Json.tree(json)));
+    }
+
+    // --- rememberEntry ---
+    public CompletableFuture<RememberResult> rememberEntry(
+            MemoryEntry entry, String datasetName, String sessionId, String tenant) {
+        String optsJson = tenant == null ? "null"
+                : ai.cognee.internal.Json.toJson(java.util.Map.of("tenant", tenant));
+        CompletableFuture<String> f = new CompletableFuture<>();
+        Native.rememberEntry(handle(), ai.cognee.internal.Json.toJson(entry), datasetName,
+                sessionId, optsJson, f);
+        return f.thenApply(json -> new RememberResult(ai.cognee.internal.Json.tree(json)));
+    }
+
+    // --- memify ---
+    public CompletableFuture<MemifyResult> memify(MemifyOptions opts) {
+        CompletableFuture<String> f = new CompletableFuture<>();
+        Native.memify(handle(), Options.jsonOf(opts), f);
+        return f.thenApply(json -> ai.cognee.internal.Json.fromJson(json, MemifyResult.class));
+    }
+
+    public CompletableFuture<MemifyResult> memify() {
+        return memify(null);
+    }
+
+    // --- improve ---
+    public CompletableFuture<ImproveResult> improve(ImproveOptions opts) {
+        CompletableFuture<String> f = new CompletableFuture<>();
+        Native.improve(handle(), opts.toJson(), f); // opts required (datasetName)
+        return f.thenApply(json -> ai.cognee.internal.Json.fromJson(json, ImproveResult.class));
+    }
+
     @Override
     public void close() {
         if (closed) {

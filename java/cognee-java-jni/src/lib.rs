@@ -17,6 +17,7 @@ mod future;
 mod handle;
 mod runtime;
 mod sdk_lifecycle;
+mod sdk_memory;
 mod sdk_ops;
 mod sdk_retrieval;
 
