@@ -1,14 +1,12 @@
 //! Async lifecycle ops: `warm`, `ownerId`.
 
-use std::sync::Arc;
-
 use jni::JNIEnv;
 use jni::objects::{JClass, JObject};
 use jni::sys::jlong;
 
 use crate::future::spawn_future;
 use crate::guard_void;
-use crate::handle::handle_ref;
+use crate::handle::checked_handle;
 
 /// `warm(handle, future)` — force `services()` to build (async), surfacing
 /// config/connection errors and resolving `owner_id`. Completes with `null`.
@@ -20,8 +18,9 @@ pub extern "system" fn Java_ai_cognee_internal_Native_warm<'l>(
     future: JObject<'l>,
 ) {
     guard_void(&mut env, |env| {
-        // SAFETY: live handle (Java closed-guard); clone before moving into spawn.
-        let state = unsafe { Arc::clone(handle_ref(handle)) };
+        let Some(state) = checked_handle(env, handle, &future) else {
+            return;
+        };
         spawn_future(env, &future, async move {
             state.services().await.map(|_| serde_json::Value::Null)
         });
@@ -38,8 +37,9 @@ pub extern "system" fn Java_ai_cognee_internal_Native_ownerId<'l>(
     future: JObject<'l>,
 ) {
     guard_void(&mut env, |env| {
-        // SAFETY: live handle (Java closed-guard).
-        let state = unsafe { Arc::clone(handle_ref(handle)) };
+        let Some(state) = checked_handle(env, handle, &future) else {
+            return;
+        };
         spawn_future(env, &future, async move {
             state
                 .owner_id()

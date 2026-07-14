@@ -48,7 +48,9 @@ pub extern "system" fn Java_ai_cognee_internal_Native_configSet<'l>(
     value_json: JString<'l>,
 ) {
     guard_void(&mut env, |env| {
-        // SAFETY: `handle` is a live handle (Java closed-guard).
+        // SAFETY: `handle` is live for this synchronous call — Java's `dispatch`
+        // holds the op/close read lock (blocking `destroy`) and fences
+        // reachability (blocking the Cleaner) around it. See `handle::handle_ref`.
         let state = unsafe { handle_ref(handle) };
         let Some(key) = read_string(env, &key, "config key") else {
             return;
@@ -84,7 +86,8 @@ macro_rules! bulk_setter {
             map_json: JString<'l>,
         ) {
             guard_void(&mut env, |env| {
-                // SAFETY: live handle (Java closed-guard).
+                // SAFETY: live for this synchronous call via Java's `dispatch`
+                // (op/close read lock + reachabilityFence). See `handle_ref`.
                 let state = unsafe { handle_ref(handle) };
                 let Some(json) = read_string(env, &map_json, "config map") else {
                     return;
@@ -133,7 +136,8 @@ pub extern "system" fn Java_ai_cognee_internal_Native_getConfig<'l>(
     handle: jlong,
 ) -> jstring {
     guard_jstring(&mut env, |env| {
-        // SAFETY: live handle (Java closed-guard).
+        // SAFETY: live for this synchronous call via Java's `dispatch`
+        // (op/close read lock + reachabilityFence). See `handle_ref`.
         let state = unsafe { handle_ref(handle) };
         let mut value = {
             let settings = state.cm.settings();

@@ -1,7 +1,5 @@
 //! Data ops: forget, update, prune_data, prune_system.
 
-use std::sync::Arc;
-
 use jni::JNIEnv;
 use jni::objects::{JClass, JObject, JString};
 use jni::sys::jlong;
@@ -12,7 +10,7 @@ use crate::args::{arg_json, arg_string};
 use crate::errors::throw_sdk_error;
 use crate::future::spawn_future;
 use crate::guard_void;
-use crate::handle::handle_ref;
+use crate::handle::checked_handle;
 
 /// `forget(handle, targetJson, optsJson, future)`
 #[unsafe(no_mangle)]
@@ -25,7 +23,9 @@ pub extern "system" fn Java_ai_cognee_internal_Native_forget<'l>(
     future: JObject<'l>,
 ) {
     guard_void(&mut env, |env| {
-        let state = unsafe { Arc::clone(handle_ref(handle)) };
+        let Some(state) = checked_handle(env, handle, &future) else {
+            return;
+        };
         let target = match arg_json(env, &target_json) {
             Ok(v) => v,
             Err(e) => return throw_sdk_error(env, e),
@@ -53,7 +53,9 @@ pub extern "system" fn Java_ai_cognee_internal_Native_update<'l>(
     future: JObject<'l>,
 ) {
     guard_void(&mut env, |env| {
-        let state = unsafe { Arc::clone(handle_ref(handle)) };
+        let Some(state) = checked_handle(env, handle, &future) else {
+            return;
+        };
         let data_id = match arg_string(env, &data_id) {
             Ok(v) => v,
             Err(e) => return throw_sdk_error(env, e),
@@ -85,7 +87,9 @@ pub extern "system" fn Java_ai_cognee_internal_Native_pruneData<'l>(
     future: JObject<'l>,
 ) {
     guard_void(&mut env, |env| {
-        let state = unsafe { Arc::clone(handle_ref(handle)) };
+        let Some(state) = checked_handle(env, handle, &future) else {
+            return;
+        };
         spawn_future(env, &future, async move { data::prune_data(&state).await });
     })
 }
@@ -100,7 +104,9 @@ pub extern "system" fn Java_ai_cognee_internal_Native_pruneSystem<'l>(
     future: JObject<'l>,
 ) {
     guard_void(&mut env, |env| {
-        let state = unsafe { Arc::clone(handle_ref(handle)) };
+        let Some(state) = checked_handle(env, handle, &future) else {
+            return;
+        };
         let opts = match arg_json(env, &opts_json) {
             Ok(v) => v,
             Err(e) => return throw_sdk_error(env, e),

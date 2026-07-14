@@ -75,21 +75,53 @@ where
             }
         };
 
-        let settled = match outcome {
-            Ok(Ok(value)) => complete_ok(&mut env, global.as_obj(), &value.to_string()),
-            Ok(Err(sdk)) => complete_err(&mut env, global.as_obj(), sdk.code(), &sdk.to_string()),
-            Err(join_err) => {
-                let msg = if join_err.is_panic() {
-                    "native task panicked"
-                } else {
-                    "native task was cancelled"
-                };
-                complete_err(&mut env, global.as_obj(), "RUNTIME_ERROR", msg)
+        // Settle inside a local frame so every JNI local ref created per
+        // completion (`new_string`, the class local-ref, the exception object)
+        // is freed when the frame pops. Daemon worker threads never detach, so
+        // without this these locals would accumulate unbounded (fatal on ART).
+        let framed = env.with_local_frame::<_, (), jni::errors::Error>(16, |env| {
+            let settled = match outcome {
+                Ok(Ok(value)) => complete_ok(env, global.as_obj(), &value.to_string()),
+                Ok(Err(sdk)) => complete_err(env, global.as_obj(), sdk.code(), &sdk.to_string()),
+                Err(join_err) => {
+                    let msg = if join_err.is_panic() {
+                        "native task panicked"
+                    } else {
+                        "native task was cancelled"
+                    };
+                    complete_err(env, global.as_obj(), "RUNTIME_ERROR", msg)
+                }
+            };
+
+            // If the up-call itself failed the future is still unsettled, so a
+            // Java `.join()` would hang forever. Best-effort fallback: clear any
+            // pending exception, then try `completeExceptionally` with a plain
+            // message. If that also fails, clear and log — never panic.
+            if settled.is_err() {
+                if env.exception_check().unwrap_or(false) {
+                    let _ = env.exception_clear();
+                }
+                let fallback = complete_err(
+                    env,
+                    global.as_obj(),
+                    "RUNTIME_ERROR",
+                    "cognee: failed to settle the future",
+                );
+                if fallback.is_err() {
+                    if env.exception_check().unwrap_or(false) {
+                        let _ = env.exception_clear();
+                    }
+                    eprintln!(
+                        "[cognee-java] failed to settle CompletableFuture: both \
+                         the result up-call and the fallback up-call failed"
+                    );
+                }
             }
-        };
+            Ok(())
+        });
 
         // Never leave a pending exception on a pooled worker thread.
-        if settled.is_err() && env.exception_check().unwrap_or(false) {
+        if framed.is_err() && env.exception_check().unwrap_or(false) {
             let _ = env.exception_clear();
         }
 

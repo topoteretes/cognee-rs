@@ -1,7 +1,5 @@
 //! Session ops: getSession, addFeedback, deleteFeedback, get/setGraphContext.
 
-use std::sync::Arc;
-
 use jni::JNIEnv;
 use jni::objects::{JClass, JObject, JString};
 use jni::sys::jlong;
@@ -12,7 +10,7 @@ use crate::args::{arg_json, arg_string};
 use crate::errors::throw_sdk_error;
 use crate::future::spawn_future;
 use crate::guard_void;
-use crate::handle::handle_ref;
+use crate::handle::checked_handle;
 
 /// `getSession(handle, sessionId, optsJson, future)` — opts `{lastN?}`.
 #[unsafe(no_mangle)]
@@ -25,7 +23,9 @@ pub extern "system" fn Java_ai_cognee_internal_Native_getSession<'l>(
     future: JObject<'l>,
 ) {
     guard_void(&mut env, |env| {
-        let state = unsafe { Arc::clone(handle_ref(handle)) };
+        let Some(state) = checked_handle(env, handle, &future) else {
+            return;
+        };
         let session = match arg_string(env, &session_id) {
             Ok(v) => v,
             Err(e) => return throw_sdk_error(env, e),
@@ -53,7 +53,9 @@ pub extern "system" fn Java_ai_cognee_internal_Native_addFeedback<'l>(
     future: JObject<'l>,
 ) {
     guard_void(&mut env, |env| {
-        let state = unsafe { Arc::clone(handle_ref(handle)) };
+        let Some(state) = checked_handle(env, handle, &future) else {
+            return;
+        };
         let session = match arg_string(env, &session_id) {
             Ok(v) => v,
             Err(e) => return throw_sdk_error(env, e),
@@ -83,7 +85,9 @@ pub extern "system" fn Java_ai_cognee_internal_Native_deleteFeedback<'l>(
     future: JObject<'l>,
 ) {
     guard_void(&mut env, |env| {
-        let state = unsafe { Arc::clone(handle_ref(handle)) };
+        let Some(state) = checked_handle(env, handle, &future) else {
+            return;
+        };
         let session = match arg_string(env, &session_id) {
             Ok(v) => v,
             Err(e) => return throw_sdk_error(env, e),
@@ -108,7 +112,9 @@ pub extern "system" fn Java_ai_cognee_internal_Native_getGraphContext<'l>(
     future: JObject<'l>,
 ) {
     guard_void(&mut env, |env| {
-        let state = unsafe { Arc::clone(handle_ref(handle)) };
+        let Some(state) = checked_handle(env, handle, &future) else {
+            return;
+        };
         let session = match arg_string(env, &session_id) {
             Ok(v) => v,
             Err(e) => return throw_sdk_error(env, e),
@@ -130,7 +136,9 @@ pub extern "system" fn Java_ai_cognee_internal_Native_setGraphContext<'l>(
     future: JObject<'l>,
 ) {
     guard_void(&mut env, |env| {
-        let state = unsafe { Arc::clone(handle_ref(handle)) };
+        let Some(state) = checked_handle(env, handle, &future) else {
+            return;
+        };
         let session = match arg_string(env, &session_id) {
             Ok(v) => v,
             Err(e) => return throw_sdk_error(env, e),

@@ -1,7 +1,5 @@
 //! Memory ops: remember, remember_entry, memify, improve.
 
-use std::sync::Arc;
-
 use jni::JNIEnv;
 use jni::objects::{JClass, JObject, JString};
 use jni::sys::jlong;
@@ -12,7 +10,7 @@ use crate::args::{arg_json, arg_string};
 use crate::errors::throw_sdk_error;
 use crate::future::spawn_future;
 use crate::guard_void;
-use crate::handle::handle_ref;
+use crate::handle::checked_handle;
 
 /// `remember(handle, inputsJson, datasetName, optsJson, future)`
 #[unsafe(no_mangle)]
@@ -26,7 +24,9 @@ pub extern "system" fn Java_ai_cognee_internal_Native_remember<'l>(
     future: JObject<'l>,
 ) {
     guard_void(&mut env, |env| {
-        let state = unsafe { Arc::clone(handle_ref(handle)) };
+        let Some(state) = checked_handle(env, handle, &future) else {
+            return;
+        };
         let inputs = match arg_json(env, &inputs_json) {
             Ok(v) => v,
             Err(e) => return throw_sdk_error(env, e),
@@ -58,7 +58,9 @@ pub extern "system" fn Java_ai_cognee_internal_Native_rememberEntry<'l>(
     future: JObject<'l>,
 ) {
     guard_void(&mut env, |env| {
-        let state = unsafe { Arc::clone(handle_ref(handle)) };
+        let Some(state) = checked_handle(env, handle, &future) else {
+            return;
+        };
         let entry = match arg_json(env, &entry_json) {
             Ok(v) => v,
             Err(e) => return throw_sdk_error(env, e),
@@ -91,7 +93,9 @@ pub extern "system" fn Java_ai_cognee_internal_Native_memify<'l>(
     future: JObject<'l>,
 ) {
     guard_void(&mut env, |env| {
-        let state = unsafe { Arc::clone(handle_ref(handle)) };
+        let Some(state) = checked_handle(env, handle, &future) else {
+            return;
+        };
         let opts = match arg_json(env, &opts_json) {
             Ok(v) => v,
             Err(e) => return throw_sdk_error(env, e),
@@ -112,7 +116,9 @@ pub extern "system" fn Java_ai_cognee_internal_Native_improve<'l>(
     future: JObject<'l>,
 ) {
     guard_void(&mut env, |env| {
-        let state = unsafe { Arc::clone(handle_ref(handle)) };
+        let Some(state) = checked_handle(env, handle, &future) else {
+            return;
+        };
         let opts = match arg_json(env, &opts_json) {
             Ok(v) => v,
             Err(e) => return throw_sdk_error(env, e),

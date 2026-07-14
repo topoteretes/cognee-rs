@@ -14,19 +14,19 @@ public final class CogneeUsers {
 
     public CompletableFuture<CogneeUser> getOrCreateDefault() {
         CompletableFuture<String> f = new CompletableFuture<>();
-        Native.getOrCreateDefaultUser(cognee.handle(), f);
+        cognee.dispatchVoid(h -> Native.getOrCreateDefaultUser(h, f));
         return f.thenApply(json -> Json.fromJson(json, CogneeUser.class));
     }
 
     public CompletableFuture<Void> resetPipelineRunStatus(String datasetId, String pipelineName) {
         CompletableFuture<String> f = new CompletableFuture<>();
-        Native.resetPipelineRunStatus(cognee.handle(), datasetId, pipelineName, f);
+        cognee.dispatchVoid(h -> Native.resetPipelineRunStatus(h, datasetId, pipelineName, f));
         return f.thenApply(s -> null);
     }
 
     public CompletableFuture<Void> resetDatasetPipelineRunStatus(String datasetId) {
         CompletableFuture<String> f = new CompletableFuture<>();
-        Native.resetDatasetPipelineRunStatus(cognee.handle(), datasetId, f);
+        cognee.dispatchVoid(h -> Native.resetDatasetPipelineRunStatus(h, datasetId, f));
         return f.thenApply(s -> null);
     }
 }

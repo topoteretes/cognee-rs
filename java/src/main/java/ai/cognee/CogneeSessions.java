@@ -24,7 +24,7 @@ public final class CogneeSessions {
     public CompletableFuture<List<Map<String, Object>>> get(String sessionId, Integer lastN) {
         String opts = lastN == null ? "null" : Json.toJson(Map.of("lastN", lastN));
         CompletableFuture<String> f = new CompletableFuture<>();
-        Native.getSession(cognee.handle(), sessionId, opts, f);
+        cognee.dispatchVoid(h -> Native.getSession(h, sessionId, opts, f));
         return f.thenApply(json ->
                 Json.fromJson(json, new TypeReference<List<Map<String, Object>>>() {}));
     }
@@ -35,27 +35,27 @@ public final class CogneeSessions {
         if (feedbackText != null) opts.put("feedbackText", feedbackText);
         if (feedbackScore != null) opts.put("feedbackScore", feedbackScore);
         CompletableFuture<String> f = new CompletableFuture<>();
-        Native.addFeedback(cognee.handle(), sessionId, qaId, Json.toJson(opts), f);
+        cognee.dispatchVoid(h -> Native.addFeedback(h, sessionId, qaId, Json.toJson(opts), f));
         return f.thenApply(json -> Json.fromJson(json, Boolean.class));
     }
 
     public CompletableFuture<Boolean> deleteFeedback(String sessionId, String qaId) {
         CompletableFuture<String> f = new CompletableFuture<>();
-        Native.deleteFeedback(cognee.handle(), sessionId, qaId, f);
+        cognee.dispatchVoid(h -> Native.deleteFeedback(h, sessionId, qaId, f));
         return f.thenApply(json -> Json.fromJson(json, Boolean.class));
     }
 
     /** Returns the stored graph context, or null if none. */
     public CompletableFuture<String> getGraphContext(String sessionId) {
         CompletableFuture<String> f = new CompletableFuture<>();
-        Native.getGraphContext(cognee.handle(), sessionId, f);
+        cognee.dispatchVoid(h -> Native.getGraphContext(h, sessionId, f));
         // The op completes with a JSON string ("..." or null).
         return f.thenApply(json -> Json.fromJson(json, String.class));
     }
 
     public CompletableFuture<Void> setGraphContext(String sessionId, String context) {
         CompletableFuture<String> f = new CompletableFuture<>();
-        Native.setGraphContext(cognee.handle(), sessionId, context, f);
+        cognee.dispatchVoid(h -> Native.setGraphContext(h, sessionId, context, f));
         return f.thenApply(s -> null);
     }
 }

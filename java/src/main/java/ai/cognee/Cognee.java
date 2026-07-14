@@ -3,8 +3,12 @@ package ai.cognee;
 import ai.cognee.internal.Json;
 import ai.cognee.internal.Native;
 import java.lang.ref.Cleaner;
+import java.lang.ref.Reference;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
+import java.util.function.LongConsumer;
+import java.util.function.LongFunction;
 
 /**
  * The cognee Java SDK entry point. Construct with optional settings (canonical
@@ -35,6 +39,15 @@ public final class Cognee implements AutoCloseable {
     private final Handle handleHolder;
     private final Cleaner.Cleanable cleanable;
     private volatile boolean closed = false;
+
+    /**
+     * Serializes op dispatch against {@link #close()}: ops take the read lock
+     * (many concurrent), {@code close()} takes the write lock (exclusive), so the
+     * closed-guard and the native call are atomic and a concurrent close cannot
+     * free the handle mid-call.
+     */
+    private final ReentrantReadWriteLock lifecycleLock = new ReentrantReadWriteLock();
+
     private CogneeConfig config;
     private CogneeDatasets datasets;
     private CogneeSessions sessions;
@@ -92,8 +105,39 @@ public final class Cognee implements AutoCloseable {
         this.cleanable = CLEANER.register(this, this.handleHolder);
     }
 
+    /**
+     * Invoke a native op with the live handle under the read lock, so a
+     * concurrent {@link #close()} (write lock) cannot free the handle between the
+     * closed-guard and the call, and fence reachability afterwards so the
+     * {@link Cleaner} cannot free {@code this} while the native call is in flight.
+     * Only the synchronous JNI window needs protecting — a spawned future has
+     * already cloned the native {@code Arc} by the time the call returns.
+     *
+     * @throws IllegalStateException if the handle is already closed.
+     */
+    <T> T dispatch(LongFunction<T> call) {
+        lifecycleLock.readLock().lock();
+        try {
+            if (closed) {
+                throw new IllegalStateException("Cognee handle is closed");
+            }
+            return call.apply(handleHolder.ptr);
+        } finally {
+            Reference.reachabilityFence(this);
+            lifecycleLock.readLock().unlock();
+        }
+    }
+
+    /** Void-returning variant of {@link #dispatch(LongFunction)}. */
+    void dispatchVoid(LongConsumer call) {
+        dispatch(h -> {
+            call.accept(h);
+            return null;
+        });
+    }
+
     /** The native handle for internal op calls. Throws if closed. */
-    public long handle() {
+    long handle() {
         if (closed) {
             throw new IllegalStateException("Cognee handle is closed");
         }
@@ -103,14 +147,14 @@ public final class Cognee implements AutoCloseable {
     /** Force engine construction now (surfaces config/connection errors early). */
     public CompletableFuture<Void> warm() {
         CompletableFuture<String> f = new CompletableFuture<>();
-        Native.warm(handle(), f);
+        dispatchVoid(h -> Native.warm(h, f));
         return f.thenApply(s -> null);
     }
 
     /** The email-derived owner id (warms lazily if needed). */
     public CompletableFuture<String> ownerId() {
         CompletableFuture<String> f = new CompletableFuture<>();
-        Native.ownerId(handle(), f);
+        dispatchVoid(h -> Native.ownerId(h, f));
         return f.thenApply(json -> ai.cognee.internal.Json.fromJson(json, String.class));
     }
 
@@ -124,8 +168,8 @@ public final class Cognee implements AutoCloseable {
     public CompletableFuture<AddResult> add(
             java.util.List<DataInput> inputs, String datasetName, AddOptions opts) {
         CompletableFuture<String> f = new CompletableFuture<>();
-        Native.add(handle(), ai.cognee.internal.Json.toJson(inputs), datasetName,
-                Options.jsonOf(opts), f);
+        dispatchVoid(h -> Native.add(h, ai.cognee.internal.Json.toJson(inputs), datasetName,
+                Options.jsonOf(opts), f));
         return f.thenApply(json -> ai.cognee.internal.Json.fromJson(json, AddResult.class));
     }
 
@@ -148,7 +192,7 @@ public final class Cognee implements AutoCloseable {
     /** Extract the knowledge graph with per-call {@link CognifyOptions}. */
     public CompletableFuture<CognifyResult> cognify(String datasetName, CognifyOptions opts) {
         CompletableFuture<String> f = new CompletableFuture<>();
-        Native.cognify(handle(), datasetName, Options.jsonOf(opts), f);
+        dispatchVoid(h -> Native.cognify(h, datasetName, Options.jsonOf(opts), f));
         return f.thenApply(json -> ai.cognee.internal.Json.fromJson(json, CognifyResult.class));
     }
 
@@ -157,8 +201,8 @@ public final class Cognee implements AutoCloseable {
     public CompletableFuture<AddAndCognifyResult> addAndCognify(
             java.util.List<DataInput> inputs, String datasetName, CognifyOptions opts) {
         CompletableFuture<String> f = new CompletableFuture<>();
-        Native.addAndCognify(handle(), ai.cognee.internal.Json.toJson(inputs), datasetName,
-                Options.jsonOf(opts), f);
+        dispatchVoid(h -> Native.addAndCognify(h, ai.cognee.internal.Json.toJson(inputs),
+                datasetName, Options.jsonOf(opts), f));
         return f.thenApply(
                 json -> ai.cognee.internal.Json.fromJson(json, AddAndCognifyResult.class));
     }
@@ -172,7 +216,7 @@ public final class Cognee implements AutoCloseable {
     /** Query the knowledge graph with per-call {@link SearchOptions}. */
     public CompletableFuture<SearchResponse> search(String query, SearchOptions opts) {
         CompletableFuture<String> f = new CompletableFuture<>();
-        Native.search(handle(), query, Options.jsonOf(opts), f);
+        dispatchVoid(h -> Native.search(h, query, Options.jsonOf(opts), f));
         return f.thenApply(json -> new SearchResponse(ai.cognee.internal.Json.tree(json)));
     }
 
@@ -185,7 +229,7 @@ public final class Cognee implements AutoCloseable {
     /** Source-aware retrieval with per-call {@link RecallOptions}. */
     public CompletableFuture<RecallResult> recall(String query, RecallOptions opts) {
         CompletableFuture<String> f = new CompletableFuture<>();
-        Native.recall(handle(), query, Options.jsonOf(opts), f);
+        dispatchVoid(h -> Native.recall(h, query, Options.jsonOf(opts), f));
         return f.thenApply(json -> new RecallResult(ai.cognee.internal.Json.tree(json)));
     }
 
@@ -194,8 +238,8 @@ public final class Cognee implements AutoCloseable {
     public CompletableFuture<RememberResult> remember(
             java.util.List<DataInput> inputs, String datasetName, RememberOptions opts) {
         CompletableFuture<String> f = new CompletableFuture<>();
-        Native.remember(handle(), ai.cognee.internal.Json.toJson(inputs), datasetName,
-                Options.jsonOf(opts), f);
+        dispatchVoid(h -> Native.remember(h, ai.cognee.internal.Json.toJson(inputs), datasetName,
+                Options.jsonOf(opts), f));
         return f.thenApply(json -> new RememberResult(ai.cognee.internal.Json.tree(json)));
     }
 
@@ -206,8 +250,8 @@ public final class Cognee implements AutoCloseable {
         String optsJson = tenant == null ? "null"
                 : ai.cognee.internal.Json.toJson(java.util.Map.of("tenant", tenant));
         CompletableFuture<String> f = new CompletableFuture<>();
-        Native.rememberEntry(handle(), ai.cognee.internal.Json.toJson(entry), datasetName,
-                sessionId, optsJson, f);
+        dispatchVoid(h -> Native.rememberEntry(h, ai.cognee.internal.Json.toJson(entry),
+                datasetName, sessionId, optsJson, f));
         return f.thenApply(json -> new RememberResult(ai.cognee.internal.Json.tree(json)));
     }
 
@@ -215,7 +259,7 @@ public final class Cognee implements AutoCloseable {
     /** Index triplet embeddings from the existing graph (enables triplet search). */
     public CompletableFuture<MemifyResult> memify(MemifyOptions opts) {
         CompletableFuture<String> f = new CompletableFuture<>();
-        Native.memify(handle(), Options.jsonOf(opts), f);
+        dispatchVoid(h -> Native.memify(h, Options.jsonOf(opts), f));
         return f.thenApply(json -> ai.cognee.internal.Json.fromJson(json, MemifyResult.class));
     }
 
@@ -228,7 +272,7 @@ public final class Cognee implements AutoCloseable {
     /** Run the session-graph bridge pipeline ({@link ImproveOptions}'s {@code datasetName} is required). */
     public CompletableFuture<ImproveResult> improve(ImproveOptions opts) {
         CompletableFuture<String> f = new CompletableFuture<>();
-        Native.improve(handle(), opts.toJson(), f); // opts required (datasetName)
+        dispatchVoid(h -> Native.improve(h, opts.toJson(), f)); // opts required (datasetName)
         return f.thenApply(json -> ai.cognee.internal.Json.fromJson(json, ImproveResult.class));
     }
 
@@ -243,7 +287,7 @@ public final class Cognee implements AutoCloseable {
         String optsJson = tenant == null ? "null"
                 : ai.cognee.internal.Json.toJson(java.util.Map.of("tenant", tenant));
         CompletableFuture<String> f = new CompletableFuture<>();
-        Native.forget(handle(), ai.cognee.internal.Json.toJson(target), optsJson, f);
+        dispatchVoid(h -> Native.forget(h, ai.cognee.internal.Json.toJson(target), optsJson, f));
         return f.thenApply(json -> new ForgetResult(ai.cognee.internal.Json.tree(json)));
     }
 
@@ -252,8 +296,8 @@ public final class Cognee implements AutoCloseable {
     public CompletableFuture<UpdateResult> update(
             String dataId, java.util.List<DataInput> newData, String datasetName, UpdateOptions opts) {
         CompletableFuture<String> f = new CompletableFuture<>();
-        Native.update(handle(), dataId, ai.cognee.internal.Json.toJson(newData), datasetName,
-                Options.jsonOf(opts), f);
+        dispatchVoid(h -> Native.update(h, dataId, ai.cognee.internal.Json.toJson(newData),
+                datasetName, Options.jsonOf(opts), f));
         return f.thenApply(json -> new UpdateResult(ai.cognee.internal.Json.tree(json)));
     }
 
@@ -261,7 +305,7 @@ public final class Cognee implements AutoCloseable {
     /** Remove all ingested files from storage (metadata DB untouched). */
     public CompletableFuture<Void> pruneData() {
         CompletableFuture<String> f = new CompletableFuture<>();
-        Native.pruneData(handle(), f);
+        dispatchVoid(h -> Native.pruneData(h, f));
         return f.thenApply(s -> null);
     }
 
@@ -269,7 +313,7 @@ public final class Cognee implements AutoCloseable {
     /** Wipe the selected backends (graph/vector/metadata/cache) per {@link PruneSystemOptions}. */
     public CompletableFuture<PruneResult> pruneSystem(PruneSystemOptions opts) {
         CompletableFuture<String> f = new CompletableFuture<>();
-        Native.pruneSystem(handle(), Options.jsonOf(opts), f);
+        dispatchVoid(h -> Native.pruneSystem(h, Options.jsonOf(opts), f));
         return f.thenApply(json -> ai.cognee.internal.Json.fromJson(json, PruneResult.class));
     }
 
@@ -287,14 +331,14 @@ public final class Cognee implements AutoCloseable {
     /** Render the knowledge graph to an HTML string with per-call {@link VisualizeOptions}. */
     public CompletableFuture<String> visualize(VisualizeOptions opts) {
         CompletableFuture<String> f = new CompletableFuture<>();
-        Native.visualize(handle(), Options.jsonOf(opts), f);
+        dispatchVoid(h -> Native.visualize(h, Options.jsonOf(opts), f));
         return f.thenApply(json -> ai.cognee.internal.Json.fromJson(json, String.class));
     }
 
     /** Render the graph to a file (returns the absolute path written). */
     public CompletableFuture<String> visualizeToFile(VisualizeOptions opts) {
         CompletableFuture<String> f = new CompletableFuture<>();
-        Native.visualizeToFile(handle(), Options.jsonOf(opts), f);
+        dispatchVoid(h -> Native.visualizeToFile(h, Options.jsonOf(opts), f));
         return f.thenApply(json -> ai.cognee.internal.Json.fromJson(json, String.class));
     }
 
@@ -322,10 +366,15 @@ public final class Cognee implements AutoCloseable {
 
     @Override
     public void close() {
-        if (closed) {
-            return;
+        lifecycleLock.writeLock().lock();
+        try {
+            if (closed) {
+                return;
+            }
+            closed = true;
+            cleanable.clean(); // runs Handle.run() exactly once → Native.destroy
+        } finally {
+            lifecycleLock.writeLock().unlock();
         }
-        closed = true;
-        cleanable.clean(); // runs Handle.run() exactly once → Native.destroy
     }
 }

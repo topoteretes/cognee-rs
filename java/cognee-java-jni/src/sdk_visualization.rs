@@ -1,8 +1,6 @@
 //! Visualization ops: visualize (HTML string), visualize_to_file (path).
 //! No #[cfg] — bindings-common returns FEATURE_NOT_BUILT when the feature is off.
 
-use std::sync::Arc;
-
 use jni::JNIEnv;
 use jni::objects::{JClass, JObject, JString};
 use jni::sys::jlong;
@@ -13,7 +11,7 @@ use crate::args::arg_json;
 use crate::errors::throw_sdk_error;
 use crate::future::spawn_future;
 use crate::guard_void;
-use crate::handle::handle_ref;
+use crate::handle::checked_handle;
 
 /// `visualize(handle, optsJson, future)` — completes with the HTML string.
 #[unsafe(no_mangle)]
@@ -25,7 +23,9 @@ pub extern "system" fn Java_ai_cognee_internal_Native_visualize<'l>(
     future: JObject<'l>,
 ) {
     guard_void(&mut env, |env| {
-        let state = unsafe { Arc::clone(handle_ref(handle)) };
+        let Some(state) = checked_handle(env, handle, &future) else {
+            return;
+        };
         let opts = match arg_json(env, &opts_json) {
             Ok(v) => v,
             Err(e) => return throw_sdk_error(env, e),
@@ -48,7 +48,9 @@ pub extern "system" fn Java_ai_cognee_internal_Native_visualizeToFile<'l>(
     future: JObject<'l>,
 ) {
     guard_void(&mut env, |env| {
-        let state = unsafe { Arc::clone(handle_ref(handle)) };
+        let Some(state) = checked_handle(env, handle, &future) else {
+            return;
+        };
         let opts = match arg_json(env, &opts_json) {
             Ok(v) => v,
             Err(e) => return throw_sdk_error(env, e),

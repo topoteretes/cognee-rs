@@ -199,6 +199,13 @@ pub extern "system" fn JNI_OnLoad(vm: JavaVM, _reserved: *mut c_void) -> jint {
     JNI_VERSION_1_8
 }
 
+> **SAFETY (later tasks add non-trivial code here — keep it guarded):** T11 wires
+> `install_default_subscriber()` + `arm_analytics()` into `JNI_OnLoad`. That body
+> runs during `System.load`, where a panic unwinding into the JVM is UB, so the
+> non-trivial calls **must** be wrapped in `std::panic::catch_unwind` and the
+> function must still return `JNI_VERSION_1_8` regardless. The `JAVA_VM.set` above
+> is infallible and needs no guard.
+
 // ---------------------------------------------------------------------------
 // Panic guards — every exported fn body runs inside one of these.
 // A panic is converted to a thrown java.lang.RuntimeException (superclass of

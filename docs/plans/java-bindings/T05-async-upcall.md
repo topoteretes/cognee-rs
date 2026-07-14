@@ -57,6 +57,16 @@ thread), and is audited under `-Xcheck:jni`.
 7. **Cancellation:** none in v1 (`CompletableFuture.cancel` only abandons the
    Java-side future; the native task runs to completion). Do not wire it.
 
+> **SAFETY (do not re-use this boilerplate unguarded):** the settle block **must**
+> run inside `env.with_local_frame(16, |env| { … })`. Daemon worker threads never
+> detach, so the JNI locals created per completion (`new_string`, the class
+> local-ref, the exception object) would otherwise accumulate unbounded — fatal
+> on Android/ART. Additionally, if the `complete`/`completeExceptionally` up-call
+> itself fails the future is never settled and Java `.join()` hangs forever, so
+> add a best-effort fallback: clear any pending exception, retry
+> `completeExceptionally` with a plain message, and log (never panic) if that also
+> fails. (Implemented in `future.rs`; the snippet below predates both fixes.)
+
 ## Steps
 
 ### 1. Create `java/cognee-java-jni/src/future.rs`

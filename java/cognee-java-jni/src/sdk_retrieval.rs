@@ -1,7 +1,5 @@
 //! Retrieval ops: search, recall.
 
-use std::sync::Arc;
-
 use jni::JNIEnv;
 use jni::objects::{JClass, JObject, JString};
 use jni::sys::jlong;
@@ -12,7 +10,7 @@ use crate::args::{arg_json, arg_string};
 use crate::errors::throw_sdk_error;
 use crate::future::spawn_future;
 use crate::guard_void;
-use crate::handle::handle_ref;
+use crate::handle::checked_handle;
 
 /// `search(handle, query, optsJson, future)`
 #[unsafe(no_mangle)]
@@ -25,7 +23,9 @@ pub extern "system" fn Java_ai_cognee_internal_Native_search<'l>(
     future: JObject<'l>,
 ) {
     guard_void(&mut env, |env| {
-        let state = unsafe { Arc::clone(handle_ref(handle)) };
+        let Some(state) = checked_handle(env, handle, &future) else {
+            return;
+        };
         let query = match arg_string(env, &query) {
             Ok(v) => v,
             Err(e) => return throw_sdk_error(env, e),
@@ -51,7 +51,9 @@ pub extern "system" fn Java_ai_cognee_internal_Native_recall<'l>(
     future: JObject<'l>,
 ) {
     guard_void(&mut env, |env| {
-        let state = unsafe { Arc::clone(handle_ref(handle)) };
+        let Some(state) = checked_handle(env, handle, &future) else {
+            return;
+        };
         let query = match arg_string(env, &query) {
             Ok(v) => v,
             Err(e) => return throw_sdk_error(env, e),

@@ -21,7 +21,7 @@ public final class CogneeConfig {
 
     /** Set any config key to any JSON-serializable value. */
     public void set(String key, Object value) {
-        Native.configSet(cognee.handle(), key, Json.toJson(value));
+        cognee.dispatchVoid(h -> Native.configSet(h, key, Json.toJson(value)));
     }
 
     /** Convenience for string-valued keys (identical to {@link #set}). */
@@ -30,24 +30,24 @@ public final class CogneeConfig {
     }
 
     public void setLlmConfig(Map<String, ?> values) {
-        Native.configSetLlmConfig(cognee.handle(), Json.toJson(values));
+        cognee.dispatchVoid(h -> Native.configSetLlmConfig(h, Json.toJson(values)));
     }
 
     public void setEmbeddingConfig(Map<String, ?> values) {
-        Native.configSetEmbeddingConfig(cognee.handle(), Json.toJson(values));
+        cognee.dispatchVoid(h -> Native.configSetEmbeddingConfig(h, Json.toJson(values)));
     }
 
     public void setVectorDbConfig(Map<String, ?> values) {
-        Native.configSetVectorDbConfig(cognee.handle(), Json.toJson(values));
+        cognee.dispatchVoid(h -> Native.configSetVectorDbConfig(h, Json.toJson(values)));
     }
 
     public void setGraphDbConfig(Map<String, ?> values) {
-        Native.configSetGraphDbConfig(cognee.handle(), Json.toJson(values));
+        cognee.dispatchVoid(h -> Native.configSetGraphDbConfig(h, Json.toJson(values)));
     }
 
     /** Read-back of the current settings (secret fields blanked, snake_case keys). */
     public Map<String, Object> get() {
-        String json = Native.getConfig(cognee.handle());
+        String json = cognee.dispatch(h -> Native.getConfig(h));
         return Json.fromJson(json, new TypeReference<Map<String, Object>>() {});
     }
 }

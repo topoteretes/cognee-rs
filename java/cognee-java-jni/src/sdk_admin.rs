@@ -1,7 +1,5 @@
 //! Admin/user/notebook ops.
 
-use std::sync::Arc;
-
 use jni::JNIEnv;
 use jni::objects::{JClass, JObject, JString};
 use jni::sys::{jboolean, jlong};
@@ -12,7 +10,7 @@ use crate::args::{arg_json, arg_string};
 use crate::errors::throw_sdk_error;
 use crate::future::spawn_future;
 use crate::guard_void;
-use crate::handle::handle_ref;
+use crate::handle::checked_handle;
 
 /// `getOrCreateDefaultUser(handle, future)`
 #[unsafe(no_mangle)]
@@ -23,7 +21,9 @@ pub extern "system" fn Java_ai_cognee_internal_Native_getOrCreateDefaultUser<'l>
     future: JObject<'l>,
 ) {
     guard_void(&mut env, |env| {
-        let state = unsafe { Arc::clone(handle_ref(handle)) };
+        let Some(state) = checked_handle(env, handle, &future) else {
+            return;
+        };
         spawn_future(env, &future, async move {
             admin::run_get_or_create_default_user(&state).await
         });
@@ -41,7 +41,9 @@ pub extern "system" fn Java_ai_cognee_internal_Native_resetPipelineRunStatus<'l>
     future: JObject<'l>,
 ) {
     guard_void(&mut env, |env| {
-        let state = unsafe { Arc::clone(handle_ref(handle)) };
+        let Some(state) = checked_handle(env, handle, &future) else {
+            return;
+        };
         let dataset_id = match arg_string(env, &dataset_id) {
             Ok(v) => v,
             Err(e) => return throw_sdk_error(env, e),
@@ -66,7 +68,9 @@ pub extern "system" fn Java_ai_cognee_internal_Native_resetDatasetPipelineRunSta
     future: JObject<'l>,
 ) {
     guard_void(&mut env, |env| {
-        let state = unsafe { Arc::clone(handle_ref(handle)) };
+        let Some(state) = checked_handle(env, handle, &future) else {
+            return;
+        };
         let dataset_id = match arg_string(env, &dataset_id) {
             Ok(v) => v,
             Err(e) => return throw_sdk_error(env, e),
@@ -86,7 +90,9 @@ pub extern "system" fn Java_ai_cognee_internal_Native_listNotebooks<'l>(
     future: JObject<'l>,
 ) {
     guard_void(&mut env, |env| {
-        let state = unsafe { Arc::clone(handle_ref(handle)) };
+        let Some(state) = checked_handle(env, handle, &future) else {
+            return;
+        };
         spawn_future(env, &future, async move {
             admin::run_list_notebooks(&state).await
         });
@@ -105,7 +111,9 @@ pub extern "system" fn Java_ai_cognee_internal_Native_createNotebook<'l>(
     future: JObject<'l>,
 ) {
     guard_void(&mut env, |env| {
-        let state = unsafe { Arc::clone(handle_ref(handle)) };
+        let Some(state) = checked_handle(env, handle, &future) else {
+            return;
+        };
         let name = match arg_string(env, &name) {
             Ok(v) => v,
             Err(e) => return throw_sdk_error(env, e),
@@ -134,7 +142,9 @@ pub extern "system" fn Java_ai_cognee_internal_Native_updateNotebook<'l>(
     future: JObject<'l>,
 ) {
     guard_void(&mut env, |env| {
-        let state = unsafe { Arc::clone(handle_ref(handle)) };
+        let Some(state) = checked_handle(env, handle, &future) else {
+            return;
+        };
         let id = match arg_string(env, &id) {
             Ok(v) => v,
             Err(e) => return throw_sdk_error(env, e),
@@ -159,7 +169,9 @@ pub extern "system" fn Java_ai_cognee_internal_Native_deleteNotebook<'l>(
     future: JObject<'l>,
 ) {
     guard_void(&mut env, |env| {
-        let state = unsafe { Arc::clone(handle_ref(handle)) };
+        let Some(state) = checked_handle(env, handle, &future) else {
+            return;
+        };
         let id = match arg_string(env, &id) {
             Ok(v) => v,
             Err(e) => return throw_sdk_error(env, e),

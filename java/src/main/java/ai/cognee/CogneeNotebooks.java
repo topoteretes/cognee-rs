@@ -19,7 +19,7 @@ public final class CogneeNotebooks {
 
     public CompletableFuture<List<CogneeNotebook>> list() {
         CompletableFuture<String> f = new CompletableFuture<>();
-        Native.listNotebooks(cognee.handle(), f);
+        cognee.dispatchVoid(h -> Native.listNotebooks(h, f));
         return f.thenApply(json -> {
             List<CogneeNotebook> out = new ArrayList<>();
             for (JsonNode n : Json.tree(json)) {
@@ -36,7 +36,7 @@ public final class CogneeNotebooks {
     public CompletableFuture<CogneeNotebook> create(String name, List<?> cells, boolean deletable) {
         String cellsJson = cells == null ? "null" : Json.toJson(cells);
         CompletableFuture<String> f = new CompletableFuture<>();
-        Native.createNotebook(cognee.handle(), name, cellsJson, deletable, f);
+        cognee.dispatchVoid(h -> Native.createNotebook(h, name, cellsJson, deletable, f));
         return f.thenApply(json -> new CogneeNotebook(Json.tree(json)));
     }
 
@@ -46,7 +46,7 @@ public final class CogneeNotebooks {
         if (name != null) patch.put("name", name);
         if (cells != null) patch.put("cells", cells);
         CompletableFuture<String> f = new CompletableFuture<>();
-        Native.updateNotebook(cognee.handle(), id, Json.toJson(patch), f);
+        cognee.dispatchVoid(h -> Native.updateNotebook(h, id, Json.toJson(patch), f));
         return f.thenApply(json -> {
             JsonNode n = Json.tree(json);
             return n.isNull() ? null : new CogneeNotebook(n);
@@ -55,7 +55,7 @@ public final class CogneeNotebooks {
 
     public CompletableFuture<Boolean> delete(String id) {
         CompletableFuture<String> f = new CompletableFuture<>();
-        Native.deleteNotebook(cognee.handle(), id, f);
+        cognee.dispatchVoid(h -> Native.deleteNotebook(h, id, f));
         return f.thenApply(json -> Json.fromJson(json, Boolean.class));
     }
 }
