@@ -147,8 +147,21 @@ impl OpenAIAdapter {
         if self.extra_args.is_empty() {
             return;
         }
+        // Reasoning models (`gpt-5*`/`o1*`/`o3*`/`o4*` on api.openai.com) reject
+        // `max_tokens` and require `max_completion_tokens`. The request body's
+        // output cap is written by `write_max_tokens` as `max_completion_tokens`,
+        // so a bare `max_tokens` coming from `LLM_ARGS` here would land alongside
+        // it and OpenAI rejects a request carrying *both* keys with a 400. Fold a
+        // `LLM_ARGS` `max_tokens` into `max_completion_tokens` (only filling the
+        // gap) so exactly one of the two keys is ever emitted.
+        let reasoning = self.is_reasoning_model();
         if let Some(obj) = body.as_object_mut() {
             for (key, value) in &self.extra_args {
+                if reasoning && key == "max_tokens" {
+                    obj.entry("max_completion_tokens")
+                        .or_insert_with(|| value.clone());
+                    continue;
+                }
                 obj.entry(key.clone()).or_insert_with(|| value.clone());
             }
         }
@@ -224,6 +237,21 @@ impl OpenAIAdapter {
     /// - HTTP 5xx (server errors)
     ///
     /// Errors on HTTP 400 and 401 are returned immediately without retrying.
+    async fn call_api(&self, mut request_body: Value) -> LlmResult<OpenAIResponse> {
+        // Merge configured `LLM_ARGS` (Python `llm_config.llm_args`) into every
+        // chat-completion / structured-output request. Only fills keys the request
+        // does not already set, so explicit parameters win — Python's
+        // `{**self.llm_args, **kwargs}`. Scoped to the chat/structured paths: the
+        // transcription (vision) path calls `send_chat_request` directly so a
+        // graph-extraction `LLM_ARGS` (e.g. a large `max_tokens`) never leaks into
+        // an image-description request.
+        self.apply_extra_args(&mut request_body);
+        self.send_chat_request(request_body).await
+    }
+
+    /// Perform the actual chat-completions HTTP POST, retrying on transient
+    /// network/server errors. Does *not* merge [`extra_args`](Self::extra_args) —
+    /// callers that want the `LLM_ARGS` merge go through [`call_api`](Self::call_api).
     #[instrument(
         name = "llm.api_call",
         level = "info",
@@ -234,12 +262,7 @@ impl OpenAIAdapter {
             cognee.llm.provider = "openai",
         ),
     )]
-    async fn call_api(&self, mut request_body: Value) -> LlmResult<OpenAIResponse> {
-        // Merge configured `LLM_ARGS` (Python `llm_config.llm_args`) into every
-        // chat-completion request. Only fills keys the request does not already
-        // set, so explicit parameters win — Python's `{**self.llm_args, **kwargs}`.
-        self.apply_extra_args(&mut request_body);
-
+    async fn send_chat_request(&self, request_body: Value) -> LlmResult<OpenAIResponse> {
         let url = format!("{}/chat/completions", self.base_url);
         tracing::Span::current().record("url", url.as_str());
         let debug_enabled = std::env::var("COGNEE_DEBUG_LLM_REQUEST")
@@ -434,6 +457,38 @@ impl OpenAIAdapter {
     /// required field or structural constraint the previous response violated —
     /// this threads `T`'s typed validation into the repair prompt, matching how
     /// instructor feeds the validation error back to the model.
+    /// Build a schema-aware validator for the type-erased raw path (which has no
+    /// Rust type to deserialize into).
+    ///
+    /// Enforces that every property named in the schema's top-level `required`
+    /// array is present and non-null. This gives the raw path the same
+    /// required-field guarantee instructor provides for a typed model, *without*
+    /// strict/grammar-constrained decoding (`response_format: json_schema`, which
+    /// 501s on Baseten): a response omitting a required field is fed back into the
+    /// existing corrective-retry loop instead of being accepted or hard-failing.
+    fn schema_required_validator(schema: &Value) -> impl Fn(&Value) -> Result<(), String> + '_ {
+        move |value: &Value| {
+            let Some(required) = schema.get("required").and_then(Value::as_array) else {
+                return Ok(());
+            };
+            let Some(obj) = value.as_object() else {
+                return Err("expected a JSON object".to_string());
+            };
+            for field in required {
+                if let Some(name) = field.as_str() {
+                    match obj.get(name) {
+                        None => return Err(format!("missing required field `{name}`")),
+                        Some(Value::Null) => {
+                            return Err(format!("required field `{name}` is null"));
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            Ok(())
+        }
+    }
+
     fn append_corrective_instruction(request: &mut Value, reason: Option<&str>) {
         if let Some(messages) = request["messages"].as_array_mut()
             && let Some(last_msg) = messages.last_mut()
@@ -522,7 +577,14 @@ impl Llm for OpenAIAdapter {
         json_schema: &Value,
         options: Option<GenerationOptions>,
     ) -> LlmResult<Value> {
-        self.structured_output_impl(messages, json_schema, options, None)
+        // The type-erased raw path has no Rust type to deserialize into, but it
+        // must still enforce the schema's required fields (summarization's
+        // custom-schema path and the HTTP structured endpoints rely on this — e.g.
+        // `summarize_one` needs the `summary` field present). Synthesise a
+        // schema-aware validator so an omitted required field drives the same
+        // corrective retry a typed caller gets, matching instructor.
+        let validator = Self::schema_required_validator(json_schema);
+        self.structured_output_impl(messages, json_schema, options, Some(&validator))
             .await
     }
 
@@ -597,7 +659,10 @@ impl Llm for OpenAIAdapter {
         });
         self.write_max_tokens(&mut request_body, Some(max_tokens));
 
-        let response = self.call_api(request_body).await?;
+        // Deliberately use `send_chat_request` (not `call_api`): `LLM_ARGS`
+        // (`extra_args`) are scoped to chat/structured extraction and must not
+        // bleed into the image-description request.
+        let response = self.send_chat_request(request_body).await?;
 
         let choice = response.choices.first().ok_or_else(|| {
             LlmError::InvalidResponse("No choices in vision response".to_string())
@@ -714,12 +779,26 @@ impl OpenAIAdapter {
         // tool call retries and, once exhausted, falls through to the legacy
         // function-calling / JSON-mode paths below (so servers that do not
         // support tool calling still work).
-        let mut last_invalid: Option<(String, String)> = None;
+        // Last outcome of the tool-calling loop, used to decide how to proceed
+        // once retries are exhausted. We distinguish a *validation miss* (the
+        // server clearly speaks tool calling and returns JSON, it merely omits a
+        // required field) from a *parse failure* / empty output / API error,
+        // because the two want different post-loop handling (see below).
+        enum ToolOutcome {
+            /// No usable output yet, or the request itself errored — fall through.
+            NoUsableOutput,
+            /// Valid JSON that failed the caller's typed/schema validation.
+            ValidationMiss { reason: String, raw: String },
+            /// A non-empty payload that did not parse as JSON.
+            ParseFailure,
+        }
+        let mut outcome = ToolOutcome::NoUsableOutput;
+        // Most recent failure reason, threaded into the next corrective retry.
+        let mut last_reason: Option<String> = None;
         for attempt in 0..self.structured_output_retries {
             let mut request_for_attempt = tools_request.clone();
             if attempt > 0 {
-                let reason = last_invalid.as_ref().map(|(r, _)| r.as_str());
-                Self::append_corrective_instruction(&mut request_for_attempt, reason);
+                Self::append_corrective_instruction(&mut request_for_attempt, last_reason.as_deref());
                 if !self.is_reasoning_model() {
                     request_for_attempt["temperature"] = json!(0.0);
                 }
@@ -734,18 +813,26 @@ impl OpenAIAdapter {
                     // Prefer a modern `tool_calls[0]`, then a legacy
                     // `function_call`, then raw `content` (some servers echo the
                     // JSON directly).
+                    // An empty/whitespace `arguments` string must be treated as
+                    // *absent* so the `.or(content)` fallback engages — some
+                    // servers emit a `tool_calls[0]` with empty arguments but put
+                    // the JSON in `message.content`. Without the `filter`, the
+                    // `Some("")` would shadow the real payload.
+                    let non_blank = |s: &str| !s.trim().is_empty();
                     let arguments = choice
                         .message
                         .tool_calls
                         .as_ref()
                         .and_then(|calls| calls.first())
                         .map(|c| c.function.arguments.as_str())
+                        .filter(|s| non_blank(s))
                         .or_else(|| {
                             choice
                                 .message
                                 .function_call
                                 .as_ref()
                                 .map(|f| f.arguments.as_str())
+                                .filter(|s| non_blank(s))
                         })
                         .or(choice.message.content.as_deref())
                         .unwrap_or("");
@@ -753,6 +840,8 @@ impl OpenAIAdapter {
                     if is_blank(arguments) {
                         // No usable output this attempt: retry until exhausted,
                         // then fall through to the legacy paths.
+                        outcome = ToolOutcome::NoUsableOutput;
+                        last_reason = None;
                         continue;
                     }
 
@@ -770,37 +859,50 @@ impl OpenAIAdapter {
                                     "tool-call response parsed but failed typed validation; \
                                      retrying with corrective instruction",
                                 );
-                                last_invalid = Some((reason, arguments.to_string()));
+                                last_reason = Some(reason.clone());
+                                outcome = ToolOutcome::ValidationMiss {
+                                    reason,
+                                    raw: arguments.to_string(),
+                                };
                                 continue;
                             }
                             return Ok(parsed);
                         }
                         Err(e) => {
-                            // Non-empty but invalid: remember it so we can surface
-                            // a clear error if every attempt fails, then retry.
-                            last_invalid = Some((e.to_string(), arguments.to_string()));
+                            // Non-empty but invalid JSON: retry, and remember that
+                            // the failure was a *parse* failure so we fall through
+                            // to the legacy/JSON-mode fallbacks once exhausted.
+                            last_reason = Some(e.to_string());
+                            outcome = ToolOutcome::ParseFailure;
                             continue;
                         }
                     }
                 }
                 Err(e) => {
-                    // Tool calling is unsupported by this model/endpoint (or the
-                    // schema was rejected). Fall back to legacy function calling
-                    // / JSON mode below, but make the reason visible — a silent
-                    // fallback is how required fields end up missing.
+                    // The tool-calling request itself errored (tool calling
+                    // unsupported, schema rejected, transient API/network error).
+                    // Fall through to the legacy/JSON-mode fallbacks — a server
+                    // may reject tool calling yet answer one of those, and those
+                    // loops re-issue the request and surface any real API error
+                    // via `?`. Crucially we do NOT return a stale validation/parse
+                    // error here [#5]; we discard the prior miss and fall through.
                     warn!(error = %e, "tool-call request failed; falling back to legacy function/JSON mode");
+                    outcome = ToolOutcome::NoUsableOutput;
                     break;
                 }
             }
         }
 
-        // Every tool-calling attempt returned a non-empty payload that was
-        // either unparseable or failed validation: surface it rather than
-        // silently swallowing it (the legacy fallbacks would only re-ask a
-        // server that clearly *does* speak tool calling).
-        if let Some((err, raw)) = last_invalid {
+        // Every tool-calling attempt returned valid JSON that failed the caller's
+        // typed/schema validation (e.g. persistently omits a required field). The
+        // server clearly speaks tool calling and returns well-formed JSON, so the
+        // legacy/JSON-mode fallbacks would only re-ask the same model; surface the
+        // validation error instead (instructor parity), naming the field. This is
+        // deliberately NOT done for a *parse* failure or empty output [#4], which
+        // fall through below in case a different request mode succeeds.
+        if let ToolOutcome::ValidationMiss { reason, raw } = outcome {
             return Err(LlmError::DeserializationError(format!(
-                "Failed to deserialize tool-call arguments after {} attempt(s): {err}. Raw: {raw}",
+                "Tool-call arguments failed schema validation after {} attempt(s): {reason}. Raw: {raw}",
                 self.structured_output_retries
             )));
         }
@@ -828,8 +930,24 @@ impl OpenAIAdapter {
             request_body["reasoning"] = json!({"effort": "none"});
         }
 
+        // Reason carried into the next attempt's corrective instruction so a
+        // legacy retry is not a byte-identical re-send (which just reproduces the
+        // same bad output) — it appends the failure detail and drops temperature
+        // to 0, exactly like the tool-calling and JSON-mode loops.
+        let mut legacy_last_reason: Option<String> = None;
         for attempt in 0..self.structured_output_retries {
-            let response = self.call_api(request_body.clone()).await?;
+            let mut request_for_attempt = request_body.clone();
+            if attempt > 0 {
+                Self::append_corrective_instruction(
+                    &mut request_for_attempt,
+                    legacy_last_reason.as_deref(),
+                );
+                if !self.is_reasoning_model() {
+                    request_for_attempt["temperature"] = json!(0.0);
+                }
+            }
+
+            let response = self.call_api(request_for_attempt).await?;
 
             let choice = response
                 .choices
@@ -850,6 +968,7 @@ impl OpenAIAdapter {
                                     function_call.arguments
                                 )));
                             }
+                            legacy_last_reason = Some(reason);
                             continue;
                         }
                         return Ok(parsed);
@@ -861,6 +980,7 @@ impl OpenAIAdapter {
                             if last_attempt {
                                 break;
                             }
+                            legacy_last_reason = None;
                             continue;
                         }
                         // Non-empty but invalid: surface it on the last attempt,
@@ -871,6 +991,7 @@ impl OpenAIAdapter {
                                 e, function_call.arguments
                             )));
                         }
+                        legacy_last_reason = Some(e.to_string());
                         continue;
                     }
                 }
@@ -960,7 +1081,14 @@ impl OpenAIAdapter {
                     return Ok(parsed);
                 }
                 Err(e) => {
-                    if !last_attempt && is_blank(content) {
+                    // Retry on *any* parse failure while attempts remain — an
+                    // empty response OR a non-empty-but-invalid one (e.g. JSON
+                    // wrapped in prose/markdown). The retry above appends a
+                    // "return ONLY one valid JSON object" instruction and drops
+                    // temperature to 0, so a re-ask can recover; narrowing this to
+                    // blank-only [#8] would give up on a malformed-but-present
+                    // payload after a single attempt.
+                    if !last_attempt {
                         continue;
                     }
                     return Err(LlmError::DeserializationError(format!(
@@ -1434,6 +1562,70 @@ mod tests {
         let mut body = json!({"model": "gpt-4o-mini", "max_tokens": 512});
         adapter.apply_extra_args(&mut body);
         assert_eq!(body["max_tokens"], 512);
+    }
+
+    #[test]
+    fn test_apply_extra_args_translates_max_tokens_for_reasoning_models() {
+        // #1: `write_max_tokens` emits `max_completion_tokens` for a reasoning
+        // model; a bare `LLM_ARGS` `max_tokens` must be folded into
+        // `max_completion_tokens` (never sent alongside it), or OpenAI 400s on
+        // both keys.
+        let args = json!({"max_tokens": 16384})
+            .as_object()
+            .unwrap()
+            .clone();
+        let reasoning = OpenAIAdapter::new("gpt-5-mini", "test-key", None)
+            .unwrap()
+            .with_extra_args(args.clone());
+
+        // Body already carries `max_completion_tokens` (from write_max_tokens):
+        // the extra `max_tokens` must NOT be added, and no bare `max_tokens` key.
+        let mut body = json!({"model": "gpt-5-mini", "max_completion_tokens": 2048});
+        reasoning.apply_extra_args(&mut body);
+        assert!(
+            body.get("max_tokens").is_none(),
+            "reasoning model must never carry a bare max_tokens"
+        );
+        assert_eq!(
+            body["max_completion_tokens"], 2048,
+            "explicit max_completion_tokens must win over LLM_ARGS"
+        );
+
+        // Body has no output cap yet: the LLM_ARGS max_tokens fills
+        // max_completion_tokens (translated), still no bare max_tokens.
+        let mut body = json!({"model": "gpt-5-mini"});
+        reasoning.apply_extra_args(&mut body);
+        assert!(body.get("max_tokens").is_none());
+        assert_eq!(body["max_completion_tokens"], 16384);
+
+        // A classic (non-reasoning) model keeps the bare max_tokens.
+        let classic = OpenAIAdapter::new("gpt-4o-mini", "test-key", None)
+            .unwrap()
+            .with_extra_args(args);
+        let mut body = json!({"model": "gpt-4o-mini"});
+        classic.apply_extra_args(&mut body);
+        assert_eq!(body["max_tokens"], 16384);
+        assert!(body.get("max_completion_tokens").is_none());
+    }
+
+    #[test]
+    fn test_schema_required_validator_enforces_required_fields() {
+        // #3: the raw path synthesises a schema-aware validator so an omitted
+        // required field is a retryable miss (not silently accepted).
+        let schema = json!({
+            "type": "object",
+            "required": ["summary"],
+            "properties": {"summary": {"type": "string"}}
+        });
+        let validate = OpenAIAdapter::schema_required_validator(&schema);
+        assert!(validate(&json!({"summary": "hello"})).is_ok());
+        assert!(validate(&json!({"other": "x"})).is_err());
+        assert!(validate(&json!({"summary": null})).is_err());
+
+        // No `required` array → nothing to enforce.
+        let loose = json!({"type": "object"});
+        let validate = OpenAIAdapter::schema_required_validator(&loose);
+        assert!(validate(&json!({})).is_ok());
     }
 
     #[test]

@@ -22,7 +22,7 @@ use serde_json::Value;
 
 use super::cassette::{CassetteEntry, CassetteMethod, LlmCassette, input_hash, vision_hash};
 use crate::error::LlmResult;
-use crate::llm_trait::Llm;
+use crate::llm_trait::{Llm, StructuredOutputValidator};
 use crate::types::{GenerationOptions, GenerationResponse, Message, MessageRole};
 
 /// Maximum length (in characters) of the recorded user-input preview.
@@ -139,6 +139,44 @@ impl Llm for RecordingLlm {
         let response = self
             .inner
             .create_structured_output_with_messages_raw(messages, json_schema, options)
+            .await?;
+        self.record(
+            hash,
+            CassetteEntry {
+                method: CassetteMethod::StructuredOutput,
+                user_input_preview: preview,
+                schema_name,
+                response: response.clone(),
+            },
+        );
+        Ok(response)
+    }
+
+    /// Must be overridden (not left to the trait default) so the caller's typed
+    /// `validator` reaches the wrapped real adapter's repair loop. The default
+    /// impl drops the validator and delegates to
+    /// `create_structured_output_with_messages_raw`, which would bypass
+    /// validation-retry (a well-formed response omitting a required field would
+    /// fail the pipeline instead of being re-asked). We forward the validator to
+    /// the inner adapter and record the (repaired) response.
+    async fn create_structured_output_with_messages_raw_validated(
+        &self,
+        messages: Vec<Message>,
+        json_schema: &Value,
+        options: Option<GenerationOptions>,
+        validator: StructuredOutputValidator<'_>,
+    ) -> LlmResult<Value> {
+        let hash = input_hash(&messages, Some(json_schema));
+        let preview = user_input_preview(&messages);
+        let schema_name = schema_name(json_schema);
+        let response = self
+            .inner
+            .create_structured_output_with_messages_raw_validated(
+                messages,
+                json_schema,
+                options,
+                validator,
+            )
             .await?;
         self.record(
             hash,
@@ -366,6 +404,77 @@ mod tests {
             .expect("one recorded entry");
         assert_eq!(entry.method, CassetteMethod::Generate);
         assert_eq!(entry.response, Value::String("\"hello\"".to_string()));
+    }
+
+    // Distinguishes which inner trait method a wrapper delegates to: `_raw`
+    // returns `{"marker":"raw"}`, `_validated` returns `{"marker":"validated"}`.
+    struct MarkerLlm;
+
+    #[async_trait]
+    impl Llm for MarkerLlm {
+        async fn generate(
+            &self,
+            _messages: Vec<Message>,
+            _options: Option<GenerationOptions>,
+        ) -> LlmResult<GenerationResponse> {
+            unimplemented!()
+        }
+
+        async fn create_structured_output_with_messages_raw(
+            &self,
+            _messages: Vec<Message>,
+            _json_schema: &Value,
+            _options: Option<GenerationOptions>,
+        ) -> LlmResult<Value> {
+            Ok(json!({"marker": "raw"}))
+        }
+
+        async fn create_structured_output_with_messages_raw_validated(
+            &self,
+            _messages: Vec<Message>,
+            _json_schema: &Value,
+            _options: Option<GenerationOptions>,
+            _validator: crate::llm_trait::StructuredOutputValidator<'_>,
+        ) -> LlmResult<Value> {
+            Ok(json!({"marker": "validated"}))
+        }
+
+        fn model(&self) -> &str {
+            "marker"
+        }
+    }
+
+    #[tokio::test]
+    async fn validated_path_delegates_to_inner_validated() {
+        // #2: RecordingLlm must forward the typed validator to the inner
+        // adapter's `_validated` method. If it fell back to the trait default it
+        // would call `_with_messages_raw` (returning the "raw" marker) and bypass
+        // validation-retry.
+        let dir = tempfile::tempdir().expect("create tempdir");
+        let path = dir.path().join("cassette.json");
+        let recorder = RecordingLlm::new(Arc::new(MarkerLlm), &path);
+
+        let schema = json!({"title": "KnowledgeGraph", "type": "object"});
+        let validate = |_: &Value| Ok(());
+        let value = recorder
+            .create_structured_output_with_messages_raw_validated(
+                graph_msgs(),
+                &schema,
+                None,
+                &validate,
+            )
+            .await
+            .expect("validated delegation");
+
+        assert_eq!(
+            value,
+            json!({"marker": "validated"}),
+            "must delegate to inner `_validated`, not `_with_messages_raw`"
+        );
+        // The delegated response is still recorded.
+        recorder.flush().expect("flush");
+        let cassette = LlmCassette::load(&path).expect("load");
+        assert_eq!(cassette.entries.len(), 1);
     }
 
     #[tokio::test]

@@ -1,5 +1,7 @@
 //! LLM trait definition for structured output generation.
 
+use std::sync::Mutex;
+
 use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Serialize, de::DeserializeOwned};
@@ -201,16 +203,41 @@ pub trait LlmExt: Llm {
         // Trial-deserialize into `T` so the adapter can retry a well-formed but
         // incomplete response (e.g. one missing a required field) with a
         // corrective instruction, rather than failing the whole pipeline.
+        //
+        // The successfully-deserialized `T` is captured here and reused below,
+        // avoiding a second full `from_value` (and the `value.clone()` a
+        // borrow-only validator would need): the adapter returns the exact
+        // `Value` that last passed the validator, so the captured `T` corresponds
+        // to it. `Mutex<Option<T>>` keeps the borrowed closure `Send + Sync` as
+        // the trait's validator type requires.
+        let captured: Mutex<Option<T>> = Mutex::new(None);
         let validator = |value: &Value| -> Result<(), String> {
-            serde_json::from_value::<T>(value.clone())
-                .map(|_| ())
-                .map_err(|e| e.to_string())
+            match serde_json::from_value::<T>(value.clone()) {
+                Ok(typed) => {
+                    // A poisoned lock (a prior panic) just means we skip the
+                    // reuse optimisation and re-deserialize below — never panic.
+                    if let Ok(mut guard) = captured.lock() {
+                        *guard = Some(typed);
+                    }
+                    Ok(())
+                }
+                Err(e) => Err(e.to_string()),
+            }
         };
         let value = self
             .create_structured_output_with_messages_raw_validated(
                 messages, &schema, options, &validator,
             )
             .await?;
+        // Reuse the `T` produced by the validator when the adapter actually ran
+        // it (the normal path). Adapters whose `_validated` default impl ignores
+        // the validator leave `captured` empty, so fall back to deserializing the
+        // returned `Value` once.
+        if let Ok(mut guard) = captured.lock()
+            && let Some(typed) = guard.take()
+        {
+            return Ok(typed);
+        }
         serde_json::from_value(value).map_err(|e| {
             LlmError::DeserializationError(format!("Failed to deserialize structured output: {e}"))
         })

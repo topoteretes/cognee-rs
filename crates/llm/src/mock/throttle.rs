@@ -33,7 +33,7 @@ use serde_json::Value;
 use tokio::time::Instant;
 
 use crate::error::{LlmError, LlmResult};
-use crate::llm_trait::Llm;
+use crate::llm_trait::{Llm, StructuredOutputValidator};
 use crate::types::{GenerationOptions, GenerationResponse, Message};
 
 /// Rolling window over which [`ThrottleConfig::rpm_limit`] is enforced.
@@ -166,6 +166,28 @@ impl Llm for ThrottleLlm {
             .await
     }
 
+    /// Overridden so the caller's typed `validator` reaches the wrapped real
+    /// adapter's repair loop (the trait default would drop it and delegate to the
+    /// non-validated method, bypassing validation-retry). The gate still counts
+    /// and throttles exactly one call per structured-output request.
+    async fn create_structured_output_with_messages_raw_validated(
+        &self,
+        messages: Vec<Message>,
+        json_schema: &Value,
+        options: Option<GenerationOptions>,
+        validator: StructuredOutputValidator<'_>,
+    ) -> LlmResult<Value> {
+        self.gate().await?;
+        self.inner
+            .create_structured_output_with_messages_raw_validated(
+                messages,
+                json_schema,
+                options,
+                validator,
+            )
+            .await
+    }
+
     async fn transcribe_image(
         &self,
         image_bytes: &[u8],
@@ -282,6 +304,61 @@ mod tests {
             .expect("structured");
         assert_eq!(t.metrics().total_calls, 2);
         assert_eq!(t.metrics().allowed, 2);
+    }
+
+    // Returns different markers per method so a test can tell which inner method
+    // a wrapper delegated to.
+    struct MarkerLlm;
+
+    #[async_trait]
+    impl Llm for MarkerLlm {
+        async fn generate(
+            &self,
+            _messages: Vec<Message>,
+            _options: Option<GenerationOptions>,
+        ) -> LlmResult<GenerationResponse> {
+            unimplemented!()
+        }
+
+        async fn create_structured_output_with_messages_raw(
+            &self,
+            _messages: Vec<Message>,
+            _json_schema: &Value,
+            _options: Option<GenerationOptions>,
+        ) -> LlmResult<Value> {
+            Ok(json!({"marker": "raw"}))
+        }
+
+        async fn create_structured_output_with_messages_raw_validated(
+            &self,
+            _messages: Vec<Message>,
+            _json_schema: &Value,
+            _options: Option<GenerationOptions>,
+            _validator: crate::llm_trait::StructuredOutputValidator<'_>,
+        ) -> LlmResult<Value> {
+            Ok(json!({"marker": "validated"}))
+        }
+
+        fn model(&self) -> &str {
+            "marker"
+        }
+    }
+
+    #[tokio::test]
+    async fn validated_path_delegates_to_inner_validated_and_counts_once() {
+        // #2: ThrottleLlm must forward the validator to the inner adapter's
+        // `_validated` (not the trait default, which would call `_raw` and bypass
+        // validation-retry), while still counting exactly one gated call.
+        let t = ThrottleLlm::new(Arc::new(MarkerLlm), ThrottleConfig::default());
+        let schema = json!({"type": "object"});
+        let validate = |_: &Value| Ok(());
+        let value = t
+            .create_structured_output_with_messages_raw_validated(msgs(), &schema, None, &validate)
+            .await
+            .expect("validated delegation");
+        assert_eq!(value, json!({"marker": "validated"}));
+        assert_eq!(t.metrics().total_calls, 1);
+        assert_eq!(t.metrics().allowed, 1);
     }
 
     #[tokio::test(start_paused = true)]
