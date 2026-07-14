@@ -3,8 +3,11 @@ package ai.cognee.internal;
 import java.util.concurrent.CompletableFuture;
 
 /**
- * Package-private 1:1 mirror of the Rust {@code Java_ai_cognee_internal_Native_*}
- * exports. Not part of the public API; excluded from published Javadoc.
+ * Internal 1:1 mirror of the Rust {@code Java_ai_cognee_internal_Native_*}
+ * exports. This is an internal API with no compatibility guarantees — it is not
+ * part of the public API and is excluded from published Javadoc. Although the
+ * class is {@code public} (JNI requires the native methods to be reachable from
+ * an exported package), it must not be used directly.
  */
 public final class Native {
     static {

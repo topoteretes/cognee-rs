@@ -16,8 +16,10 @@ control.
 
 - JDK 17+ (the artifact is compiled for release 17).
 - Maven 3.8+.
-- A Rust toolchain **only if you build the native library from source** (the
-  published jar bundles a prebuilt classifier native library per platform).
+- A Rust toolchain **only if you build the native library from source**. Once
+  published, the jar will bundle a prebuilt classifier native library per
+  platform; until then a local `mvn install` builds it from source, or you point
+  the loader at a locally built cdylib (see "Development builds" below).
 
 ## Install / build
 
@@ -121,9 +123,11 @@ try {
 }
 ```
 
-Common codes: `VALIDATION_ERROR`, `NOT_FOUND`, `CONFIG_TYPE_MISMATCH`,
-`UNKNOWN_CONFIG_KEY`, `IO_ERROR`, `LLM_ERROR`, `INTERNAL_ERROR`. Synchronous
-config setters throw `CogneeException` directly (not wrapped).
+Codes: op failures use the `SdkError` set — `COMPONENT_ERROR`,
+`SERVICE_BUILD_ERROR`, `USER_BOOTSTRAP_ERROR`, `RUNTIME_ERROR`,
+`VALIDATION_ERROR`, `UNSUPPORTED`, `FEATURE_NOT_BUILT`; synchronous config
+setters use the `ConfigError` set — `UNKNOWN_CONFIG_KEY`,
+`CONFIG_TYPE_MISMATCH` — and throw `CogneeException` directly (not wrapped).
 
 ## Configuration
 
