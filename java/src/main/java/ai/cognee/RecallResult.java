@@ -20,10 +20,9 @@ public final class RecallResult {
         return root.path("items");
     }
 
-    /** The effective search type, or null when unset. */
+    /** The effective search type, or null when unset or not recognized by this binding. */
     public SearchType searchTypeUsed() {
-        JsonNode n = root.path("searchTypeUsed");
-        return n.isTextual() ? SearchType.fromWire(n.asText()) : null;
+        return SearchType.fromWireOrNull(root.path("searchTypeUsed").asText(null));
     }
 
     public boolean autoRouted() {

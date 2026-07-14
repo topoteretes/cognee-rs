@@ -1,7 +1,6 @@
 package ai.cognee;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.file.Path;
 import java.util.List;
@@ -22,7 +21,7 @@ class CogneeAddTest {
             AddResult r2 = cognee.add(List.of(DataInput.text("hello cognee")), "ds").join();
             assertEquals(0, r2.addedCount());
             assertEquals(1, r2.deduplicatedCount());
-            assertTrue(r2.deduplicated().size() == 1);
+            assertEquals(1, r2.deduplicated().size());
         }
     }
 }

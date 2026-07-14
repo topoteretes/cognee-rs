@@ -26,4 +26,21 @@ public enum SearchType {
     public static SearchType fromWire(String wire) {
         return valueOf(wire);
     }
+
+    /**
+     * Tolerant variant of {@link #fromWire}: returns {@code null} for a
+     * {@code null}, empty, or unrecognized wire value instead of throwing.
+     * This keeps deserialization forward-compatible when the core adds a new
+     * search type this binding does not yet know about.
+     */
+    public static SearchType fromWireOrNull(String wire) {
+        if (wire == null || wire.isEmpty()) {
+            return null;
+        }
+        try {
+            return valueOf(wire);
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
+    }
 }

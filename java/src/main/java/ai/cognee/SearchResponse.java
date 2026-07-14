@@ -20,8 +20,9 @@ public final class SearchResponse {
         return root;
     }
 
+    /** The search strategy, or {@code null} if absent or not recognized by this binding. */
     public SearchType searchType() {
-        return SearchType.fromWire(root.path("search_type").asText());
+        return SearchType.fromWireOrNull(root.path("search_type").asText(null));
     }
 
     /** The `{kind, data}` result union node. */
