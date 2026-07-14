@@ -14,16 +14,18 @@ class CogneeLifecycleTest {
         Cognee cognee = new Cognee(Map.of(
                 "data_root_directory", dir.resolve("data").toString(),
                 "system_root_directory", dir.resolve("sys").toString()));
-        assertDoesNotThrow(cognee::handle);
+        // Exercise the closed-guard via the real op-dispatch path (what every
+        // op uses) rather than a back-door accessor.
+        assertDoesNotThrow(() -> cognee.dispatch(h -> h));
         cognee.close();
         cognee.close(); // idempotent
-        assertThrows(IllegalStateException.class, cognee::handle);
+        assertThrows(IllegalStateException.class, () -> cognee.dispatch(h -> h));
     }
 
     @Test
     void envOnlyConstruction() {
         try (Cognee cognee = new Cognee()) {
-            assertDoesNotThrow(cognee::handle);
+            assertDoesNotThrow(() -> cognee.dispatch(h -> h));
         }
     }
 

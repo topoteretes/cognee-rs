@@ -136,14 +136,6 @@ public final class Cognee implements AutoCloseable {
         });
     }
 
-    /** The native handle for internal op calls. Throws if closed. */
-    long handle() {
-        if (closed) {
-            throw new IllegalStateException("Cognee handle is closed");
-        }
-        return handleHolder.ptr;
-    }
-
     /** Force engine construction now (surfaces config/connection errors early). */
     public CompletableFuture<Void> warm() {
         CompletableFuture<String> f = new CompletableFuture<>();

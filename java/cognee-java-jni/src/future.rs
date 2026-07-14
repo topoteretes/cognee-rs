@@ -130,9 +130,25 @@ where
             Ok(())
         });
 
-        // Never leave a pending exception on a pooled worker thread.
-        if framed.is_err() && env.exception_check().unwrap_or(false) {
-            let _ = env.exception_clear();
+        // `with_local_frame` only returns Err when `push_local_frame` itself
+        // fails — in which case the settle closure never ran and the future is
+        // still unsettled, so a Java `.join()` would hang forever. Settle it
+        // directly without a frame (a handful of leaked locals on this rare
+        // error path is far better than a permanent hang), clearing any pending
+        // exception before and after so a pooled worker thread never carries one.
+        if framed.is_err() {
+            if env.exception_check().unwrap_or(false) {
+                let _ = env.exception_clear();
+            }
+            let _ = complete_err(
+                &mut env,
+                global.as_obj(),
+                "RUNTIME_ERROR",
+                "cognee: could not allocate a JNI local frame to settle the future",
+            );
+            if env.exception_check().unwrap_or(false) {
+                let _ = env.exception_clear();
+            }
         }
 
         drop(global); // release the global ref on EVERY path

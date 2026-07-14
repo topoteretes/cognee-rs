@@ -89,8 +89,21 @@ final class NativeLibLoader {
         Path cacheDir = Path.of(System.getProperty("java.io.tmpdir"), "cognee_java-" + jarVersion());
         Files.createDirectories(cacheDir);
         Path lib = cacheDir.resolve(libFile);
-        if (Files.isReadable(lib) && Files.size(lib) > 0) {
+        // Reuse only when the version label is immutable (a released artifact). For a
+        // SNAPSHOT/dev build the same label can bundle a different DLL between runs, so
+        // reusing a stale cached copy would load the wrong native library (an
+        // UnsatisfiedLinkError at first call, or worse a subtle ABI mismatch). Extract
+        // to a fresh unique file each run instead — dev accumulation is the acceptable
+        // cost of correctness (and COGNEE_JAVA_LIB_PATH is the usual dev path anyway).
+        boolean immutable = !jarVersion().contains("SNAPSHOT");
+        if (immutable && Files.isReadable(lib) && Files.size(lib) > 0) {
             return lib;
+        }
+        if (!immutable) {
+            Path fresh = Files.createTempFile(cacheDir, "cognee_java", ".dll");
+            Files.copy(in, fresh, StandardCopyOption.REPLACE_EXISTING);
+            fresh.toFile().deleteOnExit(); // best-effort; a mapped DLL survives until JVM exit
+            return fresh;
         }
         // Extract to a unique temp file in the same dir, then atomically publish it so
         // no partially written DLL is ever visible and concurrent extractors don't clash.
