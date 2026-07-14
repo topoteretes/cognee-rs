@@ -39,7 +39,6 @@ concurrency:
 env:
   CARGO_PROFILE_RELEASE_DEBUG: "0"
   CARGO_INCREMENTAL: "0"
-  ORT_CACHE_DIR: ${{ github.workspace }}/target/ort-cache
   CCACHE_COMPILERCHECK: content
 
 jobs:
@@ -181,9 +180,6 @@ jobs:
         with:
           path: java/cognee-java-jni/target/ort-cache
           key: java-ort-v2.0.0-rc.12-cpu-${{ matrix.platform }}
-        env:
-          # Point ort-sys at the JNI workspace's target dir.
-          ORT_CACHE_DIR: ${{ github.workspace }}/java/cognee-java-jni/target/ort-cache
 
       - name: Set up JDK (for the jar tool)
         uses: actions/setup-java@v4

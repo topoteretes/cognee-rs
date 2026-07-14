@@ -9,7 +9,7 @@ use jni::{JNIEnv, JavaVM};
 
 use cognee_bindings_common::SdkError;
 
-use crate::errors::throw_cognee_exception;
+use crate::errors::{throw_cognee_exception, throw_sdk_error};
 use crate::java_vm;
 use crate::runtime::runtime;
 
@@ -61,9 +61,19 @@ where
     };
     let vm: &'static JavaVM = java_vm();
 
-    runtime().spawn(async move {
+    // Build (or fetch) the runtime up front so a build failure is thrown
+    // synchronously to the initiating thread rather than lost inside a task.
+    let rt = match runtime() {
+        Ok(rt) => rt,
+        Err(e) => {
+            throw_sdk_error(env, e);
+            return;
+        }
+    };
+
+    rt.spawn(async move {
         // Inner spawn isolates op-body panics into a JoinError.
-        let outcome = runtime().spawn(fut).await;
+        let outcome = rt.spawn(fut).await;
 
         // Daemon attach: pooled worker threads stay attached and never block
         // JVM shutdown. Re-attaching an already-attached thread is a no-op.

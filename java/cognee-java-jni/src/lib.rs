@@ -4,12 +4,6 @@
 //! function per `cognee-bindings-common` op. Structured data crosses the
 //! boundary as JSON strings; the idiomatic Java layer (L3) owns all typing.
 
-// This glue crate is wired up incrementally (one op group per task) and many
-// helpers are reachable only through JNI-exported `extern` functions, which the
-// dead-code lint cannot see as callers. Allow dead code crate-wide so each task
-// stays green under `clippy -D warnings` while the surface is still growing.
-#![allow(dead_code)]
-
 mod args;
 mod config;
 mod errors;

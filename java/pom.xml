@@ -36,9 +36,23 @@
 
   <build>
     <resources>
+      <!-- Only version.properties is interpolated; a future binary resource
+           dropped into src/main/resources must NOT be filtered (interpolation
+           would corrupt it), so scope filtering narrowly and copy the rest
+           verbatim. -->
       <resource>
         <directory>src/main/resources</directory>
         <filtering>true</filtering>
+        <includes>
+          <include>**/version.properties</include>
+        </includes>
+      </resource>
+      <resource>
+        <directory>src/main/resources</directory>
+        <filtering>false</filtering>
+        <excludes>
+          <exclude>**/version.properties</exclude>
+        </excludes>
       </resource>
     </resources>
     <plugins>
@@ -75,6 +89,17 @@
           <quiet>true</quiet>
           <doclint>none</doclint>
         </configuration>
+        <!-- Run javadoc during `package` so broken doc comments surface at
+             `mvn verify` (i.e. in check.sh / CI) rather than at publish time. -->
+        <executions>
+          <execution>
+            <id>attach-javadocs</id>
+            <phase>package</phase>
+            <goals>
+              <goal>jar</goal>
+            </goals>
+          </execution>
+        </executions>
       </plugin>
     </plugins>
   </build>
