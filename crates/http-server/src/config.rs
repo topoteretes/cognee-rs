@@ -664,6 +664,11 @@ impl HttpServerConfig {
                 api_key: self.llm_api_key.expose_secret().to_string(),
                 endpoint: self.llm_endpoint.clone(),
                 max_retries: self.llm_max_retries,
+                // The HTTP server config does not yet expose an `LLM_ARGS`
+                // equivalent; default to no extra request params (a no-op).
+                // The CLI/ComponentManager path wires `LLM_ARGS` via
+                // `cognee_lib::Settings`.
+                llm_args: serde_json::Map::new(),
                 mock: false,
                 cassette: String::new(),
                 record_path: String::new(),

@@ -72,6 +72,18 @@ pub struct Settings {
     pub llm_max_retries: u32,
     pub llm_max_parallel_requests: u32,
 
+    /// Extra parameters merged into every LLM chat-completion request, parsed
+    /// from the `LLM_ARGS` env var (a JSON object), mirroring Python cognee's
+    /// `llm_config.llm_args`. Python's litellm adapter merges these into each
+    /// call as `{**self.llm_args, **kwargs}`; explicitly-set request parameters
+    /// always win. The canonical use is `LLM_ARGS={"max_tokens": 16384}` to
+    /// lift a provider's small default output cap that would otherwise truncate
+    /// a dense graph-extraction tool call mid-JSON. Empty by default (Python
+    /// default `llm_args = {}`). `#[serde(skip)]` (like `summarization_schema`)
+    /// keeps persisted config snapshots stable — it is env-driven only.
+    #[serde(skip)]
+    pub llm_args: serde_json::Map<String, serde_json::Value>,
+
     /// Select the record/replay mock LLM instead of the real provider
     /// (`MOCK_LLM`). Parallels `MOCK_EMBEDDING`. Requires the `mock-llm` feature.
     pub llm_mock: bool,
@@ -292,6 +304,22 @@ impl Settings {
             && let Ok(n) = v.parse::<u32>()
         {
             self.llm_max_completion_tokens = n;
+        }
+        // `LLM_ARGS` — a JSON object of extra request parameters merged into every
+        // LLM chat-completion call, mirroring Python cognee's `llm_config.llm_args`
+        // (e.g. `LLM_ARGS={"max_tokens": 16384}`). A malformed value or a non-object
+        // JSON is ignored (left at the default empty map) rather than aborting
+        // startup, matching the lenient handling of the other optional LLM knobs.
+        if let Some(v) = str_var("LLM_ARGS") {
+            match serde_json::from_str::<serde_json::Value>(&v) {
+                Ok(serde_json::Value::Object(map)) => self.llm_args = map,
+                _ => {
+                    tracing::warn!(
+                        "LLM_ARGS is set but is not a JSON object; ignoring it. \
+                         Expected e.g. LLM_ARGS='{{\"max_tokens\": 16384}}'"
+                    );
+                }
+            }
         }
         if let Some(v) = str_var("LLM_STREAMING") {
             self.llm_streaming = cognee_utils::parse_env_bool(&v);
@@ -725,6 +753,7 @@ impl Settings {
                 api_key: self.llm_api_key.clone(),
                 endpoint: self.llm_endpoint.clone(),
                 max_retries: self.llm_max_retries,
+                llm_args: self.llm_args.clone(),
                 mock: self.llm_mock,
                 cassette: self.llm_cassette.clone(),
                 record_path: self.llm_record_path.clone(),
@@ -906,6 +935,7 @@ impl Default for Settings {
             llm_max_completion_tokens: 16384,
             llm_max_retries: 2,
             llm_max_parallel_requests: 20,
+            llm_args: serde_json::Map::new(),
             llm_mock: false,
             llm_cassette: String::new(),
             llm_record_path: String::new(),
@@ -2760,8 +2790,44 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
+    fn overlay_parses_llm_args_json_object() {
+        // SAFETY: test is serial — no other thread reads/writes env concurrently.
+        unsafe { std::env::set_var("LLM_ARGS", r#"{"max_tokens": 16384, "top_p": 0.9}"#) };
+        let mut s = Settings::default();
+        s.overlay_from_env();
+        unsafe { std::env::remove_var("LLM_ARGS") };
+
+        assert_eq!(
+            s.llm_args.get("max_tokens"),
+            Some(&serde_json::json!(16384))
+        );
+        assert_eq!(s.llm_args.get("top_p"), Some(&serde_json::json!(0.9)));
+        // The lowered backend context carries the same map through to the factory.
+        assert_eq!(s.backend_context().llm.llm_args, s.llm_args);
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn overlay_ignores_malformed_llm_args() {
+        // A non-object / malformed value is ignored (left empty), not fatal.
+        unsafe { std::env::set_var("LLM_ARGS", "not json") };
+        let mut s = Settings::default();
+        s.overlay_from_env();
+        unsafe { std::env::remove_var("LLM_ARGS") };
+        assert!(s.llm_args.is_empty());
+
+        unsafe { std::env::set_var("LLM_ARGS", "[1, 2, 3]") };
+        let mut s = Settings::default();
+        s.overlay_from_env();
+        unsafe { std::env::remove_var("LLM_ARGS") };
+        assert!(s.llm_args.is_empty());
+    }
+
+    #[test]
     fn default_values_are_correct() {
         let s = Settings::default();
+        assert!(s.llm_args.is_empty());
         assert_eq!(s.cache_backend, "fs");
         assert_eq!(s.cache_host, "localhost");
         assert_eq!(s.cache_port, 6379);

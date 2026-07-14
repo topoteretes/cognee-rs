@@ -55,6 +55,16 @@ pub struct OpenAIAdapter {
     network_retries: usize,
     /// Model name for audio transcription (e.g. `"whisper-1"`).
     transcription_model: String,
+    /// Extra request parameters merged into every chat-completion request body,
+    /// mirroring Python cognee's `LLM_ARGS` / `llm_config.llm_args`, which the
+    /// litellm adapter merges into each call as `{**self.llm_args, **kwargs}`
+    /// (see `openai/adapter.py`). Keys already present on the built request body
+    /// (the explicit "kwargs", e.g. `model`, `messages`, an options-supplied
+    /// `max_tokens`) win, so these only ever *fill gaps*. The canonical use is
+    /// `{"max_tokens": 16384}` to lift a provider's small default output cap that
+    /// would otherwise truncate a dense graph-extraction tool call mid-JSON.
+    /// Empty by default (Python default `llm_args = {}`) — a no-op.
+    extra_args: serde_json::Map<String, Value>,
 }
 
 impl OpenAIAdapter {
@@ -114,7 +124,34 @@ impl OpenAIAdapter {
             structured_output_retries: Self::DEFAULT_STRUCTURED_OUTPUT_RETRIES,
             network_retries: Self::DEFAULT_NETWORK_RETRIES,
             transcription_model,
+            extra_args: serde_json::Map::new(),
         })
+    }
+
+    /// Set extra request parameters merged into every chat-completion request,
+    /// mirroring Python cognee's `LLM_ARGS` / `llm_config.llm_args`.
+    ///
+    /// Merge semantics match Python's `{**self.llm_args, **kwargs}`: an entry is
+    /// only applied when the request body does not already carry that key, so
+    /// explicitly-set parameters (model, messages, an options-supplied
+    /// `max_tokens`, …) always win. See the [`extra_args`](Self::extra_args)
+    /// field docs for the primary use case (lifting a provider output cap).
+    pub fn with_extra_args(mut self, args: serde_json::Map<String, Value>) -> Self {
+        self.extra_args = args;
+        self
+    }
+
+    /// Merge [`extra_args`](Self::extra_args) into a request body, filling only
+    /// keys that are not already present (explicit params win — Python parity).
+    fn apply_extra_args(&self, body: &mut Value) {
+        if self.extra_args.is_empty() {
+            return;
+        }
+        if let Some(obj) = body.as_object_mut() {
+            for (key, value) in &self.extra_args {
+                obj.entry(key.clone()).or_insert_with(|| value.clone());
+            }
+        }
     }
 
     /// Configure retry attempts for structured output extraction.
@@ -197,7 +234,12 @@ impl OpenAIAdapter {
             cognee.llm.provider = "openai",
         ),
     )]
-    async fn call_api(&self, request_body: Value) -> LlmResult<OpenAIResponse> {
+    async fn call_api(&self, mut request_body: Value) -> LlmResult<OpenAIResponse> {
+        // Merge configured `LLM_ARGS` (Python `llm_config.llm_args`) into every
+        // chat-completion request. Only fills keys the request does not already
+        // set, so explicit parameters win — Python's `{**self.llm_args, **kwargs}`.
+        self.apply_extra_args(&mut request_body);
+
         let url = format!("{}/chat/completions", self.base_url);
         tracing::Span::current().record("url", url.as_str());
         let debug_enabled = std::env::var("COGNEE_DEBUG_LLM_REQUEST")
@@ -1366,6 +1408,41 @@ mod tests {
         reasoning.write_max_tokens(&mut body, None);
         assert!(body.get("max_tokens").is_none());
         assert!(body.get("max_completion_tokens").is_none());
+    }
+
+    #[test]
+    fn test_apply_extra_args_fills_missing_keys_only() {
+        // Mirrors Python's `{**self.llm_args, **kwargs}`: llm_args fill gaps,
+        // explicitly-set request params win.
+        let args = json!({"max_tokens": 16384, "top_p": 0.9})
+            .as_object()
+            .unwrap()
+            .clone();
+        let adapter = OpenAIAdapter::new("gpt-4o-mini", "test-key", None)
+            .unwrap()
+            .with_extra_args(args);
+
+        // `max_tokens` absent → filled from extra_args; existing `temperature`
+        // untouched (not in extra_args); `top_p` filled.
+        let mut body = json!({"model": "gpt-4o-mini", "temperature": 0.0});
+        adapter.apply_extra_args(&mut body);
+        assert_eq!(body["max_tokens"], 16384);
+        assert_eq!(body["top_p"], 0.9);
+        assert_eq!(body["temperature"], 0.0);
+
+        // An explicitly-set key is NOT overwritten by extra_args.
+        let mut body = json!({"model": "gpt-4o-mini", "max_tokens": 512});
+        adapter.apply_extra_args(&mut body);
+        assert_eq!(body["max_tokens"], 512);
+    }
+
+    #[test]
+    fn test_apply_extra_args_empty_is_noop() {
+        let adapter = OpenAIAdapter::new("gpt-4o-mini", "test-key", None).unwrap();
+        let mut body = json!({"model": "gpt-4o-mini"});
+        let before = body.clone();
+        adapter.apply_extra_args(&mut body);
+        assert_eq!(body, before);
     }
 
     #[test]

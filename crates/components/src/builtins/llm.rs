@@ -48,7 +48,8 @@ impl LlmFactory for OpenAiCompatibleLlmFactory {
             &ctx.llm.endpoint,
             ctx.llm.max_retries,
         )
-        .map_err(|e| ComponentError::Llm(e.to_string()))?;
+        .map_err(|e| ComponentError::Llm(e.to_string()))?
+        .with_extra_args(ctx.llm.llm_args.clone());
         Ok(Arc::new(adapter))
     }
 
