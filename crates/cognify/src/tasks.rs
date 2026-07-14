@@ -3820,12 +3820,16 @@ mod tests {
         };
 
         upsert_provenance(
-            &db, None, user_id, dataset_id, &[], // chunks
-            &[], // entities
-            &[], // edges
-            &[], // summaries
+            &db,
+            None,
+            user_id,
+            dataset_id,
+            &[],    // chunks
+            &[],    // entities
+            &[],    // edges
+            &[],    // summaries
             &[doc], // documents
-            &[], // structural_edges
+            &[],    // structural_edges
         )
         .await
         .expect("wrapper provenance upsert must succeed");
