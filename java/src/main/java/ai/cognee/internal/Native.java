@@ -20,4 +20,10 @@ public final class Native {
 
     /** The Rust crate version (from {@code CARGO_PKG_VERSION}). */
     static native String version();
+
+    /** Create a native handle from a settings JSON string (or null for env). */
+    public static native long newHandle(String settingsJson);
+
+    /** Free a native handle. Safe with 0; called at most once per handle. */
+    public static native void destroy(long handle);
 }
