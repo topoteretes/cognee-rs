@@ -130,7 +130,7 @@ Additional resolved decisions:
 | T10 | Session + admin/user + notebook ops | done | T05 | `sessions().*`, `users().*` (incl. resets + `getOrCreateDefault`), `notebooks().*` wired; JUnit green. |
 | T11 | Visualization ops (feature-gated) + static setup methods + LLM-gated E2E | done | T06, T07 | `visualize`/`visualizeToFile` feature-gated; `setupLogging`/`initOtlp`/`initTelemetry`/`version` statics; `warm→add→cognify→search` integration test skips without `OPENAI_URL`/`OPENAI_TOKEN`; JUnit green. |
 | T12 | Docs + examples + Javadoc + README | done | T06, T07, T08, T09, T10, T11 | `docs/architecture.md`, `docs/tools/bindings.md`, `docs/tools/README.md`, root `README.md`, `.claude/CLAUDE.md` updated; `java/README.md` + runnable example added; `mvn -q -f java/pom.xml javadoc:javadoc` succeeds. |
-| T13 | `java-prebuild.yml` classifier-jar workflow (4-target matrix) | not-started | T11 | Workflow builds the cdylib on the 4-target matrix and produces per-classifier jars; validated locally by building one classifier jar. |
+| T13 | `java-prebuild.yml` classifier-jar workflow (4-target matrix) | done | T11 | Workflow builds the cdylib on the 4-target matrix and produces per-classifier jars; validated locally by building one classifier jar. |
 | T14 | Maven Central publishing wiring | **blocked** | T13 | (Blocked: infra — Sonatype namespace + credentials.) Publishing job authored but gated on a token precheck, silently skipped without the secret. |
 
 ## 4. Dependency graph
