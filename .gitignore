@@ -24,7 +24,7 @@ Thumbs.db
 Desktop.ini
 
 # Environment variables
-.env
+.env*
 
 # Telemetry runtime artifacts (anonymous instance ID files)
 .anon_id
