@@ -59,51 +59,119 @@ final class NativeLibLoader {
                                 + "' (resource " + resource + "). Set COGNEE_JAVA_LIB_PATH"
                                 + " to a locally built cdylib for development.");
             }
-            Path tmp = Files.createTempFile("cognee_java", suffix());
-            tmp.toFile().deleteOnExit();
-            Files.copy(in, tmp, StandardCopyOption.REPLACE_EXISTING);
-            System.load(tmp.toAbsolutePath().toString());
+            Path lib = isWindows(osName()) ? cachedWindowsLib(in, libFile) : extractToTempFile(in);
+            System.load(lib.toAbsolutePath().toString());
         } catch (IOException e) {
             throw new UncheckedIOException(e);
         }
     }
 
-    /** OpenDAL/RocksDB-style classifier: {os}-{arch}. */
+    /**
+     * POSIX extraction: a fresh 0600 per-process temp file removed on JVM exit. On
+     * Linux/macOS an mmapped .so/.dylib can still be unlinked while loaded, so
+     * {@code deleteOnExit()} reliably reclaims it and nothing accumulates.
+     */
+    private static Path extractToTempFile(InputStream in) throws IOException {
+        Path tmp = Files.createTempFile("cognee_java", suffix());
+        tmp.toFile().deleteOnExit();
+        Files.copy(in, tmp, StandardCopyOption.REPLACE_EXISTING);
+        return tmp;
+    }
+
+    /**
+     * Windows extraction: a version-keyed cache dir reused across runs. Windows keeps
+     * a loaded DLL locked and mapped until the JVM exits, so {@code deleteOnExit()}
+     * cannot remove it and every run would orphan a fresh cognee_java*.dll in %TEMP%.
+     * Keying the file on the bundled version makes extraction happen once; later runs
+     * (and concurrent JVMs) reuse the same DLL.
+     */
+    private static Path cachedWindowsLib(InputStream in, String libFile) throws IOException {
+        Path cacheDir = Path.of(System.getProperty("java.io.tmpdir"), "cognee_java-" + jarVersion());
+        Files.createDirectories(cacheDir);
+        Path lib = cacheDir.resolve(libFile);
+        if (Files.isReadable(lib) && Files.size(lib) > 0) {
+            return lib;
+        }
+        // Extract to a unique temp file in the same dir, then atomically publish it so
+        // no partially written DLL is ever visible and concurrent extractors don't clash.
+        Path tmp = Files.createTempFile(cacheDir, "cognee_java", ".dll");
+        try {
+            Files.copy(in, tmp, StandardCopyOption.REPLACE_EXISTING);
+            Files.move(tmp, lib, StandardCopyOption.ATOMIC_MOVE);
+        } catch (IOException e) {
+            // Another JVM won the race and mapped/locked lib first; fall back to its copy.
+            Files.deleteIfExists(tmp);
+            if (Files.isReadable(lib) && Files.size(lib) > 0) {
+                return lib;
+            }
+            throw e;
+        }
+        return lib;
+    }
+
+    /**
+     * Classifier for the exactly four (os, arch) targets shipped by java-prebuild.yml:
+     * linux-x86_64, linux-aarch_64, osx-aarch_64, windows-x86_64. Anything else fails
+     * fast with a clear message instead of loading a mismatched native library.
+     */
     private static String platformClassifier() {
-        String os = System.getProperty("os.name", "").toLowerCase(Locale.ROOT);
+        String os = osName();
         String arch = System.getProperty("os.arch", "").toLowerCase(Locale.ROOT);
-        boolean aarch64 = arch.contains("aarch64") || arch.contains("arm64");
+        boolean aarch64 = arch.equals("aarch64") || arch.equals("arm64");
+        boolean x8664 = arch.equals("amd64") || arch.equals("x86_64") || arch.equals("x64");
         if (os.contains("linux")) {
-            return aarch64 ? "linux-aarch_64" : "linux-x86_64";
+            if (x8664) {
+                return "linux-x86_64";
+            }
+            if (aarch64) {
+                return "linux-aarch_64";
+            }
+        } else if (isMac(os)) {
+            if (aarch64) {
+                return "osx-aarch_64";
+            }
+        } else if (isWindows(os)) {
+            if (x8664) {
+                return "windows-x86_64";
+            }
         }
-        if (os.contains("mac") || os.contains("darwin")) {
-            return "osx-aarch_64";
-        }
-        if (os.contains("win")) {
-            return "windows-x86_64";
-        }
-        throw new UnsatisfiedLinkError("unsupported platform: os=" + os + " arch=" + arch);
+        throw new UnsatisfiedLinkError(
+                "unsupported platform: os=" + os + " arch=" + arch
+                        + " (supported: linux-x86_64, linux-aarch_64, osx-aarch_64,"
+                        + " windows-x86_64)");
     }
 
     private static String libFileName() {
-        String os = System.getProperty("os.name", "").toLowerCase(Locale.ROOT);
-        if (os.contains("win")) {
+        String os = osName();
+        if (isWindows(os)) {
             return "cognee_java.dll";
         }
-        if (os.contains("mac") || os.contains("darwin")) {
+        if (isMac(os)) {
             return "libcognee_java.dylib";
         }
         return "libcognee_java.so";
     }
 
     private static String suffix() {
-        String os = System.getProperty("os.name", "").toLowerCase(Locale.ROOT);
-        if (os.contains("win")) {
+        String os = osName();
+        if (isWindows(os)) {
             return ".dll";
         }
-        if (os.contains("mac") || os.contains("darwin")) {
+        if (isMac(os)) {
             return ".dylib";
         }
         return ".so";
+    }
+
+    private static String osName() {
+        return System.getProperty("os.name", "").toLowerCase(Locale.ROOT);
+    }
+
+    private static boolean isWindows(String os) {
+        return os.contains("win");
+    }
+
+    private static boolean isMac(String os) {
+        return os.contains("mac") || os.contains("darwin");
     }
 }
