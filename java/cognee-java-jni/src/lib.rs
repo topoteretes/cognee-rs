@@ -1,0 +1,99 @@
+//! JNI (jni-rs) bindings for the cognee Rust SDK.
+//!
+//! Layer L1 of the Java binding: one exported `Java_ai_cognee_internal_Native_*`
+//! function per `cognee-bindings-common` op. Structured data crosses the
+//! boundary as JSON strings; the idiomatic Java layer (L3) owns all typing.
+
+// This glue crate is wired up incrementally (one op group per task) and many
+// helpers are reachable only through JNI-exported `extern` functions, which the
+// dead-code lint cannot see as callers. Allow dead code crate-wide so each task
+// stays green under `clippy -D warnings` while the surface is still growing.
+#![allow(dead_code)]
+
+mod runtime;
+// Added in later tasks: mod errors; mod handle; mod config; mod sdk_ops; ...
+
+use std::ffi::c_void;
+use std::sync::OnceLock;
+
+use jni::objects::JClass;
+use jni::sys::{JNI_VERSION_1_8, jint, jstring};
+use jni::{JNIEnv, JavaVM};
+
+/// The process JavaVM, cached at load so tokio worker threads can attach.
+static JAVA_VM: OnceLock<JavaVM> = OnceLock::new();
+
+/// Cached `JavaVM`. Panics only if called before `JNI_OnLoad` ran, which the
+/// JVM guarantees happens before any native method of this library is invoked.
+pub(crate) fn java_vm() -> &'static JavaVM {
+    JAVA_VM
+        .get()
+        .expect("JNI_OnLoad ran before any native method could be called")
+}
+
+/// Called by the JVM when `System.load`/`System.loadLibrary` maps this library.
+/// Caches the `JavaVM` and declares the supported JNI version.
+#[unsafe(no_mangle)]
+pub extern "system" fn JNI_OnLoad(vm: JavaVM, _reserved: *mut c_void) -> jint {
+    let _ = JAVA_VM.set(vm);
+    JNI_VERSION_1_8
+}
+
+// ---------------------------------------------------------------------------
+// Panic guards — every exported fn body runs inside one of these.
+// A panic is converted to a thrown java.lang.RuntimeException (superclass of
+// CogneeException) and the type's null/zero sentinel is returned, so no panic
+// crosses the FFI boundary (UB).
+// ---------------------------------------------------------------------------
+
+const PANIC_MSG: &str = "[cognee-java panic] a native panic was caught at the JNI boundary";
+
+pub(crate) fn guard_void<'l>(env: &mut JNIEnv<'l>, f: impl FnOnce(&mut JNIEnv<'l>)) {
+    if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(env))).is_err() {
+        let _ = env.throw_new("java/lang/RuntimeException", PANIC_MSG);
+    }
+}
+
+pub(crate) fn guard_jlong<'l>(
+    env: &mut JNIEnv<'l>,
+    f: impl FnOnce(&mut JNIEnv<'l>) -> jni::sys::jlong,
+) -> jni::sys::jlong {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(env))) {
+        Ok(v) => v,
+        Err(_) => {
+            let _ = env.throw_new("java/lang/RuntimeException", PANIC_MSG);
+            0
+        }
+    }
+}
+
+pub(crate) fn guard_jstring<'l>(
+    env: &mut JNIEnv<'l>,
+    f: impl FnOnce(&mut JNIEnv<'l>) -> jstring,
+) -> jstring {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(env))) {
+        Ok(v) => v,
+        Err(_) => {
+            let _ = env.throw_new("java/lang/RuntimeException", PANIC_MSG);
+            std::ptr::null_mut()
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Native.version() -> String
+// ---------------------------------------------------------------------------
+
+/// `ai.cognee.internal.Native.version()` — the Rust crate version string.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_ai_cognee_internal_Native_version<'l>(
+    mut env: JNIEnv<'l>,
+    _class: JClass<'l>,
+) -> jstring {
+    guard_jstring(&mut env, |env| {
+        match env.new_string(env!("CARGO_PKG_VERSION")) {
+            Ok(s) => s.into_raw(),
+            Err(_) => std::ptr::null_mut(),
+        }
+    })
+}
