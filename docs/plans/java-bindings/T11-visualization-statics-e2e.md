@@ -348,7 +348,7 @@ class EndToEndIT {
                 "data_root_directory", dir.resolve("data").toString(),
                 "system_root_directory", dir.resolve("sys").toString()))) {
             cognee.config().setLlmConfig(Map.of(
-                    "provider", "openai", "api_key", token, "endpoint", url));
+                    "llm_provider", "openai", "llm_api_key", token, "llm_endpoint", url));
             cognee.warm().join();
             cognee.add(List.of(DataInput.text(
                     "Alan Turing was a mathematician who founded computer science.")),
@@ -363,10 +363,12 @@ class EndToEndIT {
 }
 ```
 
-> The exact config keys for the LLM (`provider`/`api_key`/`endpoint` vs
-> `model`/`url`) must match `ConfigManager::set_llm_config`'s accepted keys —
-> verify against `crates/lib/src/config.rs` `set_llm_config` and adjust; record
-> any change in the Deviations log. Name the class `*IT` so it is clearly an
+> The LLM config keys were verified against `crates/lib/src/config.rs`
+> `set_llm_config` (lines ~1814-1842): the accepted keys are `llm_provider`,
+> `llm_model`, `llm_api_key`, `llm_endpoint`, … (each prefixed with `llm_`);
+> unknown keys return `ConfigError::UnknownKey`. The boilerplate above uses the
+> correct prefixed keys (`llm_provider`/`llm_api_key`/`llm_endpoint`), matching
+> the existing `CogneeConfigTest` usage. Name the class `*IT` so it is clearly an
 > integration test; it still runs under surefire and skips via `assumeTrue`.
 
 ## Verification

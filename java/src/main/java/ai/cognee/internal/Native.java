@@ -21,7 +21,7 @@ public final class Native {
     private Native() {}
 
     /** The Rust crate version (from {@code CARGO_PKG_VERSION}). */
-    static native String version();
+    public static native String version();
 
     /** Create a native handle from a settings JSON string (or null for env). */
     public static native long newHandle(String settingsJson);
@@ -116,4 +116,14 @@ public final class Native {
             CompletableFuture<String> future);
     public static native void deleteNotebook(long handle, String id,
             CompletableFuture<String> future);
+
+    // visualization
+    public static native void visualize(long handle, String optsJson,
+            CompletableFuture<String> future);
+    public static native void visualizeToFile(long handle, String optsJson,
+            CompletableFuture<String> future);
+    // module-level statics
+    public static native void setupLogging();
+    public static native void initOtlp();
+    public static native boolean initTelemetry();
 }

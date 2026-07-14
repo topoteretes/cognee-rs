@@ -256,6 +256,45 @@ public final class Cognee implements AutoCloseable {
         return pruneSystem(null);
     }
 
+    // --- visualization ---
+    public CompletableFuture<String> visualize() {
+        return visualize(null);
+    }
+
+    public CompletableFuture<String> visualize(VisualizeOptions opts) {
+        CompletableFuture<String> f = new CompletableFuture<>();
+        Native.visualize(handle(), Options.jsonOf(opts), f);
+        return f.thenApply(json -> ai.cognee.internal.Json.fromJson(json, String.class));
+    }
+
+    public CompletableFuture<String> visualizeToFile(VisualizeOptions opts) {
+        CompletableFuture<String> f = new CompletableFuture<>();
+        Native.visualizeToFile(handle(), Options.jsonOf(opts), f);
+        return f.thenApply(json -> ai.cognee.internal.Json.fromJson(json, String.class));
+    }
+
+    // --- module-level statics ---
+    /** Initialize file logging from env vars (idempotent). */
+    public static void setupLogging() {
+        Native.setupLogging();
+    }
+
+    /** Install OpenTelemetry OTLP export from env vars (idempotent). */
+    public static void initOtlp() {
+        Native.initOtlp();
+    }
+
+    /** Arm product-analytics emission (per the opt-out policy); returns whether
+     *  analytics are effective for this process. */
+    public static boolean initTelemetry() {
+        return Native.initTelemetry();
+    }
+
+    /** The native/SDK version string. */
+    public static String version() {
+        return Native.version();
+    }
+
     @Override
     public void close() {
         if (closed) {

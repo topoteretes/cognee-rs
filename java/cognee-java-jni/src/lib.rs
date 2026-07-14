@@ -24,6 +24,8 @@ mod sdk_memory;
 mod sdk_ops;
 mod sdk_retrieval;
 mod sdk_sessions;
+mod sdk_static;
+mod sdk_visualization;
 
 use std::ffi::c_void;
 use std::sync::OnceLock;
@@ -48,6 +50,12 @@ pub(crate) fn java_vm() -> &'static JavaVM {
 #[unsafe(no_mangle)]
 pub extern "system" fn JNI_OnLoad(vm: JavaVM, _reserved: *mut c_void) -> jint {
     let _ = JAVA_VM.set(vm);
+    // Parity with neon's `#[neon::main]`: install the default stderr subscriber
+    // before any native method runs (honours `COGNEE_BINDING_SUPPRESS_LOGS`),
+    // and arm product analytics so the `COGNEE_HOST_SDK` opt-out is authoritative
+    // for any binding-hosted `send_telemetry` call.
+    sdk_static::install_default_subscriber();
+    let _ = sdk_static::arm_analytics();
     JNI_VERSION_1_8
 }
 
