@@ -798,7 +798,10 @@ impl OpenAIAdapter {
         for attempt in 0..self.structured_output_retries {
             let mut request_for_attempt = tools_request.clone();
             if attempt > 0 {
-                Self::append_corrective_instruction(&mut request_for_attempt, last_reason.as_deref());
+                Self::append_corrective_instruction(
+                    &mut request_for_attempt,
+                    last_reason.as_deref(),
+                );
                 if !self.is_reasoning_model() {
                     request_for_attempt["temperature"] = json!(0.0);
                 }
@@ -1570,10 +1573,7 @@ mod tests {
         // model; a bare `LLM_ARGS` `max_tokens` must be folded into
         // `max_completion_tokens` (never sent alongside it), or OpenAI 400s on
         // both keys.
-        let args = json!({"max_tokens": 16384})
-            .as_object()
-            .unwrap()
-            .clone();
+        let args = json!({"max_tokens": 16384}).as_object().unwrap().clone();
         let reasoning = OpenAIAdapter::new("gpt-5-mini", "test-key", None)
             .unwrap()
             .with_extra_args(args.clone());
