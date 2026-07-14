@@ -12,8 +12,10 @@
 
 mod config;
 mod errors;
+mod future;
 mod handle;
 mod runtime;
+mod sdk_lifecycle;
 // Added in later tasks: mod sdk_ops; ...
 
 use std::ffi::c_void;

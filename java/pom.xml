@@ -46,7 +46,9 @@
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-surefire-plugin</artifactId>
         <version>3.2.5</version>
-        <!-- -Xcheck:jni is added in T05 to audit global-ref hygiene. -->
+        <configuration>
+          <argLine>-Xcheck:jni</argLine>
+        </configuration>
       </plugin>
     </plugins>
   </build>

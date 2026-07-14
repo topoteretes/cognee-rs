@@ -1,5 +1,7 @@
 package ai.cognee.internal;
 
+import java.util.concurrent.CompletableFuture;
+
 /**
  * Package-private 1:1 mirror of the Rust {@code Java_ai_cognee_internal_Native_*}
  * exports. Not part of the public API; excluded from published Javadoc.
@@ -38,4 +40,8 @@ public final class Native {
     public static native void configSetGraphDbConfig(long handle, String mapJson);
 
     public static native String getConfig(long handle);
+
+    public static native void warm(long handle, CompletableFuture<String> future);
+
+    public static native void ownerId(long handle, CompletableFuture<String> future);
 }

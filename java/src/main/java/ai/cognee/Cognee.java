@@ -4,6 +4,7 @@ import ai.cognee.internal.Json;
 import ai.cognee.internal.Native;
 import java.lang.ref.Cleaner;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 
 /**
  * The cognee Java SDK entry point. Construct with optional settings (canonical
@@ -67,6 +68,20 @@ public final class Cognee implements AutoCloseable {
             throw new IllegalStateException("Cognee handle is closed");
         }
         return handleHolder.ptr;
+    }
+
+    /** Force engine construction now (surfaces config/connection errors early). */
+    public CompletableFuture<Void> warm() {
+        CompletableFuture<String> f = new CompletableFuture<>();
+        Native.warm(handle(), f);
+        return f.thenApply(s -> null);
+    }
+
+    /** The email-derived owner id (warms lazily if needed). */
+    public CompletableFuture<String> ownerId() {
+        CompletableFuture<String> f = new CompletableFuture<>();
+        Native.ownerId(handle(), f);
+        return f.thenApply(json -> ai.cognee.internal.Json.fromJson(json, String.class));
     }
 
     @Override
