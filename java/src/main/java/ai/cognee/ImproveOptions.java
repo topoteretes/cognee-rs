@@ -2,9 +2,12 @@ package ai.cognee;
 
 import java.util.List;
 
-/** {@code datasetName} is required. */
+/** {@code datasetName} is required and enforced at construction. */
 public final class ImproveOptions extends Options {
     public ImproveOptions(String datasetName) {
+        if (datasetName == null || datasetName.isEmpty()) {
+            throw new IllegalArgumentException("ImproveOptions requires a non-empty datasetName");
+        }
         put("datasetName", datasetName);
     }
 

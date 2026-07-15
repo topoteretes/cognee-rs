@@ -263,6 +263,7 @@ public final class Cognee implements AutoCloseable {
     // --- improve ---
     /** Run the session-graph bridge pipeline ({@link ImproveOptions}'s {@code datasetName} is required). */
     public CompletableFuture<ImproveResult> improve(ImproveOptions opts) {
+        java.util.Objects.requireNonNull(opts, "improve requires ImproveOptions (datasetName is required)");
         CompletableFuture<String> f = new CompletableFuture<>();
         dispatchVoid(h -> Native.improve(h, opts.toJson(), f)); // opts required (datasetName)
         return f.thenApply(json -> ai.cognee.internal.Json.fromJson(json, ImproveResult.class));

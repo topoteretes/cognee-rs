@@ -93,6 +93,19 @@
         <version>3.2.5</version>
         <configuration>
           <argLine>-Xcheck:jni</argLine>
+          <!-- Make the unit tests hermetic: engine construction requires an
+               LLM key (a dummy value suffices — OpenAIAdapter::new does no
+               network I/O at construction), and MOCK_EMBEDDING avoids any real
+               embedding call / ONNX download. Without these the tests only pass
+               where the ambient env already carries OPENAI/LLM creds (e.g. a
+               dev's .env), and fail in CI's no-secrets lane. The LLM-gated
+               EndToEndIT runs under failsafe (below) and is intentionally NOT
+               given these, so it still uses real creds and self-skips without
+               OPENAI_URL/OPENAI_TOKEN. -->
+          <environmentVariables>
+            <MOCK_EMBEDDING>true</MOCK_EMBEDDING>
+            <LLM_API_KEY>sk-test</LLM_API_KEY>
+          </environmentVariables>
         </configuration>
       </plugin>
       <plugin>
