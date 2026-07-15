@@ -7,8 +7,9 @@ name: Java Prebuild
 # Each matrix leg builds the cognee_java cdylib for one target and packs a
 # single "classifier jar" whose only content is
 # native/<classifier>/libcognee_java.{so,dylib,dll}. These are uploaded as
-# workflow artifacts; deploying them to Maven Central as
-# ai.cognee:cognee:<version>:<classifier> is T14 (blocked: infra).
+# workflow artifacts; the publish job below deploys them to Maven Central as
+# io.github.topoteretes:cognee:<version>:<classifier> (T14) — gated on the
+# Central token, so it silently no-ops until the publishing secrets exist.
 #
 # The per-OS native-dep installs, the MSVC/CRT/ccache fixes, the `cross`
 # cross-compile path (ORT_CACHE_DIR=/target/ort-cache + COGNEE_REPO_ROOT +
@@ -243,3 +244,82 @@ jobs:
           name: java-${{ matrix.classifier }}
           path: cognee-*-${{ matrix.classifier }}.jar
           retention-days: 7
+
+  # ── Token gate ───────────────────────────────────────────────────────
+  # Secrets cannot be referenced in a job-level `if:`, so a precheck job
+  # exposes their presence as a boolean output the publish job gates on.
+  # Absent secrets (the pre-infra state) → has_token=false → publish skips.
+  check-token:
+    name: Check Central token
+    runs-on: ubuntu-latest
+    outputs:
+      has_token: ${{ steps.check.outputs.has_token }}
+    steps:
+      - id: check
+        env:
+          MAVEN_CENTRAL_PASSWORD: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
+        run: |
+          if [ -n "$MAVEN_CENTRAL_PASSWORD" ]; then
+            echo "has_token=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_token=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::MAVEN_CENTRAL_PASSWORD not set — skipping Maven Central publish."
+          fi
+
+  # ── Publish to Maven Central ─────────────────────────────────────────
+  # Builds the main + sources + javadoc jars, attaches the 4 classifier
+  # native jars from the matrix, GPG-signs everything, and uploads a bundle
+  # to the Central Portal (autoPublish=false → a human reviews + releases).
+  # Requires build-platform to succeed (do not publish an incomplete native
+  # set) AND the token to be present.
+  publish:
+    name: Publish to Maven Central
+    needs: [build-platform, check-token]
+    if: ${{ needs.check-token.outputs.has_token == 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17 + Central credentials + GPG key
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          server-id: central
+          server-username: MAVEN_CENTRAL_USERNAME
+          server-password: MAVEN_CENTRAL_PASSWORD
+          gpg-private-key: ${{ secrets.MAVEN_GPG_PRIVATE_KEY }}
+          gpg-passphrase: MAVEN_GPG_PASSPHRASE
+
+      - name: Download classifier native jars
+        uses: actions/download-artifact@v4
+        with:
+          pattern: java-*
+          path: /tmp/java-natives
+          merge-multiple: true
+
+      - name: Verify all four classifier jars are present
+        run: |
+          VER=$(sed -n 's:.*<version>\(.*\)</version>.*:\1:p' java/pom.xml | head -1)
+          missing=0
+          for c in linux-x86_64 linux-aarch_64 osx-aarch_64 windows-x86_64; do
+            f="/tmp/java-natives/cognee-${VER}-${c}.jar"
+            if [ ! -f "$f" ]; then echo "::error::missing native jar $f"; missing=1; fi
+          done
+          [ "$missing" = 0 ] || exit 1
+
+      - name: Deploy signed bundle to the Central Portal
+        env:
+          MAVEN_CENTRAL_USERNAME: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
+          MAVEN_CENTRAL_PASSWORD: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
+          MAVEN_GPG_PASSPHRASE: ${{ secrets.MAVEN_GPG_PASSPHRASE }}
+        run: |
+          mvn -B --no-transfer-progress \
+            -P release,attach-natives \
+            -Dnatives.dir=/tmp/java-natives \
+            -DskipTests \
+            -f java/pom.xml \
+            deploy

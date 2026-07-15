@@ -33,11 +33,16 @@ Then depend on it:
 
 ```xml
 <dependency>
-  <groupId>ai.cognee</groupId>
+  <groupId>io.github.topoteretes</groupId>
   <artifactId>cognee</artifactId>
   <version>0.1.3</version>
 </dependency>
 ```
+
+The native library ships as a per-platform *classifier* jar
+(`io.github.topoteretes:cognee:<version>:<classifier>`, e.g. `linux-x86_64`,
+`linux-aarch_64`, `osx-aarch_64`, `windows-x86_64`); `NativeLibLoader` extracts
+and loads the one matching the host at runtime.
 
 ### Development builds (locally built native library)
 

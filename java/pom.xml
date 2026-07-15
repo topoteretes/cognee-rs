@@ -4,7 +4,7 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
   <modelVersion>4.0.0</modelVersion>
 
-  <groupId>ai.cognee</groupId>
+  <groupId>io.github.topoteretes</groupId>
   <artifactId>cognee</artifactId>
   <version>0.1.3</version>
   <packaging>jar</packaging>
@@ -12,6 +12,37 @@
   <name>cognee</name>
   <description>Java SDK for cognee — an AI memory pipeline over a Rust core (JNI).</description>
   <url>https://www.cognee.ai</url>
+
+  <!-- Maven Central requires license, developer and SCM metadata on every
+       published artifact. These are harmless outside publishing, so they live
+       at the top level rather than inside the release profile. -->
+  <licenses>
+    <license>
+      <name>MIT License</name>
+      <url>https://opensource.org/licenses/MIT</url>
+      <distribution>repo</distribution>
+    </license>
+    <license>
+      <name>Apache License, Version 2.0</name>
+      <url>https://www.apache.org/licenses/LICENSE-2.0.txt</url>
+      <distribution>repo</distribution>
+    </license>
+  </licenses>
+
+  <developers>
+    <developer>
+      <id>topoteretes</id>
+      <name>Topoteretes</name>
+      <organization>Topoteretes</organization>
+      <organizationUrl>https://www.cognee.ai</organizationUrl>
+    </developer>
+  </developers>
+
+  <scm>
+    <connection>scm:git:https://github.com/topoteretes/cognee-rs.git</connection>
+    <developerConnection>scm:git:ssh://git@github.com/topoteretes/cognee-rs.git</developerConnection>
+    <url>https://github.com/topoteretes/cognee-rs</url>
+  </scm>
 
   <properties>
     <maven.compiler.release>17</maven.compiler.release>
@@ -103,4 +134,136 @@
       </plugin>
     </plugins>
   </build>
+
+  <profiles>
+    <!--
+      Publishing to Maven Central. Guarded behind `-P release` so ordinary
+      `mvn verify` (check.sh / CI) is completely unaffected. Activate with:
+        mvn -P release deploy
+      Requires: a GPG signing key (env MAVEN_GPG_PASSPHRASE, key imported into
+      the agent) and a Central Portal token in settings.xml server id `central`
+      (env MAVEN_CENTRAL_USERNAME / MAVEN_CENTRAL_PASSWORD in CI).
+      For a local dry run without a key: -Dgpg.skip=true.
+    -->
+    <profile>
+      <id>release</id>
+      <build>
+        <plugins>
+          <!-- Central requires a -sources jar. -->
+          <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-source-plugin</artifactId>
+            <version>3.3.1</version>
+            <executions>
+              <execution>
+                <id>attach-sources</id>
+                <goals>
+                  <goal>jar-no-fork</goal>
+                </goals>
+              </execution>
+            </executions>
+          </plugin>
+
+          <!-- Central requires GPG signatures for every artifact. The
+               passphrase comes from env MAVEN_GPG_PASSPHRASE; loopback pinentry
+               lets it sign non-interactively in CI. -->
+          <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-gpg-plugin</artifactId>
+            <version>3.2.4</version>
+            <executions>
+              <execution>
+                <id>sign-artifacts</id>
+                <phase>verify</phase>
+                <goals>
+                  <goal>sign</goal>
+                </goals>
+              </execution>
+            </executions>
+            <configuration>
+              <passphraseEnvName>MAVEN_GPG_PASSPHRASE</passphraseEnvName>
+              <gpgArguments>
+                <arg>--pinentry-mode</arg>
+                <arg>loopback</arg>
+              </gpgArguments>
+            </configuration>
+          </plugin>
+
+          <!-- Central Portal publisher (the current path; legacy OSSRH/
+               nexus-staging is retired). `mvn -P release deploy` uploads a
+               signed bundle to the Portal. autoPublish=false leaves it in the
+               Portal for a human to review + release. -->
+          <plugin>
+            <groupId>org.sonatype.central</groupId>
+            <artifactId>central-publishing-maven-plugin</artifactId>
+            <version>0.7.0</version>
+            <extensions>true</extensions>
+            <configuration>
+              <publishingServerId>central</publishingServerId>
+              <autoPublish>false</autoPublish>
+            </configuration>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+
+    <!--
+      Attach the per-classifier native jars (built by java-prebuild.yml on the
+      4-target matrix) to this artifact so they are signed and deployed under
+      the same coordinates. Activated only when -Dnatives.dir=<path> points at a
+      directory holding cognee-<version>-<classifier>.jar for each classifier;
+      kept separate from `release` so a local `mvn -P release package` (which has
+      no native jars) still succeeds.
+    -->
+    <profile>
+      <id>attach-natives</id>
+      <activation>
+        <property>
+          <name>natives.dir</name>
+        </property>
+      </activation>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>org.codehaus.mojo</groupId>
+            <artifactId>build-helper-maven-plugin</artifactId>
+            <version>3.6.0</version>
+            <executions>
+              <execution>
+                <id>attach-native-classifier-jars</id>
+                <phase>package</phase>
+                <goals>
+                  <goal>attach-artifact</goal>
+                </goals>
+                <configuration>
+                  <artifacts>
+                    <artifact>
+                      <file>${natives.dir}/cognee-${project.version}-linux-x86_64.jar</file>
+                      <type>jar</type>
+                      <classifier>linux-x86_64</classifier>
+                    </artifact>
+                    <artifact>
+                      <file>${natives.dir}/cognee-${project.version}-linux-aarch_64.jar</file>
+                      <type>jar</type>
+                      <classifier>linux-aarch_64</classifier>
+                    </artifact>
+                    <artifact>
+                      <file>${natives.dir}/cognee-${project.version}-osx-aarch_64.jar</file>
+                      <type>jar</type>
+                      <classifier>osx-aarch_64</classifier>
+                    </artifact>
+                    <artifact>
+                      <file>${natives.dir}/cognee-${project.version}-windows-x86_64.jar</file>
+                      <type>jar</type>
+                      <classifier>windows-x86_64</classifier>
+                    </artifact>
+                  </artifacts>
+                </configuration>
+              </execution>
+            </executions>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+  </profiles>
 </project>
