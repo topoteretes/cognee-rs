@@ -8,7 +8,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import ai.cognee.internal.Json;
 import com.fasterxml.jackson.databind.JsonNode;
 import java.nio.file.Path;
-import java.util.Map;
 import java.util.concurrent.CompletionException;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -41,9 +40,7 @@ class MemoryMarshallingTest {
         assertFalse(Json.tree(new ImproveOptions(null).toJson()).has("datasetName"));
         // ...and the core rejects the missing name deterministically (validation
         // runs before any LLM call), surfacing a VALIDATION_ERROR.
-        try (Cognee cognee = new Cognee(Map.of(
-                "data_root_directory", dir.resolve("data").toString(),
-                "system_root_directory", dir.resolve("sys").toString()))) {
+        try (Cognee cognee = new Cognee(TestConfig.underTempDir(dir))) {
             CompletionException ex = assertThrows(CompletionException.class,
                     () -> cognee.improve(new ImproveOptions(null)).join());
             assertTrue(ex.getCause() instanceof CogneeException,

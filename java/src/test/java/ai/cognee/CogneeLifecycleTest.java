@@ -4,16 +4,13 @@ import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import java.nio.file.Path;
-import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 class CogneeLifecycleTest {
     @Test
     void constructCloseRoundTrips(@TempDir Path dir) {
-        Cognee cognee = new Cognee(Map.of(
-                "data_root_directory", dir.resolve("data").toString(),
-                "system_root_directory", dir.resolve("sys").toString()));
+        Cognee cognee = new Cognee(TestConfig.underTempDir(dir));
         // Exercise the closed-guard via the real op-dispatch path (what every
         // op uses) rather than a back-door accessor.
         assertDoesNotThrow(() -> cognee.dispatch(h -> h));

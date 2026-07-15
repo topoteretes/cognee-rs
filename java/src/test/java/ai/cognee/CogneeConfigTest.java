@@ -10,9 +10,7 @@ import org.junit.jupiter.api.io.TempDir;
 
 class CogneeConfigTest {
     private Cognee handle(Path dir) {
-        return new Cognee(Map.of(
-                "data_root_directory", dir.resolve("data").toString(),
-                "system_root_directory", dir.resolve("sys").toString()));
+        return new Cognee(TestConfig.underTempDir(dir));
     }
 
     @Test

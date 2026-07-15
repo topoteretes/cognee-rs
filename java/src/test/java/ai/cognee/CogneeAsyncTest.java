@@ -13,9 +13,7 @@ import org.junit.jupiter.api.io.TempDir;
 
 class CogneeAsyncTest {
     private Cognee handle(Path dir) {
-        return new Cognee(Map.of(
-                "data_root_directory", dir.resolve("data").toString(),
-                "system_root_directory", dir.resolve("sys").toString()));
+        return new Cognee(TestConfig.underTempDir(dir));
     }
 
     @Test
@@ -42,10 +40,9 @@ class CogneeAsyncTest {
     void exceptionalCompletionCarriesCogneeException(@TempDir Path dir) {
         // Point the LLM/embedding at nonsense so warm() fails, exercising the
         // exceptional-completion path (CogneeException via the cached class).
-        try (Cognee cognee = new Cognee(Map.of(
-                "data_root_directory", dir.resolve("data").toString(),
-                "system_root_directory", dir.resolve("sys").toString(),
-                "vector_db_provider", "definitely-not-a-real-provider"))) {
+        Map<String, String> cfg = TestConfig.underTempDir(dir);
+        cfg.put("vector_db_provider", "definitely-not-a-real-provider");
+        try (Cognee cognee = new Cognee(cfg)) {
             CompletionException ex =
                     assertThrows(CompletionException.class, () -> cognee.warm().join());
             org.junit.jupiter.api.Assertions.assertTrue(

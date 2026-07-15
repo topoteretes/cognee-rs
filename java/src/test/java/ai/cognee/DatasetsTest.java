@@ -4,16 +4,13 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import java.nio.file.Path;
 import java.util.List;
-import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 class DatasetsTest {
     @Test
     void addThenListIsDeterministic(@TempDir Path dir) {
-        try (Cognee cognee = new Cognee(Map.of(
-                "data_root_directory", dir.resolve("data").toString(),
-                "system_root_directory", dir.resolve("sys").toString()))) {
+        try (Cognee cognee = new Cognee(TestConfig.underTempDir(dir))) {
             cognee.add(List.of(DataInput.text("x")), "ds").join();
             List<CogneeDataset> ds = cognee.datasets().list().join();
             CogneeDataset d = ds.stream()

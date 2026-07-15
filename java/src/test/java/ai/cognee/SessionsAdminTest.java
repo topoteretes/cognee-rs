@@ -8,15 +8,12 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.file.Path;
 import java.util.List;
-import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 class SessionsAdminTest {
     private Cognee handle(Path dir) {
-        return new Cognee(Map.of(
-                "data_root_directory", dir.resolve("data").toString(),
-                "system_root_directory", dir.resolve("sys").toString()));
+        return new Cognee(TestConfig.underTempDir(dir));
     }
 
     @Test

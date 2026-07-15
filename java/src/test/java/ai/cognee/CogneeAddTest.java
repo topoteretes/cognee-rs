@@ -4,16 +4,13 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import java.nio.file.Path;
 import java.util.List;
-import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 class CogneeAddTest {
     @Test
     void addReturnsTypedResult(@TempDir Path dir) {
-        try (Cognee cognee = new Cognee(Map.of(
-                "data_root_directory", dir.resolve("data").toString(),
-                "system_root_directory", dir.resolve("sys").toString()))) {
+        try (Cognee cognee = new Cognee(TestConfig.underTempDir(dir))) {
             AddResult r = cognee.add(List.of(DataInput.text("hello cognee")), "ds").join();
             assertEquals("ds", r.datasetName());
             assertEquals(1, r.addedCount());
