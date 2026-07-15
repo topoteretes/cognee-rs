@@ -4,7 +4,7 @@ import java.util.List;
 
 /** Per-call options for {@link Cognee#search}. */
 public final class SearchOptions extends Options {
-    public SearchOptions searchType(SearchType t) { put("searchType", t.wire()); return this; }
+    public SearchOptions searchType(SearchType t) { if (t != null) put("searchType", t.wire()); return this; }
     public SearchOptions datasets(List<String> d) { put("datasets", d); return this; }
     public SearchOptions datasetIds(List<String> ids) { put("datasetIds", ids); return this; }
     public SearchOptions topK(int n) { put("topK", n); return this; }

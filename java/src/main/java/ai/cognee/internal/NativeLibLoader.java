@@ -3,6 +3,7 @@ package ai.cognee.internal;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.UncheckedIOException;
+import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
@@ -110,7 +111,14 @@ final class NativeLibLoader {
         Path tmp = Files.createTempFile(cacheDir, "cognee_java", ".dll");
         try {
             Files.copy(in, tmp, StandardCopyOption.REPLACE_EXISTING);
-            Files.move(tmp, lib, StandardCopyOption.ATOMIC_MOVE);
+            try {
+                Files.move(tmp, lib, StandardCopyOption.ATOMIC_MOVE);
+            } catch (AtomicMoveNotSupportedException nonAtomic) {
+                // Some filesystems (network shares, exotic providers) don't support
+                // atomic moves. tmp is already fully written, so a plain replace is
+                // safe: same-version content, last-writer-wins between concurrent JVMs.
+                Files.move(tmp, lib, StandardCopyOption.REPLACE_EXISTING);
+            }
         } catch (IOException e) {
             // Another JVM won the race and mapped/locked lib first; fall back to its copy.
             Files.deleteIfExists(tmp);
