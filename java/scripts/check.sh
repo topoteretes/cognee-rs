@@ -11,9 +11,15 @@ echo "================================================================"
 echo "=== Java: Checking version parity with Cargo workspace ==="
 echo "================================================================"
 WS_VERSION=$(grep -m1 '^version' "$REPO_ROOT/Cargo.toml" | sed -E 's/.*"(.*)".*/\1/')
+# The JNI crate is standalone (not a workspace member), so its version is a
+# literal that can drift independently. The runtime version handshake is
+# pom <-> the cdylib's CARGO_PKG_VERSION (i.e. this crate's version), so it is
+# the load-bearing pair; assert all three agree.
+JNI_VERSION=$(grep -m1 '^version' "$JAVA_DIR/cognee-java-jni/Cargo.toml" | sed -E 's/.*"(.*)".*/\1/')
 POM_VERSION=$(sed -n 's:.*<version>\(.*\)</version>.*:\1:p' "$JAVA_DIR/pom.xml" | head -1)
-if [ "$WS_VERSION" != "$POM_VERSION" ]; then
-  echo "error: version drift — workspace Cargo.toml=${WS_VERSION}, java/pom.xml=${POM_VERSION}" >&2
+if [ "$POM_VERSION" != "$JNI_VERSION" ] || [ "$JNI_VERSION" != "$WS_VERSION" ]; then
+  echo "error: version drift — workspace Cargo.toml=${WS_VERSION}, java/cognee-java-jni/Cargo.toml=${JNI_VERSION}, java/pom.xml=${POM_VERSION}" >&2
+  echo "       (the runtime handshake compares java/pom.xml against the cdylib's CARGO_PKG_VERSION; keep all three in sync)" >&2
   exit 1
 fi
 echo "version ok (${POM_VERSION})"

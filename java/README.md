@@ -16,33 +16,50 @@ control.
 
 - JDK 17+ (the artifact is compiled for release 17).
 - Maven 3.8+.
-- A Rust toolchain **only if you build the native library from source**. Once
-  published, the jar will bundle a prebuilt classifier native library per
-  platform; until then a local `mvn install` builds it from source, or you point
-  the loader at a locally built cdylib (see "Development builds" below).
+- A **Rust toolchain** to build the native library. Maven does **not** compile
+  the cdylib (the pom has no Cargo step); the native library comes either from a
+  published classifier jar (once on Maven Central) or from a locally built cdylib
+  you point the loader at via `COGNEE_JAVA_LIB_PATH` (see "Development builds").
 
 ## Install / build
 
-Not yet on Maven Central. Build and install into your local Maven repository:
+Not yet on Maven Central, so a local setup needs **two** pieces — the Java jar
+*and* the native library:
 
-```bash
-mvn -f java/pom.xml install
-```
+1. **Build the native cdylib** and export its path (details in "Development
+   builds" below):
 
-Then depend on it:
+   ```bash
+   cargo build --manifest-path java/cognee-java-jni/Cargo.toml
+   export COGNEE_JAVA_LIB_PATH="$(pwd)/java/cognee-java-jni/target/debug/libcognee_java.so"
+   ```
 
-```xml
-<dependency>
-  <groupId>io.github.topoteretes</groupId>
-  <artifactId>cognee</artifactId>
-  <version>0.1.3</version>
-</dependency>
-```
+2. **Install the Java jar** into your local Maven repository (this packages the
+   Java classes only — not the native library):
 
-The native library ships as a per-platform *classifier* jar
+   ```bash
+   mvn -f java/pom.xml install
+   ```
+
+3. **Depend on it:**
+
+   ```xml
+   <dependency>
+     <groupId>io.github.topoteretes</groupId>
+     <artifactId>cognee</artifactId>
+     <version>0.1.3</version>
+   </dependency>
+   ```
+
+   At runtime the loader still needs the native library: either
+   `COGNEE_JAVA_LIB_PATH` points at your locally built cdylib, or a classifier
+   jar is on the classpath (see below).
+
+Once published, the native library ships as a per-platform *classifier* jar
 (`io.github.topoteretes:cognee:<version>:<classifier>`, e.g. `linux-x86_64`,
 `linux-aarch_64`, `osx-aarch_64`, `windows-x86_64`); `NativeLibLoader` extracts
-and loads the one matching the host at runtime.
+and loads the one matching the host at runtime, so no `COGNEE_JAVA_LIB_PATH` is
+needed.
 
 ### Development builds (locally built native library)
 
