@@ -202,7 +202,7 @@ via `crates/bindings-common/`, so their surfaces line up 1:1.
 | **JavaScript/TypeScript** (Neon) | `npm install @cognee/cognee-ts` ([npm](https://www.npmjs.com/package/@cognee/cognee-ts)) | [ts/README.md](ts/README.md) | `import { Cognee } from '@cognee/cognee-ts'` |
 | **Python** (PyO3) | build from source (`maturin develop`) — not yet on PyPI | [python/README.md](python/README.md) | `from cognee_py import Cognee` |
 | **C API** (FFI) | build from source — see README | [capi/README.md](capi/README.md) | `#include "cognee_sdk.h"` + `cg_sdk_*` |
-| **Java** (JNI) | build from source (cdylib + `mvn -f java/pom.xml install`) — see README; not yet on Maven Central | [java/README.md](java/README.md) | `import ai.cognee.Cognee;` |
+| **Java** (JNI) | `io.github.topoteretes:cognee` ([Maven Central](https://central.sonatype.com/artifact/io.github.topoteretes/cognee)) | [java/README.md](java/README.md) | `import ai.cognee.Cognee;` |
 
 
 ### Objectives
