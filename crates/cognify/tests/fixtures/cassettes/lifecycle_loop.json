@@ -2,37 +2,43 @@
   "version": 1,
   "model": "gpt-4o-mini",
   "entries": {
-    "7cfa3997e4a7170e4ae9b250a4743e48b3166206dcdae0cf1ab14a17e8944f9f": {
+    "668c2315d1d16afd48ab174d47928f3baea15c04615b508e014f0e824ab29ed9": {
       "method": "structured_output",
       "user_input_preview": "Alice works at TechCorp in San Francisco as a software engineer.",
       "schema_name": "KnowledgeGraph",
       "response": {
-        "edges": [
-          {
-            "description": "Alice works at TechCorp as a software engineer.",
-            "relationship_name": "works_at",
-            "source_node_id": "Alice",
-            "target_node_id": "TechCorp"
-          }
-        ],
         "nodes": [
           {
-            "description": "Alice is a software engineer working at TechCorp.",
             "id": "Alice",
             "name": "Alice",
-            "type": "PERSON"
+            "type": "PERSON",
+            "description": "A software engineer working at TechCorp."
           },
           {
-            "description": "TechCorp is a company located in San Francisco.",
             "id": "TechCorp",
             "name": "TechCorp",
-            "type": "ORGANIZATION"
+            "type": "ORGANIZATION",
+            "description": "An organization where Alice works."
           },
           {
-            "description": "San Francisco is a city in California.",
             "id": "San Francisco",
             "name": "San Francisco",
-            "type": "LOCATION"
+            "type": "LOCATION",
+            "description": "The location of TechCorp."
+          }
+        ],
+        "edges": [
+          {
+            "source_node_id": "Alice",
+            "target_node_id": "TechCorp",
+            "relationship_name": "works_at",
+            "description": "Alice works at TechCorp."
+          },
+          {
+            "source_node_id": "TechCorp",
+            "target_node_id": "San Francisco",
+            "relationship_name": "located_in",
+            "description": "TechCorp is located in San Francisco."
           }
         ]
       }
