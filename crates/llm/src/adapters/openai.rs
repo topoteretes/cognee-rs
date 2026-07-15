@@ -489,6 +489,46 @@ impl OpenAIAdapter {
         }
     }
 
+    /// Recompute the schema's top-level `required` array to list every property
+    /// whose subschema carries no literal `"default"` key — a port of
+    /// instructor's `generate_openai_schema` (`instructor/processing/schema.py`),
+    /// which cognee's Python side relies on for its default `Mode.TOOLS` path.
+    ///
+    /// Why this matters: Python's pydantic emits no schema `"default"` for
+    /// `default_factory` fields, so instructor's rewrite re-adds them to
+    /// `required`, which is what makes the model reliably populate fields like
+    /// `KnowledgeGraph.edges` on the *non-strict* tool-calling path. Rust/schemars
+    /// already derives an equivalent `required` from the absence of
+    /// `#[serde(default)]`, so for a correctly-derived schema this is a no-op; it
+    /// exists to guarantee that parity holds for every response model and to keep
+    /// the request byte-aligned with what litellm/instructor sends.
+    ///
+    /// Deliberately shallow: only the top-level `required` is recomputed. It does
+    /// NOT recurse into `$defs`, set `additionalProperties:false`, or add
+    /// `strict:true` — those drive grammar-constrained decoding and make Baseten's
+    /// gpt-oss-120b return HTTP 501 (see the note in `structured_output_impl`).
+    /// The mild top-level rewrite is verified to be accepted by Baseten.
+    fn recompute_top_level_required(schema: &Value) -> Value {
+        let mut schema = schema.clone();
+        let Some(props) = schema.get("properties").and_then(Value::as_object) else {
+            return schema;
+        };
+        let mut required: Vec<String> = props
+            .iter()
+            .filter(|(_, subschema)| subschema.get("default").is_none())
+            .map(|(name, _)| name.clone())
+            .collect();
+        required.sort();
+        if let Some(obj) = schema.as_object_mut() {
+            if required.is_empty() {
+                obj.remove("required");
+            } else {
+                obj.insert("required".to_string(), json!(required));
+            }
+        }
+        schema
+    }
+
     fn append_corrective_instruction(request: &mut Value, reason: Option<&str>) {
         if let Some(messages) = request["messages"].as_array_mut()
             && let Some(last_msg) = messages.last_mut()
@@ -723,7 +763,11 @@ impl OpenAIAdapter {
             |parsed: &Value| -> Option<String> { validator.and_then(|v| v(parsed).err()) };
 
         let opts = options.unwrap_or_default();
-        let schema = json_schema;
+        // Align the advertised `required` array with what instructor sends on its
+        // default TOOLS path (every non-default property is required). See
+        // `recompute_top_level_required`. This is the shallow, Baseten-safe
+        // rewrite — NOT the all-required/strict transform warned about below.
+        let schema = Self::recompute_top_level_required(json_schema);
 
         // Primary path: OpenAI tool calling (`tools` + forced `tool_choice`).
         //
@@ -733,14 +777,17 @@ impl OpenAIAdapter {
         // passing the schema *as-is*.
         //
         // We deliberately do NOT use `response_format: {type: json_schema,
-        // strict: true}` here, and we do NOT rewrite the schema to be
-        // all-required / `additionalProperties:false`. Both drive
-        // grammar-constrained decoding on OpenAI-compatible backends; Baseten's
-        // gpt-oss-120b returns HTTP 501 "Error making prediction" on such
-        // requests (verified: even the all-required rewrite *without*
-        // `strict:true` reproduces the 501). Passing the schema unmodified — the
-        // exact shape litellm sends — is what keeps Baseten working. The
-        // required-field guarantee is instead enforced by retrying on a
+        // strict: true}` here, and we do NOT do the *heavy* strict rewrite
+        // (recursively forcing every nested field required +
+        // `additionalProperties:false`). Both drive grammar-constrained decoding
+        // on OpenAI-compatible backends; Baseten's gpt-oss-120b returns HTTP 501
+        // "Error making prediction" on such requests (verified: even the
+        // recursive all-required rewrite *without* `strict:true` reproduces the
+        // 501). We DO apply the shallow top-level `required` recompute
+        // (`recompute_top_level_required`) — the exact shape instructor's default
+        // TOOLS mode sends, verified accepted by Baseten — so the model reliably
+        // returns every non-default field (e.g. `KnowledgeGraph.edges`). The
+        // required-field guarantee is further backed by retrying on a
         // malformed/incomplete/validation-failing response with a corrective
         // instruction below.
         let mut tools_request = json!({
@@ -751,7 +798,7 @@ impl OpenAIAdapter {
                 "function": {
                     "name": "extract_structured_data",
                     "description": "Extract structured data from the input",
-                    "parameters": schema
+                    "parameters": schema.clone()
                 }
             }],
             "tool_choice": {
@@ -917,7 +964,7 @@ impl OpenAIAdapter {
             "functions": [{
                 "name": "extract_structured_data",
                 "description": "Extract structured data from the input",
-                "parameters": schema
+                "parameters": schema.clone()
             }],
             "function_call": {"name": "extract_structured_data"}
         });
@@ -1006,7 +1053,7 @@ impl OpenAIAdapter {
         // Fallback to JSON mode (works with Ollama and other providers)
         let mut json_messages = Self::convert_messages(&messages);
 
-        let example = Self::schema_to_example(schema);
+        let example = Self::schema_to_example(&schema);
 
         if let Some(last_msg) = json_messages.last_mut()
             && last_msg["role"] == "user"

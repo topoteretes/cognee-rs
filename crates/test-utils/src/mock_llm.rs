@@ -25,7 +25,7 @@ use cognee_llm::{Llm, LlmError, LlmResult};
 ///
 /// ```ignore
 /// let mock = MockLlm::new(vec![
-///     serde_json::json!({"nodes": [], "relationships": []}).to_string(),
+///     serde_json::json!({"nodes": [], "edges": []}).to_string(),
 /// ]);
 /// let llm: Arc<dyn Llm> = Arc::new(mock);
 /// ```
@@ -69,7 +69,7 @@ impl MockLlm {
         let mut queue = self.responses.lock().expect("MockLlm lock poisoned");
         queue
             .pop_front()
-            .unwrap_or_else(|| r#"{"nodes":[],"relationships":[]}"#.to_string())
+            .unwrap_or_else(|| r#"{"nodes":[],"edges":[]}"#.to_string())
     }
 }
 
@@ -152,12 +152,12 @@ mod tests {
         let mock = MockLlm::empty();
         let r = mock.generate(vec![], None).await.unwrap();
         assert!(r.content.contains("nodes"));
-        assert!(r.content.contains("relationships"));
+        assert!(r.content.contains("edges"));
     }
 
     #[tokio::test]
     async fn structured_output_parses_canned_json() {
-        let canned = json!({"nodes": [{"name": "Alice"}], "relationships": []});
+        let canned = json!({"nodes": [{"name": "Alice"}], "edges": []});
         let mock = MockLlm::new(vec![canned.to_string()]);
 
         let schema = json!({}); // schema ignored by mock
