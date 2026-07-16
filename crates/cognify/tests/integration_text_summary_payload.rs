@@ -43,7 +43,7 @@ async fn text_summary_payload_contains_text_field() {
     // 2. Summarization response (consumed by the summarize-text stage)
     let mock_llm = MockLlm::new(vec![
         // Response 1: graph extraction -> empty graph
-        json!({"nodes": [], "relationships": []}).to_string(),
+        json!({"nodes": [], "edges": []}).to_string(),
         // Response 2: summarization -> deterministic summary
         json!({
             "summary": EXPECTED_SUMMARY,
