@@ -238,3 +238,59 @@ async fn read_only_file_permission_connects_without_wal() {
     perms.set_readonly(false);
     std::fs::set_permissions(&path, perms).unwrap();
 }
+
+/// The writability probe must use the driver's *decoded* filename. sqlx
+/// percent-decodes the path while parsing, so a URL-escaped path pointing at a
+/// read-only file must still be seen as unwritable; probing the raw URL would
+/// test a non-existent literal path (`my%20app.db`), report it writable, and
+/// issue `PRAGMA journal_mode=WAL` on a read-only file.
+#[tokio::test]
+async fn read_only_percent_encoded_path_connects_without_wal() {
+    use sea_orm::sqlx::ConnectOptions as _;
+    use sea_orm::sqlx::sqlite::SqliteConnectOptions;
+
+    let dir = tempfile::tempdir().unwrap();
+    // A real filename containing a space, addressed as `%20` in the URL.
+    let path = dir.path().join("my app.db");
+
+    {
+        use sea_orm::sqlx::Connection;
+        let mut conn = SqliteConnectOptions::new()
+            .filename(&path)
+            .create_if_missing(true)
+            .connect()
+            .await
+            .expect("seed connect");
+        sea_orm::sqlx::query("CREATE TABLE t (x INTEGER)")
+            .execute(&mut conn)
+            .await
+            .expect("seed schema");
+        conn.close().await.expect("close seed connection");
+    }
+
+    let mut perms = std::fs::metadata(&path).unwrap().permissions();
+    perms.set_readonly(true);
+    std::fs::set_permissions(&path, perms).unwrap();
+
+    if std::fs::OpenOptions::new().write(true).open(&path).is_ok() {
+        let mut perms = std::fs::metadata(&path).unwrap().permissions();
+        perms.set_readonly(false);
+        std::fs::set_permissions(&path, perms).unwrap();
+        return;
+    }
+
+    let url = format!("sqlite://{}", path.display().to_string().replace(' ', "%20"));
+    let db = connect(&url)
+        .await
+        .expect("percent-encoded read-only path must still connect");
+
+    assert_eq!(
+        journal_mode(&db).await,
+        "delete",
+        "escaped read-only path must not be switched to WAL",
+    );
+
+    let mut perms = std::fs::metadata(&path).unwrap().permissions();
+    perms.set_readonly(false);
+    std::fs::set_permissions(&path, perms).unwrap();
+}

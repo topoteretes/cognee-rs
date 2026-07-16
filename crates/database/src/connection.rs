@@ -8,17 +8,32 @@ use crate::types::DatabaseError;
 
 /// Relational connection-pool sizing, applied by [`connect`].
 ///
-/// These pin sqlx's own pool defaults, except `POOL_MIN_CONNECTIONS = 1` (sqlx
-/// defaults to 0) so one warm connection survives idle periods. The pool serves
-/// only the relational database: the Postgres graph and vector adapters
-/// (`PgGraphAdapter`, `PgVectorAdapter`) open their own separate pools.
+/// `POOL_MAX_CONNECTIONS` and `POOL_MIN_CONNECTIONS` are sqlx's own pool
+/// defaults, kept deliberately rather than invented. No benchmark motivates a
+/// different ceiling, and an embedded SQLite database has one writer regardless,
+/// so the pool only ever buys concurrent readers under WAL; a larger ceiling
+/// would add contention, not throughput. `min = 0` lets a file database fall
+/// back to zero connections when idle and release its `-wal`/`-shm` sidecars.
+/// Only an in-memory database must never drop to zero connections, and that
+/// branch sets `min` explicitly (see [`connect_sqlite`]).
+///
+/// The pool serves only the relational database: the Postgres graph and vector
+/// adapters (`PgGraphAdapter`, `PgVectorAdapter`) open their own separate pools.
 /// `POOL_ACQUIRE_TIMEOUT` surfaces pool exhaustion as a prompt error instead of
-/// a silent hang. In-memory SQLite overrides parts of this at connect time
-/// because correctness requires it (see [`connect_sqlite`]).
+/// a silent hang.
 const POOL_MAX_CONNECTIONS: u32 = 10;
-const POOL_MIN_CONNECTIONS: u32 = 1;
+const POOL_MIN_CONNECTIONS: u32 = 0;
 const POOL_ACQUIRE_TIMEOUT: Duration = Duration::from_secs(30);
 const POOL_IDLE_TIMEOUT: Duration = Duration::from_secs(600);
+
+/// SQLite lock-wait ceiling, matching Python's `SqlAlchemyAdapter`
+/// (`busy_timeout=120000`, added for the "database is locked" fix in
+/// topoteretes/cognee#2717). sqlx defaults to 5s, which `upsert_provenance_graph`
+/// can exceed on a slow device: it holds the single writer lock across the whole
+/// node+edge batch group, so a second writer waiting on that lock needs a
+/// ceiling above the group's commit time or the wait surfaces as `SQLITE_BUSY`.
+#[cfg(feature = "sqlite")]
+const SQLITE_BUSY_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// How a SQLite URL behaves at connect time, derived from its path and query
 /// parameters. Parameters are matched exactly after splitting the URL, never
@@ -139,20 +154,26 @@ async fn connect_sqlite(url: &str) -> Result<DatabaseConnection, DatabaseError> 
     let mut conn_opts = SqliteConnectOptions::from_str(url)
         .map_err(|e| DatabaseError::ConnectionError(e.to_string()))?
         .log_statements(log::LevelFilter::Info)
-        .busy_timeout(Duration::from_secs(5));
+        .busy_timeout(SQLITE_BUSY_TIMEOUT);
 
-    if kind.in_memory {
-        // In-memory: no file to journal; sqlx's default WAL is a no-op here.
-    } else if kind.read_only || !sqlite_path_is_writable(url) {
-        // A read-only URL, or a file we cannot write (read-only mount or
-        // permissions): open read-only so sqlx issues no journal-mode pragma.
-        // `PRAGMA journal_mode=WAL` writes to the file and would otherwise fail
-        // the connect, where before it served reads.
-        conn_opts = conn_opts.read_only(true);
-    } else {
-        conn_opts = conn_opts
-            .journal_mode(SqliteJournalMode::Wal)
-            .synchronous(SqliteSynchronous::Normal);
+    // In-memory has no file to journal, and sqlx's default WAL is a no-op there.
+    if !kind.in_memory {
+        // Probe the driver's own filename rather than the raw URL: sqlx
+        // percent-decodes the path while parsing, so re-deriving it here would
+        // test a path that does not exist (`my%20app.db`) and wrongly report a
+        // read-only file as writable.
+        let writable = sqlite_path_is_writable(conn_opts.get_filename());
+        if kind.read_only || !writable {
+            // A read-only URL, or a file we cannot write (read-only mount or
+            // permissions): open read-only so sqlx issues no journal-mode
+            // pragma. `PRAGMA journal_mode=WAL` writes to the file and would
+            // otherwise fail the connect, where before it served reads.
+            conn_opts = conn_opts.read_only(true);
+        } else {
+            conn_opts = conn_opts
+                .journal_mode(SqliteJournalMode::Wal)
+                .synchronous(SqliteSynchronous::Normal);
+        }
     }
 
     let mut pool_opts = SqlitePoolOptions::new()
@@ -162,12 +183,14 @@ async fn connect_sqlite(url: &str) -> Result<DatabaseConnection, DatabaseError> 
         .idle_timeout(POOL_IDLE_TIMEOUT);
 
     if kind.in_memory {
+        // The database lives only as long as its connections, so keep one alive
+        // and disable both reapers.
         pool_opts = pool_opts
-            .min_connections(POOL_MIN_CONNECTIONS.max(1))
+            .min_connections(1)
             .idle_timeout(None)
             .max_lifetime(None);
         if !kind.shared_cache {
-            pool_opts = pool_opts.max_connections(1).min_connections(1);
+            pool_opts = pool_opts.max_connections(1);
         }
     }
 
@@ -179,34 +202,17 @@ async fn connect_sqlite(url: &str) -> Result<DatabaseConnection, DatabaseError> 
     Ok(SqlxSqliteConnector::from_sqlx_sqlite_pool(sqlx_pool))
 }
 
-/// Best-effort filesystem path for a file-backed SQLite URL; `None` for
-/// in-memory URLs or when no path is discernible.
-#[cfg(feature = "sqlite")]
-fn sqlite_fs_path(url: &str) -> Option<String> {
-    let rest = url
-        .strip_prefix("sqlite://")
-        .or_else(|| url.strip_prefix("sqlite:"))
-        .unwrap_or(url);
-    let (path, _query) = rest.split_once('?').unwrap_or((rest, ""));
-    let path = path.strip_prefix("file:").unwrap_or(path);
-    if path.is_empty() || path == ":memory:" {
-        None
-    } else {
-        Some(path.to_string())
-    }
-}
-
 /// Whether WAL can safely be enabled, based on real filesystem writability
-/// rather than the URL alone. Only an *existing* file that cannot be opened for
+/// rather than the URL alone.
+///
+/// Takes the driver's already-decoded filename
+/// (`SqliteConnectOptions::get_filename`) so an escaped path is probed exactly
+/// as sqlx will open it. Only an *existing* file that cannot be opened for
 /// writing forces read-only: a missing file is created by the driver
 /// (`mode=rwc`), and if its parent is unwritable the connect fails the same way
 /// with or without WAL. The write probe does not truncate or create.
 #[cfg(feature = "sqlite")]
-fn sqlite_path_is_writable(url: &str) -> bool {
-    let Some(path) = sqlite_fs_path(url) else {
-        return true;
-    };
-    let path = std::path::Path::new(&path);
+fn sqlite_path_is_writable(path: &std::path::Path) -> bool {
     if path.exists() {
         std::fs::OpenOptions::new().write(true).open(path).is_ok()
     } else {
@@ -271,23 +277,4 @@ mod tests {
         assert!(!sqlite_url_is_in_memory("postgres://user:pw@localhost/db"));
     }
 
-    #[cfg(feature = "sqlite")]
-    #[test]
-    fn extracts_fs_path_for_file_urls_only() {
-        use super::sqlite_fs_path;
-        assert_eq!(
-            sqlite_fs_path("sqlite://data/app.db"),
-            Some("data/app.db".into())
-        );
-        assert_eq!(
-            sqlite_fs_path("sqlite:./rel.db?mode=rwc"),
-            Some("./rel.db".into())
-        );
-        assert_eq!(
-            sqlite_fs_path("sqlite:file:x.db?mode=rwc"),
-            Some("x.db".into())
-        );
-        assert_eq!(sqlite_fs_path("sqlite::memory:"), None);
-        assert_eq!(sqlite_fs_path("sqlite::memory:?cache=shared"), None);
-    }
 }

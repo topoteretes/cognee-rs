@@ -45,7 +45,7 @@ pub use pipelines::sea_orm_impl::SeaOrmPipelineRunRepository;
 pub use pipelines::{
     NoopPipelineRunRepository, PipelineRunRepository, PipelineRunWithAttributionRow,
 };
-pub use sea_orm::{DatabaseConnection, TransactionTrait};
+pub use sea_orm::DatabaseConnection;
 pub use sync::{
     SeaOrmSyncOperationRepository, SyncOperationRepository, SyncOperationRow, SyncOperationStatus,
 };
