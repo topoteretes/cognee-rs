@@ -276,5 +276,4 @@ mod tests {
     fn non_sqlite_urls_are_not_in_memory() {
         assert!(!sqlite_url_is_in_memory("postgres://user:pw@localhost/db"));
     }
-
 }

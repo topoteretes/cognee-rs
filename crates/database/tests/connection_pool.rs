@@ -279,7 +279,10 @@ async fn read_only_percent_encoded_path_connects_without_wal() {
         return;
     }
 
-    let url = format!("sqlite://{}", path.display().to_string().replace(' ', "%20"));
+    let url = format!(
+        "sqlite://{}",
+        path.display().to_string().replace(' ', "%20")
+    );
     let db = connect(&url)
         .await
         .expect("percent-encoded read-only path must still connect");
