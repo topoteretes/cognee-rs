@@ -70,7 +70,17 @@ fire against another endpoint.
 `LLM_ENDPOINT` always overrides the default when set. Audio transcription
 (Whisper) is wired only for `openai` and `custom`/`openai_compatible` (which may
 expose `/audio/transcriptions`); `ollama`/`mistral`/`gemini` get graceful no-audio.
-Native Anthropic, Azure, and Bedrock adapters are tracked separately in issue #17.
+
+`anthropic` uses a **native Messages-API adapter** (not the OpenAI-compatible
+factory): it authenticates with `x-api-key`, hoists the system prompt into the
+top-level `system` field, and produces structured output via a forced `tool_use`.
+It requires `LLM_API_KEY`, strips an `anthropic/` model prefix, honors `LLM_ARGS`
+(merged into each request), and supports image description (vision) but not audio
+transcription. The endpoint is always `https://api.anthropic.com/v1`: unlike the
+OpenAI-compatible path it deliberately ignores `LLM_ENDPOINT`/`OPENAI_URL` (which
+alias each other) so a stray `OPENAI_URL` cannot misroute Anthropic traffic —
+matching the Python SDK, which passes no base URL. Native Azure and Bedrock
+adapters are tracked separately in issue #17.
 
 > **Ollama embeddings:** set `EMBEDDING_ENDPOINT` explicitly when using
 > `EMBEDDING_PROVIDER=ollama`. The Ollama embedder needs the `/api/embed` route, and

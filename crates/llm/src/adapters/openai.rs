@@ -317,13 +317,16 @@ impl OpenAIAdapter {
 
                 let err = match status.as_u16() {
                     401 => LlmError::AuthenticationError(error_body),
+                    402 => LlmError::PaymentRequired(error_body),
                     429 => LlmError::RateLimitExceeded(error_body),
                     400 => LlmError::InvalidResponse(format!("Bad request: {error_body}")),
                     _ => LlmError::ApiError(format!("HTTP {status}: {error_body}")),
                 };
 
-                // Non-retryable: bad request or authentication failure.
-                if matches!(status.as_u16(), 400 | 401) {
+                // Non-retryable: bad request, auth, or billing (402). 402 mirrors
+                // Python, whose retry policy excludes LLMPaymentRequiredError: a
+                // billing failure can never succeed, so retrying just burns budget.
+                if matches!(status.as_u16(), 400..=402) {
                     return Err(err);
                 }
 
@@ -1232,6 +1235,7 @@ impl OpenAIAdapter {
 
             return Err(match status.as_u16() {
                 401 => LlmError::AuthenticationError(error_body),
+                402 => LlmError::PaymentRequired(error_body),
                 429 => LlmError::RateLimitExceeded(error_body),
                 400 => LlmError::InvalidResponse(format!("Bad request: {error_body}")),
                 _ => LlmError::ApiError(format!("HTTP {status}: {error_body}")),

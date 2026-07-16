@@ -669,6 +669,9 @@ impl HttpServerConfig {
                 // The CLI/ComponentManager path wires `LLM_ARGS` via
                 // `cognee_lib::Settings`.
                 llm_args: serde_json::Map::new(),
+                // The HTTP server does not expose an LLM completion-tokens knob
+                // yet; use the same ceiling as the SDK default (Settings).
+                max_completion_tokens: cognee_llm::DEFAULT_MAX_COMPLETION_TOKENS,
                 mock: false,
                 cassette: String::new(),
                 record_path: String::new(),

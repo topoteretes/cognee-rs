@@ -31,6 +31,12 @@ pub enum LlmError {
     #[error("Authentication failed: {0}")]
     AuthenticationError(String),
 
+    /// HTTP 402 — billing/credit exhausted. Terminal: retrying can never make a
+    /// billing failure succeed, so it is excluded from retry the way Python's
+    /// `retry_if_not_exception_type` excludes `LLMPaymentRequiredError`.
+    #[error("Payment required: {0}")]
+    PaymentRequired(String),
+
     #[error("Timeout: {0}")]
     Timeout(String),
 

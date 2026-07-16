@@ -65,7 +65,7 @@ pub mod schema;
 pub mod transcriber;
 pub mod types;
 
-pub use adapters::OpenAIAdapter;
+pub use adapters::{AnthropicAdapter, OpenAIAdapter};
 pub use config::{LlmConfig, LlmProvider};
 pub use dynamic_model::{DynamicGraphModel, GraphModelError, graph_schema_to_graph_model};
 pub use error::{LlmError, LlmResult};
@@ -77,4 +77,7 @@ pub use schema::{
     graph_model_to_schema_string,
 };
 pub use transcriber::{Transcriber, TranscriptionOutput, validate_audio_format};
-pub use types::{GenerationOptions, GenerationResponse, Message, MessageRole, TokenUsage};
+pub use types::{
+    DEFAULT_MAX_COMPLETION_TOKENS, GenerationOptions, GenerationResponse, Message, MessageRole,
+    TokenUsage,
+};

@@ -90,6 +90,8 @@ impl ComponentRegistry {
         for id in llm::OPENAI_COMPATIBLE_PROVIDERS {
             reg.register_llm(Arc::new(OpenAiCompatibleLlmFactory::new(id)));
         }
+        // Native Anthropic Messages API adapter (not OpenAI-compatible).
+        reg.register_llm(Arc::new(llm::AnthropicLlmFactory));
 
         reg
     }
@@ -405,6 +407,7 @@ mod tests {
                 endpoint: String::new(),
                 max_retries: 3,
                 llm_args: serde_json::Map::new(),
+                max_completion_tokens: cognee_llm::DEFAULT_MAX_COMPLETION_TOKENS,
                 mock: false,
                 cassette: String::new(),
                 record_path: String::new(),

@@ -41,6 +41,13 @@ impl Message {
     }
 }
 
+/// Default output-token ceiling (`llm_max_completion_tokens`) shared across the
+/// SDK: `GenerationOptions::default`, the config defaults in `cognee-lib` and
+/// `cognee-http-server`, and the Anthropic adapter's fallback. Kept in one place
+/// so all of them move in lockstep. The per-request value is still clamped to
+/// each model's documented cap (see `AnthropicAdapter::effective_max_tokens`).
+pub const DEFAULT_MAX_COMPLETION_TOKENS: u32 = 16384;
+
 /// Options for LLM generation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GenerationOptions {
@@ -73,7 +80,7 @@ impl Default for GenerationOptions {
     fn default() -> Self {
         Self {
             temperature: Some(0.0),
-            max_tokens: Some(16384),
+            max_tokens: Some(DEFAULT_MAX_COMPLETION_TOKENS),
             top_p: None,
             frequency_penalty: None,
             presence_penalty: None,
