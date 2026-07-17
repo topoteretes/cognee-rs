@@ -42,6 +42,13 @@ const DEFAULT_TEMPORAL_INTERVAL_PROMPT: &str = "You are tasked with identifying 
 /// bound on broad year queries, which routed them down the empty triplet-fallback
 /// path (all events dropped), while narrower month-scoped queries happened to
 /// extract cleanly.
+///
+/// Unspecified finer components resolve to the *start* of their unit (a date-only
+/// bound → 00:00:00, a single-moment query where `starts_at == ends_at` → one
+/// instant). This is intentional parity with Python cognee, whose `Timestamp`
+/// applies the same 1/0 defaults and whose `date_to_int` performs no end-of-period
+/// expansion; it is deliberately not "widened" to end-of-day here so the two SDKs
+/// return matching event sets.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 struct QueryInterval {
     starts_at: Option<RawExtractedTimestamp>,
@@ -60,11 +67,12 @@ impl QueryInterval {
     /// Convert the extracted bounds to millisecond epoch bounds.
     ///
     /// Returns `None` — signalling "no usable interval, fall back to triplet
-    /// search" — when either no bound was provided, or a *provided* bound is not
-    /// a valid calendar date (e.g. a hallucinated `2024-02-30`). Discarding the
-    /// whole interval in that case mirrors Python (where `date_to_int` raises on
-    /// an impossible date) and, crucially, avoids silently dropping one side and
-    /// widening a bounded query into an open-ended scan of all history.
+    /// search" — in two cases: no bound was provided at all (both sides absent),
+    /// or a *provided* bound is not a valid calendar date (e.g. a hallucinated
+    /// `2024-02-30`). A single-sided interval (only `starts_at` or only `ends_at`)
+    /// is kept. Discarding the whole interval on an impossible date mirrors Python
+    /// (where `date_to_int` raises) and, crucially, avoids silently dropping one
+    /// side and widening a bounded query into an open-ended scan of all history.
     fn into_millis_interval(self) -> Option<ParsedInterval> {
         let start = match self.starts_at {
             Some(ts) => Some(to_cognify_timestamp(ts)?.time_at),
