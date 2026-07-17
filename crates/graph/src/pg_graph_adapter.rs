@@ -122,6 +122,47 @@ struct NodeRow {
     updated_at: DateTime<Utc>,
 }
 
+/// Migration version recorded by this adapter's migrator (see [`migrator`]).
+///
+/// Older builds tracked this in the default `seaql_migrations`; newer builds use
+/// `seaql_migrations_pggraph`. The constant is used to purge the stale legacy row
+/// during init — see [`cleanup_legacy_seaql_migrations`].
+const GRAPH_MIGRATION_VERSION: &str = "m20250101_000001_create_graph_tables";
+
+/// Remove this adapter's stale bookkeeping row from the *default*
+/// `seaql_migrations` table that older builds may have left behind.
+///
+/// # Why
+/// This adapter now tracks its migrations in `seaql_migrations_pggraph`. In an
+/// "everything in one Postgres" deployment the core/relational migrator owns the
+/// default `seaql_migrations`. If an older build had recorded
+/// [`GRAPH_MIGRATION_VERSION`] there, the core migrator would treat it as a
+/// foreign "applied but its file is missing" version and abort. We delete only
+/// the version this adapter itself defines — never a core/relational version — so
+/// the operation is safe and idempotent. Guarded by `to_regclass` so it is a
+/// no-op on fresh installs where the default table does not (yet) exist.
+///
+/// # Residual
+/// This only helps when this adapter initialises. If the core migrator runs
+/// *first* against a DB that still holds the legacy row it aborts before this
+/// cleanup can run; such a DB needs a one-time manual
+/// `DELETE FROM seaql_migrations WHERE version = 'm20250101_000001_create_graph_tables'`.
+async fn cleanup_legacy_seaql_migrations(db: &DatabaseConnection) -> GraphDBResult<()> {
+    // `GRAPH_MIGRATION_VERSION` is a compile-time constant with no user input,
+    // so inlining it into the DO block carries no injection risk.
+    let sql = format!(
+        "DO $$ BEGIN \
+             IF to_regclass('seaql_migrations') IS NOT NULL THEN \
+                 DELETE FROM seaql_migrations WHERE version = '{GRAPH_MIGRATION_VERSION}'; \
+             END IF; \
+         END $$;"
+    );
+    db.execute_unprepared(&sql).await.map_err(|e| {
+        GraphDBError::InitializationError(format!("PgGraph legacy migration cleanup failed: {e}"))
+    })?;
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Adapter
 // ---------------------------------------------------------------------------
@@ -144,6 +185,7 @@ impl PgGraphAdapter {
             .await
             .map_err(|e| GraphDBError::ConnectionError(format!("PgGraph connect failed: {e}")))?;
 
+        cleanup_legacy_seaql_migrations(&db).await?;
         migrator::Migrator::up(&db, None).await.map_err(|e| {
             GraphDBError::InitializationError(format!("PgGraph migration failed: {e}"))
         })?;
@@ -156,6 +198,7 @@ impl PgGraphAdapter {
     ///
     /// Only the graph tables are created if missing (via migration).
     pub async fn from_connection(db: DatabaseConnection) -> GraphDBResult<Self> {
+        cleanup_legacy_seaql_migrations(&db).await?;
         migrator::Migrator::up(&db, None).await.map_err(|e| {
             GraphDBError::InitializationError(format!("PgGraph migration failed: {e}"))
         })?;
@@ -1235,6 +1278,16 @@ mod migrator {
 
     #[async_trait::async_trait]
     impl MigratorTrait for Migrator {
+        /// Track applied migrations in a graph-specific bookkeeping table rather
+        /// than the default `seaql_migrations`. In an "everything in one Postgres"
+        /// deployment the core/relational migrator, the pgvector adapter and this
+        /// graph adapter all point at the same database; if they shared the default
+        /// table each would treat the others' versions as "applied but missing" and
+        /// abort. See the `shared_db_migration_tests` module below.
+        fn migration_table_name() -> DynIden {
+            Alias::new("seaql_migrations_pggraph").into_iden()
+        }
+
         fn migrations() -> Vec<Box<dyn MigrationTrait>> {
             vec![Box::new(CreateGraphTables)]
         }
@@ -1309,5 +1362,213 @@ mod migrator {
                 .await?;
             Ok(())
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Shared-Postgres migration regression tests
+//
+// These run only when `PGGRAPH_TEST_URL` points at a live Postgres instance and
+// are skipped otherwise. They live inline (rather than under `tests/`) so they
+// can reuse the crate's own optional `sea-orm`/`sea-orm-migration` dependencies
+// without forcing a heavy dev-dependency onto the default (feature-off) build.
+// ---------------------------------------------------------------------------
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
+mod shared_db_migration_tests {
+    use super::PgGraphAdapter;
+    use sea_orm::{ConnectionTrait, Database, DatabaseConnection, Statement};
+    use sea_orm_migration::prelude::*;
+    use serial_test::serial;
+
+    fn test_url() -> Option<String> {
+        std::env::var("PGGRAPH_TEST_URL").ok()
+    }
+
+    /// A stand-in for the downstream relational / auth migrator. It writes its
+    /// versions into the DEFAULT `seaql_migrations` table — exactly what the core
+    /// schema does in an all-Postgres deployment.
+    struct RelationalMigrator;
+
+    #[async_trait::async_trait]
+    impl MigratorTrait for RelationalMigrator {
+        fn migrations() -> Vec<Box<dyn MigrationTrait>> {
+            vec![Box::new(RelBaseline), Box::new(RelAuth)]
+        }
+    }
+
+    struct RelBaseline;
+    impl MigrationName for RelBaseline {
+        fn name(&self) -> &str {
+            "m20260914_000001_baseline"
+        }
+    }
+    #[async_trait::async_trait]
+    impl MigrationTrait for RelBaseline {
+        async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+            manager
+                .get_connection()
+                .execute_unprepared("CREATE TABLE IF NOT EXISTS rel_baseline_marker (id INT)")
+                .await?;
+            Ok(())
+        }
+        async fn down(&self, _manager: &SchemaManager) -> Result<(), DbErr> {
+            Ok(())
+        }
+    }
+
+    struct RelAuth;
+    impl MigrationName for RelAuth {
+        fn name(&self) -> &str {
+            "m20260914_000002_auth"
+        }
+    }
+    #[async_trait::async_trait]
+    impl MigrationTrait for RelAuth {
+        async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+            manager
+                .get_connection()
+                .execute_unprepared("CREATE TABLE IF NOT EXISTS rel_auth_marker (id INT)")
+                .await?;
+            Ok(())
+        }
+        async fn down(&self, _manager: &SchemaManager) -> Result<(), DbErr> {
+            Ok(())
+        }
+    }
+
+    /// Drop every table and bookkeeping table so each run starts clean.
+    async fn reset(db: &DatabaseConnection) {
+        for stmt in [
+            "DROP TABLE IF EXISTS graph_edge CASCADE",
+            "DROP TABLE IF EXISTS graph_node CASCADE",
+            "DROP TABLE IF EXISTS rel_baseline_marker CASCADE",
+            "DROP TABLE IF EXISTS rel_auth_marker CASCADE",
+            "DROP TABLE IF EXISTS seaql_migrations CASCADE",
+            "DROP TABLE IF EXISTS seaql_migrations_pggraph CASCADE",
+        ] {
+            db.execute(Statement::from_string(db.get_database_backend(), stmt))
+                .await
+                .unwrap();
+        }
+    }
+
+    /// Count rows in a bookkeeping table. Returns 0 **only** when the table does
+    /// not exist; any other DB error panics so it fails the test rather than
+    /// masquerading as an empty table (`table` is a fixed test literal, so
+    /// interpolating it carries no injection risk).
+    async fn version_count(db: &DatabaseConnection, table: &str) -> i64 {
+        let exists = db
+            .query_one(Statement::from_string(
+                db.get_database_backend(),
+                format!("SELECT to_regclass('{table}') IS NOT NULL AS present"),
+            ))
+            .await
+            .unwrap()
+            .and_then(|row| row.try_get::<bool>("", "present").ok())
+            .unwrap_or(false);
+        if !exists {
+            return 0;
+        }
+        let row = db
+            .query_one(Statement::from_string(
+                db.get_database_backend(),
+                format!("SELECT count(*) AS c FROM {table}"),
+            ))
+            .await
+            .unwrap()
+            .unwrap();
+        row.try_get::<i64>("", "c").unwrap()
+    }
+
+    /// The relational migrator and the graph adapter migrator must coexist in
+    /// one Postgres DB without colliding on the default `seaql_migrations` table.
+    #[tokio::test]
+    #[serial]
+    async fn pggraph_coexists_with_relational_migrator_in_shared_db() {
+        let Some(url) = test_url() else {
+            eprintln!("PGGRAPH_TEST_URL not set — skipping shared-DB migration test");
+            return;
+        };
+
+        let db = Database::connect(&url).await.unwrap();
+        reset(&db).await;
+
+        // 1. Relational / auth migrator runs first and populates the default
+        //    `seaql_migrations` with versions the graph migrator does not own.
+        RelationalMigrator::up(&db, None)
+            .await
+            .expect("relational migrator should succeed");
+        assert_eq!(version_count(&db, "seaql_migrations").await, 2);
+
+        // 2. Initialising the graph adapter against the SAME database must
+        //    succeed. Before the fix it aborted with "Migration file of version
+        //    'm20260914_000002_auth' is missing ...".
+        let adapter = PgGraphAdapter::new(&url).await;
+        assert!(
+            adapter.is_ok(),
+            "PgGraphAdapter init must not collide with the relational \
+             seaql_migrations table; got: {:?}",
+            adapter.err()
+        );
+
+        // 3. The graph migrator tracks its version in its OWN table and leaves
+        //    the relational bookkeeping untouched.
+        assert_eq!(version_count(&db, "seaql_migrations").await, 2);
+        assert_eq!(version_count(&db, "seaql_migrations_pggraph").await, 1);
+
+        reset(&db).await;
+    }
+
+    /// Upgrade path: a legacy graph row left in the default `seaql_migrations`
+    /// by an older build must be purged so the core migrator no longer chokes.
+    #[tokio::test]
+    #[serial]
+    async fn pggraph_purges_legacy_row_from_default_table_on_upgrade() {
+        let Some(url) = test_url() else {
+            eprintln!("PGGRAPH_TEST_URL not set — skipping legacy-purge test");
+            return;
+        };
+
+        let db = Database::connect(&url).await.unwrap();
+        reset(&db).await;
+
+        // Simulate an older build that recorded the graph version into the
+        // DEFAULT `seaql_migrations` table (aux-ran-before-core ordering).
+        db.execute(Statement::from_string(
+            db.get_database_backend(),
+            "CREATE TABLE seaql_migrations (version VARCHAR PRIMARY KEY, applied_at BIGINT NOT NULL)",
+        ))
+        .await
+        .unwrap();
+        db.execute(Statement::from_string(
+            db.get_database_backend(),
+            "INSERT INTO seaql_migrations (version, applied_at) \
+             VALUES ('m20250101_000001_create_graph_tables', 0)",
+        ))
+        .await
+        .unwrap();
+
+        // Upgraded build initialises the graph adapter.
+        PgGraphAdapter::new(&url)
+            .await
+            .expect("graph adapter should initialise on upgrade");
+
+        // The stale graph row is gone, so the core/relational migrator can now
+        // run against the default table without aborting.
+        assert_eq!(
+            version_count(&db, "seaql_migrations").await,
+            0,
+            "legacy graph row must be purged from the default seaql_migrations"
+        );
+        RelationalMigrator::up(&db, None)
+            .await
+            .expect("core migrator must not choke after legacy row is purged");
+
+        reset(&db).await;
     }
 }

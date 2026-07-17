@@ -60,6 +60,47 @@ impl Iden for VColl {
     }
 }
 
+/// Migration version recorded by this adapter's migrator (see `migrator`).
+///
+/// Older builds tracked this in the default `seaql_migrations`; newer builds use
+/// `seaql_migrations_pgvector`. The constant is used to purge the stale legacy
+/// row during init — see [`cleanup_legacy_seaql_migrations`].
+const PGVECTOR_MIGRATION_VERSION: &str = "m20250101_000001_create_pgvector_extension";
+
+/// Remove this adapter's stale bookkeeping row from the *default*
+/// `seaql_migrations` table that older builds may have left behind.
+///
+/// # Why
+/// This adapter now tracks its migrations in `seaql_migrations_pgvector`. In an
+/// "everything in one Postgres" deployment the core/relational migrator owns the
+/// default `seaql_migrations`. If an older build had recorded
+/// [`PGVECTOR_MIGRATION_VERSION`] there, the core migrator would treat it as a
+/// foreign "applied but its file is missing" version and abort. We delete only
+/// the version this adapter itself defines — never a core/relational version — so
+/// the operation is safe and idempotent. Guarded by `to_regclass` so it is a
+/// no-op on fresh installs where the default table does not (yet) exist.
+///
+/// # Residual
+/// This only helps when this adapter initialises. If the core migrator runs
+/// *first* against a DB that still holds the legacy row it aborts before this
+/// cleanup can run; such a DB needs a one-time manual
+/// `DELETE FROM seaql_migrations WHERE version = 'm20250101_000001_create_pgvector_extension'`.
+async fn cleanup_legacy_seaql_migrations(db: &DatabaseConnection) -> VectorDBResult<()> {
+    // `PGVECTOR_MIGRATION_VERSION` is a compile-time constant with no user input,
+    // so inlining it into the DO block carries no injection risk.
+    let sql = format!(
+        "DO $$ BEGIN \
+             IF to_regclass('seaql_migrations') IS NOT NULL THEN \
+                 DELETE FROM seaql_migrations WHERE version = '{PGVECTOR_MIGRATION_VERSION}'; \
+             END IF; \
+         END $$;"
+    );
+    db.execute_unprepared(&sql).await.map_err(|e| {
+        VectorDBError::StorageError(format!("PGVector legacy migration cleanup failed: {e}"))
+    })?;
+    Ok(())
+}
+
 /// Vector database backed by PostgreSQL + pgvector extension.
 ///
 /// Requires a PostgreSQL instance with the `vector` extension installed (the
@@ -84,6 +125,7 @@ impl PgVectorAdapter {
             .await
             .map_err(|e| VectorDBError::StorageError(format!("PGVector connect failed: {e}")))?;
 
+        cleanup_legacy_seaql_migrations(&db).await?;
         migrator::Migrator::up(&db, None)
             .await
             .map_err(|e| VectorDBError::StorageError(format!("PGVector migration failed: {e}")))?;
@@ -98,6 +140,7 @@ impl PgVectorAdapter {
     /// (the connection proves it does). Only the pgvector extension and
     /// bookkeeping table are created if missing.
     pub async fn from_connection(db: DatabaseConnection, dimension: usize) -> VectorDBResult<Self> {
+        cleanup_legacy_seaql_migrations(&db).await?;
         migrator::Migrator::up(&db, None)
             .await
             .map_err(|e| VectorDBError::StorageError(format!("PGVector migration failed: {e}")))?;
@@ -669,6 +712,16 @@ mod migrator {
 
     #[async_trait::async_trait]
     impl MigratorTrait for Migrator {
+        /// Track applied migrations in a pgvector-specific bookkeeping table rather
+        /// than the default `seaql_migrations`. In an "everything in one Postgres"
+        /// deployment the core/relational migrator, this pgvector adapter and the
+        /// graph adapter all point at the same database; if they shared the default
+        /// table each would treat the others' versions as "applied but missing" and
+        /// abort. See the `shared_db_migration_tests` module below.
+        fn migration_table_name() -> DynIden {
+            Alias::new("seaql_migrations_pgvector").into_iden()
+        }
+
         fn migrations() -> Vec<Box<dyn MigrationTrait>> {
             vec![Box::new(CreatePgVectorExtension)]
         }
@@ -712,5 +765,213 @@ mod migrator {
                 .await?;
             Ok(())
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Shared-Postgres migration regression tests
+//
+// These run only when `PGVECTOR_TEST_URL` points at a live Postgres instance
+// (with the `vector` extension) and are skipped otherwise. They live inline
+// (rather than under `tests/`) so they can reuse the crate's own optional
+// `sea-orm`/`sea-orm-migration` dependencies without forcing a heavy
+// dev-dependency onto the default (feature-off) build.
+// ---------------------------------------------------------------------------
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
+mod shared_db_migration_tests {
+    use super::PgVectorAdapter;
+    use sea_orm::{ConnectionTrait, Database, DatabaseConnection, Statement};
+    use sea_orm_migration::prelude::*;
+    use serial_test::serial;
+
+    fn test_url() -> Option<String> {
+        std::env::var("PGVECTOR_TEST_URL").ok()
+    }
+
+    /// A stand-in for the downstream relational / auth migrator. It writes its
+    /// versions into the DEFAULT `seaql_migrations` table — exactly what the core
+    /// schema does in an all-Postgres deployment.
+    struct RelationalMigrator;
+
+    #[async_trait::async_trait]
+    impl MigratorTrait for RelationalMigrator {
+        fn migrations() -> Vec<Box<dyn MigrationTrait>> {
+            vec![Box::new(RelBaseline), Box::new(RelAuth)]
+        }
+    }
+
+    struct RelBaseline;
+    impl MigrationName for RelBaseline {
+        fn name(&self) -> &str {
+            "m20260914_000001_baseline"
+        }
+    }
+    #[async_trait::async_trait]
+    impl MigrationTrait for RelBaseline {
+        async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+            manager
+                .get_connection()
+                .execute_unprepared("CREATE TABLE IF NOT EXISTS rel_baseline_marker (id INT)")
+                .await?;
+            Ok(())
+        }
+        async fn down(&self, _manager: &SchemaManager) -> Result<(), DbErr> {
+            Ok(())
+        }
+    }
+
+    struct RelAuth;
+    impl MigrationName for RelAuth {
+        fn name(&self) -> &str {
+            "m20260914_000002_auth"
+        }
+    }
+    #[async_trait::async_trait]
+    impl MigrationTrait for RelAuth {
+        async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+            manager
+                .get_connection()
+                .execute_unprepared("CREATE TABLE IF NOT EXISTS rel_auth_marker (id INT)")
+                .await?;
+            Ok(())
+        }
+        async fn down(&self, _manager: &SchemaManager) -> Result<(), DbErr> {
+            Ok(())
+        }
+    }
+
+    /// Drop every table and bookkeeping table so each run starts clean.
+    async fn reset(db: &DatabaseConnection) {
+        for stmt in [
+            "DROP TABLE IF EXISTS _vector_collections CASCADE",
+            "DROP TABLE IF EXISTS rel_baseline_marker CASCADE",
+            "DROP TABLE IF EXISTS rel_auth_marker CASCADE",
+            "DROP TABLE IF EXISTS seaql_migrations CASCADE",
+            "DROP TABLE IF EXISTS seaql_migrations_pgvector CASCADE",
+        ] {
+            db.execute(Statement::from_string(db.get_database_backend(), stmt))
+                .await
+                .unwrap();
+        }
+    }
+
+    /// Count rows in a bookkeeping table. Returns 0 **only** when the table does
+    /// not exist; any other DB error panics so it fails the test rather than
+    /// masquerading as an empty table (`table` is a fixed test literal, so
+    /// interpolating it carries no injection risk).
+    async fn version_count(db: &DatabaseConnection, table: &str) -> i64 {
+        let exists = db
+            .query_one(Statement::from_string(
+                db.get_database_backend(),
+                format!("SELECT to_regclass('{table}') IS NOT NULL AS present"),
+            ))
+            .await
+            .unwrap()
+            .and_then(|row| row.try_get::<bool>("", "present").ok())
+            .unwrap_or(false);
+        if !exists {
+            return 0;
+        }
+        let row = db
+            .query_one(Statement::from_string(
+                db.get_database_backend(),
+                format!("SELECT count(*) AS c FROM {table}"),
+            ))
+            .await
+            .unwrap()
+            .unwrap();
+        row.try_get::<i64>("", "c").unwrap()
+    }
+
+    /// The relational migrator and the pgvector adapter migrator must coexist in
+    /// one Postgres DB without colliding on the default `seaql_migrations` table.
+    #[tokio::test]
+    #[serial]
+    async fn pgvector_coexists_with_relational_migrator_in_shared_db() {
+        let Some(url) = test_url() else {
+            eprintln!("PGVECTOR_TEST_URL not set — skipping shared-DB migration test");
+            return;
+        };
+
+        let db = Database::connect(&url).await.unwrap();
+        reset(&db).await;
+
+        // 1. Relational / auth migrator runs first and populates the default
+        //    `seaql_migrations` with versions the vector migrator does not own.
+        RelationalMigrator::up(&db, None)
+            .await
+            .expect("relational migrator should succeed");
+        assert_eq!(version_count(&db, "seaql_migrations").await, 2);
+
+        // 2. Initialising the vector adapter against the SAME database must
+        //    succeed. Before the fix it aborted with "Migration file of version
+        //    'm20260914_000002_auth' is missing ...".
+        let adapter = PgVectorAdapter::new(&url, 384).await;
+        assert!(
+            adapter.is_ok(),
+            "PgVectorAdapter init must not collide with the relational \
+             seaql_migrations table; got: {:?}",
+            adapter.err()
+        );
+
+        // 3. The vector migrator tracks its version in its OWN table and leaves
+        //    the relational bookkeeping untouched.
+        assert_eq!(version_count(&db, "seaql_migrations").await, 2);
+        assert_eq!(version_count(&db, "seaql_migrations_pgvector").await, 1);
+
+        reset(&db).await;
+    }
+
+    /// Upgrade path: a legacy pgvector row left in the default `seaql_migrations`
+    /// by an older build must be purged so the core migrator no longer chokes.
+    #[tokio::test]
+    #[serial]
+    async fn pgvector_purges_legacy_row_from_default_table_on_upgrade() {
+        let Some(url) = test_url() else {
+            eprintln!("PGVECTOR_TEST_URL not set — skipping legacy-purge test");
+            return;
+        };
+
+        let db = Database::connect(&url).await.unwrap();
+        reset(&db).await;
+
+        // Simulate an older build that recorded the pgvector version into the
+        // DEFAULT `seaql_migrations` table (aux-ran-before-core ordering).
+        db.execute(Statement::from_string(
+            db.get_database_backend(),
+            "CREATE TABLE seaql_migrations (version VARCHAR PRIMARY KEY, applied_at BIGINT NOT NULL)",
+        ))
+        .await
+        .unwrap();
+        db.execute(Statement::from_string(
+            db.get_database_backend(),
+            "INSERT INTO seaql_migrations (version, applied_at) \
+             VALUES ('m20250101_000001_create_pgvector_extension', 0)",
+        ))
+        .await
+        .unwrap();
+
+        // Upgraded build initialises the vector adapter.
+        PgVectorAdapter::new(&url, 384)
+            .await
+            .expect("vector adapter should initialise on upgrade");
+
+        // The stale vector row is gone, so the core/relational migrator can now
+        // run against the default table without aborting.
+        assert_eq!(
+            version_count(&db, "seaql_migrations").await,
+            0,
+            "legacy pgvector row must be purged from the default seaql_migrations"
+        );
+        RelationalMigrator::up(&db, None)
+            .await
+            .expect("core migrator must not choke after legacy row is purged");
+
+        reset(&db).await;
     }
 }
