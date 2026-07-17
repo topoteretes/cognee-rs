@@ -15,9 +15,15 @@ use crate::error::CognifyError;
 
 /// Default system prompt for knowledge graph extraction.
 ///
-/// Vendored byte-for-byte from Python's
-/// `cognee/infrastructure/llm/prompts/generate_graph_prompt.txt` (kept in sync via
-/// the prompt-parity drift guard in the inline `#[cfg(test)]` block below).
+/// Vendored from Python's
+/// `cognee/infrastructure/llm/prompts/generate_graph_prompt.txt`, with one
+/// intentional Rust-only addition: the "Node Descriptions" instruction (see the
+/// drift guard in the inline `#[cfg(test)]` block below). Python advertises
+/// `Node.description` as required only via the injected schema in instructor's
+/// JSON mode, which is absent in tool/function/`json_schema` modes and on
+/// providers that reject `json_schema` (e.g. Groq) — so a non-strict model omits
+/// the field and hard-fails cognify (issue #66). Reinforcing it in the prompt
+/// text closes that gap. Any future re-sync from Python MUST preserve this line.
 const DEFAULT_GRAPH_PROMPT: &str = include_str!("prompts/generate_graph_prompt.txt");
 
 /// Appended to the system prompt when extracting a group of chunks in one call.
@@ -590,8 +596,11 @@ mod tests {
     #[test]
     fn graph_prompt_matches_vendored_txt() {
         // Drift guard: const must equal the vendored .txt byte-for-byte.
-        // Manual re-sync: cp /tmp/cognee-python/cognee/infrastructure/llm/prompts/generate_graph_prompt.txt \
-        //   crates/cognify/src/fact_extraction/prompts/generate_graph_prompt.txt
+        // Re-sync from Python, then RE-APPLY the Rust-only "Node Descriptions"
+        // addition (issue #66) — do not blindly overwrite:
+        //   cp /tmp/cognee-python/cognee/infrastructure/llm/prompts/generate_graph_prompt.txt \
+        //     crates/cognify/src/fact_extraction/prompts/generate_graph_prompt.txt
+        //   # then restore the "Node Descriptions" block under "# 1. Labeling Nodes"
         let vendored = include_str!("prompts/generate_graph_prompt.txt");
         assert_eq!(
             DEFAULT_GRAPH_PROMPT, vendored,
@@ -601,6 +610,13 @@ mod tests {
         assert!(
             vendored.contains("Every edge should include a description"),
             "edge-description paragraph missing — not the Python prompt"
+        );
+        // Rust-only addition (issue #66): non-strict LLMs (e.g. Groq) omit node
+        // `description` unless the prompt demands it. Guard against a re-sync
+        // from Python silently dropping this line.
+        assert!(
+            vendored.contains(r#"Every node MUST include a "description" field"#),
+            "Node-description instruction missing — issue #66 fix regressed"
         );
         assert!(
             vendored.contains(r#"label it as **"Person"**"#),

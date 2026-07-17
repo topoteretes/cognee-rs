@@ -1,21 +1,44 @@
 {
   "version": 1,
-  "model": "gpt-4o-mini",
+  "model": "openai/gpt-oss-120b",
   "entries": {
-    "fbc41f79369b7e05f4efbceb42baa39c2c51b38ef6d4c1ef152824eab1f510a1": {
+    "bc43a4459d234edd47aeee428a0774a83d6181bcac5643ef4c15e2cbfaa62d90": {
       "method": "structured_output",
       "user_input_preview": "Artificial intelligence enables machines to simulate human intelligence.",
       "schema_name": "KnowledgeGraph",
       "response": {
-        "nodes": [
+        "edges": [
           {
-            "id": "Artificial Intelligence",
-            "name": "Artificial Intelligence",
-            "type": "CONCEPT",
-            "description": "Artificial intelligence enables machines to simulate human intelligence."
+            "relationship_name": "enables",
+            "source_node_id": "Artificial intelligence",
+            "target_node_id": "machines"
+          },
+          {
+            "relationship_name": "simulates",
+            "source_node_id": "machines",
+            "target_node_id": "human intelligence"
           }
         ],
-        "edges": []
+        "nodes": [
+          {
+            "description": "Artificial intelligence enables machines to simulate human intelligence.",
+            "id": "Artificial intelligence",
+            "name": "Artificial intelligence",
+            "type": "CONCEPT"
+          },
+          {
+            "description": "Machines are devices that can be enabled by artificial intelligence to simulate human intelligence.",
+            "id": "machines",
+            "name": "machines",
+            "type": "CONCEPT"
+          },
+          {
+            "description": "Human intelligence is the intelligence exhibited by humans, which machines aim to simulate.",
+            "id": "human intelligence",
+            "name": "human intelligence",
+            "type": "CONCEPT"
+          }
+        ]
       }
     }
   }

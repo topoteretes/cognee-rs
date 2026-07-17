@@ -1,44 +1,58 @@
 {
   "version": 1,
-  "model": "gpt-4o-mini",
+  "model": "openai/gpt-oss-120b",
   "entries": {
-    "668c2315d1d16afd48ab174d47928f3baea15c04615b508e014f0e824ab29ed9": {
+    "5c9a8b3957e115c37204a493e4542f986c6ab0da06086bfbcba5bd750039b22e": {
       "method": "structured_output",
       "user_input_preview": "Alice works at TechCorp in San Francisco as a software engineer.",
       "schema_name": "KnowledgeGraph",
       "response": {
-        "nodes": [
-          {
-            "id": "Alice",
-            "name": "Alice",
-            "type": "PERSON",
-            "description": "A software engineer working at TechCorp."
-          },
-          {
-            "id": "TechCorp",
-            "name": "TechCorp",
-            "type": "ORGANIZATION",
-            "description": "An organization where Alice works."
-          },
-          {
-            "id": "San Francisco",
-            "name": "San Francisco",
-            "type": "LOCATION",
-            "description": "The location of TechCorp."
-          }
-        ],
         "edges": [
           {
-            "source_node_id": "Alice",
-            "target_node_id": "TechCorp",
             "relationship_name": "works_at",
-            "description": "Alice works at TechCorp."
+            "source_node_id": "Alice",
+            "target_node_id": "TechCorp"
           },
           {
-            "source_node_id": "TechCorp",
-            "target_node_id": "San Francisco",
+            "relationship_name": "works_in",
+            "source_node_id": "Alice",
+            "target_node_id": "San Francisco"
+          },
+          {
+            "relationship_name": "has_profession",
+            "source_node_id": "Alice",
+            "target_node_id": "Software Engineer"
+          },
+          {
             "relationship_name": "located_in",
-            "description": "TechCorp is located in San Francisco."
+            "source_node_id": "TechCorp",
+            "target_node_id": "San Francisco"
+          }
+        ],
+        "nodes": [
+          {
+            "description": "Alice is a software engineer who works at TechCorp in San Francisco.",
+            "id": "Alice",
+            "name": "Alice",
+            "type": "PERSON"
+          },
+          {
+            "description": "TechCorp is the employer where Alice works.",
+            "id": "TechCorp",
+            "name": "TechCorp",
+            "type": "ORGANIZATION"
+          },
+          {
+            "description": "San Francisco is the city where TechCorp is located and where Alice works.",
+            "id": "San Francisco",
+            "name": "San Francisco",
+            "type": "CONCEPT"
+          },
+          {
+            "description": "Software engineer is the profession of Alice.",
+            "id": "Software Engineer",
+            "name": "Software Engineer",
+            "type": "CONCEPT"
           }
         ]
       }
