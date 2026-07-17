@@ -1,85 +1,81 @@
 {
   "version": 1,
-  "model": "gpt-4o-mini",
+  "model": "openai/gpt-oss-120b",
   "entries": {
-    "55b94768377ea536da46d1c6adf7e67fed59b39be58b6c3f663590d9206bda5e": {
-      "method": "structured_output",
-      "user_input_preview": "Bob is an engineer at TechCorp. Bob develops cloud infrastructure.",
-      "schema_name": "KnowledgeGraph",
-      "response": {
-        "nodes": [
-          {
-            "id": "Bob",
-            "name": "Bob",
-            "type": "PERSON",
-            "description": "Bob is an engineer at TechCorp."
-          },
-          {
-            "id": "TechCorp",
-            "name": "TechCorp",
-            "type": "ORGANIZATION",
-            "description": "TechCorp is the organization where Bob works."
-          },
-          {
-            "id": "cloud_infrastructure",
-            "name": "cloud infrastructure",
-            "type": "CONCEPT",
-            "description": "Cloud infrastructure is the technology that Bob develops."
-          }
-        ],
-        "edges": [
-          {
-            "source_node_id": "Bob",
-            "target_node_id": "TechCorp",
-            "relationship_name": "works_at",
-            "description": "Bob works at TechCorp."
-          },
-          {
-            "source_node_id": "Bob",
-            "target_node_id": "cloud_infrastructure",
-            "relationship_name": "develops",
-            "description": "Bob develops cloud infrastructure."
-          }
-        ]
-      }
-    },
-    "f5ce7d46da2e8a89b581d8771568546279706bbe927a5ad13999f467338303ac": {
+    "7784435908d277abbb8377ca25237097fd2686b612d13babddb261788b2ea6fe": {
       "method": "structured_output",
       "user_input_preview": "Alice is a researcher at TechCorp. Alice studies machine learning.",
       "schema_name": "KnowledgeGraph",
       "response": {
-        "nodes": [
-          {
-            "id": "Alice",
-            "name": "Alice",
-            "type": "PERSON",
-            "description": "Alice is a researcher."
-          },
-          {
-            "id": "TechCorp",
-            "name": "TechCorp",
-            "type": "ORGANIZATION",
-            "description": "TechCorp is the organization where Alice works."
-          },
-          {
-            "id": "machine_learning",
-            "name": "machine learning",
-            "type": "CONCEPT",
-            "description": "Machine learning is the field of study that Alice focuses on."
-          }
-        ],
         "edges": [
           {
-            "source_node_id": "Alice",
-            "target_node_id": "TechCorp",
             "relationship_name": "works_at",
-            "description": "Alice works at TechCorp."
+            "source_node_id": "Alice",
+            "target_node_id": "TechCorp"
           },
           {
-            "source_node_id": "Alice",
-            "target_node_id": "machine_learning",
             "relationship_name": "studies",
-            "description": "Alice studies machine learning."
+            "source_node_id": "Alice",
+            "target_node_id": "machine learning"
+          }
+        ],
+        "nodes": [
+          {
+            "description": "Alice is a researcher at TechCorp.",
+            "id": "Alice",
+            "name": "Alice",
+            "type": "PERSON"
+          },
+          {
+            "description": "TechCorp is the organization where Alice works.",
+            "id": "TechCorp",
+            "name": "TechCorp",
+            "type": "ORGANIZATION"
+          },
+          {
+            "description": "Machine learning is the field that Alice studies.",
+            "id": "machine learning",
+            "name": "machine learning",
+            "type": "CONCEPT"
+          }
+        ]
+      }
+    },
+    "9a3b3c922e5f59448bd18c6ccd7f16636383d701d020bb925bc0f34cd62529f5": {
+      "method": "structured_output",
+      "user_input_preview": "Bob is an engineer at TechCorp. Bob develops cloud infrastructure.",
+      "schema_name": "KnowledgeGraph",
+      "response": {
+        "edges": [
+          {
+            "relationship_name": "works_at",
+            "source_node_id": "Bob",
+            "target_node_id": "TechCorp"
+          },
+          {
+            "relationship_name": "develops",
+            "source_node_id": "Bob",
+            "target_node_id": "cloud_infrastructure"
+          }
+        ],
+        "nodes": [
+          {
+            "description": "Bob is an engineer at TechCorp who develops cloud infrastructure.",
+            "id": "Bob",
+            "name": "Bob",
+            "type": "PERSON"
+          },
+          {
+            "description": "TechCorp is the company where Bob works as an engineer.",
+            "id": "TechCorp",
+            "name": "TechCorp",
+            "type": "ORGANIZATION"
+          },
+          {
+            "description": "Cloud infrastructure is the system that Bob develops.",
+            "id": "cloud_infrastructure",
+            "name": "cloud infrastructure",
+            "type": "CONCEPT"
           }
         ]
       }

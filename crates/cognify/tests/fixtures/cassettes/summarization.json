@@ -1,14 +1,14 @@
 {
   "version": 1,
-  "model": "gpt-4o-mini",
+  "model": "openai/gpt-oss-120b",
   "entries": {
     "387b736045e82244049e1078a34201d94c067a03f44d957791fac5135ebe61ae": {
       "method": "structured_output",
       "user_input_preview": "\nQuantum computing represents a paradigm shift in computation. Unlike classical computers \nthat use bits, quantum comput",
       "schema_name": "SummarizedContent",
       "response": {
-        "description": "Quantum computing is a new approach to computation that utilizes qubits instead of bits, enabling faster problem-solving capabilities compared to classical computers.",
-        "summary": "Quantum computing introduces qubits that can exist in superposition, allowing for exponential speed improvements over classical computing."
+        "description": "Quantum computing uses qubits in superposition to achieve exponential speedups over classical computers that use bits, representing a paradigm shift in computation.",
+        "summary": "Quantum computers employ qubits capable of superposition, enabling exponentially faster solutions compared to classical bit-based computers."
       }
     },
     "66d8e212656178a5e475902bd6a7be383fd927b85ddd586457fce61f88796985": {
@@ -16,8 +16,8 @@
       "user_input_preview": "\nQuantum computing represents a paradigm shift in computation. Unlike classical computers \nthat use bits, quantum comput",
       "schema_name": "SummarizedContent",
       "response": {
-        "description": "Quantum computing fundamentally changes how computations are performed by utilizing qubits, which can exist in multiple states simultaneously (superposition). This unique property enables quantum computers to solve specific problems at an exponentially faster rate compared to classical computers that rely on bits.",
-        "summary": "Quantum computing introduces a new way of computation using qubits, allowing for exponentially faster problem-solving compared to classical computers."
+        "description": "Quantum computing is a new computational paradigm that uses qubits, which can exist in superposition, unlike classical bits. This capability enables quantum computers to solve certain problems exponentially faster than traditional computers.",
+        "summary": "Quantum computing uses qubits in superposition to achieve exponential speedups over classical computers for specific problems."
       }
     },
     "faa749dbc29a9858f82f2591975f3bf77552007a75523af1c64b5ab951316eb9": {
@@ -25,8 +25,8 @@
       "user_input_preview": "\nArtificial intelligence has made remarkable progress over the past decade, transforming \nindustries ranging from health",
       "schema_name": "SummarizedContent",
       "response": {
-        "description": "This chunk discusses the advancements in artificial intelligence, particularly in machine learning, natural language processing, and the ethical considerations surrounding these technologies. It highlights the role of large language models and anticipates future developments in AI integration into daily life.",
-        "summary": "The chunk covers the significant progress in artificial intelligence over the past decade, including advancements in machine learning and natural language processing, while also addressing ethical concerns and future trends."
+        "description": "Artificial intelligence has rapidly progressed over the past decade, impacting healthcare and transportation through advanced machine learning, autonomous vehicles, and natural language processing. Large language models using transformer architectures enable diverse tasks, while raising ethical issues like bias, privacy, and environmental impact, prompting researchers and policymakers to create responsible AI frameworks. Future growth will rely on edge computing, efficient architectures, and multi‑modal learning across text, images, and audio.",
+        "summary": "AI's decade‑long advances span healthcare, transportation, and language technologies, bring ethical challenges, and point toward edge‑based, multi‑modal future applications."
       }
     }
   }

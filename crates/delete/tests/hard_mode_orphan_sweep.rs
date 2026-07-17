@@ -30,7 +30,7 @@ use cognee_llm::{Llm, build_openai_compatible_adapter};
 use cognee_models::DataInput;
 use cognee_ontology::NoOpOntologyResolver;
 use cognee_storage::{LocalStorage, StorageTrait};
-use cognee_test_utils::MockVectorDB;
+use cognee_test_utils::{MockVectorDB, fail_loudly_in_cassette_mode};
 use cognee_vector::VectorDB;
 use tempfile::TempDir;
 use uuid::Uuid;
@@ -60,18 +60,6 @@ fn require_env(var_name: &str) -> String {
         return v;
     }
     panic!("Required environment variable '{var_name}' is not set")
-}
-
-/// In cassette-replay mode a pipeline error means a stale/missing cassette
-/// entry; the `Err => eprintln + return` skip blocks below would otherwise
-/// swallow it and pass with zero assertions. Call this in those blocks so a
-/// replay miss fails loudly (re-record cassettes); no-op outside replay mode.
-fn fail_loudly_on_replay_miss(what: &str, err: &impl std::fmt::Display) {
-    if std::env::var("COGNEE_TEST_REPLAY").is_ok_and(|v| !v.is_empty()) {
-        panic!(
-            "{what} failed in replay mode — likely a stale/missing cassette entry; re-record cassettes. Error: {err}"
-        );
-    }
 }
 
 /// LLM for this test: offline replay when `COGNEE_TEST_REPLAY=1` (MissPolicy::Error
@@ -252,7 +240,7 @@ async fn test_hard_mode_sweeps_orphan_entities() {
     {
         Ok(r) => r,
         Err(e) => {
-            fail_loudly_on_replay_miss("cognify", &e);
+            fail_loudly_in_cassette_mode("cognify", &e);
             eprintln!("Skipping test: cognify failed: {e}");
             return;
         }
@@ -432,7 +420,7 @@ async fn test_soft_mode_preserves_orphan_entities() {
     )
     .await
     {
-        fail_loudly_on_replay_miss("cognify (re-add)", &e);
+        fail_loudly_in_cassette_mode("cognify (re-add)", &e);
         eprintln!("Skipping test: cognify failed: {e}");
         return;
     }

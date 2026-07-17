@@ -146,7 +146,7 @@ fn role_str(role: &crate::types::MessageRole) -> &'static str {
 /// version bump or a field reorder in a schema type (`KnowledgeGraph`,
 /// `SummarizedContent`, …) changes the hash and misses every recorded entry.
 /// That surfaces loudly — replay tests use `MissPolicy::Error` and the e2e
-/// skip-blocks call `fail_loudly_on_replay_miss` — so the remedy is simply to
+/// skip-blocks call `fail_loudly_in_cassette_mode` — so the remedy is simply to
 /// re-record the cassettes (see docs/build/ci-test-parallelism.md), not a
 /// silent test-coverage loss.
 fn canonicalize(value: &Value) -> String {

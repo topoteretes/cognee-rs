@@ -127,6 +127,35 @@ pub fn require_env(var_name: &str) -> String {
     panic!("❌ Required environment variable '{var_name}' is not set")
 }
 
+/// Fail loudly when a pipeline error occurs in either cassette mode, so the
+/// `Err(e) => { eprintln!("Skipping…"); return }` skip blocks the e2e tests use
+/// to tolerate a missing real LLM don't swallow it and pass with zero assertions.
+///
+/// - Replay mode (`COGNEE_TEST_REPLAY`): the error is a cassette miss — a
+///   stale/edited prompt or schema whose input hash no longer matches a recorded
+///   entry (`ReplayLlm` returns `LlmError::InvalidResponse`). Re-record.
+/// - Record mode (`COGNEE_RECORD_LLM`): the live LLM call failed, so the cassette
+///   would be silently left empty/partial (`RecordingLlm` only records successful
+///   calls) and pass recording but fail the next replay. Fail now instead. Note
+///   Baseten 501 "Error making prediction" is transient — just re-run.
+///
+/// Outside both modes (a legacy live run with no cassette) it is a no-op and the
+/// legitimate "no LLM configured" skip proceeds. Single source of truth: the
+/// per-crate `tests/test_utils.rs` shims re-export this so the skip-swallowing
+/// gap it closes cannot silently reopen in one copy.
+pub fn fail_loudly_in_cassette_mode(what: &str, err: &impl std::fmt::Display) {
+    if std::env::var("COGNEE_TEST_REPLAY").is_ok_and(|v| !v.is_empty()) {
+        panic!(
+            "{what} failed in replay mode — likely a stale/missing cassette entry; re-record cassettes. Error: {err}"
+        );
+    }
+    if std::env::var("COGNEE_RECORD_LLM").is_ok_and(|v| !v.is_empty()) {
+        panic!(
+            "{what} failed while recording — the cassette would be left empty/partial; fix the LLM error and re-record (Baseten 501s are transient — retry). Error: {err}"
+        );
+    }
+}
+
 /// Returns `true` when live LLM credentials are configured — `OPENAI_URL`/
 /// `OPENAI_TOKEN` or the canonical `LLM_ENDPOINT`/`LLM_API_KEY`. Integration/E2E
 /// tests call this to skip gracefully (per the repo convention) instead of

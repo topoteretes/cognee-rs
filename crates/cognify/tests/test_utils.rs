@@ -7,27 +7,13 @@ use std::sync::Arc;
 // crate uses one implementation (consistent alias fallback + model default).
 // Re-exported here (with the historical `create_adapter_from_env` name) so the
 // many `test_utils::…` call sites in this crate's tests keep compiling.
+// `fail_loudly_in_cassette_mode` also lives in the shared crate (single source
+// of truth — see its docs there) and is re-exported here alongside the env helpers.
 #[allow(unused_imports)]
 pub use cognee_test_utils::{
-    create_openai_adapter_from_env as create_adapter_from_env, llm_env_available, require_env,
+    create_openai_adapter_from_env as create_adapter_from_env, fail_loudly_in_cassette_mode,
+    llm_env_available, require_env,
 };
-
-/// In cassette-replay mode (`COGNEE_TEST_REPLAY` set), a pipeline error means a
-/// cassette miss — a stale/edited prompt or schema whose input hash no longer
-/// matches a recorded entry (`ReplayLlm` returns `LlmError::InvalidResponse`).
-/// The `Err(e) => { eprintln!("Skipping…"); return }` blocks the e2e tests use
-/// to tolerate a missing real LLM would otherwise swallow that miss and pass
-/// with zero assertions. Call this in those blocks so replay misses fail loudly
-/// (re-record via the record-cassettes workflow); outside replay mode it is a
-/// no-op and the legitimate skip proceeds.
-#[allow(dead_code)]
-pub fn fail_loudly_on_replay_miss(what: &str, err: &impl std::fmt::Display) {
-    if std::env::var("COGNEE_TEST_REPLAY").is_ok_and(|v| !v.is_empty()) {
-        panic!(
-            "{what} failed in replay mode — likely a stale/missing cassette entry; re-record cassettes. Error: {err}"
-        );
-    }
-}
 
 /// Resolve the on-disk path of a named cassette under this crate's
 /// `tests/fixtures/cassettes/` directory.
