@@ -1283,7 +1283,7 @@ mod migrator {
         /// deployment the core/relational migrator, the pgvector adapter and this
         /// graph adapter all point at the same database; if they shared the default
         /// table each would treat the others' versions as "applied but missing" and
-        /// abort. See `tests/pg_shared_db_migration.rs`.
+        /// abort. See the `shared_db_migration_tests` module below.
         fn migration_table_name() -> DynIden {
             Alias::new("seaql_migrations_pggraph").into_iden()
         }
@@ -1457,16 +1457,32 @@ mod shared_db_migration_tests {
         }
     }
 
-    /// Count rows in a bookkeeping table (0 if the table does not exist).
+    /// Count rows in a bookkeeping table. Returns 0 **only** when the table does
+    /// not exist; any other DB error panics so it fails the test rather than
+    /// masquerading as an empty table (`table` is a fixed test literal, so
+    /// interpolating it carries no injection risk).
     async fn version_count(db: &DatabaseConnection, table: &str) -> i64 {
-        let sql = format!("SELECT count(*) AS c FROM {table}");
-        match db
-            .query_one(Statement::from_string(db.get_database_backend(), sql))
+        let exists = db
+            .query_one(Statement::from_string(
+                db.get_database_backend(),
+                format!("SELECT to_regclass('{table}') IS NOT NULL AS present"),
+            ))
             .await
-        {
-            Ok(Some(row)) => row.try_get::<i64>("", "c").unwrap_or(0),
-            _ => 0,
+            .unwrap()
+            .and_then(|row| row.try_get::<bool>("", "present").ok())
+            .unwrap_or(false);
+        if !exists {
+            return 0;
         }
+        let row = db
+            .query_one(Statement::from_string(
+                db.get_database_backend(),
+                format!("SELECT count(*) AS c FROM {table}"),
+            ))
+            .await
+            .unwrap()
+            .unwrap();
+        row.try_get::<i64>("", "c").unwrap()
     }
 
     /// The relational migrator and the graph adapter migrator must coexist in
