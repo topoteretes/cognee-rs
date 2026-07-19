@@ -533,7 +533,7 @@ fn init_tracing() {
 
 - The new binary is named **`cognee-http-server`** (matches the package name; unambiguous on `$PATH`).
 - The existing `cognee-cli serve` subcommand (commit `ab18925`) handles the cloud OAuth flow. It stays as-is; this work does not modify `cognee-cli`.
-- A user who wants both installs both: `cargo install cognee-cli` and `cargo install cognee-http-server --features bin`. Distribution-wise (Docker, deb/rpm, brew) we publish them as two artifacts.
+- A user who wants both installs both: the `cognee-cli` binary (built from source — `cargo build --release -p cognee-cli`; it is not published to crates.io) and `cargo install cognee-http-server --features bin`. Distribution-wise (Docker, deb/rpm, brew) we publish them as two artifacts.
 
 ### Deployment shape
 

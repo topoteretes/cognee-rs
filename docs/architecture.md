@@ -16,7 +16,7 @@ root `README.md` link here rather than duplicating it.
 ## Workspace structure
 
 ```
-cognee-rust-oss/
+cognee-rs/
 ├── Cargo.toml                  # Workspace root (edition 2024, resolver 3)
 ├── crates/
 │   ├── models/                 # Core data types: Data, Dataset, DataInput, Document, DocumentChunk
