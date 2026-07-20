@@ -108,9 +108,9 @@ cognee-rs/
 
 **cognee-bindings-common** — Shared SDK facade for the Neon JS, C-API, and Java (JNI) bindings: `SdkError` (+ `code()`), `HandleState`, `CogneeServices`, and neon-free JSON wire helpers. Not a new user-facing Rust API — that remains `cognee::api`.
 
-**cognee** — Unified public API facade. Re-exports all crates and adds an `api/` module mirroring the Python SDK: `forget`, `update`, `prune`, `recall`, `remember`, `improve`, plus `DatasetManager`. Houses the shared `Settings`/`ConfigManager` and runtime setters. `ComponentManager` (lazy, version-cached) delegates backend construction to a `cognee-components` `ComponentRegistry`; use `ComponentManager::with_registry` (or `HandleState::from_settings_with_registry` in the bindings) to inject external adapter factories. The registry API is re-exported here so closed entry points use `cognee::` paths. (The crate lives in `crates/lib/`; it was published as `cognee-lib` up to v0.1.3 and renamed to `cognee` in v0.2.0.)
+**cognee** — Unified public API facade. Re-exports all crates and adds an `api/` module mirroring the Python SDK: `forget`, `update`, `prune`, `recall`, `remember`, `improve`, plus `DatasetManager`. Houses the shared `Settings`/`ConfigManager` and runtime setters. `ComponentManager` (lazy, version-cached) delegates backend construction to a `cognee-components` `ComponentRegistry`; use `ComponentManager::with_registry` (or `HandleState::from_settings_with_registry` in the bindings) to inject external adapter factories. The registry API is re-exported here so closed entry points use `cognee::` paths. (The crate lives in `crates/lib/`; it shipped as `cognee-lib` through v0.1.3 and was renamed to `cognee`.)
 
-**cognee-lib** — Deprecated re-export shim (`crates/cognee-lib/`) that keeps the old `cognee-lib` crate name compiling after the v0.2.0 rename. It is `pub use cognee::*` with every Cargo feature forwarded 1:1 to `cognee`. New code should depend on `cognee` directly.
+**cognee-lib** — Deprecated re-export shim (`crates/cognee-lib/`) that keeps the old `cognee-lib` crate name compiling after the rename. It is `pub use cognee::*` with every Cargo feature forwarded 1:1 to `cognee`. New code should depend on `cognee` directly.
 
 **cognee-cli** — Command-line binary (`cognee-cli`). See [tools/cli.md](tools/cli.md).
 

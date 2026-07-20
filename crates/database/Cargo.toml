@@ -19,8 +19,8 @@ sqlite   = ["sea-orm/sqlx-sqlite"]
 postgres = ["sea-orm/sqlx-postgres"]
 
 [dependencies]
-cognee-models     = { path = "../models", version = "0.2.0" }
-cognee-utils      = { path = "../utils", version = "0.2.0" }
+cognee-models     = { path = "../models", version = "0.1.3" }
+cognee-utils      = { path = "../utils", version = "0.1.3" }
 async-trait.workspace = true
 chrono.workspace  = true
 include_dir = "0.7"
