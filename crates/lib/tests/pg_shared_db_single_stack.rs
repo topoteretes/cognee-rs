@@ -21,18 +21,18 @@
 //! raw vectors and graph rows directly. It requires only a Postgres instance:
 //!
 //!   TEST_POSTGRES_URL="postgres://user:pass@localhost:5432/cognee" \
-//!     cargo test -p cognee-lib --features pggraph,pgvector,postgres \
+//!     cargo test -p cognee --features pggraph,pgvector,postgres \
 //!       --test pg_shared_db_single_stack -- --nocapture
 //!
 //! Skipped cleanly when `TEST_POSTGRES_URL` is unset. Runs serially (shared DB).
 #![cfg(all(feature = "pggraph", feature = "pgvector", feature = "postgres"))]
 
-use cognee_lib::database::ops::datasets::create_dataset;
-use cognee_lib::database::ops::graph_storage::{
+use cognee::database::ops::datasets::create_dataset;
+use cognee::database::ops::graph_storage::{
     get_edges_by_data, get_nodes_by_data, upsert_edges, upsert_nodes,
 };
-use cognee_lib::database::{GraphEdge, GraphNode, connect, initialize};
-use cognee_lib::models::Dataset;
+use cognee::database::{GraphEdge, GraphNode, connect, initialize};
+use cognee::models::Dataset;
 
 use cognee_graph::{GraphDBTrait, GraphDBTraitExt, PgGraphAdapter};
 use cognee_vector::{PgVectorAdapter, VectorDB, VectorPoint};

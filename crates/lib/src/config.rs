@@ -62,8 +62,14 @@ fn with_sslmode(url: String, sslmode: &str) -> String {
 /// The chart passes asyncpg-style connect args, e.g. `{"ssl":"require"}`. We map
 /// the `ssl` key onto the equivalent libpq `sslmode` value that sqlx understands:
 /// a string is passed through when it is already a valid libpq mode; a boolean
-/// `true` maps to `require`. Returns `None` when the JSON is unparseable, has no
-/// `ssl` key, or the value does not map to a known mode.
+/// `true` maps to `require`.
+///
+/// Returns `None` when the JSON is unparseable or has no `ssl` key. It never
+/// *silently* downgrades a configured TLS requirement: an unrecognized string
+/// (likely a typo) logs a warning and returns `None`, and an object/array `ssl`
+/// (asyncpg accepts an `SSLContext`, which has no libpq-`sslmode` equivalent)
+/// maps to `require` rather than dropping TLS — matching Python, which passes
+/// `ssl` through verbatim and never quietly disables it.
 fn sslmode_from_connect_args(raw: &str) -> Option<String> {
     let parsed: serde_json::Value = serde_json::from_str(raw).ok()?;
     match parsed.get("ssl")? {
@@ -76,8 +82,26 @@ fn sslmode_from_connect_args(raw: &str) -> Option<String> {
                 // asyncpg accepts bare "true"/"false" strings too.
                 "true" => Some("require".to_string()),
                 "false" => Some("disable".to_string()),
-                _ => None,
+                other => {
+                    tracing::warn!(
+                        ssl = other,
+                        "DATABASE_CONNECT_ARGS `ssl` is not a recognized libpq sslmode; \
+                         ignoring it. Set DB_SSLMODE explicitly to control TLS."
+                    );
+                    None
+                }
             }
+        }
+        // An SSLContext-shaped object/array can't be expressed as a libpq
+        // sslmode, but its presence means TLS is intended — require it rather
+        // than silently connecting unencrypted; the custom context is not
+        // carried through the URL.
+        serde_json::Value::Object(_) | serde_json::Value::Array(_) => {
+            tracing::warn!(
+                "DATABASE_CONNECT_ARGS `ssl` is a custom TLS context, which cannot be \
+                 expressed as a libpq sslmode; defaulting to sslmode=require."
+            );
+            Some("require".to_string())
         }
         _ => None,
     }
@@ -885,27 +909,48 @@ impl Settings {
             return Ok(self.vector_db_url.clone());
         }
 
-        // Host comes from `vector_db_host` (populated by `VECTOR_DB_HOST`), NOT
-        // `vector_db_url` — the latter is only a full-URL shortcut, handled
-        // above. A chart that sets `VECTOR_DB_HOST` without `VECTOR_DB_URL` must
-        // resolve to that host, not silently fall back to localhost.
-        let host = if self.vector_db_host.is_empty() {
-            "localhost"
+        // Python parity (`create_vector_engine.py` pgvector branch): use the
+        // `VECTOR_DB_*` credentials only when the vector-specific set is present;
+        // otherwise fall back WHOLESALE to the relational `db_*` configuration —
+        // same host, port, AND database. That is exactly what the single-shared-
+        // Postgres layout wants (Python even reuses the relational engine object
+        // in that case), and it mirrors `resolved_graph_postgres_url` below.
+        //
+        // The previous per-field defaults (`localhost` / port `1234` / database
+        // `cognee_vectors`) had no Python counterpart: a chart that set only
+        // `VECTOR_DB_HOST` landed on port 1234 in a database named `cognee_vectors`
+        // — a different database from the relational/graph stores on the same
+        // host, silently defeating the single-DB goal. Gate on host+name+username
+        // (not password, which may be empty for trust auth), matching the graph
+        // path.
+        let vector_creds_complete = !self.vector_db_host.is_empty()
+            && !self.vector_db_name.is_empty()
+            && !self.vector_db_username.is_empty();
+
+        let (host, port, name, user, pass) = if vector_creds_complete {
+            (
+                self.vector_db_host.as_str(),
+                self.vector_db_port,
+                self.vector_db_name.as_str(),
+                self.vector_db_username.as_str(),
+                self.vector_db_password.as_str(),
+            )
         } else {
-            &self.vector_db_host
+            tracing::warn!(
+                "Postgres vector credentials not fully configured; falling back to the \
+                 relational database configuration. Set VECTOR_DB_* explicitly to avoid this."
+            );
+            if self.db_host.is_empty() || self.db_name.is_empty() || self.db_username.is_empty() {
+                return Err("Missing required Postgres vector credentials".into());
+            }
+            (
+                self.db_host.as_str(),
+                self.db_port,
+                self.db_name.as_str(),
+                self.db_username.as_str(),
+                self.db_password.as_str(),
+            )
         };
-        let port = self.vector_db_port;
-        let name = if self.vector_db_name.is_empty() {
-            "cognee_vectors"
-        } else {
-            &self.vector_db_name
-        };
-        let user = if self.db_username.is_empty() {
-            "postgres"
-        } else {
-            &self.db_username
-        };
-        let pass = &self.db_password;
 
         build_postgres_url(host, port, name, user, pass).map(|u| with_sslmode(u, &self.db_sslmode))
     }
@@ -3208,46 +3253,94 @@ mod tests {
         );
         // No ssl key, unknown value, or bad JSON => None (append nothing).
         assert_eq!(sslmode_from_connect_args(r#"{"foo":1}"#), None);
+        // Unknown string (likely a typo) => None, but warns rather than crashing.
         assert_eq!(sslmode_from_connect_args(r#"{"ssl":"bogus"}"#), None);
         assert_eq!(sslmode_from_connect_args("not json"), None);
+        // An object/array ssl (asyncpg SSLContext) can't map to a libpq sslmode,
+        // but TLS is clearly intended — require it, never silently drop (Fix #6).
+        assert_eq!(
+            sslmode_from_connect_args(r#"{"ssl":{"ca":"/etc/ca.pem"}}"#).as_deref(),
+            Some("require")
+        );
     }
 
-    // -- vector Postgres URL reads vector_db_host (Fix 3) -------------------
+    // -- vector Postgres URL: all-or-nothing relational fallback (Fixes 1-3) --
 
     #[cfg(feature = "pgvector")]
     #[test]
-    fn vector_postgres_url_reads_vector_db_host() {
-        // VECTOR_DB_HOST populates vector_db_host; with no full VECTOR_DB_URL the
-        // resolver must use that host, not localhost.
+    fn vector_postgres_url_uses_full_vector_creds() {
+        // When the full VECTOR_DB_* set is present, use it verbatim.
         let s = Settings {
             vector_db_provider: "pgvector".to_string(),
             vector_db_host: "vec.internal".to_string(),
-            vector_db_port: 5432,
-            vector_db_name: "cognee".to_string(),
-            db_username: "postgres".to_string(),
-            db_password: "pw".to_string(),
+            vector_db_port: 6543,
+            vector_db_name: "vectors".to_string(),
+            vector_db_username: "vuser".to_string(),
+            vector_db_password: "vpw".to_string(),
             ..Settings::default()
         };
-        let url = s.resolved_vector_postgres_url().expect("url builds");
-        assert_eq!(url, "postgres://postgres:pw@vec.internal:5432/cognee");
+        assert_eq!(
+            s.resolved_vector_postgres_url().expect("url builds"),
+            "postgres://vuser:vpw@vec.internal:6543/vectors"
+        );
     }
 
     #[cfg(feature = "pgvector")]
     #[test]
-    fn vector_postgres_url_defaults_to_localhost_without_host() {
+    fn vector_postgres_url_falls_back_to_relational_for_single_db() {
+        // The single-shared-Postgres case: only db_* is configured, no
+        // VECTOR_DB_*. The vector store must share the relational host, PORT and
+        // DATABASE — NOT port 1234 or a `cognee_vectors` database (Fixes 1 & 2).
+        // This is the path the pg_shared_db_single_stack test could not exercise.
         let s = Settings {
             vector_db_provider: "pgvector".to_string(),
-            vector_db_host: String::new(),
-            vector_db_port: 5432,
+            db_provider: "postgres".to_string(),
+            db_host: "shared-pg".to_string(),
+            db_port: 5432,
+            db_name: "cognee_db".to_string(),
             db_username: "postgres".to_string(),
             db_password: "pw".to_string(),
             ..Settings::default()
         };
-        let url = s.resolved_vector_postgres_url().expect("url builds");
-        assert!(
-            url.starts_with("postgres://postgres:pw@localhost:5432/"),
-            "expected localhost fallback, got {url}"
+        assert_eq!(
+            s.resolved_vector_postgres_url().expect("url builds"),
+            "postgres://postgres:pw@shared-pg:5432/cognee_db",
+            "vector store must land on the SAME host/port/database as relational"
         );
+    }
+
+    #[cfg(feature = "pgvector")]
+    #[test]
+    fn vector_postgres_url_partial_vector_creds_use_relational() {
+        // VECTOR_DB_HOST alone is incomplete → fall back wholesale to relational
+        // (Python's all-or-nothing rule), not a per-field mix landing on 1234.
+        let s = Settings {
+            vector_db_provider: "pgvector".to_string(),
+            vector_db_host: "ignored-partial".to_string(),
+            db_host: "shared-pg".to_string(),
+            db_port: 5432,
+            db_name: "cognee_db".to_string(),
+            db_username: "postgres".to_string(),
+            db_password: "pw".to_string(),
+            ..Settings::default()
+        };
+        assert_eq!(
+            s.resolved_vector_postgres_url().expect("url builds"),
+            "postgres://postgres:pw@shared-pg:5432/cognee_db"
+        );
+    }
+
+    #[cfg(feature = "pgvector")]
+    #[test]
+    fn vector_postgres_url_errs_without_any_creds() {
+        // No VECTOR_DB_* and no relational db_* creds → explicit error, not a
+        // silent localhost/1234 URL that fails obscurely at connect time.
+        let s = Settings {
+            vector_db_provider: "pgvector".to_string(),
+            db_username: String::new(),
+            ..Settings::default()
+        };
+        assert!(s.resolved_vector_postgres_url().is_err());
     }
 
     #[cfg(feature = "pgvector")]
@@ -3269,11 +3362,12 @@ mod tests {
     #[cfg(feature = "pgvector")]
     #[test]
     fn vector_postgres_url_appends_sslmode() {
+        // sslmode is appended on the relational-fallback (single-DB) path too.
         let s = Settings {
             vector_db_provider: "pgvector".to_string(),
-            vector_db_host: "vec.internal".to_string(),
-            vector_db_port: 5432,
-            vector_db_name: "cognee".to_string(),
+            db_host: "shared-pg".to_string(),
+            db_port: 5432,
+            db_name: "cognee_db".to_string(),
             db_username: "postgres".to_string(),
             db_password: "pw".to_string(),
             db_sslmode: "require".to_string(),
@@ -3281,7 +3375,7 @@ mod tests {
         };
         assert_eq!(
             s.resolved_vector_postgres_url().expect("url builds"),
-            "postgres://postgres:pw@vec.internal:5432/cognee?sslmode=require"
+            "postgres://postgres:pw@shared-pg:5432/cognee_db?sslmode=require"
         );
     }
 
