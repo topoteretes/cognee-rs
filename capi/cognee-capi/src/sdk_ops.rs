@@ -2,7 +2,7 @@
 //!
 //! Each export follows the Phase-2 canonical pattern: clone the
 //! `Arc<HandleState>` into `spawn_sdk_op`, obtain a `CogneeServices` via
-//! `state.services().await?`, call the `cognee-lib` API with the bundled
+//! `state.services().await?`, call the `cognee` API with the bundled
 //! `Arc<dyn …>` handles, marshal the result back to JSON, and deliver it
 //! through the callback.
 //!

@@ -3,7 +3,7 @@
 //! These functions contain the pure-Rust async logic that is shared between
 //! every language binding surface (C API, Neon JS, Python). Each function takes
 //! a [`HandleState`] reference and `serde_json::Value` arguments, performs the
-//! operation against the underlying cognee-lib APIs, and returns a result (or
+//! operation against the underlying cognee APIs, and returns a result (or
 //! an [`SdkError`]).
 //!
 //! Both functions are gated behind `#[cfg(feature = "visualization")]`. When
@@ -36,7 +36,7 @@ pub async fn visualize(
     {
         use std::sync::Arc;
 
-        use cognee_lib::visualization::render;
+        use cognee::visualization::render;
 
         let svc = state.services().await?;
         let graph_db = Arc::clone(&svc.graph_db);
@@ -71,7 +71,7 @@ pub async fn visualize_to_file(
         use std::path::PathBuf;
         use std::sync::Arc;
 
-        use cognee_lib::visualize;
+        use cognee::visualize;
 
         let dest: Option<PathBuf> = opts
             .and_then(|v| v.get("destinationPath"))

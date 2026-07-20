@@ -13,6 +13,8 @@ members = [
     "crates/core",
     "crates/components",
     "crates/lib",
+    # Deprecated re-export shim keeping the old `cognee-lib` crate name alive.
+    "crates/cognee-lib",
     "crates/logging",
     "crates/cli",
     "crates/utils",
@@ -48,7 +50,7 @@ resolver = "3"
 
 [workspace.package]
 edition = "2024"
-version = "0.1.3"
+version = "0.2.0"
 rust-version = "1.91"
 license = "MIT OR Apache-2.0"
 authors = ["Topoteretes <support@cognee.ai>"]

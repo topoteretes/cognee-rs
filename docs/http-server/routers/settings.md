@@ -33,7 +33,7 @@ Companion docs: [../architecture.md](../architecture.md),
   | 500 | `ApiError` (`Internal`) | Failure resolving config from environment / config service. |
 - **Side effects**: read-only. Does *not* touch the relational DB. The settings come from
   `LlmConfig` and `VectorDbConfig` in process-local state ([Python source: `get_settings.py` L44-L191](https://github.com/topoteretes/cognee/blob/main/cognee/modules/settings/get_settings.py#L44-L191)).
-- **Delegation target**: `cognee_lib::settings::get_settings()` (new façade in `cognee-lib`, wrapping
+- **Delegation target**: `cognee::settings::get_settings()` (new façade in `cognee`, wrapping
   the existing `cognee_llm::LlmConfig` and `cognee_vector::VectorDbConfig` snapshots).
 - **Validation rules**: none.
 - **Authorization checks**: authentication only — every authenticated user reads the same global
@@ -64,8 +64,8 @@ Companion docs: [../architecture.md](../architecture.md),
   - When `llm` is provided: updates the in-process `LLMConfig` ([`save_llm_config.py` L11-L18](https://github.com/topoteretes/cognee/blob/main/cognee/modules/settings/save_llm_config.py#L11-L18)) — sets `llm_provider`, `llm_model`, and conditionally `llm_api_key`. The API key is only written when the supplied value (a) does not contain `"*****"` (a redacted-form sentinel) **and** (b) is non-empty after `.strip()`. This is the **echo-back guard**: if the frontend resubmits the value it received from `GET` (which contains stars), we must not overwrite the real key with the masked version.
   - When `vector_db` is provided: updates `VectorDBConfig` ([`save_vector_db_config.py` L12-L19](https://github.com/topoteretes/cognee/blob/main/cognee/modules/settings/save_vector_db_config.py#L12-L19)) — sets `vector_db_url`, `vector_db_provider`, conditionally `vector_db_key` with the same `"*****"`-and-empty guard. Does **not** persist any of the `endpoint` or `api_version` fields (Python's input DTO has no such fields).
   - Persistence backend: process-singleton, identical to Python. The Rust port writes to in-process `LlmConfig` / `VectorDbConfig` and does **not** persist to a relational table. Python's behavior — settings reset to env-var defaults on restart, and may diverge across workers in a multi-process deployment — is reproduced verbatim. Operators who need durable settings should set them via env vars at boot (the same workaround Python users employ).
-- **Delegation target**: `cognee_lib::settings::save_llm_config(...)` and
-  `cognee_lib::settings::save_vector_db_config(...)`. Each invoked only when the corresponding
+- **Delegation target**: `cognee::settings::save_llm_config(...)` and
+  `cognee::settings::save_vector_db_config(...)`. Each invoked only when the corresponding
   optional field is `Some`.
 - **Validation rules**:
   - `llm.provider ∈ {"openai", "ollama", "anthropic", "gemini", "mistral"}` (Python's `Literal`
@@ -237,7 +237,7 @@ pub fn should_persist_api_key(submitted: &str) -> bool {
 2. Add the static `LLM_PROVIDERS`, `VECTOR_DB_PROVIDERS`, and `MODELS` lists in
    `crates/http-server/src/routers/settings.rs` (literal-equal to Python — the cross-SDK parity test
    compares as JSON).
-3. Add `cognee_lib::settings` façade exposing `get_settings()`, `save_llm_config(LLMConfigInput)`,
+3. Add `cognee::settings` façade exposing `get_settings()`, `save_llm_config(LLMConfigInput)`,
    `save_vector_db_config(VectorDbConfigInput)`. Wraps existing `LlmConfig`/`VectorDbConfig`.
 4. Add handlers in `crates/http-server/src/routers/settings.rs`. Both are `#[tracing::instrument(skip(state))]`.
 5. OpenAPI annotations; explicitly document the redaction/echo policy in the description.
@@ -259,7 +259,7 @@ pub fn should_persist_api_key(submitted: &str) -> bool {
 3. **`endpoint` and `api_version` fields are read-only** — surfaced on `GET` but not in the input DTO. Match Python exactly: input DTO does not accept these fields.
 4. **`bedrock` asymmetry** — `bedrock` is in the GET-advertised providers but not the POST `Literal`. Replicate the asymmetry verbatim. The frontend treats `bedrock` as read-only.
 5. **No admin gate** — Python lets any authenticated user rewrite the global LLM / vector-DB config. Rust matches. The cross-SDK parity test confirms a non-superuser can save without 403.
-6. **Settings-singleton placement** — *Resolved during P5 (commit 2652aea)*: the spec called for a `cognee_lib::settings` façade that the router thinly wraps, but `cognee-lib`'s `server` feature already gates `cognee-http-server`, so a back-edge from `cognee-lib::settings` to the router would create a feature cycle. The process-singleton `SettingsStore` therefore lives directly in `crates/http-server/src/routers/settings.rs`. Wire shape, redaction policy, and provider/model lists still match Python verbatim. If a non-HTTP consumer ever needs these settings, lift the singleton into a sibling `cognee-settings` crate without churning HTTP code.
+6. **Settings-singleton placement** — *Resolved during P5 (commit 2652aea)*: the spec called for a `cognee::settings` façade that the router thinly wraps, but `cognee`'s `server` feature already gates `cognee-http-server`, so a back-edge from `cognee::settings` to the router would create a feature cycle. The process-singleton `SettingsStore` therefore lives directly in `crates/http-server/src/routers/settings.rs`. Wire shape, redaction policy, and provider/model lists still match Python verbatim. If a non-HTTP consumer ever needs these settings, lift the singleton into a sibling `cognee-settings` crate without churning HTTP code.
 
 ## 7. References
 

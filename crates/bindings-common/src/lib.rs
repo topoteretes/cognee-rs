@@ -13,7 +13,7 @@
 //! ## What does NOT live here
 //!
 //! This crate is the *bindings facade*, not a new user-facing Rust API (that
-//! remains `cognee_lib::api`). Binding-specific types that require
+//! remains `cognee::api`). Binding-specific types that require
 //! `neon::prelude::*` (`throw_sdk_error`, `throw_config_error`, `stringify_js`,
 //! `parse_js`, `js_to_serde`, `js_to_value`, `read_opts`) stay in
 //! `cognee-ts-neon`. FFI helpers (`CgSdk`, `cg_sdk_*`) stay in `cognee-capi`.

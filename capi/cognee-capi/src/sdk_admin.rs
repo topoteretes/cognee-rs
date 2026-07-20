@@ -8,7 +8,7 @@
 //!
 //! All follow the Phase-4 canonical pattern:
 //!   `Arc::clone(&(*sdk).state)` → `spawn_sdk_op` → `state.services().await?`
-//!   → call cognee-lib API → serialize result → callback.
+//!   → call cognee API → serialize result → callback.
 //!
 //! ## Serde notes
 //! - `SessionQAEntry`, `User`, `Notebook` derive `Serialize` → direct serde.

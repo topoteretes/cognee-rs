@@ -35,7 +35,7 @@ ort-tensorrt = ["ort/tensorrt"]
 
 [dependencies]
 async-trait = { workspace = true }
-cognee-utils = { path = "../utils", version = "0.1.3" }
+cognee-utils = { path = "../utils", version = "0.2.0" }
 futures     = { workspace = true }
 tokio       = { workspace = true }
 serde       = { workspace = true }
@@ -56,7 +56,7 @@ mockito = "1"
 # The integration test exercises the ONNX engine (config::OnnxEmbeddingConfig,
 # onnx::OnnxEmbeddingEngine), which only exist under the `onnx` feature. Gate it
 # so `cargo check -p cognee-embedding --all-targets` (no features) does not fail
-# to compile it. At the workspace level `onnx` is unified on (cognee-lib enables
+# to compile it. At the workspace level `onnx` is unified on (cognee enables
 # it by default), so the test still builds and runs there.
 [[test]]
 name = "integration"

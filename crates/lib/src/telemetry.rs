@@ -3,7 +3,7 @@
 //! Re-exports the public API of [`cognee_observability`] (OTEL setup,
 //! gap 01) and [`cognee_telemetry`] (`send_telemetry` product-analytics
 //! client, gap 02) so consumers reach both through the same
-//! `cognee_lib::telemetry` namespace.
+//! `cognee::telemetry` namespace.
 //!
 //! When the `telemetry` cargo feature is on, observability re-exports
 //! pull in `cognee-observability` and the `send_telemetry` re-exports
@@ -67,7 +67,7 @@ impl SettingsView for Settings {
 // feature states (the leaf crate switches between real and noop bodies
 // internally, but the symbols are stable). Re-export them unconditionally
 // so callers compile under `--no-default-features` and can name
-// `cognee_lib::telemetry::TelemetryError`.
+// `cognee::telemetry::TelemetryError`.
 
 pub use cognee_telemetry::{
     PropertyValue, TelemetryError, UserIdRef, send_telemetry, try_send_telemetry,

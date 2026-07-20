@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// and the binding-specific policy allowed emission.
 ///
 /// Gates the `COGNEE_HOST_SDK` sentinel in [`is_disabled`]: pure-Rust
-/// embedders (CLI, http-server) using `cognee_lib::api::*` do not set
+/// embedders (CLI, http-server) using `cognee::api::*` do not set
 /// this flag and are therefore not suppressed by `COGNEE_HOST_SDK`.
 ///
 /// Mutated exclusively via [`arm_binding_emission`]; read via

@@ -8,8 +8,8 @@ Companion docs: [../architecture.md](../architecture.md), [../auth.md](../auth.m
 - Mount prefix: `/api/v1/delete`
 - Router file: `crates/http-server/src/routers/delete.rs`
 - Python source: [`cognee/api/v1/delete/routers/get_delete_router.py`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/delete/routers/get_delete_router.py)
-- Underlying SDK: chains directly into `cognee_lib::api::datasets::delete_data` — no new business logic.
-- Rust delegation target: `cognee_lib::api::datasets::delete_data(dataset_id, data_id, user, mode, delete_dataset_if_empty) -> Result<DeleteResult, _>`.
+- Underlying SDK: chains directly into `cognee::api::datasets::delete_data` — no new business logic.
+- Rust delegation target: `cognee::api::datasets::delete_data(dataset_id, data_id, user, mode, delete_dataset_if_empty) -> Result<DeleteResult, _>`.
 
 ## 2. Endpoints
 
@@ -45,7 +45,7 @@ Companion docs: [../architecture.md](../architecture.md), [../auth.md](../auth.m
   - **Graph DB**: removes the data's subgraph (`delete_data_nodes_and_edges` for normal data, `legacy_delete` for orphan data with no graph nodes — see [`datasets.py:163-168`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/datasets/datasets.py#L163-L168)).
   - **Vector DB**: removes vector points associated with the data.
   - **File storage**: removes the raw file at `data.raw_data_location`.
-- **Delegation target**: `cognee_lib::api::datasets::delete_data(dataset_id, data_id, user, mode, delete_dataset_if_empty)`. The handler is essentially a one-liner.
+- **Delegation target**: `cognee::api::datasets::delete_data(dataset_id, data_id, user, mode, delete_dataset_if_empty)`. The handler is essentially a one-liner.
 - **Validation rules**: `data_id` and `dataset_id` are valid UUIDs; `mode` is `"soft"` or `"hard"` (Python doesn't enforce this — any string passes through, and the SDK's `delete_data` doesn't read the param past line 128. Rust SHOULD validate and reject unknown values with 422 to avoid silent typos).
 - **Permission gate**: `delete` on `dataset_id` (cite [../tenants.md §5](../tenants.md#5-permission-resolution)). Same as canonical route.
 - **Rate / size limits**: none.

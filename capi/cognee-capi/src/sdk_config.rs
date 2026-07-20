@@ -52,7 +52,7 @@ use std::collections::HashMap;
 use std::ffi::{CStr, CString, c_char};
 use std::sync::Arc;
 
-use cognee_lib::config::ConfigError;
+use cognee::config::ConfigError;
 
 use crate::error::{CgErrorCode, set_last_error};
 use crate::sdk::CgSdk;

@@ -1,6 +1,6 @@
 //! Shared construction of OpenAI-compatible LLM adapters.
 //!
-//! The embedded component manager (`cognee-lib`) and the standalone HTTP server
+//! The embedded component manager (`cognee`) and the standalone HTTP server
 //! (`cognee-http-server`) both wire the LLM the same way: an [`OpenAIAdapter`]
 //! built from the configured model / key / endpoint, with structured-output and
 //! network retries applied. Centralising that here keeps the two wiring paths in

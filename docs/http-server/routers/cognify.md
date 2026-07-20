@@ -73,7 +73,7 @@ Companion docs: [../architecture.md](../architecture.md), [../auth.md](../auth.m
   | `400` | `{"error": "No datasets or dataset_ids provided"}` | Both `datasets` and `dataset_ids` are missing/empty. | [Python lines 132–138](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/cognify/routers/get_cognify_router.py#L132-L138) |
   | `400` | `{"detail": [{...}]}` | Body fails JSON validation (handled by the custom `Json` extractor — see [architecture.md §10](../architecture.md#10-request-validation)). | serde validation |
   | `401` | `{"detail": "Unauthorized"}` | No JWT/cookie/API key. | `AuthenticatedUser` extractor |
-  | `403` | `{"detail": "..."}` | User lacks `write` permission on a target dataset (raised inside `cognee_cognify`). Maps to `ApiError::Forbidden`. | `cognee_lib::permissions` |
+  | `403` | `{"detail": "..."}` | User lacks `write` permission on a target dataset (raised inside `cognee_cognify`). Maps to `ApiError::Forbidden`. | `cognee::permissions` |
   | `409` | `{"error": "<msg>"}` | `OntologyManager::get_contents` returns an unknown-key error (Python: `OntologyService.get_ontology_contents` raises `ValueError`). | [Python lines 271–278](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/cognify/routers/get_cognify_router.py#L271-L278) |
   | `500` | `{"error": "Pipeline run errored", "detail": "<msg>"}` | Any of the per-dataset runs returned a `PipelineRunErrored`. The `detail` is the first errored run's `error` string (Python uses `next(...isinstance(v, PipelineRunErrored))` at [lines 255–269](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/cognify/routers/get_cognify_router.py#L255-L269)). |
   | `500` | `{"error": "Internal server error", "detail": "<msg>"}` | Any other exception during pipeline execution. | [Python lines 280–288](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/cognify/routers/get_cognify_router.py#L280-L288) |
@@ -90,7 +90,7 @@ Companion docs: [../architecture.md](../architecture.md), [../auth.md](../auth.m
   - Persists `graph_model` and `custom_prompt` into `DatasetConfiguration` for the **first dataset** in `datasets`/`dataset_ids` ([Python lines 215–252](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/cognify/routers/get_cognify_router.py#L215-L252)). On lookup-then-write the row is created if absent. Failures are logged at `WARN` and **do not** fail the request.
   - On startup the router reads `DatasetConfiguration` for the first dataset to fill missing `graph_model`/`custom_prompt` from a previous cognify ([Python lines 171–198](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/cognify/routers/get_cognify_router.py#L171-L198)). Failures here are logged at `DEBUG` and ignored.
 
-- **Delegation target**: `cognee_lib::cognify::cognify(datasets, user, CognifyConfig { graph_model, ontology_resolver, custom_prompt, chunks_per_batch, run_in_background, .. })`. The handler does not duplicate dataset resolution, classification, chunking, or LLM logic — it constructs the `CognifyConfig` and delegates. The handler **does** own the `DatasetConfiguration` round-trip, the ontology resolver assembly, and the `PipelineRunErrored` aggregation step (these are router-side concerns that Python's HTTP layer also owns).
+- **Delegation target**: `cognee::cognify::cognify(datasets, user, CognifyConfig { graph_model, ontology_resolver, custom_prompt, chunks_per_batch, run_in_background, .. })`. The handler does not duplicate dataset resolution, classification, chunking, or LLM logic — it constructs the `CognifyConfig` and delegates. The handler **does** own the `DatasetConfiguration` round-trip, the ontology resolver assembly, and the `PipelineRunErrored` aggregation step (these are router-side concerns that Python's HTTP layer also owns).
 
 - **Validation rules**:
   - At least one of `datasets` or `dataset_ids` must be non-empty (Python rejects empty lists with the same 400 message).
@@ -98,7 +98,7 @@ Companion docs: [../architecture.md](../architecture.md), [../auth.md](../auth.m
   - `chunks_per_batch`, when set, must be `> 0` — Rust adds this guard (Python does not; we choose `400` here for safety, document in open questions).
   - `ontology_key` items must be non-empty strings; empty list (Python `[]`) is treated as "no ontology".
 
-- **Permission gate**: per dataset, the user must have `write` permission via `state.lib.permissions().user_can(user.id, dataset_id, "write")` (see [../tenants.md §9](../tenants.md#9-repository-surface)). Cognify mutates the graph; `read` is insufficient. The check is enforced inside `cognee_lib::cognify::cognify` via the internal `resolve_authorized_user_datasets` helper (which calls the same `PermissionsRepository::user_can` underneath). The handler does not pre-check; permission errors surface as `ApiError::Forbidden`.
+- **Permission gate**: per dataset, the user must have `write` permission via `state.lib.permissions().user_can(user.id, dataset_id, "write")` (see [../tenants.md §9](../tenants.md#9-repository-surface)). Cognify mutates the graph; `read` is insufficient. The check is enforced inside `cognee::cognify::cognify` via the internal `resolve_authorized_user_datasets` helper (which calls the same `PermissionsRepository::user_can` underneath). The handler does not pre-check; permission errors surface as `ApiError::Forbidden`.
 
 - **Rate / size limits**: standard JSON body limit (default 1 MiB for non-multipart endpoints); cognify payloads are tiny.
 
@@ -155,7 +155,7 @@ This endpoint is the WebSocket surface for the cognify pipeline. The full protoc
 - **Delegation target**:
   - Auth: `crates/http-server/src/auth/cookie.rs::authenticate_from_cookie`.
   - Subscription: `cognee_core::PipelineRunRegistry::subscribe(run_id)` (held in `AppState::pipelines` as `Arc<dyn cognee_core::PipelineRunRegistry>`).
-  - Payload: `cognee_lib::graph::formatted_graph_data(dataset_id, user)`.
+  - Payload: `cognee::graph::formatted_graph_data(dataset_id, user)`.
 
 - **Validation rules**:
   - `pipeline_run_id` parses as `Uuid` (path-level coercion via axum's `Path<Uuid>`). Bad UUID → 400 from the framework before upgrade.
@@ -230,7 +230,7 @@ If the run **erroneously fails** mid-stream (e.g. LLM provider 500), the task em
 
 ### 3.1 Per-dataset fan-out for the POST handler
 
-Cognify accepts a list of datasets, but the underlying `cognee_lib::cognify::cognify` runs them sequentially (Python parity). For each dataset the dispatcher:
+Cognify accepts a list of datasets, but the underlying `cognee::cognify::cognify` runs them sequentially (Python parity). For each dataset the dispatcher:
 
 1. Computes `pipeline_id` and `pipeline_run_id` per [pipelines.md §4](../pipelines.md#4-identifiers).
 2. Builds a `RunSpec { run_id: Some(prid), pipeline_name: "cognify_pipeline", user_id, dataset_id }`.
@@ -339,8 +339,8 @@ Notes:
 
 1. Add DTOs in `crates/http-server/src/dto/cognify.rs` and `crates/http-server/src/dto/pipeline_run.rs` (shared `PipelineRunInfoDTO`, `CognifyWsFrameDTO`).
 2. Add the POST handler in `crates/http-server/src/routers/cognify.rs::post_cognify` — should be ≤ 80 lines, delegating to:
-   - `cognee_lib::ontology::OntologyManager::get_contents` (existing crate: [crates/ontology/src/manager.rs:263](../../../crates/ontology/src/manager.rs)) to resolve `ontology_key`.
-   - `cognee_lib::cognify::cognify` for the pipeline run.
+   - `cognee::ontology::OntologyManager::get_contents` (existing crate: [crates/ontology/src/manager.rs:263](../../../crates/ontology/src/manager.rs)) to resolve `ontology_key`.
+   - `cognee::cognify::cognify` for the pipeline run.
    - `crates/http-server/src/state::AppState::pipelines.dispatch_pipeline(...)` for the registry plumbing.
    - A new `DatasetConfigurationRepository::{find_by_dataset_id, upsert}` (to-be-added in P3 — the existing `crates/database/src/ops/` does not yet expose this; SeaORM entity for `dataset_configuration` will be added with this router) for the schema/prompt persistence (best-effort, never fail the request).
 3. Add the WebSocket handler `ws_subscribe` in `crates/http-server/src/routers/cognify.rs`:
@@ -366,7 +366,7 @@ Notes:
    - Empty `datasets` AND `dataset_ids` → 400.
    - `datasets=["x"]`, `dataset_ids=["<uuid>"]` → uses the UUID list (Python parity).
    - Unknown ontology key → 409.
-   - Single-dataset blocking run, mocked `cognee_lib`, response shape.
+   - Single-dataset blocking run, mocked `cognee`, response shape.
    - First-errored aggregation: two datasets, one ok one errored → 500 with the errored dataset's `error` as `detail`.
 7. Add integration tests in `crates/http-server/tests/test_cognify.rs`:
    - End-to-end `POST` on a tmpfs workspace with a real cognify run (gated behind `OPENAI_URL`).

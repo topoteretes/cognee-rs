@@ -1088,7 +1088,7 @@ pub enum ConfigError {
 ///
 /// # Example
 /// ```
-/// use cognee_lib::config::{ConfigManager, Settings};
+/// use cognee::config::{ConfigManager, Settings};
 ///
 /// let cfg = ConfigManager::new(Settings::default());
 /// assert_eq!(cfg.version(), 0);

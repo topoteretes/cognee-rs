@@ -55,7 +55,7 @@ Companion docs: [../architecture.md](../architecture.md), [../auth.md](../auth.m
   | `400` | `{"error": "Either datasetId or datasetName must be provided."}` | Both `dataset_id` and `dataset_name` are missing/empty. | [Python lines 92–98](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/memify/routers/get_memify_router.py#L92-L98) |
   | `400` | `{"detail": [{...}]}` | Body fails JSON validation. | Custom `Json` extractor |
   | `401` | `{"detail": "Unauthorized"}` | No JWT/cookie/API key. | `AuthenticatedUser` |
-  | `403` | `{"detail": "..."}` | User lacks `write` permission on the target dataset. | `cognee_lib::permissions` |
+  | `403` | `{"detail": "..."}` | User lacks `write` permission on the target dataset. | `cognee::permissions` |
   | `422` | `{"detail": [...]}` | Pydantic-level type errors (e.g. `dataset_id` neither UUID nor empty string). | |
   | `500` | `{"error": "Pipeline run errored", "detail": "<msg>"}` | `memify_run` is a `PipelineRunErrored`. | [Python lines 113–122](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/memify/routers/get_memify_router.py#L113-L122) |
   | `500` | `{"error": "Internal server error", "detail": "<msg>"}` | Any other exception. | [Python lines 124–132](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/memify/routers/get_memify_router.py#L124-L132) |
@@ -75,7 +75,7 @@ Companion docs: [../architecture.md](../architecture.md), [../auth.md](../auth.m
   - If `dataset_id` is the empty string `""` (Python's `Literal[""]`), the `DatasetIdRef` deserializer treats it as `None`, so the handler falls back to `dataset_name`. The Rust `DatasetIdRef` deserializer (see §3) accepts `null`, `""`/whitespace, or a UUID.
   - There are no task-name fields to validate: the DTO carries no `extraction_tasks` / `enrichment_tasks`, so the "unknown task name" failure mode does not exist in Rust today.
 
-- **Permission gate**: `write` permission on the target dataset via `state.lib.permissions().user_can(user.id, dataset_id, "write")` (see [../tenants.md §9](../tenants.md#9-repository-surface)). Memify mutates the graph and the vector index. The check is enforced inside `cognee_lib::cognify::memify::memify` via the internal `resolve_authorized_user_datasets` helper (which calls the same `PermissionsRepository::user_can` underneath).
+- **Permission gate**: `write` permission on the target dataset via `state.lib.permissions().user_can(user.id, dataset_id, "write")` (see [../tenants.md §9](../tenants.md#9-repository-surface)). Memify mutates the graph and the vector index. The check is enforced inside `cognee::cognify::memify::memify` via the internal `resolve_authorized_user_datasets` helper (which calls the same `PermissionsRepository::user_can` underneath).
 
 - **Rate / size limits**: standard JSON body limit (the global middleware cap applies; the payload is small — dataset selection plus a boolean).
 

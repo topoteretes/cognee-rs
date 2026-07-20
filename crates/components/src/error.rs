@@ -1,6 +1,6 @@
 //! Error type shared by all component factories.
 //!
-//! This type is re-exported by `cognee-lib` as `cognee_lib::ComponentError`, so
+//! This type is re-exported by `cognee` as `cognee::ComponentError`, so
 //! it stays the identical type across the OSS crates and the closed cloud repo.
 
 use thiserror::Error;

@@ -121,7 +121,7 @@ pub struct Pipeline {
     /// Optional pre-built telemetry settings snapshot (the `| config`
     /// merge from Python's pipeline lifecycle events). When `None`,
     /// `Pipeline Run *` analytics events emit with no settings merged
-    /// in. Populated by `cognee-lib` from `Config::telemetry_snapshot()`.
+    /// in. Populated by `cognee` from `Config::telemetry_snapshot()`.
     ///
     /// Carried as a plain field rather than a feature-gated one so the
     /// `Pipeline` struct shape is stable across feature flips. The

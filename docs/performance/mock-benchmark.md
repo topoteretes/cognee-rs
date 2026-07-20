@@ -43,7 +43,7 @@ The cassette and corpus are committed under
 | `MOCK_EMBEDDING` | `deterministic` | Use the deterministic SHA-256 mock embedding engine (offline, free). |
 
 `MOCK_LLM` / `MOCK_LLM_CASSETTE` / `COGNEE_RECORD_LLM` are read in
-`cognee-lib`'s config (`crates/lib/src/config.rs`); `MOCK_EMBEDDING` is read in
+`cognee`'s config (`crates/lib/src/config.rs`); `MOCK_EMBEDDING` is read in
 the embedding config (`crates/embedding/src/config.rs`).
 
 ## Feature flags
@@ -52,7 +52,7 @@ Two named features gate the moving parts; both are **default-on** and pull in no
 heavy dependencies, but are kept named so they can be compiled out.
 
 - **`mock`** — the record/replay cassette mock in `cognee-llm`. Surfaced as
-  **`mock-llm`** in `cognee-lib` and `cognee-cli` (`mock-llm = ["cognee-lib/mock-llm"]`
+  **`mock-llm`** in `cognee` and `cognee-cli` (`mock-llm = ["cognee/mock-llm"]`
   → `["cognee-llm/mock"]`).
 - **`bench`** — the `cognee-cli bench` subcommand.
 

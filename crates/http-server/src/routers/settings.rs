@@ -6,9 +6,9 @@
 //!
 //! **Persistence**: in-process singleton. Python keeps these in process
 //! memory (not a relational table) and resets on restart (`§3`). We replicate
-//! exactly. The HTTP server cannot depend on `cognee-lib` (would create a
+//! exactly. The HTTP server cannot depend on `cognee` (would create a
 //! dependency cycle), so the settings storage lives here rather than under
-//! `cognee_lib::settings`.
+//! `cognee::settings`.
 //!
 //! The provider/model lists below are static constants copied verbatim from
 //! Python's `cognee/modules/settings/get_settings.py L60-L179` for the

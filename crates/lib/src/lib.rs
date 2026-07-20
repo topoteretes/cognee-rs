@@ -13,8 +13,8 @@
 //! `telemetry` cargo feature and set `OTEL_EXPORTER_OTLP_ENDPOINT`:
 //!
 //! ```ignore
-//! use cognee_lib::telemetry::{init_telemetry, TelemetryGuard};
-//! use cognee_lib::config::{ConfigManager, Settings};
+//! use cognee::telemetry::{init_telemetry, TelemetryGuard};
+//! use cognee::config::{ConfigManager, Settings};
 //! use tracing_subscriber::Registry;
 //!
 //! let settings: Settings = ConfigManager::from_env().settings().clone();
@@ -167,7 +167,7 @@ pub use config::{ConfigError, ConfigManager, Settings};
 pub use context::PipelineContext;
 pub use error::ComponentError;
 // Adapter-registry surface — so external (closed) entry points can build and
-// register factories via `cognee_lib::` paths without a direct dependency edge
+// register factories via `cognee::` paths without a direct dependency edge
 // beyond where they define the impls.
 pub use cognee_components::{
     BackendBuildContext, ComponentRegistry, DefaultEmbeddingFactory, EmbeddingFactory,

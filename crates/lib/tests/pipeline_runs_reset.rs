@@ -12,10 +12,8 @@
 
 use std::sync::Arc;
 
-use cognee_lib::api::pipeline_runs::{
-    reset_dataset_pipeline_run_status, reset_pipeline_run_status,
-};
-use cognee_lib::database::{
+use cognee::api::pipeline_runs::{reset_dataset_pipeline_run_status, reset_pipeline_run_status};
+use cognee::database::{
     PipelineRunRepository, PipelineRunStatus, SeaOrmPipelineRunRepository, connect, initialize,
 };
 use serde_json::json;
@@ -37,12 +35,9 @@ async fn reset_pipeline_run_status_writes_initiated_row() {
     let pipeline_name = "cognify_pipeline";
 
     // Seed a COMPLETED row so the latest status would otherwise short-circuit.
-    let pid = cognee_lib::core::pipeline_run_registry::ids::pipeline_id(
-        user_id,
-        dataset_id,
-        pipeline_name,
-    );
-    let prid = cognee_lib::core::pipeline_run_registry::ids::pipeline_run_id(pid, dataset_id);
+    let pid =
+        cognee::core::pipeline_run_registry::ids::pipeline_id(user_id, dataset_id, pipeline_name);
+    let prid = cognee::core::pipeline_run_registry::ids::pipeline_run_id(pid, dataset_id);
     repo.log_pipeline_run(
         prid,
         pid,
@@ -75,9 +70,8 @@ async fn reset_dataset_pipeline_run_status_skips_already_initiated() {
     // Pipeline A: already INITIATED (should be skipped — no new row).
     // Pipeline B: COMPLETED (should be reset).
     for name in ["already_pending", "needs_reset"] {
-        let pid =
-            cognee_lib::core::pipeline_run_registry::ids::pipeline_id(user_id, dataset_id, name);
-        let prid = cognee_lib::core::pipeline_run_registry::ids::pipeline_run_id(pid, dataset_id);
+        let pid = cognee::core::pipeline_run_registry::ids::pipeline_id(user_id, dataset_id, name);
+        let prid = cognee::core::pipeline_run_registry::ids::pipeline_run_id(pid, dataset_id);
         let status = if name == "already_pending" {
             PipelineRunStatus::Initiated
         } else {
@@ -144,12 +138,9 @@ async fn reset_dataset_pipeline_run_status_is_idempotent() {
     let pipeline_name = "cognify_pipeline";
 
     // Seed one COMPLETED row.
-    let pid = cognee_lib::core::pipeline_run_registry::ids::pipeline_id(
-        user_id,
-        dataset_id,
-        pipeline_name,
-    );
-    let prid = cognee_lib::core::pipeline_run_registry::ids::pipeline_run_id(pid, dataset_id);
+    let pid =
+        cognee::core::pipeline_run_registry::ids::pipeline_id(user_id, dataset_id, pipeline_name);
+    let prid = cognee::core::pipeline_run_registry::ids::pipeline_run_id(pid, dataset_id);
     repo.log_pipeline_run(
         prid,
         pid,

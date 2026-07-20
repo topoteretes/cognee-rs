@@ -1,6 +1,6 @@
 [package]
 name = "cognee-java-jni"
-version = "0.1.3"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.91"
 license = "MIT OR Apache-2.0"
@@ -28,19 +28,19 @@ default = [
     "html-loader",
     "telemetry",
 ]
-telemetry     = ["cognee-lib/telemetry"]
-visualization = ["cognee-lib/visualization", "cognee-bindings-common/visualization"]
-ladybug       = ["cognee-lib/ladybug",       "cognee-bindings-common/ladybug"]
-onnx          = ["cognee-lib/onnx",          "cognee-bindings-common/onnx"]
-hf-tokenizer  = ["cognee-lib/hf-tokenizer",  "cognee-bindings-common/hf-tokenizer"]
-tiktoken      = ["cognee-lib/tiktoken",      "cognee-bindings-common/tiktoken"]
-sqlite        = ["cognee-lib/sqlite",        "cognee-bindings-common/sqlite"]
-testing       = ["cognee-lib/testing",       "cognee-bindings-common/testing"]
-html-loader   = ["cognee-lib/html-loader"]
+telemetry     = ["cognee/telemetry"]
+visualization = ["cognee/visualization", "cognee-bindings-common/visualization"]
+ladybug       = ["cognee/ladybug",       "cognee-bindings-common/ladybug"]
+onnx          = ["cognee/onnx",          "cognee-bindings-common/onnx"]
+hf-tokenizer  = ["cognee/hf-tokenizer",  "cognee-bindings-common/hf-tokenizer"]
+tiktoken      = ["cognee/tiktoken",      "cognee-bindings-common/tiktoken"]
+sqlite        = ["cognee/sqlite",        "cognee-bindings-common/sqlite"]
+testing       = ["cognee/testing",       "cognee-bindings-common/testing"]
+html-loader   = ["cognee/html-loader"]
 
 [dependencies]
 cognee-bindings-common = { path = "../../crates/bindings-common", default-features = false }
-cognee-lib = { path = "../../crates/lib", default-features = false }
+cognee = { path = "../../crates/lib", default-features = false }
 cognee-logging = { path = "../../crates/logging" }
 cognee-observability = { path = "../../crates/observability", features = ["telemetry"] }
 cognee-telemetry     = { path = "../../crates/telemetry",     features = ["telemetry"] }

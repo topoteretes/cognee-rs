@@ -3,7 +3,7 @@
 Canonical reference for configuring cognee-rust. The complete, field-level source
 of truth is the [`Settings`](../crates/lib/src/config.rs) struct and the
 [`ConfigManager`](../crates/lib/src/config.rs) runtime API — build the rustdoc with
-`cargo doc -p cognee-lib --no-deps --open` to browse every field and setter with
+`cargo doc -p cognee --no-deps --open` to browse every field and setter with
 its type. This page groups those fields by subsystem and gives the env-var name
 and default for each.
 

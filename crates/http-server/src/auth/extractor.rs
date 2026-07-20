@@ -71,7 +71,7 @@ impl FromRequestParts<AppState> for AuthenticatedUser {
 /// **UUID5 content-addressing invariant** (Python parity): the returned
 /// `id` MUST equal `Uuid::new_v5(&Uuid::NAMESPACE_OID, email.as_bytes())`
 /// for the configured `default_user_email`. This matches
-/// [`cognee_lib::api::user::get_or_create_default_user`] and the Python
+/// [`cognee::api::user::get_or_create_default_user`] and the Python
 /// reference SDK (`uuid5(NAMESPACE_OID, email)`), so the HTTP server
 /// produces the same owner id as the bindings/CLI for the same email.
 /// Without this, data added via bindings (uuid5-derived owner) would
@@ -138,7 +138,7 @@ mod tests {
 
     /// `default_user_from_state` MUST derive the owner id as
     /// `uuid5(NAMESPACE_OID, default_user_email)` so it matches
-    /// `cognee_lib::api::user::get_or_create_default_user` and the
+    /// `cognee::api::user::get_or_create_default_user` and the
     /// Python reference SDK. Locks down the Python parity invariant
     /// referenced in Plan §7.
     #[tokio::test]

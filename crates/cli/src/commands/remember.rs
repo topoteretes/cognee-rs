@@ -1,14 +1,14 @@
 use std::sync::Arc;
 
-use cognee_lib::add::AddPipeline;
-use cognee_lib::api::remember;
-use cognee_lib::cognify::CognifyConfig;
-use cognee_lib::core::RayonThreadPool;
-use cognee_lib::models::DataInput;
-use cognee_lib::ontology::{NoOpOntologyResolver, OntologyResolver};
-use cognee_lib::search::{SeaOrmSessionStore, SessionManager};
-use cognee_lib::session::SessionStore;
-use cognee_lib::{ComponentManager, PipelineContext};
+use cognee::add::AddPipeline;
+use cognee::api::remember;
+use cognee::cognify::CognifyConfig;
+use cognee::core::RayonThreadPool;
+use cognee::models::DataInput;
+use cognee::ontology::{NoOpOntologyResolver, OntologyResolver};
+use cognee::search::{SeaOrmSessionStore, SessionManager};
+use cognee::session::SessionStore;
+use cognee::{ComponentManager, PipelineContext};
 use tracing::info;
 use uuid::Uuid;
 
@@ -80,7 +80,7 @@ pub fn run(args: RememberArgs, cm: Arc<ComponentManager>) -> Result<(), CliError
         let add_pipeline = Arc::new(
             AddPipeline::new(
                 Arc::clone(&storage),
-                Arc::clone(&database) as Arc<dyn cognee_lib::database::IngestDb>,
+                Arc::clone(&database) as Arc<dyn cognee::database::IngestDb>,
             )
             .with_thread_pool(thread_pool)
             .with_graph_db(Arc::clone(&graph_db))

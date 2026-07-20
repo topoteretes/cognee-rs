@@ -95,37 +95,37 @@ tower-http = { version = "0.6", features = ["cors", "trace", "limit"] }
 hyper = { version = "1", features = ["server", "http1", "http2"] }
 
 # cognee crates
-# NOTE: cognee-lib is intentionally NOT a direct dep here — adding it would
-# create a cycle when cognee-lib's `server` feature pulls in cognee-http-server.
-# Concrete cognee-lib types are wired via AppState in P1+.
-cognee-models = { path = "../models", version = "0.1.3" }
-cognee-observability = { path = "../observability", version = "0.1.3", optional = true }
+# NOTE: cognee is intentionally NOT a direct dep here — adding it would
+# create a cycle when cognee's `server` feature pulls in cognee-http-server.
+# Concrete cognee types are wired via AppState in P1+.
+cognee-models = { path = "../models", version = "0.2.0" }
+cognee-observability = { path = "../observability", version = "0.2.0", optional = true }
 # Product-analytics client. Gated by the `telemetry` feature so a
 # `--no-default-features` build drops the dep entirely; the `emit` helper
 # in `telemetry.rs` compiles to a noop when absent.
-cognee-telemetry = { path = "../telemetry", version = "0.1.3", optional = true, features = ["telemetry"] }
-cognee-core = { path = "../core", version = "0.1.3", features = ["pipeline-run-registry"] }
+cognee-telemetry = { path = "../telemetry", version = "0.2.0", optional = true, features = ["telemetry"] }
+cognee-core = { path = "../core", version = "0.2.0", features = ["pipeline-run-registry"] }
 # Shared backend construction + adapter registry. Standalone wiring builds a
 # `ComponentRegistry::with_builtins()`; the enabled features here determine
 # which providers `with_builtins()` registers (onnx/ladybug/pgvector; mock-llm
 # is intentionally NOT enabled so a production server never honors MOCK_LLM).
-cognee-components = { path = "../components", version = "0.1.3", default-features = false, features = ["onnx", "ladybug", "pgvector"] }
-cognee-database = { path = "../database", version = "0.1.3", features = ["sqlite"] }
+cognee-components = { path = "../components", version = "0.2.0", default-features = false, features = ["onnx", "ladybug", "pgvector"] }
+cognee-database = { path = "../database", version = "0.2.0", features = ["sqlite"] }
 sea-orm = { version = "1", default-features = false, features = ["runtime-tokio-rustls", "with-chrono", "with-uuid", "with-json"] }
-cognee-storage = { path = "../storage", version = "0.1.3" }
-cognee-ingestion = { path = "../ingestion", version = "0.1.3" }
-cognee-cognify = { path = "../cognify", version = "0.1.3" }
-cognee-embedding = { path = "../embedding", version = "0.1.3", features = ["onnx"] }
-cognee-delete = { path = "../delete", version = "0.1.3" }
-cognee-ontology = { path = "../ontology", version = "0.1.3" }
-cognee-search = { path = "../search", version = "0.1.3" }
-cognee-session = { path = "../session", version = "0.1.3" }
-cognee-llm = { path = "../llm", version = "0.1.3" }
-cognee-graph = { path = "../graph", version = "0.1.3", features = ["ladybug"] }
-cognee-vector = { path = "../vector", version = "0.1.3", features = ["pgvector"] }
-cognee-logging = { path = "../logging", version = "0.1.3" }
-cognee-visualization = { path = "../visualization", version = "0.1.3" }
-cognee-utils = { path = "../utils", version = "0.1.3" }
+cognee-storage = { path = "../storage", version = "0.2.0" }
+cognee-ingestion = { path = "../ingestion", version = "0.2.0" }
+cognee-cognify = { path = "../cognify", version = "0.2.0" }
+cognee-embedding = { path = "../embedding", version = "0.2.0", features = ["onnx"] }
+cognee-delete = { path = "../delete", version = "0.2.0" }
+cognee-ontology = { path = "../ontology", version = "0.2.0" }
+cognee-search = { path = "../search", version = "0.2.0" }
+cognee-session = { path = "../session", version = "0.2.0" }
+cognee-llm = { path = "../llm", version = "0.2.0" }
+cognee-graph = { path = "../graph", version = "0.2.0", features = ["ladybug"] }
+cognee-vector = { path = "../vector", version = "0.2.0", features = ["pgvector"] }
+cognee-logging = { path = "../logging", version = "0.2.0" }
+cognee-visualization = { path = "../visualization", version = "0.2.0" }
+cognee-utils = { path = "../utils", version = "0.2.0" }
 
 # Serialization
 serde = { workspace = true, features = ["derive"] }

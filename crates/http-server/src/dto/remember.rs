@@ -49,15 +49,15 @@ pub struct UploadedFilePart {
 /// see `cognee/api/v1/remember/remember.py:323-324, 480, 521, 720, 751`.
 ///
 /// **Decision 15** (two-layer status convention): the library
-/// `cognee_lib::api::remember::RememberStatus` enum (LIB-06, commit b39cd05)
+/// `cognee::api::remember::RememberStatus` enum (LIB-06, commit b39cd05)
 /// emits CamelCase for internal Rust consistency with
 /// `cognee_core::PipelineRunStatus`. The HTTP layer translates back to
 /// Python's lowercase here for strict wire parity. **No wire divergence.**
 ///
-/// The cross-crate `From<cognee_lib::api::remember::RememberStatus>`
+/// The cross-crate `From<cognee::api::remember::RememberStatus>`
 /// translation is **deferred to the P5 wiring task** because
-/// `cognee-http-server` cannot depend on `cognee-lib` (cycle constraint —
-/// `cognee-lib`'s `server` feature pulls in `cognee-http-server`).
+/// `cognee-http-server` cannot depend on `cognee` (cycle constraint —
+/// `cognee`'s `server` feature pulls in `cognee-http-server`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub enum WireRememberStatus {
     #[serde(rename = "running")]
@@ -74,9 +74,9 @@ pub enum WireRememberStatus {
 
 /// Per-item result info attached to `RememberResultDTO.items`.
 ///
-/// Mirrors the fields of `cognee_lib::api::remember::RememberItemInfo`
+/// Mirrors the fields of `cognee::api::remember::RememberItemInfo`
 /// (`crates/lib/src/api/remember.rs:72-82`) but is defined locally because
-/// `cognee-http-server` cannot depend on `cognee-lib` (cycle constraint).
+/// `cognee-http-server` cannot depend on `cognee` (cycle constraint).
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub struct RememberItemDTO {

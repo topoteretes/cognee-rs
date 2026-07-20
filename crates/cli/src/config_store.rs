@@ -1,5 +1,5 @@
 use crate::error::CliError;
-pub use cognee_lib::Settings;
+pub use cognee::Settings;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 const CURRENT_VERSION: u32 = 1;
 
-pub use cognee_lib::config::DEFAULT_SYSTEM_PROMPT_PATH;
+pub use cognee::config::DEFAULT_SYSTEM_PROMPT_PATH;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConfigDocument {
