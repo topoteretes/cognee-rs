@@ -1,17 +1,17 @@
 use std::io;
 use std::sync::Arc;
 
-use cognee_lib::PipelineContext;
-use cognee_lib::api::DatasetRef;
-use cognee_lib::database::{IngestDb, PipelineRunRepository, SeaOrmPipelineRunRepository};
-use cognee_lib::delete::{DeleteMode, DeleteRequest, DeleteScope, DeleteService};
+use cognee::PipelineContext;
+use cognee::api::DatasetRef;
+use cognee::database::{IngestDb, PipelineRunRepository, SeaOrmPipelineRunRepository};
+use cognee::delete::{DeleteMode, DeleteRequest, DeleteScope, DeleteService};
 use tracing::{info, warn};
 use uuid::Uuid;
 
 use crate::cli::{DeleteArgs, DeleteModeArg};
 use crate::error::CliError;
 
-pub fn run(args: DeleteArgs, cm: Arc<cognee_lib::ComponentManager>) -> Result<(), CliError> {
+pub fn run(args: DeleteArgs, cm: Arc<cognee::ComponentManager>) -> Result<(), CliError> {
     let dry_run = args.dry_run;
     let force = args.force;
     let enforce_acl = args.enforce_acl;
@@ -66,7 +66,7 @@ pub fn run(args: DeleteArgs, cm: Arc<cognee_lib::ComponentManager>) -> Result<()
 
         let service = DeleteService::new(
             storage,
-            database.clone() as Arc<dyn cognee_lib::database::DeleteDb>,
+            database.clone() as Arc<dyn cognee::database::DeleteDb>,
         )
         .with_graph_db(graph_db)
         .with_vector_db(vector_db)
@@ -102,7 +102,7 @@ pub fn run(args: DeleteArgs, cm: Arc<cognee_lib::ComponentManager>) -> Result<()
     })
 }
 
-pub fn print_preview(preview: &cognee_lib::delete::DeletePreview) {
+pub fn print_preview(preview: &cognee::delete::DeletePreview) {
     info!(
         datasets = preview.datasets_to_delete,
         links = preview.dataset_links_to_delete,
@@ -114,7 +114,7 @@ pub fn print_preview(preview: &cognee_lib::delete::DeletePreview) {
     );
 }
 
-pub fn print_result(result: &cognee_lib::delete::DeleteResult) {
+pub fn print_result(result: &cognee::delete::DeleteResult) {
     info!(
         deleted_datasets = result.deleted_datasets,
         deleted_links = result.deleted_dataset_links,

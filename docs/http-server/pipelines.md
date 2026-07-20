@@ -2,7 +2,7 @@
 
 This document specifies how the Rust HTTP server tracks long-running pipeline operations (`/cognify`, `/memify`, `/remember`, `/improve`, `/sync`, `/add`) when the caller passes `run_in_background=true`. The component that owns this lifecycle is **`cognee_core::PipelineRunRegistry`** — a runtime-agnostic registry that hosts a per-run in-memory event channel, satisfies the existing `cognee_core::PipelineWatcher` trait so library functions can publish lifecycle events without knowing about it, and persists durable status rows via an injected `PipelineRunRepository` trait. The HTTP server consumes the registry through `AppState` and binds it as the `PipelineWatcher` in every `TaskContext` it builds.
 
-Library functions in `cognee-lib` stay synchronous (callers `.await` them to completion). The `run_in_background` flag is purely a **hosting concern**: the HTTP server decides whether to await the future inline or hand it to the registry's spawn path. There is no `run_in_background` flag in the library API.
+Library functions in `cognee` stay synchronous (callers `.await` them to completion). The `run_in_background` flag is purely a **hosting concern**: the HTTP server decides whether to await the future inline or hand it to the registry's spawn path. There is no `run_in_background` flag in the library API.
 
 Companion docs: [architecture.md](architecture.md), [auth.md](auth.md), [websocket.md](websocket.md) (consumes the channel exposed here), [routers/cognify.md](routers/cognify.md), [routers/memify.md](routers/memify.md), [routers/remember.md](routers/remember.md), [routers/improve.md](routers/improve.md).
 
@@ -12,7 +12,7 @@ Companion docs: [architecture.md](architecture.md), [auth.md](auth.md), [websock
 
 - **One reusable component** at `cognee_core::PipelineRunRegistry` — usable by the HTTP server, the CLI, the MCP, embedders, and any other host that needs background lifecycle tracking.
 - **Two-tier visibility, matching Python**: a *durable* `pipeline_runs` table that survives restarts and powers historical queries (`GET /api/v1/datasets/status`, `GET /api/v1/activity/pipeline-runs`), and a *volatile* per-run event channel that powers live WebSocket subscriptions during a run.
-- **Library API stays unchanged**: `cognee_lib::cognify::cognify(...)`, `cognee_lib::cognify::memify::memify(...)`, `cognee_ingestion::AddPipeline::run(...)`, etc. remain synchronous (note: `cognee_lib::add` is a *module*, not a function — the entry point is `AddPipeline::run`). They publish lifecycle events through the existing `cognee_core::PipelineWatcher` trait.
+- **Library API stays unchanged**: `cognee::cognify::cognify(...)`, `cognee::cognify::memify::memify(...)`, `cognee_ingestion::AddPipeline::run(...)`, etc. remain synchronous (note: `cognee::add` is a *module*, not a function — the entry point is `AddPipeline::run`). They publish lifecycle events through the existing `cognee_core::PipelineWatcher` trait.
 - **Wire-compatible status enum on the wire**: the `pipeline_runs.status` column and the WebSocket frame's `status` field both use Python's `DATASET_PROCESSING_*` and `PipelineRun*` strings. The mapping from `cognee_core::PipelineRunStatus` to those wire strings happens in the HTTP DTO layer.
 - **Wire-compatible event shape**: events emitted to the WebSocket carry the same `{pipeline_run_id, status, payload}` JSON used by [Python's WS handler](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/cognify/routers/get_cognify_router.py#L312-L345).
 - **Deterministic IDs available**: when the caller has them, `pipeline_run_id` is `uuid5(NAMESPACE_OID, "{pipeline_id}_{dataset_id}")` (Python parity). When the caller does not (e.g. an embedder running ad-hoc work), the registry auto-generates one via `Uuid::new_v4()`.
@@ -21,7 +21,7 @@ Companion docs: [architecture.md](architecture.md), [auth.md](auth.md), [websock
 
 ### Non-goals
 
-- **No `run_in_background` in `cognee-lib`.** Library callers who want background execution `tokio::spawn` it themselves or use the registry directly. The HTTP server is the only first-class consumer of the background path.
+- **No `run_in_background` in `cognee`.** Library callers who want background execution `tokio::spawn` it themselves or use the registry directly. The HTTP server is the only first-class consumer of the background path.
 - **Cross-process / cross-replica fan-out**: the in-memory registry is local to one process. Multi-replica deployments need either sticky-session WebSocket routing or a Redis-backed channel — out of scope.
 - **Pause / resume / cancel from HTTP**: not exposed. The registry has `abort(run_id)` for shutdown, but no public HTTP endpoint to invoke it. Once a run starts, it runs to completion or errors out (matches Python).
 - **Streaming logs to the client**: the WebSocket emits *status events* with formatted graph payloads, not per-task log lines. Stdout/stderr stays in `tracing`.
@@ -32,8 +32,8 @@ Two existing library functions ship their own background machinery and must be r
 
 | Library function | What needs to change | Source |
 |---|---|---|
-| `cognee_lib::api::remember::remember()` | Drops the `run_in_background: bool` parameter and the bespoke `RememberResult` / `JoinHandle` shared-state machinery. Returns a synchronous `Result<RememberResult, Error>` that always reflects the completed-or-errored run. The HTTP `/remember` handler is what spawns the background task via `PipelineRunRegistry::register_background(...)`. The `RememberResult` struct keeps its observable fields (`status`, `data_size`, `pipeline_run_id`, `error`, etc.) but loses the `JoinHandle` and the `await_completion()` method. | [crates/lib/src/api/remember.rs:75-107](../../crates/lib/src/api/remember.rs#L75-L107), [:236-336](../../crates/lib/src/api/remember.rs#L236-L336), [:503-700](../../crates/lib/src/api/remember.rs#L503-L700) |
-| `cognee_lib::api::improve::improve()` | Drops the `run_in_background: bool` parameter. The `has_sessions && !run_in_background` skip-condition collapses (always run when sessions are present, since the function is now sync). The HTTP `/improve` handler is what spawns the background task via the registry. | [crates/lib/src/api/improve.rs:59](../../crates/lib/src/api/improve.rs#L59), [:197-198](../../crates/lib/src/api/improve.rs#L197-L198) |
+| `cognee::api::remember::remember()` | Drops the `run_in_background: bool` parameter and the bespoke `RememberResult` / `JoinHandle` shared-state machinery. Returns a synchronous `Result<RememberResult, Error>` that always reflects the completed-or-errored run. The HTTP `/remember` handler is what spawns the background task via `PipelineRunRegistry::register_background(...)`. The `RememberResult` struct keeps its observable fields (`status`, `data_size`, `pipeline_run_id`, `error`, etc.) but loses the `JoinHandle` and the `await_completion()` method. | [crates/lib/src/api/remember.rs:75-107](../../crates/lib/src/api/remember.rs#L75-L107), [:236-336](../../crates/lib/src/api/remember.rs#L236-L336), [:503-700](../../crates/lib/src/api/remember.rs#L503-L700) |
+| `cognee::api::improve::improve()` | Drops the `run_in_background: bool` parameter. The `has_sessions && !run_in_background` skip-condition collapses (always run when sessions are present, since the function is now sync). The HTTP `/improve` handler is what spawns the background task via the registry. | [crates/lib/src/api/improve.rs:59](../../crates/lib/src/api/improve.rs#L59), [:197-198](../../crates/lib/src/api/improve.rs#L197-L198) |
 
 After the refactor, `grep -rn run_in_background crates/lib crates/cognify crates/ingestion` returns zero matches. Other `tokio::spawn` calls in the library tree (`crates/cognify/src/summarization/extractor.rs`, `crates/cognify/src/fact_extraction/extractor.rs`, `crates/cognify/src/tasks.rs`) are **internal parallelism** within a pipeline — not background-mode dispatch — and stay as-is.
 
@@ -222,7 +222,7 @@ pub trait PipelineRunRepository: Send + Sync {
 |---|---|
 | Crate | `cognee-core` |
 | Module | `cognee_core::pipeline_run_registry` (re-exported at the crate root) |
-| Feature flag | `pipeline-run-registry` (off by default to keep the core's footprint small for embedders that don't need it; enabled by default in `cognee-lib` and `cognee-http-server`) |
+| Feature flag | `pipeline-run-registry` (off by default to keep the core's footprint small for embedders that don't need it; enabled by default in `cognee` and `cognee-http-server`) |
 
 ### 6.2 Public types
 

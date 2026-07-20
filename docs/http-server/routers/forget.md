@@ -9,7 +9,7 @@ Companion docs: [../architecture.md](../architecture.md), [../auth.md](../auth.m
 - Router file: `crates/http-server/src/routers/forget.rs`
 - Python source: [`cognee/api/v1/forget/routers/get_forget_router.py`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/forget/routers/get_forget_router.py)
 - Underlying SDK function: [`cognee/api/v1/forget/forget.py`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/forget/forget.py)
-- Rust delegation target: `cognee_lib::api::forget::forget(data_id, dataset, everything, user) -> Result<ForgetResultDTO, _>`. The SDK already exists (see [project guide](../../../.claude/CLAUDE.md), Memory API v2 section).
+- Rust delegation target: `cognee::api::forget::forget(data_id, dataset, everything, user) -> Result<ForgetResultDTO, _>`. The SDK already exists (see [project guide](../../../.claude/CLAUDE.md), Memory API v2 section).
 
 ## 2. Endpoints
 
@@ -69,7 +69,7 @@ Companion docs: [../architecture.md](../architecture.md), [../auth.md](../auth.m
     - All of mode 2 for every dataset the user owns.
     - **Plus** session cache prune: clears Redis or filesystem session store via `cache_engine.prune()`. Source: [`forget.py:124-138`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/forget/forget.py#L124-L138).
     - Cache cleanup is wrapped in a try/except — if it fails, logs a warning and returns success anyway (non-fatal). Match.
-- **Delegation target**: `cognee_lib::api::forget::forget(data_id, dataset, everything, user)`. The handler is a thin wrapper that:
+- **Delegation target**: `cognee::api::forget::forget(data_id, dataset, everything, user)`. The handler is a thin wrapper that:
   1. Validates cross-field rules (§2.1.1).
   2. Calls the SDK.
   3. Maps the result dict to `ForgetResultDTO` (a tagged enum).

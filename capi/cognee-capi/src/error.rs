@@ -177,7 +177,7 @@ mod tests {
         // Each pair: (SdkError variant, expected CgErrorCode)
         let cases: &[(SdkError, CgErrorCode)] = &[
             (
-                SdkError::Component(cognee_lib::ComponentError::GraphDb("test".to_string())),
+                SdkError::Component(cognee::ComponentError::GraphDb("test".to_string())),
                 CgErrorCode::Component,
             ),
             (

@@ -18,7 +18,7 @@ Build with the feature:
 cargo build --release --features telemetry
 ```
 
-> The umbrella `cognee-lib`, the CLI (`cognee-cli`), and the HTTP server enable
+> The umbrella `cognee`, the CLI (`cognee-cli`), and the HTTP server enable
 > `telemetry` through their default feature sets, so a plain release build of
 > those binaries already includes the OTLP exporter code paths.
 
@@ -59,7 +59,7 @@ rejected at startup with a descriptive error rather than being silently ignored.
 ## Programmatic initialization
 
 Drive `init_telemetry` from any `SettingsView`. The `EnvSettingsView` adapter
-reads the env vars above directly, so callers that don't depend on `cognee-lib`
+reads the env vars above directly, so callers that don't depend on `cognee`
 can still bring up the pipeline. Hold the returned `TelemetryGuard` for the
 lifetime of the process — dropping it calls `force_flush()` then `shutdown()` on
 the OTEL provider so no spans are lost on exit.
@@ -79,7 +79,7 @@ Registry::default()
     .init();
 ```
 
-`cognee_lib::config::Settings` implements `SettingsView`, so embedders that
+`cognee::config::Settings` implements `SettingsView`, so embedders that
 already hold a `Settings` can pass it directly instead of `EnvSettingsView`.
 
 ## Deployment recipes

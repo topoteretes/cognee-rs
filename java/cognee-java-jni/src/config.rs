@@ -7,7 +7,7 @@ use jni::JNIEnv;
 use jni::objects::{JClass, JString};
 use jni::sys::{jlong, jstring};
 
-use cognee_lib::config::ConfigError;
+use cognee::config::ConfigError;
 
 use crate::errors::throw_cognee_exception;
 use crate::handle::handle_ref;

@@ -10,8 +10,8 @@
 
 use std::sync::Arc;
 
+use cognee::config::ConfigManager;
 use cognee_bindings_common::HandleState;
-use cognee_lib::config::ConfigManager;
 use pyo3::prelude::*;
 
 use crate::config::PyCogneeConfig;
@@ -30,9 +30,9 @@ use crate::sdk_sessions::PyCogneeSessions;
 ///
 /// Mirrors `apply_settings_json_patch` in `capi/cognee-capi/src/sdk.rs`.
 fn apply_settings_json_patch(
-    base: cognee_lib::config::Settings,
+    base: cognee::config::Settings,
     json: &str,
-) -> Result<cognee_lib::config::Settings, String> {
+) -> Result<cognee::config::Settings, String> {
     let patch: serde_json::Value =
         serde_json::from_str(json).map_err(|e| format!("settings_json parse error: {e}"))?;
 
@@ -48,7 +48,7 @@ fn apply_settings_json_patch(
         // mismatches are reported as errors since they indicate caller bugs.
         match cm.set(key, value.clone()) {
             Ok(()) => {}
-            Err(cognee_lib::config::ConfigError::UnknownKey(_)) => {
+            Err(cognee::config::ConfigError::UnknownKey(_)) => {
                 // Silently skip unrecognised keys — new fields added to Settings
                 // in future versions will not break older JSON overlays.
             }

@@ -14,7 +14,7 @@ Coverage:
 
 Stage-level convergence (the Rust handler runs the full session-bridge path)
 is gated on the deferred P5 follow-up — wiring the real
-``cognee_lib::api::improve::improve(...)`` call from the http-server requires
+``cognee::api::improve::improve(...)`` call from the http-server requires
 resolving the cycle constraint at ``crates/http-server/Cargo.toml:36-38`` and
 extending ``ComponentHandles`` with ``vector_db`` / ``embedding_engine`` /
 ``add_pipeline`` / ``checkpoint_store`` / ``cognify_config`` /

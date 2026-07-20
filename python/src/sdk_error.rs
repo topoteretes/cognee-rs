@@ -1,14 +1,14 @@
 //! SDK-tier error types for the Python binding.
 //!
 //! Converts [`SdkError`] (from `cognee-bindings-common`) and
-//! [`ConfigError`] (from `cognee-lib`) into the appropriate Python exceptions.
+//! [`ConfigError`] (from `cognee`) into the appropriate Python exceptions.
 //!
 //! All SDK exceptions extend [`CogneeError`] so callers can catch broadly.
 //! This hierarchy is separate from the engine-tier [`PipelineError`] hierarchy
 //! (same split as in the C API: codes 0–10 engine, 11–18 SDK).
 
+use cognee::config::ConfigError;
 use cognee_bindings_common::SdkError;
-use cognee_lib::config::ConfigError;
 use pyo3::create_exception;
 use pyo3::exceptions::PyException;
 use pyo3::prelude::*;

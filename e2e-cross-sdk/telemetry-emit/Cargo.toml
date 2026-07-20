@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish = false
-description = "Harness-only binary that drives cognee_lib::telemetry::send_telemetry once with fixed args. Used by the e2e-cross-sdk telemetry parity tests. Not part of the production CLI."
+description = "Harness-only binary that drives cognee::telemetry::send_telemetry once with fixed args. Used by the e2e-cross-sdk telemetry parity tests. Not part of the production CLI."
 repository.workspace = true
 homepage.workspace = true
 readme.workspace = true
@@ -25,10 +25,10 @@ name = "cognee-telemetry-emit"
 path = "../bin/telemetry_emit.rs"
 
 [dependencies]
-# The harness binary only needs `telemetry`. cognee-lib's
+# The harness binary only needs `telemetry`. cognee's
 # component_manager keeps its `_dim` local prefixed for any
 # feature combination where pgvector is off, so no extra engine
 # feature is required.
-cognee-lib = { path = "../../crates/lib", default-features = false, features = ["telemetry"] }
+cognee = { path = "../../crates/lib", default-features = false, features = ["telemetry"] }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

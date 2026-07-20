@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
-use cognee_lib::add::AddPipeline;
-use cognee_lib::core::RayonThreadPool;
-use cognee_lib::database::{PipelineRunRepository, SeaOrmPipelineRunRepository};
-use cognee_lib::models::DataInput;
-use cognee_lib::{ComponentManager, PipelineContext};
+use cognee::add::AddPipeline;
+use cognee::core::RayonThreadPool;
+use cognee::database::{PipelineRunRepository, SeaOrmPipelineRunRepository};
+use cognee::models::DataInput;
+use cognee::{ComponentManager, PipelineContext};
 use tracing::info;
 use uuid::Uuid;
 
@@ -60,7 +60,7 @@ pub fn run(args: AddArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> {
 
         let pipeline = AddPipeline::new(
             storage,
-            Arc::clone(&database) as Arc<dyn cognee_lib::database::IngestDb>,
+            Arc::clone(&database) as Arc<dyn cognee::database::IngestDb>,
         )
         .with_thread_pool(thread_pool)
         .with_graph_db(graph_db)

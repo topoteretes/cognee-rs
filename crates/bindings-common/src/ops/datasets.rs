@@ -5,7 +5,7 @@
 //! These functions contain the pure-Rust async logic shared between every
 //! language binding surface (C API, Neon JS, Python). Each function takes a
 //! [`HandleState`] reference plus typed arguments, performs the operation
-//! against `DatasetManager` from `cognee-lib`, and returns a
+//! against `DatasetManager` from `cognee`, and returns a
 //! `serde_json::Value` result (or an [`SdkError`]).
 //!
 //! The binding-specific wrappers (C string parsing, Neon JS promise settling,
@@ -24,8 +24,8 @@ use std::sync::Arc;
 
 use uuid::Uuid;
 
-use cognee_lib::api::{DatasetDb, DatasetManager};
-use cognee_lib::delete::DeleteMode;
+use cognee::api::{DatasetDb, DatasetManager};
+use cognee::delete::DeleteMode;
 
 use crate::{HandleState, SdkError};
 

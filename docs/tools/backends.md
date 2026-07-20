@@ -24,7 +24,7 @@ Notes:
   local file storage. No native vector-store dependencies are required.
 - **Feature gates.** `pgvector`, `pggraph`/`postgres`, and the
   `hf-tokenizer`/`tiktoken` counters are cargo features, on by default in
-  `cognee-lib`/`cognee-cli` — see
+  `cognee`/`cognee-cli` — see
   [architecture.md §feature strategy](../architecture.md#architecture-patterns).
 - **Closed-source companions.** Embedded Qdrant (`cognee-vector-qdrant`) and
   on-device LiteRT inference (`cognee-llm-litert`, Android) live in the closed

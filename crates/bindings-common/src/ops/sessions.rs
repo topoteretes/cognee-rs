@@ -4,7 +4,7 @@
 //! These functions contain the pure-Rust async logic shared between every
 //! language binding surface (C API, Neon JS, Python). Each function takes a
 //! [`HandleState`] reference plus typed arguments, performs the operation
-//! against the underlying cognee-lib session APIs, and returns a
+//! against the underlying cognee session APIs, and returns a
 //! `serde_json::Value` result (or an [`SdkError`]).
 //!
 //! The binding-specific wrappers (C string parsing, Neon JS promise settling,
@@ -23,7 +23,7 @@
 //! {"feedbackText": "...", "feedbackScore": N}
 //! ```
 
-use cognee_lib::session::get_session;
+use cognee::session::get_session;
 
 use crate::{HandleState, SdkError};
 
@@ -81,7 +81,7 @@ pub async fn run_add_feedback(
     let owner_id = state.owner_id().await?;
     let owner_str = owner_id.to_string();
 
-    let ok = cognee_lib::session::add_feedback(
+    let ok = cognee::session::add_feedback(
         svc.session_manager.as_ref(),
         session_id,
         qa_id,
@@ -107,7 +107,7 @@ pub async fn run_delete_feedback(
     let owner_id = state.owner_id().await?;
     let owner_str = owner_id.to_string();
 
-    let ok = cognee_lib::session::delete_feedback(
+    let ok = cognee::session::delete_feedback(
         svc.session_manager.as_ref(),
         session_id,
         qa_id,
@@ -131,7 +131,7 @@ pub async fn run_get_graph_context(
     let owner_id = state.owner_id().await?;
     let owner_str = owner_id.to_string();
 
-    let ctx = cognee_lib::session::get_graph_context(
+    let ctx = cognee::session::get_graph_context(
         svc.session_manager.as_ref(),
         session_id,
         Some(&owner_str),
@@ -157,7 +157,7 @@ pub async fn run_set_graph_context(
     let owner_id = state.owner_id().await?;
     let owner_str = owner_id.to_string();
 
-    cognee_lib::session::set_graph_context(
+    cognee::session::set_graph_context(
         svc.session_manager.as_ref(),
         session_id,
         Some(&owner_str),

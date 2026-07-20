@@ -24,7 +24,7 @@
 //!
 //! Drive [`init_telemetry`] from a [`SettingsView`] implementation. The
 //! [`EnvSettingsView`] adapter reads the standard env vars directly, so
-//! callers that don't want to depend on `cognee-lib` can still bring up
+//! callers that don't want to depend on `cognee` can still bring up
 //! the pipeline:
 //!
 //! ```ignore
@@ -47,7 +47,7 @@
 //! drop(guard);
 //! ```
 //!
-//! Embedders that already use `cognee_lib::config::Settings` can pass it
+//! Embedders that already use `cognee::config::Settings` can pass it
 //! directly — `Settings` implements [`SettingsView`].
 //!
 //! ## Configuration

@@ -1,5 +1,5 @@
 //! [`ComponentRegistry`] — the pluggable provider → factory map shared by the
-//! `ComponentManager` (cognee-lib) and the HTTP server's standalone wiring.
+//! `ComponentManager` (cognee) and the HTTP server's standalone wiring.
 
 use std::collections::HashMap;
 use std::sync::Arc;

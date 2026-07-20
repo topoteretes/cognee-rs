@@ -44,7 +44,7 @@ pub enum HealthStatus {
 /// Abstraction for the cognee health-check machinery.
 ///
 /// P0 uses `MockHealthChecker`; later phases wire in
-/// `cognee_lib::health::DefaultHealthChecker` which fans out to all backends.
+/// `cognee::health::DefaultHealthChecker` which fans out to all backends.
 #[async_trait]
 pub trait HealthChecker: Send + Sync {
     /// Run the health checks and return a report.
@@ -84,7 +84,7 @@ pub struct HealthCheckError(pub String);
 
 // ─── Mock health checker (P0) ─────────────────────────────────────────────────
 
-/// Simple in-process health checker used before the real `cognee_lib::health`
+/// Simple in-process health checker used before the real `cognee::health`
 /// module is wired in.  Always returns HEALTHY with stub component entries.
 pub struct MockHealthChecker {
     start_time: Instant,

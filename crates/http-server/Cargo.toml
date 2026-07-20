@@ -95,9 +95,9 @@ tower-http = { version = "0.6", features = ["cors", "trace", "limit"] }
 hyper = { version = "1", features = ["server", "http1", "http2"] }
 
 # cognee crates
-# NOTE: cognee-lib is intentionally NOT a direct dep here — adding it would
-# create a cycle when cognee-lib's `server` feature pulls in cognee-http-server.
-# Concrete cognee-lib types are wired via AppState in P1+.
+# NOTE: cognee is intentionally NOT a direct dep here — adding it would
+# create a cycle when cognee's `server` feature pulls in cognee-http-server.
+# Concrete cognee types are wired via AppState in P1+.
 cognee-models = { path = "../models", version = "0.1.3" }
 cognee-observability = { path = "../observability", version = "0.1.3", optional = true }
 # Product-analytics client. Gated by the `telemetry` feature so a

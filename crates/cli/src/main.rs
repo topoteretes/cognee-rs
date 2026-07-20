@@ -2,11 +2,11 @@ use std::process::ExitCode as StdExitCode;
 use std::sync::Arc;
 
 use clap::Parser;
+use cognee::{ComponentManager, ConfigManager};
 use cognee_cli::cli::{Cli, Commands};
 use cognee_cli::commands;
 use cognee_cli::config_store::{Settings, load_settings};
 use cognee_cli::error::{CliError, ExitCode};
-use cognee_lib::{ComponentManager, ConfigManager};
 #[cfg(feature = "bench")]
 use commands::bench;
 #[cfg(feature = "visualization")]
@@ -82,7 +82,7 @@ fn main() -> StdExitCode {
 
     #[cfg(feature = "telemetry")]
     let (_log_guards, _telemetry_guard) = {
-        use cognee_lib::telemetry::{TelemetryGuard, init_telemetry};
+        use cognee::telemetry::{TelemetryGuard, init_telemetry};
         use tracing_subscriber::{Layer, Registry, layer::Identity};
 
         // Telemetry init failure must not abort the user's CLI command —

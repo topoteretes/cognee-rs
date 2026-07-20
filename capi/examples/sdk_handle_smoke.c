@@ -103,7 +103,7 @@ int main(void)
      * The test relies on MOCK_EMBEDDING=true being read from the env OR set
      * here.  We set it in the JSON overlay for hermetic testing.
      */
-    /* Keys are snake_case to match the cognee-lib ConfigManager
+    /* Keys are snake_case to match the cognee ConfigManager
      * dispatcher. `vector_db_provider="mock"` selects the
      * `cognee_vector::MockVectorDB` adapter (registered behind the
      * `testing` Cargo feature, enabled by the C-API default features).

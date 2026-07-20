@@ -9,7 +9,7 @@ Companion docs: [../architecture.md](../architecture.md), [../auth.md](../auth.m
 - Router file: `crates/http-server/src/routers/add.rs`
 - Python source: [`cognee/api/v1/add/routers/get_add_router.py`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/add/routers/get_add_router.py)
 - Underlying SDK function: [`cognee/api/v1/add/add.py`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/add/add.py)
-- Rust delegation target: `cognee_lib::api::add::add(...)` (re-exports `cognee_ingestion::AddPipeline`).
+- Rust delegation target: `cognee::api::add::add(...)` (re-exports `cognee_ingestion::AddPipeline`).
 
 ## 2. Endpoints
 
@@ -99,14 +99,14 @@ Companion docs: [../architecture.md](../architecture.md), [../auth.md](../auth.m
   - **Graph DB**: none — `add` does not write to graph.
   - **Vector DB**: none.
   - **Channels**: none on `run_in_background=false`. (Background path is not exposed via HTTP; see §3.4.)
-- **Delegation target**: `cognee_lib::api::add::add(data, dataset_name, dataset_id, user, node_set, …)` — single async call. Wraps `AddPipeline` from `cognee-ingestion`. The handler must avoid putting any business logic between the multipart parse and this call.
+- **Delegation target**: `cognee::api::add::add(data, dataset_name, dataset_id, user, node_set, …)` — single async call. Wraps `AddPipeline` from `cognee-ingestion`. The handler must avoid putting any business logic between the multipart parse and this call.
 - **Validation rules** (cross-field, beyond serde):
   1. Either `datasetName` or `datasetId` must be present and non-empty. Otherwise `400`.
   2. `datasetId` must be a valid UUID when present. Empty string is normalized to absent.
   3. `node_set` of `[""]` (single empty repetition) is normalized to `None` (matches Python's quirky default-handling, [`get_add_router.py:107-109`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/add/routers/get_add_router.py#L107-L109)). Empty list also normalizes to `None`. A list with at least one non-empty entry is preserved.
   4. Each `data` part's filename, if present, must not contain path traversal sequences (`../`, `..\\`, leading `/`). On violation, return `400` with `{"error": "Invalid filename: <name>"}`.
   5. `data` parts whose body is < 4 KiB and whose decoded text starts with `http://`, `https://`, or `s3://` are interpreted as URL/S3 strings rather than raw bytes (Python parity — `resolve_dlt_sources`, [`add.py:214-219`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/add/add.py#L214-L219)).
-- **Permission gate**: `write` on the target dataset (cite [../tenants.md §5](../tenants.md#5-permission-resolution) for the resolution algorithm and [../tenants.md §9](../tenants.md#9-repository-surface) for the trait surface). Concretely: `state.lib.permissions().user_can(user.id, dataset_id, "write")`. The internal `resolve_authorized_user_datasets` helper in `cognee-lib` wraps this for batch flows. If `dataset_id` refers to an existing dataset the user lacks `write` on, returns 403. If `dataset_name` is given and no dataset of that name exists for the user, **a new dataset is created** and the user is granted `read+write+share+delete` on it (matches Python's `create_dataset` flow and the parallel handler in `datasets.create_new_dataset`).
+- **Permission gate**: `write` on the target dataset (cite [../tenants.md §5](../tenants.md#5-permission-resolution) for the resolution algorithm and [../tenants.md §9](../tenants.md#9-repository-surface) for the trait surface). Concretely: `state.lib.permissions().user_can(user.id, dataset_id, "write")`. The internal `resolve_authorized_user_datasets` helper in `cognee` wraps this for batch flows. If `dataset_id` refers to an existing dataset the user lacks `write` on, returns 403. If `dataset_name` is given and no dataset of that name exists for the user, **a new dataset is created** and the user is granted `read+write+share+delete` on it (matches Python's `create_dataset` flow and the parallel handler in `datasets.create_new_dataset`).
 - **Rate / size limits**: per-route body limit overrides global; no rate limit in phase 1.
 - **OpenAPI**:
   - Tag: `["add"]`
@@ -298,7 +298,7 @@ Field-level mapping vs Python:
 1. **Per-route body limit**: Python applies no per-route limit (only the global FastAPI/uvicorn limit). Rust matches: only the global `100 MiB` middleware cap ([../architecture.md §8](../architecture.md#8-middleware-stack)) applies. No `HTTP_BODY_LIMIT_BYTES_ADD` env var.
 2. **Spool location**: Python writes to `tempfile.NamedTemporaryFile()` which honors `TMPDIR` / `TEMP` / `TMP`. Rust matches via `std::env::temp_dir()` — same env-var precedence. No `COGNEE_UPLOAD_SPOOL_DIR` Rust-only addition.
 3. **URL detection threshold**: Python uses `len(value) < 4096` to decide whether a multipart form value is a URL ([`get_add_router.py`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/add/routers/get_add_router.py)). Rust matches: 4 KiB threshold, no configuration knob.
-4. **Background ingestion via HTTP**: Python does not expose `run_in_background` on `/add`. Rust matches — no `?run_in_background=true` query parameter. Library callers can still drive background ingestion via `cognee_lib::add` directly.
+4. **Background ingestion via HTTP**: Python does not expose `run_in_background` on `/add`. Rust matches — no `?run_in_background=true` query parameter. Library callers can still drive background ingestion via `cognee::add` directly.
 5. **Streaming hash vs spool-then-hash**: implementation detail invisible at the wire layer. Spool-then-hash is simpler; either approach yields identical observable behavior. No wire impact.
 6. **Concurrency cap on `data` parts**: Python has none. Rust matches — no per-route concurrency limit beyond the global middleware default.
 

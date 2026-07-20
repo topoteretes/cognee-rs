@@ -35,16 +35,16 @@ default = [
     "sqlite",
     "testing",
 ]
-visualization = ["cognee-lib/visualization"]
-ladybug       = ["cognee-lib/ladybug"]
-onnx          = ["cognee-lib/onnx"]
-hf-tokenizer  = ["cognee-lib/hf-tokenizer"]
-tiktoken      = ["cognee-lib/tiktoken"]
-sqlite        = ["cognee-lib/sqlite"]
-testing       = ["cognee-lib/testing"]
+visualization = ["cognee/visualization"]
+ladybug       = ["cognee/ladybug"]
+onnx          = ["cognee/onnx"]
+hf-tokenizer  = ["cognee/hf-tokenizer"]
+tiktoken      = ["cognee/tiktoken"]
+sqlite        = ["cognee/sqlite"]
+testing       = ["cognee/testing"]
 
 [dependencies]
-cognee-lib = { path = "../lib", version = "0.1.3", default-features = false }
+cognee = { path = "../lib", version = "0.1.3", default-features = false }
 serde      = { workspace = true }
 serde_json = { workspace = true }
 thiserror  = { workspace = true }

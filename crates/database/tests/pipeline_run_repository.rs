@@ -906,6 +906,6 @@ async fn run_info_initiated_shape_is_empty_object() {
 // ---------------------------------------------------------------------------
 // Reset-helper tests live in `crates/lib/tests/pipeline_runs_reset.rs`
 // because `reset_pipeline_run_status` / `reset_dataset_pipeline_run_status`
-// are part of the `cognee-lib` public API and adding `cognee-lib` as a
+// are part of the `cognee` public API and adding `cognee` as a
 // dev-dependency of `cognee-database` would create a build cycle.
 // ---------------------------------------------------------------------------

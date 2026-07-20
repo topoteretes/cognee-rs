@@ -61,7 +61,7 @@ Companion docs: [../architecture.md](../architecture.md), [../auth.md](../auth.m
   | `400` | `{"detail": "Either datasetId or datasetName must be provided."}` | Both `datasetId` and `datasetName` empty/missing. Python raises `HTTPException(400, ...)` so the body shape is `{"detail": "..."}` (not `{"error": "..."}`). | [Python lines 70–74](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/remember/routers/get_remember_router.py#L70-L74) |
   | `400` | `{"detail": [{...}]}` | Multipart parse failure or bad form fields. | Custom multipart extractor |
   | `401` | `{"detail": "Unauthorized"}` | No JWT/cookie/API key. | `AuthenticatedUser` |
-  | `403` | `{"detail": "..."}` | User lacks `write` permission on the target dataset. | `cognee_lib::permissions` |
+  | `403` | `{"detail": "..."}` | User lacks `write` permission on the target dataset. | `cognee::permissions` |
   | `409` | `{"error": "An error occurred during remember."}` | Any exception during processing. **Note**: Python returns `409`, not `500`, for catch-all errors here ([line 91–96](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/remember/routers/get_remember_router.py#L91-L96)). The `detail` field is **not** populated — only the literal `error` string. | Python parity |
   | `413` | `{"detail": "request body too large"}` | Aggregate multipart body exceeds the limit (default 100 MiB). | `tower_http::limit::RequestBodyLimitLayer` |
   | `422` | `{"detail": [...]}` | Pydantic-level type errors on form fields. | |
@@ -77,7 +77,7 @@ Companion docs: [../architecture.md](../architecture.md), [../auth.md](../auth.m
   - Writes graph + vector data exactly as `/api/v1/cognify` does — see [cognify.md §2.1 side effects](cognify.md#21-post-apiv1cognify--run-the-cognify-pipeline).
   - **Does not** invoke memify; the resulting graph is queryable via `/api/v1/search` but not yet enriched with `Triplet:text` embeddings unless the caller follows up with `/api/v1/memify`.
 
-- **Delegation target**: `cognee_lib::api::remember::remember(files, RememberConfig { dataset_name, dataset_id, node_set, custom_prompt, chunks_per_batch, user })`. **Note: no `run_in_background` field on `RememberConfig`** — the library function is synchronous after the §2 prerequisite refactor. Background dispatch is the HTTP handler's responsibility (it wraps this call in `state.pipelines.register_inline` or `register_background`). The Rust function mirrors Python's `cognee.api.v1.remember.remember`: stream files through `AddPipeline::run`, then invoke `cognify()` on the resulting dataset, then return a `RememberResult`. The router itself does no business logic beyond the dispatcher choice.
+- **Delegation target**: `cognee::api::remember::remember(files, RememberConfig { dataset_name, dataset_id, node_set, custom_prompt, chunks_per_batch, user })`. **Note: no `run_in_background` field on `RememberConfig`** — the library function is synchronous after the §2 prerequisite refactor. Background dispatch is the HTTP handler's responsibility (it wraps this call in `state.pipelines.register_inline` or `register_background`). The Rust function mirrors Python's `cognee.api.v1.remember.remember`: stream files through `AddPipeline::run`, then invoke `cognify()` on the resulting dataset, then return a `RememberResult`. The router itself does no business logic beyond the dispatcher choice.
 
 - **Validation rules**:
   - At least one of `datasetName` / `datasetId` must be set (Python rejects via `HTTPException(400)`).
@@ -86,7 +86,7 @@ Companion docs: [../architecture.md](../architecture.md), [../auth.md](../auth.m
   - At least one file must be present in `data` — Python's `default=None` makes the parameter optional; the inner `cognee_remember` raises if `data` is `None`. Surface as `409` (matches Python catch-all).
   - `chunks_per_batch > 0` — Rust additional guard, returns `400`. Python doesn't validate.
 
-- **Permission gate**: `write` on the target dataset *if `dataset_id` is supplied* (cross-tenant); for `dataset_name` the dataset is created if missing under the user's tenant. The check lives inside `cognee_lib::api::remember::remember`.
+- **Permission gate**: `write` on the target dataset *if `dataset_id` is supplied* (cross-tenant); for `dataset_name` the dataset is created if missing under the user's tenant. The check lives inside `cognee::api::remember::remember`.
 
 - **Rate / size limits**:
   - **Aggregate body limit**: 100 MiB by default (`HTTP_BODY_LIMIT_BYTES`, see [architecture.md §11](../architecture.md#11-configuration)). Configurable per deployment.
@@ -158,7 +158,7 @@ A JSON (not multipart) sibling endpoint that writes a single typed memory entry 
   - `RunSpec { run_id: Some(prid), pipeline_name: "cognify_pipeline", user_id: Some(user.id), dataset_id }`.
   - The `add` step does **not** register a separate `pipeline_runs` row in Python (add is not pipeline-tracked); Rust matches.
 
-- **Library API note**: `cognee_lib::api::remember::remember()` no longer accepts a `run_in_background` parameter. The current library implementation has a bespoke `RememberResult` + `JoinHandle` shared-state machinery for in-process background mode ([crates/lib/src/api/remember.rs:75-107](../../../crates/lib/src/api/remember.rs#L75-L107), [:236-336](../../../crates/lib/src/api/remember.rs#L236-L336)) — that path is being removed as a prerequisite of this router landing. After the refactor, the function returns a synchronous `Result<RememberResult, Error>` whose fields reflect the completed-or-errored run; the HTTP layer wraps it via the registry as it does for cognify/memify/improve. See [pipelines.md §2](../pipelines.md#2-library-refactor-prerequisite).
+- **Library API note**: `cognee::api::remember::remember()` no longer accepts a `run_in_background` parameter. The current library implementation has a bespoke `RememberResult` + `JoinHandle` shared-state machinery for in-process background mode ([crates/lib/src/api/remember.rs:75-107](../../../crates/lib/src/api/remember.rs#L75-L107), [:236-336](../../../crates/lib/src/api/remember.rs#L236-L336)) — that path is being removed as a prerequisite of this router landing. After the refactor, the function returns a synchronous `Result<RememberResult, Error>` whose fields reflect the completed-or-errored run; the HTTP layer wraps it via the registry as it does for cognify/memify/improve. See [pipelines.md §2](../pipelines.md#2-library-refactor-prerequisite).
 
 - **Multipart streaming**: `axum::extract::Multipart` gives us a stream of parts. The handler iterates parts, dispatches:
   - String-typed parts (`datasetName`, `datasetId`, `run_in_background`, etc.) collected into a `RememberFormDTO`.
@@ -284,7 +284,7 @@ The `DatasetIdRef` helper is shared with `/memify` and `/improve`; see [memify.m
 3. Add the handler `post_remember` in `crates/http-server/src/routers/remember.rs`:
    - Parse multipart into `(RememberFormDTO, Vec<UploadedFilePart>)`.
    - Validate at least one of `dataset_name` / `dataset_id` (return `400` via `ApiError::BadRequest("Either datasetId or datasetName must be provided.")` — note the message goes to `detail`, not `error`).
-   - Call `cognee_lib::api::remember::remember(files, RememberConfig { ... }, user)`.
+   - Call `cognee::api::remember::remember(files, RememberConfig { ... }, user)`.
    - On error, return `409 {"error": "An error occurred during remember."}` (no `detail`).
    - On success, serialise the `RememberResult` to JSON and return `200`.
 4. Wire the router into `build_router`:

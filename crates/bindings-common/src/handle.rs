@@ -16,11 +16,11 @@ use std::sync::Arc;
 use tokio::sync::Mutex as TokioMutex;
 use uuid::Uuid;
 
-use cognee_lib::ComponentManager;
-use cognee_lib::ComponentRegistry;
-use cognee_lib::config::{ConfigManager, Settings};
-use cognee_lib::database::DatabaseConnection;
-use cognee_lib::models::User;
+use cognee::ComponentManager;
+use cognee::ComponentRegistry;
+use cognee::config::{ConfigManager, Settings};
+use cognee::database::DatabaseConnection;
+use cognee::models::User;
 
 use crate::SdkError;
 use crate::services::CogneeServices;
@@ -29,7 +29,7 @@ use crate::services::CogneeServices;
 ///
 /// OSS has no `users`-table writer, so the default binding behaviour is
 /// **DB-free** (`HandleState`'s hook is `None` → the in-memory
-/// `cognee_lib::api::get_or_create_default_user` UUID5 derivation is used,
+/// `cognee::api::get_or_create_default_user` UUID5 derivation is used,
 /// with no DB write). The closed cloud build attaches an implementation that
 /// upserts a real `users` row through `cognee-access-control`, so warm/admin
 /// paths persist the default user for downstream ACL / API-key FK integrity.

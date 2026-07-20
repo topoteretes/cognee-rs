@@ -18,7 +18,7 @@
 //!   COGNEE_E2E_TOKENIZER_PATH  — path to the BGE-Small tokenizer.json
 //!
 //! Run with:
-//!   TEST_POSTGRES_URL="postgres://..." cargo test -p cognee-lib \
+//!   TEST_POSTGRES_URL="postgres://..." cargo test -p cognee \
 //!       --features pggraph,pgvector,postgres \
 //!       --test pg_full_stack_e2e -- --nocapture
 //!
@@ -29,15 +29,15 @@
 
 use std::sync::Arc;
 
-use cognee_lib::PipelineContext;
-use cognee_lib::add::AddPipeline;
-use cognee_lib::cognify::{CognifyConfig, cognify};
-use cognee_lib::component_manager::ComponentManager;
-use cognee_lib::config::{ConfigManager, Settings};
-use cognee_lib::core::{CpuPool, RayonThreadPool};
-use cognee_lib::database::{IngestDb, PipelineRunRepository, SeaOrmPipelineRunRepository, ops};
-use cognee_lib::models::DataInput;
-use cognee_lib::ontology::{NoOpOntologyResolver, OntologyResolver};
+use cognee::PipelineContext;
+use cognee::add::AddPipeline;
+use cognee::cognify::{CognifyConfig, cognify};
+use cognee::component_manager::ComponentManager;
+use cognee::config::{ConfigManager, Settings};
+use cognee::core::{CpuPool, RayonThreadPool};
+use cognee::database::{IngestDb, PipelineRunRepository, SeaOrmPipelineRunRepository, ops};
+use cognee::models::DataInput;
+use cognee::ontology::{NoOpOntologyResolver, OntologyResolver};
 use serial_test::serial;
 use uuid::Uuid;
 

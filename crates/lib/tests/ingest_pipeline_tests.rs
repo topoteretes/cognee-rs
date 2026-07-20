@@ -5,13 +5,13 @@
 )]
 use std::sync::Arc;
 
-use cognee_lib::add::build_add_pipeline;
-use cognee_lib::add::{HashAlgorithm, generate_dataset_id};
-use cognee_lib::core::{NoopWatcher, Value, execute};
-use cognee_lib::database::{IngestDb, ops};
-use cognee_lib::models::{Data, DataInput};
-use cognee_lib::storage::LocalStorage;
-use cognee_lib::storage::StorageTrait;
+use cognee::add::build_add_pipeline;
+use cognee::add::{HashAlgorithm, generate_dataset_id};
+use cognee::core::{NoopWatcher, Value, execute};
+use cognee::database::{IngestDb, ops};
+use cognee::models::{Data, DataInput};
+use cognee::storage::LocalStorage;
+use cognee::storage::StorageTrait;
 use cognee_test_utils::{MockStorage, test_task_context};
 use tempfile::TempDir;
 use uuid::Uuid;
@@ -31,7 +31,7 @@ fn downcast_ref<T: 'static>(v: &Arc<dyn Value>) -> &T {
 #[tokio::test]
 async fn pipeline_based_add_text() {
     let (_handle, ctx, db) = test_task_context().await;
-    let storage: Arc<dyn cognee_lib::storage::StorageTrait> = Arc::new(MockStorage::new());
+    let storage: Arc<dyn cognee::storage::StorageTrait> = Arc::new(MockStorage::new());
     let owner_id = Uuid::new_v4();
 
     let pipeline = build_add_pipeline(
@@ -93,7 +93,7 @@ async fn pipeline_based_add_url_html() {
         .initialize()
         .await
         .expect("initialize storage");
-    let storage: Arc<dyn cognee_lib::storage::StorageTrait> = local_storage.clone();
+    let storage: Arc<dyn cognee::storage::StorageTrait> = local_storage.clone();
     let owner_id = Uuid::new_v4();
     let url = format!("{}/page.html", server.url());
 
@@ -155,7 +155,7 @@ async fn pipeline_based_add_url_html() {
 #[tokio::test]
 async fn pipeline_based_add_multiple() {
     let (_handle, ctx, db) = test_task_context().await;
-    let storage: Arc<dyn cognee_lib::storage::StorageTrait> = Arc::new(MockStorage::new());
+    let storage: Arc<dyn cognee::storage::StorageTrait> = Arc::new(MockStorage::new());
     let owner_id = Uuid::new_v4();
 
     let pipeline = build_add_pipeline(
@@ -185,7 +185,7 @@ async fn pipeline_based_add_multiple() {
 #[tokio::test]
 async fn pipeline_deduplication() {
     let (_handle, ctx, db) = test_task_context().await;
-    let storage: Arc<dyn cognee_lib::storage::StorageTrait> = Arc::new(MockStorage::new());
+    let storage: Arc<dyn cognee::storage::StorageTrait> = Arc::new(MockStorage::new());
     let owner_id = Uuid::new_v4();
 
     let pipeline = build_add_pipeline(
@@ -221,7 +221,7 @@ async fn pipeline_deduplication() {
 #[tokio::test]
 async fn pipeline_tenant_isolation() {
     let (_handle, ctx, db) = test_task_context().await;
-    let storage: Arc<dyn cognee_lib::storage::StorageTrait> = Arc::new(MockStorage::new());
+    let storage: Arc<dyn cognee::storage::StorageTrait> = Arc::new(MockStorage::new());
     let owner_id = Uuid::new_v4();
     let tenant_id = Uuid::new_v4();
 

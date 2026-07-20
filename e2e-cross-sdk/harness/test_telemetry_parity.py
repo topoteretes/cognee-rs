@@ -84,7 +84,7 @@ def _rust_emit():
     """Drive Rust's ``send_telemetry`` via the harness-only emit binary.
 
     A dedicated ``/usr/local/bin/cognee-telemetry-emit`` binary calls
-    ``cognee_lib::telemetry::send_telemetry`` directly with fixed args.
+    ``cognee::telemetry::send_telemetry`` directly with fixed args.
     We do **not** use ``cognee-cli-rust`` because no production
     subcommand is guaranteed to route to ``send_telemetry``.
     """

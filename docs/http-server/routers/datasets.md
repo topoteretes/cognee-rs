@@ -9,7 +9,7 @@ Companion docs: [../architecture.md](../architecture.md), [../auth.md](../auth.m
 - Router file: `crates/http-server/src/routers/datasets.rs`
 - Python source: [`cognee/api/v1/datasets/routers/get_datasets_router.py`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/datasets/routers/get_datasets_router.py)
 - Underlying SDK class: [`cognee/api/v1/datasets/datasets.py`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/datasets/datasets.py) (the `datasets` namespace) plus `cognee/modules/data/methods/*` for direct data access and `cognee/modules/graph/methods/get_formatted_graph_data.py` for the graph rendering.
-- Rust delegation surface: a mix of `cognee_lib::api::datasets::*`, `cognee_lib::modules::data::*`, and `cognee_lib::modules::graph::*`. The handler keeps no business logic.
+- Rust delegation surface: a mix of `cognee::api::datasets::*`, `cognee::modules::data::*`, and `cognee::modules::graph::*`. The handler keeps no business logic.
 
 ## 2. Endpoints
 
@@ -30,7 +30,7 @@ Companion docs: [../architecture.md](../architecture.md), [../auth.md](../auth.m
   | `418` | `{"detail": "Error retrieving datasets: <inner>"}` | Generic catch-all from Python. Source: [`get_datasets_router.py:122-126`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/datasets/routers/get_datasets_router.py#L122-L126). The `418 I'm a teapot` is intentional — Python uses it as a "couldn't categorize" status. The Rust `ApiError::Teapot(String)` variant maps here. |
 
 - **Side effects**: none (read-only).
-- **Delegation target**: `cognee_lib::modules::users::permissions::get_all_user_permission_datasets(user, "read") -> Vec<Dataset>`. Source: [`get_datasets_router.py:118`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/datasets/routers/get_datasets_router.py#L118).
+- **Delegation target**: `cognee::modules::users::permissions::get_all_user_permission_datasets(user, "read") -> Vec<Dataset>`. Source: [`get_datasets_router.py:118`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/datasets/routers/get_datasets_router.py#L118).
 - **Validation rules**: none.
 - **Permission gate**: `read` on each candidate dataset (the SDK call already filters; the handler does not re-check). [../tenants.md §5](../tenants.md#5-permission-resolution).
 - **OpenAPI**: tag `["datasets"]`, response `200: list[DatasetDTO]`.
@@ -58,7 +58,7 @@ Companion docs: [../architecture.md](../architecture.md), [../auth.md](../auth.m
   | `409` | `{"error": "<inner>"}` | Generic catch. Source: [`get_datasets_router.py:413-414`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/datasets/routers/get_datasets_router.py#L413-L414). Note the `{error}` envelope (not `{detail}`) — same quirk as add/update. |
   | `422` | `{"detail": [...], "body": ...}` | Bad UUID in query. |
 - **Side effects**: none.
-- **Delegation target**: `cognee_lib::api::datasets::get_status(dataset_ids: &[Uuid]) -> HashMap<Uuid, PipelineRunStatus>`. Internal: queries the `pipeline_runs` table for the latest row per dataset where `pipeline_name = "cognify_pipeline"`.
+- **Delegation target**: `cognee::api::datasets::get_status(dataset_ids: &[Uuid]) -> HashMap<Uuid, PipelineRunStatus>`. Internal: queries the `pipeline_runs` table for the latest row per dataset where `pipeline_name = "cognify_pipeline"`.
 - **Validation rules**: an empty `dataset` query list is accepted and returns `{}` (Python parity — empty input → empty result, no `422`). Strict wire parity; do not impose a `>= 1` requirement.
 - **Permission gate**: `read` on each dataset. Datasets the caller can't read are silently filtered.
 - **OpenAPI**: tag `["datasets"]`, parameter `dataset: array<Uuid>`, response `200: dict<UUID, PipelineRunStatus>`.
@@ -80,7 +80,7 @@ Companion docs: [../architecture.md](../architecture.md), [../auth.md](../auth.m
   | `404` | `{"message": "Dataset (<uuid>) not found."}` | Caller lacks `read` permission OR dataset doesn't exist. **Note**: Python returns `ErrorResponseDTO("Dataset ... not found.")` which has a single `message` field. Source: [`get_datasets_router.py:35-36`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/datasets/routers/get_datasets_router.py#L35-L36) (the model definition) and [`:347-350`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/datasets/routers/get_datasets_router.py#L347-L350) (the response). This is **distinct** from the `{error, detail}` envelope used by add/update. Document loudly. |
   | `422` | `{"detail": [...], "body": ...}` | Invalid UUID. |
 - **Side effects**: none.
-- **Delegation target**: `cognee_lib::modules::data::methods::get_dataset_data(dataset_id: Uuid) -> Vec<Data>`. Source: [`get_datasets_router.py:341`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/datasets/routers/get_datasets_router.py#L341).
+- **Delegation target**: `cognee::modules::data::methods::get_dataset_data(dataset_id: Uuid) -> Vec<Data>`. Source: [`get_datasets_router.py:341`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/datasets/routers/get_datasets_router.py#L341).
 - **Validation rules**: `dataset_id` must be a valid UUID.
 - **Permission gate**: `read` on `dataset_id` (cite [../tenants.md §5](../tenants.md#5-permission-resolution)).
 - **OpenAPI**: tag `["datasets"]`, response `200: list[DataDTO]`, `404: ErrorMessageDTO`.
@@ -113,7 +113,7 @@ This is the most operationally-loaded endpoint: it returns `FileResponse` (local
   2. `get_dataset_data(dataset_id)` — list data rows.
   3. `get_data(user.id, data_id)` — fetch the row.
   4. URI-scheme dispatch:
-     - `s3://...` → `cognee_lib::infrastructure::files::open_data_file(uri, "rb")` → wrap in async iterator → `axum::body::Body::from_stream`.
+     - `s3://...` → `cognee::infrastructure::files::open_data_file(uri, "rb")` → wrap in async iterator → `axum::body::Body::from_stream`.
      - `file://...` or empty scheme or `<single-letter>:` (Windows path) → `axum::extract::Path(local_path)` → `tokio::fs::File::open` → wrap in `tokio_util::io::ReaderStream` → `axum::body::Body::from_stream`. We do **not** use a built-in `FileResponse` analog — `tower-http::services::ServeFile` doesn't fit handler ergonomics; build the response manually with explicit `Content-Disposition`.
      - Anything else → 501.
 - **Validation rules**: both UUIDs valid.
@@ -144,7 +144,7 @@ This is the most operationally-loaded endpoint: it returns `FileResponse` (local
   | `404` | `{"detail": "..."}` | `DataNotFoundError` from the graph layer. |
   | `500` | `{"detail": "..."}` | Generic catch (no explicit Python handling — bubbles up as 500). |
 - **Side effects**: read-only.
-- **Delegation target**: `cognee_lib::modules::graph::methods::get_formatted_graph_data(dataset_id, user) -> GraphData`. Source: [`get_datasets_router.py:296-299`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/datasets/routers/get_datasets_router.py#L296-L299).
+- **Delegation target**: `cognee::modules::graph::methods::get_formatted_graph_data(dataset_id, user) -> GraphData`. Source: [`get_datasets_router.py:296-299`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/datasets/routers/get_datasets_router.py#L296-L299).
 - **Validation rules**: valid UUID.
 - **Permission gate**: `read` on `dataset_id`. Enforced inside `get_formatted_graph_data` (the SDK) — handler does not duplicate.
 - **OpenAPI**: tag `["datasets"]`, response `200: GraphDTO`.
@@ -170,7 +170,7 @@ This is the most operationally-loaded endpoint: it returns `FileResponse` (local
   | `401` | `{"detail": "Unauthorized"}` | — |
   | `404` | `{"error": "Dataset not found"}` | Caller lacks `read` permission. Source: [`get_datasets_router.py:529-530`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/datasets/routers/get_datasets_router.py#L529-L530). Note `{error}` envelope. |
 - **Side effects**: read-only.
-- **Delegation target**: `cognee_lib::modules::data::methods::get_dataset_configuration(dataset_id) -> Option<DatasetConfiguration>` — a new helper to add.
+- **Delegation target**: `cognee::modules::data::methods::get_dataset_configuration(dataset_id) -> Option<DatasetConfiguration>` — a new helper to add.
 - **Validation rules**: valid UUID.
 - **Permission gate**: `read`.
 - **OpenAPI**: tag `["datasets"]`, response `200: DatasetSchemaResponseDTO`.
@@ -194,7 +194,7 @@ This is the most operationally-loaded endpoint: it returns `FileResponse` (local
 - **Side effects**:
   - **Relational DB**: insert one row in `datasets` if no dataset of that name exists for `user.id`. Otherwise return the existing row (idempotent — Python: [`get_datasets_router.py:166-169`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/datasets/routers/get_datasets_router.py#L166-L169)).
   - **ACLs**: on creation, grant the user `read+write+share+delete` permissions on the new dataset. Source: [`get_datasets_router.py:177-180`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/datasets/routers/get_datasets_router.py#L177-L180).
-- **Delegation target**: `cognee_lib::modules::data::methods::{get_datasets_by_name, create_dataset}` + `cognee_lib::modules::users::permissions::give_permission_on_dataset` (loop x4).
+- **Delegation target**: `cognee::modules::data::methods::{get_datasets_by_name, create_dataset}` + `cognee::modules::users::permissions::give_permission_on_dataset` (loop x4).
 - **Validation rules**: `name` non-empty (Python doesn't enforce this; we should — empty-name datasets are pathological. Open question §6).
 - **Permission gate**: none — anyone authenticated may create datasets within their tenant.
 - **OpenAPI**: tag `["datasets"]`, request body `DatasetCreationPayload`, response `200: DatasetDTO`.
@@ -216,7 +216,7 @@ This is the most operationally-loaded endpoint: it returns `FileResponse` (local
   | `404` | `{"error": "Dataset not found"}` | Caller lacks `write`. Source: [`get_datasets_router.py:555-556`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/datasets/routers/get_datasets_router.py#L555-L556). |
   | `422` | `{"detail": [...], "body": ...}` | Body shape invalid. |
 - **Side effects**: upsert one row in the `dataset_configurations` table (or whatever the Rust equivalent is — see [project guide](../../../.claude/CLAUDE.md) for migration status).
-- **Delegation target**: a new `cognee_lib::modules::data::methods::upsert_dataset_configuration(dataset_id, graph_schema, custom_prompt)` helper.
+- **Delegation target**: a new `cognee::modules::data::methods::upsert_dataset_configuration(dataset_id, graph_schema, custom_prompt)` helper.
 - **Validation rules**: valid UUID; `graph_schema` if present must be a JSON object (not a primitive); `custom_prompt` if present must be a string.
 - **Permission gate**: `write` on `dataset_id`. Source: [`get_datasets_router.py:554`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/datasets/routers/get_datasets_router.py#L554).
 - **OpenAPI**: tag `["datasets"]`, request body `DatasetSchemaPayloadDTO`, response `200: dict`.
@@ -237,7 +237,7 @@ This is the most operationally-loaded endpoint: it returns `FileResponse` (local
   | `401` | `{"detail": "Unauthorized"}` | — |
   | `500` | `{"detail": "..."}` | Bubbles from the SDK; Python doesn't wrap. |
 - **Side effects**: deletes every dataset the user has `delete` on, plus all data rows, graph nodes, vector embeddings.
-- **Delegation target**: `cognee_lib::api::datasets::delete_all(user)`. Source: [`datasets.py:177-187`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/datasets/datasets.py#L177-L187).
+- **Delegation target**: `cognee::api::datasets::delete_all(user)`. Source: [`datasets.py:177-187`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/datasets/datasets.py#L177-L187).
 - **Validation rules**: none.
 - **Permission gate**: `delete` on each affected dataset (filtered inside the SDK).
 - **OpenAPI**: tag `["datasets"]`, response `200: null`.
@@ -259,7 +259,7 @@ This is the most operationally-loaded endpoint: it returns `FileResponse` (local
   | `404` | `{"detail": "Dataset (<uuid>) not accessible."}` | Caller lacks `delete` OR dataset doesn't exist. Source: `UnauthorizedDataAccessError` raised by `empty_dataset`. |
   | `500` | `{"detail": "..."}` | Other DB errors. |
 - **Side effects**: cascading delete: graph nodes/edges → dataset metadata → individual data records → vector points.
-- **Delegation target**: `cognee_lib::api::datasets::empty_dataset(dataset_id, user)`.
+- **Delegation target**: `cognee::api::datasets::empty_dataset(dataset_id, user)`.
 - **Validation rules**: valid UUID.
 - **Permission gate**: `delete` on `dataset_id`.
 - **OpenAPI**: tag `["datasets"]`, response `200`, `404: ErrorMessageDTO`.
@@ -281,7 +281,7 @@ This is the most operationally-loaded endpoint: it returns `FileResponse` (local
   | `404` | `{"detail": "Dataset/Data (<uuid>) not accessible."}` | `UnauthorizedDataAccessError`. |
   | `500` | `{"detail": "..."}` | DB error. |
 - **Side effects**: removes the data row, its graph subgraph, and its vector points. Does not delete the dataset.
-- **Delegation target**: `cognee_lib::api::datasets::delete_data(dataset_id, data_id, user)`.
+- **Delegation target**: `cognee::api::datasets::delete_data(dataset_id, data_id, user)`.
 - **Validation rules**: both UUIDs valid.
 - **Permission gate**: `delete` on `dataset_id`. The deprecated `/api/v1/delete` route delegates here — see [delete.md](delete.md).
 - **OpenAPI**: tag `["datasets"]`, response `200`, `404: ErrorMessageDTO`.

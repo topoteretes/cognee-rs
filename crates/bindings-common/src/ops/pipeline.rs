@@ -3,7 +3,7 @@
 //! These functions contain the pure-Rust async logic that is shared between
 //! every language binding surface (C API, Neon JS, Python). Each function takes
 //! a [`HandleState`] reference and `serde_json::Value` arguments, performs the
-//! operation against the underlying cognee-lib pipelines, and returns a
+//! operation against the underlying cognee pipelines, and returns a
 //! `serde_json::Value` result (or an [`SdkError`]).
 //!
 //! The binding-specific wrappers (C string parsing, Neon JS promise settling,
@@ -29,9 +29,9 @@ use std::collections::HashSet;
 use serde_json::json;
 use uuid::Uuid;
 
-use cognee_lib::cognify::cognify as cognee_lib_cognify;
-use cognee_lib::database::ops;
-use cognee_lib::models::{Data, Dataset};
+use cognee::cognify::cognify as cognee_cognify;
+use cognee::database::ops;
+use cognee::models::{Data, Dataset};
 
 use crate::wire::{cognify_result_json, marshal_inputs};
 use crate::{CogneeServices, HandleState, SdkError};
@@ -55,7 +55,7 @@ pub fn opts_tenant(opts: &serde_json::Value) -> Result<Option<Uuid>, SdkError> {
 pub fn cognify_config_with_opts(
     svc: &CogneeServices,
     opts: &serde_json::Value,
-) -> cognee_lib::cognify::CognifyConfig {
+) -> cognee::cognify::CognifyConfig {
     let mut cfg = svc.cognify_config.clone();
     if let Some(n) = opts.get("chunkSize").and_then(|v| v.as_u64()) {
         cfg = cfg.with_chunk_size(n as usize);
@@ -177,15 +177,15 @@ pub async fn run_cognify_on_items(
     owner_id: Uuid,
     data_items: Vec<Data>,
     opts: &serde_json::Value,
-) -> Result<cognee_lib::cognify::CognifyResult, SdkError> {
+) -> Result<cognee::cognify::CognifyResult, SdkError> {
     if data_items.is_empty() {
-        return Ok(cognee_lib::cognify::CognifyResult::empty());
+        return Ok(cognee::cognify::CognifyResult::empty());
     }
 
     let user_email = best_effort_user_email(svc, owner_id).await;
     let config = cognify_config_with_opts(svc, opts);
 
-    cognee_lib_cognify(
+    cognee_cognify(
         data_items,
         dataset.id,
         Some(owner_id),
@@ -299,7 +299,7 @@ pub async fn add_and_cognify(
         // Everything was a duplicate: skip cognify, return a zeroed summary.
         return Ok(json!({
             "add": add_json,
-            "cognify": cognify_result_json(&cognee_lib::cognify::CognifyResult::empty()),
+            "cognify": cognify_result_json(&cognee::cognify::CognifyResult::empty()),
         }));
     }
 

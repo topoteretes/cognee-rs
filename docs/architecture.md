@@ -16,7 +16,7 @@ root `README.md` link here rather than duplicating it.
 ## Workspace structure
 
 ```
-cognee-rust-oss/
+cognee-rs/
 ├── Cargo.toml                  # Workspace root (edition 2024, resolver 3)
 ├── crates/
 │   ├── models/                 # Core data types: Data, Dataset, DataInput, Document, DocumentChunk
@@ -39,7 +39,8 @@ cognee-rust-oss/
 │   ├── observability/          # OpenTelemetry tracing pipeline (OTLP exporter, telemetry feature)
 │   ├── telemetry/              # Product analytics (explicit opt-in; fail-closed)
 │   ├── logging/                # Shared file logging (rotation, Python-compatible plain formatter)
-│   ├── lib/                    # Top-level library aggregating all crates (public api/ module)
+│   ├── lib/                    # Top-level library `cognee` aggregating all crates (public api/ module)
+│   ├── cognee-lib/             # Deprecated re-export shim keeping the old `cognee-lib` crate name
 │   ├── bindings-common/        # Shared SDK facade for the JS (Neon) + C-API bindings
 │   ├── cli/                    # CLI binary (cognee-cli)
 │   ├── bench/                  # Criterion benchmarks (add + cognify + search pipeline)
@@ -91,7 +92,7 @@ cognee-rust-oss/
 
 **cognee-core** — Async runtime, task scheduling, and pipeline-execution primitives. Traits: `PipelineWatcher`, `ExecStatusManager`. Impls: `NoopWatcher`, `RayonThreadPool`, `NoopExecStatusManager`.
 
-**cognee-components** — Shared backend construction. Owns `ComponentError`, the `BackendBuildContext` (the resolved, env-free input both callers lower their config into), the adapter factory traits (`VectorDbFactory`, `GraphDbFactory`, `LlmFactory`, `EmbeddingFactory`), and the `ComponentRegistry` (provider-id → factory) with `with_builtins()`. Sits below `cognee-lib` and `cognee-http-server`; both delegate their backend construction here, so the two paths can't drift. The registry is the explicit-DI extension seam — external adapters (closed `cognee-vector-qdrant` / `cognee-llm-litert`) implement a factory trait and `register_*` it at their binary entry point. See [operations.md](operations.md).
+**cognee-components** — Shared backend construction. Owns `ComponentError`, the `BackendBuildContext` (the resolved, env-free input both callers lower their config into), the adapter factory traits (`VectorDbFactory`, `GraphDbFactory`, `LlmFactory`, `EmbeddingFactory`), and the `ComponentRegistry` (provider-id → factory) with `with_builtins()`. Sits below `cognee` and `cognee-http-server`; both delegate their backend construction here, so the two paths can't drift. The registry is the explicit-DI extension seam — external adapters (closed `cognee-vector-qdrant` / `cognee-llm-litert`) implement a factory trait and `register_*` it at their binary entry point. See [operations.md](operations.md).
 
 **cognee-http-server** — `axum`-based HTTP server. Library exposes `build_router`, `run`, and `AppState`; also builds the `cognee-http-server` binary. Routers mirror the Python FastAPI surface under `/api/v1/*`. See [http-server/](http-server/README.md).
 
@@ -109,9 +110,11 @@ binding-host suppression still win. See
 
 **cognee-bench** — Criterion benchmark crate (`batch_add_cognify`) exercising the add + cognify + search pipeline.
 
-**cognee-bindings-common** — Shared SDK facade for the Neon JS, C-API, and Java (JNI) bindings: `SdkError` (+ `code()`), `HandleState`, `CogneeServices`, and neon-free JSON wire helpers. Not a new user-facing Rust API — that remains `cognee_lib::api`.
+**cognee-bindings-common** — Shared SDK facade for the Neon JS, C-API, and Java (JNI) bindings: `SdkError` (+ `code()`), `HandleState`, `CogneeServices`, and neon-free JSON wire helpers. Not a new user-facing Rust API — that remains `cognee::api`.
 
-**cognee-lib** — Unified public API facade. Re-exports all crates and adds an `api/` module mirroring the Python SDK: `forget`, `update`, `prune`, `recall`, `remember`, `improve`, plus `DatasetManager`. Houses the shared `Settings`/`ConfigManager` and runtime setters. `ComponentManager` (lazy, version-cached) delegates backend construction to a `cognee-components` `ComponentRegistry`; use `ComponentManager::with_registry` (or `HandleState::from_settings_with_registry` in the bindings) to inject external adapter factories. The registry API is re-exported here so closed entry points use `cognee_lib::` paths.
+**cognee** — Unified public API facade. Re-exports all crates and adds an `api/` module mirroring the Python SDK: `forget`, `update`, `prune`, `recall`, `remember`, `improve`, plus `DatasetManager`. Houses the shared `Settings`/`ConfigManager` and runtime setters. `ComponentManager` (lazy, version-cached) delegates backend construction to a `cognee-components` `ComponentRegistry`; use `ComponentManager::with_registry` (or `HandleState::from_settings_with_registry` in the bindings) to inject external adapter factories. The registry API is re-exported here so closed entry points use `cognee::` paths. (The crate lives in `crates/lib/`; it shipped as `cognee-lib` through v0.1.3 and was renamed to `cognee`.)
+
+**cognee-lib** — Deprecated re-export shim (`crates/cognee-lib/`) that keeps the old `cognee-lib` crate name compiling after the rename. It is `pub use cognee::*` with every Cargo feature forwarded 1:1 to `cognee`. New code should depend on `cognee` directly.
 
 **cognee-cli** — Command-line binary (`cognee-cli`). See [tools/cli.md](tools/cli.md).
 
@@ -121,7 +124,7 @@ binding-host suppression still win. See
 
 ## Architecture patterns
 
-- **Feature strategy** — Individual crates define optional features with no defaults (`default = []`). The umbrella library (`cognee-lib`) and the CLI (`cognee-cli`) enable all non-platform-specific features by default, so a plain `cargo build` gives a fully-featured binary. Platform- and deployment-specific extras (e.g. on-device LiteRT inference, embedded Qdrant) ship in the closed `cognee-cloud-rs` companion repo; the `testing` feature stays opt-in. New feature-gated capabilities should be propagated up through `cognee-lib`/`cognee-cli` defaults unless platform- or test-only.
+- **Feature strategy** — Individual crates define optional features with no defaults (`default = []`). The umbrella library (`cognee`) and the CLI (`cognee-cli`) enable all non-platform-specific features by default, so a plain `cargo build` gives a fully-featured binary. Platform- and deployment-specific extras (e.g. on-device LiteRT inference, embedded Qdrant) ship in the closed `cognee-cloud-rs` companion repo; the `testing` feature stays opt-in. New feature-gated capabilities should be propagated up through `cognee`/`cognee-cli` defaults unless platform- or test-only.
 - **Trait-based abstractions** — `StorageTrait`, `IngestDb`, `GraphDBTrait`, `VectorDB`, `EmbeddingEngine`, `Llm`, `SessionStore`, etc. enable backend swapping and mock testing.
 - **Prefer `dyn Trait`** — object-safe traits via `&dyn Trait` / `Arc<dyn Trait>` at call sites; monomorphized generics only when performance-critical.
 - **Zero-copy where possible** — `WordChunk<'a>`, `SentenceChunk<'a>`, `ParagraphChunk<'a>` borrow `&str` slices via byte-offset tracking.
@@ -166,11 +169,11 @@ cargo doc -p cognee-cognify --no-deps --open
 
 CI already runs `cargo doc --no-deps` on every push (no hosted docs.rs site —
 build locally). Each crate's `lib.rs` carries a top-level `//!` summary; start
-from `cognee-lib` (the facade) and follow the re-exports.
+from `cognee` (the facade) and follow the re-exports.
 
 | Area | Crate (package) | Start at |
 |---|---|---|
-| Public SDK facade | `cognee-lib` | `api` module, `ConfigManager` |
+| Public SDK facade | `cognee` | `api` module, `ConfigManager` |
 | Ingest | `cognee-ingestion` | `AddPipeline` |
 | Chunking | `cognee-chunking` | `TokenCounter`, `text_chunker` |
 | Cognify / memify | `cognee-cognify` | `cognify`, `memify`, `CognifyConfig` |

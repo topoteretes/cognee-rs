@@ -13,8 +13,7 @@ pub(crate) fn cstring_lossy(s: &str) -> CString {
         Ok(c) => c,
         Err(_) => {
             let sanitized: String = s.chars().filter(|&c| c != '\0').collect();
-            CString::new(sanitized)
-                .expect("interior NULs stripped, so this cannot fail")
+            CString::new(sanitized).expect("interior NULs stripped, so this cannot fail")
         }
     }
 }

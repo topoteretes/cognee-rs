@@ -3,7 +3,7 @@
 //! These functions contain the pure-Rust async logic that is shared between
 //! every language binding surface (C API, Neon JS, Python). Each function takes
 //! a [`HandleState`] reference and `serde_json::Value` arguments, performs the
-//! operation against the underlying cognee-lib APIs, and returns a
+//! operation against the underlying cognee APIs, and returns a
 //! `serde_json::Value` result (or an [`SdkError`]).
 //!
 //! The binding-specific wrappers (C string parsing, Neon JS promise settling,
@@ -53,10 +53,10 @@ use std::sync::Arc;
 use serde_json::json;
 use uuid::Uuid;
 
-use cognee_lib::api::{ImproveParams, remember, remember_entry};
-use cognee_lib::cognify::{MemifyConfig, run_memify};
-use cognee_lib::database::{PipelineRunRepository, SeaOrmPipelineRunRepository};
-use cognee_lib::models::{FeedbackEntry, MemoryEntry, QAEntry, TraceEntry};
+use cognee::api::{ImproveParams, remember, remember_entry};
+use cognee::cognify::{MemifyConfig, run_memify};
+use cognee::database::{PipelineRunRepository, SeaOrmPipelineRunRepository};
+use cognee::models::{FeedbackEntry, MemoryEntry, QAEntry, TraceEntry};
 
 use crate::wire::marshal_inputs;
 use crate::{HandleState, SdkError};
@@ -79,8 +79,8 @@ fn opts_tenant(opts: &serde_json::Value) -> Result<Option<Uuid>, SdkError> {
 // MemifyResult JSON helper (MemifyResult does not derive Serialize).
 // ---------------------------------------------------------------------------
 
-/// Serialise a [`cognee_lib::cognify::MemifyResult`] to a camelCase JSON value.
-pub fn memify_result_json(r: &cognee_lib::cognify::MemifyResult) -> serde_json::Value {
+/// Serialise a [`cognee::cognify::MemifyResult`] to a camelCase JSON value.
+pub fn memify_result_json(r: &cognee::cognify::MemifyResult) -> serde_json::Value {
     json!({
         "tripletCount": r.triplet_count,
         "indexedCount": r.index_result.indexed_count,
@@ -396,7 +396,7 @@ pub async fn run_improve(
     let svc = state.services().await?;
     let owner_id = state.owner_id().await?;
 
-    let result = cognee_lib::api::improve(ImproveParams {
+    let result = cognee::api::improve(ImproveParams {
         dataset_name,
         session_ids,
         node_name,

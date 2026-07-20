@@ -36,7 +36,7 @@ cognee_http_server::run(addr, state).await?;
 
 Public entry points: `build_router(AppState)` (assembles the router + middleware +
 all sub-routers), `run(addr, AppState)` (binds a listener and serves), and
-`AppState`. Routers delegate into `cognee-lib` facades — no business logic is
+`AppState`. Routers delegate into `cognee` facades — no business logic is
 re-implemented in the server crate. See the
 [architecture decisions](../http-server/architecture.md) for the dual-surface
 design and middleware stack, and [tools/backends.md](backends.md) for how the

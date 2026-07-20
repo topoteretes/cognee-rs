@@ -43,7 +43,7 @@ deployment (relational + graph + vector all on Postgres) plus one summarization
 ergonomics gap. The `PgGraphAdapter` itself is already fully written
 ([crates/graph/src/pg_graph_adapter.rs](../../crates/graph/src/pg_graph_adapter.rs),
 1,265 lines, feature `postgres`) and `pggraph` is already in the default feature
-set of both `cognee-lib` and `cognee-cli` — it is simply **never reachable at
+set of both `cognee` and `cognee-cli` — it is simply **never reachable at
 runtime** because `ComponentManager` rejects the `postgres` graph provider.
 
 This document is the index. The one remaining work item (Item 3) has a dedicated

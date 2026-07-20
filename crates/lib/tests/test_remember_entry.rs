@@ -22,8 +22,8 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use chrono::Utc;
-use cognee_lib::api::error::ApiError;
-use cognee_lib::api::remember::{RememberStatus, remember_entry};
+use cognee::api::error::ApiError;
+use cognee::api::remember::{RememberStatus, remember_entry};
 use cognee_models::{FeedbackEntry, MemoryEntry, QAEntry, TraceEntry};
 use cognee_session::{
     SessionError, SessionManager, SessionQAEntry, SessionQAUpdate, SessionStore, SessionTraceStep,

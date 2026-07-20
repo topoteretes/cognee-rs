@@ -228,10 +228,10 @@ pub struct HttpServerConfig {
     /// The resulting owner id is
     /// `Uuid::new_v5(&Uuid::NAMESPACE_OID, default_user_email.as_bytes())`
     /// — the same derivation used by
-    /// [`cognee_lib::api::user::get_or_create_default_user`] and the
+    /// [`cognee::api::user::get_or_create_default_user`] and the
     /// Python reference SDK (`uuid5(NAMESPACE_OID, email)`).
     ///
-    /// Mirrors `Settings::default_user_email` in `cognee-lib` so the HTTP
+    /// Mirrors `Settings::default_user_email` in `cognee` so the HTTP
     /// server and the bindings/CLI agree on owner ids for the same
     /// configured email. Env: `DEFAULT_USER_EMAIL`. Default:
     /// `"default_user@example.com"`.
@@ -573,7 +573,7 @@ impl HttpServerConfig {
 impl HttpServerConfig {
     /// Lower these settings into a [`cognee_components::BackendBuildContext`].
     ///
-    /// Unlike `cognee-lib`'s `Settings::backend_context`, the standalone server
+    /// Unlike `cognee`'s `Settings::backend_context`, the standalone server
     /// deliberately does **not** read `MOCK_LLM` / `MOCK_EMBEDDING` or wire the
     /// recording path: a production server must never silently honor those.
     /// Mock backends are opt-in through the `dev-mock` feature + an explicit
@@ -667,7 +667,7 @@ impl HttpServerConfig {
                 // The HTTP server config does not yet expose an `LLM_ARGS`
                 // equivalent; default to no extra request params (a no-op).
                 // The CLI/ComponentManager path wires `LLM_ARGS` via
-                // `cognee_lib::Settings`.
+                // `cognee::Settings`.
                 llm_args: serde_json::Map::new(),
                 mock: false,
                 cassette: String::new(),

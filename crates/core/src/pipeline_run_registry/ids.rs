@@ -1,9 +1,9 @@
 //! Deterministic pipeline & pipeline-run IDs (Python parity).
 //!
 //! Shared between the HTTP server's `dispatch_pipeline` and library-level
-//! callers such as the reset helpers in `cognee-lib`. Promoted out of
+//! callers such as the reset helpers in `cognee`. Promoted out of
 //! `crates/http-server/src/pipelines/dispatch.rs` (action item 08-05 §4.0)
-//! so `cognee-lib` can call them without depending on `cognee-http-server`.
+//! so `cognee` can call them without depending on `cognee-http-server`.
 //!
 //! Both helpers produce byte-identical values to the Python utilities:
 //!
