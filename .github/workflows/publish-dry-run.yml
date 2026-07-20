@@ -116,8 +116,20 @@ jobs:
               # external dep) is still a hard failure.
               missing="$(grep -oE 'no matching package named `[^`]+` found' "$crate_log" \
                 | head -1 | sed -E 's/^no matching package named `([^`]+)` found$/\1/' || true)"
+              # Same root cause, different wording: a workspace sibling that IS on
+              # the index but not yet at the required version (e.g. a reserved
+              # placeholder like `cognee 0.0.0`, or a release/* bump). cargo emits
+              # "failed to select a version for the requirement `<crate> = ..."
+              # instead of "no matching package". Only the ordered real publish
+              # satisfies it, so downgrade to SKIP too — still guarded to
+              # workspace members, so a genuine external version conflict fails.
+              unmet="$(grep -oE 'failed to select a version for the requirement `[^ ]+ =' "$crate_log" \
+                | head -1 | sed -E 's/^failed to select a version for the requirement `([^ ]+) =$/\1/' || true)"
               if [ -n "$missing" ] && is_ws_member "$missing"; then
                 echo "SKIP (depends on not-yet-published workspace crate '$missing')"
+                skips=$((skips + 1))
+              elif [ -n "$unmet" ] && is_ws_member "$unmet"; then
+                echo "SKIP (workspace crate '$unmet' not yet published at the required version)"
                 skips=$((skips + 1))
               else
                 echo FAIL
