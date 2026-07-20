@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use chrono::{DateTime, Utc};
 use cognee_utils::tracing_keys::{COGNEE_DB_ROW_COUNT, COGNEE_DB_SYSTEM};
 use sea_orm::sea_query::{Alias, Expr, OnConflict, Query};
@@ -23,6 +25,34 @@ use crate::uuid_hex;
 /// fails with "too many SQL variables".
 const PROVENANCE_INSERT_BATCH: usize = 500;
 
+/// Return references to `items` de-duplicated by `key`, keeping the **last**
+/// occurrence of each key, in forward order.
+///
+/// Postgres rejects an `INSERT … ON CONFLICT (id) DO UPDATE` whose VALUES list
+/// names the same conflict-target row more than once ("ON CONFLICT DO UPDATE
+/// command cannot affect row a second time"). The provenance upserts can be
+/// handed a batch that repeats a node/edge id (e.g. the same entity re-emitted
+/// within one chunk); collapsing to the last occurrence keeps the upsert legal
+/// while preserving update semantics — the last write wins, exactly as it would
+/// if the duplicates landed in separate statements. SQLite tolerates the
+/// duplicate, so this only matters on Postgres, but de-duplicating for both
+/// keeps behaviour identical across backends.
+fn dedup_keeping_last<T, F>(items: &[T], key: F) -> Vec<&T>
+where
+    F: Fn(&T) -> Uuid,
+{
+    // Walk backwards: the first time a key is seen is its last occurrence.
+    let mut seen: HashSet<Uuid> = HashSet::with_capacity(items.len());
+    let mut out: Vec<&T> = Vec::with_capacity(items.len());
+    for item in items.iter().rev() {
+        if seen.insert(key(item)) {
+            out.push(item);
+        }
+    }
+    out.reverse();
+    out
+}
+
 #[instrument(
     name = "cognee.db.relational.graph_storage.upsert_nodes",
     level = "info",
@@ -40,7 +70,12 @@ pub async fn upsert_nodes(
     }
     // Chunk so a single statement never exceeds the DB's bound-variable cap.
     for batch in nodes.chunks(PROVENANCE_INSERT_BATCH) {
-        let models: Vec<node::ActiveModel> = batch.iter().map(node::ActiveModel::from).collect();
+        // Collapse duplicate ids within the batch (keep last) so Postgres' ON
+        // CONFLICT DO UPDATE never touches the same row twice.
+        let models: Vec<node::ActiveModel> = dedup_keeping_last(batch, |n| n.id)
+            .into_iter()
+            .map(node::ActiveModel::from)
+            .collect();
         node::Entity::insert_many(models)
             .on_conflict(
                 OnConflict::column(node::Column::Id)
@@ -128,7 +163,12 @@ pub async fn upsert_edges(
     }
     // Chunk so a single statement never exceeds the DB's bound-variable cap.
     for batch in edges.chunks(PROVENANCE_INSERT_BATCH) {
-        let models: Vec<edge::ActiveModel> = batch.iter().map(edge::ActiveModel::from).collect();
+        // Collapse duplicate ids within the batch (keep last) so Postgres' ON
+        // CONFLICT DO UPDATE never touches the same row twice.
+        let models: Vec<edge::ActiveModel> = dedup_keeping_last(batch, |e| e.id)
+            .into_iter()
+            .map(edge::ActiveModel::from)
+            .collect();
         edge::Entity::insert_many(models)
             .on_conflict(
                 OnConflict::column(edge::Column::Id)
