@@ -31,7 +31,7 @@ held.**
 | B3 pre-transport gate | DONE | Static call order in `crates/telemetry/src/real.rs` remains `is_disabled()` before `build_body`, identity helpers, runtime acquisition, client access, or `post`. Added-line scan found no server/listener/socket/database/model/credential/process surface. |
 | B4 bounded regression coverage | PARTIAL | Formatter and lightweight syntax checks passed. `cargo test -p cognee-telemetry --features telemetry --lib --jobs 3` was interrupted during dependency compilation; zero tests executed. No cargo/rustc command was restarted. Socket-backed integration tests were intentionally not run. |
 | B5 operator truth | DONE | Rust/C/Python/TypeScript/Java comments, manifests, smoke fixtures, and operator docs consistently describe explicit opt-in and suppression precedence. Stale current-policy `ON by default` / opt-out wording was removed or clarified. |
-| B6 scoped publication | PARTIAL | Diff is limited to telemetry behavior, focused fixtures, policy documentation, plan/list/walkthrough. Commit/push/draft-PR receipts are pending below. No merge is authorized. |
+| B6 scoped publication | DONE | The exact 43-path implementation snapshot was committed, passed repository publication hygiene, pushed to the user fork, and opened as an upstream draft PR. No merge was performed or authorized. |
 
 ## Verification evidence
 
@@ -113,9 +113,11 @@ database, or model process was started.
 
 ## Publication receipt
 
-- Commit: **PENDING**
-- Remote fork: **PENDING**
-- Draft PR: **PENDING**
+- Primary implementation commit: `b08c963821bbd4740492bc2e41698494ba54a182`
+- Remote fork: `https://github.com/bardiyafreeman/cognee-rs`
+- Head: `bardiyafreeman:codex/cognee-fail-closed-telemetry`
+- Base: `topoteretes/cognee-rs:main`
+- Draft PR: `https://github.com/topoteretes/cognee-rs/pull/94`
 - Merge: **NOT PERFORMED / NOT AUTHORIZED**
 
 Signoff: iCodex (GPT-5), under Vishvakarma

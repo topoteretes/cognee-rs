@@ -34,9 +34,9 @@ Date: 2026-07-20
 - [x] Stop the interrupted Cargo process and move its generated target tree
       out of the worktree; no task-owned process remains.
 - [x] Create the GATE 2 walkthrough with the verification hold stated plainly.
-- [ ] Exact-stage and commit only task paths.
-- [ ] Run post-commit publication hygiene against the exact commit.
-- [ ] Push `codex/cognee-fail-closed-telemetry` to a writable fork and open a
+- [x] Exact-stage and commit only task paths.
+- [x] Run post-commit publication hygiene against the exact commit.
+- [x] Push `codex/cognee-fail-closed-telemetry` to a writable fork and open a
       draft PR; never merge.
 
 Signoff: iCodex (GPT-5), under Vishvakarma

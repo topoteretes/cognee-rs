@@ -128,7 +128,7 @@ pre-amendment record as chronology, not standing scope.
 - [x] **B5 — operator truth:** crate and operator documentation consistently
       state explicit opt-in, accepted values, and higher-priority suppression;
       no document claims opt-out/default-on behavior.
-- [ ] **B6 — scoped publication:** only telemetry behavior, its focused tests,
+- [x] **B6 — scoped publication:** only telemetry behavior, its focused tests,
       documentation, this plan, and the GATE 2 walkthrough enter the commit.
       No files from the unrelated dirty fork worktree are copied. Publication
       remains draft-only and never merges.
