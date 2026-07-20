@@ -94,6 +94,11 @@ jobs:
           ws_members="$(cargo metadata --no-deps --format-version 1 --manifest-path Cargo.toml \
             | python3 -c 'import json,sys; print("\n".join(p["name"] for p in json.load(sys.stdin)["packages"]))')"
           is_ws_member() { printf '%s\n' "$ws_members" | grep -qxF "$1"; }
+          # Current workspace version. Every intra-workspace dep requirement is
+          # pinned to it by scripts/release/set-version.sh, so a legitimately
+          # unpublishable-yet sibling always requires exactly this version; any
+          # other required version is a stale/impossible pin and must not skip.
+          ws_version="$(grep -m1 '^version = ' Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')"
 
           : > /tmp/dry-run.log
           fails=0
@@ -120,16 +125,20 @@ jobs:
               # the index but not yet at the required version (e.g. a reserved
               # placeholder like `cognee 0.0.0`, or a release/* bump). cargo emits
               # "failed to select a version for the requirement `<crate> = ..."
-              # instead of "no matching package". Only the ordered real publish
-              # satisfies it, so downgrade to SKIP too — still guarded to
-              # workspace members, so a genuine external version conflict fails.
+              # instead of "no matching package". Downgrade to SKIP ONLY when the
+              # required version equals the current workspace version — the pin
+              # set-version.sh writes for every internal dep, which the ordered
+              # real publish will satisfy. A pin requiring any OTHER version is
+              # stale/impossible (it also reds `cargo check`), so it still FAILs.
               unmet="$(grep -oE 'failed to select a version for the requirement `[^ ]+ =' "$crate_log" \
                 | head -1 | sed -E 's/^failed to select a version for the requirement `([^ ]+) =$/\1/' || true)"
+              unmet_req="$(grep -oE 'the requirement `[^ ]+ = "[^"]+"' "$crate_log" \
+                | head -1 | sed -E 's/.*= "\^?=?([0-9][^"]*)"$/\1/' || true)"
               if [ -n "$missing" ] && is_ws_member "$missing"; then
                 echo "SKIP (depends on not-yet-published workspace crate '$missing')"
                 skips=$((skips + 1))
-              elif [ -n "$unmet" ] && is_ws_member "$unmet"; then
-                echo "SKIP (workspace crate '$unmet' not yet published at the required version)"
+              elif [ -n "$unmet" ] && is_ws_member "$unmet" && [ "$unmet_req" = "$ws_version" ]; then
+                echo "SKIP (workspace crate '$unmet' not yet published at v${ws_version})"
                 skips=$((skips + 1))
               else
                 echo FAIL
