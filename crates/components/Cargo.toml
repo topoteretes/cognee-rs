@@ -16,7 +16,7 @@ workspace = true
 
 [features]
 # Standalone builds register the common OSS provider set. Downstream crates
-# (cognee-lib, cognee-http-server) depend with `default-features = false` and
+# (cognee, cognee-http-server) depend with `default-features = false` and
 # forward exactly the features they want, so `--no-default-features` builds
 # stay precise.
 default = ["onnx", "ladybug", "pgvector", "pggraph", "mock-llm"]

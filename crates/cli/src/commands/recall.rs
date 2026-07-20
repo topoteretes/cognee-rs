@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
-use cognee_lib::api::recall;
-use cognee_lib::database::IngestDb;
-use cognee_lib::search::{SeaOrmSessionStore, SearchBuilder, SearchType, SessionManager};
-use cognee_lib::session::SessionStore;
-use cognee_lib::{ComponentManager, PipelineContext};
+use cognee::api::recall;
+use cognee::database::IngestDb;
+use cognee::search::{SeaOrmSessionStore, SearchBuilder, SearchType, SessionManager};
+use cognee::session::SessionStore;
+use cognee::{ComponentManager, PipelineContext};
 use uuid::Uuid;
 
 use crate::cli::{OutputFormatArg, QueryTypeArg, RecallArgs};
@@ -116,7 +116,7 @@ fn map_query_type(query_type: QueryTypeArg) -> SearchType {
 }
 
 fn render_output(
-    result: &cognee_lib::api::RecallResult,
+    result: &cognee::api::RecallResult,
     output_format: OutputFormatArg,
 ) -> Result<(), CliError> {
     // Recall results are the command's primary output and must reach stdout

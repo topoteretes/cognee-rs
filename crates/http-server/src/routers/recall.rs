@@ -101,7 +101,7 @@ pub async fn get_recall_history(
 ///
 /// Calls `cognee_search::recall_scope::*` helpers directly because the
 /// http-server -> lib cycle constraint (`Cargo.toml:35-37`) forbids
-/// importing `cognee_lib::api::recall::recall`. The fan-out logic mirrors
+/// importing `cognee::api::recall::recall`. The fan-out logic mirrors
 /// Python `recall.py:373-531` byte-for-byte (per Decisions 17 + 18 — the
 /// LIB-08 lift makes the four `pub` helpers reachable without a cycle).
 #[utoipa::path(
@@ -164,7 +164,7 @@ pub async fn post_recall(
         .and_then(|c| c.session_manager.as_ref().cloned());
 
     // -- Resolve scope to a concrete source list (mirrors
-    //    `cognee_lib::api::recall::recall()` at `crates/lib/src/api/recall.rs:78-100`,
+    //    `cognee::api::recall::recall()` at `crates/lib/src/api/recall.rs:78-100`,
     //    Python `recall.py:373-386`). --
     let normalized: Vec<RecallScope> = match payload.scope {
         None => vec![RecallScope::Auto],

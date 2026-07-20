@@ -1,4 +1,4 @@
-# cognee-lib
+# cognee
 
 Unified public API for cognee-rust — the single-entry-point umbrella crate that re-exports `add`, `cognify`, and `search` for embedded and Rust-SDK users.
 

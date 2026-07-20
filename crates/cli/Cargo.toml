@@ -44,7 +44,7 @@ default = [
     # --no-default-features for compile-time opt-out.
     "telemetry",
 ]
-mock-llm      = ["cognee-lib/mock-llm"]
+mock-llm      = ["cognee/mock-llm"]
 # `bench` adds the `bench` subcommand (perf orchestrator driver). Pulls no heavy
 # deps — just reuses the existing pipeline wiring + tempfile — so it is on by
 # default.
@@ -54,44 +54,44 @@ bench         = ["dep:tempfile"]
 # no root. Opt-in (NOT in default) so normal bench runs stay lean and CI can
 # still emit flamegraphs offline via `--features bench,profiling`.
 profiling     = ["dep:pprof"]
-onnx          = ["cognee-lib/onnx"]
+onnx          = ["cognee/onnx"]
 # Platform-specific GPU acceleration for ONNX Runtime (opt-in, NOT in default).
 # Enable for NVIDIA hardware: --features ort-cuda or --features ort-tensorrt.
-ort-cuda      = ["cognee-lib/ort-cuda"]
-ort-tensorrt  = ["cognee-lib/ort-tensorrt"]
-onnx-dynamic  = ["cognee-lib/onnx-dynamic"]
-ladybug       = ["cognee-lib/ladybug"]
-pgvector      = ["cognee-lib/pgvector"]
-pggraph       = ["cognee-lib/pggraph"]
-sqlite        = ["cognee-lib/sqlite"]
-postgres      = ["cognee-lib/postgres"]
-hf-tokenizer  = ["cognee-lib/hf-tokenizer"]
-tiktoken      = ["cognee-lib/tiktoken"]
-telemetry     = ["cognee-lib/telemetry"]
-visualization = ["cognee-lib/visualization"]
+ort-cuda      = ["cognee/ort-cuda"]
+ort-tensorrt  = ["cognee/ort-tensorrt"]
+onnx-dynamic  = ["cognee/onnx-dynamic"]
+ladybug       = ["cognee/ladybug"]
+pgvector      = ["cognee/pgvector"]
+pggraph       = ["cognee/pggraph"]
+sqlite        = ["cognee/sqlite"]
+postgres      = ["cognee/postgres"]
+hf-tokenizer  = ["cognee/hf-tokenizer"]
+tiktoken      = ["cognee/tiktoken"]
+telemetry     = ["cognee/telemetry"]
+visualization = ["cognee/visualization"]
 
-# Document format loaders (forwarded through cognee-lib)
-pdf-pdfium        = ["cognee-lib/pdf-pdfium"]
-pdf-pure-rust     = ["cognee-lib/pdf-pure-rust"]
-csv-loader        = ["cognee-lib/csv-loader"]
-html-loader       = ["cognee-lib/html-loader"]
-image-loader      = ["cognee-lib/image-loader"]
-audio-loader      = ["cognee-lib/audio-loader"]
-unstructured      = ["cognee-lib/unstructured"]
-unstructured-xlsx = ["cognee-lib/unstructured-xlsx"]
-unstructured-docx = ["cognee-lib/unstructured-docx"]
-unstructured-pptx = ["cognee-lib/unstructured-pptx"]
-unstructured-epub = ["cognee-lib/unstructured-epub"]
-unstructured-eml  = ["cognee-lib/unstructured-eml"]
-unstructured-odt  = ["cognee-lib/unstructured-odt"]
-unstructured-odp  = ["cognee-lib/unstructured-odp"]
+# Document format loaders (forwarded through cognee)
+pdf-pdfium        = ["cognee/pdf-pdfium"]
+pdf-pure-rust     = ["cognee/pdf-pure-rust"]
+csv-loader        = ["cognee/csv-loader"]
+html-loader       = ["cognee/html-loader"]
+image-loader      = ["cognee/image-loader"]
+audio-loader      = ["cognee/audio-loader"]
+unstructured      = ["cognee/unstructured"]
+unstructured-xlsx = ["cognee/unstructured-xlsx"]
+unstructured-docx = ["cognee/unstructured-docx"]
+unstructured-pptx = ["cognee/unstructured-pptx"]
+unstructured-epub = ["cognee/unstructured-epub"]
+unstructured-eml  = ["cognee/unstructured-eml"]
+unstructured-odt  = ["cognee/unstructured-odt"]
+unstructured-odp  = ["cognee/unstructured-odp"]
 
 # Composite feature for Android CLI builds
-android-default = ["cognee-lib/android-default"]
+android-default = ["cognee/android-default"]
 
 [dependencies]
 clap = { workspace = true, features = ["derive"] }
-cognee-lib = { path = "../lib", version = "0.1.3" }
+cognee = { path = "../lib", version = "0.1.3" }
 cognee-logging = { path = "../logging", version = "0.1.3" }
 dirs.workspace = true
 serde.workspace = true

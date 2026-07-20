@@ -5,14 +5,14 @@
 )]
 use std::sync::Arc;
 
-use cognee_lib::add::HashAlgorithm;
-use cognee_lib::add::build_add_pipeline;
-use cognee_lib::api::{ApiError, DatasetRef, ForgetTarget, forget};
-use cognee_lib::core::{NoopWatcher, Value, execute};
-use cognee_lib::database::{DeleteDb, IngestDb, ops};
-use cognee_lib::delete::{DeleteMode, DeleteRequest, DeleteScope, DeleteService};
-use cognee_lib::models::{Data, DataInput, Dataset};
-use cognee_lib::storage::StorageTrait;
+use cognee::add::HashAlgorithm;
+use cognee::add::build_add_pipeline;
+use cognee::api::{ApiError, DatasetRef, ForgetTarget, forget};
+use cognee::core::{NoopWatcher, Value, execute};
+use cognee::database::{DeleteDb, IngestDb, ops};
+use cognee::delete::{DeleteMode, DeleteRequest, DeleteScope, DeleteService};
+use cognee::models::{Data, DataInput, Dataset};
+use cognee::storage::StorageTrait;
 use cognee_test_utils::{MockStorage, test_task_context};
 use uuid::Uuid;
 
@@ -27,8 +27,8 @@ fn downcast_ref<T: 'static>(v: &Arc<dyn Value>) -> &T {
 /// Run the add pipeline for one text input and return the resulting `Data`.
 async fn add_text_to_dataset(
     storage: &Arc<dyn StorageTrait>,
-    db: &Arc<cognee_lib::database::DatabaseConnection>,
-    ctx: &Arc<cognee_lib::core::TaskContext>,
+    db: &Arc<cognee::database::DatabaseConnection>,
+    ctx: &Arc<cognee::core::TaskContext>,
     dataset_name: &str,
     text: &str,
     owner_id: Uuid,
@@ -56,7 +56,7 @@ async fn add_text_to_dataset(
 ///
 /// This mirrors the helper in `crates/delete/src/lib.rs` tests.
 async fn seed_dataset_with_data(
-    db: &cognee_lib::database::DatabaseConnection,
+    db: &cognee::database::DatabaseConnection,
     storage: &MockStorage,
     owner_id: Uuid,
     dataset_name: &str,

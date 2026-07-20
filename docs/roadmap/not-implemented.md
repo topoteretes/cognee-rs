@@ -16,7 +16,7 @@ Implemented") and restated here for one consolidated view:
 
 - **Legacy binary office formats** — text, PDF, CSV, HTML, image, audio, and the modern XML-based
   office formats (DOCX, XLSX/XLS/ODS, PPTX, EPUB, EML, ODT, ODP) are all extracted end-to-end (each
-  behind its own feature flag; the umbrella `unstructured` feature is on by default in `cognee-lib`).
+  behind its own feature flag; the umbrella `unstructured` feature is on by default in `cognee`).
   The extractors live in [`crates/ingestion/src/loaders/unstructured/`](../../crates/ingestion/src/loaders/unstructured/)
   and dispatch by extension in
   [`mod.rs`](../../crates/ingestion/src/loaders/unstructured/mod.rs). What is **not** supported is the
@@ -30,7 +30,7 @@ Implemented") and restated here for one consolidated view:
   content and URL metadata, and leaves graph provenance to cognify.
 - **Tokenizer features under `--no-default-features`** — `HuggingFaceTokenCounter` and
   `TikTokenCounter` are behind optional feature flags (`hf-tokenizer`, `tiktoken`). Both are in
-  `cognee-lib`'s **default** feature set, so a standard build (and CI) includes them; they are only
+  `cognee`'s **default** feature set, so a standard build (and CI) includes them; they are only
   absent in `--no-default-features` builds or when the `cognee-chunking` crate is used directly
   without enabling them. Not a gap for default builds — noted only for downstream crates that strip
   defaults.

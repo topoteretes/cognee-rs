@@ -13,17 +13,17 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use cognee_lib::add::AddPipeline;
-use cognee_lib::api::prune::{PruneTarget, prune_data, prune_system};
-use cognee_lib::cognify::{ChunkStrategy, CognifyConfig, TokenCounterKind, cognify};
-use cognee_lib::core::RayonThreadPool;
-use cognee_lib::database::{IngestDb, PipelineRunRepository, SeaOrmPipelineRunRepository, ops};
-use cognee_lib::models::DataInput;
-use cognee_lib::ontology::{NoOpOntologyResolver, OntologyResolver};
-use cognee_lib::search::{
+use cognee::add::AddPipeline;
+use cognee::api::prune::{PruneTarget, prune_data, prune_system};
+use cognee::cognify::{ChunkStrategy, CognifyConfig, TokenCounterKind, cognify};
+use cognee::core::RayonThreadPool;
+use cognee::database::{IngestDb, PipelineRunRepository, SeaOrmPipelineRunRepository, ops};
+use cognee::models::DataInput;
+use cognee::ontology::{NoOpOntologyResolver, OntologyResolver};
+use cognee::search::{
     SeaOrmSessionStore, SearchBuilder, SearchRequest, SearchType, SessionManager,
 };
-use cognee_lib::{ComponentManager, PipelineContext};
+use cognee::{ComponentManager, PipelineContext};
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 use uuid::Uuid;
@@ -591,7 +591,7 @@ async fn phase_cognify(
     // the closed cloud build), so `user_email` always falls back to `None`.
     let user_email: Option<String> = None;
 
-    let thread_pool: Arc<dyn cognee_lib::core::CpuPool> =
+    let thread_pool: Arc<dyn cognee::core::CpuPool> =
         Arc::new(RayonThreadPool::with_default_threads().map_err(|e| format!("thread pool: {e}"))?);
     let pipeline_run_repo: Arc<dyn PipelineRunRepository> =
         Arc::new(SeaOrmPipelineRunRepository::new(Arc::clone(&database)));
@@ -701,7 +701,7 @@ async fn phase_search(
         .await
         .map_err(|e| e.to_string())?;
     let session_manager = Arc::new(SessionManager::new(Arc::new(session_store)));
-    let search_history_db = Arc::clone(&database) as Arc<dyn cognee_lib::database::SearchHistoryDb>;
+    let search_history_db = Arc::clone(&database) as Arc<dyn cognee::database::SearchHistoryDb>;
     let orchestrator = SearchBuilder::new(
         vector_db,
         embedding_engine,

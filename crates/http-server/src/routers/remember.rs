@@ -430,7 +430,7 @@ impl std::error::Error for RememberDispatchError {}
 /// session bookkeeping when `session_id` is set.
 ///
 /// Mirrors the permanent-mode composition in
-/// `cognee_lib::api::remember::remember()`: cognify the just-ingested
+/// `cognee::api::remember::remember()`: cognify the just-ingested
 /// `Data` rows, then run `memify` to populate the `("Triplet","text")`
 /// vector collection so `SearchType::TripletCompletion` can serve queries.
 ///
@@ -574,15 +574,15 @@ async fn run_remember_cognify_memify(
 ///
 /// Python parity: `cognee/api/v1/remember/routers/get_remember_router.py:115-164`.
 ///
-/// **Inline replication** of `cognee_lib::api::remember::remember_entry`
+/// **Inline replication** of `cognee::api::remember::remember_entry`
 /// (`crates/lib/src/api/remember.rs:603-792`) to work around the
-/// `cognee-http-server` ↔ `cognee-lib` cycle constraint
+/// `cognee-http-server` ↔ `cognee` cycle constraint
 /// (`Cargo.toml:35-37`). The library facade is the canonical in-process
 /// Rust SDK entry point for non-HTTP callers; this handler is a parallel
 /// implementation that mirrors the same `match` on the `MemoryEntry`
 /// variants byte-for-byte. **See also**: if Python's
 /// `_dispatch_session_entry` ever changes shape, both this handler **and**
-/// `cognee_lib::api::remember::remember_entry` must be updated.
+/// `cognee::api::remember::remember_entry` must be updated.
 ///
 /// Status codes match Python:
 /// - `200` — success.

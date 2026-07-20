@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
-use cognee_lib::database::IngestDb;
-use cognee_lib::search::{
+use cognee::database::IngestDb;
+use cognee::search::{
     SeaOrmSessionStore, SearchBuilder, SearchOutput, SearchRequest, SearchResponse, SearchType,
     SessionManager,
 };
-use cognee_lib::{ComponentManager, PipelineContext};
+use cognee::{ComponentManager, PipelineContext};
 use tracing::warn;
 use uuid::Uuid;
 

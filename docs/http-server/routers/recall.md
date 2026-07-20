@@ -37,7 +37,7 @@ Companion docs: [../architecture.md](../architecture.md), [../auth.md](../auth.m
 
 ### 2.2 `POST /api/v1/recall` — multi-source semantic recall
 
-**Behavior note**: the Rust handler (`post_recall` in `crates/http-server/src/routers/recall.rs`) does **not** delegate to the search orchestrator as a thin alias. It performs **scope resolution** and **session-first dispatch** in the handler itself by calling the `cognee_search::recall_scope::*` helpers (`search_session`, `search_trace`, `fetch_graph_context`, `run_graph`). This mirrors the library-level `cognee_lib::api::recall::recall()` (which the handler cannot import directly due to the http-server → lib cycle constraint), so the fan-out logic lives in the four `pub` `recall_scope` helpers instead. The orchestrator is still required (it backs the `Graph` source and the GET-history path), but the request flow is driven by the resolved scope, not a single search call.
+**Behavior note**: the Rust handler (`post_recall` in `crates/http-server/src/routers/recall.rs`) does **not** delegate to the search orchestrator as a thin alias. It performs **scope resolution** and **session-first dispatch** in the handler itself by calling the `cognee_search::recall_scope::*` helpers (`search_session`, `search_trace`, `fetch_graph_context`, `run_graph`). This mirrors the library-level `cognee::api::recall::recall()` (which the handler cannot import directly due to the http-server → lib cycle constraint), so the fan-out logic lives in the four `pub` `recall_scope` helpers instead. The orchestrator is still required (it backs the `Graph` source and the GET-history path), but the request flow is driven by the resolved scope, not a single search call.
 
 - **Auth**: `required` (`AuthenticatedUser`).
 - **Path params**: none.
@@ -67,7 +67,7 @@ Companion docs: [../architecture.md](../architecture.md), [../auth.md](../auth.m
 - **Side effects**:
   1. **Search-history write** (every POST). Same two rows as `/api/v1/search`: one `Query` row, one `Result` row. Persisted via `SearchHistoryDb::log_query` + `log_result` from inside `SearchOrchestrator::search`. The history is **shared** between the two endpoints — `GET /api/v1/recall` and `GET /api/v1/search` return the same set.
   2. **Vector / graph reads** as in search.
-- **Delegation target**: the `cognee_search::recall_scope::*` helpers (`search_session`, `search_trace`, `fetch_graph_context`, `run_graph`), iterated per the resolved scope list. The `Graph` source calls `run_graph` against the `SearchOrchestrator`; the session-backed sources use the optional `session_store` / `session_manager` component handles (which gracefully return `Ok(vec![])` when unwired). The handler does **not** call `cognee_lib::api::recall::recall` (cycle constraint); the `recall_scope` helpers were lifted into `cognee-search` so the fan-out is reachable without a cycle.
+- **Delegation target**: the `cognee_search::recall_scope::*` helpers (`search_session`, `search_trace`, `fetch_graph_context`, `run_graph`), iterated per the resolved scope list. The `Graph` source calls `run_graph` against the `SearchOrchestrator`; the session-backed sources use the optional `session_store` / `session_manager` component handles (which gracefully return `Ok(vec![])` when unwired). The handler does **not** call `cognee::api::recall::recall` (cycle constraint); the `recall_scope` helpers were lifted into `cognee-search` so the fan-out is reachable without a cycle.
 - **Validation rules**: same as search.
 - **Rate / size limits**: default body limit (100 MiB).
 - **Permission gate**: `read` permission on each requested dataset (same as search). When permission resolution drops the entire scope, the orchestrator returns a `PermissionDenied` error which the recall handler maps to **`200 []`** (not 403, unlike search).
@@ -84,7 +84,7 @@ Companion docs: [../architecture.md](../architecture.md), [../auth.md](../auth.m
 
 ### 3.1 Capabilities reachable from HTTP
 
-The HTTP recall handler reproduces the library-level recall fan-out by calling the `cognee_search::recall_scope::*` helpers directly (it cannot import `cognee_lib::api::recall::recall` due to the http-server → lib cycle constraint). The behaviors below are surfaced through the wire DTO's `scope` / `session_id` fields:
+The HTTP recall handler reproduces the library-level recall fan-out by calling the `cognee_search::recall_scope::*` helpers directly (it cannot import `cognee::api::recall::recall` due to the http-server → lib cycle constraint). The behaviors below are surfaced through the wire DTO's `scope` / `session_id` fields:
 
 | Capability | Reachable from HTTP `/api/v1/recall`? | Notes |
 |---|---|---|
@@ -194,7 +194,7 @@ Same as in [search.md §4](search.md#searchtype-wire-shapes) — all 15 `SearchT
 2. Add `crates/http-server/src/routers/recall.rs` with `get_recall_history` + `post_recall` handlers and `pub fn router()`.
 3. Wire `nest("/recall", recall::router())` in `build_router()`.
 4. Extend `crates/http-server/src/error.rs` with `ApiError::RecallError(StatusCode, RecallErrorBody)` so the three envelope shapes serialize correctly.
-5. The handler resolves `scope` (via `recall_scope::normalize_scope`) and iterates the resolved sources, calling the `cognee_search::recall_scope::*` helpers (`search_session`, `search_trace`, `fetch_graph_context`, `run_graph`). Do **not** call `cognee_lib::api::recall::recall` from this handler — the http-server → lib cycle constraint forbids it; the `recall_scope` helpers are the cycle-free reachable surface.
+5. The handler resolves `scope` (via `recall_scope::normalize_scope`) and iterates the resolved sources, calling the `cognee_search::recall_scope::*` helpers (`search_session`, `search_trace`, `fetch_graph_context`, `run_graph`). Do **not** call `cognee::api::recall::recall` from this handler — the http-server → lib cycle constraint forbids it; the `recall_scope` helpers are the cycle-free reachable surface.
 6. OpenAPI: tag `["v1", "recall"]`; declare the three response shapes for `200`, `409`, `422`.
 7. Unit tests: DTO defaults; `RecallErrorBody` serialization for both arms.
 8. Integration tests in `crates/http-server/tests/test_recall.rs`:
@@ -211,7 +211,7 @@ Same as in [search.md §4](search.md#searchtype-wire-shapes) — all 15 `SearchT
 2. **Telemetry parity (PostHog)** — Python's `send_telemetry(...)` is skipped in Rust per [../observability.md §1](../observability.md#1-goals--non-goals). Confirm this gap is documented for the user-facing CHANGELOG.
 3. **Empty `[]` permission-denied response** — Python returns `200 []` rather than `403`, which is a deliberate UX choice (recall is "always succeed"). Confirm the e2e parity test asserts on `200` not `403`.
 4. **Search-history history-write idempotency** — does Python double-write when the SDK retries? If so, Rust matches; if not, Rust matches; either way confirm via a parity test.
-5. **Library-level recall reachability** — embedders who call `cognee_lib::api::recall::recall` directly should still get auto-routing and session-first dispatch. The HTTP layer simply doesn't expose them. Confirm the embedder-facing docs make this distinction clear.
+5. **Library-level recall reachability** — embedders who call `cognee::api::recall::recall` directly should still get auto-routing and session-first dispatch. The HTTP layer simply doesn't expose them. Confirm the embedder-facing docs make this distinction clear.
 3. **`?include_source=true` query parameter**: should the HTTP layer expose the library's `_source: "session" | "graph"` tag? Useful for frontends building "Recent activity" UIs that distinguish session-cached answers. Recommend yes, behind an opt-in query param to keep default wire format Python-compatible.
 4. **Override counter exposure**: where does `record_override`'s state surface to the operator? Options: (a) a new `GET /api/v1/activity/recall-overrides` endpoint, (b) a span attribute on every recall request, (c) only via the in-memory span buffer (current state). Recommend (c) for phase 4; revisit if misrouting becomes a real issue.
 5. **Session search algorithm**: the library uses `HashSet::intersection` (token overlap, min length 2). For a session with thousands of Q&A entries, this is O(n) per call. Should the session store cache an inverted index? Out of scope for the HTTP doc — flag in [`crates/session/`](../../../crates/session/).

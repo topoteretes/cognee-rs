@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
-use cognee_lib::add::AddPipeline;
-use cognee_lib::cognify::{ChunkStrategy, CognifyConfig, cognify};
-use cognee_lib::database::{IngestDb, PipelineRunRepository, SeaOrmPipelineRunRepository, ops};
-use cognee_lib::models::DataInput;
-use cognee_lib::ontology::{NoOpOntologyResolver, OntologyResolver, RdfLibOntologyResolver};
-use cognee_lib::{ComponentManager, PipelineContext};
+use cognee::add::AddPipeline;
+use cognee::cognify::{ChunkStrategy, CognifyConfig, cognify};
+use cognee::database::{IngestDb, PipelineRunRepository, SeaOrmPipelineRunRepository, ops};
+use cognee::models::DataInput;
+use cognee::ontology::{NoOpOntologyResolver, OntologyResolver, RdfLibOntologyResolver};
+use cognee::{ComponentManager, PipelineContext};
 use tracing::{info, warn};
 use uuid::Uuid;
 
@@ -62,7 +62,7 @@ pub fn run(args: AddAndCognifyArgs, cm: Arc<ComponentManager>) -> Result<(), Cli
             .await
             .map_err(|e| CliError::Runtime(format!("{e}")))?;
         let thread_pool_for_add = Arc::new(
-            cognee_lib::core::RayonThreadPool::with_default_threads()
+            cognee::core::RayonThreadPool::with_default_threads()
                 .map_err(|e| CliError::Runtime(format!("Failed to build thread pool: {e}")))?,
         );
         // Gap 08-07: persist the four-state `pipeline_runs` trail through
@@ -178,8 +178,8 @@ pub fn run(args: AddAndCognifyArgs, cm: Arc<ComponentManager>) -> Result<(), Cli
         // provenance stamp.
         let user_email: Option<String> = None;
 
-        let thread_pool: Arc<dyn cognee_lib::core::CpuPool> = Arc::new(
-            cognee_lib::core::RayonThreadPool::with_default_threads()
+        let thread_pool: Arc<dyn cognee::core::CpuPool> = Arc::new(
+            cognee::core::RayonThreadPool::with_default_threads()
                 .map_err(|e| CliError::Runtime(format!("failed to construct thread pool: {e}")))?,
         );
 

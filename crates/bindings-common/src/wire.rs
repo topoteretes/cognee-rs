@@ -14,7 +14,7 @@
 use base64::Engine as _;
 use serde_json::json;
 
-use cognee_lib::models::DataInput;
+use cognee::models::DataInput;
 
 use crate::SdkError;
 
@@ -27,7 +27,7 @@ use crate::SdkError;
 /// `CognifyResult` is NOT `Serialize` (it carries non-serialisable internal
 /// fields), so its JSON is hand-built here from the same `.len()` counts the
 /// CLI prints. Shared between all binding surfaces.
-pub fn cognify_result_json(result: &cognee_lib::cognify::CognifyResult) -> serde_json::Value {
+pub fn cognify_result_json(result: &cognee::cognify::CognifyResult) -> serde_json::Value {
     json!({
         "chunks": result.chunks.len(),
         "entities": result.entities.len(),

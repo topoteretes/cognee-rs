@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use cognee_lib::{ComponentManager, PipelineContext, visualize};
+use cognee::{ComponentManager, PipelineContext, visualize};
 use tracing::info;
 
 use crate::cli::VisualizeArgs;

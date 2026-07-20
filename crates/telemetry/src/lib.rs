@@ -35,7 +35,7 @@
 //! At runtime: `TELEMETRY_DISABLED=1` (any non-empty value) or
 //! `ENV=test` / `ENV=dev`.
 //!
-//! At compile time: build `cognee-lib` (or any consumer) with
+//! At compile time: build `cognee` (or any consumer) with
 //! `--no-default-features`. [`send_telemetry`] and
 //! [`try_send_telemetry`] still exist in the public surface but are
 //! compiled to noop bodies — no `reqwest`, no `tokio` runtime
@@ -177,7 +177,7 @@ pub fn tenant_id_for_telemetry(tenant_id: Option<Uuid>) -> String {
 /// Equivalent to `env!("CARGO_PKG_VERSION")` evaluated inside the
 /// `cognee-telemetry` crate. The workspace pins all cognee crates to
 /// the same version via `version.workspace = true`, so the value is
-/// the same as `cognee-lib`'s reported version. Lifecycle emitters in
+/// the same as `cognee`'s reported version. Lifecycle emitters in
 /// `cognee-core` and elsewhere should call this accessor instead of
 /// inlining `env!("CARGO_PKG_VERSION")`, which would otherwise expand
 /// to the calling crate's version.

@@ -47,7 +47,7 @@ COPY cognee-rust/crates/ crates/
 COPY cognee-rust/examples/ examples/
 COPY cognee-rust/capi/ capi/
 COPY cognee-rust/python/ python/
-# Harness-only crate that drives cognee_lib::telemetry::send_telemetry
+# Harness-only crate that drives cognee::telemetry::send_telemetry
 # directly. Source lives under e2e-cross-sdk/bin/telemetry_emit.rs;
 # manifest lives under e2e-cross-sdk/telemetry-emit/Cargo.toml. Both
 # are needed at workspace resolution time because the workspace root

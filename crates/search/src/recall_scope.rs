@@ -1,11 +1,11 @@
 //! Recall-scope primitives and source helpers, lifted from
-//! `cognee-lib::api::recall` so that `cognee-http-server` can consume them
+//! `cognee::api::recall` so that `cognee-http-server` can consume them
 //! directly without triggering the http-server -> lib cycle. See
 //! `docs/http-api-v2/tasks/lib-08-recall-scope-lift.md` (Decision 18).
 //!
 //! This is a pure relocation of the LIB-07 work — no behavior change. The
 //! only material adjustment is `normalize_scope`'s error type, which pivots
-//! from `cognee-lib`'s `ApiError::InvalidArgument` to this crate's
+//! from `cognee`'s `ApiError::InvalidArgument` to this crate's
 //! `SearchError::InvalidInput`. The error-message string stays byte-identical
 //! to LIB-07 / Python parity.
 
@@ -21,10 +21,10 @@ use crate::{
     SearchOrchestrator, SearchRequest, SearchResponse, SearchType, record_override, route_query,
 };
 
-/// Advanced tuning options forwarded from `cognee_lib::api::recall::RecallOptions`.
+/// Advanced tuning options forwarded from `cognee::api::recall::RecallOptions`.
 ///
 /// Kept as a separate struct so `cognee-search` does not need to depend on
-/// `cognee-lib`. The HTTP server and language bindings that build a
+/// `cognee`. The HTTP server and language bindings that build a
 /// `SearchRequest` directly can use this type too.
 #[derive(Debug, Clone, Default)]
 pub struct RecallOptions {

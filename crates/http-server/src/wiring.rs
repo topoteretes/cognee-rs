@@ -142,7 +142,7 @@ async fn wire_graph_db(
 }
 
 /// Validate the pgvector configuration. Kept in the server wrapper (not the
-/// shared factory) so `cognee-lib`'s empty-URL→localhost synthesis is
+/// shared factory) so `cognee`'s empty-URL→localhost synthesis is
 /// unaffected.
 fn validate_vector_config(cfg: &HttpServerConfig) -> Result<(), ServerError> {
     let provider = cfg.vector_provider.to_ascii_lowercase();

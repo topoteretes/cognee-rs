@@ -3,7 +3,7 @@
 //!
 //! This is the keystone facade for the SDK bindings: every `sdk_*` function
 //! obtains a `CogneeServices` via `HandleState::services()` and calls a
-//! `cognee-lib` API with the bundled `Arc<dyn …>` handles, so the wiring lives
+//! `cognee` API with the bundled `Arc<dyn …>` handles, so the wiring lives
 //! in exactly one place (mirroring the CLI command builders, which are the
 //! authoritative reference).
 
@@ -11,26 +11,26 @@ use std::sync::Arc;
 
 use uuid::Uuid;
 
-use cognee_lib::ComponentManager;
-use cognee_lib::PipelineContext;
-use cognee_lib::add::AddPipeline;
-use cognee_lib::api::get_or_create_default_user;
-use cognee_lib::cognify::{ChunkStrategy, CognifyConfig};
-use cognee_lib::core::{CpuPool, RayonThreadPool};
-use cognee_lib::database::{
+use cognee::ComponentManager;
+use cognee::PipelineContext;
+use cognee::add::AddPipeline;
+use cognee::api::get_or_create_default_user;
+use cognee::cognify::{ChunkStrategy, CognifyConfig};
+use cognee::core::{CpuPool, RayonThreadPool};
+use cognee::database::{
     CheckpointStore, DatabaseConnection, DeleteDb, IngestDb, PipelineRunRepository,
     SeaOrmCheckpointStore, SeaOrmPipelineRunRepository, SearchHistoryDb,
 };
-use cognee_lib::delete::DeleteService;
-use cognee_lib::embedding::EmbeddingEngine;
-use cognee_lib::graph::GraphDBTrait;
-use cognee_lib::llm::Llm;
-use cognee_lib::ontology::{NoOpOntologyResolver, OntologyResolver, RdfLibOntologyResolver};
-use cognee_lib::search::{
+use cognee::delete::DeleteService;
+use cognee::embedding::EmbeddingEngine;
+use cognee::graph::GraphDBTrait;
+use cognee::llm::Llm;
+use cognee::ontology::{NoOpOntologyResolver, OntologyResolver, RdfLibOntologyResolver};
+use cognee::search::{
     SeaOrmSessionStore, SearchBuilder, SearchOrchestrator, SessionManager, SessionStore,
 };
-use cognee_lib::storage::StorageTrait;
-use cognee_lib::vector::VectorDB;
+use cognee::storage::StorageTrait;
+use cognee::vector::VectorDB;
 
 use crate::SdkError;
 
@@ -38,7 +38,7 @@ use crate::SdkError;
 ///
 /// Built once per config version by [`CogneeServices::build`] and cached by the
 /// handle. All fields are `Arc`-shared so `sdk_*` functions can cheaply clone a
-/// handle into a `cognee-lib` API call.
+/// handle into a `cognee` API call.
 // Most fields are consumed by the SDK ops added in later phases; they are part
 // of the facade contract now so the wiring lives in one place.
 #[allow(dead_code)]

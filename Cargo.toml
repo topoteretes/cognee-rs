@@ -13,6 +13,8 @@ members = [
     "crates/core",
     "crates/components",
     "crates/lib",
+    # Deprecated re-export shim keeping the old `cognee-lib` crate name alive.
+    "crates/cognee-lib",
     "crates/logging",
     "crates/cli",
     "crates/utils",

@@ -13,7 +13,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use cognee_lib::api::recall;
+use cognee::api::recall;
 use cognee_search::orchestration::SearchTypeRegistry;
 use cognee_search::retrievers::SearchRetriever;
 use cognee_search::types::{SearchContext, SearchError, SearchOutput, SearchParams};

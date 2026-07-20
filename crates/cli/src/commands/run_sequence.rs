@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use clap::Parser;
-use cognee_lib::ComponentManager;
+use cognee::ComponentManager;
 use serde::{Deserialize, Serialize};
 use tracing::info;
 

@@ -1,4 +1,4 @@
-use cognee_lib::ComponentError;
+use cognee::ComponentError;
 use thiserror::Error;
 
 #[repr(u8)]

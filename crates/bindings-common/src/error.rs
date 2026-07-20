@@ -6,7 +6,7 @@
 
 use thiserror::Error;
 
-use cognee_lib::ComponentError;
+use cognee::ComponentError;
 
 /// Errors surfaced by the SDK handle/facade.
 ///

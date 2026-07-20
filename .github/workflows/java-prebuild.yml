@@ -14,7 +14,7 @@ name: Java Prebuild
 # The per-OS native-dep installs, the MSVC/CRT/ccache fixes, the `cross`
 # cross-compile path (ORT_CACHE_DIR=/target/ort-cache + COGNEE_REPO_ROOT +
 # SIMSIMD SVE-disable flags), and the ORT prefetch step are cloned verbatim
-# from ts-prebuild.yml — they are load-bearing for building cognee-lib
+# from ts-prebuild.yml — they are load-bearing for building cognee
 # (lbug/qdrant/ort) on each platform.
 #
 # LOCAL APPROXIMATION: the full 4-target matrix cannot run locally; only the

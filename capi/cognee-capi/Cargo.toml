@@ -36,28 +36,28 @@ default = [
     "sqlite",
     "testing",
     # Product-analytics emission ON by default — Python-SDK parity. The
-    # cognee-lib `send_telemetry` call sites are otherwise compiled out
-    # because cognee-lib is pulled with `default-features = false`.
+    # cognee `send_telemetry` call sites are otherwise compiled out
+    # because cognee is pulled with `default-features = false`.
     "telemetry",
 ]
-# Compiles in the cognee-lib/search/session/core `send_telemetry` call
+# Compiles in the cognee/search/session/core `send_telemetry` call
 # sites. Runtime emission is still gated by `is_disabled()`
 # (TELEMETRY_DISABLED / ENV / COGNEE_HOST_SDK) — see telemetry_analytics.rs.
-telemetry     = ["cognee-lib/telemetry"]
-visualization = ["cognee-lib/visualization",         "cognee-bindings-common/visualization"]
+telemetry     = ["cognee/telemetry"]
+visualization = ["cognee/visualization",         "cognee-bindings-common/visualization"]
 # The closed `cognee-c-cloud` cdylib (T15e) re-adds cloud via
 # `cognee-bindings-cloud`; this OSS cdylib intentionally omits it.
-ladybug       = ["cognee-lib/ladybug",               "cognee-bindings-common/ladybug"]
-onnx          = ["cognee-lib/onnx",                  "cognee-bindings-common/onnx"]
-hf-tokenizer  = ["cognee-lib/hf-tokenizer",          "cognee-bindings-common/hf-tokenizer"]
-tiktoken      = ["cognee-lib/tiktoken",               "cognee-bindings-common/tiktoken"]
-sqlite        = ["cognee-lib/sqlite",                "cognee-bindings-common/sqlite"]
+ladybug       = ["cognee/ladybug",               "cognee-bindings-common/ladybug"]
+onnx          = ["cognee/onnx",                  "cognee-bindings-common/onnx"]
+hf-tokenizer  = ["cognee/hf-tokenizer",          "cognee-bindings-common/hf-tokenizer"]
+tiktoken      = ["cognee/tiktoken",               "cognee-bindings-common/tiktoken"]
+sqlite        = ["cognee/sqlite",                "cognee-bindings-common/sqlite"]
 # testing is in defaults because cg_task_context_mock requires mock
 # graph/vector backends — same reason cognee-ts-neon keeps it.
-testing       = ["cognee-lib/testing",               "cognee-bindings-common/testing"]
+testing       = ["cognee/testing",               "cognee-bindings-common/testing"]
 # Record/replay cassette-based mock LLM. Required for the iOS demo and offline
 # testing. Enables `llm_mock` / `llm_cassette` settings keys at runtime.
-mock-llm      = ["cognee-lib/mock-llm"]
+mock-llm      = ["cognee/mock-llm"]
 # Test-only opt-in: exposes `cg_test_force_panic`, a no-return symbol
 # that always panics. Used by the capi smoke tests under
 # `capi/examples/panic_hook_smoke.c` to verify the gap-07 panic hook
@@ -69,15 +69,15 @@ testing-panic = []
 # Full cognee SDK.
 # Feature set mirrors cognee-ts-neon; default-features = false so only the
 # features listed above are enabled.
-cognee-lib = { path = "../../crates/lib", default-features = false }
+cognee = { path = "../../crates/lib", default-features = false }
 # Shared bindings facade (HandleState, CogneeServices, SdkError, wire helpers).
-# Feature flags are forwarded identically to cognee-lib (the path resolves to
+# Feature flags are forwarded identically to cognee (the path resolves to
 # the root-workspace member at crates/bindings-common).
 cognee-bindings-common = { path = "../../crates/bindings-common", default-features = false }
 serde_json = { workspace = true }
 # Kept as direct deps so the existing engine modules (task_context.rs etc.)
 # keep their crate-path imports without a rewire. These are path deps that
-# resolve to the same versions cognee-lib pulls in.
+# resolve to the same versions cognee pulls in.
 cognee-core = { path = "../../crates/core" }
 cognee-database = { path = "../../crates/database", features = ["sqlite"] }
 cognee-graph = { path = "../../crates/graph", features = ["testing"] }

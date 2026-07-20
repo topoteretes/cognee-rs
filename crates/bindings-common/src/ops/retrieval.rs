@@ -3,7 +3,7 @@
 //! These functions contain the pure-Rust async logic that is shared between
 //! every language binding surface (C API, Neon JS, Python). Each function takes
 //! a [`HandleState`] reference and `serde_json::Value` arguments, performs the
-//! operation against the underlying cognee-lib APIs, and returns a
+//! operation against the underlying cognee APIs, and returns a
 //! `serde_json::Value` result (or an [`SdkError`]).
 //!
 //! The binding-specific wrappers (C string parsing, Neon JS promise settling,
@@ -32,8 +32,8 @@ use std::sync::Arc;
 use serde_json::json;
 use uuid::Uuid;
 
-use cognee_lib::api::{ScopeInput, normalize_scope, recall as cognee_lib_recall};
-use cognee_lib::search::{SearchRequest, SearchType};
+use cognee::api::{ScopeInput, normalize_scope, recall as cognee_recall};
+use cognee::search::{SearchRequest, SearchType};
 
 use crate::{HandleState, SdkError};
 
@@ -284,7 +284,7 @@ pub async fn recall(
     let session_store_ref = Arc::clone(&svc.session_store);
     let session_manager_ref = Arc::clone(&svc.session_manager);
 
-    let result = cognee_lib_recall(
+    let result = cognee_recall(
         query,
         query_type,
         datasets,

@@ -9,7 +9,7 @@ Companion docs: [../architecture.md](../architecture.md), [../auth.md](../auth.m
 - Router file: `crates/http-server/src/routers/update.rs`
 - Python source: [`cognee/api/v1/update/routers/get_update_router.py`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/update/routers/get_update_router.py)
 - Underlying SDK function: [`cognee/api/v1/update/update.py`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/update/update.py) — orchestrates `delete_data` + `add` + `cognify`.
-- Rust delegation target: `cognee_lib::api::update::update(...)`. Phase-2 plan: implement as the same composition the Python SDK does (`delete_data → add → cognify`). A future single-shot atomic delete-then-add is out of scope.
+- Rust delegation target: `cognee::api::update::update(...)`. Phase-2 plan: implement as the same composition the Python SDK does (`delete_data → add → cognify`). A future single-shot atomic delete-then-add is out of scope.
 
 ## 2. Endpoints
 
@@ -75,10 +75,10 @@ Companion docs: [../architecture.md](../architecture.md), [../auth.md](../auth.m
   - **File storage**: deletes the old raw file (`legacy_delete` + `delete_data`), stores new files via `LocalStorage::store_stream`.
     - If a replacement part is an HTTP(S) URL, the chained add step fetches and stores it exactly like `/add`; the chained cognify step can then rebuild `WebPage` / `WebSite` provenance for the replacement content.
   - **Channels**: none in phase 2 (no background mode exposed).
-- **Delegation target**: `cognee_lib::api::update::update(data_id, files, dataset_id, user, node_set, ...)`. Internally chains:
-  1. `cognee_lib::api::datasets::datasets::delete_data(dataset_id, data_id, user)` — [`update.py:80-84`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/update/update.py#L80-L84).
-  2. `cognee_lib::api::add::add(files, dataset_id, user, node_set, ...)` — [`update.py:86-95`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/update/update.py#L86-L95).
-  3. `cognee_lib::api::cognify::cognify(datasets=[dataset_id], user, ...)` — [`update.py:97-103`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/update/update.py#L97-L103).
+- **Delegation target**: `cognee::api::update::update(data_id, files, dataset_id, user, node_set, ...)`. Internally chains:
+  1. `cognee::api::datasets::datasets::delete_data(dataset_id, data_id, user)` — [`update.py:80-84`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/update/update.py#L80-L84).
+  2. `cognee::api::add::add(files, dataset_id, user, node_set, ...)` — [`update.py:86-95`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/update/update.py#L86-L95).
+  3. `cognee::api::cognify::cognify(datasets=[dataset_id], user, ...)` — [`update.py:97-103`](https://github.com/topoteretes/cognee/blob/main/cognee/api/v1/update/update.py#L97-L103).
 - **Validation rules**:
   1. `data_id` must be a valid UUID v4. Otherwise 422 (axum's `Query` deserialize fails through the validation extractor).
   2. `dataset_id` same.
@@ -117,7 +117,7 @@ Companion docs: [../architecture.md](../architecture.md), [../auth.md](../auth.m
 
 ### 3.2 No background mode
 
-Like `/add`, `update` does not expose `run_in_background`. The chained cognify call inside `cognee_lib::api::update::update(...)` is always blocking (`update.py:97-103` calls `cognify(...)` without the `run_in_background=True` kwarg).
+Like `/add`, `update` does not expose `run_in_background`. The chained cognify call inside `cognee::api::update::update(...)` is always blocking (`update.py:97-103` calls `cognify(...)` without the `run_in_background=True` kwarg).
 
 ### 3.3 No partial-success protocol
 

@@ -1,11 +1,9 @@
 use std::sync::Arc;
 
-use cognee_lib::api::{DatasetRef, ForgetTarget, forget};
-use cognee_lib::database::{
-    DeleteDb, IngestDb, PipelineRunRepository, SeaOrmPipelineRunRepository,
-};
-use cognee_lib::delete::DeleteService;
-use cognee_lib::{ComponentManager, PipelineContext};
+use cognee::api::{DatasetRef, ForgetTarget, forget};
+use cognee::database::{DeleteDb, IngestDb, PipelineRunRepository, SeaOrmPipelineRunRepository};
+use cognee::delete::DeleteService;
+use cognee::{ComponentManager, PipelineContext};
 use tracing::{info, warn};
 use uuid::Uuid;
 

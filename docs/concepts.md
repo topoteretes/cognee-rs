@@ -77,7 +77,7 @@ operate within a dataset scope. Dataset IDs are deterministic (UUID5 of name +
 owner) for cross-SDK reproducibility.
 
 Rust: `Dataset` in [`cognee-models`](../crates/models/); lifecycle helpers in
-`DatasetManager` ([`cognee-lib`](../crates/lib/) `api::datasets`).
+`DatasetManager` ([`cognee`](../crates/lib/) `api::datasets`).
 
 ### Sessions
 

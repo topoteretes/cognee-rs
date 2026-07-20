@@ -46,7 +46,7 @@ extractor requests the custom schema when it is `Some`
 
 ### Via top-level config
 
-`cognee-lib` exposes a runtime setter mirroring Python's
+`cognee` exposes a runtime setter mirroring Python's
 `cognee.config.set_summarization_model(...)`:
 
 ```rust
