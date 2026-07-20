@@ -5,7 +5,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use cognee_llm::{Llm, Transcriber, build_openai_compatible_adapter};
+use cognee_llm::{AnthropicAdapter, Llm, Transcriber, build_openai_compatible_adapter};
 
 use crate::context::BackendBuildContext;
 use crate::error::ComponentError;
@@ -77,6 +77,50 @@ impl LlmFactory for OpenAiCompatibleLlmFactory {
         )
         .map_err(|e| ComponentError::Llm(e.to_string()))?;
         Ok(Some(Arc::new(adapter) as Arc<dyn Transcriber>))
+    }
+}
+
+/// Provider id served by [`AnthropicLlmFactory`].
+pub const ANTHROPIC_PROVIDER: &str = "anthropic";
+
+/// Built-in factory for the native Anthropic Messages API adapter. Anthropic is
+/// not OpenAI-compatible, so it cannot route through the shared factory (issue
+/// #17, Tier 2).
+pub struct AnthropicLlmFactory;
+
+#[async_trait]
+impl LlmFactory for AnthropicLlmFactory {
+    fn provider(&self) -> &str {
+        ANTHROPIC_PROVIDER
+    }
+
+    async fn build(&self, ctx: &BackendBuildContext) -> Result<Arc<dyn Llm>, ComponentError> {
+        if ctx.llm.api_key.trim().is_empty() {
+            return Err(ComponentError::Config(
+                "anthropic provider requires an API key (set LLM_API_KEY)".to_string(),
+            ));
+        }
+        // Do NOT inherit `ctx.llm.endpoint`: it aliases OPENAI_URL (a
+        // documented-required var in this repo), so flipping LLM_PROVIDER=anthropic
+        // while OPENAI_URL is still set would POST every request to the OpenAI host
+        // with an x-api-key header (404/401 on all traffic). Python's Anthropic
+        // path passes no base_url either, so use the Anthropic default.
+        let adapter = AnthropicAdapter::new(ctx.llm.model.clone(), ctx.llm.api_key.clone(), None)
+            .map_err(|e| ComponentError::Llm(e.to_string()))?
+            .with_structured_output_retries(ctx.llm.max_retries)
+            .with_network_retries(ctx.llm.max_retries)
+            .with_max_completion_tokens(ctx.llm.max_completion_tokens)
+            .with_extra_args(ctx.llm.llm_args.clone());
+        Ok(Arc::new(adapter))
+    }
+
+    async fn build_transcriber(
+        &self,
+        _ctx: &BackendBuildContext,
+    ) -> Result<Option<Arc<dyn Transcriber>>, ComponentError> {
+        // The Anthropic Messages API has no Whisper-style transcription route, so
+        // audio degrades gracefully to None (same as ollama/mistral/gemini).
+        Ok(None)
     }
 }
 

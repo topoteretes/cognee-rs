@@ -136,6 +136,7 @@ mod tests {
                 endpoint: String::new(),
                 max_retries: 3,
                 llm_args: serde_json::Map::new(),
+                max_completion_tokens: cognee_llm::DEFAULT_MAX_COMPLETION_TOKENS,
                 mock: false,
                 cassette: String::new(),
                 record_path: String::new(),

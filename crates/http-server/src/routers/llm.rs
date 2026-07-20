@@ -242,6 +242,11 @@ pub async fn post_infer_schema(
 ///
 /// Python uses 400 for `ValueError` (malformed schema, prompt-render failure)
 /// and 409 for everything else (network, rate limit, OpenAI 5xx).
+///
+/// `PaymentRequired` (upstream HTTP 402, billing/credit exhausted) is terminal:
+/// it must map to a distinct terminal status, not the 409 fallthrough. 409 is
+/// the "transient, retry me" bucket, so folding a billing failure into it would
+/// invite a client retry loop against a condition retrying can never clear.
 fn map_llm_error(err: LlmError) -> ApiError {
     match err {
         LlmError::ConfigError(_)
@@ -249,6 +254,52 @@ fn map_llm_error(err: LlmError) -> ApiError {
         | LlmError::InvalidResponse(_) => {
             ApiError::LlmError(StatusCode::BAD_REQUEST, err.to_string())
         }
+        LlmError::PaymentRequired(_) => {
+            ApiError::LlmError(StatusCode::PAYMENT_REQUIRED, err.to_string())
+        }
         _ => ApiError::LlmError(StatusCode::CONFLICT, err.to_string()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn status_of(err: LlmError) -> StatusCode {
+        match map_llm_error(err) {
+            ApiError::LlmError(status, _) => status,
+            other => panic!("expected ApiError::LlmError, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn payment_required_maps_to_terminal_402_not_the_409_retry_bucket() {
+        // A billing failure is terminal: it must not land in the 409 bucket that
+        // signals "transient, retry me", or a client would retry a condition
+        // retrying can never clear.
+        assert_eq!(
+            status_of(LlmError::PaymentRequired("credit exhausted".into())),
+            StatusCode::PAYMENT_REQUIRED,
+        );
+    }
+
+    #[test]
+    fn transient_errors_still_map_to_409() {
+        assert_eq!(
+            status_of(LlmError::NetworkError("connection reset".into())),
+            StatusCode::CONFLICT,
+        );
+        assert_eq!(
+            status_of(LlmError::RateLimitExceeded("slow down".into())),
+            StatusCode::CONFLICT,
+        );
+    }
+
+    #[test]
+    fn value_errors_map_to_400() {
+        assert_eq!(
+            status_of(LlmError::ConfigError("bad schema".into())),
+            StatusCode::BAD_REQUEST,
+        );
     }
 }

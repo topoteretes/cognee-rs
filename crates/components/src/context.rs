@@ -107,6 +107,10 @@ pub struct LlmInputs {
     /// Applied by the OpenAI-compatible factory via
     /// `OpenAIAdapter::with_extra_args`. See that field's docs for semantics.
     pub llm_args: serde_json::Map<String, serde_json::Value>,
+    /// Output-token ceiling (Python's `llm_max_completion_tokens`). Adapters that
+    /// must send an explicit `max_tokens` (Anthropic) clamp it against the
+    /// model's documented output limit.
+    pub max_completion_tokens: u32,
     /// Replaces the provider adapter with a cassette replay mock.
     pub mock: bool,
     /// Cassette path for the replay mock (consumed only under `mock-llm`).
