@@ -162,12 +162,12 @@ jobs:
       # Canary for cfg(not(feature = "telemetry")) drift: ensures the noop
       # path in cognee-observability compiles cleanly even if `default`
       # ever grows a transitive dep that accidentally enables telemetry.
-      # Scoped to `-p cognee-lib` to keep the build small (no rebuild of
+      # Scoped to `-p cognee` to keep the build small (no rebuild of
       # the full workspace's binaries).
       - name: Compilation check (no default features)
         env:
           CARGO_TARGET_DIR: target/no-default
-        run: cargo check -p cognee-lib --no-default-features
+        run: cargo check -p cognee --no-default-features
 
       - name: License presence (every published crate)
         run: |
@@ -452,7 +452,7 @@ jobs:
         with:
           make-default: true
 
-      # cmake + protoc are needed by lbug's bundled C++ build (via cognee-lib).
+      # cmake + protoc are needed by lbug's bundled C++ build (via cognee).
       - name: Install build deps
         run: sudo apt-get update && sudo apt-get install -y cmake protobuf-compiler
 
@@ -771,7 +771,7 @@ jobs:
       - uses: rui314/setup-mold@v1
         with:
           make-default: true
-      # cmake is required by the `lbug` crate (pulled in via cognee-lib's
+      # cmake is required by the `lbug` crate (pulled in via cognee's
       # `ladybug` feature), whose build.rs compiles bundled C++ with CMake.
       - run: sudo apt-get update && sudo apt-get install -y cmake protobuf-compiler
       # Restore-only: the lint job saves the shared lbug C++ ccache. The
@@ -815,7 +815,7 @@ jobs:
       - uses: rui314/setup-mold@v1
         with:
           make-default: true
-      # cmake is required by the lbug crate (via cognee-lib's ladybug feature).
+      # cmake is required by the lbug crate (via cognee's ladybug feature).
       - run: sudo apt-get update && sudo apt-get install -y cmake protobuf-compiler
       - name: Set up JDK (Temurin 17)
         uses: actions/setup-java@v4
