@@ -12,8 +12,9 @@ categories.workspace = true
 authors.workspace = true
 
 # docs.rs cannot build `ort`'s default static-link mode (see the `cognee` crate's
-# note). Mirror its docs.rs config: disable defaults and re-enable the same set
-# with `onnx-dynamic` swapped in for `onnx` so ort builds in dlopen mode.
+# note). Mirror its docs.rs config: disable defaults and re-enable the same set,
+# enabling BOTH `onnx` (gates the onnx-cfg'd code) and `onnx-dynamic` (flips the
+# `ort` dep into dlopen mode) so ort builds without the static-link download.
 [package.metadata.docs.rs]
 no-default-features = true
 features = [

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use cognee::cognee_core::{CpuPool, RayonThreadPool};
+use cognee::core::{CpuPool, RayonThreadPool};
 use cognee::cognify::{MemifyConfig, run_memify};
 use cognee::database::{PipelineRunRepository, SeaOrmPipelineRunRepository, ops};
 use cognee::{ComponentManager, PipelineContext};
