@@ -80,6 +80,63 @@ impl LlmFactory for OpenAiCompatibleLlmFactory {
     }
 }
 
+/// Provider id served by [`AzureLlmFactory`].
+pub const AZURE_PROVIDER: &str = "azure";
+
+/// Built-in factory for Azure OpenAI. Azure is wire-compatible with the OpenAI
+/// chat API but authenticates with an `api-key` header and appends an
+/// `?api-version=<v>` query, and the deployment is encoded in the endpoint URL
+/// (issue #17, Tier 3). It builds the shared `OpenAIAdapter` against the explicit
+/// deployment endpoint, then switches to the Azure auth/URL conventions with
+/// `with_api_version`.
+pub struct AzureLlmFactory;
+
+#[async_trait]
+impl LlmFactory for AzureLlmFactory {
+    fn provider(&self) -> &str {
+        AZURE_PROVIDER
+    }
+
+    async fn build(&self, ctx: &BackendBuildContext) -> Result<Arc<dyn Llm>, ComponentError> {
+        if ctx.llm.endpoint.trim().is_empty() {
+            return Err(ComponentError::Config(
+                "azure provider requires LLM_ENDPOINT (the deployment URL: \
+                 https://<resource>.openai.azure.com/openai/deployments/<deployment>)"
+                    .to_string(),
+            ));
+        }
+        let api_version = ctx.llm.api_version.trim();
+        if api_version.is_empty() {
+            return Err(ComponentError::Config(
+                "azure provider requires LLM_API_VERSION (e.g. 2024-12-01-preview)".to_string(),
+            ));
+        }
+        // Azure's endpoint is the deployment URL, so build it as a "custom"
+        // explicit-endpoint OpenAI adapter (which enforces endpoint + key), then
+        // switch to api-key auth and the api-version query.
+        let adapter = build_openai_compatible_adapter(
+            "custom",
+            &ctx.llm.model,
+            &ctx.llm.api_key,
+            &ctx.llm.endpoint,
+            ctx.llm.max_retries,
+        )
+        .map_err(|e| ComponentError::Llm(e.to_string()))?
+        .with_api_version(api_version)
+        .with_extra_args(ctx.llm.llm_args.clone());
+        Ok(Arc::new(adapter))
+    }
+
+    async fn build_transcriber(
+        &self,
+        _ctx: &BackendBuildContext,
+    ) -> Result<Option<Arc<dyn Transcriber>>, ComponentError> {
+        // Azure Whisper deployments exist but need their own deployment URL and
+        // api-version; not wired here, so audio degrades gracefully to None.
+        Ok(None)
+    }
+}
+
 // ── Cross-cutting mock / record helpers ───────────────────────────────────
 //
 // These are applied uniformly by `ComponentRegistry::build_llm` regardless of

@@ -754,6 +754,7 @@ impl Settings {
                 endpoint: self.llm_endpoint.clone(),
                 max_retries: self.llm_max_retries,
                 llm_args: self.llm_args.clone(),
+                api_version: self.llm_api_version.clone(),
                 mock: self.llm_mock,
                 cassette: self.llm_cassette.clone(),
                 record_path: self.llm_record_path.clone(),

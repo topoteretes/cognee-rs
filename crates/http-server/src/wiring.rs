@@ -279,6 +279,30 @@ fn wire_responses_client(cfg: &HttpServerConfig) -> Option<Arc<dyn ResponsesClie
         return None;
     }
 
+    // The OpenAI Responses client speaks the OpenAI /responses convention
+    // (Authorization: Bearer, no api-version). Allowlist the providers that use
+    // that convention *and* can serve a /responses route: openai (empty means the
+    // openai default), plus the Bearer-auth OpenAI-compatible gateways — LiteLLM
+    // proxy and vLLM (>=0.9) expose an OpenAI-style /responses route and are
+    // typically configured as `custom` / `openai_compatible`. Excluded because
+    // they would 401/404 on every POST /api/v1/responses: Azure (api-key +
+    // api-version), Anthropic (no /responses route), and the ollama / mistral /
+    // gemini gateways (no /responses route). The feature is already opt-in via
+    // `responses_client_enabled` (config.rs), so a `custom` gateway that does not
+    // implement the route only 404s when its operator explicitly enables and
+    // calls it — add/cognify/search are unaffected either way.
+    let provider = cfg.llm_provider.to_ascii_lowercase();
+    if !matches!(
+        provider.as_str(),
+        "openai" | "" | "custom" | "openai_compatible"
+    ) {
+        tracing::info!(
+            "responses client not wired for provider '{provider}' \
+             (its gateway does not serve the OpenAI /responses route)"
+        );
+        return None;
+    }
+
     let api_key = cfg.llm_api_key.expose_secret().to_string();
     if api_key.is_empty() {
         tracing::warn!("responses client enabled but llm api key is missing; wiring as None");
@@ -407,5 +431,42 @@ mod tests {
             msg.contains("postgres connection string") && msg.contains("VECTOR_DB_PROVIDER"),
             "expected actionable pgvector error, got: {msg}"
         );
+    }
+
+    #[test]
+    fn wire_responses_client_allowlist_covers_bearer_compatible_gateways() {
+        use secrecy::SecretString;
+
+        let cfg_for = |provider: &str| HttpServerConfig {
+            llm_provider: provider.to_string(),
+            llm_api_key: SecretString::new("sk-test".to_string().into()),
+            responses_client_enabled: true,
+            ..Default::default()
+        };
+
+        // openai plus the Bearer-auth OpenAI-compatible gateways (LiteLLM / vLLM,
+        // configured as custom / openai_compatible) can serve the /responses route.
+        for provider in ["openai", "", "custom", "openai_compatible"] {
+            assert!(
+                wire_responses_client(&cfg_for(provider)).is_some(),
+                "provider '{provider}' should wire a responses client"
+            );
+        }
+
+        // api-key auth (azure) or no /responses route (anthropic / ollama /
+        // mistral / gemini) stay excluded.
+        for provider in ["azure", "anthropic", "ollama", "mistral", "gemini"] {
+            assert!(
+                wire_responses_client(&cfg_for(provider)).is_none(),
+                "provider '{provider}' must not wire a responses client"
+            );
+        }
+
+        // The opt-in flag still gates an allowlisted provider.
+        let disabled = HttpServerConfig {
+            responses_client_enabled: false,
+            ..cfg_for("openai")
+        };
+        assert!(wire_responses_client(&disabled).is_none());
     }
 }

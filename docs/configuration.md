@@ -70,7 +70,14 @@ fire against another endpoint.
 `LLM_ENDPOINT` always overrides the default when set. Audio transcription
 (Whisper) is wired only for `openai` and `custom`/`openai_compatible` (which may
 expose `/audio/transcriptions`); `ollama`/`mistral`/`gemini` get graceful no-audio.
-Native Anthropic, Azure, and Bedrock adapters are tracked separately in issue #17.
+Native Anthropic and Bedrock adapters are tracked separately in issue #17.
+
+`azure` reuses the OpenAI request path with Azure's auth and URL conventions: it
+authenticates with the `api-key` header and appends an `?api-version=<v>` query.
+Set `LLM_PROVIDER=azure`, `LLM_API_KEY`, `LLM_API_VERSION` (e.g.
+`2024-12-01-preview`), and `LLM_ENDPOINT` to the **deployment** URL
+(`https://<resource>.openai.azure.com/openai/deployments/<deployment>`); the model
+in the request body is ignored by Azure since the deployment is in the URL.
 
 > **Ollama embeddings:** set `EMBEDDING_ENDPOINT` explicitly when using
 > `EMBEDDING_PROVIDER=ollama`. The Ollama embedder needs the `/api/embed` route, and

@@ -198,6 +198,10 @@ pub struct HttpServerConfig {
     /// Env: `LLM_ENDPOINT` (fallback `OPENAI_URL`).
     pub llm_endpoint: String,
 
+    /// LLM API version (Azure OpenAI only).
+    /// Env: `LLM_API_VERSION`.
+    pub llm_api_version: String,
+
     /// LLM retry count for both structured-output and network retries.
     /// Env: `LLM_MAX_RETRIES`.
     pub llm_max_retries: u32,
@@ -345,6 +349,7 @@ impl Default for HttpServerConfig {
             llm_model: "gpt-4o-mini".to_string(),
             llm_api_key: SecretString::new(String::new().into()),
             llm_endpoint: String::new(),
+            llm_api_version: String::new(),
             llm_max_retries: 3,
             session_store_backend: "seaorm".to_string(),
             session_root_directory: default_session_root_directory(&system_root),
@@ -532,6 +537,9 @@ impl HttpServerConfig {
         if let Some(v) = first_non_empty_env(&["LLM_ENDPOINT", "OPENAI_URL"]) {
             cfg.llm_endpoint = v;
         }
+        if let Ok(v) = std::env::var("LLM_API_VERSION") {
+            cfg.llm_api_version = v;
+        }
         if let Ok(v) = std::env::var("LLM_MAX_RETRIES") {
             cfg.llm_max_retries = v
                 .parse::<u32>()
@@ -669,6 +677,7 @@ impl HttpServerConfig {
                 // The CLI/ComponentManager path wires `LLM_ARGS` via
                 // `cognee::Settings`.
                 llm_args: serde_json::Map::new(),
+                api_version: self.llm_api_version.clone(),
                 mock: false,
                 cassette: String::new(),
                 record_path: String::new(),

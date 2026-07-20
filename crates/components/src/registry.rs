@@ -90,6 +90,8 @@ impl ComponentRegistry {
         for id in llm::OPENAI_COMPATIBLE_PROVIDERS {
             reg.register_llm(Arc::new(OpenAiCompatibleLlmFactory::new(id)));
         }
+        // Azure OpenAI: OpenAI-compatible wire, but api-key auth + api-version.
+        reg.register_llm(Arc::new(llm::AzureLlmFactory));
 
         reg
     }
@@ -405,6 +407,7 @@ mod tests {
                 endpoint: String::new(),
                 max_retries: 3,
                 llm_args: serde_json::Map::new(),
+                api_version: String::new(),
                 mock: false,
                 cassette: String::new(),
                 record_path: String::new(),

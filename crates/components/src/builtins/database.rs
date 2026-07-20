@@ -136,6 +136,7 @@ mod tests {
                 endpoint: String::new(),
                 max_retries: 3,
                 llm_args: serde_json::Map::new(),
+                api_version: String::new(),
                 mock: false,
                 cassette: String::new(),
                 record_path: String::new(),

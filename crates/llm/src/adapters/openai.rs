@@ -49,6 +49,10 @@ pub struct OpenAIAdapter {
     model: String,
     api_key: String,
     base_url: String,
+    /// When `Some`, the adapter targets Azure OpenAI: requests authenticate with
+    /// the `api-key` header (not `Authorization: Bearer`) and carry an
+    /// `?api-version=<v>` query parameter. `None` is the standard OpenAI path.
+    api_version: Option<String>,
     client: Client,
     structured_output_retries: usize,
     /// Number of times to retry the HTTP request on transient network/server errors.
@@ -65,6 +69,79 @@ pub struct OpenAIAdapter {
     /// would otherwise truncate a dense graph-extraction tool call mid-JSON.
     /// Empty by default (Python default `llm_args = {}`) — a no-op.
     extra_args: serde_json::Map<String, Value>,
+    /// Whether this adapter's `(model, base_url)` pair is an OpenAI reasoning
+    /// model that needs the reasoning parameter shape. Computed once at
+    /// construction (both inputs are fixed there) so the per-request build path
+    /// does not re-parse `base_url` on every `is_reasoning_model()` call. See
+    /// [`compute_reasoning_model`].
+    reasoning_model: bool,
+}
+
+/// Whether `model` is an OpenAI reasoning family (`gpt-5*`, `o1*`, `o3*`, `o4*`)
+/// served from a host that requires the reasoning parameter shape.
+///
+/// Detection is name-based and host-agnostic for remote hosts, so it fires on
+/// both official OpenAI and Azure deployments (`*.openai.azure.com`) of these
+/// models, which both require the reasoning parameter shape. (A host gate on
+/// `api.openai.com` used to leave Azure o-series/gpt-5 deployments sending
+/// `max_tokens`+`temperature`, which Azure 400s on every call.) It is suppressed
+/// only for a local host (see [`is_local_base_url`]) — loopback, or Ollama's
+/// default port on a private-network address — which keeps accepting the legacy
+/// parameters even when a served model name collides with a reasoning prefix.
+///
+/// A self-hosted gateway on a private network but a non-Ollama port (e.g. a LAN
+/// vLLM at `http://192.168.1.5:8000`) is treated as remote and gets the
+/// reasoning shape; such a host is often a proxy to real OpenAI, where that
+/// shape is correct. A deployment that needs the opposite can point the model at
+/// a loopback bind or use Ollama's port.
+fn compute_reasoning_model(model: &str, base_url: &str) -> bool {
+    let m = model.to_lowercase();
+    let is_reasoning_name =
+        m.starts_with("gpt-5") || m.starts_with("o1") || m.starts_with("o3") || m.starts_with("o4");
+    is_reasoning_name && !is_local_base_url(base_url)
+}
+
+/// Heuristic for a local / non-OpenAI-compatible host that does not accept the
+/// reasoning-model parameter shape.
+///
+/// Matches on the parsed host authority, not a substring scan of the whole URL,
+/// so a genuinely remote endpoint whose URL merely contains `localhost` as a
+/// subdomain (`o3.localhost.example.com`) or `127.0.0.1` in a path/query is not
+/// misclassified as local. Local means either:
+/// - a loopback host (`localhost`, `127.0.0.0/8`, `::1`), any port; or
+/// - Ollama's default port `11434` on a private-network host (loopback or an
+///   RFC-1918 / link-local address). The port shortcut is gated on a private
+///   host so a genuinely remote endpoint that merely listens on `11434`
+///   (`https://gateway.example.com:11434`) is not classified local and still
+///   gets the reasoning shape for a real o-series/gpt-5 model.
+fn is_local_base_url(base_url: &str) -> bool {
+    let Ok(url) = reqwest::Url::parse(base_url) else {
+        // An unparseable base_url can't be classified as local; treat it as
+        // remote so a reasoning model still gets the correct parameter shape.
+        return false;
+    };
+    let Some(host) = url.host_str() else {
+        return false;
+    };
+    // url keeps brackets on IPv6 literals; strip them so `[::1]` parses as `::1`.
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    if host.eq_ignore_ascii_case("localhost") {
+        return true;
+    }
+    let Ok(ip) = host.parse::<std::net::IpAddr>() else {
+        // A named remote host (not the `localhost` label) is not local.
+        return false;
+    };
+    if ip.is_loopback() {
+        return true;
+    }
+    let is_private = match ip {
+        std::net::IpAddr::V4(v4) => v4.is_private() || v4.is_link_local(),
+        // Unique-local (`fc00::/7`) detection is not stable on IpAddr; loopback
+        // (handled above) covers the realistic local-IPv6 case.
+        std::net::IpAddr::V6(_) => false,
+    };
+    is_private && url.port() == Some(11434)
 }
 
 impl OpenAIAdapter {
@@ -110,21 +187,29 @@ impl OpenAIAdapter {
         // that legitimately contain a slash (e.g. Baseten's `openai/gpt-oss-120b`).
         let model: String = model.into();
 
+        // Normalise a trailing slash so request URLs built as
+        // `{base_url}/chat/completions` never produce a double slash. The
+        // Gemini OpenAI-compat base ends in `/v1beta/openai/`, and a
+        // user-supplied endpoint may too; both would otherwise 404.
+        let base_url = base_url
+            .map(|u| u.trim_end_matches('/').to_string())
+            .unwrap_or_else(|| Self::DEFAULT_BASE_URL.to_string());
+
+        // Both `model` and `base_url` are fixed for the adapter's lifetime, so
+        // classify once here instead of re-parsing `base_url` on every request.
+        let reasoning_model = compute_reasoning_model(&model, &base_url);
+
         Ok(Self {
             model,
             api_key: api_key.into(),
-            // Normalise a trailing slash so request URLs built as
-            // `{base_url}/chat/completions` never produce a double slash. The
-            // Gemini OpenAI-compat base ends in `/v1beta/openai/`, and a
-            // user-supplied endpoint may too; both would otherwise 404.
-            base_url: base_url
-                .map(|u| u.trim_end_matches('/').to_string())
-                .unwrap_or_else(|| Self::DEFAULT_BASE_URL.to_string()),
+            base_url,
+            api_version: None,
             client,
             structured_output_retries: Self::DEFAULT_STRUCTURED_OUTPUT_RETRIES,
             network_retries: Self::DEFAULT_NETWORK_RETRIES,
             transcription_model,
             extra_args: serde_json::Map::new(),
+            reasoning_model,
         })
     }
 
@@ -195,6 +280,59 @@ impl OpenAIAdapter {
         format!("Bearer {}", self.api_key)
     }
 
+    /// Enable Azure OpenAI mode by setting the API version. An empty/whitespace
+    /// value is treated as unset (stays on the standard OpenAI path). In Azure
+    /// mode the `base_url` is expected to be the deployment endpoint
+    /// (`https://<resource>.openai.azure.com/openai/deployments/<deployment>`),
+    /// so `{base_url}/chat/completions?api-version=<v>` is the Azure request URL.
+    pub fn with_api_version(mut self, api_version: impl Into<String>) -> Self {
+        let v = api_version.into();
+        let trimmed = v.trim();
+        // Store trimmed: `endpoint_url` interpolates this raw, so trailing
+        // whitespace would percent-encode to `?api-version=...%20` and Azure
+        // 400s every request. (Matches the embedding path's api-version handling.)
+        self.api_version = if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        };
+        self
+    }
+
+    /// Build a request URL for `path`, appending `api-version=<v>` in Azure mode.
+    ///
+    /// The api-version is added through `Url::query_pairs_mut`, so the query
+    /// separator is chosen correctly even if `base_url` already carries a query
+    /// (no malformed double-`?`) and the value is percent-encoded rather than
+    /// interpolated raw. If `base_url` does not parse as a URL we fall back to a
+    /// manual append that still picks `?` vs `&` from the existing query, so the
+    /// api-version is never silently dropped (Azure 400s without it).
+    fn endpoint_url(&self, path: &str) -> String {
+        let base = format!("{}/{path}", self.base_url);
+        match &self.api_version {
+            Some(v) => match reqwest::Url::parse(&base) {
+                Ok(mut url) => {
+                    url.query_pairs_mut().append_pair("api-version", v);
+                    url.into()
+                }
+                Err(_) => {
+                    let sep = if base.contains('?') { '&' } else { '?' };
+                    format!("{base}{sep}api-version={v}")
+                }
+            },
+            None => base,
+        }
+    }
+
+    /// Apply the provider's auth header: `api-key` for Azure, `Authorization:
+    /// Bearer` for standard OpenAI / OpenAI-compatible endpoints.
+    fn apply_auth(&self, req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        match &self.api_version {
+            Some(_) => req.header("api-key", &self.api_key),
+            None => req.header("Authorization", self.auth_header()),
+        }
+    }
+
     /// Whether to request non-thinking mode for local Qwen OpenAI-compatible endpoints.
     fn should_disable_thinking(&self) -> bool {
         self.model.to_lowercase().starts_with("qwen") && !self.base_url.contains("api.openai.com")
@@ -204,15 +342,10 @@ impl OpenAIAdapter {
     /// that reject `temperature`/`top_p`/`frequency_penalty`/`presence_penalty`
     /// overrides and require `max_completion_tokens` in place of `max_tokens`.
     ///
-    /// Gated on the official `api.openai.com` base URL so custom OpenAI-compatible
-    /// proxies (Ollama, vLLM, …) keep accepting legacy parameters even when the
-    /// configured model name happens to match a reasoning-family prefix.
+    /// Returns the value classified once at construction (see
+    /// [`compute_reasoning_model`]); no per-call URL parsing.
     fn is_reasoning_model(&self) -> bool {
-        if !self.base_url.contains("api.openai.com") {
-            return false;
-        }
-        let m = self.model.to_lowercase();
-        m.starts_with("gpt-5") || m.starts_with("o1") || m.starts_with("o3") || m.starts_with("o4")
+        self.reasoning_model
     }
 
     /// Insert `max_tokens` (or `max_completion_tokens` on reasoning models) into a
@@ -263,7 +396,7 @@ impl OpenAIAdapter {
         ),
     )]
     async fn send_chat_request(&self, request_body: Value) -> LlmResult<OpenAIResponse> {
-        let url = format!("{}/chat/completions", self.base_url);
+        let url = self.endpoint_url("chat/completions");
         tracing::Span::current().record("url", url.as_str());
         let debug_enabled = std::env::var("COGNEE_DEBUG_LLM_REQUEST")
             .map(|v| cognee_utils::parse_env_bool(&v))
@@ -292,9 +425,7 @@ impl OpenAIAdapter {
             }
 
             let response = match self
-                .client
-                .post(&url)
-                .header("Authorization", self.auth_header())
+                .apply_auth(self.client.post(&url))
                 .header("Content-Type", "application/json")
                 .json(&request_body)
                 .send()
@@ -1194,7 +1325,7 @@ impl OpenAIAdapter {
         &self,
         form: reqwest::multipart::Form,
     ) -> LlmResult<WhisperResponse> {
-        let url = format!("{}/audio/transcriptions", self.base_url);
+        let url = self.endpoint_url("audio/transcriptions");
         tracing::Span::current().record("url", url.as_str());
 
         // We cannot clone a multipart Form, so the first attempt uses the
@@ -1214,9 +1345,7 @@ impl OpenAIAdapter {
         // the form on each attempt.
 
         let response = self
-            .client
-            .post(&url)
-            .header("Authorization", self.auth_header())
+            .apply_auth(self.client.post(&url))
             .multipart(form)
             .send()
             .await
@@ -1527,6 +1656,76 @@ mod tests {
     }
 
     #[test]
+    fn openai_mode_has_no_api_version_and_bearer_url() {
+        let adapter = OpenAIAdapter::new("gpt-4o-mini", "sk-test", None).unwrap();
+        assert!(adapter.api_version.is_none());
+        // No api-version query on the standard OpenAI path.
+        assert_eq!(
+            adapter.endpoint_url("chat/completions"),
+            "https://api.openai.com/v1/chat/completions"
+        );
+    }
+
+    #[test]
+    fn with_api_version_enables_azure_mode_and_query() {
+        let adapter = OpenAIAdapter::new(
+            "gpt-4o-mini",
+            "sk-test",
+            Some("https://res.openai.azure.com/openai/deployments/gpt-4o-mini".to_string()),
+        )
+        .unwrap()
+        .with_api_version("2024-12-01-preview");
+        assert_eq!(adapter.api_version.as_deref(), Some("2024-12-01-preview"));
+        assert_eq!(
+            adapter.endpoint_url("chat/completions"),
+            "https://res.openai.azure.com/openai/deployments/gpt-4o-mini/chat/completions?api-version=2024-12-01-preview"
+        );
+    }
+
+    #[test]
+    fn endpoint_url_hardens_against_double_query_and_encodes_api_version() {
+        // base_url already carrying a query must not yield a malformed double-`?`;
+        // the api-version is appended with `&`.
+        let with_query = OpenAIAdapter::new(
+            "gpt-4o-mini",
+            "sk-test",
+            Some("https://res.openai.azure.com/openai/deployments/gpt-4o-mini?foo=bar".to_string()),
+        )
+        .unwrap()
+        .with_api_version("2024-12-01-preview");
+        let url = with_query.endpoint_url("chat/completions");
+        assert_eq!(url.matches('?').count(), 1, "exactly one '?': {url}");
+        assert!(url.contains("foo=bar"), "existing query preserved: {url}");
+        assert!(
+            url.contains("api-version=2024-12-01-preview"),
+            "api-version appended: {url}"
+        );
+
+        // A value with a reserved character is percent-encoded, not interpolated raw.
+        let odd = OpenAIAdapter::new(
+            "gpt-4o-mini",
+            "sk-test",
+            Some("https://res.openai.azure.com/openai/deployments/gpt-4o-mini".to_string()),
+        )
+        .unwrap()
+        .with_api_version("2024 preview&x=1");
+        let url = odd.endpoint_url("chat/completions");
+        assert!(
+            !url.contains("api-version=2024 preview&x=1"),
+            "raw value must not appear unencoded: {url}"
+        );
+        assert!(url.contains("api-version="), "api-version present: {url}");
+    }
+
+    #[test]
+    fn with_api_version_empty_stays_openai_mode() {
+        let adapter = OpenAIAdapter::new("gpt-4o-mini", "sk-test", None)
+            .unwrap()
+            .with_api_version("   ");
+        assert!(adapter.api_version.is_none());
+    }
+
+    #[test]
     fn test_is_reasoning_model_matches_openai_families() {
         let cases = [
             ("gpt-5", true),
@@ -1565,6 +1764,89 @@ mod tests {
         )
         .unwrap();
         assert!(!adapter.is_reasoning_model());
+    }
+
+    #[test]
+    fn is_reasoning_model_detected_on_azure_and_remote_gateways() {
+        // The bug this fixes: a host gate on api.openai.com left Azure o-series /
+        // gpt-5 deployments sending max_tokens + temperature, which Azure 400s on
+        // every call. Detection is now name-based, so the Azure deployment matches.
+        let azure = OpenAIAdapter::new(
+            "o3-mini",
+            "sk-test",
+            Some("https://my-resource.openai.azure.com/openai/deployments/o3".to_string()),
+        )
+        .unwrap()
+        .with_api_version("2024-12-01-preview");
+        assert!(azure.is_reasoning_model());
+
+        // A remote (non-local) OpenAI-compatible gateway serving a reasoning
+        // model is detected too, since detection is host-agnostic.
+        let gateway = OpenAIAdapter::new(
+            "gpt-5",
+            "sk-test",
+            Some("https://gateway.example.com/v1".to_string()),
+        )
+        .unwrap();
+        assert!(gateway.is_reasoning_model());
+
+        // Regression: the old substring scan misclassified a genuinely remote
+        // host as local when the URL merely contained a loopback token. A
+        // `localhost` subdomain label must NOT suppress detection.
+        let subdomain = OpenAIAdapter::new(
+            "o3-mini",
+            "sk-test",
+            Some("https://o3.localhost.example.com/v1".to_string()),
+        )
+        .unwrap();
+        assert!(subdomain.is_reasoning_model());
+        // `127.0.0.1` appearing only in a path must NOT suppress detection.
+        let path_ip = OpenAIAdapter::new(
+            "gpt-5",
+            "sk-test",
+            Some("https://gateway.example.com/proxy/127.0.0.1/v1".to_string()),
+        )
+        .unwrap();
+        assert!(path_ip.is_reasoning_model());
+        // An actual loopback host is still suppressed (local runtimes reject the shape).
+        let loopback = OpenAIAdapter::new(
+            "o3-mini",
+            "sk-test",
+            Some("http://127.0.0.1:8080/v1".to_string()),
+        )
+        .unwrap();
+        assert!(!loopback.is_reasoning_model());
+
+        // A genuinely remote endpoint that merely listens on Ollama's default
+        // port 11434 is NOT local: a real reasoning model there still gets the
+        // reasoning shape. (The port shortcut is gated on a private host.)
+        let remote_11434 = OpenAIAdapter::new(
+            "gpt-5",
+            "sk-test",
+            Some("https://gateway.example.com:11434/v1".to_string()),
+        )
+        .unwrap();
+        assert!(remote_11434.is_reasoning_model());
+
+        // Ollama on a private-network host (RFC-1918 + port 11434) is local, so
+        // a name-colliding model is suppressed.
+        let lan_ollama = OpenAIAdapter::new(
+            "o3-mini",
+            "sk-test",
+            Some("http://192.168.1.5:11434/v1".to_string()),
+        )
+        .unwrap();
+        assert!(!lan_ollama.is_reasoning_model());
+
+        // A private-network host on a non-Ollama port is treated as remote (often
+        // a proxy to real OpenAI), so the reasoning shape applies.
+        let lan_gateway = OpenAIAdapter::new(
+            "gpt-5",
+            "sk-test",
+            Some("http://192.168.1.5:8000/v1".to_string()),
+        )
+        .unwrap();
+        assert!(lan_gateway.is_reasoning_model());
     }
 
     #[test]
